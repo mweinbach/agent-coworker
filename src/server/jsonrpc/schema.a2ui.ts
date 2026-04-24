@@ -62,9 +62,10 @@ export function formatA2uiActionDeliveryText(opts: {
   eventType: string;
   payload?: Record<string, unknown>;
 }): string {
-  const payloadText = opts.payload && Object.keys(opts.payload).length > 0
-    ? `\npayload: ${JSON.stringify(opts.payload)}`
-    : "";
+  const payloadText =
+    opts.payload && Object.keys(opts.payload).length > 0
+      ? `\npayload: ${JSON.stringify(opts.payload)}`
+      : "";
   return [
     `[a2ui.action] The user interacted with surface "${opts.surfaceId}".`,
     `component: ${opts.componentId}`,

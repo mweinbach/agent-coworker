@@ -31,57 +31,63 @@ describe("mobile cowork jsonrpc client", () => {
     expect(initializePayload.method).toBe("initialize");
     expect(initializePayload.params.clientInfo.name).toBe("cowork-mobile");
 
-    await client.handleIncoming(JSON.stringify({
-      id: initializePayload.id,
-      result: {
-        protocolVersion: "0.1",
-        serverInfo: {
-          name: "cowork-server",
-          subprotocol: "cowork.jsonrpc.v1",
+    await client.handleIncoming(
+      JSON.stringify({
+        id: initializePayload.id,
+        result: {
+          protocolVersion: "0.1",
+          serverInfo: {
+            name: "cowork-server",
+            subprotocol: "cowork.jsonrpc.v1",
+          },
+          capabilities: {
+            experimentalApi: false,
+          },
+          transport: {
+            type: "websocket",
+            protocolMode: "jsonrpc",
+          },
         },
-        capabilities: {
-          experimentalApi: false,
-        },
-        transport: {
-          type: "websocket",
-          protocolMode: "jsonrpc",
-        },
-      },
-    }));
+      }),
+    );
     await handshakePromise;
 
     const initializedPayload = JSON.parse(sent[1]!);
     expect(initializedPayload.method).toBe("initialized");
     const listPromise = client.requestThreadList();
     const listPayload = JSON.parse(sent.at(-1)!);
-    await client.handleIncoming(JSON.stringify({
-      id: listPayload.id,
-      result: {
-        threads: [],
-      },
-    }));
+    await client.handleIncoming(
+      JSON.stringify({
+        id: listPayload.id,
+        result: {
+          threads: [],
+        },
+      }),
+    );
     await expect(listPromise).resolves.toEqual({ threads: [] });
 
     await flushMicrotasks();
 
-    await client.handleIncoming(JSON.stringify({
-      method: "thread/started",
-      params: {
-        thread: {
-          id: "thread-1",
-          title: "Remote thread",
-          preview: "",
-          modelProvider: "opencode",
-          model: "gpt-5",
-          cwd: "/workspace",
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          messageCount: 0,
-          lastEventSeq: 0,
-          status: { type: "idle" },
+    await client.handleIncoming(
+      JSON.stringify({
+        method: "thread/started",
+        params: {
+          thread: {
+            id: "thread-1",
+            title: "Remote thread",
+            preview: "",
+            modelProvider: "opencode",
+            model: "gpt-5",
+            cwd: "/workspace",
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            messageCount: 0,
+            lastEventSeq: 0,
+            status: { type: "idle" },
+          },
         },
-      },
-    }));
+      }),
+    );
 
     expect(notifications).toHaveLength(1);
     expect(notifications[0]?.method).toBe("thread/started");
@@ -109,45 +115,51 @@ describe("mobile cowork jsonrpc client", () => {
 
     const handshakePromise = client.initialize();
     const initializePayload = JSON.parse(sent[0]!);
-    await client.handleIncoming(JSON.stringify({
-      id: initializePayload.id,
-      result: {
-        protocolVersion: "0.1",
-        serverInfo: {
-          name: "cowork-server",
-          subprotocol: "cowork.jsonrpc.v1",
+    await client.handleIncoming(
+      JSON.stringify({
+        id: initializePayload.id,
+        result: {
+          protocolVersion: "0.1",
+          serverInfo: {
+            name: "cowork-server",
+            subprotocol: "cowork.jsonrpc.v1",
+          },
+          capabilities: {
+            experimentalApi: false,
+          },
+          transport: {
+            type: "websocket",
+            protocolMode: "jsonrpc",
+          },
         },
-        capabilities: {
-          experimentalApi: false,
-        },
-        transport: {
-          type: "websocket",
-          protocolMode: "jsonrpc",
-        },
-      },
-    }));
+      }),
+    );
     await handshakePromise;
 
     const listPromise = client.requestThreadList();
     const listPayload = JSON.parse(sent.at(-1)!);
-    await client.handleIncoming(JSON.stringify({
-      id: listPayload.id,
-      result: {
-        threads: [],
-      },
-    }));
+    await client.handleIncoming(
+      JSON.stringify({
+        id: listPayload.id,
+        result: {
+          threads: [],
+        },
+      }),
+    );
     await expect(listPromise).resolves.toEqual({ threads: [] });
 
-    await client.handleIncoming(JSON.stringify({
-      id: 7,
-      method: "item/tool/requestUserInput",
-      params: {
-        threadId: "thread-1",
-        requestId: "req-1",
-        itemId: "item-1",
-        question: "Continue?",
-      },
-    }));
+    await client.handleIncoming(
+      JSON.stringify({
+        id: 7,
+        method: "item/tool/requestUserInput",
+        params: {
+          threadId: "thread-1",
+          requestId: "req-1",
+          itemId: "item-1",
+          question: "Continue?",
+        },
+      }),
+    );
     await flushMicrotasks();
     expect(requests).toEqual([{ id: 7, method: "item/tool/requestUserInput" }]);
 
@@ -174,42 +186,46 @@ describe("mobile cowork jsonrpc client", () => {
 
     const handshakePromise = client.initialize();
     const initializePayload = JSON.parse(sent[0]!);
-    await client.handleIncoming(JSON.stringify({
-      id: initializePayload.id,
-      result: {
-        protocolVersion: "0.1",
-        serverInfo: {
-          name: "cowork-server",
-          subprotocol: "cowork.jsonrpc.v1",
+    await client.handleIncoming(
+      JSON.stringify({
+        id: initializePayload.id,
+        result: {
+          protocolVersion: "0.1",
+          serverInfo: {
+            name: "cowork-server",
+            subprotocol: "cowork.jsonrpc.v1",
+          },
+          capabilities: { experimentalApi: false },
+          transport: {
+            type: "websocket",
+            protocolMode: "jsonrpc",
+          },
         },
-        capabilities: { experimentalApi: false },
-        transport: {
-          type: "websocket",
-          protocolMode: "jsonrpc",
-        },
-      },
-    }));
+      }),
+    );
     await handshakePromise;
 
-    await client.handleIncoming(JSON.stringify({
-      method: "item/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: null,
-        item: {
-          id: "uiSurface:surface-1",
-          type: "uiSurface",
-          surfaceId: "surface-1",
-          catalogId: "https://a2ui.org/specification/v0_9/basic_catalog.json",
-          version: "v0.9",
-          revision: 2,
-          deleted: false,
-          changeKind: "updateComponents",
-          reason: "refresh summary",
-          toolCallId: "tool-1",
+    await client.handleIncoming(
+      JSON.stringify({
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: null,
+          item: {
+            id: "uiSurface:surface-1",
+            type: "uiSurface",
+            surfaceId: "surface-1",
+            catalogId: "https://a2ui.org/specification/v0_9/basic_catalog.json",
+            version: "v0.9",
+            revision: 2,
+            deleted: false,
+            changeKind: "updateComponents",
+            reason: "refresh summary",
+            toolCallId: "tool-1",
+          },
         },
-      },
-    }));
+      }),
+    );
 
     expect(notifications).toHaveLength(1);
     expect(notifications[0]?.method).toBe("item/completed");
@@ -226,86 +242,90 @@ describe("mobile cowork jsonrpc client", () => {
 
     const handshakePromise = client.initialize();
     const initializePayload = JSON.parse(sent[0]!);
-    await client.handleIncoming(JSON.stringify({
-      id: initializePayload.id,
-      result: {
-        protocolVersion: "0.1",
-        serverInfo: {
-          name: "cowork-server",
-          subprotocol: "cowork.jsonrpc.v1",
+    await client.handleIncoming(
+      JSON.stringify({
+        id: initializePayload.id,
+        result: {
+          protocolVersion: "0.1",
+          serverInfo: {
+            name: "cowork-server",
+            subprotocol: "cowork.jsonrpc.v1",
+          },
+          capabilities: { experimentalApi: false },
+          transport: {
+            type: "websocket",
+            protocolMode: "jsonrpc",
+          },
         },
-        capabilities: { experimentalApi: false },
-        transport: {
-          type: "websocket",
-          protocolMode: "jsonrpc",
-        },
-      },
-    }));
+      }),
+    );
     await handshakePromise;
 
     const readPromise = client.readThread("thread-1");
     const readPayload = JSON.parse(sent.at(-1)!);
-    await client.handleIncoming(JSON.stringify({
-      id: readPayload.id,
-      result: {
-        thread: {
-          id: "thread-1",
-          title: "Thread",
-          preview: "",
-          modelProvider: "google",
-          model: "gemini-3.1-pro-preview",
-          cwd: "/workspace",
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          messageCount: 1,
-          lastEventSeq: 1,
-          status: { type: "idle" },
+    await client.handleIncoming(
+      JSON.stringify({
+        id: readPayload.id,
+        result: {
+          thread: {
+            id: "thread-1",
+            title: "Thread",
+            preview: "",
+            modelProvider: "google",
+            model: "gemini-3.1-pro-preview",
+            cwd: "/workspace",
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            messageCount: 1,
+            lastEventSeq: 1,
+            status: { type: "idle" },
+          },
+          coworkSnapshot: {
+            sessionId: "session-1",
+            title: "Thread",
+            titleSource: "manual",
+            titleModel: null,
+            provider: "google",
+            model: "gemini-3.1-pro-preview",
+            sessionKind: "root",
+            parentSessionId: null,
+            role: null,
+            mode: null,
+            depth: null,
+            nickname: null,
+            requestedModel: null,
+            effectiveModel: null,
+            requestedReasoningEffort: null,
+            effectiveReasoningEffort: null,
+            executionState: null,
+            lastMessagePreview: null,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            messageCount: 1,
+            lastEventSeq: 1,
+            feed: [
+              {
+                id: "ui-surface-1",
+                kind: "ui_surface",
+                ts: new Date().toISOString(),
+                surfaceId: "surface-1",
+                catalogId: "https://a2ui.org/specification/v0_9/basic_catalog.json",
+                version: "v0.9",
+                revision: 2,
+                deleted: false,
+                changeKind: "updateComponents",
+                reason: "refresh summary",
+                toolCallId: "tool-1",
+              },
+            ],
+            agents: [],
+            todos: [],
+            hasPendingAsk: false,
+            hasPendingApproval: false,
+          },
         },
-        coworkSnapshot: {
-          sessionId: "session-1",
-          title: "Thread",
-          titleSource: "manual",
-          titleModel: null,
-          provider: "google",
-          model: "gemini-3.1-pro-preview",
-          sessionKind: "root",
-          parentSessionId: null,
-          role: null,
-          mode: null,
-          depth: null,
-          nickname: null,
-          requestedModel: null,
-          effectiveModel: null,
-          requestedReasoningEffort: null,
-          effectiveReasoningEffort: null,
-          executionState: null,
-          lastMessagePreview: null,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          messageCount: 1,
-          lastEventSeq: 1,
-          feed: [
-            {
-              id: "ui-surface-1",
-              kind: "ui_surface",
-              ts: new Date().toISOString(),
-              surfaceId: "surface-1",
-              catalogId: "https://a2ui.org/specification/v0_9/basic_catalog.json",
-              version: "v0.9",
-              revision: 2,
-              deleted: false,
-              changeKind: "updateComponents",
-              reason: "refresh summary",
-              toolCallId: "tool-1",
-            },
-          ],
-          agents: [],
-          todos: [],
-          hasPendingAsk: false,
-          hasPendingApproval: false,
-        },
-      },
-    }));
+      }),
+    );
 
     await expect(readPromise).resolves.toMatchObject({
       coworkSnapshot: {
@@ -335,23 +355,25 @@ describe("mobile cowork jsonrpc client", () => {
 
     const firstHandshake = client.initialize();
     const firstInitializePayload = JSON.parse(sent[0]!);
-    await client.handleIncoming(JSON.stringify({
-      id: firstInitializePayload.id,
-      result: {
-        protocolVersion: "0.1",
-        serverInfo: {
-          name: "cowork-server",
-          subprotocol: "cowork.jsonrpc.v1",
+    await client.handleIncoming(
+      JSON.stringify({
+        id: firstInitializePayload.id,
+        result: {
+          protocolVersion: "0.1",
+          serverInfo: {
+            name: "cowork-server",
+            subprotocol: "cowork.jsonrpc.v1",
+          },
+          capabilities: {
+            experimentalApi: false,
+          },
+          transport: {
+            type: "websocket",
+            protocolMode: "jsonrpc",
+          },
         },
-        capabilities: {
-          experimentalApi: false,
-        },
-        transport: {
-          type: "websocket",
-          protocolMode: "jsonrpc",
-        },
-      },
-    }));
+      }),
+    );
     await firstHandshake;
     expect(JSON.parse(sent[1]!).method).toBe("initialized");
 
@@ -361,23 +383,25 @@ describe("mobile cowork jsonrpc client", () => {
     const secondInitializePayload = JSON.parse(sent[2]!);
     expect(secondInitializePayload.method).toBe("initialize");
     expect(secondInitializePayload.id).not.toBe(firstInitializePayload.id);
-    await client.handleIncoming(JSON.stringify({
-      id: secondInitializePayload.id,
-      result: {
-        protocolVersion: "0.1",
-        serverInfo: {
-          name: "cowork-server",
-          subprotocol: "cowork.jsonrpc.v1",
+    await client.handleIncoming(
+      JSON.stringify({
+        id: secondInitializePayload.id,
+        result: {
+          protocolVersion: "0.1",
+          serverInfo: {
+            name: "cowork-server",
+            subprotocol: "cowork.jsonrpc.v1",
+          },
+          capabilities: {
+            experimentalApi: false,
+          },
+          transport: {
+            type: "websocket",
+            protocolMode: "jsonrpc",
+          },
         },
-        capabilities: {
-          experimentalApi: false,
-        },
-        transport: {
-          type: "websocket",
-          protocolMode: "jsonrpc",
-        },
-      },
-    }));
+      }),
+    );
     await secondHandshake;
     expect(JSON.parse(sent[3]!).method).toBe("initialized");
   });
@@ -414,10 +438,14 @@ describe("mobile cowork jsonrpc client", () => {
     });
 
     await expect(client.handleIncoming("{")).resolves.toBeUndefined();
-    await expect(client.handleIncoming(JSON.stringify({
-      method: "thread/started",
-      params: { bad: true },
-    }))).resolves.toBeUndefined();
+    await expect(
+      client.handleIncoming(
+        JSON.stringify({
+          method: "thread/started",
+          params: { bad: true },
+        }),
+      ),
+    ).resolves.toBeUndefined();
     expect(notifications).toEqual([]);
   });
 });

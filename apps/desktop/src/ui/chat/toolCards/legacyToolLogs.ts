@@ -1,5 +1,5 @@
-import type { FeedItem } from "../../../app/types";
 import { z } from "zod";
+import type { FeedItem } from "../../../app/types";
 
 export type LegacyToolLog = {
   direction: "start" | "finish";
@@ -9,12 +9,17 @@ export type LegacyToolLog = {
 
 const LEGACY_TOOL_LOG_RE = /^tool([<>])\s+([A-Za-z0-9_.:-]+)(?:\s+(.+))?$/;
 const toolDirectionSymbolSchema = z.enum([">", "<"]);
-const toolNameSchema = z.string().trim().regex(/^[A-Za-z0-9_.:-]+$/);
+const toolNameSchema = z
+  .string()
+  .trim()
+  .regex(/^[A-Za-z0-9_.:-]+$/);
 const payloadTextSchema = z.string().trim().min(1);
-const payloadErrorStatusSchema = z.object({
-  error: z.unknown().optional(),
-  denied: z.unknown().optional(),
-}).passthrough();
+const payloadErrorStatusSchema = z
+  .object({
+    error: z.unknown().optional(),
+    denied: z.unknown().optional(),
+  })
+  .passthrough();
 
 function parsePayload(value: unknown): unknown {
   const parsedPayloadText = payloadTextSchema.safeParse(value);
@@ -59,7 +64,7 @@ export function normalizeFeedForToolCards(feed: FeedItem[], developerMode: boole
   const modernToolNames = new Set(
     feed
       .filter((item): item is Extract<FeedItem, { kind: "tool" }> => item.kind === "tool")
-      .map((item) => item.name)
+      .map((item) => item.name),
   );
 
   for (const item of feed) {

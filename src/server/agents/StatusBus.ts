@@ -4,9 +4,11 @@ import type { AgentWaitMode, AgentWaitResult } from "./types";
 type StatusListener = (agent: PersistentAgentSummary) => void;
 
 function isTerminal(agent: PersistentAgentSummary): boolean {
-  return agent.executionState === "completed"
-    || agent.executionState === "errored"
-    || agent.executionState === "closed";
+  return (
+    agent.executionState === "completed" ||
+    agent.executionState === "errored" ||
+    agent.executionState === "closed"
+  );
 }
 
 export class StatusBus {
@@ -31,7 +33,11 @@ export class StatusBus {
     };
   }
 
-  async wait(agentIds: string[], timeoutMs = 30_000, mode: AgentWaitMode = "any"): Promise<AgentWaitResult> {
+  async wait(
+    agentIds: string[],
+    timeoutMs = 30_000,
+    mode: AgentWaitMode = "any",
+  ): Promise<AgentWaitResult> {
     const dedupedIds = [...new Set(agentIds)];
     if (dedupedIds.length === 0) {
       return { timedOut: true, mode, agents: [], readyAgentIds: [] };
@@ -48,16 +54,17 @@ export class StatusBus {
       return { mode, agents, readyAgentIds };
     };
 
-    const isSatisfied = (readyAgentIds: string[]) => mode === "all"
-      ? readyAgentIds.length === dedupedIds.length
-      : readyAgentIds.length > 0;
+    const isSatisfied = (readyAgentIds: string[]) =>
+      mode === "all" ? readyAgentIds.length === dedupedIds.length : readyAgentIds.length > 0;
 
     const immediate = getSnapshot();
     if (isSatisfied(immediate.readyAgentIds)) {
       return { timedOut: false, ...immediate };
     }
 
-    const resolvedTimeoutMs = Number.isFinite(timeoutMs) ? Math.max(0, Math.floor(timeoutMs)) : 30_000;
+    const resolvedTimeoutMs = Number.isFinite(timeoutMs)
+      ? Math.max(0, Math.floor(timeoutMs))
+      : 30_000;
     if (resolvedTimeoutMs === 0) {
       return { timedOut: true, ...getSnapshot() };
     }

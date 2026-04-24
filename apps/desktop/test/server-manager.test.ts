@@ -61,7 +61,12 @@ describe("desktop server manager startup parsing", () => {
     child.stdout.write("warming up\n");
     child.stdout.write(JSON.stringify({ type: "status", phase: "boot" }) + "\n");
     child.stdout.write(
-      JSON.stringify({ type: "server_listening", url: "ws://127.0.0.1:1234/ws", port: 1234, cwd: "C:\\tmp" }) + "\n"
+      JSON.stringify({
+        type: "server_listening",
+        url: "ws://127.0.0.1:1234/ws",
+        port: 1234,
+        cwd: "C:\\tmp",
+      }) + "\n",
     );
 
     const payload = await waitPromise;
@@ -118,19 +123,31 @@ describe("desktop server manager startup mode", () => {
   test("buildServerEnv mirrors process env without desktop-only skill bootstrap flags", () => {
     const env = __internal.buildServerEnv();
     expect(env).not.toBe(process.env);
-    expect(env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP).toBe(process.env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP ?? "1");
+    expect(env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP).toBe(
+      process.env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP ?? "1",
+    );
   });
 
   test("only retries source startup automatically on Windows", () => {
-    expect(__internal.getSourceStartupAttemptCount(true)).toBe(process.platform === "win32" ? 2 : 1);
+    expect(__internal.getSourceStartupAttemptCount(true)).toBe(
+      process.platform === "win32" ? 2 : 1,
+    );
     expect(__internal.getSourceStartupAttemptCount(true, "win32")).toBe(2);
     expect(__internal.getSourceStartupAttemptCount(true, "darwin")).toBe(1);
     expect(__internal.getSourceStartupAttemptCount(false, "win32")).toBe(1);
   });
 
   test("only injects Bun transpiler cache env for Windows source attempts", () => {
-    const windowsAttempt = __internal.buildSourceEnvForAttempt({ PATH: process.env.PATH }, 2, "win32");
-    const linuxAttempt = __internal.buildSourceEnvForAttempt({ PATH: process.env.PATH }, 2, "linux");
+    const windowsAttempt = __internal.buildSourceEnvForAttempt(
+      { PATH: process.env.PATH },
+      2,
+      "win32",
+    );
+    const linuxAttempt = __internal.buildSourceEnvForAttempt(
+      { PATH: process.env.PATH },
+      2,
+      "linux",
+    );
 
     try {
       expect(typeof windowsAttempt.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH).toBe("string");
@@ -145,7 +162,9 @@ describe("desktop server manager startup mode", () => {
 
 describe("desktop server manager bun crash detection", () => {
   test("detects bun panic output", () => {
-    expect(__internal.isLikelyBunSegfault("panic(main thread): Segmentation fault at address 0x1")).toBe(true);
+    expect(
+      __internal.isLikelyBunSegfault("panic(main thread): Segmentation fault at address 0x1"),
+    ).toBe(true);
     expect(__internal.isLikelyBunSegfault("oh no: Bun has crashed.")).toBe(true);
     expect(__internal.isLikelyBunSegfault("normal stderr line")).toBe(false);
   });

@@ -19,7 +19,10 @@ const localStorageMock = {
 
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
 const originalLocalStorageDescriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
-const originalInjectedServerUrlDescriptor = Object.getOwnPropertyDescriptor(globalThis, "__COWORK_SERVER_URL__");
+const originalInjectedServerUrlDescriptor = Object.getOwnPropertyDescriptor(
+  globalThis,
+  "__COWORK_SERVER_URL__",
+);
 
 function installWindowMock() {
   Object.defineProperty(globalThis, "window", {
@@ -67,12 +70,8 @@ function restoreWindowMock() {
 
 installWindowMock();
 
-const {
-  configureWebAdapter,
-  createWebAdapter,
-  deriveSameOriginServerUrl,
-  normalizeWebServerUrl,
-} = await import("../src/lib/webAdapter");
+const { configureWebAdapter, createWebAdapter, deriveSameOriginServerUrl, normalizeWebServerUrl } =
+  await import("../src/lib/webAdapter");
 
 describe("webAdapter server URL normalization", () => {
   beforeEach(() => {
@@ -95,16 +94,18 @@ describe("webAdapter server URL normalization", () => {
     const originalFetch = globalThis.fetch;
     const desktopState = {
       version: 2,
-      workspaces: [{
-        id: "ws_full",
-        name: "Full Desktop",
-        path: "/tmp/full-desktop",
-        createdAt: "2026-04-18T00:00:00.000Z",
-        lastOpenedAt: "2026-04-18T00:00:00.000Z",
-        defaultEnableMcp: true,
-        defaultBackupsEnabled: true,
-        yolo: false,
-      }],
+      workspaces: [
+        {
+          id: "ws_full",
+          name: "Full Desktop",
+          path: "/tmp/full-desktop",
+          createdAt: "2026-04-18T00:00:00.000Z",
+          lastOpenedAt: "2026-04-18T00:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
       threads: [],
       developerMode: false,
       showHiddenFiles: false,
@@ -114,10 +115,11 @@ describe("webAdapter server URL normalization", () => {
     Object.defineProperty(globalThis, "fetch", {
       configurable: true,
       writable: true,
-      value: async () => new Response(JSON.stringify(desktopState), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
+      value: async () =>
+        new Response(JSON.stringify(desktopState), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
     });
 
     configureWebAdapter("ws://127.0.0.1:7337/ws", "");
@@ -137,23 +139,26 @@ describe("webAdapter server URL normalization", () => {
     const originalFetch = globalThis.fetch;
     const responses = new Map<string, Response>([
       ["http://127.0.0.1:7337/cowork/desktop/state", new Response("missing", { status: 404 })],
-      ["http://127.0.0.1:7337/cowork/workspaces", new Response(JSON.stringify({
-        workspaces: [{ name: "Repo", path: "/tmp/repo" }],
-      }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      })],
+      [
+        "http://127.0.0.1:7337/cowork/workspaces",
+        new Response(
+          JSON.stringify({
+            workspaces: [{ name: "Repo", path: "/tmp/repo" }],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      ],
     ]);
 
     Object.defineProperty(globalThis, "fetch", {
       configurable: true,
       writable: true,
       value: async (input: string | URL | Request) => {
-        const url = typeof input === "string"
-          ? input
-          : input instanceof URL
-            ? input.toString()
-            : input.url;
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
         const response = responses.get(url);
         if (!response) {
           throw new Error(`Unexpected fetch: ${url}`);

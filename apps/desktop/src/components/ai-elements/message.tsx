@@ -1,31 +1,30 @@
+import { cjk } from "@streamdown/cjk";
+import { code } from "@streamdown/code";
+import { math } from "@streamdown/math";
+import { mermaid } from "@streamdown/mermaid";
 import type { ComponentProps, HTMLAttributes, ReactNode } from "react";
-import type { Options as RehypeSanitizeOptions } from "rehype-sanitize";
-import type { PluggableList } from "unified";
-
 import { Children, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import type { Options as RehypeSanitizeOptions } from "rehype-sanitize";
+import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import {
   defaultRehypePlugins,
   defaultRemarkPlugins,
   Streamdown,
   type StreamdownProps,
 } from "streamdown";
-import { cjk } from "@streamdown/cjk";
-import { code } from "@streamdown/code";
-import { math } from "@streamdown/math";
-import { mermaid } from "@streamdown/mermaid";
-import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
+import type { PluggableList } from "unified";
 
 import {
+  type CitationSource,
   describeCitationSource,
   normalizeDisplayCitationMarkers,
-  type CitationSource,
 } from "../../../../../src/shared/displayCitationMarkers";
 import { useAppStore } from "../../app/store";
-import { Button } from "../ui/button";
 import { confirmAction, openExternalUrl, openPath } from "../../lib/desktopCommands";
 import { getFilePreviewKind } from "../../lib/filePreviewKind";
 import { cn } from "../../lib/utils";
+import { Button } from "../ui/button";
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
   from: "user" | "assistant";
@@ -89,7 +88,7 @@ export const defaultDesktopRehypePlugins: PluggableList = [
 const bareDesktopFilePathPatterns = [
   /(?:[A-Za-z]:\\(?:[^\\\r\n<>:"|?*]+\\)*[^\\\r\n<>:"|?*]+\.[A-Za-z0-9]{1,12})(?=$|[\s),\].!?:;"'])/g,
   /(?:\\\\[^\\\r\n<>:"|?*]+\\(?:[^\\\r\n<>:"|?*]+\\)*[^\\\r\n<>:"|?*]+\.[A-Za-z0-9]{1,12})(?=$|[\s),\].!?:;"'])/g,
-  /(?:\/(?:Users|home|tmp|var|opt|Applications|Volumes)(?:\/[^\/\r\n]+)+\.[A-Za-z0-9]{1,12})(?=$|[\s),\].!?:;"'])/g,
+  /(?:\/(?:Users|home|tmp|var|opt|Applications|Volumes)(?:\/[^/\r\n]+)+\.[A-Za-z0-9]{1,12})(?=$|[\s),\].!?:;"'])/g,
 ] as const;
 const autoLinkSkippedNodeTypes = new Set(["code", "inlineCode", "html", "link", "linkReference"]);
 
@@ -148,11 +147,15 @@ function decodeCitationChipSources(rawValue?: string): CitationChipSourcePayload
         return [];
       }
 
-      return [{
-        url: entry.url,
-        ...(typeof entry.title === "string" && entry.title.trim().length > 0 ? { title: entry.title } : {}),
-        ...(typeof entry.id === "string" && entry.id.trim().length > 0 ? { id: entry.id } : {}),
-      }];
+      return [
+        {
+          url: entry.url,
+          ...(typeof entry.title === "string" && entry.title.trim().length > 0
+            ? { title: entry.title }
+            : {}),
+          ...(typeof entry.id === "string" && entry.id.trim().length > 0 ? { id: entry.id } : {}),
+        },
+      ];
     });
   } catch {
     return [];
@@ -268,19 +271,29 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
 
-function computeCitationPopupPosition(anchorRect: DOMRect, cardRect: DOMRect): CitationPopupPosition {
+function computeCitationPopupPosition(
+  anchorRect: DOMRect,
+  cardRect: DOMRect,
+): CitationPopupPosition {
   const viewportWidth = window.innerWidth;
   const viewportHeight = window.innerHeight;
-  const maxLeft = Math.max(CITATION_POPUP_MARGIN, viewportWidth - cardRect.width - CITATION_POPUP_MARGIN);
+  const maxLeft = Math.max(
+    CITATION_POPUP_MARGIN,
+    viewportWidth - cardRect.width - CITATION_POPUP_MARGIN,
+  );
   const preferredLeft = clamp(anchorRect.left, CITATION_POPUP_MARGIN, maxLeft);
   const belowTop = anchorRect.bottom + CITATION_POPUP_GAP;
   const aboveTop = anchorRect.top - cardRect.height - CITATION_POPUP_GAP;
-  const maxTop = Math.max(CITATION_POPUP_MARGIN, viewportHeight - cardRect.height - CITATION_POPUP_MARGIN);
-  const top = belowTop + cardRect.height <= viewportHeight - CITATION_POPUP_MARGIN
-    ? belowTop
-    : aboveTop >= CITATION_POPUP_MARGIN
-      ? aboveTop
-      : clamp(belowTop, CITATION_POPUP_MARGIN, maxTop);
+  const maxTop = Math.max(
+    CITATION_POPUP_MARGIN,
+    viewportHeight - cardRect.height - CITATION_POPUP_MARGIN,
+  );
+  const top =
+    belowTop + cardRect.height <= viewportHeight - CITATION_POPUP_MARGIN
+      ? belowTop
+      : aboveTop >= CITATION_POPUP_MARGIN
+        ? aboveTop
+        : clamp(belowTop, CITATION_POPUP_MARGIN, maxTop);
 
   return { left: preferredLeft, top };
 }
@@ -289,9 +302,21 @@ function CitationArrow({ direction }: { direction: "left" | "right" }) {
   return (
     <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="text-foreground">
       {direction === "left" ? (
-        <path d="M7.5 2.5L4 6l3.5 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+        <path
+          d="M7.5 2.5L4 6l3.5 3.5"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
       ) : (
-        <path d="M4.5 2.5L8 6l-3.5 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+        <path
+          d="M4.5 2.5L8 6l-3.5 3.5"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
       )}
     </svg>
   );
@@ -305,10 +330,14 @@ function DesktopCitationChip({
   title,
   ...props
 }: DesktopCitationChipProps) {
-  const resolvedEncodedSources = encodedSources
-    ?? citationChipSourcesAttrFromTitle(title)
-    ?? citationChipSourcesAttrFromNode(node);
-  const sources = useMemo(() => decodeCitationChipSources(resolvedEncodedSources), [resolvedEncodedSources]);
+  const resolvedEncodedSources =
+    encodedSources ??
+    citationChipSourcesAttrFromTitle(title) ??
+    citationChipSourcesAttrFromNode(node);
+  const sources = useMemo(
+    () => decodeCitationChipSources(resolvedEncodedSources),
+    [resolvedEncodedSources],
+  );
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
   const rootRef = useRef<HTMLElement | null>(null);
@@ -398,10 +427,7 @@ function DesktopCitationChip({
 
       const duration = clamp(Math.round(4500 + overflow * 38), 5500, 15_000);
       animation = textEl.animate(
-        [
-          { transform: "translateX(0)" },
-          { transform: `translateX(-${overflow}px)` },
-        ],
+        [{ transform: "translateX(0)" }, { transform: `translateX(-${overflow}px)` }],
         {
           duration,
           direction: "alternate",
@@ -434,7 +460,10 @@ function DesktopCitationChip({
 
     const onPointerDown = (event: MouseEvent) => {
       const target = event.target;
-      if (target instanceof Node && (rootRef.current?.contains(target) || cardRef.current?.contains(target))) {
+      if (
+        target instanceof Node &&
+        (rootRef.current?.contains(target) || cardRef.current?.contains(target))
+      ) {
         return;
       }
       setOpen(false);
@@ -481,7 +510,9 @@ function DesktopCitationChip({
       if (!anchor || !card) {
         return;
       }
-      setPopupPosition(computeCitationPopupPosition(anchor.getBoundingClientRect(), card.getBoundingClientRect()));
+      setPopupPosition(
+        computeCitationPopupPosition(anchor.getBoundingClientRect(), card.getBoundingClientRect()),
+      );
     };
 
     updatePosition();
@@ -526,74 +557,80 @@ function DesktopCitationChip({
       </Button>
       {open && currentSource && typeof document !== "undefined"
         ? createPortal(
-          <div
-            ref={cardRef}
-            role="dialog"
-            aria-label="Citation sources"
-            className="app-surface-card app-shadow-surface-elevated fixed z-[70] w-[min(16rem,calc(100vw-2rem))] overflow-hidden rounded-lg border border-border/32 text-card-foreground"
-            style={popupPosition ? { left: popupPosition.left, top: popupPosition.top } : { left: 0, top: 0, visibility: "hidden" }}
-            onMouseEnter={handleHoverEnter}
-            onMouseLeave={handleHoverLeave}
-          >
-            <div className="flex items-center gap-0 border-b border-border/32 bg-muted/20 px-1.5 py-0.5">
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                className="h-6 w-6 min-w-6 rounded-full p-0 shadow-none transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-35"
-                aria-label="Previous source"
-                disabled={sources.length <= 1}
-                onClick={() => setActiveIndex((index) => (index - 1 + sources.length) % sources.length)}
-              >
-                <CitationArrow direction="left" />
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                className="h-6 w-6 min-w-6 rounded-full p-0 shadow-none transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-35"
-                aria-label="Next source"
-                disabled={sources.length <= 1}
-                onClick={() => setActiveIndex((index) => (index + 1) % sources.length)}
-              >
-                <CitationArrow direction="right" />
-              </Button>
-              <div className="ml-auto pr-0.5 text-[11px] font-medium tabular-nums text-muted-foreground">
-                {activeIndex + 1}/{sources.length}
-              </div>
-            </div>
             <div
-              role="button"
-              tabIndex={0}
-              aria-label={`Open source: ${citationSourceTitle(currentSource)}`}
-              className="w-full cursor-pointer text-left outline-none transition-colors hover:bg-muted/[0.06] focus-visible:ring-2 focus-visible:ring-ring"
-              onClick={() => {
-                setOpen(false);
-                void openExternalCitationSource(currentSource);
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") {
-                  event.preventDefault();
-                  setOpen(false);
-                  void openExternalCitationSource(currentSource);
-                }
-              }}
+              ref={cardRef}
+              role="dialog"
+              aria-label="Citation sources"
+              className="app-surface-card app-shadow-surface-elevated fixed z-[70] w-[min(16rem,calc(100vw-2rem))] overflow-hidden rounded-lg border border-border/32 text-card-foreground"
+              style={
+                popupPosition
+                  ? { left: popupPosition.left, top: popupPosition.top }
+                  : { left: 0, top: 0, visibility: "hidden" }
+              }
+              onMouseEnter={handleHoverEnter}
+              onMouseLeave={handleHoverLeave}
             >
-              <div className="flex items-center gap-2 px-2 py-1.5">
-                <CitationFavicon source={currentSource} className="size-4 shrink-0 text-[9px]" />
-                <div ref={citationTitleContainerRef} className="min-w-0 flex-1 overflow-hidden">
-                  <p
-                    ref={citationTitleTextRef}
-                    className="inline-block whitespace-nowrap text-[0.9rem] font-semibold leading-snug tracking-tight text-foreground will-change-transform"
-                  >
-                    {citationSourceTitle(currentSource)}
-                  </p>
+              <div className="flex items-center gap-0 border-b border-border/32 bg-muted/20 px-1.5 py-0.5">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  className="h-6 w-6 min-w-6 rounded-full p-0 shadow-none transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-35"
+                  aria-label="Previous source"
+                  disabled={sources.length <= 1}
+                  onClick={() =>
+                    setActiveIndex((index) => (index - 1 + sources.length) % sources.length)
+                  }
+                >
+                  <CitationArrow direction="left" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  className="h-6 w-6 min-w-6 rounded-full p-0 shadow-none transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-35"
+                  aria-label="Next source"
+                  disabled={sources.length <= 1}
+                  onClick={() => setActiveIndex((index) => (index + 1) % sources.length)}
+                >
+                  <CitationArrow direction="right" />
+                </Button>
+                <div className="ml-auto pr-0.5 text-[11px] font-medium tabular-nums text-muted-foreground">
+                  {activeIndex + 1}/{sources.length}
                 </div>
               </div>
-            </div>
-          </div>,
-          document.body,
-        )
+              <div
+                role="button"
+                tabIndex={0}
+                aria-label={`Open source: ${citationSourceTitle(currentSource)}`}
+                className="w-full cursor-pointer text-left outline-none transition-colors hover:bg-muted/[0.06] focus-visible:ring-2 focus-visible:ring-ring"
+                onClick={() => {
+                  setOpen(false);
+                  void openExternalCitationSource(currentSource);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    setOpen(false);
+                    void openExternalCitationSource(currentSource);
+                  }
+                }}
+              >
+                <div className="flex items-center gap-2 px-2 py-1.5">
+                  <CitationFavicon source={currentSource} className="size-4 shrink-0 text-[9px]" />
+                  <div ref={citationTitleContainerRef} className="min-w-0 flex-1 overflow-hidden">
+                    <p
+                      ref={citationTitleTextRef}
+                      className="inline-block whitespace-nowrap text-[0.9rem] font-semibold leading-snug tracking-tight text-foreground will-change-transform"
+                    >
+                      {citationSourceTitle(currentSource)}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>,
+            document.body,
+          )
         : null}
     </cite>
   );
@@ -762,7 +799,10 @@ function isAutoLinkSkippedNode(node: HastNode): boolean {
     return true;
   }
 
-  return node.type === "element" && (node.tagName === "a" || node.tagName === "code" || node.tagName === "pre");
+  return (
+    node.type === "element" &&
+    (node.tagName === "a" || node.tagName === "code" || node.tagName === "pre")
+  );
 }
 
 function findBareDesktopFilePathMatches(text: string): DesktopPathMatch[] {
@@ -782,7 +822,9 @@ function findBareDesktopFilePathMatches(text: string): DesktopPathMatch[] {
     }
   }
 
-  matches.sort((left, right) => left.start - right.start || (right.end - right.start) - (left.end - left.start));
+  matches.sort(
+    (left, right) => left.start - right.start || right.end - right.start - (left.end - left.start),
+  );
 
   const deduped: DesktopPathMatch[] = [];
   for (const match of matches) {
@@ -888,7 +930,11 @@ export function rewriteDesktopFileLinksInTree(node: HastNode): void {
     }
   }
 
-  if (node.type === "element" && node.tagName === "a" && typeof node.properties?.href === "string") {
+  if (
+    node.type === "element" &&
+    node.tagName === "a" &&
+    typeof node.properties?.href === "string"
+  ) {
     const href = node.properties.href;
     const desktopPath = fileUrlToDesktopPath(href);
     if (desktopPath) {
@@ -938,16 +984,18 @@ async function openDesktopMessageLink(href: string): Promise<void> {
   const externalTarget = classifyExternalMessageHref(forwardedExternalHref);
   if (externalTarget) {
     const confirmed = await confirmAction({
-      title: externalTarget === "browser"
-        ? "Open external link?"
-        : externalTarget === "mail"
-          ? "Open mail link?"
-          : "Open app link?",
-      message: externalTarget === "browser"
-        ? "This will open the link in your default browser."
-        : externalTarget === "mail"
-          ? "This will open the link in your default mail app."
-          : "This will open the link in another app on this Mac.",
+      title:
+        externalTarget === "browser"
+          ? "Open external link?"
+          : externalTarget === "mail"
+            ? "Open mail link?"
+            : "Open app link?",
+      message:
+        externalTarget === "browser"
+          ? "This will open the link in your default browser."
+          : externalTarget === "mail"
+            ? "This will open the link in your default mail app."
+            : "This will open the link in another app on this Mac.",
       detail: forwardedExternalHref,
       kind: "info",
       confirmLabel: externalTarget === "browser" ? "Open link" : "Open",
@@ -983,7 +1031,10 @@ export function DesktopMessageLink({
         type="button"
         variant="link"
         size="sm"
-        className={cn("wrap-anywhere appearance-none bg-transparent p-0 text-left font-medium text-primary underline", className)}
+        className={cn(
+          "wrap-anywhere appearance-none bg-transparent p-0 text-left font-medium text-primary underline",
+          className,
+        )}
         data-streamdown="link"
         onClick={(event) => {
           if (!href) {
@@ -1042,22 +1093,28 @@ function normalizeMessageResponseChildren(
   if (typeof children === "string") {
     return normalizeDisplayCitationMarkers(children, {
       citationUrlsByIndex,
-      citationSourcesByIndex: citationSources ? new Map(citationSources.map((source, index) => [index + 1, source] as const)) : undefined,
+      citationSourcesByIndex: citationSources
+        ? new Map(citationSources.map((source, index) => [index + 1, source] as const))
+        : undefined,
       citationMode: "html",
       annotations: citationAnnotations,
       fallbackToSourcesFooter,
     });
   }
 
-  return Children.map(children, (child) => typeof child === "string"
-    ? normalizeDisplayCitationMarkers(child, {
-      citationUrlsByIndex,
-      citationSourcesByIndex: citationSources ? new Map(citationSources.map((source, index) => [index + 1, source] as const)) : undefined,
-      citationMode: "html",
-      annotations: citationAnnotations,
-      fallbackToSourcesFooter,
-    })
-    : child);
+  return Children.map(children, (child) =>
+    typeof child === "string"
+      ? normalizeDisplayCitationMarkers(child, {
+          citationUrlsByIndex,
+          citationSourcesByIndex: citationSources
+            ? new Map(citationSources.map((source, index) => [index + 1, source] as const))
+            : undefined,
+          citationMode: "html",
+          annotations: citationAnnotations,
+          fallbackToSourcesFooter,
+        })
+      : child,
+  );
 }
 
 export const MessageResponse = memo(function MessageResponse({
@@ -1096,7 +1153,9 @@ export const MessageResponse = memo(function MessageResponse({
         ...plugins,
       }}
       remarkPlugins={
-        remarkPlugins ? [...remarkPlugins, remarkRewriteDesktopFileLinks] : [defaultRemarkPlugins.gfm, remarkRewriteDesktopFileLinks]
+        remarkPlugins
+          ? [...remarkPlugins, remarkRewriteDesktopFileLinks]
+          : [defaultRemarkPlugins.gfm, remarkRewriteDesktopFileLinks]
       }
       rehypePlugins={rehypePlugins ?? defaultDesktopRehypePlugins}
     />

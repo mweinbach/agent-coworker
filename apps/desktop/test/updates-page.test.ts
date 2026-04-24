@@ -27,42 +27,44 @@ const MOCK_UPDATE_STATE = {
   release: null,
 };
 
-mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
-  appendTranscriptBatch: async () => {},
-  appendTranscriptEvent: async () => {},
-  deleteTranscript: async () => {},
-  listDirectory: async () => [],
-  loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
-  pickWorkspaceDirectory: async () => null,
-  readTranscript: async () => [],
-  saveState: async () => {},
-  startWorkspaceServer: async () => ({ url: "ws://mock" }),
-  stopWorkspaceServer: async () => {},
-  showContextMenu: async () => null,
-  windowMinimize: async () => {},
-  windowMaximize: async () => {},
-  windowClose: async () => {},
-  getPlatform: async () => "linux",
-  readFile: async () => "",
-  previewOSFile: async () => {},
-  openPath: async () => {},
-  openExternalUrl: async () => {},
-  revealPath: async () => {},
-  copyPath: async () => {},
-  createDirectory: async () => {},
-  renamePath: async () => {},
-  trashPath: async () => {},
-  confirmAction: async () => true,
-  showNotification: async () => true,
-  getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  getUpdateState: async () => MOCK_UPDATE_STATE,
-  checkForUpdates: async () => {},
-  quitAndInstallUpdate: async () => {},
-  onSystemAppearanceChanged: () => () => {},
-  onMenuCommand: () => () => {},
-  onUpdateStateChanged: () => () => {},
-}));
+mock.module("../src/lib/desktopCommands", () =>
+  createDesktopCommandsMock({
+    appendTranscriptBatch: async () => {},
+    appendTranscriptEvent: async () => {},
+    deleteTranscript: async () => {},
+    listDirectory: async () => [],
+    loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
+    pickWorkspaceDirectory: async () => null,
+    readTranscript: async () => [],
+    saveState: async () => {},
+    startWorkspaceServer: async () => ({ url: "ws://mock" }),
+    stopWorkspaceServer: async () => {},
+    showContextMenu: async () => null,
+    windowMinimize: async () => {},
+    windowMaximize: async () => {},
+    windowClose: async () => {},
+    getPlatform: async () => "linux",
+    readFile: async () => "",
+    previewOSFile: async () => {},
+    openPath: async () => {},
+    openExternalUrl: async () => {},
+    revealPath: async () => {},
+    copyPath: async () => {},
+    createDirectory: async () => {},
+    renamePath: async () => {},
+    trashPath: async () => {},
+    confirmAction: async () => true,
+    showNotification: async () => true,
+    getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    getUpdateState: async () => MOCK_UPDATE_STATE,
+    checkForUpdates: async () => {},
+    quitAndInstallUpdate: async () => {},
+    onSystemAppearanceChanged: () => () => {},
+    onMenuCommand: () => () => {},
+    onUpdateStateChanged: () => () => {},
+  }),
+);
 
 mock.module("../src/lib/agentSocket", () => ({
   JsonRpcSocket: NoopJsonRpcSocket,
@@ -72,7 +74,9 @@ const { UpdatesPage } = await import("../src/ui/settings/pages/UpdatesPage");
 
 describe("desktop updates page", () => {
   test("renders disabled packaged messaging for unpackaged builds", () => {
-    const html = renderToStaticMarkup(createElement(UpdatesPage, { state: MOCK_UPDATE_STATE as any }));
+    const html = renderToStaticMarkup(
+      createElement(UpdatesPage, { state: MOCK_UPDATE_STATE as any }),
+    );
 
     expect(html).toContain("Updates");
     expect(html).toContain("Current build");
@@ -93,7 +97,9 @@ describe("desktop updates page", () => {
     );
 
     expect(html).toContain("0.1.9");
-    expect(html).toContain("Updates are unavailable for this platform because no update feed is published.");
+    expect(html).toContain(
+      "Updates are unavailable for this platform because no update feed is published.",
+    );
     expect(html).toContain("Latest seen version");
     expect(html).toContain("Check now");
   });
@@ -145,7 +151,8 @@ describe("desktop updates page", () => {
             version: "0.1.21",
             releaseName: "v0.1.21",
             releaseDate: "2026-03-12T12:00:00.000Z",
-            releaseNotes: "<h1>Cowork 0.1.21</h1><p>This release fixes the macOS auto-update path by forcing full signed update downloads.</p><ul><li>Mac updater reliability</li></ul>",
+            releaseNotes:
+              "<h1>Cowork 0.1.21</h1><p>This release fixes the macOS auto-update path by forcing full signed update downloads.</p><ul><li>Mac updater reliability</li></ul>",
             releasePageUrl: "https://github.com/mweinbach/agent-coworker/releases/tag/v0.1.21",
           },
         } as any,
@@ -154,7 +161,9 @@ describe("desktop updates page", () => {
 
     expect(html).toContain("<h1");
     expect(html).toContain("Cowork 0.1.21</h1>");
-    expect(html).toContain("<p>This release fixes the macOS auto-update path by forcing full signed update downloads.</p>");
+    expect(html).toContain(
+      "<p>This release fixes the macOS auto-update path by forcing full signed update downloads.</p>",
+    );
     expect(html).toContain("<li");
     expect(html).toContain("Mac updater reliability</li>");
     expect(html).not.toContain("&lt;h1&gt;Cowork 0.1.19&lt;/h1&gt;");

@@ -1,21 +1,25 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-
-import {
-  ChevronRightIcon,
-  FolderIcon,
-  FolderOpenIcon,
-  FileIcon,
-  MoreVerticalIcon,
-} from "lucide-react";
 import type { AutoAnimationPlugin } from "@formkit/auto-animate";
 import { getTransitionSizes } from "@formkit/auto-animate";
 import { useAutoAnimate } from "@formkit/auto-animate/react";
+import {
+  ChevronRightIcon,
+  FileIcon,
+  FolderIcon,
+  FolderOpenIcon,
+  MoreVerticalIcon,
+} from "lucide-react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { useAppStore } from "../../app/store";
 import type { ExplorerEntry } from "../../app/types";
 import { Button } from "../../components/ui/button";
+import {
+  confirmAction,
+  listDirectory,
+  showContextMenu,
+  showNotification,
+} from "../../lib/desktopCommands";
 import { cn } from "../../lib/utils";
-import { listDirectory, showContextMenu, confirmAction, showNotification } from "../../lib/desktopCommands";
 
 export type WorkspaceFileExplorerProps = {
   workspaceId: string;
@@ -102,11 +106,17 @@ function explorerScopeKey(workspaceId: string, rootPath: string): string {
   return `${workspaceId}:${normalizeExplorerPath(rootPath)}`;
 }
 
-function cloneDirectoryByPath(data: Record<string, DirectorySnapshot>): Record<string, DirectorySnapshot> {
+function cloneDirectoryByPath(
+  data: Record<string, DirectorySnapshot>,
+): Record<string, DirectorySnapshot> {
   return JSON.parse(JSON.stringify(data)) as Record<string, DirectorySnapshot>;
 }
 
-async function runPool<T>(items: T[], concurrency: number, fn: (item: T) => Promise<void>): Promise<void> {
+async function runPool<T>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T) => Promise<void>,
+): Promise<void> {
   if (items.length === 0) return;
   const queue = items.slice();
   const worker = async () => {
@@ -153,7 +163,9 @@ export function isTreeRowControlTarget(target: EventTarget | null): boolean {
       typeof target === "object" &&
       "closest" in target &&
       typeof (target as { closest?: unknown }).closest === "function" &&
-      (target as { closest: (selector: string) => Element | null }).closest(FILE_EXPLORER_CONTROL_SELECTOR),
+      (target as { closest: (selector: string) => Element | null }).closest(
+        FILE_EXPLORER_CONTROL_SELECTOR,
+      ),
   );
 }
 
@@ -187,7 +199,7 @@ export function buildDirectoryFingerprint(entries: ExplorerEntry[]): string {
 export function shouldReuseBackgroundDirectorySnapshot(
   current: DirectorySnapshotSummary | undefined,
   fingerprint: string,
-  error: string | null
+  error: string | null,
 ): boolean {
   return !!current && current.error === error && current.fingerprint === fingerprint;
 }
@@ -316,7 +328,9 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
   workspaceId,
   className,
 }: WorkspaceFileExplorerProps) {
-  const workspacePath = useAppStore((s) => s.workspaces.find((w) => w.id === workspaceId)?.path ?? null);
+  const workspacePath = useAppStore(
+    (s) => s.workspaces.find((w) => w.id === workspaceId)?.path ?? null,
+  );
   const explorer = useAppStore((s) => s.workspaceExplorerById[workspaceId]);
   const refreshSignal = useAppStore((s) => s.workspaceExplorerRefreshById[workspaceId] ?? 0);
   const showHiddenFiles = useAppStore((s) => s.showHiddenFiles);
@@ -357,7 +371,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
 
   const treeRows = useMemo(
     () => buildExplorerRows(rootPath, expandedPaths, directoryByPath, showHiddenFiles),
-    [rootPath, expandedPaths, directoryByPath, showHiddenFiles]
+    [rootPath, expandedPaths, directoryByPath, showHiddenFiles],
   );
 
   const rootSnapshot = directoryByPath[rootPath];
@@ -369,10 +383,13 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
       treeListDomRef.current = node;
       autoAnimateRef(node);
     },
-    [autoAnimateRef]
+    [autoAnimateRef],
   );
   const [rowEnterAnimationsReady, setRowEnterAnimationsReady] = useState(false);
-  const explorerRowAnimPrevRef = useRef<{ scope: string; keys: Set<string> }>({ scope: "", keys: new Set() });
+  const explorerRowAnimPrevRef = useRef<{ scope: string; keys: Set<string> }>({
+    scope: "",
+    keys: new Set(),
+  });
 
   useEffect(() => {
     rootPathRef.current = rootPath;
@@ -428,7 +445,8 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
     if (added.length === 0) return;
 
     const reducedMotion =
-      typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     if (reducedMotion) return;
 
     for (const key of added) {
@@ -489,7 +507,10 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
         let changed = false;
         setDirectoryByPath((previous) => {
           const current = previous[targetPath];
-          if (opts?.background && shouldReuseBackgroundDirectorySnapshot(current, fingerprint, null)) {
+          if (
+            opts?.background &&
+            shouldReuseBackgroundDirectorySnapshot(current, fingerprint, null)
+          ) {
             return previous;
           }
 
@@ -513,7 +534,10 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
         let changed = false;
         setDirectoryByPath((previous) => {
           const current = previous[targetPath];
-          if (opts?.background && shouldReuseBackgroundDirectorySnapshot(current, current?.fingerprint ?? "", message)) {
+          if (
+            opts?.background &&
+            shouldReuseBackgroundDirectorySnapshot(current, current?.fingerprint ?? "", message)
+          ) {
             return previous;
           }
 
@@ -530,36 +554,35 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
         return changed;
       }
     },
-    [showHiddenFiles]
+    [showHiddenFiles],
   );
 
-  const refreshExpandedDirectories = useCallback(
-    async () => {
-      const currentRootPath = rootPathRef.current;
-      if (!currentRootPath) return;
-      if (syncInFlightRef.current) {
-        syncQueuedRef.current = true;
-        return;
-      }
-      syncInFlightRef.current = true;
+  const refreshExpandedDirectories = useCallback(async () => {
+    const currentRootPath = rootPathRef.current;
+    if (!currentRootPath) return;
+    if (syncInFlightRef.current) {
+      syncQueuedRef.current = true;
+      return;
+    }
+    syncInFlightRef.current = true;
 
-      try {
-        do {
-          syncQueuedRef.current = false;
-          const cycleRootPath = rootPathRef.current;
-          if (!cycleRootPath) break;
-          const paths = new Set<string>([cycleRootPath, ...expandedPathsRef.current]);
-          const updates = await Promise.all(Array.from(paths).map((path) => loadDirectory(path, { background: true })));
-          if (updates.some(Boolean)) {
-            void refresh(workspaceId).catch(() => {});
-          }
-        } while (syncQueuedRef.current);
-      } finally {
-        syncInFlightRef.current = false;
-      }
-    },
-    [loadDirectory, refresh, workspaceId]
-  );
+    try {
+      do {
+        syncQueuedRef.current = false;
+        const cycleRootPath = rootPathRef.current;
+        if (!cycleRootPath) break;
+        const paths = new Set<string>([cycleRootPath, ...expandedPathsRef.current]);
+        const updates = await Promise.all(
+          Array.from(paths).map((path) => loadDirectory(path, { background: true })),
+        );
+        if (updates.some(Boolean)) {
+          void refresh(workspaceId).catch(() => {});
+        }
+      } while (syncQueuedRef.current);
+    } finally {
+      syncInFlightRef.current = false;
+    }
+  }, [loadDirectory, refresh, workspaceId]);
 
   const toggleDirectory = useCallback(
     (path: string) => {
@@ -585,10 +608,13 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
         const snap = directoryByPathRef.current[normalizedTarget];
         const useBackgroundRefresh =
           !!snap && !snap.loading && !snap.error && snap.updatedAt != null;
-        void loadDirectory(targetPath, useBackgroundRefresh ? { background: true } : undefined).catch(() => {});
+        void loadDirectory(
+          targetPath,
+          useBackgroundRefresh ? { background: true } : undefined,
+        ).catch(() => {});
       }
     },
-    [loadDirectory]
+    [loadDirectory],
   );
 
   useEffect(() => {
@@ -598,7 +624,10 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
 
     const prevScope = scopeRef.current;
     if (prevScope) {
-      explorerDirectorySessionByScope.set(prevScope, cloneDirectoryByPath(directoryByPathRef.current));
+      explorerDirectorySessionByScope.set(
+        prevScope,
+        cloneDirectoryByPath(directoryByPathRef.current),
+      );
     }
 
     folderLastClickRef.current = null;
@@ -626,7 +655,10 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
     return () => {
       const scope = scopeRef.current;
       if (scope) {
-        explorerDirectorySessionByScope.set(scope, cloneDirectoryByPath(directoryByPathRef.current));
+        explorerDirectorySessionByScope.set(
+          scope,
+          cloneDirectoryByPath(directoryByPathRef.current),
+        );
       }
     };
   }, []);
@@ -649,7 +681,9 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
         await loadDirectory(p, { silent: true });
       };
 
-      const childDirs = rootSnap.entries.filter((e) => e.isDirectory).map((e) => normalizeExplorerPath(e.path));
+      const childDirs = rootSnap.entries
+        .filter((e) => e.isDirectory)
+        .map((e) => normalizeExplorerPath(e.path));
       await runPool(childDirs, PREFETCH_CONCURRENCY, silentLoad);
 
       if (cancelled || gen !== prefetchGenRef.current) return;
@@ -726,7 +760,12 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
 
       const items = [
         ...(entry.isDirectory
-          ? [{ id: folderExpanded ? "collapse" : "expand", label: folderExpanded ? "Collapse Folder" : "Expand Folder" }]
+          ? [
+              {
+                id: folderExpanded ? "collapse" : "expand",
+                label: folderExpanded ? "Collapse Folder" : "Expand Folder",
+              },
+            ]
           : []),
         { id: "open", label: openLabel },
         { id: "reveal", label: "Reveal in Finder/Explorer" },
@@ -772,7 +811,16 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
         }
       }
     },
-    [workspaceId, selectFile, openFile, toggleDirectory, revealFile, copyPath, trashPath, refreshExpandedDirectories]
+    [
+      workspaceId,
+      selectFile,
+      openFile,
+      toggleDirectory,
+      revealFile,
+      copyPath,
+      trashPath,
+      refreshExpandedDirectories,
+    ],
   );
 
   const handleContextMenu = useCallback(
@@ -781,7 +829,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
       e.stopPropagation();
       await openEntryMenu(entry);
     },
-    [openEntryMenu]
+    [openEntryMenu],
   );
 
   const handleOpenEntry = useCallback(
@@ -792,7 +840,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
       }
       void openFile(workspaceId, entry.path, false).catch(() => {});
     },
-    [openFile, toggleDirectory, workspaceId]
+    [openFile, toggleDirectory, workspaceId],
   );
 
   const handleSelectEntry = useCallback(
@@ -802,7 +850,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
         openFilePreview({ path: entry.path });
       }
     },
-    [openFilePreview, selectFile, workspaceId]
+    [openFilePreview, selectFile, workspaceId],
   );
 
   if (!workspacePath || !rootPath) {
@@ -817,7 +865,9 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
     <div className={cn("flex h-full flex-col overflow-hidden", className)}>
       <div className="flex items-center justify-between px-2.5 pb-1 pt-2">
         <div className="flex items-center gap-2 min-w-0">
-          <div className="text-[10px] font-semibold tracking-[0.16em] text-muted-foreground/80 shrink-0 uppercase">Files</div>
+          <div className="text-[10px] font-semibold tracking-[0.16em] text-muted-foreground/80 shrink-0 uppercase">
+            Files
+          </div>
           <div className="text-muted-foreground/35 text-[11px] shrink-0 font-light">/</div>
           <Button
             type="button"
@@ -833,10 +883,16 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
         </div>
       </div>
 
-      <div className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain px-1 pb-1" data-file-explorer-scroll-region="true">
+      <div
+        className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain px-1 pb-1"
+        data-file-explorer-scroll-region="true"
+      >
         {rootSnapshot?.error ? (
-          <div className="rounded bg-destructive/10 p-3 text-center text-xs text-destructive">{rootSnapshot.error}</div>
-        ) : treeRows.length === 0 && (!rootSnapshot || rootSnapshot.loading) ? null : treeRows.length === 0 ? (
+          <div className="rounded bg-destructive/10 p-3 text-center text-xs text-destructive">
+            {rootSnapshot.error}
+          </div>
+        ) : treeRows.length === 0 &&
+          (!rootSnapshot || rootSnapshot.loading) ? null : treeRows.length === 0 ? (
           <div className="py-6 text-center text-xs text-muted-foreground">This folder is empty</div>
         ) : (
           <div
@@ -853,7 +909,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
                     data-file-row-key={explorerRowDomKey(row)}
                     className={cn(
                       "flex items-center gap-1 rounded py-1 text-[10px] transition-opacity duration-150 ease-out motion-reduce:transition-none",
-                      row.status === "error" ? "text-destructive" : "text-muted-foreground"
+                      row.status === "error" ? "text-destructive" : "text-muted-foreground",
                     )}
                     style={{ paddingLeft: `${row.depth * 0.85 + 1.15}rem` }}
                   >
@@ -884,7 +940,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
                     isSelected
                       ? "bg-accent text-accent-foreground"
                       : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
-                    entry.isHidden && "opacity-70"
+                    entry.isHidden && "opacity-70",
                   )}
                   style={{ paddingLeft: `${depth * 0.85 + 0.35}rem` }}
                   onDoubleClick={(event) => {
@@ -961,7 +1017,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
                       aria-label={row.expanded ? `Collapse ${entry.name}` : `Expand ${entry.name}`}
                       className={cn(
                         "h-[18px] w-[18px] min-w-[18px] rounded p-0 transition-colors duration-150 ease-out select-none shadow-none motion-reduce:transition-none",
-                        isSelected ? "hover:bg-accent-foreground/15" : "hover:bg-muted"
+                        isSelected ? "hover:bg-accent-foreground/15" : "hover:bg-muted",
                       )}
                       data-file-explorer-control="true"
                       onPress={() => toggleDirectory(entry.path)}
@@ -999,7 +1055,12 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
 
                   <div className="min-w-0 flex-1">
                     <div className="truncate font-medium">{entry.name}</div>
-                    <div className={cn("truncate text-[9px] leading-3.5", isSelected ? "text-accent-foreground/85" : "text-muted-foreground")}>
+                    <div
+                      className={cn(
+                        "truncate text-[9px] leading-3.5",
+                        isSelected ? "text-accent-foreground/85" : "text-muted-foreground",
+                      )}
+                    >
                       {entryMeta}
                     </div>
                   </div>
@@ -1011,7 +1072,9 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
                     aria-label={`More options for ${entry.name}`}
                     className={cn(
                       "h-5 w-5 min-w-5 rounded p-0 opacity-0 transition-opacity select-none shadow-none",
-                      isSelected ? "opacity-100 hover:bg-accent-foreground/15" : "group-hover:opacity-100 hover:bg-muted"
+                      isSelected
+                        ? "opacity-100 hover:bg-accent-foreground/15"
+                        : "group-hover:opacity-100 hover:bg-muted",
                     )}
                     data-file-explorer-control="true"
                     onPress={() => void openEntryMenu(entry)}

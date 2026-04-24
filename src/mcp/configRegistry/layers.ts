@@ -3,13 +3,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { z } from "zod";
-
-import type { AgentConfig, MCPServerConfig } from "../../types";
 import {
   buildPluginCatalogSnapshot,
   comparePluginCatalogEntries,
   readPluginMcpServers,
 } from "../../plugins";
+import type { AgentConfig, MCPServerConfig } from "../../types";
 import { canonicalizePathForBoundaryCheckSync, isPathInside } from "../../utils/paths";
 import { resolveMcpConfigPaths } from "../configPaths";
 import { parseMCPServersDocument } from "./parser";
@@ -72,7 +71,13 @@ async function readLayer(opts: {
 }
 
 function mergeLayers(layers: MCPConfigLayer[]): MCPRegistryServer[] {
-  const precedence: MCPServerSource[] = ["system", "user_legacy", "user", "workspace_legacy", "workspace"];
+  const precedence: MCPServerSource[] = [
+    "system",
+    "user_legacy",
+    "user",
+    "workspace_legacy",
+    "workspace",
+  ];
   const bySource = new Map(layers.map((layer) => [layer.source, layer]));
   const mergedByName = new Map<string, MCPRegistryServer>();
 
@@ -117,7 +122,12 @@ function isPluginRelativeFilesystemPath(pluginRootDir: string, value: string): b
   return isPathInside(pluginRootDir, resolved) && existsSync(resolved);
 }
 
-function resolvePluginLocalPath(serverName: string, pluginRootDir: string, value: string, label: string): string {
+function resolvePluginLocalPath(
+  serverName: string,
+  pluginRootDir: string,
+  value: string,
+  label: string,
+): string {
   const resolved = path.resolve(pluginRootDir, value);
   const canonicalPluginRoot = canonicalizePathForBoundaryCheckSync(pluginRootDir);
   const canonicalResolved = canonicalizePathForBoundaryCheckSync(resolved);
@@ -127,7 +137,10 @@ function resolvePluginLocalPath(serverName: string, pluginRootDir: string, value
   return resolved;
 }
 
-function rebasePluginLocalTransport(server: MCPServerConfig, pluginRootDir: string): MCPServerConfig {
+function rebasePluginLocalTransport(
+  server: MCPServerConfig,
+  pluginRootDir: string,
+): MCPServerConfig {
   if (server.transport.type !== "stdio") {
     return server;
   }
@@ -138,7 +151,8 @@ function rebasePluginLocalTransport(server: MCPServerConfig, pluginRootDir: stri
   const args = server.transport.args?.map((arg) =>
     isPluginRelativeFilesystemPath(pluginRootDir, arg)
       ? resolvePluginLocalPath(server.name, pluginRootDir, arg, `argument "${arg}"`)
-      : arg);
+      : arg,
+  );
   const cwd = server.transport.cwd
     ? resolvePluginLocalPath(server.name, pluginRootDir, server.transport.cwd, "cwd")
     : undefined;
@@ -155,7 +169,9 @@ function rebasePluginLocalTransport(server: MCPServerConfig, pluginRootDir: stri
   };
 }
 
-async function readPluginLayers(config: AgentConfig): Promise<{ layers: MCPConfigLayer[]; warnings: string[] }> {
+async function readPluginLayers(
+  config: AgentConfig,
+): Promise<{ layers: MCPConfigLayer[]; warnings: string[] }> {
   const catalog = await buildPluginCatalogSnapshot(config);
   const layers: MCPConfigLayer[] = [];
   const warnings = [...catalog.warnings];
@@ -167,8 +183,9 @@ async function readPluginLayers(config: AgentConfig): Promise<{ layers: MCPConfi
     let servers: MCPServerConfig[] = [];
     let parseError: string | undefined;
     try {
-      servers = (await readPluginMcpServers(plugin.mcpPath))
-        .map((server) => rebasePluginLocalTransport(server, plugin.rootDir));
+      servers = (await readPluginMcpServers(plugin.mcpPath)).map((server) =>
+        rebasePluginLocalTransport(server, plugin.rootDir),
+      );
     } catch (error) {
       parseError = String(error);
       warnings.push(`[MCP] Ignoring malformed plugin MCP config at ${filePath}: ${parseError}`);
@@ -196,7 +213,10 @@ async function readPluginLayers(config: AgentConfig): Promise<{ layers: MCPConfi
   return { layers, warnings };
 }
 
-function mergePluginLayers(baseServers: MCPRegistryServer[], pluginLayers: MCPConfigLayer[]): {
+function mergePluginLayers(
+  baseServers: MCPRegistryServer[],
+  pluginLayers: MCPConfigLayer[],
+): {
   servers: MCPRegistryServer[];
   warnings: string[];
 } {
@@ -229,29 +249,55 @@ function mergePluginLayers(baseServers: MCPRegistryServer[], pluginLayers: MCPCo
   };
 }
 
-export async function loadMCPConfigRegistry(config: AgentConfig): Promise<MCPConfigRegistrySnapshot> {
+export async function loadMCPConfigRegistry(
+  config: AgentConfig,
+): Promise<MCPConfigRegistrySnapshot> {
   const paths = resolveMcpConfigPaths(config);
 
   const [layers, pluginData] = await Promise.all([
     Promise.all([
-      readLayer({ source: "workspace", filePath: paths.workspaceConfigFile, editable: true, legacy: false }),
+      readLayer({
+        source: "workspace",
+        filePath: paths.workspaceConfigFile,
+        editable: true,
+        legacy: false,
+      }),
       readLayer({ source: "user", filePath: paths.userConfigFile, editable: false, legacy: false }),
-      readLayer({ source: "system", filePath: paths.systemConfigFile, editable: false, legacy: false }),
-      readLayer({ source: "workspace_legacy", filePath: paths.workspaceLegacyFile, editable: false, legacy: true }),
-      readLayer({ source: "user_legacy", filePath: paths.userLegacyFile, editable: false, legacy: true }),
+      readLayer({
+        source: "system",
+        filePath: paths.systemConfigFile,
+        editable: false,
+        legacy: false,
+      }),
+      readLayer({
+        source: "workspace_legacy",
+        filePath: paths.workspaceLegacyFile,
+        editable: false,
+        legacy: true,
+      }),
+      readLayer({
+        source: "user_legacy",
+        filePath: paths.userLegacyFile,
+        editable: false,
+        legacy: true,
+      }),
     ]),
     readPluginLayers(config),
   ]);
 
   const warnings = layers
     .filter((layer) => Boolean(layer.file.parseError))
-    .map((layer) => `[MCP] Ignoring malformed ${layer.source} config at ${layer.file.path}: ${layer.file.parseError}`);
+    .map(
+      (layer) =>
+        `[MCP] Ignoring malformed ${layer.source} config at ${layer.file.path}: ${layer.file.parseError}`,
+    );
   warnings.push(...pluginData.warnings);
 
   const merged = mergePluginLayers(mergeLayers(layers), pluginData.layers);
   warnings.push(...merged.warnings);
 
-  const fileForSource = (source: MCPServerSource) => layers.find((layer) => layer.source === source)!.file;
+  const fileForSource = (source: MCPServerSource) =>
+    layers.find((layer) => layer.source === source)!.file;
 
   return {
     servers: merged.servers,

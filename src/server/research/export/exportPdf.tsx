@@ -1,11 +1,16 @@
 import fs from "node:fs/promises";
-
+import { Document, Link, Page, renderToBuffer, StyleSheet, Text, View } from "@react-pdf/renderer";
 import React from "react";
-import { Document, Link, Page, StyleSheet, Text, View, renderToBuffer } from "@react-pdf/renderer";
 
 import type { ResearchRecord } from "../types";
-import { nodeChildren, nodeText, parseMarkdownAst, trimMarkdownText, type MarkdownNode } from "./markdownAst";
 import { buildResearchMarkdownDocument } from "./exportMarkdown";
+import {
+  type MarkdownNode,
+  nodeChildren,
+  nodeText,
+  parseMarkdownAst,
+  trimMarkdownText,
+} from "./markdownAst";
 
 const styles = StyleSheet.create({
   page: {
@@ -173,9 +178,10 @@ function renderInline(node: MarkdownNode, key: string): React.ReactNode {
       );
     case "link": {
       const content = nodeChildren(node);
-      const label = content.length > 0
-        ? content.map((child, index) => renderInline(child, `${key}:${index}`))
-        : node.url ?? "";
+      const label =
+        content.length > 0
+          ? content.map((child, index) => renderInline(child, `${key}:${index}`))
+          : (node.url ?? "");
       return (
         <Link key={key} src={node.url ?? ""} style={styles.link}>
           {label}
@@ -202,9 +208,10 @@ function renderInline(node: MarkdownNode, key: string): React.ReactNode {
 
 function renderParagraphText(node: MarkdownNode, key: string, style = styles.paragraph) {
   const children = nodeChildren(node);
-  const content = children.length > 0
-    ? children.map((child, index) => renderInline(child, `${key}:${index}`))
-    : trimMarkdownText(nodeText(node));
+  const content =
+    children.length > 0
+      ? children.map((child, index) => renderInline(child, `${key}:${index}`))
+      : trimMarkdownText(nodeText(node));
 
   return (
     <Text key={key} style={style}>
@@ -230,9 +237,13 @@ function renderListItem(
     >
       <Text style={styles.listMarker}>{marker}</Text>
       <View style={styles.listContent}>
-        {children.length > 0
-          ? children.map((child, childIndex) => renderBlock(child, `${key}:${childIndex}`, listLevel + 1))
-          : <Text style={styles.paragraph}>{trimMarkdownText(nodeText(node))}</Text>}
+        {children.length > 0 ? (
+          children.map((child, childIndex) =>
+            renderBlock(child, `${key}:${childIndex}`, listLevel + 1),
+          )
+        ) : (
+          <Text style={styles.paragraph}>{trimMarkdownText(nodeText(node))}</Text>
+        )}
       </View>
     </View>
   );
@@ -253,14 +264,18 @@ function renderBlock(node: MarkdownNode, key: string, listLevel = 0): React.Reac
       const start = typeof node.start === "number" ? node.start : 1;
       return (
         <View key={key} style={styles.list}>
-          {items.map((item, index) => renderListItem(item, `${key}:${index}`, node.ordered === true, index, listLevel, start))}
+          {items.map((item, index) =>
+            renderListItem(item, `${key}:${index}`, node.ordered === true, index, listLevel, start),
+          )}
         </View>
       );
     }
     case "blockquote":
       return (
         <View key={key} style={styles.blockquote}>
-          {nodeChildren(node).map((child, index) => renderBlock(child, `${key}:${index}`, listLevel))}
+          {nodeChildren(node).map((child, index) =>
+            renderBlock(child, `${key}:${index}`, listLevel),
+          )}
         </View>
       );
     case "code":
@@ -282,7 +297,9 @@ function renderBlock(node: MarkdownNode, key: string, listLevel = 0): React.Reac
       }
       return (
         <React.Fragment key={key}>
-          {nodeChildren(node).map((child, index) => renderBlock(child, `${key}:${index}`, listLevel))}
+          {nodeChildren(node).map((child, index) =>
+            renderBlock(child, `${key}:${index}`, listLevel),
+          )}
         </React.Fragment>
       );
     }

@@ -9,19 +9,21 @@ describe("mobile workspace switch bootstrap", () => {
     const refreshWorkspaceBoundStores = mock(async () => {});
     const initialize = mock(async () => {});
     const requestThreadList = mock(async () => ({
-      threads: [{
-        id: "thread-1",
-        title: "Thread One",
-        preview: "",
-        modelProvider: "openai",
-        model: "gpt-5",
-        cwd: "/tmp/workspace-two",
-        createdAt: new Date(0).toISOString(),
-        updatedAt: new Date(0).toISOString(),
-        messageCount: 0,
-        lastEventSeq: 3,
-        status: { type: "idle" as const },
-      }],
+      threads: [
+        {
+          id: "thread-1",
+          title: "Thread One",
+          preview: "",
+          modelProvider: "openai",
+          model: "gpt-5",
+          cwd: "/tmp/workspace-two",
+          createdAt: new Date(0).toISOString(),
+          updatedAt: new Date(0).toISOString(),
+          messageCount: 0,
+          lastEventSeq: 3,
+          status: { type: "idle" as const },
+        },
+      ],
     }));
 
     await bootstrapWorkspaceSwitchSession({
@@ -48,13 +50,15 @@ describe("mobile workspace switch bootstrap", () => {
     });
     const requestThreadList = mock(async () => ({ threads: [] }));
 
-    await expect(bootstrapWorkspaceSwitchSession({
-      client: { initialize, requestThreadList },
-      clearThreads,
-      hydrateThread,
-      refreshWorkspaceBoundStores,
-      waitForInitializedMs: 0,
-    })).rejects.toThrow("Not initialized");
+    await expect(
+      bootstrapWorkspaceSwitchSession({
+        client: { initialize, requestThreadList },
+        clearThreads,
+        hydrateThread,
+        refreshWorkspaceBoundStores,
+        waitForInitializedMs: 0,
+      }),
+    ).rejects.toThrow("Not initialized");
 
     expect(clearThreads).toHaveBeenCalledTimes(1);
     expect(requestThreadList).not.toHaveBeenCalled();

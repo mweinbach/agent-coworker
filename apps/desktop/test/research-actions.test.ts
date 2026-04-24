@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 
 import { MAX_RESEARCH_UPLOAD_BYTES } from "../../../src/server/research/types";
 
-const { createResearchActions, __internalResearchActionBindings } = await import("../src/app/store.actions/research");
+const { createResearchActions, __internalResearchActionBindings } = await import(
+  "../src/app/store.actions/research"
+);
 
 type TestState = {
   notifications: Array<{
@@ -17,14 +19,17 @@ type TestState = {
   researchTransportWorkspaceId: string | null;
   workspaces: Array<{ id: string; path: string }>;
   view: "chat" | "skills" | "research" | "settings";
-  researchById: Record<string, {
-    id: string;
-    title: string;
-    status?: "pending" | "running" | "completed" | "cancelled" | "failed";
-    outputsMarkdown?: string;
-    lastEventId?: string | null;
-    updatedAt?: string;
-  }>;
+  researchById: Record<
+    string,
+    {
+      id: string;
+      title: string;
+      status?: "pending" | "running" | "completed" | "cancelled" | "failed";
+      outputsMarkdown?: string;
+      lastEventId?: string | null;
+      updatedAt?: string;
+    }
+  >;
   researchOrder: string[];
   selectedResearchId: string | null;
   researchListLoading: boolean;
@@ -75,7 +80,8 @@ describe("research actions", () => {
   const saveExportedFileMock = mock(async () => "/Users/test/Downloads/report.pdf");
 
   const deps = {
-    saveExportedFile: (...args: Parameters<typeof saveExportedFileMock>) => saveExportedFileMock(...args),
+    saveExportedFile: (...args: Parameters<typeof saveExportedFileMock>) =>
+      saveExportedFileMock(...args),
     requestJsonRpc: (...args: Parameters<typeof requestJsonRpcMock>) => requestJsonRpcMock(...args),
     registerWorkspaceJsonRpcLifecycle: () => () => {},
     registerWorkspaceJsonRpcRouter: () => () => {},
@@ -165,7 +171,9 @@ describe("research actions", () => {
     expect(harness.state.notifications).toHaveLength(1);
     expect(harness.state.notifications[0]?.kind).toBe("error");
     expect(harness.state.notifications[0]?.title).toBe("Unable to export research");
-    expect(harness.state.notifications[0]?.detail).toBe("The export completed without a downloadable file path.");
+    expect(harness.state.notifications[0]?.detail).toBe(
+      "The export completed without a downloadable file path.",
+    );
   });
 
   test("startResearch rejects oversized files before reading attachment bytes", async () => {
@@ -206,15 +214,28 @@ describe("research actions", () => {
       },
       researchOrder: ["research-1"],
     });
-    let routeHandler: ((message: { kind: "notification"; method: string; params?: Record<string, unknown> }) => void) | null = null;
-    const actions = createResearchActions(harness.set as never, harness.get as never, {
-      ...deps,
-      registerWorkspaceJsonRpcRouter: (_workspaceId: string, handler: NonNullable<typeof routeHandler>) => {
-        routeHandler = handler;
-        return () => {};
-      },
-      requestJsonRpc: async () => ({ path: "/tmp/report.pdf" }),
-    } as never);
+    let routeHandler:
+      | ((message: {
+          kind: "notification";
+          method: string;
+          params?: Record<string, unknown>;
+        }) => void)
+      | null = null;
+    const actions = createResearchActions(
+      harness.set as never,
+      harness.get as never,
+      {
+        ...deps,
+        registerWorkspaceJsonRpcRouter: (
+          _workspaceId: string,
+          handler: NonNullable<typeof routeHandler>,
+        ) => {
+          routeHandler = handler;
+          return () => {};
+        },
+        requestJsonRpc: async () => ({ path: "/tmp/report.pdf" }),
+      } as never,
+    );
 
     await actions.exportResearch("research-1", "pdf");
     routeHandler?.({
@@ -241,26 +262,41 @@ describe("research actions", () => {
           outputsMarkdown: "",
           lastEventId: "evt-1",
           thoughtSummaries: [],
-          sources: [{
-            sourceType: "url",
-            url: "https://example.com/report",
-            title: "url_context_result",
-            host: "example.com",
-          }],
+          sources: [
+            {
+              sourceType: "url",
+              url: "https://example.com/report",
+              title: "url_context_result",
+              host: "example.com",
+            },
+          ],
           updatedAt: "2026-04-21T00:00:00.000Z",
         },
       },
       researchOrder: ["research-1"],
     });
-    let routeHandler: ((message: { kind: "notification"; method: string; params?: Record<string, unknown> }) => void) | null = null;
-    const actions = createResearchActions(harness.set as never, harness.get as never, {
-      ...deps,
-      registerWorkspaceJsonRpcRouter: (_workspaceId: string, handler: NonNullable<typeof routeHandler>) => {
-        routeHandler = handler;
-        return () => {};
-      },
-      requestJsonRpc: async () => ({ path: "/tmp/report.pdf" }),
-    } as never);
+    let routeHandler:
+      | ((message: {
+          kind: "notification";
+          method: string;
+          params?: Record<string, unknown>;
+        }) => void)
+      | null = null;
+    const actions = createResearchActions(
+      harness.set as never,
+      harness.get as never,
+      {
+        ...deps,
+        registerWorkspaceJsonRpcRouter: (
+          _workspaceId: string,
+          handler: NonNullable<typeof routeHandler>,
+        ) => {
+          routeHandler = handler;
+          return () => {};
+        },
+        requestJsonRpc: async () => ({ path: "/tmp/report.pdf" }),
+      } as never,
+    );
 
     await actions.exportResearch("research-1", "pdf");
     routeHandler?.({
@@ -277,12 +313,14 @@ describe("research actions", () => {
       },
     });
 
-    expect(harness.state.researchById["research-1"]?.sources).toEqual([{
-      sourceType: "url",
-      url: "https://example.com/report",
-      title: "Final report title",
-      host: "example.com",
-    }]);
+    expect(harness.state.researchById["research-1"]?.sources).toEqual([
+      {
+        sourceType: "url",
+        url: "https://example.com/report",
+        title: "Final report title",
+        host: "example.com",
+      },
+    ]);
   });
 
   test("research subscriptions apply the returned catch-up snapshot", async () => {
@@ -314,18 +352,27 @@ describe("research actions", () => {
       lastEventId: "evt-4",
       updatedAt: "2026-04-21T00:01:00.000Z",
     };
-    const actions = createResearchActions(harness.set as never, harness.get as never, {
-      ...deps,
-      requestJsonRpc: async (_get: unknown, _set: unknown, _workspaceId: string, method: string) => {
-        if (method === "research/list") {
-          return { research: [runningResearch] };
-        }
-        if (method === "research/subscribe") {
-          return { research: snapshot };
-        }
-        return {};
-      },
-    } as never);
+    const actions = createResearchActions(
+      harness.set as never,
+      harness.get as never,
+      {
+        ...deps,
+        requestJsonRpc: async (
+          _get: unknown,
+          _set: unknown,
+          _workspaceId: string,
+          method: string,
+        ) => {
+          if (method === "research/list") {
+            return { research: [runningResearch] };
+          }
+          if (method === "research/subscribe") {
+            return { research: snapshot };
+          }
+          return {};
+        },
+      } as never,
+    );
 
     await actions.refreshResearchList();
 

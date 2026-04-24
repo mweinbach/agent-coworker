@@ -5,13 +5,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { loadAgentPrompt, loadSystemPromptWithSkills } from "../src/prompt";
+import type { AgentConfig } from "../src/types";
 import {
   buildDirectoryTreeLines,
   buildWorkspaceMapSection,
   sanitizeWorkspaceMapLabel,
   WORKSPACE_MAP_IGNORED_DIRS,
 } from "../src/workspace/map";
-import type { AgentConfig } from "../src/types";
 
 function repoRoot(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
@@ -36,11 +36,7 @@ function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
       path.join(repoRoot(), "skills"),
     ],
     memoryDirs: ["/test/project/.agent/memory", "/test/home/.agent/memory"],
-    configDirs: [
-      "/test/project/.agent",
-      "/test/home/.agent",
-      path.join(repoRoot(), "config"),
-    ],
+    configDirs: ["/test/project/.agent", "/test/home/.agent", path.join(repoRoot(), "config")],
   };
   return { ...base, ...overrides };
 }

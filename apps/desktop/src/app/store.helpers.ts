@@ -1,35 +1,13 @@
-import { startWorkspaceServer } from "../lib/desktopCommands";
-import { createDefaultUpdaterState, type UpdaterState } from "../lib/desktopApi";
 import type {
   DesktopFeatureFlagId,
   DesktopFeatureFlagOverrides,
   DesktopFeatureFlags,
 } from "../../../../src/shared/featureFlags";
+import { createDefaultUpdaterState, type UpdaterState } from "../lib/desktopApi";
+import { startWorkspaceServer } from "../lib/desktopCommands";
 import { fallbackAuthMethods } from "../lib/providerDisplayNames";
 import type { MCPServerConfig, ProviderName, ServerEvent, TodoItem } from "../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../lib/wsProtocol";
-
-import type {
-  PersistedProviderUiState,
-  Notification,
-  OnboardingStep,
-  PersistedOnboardingState,
-  PluginManagementMode,
-  PromptModalState,
-  ResearchCard,
-  ResearchDetail,
-  ResearchSettingsState,
-  SettingsPageId,
-  ThreadRecord,
-  ThreadBusyPolicy,
-  ThreadRuntime,
-  ThreadTitleSource,
-  ViewId,
-  WorkspaceDefaultsPatch,
-  WorkspaceRecord,
-  WorkspaceRuntime,
-  WorkspaceExplorerState,
-} from "./types";
 import {
   buildContextPreamble,
   extractAgentStateFromTranscript,
@@ -42,35 +20,61 @@ import {
   disposeWorkspaceJsonRpcSocketState,
   reactivateWorkspaceJsonRpcSocketState,
 } from "./store.helpers/jsonRpcSocket";
-import { persist, persistNow, syncDesktopStateCache, syncDesktopStateCacheNow } from "./store.helpers/persistence";
 import {
-  RUNTIME,
+  persist,
+  persistNow,
+  syncDesktopStateCache,
+  syncDesktopStateCacheNow,
+} from "./store.helpers/persistence";
+import {
+  beginThreadSelectionRequest,
   bumpWorkspaceJsonRpcSocketGeneration,
   bumpWorkspaceStartGeneration,
+  clearPendingThreadSteer,
+  clearPendingThreadSteers,
+  clearThreadSelectionRequest,
   clearWorkspaceJsonRpcSocketGeneration,
   clearWorkspaceStartState,
   defaultThreadRuntime,
   defaultWorkspaceRuntime,
-  clearPendingThreadSteer,
-  clearPendingThreadSteers,
-  clearThreadSelectionRequest,
-  beginThreadSelectionRequest,
   ensureThreadRuntime,
   ensureWorkspaceRuntime,
   getWorkspaceJsonRpcSocketGeneration,
+  getWorkspaceStartGeneration,
   hasPendingThreadSteer,
   isCurrentThreadSelectionRequest,
-  getWorkspaceStartGeneration,
   markPendingThreadSteerAccepted,
-  queuePendingThreadMessage,
-  rememberPendingThreadSteer,
   prependPendingThreadMessage,
   prependPendingThreadMessageWithAttachments,
+  queuePendingThreadMessage,
+  RUNTIME,
+  rememberPendingThreadSteer,
   shiftPendingThreadAttachments,
   shiftPendingThreadMessage,
 } from "./store.helpers/runtimeState";
 import { createThreadEventReducer } from "./store.helpers/threadEventReducer";
 import { createTranscriptBuffer } from "./store.helpers/transcriptBuffer";
+import type {
+  Notification,
+  OnboardingStep,
+  PersistedOnboardingState,
+  PersistedProviderUiState,
+  PluginManagementMode,
+  PromptModalState,
+  ResearchCard,
+  ResearchDetail,
+  ResearchSettingsState,
+  SettingsPageId,
+  ThreadBusyPolicy,
+  ThreadRecord,
+  ThreadRuntime,
+  ThreadTitleSource,
+  ViewId,
+  WorkspaceDefaultsPatch,
+  WorkspaceExplorerState,
+  WorkspaceRecord,
+  WorkspaceRuntime,
+} from "./types";
 
 function nowIso() {
   return new Date().toISOString();
@@ -93,7 +97,9 @@ function truncateTitle(s: string, max = 34) {
 
 function isPlaceholderThreadTitle(title: string): boolean {
   const normalized = title.trim().toLowerCase();
-  return normalized === "new thread" || normalized === "new session" || normalized === "new conversation";
+  return (
+    normalized === "new thread" || normalized === "new session" || normalized === "new conversation"
+  );
 }
 
 function normalizeThreadTitleSource(source: unknown, fallbackTitle: string): ThreadTitleSource {
@@ -132,7 +138,10 @@ function isProviderName(v: unknown): v is ProviderName {
   return typeof v === "string" && (PROVIDER_NAMES as readonly string[]).includes(v);
 }
 
-function providerAuthMethodsFor(state: AppStoreState, provider: ProviderName): ProviderAuthMethod[] {
+function providerAuthMethodsFor(
+  state: AppStoreState,
+  provider: ProviderName,
+): ProviderAuthMethod[] {
   const fromState = state.providerAuthMethodsByProvider[provider];
   if (Array.isArray(fromState) && fromState.length > 0) return fromState;
   return fallbackAuthMethods(provider);
@@ -218,14 +227,32 @@ export type AppStoreState = {
   reorderWorkspaces: (sourceWorkspaceId: string, targetWorkspaceId: string) => Promise<void>;
   setWorkspacesOrder: (orderedIds: string[]) => Promise<void>;
 
-  newThread: (opts?: { workspaceId?: string; titleHint?: string; firstMessage?: string; mode?: "draft" | "session"; attachments?: import("./store.helpers/jsonRpcSocket").FileAttachmentInput[] }) => Promise<boolean>;
+  newThread: (opts?: {
+    workspaceId?: string;
+    titleHint?: string;
+    firstMessage?: string;
+    mode?: "draft" | "session";
+    attachments?: import("./store.helpers/jsonRpcSocket").FileAttachmentInput[];
+  }) => Promise<boolean>;
   removeThread: (threadId: string) => Promise<void>;
   deleteThreadHistory: (threadId: string) => Promise<void>;
   selectThread: (threadId: string) => Promise<void>;
-  reconnectThread: (threadId: string, firstMessage?: string, opts?: { selectionRequestId?: number; skipWorkspaceSelect?: boolean; attachments?: import("./store.helpers/jsonRpcSocket").FileAttachmentInput[] }) => Promise<boolean>;
+  reconnectThread: (
+    threadId: string,
+    firstMessage?: string,
+    opts?: {
+      selectionRequestId?: number;
+      skipWorkspaceSelect?: boolean;
+      attachments?: import("./store.helpers/jsonRpcSocket").FileAttachmentInput[];
+    },
+  ) => Promise<boolean>;
   renameThread: (threadId: string, newTitle: string) => void;
 
-  sendMessage: (text: string, busyPolicy?: ThreadBusyPolicy, attachments?: import("./store.helpers/jsonRpcSocket").FileAttachmentInput[]) => Promise<boolean>;
+  sendMessage: (
+    text: string,
+    busyPolicy?: ThreadBusyPolicy,
+    attachments?: import("./store.helpers/jsonRpcSocket").FileAttachmentInput[],
+  ) => Promise<boolean>;
   cancelThread: (threadId: string, opts?: { includeSubagents?: boolean }) => void;
   clearThreadUsageHardCap: (threadId: string) => void;
   dispatchA2uiAction: (opts: {
@@ -267,7 +294,10 @@ export type AppStoreState = {
   disableSkillInstallation: (installationId: string) => Promise<void>;
   enableSkillInstallation: (installationId: string) => Promise<void>;
   deleteSkillInstallation: (installationId: string) => Promise<void>;
-  copySkillInstallation: (installationId: string, targetScope: "project" | "global") => Promise<void>;
+  copySkillInstallation: (
+    installationId: string,
+    targetScope: "project" | "global",
+  ) => Promise<void>;
   checkSkillInstallationUpdate: (installationId: string) => Promise<void>;
   updateSkillInstallation: (installationId: string) => Promise<void>;
 
@@ -289,7 +319,10 @@ export type AppStoreState = {
     settings?: Partial<ResearchSettingsState>;
   }) => Promise<ResearchCard | null>;
   setResearchDraftSettings: (patch: Partial<ResearchSettingsState>) => void;
-  exportResearch: (researchId: string, format: import("../../../../src/server/research/types").ResearchExportFormat) => Promise<string | null>;
+  exportResearch: (
+    researchId: string,
+    format: import("../../../../src/server/research/types").ResearchExportFormat,
+  ) => Promise<string | null>;
   approveResearchPlan: (researchId: string) => Promise<ResearchCard | null>;
   refineResearchPlan: (researchId: string, input: string) => Promise<ResearchCard | null>;
 
@@ -316,25 +349,58 @@ export type AppStoreState = {
   deleteWorkspaceMcpServer: (workspaceId: string, name: string) => Promise<void>;
   validateWorkspaceMcpServer: (workspaceId: string, name: string) => Promise<void>;
   authorizeWorkspaceMcpServerAuth: (workspaceId: string, name: string) => Promise<void>;
-  callbackWorkspaceMcpServerAuth: (workspaceId: string, name: string, code?: string) => Promise<void>;
+  callbackWorkspaceMcpServerAuth: (
+    workspaceId: string,
+    name: string,
+    code?: string,
+  ) => Promise<void>;
   setWorkspaceMcpServerApiKey: (workspaceId: string, name: string, apiKey: string) => Promise<void>;
   migrateWorkspaceMcpLegacy: (workspaceId: string, scope: "workspace" | "user") => Promise<void>;
   requestWorkspaceBackups: (workspaceId: string) => Promise<void>;
-  requestWorkspaceBackupDelta: (workspaceId: string, targetSessionId: string, checkpointId: string) => Promise<void>;
+  requestWorkspaceBackupDelta: (
+    workspaceId: string,
+    targetSessionId: string,
+    checkpointId: string,
+  ) => Promise<void>;
   createWorkspaceBackupCheckpoint: (workspaceId: string, targetSessionId: string) => Promise<void>;
   restoreWorkspaceBackupOriginal: (workspaceId: string, targetSessionId: string) => Promise<void>;
-  restoreWorkspaceBackupCheckpoint: (workspaceId: string, targetSessionId: string, checkpointId: string) => Promise<void>;
-  deleteWorkspaceBackupCheckpoint: (workspaceId: string, targetSessionId: string, checkpointId: string) => Promise<void>;
+  restoreWorkspaceBackupCheckpoint: (
+    workspaceId: string,
+    targetSessionId: string,
+    checkpointId: string,
+  ) => Promise<void>;
+  deleteWorkspaceBackupCheckpoint: (
+    workspaceId: string,
+    targetSessionId: string,
+    checkpointId: string,
+  ) => Promise<void>;
   deleteWorkspaceBackupEntry: (workspaceId: string, targetSessionId: string) => Promise<void>;
-  setWorkspaceBackupSessionEnabled: (workspaceId: string, targetSessionId: string, enabled: boolean) => Promise<void>;
+  setWorkspaceBackupSessionEnabled: (
+    workspaceId: string,
+    targetSessionId: string,
+    enabled: boolean,
+  ) => Promise<void>;
 
   requestWorkspaceMemories: (workspaceId: string) => Promise<void>;
-  upsertWorkspaceMemory: (workspaceId: string, scope: "workspace" | "user", id: string | undefined, content: string) => Promise<void>;
-  deleteWorkspaceMemory: (workspaceId: string, scope: "workspace" | "user", id: string) => Promise<void>;
+  upsertWorkspaceMemory: (
+    workspaceId: string,
+    scope: "workspace" | "user",
+    id: string | undefined,
+    content: string,
+  ) => Promise<void>;
+  deleteWorkspaceMemory: (
+    workspaceId: string,
+    scope: "workspace" | "user",
+    id: string,
+  ) => Promise<void>;
 
   connectProvider: (provider: ProviderName, apiKey?: string) => Promise<void>;
   setProviderApiKey: (provider: ProviderName, methodId: string, apiKey: string) => Promise<void>;
-  setProviderConfig: (provider: ProviderName, methodId: string, values: Record<string, string>) => Promise<void>;
+  setProviderConfig: (
+    provider: ProviderName,
+    methodId: string,
+    values: Record<string, string>,
+  ) => Promise<void>;
   copyProviderApiKey: (provider: ProviderName, sourceProvider: ProviderName) => Promise<void>;
   authorizeProviderAuth: (provider: ProviderName, methodId: string) => Promise<void>;
   logoutProviderAuth: (provider: ProviderName) => Promise<void>;
@@ -369,7 +435,11 @@ export type AppStoreState = {
   openWorkspaceFile: (workspaceId: string, path: string, isDirectory: boolean) => Promise<void>;
   revealWorkspaceFile: (path: string) => Promise<void>;
   copyWorkspaceFilePath: (path: string) => Promise<void>;
-  createWorkspaceDirectory: (workspaceId: string, parentPath: string, name: string) => Promise<void>;
+  createWorkspaceDirectory: (
+    workspaceId: string,
+    parentPath: string,
+    name: string,
+  ) => Promise<void>;
   renameWorkspacePath: (workspaceId: string, path: string, newName: string) => Promise<void>;
   trashWorkspacePath: (workspaceId: string, path: string) => Promise<void>;
 
@@ -497,14 +567,23 @@ async function ensureServerRunning(
 
   const startPromise = (async () => {
     try {
-      const res = await startWorkspaceServer({ workspaceId, workspacePath: ws.path, yolo: ws.yolo });
+      const res = await startWorkspaceServer({
+        workspaceId,
+        workspacePath: ws.path,
+        yolo: ws.yolo,
+      });
       if (getWorkspaceStartGeneration(workspaceId) !== generation) {
         return;
       }
       set((s) => ({
         workspaceRuntimeById: {
           ...s.workspaceRuntimeById,
-          [workspaceId]: { ...s.workspaceRuntimeById[workspaceId], serverUrl: res.url, starting: false, error: null },
+          [workspaceId]: {
+            ...s.workspaceRuntimeById[workspaceId],
+            serverUrl: res.url,
+            starting: false,
+            error: null,
+          },
         },
       }));
     } catch (err) {
@@ -544,58 +623,58 @@ async function ensureServerRunning(
 }
 
 export {
-  RUNTIME,
+  __controlSocketInternal,
+  __threadEventReducerInternal,
+  appendThreadTranscript,
+  basename,
+  beginThreadSelectionRequest,
+  buildContextPreamble,
   bumpWorkspaceJsonRpcSocketGeneration,
   bumpWorkspaceStartGeneration,
-  clearWorkspaceJsonRpcSocketGeneration,
-  clearWorkspaceStartState,
-  nowIso,
-  makeId,
-  basename,
-  truncateTitle,
-  normalizeThreadTitleSource,
-  buildContextPreamble,
-  extractAgentStateFromTranscript,
-  extractUsageStateFromTranscript,
-  isProviderName,
-  providerAuthMethodsFor,
-  defaultWorkspaceRuntime,
-  defaultThreadRuntime,
-  beginThreadSelectionRequest,
   clearPendingThreadSteer,
   clearPendingThreadSteers,
   clearThreadSelectionRequest,
-  ensureWorkspaceRuntime,
+  clearWorkspaceJsonRpcSocketGeneration,
+  clearWorkspaceStartState,
+  defaultThreadRuntime,
+  defaultWorkspaceRuntime,
+  disposeAllJsonRpcState,
+  disposeWorkspaceJsonRpcState,
+  ensureControlSocket,
+  ensureServerRunning,
   ensureThreadRuntime,
+  ensureThreadSocket,
+  ensureWorkspaceRuntime,
+  extractAgentStateFromTranscript,
+  extractUsageStateFromTranscript,
   getWorkspaceJsonRpcSocketGeneration,
   hasPendingThreadSteer,
   isCurrentThreadSelectionRequest,
+  isProviderName,
+  makeId,
   mapTranscriptToFeed,
   markPendingThreadSteerAccepted,
+  normalizeThreadTitleSource,
+  nowIso,
   persist,
   persistNow,
-  syncDesktopStateCache,
-  syncDesktopStateCacheNow,
-  ensureServerRunning,
-  disposeWorkspaceJsonRpcState,
-  disposeAllJsonRpcState,
-  reactivateWorkspaceJsonRpcState,
-  ensureControlSocket,
-  waitForControlSession,
-  requestWorkspaceSessions,
-  requestSessionSnapshot,
-  requestJsonRpcControlEvent,
-  __controlSocketInternal,
-  ensureThreadSocket,
-  sendThread,
-  __threadEventReducerInternal,
-  appendThreadTranscript,
-  pushNotification,
-  sendUserMessageToThread,
-  queuePendingThreadMessage,
-  rememberPendingThreadSteer,
   prependPendingThreadMessage,
   prependPendingThreadMessageWithAttachments,
+  providerAuthMethodsFor,
+  pushNotification,
+  queuePendingThreadMessage,
+  RUNTIME,
+  reactivateWorkspaceJsonRpcState,
+  rememberPendingThreadSteer,
+  requestJsonRpcControlEvent,
+  requestSessionSnapshot,
+  requestWorkspaceSessions,
+  sendThread,
+  sendUserMessageToThread,
   shiftPendingThreadAttachments,
   shiftPendingThreadMessage,
+  syncDesktopStateCache,
+  syncDesktopStateCacheNow,
+  truncateTitle,
+  waitForControlSession,
 };

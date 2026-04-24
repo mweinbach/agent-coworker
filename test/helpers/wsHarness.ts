@@ -34,9 +34,9 @@ export function serverOpts(
   };
 }
 
-export async function stopTestServer(
-  server: { stop: (closeActiveConnections?: boolean) => Promise<void> | void },
-): Promise<void> {
+export async function stopTestServer(server: {
+  stop: (closeActiveConnections?: boolean) => Promise<void> | void;
+}): Promise<void> {
   await server.stop(true);
 }
 
@@ -51,7 +51,10 @@ async function connectJsonRpc(
   onMessage: (message: any) => void,
 ): Promise<JsonRpcConnection> {
   const ws = new WebSocket(`${url}?protocol=jsonrpc`);
-  const pending = new Map<number, { resolve: (value: any) => void; reject: (error: Error) => void }>();
+  const pending = new Map<
+    number,
+    { resolve: (value: any) => void; reject: (error: Error) => void }
+  >();
   let nextId = 0;
 
   ws.onmessage = (event) => {
@@ -66,7 +69,10 @@ async function connectJsonRpc(
   };
 
   await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("Timed out waiting for websocket open")), 5_000);
+    const timer = setTimeout(
+      () => reject(new Error("Timed out waiting for websocket open")),
+      5_000,
+    );
     ws.onopen = () => {
       clearTimeout(timer);
       resolve();
@@ -92,7 +98,9 @@ async function connectJsonRpc(
     },
   });
   if (initializeResponse.error) {
-    throw new Error(initializeResponse.error.message ?? "Failed to initialize JSON-RPC test connection");
+    throw new Error(
+      initializeResponse.error.message ?? "Failed to initialize JSON-RPC test connection",
+    );
   }
   ws.send(JSON.stringify({ method: "initialized" }));
 
@@ -156,14 +164,17 @@ export function withSession<T>(
           return;
         }
 
-        const threadId = typeof message.sessionId === "string" && message.sessionId.trim()
-          ? message.sessionId.trim()
-          : activeSessionId;
+        const threadId =
+          typeof message.sessionId === "string" && message.sessionId.trim()
+            ? message.sessionId.trim()
+            : activeSessionId;
 
         const run = async () => {
           switch (message.type) {
             case "harness_context_get": {
-              const response = await rpc?.sendRequest("cowork/session/harnessContext/get", { threadId });
+              const response = await rpc?.sendRequest("cowork/session/harnessContext/get", {
+                threadId,
+              });
               if (response?.result?.event) {
                 dispatch({
                   ...response.result.event,
@@ -197,7 +208,9 @@ export function withSession<T>(
               rpc?.sendResponse(message.requestId, { answer: message.answer });
               return;
             case "approval_response":
-              rpc?.sendResponse(message.requestId, { decision: message.approved ? "accept" : "decline" });
+              rpc?.sendResponse(message.requestId, {
+                decision: message.approved ? "accept" : "decline",
+              });
               return;
             case "agent_spawn":
               await rpc?.sendRequest("cowork/session/agent/spawn", {
@@ -208,8 +221,12 @@ export function withSession<T>(
                 ...(message.reasoningEffort ? { reasoningEffort: message.reasoningEffort } : {}),
                 ...(message.contextMode !== undefined ? { contextMode: message.contextMode } : {}),
                 ...(message.briefing !== undefined ? { briefing: message.briefing } : {}),
-                ...(message.includeParentTodos !== undefined ? { includeParentTodos: message.includeParentTodos } : {}),
-                ...(message.includeHarnessContext !== undefined ? { includeHarnessContext: message.includeHarnessContext } : {}),
+                ...(message.includeParentTodos !== undefined
+                  ? { includeParentTodos: message.includeParentTodos }
+                  : {}),
+                ...(message.includeHarnessContext !== undefined
+                  ? { includeHarnessContext: message.includeHarnessContext }
+                  : {}),
                 ...(message.forkContext !== undefined ? { forkContext: message.forkContext } : {}),
               });
               return;
@@ -233,10 +250,16 @@ export function withSession<T>(
               });
               return;
             case "agent_resume":
-              await rpc?.sendRequest("cowork/session/agent/resume", { threadId, agentId: message.agentId });
+              await rpc?.sendRequest("cowork/session/agent/resume", {
+                threadId,
+                agentId: message.agentId,
+              });
               return;
             case "agent_close":
-              await rpc?.sendRequest("cowork/session/agent/close", { threadId, agentId: message.agentId });
+              await rpc?.sendRequest("cowork/session/agent/close", {
+                threadId,
+                agentId: message.agentId,
+              });
               return;
             default:
               finishReject(new Error(`Unsupported legacy test message: ${String(message.type)}`));

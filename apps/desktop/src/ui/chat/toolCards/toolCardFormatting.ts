@@ -49,7 +49,9 @@ function nativeGoogleToolKind(name: string): "web-search" | "url-context" | null
 function recordStringArray(record: Record<string, unknown>, key: string): string[] {
   const value = record[key];
   if (!Array.isArray(value)) return [];
-  return value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0);
+  return value.filter(
+    (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
+  );
 }
 
 function firstStringArrayValue(record: Record<string, unknown>, key: string): string | null {
@@ -91,9 +93,12 @@ function nativeWebSearchAction(value: unknown): Record<string, unknown> | null {
 }
 
 function nativeWebSearchActionSummary(action: Record<string, unknown>): string {
-  const actionType = toText(getRecordValue(action, ["type"])).trim().toLowerCase();
+  const actionType = toText(getRecordValue(action, ["type"]))
+    .trim()
+    .toLowerCase();
   if (actionType === "search") {
-    const query = getRecordValue(action, ["query", "q"]) ?? firstStringArrayValue(action, "queries");
+    const query =
+      getRecordValue(action, ["query", "q"]) ?? firstStringArrayValue(action, "queries");
     if (query) {
       return `Search: ${truncate(toText(query), 90)}`;
     }
@@ -163,7 +168,15 @@ function summarizeArgs(name: string, args: unknown): string {
     return question ? truncate(toText(question), 90) : "";
   }
 
-  const common = getRecordValue(args, ["query", "command", "filePath", "path", "url", "pattern", "input"]);
+  const common = getRecordValue(args, [
+    "query",
+    "command",
+    "filePath",
+    "path",
+    "url",
+    "pattern",
+    "input",
+  ]);
   return common ? truncate(toText(common), 90) : "";
 }
 
@@ -202,10 +215,7 @@ function summarizeAskResult(result: unknown): string | null {
 function summarizeResult(name: string, state: ToolFeedState, result: unknown): string {
   const nativeKind = nativeGoogleToolKind(name);
   if (nativeKind === "web-search" || nativeKind === "url-context") {
-    const waitingLabel =
-      nativeKind === "url-context"
-        ? "Reading URL context"
-        : "Searching the web";
+    const waitingLabel = nativeKind === "url-context" ? "Reading URL context" : "Searching the web";
     if (state === "input-streaming" || state === "input-available") {
       return waitingLabel;
     }
@@ -284,22 +294,28 @@ function summarizeResult(name: string, state: ToolFeedState, result: unknown): s
   return "Completed";
 }
 
-function buildDetailsRows(args: unknown, result: unknown, state: ToolFeedState): ToolCardDetailsRow[] {
-  const rows: ToolCardDetailsRow[] = [{
-    label: "Status",
-    value:
-      state === "input-streaming"
-        ? "Capturing Input"
-        : state === "input-available"
-          ? "Running"
-          : state === "approval-requested"
-            ? "Awaiting Approval"
-            : state === "output-available"
-              ? "Done"
-              : state === "output-denied"
-                ? "Denied"
-                : "Error",
-  }];
+function buildDetailsRows(
+  args: unknown,
+  result: unknown,
+  state: ToolFeedState,
+): ToolCardDetailsRow[] {
+  const rows: ToolCardDetailsRow[] = [
+    {
+      label: "Status",
+      value:
+        state === "input-streaming"
+          ? "Capturing Input"
+          : state === "input-available"
+            ? "Running"
+            : state === "approval-requested"
+              ? "Awaiting Approval"
+              : state === "output-available"
+                ? "Done"
+                : state === "output-denied"
+                  ? "Denied"
+                  : "Error",
+    },
+  ];
 
   if (isRecord(args)) {
     if (isRecord(args.action)) {
@@ -339,7 +355,11 @@ function buildDetailsRows(args: unknown, result: unknown, state: ToolFeedState):
       const actionType = getRecordValue(action, ["type"]);
       const query = getRecordValue(action, ["query", "q", "pattern"]);
       const url = getRecordValue(action, ["url"]);
-      const sources = Array.isArray(result.sources) ? result.sources : Array.isArray(action.sources) ? action.sources : [];
+      const sources = Array.isArray(result.sources)
+        ? result.sources
+        : Array.isArray(action.sources)
+          ? action.sources
+          : [];
       if (actionType) rows.push({ label: "Action", value: toText(actionType) });
       if (query) rows.push({ label: "Query", value: truncate(toText(query), 140) });
       if (url) rows.push({ label: "URL", value: truncate(toText(url), 140) });
@@ -370,7 +390,7 @@ export function formatToolCard(
   name: string,
   args: unknown,
   result: unknown,
-  state: ToolFeedState
+  state: ToolFeedState,
 ): ToolCardFormatting {
   const title = humanizeToolName(name);
   const argsSummary = summarizeArgs(name, args);

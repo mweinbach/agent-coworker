@@ -7,10 +7,10 @@ import {
   getPersistedSessionFilePath,
   LEGACY_JSON_SESSION_LIST_LAST_EVENT_SEQ,
   listPersistedSessionSnapshots,
+  type PersistedSessionSnapshot,
   parsePersistedSessionSnapshot,
   readPersistedSessionSnapshot,
   writePersistedSessionSnapshot,
-  type PersistedSessionSnapshot,
 } from "../src/server/sessionStore";
 
 function makeSnapshot(sessionId: string): PersistedSessionSnapshot {
@@ -213,7 +213,11 @@ describe("sessionStore", () => {
     });
 
     await fs.writeFile(path.join(sessionsDir, "broken.json"), "{ invalid", "utf-8");
-    await fs.writeFile(path.join(sessionsDir, "invalid-shape.json"), JSON.stringify({ version: 2 }), "utf-8");
+    await fs.writeFile(
+      path.join(sessionsDir, "invalid-shape.json"),
+      JSON.stringify({ version: 2 }),
+      "utf-8",
+    );
 
     const summaries = await listPersistedSessionSnapshots({ sessionsDir });
 

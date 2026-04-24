@@ -1,20 +1,18 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { createElement } from "react";
-import { act } from "react";
+import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
 import { setupJsdom } from "./jsdomHarness";
+
 const actualButtonModule = await import("../src/components/ui/button");
 let exportMenuButtonMockEnabled = false;
 
 mock.module("../src/components/ui/button", () => ({
   ...actualButtonModule,
-  Button: ({
-    children,
-    ...props
-  }: any) => exportMenuButtonMockEnabled
-    ? createElement("button", props, children)
-    : createElement(actualButtonModule.Button, props, children),
+  Button: ({ children, ...props }: any) =>
+    exportMenuButtonMockEnabled
+      ? createElement("button", props, children)
+      : createElement(actualButtonModule.Button, props, children),
 }));
 
 const { useAppStore } = await import("../src/app/store");
@@ -54,10 +52,12 @@ describe("research export menu", () => {
       });
 
       await act(async () => {
-        root.render(createElement(ResearchExportMenu, {
-          researchId: "research-1",
-          pending: false,
-        }));
+        root.render(
+          createElement(ResearchExportMenu, {
+            researchId: "research-1",
+            pending: false,
+          }),
+        );
       });
 
       const formats = [
@@ -76,8 +76,9 @@ describe("research export menu", () => {
           await Promise.resolve();
         });
 
-        const action = [...container.querySelectorAll('button[role="menuitem"]')]
-          .find((node) => node.textContent?.includes(entry.label));
+        const action = [...container.querySelectorAll('button[role="menuitem"]')].find((node) =>
+          node.textContent?.includes(entry.label),
+        );
         if (!(action instanceof harness.dom.window.HTMLButtonElement)) {
           throw new Error(`missing ${entry.label} menu item`);
         }
@@ -120,10 +121,12 @@ describe("research export menu", () => {
       });
 
       await act(async () => {
-        root.render(createElement(ResearchExportMenu, {
-          researchId: "research-1",
-          pending: true,
-        }));
+        root.render(
+          createElement(ResearchExportMenu, {
+            researchId: "research-1",
+            pending: true,
+          }),
+        );
       });
 
       const trigger = container.querySelector('button[aria-haspopup="menu"]');

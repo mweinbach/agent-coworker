@@ -1,15 +1,15 @@
+import { execFile as execFileCallback } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 
-import { app, clipboard, dialog, shell, BrowserWindow } from "electron";
+import { app, BrowserWindow, clipboard, dialog, shell } from "electron";
 
 import {
-  DESKTOP_IPC_CHANNELS,
   type CopyPathInput,
   type CreateDirectoryInput,
+  DESKTOP_IPC_CHANNELS,
   type ListDirectoryInput,
   type OpenPathInput,
   type PreferredFileAppInput,
@@ -36,14 +36,14 @@ import {
   trashPathInputSchema,
 } from "../../src/lib/desktopSchemas";
 import { resolveDesktopBuiltinSkillRootsForReveal } from "../services/desktopBuiltinPaths";
+import { isExplorerEntryHidden } from "../services/explorerVisibility";
+import { DEFAULT_PREVIEW_MAX_BYTES, readCappedFilePreview } from "../services/filePreviewRead";
 import {
   resolveAllowedDirectoryPath,
   resolveAllowedPath,
   resolveAllowedRevealPath,
   resolveAllowedSaveExportSourcePath,
 } from "../services/ipcSecurity";
-import { isExplorerEntryHidden } from "../services/explorerVisibility";
-import { DEFAULT_PREVIEW_MAX_BYTES, readCappedFilePreview } from "../services/filePreviewRead";
 import type { DesktopIpcModuleContext } from "./types";
 
 const execFile = promisify(execFileCallback);
@@ -51,66 +51,69 @@ const execFile = promisify(execFileCallback);
 export function registerFilesIpc(context: DesktopIpcModuleContext): void {
   const { handleDesktopInvoke, parseWithSchema, workspaceRoots } = context;
 
-  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.listDirectory, async (_event, args: ListDirectoryInput) => {
-    await workspaceRoots.ensureApprovedWorkspaceRoots();
-    const input = parseWithSchema(listDirectoryInputSchema, args, "listDirectory options");
-    const approvedRoots = workspaceRoots.getApprovedWorkspaceRoots();
-    if (approvedRoots.length === 0) {
-      throw new Error("No workspace roots available for directory listing");
-    }
-    const safePath = resolveAllowedDirectoryPath(approvedRoots, input.path);
+  handleDesktopInvoke(
+    DESKTOP_IPC_CHANNELS.listDirectory,
+    async (_event, args: ListDirectoryInput) => {
+      await workspaceRoots.ensureApprovedWorkspaceRoots();
+      const input = parseWithSchema(listDirectoryInputSchema, args, "listDirectory options");
+      const approvedRoots = workspaceRoots.getApprovedWorkspaceRoots();
+      if (approvedRoots.length === 0) {
+        throw new Error("No workspace roots available for directory listing");
+      }
+      const safePath = resolveAllowedDirectoryPath(approvedRoots, input.path);
 
-    const entries = await fs.readdir(safePath, { withFileTypes: true });
-    const results = await Promise.all(
-      entries.map(async (entry) => {
-        const isHidden = isExplorerEntryHidden(entry.name);
-        if (!input.includeHidden && isHidden) {
-          return null;
-        }
+      const entries = await fs.readdir(safePath, { withFileTypes: true });
+      const results = await Promise.all(
+        entries.map(async (entry) => {
+          const isHidden = isExplorerEntryHidden(entry.name);
+          if (!input.includeHidden && isHidden) {
+            return null;
+          }
 
-        let sizeBytes: number | null = null;
-        let modifiedAtMs: number | null = null;
-        try {
-          const stat = await fs.stat(path.join(safePath, entry.name));
-          sizeBytes = stat.size;
-          modifiedAtMs = stat.mtimeMs;
-        } catch {
-          // Ignore stat errors for broken symlinks etc.
-        }
+          let sizeBytes: number | null = null;
+          let modifiedAtMs: number | null = null;
+          try {
+            const stat = await fs.stat(path.join(safePath, entry.name));
+            sizeBytes = stat.size;
+            modifiedAtMs = stat.mtimeMs;
+          } catch {
+            // Ignore stat errors for broken symlinks etc.
+          }
 
-        return {
-          name: entry.name,
-          path: path.join(safePath, entry.name),
-          isDirectory: entry.isDirectory(),
-          isHidden,
-          sizeBytes,
-          modifiedAtMs,
-        };
-      })
-    );
+          return {
+            name: entry.name,
+            path: path.join(safePath, entry.name),
+            isDirectory: entry.isDirectory(),
+            isHidden,
+            sizeBytes,
+            modifiedAtMs,
+          };
+        }),
+      );
 
-    return results
-      .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
-      .sort((a, b) => {
-        if (a.isDirectory !== b.isDirectory) {
-          return a.isDirectory ? -1 : 1;
-        }
-        return a.name.localeCompare(b.name);
-      });
-  });
+      return results
+        .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+        .sort((a, b) => {
+          if (a.isDirectory !== b.isDirectory) {
+            return a.isDirectory ? -1 : 1;
+          }
+          return a.name.localeCompare(b.name);
+        });
+    },
+  );
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.readFile, async (_event, args: ReadFileInput) => {
     const input = parseWithSchema(readFileInputSchema, args, "readFile options");
     await workspaceRoots.ensureApprovedWorkspaceRoots();
     const safePath = resolveAllowedPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
-    
+
     let fh;
     try {
-      fh = await fs.open(safePath, 'r');
+      fh = await fs.open(safePath, "r");
       const buffer = Buffer.alloc(256 * 1024); // max 256KB preview
       const { bytesRead } = await fh.read(buffer, 0, buffer.length, 0);
-      let content = buffer.subarray(0, bytesRead).toString("utf8");
-      
+      const content = buffer.subarray(0, bytesRead).toString("utf8");
+
       // If it looks like binary or just unprintable, maybe we don't preview or just let it be.
       // We'll just return the string.
       return { content };
@@ -121,29 +124,46 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
     }
   });
 
-  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.readFileForPreview, async (_event, args: ReadFileForPreviewInput) => {
-    const input = parseWithSchema(readFileForPreviewInputSchema, args, "readFileForPreview options");
-    await workspaceRoots.ensureApprovedWorkspaceRoots();
-    const safePath = resolveAllowedPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
-    return await readCappedFilePreview(safePath, input.maxBytes ?? DEFAULT_PREVIEW_MAX_BYTES);
-  });
+  handleDesktopInvoke(
+    DESKTOP_IPC_CHANNELS.readFileForPreview,
+    async (_event, args: ReadFileForPreviewInput) => {
+      const input = parseWithSchema(
+        readFileForPreviewInputSchema,
+        args,
+        "readFileForPreview options",
+      );
+      await workspaceRoots.ensureApprovedWorkspaceRoots();
+      const safePath = resolveAllowedPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
+      return await readCappedFilePreview(safePath, input.maxBytes ?? DEFAULT_PREVIEW_MAX_BYTES);
+    },
+  );
 
-  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.getPreferredFileApp, async (_event, args: PreferredFileAppInput) => {
-    const input = parseWithSchema(preferredFileAppInputSchema, args, "getPreferredFileApp options");
-    await workspaceRoots.ensureApprovedWorkspaceRoots();
-    const safePath = resolveAllowedPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
-    return await resolvePreferredFileAppLabel(safePath);
-  });
+  handleDesktopInvoke(
+    DESKTOP_IPC_CHANNELS.getPreferredFileApp,
+    async (_event, args: PreferredFileAppInput) => {
+      const input = parseWithSchema(
+        preferredFileAppInputSchema,
+        args,
+        "getPreferredFileApp options",
+      );
+      await workspaceRoots.ensureApprovedWorkspaceRoots();
+      const safePath = resolveAllowedPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
+      return await resolvePreferredFileAppLabel(safePath);
+    },
+  );
 
-  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.previewOSFile, async (event, args: PreviewOSFileInput) => {
-    const input = parseWithSchema(previewOSFileInputSchema, args, "previewOSFile options");
-    await workspaceRoots.ensureApprovedWorkspaceRoots();
-    const safePath = resolveAllowedPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
-    const win = BrowserWindow.fromWebContents(event.sender);
-    if (win) {
-      win.previewFile(safePath);
-    }
-  });
+  handleDesktopInvoke(
+    DESKTOP_IPC_CHANNELS.previewOSFile,
+    async (event, args: PreviewOSFileInput) => {
+      const input = parseWithSchema(previewOSFileInputSchema, args, "previewOSFile options");
+      await workspaceRoots.ensureApprovedWorkspaceRoots();
+      const safePath = resolveAllowedPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
+      const win = BrowserWindow.fromWebContents(event.sender);
+      if (win) {
+        win.previewFile(safePath);
+      }
+    },
+  );
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.openPath, async (_event, args: OpenPathInput) => {
     const input = parseWithSchema(openPathInputSchema, args, "openPath options");
@@ -155,39 +175,45 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
     }
   });
 
-  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.saveExportedFile, async (event, args: SaveExportedFileInput) => {
-    const input = parseWithSchema(saveExportedFileInputSchema, args, "saveExportedFile options");
-    await workspaceRoots.ensureApprovedWorkspaceRoots();
-    const safeSourcePath = resolveAllowedSaveExportSourcePath(
-      workspaceRoots.getApprovedWorkspaceRoots(),
-      input.sourcePath,
-    );
-    const downloadsPath = (() => {
-      try {
-        return app.getPath("downloads");
-      } catch {
-        return os.homedir();
+  handleDesktopInvoke(
+    DESKTOP_IPC_CHANNELS.saveExportedFile,
+    async (event, args: SaveExportedFileInput) => {
+      const input = parseWithSchema(saveExportedFileInputSchema, args, "saveExportedFile options");
+      await workspaceRoots.ensureApprovedWorkspaceRoots();
+      const safeSourcePath = resolveAllowedSaveExportSourcePath(
+        workspaceRoots.getApprovedWorkspaceRoots(),
+        input.sourcePath,
+      );
+      const downloadsPath = (() => {
+        try {
+          return app.getPath("downloads");
+        } catch {
+          return os.homedir();
+        }
+      })();
+      const defaultPath = path.join(downloadsPath || os.homedir(), input.defaultFileName);
+      const ownerWindow =
+        BrowserWindow.fromWebContents(event.sender) ??
+        BrowserWindow.getFocusedWindow() ??
+        undefined;
+      const result = ownerWindow
+        ? await dialog.showSaveDialog(ownerWindow, {
+            title: "Save research export",
+            defaultPath,
+          })
+        : await dialog.showSaveDialog({
+            title: "Save research export",
+            defaultPath,
+          });
+
+      if (result.canceled || !result.filePath) {
+        return null;
       }
-    })();
-    const defaultPath = path.join(downloadsPath || os.homedir(), input.defaultFileName);
-    const ownerWindow = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getFocusedWindow() ?? undefined;
-    const result = ownerWindow
-      ? await dialog.showSaveDialog(ownerWindow, {
-          title: "Save research export",
-          defaultPath,
-        })
-      : await dialog.showSaveDialog({
-          title: "Save research export",
-          defaultPath,
-        });
 
-    if (result.canceled || !result.filePath) {
-      return null;
-    }
-
-    await fs.copyFile(safeSourcePath, result.filePath);
-    return result.filePath;
-  });
+      await fs.copyFile(safeSourcePath, result.filePath);
+      return result.filePath;
+    },
+  );
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.revealPath, async (_event, args: RevealPathInput) => {
     const input = parseWithSchema(revealPathInputSchema, args, "revealPath options");
@@ -206,15 +232,18 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
     clipboard.writeText(input.path);
   });
 
-  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.createDirectory, async (_event, args: CreateDirectoryInput) => {
-    const input = parseWithSchema(createDirectoryInputSchema, args, "createDirectory options");
-    await workspaceRoots.ensureApprovedWorkspaceRoots();
-    const roots = workspaceRoots.getApprovedWorkspaceRoots();
-    const safeParent = resolveAllowedDirectoryPath(roots, input.parentPath);
-    const targetPath = path.join(safeParent, input.name);
-    resolveAllowedPath(roots, targetPath);
-    await fs.mkdir(targetPath);
-  });
+  handleDesktopInvoke(
+    DESKTOP_IPC_CHANNELS.createDirectory,
+    async (_event, args: CreateDirectoryInput) => {
+      const input = parseWithSchema(createDirectoryInputSchema, args, "createDirectory options");
+      await workspaceRoots.ensureApprovedWorkspaceRoots();
+      const roots = workspaceRoots.getApprovedWorkspaceRoots();
+      const safeParent = resolveAllowedDirectoryPath(roots, input.parentPath);
+      const targetPath = path.join(safeParent, input.name);
+      resolveAllowedPath(roots, targetPath);
+      await fs.mkdir(targetPath);
+    },
+  );
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.renamePath, async (_event, args: RenamePathInput) => {
     const input = parseWithSchema(renamePathInputSchema, args, "renamePath options");
@@ -240,8 +269,11 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
         return;
       } catch (deleteError) {
         const trashDetail = trashError instanceof Error ? trashError.message : String(trashError);
-        const deleteDetail = deleteError instanceof Error ? deleteError.message : String(deleteError);
-        throw new Error(`Unable to move to Trash (${trashDetail}) and permanent delete failed (${deleteDetail})`);
+        const deleteDetail =
+          deleteError instanceof Error ? deleteError.message : String(deleteError);
+        throw new Error(
+          `Unable to move to Trash (${trashDetail}) and permanent delete failed (${deleteDetail})`,
+        );
       }
     }
   });
@@ -299,7 +331,9 @@ async function appCandidateExists(candidate: AppCandidate): Promise<boolean> {
   }
 
   try {
-    const { stdout } = await execFile("mdfind", [`kMDItemCFBundleIdentifier == "${candidate.bundleId}"`]);
+    const { stdout } = await execFile("mdfind", [
+      `kMDItemCFBundleIdentifier == "${candidate.bundleId}"`,
+    ]);
     return stdout.trim().length > 0;
   } catch {
     return false;

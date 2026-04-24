@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { type MouseEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAppStore } from "../../app/store";
 import type { ResearchCard } from "../../app/types";
@@ -44,7 +44,11 @@ function buildReportSnippet(markdown: string, title: string): string {
     const headingMatch = block.match(/^#{1,6}\s+(.+)$/);
     if (headingMatch) {
       const headingText = headingMatch[1].trim().toLowerCase();
-      if (headingText === normalizedTitle || normalizedTitle.includes(headingText) || headingText.includes(normalizedTitle)) {
+      if (
+        headingText === normalizedTitle ||
+        normalizedTitle.includes(headingText) ||
+        headingText.includes(normalizedTitle)
+      ) {
         continue;
       }
     }
@@ -322,19 +326,22 @@ export function ResearchCardGrid({
     void renameResearch(currentId, trimmed);
   }, [editingId, editingTitle, renameResearch]);
 
-  const handleContextMenu = useCallback(async (event: MouseEvent<HTMLElement>, entry: ResearchCard) => {
-    event.preventDefault();
-    event.stopPropagation();
-    const result = await showContextMenu([
-      { id: "open", label: "Open" },
-      { id: "rename", label: "Rename" },
-    ]);
-    if (result === "open") {
-      onSelectResearch(entry.id);
-    } else if (result === "rename") {
-      startEditing(entry);
-    }
-  }, [onSelectResearch, startEditing]);
+  const handleContextMenu = useCallback(
+    async (event: MouseEvent<HTMLElement>, entry: ResearchCard) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const result = await showContextMenu([
+        { id: "open", label: "Open" },
+        { id: "rename", label: "Rename" },
+      ]);
+      if (result === "open") {
+        onSelectResearch(entry.id);
+      } else if (result === "rename") {
+        startEditing(entry);
+      }
+    },
+    [onSelectResearch, startEditing],
+  );
 
   return (
     <div role="listbox" aria-label="Research history" className="flex flex-col gap-1">

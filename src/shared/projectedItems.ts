@@ -1,18 +1,15 @@
 import { z } from "zod";
-
+import { SERVER_ERROR_CODES, SERVER_ERROR_SOURCES, type TodoItem } from "../types";
 import type { SessionFeedItem } from "./sessionSnapshot";
-import {
-  SERVER_ERROR_CODES,
-  SERVER_ERROR_SOURCES,
-  type TodoItem,
-} from "../types";
 
 const nonEmptyStringSchema = z.string().trim().min(1);
-const todoItemSchema = z.object({
-  content: z.string(),
-  status: z.enum(["pending", "in_progress", "completed"]),
-  activeForm: z.string(),
-}).strict();
+const todoItemSchema = z
+  .object({
+    content: z.string(),
+    status: z.enum(["pending", "in_progress", "completed"]),
+    activeForm: z.string(),
+  })
+  .strict();
 
 export const projectedToolStateSchema = z.enum([
   "input-streaming",
@@ -23,82 +20,105 @@ export const projectedToolStateSchema = z.enum([
   "output-denied",
 ]);
 
-export const projectedUserMessageContentPartSchema = z.object({
-  type: z.literal("text"),
-  text: z.string(),
-}).strict();
+export const projectedUserMessageContentPartSchema = z
+  .object({
+    type: z.literal("text"),
+    text: z.string(),
+  })
+  .strict();
 
 export const projectedItemSchema = z.discriminatedUnion("type", [
-  z.object({
-    id: nonEmptyStringSchema,
-    type: z.literal("userMessage"),
-    content: z.array(projectedUserMessageContentPartSchema),
-    clientMessageId: nonEmptyStringSchema.optional(),
-  }).strict(),
-  z.object({
-    id: nonEmptyStringSchema,
-    type: z.literal("agentMessage"),
-    text: z.string(),
-    annotations: z.array(z.record(z.string(), z.unknown())).optional(),
-  }).strict(),
-  z.object({
-    id: nonEmptyStringSchema,
-    type: z.literal("reasoning"),
-    mode: z.enum(["reasoning", "summary"]),
-    text: z.string(),
-  }).strict(),
-  z.object({
-    id: nonEmptyStringSchema,
-    type: z.literal("toolCall"),
-    toolName: z.string(),
-    state: projectedToolStateSchema,
-    args: z.unknown().optional(),
-    result: z.unknown().optional(),
-    approval: z.object({
-      approvalId: nonEmptyStringSchema,
-      reason: z.unknown().optional(),
-      toolCall: z.unknown().optional(),
-    }).strict().optional(),
-  }).strict(),
-  z.object({
-    id: nonEmptyStringSchema,
-    type: z.literal("system"),
-    line: z.string(),
-  }).strict(),
-  z.object({
-    id: nonEmptyStringSchema,
-    type: z.literal("log"),
-    line: z.string(),
-  }).strict(),
-  z.object({
-    id: nonEmptyStringSchema,
-    type: z.literal("todos"),
-    todos: z.array(todoItemSchema),
-  }).strict(),
-  z.object({
-    id: nonEmptyStringSchema,
-    type: z.literal("error"),
-    message: z.string(),
-    code: z.enum(SERVER_ERROR_CODES),
-    source: z.enum(SERVER_ERROR_SOURCES),
-  }).strict(),
-  z.object({
-    id: nonEmptyStringSchema,
-    type: z.literal("uiSurface"),
-    surfaceId: nonEmptyStringSchema,
-    catalogId: nonEmptyStringSchema,
-    version: z.literal("v0.9"),
-    revision: z.number().int().nonnegative(),
-    deleted: z.boolean(),
-    theme: z.record(z.string(), z.unknown()).optional(),
-    root: z.record(z.string(), z.unknown()).optional(),
-    dataModel: z.unknown().optional(),
-    changeKind: z
-      .enum(["createSurface", "updateComponents", "updateDataModel", "deleteSurface"])
-      .optional(),
-    reason: z.string().optional(),
-    toolCallId: z.string().optional(),
-  }).strict(),
+  z
+    .object({
+      id: nonEmptyStringSchema,
+      type: z.literal("userMessage"),
+      content: z.array(projectedUserMessageContentPartSchema),
+      clientMessageId: nonEmptyStringSchema.optional(),
+    })
+    .strict(),
+  z
+    .object({
+      id: nonEmptyStringSchema,
+      type: z.literal("agentMessage"),
+      text: z.string(),
+      annotations: z.array(z.record(z.string(), z.unknown())).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      id: nonEmptyStringSchema,
+      type: z.literal("reasoning"),
+      mode: z.enum(["reasoning", "summary"]),
+      text: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      id: nonEmptyStringSchema,
+      type: z.literal("toolCall"),
+      toolName: z.string(),
+      state: projectedToolStateSchema,
+      args: z.unknown().optional(),
+      result: z.unknown().optional(),
+      approval: z
+        .object({
+          approvalId: nonEmptyStringSchema,
+          reason: z.unknown().optional(),
+          toolCall: z.unknown().optional(),
+        })
+        .strict()
+        .optional(),
+    })
+    .strict(),
+  z
+    .object({
+      id: nonEmptyStringSchema,
+      type: z.literal("system"),
+      line: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      id: nonEmptyStringSchema,
+      type: z.literal("log"),
+      line: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      id: nonEmptyStringSchema,
+      type: z.literal("todos"),
+      todos: z.array(todoItemSchema),
+    })
+    .strict(),
+  z
+    .object({
+      id: nonEmptyStringSchema,
+      type: z.literal("error"),
+      message: z.string(),
+      code: z.enum(SERVER_ERROR_CODES),
+      source: z.enum(SERVER_ERROR_SOURCES),
+    })
+    .strict(),
+  z
+    .object({
+      id: nonEmptyStringSchema,
+      type: z.literal("uiSurface"),
+      surfaceId: nonEmptyStringSchema,
+      catalogId: nonEmptyStringSchema,
+      version: z.literal("v0.9"),
+      revision: z.number().int().nonnegative(),
+      deleted: z.boolean(),
+      theme: z.record(z.string(), z.unknown()).optional(),
+      root: z.record(z.string(), z.unknown()).optional(),
+      dataModel: z.unknown().optional(),
+      changeKind: z
+        .enum(["createSurface", "updateComponents", "updateDataModel", "deleteSurface"])
+        .optional(),
+      reason: z.string().optional(),
+      toolCallId: z.string().optional(),
+    })
+    .strict(),
 ]);
 
 export type ProjectedItem = z.infer<typeof projectedItemSchema>;
@@ -115,11 +135,7 @@ function existingTsOr(ts: string, existing?: SessionFeedItem): string {
   return existing?.ts ?? ts;
 }
 
-function toFeedItem(
-  item: ProjectedItem,
-  ts: string,
-  existing?: SessionFeedItem,
-): SessionFeedItem {
+function toFeedItem(item: ProjectedItem, ts: string, existing?: SessionFeedItem): SessionFeedItem {
   switch (item.type) {
     case "userMessage":
       return {
@@ -207,7 +223,11 @@ function toFeedItem(
   }
 }
 
-function upsertFeedItem(feed: SessionFeedItem[], item: ProjectedItem, ts: string): SessionFeedItem[] {
+function upsertFeedItem(
+  feed: SessionFeedItem[],
+  item: ProjectedItem,
+  ts: string,
+): SessionFeedItem[] {
   const index = feed.findIndex((entry) => entry.id === item.id);
   const existing = index >= 0 ? feed[index] : undefined;
   const next = toFeedItem(item, ts, existing);

@@ -49,7 +49,9 @@ function restoreWindowMock() {
 
 installWindowMock();
 
-const { DESKTOP_STATE_CACHE_KEY, loadDesktopStateCacheRaw, saveDesktopStateCache } = await import("../src/app/localStateCache");
+const { DESKTOP_STATE_CACHE_KEY, loadDesktopStateCacheRaw, saveDesktopStateCache } = await import(
+  "../src/app/localStateCache"
+);
 const { saveServerUrl, saveWorkspacePath } = await import("../src/lib/webWorkspaceState");
 
 describe("desktop local state cache", () => {
@@ -67,7 +69,9 @@ describe("desktop local state cache", () => {
       sessionSnapshots: {},
     } as any);
 
-    const scopedKeys = [...storage.keys()].filter((key) => key.startsWith(`${DESKTOP_STATE_CACHE_KEY}:`));
+    const scopedKeys = [...storage.keys()].filter((key) =>
+      key.startsWith(`${DESKTOP_STATE_CACHE_KEY}:`),
+    );
     expect(scopedKeys).toHaveLength(1);
     expect(loadDesktopStateCacheRaw()).not.toBeNull();
 

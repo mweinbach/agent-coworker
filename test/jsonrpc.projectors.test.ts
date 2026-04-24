@@ -16,7 +16,10 @@ const PI_PROVIDER_CASES = [
   { provider: "opencode-zen", model: "kimi-k2.5" },
 ] as const;
 
-function streamChunk(partType: Extract<ServerEvent, { type: "model_stream_chunk" }>["partType"], part: Record<string, unknown>): ServerEvent {
+function streamChunk(
+  partType: Extract<ServerEvent, { type: "model_stream_chunk" }>["partType"],
+  part: Record<string, unknown>,
+): ServerEvent {
   return {
     type: "model_stream_chunk",
     sessionId,
@@ -83,11 +86,13 @@ describe("JSON-RPC projectors", () => {
       clientMessageId: "steer-1",
     });
 
-    const userStarted = outbound.find((message) =>
-      message.method === "item/started" && message.params?.item?.type === "userMessage"
+    const userStarted = outbound.find(
+      (message) =>
+        message.method === "item/started" && message.params?.item?.type === "userMessage",
     );
-    const userCompleted = outbound.find((message) =>
-      message.method === "item/completed" && message.params?.item?.type === "userMessage"
+    const userCompleted = outbound.find(
+      (message) =>
+        message.method === "item/completed" && message.params?.item?.type === "userMessage",
     );
 
     expect(userStarted?.params?.item).toMatchObject({
@@ -120,11 +125,12 @@ describe("JSON-RPC projectors", () => {
       clientMessageId: "steer-1",
     });
 
-    const userStarted = emissions.find((event) =>
-      event.eventType === "item/started" && event.payload?.item?.type === "userMessage"
+    const userStarted = emissions.find(
+      (event) => event.eventType === "item/started" && event.payload?.item?.type === "userMessage",
     );
-    const userCompleted = emissions.find((event) =>
-      event.eventType === "item/completed" && event.payload?.item?.type === "userMessage"
+    const userCompleted = emissions.find(
+      (event) =>
+        event.eventType === "item/completed" && event.payload?.item?.type === "userMessage",
     );
 
     expect(userStarted?.payload?.item).toMatchObject({
@@ -150,9 +156,17 @@ describe("JSON-RPC projectors", () => {
       turnId,
       cause: "user_message",
     });
-    projector.handle(streamChunk("text_delta", { id: "text-1", phase: "commentary", text: "Internal commentary" }));
+    projector.handle(
+      streamChunk("text_delta", { id: "text-1", phase: "commentary", text: "Internal commentary" }),
+    );
     projector.handle(streamChunk("reasoning_start", { id: "reasoning-1", mode: "summary" }));
-    projector.handle(streamChunk("reasoning_delta", { id: "reasoning-1", mode: "summary", text: "Inspecting the reports." }));
+    projector.handle(
+      streamChunk("reasoning_delta", {
+        id: "reasoning-1",
+        mode: "summary",
+        text: "Inspecting the reports.",
+      }),
+    );
     projector.handle(streamChunk("reasoning_end", { id: "reasoning-1", mode: "summary" }));
     projector.handle({
       type: "reasoning",
@@ -204,9 +218,13 @@ describe("JSON-RPC projectors", () => {
 
     const reasoningStartedIndex = outbound.findIndex((message) => message === reasoningStarted[0]);
     const reasoningDeltaIndex = outbound.findIndex((message) => message === reasoningDeltas[0]);
-    const reasoningCompletedIndex = outbound.findIndex((message) => message === reasoningCompleted[0]);
-    const assistantDeltaIndex = outbound.findIndex((message) =>
-      message.method === "item/agentMessage/delta" && message.params?.delta === "Here is the result.",
+    const reasoningCompletedIndex = outbound.findIndex(
+      (message) => message === reasoningCompleted[0],
+    );
+    const assistantDeltaIndex = outbound.findIndex(
+      (message) =>
+        message.method === "item/agentMessage/delta" &&
+        message.params?.delta === "Here is the result.",
     );
     expect(reasoningStartedIndex).toBeLessThan(reasoningDeltaIndex);
     expect(reasoningDeltaIndex).toBeLessThan(reasoningCompletedIndex);
@@ -227,9 +245,17 @@ describe("JSON-RPC projectors", () => {
       turnId,
       cause: "user_message",
     });
-    projector.handle(streamChunk("text_delta", { id: "text-1", phase: "commentary", text: "Internal commentary" }));
+    projector.handle(
+      streamChunk("text_delta", { id: "text-1", phase: "commentary", text: "Internal commentary" }),
+    );
     projector.handle(streamChunk("reasoning_start", { id: "reasoning-1", mode: "summary" }));
-    projector.handle(streamChunk("reasoning_delta", { id: "reasoning-1", mode: "summary", text: "Inspecting the reports." }));
+    projector.handle(
+      streamChunk("reasoning_delta", {
+        id: "reasoning-1",
+        mode: "summary",
+        text: "Inspecting the reports.",
+      }),
+    );
     projector.handle(streamChunk("reasoning_end", { id: "reasoning-1", mode: "summary" }));
     projector.handle({
       type: "reasoning",
@@ -296,7 +322,9 @@ describe("JSON-RPC projectors", () => {
     });
     projector.handle(streamChunk("text_delta", { id: "s0", text: "First answer." }));
     projector.handle(streamChunk("reasoning_start", { id: "r1", mode: "reasoning" }));
-    projector.handle(streamChunk("reasoning_delta", { id: "r1", mode: "reasoning", text: "Need one more step." }));
+    projector.handle(
+      streamChunk("reasoning_delta", { id: "r1", mode: "reasoning", text: "Need one more step." }),
+    );
     projector.handle(streamChunk("reasoning_end", { id: "r1", mode: "reasoning" }));
     projector.handle(streamChunk("text_delta", { id: "s0", text: "\n\nSecond answer." }));
     projector.handle({
@@ -326,9 +354,15 @@ describe("JSON-RPC projectors", () => {
       "\n\nSecond answer.",
     ]);
 
-    const firstAssistantCompletedIndex = outbound.findIndex((message) => message === assistantCompleted[0]);
-    const reasoningCompletedIndex = outbound.findIndex((message) => message === reasoningCompleted[0]);
-    const secondAssistantStartedIndex = outbound.findIndex((message) => message === assistantStarted[1]);
+    const firstAssistantCompletedIndex = outbound.findIndex(
+      (message) => message === assistantCompleted[0],
+    );
+    const reasoningCompletedIndex = outbound.findIndex(
+      (message) => message === reasoningCompleted[0],
+    );
+    const secondAssistantStartedIndex = outbound.findIndex(
+      (message) => message === assistantStarted[1],
+    );
     expect(firstAssistantCompletedIndex).toBeLessThan(reasoningCompletedIndex);
     expect(reasoningCompletedIndex).toBeLessThan(secondAssistantStartedIndex);
   });
@@ -349,7 +383,9 @@ describe("JSON-RPC projectors", () => {
     });
     projector.handle(streamChunk("text_delta", { id: "s0", text: "First answer." }));
     projector.handle(streamChunk("reasoning_start", { id: "r1", mode: "reasoning" }));
-    projector.handle(streamChunk("reasoning_delta", { id: "r1", mode: "reasoning", text: "Need one more step." }));
+    projector.handle(
+      streamChunk("reasoning_delta", { id: "r1", mode: "reasoning", text: "Need one more step." }),
+    );
     projector.handle(streamChunk("reasoning_end", { id: "r1", mode: "reasoning" }));
     projector.handle(streamChunk("text_delta", { id: "s0", text: "\n\nSecond answer." }));
     projector.handle({
@@ -379,9 +415,13 @@ describe("JSON-RPC projectors", () => {
       "\n\nSecond answer.",
     ]);
 
-    const firstAssistantCompletedIndex = emissions.findIndex((event) => event === assistantCompleted[0]);
+    const firstAssistantCompletedIndex = emissions.findIndex(
+      (event) => event === assistantCompleted[0],
+    );
     const reasoningCompletedIndex = emissions.findIndex((event) => event === reasoningCompleted[0]);
-    const secondAssistantStartedIndex = emissions.findIndex((event) => event === assistantStarted[1]);
+    const secondAssistantStartedIndex = emissions.findIndex(
+      (event) => event === assistantStarted[1],
+    );
     expect(firstAssistantCompletedIndex).toBeLessThan(reasoningCompletedIndex);
     expect(reasoningCompletedIndex).toBeLessThan(secondAssistantStartedIndex);
   });
@@ -402,7 +442,13 @@ describe("JSON-RPC projectors", () => {
     });
     projector.handle(streamChunk("text_delta", { id: "s0", text: "\n\n" }));
     projector.handle(streamChunk("reasoning_start", { id: "r1", mode: "reasoning" }));
-    projector.handle(streamChunk("reasoning_delta", { id: "r1", mode: "reasoning", text: "Checking the benchmarks." }));
+    projector.handle(
+      streamChunk("reasoning_delta", {
+        id: "r1",
+        mode: "reasoning",
+        text: "Checking the benchmarks.",
+      }),
+    );
     projector.handle(streamChunk("reasoning_end", { id: "r1", mode: "reasoning" }));
     projector.handle(streamChunk("text_delta", { id: "s0", text: "\n\nFinal answer." }));
     projector.handle({
@@ -435,7 +481,13 @@ describe("JSON-RPC projectors", () => {
     });
     projector.handle(streamChunk("text_delta", { id: "s0", text: "\n\n" }));
     projector.handle(streamChunk("reasoning_start", { id: "r1", mode: "reasoning" }));
-    projector.handle(streamChunk("reasoning_delta", { id: "r1", mode: "reasoning", text: "Checking the benchmarks." }));
+    projector.handle(
+      streamChunk("reasoning_delta", {
+        id: "r1",
+        mode: "reasoning",
+        text: "Checking the benchmarks.",
+      }),
+    );
     projector.handle(streamChunk("reasoning_end", { id: "r1", mode: "reasoning" }));
     projector.handle(streamChunk("text_delta", { id: "s0", text: "\n\nFinal answer." }));
     projector.handle({
@@ -467,43 +519,61 @@ describe("JSON-RPC projectors", () => {
       cause: "user_message",
     });
     projector.handle(googleRaw(0, { event_type: "interaction.start" }));
-    projector.handle(googleRaw(1, { event_type: "content.start", index: 0, content: { type: "thought" } }));
-    projector.handle(googleRaw(2, {
-      event_type: "content.delta",
-      index: 0,
-      delta: { type: "thought_summary", content: { type: "text", text: "First pass." } },
-    }));
+    projector.handle(
+      googleRaw(1, { event_type: "content.start", index: 0, content: { type: "thought" } }),
+    );
+    projector.handle(
+      googleRaw(2, {
+        event_type: "content.delta",
+        index: 0,
+        delta: { type: "thought_summary", content: { type: "text", text: "First pass." } },
+      }),
+    );
     projector.handle(googleRaw(3, { event_type: "content.stop", index: 0 }));
-    projector.handle(googleRaw(4, {
-      event_type: "content.start",
-      index: 1,
-      content: { type: "google_search_call", id: "search-call" },
-    }));
-    projector.handle(googleRaw(5, {
-      event_type: "content.delta",
-      index: 1,
-      delta: { type: "google_search_call", id: "search-call", arguments: { queries: ["Project Hail Mary movie reviews"] } },
-    }));
-    projector.handle(googleRaw(6, { event_type: "content.stop", index: 1 }));
-    projector.handle(googleRaw(7, {
-      event_type: "content.start",
-      index: 2,
-      content: {
-        type: "google_search_result",
-        call_id: "search-call",
-        result: {
-          results: [{ title: "MovieWeb" }],
-          sources: [{ url: "https://example.com/review" }],
+    projector.handle(
+      googleRaw(4, {
+        event_type: "content.start",
+        index: 1,
+        content: { type: "google_search_call", id: "search-call" },
+      }),
+    );
+    projector.handle(
+      googleRaw(5, {
+        event_type: "content.delta",
+        index: 1,
+        delta: {
+          type: "google_search_call",
+          id: "search-call",
+          arguments: { queries: ["Project Hail Mary movie reviews"] },
         },
-      },
-    }));
+      }),
+    );
+    projector.handle(googleRaw(6, { event_type: "content.stop", index: 1 }));
+    projector.handle(
+      googleRaw(7, {
+        event_type: "content.start",
+        index: 2,
+        content: {
+          type: "google_search_result",
+          call_id: "search-call",
+          result: {
+            results: [{ title: "MovieWeb" }],
+            sources: [{ url: "https://example.com/review" }],
+          },
+        },
+      }),
+    );
     projector.handle(googleRaw(8, { event_type: "content.stop", index: 2 }));
-    projector.handle(googleRaw(9, { event_type: "content.start", index: 3, content: { type: "thought" } }));
-    projector.handle(googleRaw(10, {
-      event_type: "content.delta",
-      index: 3,
-      delta: { type: "thought_summary", content: { type: "text", text: "Second pass." } },
-    }));
+    projector.handle(
+      googleRaw(9, { event_type: "content.start", index: 3, content: { type: "thought" } }),
+    );
+    projector.handle(
+      googleRaw(10, {
+        event_type: "content.delta",
+        index: 3,
+        delta: { type: "thought_summary", content: { type: "text", text: "Second pass." } },
+      }),
+    );
     projector.handle(googleRaw(11, { event_type: "content.stop", index: 3 }));
     projector.handle({
       type: "reasoning",
@@ -574,43 +644,61 @@ describe("JSON-RPC projectors", () => {
       cause: "user_message",
     });
     projector.handle(googleRaw(0, { event_type: "interaction.start" }));
-    projector.handle(googleRaw(1, { event_type: "content.start", index: 0, content: { type: "thought" } }));
-    projector.handle(googleRaw(2, {
-      event_type: "content.delta",
-      index: 0,
-      delta: { type: "thought_summary", content: { type: "text", text: "First pass." } },
-    }));
+    projector.handle(
+      googleRaw(1, { event_type: "content.start", index: 0, content: { type: "thought" } }),
+    );
+    projector.handle(
+      googleRaw(2, {
+        event_type: "content.delta",
+        index: 0,
+        delta: { type: "thought_summary", content: { type: "text", text: "First pass." } },
+      }),
+    );
     projector.handle(googleRaw(3, { event_type: "content.stop", index: 0 }));
-    projector.handle(googleRaw(4, {
-      event_type: "content.start",
-      index: 1,
-      content: { type: "google_search_call", id: "search-call" },
-    }));
-    projector.handle(googleRaw(5, {
-      event_type: "content.delta",
-      index: 1,
-      delta: { type: "google_search_call", id: "search-call", arguments: { queries: ["Project Hail Mary movie reviews"] } },
-    }));
-    projector.handle(googleRaw(6, { event_type: "content.stop", index: 1 }));
-    projector.handle(googleRaw(7, {
-      event_type: "content.start",
-      index: 2,
-      content: {
-        type: "google_search_result",
-        call_id: "search-call",
-        result: {
-          results: [{ title: "MovieWeb" }],
-          sources: [{ url: "https://example.com/review" }],
+    projector.handle(
+      googleRaw(4, {
+        event_type: "content.start",
+        index: 1,
+        content: { type: "google_search_call", id: "search-call" },
+      }),
+    );
+    projector.handle(
+      googleRaw(5, {
+        event_type: "content.delta",
+        index: 1,
+        delta: {
+          type: "google_search_call",
+          id: "search-call",
+          arguments: { queries: ["Project Hail Mary movie reviews"] },
         },
-      },
-    }));
+      }),
+    );
+    projector.handle(googleRaw(6, { event_type: "content.stop", index: 1 }));
+    projector.handle(
+      googleRaw(7, {
+        event_type: "content.start",
+        index: 2,
+        content: {
+          type: "google_search_result",
+          call_id: "search-call",
+          result: {
+            results: [{ title: "MovieWeb" }],
+            sources: [{ url: "https://example.com/review" }],
+          },
+        },
+      }),
+    );
     projector.handle(googleRaw(8, { event_type: "content.stop", index: 2 }));
-    projector.handle(googleRaw(9, { event_type: "content.start", index: 3, content: { type: "thought" } }));
-    projector.handle(googleRaw(10, {
-      event_type: "content.delta",
-      index: 3,
-      delta: { type: "thought_summary", content: { type: "text", text: "Second pass." } },
-    }));
+    projector.handle(
+      googleRaw(9, { event_type: "content.start", index: 3, content: { type: "thought" } }),
+    );
+    projector.handle(
+      googleRaw(10, {
+        event_type: "content.delta",
+        index: 3,
+        delta: { type: "thought_summary", content: { type: "text", text: "Second pass." } },
+      }),
+    );
     projector.handle(googleRaw(11, { event_type: "content.stop", index: 3 }));
     projector.handle({
       type: "reasoning",
@@ -688,38 +776,90 @@ describe("JSON-RPC projectors", () => {
           turnId,
           cause: "user_message",
         });
-        projector.handle(piChunk(provider, model, "reasoning_start", { id: "s0", mode: "reasoning" }));
-        projector.handle(piChunk(provider, model, "reasoning_delta", { id: "s0", mode: "reasoning", text: "First step." }));
-        projector.handle(piChunk(provider, model, "reasoning_end", { id: "s0", mode: "reasoning" }));
-        projector.handle(piChunk(provider, model, "tool_input_start", { id: "tool_call_0", toolName: "webSearch" }));
-        projector.handle(piChunk(provider, model, "tool_input_delta", { id: "tool_call_0", delta: "{\"query\":\"first\"}" }));
-        projector.handle(piChunk(provider, model, "tool_input_end", { id: "tool_call_0", toolName: "webSearch" }));
-        projector.handle(piChunk(provider, model, "tool_call", {
-          toolCallId: "tool_call_0",
-          toolName: "webSearch",
-          input: { query: "first" },
-        }));
-        projector.handle(piChunk(provider, model, "tool_result", {
-          toolCallId: "tool_call_0",
-          toolName: "webSearch",
-          output: { result: "first" },
-        }));
-        projector.handle(piChunk(provider, model, "reasoning_start", { id: "s0", mode: "reasoning" }));
-        projector.handle(piChunk(provider, model, "reasoning_delta", { id: "s0", mode: "reasoning", text: "Second step." }));
-        projector.handle(piChunk(provider, model, "reasoning_end", { id: "s0", mode: "reasoning" }));
-        projector.handle(piChunk(provider, model, "tool_input_start", { id: "tool_call_0", toolName: "webSearch" }));
-        projector.handle(piChunk(provider, model, "tool_input_delta", { id: "tool_call_0", delta: "{\"query\":\"second\"}" }));
-        projector.handle(piChunk(provider, model, "tool_input_end", { id: "tool_call_0", toolName: "webSearch" }));
-        projector.handle(piChunk(provider, model, "tool_call", {
-          toolCallId: "tool_call_0",
-          toolName: "webSearch",
-          input: { query: "second" },
-        }));
-        projector.handle(piChunk(provider, model, "tool_result", {
-          toolCallId: "tool_call_0",
-          toolName: "webSearch",
-          output: { result: "second" },
-        }));
+        projector.handle(
+          piChunk(provider, model, "reasoning_start", { id: "s0", mode: "reasoning" }),
+        );
+        projector.handle(
+          piChunk(provider, model, "reasoning_delta", {
+            id: "s0",
+            mode: "reasoning",
+            text: "First step.",
+          }),
+        );
+        projector.handle(
+          piChunk(provider, model, "reasoning_end", { id: "s0", mode: "reasoning" }),
+        );
+        projector.handle(
+          piChunk(provider, model, "tool_input_start", {
+            id: "tool_call_0",
+            toolName: "webSearch",
+          }),
+        );
+        projector.handle(
+          piChunk(provider, model, "tool_input_delta", {
+            id: "tool_call_0",
+            delta: '{"query":"first"}',
+          }),
+        );
+        projector.handle(
+          piChunk(provider, model, "tool_input_end", { id: "tool_call_0", toolName: "webSearch" }),
+        );
+        projector.handle(
+          piChunk(provider, model, "tool_call", {
+            toolCallId: "tool_call_0",
+            toolName: "webSearch",
+            input: { query: "first" },
+          }),
+        );
+        projector.handle(
+          piChunk(provider, model, "tool_result", {
+            toolCallId: "tool_call_0",
+            toolName: "webSearch",
+            output: { result: "first" },
+          }),
+        );
+        projector.handle(
+          piChunk(provider, model, "reasoning_start", { id: "s0", mode: "reasoning" }),
+        );
+        projector.handle(
+          piChunk(provider, model, "reasoning_delta", {
+            id: "s0",
+            mode: "reasoning",
+            text: "Second step.",
+          }),
+        );
+        projector.handle(
+          piChunk(provider, model, "reasoning_end", { id: "s0", mode: "reasoning" }),
+        );
+        projector.handle(
+          piChunk(provider, model, "tool_input_start", {
+            id: "tool_call_0",
+            toolName: "webSearch",
+          }),
+        );
+        projector.handle(
+          piChunk(provider, model, "tool_input_delta", {
+            id: "tool_call_0",
+            delta: '{"query":"second"}',
+          }),
+        );
+        projector.handle(
+          piChunk(provider, model, "tool_input_end", { id: "tool_call_0", toolName: "webSearch" }),
+        );
+        projector.handle(
+          piChunk(provider, model, "tool_call", {
+            toolCallId: "tool_call_0",
+            toolName: "webSearch",
+            input: { query: "second" },
+          }),
+        );
+        projector.handle(
+          piChunk(provider, model, "tool_result", {
+            toolCallId: "tool_call_0",
+            toolName: "webSearch",
+            output: { result: "second" },
+          }),
+        );
         projector.handle({
           type: "reasoning",
           sessionId,
@@ -740,7 +880,9 @@ describe("JSON-RPC projectors", () => {
         "First step.",
         "Second step.",
       ]);
-      expect(new Set(legacyCompletedReasoning.map((message) => message.params?.item?.id)).size).toBe(2);
+      expect(
+        new Set(legacyCompletedReasoning.map((message) => message.params?.item?.id)).size,
+      ).toBe(2);
 
       const legacyCompletedTools = outbound
         .filter((message) => message.method === "item/completed")
@@ -761,7 +903,9 @@ describe("JSON-RPC projectors", () => {
         "First step.",
         "Second step.",
       ]);
-      expect(new Set(journalCompletedReasoning.map((event) => event.payload?.item?.id)).size).toBe(2);
+      expect(new Set(journalCompletedReasoning.map((event) => event.payload?.item?.id)).size).toBe(
+        2,
+      );
 
       const journalCompletedTools = emissions
         .filter((event) => event.eventType === "item/completed")

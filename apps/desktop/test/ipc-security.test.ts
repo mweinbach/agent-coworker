@@ -18,7 +18,7 @@ describe("desktop IPC security helpers", () => {
         isPackaged: false,
         electronRendererUrl: undefined,
         desktopRendererPort: undefined,
-      })
+      }),
     ).toBe(true);
 
     expect(
@@ -26,7 +26,7 @@ describe("desktop IPC security helpers", () => {
         isPackaged: false,
         electronRendererUrl: undefined,
         desktopRendererPort: undefined,
-      })
+      }),
     ).toBe(false);
   });
 
@@ -36,7 +36,7 @@ describe("desktop IPC security helpers", () => {
         isPackaged: true,
         electronRendererUrl: undefined,
         desktopRendererPort: undefined,
-      })
+      }),
     ).toBe(true);
 
     expect(
@@ -44,7 +44,7 @@ describe("desktop IPC security helpers", () => {
         isPackaged: true,
         electronRendererUrl: undefined,
         desktopRendererPort: undefined,
-      })
+      }),
     ).toBe(false);
   });
 
@@ -58,15 +58,15 @@ describe("desktop IPC security helpers", () => {
       const resolved = resolveAllowedDirectoryPath([workspaceRoot], nested);
       expect(await fs.realpath(resolved)).toBe(await fs.realpath(nested));
 
-      expect(() => resolveAllowedDirectoryPath([workspaceRoot], path.dirname(workspaceRoot))).toThrow(
-        "outside allowed workspace roots"
-      );
+      expect(() =>
+        resolveAllowedDirectoryPath([workspaceRoot], path.dirname(workspaceRoot)),
+      ).toThrow("outside allowed workspace roots");
 
       if (process.platform !== "win32") {
         const escapeLink = path.join(workspaceRoot, "escape");
         await fs.symlink(outsideRoot, escapeLink);
         expect(() => resolveAllowedDirectoryPath([workspaceRoot], escapeLink)).toThrow(
-          "outside allowed workspace roots"
+          "outside allowed workspace roots",
         );
       }
     } finally {
@@ -84,7 +84,9 @@ describe("desktop IPC security helpers", () => {
       expect(resolved).toBe(newFile); // Since it doesn't exist, realpathSync fails and it returns resolve() which is within root
 
       const outsideFile = path.join(workspaceRoot, "..", "new_file.txt");
-      expect(() => resolveAllowedPath([workspaceRoot], outsideFile)).toThrow("outside allowed workspace roots");
+      expect(() => resolveAllowedPath([workspaceRoot], outsideFile)).toThrow(
+        "outside allowed workspace roots",
+      );
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });
     }
@@ -96,7 +98,9 @@ describe("desktop IPC security helpers", () => {
     const home = os.homedir();
     try {
       const coworkSkill = path.join(home, ".cowork", "skills", "some-skill", "SKILL.md");
-      expect(() => resolveAllowedPath([workspaceRoot], coworkSkill)).toThrow("outside allowed workspace roots");
+      expect(() => resolveAllowedPath([workspaceRoot], coworkSkill)).toThrow(
+        "outside allowed workspace roots",
+      );
       expect(() => resolveAllowedRevealPath([workspaceRoot], coworkSkill)).not.toThrow();
     } finally {
       await fs.rm(tempWorkspace, { recursive: true, force: true });
@@ -111,7 +115,9 @@ describe("desktop IPC security helpers", () => {
       const researchExport = path.join(home, ".cowork", "research", "research-1", "report.pdf");
       const unrelatedHomePath = path.join(home, ".cowork", "auth", "codex-cli", "auth.json");
 
-      expect(resolveAllowedSaveExportSourcePath([workspaceRoot], researchExport)).toBe(researchExport);
+      expect(resolveAllowedSaveExportSourcePath([workspaceRoot], researchExport)).toBe(
+        researchExport,
+      );
       expect(() => resolveAllowedSaveExportSourcePath([workspaceRoot], unrelatedHomePath)).toThrow(
         "outside allowed workspace roots",
       );
@@ -132,9 +138,9 @@ describe("desktop IPC security helpers", () => {
 
       const outside = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-nope-"));
       try {
-        expect(() => resolveAllowedRevealPath([workspaceRoot], path.join(outside, "secret"))).toThrow(
-          "outside allowed workspace roots",
-        );
+        expect(() =>
+          resolveAllowedRevealPath([workspaceRoot], path.join(outside, "secret")),
+        ).toThrow("outside allowed workspace roots");
       } finally {
         await fs.rm(outside, { recursive: true, force: true });
       }

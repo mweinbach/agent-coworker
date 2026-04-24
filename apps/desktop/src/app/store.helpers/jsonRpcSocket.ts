@@ -1,12 +1,12 @@
 import { JsonRpcSocket } from "../../lib/agentSocket";
 import type { StoreGet, StoreSet } from "../store.helpers";
 import type { ThreadRuntime, WorkspaceRecord } from "../types";
+import { JSONRPC_SOCKET_OVERRIDE_KEY } from "./jsonRpcSocketOverride";
 import {
-  RUNTIME,
   bumpWorkspaceJsonRpcSocketGeneration,
   getWorkspaceJsonRpcSocketGeneration,
+  RUNTIME,
 } from "./runtimeState";
-import { JSONRPC_SOCKET_OVERRIDE_KEY } from "./jsonRpcSocketOverride";
 
 type JsonRpcNotification =
   | { kind: "notification"; method: string; params?: any }
@@ -108,10 +108,15 @@ function isActiveWorkspaceJsonRpcSocketGeneration(
   workspaceId: string,
   generation: number | undefined,
 ): boolean {
-  return generation !== undefined && getWorkspaceJsonRpcSocketGeneration(workspaceId) === generation;
+  return (
+    generation !== undefined && getWorkspaceJsonRpcSocketGeneration(workspaceId) === generation
+  );
 }
 
-export function registerWorkspaceJsonRpcRouter(workspaceId: string, router: WorkspaceNotificationRouter): () => void {
+export function registerWorkspaceJsonRpcRouter(
+  workspaceId: string,
+  router: WorkspaceNotificationRouter,
+): () => void {
   if (isWorkspaceDisposed(workspaceId)) {
     return () => {};
   }
@@ -128,11 +133,15 @@ export function registerWorkspaceJsonRpcRouter(workspaceId: string, router: Work
   };
 }
 
-export function registerWorkspaceJsonRpcLifecycle(workspaceId: string, listener: WorkspaceLifecycleListener): () => void {
+export function registerWorkspaceJsonRpcLifecycle(
+  workspaceId: string,
+  listener: WorkspaceLifecycleListener,
+): () => void {
   if (isWorkspaceDisposed(workspaceId)) {
     return () => {};
   }
-  const listeners = workspaceLifecycleListeners.get(workspaceId) ?? new Set<WorkspaceLifecycleListener>();
+  const listeners =
+    workspaceLifecycleListeners.get(workspaceId) ?? new Set<WorkspaceLifecycleListener>();
   listeners.add(listener);
   workspaceLifecycleListeners.set(workspaceId, listeners);
   return () => {
@@ -191,8 +200,9 @@ export function ensureWorkspaceJsonRpcSocket(
         // ignore
       }
     } else {
-      const controlSessionId = (get() as { workspaceRuntimeById?: Record<string, { controlSessionId?: string | null }> })
-        .workspaceRuntimeById?.[workspaceId]?.controlSessionId ?? null;
+      const controlSessionId =
+        (get() as { workspaceRuntimeById?: Record<string, { controlSessionId?: string | null }> })
+          .workspaceRuntimeById?.[workspaceId]?.controlSessionId ?? null;
       if (set && existing.__coworkOpened === true && !controlSessionId) {
         syncWorkspaceSocketState(workspaceId, true);
       }
@@ -219,7 +229,11 @@ export function ensureWorkspaceJsonRpcSocket(
       if (!isActiveWorkspaceJsonRpcSocketGeneration(workspaceId, socket.__coworkGeneration)) {
         return;
       }
-      emitToWorkspaceRouters(workspaceId, { kind: "notification", method: message.method, params: message.params });
+      emitToWorkspaceRouters(workspaceId, {
+        kind: "notification",
+        method: message.method,
+        params: message.params,
+      });
     },
     onServerRequest: (message: any) => {
       if (!isActiveWorkspaceJsonRpcSocketGeneration(workspaceId, socket.__coworkGeneration)) {
@@ -280,7 +294,11 @@ export async function requestJsonRpc(
   return await socket.request(method, params, { retryable: true });
 }
 
-export async function requestJsonRpcThreadList(get: StoreGet, set: StoreSet | undefined, workspaceId: string): Promise<any[]> {
+export async function requestJsonRpcThreadList(
+  get: StoreGet,
+  set: StoreSet | undefined,
+  workspaceId: string,
+): Promise<any[]> {
   const workspace = getWorkspaceById(get, workspaceId);
   const result = await requestJsonRpc(get, set, workspaceId, "thread/list", {
     cwd: workspace?.path,
@@ -350,9 +368,19 @@ export async function startJsonRpcTurn(
   if (attachments && attachments.length > 0) {
     for (const a of attachments) {
       if ("contentBase64" in a) {
-        input.push({ type: "file", filename: a.filename, contentBase64: a.contentBase64, mimeType: a.mimeType });
+        input.push({
+          type: "file",
+          filename: a.filename,
+          contentBase64: a.contentBase64,
+          mimeType: a.mimeType,
+        });
       } else {
-        input.push({ type: "uploadedFile", filename: a.filename, path: a.path, mimeType: a.mimeType });
+        input.push({
+          type: "uploadedFile",
+          filename: a.filename,
+          path: a.path,
+          mimeType: a.mimeType,
+        });
       }
     }
   }
@@ -380,9 +408,19 @@ export async function steerJsonRpcTurn(
   if (attachments && attachments.length > 0) {
     for (const a of attachments) {
       if ("contentBase64" in a) {
-        input.push({ type: "file", filename: a.filename, contentBase64: a.contentBase64, mimeType: a.mimeType });
+        input.push({
+          type: "file",
+          filename: a.filename,
+          contentBase64: a.contentBase64,
+          mimeType: a.mimeType,
+        });
       } else {
-        input.push({ type: "uploadedFile", filename: a.filename, path: a.path, mimeType: a.mimeType });
+        input.push({
+          type: "uploadedFile",
+          filename: a.filename,
+          path: a.path,
+          mimeType: a.mimeType,
+        });
       }
     }
   }
@@ -473,11 +511,14 @@ export function findThreadIdForJsonRpcNotification(
 ): string | null {
   if (!threadId) return null;
   const runtimeById = get().threadRuntimeById;
-  const direct = get().threads.find((thread) => thread.workspaceId === workspaceId && thread.id === threadId);
+  const direct = get().threads.find(
+    (thread) => thread.workspaceId === workspaceId && thread.id === threadId,
+  );
   if (direct) return direct.id;
-  const bySession = get().threads.find((thread) =>
-    thread.workspaceId === workspaceId
-    && (thread.sessionId === threadId || runtimeById[thread.id]?.sessionId === threadId),
+  const bySession = get().threads.find(
+    (thread) =>
+      thread.workspaceId === workspaceId &&
+      (thread.sessionId === threadId || runtimeById[thread.id]?.sessionId === threadId),
   );
   return bySession?.id ?? null;
 }

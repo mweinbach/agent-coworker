@@ -17,8 +17,7 @@ export type JsonRpcThreadSubscriptionOptions = {
   initialAgentText?: string | null;
   drainDisconnectedReplayBuffer?: boolean;
   pendingPromptEvents?: ReadonlyArray<
-    Extract<ServerEvent, { type: "ask" }>
-    | Extract<ServerEvent, { type: "approval" }>
+    Extract<ServerEvent, { type: "ask" }> | Extract<ServerEvent, { type: "approval" }>
   >;
   skipPendingPromptRequestIds?: ReadonlySet<string>;
 };
@@ -27,7 +26,11 @@ type CreateJsonRpcTransportAdapterDeps = {
   maxPendingRequests: number;
   loadThreadBinding: (threadId: string) => SessionBinding | null;
   getThreadBinding: (threadId: string) => SessionBinding | null | undefined;
-  addBindingSink: (binding: SessionBinding, sinkId: string, sink: (event: ServerEvent) => void) => void;
+  addBindingSink: (
+    binding: SessionBinding,
+    sinkId: string,
+    sink: (event: ServerEvent) => void,
+  ) => void;
   removeBindingSink: (binding: SessionBinding, sinkId: string) => void;
   countLiveConnectionSinks: (binding: SessionBinding) => number;
   listThreadJournalEvents: (
@@ -84,16 +87,12 @@ export function createJsonRpcTransportAdapter({
     });
   };
 
-  const replayJournal = (
-    ws: StartServerSocket,
-    threadId: string,
-    afterSeq = 0,
-    limit?: number,
-  ) => {
+  const replayJournal = (ws: StartServerSocket, threadId: string, afterSeq = 0, limit?: number) => {
     const replayedRequestIds = new Set<string>();
-    const journalEvents = limit === undefined
-      ? listThreadJournalEvents(threadId, { afterSeq })
-      : listThreadJournalEvents(threadId, { afterSeq, limit });
+    const journalEvents =
+      limit === undefined
+        ? listThreadJournalEvents(threadId, { afterSeq })
+        : listThreadJournalEvents(threadId, { afterSeq, limit });
     for (const event of journalEvents) {
       if (event.eventType.startsWith("request:")) {
         const method = event.eventType.slice("request:".length);
@@ -144,7 +143,8 @@ export function createJsonRpcTransportAdapter({
     }
 
     const shouldReplayBufferedEvents =
-      opts?.drainDisconnectedReplayBuffer || (!binding.socket && countLiveConnectionSinks(binding) === 0);
+      opts?.drainDisconnectedReplayBuffer ||
+      (!binding.socket && countLiveConnectionSinks(binding) === 0);
     const sinkId = `jsonrpc:${connectionId}:${threadId}`;
     const projector = createJsonRpcEventProjector({
       threadId,
@@ -200,7 +200,7 @@ export function createJsonRpcTransportAdapter({
     const subscription = subscriptions?.get(threadId);
     if (!subscription) {
       const existingBinding = getThreadBinding(threadId);
-      return existingBinding?.session ? "notSubscribed" as const : "notLoaded" as const;
+      return existingBinding?.session ? ("notSubscribed" as const) : ("notLoaded" as const);
     }
 
     const binding = getThreadBinding(threadId);
@@ -233,16 +233,16 @@ export function createJsonRpcTransportAdapter({
     subscriptionsByConnectionId.delete(connectionId);
   };
 
-  const routeResponse = (
-    ws: StartServerSocket,
-    message: JsonRpcLiteClientResponse,
-  ) => {
+  const routeResponse = (ws: StartServerSocket, message: JsonRpcLiteClientResponse) => {
     const pending = ws.data.rpc?.pendingServerRequests.get(message.id);
     if (!pending) {
-      sendJsonRpc(ws, buildJsonRpcErrorResponse(message.id, {
-        code: JSONRPC_ERROR_CODES.invalidRequest,
-        message: `Unknown server request id: ${String(message.id)}`,
-      }));
+      sendJsonRpc(
+        ws,
+        buildJsonRpcErrorResponse(message.id, {
+          code: JSONRPC_ERROR_CODES.invalidRequest,
+          message: `Unknown server request id: ${String(message.id)}`,
+        }),
+      );
       return;
     }
 
@@ -260,9 +260,7 @@ export function createJsonRpcTransportAdapter({
       const result = message.result as Record<string, unknown> | undefined;
       const decision = typeof result?.decision === "string" ? result.decision : undefined;
       const approved =
-        result?.approved === true
-        || decision === "accept"
-        || decision === "acceptForSession";
+        result?.approved === true || decision === "accept" || decision === "acceptForSession";
       session.handleApprovalResponse(pending.requestId, approved);
     } else {
       const result = message.result as Record<string, unknown> | undefined;
@@ -299,17 +297,20 @@ export function createJsonRpcTransportAdapter({
   ) => {
     const rpcState = ws.data.rpc;
     if (
-      rpcState
-      && "id" in message
-      && "method" in message
-      && message.method !== "initialize"
-      && message.method !== "initialized"
-      && rpcState.pendingRequestCount >= rpcState.maxPendingRequests
+      rpcState &&
+      "id" in message &&
+      "method" in message &&
+      message.method !== "initialize" &&
+      message.method !== "initialized" &&
+      rpcState.pendingRequestCount >= rpcState.maxPendingRequests
     ) {
-      sendJsonRpc(ws, buildJsonRpcErrorResponse(message.id, {
-        code: JSONRPC_ERROR_CODES.serverOverloaded,
-        message: "Server overloaded; retry later.",
-      }));
+      sendJsonRpc(
+        ws,
+        buildJsonRpcErrorResponse(message.id, {
+          code: JSONRPC_ERROR_CODES.serverOverloaded,
+          message: "Server overloaded; retry later.",
+        }),
+      );
       return;
     }
 
@@ -323,15 +324,19 @@ export function createJsonRpcTransportAdapter({
         }
         void routeRequest(ws, request)
           .catch((reason) => {
-            const detail = reason instanceof Error
-              ? reason.message
-              : typeof reason === "string"
-                ? reason
-                : "Internal error";
-            sendJsonRpc(ws, buildJsonRpcErrorResponse(request.id, {
-              code: JSONRPC_ERROR_CODES.internalError,
-              message: detail,
-            }));
+            const detail =
+              reason instanceof Error
+                ? reason.message
+                : typeof reason === "string"
+                  ? reason
+                  : "Internal error";
+            sendJsonRpc(
+              ws,
+              buildJsonRpcErrorResponse(request.id, {
+                code: JSONRPC_ERROR_CODES.internalError,
+                message: detail,
+              }),
+            );
           })
           .finally(() => {
             if (ws.data.rpc) {

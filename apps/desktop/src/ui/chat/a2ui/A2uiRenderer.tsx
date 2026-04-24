@@ -1,8 +1,6 @@
-import { Fragment, useState } from "react";
-
 import type { CSSProperties, ReactNode } from "react";
-
-import { cn } from "../../../lib/utils";
+import { Fragment, useState } from "react";
+import { isSupportedBasicComponentType } from "../../../../../../src/shared/a2ui/component";
 import {
   formatString,
   resolveDynamic,
@@ -11,7 +9,7 @@ import {
   stringifyDynamic,
 } from "../../../../../../src/shared/a2ui/expressions";
 import { resolveDynamicWithFunctions } from "../../../../../../src/shared/a2ui/functions";
-import { isSupportedBasicComponentType } from "../../../../../../src/shared/a2ui/component";
+import { cn } from "../../../lib/utils";
 
 /**
  * Permissive shape of an A2UI v0.9 component. We defensively introspect
@@ -87,25 +85,26 @@ function resolveOptionalAlignmentClass(
   axis: "justify" | "items",
 ): string | null {
   if (!props) return null;
-  const raw = axis === "justify" ? props.justify ?? props.alignX : props.align ?? props.alignY;
+  const raw = axis === "justify" ? (props.justify ?? props.alignX) : (props.align ?? props.alignY);
   if (typeof raw !== "string") return null;
   const normalized = raw.toLowerCase();
-  const map = axis === "justify"
-    ? {
-        start: "justify-start",
-        center: "justify-center",
-        end: "justify-end",
-        between: "justify-between",
-        around: "justify-around",
-        evenly: "justify-evenly",
-      } as Record<string, string>
-    : {
-        start: "items-start",
-        center: "items-center",
-        end: "items-end",
-        stretch: "items-stretch",
-        baseline: "items-baseline",
-      } as Record<string, string>;
+  const map =
+    axis === "justify"
+      ? ({
+          start: "justify-start",
+          center: "justify-center",
+          end: "justify-end",
+          between: "justify-between",
+          around: "justify-around",
+          evenly: "justify-evenly",
+        } as Record<string, string>)
+      : ({
+          start: "items-start",
+          center: "items-center",
+          end: "items-end",
+          stretch: "items-stretch",
+          baseline: "items-baseline",
+        } as Record<string, string>);
   return map[normalized] ?? null;
 }
 
@@ -114,7 +113,11 @@ function resolveImageSrc(rawValue: unknown, model: unknown): string | null {
   if (!value) return null;
   try {
     const parsed = new URL(value);
-    if (parsed.protocol === "http:" || parsed.protocol === "https:" || parsed.protocol === "data:") {
+    if (
+      parsed.protocol === "http:" ||
+      parsed.protocol === "https:" ||
+      parsed.protocol === "data:"
+    ) {
       return value;
     }
     return null;
@@ -147,7 +150,13 @@ type RenderContext = {
 
 const MAX_RENDER_DEPTH = 32;
 
-function RenderNode({ component, context }: { component: A2uiRenderableComponent; context: RenderContext }) {
+function RenderNode({
+  component,
+  context,
+}: {
+  component: A2uiRenderableComponent;
+  context: RenderContext;
+}) {
   if (context.depth > MAX_RENDER_DEPTH) {
     return (
       <pre className="whitespace-pre-wrap rounded border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
@@ -158,10 +167,18 @@ function RenderNode({ component, context }: { component: A2uiRenderableComponent
 
   const rawType = component.type;
   if (typeof rawType !== "string" || !rawType.trim()) {
-    return <UnknownComponent component={component} context={context} reason="missing component type" />;
+    return (
+      <UnknownComponent component={component} context={context} reason="missing component type" />
+    );
   }
   if (!isSupportedBasicComponentType(rawType)) {
-    return <UnknownComponent component={component} context={context} reason={`unsupported type: ${rawType}`} />;
+    return (
+      <UnknownComponent
+        component={component}
+        context={context}
+        reason={`unsupported type: ${rawType}`}
+      />
+    );
   }
 
   const props = isRecord(component.props) ? component.props : undefined;
@@ -176,13 +193,15 @@ function RenderNode({ component, context }: { component: A2uiRenderableComponent
     case "Text":
     case "Paragraph": {
       const text = resolveText(props, context.dataModel, "text", "value");
-      return <p className="whitespace-pre-wrap break-words text-sm leading-6 text-foreground">{text}</p>;
+      return (
+        <p className="whitespace-pre-wrap break-words text-sm leading-6 text-foreground">{text}</p>
+      );
     }
 
     case "Heading": {
       const text = resolveText(props, context.dataModel, "text", "value");
       const level = Math.min(Math.max(Number(props?.level ?? 2), 1), 6);
-      const HeadingTag = (`h${level}` as unknown) as keyof React.JSX.IntrinsicElements;
+      const HeadingTag = `h${level}` as unknown as keyof React.JSX.IntrinsicElements;
       return (
         <HeadingTag
           className={cn(
@@ -277,9 +296,7 @@ function RenderNode({ component, context }: { component: A2uiRenderableComponent
         return cardChildren;
       }
       return (
-        <div className="rounded-xl border border-border/25 bg-muted/[0.02] p-4">
-          {cardChildren}
-        </div>
+        <div className="rounded-xl border border-border/25 bg-muted/[0.02] p-4">{cardChildren}</div>
       );
     }
 
@@ -302,13 +319,12 @@ function RenderNode({ component, context }: { component: A2uiRenderableComponent
       const componentId = typeof component.id === "string" ? component.id : "";
       const canClick = context.interactive && Boolean(context.onAction) && componentId.length > 0;
       const eventType = typeof props?.eventType === "string" ? props.eventType : "click";
-      const tooltip = canClick
-        ? undefined
-        : "Interactions are not wired up for this surface.";
+      const tooltip = canClick ? undefined : "Interactions are not wired up for this surface.";
       const variant = typeof props?.variant === "string" ? props.variant.toLowerCase() : "primary";
-      const buttonClass = variant === "secondary" || variant === "ghost" || variant === "outline"
-        ? "border-border/60 bg-background/70 text-foreground hover:bg-muted/40"
-        : "border-transparent bg-primary text-primary-foreground shadow-sm hover:bg-primary/90";
+      const buttonClass =
+        variant === "secondary" || variant === "ghost" || variant === "outline"
+          ? "border-border/60 bg-background/70 text-foreground hover:bg-muted/40"
+          : "border-transparent bg-primary text-primary-foreground shadow-sm hover:bg-primary/90";
       return (
         <button
           type="button"
@@ -334,7 +350,13 @@ function RenderNode({ component, context }: { component: A2uiRenderableComponent
     case "TextField": {
       const placeholder = resolveText(props, context.dataModel, "placeholder", "hint");
       const label = resolveText(props, context.dataModel, "label");
-      const defaultValue = resolveText(props, context.dataModel, "value", "defaultValue", "initialValue");
+      const defaultValue = resolveText(
+        props,
+        context.dataModel,
+        "value",
+        "defaultValue",
+        "initialValue",
+      );
       const componentId = typeof component.id === "string" ? component.id : "";
       const canSubmit = context.interactive && Boolean(context.onAction) && componentId.length > 0;
       return (
@@ -360,9 +382,10 @@ function RenderNode({ component, context }: { component: A2uiRenderableComponent
 
     case "Checkbox": {
       const label = resolveText(props, context.dataModel, "label", "text");
-      const initialValue = resolveBooleanProp(props, context.dataModel, "value")
-        || resolveBooleanProp(props, context.dataModel, "checked")
-        || resolveBooleanProp(props, context.dataModel, "defaultChecked");
+      const initialValue =
+        resolveBooleanProp(props, context.dataModel, "value") ||
+        resolveBooleanProp(props, context.dataModel, "checked") ||
+        resolveBooleanProp(props, context.dataModel, "defaultChecked");
       const componentId = typeof component.id === "string" ? component.id : "";
       const canChange = context.interactive && Boolean(context.onAction) && componentId.length > 0;
       return (
@@ -406,10 +429,19 @@ function RenderNode({ component, context }: { component: A2uiRenderableComponent
     case "TextArea": {
       const placeholder = resolveText(props, context.dataModel, "placeholder", "hint");
       const label = resolveText(props, context.dataModel, "label");
-      const defaultValue = resolveText(props, context.dataModel, "value", "defaultValue", "initialValue");
+      const defaultValue = resolveText(
+        props,
+        context.dataModel,
+        "value",
+        "defaultValue",
+        "initialValue",
+      );
       const componentId = typeof component.id === "string" ? component.id : "";
       const rowsRaw = props?.rows;
-      const rows = typeof rowsRaw === "number" && rowsRaw > 0 ? Math.min(Math.max(Math.floor(rowsRaw), 2), 20) : 4;
+      const rows =
+        typeof rowsRaw === "number" && rowsRaw > 0
+          ? Math.min(Math.max(Math.floor(rowsRaw), 2), 20)
+          : 4;
       const canSubmit = context.interactive && Boolean(context.onAction) && componentId.length > 0;
       return (
         <ControlledTextArea
@@ -450,8 +482,9 @@ function RenderNode({ component, context }: { component: A2uiRenderableComponent
             return [];
           })
         : [];
-      const defaultValue = resolveDynamicString(props?.value ?? props?.defaultValue, context.dataModel)
-        || (options[0]?.value ?? "");
+      const defaultValue =
+        resolveDynamicString(props?.value ?? props?.defaultValue, context.dataModel) ||
+        (options[0]?.value ?? "");
       return (
         <ControlledSelect
           label={label}
@@ -474,7 +507,9 @@ function RenderNode({ component, context }: { component: A2uiRenderableComponent
       const text = resolveText(props, context.dataModel, "text", "label");
       const href = resolveLinkHref(props?.href ?? props?.url, context.dataModel);
       if (!href) {
-        return <span className="text-sm text-muted-foreground underline-offset-2">{text || "link"}</span>;
+        return (
+          <span className="text-sm text-muted-foreground underline-offset-2">{text || "link"}</span>
+        );
       }
       return (
         <a
@@ -490,7 +525,9 @@ function RenderNode({ component, context }: { component: A2uiRenderableComponent
     }
 
     case "ProgressBar": {
-      const value = clampProgressValue(resolveDynamicWithFunctions(props?.value, context.dataModel));
+      const value = clampProgressValue(
+        resolveDynamicWithFunctions(props?.value, context.dataModel),
+      );
       const max = (() => {
         const raw = resolveDynamicWithFunctions(props?.max, context.dataModel);
         return typeof raw === "number" && raw > 0 ? raw : 100;
@@ -500,8 +537,14 @@ function RenderNode({ component, context }: { component: A2uiRenderableComponent
       return (
         <div className="flex flex-col gap-1.5">
           <div className="flex items-center justify-between gap-3">
-            {label ? <span className="text-xs font-medium text-muted-foreground">{label}</span> : <span />}
-            <span className="tabular-nums text-[11px] font-semibold text-foreground/80">{Math.round(pct)}%</span>
+            {label ? (
+              <span className="text-xs font-medium text-muted-foreground">{label}</span>
+            ) : (
+              <span />
+            )}
+            <span className="tabular-nums text-[11px] font-semibold text-foreground/80">
+              {Math.round(pct)}%
+            </span>
           </div>
           <div
             role="progressbar"
@@ -522,20 +565,25 @@ function RenderNode({ component, context }: { component: A2uiRenderableComponent
     case "Badge": {
       const text = resolveText(props, context.dataModel, "text", "label");
       const tone = typeof props?.tone === "string" ? props.tone.toLowerCase() : "default";
-      const toneClass = tone === "success"
-        ? "border-success/30 bg-success/10 text-success"
-        : tone === "warning"
-          ? "border-warning/30 bg-warning/10 text-warning"
-          : tone === "danger" || tone === "error"
-            ? "border-destructive/30 bg-destructive/10 text-destructive"
-            : tone === "info" || tone === "primary"
-              ? "border-primary/25 bg-primary/10 text-primary"
-              : "border-border/50 bg-muted/50 text-muted-foreground";
+      const toneClass =
+        tone === "success"
+          ? "border-success/30 bg-success/10 text-success"
+          : tone === "warning"
+            ? "border-warning/30 bg-warning/10 text-warning"
+            : tone === "danger" || tone === "error"
+              ? "border-destructive/30 bg-destructive/10 text-destructive"
+              : tone === "info" || tone === "primary"
+                ? "border-primary/25 bg-primary/10 text-primary"
+                : "border-border/50 bg-muted/50 text-muted-foreground";
       return (
-        <span className={cn(
-          "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium leading-none",
-          toneClass,
-        )}>{text}</span>
+        <span
+          className={cn(
+            "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium leading-none",
+            toneClass,
+          )}
+        >
+          {text}
+        </span>
       );
     }
 
@@ -547,14 +595,21 @@ function RenderNode({ component, context }: { component: A2uiRenderableComponent
             if (typeof col === "string") return [{ key: col, label: col }];
             if (col && typeof col === "object") {
               const rec = col as Record<string, unknown>;
-              const key = typeof rec.key === "string" ? rec.key
-                : typeof rec.id === "string" ? rec.id
-                : typeof rec.field === "string" ? rec.field
-                : null;
+              const key =
+                typeof rec.key === "string"
+                  ? rec.key
+                  : typeof rec.id === "string"
+                    ? rec.id
+                    : typeof rec.field === "string"
+                      ? rec.field
+                      : null;
               if (!key) return [];
-              const lbl = typeof rec.label === "string" ? rec.label
-                : typeof rec.title === "string" ? rec.title
-                : key;
+              const lbl =
+                typeof rec.label === "string"
+                  ? rec.label
+                  : typeof rec.title === "string"
+                    ? rec.title
+                    : key;
               return [{ key, label: lbl }];
             }
             return [];
@@ -562,7 +617,13 @@ function RenderNode({ component, context }: { component: A2uiRenderableComponent
         : [];
       const rows = Array.isArray(rowsRaw) ? rowsRaw : [];
       if (columns.length === 0) {
-        return <UnknownComponent component={component} context={childContext} reason="Table requires props.columns" />;
+        return (
+          <UnknownComponent
+            component={component}
+            context={childContext}
+            reason="Table requires props.columns"
+          />
+        );
       }
       return (
         <div className="overflow-hidden overflow-x-auto rounded-xl border border-border/30 bg-gradient-to-b from-muted/[0.12] to-muted/[0.03] ring-1 ring-border/15 shadow-[var(--shadow-field)]">
@@ -598,14 +659,19 @@ function RenderNode({ component, context }: { component: A2uiRenderableComponent
                         colIndex === 0 && "font-medium text-foreground",
                       )}
                     >
-                      <span className="block min-w-0 break-words">{tableCellRender(row, col.key)}</span>
+                      <span className="block min-w-0 break-words">
+                        {tableCellRender(row, col.key)}
+                      </span>
                     </td>
                   ))}
                 </tr>
               ))}
               {rows.length === 0 ? (
                 <tr>
-                  <td colSpan={columns.length} className="px-4 py-6 text-center text-sm text-muted-foreground">
+                  <td
+                    colSpan={columns.length}
+                    className="px-4 py-6 text-center text-sm text-muted-foreground"
+                  >
                     No rows.
                   </td>
                 </tr>
@@ -617,7 +683,13 @@ function RenderNode({ component, context }: { component: A2uiRenderableComponent
     }
 
     default:
-      return <UnknownComponent component={component} context={childContext} reason={`unhandled type: ${rawType}`} />;
+      return (
+        <UnknownComponent
+          component={component}
+          context={childContext}
+          reason={`unhandled type: ${rawType}`}
+        />
+      );
   }
 }
 
@@ -748,9 +820,15 @@ function ControlledSelect({
         }}
         className="h-10 w-full rounded-lg border border-border/60 bg-background/70 px-3 text-sm text-foreground shadow-none focus:outline-none focus:ring-2 focus:ring-ring/40"
       >
-        {hasPlaceholder ? <option value="" disabled>{placeholder}</option> : null}
+        {hasPlaceholder ? (
+          <option value="" disabled>
+            {placeholder}
+          </option>
+        ) : null}
         {options.map((option) => (
-          <option key={option.value} value={option.value}>{option.label}</option>
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
         ))}
       </select>
     </label>
@@ -803,7 +881,8 @@ function UnknownComponent({
   context: RenderContext;
   reason: string;
 }): ReactNode {
-  const typeName = typeof component.type === "string" ? component.type : String(component.type ?? "?");
+  const typeName =
+    typeof component.type === "string" ? component.type : String(component.type ?? "?");
   return (
     <div className="rounded-md border border-dashed border-border/60 bg-muted/20 p-2 text-xs">
       <div className="font-semibold text-muted-foreground">Unrendered component</div>

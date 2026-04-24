@@ -1,5 +1,5 @@
-import * as React from "react";
 import { Disclosure as HeroDisclosure } from "@heroui/react";
+import * as React from "react";
 
 import { cn } from "@/lib/utils";
 
@@ -22,13 +22,14 @@ function useCollapsibleContext() {
 type CollapsibleProps = Omit<
   React.ComponentProps<typeof HeroDisclosure>,
   "children" | "defaultExpanded" | "isDisabled" | "isExpanded" | "onExpandedChange"
-> & React.HTMLAttributes<HTMLDivElement> & {
-  children?: React.ReactNode;
-  defaultOpen?: boolean;
-  disabled?: boolean;
-  onOpenChange?: (open: boolean) => void;
-  open?: boolean;
-};
+> &
+  React.HTMLAttributes<HTMLDivElement> & {
+    children?: React.ReactNode;
+    defaultOpen?: boolean;
+    disabled?: boolean;
+    onOpenChange?: (open: boolean) => void;
+    open?: boolean;
+  };
 
 function Collapsible({
   children,
@@ -42,15 +43,20 @@ function Collapsible({
   const [uncontrolledOpen, setUncontrolledOpen] = React.useState(defaultOpen ?? false);
   const isOpen = open ?? uncontrolledOpen;
 
-  const handleOpenChange = React.useCallback((nextOpen: boolean) => {
-    if (open === undefined) {
-      setUncontrolledOpen(nextOpen);
-    }
-    onOpenChange?.(nextOpen);
-  }, [onOpenChange, open]);
+  const handleOpenChange = React.useCallback(
+    (nextOpen: boolean) => {
+      if (open === undefined) {
+        setUncontrolledOpen(nextOpen);
+      }
+      onOpenChange?.(nextOpen);
+    },
+    [onOpenChange, open],
+  );
 
   return (
-    <CollapsibleContext.Provider value={{ disabled: disabled ?? false, open: isOpen, setOpen: handleOpenChange }}>
+    <CollapsibleContext.Provider
+      value={{ disabled: disabled ?? false, open: isOpen, setOpen: handleOpenChange }}
+    >
       <HeroDisclosure
         className={className}
         data-expanded={isOpen ? "true" : "false"}
@@ -66,7 +72,10 @@ function Collapsible({
   );
 }
 
-type CollapsibleTriggerProps = Omit<React.ComponentProps<typeof HeroDisclosure.Trigger>, "children"> & {
+type CollapsibleTriggerProps = Omit<
+  React.ComponentProps<typeof HeroDisclosure.Trigger>,
+  "children"
+> & {
   asChild?: boolean;
   children?: React.ReactNode;
 };
@@ -115,9 +124,7 @@ function CollapsibleTrigger({
 
   return (
     <HeroDisclosure.Heading>
-      <HeroDisclosure.Trigger {...sharedProps}>
-        {children}
-      </HeroDisclosure.Trigger>
+      <HeroDisclosure.Trigger {...sharedProps}>{children}</HeroDisclosure.Trigger>
     </HeroDisclosure.Heading>
   );
 }

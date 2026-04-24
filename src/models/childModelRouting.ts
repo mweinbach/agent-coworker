@@ -1,10 +1,10 @@
-import { normalizeModelIdForProvider } from "./metadata";
 import {
   type ChildModelRoutingMode,
   isChildModelRoutingMode,
   isProviderName,
   type ProviderName,
 } from "../types";
+import { normalizeModelIdForProvider } from "./metadata";
 
 export type ParsedChildModelRef = {
   provider: ProviderName;
@@ -17,7 +17,11 @@ export function childModelRef(provider: ProviderName, modelId: string): string {
   return `${provider}:${modelId}`;
 }
 
-export function parseChildModelRef(raw: string, defaultProvider?: ProviderName, source = "child model"): ParsedChildModelRef {
+export function parseChildModelRef(
+  raw: string,
+  defaultProvider?: ProviderName,
+  source = "child model",
+): ParsedChildModelRef {
   const trimmed = raw.trim();
   if (!trimmed) {
     throw new Error(`${source} is required`);
@@ -87,7 +91,11 @@ export function legacyPreferredChildModelForProvider(
 ): string {
   if (!preferredChildModelRef) return currentModel;
   try {
-    const parsed = parseChildModelRef(preferredChildModelRef, provider, "preferred child model ref");
+    const parsed = parseChildModelRef(
+      preferredChildModelRef,
+      provider,
+      "preferred child model ref",
+    );
     return parsed.provider === provider ? parsed.modelId : currentModel;
   } catch {
     return currentModel;
@@ -142,32 +150,48 @@ export function normalizeChildRoutingConfig(opts: {
   );
 
   let preferredRef = fallbackRef;
-  const rawPreferredRef = typeof opts.preferredChildModelRef === "string" && opts.preferredChildModelRef.trim()
-    ? opts.preferredChildModelRef.trim()
-    : undefined;
+  const rawPreferredRef =
+    typeof opts.preferredChildModelRef === "string" && opts.preferredChildModelRef.trim()
+      ? opts.preferredChildModelRef.trim()
+      : undefined;
 
   if (mode === "cross-provider-allowlist") {
     if (rawPreferredRef) {
       try {
-        preferredRef = parseChildModelRef(rawPreferredRef, opts.provider, `${source} preferred child target`).ref;
+        preferredRef = parseChildModelRef(
+          rawPreferredRef,
+          opts.provider,
+          `${source} preferred child target`,
+        ).ref;
       } catch {
         preferredRef = fallbackRef;
       }
     }
     if (allowedChildModelRefs.length > 0) {
-      preferredRef = allowedChildModelRefs.includes(preferredRef) ? preferredRef : allowedChildModelRefs[0]!;
+      preferredRef = allowedChildModelRefs.includes(preferredRef)
+        ? preferredRef
+        : allowedChildModelRefs[0]!;
     } else {
       preferredRef = fallbackRef;
     }
   } else {
-    const rawPreferredTarget = rawPreferredRef
-      ?? (typeof opts.preferredChildModel === "string" && opts.preferredChildModel.trim()
+    const rawPreferredTarget =
+      rawPreferredRef ??
+      (typeof opts.preferredChildModel === "string" && opts.preferredChildModel.trim()
         ? opts.preferredChildModel.trim()
         : undefined);
     if (rawPreferredTarget) {
-      preferredRef = parseChildModelRef(rawPreferredTarget, opts.provider, `${source} preferred child target`).ref;
+      preferredRef = parseChildModelRef(
+        rawPreferredTarget,
+        opts.provider,
+        `${source} preferred child target`,
+      ).ref;
     }
-    const parsedPreferred = parseChildModelRef(preferredRef, opts.provider, `${source} preferred child target`);
+    const parsedPreferred = parseChildModelRef(
+      preferredRef,
+      opts.provider,
+      `${source} preferred child target`,
+    );
     preferredRef = parsedPreferred.provider === opts.provider ? parsedPreferred.ref : fallbackRef;
   }
 
@@ -175,9 +199,9 @@ export function normalizeChildRoutingConfig(opts: {
     childModelRoutingMode: mode,
     preferredChildModel:
       mode === "cross-provider-allowlist"
-        ? (typeof opts.preferredChildModel === "string" && opts.preferredChildModel.trim()
-            ? preferredChildModel
-            : legacyPreferredChildModelForProvider(opts.provider, opts.model, preferredRef))
+        ? typeof opts.preferredChildModel === "string" && opts.preferredChildModel.trim()
+          ? preferredChildModel
+          : legacyPreferredChildModelForProvider(opts.provider, opts.model, preferredRef)
         : legacyPreferredChildModelForProvider(opts.provider, opts.model, preferredRef),
     preferredChildModelRef: preferredRef,
     allowedChildModelRefs,

@@ -26,11 +26,11 @@ export class PersistenceManager {
         name: string,
         status: "ok" | "error",
         attributes?: Record<string, string | number | boolean>,
-        durationMs?: number
+        durationMs?: number,
       ) => void;
       emitError: (message: string) => void;
       formatError: (err: unknown) => string;
-    }
+    },
   ) {}
 
   queuePersistSessionSnapshot(reason: string) {
@@ -80,7 +80,7 @@ export class PersistenceManager {
               reason: primaryReason,
               coalescedReasonCount: reasons.length,
             },
-            Date.now() - startedAt
+            Date.now() - startedAt,
           );
         }
       } finally {
@@ -95,11 +95,11 @@ export class PersistenceManager {
       .then(run)
       .catch((err) => {
         const formattedError = this.opts.formatError(err);
-        this.opts.emitTelemetry(
-          "session.snapshot.persist",
-          "error",
-          { sessionId: this.opts.sessionId, reason, error: formattedError }
-        );
+        this.opts.emitTelemetry("session.snapshot.persist", "error", {
+          sessionId: this.opts.sessionId,
+          reason,
+          error: formattedError,
+        });
         if (formattedError.toLowerCase().includes("database is locked")) {
           this.opts.emitTelemetry("session.db.sqlite_lock", "error", {
             sessionId: this.opts.sessionId,

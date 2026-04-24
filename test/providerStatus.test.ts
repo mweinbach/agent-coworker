@@ -5,11 +5,15 @@ import path from "node:path";
 import { Bedrock } from "@aws-sdk/client-bedrock";
 
 import { getAiCoworkerPaths, writeConnectionStore } from "../src/connect";
-import { refreshBedrockDiscoveryCache } from "../src/providers/bedrockShared";
 import { getProviderStatuses } from "../src/providerStatus";
+import { refreshBedrockDiscoveryCache } from "../src/providers/bedrockShared";
 
 function b64url(input: string): string {
-  return Buffer.from(input, "utf8").toString("base64").replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+  return Buffer.from(input, "utf8")
+    .toString("base64")
+    .replace(/=/g, "")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
 }
 
 function makeJwt(payload: Record<string, unknown>): string {
@@ -44,8 +48,10 @@ function mockBedrockDiscovery(modelId = "custom.bedrock-model-v1") {
     } as any;
   };
   Bedrock.prototype.listInferenceProfiles = async () => ({ inferenceProfileSummaries: [] }) as any;
-  Bedrock.prototype.listCustomModelDeployments = async () => ({ modelDeploymentSummaries: [] }) as any;
-  Bedrock.prototype.listProvisionedModelThroughputs = async () => ({ provisionedModelSummaries: [] }) as any;
+  Bedrock.prototype.listCustomModelDeployments = async () =>
+    ({ modelDeploymentSummaries: [] }) as any;
+  Bedrock.prototype.listProvisionedModelThroughputs = async () =>
+    ({ provisionedModelSummaries: [] }) as any;
   Bedrock.prototype.listImportedModels = async () => ({ modelSummaries: [] }) as any;
 
   return {
@@ -81,9 +87,9 @@ describe("getProviderStatuses", () => {
           },
         },
         null,
-        2
+        2,
       ),
-      "utf-8"
+      "utf-8",
     );
 
     const statuses = await getProviderStatuses({ paths });
@@ -283,7 +289,11 @@ describe("getProviderStatuses", () => {
     const home = await makeTmpHome();
     const paths = getAiCoworkerPaths({ homedir: home });
 
-    const idToken = makeJwt({ iss: "https://auth.example.com", email: "jwt@example.com", chatgpt_account_id: "acct-123" });
+    const idToken = makeJwt({
+      iss: "https://auth.example.com",
+      email: "jwt@example.com",
+      chatgpt_account_id: "acct-123",
+    });
     const accessToken = "access-token";
 
     const codexAuth = {
@@ -296,7 +306,8 @@ describe("getProviderStatuses", () => {
     await fs.writeFile(codexAuthPath, JSON.stringify(codexAuth), "utf-8");
 
     const runner = async ({ command }: { command: string }) => {
-      if (command === "claude") return { exitCode: 1, signal: null, stdout: "", stderr: "not logged in" };
+      if (command === "claude")
+        return { exitCode: 1, signal: null, stdout: "", stderr: "not logged in" };
       return { exitCode: 1, signal: null, stdout: "", stderr: "unknown" };
     };
 
@@ -305,60 +316,63 @@ describe("getProviderStatuses", () => {
       if (u === "https://chatgpt.com/backend-api/wham/usage") {
         expect(init?.headers?.authorization).toBe(`Bearer ${accessToken}`);
         expect(init?.headers?.["chatgpt-account-id"]).toBe("acct-123");
-        return new Response(JSON.stringify({
-          account_id: "acct-123",
-          email: "backend@example.com",
-          plan_type: "pro",
-          rate_limit: {
-            allowed: true,
-            limit_reached: false,
-            primary_window: {
-              used_percent: 4,
-              limit_window_seconds: 18_000,
-              reset_after_seconds: 13097,
-              reset_at: 1_773_038_084,
-            },
-            secondary_window: {
-              used_percent: 31,
-              limit_window_seconds: 604_800,
-              reset_after_seconds: 506_488,
-              reset_at: 1_773_531_475,
-            },
-          },
-          code_review_rate_limit: {
-            allowed: true,
-            limit_reached: false,
-            primary_window: {
-              used_percent: 5,
-              limit_window_seconds: 604_800,
-              reset_after_seconds: 435_167,
-              reset_at: 1_773_460_153,
-            },
-            secondary_window: null,
-          },
-          additional_rate_limits: [
-            {
-              limit_name: "GPT-5.3-Codex-Spark",
-              metered_feature: "codex_bengalfox",
-              rate_limit: {
-                allowed: true,
-                limit_reached: false,
-                primary_window: {
-                  used_percent: 0,
-                  limit_window_seconds: 18_000,
-                  reset_after_seconds: 18_000,
-                  reset_at: 1_773_042_987,
-                },
-                secondary_window: null,
+        return new Response(
+          JSON.stringify({
+            account_id: "acct-123",
+            email: "backend@example.com",
+            plan_type: "pro",
+            rate_limit: {
+              allowed: true,
+              limit_reached: false,
+              primary_window: {
+                used_percent: 4,
+                limit_window_seconds: 18_000,
+                reset_after_seconds: 13097,
+                reset_at: 1_773_038_084,
+              },
+              secondary_window: {
+                used_percent: 31,
+                limit_window_seconds: 604_800,
+                reset_after_seconds: 506_488,
+                reset_at: 1_773_531_475,
               },
             },
-          ],
-          credits: {
-            has_credits: false,
-            unlimited: false,
-            balance: "0",
-          },
-        }), { status: 200 });
+            code_review_rate_limit: {
+              allowed: true,
+              limit_reached: false,
+              primary_window: {
+                used_percent: 5,
+                limit_window_seconds: 604_800,
+                reset_after_seconds: 435_167,
+                reset_at: 1_773_460_153,
+              },
+              secondary_window: null,
+            },
+            additional_rate_limits: [
+              {
+                limit_name: "GPT-5.3-Codex-Spark",
+                metered_feature: "codex_bengalfox",
+                rate_limit: {
+                  allowed: true,
+                  limit_reached: false,
+                  primary_window: {
+                    used_percent: 0,
+                    limit_window_seconds: 18_000,
+                    reset_after_seconds: 18_000,
+                    reset_at: 1_773_042_987,
+                  },
+                  secondary_window: null,
+                },
+              },
+            ],
+            credits: {
+              has_credits: false,
+              unlimited: false,
+              balance: "0",
+            },
+          }),
+          { status: 200 },
+        );
       }
       return new Response("not found", { status: 404 });
     };
@@ -444,11 +458,17 @@ describe("getProviderStatuses", () => {
     await fs.mkdir(path.dirname(legacyPath), { recursive: true });
     await fs.writeFile(
       legacyPath,
-      JSON.stringify({ auth_mode: "chatgpt", tokens: { id_token: idToken, access_token: accessToken } }),
-      "utf-8"
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: { id_token: idToken, access_token: accessToken },
+      }),
+      "utf-8",
     );
 
-    const statuses = await getProviderStatuses({ paths, fetchImpl: async () => new Response("not found", { status: 404 }) });
+    const statuses = await getProviderStatuses({
+      paths,
+      fetchImpl: async () => new Response("not found", { status: 404 }),
+    });
     const codex = statuses.find((s) => s.provider === "codex-cli");
     expect(codex).toBeDefined();
     expect(codex?.authorized).toBe(false);
@@ -456,21 +476,31 @@ describe("getProviderStatuses", () => {
     expect(codex?.mode).toBe("missing");
     expect(codex?.account).toBeNull();
     expect(codex?.message).toContain("Not logged in to Codex");
-    await expect(fs.readFile(path.join(home, ".cowork", "auth", "codex-cli", "auth.json"), "utf-8")).rejects.toThrow();
+    await expect(
+      fs.readFile(path.join(home, ".cowork", "auth", "codex-cli", "auth.json"), "utf-8"),
+    ).rejects.toThrow();
   });
 
   test("codex-cli: usage verification failure keeps credentials authorized but unverified", async () => {
     const home = await makeTmpHome();
     const paths = getAiCoworkerPaths({ homedir: home });
 
-    const idToken = makeJwt({ iss: "https://auth.example.com", email: "jwt@example.com", chatgpt_account_id: "acct-123" });
+    const idToken = makeJwt({
+      iss: "https://auth.example.com",
+      email: "jwt@example.com",
+      chatgpt_account_id: "acct-123",
+    });
     const accessToken = "access-token";
     const codexAuthPath = path.join(home, ".cowork", "auth", "codex-cli", "auth.json");
     await fs.mkdir(path.dirname(codexAuthPath), { recursive: true });
     await fs.writeFile(
       codexAuthPath,
-      JSON.stringify({ version: 1, auth_mode: "chatgpt", tokens: { id_token: idToken, access_token: accessToken } }),
-      "utf-8"
+      JSON.stringify({
+        version: 1,
+        auth_mode: "chatgpt",
+        tokens: { id_token: idToken, access_token: accessToken },
+      }),
+      "utf-8",
     );
 
     const fetchImpl = async () => new Response("boom", { status: 500 });
@@ -488,24 +518,36 @@ describe("getProviderStatuses", () => {
     const home = await makeTmpHome();
     const paths = getAiCoworkerPaths({ homedir: home });
 
-    const idToken = makeJwt({ iss: "https://auth.example.com", email: "jwt@example.com", chatgpt_account_id: "acct-123" });
+    const idToken = makeJwt({
+      iss: "https://auth.example.com",
+      email: "jwt@example.com",
+      chatgpt_account_id: "acct-123",
+    });
     const accessToken = "access-token";
     const codexAuthPath = path.join(home, ".cowork", "auth", "codex-cli", "auth.json");
     await fs.mkdir(path.dirname(codexAuthPath), { recursive: true });
     await fs.writeFile(
       codexAuthPath,
-      JSON.stringify({ version: 1, auth_mode: "chatgpt", tokens: { id_token: idToken, access_token: accessToken } }),
-      "utf-8"
+      JSON.stringify({
+        version: 1,
+        auth_mode: "chatgpt",
+        tokens: { id_token: idToken, access_token: accessToken },
+      }),
+      "utf-8",
     );
 
     const statuses = await getProviderStatuses({
       paths,
-      fetchImpl: async () => new Response(JSON.stringify({
-        credits: {
-          has_credits: "nope",
-          unlimited: false,
-        },
-      }), { status: 200 }),
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            credits: {
+              has_credits: "nope",
+              unlimited: false,
+            },
+          }),
+          { status: 200 },
+        ),
     });
     const codex = statuses.find((s) => s.provider === "codex-cli");
 
@@ -538,7 +580,7 @@ describe("getProviderStatuses", () => {
           refresh_token: "refresh-token",
         },
       }),
-      "utf-8"
+      "utf-8",
     );
 
     let refreshCalls = 0;
@@ -561,5 +603,4 @@ describe("getProviderStatuses", () => {
     expect(codex?.tokenRecoverable).toBe(true);
     expect(codex?.message).toContain("Codex token expired.");
   });
-
 });

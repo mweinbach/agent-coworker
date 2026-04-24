@@ -146,59 +146,60 @@ class FakeWebSocket {
       });
     }
     if (
-      (parsed?.method === "cowork/session/state/read"
-        || parsed?.method === "cowork/provider/catalog/read"
-        || parsed?.method === "cowork/provider/authMethods/read")
-      && parsed?.id != null
+      (parsed?.method === "cowork/session/state/read" ||
+        parsed?.method === "cowork/provider/catalog/read" ||
+        parsed?.method === "cowork/provider/authMethods/read") &&
+      parsed?.id != null
     ) {
       queueMicrotask(() => {
-        const result = parsed.method === "cowork/session/state/read"
-          ? {
-              events: [
-                {
-                  type: "config_updated",
-                  sessionId: "thread-test",
-                  config: {
-                    provider: "openai",
-                    model: "gpt-5.4",
-                    workingDirectory: process.cwd(),
-                  },
-                },
-                {
-                  type: "session_settings",
-                  sessionId: "thread-test",
-                  enableMcp: true,
-                  enableMemory: true,
-                  memoryRequireApproval: false,
-                },
-                {
-                  type: "session_config",
-                  sessionId: "thread-test",
-                  config: {
-                    enableMemory: true,
-                  },
-                },
-              ],
-            }
-          : parsed.method === "cowork/provider/catalog/read"
+        const result =
+          parsed.method === "cowork/session/state/read"
             ? {
-                event: {
-                  type: "provider_catalog",
-                  sessionId: "thread-test",
-                  all: [{ id: "openai" }],
-                  default: { openai: "gpt-5.4" },
-                  connected: ["openai"],
-                },
-              }
-            : {
-                event: {
-                  type: "provider_auth_methods",
-                  sessionId: "thread-test",
-                  methods: {
-                    openai: [{ id: "api_key", type: "api", label: "API key" }],
+                events: [
+                  {
+                    type: "config_updated",
+                    sessionId: "thread-test",
+                    config: {
+                      provider: "openai",
+                      model: "gpt-5.4",
+                      workingDirectory: process.cwd(),
+                    },
                   },
-                },
-              };
+                  {
+                    type: "session_settings",
+                    sessionId: "thread-test",
+                    enableMcp: true,
+                    enableMemory: true,
+                    memoryRequireApproval: false,
+                  },
+                  {
+                    type: "session_config",
+                    sessionId: "thread-test",
+                    config: {
+                      enableMemory: true,
+                    },
+                  },
+                ],
+              }
+            : parsed.method === "cowork/provider/catalog/read"
+              ? {
+                  event: {
+                    type: "provider_catalog",
+                    sessionId: "thread-test",
+                    all: [{ id: "openai" }],
+                    default: { openai: "gpt-5.4" },
+                    connected: ["openai"],
+                  },
+                }
+              : {
+                  event: {
+                    type: "provider_auth_methods",
+                    sessionId: "thread-test",
+                    methods: {
+                      openai: [{ id: "api_key", type: "api", label: "API key" }],
+                    },
+                  },
+                };
         this.onmessage?.({ data: JSON.stringify({ id: parsed.id, result }) });
       });
     }
@@ -238,7 +239,10 @@ async function waitForCliReady(timeoutMs = 2_000) {
   throw new Error(`Timed out waiting for CLI test harness to connect: ${JSON.stringify(snapshot)}`);
 }
 
-async function withReplDiagnostics(name: string, run: (diagnostics: FailureDiagnostics) => Promise<void>) {
+async function withReplDiagnostics(
+  name: string,
+  run: (diagnostics: FailureDiagnostics) => Promise<void>,
+) {
   const diagnostics = createFailureDiagnostics(name);
   activeDiagnostics = diagnostics;
   try {
@@ -253,101 +257,98 @@ async function withReplDiagnostics(name: string, run: (diagnostics: FailureDiagn
 
 describe("CLI REPL restart failure recovery", () => {
   test("does not get stuck after a failed /restart (serverStopping reset; disconnect cleanup not skipped)", async () => {
-    await withReplDiagnostics(
-      "does not get stuck after a failed /restart",
-      async (diagnostics) => {
-        rlRef = null;
-        FakeWebSocket.instances = [];
-        const realLog = console.log;
-        const realErr = console.error;
+    await withReplDiagnostics("does not get stuck after a failed /restart", async (diagnostics) => {
+      rlRef = null;
+      FakeWebSocket.instances = [];
+      const realLog = console.log;
+      const realErr = console.error;
 
-        try {
-          const logs: string[] = [];
-          console.log = (...args: any[]) => {
-            const line = args.join(" ");
-            logs.push(line);
-            diagnostics.log("console.log", { line });
-          };
-          console.error = (...args: any[]) => {
-            const line = args.join(" ");
-            logs.push(line);
-            diagnostics.log("console.error", { line });
-          };
+      try {
+        const logs: string[] = [];
+        console.log = (...args: any[]) => {
+          const line = args.join(" ");
+          logs.push(line);
+          diagnostics.log("console.log", { line });
+        };
+        console.error = (...args: any[]) => {
+          const line = args.join(" ");
+          logs.push(line);
+          diagnostics.log("console.error", { line });
+        };
 
-          let startCalls = 0;
-          const startAgentServerStub = async () => {
-            startCalls++;
-            diagnostics.log("start-agent-server", { startCalls });
-            if (startCalls >= 2) throw new Error("boom: start failed");
+        let startCalls = 0;
+        const startAgentServerStub = async () => {
+          startCalls++;
+          diagnostics.log("start-agent-server", { startCalls });
+          if (startCalls >= 2) throw new Error("boom: start failed");
 
-            return {
-              server: {
-                stop() {
-                  diagnostics.log("stub-server.stop", getHarnessSnapshot());
-                  // Mimic server shutdown closing the active websocket.
-                  for (const ws of FakeWebSocket.instances) ws.close();
-                },
-              },
-              url: "ws://mock",
-              config: {} as any,
-              system: "",
-            };
-          };
-
-          const { runCliRepl } = await import("../src/cli/repl");
-
-          const replPromise = runCliRepl({
-            __internal: {
-              startAgentServer: startAgentServerStub as any,
-              WebSocket: FakeWebSocket as any,
-              createReadlineInterface: () => {
-                rlRef = new FakeReadline();
-                diagnostics.log("create-readline", getHarnessSnapshot());
-                return rlRef as any;
+          return {
+            server: {
+              stop() {
+                diagnostics.log("stub-server.stop", getHarnessSnapshot());
+                // Mimic server shutdown closing the active websocket.
+                for (const ws of FakeWebSocket.instances) ws.close();
               },
             },
-          });
+            url: "ws://mock",
+            config: {} as any,
+            system: "",
+          };
+        };
 
-          diagnostics.log("after runCliRepl", getHarnessSnapshot());
-          await waitForCliReady();
+        const { runCliRepl } = await import("../src/cli/repl");
 
-          // Wait for the handshake + thread start to complete
-          await new Promise<void>((resolve) => setTimeout(resolve, 200));
+        const replPromise = runCliRepl({
+          __internal: {
+            startAgentServer: startAgentServerStub as any,
+            WebSocket: FakeWebSocket as any,
+            createReadlineInterface: () => {
+              rlRef = new FakeReadline();
+              diagnostics.log("create-readline", getHarnessSnapshot());
+              return rlRef as any;
+            },
+          },
+        });
 
-          diagnostics.log("after waitForCliReady", getHarnessSnapshot());
-          expect(rlRef).toBeDefined();
-          expect(FakeWebSocket.instances[0]).toBeDefined();
+        diagnostics.log("after runCliRepl", getHarnessSnapshot());
+        await waitForCliReady();
 
-          await rlRef!.emitLine("/restart");
-          diagnostics.log("after /restart", {
-            logs,
-            harness: getHarnessSnapshot(),
-          });
-          expect(logs.join("\n")).toContain("restarting server...");
-          expect(logs.join("\n")).toContain("Error:");
+        // Wait for the handshake + thread start to complete
+        await new Promise<void>((resolve) => setTimeout(resolve, 200));
 
-          const before = logs.length;
-          await rlRef!.emitLine("hello");
+        diagnostics.log("after waitForCliReady", getHarnessSnapshot());
+        expect(rlRef).toBeDefined();
+        expect(FakeWebSocket.instances[0]).toBeDefined();
 
-          diagnostics.log("after hello", {
-            before,
-            after: logs.length,
-            logs,
-            harness: getHarnessSnapshot(),
-            prompt: rlRef?.lastPrompt ?? null,
-          });
-          // The key regression: input must not be silently dropped after a failed restart.
-          expect(logs.length).toBeGreaterThan(before);
-          expect(logs.join("\n")).toMatch(/not connected:|disconnected:/);
-          expect(rlRef!.lastPrompt).toBe("you> ");
+        await rlRef!.emitLine("/restart");
+        diagnostics.log("after /restart", {
+          logs,
+          harness: getHarnessSnapshot(),
+        });
+        expect(logs.join("\n")).toContain("restarting server...");
+        expect(logs.join("\n")).toContain("Error:");
 
-          rlRef!.close();
-          await replPromise;
-        } finally {
-          console.log = realLog;
-          console.error = realErr;
-        }
-      },
-    );
+        const before = logs.length;
+        await rlRef!.emitLine("hello");
+
+        diagnostics.log("after hello", {
+          before,
+          after: logs.length,
+          logs,
+          harness: getHarnessSnapshot(),
+          prompt: rlRef?.lastPrompt ?? null,
+        });
+        // The key regression: input must not be silently dropped after a failed restart.
+        expect(logs.length).toBeGreaterThan(before);
+        expect(logs.join("\n")).toMatch(/not connected:|disconnected:/);
+        expect(rlRef!.lastPrompt).toBe("you> ");
+
+        rlRef!.close();
+        await replPromise;
+      } finally {
+        console.log = realLog;
+        console.error = realErr;
+      }
+    });
   });
 });

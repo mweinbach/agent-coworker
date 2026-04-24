@@ -1,9 +1,9 @@
-import { useEffect, useMemo } from "react";
 import { PlusIcon } from "lucide-react";
+import { useEffect, useMemo } from "react";
 
 import { useAppStore } from "../app/store";
-import { Button } from "../components/ui/button";
 import type { ResearchCard } from "../app/types";
+import { Button } from "../components/ui/button";
 import { NewResearchComposer } from "./research/NewResearchComposer";
 import { ResearchCardGrid } from "./research/ResearchCardGrid";
 import { ResearchDetailPane } from "./research/ResearchDetailPane";
@@ -18,12 +18,13 @@ export function ResearchView() {
   const selectResearch = useAppStore((s) => s.selectResearch);
 
   const research = useMemo(
-    () => researchOrder
-      .map((researchId) => researchById[researchId])
-      .filter((entry): entry is ResearchCard => Boolean(entry)),
+    () =>
+      researchOrder
+        .map((researchId) => researchById[researchId])
+        .filter((entry): entry is ResearchCard => Boolean(entry)),
     [researchById, researchOrder],
   );
-  const selectedResearch = selectedResearchId ? researchById[selectedResearchId] ?? null : null;
+  const selectedResearch = selectedResearchId ? (researchById[selectedResearchId] ?? null) : null;
 
   useEffect(() => {
     void refreshResearchList();

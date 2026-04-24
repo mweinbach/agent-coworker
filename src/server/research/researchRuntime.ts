@@ -45,7 +45,9 @@ function asAsyncIterable<T>(value: unknown): AsyncIterable<T> {
   throw new Error("Expected a streaming interaction response from Google.");
 }
 
-function operationErrorMessage(operation: { error?: Record<string, unknown> } | null | undefined): string {
+function operationErrorMessage(
+  operation: { error?: Record<string, unknown> } | null | undefined,
+): string {
   const error = operation?.error;
   if (!error) {
     return "Google operation failed.";
@@ -82,7 +84,7 @@ async function waitForOperation<T>(
 
   while (!current.done) {
     await delay(750, signal);
-    current = await client.operations.get({ operation: current }) as unknown as Operation<T>;
+    current = (await client.operations.get({ operation: current })) as unknown as Operation<T>;
   }
 
   if (current.error) {
@@ -98,20 +100,25 @@ export async function createResearchInteractionStream(
   opts: CreateResearchInteractionStreamOptions,
 ): Promise<AsyncIterable<ResearchInteractionStreamEvent>> {
   const client = getGoogleClient(opts.apiKey);
-  const result = await client.interactions.create({
-    agent: "deep-research-pro-preview-12-2025",
-    input: opts.input,
-    background: true,
-    stream: true,
-    store: true,
-    ...(opts.previousInteractionId ? { previous_interaction_id: opts.previousInteractionId } : {}),
-    ...(opts.tools && opts.tools.length > 0 ? { tools: opts.tools } : {}),
-    agent_config: {
-      type: "deep-research",
-      thinking_summaries: opts.thinkingSummaries ?? "auto",
-      ...(opts.collaborativePlanning ? { collaborative_planning: true } : {}),
+  const result = await client.interactions.create(
+    {
+      agent: "deep-research-pro-preview-12-2025",
+      input: opts.input,
+      background: true,
+      stream: true,
+      store: true,
+      ...(opts.previousInteractionId
+        ? { previous_interaction_id: opts.previousInteractionId }
+        : {}),
+      ...(opts.tools && opts.tools.length > 0 ? { tools: opts.tools } : {}),
+      agent_config: {
+        type: "deep-research",
+        thinking_summaries: opts.thinkingSummaries ?? "auto",
+        ...(opts.collaborativePlanning ? { collaborative_planning: true } : {}),
+      },
     },
-  }, opts.signal ? { signal: opts.signal } as any : undefined);
+    opts.signal ? ({ signal: opts.signal } as any) : undefined,
+  );
 
   return asAsyncIterable<ResearchInteractionStreamEvent>(result);
 }
@@ -126,7 +133,7 @@ export async function resumeResearchInteractionStream(
       stream: true,
       ...(opts.lastEventId ? { last_event_id: opts.lastEventId } : {}),
     },
-    opts.signal ? { signal: opts.signal } as any : undefined,
+    opts.signal ? ({ signal: opts.signal } as any) : undefined,
   );
 
   return asAsyncIterable<ResearchInteractionStreamEvent>(result);
@@ -174,7 +181,8 @@ export async function uploadFileToResearchFileSearchStore(
 
   const completed = await waitForOperation(opts.apiKey, operation, opts.signal);
   return {
-    ...(typeof (completed.response as { documentName?: string } | undefined)?.documentName === "string"
+    ...(typeof (completed.response as { documentName?: string } | undefined)?.documentName ===
+    "string"
       ? { documentName: (completed.response as { documentName: string }).documentName }
       : {}),
   };

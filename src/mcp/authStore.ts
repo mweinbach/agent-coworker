@@ -1,26 +1,3 @@
-export type {
-  MCPAuthFileState,
-  MCPAuthMode,
-  MCPAuthScope,
-  MCPTokenEndpointAuthMethod,
-  MCPResolvedServerAuth,
-  MCPServerCredentialRecord,
-  MCPServerCredentialsDocument,
-  MCPServerOAuthClientInfo,
-  MCPServerOAuthPending,
-  MCPServerOAuthTokens,
-} from "./authStore/types";
-
-export { mcpTokenEndpointAuthMethods } from "./authStore/types";
-
-export { readMCPAuthFiles } from "./authStore/store";
-
-export {
-  readMCPServerOAuthClientInformation,
-  readMCPServerOAuthPending,
-  resolveMCPServerAuthState,
-} from "./authStore/resolver";
-
 export {
   completeMCPServerOAuth,
   renameMCPServerCredentials,
@@ -28,3 +5,23 @@ export {
   setMCPServerOAuthClientInformation,
   setMCPServerOAuthPending,
 } from "./authStore/editor";
+export {
+  readMCPServerOAuthClientInformation,
+  readMCPServerOAuthPending,
+  resolveMCPServerAuthState,
+} from "./authStore/resolver";
+
+export { readMCPAuthFiles } from "./authStore/store";
+export type {
+  MCPAuthFileState,
+  MCPAuthMode,
+  MCPAuthScope,
+  MCPResolvedServerAuth,
+  MCPServerCredentialRecord,
+  MCPServerCredentialsDocument,
+  MCPServerOAuthClientInfo,
+  MCPServerOAuthPending,
+  MCPServerOAuthTokens,
+  MCPTokenEndpointAuthMethod,
+} from "./authStore/types";
+export { mcpTokenEndpointAuthMethods } from "./authStore/types";

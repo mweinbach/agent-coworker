@@ -1,7 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
-
-import { createPairingScanHandler } from "../apps/mobile/src/features/pairing/scanHandler";
 import type { PairingQrPayload } from "../apps/mobile/src/features/pairing/pairingTypes";
+import { createPairingScanHandler } from "../apps/mobile/src/features/pairing/scanHandler";
 import { RELAY_PAIRING_QR_VERSION } from "../src/shared/mobileRelaySecurity";
 
 function buildPayload(): PairingQrPayload {
@@ -20,9 +19,12 @@ describe("mobile pairing scan handler", () => {
   test("ignores duplicate scans while a pairing attempt is already in flight", async () => {
     const payload = buildPayload();
     let resolveConnect: (() => void) | null = null;
-    const connectWithQr = mock(() => new Promise<void>((resolve) => {
-      resolveConnect = resolve;
-    }));
+    const connectWithQr = mock(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveConnect = resolve;
+        }),
+    );
     const setScannedPayload = mock(() => {});
     const onSuccess = mock(() => {});
     const onInvalidPayload = mock(() => {});

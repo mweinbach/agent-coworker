@@ -1,4 +1,10 @@
 import type {
+  DesktopFeatureFlagOverrides,
+  DesktopFeatureFlags,
+} from "../../../../src/shared/featureFlags";
+import { hydrateTranscriptSnapshot } from "../app/transcriptHydration";
+import type { HydratedTranscriptSnapshot, PersistedState, TranscriptEvent } from "../app/types";
+import type {
   ContextMenuItem,
   DesktopApi,
   DesktopMenuCommand,
@@ -9,18 +15,13 @@ import type {
   SystemAppearance,
   UpdaterState,
 } from "./desktopApi";
-import type { DesktopFeatureFlagOverrides, DesktopFeatureFlags } from "../../../../src/shared/featureFlags";
-import type { HydratedTranscriptSnapshot, PersistedState, TranscriptEvent } from "../app/types";
-import { hydrateTranscriptSnapshot } from "../app/transcriptHydration";
+import { createDefaultUpdaterState } from "./desktopApi";
 import {
-  createDefaultUpdaterState,
-} from "./desktopApi";
-import {
+  getSavedServerUrl,
+  getSavedWorkspacePath,
   loadPersistedState,
   savePersistedState,
-  getSavedServerUrl,
   saveServerUrl,
-  getSavedWorkspacePath,
   saveWorkspacePath,
   seedWorkspaceFromUrl,
 } from "./webWorkspaceState";
@@ -34,7 +35,8 @@ const SAME_ORIGIN_PROXY_WS_PATH = "/cowork/ws";
 const LEGACY_SAME_ORIGIN_WS_PATH = "/ws";
 
 function getInjectedWebServerUrl(): string | null {
-  const value = (globalThis as typeof globalThis & { __COWORK_SERVER_URL__?: unknown }).__COWORK_SERVER_URL__;
+  const value = (globalThis as typeof globalThis & { __COWORK_SERVER_URL__?: unknown })
+    .__COWORK_SERVER_URL__;
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
@@ -54,10 +56,14 @@ export function normalizeWebServerUrl(serverUrl: string): string {
   try {
     const parsed = new URL(trimmed);
     if (
-      isCurrentPageWsOrigin(parsed)
-      && (parsed.pathname === LEGACY_SAME_ORIGIN_WS_PATH || parsed.pathname === SAME_ORIGIN_PROXY_WS_PATH)
+      isCurrentPageWsOrigin(parsed) &&
+      (parsed.pathname === LEGACY_SAME_ORIGIN_WS_PATH ||
+        parsed.pathname === SAME_ORIGIN_PROXY_WS_PATH)
     ) {
-      return getInjectedWebServerUrl() ?? `${parsed.protocol}//${parsed.host}${SAME_ORIGIN_PROXY_WS_PATH}`;
+      return (
+        getInjectedWebServerUrl() ??
+        `${parsed.protocol}//${parsed.host}${SAME_ORIGIN_PROXY_WS_PATH}`
+      );
     }
     return parsed.toString();
   } catch {
@@ -84,7 +90,8 @@ export function deriveSameOriginServerUrl(): string {
 function toHttpBaseUrl(serverUrl: string): string {
   try {
     const parsed = new URL(serverUrl);
-    const protocol = parsed.protocol === "wss:" ? "https:" : parsed.protocol === "ws:" ? "http:" : parsed.protocol;
+    const protocol =
+      parsed.protocol === "wss:" ? "https:" : parsed.protocol === "ws:" ? "http:" : parsed.protocol;
     return `${protocol}//${parsed.host}`;
   } catch {
     return serverUrl
@@ -109,7 +116,10 @@ function getWorkspacePath(): string {
   return configuredWorkspacePath ?? getSavedWorkspacePath() ?? "";
 }
 
-function buildWebRouteUrl(pathname: string, params: Record<string, string | number | boolean | undefined> = {}): string {
+function buildWebRouteUrl(
+  pathname: string,
+  params: Record<string, string | number | boolean | undefined> = {},
+): string {
   const url = new URL(pathname, `${getHttpBaseUrl()}/`);
   for (const [key, value] of Object.entries(params)) {
     if (value === undefined) continue;
@@ -118,12 +128,15 @@ function buildWebRouteUrl(pathname: string, params: Record<string, string | numb
   return url.toString();
 }
 
-async function readWebJson<T>(pathname: string, params: Record<string, string | number | boolean | undefined> = {}): Promise<T> {
+async function readWebJson<T>(
+  pathname: string,
+  params: Record<string, string | number | boolean | undefined> = {},
+): Promise<T> {
   const response = await fetch(buildWebRouteUrl(pathname, params));
   if (!response.ok) {
-    throw new Error(await response.text() || `Request failed (${response.status})`);
+    throw new Error((await response.text()) || `Request failed (${response.status})`);
   }
-  return await response.json() as T;
+  return (await response.json()) as T;
 }
 
 async function maybeReadWebJson<T>(
@@ -135,15 +148,12 @@ async function maybeReadWebJson<T>(
     return null;
   }
   if (!response.ok) {
-    throw new Error(await response.text() || `Request failed (${response.status})`);
+    throw new Error((await response.text()) || `Request failed (${response.status})`);
   }
-  return await response.json() as T;
+  return (await response.json()) as T;
 }
 
-async function postWebJson<T>(
-  pathname: string,
-  body: Record<string, unknown>,
-): Promise<T> {
+async function postWebJson<T>(pathname: string, body: Record<string, unknown>): Promise<T> {
   const response = await fetch(buildWebRouteUrl(pathname), {
     method: "POST",
     headers: {
@@ -152,13 +162,13 @@ async function postWebJson<T>(
     body: JSON.stringify(body),
   });
   if (!response.ok) {
-    throw new Error(await response.text() || `Request failed (${response.status})`);
+    throw new Error((await response.text()) || `Request failed (${response.status})`);
   }
   if (response.status === 204) {
     return undefined as T;
   }
   const text = await response.text();
-  return text ? JSON.parse(text) as T : undefined as T;
+  return text ? (JSON.parse(text) as T) : (undefined as T);
 }
 
 async function maybePostWebJson<T>(
@@ -176,16 +186,19 @@ async function maybePostWebJson<T>(
     return null;
   }
   if (!response.ok) {
-    throw new Error(await response.text() || `Request failed (${response.status})`);
+    throw new Error((await response.text()) || `Request failed (${response.status})`);
   }
   if (response.status === 204) {
     return undefined as T;
   }
   const text = await response.text();
-  return text ? JSON.parse(text) as T : undefined as T;
+  return text ? (JSON.parse(text) as T) : (undefined as T);
 }
 
-async function maybeDeleteWeb(pathname: string, params: Record<string, string | number | boolean | undefined>): Promise<boolean> {
+async function maybeDeleteWeb(
+  pathname: string,
+  params: Record<string, string | number | boolean | undefined>,
+): Promise<boolean> {
   const response = await fetch(buildWebRouteUrl(pathname, params), {
     method: "DELETE",
   });
@@ -193,15 +206,18 @@ async function maybeDeleteWeb(pathname: string, params: Record<string, string | 
     return false;
   }
   if (!response.ok) {
-    throw new Error(await response.text() || `Request failed (${response.status})`);
+    throw new Error((await response.text()) || `Request failed (${response.status})`);
   }
   return true;
 }
 
-async function readWebBytes(pathname: string, params: Record<string, string | number | boolean | undefined>): Promise<ReadFileForPreviewOutput> {
+async function readWebBytes(
+  pathname: string,
+  params: Record<string, string | number | boolean | undefined>,
+): Promise<ReadFileForPreviewOutput> {
   const response = await fetch(buildWebRouteUrl(pathname, params));
   if (!response.ok) {
-    throw new Error(await response.text() || `Request failed (${response.status})`);
+    throw new Error((await response.text()) || `Request failed (${response.status})`);
   }
   const buffer = await response.arrayBuffer();
   return {
@@ -228,9 +244,7 @@ function createActionButton(
   button.style.padding = "10px 12px";
   button.style.border = "1px solid var(--border-default)";
   button.style.borderRadius = "10px";
-  button.style.background = opts.emphasized
-    ? "var(--surface-raised)"
-    : "var(--surface-base)";
+  button.style.background = opts.emphasized ? "var(--surface-raised)" : "var(--surface-base)";
   button.style.color = opts.muted ? "var(--text-secondary)" : "var(--text-primary)";
   button.style.textAlign = "left";
   button.style.fontSize = "13px";
@@ -321,9 +335,11 @@ function showBrowserActionSheet(items: ContextMenuItem[]): Promise<string | null
     document.addEventListener("keydown", onKeyDown);
 
     for (const item of enabledItems) {
-      panel.appendChild(createActionButton(item.label, () => close(item.id), {
-        emphasized: true,
-      }));
+      panel.appendChild(
+        createActionButton(item.label, () => close(item.id), {
+          emphasized: true,
+        }),
+      );
     }
 
     panel.appendChild(createActionButton("Cancel", () => close(null), { muted: true }));
@@ -379,12 +395,12 @@ export function createWebAdapter(): DesktopApi {
   const resolveWebDesktopFeatureFlags = (
     overrides?: DesktopFeatureFlagOverrides,
   ): DesktopFeatureFlags => {
-    const normalizedPicker = typeof overrides?.workspacePicker === "boolean"
-      ? overrides.workspacePicker
-      : fullDesktopMode;
-    const normalizedLifecycle = typeof overrides?.workspaceLifecycle === "boolean"
-      ? overrides.workspaceLifecycle
-      : fullDesktopMode;
+    const normalizedPicker =
+      typeof overrides?.workspacePicker === "boolean" ? overrides.workspacePicker : fullDesktopMode;
+    const normalizedLifecycle =
+      typeof overrides?.workspaceLifecycle === "boolean"
+        ? overrides.workspaceLifecycle
+        : fullDesktopMode;
     return {
       remoteAccess: false,
       workspacePicker: normalizedPicker,
@@ -400,7 +416,10 @@ export function createWebAdapter(): DesktopApi {
     resolveDesktopFeatureFlags: (overrides) => resolveWebDesktopFeatureFlags(overrides),
 
     async startWorkspaceServer(opts): Promise<{ url: string }> {
-      const started = await maybePostWebJson<{ url: string }>("/cowork/desktop/workspace/start", opts);
+      const started = await maybePostWebJson<{ url: string }>(
+        "/cowork/desktop/workspace/start",
+        opts,
+      );
       if (started) {
         return started;
       }
@@ -423,36 +442,49 @@ export function createWebAdapter(): DesktopApi {
         return seedWorkspaceFromUrl(url, workspacePath);
       }
 
-      const discovered = await readWebJson<{ workspaces?: Array<{ path: string }> }>("/cowork/workspaces");
+      const discovered = await readWebJson<{ workspaces?: Array<{ path: string }> }>(
+        "/cowork/workspaces",
+      );
       const fallbackPath = discovered.workspaces?.[0]?.path?.trim();
       if (!fallbackPath) {
-        throw new Error("Browser mode requires a workspace path. Reconnect through the Connect page.");
+        throw new Error(
+          "Browser mode requires a workspace path. Reconnect through the Connect page.",
+        );
       }
       return seedWorkspaceFromUrl(url, fallbackPath);
     },
 
     async saveState(state: PersistedState): Promise<void> {
-      const saved = await maybePostWebJson<PersistedState>("/cowork/desktop/state", state as Record<string, unknown>);
+      const saved = await maybePostWebJson<PersistedState>(
+        "/cowork/desktop/state",
+        state as Record<string, unknown>,
+      );
       if (!saved) {
         savePersistedState(state);
       }
     },
 
     async readTranscript(opts): Promise<TranscriptEvent[]> {
-      return await maybeReadWebJson<TranscriptEvent[]>("/cowork/desktop/transcript", {
-        threadId: opts.threadId,
-      }) ?? [];
+      return (
+        (await maybeReadWebJson<TranscriptEvent[]>("/cowork/desktop/transcript", {
+          threadId: opts.threadId,
+        })) ?? []
+      );
     },
 
     async hydrateTranscript(opts): Promise<HydratedTranscriptSnapshot> {
-      const transcript = await maybeReadWebJson<TranscriptEvent[]>("/cowork/desktop/transcript", {
-        threadId: opts.threadId,
-      }) ?? [];
+      const transcript =
+        (await maybeReadWebJson<TranscriptEvent[]>("/cowork/desktop/transcript", {
+          threadId: opts.threadId,
+        })) ?? [];
       return hydrateTranscriptSnapshot(transcript);
     },
 
     async appendTranscriptEvent(opts): Promise<void> {
-      await maybePostWebJson<void>("/cowork/desktop/transcript/event", opts as Record<string, unknown>);
+      await maybePostWebJson<void>(
+        "/cowork/desktop/transcript/event",
+        opts as Record<string, unknown>,
+      );
     },
     async appendTranscriptBatch(events): Promise<void> {
       const response = await fetch(buildWebRouteUrl("/cowork/desktop/transcript/batch"), {
@@ -466,7 +498,7 @@ export function createWebAdapter(): DesktopApi {
         return;
       }
       if (!response.ok) {
-        throw new Error(await response.text() || `Request failed (${response.status})`);
+        throw new Error((await response.text()) || `Request failed (${response.status})`);
       }
     },
     async deleteTranscript(opts): Promise<void> {
@@ -478,9 +510,12 @@ export function createWebAdapter(): DesktopApi {
       if (!candidate || !candidate.trim()) {
         return null;
       }
-      const resolved = await maybePostWebJson<{ path: string }>("/cowork/desktop/workspace/resolve", {
-        path: candidate.trim(),
-      });
+      const resolved = await maybePostWebJson<{ path: string }>(
+        "/cowork/desktop/workspace/resolve",
+        {
+          path: candidate.trim(),
+        },
+      );
       return resolved?.path ?? candidate.trim();
     },
 
@@ -551,7 +586,9 @@ export function createWebAdapter(): DesktopApi {
     },
 
     async confirmAction(opts): Promise<boolean> {
-      return window.confirm(`${opts.title}\n\n${opts.message}${opts.detail ? `\n\n${opts.detail}` : ""}`);
+      return window.confirm(
+        `${opts.title}\n\n${opts.message}${opts.detail ? `\n\n${opts.detail}` : ""}`,
+      );
     },
 
     async showNotification(opts): Promise<boolean> {
@@ -604,10 +641,10 @@ export function createWebAdapter(): DesktopApi {
       menuListeners.add(listener);
 
       const keyMap: Record<string, DesktopMenuCommand> = {
-        "n": "newThread",
-        "b": "toggleSidebar",
+        n: "newThread",
+        b: "toggleSidebar",
         ",": "openSettings",
-        "r": "openResearch",
+        r: "openResearch",
       };
 
       const handler = (e: KeyboardEvent) => {

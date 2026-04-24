@@ -13,7 +13,14 @@ function UsageRow({ label, value }: { label: string; value: string }) {
   return (
     <View style={{ flexDirection: "row", justifyContent: "space-between", paddingVertical: 8 }}>
       <Text style={{ color: theme.textSecondary, fontSize: 14 }}>{label}</Text>
-      <Text style={{ color: theme.text, fontSize: 14, fontWeight: "600", fontVariant: ["tabular-nums"] }}>
+      <Text
+        style={{
+          color: theme.text,
+          fontSize: 14,
+          fontWeight: "600",
+          fontVariant: ["tabular-nums"],
+        }}
+      >
         {value}
       </Text>
     </View>

@@ -2,28 +2,30 @@ import type { MemoryScope } from "../../../../../src/memoryStore";
 
 import {
   type AppStoreActions,
-  type StoreGet,
-  type StoreSet,
   ensureControlSocket,
   ensureServerRunning,
   makeId,
   nowIso,
   pushNotification,
   requestJsonRpcControlEvent,
+  type StoreGet,
+  type StoreSet,
 } from "../store.helpers";
 
 export function createWorkspaceMemoryActions(
   set: StoreSet,
   get: StoreGet,
-): Pick<AppStoreActions, "requestWorkspaceMemories" | "upsertWorkspaceMemory" | "deleteWorkspaceMemory"> {
+): Pick<
+  AppStoreActions,
+  "requestWorkspaceMemories" | "upsertWorkspaceMemory" | "deleteWorkspaceMemory"
+> {
   return {
     requestWorkspaceMemories: async (workspaceId: string) => {
       await ensureServerRunning(get, set, workspaceId);
       const socket = ensureControlSocket(get, set, workspaceId);
 
       const waitingForInitialControlSession =
-        Boolean(socket)
-        && !get().workspaceRuntimeById[workspaceId]?.controlSessionId;
+        Boolean(socket) && !get().workspaceRuntimeById[workspaceId]?.controlSessionId;
       if (waitingForInitialControlSession) {
         return;
       }

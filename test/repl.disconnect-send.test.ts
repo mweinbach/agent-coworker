@@ -154,59 +154,60 @@ class FakeWebSocket {
       });
     }
     if (
-      (parsed?.method === "cowork/session/state/read"
-        || parsed?.method === "cowork/provider/catalog/read"
-        || parsed?.method === "cowork/provider/authMethods/read")
-      && parsed?.id != null
+      (parsed?.method === "cowork/session/state/read" ||
+        parsed?.method === "cowork/provider/catalog/read" ||
+        parsed?.method === "cowork/provider/authMethods/read") &&
+      parsed?.id != null
     ) {
       queueMicrotask(() => {
-        const result = parsed.method === "cowork/session/state/read"
-          ? {
-              events: [
-                {
-                  type: "config_updated",
-                  sessionId: "thread-test",
-                  config: {
-                    provider: "openai",
-                    model: "gpt-5.4",
-                    workingDirectory: process.cwd(),
-                  },
-                },
-                {
-                  type: "session_settings",
-                  sessionId: "thread-test",
-                  enableMcp: true,
-                  enableMemory: true,
-                  memoryRequireApproval: false,
-                },
-                {
-                  type: "session_config",
-                  sessionId: "thread-test",
-                  config: {
-                    enableMemory: true,
-                  },
-                },
-              ],
-            }
-          : parsed.method === "cowork/provider/catalog/read"
+        const result =
+          parsed.method === "cowork/session/state/read"
             ? {
-                event: {
-                  type: "provider_catalog",
-                  sessionId: "thread-test",
-                  all: [{ id: "openai" }],
-                  default: { openai: "gpt-5.4" },
-                  connected: ["openai"],
-                },
-              }
-            : {
-                event: {
-                  type: "provider_auth_methods",
-                  sessionId: "thread-test",
-                  methods: {
-                    openai: [{ id: "api_key", type: "api", label: "API key" }],
+                events: [
+                  {
+                    type: "config_updated",
+                    sessionId: "thread-test",
+                    config: {
+                      provider: "openai",
+                      model: "gpt-5.4",
+                      workingDirectory: process.cwd(),
+                    },
                   },
-                },
-              };
+                  {
+                    type: "session_settings",
+                    sessionId: "thread-test",
+                    enableMcp: true,
+                    enableMemory: true,
+                    memoryRequireApproval: false,
+                  },
+                  {
+                    type: "session_config",
+                    sessionId: "thread-test",
+                    config: {
+                      enableMemory: true,
+                    },
+                  },
+                ],
+              }
+            : parsed.method === "cowork/provider/catalog/read"
+              ? {
+                  event: {
+                    type: "provider_catalog",
+                    sessionId: "thread-test",
+                    all: [{ id: "openai" }],
+                    default: { openai: "gpt-5.4" },
+                    connected: ["openai"],
+                  },
+                }
+              : {
+                  event: {
+                    type: "provider_auth_methods",
+                    sessionId: "thread-test",
+                    methods: {
+                      openai: [{ id: "api_key", type: "api", label: "API key" }],
+                    },
+                  },
+                };
         this.onmessage?.({ data: JSON.stringify({ id: parsed.id, result }) });
       });
     }
@@ -246,7 +247,10 @@ async function waitForCliReady(timeoutMs = 2_000) {
   throw new Error(`Timed out waiting for CLI test harness to connect: ${JSON.stringify(snapshot)}`);
 }
 
-async function withReplDiagnostics(name: string, run: (diagnostics: FailureDiagnostics) => Promise<void>) {
+async function withReplDiagnostics(
+  name: string,
+  run: (diagnostics: FailureDiagnostics) => Promise<void>,
+) {
   const diagnostics = createFailureDiagnostics(name);
   activeDiagnostics = diagnostics;
   try {

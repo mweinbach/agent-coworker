@@ -15,7 +15,10 @@ const PROJECT_INSTRUCTIONS_TRUNCATED_NOTICE =
 
 type ProjectInstructionsIo = Pick<typeof fs, "stat" | "readFile">;
 
-async function findGitRoot(startDir: string, io: ProjectInstructionsIo = fs): Promise<string | undefined> {
+async function findGitRoot(
+  startDir: string,
+  io: ProjectInstructionsIo = fs,
+): Promise<string | undefined> {
   let current = path.resolve(startDir);
   while (true) {
     const gitPath = path.join(current, ".git");
@@ -88,7 +91,7 @@ function truncateUtf8Bytes(value: string, maxBytes: number): string {
   }
   const suffix = "\n\n… (truncated: project instructions exceeded byte limit)";
   const suffixBytes = Buffer.byteLength(suffix, "utf8");
-  let allowed = maxBytes - suffixBytes;
+  const allowed = maxBytes - suffixBytes;
   if (allowed <= 0) {
     return utf8PrefixWithinByteLimit(buf, maxBytes);
   }
@@ -138,10 +141,7 @@ async function loadAgentsFileForDirectory(
     try {
       const content = await io.readFile(abs, "utf8");
       return { directory: dir, displayPath, filename, content };
-    } catch {
-      // Fail open so unreadable AGENTS files do not block prompt construction.
-      continue;
-    }
+    } catch {}
   }
   return null;
 }
@@ -161,7 +161,11 @@ export async function loadProjectAgentsFiles(
 
   const loaded: LoadedAgentsFile[] = [];
   for (const dir of dirs) {
-    const loadedFile = await loadAgentsFileForDirectory(dir, displayPathForDirectory(rootForLabels, dir), io);
+    const loadedFile = await loadAgentsFileForDirectory(
+      dir,
+      displayPathForDirectory(rootForLabels, dir),
+      io,
+    );
     if (loadedFile) {
       loaded.push(loadedFile);
     }
@@ -170,10 +174,16 @@ export async function loadProjectAgentsFiles(
 }
 
 function renderProjectInstructionsSectionInner(files: LoadedAgentsFile[]): string {
-  return joinProjectInstructionsParts([PROJECT_INSTRUCTIONS_HEADER, ...files.map(renderProjectInstructionsFileBlock)]);
+  return joinProjectInstructionsParts([
+    PROJECT_INSTRUCTIONS_HEADER,
+    ...files.map(renderProjectInstructionsFileBlock),
+  ]);
 }
 
-function renderProjectInstructionsSectionWithinByteLimit(files: LoadedAgentsFile[], maxBytes: number): string {
+function renderProjectInstructionsSectionWithinByteLimit(
+  files: LoadedAgentsFile[],
+  maxBytes: number,
+): string {
   const rendered = renderProjectInstructionsSectionInner(files);
   if (Buffer.byteLength(rendered, "utf8") <= maxBytes) {
     return rendered;
@@ -181,7 +191,11 @@ function renderProjectInstructionsSectionWithinByteLimit(files: LoadedAgentsFile
 
   const fileBlocks = files.map(renderProjectInstructionsFileBlock);
   const buildTruncatedSection = (blocks: string[]) =>
-    joinProjectInstructionsParts([PROJECT_INSTRUCTIONS_HEADER, PROJECT_INSTRUCTIONS_TRUNCATED_NOTICE, ...blocks]);
+    joinProjectInstructionsParts([
+      PROJECT_INSTRUCTIONS_HEADER,
+      PROJECT_INSTRUCTIONS_TRUNCATED_NOTICE,
+      ...blocks,
+    ]);
 
   const selectedBlocks: string[] = [];
   const mostSpecificBlock = fileBlocks[fileBlocks.length - 1];

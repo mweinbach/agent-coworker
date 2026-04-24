@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
 import { defaultModelForProvider, getModel, loadConfig } from "../../src/config";
-import { PROVIDER_MODEL_CATALOG } from "../../src/providers";
 import { normalizeModelIdForProvider } from "../../src/models/metadata";
+import { PROVIDER_MODEL_CATALOG } from "../../src/providers";
 import { DEFAULT_PROVIDER_OPTIONS, makeConfig, makeTmpDirs, repoRoot } from "./helpers";
 
 // ---------------------------------------------------------------------------
@@ -16,8 +16,12 @@ describe("Google provider (gemini-3.1-pro-preview)", () => {
   test("catalog includes Gemini 3 preview models", () => {
     expect(PROVIDER_MODEL_CATALOG.google.availableModels).toContain("gemini-3-flash-preview");
     expect(PROVIDER_MODEL_CATALOG.google.availableModels).toContain("gemini-3.1-pro-preview");
-    expect(PROVIDER_MODEL_CATALOG.google.availableModels).toContain("gemini-3.1-pro-preview-customtools");
-    expect(PROVIDER_MODEL_CATALOG.google.availableModels).toContain("gemini-3.1-flash-lite-preview");
+    expect(PROVIDER_MODEL_CATALOG.google.availableModels).toContain(
+      "gemini-3.1-pro-preview-customtools",
+    );
+    expect(PROVIDER_MODEL_CATALOG.google.availableModels).toContain(
+      "gemini-3.1-flash-lite-preview",
+    );
   });
 
   test("getModel creates google model with default gemini-3-flash-preview", () => {

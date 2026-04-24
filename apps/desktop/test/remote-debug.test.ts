@@ -11,7 +11,7 @@ describe("resolveElectronRemoteDebugConfig", () => {
       resolveElectronRemoteDebugConfig({
         isPackaged: false,
         env: {},
-      })
+      }),
     ).toEqual({
       enabled: true,
       port: DEFAULT_ELECTRON_REMOTE_DEBUG_PORT,
@@ -23,7 +23,7 @@ describe("resolveElectronRemoteDebugConfig", () => {
       resolveElectronRemoteDebugConfig({
         isPackaged: false,
         env: { COWORK_ELECTRON_REMOTE_DEBUG: "0" },
-      })
+      }),
     ).toEqual({
       enabled: false,
       port: DEFAULT_ELECTRON_REMOTE_DEBUG_PORT,
@@ -35,7 +35,7 @@ describe("resolveElectronRemoteDebugConfig", () => {
       resolveElectronRemoteDebugConfig({
         isPackaged: true,
         env: { COWORK_ELECTRON_REMOTE_DEBUG: "1", COWORK_ELECTRON_REMOTE_DEBUG_PORT: "9333" },
-      })
+      }),
     ).toEqual({
       enabled: false,
       port: DEFAULT_ELECTRON_REMOTE_DEBUG_PORT,
@@ -47,7 +47,7 @@ describe("resolveElectronRemoteDebugConfig", () => {
       resolveElectronRemoteDebugConfig({
         isPackaged: false,
         env: { COWORK_ELECTRON_REMOTE_DEBUG_PORT: "9333" },
-      })
+      }),
     ).toEqual({
       enabled: true,
       port: "9333",

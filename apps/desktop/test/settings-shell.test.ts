@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { useAppStore } from "../src/app/store";
-import { SettingsShell, getSettingsGroups } from "../src/ui/settings/SettingsShell";
+import { getSettingsGroups, SettingsShell } from "../src/ui/settings/SettingsShell";
 
 describe("settings shell", () => {
   test("shows remote access when the feature is enabled", () => {
@@ -53,6 +53,8 @@ describe("settings shell", () => {
   test("keeps settings navigation copy on readable foreground-derived colors", () => {
     const markup = renderToStaticMarkup(createElement(SettingsShell));
     expect(markup).toContain("text-foreground/72");
-    expect(markup).toContain("font-normal text-foreground/78 hover:bg-foreground/[0.05] hover:text-foreground");
+    expect(markup).toContain(
+      "font-normal text-foreground/78 hover:bg-foreground/[0.05] hover:text-foreground",
+    );
   });
 });

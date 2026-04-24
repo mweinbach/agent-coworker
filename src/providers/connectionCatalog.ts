@@ -1,6 +1,11 @@
-import { getAiCoworkerPaths, readConnectionStore, type AiCoworkerPaths } from "../connect";
+import { type AiCoworkerPaths, getAiCoworkerPaths, readConnectionStore } from "../connect";
+import {
+  defaultSupportedModel,
+  listSupportedModels,
+  type SupportedModel,
+} from "../models/registry";
 import { PROVIDER_NAMES, type ProviderName } from "../types";
-import { defaultSupportedModel, listSupportedModels, type SupportedModel } from "../models/registry";
+import { resolveAuthHomeDir } from "../utils/authHome";
 import { readBedrockCatalogSnapshot } from "./bedrockShared";
 import { readCodexAuthMaterial } from "./codex-auth";
 import {
@@ -9,11 +14,17 @@ import {
   mapLmStudioModelToResolvedMetadata,
   selectDefaultLmStudioModel,
 } from "./lmstudio/catalog";
-import { isLmStudioError, listLmStudioModels, resolveLmStudioProviderOptions } from "./lmstudio/client";
+import {
+  isLmStudioError,
+  listLmStudioModels,
+  resolveLmStudioProviderOptions,
+} from "./lmstudio/client";
 import { getOpenCodeDisplayName } from "./opencodeShared";
-import { resolveAuthHomeDir } from "../utils/authHome";
 
-function storedProviderApiKey(store: Awaited<ReturnType<typeof readConnectionStore>>, provider: ProviderName): string | undefined {
+function storedProviderApiKey(
+  store: Awaited<ReturnType<typeof readConnectionStore>>,
+  provider: ProviderName,
+): string | undefined {
   const entry = store.services[provider];
   const apiKey = entry?.mode === "api_key" ? entry.apiKey?.trim() : "";
   return apiKey || undefined;
@@ -105,13 +116,18 @@ async function lmStudioCatalogEntry(opts: {
 }): Promise<{ entry: ProviderCatalogEntry; connected: boolean }> {
   const provider = resolveLmStudioProviderOptions(opts.providerOptions, opts.env);
   try {
-    const models = (await listLmStudioModels({
-      baseUrl: provider.baseUrl,
-      apiKey: provider.apiKey ?? (opts.store ? storedProviderApiKey(opts.store, "lmstudio") : undefined),
-      fetchImpl: opts.lmstudioFetchImpl,
-    })).models;
+    const models = (
+      await listLmStudioModels({
+        baseUrl: provider.baseUrl,
+        apiKey:
+          provider.apiKey ??
+          (opts.store ? storedProviderApiKey(opts.store, "lmstudio") : undefined),
+        fetchImpl: opts.lmstudioFetchImpl,
+      })
+    ).models;
     const llms = listLmStudioLlms(models);
-    const defaultModel = llms.length > 0 ? selectDefaultLmStudioModel(models, provider.baseUrl).key : "";
+    const defaultModel =
+      llms.length > 0 ? selectDefaultLmStudioModel(models, provider.baseUrl).key : "";
     return {
       entry: {
         id: "lmstudio",
@@ -161,12 +177,14 @@ async function lmStudioCatalogEntry(opts: {
   }
 }
 
-export async function listProviderCatalogEntries(opts: {
-  store?: Awaited<ReturnType<typeof readConnectionStore>>;
-  providerOptions?: unknown;
-  env?: NodeJS.ProcessEnv;
-  lmstudioFetchImpl?: typeof fetch;
-} = {}): Promise<ProviderCatalogEntry[]> {
+export async function listProviderCatalogEntries(
+  opts: {
+    store?: Awaited<ReturnType<typeof readConnectionStore>>;
+    providerOptions?: unknown;
+    env?: NodeJS.ProcessEnv;
+    lmstudioFetchImpl?: typeof fetch;
+  } = {},
+): Promise<ProviderCatalogEntry[]> {
   const bedrock = await bedrockCatalogEntry({
     providerOptions: opts.providerOptions,
     env: opts.env,
@@ -179,15 +197,17 @@ export async function listProviderCatalogEntries(opts: {
   });
 }
 
-export async function getProviderCatalog(opts: {
-  homedir?: string;
-  paths?: AiCoworkerPaths;
-  readStore?: typeof readConnectionStore;
-  readCodexAuthMaterialImpl?: typeof readCodexAuthMaterial;
-  providerOptions?: unknown;
-  env?: NodeJS.ProcessEnv;
-  lmstudioFetchImpl?: typeof fetch;
-} = {}): Promise<ProviderCatalogPayload> {
+export async function getProviderCatalog(
+  opts: {
+    homedir?: string;
+    paths?: AiCoworkerPaths;
+    readStore?: typeof readConnectionStore;
+    readCodexAuthMaterialImpl?: typeof readCodexAuthMaterial;
+    providerOptions?: unknown;
+    env?: NodeJS.ProcessEnv;
+    lmstudioFetchImpl?: typeof fetch;
+  } = {},
+): Promise<ProviderCatalogPayload> {
   const paths = opts.paths ?? getAiCoworkerPaths({ homedir: opts.homedir ?? resolveAuthHomeDir() });
   const readStore = opts.readStore ?? readConnectionStore;
   const readCodexAuthMaterialImpl = opts.readCodexAuthMaterialImpl ?? readCodexAuthMaterial;

@@ -1,28 +1,27 @@
 import { defaultModelForProvider } from "@cowork/providers/catalog";
 import type { OpenAiCompatibleProviderOptionsByProvider } from "@cowork/shared/openaiCompatibleOptions";
-
+import type { SessionConfigPatch } from "../../../../../src/server/protocol";
 import {
+  copyPath,
+  createDirectory,
   deleteTranscript,
   listDirectory,
   loadState,
+  openPath,
   pickWorkspaceDirectory,
   readTranscript,
-  stopWorkspaceServer,
-  openPath,
-  revealPath,
-  copyPath,
-  createDirectory,
   renamePath,
+  revealPath,
+  stopWorkspaceServer,
   trashPath,
 } from "../../lib/desktopCommands";
 import type { ProviderName } from "../../lib/wsProtocol";
-import type { SessionConfigPatch } from "../../../../../src/server/protocol";
-
+import {
+  mergeWorkspaceProviderOptions,
+  normalizeWorkspaceProviderOptions,
+} from "../openaiCompatibleProviderOptions";
 import {
   type AppStoreActions,
-  type StoreGet,
-  type StoreSet,
-  RUNTIME,
   appendThreadTranscript,
   basename,
   buildContextPreamble,
@@ -34,27 +33,32 @@ import {
   isProviderName,
   makeId,
   mapTranscriptToFeed,
+  normalizeThreadTitleSource,
   nowIso,
   persistNow,
+  prependPendingThreadMessageWithAttachments,
   providerAuthMethodsFor,
   pushNotification,
+  RUNTIME,
   requestJsonRpcControlEvent,
+  type StoreGet,
+  type StoreSet,
   sendThread,
   sendUserMessageToThread,
-  normalizeThreadTitleSource,
-  prependPendingThreadMessageWithAttachments,
-  truncateTitle,
-  waitForControlSession,
   shiftPendingThreadAttachments,
   shiftPendingThreadMessage,
+  truncateTitle,
+  waitForControlSession,
 } from "../store.helpers";
 import { requestJsonRpc } from "../store.helpers/jsonRpcSocket";
-import { mergeWorkspaceProviderOptions, normalizeWorkspaceProviderOptions } from "../openaiCompatibleProviderOptions";
 import type { DraftModelSelection } from "../store.helpers/runtimeState";
-import { normalizeWorkspaceUserProfile } from "../types";
 import type { ThreadRecord, WorkspaceDefaultsPatch, WorkspaceRecord } from "../types";
+import { normalizeWorkspaceUserProfile } from "../types";
 
-export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "applyWorkspaceDefaultsToThread" | "updateWorkspaceDefaults"> {
+export function createWorkspaceDefaultsActions(
+  set: StoreSet,
+  get: StoreGet,
+): Pick<AppStoreActions, "applyWorkspaceDefaultsToThread" | "updateWorkspaceDefaults"> {
   type ApplySessionDefaultsMessage = {
     type: "apply_session_defaults";
     sessionId: string;
@@ -109,19 +113,28 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
         enableMcp?: unknown;
       };
       if (candidate.type === "error") {
-        errorMessage = typeof candidate.message === "string" && candidate.message.trim()
-          ? candidate.message
-          : "Unable to apply workspace defaults to the active thread.";
+        errorMessage =
+          typeof candidate.message === "string" && candidate.message.trim()
+            ? candidate.message
+            : "Unable to apply workspace defaults to the active thread.";
         continue;
       }
       if (candidate.sessionId !== sessionId) {
         continue;
       }
-      if (candidate.type === "config_updated" && candidate.config && typeof candidate.config === "object") {
+      if (
+        candidate.type === "config_updated" &&
+        candidate.config &&
+        typeof candidate.config === "object"
+      ) {
         nextConfig = candidate.config as Record<string, unknown>;
         continue;
       }
-      if (candidate.type === "session_config" && candidate.config && typeof candidate.config === "object") {
+      if (
+        candidate.type === "session_config" &&
+        candidate.config &&
+        typeof candidate.config === "object"
+      ) {
         nextSessionConfig = candidate.config as Record<string, unknown>;
         continue;
       }
@@ -142,7 +155,9 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
             [threadId]: {
               ...runtime,
               ...(nextConfig !== unset ? { config: nextConfig as typeof runtime.config } : {}),
-              ...(nextSessionConfig !== unset ? { sessionConfig: nextSessionConfig as typeof runtime.sessionConfig } : {}),
+              ...(nextSessionConfig !== unset
+                ? { sessionConfig: nextSessionConfig as typeof runtime.sessionConfig }
+                : {}),
               ...(nextEnableMcp !== unset ? { enableMcp: nextEnableMcp } : {}),
             },
           },
@@ -160,16 +175,16 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
     const normalizedLeft = normalizeWorkspaceUserProfile(left);
     const normalizedRight = normalizeWorkspaceUserProfile(right);
     return (
-      normalizedLeft.instructions === normalizedRight.instructions
-      && normalizedLeft.work === normalizedRight.work
-      && normalizedLeft.details === normalizedRight.details
+      normalizedLeft.instructions === normalizedRight.instructions &&
+      normalizedLeft.work === normalizedRight.work &&
+      normalizedLeft.details === normalizedRight.details
     );
   };
 
   const buildApplySessionDefaultsMessage = (opts: {
     sessionId: string;
     current: DefaultsTargetState;
-      desired: {
+    desired: {
       provider?: ProviderName;
       model?: string;
       enableMcp?: boolean;
@@ -183,7 +198,7 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       userName?: string;
       userProfile?: WorkspaceRecord["userProfile"];
       a2uiEnabled?: boolean;
-      };
+    };
   }): ApplySessionDefaultsMessage | null => {
     const configPatch: NonNullable<ApplySessionDefaultsMessage["config"]> = {};
     const currentProvider =
@@ -191,26 +206,25 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
         ? opts.current.config.provider
         : undefined;
     const currentModel =
-      typeof opts.current.config?.model === "string"
-        ? opts.current.config.model.trim()
-        : undefined;
+      typeof opts.current.config?.model === "string" ? opts.current.config.model.trim() : undefined;
 
     const providerChanged =
-      opts.desired.provider !== undefined
-      && !!opts.desired.model
-      && (opts.desired.provider !== currentProvider || opts.desired.model !== currentModel);
+      opts.desired.provider !== undefined &&
+      !!opts.desired.model &&
+      (opts.desired.provider !== currentProvider || opts.desired.model !== currentModel);
     const enableMcpChanged =
-      typeof opts.desired.enableMcp === "boolean"
-      && opts.desired.enableMcp !== opts.current.enableMcp;
+      typeof opts.desired.enableMcp === "boolean" &&
+      opts.desired.enableMcp !== opts.current.enableMcp;
 
     if (
-      typeof opts.desired.backupsEnabled === "boolean"
-      && opts.desired.backupsEnabled !== opts.current.sessionConfig?.defaultBackupsEnabled
+      typeof opts.desired.backupsEnabled === "boolean" &&
+      opts.desired.backupsEnabled !== opts.current.sessionConfig?.defaultBackupsEnabled
     ) {
       configPatch.backupsEnabled = opts.desired.backupsEnabled;
     }
 
-    const currentDefaultToolOutputOverflow = opts.current.sessionConfig?.defaultToolOutputOverflowChars;
+    const currentDefaultToolOutputOverflow =
+      opts.current.sessionConfig?.defaultToolOutputOverflowChars;
     if (opts.desired.toolOutputOverflowChars !== currentDefaultToolOutputOverflow) {
       if (opts.desired.toolOutputOverflowChars !== undefined) {
         configPatch.toolOutputOverflowChars = opts.desired.toolOutputOverflowChars;
@@ -220,46 +234,56 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
     }
 
     if (
-      opts.desired.childModelRoutingMode !== "cross-provider-allowlist"
-      && opts.desired.preferredChildModel
-      && opts.desired.preferredChildModel !== opts.current.sessionConfig?.preferredChildModel
+      opts.desired.childModelRoutingMode !== "cross-provider-allowlist" &&
+      opts.desired.preferredChildModel &&
+      opts.desired.preferredChildModel !== opts.current.sessionConfig?.preferredChildModel
     ) {
       configPatch.preferredChildModel = opts.desired.preferredChildModel;
     }
     if (
-      opts.desired.childModelRoutingMode
-      && opts.desired.childModelRoutingMode !== opts.current.sessionConfig?.childModelRoutingMode
+      opts.desired.childModelRoutingMode &&
+      opts.desired.childModelRoutingMode !== opts.current.sessionConfig?.childModelRoutingMode
     ) {
       configPatch.childModelRoutingMode = opts.desired.childModelRoutingMode;
     }
     if (
-      opts.desired.preferredChildModelRef
-      && opts.desired.preferredChildModelRef !== opts.current.sessionConfig?.preferredChildModelRef
+      opts.desired.preferredChildModelRef &&
+      opts.desired.preferredChildModelRef !== opts.current.sessionConfig?.preferredChildModelRef
     ) {
       configPatch.preferredChildModelRef = opts.desired.preferredChildModelRef;
     }
     if (
-      opts.desired.allowedChildModelRefs
-      && !stringArrayEqual(opts.desired.allowedChildModelRefs, opts.current.sessionConfig?.allowedChildModelRefs)
+      opts.desired.allowedChildModelRefs &&
+      !stringArrayEqual(
+        opts.desired.allowedChildModelRefs,
+        opts.current.sessionConfig?.allowedChildModelRefs,
+      )
     ) {
       configPatch.allowedChildModelRefs = opts.desired.allowedChildModelRefs;
     }
 
     const desiredProviderOptions = normalizeWorkspaceProviderOptions(opts.desired.providerOptions);
-    const currentProviderOptions = normalizeWorkspaceProviderOptions(opts.current.sessionConfig?.providerOptions);
-    if (JSON.stringify(desiredProviderOptions ?? null) !== JSON.stringify(currentProviderOptions ?? null) && desiredProviderOptions) {
-      configPatch.providerOptions = desiredProviderOptions as OpenAiCompatibleProviderOptionsByProvider;
+    const currentProviderOptions = normalizeWorkspaceProviderOptions(
+      opts.current.sessionConfig?.providerOptions,
+    );
+    if (
+      JSON.stringify(desiredProviderOptions ?? null) !==
+        JSON.stringify(currentProviderOptions ?? null) &&
+      desiredProviderOptions
+    ) {
+      configPatch.providerOptions =
+        desiredProviderOptions as OpenAiCompatibleProviderOptionsByProvider;
     }
 
     if (
-      opts.desired.userName !== undefined
-      && opts.desired.userName !== opts.current.sessionConfig?.userName
+      opts.desired.userName !== undefined &&
+      opts.desired.userName !== opts.current.sessionConfig?.userName
     ) {
       configPatch.userName = opts.desired.userName;
     }
     if (
-      opts.desired.userProfile !== undefined
-      && !userProfileEqual(opts.desired.userProfile, opts.current.sessionConfig?.userProfile)
+      opts.desired.userProfile !== undefined &&
+      !userProfileEqual(opts.desired.userProfile, opts.current.sessionConfig?.userProfile)
     ) {
       configPatch.userProfile = normalizeWorkspaceUserProfile(opts.desired.userProfile);
     }
@@ -271,8 +295,8 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
           ? opts.current.sessionConfig.featureFlags.workspace.a2ui
           : undefined;
     if (
-      typeof opts.desired.a2uiEnabled === "boolean"
-      && opts.desired.a2uiEnabled !== currentA2uiEnabled
+      typeof opts.desired.a2uiEnabled === "boolean" &&
+      opts.desired.a2uiEnabled !== currentA2uiEnabled
     ) {
       configPatch.featureFlags = {
         workspace: { a2ui: opts.desired.a2uiEnabled },
@@ -299,7 +323,10 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
     }
 
     const runtime = get().workspaceRuntimeById[workspaceId];
-    const controlConfig = runtime?.controlConfig as { provider?: unknown; model?: unknown } | null | undefined;
+    const controlConfig = runtime?.controlConfig as
+      | { provider?: unknown; model?: unknown }
+      | null
+      | undefined;
     const controlSessionConfig = runtime?.controlSessionConfig;
     const provider =
       workspace.defaultProvider && isProviderName(workspace.defaultProvider)
@@ -309,33 +336,51 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
           : "google";
     const liveDefaultModel = get().providerDefaultModelByProvider[provider]?.trim() || "";
     const controlModel = typeof controlConfig?.model === "string" ? controlConfig.model.trim() : "";
-    const defaultModel = workspace.defaultModel?.trim() || controlModel || liveDefaultModel || defaultModelForProvider(provider);
+    const defaultModel =
+      workspace.defaultModel?.trim() ||
+      controlModel ||
+      liveDefaultModel ||
+      defaultModelForProvider(provider);
     const defaultPreferredChildModel =
-      controlSessionConfig?.preferredChildModel?.trim()
-      || workspace.defaultPreferredChildModel?.trim()
-      || defaultModel;
+      controlSessionConfig?.preferredChildModel?.trim() ||
+      workspace.defaultPreferredChildModel?.trim() ||
+      defaultModel;
     const defaultPreferredChildModelRef =
-      controlSessionConfig?.preferredChildModelRef?.trim()
-      || workspace.defaultPreferredChildModelRef?.trim()
-      || (defaultPreferredChildModel ? `${provider}:${defaultPreferredChildModel}` : undefined);
+      controlSessionConfig?.preferredChildModelRef?.trim() ||
+      workspace.defaultPreferredChildModelRef?.trim() ||
+      (defaultPreferredChildModel ? `${provider}:${defaultPreferredChildModel}` : undefined);
 
     return {
       ...workspace,
       defaultProvider: provider,
       defaultModel,
       defaultPreferredChildModel,
-      defaultChildModelRoutingMode: controlSessionConfig?.childModelRoutingMode ?? workspace.defaultChildModelRoutingMode ?? "same-provider",
+      defaultChildModelRoutingMode:
+        controlSessionConfig?.childModelRoutingMode ??
+        workspace.defaultChildModelRoutingMode ??
+        "same-provider",
       defaultPreferredChildModelRef,
-      defaultAllowedChildModelRefs: controlSessionConfig?.allowedChildModelRefs ?? workspace.defaultAllowedChildModelRefs ?? [],
-      defaultToolOutputOverflowChars: controlSessionConfig?.defaultToolOutputOverflowChars ?? workspace.defaultToolOutputOverflowChars,
-      providerOptions: normalizeWorkspaceProviderOptions(controlSessionConfig?.providerOptions) ?? workspace.providerOptions,
-      userName: typeof controlSessionConfig?.userName === "string" ? controlSessionConfig.userName : workspace.userName,
+      defaultAllowedChildModelRefs:
+        controlSessionConfig?.allowedChildModelRefs ?? workspace.defaultAllowedChildModelRefs ?? [],
+      defaultToolOutputOverflowChars:
+        controlSessionConfig?.defaultToolOutputOverflowChars ??
+        workspace.defaultToolOutputOverflowChars,
+      providerOptions:
+        normalizeWorkspaceProviderOptions(controlSessionConfig?.providerOptions) ??
+        workspace.providerOptions,
+      userName:
+        typeof controlSessionConfig?.userName === "string"
+          ? controlSessionConfig.userName
+          : workspace.userName,
       userProfile: controlSessionConfig?.userProfile
         ? normalizeWorkspaceUserProfile(controlSessionConfig.userProfile)
         : workspace.userProfile
           ? normalizeWorkspaceUserProfile(workspace.userProfile)
           : undefined,
-      defaultEnableMcp: typeof runtime?.controlEnableMcp === "boolean" ? runtime.controlEnableMcp : workspace.defaultEnableMcp,
+      defaultEnableMcp:
+        typeof runtime?.controlEnableMcp === "boolean"
+          ? runtime.controlEnableMcp
+          : workspace.defaultEnableMcp,
       defaultBackupsEnabled:
         typeof controlSessionConfig?.defaultBackupsEnabled === "boolean"
           ? controlSessionConfig.defaultBackupsEnabled
@@ -358,7 +403,10 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       ...(clearDefaultToolOutputOverflowChars ? { defaultToolOutputOverflowChars: undefined } : {}),
       ...(workspacePatch.providerOptions !== undefined
         ? {
-            providerOptions: mergeWorkspaceProviderOptions(workspace.providerOptions, workspacePatch.providerOptions),
+            providerOptions: mergeWorkspaceProviderOptions(
+              workspace.providerOptions,
+              workspacePatch.providerOptions,
+            ),
           }
         : {}),
       ...(userProfilePatch !== undefined
@@ -386,7 +434,14 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
     }
     const queuedAttachments = shiftPendingThreadAttachments(threadId);
 
-    const accepted = sendUserMessageToThread(get, set, threadId, next, undefined, queuedAttachments);
+    const accepted = sendUserMessageToThread(
+      get,
+      set,
+      threadId,
+      next,
+      undefined,
+      queuedAttachments,
+    );
     if (!accepted) {
       prependPendingThreadMessageWithAttachments(threadId, next, queuedAttachments);
     }
@@ -402,11 +457,10 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
     ) => {
       const thread = get().threads.find((t) => t.id === threadId);
       if (!thread) return;
-      const ws = (
+      const ws =
         mode === "explicit"
-          ? get().workspaces.find((entry) => entry.id === thread.workspaceId) ?? null
-          : resolveWorkspaceDefaults(thread.workspaceId)
-      );
+          ? (get().workspaces.find((entry) => entry.id === thread.workspaceId) ?? null)
+          : resolveWorkspaceDefaults(thread.workspaceId);
       if (!ws) return;
       const rt = get().threadRuntimeById[threadId];
       if (!rt?.sessionId) return;
@@ -415,15 +469,16 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       if (pendingApply?.inFlight) {
         return;
       }
-      const allowBeforeHydration = opts?.allowBeforeHydration === true || pendingApply?.allowBeforeHydration === true;
+      const allowBeforeHydration =
+        opts?.allowBeforeHydration === true || pendingApply?.allowBeforeHydration === true;
       const effectiveDraftModelSelection: DraftModelSelection | null =
         mode === "auto-resume"
           ? null
-          : draftModelSelection ?? pendingApply?.draftModelSelection ?? null;
+          : (draftModelSelection ?? pendingApply?.draftModelSelection ?? null);
       if (
-        mode !== "explicit"
-        && !allowBeforeHydration
-        && (rt.sessionConfig == null || typeof rt.enableMcp !== "boolean")
+        mode !== "explicit" &&
+        !allowBeforeHydration &&
+        (rt.sessionConfig == null || typeof rt.enableMcp !== "boolean")
       ) {
         RUNTIME.pendingWorkspaceDefaultApplyByThread.set(threadId, {
           mode,
@@ -434,7 +489,8 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
         return;
       }
       const harnessBackupsDefault = workspaceRuntime?.controlSessionConfig?.defaultBackupsEnabled;
-      const harnessToolOutputOverflowChars = workspaceRuntime?.controlSessionConfig?.defaultToolOutputOverflowChars;
+      const harnessToolOutputOverflowChars =
+        workspaceRuntime?.controlSessionConfig?.defaultToolOutputOverflowChars;
 
       // Defer model / provider / other config changes when the session is
       // busy — changing the model mid-turn is not safe.
@@ -459,11 +515,11 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
 
       let provider = inferredProvider;
       const liveDefaultModel = get().providerDefaultModelByProvider[provider]?.trim() || "";
-      let model = (
-        preserveSessionModel
+      let model =
+        (preserveSessionModel
           ? rt.config?.model?.trim()
-          : ws.defaultModel?.trim() || liveDefaultModel || rt.config?.model?.trim() || ""
-      ) || undefined;
+          : ws.defaultModel?.trim() || liveDefaultModel || rt.config?.model?.trim() || "") ||
+        undefined;
 
       if (!preserveSessionModel && effectiveDraftModelSelection) {
         const p = effectiveDraftModelSelection.provider;
@@ -473,37 +529,37 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
           model = m;
         }
       }
-      const preferredChildModel = (
-        preserveSessionModel
+      const preferredChildModel =
+        (preserveSessionModel
           ? rt.sessionConfig?.preferredChildModel?.trim() || rt.config?.model?.trim() || ""
-          : ws.defaultPreferredChildModel?.trim() || ws.defaultModel?.trim() || rt.sessionConfig?.preferredChildModel?.trim() || ""
-      ) || undefined;
-      const childModelRoutingMode =
-        preserveSessionModel
-          ? rt.sessionConfig?.childModelRoutingMode ?? "same-provider"
-          : ws.defaultChildModelRoutingMode
-            ?? rt.sessionConfig?.childModelRoutingMode
-            ?? "same-provider";
+          : ws.defaultPreferredChildModel?.trim() ||
+            ws.defaultModel?.trim() ||
+            rt.sessionConfig?.preferredChildModel?.trim() ||
+            "") || undefined;
+      const childModelRoutingMode = preserveSessionModel
+        ? (rt.sessionConfig?.childModelRoutingMode ?? "same-provider")
+        : (ws.defaultChildModelRoutingMode ??
+          rt.sessionConfig?.childModelRoutingMode ??
+          "same-provider");
       const preferredChildModelRef =
-        (
-          preserveSessionModel
-            ? rt.sessionConfig?.preferredChildModelRef?.trim()
-            : ws.defaultPreferredChildModelRef?.trim() || rt.sessionConfig?.preferredChildModelRef?.trim()
-        )
-        || (provider && preferredChildModel ? `${provider}:${preferredChildModel}` : undefined);
-      const allowedChildModelRefs =
-        preserveSessionModel
-          ? rt.sessionConfig?.allowedChildModelRefs ?? []
-          : ws.defaultAllowedChildModelRefs
-            ?? rt.sessionConfig?.allowedChildModelRefs
-            ?? [];
+        (preserveSessionModel
+          ? rt.sessionConfig?.preferredChildModelRef?.trim()
+          : ws.defaultPreferredChildModelRef?.trim() ||
+            rt.sessionConfig?.preferredChildModelRef?.trim()) ||
+        (provider && preferredChildModel ? `${provider}:${preferredChildModel}` : undefined);
+      const allowedChildModelRefs = preserveSessionModel
+        ? (rt.sessionConfig?.allowedChildModelRefs ?? [])
+        : (ws.defaultAllowedChildModelRefs ?? rt.sessionConfig?.allowedChildModelRefs ?? []);
       const providerOptions = ws.providerOptions;
       const userName = ws.userName;
-      const userProfile = ws.userProfile ? normalizeWorkspaceUserProfile(ws.userProfile) : undefined;
+      const userProfile = ws.userProfile
+        ? normalizeWorkspaceUserProfile(ws.userProfile)
+        : undefined;
       const globalA2uiEnabled = get().desktopFeatureFlags.a2ui;
-      const desiredEnableMcp = mode === "explicit"
-        ? ws.defaultEnableMcp
-        : (workspaceRuntime?.controlEnableMcp ?? ws.defaultEnableMcp);
+      const desiredEnableMcp =
+        mode === "explicit"
+          ? ws.defaultEnableMcp
+          : (workspaceRuntime?.controlEnableMcp ?? ws.defaultEnableMcp);
       const message = buildApplySessionDefaultsMessage({
         sessionId: rt.sessionId,
         current: {
@@ -514,8 +570,12 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
         desired: {
           ...(!preserveSessionModel && provider && model ? { provider, model } : {}),
           enableMcp: desiredEnableMcp,
-          ...(typeof (mode === "explicit" ? ws.defaultBackupsEnabled : harnessBackupsDefault) === "boolean"
-            ? { backupsEnabled: mode === "explicit" ? ws.defaultBackupsEnabled : harnessBackupsDefault }
+          ...(typeof (mode === "explicit" ? ws.defaultBackupsEnabled : harnessBackupsDefault) ===
+          "boolean"
+            ? {
+                backupsEnabled:
+                  mode === "explicit" ? ws.defaultBackupsEnabled : harnessBackupsDefault,
+              }
             : {}),
           ...(mode === "explicit"
             ? { toolOutputOverflowChars: ws.defaultToolOutputOverflowChars }
@@ -545,14 +605,20 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
         inFlight: true,
       });
       try {
-        const result = await requestJsonRpc(get, set, thread.workspaceId, "cowork/session/defaults/apply", {
-          threadId: rt.sessionId,
-          cwd: ws.path,
-          ...(message.provider !== undefined ? { provider: message.provider } : {}),
-          ...(message.model !== undefined ? { model: message.model } : {}),
-          ...(message.enableMcp !== undefined ? { enableMcp: message.enableMcp } : {}),
-          ...(message.config !== undefined ? { config: message.config } : {}),
-        });
+        const result = await requestJsonRpc(
+          get,
+          set,
+          thread.workspaceId,
+          "cowork/session/defaults/apply",
+          {
+            threadId: rt.sessionId,
+            cwd: ws.path,
+            ...(message.provider !== undefined ? { provider: message.provider } : {}),
+            ...(message.model !== undefined ? { model: message.model } : {}),
+            ...(message.enableMcp !== undefined ? { enableMcp: message.enableMcp } : {}),
+            ...(message.config !== undefined ? { config: message.config } : {}),
+          },
+        );
         const applied = applyThreadJsonRpcResponseState(threadId, rt.sessionId, result);
         if (!applied.ok) {
           throw new ThreadDefaultsApplyResponseError(
@@ -561,17 +627,19 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
         }
         appendThreadTranscript(threadId, "client", message);
       } catch (error) {
-        const detail = error instanceof ThreadDefaultsApplyResponseError && error.message.trim()
-          ? error.message
-          : "Unable to apply workspace defaults to the active thread.";
+        const detail =
+          error instanceof ThreadDefaultsApplyResponseError && error.message.trim()
+            ? error.message
+            : "Unable to apply workspace defaults to the active thread.";
         set((s) => ({
           notifications: pushNotification(s.notifications, {
             id: makeId(),
             ts: nowIso(),
             kind: "error",
-            title: detail === "Unable to apply workspace defaults to the active thread."
-              ? "Not connected"
-              : "Unable to apply workspace defaults",
+            title:
+              detail === "Unable to apply workspace defaults to the active thread."
+                ? "Not connected"
+                : "Unable to apply workspace defaults",
             detail,
           }),
         }));
@@ -583,12 +651,11 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
         flushQueuedThreadMessageIfReady(threadId);
       }
     },
-  
 
     updateWorkspaceDefaults: async (workspaceId, patch: WorkspaceDefaultsPatch) => {
       const optimisticWorkspace =
-        resolveWorkspaceDefaults(workspaceId)
-        ?? get().workspaces.find((workspace) => workspace.id === workspaceId);
+        resolveWorkspaceDefaults(workspaceId) ??
+        get().workspaces.find((workspace) => workspace.id === workspaceId);
       if (!optimisticWorkspace) {
         return;
       }
@@ -601,7 +668,11 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       }));
       await persistNow(get);
 
-      const { clearDefaultToolOutputOverflowChars, userProfile: userProfilePatch, ...workspacePatch } = patch;
+      const {
+        clearDefaultToolOutputOverflowChars,
+        userProfile: userProfilePatch,
+        ...workspacePatch
+      } = patch;
       const shouldSyncCoreSettings =
         workspacePatch.defaultProvider !== undefined ||
         workspacePatch.defaultModel !== undefined ||
@@ -623,7 +694,9 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);
       const controlReady = await waitForControlSession(get, set, workspaceId);
-      const workspacePath = get().workspaces.find((workspace) => workspace.id === workspaceId)?.path;
+      const workspacePath = get().workspaces.find(
+        (workspace) => workspace.id === workspaceId,
+      )?.path;
       const workspace = controlReady
         ? resolveWorkspaceDefaults(workspaceId)
         : get().workspaces.find((w) => w.id === workspaceId);
@@ -631,71 +704,88 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       const nextWorkspace = applyWorkspacePatch(workspace, patch);
 
       set((s) => ({
-        workspaces: s.workspaces.map((entry) => (
-          entry.id === workspaceId ? nextWorkspace : entry
-        )),
+        workspaces: s.workspaces.map((entry) => (entry.id === workspaceId ? nextWorkspace : entry)),
       }));
       await persistNow(get);
 
-      const provider = (
+      const provider =
         nextWorkspace.defaultProvider && isProviderName(nextWorkspace.defaultProvider)
           ? nextWorkspace.defaultProvider
-          : "google"
-      );
+          : "google";
       const liveDefaultModel = get().providerDefaultModelByProvider[provider]?.trim() || "";
-      const model = nextWorkspace.defaultModel?.trim() || liveDefaultModel || defaultModelForProvider(provider);
+      const model =
+        nextWorkspace.defaultModel?.trim() || liveDefaultModel || defaultModelForProvider(provider);
       const preferredChildModel = nextWorkspace.defaultPreferredChildModel?.trim() || model || "";
       const childModelRoutingMode = nextWorkspace.defaultChildModelRoutingMode ?? "same-provider";
-      const preferredChildModelRef = nextWorkspace.defaultPreferredChildModelRef?.trim() || (preferredChildModel ? `${provider}:${preferredChildModel}` : "");
+      const preferredChildModelRef =
+        nextWorkspace.defaultPreferredChildModelRef?.trim() ||
+        (preferredChildModel ? `${provider}:${preferredChildModel}` : "");
       const allowedChildModelRefs = nextWorkspace.defaultAllowedChildModelRefs ?? [];
       const toolOutputOverflowChars = nextWorkspace.defaultToolOutputOverflowChars;
       const providerOptions = nextWorkspace.providerOptions;
       const userName = nextWorkspace.userName;
-      const userProfile = nextWorkspace.userProfile ? normalizeWorkspaceUserProfile(nextWorkspace.userProfile) : undefined;
+      const userProfile = nextWorkspace.userProfile
+        ? normalizeWorkspaceUserProfile(nextWorkspace.userProfile)
+        : undefined;
       const globalA2uiEnabled = get().desktopFeatureFlags.a2ui;
       const currentWorkspaceRuntime = get().workspaceRuntimeById[workspaceId];
-      const controlMessage = controlReady && currentWorkspaceRuntime?.controlSessionId
-        ? buildApplySessionDefaultsMessage({
-            sessionId: currentWorkspaceRuntime.controlSessionId,
-            current: {
-              config: currentWorkspaceRuntime.controlConfig,
-              sessionConfig: currentWorkspaceRuntime.controlSessionConfig,
-              enableMcp: currentWorkspaceRuntime.controlEnableMcp,
-            },
-            desired: {
-              provider,
-              model,
-              enableMcp: nextWorkspace.defaultEnableMcp,
-              backupsEnabled: nextWorkspace.defaultBackupsEnabled,
-              toolOutputOverflowChars,
-              ...(preferredChildModel ? { preferredChildModel } : {}),
-              childModelRoutingMode,
-              ...(preferredChildModelRef ? { preferredChildModelRef } : {}),
-              allowedChildModelRefs,
-              ...(providerOptions ? { providerOptions } : {}),
-              ...(userName !== undefined ? { userName } : {}),
-              ...(userProfile !== undefined ? { userProfile } : {}),
-              a2uiEnabled: globalA2uiEnabled,
-            },
-          })
-        : null;
+      const controlMessage =
+        controlReady && currentWorkspaceRuntime?.controlSessionId
+          ? buildApplySessionDefaultsMessage({
+              sessionId: currentWorkspaceRuntime.controlSessionId,
+              current: {
+                config: currentWorkspaceRuntime.controlConfig,
+                sessionConfig: currentWorkspaceRuntime.controlSessionConfig,
+                enableMcp: currentWorkspaceRuntime.controlEnableMcp,
+              },
+              desired: {
+                provider,
+                model,
+                enableMcp: nextWorkspace.defaultEnableMcp,
+                backupsEnabled: nextWorkspace.defaultBackupsEnabled,
+                toolOutputOverflowChars,
+                ...(preferredChildModel ? { preferredChildModel } : {}),
+                childModelRoutingMode,
+                ...(preferredChildModelRef ? { preferredChildModelRef } : {}),
+                allowedChildModelRefs,
+                ...(providerOptions ? { providerOptions } : {}),
+                ...(userName !== undefined ? { userName } : {}),
+                ...(userProfile !== undefined ? { userProfile } : {}),
+                a2uiEnabled: globalA2uiEnabled,
+              },
+            })
+          : null;
 
       const persisted = controlReady
-        ? (!controlMessage || await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/session/defaults/apply", {
-            cwd: workspacePath,
-            ...(controlMessage.provider !== undefined ? { provider: controlMessage.provider } : {}),
-            ...(controlMessage.model !== undefined ? { model: controlMessage.model } : {}),
-            ...(controlMessage.enableMcp !== undefined ? { enableMcp: controlMessage.enableMcp } : {}),
-            ...(controlMessage.config !== undefined ? { config: controlMessage.config } : {}),
-          }))
+        ? !controlMessage ||
+          (await requestJsonRpcControlEvent(
+            get,
+            set,
+            workspaceId,
+            "cowork/session/defaults/apply",
+            {
+              cwd: workspacePath,
+              ...(controlMessage.provider !== undefined
+                ? { provider: controlMessage.provider }
+                : {}),
+              ...(controlMessage.model !== undefined ? { model: controlMessage.model } : {}),
+              ...(controlMessage.enableMcp !== undefined
+                ? { enableMcp: controlMessage.enableMcp }
+                : {}),
+              ...(controlMessage.config !== undefined ? { config: controlMessage.config } : {}),
+            },
+          ))
         : false;
 
       if (persisted && controlMessage) {
         set((s) => {
           const workspaceRuntime = s.workspaceRuntimeById[workspaceId];
-          const workingDirectory = workspacePath ?? workspaceRuntime.controlConfig?.workingDirectory;
+          const workingDirectory =
+            workspacePath ?? workspaceRuntime.controlConfig?.workingDirectory;
           const nextControlConfig =
-            controlMessage.provider !== undefined && controlMessage.model !== undefined && workingDirectory
+            controlMessage.provider !== undefined &&
+            controlMessage.model !== undefined &&
+            workingDirectory
               ? {
                   ...(workspaceRuntime.controlConfig ?? {}),
                   provider: controlMessage.provider,
@@ -709,7 +799,9 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
               [workspaceId]: {
                 ...workspaceRuntime,
                 ...(nextControlConfig ? { controlConfig: nextControlConfig } : {}),
-                ...(controlMessage.enableMcp !== undefined ? { controlEnableMcp: controlMessage.enableMcp } : {}),
+                ...(controlMessage.enableMcp !== undefined
+                  ? { controlEnableMcp: controlMessage.enableMcp }
+                  : {}),
               },
             },
           };
@@ -723,7 +815,8 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
             ts: nowIso(),
             kind: "error",
             title: "Workspace settings partially applied",
-            detail: "Control session is not fully connected yet. Reopen the workspace settings to retry.",
+            detail:
+              "Control session is not fully connected yet. Reopen the workspace settings to retry.",
           }),
         }));
       }
@@ -735,6 +828,5 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
         void get().applyWorkspaceDefaultsToThread(threadId, "explicit");
       }
     },
-  
   };
 }

@@ -1,5 +1,5 @@
-import { useRef, useState } from "react";
 import { PaperclipIcon, Settings2Icon } from "lucide-react";
+import { useRef, useState } from "react";
 
 import { useAppStore } from "../../app/store";
 import {
@@ -16,17 +16,14 @@ import { Button } from "../../components/ui/button";
 import { ResearchSettingsDialog } from "./ResearchSettingsPopover";
 import { useResearchAttachments } from "./useResearchAttachments";
 
-export function NewResearchComposer({
-  onSubmitted,
-}: {
-  onSubmitted?: () => void;
-}) {
+export function NewResearchComposer({ onSubmitted }: { onSubmitted?: () => void }) {
   const startResearch = useAppStore((s) => s.startResearch);
   const [input, setInput] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const { attachments, attachmentPreviews, addFiles, removeAttachment, clearAttachments } = useResearchAttachments();
+  const { attachments, attachmentPreviews, addFiles, removeAttachment, clearAttachments } =
+    useResearchAttachments();
 
   const submit = async () => {
     const trimmed = input.trim();
@@ -104,18 +101,12 @@ export function NewResearchComposer({
                 <PaperclipIcon className="h-4 w-4" />
               </Button>
             </PromptInputTools>
-            <PromptInputSubmit
-              status={submitting ? "pending" : "ready"}
-              disabled={!input.trim()}
-            />
+            <PromptInputSubmit status={submitting ? "pending" : "ready"} disabled={!input.trim()} />
           </PromptInputFooter>
         </PromptInputForm>
       </PromptInputRoot>
 
-      <ResearchSettingsDialog
-        open={settingsOpen}
-        onOpenChange={setSettingsOpen}
-      />
+      <ResearchSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
 
       <input
         ref={fileInputRef}

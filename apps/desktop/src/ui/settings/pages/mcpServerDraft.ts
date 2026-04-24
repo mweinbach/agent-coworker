@@ -47,7 +47,7 @@ export function toBool(checked: boolean | "indeterminate") {
 }
 
 function quoteArg(value: string): string {
-  if (value.length === 0) return "\"\"";
+  if (value.length === 0) return '""';
   if (SIMPLE_ARG_RE.test(value)) return value;
   return `"${value.replace(/[\\$`"]/g, "\\$&")}"`;
 }
@@ -60,7 +60,7 @@ function formatArgs(args: string[] | undefined): string {
 export function parseArgs(value: string): string[] | undefined {
   const tokens: string[] = [];
   let current = "";
-  let quotedBy: "\"" | "'" | null = null;
+  let quotedBy: '"' | "'" | null = null;
   let tokenStarted = false;
 
   for (let i = 0; i < value.length; i++) {
@@ -75,7 +75,7 @@ export function parseArgs(value: string): string[] | undefined {
       continue;
     }
 
-    if (!quotedBy && (ch === "\"" || ch === "'")) {
+    if (!quotedBy && (ch === '"' || ch === "'")) {
       quotedBy = ch;
       tokenStarted = true;
       continue;
@@ -86,7 +86,7 @@ export function parseArgs(value: string): string[] | undefined {
       continue;
     }
 
-    if (quotedBy === "\"" && ch === "\"") {
+    if (quotedBy === '"' && ch === '"') {
       quotedBy = null;
       continue;
     }
@@ -99,8 +99,15 @@ export function parseArgs(value: string): string[] | undefined {
         continue;
       }
 
-      if (!quotedBy || quotedBy === "\"") {
-        if (!quotedBy || next === "\"" || next === "\\" || next === "$" || next === "`" || /\s/.test(next)) {
+      if (!quotedBy || quotedBy === '"') {
+        if (
+          !quotedBy ||
+          next === '"' ||
+          next === "\\" ||
+          next === "$" ||
+          next === "`" ||
+          /\s/.test(next)
+        ) {
           current += next;
           tokenStarted = true;
           i += 1;
@@ -117,7 +124,9 @@ export function parseArgs(value: string): string[] | undefined {
   return tokens.length > 0 ? tokens : undefined;
 }
 
-function nonEmptyStringMap(value: Record<string, string> | undefined): Record<string, string> | undefined {
+function nonEmptyStringMap(
+  value: Record<string, string> | undefined,
+): Record<string, string> | undefined {
   if (!value) return undefined;
   return Object.keys(value).length > 0 ? { ...value } : undefined;
 }
@@ -193,7 +202,9 @@ export function buildServerFromDraft(draft: DraftState): MCPServerConfig | null 
       if (!command) return null;
       const args = parseArgs(draft.args);
       const env =
-        draft.existingTransport?.type === "stdio" ? nonEmptyStringMap(draft.existingTransport.env) : undefined;
+        draft.existingTransport?.type === "stdio"
+          ? nonEmptyStringMap(draft.existingTransport.env)
+          : undefined;
       return {
         type: "stdio" as const,
         command,

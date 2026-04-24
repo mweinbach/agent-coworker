@@ -1,19 +1,20 @@
 import { describe, expect, test } from "bun:test";
-
-import { RELAY_PAIRING_QR_VERSION } from "../src/shared/mobileRelaySecurity";
 import {
   parsePairingQrPayload,
   validatePairingPayload,
 } from "../apps/mobile/src/features/pairing/qrValidation";
+import { RELAY_PAIRING_QR_VERSION } from "../src/shared/mobileRelaySecurity";
 
-function buildPayload(overrides?: Partial<{
-  expiresAt: number;
-  relay: string;
-  sessionId: string;
-  macDeviceId: string;
-  macIdentityPublicKey: string;
-  pairingSecret: string;
-}>) {
+function buildPayload(
+  overrides?: Partial<{
+    expiresAt: number;
+    relay: string;
+    sessionId: string;
+    macDeviceId: string;
+    macIdentityPublicKey: string;
+    pairingSecret: string;
+  }>,
+) {
   return {
     v: RELAY_PAIRING_QR_VERSION,
     relay: overrides?.relay ?? "wss://relay.example.test/relay",
@@ -32,9 +33,13 @@ describe("mobile pairing QR validation", () => {
   });
 
   test("rejects expired pairing payloads", () => {
-    const parsed = validatePairingPayload(JSON.stringify(buildPayload({
-      expiresAt: Date.now() - 1_000,
-    })));
+    const parsed = validatePairingPayload(
+      JSON.stringify(
+        buildPayload({
+          expiresAt: Date.now() - 1_000,
+        }),
+      ),
+    );
     expect(parsed.success).toBe(false);
     if (!parsed.success) {
       expect(parsed.error).toContain("expired");
@@ -42,18 +47,22 @@ describe("mobile pairing QR validation", () => {
   });
 
   test("rejects malformed payloads", () => {
-    const parsed = validatePairingPayload(JSON.stringify({
-      v: RELAY_PAIRING_QR_VERSION,
-      relay: "",
-    }));
+    const parsed = validatePairingPayload(
+      JSON.stringify({
+        v: RELAY_PAIRING_QR_VERSION,
+        relay: "",
+      }),
+    );
     expect(parsed.success).toBe(false);
   });
 
   test("rejects unsupported pairing payload versions", () => {
-    const parsed = validatePairingPayload(JSON.stringify({
-      ...buildPayload(),
-      v: RELAY_PAIRING_QR_VERSION - 1,
-    }));
+    const parsed = validatePairingPayload(
+      JSON.stringify({
+        ...buildPayload(),
+        v: RELAY_PAIRING_QR_VERSION - 1,
+      }),
+    );
     expect(parsed.success).toBe(false);
   });
 });

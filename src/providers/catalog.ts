@@ -1,12 +1,14 @@
-import type { ProviderName } from "../types";
 import { defaultModelIdForProvider, listSupportedModelIds } from "../models/registry";
+import type { ProviderName } from "../types";
 
 type ProviderModelDefinition = {
   defaultModel: string;
   availableModels: readonly string[];
 };
 
-export const USER_FACING_DISABLED_PROVIDERS = ["baseten"] as const satisfies readonly ProviderName[];
+export const USER_FACING_DISABLED_PROVIDERS = [
+  "baseten",
+] as const satisfies readonly ProviderName[];
 const USER_FACING_DISABLED_PROVIDER_SET = new Set<ProviderName>(USER_FACING_DISABLED_PROVIDERS);
 
 export function isUserFacingProviderEnabled(provider: ProviderName): boolean {
@@ -100,6 +102,7 @@ export function modelChoicesByProvider(): Record<ProviderName, readonly string[]
 }
 
 export function userFacingProviders(): ProviderName[] {
-  return (Object.keys(PROVIDER_MODEL_CATALOG) as ProviderName[])
-    .filter((provider) => isUserFacingProviderEnabled(provider));
+  return (Object.keys(PROVIDER_MODEL_CATALOG) as ProviderName[]).filter((provider) =>
+    isUserFacingProviderEnabled(provider),
+  );
 }

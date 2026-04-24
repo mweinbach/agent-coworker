@@ -15,6 +15,7 @@ export function resolveElectronRemoteDebugConfig(options: {
 
   return {
     enabled: true,
-    port: options.env.COWORK_ELECTRON_REMOTE_DEBUG_PORT?.trim() || DEFAULT_ELECTRON_REMOTE_DEBUG_PORT,
+    port:
+      options.env.COWORK_ELECTRON_REMOTE_DEBUG_PORT?.trim() || DEFAULT_ELECTRON_REMOTE_DEBUG_PORT,
   };
 }

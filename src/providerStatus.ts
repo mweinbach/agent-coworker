@@ -1,14 +1,41 @@
 import { z } from "zod";
 
-import { getAiCoworkerPaths, maskApiKey, readConnectionStore, type AiCoworkerPaths, type ConnectionStore } from "./connect";
-import { maskBedrockFieldValues, readBedrockCatalogSnapshot, refreshBedrockDiscoveryCache } from "./providers/bedrockShared";
-import { CODEX_BACKEND_BASE_URL, decodeJwtPayload, isTokenExpiring, readCodexAuthMaterial, refreshCodexAuthMaterial } from "./providers/codex-auth";
+import {
+  type AiCoworkerPaths,
+  type ConnectionStore,
+  getAiCoworkerPaths,
+  maskApiKey,
+  readConnectionStore,
+} from "./connect";
+import {
+  maskBedrockFieldValues,
+  readBedrockCatalogSnapshot,
+  refreshBedrockDiscoveryCache,
+} from "./providers/bedrockShared";
+import {
+  CODEX_BACKEND_BASE_URL,
+  decodeJwtPayload,
+  isTokenExpiring,
+  readCodexAuthMaterial,
+  refreshCodexAuthMaterial,
+} from "./providers/codex-auth";
 import { listLmStudioLlms } from "./providers/lmstudio/catalog";
-import { isLmStudioError, listLmStudioModels, resolveLmStudioProviderOptions } from "./providers/lmstudio/client";
+import {
+  isLmStudioError,
+  listLmStudioModels,
+  resolveLmStudioProviderOptions,
+} from "./providers/lmstudio/client";
 import { PROVIDER_NAMES, type ProviderName } from "./types";
 import { resolveAuthHomeDir } from "./utils/authHome";
 
-export type ProviderStatusMode = "missing" | "error" | "api_key" | "oauth" | "oauth_pending" | "local" | "credentials";
+export type ProviderStatusMode =
+  | "missing"
+  | "error"
+  | "api_key"
+  | "oauth"
+  | "oauth_pending"
+  | "local"
+  | "credentials";
 
 export type ProviderAccount = {
   email?: string;
@@ -63,7 +90,13 @@ export type ProviderStatus = {
 
 const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
 const finiteNumberSchema = z.number().finite();
-const providerStatusModeSchema = z.enum(["api_key", "oauth", "oauth_pending", "local", "credentials"]);
+const providerStatusModeSchema = z.enum([
+  "api_key",
+  "oauth",
+  "oauth_pending",
+  "local",
+  "credentials",
+]);
 
 function normalizeProviderStatusMode(mode: unknown): ProviderStatusMode {
   const parsed = providerStatusModeSchema.safeParse(mode);
@@ -213,23 +246,30 @@ async function getBedrockStatus(opts: {
   env?: NodeJS.ProcessEnv;
   refreshDiscovery?: boolean;
 }): Promise<ProviderStatus> {
-  const base = statusFromConnectionStore({ provider: "bedrock", store: opts.store, checkedAt: opts.checkedAt });
+  const base = statusFromConnectionStore({
+    provider: "bedrock",
+    store: opts.store,
+    checkedAt: opts.checkedAt,
+  });
   const discovery = opts.refreshDiscovery
     ? await refreshBedrockDiscoveryCache({
-      paths: opts.paths,
-      env: opts.env,
-    })
+        paths: opts.paths,
+        env: opts.env,
+      })
     : await readBedrockCatalogSnapshot({
-      paths: opts.paths,
-      env: opts.env,
-    });
+        paths: opts.paths,
+        env: opts.env,
+      });
 
   if (!discovery.auth) {
     return base;
   }
 
-  const verified = opts.refreshDiscovery && "ok" in discovery ? discovery.ok && !discovery.usedCache : false;
-  const message = discovery.message ?? (base.mode === "missing" ? "Amazon Bedrock credentials detected." : base.message);
+  const verified =
+    opts.refreshDiscovery && "ok" in discovery ? discovery.ok && !discovery.usedCache : false;
+  const message =
+    discovery.message ??
+    (base.mode === "missing" ? "Amazon Bedrock credentials detected." : base.message);
 
   return {
     provider: "bedrock",
@@ -245,41 +285,51 @@ async function getBedrockStatus(opts: {
   };
 }
 
-const codexRateLimitWindowSchema = z.object({
-  used_percent: finiteNumberSchema,
-  limit_window_seconds: finiteNumberSchema,
-  reset_after_seconds: finiteNumberSchema.optional(),
-  reset_at: finiteNumberSchema.optional(),
-}).passthrough();
+const codexRateLimitWindowSchema = z
+  .object({
+    used_percent: finiteNumberSchema,
+    limit_window_seconds: finiteNumberSchema,
+    reset_after_seconds: finiteNumberSchema.optional(),
+    reset_at: finiteNumberSchema.optional(),
+  })
+  .passthrough();
 
-const codexRateLimitDetailsSchema = z.object({
-  allowed: z.boolean().optional(),
-  limit_reached: z.boolean().optional(),
-  primary_window: codexRateLimitWindowSchema.nullish(),
-  secondary_window: codexRateLimitWindowSchema.nullish(),
-}).passthrough();
+const codexRateLimitDetailsSchema = z
+  .object({
+    allowed: z.boolean().optional(),
+    limit_reached: z.boolean().optional(),
+    primary_window: codexRateLimitWindowSchema.nullish(),
+    secondary_window: codexRateLimitWindowSchema.nullish(),
+  })
+  .passthrough();
 
-const codexCreditsSchema = z.object({
-  has_credits: z.boolean(),
-  unlimited: z.boolean(),
-  balance: z.union([z.string(), finiteNumberSchema]).optional(),
-}).passthrough();
+const codexCreditsSchema = z
+  .object({
+    has_credits: z.boolean(),
+    unlimited: z.boolean(),
+    balance: z.union([z.string(), finiteNumberSchema]).optional(),
+  })
+  .passthrough();
 
-const codexAdditionalRateLimitSchema = z.object({
-  limit_name: nonEmptyTrimmedStringSchema.optional(),
-  metered_feature: nonEmptyTrimmedStringSchema.optional(),
-  rate_limit: codexRateLimitDetailsSchema.nullish(),
-}).passthrough();
+const codexAdditionalRateLimitSchema = z
+  .object({
+    limit_name: nonEmptyTrimmedStringSchema.optional(),
+    metered_feature: nonEmptyTrimmedStringSchema.optional(),
+    rate_limit: codexRateLimitDetailsSchema.nullish(),
+  })
+  .passthrough();
 
-const codexUsageStatusSchema = z.object({
-  account_id: nonEmptyTrimmedStringSchema.optional(),
-  email: nonEmptyTrimmedStringSchema.optional(),
-  plan_type: z.string().trim().min(1).optional(),
-  rate_limit: codexRateLimitDetailsSchema.nullish(),
-  code_review_rate_limit: codexRateLimitDetailsSchema.nullish(),
-  additional_rate_limits: z.array(codexAdditionalRateLimitSchema).nullish(),
-  credits: codexCreditsSchema.nullish(),
-}).passthrough();
+const codexUsageStatusSchema = z
+  .object({
+    account_id: nonEmptyTrimmedStringSchema.optional(),
+    email: nonEmptyTrimmedStringSchema.optional(),
+    plan_type: z.string().trim().min(1).optional(),
+    rate_limit: codexRateLimitDetailsSchema.nullish(),
+    code_review_rate_limit: codexRateLimitDetailsSchema.nullish(),
+    additional_rate_limits: z.array(codexAdditionalRateLimitSchema).nullish(),
+    credits: codexCreditsSchema.nullish(),
+  })
+  .passthrough();
 
 function codexUsageEndpoint(): string {
   return CODEX_BACKEND_BASE_URL.replace(/\/codex$/, "/wham/usage");
@@ -297,7 +347,9 @@ function mapCodexRateLimitWindow(
   return {
     usedPercent: window.used_percent,
     windowSeconds: window.limit_window_seconds,
-    ...(Number.isFinite(window.reset_after_seconds) ? { resetAfterSeconds: window.reset_after_seconds } : {}),
+    ...(Number.isFinite(window.reset_after_seconds)
+      ? { resetAfterSeconds: window.reset_after_seconds }
+      : {}),
     ...(Number.isFinite(window.reset_at) ? { resetAt: epochSecondsToIso(window.reset_at) } : {}),
   };
 }
@@ -323,16 +375,20 @@ function mapCodexRateLimitSnapshot(opts: {
     ...(opts.limitId ? { limitId: opts.limitId } : {}),
     ...(opts.limitName ? { limitName: opts.limitName } : {}),
     ...(opts.details?.allowed !== undefined ? { allowed: opts.details.allowed } : {}),
-    ...(opts.details?.limit_reached !== undefined ? { limitReached: opts.details.limit_reached } : {}),
-    ...(opts.details !== undefined ? { primaryWindow: mapCodexRateLimitWindow(opts.details?.primary_window) } : {}),
-    ...(opts.details !== undefined ? { secondaryWindow: mapCodexRateLimitWindow(opts.details?.secondary_window) } : {}),
+    ...(opts.details?.limit_reached !== undefined
+      ? { limitReached: opts.details.limit_reached }
+      : {}),
+    ...(opts.details !== undefined
+      ? { primaryWindow: mapCodexRateLimitWindow(opts.details?.primary_window) }
+      : {}),
+    ...(opts.details !== undefined
+      ? { secondaryWindow: mapCodexRateLimitWindow(opts.details?.secondary_window) }
+      : {}),
     ...(opts.credits !== undefined ? { credits: mapCodexCredits(opts.credits) } : {}),
   };
 }
 
-function mapCodexUsageStatus(
-  payload: z.infer<typeof codexUsageStatusSchema>,
-): ProviderUsageStatus {
+function mapCodexUsageStatus(payload: z.infer<typeof codexUsageStatusSchema>): ProviderUsageStatus {
   const rateLimits: ProviderRateLimitSnapshot[] = [
     mapCodexRateLimitSnapshot({
       limitId: "codex",
@@ -374,7 +430,13 @@ async function codexBackendVerification(opts: {
   accessToken: string;
   accountId?: string;
   fetchImpl: typeof fetch;
-}): Promise<{ email?: string; name?: string; message: string; ok: boolean; usage?: ProviderUsageStatus }> {
+}): Promise<{
+  email?: string;
+  name?: string;
+  message: string;
+  ok: boolean;
+  usage?: ProviderUsageStatus;
+}> {
   const idPayload = opts.idToken ? decodeJwtPayload(opts.idToken) : null;
   const accessPayload = decodeJwtPayload(opts.accessToken);
   const email = asNonEmptyString(idPayload?.email) ?? asNonEmptyString(accessPayload?.email);
@@ -382,10 +444,20 @@ async function codexBackendVerification(opts: {
     asNonEmptyString(opts.accountId) ??
     asNonEmptyString(idPayload?.chatgpt_account_id) ??
     asNonEmptyString(accessPayload?.chatgpt_account_id) ??
-    asNonEmptyString((idPayload?.["https://api.openai.com/auth"] as Record<string, unknown> | undefined)?.chatgpt_account_id) ??
-    asNonEmptyString((accessPayload?.["https://api.openai.com/auth"] as Record<string, unknown> | undefined)?.chatgpt_account_id);
+    asNonEmptyString(
+      (idPayload?.["https://api.openai.com/auth"] as Record<string, unknown> | undefined)
+        ?.chatgpt_account_id,
+    ) ??
+    asNonEmptyString(
+      (accessPayload?.["https://api.openai.com/auth"] as Record<string, unknown> | undefined)
+        ?.chatgpt_account_id,
+    );
   if (!accountId) {
-    return { email, ok: false, message: "Codex token missing ChatGPT account id; cannot verify backend access." };
+    return {
+      email,
+      ok: false,
+      message: "Codex token missing ChatGPT account id; cannot verify backend access.",
+    };
   }
 
   try {
@@ -409,7 +481,12 @@ async function codexBackendVerification(opts: {
     const planSuffix = planType ? ` (${planType})` : "";
     const usage = mapCodexUsageStatus(parsedUsage.data);
     const usageEmail = usage?.email ?? email;
-    return { email: usageEmail, ok: true, message: `Verified via Codex usage endpoint${planSuffix}.`, usage };
+    return {
+      email: usageEmail,
+      ok: true,
+      message: `Verified via Codex usage endpoint${planSuffix}.`,
+      usage,
+    };
   } catch (err) {
     return { email, ok: false, message: `Codex usage endpoint error: ${String(err)}` };
   }
@@ -421,12 +498,23 @@ async function getCodexCliStatus(opts: {
   checkedAt: string;
   fetchImpl: typeof fetch;
 }): Promise<ProviderStatus> {
-  const base = statusFromConnectionStore({ provider: "codex-cli", store: opts.store, checkedAt: opts.checkedAt });
+  const base = statusFromConnectionStore({
+    provider: "codex-cli",
+    store: opts.store,
+    checkedAt: opts.checkedAt,
+  });
 
   // Respect an explicitly saved API key, but never surface it.
   const entry = opts.store.services["codex-cli"];
   if (entry?.mode === "api_key" && entry.apiKey) {
-    return { ...base, provider: "codex-cli", authorized: true, mode: "api_key", verified: false, account: null };
+    return {
+      ...base,
+      provider: "codex-cli",
+      authorized: true,
+      mode: "api_key",
+      verified: false,
+      account: null,
+    };
   }
 
   let material = await readCodexAuthMaterial(opts.paths);
@@ -478,7 +566,9 @@ async function getCodexCliStatus(opts: {
 
   if (isTokenExpiring(material, 0)) {
     const recoverable = Boolean(material.refreshToken);
-    console.warn(`[codex-auth] Token still expired after refresh attempts. recoverable=${recoverable}`);
+    console.warn(
+      `[codex-auth] Token still expired after refresh attempts. recoverable=${recoverable}`,
+    );
     return {
       provider: "codex-cli",
       authorized: false,
@@ -498,7 +588,9 @@ async function getCodexCliStatus(opts: {
     fetchImpl: opts.fetchImpl,
   });
   const account: ProviderAccount | null =
-    ui.email || ui.name || material.email ? { email: ui.email ?? material.email, name: ui.name } : null;
+    ui.email || ui.name || material.email
+      ? { email: ui.email ?? material.email, name: ui.name }
+      : null;
 
   if (ui.ok) {
     return {
@@ -536,11 +628,13 @@ async function getLmStudioStatus(opts: {
   const savedApiKeyMasks = buildSavedApiKeyMasks({ provider: "lmstudio", store: opts.store });
 
   try {
-    const models = (await listLmStudioModels({
-      baseUrl: providerConfig.baseUrl,
-      apiKey: providerConfig.apiKey ?? storedProviderApiKey(opts.store, "lmstudio"),
-      fetchImpl: opts.fetchImpl,
-    })).models;
+    const models = (
+      await listLmStudioModels({
+        baseUrl: providerConfig.baseUrl,
+        apiKey: providerConfig.apiKey ?? storedProviderApiKey(opts.store, "lmstudio"),
+        fetchImpl: opts.fetchImpl,
+      })
+    ).models;
     const llmCount = listLmStudioLlms(models).length;
     return {
       provider: "lmstudio",
@@ -548,9 +642,10 @@ async function getLmStudioStatus(opts: {
       verified: true,
       mode: "local",
       account: null,
-      message: llmCount > 0
-        ? `LM Studio server reachable at ${providerConfig.baseUrl}.`
-        : `LM Studio server reachable at ${providerConfig.baseUrl}, but no LLMs are available.`,
+      message:
+        llmCount > 0
+          ? `LM Studio server reachable at ${providerConfig.baseUrl}.`
+          : `LM Studio server reachable at ${providerConfig.baseUrl}, but no LLMs are available.`,
       checkedAt: opts.checkedAt,
       ...(savedApiKeyMasks ? { savedApiKeyMasks } : {}),
     };
@@ -571,15 +666,17 @@ async function getLmStudioStatus(opts: {
   }
 }
 
-export async function getProviderStatuses(opts: {
-  homedir?: string;
-  paths?: AiCoworkerPaths;
-  fetchImpl?: typeof fetch;
-  now?: () => Date;
-  providerOptions?: unknown;
-  env?: NodeJS.ProcessEnv;
-  refreshBedrockDiscovery?: boolean;
-} = {}): Promise<ProviderStatus[]> {
+export async function getProviderStatuses(
+  opts: {
+    homedir?: string;
+    paths?: AiCoworkerPaths;
+    fetchImpl?: typeof fetch;
+    now?: () => Date;
+    providerOptions?: unknown;
+    env?: NodeJS.ProcessEnv;
+    refreshBedrockDiscovery?: boolean;
+  } = {},
+): Promise<ProviderStatus[]> {
   const paths = opts.paths ?? getAiCoworkerPaths({ homedir: opts.homedir ?? resolveAuthHomeDir() });
   const fetchImpl = opts.fetchImpl ?? fetch;
   const now = opts.now ?? (() => new Date());
@@ -594,23 +691,27 @@ export async function getProviderStatuses(opts: {
       continue;
     }
     if (provider === "bedrock") {
-      out.push(await getBedrockStatus({
-        paths,
-        store,
-        checkedAt,
-        env: opts.env,
-        refreshDiscovery: opts.refreshBedrockDiscovery,
-      }));
+      out.push(
+        await getBedrockStatus({
+          paths,
+          store,
+          checkedAt,
+          env: opts.env,
+          refreshDiscovery: opts.refreshBedrockDiscovery,
+        }),
+      );
       continue;
     }
     if (provider === "lmstudio") {
-      out.push(await getLmStudioStatus({
-        store,
-        checkedAt,
-        providerOptions: opts.providerOptions,
-        env: opts.env,
-        fetchImpl,
-      }));
+      out.push(
+        await getLmStudioStatus({
+          store,
+          checkedAt,
+          providerOptions: opts.providerOptions,
+          env: opts.env,
+          fetchImpl,
+        }),
+      );
       continue;
     }
     out.push(statusFromConnectionStore({ provider, store, checkedAt }));

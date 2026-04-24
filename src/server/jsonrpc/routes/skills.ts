@@ -8,9 +8,7 @@ import {
 import { toJsonRpcParams } from "./shared";
 import type { JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
 
-export function createSkillsRouteHandlers(
-  context: JsonRpcRouteContext,
-): JsonRpcRequestHandlerMap {
+export function createSkillsRouteHandlers(context: JsonRpcRouteContext): JsonRpcRequestHandlerMap {
   return {
     "cowork/skills/catalog/read": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
@@ -19,7 +17,8 @@ export function createSkillsRouteHandlers(
         context,
         cwd,
         async (session) => await session.getSkillsCatalog(),
-        (event): event is Extract<ServerEvent, { type: "skills_catalog" }> => event.type === "skills_catalog",
+        (event): event is Extract<ServerEvent, { type: "skills_catalog" }> =>
+          event.type === "skills_catalog",
       );
       if (context.utils.isSessionError(event)) {
         sendSessionMutationError(context, ws, message.id, event);
@@ -35,7 +34,8 @@ export function createSkillsRouteHandlers(
         context,
         cwd,
         async (session) => await session.listSkills(),
-        (event): event is Extract<ServerEvent, { type: "skills_list" }> => event.type === "skills_list",
+        (event): event is Extract<ServerEvent, { type: "skills_list" }> =>
+          event.type === "skills_list",
       );
       if (context.utils.isSessionError(event)) {
         sendSessionMutationError(context, ws, message.id, event);
@@ -79,7 +79,8 @@ export function createSkillsRouteHandlers(
         context,
         cwd,
         async (session) => await session.listSkills(),
-        (event): event is Extract<ServerEvent, { type: "skills_list" }> => event.type === "skills_list",
+        (event): event is Extract<ServerEvent, { type: "skills_list" }> =>
+          event.type === "skills_list",
       );
       if (context.utils.isSessionError(event)) {
         sendSessionMutationError(context, ws, message.id, event);
@@ -105,7 +106,8 @@ export function createSkillsRouteHandlers(
         context,
         cwd,
         async (session) => await session.listSkills(),
-        (event): event is Extract<ServerEvent, { type: "skills_list" }> => event.type === "skills_list",
+        (event): event is Extract<ServerEvent, { type: "skills_list" }> =>
+          event.type === "skills_list",
       );
       if (context.utils.isSessionError(event)) {
         sendSessionMutationError(context, ws, message.id, event);
@@ -131,7 +133,8 @@ export function createSkillsRouteHandlers(
         context,
         cwd,
         async (session) => await session.listSkills(),
-        (event): event is Extract<ServerEvent, { type: "skills_list" }> => event.type === "skills_list",
+        (event): event is Extract<ServerEvent, { type: "skills_list" }> =>
+          event.type === "skills_list",
       );
       if (context.utils.isSessionError(event)) {
         sendSessionMutationError(context, ws, message.id, event);
@@ -143,12 +146,14 @@ export function createSkillsRouteHandlers(
     "cowork/skills/installation/read": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
       const cwd = context.utils.resolveWorkspacePath(params, message.method);
-      const installationId = typeof params.installationId === "string" ? params.installationId.trim() : "";
+      const installationId =
+        typeof params.installationId === "string" ? params.installationId.trim() : "";
       const event = await captureWorkspaceControlOutcome(
         context,
         cwd,
         async (session) => await session.getSkillInstallation(installationId),
-        (event): event is Extract<ServerEvent, { type: "skill_installation" }> => event.type === "skill_installation",
+        (event): event is Extract<ServerEvent, { type: "skill_installation" }> =>
+          event.type === "skill_installation",
       );
       if (context.utils.isSessionError(event)) {
         sendSessionMutationError(context, ws, message.id, event);
@@ -166,7 +171,8 @@ export function createSkillsRouteHandlers(
         context,
         cwd,
         async (session) => await session.previewSkillInstall(sourceInput, targetScope),
-        (event): event is Extract<ServerEvent, { type: "skill_install_preview" }> => event.type === "skill_install_preview",
+        (event): event is Extract<ServerEvent, { type: "skill_install_preview" }> =>
+          event.type === "skill_install_preview",
       );
       if (context.utils.isSessionError(event)) {
         sendSessionMutationError(context, ws, message.id, event);
@@ -184,7 +190,8 @@ export function createSkillsRouteHandlers(
         context,
         cwd,
         async (session) => await session.installSkills(sourceInput, targetScope),
-        (event): event is Extract<ServerEvent, { type: "skills_catalog" }> => event.type === "skills_catalog",
+        (event): event is Extract<ServerEvent, { type: "skills_catalog" }> =>
+          event.type === "skills_catalog",
       );
       if (context.utils.isSessionError(event)) {
         sendSessionMutationError(context, ws, message.id, event);
@@ -196,14 +203,16 @@ export function createSkillsRouteHandlers(
     "cowork/skills/installation/enable": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
       const cwd = context.utils.resolveWorkspacePath(params, message.method);
-      const installationId = typeof params.installationId === "string" ? params.installationId.trim() : "";
+      const installationId =
+        typeof params.installationId === "string" ? params.installationId.trim() : "";
       const event = await captureWorkspaceControlOutcome(
         context,
         cwd,
         async (session) => {
           await session.enableSkillInstallation(installationId);
         },
-        (event): event is Extract<ServerEvent, { type: "skills_catalog" }> => event.type === "skills_catalog",
+        (event): event is Extract<ServerEvent, { type: "skills_catalog" }> =>
+          event.type === "skills_catalog",
       );
       if (context.utils.isSessionError(event)) {
         sendSessionMutationError(context, ws, message.id, event);
@@ -215,14 +224,16 @@ export function createSkillsRouteHandlers(
     "cowork/skills/installation/disable": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
       const cwd = context.utils.resolveWorkspacePath(params, message.method);
-      const installationId = typeof params.installationId === "string" ? params.installationId.trim() : "";
+      const installationId =
+        typeof params.installationId === "string" ? params.installationId.trim() : "";
       const event = await captureWorkspaceControlOutcome(
         context,
         cwd,
         async (session) => {
           await session.disableSkillInstallation(installationId);
         },
-        (event): event is Extract<ServerEvent, { type: "skills_catalog" }> => event.type === "skills_catalog",
+        (event): event is Extract<ServerEvent, { type: "skills_catalog" }> =>
+          event.type === "skills_catalog",
       );
       if (context.utils.isSessionError(event)) {
         sendSessionMutationError(context, ws, message.id, event);
@@ -234,14 +245,16 @@ export function createSkillsRouteHandlers(
     "cowork/skills/installation/delete": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
       const cwd = context.utils.resolveWorkspacePath(params, message.method);
-      const installationId = typeof params.installationId === "string" ? params.installationId.trim() : "";
+      const installationId =
+        typeof params.installationId === "string" ? params.installationId.trim() : "";
       const event = await captureWorkspaceControlOutcome(
         context,
         cwd,
         async (session) => {
           await session.deleteSkillInstallation(installationId);
         },
-        (event): event is Extract<ServerEvent, { type: "skills_catalog" }> => event.type === "skills_catalog",
+        (event): event is Extract<ServerEvent, { type: "skills_catalog" }> =>
+          event.type === "skills_catalog",
       );
       if (context.utils.isSessionError(event)) {
         sendSessionMutationError(context, ws, message.id, event);
@@ -253,14 +266,16 @@ export function createSkillsRouteHandlers(
     "cowork/skills/installation/update": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
       const cwd = context.utils.resolveWorkspacePath(params, message.method);
-      const installationId = typeof params.installationId === "string" ? params.installationId.trim() : "";
+      const installationId =
+        typeof params.installationId === "string" ? params.installationId.trim() : "";
       const event = await captureWorkspaceControlOutcome(
         context,
         cwd,
         async (session) => {
           await session.updateSkillInstallation(installationId);
         },
-        (event): event is Extract<ServerEvent, { type: "skills_catalog" }> => event.type === "skills_catalog",
+        (event): event is Extract<ServerEvent, { type: "skills_catalog" }> =>
+          event.type === "skills_catalog",
       );
       if (context.utils.isSessionError(event)) {
         sendSessionMutationError(context, ws, message.id, event);
@@ -272,13 +287,15 @@ export function createSkillsRouteHandlers(
     "cowork/skills/installation/copy": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
       const cwd = context.utils.resolveWorkspacePath(params, message.method);
-      const installationId = typeof params.installationId === "string" ? params.installationId.trim() : "";
+      const installationId =
+        typeof params.installationId === "string" ? params.installationId.trim() : "";
       const targetScope = params.targetScope === "global" ? "global" : "project";
       const event = await captureWorkspaceControlOutcome(
         context,
         cwd,
         async (session) => await session.copySkillInstallation(installationId, targetScope),
-        (event): event is Extract<ServerEvent, { type: "skills_catalog" }> => event.type === "skills_catalog",
+        (event): event is Extract<ServerEvent, { type: "skills_catalog" }> =>
+          event.type === "skills_catalog",
       );
       if (context.utils.isSessionError(event)) {
         sendSessionMutationError(context, ws, message.id, event);
@@ -290,7 +307,8 @@ export function createSkillsRouteHandlers(
     "cowork/skills/installation/checkUpdate": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
       const cwd = context.utils.resolveWorkspacePath(params, message.method);
-      const installationId = typeof params.installationId === "string" ? params.installationId.trim() : "";
+      const installationId =
+        typeof params.installationId === "string" ? params.installationId.trim() : "";
       const event = await captureWorkspaceControlOutcome(
         context,
         cwd,

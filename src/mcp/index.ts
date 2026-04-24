@@ -12,33 +12,33 @@ import type { AgentConfig, MCPServerConfig } from "../types";
 import { VERSION } from "../version";
 import {
   completeMCPServerOAuth,
-  mcpTokenEndpointAuthMethods,
-  resolveMCPServerAuthState,
-  setMCPServerOAuthClientInformation,
   type MCPAuthMode,
   type MCPAuthScope,
   type MCPServerOAuthClientInfo,
   type MCPServerOAuthTokens,
+  mcpTokenEndpointAuthMethods,
+  resolveMCPServerAuthState,
+  setMCPServerOAuthClientInformation,
 } from "./authStore";
 import {
   DEFAULT_MCP_SERVERS_DOCUMENT,
-  MCP_SERVERS_FILE_NAME,
   loadMCPConfigRegistry,
+  MCP_SERVERS_FILE_NAME,
+  type MCPRegistryFileState,
+  type MCPRegistryLegacyState,
+  type MCPRegistryServer,
   parseMCPServersDocument,
   readWorkspaceMCPServersDocument,
   resolveMcpConfigPaths,
   writeWorkspaceMCPServersDocument,
-  type MCPRegistryFileState,
-  type MCPRegistryLegacyState,
-  type MCPRegistryServer,
 } from "./configRegistry";
 
 export {
   DEFAULT_MCP_SERVERS_DOCUMENT,
-  parseMCPServersDocument,
   loadMCPConfigRegistry,
-  resolveMcpConfigPaths,
+  parseMCPServersDocument,
   readWorkspaceMCPServersDocument,
+  resolveMcpConfigPaths,
   writeWorkspaceMCPServersDocument,
 };
 
@@ -56,27 +56,34 @@ export interface MCPServersSnapshot {
 }
 
 const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
-const oauthProviderTokensSchema = z.object({
-  access_token: nonEmptyTrimmedStringSchema,
-  token_type: nonEmptyTrimmedStringSchema.optional(),
-  refresh_token: nonEmptyTrimmedStringSchema.optional(),
-  expires_in: z.preprocess((value) => {
-    if (typeof value === "number" && Number.isFinite(value)) return value;
-    if (typeof value === "string" && value.trim()) {
-      const parsed = Number(value);
-      if (Number.isFinite(parsed)) return parsed;
-    }
-    return undefined;
-  }, z.number().finite().optional()),
-  scope: nonEmptyTrimmedStringSchema.optional(),
-}).passthrough();
-const oauthClientInformationSchema = z.object({
-  client_id: nonEmptyTrimmedStringSchema,
-  client_secret: nonEmptyTrimmedStringSchema.optional(),
-  token_endpoint_auth_method: z.enum(mcpTokenEndpointAuthMethods).optional(),
-  redirect_uris: z.array(nonEmptyTrimmedStringSchema).min(1).optional(),
-}).passthrough();
-const retryCountSchema = z.number().finite().transform((value) => Math.max(0, Math.floor(value)));
+const oauthProviderTokensSchema = z
+  .object({
+    access_token: nonEmptyTrimmedStringSchema,
+    token_type: nonEmptyTrimmedStringSchema.optional(),
+    refresh_token: nonEmptyTrimmedStringSchema.optional(),
+    expires_in: z.preprocess((value) => {
+      if (typeof value === "number" && Number.isFinite(value)) return value;
+      if (typeof value === "string" && value.trim()) {
+        const parsed = Number(value);
+        if (Number.isFinite(parsed)) return parsed;
+      }
+      return undefined;
+    }, z.number().finite().optional()),
+    scope: nonEmptyTrimmedStringSchema.optional(),
+  })
+  .passthrough();
+const oauthClientInformationSchema = z
+  .object({
+    client_id: nonEmptyTrimmedStringSchema,
+    client_secret: nonEmptyTrimmedStringSchema.optional(),
+    token_endpoint_auth_method: z.enum(mcpTokenEndpointAuthMethods).optional(),
+    redirect_uris: z.array(nonEmptyTrimmedStringSchema).min(1).optional(),
+  })
+  .passthrough();
+const retryCountSchema = z
+  .number()
+  .finite()
+  .transform((value) => Math.max(0, Math.floor(value)));
 const mcpToolRecordSchema = z.record(z.string(), z.unknown());
 type RuntimeMcpClient = {
   tools: () => Promise<Record<string, unknown>>;
@@ -91,8 +98,13 @@ const runtimeMcpClientSchema = z.custom<RuntimeMcpClient>((value) => {
 type RuntimeMcpHttpTransport = Extract<MCPServerConfig["transport"], { type: "http" | "sse" }> & {
   authProvider?: OAuthClientProvider;
 };
-type RuntimeMcpTransport = Extract<MCPServerConfig["transport"], { type: "stdio" }> | RuntimeMcpHttpTransport;
-type RuntimeMcpClientFactory = (opts: { name: string; transport: RuntimeMcpTransport }) => Promise<RuntimeMcpClient>;
+type RuntimeMcpTransport =
+  | Extract<MCPServerConfig["transport"], { type: "stdio" }>
+  | RuntimeMcpHttpTransport;
+type RuntimeMcpClientFactory = (opts: {
+  name: string;
+  transport: RuntimeMcpTransport;
+}) => Promise<RuntimeMcpClient>;
 
 function normalizeToolArguments(input: unknown): Record<string, unknown> {
   if (typeof input !== "object" || input === null || Array.isArray(input)) return {};
@@ -107,7 +119,8 @@ async function createRuntimeMcpClient(opts: {
 
   const requestInit = (() => {
     if (opts.transport.type === "stdio") return undefined;
-    if (!opts.transport.headers || Object.keys(opts.transport.headers).length === 0) return undefined;
+    if (!opts.transport.headers || Object.keys(opts.transport.headers).length === 0)
+      return undefined;
     return { headers: opts.transport.headers };
   })();
 
@@ -138,7 +151,11 @@ async function createRuntimeMcpClient(opts: {
       for (const entry of listed.tools ?? []) {
         discovered[entry.name] = {
           description: entry.description ?? `MCP tool ${entry.name}`,
-          inputSchema: entry.inputSchema ?? { type: "object", properties: {}, additionalProperties: true },
+          inputSchema: entry.inputSchema ?? {
+            type: "object",
+            properties: {},
+            additionalProperties: true,
+          },
           ...(entry.annotations ? { annotations: entry.annotations } : {}),
           execute: async (input: unknown) =>
             await client.callTool({
@@ -183,9 +200,12 @@ function toOAuthTokensForSdk(tokens: MCPServerOAuthTokens): {
   };
 }
 
-function toStoredOAuthTokens(tokens: z.infer<typeof oauthProviderTokensSchema>): Omit<MCPServerOAuthTokens, "updatedAt"> {
+function toStoredOAuthTokens(
+  tokens: z.infer<typeof oauthProviderTokensSchema>,
+): Omit<MCPServerOAuthTokens, "updatedAt"> {
   const expiresAt = (() => {
-    if (typeof tokens.expires_in !== "number" || !Number.isFinite(tokens.expires_in)) return undefined;
+    if (typeof tokens.expires_in !== "number" || !Number.isFinite(tokens.expires_in))
+      return undefined;
     return new Date(Date.now() + tokens.expires_in * 1000).toISOString();
   })();
 
@@ -240,7 +260,9 @@ function createRuntimeOAuthProvider(opts: {
     },
     redirectToAuthorization: async () => {
       // Runtime MCP discovery should not trigger interactive auth flows.
-      throw new Error(`MCP server \"${opts.server.name}\" requires interactive OAuth re-authorization.`);
+      throw new Error(
+        `MCP server "${opts.server.name}" requires interactive OAuth re-authorization.`,
+      );
     },
     saveCodeVerifier: async () => {
       // verifier persistence is handled by explicit session auth flows.
@@ -262,9 +284,7 @@ function createRuntimeOAuthProvider(opts: {
       if (!latestClientInfo) return undefined;
       return {
         client_id: latestClientInfo.clientId,
-        ...(latestClientInfo.clientSecret
-          ? { client_secret: latestClientInfo.clientSecret }
-          : {}),
+        ...(latestClientInfo.clientSecret ? { client_secret: latestClientInfo.clientSecret } : {}),
         ...(latestClientInfo.tokenEndpointAuthMethod
           ? { token_endpoint_auth_method: latestClientInfo.tokenEndpointAuthMethod }
           : {}),
@@ -312,7 +332,10 @@ function createRuntimeOAuthProvider(opts: {
   };
 }
 
-async function hydrateServerForRuntime(config: AgentConfig, server: MCPRegistryServer): Promise<MCPServerConfig> {
+async function hydrateServerForRuntime(
+  config: AgentConfig,
+  server: MCPRegistryServer,
+): Promise<MCPServerConfig> {
   const auth = await resolveMCPServerAuthState(config, server);
 
   if (server.transport.type === "http" || server.transport.type === "sse") {
@@ -382,7 +405,9 @@ export async function readMCPServersSnapshot(config: AgentConfig): Promise<MCPSe
 
 export async function loadMCPServers(config: AgentConfig): Promise<MCPServerConfig[]> {
   const registry = await loadMCPConfigRegistry(config);
-  const hydrated = await Promise.all(registry.servers.map(async (server) => await hydrateServerForRuntime(config, server)));
+  const hydrated = await Promise.all(
+    registry.servers.map(async (server) => await hydrateServerForRuntime(config, server)),
+  );
   return hydrated;
 }
 
@@ -402,7 +427,10 @@ export async function readProjectMCPServersDocument(config: AgentConfig): Promis
   };
 }
 
-export async function writeProjectMCPServersDocument(projectAgentDir: string, rawJson: string): Promise<void> {
+export async function writeProjectMCPServersDocument(
+  projectAgentDir: string,
+  rawJson: string,
+): Promise<void> {
   parseMCPServersDocument(rawJson);
   const workspaceRoot = path.dirname(projectAgentDir);
   const workspaceCoworkDir = path.join(workspaceRoot, ".cowork");

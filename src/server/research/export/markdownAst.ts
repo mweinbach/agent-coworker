@@ -1,5 +1,5 @@
-import { unified } from "unified";
 import remarkParse from "remark-parse";
+import { unified } from "unified";
 
 export type MarkdownNode = {
   type: string;
@@ -14,7 +14,11 @@ export type MarkdownNode = {
 };
 
 function isMarkdownNode(value: unknown): value is MarkdownNode {
-  return typeof value === "object" && value !== null && typeof (value as { type?: unknown }).type === "string";
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { type?: unknown }).type === "string"
+  );
 }
 
 export function parseMarkdownAst(markdown: string): MarkdownNode[] {
@@ -42,11 +46,15 @@ export function nodeText(node: MarkdownNode | null | undefined): string {
     case "break":
       return "\n";
     default:
-      return nodeChildren(node).map((child) => nodeText(child)).join("");
+      return nodeChildren(node)
+        .map((child) => nodeText(child))
+        .join("");
   }
 }
 
 export function trimMarkdownText(value: string): string {
-  return value.replace(/\s+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  return value
+    .replace(/\s+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
-

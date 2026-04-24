@@ -1,9 +1,9 @@
 import type { MCPServerConfig } from "../../types";
-import type { SessionContext } from "./SessionContext";
 import { McpAuthFlow } from "./mcp/McpAuthFlow";
 import { McpRegistryFlow } from "./mcp/McpRegistryFlow";
 import { McpServerResolver } from "./mcp/McpServerResolver";
 import { McpValidationFlow } from "./mcp/McpValidationFlow";
+import type { SessionContext } from "./SessionContext";
 
 export class McpManager {
   private readonly resolver: McpServerResolver;

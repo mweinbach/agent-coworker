@@ -1,9 +1,8 @@
 import { ExternalLinkIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-
+import { describeCitationSource } from "../../../../../src/shared/displayCitationMarkers";
 import type { ResearchDetail } from "../../app/types";
 import { Button } from "../../components/ui/button";
-import { describeCitationSource } from "../../../../../src/shared/displayCitationMarkers";
 import { openExternalUrl } from "../../lib/desktopCommands";
 import { cn } from "../../lib/utils";
 
@@ -36,7 +35,9 @@ export function ResearchSourcesList({
     <div className="rounded-2xl border border-border/65 bg-card/70 px-4 py-4">
       <div className="mb-3">
         <div className="text-sm font-semibold text-foreground">Sources</div>
-        <div className="text-xs text-muted-foreground">URLs captured from Google Search, URL Context, and file citations.</div>
+        <div className="text-xs text-muted-foreground">
+          URLs captured from Google Search, URL Context, and file citations.
+        </div>
       </div>
       <div className="space-y-2">
         {sources.map((source, index) => (
@@ -45,7 +46,9 @@ export function ResearchSourcesList({
             className="flex items-center justify-between gap-2 rounded-xl border border-border/60 bg-muted/10 px-3 py-2.5"
           >
             <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-medium text-foreground">{source.title ?? source.url}</div>
+              <div className="truncate text-sm font-medium text-foreground">
+                {source.title ?? source.url}
+              </div>
               <div className="truncate text-xs text-muted-foreground">{source.url}</div>
             </div>
             <Button
@@ -66,7 +69,11 @@ export function ResearchSourcesList({
 }
 
 function SourceRow({ source }: { source: SourceRow }) {
-  const display = useMemo(() => describeCitationSource({ url: source.url, ...(source.title ? { title: source.title } : {}) }), [source.title, source.url]);
+  const display = useMemo(
+    () =>
+      describeCitationSource({ url: source.url, ...(source.title ? { title: source.title } : {}) }),
+    [source.title, source.url],
+  );
   const faviconSrc = display.faviconHostname
     ? `https://www.google.com/s2/favicons?domain=${encodeURIComponent(display.faviconHostname)}&sz=32`
     : null;

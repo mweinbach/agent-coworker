@@ -83,7 +83,10 @@ function createFakeWindow(x = 40, y = 50): FakeWindow {
 }
 
 function createHandlers() {
-  const handlers = new Map<string, (event: { sender: FakeWebContents }, args?: unknown) => unknown>();
+  const handlers = new Map<
+    string,
+    (event: { sender: FakeWebContents }, args?: unknown) => unknown
+  >();
   registerWindowIpc({
     deps: {} as never,
     workspaceRoots: {} as never,
@@ -112,10 +115,7 @@ describe("window IPC", () => {
 
     sender.emit("destroyed");
 
-    handlers.get(DESKTOP_IPC_CHANNELS.windowDragMove)?.(
-      { sender },
-      { screenX: 140, screenY: 150 },
-    );
+    handlers.get(DESKTOP_IPC_CHANNELS.windowDragMove)?.({ sender }, { screenX: 140, screenY: 150 });
 
     expect(win.setPositionCalls).toEqual([]);
   });

@@ -1,9 +1,10 @@
+import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
-import { describe, expect, test } from "bun:test";
-
 const workflowPath = new URL("../.github/workflows/ci.yml", import.meta.url);
+const stableTestRunnerPath = new URL("../scripts/run_tests_stable.ts", import.meta.url);
 const workflow = readFileSync(workflowPath, "utf8");
+const stableTestRunner = readFileSync(stableTestRunnerPath, "utf8");
 
 describe("main CI workflow", () => {
   test("pins Bun version via .bun-version file", () => {
@@ -18,9 +19,7 @@ describe("main CI workflow", () => {
     expect(workflow).toContain("apps/desktop/node_modules");
     expect(workflow).toContain("apps/mobile/node_modules");
     expect(workflow).toContain("~/.bun/install/cache");
-    expect(workflow).toContain(
-      "${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}",
-    );
+    expect(workflow).toContain("${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}");
   });
 
   test("keeps the core reliability guardrails", () => {
@@ -31,6 +30,13 @@ describe("main CI workflow", () => {
     expect(workflow).toContain("- name: Unit tests");
     expect(workflow).toContain("run: bun run test:stable -- --max-concurrency 1");
     expect(workflow).not.toContain("- name: Stable per-file unit tests");
+  });
+
+  test("stable test runner discovers TypeScript and TSX test files", () => {
+    expect(stableTestRunner).toContain('"test/**/*.test.ts"');
+    expect(stableTestRunner).toContain('"test/**/*.test.tsx"');
+    expect(stableTestRunner).toContain('"apps/**/test/**/*.test.ts"');
+    expect(stableTestRunner).toContain('"apps/**/test/**/*.test.tsx"');
   });
 
   test("keeps remote MCP smoke opt-in via secrets-backed environment", () => {

@@ -1,8 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-
-import type { AgentConfig, PluginCatalogEntry, PluginScope } from "../types";
 import { getAiCoworkerPaths } from "../connect";
+import type { AgentConfig, PluginCatalogEntry, PluginScope } from "../types";
 import { resolveCoworkHomedir } from "../utils/coworkHome";
 import { nowIso } from "../utils/typeGuards";
 
@@ -43,11 +42,15 @@ function normalizeBooleanMap(value: unknown): Record<string, boolean> {
 }
 
 function normalizeDocument(value: unknown): PluginOverrideDocument {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return { ...DEFAULT_DOCUMENT, updatedAt: nowIso() };
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return { ...DEFAULT_DOCUMENT, updatedAt: nowIso() };
   const record = value as Record<string, unknown>;
   return {
     version: 1,
-    updatedAt: typeof record.updatedAt === "string" && record.updatedAt.trim().length > 0 ? record.updatedAt : nowIso(),
+    updatedAt:
+      typeof record.updatedAt === "string" && record.updatedAt.trim().length > 0
+        ? record.updatedAt
+        : nowIso(),
     plugins: normalizeBooleanMap(record.plugins),
     skills: normalizeBooleanMap(record.skills),
   };
@@ -134,8 +137,12 @@ export async function readPluginOverrides(config: AgentConfig): Promise<PluginOv
   };
 }
 
-export function isPluginEnabled(entry: PluginCatalogEntry, overrides: PluginOverrideSnapshot): boolean {
-  const overrideMap = entry.scope === "workspace" ? overrides.workspace.plugins : overrides.user.plugins;
+export function isPluginEnabled(
+  entry: PluginCatalogEntry,
+  overrides: PluginOverrideSnapshot,
+): boolean {
+  const overrideMap =
+    entry.scope === "workspace" ? overrides.workspace.plugins : overrides.user.plugins;
   const override = overrideMap?.[pluginOverrideKey(entry.id)];
   return override ?? true;
 }
@@ -146,7 +153,8 @@ export function isPluginSkillEnabled(
   rawSkillName: string,
   overrides: PluginOverrideSnapshot,
 ): boolean {
-  const overrideMap = pluginScope === "workspace" ? overrides.workspace.skills : overrides.user.skills;
+  const overrideMap =
+    pluginScope === "workspace" ? overrides.workspace.skills : overrides.user.skills;
   const override = overrideMap?.[pluginSkillOverrideKey(pluginId, rawSkillName)];
   return override ?? true;
 }

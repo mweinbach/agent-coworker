@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createElement } from "react";
-import { act } from "react";
+import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
 import { Button, buttonVariants } from "../src/components/ui/button";

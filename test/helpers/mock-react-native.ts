@@ -18,7 +18,10 @@ const expoModulesCoreMockFactory = () => ({
   EventEmitter: class EventEmitter<TEventsMap extends Record<string, (...args: any[]) => void>> {
     private readonly emitter = new NodeEventEmitter();
 
-    addListener<EventName extends keyof TEventsMap>(eventName: EventName, listener: TEventsMap[EventName]) {
+    addListener<EventName extends keyof TEventsMap>(
+      eventName: EventName,
+      listener: TEventsMap[EventName],
+    ) {
       this.emitter.on(String(eventName), listener as (...args: any[]) => void);
       return {
         remove: () => {
@@ -31,7 +34,10 @@ const expoModulesCoreMockFactory = () => ({
       this.emitter.removeAllListeners(String(eventName));
     }
 
-    emit<EventName extends keyof TEventsMap>(eventName: EventName, ...args: Parameters<TEventsMap[EventName]>) {
+    emit<EventName extends keyof TEventsMap>(
+      eventName: EventName,
+      ...args: Parameters<TEventsMap[EventName]>
+    ) {
       this.emitter.emit(String(eventName), ...args);
     }
   },
@@ -39,7 +45,8 @@ const expoModulesCoreMockFactory = () => ({
 });
 
 const reactNativeMockFactory = () => {
-  const stubComponent = (tag: string) =>
+  const stubComponent =
+    (tag: string) =>
     ({ children, ...props }: Record<string, unknown>) => {
       const { createElement } = require("react");
       return createElement(tag, props, children);
@@ -48,13 +55,20 @@ const reactNativeMockFactory = () => {
   return {
     TurboModuleRegistry: { get: () => null },
     NativeEventEmitter: class NativeEventEmitter {
-      addListener() { return { remove: () => {} }; }
+      addListener() {
+        return { remove: () => {} };
+      }
       removeAllListeners() {}
     },
     Platform: {
       OS: "ios",
-      select: <T>(specifics: { ios?: T; android?: T; web?: T; native?: T; default?: T }): T | undefined =>
-        specifics.ios ?? specifics.native ?? specifics.default,
+      select: <T>(specifics: {
+        ios?: T;
+        android?: T;
+        web?: T;
+        native?: T;
+        default?: T;
+      }): T | undefined => specifics.ios ?? specifics.native ?? specifics.default,
     },
     NativeModules: {},
     View: stubComponent("view"),
@@ -69,7 +83,9 @@ const reactNativeMockFactory = () => {
     StyleSheet: { create: (s: unknown) => s },
     Dimensions: { get: () => ({ width: 375, height: 812 }) },
     Animated: {
-      Value: class { setValue() {} }
+      Value: class {
+        setValue() {}
+      },
     },
     Pressable: stubComponent("pressable"),
     Modal: stubComponent("modal"),

@@ -8,17 +8,16 @@ import { enrichCitationAnnotations } from "../citationMetadata";
 import type { SessionDb } from "../sessionDb";
 import type { StartServerSocket } from "../startServer/types";
 import { exportResearch } from "./export";
-import { buildInteractionTools } from "./settings";
+import { ResearchFileStore } from "./researchFileStore";
 import {
   cancelResearchInteraction,
   createResearchInteractionStream,
-  resumeResearchInteractionStream,
   type ResearchInteractionStreamEvent,
+  resumeResearchInteractionStream,
 } from "./researchRuntime";
-import { ResearchFileStore } from "./researchFileStore";
+import { buildInteractionTools } from "./settings";
 import {
   normalizeResearchSettings,
-  researchRecordSchema,
   type ResearchExportFormat,
   type ResearchInputFile,
   type ResearchRecord,
@@ -26,6 +25,7 @@ import {
   type ResearchSource,
   type ResearchStatus,
   type ResearchThoughtSummary,
+  researchRecordSchema,
 } from "./types";
 
 type BufferedResearchNotification = {
@@ -148,7 +148,10 @@ function extractTitleFromMarkdown(markdown: string): string | null {
 }
 
 function normalizeInteractionStatus(
-  status: Interactions.Interaction["status"] | Interactions.InteractionStatusUpdate["status"] | undefined,
+  status:
+    | Interactions.Interaction["status"]
+    | Interactions.InteractionStatusUpdate["status"]
+    | undefined,
 ): ResearchStatus {
   switch (status) {
     case "completed":
@@ -193,9 +196,7 @@ function isContentDeltaEvent(
   return event.event_type === "content.delta";
 }
 
-function isErrorEvent(
-  event: ResearchInteractionStreamEvent,
-): event is Interactions.ErrorEvent {
+function isErrorEvent(event: ResearchInteractionStreamEvent): event is Interactions.ErrorEvent {
   return event.event_type === "error";
 }
 
@@ -236,14 +237,16 @@ export class ResearchService {
         byId.set(id, state.record);
       }
     }
-    const resolved = await Promise.all([...byId.values()].map(async (record) => {
-      const nextRecord = await this.resolveStoredSourceDestinations(record);
-      const activeState = this.states.get(record.id);
-      if (activeState) {
-        activeState.record = nextRecord;
-      }
-      return nextRecord;
-    }));
+    const resolved = await Promise.all(
+      [...byId.values()].map(async (record) => {
+        const nextRecord = await this.resolveStoredSourceDestinations(record);
+        const activeState = this.states.get(record.id);
+        if (activeState) {
+          activeState.record = nextRecord;
+        }
+        return nextRecord;
+      }),
+    );
     return resolved.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   }
 
@@ -312,7 +315,10 @@ export class ResearchService {
     return state.record;
   }
 
-  async followUp(parentResearchId: string, params: FollowUpResearchParams): Promise<ResearchRecord> {
+  async followUp(
+    parentResearchId: string,
+    params: FollowUpResearchParams,
+  ): Promise<ResearchRecord> {
     await this.init();
     const parent = await this.get(parentResearchId);
     if (!parent) {
@@ -325,7 +331,9 @@ export class ResearchService {
       throw new Error("Follow-up is only available after the selected research has completed.");
     }
     if (parent.planPending) {
-      throw new Error("Follow-up is only available after the selected research plan has been approved.");
+      throw new Error(
+        "Follow-up is only available after the selected research plan has been approved.",
+      );
     }
     const input = params.input.trim();
     if (!input) {
@@ -399,7 +407,8 @@ export class ResearchService {
 
   async cancel(id: string): Promise<ResearchRecord | null> {
     const activeState = this.states.get(id);
-    const existing = activeState?.record ?? this.sessionDb.getResearch(id, { workspacePath: this.workspacePath });
+    const existing =
+      activeState?.record ?? this.sessionDb.getResearch(id, { workspacePath: this.workspacePath });
     if (!existing) {
       return null;
     }
@@ -431,19 +440,18 @@ export class ResearchService {
       updatedAt: new Date().toISOString(),
     });
     await this.flushPersistNow(state);
-    this.broadcast(
-      state,
-      "research/updated",
-      { research: state.record },
-      state.record.lastEventId,
-    );
+    this.broadcast(state, "research/updated", { research: state.record }, state.record.lastEventId);
     this.broadcast(
       state,
       "research/failed",
-      { researchId: state.record.id, status: state.record.status, error: state.record.error ?? "cancelled" },
+      {
+        researchId: state.record.id,
+        status: state.record.status,
+        error: state.record.error ?? "cancelled",
+      },
       state.record.lastEventId,
     );
-    this.evictTerminalState(state);
+    await this.cleanupTerminalState(state);
     return state.record;
   }
 
@@ -633,7 +641,12 @@ export class ResearchService {
           updatedAt: new Date().toISOString(),
         });
         await this.flushPersistNow(state);
-        this.broadcast(state, "research/updated", { research: state.record }, state.record.lastEventId);
+        this.broadcast(
+          state,
+          "research/updated",
+          { research: state.record },
+          state.record.lastEventId,
+        );
       }
 
       if (state.cancelRequested || state.record.status === "cancelled") {
@@ -646,27 +659,40 @@ export class ResearchService {
         updatedAt: new Date().toISOString(),
       });
       await this.flushPersistNow(state);
-      this.broadcast(state, "research/updated", { research: state.record }, state.record.lastEventId);
+      this.broadcast(
+        state,
+        "research/updated",
+        { research: state.record },
+        state.record.lastEventId,
+      );
 
       const tools = buildInteractionTools(state.record.inputs.fileSearchStoreName);
       const stream = await createResearchInteractionStream({
         apiKey,
         input: opts.prompt,
-        ...(opts.previousInteractionId ? { previousInteractionId: opts.previousInteractionId } : {}),
+        ...(opts.previousInteractionId
+          ? { previousInteractionId: opts.previousInteractionId }
+          : {}),
         tools,
         collaborativePlanning: opts.collaborativePlanning,
       });
       await this.consumeInteractionStream(state, stream);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      const nextStatus: ResearchStatus = state.cancelRequested || message === "cancelled" ? "cancelled" : "failed";
+      const nextStatus: ResearchStatus =
+        state.cancelRequested || message === "cancelled" ? "cancelled" : "failed";
       this.updateRecord(state, {
         status: nextStatus,
         error: nextStatus === "cancelled" ? "cancelled" : message,
         updatedAt: new Date().toISOString(),
       });
       await this.flushPersistNow(state);
-      this.broadcast(state, "research/updated", { research: state.record }, state.record.lastEventId);
+      this.broadcast(
+        state,
+        "research/updated",
+        { research: state.record },
+        state.record.lastEventId,
+      );
       this.broadcast(
         state,
         "research/failed",
@@ -680,7 +706,7 @@ export class ResearchService {
     } finally {
       state.streamPromise = null;
       if (isTerminalResearchStatus(state.record.status)) {
-        this.evictTerminalState(state);
+        await this.cleanupTerminalState(state);
       }
     }
   }
@@ -702,9 +728,8 @@ export class ResearchService {
       return;
     }
 
-    const eventId = "event_id" in event && typeof event.event_id === "string"
-      ? event.event_id
-      : null;
+    const eventId =
+      "event_id" in event && typeof event.event_id === "string" ? event.event_id : null;
     if (eventId) {
       this.updateRecord(state, {
         lastEventId: eventId,
@@ -761,7 +786,7 @@ export class ResearchService {
         });
         await this.flushPersistNow(state);
         this.broadcast(state, "research/updated", { research: state.record }, eventId);
-        this.evictTerminalState(state);
+        await this.cleanupTerminalState(state);
         return;
       }
       this.updateRecord(state, {
@@ -799,7 +824,7 @@ export class ResearchService {
         );
       }
       if (isTerminalResearchStatus(state.record.status)) {
-        this.evictTerminalState(state);
+        await this.cleanupTerminalState(state);
       }
       return;
     }
@@ -919,10 +944,7 @@ export class ResearchService {
     );
   }
 
-  private maybeUpgradeTitleFromReport(
-    state: ResearchRuntimeState,
-    eventId: string | null,
-  ): void {
+  private maybeUpgradeTitleFromReport(state: ResearchRuntimeState, eventId: string | null): void {
     const autoTitle = buildResearchTitle(state.record.prompt);
     if (state.record.title !== autoTitle) {
       return;
@@ -935,12 +957,7 @@ export class ResearchService {
       title: extracted,
       updatedAt: new Date().toISOString(),
     });
-    this.broadcast(
-      state,
-      "research/updated",
-      { research: state.record },
-      eventId,
-    );
+    this.broadcast(state, "research/updated", { research: state.record }, eventId);
   }
 
   private appendThoughtSummary(
@@ -953,7 +970,9 @@ export class ResearchService {
       return;
     }
     const thought: ResearchThoughtSummary = {
-      id: eventId ? `thought:${eventId}:${state.record.thoughtSummaries.length}` : crypto.randomUUID(),
+      id: eventId
+        ? `thought:${eventId}:${state.record.thoughtSummaries.length}`
+        : crypto.randomUUID(),
       text: normalized,
       ts: new Date().toISOString(),
     };
@@ -1002,7 +1021,8 @@ export class ResearchService {
     annotations: unknown,
     eventId: string | null,
   ): Promise<void> {
-    const enrichedAnnotations = await enrichCitationAnnotations(annotations) ?? asRecordArray(annotations);
+    const enrichedAnnotations =
+      (await enrichCitationAnnotations(annotations)) ?? asRecordArray(annotations);
     const nextSources: ResearchSource[] = [];
     for (const annotation of enrichedAnnotations) {
       const type = asNonEmptyString(annotation.type);
@@ -1013,7 +1033,9 @@ export class ResearchService {
         }
         nextSources.push({
           url,
-          ...(asNonEmptyString(annotation.title) ? { title: asNonEmptyString(annotation.title) } : {}),
+          ...(asNonEmptyString(annotation.title)
+            ? { title: asNonEmptyString(annotation.title) }
+            : {}),
           sourceType: "url",
           ...(sourceHost(url) ? { host: sourceHost(url) } : {}),
         });
@@ -1026,7 +1048,9 @@ export class ResearchService {
         }
         nextSources.push({
           url,
-          ...(asNonEmptyString(annotation.file_name) ? { title: asNonEmptyString(annotation.file_name) } : {}),
+          ...(asNonEmptyString(annotation.file_name)
+            ? { title: asNonEmptyString(annotation.file_name) }
+            : {}),
           sourceType: "file",
         });
         continue;
@@ -1038,7 +1062,9 @@ export class ResearchService {
         }
         nextSources.push({
           url,
-          ...(asNonEmptyString(annotation.name) ? { title: asNonEmptyString(annotation.name) } : {}),
+          ...(asNonEmptyString(annotation.name)
+            ? { title: asNonEmptyString(annotation.name) }
+            : {}),
           sourceType: "place",
           ...(sourceHost(url) ? { host: sourceHost(url) } : {}),
         });
@@ -1050,7 +1076,9 @@ export class ResearchService {
     }
   }
 
-  private async resolveSourcesViaCitationAnnotations(sources: ResearchSource[]): Promise<ResearchSource[]> {
+  private async resolveSourcesViaCitationAnnotations(
+    sources: ResearchSource[],
+  ): Promise<ResearchSource[]> {
     if (sources.length === 0) {
       return sources;
     }
@@ -1062,12 +1090,16 @@ export class ResearchService {
       start_index: index,
       end_index: index,
     }));
-    const enrichedAnnotations = await enrichCitationAnnotations(syntheticAnnotations) ?? syntheticAnnotations;
+    const enrichedAnnotations =
+      (await enrichCitationAnnotations(syntheticAnnotations)) ?? syntheticAnnotations;
     return enrichedAnnotations.map((annotation, index): ResearchSource => {
       const original = sources[index]!;
       const annotationRecord = asRecord(annotation);
       const url = asNonEmptyString(annotation.url) ?? original.url;
-      const title = asNonEmptyString(annotation.title) ?? asNonEmptyString(annotationRecord?.name) ?? original.title;
+      const title =
+        asNonEmptyString(annotation.title) ??
+        asNonEmptyString(annotationRecord?.name) ??
+        original.title;
       return {
         ...original,
         url,
@@ -1101,14 +1133,18 @@ export class ResearchService {
     eventId: string | null,
   ): void {
     const identity = sourceIdentity(source);
-    const existingIndex = state.record.sources.findIndex((entry) => sourceIdentity(entry) === identity);
+    const existingIndex = state.record.sources.findIndex(
+      (entry) => sourceIdentity(entry) === identity,
+    );
     if (existingIndex !== -1) {
       const existing = state.record.sources[existingIndex]!;
       const merged = mergeResearchSource(existing, source);
       if (JSON.stringify(merged) === JSON.stringify(existing)) {
         return;
       }
-      const sources = state.record.sources.map((entry, index) => index === existingIndex ? merged : entry);
+      const sources = state.record.sources.map((entry, index) =>
+        index === existingIndex ? merged : entry,
+      );
       this.updateRecord(state, {
         sources,
         updatedAt: new Date().toISOString(),
@@ -1171,7 +1207,18 @@ export class ResearchService {
     return record.workspacePath === this.workspacePath;
   }
 
-  private evictTerminalState(state: ResearchRuntimeState): void {
+  private async cleanupTerminalState(state: ResearchRuntimeState): Promise<void> {
+    if (this.states.get(state.record.id) !== state) {
+      return;
+    }
+    const fileSearchStoreName = state.record.inputs.fileSearchStoreName;
+    if (fileSearchStoreName) {
+      try {
+        await this.fileStore.deleteResearchStore(this.resolveGoogleApiKey(), fileSearchStoreName);
+      } catch {
+        // Remote store deletion is best effort; local terminal cleanup must still complete.
+      }
+    }
     if (state.persistTimer) {
       clearTimeout(state.persistTimer);
       state.persistTimer = null;
@@ -1248,11 +1295,14 @@ export class ResearchService {
     if (saved) {
       return saved;
     }
-    const fromEnv = process.env.GOOGLE_GENERATIVE_AI_API_KEY?.trim() || process.env.GOOGLE_API_KEY?.trim();
+    const fromEnv =
+      process.env.GOOGLE_GENERATIVE_AI_API_KEY?.trim() || process.env.GOOGLE_API_KEY?.trim();
     if (fromEnv) {
       return fromEnv;
     }
-    throw new Error("Google Deep Research requires a saved Google API key or GOOGLE_GENERATIVE_AI_API_KEY.");
+    throw new Error(
+      "Google Deep Research requires a saved Google API key or GOOGLE_GENERATIVE_AI_API_KEY.",
+    );
   }
 
   private async resolveAttachedFiles(params: StartResearchParams): Promise<ResearchInputFile[]> {
@@ -1267,52 +1317,56 @@ export class ResearchService {
   }
 
   private async resumeInFlight(): Promise<void> {
-    const runningResearch = this.sessionDb.listRunningResearch({ workspacePath: this.workspacePath });
-    await Promise.allSettled(runningResearch.map(async (record) => {
-      const state = this.getOrCreateState(record);
-      if (!record.interactionId) {
-        this.updateRecord(state, {
-          status: "failed",
-          error: "Research could not be resumed because the interaction id was never stored.",
-          updatedAt: new Date().toISOString(),
-        });
-        await this.flushPersistNow(state);
-        return;
-      }
-      try {
-        const stream = await resumeResearchInteractionStream({
-          apiKey: this.resolveGoogleApiKey(),
-          interactionId: record.interactionId,
-          lastEventId: record.lastEventId,
-        });
-        state.streamPromise = this.consumeInteractionStream(state, stream)
-          .catch(async (error) => {
-            const message = error instanceof Error ? error.message : String(error);
-            if (state.cancelRequested || state.record.status === "cancelled") {
-              return;
-            }
-            this.updateRecord(state, {
-              status: "failed",
-              error: message,
-              updatedAt: new Date().toISOString(),
-            });
-            await this.flushPersistNow(state);
-          })
-          .finally(() => {
-            state.streamPromise = null;
+    const runningResearch = this.sessionDb.listRunningResearch({
+      workspacePath: this.workspacePath,
+    });
+    await Promise.allSettled(
+      runningResearch.map(async (record) => {
+        const state = this.getOrCreateState(record);
+        if (!record.interactionId) {
+          this.updateRecord(state, {
+            status: "failed",
+            error: "Research could not be resumed because the interaction id was never stored.",
+            updatedAt: new Date().toISOString(),
           });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (state.cancelRequested || state.record.status === "cancelled") {
+          await this.flushPersistNow(state);
           return;
         }
-        this.updateRecord(state, {
-          status: "failed",
-          error: message,
-          updatedAt: new Date().toISOString(),
-        });
-        await this.flushPersistNow(state);
-      }
-    }));
+        try {
+          const stream = await resumeResearchInteractionStream({
+            apiKey: this.resolveGoogleApiKey(),
+            interactionId: record.interactionId,
+            lastEventId: record.lastEventId,
+          });
+          state.streamPromise = this.consumeInteractionStream(state, stream)
+            .catch(async (error) => {
+              const message = error instanceof Error ? error.message : String(error);
+              if (state.cancelRequested || state.record.status === "cancelled") {
+                return;
+              }
+              this.updateRecord(state, {
+                status: "failed",
+                error: message,
+                updatedAt: new Date().toISOString(),
+              });
+              await this.flushPersistNow(state);
+            })
+            .finally(() => {
+              state.streamPromise = null;
+            });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (state.cancelRequested || state.record.status === "cancelled") {
+            return;
+          }
+          this.updateRecord(state, {
+            status: "failed",
+            error: message,
+            updatedAt: new Date().toISOString(),
+          });
+          await this.flushPersistNow(state);
+        }
+      }),
+    );
   }
 }

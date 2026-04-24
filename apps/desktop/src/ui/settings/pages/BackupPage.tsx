@@ -1,5 +1,3 @@
-import { useEffect, useEffectEvent, useState } from "react";
-
 import {
   AlertTriangleIcon,
   ArchiveIcon,
@@ -13,8 +11,10 @@ import {
   SaveIcon,
   Trash2Icon,
 } from "lucide-react";
+import { useEffect, useEffectEvent, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
+import { workspaceBackupActionKey } from "../../../app/store.helpers/backupActionKey";
 import type {
   WorkspaceBackupDeltaEvent,
   WorkspaceBackupEntry,
@@ -23,8 +23,14 @@ import type {
 } from "../../../app/types";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "../../../components/ui/card";
 import { Checkbox } from "../../../components/ui/checkbox";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../components/ui/card";
 import {
   Select,
   SelectContent,
@@ -34,7 +40,6 @@ import {
 } from "../../../components/ui/select";
 import { confirmAction, revealPath } from "../../../lib/desktopCommands";
 import { cn } from "../../../lib/utils";
-import { workspaceBackupActionKey } from "../../../app/store.helpers/backupActionKey";
 import { useOptionalSettingsChrome } from "../SettingsChromeContext";
 
 type BackupPageProps = {
@@ -98,7 +103,15 @@ function lifecycleBadgeClass(lifecycle: WorkspaceBackupEntry["lifecycle"]): stri
   return "border-border/50 bg-transparent text-muted-foreground";
 }
 
-function StatItem({ label, value, icon: Icon }: { label: string; value: string; icon: React.ComponentType<{ className?: string }> }) {
+function StatItem({
+  label,
+  value,
+  icon: Icon,
+}: {
+  label: string;
+  value: string;
+  icon: React.ComponentType<{ className?: string }>;
+}) {
   return (
     <div className="flex items-center gap-3">
       <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border/45 bg-background/50 text-muted-foreground">
@@ -138,8 +151,16 @@ function BackupSidebar({
     >
       <div className="flex items-center justify-between border-b border-border/70 bg-muted/10 px-4 py-3.5 shrink-0">
         <span className="text-sm font-semibold text-foreground">Backup History</span>
-        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => onRefresh?.()} disabled={loading}>
-          <RefreshCwIcon className={cn("h-4 w-4 text-muted-foreground", loading ? "animate-spin" : "")} />
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8"
+          onClick={() => onRefresh?.()}
+          disabled={loading}
+        >
+          <RefreshCwIcon
+            className={cn("h-4 w-4 text-muted-foreground", loading ? "animate-spin" : "")}
+          />
         </Button>
       </div>
 
@@ -147,12 +168,16 @@ function BackupSidebar({
         {entries.length === 0 && !loading ? (
           <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
             <ArchiveIcon className="h-8 w-8 mb-3 text-muted-foreground/30" />
-            <p className="text-sm text-muted-foreground">No backups yet. Backups appear after Cowork creates recovery snapshots for a session in this workspace.</p>
+            <p className="text-sm text-muted-foreground">
+              No backups yet. Backups appear after Cowork creates recovery snapshots for a session
+              in this workspace.
+            </p>
           </div>
         ) : null}
 
         {entries.map((entry) => {
-          const isBackupSelected = entry.targetSessionId === selectedTargetSessionId && selectedCheckpointId === null;
+          const isBackupSelected =
+            entry.targetSessionId === selectedTargetSessionId && selectedCheckpointId === null;
 
           return (
             <div key={entry.targetSessionId} className="mb-1">
@@ -165,17 +190,30 @@ function BackupSidebar({
                   "h-auto w-full justify-start gap-2.5 rounded-lg px-3 py-2.5 text-left text-sm shadow-none transition-all",
                   isBackupSelected
                     ? "border border-border/65 bg-background/72 font-medium text-foreground"
-                    : "border border-transparent text-foreground hover:bg-background/35"
+                    : "border border-transparent text-foreground hover:bg-background/35",
                 )}
               >
-                <FolderOpenIcon className={cn("h-4 w-4 shrink-0", isBackupSelected ? "text-foreground" : "text-muted-foreground")} />
+                <FolderOpenIcon
+                  className={cn(
+                    "h-4 w-4 shrink-0",
+                    isBackupSelected ? "text-foreground" : "text-muted-foreground",
+                  )}
+                />
                 <span className="truncate flex-1">{backupTitle(entry)}</span>
                 {entry.lifecycle === "active" ? (
-                  <Badge variant="outline" className={cn("h-5 px-2 text-[10px] font-medium", lifecycleBadgeClass(entry.lifecycle))}>
+                  <Badge
+                    variant="outline"
+                    className={cn(
+                      "h-5 px-2 text-[10px] font-medium",
+                      lifecycleBadgeClass(entry.lifecycle),
+                    )}
+                  >
                     Active
                   </Badge>
                 ) : null}
-                {entry.status === "failed" && <AlertTriangleIcon className="w-3.5 h-3.5 text-destructive shrink-0" />}
+                {entry.status === "failed" && (
+                  <AlertTriangleIcon className="w-3.5 h-3.5 text-destructive shrink-0" />
+                )}
               </Button>
 
               <div className="ml-4 border-l-2 border-border/40 pl-3 mt-0.5 space-y-0.5">
@@ -183,7 +221,9 @@ function BackupSidebar({
                   <div className="py-2 text-xs text-muted-foreground/70 pl-2">No checkpoints</div>
                 ) : (
                   [...entry.checkpoints].reverse().map((cp) => {
-                    const isCpSelected = entry.targetSessionId === selectedTargetSessionId && selectedCheckpointId === cp.id;
+                    const isCpSelected =
+                      entry.targetSessionId === selectedTargetSessionId &&
+                      selectedCheckpointId === cp.id;
                     return (
                       <Button
                         key={cp.id}
@@ -195,7 +235,7 @@ function BackupSidebar({
                           "h-auto w-full justify-between rounded-md px-2.5 py-1.5 text-left text-xs shadow-none transition-all",
                           isCpSelected
                             ? "border border-border/55 bg-background/60 font-medium text-foreground"
-                            : "border border-transparent text-muted-foreground hover:bg-background/28"
+                            : "border border-transparent text-muted-foreground hover:bg-background/28",
                         )}
                       >
                         <div className="flex items-center gap-2 min-w-0">
@@ -240,10 +280,14 @@ function BackupDetailView({
             <FolderOpenIcon className="h-5 w-5" />
           </div>
           <div className="flex-1 min-w-0">
-            <div className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Selected backup</div>
+            <div className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
+              Selected backup
+            </div>
             <h2 className="text-lg font-semibold truncate">{backupTitle(entry)}</h2>
             <div className="flex items-center gap-2 mt-1 flex-wrap">
-              <span className="text-sm text-muted-foreground">{entry.provider || "Unknown"} • {entry.model || "Unknown model"}</span>
+              <span className="text-sm text-muted-foreground">
+                {entry.provider || "Unknown"} • {entry.model || "Unknown model"}
+              </span>
               <Badge
                 variant="outline"
                 className={cn("h-5 text-[10px]", lifecycleBadgeClass(entry.lifecycle))}
@@ -251,7 +295,12 @@ function BackupDetailView({
                 {entry.lifecycle}
               </Badge>
               {entry.status === "failed" && (
-                <Badge variant="outline" className="h-5 border-destructive/25 bg-destructive/5 text-[10px] text-destructive/80">Failed</Badge>
+                <Badge
+                  variant="outline"
+                  className="h-5 border-destructive/25 bg-destructive/5 text-[10px] text-destructive/80"
+                >
+                  Failed
+                </Badge>
               )}
             </div>
           </div>
@@ -261,9 +310,17 @@ function BackupDetailView({
       <div className="border-b border-border/60 bg-background/64 px-6 py-4">
         <div className="flex flex-wrap items-center gap-x-8 gap-y-3">
           <StatItem label="Created" value={formatTimestamp(entry.createdAt)} icon={ClockIcon} />
-          <StatItem label="Last Updated" value={formatTimestamp(entry.updatedAt)} icon={RefreshCwIcon} />
+          <StatItem
+            label="Last Updated"
+            value={formatTimestamp(entry.updatedAt)}
+            icon={RefreshCwIcon}
+          />
           <StatItem label="Storage" value={formatBytes(entry.totalBytes)} icon={HardDriveIcon} />
-          <StatItem label="Checkpoints" value={String(entry.checkpoints.length)} icon={DatabaseIcon} />
+          <StatItem
+            label="Checkpoints"
+            value={String(entry.checkpoints.length)}
+            icon={DatabaseIcon}
+          />
         </div>
       </div>
 
@@ -274,7 +331,10 @@ function BackupDetailView({
             <Button
               variant="outline"
               onClick={() => onCreateCheckpoint?.(entry.targetSessionId)}
-              disabled={entry.status !== "ready" || pendingActions[workspaceBackupActionKey("checkpoint", entry.targetSessionId)]}
+              disabled={
+                entry.status !== "ready" ||
+                pendingActions[workspaceBackupActionKey("checkpoint", entry.targetSessionId)]
+              }
             >
               <SaveIcon className="mr-2 h-4 w-4" />
               Create Checkpoint
@@ -286,7 +346,8 @@ function BackupDetailView({
                 const confirmed = await confirmAction({
                   title: "Restore Original State",
                   message: "Restore the workspace to before this session started?",
-                  detail: "This overwrites current files. We will create a safety checkpoint first just in case.",
+                  detail:
+                    "This overwrites current files. We will create a safety checkpoint first just in case.",
                   kind: "warning",
                   confirmLabel: "Restore",
                   cancelLabel: "Cancel",
@@ -294,7 +355,10 @@ function BackupDetailView({
                 });
                 if (confirmed) onRestoreOriginal?.(entry.targetSessionId);
               }}
-              disabled={entry.status !== "ready" || pendingActions[workspaceBackupActionKey("restore-original", entry.targetSessionId)]}
+              disabled={
+                entry.status !== "ready" ||
+                pendingActions[workspaceBackupActionKey("restore-original", entry.targetSessionId)]
+              }
             >
               <RotateCcwIcon className="mr-2 h-4 w-4 text-destructive/70" />
               Restore Original Workspace
@@ -312,9 +376,10 @@ function BackupDetailView({
                 const confirmed = await confirmAction({
                   title: "Delete Backup Entry",
                   message: `Delete all backup history for ${backupTitle(entry)}?`,
-                  detail: entry.lifecycle === "active"
-                    ? "The session will stay available, but backups for it will be disabled until you turn them back on."
-                    : "This removes the stored backup folder for this session entry.",
+                  detail:
+                    entry.lifecycle === "active"
+                      ? "The session will stay available, but backups for it will be disabled until you turn them back on."
+                      : "This removes the stored backup folder for this session entry.",
                   kind: "warning",
                   confirmLabel: "Delete backup",
                   cancelLabel: "Cancel",
@@ -322,7 +387,9 @@ function BackupDetailView({
                 });
                 if (confirmed) onDeleteEntry?.(entry.targetSessionId);
               }}
-              disabled={pendingActions[workspaceBackupActionKey("delete-entry", entry.targetSessionId)]}
+              disabled={
+                pendingActions[workspaceBackupActionKey("delete-entry", entry.targetSessionId)]
+              }
             >
               <Trash2Icon className="mr-2 h-4 w-4" />
               Delete Backup Entry
@@ -369,12 +436,23 @@ function CheckpointDeltaView({
             <FileTextIcon className="h-4 w-4" />
           </div>
           <div>
-            <div className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Checkpoint snapshot</div>
-            <div className="flex items-center gap-2">
-              <h2 className="font-semibold text-sm">Checkpoint <span className="ml-1 font-mono text-foreground/80">{checkpoint.id}</span></h2>
-              {checkpoint.trigger !== "manual" && <Badge variant="outline" className="text-[9px] uppercase h-4 py-0">{checkpoint.trigger}</Badge>}
+            <div className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
+              Checkpoint snapshot
             </div>
-            <div className="text-xs text-muted-foreground">Captured {formatTimestamp(checkpoint.createdAt)}</div>
+            <div className="flex items-center gap-2">
+              <h2 className="font-semibold text-sm">
+                Checkpoint{" "}
+                <span className="ml-1 font-mono text-foreground/80">{checkpoint.id}</span>
+              </h2>
+              {checkpoint.trigger !== "manual" && (
+                <Badge variant="outline" className="text-[9px] uppercase h-4 py-0">
+                  {checkpoint.trigger}
+                </Badge>
+              )}
+            </div>
+            <div className="text-xs text-muted-foreground">
+              Captured {formatTimestamp(checkpoint.createdAt)}
+            </div>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -392,7 +470,12 @@ function CheckpointDeltaView({
               });
               if (confirmed) onRestoreCheckpoint?.(entry.targetSessionId, checkpoint.id);
             }}
-            disabled={entry.status !== "ready" || pendingActions[workspaceBackupActionKey("restore-checkpoint", entry.targetSessionId, checkpoint.id)]}
+            disabled={
+              entry.status !== "ready" ||
+              pendingActions[
+                workspaceBackupActionKey("restore-checkpoint", entry.targetSessionId, checkpoint.id)
+              ]
+            }
           >
             <RotateCcwIcon className="mr-2 h-3.5 w-3.5" />
             Restore
@@ -412,7 +495,12 @@ function CheckpointDeltaView({
               });
               if (confirmed) onDeleteCheckpoint?.(entry.targetSessionId, checkpoint.id);
             }}
-            disabled={entry.status !== "ready" || pendingActions[workspaceBackupActionKey("delete-checkpoint", entry.targetSessionId, checkpoint.id)]}
+            disabled={
+              entry.status !== "ready" ||
+              pendingActions[
+                workspaceBackupActionKey("delete-checkpoint", entry.targetSessionId, checkpoint.id)
+              ]
+            }
           >
             <Trash2Icon className="h-4 w-4" />
           </Button>
@@ -423,7 +511,9 @@ function CheckpointDeltaView({
         <div className="flex items-center justify-between border-b border-border/40 bg-background/64 px-6 py-3 text-xs shrink-0">
           <span className="text-muted-foreground flex items-center gap-2">
             Compared to baseline:
-            <Badge variant="secondary" className="font-mono text-[10px]">{delta?.baselineLabel || "..."}</Badge>
+            <Badge variant="secondary" className="font-mono text-[10px]">
+              {delta?.baselineLabel || "..."}
+            </Badge>
           </span>
           {delta && (
             <div className="flex items-center gap-4 font-medium">
@@ -436,9 +526,13 @@ function CheckpointDeltaView({
 
         <div className="flex-1 overflow-y-auto">
           {deltaLoading && !delta ? (
-            <div className="flex items-center justify-center h-40 text-sm text-muted-foreground">Loading file changes...</div>
+            <div className="flex items-center justify-center h-40 text-sm text-muted-foreground">
+              Loading file changes...
+            </div>
           ) : deltaError ? (
-            <div className="m-6 p-4 text-sm text-destructive bg-destructive/10 rounded-md border border-destructive/20">{deltaError}</div>
+            <div className="m-6 p-4 text-sm text-destructive bg-destructive/10 rounded-md border border-destructive/20">
+              {deltaError}
+            </div>
           ) : delta?.files.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-40 text-muted-foreground">
               <FileTextIcon className="h-8 w-8 mb-2 opacity-20" />
@@ -452,20 +546,36 @@ function CheckpointDeltaView({
                 <div className="w-24 text-right">Status</div>
               </div>
               <div className="divide-y divide-border/30">
-                {delta.files.map(f => (
-                  <div key={f.path} className="group flex items-center px-6 py-2.5 text-sm transition-colors hover:bg-muted/30">
+                {delta.files.map((f) => (
+                  <div
+                    key={f.path}
+                    className="group flex items-center px-6 py-2.5 text-sm transition-colors hover:bg-muted/30"
+                  >
                     <div className="flex-1 flex items-center gap-3 min-w-0 pr-4">
-                      {f.kind === "directory" ? <FolderOpenIcon className="w-4 h-4 text-muted-foreground shrink-0" /> : <FileTextIcon className="w-4 h-4 text-muted-foreground shrink-0" />}
-                      <span className="font-mono text-[13px] truncate" title={f.path}>{f.path}</span>
+                      {f.kind === "directory" ? (
+                        <FolderOpenIcon className="w-4 h-4 text-muted-foreground shrink-0" />
+                      ) : (
+                        <FileTextIcon className="w-4 h-4 text-muted-foreground shrink-0" />
+                      )}
+                      <span className="font-mono text-[13px] truncate" title={f.path}>
+                        {f.path}
+                      </span>
                     </div>
-                    <div className="w-24 text-xs text-muted-foreground capitalize shrink-0">{f.kind}</div>
+                    <div className="w-24 text-xs text-muted-foreground capitalize shrink-0">
+                      {f.kind}
+                    </div>
                     <div className="w-24 text-right shrink-0">
-                      <Badge variant="outline" className={cn(
-                        "text-[10px] uppercase h-5 py-0",
-                        f.change === "added" ? "border-success/20 bg-success/[0.04] text-success/80 group-hover:bg-success/[0.07]" :
-                        f.change === "modified" ? "border-warning/20 bg-warning/[0.04] text-warning/80 group-hover:bg-warning/[0.07]" :
-                        "border-destructive/20 bg-destructive/[0.04] text-destructive/75 group-hover:bg-destructive/[0.07]"
-                      )}>
+                      <Badge
+                        variant="outline"
+                        className={cn(
+                          "text-[10px] uppercase h-5 py-0",
+                          f.change === "added"
+                            ? "border-success/20 bg-success/[0.04] text-success/80 group-hover:bg-success/[0.07]"
+                            : f.change === "modified"
+                              ? "border-warning/20 bg-warning/[0.04] text-warning/80 group-hover:bg-warning/[0.07]"
+                              : "border-destructive/20 bg-destructive/[0.04] text-destructive/75 group-hover:bg-destructive/[0.07]",
+                        )}
+                      >
                         {f.change}
                       </Badge>
                     </div>
@@ -495,12 +605,22 @@ export function BackupPage(props: BackupPageProps = {}) {
   const selectWorkspaceFromStore = useAppStore((s) => s.selectWorkspace);
   const requestWorkspaceBackupsFromStore = useAppStore((s) => s.requestWorkspaceBackups);
   const requestWorkspaceBackupDeltaFromStore = useAppStore((s) => s.requestWorkspaceBackupDelta);
-  const createWorkspaceBackupCheckpointFromStore = useAppStore((s) => s.createWorkspaceBackupCheckpoint);
-  const restoreWorkspaceBackupOriginalFromStore = useAppStore((s) => s.restoreWorkspaceBackupOriginal);
-  const restoreWorkspaceBackupCheckpointFromStore = useAppStore((s) => s.restoreWorkspaceBackupCheckpoint);
-  const deleteWorkspaceBackupCheckpointFromStore = useAppStore((s) => s.deleteWorkspaceBackupCheckpoint);
+  const createWorkspaceBackupCheckpointFromStore = useAppStore(
+    (s) => s.createWorkspaceBackupCheckpoint,
+  );
+  const restoreWorkspaceBackupOriginalFromStore = useAppStore(
+    (s) => s.restoreWorkspaceBackupOriginal,
+  );
+  const restoreWorkspaceBackupCheckpointFromStore = useAppStore(
+    (s) => s.restoreWorkspaceBackupCheckpoint,
+  );
+  const deleteWorkspaceBackupCheckpointFromStore = useAppStore(
+    (s) => s.deleteWorkspaceBackupCheckpoint,
+  );
   const deleteWorkspaceBackupEntryFromStore = useAppStore((s) => s.deleteWorkspaceBackupEntry);
-  const setWorkspaceBackupSessionEnabledFromStore = useAppStore((s) => s.setWorkspaceBackupSessionEnabled);
+  const setWorkspaceBackupSessionEnabledFromStore = useAppStore(
+    (s) => s.setWorkspaceBackupSessionEnabled,
+  );
   // During SSR (renderToStaticMarkup), hooks like useAppStore(selector) return default state
   // because there's no React store provider. Read directly from getState() as a fallback.
   const serverState = typeof window === "undefined" ? useAppStore.getState() : null;
@@ -513,29 +633,62 @@ export function BackupPage(props: BackupPageProps = {}) {
   const threads = serverState?.threads ?? threadsFromStore;
   const threadRuntimeById = serverState?.threadRuntimeById ?? threadRuntimeByIdFromStore;
 
-  const workspaceList = props.workspace !== undefined ? (props.workspace ? [props.workspace] : []) : workspaces;
-  const workspace = props.workspace !== undefined
-    ? props.workspace
-    : (selectedWorkspaceId
-      ? workspaces.find((entry) => entry.id === selectedWorkspaceId) ?? workspaces[0] ?? null
-      : workspaces[0] ?? null);
-  const runtime = props.runtime !== undefined ? props.runtime : (workspace ? workspaceRuntimeById[workspace.id] ?? null : null);
+  const workspaceList =
+    props.workspace !== undefined ? (props.workspace ? [props.workspace] : []) : workspaces;
+  const workspace =
+    props.workspace !== undefined
+      ? props.workspace
+      : selectedWorkspaceId
+        ? (workspaces.find((entry) => entry.id === selectedWorkspaceId) ?? workspaces[0] ?? null)
+        : (workspaces[0] ?? null);
+  const runtime =
+    props.runtime !== undefined
+      ? props.runtime
+      : workspace
+        ? (workspaceRuntimeById[workspace.id] ?? null)
+        : null;
 
-  const refreshBackups = props.onRefresh
-    ?? (workspace ? () => requestWorkspaceBackupsFromStore(workspace.id) : undefined);
-  const createCheckpoint = props.onCreateCheckpoint
-    ?? (workspace ? (targetSessionId: string) => createWorkspaceBackupCheckpointFromStore(workspace.id, targetSessionId) : undefined);
-  const restoreOriginal = props.onRestoreOriginal
-    ?? (workspace ? (targetSessionId: string) => restoreWorkspaceBackupOriginalFromStore(workspace.id, targetSessionId) : undefined);
-  const restoreCheckpoint = props.onRestoreCheckpoint
-    ?? (workspace ? (targetSessionId: string, checkpointId: string) => restoreWorkspaceBackupCheckpointFromStore(workspace.id, targetSessionId, checkpointId) : undefined);
-  const deleteCheckpoint = props.onDeleteCheckpoint
-    ?? (workspace ? (targetSessionId: string, checkpointId: string) => deleteWorkspaceBackupCheckpointFromStore(workspace.id, targetSessionId, checkpointId) : undefined);
-  const deleteEntry = props.onDeleteEntry
-    ?? (workspace ? (targetSessionId: string) => deleteWorkspaceBackupEntryFromStore(workspace.id, targetSessionId) : undefined);
-  const setSessionBackupsEnabled = props.onSetSessionBackupsEnabled
-    ?? (workspace ? (targetSessionId: string, enabled: boolean) => setWorkspaceBackupSessionEnabledFromStore(workspace.id, targetSessionId, enabled) : undefined);
-  const revealFolder = props.onRevealFolder ?? (async (folderPath: string) => await revealPath({ path: folderPath }));
+  const refreshBackups =
+    props.onRefresh ??
+    (workspace ? () => requestWorkspaceBackupsFromStore(workspace.id) : undefined);
+  const createCheckpoint =
+    props.onCreateCheckpoint ??
+    (workspace
+      ? (targetSessionId: string) =>
+          createWorkspaceBackupCheckpointFromStore(workspace.id, targetSessionId)
+      : undefined);
+  const restoreOriginal =
+    props.onRestoreOriginal ??
+    (workspace
+      ? (targetSessionId: string) =>
+          restoreWorkspaceBackupOriginalFromStore(workspace.id, targetSessionId)
+      : undefined);
+  const restoreCheckpoint =
+    props.onRestoreCheckpoint ??
+    (workspace
+      ? (targetSessionId: string, checkpointId: string) =>
+          restoreWorkspaceBackupCheckpointFromStore(workspace.id, targetSessionId, checkpointId)
+      : undefined);
+  const deleteCheckpoint =
+    props.onDeleteCheckpoint ??
+    (workspace
+      ? (targetSessionId: string, checkpointId: string) =>
+          deleteWorkspaceBackupCheckpointFromStore(workspace.id, targetSessionId, checkpointId)
+      : undefined);
+  const deleteEntry =
+    props.onDeleteEntry ??
+    (workspace
+      ? (targetSessionId: string) =>
+          deleteWorkspaceBackupEntryFromStore(workspace.id, targetSessionId)
+      : undefined);
+  const setSessionBackupsEnabled =
+    props.onSetSessionBackupsEnabled ??
+    (workspace
+      ? (targetSessionId: string, enabled: boolean) =>
+          setWorkspaceBackupSessionEnabledFromStore(workspace.id, targetSessionId, enabled)
+      : undefined);
+  const revealFolder =
+    props.onRevealFolder ?? (async (folderPath: string) => await revealPath({ path: folderPath }));
 
   const [selectedTargetSessionId, setSelectedTargetSessionId] = useState<string | null>(null);
   const [selectedCheckpointId, setSelectedCheckpointId] = useState<string | null>(null);
@@ -556,26 +709,39 @@ export function BackupPage(props: BackupPageProps = {}) {
 
   const entries = runtime?.workspaceBackups ?? [];
   const sortedEntries = sortByUpdated(entries);
-  const activeTargetSessionId = selectedTargetSessionId ?? sortedEntries[0]?.targetSessionId ?? null;
+  const activeTargetSessionId =
+    selectedTargetSessionId ?? sortedEntries[0]?.targetSessionId ?? null;
 
   useEffect(() => {
     const selectedEntry = activeTargetSessionId
-      ? sortedEntries.find((entry) => entry.targetSessionId === activeTargetSessionId) ?? null
+      ? (sortedEntries.find((entry) => entry.targetSessionId === activeTargetSessionId) ?? null)
       : null;
 
     if (selectedEntry && selectedCheckpointId) {
-      const checkpointStillExists = selectedEntry.checkpoints.some((cp) => cp.id === selectedCheckpointId);
+      const checkpointStillExists = selectedEntry.checkpoints.some(
+        (cp) => cp.id === selectedCheckpointId,
+      );
       if (!checkpointStillExists) setSelectedCheckpointId(null);
     }
   }, [sortedEntries, activeTargetSessionId, selectedCheckpointId]);
 
   const requestSelectedDelta = useEffectEvent(() => {
     if (!workspace?.id || !selectedTargetSessionId || !selectedCheckpointId) return;
-    void requestWorkspaceBackupDeltaFromStore(workspace.id, selectedTargetSessionId, selectedCheckpointId);
+    void requestWorkspaceBackupDeltaFromStore(
+      workspace.id,
+      selectedTargetSessionId,
+      selectedCheckpointId,
+    );
   });
 
   useEffect(() => {
-    if (!workspace?.id || !runtime?.controlSessionId || !activeTargetSessionId || !selectedCheckpointId) return;
+    if (
+      !workspace?.id ||
+      !runtime?.controlSessionId ||
+      !activeTargetSessionId ||
+      !selectedCheckpointId
+    )
+      return;
     requestSelectedDelta();
   }, [workspace?.id, runtime?.controlSessionId, activeTargetSessionId, selectedCheckpointId]);
 
@@ -586,41 +752,53 @@ export function BackupPage(props: BackupPageProps = {}) {
   const deltaError = runtime?.workspaceBackupDeltaError ?? null;
   const deltaLoading = runtime?.workspaceBackupDeltaLoading ?? false;
 
-  const selectedEntry = sortedEntries.find((entry) => entry.targetSessionId === activeTargetSessionId);
-  const selectedCp = selectedEntry?.checkpoints.find(c => c.id === selectedCheckpointId);
-  const activeDelta = activeTargetSessionId
-    && selectedCheckpointId
-    && deltaPreview?.targetSessionId === activeTargetSessionId
-    && deltaPreview?.checkpointId === selectedCheckpointId
-    ? deltaPreview
+  const selectedEntry = sortedEntries.find(
+    (entry) => entry.targetSessionId === activeTargetSessionId,
+  );
+  const selectedCp = selectedEntry?.checkpoints.find((c) => c.id === selectedCheckpointId);
+  const activeDelta =
+    activeTargetSessionId &&
+    selectedCheckpointId &&
+    deltaPreview?.targetSessionId === activeTargetSessionId &&
+    deltaPreview?.checkpointId === selectedCheckpointId
+      ? deltaPreview
+      : null;
+  const selectedThread =
+    selectedEntry && workspace
+      ? (threads.find(
+          (thread) =>
+            thread.workspaceId === workspace.id &&
+            threadRuntimeById[thread.id]?.sessionId === selectedEntry.targetSessionId,
+        ) ?? null)
+      : null;
+  const selectedThreadRuntime = selectedThread
+    ? (threadRuntimeById[selectedThread.id] ?? null)
     : null;
-  const selectedThread = selectedEntry && workspace
-    ? threads.find((thread) => (
-        thread.workspaceId === workspace.id
-          && threadRuntimeById[thread.id]?.sessionId === selectedEntry.targetSessionId
-      )) ?? null
-    : null;
-  const selectedThreadRuntime = selectedThread ? threadRuntimeById[selectedThread.id] ?? null : null;
   const canToggleSelectedEntry = Boolean(
-    selectedEntry
-      && selectedEntry.lifecycle === "active"
-      && selectedThreadRuntime?.sessionId,
+    selectedEntry && selectedEntry.lifecycle === "active" && selectedThreadRuntime?.sessionId,
   );
   const selectedBackupsEnabled = selectedThreadRuntime?.sessionConfig?.backupsEnabled ?? null;
 
   const settingsChrome = useOptionalSettingsChrome();
   useEffect(() => {
     if (!settingsChrome) return;
-    return () => { settingsChrome.setChrome(null); };
+    return () => {
+      settingsChrome.setChrome(null);
+    };
   }, [settingsChrome]);
 
   if (!workspace) {
     return (
-      <div className="flex min-h-[220px] flex-col items-center justify-center px-4 py-10" data-backup-page="true">
+      <div
+        className="flex min-h-[220px] flex-col items-center justify-center px-4 py-10"
+        data-backup-page="true"
+      >
         <Card className="w-full max-w-md border-border/80 bg-card/85">
           <CardContent className="p-8 text-center">
             <ArchiveIcon className="mx-auto mb-4 h-12 w-12 text-muted-foreground/30" />
-            <p className="text-muted-foreground">Select a workspace first to manage its backup history.</p>
+            <p className="text-muted-foreground">
+              Select a workspace first to manage its backup history.
+            </p>
           </CardContent>
         </Card>
       </div>
@@ -628,10 +806,7 @@ export function BackupPage(props: BackupPageProps = {}) {
   }
 
   return (
-    <div
-      className="flex h-full min-h-0 flex-col gap-0"
-      data-backup-page="true"
-    >
+    <div className="flex h-full min-h-0 flex-col gap-0" data-backup-page="true">
       <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 px-5 py-2.5 max-[960px]:px-4">
         <label className="flex max-w-full items-center gap-2 rounded-md border border-border/70 bg-background px-2.5 py-1.5 text-xs sm:text-sm">
           <Checkbox
@@ -647,13 +822,20 @@ export function BackupPage(props: BackupPageProps = {}) {
           </span>
         </label>
         {workspacePickerEnabled && workspaceList.length > 1 && props.workspace === undefined && (
-          <Select value={workspace.id} onValueChange={(val) => { if (val !== workspace.id) void selectWorkspaceFromStore(val); }}>
+          <Select
+            value={workspace.id}
+            onValueChange={(val) => {
+              if (val !== workspace.id) void selectWorkspaceFromStore(val);
+            }}
+          >
             <SelectTrigger className="h-9 w-[min(200px,100%)] border-border/70 bg-background text-sm">
               <SelectValue placeholder="Select workspace" />
             </SelectTrigger>
             <SelectContent>
               {workspaceList.map((ws) => (
-                <SelectItem key={ws.id} value={ws.id}>{ws.name}</SelectItem>
+                <SelectItem key={ws.id} value={ws.id}>
+                  {ws.name}
+                </SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -668,17 +850,20 @@ export function BackupPage(props: BackupPageProps = {}) {
       ) : null}
 
       {/* Main Split-Pane Layout - Full Page */}
-      <div
-        className="flex min-h-0 flex-1 overflow-hidden bg-transparent"
-        data-backup-split="true"
-      >
+      <div className="flex min-h-0 flex-1 overflow-hidden bg-transparent" data-backup-split="true">
         <BackupSidebar
           entries={sortedEntries}
           selectedTargetSessionId={selectedTargetSessionId}
           selectedCheckpointId={selectedCheckpointId}
           loading={loading}
-          onSelectEntry={(id) => { setSelectedTargetSessionId(id); setSelectedCheckpointId(null); }}
-          onSelectCheckpoint={(entryId, cpId) => { setSelectedTargetSessionId(entryId); setSelectedCheckpointId(cpId); }}
+          onSelectEntry={(id) => {
+            setSelectedTargetSessionId(id);
+            setSelectedCheckpointId(null);
+          }}
+          onSelectCheckpoint={(entryId, cpId) => {
+            setSelectedTargetSessionId(entryId);
+            setSelectedCheckpointId(cpId);
+          }}
           onRefresh={() => void refreshBackups?.()}
         />
 
@@ -690,7 +875,8 @@ export function BackupPage(props: BackupPageProps = {}) {
               <div className="space-y-2 max-w-sm">
                 <p className="text-sm font-medium text-foreground">Select a backup to inspect</p>
                 <p className="text-xs">
-                  Cowork creates recovery snapshots when you chat. Select a session to view its checkpoints, or select a checkpoint to see what files changed.
+                  Cowork creates recovery snapshots when you chat. Select a session to view its
+                  checkpoints, or select a checkpoint to see what files changed.
                 </p>
               </div>
             </div>

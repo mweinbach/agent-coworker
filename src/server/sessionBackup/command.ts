@@ -12,7 +12,7 @@ const errorMessageSchema = z.object({ message: z.string() }).passthrough();
 export async function runCommand(
   command: string,
   args: string[],
-  opts: { cwd?: string } = {}
+  opts: { cwd?: string } = {},
 ): Promise<CommandResult> {
   let child: ReturnType<typeof spawn>;
   try {

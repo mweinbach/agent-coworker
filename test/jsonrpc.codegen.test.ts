@@ -30,12 +30,12 @@ describe("JSON-RPC schema codegen", () => {
       fs.readFile(path.join(root, "docs/generated/websocket-jsonrpc.d.ts"), "utf-8"),
     ]);
 
-    expect(jsonSchemaFile).toContain("\"cowork/provider/catalog/read\"");
-    expect(jsonSchemaFile).toContain("\"cowork/session/defaults/apply\"");
-    expect(jsonSchemaFile).toContain("\"cowork/backups/workspace/read\"");
+    expect(jsonSchemaFile).toContain('"cowork/provider/catalog/read"');
+    expect(jsonSchemaFile).toContain('"cowork/session/defaults/apply"');
+    expect(jsonSchemaFile).toContain('"cowork/backups/workspace/read"');
 
-    expect(tsFile).toContain("\"cowork/provider/catalog/read\"");
-    expect(tsFile).toContain("\"cowork/session/defaults/apply\"");
-    expect(tsFile).toContain("\"cowork/backups/workspace/read\"");
+    expect(tsFile).toContain('"cowork/provider/catalog/read"');
+    expect(tsFile).toContain('"cowork/session/defaults/apply"');
+    expect(tsFile).toContain('"cowork/backups/workspace/read"');
   });
 });

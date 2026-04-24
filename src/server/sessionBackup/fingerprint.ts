@@ -5,7 +5,10 @@ import path from "node:path";
 
 import { MODEL_SCRATCHPAD_DIRNAME } from "../../shared/toolOutputOverflow";
 
-async function updateHashWithFileContent(hash: ReturnType<typeof createHash>, filePath: string): Promise<void> {
+async function updateHashWithFileContent(
+  hash: ReturnType<typeof createHash>,
+  filePath: string,
+): Promise<void> {
   const stream = createReadStream(filePath);
   for await (const chunk of stream) {
     hash.update(chunk);
@@ -15,7 +18,7 @@ async function updateHashWithFileContent(hash: ReturnType<typeof createHash>, fi
 async function updateHashWithDirectory(
   hash: ReturnType<typeof createHash>,
   rootDir: string,
-  currentDir: string
+  currentDir: string,
 ): Promise<void> {
   const entries = await fs.readdir(currentDir, { withFileTypes: true });
   entries.sort((a, b) => a.name.localeCompare(b.name));

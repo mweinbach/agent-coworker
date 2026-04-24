@@ -12,11 +12,7 @@ export async function exportResearch(opts: {
   format: ResearchExportFormat;
 }): Promise<{ path: string; sizeBytes: number }> {
   const filename =
-    opts.format === "markdown"
-      ? "report.md"
-      : opts.format === "pdf"
-        ? "report.pdf"
-        : "report.docx";
+    opts.format === "markdown" ? "report.md" : opts.format === "pdf" ? "report.pdf" : "report.docx";
   const outputPath = path.join(opts.rootDir, filename);
   await ensurePrivateDirectory(path.dirname(outputPath));
 

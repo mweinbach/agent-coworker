@@ -22,8 +22,7 @@ export default function ThreadsScreen() {
       return true;
     }
     return (
-      thread.title.toLowerCase().includes(query)
-      || thread.preview.toLowerCase().includes(query)
+      thread.title.toLowerCase().includes(query) || thread.preview.toLowerCase().includes(query)
     );
   });
 
@@ -74,7 +73,10 @@ export default function ThreadsScreen() {
                 >
                   <View style={{ flexDirection: "row", justifyContent: "space-between", gap: 12 }}>
                     <View style={{ flex: 1, gap: 5 }}>
-                      <Text selectable style={{ color: theme.text, fontSize: 16, fontWeight: "700" }}>
+                      <Text
+                        selectable
+                        style={{ color: theme.text, fontSize: 16, fontWeight: "700" }}
+                      >
                         {thread.title}
                       </Text>
                       <Text

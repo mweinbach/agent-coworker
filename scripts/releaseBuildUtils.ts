@@ -54,19 +54,19 @@ function normalizeBuildArch(arch: string): string {
 
 export function resolveBuildTarget(
   argv: string[],
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
 ): BuildTarget {
   const envPlatform = env.COWORK_BUILD_PLATFORM?.trim() ? env.COWORK_BUILD_PLATFORM : undefined;
   const envArch = env.COWORK_BUILD_ARCH?.trim() ? env.COWORK_BUILD_ARCH : undefined;
   const explicitPlatform =
-    parseFlagValue(argv, "--target-platform", "--platform")
-    ?? (argv.includes("--windows") ? "win32" : null)
-    ?? (argv.includes("--mac") ? "darwin" : null)
-    ?? (argv.includes("--linux") ? "linux" : null);
+    parseFlagValue(argv, "--target-platform", "--platform") ??
+    (argv.includes("--windows") ? "win32" : null) ??
+    (argv.includes("--mac") ? "darwin" : null) ??
+    (argv.includes("--linux") ? "linux" : null);
   const explicitArch =
-    parseFlagValue(argv, "--target-arch", "--arch")
-    ?? (argv.includes("--arm64") ? "arm64" : null)
-    ?? (argv.includes("--x64") ? "x64" : null);
+    parseFlagValue(argv, "--target-arch", "--arch") ??
+    (argv.includes("--arm64") ? "arm64" : null) ??
+    (argv.includes("--x64") ? "x64" : null);
 
   return {
     platform: normalizeBuildPlatform(explicitPlatform ?? envPlatform ?? process.platform),
@@ -119,7 +119,7 @@ export async function runCommand(
   options: {
     cwd: string;
     env?: NodeJS.ProcessEnv;
-  }
+  },
 ): Promise<void> {
   const proc = Bun.spawn(command, {
     cwd: options.cwd,
@@ -139,11 +139,18 @@ function psQuoteSingle(value: string): string {
 
 async function extractZipArchive(archivePath: string, destDir: string): Promise<void> {
   if (process.platform === "win32") {
-    const command =
-      `Expand-Archive -Path ${psQuoteSingle(archivePath)} -DestinationPath ${psQuoteSingle(destDir)} -Force`;
+    const command = `Expand-Archive -Path ${psQuoteSingle(archivePath)} -DestinationPath ${psQuoteSingle(destDir)} -Force`;
     await runCommand(
-      ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
-      { cwd: path.dirname(destDir) }
+      [
+        "powershell.exe",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        command,
+      ],
+      { cwd: path.dirname(destDir) },
     );
     return;
   }
@@ -196,12 +203,21 @@ function resolveBunRuntimeAssetName(target: BuildTarget): string {
 
 export async function ensureBundledBunRuntime(
   root: string,
-  target: BuildTarget
+  target: BuildTarget,
 ): Promise<{ executablePath: string; version: string }> {
   const assetName = resolveBunRuntimeAssetName(target);
   const version = Bun.version;
-  const cacheDir = path.join(root, "dist", ".bun-runtime-cache", `bun-v${version}`, `${target.platform}-${target.arch}`);
-  const bundledExecutablePath = path.join(cacheDir, target.platform === "win32" ? "bun.exe" : "bun");
+  const cacheDir = path.join(
+    root,
+    "dist",
+    ".bun-runtime-cache",
+    `bun-v${version}`,
+    `${target.platform}-${target.arch}`,
+  );
+  const bundledExecutablePath = path.join(
+    cacheDir,
+    target.platform === "win32" ? "bun.exe" : "bun",
+  );
 
   if (await pathExists(bundledExecutablePath)) {
     return { executablePath: bundledExecutablePath, version };
@@ -216,14 +232,19 @@ export async function ensureBundledBunRuntime(
 
   const response = await fetch(downloadUrl);
   if (!response.ok) {
-    throw new Error(`Failed to download Bun runtime from ${downloadUrl}: ${response.status} ${response.statusText}`);
+    throw new Error(
+      `Failed to download Bun runtime from ${downloadUrl}: ${response.status} ${response.statusText}`,
+    );
   }
 
   await Bun.write(archivePath, response);
   await fs.mkdir(extractDir, { recursive: true });
   await extractZipArchive(archivePath, extractDir);
 
-  const extractedExecutablePath = await findFileRecursive(extractDir, path.basename(bundledExecutablePath));
+  const extractedExecutablePath = await findFileRecursive(
+    extractDir,
+    path.basename(bundledExecutablePath),
+  );
   if (!extractedExecutablePath) {
     throw new Error(`Unable to find ${path.basename(bundledExecutablePath)} in ${assetName}`);
   }

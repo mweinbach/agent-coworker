@@ -1,25 +1,29 @@
 import { z } from "zod";
 
 import { getAiCoworkerPaths } from "../store/connections";
+import { resolveAuthHomeDir } from "../utils/authHome";
 import { readToolApiKey } from "./api-keys";
 import type { ToolContext } from "./context";
-import { resolveAuthHomeDir } from "../utils/authHome";
 
 const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
 const stringSchema = z.string();
 const arraySchema = z.array(z.unknown());
 const recordSchema = z.record(z.string(), z.unknown());
 const exaTextObjectSchema = z.object({ text: stringSchema }).passthrough();
-const exaContentsResultSchema = z.object({
-  title: stringSchema.optional(),
-  url: stringSchema.optional(),
-  text: z.unknown().optional(),
-  highlights: z.unknown().optional(),
-  extras: z.unknown().optional(),
-}).passthrough();
-const exaContentsResponseSchema = z.object({
-  results: z.array(exaContentsResultSchema).optional(),
-}).passthrough();
+const exaContentsResultSchema = z
+  .object({
+    title: stringSchema.optional(),
+    url: stringSchema.optional(),
+    text: z.unknown().optional(),
+    highlights: z.unknown().optional(),
+    extras: z.unknown().optional(),
+  })
+  .passthrough();
+const exaContentsResponseSchema = z
+  .object({
+    results: z.array(exaContentsResultSchema).optional(),
+  })
+  .passthrough();
 
 export const EXA_MISSING_KEY_MESSAGE = "set EXA_API_KEY or save Exa API key in provider settings";
 
@@ -63,7 +67,7 @@ function getExaStringList(value: unknown): string[] {
       nested.data.url,
       nested.data.href,
       nested.data.src,
-      nested.data.link
+      nested.data.link,
     );
     if (nestedString) items.push(nestedString);
   }
@@ -142,7 +146,8 @@ export async function fetchExaContents(opts: {
   const extras = recordSchema.safeParse(result.extras);
   const links = getExaStringList(extras.success ? extras.data.links : undefined);
   const imageLinks = getExaStringList(extras.success ? extras.data.imageLinks : undefined);
-  const text = getExaText(result.text).trim() || getExaStringList(result.highlights).join("\n\n").trim();
+  const text =
+    getExaText(result.text).trim() || getExaStringList(result.highlights).join("\n\n").trim();
   if (!text && links.length === 0 && imageLinks.length === 0) {
     throw new Error(`Exa contents returned no content for ${opts.url}`);
   }

@@ -14,7 +14,7 @@ type AttachmentSizeLike = { size: number };
 type AttachmentValidationInput = AttachmentCountLike | readonly AttachmentSizeLike[];
 
 function getAttachmentLength(input?: AttachmentValidationInput): number {
-  return Array.isArray(input) ? input.length : input?.length ?? 0;
+  return Array.isArray(input) ? input.length : (input?.length ?? 0);
 }
 
 function getAttachmentByteLengths(input?: AttachmentValidationInput): number[] {
@@ -48,11 +48,13 @@ export function getAttachmentPickerValidationMessage(
   if (totalCount === 0) {
     return null;
   }
-  return getAttachmentCountValidationMessage(totalCount)
-    ?? getAttachmentUploadByteLengthValidationMessage([
+  return (
+    getAttachmentCountValidationMessage(totalCount) ??
+    getAttachmentUploadByteLengthValidationMessage([
       ...getAttachmentByteLengths(existingAttachments),
       ...getAttachmentByteLengths(selectedFiles),
-    ]);
+    ])
+  );
 }
 
 export function getAttachmentUploadValidationMessage(byteLength: number): string | null {

@@ -6,8 +6,8 @@ import {
   type ThreadModelStreamRuntime,
 } from "../store.feedMapping";
 import type { AppStoreState } from "../store.helpers";
-import { createDefaultA2uiDock } from "../types";
 import type { CachedSessionSnapshot, ThreadRuntime, WorkspaceRuntime } from "../types";
+import { createDefaultA2uiDock } from "../types";
 
 export type PendingThreadSteer = {
   clientMessageId: string;
@@ -46,7 +46,10 @@ export type RuntimeMaps = {
   pluginInstallWaiters: Map<string, SkillInstallWaiter>;
   optimisticUserMessageIds: Map<string, Set<string>>;
   pendingThreadMessages: Map<string, string[]>;
-  pendingThreadAttachments: Map<string, Array<import("./jsonRpcSocket").FileAttachmentInput[] | undefined>>;
+  pendingThreadAttachments: Map<
+    string,
+    Array<import("./jsonRpcSocket").FileAttachmentInput[] | undefined>
+  >;
   pendingThreadSteers: Map<string, Map<string, PendingThreadSteer>>;
   threadSelectionRequests: Map<string, number>;
   nextThreadSelectionRequestId: number;
@@ -97,7 +100,11 @@ export function resetModelStreamRuntime(threadId: string) {
   RUNTIME.modelStreamByThread.set(threadId, createThreadModelStreamRuntime());
 }
 
-export function queuePendingThreadMessage(threadId: string, text: string, attachments?: import("./jsonRpcSocket").FileAttachmentInput[]) {
+export function queuePendingThreadMessage(
+  threadId: string,
+  text: string,
+  attachments?: import("./jsonRpcSocket").FileAttachmentInput[],
+) {
   const trimmed = text.trim();
   if (!trimmed && (!attachments || attachments.length === 0)) return;
   const existing = RUNTIME.pendingThreadMessages.get(threadId) ?? [];
@@ -108,7 +115,9 @@ export function queuePendingThreadMessage(threadId: string, text: string, attach
   RUNTIME.pendingThreadAttachments.set(threadId, existingAttachments);
 }
 
-export function shiftPendingThreadAttachments(threadId: string): import("./jsonRpcSocket").FileAttachmentInput[] | undefined {
+export function shiftPendingThreadAttachments(
+  threadId: string,
+): import("./jsonRpcSocket").FileAttachmentInput[] | undefined {
   const existing = RUNTIME.pendingThreadAttachments.get(threadId);
   if (!existing || existing.length === 0) return undefined;
   const next = existing.shift();
@@ -164,7 +173,8 @@ export function prependPendingThreadMessageWithAttachments(
 }
 
 export function rememberPendingThreadSteer(threadId: string, steer: PendingThreadSteer) {
-  const existing = RUNTIME.pendingThreadSteers.get(threadId) ?? new Map<string, PendingThreadSteer>();
+  const existing =
+    RUNTIME.pendingThreadSteers.get(threadId) ?? new Map<string, PendingThreadSteer>();
   existing.set(steer.clientMessageId, steer);
   RUNTIME.pendingThreadSteers.set(threadId, existing);
 }

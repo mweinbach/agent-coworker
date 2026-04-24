@@ -1,3 +1,4 @@
+import type { MCPServerOAuthPending } from "../../../mcp/authStore";
 import {
   completeMCPServerOAuth,
   readMCPServerOAuthClientInformation,
@@ -6,11 +7,14 @@ import {
   setMCPServerOAuthClientInformation,
   setMCPServerOAuthPending,
 } from "../../../mcp/authStore";
-import type { MCPServerOAuthPending } from "../../../mcp/authStore";
 import type { MCPRegistryServer } from "../../../mcp/configRegistry";
-import { authorizeMCPServerOAuth, consumeCapturedOAuthCode, exchangeMCPServerOAuthCode } from "../../../mcp/oauthProvider";
+import {
+  authorizeMCPServerOAuth,
+  consumeCapturedOAuthCode,
+  exchangeMCPServerOAuthCode,
+} from "../../../mcp/oauthProvider";
 import type { SessionContext } from "../SessionContext";
-import { McpServerResolver } from "./McpServerResolver";
+import type { McpServerResolver } from "./McpServerResolver";
 
 const AUTO_OAUTH_POLL_INTERVAL_MS = 250;
 
@@ -73,7 +77,7 @@ export class McpAuthFlow {
         name: server.name,
         ok: false,
         mode: "missing",
-        message: `MCP server \"${server.name}\" does not support OAuth authorization.`,
+        message: `MCP server "${server.name}" does not support OAuth authorization.`,
       });
       return;
     }
@@ -85,7 +89,10 @@ export class McpAuthFlow {
         server,
       });
 
-      const result = await this.deps.authorizeMCPServerOAuth(server, storedClientState.clientInformation);
+      const result = await this.deps.authorizeMCPServerOAuth(
+        server,
+        storedClientState.clientInformation,
+      );
       if (result.clientInformation) {
         await setMCPServerOAuthClientInformation({
           config: this.context.state.config,
@@ -134,7 +141,7 @@ export class McpAuthFlow {
         name: server.name,
         ok: false,
         mode: "missing",
-        message: `MCP server \"${server.name}\" does not support OAuth authorization.`,
+        message: `MCP server "${server.name}" does not support OAuth authorization.`,
       });
       return null;
     }
@@ -146,7 +153,10 @@ export class McpAuthFlow {
         this.cancelAutoOAuthCompletion(server.name);
       }
 
-      const pendingState = await readMCPServerOAuthPending({ config: this.context.state.config, server });
+      const pendingState = await readMCPServerOAuthPending({
+        config: this.context.state.config,
+        server,
+      });
       const pending = pendingState.pending;
       if (!pending) {
         this.context.emit({
@@ -236,7 +246,10 @@ export class McpAuthFlow {
     const deadlineMs = Number.isFinite(expiresAt) ? expiresAt : Date.now() + 10 * 60_000;
 
     while (!signal.aborted && Date.now() < deadlineMs) {
-      const pendingState = await readMCPServerOAuthPending({ config: this.context.state.config, server });
+      const pendingState = await readMCPServerOAuthPending({
+        config: this.context.state.config,
+        server,
+      });
       const currentPending = pendingState.pending;
       if (!currentPending || currentPending.challengeId !== pending.challengeId) {
         return;
@@ -251,7 +264,10 @@ export class McpAuthFlow {
       const ready = await this.waitForConnectionIdle(deadlineMs, signal);
       if (!ready) return;
 
-      const latestPendingState = await readMCPServerOAuthPending({ config: this.context.state.config, server });
+      const latestPendingState = await readMCPServerOAuthPending({
+        config: this.context.state.config,
+        server,
+      });
       const latestPending = latestPendingState.pending;
       if (!latestPending || latestPending.challengeId !== pending.challengeId) {
         return;
@@ -323,7 +339,7 @@ export class McpAuthFlow {
         name: server.name,
         ok: false,
         mode: "missing",
-        message: `MCP server \"${server.name}\" is not configured for API key auth.`,
+        message: `MCP server "${server.name}" is not configured for API key auth.`,
       });
       return null;
     }

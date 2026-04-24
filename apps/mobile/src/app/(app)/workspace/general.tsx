@@ -33,7 +33,13 @@ function ChoicePill({
         paddingVertical: 7,
       }}
     >
-      <Text style={{ color: selected ? theme.primaryText : theme.text, fontSize: 13, fontWeight: "700" }}>
+      <Text
+        style={{
+          color: selected ? theme.primaryText : theme.text,
+          fontSize: 13,
+          fontWeight: "700",
+        }}
+      >
         {label}
       </Text>
     </Pressable>
@@ -43,7 +49,14 @@ function ChoicePill({
 function SectionLabel({ children }: { children: string }) {
   const theme = useAppTheme();
   return (
-    <Text style={{ color: theme.textTertiary, fontSize: 11, fontWeight: "700", textTransform: "uppercase" }}>
+    <Text
+      style={{
+        color: theme.textTertiary,
+        fontSize: 11,
+        fontWeight: "700",
+        textTransform: "uppercase",
+      }}
+    >
       {children}
     </Text>
   );
@@ -83,12 +96,14 @@ export default function WorkspaceGeneralScreen() {
     [catalog, selectedProvider],
   );
   const routingMode = controlSnapshot?.sessionConfig?.childModelRoutingMode ?? "same-provider";
-  const backupsEnabled = controlSnapshot?.sessionConfig?.backupsEnabled === undefined
-    ? true
-    : controlSnapshot.sessionConfig.backupsEnabled === true;
-  const enableMcp = controlSnapshot?.settings?.enableMcp === undefined
-    ? true
-    : controlSnapshot.settings.enableMcp === true;
+  const backupsEnabled =
+    controlSnapshot?.sessionConfig?.backupsEnabled === undefined
+      ? true
+      : controlSnapshot.sessionConfig.backupsEnabled === true;
+  const enableMcp =
+    controlSnapshot?.settings?.enableMcp === undefined
+      ? true
+      : controlSnapshot.settings.enableMcp === true;
   const codexOptions = controlSnapshot?.sessionConfig?.providerOptions?.["codex-cli"];
   const googleOptions = controlSnapshot?.sessionConfig?.providerOptions?.google;
 
@@ -109,9 +124,13 @@ export default function WorkspaceGeneralScreen() {
   if (!isConnected) {
     return (
       <Screen scroll>
-        <SectionCard title="General" description="Connect to a desktop to manage workspace defaults.">
+        <SectionCard
+          title="General"
+          description="Connect to a desktop to manage workspace defaults."
+        >
           <Text selectable style={{ color: theme.textSecondary, fontSize: 14, lineHeight: 21 }}>
-            Workspace defaults stay disabled until the secure relay is connected to a desktop session.
+            Workspace defaults stay disabled until the secure relay is connected to a desktop
+            session.
           </Text>
         </SectionCard>
       </Screen>
@@ -126,11 +145,15 @@ export default function WorkspaceGeneralScreen() {
         action={selectedModel ? <StatusPill label={selectedModel} tone="primary" /> : undefined}
       >
         <Text selectable style={{ color: theme.textSecondary, fontSize: 14, lineHeight: 21 }}>
-          Workspace defaults apply to the shared control session. Thread-specific overrides still belong on thread screens.
+          Workspace defaults apply to the shared control session. Thread-specific overrides still
+          belong on thread screens.
         </Text>
       </SectionCard>
 
-      <SectionCard title="Workspace defaults" description="Choose the default provider, model, and workspace toggles.">
+      <SectionCard
+        title="Workspace defaults"
+        description="Choose the default provider, model, and workspace toggles."
+      >
         <View style={{ gap: 14 }}>
           <View style={{ gap: 8 }}>
             <SectionLabel>Provider</SectionLabel>
@@ -220,7 +243,10 @@ export default function WorkspaceGeneralScreen() {
         </View>
       </SectionCard>
 
-      <SectionCard title="Web Search" description="Provider-specific workspace defaults for relay-backed search behavior.">
+      <SectionCard
+        title="Web Search"
+        description="Provider-specific workspace defaults for relay-backed search behavior."
+      >
         {selectedProvider === "codex-cli" ? (
           <View style={{ gap: 14 }}>
             <View style={{ gap: 8 }}>
@@ -283,7 +309,9 @@ export default function WorkspaceGeneralScreen() {
             }}
           >
             <View style={{ flex: 1, gap: 3 }}>
-              <Text style={{ color: theme.text, fontSize: 15, fontWeight: "700" }}>Native Web Search</Text>
+              <Text style={{ color: theme.text, fontSize: 15, fontWeight: "700" }}>
+                Native Web Search
+              </Text>
               <Text style={{ color: theme.textSecondary, fontSize: 13 }}>
                 Let Gemini use provider-native web search from the workspace defaults.
               </Text>
@@ -312,7 +340,10 @@ export default function WorkspaceGeneralScreen() {
         )}
       </SectionCard>
 
-      <SectionCard title="Subagent Models" description="Workspace-level child-model routing defaults.">
+      <SectionCard
+        title="Subagent Models"
+        description="Workspace-level child-model routing defaults."
+      >
         <View style={{ gap: 14 }}>
           <View style={{ gap: 8 }}>
             <SectionLabel>Routing</SectionLabel>
@@ -420,7 +451,9 @@ export default function WorkspaceGeneralScreen() {
               paddingVertical: 11,
             })}
           >
-            <Text style={{ color: theme.primaryText, fontWeight: "700" }}>Save routing defaults</Text>
+            <Text style={{ color: theme.primaryText, fontWeight: "700" }}>
+              Save routing defaults
+            </Text>
           </Pressable>
         </View>
       </SectionCard>

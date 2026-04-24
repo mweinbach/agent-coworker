@@ -17,15 +17,15 @@ import {
 } from "@aws-sdk/client-bedrock-runtime";
 
 import { calculateCost } from "../../node_modules/@mariozechner/pi-ai/dist/models.js";
-import { AssistantMessageEventStream } from "../../node_modules/@mariozechner/pi-ai/dist/utils/event-stream.js";
-import { parseStreamingJson } from "../../node_modules/@mariozechner/pi-ai/dist/utils/json-parse.js";
-import { sanitizeSurrogates } from "../../node_modules/@mariozechner/pi-ai/dist/utils/sanitize-unicode.js";
 import {
   adjustMaxTokensForThinking,
   buildBaseOptions,
   clampReasoning,
 } from "../../node_modules/@mariozechner/pi-ai/dist/providers/simple-options.js";
 import { transformMessages } from "../../node_modules/@mariozechner/pi-ai/dist/providers/transform-messages.js";
+import { AssistantMessageEventStream } from "../../node_modules/@mariozechner/pi-ai/dist/utils/event-stream.js";
+import { parseStreamingJson } from "../../node_modules/@mariozechner/pi-ai/dist/utils/json-parse.js";
+import { sanitizeSurrogates } from "../../node_modules/@mariozechner/pi-ai/dist/utils/sanitize-unicode.js";
 
 export const streamBedrock = (model, context, options = {}) => {
   const stream = new AssistantMessageEventStream();
@@ -56,7 +56,8 @@ export const streamBedrock = (model, context, options = {}) => {
     };
 
     if (typeof process !== "undefined" && (process.versions?.node || process.versions?.bun)) {
-      const explicitRegion = options.region || process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION;
+      const explicitRegion =
+        options.region || process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION;
       if (explicitRegion) {
         config.region = explicitRegion;
       } else if (!process.env.AWS_PROFILE && !options.profile) {
@@ -101,7 +102,9 @@ export const streamBedrock = (model, context, options = {}) => {
         inferenceConfig: { maxTokens: options.maxTokens, temperature: options.temperature },
         toolConfig: convertToolConfig(context.tools, options.toolChoice),
         additionalModelRequestFields: buildAdditionalModelRequestFields(model, options),
-        ...(options.requestMetadata !== undefined ? { requestMetadata: options.requestMetadata } : {}),
+        ...(options.requestMetadata !== undefined
+          ? { requestMetadata: options.requestMetadata }
+          : {}),
       };
       const nextCommandInput = await options?.onPayload?.(commandInput, model);
       if (nextCommandInput !== undefined) {
@@ -112,7 +115,9 @@ export const streamBedrock = (model, context, options = {}) => {
       for await (const item of response.stream) {
         if (item.messageStart) {
           if (item.messageStart.role !== ConversationRole.ASSISTANT) {
-            throw new Error("Unexpected assistant message start but got user message start instead");
+            throw new Error(
+              "Unexpected assistant message start but got user message start instead",
+            );
           }
           stream.push({ type: "start", partial: output });
         } else if (item.contentBlockStart) {
@@ -188,7 +193,9 @@ export const streamSimpleBedrock = (model, context, options) => {
       ...(options?.token ? { token: options.token } : {}),
       ...(options?.toolChoice ? { toolChoice: options.toolChoice } : {}),
       ...(options?.requestMetadata ? { requestMetadata: options.requestMetadata } : {}),
-      ...(options?.interleavedThinking !== undefined ? { interleavedThinking: options.interleavedThinking } : {}),
+      ...(options?.interleavedThinking !== undefined
+        ? { interleavedThinking: options.interleavedThinking }
+        : {}),
     });
   }
   if (model.id.includes("anthropic.claude") || model.id.includes("anthropic/claude")) {
@@ -203,7 +210,9 @@ export const streamSimpleBedrock = (model, context, options) => {
         ...(options?.token ? { token: options.token } : {}),
         ...(options?.toolChoice ? { toolChoice: options.toolChoice } : {}),
         ...(options?.requestMetadata ? { requestMetadata: options.requestMetadata } : {}),
-        ...(options?.interleavedThinking !== undefined ? { interleavedThinking: options.interleavedThinking } : {}),
+        ...(options?.interleavedThinking !== undefined
+          ? { interleavedThinking: options.interleavedThinking }
+          : {}),
       });
     }
     const adjusted = adjustMaxTokensForThinking(
@@ -226,7 +235,9 @@ export const streamSimpleBedrock = (model, context, options) => {
       ...(options?.token ? { token: options.token } : {}),
       ...(options?.toolChoice ? { toolChoice: options.toolChoice } : {}),
       ...(options?.requestMetadata ? { requestMetadata: options.requestMetadata } : {}),
-      ...(options?.interleavedThinking !== undefined ? { interleavedThinking: options.interleavedThinking } : {}),
+      ...(options?.interleavedThinking !== undefined
+        ? { interleavedThinking: options.interleavedThinking }
+        : {}),
     });
   }
   return streamBedrock(model, context, {
@@ -239,7 +250,9 @@ export const streamSimpleBedrock = (model, context, options) => {
     ...(options?.token ? { token: options.token } : {}),
     ...(options?.toolChoice ? { toolChoice: options.toolChoice } : {}),
     ...(options?.requestMetadata ? { requestMetadata: options.requestMetadata } : {}),
-    ...(options?.interleavedThinking !== undefined ? { interleavedThinking: options.interleavedThinking } : {}),
+    ...(options?.interleavedThinking !== undefined
+      ? { interleavedThinking: options.interleavedThinking }
+      : {}),
   });
 };
 
@@ -280,12 +293,22 @@ function handleContentBlockDelta(event, blocks, output, stream) {
   } else if (delta?.toolUse && block?.type === "toolCall") {
     block.partialJson = (block.partialJson || "") + (delta.toolUse.input || "");
     block.arguments = parseStreamingJson(block.partialJson);
-    stream.push({ type: "toolcall_delta", contentIndex: index, delta: delta.toolUse.input || "", partial: output });
+    stream.push({
+      type: "toolcall_delta",
+      contentIndex: index,
+      delta: delta.toolUse.input || "",
+      partial: output,
+    });
   } else if (delta?.reasoningContent) {
     let thinkingBlock = block;
     let thinkingIndex = index;
     if (!thinkingBlock) {
-      const newBlock = { type: "thinking", thinking: "", thinkingSignature: "", index: contentBlockIndex };
+      const newBlock = {
+        type: "thinking",
+        thinking: "",
+        thinkingSignature: "",
+        index: contentBlockIndex,
+      };
       output.content.push(newBlock);
       thinkingIndex = blocks.length - 1;
       thinkingBlock = blocks[thinkingIndex];
@@ -330,7 +353,12 @@ function handleContentBlockStop(event, blocks, output, stream) {
       stream.push({ type: "text_end", contentIndex: index, content: block.text, partial: output });
       break;
     case "thinking":
-      stream.push({ type: "thinking_end", contentIndex: index, content: block.thinking, partial: output });
+      stream.push({
+        type: "thinking_end",
+        contentIndex: index,
+        content: block.thinking,
+        partial: output,
+      });
       break;
     case "toolCall":
       block.arguments = parseStreamingJson(block.partialJson);
@@ -397,7 +425,10 @@ function buildSystemPrompt(systemPrompt, model, cacheRetention) {
   const blocks = [{ text: sanitizeSurrogates(systemPrompt) }];
   if (cacheRetention !== "none" && supportsPromptCaching(model)) {
     blocks.push({
-      cachePoint: { type: CachePointType.DEFAULT, ...(cacheRetention === "long" ? { ttl: CacheTTL.ONE_HOUR } : {}) },
+      cachePoint: {
+        type: CachePointType.DEFAULT,
+        ...(cacheRetention === "long" ? { ttl: CacheTTL.ONE_HOUR } : {}),
+      },
     });
   }
   return blocks;
@@ -417,18 +448,19 @@ function convertMessages(context, model, cacheRetention) {
       case "user":
         result.push({
           role: ConversationRole.USER,
-          content: typeof m.content === "string"
-            ? [{ text: sanitizeSurrogates(m.content) }]
-            : m.content.map((c) => {
-                switch (c.type) {
-                  case "text":
-                    return { text: sanitizeSurrogates(c.text) };
-                  case "image":
-                    return { image: createImageBlock(c.mimeType, c.data) };
-                  default:
-                    throw new Error("Unknown user content type");
-                }
-              }),
+          content:
+            typeof m.content === "string"
+              ? [{ text: sanitizeSurrogates(m.content) }]
+              : m.content.map((c) => {
+                  switch (c.type) {
+                    case "text":
+                      return { text: sanitizeSurrogates(c.text) };
+                    case "image":
+                      return { image: createImageBlock(c.mimeType, c.data) };
+                    default:
+                      throw new Error("Unknown user content type");
+                  }
+                }),
         });
         break;
       case "assistant": {
@@ -491,7 +523,8 @@ function convertMessages(context, model, cacheRetention) {
             content: m.content.map((c) =>
               c.type === "image"
                 ? { image: createImageBlock(c.mimeType, c.data) }
-                : { text: sanitizeSurrogates(c.text) }),
+                : { text: sanitizeSurrogates(c.text) },
+            ),
             status: m.isError ? ToolResultStatus.ERROR : ToolResultStatus.SUCCESS,
           },
         });
@@ -504,7 +537,8 @@ function convertMessages(context, model, cacheRetention) {
               content: nextMsg.content.map((c) =>
                 c.type === "image"
                   ? { image: createImageBlock(c.mimeType, c.data) }
-                  : { text: sanitizeSurrogates(c.text) }),
+                  : { text: sanitizeSurrogates(c.text) },
+              ),
               status: nextMsg.isError ? ToolResultStatus.ERROR : ToolResultStatus.SUCCESS,
             },
           });

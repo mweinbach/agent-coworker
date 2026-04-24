@@ -1,4 +1,4 @@
-import { describe, test, expect } from "bun:test";
+import { describe, expect, test } from "bun:test";
 
 import {
   evaluateA2uiFunction,
@@ -31,8 +31,12 @@ describe("evaluateA2uiFunction", () => {
   const model = { name: "Ada", count: 2, items: [1, 2, 3], active: true, empty: "" };
 
   test("if uses then/else branches", () => {
-    expect(evaluateA2uiFunction({ if: { cond: { path: "/active" }, then: "on", else: "off" } }, model)).toBe("on");
-    expect(evaluateA2uiFunction({ if: { cond: { path: "/missing" }, then: "on", else: "off" } }, model)).toBe("off");
+    expect(
+      evaluateA2uiFunction({ if: { cond: { path: "/active" }, then: "on", else: "off" } }, model),
+    ).toBe("on");
+    expect(
+      evaluateA2uiFunction({ if: { cond: { path: "/missing" }, then: "on", else: "off" } }, model),
+    ).toBe("off");
   });
 
   test("not inverts truthiness", () => {
@@ -47,12 +51,18 @@ describe("evaluateA2uiFunction", () => {
   });
 
   test("and/or collapse lists", () => {
-    expect(evaluateA2uiFunction({ and: [{ path: "/active" }, { eq: [{ path: "/count" }, 2] }] }, model)).toBe(true);
-    expect(evaluateA2uiFunction({ or: [{ path: "/empty" }, false, { path: "/active" }] }, model)).toBe(true);
+    expect(
+      evaluateA2uiFunction({ and: [{ path: "/active" }, { eq: [{ path: "/count" }, 2] }] }, model),
+    ).toBe(true);
+    expect(
+      evaluateA2uiFunction({ or: [{ path: "/empty" }, false, { path: "/active" }] }, model),
+    ).toBe(true);
   });
 
   test("concat stringifies and joins", () => {
-    expect(evaluateA2uiFunction({ concat: ["hi ", { path: "/name" }, "!"] }, model)).toBe("hi Ada!");
+    expect(evaluateA2uiFunction({ concat: ["hi ", { path: "/name" }, "!"] }, model)).toBe(
+      "hi Ada!",
+    );
   });
 
   test("length works on arrays, strings, and objects", () => {
@@ -63,10 +73,7 @@ describe("evaluateA2uiFunction", () => {
 
   test("join glues array entries", () => {
     expect(
-      evaluateA2uiFunction(
-        { join: { items: { path: "/items" }, separator: "-" } },
-        model,
-      ),
+      evaluateA2uiFunction({ join: { items: { path: "/items" }, separator: "-" } }, model),
     ).toBe("1-2-3");
   });
 
@@ -85,7 +92,12 @@ describe("evaluateA2uiFunction", () => {
   });
 
   test("coalesce returns the first non-empty value", () => {
-    expect(evaluateA2uiFunction({ coalesce: [{ path: "/missing" }, { path: "/empty" }, "fallback"] }, model)).toBe("fallback");
+    expect(
+      evaluateA2uiFunction(
+        { coalesce: [{ path: "/missing" }, { path: "/empty" }, "fallback"] },
+        model,
+      ),
+    ).toBe("fallback");
   });
 
   test("resolveDynamicWithFunctions falls back to plain bindings", () => {

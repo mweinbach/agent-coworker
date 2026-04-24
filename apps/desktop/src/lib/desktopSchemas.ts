@@ -10,6 +10,7 @@ import {
   OPENAI_REASONING_SUMMARY_VALUES,
   OPENAI_TEXT_VERBOSITY_VALUES,
 } from "../../../../src/shared/openaiCompatibleOptions";
+import type { PersistedState } from "../app/types";
 import type {
   ConfirmActionInput,
   ContextMenuItem,
@@ -23,25 +24,24 @@ import type {
   OpenPathInput,
   PreferredFileAppInput,
   PreviewOSFileInput,
-  SaveExportedFileInput,
   ReadFileForPreviewInput,
   ReadFileInput,
   ReadTranscriptInput,
   RenamePathInput,
   RevealPathInput,
+  SaveExportedFileInput,
   SetWindowAppearanceInput,
   ShowContextMenuInput,
   StartWorkspaceServerInput,
   StopWorkspaceServerInput,
   SystemAppearance,
   TranscriptBatchInput,
+  TrashPathInput,
   UpdaterProgress,
   UpdaterReleaseInfo,
   UpdaterState,
-  TrashPathInput,
   WindowDragPointInput,
 } from "./desktopApi";
-import type { PersistedState } from "../app/types";
 
 const SAFE_ID = /^[A-Za-z0-9_-]{1,256}$/;
 const invalidPathSegmentPattern = /[/\\\0]/;
@@ -76,55 +76,89 @@ const validatedSegmentSchema = nonEmptyStringSchema.refine(
   "invalid path segment",
 );
 
-const providerOptionsSchema = z.object({
-  reasoningEffort: reasoningEffortSchema.optional(),
-  reasoningSummary: reasoningSummarySchema.optional(),
-  textVerbosity: textVerbositySchema.optional(),
-}).strict();
+const providerOptionsSchema = z
+  .object({
+    reasoningEffort: reasoningEffortSchema.optional(),
+    reasoningSummary: reasoningSummarySchema.optional(),
+    textVerbosity: textVerbositySchema.optional(),
+  })
+  .strict();
 
-const codexWebSearchLocationSchema = z.object({
-  country: z.string().trim().min(1).optional(),
-  region: z.string().trim().min(1).optional(),
-  city: z.string().trim().min(1).optional(),
-  timezone: z.string().trim().min(1).optional(),
-}).strict();
+const codexWebSearchLocationSchema = z
+  .object({
+    country: z.string().trim().min(1).optional(),
+    region: z.string().trim().min(1).optional(),
+    city: z.string().trim().min(1).optional(),
+    timezone: z.string().trim().min(1).optional(),
+  })
+  .strict();
 
-const codexCliProviderOptionsSchema = providerOptionsSchema.extend({
-  webSearchBackend: webSearchBackendSchema.optional(),
-  webSearchFallbackBackend: z.enum(LOCAL_WEB_SEARCH_PROVIDER_VALUES).optional(),
-  webSearchMode: webSearchModeSchema.optional(),
-  webSearch: z.object({
-    contextSize: webSearchContextSizeSchema.optional(),
-    allowedDomains: z.array(z.string().trim().min(1)).optional(),
-    location: codexWebSearchLocationSchema.optional(),
-  }).strict().optional(),
-}).strict();
+const codexCliProviderOptionsSchema = providerOptionsSchema
+  .extend({
+    webSearchBackend: webSearchBackendSchema.optional(),
+    webSearchFallbackBackend: z.enum(LOCAL_WEB_SEARCH_PROVIDER_VALUES).optional(),
+    webSearchMode: webSearchModeSchema.optional(),
+    webSearch: z
+      .object({
+        contextSize: webSearchContextSizeSchema.optional(),
+        allowedDomains: z.array(z.string().trim().min(1)).optional(),
+        location: codexWebSearchLocationSchema.optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
 
-const googleProviderOptionsSchema = z.object({
-  nativeWebSearch: z.boolean().optional(),
-  thinkingConfig: z.object({
-    thinkingLevel: z.enum(GOOGLE_THINKING_LEVEL_VALUES).optional(),
-  }).strict().optional(),
-}).strict();
+const googleProviderOptionsSchema = z
+  .object({
+    nativeWebSearch: z.boolean().optional(),
+    thinkingConfig: z
+      .object({
+        thinkingLevel: z.enum(GOOGLE_THINKING_LEVEL_VALUES).optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
 
-const workspaceProviderOptionsSchema = z.object({
-  openai: providerOptionsSchema.optional(),
-  "codex-cli": codexCliProviderOptionsSchema.optional(),
-  google: googleProviderOptionsSchema.optional(),
-  lmstudio: z.object({
-    baseUrl: z.string().trim().min(1).optional(),
-    contextLength: z.number().int().positive().optional(),
-    autoLoad: z.boolean().optional(),
-    reloadOnContextMismatch: z.boolean().optional(),
-  }).strict().optional(),
-}).strict();
+const workspaceProviderOptionsSchema = z
+  .object({
+    openai: providerOptionsSchema.optional(),
+    "codex-cli": codexCliProviderOptionsSchema.optional(),
+    google: googleProviderOptionsSchema.optional(),
+    lmstudio: z
+      .object({
+        baseUrl: z.string().trim().min(1).optional(),
+        contextLength: z.number().int().positive().optional(),
+        autoLoad: z.boolean().optional(),
+        reloadOnContextMismatch: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
 
-const desktopFeatureFlagOverridesSchema = z.object({
-  remoteAccess: z.preprocess((value) => (typeof value === "boolean" ? value : undefined), z.boolean().optional()),
-  workspacePicker: z.preprocess((value) => (typeof value === "boolean" ? value : undefined), z.boolean().optional()),
-  workspaceLifecycle: z.preprocess((value) => (typeof value === "boolean" ? value : undefined), z.boolean().optional()),
-  a2ui: z.preprocess((value) => (typeof value === "boolean" ? value : undefined), z.boolean().optional()),
-}).passthrough().optional();
+const desktopFeatureFlagOverridesSchema = z
+  .object({
+    remoteAccess: z.preprocess(
+      (value) => (typeof value === "boolean" ? value : undefined),
+      z.boolean().optional(),
+    ),
+    workspacePicker: z.preprocess(
+      (value) => (typeof value === "boolean" ? value : undefined),
+      z.boolean().optional(),
+    ),
+    workspaceLifecycle: z.preprocess(
+      (value) => (typeof value === "boolean" ? value : undefined),
+      z.boolean().optional(),
+    ),
+    a2ui: z.preprocess(
+      (value) => (typeof value === "boolean" ? value : undefined),
+      z.boolean().optional(),
+    ),
+  })
+  .passthrough()
+  .optional();
 
 export const startWorkspaceServerInputSchema: z.ZodType<StartWorkspaceServerInput> = z.object({
   workspaceId: safeIdSchema,
@@ -179,7 +213,12 @@ export const readFileInputSchema: z.ZodType<ReadFileInput> = sharedPathSchema;
 
 export const readFileForPreviewInputSchema: z.ZodType<ReadFileForPreviewInput> = z.object({
   path: nonEmptyStringSchema,
-  maxBytes: z.number().int().positive().max(50 * 1024 * 1024).optional(),
+  maxBytes: z
+    .number()
+    .int()
+    .positive()
+    .max(50 * 1024 * 1024)
+    .optional(),
 });
 
 export const revealPathInputSchema: z.ZodType<RevealPathInput> = sharedPathSchema;
@@ -196,92 +235,142 @@ export const renamePathInputSchema: z.ZodType<RenamePathInput> = z.object({
   newName: validatedSegmentSchema,
 });
 
-const persistedWorkspaceSchema = z.object({
-  id: safeIdSchema,
-  name: nonEmptyStringSchema,
-  path: nonEmptyStringSchema,
-  createdAt: nonEmptyStringSchema,
-  lastOpenedAt: nonEmptyStringSchema,
-  wsProtocol: z.preprocess(() => "jsonrpc", z.literal("jsonrpc")),
-  defaultProvider: optionalNonEmptyStringSchema,
-  defaultModel: optionalNonEmptyStringSchema,
-  defaultPreferredChildModel: optionalNonEmptyStringSchema,
-  defaultChildModelRoutingMode: z.enum(["same-provider", "cross-provider-allowlist"]).optional(),
-  defaultPreferredChildModelRef: optionalNonEmptyStringSchema,
-  defaultAllowedChildModelRefs: z.array(nonEmptyStringSchema).optional(),
-  defaultToolOutputOverflowChars: z.preprocess((value) => {
-    if (value === undefined) return undefined;
-    if (value === null) return null;
-    if (typeof value === "number" && Number.isFinite(value)) {
-      return Math.max(0, Math.floor(value));
-    }
-    return undefined;
-  }, z.number().int().nonnegative().nullable().optional()),
-  providerOptions: workspaceProviderOptionsSchema.optional(),
-  userName: optionalStringSchema,
-  userProfile: z.object({
-    instructions: optionalStringSchema,
-    work: optionalStringSchema,
-    details: optionalStringSchema,
-  }).passthrough().optional(),
-  defaultEnableMcp: z.preprocess((value) => (typeof value === "boolean" ? value : true), z.boolean()),
-  defaultBackupsEnabled: z.preprocess((value) => (typeof value === "boolean" ? value : true), z.boolean()),
-  yolo: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
-}).passthrough();
-
-const persistedThreadSchema = z.object({
-  id: safeIdSchema,
-  workspaceId: safeIdSchema,
-  title: nonEmptyStringSchema,
-  titleSource: z.enum(["default", "model", "heuristic", "manual"]).optional(),
-  createdAt: nonEmptyStringSchema,
-  lastMessageAt: nonEmptyStringSchema,
-  status: z.enum(["active", "disconnected"]),
-  sessionId: z.preprocess((value) => (typeof value === "string" && value.trim() ? value : null), z.string().nullable()),
-  messageCount: z.preprocess(
-    (value) => (typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0),
-    z.number().int().nonnegative(),
-  ),
-  lastEventSeq: z.preprocess(
-    (value) => (typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0),
-    z.number().int().nonnegative(),
-  ),
-  legacyTranscriptId: z.preprocess((value) => (typeof value === "string" && value.trim() ? value : null), z.string().nullable()).optional(),
-}).passthrough();
-
-const persistedOnboardingSchema = z.object({
-  status: z.preprocess(
-    (value) => (value === "pending" || value === "dismissed" || value === "completed" ? value : "pending"),
-    z.enum(["pending", "dismissed", "completed"]),
-  ),
-  completedAt: z.preprocess((value) => (typeof value === "string" && value.trim() ? value : null), z.string().nullable()),
-  dismissedAt: z.preprocess((value) => (typeof value === "string" && value.trim() ? value : null), z.string().nullable()),
-}).optional();
-
-const persistedProviderUiStateSchema = z.object({
-  lmstudio: z.object({
-    enabled: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
-    hiddenModels: z.preprocess(
-      (value) => Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [],
-      z.array(nonEmptyStringSchema),
+const persistedWorkspaceSchema = z
+  .object({
+    id: safeIdSchema,
+    name: nonEmptyStringSchema,
+    path: nonEmptyStringSchema,
+    createdAt: nonEmptyStringSchema,
+    lastOpenedAt: nonEmptyStringSchema,
+    wsProtocol: z.preprocess(() => "jsonrpc", z.literal("jsonrpc")),
+    defaultProvider: optionalNonEmptyStringSchema,
+    defaultModel: optionalNonEmptyStringSchema,
+    defaultPreferredChildModel: optionalNonEmptyStringSchema,
+    defaultChildModelRoutingMode: z.enum(["same-provider", "cross-provider-allowlist"]).optional(),
+    defaultPreferredChildModelRef: optionalNonEmptyStringSchema,
+    defaultAllowedChildModelRefs: z.array(nonEmptyStringSchema).optional(),
+    defaultToolOutputOverflowChars: z.preprocess((value) => {
+      if (value === undefined) return undefined;
+      if (value === null) return null;
+      if (typeof value === "number" && Number.isFinite(value)) {
+        return Math.max(0, Math.floor(value));
+      }
+      return undefined;
+    }, z.number().int().nonnegative().nullable().optional()),
+    providerOptions: workspaceProviderOptionsSchema.optional(),
+    userName: optionalStringSchema,
+    userProfile: z
+      .object({
+        instructions: optionalStringSchema,
+        work: optionalStringSchema,
+        details: optionalStringSchema,
+      })
+      .passthrough()
+      .optional(),
+    defaultEnableMcp: z.preprocess(
+      (value) => (typeof value === "boolean" ? value : true),
+      z.boolean(),
     ),
-  }).optional(),
-}).optional();
+    defaultBackupsEnabled: z.preprocess(
+      (value) => (typeof value === "boolean" ? value : true),
+      z.boolean(),
+    ),
+    yolo: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
+  })
+  .passthrough();
 
-export const persistedStateInputSchema: z.ZodType<PersistedState> = z.object({
-  workspaces: z.array(persistedWorkspaceSchema),
-  threads: z.array(persistedThreadSchema),
-  developerMode: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
-  showHiddenFiles: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
-  perWorkspaceSettings: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()).optional(),
-  desktopFeatureFlagOverrides: desktopFeatureFlagOverridesSchema,
-  version: z.preprocess(
-    (value) => (typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 2),
-    z.number().int().nonnegative(),
-  ),
-  providerUiState: persistedProviderUiStateSchema,
-  onboarding: persistedOnboardingSchema,
-}).passthrough() as z.ZodType<PersistedState>;
+const persistedThreadSchema = z
+  .object({
+    id: safeIdSchema,
+    workspaceId: safeIdSchema,
+    title: nonEmptyStringSchema,
+    titleSource: z.enum(["default", "model", "heuristic", "manual"]).optional(),
+    createdAt: nonEmptyStringSchema,
+    lastMessageAt: nonEmptyStringSchema,
+    status: z.enum(["active", "disconnected"]),
+    sessionId: z.preprocess(
+      (value) => (typeof value === "string" && value.trim() ? value : null),
+      z.string().nullable(),
+    ),
+    messageCount: z.preprocess(
+      (value) =>
+        typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0,
+      z.number().int().nonnegative(),
+    ),
+    lastEventSeq: z.preprocess(
+      (value) =>
+        typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0,
+      z.number().int().nonnegative(),
+    ),
+    legacyTranscriptId: z
+      .preprocess(
+        (value) => (typeof value === "string" && value.trim() ? value : null),
+        z.string().nullable(),
+      )
+      .optional(),
+  })
+  .passthrough();
+
+const persistedOnboardingSchema = z
+  .object({
+    status: z.preprocess(
+      (value) =>
+        value === "pending" || value === "dismissed" || value === "completed" ? value : "pending",
+      z.enum(["pending", "dismissed", "completed"]),
+    ),
+    completedAt: z.preprocess(
+      (value) => (typeof value === "string" && value.trim() ? value : null),
+      z.string().nullable(),
+    ),
+    dismissedAt: z.preprocess(
+      (value) => (typeof value === "string" && value.trim() ? value : null),
+      z.string().nullable(),
+    ),
+  })
+  .optional();
+
+const persistedProviderUiStateSchema = z
+  .object({
+    lmstudio: z
+      .object({
+        enabled: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
+        hiddenModels: z.preprocess(
+          (value) =>
+            Array.isArray(value)
+              ? value.filter((entry): entry is string => typeof entry === "string")
+              : [],
+          z.array(nonEmptyStringSchema),
+        ),
+      })
+      .optional(),
+  })
+  .optional();
+
+export const persistedStateInputSchema: z.ZodType<PersistedState> = z
+  .object({
+    workspaces: z.array(persistedWorkspaceSchema),
+    threads: z.array(persistedThreadSchema),
+    developerMode: z.preprocess(
+      (value) => (typeof value === "boolean" ? value : false),
+      z.boolean(),
+    ),
+    showHiddenFiles: z.preprocess(
+      (value) => (typeof value === "boolean" ? value : false),
+      z.boolean(),
+    ),
+    perWorkspaceSettings: z
+      .preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean())
+      .optional(),
+    desktopFeatureFlagOverrides: desktopFeatureFlagOverridesSchema,
+    version: z.preprocess(
+      (value) =>
+        typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 2,
+      z.number().int().nonnegative(),
+    ),
+    providerUiState: persistedProviderUiStateSchema,
+    onboarding: persistedOnboardingSchema,
+  })
+  .passthrough() as z.ZodType<PersistedState>;
 
 export const confirmActionInputSchema: z.ZodType<ConfirmActionInput> = z.object({
   title: nonEmptyStringSchema,
@@ -315,7 +404,16 @@ export const updaterReleaseInfoSchema: z.ZodType<UpdaterReleaseInfo> = z.object(
 });
 
 export const updaterStateSchema: z.ZodType<UpdaterState> = z.object({
-  phase: z.enum(["disabled", "idle", "checking", "available", "downloading", "downloaded", "up-to-date", "error"]),
+  phase: z.enum([
+    "disabled",
+    "idle",
+    "checking",
+    "available",
+    "downloading",
+    "downloaded",
+    "up-to-date",
+    "error",
+  ]),
   packaged: z.boolean(),
   currentVersion: nonEmptyStringSchema,
   lastCheckStartedAt: z.string().nullable(),

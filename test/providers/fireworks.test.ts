@@ -1,5 +1,5 @@
-import path from "node:path";
 import { describe, expect, test } from "bun:test";
+import path from "node:path";
 
 import { defaultModelForProvider, getModel, loadConfig } from "../../src/config";
 import { makeConfig, makeTmpDirs, repoRoot, writeJson } from "./helpers";

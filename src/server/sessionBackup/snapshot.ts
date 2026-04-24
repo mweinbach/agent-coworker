@@ -1,8 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-
-import type { SessionBackupMetadataSnapshot } from "./metadata";
 import { copyDirectory, copyDirectoryContents, directoryByteSize } from "./fileSystem";
+import type { SessionBackupMetadataSnapshot } from "./metadata";
 import { createTarGz, extractTarGz } from "./tar";
 
 export async function createSnapshotWithTarFallback(opts: {
@@ -28,7 +27,10 @@ export async function createSnapshotWithTarFallback(opts: {
   }
 }
 
-export async function snapshotByteSize(sessionDir: string, snapshot: SessionBackupMetadataSnapshot): Promise<number> {
+export async function snapshotByteSize(
+  sessionDir: string,
+  snapshot: SessionBackupMetadataSnapshot,
+): Promise<number> {
   const absolutePath = path.join(sessionDir, snapshot.path);
   if (snapshot.kind === "tar_gz") {
     const stat = await fs.stat(absolutePath);

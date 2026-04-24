@@ -2,31 +2,28 @@ import { defaultModelForProvider } from "@cowork/providers/catalog";
 import { z } from "zod";
 
 import {
+  copyPath,
+  createDirectory,
   deleteTranscript,
   listDirectory,
   loadState,
+  openPath,
   pickWorkspaceDirectory,
   readTranscript,
-  stopWorkspaceServer,
-  openPath,
-  revealPath,
-  copyPath,
-  createDirectory,
   renamePath,
+  revealPath,
+  stopWorkspaceServer,
   trashPath,
 } from "../../lib/desktopCommands";
-import { type ProviderName } from "../../lib/wsProtocol";
-
+import type { ProviderName } from "../../lib/wsProtocol";
+import { applyWorkspaceOrder, reorderSidebarItemsById } from "../../ui/sidebarHelpers";
 import {
   type AppStoreActions,
-  type StoreGet,
-  type StoreSet,
-  RUNTIME,
   appendThreadTranscript,
   basename,
+  buildContextPreamble,
   bumpWorkspaceJsonRpcSocketGeneration,
   bumpWorkspaceStartGeneration,
-  buildContextPreamble,
   clearPendingThreadSteers,
   clearWorkspaceJsonRpcSocketGeneration,
   clearWorkspaceStartState,
@@ -38,22 +35,35 @@ import {
   isProviderName,
   makeId,
   mapTranscriptToFeed,
+  normalizeThreadTitleSource,
   nowIso,
   persistNow,
   providerAuthMethodsFor,
   pushNotification,
   queuePendingThreadMessage,
+  RUNTIME,
   requestWorkspaceSessions,
+  type StoreGet,
+  type StoreSet,
   sendThread,
   sendUserMessageToThread,
-  normalizeThreadTitleSource,
   truncateTitle,
 } from "../store.helpers";
 import type { ThreadRecord, WorkspaceRecord } from "../types";
-import { applyWorkspaceOrder, reorderSidebarItemsById } from "../../ui/sidebarHelpers";
 import { hydrateThreadSelection } from "./thread";
 
-export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "addWorkspace" | "removeWorkspace" | "selectWorkspace" | "reorderWorkspaces" | "setWorkspacesOrder" | "restartWorkspaceServer"> {
+export function createWorkspaceActions(
+  set: StoreSet,
+  get: StoreGet,
+): Pick<
+  AppStoreActions,
+  | "addWorkspace"
+  | "removeWorkspace"
+  | "selectWorkspace"
+  | "reorderWorkspaces"
+  | "setWorkspacesOrder"
+  | "restartWorkspaceServer"
+> {
   const closeThreadSession = (threadId: string) => {
     sendThread(get, threadId, (sessionId) => ({ type: "session_close", sessionId }));
   };
@@ -62,7 +72,7 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
     const state = get();
     const currentThreadId = state.selectedThreadId;
     const currentThread = currentThreadId
-      ? state.threads.find((thread) => thread.id === currentThreadId) ?? null
+      ? (state.threads.find((thread) => thread.id === currentThreadId) ?? null)
       : null;
 
     if (currentThread?.workspaceId === workspaceId) {
@@ -83,7 +93,7 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
       if (!isWorkspaceLifecycleEnabled()) return;
       if (RUNTIME.workspacePickerOpen) return;
       RUNTIME.workspacePickerOpen = true;
-  
+
       let dir: string | null = null;
       try {
         dir = await pickWorkspaceDirectory();
@@ -91,13 +101,13 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
         RUNTIME.workspacePickerOpen = false;
       }
       if (!dir) return;
-  
+
       const existing = get().workspaces.find((w) => w.path === dir);
       if (existing) {
         await get().selectWorkspace(existing.id);
         return;
       }
-  
+
       const stayInSettings = get().view === "settings";
       const ws: WorkspaceRecord = {
         id: makeId(),
@@ -116,7 +126,7 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
         defaultBackupsEnabled: true,
         yolo: false,
       };
-  
+
       set((s) => ({
         workspaces: [ws, ...s.workspaces],
         selectedWorkspaceId: ws.id,
@@ -128,7 +138,6 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
       ensureControlSocket(get, set, ws.id);
       void requestWorkspaceSessions(get, set, ws.id);
     },
-  
 
     removeWorkspace: async (workspaceId: string) => {
       if (!isWorkspaceLifecycleEnabled()) return;
@@ -163,11 +172,14 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
       } finally {
         disposeWorkspaceJsonRpcState(get, workspaceId);
       }
-  
+
       set((s) => {
         const remainingWorkspaces = s.workspaces.filter((w) => w.id !== workspaceId);
         const remainingThreads = s.threads.filter((t) => t.workspaceId !== workspaceId);
-        const selectedWorkspaceId = s.selectedWorkspaceId === workspaceId ? (remainingWorkspaces[0]?.id ?? null) : s.selectedWorkspaceId;
+        const selectedWorkspaceId =
+          s.selectedWorkspaceId === workspaceId
+            ? (remainingWorkspaces[0]?.id ?? null)
+            : s.selectedWorkspaceId;
         const pluginManagementWorkspaceId =
           s.pluginManagementWorkspaceId === workspaceId ? null : s.pluginManagementWorkspaceId;
         const pluginManagementMode =
@@ -175,7 +187,9 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
             ? "auto"
             : s.pluginManagementMode;
         const selectedThreadId =
-          s.selectedThreadId && remainingThreads.some((t) => t.id === s.selectedThreadId) ? s.selectedThreadId : null;
+          s.selectedThreadId && remainingThreads.some((t) => t.id === s.selectedThreadId)
+            ? s.selectedThreadId
+            : null;
         return {
           workspaces: remainingWorkspaces,
           threads: remainingThreads,
@@ -188,7 +202,6 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
       clearWorkspaceStartState(workspaceId);
       await persistNow(get);
     },
-  
 
     selectWorkspace: async (workspaceId: string) => {
       const wasSelected = get().selectedWorkspaceId === workspaceId;
@@ -206,17 +219,19 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
         view: s.view === "settings" ? "settings" : s.view,
       }));
       ensureWorkspaceRuntime(get, set, workspaceId);
-  
+
       const ws = get().workspaces.find((w) => w.id === workspaceId);
       if (!ws) return;
-  
+
       if (!wasSelected) {
         set((s) => ({
-          workspaces: s.workspaces.map((w) => (w.id === workspaceId ? { ...w, lastOpenedAt: nowIso() } : w)),
+          workspaces: s.workspaces.map((w) =>
+            w.id === workspaceId ? { ...w, lastOpenedAt: nowIso() } : w,
+          ),
         }));
         await persistNow(get);
       }
-  
+
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);
       void requestWorkspaceSessions(get, set, workspaceId);
@@ -252,7 +267,6 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
       set({ workspaces: nextWorkspaces });
       await persistNow(get);
     },
-  
 
     restartWorkspaceServer: async (workspaceId) => {
       if (!isWorkspaceLifecycleEnabled()) return;
@@ -279,7 +293,7 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
       } catch {
         // ignore
       }
-  
+
       set((s) => ({
         workspaceRuntimeById: {
           ...s.workspaceRuntimeById,
@@ -305,6 +319,5 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
       ensureControlSocket(get, set, workspaceId);
       void requestWorkspaceSessions(get, set, workspaceId);
     },
-
   };
 }

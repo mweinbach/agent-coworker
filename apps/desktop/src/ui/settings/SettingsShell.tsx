@@ -1,21 +1,20 @@
-import { useCallback, useState, type ReactNode } from "react";
-
 import { ArrowLeftIcon } from "lucide-react";
+import { type ReactNode, useCallback, useState } from "react";
 
 import { useAppStore } from "../../app/store";
+import type { SettingsPageId } from "../../app/types";
 import { Button } from "../../components/ui/button";
 import { cn } from "../../lib/utils";
-import type { SettingsPageId } from "../../app/types";
+import { BackupPage } from "./pages/BackupPage";
+import { DeveloperPage } from "./pages/DeveloperPage";
+import { FeatureFlagsPage } from "./pages/FeatureFlagsPage";
+import { McpServersPage } from "./pages/McpServersPage";
+import { MemoryPage } from "./pages/MemoryPage";
 import { ProvidersPage } from "./pages/ProvidersPage";
+import { RemoteAccessPage } from "./pages/RemoteAccessPage";
+import { UpdatesPage } from "./pages/UpdatesPage";
 import { UsagePage } from "./pages/UsagePage";
 import { WorkspacesPage } from "./pages/WorkspacesPage";
-import { BackupPage } from "./pages/BackupPage";
-import { McpServersPage } from "./pages/McpServersPage";
-import { UpdatesPage } from "./pages/UpdatesPage";
-import { DeveloperPage } from "./pages/DeveloperPage";
-import { MemoryPage } from "./pages/MemoryPage";
-import { RemoteAccessPage } from "./pages/RemoteAccessPage";
-import { FeatureFlagsPage } from "./pages/FeatureFlagsPage";
 import { SettingsChromeProvider, type SettingsChromeState } from "./SettingsChromeContext";
 
 type SettingsPageDefinition = {
@@ -24,10 +23,7 @@ type SettingsPageDefinition = {
   render: () => ReactNode;
 };
 
-const SETTINGS_PAGE_META: Record<
-  SettingsPageId,
-  { title: string; description: string }
-> = {
+const SETTINGS_PAGE_META: Record<SettingsPageId, { title: string; description: string }> = {
   providers: {
     title: "Providers",
     description: "Connect models and see whether each provider is ready to use.",
@@ -88,7 +84,13 @@ export function getSettingsGroups(remoteAccessAvailable: boolean): Array<{
         { id: "workspaces", label: "General", render: () => <WorkspacesPage /> },
         { id: "memory", label: "Memory", render: () => <MemoryPage /> },
         ...(remoteAccessAvailable
-          ? [{ id: "remoteAccess", label: "Remote access", render: () => <RemoteAccessPage /> } satisfies SettingsPageDefinition]
+          ? [
+              {
+                id: "remoteAccess",
+                label: "Remote access",
+                render: () => <RemoteAccessPage />,
+              } satisfies SettingsPageDefinition,
+            ]
           : []),
       ],
     },
@@ -124,7 +126,9 @@ function SettingsNavigation({
     pages: SettingsPageDefinition[];
   }>;
 }) {
-  const currentWorkspace = useAppStore((s) => s.workspaces.find(w => w.id === s.selectedWorkspaceId));
+  const currentWorkspace = useAppStore((s) =>
+    s.workspaces.find((w) => w.id === s.selectedWorkspaceId),
+  );
   const perWorkspaceSettings = useAppStore((s) => s.perWorkspaceSettings);
 
   return (
@@ -140,7 +144,10 @@ function SettingsNavigation({
           Back
         </Button>
         {perWorkspaceSettings && currentWorkspace && (
-          <div className="mt-2 truncate px-1 text-[11px] text-foreground/68" title={currentWorkspace.name}>
+          <div
+            className="mt-2 truncate px-1 text-[11px] text-foreground/68"
+            title={currentWorkspace.name}
+          >
             {currentWorkspace.name}
           </div>
         )}

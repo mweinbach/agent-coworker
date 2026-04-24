@@ -46,7 +46,10 @@ function assertPathWithinRoots(roots: string[], targetPath: string, label: strin
   const normalizedTarget = normalizeBoundaryPath(requested);
   for (const root of roots) {
     const normalizedRoot = normalizeBoundaryPath(root);
-    if (normalizedTarget === normalizedRoot || normalizedTarget.startsWith(`${normalizedRoot}${path.sep}`)) {
+    if (
+      normalizedTarget === normalizedRoot ||
+      normalizedTarget.startsWith(`${normalizedRoot}${path.sep}`)
+    ) {
       return normalizedTarget;
     }
   }
@@ -55,7 +58,14 @@ function assertPathWithinRoots(roots: string[], targetPath: string, label: strin
 }
 
 function assertValidFileName(name: string, label: string): void {
-  if (!name || name.includes("/") || name.includes("\\") || name.includes("\0") || name === "." || name === "..") {
+  if (
+    !name ||
+    name.includes("/") ||
+    name.includes("\\") ||
+    name.includes("\0") ||
+    name === "." ||
+    name === ".."
+  ) {
     throw new Error(`${label} is invalid`);
   }
 }
@@ -102,31 +112,33 @@ async function listDirectoryEntries(
   }
 
   const entries = await fsp.readdir(safePath, { withFileTypes: true });
-  const results = await Promise.all(entries.map(async (entry) => {
-    const isHidden = isExplorerEntryHidden(entry.name);
-    if (!includeHidden && isHidden) {
-      return null;
-    }
+  const results = await Promise.all(
+    entries.map(async (entry) => {
+      const isHidden = isExplorerEntryHidden(entry.name);
+      if (!includeHidden && isHidden) {
+        return null;
+      }
 
-    let sizeBytes: number | null = null;
-    let modifiedAtMs: number | null = null;
-    try {
-      const entryStat = await fsp.stat(path.join(safePath, entry.name));
-      sizeBytes = entryStat.size;
-      modifiedAtMs = entryStat.mtimeMs;
-    } catch {
-      // Broken links or transient stat errors should not block the listing.
-    }
+      let sizeBytes: number | null = null;
+      let modifiedAtMs: number | null = null;
+      try {
+        const entryStat = await fsp.stat(path.join(safePath, entry.name));
+        sizeBytes = entryStat.size;
+        modifiedAtMs = entryStat.mtimeMs;
+      } catch {
+        // Broken links or transient stat errors should not block the listing.
+      }
 
-    return {
-      name: entry.name,
-      path: path.join(safePath, entry.name),
-      isDirectory: entry.isDirectory(),
-      isHidden,
-      sizeBytes,
-      modifiedAtMs,
-    } satisfies ExplorerEntryPayload;
-  }));
+      return {
+        name: entry.name,
+        path: path.join(safePath, entry.name),
+        isDirectory: entry.isDirectory(),
+        isHidden,
+        sizeBytes,
+        modifiedAtMs,
+      } satisfies ExplorerEntryPayload;
+    }),
+  );
 
   return results
     .filter((entry): entry is ExplorerEntryPayload => entry !== null)
@@ -158,7 +170,10 @@ function resolveContainingRoot(roots: string[], safePath: string): string {
   let bestMatch: string | null = null;
   for (const root of roots) {
     const normalizedRoot = normalizeBoundaryPath(root);
-    if (normalizedTarget !== normalizedRoot && !normalizedTarget.startsWith(`${normalizedRoot}${path.sep}`)) {
+    if (
+      normalizedTarget !== normalizedRoot &&
+      !normalizedTarget.startsWith(`${normalizedRoot}${path.sep}`)
+    ) {
       continue;
     }
     if (!bestMatch || normalizedRoot.length > bestMatch.length) {
@@ -177,7 +192,10 @@ function uniqueTrashDestination(trashDir: string, baseName: string): Promise<str
   return Promise.resolve(candidate);
 }
 
-async function movePathToWorkspaceTrash(workspaceRoots: string[], requestedPath: string): Promise<void> {
+async function movePathToWorkspaceTrash(
+  workspaceRoots: string[],
+  requestedPath: string,
+): Promise<void> {
   const safePath = assertPathWithinRoots(workspaceRoots, requestedPath, "path");
   const containingRoot = resolveContainingRoot(workspaceRoots, safePath);
   const trashDir = path.join(containingRoot, ".cowork-trash");
@@ -242,12 +260,17 @@ function buildOpenRoute(pathValue: string): string {
   return `/cowork/fs/open?path=${encodeURIComponent(pathValue)}`;
 }
 
-function renderDirectoryHtml(currentPath: string, entries: ExplorerEntryPayload[], parentPath: string | null): string {
-  const rows = entries.map((entry) => {
-    const href = buildOpenRoute(entry.path);
-    const kind = entry.isDirectory ? "Folder" : "File";
-    const hiddenBadge = entry.isHidden ? `<span class="badge">hidden</span>` : "";
-    return `
+function renderDirectoryHtml(
+  currentPath: string,
+  entries: ExplorerEntryPayload[],
+  parentPath: string | null,
+): string {
+  const rows = entries
+    .map((entry) => {
+      const href = buildOpenRoute(entry.path);
+      const kind = entry.isDirectory ? "Folder" : "File";
+      const hiddenBadge = entry.isHidden ? `<span class="badge">hidden</span>` : "";
+      return `
       <li class="entry">
         <a class="entry-link" href="${href}">
           <span class="entry-title">${escapeHtml(entry.name)}</span>
@@ -255,7 +278,8 @@ function renderDirectoryHtml(currentPath: string, entries: ExplorerEntryPayload[
         </a>
       </li>
     `;
-  }).join("");
+    })
+    .join("");
 
   const parentLink = parentPath
     ? `<a class="parent-link" href="${buildOpenRoute(parentPath)}">Up one level</a>`
@@ -399,7 +423,10 @@ function textResponse(message: string, status: number): Response {
 }
 
 function normalizeErrorStatus(error: unknown): number {
-  const code = typeof error === "object" && error !== null && "code" in error ? String((error as { code?: unknown }).code) : "";
+  const code =
+    typeof error === "object" && error !== null && "code" in error
+      ? String((error as { code?: unknown }).code)
+      : "";
   if (code === "ENOENT") return 404;
   return 400;
 }
@@ -428,7 +455,10 @@ function readRequiredStringField(body: Record<string, unknown>, key: string): st
   return value;
 }
 
-async function handleOpenPathRequest(workspaceRoots: string[], requestedPath: string): Promise<Response> {
+async function handleOpenPathRequest(
+  workspaceRoots: string[],
+  requestedPath: string,
+): Promise<Response> {
   const safePath = assertPathWithinRoots(workspaceRoots, requestedPath, "path");
   const stat = await fsp.stat(safePath);
   if (stat.isDirectory()) {
@@ -472,10 +502,12 @@ export async function handleWebDesktopRoute(
     if (url.pathname === "/cowork/workspaces") {
       const workspaces = opts.desktopService
         ? await opts.desktopService.listWorkspaces(opts.cwd)
-        : [{
-            name: opts.cwd.split("/").pop() ?? opts.cwd.split("\\").pop() ?? opts.cwd,
-            path: opts.cwd,
-          }];
+        : [
+            {
+              name: opts.cwd.split("/").pop() ?? opts.cwd.split("\\").pop() ?? opts.cwd,
+              path: opts.cwd,
+            },
+          ];
       return jsonResponse({
         workspaces,
       });
@@ -496,11 +528,13 @@ export async function handleWebDesktopRoute(
         const workspaceId = readRequiredStringField(body, "workspaceId");
         const workspacePath = readRequiredStringField(body, "workspacePath");
         const yolo = typeof body.yolo === "boolean" ? body.yolo : false;
-        return jsonResponse(await opts.desktopService.startWorkspaceServer({
-          workspaceId,
-          workspacePath,
-          yolo,
-        }));
+        return jsonResponse(
+          await opts.desktopService.startWorkspaceServer({
+            workspaceId,
+            workspacePath,
+            yolo,
+          }),
+        );
       }
 
       if (url.pathname === "/cowork/desktop/workspace/stop" && req.method === "POST") {
@@ -611,11 +645,18 @@ export async function handleWebDesktopRoute(
     }
 
     if (url.pathname === "/cowork/fs/open") {
-      return await handleOpenPathRequest(workspaceRoots, readRequiredStringParam(url.searchParams, "path"));
+      return await handleOpenPathRequest(
+        workspaceRoots,
+        readRequiredStringParam(url.searchParams, "path"),
+      );
     }
 
     if (url.pathname === "/cowork/fs/reveal") {
-      const safePath = assertPathWithinRoots(workspaceRoots, readRequiredStringParam(url.searchParams, "path"), "path");
+      const safePath = assertPathWithinRoots(
+        workspaceRoots,
+        readRequiredStringParam(url.searchParams, "path"),
+        "path",
+      );
       let targetPath = safePath;
       try {
         const stat = await fsp.stat(safePath);

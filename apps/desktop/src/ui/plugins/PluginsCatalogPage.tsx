@@ -1,11 +1,11 @@
+import { RefreshCwIcon } from "lucide-react";
 import { useMemo } from "react";
 import { useAppStore } from "../../app/store";
+import { Badge } from "../../components/ui/badge";
+import { Button } from "../../components/ui/button";
+import { InstallPluginDialog } from "./InstallPluginDialog";
 import { PluginCardGrid } from "./PluginCardGrid";
 import { PluginDetailDialog } from "./PluginDetailDialog";
-import { InstallPluginDialog } from "./InstallPluginDialog";
-import { Button } from "../../components/ui/button";
-import { Badge } from "../../components/ui/badge";
-import { RefreshCwIcon } from "lucide-react";
 
 export function PluginsCatalogPage({
   workspaceId,
@@ -33,11 +33,12 @@ export function PluginsCatalogPage({
     }
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase();
-      items = items.filter((plugin) =>
-        plugin.name.toLowerCase().includes(query)
-        || plugin.displayName.toLowerCase().includes(query)
-        || plugin.description.toLowerCase().includes(query)
-        || plugin.interface?.shortDescription?.toLowerCase().includes(query)
+      items = items.filter(
+        (plugin) =>
+          plugin.name.toLowerCase().includes(query) ||
+          plugin.displayName.toLowerCase().includes(query) ||
+          plugin.description.toLowerCase().includes(query) ||
+          plugin.interface?.shortDescription?.toLowerCase().includes(query),
       );
     }
     return items.sort((left, right) => left.displayName.localeCompare(right.displayName));
@@ -46,9 +47,10 @@ export function PluginsCatalogPage({
   const enabledPlugins = useMemo(() => plugins.filter((plugin) => plugin.enabled), [plugins]);
   const disabledPlugins = useMemo(() => plugins.filter((plugin) => !plugin.enabled), [plugins]);
 
-  const emptyLabel = managementScope === "global"
-    ? "No Codex-style plugins were discovered in your global library."
-    : "No Codex-style plugins were discovered for this workspace.";
+  const emptyLabel =
+    managementScope === "global"
+      ? "No Codex-style plugins were discovered in your global library."
+      : "No Codex-style plugins were discovered for this workspace.";
 
   return (
     <div className="app-skills-view h-full min-h-0 overflow-y-auto px-6 py-4">
@@ -70,14 +72,20 @@ export function PluginsCatalogPage({
           {enabledPlugins.length > 0 ? (
             <section>
               <h2 className="mb-4 text-lg font-semibold">Enabled</h2>
-              <PluginCardGrid plugins={enabledPlugins} onSelect={(pluginId, scope) => void selectPlugin(pluginId, scope)} />
+              <PluginCardGrid
+                plugins={enabledPlugins}
+                onSelect={(pluginId, scope) => void selectPlugin(pluginId, scope)}
+              />
             </section>
           ) : null}
 
           {disabledPlugins.length > 0 ? (
             <section>
               <h2 className="mb-4 text-lg font-semibold text-muted-foreground">Disabled</h2>
-              <PluginCardGrid plugins={disabledPlugins} onSelect={(pluginId, scope) => void selectPlugin(pluginId, scope)} />
+              <PluginCardGrid
+                plugins={disabledPlugins}
+                onSelect={(pluginId, scope) => void selectPlugin(pluginId, scope)}
+              />
             </section>
           ) : null}
 

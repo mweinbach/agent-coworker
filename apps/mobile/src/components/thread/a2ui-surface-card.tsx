@@ -2,17 +2,17 @@ import { useState } from "react";
 import { Linking, Pressable, Text, View } from "react-native";
 
 import type { SessionFeedItem } from "@/features/cowork/protocolTypes";
+import { useAppTheme } from "@/theme/use-app-theme";
 import {
   isBasicCatalogId,
   isSupportedBasicComponentType,
 } from "../../../../../src/shared/a2ui/component";
 import {
-  resolveDynamicString,
   resolveDynamicBoolean,
+  resolveDynamicString,
   stringifyDynamic,
 } from "../../../../../src/shared/a2ui/expressions";
 import { resolveDynamicWithFunctions } from "../../../../../src/shared/a2ui/functions";
-import { useAppTheme } from "@/theme/use-app-theme";
 
 type UiSurfaceItem = Extract<SessionFeedItem, { kind: "ui_surface" }>;
 
@@ -127,9 +127,7 @@ export function A2uiSurfaceCard({ item }: A2uiSurfaceCardProps) {
       {root ? (
         <RenderNode node={root} model={item.dataModel} depth={0} />
       ) : (
-        <Text style={{ color: theme.textSecondary, fontSize: 12 }}>
-          Empty surface.
-        </Text>
+        <Text style={{ color: theme.textSecondary, fontSize: 12 }}>Empty surface.</Text>
       )}
     </View>
   );
@@ -226,13 +224,14 @@ function RenderNode({
       return <View style={{ height: 12 }} />;
     case "Badge": {
       const tone = typeof props?.tone === "string" ? props.tone.toLowerCase() : "default";
-      const toneColor = tone === "success"
-        ? theme.primary
-        : tone === "warning"
-          ? theme.danger
-          : tone === "danger" || tone === "error"
+      const toneColor =
+        tone === "success"
+          ? theme.primary
+          : tone === "warning"
             ? theme.danger
-            : theme.textSecondary;
+            : tone === "danger" || tone === "error"
+              ? theme.danger
+              : theme.textSecondary;
       return (
         <View
           style={{
@@ -253,13 +252,13 @@ function RenderNode({
     case "Link": {
       const text = readText(props, model, "text", "label");
       const href = props?.href ?? props?.url;
-      const hrefStr = typeof href === "string"
-        ? href
-        : resolveDynamicString(href, model);
+      const hrefStr = typeof href === "string" ? href : resolveDynamicString(href, model);
       const safeHref = /^https?:\/\//i.test(hrefStr) ? hrefStr : null;
       return (
         <Pressable
-          onPress={() => { if (safeHref) Linking.openURL(safeHref); }}
+          onPress={() => {
+            if (safeHref) Linking.openURL(safeHref);
+          }}
           disabled={!safeHref}
         >
           <Text
@@ -301,7 +300,9 @@ function RenderNode({
       return (
         <View style={{ gap: 4 }}>
           {label ? (
-            <Text style={{ color: theme.textSecondary, fontSize: 12, fontWeight: "600" }}>{label}</Text>
+            <Text style={{ color: theme.textSecondary, fontSize: 12, fontWeight: "600" }}>
+              {label}
+            </Text>
           ) : null}
           <View
             style={{
@@ -345,7 +346,9 @@ function RenderNode({
       return (
         <View style={{ gap: 4 }}>
           {label ? (
-            <Text style={{ color: theme.textSecondary, fontSize: 12, fontWeight: "600" }}>{label}</Text>
+            <Text style={{ color: theme.textSecondary, fontSize: 12, fontWeight: "600" }}>
+              {label}
+            </Text>
           ) : null}
           <View
             style={{
@@ -420,14 +423,21 @@ function RenderNode({
         ? columnsRaw.flatMap((col) => {
             if (typeof col === "string") return [{ key: col, label: col }];
             if (isRecord(col)) {
-              const key = typeof col.key === "string" ? col.key
-                : typeof col.id === "string" ? col.id
-                : typeof col.field === "string" ? col.field
-                : null;
+              const key =
+                typeof col.key === "string"
+                  ? col.key
+                  : typeof col.id === "string"
+                    ? col.id
+                    : typeof col.field === "string"
+                      ? col.field
+                      : null;
               if (!key) return [];
-              const label = typeof col.label === "string" ? col.label
-                : typeof col.title === "string" ? col.title
-                : key;
+              const label =
+                typeof col.label === "string"
+                  ? col.label
+                  : typeof col.title === "string"
+                    ? col.title
+                    : key;
               return [{ key, label }];
             }
             return [];

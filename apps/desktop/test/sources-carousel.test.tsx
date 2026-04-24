@@ -1,6 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import { createElement } from "react";
-import { act } from "react";
+import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -9,9 +8,11 @@ import { setupJsdom } from "./jsdomHarness";
 
 const confirmActionMock = mock(async () => true);
 
-mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
-  confirmAction: confirmActionMock,
-}));
+mock.module("../src/lib/desktopCommands", () =>
+  createDesktopCommandsMock({
+    confirmAction: confirmActionMock,
+  }),
+);
 
 const { SourcesCarousel } = await import("../src/components/ai-elements/sources-carousel");
 
@@ -36,7 +37,12 @@ describe("desktop sources carousel", () => {
       await act(async () => {
         root.render(
           createElement(SourcesCarousel, {
-            sources: [{ title: "HeroUI Migration", url: "https://example.com/articles/hero-ui-migration-guide" }],
+            sources: [
+              {
+                title: "HeroUI Migration",
+                url: "https://example.com/articles/hero-ui-migration-guide",
+              },
+            ],
           }),
         );
       });

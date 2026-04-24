@@ -64,7 +64,10 @@ const sessionBackupMetadataSchema = z
 const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
 
 export async function writeJson(filePath: string, value: unknown): Promise<void> {
-  await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf-8", mode: 0o600 });
+  await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, {
+    encoding: "utf-8",
+    mode: 0o600,
+  });
   try {
     await fs.chmod(filePath, 0o600);
   } catch {
@@ -84,7 +87,7 @@ export async function readMetadata(filePath: string): Promise<SessionBackupMetad
     const parsed = sessionBackupMetadataSchema.safeParse(payload);
     if (!parsed.success) {
       throw new Error(
-        `Invalid backup metadata schema at ${filePath}: ${parsed.error.issues[0]?.message ?? "validation_failed"}`
+        `Invalid backup metadata schema at ${filePath}: ${parsed.error.issues[0]?.message ?? "validation_failed"}`,
       );
     }
     return parsed.data;

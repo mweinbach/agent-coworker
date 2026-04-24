@@ -89,14 +89,17 @@ export function heuristicTitleFromQuery(query: string): string {
 
   const withoutTrailingPunctuation = compact.replace(/[.!?]+$/g, "").trim();
   const tokenBound = limitTokenCount(withoutTrailingPunctuation || compact, TITLE_MAX_TOKENS);
-  const charBound = tokenBound.length > TITLE_MAX_CHARS ? truncateToCharLimit(tokenBound, TITLE_MAX_CHARS) : tokenBound;
+  const charBound =
+    tokenBound.length > TITLE_MAX_CHARS
+      ? truncateToCharLimit(tokenBound, TITLE_MAX_CHARS)
+      : tokenBound;
   return charBound || DEFAULT_SESSION_TITLE;
 }
 
 function modelCandidatesForProvider(
   provider: AgentConfig["provider"],
   currentModel: string,
-  defaultModelForProviderImpl: SessionTitleDeps["defaultModelForProvider"]
+  defaultModelForProviderImpl: SessionTitleDeps["defaultModelForProvider"],
 ): string[] {
   const candidates = [
     TITLE_MODEL_BY_PROVIDER[provider],
@@ -141,13 +144,13 @@ export function createSessionTitleGenerator(overrides: Partial<SessionTitleDeps>
     }
 
     if (!lazyDepsPromise) {
-      lazyDepsPromise = Promise.all([
-        import("../runtime"),
-        import("../providers/catalog"),
-      ]).then(([runtime, catalog]) => ({
-        createRuntime: overrides.createRuntime ?? runtime.createRuntime,
-        defaultModelForProvider: overrides.defaultModelForProvider ?? catalog.defaultModelForProvider,
-      }));
+      lazyDepsPromise = Promise.all([import("../runtime"), import("../providers/catalog")]).then(
+        ([runtime, catalog]) => ({
+          createRuntime: overrides.createRuntime ?? runtime.createRuntime,
+          defaultModelForProvider:
+            overrides.defaultModelForProvider ?? catalog.defaultModelForProvider,
+        }),
+      );
     }
 
     return await lazyDepsPromise;

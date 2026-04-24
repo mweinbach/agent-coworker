@@ -1,12 +1,13 @@
 import { afterAll, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { createElement } from "react";
-import { act } from "react";
+import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
 import { setupJsdom } from "./jsdomHarness";
 
-type PreviewResult = Awaited<ReturnType<typeof import("../src/lib/desktopCommands").readFileForPreview>>;
+type PreviewResult = Awaited<
+  ReturnType<typeof import("../src/lib/desktopCommands").readFileForPreview>
+>;
 
 let previewResult: PreviewResult = {
   bytes: new Uint8Array(),
@@ -15,7 +16,9 @@ let previewResult: PreviewResult = {
 };
 
 const readFileForPreviewMock = mock(async () => previewResult);
-const getPreferredFileAppMock = mock(async (opts: { path: string }) => opts.path.endsWith(".docx") ? "Word" : null);
+const getPreferredFileAppMock = mock(async (opts: { path: string }) =>
+  opts.path.endsWith(".docx") ? "Word" : null,
+);
 const loadDocxPreviewLayoutMock = mock(async () => ({
   accentColor: "#EC6210",
   titleColor: "#1C1B19",
@@ -40,10 +43,12 @@ mock.module("dompurify", () => ({
   },
 }));
 
-mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
-  getPreferredFileApp: getPreferredFileAppMock,
-  readFileForPreview: readFileForPreviewMock,
-}));
+mock.module("../src/lib/desktopCommands", () =>
+  createDesktopCommandsMock({
+    getPreferredFileApp: getPreferredFileAppMock,
+    readFileForPreview: readFileForPreviewMock,
+  }),
+);
 
 const docxPreviewModule = await import("../src/lib/docxPreview");
 spyOn(docxPreviewModule, "loadDocxPreviewLayout").mockImplementation(loadDocxPreviewLayoutMock);
@@ -98,9 +103,12 @@ describe("file preview modal", () => {
     const harness = setupPreviewJsdom();
 
     try {
-      const path = "/Users/mweinbach/Library/Mobile Documents/com~apple~CloudDocs/Claude/tmp/preview_latency_review.md";
+      const path =
+        "/Users/mweinbach/Library/Mobile Documents/com~apple~CloudDocs/Claude/tmp/preview_latency_review.md";
       previewResult = {
-        bytes: new TextEncoder().encode("# Preview latency review\n\nThis markdown body should render in a narrower reading column."),
+        bytes: new TextEncoder().encode(
+          "# Preview latency review\n\nThis markdown body should render in a narrower reading column.",
+        ),
         byteLength: 84,
         truncated: false,
       };
@@ -137,7 +145,8 @@ describe("file preview modal", () => {
     const harness = setupPreviewJsdom();
 
     try {
-      const path = "/Users/mweinbach/Library/Mobile Documents/com~apple~CloudDocs/Claude/tmp/preview_latency_review.docx";
+      const path =
+        "/Users/mweinbach/Library/Mobile Documents/com~apple~CloudDocs/Claude/tmp/preview_latency_review.docx";
       previewResult = {
         bytes: new Uint8Array([1, 2, 3, 4]),
         byteLength: 4,
@@ -180,7 +189,8 @@ describe("file preview modal", () => {
     const harness = setupPreviewJsdom();
 
     try {
-      const path = "/Users/mweinbach/Library/Mobile Documents/com~apple~CloudDocs/Claude/tmp/preview_latency_review.docx";
+      const path =
+        "/Users/mweinbach/Library/Mobile Documents/com~apple~CloudDocs/Claude/tmp/preview_latency_review.docx";
       previewResult = {
         bytes: new Uint8Array([1, 2, 3, 4]),
         byteLength: 4,

@@ -3,8 +3,8 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import {
-  canClearSessionHardCap,
   ChatThreadHeader,
+  canClearSessionHardCap,
   composerBusyHint,
   filterFeedForDeveloperMode,
   formatSessionBudgetLine,
@@ -16,8 +16,8 @@ import {
   reasoningPreviewText,
   resolveComposerBusyPolicy,
   sessionUsageTone,
-  summarizeA2uiActionMessage,
   shouldToggleReasoningExpanded,
+  summarizeA2uiActionMessage,
 } from "../src/ui/ChatView";
 
 describe("desktop reasoning UI helpers", () => {
@@ -28,7 +28,9 @@ describe("desktop reasoning UI helpers", () => {
 
   test("builds collapsed preview from first lines", () => {
     expect(reasoningPreviewText("line 1\nline 2", 3)).toBe("line 1\nline 2");
-    expect(reasoningPreviewText("line 1\nline 2\nline 3\nline 4", 3)).toBe("line 1\nline 2\nline 3...");
+    expect(reasoningPreviewText("line 1\nline 2\nline 3\nline 4", 3)).toBe(
+      "line 1\nline 2\nline 3...",
+    );
   });
 
   test("keyboard toggle helper only allows Enter and Space", () => {
@@ -41,7 +43,13 @@ describe("desktop reasoning UI helpers", () => {
   test("hides system feed entries unless developer mode is enabled", () => {
     const feed = [
       { id: "a", kind: "system", ts: "2024-01-01T00:00:00.000Z", line: "[server_hello]" },
-      { id: "b", kind: "message", role: "assistant" as const, ts: "2024-01-01T00:00:01.000Z", text: "hi" },
+      {
+        id: "b",
+        kind: "message",
+        role: "assistant" as const,
+        ts: "2024-01-01T00:00:01.000Z",
+        text: "hi",
+      },
     ];
 
     expect(filterFeedForDeveloperMode(feed, false)).toEqual([
@@ -184,14 +192,16 @@ describe("desktop reasoning UI helpers", () => {
         },
       }),
     ).toBe("Hard cap exceeded at $0.02");
-    expect(sessionUsageTone({
-      ...warningUsage,
-      budgetStatus: {
-        ...warningUsage.budgetStatus,
-        stopTriggered: true,
-        stopAtUsd: 0.02,
-      },
-    })).toContain("destructive");
+    expect(
+      sessionUsageTone({
+        ...warningUsage,
+        budgetStatus: {
+          ...warningUsage.budgetStatus,
+          stopTriggered: true,
+          stopAtUsd: 0.02,
+        },
+      }),
+    ).toContain("destructive");
   });
 
   test("only exposes hard-cap clearing once the thread has reconnected", () => {
@@ -217,151 +227,173 @@ describe("desktop reasoning UI helpers", () => {
       updatedAt: "2024-01-01T00:00:01.000Z",
     };
 
-    expect(canClearSessionHardCap({
-      sessionUsage: stoppedUsage,
-      transcriptOnly: false,
-      connected: false,
-      sessionId: null,
-      threadStatus: "active",
-    })).toBe(false);
+    expect(
+      canClearSessionHardCap({
+        sessionUsage: stoppedUsage,
+        transcriptOnly: false,
+        connected: false,
+        sessionId: null,
+        threadStatus: "active",
+      }),
+    ).toBe(false);
 
-    expect(canClearSessionHardCap({
-      sessionUsage: stoppedUsage,
-      transcriptOnly: false,
-      connected: true,
-      sessionId: "session-1",
-      threadStatus: "active",
-    })).toBe(true);
+    expect(
+      canClearSessionHardCap({
+        sessionUsage: stoppedUsage,
+        transcriptOnly: false,
+        connected: true,
+        sessionId: "session-1",
+        threadStatus: "active",
+      }),
+    ).toBe(true);
   });
 
   test("keeps the stop action enabled while a run is active and the composer is empty", () => {
-    expect(getComposerSubmitState({
-      busy: true,
-      hasPromptModal: false,
-      composerText: "",
-      hasPendingAttachments: false,
-      pendingAttachmentSignature: "",
-      pendingTurnStart: null,
-      pendingSteer: null,
-      sessionId: "session-1",
-      threadStatus: "active",
-    })).toEqual({ status: "streaming", disabled: false, mode: "send" });
+    expect(
+      getComposerSubmitState({
+        busy: true,
+        hasPromptModal: false,
+        composerText: "",
+        hasPendingAttachments: false,
+        pendingAttachmentSignature: "",
+        pendingTurnStart: null,
+        pendingSteer: null,
+        sessionId: "session-1",
+        threadStatus: "active",
+      }),
+    ).toEqual({ status: "streaming", disabled: false, mode: "send" });
 
-    expect(getComposerSubmitState({
-      busy: true,
-      hasPromptModal: false,
-      composerText: "",
-      hasPendingAttachments: false,
-      pendingAttachmentSignature: "",
-      pendingTurnStart: null,
-      pendingSteer: null,
-      sessionId: null,
-      threadStatus: "active",
-    })).toEqual({ status: "streaming", disabled: true, mode: "send" });
+    expect(
+      getComposerSubmitState({
+        busy: true,
+        hasPromptModal: false,
+        composerText: "",
+        hasPendingAttachments: false,
+        pendingAttachmentSignature: "",
+        pendingTurnStart: null,
+        pendingSteer: null,
+        sessionId: null,
+        threadStatus: "active",
+      }),
+    ).toEqual({ status: "streaming", disabled: true, mode: "send" });
 
-    expect(getComposerSubmitState({
-      busy: true,
-      hasPromptModal: false,
-      composerText: "tighten scope",
-      hasPendingAttachments: false,
-      pendingAttachmentSignature: "",
-      pendingTurnStart: null,
-      pendingSteer: null,
-      sessionId: "session-1",
-      threadStatus: "active",
-    })).toEqual({ status: "ready", disabled: false, mode: "steer-ready" });
+    expect(
+      getComposerSubmitState({
+        busy: true,
+        hasPromptModal: false,
+        composerText: "tighten scope",
+        hasPendingAttachments: false,
+        pendingAttachmentSignature: "",
+        pendingTurnStart: null,
+        pendingSteer: null,
+        sessionId: "session-1",
+        threadStatus: "active",
+      }),
+    ).toEqual({ status: "ready", disabled: false, mode: "steer-ready" });
 
-    expect(getComposerSubmitState({
-      busy: true,
-      hasPromptModal: false,
-      composerText: "tighten scope",
-      hasPendingAttachments: false,
-      pendingAttachmentSignature: "",
-      pendingTurnStart: null,
-      pendingSteer: {
-        clientMessageId: "cmid-1",
-        text: "tighten scope",
-        attachmentSignature: "",
-        status: "sending",
-      },
-      sessionId: "session-1",
-      threadStatus: "active",
-    })).toEqual({ status: "ready", disabled: true, mode: "steer-pending" });
+    expect(
+      getComposerSubmitState({
+        busy: true,
+        hasPromptModal: false,
+        composerText: "tighten scope",
+        hasPendingAttachments: false,
+        pendingAttachmentSignature: "",
+        pendingTurnStart: null,
+        pendingSteer: {
+          clientMessageId: "cmid-1",
+          text: "tighten scope",
+          attachmentSignature: "",
+          status: "sending",
+        },
+        sessionId: "session-1",
+        threadStatus: "active",
+      }),
+    ).toEqual({ status: "ready", disabled: true, mode: "steer-pending" });
 
-    expect(getComposerSubmitState({
-      busy: false,
-      hasPromptModal: false,
-      composerText: "",
-      hasPendingAttachments: false,
-      pendingAttachmentSignature: "",
-      pendingTurnStart: null,
-      pendingSteer: null,
-      sessionId: "session-1",
-      threadStatus: "active",
-    })).toEqual({ status: "ready", disabled: true, mode: "send" });
+    expect(
+      getComposerSubmitState({
+        busy: false,
+        hasPromptModal: false,
+        composerText: "",
+        hasPendingAttachments: false,
+        pendingAttachmentSignature: "",
+        pendingTurnStart: null,
+        pendingSteer: null,
+        sessionId: "session-1",
+        threadStatus: "active",
+      }),
+    ).toEqual({ status: "ready", disabled: true, mode: "send" });
 
-    expect(getComposerSubmitState({
-      busy: false,
-      hasPromptModal: false,
-      composerText: "",
-      hasPendingAttachments: true,
-      pendingAttachmentSignature: "sig-1",
-      pendingTurnStart: null,
-      pendingSteer: null,
-      sessionId: "session-1",
-      threadStatus: "active",
-    })).toEqual({ status: "ready", disabled: false, mode: "send" });
+    expect(
+      getComposerSubmitState({
+        busy: false,
+        hasPromptModal: false,
+        composerText: "",
+        hasPendingAttachments: true,
+        pendingAttachmentSignature: "sig-1",
+        pendingTurnStart: null,
+        pendingSteer: null,
+        sessionId: "session-1",
+        threadStatus: "active",
+      }),
+    ).toEqual({ status: "ready", disabled: false, mode: "send" });
 
-    expect(getComposerSubmitState({
-      busy: true,
-      hasPromptModal: false,
-      composerText: "",
-      hasPendingAttachments: true,
-      pendingAttachmentSignature: "sig-1",
-      pendingTurnStart: null,
-      pendingSteer: {
-        clientMessageId: "cmid-2",
-        text: "",
-        attachmentSignature: "sig-1",
-        status: "sending",
-      },
-      sessionId: "session-1",
-      threadStatus: "active",
-    })).toEqual({ status: "ready", disabled: true, mode: "steer-pending" });
+    expect(
+      getComposerSubmitState({
+        busy: true,
+        hasPromptModal: false,
+        composerText: "",
+        hasPendingAttachments: true,
+        pendingAttachmentSignature: "sig-1",
+        pendingTurnStart: null,
+        pendingSteer: {
+          clientMessageId: "cmid-2",
+          text: "",
+          attachmentSignature: "sig-1",
+          status: "sending",
+        },
+        sessionId: "session-1",
+        threadStatus: "active",
+      }),
+    ).toEqual({ status: "ready", disabled: true, mode: "steer-pending" });
 
-    expect(getComposerSubmitState({
-      busy: false,
-      hasPromptModal: false,
-      composerText: "",
-      hasPendingAttachments: false,
-      pendingAttachmentSignature: "",
-      pendingTurnStart: {
-        clientMessageId: "cmid-3",
-        text: "hello",
-        attachmentSignature: "",
-        status: "sending",
-      },
-      pendingSteer: null,
-      sessionId: "session-1",
-      threadStatus: "active",
-    })).toEqual({ status: "pending", disabled: true, mode: "send" });
+    expect(
+      getComposerSubmitState({
+        busy: false,
+        hasPromptModal: false,
+        composerText: "",
+        hasPendingAttachments: false,
+        pendingAttachmentSignature: "",
+        pendingTurnStart: {
+          clientMessageId: "cmid-3",
+          text: "hello",
+          attachmentSignature: "",
+          status: "sending",
+        },
+        pendingSteer: null,
+        sessionId: "session-1",
+        threadStatus: "active",
+      }),
+    ).toEqual({ status: "pending", disabled: true, mode: "send" });
 
-    expect(getComposerSubmitState({
-      busy: false,
-      hasPromptModal: false,
-      composerText: "follow-up",
-      hasPendingAttachments: false,
-      pendingAttachmentSignature: "",
-      pendingTurnStart: {
-        clientMessageId: "cmid-4",
-        text: "hello",
-        attachmentSignature: "",
-        status: "sending",
-      },
-      pendingSteer: null,
-      sessionId: "session-1",
-      threadStatus: "active",
-    })).toEqual({ status: "pending", disabled: true, mode: "send" });
+    expect(
+      getComposerSubmitState({
+        busy: false,
+        hasPromptModal: false,
+        composerText: "follow-up",
+        hasPendingAttachments: false,
+        pendingAttachmentSignature: "",
+        pendingTurnStart: {
+          clientMessageId: "cmid-4",
+          text: "hello",
+          attachmentSignature: "",
+          status: "sending",
+        },
+        pendingSteer: null,
+        sessionId: "session-1",
+        threadStatus: "active",
+      }),
+    ).toEqual({ status: "pending", disabled: true, mode: "send" });
   });
 
   test("routes busy composer submits through steer mode", () => {
@@ -370,24 +402,36 @@ describe("desktop reasoning UI helpers", () => {
   });
 
   test("renders steer-specific composer helper copy", () => {
-    expect(composerBusyHint({ status: "pending", disabled: true, mode: "send" })).toBe("Sending message. Waiting for the run to start.");
-    expect(composerBusyHint({ status: "streaming", disabled: false, mode: "send" })).toBe("Type to steer, or use stop to cancel.");
-    expect(composerBusyHint({ status: "ready", disabled: false, mode: "steer-ready" })).toBe("Steer ready. Press Enter to inject it into the current run.");
-    expect(composerBusyHint({ status: "ready", disabled: false, mode: "steer-pending" })).toBe("Steer sent. Waiting for the running turn to accept it.");
+    expect(composerBusyHint({ status: "pending", disabled: true, mode: "send" })).toBe(
+      "Sending message. Waiting for the run to start.",
+    );
+    expect(composerBusyHint({ status: "streaming", disabled: false, mode: "send" })).toBe(
+      "Type to steer, or use stop to cancel.",
+    );
+    expect(composerBusyHint({ status: "ready", disabled: false, mode: "steer-ready" })).toBe(
+      "Steer ready. Press Enter to inject it into the current run.",
+    );
+    expect(composerBusyHint({ status: "ready", disabled: false, mode: "steer-pending" })).toBe(
+      "Steer sent. Waiting for the running turn to accept it.",
+    );
     expect(composerBusyHint({ status: "ready", disabled: false, mode: "send" })).toBeNull();
   });
 
   test("hydrates overflowed citation urls and sources from structured webSearch spill files", async () => {
-    const spillContent = JSON.stringify({
-      provider: "exa",
-      count: 2,
-      response: {
-        results: [
-          { title: "NVIDIA Blog", url: "https://blogs.nvidia.com/gtc" },
-          { title: "CNBC", url: "https://www.cnbc.com/gtc" },
-        ],
+    const spillContent = JSON.stringify(
+      {
+        provider: "exa",
+        count: 2,
+        response: {
+          results: [
+            { title: "NVIDIA Blog", url: "https://blogs.nvidia.com/gtc" },
+            { title: "CNBC", url: "https://www.cnbc.com/gtc" },
+          ],
+        },
       },
-    }, null, 2);
+      null,
+      2,
+    );
 
     const result = await loadOverflowCitationContext(
       [["assistant-1", "/tmp/exa-results.json"]],
@@ -397,31 +441,45 @@ describe("desktop reasoning UI helpers", () => {
       },
     );
 
-    expect(result.urlsByMessageId).toEqual(new Map([
-      ["assistant-1", new Map([
-        [1, "https://blogs.nvidia.com/gtc"],
-        [2, "https://www.cnbc.com/gtc"],
-      ])],
-    ]));
-    expect(result.sourcesByMessageId).toEqual(new Map([
-      ["assistant-1", [
-        { title: "NVIDIA Blog", url: "https://blogs.nvidia.com/gtc" },
-        { title: "CNBC", url: "https://www.cnbc.com/gtc" },
-      ]],
-    ]));
+    expect(result.urlsByMessageId).toEqual(
+      new Map([
+        [
+          "assistant-1",
+          new Map([
+            [1, "https://blogs.nvidia.com/gtc"],
+            [2, "https://www.cnbc.com/gtc"],
+          ]),
+        ],
+      ]),
+    );
+    expect(result.sourcesByMessageId).toEqual(
+      new Map([
+        [
+          "assistant-1",
+          [
+            { title: "NVIDIA Blog", url: "https://blogs.nvidia.com/gtc" },
+            { title: "CNBC", url: "https://www.cnbc.com/gtc" },
+          ],
+        ],
+      ]),
+    );
   });
 
   test("hydrates duplicate spill files for each cited block but keeps sources on the latest block", async () => {
-    const spillContent = JSON.stringify({
-      provider: "exa",
-      count: 2,
-      response: {
-        results: [
-          { title: "NVIDIA Blog", url: "https://blogs.nvidia.com/gtc" },
-          { title: "CNBC", url: "https://www.cnbc.com/gtc" },
-        ],
+    const spillContent = JSON.stringify(
+      {
+        provider: "exa",
+        count: 2,
+        response: {
+          results: [
+            { title: "NVIDIA Blog", url: "https://blogs.nvidia.com/gtc" },
+            { title: "CNBC", url: "https://www.cnbc.com/gtc" },
+          ],
+        },
       },
-    }, null, 2);
+      null,
+      2,
+    );
 
     const result = await loadOverflowCitationContext(
       [
@@ -434,22 +492,35 @@ describe("desktop reasoning UI helpers", () => {
       },
     );
 
-    expect(result.urlsByMessageId).toEqual(new Map([
-      ["assistant-1", new Map([
-        [1, "https://blogs.nvidia.com/gtc"],
-        [2, "https://www.cnbc.com/gtc"],
-      ])],
-      ["assistant-3", new Map([
-        [1, "https://blogs.nvidia.com/gtc"],
-        [2, "https://www.cnbc.com/gtc"],
-      ])],
-    ]));
-    expect(result.sourcesByMessageId).toEqual(new Map([
-      ["assistant-3", [
-        { title: "NVIDIA Blog", url: "https://blogs.nvidia.com/gtc" },
-        { title: "CNBC", url: "https://www.cnbc.com/gtc" },
-      ]],
-    ]));
+    expect(result.urlsByMessageId).toEqual(
+      new Map([
+        [
+          "assistant-1",
+          new Map([
+            [1, "https://blogs.nvidia.com/gtc"],
+            [2, "https://www.cnbc.com/gtc"],
+          ]),
+        ],
+        [
+          "assistant-3",
+          new Map([
+            [1, "https://blogs.nvidia.com/gtc"],
+            [2, "https://www.cnbc.com/gtc"],
+          ]),
+        ],
+      ]),
+    );
+    expect(result.sourcesByMessageId).toEqual(
+      new Map([
+        [
+          "assistant-3",
+          [
+            { title: "NVIDIA Blog", url: "https://blogs.nvidia.com/gtc" },
+            { title: "CNBC", url: "https://www.cnbc.com/gtc" },
+          ],
+        ],
+      ]),
+    );
   });
 
   test("renders usage stats as a title hover/focus reveal instead of an always-on header row", () => {
@@ -479,14 +550,18 @@ describe("desktop reasoning UI helpers", () => {
       createElement(ChatThreadHeader, {
         title: "Usage thread",
         sessionUsage,
-        usageHeadline: formatSessionUsageHeadline(sessionUsage, {
-          turnId: "turn-2",
-          usage: {
-            promptTokens: 200,
-            completionTokens: 50,
-            totalTokens: 250,
+        usageHeadline: formatSessionUsageHeadline(
+          sessionUsage,
+          {
+            turnId: "turn-2",
+            usage: {
+              promptTokens: 200,
+              completionTokens: 50,
+              totalTokens: 250,
+            },
           },
-        }, { showTokens: true }),
+          { showTokens: true },
+        ),
         usageBudgetLine: formatSessionBudgetLine(sessionUsage),
         canClearHardCap: false,
         onClearHardCap: () => {},

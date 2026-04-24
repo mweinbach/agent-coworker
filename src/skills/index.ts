@@ -1,8 +1,12 @@
 import path from "node:path";
-
-import type { AgentConfig, SkillEntry, SkillScope, SkillScopeDescriptor } from "../types";
 import { buildPluginCatalogSnapshot, comparePluginCatalogEntries } from "../plugins";
-import { scanSkillCatalog, scanSkillCatalogFromSources, toLegacySkillEntry, type SkillCatalogSource } from "./catalog";
+import type { AgentConfig, SkillEntry, SkillScope, SkillScopeDescriptor } from "../types";
+import {
+  type SkillCatalogSource,
+  scanSkillCatalog,
+  scanSkillCatalogFromSources,
+  toLegacySkillEntry,
+} from "./catalog";
 
 export { extractTriggers } from "./catalog";
 
@@ -35,7 +39,7 @@ function standaloneSources(skillsDirs: string[]): SkillCatalogSource[] {
 
 export async function discoverSkills(
   skillsDirs: string[],
-  opts: { includeDisabled?: boolean } = {}
+  opts: { includeDisabled?: boolean } = {},
 ): Promise<SkillEntry[]> {
   const catalog = await scanSkillCatalog(skillsDirs, {
     includeDisabled: opts.includeDisabled === true,
@@ -71,21 +75,24 @@ export async function discoverSkillsForConfig(
     pluginCatalog?: Awaited<ReturnType<typeof buildPluginCatalogSnapshot>>;
   } = {},
 ): Promise<SkillEntry[]> {
-  const pluginCatalog = opts.pluginCatalog ?? await buildPluginCatalogSnapshot(config);
+  const pluginCatalog = opts.pluginCatalog ?? (await buildPluginCatalogSnapshot(config));
   const orderedPlugins = [...pluginCatalog.plugins].sort(comparePluginCatalogEntries);
-  const catalog = await scanSkillCatalogFromSources([
-    ...standaloneSources(config.skillsDirs),
-    ...orderedPlugins.flatMap((plugin) =>
-      plugin.skills.map((skill) => ({
-        kind: "plugin" as const,
-        plugin,
-        skill,
-        enabled: skill.enabled,
-      })),
-    ),
-  ], {
-    includeDisabled: opts.includeDisabled === true,
-  });
+  const catalog = await scanSkillCatalogFromSources(
+    [
+      ...standaloneSources(config.skillsDirs),
+      ...orderedPlugins.flatMap((plugin) =>
+        plugin.skills.map((skill) => ({
+          kind: "plugin" as const,
+          plugin,
+          skill,
+          enabled: skill.enabled,
+        })),
+      ),
+    ],
+    {
+      includeDisabled: opts.includeDisabled === true,
+    },
+  );
   const filtered = opts.includeDisabled
     ? catalog.installations
     : catalog.installations.filter((installation) => installation.enabled);

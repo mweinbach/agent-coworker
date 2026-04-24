@@ -1,13 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-
-import { toolResultContentFromOutput, type PiToolResultContentPart } from "./piMessageBridge";
-
 import {
   effectiveToolOutputOverflowChars,
   MODEL_SCRATCHPAD_DIRNAME,
   TOOL_OUTPUT_OVERFLOW_PREVIEW_CHARS,
 } from "../shared/toolOutputOverflow";
+import { type PiToolResultContentPart, toolResultContentFromOutput } from "./piMessageBridge";
 
 type OverflowSummaryField = "exitCode" | "ok" | "count" | "provider";
 
@@ -39,7 +37,9 @@ function isTextOnlyRichOutput(value: unknown): boolean {
 
 function joinToolResultText(parts: PiToolResultContentPart[]): string {
   return parts
-    .filter((part): part is Extract<PiToolResultContentPart, { type: "text" }> => part.type === "text")
+    .filter(
+      (part): part is Extract<PiToolResultContentPart, { type: "text" }> => part.type === "text",
+    )
     .map((part) => part.text)
     .join("\n");
 }
@@ -85,7 +85,9 @@ function buildOverflowPointerText(filePath: string, chars: number, preview: stri
     "Use the read tool to inspect the saved file if you need the full result.",
   ];
   if (preview.trim()) {
-    sections.push(`Preview (first ${TOOL_OUTPUT_OVERFLOW_PREVIEW_CHARS.toLocaleString()} chars):\n${preview}`);
+    sections.push(
+      `Preview (first ${TOOL_OUTPUT_OVERFLOW_PREVIEW_CHARS.toLocaleString()} chars):\n${preview}`,
+    );
   }
   return sections.join("\n\n");
 }
@@ -142,21 +144,25 @@ export async function maybeSpillToolOutputToWorkspace(opts: {
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
   const scratchDir = path.join(opts.workingDirectory, MODEL_SCRATCHPAD_DIRNAME);
-  const fileName = [
-    timestamp,
-    sanitizeFileSegment(opts.toolName, "tool"),
-    sanitizeFileSegment(opts.toolCallId, "call"),
-  ].join("__") + ".txt";
+  const fileName =
+    [
+      timestamp,
+      sanitizeFileSegment(opts.toolName, "tool"),
+      sanitizeFileSegment(opts.toolCallId, "call"),
+    ].join("__") + ".txt";
   const filePath = path.join(scratchDir, fileName);
 
   try {
     await fs.mkdir(scratchDir, { recursive: true, mode: PRIVATE_SCRATCHPAD_DIR_MODE });
     await fs.chmod(scratchDir, PRIVATE_SCRATCHPAD_DIR_MODE).catch(() => {});
-    await fs.writeFile(filePath, spillText, { encoding: "utf-8", mode: PRIVATE_SCRATCHPAD_FILE_MODE });
+    await fs.writeFile(filePath, spillText, {
+      encoding: "utf-8",
+      mode: PRIVATE_SCRATCHPAD_FILE_MODE,
+    });
     await fs.chmod(filePath, PRIVATE_SCRATCHPAD_FILE_MODE).catch(() => {});
   } catch (error) {
     opts.log?.(
-      `[warn] Failed to write tool overflow spill file for ${opts.toolName}: ${error instanceof Error ? error.message : String(error)}`
+      `[warn] Failed to write tool overflow spill file for ${opts.toolName}: ${error instanceof Error ? error.message : String(error)}`,
     );
     return null;
   }

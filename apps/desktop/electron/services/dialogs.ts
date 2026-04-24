@@ -55,7 +55,10 @@ function buildDefaultConfirmDialog(
   };
 }
 
-export function buildConfirmDialog(input: ConfirmActionInput, platform: NodeJS.Platform = process.platform): BuiltConfirmDialog {
+export function buildConfirmDialog(
+  input: ConfirmActionInput,
+  platform: NodeJS.Platform = process.platform,
+): BuiltConfirmDialog {
   const confirmLabel = trimOrDefault(input.confirmLabel, "Confirm");
   const cancelLabel = trimOrDefault(input.cancelLabel, "Cancel");
 

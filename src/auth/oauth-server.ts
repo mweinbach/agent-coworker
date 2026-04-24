@@ -15,7 +15,7 @@ const addressInfoSchema = z.object({ port: z.number().int().nonnegative() }).pas
 
 export async function listenOnLocalhost(
   preferredPort: number,
-  onRequest: (req: IncomingMessage, res: ServerResponse) => void
+  onRequest: (req: IncomingMessage, res: ServerResponse) => void,
 ): Promise<{ port: number; close: () => void }> {
   const isAddrInUse = (err: unknown): boolean => {
     const parsed = errorWithCodeSchema.safeParse(err);
@@ -27,7 +27,10 @@ export async function listenOnLocalhost(
     return parsed.success && parsed.data.code === code;
   };
 
-  const listen = async (host: string, port: number): Promise<{ port: number; close: () => void }> => {
+  const listen = async (
+    host: string,
+    port: number,
+  ): Promise<{ port: number; close: () => void }> => {
     const server = createServer(onRequest);
     const resolvedPort = await new Promise<number>((resolve, reject) => {
       const onError = (err: unknown) => {
@@ -76,7 +79,9 @@ export async function listenOnLocalhost(
     }
 
     if (listeners.length === 0 || resolvedPort == null) {
-      throw lastErr instanceof Error ? lastErr : new Error("Unable to bind localhost callback port.");
+      throw lastErr instanceof Error
+        ? lastErr
+        : new Error("Unable to bind localhost callback port.");
     }
 
     return {

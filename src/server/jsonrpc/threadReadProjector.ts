@@ -20,7 +20,9 @@ type ProjectedTurnState = {
   seenOccurrencesByRawId: Map<string, number>;
 };
 
-function dedupeReplayReasoningItems(items: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+function dedupeReplayReasoningItems(
+  items: Array<Record<string, unknown>>,
+): Array<Record<string, unknown>> {
   const reasoningHistory: string[] = [];
   const seenReasoningTexts = new Set<string>();
   const out: Array<Record<string, unknown>> = [];
@@ -50,7 +52,9 @@ function dedupeReplayReasoningItems(items: Array<Record<string, unknown>>): Arra
   return out;
 }
 
-function dedupeReplayAssistantItems(items: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+function dedupeReplayAssistantItems(
+  items: Array<Record<string, unknown>>,
+): Array<Record<string, unknown>> {
   let assistantHistory = "";
   const out: Array<Record<string, unknown>> = [];
 
@@ -164,7 +168,12 @@ export function createThreadTurnProjector() {
         if (!turnId || !rawItemId) return;
         const turn = ensureTurn(turnId);
         const itemId = currentProjectedItemId(turn, rawItemId);
-        const existing = turn.items.get(itemId) ?? { id: itemId, type: "reasoning", mode, text: "" };
+        const existing = turn.items.get(itemId) ?? {
+          id: itemId,
+          type: "reasoning",
+          mode,
+          text: "",
+        };
         const currentText = typeof existing.text === "string" ? existing.text : "";
         if (!turn.items.has(itemId)) {
           turn.itemOrder.push(itemId);
@@ -189,16 +198,19 @@ export function createThreadTurnProjector() {
     }
   };
 
-  const build = (): ProjectedTurn[] => order.map((turnId) => {
-    const turn = turns.get(turnId)!;
-    return {
-      id: turn.id,
-      status: turn.status,
-      items: dedupeReplayAssistantItems(dedupeReplayReasoningItems(
-        turn.itemOrder.map((itemId) => turn.items.get(itemId)!).filter(Boolean),
-      )),
-    };
-  });
+  const build = (): ProjectedTurn[] =>
+    order.map((turnId) => {
+      const turn = turns.get(turnId)!;
+      return {
+        id: turn.id,
+        status: turn.status,
+        items: dedupeReplayAssistantItems(
+          dedupeReplayReasoningItems(
+            turn.itemOrder.map((itemId) => turn.items.get(itemId)!).filter(Boolean),
+          ),
+        ),
+      };
+    });
 
   return {
     handle,
@@ -206,7 +218,9 @@ export function createThreadTurnProjector() {
   };
 }
 
-export function projectThreadTurnsFromJournal(events: PersistedThreadJournalEvent[]): ProjectedTurn[] {
+export function projectThreadTurnsFromJournal(
+  events: PersistedThreadJournalEvent[],
+): ProjectedTurn[] {
   const projector = createThreadTurnProjector();
   for (const event of events) {
     projector.handle(event);

@@ -105,9 +105,9 @@ describe("shouldUseMacosNativeGlass", () => {
   });
 
   test("disables glass when reduced transparency is preferred", () => {
-    expect(
-      shouldUseMacosNativeGlass("darwin", {}, { prefersReducedTransparency: true }),
-    ).toBe(false);
+    expect(shouldUseMacosNativeGlass("darwin", {}, { prefersReducedTransparency: true })).toBe(
+      false,
+    );
   });
 
   test("respects explicit environment overrides", () => {

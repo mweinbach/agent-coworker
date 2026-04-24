@@ -1,11 +1,13 @@
-import type { ComponentProps } from "react";
-
 import { Checkbox as HeroCheckbox } from "@heroui/react";
 import { CheckIcon } from "lucide-react";
+import type { ComponentProps } from "react";
 
 import { cn } from "@/lib/utils";
 
-type CheckboxProps = Omit<ComponentProps<typeof HeroCheckbox>, "children" | "isSelected" | "onChange" | "isDisabled"> & {
+type CheckboxProps = Omit<
+  ComponentProps<typeof HeroCheckbox>,
+  "children" | "isSelected" | "onChange" | "isDisabled"
+> & {
   checked?: boolean;
   disabled?: boolean;
   onCheckedChange?: (checked: boolean) => void;

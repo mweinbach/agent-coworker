@@ -1,13 +1,11 @@
-import { useMemo } from "react";
-import { Streamdown } from "streamdown";
 import { cjk } from "@streamdown/cjk";
 import { code } from "@streamdown/code";
 import { math } from "@streamdown/math";
 import { mermaid } from "@streamdown/mermaid";
-
-import { getExtensionLower } from "../lib/filePreviewKind";
+import { useMemo } from "react";
+import { defaultRemarkPlugins, Streamdown } from "streamdown";
 import { defaultDesktopRehypePlugins } from "../components/ai-elements/message";
-import { defaultRemarkPlugins } from "streamdown";
+import { getExtensionLower } from "../lib/filePreviewKind";
 
 const previewPlugins = { cjk, code, math, mermaid };
 const mdRemarkPlugins = [defaultRemarkPlugins.gfm];

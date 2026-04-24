@@ -66,11 +66,12 @@ export function useResearchAttachments() {
   }, []);
 
   const attachmentPreviews = useMemo(
-    () => attachments.map((attachment) => ({
-      filename: attachment.filename,
-      mimeType: attachment.mimeType,
-      previewUrl: attachment.previewUrl,
-    })),
+    () =>
+      attachments.map((attachment) => ({
+        filename: attachment.filename,
+        mimeType: attachment.mimeType,
+        previewUrl: attachment.previewUrl,
+      })),
     [attachments],
   );
 

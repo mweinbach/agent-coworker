@@ -1,5 +1,5 @@
-import * as React from "react";
 import { ScrollShadow as HeroScrollShadow } from "@heroui/react";
+import type * as React from "react";
 
 type ScrollShadowProps = React.ComponentProps<typeof HeroScrollShadow>;
 

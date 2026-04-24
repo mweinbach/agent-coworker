@@ -145,10 +145,14 @@
     --shadow-settings-pane-divider: inset 1px 0 0 var(--border-subtle);
     --shadow-surface-elevated: 0 1px 0 color-mix(in srgb, var(--text-base) 6%, transparent);
     --shadow-overlay: var(--shadow-overlay-base);
-    --shadow-popover: 0 14px 30px color-mix(in srgb, var(--panel-bg) 24%, transparent), 0 1px 0 color-mix(in srgb, var(--text-base) 8%, transparent);
+    --shadow-popover:
+      0 14px 30px color-mix(in srgb, var(--panel-bg) 24%, transparent),
+      0 1px 0 color-mix(in srgb, var(--text-base) 8%, transparent);
     --shadow-field: 0 0 0 0 transparent;
 
-    --focus-ring-shadow: 0 0 0 2px var(--surface-window), 0 0 0 4px color-mix(in srgb, var(--accent-base) 40%, transparent);
+    --focus-ring-shadow:
+      0 0 0 2px var(--surface-window),
+      0 0 0 4px color-mix(in srgb, var(--accent-base) 40%, transparent);
     --scrollbar-thumb: color-mix(in srgb, var(--text-base) 18%, transparent);
     --scrollbar-thumb-hover: color-mix(in srgb, var(--text-base) 30%, transparent);
     --toolbar-button-filter: none;

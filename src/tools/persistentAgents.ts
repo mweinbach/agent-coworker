@@ -21,13 +21,22 @@ export function createListAgentsTool(ctx: ToolContext) {
 
 export function createSendAgentInputTool(ctx: ToolContext) {
   return defineTool({
-    description: "Send a follow-up message to an existing child agent. Use interrupt=true to redirect work immediately.",
+    description:
+      "Send a follow-up message to an existing child agent. Use interrupt=true to redirect work immediately.",
     inputSchema: z.object({
       agentId: z.string().trim().min(1),
       message: z.string().trim().min(1).max(20_000),
       interrupt: z.boolean().optional(),
     }),
-    execute: async ({ agentId, message, interrupt }: { agentId: string; message: string; interrupt?: boolean }) => {
+    execute: async ({
+      agentId,
+      message,
+      interrupt,
+    }: {
+      agentId: string;
+      message: string;
+      interrupt?: boolean;
+    }) => {
       ctx.log(`tool> sendAgentInput ${JSON.stringify({ agentId, interrupt: interrupt === true })}`);
       await requireAgentControl(ctx).sendInput({ agentId, message, interrupt });
       ctx.log(`tool< sendAgentInput ${JSON.stringify({ agentId })}`);
@@ -38,27 +47,38 @@ export function createSendAgentInputTool(ctx: ToolContext) {
 
 export function createWaitForAgentTool(ctx: ToolContext) {
   return defineTool({
-    description: "Wait for child agents to reach terminal states. mode='any' resolves on the first terminal child; mode='all' waits for every requested child. Returns the latest known status for all requested ids even when timed out.",
+    description:
+      "Wait for child agents to reach terminal states. mode='any' resolves on the first terminal child; mode='all' waits for every requested child. Returns the latest known status for all requested ids even when timed out.",
     inputSchema: z.object({
       agentIds: z.array(z.string().trim().min(1)).min(1),
       timeoutMs: z.number().int().min(0).max(300_000).optional(),
       mode: z.enum(AGENT_WAIT_MODE_VALUES).optional(),
     }),
-    execute: async ({ agentIds, timeoutMs, mode }: { agentIds: string[]; timeoutMs?: number; mode?: "any" | "all" }) =>
-      await requireAgentControl(ctx).wait({ agentIds, timeoutMs, mode }),
+    execute: async ({
+      agentIds,
+      timeoutMs,
+      mode,
+    }: {
+      agentIds: string[];
+      timeoutMs?: number;
+      mode?: "any" | "all";
+    }) => await requireAgentControl(ctx).wait({ agentIds, timeoutMs, mode }),
   });
 }
 
 export function createInspectAgentTool(ctx: ToolContext) {
   return defineTool({
-    description: "Read the latest detailed result for a child agent, including full assistant text and parsed structured report.",
+    description:
+      "Read the latest detailed result for a child agent, including full assistant text and parsed structured report.",
     inputSchema: z.object({
       agentId: z.string().trim().min(1),
     }),
     execute: async ({ agentId }: { agentId: string }) => {
       ctx.log(`tool> inspectAgent ${JSON.stringify({ agentId })}`);
       const result = await requireAgentControl(ctx).inspect({ agentId });
-      ctx.log(`tool< inspectAgent ${JSON.stringify({ agentId, hasText: !!result.latestAssistantText, hasReport: !!result.parsedReport })}`);
+      ctx.log(
+        `tool< inspectAgent ${JSON.stringify({ agentId, hasText: !!result.latestAssistantText, hasReport: !!result.parsedReport })}`,
+      );
       return result;
     },
   });
@@ -66,7 +86,8 @@ export function createInspectAgentTool(ctx: ToolContext) {
 
 export function createResumeAgentTool(ctx: ToolContext) {
   return defineTool({
-    description: "Resume a previously closed child agent by id so it can receive new input and waits.",
+    description:
+      "Resume a previously closed child agent by id so it can receive new input and waits.",
     inputSchema: z.object({
       agentId: z.string().trim().min(1),
     }),
@@ -81,7 +102,8 @@ export function createResumeAgentTool(ctx: ToolContext) {
 
 export function createCloseAgentTool(ctx: ToolContext) {
   return defineTool({
-    description: "Close a child agent when it is no longer needed and return its last known status.",
+    description:
+      "Close a child agent when it is no longer needed and return its last known status.",
     inputSchema: z.object({
       agentId: z.string().trim().min(1),
     }),

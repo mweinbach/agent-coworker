@@ -1,12 +1,14 @@
-import * as React from "react";
 import { Button as HeroButton } from "@heroui/react";
+import * as React from "react";
 
 import { cn } from "@/lib/utils";
 
 type ButtonVariant = "default" | "secondary" | "destructive" | "outline" | "ghost" | "link";
 type ButtonSize = "default" | "sm" | "lg" | "icon" | "icon-sm";
 
-type HeroButtonPressEvent = Parameters<NonNullable<React.ComponentProps<typeof HeroButton>["onPress"]>>[0];
+type HeroButtonPressEvent = Parameters<
+  NonNullable<React.ComponentProps<typeof HeroButton>["onPress"]>
+>[0];
 
 function assignRef<T>(ref: React.Ref<T> | undefined, value: T | null) {
   if (!ref) {
@@ -35,7 +37,10 @@ function getElementRef<T>(element: React.ReactElement): React.Ref<T> | undefined
   return withPossibleRef.props.ref ?? withPossibleRef.ref;
 }
 
-type ButtonProps = Omit<React.ComponentProps<typeof HeroButton>, "variant" | "size" | "onPress" | "isDisabled"> & {
+type ButtonProps = Omit<
+  React.ComponentProps<typeof HeroButton>,
+  "variant" | "size" | "onPress" | "isDisabled"
+> & {
   variant?: ButtonVariant;
   size?: ButtonSize;
   asChild?: boolean;
@@ -45,7 +50,9 @@ type ButtonProps = Omit<React.ComponentProps<typeof HeroButton>, "variant" | "si
   title?: string;
 };
 
-function mapVariant(variant: ButtonVariant | undefined): NonNullable<React.ComponentProps<typeof HeroButton>["variant"]> {
+function mapVariant(
+  variant: ButtonVariant | undefined,
+): NonNullable<React.ComponentProps<typeof HeroButton>["variant"]> {
   switch (variant) {
     case "secondary":
       return "secondary";
@@ -63,7 +70,9 @@ function mapVariant(variant: ButtonVariant | undefined): NonNullable<React.Compo
   }
 }
 
-function mapSize(size: ButtonSize | undefined): NonNullable<React.ComponentProps<typeof HeroButton>["size"]> {
+function mapSize(
+  size: ButtonSize | undefined,
+): NonNullable<React.ComponentProps<typeof HeroButton>["size"]> {
   switch (size) {
     case "sm":
     case "icon-sm":
@@ -78,11 +87,15 @@ function mapSize(size: ButtonSize | undefined): NonNullable<React.ComponentProps
 }
 
 const buttonVariantStyles: Record<ButtonVariant, string> = {
-  default: "border border-transparent bg-primary text-primary-foreground shadow-none hover:bg-primary/85",
+  default:
+    "border border-transparent bg-primary text-primary-foreground shadow-none hover:bg-primary/85",
   secondary: "border border-border/70 bg-muted/40 text-foreground shadow-none hover:bg-muted/60",
-  destructive: "border border-transparent bg-destructive/10 text-destructive shadow-none hover:bg-destructive/20 hover:text-destructive",
-  outline: "border border-border/70 bg-background/80 text-foreground shadow-none hover:bg-muted/30 hover:text-foreground",
-  ghost: "border border-transparent bg-transparent text-foreground shadow-none hover:bg-muted/40 hover:text-foreground",
+  destructive:
+    "border border-transparent bg-destructive/10 text-destructive shadow-none hover:bg-destructive/20 hover:text-destructive",
+  outline:
+    "border border-border/70 bg-background/80 text-foreground shadow-none hover:bg-muted/30 hover:text-foreground",
+  ghost:
+    "border border-transparent bg-transparent text-foreground shadow-none hover:bg-muted/40 hover:text-foreground",
   link: "h-auto px-0 py-0 text-primary underline-offset-4 hover:underline",
 };
 
@@ -107,17 +120,20 @@ function buttonVariants({
   );
 }
 
-const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button({
-  className,
-  variant = "default",
-  size = "default",
-  asChild = false,
-  onClick,
-  onPress,
-  disabled,
-  children,
-  ...props
-}, ref) {
+const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
+  {
+    className,
+    variant = "default",
+    size = "default",
+    asChild = false,
+    onClick,
+    onPress,
+    disabled,
+    children,
+    ...props
+  },
+  ref,
+) {
   if (asChild && React.isValidElement(children)) {
     const child = children as React.ReactElement<React.HTMLAttributes<HTMLElement>>;
     const childProps = {
@@ -132,10 +148,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
         child.props.onClick?.(event);
         onClick?.(event as React.MouseEvent<HTMLButtonElement>);
       },
-      ref: composeRefs(
-        getElementRef<HTMLElement>(child),
-        ref as React.Ref<HTMLElement>,
-      ),
+      ref: composeRefs(getElementRef<HTMLElement>(child), ref as React.Ref<HTMLElement>),
     } as React.HTMLAttributes<HTMLElement>;
 
     return React.cloneElement(child, childProps);

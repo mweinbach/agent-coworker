@@ -52,10 +52,10 @@ function deriveWorkingDirectoryRelation(
   const normalizedRelative = pathImpl.relative(normalizedWorkspaceRoot, normalizedExecutionCwd);
 
   if (
-    normalizedRelative
-    && normalizedRelative !== ".."
-    && !normalizedRelative.startsWith(`..${pathImpl.sep}`)
-    && !pathImpl.isAbsolute(normalizedRelative)
+    normalizedRelative &&
+    normalizedRelative !== ".." &&
+    !normalizedRelative.startsWith(`..${pathImpl.sep}`) &&
+    !pathImpl.isAbsolute(normalizedRelative)
   ) {
     return `inside workspace root at ${normalizedRelative}`;
   }
@@ -92,7 +92,8 @@ export function deriveActiveWorkspaceContext(
     gitRoot: findGitRootSync(executionCwd),
     workingDirectoryRelation: deriveWorkingDirectoryRelation(workspaceRoot, executionCwd, platform),
     outputDirectory: config.outputDirectory,
-    effectiveUploadsDirectory: config.uploadsDirectory ?? path.resolve(config.workingDirectory, "User Uploads"),
+    effectiveUploadsDirectory:
+      config.uploadsDirectory ?? path.resolve(config.workingDirectory, "User Uploads"),
     projectAgentDir: config.projectAgentDir,
   };
 }

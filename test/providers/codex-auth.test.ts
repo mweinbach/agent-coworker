@@ -19,7 +19,11 @@ import {
 } from "../../src/providers/codex-auth";
 
 function b64url(input: string): string {
-  return Buffer.from(input, "utf8").toString("base64").replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+  return Buffer.from(input, "utf8")
+    .toString("base64")
+    .replace(/=/g, "")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
 }
 
 function makeJwt(payload: Record<string, unknown>): string {
@@ -173,10 +177,13 @@ describe("codex auth token response parsing", () => {
       paths: { authDir },
       material,
       fetchImpl: async () =>
-        new Response(JSON.stringify({ access_token: makeJwt({ exp: 1_760_000_000 }), expires_in: 60 }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
+        new Response(
+          JSON.stringify({ access_token: makeJwt({ exp: 1_760_000_000 }), expires_in: 60 }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
     });
 
     expect(refreshed.refreshToken).toBe("refresh-token-existing");
@@ -218,9 +225,9 @@ describe("codex auth token response parsing", () => {
           last_refresh: "2026-03-11T18:00:01.000Z",
         },
         null,
-        2
+        2,
       ),
-      "utf-8"
+      "utf-8",
     );
 
     const staleMaterial = {
@@ -244,7 +251,7 @@ describe("codex auth token response parsing", () => {
           {
             status: 200,
             headers: { "Content-Type": "application/json" },
-          }
+          },
         ),
     });
 
@@ -347,14 +354,17 @@ describe("readCodexAuthMaterial fallback behavior", () => {
         {
           auth_mode: "chatgpt",
           tokens: {
-            access_token: makeJwt({ exp: Math.floor(Date.now() / 1000) + 3600, email: "legacy@example.com" }),
+            access_token: makeJwt({
+              exp: Math.floor(Date.now() / 1000) + 3600,
+              email: "legacy@example.com",
+            }),
             refresh_token: "legacy-refresh-token",
           },
         },
         null,
-        2
+        2,
       ),
-      "utf-8"
+      "utf-8",
     );
 
     const material = await readCodexAuthMaterial(paths);
@@ -402,9 +412,9 @@ describe("readCodexAuthMaterial fallback behavior", () => {
           },
         },
         null,
-        2
+        2,
       ),
-      "utf-8"
+      "utf-8",
     );
 
     const material = await readCodexAuthMaterial(paths);
@@ -417,7 +427,10 @@ describe("readCodexAuthMaterial fallback behavior", () => {
   test("ignores legacy external auth when Cowork auth is missing", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "codex-auth-import-legacy-"));
     const paths = makePaths(home);
-    const accessToken = makeJwt({ exp: Math.floor(Date.now() / 1000) + 3600, email: "legacy@example.com" });
+    const accessToken = makeJwt({
+      exp: Math.floor(Date.now() / 1000) + 3600,
+      email: "legacy@example.com",
+    });
     const idToken = makeJwt({
       iss: CODEX_OAUTH_ISSUER,
       email: "legacy@example.com",
@@ -439,7 +452,9 @@ describe("readCodexAuthMaterial fallback behavior", () => {
     );
 
     await expect(readCodexAuthMaterial(paths)).resolves.toBeNull();
-    await expect(fs.readFile(path.join(paths.authDir, "codex-cli", "auth.json"), "utf-8")).rejects.toThrow();
+    await expect(
+      fs.readFile(path.join(paths.authDir, "codex-cli", "auth.json"), "utf-8"),
+    ).rejects.toThrow();
   });
 
   test("clearCodexAuthMaterial only clears Cowork auth and does not restore from legacy auth", async () => {

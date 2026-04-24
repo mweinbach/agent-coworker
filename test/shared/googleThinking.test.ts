@@ -34,8 +34,12 @@ describe("googleThinking helpers", () => {
   });
 
   test("normalizes unsupported thinking levels away for the selected model", () => {
-    expect(normalizeGoogleThinkingLevelForModel("gemini-3.1-pro-preview", "minimal")).toBeUndefined();
+    expect(
+      normalizeGoogleThinkingLevelForModel("gemini-3.1-pro-preview", "minimal"),
+    ).toBeUndefined();
     expect(normalizeGoogleThinkingLevelForModel("gemini-3.1-pro-preview", "low")).toBe("low");
-    expect(normalizeGoogleThinkingLevelForModel("gemini-3-flash-preview", "minimal")).toBe("minimal");
+    expect(normalizeGoogleThinkingLevelForModel("gemini-3-flash-preview", "minimal")).toBe(
+      "minimal",
+    );
   });
 });

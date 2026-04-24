@@ -1,7 +1,4 @@
-type TogetherModelId =
-  | "moonshotai/Kimi-K2.5"
-  | "Qwen/Qwen3.5-397B-A17B"
-  | "zai-org/GLM-5";
+type TogetherModelId = "moonshotai/Kimi-K2.5" | "Qwen/Qwen3.5-397B-A17B" | "zai-org/GLM-5";
 
 type TogetherModelSpec = {
   id: TogetherModelId;
@@ -68,10 +65,9 @@ export function getTogetherModelSpec(modelId: string): TogetherModelSpec | null 
   return TOGETHER_MODEL_SPECS[modelId as TogetherModelId] ?? null;
 }
 
-export function resolveTogetherApiKey(opts: {
-  savedKey?: string;
-  env?: NodeJS.ProcessEnv;
-} = {}): string | undefined {
+export function resolveTogetherApiKey(
+  opts: { savedKey?: string; env?: NodeJS.ProcessEnv } = {},
+): string | undefined {
   const env = opts.env ?? process.env;
   const key = opts.savedKey?.trim() || env.TOGETHER_API_KEY?.trim();
   return key || undefined;

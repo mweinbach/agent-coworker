@@ -1,6 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import { createElement } from "react";
-import { act } from "react";
+import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
@@ -29,42 +28,44 @@ const MOCK_UPDATE_STATE = {
 const openPathMock = mock(async () => {});
 const revealPathMock = mock(async () => {});
 
-mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
-  appendTranscriptBatch: async () => {},
-  appendTranscriptEvent: async () => {},
-  deleteTranscript: async () => {},
-  listDirectory: async () => [],
-  loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
-  pickWorkspaceDirectory: async () => null,
-  readTranscript: async () => [],
-  saveState: async () => {},
-  startWorkspaceServer: async () => ({ url: "ws://mock" }),
-  stopWorkspaceServer: async () => {},
-  showContextMenu: async () => null,
-  windowMinimize: async () => {},
-  windowMaximize: async () => {},
-  windowClose: async () => {},
-  getPlatform: async () => "linux",
-  readFile: async () => "",
-  previewOSFile: async () => {},
-  openPath: openPathMock,
-  openExternalUrl: async () => {},
-  revealPath: revealPathMock,
-  copyPath: async () => {},
-  createDirectory: async () => {},
-  renamePath: async () => {},
-  trashPath: async () => {},
-  confirmAction: async () => true,
-  showNotification: async () => true,
-  getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  getUpdateState: async () => MOCK_UPDATE_STATE,
-  checkForUpdates: async () => {},
-  quitAndInstallUpdate: async () => {},
-  onSystemAppearanceChanged: () => () => {},
-  onMenuCommand: () => () => {},
-  onUpdateStateChanged: () => () => {},
-}));
+mock.module("../src/lib/desktopCommands", () =>
+  createDesktopCommandsMock({
+    appendTranscriptBatch: async () => {},
+    appendTranscriptEvent: async () => {},
+    deleteTranscript: async () => {},
+    listDirectory: async () => [],
+    loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
+    pickWorkspaceDirectory: async () => null,
+    readTranscript: async () => [],
+    saveState: async () => {},
+    startWorkspaceServer: async () => ({ url: "ws://mock" }),
+    stopWorkspaceServer: async () => {},
+    showContextMenu: async () => null,
+    windowMinimize: async () => {},
+    windowMaximize: async () => {},
+    windowClose: async () => {},
+    getPlatform: async () => "linux",
+    readFile: async () => "",
+    previewOSFile: async () => {},
+    openPath: openPathMock,
+    openExternalUrl: async () => {},
+    revealPath: revealPathMock,
+    copyPath: async () => {},
+    createDirectory: async () => {},
+    renamePath: async () => {},
+    trashPath: async () => {},
+    confirmAction: async () => true,
+    showNotification: async () => true,
+    getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    getUpdateState: async () => MOCK_UPDATE_STATE,
+    checkForUpdates: async () => {},
+    quitAndInstallUpdate: async () => {},
+    onSystemAppearanceChanged: () => () => {},
+    onMenuCommand: () => () => {},
+    onUpdateStateChanged: () => () => {},
+  }),
+);
 
 const { useAppStore } = await import("../src/app/store");
 const { defaultWorkspaceRuntime } = await import("../src/app/store.helpers/runtimeState");
@@ -119,10 +120,14 @@ describe("skill detail dialog", () => {
       const storeState = useAppStore.getState();
       const rt = storeState.workspaceRuntimeById["ws-1"];
       if (!rt) {
-        throw new Error(`store has no ws-1 runtime. keys: ${Object.keys(storeState.workspaceRuntimeById).join(",")}`);
+        throw new Error(
+          `store has no ws-1 runtime. keys: ${Object.keys(storeState.workspaceRuntimeById).join(",")}`,
+        );
       }
       if (!rt.selectedSkillInstallation) {
-        throw new Error(`ws-1 runtime has no selectedSkillInstallation. installationId: ${rt.selectedSkillInstallationId}`);
+        throw new Error(
+          `ws-1 runtime has no selectedSkillInstallation. installationId: ${rt.selectedSkillInstallationId}`,
+        );
       }
 
       // Verify basic React rendering works in this JSDOM
@@ -141,9 +146,13 @@ describe("skill detail dialog", () => {
         const installationId = rt2?.selectedSkillInstallationId ?? "null";
         const hasInstallation = rt2?.selectedSkillInstallation ? "yes" : "no";
         const selectedName = rt2?.selectedSkillName ?? "null";
-        return createElement("div", null,
-          createElement("div", { id: "wrapper-debug" },
-            `id=${installationId}|inst=${hasInstallation}|name=${selectedName}`
+        return createElement(
+          "div",
+          null,
+          createElement(
+            "div",
+            { id: "wrapper-debug" },
+            `id=${installationId}|inst=${hasInstallation}|name=${selectedName}`,
           ),
           createElement(SkillDetailDialog, { workspaceId: "ws-1" }),
         );
@@ -156,26 +165,28 @@ describe("skill detail dialog", () => {
       const debugEl = harness.dom.window.document.getElementById("wrapper-debug");
       const debugText = debugEl?.textContent ?? "(wrapper-debug missing)";
 
-      const openFolderButton = Array.from(harness.dom.window.document.querySelectorAll("button")).find(
-        (button) => button.textContent?.includes("Open folder"),
-      );
-      const uninstallButton = Array.from(harness.dom.window.document.querySelectorAll("button")).find(
-        (button) => button.textContent?.includes("Uninstall"),
-      );
+      const openFolderButton = Array.from(
+        harness.dom.window.document.querySelectorAll("button"),
+      ).find((button) => button.textContent?.includes("Open folder"));
+      const uninstallButton = Array.from(
+        harness.dom.window.document.querySelectorAll("button"),
+      ).find((button) => button.textContent?.includes("Uninstall"));
 
       if (!openFolderButton) {
         const html = harness.dom.window.document.getElementById("root")?.innerHTML ?? "(empty)";
         throw new Error(
           `missing open folder button.` +
-          ` wrapperDebug: ${debugText}` +
-          ` | DOM: ${html.slice(0, 500)}`
+            ` wrapperDebug: ${debugText}` +
+            ` | DOM: ${html.slice(0, 500)}`,
         );
       }
 
       expect(uninstallButton).toBeUndefined();
 
       await act(async () => {
-        openFolderButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+        openFolderButton.dispatchEvent(
+          new harness.dom.window.MouseEvent("click", { bubbles: true }),
+        );
         await Promise.resolve();
       });
 
@@ -202,8 +213,10 @@ describe("skill detail dialog", () => {
     const installationRoot = "/home/test/.cowork/skills/example-skill";
 
     useAppStore.setState({
-      deleteSkillInstallation: deleteSkillInstallationMock as typeof previousState.deleteSkillInstallation,
-      selectSkillInstallation: selectSkillInstallationMock as typeof previousState.selectSkillInstallation,
+      deleteSkillInstallation:
+        deleteSkillInstallationMock as typeof previousState.deleteSkillInstallation,
+      selectSkillInstallation:
+        selectSkillInstallationMock as typeof previousState.selectSkillInstallation,
       workspaceRuntimeById: {
         "ws-1": {
           ...defaultWorkspaceRuntime(),
@@ -243,9 +256,9 @@ describe("skill detail dialog", () => {
         root.render(createElement(SkillDetailDialog, { workspaceId: "ws-1" }));
       });
 
-      const uninstallButton = Array.from(harness.dom.window.document.querySelectorAll("button")).find(
-        (button) => button.textContent?.includes("Uninstall"),
-      );
+      const uninstallButton = Array.from(
+        harness.dom.window.document.querySelectorAll("button"),
+      ).find((button) => button.textContent?.includes("Uninstall"));
 
       if (!uninstallButton) {
         const html = harness.dom.window.document.getElementById("root")?.innerHTML ?? "(empty)";
@@ -253,7 +266,9 @@ describe("skill detail dialog", () => {
       }
 
       await act(async () => {
-        uninstallButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+        uninstallButton.dispatchEvent(
+          new harness.dom.window.MouseEvent("click", { bubbles: true }),
+        );
         await Promise.resolve();
       });
 

@@ -1,20 +1,20 @@
+import type {
+  DesktopFeatureFlagId,
+  DesktopFeatureFlagOverrides,
+  DesktopFeatureFlags,
+} from "../../../../src/shared/featureFlags";
 import type { HydratedTranscriptSnapshot, PersistedState, TranscriptEvent } from "../app/types";
 import type {
   ConfirmActionInput,
+  DesktopApi,
   DesktopMenuCommand,
   DesktopNotificationInput,
-  DesktopApi,
   ExplorerEntry,
   ReadFileForPreviewOutput,
   SetWindowAppearanceInput,
   SystemAppearance,
   UpdaterState,
 } from "./desktopApi";
-import type {
-  DesktopFeatureFlagId,
-  DesktopFeatureFlagOverrides,
-  DesktopFeatureFlags,
-} from "../../../../src/shared/featureFlags";
 
 function getDesktopApi(): DesktopApi | undefined {
   return typeof window === "undefined" ? undefined : window.cowork;
@@ -37,7 +37,9 @@ function getDefaultDesktopFeatureFlags(): DesktopFeatureFlags {
   };
 }
 
-export function getDesktopFeatureFlags(overrides?: DesktopFeatureFlagOverrides): DesktopFeatureFlags {
+export function getDesktopFeatureFlags(
+  overrides?: DesktopFeatureFlagOverrides,
+): DesktopFeatureFlags {
   const api = getDesktopApi();
   if (!api) {
     return getDefaultDesktopFeatureFlags();
@@ -90,7 +92,9 @@ export async function readTranscript(opts: { threadId: string }): Promise<Transc
   return await requireDesktopApi().readTranscript(opts);
 }
 
-export async function hydrateTranscript(opts: { threadId: string }): Promise<HydratedTranscriptSnapshot> {
+export async function hydrateTranscript(opts: {
+  threadId: string;
+}): Promise<HydratedTranscriptSnapshot> {
   return await requireDesktopApi().hydrateTranscript(opts);
 }
 
@@ -103,12 +107,14 @@ export async function appendTranscriptEvent(opts: {
   await requireDesktopApi().appendTranscriptEvent(opts);
 }
 
-export async function appendTranscriptBatch(events: {
-  ts: string;
-  threadId: string;
-  direction: "server" | "client";
-  payload: unknown;
-}[]): Promise<void> {
+export async function appendTranscriptBatch(
+  events: {
+    ts: string;
+    threadId: string;
+    direction: "server" | "client";
+    payload: unknown;
+  }[],
+): Promise<void> {
   await requireDesktopApi().appendTranscriptBatch(events);
 }
 
@@ -120,7 +126,9 @@ export async function pickWorkspaceDirectory(): Promise<string | null> {
   return await requireDesktopApi().pickWorkspaceDirectory();
 }
 
-export async function showContextMenu(items: { id: string; label: string; enabled?: boolean }[]): Promise<string | null> {
+export async function showContextMenu(
+  items: { id: string; label: string; enabled?: boolean }[],
+): Promise<string | null> {
   return await requireDesktopApi().showContextMenu({ items });
 }
 
@@ -152,7 +160,10 @@ export async function getPlatform(): Promise<string> {
   return await requireDesktopApi().getPlatform();
 }
 
-export async function listDirectory(opts: { path: string; includeHidden?: boolean }): Promise<ExplorerEntry[]> {
+export async function listDirectory(opts: {
+  path: string;
+  includeHidden?: boolean;
+}): Promise<ExplorerEntry[]> {
   if (typeof window === "undefined") {
     return [];
   }
@@ -243,7 +254,9 @@ export async function getSystemAppearance(): Promise<SystemAppearance> {
   return await requireDesktopApi().getSystemAppearance();
 }
 
-export async function setWindowAppearance(opts: SetWindowAppearanceInput): Promise<SystemAppearance> {
+export async function setWindowAppearance(
+  opts: SetWindowAppearanceInput,
+): Promise<SystemAppearance> {
   return await requireDesktopApi().setWindowAppearance(opts);
 }
 
@@ -259,19 +272,27 @@ export async function stopMobileRelay(): Promise<import("./desktopApi").MobileRe
   return await requireDesktopApi().stopMobileRelay();
 }
 
-export async function getMobileRelayState(): Promise<import("./desktopApi").MobileRelayBridgeState> {
+export async function getMobileRelayState(): Promise<
+  import("./desktopApi").MobileRelayBridgeState
+> {
   return await requireDesktopApi().getMobileRelayState();
 }
 
-export async function rotateMobileRelaySession(): Promise<import("./desktopApi").MobileRelayBridgeState> {
+export async function rotateMobileRelaySession(): Promise<
+  import("./desktopApi").MobileRelayBridgeState
+> {
   return await requireDesktopApi().rotateMobileRelaySession();
 }
 
-export async function forgetMobileRelayTrustedPhone(): Promise<import("./desktopApi").MobileRelayBridgeState> {
+export async function forgetMobileRelayTrustedPhone(): Promise<
+  import("./desktopApi").MobileRelayBridgeState
+> {
   return await requireDesktopApi().forgetMobileRelayTrustedPhone();
 }
 
-export function onSystemAppearanceChanged(listener: (appearance: SystemAppearance) => void): () => void {
+export function onSystemAppearanceChanged(
+  listener: (appearance: SystemAppearance) => void,
+): () => void {
   return requireDesktopApi().onSystemAppearanceChanged(listener);
 }
 

@@ -17,46 +17,52 @@ import { isRecord } from "../utils/typeGuards";
 const nonEmptyStringSchema = z.string().trim().min(1);
 const optionalStringArraySchema = z.array(nonEmptyStringSchema).optional();
 
-const pluginInterfaceSchema = z.object({
-  displayName: nonEmptyStringSchema.optional(),
-  shortDescription: nonEmptyStringSchema.optional(),
-  longDescription: nonEmptyStringSchema.optional(),
-  developerName: nonEmptyStringSchema.optional(),
-  category: nonEmptyStringSchema.optional(),
-  capabilities: z.array(nonEmptyStringSchema).optional(),
-  websiteURL: nonEmptyStringSchema.optional(),
-  privacyPolicyURL: nonEmptyStringSchema.optional(),
-  termsOfServiceURL: nonEmptyStringSchema.optional(),
-  defaultPrompt: z.union([nonEmptyStringSchema, z.array(nonEmptyStringSchema)]).optional(),
-  brandColor: nonEmptyStringSchema.optional(),
-  composerIcon: nonEmptyStringSchema.optional(),
-  logo: nonEmptyStringSchema.optional(),
-  screenshots: z.array(nonEmptyStringSchema).optional(),
-}).strict();
+const pluginInterfaceSchema = z
+  .object({
+    displayName: nonEmptyStringSchema.optional(),
+    shortDescription: nonEmptyStringSchema.optional(),
+    longDescription: nonEmptyStringSchema.optional(),
+    developerName: nonEmptyStringSchema.optional(),
+    category: nonEmptyStringSchema.optional(),
+    capabilities: z.array(nonEmptyStringSchema).optional(),
+    websiteURL: nonEmptyStringSchema.optional(),
+    privacyPolicyURL: nonEmptyStringSchema.optional(),
+    termsOfServiceURL: nonEmptyStringSchema.optional(),
+    defaultPrompt: z.union([nonEmptyStringSchema, z.array(nonEmptyStringSchema)]).optional(),
+    brandColor: nonEmptyStringSchema.optional(),
+    composerIcon: nonEmptyStringSchema.optional(),
+    logo: nonEmptyStringSchema.optional(),
+    screenshots: z.array(nonEmptyStringSchema).optional(),
+  })
+  .strict();
 
 const pluginAuthorSchema = z.union([
   nonEmptyStringSchema,
-  z.object({
-    name: nonEmptyStringSchema.optional(),
-    email: nonEmptyStringSchema.optional(),
-    url: nonEmptyStringSchema.optional(),
-  }).strict(),
+  z
+    .object({
+      name: nonEmptyStringSchema.optional(),
+      email: nonEmptyStringSchema.optional(),
+      url: nonEmptyStringSchema.optional(),
+    })
+    .strict(),
 ]);
 
-const pluginManifestSchema = z.object({
-  name: nonEmptyStringSchema.regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
-  version: nonEmptyStringSchema.optional(),
-  description: nonEmptyStringSchema.optional(),
-  author: pluginAuthorSchema.optional(),
-  homepage: nonEmptyStringSchema.optional(),
-  repository: nonEmptyStringSchema.optional(),
-  license: nonEmptyStringSchema.optional(),
-  keywords: optionalStringArraySchema,
-  skills: z.union([nonEmptyStringSchema, z.array(nonEmptyStringSchema)]).optional(),
-  mcpServers: nonEmptyStringSchema.optional(),
-  apps: nonEmptyStringSchema.optional(),
-  interface: pluginInterfaceSchema.optional(),
-}).strict();
+const pluginManifestSchema = z
+  .object({
+    name: nonEmptyStringSchema.regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+    version: nonEmptyStringSchema.optional(),
+    description: nonEmptyStringSchema.optional(),
+    author: pluginAuthorSchema.optional(),
+    homepage: nonEmptyStringSchema.optional(),
+    repository: nonEmptyStringSchema.optional(),
+    license: nonEmptyStringSchema.optional(),
+    keywords: optionalStringArraySchema,
+    skills: z.union([nonEmptyStringSchema, z.array(nonEmptyStringSchema)]).optional(),
+    mcpServers: nonEmptyStringSchema.optional(),
+    apps: nonEmptyStringSchema.optional(),
+    interface: pluginInterfaceSchema.optional(),
+  })
+  .strict();
 
 export interface PluginManifest {
   name: string;
@@ -94,12 +100,19 @@ type ParsedSkillFrontMatter = {
   rawFrontMatter: Record<string, unknown>;
 };
 
-const skillFrontMatterSchema = z.object({
-  name: z.string().trim().min(1).max(64).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
-  description: z.string().trim().min(1).max(1024),
-  metadata: z.record(z.string(), z.unknown()).optional(),
-  triggers: z.union([z.string(), z.array(z.unknown())]).optional(),
-}).passthrough();
+const skillFrontMatterSchema = z
+  .object({
+    name: z
+      .string()
+      .trim()
+      .min(1)
+      .max(64)
+      .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+    description: z.string().trim().min(1).max(1024),
+    metadata: z.record(z.string(), z.unknown()).optional(),
+    triggers: z.union([z.string(), z.array(z.unknown())]).optional(),
+  })
+  .passthrough();
 
 function splitFrontMatter(raw: string): { frontMatterRaw: string | null } {
   const re = /^\ufeff?---\s*\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n|$)/;
@@ -145,8 +158,8 @@ function extractTriggers(name: string, frontMatter?: Record<string, unknown>): s
 function stripQuotes(value: string): string {
   const trimmed = value.trim();
   if (
-    (trimmed.startsWith("\"") && trimmed.endsWith("\"") && trimmed.length >= 2)
-    || (trimmed.startsWith("'") && trimmed.endsWith("'") && trimmed.length >= 2)
+    (trimmed.startsWith('"') && trimmed.endsWith('"') && trimmed.length >= 2) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'") && trimmed.length >= 2)
   ) {
     return trimmed.slice(1, -1);
   }
@@ -189,7 +202,10 @@ function parseAgentInterfaceYaml(raw: string): SkillInterfaceMeta | null {
   return Object.keys(out).length > 0 ? out : null;
 }
 
-async function parseSkillFrontMatter(skillPath: string, expectedName: string): Promise<ParsedSkillFrontMatter | null> {
+async function parseSkillFrontMatter(
+  skillPath: string,
+  expectedName: string,
+): Promise<ParsedSkillFrontMatter | null> {
   const raw = await fs.readFile(skillPath, "utf-8");
   const { frontMatterRaw } = splitFrontMatter(raw);
   if (!frontMatterRaw) return null;
@@ -232,7 +248,9 @@ async function readSkillInterface(skillRoot: string): Promise<SkillInterfaceMeta
   }
 }
 
-function normalizePluginInterface(value: z.infer<typeof pluginInterfaceSchema> | undefined): PluginInterfaceMeta | undefined {
+function normalizePluginInterface(
+  value: z.infer<typeof pluginInterfaceSchema> | undefined,
+): PluginInterfaceMeta | undefined {
   if (!value) return undefined;
   const defaultPrompt = Array.isArray(value.defaultPrompt)
     ? [...value.defaultPrompt]
@@ -257,7 +275,11 @@ function normalizePluginInterface(value: z.infer<typeof pluginInterfaceSchema> |
   };
 }
 
-function resolveRelativePath(pluginRoot: string, relativePath: string | undefined, fallback: string | undefined): string | undefined {
+function resolveRelativePath(
+  pluginRoot: string,
+  relativePath: string | undefined,
+  fallback: string | undefined,
+): string | undefined {
   const selected = relativePath ?? fallback;
   if (!selected) return undefined;
   return resolveMaybeRelative(selected, pluginRoot);
@@ -332,7 +354,9 @@ async function assertPathInsidePluginRoot(
     canonicalizePathForBoundaryCheck(targetPath),
   ]);
   if (!isPathInside(canonicalPluginRoot, canonicalTargetPath)) {
-    throw new Error(`Plugin manifest at ${manifestPath} resolves ${label} outside the plugin root.`);
+    throw new Error(
+      `Plugin manifest at ${manifestPath} resolves ${label} outside the plugin root.`,
+    );
   }
 }
 
@@ -346,9 +370,12 @@ async function resolvePluginSkillsPaths(
   manifestPath: string,
 ): Promise<string[]> {
   const requestedValues = Array.isArray(skillsValue)
-    ? (skillsValue.length > 0 ? skillsValue : [undefined])
+    ? skillsValue.length > 0
+      ? skillsValue
+      : [undefined]
     : [skillsValue];
-  const shouldValidateExistingPaths = skillsValue !== undefined && (!Array.isArray(skillsValue) || skillsValue.length > 0);
+  const shouldValidateExistingPaths =
+    skillsValue !== undefined && (!Array.isArray(skillsValue) || skillsValue.length > 0);
   const resolvedSkillsPaths: string[] = [];
 
   for (const requestedValue of requestedValues) {
@@ -409,7 +436,9 @@ export async function readPluginManifest(pluginRoot: string): Promise<PluginMani
     ...(parsed.repository ? { repository: parsed.repository } : {}),
     ...(parsed.license ? { license: parsed.license } : {}),
     keywords: parsed.keywords ?? [],
-    ...(normalizePluginInterface(parsed.interface) ? { interface: normalizePluginInterface(parsed.interface) } : {}),
+    ...(normalizePluginInterface(parsed.interface)
+      ? { interface: normalizePluginInterface(parsed.interface) }
+      : {}),
     skillsPath,
     skillsPaths,
     ...(mcpPath ? { mcpPath } : {}),
@@ -419,7 +448,9 @@ export async function readPluginManifest(pluginRoot: string): Promise<PluginMani
   };
 }
 
-async function readPluginSkillDirents(pluginManifest: PluginManifest): Promise<Array<{ skillsPath: string; name: string }>> {
+async function readPluginSkillDirents(
+  pluginManifest: PluginManifest,
+): Promise<Array<{ skillsPath: string; name: string }>> {
   const dirents: Array<{ skillsPath: string; name: string }> = [];
   const canonicalPluginRoot = await canonicalizePathForBoundaryCheck(pluginManifest.rootDir);
 
@@ -450,10 +481,14 @@ async function readPluginSkillDirents(pluginManifest: PluginManifest): Promise<A
     }
   }
 
-  return dirents.sort((left, right) => `${left.skillsPath}:${left.name}`.localeCompare(`${right.skillsPath}:${right.name}`));
+  return dirents.sort((left, right) =>
+    `${left.skillsPath}:${left.name}`.localeCompare(`${right.skillsPath}:${right.name}`),
+  );
 }
 
-export async function validatePluginBundledSkills(pluginManifest: PluginManifest): Promise<string[]> {
+export async function validatePluginBundledSkills(
+  pluginManifest: PluginManifest,
+): Promise<string[]> {
   const dirents = await readPluginSkillDirents(pluginManifest);
   const warnings: string[] = [];
 
@@ -469,7 +504,9 @@ export async function validatePluginBundledSkills(pluginManifest: PluginManifest
     } catch (error) {
       const code = (error as NodeJS.ErrnoException | undefined)?.code;
       if (code === "ENOENT") {
-        warnings.push(`Ignoring plugin skill "${dirent.name}" from ${skillPath}: missing SKILL.md.`);
+        warnings.push(
+          `Ignoring plugin skill "${dirent.name}" from ${skillPath}: missing SKILL.md.`,
+        );
       } else {
         warnings.push(`Ignoring plugin skill "${dirent.name}" from ${skillPath}: ${String(error)}`);
       }
@@ -492,7 +529,9 @@ export async function readPluginSkillSummaries(pluginManifest: PluginManifest): 
     try {
       const parsed = await parseSkillFrontMatter(skillPath, dirent.name);
       if (!parsed) {
-        warnings.push(`[plugins] Ignoring malformed bundled skill "${dirent.name}" at ${skillPath}.`);
+        warnings.push(
+          `[plugins] Ignoring malformed bundled skill "${dirent.name}" at ${skillPath}.`,
+        );
         continue;
       }
       const interfaceMeta = await readSkillInterface(skillRoot);
@@ -506,7 +545,9 @@ export async function readPluginSkillSummaries(pluginManifest: PluginManifest): 
         warnings: [],
       });
     } catch (error) {
-      warnings.push(`[plugins] Ignoring malformed bundled skill "${dirent.name}" at ${skillPath}: ${String(error)}`);
+      warnings.push(
+        `[plugins] Ignoring malformed bundled skill "${dirent.name}" at ${skillPath}: ${String(error)}`,
+      );
     }
   }
 
@@ -516,7 +557,9 @@ export async function readPluginSkillSummaries(pluginManifest: PluginManifest): 
   };
 }
 
-export async function readPluginAppSummaries(appPath: string | undefined): Promise<ParsedPluginApp[]> {
+export async function readPluginAppSummaries(
+  appPath: string | undefined,
+): Promise<ParsedPluginApp[]> {
   if (!appPath) return [];
   try {
     const raw = await fs.readFile(appPath, "utf-8");
@@ -525,22 +568,27 @@ export async function readPluginAppSummaries(appPath: string | undefined): Promi
     const entries = Array.isArray(parsed.apps)
       ? parsed.apps
       : isRecord(parsed.apps)
-        ? Object.entries(parsed.apps).map(([id, value]) => ({ id, ...(isRecord(value) ? value : {}) }))
+        ? Object.entries(parsed.apps).map(([id, value]) => ({
+            id,
+            ...(isRecord(value) ? value : {}),
+          }))
         : Object.entries(parsed)
             .filter(([, value]) => isRecord(value))
             .map(([id, value]) => ({ id, ...(value as Record<string, unknown>) }));
     return entries
       .map((entry) => {
         if (!isRecord(entry)) return null;
-        const id = typeof entry.id === "string" && entry.id.trim().length > 0
-          ? entry.id.trim()
-          : typeof entry.name === "string" && entry.name.trim().length > 0
-            ? entry.name.trim()
-            : null;
+        const id =
+          typeof entry.id === "string" && entry.id.trim().length > 0
+            ? entry.id.trim()
+            : typeof entry.name === "string" && entry.name.trim().length > 0
+              ? entry.name.trim()
+              : null;
         if (!id) return null;
-        const displayName = typeof entry.displayName === "string" && entry.displayName.trim().length > 0
-          ? entry.displayName.trim()
-          : id;
+        const displayName =
+          typeof entry.displayName === "string" && entry.displayName.trim().length > 0
+            ? entry.displayName.trim()
+            : id;
         return {
           id,
           displayName,
@@ -589,7 +637,9 @@ export function buildPluginCatalogEntry(opts: {
     ...(opts.pluginManifest.homepage ? { homepage: opts.pluginManifest.homepage } : {}),
     ...(opts.pluginManifest.repository ? { repository: opts.pluginManifest.repository } : {}),
     ...(opts.pluginManifest.license ? { license: opts.pluginManifest.license } : {}),
-    ...(opts.pluginManifest.keywords.length > 0 ? { keywords: [...opts.pluginManifest.keywords] } : {}),
+    ...(opts.pluginManifest.keywords.length > 0
+      ? { keywords: [...opts.pluginManifest.keywords] }
+      : {}),
     ...(opts.pluginManifest.interface ? { interface: opts.pluginManifest.interface } : {}),
     ...(opts.marketplace ? { marketplace: opts.marketplace } : {}),
     skills: opts.skills.map((skill) => ({

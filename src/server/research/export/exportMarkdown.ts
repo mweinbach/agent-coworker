@@ -17,9 +17,7 @@ function formatIsoDate(iso: string): string {
 function formatSource(source: ResearchSource): string {
   const label = source.title?.trim() || source.url;
   const suffix = source.host ? ` (${source.host})` : "";
-  return label === source.url
-    ? `- ${source.url}${suffix}`
-    : `- [${label}](${source.url})${suffix}`;
+  return label === source.url ? `- ${source.url}${suffix}` : `- [${label}](${source.url})${suffix}`;
 }
 
 export function buildResearchMarkdownDocument(research: ResearchRecord): string {
@@ -69,4 +67,3 @@ export async function exportMarkdown(opts: {
     sizeBytes: stats.size,
   };
 }
-

@@ -10,7 +10,10 @@ const DEFAULT_SKILLS_REPO = "openai/skills";
 const DEFAULT_SKILLS_REF = "main";
 const DEFAULT_SKILLS_STATE_FILE = "default-global-skills.json";
 const INSTALL_STATE_VERSION = 1;
-const bootstrapPromises = new Map<string, Promise<EnsureDefaultGlobalSkillsInstalledResult | null>>();
+const bootstrapPromises = new Map<
+  string,
+  Promise<EnsureDefaultGlobalSkillsInstalledResult | null>
+>();
 
 type DefaultGlobalSkillsState = {
   version: number;
@@ -88,20 +91,24 @@ function isTruthy(value: string | undefined): boolean {
   return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }
 
-export function shouldBootstrapDefaultGlobalSkills(env: Record<string, string | undefined> = process.env): boolean {
+export function shouldBootstrapDefaultGlobalSkills(
+  env: Record<string, string | undefined> = process.env,
+): boolean {
   return !isTruthy(env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP);
 }
 
-export async function ensureDefaultGlobalSkillsReady(opts: {
-  homedir?: string;
-  env?: Record<string, string | undefined>;
-  fetchImpl?: FetchLike;
-  repo?: string;
-  ref?: string;
-  skills?: readonly DefaultSkillSpec[];
-  force?: boolean;
-  log?: (line: string) => void;
-} = {}): Promise<EnsureDefaultGlobalSkillsInstalledResult | null> {
+export async function ensureDefaultGlobalSkillsReady(
+  opts: {
+    homedir?: string;
+    env?: Record<string, string | undefined>;
+    fetchImpl?: FetchLike;
+    repo?: string;
+    ref?: string;
+    skills?: readonly DefaultSkillSpec[];
+    force?: boolean;
+    log?: (line: string) => void;
+  } = {},
+): Promise<EnsureDefaultGlobalSkillsInstalledResult | null> {
   const env = opts.env ?? process.env;
   if (!shouldBootstrapDefaultGlobalSkills(env)) {
     return null;
@@ -117,7 +124,9 @@ export async function ensureDefaultGlobalSkillsReady(opts: {
     try {
       return await ensureDefaultGlobalSkillsInstalled(opts);
     } catch (error) {
-      opts.log?.(`Default skill bootstrap failed: ${error instanceof Error ? error.message : String(error)}`);
+      opts.log?.(
+        `Default skill bootstrap failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
       bootstrapPromises.delete(home);
       return null;
     }
@@ -127,15 +136,17 @@ export async function ensureDefaultGlobalSkillsReady(opts: {
   return await promise;
 }
 
-export async function ensureDefaultGlobalSkillsInstalled(opts: {
-  homedir?: string;
-  fetchImpl?: FetchLike;
-  repo?: string;
-  ref?: string;
-  skills?: readonly DefaultSkillSpec[];
-  force?: boolean;
-  log?: (line: string) => void;
-} = {}): Promise<EnsureDefaultGlobalSkillsInstalledResult> {
+export async function ensureDefaultGlobalSkillsInstalled(
+  opts: {
+    homedir?: string;
+    fetchImpl?: FetchLike;
+    repo?: string;
+    ref?: string;
+    skills?: readonly DefaultSkillSpec[];
+    force?: boolean;
+    log?: (line: string) => void;
+  } = {},
+): Promise<EnsureDefaultGlobalSkillsInstalledResult> {
   const repo = opts.repo ?? DEFAULT_SKILLS_REPO;
   const ref = opts.ref ?? DEFAULT_SKILLS_REF;
   const skills = [...(opts.skills ?? DEFAULT_GLOBAL_SKILLS)];

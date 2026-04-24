@@ -2,9 +2,9 @@ import { z } from "zod";
 
 import {
   buildJsonRpcErrorResponse,
-  parseJsonRpcClientMessage,
   type JsonRpcLiteClientMessage,
   type JsonRpcLiteResponse,
+  parseJsonRpcClientMessage,
 } from "./protocol";
 
 const websocketMessageRawSchema = z.union([

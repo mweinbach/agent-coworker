@@ -5,14 +5,16 @@ import {
   buildDirectoryFingerprint,
   buildExplorerRows,
   explorerRowDomKey,
-  normalizeExplorerPath,
   isTreeRowControlTarget,
+  normalizeExplorerPath,
   shouldAutoRefreshExplorer,
   shouldReuseBackgroundDirectorySnapshot,
 } from "../src/ui/file-explorer/WorkspaceFileExplorer";
 import { setupJsdom } from "./jsdomHarness";
 
-function entry(partial: Partial<ExplorerEntry> & Pick<ExplorerEntry, "name" | "path" | "isDirectory">): ExplorerEntry {
+function entry(
+  partial: Partial<ExplorerEntry> & Pick<ExplorerEntry, "name" | "path" | "isDirectory">,
+): ExplorerEntry {
   return {
     isHidden: false,
     sizeBytes: partial.isDirectory ? null : 100,
@@ -74,25 +76,21 @@ describe("workspace file explorer helpers", () => {
     const fingerprint = buildDirectoryFingerprint(entries);
 
     expect(
-      shouldReuseBackgroundDirectorySnapshot(
-        { error: null, fingerprint },
-        fingerprint,
-        null,
-      )
+      shouldReuseBackgroundDirectorySnapshot({ error: null, fingerprint }, fingerprint, null),
     ).toBe(true);
     expect(
       shouldReuseBackgroundDirectorySnapshot(
         { error: null, fingerprint },
         `${fingerprint}:changed`,
         null,
-      )
+      ),
     ).toBe(false);
     expect(
       shouldReuseBackgroundDirectorySnapshot(
         { error: "old error", fingerprint },
         fingerprint,
         null,
-      )
+      ),
     ).toBe(false);
   });
 
@@ -130,7 +128,9 @@ describe("workspace file explorer helpers", () => {
           entry({ name: "src", path: srcPath, isDirectory: true }),
           entry({ name: "README.md", path: readmePath, isDirectory: false }),
         ]),
-        [srcPath]: snapshot([entry({ name: "index.ts", path: `${srcPath}/index.ts`, isDirectory: false })]),
+        [srcPath]: snapshot([
+          entry({ name: "index.ts", path: `${srcPath}/index.ts`, isDirectory: false }),
+        ]),
       },
       false,
     );

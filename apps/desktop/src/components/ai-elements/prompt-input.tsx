@@ -1,10 +1,8 @@
-import type { ComponentProps, DragEvent } from "react";
-
-import { forwardRef, useCallback, useState } from "react";
 import { ArrowUpIcon, FileTextIcon, LoaderCircleIcon, SquareIcon, XIcon } from "lucide-react";
-
-import { Button } from "../ui/button";
+import type { ComponentProps, DragEvent } from "react";
+import { forwardRef, useCallback, useState } from "react";
 import { cn } from "../../lib/utils";
+import { Button } from "../ui/button";
 
 export type PromptInputStatus = "ready" | "pending" | "submitted" | "streaming" | "error";
 export type PromptInputMode = "send" | "steer-ready" | "steer-pending";
@@ -106,7 +104,11 @@ export type PromptInputAttachmentPreviewsProps = {
   className?: string;
 };
 
-export function PromptInputAttachmentPreviews({ attachments, onRemove, className }: PromptInputAttachmentPreviewsProps) {
+export function PromptInputAttachmentPreviews({
+  attachments,
+  onRemove,
+  className,
+}: PromptInputAttachmentPreviewsProps) {
   if (attachments.length === 0) return null;
 
   return (
@@ -130,7 +132,10 @@ export function PromptInputAttachmentPreviews({ attachments, onRemove, className
                   <FileTextIcon className="size-3.5 text-muted-foreground" aria-hidden />
                 )}
               </div>
-              <p className="truncate pr-1 text-[13px] font-medium leading-none text-foreground/88" title={item.filename}>
+              <p
+                className="truncate pr-1 text-[13px] font-medium leading-none text-foreground/88"
+                title={item.filename}
+              >
                 {item.filename}
               </p>
               <button
@@ -149,73 +154,85 @@ export function PromptInputAttachmentPreviews({ attachments, onRemove, className
   );
 }
 
-export const PromptInputForm = forwardRef<HTMLFormElement, ComponentProps<"form">>(function PromptInputForm(
-  { className, ...props },
-  ref,
-) {
-  return <form ref={ref} className={cn("flex min-h-0 flex-1 flex-col gap-1.5", className)} {...props} />;
-});
+export const PromptInputForm = forwardRef<HTMLFormElement, ComponentProps<"form">>(
+  function PromptInputForm({ className, ...props }, ref) {
+    return (
+      <form
+        ref={ref}
+        className={cn("flex min-h-0 flex-1 flex-col gap-1.5", className)}
+        {...props}
+      />
+    );
+  },
+);
 
-export const PromptInputBody = forwardRef<HTMLDivElement, ComponentProps<"div">>(function PromptInputBody(
-  { className, ...props },
-  ref,
-) {
-  return <div ref={ref} className={cn("flex min-h-0 flex-1 px-0.5", className)} {...props} />;
-});
+export const PromptInputBody = forwardRef<HTMLDivElement, ComponentProps<"div">>(
+  function PromptInputBody({ className, ...props }, ref) {
+    return <div ref={ref} className={cn("flex min-h-0 flex-1 px-0.5", className)} {...props} />;
+  },
+);
 
-export const PromptInputFooter = forwardRef<HTMLDivElement, ComponentProps<"div">>(function PromptInputFooter(
-  { className, ...props },
-  ref,
-) {
-  return (
-    <div
-      ref={ref}
-      className={cn("flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-0.5 pt-1", className)}
-      {...props}
-    />
-  );
-});
+export const PromptInputFooter = forwardRef<HTMLDivElement, ComponentProps<"div">>(
+  function PromptInputFooter({ className, ...props }, ref) {
+    return (
+      <div
+        ref={ref}
+        className={cn(
+          "flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-0.5 pt-1",
+          className,
+        )}
+        {...props}
+      />
+    );
+  },
+);
 
-export const PromptInputStatusRow = forwardRef<HTMLDivElement, ComponentProps<"div">>(function PromptInputStatusRow(
-  { className, children, ...props },
-  ref,
-) {
-  if (!children) return null;
-  return (
-    <div
-      ref={ref}
-      data-slot="prompt-input-status-row"
-      className={cn("flex h-6 min-w-0 shrink-0 items-center px-1 text-[11px] leading-none text-muted-foreground", className)}
-      {...props}
-    >
-      <span className="block min-w-0 truncate">{children}</span>
-    </div>
-  );
-});
+export const PromptInputStatusRow = forwardRef<HTMLDivElement, ComponentProps<"div">>(
+  function PromptInputStatusRow({ className, children, ...props }, ref) {
+    if (!children) return null;
+    return (
+      <div
+        ref={ref}
+        data-slot="prompt-input-status-row"
+        className={cn(
+          "flex h-6 min-w-0 shrink-0 items-center px-1 text-[11px] leading-none text-muted-foreground",
+          className,
+        )}
+        {...props}
+      >
+        <span className="block min-w-0 truncate">{children}</span>
+      </div>
+    );
+  },
+);
 
-export const PromptInputTools = forwardRef<HTMLDivElement, ComponentProps<"div">>(function PromptInputTools(
-  { className, ...props },
-  ref,
-) {
-  return <div ref={ref} className={cn("flex min-w-0 flex-1 items-center gap-1.5", className)} {...props} />;
-});
+export const PromptInputTools = forwardRef<HTMLDivElement, ComponentProps<"div">>(
+  function PromptInputTools({ className, ...props }, ref) {
+    return (
+      <div
+        ref={ref}
+        className={cn("flex min-w-0 flex-1 items-center gap-1.5", className)}
+        {...props}
+      />
+    );
+  },
+);
 
-export const PromptInputTextarea = forwardRef<HTMLTextAreaElement, ComponentProps<"textarea">>(function PromptInputTextarea(
-  { className, rows = 1, ...props },
-  ref,
-) {
-  return (
-    <textarea
-      ref={ref}
-      rows={rows}
-      className={cn(
-        "min-h-[3.25rem] w-full flex-1 resize-none border-0 bg-transparent px-1 py-1.5 text-[15px] leading-6 text-foreground shadow-none outline-none ring-0 placeholder:text-muted-foreground/90 focus:border-0 focus:shadow-none focus:outline-none focus:ring-0 focus-visible:border-0 focus-visible:shadow-none focus-visible:outline-none focus-visible:ring-0",
-        className,
-      )}
-      {...props}
-    />
-  );
-});
+export const PromptInputTextarea = forwardRef<HTMLTextAreaElement, ComponentProps<"textarea">>(
+  function PromptInputTextarea({ className, rows = 1, ...props }, ref) {
+    return (
+      <textarea
+        ref={ref}
+        rows={rows}
+        className={cn(
+          "min-h-[3.25rem] w-full flex-1 resize-none border-0 bg-transparent px-1 py-1.5 text-[15px] leading-6 text-foreground shadow-none outline-none ring-0 placeholder:text-muted-foreground/90 focus:border-0 focus:shadow-none focus:outline-none focus:ring-0 focus-visible:border-0 focus-visible:shadow-none focus-visible:outline-none focus-visible:ring-0",
+          className,
+        )}
+        {...props}
+      />
+    );
+  },
+);
 
 type PromptInputSubmitProps = Omit<ComponentProps<typeof Button>, "children" | "type"> & {
   mode?: PromptInputMode;
@@ -223,7 +240,14 @@ type PromptInputSubmitProps = Omit<ComponentProps<typeof Button>, "children" | "
   status: PromptInputStatus;
 };
 
-export function PromptInputSubmit({ className, disabled, mode = "send", onStop, status, ...props }: PromptInputSubmitProps) {
+export function PromptInputSubmit({
+  className,
+  disabled,
+  mode = "send",
+  onStop,
+  status,
+  ...props
+}: PromptInputSubmitProps) {
   if (status === "submitted" || status === "streaming") {
     return (
       <Button
@@ -281,12 +305,20 @@ export function PromptInputSubmit({ className, disabled, mode = "send", onStop, 
       )}
       disabled={disabled}
       aria-label={steerReady || steerPending ? "Steer current response" : "Send message"}
-      title={steerPending ? "Steer sent, waiting for acceptance" : steerReady ? "Steer the current response" : "Send message"}
+      title={
+        steerPending
+          ? "Steer sent, waiting for acceptance"
+          : steerReady
+            ? "Steer the current response"
+            : "Send message"
+      }
       {...props}
     >
-      {steerPending
-        ? <LoaderCircleIcon data-icon="send" className="size-4 animate-spin" strokeWidth={2.25} />
-        : <ArrowUpIcon data-icon="send" className="size-4" strokeWidth={2.25} />}
+      {steerPending ? (
+        <LoaderCircleIcon data-icon="send" className="size-4 animate-spin" strokeWidth={2.25} />
+      ) : (
+        <ArrowUpIcon data-icon="send" className="size-4" strokeWidth={2.25} />
+      )}
     </Button>
   );
 }

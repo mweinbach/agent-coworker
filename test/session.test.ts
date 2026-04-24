@@ -1,28 +1,27 @@
-import { describe, expect, test, mock, beforeEach, afterAll } from "bun:test";
+import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
-import { createRuntime } from "../src/runtime";
-import { SessionCostTracker } from "../src/session/costTracker";
-import type { AgentConfig, TodoItem } from "../src/types";
-import { ASK_SKIP_TOKEN, type ServerEvent } from "../src/server/protocol";
+import * as REAL_AGENT from "../src/agent";
 import { defaultSupportedModel, getSupportedModel } from "../src/models/registry";
 import { __internal as observabilityRuntimeInternal } from "../src/observability/runtime";
+import { createRuntime } from "../src/runtime";
+import { ASK_SKIP_TOKEN, type ServerEvent } from "../src/server/protocol";
+import type { SessionInfoState } from "../src/server/session/SessionContext";
 import type {
   SessionBackupHandle,
   SessionBackupInitOptions,
   SessionBackupPublicCheckpoint,
   SessionBackupPublicState,
 } from "../src/server/sessionBackup";
-import type { SessionInfoState } from "../src/server/session/SessionContext";
+import { SessionCostTracker } from "../src/session/costTracker";
 import {
-  MAX_ATTACHMENT_INLINE_BYTE_SIZE,
   MAX_ATTACHMENT_BASE64_SIZE,
+  MAX_ATTACHMENT_INLINE_BYTE_SIZE,
   MAX_TURN_ATTACHMENT_COUNT,
   MAX_TURN_ATTACHMENT_TOTAL_BASE64_SIZE,
 } from "../src/shared/attachments";
-import * as REAL_AGENT from "../src/agent";
+import type { AgentConfig, TodoItem } from "../src/types";
 
 // ---------------------------------------------------------------------------
 // Mock runTurn before importing AgentSession (which imports ../agent)
@@ -39,14 +38,16 @@ mock.module("../src/agent", () => ({
   runTurn: mockRunTurn,
 }));
 
-const mockConnectModelProvider = mock(async (_opts: any): Promise<any> => ({
-  ok: true,
-  provider: "openai",
-  mode: "api_key",
-  storageFile: "/tmp/mock-home/.cowork/auth/connections.json",
-  message: "Provider key saved.",
-  maskedApiKey: "sk-t...est",
-}));
+const mockConnectModelProvider = mock(
+  async (_opts: any): Promise<any> => ({
+    ok: true,
+    provider: "openai",
+    mode: "api_key",
+    storageFile: "/tmp/mock-home/.cowork/auth/connections.json",
+    message: "Provider key saved.",
+    maskedApiKey: "sk-t...est",
+  }),
+);
 
 const mockGetAiCoworkerPaths = mock((opts?: { homedir?: string }) => {
   const home = opts?.homedir ?? "/tmp/mock-home";
@@ -69,7 +70,9 @@ const mockGenerateSessionTitle = mock(async () => ({
   model: null as string | null,
 }));
 
-const mockWritePersistedSessionSnapshot = mock(async () => "/tmp/mock-home/.cowork/sessions/mock.json");
+const mockWritePersistedSessionSnapshot = mock(
+  async () => "/tmp/mock-home/.cowork/sessions/mock.json",
+);
 
 // Import AgentSession AFTER the runTurn mock is registered so it picks up the mock.
 const { AgentSession } = await import("../src/server/session/AgentSession");
@@ -194,12 +197,23 @@ function makeSession(
       patch: Partial<
         Pick<
           AgentConfig,
-          "provider" | "model" | "preferredChildModel" | "enableMcp" | "enableA2ui" | "enableMemory" | "memoryRequireApproval" | "observabilityEnabled" | "backupsEnabled" | "toolOutputOverflowChars" | "userName" | "featureFlags"
+          | "provider"
+          | "model"
+          | "preferredChildModel"
+          | "enableMcp"
+          | "enableA2ui"
+          | "enableMemory"
+          | "memoryRequireApproval"
+          | "observabilityEnabled"
+          | "backupsEnabled"
+          | "toolOutputOverflowChars"
+          | "userName"
+          | "featureFlags"
         >
       > & {
         userProfile?: Partial<NonNullable<AgentConfig["userProfile"]>>;
         clearToolOutputOverflowChars?: boolean;
-      }
+      },
     ) => Promise<void> | void;
     loadSystemPromptWithSkillsImpl: (config: AgentConfig) => Promise<{
       prompt: string;
@@ -226,15 +240,16 @@ function makeSession(
     }) => Promise<void>;
     sessionInfoPatch: Partial<SessionInfoState>;
     discoveredSkills: Array<{ name: string; description: string }>;
-  }>
+  }>,
 ) {
   const dir = "/tmp/test-session";
   const { emit, events } = makeEmit();
   const sessionBackupFactory = overrides?.sessionBackupFactory ?? makeSessionBackupFactory();
   const getProviderStatusesImpl = overrides?.getProviderStatusesImpl ?? (async () => []);
-  const discoveredSkills = overrides && "discoveredSkills" in overrides
-    ? overrides.discoveredSkills
-    : [{ name: "test-skill", description: "Test skill" }];
+  const discoveredSkills =
+    overrides && "discoveredSkills" in overrides
+      ? overrides.discoveredSkills
+      : [{ name: "test-skill", description: "Test skill" }];
   const session = new AgentSession({
     config: overrides?.config ?? makeConfig(dir),
     system: overrides?.system ?? "You are a test assistant.",
@@ -270,10 +285,7 @@ async function flushAsyncWork(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-async function waitForCondition(
-  predicate: () => boolean,
-  timeoutMs = 1_000,
-): Promise<void> {
+async function waitForCondition(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (predicate()) {
@@ -333,7 +345,9 @@ describe("AgentSession", () => {
     }));
 
     mockWritePersistedSessionSnapshot.mockReset();
-    mockWritePersistedSessionSnapshot.mockImplementation(async () => "/tmp/mock-home/.cowork/sessions/mock.json");
+    mockWritePersistedSessionSnapshot.mockImplementation(
+      async () => "/tmp/mock-home/.cowork/sessions/mock.json",
+    );
   });
 
   afterAll(() => {
@@ -540,7 +554,9 @@ describe("AgentSession", () => {
 
       expect(session.getEnableMcp()).toBe(false);
       expect(events.some((evt) => evt.type === "session_settings")).toBe(true);
-      const errEvt = events.find((evt): evt is Extract<ServerEvent, { type: "error" }> => evt.type === "error");
+      const errEvt = events.find(
+        (evt): evt is Extract<ServerEvent, { type: "error" }> => evt.type === "error",
+      );
       expect(errEvt).toBeDefined();
       if (errEvt) {
         expect(errEvt.code).toBe("internal_error");
@@ -555,8 +571,9 @@ describe("AgentSession", () => {
       mockRunTurn.mockImplementationOnce(
         () =>
           new Promise((resolve) => {
-            resolveRunTurn = () => resolve({ text: "", reasoningText: undefined, responseMessages: [] });
-          })
+            resolveRunTurn = () =>
+              resolve({ text: "", reasoningText: undefined, responseMessages: [] });
+          }),
       );
 
       const first = session.sendUserMessage("first");
@@ -671,9 +688,7 @@ describe("AgentSession", () => {
 
       const runTurnArgs = mockRunTurn.mock.calls.at(-1)?.[0] as any;
       expect(runTurnArgs.system).toBe("prompt:a2ui-true");
-      expect(runTurnArgs.discoveredSkills).toEqual([
-        { name: "ui-skill", description: "UI skill" },
-      ]);
+      expect(runTurnArgs.discoveredSkills).toEqual([{ name: "ui-skill", description: "UI skill" }]);
       expect(session.getSessionConfigEvent().config.enableA2ui).toBe(true);
     });
 
@@ -746,7 +761,9 @@ describe("AgentSession", () => {
       await session.upsertMemory("workspace", "note", "Remember this");
 
       expect(loadSystemPromptWithSkillsImpl).not.toHaveBeenCalled();
-      const errEvt = events.find((evt): evt is Extract<ServerEvent, { type: "error" }> => evt.type === "error");
+      const errEvt = events.find(
+        (evt): evt is Extract<ServerEvent, { type: "error" }> => evt.type === "error",
+      );
       expect(errEvt).toBeDefined();
       if (errEvt) {
         expect(errEvt.code).toBe("internal_error");
@@ -770,7 +787,9 @@ describe("AgentSession", () => {
       await session.deleteMemory("workspace", "note");
 
       expect(loadSystemPromptWithSkillsImpl).not.toHaveBeenCalled();
-      const errEvt = events.find((evt): evt is Extract<ServerEvent, { type: "error" }> => evt.type === "error");
+      const errEvt = events.find(
+        (evt): evt is Extract<ServerEvent, { type: "error" }> => evt.type === "error",
+      );
       expect(errEvt).toBeDefined();
       if (errEvt) {
         expect(errEvt.code).toBe("internal_error");
@@ -824,8 +843,11 @@ describe("AgentSession", () => {
           auth: { type: "none" },
         });
 
-        const persistedRaw = await fs.readFile(path.join(tmpDir, ".cowork", "mcp-servers.json"), "utf-8");
-        expect(persistedRaw).toContain("\"name\": \"local\"");
+        const persistedRaw = await fs.readFile(
+          path.join(tmpDir, ".cowork", "mcp-servers.json"),
+          "utf-8",
+        );
+        expect(persistedRaw).toContain('"name": "local"');
       } finally {
         await fs.rm(tmpDir, { recursive: true, force: true });
       }
@@ -894,7 +916,10 @@ describe("AgentSession", () => {
           expect(resultEvt.mode).toBe("api_key");
         }
 
-        const authRaw = await fs.readFile(path.join(tmpDir, ".cowork", "auth", "mcp-credentials.json"), "utf-8");
+        const authRaw = await fs.readFile(
+          path.join(tmpDir, ".cowork", "auth", "mcp-credentials.json"),
+          "utf-8",
+        );
         expect(authRaw).toContain("secret-token");
       } finally {
         await fs.rm(tmpDir, { recursive: true, force: true });
@@ -911,7 +936,10 @@ describe("AgentSession", () => {
           JSON.stringify(
             {
               servers: [
-                { name: "legacy-one", transport: { type: "stdio", command: "echo", args: ["legacy"] } },
+                {
+                  name: "legacy-one",
+                  transport: { type: "stdio", command: "echo", args: ["legacy"] },
+                },
               ],
             },
             null,
@@ -922,19 +950,29 @@ describe("AgentSession", () => {
         await fs.mkdir(path.join(tmpDir, ".cowork"), { recursive: true });
         await fs.writeFile(
           path.join(tmpDir, ".cowork", "mcp-servers.json"),
-          JSON.stringify({ servers: [{ name: "existing", transport: { type: "stdio", command: "echo" } }] }, null, 2),
+          JSON.stringify(
+            { servers: [{ name: "existing", transport: { type: "stdio", command: "echo" } }] },
+            null,
+            2,
+          ),
           "utf-8",
         );
 
         const { session } = makeSession({ config });
         await session.migrateLegacyMcpServers("workspace");
 
-        const migratedRaw = await fs.readFile(path.join(tmpDir, ".cowork", "mcp-servers.json"), "utf-8");
-        expect(migratedRaw).toContain("\"name\": \"existing\"");
-        expect(migratedRaw).toContain("\"name\": \"legacy-one\"");
+        const migratedRaw = await fs.readFile(
+          path.join(tmpDir, ".cowork", "mcp-servers.json"),
+          "utf-8",
+        );
+        expect(migratedRaw).toContain('"name": "existing"');
+        expect(migratedRaw).toContain('"name": "legacy-one"');
 
-        const archived = await fs.readFile(path.join(tmpDir, ".agent", "mcp-servers.legacy-migrated.json"), "utf-8");
-        expect(archived).toContain("\"legacy-one\"");
+        const archived = await fs.readFile(
+          path.join(tmpDir, ".agent", "mcp-servers.legacy-migrated.json"),
+          "utf-8",
+        );
+        expect(archived).toContain('"legacy-one"');
       } finally {
         await fs.rm(tmpDir, { recursive: true, force: true });
       }
@@ -1176,9 +1214,15 @@ describe("AgentSession", () => {
         allowedChildModelRefs: ["google:gemini-3.1-pro-preview"],
       });
       expect(session.getSessionConfigEvent().config.preferredChildModel).toBe("gpt-5.2");
-      expect(session.getSessionConfigEvent().config.childModelRoutingMode).toBe("cross-provider-allowlist");
-      expect(session.getSessionConfigEvent().config.preferredChildModelRef).toBe("google:gemini-3.1-pro-preview");
-      expect(session.getSessionConfigEvent().config.allowedChildModelRefs).toEqual(["google:gemini-3.1-pro-preview"]);
+      expect(session.getSessionConfigEvent().config.childModelRoutingMode).toBe(
+        "cross-provider-allowlist",
+      );
+      expect(session.getSessionConfigEvent().config.preferredChildModelRef).toBe(
+        "google:gemini-3.1-pro-preview",
+      );
+      expect(session.getSessionConfigEvent().config.allowedChildModelRefs).toEqual([
+        "google:gemini-3.1-pro-preview",
+      ]);
       expect(events.some((evt) => evt.type === "error")).toBe(false);
     });
 
@@ -1240,7 +1284,9 @@ describe("AgentSession", () => {
       const cfgEvt = events.filter((evt) => evt.type === "session_config").at(-1) as any;
       expect(cfgEvt).toBeUndefined();
 
-      const errEvt = events.find((evt): evt is Extract<ServerEvent, { type: "error" }> => evt.type === "error");
+      const errEvt = events.find(
+        (evt): evt is Extract<ServerEvent, { type: "error" }> => evt.type === "error",
+      );
       expect(errEvt).toBeDefined();
       if (errEvt) {
         expect(errEvt.code).toBe("internal_error");
@@ -1395,10 +1441,9 @@ describe("AgentSession", () => {
     async function createSkill(parentDir: string, name: string, content: string): Promise<string> {
       const skillDir = path.join(parentDir, name);
       await fs.mkdir(skillDir, { recursive: true });
-      const normalizedContent =
-        content.trimStart().startsWith("---")
-          ? content
-          : ["---", `name: \"${name}\"`, `description: \"${name} skill\"`, "---", "", content].join("\n");
+      const normalizedContent = content.trimStart().startsWith("---")
+        ? content
+        : ["---", `name: "${name}"`, `description: "${name} skill"`, "---", "", content].join("\n");
       await fs.writeFile(path.join(skillDir, "SKILL.md"), normalizedContent, "utf-8");
       return skillDir;
     }
@@ -1494,7 +1539,9 @@ describe("AgentSession", () => {
       expect(evt.code).toBe("busy");
       expect(evt.message).toBe("Agent is busy");
       await fs.access(path.join(root, "skills", "alpha", "SKILL.md"));
-      await expect(fs.access(path.join(root, "disabled-skills", "alpha", "SKILL.md"))).rejects.toBeDefined();
+      await expect(
+        fs.access(path.join(root, "disabled-skills", "alpha", "SKILL.md")),
+      ).rejects.toBeDefined();
     });
 
     test("enableSkill moves global skill back to skills and marks it enabled", async () => {
@@ -1577,7 +1624,9 @@ describe("AgentSession", () => {
 
       const catalogEvt = events.filter((event) => event.type === "skills_catalog").at(-1) as any;
       expect(catalogEvt).toBeDefined();
-      expect(catalogEvt.catalog.effectiveSkills.some((skill: any) => skill.name === "alpha")).toBe(true);
+      expect(catalogEvt.catalog.effectiveSkills.some((skill: any) => skill.name === "alpha")).toBe(
+        true,
+      );
       expect(catalogEvt.clearedMutationPendingKeys).toEqual(["install:project"]);
 
       const detailEvt = events.filter((event) => event.type === "skill_installation").at(-1) as any;
@@ -1597,13 +1646,17 @@ describe("AgentSession", () => {
       await fs.mkdir(path.join(rootDir, "skills", "import-frame"), { recursive: true });
       await fs.writeFile(
         path.join(rootDir, ".codex-plugin", "plugin.json"),
-        `${JSON.stringify({
-          name,
-          description: "Plugin helpers",
-          interface: {
-            displayName: "Figma Toolkit",
+        `${JSON.stringify(
+          {
+            name,
+            description: "Plugin helpers",
+            interface: {
+              displayName: "Figma Toolkit",
+            },
           },
-        }, null, 2)}\n`,
+          null,
+          2,
+        )}\n`,
         "utf-8",
       );
       await fs.writeFile(
@@ -1684,7 +1737,7 @@ describe("AgentSession", () => {
       expect(session.getPublicConfig().provider).toBe("google");
       expect(session.getPublicConfig().model).toBe("gemini-3-flash-preview");
       const updated = events.find(
-        (e): e is Extract<ServerEvent, { type: "config_updated" }> => e.type === "config_updated"
+        (e): e is Extract<ServerEvent, { type: "config_updated" }> => e.type === "config_updated",
       );
       expect(updated).toBeDefined();
       if (updated) {
@@ -1701,7 +1754,7 @@ describe("AgentSession", () => {
       expect(session.getPublicConfig().provider).toBe("anthropic");
       expect(session.getPublicConfig().model).toBe("claude-sonnet-4-5");
       const updated = events.find(
-        (e): e is Extract<ServerEvent, { type: "config_updated" }> => e.type === "config_updated"
+        (e): e is Extract<ServerEvent, { type: "config_updated" }> => e.type === "config_updated",
       );
       expect(updated).toBeDefined();
       if (updated) {
@@ -1746,7 +1799,9 @@ describe("AgentSession", () => {
     test("emits session_info when provider/model changes", async () => {
       const { session, events } = makeSession();
       await session.setModel("gpt-5.2", "openai");
-      const info = events.find((e): e is Extract<ServerEvent, { type: "session_info" }> => e.type === "session_info");
+      const info = events.find(
+        (e): e is Extract<ServerEvent, { type: "session_info" }> => e.type === "session_info",
+      );
       expect(info).toBeDefined();
       if (info) {
         expect(info.provider).toBe("openai");
@@ -1831,12 +1886,14 @@ describe("AgentSession", () => {
 
       await session.setModel("gemini-3-flash-preview");
 
-      const updated = events.find((e): e is Extract<ServerEvent, { type: "config_updated" }> => e.type === "config_updated");
+      const updated = events.find(
+        (e): e is Extract<ServerEvent, { type: "config_updated" }> => e.type === "config_updated",
+      );
       expect(updated).toBeDefined();
       expect(session.getPublicConfig().model).toBe("gemini-3-flash-preview");
       const err = events.find(
         (e): e is Extract<ServerEvent, { type: "error" }> =>
-          e.type === "error" && e.message.includes("Model updated for this session")
+          e.type === "error" && e.message.includes("Model updated for this session"),
       );
       expect(err).toBeDefined();
       if (err) {
@@ -1879,7 +1936,8 @@ describe("AgentSession", () => {
           provider: "anthropic",
           model: "claude-sonnet-4-5",
           preferredChildModel: "claude-sonnet-4-5",
-          knowledgeCutoff: getSupportedModel("anthropic", "claude-sonnet-4-5")?.knowledgeCutoff ?? "unknown",
+          knowledgeCutoff:
+            getSupportedModel("anthropic", "claude-sonnet-4-5")?.knowledgeCutoff ?? "unknown",
         },
       });
       const before = session.getPublicConfig();
@@ -1887,7 +1945,9 @@ describe("AgentSession", () => {
       await session.setModel("gpt-5.4(xhigh)", "anthropic");
 
       expect(session.getPublicConfig()).toEqual(before);
-      const err = events.find((e): e is Extract<ServerEvent, { type: "error" }> => e.type === "error");
+      const err = events.find(
+        (e): e is Extract<ServerEvent, { type: "error" }> => e.type === "error",
+      );
       expect(err).toBeDefined();
       if (err) {
         expect(err.code).toBe("validation_failed");
@@ -1942,9 +2002,7 @@ describe("AgentSession", () => {
   describe("provider catalog/auth methods", () => {
     test("emitProviderCatalog emits provider_catalog event", async () => {
       const catalog = {
-        all: [
-          { id: "openai", name: "OpenAI", models: ["gpt-5.2"], defaultModel: "gpt-5.2" },
-        ],
+        all: [{ id: "openai", name: "OpenAI", models: ["gpt-5.2"], defaultModel: "gpt-5.2" }],
         default: { openai: "gpt-5.2" },
         connected: ["openai"],
       };
@@ -2034,9 +2092,11 @@ describe("AgentSession", () => {
         expect(authEvt.provider).toBe("openai");
         expect(authEvt.methodId).toBe("api_key");
       }
-      expect(getProviderStatusesImpl).toHaveBeenCalledWith(expect.objectContaining({
-        refreshBedrockDiscovery: false,
-      }));
+      expect(getProviderStatusesImpl).toHaveBeenCalledWith(
+        expect.objectContaining({
+          refreshBedrockDiscovery: false,
+        }),
+      );
       expect(events.some((e) => e.type === "provider_status")).toBe(true);
       expect(events.some((e) => e.type === "provider_catalog")).toBe(true);
       expect((session as any).state.providerState).toBeNull();
@@ -2046,20 +2106,29 @@ describe("AgentSession", () => {
       const home = await fs.mkdtemp(path.join(os.tmpdir(), "session-bedrock-config-"));
       const connectionsFile = path.join(home, ".cowork", "auth", "connections.json");
       const getProviderCatalogImpl = mock(async () => ({
-        all: [{ id: "bedrock", name: "Amazon Bedrock", models: ["amazon.nova-lite-v1:0"], defaultModel: "amazon.nova-lite-v1:0" }],
+        all: [
+          {
+            id: "bedrock",
+            name: "Amazon Bedrock",
+            models: ["amazon.nova-lite-v1:0"],
+            defaultModel: "amazon.nova-lite-v1:0",
+          },
+        ],
         default: { bedrock: "amazon.nova-lite-v1:0" },
         connected: ["bedrock"],
       }));
-      const getProviderStatusesImpl = mock(async () => [{
-        provider: "bedrock",
-        authorized: true,
-        verified: false,
-        mode: "credentials",
-        account: null,
-        message: "Credentials saved.",
-        checkedAt: "2026-04-14T00:00:00.000Z",
-        methodId: "aws_default",
-      }]);
+      const getProviderStatusesImpl = mock(async () => [
+        {
+          provider: "bedrock",
+          authorized: true,
+          verified: false,
+          mode: "credentials",
+          account: null,
+          message: "Credentials saved.",
+          checkedAt: "2026-04-14T00:00:00.000Z",
+          methodId: "aws_default",
+        },
+      ]);
       const { session, events } = makeSession({
         config: {
           ...makeConfig("/tmp/test-session"),
@@ -2089,9 +2158,11 @@ describe("AgentSession", () => {
         expect(authEvt.provider).toBe("bedrock");
         expect(authEvt.methodId).toBe("aws_default");
       }
-      expect(getProviderStatusesImpl).toHaveBeenCalledWith(expect.objectContaining({
-        refreshBedrockDiscovery: true,
-      }));
+      expect(getProviderStatusesImpl).toHaveBeenCalledWith(
+        expect.objectContaining({
+          refreshBedrockDiscovery: true,
+        }),
+      );
       expect(events.some((e) => e.type === "provider_status")).toBe(true);
       expect(events.some((e) => e.type === "provider_catalog")).toBe(true);
     });
@@ -2100,18 +2171,22 @@ describe("AgentSession", () => {
       const home = await fs.mkdtemp(path.join(os.tmpdir(), "session-copy-provider-key-"));
       const connectionsFile = path.join(home, ".cowork", "auth", "connections.json");
       await fs.mkdir(path.dirname(connectionsFile), { recursive: true });
-      await fs.writeFile(connectionsFile, JSON.stringify({
-        version: 1,
-        updatedAt: "2026-03-11T00:00:00.000Z",
-        services: {
-          "opencode-go": {
-            service: "opencode-go",
-            mode: "api_key",
-            apiKey: "opencode-go-key-1234",
-            updatedAt: "2026-03-11T00:00:00.000Z",
+      await fs.writeFile(
+        connectionsFile,
+        JSON.stringify({
+          version: 1,
+          updatedAt: "2026-03-11T00:00:00.000Z",
+          services: {
+            "opencode-go": {
+              service: "opencode-go",
+              mode: "api_key",
+              apiKey: "opencode-go-key-1234",
+              updatedAt: "2026-03-11T00:00:00.000Z",
+            },
           },
-        },
-      }), "utf-8");
+        }),
+        "utf-8",
+      );
 
       const statuses = [
         {
@@ -2127,7 +2202,12 @@ describe("AgentSession", () => {
       ];
       const getProviderCatalogImpl = mock(async () => ({
         all: [
-          { id: "opencode-go", name: "OpenCode Go", models: ["glm-5", "kimi-k2.5"], defaultModel: "glm-5" },
+          {
+            id: "opencode-go",
+            name: "OpenCode Go",
+            models: ["glm-5", "kimi-k2.5"],
+            defaultModel: "glm-5",
+          },
           {
             id: "opencode-zen",
             name: "OpenCode Zen",
@@ -2398,7 +2478,7 @@ describe("AgentSession", () => {
                 reasoningText: undefined,
                 responseMessages: [{ role: "assistant", content: "ok" }],
               });
-          })
+          }),
       );
 
       const first = session.sendUserMessage("first");
@@ -2548,7 +2628,9 @@ describe("AgentSession", () => {
       expect(assistantEvt).toBeDefined();
       expect(assistantEvt.text).toBe(ASK_SKIP_TOKEN);
 
-      const validationErrors = events.filter((e) => e.type === "error" && (e as any).code === "validation_failed");
+      const validationErrors = events.filter(
+        (e) => e.type === "error" && (e as any).code === "validation_failed",
+      );
       expect(validationErrors.length).toBe(0);
     });
 
@@ -2647,7 +2729,11 @@ describe("AgentSession", () => {
 
       mockRunTurn.mockImplementation(async (params: any) => {
         const approved = await params.approveCommand("npm install");
-        return { text: approved ? "approved" : "denied", reasoningText: undefined, responseMessages: [] };
+        return {
+          text: approved ? "approved" : "denied",
+          reasoningText: undefined,
+          responseMessages: [],
+        };
       });
 
       const sendPromise = session.sendUserMessage("install deps");
@@ -2670,7 +2756,11 @@ describe("AgentSession", () => {
 
       mockRunTurn.mockImplementation(async (params: any) => {
         const approved = await params.approveCommand("npm install");
-        return { text: approved ? "approved" : "denied", reasoningText: undefined, responseMessages: [] };
+        return {
+          text: approved ? "approved" : "denied",
+          reasoningText: undefined,
+          responseMessages: [],
+        };
       });
 
       const sendPromise = session.sendUserMessage("install deps");
@@ -2752,7 +2842,11 @@ describe("AgentSession", () => {
 
       mockRunTurn.mockImplementation(async (params: any) => {
         const approved = await params.approveCommand("npm install");
-        return { text: approved ? "approved" : "denied", reasoningText: undefined, responseMessages: [] };
+        return {
+          text: approved ? "approved" : "denied",
+          reasoningText: undefined,
+          responseMessages: [],
+        };
       });
 
       const sendPromise = session.sendUserMessage("go");
@@ -2813,7 +2907,11 @@ describe("AgentSession", () => {
 
       mockRunTurn.mockImplementation(async (params: any) => {
         const approved = await params.approveCommand("ls -la");
-        return { text: approved ? "auto-approved" : "denied", reasoningText: undefined, responseMessages: [] };
+        return {
+          text: approved ? "auto-approved" : "denied",
+          reasoningText: undefined,
+          responseMessages: [],
+        };
       });
 
       await session.sendUserMessage("list files");
@@ -2830,7 +2928,11 @@ describe("AgentSession", () => {
 
       mockRunTurn.mockImplementation(async (params: any) => {
         const approved = await params.approveCommand("rm -rf /tmp/whatever");
-        return { text: approved ? "approved" : "denied", reasoningText: undefined, responseMessages: [] };
+        return {
+          text: approved ? "approved" : "denied",
+          reasoningText: undefined,
+          responseMessages: [],
+        };
       });
 
       await session.sendUserMessage("go");
@@ -2970,8 +3072,9 @@ describe("AgentSession", () => {
       mockRunTurn.mockImplementation(
         () =>
           new Promise((resolve) => {
-            resolveRunTurn = () => resolve({ text: "", reasoningText: undefined, responseMessages: [] });
-          })
+            resolveRunTurn = () =>
+              resolve({ text: "", reasoningText: undefined, responseMessages: [] });
+          }),
       );
 
       const first = session.sendUserMessage("first");
@@ -2994,7 +3097,9 @@ describe("AgentSession", () => {
 
       mockRunTurn.mockImplementation(async () => {
         await session.sendUserMessage("concurrent");
-        const busyError = events.find((e) => e.type === "error" && (e as any).message === "Agent is busy");
+        const busyError = events.find(
+          (e) => e.type === "error" && (e as any).message === "Agent is busy",
+        );
         wasRunningDuringExecution = busyError !== undefined;
         return { text: "", reasoningText: undefined, responseMessages: [] };
       });
@@ -3020,22 +3125,29 @@ describe("AgentSession", () => {
       mockRunTurn.mockImplementation(
         () =>
           new Promise((resolve) => {
-            resolveRunTurn = () => resolve({ text: "", reasoningText: undefined, responseMessages: [] });
-          })
+            resolveRunTurn = () =>
+              resolve({ text: "", reasoningText: undefined, responseMessages: [] });
+          }),
       );
 
       const p = session.sendUserMessage("go");
       await new Promise((r) => setTimeout(r, 10));
 
-      const busyTrueIdx = events.findIndex((e) => e.type === "session_busy" && (e as any).busy === true);
-      const busyFalseIdx = events.findIndex((e) => e.type === "session_busy" && (e as any).busy === false);
+      const busyTrueIdx = events.findIndex(
+        (e) => e.type === "session_busy" && (e as any).busy === true,
+      );
+      const busyFalseIdx = events.findIndex(
+        (e) => e.type === "session_busy" && (e as any).busy === false,
+      );
       expect(busyTrueIdx).toBeGreaterThanOrEqual(0);
       expect(busyFalseIdx).toBe(-1);
 
       resolveRunTurn();
       await p;
 
-      const busyFalseIdxAfter = events.findIndex((e) => e.type === "session_busy" && (e as any).busy === false);
+      const busyFalseIdxAfter = events.findIndex(
+        (e) => e.type === "session_busy" && (e as any).busy === false,
+      );
       expect(busyFalseIdxAfter).toBeGreaterThan(busyTrueIdx);
     });
 
@@ -3050,7 +3162,8 @@ describe("AgentSession", () => {
       mockRunTurn.mockImplementation(
         () =>
           new Promise((resolve) => {
-            resolveRunTurn = () => resolve({ text: "", reasoningText: undefined, responseMessages: [] });
+            resolveRunTurn = () =>
+              resolve({ text: "", reasoningText: undefined, responseMessages: [] });
           }),
       );
 
@@ -3066,7 +3179,9 @@ describe("AgentSession", () => {
       await waitForCondition(() => events.some((event) => event.type === "skills_list"));
 
       expect(loadSystemPromptWithSkillsImpl).toHaveBeenCalledTimes(1);
-      const busyFalseIdx = events.findIndex((event) => event.type === "session_busy" && (event as any).busy === false);
+      const busyFalseIdx = events.findIndex(
+        (event) => event.type === "session_busy" && (event as any).busy === false,
+      );
       const skillsListIdx = events.findIndex((event) => event.type === "skills_list");
       expect(busyFalseIdx).toBeGreaterThanOrEqual(0);
       expect(skillsListIdx).toBeGreaterThan(busyFalseIdx);
@@ -3075,28 +3190,37 @@ describe("AgentSession", () => {
     test("accepts steer_message for the active turn without emitting another busy=true", async () => {
       const { session, events } = makeSession();
 
-      let capturedPrepareStep: ((step: { stepNumber: number; messages: any[] }) => Promise<any>) | undefined;
+      let capturedPrepareStep:
+        | ((step: { stepNumber: number; messages: any[] }) => Promise<any>)
+        | undefined;
       let resolveRunTurn!: () => void;
       mockRunTurn.mockImplementation(
         (params: any) =>
           new Promise((resolve) => {
             capturedPrepareStep = params.prepareStep;
-            resolveRunTurn = () => resolve({ text: "", reasoningText: undefined, responseMessages: [] });
+            resolveRunTurn = () =>
+              resolve({ text: "", reasoningText: undefined, responseMessages: [] });
           }),
       );
 
       const turnPromise = session.sendUserMessage("go");
       await new Promise((r) => setTimeout(r, 10));
 
-      const busyTrue = events.find((e) => e.type === "session_busy" && (e as any).busy === true) as any;
+      const busyTrue = events.find(
+        (e) => e.type === "session_busy" && (e as any).busy === true,
+      ) as any;
       expect(busyTrue?.turnId).toBeTruthy();
 
       await session.sendSteerMessage("narrow the scope", busyTrue.turnId, "steer-1");
 
-      const steerAccepted = events.find((e) => e.type === "steer_accepted") as Extract<ServerEvent, { type: "steer_accepted" }> | undefined;
+      const steerAccepted = events.find((e) => e.type === "steer_accepted") as
+        | Extract<ServerEvent, { type: "steer_accepted" }>
+        | undefined;
       expect(steerAccepted).toBeDefined();
       expect(steerAccepted?.turnId).toBe(busyTrue.turnId);
-      expect(events.filter((e) => e.type === "session_busy" && (e as any).busy === true)).toHaveLength(1);
+      expect(
+        events.filter((e) => e.type === "session_busy" && (e as any).busy === true),
+      ).toHaveLength(1);
       expect(
         events.some((e) => e.type === "user_message" && (e as any).text === "narrow the scope"),
       ).toBe(false);
@@ -3117,7 +3241,8 @@ describe("AgentSession", () => {
       mockRunTurn.mockImplementation(
         () =>
           new Promise((resolve) => {
-            resolveRunTurn = () => resolve({ text: "", reasoningText: undefined, responseMessages: [] });
+            resolveRunTurn = () =>
+              resolve({ text: "", reasoningText: undefined, responseMessages: [] });
           }),
       );
 
@@ -3126,7 +3251,9 @@ describe("AgentSession", () => {
 
       await session.sendSteerMessage("continue", "wrong-turn", "steer-wrong");
 
-      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      const errorEvt = events.find((e) => e.type === "error") as
+        | Extract<ServerEvent, { type: "error" }>
+        | undefined;
       expect(errorEvt?.message).toBe("Active turn mismatch.");
       expect(events.some((e) => e.type === "steer_accepted")).toBe(false);
 
@@ -3136,7 +3263,9 @@ describe("AgentSession", () => {
 
     test("commits an accepted steer only when prepareStep drains it", async () => {
       const { session, events } = makeSession();
-      let capturedPrepareStep: ((step: { stepNumber: number; messages: any[] }) => Promise<any>) | undefined;
+      let capturedPrepareStep:
+        | ((step: { stepNumber: number; messages: any[] }) => Promise<any>)
+        | undefined;
       let resolveRunTurn!: () => void;
 
       mockRunTurn.mockImplementation(async (params: any) => {
@@ -3158,9 +3287,15 @@ describe("AgentSession", () => {
       expect(activeTurnId).toBeTruthy();
       await session.sendSteerMessage("mention the queue behavior", activeTurnId!, "steer-commit");
 
-      expect((session as any).state.allMessages.some((message: any) => message.content === "mention the queue behavior")).toBe(false);
       expect(
-        events.some((e) => e.type === "user_message" && (e as any).clientMessageId === "steer-commit"),
+        (session as any).state.allMessages.some(
+          (message: any) => message.content === "mention the queue behavior",
+        ),
+      ).toBe(false);
+      expect(
+        events.some(
+          (e) => e.type === "user_message" && (e as any).clientMessageId === "steer-commit",
+        ),
       ).toBe(false);
 
       const baseMessages = [{ role: "user", content: "go" }];
@@ -3169,12 +3304,18 @@ describe("AgentSession", () => {
         ...baseMessages,
         { role: "user", content: "mention the queue behavior" },
       ]);
-      expect((session as any).state.allMessages.some((message: any) => message.content === "mention the queue behavior")).toBe(true);
       expect(
-        events.some((e) =>
-          e.type === "user_message"
-          && (e as any).text === "mention the queue behavior"
-          && (e as any).clientMessageId === "steer-commit"),
+        (session as any).state.allMessages.some(
+          (message: any) => message.content === "mention the queue behavior",
+        ),
+      ).toBe(true);
+      expect(
+        events.some(
+          (e) =>
+            e.type === "user_message" &&
+            (e as any).text === "mention the queue behavior" &&
+            (e as any).clientMessageId === "steer-commit",
+        ),
       ).toBe(true);
 
       resolveRunTurn();
@@ -3190,7 +3331,9 @@ describe("AgentSession", () => {
           uploadsDirectory: uploadsDir,
         },
       });
-      let capturedPrepareStep: ((step: { stepNumber: number; messages: any[] }) => Promise<any>) | undefined;
+      let capturedPrepareStep:
+        | ((step: { stepNumber: number; messages: any[] }) => Promise<any>)
+        | undefined;
       let resolveRunTurn!: () => void;
 
       mockRunTurn.mockImplementation(async (params: any) => {
@@ -3208,11 +3351,13 @@ describe("AgentSession", () => {
       const turnPromise = session.sendUserMessage("go");
       await new Promise((r) => setTimeout(r, 10));
 
-      await session.sendSteerMessage("", session.activeTurnId!, "steer-attachment", [{
-        filename: "diagram.png",
-        contentBase64: "aGVsbG8=",
-        mimeType: "image/png",
-      }]);
+      await session.sendSteerMessage("", session.activeTurnId!, "steer-attachment", [
+        {
+          filename: "diagram.png",
+          contentBase64: "aGVsbG8=",
+          mimeType: "image/png",
+        },
+      ]);
 
       await capturedPrepareStep?.({
         stepNumber: 2,
@@ -3220,12 +3365,16 @@ describe("AgentSession", () => {
       });
 
       expect(
-        events.some((e) =>
-          e.type === "user_message"
-          && (e as any).clientMessageId === "steer-attachment"
-          && (e as any).text === "[diagram.png]"),
+        events.some(
+          (e) =>
+            e.type === "user_message" &&
+            (e as any).clientMessageId === "steer-attachment" &&
+            (e as any).text === "[diagram.png]",
+        ),
       ).toBe(true);
-      await expect(fs.readFile(path.join(uploadsDir, "diagram.png"), "utf8")).resolves.toBe("hello");
+      await expect(fs.readFile(path.join(uploadsDir, "diagram.png"), "utf8")).resolves.toBe(
+        "hello",
+      );
 
       resolveRunTurn();
       await turnPromise;
@@ -3238,7 +3387,8 @@ describe("AgentSession", () => {
       mockRunTurn.mockImplementation(
         () =>
           new Promise((resolve) => {
-            resolveRunTurn = () => resolve({ text: "", reasoningText: undefined, responseMessages: [] });
+            resolveRunTurn = () =>
+              resolve({ text: "", reasoningText: undefined, responseMessages: [] });
           }),
       );
 
@@ -3248,23 +3398,49 @@ describe("AgentSession", () => {
       const activeTurnId = session.activeTurnId;
       expect(activeTurnId).toBeTruthy();
 
-      await session.sendSteerMessage("first attachment steer", activeTurnId!, "steer-attachment-1", [{
-        filename: "large-1.txt",
-        contentBase64: "a".repeat(MAX_ATTACHMENT_BASE64_SIZE),
-        mimeType: "text/plain",
-      }]);
-      await session.sendSteerMessage("second attachment steer", activeTurnId!, "steer-attachment-2", [{
-        filename: "large-2.txt",
-        contentBase64: "b".repeat(MAX_TURN_ATTACHMENT_TOTAL_BASE64_SIZE - MAX_ATTACHMENT_BASE64_SIZE + 4),
-        mimeType: "text/plain",
-      }]);
+      await session.sendSteerMessage(
+        "first attachment steer",
+        activeTurnId!,
+        "steer-attachment-1",
+        [
+          {
+            filename: "large-1.txt",
+            contentBase64: "a".repeat(MAX_ATTACHMENT_BASE64_SIZE),
+            mimeType: "text/plain",
+          },
+        ],
+      );
+      await session.sendSteerMessage(
+        "second attachment steer",
+        activeTurnId!,
+        "steer-attachment-2",
+        [
+          {
+            filename: "large-2.txt",
+            contentBase64: "b".repeat(
+              MAX_TURN_ATTACHMENT_TOTAL_BASE64_SIZE - MAX_ATTACHMENT_BASE64_SIZE + 4,
+            ),
+            mimeType: "text/plain",
+          },
+        ],
+      );
 
-      const errorEvt = events.findLast((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      const errorEvt = events.findLast((e) => e.type === "error") as
+        | Extract<ServerEvent, { type: "error" }>
+        | undefined;
       expect(errorEvt?.message).toBe(
         "Pending steer attachments are too large. Wait for the current turn to consume queued steers.",
       );
-      expect(events.some((e) => e.type === "steer_accepted" && (e as any).clientMessageId === "steer-attachment-1")).toBe(true);
-      expect(events.some((e) => e.type === "steer_accepted" && (e as any).clientMessageId === "steer-attachment-2")).toBe(false);
+      expect(
+        events.some(
+          (e) => e.type === "steer_accepted" && (e as any).clientMessageId === "steer-attachment-1",
+        ),
+      ).toBe(true);
+      expect(
+        events.some(
+          (e) => e.type === "steer_accepted" && (e as any).clientMessageId === "steer-attachment-2",
+        ),
+      ).toBe(false);
       expect((session as any).state.pendingSteers).toHaveLength(1);
       (session as any).state.pendingSteers.splice(0);
 
@@ -3323,14 +3499,20 @@ describe("AgentSession", () => {
 
         if (runCount === 1) {
           queueMicrotask(() => {
-            void session.sendSteerMessage("follow up once", session.activeTurnId!, "steer-remaining-steps");
+            void session.sendSteerMessage(
+              "follow up once",
+              session.activeTurnId!,
+              "steer-remaining-steps",
+            );
           });
         }
 
         return {
           text: runCount === 1 ? "first pass" : "second pass",
           reasoningText: undefined,
-          responseMessages: [{ role: "assistant", content: runCount === 1 ? "first pass" : "second pass" }],
+          responseMessages: [
+            { role: "assistant", content: runCount === 1 ? "first pass" : "second pass" },
+          ],
         };
       });
 
@@ -3351,7 +3533,11 @@ describe("AgentSession", () => {
 
         if (runCount === 1) {
           queueMicrotask(() => {
-            void session.sendSteerMessage("follow up in the same turn", session.activeTurnId!, "steer-late");
+            void session.sendSteerMessage(
+              "follow up in the same turn",
+              session.activeTurnId!,
+              "steer-late",
+            );
           });
           return {
             text: "first pass",
@@ -3391,9 +3577,13 @@ describe("AgentSession", () => {
         role: "user",
         content: "follow up in the same turn",
       });
-      expect(events.filter((e) => e.type === "session_busy" && (e as any).busy === true)).toHaveLength(1);
+      expect(
+        events.filter((e) => e.type === "session_busy" && (e as any).busy === true),
+      ).toHaveLength(1);
 
-      const usageEvents = events.filter((e) => e.type === "turn_usage") as Array<Extract<ServerEvent, { type: "turn_usage" }>>;
+      const usageEvents = events.filter((e) => e.type === "turn_usage") as Array<
+        Extract<ServerEvent, { type: "turn_usage" }>
+      >;
       expect(usageEvents).toHaveLength(1);
       expect(usageEvents[0]?.turnId).toBe(seenTurnIds[0]);
       expect(usageEvents[0]?.usage).toMatchObject({
@@ -3417,7 +3607,11 @@ describe("AgentSession", () => {
         runCount += 1;
         if (runCount === 1) {
           queueMicrotask(() => {
-            void session.sendSteerMessage("follow up in the same turn", session.activeTurnId!, "steer-cancelled");
+            void session.sendSteerMessage(
+              "follow up in the same turn",
+              session.activeTurnId!,
+              "steer-cancelled",
+            );
             queueMicrotask(() => {
               session.cancel();
             });
@@ -3436,12 +3630,14 @@ describe("AgentSession", () => {
 
       expect(runCount).toBe(1);
       expect(
-        (session as any).state.allMessages.some((message: any) => message.content === "follow up in the same turn"),
+        (session as any).state.allMessages.some(
+          (message: any) => message.content === "follow up in the same turn",
+        ),
       ).toBe(false);
       expect(
-        events.some((e) =>
-          e.type === "user_message"
-          && (e as any).clientMessageId === "steer-cancelled"),
+        events.some(
+          (e) => e.type === "user_message" && (e as any).clientMessageId === "steer-cancelled",
+        ),
       ).toBe(false);
     });
 
@@ -3515,7 +3711,11 @@ describe("AgentSession", () => {
 
         if (runCount === 1) {
           queueMicrotask(() => {
-            void session.sendSteerMessage("follow up and fail", session.activeTurnId!, "steer-error");
+            void session.sendSteerMessage(
+              "follow up and fail",
+              session.activeTurnId!,
+              "steer-error",
+            );
           });
           return {
             text: "first pass",
@@ -3532,12 +3732,14 @@ describe("AgentSession", () => {
 
       expect(runCount).toBe(2);
 
-      const busyTrue = events.find(
-        (e) => e.type === "session_busy" && (e as any).busy === true
-      ) as Extract<ServerEvent, { type: "session_busy" }> | undefined;
+      const busyTrue = events.find((e) => e.type === "session_busy" && (e as any).busy === true) as
+        | Extract<ServerEvent, { type: "session_busy" }>
+        | undefined;
       expect(busyTrue?.turnId).toBeTruthy();
 
-      const usageEvents = events.filter((e) => e.type === "turn_usage") as Array<Extract<ServerEvent, { type: "turn_usage" }>>;
+      const usageEvents = events.filter((e) => e.type === "turn_usage") as Array<
+        Extract<ServerEvent, { type: "turn_usage" }>
+      >;
       expect(usageEvents).toHaveLength(1);
       expect(usageEvents[0]?.turnId).toBe(busyTrue?.turnId);
       expect(usageEvents[0]?.usage).toMatchObject({
@@ -3557,17 +3759,21 @@ describe("AgentSession", () => {
         totalTokens: 15,
       });
 
-      const sessionUsageEvents = events.filter((e) => e.type === "session_usage") as Array<Extract<ServerEvent, { type: "session_usage" }>>;
+      const sessionUsageEvents = events.filter((e) => e.type === "session_usage") as Array<
+        Extract<ServerEvent, { type: "session_usage" }>
+      >;
       expect(sessionUsageEvents).toHaveLength(1);
       expect(sessionUsageEvents[0]?.usage?.totalTurns).toBe(1);
       expect(sessionUsageEvents[0]?.usage?.turns[0]?.turnId).toBe(busyTrue?.turnId);
 
-      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      const errorEvt = events.find((e) => e.type === "error") as
+        | Extract<ServerEvent, { type: "error" }>
+        | undefined;
       expect(errorEvt?.message).toContain("follow-up provider failed");
 
-      const busyFalse = events.find(
-        (e) => e.type === "session_busy" && !(e as any).busy
-      ) as Extract<ServerEvent, { type: "session_busy" }> | undefined;
+      const busyFalse = events.find((e) => e.type === "session_busy" && !(e as any).busy) as
+        | Extract<ServerEvent, { type: "session_busy" }>
+        | undefined;
       expect(busyFalse?.outcome).toBe("error");
     });
 
@@ -3578,7 +3784,8 @@ describe("AgentSession", () => {
       mockRunTurn.mockImplementation(
         () =>
           new Promise((resolve) => {
-            resolveRunTurn = () => resolve({ text: "", reasoningText: undefined, responseMessages: [] });
+            resolveRunTurn = () =>
+              resolve({ text: "", reasoningText: undefined, responseMessages: [] });
           }),
       );
 
@@ -3591,9 +3798,15 @@ describe("AgentSession", () => {
 
       await session.sendSteerMessage("too late", activeTurnId!, "steer-closed");
 
-      const errorEvt = events.findLast((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      const errorEvt = events.findLast((e) => e.type === "error") as
+        | Extract<ServerEvent, { type: "error" }>
+        | undefined;
       expect(errorEvt?.message).toBe("Active turn no longer accepts steering.");
-      expect(events.some((e) => e.type === "steer_accepted" && (e as any).clientMessageId === "steer-closed")).toBe(false);
+      expect(
+        events.some(
+          (e) => e.type === "steer_accepted" && (e as any).clientMessageId === "steer-closed",
+        ),
+      ).toBe(false);
 
       resolveRunTurn();
       await turnPromise;
@@ -3615,8 +3828,9 @@ describe("AgentSession", () => {
       mockRunTurn.mockImplementation(
         () =>
           new Promise((resolve) => {
-            resolveRunTurn = () => resolve({ text: "", reasoningText: undefined, responseMessages: [] });
-          })
+            resolveRunTurn = () =>
+              resolve({ text: "", reasoningText: undefined, responseMessages: [] });
+          }),
       );
 
       const sendPromise = session.sendUserMessage("go");
@@ -3624,8 +3838,11 @@ describe("AgentSession", () => {
 
       expect(
         events.some(
-          (event) => event.type === "session_info" && event.sessionId === session.id && event.executionState === "running"
-        )
+          (event) =>
+            event.type === "session_info" &&
+            event.sessionId === session.id &&
+            event.executionState === "running",
+        ),
       ).toBe(true);
 
       resolveRunTurn();
@@ -3634,8 +3851,11 @@ describe("AgentSession", () => {
       expect(session.getSessionInfoEvent().executionState).toBe("completed");
       expect(
         events.some(
-          (event) => event.type === "session_info" && event.sessionId === session.id && event.executionState === "completed"
-        )
+          (event) =>
+            event.type === "session_info" &&
+            event.sessionId === session.id &&
+            event.executionState === "completed",
+        ),
       ).toBe(true);
     });
 
@@ -3660,13 +3880,19 @@ describe("AgentSession", () => {
       expect(session.getSessionInfoEvent().executionState).toBe("errored");
       expect(
         events.some(
-          (event) => event.type === "session_info" && event.sessionId === session.id && event.executionState === "running"
-        )
+          (event) =>
+            event.type === "session_info" &&
+            event.sessionId === session.id &&
+            event.executionState === "running",
+        ),
       ).toBe(true);
       expect(
         events.some(
-          (event) => event.type === "session_info" && event.sessionId === session.id && event.executionState === "errored"
-        )
+          (event) =>
+            event.type === "session_info" &&
+            event.sessionId === session.id &&
+            event.executionState === "errored",
+        ),
       ).toBe(true);
     });
 
@@ -3686,7 +3912,9 @@ describe("AgentSession", () => {
         .mockImplementationOnce(async () => ({
           text: "First child result",
           reasoningText: undefined,
-          responseMessages: [{ role: "assistant", content: [{ type: "text", text: "First child result" }] }],
+          responseMessages: [
+            { role: "assistant", content: [{ type: "text", text: "First child result" }] },
+          ],
         }))
         .mockImplementationOnce(async () => {
           throw new Error("delegate failed");
@@ -3718,19 +3946,45 @@ describe("AgentSession", () => {
         responseMessages: [
           {
             role: "assistant",
-            content: [{ type: "text", text: "I'm having trouble with the function call format. Let me try again." }],
+            content: [
+              {
+                type: "text",
+                text: "I'm having trouble with the function call format. Let me try again.",
+              },
+            ],
           },
           {
             role: "tool",
-            content: [{ type: "tool-result", toolName: "tool", output: { value: "Tool tool not found" }, isError: true }],
+            content: [
+              {
+                type: "tool-result",
+                toolName: "tool",
+                output: { value: "Tool tool not found" },
+                isError: true,
+              },
+            ],
           },
           {
             role: "tool",
-            content: [{ type: "tool-result", toolName: "tool", output: { value: "Tool tool not found" }, isError: true }],
+            content: [
+              {
+                type: "tool-result",
+                toolName: "tool",
+                output: { value: "Tool tool not found" },
+                isError: true,
+              },
+            ],
           },
           {
             role: "tool",
-            content: [{ type: "tool-result", toolName: "read", output: { value: "Invalid input: expected string, received undefined" }, isError: true }],
+            content: [
+              {
+                type: "tool-result",
+                toolName: "read",
+                output: { value: "Invalid input: expected string, received undefined" },
+                isError: true,
+              },
+            ],
           },
         ],
       }));
@@ -3738,65 +3992,70 @@ describe("AgentSession", () => {
       await session.sendUserMessage("go");
 
       expect(session.getSessionInfoEvent().executionState).toBe("errored");
-      expect(session.getSessionInfoEvent().lastMessagePreview).toContain("Model failed to produce valid tool calls");
+      expect(session.getSessionInfoEvent().lastMessagePreview).toContain(
+        "Model failed to produce valid tool calls",
+      );
       expect(
         events.some(
-          (event) => event.type === "error"
-            && event.sessionId === session.id
-            && event.code === "provider_error"
-            && event.message.includes("Model failed to produce valid tool calls")
-        )
+          (event) =>
+            event.type === "error" &&
+            event.sessionId === session.id &&
+            event.code === "provider_error" &&
+            event.message.includes("Model failed to produce valid tool calls"),
+        ),
       ).toBe(true);
       expect(events.some((event) => event.type === "assistant_message")).toBe(false);
     });
 
     test("clears busy and allows follow-up even when auto-checkpoint never resolves", async () => {
-      const sessionBackupFactory = mock(async (opts: SessionBackupInitOptions): Promise<SessionBackupHandle> => {
-        const createdAt = new Date().toISOString();
-        const checkpoints: SessionBackupPublicCheckpoint[] = [
-          {
-            id: "cp-0001",
-            index: 1,
+      const sessionBackupFactory = mock(
+        async (opts: SessionBackupInitOptions): Promise<SessionBackupHandle> => {
+          const createdAt = new Date().toISOString();
+          const checkpoints: SessionBackupPublicCheckpoint[] = [
+            {
+              id: "cp-0001",
+              index: 1,
+              createdAt,
+              trigger: "initial",
+              changed: false,
+              patchBytes: 0,
+            },
+          ];
+          const state = (): SessionBackupPublicState => ({
+            status: "ready",
+            sessionId: opts.sessionId,
+            workingDirectory: opts.workingDirectory,
+            backupDirectory: `/tmp/mock-backups/${opts.sessionId}`,
             createdAt,
-            trigger: "initial",
-            changed: false,
-            patchBytes: 0,
-          },
-        ];
-        const state = (): SessionBackupPublicState => ({
-          status: "ready",
-          sessionId: opts.sessionId,
-          workingDirectory: opts.workingDirectory,
-          backupDirectory: `/tmp/mock-backups/${opts.sessionId}`,
-          createdAt,
-          originalSnapshot: { kind: "directory" },
-          checkpoints: [...checkpoints],
-        });
+            originalSnapshot: { kind: "directory" },
+            checkpoints: [...checkpoints],
+          });
 
-        return {
-          getPublicState: () => state(),
-          createCheckpoint: async (trigger) => {
-            if (trigger === "auto") {
-              await new Promise<never>(() => {});
-            }
-            const checkpoint: SessionBackupPublicCheckpoint = {
-              id: `cp-${String(checkpoints.length + 1).padStart(4, "0")}`,
-              index: checkpoints.length + 1,
-              createdAt: new Date().toISOString(),
-              trigger,
-              changed: true,
-              patchBytes: 42,
-            };
-            checkpoints.push(checkpoint);
-            return checkpoint;
-          },
-          restoreOriginal: async () => {},
-          restoreCheckpoint: async (_checkpointId: string) => {},
-          deleteCheckpoint: async (_checkpointId: string) => false,
-          reloadFromDisk: async () => state(),
-          close: async () => {},
-        };
-      });
+          return {
+            getPublicState: () => state(),
+            createCheckpoint: async (trigger) => {
+              if (trigger === "auto") {
+                await new Promise<never>(() => {});
+              }
+              const checkpoint: SessionBackupPublicCheckpoint = {
+                id: `cp-${String(checkpoints.length + 1).padStart(4, "0")}`,
+                index: checkpoints.length + 1,
+                createdAt: new Date().toISOString(),
+                trigger,
+                changed: true,
+                patchBytes: 42,
+              };
+              checkpoints.push(checkpoint);
+              return checkpoint;
+            },
+            restoreOriginal: async () => {},
+            restoreCheckpoint: async (_checkpointId: string) => {},
+            deleteCheckpoint: async (_checkpointId: string) => false,
+            reloadFromDisk: async () => state(),
+            close: async () => {},
+          };
+        },
+      );
 
       const { session, events } = makeSession({ sessionBackupFactory });
 
@@ -3808,14 +4067,20 @@ describe("AgentSession", () => {
       ]);
       expect(firstTurnResult).toBe("resolved");
 
-      const busyTrueIdx = events.findIndex((e) => e.type === "session_busy" && (e as any).busy === true);
-      const busyFalseIdx = events.findIndex((e) => e.type === "session_busy" && (e as any).busy === false);
+      const busyTrueIdx = events.findIndex(
+        (e) => e.type === "session_busy" && (e as any).busy === true,
+      );
+      const busyFalseIdx = events.findIndex(
+        (e) => e.type === "session_busy" && (e as any).busy === false,
+      );
       expect(busyTrueIdx).toBeGreaterThanOrEqual(0);
       expect(busyFalseIdx).toBeGreaterThan(busyTrueIdx);
 
       events.length = 0;
       await session.sendUserMessage("follow-up");
-      const busyError = events.find((e) => e.type === "error" && (e as any).message === "Agent is busy");
+      const busyError = events.find(
+        (e) => e.type === "error" && (e as any).message === "Agent is busy",
+      );
       expect(busyError).toBeUndefined();
     });
 
@@ -3847,11 +4112,13 @@ describe("AgentSession", () => {
         },
       });
 
-      await session.sendUserMessage("", "msg-attachment", undefined, [{
-        filename: "photo.png",
-        contentBase64: "aGVsbG8=",
-        mimeType: "image/png",
-      }]);
+      await session.sendUserMessage("", "msg-attachment", undefined, [
+        {
+          filename: "photo.png",
+          contentBase64: "aGVsbG8=",
+          mimeType: "image/png",
+        },
+      ]);
 
       const userEvt = events.find((e) => e.type === "user_message") as any;
       expect(userEvt).toMatchObject({
@@ -3886,7 +4153,9 @@ describe("AgentSession", () => {
         },
       ]);
 
-      await expect(fs.readFile(path.join(uploadsDir, "photo.png"), "utf8")).resolves.toBe("existing");
+      await expect(fs.readFile(path.join(uploadsDir, "photo.png"), "utf8")).resolves.toBe(
+        "existing",
+      );
       await expect(fs.readFile(path.join(uploadsDir, "photo_1.png"), "utf8")).resolves.toBe("one");
       await expect(fs.readFile(path.join(uploadsDir, "photo_2.png"), "utf8")).resolves.toBe("two");
     });
@@ -3901,11 +4170,13 @@ describe("AgentSession", () => {
         config: makeConfig(dir),
       });
 
-      await session.sendUserMessage("", "msg-uploaded-path", undefined, [{
-        filename: "large.bin",
-        path: uploadedPath,
-        mimeType: "application/octet-stream",
-      }]);
+      await session.sendUserMessage("", "msg-uploaded-path", undefined, [
+        {
+          filename: "large.bin",
+          path: uploadedPath,
+          mimeType: "application/octet-stream",
+        },
+      ]);
 
       await expect(fs.readFile(uploadedPath, "utf8")).resolves.toBe("existing-large-file");
       await expect(fs.readdir(uploadsDir)).resolves.toEqual(["large.bin"]);
@@ -3922,13 +4193,17 @@ describe("AgentSession", () => {
         config: makeConfig(dir),
       });
 
-      await session.sendUserMessage("", "msg-invalid-filename", undefined, [{
-        filename: "..",
-        contentBase64: "aGVsbG8=",
-        mimeType: "image/png",
-      }]);
+      await session.sendUserMessage("", "msg-invalid-filename", undefined, [
+        {
+          filename: "..",
+          contentBase64: "aGVsbG8=",
+          mimeType: "image/png",
+        },
+      ]);
 
-      const errorEvt = events.findLast((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      const errorEvt = events.findLast((e) => e.type === "error") as
+        | Extract<ServerEvent, { type: "error" }>
+        | undefined;
       expect(errorEvt).toMatchObject({
         code: "validation_failed",
         message: "Invalid attachment filename: ..",
@@ -3946,13 +4221,17 @@ describe("AgentSession", () => {
         config: makeConfig(dir),
       });
 
-      await session.sendUserMessage("", "msg-uploaded-dir", undefined, [{
-        filename: "folder",
-        path: nestedDir,
-        mimeType: "image/png",
-      }]);
+      await session.sendUserMessage("", "msg-uploaded-dir", undefined, [
+        {
+          filename: "folder",
+          path: nestedDir,
+          mimeType: "image/png",
+        },
+      ]);
 
-      const errorEvt = events.findLast((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      const errorEvt = events.findLast((e) => e.type === "error") as
+        | Extract<ServerEvent, { type: "error" }>
+        | undefined;
       expect(errorEvt).toMatchObject({
         code: "validation_failed",
         message: `Uploaded attachment is not a file: ${nestedDir}`,
@@ -3970,11 +4249,13 @@ describe("AgentSession", () => {
         config: makeConfig(dir),
       });
 
-      await session.sendUserMessage("", "msg-uploaded-image", undefined, [{
-        filename: "photo.png",
-        path: uploadedPath,
-        mimeType: "image/png",
-      }]);
+      await session.sendUserMessage("", "msg-uploaded-image", undefined, [
+        {
+          filename: "photo.png",
+          path: uploadedPath,
+          mimeType: "image/png",
+        },
+      ]);
 
       const call = mockRunTurn.mock.calls.at(-1)?.[0] as any;
       expect(call.messages.at(-1)?.content).toContainEqual({
@@ -4049,13 +4330,17 @@ describe("AgentSession", () => {
         config: makeConfig(dir),
       });
 
-      await session.sendUserMessage("", "msg-uploaded-too-large", undefined, [{
-        filename: "oversized.pdf",
-        path: uploadedPath,
-        mimeType: "application/pdf",
-      }]);
+      await session.sendUserMessage("", "msg-uploaded-too-large", undefined, [
+        {
+          filename: "oversized.pdf",
+          path: uploadedPath,
+          mimeType: "application/pdf",
+        },
+      ]);
 
-      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      const errorEvt = events.find((e) => e.type === "error") as
+        | Extract<ServerEvent, { type: "error" }>
+        | undefined;
       expect(errorEvt).toMatchObject({
         code: "validation_failed",
         message: "Uploaded multimodal file too large to send to the model (max 25MB)",
@@ -4069,13 +4354,17 @@ describe("AgentSession", () => {
         config: makeConfig(dir),
       });
 
-      await session.sendUserMessage("", "msg-too-large", undefined, [{
-        filename: "large.bin",
-        contentBase64: "a".repeat(MAX_ATTACHMENT_BASE64_SIZE + 1),
-        mimeType: "application/octet-stream",
-      }]);
+      await session.sendUserMessage("", "msg-too-large", undefined, [
+        {
+          filename: "large.bin",
+          contentBase64: "a".repeat(MAX_ATTACHMENT_BASE64_SIZE + 1),
+          mimeType: "application/octet-stream",
+        },
+      ]);
 
-      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      const errorEvt = events.find((e) => e.type === "error") as
+        | Extract<ServerEvent, { type: "error" }>
+        | undefined;
       expect(errorEvt).toMatchObject({
         code: "validation_failed",
         message: "File too large to send inline (max 25MB)",
@@ -4089,13 +4378,20 @@ describe("AgentSession", () => {
         config: makeConfig(dir),
       });
 
-      await session.sendUserMessage("", "msg-too-many-files", undefined, Array.from({ length: MAX_TURN_ATTACHMENT_COUNT + 1 }, (_, index) => ({
-        filename: `file-${index}.txt`,
-        contentBase64: "YQ==",
-        mimeType: "text/plain",
-      })));
+      await session.sendUserMessage(
+        "",
+        "msg-too-many-files",
+        undefined,
+        Array.from({ length: MAX_TURN_ATTACHMENT_COUNT + 1 }, (_, index) => ({
+          filename: `file-${index}.txt`,
+          contentBase64: "YQ==",
+          mimeType: "text/plain",
+        })),
+      );
 
-      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      const errorEvt = events.find((e) => e.type === "error") as
+        | Extract<ServerEvent, { type: "error" }>
+        | undefined;
       expect(errorEvt).toMatchObject({
         code: "validation_failed",
         message: `Too many file attachments (max ${MAX_TURN_ATTACHMENT_COUNT})`,
@@ -4127,7 +4423,9 @@ describe("AgentSession", () => {
       expect(mockGenerateSessionTitle.mock.calls[0]?.[0]).toMatchObject({
         query: "first question",
       });
-      const infoEvents = events.filter((evt): evt is Extract<ServerEvent, { type: "session_info" }> => evt.type === "session_info");
+      const infoEvents = events.filter(
+        (evt): evt is Extract<ServerEvent, { type: "session_info" }> => evt.type === "session_info",
+      );
       expect(infoEvents.some((evt) => evt.title === "First prompt title")).toBe(true);
     });
 
@@ -4137,7 +4435,7 @@ describe("AgentSession", () => {
         () =>
           new Promise((resolve) => {
             resolveTitle = resolve;
-          })
+          }),
       );
 
       const { session } = makeSession();
@@ -4266,7 +4564,12 @@ describe("AgentSession", () => {
         }));
 
       const dir = "/tmp/test-session";
-      const config = { ...makeConfig(dir), provider: "openai" as const, model: "gpt-5.2", preferredChildModel: "gpt-5.2" };
+      const config = {
+        ...makeConfig(dir),
+        provider: "openai" as const,
+        model: "gpt-5.2",
+        preferredChildModel: "gpt-5.2",
+      };
       const { session } = makeSession({ config });
       (session as any).state.providerState = {
         provider: "openai",
@@ -4354,7 +4657,9 @@ describe("AgentSession", () => {
       await session.sendUserMessage("hello");
 
       expect(mockRunTurn).toHaveBeenCalledTimes(2);
-      expect((mockRunTurn.mock.calls[0][0] as any).providerState?.interactionId).toBe("interaction_stale");
+      expect((mockRunTurn.mock.calls[0][0] as any).providerState?.interactionId).toBe(
+        "interaction_stale",
+      );
       expect((mockRunTurn.mock.calls[1][0] as any).providerState).toBeNull();
       expect((session as any).state.providerState).toEqual(freshGoogleProviderState);
     });
@@ -4434,9 +4739,17 @@ describe("AgentSession", () => {
       const { session, events } = makeSession({ config });
       await session.sendUserMessage("hi");
 
-      const chunks = events.filter((e) => e.type === "model_stream_chunk") as Extract<ServerEvent, { type: "model_stream_chunk" }>[];
+      const chunks = events.filter((e) => e.type === "model_stream_chunk") as Extract<
+        ServerEvent,
+        { type: "model_stream_chunk" }
+      >[];
       expect(chunks).toHaveLength(4);
-      expect(chunks.map((chunk) => chunk.partType)).toEqual(["start", "text_delta", "text_delta", "finish"]);
+      expect(chunks.map((chunk) => chunk.partType)).toEqual([
+        "start",
+        "text_delta",
+        "text_delta",
+        "finish",
+      ]);
       expect(new Set(chunks.map((chunk) => chunk.turnId)).size).toBe(1);
       expect(chunks.map((chunk) => chunk.index)).toEqual([0, 1, 2, 3]);
       for (const chunk of chunks) {
@@ -4593,9 +4906,9 @@ describe("AgentSession", () => {
       const { session, events } = makeSession({ config });
       await session.sendUserMessage("go");
 
-      const chunk = events.find((e) => e.type === "model_stream_chunk" && e.partType === "reasoning_delta") as
-        | Extract<ServerEvent, { type: "model_stream_chunk" }>
-        | undefined;
+      const chunk = events.find(
+        (e) => e.type === "model_stream_chunk" && e.partType === "reasoning_delta",
+      ) as Extract<ServerEvent, { type: "model_stream_chunk" }> | undefined;
       expect(chunk).toBeDefined();
       if (chunk) {
         expect(chunk.part.mode).toBe("summary");
@@ -4650,9 +4963,9 @@ describe("AgentSession", () => {
       const { session, events } = makeSession({ config });
       await session.sendUserMessage("go");
 
-      const chunk = events.find((e) => e.type === "model_stream_chunk" && e.partType === "reasoning_delta") as
-        | Extract<ServerEvent, { type: "model_stream_chunk" }>
-        | undefined;
+      const chunk = events.find(
+        (e) => e.type === "model_stream_chunk" && e.partType === "reasoning_delta",
+      ) as Extract<ServerEvent, { type: "model_stream_chunk" }> | undefined;
       expect(chunk).toBeDefined();
       if (chunk) {
         expect(chunk.part.mode).toBe("reasoning");
@@ -4727,7 +5040,9 @@ describe("AgentSession", () => {
       const { session, events } = makeSession();
       await session.sendUserMessage("go");
 
-      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      const errorEvt = events.find((e) => e.type === "error") as
+        | Extract<ServerEvent, { type: "error" }>
+        | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
         expect(errorEvt.code).toBe("validation_failed");
@@ -4743,7 +5058,9 @@ describe("AgentSession", () => {
       const { session, events } = makeSession();
       await session.sendUserMessage("go");
 
-      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      const errorEvt = events.find((e) => e.type === "error") as
+        | Extract<ServerEvent, { type: "error" }>
+        | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
         expect(errorEvt.code).toBe("permission_denied");
@@ -4759,7 +5076,9 @@ describe("AgentSession", () => {
       const { session, events } = makeSession();
       await session.sendUserMessage("go");
 
-      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      const errorEvt = events.find((e) => e.type === "error") as
+        | Extract<ServerEvent, { type: "error" }>
+        | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
         expect(errorEvt.code).toBe("backup_error");
@@ -4775,7 +5094,9 @@ describe("AgentSession", () => {
       const { session, events } = makeSession();
       await session.sendUserMessage("go");
 
-      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      const errorEvt = events.find((e) => e.type === "error") as
+        | Extract<ServerEvent, { type: "error" }>
+        | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
         expect(errorEvt.code).toBe("backup_error");
@@ -4791,7 +5112,9 @@ describe("AgentSession", () => {
       const { session, events } = makeSession();
       await session.sendUserMessage("go");
 
-      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      const errorEvt = events.find((e) => e.type === "error") as
+        | Extract<ServerEvent, { type: "error" }>
+        | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
         expect(errorEvt.code).toBe("internal_error");
@@ -4828,7 +5151,9 @@ describe("AgentSession", () => {
       }));
 
       await session.sendUserMessage("second");
-      const busyError = events.find((e) => e.type === "error" && (e as any).message === "Agent is busy");
+      const busyError = events.find(
+        (e) => e.type === "error" && (e as any).message === "Agent is busy",
+      );
       expect(busyError).toBeUndefined();
 
       const assistantEvt = events.find((e) => e.type === "assistant_message") as any;
@@ -5034,7 +5359,8 @@ describe("AgentSession", () => {
       const { session, events } = makeSession();
       await session.sendUserMessage("checkpoint me");
       for (let i = 0; i < 40; i += 1) {
-        if (events.some((e) => e.type === "session_backup_state" && e.reason === "auto_checkpoint")) break;
+        if (events.some((e) => e.type === "session_backup_state" && e.reason === "auto_checkpoint"))
+          break;
         await new Promise((resolve) => {
           setTimeout(resolve, 5);
         });
@@ -5057,7 +5383,7 @@ describe("AgentSession", () => {
       await session.createManualSessionCheckpoint();
 
       const manual = events.find(
-        (e) => e.type === "session_backup_state" && e.reason === "manual_checkpoint"
+        (e) => e.type === "session_backup_state" && e.reason === "manual_checkpoint",
       ) as Extract<ServerEvent, { type: "session_backup_state" }> | undefined;
       expect(manual).toBeDefined();
       if (manual) {
@@ -5070,57 +5396,59 @@ describe("AgentSession", () => {
     test("restoreSessionBackup routes original and checkpoint restores to the backup handle", async () => {
       let restoreOriginalCalls = 0;
       const restoreCheckpointCalls: string[] = [];
-      const backupFactory = mock(async (opts: SessionBackupInitOptions): Promise<SessionBackupHandle> => {
-        const createdAt = new Date().toISOString();
-        const checkpoints: SessionBackupPublicCheckpoint[] = [
-          {
-            id: "cp-0001",
-            index: 1,
+      const backupFactory = mock(
+        async (opts: SessionBackupInitOptions): Promise<SessionBackupHandle> => {
+          const createdAt = new Date().toISOString();
+          const checkpoints: SessionBackupPublicCheckpoint[] = [
+            {
+              id: "cp-0001",
+              index: 1,
+              createdAt,
+              trigger: "initial",
+              changed: false,
+              patchBytes: 0,
+            },
+          ];
+
+          const getState = (): SessionBackupPublicState => ({
+            status: "ready",
+            sessionId: opts.sessionId,
+            workingDirectory: opts.workingDirectory,
+            backupDirectory: `/tmp/mock-backups/${opts.sessionId}`,
             createdAt,
-            trigger: "initial",
-            changed: false,
-            patchBytes: 0,
-          },
-        ];
+            originalSnapshot: { kind: "directory" },
+            checkpoints: [...checkpoints],
+          });
 
-        const getState = (): SessionBackupPublicState => ({
-          status: "ready",
-          sessionId: opts.sessionId,
-          workingDirectory: opts.workingDirectory,
-          backupDirectory: `/tmp/mock-backups/${opts.sessionId}`,
-          createdAt,
-          originalSnapshot: { kind: "directory" },
-          checkpoints: [...checkpoints],
-        });
-
-        return {
-          getPublicState: () => getState(),
-          createCheckpoint: async (trigger) => {
-            const checkpoint: SessionBackupPublicCheckpoint = {
-              id: `cp-${String(checkpoints.length + 1).padStart(4, "0")}`,
-              index: checkpoints.length + 1,
-              createdAt: new Date().toISOString(),
-              trigger,
-              changed: true,
-              patchBytes: 42,
-            };
-            checkpoints.push(checkpoint);
-            return checkpoint;
-          },
-          restoreOriginal: async () => {
-            restoreOriginalCalls += 1;
-          },
-          restoreCheckpoint: async (checkpointId) => {
-            restoreCheckpointCalls.push(checkpointId);
-            if (!checkpoints.some((cp) => cp.id === checkpointId)) {
-              throw new Error(`Unknown checkpoint: ${checkpointId}`);
-            }
-          },
-          deleteCheckpoint: async () => false,
-          reloadFromDisk: async () => getState(),
-          close: async () => {},
-        };
-      });
+          return {
+            getPublicState: () => getState(),
+            createCheckpoint: async (trigger) => {
+              const checkpoint: SessionBackupPublicCheckpoint = {
+                id: `cp-${String(checkpoints.length + 1).padStart(4, "0")}`,
+                index: checkpoints.length + 1,
+                createdAt: new Date().toISOString(),
+                trigger,
+                changed: true,
+                patchBytes: 42,
+              };
+              checkpoints.push(checkpoint);
+              return checkpoint;
+            },
+            restoreOriginal: async () => {
+              restoreOriginalCalls += 1;
+            },
+            restoreCheckpoint: async (checkpointId) => {
+              restoreCheckpointCalls.push(checkpointId);
+              if (!checkpoints.some((cp) => cp.id === checkpointId)) {
+                throw new Error(`Unknown checkpoint: ${checkpointId}`);
+              }
+            },
+            deleteCheckpoint: async () => false,
+            reloadFromDisk: async () => getState(),
+            close: async () => {},
+          };
+        },
+      );
 
       const { session, events } = makeSession({ sessionBackupFactory: backupFactory });
       await session.createManualSessionCheckpoint();
@@ -5130,7 +5458,7 @@ describe("AgentSession", () => {
       expect(restoreOriginalCalls).toBe(1);
       expect(restoreCheckpointCalls).toEqual(["cp-0001"]);
       const restoreEvents = events.filter(
-        (e) => e.type === "session_backup_state" && e.reason === "restore"
+        (e) => e.type === "session_backup_state" && e.reason === "restore",
       ) as Array<Extract<ServerEvent, { type: "session_backup_state" }>>;
       expect(restoreEvents).toHaveLength(2);
       expect(restoreEvents.every((evt) => evt.backup.status === "ready")).toBe(true);
@@ -5150,10 +5478,13 @@ describe("AgentSession", () => {
     test("manual checkpoint requests are serialized", async () => {
       const { session, events } = makeSession();
 
-      await Promise.all([session.createManualSessionCheckpoint(), session.createManualSessionCheckpoint()]);
+      await Promise.all([
+        session.createManualSessionCheckpoint(),
+        session.createManualSessionCheckpoint(),
+      ]);
 
       const manualEvents = events.filter(
-        (e) => e.type === "session_backup_state" && e.reason === "manual_checkpoint"
+        (e) => e.type === "session_backup_state" && e.reason === "manual_checkpoint",
       ) as Array<Extract<ServerEvent, { type: "session_backup_state" }>>;
       expect(manualEvents.length).toBe(2);
       expect(manualEvents[1]?.backup.checkpoints.length).toBe(3);
@@ -5201,7 +5532,9 @@ describe("AgentSession", () => {
       const { session, events } = makeSession();
       await session.sendUserMessage("go");
 
-      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      const errorEvt = events.find((e) => e.type === "error") as
+        | Extract<ServerEvent, { type: "error" }>
+        | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
         expect(errorEvt.code).toBe("permission_denied");
@@ -5217,7 +5550,9 @@ describe("AgentSession", () => {
       const { session, events } = makeSession();
       await session.sendUserMessage("go");
 
-      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      const errorEvt = events.find((e) => e.type === "error") as
+        | Extract<ServerEvent, { type: "error" }>
+        | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
         expect(errorEvt.code).toBe("permission_denied");
@@ -5233,7 +5568,9 @@ describe("AgentSession", () => {
       const { session, events } = makeSession();
       await session.sendUserMessage("go");
 
-      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      const errorEvt = events.find((e) => e.type === "error") as
+        | Extract<ServerEvent, { type: "error" }>
+        | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
         expect(errorEvt.code).toBe("permission_denied");
@@ -5249,7 +5586,9 @@ describe("AgentSession", () => {
       const { session, events } = makeSession();
       await session.sendUserMessage("go");
 
-      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      const errorEvt = events.find((e) => e.type === "error") as
+        | Extract<ServerEvent, { type: "error" }>
+        | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
         expect(errorEvt.code).toBe("permission_denied");
@@ -5265,7 +5604,9 @@ describe("AgentSession", () => {
       const { session, events } = makeSession();
       await session.sendUserMessage("go");
 
-      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      const errorEvt = events.find((e) => e.type === "error") as
+        | Extract<ServerEvent, { type: "error" }>
+        | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
         expect(errorEvt.code).toBe("permission_denied");
@@ -5281,7 +5622,9 @@ describe("AgentSession", () => {
       const { session, events } = makeSession();
       await session.sendUserMessage("go");
 
-      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      const errorEvt = events.find((e) => e.type === "error") as
+        | Extract<ServerEvent, { type: "error" }>
+        | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
         expect(errorEvt.code).toBe("provider_error");
@@ -5297,7 +5640,9 @@ describe("AgentSession", () => {
       const { session, events } = makeSession();
       await session.sendUserMessage("go");
 
-      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      const errorEvt = events.find((e) => e.type === "error") as
+        | Extract<ServerEvent, { type: "error" }>
+        | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
         expect(errorEvt.code).toBe("provider_error");
@@ -5313,7 +5658,9 @@ describe("AgentSession", () => {
       const { session, events } = makeSession();
       await session.sendUserMessage("go");
 
-      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      const errorEvt = events.find((e) => e.type === "error") as
+        | Extract<ServerEvent, { type: "error" }>
+        | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
         expect(errorEvt.code).toBe("provider_error");
@@ -5329,7 +5676,9 @@ describe("AgentSession", () => {
       const { session, events } = makeSession();
       await session.sendUserMessage("go");
 
-      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      const errorEvt = events.find((e) => e.type === "error") as
+        | Extract<ServerEvent, { type: "error" }>
+        | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
         expect(errorEvt.code).toBe("backup_error");
@@ -5345,7 +5694,9 @@ describe("AgentSession", () => {
       const { session, events } = makeSession();
       await session.sendUserMessage("go");
 
-      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      const errorEvt = events.find((e) => e.type === "error") as
+        | Extract<ServerEvent, { type: "error" }>
+        | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
         expect(errorEvt.code).toBe("validation_failed");
@@ -5361,7 +5712,9 @@ describe("AgentSession", () => {
       const { session, events } = makeSession();
       await session.sendUserMessage("go");
 
-      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      const errorEvt = events.find((e) => e.type === "error") as
+        | Extract<ServerEvent, { type: "error" }>
+        | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
         expect(errorEvt.code).toBe("validation_failed");
@@ -5377,7 +5730,9 @@ describe("AgentSession", () => {
       const { session, events } = makeSession();
       await session.sendUserMessage("go");
 
-      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      const errorEvt = events.find((e) => e.type === "error") as
+        | Extract<ServerEvent, { type: "error" }>
+        | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
         expect(errorEvt.code).toBe("validation_failed");
@@ -5393,7 +5748,9 @@ describe("AgentSession", () => {
       const { session, events } = makeSession();
       await session.sendUserMessage("go");
 
-      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      const errorEvt = events.find((e) => e.type === "error") as
+        | Extract<ServerEvent, { type: "error" }>
+        | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
         expect(errorEvt.code).toBe("observability_error");
@@ -5409,7 +5766,9 @@ describe("AgentSession", () => {
       const { session, events } = makeSession();
       await session.sendUserMessage("go");
 
-      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      const errorEvt = events.find((e) => e.type === "error") as
+        | Extract<ServerEvent, { type: "error" }>
+        | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
         expect(errorEvt.code).toBe("provider_error");
@@ -5425,7 +5784,9 @@ describe("AgentSession", () => {
       const { session, events } = makeSession();
       await session.sendUserMessage("go");
 
-      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      const errorEvt = events.find((e) => e.type === "error") as
+        | Extract<ServerEvent, { type: "error" }>
+        | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
         expect(errorEvt.code).toBe("permission_denied");
@@ -5441,7 +5802,9 @@ describe("AgentSession", () => {
       const { session, events } = makeSession();
       await session.sendUserMessage("go");
 
-      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      const errorEvt = events.find((e) => e.type === "error") as
+        | Extract<ServerEvent, { type: "error" }>
+        | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
         expect(errorEvt.code).toBe("internal_error");
@@ -5457,9 +5820,7 @@ describe("AgentSession", () => {
       const { session, events } = makeSession();
       await session.sendUserMessage("go");
 
-      const busyFalse = events.find(
-        (e) => e.type === "session_busy" && !(e as any).busy
-      ) as any;
+      const busyFalse = events.find((e) => e.type === "session_busy" && !(e as any).busy) as any;
       expect(busyFalse).toBeDefined();
       expect(busyFalse.outcome).toBe("error");
     });
@@ -5487,7 +5848,9 @@ describe("AgentSession", () => {
       const { session, events } = makeSession();
       await session.sendUserMessage("go");
 
-      const usageEvt = events.find((e) => e.type === "turn_usage") as Extract<ServerEvent, { type: "turn_usage" }> | undefined;
+      const usageEvt = events.find((e) => e.type === "turn_usage") as
+        | Extract<ServerEvent, { type: "turn_usage" }>
+        | undefined;
       expect(usageEvt).toBeDefined();
       if (usageEvt) {
         expect(usageEvt.sessionId).toBe(session.id);
@@ -5526,7 +5889,9 @@ describe("AgentSession", () => {
       const { session, events } = makeSession();
       await session.sendUserMessage("go");
 
-      const busyTrue = events.find((e) => e.type === "session_busy" && (e as any).busy === true) as any;
+      const busyTrue = events.find(
+        (e) => e.type === "session_busy" && (e as any).busy === true,
+      ) as any;
       const usageEvt = events.find((e) => e.type === "turn_usage") as any;
       expect(busyTrue).toBeDefined();
       expect(usageEvt).toBeDefined();
@@ -5698,7 +6063,9 @@ describe("AgentSession", () => {
       await session.sendUserMessage("second");
 
       expect(mockRunTurn.mock.calls.length).toBe(1);
-      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      const errorEvt = events.find((e) => e.type === "error") as
+        | Extract<ServerEvent, { type: "error" }>
+        | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
         expect(errorEvt.code).toBe("validation_failed");
@@ -5737,7 +6104,9 @@ describe("AgentSession", () => {
       events.length = 0;
       session.setSessionUsageBudget(20, null);
 
-      const usageEvt = events.find((e) => e.type === "session_usage") as Extract<ServerEvent, { type: "session_usage" }> | undefined;
+      const usageEvt = events.find((e) => e.type === "session_usage") as
+        | Extract<ServerEvent, { type: "session_usage" }>
+        | undefined;
       expect(usageEvt).toBeDefined();
       if (usageEvt?.usage) {
         expect(usageEvt.usage.budgetStatus.stopAtUsd).toBeNull();
@@ -5776,7 +6145,9 @@ describe("AgentSession", () => {
         await session.sendUserMessage(`turn ${i + 1}`);
       }
 
-      const usageEvt = events.findLast((e) => e.type === "session_usage") as Extract<ServerEvent, { type: "session_usage" }> | undefined;
+      const usageEvt = events.findLast((e) => e.type === "session_usage") as
+        | Extract<ServerEvent, { type: "session_usage" }>
+        | undefined;
       expect(usageEvt).toBeDefined();
       expect(usageEvt?.usage?.totalTurns).toBe(10);
       expect(usageEvt?.usage?.turns).toHaveLength(8);
@@ -5810,12 +6181,16 @@ describe("AgentSession", () => {
 
       await session.sendUserMessage("first");
 
-      const warningEvt = events.find((e) => e.type === "budget_warning") as Extract<ServerEvent, { type: "budget_warning" }> | undefined;
+      const warningEvt = events.find((e) => e.type === "budget_warning") as
+        | Extract<ServerEvent, { type: "budget_warning" }>
+        | undefined;
       expect(warningEvt).toBeDefined();
       expect(warningEvt?.currentCostUsd).toBe(15.75);
       expect(warningEvt?.thresholdUsd).toBe(1);
 
-      const exceededEvt = events.find((e) => e.type === "budget_exceeded") as Extract<ServerEvent, { type: "budget_exceeded" }> | undefined;
+      const exceededEvt = events.find((e) => e.type === "budget_exceeded") as
+        | Extract<ServerEvent, { type: "budget_exceeded" }>
+        | undefined;
       expect(exceededEvt).toBeDefined();
       expect(exceededEvt?.currentCostUsd).toBe(15.75);
       expect(exceededEvt?.thresholdUsd).toBe(2);
@@ -5846,7 +6221,9 @@ describe("AgentSession", () => {
 
       session.setSessionUsageBudget(undefined, null);
 
-      const usageEvt = events.find((e) => e.type === "session_usage") as Extract<ServerEvent, { type: "session_usage" }> | undefined;
+      const usageEvt = events.find((e) => e.type === "session_usage") as
+        | Extract<ServerEvent, { type: "session_usage" }>
+        | undefined;
       expect(usageEvt?.usage?.budgetStatus).toMatchObject({
         warnAtUsd: 2,
         stopAtUsd: null,
@@ -5860,10 +6237,14 @@ describe("AgentSession", () => {
 
       session.setSessionUsageBudget(6, undefined);
 
-      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      const errorEvt = events.find((e) => e.type === "error") as
+        | Extract<ServerEvent, { type: "error" }>
+        | undefined;
       expect(errorEvt).toBeDefined();
       expect(errorEvt?.code).toBe("validation_failed");
-      expect(errorEvt?.message).toContain("Warning threshold must be less than the hard-stop threshold.");
+      expect(errorEvt?.message).toContain(
+        "Warning threshold must be less than the hard-stop threshold.",
+      );
 
       const usageEvt = events.find((e) => e.type === "session_usage");
       expect(usageEvt).toBeUndefined();
@@ -5926,7 +6307,9 @@ describe("AgentSession", () => {
 
       session.getSessionUsage();
 
-      const usageEvt = events.find((e) => e.type === "session_usage") as Extract<ServerEvent, { type: "session_usage" }> | undefined;
+      const usageEvt = events.find((e) => e.type === "session_usage") as
+        | Extract<ServerEvent, { type: "session_usage" }>
+        | undefined;
       expect(usageEvt?.usage).toEqual(tracker.getCompactSnapshot());
       expect(usageEvt?.usage?.totalTurns).toBe(10);
       expect(usageEvt?.usage?.turns).toHaveLength(8);
@@ -6096,16 +6479,20 @@ describe("AgentSession", () => {
         getProviderStatusesImpl: async () => [],
       });
 
-      expect(session.getSessionInfoEvent()).toEqual(expect.objectContaining({
-        nickname: "plan-auth",
-        taskType: "plan",
-        targetPaths: ["src/auth", "test/auth"],
-      }));
-      expect(session.peekSessionSnapshot()).toEqual(expect.objectContaining({
-        nickname: "plan-auth",
-        taskType: "plan",
-        targetPaths: ["src/auth", "test/auth"],
-      }));
+      expect(session.getSessionInfoEvent()).toEqual(
+        expect.objectContaining({
+          nickname: "plan-auth",
+          taskType: "plan",
+          targetPaths: ["src/auth", "test/auth"],
+        }),
+      );
+      expect(session.peekSessionSnapshot()).toEqual(
+        expect.objectContaining({
+          nickname: "plan-auth",
+          taskType: "plan",
+          targetPaths: ["src/auth", "test/auth"],
+        }),
+      );
     });
 
     test("rehydrates persisted A2UI surfaces so resumed actions validate against restored state", () => {
@@ -6269,7 +6656,9 @@ describe("AgentSession", () => {
 
     test("migrates unsupported persisted models to provider default and persists the upgraded snapshot", async () => {
       const { emit, events } = makeEmit();
-      const writePersistedSessionSnapshotImpl = mock(async () => "/tmp/mock-home/.cowork/sessions/persisted-upgraded.json");
+      const writePersistedSessionSnapshotImpl = mock(
+        async () => "/tmp/mock-home/.cowork/sessions/persisted-upgraded.json",
+      );
       const persistedModel = "gpt-5.3-codex";
       const expectedModel = defaultSupportedModel("openai").id;
 
@@ -6318,7 +6707,7 @@ describe("AgentSession", () => {
 
       const migrationLog = events.find(
         (event): event is Extract<ServerEvent, { type: "log" }> =>
-          event.type === "log" && event.line.includes("unsupported model")
+          event.type === "log" && event.line.includes("unsupported model"),
       );
       expect(migrationLog).toBeDefined();
       expect(migrationLog?.line).toContain(`"${persistedModel}"`);
@@ -6343,7 +6732,9 @@ describe("AgentSession", () => {
 
     test("migrates aliased persisted models to canonical ids and persists the upgraded snapshot", async () => {
       const { emit, events } = makeEmit();
-      const writePersistedSessionSnapshotImpl = mock(async () => "/tmp/mock-home/.cowork/sessions/persisted-aliased.json");
+      const writePersistedSessionSnapshotImpl = mock(
+        async () => "/tmp/mock-home/.cowork/sessions/persisted-aliased.json",
+      );
       const persistedModel = "gpt-5.1";
       const expectedModel = "gpt-5.4";
 
@@ -6392,7 +6783,7 @@ describe("AgentSession", () => {
 
       const migrationLog = events.find(
         (event): event is Extract<ServerEvent, { type: "log" }> =>
-          event.type === "log" && event.line.includes("legacy model alias")
+          event.type === "log" && event.line.includes("legacy model alias"),
       );
       expect(migrationLog).toBeDefined();
       expect(migrationLog?.line).toContain(`"${persistedModel}"`);
@@ -6665,7 +7056,12 @@ describe("AgentSession", () => {
         createAgentSessionImpl,
         listAgentSessionsImpl: async () => [],
         sendAgentInputImpl: async () => {},
-        waitForAgentImpl: async () => ({ timedOut: false, mode: "any" as const, agents: [], readyAgentIds: [] }),
+        waitForAgentImpl: async () => ({
+          timedOut: false,
+          mode: "any" as const,
+          agents: [],
+          readyAgentIds: [],
+        }),
         closeAgentImpl: async () => ({
           sessionId: "sub-1",
           parentSessionId: "parent-1",

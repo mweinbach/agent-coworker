@@ -93,7 +93,10 @@ const updateComponentsSchema = z
   })
   .strict()
   .refine(
-    (value) => Boolean(value.root) || (value.components?.length ?? 0) > 0 || (value.deleteIds?.length ?? 0) > 0,
+    (value) =>
+      Boolean(value.root) ||
+      (value.components?.length ?? 0) > 0 ||
+      (value.deleteIds?.length ?? 0) > 0,
     "updateComponents must provide root, components, or deleteIds",
   );
 
@@ -169,9 +172,7 @@ export function envelopeSurfaceId(envelope: A2uiEnvelope): string {
   throw new Error("Invalid A2UI envelope: no operation set");
 }
 
-export type ParsedEnvelope =
-  | { ok: true; envelope: A2uiEnvelope }
-  | { ok: false; error: string };
+export type ParsedEnvelope = { ok: true; envelope: A2uiEnvelope } | { ok: false; error: string };
 
 function serializedEnvelopeBytes(value: unknown): number | null {
   try {

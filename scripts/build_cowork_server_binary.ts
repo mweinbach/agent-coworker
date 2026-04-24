@@ -42,7 +42,10 @@ function parseOutfile(argv: string[], target: { platform: NodeJS.Platform; arch:
   return path.isAbsolute(value) ? value : path.join(root, value);
 }
 
-function resolveBundleLauncherPath(outfile: string, target: { platform: NodeJS.Platform; arch: string }): string {
+function resolveBundleLauncherPath(
+  outfile: string,
+  target: { platform: NodeJS.Platform; arch: string },
+): string {
   if (!shouldUseBundledBunRuntime(target.platform, target.arch)) {
     return outfile;
   }
@@ -56,8 +59,8 @@ function buildWindowsBundleLauncher(): string {
   return [
     "@echo off",
     "setlocal",
-    "set \"SCRIPT_DIR=%~dp0\"",
-    "\"%SCRIPT_DIR%bun.exe\" \"%SCRIPT_DIR%server\\index.js\" %*",
+    'set "SCRIPT_DIR=%~dp0"',
+    '"%SCRIPT_DIR%bun.exe" "%SCRIPT_DIR%server\\index.js" %*',
     "",
   ].join("\r\n");
 }
@@ -81,18 +84,28 @@ async function main() {
     await fs.mkdir(serverEntrypointDir, { recursive: true });
 
     await runCommand(
-      ["bun", "build", entry, "--outfile", serverEntrypointPath, "--target", "bun", "--minify", "--sourcemap=none"],
+      [
+        "bun",
+        "build",
+        entry,
+        "--outfile",
+        serverEntrypointPath,
+        "--target",
+        "bun",
+        "--minify",
+        "--sourcemap=none",
+      ],
       {
         cwd: root,
         env: process.env,
-      }
+      },
     );
 
     const { executablePath, version } = await ensureBundledBunRuntime(root, target);
     await fs.copyFile(executablePath, path.join(outDir, SIDECAR_BUN_EXECUTABLE_NAME));
     await fs.writeFile(resolvedOutfile, buildWindowsBundleLauncher(), "utf8");
 
-      const bundledDirs: string[] = [];
+    const bundledDirs: string[] = [];
     for (const dir of ["prompts", "config", "docs"] as const) {
       const srcDir = path.join(root, dir);
       if (!(await pathExists(srcDir))) {
@@ -105,24 +118,39 @@ async function main() {
     }
 
     console.log(`[build] cowork-server launcher: ${path.relative(root, resolvedOutfile)}`);
-    console.log(`[build] cowork-server Bun runtime: ${path.relative(root, path.join(outDir, SIDECAR_BUN_EXECUTABLE_NAME))} (v${version})`);
+    console.log(
+      `[build] cowork-server Bun runtime: ${path.relative(root, path.join(outDir, SIDECAR_BUN_EXECUTABLE_NAME))} (v${version})`,
+    );
     console.log(`[build] cowork-server entrypoint: ${path.relative(root, serverEntrypointPath)}`);
-    console.log(`[build] cowork-server resources: ${path.relative(root, outDir)}/{${bundledDirs.join(",")}}`);
+    console.log(
+      `[build] cowork-server resources: ${path.relative(root, outDir)}/{${bundledDirs.join(",")}}`,
+    );
     return;
   }
 
   if (target.platform !== process.platform || target.arch !== process.arch) {
     throw new Error(
-      `Cross-compiling cowork-server is unsupported for ${target.platform}/${target.arch} on ${process.platform}/${process.arch}`
+      `Cross-compiling cowork-server is unsupported for ${target.platform}/${target.arch} on ${process.platform}/${process.arch}`,
     );
   }
 
   await runCommand(
-    ["bun", "build", entry, "--compile", "--target", "bun", "--outfile", resolvedOutfile, "--minify", "--sourcemap=none"],
+    [
+      "bun",
+      "build",
+      entry,
+      "--compile",
+      "--target",
+      "bun",
+      "--outfile",
+      resolvedOutfile,
+      "--minify",
+      "--sourcemap=none",
+    ],
     {
       cwd: root,
       env: process.env,
-    }
+    },
   );
 
   const bundledDirs: string[] = [];
@@ -138,7 +166,9 @@ async function main() {
   }
 
   console.log(`[build] cowork-server binary: ${path.relative(root, resolvedOutfile)}`);
-  console.log(`[build] cowork-server resources: ${path.relative(root, outDir)}/{${bundledDirs.join(",")}}`);
+  console.log(
+    `[build] cowork-server resources: ${path.relative(root, outDir)}/{${bundledDirs.join(",")}}`,
+  );
 }
 
 main().catch((error) => {

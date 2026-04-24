@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { z } from "zod";
+import type { z } from "zod";
 
 export type ValidationIssue = {
   code: string;
@@ -128,7 +128,13 @@ async function validateArtifactAssertions(
   for (const assertion of assertions) {
     const rawValue = getFieldValue(parsed, assertion.field);
     if (typeof rawValue !== "string" || rawValue.trim().length === 0) {
-      issues.push(issue("missing_field", `Field "${assertion.field}" must be a non-empty string`, assertion.field));
+      issues.push(
+        issue(
+          "missing_field",
+          `Field "${assertion.field}" must be a non-empty string`,
+          assertion.field,
+        ),
+      );
       continue;
     }
 
@@ -136,12 +142,24 @@ async function validateArtifactAssertions(
     switch (assertion.kind) {
       case "absolute_path":
         if (!path.isAbsolute(value)) {
-          issues.push(issue("not_absolute", `Field "${assertion.field}" must be an absolute path`, assertion.field));
+          issues.push(
+            issue(
+              "not_absolute",
+              `Field "${assertion.field}" must be an absolute path`,
+              assertion.field,
+            ),
+          );
         }
         break;
       case "within_run_dir": {
         if (!path.isAbsolute(value)) {
-          issues.push(issue("not_absolute", `Field "${assertion.field}" must be an absolute path`, assertion.field));
+          issues.push(
+            issue(
+              "not_absolute",
+              `Field "${assertion.field}" must be an absolute path`,
+              assertion.field,
+            ),
+          );
           break;
         }
         const [canonicalRunDir, canonicalValue] = await Promise.all([
@@ -150,47 +168,73 @@ async function validateArtifactAssertions(
         ]);
         const relative = path.relative(canonicalRunDir, canonicalValue);
         if (relative.startsWith("..") || path.isAbsolute(relative)) {
-          issues.push(issue("outside_run_dir", `Field "${assertion.field}" must stay within the run directory`, assertion.field));
+          issues.push(
+            issue(
+              "outside_run_dir",
+              `Field "${assertion.field}" must stay within the run directory`,
+              assertion.field,
+            ),
+          );
         }
         break;
       }
       case "extension":
         if (!value.toLowerCase().endsWith(assertion.ext.toLowerCase())) {
-          issues.push(issue("wrong_extension", `Field "${assertion.field}" must end with ${assertion.ext}`, assertion.field));
+          issues.push(
+            issue(
+              "wrong_extension",
+              `Field "${assertion.field}" must end with ${assertion.ext}`,
+              assertion.field,
+            ),
+          );
         }
         break;
       case "exists": {
         const stat = await fs.stat(value).catch(() => null);
         if (!stat?.isFile()) {
-          issues.push(issue("missing_file", `File for "${assertion.field}" does not exist`, assertion.field));
+          issues.push(
+            issue("missing_file", `File for "${assertion.field}" does not exist`, assertion.field),
+          );
         }
         break;
       }
       case "non_empty_file": {
         const stat = await fs.stat(value).catch(() => null);
         if (!stat?.isFile() || stat.size <= 0) {
-          issues.push(issue("empty_file", `File for "${assertion.field}" must exist and be non-empty`, assertion.field));
+          issues.push(
+            issue(
+              "empty_file",
+              `File for "${assertion.field}" must exist and be non-empty`,
+              assertion.field,
+            ),
+          );
         }
         break;
       }
       case "text_includes": {
         const contents = await fs.readFile(value, "utf-8").catch(() => null);
         if (contents === null) {
-          issues.push(issue("missing_file", `File for "${assertion.field}" does not exist`, assertion.field));
+          issues.push(
+            issue("missing_file", `File for "${assertion.field}" does not exist`, assertion.field),
+          );
           break;
         }
         if (!contents.includes(assertion.needle)) {
-          issues.push(issue(
-            "missing_text",
-            `File for "${assertion.field}" must include required text: ${assertion.needle}`,
-            assertion.field,
-          ));
+          issues.push(
+            issue(
+              "missing_text",
+              `File for "${assertion.field}" must include required text: ${assertion.needle}`,
+              assertion.field,
+            ),
+          );
         }
         break;
       }
       default: {
         const _exhaustive: never = assertion;
-        warnings.push(issue("unknown_assertion", `Unknown artifact assertion: ${String(_exhaustive)}`));
+        warnings.push(
+          issue("unknown_assertion", `Unknown artifact assertion: ${String(_exhaustive)}`),
+        );
       }
     }
   }
@@ -209,18 +253,21 @@ export async function validateFinalContract(opts: {
 
   let parsedCandidate: unknown;
   try {
-    parsedCandidate = opts.contract.format === "json"
-      ? parseJsonFinalOutput(opts.finalText)
-      : parseLinePairsFinalOutput(
-          opts.finalText,
-          opts.contract.sentinel,
-          opts.contract.sentinelKey,
-        );
+    parsedCandidate =
+      opts.contract.format === "json"
+        ? parseJsonFinalOutput(opts.finalText)
+        : parseLinePairsFinalOutput(
+            opts.finalText,
+            opts.contract.sentinel,
+            opts.contract.sentinelKey,
+          );
   } catch (error) {
-    issues.push(issue(
-      "parse_failed",
-      `Failed to parse final ${opts.contract.format === "json" ? "JSON" : "line-pairs"} output: ${error instanceof Error ? error.message : String(error)}`,
-    ));
+    issues.push(
+      issue(
+        "parse_failed",
+        `Failed to parse final ${opts.contract.format === "json" ? "JSON" : "line-pairs"} output: ${error instanceof Error ? error.message : String(error)}`,
+      ),
+    );
     return {
       ok: false,
       schemaOk: false,
@@ -234,11 +281,13 @@ export async function validateFinalContract(opts: {
   const schemaResult = opts.contract.schema.safeParse(parsedCandidate);
   if (!schemaResult.success) {
     for (const schemaIssue of schemaResult.error.issues) {
-      issues.push(issue(
-        "schema_failed",
-        schemaIssue.message,
-        schemaIssue.path.map(String).join(".") || undefined,
-      ));
+      issues.push(
+        issue(
+          "schema_failed",
+          schemaIssue.message,
+          schemaIssue.path.map(String).join(".") || undefined,
+        ),
+      );
     }
     return {
       ok: false,
@@ -253,7 +302,11 @@ export async function validateFinalContract(opts: {
   const parsed = schemaResult.data;
   let artifactOk = true;
   if (opts.contract.artifactAssertions && opts.contract.artifactAssertions.length > 0) {
-    const artifactResult = await validateArtifactAssertions(parsed, opts.runDir, opts.contract.artifactAssertions);
+    const artifactResult = await validateArtifactAssertions(
+      parsed,
+      opts.runDir,
+      opts.contract.artifactAssertions,
+    );
     issues.push(...artifactResult.issues);
     warnings.push(...artifactResult.warnings);
     artifactOk = artifactResult.ok;

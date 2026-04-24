@@ -51,11 +51,7 @@ export function AppButton({
       })}
     >
       {icon ? (
-        <SFSymbol
-          name={icon}
-          size={18}
-          color={isPrimary ? theme.primaryText : theme.text}
-        />
+        <SFSymbol name={icon} size={18} color={isPrimary ? theme.primaryText : theme.text} />
       ) : null}
       <Text
         selectable

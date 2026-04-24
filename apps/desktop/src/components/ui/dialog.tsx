@@ -1,9 +1,8 @@
+import { XIcon } from "lucide-react";
 import * as React from "react";
 import { createPortal } from "react-dom";
-import { XIcon } from "lucide-react";
-
-import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 type DialogContextValue = {
   open: boolean;
@@ -29,7 +28,8 @@ const DIALOG_FOCUSABLE_SELECTOR = [
 
 function getFocusableElements(container: HTMLElement): HTMLElement[] {
   return Array.from(container.querySelectorAll<HTMLElement>(DIALOG_FOCUSABLE_SELECTOR)).filter(
-    (element) => !element.hasAttribute("disabled") && element.getAttribute("aria-hidden") !== "true",
+    (element) =>
+      !element.hasAttribute("disabled") && element.getAttribute("aria-hidden") !== "true",
   );
 }
 
@@ -128,18 +128,20 @@ function Dialog({ children, open, defaultOpen, onOpenChange }: DialogProps) {
   const restoreFocusRef = React.useRef<HTMLElement | null>(null);
   const triggerRef = React.useRef<HTMLElement | null>(null);
   const isOpen = open ?? uncontrolledOpen;
-  const setOpen = React.useCallback((nextOpen: boolean) => {
-    if (nextOpen && typeof document !== "undefined") {
-      const activeElement = getActiveElement(document);
-      restoreFocusRef.current = activeElement && activeElement !== document.body
-        ? activeElement
-        : triggerRef.current;
-    }
-    if (open === undefined) {
-      setUncontrolledOpen(nextOpen);
-    }
-    onOpenChange?.(nextOpen);
-  }, [onOpenChange, open]);
+  const setOpen = React.useCallback(
+    (nextOpen: boolean) => {
+      if (nextOpen && typeof document !== "undefined") {
+        const activeElement = getActiveElement(document);
+        restoreFocusRef.current =
+          activeElement && activeElement !== document.body ? activeElement : triggerRef.current;
+      }
+      if (open === undefined) {
+        setUncontrolledOpen(nextOpen);
+      }
+      onOpenChange?.(nextOpen);
+    },
+    [onOpenChange, open],
+  );
 
   React.useLayoutEffect(() => {
     if (!isOpen || typeof document === "undefined") {
@@ -148,14 +150,15 @@ function Dialog({ children, open, defaultOpen, onOpenChange }: DialogProps) {
 
     if (restoreFocusRef.current === null) {
       const activeElement = getActiveElement(document);
-      restoreFocusRef.current = activeElement && activeElement !== document.body
-        ? activeElement
-        : triggerRef.current;
+      restoreFocusRef.current =
+        activeElement && activeElement !== document.body ? activeElement : triggerRef.current;
     }
   }, [isOpen]);
 
   return (
-    <DialogContext.Provider value={{ open: isOpen, restoreFocusRef, triggerRef, setOpen }}>{children}</DialogContext.Provider>
+    <DialogContext.Provider value={{ open: isOpen, restoreFocusRef, triggerRef, setOpen }}>
+      {children}
+    </DialogContext.Provider>
   );
 }
 
@@ -163,7 +166,13 @@ type DialogTriggerProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
   asChild?: boolean;
 };
 
-function DialogTrigger({ children, asChild = false, onClick, type, ...props }: React.PropsWithChildren<DialogTriggerProps>) {
+function DialogTrigger({
+  children,
+  asChild = false,
+  onClick,
+  type,
+  ...props
+}: React.PropsWithChildren<DialogTriggerProps>) {
   const { setOpen, triggerRef } = useDialogContext();
 
   const handleClick = (event: React.MouseEvent<HTMLElement>) => {
@@ -215,19 +224,18 @@ const DialogPortal = ({ children }: { children: React.ReactNode }) => {
   return createPortal(children, document.body);
 };
 
-const DialogOverlay = React.forwardRef<HTMLDivElement, React.ComponentProps<"div">>(function DialogOverlay(
-  { className, ...props },
-  ref,
-) {
-  return (
-    <div
-      ref={ref}
-      data-slot="dialog-overlay"
-      className={cn("fixed inset-0 z-0 bg-foreground/40", className)}
-      {...props}
-    />
-  );
-});
+const DialogOverlay = React.forwardRef<HTMLDivElement, React.ComponentProps<"div">>(
+  function DialogOverlay({ className, ...props }, ref) {
+    return (
+      <div
+        ref={ref}
+        data-slot="dialog-overlay"
+        className={cn("fixed inset-0 z-0 bg-foreground/40", className)}
+        {...props}
+      />
+    );
+  },
+);
 
 type DialogContentProps = React.HTMLAttributes<HTMLDivElement> & {
   showClose?: boolean;
@@ -365,7 +373,9 @@ function DialogContent({
 
   const handleBackdropClick = React.useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
-      const syntheticEvent = Object.create(event.nativeEvent) as Event & { preventDefault: () => void };
+      const syntheticEvent = Object.create(event.nativeEvent) as Event & {
+        preventDefault: () => void;
+      };
       syntheticEvent.preventDefault = () => {
         allowDismissRef.current = false;
         event.preventDefault();
@@ -432,20 +442,45 @@ function DialogContent({
 }
 
 function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
-  return <div data-slot="dialog-header" className={cn("flex flex-col gap-1.5 text-left", className)} {...props} />;
+  return (
+    <div
+      data-slot="dialog-header"
+      className={cn("flex flex-col gap-1.5 text-left", className)}
+      {...props}
+    />
+  );
 }
 
 function DialogFooter({ className, ...props }: React.ComponentProps<"div">) {
-  return <div data-slot="dialog-footer" className={cn("flex flex-col-reverse gap-2 sm:flex-row sm:justify-end", className)} {...props} />;
+  return (
+    <div
+      data-slot="dialog-footer"
+      className={cn("flex flex-col-reverse gap-2 sm:flex-row sm:justify-end", className)}
+      {...props}
+    />
+  );
 }
 
 function DialogTitle({ className, ...props }: React.ComponentProps<"h2">) {
-  return <h2 data-slot="dialog-title" className={cn("text-lg font-semibold leading-none tracking-tight", className)} {...props} />;
+  return (
+    <h2
+      data-slot="dialog-title"
+      className={cn("text-lg font-semibold leading-none tracking-tight", className)}
+      {...props}
+    />
+  );
 }
 
 const DialogDescription = React.forwardRef<HTMLParagraphElement, React.ComponentProps<"p">>(
   function DialogDescription({ className, ...props }, ref) {
-    return <p ref={ref} data-slot="dialog-description" className={cn("app-text-muted text-sm", className)} {...props} />;
+    return (
+      <p
+        ref={ref}
+        data-slot="dialog-description"
+        className={cn("app-text-muted text-sm", className)}
+        {...props}
+      />
+    );
   },
 );
 
@@ -467,6 +502,7 @@ function DialogClose({ children, ...props }: React.ComponentProps<typeof Button>
   );
 }
 
+export type { DialogContentProps };
 export {
   Dialog,
   DialogClose,
@@ -479,5 +515,3 @@ export {
   DialogTitle,
   DialogTrigger,
 };
-
-export type { DialogContentProps };

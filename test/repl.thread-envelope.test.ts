@@ -56,12 +56,17 @@ class FakeWebSocket {
     const parsed = JSON.parse(data);
     if (parsed?.method === "initialize" && parsed?.id != null) {
       queueMicrotask(() => {
-        this.onmessage?.({ data: JSON.stringify({ id: parsed.id, result: { serverInfo: { name: "test" } } }) });
+        this.onmessage?.({
+          data: JSON.stringify({ id: parsed.id, result: { serverInfo: { name: "test" } } }),
+        });
       });
       return;
     }
 
-    if ((parsed?.method === "thread/start" || parsed?.method === "thread/resume") && parsed?.id != null) {
+    if (
+      (parsed?.method === "thread/start" || parsed?.method === "thread/resume") &&
+      parsed?.id != null
+    ) {
       queueMicrotask(() => {
         this.onmessage?.({
           data: JSON.stringify({
@@ -88,58 +93,59 @@ class FakeWebSocket {
     }
 
     if (
-      (parsed?.method === "cowork/session/state/read"
-        || parsed?.method === "cowork/provider/catalog/read"
-        || parsed?.method === "cowork/provider/authMethods/read")
-      && parsed?.id != null
+      (parsed?.method === "cowork/session/state/read" ||
+        parsed?.method === "cowork/provider/catalog/read" ||
+        parsed?.method === "cowork/provider/authMethods/read") &&
+      parsed?.id != null
     ) {
-      const result = parsed.method === "cowork/session/state/read"
-        ? {
-            events: [
-              {
-                type: "config_updated",
-                sessionId: "thread-test",
-                config: {
-                  provider: "openai",
-                  model: "gpt-5.4",
-                  workingDirectory: process.cwd(),
-                },
-              },
-              {
-                type: "session_settings",
-                sessionId: "thread-test",
-                enableMcp: true,
-                enableMemory: true,
-                memoryRequireApproval: false,
-              },
-              {
-                type: "session_config",
-                sessionId: "thread-test",
-                config: {
-                  enableMemory: true,
-                },
-              },
-            ],
-          }
-        : parsed.method === "cowork/provider/catalog/read"
+      const result =
+        parsed.method === "cowork/session/state/read"
           ? {
-              event: {
-                type: "provider_catalog",
-                sessionId: "thread-test",
-                all: [{ id: "openai" }, { id: "google" }],
-                default: { openai: "gpt-5.4", google: "gemini-3.1-pro-preview" },
-                connected: ["openai"],
-              },
-            }
-          : {
-              event: {
-                type: "provider_auth_methods",
-                sessionId: "thread-test",
-                methods: {
-                  openai: [{ id: "api_key", type: "api", label: "API key" }],
+              events: [
+                {
+                  type: "config_updated",
+                  sessionId: "thread-test",
+                  config: {
+                    provider: "openai",
+                    model: "gpt-5.4",
+                    workingDirectory: process.cwd(),
+                  },
                 },
-              },
-            };
+                {
+                  type: "session_settings",
+                  sessionId: "thread-test",
+                  enableMcp: true,
+                  enableMemory: true,
+                  memoryRequireApproval: false,
+                },
+                {
+                  type: "session_config",
+                  sessionId: "thread-test",
+                  config: {
+                    enableMemory: true,
+                  },
+                },
+              ],
+            }
+          : parsed.method === "cowork/provider/catalog/read"
+            ? {
+                event: {
+                  type: "provider_catalog",
+                  sessionId: "thread-test",
+                  all: [{ id: "openai" }, { id: "google" }],
+                  default: { openai: "gpt-5.4", google: "gemini-3.1-pro-preview" },
+                  connected: ["openai"],
+                },
+              }
+            : {
+                event: {
+                  type: "provider_auth_methods",
+                  sessionId: "thread-test",
+                  methods: {
+                    openai: [{ id: "api_key", type: "api", label: "API key" }],
+                  },
+                },
+              };
       queueMicrotask(() => {
         startupResponseCount += 1;
         this.onmessage?.({ data: JSON.stringify({ id: parsed.id, result }) });

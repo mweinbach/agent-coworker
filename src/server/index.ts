@@ -4,14 +4,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-
 // Keep server output clean by default.
 const globalSettings = globalThis as typeof globalThis & { AI_SDK_LOG_WARNINGS?: boolean };
 globalSettings.AI_SDK_LOG_WARNINGS = false;
 
 function printUsage() {
   console.log(
-    "Usage: bun src/server/index.ts [--dir <directory_path>] [--host <hostname>] [--port <port>] [--yolo] [--json] [--ws-protocol-default <jsonrpc>]"
+    "Usage: bun src/server/index.ts [--dir <directory_path>] [--host <hostname>] [--port <port>] [--yolo] [--json] [--ws-protocol-default <jsonrpc>]",
   );
 }
 
@@ -162,7 +161,7 @@ async function main() {
         port: server.port,
         cwd: config.workingDirectory,
         wsProtocolDefault: "jsonrpc",
-      })
+      }),
     );
     return;
   }
@@ -170,7 +169,9 @@ async function main() {
   const hostHints = resolveListeningHints(host);
   console.log(`[cowork-server] listening on ${url} (cwd=${config.workingDirectory})`);
   if (host === "0.0.0.0") {
-    console.log(`[cowork-server] reachable on: ${hostHints.map((ip) => `ws://${ip}:${server.port}/ws`).join(", ")}`);
+    console.log(
+      `[cowork-server] reachable on: ${hostHints.map((ip) => `ws://${ip}:${server.port}/ws`).join(", ")}`,
+    );
   }
 }
 

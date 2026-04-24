@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
-
-import type { PersistentAgentSummary } from "../src/shared/agents";
 import { StatusBus } from "../src/server/agents/StatusBus";
+import type { PersistentAgentSummary } from "../src/shared/agents";
 
 function makeSummary(
   agentId: string,

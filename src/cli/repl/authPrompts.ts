@@ -1,6 +1,6 @@
-import readline from "node:readline";
+import type readline from "node:readline";
 
-import { resolveProviderAuthMethodSelection, type ProviderAuthMethod } from "../parser";
+import { type ProviderAuthMethod, resolveProviderAuthMethodSelection } from "../parser";
 
 async function askLine(rl: readline.Interface, prompt: string): Promise<string> {
   return await new Promise((resolve) => {
@@ -11,19 +11,24 @@ async function askLine(rl: readline.Interface, prompt: string): Promise<string> 
 export async function promptForProviderMethod(
   rl: readline.Interface,
   provider: string,
-  methods: ProviderAuthMethod[]
+  methods: ProviderAuthMethod[],
 ): Promise<ProviderAuthMethod | null> {
   if (methods.length <= 1) return methods[0] ?? null;
 
   console.log(`Auth methods for ${provider}:`);
   for (let i = 0; i < methods.length; i++) {
     const method = methods[i]!;
-    const mode = method.type === "oauth" ? `oauth${method.oauthMode ? ` (${method.oauthMode})` : ""}` : "api key";
+    const mode =
+      method.type === "oauth"
+        ? `oauth${method.oauthMode ? ` (${method.oauthMode})` : ""}`
+        : "api key";
     console.log(`  ${i + 1}. ${method.label} [${method.id}] - ${mode}`);
   }
 
   while (true) {
-    const answer = (await askLine(rl, `Select method [1-${methods.length}] (or "cancel"): `)).trim();
+    const answer = (
+      await askLine(rl, `Select method [1-${methods.length}] (or "cancel"): `)
+    ).trim();
     if (["cancel", "c", "q", "quit"].includes(answer.toLowerCase())) return null;
     const selected = resolveProviderAuthMethodSelection(methods, answer);
     if (selected) return selected;
@@ -31,10 +36,7 @@ export async function promptForProviderMethod(
   }
 }
 
-export async function promptForApiKey(
-  rl: readline.Interface,
-  provider: string,
-): Promise<string> {
+export async function promptForApiKey(rl: readline.Interface, provider: string): Promise<string> {
   return (await askLine(rl, `${provider} API key: `)).trim();
 }
 
@@ -50,7 +52,9 @@ export async function promptForProviderFields(
   for (const field of fields) {
     const suffix = field.required ? " (required)" : "";
     const placeholder = field.placeholder ? ` [${field.placeholder}]` : "";
-    const answer = (await askLine(rl, `${provider} ${field.label}${suffix}${placeholder}: `)).trim();
+    const answer = (
+      await askLine(rl, `${provider} ${field.label}${suffix}${placeholder}: `)
+    ).trim();
     if (!answer && field.required) {
       console.log(`${field.label} is required.`);
       return null;

@@ -228,58 +228,67 @@ const MOCK_UPDATE_STATE = {
   error: null,
 };
 
-mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
-  appendTranscriptBatch: async () => {},
-  appendTranscriptEvent: async () => {},
-  deleteTranscript: async () => {},
-  listDirectory: async () => [],
-  loadState: async () => {
-    if (loadStateError) {
-      throw loadStateError;
-    }
-    return loadedState;
-  },
-  pickWorkspaceDirectory: async () => null,
-  readTranscript: async () => [],
-  saveState: async () => {},
-  startWorkspaceServer: async () => ({ url: "ws://mock" }),
-  stopWorkspaceServer: async () => {},
-  showContextMenu: async () => null,
-  windowMinimize: async () => {},
-  windowMaximize: async () => {},
-  windowClose: async () => {},
-  getPlatform: async () => "linux",
-  readFile: async () => "",
-  previewOSFile: async () => {},
-  openPath: async () => {},
-  openExternalUrl: async () => {},
-  revealPath: async () => {},
-  copyPath: async () => {},
-  createDirectory: async () => {},
-  renamePath: async () => {},
-  trashPath: async () => {},
-  confirmAction: async () => true,
-  showNotification: async () => true,
-  getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  getUpdateState: async () => MOCK_UPDATE_STATE,
-  getDesktopFeatureFlags: (featureOverrides) => ({
-    remoteAccess: typeof featureOverrides?.remoteAccess === "boolean"
-      ? featureOverrides.remoteAccess
-      : (packagedApp ? false : remoteAccessEnabled),
-    workspacePicker: typeof featureOverrides?.workspacePicker === "boolean" ? featureOverrides.workspacePicker : true,
-    workspaceLifecycle: typeof featureOverrides?.workspaceLifecycle === "boolean"
-      ? featureOverrides.workspaceLifecycle
-      : true,
-    a2ui: typeof featureOverrides?.a2ui === "boolean" ? featureOverrides.a2ui : false,
+mock.module("../src/lib/desktopCommands", () =>
+  createDesktopCommandsMock({
+    appendTranscriptBatch: async () => {},
+    appendTranscriptEvent: async () => {},
+    deleteTranscript: async () => {},
+    listDirectory: async () => [],
+    loadState: async () => {
+      if (loadStateError) {
+        throw loadStateError;
+      }
+      return loadedState;
+    },
+    pickWorkspaceDirectory: async () => null,
+    readTranscript: async () => [],
+    saveState: async () => {},
+    startWorkspaceServer: async () => ({ url: "ws://mock" }),
+    stopWorkspaceServer: async () => {},
+    showContextMenu: async () => null,
+    windowMinimize: async () => {},
+    windowMaximize: async () => {},
+    windowClose: async () => {},
+    getPlatform: async () => "linux",
+    readFile: async () => "",
+    previewOSFile: async () => {},
+    openPath: async () => {},
+    openExternalUrl: async () => {},
+    revealPath: async () => {},
+    copyPath: async () => {},
+    createDirectory: async () => {},
+    renamePath: async () => {},
+    trashPath: async () => {},
+    confirmAction: async () => true,
+    showNotification: async () => true,
+    getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    getUpdateState: async () => MOCK_UPDATE_STATE,
+    getDesktopFeatureFlags: (featureOverrides) => ({
+      remoteAccess:
+        typeof featureOverrides?.remoteAccess === "boolean"
+          ? featureOverrides.remoteAccess
+          : packagedApp
+            ? false
+            : remoteAccessEnabled,
+      workspacePicker:
+        typeof featureOverrides?.workspacePicker === "boolean"
+          ? featureOverrides.workspacePicker
+          : true,
+      workspaceLifecycle:
+        typeof featureOverrides?.workspaceLifecycle === "boolean"
+          ? featureOverrides.workspaceLifecycle
+          : true,
+      a2ui: typeof featureOverrides?.a2ui === "boolean" ? featureOverrides.a2ui : false,
+    }),
+    isPackagedDesktopApp: () => packagedApp,
+    checkForUpdates: async () => {},
+    quitAndInstallUpdate: async () => {},
+    onSystemAppearanceChanged: () => () => {},
+    onMenuCommand: () => () => {},
+    onUpdateStateChanged: () => () => {},
   }),
-  isPackagedDesktopApp: () => packagedApp,
-  checkForUpdates: async () => {},
-  quitAndInstallUpdate: async () => {},
-  onSystemAppearanceChanged: () => () => {},
-  onMenuCommand: () => () => {},
-  onUpdateStateChanged: () => () => {},
-}));
+);
 
 mock.module("../src/lib/agentSocket", () => ({
   JsonRpcSocket: class {
@@ -640,7 +649,9 @@ describe("desktop bootstrap cache", () => {
 
     const seed = buildCachedDesktopStateSeed(snapshotCachedState);
     expect(seed?.ready).toBe(true);
-    expect(RUNTIME.sessionSnapshots.get("thread-session")?.snapshot.title).toBe("Cached Harness Snapshot");
+    expect(RUNTIME.sessionSnapshots.get("thread-session")?.snapshot.title).toBe(
+      "Cached Harness Snapshot",
+    );
   });
 
   test("buildCachedDesktopStateSeed rebuilds valid snapshot fingerprints and ignores malformed entries", () => {
@@ -648,7 +659,9 @@ describe("desktop bootstrap cache", () => {
       fingerprint: { updatedAt: "2026-03-18T00:00:00.000Z", messageCount: 0, lastEventSeq: 0 },
       snapshot: makeCachedSessionSnapshot("stale-session"),
     });
-    const validSnapshot = makeCachedSessionSnapshot("thread-session", { title: "Recovered Cached Snapshot" });
+    const validSnapshot = makeCachedSessionSnapshot("thread-session", {
+      title: "Recovered Cached Snapshot",
+    });
     const snapshotCachedState = {
       ...cachedState,
       sessionSnapshots: {

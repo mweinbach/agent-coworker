@@ -14,8 +14,7 @@ export const designTokens = {
     base: "var(--radius)",
   },
   classes: {
-    panelSurface:
-      "border border-border/65 bg-card/92 shadow-none backdrop-blur-[1px]",
+    panelSurface: "border border-border/65 bg-card/92 shadow-none backdrop-blur-[1px]",
     subtleSurface: "border border-border/60 bg-muted/20",
     mutedText: "text-muted-foreground",
     pageTitle: "text-[1.75rem] font-semibold tracking-tight text-foreground",

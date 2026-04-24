@@ -1,10 +1,9 @@
-import { describe, expect, test, mock, beforeEach } from "bun:test";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
 import path from "node:path";
-
-import type { AgentConfig } from "../../src/types";
 import type { RunTurnParams } from "../../src/agent";
 import { createRunTurn } from "../../src/agent";
 import { __internal as observabilityRuntimeInternal } from "../../src/observability/runtime";
+import type { AgentConfig } from "../../src/types";
 import { DEFAULT_PROVIDER_OPTIONS, makeConfig } from "./helpers";
 
 // ---------------------------------------------------------------------------
@@ -20,12 +19,7 @@ describe("Provider options structure", () => {
 
   test("no extra unknown providers in options", () => {
     const providers = Object.keys(DEFAULT_PROVIDER_OPTIONS);
-    expect(providers).toEqual([
-      "openai",
-      "google",
-      "anthropic",
-      "codex-cli",
-    ]);
+    expect(providers).toEqual(["openai", "google", "anthropic", "codex-cli"]);
   });
 
   test("each provider options is a plain object", () => {

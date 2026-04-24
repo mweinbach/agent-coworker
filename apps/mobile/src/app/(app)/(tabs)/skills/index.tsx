@@ -59,7 +59,8 @@ export default function SkillsScreen() {
         description="Install from skills.sh, GitHub, or local paths, then inspect what is actually effective in the active workspace."
       >
         <Text selectable style={{ color: theme.textSecondary, fontSize: 14, lineHeight: 21 }}>
-          This is the same managed skill surface the desktop control session exposes, now reachable directly from a top-level mobile page.
+          This is the same managed skill surface the desktop control session exposes, now reachable
+          directly from a top-level mobile page.
         </Text>
       </SectionCard>
 
@@ -69,7 +70,10 @@ export default function SkillsScreen() {
         </View>
       ) : null}
 
-      <SectionCard title="Install skill" description="Preview or install from skills.sh, GitHub, or a local path.">
+      <SectionCard
+        title="Install skill"
+        description="Preview or install from skills.sh, GitHub, or a local path."
+      >
         <View style={{ gap: 10 }}>
           <TextInput
             value={sourceInput}
@@ -103,7 +107,12 @@ export default function SkillsScreen() {
                   paddingVertical: 7,
                 }}
               >
-                <Text style={{ color: targetScope === scope ? theme.primaryText : theme.text, fontWeight: "700" }}>
+                <Text
+                  style={{
+                    color: targetScope === scope ? theme.primaryText : theme.text,
+                    fontWeight: "700",
+                  }}
+                >
                   {scope === "project" ? "Workspace" : "User"}
                 </Text>
               </Pressable>
@@ -149,7 +158,10 @@ export default function SkillsScreen() {
       </SectionCard>
 
       {installPreview ? (
-        <SectionCard title="Install preview" description={`${installPreview.candidates.length} candidate skills`}>
+        <SectionCard
+          title="Install preview"
+          description={`${installPreview.candidates.length} candidate skills`}
+        >
           <View style={{ gap: 8 }}>
             {installPreview.warnings.map((warning) => (
               <Text key={warning} style={{ color: theme.warning, fontSize: 13, lineHeight: 18 }}>
@@ -170,8 +182,12 @@ export default function SkillsScreen() {
                   paddingVertical: 10,
                 }}
               >
-                <Text style={{ color: theme.text, fontSize: 14, fontWeight: "700" }}>{candidate.name}</Text>
-                <Text style={{ color: theme.textSecondary, fontSize: 13, lineHeight: 18 }}>{candidate.description}</Text>
+                <Text style={{ color: theme.text, fontSize: 14, fontWeight: "700" }}>
+                  {candidate.name}
+                </Text>
+                <Text style={{ color: theme.textSecondary, fontSize: 13, lineHeight: 18 }}>
+                  {candidate.description}
+                </Text>
                 <Text style={{ color: theme.textTertiary, fontSize: 12 }}>
                   {candidate.wouldBeEffective ? "Becomes active" : "Installed but shadowed"}
                 </Text>
@@ -199,7 +215,10 @@ export default function SkillsScreen() {
       ) : null}
 
       {installations.length > 0 ? (
-        <SectionCard title="Installations" description={`${installations.length} managed skill installs`}>
+        <SectionCard
+          title="Installations"
+          description={`${installations.length} managed skill installs`}
+        >
           <View style={{ gap: 10 }}>
             {installations.map((installation) => {
               const updateCheck = updateChecksByInstallationId[installation.installationId];
@@ -219,20 +238,38 @@ export default function SkillsScreen() {
                     paddingVertical: 12,
                   }}
                 >
-                  <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                    }}
+                  >
                     <View style={{ flex: 1, gap: 2 }}>
-                      <Text style={{ color: theme.text, fontSize: 15, fontWeight: "700" }}>{installation.name}</Text>
+                      <Text style={{ color: theme.text, fontSize: 15, fontWeight: "700" }}>
+                        {installation.name}
+                      </Text>
                       {installation.description ? (
-                        <Text numberOfLines={2} style={{ color: theme.textSecondary, fontSize: 13 }}>
+                        <Text
+                          numberOfLines={2}
+                          style={{ color: theme.textSecondary, fontSize: 13 }}
+                        >
                           {installation.description}
                         </Text>
                       ) : null}
                     </View>
-                    <StatusPill label={installation.state} tone={installation.effective ? "success" : "neutral"} />
+                    <StatusPill
+                      label={installation.state}
+                      tone={installation.effective ? "success" : "neutral"}
+                    />
                   </View>
-                  <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+                  <View
+                    style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, alignItems: "center" }}
+                  >
                     <StatusPill label={installation.scope} tone="neutral" />
-                    {installation.effective ? <StatusPill label="effective" tone="primary" /> : null}
+                    {installation.effective ? (
+                      <StatusPill label="effective" tone="primary" />
+                    ) : null}
                     <Pressable
                       onPress={() => {
                         void (installation.enabled
@@ -265,7 +302,9 @@ export default function SkillsScreen() {
                         paddingVertical: 5,
                       })}
                     >
-                      <Text style={{ color: theme.text, fontSize: 12, fontWeight: "600" }}>Inspect</Text>
+                      <Text style={{ color: theme.text, fontSize: 12, fontWeight: "600" }}>
+                        Inspect
+                      </Text>
                     </Pressable>
                     <Pressable
                       onPress={() => {
@@ -280,7 +319,9 @@ export default function SkillsScreen() {
                         paddingVertical: 5,
                       })}
                     >
-                      <Text style={{ color: theme.text, fontSize: 12, fontWeight: "600" }}>Check update</Text>
+                      <Text style={{ color: theme.text, fontSize: 12, fontWeight: "600" }}>
+                        Check update
+                      </Text>
                     </Pressable>
                     <Pressable
                       onPress={() => {
@@ -312,13 +353,23 @@ export default function SkillsScreen() {
                         paddingVertical: 5,
                       })}
                     >
-                      <Text style={{ color: theme.danger, fontSize: 12, fontWeight: "600" }}>Delete</Text>
+                      <Text style={{ color: theme.danger, fontSize: 12, fontWeight: "600" }}>
+                        Delete
+                      </Text>
                     </Pressable>
                   </View>
                   {updateCheck ? (
                     <View style={{ gap: 4 }}>
-                      <Text style={{ color: updateCheck.canUpdate ? theme.success : theme.textSecondary, fontSize: 12, fontWeight: "600" }}>
-                        {updateCheck.canUpdate ? "Update available" : updateCheck.reason ?? "Up to date"}
+                      <Text
+                        style={{
+                          color: updateCheck.canUpdate ? theme.success : theme.textSecondary,
+                          fontSize: 12,
+                          fontWeight: "600",
+                        }}
+                      >
+                        {updateCheck.canUpdate
+                          ? "Update available"
+                          : (updateCheck.reason ?? "Up to date")}
                       </Text>
                       {updateCheck.canUpdate ? (
                         <Pressable
@@ -333,13 +384,21 @@ export default function SkillsScreen() {
                             paddingVertical: 5,
                           })}
                         >
-                          <Text style={{ color: theme.primaryText, fontSize: 12, fontWeight: "700" }}>Update now</Text>
+                          <Text
+                            style={{ color: theme.primaryText, fontSize: 12, fontWeight: "700" }}
+                          >
+                            Update now
+                          </Text>
                         </Pressable>
                       ) : null}
                     </View>
                   ) : null}
                   {content ? (
-                    <Text selectable numberOfLines={10} style={{ color: theme.textSecondary, fontSize: 12, lineHeight: 18 }}>
+                    <Text
+                      selectable
+                      numberOfLines={10}
+                      style={{ color: theme.textSecondary, fontSize: 12, lineHeight: 18 }}
+                    >
                       {content}
                     </Text>
                   ) : null}
@@ -349,11 +408,17 @@ export default function SkillsScreen() {
           </View>
         </SectionCard>
       ) : !loading ? (
-        <SectionCard title="No installations" description="No managed skills are installed in this workspace yet." />
+        <SectionCard
+          title="No installations"
+          description="No managed skills are installed in this workspace yet."
+        />
       ) : null}
 
       {effectiveInstallations.length > 0 ? (
-        <SectionCard title="Effective skills" description={`${effectiveInstallations.length} active skills currently shape the workspace prompt.`}>
+        <SectionCard
+          title="Effective skills"
+          description={`${effectiveInstallations.length} active skills currently shape the workspace prompt.`}
+        >
           <View style={{ gap: 8 }}>
             {effectiveInstallations.map((installation) => (
               <View
@@ -369,14 +434,21 @@ export default function SkillsScreen() {
                   paddingVertical: 10,
                 }}
               >
-                <Text style={{ color: theme.text, fontSize: 14, fontWeight: "700" }}>{installation.name}</Text>
-                <Text style={{ color: theme.textSecondary, fontSize: 13, lineHeight: 18 }}>{installation.description}</Text>
+                <Text style={{ color: theme.text, fontSize: 14, fontWeight: "700" }}>
+                  {installation.name}
+                </Text>
+                <Text style={{ color: theme.textSecondary, fontSize: 13, lineHeight: 18 }}>
+                  {installation.description}
+                </Text>
               </View>
             ))}
           </View>
         </SectionCard>
       ) : skills.length > 0 ? (
-        <SectionCard title="Effective skills" description={`${skills.length} skills resolved in the current workspace.`}>
+        <SectionCard
+          title="Effective skills"
+          description={`${skills.length} skills resolved in the current workspace.`}
+        >
           <View style={{ gap: 8 }}>
             {skills.map((skill) => (
               <View
@@ -392,8 +464,12 @@ export default function SkillsScreen() {
                   paddingVertical: 10,
                 }}
               >
-                <Text style={{ color: theme.text, fontSize: 14, fontWeight: "700" }}>{skill.name}</Text>
-                <Text style={{ color: theme.textSecondary, fontSize: 13, lineHeight: 18 }}>{skill.description}</Text>
+                <Text style={{ color: theme.text, fontSize: 14, fontWeight: "700" }}>
+                  {skill.name}
+                </Text>
+                <Text style={{ color: theme.textSecondary, fontSize: 13, lineHeight: 18 }}>
+                  {skill.description}
+                </Text>
               </View>
             ))}
           </View>

@@ -61,19 +61,25 @@ describe("research JSON-RPC schemas", () => {
       uploadedAt: "2026-04-21T00:00:00.000Z",
     };
 
-    expect(() => jsonRpcRequestSchemas["research/start"].parse({
-      input: "Summarize this",
-      attachedFiles: [inlineFile],
-    })).toThrow();
-    expect(() => jsonRpcRequestSchemas["research/followup"].parse({
-      parentResearchId: "research-1",
-      input: "Continue this",
-      attachedFiles: [inlineFile],
-    })).toThrow();
-    expect(() => jsonRpcRequestSchemas["research/uploadFile"].parse({
-      filename: "huge.txt",
-      mimeType: "text/plain",
-      contentBase64: "a".repeat(MAX_RESEARCH_UPLOAD_BASE64_LENGTH + 1),
-    })).toThrow();
+    expect(() =>
+      jsonRpcRequestSchemas["research/start"].parse({
+        input: "Summarize this",
+        attachedFiles: [inlineFile],
+      }),
+    ).toThrow();
+    expect(() =>
+      jsonRpcRequestSchemas["research/followup"].parse({
+        parentResearchId: "research-1",
+        input: "Continue this",
+        attachedFiles: [inlineFile],
+      }),
+    ).toThrow();
+    expect(() =>
+      jsonRpcRequestSchemas["research/uploadFile"].parse({
+        filename: "huge.txt",
+        mimeType: "text/plain",
+        contentBase64: "a".repeat(MAX_RESEARCH_UPLOAD_BASE64_LENGTH + 1),
+      }),
+    ).toThrow();
   });
 });

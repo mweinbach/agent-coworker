@@ -46,10 +46,9 @@ export function getNvidiaModelSpec(modelId: string): NvidiaModelSpec | null {
   return NVIDIA_MODEL_SPECS[modelId as NvidiaModelId] ?? null;
 }
 
-export function resolveNvidiaApiKey(opts: {
-  savedKey?: string;
-  env?: NodeJS.ProcessEnv;
-} = {}): string | undefined {
+export function resolveNvidiaApiKey(
+  opts: { savedKey?: string; env?: NodeJS.ProcessEnv } = {},
+): string | undefined {
   const env = opts.env ?? process.env;
   const key = opts.savedKey?.trim() || env.NVIDIA_API_KEY?.trim();
   return key || undefined;

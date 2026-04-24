@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
 import { PaperclipIcon } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 
 import { useAppStore } from "../../app/store";
 import {
@@ -36,7 +36,8 @@ export function ResearchFollowUpComposer({
   const [input, setInput] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const { attachments, attachmentPreviews, addFiles, removeAttachment, clearAttachments } = useResearchAttachments();
+  const { attachments, attachmentPreviews, addFiles, removeAttachment, clearAttachments } =
+    useResearchAttachments();
 
   const submit = async () => {
     const trimmed = input.trim();

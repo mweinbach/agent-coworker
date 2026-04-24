@@ -1,6 +1,5 @@
-import { readFileSync } from "node:fs";
-
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 
 const workflowPath = new URL("../.github/workflows/cowork-server-release.yml", import.meta.url);
 const workflow = readFileSync(workflowPath, "utf8");
@@ -40,9 +39,7 @@ describe("cowork-server release workflow", () => {
   });
 
   test("blocks prerelease publishing on the ARM64 smoke job", () => {
-    expect(workflow).toMatch(
-      /publish:[\s\S]*?needs:[\s\S]*?- build[\s\S]*?- smoke-windows-arm64/,
-    );
+    expect(workflow).toMatch(/publish:[\s\S]*?needs:[\s\S]*?- build[\s\S]*?- smoke-windows-arm64/);
     expect(workflow).toContain("files: ${{ steps.collect.outputs.files }}");
   });
 });

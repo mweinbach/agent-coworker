@@ -2,7 +2,12 @@ import { spawn } from "node:child_process";
 import fg from "fast-glob";
 
 const DEFAULT_BATCH_SIZE = 1;
-const TEST_FILE_PATTERNS = ["test/**/*.test.ts", "apps/**/test/**/*.test.ts"];
+const TEST_FILE_PATTERNS = [
+  "test/**/*.test.ts",
+  "test/**/*.test.tsx",
+  "apps/**/test/**/*.test.ts",
+  "apps/**/test/**/*.test.tsx",
+];
 
 function printUsageAndExit(): never {
   console.error("Usage: bun scripts/run_tests_stable.ts [--batch-size N] [-- <bun test args>]");

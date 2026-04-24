@@ -1,12 +1,12 @@
-import { NativeTabs, Badge, Icon, Label } from "expo-router/unstable-native-tabs";
+import { Badge, Icon, Label, NativeTabs } from "expo-router/unstable-native-tabs";
 
 import { useThreadStore } from "@/features/cowork/threadStore";
 import { useAppTheme } from "@/theme/use-app-theme";
 
 export default function AppTabsLayout() {
   const theme = useAppTheme();
-  const pendingCount = useThreadStore((state) =>
-    state.threads.filter((thread) => thread.pendingPrompt).length,
+  const pendingCount = useThreadStore(
+    (state) => state.threads.filter((thread) => thread.pendingPrompt).length,
   );
 
   return (
@@ -51,9 +51,7 @@ export default function AppTabsLayout() {
           }}
         />
         <Label>Threads</Label>
-        {pendingCount > 0 ? (
-          <Badge>{pendingCount > 9 ? "9+" : String(pendingCount)}</Badge>
-        ) : null}
+        {pendingCount > 0 ? <Badge>{pendingCount > 9 ? "9+" : String(pendingCount)}</Badge> : null}
       </NativeTabs.Trigger>
       <NativeTabs.Trigger name="skills">
         <Icon

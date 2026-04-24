@@ -1,17 +1,17 @@
 import { getAiCoworkerPaths } from "../connect";
 import type { AgentConfig } from "../types";
-import {
-  getOpenCodeProviderConfig,
-  isOpenCodeModelSupportedByProvider,
-  resolveOpenCodeApiKey,
-  type OpenCodeProviderName,
-} from "./opencodeShared";
+import { resolveAuthHomeDir } from "../utils/authHome";
 import {
   isTokenExpiring,
   readCodexAuthMaterial,
   refreshCodexAuthMaterialCoalesced,
 } from "./codex-auth";
-import { resolveAuthHomeDir } from "../utils/authHome";
+import {
+  getOpenCodeProviderConfig,
+  isOpenCodeModelSupportedByProvider,
+  type OpenCodeProviderName,
+  resolveOpenCodeApiKey,
+} from "./opencodeShared";
 
 type HeaderMap = Record<string, string>;
 type HeaderResolver = () => Promise<HeaderMap>;
@@ -81,7 +81,10 @@ export function createGoogleModelAdapter(modelId: string, savedKey?: string): Pr
   });
 }
 
-export function createAnthropicModelAdapter(modelId: string, savedKey?: string): ProviderModelAdapter {
+export function createAnthropicModelAdapter(
+  modelId: string,
+  savedKey?: string,
+): ProviderModelAdapter {
   return createModelAdapter(modelId, "anthropic.messages", async () => {
     const key = firstNonEmpty(savedKey, envKey("ANTHROPIC_API_KEY"));
     const headers: HeaderMap = {};
@@ -99,7 +102,10 @@ export function createBedrockModelAdapter(
   return createModelAdapter(modelId, "amazon-bedrock.converse", async () => ({}));
 }
 
-export function createBasetenModelAdapter(modelId: string, savedKey?: string): ProviderModelAdapter {
+export function createBasetenModelAdapter(
+  modelId: string,
+  savedKey?: string,
+): ProviderModelAdapter {
   return createModelAdapter(modelId, "baseten.completions", async () => {
     const key = firstNonEmpty(savedKey, envKey("BASETEN_API_KEY"));
     const headers: HeaderMap = {};
@@ -110,7 +116,10 @@ export function createBasetenModelAdapter(modelId: string, savedKey?: string): P
   });
 }
 
-export function createTogetherModelAdapter(modelId: string, savedKey?: string): ProviderModelAdapter {
+export function createTogetherModelAdapter(
+  modelId: string,
+  savedKey?: string,
+): ProviderModelAdapter {
   return createModelAdapter(modelId, "together.completions", async () => {
     const key = firstNonEmpty(savedKey, envKey("TOGETHER_API_KEY"));
     const headers: HeaderMap = {};
@@ -121,7 +130,10 @@ export function createTogetherModelAdapter(modelId: string, savedKey?: string): 
   });
 }
 
-export function createFireworksModelAdapter(modelId: string, savedKey?: string): ProviderModelAdapter {
+export function createFireworksModelAdapter(
+  modelId: string,
+  savedKey?: string,
+): ProviderModelAdapter {
   return createModelAdapter(
     modelId,
     "fireworks.completions",
@@ -167,11 +179,17 @@ function createOpenCodeModelAdapter(
   });
 }
 
-export function createOpenCodeGoModelAdapter(modelId: string, savedKey?: string): ProviderModelAdapter {
+export function createOpenCodeGoModelAdapter(
+  modelId: string,
+  savedKey?: string,
+): ProviderModelAdapter {
   return createOpenCodeModelAdapter("opencode-go", modelId, savedKey);
 }
 
-export function createOpenCodeZenModelAdapter(modelId: string, savedKey?: string): ProviderModelAdapter {
+export function createOpenCodeZenModelAdapter(
+  modelId: string,
+  savedKey?: string,
+): ProviderModelAdapter {
   return createOpenCodeModelAdapter("opencode-zen", modelId, savedKey);
 }
 
@@ -208,7 +226,7 @@ async function resolveCodexAuthHeaders(config: AgentConfig): Promise<HeaderMap> 
 export function createCodexCliModelAdapter(
   config: AgentConfig,
   modelId: string,
-  savedKey?: string
+  savedKey?: string,
 ): ProviderModelAdapter {
   return createModelAdapter(modelId, "codex-cli.responses", async () => {
     const key = firstNonEmpty(savedKey);
@@ -222,26 +240,33 @@ export function createLmStudioModelAdapter(
   modelId: string,
   savedKey?: string,
 ): ProviderModelAdapter {
-  const root = typeof config.providerOptions === "object" && config.providerOptions !== null
-    ? (config.providerOptions as Record<string, unknown>)
-    : {};
-  const section = typeof root.lmstudio === "object" && root.lmstudio !== null
-    ? root.lmstudio as Record<string, unknown>
-    : {};
+  const root =
+    typeof config.providerOptions === "object" && config.providerOptions !== null
+      ? (config.providerOptions as Record<string, unknown>)
+      : {};
+  const section =
+    typeof root.lmstudio === "object" && root.lmstudio !== null
+      ? (root.lmstudio as Record<string, unknown>)
+      : {};
   const baseUrl =
-    (typeof process.env.LM_STUDIO_BASE_URL === "string" && process.env.LM_STUDIO_BASE_URL.trim())
-    || (typeof section.baseUrl === "string" && section.baseUrl.trim())
-    || "http://localhost:1234";
-  return createModelAdapter(modelId, "lmstudio.openai-compat", async () => {
-    const key = firstNonEmpty(
-      savedKey,
-      process.env.LM_STUDIO_API_KEY,
-      process.env.LM_STUDIO_API_TOKEN,
-    );
-    const headers: HeaderMap = {};
-    if (key) {
-      headers.authorization = `Bearer ${key}`;
-    }
-    return headers;
-  }, baseUrl);
+    (typeof process.env.LM_STUDIO_BASE_URL === "string" && process.env.LM_STUDIO_BASE_URL.trim()) ||
+    (typeof section.baseUrl === "string" && section.baseUrl.trim()) ||
+    "http://localhost:1234";
+  return createModelAdapter(
+    modelId,
+    "lmstudio.openai-compat",
+    async () => {
+      const key = firstNonEmpty(
+        savedKey,
+        process.env.LM_STUDIO_API_KEY,
+        process.env.LM_STUDIO_API_TOKEN,
+      );
+      const headers: HeaderMap = {};
+      if (key) {
+        headers.authorization = `Bearer ${key}`;
+      }
+      return headers;
+    },
+    baseUrl,
+  );
 }

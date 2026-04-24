@@ -1,8 +1,7 @@
 import { describe, expect, test } from "bun:test";
-
-import { selectDockView, __internal } from "../src/ui/chat/a2ui/A2uiSurfaceDock";
-import { recordSurfaceRevision, type ProjectedUiSurface } from "../src/app/a2uiDockReducer";
+import { type ProjectedUiSurface, recordSurfaceRevision } from "../src/app/a2uiDockReducer";
 import { createDefaultA2uiDock } from "../src/app/types";
+import { __internal, selectDockView } from "../src/ui/chat/a2ui/A2uiSurfaceDock";
 
 const catalogId = "https://a2ui.org/specification/v0_9/basic_catalog.json";
 
@@ -44,7 +43,11 @@ describe("selectDockView", () => {
   test("does not flag unseen for a deleted latest revision", () => {
     let dock = createDefaultA2uiDock();
     dock = recordSurfaceRevision(dock, project({ revision: 1 }), "2026-04-17T00:00:00.000Z");
-    dock = recordSurfaceRevision(dock, project({ revision: 2, deleted: true, root: undefined, dataModel: undefined }), "2026-04-17T00:00:01.000Z");
+    dock = recordSurfaceRevision(
+      dock,
+      project({ revision: 2, deleted: true, root: undefined, dataModel: undefined }),
+      "2026-04-17T00:00:01.000Z",
+    );
     const view = selectDockView(dock)!;
     expect(view.activeRevision.deleted).toBe(true);
     expect(view.hasUnseen).toBe(false);

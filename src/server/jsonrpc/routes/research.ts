@@ -1,7 +1,6 @@
 import type { z } from "zod";
-
-import { jsonRpcResearchRequestSchemas } from "../schema.research";
 import { JSONRPC_ERROR_CODES } from "../protocol";
+import { jsonRpcResearchRequestSchemas } from "../schema.research";
 import type { JsonRpcRequestHandler, JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
 
 function sendExecutionError(
@@ -17,7 +16,9 @@ function sendExecutionError(
 }
 
 type ResearchRequestMethod = keyof typeof jsonRpcResearchRequestSchemas;
-type ResearchRequestParams<M extends ResearchRequestMethod> = z.infer<(typeof jsonRpcResearchRequestSchemas)[M]>;
+type ResearchRequestParams<M extends ResearchRequestMethod> = z.infer<
+  (typeof jsonRpcResearchRequestSchemas)[M]
+>;
 
 function createResearchHandler<M extends ResearchRequestMethod>(
   context: JsonRpcRouteContext,
@@ -41,7 +42,12 @@ function createResearchHandler<M extends ResearchRequestMethod>(
       const result = await run(parsed.data as ResearchRequestParams<M>, ws);
       context.jsonrpc.sendResult(ws, message.id, result);
     } catch (error) {
-      sendExecutionError(context, ws, message.id, error instanceof Error ? error.message : String(error));
+      sendExecutionError(
+        context,
+        ws,
+        message.id,
+        error instanceof Error ? error.message : String(error),
+      );
     }
   };
 }
@@ -73,25 +79,45 @@ export function createResearchRouteHandlers(
         attachedFileIds: params.attachedFileIds,
       }),
     })),
-    "research/uploadFile": createResearchHandler(context, "research/uploadFile", async (params) => ({
-      file: await context.research.uploadFile(params),
-    })),
-    "research/attachFile": createResearchHandler(context, "research/attachFile", async (params) => ({
-      research: await context.research.attachUploadedFile(params.researchId, params.fileId),
-    })),
-    "research/subscribe": createResearchHandler(context, "research/subscribe", async (params, ws) => ({
-      research: await context.research.subscribe(ws, params.researchId, params.afterEventId),
-    })),
+    "research/uploadFile": createResearchHandler(
+      context,
+      "research/uploadFile",
+      async (params) => ({
+        file: await context.research.uploadFile(params),
+      }),
+    ),
+    "research/attachFile": createResearchHandler(
+      context,
+      "research/attachFile",
+      async (params) => ({
+        research: await context.research.attachUploadedFile(params.researchId, params.fileId),
+      }),
+    ),
+    "research/subscribe": createResearchHandler(
+      context,
+      "research/subscribe",
+      async (params, ws) => ({
+        research: await context.research.subscribe(ws, params.researchId, params.afterEventId),
+      }),
+    ),
     "research/unsubscribe": createResearchHandler(context, "research/unsubscribe", (params, ws) => {
       context.research.unsubscribe(ws, params.researchId);
       return { status: "unsubscribed" };
     }),
-    "research/approvePlan": createResearchHandler(context, "research/approvePlan", async (params) => ({
-      research: await context.research.approvePlan(params.researchId),
-    })),
-    "research/refinePlan": createResearchHandler(context, "research/refinePlan", async (params) => ({
-      research: await context.research.refinePlan(params.researchId, params.input),
-    })),
+    "research/approvePlan": createResearchHandler(
+      context,
+      "research/approvePlan",
+      async (params) => ({
+        research: await context.research.approvePlan(params.researchId),
+      }),
+    ),
+    "research/refinePlan": createResearchHandler(
+      context,
+      "research/refinePlan",
+      async (params) => ({
+        research: await context.research.refinePlan(params.researchId, params.input),
+      }),
+    ),
     "research/export": createResearchHandler(context, "research/export", async (params) => {
       return await context.research.export(params.researchId, params.format);
     }),

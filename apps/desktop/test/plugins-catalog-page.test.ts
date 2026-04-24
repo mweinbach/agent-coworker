@@ -1,6 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import { createElement } from "react";
-import { act } from "react";
+import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
 import { NoopJsonRpcSocket } from "./helpers/jsonRpcSocketMock";
@@ -27,42 +26,44 @@ const MOCK_UPDATE_STATE = {
   error: null,
 };
 
-mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
-  appendTranscriptBatch: async () => {},
-  appendTranscriptEvent: async () => {},
-  deleteTranscript: async () => {},
-  listDirectory: async () => [],
-  loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
-  pickWorkspaceDirectory: async () => null,
-  readTranscript: async () => [],
-  saveState: async () => {},
-  startWorkspaceServer: async () => ({ url: "ws://mock" }),
-  stopWorkspaceServer: async () => {},
-  showContextMenu: async () => null,
-  windowMinimize: async () => {},
-  windowMaximize: async () => {},
-  windowClose: async () => {},
-  getPlatform: async () => "linux",
-  readFile: async () => "",
-  previewOSFile: async () => {},
-  openPath: async () => {},
-  openExternalUrl: async () => {},
-  revealPath: async () => {},
-  copyPath: async () => {},
-  createDirectory: async () => {},
-  renamePath: async () => {},
-  trashPath: async () => {},
-  confirmAction: async () => true,
-  showNotification: async () => true,
-  getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  getUpdateState: async () => MOCK_UPDATE_STATE,
-  checkForUpdates: async () => {},
-  quitAndInstallUpdate: async () => {},
-  onSystemAppearanceChanged: () => () => {},
-  onMenuCommand: () => () => {},
-  onUpdateStateChanged: () => () => {},
-}));
+mock.module("../src/lib/desktopCommands", () =>
+  createDesktopCommandsMock({
+    appendTranscriptBatch: async () => {},
+    appendTranscriptEvent: async () => {},
+    deleteTranscript: async () => {},
+    listDirectory: async () => [],
+    loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
+    pickWorkspaceDirectory: async () => null,
+    readTranscript: async () => [],
+    saveState: async () => {},
+    startWorkspaceServer: async () => ({ url: "ws://mock" }),
+    stopWorkspaceServer: async () => {},
+    showContextMenu: async () => null,
+    windowMinimize: async () => {},
+    windowMaximize: async () => {},
+    windowClose: async () => {},
+    getPlatform: async () => "linux",
+    readFile: async () => "",
+    previewOSFile: async () => {},
+    openPath: async () => {},
+    openExternalUrl: async () => {},
+    revealPath: async () => {},
+    copyPath: async () => {},
+    createDirectory: async () => {},
+    renamePath: async () => {},
+    trashPath: async () => {},
+    confirmAction: async () => true,
+    showNotification: async () => true,
+    getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    getUpdateState: async () => MOCK_UPDATE_STATE,
+    checkForUpdates: async () => {},
+    quitAndInstallUpdate: async () => {},
+    onSystemAppearanceChanged: () => () => {},
+    onMenuCommand: () => () => {},
+    onUpdateStateChanged: () => () => {},
+  }),
+);
 
 mock.module("../src/lib/agentSocket", () => ({
   JsonRpcSocket: NoopJsonRpcSocket,
@@ -70,10 +71,8 @@ mock.module("../src/lib/agentSocket", () => ({
 
 const { useAppStore } = await import("../src/app/store");
 const { defaultWorkspaceRuntime } = await import("../src/app/store.helpers/runtimeState");
-const {
-  shouldDisablePluginInstallForScope,
-  shouldRequireFreshPluginPreviewForScope,
-} = await import("../src/ui/plugins/InstallPluginDialog");
+const { shouldDisablePluginInstallForScope, shouldRequireFreshPluginPreviewForScope } =
+  await import("../src/ui/plugins/InstallPluginDialog");
 const { PluginsCatalogPage } = await import("../src/ui/plugins/PluginsCatalogPage");
 mock.restore();
 
@@ -81,29 +80,33 @@ const workspaceId = "ws-plugins";
 
 function baseWorkspaceState() {
   return {
-    workspaces: [{
-      id: workspaceId,
-      name: "Plugin Workspace",
-      path: "/tmp/plugin-workspace",
-      createdAt: "2026-03-30T00:00:00.000Z",
-      lastOpenedAt: "2026-03-30T00:00:00.000Z",
-      defaultEnableMcp: true,
-      defaultBackupsEnabled: true,
-      yolo: false,
-    }],
-    threads: [{
-      id: "thread-1",
-      workspaceId,
-      title: "Thread 1",
-      titleSource: "manual",
-      createdAt: "2026-03-30T00:00:00.000Z",
-      lastMessageAt: "2026-03-30T00:00:00.000Z",
-      status: "active",
-      sessionId: "session-1",
-      messageCount: 1,
-      lastEventSeq: 1,
-      draft: false,
-    }],
+    workspaces: [
+      {
+        id: workspaceId,
+        name: "Plugin Workspace",
+        path: "/tmp/plugin-workspace",
+        createdAt: "2026-03-30T00:00:00.000Z",
+        lastOpenedAt: "2026-03-30T00:00:00.000Z",
+        defaultEnableMcp: true,
+        defaultBackupsEnabled: true,
+        yolo: false,
+      },
+    ],
+    threads: [
+      {
+        id: "thread-1",
+        workspaceId,
+        title: "Thread 1",
+        titleSource: "manual",
+        createdAt: "2026-03-30T00:00:00.000Z",
+        lastMessageAt: "2026-03-30T00:00:00.000Z",
+        status: "active",
+        sessionId: "session-1",
+        messageCount: 1,
+        lastEventSeq: 1,
+        draft: false,
+      },
+    ],
     selectedWorkspaceId: workspaceId,
     selectedThreadId: "thread-1",
     selectThread: mock(async () => {}),
@@ -130,14 +133,30 @@ describe("plugins catalog page", () => {
 
     const harness = setupJsdom();
     try {
-      (harness.dom.window.HTMLElement.prototype as { attachEvent?: () => void; detachEvent?: () => void }).attachEvent = () => {};
-      (harness.dom.window.HTMLElement.prototype as { attachEvent?: () => void; detachEvent?: () => void }).detachEvent = () => {};
+      (
+        harness.dom.window.HTMLElement.prototype as {
+          attachEvent?: () => void;
+          detachEvent?: () => void;
+        }
+      ).attachEvent = () => {};
+      (
+        harness.dom.window.HTMLElement.prototype as {
+          attachEvent?: () => void;
+          detachEvent?: () => void;
+        }
+      ).detachEvent = () => {};
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
       root = createRoot(container);
 
       await act(async () => {
-        root.render(createElement(PluginsCatalogPage, { workspaceId, searchQuery: "", setSearchQuery: () => {} }));
+        root.render(
+          createElement(PluginsCatalogPage, {
+            workspaceId,
+            searchQuery: "",
+            setSearchQuery: () => {},
+          }),
+        );
       });
 
       expect(container.textContent).toContain("Loading...");
@@ -179,7 +198,13 @@ describe("plugins catalog page", () => {
       root = createRoot(container);
 
       await act(async () => {
-        root.render(createElement(PluginsCatalogPage, { workspaceId, searchQuery: "", setSearchQuery: () => {} }));
+        root.render(
+          createElement(PluginsCatalogPage, {
+            workspaceId,
+            searchQuery: "",
+            setSearchQuery: () => {},
+          }),
+        );
       });
 
       expect(container.textContent).toContain("Connection issue");
@@ -223,7 +248,13 @@ describe("plugins catalog page", () => {
       root = createRoot(container);
 
       await act(async () => {
-        root.render(createElement(PluginsCatalogPage, { workspaceId, searchQuery: "", setSearchQuery: () => {} }));
+        root.render(
+          createElement(PluginsCatalogPage, {
+            workspaceId,
+            searchQuery: "",
+            setSearchQuery: () => {},
+          }),
+        );
       });
 
       expect(container.textContent).toContain("+ New plugin");
@@ -259,15 +290,17 @@ describe("plugins catalog page", () => {
             },
             targetScope: "workspace",
             warnings: [],
-            candidates: [{
-              pluginId: "old-plugin",
-              displayName: "Old Plugin",
-              description: "Old preview should be cleared",
-              relativeRootPath: ".",
-              wouldBePrimary: true,
-              shadowedPluginIds: [],
-              diagnostics: [],
-            }],
+            candidates: [
+              {
+                pluginId: "old-plugin",
+                displayName: "Old Plugin",
+                description: "Old preview should be cleared",
+                relativeRootPath: ".",
+                wouldBePrimary: true,
+                shadowedPluginIds: [],
+                diagnostics: [],
+              },
+            ],
           },
         },
       },
@@ -275,25 +308,43 @@ describe("plugins catalog page", () => {
 
     const harness = setupJsdom();
     try {
-      (harness.dom.window.HTMLElement.prototype as { attachEvent?: () => void; detachEvent?: () => void }).attachEvent = () => {};
-      (harness.dom.window.HTMLElement.prototype as { attachEvent?: () => void; detachEvent?: () => void }).detachEvent = () => {};
+      (
+        harness.dom.window.HTMLElement.prototype as {
+          attachEvent?: () => void;
+          detachEvent?: () => void;
+        }
+      ).attachEvent = () => {};
+      (
+        harness.dom.window.HTMLElement.prototype as {
+          attachEvent?: () => void;
+          detachEvent?: () => void;
+        }
+      ).detachEvent = () => {};
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
       root = createRoot(container);
 
       await act(async () => {
-        root.render(createElement(PluginsCatalogPage, { workspaceId, searchQuery: "", setSearchQuery: () => {} }));
+        root.render(
+          createElement(PluginsCatalogPage, {
+            workspaceId,
+            searchQuery: "",
+            setSearchQuery: () => {},
+          }),
+        );
       });
 
-      const newPluginButton = Array.from(container.querySelectorAll("button")).find(
-        (button) => button.textContent?.includes("+ New plugin"),
+      const newPluginButton = Array.from(container.querySelectorAll("button")).find((button) =>
+        button.textContent?.includes("+ New plugin"),
       );
       if (!(newPluginButton instanceof harness.dom.window.HTMLButtonElement)) {
         throw new Error("missing new plugin button");
       }
 
       await act(async () => {
-        newPluginButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+        newPluginButton.dispatchEvent(
+          new harness.dom.window.MouseEvent("click", { bubbles: true }),
+        );
       });
 
       const dialogText = harness.dom.window.document.body.textContent ?? "";
@@ -302,7 +353,9 @@ describe("plugins catalog page", () => {
       expect(dialogText).not.toContain("/tmp/old-plugin");
 
       const textarea = harness.dom.window.document.querySelector("textarea");
-      expect(textarea?.getAttribute("placeholder")).toContain("https://github.com/example/codex-plugin-repo");
+      expect(textarea?.getAttribute("placeholder")).toContain(
+        "https://github.com/example/codex-plugin-repo",
+      );
       expect((textarea as HTMLTextAreaElement | null)?.value ?? "").toBe("");
 
       await act(async () => {
@@ -337,25 +390,43 @@ describe("plugins catalog page", () => {
 
     const harness = setupJsdom();
     try {
-      (harness.dom.window.HTMLElement.prototype as { attachEvent?: () => void; detachEvent?: () => void }).attachEvent = () => {};
-      (harness.dom.window.HTMLElement.prototype as { attachEvent?: () => void; detachEvent?: () => void }).detachEvent = () => {};
+      (
+        harness.dom.window.HTMLElement.prototype as {
+          attachEvent?: () => void;
+          detachEvent?: () => void;
+        }
+      ).attachEvent = () => {};
+      (
+        harness.dom.window.HTMLElement.prototype as {
+          attachEvent?: () => void;
+          detachEvent?: () => void;
+        }
+      ).detachEvent = () => {};
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
       root = createRoot(container);
 
       await act(async () => {
-        root.render(createElement(PluginsCatalogPage, { workspaceId, searchQuery: "", setSearchQuery: () => {} }));
+        root.render(
+          createElement(PluginsCatalogPage, {
+            workspaceId,
+            searchQuery: "",
+            setSearchQuery: () => {},
+          }),
+        );
       });
 
-      const newPluginButton = Array.from(container.querySelectorAll("button")).find(
-        (button) => button.textContent?.includes("+ New plugin"),
+      const newPluginButton = Array.from(container.querySelectorAll("button")).find((button) =>
+        button.textContent?.includes("+ New plugin"),
       );
       if (!(newPluginButton instanceof harness.dom.window.HTMLButtonElement)) {
         throw new Error("missing new plugin button");
       }
 
       await act(async () => {
-        newPluginButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+        newPluginButton.dispatchEvent(
+          new harness.dom.window.MouseEvent("click", { bubbles: true }),
+        );
       });
 
       const textarea = harness.dom.window.document.querySelector("textarea");
@@ -400,21 +471,25 @@ describe("plugins catalog page", () => {
       warnings: [],
     };
 
-    expect(shouldRequireFreshPluginPreviewForScope({
-      normalizedSourceInput: "owner/repo",
-      lastPreviewSourceInput: "owner/repo",
-      lastPreviewTargetScope: "workspace",
-      pluginPreview: preview,
-      targetScope: "workspace",
-    })).toBe(false);
+    expect(
+      shouldRequireFreshPluginPreviewForScope({
+        normalizedSourceInput: "owner/repo",
+        lastPreviewSourceInput: "owner/repo",
+        lastPreviewTargetScope: "workspace",
+        pluginPreview: preview,
+        targetScope: "workspace",
+      }),
+    ).toBe(false);
 
-    expect(shouldRequireFreshPluginPreviewForScope({
-      normalizedSourceInput: "owner/repo",
-      lastPreviewSourceInput: "owner/repo",
-      lastPreviewTargetScope: "workspace",
-      pluginPreview: preview,
-      targetScope: "user",
-    })).toBe(true);
+    expect(
+      shouldRequireFreshPluginPreviewForScope({
+        normalizedSourceInput: "owner/repo",
+        lastPreviewSourceInput: "owner/repo",
+        lastPreviewTargetScope: "workspace",
+        pluginPreview: preview,
+        targetScope: "user",
+      }),
+    ).toBe(true);
   });
 
   test("install dialog disables install when the active preview has no valid candidates", () => {
@@ -427,56 +502,68 @@ describe("plugins catalog page", () => {
         repo: "owner/repo",
       },
       targetScope: "workspace" as const,
-      candidates: [{
-        pluginId: "broken-plugin",
-        displayName: "Broken Plugin",
-        description: "Broken plugin",
-        relativeRootPath: ".",
-        wouldBePrimary: true,
-        shadowedPluginIds: [],
-        diagnostics: [{
-          code: "invalid_plugin_manifest",
-          severity: "error" as const,
-          message: "Invalid plugin manifest",
-        }],
-      }],
+      candidates: [
+        {
+          pluginId: "broken-plugin",
+          displayName: "Broken Plugin",
+          description: "Broken plugin",
+          relativeRootPath: ".",
+          wouldBePrimary: true,
+          shadowedPluginIds: [],
+          diagnostics: [
+            {
+              code: "invalid_plugin_manifest",
+              severity: "error" as const,
+              message: "Invalid plugin manifest",
+            },
+          ],
+        },
+      ],
       warnings: [],
     };
 
-    expect(shouldDisablePluginInstallForScope({
-      normalizedSourceInput: "owner/repo",
-      lastPreviewSourceInput: "owner/repo",
-      lastPreviewTargetScope: "workspace",
-      pluginPreview: invalidPreview,
-      targetScope: "workspace",
-      pluginInstallInFlight: false,
-    })).toBe(true);
+    expect(
+      shouldDisablePluginInstallForScope({
+        normalizedSourceInput: "owner/repo",
+        lastPreviewSourceInput: "owner/repo",
+        lastPreviewTargetScope: "workspace",
+        pluginPreview: invalidPreview,
+        targetScope: "workspace",
+        pluginInstallInFlight: false,
+      }),
+    ).toBe(true);
 
-    expect(shouldDisablePluginInstallForScope({
-      normalizedSourceInput: "owner/repo",
-      lastPreviewSourceInput: "owner/repo",
-      lastPreviewTargetScope: "workspace",
-      pluginPreview: invalidPreview,
-      targetScope: "user",
-      pluginInstallInFlight: false,
-    })).toBe(true);
+    expect(
+      shouldDisablePluginInstallForScope({
+        normalizedSourceInput: "owner/repo",
+        lastPreviewSourceInput: "owner/repo",
+        lastPreviewTargetScope: "workspace",
+        pluginPreview: invalidPreview,
+        targetScope: "user",
+        pluginInstallInFlight: false,
+      }),
+    ).toBe(true);
 
     const validPreview = {
       ...invalidPreview,
-      candidates: [{
-        ...invalidPreview.candidates[0],
-        diagnostics: [],
-      }],
+      candidates: [
+        {
+          ...invalidPreview.candidates[0],
+          diagnostics: [],
+        },
+      ],
     };
 
-    expect(shouldDisablePluginInstallForScope({
-      normalizedSourceInput: "owner/repo",
-      lastPreviewSourceInput: "owner/repo",
-      lastPreviewTargetScope: "workspace",
-      pluginPreview: validPreview,
-      targetScope: "workspace",
-      pluginInstallInFlight: false,
-    })).toBe(false);
+    expect(
+      shouldDisablePluginInstallForScope({
+        normalizedSourceInput: "owner/repo",
+        lastPreviewSourceInput: "owner/repo",
+        lastPreviewTargetScope: "workspace",
+        pluginPreview: validPreview,
+        targetScope: "workspace",
+        pluginInstallInFlight: false,
+      }),
+    ).toBe(false);
   });
 
   test("renders enabled and disabled plugin sections with counts", async () => {
@@ -499,9 +586,16 @@ describe("plugins catalog page", () => {
                 discoveryKind: "marketplace",
                 enabled: true,
                 rootDir: "/tmp/plugin-workspace/.agents/plugins/figma-toolkit",
-                manifestPath: "/tmp/plugin-workspace/.agents/plugins/figma-toolkit/.codex-plugin/plugin.json",
+                manifestPath:
+                  "/tmp/plugin-workspace/.agents/plugins/figma-toolkit/.codex-plugin/plugin.json",
                 skillsPath: "/tmp/plugin-workspace/.agents/plugins/figma-toolkit/skills",
-                skills: [{ name: "figma-toolkit:import-frame", description: "Import frame", enabled: true }],
+                skills: [
+                  {
+                    name: "figma-toolkit:import-frame",
+                    description: "Import frame",
+                    enabled: true,
+                  },
+                ],
                 mcpServers: ["figma"],
                 apps: [{ id: "figma-app", displayName: "Figma App", description: "Metadata only" }],
                 warnings: [],
@@ -535,7 +629,13 @@ describe("plugins catalog page", () => {
       root = createRoot(container);
 
       await act(async () => {
-        root.render(createElement(PluginsCatalogPage, { workspaceId, searchQuery: "", setSearchQuery: () => {} }));
+        root.render(
+          createElement(PluginsCatalogPage, {
+            workspaceId,
+            searchQuery: "",
+            setSearchQuery: () => {},
+          }),
+        );
       });
 
       expect(container.textContent).toContain("Enabled");
@@ -579,7 +679,8 @@ describe("plugins catalog page", () => {
                 discoveryKind: "direct",
                 enabled: true,
                 rootDir: "/tmp/plugin-workspace/.agents/plugins/figma-toolkit",
-                manifestPath: "/tmp/plugin-workspace/.agents/plugins/figma-toolkit/.codex-plugin/plugin.json",
+                manifestPath:
+                  "/tmp/plugin-workspace/.agents/plugins/figma-toolkit/.codex-plugin/plugin.json",
                 skillsPath: "/tmp/plugin-workspace/.agents/plugins/figma-toolkit/skills",
                 skills: [],
                 mcpServers: [],
@@ -615,7 +716,13 @@ describe("plugins catalog page", () => {
       root = createRoot(container);
 
       await act(async () => {
-        root.render(createElement(PluginsCatalogPage, { workspaceId, searchQuery: "", setSearchQuery: () => {} }));
+        root.render(
+          createElement(PluginsCatalogPage, {
+            workspaceId,
+            searchQuery: "",
+            setSearchQuery: () => {},
+          }),
+        );
       });
 
       const pageText = container.textContent ?? "";

@@ -4,18 +4,24 @@ import os from "node:os";
 import path from "node:path";
 
 import { z } from "zod";
-
-import type { RuntimeRunTurnParams } from "../src/runtime/types";
-import type { AgentConfig, ModelMessage } from "../src/types";
 import { getAiCoworkerPaths } from "../src/connect";
 import { defaultSupportedModel } from "../src/models/registry";
 import { CODEX_BACKEND_BASE_URL, writeCodexAuthMaterial } from "../src/providers/codex-auth";
 import { resolveOpenAiResponsesModel } from "../src/runtime/openaiResponsesModel";
-import { __internal as piRuntimeInternal, createPiRuntime } from "../src/runtime/piRuntime";
-import { MODEL_SCRATCHPAD_DIRNAME, TOOL_OUTPUT_OVERFLOW_PREVIEW_CHARS } from "../src/shared/toolOutputOverflow";
+import { createPiRuntime, __internal as piRuntimeInternal } from "../src/runtime/piRuntime";
+import type { RuntimeRunTurnParams } from "../src/runtime/types";
+import {
+  MODEL_SCRATCHPAD_DIRNAME,
+  TOOL_OUTPUT_OVERFLOW_PREVIEW_CHARS,
+} from "../src/shared/toolOutputOverflow";
+import type { AgentConfig, ModelMessage } from "../src/types";
 
 function b64url(input: string): string {
-  return Buffer.from(input, "utf8").toString("base64").replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+  return Buffer.from(input, "utf8")
+    .toString("base64")
+    .replace(/=/g, "")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
 }
 
 function makeJwt(payload: Record<string, unknown>): string {
@@ -45,7 +51,10 @@ function makeConfig(homeDir: string, overrides: Partial<AgentConfig> = {}): Agen
   };
 }
 
-function makeParams(config: AgentConfig, overrides: Partial<RuntimeRunTurnParams> = {}): RuntimeRunTurnParams {
+function makeParams(
+  config: AgentConfig,
+  overrides: Partial<RuntimeRunTurnParams> = {},
+): RuntimeRunTurnParams {
   return {
     config,
     system: "You are helpful.",
@@ -77,10 +86,7 @@ async function withEnv<T>(
   }
 }
 
-async function withMockedFetch<T>(
-  fetchImpl: typeof fetch,
-  run: () => Promise<T>,
-): Promise<T> {
+async function withMockedFetch<T>(fetchImpl: typeof fetch, run: () => Promise<T>): Promise<T> {
   const previous = globalThis.fetch;
   globalThis.fetch = fetchImpl;
   try {
@@ -103,8 +109,8 @@ describe("pi runtime regressions", () => {
         makeParams(makeConfig(homeDir), {
           abortSignal: controller.signal,
           onModelAbort,
-        })
-      )
+        }),
+      ),
     ).rejects.toThrow("Model turn aborted.");
 
     expect(onModelAbort).toHaveBeenCalledTimes(1);
@@ -285,43 +291,52 @@ describe("pi runtime regressions", () => {
       (async (input: RequestInfo | URL) => {
         const url = String(input);
         if (url.endsWith("/api/v1/models")) {
-          return new Response(JSON.stringify({
-            models: [
-              {
-                type: "llm",
-                publisher: "local",
-                key: "local/qwen-2.5",
-                display_name: "Qwen 2.5 Local",
-                loaded_instances: [],
-                max_context_length: 32768,
-                capabilities: { vision: true, trained_for_tool_use: false },
-                size_bytes: 1,
-                architecture: "llama",
-                format: "gguf",
-              },
-            ],
-          }), {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          });
+          return new Response(
+            JSON.stringify({
+              models: [
+                {
+                  type: "llm",
+                  publisher: "local",
+                  key: "local/qwen-2.5",
+                  display_name: "Qwen 2.5 Local",
+                  loaded_instances: [],
+                  max_context_length: 32768,
+                  capabilities: { vision: true, trained_for_tool_use: false },
+                  size_bytes: 1,
+                  architecture: "llama",
+                  format: "gguf",
+                },
+              ],
+            }),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
         }
 
-        return new Response(JSON.stringify({
-          type: "llm",
-          instance_id: "inst-1",
-          load_time_seconds: 0.25,
-          status: "loaded",
-          load_config: {
-            context_length: 8192,
+        return new Response(
+          JSON.stringify({
+            type: "llm",
+            instance_id: "inst-1",
+            load_time_seconds: 0.25,
+            status: "loaded",
+            load_config: {
+              context_length: 8192,
+            },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
           },
-        }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
+        );
       }) as typeof fetch,
-      async () => await piRuntimeInternal.resolvePiModel(makeParams(config, {
-        providerOptions: config.providerOptions,
-      })),
+      async () =>
+        await piRuntimeInternal.resolvePiModel(
+          makeParams(config, {
+            providerOptions: config.providerOptions,
+          }),
+        ),
     );
 
     expect(resolved.model.id).toBe("local/qwen-2.5");
@@ -351,37 +366,46 @@ describe("pi runtime regressions", () => {
       },
     });
 
-    const resolved = await withEnv("OPENAI_API_KEY", undefined, async () =>
-      await withMockedFetch(
-        (async (input: RequestInfo | URL) => {
-          const url = String(input);
-          if (url.endsWith("/api/v1/models")) {
-            return new Response(JSON.stringify({
-              models: [
+    const resolved = await withEnv(
+      "OPENAI_API_KEY",
+      undefined,
+      async () =>
+        await withMockedFetch(
+          (async (input: RequestInfo | URL) => {
+            const url = String(input);
+            if (url.endsWith("/api/v1/models")) {
+              return new Response(
+                JSON.stringify({
+                  models: [
+                    {
+                      type: "llm",
+                      publisher: "local",
+                      key: "local/qwen-2.5",
+                      display_name: "Qwen 2.5 Local",
+                      loaded_instances: [],
+                      max_context_length: 32768,
+                      capabilities: { vision: false, trained_for_tool_use: false },
+                      size_bytes: 1,
+                      architecture: "llama",
+                      format: "gguf",
+                    },
+                  ],
+                }),
                 {
-                  type: "llm",
-                  publisher: "local",
-                  key: "local/qwen-2.5",
-                  display_name: "Qwen 2.5 Local",
-                  loaded_instances: [],
-                  max_context_length: 32768,
-                  capabilities: { vision: false, trained_for_tool_use: false },
-                  size_bytes: 1,
-                  architecture: "llama",
-                  format: "gguf",
+                  status: 200,
+                  headers: { "content-type": "application/json" },
                 },
-              ],
-            }), {
-              status: 200,
-              headers: { "content-type": "application/json" },
-            });
-          }
-          throw new Error(`unexpected fetch url: ${url}`);
-        }) as typeof fetch,
-        async () => await piRuntimeInternal.resolvePiModel(makeParams(config, {
-          providerOptions: config.providerOptions,
-        })),
-      )
+              );
+            }
+            throw new Error(`unexpected fetch url: ${url}`);
+          }) as typeof fetch,
+          async () =>
+            await piRuntimeInternal.resolvePiModel(
+              makeParams(config, {
+                providerOptions: config.providerOptions,
+              }),
+            ),
+        ),
     );
 
     expect(resolved.model.id).toBe("local/qwen-2.5");
@@ -434,25 +458,28 @@ describe("pi runtime regressions", () => {
       (async (input: RequestInfo | URL) => {
         const url = String(input);
         if (url.endsWith("/api/v1/models")) {
-          return new Response(JSON.stringify({
-            models: [
-              {
-                type: "llm",
-                publisher: "local",
-                key: "local/qwen-2.5",
-                display_name: "Qwen 2.5 Local",
-                loaded_instances: [],
-                max_context_length: 32768,
-                capabilities: { vision: false, trained_for_tool_use: true },
-                size_bytes: 1,
-                architecture: "llama",
-                format: "gguf",
-              },
-            ],
-          }), {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          });
+          return new Response(
+            JSON.stringify({
+              models: [
+                {
+                  type: "llm",
+                  publisher: "local",
+                  key: "local/qwen-2.5",
+                  display_name: "Qwen 2.5 Local",
+                  loaded_instances: [],
+                  max_context_length: 32768,
+                  capabilities: { vision: false, trained_for_tool_use: true },
+                  size_bytes: 1,
+                  architecture: "llama",
+                  format: "gguf",
+                },
+              ],
+            }),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
         }
         throw new Error(`unexpected fetch url: ${url}`);
       }) as typeof fetch,
@@ -464,7 +491,12 @@ describe("pi runtime regressions", () => {
               {
                 role: "assistant",
                 content: [
-                  { type: "tool-call", toolCallId: "call-1", toolName: "read", input: { path: "/tmp/a.ts" } },
+                  {
+                    type: "tool-call",
+                    toolCallId: "call-1",
+                    toolName: "read",
+                    input: { path: "/tmp/a.ts" },
+                  },
                   { type: "text", text: "Earlier answer" },
                 ],
               },
@@ -488,7 +520,12 @@ describe("pi runtime regressions", () => {
               {
                 role: "assistant",
                 content: [
-                  { type: "tool-call", toolCallId: "call-1", toolName: "read", input: { path: "/tmp/a.ts" } },
+                  {
+                    type: "tool-call",
+                    toolCallId: "call-1",
+                    toolName: "read",
+                    input: { path: "/tmp/a.ts" },
+                  },
                   { type: "text", text: "Earlier answer" },
                 ],
               },
@@ -513,10 +550,16 @@ describe("pi runtime regressions", () => {
     );
 
     expect(streamCalls).toHaveLength(1);
-    const piMessages = (streamCalls[0]?.messages as Array<Record<string, unknown>> | undefined) ?? [];
-    expect(piMessages.map((message) => message.role)).toEqual(["user", "assistant", "toolResult", "user"]);
+    const piMessages =
+      (streamCalls[0]?.messages as Array<Record<string, unknown>> | undefined) ?? [];
+    expect(piMessages.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+      "user",
+    ]);
     expect(piMessages[0]?.content).toBe("request inside the window");
-    expect((piMessages[1]?.content as Array<Record<string, unknown>> | undefined)).toEqual([
+    expect(piMessages[1]?.content as Array<Record<string, unknown>> | undefined).toEqual([
       { type: "toolCall", id: "call-1", name: "read", arguments: { path: "/tmp/a.ts" } },
       { type: "text", text: "Earlier answer" },
     ]);
@@ -524,7 +567,7 @@ describe("pi runtime regressions", () => {
       role: "toolResult",
       toolCallId: "call-1",
       toolName: "read",
-      content: [{ type: "text", text: "{\"ok\":true}" }],
+      content: [{ type: "text", text: '{"ok":true}' }],
     });
     expect(piMessages[3]?.content).toBe("follow-up question");
   });
@@ -576,9 +619,11 @@ describe("pi runtime regressions", () => {
       preferredChildModel: "glm-5",
     });
 
-    const resolved = await withEnv("OPENCODE_API_KEY", undefined, async () => (
-      await piRuntimeInternal.resolvePiModel(makeParams(config))
-    ));
+    const resolved = await withEnv(
+      "OPENCODE_API_KEY",
+      undefined,
+      async () => await piRuntimeInternal.resolvePiModel(makeParams(config)),
+    );
 
     expect(resolved.apiKey).toBeUndefined();
     expect(resolved.model).toMatchObject({
@@ -601,9 +646,11 @@ describe("pi runtime regressions", () => {
       preferredChildModel: "kimi-k2.5",
     });
 
-    const resolved = await withEnv("OPENCODE_API_KEY", undefined, async () => (
-      await piRuntimeInternal.resolvePiModel(makeParams(config))
-    ));
+    const resolved = await withEnv(
+      "OPENCODE_API_KEY",
+      undefined,
+      async () => await piRuntimeInternal.resolvePiModel(makeParams(config)),
+    );
 
     expect(resolved.apiKey).toBeUndefined();
     expect(resolved.model).toMatchObject({
@@ -627,9 +674,11 @@ describe("pi runtime regressions", () => {
       preferredChildModel: "moonshotai/Kimi-K2.5",
     });
 
-    const resolved = await withEnv("BASETEN_API_KEY", "env-baseten-key", async () => (
-      await piRuntimeInternal.resolvePiModel(makeParams(config))
-    ));
+    const resolved = await withEnv(
+      "BASETEN_API_KEY",
+      "env-baseten-key",
+      async () => await piRuntimeInternal.resolvePiModel(makeParams(config)),
+    );
 
     expect(resolved.apiKey).toBe("env-baseten-key");
     expect(resolved.model).toMatchObject({
@@ -658,9 +707,11 @@ describe("pi runtime regressions", () => {
       preferredChildModel: "moonshotai/Kimi-K2.5",
     });
 
-    const resolved = await withEnv("TOGETHER_API_KEY", "env-together-key", async () => (
-      await piRuntimeInternal.resolvePiModel(makeParams(config))
-    ));
+    const resolved = await withEnv(
+      "TOGETHER_API_KEY",
+      "env-together-key",
+      async () => await piRuntimeInternal.resolvePiModel(makeParams(config)),
+    );
 
     expect(resolved.apiKey).toBe("env-together-key");
     expect(resolved.model).toMatchObject({
@@ -689,9 +740,11 @@ describe("pi runtime regressions", () => {
       preferredChildModel: "nvidia/nemotron-3-super-120b-a12b",
     });
 
-    const resolved = await withEnv("NVIDIA_API_KEY", "env-nvidia-key", async () => (
-      await piRuntimeInternal.resolvePiModel(makeParams(config))
-    ));
+    const resolved = await withEnv(
+      "NVIDIA_API_KEY",
+      "env-nvidia-key",
+      async () => await piRuntimeInternal.resolvePiModel(makeParams(config)),
+    );
 
     expect(resolved.apiKey).toBe("env-nvidia-key");
     expect(resolved.model).toMatchObject({
@@ -715,17 +768,19 @@ describe("pi runtime regressions", () => {
   });
 
   test("nvidia request normalization forces thinking on and strips explicit token controls", () => {
-    expect(piRuntimeInternal.normalizeNvidiaChatCompletionsBody({
-      model: "nvidia/nemotron-3-super-120b-a12b",
-      max_tokens: 16_384,
-      max_completion_tokens: 8_192,
-      reasoning_budget: 16_384,
-      reasoning_effort: "high",
-      enable_thinking: false,
-      store: false,
-      chat_template_kwargs: { preserve: true },
-      stream: true,
-    })).toEqual({
+    expect(
+      piRuntimeInternal.normalizeNvidiaChatCompletionsBody({
+        model: "nvidia/nemotron-3-super-120b-a12b",
+        max_tokens: 16_384,
+        max_completion_tokens: 8_192,
+        reasoning_budget: 16_384,
+        reasoning_effort: "high",
+        enable_thinking: false,
+        store: false,
+        chat_template_kwargs: { preserve: true },
+        stream: true,
+      }),
+    ).toEqual({
       model: "nvidia/nemotron-3-super-120b-a12b",
       chat_template_kwargs: {
         preserve: true,
@@ -735,69 +790,72 @@ describe("pi runtime regressions", () => {
     });
   });
 
-  test.serial("nvidia PI runtime tolerates missing local pricing metadata without surfacing model.cost errors", async () => {
-    await withEnv("NVIDIA_API_KEY", "test-dummy-key", async () => {
-      const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-nvidia-live-stream-"));
-      const runtime = createPiRuntime();
-      const config = makeConfig(homeDir, {
-        provider: "nvidia",
-        model: "nvidia/nemotron-3-super-120b-a12b",
-        preferredChildModel: "nvidia/nemotron-3-super-120b-a12b",
-      });
-
-      const encoder = new TextEncoder();
-      const requestBodies: string[] = [];
-      const originalFetch = globalThis.fetch;
-      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-        requestBodies.push(typeof init?.body === "string" ? init.body : "");
-        const chunks = [
-          'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":0,"model":"nvidia/nemotron-3-super-120b-a12b","choices":[{"index":0,"delta":{"role":"assistant","content":"Hello"},"finish_reason":null}]}\n\n',
-          'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":0,"model":"nvidia/nemotron-3-super-120b-a12b","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}\n\n',
-          'data: [DONE]\n\n',
-        ];
-        let index = 0;
-        const body = new ReadableStream({
-          pull(controller) {
-            if (index >= chunks.length) {
-              controller.close();
-              return;
-            }
-            controller.enqueue(encoder.encode(chunks[index++]));
-          },
-        });
-        return new Response(body, {
-          status: 200,
-          headers: { "content-type": "text/event-stream" },
-        });
-      }) as typeof fetch;
-
-      try {
-        const result = await runtime.runTurn(makeParams(config));
-
-        expect(result.text).toBe("Hello");
-        expect(result.reasoningText).toBeUndefined();
-        expect(result.usage).toEqual({
-          promptTokens: 10,
-          completionTokens: 2,
-          totalTokens: 12,
-        });
-        expect(requestBodies).toHaveLength(1);
-        expect(JSON.parse(requestBodies[0] ?? "{}")).toEqual({
+  test.serial(
+    "nvidia PI runtime tolerates missing local pricing metadata without surfacing model.cost errors",
+    async () => {
+      await withEnv("NVIDIA_API_KEY", "test-dummy-key", async () => {
+        const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-nvidia-live-stream-"));
+        const runtime = createPiRuntime();
+        const config = makeConfig(homeDir, {
+          provider: "nvidia",
           model: "nvidia/nemotron-3-super-120b-a12b",
-          messages: [
-            { role: "system", content: "You are helpful." },
-            { role: "user", content: "hello" },
-          ],
-          stream: true,
-          stream_options: { include_usage: true },
-          tools: [],
-          chat_template_kwargs: { enable_thinking: true },
+          preferredChildModel: "nvidia/nemotron-3-super-120b-a12b",
         });
-      } finally {
-        globalThis.fetch = originalFetch;
-      }
-    });
-  });
+
+        const encoder = new TextEncoder();
+        const requestBodies: string[] = [];
+        const originalFetch = globalThis.fetch;
+        globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+          requestBodies.push(typeof init?.body === "string" ? init.body : "");
+          const chunks = [
+            'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":0,"model":"nvidia/nemotron-3-super-120b-a12b","choices":[{"index":0,"delta":{"role":"assistant","content":"Hello"},"finish_reason":null}]}\n\n',
+            'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":0,"model":"nvidia/nemotron-3-super-120b-a12b","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}\n\n',
+            "data: [DONE]\n\n",
+          ];
+          let index = 0;
+          const body = new ReadableStream({
+            pull(controller) {
+              if (index >= chunks.length) {
+                controller.close();
+                return;
+              }
+              controller.enqueue(encoder.encode(chunks[index++]));
+            },
+          });
+          return new Response(body, {
+            status: 200,
+            headers: { "content-type": "text/event-stream" },
+          });
+        }) as typeof fetch;
+
+        try {
+          const result = await runtime.runTurn(makeParams(config));
+
+          expect(result.text).toBe("Hello");
+          expect(result.reasoningText).toBeUndefined();
+          expect(result.usage).toEqual({
+            promptTokens: 10,
+            completionTokens: 2,
+            totalTokens: 12,
+          });
+          expect(requestBodies).toHaveLength(1);
+          expect(JSON.parse(requestBodies[0] ?? "{}")).toEqual({
+            model: "nvidia/nemotron-3-super-120b-a12b",
+            messages: [
+              { role: "system", content: "You are helpful." },
+              { role: "user", content: "hello" },
+            ],
+            stream: true,
+            stream_options: { include_usage: true },
+            tools: [],
+            chat_template_kwargs: { enable_thinking: true },
+          });
+        } finally {
+          globalThis.fetch = originalFetch;
+        }
+      });
+    },
+  );
 
   test("opencode-zen runtime model resolution returns explicit GLM-5 PI metadata and env-key fallback", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-opencode-zen-"));
@@ -807,9 +865,11 @@ describe("pi runtime regressions", () => {
       preferredChildModel: "glm-5",
     });
 
-    const resolved = await withEnv("OPENCODE_ZEN_API_KEY", "env-opencode-zen-key", async () => (
-      await piRuntimeInternal.resolvePiModel(makeParams(config))
-    ));
+    const resolved = await withEnv(
+      "OPENCODE_ZEN_API_KEY",
+      "env-opencode-zen-key",
+      async () => await piRuntimeInternal.resolvePiModel(makeParams(config)),
+    );
 
     expect(resolved.apiKey).toBe("env-opencode-zen-key");
     expect(resolved.model).toMatchObject({
@@ -905,33 +965,38 @@ describe("pi runtime regressions", () => {
       preferredChildModel: "accounts/fireworks/models/glm-5",
     });
 
-    await runtime.runTurn(makeParams(config, {
-      tools: {
-        readFile: {
-          description: "simple tool",
-          inputSchema: z.object({
-            filePath: z.string(),
-            limit: z.number().optional(),
-          }),
-          execute: async () => "unused",
-        },
-        giantTool: {
-          description: "tool with a very large enum schema",
-          inputSchema: {
-            type: "object",
-            properties: {
-              choice: {
-                type: "string",
-                enum: Array.from({ length: 160 }, (_, index) => `option-${index}-${"x".repeat(12)}`),
-              },
-            },
-            required: ["choice"],
-            additionalProperties: false,
+    await runtime.runTurn(
+      makeParams(config, {
+        tools: {
+          readFile: {
+            description: "simple tool",
+            inputSchema: z.object({
+              filePath: z.string(),
+              limit: z.number().optional(),
+            }),
+            execute: async () => "unused",
           },
-          execute: async () => "unused",
+          giantTool: {
+            description: "tool with a very large enum schema",
+            inputSchema: {
+              type: "object",
+              properties: {
+                choice: {
+                  type: "string",
+                  enum: Array.from(
+                    { length: 160 },
+                    (_, index) => `option-${index}-${"x".repeat(12)}`,
+                  ),
+                },
+              },
+              required: ["choice"],
+              additionalProperties: false,
+            },
+            execute: async () => "unused",
+          },
         },
-      },
-    }));
+      }),
+    );
 
     const sentTools = streamCalls[0]?.tools as Array<Record<string, any>>;
     expect(sentTools).toHaveLength(2);
@@ -969,7 +1034,10 @@ describe("pi runtime regressions", () => {
         key,
         {
           type: "string",
-          enum: Array.from({ length: 24 }, (__unused, enumIndex) => `value-${enumIndex}-${"y".repeat(24)}`),
+          enum: Array.from(
+            { length: 24 },
+            (__unused, enumIndex) => `value-${enumIndex}-${"y".repeat(24)}`,
+          ),
         },
       ] as const;
     });
@@ -1002,20 +1070,22 @@ describe("pi runtime regressions", () => {
       preferredChildModel: "accounts/fireworks/models/glm-5",
     });
 
-    await runtime.runTurn(makeParams(config, {
-      tools: {
-        giantTool: {
-          description: "tool with many long property names",
-          inputSchema: {
-            type: "object",
-            properties: Object.fromEntries(propertyEntries),
-            required: propertyEntries.map(([key]) => key),
-            additionalProperties: false,
+    await runtime.runTurn(
+      makeParams(config, {
+        tools: {
+          giantTool: {
+            description: "tool with many long property names",
+            inputSchema: {
+              type: "object",
+              properties: Object.fromEntries(propertyEntries),
+              required: propertyEntries.map(([key]) => key),
+              additionalProperties: false,
+            },
+            execute: async () => "unused",
           },
-          execute: async () => "unused",
         },
-      },
-    }));
+      }),
+    );
 
     const sentTools = streamCalls[0]?.tools as Array<Record<string, any>>;
     expect(sentTools).toHaveLength(1);
@@ -1089,7 +1159,9 @@ describe("pi runtime regressions", () => {
     });
 
     expect(result.messages).toEqual(messages);
-    expect(result.providerOptions).toEqual({ google: { thinkingConfig: { includeThoughts: false } } });
+    expect(result.providerOptions).toEqual({
+      google: { thinkingConfig: { includeThoughts: false } },
+    });
     expect(result.streamOptions).toEqual({ maxOutputTokens: 1024 });
   });
 
@@ -1107,12 +1179,17 @@ describe("pi runtime regressions", () => {
       true,
       async (part) => {
         emitted.push(part as Record<string, unknown>);
-      }
+      },
     );
 
     expect(emitted).toEqual([
       { type: "tool-input-end", id: "call_partial" },
-      { type: "tool-call", toolCallId: "call_partial", toolName: "grep", input: { query: "needle" } },
+      {
+        type: "tool-call",
+        toolCallId: "call_partial",
+        toolName: "grep",
+        input: { query: "needle" },
+      },
     ]);
   });
 
@@ -1132,7 +1209,7 @@ describe("pi runtime regressions", () => {
       }),
       async (part) => {
         emitted.push(part as Record<string, unknown>);
-      }
+      },
     );
 
     expect(emitted).toEqual([
@@ -1177,31 +1254,40 @@ describe("pi runtime regressions", () => {
     });
 
     const result = await runtime.runTurn(
-      makeParams(makeConfig(homeDir, {
-        provider: "opencode-zen",
-        model: "glm-5",
-        preferredChildModel: "glm-5",
-      }), {
-        maxSteps: 2,
-        tools: {
-          read: {
-            inputSchema: z.object({ filePath: z.string() }),
-            execute: async () => "unused",
+      makeParams(
+        makeConfig(homeDir, {
+          provider: "opencode-zen",
+          model: "glm-5",
+          preferredChildModel: "glm-5",
+        }),
+        {
+          maxSteps: 2,
+          tools: {
+            read: {
+              inputSchema: z.object({ filePath: z.string() }),
+              execute: async () => "unused",
+            },
+          },
+          prepareStep: async ({ messages }) => {
+            stepMessages.push(messages);
+            return undefined;
           },
         },
-        prepareStep: async ({ messages }) => {
-          stepMessages.push(messages);
-          return undefined;
-        },
-      }),
+      ),
     );
 
     expect(stepMessages).toHaveLength(2);
-    expect(stepMessages[1]?.some((message) => {
-      if (message.role !== "assistant") return false;
-      return JSON.stringify(message.content).includes("Possible invalid tool call format detected");
-    })).toBe(true);
-    expect(JSON.stringify(result.responseMessages)).not.toContain("Possible invalid tool call format detected");
+    expect(
+      stepMessages[1]?.some((message) => {
+        if (message.role !== "assistant") return false;
+        return JSON.stringify(message.content).includes(
+          "Possible invalid tool call format detected",
+        );
+      }),
+    ).toBe(true);
+    expect(JSON.stringify(result.responseMessages)).not.toContain(
+      "Possible invalid tool call format detected",
+    );
   });
 
   test("executeToolCall leaves short tool output inline when under the overflow threshold", async () => {
@@ -1219,7 +1305,7 @@ describe("pi runtime regressions", () => {
       }),
       async (part) => {
         emitted.push(part as Record<string, unknown>);
-      }
+      },
     );
 
     expect(emitted).toEqual([
@@ -1259,7 +1345,7 @@ describe("pi runtime regressions", () => {
       }),
       async (part) => {
         emitted.push(part as Record<string, unknown>);
-      }
+      },
     );
 
     expect(emitted).toHaveLength(2);
@@ -1329,7 +1415,7 @@ describe("pi runtime regressions", () => {
       }),
       async (part) => {
         emitted.push(part as Record<string, unknown>);
-      }
+      },
     );
 
     expect(emitted).toEqual([
@@ -1367,7 +1453,7 @@ describe("pi runtime regressions", () => {
       }),
       async (part) => {
         emitted.push(part as Record<string, unknown>);
-      }
+      },
     );
 
     expect(emitted).toEqual([
@@ -1398,7 +1484,7 @@ describe("pi runtime regressions", () => {
       }),
       async (part) => {
         emitted.push(part as Record<string, unknown>);
-      }
+      },
     );
 
     expect(emitted).toHaveLength(2);
@@ -1410,13 +1496,19 @@ describe("pi runtime regressions", () => {
     expect(toolResultOutput.overflow).toBe(true);
     expect(toolResultOutput.chars).toBe(oversized.length);
     expect(typeof toolResultOutput.filePath).toBe("string");
-    expect((toolResultOutput.filePath as string)).toContain(path.join(homeDir, ".ModelScratchpad"));
+    expect(toolResultOutput.filePath as string).toContain(path.join(homeDir, ".ModelScratchpad"));
     expect((toolResultOutput.value as string).length).toBeLessThan(oversized.length);
     expect(toolResultOutput.value).toContain(toolResultOutput.filePath as string);
-    expect(toolResultOutput.value).toContain(`Preview (first ${TOOL_OUTPUT_OVERFLOW_PREVIEW_CHARS.toLocaleString()} chars):`);
-    expect(String(toolResultOutput.preview).startsWith(oversized.slice(0, TOOL_OUTPUT_OVERFLOW_PREVIEW_CHARS))).toBe(true);
+    expect(toolResultOutput.value).toContain(
+      `Preview (first ${TOOL_OUTPUT_OVERFLOW_PREVIEW_CHARS.toLocaleString()} chars):`,
+    );
+    expect(
+      String(toolResultOutput.preview).startsWith(
+        oversized.slice(0, TOOL_OUTPUT_OVERFLOW_PREVIEW_CHARS),
+      ),
+    ).toBe(true);
     expect(String(toolResultOutput.preview)).toContain(
-      `preview truncated ${oversized.length - TOOL_OUTPUT_OVERFLOW_PREVIEW_CHARS} chars`
+      `preview truncated ${oversized.length - TOOL_OUTPUT_OVERFLOW_PREVIEW_CHARS} chars`,
     );
     expect(String(toolResultOutput.preview).length).toBeGreaterThan(120);
 
@@ -1436,5 +1528,4 @@ describe("pi runtime regressions", () => {
     expect(result.details).toEqual(toolResultOutput);
     expect(result.content).toEqual([{ type: "text", text: toolResultOutput.value }]);
   });
-
 });

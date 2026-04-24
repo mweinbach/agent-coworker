@@ -27,7 +27,14 @@ export function assertSafeId(id: string, label: string): void {
 }
 
 export function assertValidFileName(name: string, label: string): void {
-  if (!name || name.includes("/") || name.includes("\\") || name.includes("\0") || name === ".." || name === ".") {
+  if (
+    !name ||
+    name.includes("/") ||
+    name.includes("\\") ||
+    name.includes("\0") ||
+    name === ".." ||
+    name === "."
+  ) {
     throw new Error(`${label} is invalid`);
   }
 }
@@ -60,7 +67,10 @@ export function assertDirection(direction: string): "server" | "client" {
 export function assertWithinTranscriptsDir(root: string, filePath: string): void {
   const normalizedRoot = path.resolve(root);
   const normalizedPath = path.resolve(filePath);
-  if (normalizedPath !== normalizedRoot && !normalizedPath.startsWith(`${normalizedRoot}${path.sep}`)) {
+  if (
+    normalizedPath !== normalizedRoot &&
+    !normalizedPath.startsWith(`${normalizedRoot}${path.sep}`)
+  ) {
     throw new Error("Resolved transcript path escapes transcript root");
   }
 }
@@ -73,7 +83,10 @@ export function assertPathWithinRoots(roots: string[], targetPath: string, label
   const normalizedTarget = normalizeBoundaryPath(targetPath);
   for (const root of roots) {
     const normalizedRoot = normalizeBoundaryPath(root);
-    if (normalizedTarget === normalizedRoot || normalizedTarget.startsWith(`${normalizedRoot}${path.sep}`)) {
+    if (
+      normalizedTarget === normalizedRoot ||
+      normalizedTarget.startsWith(`${normalizedRoot}${path.sep}`)
+    ) {
       return normalizedTarget;
     }
   }

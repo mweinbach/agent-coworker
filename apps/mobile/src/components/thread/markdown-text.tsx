@@ -102,7 +102,14 @@ function CodeBlock({ language, content }: { language: string; content: string })
             borderBottomColor: theme.borderMuted,
           }}
         >
-          <Text style={{ color: theme.textTertiary, fontSize: 11, fontWeight: "600", textTransform: "uppercase" }}>
+          <Text
+            style={{
+              color: theme.textTertiary,
+              fontSize: 11,
+              fontWeight: "600",
+              textTransform: "uppercase",
+            }}
+          >
             {language}
           </Text>
         </View>

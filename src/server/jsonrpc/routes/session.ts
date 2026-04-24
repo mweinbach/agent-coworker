@@ -12,9 +12,7 @@ import {
 import { toJsonRpcParams } from "./shared";
 import type { JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
 
-export function createSessionRouteHandlers(
-  context: JsonRpcRouteContext,
-): JsonRpcRequestHandlerMap {
+export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRpcRequestHandlerMap {
   return {
     "cowork/session/title/set": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
@@ -32,7 +30,8 @@ export function createSessionRouteHandlers(
       const event = await context.events.capture(
         binding!,
         () => session.setSessionTitle(title),
-        (event): event is Extract<ServerEvent, { type: "session_info" }> => event.type === "session_info",
+        (event): event is Extract<ServerEvent, { type: "session_info" }> =>
+          event.type === "session_info",
       );
       context.jsonrpc.sendResult(ws, message.id, { event });
     },
@@ -49,9 +48,10 @@ export function createSessionRouteHandlers(
       const params = toJsonRpcParams(message.params);
       const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
       const model = typeof params.model === "string" ? params.model : "";
-      const provider = typeof params.provider === "string"
-        ? params.provider as AgentConfig["provider"]
-        : undefined;
+      const provider =
+        typeof params.provider === "string"
+          ? (params.provider as AgentConfig["provider"])
+          : undefined;
       const binding = context.threads.getLive(threadId);
       const session = binding?.session;
       if (!session || !model.trim()) {
@@ -65,7 +65,8 @@ export function createSessionRouteHandlers(
         context,
         binding!,
         async () => await session.setModel(model, provider),
-        (event): event is Extract<ServerEvent, { type: "config_updated" }> => event.type === "config_updated",
+        (event): event is Extract<ServerEvent, { type: "config_updated" }> =>
+          event.type === "config_updated",
       );
       if (outcome?.type === "error") {
         sendSessionMutationError(context, ws, message.id, outcome);
@@ -92,17 +93,20 @@ export function createSessionRouteHandlers(
         });
         return;
       }
-      const warnAtUsd = typeof params.warnAtUsd === "number" || params.warnAtUsd === null
-        ? params.warnAtUsd as number | null
-        : undefined;
-      const stopAtUsd = typeof params.stopAtUsd === "number" || params.stopAtUsd === null
-        ? params.stopAtUsd as number | null
-        : undefined;
+      const warnAtUsd =
+        typeof params.warnAtUsd === "number" || params.warnAtUsd === null
+          ? (params.warnAtUsd as number | null)
+          : undefined;
+      const stopAtUsd =
+        typeof params.stopAtUsd === "number" || params.stopAtUsd === null
+          ? (params.stopAtUsd as number | null)
+          : undefined;
       const outcome = await captureBindingOutcome(
         context,
         binding!,
         () => session.setSessionUsageBudget(warnAtUsd, stopAtUsd),
-        (event): event is Extract<ServerEvent, { type: "session_usage" }> => event.type === "session_usage",
+        (event): event is Extract<ServerEvent, { type: "session_usage" }> =>
+          event.type === "session_usage",
       );
       if (outcome.type === "error") {
         sendSessionMutationError(context, ws, message.id, outcome);
@@ -128,7 +132,8 @@ export function createSessionRouteHandlers(
         context,
         binding!,
         async () => await session.setConfig(configPatch),
-        (event): event is Extract<ServerEvent, { type: "session_config" }> => event.type === "session_config",
+        (event): event is Extract<ServerEvent, { type: "session_config" }> =>
+          event.type === "session_config",
       );
       if (outcome?.type === "error") {
         sendSessionMutationError(context, ws, message.id, outcome);
@@ -155,13 +160,16 @@ export function createSessionRouteHandlers(
       const outcome = await context.events.capture(
         binding!,
         () => session.getHarnessContext(),
-        (event): event is Extract<ServerEvent, { type: "harness_context" }> => event.type === "harness_context",
+        (event): event is Extract<ServerEvent, { type: "harness_context" }> =>
+          event.type === "harness_context",
       );
       context.jsonrpc.sendResult(ws, message.id, { event: outcome });
     },
 
     "cowork/session/harnessContext/set": async (ws, message) => {
-      const parsed = jsonRpcSessionRequestSchemas["cowork/session/harnessContext/set"].safeParse(message.params);
+      const parsed = jsonRpcSessionRequestSchemas["cowork/session/harnessContext/set"].safeParse(
+        message.params,
+      );
       if (!parsed.success) {
         const detail = parsed.error.issues[0]?.message;
         context.jsonrpc.sendError(ws, message.id, {
@@ -185,7 +193,8 @@ export function createSessionRouteHandlers(
       const outcome = await context.events.capture(
         binding!,
         () => session.setHarnessContext(harnessPayload),
-        (event): event is Extract<ServerEvent, { type: "harness_context" }> => event.type === "harness_context",
+        (event): event is Extract<ServerEvent, { type: "harness_context" }> =>
+          event.type === "harness_context",
       );
       context.jsonrpc.sendResult(ws, message.id, { event: outcome });
     },
@@ -194,9 +203,10 @@ export function createSessionRouteHandlers(
       const params = toJsonRpcParams(message.params);
       const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
-      const provider = typeof params.provider === "string"
-        ? params.provider as AgentConfig["provider"]
-        : undefined;
+      const provider =
+        typeof params.provider === "string"
+          ? (params.provider as AgentConfig["provider"])
+          : undefined;
       const model = typeof params.model === "string" ? params.model : undefined;
       const enableMcp = typeof params.enableMcp === "boolean" ? params.enableMcp : undefined;
       const configPatch = params.config as any;
@@ -214,36 +224,64 @@ export function createSessionRouteHandlers(
             }
             const outcome = await context.events.captureMutationOutcome(
               binding,
-              async () => await session.applySessionDefaults({
-                ...(provider !== undefined && model !== undefined ? { provider, model } : {}),
-                ...(enableMcp !== undefined ? { enableMcp } : {}),
-                ...(configPatch && typeof configPatch === "object" ? { config: configPatch } : {}),
-              }),
-              (event): event is Extract<ServerEvent, { type: "session_config" | "config_updated" | "session_settings" | "session_info" | "error" }> => (
-                event.type === "session_config"
-                || event.type === "config_updated"
-                || event.type === "session_settings"
-                || event.type === "session_info"
-                || event.type === "error"
-              ),
+              async () =>
+                await session.applySessionDefaults({
+                  ...(provider !== undefined && model !== undefined ? { provider, model } : {}),
+                  ...(enableMcp !== undefined ? { enableMcp } : {}),
+                  ...(configPatch && typeof configPatch === "object"
+                    ? { config: configPatch }
+                    : {}),
+                }),
+              (
+                event,
+              ): event is Extract<
+                ServerEvent,
+                {
+                  type:
+                    | "session_config"
+                    | "config_updated"
+                    | "session_settings"
+                    | "session_info"
+                    | "error";
+                }
+              > =>
+                event.type === "session_config" ||
+                event.type === "config_updated" ||
+                event.type === "session_settings" ||
+                event.type === "session_info" ||
+                event.type === "error",
             );
             return { outcome, fallback: session.getSessionConfigEvent() };
           })()
         : await context.workspaceControl.withSession(cwd, async (binding, session) => {
             const outcome = await context.events.captureMutationOutcome(
               binding,
-              async () => await session.applySessionDefaults({
-                ...(provider !== undefined && model !== undefined ? { provider, model } : {}),
-                ...(enableMcp !== undefined ? { enableMcp } : {}),
-                ...(configPatch && typeof configPatch === "object" ? { config: configPatch } : {}),
-              }),
-              (event): event is Extract<ServerEvent, { type: "session_config" | "config_updated" | "session_settings" | "session_info" | "error" }> => (
-                event.type === "session_config"
-                || event.type === "config_updated"
-                || event.type === "session_settings"
-                || event.type === "session_info"
-                || event.type === "error"
-              ),
+              async () =>
+                await session.applySessionDefaults({
+                  ...(provider !== undefined && model !== undefined ? { provider, model } : {}),
+                  ...(enableMcp !== undefined ? { enableMcp } : {}),
+                  ...(configPatch && typeof configPatch === "object"
+                    ? { config: configPatch }
+                    : {}),
+                }),
+              (
+                event,
+              ): event is Extract<
+                ServerEvent,
+                {
+                  type:
+                    | "session_config"
+                    | "config_updated"
+                    | "session_settings"
+                    | "session_info"
+                    | "error";
+                }
+              > =>
+                event.type === "session_config" ||
+                event.type === "config_updated" ||
+                event.type === "session_settings" ||
+                event.type === "session_info" ||
+                event.type === "error",
             );
             return { outcome, fallback: session.getSessionConfigEvent() };
           });
@@ -256,7 +294,9 @@ export function createSessionRouteHandlers(
     },
 
     "cowork/session/file/upload": async (ws, message) => {
-      const parsed = jsonRpcSessionRequestSchemas["cowork/session/file/upload"].safeParse(message.params);
+      const parsed = jsonRpcSessionRequestSchemas["cowork/session/file/upload"].safeParse(
+        message.params,
+      );
       if (!parsed.success) {
         const detail = parsed.error.issues[0]?.message;
         context.jsonrpc.sendError(ws, message.id, {
@@ -270,8 +310,10 @@ export function createSessionRouteHandlers(
       const outcome = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => await session.uploadFile(parsed.data.filename, parsed.data.contentBase64),
-        (event): event is Extract<ServerEvent, { type: "file_uploaded" }> => event.type === "file_uploaded",
+        async (session) =>
+          await session.uploadFile(parsed.data.filename, parsed.data.contentBase64),
+        (event): event is Extract<ServerEvent, { type: "file_uploaded" }> =>
+          event.type === "file_uploaded",
       );
       if (outcome.type === "error") {
         sendSessionMutationError(context, ws, message.id, outcome);
@@ -283,14 +325,14 @@ export function createSessionRouteHandlers(
     "cowork/session/delete": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
       const cwd = context.utils.resolveWorkspacePath(params, message.method);
-      const targetSessionId = typeof params.targetSessionId === "string" ? params.targetSessionId.trim() : "";
+      const targetSessionId =
+        typeof params.targetSessionId === "string" ? params.targetSessionId.trim() : "";
       const outcome = await captureWorkspaceControlOutcome(
         context,
         cwd,
         async (session) => await session.deleteSession(targetSessionId),
-        (event): event is Extract<ServerEvent, { type: "session_deleted" }> => (
-          event.type === "session_deleted" && event.targetSessionId === targetSessionId
-        ),
+        (event): event is Extract<ServerEvent, { type: "session_deleted" }> =>
+          event.type === "session_deleted" && event.targetSessionId === targetSessionId,
       );
       if (outcome.type === "error") {
         sendSessionMutationError(context, ws, message.id, outcome);

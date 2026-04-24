@@ -13,22 +13,25 @@ import {
 } from "../../src/providers/modelAdapter";
 import { makeConfig, makeTmpDirs, withEnv, writeJson } from "./helpers";
 
-async function writeCodexAuth(home: string, overrides: Partial<{
-  accessToken: string;
-  accountId: string;
-  expiresAtMs: number;
-}> = {}) {
+async function writeCodexAuth(
+  home: string,
+  overrides: Partial<{
+    accessToken: string;
+    accountId: string;
+    expiresAtMs: number;
+  }> = {},
+) {
   const authFile = path.join(home, ".cowork", "auth", "codex-cli", "auth.json");
   await writeJson(authFile, {
     version: 1,
     auth_mode: "chatgpt",
     issuer: "https://auth.openai.com",
     client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
-      tokens: {
-        access_token: overrides.accessToken ?? "codex-token",
-        refresh_token: "refresh-token",
-        expires_at: overrides.expiresAtMs ?? Date.now() + 3_600_000,
-      },
+    tokens: {
+      access_token: overrides.accessToken ?? "codex-token",
+      refresh_token: "refresh-token",
+      expires_at: overrides.expiresAtMs ?? Date.now() + 3_600_000,
+    },
     account: {
       account_id: overrides.accountId ?? "acct-123",
     },
@@ -111,11 +114,17 @@ describe("provider model adapters", () => {
               await withEnv("TOGETHER_API_KEY", undefined, async () => {
                 await withEnv("NVIDIA_API_KEY", undefined, async () => {
                   const openAiHeaders = await createOpenAiModelAdapter("gpt-5.2").config.headers();
-                  const googleHeaders = await createGoogleModelAdapter("gemini-3.1").config.headers();
-                  const anthropicHeaders = await createAnthropicModelAdapter("claude-opus-4-6").config.headers();
-                  const basetenHeaders = await createBasetenModelAdapter("moonshotai/Kimi-K2.5").config.headers();
-                  const togetherHeaders = await createTogetherModelAdapter("moonshotai/Kimi-K2.5").config.headers();
-                  const nvidiaHeaders = await createNvidiaModelAdapter("nvidia/nemotron-3-super-120b-a12b").config.headers();
+                  const googleHeaders =
+                    await createGoogleModelAdapter("gemini-3.1").config.headers();
+                  const anthropicHeaders =
+                    await createAnthropicModelAdapter("claude-opus-4-6").config.headers();
+                  const basetenHeaders =
+                    await createBasetenModelAdapter("moonshotai/Kimi-K2.5").config.headers();
+                  const togetherHeaders =
+                    await createTogetherModelAdapter("moonshotai/Kimi-K2.5").config.headers();
+                  const nvidiaHeaders = await createNvidiaModelAdapter(
+                    "nvidia/nemotron-3-super-120b-a12b",
+                  ).config.headers();
 
                   expect(openAiHeaders).toEqual({});
                   expect(googleHeaders).toEqual({});

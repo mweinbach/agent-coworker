@@ -1,8 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-
+import type { SessionSnapshot } from "../src/app/types";
 import { clearJsonRpcSocketOverride, setJsonRpcSocketOverride } from "./helpers/jsonRpcSocketMock";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
-import type { SessionSnapshot } from "../src/app/types";
 
 type Deferred<T> = {
   promise: Promise<T>;
@@ -102,51 +101,57 @@ class MockJsonRpcSocket {
   }
 }
 
-mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
-  appendTranscriptBatch: async () => {},
-  appendTranscriptEvent: async () => {},
-  deleteTranscript: async () => {},
-  listDirectory: async () => [],
-  loadState: async () => ({ version: 2, workspaces: [], threads: [] }),
-  pickWorkspaceDirectory: async () => pickedWorkspaceDirectory,
-  readTranscript: async () => [],
-  saveState: async (state: any) => {
-    savedStates.push(state);
-  },
-  startWorkspaceServer: async (opts: { workspaceId: string; workspacePath: string; yolo: boolean }) => {
-    startCalls.push(opts);
-    const deferred = createDeferred<{ url: string }>();
-    startDeferreds.push(deferred);
-    return await deferred.promise;
-  },
-  stopWorkspaceServer: async ({ workspaceId }: { workspaceId: string }) => {
-    stopCalls.push(workspaceId);
-  },
-  showContextMenu: async () => null,
-  windowMinimize: async () => {},
-  windowMaximize: async () => {},
-  windowClose: async () => {},
-  getPlatform: async () => "linux",
-  readFile: async () => "",
-  previewOSFile: async () => {},
-  openPath: async () => {},
-  openExternalUrl: async () => {},
-  revealPath: async () => {},
-  copyPath: async () => {},
-  createDirectory: async () => {},
-  renamePath: async () => {},
-  trashPath: async () => {},
-  confirmAction: async () => true,
-  showNotification: async () => true,
-  getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  getUpdateState: async () => MOCK_UPDATE_STATE,
-  checkForUpdates: async () => {},
-  quitAndInstallUpdate: async () => {},
-  onSystemAppearanceChanged: () => () => {},
-  onMenuCommand: () => () => {},
-  onUpdateStateChanged: () => () => {},
-}));
+mock.module("../src/lib/desktopCommands", () =>
+  createDesktopCommandsMock({
+    appendTranscriptBatch: async () => {},
+    appendTranscriptEvent: async () => {},
+    deleteTranscript: async () => {},
+    listDirectory: async () => [],
+    loadState: async () => ({ version: 2, workspaces: [], threads: [] }),
+    pickWorkspaceDirectory: async () => pickedWorkspaceDirectory,
+    readTranscript: async () => [],
+    saveState: async (state: any) => {
+      savedStates.push(state);
+    },
+    startWorkspaceServer: async (opts: {
+      workspaceId: string;
+      workspacePath: string;
+      yolo: boolean;
+    }) => {
+      startCalls.push(opts);
+      const deferred = createDeferred<{ url: string }>();
+      startDeferreds.push(deferred);
+      return await deferred.promise;
+    },
+    stopWorkspaceServer: async ({ workspaceId }: { workspaceId: string }) => {
+      stopCalls.push(workspaceId);
+    },
+    showContextMenu: async () => null,
+    windowMinimize: async () => {},
+    windowMaximize: async () => {},
+    windowClose: async () => {},
+    getPlatform: async () => "linux",
+    readFile: async () => "",
+    previewOSFile: async () => {},
+    openPath: async () => {},
+    openExternalUrl: async () => {},
+    revealPath: async () => {},
+    copyPath: async () => {},
+    createDirectory: async () => {},
+    renamePath: async () => {},
+    trashPath: async () => {},
+    confirmAction: async () => true,
+    showNotification: async () => true,
+    getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    getUpdateState: async () => MOCK_UPDATE_STATE,
+    checkForUpdates: async () => {},
+    quitAndInstallUpdate: async () => {},
+    onSystemAppearanceChanged: () => () => {},
+    onMenuCommand: () => () => {},
+    onUpdateStateChanged: () => () => {},
+  }),
+);
 
 mock.module("../src/lib/agentSocket", () => ({
   JsonRpcSocket: MockJsonRpcSocket,
@@ -255,7 +260,9 @@ describe("workspace startup flow", () => {
     const state = useAppStore.getState();
     expect(state.workspaces).toHaveLength(1);
     expect(state.workspaces[0]?.defaultToolOutputOverflowChars).toBeUndefined();
-    expect(state.workspaceRuntimeById[state.workspaces[0]!.id]?.serverUrl).toBe("ws://new-workspace");
+    expect(state.workspaceRuntimeById[state.workspaces[0]!.id]?.serverUrl).toBe(
+      "ws://new-workspace",
+    );
   });
 
   test("restartWorkspaceServer supersedes an in-flight startup and ignores stale completion", async () => {
@@ -424,13 +431,17 @@ describe("workspace startup flow", () => {
     expect(useAppStore.getState().view).toBe("skills");
     expect(useAppStore.getState().selectedWorkspaceId).toBe("ws-2");
     expect(useAppStore.getState().selectedThreadId).toBe("thread-ws-2");
-    expect(useAppStore.getState().threadRuntimeById["thread-ws-2"]?.feed.length ?? 0).toBeGreaterThan(0);
+    expect(
+      useAppStore.getState().threadRuntimeById["thread-ws-2"]?.feed.length ?? 0,
+    ).toBeGreaterThan(0);
 
     startDeferreds[0]?.resolve({ url: "ws://workspace-two" });
     await selectPromise;
 
     expect(useAppStore.getState().threadRuntimeById["thread-ws-2"]?.hydrating).toBe(false);
-    expect(useAppStore.getState().threadRuntimeById["thread-ws-2"]?.feed.length ?? 0).toBeGreaterThan(0);
+    expect(
+      useAppStore.getState().threadRuntimeById["thread-ws-2"]?.feed.length ?? 0,
+    ).toBeGreaterThan(0);
   });
 
   test("selectThread returns from skills to chat even when the thread is already active", async () => {

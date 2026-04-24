@@ -12,12 +12,9 @@ describe("extractTriggers", () => {
   });
 
   test("extracts triggers from metadata.triggers", () => {
-    expect(extractTriggers("test", { metadata: { triggers: "@home, #work, c++, node.js" } })).toEqual([
-      "@home",
-      "#work",
-      "c++",
-      "node.js",
-    ]);
+    expect(
+      extractTriggers("test", { metadata: { triggers: "@home, #work, c++, node.js" } }),
+    ).toEqual(["@home", "#work", "c++", "node.js"]);
   });
 
   test("filters empty values in trigger strings", () => {
@@ -25,7 +22,13 @@ describe("extractTriggers", () => {
   });
 
   test("returns defaults if no trigger metadata is provided (known skill)", () => {
-    expect(extractTriggers("pdf", { name: "pdf" })).toEqual(["pdf", ".pdf", "form", "merge", "split"]);
+    expect(extractTriggers("pdf", { name: "pdf" })).toEqual([
+      "pdf",
+      ".pdf",
+      "form",
+      "merge",
+      "split",
+    ]);
   });
 
   test("returns name as default if no trigger metadata is provided (unknown skill)", () => {

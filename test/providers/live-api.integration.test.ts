@@ -92,7 +92,9 @@ describe("live model API integration", () => {
       messages: [
         {
           role: "user",
-          content: [{ type: "text", text: "Use the ask tool once, then answer with exactly DONE." }],
+          content: [
+            { type: "text", text: "Use the ask tool once, then answer with exactly DONE." },
+          ],
         },
       ],
       log: () => {},
@@ -120,7 +122,9 @@ describe("live model API integration", () => {
       const result = await runTurn({
         config,
         system: "You are a concise test assistant.",
-        messages: [{ role: "user", content: [{ type: "text", text: "Reply with exactly ANTHROPIC_OK." }] }],
+        messages: [
+          { role: "user", content: [{ type: "text", text: "Reply with exactly ANTHROPIC_OK." }] },
+        ],
         log: () => {},
         askUser: async () => "",
         approveCommand: async () => false,
@@ -147,7 +151,9 @@ describe("live model API integration", () => {
     const result = await runTurn({
       config,
       system: "You are a concise test assistant.",
-      messages: [{ role: "user", content: [{ type: "text", text: "Reply with exactly GOOGLE_OK." }] }],
+      messages: [
+        { role: "user", content: [{ type: "text", text: "Reply with exactly GOOGLE_OK." }] },
+      ],
       log: () => {},
       askUser: async () => "",
       approveCommand: async () => false,
@@ -157,5 +163,4 @@ describe("live model API integration", () => {
     expect(result.text.toUpperCase()).toContain("GOOGLE_OK");
     expect(result.responseMessages.length).toBeGreaterThan(0);
   }, 120_000);
-
 });

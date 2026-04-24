@@ -5,9 +5,9 @@ import path from "node:path";
 
 import { SessionBackupManager } from "../src/server/sessionBackup";
 import { directoryByteSize } from "../src/server/sessionBackup/fileSystem";
+import { workspaceFingerprint } from "../src/server/sessionBackup/fingerprint";
 import { extractTarGz } from "../src/server/sessionBackup/tar";
 import { MODEL_SCRATCHPAD_DIRNAME } from "../src/shared/toolOutputOverflow";
-import { workspaceFingerprint } from "../src/server/sessionBackup/fingerprint";
 import { withGlobalTestLock } from "./shared/processLock";
 
 async function makeTmpWorkspace() {
@@ -138,7 +138,9 @@ describe("SessionBackupManager", () => {
       expect(checkpoint.patchBytes).toBeGreaterThan(0);
 
       expect(await fileExists(path.join(backupDir, "checkpoints", checkpoint.id))).toBe(true);
-      expect(await fileExists(path.join(backupDir, "checkpoints", `${checkpoint.id}.tar.gz`))).toBe(false);
+      expect(await fileExists(path.join(backupDir, "checkpoints", `${checkpoint.id}.tar.gz`))).toBe(
+        false,
+      );
 
       await fs.writeFile(path.join(workspace, "a.txt"), "three\n", "utf-8");
       await fs.writeFile(path.join(workspace, "new.txt"), "new\n", "utf-8");
@@ -187,7 +189,11 @@ describe("SessionBackupManager", () => {
     const { workspace } = await makeTmpWorkspace();
     await fs.writeFile(path.join(workspace, "tracked.txt"), "track\n", "utf-8");
     await fs.mkdir(path.join(workspace, MODEL_SCRATCHPAD_DIRNAME), { recursive: true });
-    await fs.writeFile(path.join(workspace, MODEL_SCRATCHPAD_DIRNAME, "root.txt"), "ignore\n", "utf-8");
+    await fs.writeFile(
+      path.join(workspace, MODEL_SCRATCHPAD_DIRNAME, "root.txt"),
+      "ignore\n",
+      "utf-8",
+    );
 
     const nestedScratchpadDir = path.join(workspace, "subdir", MODEL_SCRATCHPAD_DIRNAME);
     await fs.mkdir(nestedScratchpadDir, { recursive: true });
@@ -200,7 +206,11 @@ describe("SessionBackupManager", () => {
     const { home, workspace } = await makeTmpWorkspace();
     await fs.writeFile(path.join(workspace, "tracked.txt"), "original\n", "utf-8");
     await fs.mkdir(path.join(workspace, ".ModelScratchpad"), { recursive: true });
-    await fs.writeFile(path.join(workspace, ".ModelScratchpad", "spill.txt"), "scratch-v1\n", "utf-8");
+    await fs.writeFile(
+      path.join(workspace, ".ModelScratchpad", "spill.txt"),
+      "scratch-v1\n",
+      "utf-8",
+    );
 
     await withMissingPathEnv(workspace, async () => {
       const manager = await SessionBackupManager.create({
@@ -215,12 +225,18 @@ describe("SessionBackupManager", () => {
       expect(await fileExists(path.join(backupDir, "original", ".ModelScratchpad"))).toBe(false);
 
       await fs.writeFile(path.join(workspace, "tracked.txt"), "mutated\n", "utf-8");
-      await fs.writeFile(path.join(workspace, ".ModelScratchpad", "spill.txt"), "scratch-v2\n", "utf-8");
+      await fs.writeFile(
+        path.join(workspace, ".ModelScratchpad", "spill.txt"),
+        "scratch-v2\n",
+        "utf-8",
+      );
 
       await manager.restoreOriginal();
 
       expect(await fs.readFile(path.join(workspace, "tracked.txt"), "utf-8")).toBe("original\n");
-      expect(await fs.readFile(path.join(workspace, ".ModelScratchpad", "spill.txt"), "utf-8")).toBe("scratch-v2\n");
+      expect(
+        await fs.readFile(path.join(workspace, ".ModelScratchpad", "spill.txt"), "utf-8"),
+      ).toBe("scratch-v2\n");
     });
   });
 
@@ -242,9 +258,12 @@ describe("SessionBackupManager", () => {
       const backupDir = manager.getPublicState().backupDirectory;
       if (!backupDir) throw new Error("Expected backup directory");
 
-      expect(await fs.readFile(path.join(backupDir, "original", "subdir", MODEL_SCRATCHPAD_DIRNAME, "spill.txt"), "utf-8")).toBe(
-        "nested-v1\n"
-      );
+      expect(
+        await fs.readFile(
+          path.join(backupDir, "original", "subdir", MODEL_SCRATCHPAD_DIRNAME, "spill.txt"),
+          "utf-8",
+        ),
+      ).toBe("nested-v1\n");
 
       await fs.writeFile(path.join(workspace, "tracked.txt"), "mutated\n", "utf-8");
       await fs.writeFile(nestedScratchpadFile, "nested-v2\n", "utf-8");
@@ -260,7 +279,11 @@ describe("SessionBackupManager", () => {
     const { home, workspace } = await makeTmpWorkspace();
     await fs.writeFile(path.join(workspace, "tracked.txt"), "original\n", "utf-8");
     await fs.mkdir(path.join(workspace, MODEL_SCRATCHPAD_DIRNAME), { recursive: true });
-    await fs.writeFile(path.join(workspace, MODEL_SCRATCHPAD_DIRNAME, "spill.txt"), "scratch\n", "utf-8");
+    await fs.writeFile(
+      path.join(workspace, MODEL_SCRATCHPAD_DIRNAME, "spill.txt"),
+      "scratch\n",
+      "utf-8",
+    );
 
     const manager = await SessionBackupManager.create({
       sessionId: crypto.randomUUID(),
@@ -298,8 +321,14 @@ describe("SessionBackupManager", () => {
     const checkpoint = await manager.createCheckpoint("auto");
     expect(checkpoint.changed).toBe(false);
     expect(checkpoint.patchBytes).toBe(0);
-    expect(await fileExists(path.join(backupState.backupDirectory, "checkpoints", `${checkpoint.id}.tar.gz`))).toBe(false);
-    expect(await fileExists(path.join(backupState.backupDirectory, "checkpoints", checkpoint.id))).toBe(false);
+    expect(
+      await fileExists(
+        path.join(backupState.backupDirectory, "checkpoints", `${checkpoint.id}.tar.gz`),
+      ),
+    ).toBe(false);
+    expect(
+      await fileExists(path.join(backupState.backupDirectory, "checkpoints", checkpoint.id)),
+    ).toBe(false);
 
     await fs.writeFile(path.join(workspace, "a.txt"), "mutated\n", "utf-8");
     await manager.restoreCheckpoint(checkpoint.id);
@@ -346,15 +375,31 @@ describe("SessionBackupManager", () => {
 
     const backupState = manager.getPublicState();
     if (!backupState.backupDirectory) throw new Error("Expected backup directory");
-    const sharedTarPath = path.join(backupState.backupDirectory, "checkpoints", `${changedCheckpoint.id}.tar.gz`);
-    const sharedDirPath = path.join(backupState.backupDirectory, "checkpoints", changedCheckpoint.id);
+    const sharedTarPath = path.join(
+      backupState.backupDirectory,
+      "checkpoints",
+      `${changedCheckpoint.id}.tar.gz`,
+    );
+    const sharedDirPath = path.join(
+      backupState.backupDirectory,
+      "checkpoints",
+      changedCheckpoint.id,
+    );
     expect((await fileExists(sharedTarPath)) || (await fileExists(sharedDirPath))).toBe(true);
 
     const unchangedCheckpoint = await manager.createCheckpoint("auto");
     expect(unchangedCheckpoint.changed).toBe(false);
     expect(unchangedCheckpoint.patchBytes).toBe(0);
-    expect(await fileExists(path.join(backupState.backupDirectory, "checkpoints", `${unchangedCheckpoint.id}.tar.gz`))).toBe(false);
-    expect(await fileExists(path.join(backupState.backupDirectory, "checkpoints", unchangedCheckpoint.id))).toBe(false);
+    expect(
+      await fileExists(
+        path.join(backupState.backupDirectory, "checkpoints", `${unchangedCheckpoint.id}.tar.gz`),
+      ),
+    ).toBe(false);
+    expect(
+      await fileExists(
+        path.join(backupState.backupDirectory, "checkpoints", unchangedCheckpoint.id),
+      ),
+    ).toBe(false);
 
     const removedChanged = await manager.deleteCheckpoint(changedCheckpoint.id);
     expect(removedChanged).toBe(true);
@@ -507,9 +552,14 @@ describe("SessionBackupManager", () => {
     }
 
     const backupsRoot = path.join(home, ".cowork", "session-backups");
-    await SessionBackupManager.pruneClosedSessions(backupsRoot, { maxClosedSessions: 1, maxClosedAgeDays: 365 });
+    await SessionBackupManager.pruneClosedSessions(backupsRoot, {
+      maxClosedSessions: 1,
+      maxClosedAgeDays: 365,
+    });
 
-    const existing = await Promise.all(ids.map(async (id) => ({ id, exists: await fileExists(path.join(backupsRoot, id)) })));
+    const existing = await Promise.all(
+      ids.map(async (id) => ({ id, exists: await fileExists(path.join(backupsRoot, id)) })),
+    );
     expect(existing.filter((x) => x.exists).length).toBe(1);
   });
 });

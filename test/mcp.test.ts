@@ -1,22 +1,25 @@
-import { describe, expect, test, mock, beforeEach } from "bun:test";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
-import type { AgentConfig, MCPServerConfig } from "../src/types";
 import {
   DEFAULT_MCP_SERVERS_DOCUMENT,
   loadMCPServers,
   loadMCPTools,
   parseMCPServersDocument,
-  readProjectMCPServersDocument,
   readMCPServersSnapshot,
+  readProjectMCPServersDocument,
   readWorkspaceMCPServersDocument,
   writeProjectMCPServersDocument,
   writeWorkspaceMCPServersDocument,
 } from "../src/mcp";
+import type { AgentConfig, MCPServerConfig } from "../src/types";
 
-function makeConfig(workspaceRoot: string, userHome: string, builtInConfigDir: string): AgentConfig {
+function makeConfig(
+  workspaceRoot: string,
+  userHome: string,
+  builtInConfigDir: string,
+): AgentConfig {
   return {
     provider: "google",
     model: "gemini-3-flash-preview",
@@ -75,7 +78,13 @@ describe("mcp parsing", () => {
     expect(() =>
       parseMCPServersDocument(
         JSON.stringify({
-          servers: [{ name: "bad", transport: { type: "http", url: "https://x" }, auth: { type: "oauth", oauthMode: "bad" } }],
+          servers: [
+            {
+              name: "bad",
+              transport: { type: "http", url: "https://x" },
+              auth: { type: "oauth", oauthMode: "bad" },
+            },
+          ],
         }),
       ),
     ).toThrow("oauthMode");
@@ -106,9 +115,16 @@ describe("workspace mcp document", () => {
     const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-doc-write-builtin-"));
     try {
       const config = makeConfig(tmpWorkspace, tmpHome, builtInConfigDir);
-      const raw = JSON.stringify({ servers: [{ name: "local", transport: { type: "stdio", command: "echo" } }] }, null, 2);
+      const raw = JSON.stringify(
+        { servers: [{ name: "local", transport: { type: "stdio", command: "echo" } }] },
+        null,
+        2,
+      );
       await writeWorkspaceMCPServersDocument(config, raw);
-      const persisted = await fs.readFile(path.join(tmpWorkspace, ".cowork", "mcp-servers.json"), "utf-8");
+      const persisted = await fs.readFile(
+        path.join(tmpWorkspace, ".cowork", "mcp-servers.json"),
+        "utf-8",
+      );
       expect(persisted).toBe(`${raw}\n`);
     } finally {
       await fs.rm(tmpWorkspace, { recursive: true, force: true });
@@ -118,12 +134,20 @@ describe("workspace mcp document", () => {
   });
 
   test("writeProjectMCPServersDocument writes to the .cowork path used by readProjectMCPServersDocument", async () => {
-    const tmpWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-doc-project-write-workspace-"));
+    const tmpWorkspace = await fs.mkdtemp(
+      path.join(os.tmpdir(), "mcp-doc-project-write-workspace-"),
+    );
     const tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-doc-project-write-home-"));
-    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-doc-project-write-builtin-"));
+    const builtInConfigDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "mcp-doc-project-write-builtin-"),
+    );
     try {
       const config = makeConfig(tmpWorkspace, tmpHome, builtInConfigDir);
-      const raw = JSON.stringify({ servers: [{ name: "project", transport: { type: "stdio", command: "echo" } }] }, null, 2);
+      const raw = JSON.stringify(
+        { servers: [{ name: "project", transport: { type: "stdio", command: "echo" } }] },
+        null,
+        2,
+      );
       await writeProjectMCPServersDocument(config.projectAgentDir, raw);
 
       const workspaceFile = path.join(tmpWorkspace, ".cowork", "mcp-servers.json");
@@ -155,16 +179,25 @@ describe("mcp layered snapshot", () => {
       const config = makeConfig(tmpWorkspace, tmpHome, builtInConfigDir);
 
       await writeJson(path.join(builtInConfigDir, "mcp-servers.json"), {
-        servers: [{ name: "shared", transport: { type: "stdio", command: "system" } }, { name: "sys", transport: { type: "stdio", command: "sys" } }],
+        servers: [
+          { name: "shared", transport: { type: "stdio", command: "system" } },
+          { name: "sys", transport: { type: "stdio", command: "sys" } },
+        ],
       });
       await writeJson(path.join(tmpHome, ".cowork", "config", "mcp-servers.json"), {
-        servers: [{ name: "shared", transport: { type: "stdio", command: "user" } }, { name: "user", transport: { type: "stdio", command: "user-only" } }],
+        servers: [
+          { name: "shared", transport: { type: "stdio", command: "user" } },
+          { name: "user", transport: { type: "stdio", command: "user-only" } },
+        ],
       });
       await writeJson(path.join(tmpWorkspace, ".agent", "mcp-servers.json"), {
         servers: [{ name: "legacy-ws", transport: { type: "stdio", command: "legacy" } }],
       });
       await writeJson(path.join(tmpWorkspace, ".cowork", "mcp-servers.json"), {
-        servers: [{ name: "shared", transport: { type: "stdio", command: "workspace" } }, { name: "workspace", transport: { type: "stdio", command: "workspace-only" } }],
+        servers: [
+          { name: "shared", transport: { type: "stdio", command: "workspace" } },
+          { name: "workspace", transport: { type: "stdio", command: "workspace-only" } },
+        ],
       });
 
       const snapshot = await readMCPServersSnapshot(config);
@@ -254,7 +287,11 @@ describe("runtime auth injection", () => {
         servers: [
           {
             name: "shadowed",
-            transport: { type: "http", url: "https://workspace.example.com", headers: { "x-base": "workspace" } },
+            transport: {
+              type: "http",
+              url: "https://workspace.example.com",
+              headers: { "x-base": "workspace" },
+            },
             auth: { type: "api_key", headerName: "Authorization", prefix: "Bearer" },
           },
         ],
@@ -335,9 +372,13 @@ describe("runtime auth injection", () => {
   });
 
   test("loadMCPServers keeps oauth provider when access token is expired but refreshable", async () => {
-    const tmpWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-runtime-oauth-refresh-workspace-"));
+    const tmpWorkspace = await fs.mkdtemp(
+      path.join(os.tmpdir(), "mcp-runtime-oauth-refresh-workspace-"),
+    );
     const tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-runtime-oauth-refresh-home-"));
-    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-runtime-oauth-refresh-builtin-"));
+    const builtInConfigDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "mcp-runtime-oauth-refresh-builtin-"),
+    );
 
     try {
       const config = makeConfig(tmpWorkspace, tmpHome, builtInConfigDir);
@@ -392,14 +433,18 @@ describe("loadMCPTools", () => {
   });
 
   test("prefixes tool names by server", async () => {
-    const servers: MCPServerConfig[] = [{ name: "local", transport: { type: "stdio", command: "echo" } }];
+    const servers: MCPServerConfig[] = [
+      { name: "local", transport: { type: "stdio", command: "echo" } },
+    ];
     const result = await loadMCPTools(servers, { createClient: mockCreateMCPClient as any });
     expect(result.tools).toHaveProperty("mcp__local__ping");
   });
 
   test("collects errors for optional server failures", async () => {
     mockCreateMCPClient.mockRejectedValue(new Error("refused"));
-    const servers: MCPServerConfig[] = [{ name: "flaky", transport: { type: "stdio", command: "echo" }, retries: 0 }];
+    const servers: MCPServerConfig[] = [
+      { name: "flaky", transport: { type: "stdio", command: "echo" }, retries: 0 },
+    ];
     const result = await loadMCPTools(servers, { createClient: mockCreateMCPClient as any });
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]).toContain("flaky");

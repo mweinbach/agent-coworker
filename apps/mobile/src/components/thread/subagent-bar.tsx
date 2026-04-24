@@ -13,7 +13,10 @@ type SubagentBarProps = {
   agents: AgentEntry[];
 };
 
-function agentStateColor(state: string | null | undefined, theme: ReturnType<typeof useAppTheme>): string {
+function agentStateColor(
+  state: string | null | undefined,
+  theme: ReturnType<typeof useAppTheme>,
+): string {
   switch (state) {
     case "running":
       return theme.success;

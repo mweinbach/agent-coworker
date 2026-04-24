@@ -1,8 +1,8 @@
-import { BrowserWindow, Notification, dialog, nativeTheme, shell } from "electron";
+import { BrowserWindow, dialog, Notification, nativeTheme, shell } from "electron";
 
 import {
-  DESKTOP_IPC_CHANNELS,
   type ConfirmActionInput,
+  DESKTOP_IPC_CHANNELS,
   type DesktopNotificationInput,
   type OpenExternalUrlInput,
   type SetWindowAppearanceInput,
@@ -20,35 +20,51 @@ import type { DesktopIpcModuleContext } from "./types";
 export function registerSystemIpc(context: DesktopIpcModuleContext): void {
   const { handleDesktopInvoke, parseWithSchema } = context;
 
-  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.confirmAction, async (event, args: ConfirmActionInput) => {
-    const input = parseWithSchema(confirmActionInputSchema, args, "confirmAction options");
-    const ownerWindow = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getFocusedWindow() ?? undefined;
-    const built = buildConfirmDialog(input);
+  handleDesktopInvoke(
+    DESKTOP_IPC_CHANNELS.confirmAction,
+    async (event, args: ConfirmActionInput) => {
+      const input = parseWithSchema(confirmActionInputSchema, args, "confirmAction options");
+      const ownerWindow =
+        BrowserWindow.fromWebContents(event.sender) ??
+        BrowserWindow.getFocusedWindow() ??
+        undefined;
+      const built = buildConfirmDialog(input);
 
-    const response = ownerWindow
-      ? await dialog.showMessageBox(ownerWindow, built.options)
-      : await dialog.showMessageBox(built.options);
-    return response.response === built.confirmButtonIndex;
-  });
+      const response = ownerWindow
+        ? await dialog.showMessageBox(ownerWindow, built.options)
+        : await dialog.showMessageBox(built.options);
+      return response.response === built.confirmButtonIndex;
+    },
+  );
 
-  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.showNotification, async (_event, args: DesktopNotificationInput) => {
-    const input = parseWithSchema(desktopNotificationInputSchema, args, "showNotification options");
-    if (!Notification.isSupported()) {
-      return false;
-    }
-    const notification = new Notification({
-      title: input.title.trim(),
-      body: input.body?.trim(),
-      silent: input.silent,
-    });
-    notification.show();
-    return true;
-  });
+  handleDesktopInvoke(
+    DESKTOP_IPC_CHANNELS.showNotification,
+    async (_event, args: DesktopNotificationInput) => {
+      const input = parseWithSchema(
+        desktopNotificationInputSchema,
+        args,
+        "showNotification options",
+      );
+      if (!Notification.isSupported()) {
+        return false;
+      }
+      const notification = new Notification({
+        title: input.title.trim(),
+        body: input.body?.trim(),
+        silent: input.silent,
+      });
+      notification.show();
+      return true;
+    },
+  );
 
-  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.openExternalUrl, async (_event, args: OpenExternalUrlInput) => {
-    const input = parseWithSchema(openExternalUrlInputSchema, args, "openExternalUrl options");
-    await shell.openExternal(input.url);
-  });
+  handleDesktopInvoke(
+    DESKTOP_IPC_CHANNELS.openExternalUrl,
+    async (_event, args: OpenExternalUrlInput) => {
+      const input = parseWithSchema(openExternalUrlInputSchema, args, "openExternalUrl options");
+      await shell.openExternal(input.url);
+    },
+  );
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.getUpdateState, async () => {
     return context.deps.updater.getState();
@@ -66,15 +82,23 @@ export function registerSystemIpc(context: DesktopIpcModuleContext): void {
     return getSystemAppearanceSnapshot();
   });
 
-  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.setWindowAppearance, async (event, args: SetWindowAppearanceInput) => {
-    const input = parseWithSchema(setWindowAppearanceInputSchema, args, "setWindowAppearance options");
-    const ownerWindow = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getFocusedWindow();
-    if (!ownerWindow) {
-      if (input.themeSource) {
-        nativeTheme.themeSource = input.themeSource;
+  handleDesktopInvoke(
+    DESKTOP_IPC_CHANNELS.setWindowAppearance,
+    async (event, args: SetWindowAppearanceInput) => {
+      const input = parseWithSchema(
+        setWindowAppearanceInputSchema,
+        args,
+        "setWindowAppearance options",
+      );
+      const ownerWindow =
+        BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getFocusedWindow();
+      if (!ownerWindow) {
+        if (input.themeSource) {
+          nativeTheme.themeSource = input.themeSource;
+        }
+        return getSystemAppearanceSnapshot();
       }
-      return getSystemAppearanceSnapshot();
-    }
-    return applyWindowAppearance(ownerWindow, input);
-  });
+      return applyWindowAppearance(ownerWindow, input);
+    },
+  );
 }

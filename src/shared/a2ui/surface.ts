@@ -1,10 +1,5 @@
-import {
-  type A2uiComponent,
-  type A2uiEnvelope,
-  envelopeKind,
-  envelopeSurfaceId,
-} from "./protocol";
 import { setByPointer, splitPointer } from "./expressions";
+import { type A2uiComponent, type A2uiEnvelope, envelopeKind, envelopeSurfaceId } from "./protocol";
 
 /**
  * Canonical resolved state for a single A2UI surface. Server + client both

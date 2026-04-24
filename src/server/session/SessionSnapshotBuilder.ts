@@ -1,5 +1,5 @@
-import type { AgentExecutionState } from "../../shared/agents";
 import type { HarnessContextStore } from "../../harness/contextStore";
+import type { AgentExecutionState } from "../../shared/agents";
 import type { PersistedSessionMutation } from "../sessionDb";
 import type { PersistedSessionSnapshot } from "../sessionStore";
 import type { SessionRuntimeState } from "./SessionContext";
@@ -13,7 +13,7 @@ export class SessionSnapshotBuilder {
       getEnableMcp: () => boolean;
       hasPendingAsk: () => boolean;
       hasPendingApproval: () => boolean;
-    }
+    },
   ) {}
 
   private resolvePersistedLastMessagePreview(): string | null {
@@ -75,8 +75,12 @@ export class SessionSnapshotBuilder {
         enableMcp: this.opts.getEnableMcp(),
         backupsEnabledOverride: this.opts.state.backupsEnabledOverride,
         workingDirectory: this.opts.state.config.workingDirectory,
-        ...(this.opts.state.config.outputDirectory ? { outputDirectory: this.opts.state.config.outputDirectory } : {}),
-        ...(this.opts.state.config.uploadsDirectory ? { uploadsDirectory: this.opts.state.config.uploadsDirectory } : {}),
+        ...(this.opts.state.config.outputDirectory
+          ? { outputDirectory: this.opts.state.config.outputDirectory }
+          : {}),
+        ...(this.opts.state.config.uploadsDirectory
+          ? { uploadsDirectory: this.opts.state.config.uploadsDirectory }
+          : {}),
         ...(this.opts.state.config.providerOptions !== undefined
           ? { providerOptions: structuredClone(this.opts.state.config.providerOptions) }
           : {}),
@@ -116,8 +120,12 @@ export class SessionSnapshotBuilder {
       provider: this.opts.state.config.provider,
       model: this.opts.state.config.model,
       workingDirectory: this.opts.state.config.workingDirectory,
-      ...(this.opts.state.config.outputDirectory ? { outputDirectory: this.opts.state.config.outputDirectory } : {}),
-      ...(this.opts.state.config.uploadsDirectory ? { uploadsDirectory: this.opts.state.config.uploadsDirectory } : {}),
+      ...(this.opts.state.config.outputDirectory
+        ? { outputDirectory: this.opts.state.config.outputDirectory }
+        : {}),
+      ...(this.opts.state.config.uploadsDirectory
+        ? { uploadsDirectory: this.opts.state.config.uploadsDirectory }
+        : {}),
       ...(this.opts.state.config.providerOptions !== undefined
         ? { providerOptions: structuredClone(this.opts.state.config.providerOptions) }
         : {}),

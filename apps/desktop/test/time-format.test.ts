@@ -32,4 +32,3 @@ describe("formatRelativeAge", () => {
     expect(formatRelativeAge("not-a-date", now)).toBe("");
   });
 });
-

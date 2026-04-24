@@ -1,12 +1,14 @@
-import { describe, test, expect } from "bun:test";
-
-import { A2uiSurfaceManager } from "../../src/server/session/A2uiSurfaceManager";
+import { describe, expect, test } from "bun:test";
 import { createConversationProjection } from "../../src/server/projection/conversationProjection";
-import { createA2uiTool } from "../../src/tools/a2ui";
 import type { ServerEvent } from "../../src/server/protocol";
+import { A2uiSurfaceManager } from "../../src/server/session/A2uiSurfaceManager";
 import type { ProjectedItem } from "../../src/shared/projectedItems";
-import { applyProjectedItemCompleted, applyProjectedItemStarted } from "../../src/shared/projectedItems";
+import {
+  applyProjectedItemCompleted,
+  applyProjectedItemStarted,
+} from "../../src/shared/projectedItems";
 import type { SessionFeedItem } from "../../src/shared/sessionSnapshot";
+import { createA2uiTool } from "../../src/tools/a2ui";
 import type { ToolContext } from "../../src/tools/context";
 import type { AgentConfig } from "../../src/types";
 
@@ -67,9 +69,7 @@ describe("A2UI end-to-end (manager → projection → feed)", () => {
             root: {
               id: "root",
               type: "Column",
-              children: [
-                { id: "title", type: "Heading", props: { text: "Hello" } },
-              ],
+              children: [{ id: "title", type: "Heading", props: { text: "Hello" } }],
             },
             dataModel: { message: "Welcome" },
           },
@@ -106,21 +106,25 @@ describe("A2UI end-to-end (manager → projection → feed)", () => {
 
     const surfaces = feed.filter((item) => item.kind === "ui_surface");
     expect(surfaces).toHaveLength(2);
-    const updated = surfaces[surfaces.length - 1]! as Extract<SessionFeedItem, { kind: "ui_surface" }>;
+    const updated = surfaces[surfaces.length - 1]! as Extract<
+      SessionFeedItem,
+      { kind: "ui_surface" }
+    >;
     expect(updated.revision).toBe(2);
     expect((updated.dataModel as Record<string, unknown>).message).toBe("Hi there");
 
     // deleteSurface also appends — it becomes a tombstone in the transcript.
     await tool.execute({
-      envelopes: [
-        { version: "v0.9", deleteSurface: { surfaceId: "greeter" } },
-      ],
+      envelopes: [{ version: "v0.9", deleteSurface: { surfaceId: "greeter" } }],
     });
     projection.handle(events.at(-1)!);
 
     const finalSurfaces = feed.filter((item) => item.kind === "ui_surface");
     expect(finalSurfaces).toHaveLength(3);
-    const tombstone = finalSurfaces[finalSurfaces.length - 1]! as Extract<SessionFeedItem, { kind: "ui_surface" }>;
+    const tombstone = finalSurfaces[finalSurfaces.length - 1]! as Extract<
+      SessionFeedItem,
+      { kind: "ui_surface" }
+    >;
     expect(tombstone.deleted).toBe(true);
   });
 });

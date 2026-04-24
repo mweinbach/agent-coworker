@@ -1,4 +1,4 @@
-import { describe, expect, test, mock } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -12,8 +12,8 @@ import {
   logoutProviderAuth,
   requiresProviderAuthCode,
   resolveProviderAuthMethod,
-  setProviderConfig,
   setProviderApiKey,
+  setProviderConfig,
 } from "../../src/providers/authRegistry";
 
 describe("providers/authRegistry", () => {
@@ -250,18 +250,22 @@ describe("providers/authRegistry", () => {
     const paths = getAiCoworkerPaths({ homedir: home });
     const now = new Date().toISOString();
     await fs.mkdir(path.dirname(paths.connectionsFile), { recursive: true });
-    await fs.writeFile(paths.connectionsFile, JSON.stringify({
-      version: 1,
-      updatedAt: now,
-      services: {
-        "opencode-go": {
-          service: "opencode-go",
-          mode: "api_key",
-          apiKey: "opencode-go-key-1234",
-          updatedAt: now,
+    await fs.writeFile(
+      paths.connectionsFile,
+      JSON.stringify({
+        version: 1,
+        updatedAt: now,
+        services: {
+          "opencode-go": {
+            service: "opencode-go",
+            mode: "api_key",
+            apiKey: "opencode-go-key-1234",
+            updatedAt: now,
+          },
         },
-      },
-    }), "utf-8");
+      }),
+      "utf-8",
+    );
 
     const connect = mock(async (opts: any) => ({
       ok: true as const,
@@ -318,24 +322,28 @@ describe("providers/authRegistry", () => {
     const paths = getAiCoworkerPaths({ homedir: home });
     const now = new Date().toISOString();
     await fs.mkdir(path.dirname(paths.connectionsFile), { recursive: true });
-    await fs.writeFile(paths.connectionsFile, JSON.stringify({
-      version: 1,
-      updatedAt: now,
-      services: {
-        "opencode-go": {
-          service: "opencode-go",
-          mode: "api_key",
-          apiKey: "opencode-go-key-1234",
-          updatedAt: now,
+    await fs.writeFile(
+      paths.connectionsFile,
+      JSON.stringify({
+        version: 1,
+        updatedAt: now,
+        services: {
+          "opencode-go": {
+            service: "opencode-go",
+            mode: "api_key",
+            apiKey: "opencode-go-key-1234",
+            updatedAt: now,
+          },
+          "opencode-zen": {
+            service: "opencode-zen",
+            mode: "api_key",
+            apiKey: "opencode-zen-key-5678",
+            updatedAt: now,
+          },
         },
-        "opencode-zen": {
-          service: "opencode-zen",
-          mode: "api_key",
-          apiKey: "opencode-zen-key-5678",
-          updatedAt: now,
-        },
-      },
-    }), "utf-8");
+      }),
+      "utf-8",
+    );
 
     const connect = mock(async (opts: any) => ({
       ok: true as const,
@@ -384,17 +392,21 @@ describe("providers/authRegistry", () => {
     const paths = getAiCoworkerPaths({ homedir: home });
     const now = new Date().toISOString();
     await fs.mkdir(path.dirname(paths.connectionsFile), { recursive: true });
-    await fs.writeFile(paths.connectionsFile, JSON.stringify({
-      version: 1,
-      updatedAt: now,
-      services: {
-        openai: {
-          service: "openai",
-          mode: "oauth_pending",
-          updatedAt: now,
+    await fs.writeFile(
+      paths.connectionsFile,
+      JSON.stringify({
+        version: 1,
+        updatedAt: now,
+        services: {
+          openai: {
+            service: "openai",
+            mode: "oauth_pending",
+            updatedAt: now,
+          },
         },
-      },
-    }), "utf-8");
+      }),
+      "utf-8",
+    );
 
     const connect = mock(async () => ({
       ok: true as const,

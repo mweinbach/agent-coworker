@@ -19,13 +19,14 @@ function normalizeHost(hostname: string): string {
 
 function isPrivateIpv4(host: string): boolean {
   const parts = host.split(".").map((p) => Number(p));
-  if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return false;
+  if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255))
+    return false;
 
   const [a, b] = parts;
   if (a === 0) return true;
   if (a === 10) return true;
   if (a === 127) return true;
-  if (a === 100 && b >= 64 && b <= 127) return true;   // CGNAT 100.64.0.0/10
+  if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT 100.64.0.0/10
   if (a === 169 && b === 254) return true;
   if (a === 172 && b >= 16 && b <= 31) return true;
   if (a === 192 && b === 168) return true;
@@ -77,8 +78,8 @@ export type SafeWebResolution = {
   addresses: LookupResult[];
 };
 
-let dnsLookup: DnsLookup = async (hostname: string) => lookup(hostname, { all: true, verbatim: true });
-
+let dnsLookup: DnsLookup = async (hostname: string) =>
+  lookup(hostname, { all: true, verbatim: true });
 
 async function resolvePublicAddresses(hostname: string): Promise<LookupResult[]> {
   const host = normalizeHost(hostname);
@@ -139,7 +140,9 @@ function expandIpv6Parts(segment: string | undefined): number[] | null {
 }
 
 function isIpv4MappedIpv6(hextets: number[]): boolean {
-  return hextets.length === 8 && hextets.slice(0, 5).every((part) => part === 0) && hextets[5] === 0xffff;
+  return (
+    hextets.length === 8 && hextets.slice(0, 5).every((part) => part === 0) && hextets[5] === 0xffff
+  );
 }
 
 export async function assertSafeWebUrl(urlRaw: string): Promise<URL> {

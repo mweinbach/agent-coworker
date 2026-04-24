@@ -2,10 +2,9 @@ import { afterAll, describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
-import type { PersistedSessionRecord } from "../src/server/sessionDb";
 import { SessionBackupManager } from "../src/server/sessionBackup";
 import { readMetadata } from "../src/server/sessionBackup/metadata";
+import type { PersistedSessionRecord } from "../src/server/sessionDb";
 import { WorkspaceBackupService } from "../src/server/workspaceBackups";
 
 const tmpRoots: string[] = [];
@@ -22,7 +21,10 @@ async function makeTmpWorkspaces() {
   return { root, home, workspaceA, workspaceB };
 }
 
-function makeSessionRecord(sessionId: string, status: PersistedSessionRecord["status"]): PersistedSessionRecord {
+function makeSessionRecord(
+  sessionId: string,
+  status: PersistedSessionRecord["status"],
+): PersistedSessionRecord {
   return {
     sessionId,
     sessionKind: "root",
@@ -79,7 +81,9 @@ function makeService(opts: {
 }
 
 afterAll(async () => {
-  await Promise.all(tmpRoots.map((root) => fs.rm(root, { recursive: true, force: true }).catch(() => {})));
+  await Promise.all(
+    tmpRoots.map((root) => fs.rm(root, { recursive: true, force: true }).catch(() => {})),
+  );
 });
 
 describe("WorkspaceBackupService", () => {
@@ -198,9 +202,15 @@ describe("WorkspaceBackupService", () => {
       },
     });
 
-    await expect(service.createCheckpoint(workspaceA, "session-busy")).rejects.toThrow("Session is busy");
-    await expect(service.restoreBackup(workspaceA, "session-busy", checkpoint.id)).rejects.toThrow("Session is busy");
-    await expect(service.deleteCheckpoint(workspaceA, "session-busy", checkpoint.id)).rejects.toThrow("Session is busy");
+    await expect(service.createCheckpoint(workspaceA, "session-busy")).rejects.toThrow(
+      "Session is busy",
+    );
+    await expect(service.restoreBackup(workspaceA, "session-busy", checkpoint.id)).rejects.toThrow(
+      "Session is busy",
+    );
+    await expect(
+      service.deleteCheckpoint(workspaceA, "session-busy", checkpoint.id),
+    ).rejects.toThrow("Session is busy");
   });
 
   test("deleteEntry disables a live session override before removing its backup directory", async () => {
@@ -219,9 +229,10 @@ describe("WorkspaceBackupService", () => {
     const service = new WorkspaceBackupService({
       homedir: home,
       sessionDb: {
-        getSessionRecord: (sessionId: string) => (
-          sessionId === "session-live-delete" ? makeSessionRecord("session-live-delete", "active") : null
-        ),
+        getSessionRecord: (sessionId: string) =>
+          sessionId === "session-live-delete"
+            ? makeSessionRecord("session-live-delete", "active")
+            : null,
       } as any,
       getLiveSession: (sessionId: string) => {
         if (sessionId !== "session-live-delete") return null;
@@ -242,7 +253,9 @@ describe("WorkspaceBackupService", () => {
 
     const entries = await service.deleteEntry(workspaceA, "session-live-delete");
     expect(overrideCalls).toEqual([false]);
-    expect(entries.find((entry) => entry.targetSessionId === "session-live-delete")).toBeUndefined();
+    expect(
+      entries.find((entry) => entry.targetSessionId === "session-live-delete"),
+    ).toBeUndefined();
     await expect(fs.stat(backupDirectory)).rejects.toThrow();
   });
 
@@ -346,7 +359,9 @@ describe("WorkspaceBackupService", () => {
     const initialCheckpoint = state.checkpoints[0];
     expect(initialCheckpoint?.trigger).toBe("initial");
 
-    await expect(manager.deleteCheckpoint(initialCheckpoint!.id)).rejects.toThrow("Cannot delete the initial checkpoint");
+    await expect(manager.deleteCheckpoint(initialCheckpoint!.id)).rejects.toThrow(
+      "Cannot delete the initial checkpoint",
+    );
 
     const afterDelete = manager.getPublicState();
     expect(afterDelete.checkpoints).toHaveLength(1);

@@ -10,12 +10,17 @@ export function makeItemId(prefix: string, seed: string): string {
   return `${prefix}:${seed}`;
 }
 
-export function readPartString(part: Record<string, unknown> | undefined, key: string): string | null {
+export function readPartString(
+  part: Record<string, unknown> | undefined,
+  key: string,
+): string | null {
   const value = part?.[key];
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
-export function reasoningModeFromPart(part: Record<string, unknown> | undefined): ProjectedReasoningMode {
+export function reasoningModeFromPart(
+  part: Record<string, unknown> | undefined,
+): ProjectedReasoningMode {
   return readPartString(part, "mode") === "summary" ? "summary" : "reasoning";
 }
 

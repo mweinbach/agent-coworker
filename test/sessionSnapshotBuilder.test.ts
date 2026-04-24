@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import path from "node:path";
 
 import { HarnessContextStore } from "../src/harness/contextStore";
-import { SessionSnapshotBuilder } from "../src/server/session/SessionSnapshotBuilder";
 import type { SessionRuntimeState } from "../src/server/session/SessionContext";
+import { SessionSnapshotBuilder } from "../src/server/session/SessionSnapshotBuilder";
 import type { AgentConfig } from "../src/types";
 
 function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
@@ -139,8 +139,12 @@ describe("SessionSnapshotBuilder child execution state", () => {
       hasPendingApproval: () => false,
     });
 
-    expect(erroredBuilder.buildCanonicalSnapshot("2026-03-16T18:01:00.000Z").executionState).toBe("errored");
-    expect(closedBuilder.buildCanonicalSnapshot("2026-03-16T18:01:00.000Z").executionState).toBe("closed");
+    expect(erroredBuilder.buildCanonicalSnapshot("2026-03-16T18:01:00.000Z").executionState).toBe(
+      "errored",
+    );
+    expect(closedBuilder.buildCanonicalSnapshot("2026-03-16T18:01:00.000Z").executionState).toBe(
+      "closed",
+    );
   });
 
   test("includes providerOptions in persisted snapshots when routed config overrides are present", () => {
@@ -174,9 +178,7 @@ describe("SessionSnapshotBuilder child execution state", () => {
       allMessages: [
         {
           role: "assistant",
-          content: [
-            { type: "output_text", phase: "final", text: "Latest child result" },
-          ],
+          content: [{ type: "output_text", phase: "final", text: "Latest child result" }],
         } as any,
       ],
       sessionInfo: {
@@ -206,9 +208,7 @@ describe("SessionSnapshotBuilder child execution state", () => {
       allMessages: [
         {
           role: "assistant",
-          content: [
-            { type: "output_text", phase: "final", text: "Older child result" },
-          ],
+          content: [{ type: "output_text", phase: "final", text: "Older child result" }],
         } as any,
       ],
       sessionInfo: {

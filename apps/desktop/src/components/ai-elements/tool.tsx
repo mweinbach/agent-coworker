@@ -1,6 +1,3 @@
-import type { ComponentProps } from "react";
-import type { ToolFeedState } from "../../app/types";
-
 import {
   CheckCircleIcon,
   ChevronDownIcon,
@@ -13,10 +10,11 @@ import {
   WrenchIcon,
   XCircleIcon,
 } from "lucide-react";
-
+import type { ComponentProps } from "react";
+import type { ToolFeedState } from "../../app/types";
+import { cn } from "../../lib/utils";
 import { Badge } from "../ui/badge";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible";
-import { cn } from "../../lib/utils";
 
 type ToolVariant = "default" | "trace";
 
@@ -43,7 +41,11 @@ function ToolStatusIcon({ state }: ToolStatusIconProps) {
   if (state === "approval-requested") {
     return <CircleIcon className="size-3.5 text-primary" />;
   }
-  return <ClockIcon className={cn("size-3.5 text-primary", state === "input-streaming" && "animate-pulse")} />;
+  return (
+    <ClockIcon
+      className={cn("size-3.5 text-primary", state === "input-streaming" && "animate-pulse")}
+    />
+  );
 }
 
 export type ToolProps = ComponentProps<typeof Collapsible> & {
@@ -101,7 +103,10 @@ export function ToolHeader({
   if (variant === "trace") {
     return (
       <CollapsibleTrigger
-        className={cn("group flex w-full items-start justify-between gap-3 px-3 py-2.5 text-left outline-none transition-colors hover:bg-muted/10", className)}
+        className={cn(
+          "group flex w-full items-start justify-between gap-3 px-3 py-2.5 text-left outline-none transition-colors hover:bg-muted/10",
+          className,
+        )}
         {...props}
       >
         <div className="flex min-w-0 items-start gap-2.5">
@@ -110,12 +115,22 @@ export function ToolHeader({
           </div>
           <div className="min-w-0">
             <div className="truncate text-sm font-semibold leading-5 text-foreground">{title}</div>
-            {subtitle ? <div className="mt-0.5 whitespace-pre-wrap break-words text-xs leading-5 text-muted-foreground/85">{subtitle}</div> : null}
+            {subtitle ? (
+              <div className="mt-0.5 whitespace-pre-wrap break-words text-xs leading-5 text-muted-foreground/85">
+                {subtitle}
+              </div>
+            ) : null}
           </div>
         </div>
         <div className="flex shrink-0 items-start gap-2">
           <Badge
-            variant={state === "output-error" || state === "output-denied" ? "destructive" : state === "output-available" ? "outline" : "secondary"}
+            variant={
+              state === "output-error" || state === "output-denied"
+                ? "destructive"
+                : state === "output-available"
+                  ? "outline"
+                  : "secondary"
+            }
             className="mt-0.5 gap-1 px-1.5 py-0 text-[9px] font-semibold uppercase tracking-[0.14em]"
           >
             <ToolStatusIcon state={state} />
@@ -131,7 +146,10 @@ export function ToolHeader({
 
   return (
     <CollapsibleTrigger
-      className={cn("group flex w-full items-center justify-between gap-3 px-2.5 py-2 text-left outline-none", className)}
+      className={cn(
+        "group flex w-full items-center justify-between gap-3 px-2.5 py-2 text-left outline-none",
+        className,
+      )}
       {...props}
     >
       <div className="flex min-w-0 items-center gap-3">
@@ -139,19 +157,31 @@ export function ToolHeader({
           <ToolIcon title={title} className="size-3.5 text-muted-foreground/80" />
         </div>
         <div className="min-w-0">
-          <div className="truncate font-semibold leading-tight text-[12px] text-foreground">{title}</div>
-          {subtitle ? <div className="mt-0.5 truncate text-[11px] text-muted-foreground/80">{subtitle}</div> : null}
+          <div className="truncate font-semibold leading-tight text-[12px] text-foreground">
+            {title}
+          </div>
+          {subtitle ? (
+            <div className="mt-0.5 truncate text-[11px] text-muted-foreground/80">{subtitle}</div>
+          ) : null}
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-2">
         <Badge
-          variant={state === "output-error" || state === "output-denied" ? "destructive" : state === "output-available" ? "outline" : "secondary"}
+          variant={
+            state === "output-error" || state === "output-denied"
+              ? "destructive"
+              : state === "output-available"
+                ? "outline"
+                : "secondary"
+          }
           className="gap-1.5 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
         >
           <ToolStatusIcon state={state} />
           <span>{stateLabel[state]}</span>
         </Badge>
-        {showChevron ? <ChevronDownIcon className="size-4 text-muted-foreground/40 transition-transform group-data-[state=open]:rotate-180" /> : null}
+        {showChevron ? (
+          <ChevronDownIcon className="size-4 text-muted-foreground/40 transition-transform group-data-[state=open]:rotate-180" />
+        ) : null}
       </div>
     </CollapsibleTrigger>
   );
@@ -184,11 +214,15 @@ export type ToolCodeBlockProps = {
 export function ToolCodeBlock({ label, value, tone = "default" }: ToolCodeBlockProps) {
   return (
     <div className="flex flex-col gap-1.5">
-      <div className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">{label}</div>
+      <div className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">
+        {label}
+      </div>
       <pre
         className={cn(
           "app-shadow-surface max-h-72 overflow-auto rounded-lg bg-background/40 p-3 text-[11px] leading-relaxed ring-1 ring-border/20",
-          tone === "error" ? "bg-destructive/5 text-destructive ring-destructive/20" : "text-foreground/80",
+          tone === "error"
+            ? "bg-destructive/5 text-destructive ring-destructive/20"
+            : "text-foreground/80",
         )}
       >
         {value}

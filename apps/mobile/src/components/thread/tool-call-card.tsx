@@ -65,8 +65,18 @@ function CollapsibleJson({ label, data }: { label: string; data: unknown }) {
 
   return (
     <View style={{ gap: 4 }}>
-      <Pressable onPress={() => setExpanded(!expanded)} style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-        <Text style={{ color: theme.textTertiary, fontSize: 11, fontWeight: "600", textTransform: "uppercase" }}>
+      <Pressable
+        onPress={() => setExpanded(!expanded)}
+        style={{ flexDirection: "row", alignItems: "center", gap: 6 }}
+      >
+        <Text
+          style={{
+            color: theme.textTertiary,
+            fontSize: 11,
+            fontWeight: "600",
+            textTransform: "uppercase",
+          }}
+        >
           {label}
         </Text>
         {isLong ? (

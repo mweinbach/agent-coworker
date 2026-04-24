@@ -1,6 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import { createElement } from "react";
-import { act } from "react";
+import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
@@ -90,7 +89,9 @@ describe("desktop app top bar", () => {
       expect(sidebarToggle?.className).toContain("app-topbar__plain-icon-button");
       expect(inlineSidebarToggle?.className).toContain("app-topbar__toolbar-layer");
       expect(inlineSidebarToggle?.className).not.toContain("app-topbar__toolbar ");
-      expect(inlineSidebarToggle?.className).not.toContain("app-topbar__toolbar app-topbar__controls");
+      expect(inlineSidebarToggle?.className).not.toContain(
+        "app-topbar__toolbar app-topbar__controls",
+      );
       expect(newChatButton).toBeNull();
       expect(newChatReveal).toBeUndefined();
       expect(titleShell).not.toBeNull();
@@ -499,7 +500,9 @@ describe("desktop app top bar", () => {
         );
       });
 
-      const titleButton = container.querySelector('button[aria-label="Select plugin management workspace"]');
+      const titleButton = container.querySelector(
+        'button[aria-label="Select plugin management workspace"]',
+      );
       if (!(titleButton instanceof harness.dom.window.HTMLButtonElement)) {
         throw new Error("missing plugin management selector button");
       }
@@ -515,9 +518,9 @@ describe("desktop app top bar", () => {
       expect(harness.dom.window.document.body.textContent).toContain("IntelProDay");
       expect(harness.dom.window.document.body.textContent).toContain("Research Lab");
 
-      const intelOption = Array.from(harness.dom.window.document.querySelectorAll('[data-slot="select-item"]')).find(
-        (element) => element.textContent?.includes("IntelProDay"),
-      );
+      const intelOption = Array.from(
+        harness.dom.window.document.querySelectorAll('[data-slot="select-item"]'),
+      ).find((element) => element.textContent?.includes("IntelProDay"));
       if (!(intelOption instanceof harness.dom.window.HTMLElement)) {
         throw new Error("missing IntelProDay option");
       }

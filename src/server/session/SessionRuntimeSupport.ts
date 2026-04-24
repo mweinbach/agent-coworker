@@ -15,7 +15,7 @@ export class SessionRuntimeSupport {
       deps: SessionDependencies;
       emit: (evt: ServerEvent) => void;
       emitObservabilityStatusChanged: () => void;
-    }
+    },
   ) {}
 
   emitError(code: ServerErrorCode, source: ServerErrorSource, message: string) {
@@ -53,7 +53,7 @@ export class SessionRuntimeSupport {
     name: string,
     status: "ok" | "error",
     attributes?: Record<string, string | number | boolean>,
-    durationMs?: number
+    durationMs?: number,
   ) {
     void (async () => {
       const { emitObservabilityEvent } = await import("../../observability/otel");
@@ -78,7 +78,9 @@ export class SessionRuntimeSupport {
   }
 
   getGlobalAuthPaths() {
-    return this.opts.deps.getAiCoworkerPathsImpl({ homedir: resolveAuthHomeDir(this.opts.state.config) });
+    return this.opts.deps.getAiCoworkerPathsImpl({
+      homedir: resolveAuthHomeDir(this.opts.state.config),
+    });
   }
 
   async runProviderConnect(opts: Parameters<SessionDependencies["connectProviderImpl"]>[0]) {
@@ -104,7 +106,7 @@ export class SessionRuntimeSupport {
     const registry = await loadMCPConfigRegistry(this.opts.state.config);
     const server = registry.servers.find((entry) => entry.name === name) ?? null;
     if (!server) {
-      this.emitError("validation_failed", "session", `MCP server \"${name}\" not found.`);
+      this.emitError("validation_failed", "session", `MCP server "${name}" not found.`);
       return null;
     }
     return server;

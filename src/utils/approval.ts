@@ -170,7 +170,11 @@ function extractPathsFromToken(token: string, workingDirectory?: string): string
   return paths;
 }
 
-function hasOutsideAllowedScope(command: string, allowedRoots?: string[], workingDirectory?: string): boolean {
+function hasOutsideAllowedScope(
+  command: string,
+  allowedRoots?: string[],
+  workingDirectory?: string,
+): boolean {
   if (!allowedRoots || allowedRoots.length === 0) return false;
   const normalizedRoots = allowedRoots.map((root) => {
     try {
@@ -213,7 +217,7 @@ function hasOutsideAllowedScope(command: string, allowedRoots?: string[], workin
 
 export function classifyCommandDetailed(
   command: string,
-  ctx: CommandApprovalContext = {}
+  ctx: CommandApprovalContext = {},
 ): CommandApprovalClassificationDetailed {
   const dangerous = ALWAYS_WARN_PATTERNS.some((p) => p.test(command));
   if (dangerous) {
@@ -241,14 +245,14 @@ export function classifyCommandDetailed(
 
 export async function approveCommand(
   command: string,
-  prompt: (message: string) => Promise<string>
+  prompt: (message: string) => Promise<string>,
 ): Promise<boolean> {
   const classification = classifyCommandDetailed(command);
   if (classification.kind === "auto") return true;
 
   const prefix = classification.dangerous ? "DANGEROUS: " : "Run: ";
   const answer = await prompt(
-    `${prefix}${command}\nRisk: ${classification.riskCode}\nApprove? [y/N] `
+    `${prefix}${command}\nRisk: ${classification.riskCode}\nApprove? [y/N] `,
   );
   return answer.trim().toLowerCase() === "y";
 }

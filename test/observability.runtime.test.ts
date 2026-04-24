@@ -1,6 +1,4 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-
-import type { AgentConfig } from "../src/types";
 import {
   __internal,
   buildRuntimeTelemetrySettings,
@@ -9,6 +7,7 @@ import {
   noteObservabilityFailure,
   noteObservabilitySuccess,
 } from "../src/observability/runtime";
+import type { AgentConfig } from "../src/types";
 
 function makeConfig(overrides?: Partial<AgentConfig>): AgentConfig {
   return {

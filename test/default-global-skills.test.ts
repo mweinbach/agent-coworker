@@ -4,9 +4,9 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+  type DefaultSkillSpec,
   defaultGlobalSkillsStateFile,
   ensureDefaultGlobalSkillsInstalled,
-  type DefaultSkillSpec,
 } from "../src/skills/defaultGlobalSkills";
 
 function jsonResponse(payload: unknown, status = 200): Response {
@@ -23,7 +23,10 @@ function textResponse(payload: string, status = 200): Response {
   });
 }
 
-function createGitHubFetchStub(tree: Record<string, unknown>, files: Record<string, string>): typeof fetch {
+function createGitHubFetchStub(
+  tree: Record<string, unknown>,
+  files: Record<string, string>,
+): typeof fetch {
   return (async (input: RequestInfo | URL) => {
     const url = String(input);
 
@@ -94,7 +97,7 @@ describe("default global skills bootstrap", () => {
         "https://download.test/beta/SKILL.md":
           "---\nname: beta\ndescription: Beta skill\n---\nBeta body\n",
         "https://download.test/beta/assets/example.txt": "beta asset\n",
-      }
+      },
     );
 
     try {
@@ -108,11 +111,22 @@ describe("default global skills bootstrap", () => {
 
       expect(result.status).toBe("installed");
       expect(result.installed).toEqual(["alpha", "beta"]);
-      expect(await fs.readFile(path.join(home, ".cowork", "skills", "alpha", "SKILL.md"), "utf-8")).toContain("Alpha body");
-      expect(await fs.readFile(path.join(home, ".cowork", "skills", "beta", "assets", "example.txt"), "utf-8")).toBe("beta asset\n");
+      expect(
+        await fs.readFile(path.join(home, ".cowork", "skills", "alpha", "SKILL.md"), "utf-8"),
+      ).toContain("Alpha body");
+      expect(
+        await fs.readFile(
+          path.join(home, ".cowork", "skills", "beta", "assets", "example.txt"),
+          "utf-8",
+        ),
+      ).toBe("beta asset\n");
 
       const stateFile = defaultGlobalSkillsStateFile(home);
-      const state = JSON.parse(await fs.readFile(stateFile, "utf-8")) as { repo: string; ref: string; skills: string[] };
+      const state = JSON.parse(await fs.readFile(stateFile, "utf-8")) as {
+        repo: string;
+        ref: string;
+        skills: string[];
+      };
       expect(state.repo).toBe("test/repo");
       expect(state.ref).toBe("main");
       expect(state.skills).toEqual(["alpha", "beta"]);
@@ -123,7 +137,9 @@ describe("default global skills bootstrap", () => {
 
   test("does not reinstall on later runs once the bootstrap state file exists", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-skills-once-"));
-    const skills: readonly DefaultSkillSpec[] = [{ name: "alpha", githubPath: "skills/.curated/alpha" }];
+    const skills: readonly DefaultSkillSpec[] = [
+      { name: "alpha", githubPath: "skills/.curated/alpha" },
+    ];
 
     const fetchImpl = createGitHubFetchStub(
       {
@@ -140,7 +156,7 @@ describe("default global skills bootstrap", () => {
       {
         "https://download.test/alpha/SKILL.md":
           "---\nname: alpha\ndescription: Alpha skill\n---\nAlpha body\n",
-      }
+      },
     );
 
     try {

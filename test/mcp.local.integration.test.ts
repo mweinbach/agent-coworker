@@ -36,10 +36,7 @@ async function runScenario<T>(scenario: "load-tools" | "run-turn"): Promise<T> {
       stderr: "pipe",
     });
 
-    const [exitCode, stderr] = await Promise.all([
-      proc.exited,
-      new Response(proc.stderr).text(),
-    ]);
+    const [exitCode, stderr] = await Promise.all([proc.exited, new Response(proc.stderr).text()]);
 
     if (exitCode !== 0) {
       throw new Error(stderr.trim() || `Runner exited with status ${exitCode}`);

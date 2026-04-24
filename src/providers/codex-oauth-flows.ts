@@ -1,7 +1,12 @@
 import { createHash, randomBytes } from "node:crypto";
 import { z } from "zod";
 
-import { listenOnLocalhost, OAUTH_FAILURE_HTML, OAUTH_LOOPBACK_HOST, OAUTH_SUCCESS_HTML } from "../auth/oauth-server";
+import {
+  listenOnLocalhost,
+  OAUTH_FAILURE_HTML,
+  OAUTH_LOOPBACK_HOST,
+  OAUTH_SUCCESS_HTML,
+} from "../auth/oauth-server";
 import type { AiCoworkerPaths, ConnectService } from "../store/connections";
 import type { UrlOpener } from "../utils/browser";
 import { openExternalUrl } from "../utils/browser";
@@ -10,9 +15,9 @@ import {
   CODEX_OAUTH_ISSUER,
   CODEX_OAUTH_ORIGINATOR,
   CODEX_OAUTH_SCOPE,
+  type CodexAuthMaterial,
   codexAuthFilePath,
   codexMaterialFromTokenResponse,
-  type CodexAuthMaterial,
 } from "./codex-auth";
 
 const finiteNumberFromUnknownSchema = z.preprocess((value) => {
@@ -26,16 +31,20 @@ const finiteNumberFromUnknownSchema = z.preprocess((value) => {
 
 const tokenExchangeResponseSchema = z.record(z.string(), z.unknown());
 
-const deviceAuthStartResponseSchema = z.object({
-  device_auth_id: z.string().trim().min(1),
-  user_code: z.string().trim().min(1),
-  interval: finiteNumberFromUnknownSchema.optional(),
-}).passthrough();
+const deviceAuthStartResponseSchema = z
+  .object({
+    device_auth_id: z.string().trim().min(1),
+    user_code: z.string().trim().min(1),
+    interval: finiteNumberFromUnknownSchema.optional(),
+  })
+  .passthrough();
 
-const deviceAuthTokenPollResponseSchema = z.object({
-  authorization_code: z.string().trim().min(1),
-  code_verifier: z.string().trim().min(1),
-}).passthrough();
+const deviceAuthTokenPollResponseSchema = z
+  .object({
+    authorization_code: z.string().trim().min(1),
+    code_verifier: z.string().trim().min(1),
+  })
+  .passthrough();
 
 export function isOauthCliProvider(service: ConnectService): service is "codex-cli" {
   return service === "codex-cli";
@@ -66,7 +75,11 @@ function encodeOauthQueryValue(value: string): string {
   return encodeURIComponent(value);
 }
 
-export function buildCodexAuthorizeUrl(redirectUri: string, challenge: string, state: string): string {
+export function buildCodexAuthorizeUrl(
+  redirectUri: string,
+  challenge: string,
+  state: string,
+): string {
   // DO NOT TOUCH THIS CONTRACT.
   // These params must stay aligned with the live upstream Codex CLI flow:
   // same client ID, scope, originator, localhost redirect behavior, and raw
@@ -83,7 +96,9 @@ export function buildCodexAuthorizeUrl(redirectUri: string, challenge: string, s
     ["codex_cli_simplified_flow", "true"],
     ["state", state],
     ["originator", CODEX_OAUTH_ORIGINATOR],
-  ].map(([key, value]) => `${key}=${encodeOauthQueryValue(value)}`).join("&");
+  ]
+    .map(([key, value]) => `${key}=${encodeOauthQueryValue(value)}`)
+    .join("&");
   return `${CODEX_OAUTH_ISSUER}/oauth/authorize?${query}`;
 }
 
@@ -289,17 +304,23 @@ export async function runCodexDeviceOAuth(opts: {
   const opener = opts.openUrl ?? openExternalUrl;
   const verificationUrl = `${CODEX_OAUTH_ISSUER}/codex/device`;
 
-  const userCodeResponse = await opts.fetchImpl(`${CODEX_OAUTH_ISSUER}/api/accounts/deviceauth/usercode`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "User-Agent": "agent-coworker" },
-    body: JSON.stringify({ client_id: CODEX_OAUTH_CLIENT_ID }),
-  });
+  const userCodeResponse = await opts.fetchImpl(
+    `${CODEX_OAUTH_ISSUER}/api/accounts/deviceauth/usercode`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "User-Agent": "agent-coworker" },
+      body: JSON.stringify({ client_id: CODEX_OAUTH_CLIENT_ID }),
+    },
+  );
   if (!userCodeResponse.ok) {
     const text = await userCodeResponse.text().catch(() => "");
-    throw new Error(`Failed to start device-code auth (${userCodeResponse.status}): ${text.slice(0, 500)}`.trim());
+    throw new Error(
+      `Failed to start device-code auth (${userCodeResponse.status}): ${text.slice(0, 500)}`.trim(),
+    );
   }
   const userCodeData = deviceAuthStartResponseSchema.safeParse(await userCodeResponse.json());
-  if (!userCodeData.success) throw new Error("Device-code auth response was missing required fields.");
+  if (!userCodeData.success)
+    throw new Error("Device-code auth response was missing required fields.");
   const deviceAuthId = userCodeData.data.device_auth_id;
   const userCode = userCodeData.data.user_code;
   const intervalSec = Math.max(1, Math.floor(userCodeData.data.interval ?? 5));
@@ -308,14 +329,17 @@ export async function runCodexDeviceOAuth(opts: {
   await opener(verificationUrl);
 
   while (true) {
-    const pollResponse = await opts.fetchImpl(`${CODEX_OAUTH_ISSUER}/api/accounts/deviceauth/token`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "User-Agent": "agent-coworker" },
-      body: JSON.stringify({
-        device_auth_id: deviceAuthId,
-        user_code: userCode,
-      }),
-    });
+    const pollResponse = await opts.fetchImpl(
+      `${CODEX_OAUTH_ISSUER}/api/accounts/deviceauth/token`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "User-Agent": "agent-coworker" },
+        body: JSON.stringify({
+          device_auth_id: deviceAuthId,
+          user_code: userCode,
+        }),
+      },
+    );
 
     if (pollResponse.ok) {
       const pollData = deviceAuthTokenPollResponseSchema.safeParse(await pollResponse.json());
@@ -339,7 +363,9 @@ export async function runCodexDeviceOAuth(opts: {
 
     if (pollResponse.status !== 403 && pollResponse.status !== 404) {
       const text = await pollResponse.text().catch(() => "");
-      throw new Error(`Device-code auth failed (${pollResponse.status}): ${text.slice(0, 500)}`.trim());
+      throw new Error(
+        `Device-code auth failed (${pollResponse.status}): ${text.slice(0, 500)}`.trim(),
+      );
     }
 
     await wait(intervalSec * 1000 + 3000);

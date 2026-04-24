@@ -3,18 +3,18 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import type { AgentConfig } from "../types";
-import type { SessionDb, SessionPersistenceStatus } from "./sessionDb";
 import {
   getSessionBackupsRootDirs,
+  SessionBackupManager,
+  type SessionBackupPublicCheckpoint,
   type WorkspaceBackupDeltaPreview,
   type WorkspaceBackupLifecycle,
   type WorkspaceBackupPublicEntry,
-  type SessionBackupPublicCheckpoint,
-  SessionBackupManager,
 } from "./sessionBackup";
 import { summarizeSnapshotDelta } from "./sessionBackup/delta";
 import { readMetadata, type SessionBackupMetadata } from "./sessionBackup/metadata";
 import { snapshotByteSize } from "./sessionBackup/snapshot";
+import type { SessionDb, SessionPersistenceStatus } from "./sessionDb";
 
 const METADATA_FILE = "metadata.json";
 
@@ -101,7 +101,8 @@ async function readMetadataHint(metadataPath: string): Promise<WorkspaceBackupMe
       const record = parsed as Record<string, unknown>;
       return {
         sessionId: typeof record.sessionId === "string" ? record.sessionId : undefined,
-        workingDirectory: typeof record.workingDirectory === "string" ? record.workingDirectory : undefined,
+        workingDirectory:
+          typeof record.workingDirectory === "string" ? record.workingDirectory : undefined,
         createdAt: typeof record.createdAt === "string" ? record.createdAt : undefined,
         closedAt: typeof record.closedAt === "string" ? record.closedAt : undefined,
         state: record.state === "active" || record.state === "closed" ? record.state : undefined,
@@ -112,7 +113,10 @@ async function readMetadataHint(metadataPath: string): Promise<WorkspaceBackupMe
         workingDirectory: tryExtractJsonString(raw, "workingDirectory"),
         createdAt: tryExtractJsonString(raw, "createdAt"),
         closedAt: tryExtractJsonString(raw, "closedAt"),
-        state: tryExtractJsonEnum(raw, "state", ["active", "closed"]) as "active" | "closed" | undefined,
+        state: tryExtractJsonEnum(raw, "state", ["active", "closed"]) as
+          | "active"
+          | "closed"
+          | undefined,
       };
     }
   } catch {
@@ -146,7 +150,10 @@ export class WorkspaceBackupService {
       try {
         rootEntries = await fs.readdir(rootDir, { withFileTypes: true });
       } catch (error) {
-        const code = error && typeof error === "object" && "code" in error ? (error as { code?: string }).code : null;
+        const code =
+          error && typeof error === "object" && "code" in error
+            ? (error as { code?: string }).code
+            : null;
         if (code === "ENOENT") continue;
         throw error;
       }
@@ -159,15 +166,25 @@ export class WorkspaceBackupService {
       }
     }
 
-    entries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.targetSessionId.localeCompare(b.targetSessionId));
+    entries.sort(
+      (a, b) =>
+        b.updatedAt.localeCompare(a.updatedAt) ||
+        a.targetSessionId.localeCompare(b.targetSessionId),
+    );
     return entries;
   }
 
-  async createCheckpoint(workingDirectory: string, targetSessionId: string): Promise<WorkspaceBackupPublicEntry[]> {
+  async createCheckpoint(
+    workingDirectory: string,
+    targetSessionId: string,
+  ): Promise<WorkspaceBackupPublicEntry[]> {
     return this.withSessionLock(targetSessionId, async () => {
       const lookup = await this.findWorkspaceBackup(workingDirectory, targetSessionId);
       if (!lookup) throw new Error(`Unknown workspace backup: ${targetSessionId}`);
-      if (!lookup.metadata) throw new Error(lookup.failureReason ?? `Workspace backup is unavailable: ${targetSessionId}`);
+      if (!lookup.metadata)
+        throw new Error(
+          lookup.failureReason ?? `Workspace backup is unavailable: ${targetSessionId}`,
+        );
       await this.guardLiveSession(targetSessionId);
 
       const manager = await SessionBackupManager.openExisting({ sessionDir: lookup.sessionDir });
@@ -177,11 +194,18 @@ export class WorkspaceBackupService {
     });
   }
 
-  async restoreBackup(workingDirectory: string, targetSessionId: string, checkpointId?: string): Promise<WorkspaceBackupPublicEntry[]> {
+  async restoreBackup(
+    workingDirectory: string,
+    targetSessionId: string,
+    checkpointId?: string,
+  ): Promise<WorkspaceBackupPublicEntry[]> {
     return this.withSessionLock(targetSessionId, async () => {
       const lookup = await this.findWorkspaceBackup(workingDirectory, targetSessionId);
       if (!lookup) throw new Error(`Unknown workspace backup: ${targetSessionId}`);
-      if (!lookup.metadata) throw new Error(lookup.failureReason ?? `Workspace backup is unavailable: ${targetSessionId}`);
+      if (!lookup.metadata)
+        throw new Error(
+          lookup.failureReason ?? `Workspace backup is unavailable: ${targetSessionId}`,
+        );
       await this.guardLiveSession(targetSessionId);
 
       const manager = await SessionBackupManager.openExisting({ sessionDir: lookup.sessionDir });
@@ -189,7 +213,7 @@ export class WorkspaceBackupService {
       // Validate checkpoint exists before creating safety checkpoint
       if (checkpointId) {
         const state = manager.getPublicState();
-        const checkpointExists = state.checkpoints.some(cp => cp.id === checkpointId);
+        const checkpointExists = state.checkpoints.some((cp) => cp.id === checkpointId);
         if (!checkpointExists) {
           throw new Error(`Unknown checkpoint: ${checkpointId}`);
         }
@@ -206,11 +230,18 @@ export class WorkspaceBackupService {
     });
   }
 
-  async deleteCheckpoint(workingDirectory: string, targetSessionId: string, checkpointId: string): Promise<WorkspaceBackupPublicEntry[]> {
+  async deleteCheckpoint(
+    workingDirectory: string,
+    targetSessionId: string,
+    checkpointId: string,
+  ): Promise<WorkspaceBackupPublicEntry[]> {
     return this.withSessionLock(targetSessionId, async () => {
       const lookup = await this.findWorkspaceBackup(workingDirectory, targetSessionId);
       if (!lookup) throw new Error(`Unknown workspace backup: ${targetSessionId}`);
-      if (!lookup.metadata) throw new Error(lookup.failureReason ?? `Workspace backup is unavailable: ${targetSessionId}`);
+      if (!lookup.metadata)
+        throw new Error(
+          lookup.failureReason ?? `Workspace backup is unavailable: ${targetSessionId}`,
+        );
       await this.guardLiveSession(targetSessionId);
 
       const manager = await SessionBackupManager.openExisting({ sessionDir: lookup.sessionDir });
@@ -221,7 +252,10 @@ export class WorkspaceBackupService {
     });
   }
 
-  async deleteEntry(workingDirectory: string, targetSessionId: string): Promise<WorkspaceBackupPublicEntry[]> {
+  async deleteEntry(
+    workingDirectory: string,
+    targetSessionId: string,
+  ): Promise<WorkspaceBackupPublicEntry[]> {
     return this.withSessionLock(targetSessionId, async () => {
       const lookup = await this.findWorkspaceBackup(workingDirectory, targetSessionId);
       if (!lookup) throw new Error(`Unknown workspace backup: ${targetSessionId}`);
@@ -247,15 +281,21 @@ export class WorkspaceBackupService {
   ): Promise<WorkspaceBackupDeltaPreview> {
     const lookup = await this.findWorkspaceBackup(workingDirectory, targetSessionId);
     if (!lookup) throw new Error(`Unknown workspace backup: ${targetSessionId}`);
-    if (!lookup.metadata) throw new Error(lookup.failureReason ?? `Workspace backup is unavailable: ${targetSessionId}`);
+    if (!lookup.metadata)
+      throw new Error(
+        lookup.failureReason ?? `Workspace backup is unavailable: ${targetSessionId}`,
+      );
 
-    const checkpointIndex = lookup.metadata.checkpoints.findIndex((checkpoint) => checkpoint.id === checkpointId);
+    const checkpointIndex = lookup.metadata.checkpoints.findIndex(
+      (checkpoint) => checkpoint.id === checkpointId,
+    );
     if (checkpointIndex < 0) {
       throw new Error(`Unknown checkpoint id: ${checkpointId}`);
     }
 
     const checkpoint = lookup.metadata.checkpoints[checkpointIndex];
-    const baselineCheckpoint = checkpointIndex > 0 ? lookup.metadata.checkpoints[checkpointIndex - 1] : null;
+    const baselineCheckpoint =
+      checkpointIndex > 0 ? lookup.metadata.checkpoints[checkpointIndex - 1] : null;
     const baselineSnapshot = baselineCheckpoint?.snapshot ?? lookup.metadata.originalSnapshot;
     const baselineLabel = baselineCheckpoint?.id ?? "Original snapshot";
 
@@ -359,9 +399,10 @@ export class WorkspaceBackupService {
     const sessionRecord = this.opts.sessionDb?.getSessionRecord(targetSessionId) ?? null;
     const liveSession = this.opts.getLiveSession(targetSessionId);
     const stats = await fs.stat(sessionDir).catch(() => null);
-    const createdAt = hint.createdAt
-      ?? (stats?.birthtime ? stats.birthtime.toISOString() : stats?.mtime.toISOString())
-      ?? new Date(0).toISOString();
+    const createdAt =
+      hint.createdAt ??
+      (stats?.birthtime ? stats.birthtime.toISOString() : stats?.mtime.toISOString()) ??
+      new Date(0).toISOString();
     const updatedAt = maxIsoTimestamp(
       liveSession?.updatedAt,
       sessionRecord?.updatedAt,
@@ -407,7 +448,8 @@ export class WorkspaceBackupService {
         return { sessionDir, metadata };
       } catch (error) {
         const hint = await readMetadataHint(metadataPath);
-        if (!hint?.workingDirectory || path.resolve(hint.workingDirectory) !== workingDirectory) continue;
+        if (!hint?.workingDirectory || path.resolve(hint.workingDirectory) !== workingDirectory)
+          continue;
         return {
           sessionDir,
           metadata: null,
@@ -423,9 +465,7 @@ export class WorkspaceBackupService {
     originalSnapshot: SessionBackupMetadata["originalSnapshot"],
     checkpoints: SessionBackupMetadata["checkpoints"],
   ): Promise<number> {
-    const seen = new Set<string>([
-      `${originalSnapshot.kind}:${originalSnapshot.path}`,
-    ]);
+    const seen = new Set<string>([`${originalSnapshot.kind}:${originalSnapshot.path}`]);
     let total = 0;
     for (const checkpoint of checkpoints) {
       const key = `${checkpoint.snapshot.kind}:${checkpoint.snapshot.path}`;
@@ -436,7 +476,9 @@ export class WorkspaceBackupService {
     return total;
   }
 
-  private toPublicCheckpoint(checkpoint: SessionBackupMetadata["checkpoints"][number]): SessionBackupPublicCheckpoint {
+  private toPublicCheckpoint(
+    checkpoint: SessionBackupMetadata["checkpoints"][number],
+  ): SessionBackupPublicCheckpoint {
     return {
       id: checkpoint.id,
       index: checkpoint.index,

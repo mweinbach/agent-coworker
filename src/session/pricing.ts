@@ -201,9 +201,12 @@ const BASE_PRICING_TABLE: Record<string, ModelPricing> = {
 };
 
 const pricingOverrideSchema = {
-  inputPerMillion: (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0,
-  outputPerMillion: (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0,
-  cachedInputPerMillion: (value: unknown) => value === undefined || (typeof value === "number" && Number.isFinite(value) && value >= 0),
+  inputPerMillion: (value: unknown) =>
+    typeof value === "number" && Number.isFinite(value) && value >= 0,
+  outputPerMillion: (value: unknown) =>
+    typeof value === "number" && Number.isFinite(value) && value >= 0,
+  cachedInputPerMillion: (value: unknown) =>
+    value === undefined || (typeof value === "number" && Number.isFinite(value) && value >= 0),
 };
 
 let cachedPricingOverrideRaw: string | null = null;
@@ -212,9 +215,11 @@ let cachedPricingOverrides: Record<string, ModelPricing> = {};
 function isModelPricing(value: unknown): value is ModelPricing {
   if (!value || typeof value !== "object") return false;
   const record = value as Record<string, unknown>;
-  return pricingOverrideSchema.inputPerMillion(record.inputPerMillion)
-    && pricingOverrideSchema.outputPerMillion(record.outputPerMillion)
-    && pricingOverrideSchema.cachedInputPerMillion(record.cachedInputPerMillion);
+  return (
+    pricingOverrideSchema.inputPerMillion(record.inputPerMillion) &&
+    pricingOverrideSchema.outputPerMillion(record.outputPerMillion) &&
+    pricingOverrideSchema.cachedInputPerMillion(record.cachedInputPerMillion)
+  );
 }
 
 function isPricingOverrideKey(value: string): value is `${ProviderName}:${string}` {
@@ -222,14 +227,16 @@ function isPricingOverrideKey(value: string): value is `${ProviderName}:${string
   if (separatorIndex <= 0 || separatorIndex === value.length - 1) return false;
   const provider = value.slice(0, separatorIndex);
   // `opencode-go` intentionally has no local pricing or override support.
-  return provider === "google"
-    || provider === "openai"
-    || provider === "anthropic"
-    || provider === "baseten"
-    || provider === "together"
-    || provider === "fireworks"
-    || provider === "opencode-zen"
-    || provider === "codex-cli";
+  return (
+    provider === "google" ||
+    provider === "openai" ||
+    provider === "anthropic" ||
+    provider === "baseten" ||
+    provider === "together" ||
+    provider === "fireworks" ||
+    provider === "opencode-zen" ||
+    provider === "codex-cli"
+  );
 }
 
 function loadPricingOverridesFromEnv(env: PricingEnv = process.env): Record<string, ModelPricing> {
@@ -248,13 +255,17 @@ function loadPricingOverridesFromEnv(env: PricingEnv = process.env): Record<stri
   try {
     parsed = JSON.parse(raw);
   } catch (error) {
-    console.warn(`[pricing] Ignoring invalid COWORK_MODEL_PRICING_OVERRIDES JSON: ${String(error)}`);
+    console.warn(
+      `[pricing] Ignoring invalid COWORK_MODEL_PRICING_OVERRIDES JSON: ${String(error)}`,
+    );
     cachedPricingOverrides = {};
     return cachedPricingOverrides;
   }
 
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    console.warn("[pricing] Ignoring COWORK_MODEL_PRICING_OVERRIDES because it is not a JSON object.");
+    console.warn(
+      "[pricing] Ignoring COWORK_MODEL_PRICING_OVERRIDES because it is not a JSON object.",
+    );
     cachedPricingOverrides = {};
     return cachedPricingOverrides;
   }
@@ -262,17 +273,23 @@ function loadPricingOverridesFromEnv(env: PricingEnv = process.env): Record<stri
   const overrides: Record<string, ModelPricing> = {};
   for (const [key, value] of Object.entries(parsed)) {
     if (!isPricingOverrideKey(key)) {
-      console.warn(`[pricing] Ignoring model pricing override with invalid key "${key}". Expected "provider:model".`);
+      console.warn(
+        `[pricing] Ignoring model pricing override with invalid key "${key}". Expected "provider:model".`,
+      );
       continue;
     }
     if (!isModelPricing(value)) {
-      console.warn(`[pricing] Ignoring model pricing override for "${key}" because the pricing payload is invalid.`);
+      console.warn(
+        `[pricing] Ignoring model pricing override for "${key}" because the pricing payload is invalid.`,
+      );
       continue;
     }
     overrides[key] = {
       inputPerMillion: value.inputPerMillion,
       outputPerMillion: value.outputPerMillion,
-      ...(value.cachedInputPerMillion !== undefined ? { cachedInputPerMillion: value.cachedInputPerMillion } : {}),
+      ...(value.cachedInputPerMillion !== undefined
+        ? { cachedInputPerMillion: value.cachedInputPerMillion }
+        : {}),
     };
   }
 
@@ -336,7 +353,8 @@ export function calculateTokenCost(
   const uncachedPromptTokens = Math.max(0, promptTokens - normalizedCachedPromptTokens);
   const inputCost = (uncachedPromptTokens / 1_000_000) * pricing.inputPerMillion;
   const cachedInputCost =
-    (normalizedCachedPromptTokens / 1_000_000) * (pricing.cachedInputPerMillion ?? pricing.inputPerMillion);
+    (normalizedCachedPromptTokens / 1_000_000) *
+    (pricing.cachedInputPerMillion ?? pricing.inputPerMillion);
   const outputCost = (completionTokens / 1_000_000) * pricing.outputPerMillion;
   return inputCost + cachedInputCost + outputCost;
 }

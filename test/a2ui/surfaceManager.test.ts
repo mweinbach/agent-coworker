@@ -1,9 +1,8 @@
-import { describe, test, expect } from "bun:test";
-
-import { A2uiSurfaceManager } from "../../src/server/session/A2uiSurfaceManager";
+import { describe, expect, test } from "bun:test";
 import type { ServerEvent } from "../../src/server/protocol";
-import { A2UI_BASIC_CATALOG_ID } from "../../src/shared/a2ui/component";
+import { A2uiSurfaceManager } from "../../src/server/session/A2uiSurfaceManager";
 import type { A2uiEnvelope } from "../../src/shared/a2ui";
+import { A2UI_BASIC_CATALOG_ID } from "../../src/shared/a2ui/component";
 
 function createManager() {
   const events: ServerEvent[] = [];
@@ -104,7 +103,10 @@ describe("A2uiSurfaceManager", () => {
   test("eviction removes the oldest retained surface while still emitting a delete event", () => {
     const { manager, events } = createManager();
     for (let index = 1; index <= 16; index += 1) {
-      const result = manager.applyEnvelope(createEnvelope(`s${index}`), `2026-01-01T00:00:${String(index).padStart(2, "0")}.000Z`);
+      const result = manager.applyEnvelope(
+        createEnvelope(`s${index}`),
+        `2026-01-01T00:00:${String(index).padStart(2, "0")}.000Z`,
+      );
       expect(result.ok).toBe(true);
     }
 
@@ -115,7 +117,9 @@ describe("A2uiSurfaceManager", () => {
     expect(manager.getSurfaces()).not.toHaveProperty("s1");
     expect(manager.getSurfaces()).toHaveProperty("s17");
 
-    const deleteEvent = events.findLast((event) => event.type === "a2ui_surface" && event.surfaceId === "s1");
+    const deleteEvent = events.findLast(
+      (event) => event.type === "a2ui_surface" && event.surfaceId === "s1",
+    );
     expect(deleteEvent).toBeTruthy();
     expect((deleteEvent as Extract<ServerEvent, { type: "a2ui_surface" }>).deleted).toBe(true);
   });
@@ -123,18 +127,23 @@ describe("A2uiSurfaceManager", () => {
   test("prunes deleted tombstones before creating a new surface at the cap", () => {
     const { manager } = createManager();
 
-    manager.hydrate(Object.fromEntries(
-      Array.from({ length: 16 }, (_, offset) => {
-        const surfaceId = `s${offset + 1}`;
-        return [surfaceId, {
-          surfaceId,
-          catalogId: A2UI_BASIC_CATALOG_ID,
-          revision: 2,
-          updatedAt: `2026-01-01T00:00:${String(offset + 1).padStart(2, "0")}.000Z`,
-          deleted: true,
-        }];
-      }),
-    ));
+    manager.hydrate(
+      Object.fromEntries(
+        Array.from({ length: 16 }, (_, offset) => {
+          const surfaceId = `s${offset + 1}`;
+          return [
+            surfaceId,
+            {
+              surfaceId,
+              catalogId: A2UI_BASIC_CATALOG_ID,
+              revision: 2,
+              updatedAt: `2026-01-01T00:00:${String(offset + 1).padStart(2, "0")}.000Z`,
+              deleted: true,
+            },
+          ];
+        }),
+      ),
+    );
 
     const result = manager.applyEnvelope(createEnvelope("s17"));
 
@@ -146,47 +155,67 @@ describe("A2uiSurfaceManager", () => {
   test("does not evict another surface when updating an existing one at the cap", () => {
     const { manager, events } = createManager();
     for (let index = 1; index <= 16; index += 1) {
-      const result = manager.applyEnvelope(createEnvelope(`s${index}`), `2026-01-01T00:00:${String(index).padStart(2, "0")}.000Z`);
+      const result = manager.applyEnvelope(
+        createEnvelope(`s${index}`),
+        `2026-01-01T00:00:${String(index).padStart(2, "0")}.000Z`,
+      );
       expect(result.ok).toBe(true);
     }
     events.length = 0;
 
-    const result = manager.applyEnvelope({
-      version: "v0.9",
-      updateDataModel: {
-        surfaceId: "s16",
-        path: "/message",
-        value: "updated",
+    const result = manager.applyEnvelope(
+      {
+        version: "v0.9",
+        updateDataModel: {
+          surfaceId: "s16",
+          path: "/message",
+          value: "updated",
+        },
       },
-    }, "2026-01-01T00:01:00.000Z");
+      "2026-01-01T00:01:00.000Z",
+    );
 
     expect(result.ok).toBe(true);
     expect(Object.keys(manager.getSurfaces())).toHaveLength(16);
     expect(manager.getSurfaces()).toHaveProperty("s1");
     expect(manager.getSurfaces()).toHaveProperty("s16");
-    expect(events.find((event) => event.type === "a2ui_surface" && event.surfaceId === "s1" && event.deleted)).toBeUndefined();
+    expect(
+      events.find(
+        (event) => event.type === "a2ui_surface" && event.surfaceId === "s1" && event.deleted,
+      ),
+    ).toBeUndefined();
   });
 
   test("does not evict another surface before deleting an existing one at the cap", () => {
     const { manager, events } = createManager();
     for (let index = 1; index <= 16; index += 1) {
-      const result = manager.applyEnvelope(createEnvelope(`s${index}`), `2026-01-01T00:00:${String(index).padStart(2, "0")}.000Z`);
+      const result = manager.applyEnvelope(
+        createEnvelope(`s${index}`),
+        `2026-01-01T00:00:${String(index).padStart(2, "0")}.000Z`,
+      );
       expect(result.ok).toBe(true);
     }
     events.length = 0;
 
-    const result = manager.applyEnvelope({
-      version: "v0.9",
-      deleteSurface: {
-        surfaceId: "s16",
+    const result = manager.applyEnvelope(
+      {
+        version: "v0.9",
+        deleteSurface: {
+          surfaceId: "s16",
+        },
       },
-    }, "2026-01-01T00:01:00.000Z");
+      "2026-01-01T00:01:00.000Z",
+    );
 
     expect(result.ok).toBe(true);
     expect(Object.keys(manager.getSurfaces())).toHaveLength(16);
     expect(manager.getSurfaces()).toHaveProperty("s1");
     expect(manager.getSurfaces().s16?.deleted).toBe(true);
-    expect(events.find((event) => event.type === "a2ui_surface" && event.surfaceId === "s1" && event.deleted)).toBeUndefined();
+    expect(
+      events.find(
+        (event) => event.type === "a2ui_surface" && event.surfaceId === "s1" && event.deleted,
+      ),
+    ).toBeUndefined();
   });
 
   test("keeps the previous surface when an oversized update is rejected", () => {
@@ -194,14 +223,17 @@ describe("A2uiSurfaceManager", () => {
     manager.applyEnvelope(createEnvelope("s1"));
     events.length = 0;
 
-    const result = manager.applyEnvelope({
-      version: "v0.9",
-      updateDataModel: {
-        surfaceId: "s1",
-        path: "/message",
-        value: "x".repeat(300_000),
+    const result = manager.applyEnvelope(
+      {
+        version: "v0.9",
+        updateDataModel: {
+          surfaceId: "s1",
+          path: "/message",
+          value: "x".repeat(300_000),
+        },
       },
-    }, "2026-01-01T00:01:00.000Z");
+      "2026-01-01T00:01:00.000Z",
+    );
 
     expect(result.ok).toBe(false);
     expect(manager.getSurfaces().s1?.revision).toBe(1);
@@ -213,7 +245,10 @@ describe("A2uiSurfaceManager", () => {
   test("does not evict another surface when an oversized create is rejected at the cap", () => {
     const { manager, events } = createManager();
     for (let index = 1; index <= 16; index += 1) {
-      const result = manager.applyEnvelope(createEnvelope(`s${index}`), `2026-01-01T00:00:${String(index).padStart(2, "0")}.000Z`);
+      const result = manager.applyEnvelope(
+        createEnvelope(`s${index}`),
+        `2026-01-01T00:00:${String(index).padStart(2, "0")}.000Z`,
+      );
       expect(result.ok).toBe(true);
     }
     events.length = 0;
@@ -227,6 +262,10 @@ describe("A2uiSurfaceManager", () => {
     expect(Object.keys(manager.getSurfaces())).toHaveLength(16);
     expect(manager.getSurfaces()).toHaveProperty("s1");
     expect(manager.getSurfaces()).not.toHaveProperty("s17");
-    expect(events.find((event) => event.type === "a2ui_surface" && event.surfaceId === "s1" && event.deleted)).toBeUndefined();
+    expect(
+      events.find(
+        (event) => event.type === "a2ui_surface" && event.surfaceId === "s1" && event.deleted,
+      ),
+    ).toBeUndefined();
   });
 });

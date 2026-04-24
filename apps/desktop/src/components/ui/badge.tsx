@@ -1,5 +1,5 @@
-import * as React from "react";
-import { Chip, chipVariants, type ChipVariants } from "@heroui/react";
+import { Chip, type ChipVariants, chipVariants } from "@heroui/react";
+import type * as React from "react";
 
 import { cn } from "@/lib/utils";
 

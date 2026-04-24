@@ -1,8 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { createElement } from "react";
-import { act } from "react";
+import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -30,11 +29,7 @@ describe("desktop token consumers", () => {
           createElement(
             "div",
             null,
-            createElement(
-              Card,
-              null,
-              createElement(CardDescription, null, "Token-aware card"),
-            ),
+            createElement(Card, null, createElement(CardDescription, null, "Token-aware card")),
             createElement(Input, {
               "aria-label": "Search",
               defaultValue: "tokens",
@@ -126,8 +121,14 @@ describe("desktop token consumers", () => {
   test("layout and skills surfaces resolve through shared token vars", () => {
     const stylesCss = readFileSync(resolve(import.meta.dir, "../src/styles.css"), "utf8");
 
-    expect(stylesCss).toMatch(/\.app-topbar__sidebar-fill\s*\{[^}]*background:\s*var\(--surface-sidebar-pane\);/s);
-    expect(stylesCss).toMatch(/\.app-topbar__content-fill\s*\{[^}]*background:\s*var\(--surface-workspace-pane\);/s);
-    expect(stylesCss).toMatch(/\.app-skills-view\s*\{[^}]*background:\s*var\(--surface-workspace-pane\);/s);
+    expect(stylesCss).toMatch(
+      /\.app-topbar__sidebar-fill\s*\{[^}]*background:\s*var\(--surface-sidebar-pane\);/s,
+    );
+    expect(stylesCss).toMatch(
+      /\.app-topbar__content-fill\s*\{[^}]*background:\s*var\(--surface-workspace-pane\);/s,
+    );
+    expect(stylesCss).toMatch(
+      /\.app-skills-view\s*\{[^}]*background:\s*var\(--surface-workspace-pane\);/s,
+    );
   });
 });

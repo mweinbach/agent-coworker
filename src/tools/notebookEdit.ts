@@ -1,22 +1,25 @@
 import fs from "node:fs/promises";
 
 import { z } from "zod";
-
-import type { ToolContext } from "./context";
-import { defineTool } from "./defineTool";
 import { resolveMaybeRelative } from "../utils/paths";
 import { assertWritePathAllowed } from "../utils/permissions";
+import type { ToolContext } from "./context";
+import { defineTool } from "./defineTool";
 
-const notebookCellSchema = z.object({
-  cell_type: z.string().trim().min(1),
-  source: z.union([z.array(z.string()), z.string()]).transform((source) =>
-    typeof source === "string" ? [source] : source
-  ),
-}).passthrough();
+const notebookCellSchema = z
+  .object({
+    cell_type: z.string().trim().min(1),
+    source: z
+      .union([z.array(z.string()), z.string()])
+      .transform((source) => (typeof source === "string" ? [source] : source)),
+  })
+  .passthrough();
 
-const notebookSchema = z.object({
-  cells: z.array(notebookCellSchema),
-}).passthrough();
+const notebookSchema = z
+  .object({
+    cells: z.array(notebookCellSchema),
+  })
+  .passthrough();
 
 export function createNotebookEditTool(ctx: ToolContext) {
   return defineTool({
@@ -43,13 +46,13 @@ export function createNotebookEditTool(ctx: ToolContext) {
       editMode?: "replace" | "insert" | "delete";
     }) => {
       ctx.log(
-        `tool> notebookEdit ${JSON.stringify({ notebookPath, cellIndex, cellType, editMode })}`
+        `tool> notebookEdit ${JSON.stringify({ notebookPath, cellIndex, cellType, editMode })}`,
       );
 
       const abs = await assertWritePathAllowed(
         resolveMaybeRelative(notebookPath, ctx.config.workingDirectory),
         ctx.config,
-        "notebookEdit"
+        "notebookEdit",
       );
       if (abs.toLowerCase().endsWith(".ipynb") === false) {
         throw new Error(`Notebook edit blocked: expected a .ipynb file: ${abs}`);
@@ -64,7 +67,7 @@ export function createNotebookEditTool(ctx: ToolContext) {
       const parsedNotebook = notebookSchema.safeParse(parsedJson);
       if (!parsedNotebook.success) {
         throw new Error(
-          `Invalid notebook format: ${abs}: ${parsedNotebook.error.issues[0]?.message ?? "validation_failed"}`
+          `Invalid notebook format: ${abs}: ${parsedNotebook.error.issues[0]?.message ?? "validation_failed"}`,
         );
       }
       const nb = parsedNotebook.data;
@@ -72,13 +75,18 @@ export function createNotebookEditTool(ctx: ToolContext) {
 
       const sourceLines = newSource
         .split("\n")
-        .map((line: string, index: number, allLines: string[]) => line + (index < allLines.length - 1 ? "\n" : ""));
+        .map(
+          (line: string, index: number, allLines: string[]) =>
+            line + (index < allLines.length - 1 ? "\n" : ""),
+        );
 
       if (editMode === "delete") {
-        if (cellIndex >= cells.length) throw new Error(`Cell ${cellIndex} out of range (${cells.length})`);
+        if (cellIndex >= cells.length)
+          throw new Error(`Cell ${cellIndex} out of range (${cells.length})`);
         cells.splice(cellIndex, 1);
       } else if (editMode === "insert") {
-        if (cellIndex > cells.length) throw new Error(`Cell ${cellIndex} out of range (${cells.length})`);
+        if (cellIndex > cells.length)
+          throw new Error(`Cell ${cellIndex} out of range (${cells.length})`);
         const ct = cellType || "code";
         cells.splice(cellIndex, 0, {
           cell_type: ct,
@@ -87,7 +95,8 @@ export function createNotebookEditTool(ctx: ToolContext) {
           ...(ct === "code" ? { outputs: [], execution_count: null } : {}),
         });
       } else {
-        if (cellIndex >= cells.length) throw new Error(`Cell ${cellIndex} out of range (${cells.length})`);
+        if (cellIndex >= cells.length)
+          throw new Error(`Cell ${cellIndex} out of range (${cells.length})`);
         cells[cellIndex]!.source = sourceLines;
         if (cellType) cells[cellIndex]!.cell_type = cellType;
       }

@@ -2,7 +2,12 @@ import { maskApiKey } from "../../connect";
 import type { AgentConfig } from "../../types";
 import { nowIso } from "../../utils/typeGuards";
 import type { MCPRegistryServer, MCPServerSource } from "../configRegistry/types";
-import { mutateScopeDoc, readMCPAuthFiles, resolvePrimaryScope, resolveScopeReadOrder } from "./store";
+import {
+  mutateScopeDoc,
+  readMCPAuthFiles,
+  resolvePrimaryScope,
+  resolveScopeReadOrder,
+} from "./store";
 import type {
   MCPAuthScope,
   MCPServerOAuthClientInfo,
@@ -51,7 +56,9 @@ export async function setMCPServerApiKeyCredential(opts: {
 
 export async function renameMCPServerCredentials(opts: {
   config: AgentConfig;
-  source: MCPServerSource | { source: MCPServerSource; pluginScope?: MCPRegistryServer["pluginScope"] };
+  source:
+    | MCPServerSource
+    | { source: MCPServerSource; pluginScope?: MCPRegistryServer["pluginScope"] };
   previousName: string;
   nextName: string;
 }): Promise<{ moved: boolean; scope: MCPAuthScope; storageFile?: string }> {
@@ -63,7 +70,9 @@ export async function renameMCPServerCredentials(opts: {
   }
 
   const files = await readMCPAuthFiles(opts.config);
-  const scope = resolveScopeReadOrder(opts.source).find((candidate) => files[candidate].doc.servers[previousName] !== undefined);
+  const scope = resolveScopeReadOrder(opts.source).find(
+    (candidate) => files[candidate].doc.servers[previousName] !== undefined,
+  );
   if (!scope) {
     return { moved: false, scope: defaultScope };
   }

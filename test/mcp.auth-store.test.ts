@@ -2,10 +2,9 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
-import type { AgentConfig } from "../src/types";
 import {
   completeMCPServerOAuth,
+  type MCPServerOAuthPending,
   readMCPAuthFiles,
   readMCPServerOAuthPending,
   renameMCPServerCredentials,
@@ -13,11 +12,15 @@ import {
   setMCPServerApiKeyCredential,
   setMCPServerOAuthClientInformation,
   setMCPServerOAuthPending,
-  type MCPServerOAuthPending,
 } from "../src/mcp/authStore";
 import type { MCPRegistryServer } from "../src/mcp/configRegistry";
+import type { AgentConfig } from "../src/types";
 
-function makeConfig(workspaceRoot: string, userHome: string, builtInConfigDir: string): AgentConfig {
+function makeConfig(
+  workspaceRoot: string,
+  userHome: string,
+  builtInConfigDir: string,
+): AgentConfig {
   return {
     provider: "google",
     model: "gemini-3-flash-preview",
@@ -86,7 +89,9 @@ describe("mcp auth store", () => {
         apiKey: "workspace-secret",
       });
       expect(result.scope).toBe("workspace");
-      expect(result.storageFile).toBe(path.join(workspace, ".cowork", "auth", "mcp-credentials.json"));
+      expect(result.storageFile).toBe(
+        path.join(workspace, ".cowork", "auth", "mcp-credentials.json"),
+      );
 
       const workspaceRaw = await fs.readFile(result.storageFile, "utf-8");
       expect(workspaceRaw).toContain("workspace-secret");
@@ -100,7 +105,9 @@ describe("mcp auth store", () => {
   test("inherited server credentials write to user auth file", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-inherited-workspace-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-inherited-home-"));
-    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-inherited-builtin-"));
+    const builtInConfigDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "mcp-auth-inherited-builtin-"),
+    );
     const config = makeConfig(workspace, home, builtInConfigDir);
 
     try {
@@ -167,7 +174,9 @@ describe("mcp auth store", () => {
       });
 
       const workspaceFiles = await readMCPAuthFiles(config);
-      expect(workspaceFiles.workspace.doc.servers["plugin-oauth"]?.oauth?.pending?.challengeId).toBe("challenge-1");
+      expect(
+        workspaceFiles.workspace.doc.servers["plugin-oauth"]?.oauth?.pending?.challengeId,
+      ).toBe("challenge-1");
       expect(workspaceFiles.user.doc.servers["plugin-oauth"]).toBeUndefined();
 
       const pendingState = await readMCPServerOAuthPending({ config, server });
@@ -198,7 +207,9 @@ describe("mcp auth store", () => {
   test("user-scoped plugin OAuth state stays in user auth storage", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-plugin-user-workspace-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-plugin-user-home-"));
-    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-plugin-user-builtin-"));
+    const builtInConfigDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "mcp-auth-plugin-user-builtin-"),
+    );
     const config = makeConfig(workspace, home, builtInConfigDir);
     const server = pluginServer("plugin-user-oauth", "user");
 
@@ -218,7 +229,9 @@ describe("mcp auth store", () => {
 
       const files = await readMCPAuthFiles(config);
       expect(files.workspace.doc.servers["plugin-user-oauth"]).toBeUndefined();
-      expect(files.user.doc.servers["plugin-user-oauth"]?.oauth?.pending?.challengeId).toBe("challenge-2");
+      expect(files.user.doc.servers["plugin-user-oauth"]?.oauth?.pending?.challengeId).toBe(
+        "challenge-2",
+      );
 
       const pendingState = await readMCPServerOAuthPending({ config, server });
       expect(pendingState.scope).toBe("user");
@@ -349,7 +362,9 @@ describe("mcp auth store", () => {
   test("setMCPServerApiKeyCredential recovers from malformed auth store and rewrites sanitized doc", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-malformed-workspace-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-malformed-home-"));
-    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-malformed-builtin-"));
+    const builtInConfigDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "mcp-auth-malformed-builtin-"),
+    );
     const config = makeConfig(workspace, home, builtInConfigDir);
     const authFile = path.join(workspace, ".cowork", "auth", "mcp-credentials.json");
 
@@ -378,7 +393,9 @@ describe("mcp auth store", () => {
   test("setMCPServerOAuthClientInformation persists redirect URIs for dynamic clients", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-clientinfo-workspace-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-clientinfo-home-"));
-    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-clientinfo-builtin-"));
+    const builtInConfigDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "mcp-auth-clientinfo-builtin-"),
+    );
     const config = makeConfig(workspace, home, builtInConfigDir);
 
     try {

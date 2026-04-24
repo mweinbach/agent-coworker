@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
+import { renameMCPServerCredentials } from "../mcp/authStore";
 import type {
   AgentConfig,
   MCPServerConfig,
@@ -9,16 +9,15 @@ import type {
   PluginInstallPreview,
   PluginInstallTargetScope,
 } from "../types";
-import { renameMCPServerCredentials } from "../mcp/authStore";
 import { workspacePathOverlaps } from "../utils/workspacePath";
 import { buildPluginCatalogSnapshot } from "./catalog";
 import { readPluginManifest } from "./manifest";
 import { readPluginMcpServers } from "./mcp";
 import {
   buildPluginInstallPreview,
-  materializePluginSource,
   type MaterializedPluginCandidate,
   type MaterializedPluginSource,
+  materializePluginSource,
   resolvePluginSource,
 } from "./sourceResolver";
 
@@ -73,10 +72,7 @@ async function pathExists(targetPath: string): Promise<boolean> {
   }
 }
 
-async function defaultCopyPluginRoot(
-  sourceRoot: string,
-  destinationRoot: string,
-): Promise<void> {
+async function defaultCopyPluginRoot(sourceRoot: string, destinationRoot: string): Promise<void> {
   await fs.mkdir(path.dirname(destinationRoot), { recursive: true });
   await fs.cp(sourceRoot, destinationRoot, {
     recursive: true,
@@ -99,7 +95,9 @@ async function stageCopySourceIfNeeded(
   sourceRoot: string,
   conflictingTargets: string[],
 ): Promise<{ sourceRoot: string; cleanup: () => Promise<void> }> {
-  const overlapsConflict = conflictingTargets.some((targetRoot) => workspacePathOverlaps(sourceRoot, targetRoot));
+  const overlapsConflict = conflictingTargets.some((targetRoot) =>
+    workspacePathOverlaps(sourceRoot, targetRoot),
+  );
   if (!overlapsConflict) {
     return {
       sourceRoot,
@@ -186,9 +184,7 @@ async function refreshCatalog(config: AgentConfig): Promise<PluginCatalogSnapsho
   return await buildPluginCatalogSnapshot(config);
 }
 
-function validateInstallCandidates(
-  validCandidates: MaterializedPluginCandidate[],
-): void {
+function validateInstallCandidates(validCandidates: MaterializedPluginCandidate[]): void {
   const seenIds = new Set<string>();
   for (const candidate of validCandidates) {
     if (seenIds.has(candidate.pluginId)) {
@@ -213,14 +209,15 @@ async function findExistingInstallRoot(
   destinationRoot: string,
   targetRoots: string[],
 ): Promise<string | null> {
-  const candidateRoots = [destinationRoot, ...targetRoots.filter((rootDir) => rootDir !== destinationRoot)];
+  const candidateRoots = [
+    destinationRoot,
+    ...targetRoots.filter((rootDir) => rootDir !== destinationRoot),
+  ];
   for (const rootDir of candidateRoots) {
     try {
       await fs.stat(rootDir);
       return rootDir;
-    } catch {
-      continue;
-    }
+    } catch {}
   }
   return null;
 }
@@ -307,7 +304,11 @@ export async function installPluginsFromSource(opts: {
   config: AgentConfig;
   input: string;
   targetScope: PluginInstallTargetScope;
-}): Promise<{ preview: PluginInstallPreview; pluginIds: string[]; catalog: PluginCatalogSnapshot }> {
+}): Promise<{
+  preview: PluginInstallPreview;
+  pluginIds: string[];
+  catalog: PluginCatalogSnapshot;
+}> {
   const currentCatalog = await refreshCatalog(opts.config);
   const preview = await buildPluginInstallPreview({
     input: opts.input,
@@ -323,7 +324,9 @@ export async function installPluginsFromSource(opts: {
   });
 
   try {
-    const validCandidates = materialized.candidates.filter((candidate) => candidate.diagnostics.length === 0);
+    const validCandidates = materialized.candidates.filter(
+      (candidate) => candidate.diagnostics.length === 0,
+    );
     if (validCandidates.length === 0) {
       throw new Error("No valid plugin bundles were found in the provided source");
     }
@@ -335,11 +338,10 @@ export async function installPluginsFromSource(opts: {
       const destinationRoot = path.join(writableScope.pluginsDir, candidate.pluginId);
       const targetRoots = conflictingTargetRoots(currentCatalog, writableScope, candidate.pluginId);
       const existingInstallRoot = await findExistingInstallRoot(destinationRoot, targetRoots);
-      const previousServers = existingInstallRoot ? await readBundledPluginMcpServers(existingInstallRoot) : [];
-      const stagedSource = await stageCopySourceIfNeeded(
-        candidate.rootDir,
-        targetRoots,
-      );
+      const previousServers = existingInstallRoot
+        ? await readBundledPluginMcpServers(existingInstallRoot)
+        : [];
+      const stagedSource = await stageCopySourceIfNeeded(candidate.rootDir, targetRoots);
       try {
         await replaceInstalledPlugin({
           sourceRoot: stagedSource.sourceRoot,

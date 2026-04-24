@@ -1,3 +1,23 @@
+import { normalizeGoogleThinkingLevelForModel } from "../shared/googleThinking";
+import { getGoogleNativeWebSearchFromProviderOptions } from "../shared/openaiCompatibleOptions";
+import {
+  type GoogleContinuationState,
+  isGoogleContinuationState,
+} from "../shared/providerContinuation";
+import type { ModelMessage } from "../types";
+import { resolveGoogleInteractionsModel } from "./googleInteractionsModel";
+import {
+  googleTurnMessagesToModelMessages,
+  type RunGoogleNativeInteractionStep,
+  runGoogleNativeInteractionStep,
+} from "./googleNativeInteractions";
+import {
+  extractPiAssistantText,
+  extractPiReasoningText,
+  mergePiUsage,
+  normalizePiUsage,
+  piTurnMessagesToModelMessages,
+} from "./piMessageBridge";
 import {
   buildInvalidToolCallFormatReminderMessage,
   buildStepState,
@@ -12,26 +32,18 @@ import {
   startModelCallSpan,
   toolMapToPiTools,
 } from "./piRuntime";
-import { resolveGoogleInteractionsModel } from "./googleInteractionsModel";
-import { asNonEmptyString, asRecord, asString, extractToolCallsFromAssistant } from "./piRuntimeOptions";
 import {
-  extractPiAssistantText,
-  extractPiReasoningText,
-  mergePiUsage,
-  normalizePiUsage,
-  piTurnMessagesToModelMessages,
-} from "./piMessageBridge";
-import {
-  googleTurnMessagesToModelMessages,
-  runGoogleNativeInteractionStep,
-  type RunGoogleNativeInteractionStep,
-} from "./googleNativeInteractions";
-import { normalizeGoogleThinkingLevelForModel } from "../shared/googleThinking";
-import { getGoogleNativeWebSearchFromProviderOptions } from "../shared/openaiCompatibleOptions";
-import { isGoogleContinuationState, type GoogleContinuationState } from "../shared/providerContinuation";
-
-import type { ModelMessage } from "../types";
-import type { LlmRuntime, RuntimeRunTurnParams, RuntimeRunTurnResult, RuntimeStepOverride } from "./types";
+  asNonEmptyString,
+  asRecord,
+  asString,
+  extractToolCallsFromAssistant,
+} from "./piRuntimeOptions";
+import type {
+  LlmRuntime,
+  RuntimeRunTurnParams,
+  RuntimeRunTurnResult,
+  RuntimeStepOverride,
+} from "./types";
 
 type RuntimeStepOverrides = RuntimeStepOverride;
 
@@ -75,23 +87,25 @@ function buildGoogleStreamOptions(
   if (apiKey) options.apiKey = apiKey;
   if (abortSignal) options.signal = abortSignal;
 
-  const googleSection = asRecord(providerOptions?.google) ?? asRecord(providerOptions?.vertex) ?? {};
+  const googleSection =
+    asRecord(providerOptions?.google) ?? asRecord(providerOptions?.vertex) ?? {};
 
   const thinkingConfig = asRecord(googleSection.thinkingConfig);
   if (thinkingConfig) {
     const includeThoughts = thinkingConfig.includeThoughts !== false;
-    const level = normalizeGoogleThinkingLevelForModel(modelId, asNonEmptyString(thinkingConfig.thinkingLevel));
+    const level = normalizeGoogleThinkingLevelForModel(
+      modelId,
+      asNonEmptyString(thinkingConfig.thinkingLevel),
+    );
     if (level) options.thinkingLevel = level;
     options.thinkingSummaries = includeThoughts ? "auto" : "none";
-    const budget = typeof thinkingConfig.thinkingBudget === "number"
-      ? thinkingConfig.thinkingBudget
-      : undefined;
+    const budget =
+      typeof thinkingConfig.thinkingBudget === "number" ? thinkingConfig.thinkingBudget : undefined;
     if (budget !== undefined) options.thinkingBudget = budget;
   }
 
-  const temperature = typeof googleSection.temperature === "number"
-    ? googleSection.temperature
-    : undefined;
+  const temperature =
+    typeof googleSection.temperature === "number" ? googleSection.temperature : undefined;
   if (temperature !== undefined) options.temperature = temperature;
 
   const toolChoice = asNonEmptyString(googleSection.toolChoice);
@@ -133,7 +147,8 @@ export function createGoogleInteractionsRuntime(
               return deltaMessages.length > 0 ? deltaMessages : [...params.messages];
             })()
           : [...(params.allMessages ?? params.messages)];
-        let stepProviderOptions: Record<string, unknown> | undefined = asRecord(params.providerOptions) ?? undefined;
+        let stepProviderOptions: Record<string, unknown> | undefined =
+          asRecord(params.providerOptions) ?? undefined;
         let nextInteractionInputStartIndex = 0;
 
         // Build a PiModel-compatible object for shared utilities (telemetry, etc.)
@@ -180,7 +195,7 @@ export function createGoogleInteractionsRuntime(
             { ...params, providerOptions: stepProviderOptions } as RuntimeRunTurnParams,
             resolvedCompat as any,
             overrides,
-            stepMessages
+            stepMessages,
           );
           stepMessages = stepState.modelMessages;
           stepProviderOptions = stepState.providerOptions;
@@ -211,10 +226,9 @@ export function createGoogleInteractionsRuntime(
           let interactionId: string | undefined;
           try {
             const requestStartIndex = Math.min(nextInteractionInputStartIndex, stepMessages.length);
-            const requestMessages =
-              previousInteractionId
-                ? stepMessages.slice(requestStartIndex)
-                : stepMessages;
+            const requestMessages = previousInteractionId
+              ? stepMessages.slice(requestStartIndex)
+              : stepMessages;
             const result = await runStepImpl({
               model: resolved.model,
               apiKey: asNonEmptyString(mergedStreamOptions.apiKey as unknown) ?? resolved.apiKey,
@@ -244,13 +258,11 @@ export function createGoogleInteractionsRuntime(
 
           turnMessages.push(assistantRecord);
           usage = mergePiUsage(usage, assistantRecord.usage);
-          finalProviderState = nextGoogleProviderState(resolved.model.id, interactionId) ?? finalProviderState;
+          finalProviderState =
+            nextGoogleProviderState(resolved.model.id, interactionId) ?? finalProviderState;
           previousInteractionId = interactionId ?? previousInteractionId;
           const assistantModelMessages = googleTurnMessagesToModelMessages([assistantRecord]);
-          stepMessages = [
-            ...stepMessages,
-            ...assistantModelMessages,
-          ];
+          stepMessages = [...stepMessages, ...assistantModelMessages];
           nextInteractionInputStartIndex = stepMessages.length;
 
           await emitPart({
@@ -264,7 +276,9 @@ export function createGoogleInteractionsRuntime(
           const stopReason = asString(assistantRecord.stopReason);
           finalStopReason = stopReason ?? finalStopReason;
           if (stopReason === "error" || stopReason === "aborted") {
-            const errorMessage = asString(assistantRecord.errorMessage) ?? "Google Interactions runtime model stream failed.";
+            const errorMessage =
+              asString(assistantRecord.errorMessage) ??
+              "Google Interactions runtime model stream failed.";
             throw new Error(errorMessage);
           }
 
@@ -282,7 +296,11 @@ export function createGoogleInteractionsRuntime(
             const toolResult = await executeToolCall(toolCall, params, emitPart);
             turnMessages.push(toolResult);
             toolResultMessages.push(...piTurnMessagesToModelMessages([toolResult as any]));
-            needsInvalidToolCallReminder ||= shouldAddInvalidToolCallFormatReminder(toolCall, toolResult, params.tools);
+            needsInvalidToolCallReminder ||= shouldAddInvalidToolCallFormatReminder(
+              toolCall,
+              toolResult,
+              params.tools,
+            );
           }
 
           if (needsInvalidToolCallReminder) {

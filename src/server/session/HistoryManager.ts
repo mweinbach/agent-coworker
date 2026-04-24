@@ -13,7 +13,10 @@ export class HistoryManager {
     }
 
     const first = this.context.state.allMessages[0];
-    this.context.state.messages = [first, ...this.context.state.allMessages.slice(-(MAX_MESSAGE_HISTORY - 1))];
+    this.context.state.messages = [
+      first,
+      ...this.context.state.allMessages.slice(-(MAX_MESSAGE_HISTORY - 1)),
+    ];
   }
 
   appendMessagesToHistory(messages: ModelMessage[]) {
@@ -25,7 +28,10 @@ export class HistoryManager {
 
     if (this.context.state.messages.length > MAX_MESSAGE_HISTORY) {
       const first = this.context.state.messages[0];
-      this.context.state.messages = [first, ...this.context.state.messages.slice(-(MAX_MESSAGE_HISTORY - 1))];
+      this.context.state.messages = [
+        first,
+        ...this.context.state.messages.slice(-(MAX_MESSAGE_HISTORY - 1)),
+      ];
     }
   }
 }

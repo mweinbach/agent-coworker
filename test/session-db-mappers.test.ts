@@ -71,12 +71,14 @@ describe("sessionDb mappers", () => {
       status: "closed",
       title_source: "manual",
       title_model: "gpt-5",
-      messages_json: "[{\"role\":\"user\",\"content\":\"hello\"}]",
-      provider_state_json: "{\"provider\":\"openai\",\"model\":\"gpt-5\",\"responseId\":\"resp_1\",\"updatedAt\":\"2026-02-19T00:00:01.000Z\"}",
+      messages_json: '[{"role":"user","content":"hello"}]',
+      provider_state_json:
+        '{"provider":"openai","model":"gpt-5","responseId":"resp_1","updatedAt":"2026-02-19T00:00:01.000Z"}',
       provider_options_json: null,
       todos_json: "[]",
-      harness_context_json: "{\"runId\":\"r-1\"}",
-      cost_tracker_json: "{\"sessionId\":\"sess-2\",\"totalTurns\":1,\"totalPromptTokens\":10,\"totalCompletionTokens\":5,\"totalTokens\":15,\"estimatedTotalCostUsd\":0.001,\"costTrackingAvailable\":true,\"byModel\":[],\"turns\":[],\"budgetStatus\":{\"configured\":false,\"warnAtUsd\":null,\"stopAtUsd\":null,\"warningTriggered\":false,\"stopTriggered\":false,\"currentCostUsd\":0.001},\"createdAt\":\"2026-02-19T00:00:00.000Z\",\"updatedAt\":\"2026-02-19T00:00:01.000Z\"}",
+      harness_context_json: '{"runId":"r-1"}',
+      cost_tracker_json:
+        '{"sessionId":"sess-2","totalTurns":1,"totalPromptTokens":10,"totalCompletionTokens":5,"totalTokens":15,"estimatedTotalCostUsd":0.001,"costTrackingAvailable":true,"byModel":[],"turns":[],"budgetStatus":{"configured":false,"warnAtUsd":null,"stopAtUsd":null,"warningTriggered":false,"stopTriggered":false,"currentCostUsd":0.001},"createdAt":"2026-02-19T00:00:00.000Z","updatedAt":"2026-02-19T00:00:01.000Z"}',
       backups_enabled_override: null,
     });
 
@@ -261,7 +263,7 @@ describe("sessionDb mappers", () => {
         status: "closed",
         title_source: "manual",
         title_model: null,
-        messages_json: "[{\"role\":\"user\",\"content\":\"hello\"}]",
+        messages_json: '[{"role":"user","content":"hello"}]',
         provider_state_json: null,
         provider_options_json: null,
         todos_json: "[]",

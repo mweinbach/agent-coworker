@@ -1,7 +1,7 @@
+import { type BarcodeScanningResult, CameraView, useCameraPermissions } from "expo-camera";
+import { useRouter } from "expo-router";
 import { useRef, useState } from "react";
 import { Alert, Pressable, Text, View } from "react-native";
-import { CameraView, type BarcodeScanningResult, useCameraPermissions } from "expo-camera";
-import { useRouter } from "expo-router";
 import Animated, { FadeIn, FadeInUp } from "react-native-reanimated";
 
 import { Screen } from "@/components/ui/screen";
@@ -23,9 +23,9 @@ export default function PairingScanScreen() {
   const scanHandlerRef = useRef<ReturnType<typeof createPairingScanHandler> | null>(null);
 
   const granted = permission?.granted ?? false;
-  const pairingInFlight = scannedPayload !== null && (
-    connectionState.status === "pairing" || connectionState.status === "connecting"
-  );
+  const pairingInFlight =
+    scannedPayload !== null &&
+    (connectionState.status === "pairing" || connectionState.status === "connecting");
 
   if (!scanHandlerRef.current) {
     scanHandlerRef.current = createPairingScanHandler({
@@ -54,7 +54,12 @@ export default function PairingScanScreen() {
         <SectionCard
           title="Scan your computer"
           description="Point your camera at the QR code shown in Cowork Desktop's remote access screen."
-          action={<StatusPill label={granted ? "Camera ready" : "Permission needed"} tone={granted ? "success" : "warning"} />}
+          action={
+            <StatusPill
+              label={granted ? "Camera ready" : "Permission needed"}
+              tone={granted ? "success" : "warning"}
+            />
+          }
         >
           {!granted ? (
             <View style={{ gap: 16, alignItems: "center", paddingVertical: 20 }}>
@@ -75,7 +80,15 @@ export default function PairingScanScreen() {
                 <Text selectable style={{ color: theme.text, fontSize: 17, fontWeight: "700" }}>
                   Camera access required
                 </Text>
-                <Text selectable style={{ color: theme.textSecondary, fontSize: 14, lineHeight: 20, textAlign: "center" }}>
+                <Text
+                  selectable
+                  style={{
+                    color: theme.textSecondary,
+                    fontSize: 14,
+                    lineHeight: 20,
+                    textAlign: "center",
+                  }}
+                >
                   Cowork Mobile needs camera access to scan the pairing code from your desktop.
                 </Text>
               </View>
@@ -151,8 +164,13 @@ export default function PairingScanScreen() {
 
       {pairingInFlight && (
         <Animated.View entering={FadeInUp.delay(200).duration(400)}>
-          <SectionCard title="Connecting..." description="Establishing secure session with your computer">
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 8 }}>
+          <SectionCard
+            title="Connecting..."
+            description="Establishing secure session with your computer"
+          >
+            <View
+              style={{ flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 8 }}
+            >
               <View
                 style={{
                   width: 40,

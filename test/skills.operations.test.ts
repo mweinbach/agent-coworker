@@ -13,7 +13,9 @@ import {
 import type { AgentConfig } from "../src/types";
 
 function skillDoc(name: string, description: string): string {
-  return ["---", `name: "${name}"`, `description: "${description}"`, "---", "", "# Body"].join("\n");
+  return ["---", `name: "${name}"`, `description: "${description}"`, "---", "", "# Body"].join(
+    "\n",
+  );
 }
 
 async function createSkill(parentDir: string, name: string, description: string): Promise<string> {
@@ -61,18 +63,21 @@ describe("updateSkillInstallation", () => {
       fetchCalls += 1;
       const url = typeof input === "string" ? input : input.url;
       if (url === "https://api.github.com/repos/owner/repo/contents/my-skill?ref=main") {
-        return new Response(JSON.stringify([
+        return new Response(
+          JSON.stringify([
+            {
+              type: "file",
+              name: "SKILL.md",
+              path: "my-skill/SKILL.md",
+              url: "https://api.github.com/repos/owner/repo/contents/my-skill/SKILL.md?ref=main",
+              download_url: "https://raw.githubusercontent.com/owner/repo/main/my-skill/SKILL.md",
+            },
+          ]),
           {
-            type: "file",
-            name: "SKILL.md",
-            path: "my-skill/SKILL.md",
-            url: "https://api.github.com/repos/owner/repo/contents/my-skill/SKILL.md?ref=main",
-            download_url: "https://raw.githubusercontent.com/owner/repo/main/my-skill/SKILL.md",
+            status: 200,
+            headers: { "content-type": "application/json" },
           },
-        ]), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
+        );
       }
       if (url === "https://raw.githubusercontent.com/owner/repo/main/my-skill/SKILL.md") {
         return new Response(skillDoc("my-skill", "Updated skill"), { status: 200 });
@@ -108,7 +113,9 @@ describe("updateSkillInstallation", () => {
 
     expect(fetchCalls).toBe(2);
     expect(result.preview.source.repo).toBe("owner/repo");
-    expect(await fs.readFile(path.join(existingSkillDir, "SKILL.md"), "utf-8")).toContain('description: "Updated skill"');
+    expect(await fs.readFile(path.join(existingSkillDir, "SKILL.md"), "utf-8")).toContain(
+      'description: "Updated skill"',
+    );
   });
 
   test("checkSkillInstallationUpdate rejects missing original skill names", async () => {
@@ -155,9 +162,11 @@ describe("updateSkillInstallation", () => {
     };
 
     await expect(updateSkillInstallation({ config, installation })).rejects.toThrow(
-      'Recorded skill "my-skill" was not found in the update source.'
+      'Recorded skill "my-skill" was not found in the update source.',
     );
-    expect(await fs.readFile(path.join(existingSkillDir, "SKILL.md"), "utf-8")).toContain('description: "Existing skill"');
+    expect(await fs.readFile(path.join(existingSkillDir, "SKILL.md"), "utf-8")).toContain(
+      'description: "Existing skill"',
+    );
     await expect(fs.access(path.join(config.skillsDirs[0]!, "other-skill"))).rejects.toBeDefined();
   });
 
@@ -194,7 +203,11 @@ describe("updateSkillInstallation", () => {
 
   test("rejects updates when the source contains duplicate valid candidates for the recorded skill name", async () => {
     const config = makeConfig(root);
-    const existingSkillDir = await createSkill(config.skillsDirs[0]!, "dup-skill", "Existing skill");
+    const existingSkillDir = await createSkill(
+      config.skillsDirs[0]!,
+      "dup-skill",
+      "Existing skill",
+    );
     const sourceRoot = path.join(root, "incoming");
     await createSkill(path.join(sourceRoot, "a"), "dup-skill", "One");
     await createSkill(path.join(sourceRoot, "b"), "dup-skill", "Two");
@@ -214,7 +227,9 @@ describe("updateSkillInstallation", () => {
     await expect(updateSkillInstallation({ config, installation })).rejects.toThrow(
       'The update source contains more than one valid skill named "dup-skill". Split the source or remove duplicates so each skill name is unique.',
     );
-    expect(await fs.readFile(path.join(existingSkillDir, "SKILL.md"), "utf-8")).toContain('description: "Existing skill"');
+    expect(await fs.readFile(path.join(existingSkillDir, "SKILL.md"), "utf-8")).toContain(
+      'description: "Existing skill"',
+    );
   });
 
   test("can update a local installation in place without deleting its source first", async () => {
@@ -235,8 +250,12 @@ describe("updateSkillInstallation", () => {
 
     const result = await updateSkillInstallation({ config, installation });
 
-    expect(result.catalog.installations.find((entry) => entry.name === "my-skill")?.installationId).toBe(installation.installationId);
-    expect(await fs.readFile(path.join(existingSkillDir, "SKILL.md"), "utf-8")).toContain('description: "Existing skill"');
+    expect(
+      result.catalog.installations.find((entry) => entry.name === "my-skill")?.installationId,
+    ).toBe(installation.installationId);
+    expect(await fs.readFile(path.join(existingSkillDir, "SKILL.md"), "utf-8")).toContain(
+      'description: "Existing skill"',
+    );
   });
 });
 
@@ -291,13 +310,21 @@ describe("installSkillsFromSource", () => {
       const config = makeConfig(root);
       const bundle = path.join(root, "bundle");
       await fs.mkdir(path.join(bundle, "a", "dup-skill"), { recursive: true });
-      await fs.writeFile(path.join(bundle, "a", "dup-skill", "SKILL.md"), skillDoc("dup-skill", "One"), "utf-8");
-      await fs.mkdir(path.join(bundle, "b", "dup-skill"), { recursive: true });
-      await fs.writeFile(path.join(bundle, "b", "dup-skill", "SKILL.md"), skillDoc("dup-skill", "Two"), "utf-8");
-
-      await expect(installSkillsFromSource({ config, input: bundle, targetScope: "project" })).rejects.toThrow(
-        /more than one valid skill named "dup-skill"/,
+      await fs.writeFile(
+        path.join(bundle, "a", "dup-skill", "SKILL.md"),
+        skillDoc("dup-skill", "One"),
+        "utf-8",
       );
+      await fs.mkdir(path.join(bundle, "b", "dup-skill"), { recursive: true });
+      await fs.writeFile(
+        path.join(bundle, "b", "dup-skill", "SKILL.md"),
+        skillDoc("dup-skill", "Two"),
+        "utf-8",
+      );
+
+      await expect(
+        installSkillsFromSource({ config, input: bundle, targetScope: "project" }),
+      ).rejects.toThrow(/more than one valid skill named "dup-skill"/);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
@@ -307,7 +334,11 @@ describe("installSkillsFromSource", () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "skills-install-same-root-"));
     try {
       const config = makeConfig(root);
-      const existingSkillDir = await createSkill(config.skillsDirs[0]!, "my-skill", "Existing skill");
+      const existingSkillDir = await createSkill(
+        config.skillsDirs[0]!,
+        "my-skill",
+        "Existing skill",
+      );
 
       const result = await installSkillsFromSource({
         config,
@@ -316,7 +347,9 @@ describe("installSkillsFromSource", () => {
       });
 
       expect(result.installationIds).toHaveLength(1);
-      expect(await fs.readFile(path.join(existingSkillDir, "SKILL.md"), "utf-8")).toContain('description: "Existing skill"');
+      expect(await fs.readFile(path.join(existingSkillDir, "SKILL.md"), "utf-8")).toContain(
+        'description: "Existing skill"',
+      );
       await fs.access(path.join(existingSkillDir, ".cowork-skill.json"));
     } finally {
       await fs.rm(root, { recursive: true, force: true });

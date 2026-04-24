@@ -59,7 +59,9 @@ function applyCatalogEvent(event: SkillsCatalogEvent) {
     installations: event.catalog.installations,
     effectiveInstallations: event.catalog.effectiveSkills,
     mutationPending: Object.fromEntries(
-      Object.entries(useSkillsStore.getState().mutationPending).filter(([key]) => !event.clearedMutationPendingKeys?.includes(key)),
+      Object.entries(useSkillsStore.getState().mutationPending).filter(
+        ([key]) => !event.clearedMutationPendingKeys?.includes(key),
+      ),
     ),
   };
 }
@@ -158,7 +160,10 @@ export const useSkillsStore = create<SkillsStoreState>((set, get) => ({
     const { client, cwd } = getClientAndCwd();
     set({ mutationPending: { ...get().mutationPending, [name]: true } });
     try {
-      const result = await callParsedControlMethod(client, "cowork/skills/enable", { cwd, skillName: name });
+      const result = await callParsedControlMethod(client, "cowork/skills/enable", {
+        cwd,
+        skillName: name,
+      });
       set({ skills: result.event.skills });
       await get().fetchSkills();
     } finally {
@@ -170,7 +175,10 @@ export const useSkillsStore = create<SkillsStoreState>((set, get) => ({
     const { client, cwd } = getClientAndCwd();
     set({ mutationPending: { ...get().mutationPending, [name]: true } });
     try {
-      const result = await callParsedControlMethod(client, "cowork/skills/disable", { cwd, skillName: name });
+      const result = await callParsedControlMethod(client, "cowork/skills/disable", {
+        cwd,
+        skillName: name,
+      });
       set({ skills: result.event.skills });
       await get().fetchSkills();
     } finally {
@@ -182,7 +190,10 @@ export const useSkillsStore = create<SkillsStoreState>((set, get) => ({
     const { client, cwd } = getClientAndCwd();
     set({ mutationPending: { ...get().mutationPending, [name]: true } });
     try {
-      const result = await callParsedControlMethod(client, "cowork/skills/delete", { cwd, skillName: name });
+      const result = await callParsedControlMethod(client, "cowork/skills/delete", {
+        cwd,
+        skillName: name,
+      });
       set({ skills: result.event.skills });
       await get().fetchSkills();
     } finally {
@@ -193,7 +204,10 @@ export const useSkillsStore = create<SkillsStoreState>((set, get) => ({
   async enableInstallation(installationId: string) {
     const { client, cwd } = getClientAndCwd();
     try {
-      const result = await callParsedControlMethod(client, "cowork/skills/installation/enable", { cwd, installationId });
+      const result = await callParsedControlMethod(client, "cowork/skills/installation/enable", {
+        cwd,
+        installationId,
+      });
       set(applyCatalogEvent(result.event));
       await get().fetchSkills();
     } catch (error) {
@@ -204,7 +218,10 @@ export const useSkillsStore = create<SkillsStoreState>((set, get) => ({
   async disableInstallation(installationId: string) {
     const { client, cwd } = getClientAndCwd();
     try {
-      const result = await callParsedControlMethod(client, "cowork/skills/installation/disable", { cwd, installationId });
+      const result = await callParsedControlMethod(client, "cowork/skills/installation/disable", {
+        cwd,
+        installationId,
+      });
       set(applyCatalogEvent(result.event));
       await get().fetchSkills();
     } catch (error) {
@@ -215,7 +232,10 @@ export const useSkillsStore = create<SkillsStoreState>((set, get) => ({
   async deleteInstallation(installationId: string) {
     const { client, cwd } = getClientAndCwd();
     try {
-      const result = await callParsedControlMethod(client, "cowork/skills/installation/delete", { cwd, installationId });
+      const result = await callParsedControlMethod(client, "cowork/skills/installation/delete", {
+        cwd,
+        installationId,
+      });
       set(applyCatalogEvent(result.event));
       await get().fetchSkills();
     } catch (error) {
@@ -226,7 +246,10 @@ export const useSkillsStore = create<SkillsStoreState>((set, get) => ({
   async updateInstallation(installationId: string) {
     const { client, cwd } = getClientAndCwd();
     try {
-      const result = await callParsedControlMethod(client, "cowork/skills/installation/update", { cwd, installationId });
+      const result = await callParsedControlMethod(client, "cowork/skills/installation/update", {
+        cwd,
+        installationId,
+      });
       set(applyCatalogEvent(result.event));
       await get().fetchSkills();
     } catch (error) {
@@ -252,10 +275,14 @@ export const useSkillsStore = create<SkillsStoreState>((set, get) => ({
   async checkInstallationUpdate(installationId: string) {
     const { client, cwd } = getClientAndCwd();
     try {
-      const result = await callParsedControlMethod(client, "cowork/skills/installation/checkUpdate", {
-        cwd,
-        installationId,
-      });
+      const result = await callParsedControlMethod(
+        client,
+        "cowork/skills/installation/checkUpdate",
+        {
+          cwd,
+          installationId,
+        },
+      );
       set({
         updateChecksByInstallationId: {
           ...get().updateChecksByInstallationId,

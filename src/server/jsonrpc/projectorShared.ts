@@ -1,3 +1,4 @@
+export type { ProjectedReasoningMode } from "../projection/shared";
 export {
   hasVisibleAssistantText,
   makeItemId,
@@ -8,4 +9,3 @@ export {
   readPartString,
   reasoningModeFromPart,
 } from "../projection/shared";
-export type { ProjectedReasoningMode } from "../projection/shared";

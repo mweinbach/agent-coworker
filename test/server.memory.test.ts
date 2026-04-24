@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
 import { HistoryManager } from "../src/server/session/HistoryManager";
-import { SessionCostTracker } from "../src/session/costTracker";
 import { SessionSnapshotProjector } from "../src/server/session/SessionSnapshotProjector";
+import { SessionCostTracker } from "../src/session/costTracker";
 import type { SessionSnapshot } from "../src/shared/sessionSnapshot";
 import type { ModelMessage } from "../src/types";
 

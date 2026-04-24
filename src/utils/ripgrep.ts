@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -61,14 +61,30 @@ function resolveRipgrepAssets(): RipgrepAsset[] {
   if (platform === "linux") {
     if (arch === "x64") {
       return [
-        { version, archiveName: `ripgrep-${version}-x86_64-unknown-linux-musl.tar.gz`, archiveKind: "tar.gz" },
-        { version, archiveName: `ripgrep-${version}-x86_64-unknown-linux-gnu.tar.gz`, archiveKind: "tar.gz" },
+        {
+          version,
+          archiveName: `ripgrep-${version}-x86_64-unknown-linux-musl.tar.gz`,
+          archiveKind: "tar.gz",
+        },
+        {
+          version,
+          archiveName: `ripgrep-${version}-x86_64-unknown-linux-gnu.tar.gz`,
+          archiveKind: "tar.gz",
+        },
       ];
     }
     if (arch === "arm64") {
       return [
-        { version, archiveName: `ripgrep-${version}-aarch64-unknown-linux-musl.tar.gz`, archiveKind: "tar.gz" },
-        { version, archiveName: `ripgrep-${version}-aarch64-unknown-linux-gnu.tar.gz`, archiveKind: "tar.gz" },
+        {
+          version,
+          archiveName: `ripgrep-${version}-aarch64-unknown-linux-musl.tar.gz`,
+          archiveKind: "tar.gz",
+        },
+        {
+          version,
+          archiveName: `ripgrep-${version}-aarch64-unknown-linux-gnu.tar.gz`,
+          archiveKind: "tar.gz",
+        },
       ];
     }
   }
@@ -77,18 +93,18 @@ function resolveRipgrepAssets(): RipgrepAsset[] {
     if (arch === "x64") {
       return [
         {
-        version,
-        archiveName: `ripgrep-${version}-x86_64-apple-darwin.tar.gz`,
-        archiveKind: "tar.gz",
+          version,
+          archiveName: `ripgrep-${version}-x86_64-apple-darwin.tar.gz`,
+          archiveKind: "tar.gz",
         },
       ];
     }
     if (arch === "arm64") {
       return [
         {
-        version,
-        archiveName: `ripgrep-${version}-aarch64-apple-darwin.tar.gz`,
-        archiveKind: "tar.gz",
+          version,
+          archiveName: `ripgrep-${version}-aarch64-apple-darwin.tar.gz`,
+          archiveKind: "tar.gz",
         },
       ];
     }
@@ -98,18 +114,18 @@ function resolveRipgrepAssets(): RipgrepAsset[] {
     if (arch === "x64") {
       return [
         {
-        version,
-        archiveName: `ripgrep-${version}-x86_64-pc-windows-msvc.zip`,
-        archiveKind: "zip",
+          version,
+          archiveName: `ripgrep-${version}-x86_64-pc-windows-msvc.zip`,
+          archiveKind: "zip",
         },
       ];
     }
     if (arch === "arm64") {
       return [
         {
-        version,
-        archiveName: `ripgrep-${version}-aarch64-pc-windows-msvc.zip`,
-        archiveKind: "zip",
+          version,
+          archiveName: `ripgrep-${version}-aarch64-pc-windows-msvc.zip`,
+          archiveKind: "zip",
         },
       ];
     }
@@ -146,20 +162,39 @@ function psQuoteSingle(s: string): string {
   return `'${s.replace(/'/g, "''")}'`;
 }
 
-async function execFileOk(command: string, args: string[], opts: { cwd?: string } = {}): Promise<void> {
+async function execFileOk(
+  command: string,
+  args: string[],
+  opts: { cwd?: string } = {},
+): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    execFile(command, args, { cwd: opts.cwd, windowsHide: true, maxBuffer: 1024 * 1024 * 10 }, (err) => {
-      if (err) return reject(err);
-      return resolve();
-    });
+    execFile(
+      command,
+      args,
+      { cwd: opts.cwd, windowsHide: true, maxBuffer: 1024 * 1024 * 10 },
+      (err) => {
+        if (err) return reject(err);
+        return resolve();
+      },
+    );
   });
 }
 
-async function extractArchive(archiveKind: RipgrepArchiveKind, archivePath: string, destDir: string): Promise<void> {
+async function extractArchive(
+  archiveKind: RipgrepArchiveKind,
+  archivePath: string,
+  destDir: string,
+): Promise<void> {
   if (archiveKind === "zip") {
-    const cmd =
-      `Expand-Archive -Path ${psQuoteSingle(archivePath)} -DestinationPath ${psQuoteSingle(destDir)} -Force`;
-    await execFileOk("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", cmd]);
+    const cmd = `Expand-Archive -Path ${psQuoteSingle(archivePath)} -DestinationPath ${psQuoteSingle(destDir)} -Force`;
+    await execFileOk("powershell.exe", [
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      cmd,
+    ]);
     return;
   }
 
@@ -181,7 +216,9 @@ async function findFileRecursive(dir: string, wantedBasename: string): Promise<s
   return null;
 }
 
-async function fetchTextAllow404(url: string): Promise<{ ok: true; text: string } | { ok: false; status: number }> {
+async function fetchTextAllow404(
+  url: string,
+): Promise<{ ok: true; text: string } | { ok: false; status: number }> {
   const res = await fetch(url, { redirect: "follow" });
   if (res.status === 404) return { ok: false, status: 404 };
   if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${url}`);
@@ -197,7 +234,10 @@ async function fetchToFileAllow404(url: string, filePath: string): Promise<boole
   return true;
 }
 
-async function installRipgrepFromGitHub(opts: EnsureRipgrepOptions, installPath: string): Promise<void> {
+async function installRipgrepFromGitHub(
+  opts: EnsureRipgrepOptions,
+  installPath: string,
+): Promise<void> {
   const assets = resolveRipgrepAssets();
   let lastErr: unknown = null;
 
@@ -222,7 +262,9 @@ async function installRipgrepFromGitHub(opts: EnsureRipgrepOptions, installPath:
 
       const actual = await sha256File(archivePath);
       if (actual !== expected) {
-        throw new Error(`Checksum mismatch for ${asset.archiveName}: expected ${expected}, got ${actual}`);
+        throw new Error(
+          `Checksum mismatch for ${asset.archiveName}: expected ${expected}, got ${actual}`,
+        );
       }
 
       opts.log?.(`[ripgrep] extracting...`);
@@ -288,14 +330,15 @@ export async function ensureRipgrep(opts: EnsureRipgrepOptions = {}): Promise<st
       throw new Error("ripgrep (rg) not found and downloads are disabled");
     }
 
-    const installPath = process.platform === "win32" ? path.join(binDir, "rg.exe") : path.join(binDir, "rg");
+    const installPath =
+      process.platform === "win32" ? path.join(binDir, "rg.exe") : path.join(binDir, "rg");
     await installRipgrepFromGitHub(opts, installPath);
-    if (!(await pathExists(installPath))) throw new Error("ripgrep download completed but install path is missing");
+    if (!(await pathExists(installPath)))
+      throw new Error("ripgrep download completed but install path is missing");
     return installPath;
-  })()
-    .finally(() => {
-      inFlight.delete(key);
-    });
+  })().finally(() => {
+    inFlight.delete(key);
+  });
 
   inFlight.set(key, p);
   return await p;

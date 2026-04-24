@@ -27,7 +27,11 @@ export function createTranscriptBuffer(deps: TranscriptBufferDeps) {
     void appendTranscriptBatch(batch);
   }
 
-  function appendThreadTranscript(threadId: string, direction: "server" | "client", payload: unknown) {
+  function appendThreadTranscript(
+    threadId: string,
+    direction: "server" | "client",
+    payload: unknown,
+  ) {
     transcriptBuffer.push({ ts: deps.nowIso(), threadId, direction, payload });
     if (!transcriptTimer) {
       transcriptTimer = setTimeout(flushTranscriptBuffer, TRANSCRIPT_BATCH_MS);

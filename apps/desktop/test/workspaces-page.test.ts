@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { createElement, StrictMode } from "react";
-import { act } from "react";
+import { act, createElement, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -29,53 +28,54 @@ const MOCK_UPDATE_STATE = {
 let workspacePickerEnabled = true;
 let workspaceLifecycleEnabled = true;
 
-mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
-  appendTranscriptBatch: async () => {},
-  appendTranscriptEvent: async () => {},
-  deleteTranscript: async () => {},
-  listDirectory: async () => [],
-  loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
-  pickWorkspaceDirectory: async () => null,
-  readTranscript: async () => [],
-  saveState: async () => {},
-  startWorkspaceServer: async () => ({ url: "ws://mock" }),
-  stopWorkspaceServer: async () => {},
-  showContextMenu: async () => null,
-  windowMinimize: async () => {},
-  windowMaximize: async () => {},
-  windowClose: async () => {},
-  getPlatform: async () => "linux",
-  readFile: async () => "",
-  previewOSFile: async () => {},
-  openPath: async () => {},
-  openExternalUrl: async () => {},
-  revealPath: async () => {},
-  copyPath: async () => {},
-  createDirectory: async () => {},
-  renamePath: async () => {},
-  trashPath: async () => {},
-  confirmAction: async () => true,
-  showNotification: async () => true,
-  getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  getUpdateState: async () => MOCK_UPDATE_STATE,
-  getDesktopFeatureFlags: () => ({
-    remoteAccess: true,
-    workspacePicker: workspacePickerEnabled,
-    workspaceLifecycle: workspaceLifecycleEnabled,
-    a2ui: false,
+mock.module("../src/lib/desktopCommands", () =>
+  createDesktopCommandsMock({
+    appendTranscriptBatch: async () => {},
+    appendTranscriptEvent: async () => {},
+    deleteTranscript: async () => {},
+    listDirectory: async () => [],
+    loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
+    pickWorkspaceDirectory: async () => null,
+    readTranscript: async () => [],
+    saveState: async () => {},
+    startWorkspaceServer: async () => ({ url: "ws://mock" }),
+    stopWorkspaceServer: async () => {},
+    showContextMenu: async () => null,
+    windowMinimize: async () => {},
+    windowMaximize: async () => {},
+    windowClose: async () => {},
+    getPlatform: async () => "linux",
+    readFile: async () => "",
+    previewOSFile: async () => {},
+    openPath: async () => {},
+    openExternalUrl: async () => {},
+    revealPath: async () => {},
+    copyPath: async () => {},
+    createDirectory: async () => {},
+    renamePath: async () => {},
+    trashPath: async () => {},
+    confirmAction: async () => true,
+    showNotification: async () => true,
+    getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    getUpdateState: async () => MOCK_UPDATE_STATE,
+    getDesktopFeatureFlags: () => ({
+      remoteAccess: true,
+      workspacePicker: workspacePickerEnabled,
+      workspaceLifecycle: workspaceLifecycleEnabled,
+      a2ui: false,
+    }),
+    checkForUpdates: async () => {},
+    quitAndInstallUpdate: async () => {},
+    onSystemAppearanceChanged: () => () => {},
+    onMenuCommand: () => () => {},
+    onUpdateStateChanged: () => () => {},
   }),
-  checkForUpdates: async () => {},
-  quitAndInstallUpdate: async () => {},
-  onSystemAppearanceChanged: () => () => {},
-  onMenuCommand: () => () => {},
-  onUpdateStateChanged: () => () => {},
-}));
+);
 
 mock.module("../src/lib/agentSocket", () => ({
   JsonRpcSocket: NoopJsonRpcSocket,
 }));
-
 
 const {
   GeminiApiSettingsCard,
@@ -214,7 +214,9 @@ describe("desktop workspaces page", () => {
       expect(container.textContent).toContain("doesn't include search");
       expect(container.textContent).not.toContain("Allowed domains");
 
-      const advancedButton = [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("Show"));
+      const advancedButton = [...container.querySelectorAll("button")].find((button) =>
+        button.textContent?.includes("Show"),
+      );
       if (!(advancedButton instanceof harness.dom.window.HTMLButtonElement)) {
         throw new Error("missing search advanced options button");
       }
@@ -242,7 +244,9 @@ describe("desktop workspaces page", () => {
         throw new Error("missing allowed domains input");
       }
 
-      const addButton = [...container.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Add");
+      const addButton = [...container.querySelectorAll("button")].find(
+        (button) => button.textContent?.trim() === "Add",
+      );
       if (!(addButton instanceof harness.dom.window.HTMLButtonElement)) {
         throw new Error("missing add domains button");
       }
@@ -254,7 +258,9 @@ describe("desktop workspaces page", () => {
         domainInput.dispatchEvent(new harness.dom.window.Event("change", { bubbles: true }));
       });
 
-      const addButtonAfterInput = [...container.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Add");
+      const addButtonAfterInput = [...container.querySelectorAll("button")].find(
+        (button) => button.textContent?.trim() === "Add",
+      );
       if (!(addButtonAfterInput instanceof harness.dom.window.HTMLButtonElement)) {
         throw new Error("missing add domains button after input");
       }
@@ -292,7 +298,6 @@ describe("desktop workspaces page", () => {
           },
         },
       ]);
-
     } finally {
       if (root) {
         await act(async () => {
@@ -355,9 +360,15 @@ describe("desktop workspaces page", () => {
       }),
     );
 
-    expect(html).toContain("Google models still use local Parallel search from an older workspace override.");
-    expect(html).toContain("Choose Native above to restore provider-native search for both providers.");
-    expect(html).toContain("These settings still apply to ChatGPT Subscription while Google models remain on the legacy local-search override above.");
+    expect(html).toContain(
+      "Google models still use local Parallel search from an older workspace override.",
+    );
+    expect(html).toContain(
+      "Choose Native above to restore provider-native search for both providers.",
+    );
+    expect(html).toContain(
+      "These settings still apply to ChatGPT Subscription while Google models remain on the legacy local-search override above.",
+    );
   });
 
   test("renders workspace controls for user profile context", () => {
@@ -412,7 +423,14 @@ describe("desktop workspaces page", () => {
           id: "google",
           name: "Google",
           defaultModel: "gemini-3-flash-preview",
-          models: [{ id: "gemini-3-flash-preview", displayName: "Gemini 3 Flash Preview", knowledgeCutoff: "unknown", supportsImageInput: true }],
+          models: [
+            {
+              id: "gemini-3-flash-preview",
+              displayName: "Gemini 3 Flash Preview",
+              knowledgeCutoff: "unknown",
+              supportsImageInput: true,
+            },
+          ],
         },
       ],
       updateWorkspaceDefaults,
@@ -473,7 +491,14 @@ describe("desktop workspaces page", () => {
           id: "google",
           name: "Google",
           defaultModel: "gemini-3-flash-preview",
-          models: [{ id: "gemini-3-flash-preview", displayName: "Gemini 3 Flash Preview", knowledgeCutoff: "unknown", supportsImageInput: true }],
+          models: [
+            {
+              id: "gemini-3-flash-preview",
+              displayName: "Gemini 3 Flash Preview",
+              knowledgeCutoff: "unknown",
+              supportsImageInput: true,
+            },
+          ],
         },
       ],
       providerConnected: ["google"],
@@ -503,9 +528,15 @@ describe("desktop workspaces page", () => {
         root.render(createElement(WorkspacesPage));
       });
 
-      expect([...container.querySelectorAll("button")].some((button) => button.textContent?.trim() === "Add")).toBe(false);
+      expect(
+        [...container.querySelectorAll("button")].some(
+          (button) => button.textContent?.trim() === "Add",
+        ),
+      ).toBe(false);
 
-      const advancedTab = [...container.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Advanced");
+      const advancedTab = [...container.querySelectorAll("button")].find(
+        (button) => button.textContent?.trim() === "Advanced",
+      );
       if (!(advancedTab instanceof harness.dom.window.HTMLButtonElement)) {
         throw new Error("missing Advanced tab");
       }
@@ -554,52 +585,117 @@ describe("desktop workspaces page", () => {
           id: "codex-cli",
           name: "Codex CLI",
           defaultModel: "gpt-5.4",
-          models: [{ id: "gpt-5.4", displayName: "GPT-5.4", knowledgeCutoff: "unknown", supportsImageInput: true }],
+          models: [
+            {
+              id: "gpt-5.4",
+              displayName: "GPT-5.4",
+              knowledgeCutoff: "unknown",
+              supportsImageInput: true,
+            },
+          ],
         },
         {
           id: "opencode-go",
           name: "OpenCode Go",
           defaultModel: "glm-5",
-          models: [{ id: "glm-5", displayName: "GLM-5", knowledgeCutoff: "unknown", supportsImageInput: false }],
+          models: [
+            {
+              id: "glm-5",
+              displayName: "GLM-5",
+              knowledgeCutoff: "unknown",
+              supportsImageInput: false,
+            },
+          ],
         },
         {
           id: "google",
           name: "Google",
           defaultModel: "gemini-3-flash-preview",
-          models: [{ id: "gemini-3-flash-preview", displayName: "Gemini 3 Flash Preview", knowledgeCutoff: "unknown", supportsImageInput: true }],
+          models: [
+            {
+              id: "gemini-3-flash-preview",
+              displayName: "Gemini 3 Flash Preview",
+              knowledgeCutoff: "unknown",
+              supportsImageInput: true,
+            },
+          ],
         },
         {
           id: "anthropic",
           name: "Anthropic",
           defaultModel: "claude-4.5-sonnet",
-          models: [{ id: "claude-4.5-sonnet", displayName: "Claude 4.5 Sonnet", knowledgeCutoff: "unknown", supportsImageInput: true }],
+          models: [
+            {
+              id: "claude-4.5-sonnet",
+              displayName: "Claude 4.5 Sonnet",
+              knowledgeCutoff: "unknown",
+              supportsImageInput: true,
+            },
+          ],
         },
         {
           id: "opencode-zen",
           name: "OpenCode Zen",
           defaultModel: "glm-5",
-          models: [{ id: "glm-5", displayName: "GLM-5", knowledgeCutoff: "unknown", supportsImageInput: false }],
+          models: [
+            {
+              id: "glm-5",
+              displayName: "GLM-5",
+              knowledgeCutoff: "unknown",
+              supportsImageInput: false,
+            },
+          ],
         },
         {
           id: "nvidia",
           name: "NVIDIA",
           defaultModel: "nvidia/nemotron-3-super-120b-a12b",
-          models: [{ id: "nvidia/nemotron-3-super-120b-a12b", displayName: "Nemotron 3 Super", knowledgeCutoff: "unknown", supportsImageInput: false }],
+          models: [
+            {
+              id: "nvidia/nemotron-3-super-120b-a12b",
+              displayName: "Nemotron 3 Super",
+              knowledgeCutoff: "unknown",
+              supportsImageInput: false,
+            },
+          ],
         },
         {
           id: "together",
           name: "Together AI",
           defaultModel: "meta-llama/Llama-3.3-70B-Instruct-Turbo",
-          models: [{ id: "meta-llama/Llama-3.3-70B-Instruct-Turbo", displayName: "Llama 3.3 70B Turbo", knowledgeCutoff: "unknown", supportsImageInput: false }],
+          models: [
+            {
+              id: "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+              displayName: "Llama 3.3 70B Turbo",
+              knowledgeCutoff: "unknown",
+              supportsImageInput: false,
+            },
+          ],
         },
         {
           id: "baseten",
           name: "Baseten",
           defaultModel: "nvidia/Nemotron-4-340B-Instruct",
-          models: [{ id: "nvidia/Nemotron-4-340B-Instruct", displayName: "Nemotron 4 340B", knowledgeCutoff: "unknown", supportsImageInput: false }],
+          models: [
+            {
+              id: "nvidia/Nemotron-4-340B-Instruct",
+              displayName: "Nemotron 4 340B",
+              knowledgeCutoff: "unknown",
+              supportsImageInput: false,
+            },
+          ],
         },
       ],
-      providerConnected: ["codex-cli", "opencode-go", "google", "anthropic", "opencode-zen", "nvidia", "together", "baseten"],
+      providerConnected: [
+        "codex-cli",
+        "opencode-go",
+        "google",
+        "anthropic",
+        "opencode-zen",
+        "nvidia",
+        "together",
+        "baseten",
+      ],
       providerDefaultModelByProvider: {
         "codex-cli": "gpt-5.4",
         "opencode-go": "glm-5",
@@ -639,9 +735,13 @@ describe("desktop workspaces page", () => {
       expect(topLevelText).toContain("Model:");
       expect(topLevelText).toContain("Subagent routing:");
       expect(topLevelText).toContain("Preferred subagent model:");
-      expect(topLevelText.indexOf("Current provider:")).toBeLessThan(topLevelText.indexOf("Active workspace"));
+      expect(topLevelText.indexOf("Current provider:")).toBeLessThan(
+        topLevelText.indexOf("Active workspace"),
+      );
 
-      const modelsTab = [...container.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Models");
+      const modelsTab = [...container.querySelectorAll("button")].find(
+        (button) => button.textContent?.trim() === "Models",
+      );
       if (!(modelsTab instanceof harness.dom.window.HTMLButtonElement)) {
         throw new Error("missing Models tab");
       }
@@ -656,8 +756,10 @@ describe("desktop workspaces page", () => {
       expect(text).toContain("Subagent Models");
       expect(text).toContain("Preferred subagent model");
 
-      const subagentModelsToggle = [...container.querySelectorAll("button")].find((button) =>
-        button.textContent?.trim() === "Show" && button.closest("[data-slot=\"card-content\"]")?.textContent?.includes("Subagent Models"),
+      const subagentModelsToggle = [...container.querySelectorAll("button")].find(
+        (button) =>
+          button.textContent?.trim() === "Show" &&
+          button.closest('[data-slot="card-content"]')?.textContent?.includes("Subagent Models"),
       );
       if (!(subagentModelsToggle instanceof harness.dom.window.HTMLButtonElement)) {
         throw new Error("missing Subagent Models toggle");
@@ -679,7 +781,9 @@ describe("desktop workspaces page", () => {
       }
       expect(expandedText).not.toContain("Baseten");
 
-      const subagentModelCheckbox = container.querySelector('[aria-label="Allow subagent model opencode-go:glm-5"]');
+      const subagentModelCheckbox = container.querySelector(
+        '[aria-label="Allow subagent model opencode-go:glm-5"]',
+      );
       if (!(subagentModelCheckbox instanceof harness.dom.window.HTMLElement)) {
         throw new Error("missing subagent model checkbox");
       }
@@ -690,7 +794,9 @@ describe("desktop workspaces page", () => {
 
       expect(subagentModelCheckbox.isConnected).toBe(true);
       expect(subagentModelsToggle.textContent).toContain("Hide");
-      expect(useAppStore.getState().workspaces[0]?.defaultAllowedChildModelRefs).toEqual(["opencode-zen:glm-5"]);
+      expect(useAppStore.getState().workspaces[0]?.defaultAllowedChildModelRefs).toEqual([
+        "opencode-zen:glm-5",
+      ]);
     } finally {
       if (root) {
         await act(async () => {
@@ -748,7 +854,9 @@ describe("desktop workspaces page", () => {
 
       expect(container.textContent).toContain("How Cowork should understand you in this workspace");
       expect(textarea.value).toBe("Platform engineer");
-      expect(consoleErrors.some((entry) => entry.includes("Maximum update depth exceeded"))).toBe(false);
+      expect(consoleErrors.some((entry) => entry.includes("Maximum update depth exceeded"))).toBe(
+        false,
+      );
 
       await act(async () => {
         root.unmount();
@@ -810,13 +918,7 @@ describe("desktop workspaces page", () => {
       });
 
       await act(async () => {
-        root.render(
-          createElement(
-            StrictMode,
-            null,
-            createElement(App),
-          ),
-        );
+        root.render(createElement(StrictMode, null, createElement(App)));
       });
 
       const textarea = container.querySelector('[aria-label="Workspace work context"]');
@@ -833,7 +935,9 @@ describe("desktop workspaces page", () => {
 
       expect(container.textContent).toContain("How Cowork should understand you in this workspace");
       expect(container.textContent).toContain("Workspace 1");
-      expect(consoleErrors.some((entry) => entry.includes("Maximum update depth exceeded"))).toBe(false);
+      expect(consoleErrors.some((entry) => entry.includes("Maximum update depth exceeded"))).toBe(
+        false,
+      );
 
       await act(async () => {
         root.unmount();

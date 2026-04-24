@@ -2,11 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { z } from "zod";
-
-import type { ToolContext } from "./context";
-import { defineTool } from "./defineTool";
 import { resolveMaybeRelative } from "../utils/paths";
 import { assertWritePathAllowed } from "../utils/permissions";
+import type { ToolContext } from "./context";
+import { defineTool } from "./defineTool";
 
 export function createWriteTool(ctx: ToolContext) {
   return defineTool({
@@ -22,7 +21,7 @@ export function createWriteTool(ctx: ToolContext) {
       const abs = await assertWritePathAllowed(
         resolveMaybeRelative(filePath, ctx.config.workingDirectory),
         ctx.config,
-        "write"
+        "write",
       );
       await fs.mkdir(path.dirname(abs), { recursive: true });
       await fs.writeFile(abs, content, "utf-8");

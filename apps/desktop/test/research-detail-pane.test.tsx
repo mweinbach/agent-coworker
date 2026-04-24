@@ -1,19 +1,16 @@
 import { describe, expect, mock, test } from "bun:test";
-import { createElement } from "react";
-import { act } from "react";
+import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
 import { setupJsdom } from "./jsdomHarness";
 
 mock.module("../src/components/ui/button", () => ({
-  Button: ({
-    children,
-    ...props
-  }: any) => createElement("button", props, children),
+  Button: ({ children, ...props }: any) => createElement("button", props, children),
 }));
 
 mock.module("../src/ui/research/ResearchFollowUpComposer", () => ({
-  ResearchFollowUpComposer: () => createElement("div", { "data-testid": "research-follow-up-composer" }, "follow-up"),
+  ResearchFollowUpComposer: () =>
+    createElement("div", { "data-testid": "research-follow-up-composer" }, "follow-up"),
 }));
 
 mock.module("../src/ui/research/ResearchReportRenderer", () => ({
@@ -145,7 +142,9 @@ describe("research detail pane layout", () => {
         throw new Error("missing sources drawer");
       }
 
-      expect(container.querySelector('[role="tablist"][aria-label="Research detail sections"]')).toBeNull();
+      expect(
+        container.querySelector('[role="tablist"][aria-label="Research detail sections"]'),
+      ).toBeNull();
       expect(container.textContent).not.toContain("Brief");
       expect(container.textContent).not.toContain("Research prompt");
       expect(container.querySelector('[aria-label="Reasoning stream"]')).toBeNull();
@@ -153,7 +152,9 @@ describe("research detail pane layout", () => {
       expect(toggle.getAttribute("aria-controls")).toBe(drawer.id);
       expect(drawer.getAttribute("aria-hidden")).toBe("true");
       expect(drawer.getAttribute("data-sources-presentation")).toBe("inline");
-      expect(drawer.getAttribute("style")).toContain("--research-sources-panel-width: clamp(18rem, 30vw, 26rem)");
+      expect(drawer.getAttribute("style")).toContain(
+        "--research-sources-panel-width: clamp(18rem, 30vw, 26rem)",
+      );
       expect(drawer.getAttribute("style")).toContain("width: 0px");
       expect(drawer.getAttribute("style")).toContain("flex-basis: 0px");
 
@@ -174,9 +175,15 @@ describe("research detail pane layout", () => {
       expect(openToggle.getAttribute("aria-expanded")).toBe("true");
       expect(openDrawer.getAttribute("aria-hidden")).toBe("false");
       expect(openDrawer.getAttribute("data-sources-presentation")).toBe("inline");
-      expect(openDrawer.getAttribute("style")).toContain("--research-sources-panel-width: clamp(18rem, 30vw, 26rem)");
-      expect(openDrawer.getAttribute("style")).toContain("width: var(--research-sources-panel-width)");
-      expect(openDrawer.getAttribute("style")).toContain("flex-basis: var(--research-sources-panel-width)");
+      expect(openDrawer.getAttribute("style")).toContain(
+        "--research-sources-panel-width: clamp(18rem, 30vw, 26rem)",
+      );
+      expect(openDrawer.getAttribute("style")).toContain(
+        "width: var(--research-sources-panel-width)",
+      );
+      expect(openDrawer.getAttribute("style")).toContain(
+        "flex-basis: var(--research-sources-panel-width)",
+      );
 
       await act(async () => {
         root.unmount();
@@ -238,7 +245,9 @@ describe("research detail pane layout", () => {
       expect(stream?.textContent).toContain("Reasoning stream");
       expect(stream?.textContent).toContain("Step 1");
       expect(stream?.textContent).toContain("Checking the most relevant source set");
-      expect(container.querySelector('[role="tablist"][aria-label="Research detail sections"]')).toBeNull();
+      expect(
+        container.querySelector('[role="tablist"][aria-label="Research detail sections"]'),
+      ).toBeNull();
 
       await act(async () => {
         root.unmount();
@@ -357,7 +366,9 @@ describe("research detail pane layout", () => {
 
       await act(async () => {
         root.render(
-          createElement("div", null,
+          createElement(
+            "div",
+            null,
             createElement(ResearchDetailPane, {
               research: {
                 id: "research-empty",

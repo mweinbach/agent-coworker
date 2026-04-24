@@ -1,9 +1,8 @@
 import { describe, expect, mock, test } from "bun:test";
 import path from "node:path";
-
-import { createSpawnAgentTool } from "../src/tools/spawnAgent";
-import type { ToolContext } from "../src/tools/context";
 import type { PersistentAgentSummary } from "../src/shared/agents";
+import type { ToolContext } from "../src/tools/context";
+import { createSpawnAgentTool } from "../src/tools/spawnAgent";
 import type { AgentConfig } from "../src/types";
 
 function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
@@ -70,23 +69,30 @@ describe("spawnAgent tool", () => {
       effectiveReasoningEffort: "high",
     });
     const spawn = mock(async () => summary);
-    const tool: any = createSpawnAgentTool(makeCtx({
-      agentControl: {
-        spawn,
-        list: async () => [],
-        sendInput: async () => {},
-        wait: async () => ({ timedOut: false, mode: "any" as const, agents: [], readyAgentIds: [] }),
-        inspect: async () => ({
-          agent: summary,
-          latestAssistantText: null,
-          parsedReport: null,
-          sessionUsage: null,
-          lastTurnUsage: null,
-        }),
-        resume: async () => summary,
-        close: async () => summary,
-      },
-    }));
+    const tool: any = createSpawnAgentTool(
+      makeCtx({
+        agentControl: {
+          spawn,
+          list: async () => [],
+          sendInput: async () => {},
+          wait: async () => ({
+            timedOut: false,
+            mode: "any" as const,
+            agents: [],
+            readyAgentIds: [],
+          }),
+          inspect: async () => ({
+            agent: summary,
+            latestAssistantText: null,
+            parsedReport: null,
+            sessionUsage: null,
+            lastTurnUsage: null,
+          }),
+          resume: async () => summary,
+          close: async () => summary,
+        },
+      }),
+    );
 
     const result = await tool.execute({
       message: "Investigate this failure",
@@ -119,50 +125,66 @@ describe("spawnAgent tool", () => {
   });
 
   test("rejects empty targetPaths entries", async () => {
-    const tool: any = createSpawnAgentTool(makeCtx({
-      agentControl: {
-        spawn: async () => makeSummary(),
-        list: async () => [],
-        sendInput: async () => {},
-        wait: async () => ({ timedOut: false, mode: "any" as const, agents: [], readyAgentIds: [] }),
-        inspect: async () => ({
-          agent: makeSummary(),
-          latestAssistantText: null,
-          parsedReport: null,
-          sessionUsage: null,
-          lastTurnUsage: null,
-        }),
-        resume: async () => makeSummary(),
-        close: async () => makeSummary(),
-      },
-    }));
+    const tool: any = createSpawnAgentTool(
+      makeCtx({
+        agentControl: {
+          spawn: async () => makeSummary(),
+          list: async () => [],
+          sendInput: async () => {},
+          wait: async () => ({
+            timedOut: false,
+            mode: "any" as const,
+            agents: [],
+            readyAgentIds: [],
+          }),
+          inspect: async () => ({
+            agent: makeSummary(),
+            latestAssistantText: null,
+            parsedReport: null,
+            sessionUsage: null,
+            lastTurnUsage: null,
+          }),
+          resume: async () => makeSummary(),
+          close: async () => makeSummary(),
+        },
+      }),
+    );
 
-    await expect(tool.execute({
-      message: "Investigate this failure",
-      targetPaths: ["src/auth", "   "],
-    })).rejects.toThrow("targetPaths entries must not be empty");
+    await expect(
+      tool.execute({
+        message: "Investigate this failure",
+        targetPaths: ["src/auth", "   "],
+      }),
+    ).rejects.toThrow("targetPaths entries must not be empty");
   });
 
   test("maps deprecated forkContext to explicit contextMode for direct compatibility", async () => {
     const summary = makeSummary();
     const spawn = mock(async () => summary);
-    const tool: any = createSpawnAgentTool(makeCtx({
-      agentControl: {
-        spawn,
-        list: async () => [],
-        sendInput: async () => {},
-        wait: async () => ({ timedOut: false, mode: "any" as const, agents: [], readyAgentIds: [] }),
-        inspect: async () => ({
-          agent: summary,
-          latestAssistantText: null,
-          parsedReport: null,
-          sessionUsage: null,
-          lastTurnUsage: null,
-        }),
-        resume: async () => summary,
-        close: async () => summary,
-      },
-    }));
+    const tool: any = createSpawnAgentTool(
+      makeCtx({
+        agentControl: {
+          spawn,
+          list: async () => [],
+          sendInput: async () => {},
+          wait: async () => ({
+            timedOut: false,
+            mode: "any" as const,
+            agents: [],
+            readyAgentIds: [],
+          }),
+          inspect: async () => ({
+            agent: summary,
+            latestAssistantText: null,
+            parsedReport: null,
+            sessionUsage: null,
+            lastTurnUsage: null,
+          }),
+          resume: async () => summary,
+          close: async () => summary,
+        },
+      }),
+    );
 
     await tool.execute({
       message: "Investigate this failure",
@@ -179,23 +201,30 @@ describe("spawnAgent tool", () => {
   test("prefers explicit contextMode over deprecated forkContext when both are provided", async () => {
     const summary = makeSummary();
     const spawn = mock(async () => summary);
-    const tool: any = createSpawnAgentTool(makeCtx({
-      agentControl: {
-        spawn,
-        list: async () => [],
-        sendInput: async () => {},
-        wait: async () => ({ timedOut: false, mode: "any" as const, agents: [], readyAgentIds: [] }),
-        inspect: async () => ({
-          agent: summary,
-          latestAssistantText: null,
-          parsedReport: null,
-          sessionUsage: null,
-          lastTurnUsage: null,
-        }),
-        resume: async () => summary,
-        close: async () => summary,
-      },
-    }));
+    const tool: any = createSpawnAgentTool(
+      makeCtx({
+        agentControl: {
+          spawn,
+          list: async () => [],
+          sendInput: async () => {},
+          wait: async () => ({
+            timedOut: false,
+            mode: "any" as const,
+            agents: [],
+            readyAgentIds: [],
+          }),
+          inspect: async () => ({
+            agent: summary,
+            latestAssistantText: null,
+            parsedReport: null,
+            sessionUsage: null,
+            lastTurnUsage: null,
+          }),
+          resume: async () => summary,
+          close: async () => summary,
+        },
+      }),
+    );
 
     await tool.execute({
       message: "Investigate this failure",
@@ -215,23 +244,30 @@ describe("spawnAgent tool", () => {
   test("defaults role to default", async () => {
     const summary = makeSummary({ role: "default" });
     const spawn = mock(async () => summary);
-    const tool: any = createSpawnAgentTool(makeCtx({
-      agentControl: {
-        spawn,
-        list: async () => [],
-        sendInput: async () => {},
-        wait: async () => ({ timedOut: false, mode: "any" as const, agents: [], readyAgentIds: [] }),
-        inspect: async () => ({
-          agent: summary,
-          latestAssistantText: null,
-          parsedReport: null,
-          sessionUsage: null,
-          lastTurnUsage: null,
-        }),
-        resume: async () => summary,
-        close: async () => summary,
-      },
-    }));
+    const tool: any = createSpawnAgentTool(
+      makeCtx({
+        agentControl: {
+          spawn,
+          list: async () => [],
+          sendInput: async () => {},
+          wait: async () => ({
+            timedOut: false,
+            mode: "any" as const,
+            agents: [],
+            readyAgentIds: [],
+          }),
+          inspect: async () => ({
+            agent: summary,
+            latestAssistantText: null,
+            parsedReport: null,
+            sessionUsage: null,
+            lastTurnUsage: null,
+          }),
+          resume: async () => summary,
+          close: async () => summary,
+        },
+      }),
+    );
 
     await tool.execute({ message: "Check the code path" });
 

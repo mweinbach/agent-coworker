@@ -1,20 +1,25 @@
-import type { ServerEvent } from "../../lib/wsProtocol";
 import {
   applyProjectedAgentMessageDelta,
   applyProjectedItemCompleted,
   applyProjectedItemStarted,
   applyProjectedReasoningDelta,
+  type ProjectedItem,
   projectedItemSchema,
   projectedTodosFromItem,
-  type ProjectedItem,
 } from "../../../../../src/shared/projectedItems";
+import type { ServerEvent } from "../../lib/wsProtocol";
 import {
+  type ProjectedUiSurface,
+  recordSurfaceRevision,
+  seedDockFromFeed,
+} from "../a2uiDockReducer";
+import { buildAttachmentDisplayText, buildAttachmentSignature } from "../attachmentInputs";
+import {
+  type ModelStreamUpdate,
   mapModelStreamChunk,
   replayModelStreamRawEvent,
   shouldIgnoreNormalizedChunkForRawBackedTurn,
-  type ModelStreamUpdate,
 } from "../modelStream";
-import { buildAttachmentDisplayText, buildAttachmentSignature } from "../attachmentInputs";
 import {
   applyModelStreamUpdateToThreadFeed as applyModelStreamUpdateToThreadFeedCore,
   developerDiagnosticSystemLineFromServerEvent,
@@ -22,24 +27,41 @@ import {
   reasoningInsertBeforeAssistantAfterStreamReplay,
   shouldSkipAssistantMessageAfterStreamReplay,
   shouldSuppressRawDebugLogLine,
+  type ThreadModelStreamRuntime,
   unhandledEventSystemLine,
   upsertAgentSummary,
-  type ThreadModelStreamRuntime,
 } from "../store.feedMapping";
 import type { StoreGet, StoreSet } from "../store.helpers";
 import {
-  createDefaultA2uiDock,
   type ApprovalPrompt,
   type AskPrompt,
+  createDefaultA2uiDock,
   type FeedItem,
   type Notification,
   type ThreadAgentSummary,
   type ThreadBusyPolicy,
   type ThreadTitleSource,
 } from "../types";
-import { recordSurfaceRevision, seedDockFromFeed, type ProjectedUiSurface } from "../a2uiDockReducer";
 import {
-  RUNTIME,
+  buildSyntheticServerHelloFromJsonRpcThread,
+  buildSyntheticSessionInfoFromJsonRpcThread,
+  buildSyntheticSessionSettings,
+  ensureWorkspaceJsonRpcSocket,
+  type FileAttachmentInput,
+  findThreadIdForJsonRpcNotification,
+  interruptJsonRpcTurn,
+  registerWorkspaceJsonRpcLifecycle,
+  registerWorkspaceJsonRpcRouter,
+  requestJsonRpc,
+  requestJsonRpcThreadRead,
+  respondToJsonRpcRequest,
+  resumeJsonRpcThread,
+  startJsonRpcThread,
+  startJsonRpcTurn,
+  steerJsonRpcTurn,
+  unsubscribeJsonRpcThread,
+} from "./jsonRpcSocket";
+import {
   clearPendingThreadSteer,
   clearPendingThreadSteers,
   ensureThreadRuntime,
@@ -49,31 +71,13 @@ import {
   prependPendingThreadMessage,
   prependPendingThreadMessageWithAttachments,
   queuePendingThreadMessage,
-  rememberPendingThreadSteer,
+  RUNTIME,
   rekeyThreadRuntimeMaps,
+  rememberPendingThreadSteer,
   resetModelStreamRuntime,
-  shiftPendingThreadMessage,
   shiftPendingThreadAttachments,
+  shiftPendingThreadMessage,
 } from "./runtimeState";
-import {
-  buildSyntheticServerHelloFromJsonRpcThread,
-  buildSyntheticSessionInfoFromJsonRpcThread,
-  buildSyntheticSessionSettings,
-  ensureWorkspaceJsonRpcSocket,
-  findThreadIdForJsonRpcNotification,
-  requestJsonRpc,
-  registerWorkspaceJsonRpcLifecycle,
-  registerWorkspaceJsonRpcRouter,
-  respondToJsonRpcRequest,
-  requestJsonRpcThreadRead,
-  resumeJsonRpcThread,
-  startJsonRpcThread,
-  startJsonRpcTurn,
-  steerJsonRpcTurn,
-  type FileAttachmentInput,
-  interruptJsonRpcTurn,
-  unsubscribeJsonRpcThread,
-} from "./jsonRpcSocket";
 
 const MAX_FEED_ITEMS = 2000;
 const JSONRPC_THREAD_EVENT_METHODS = new Set([
@@ -97,16 +101,21 @@ type ThreadOutboundMessage =
   | { type: "session_close"; sessionId: string }
   | { type: "set_session_title"; sessionId: string; title: string }
   | { type: "set_model"; sessionId: string; provider: string; model: string }
-  | { type: "set_session_usage_budget"; sessionId: string; warnAtUsd?: number | null; stopAtUsd?: number | null }
+  | {
+      type: "set_session_usage_budget";
+      sessionId: string;
+      warnAtUsd?: number | null;
+      stopAtUsd?: number | null;
+    }
   | { type: "set_config"; sessionId: string; config: Record<string, unknown> }
   | {
-    type: "apply_session_defaults";
-    sessionId: string;
-    provider?: string;
-    model?: string;
-    enableMcp?: boolean;
-    config?: Record<string, unknown>;
-  }
+      type: "apply_session_defaults";
+      sessionId: string;
+      provider?: string;
+      model?: string;
+      enableMcp?: boolean;
+      config?: Record<string, unknown>;
+    }
   | { type: "ask_response"; sessionId: string; requestId: string; answer: string }
   | { type: "approval_response"; sessionId: string; requestId: string; approved: boolean };
 
@@ -126,7 +135,11 @@ type ThreadEventReducerDeps = {
   nowIso: () => string;
   makeId: () => string;
   persist: (get: StoreGet) => void;
-  appendThreadTranscript: (threadId: string, direction: "server" | "client", payload: unknown) => void;
+  appendThreadTranscript: (
+    threadId: string,
+    direction: "server" | "client",
+    payload: unknown,
+  ) => void;
   pushNotification: (notifications: Notification[], entry: Notification) => Notification[];
   normalizeThreadTitleSource: (source: unknown, fallbackTitle: string) => ThreadTitleSource;
   shouldAdoptServerTitle: (opts: {
@@ -171,7 +184,9 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
   }
 
   function trackedThreadIdsForWorkspace(workspaceId: string, getOverride?: StoreGet): string[] {
-    const trackedThreadIds = new Set<string>(jsonRpcReconnectThreadsByWorkspace.get(workspaceId) ?? []);
+    const trackedThreadIds = new Set<string>(
+      jsonRpcReconnectThreadsByWorkspace.get(workspaceId) ?? [],
+    );
     const get = getOverride ?? threadStoreGettersByWorkspace.get(workspaceId);
     const threads = get?.().threads ?? [];
     for (const thread of threads) {
@@ -218,8 +233,8 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
   }
 
   function connectedThreadIdsForWorkspace(get: StoreGet, workspaceId: string): string[] {
-    return get().threads
-      .filter((thread) => thread.workspaceId === workspaceId)
+    return get()
+      .threads.filter((thread) => thread.workspaceId === workspaceId)
       .map((thread) => thread.id)
       .filter((threadId) => get().threadRuntimeById[threadId]?.connected);
   }
@@ -236,14 +251,18 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
         return;
       }
       if (message.kind === "request") {
-        const threadId = findThreadIdForJsonRpcNotification(get, workspaceId, message.params?.threadId ?? message.params?.thread_id ?? null);
+        const threadId = findThreadIdForJsonRpcNotification(
+          get,
+          workspaceId,
+          message.params?.threadId ?? message.params?.thread_id ?? null,
+        );
         if (!threadId) return;
         const sessionId =
-          get().threadRuntimeById[threadId]?.sessionId
-          ?? get().threads.find((thread) => thread.id === threadId)?.sessionId
-          ?? message.params?.threadId
-          ?? message.params?.thread_id
-          ?? threadId;
+          get().threadRuntimeById[threadId]?.sessionId ??
+          get().threads.find((thread) => thread.id === threadId)?.sessionId ??
+          message.params?.threadId ??
+          message.params?.thread_id ??
+          threadId;
         if (message.method === "item/tool/requestUserInput") {
           handleThreadEvent(get, set, threadId, {
             type: "ask",
@@ -275,13 +294,13 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       );
       if (!mappedThreadId) return;
       const mappedSessionId =
-        get().threadRuntimeById[mappedThreadId]?.sessionId
-        ?? get().threads.find((thread) => thread.id === mappedThreadId)?.sessionId
-        ?? params.threadId
-        ?? params.thread_id
-        ?? params.thread?.id
-        ?? params.sessionId
-        ?? mappedThreadId;
+        get().threadRuntimeById[mappedThreadId]?.sessionId ??
+        get().threads.find((thread) => thread.id === mappedThreadId)?.sessionId ??
+        params.threadId ??
+        params.thread_id ??
+        params.thread?.id ??
+        params.sessionId ??
+        mappedThreadId;
 
       if (JSONRPC_THREAD_EVENT_METHODS.has(message.method) && typeof params.type === "string") {
         handleThreadEvent(get, set, mappedThreadId, {
@@ -341,7 +360,12 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       if (message.method === "item/agentMessage/delta") {
         const itemId = typeof params.itemId === "string" ? params.itemId : null;
         if (!itemId) return;
-        applyProjectedAssistantDeltaToThread(set, mappedThreadId, itemId, String(params.delta ?? ""));
+        applyProjectedAssistantDeltaToThread(
+          set,
+          mappedThreadId,
+          itemId,
+          String(params.delta ?? ""),
+        );
         return;
       }
 
@@ -423,7 +447,9 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       return;
     }
     for (const threadId of reconnectIds) {
-      const thread = get().threads.find((entry) => entry.id === threadId && entry.workspaceId === workspaceId);
+      const thread = get().threads.find(
+        (entry) => entry.id === threadId && entry.workspaceId === workspaceId,
+      );
       const url = get().workspaceRuntimeById[workspaceId]?.serverUrl;
       if (!thread || !url || !thread.sessionId) {
         forgetThreadForReconnect(workspaceId, threadId);
@@ -451,12 +477,18 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     jsonRpcLifecycleCleanupByWorkspace.set(workspaceId, cleanup);
   }
 
-  function migrateThreadIdentity(get: StoreGet, set: StoreSet, fromThreadId: string, toThreadId: string): string {
+  function migrateThreadIdentity(
+    get: StoreGet,
+    set: StoreSet,
+    fromThreadId: string,
+    toThreadId: string,
+  ): string {
     if (!fromThreadId || !toThreadId || fromThreadId === toThreadId) {
       return toThreadId;
     }
 
-    const workspaceId = workspaceIdForThread(get, fromThreadId) ?? workspaceIdForThread(get, toThreadId);
+    const workspaceId =
+      workspaceIdForThread(get, fromThreadId) ?? workspaceIdForThread(get, toThreadId);
     rekeyThreadRuntimeMaps(fromThreadId, toThreadId);
     if (workspaceId) {
       forgetThreadForReconnect(workspaceId, fromThreadId);
@@ -472,7 +504,9 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
         ? s.threads
             .filter((thread) => thread.id !== fromThreadId)
             .map((thread) =>
-              thread.id === toThreadId && existingThread?.legacyTranscriptId && !thread.legacyTranscriptId
+              thread.id === toThreadId &&
+              existingThread?.legacyTranscriptId &&
+              !thread.legacyTranscriptId
                 ? { ...thread, legacyTranscriptId: existingThread.legacyTranscriptId }
                 : thread,
             )
@@ -484,8 +518,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
                   sessionId: toThreadId,
                   draft: false,
                   legacyTranscriptId:
-                    thread.legacyTranscriptId
-                    ?? (thread.id !== toThreadId ? thread.id : null),
+                    thread.legacyTranscriptId ?? (thread.id !== toThreadId ? thread.id : null),
                 }
               : thread,
           );
@@ -564,7 +597,8 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     if (opts?.pendingTurnStartClientMessageId) {
       set((s) => {
         const rt = s.threadRuntimeById[threadId];
-        if (!rt || rt.pendingTurnStart?.clientMessageId !== opts.pendingTurnStartClientMessageId) return {};
+        if (!rt || rt.pendingTurnStart?.clientMessageId !== opts.pendingTurnStartClientMessageId)
+          return {};
         return {
           threadRuntimeById: {
             ...s.threadRuntimeById,
@@ -587,7 +621,12 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     });
   }
 
-  function updateFeedItem(set: StoreSet, threadId: string, itemId: string, update: (item: FeedItem) => FeedItem) {
+  function updateFeedItem(
+    set: StoreSet,
+    threadId: string,
+    itemId: string,
+    update: (item: FeedItem) => FeedItem,
+  ) {
     set((s) => {
       const rt = s.threadRuntimeById[threadId];
       if (!rt) return {};
@@ -603,7 +642,12 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     });
   }
 
-  function insertFeedItemBefore(set: StoreSet, threadId: string, beforeItemId: string, item: FeedItem) {
+  function insertFeedItemBefore(
+    set: StoreSet,
+    threadId: string,
+    beforeItemId: string,
+    item: FeedItem,
+  ) {
     set((s) => {
       const rt = s.threadRuntimeById[threadId];
       if (!rt) return {};
@@ -624,7 +668,9 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       const nextFeed = [...rt.feed];
       nextFeed.splice(beforeIndex, 0, item);
       const trimmedFeed =
-        nextFeed.length > MAX_FEED_ITEMS ? nextFeed.slice(nextFeed.length - MAX_FEED_ITEMS) : nextFeed;
+        nextFeed.length > MAX_FEED_ITEMS
+          ? nextFeed.slice(nextFeed.length - MAX_FEED_ITEMS)
+          : nextFeed;
       return {
         threadRuntimeById: {
           ...s.threadRuntimeById,
@@ -658,9 +704,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       const nextFeed = trimFeed(updater(rt.feed));
       const nextThreads = opts.touchLastMessageAt
         ? s.threads.map((thread) =>
-            thread.id === threadId
-              ? { ...thread, lastMessageAt: deps.nowIso() }
-              : thread
+            thread.id === threadId ? { ...thread, lastMessageAt: deps.nowIso() } : thread,
           )
         : s.threads;
       const nextLatestTodosByThreadId = opts.todos
@@ -818,10 +862,8 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     mode: "reasoning" | "summary",
     delta: string,
   ) {
-    updateThreadFeed(
-      set,
-      threadId,
-      (feed) => applyProjectedReasoningDelta(feed, itemId, mode, delta, deps.nowIso()),
+    updateThreadFeed(set, threadId, (feed) =>
+      applyProjectedReasoningDelta(feed, itemId, mode, delta, deps.nowIso()),
     );
   }
 
@@ -839,7 +881,11 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     );
   }
 
-  function sendThread(get: StoreGet, threadId: string, build: (sessionId: string) => ThreadOutboundMessage): boolean {
+  function sendThread(
+    get: StoreGet,
+    threadId: string,
+    build: (sessionId: string) => ThreadOutboundMessage,
+  ): boolean {
     const workspaceId = workspaceIdForThread(get, threadId);
     if (!workspaceId) {
       return false;
@@ -857,47 +903,61 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     const sessionId = get().threadRuntimeById[threadId]?.sessionId ?? threadId;
     const message = build(sessionId);
     if (message.type === "cancel") {
-      return beginWorkspaceRequest(() => interruptJsonRpcTurn(get, undefined, workspaceId, sessionId));
+      return beginWorkspaceRequest(() =>
+        interruptJsonRpcTurn(get, undefined, workspaceId, sessionId),
+      );
     }
     if (message.type === "session_close") {
       forgetThreadForReconnect(workspaceId, threadId);
-      return beginWorkspaceRequest(() => unsubscribeJsonRpcThread(get, undefined, workspaceId, sessionId));
+      return beginWorkspaceRequest(() =>
+        unsubscribeJsonRpcThread(get, undefined, workspaceId, sessionId),
+      );
     }
     if (message.type === "set_session_title") {
-      return beginWorkspaceRequest(() => requestJsonRpc(get, undefined, workspaceId, "cowork/session/title/set", {
-        threadId: sessionId,
-        title: message.title,
-      }));
+      return beginWorkspaceRequest(() =>
+        requestJsonRpc(get, undefined, workspaceId, "cowork/session/title/set", {
+          threadId: sessionId,
+          title: message.title,
+        }),
+      );
     }
     if (message.type === "set_model") {
-      return beginWorkspaceRequest(() => requestJsonRpc(get, undefined, workspaceId, "cowork/session/model/set", {
-        threadId: sessionId,
-        provider: message.provider,
-        model: message.model,
-      }));
+      return beginWorkspaceRequest(() =>
+        requestJsonRpc(get, undefined, workspaceId, "cowork/session/model/set", {
+          threadId: sessionId,
+          provider: message.provider,
+          model: message.model,
+        }),
+      );
     }
     if (message.type === "set_session_usage_budget") {
-      return beginWorkspaceRequest(() => requestJsonRpc(get, undefined, workspaceId, "cowork/session/usageBudget/set", {
-        threadId: sessionId,
-        ...(message.warnAtUsd !== undefined ? { warnAtUsd: message.warnAtUsd } : {}),
-        ...(message.stopAtUsd !== undefined ? { stopAtUsd: message.stopAtUsd } : {}),
-      }));
+      return beginWorkspaceRequest(() =>
+        requestJsonRpc(get, undefined, workspaceId, "cowork/session/usageBudget/set", {
+          threadId: sessionId,
+          ...(message.warnAtUsd !== undefined ? { warnAtUsd: message.warnAtUsd } : {}),
+          ...(message.stopAtUsd !== undefined ? { stopAtUsd: message.stopAtUsd } : {}),
+        }),
+      );
     }
     if (message.type === "set_config") {
-      return beginWorkspaceRequest(() => requestJsonRpc(get, undefined, workspaceId, "cowork/session/config/set", {
-        threadId: sessionId,
-        config: message.config,
-      }));
+      return beginWorkspaceRequest(() =>
+        requestJsonRpc(get, undefined, workspaceId, "cowork/session/config/set", {
+          threadId: sessionId,
+          config: message.config,
+        }),
+      );
     }
     if (message.type === "apply_session_defaults") {
-      return beginWorkspaceRequest(() => requestJsonRpc(get, undefined, workspaceId, "cowork/session/defaults/apply", {
-        threadId: sessionId,
-        cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
-        ...(message.provider !== undefined ? { provider: message.provider } : {}),
-        ...(message.model !== undefined ? { model: message.model } : {}),
-        ...(message.enableMcp !== undefined ? { enableMcp: message.enableMcp } : {}),
-        ...(message.config !== undefined ? { config: message.config } : {}),
-      }));
+      return beginWorkspaceRequest(() =>
+        requestJsonRpc(get, undefined, workspaceId, "cowork/session/defaults/apply", {
+          threadId: sessionId,
+          cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
+          ...(message.provider !== undefined ? { provider: message.provider } : {}),
+          ...(message.model !== undefined ? { model: message.model } : {}),
+          ...(message.enableMcp !== undefined ? { enableMcp: message.enableMcp } : {}),
+          ...(message.config !== undefined ? { config: message.config } : {}),
+        }),
+      );
     }
     if (message.type === "ask_response") {
       return respondToJsonRpcRequest(workspaceId, message.requestId, { answer: message.answer });
@@ -920,10 +980,19 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     clientMessageId: string,
     attachments?: FileAttachmentInput[],
   ) {
-    void startJsonRpcTurn(get, set, workspaceId, sessionId, text, clientMessageId, attachments)
-      .catch(() => {
-        surfaceJsonRpcTurnSendFailure(set, threadId, { pendingTurnStartClientMessageId: clientMessageId });
+    void startJsonRpcTurn(
+      get,
+      set,
+      workspaceId,
+      sessionId,
+      text,
+      clientMessageId,
+      attachments,
+    ).catch(() => {
+      surfaceJsonRpcTurnSendFailure(set, threadId, {
+        pendingTurnStartClientMessageId: clientMessageId,
       });
+    });
   }
 
   function dispatchJsonRpcTurnSteer(
@@ -937,10 +1006,18 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     clientMessageId: string,
     attachments?: FileAttachmentInput[],
   ) {
-    void steerJsonRpcTurn(get, set, workspaceId, sessionId, turnId, text, clientMessageId, attachments)
-      .catch(() => {
-        surfaceJsonRpcTurnSendFailure(set, threadId, { clientMessageId });
-      });
+    void steerJsonRpcTurn(
+      get,
+      set,
+      workspaceId,
+      sessionId,
+      turnId,
+      text,
+      clientMessageId,
+      attachments,
+    ).catch(() => {
+      surfaceJsonRpcTurnSendFailure(set, threadId, { clientMessageId });
+    });
   }
 
   // `true` means the reducer accepted the message locally; JSON-RPC failures
@@ -976,9 +1053,9 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       if (busyPolicy === "steer") {
         if (!rt.activeTurnId) return false;
         if (
-          rt.pendingSteer?.status === "sending"
-          && rt.pendingSteer.text.trim() === trimmed
-          && (rt.pendingSteer.attachmentSignature ?? "") === attachmentSignature
+          rt.pendingSteer?.status === "sending" &&
+          rt.pendingSteer.text.trim() === trimmed &&
+          (rt.pendingSteer.attachmentSignature ?? "") === attachmentSignature
         ) {
           return false;
         }
@@ -1018,7 +1095,17 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
           clientMessageId,
         });
 
-        dispatchJsonRpcTurnSteer(get, set, workspaceId, rt.sessionId, rt.activeTurnId, trimmed, threadId, clientMessageId, attachments);
+        dispatchJsonRpcTurnSteer(
+          get,
+          set,
+          workspaceId,
+          rt.sessionId,
+          rt.activeTurnId,
+          trimmed,
+          threadId,
+          clientMessageId,
+          attachments,
+        );
         return true;
       }
 
@@ -1064,7 +1151,16 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       clientMessageId,
     });
 
-    dispatchJsonRpcTurnStart(get, set, workspaceId, rt.sessionId, trimmed, threadId, clientMessageId, attachments);
+    dispatchJsonRpcTurnStart(
+      get,
+      set,
+      workspaceId,
+      rt.sessionId,
+      trimmed,
+      threadId,
+      clientMessageId,
+      attachments,
+    );
     return true;
   }
 
@@ -1075,7 +1171,14 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     const next = shiftPendingThreadMessage(threadId);
     if (next === undefined) return false;
     const queuedAttachments = shiftPendingThreadAttachments(threadId);
-    const accepted = sendUserMessageToThread(get, set, threadId, next, undefined, queuedAttachments);
+    const accepted = sendUserMessageToThread(
+      get,
+      set,
+      threadId,
+      next,
+      undefined,
+      queuedAttachments,
+    );
     if (!accepted) {
       prependPendingThreadMessageWithAttachments(threadId, next, queuedAttachments);
     }
@@ -1111,7 +1214,8 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
           set((state) => ({
             workspaceExplorerRefreshById: {
               ...state.workspaceExplorerRefreshById,
-              [thread.workspaceId]: (state.workspaceExplorerRefreshById[thread.workspaceId] ?? 0) + 1,
+              [thread.workspaceId]:
+                (state.workspaceExplorerRefreshById[thread.workspaceId] ?? 0) + 1,
             },
           }));
           void get().refreshWorkspaceFiles(thread.workspaceId);
@@ -1136,11 +1240,12 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     }
 
     const snapshotFeedIds = new Set(snapshotFeed.map((item) => item.id));
-    return currentFeed.some((item) =>
-      item.kind === "message"
-      && item.role === "user"
-      && optimisticIds.has(item.id)
-      && !snapshotFeedIds.has(item.id),
+    return currentFeed.some(
+      (item) =>
+        item.kind === "message" &&
+        item.role === "user" &&
+        optimisticIds.has(item.id) &&
+        !snapshotFeedIds.has(item.id),
     );
   }
 
@@ -1179,16 +1284,25 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       if (!runtime || !thread) {
         return {};
       }
-      const preserveCurrentFeed = shouldPreserveCurrentFeed(threadId, runtime.busy, thread.lastEventSeq, runtime.feed, snapshot);
+      const preserveCurrentFeed = shouldPreserveCurrentFeed(
+        threadId,
+        runtime.busy,
+        thread.lastEventSeq,
+        runtime.feed,
+        snapshot,
+      );
       const nextLastEventSeq = preserveCurrentFeed
         ? Math.max(normalizeEventSeq(thread.lastEventSeq), normalizeEventSeq(snapshot.lastEventSeq))
         : normalizeEventSeq(snapshot.lastEventSeq);
       const nextMessageCount = preserveCurrentFeed
         ? Math.max(thread.messageCount ?? 0, normalizeEventSeq(snapshot.messageCount))
         : normalizeEventSeq(snapshot.messageCount);
-      const nextLastMessageAt = preserveCurrentFeed && typeof thread.lastMessageAt === "string" && thread.lastMessageAt > snapshot.updatedAt
-        ? thread.lastMessageAt
-        : snapshot.updatedAt;
+      const nextLastMessageAt =
+        preserveCurrentFeed &&
+        typeof thread.lastMessageAt === "string" &&
+        thread.lastMessageAt > snapshot.updatedAt
+          ? thread.lastMessageAt
+          : snapshot.updatedAt;
       return {
         threads: s.threads.map((entry) =>
           entry.id === threadId
@@ -1268,9 +1382,9 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       const resumedBusy = evt.isResume ? Boolean(evt.busy) : false;
       const prevRt = get().threadRuntimeById[threadId];
       const draftModelSelection =
-        prevRt?.draftComposerProvider != null
-        && typeof prevRt.draftComposerModel === "string"
-        && prevRt.draftComposerModel.trim()
+        prevRt?.draftComposerProvider != null &&
+        typeof prevRt.draftComposerModel === "string" &&
+        prevRt.draftComposerModel.trim()
           ? { provider: prevRt.draftComposerProvider, model: prevRt.draftComposerModel.trim() }
           : null;
       set((s) => {
@@ -1297,9 +1411,9 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
               effectiveReasoningEffort: evt.effectiveReasoningEffort ?? null,
               executionState: evt.executionState ?? null,
               lastMessagePreview: evt.lastMessagePreview ?? null,
-              agents: sessionKind === "agent" ? [] : (evt.isResume ? rt.agents : []),
+              agents: sessionKind === "agent" ? [] : evt.isResume ? rt.agents : [],
               busy: resumedBusy,
-              busySince: resumedBusy ? rt.busySince ?? deps.nowIso() : null,
+              busySince: resumedBusy ? (rt.busySince ?? deps.nowIso()) : null,
               activeTurnId: resumedBusy ? (evt.turnId ?? null) : null,
               pendingSteer: resumedBusy ? rt.pendingSteer : null,
               transcriptOnly: false,
@@ -1308,7 +1422,9 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
             },
           },
           threads: s.threads.map((t) =>
-            t.id === threadId ? { ...t, status: "active", sessionId: evt.sessionId, draft: false } : t,
+            t.id === threadId
+              ? { ...t, status: "active", sessionId: evt.sessionId, draft: false }
+              : t,
           ),
         };
       });
@@ -1338,7 +1454,14 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
             acceptedPendingFirstMessage = flushOneQueuedThreadMessageIfReady(get, set, threadId);
           } else {
             const firstMsgAttachments = shiftPendingThreadAttachments(threadId);
-            acceptedPendingFirstMessage = sendUserMessageToThread(get, set, threadId, pendingFirstMessage, undefined, firstMsgAttachments);
+            acceptedPendingFirstMessage = sendUserMessageToThread(
+              get,
+              set,
+              threadId,
+              pendingFirstMessage,
+              undefined,
+              firstMsgAttachments,
+            );
           }
         }
       }
@@ -1393,7 +1516,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
             [threadId]: {
               ...rt,
               busy: evt.busy,
-              busySince: evt.busy ? rt.busySince ?? deps.nowIso() : null,
+              busySince: evt.busy ? (rt.busySince ?? deps.nowIso()) : null,
               activeTurnId: evt.busy ? (evt.turnId ?? rt.activeTurnId) : null,
               pendingTurnStart: null,
               pendingSteer: evt.busy ? rt.pendingSteer : null,
@@ -1424,7 +1547,8 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
         set((s) => {
           const rt = s.threadRuntimeById[threadId];
           const pendingSteer = rt?.pendingSteer;
-          if (!rt || !pendingSteer || pendingSteer.clientMessageId !== evt.clientMessageId) return {};
+          if (!rt || !pendingSteer || pendingSteer.clientMessageId !== evt.clientMessageId)
+            return {};
           return {
             threadRuntimeById: {
               ...s.threadRuntimeById,
@@ -1441,7 +1565,11 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       }
       const activeThreadId = get().selectedThreadId;
       const composerText = get().composerText.trim();
-      if (activeThreadId === threadId && composerText.length > 0 && composerText === evt.text.trim()) {
+      if (
+        activeThreadId === threadId &&
+        composerText.length > 0 &&
+        composerText === evt.text.trim()
+      ) {
         set({ composerText: "" });
       }
       return;
@@ -1502,17 +1630,22 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
               provider: rt.config.provider ?? evt.provider,
               model: rt.config.model ?? evt.model,
             }
-          : rt?.config ?? null;
+          : (rt?.config ?? null);
         const incomingTitle = evt.title.trim();
-        const incomingSource = deps.normalizeThreadTitleSource(evt.titleSource, incomingTitle || evt.title);
+        const incomingSource = deps.normalizeThreadTitleSource(
+          evt.titleSource,
+          incomingTitle || evt.title,
+        );
         const nextThreads = s.threads.map((t) => {
           if (t.id !== threadId) return t;
           const currentSource = deps.normalizeThreadTitleSource(t.titleSource, t.title);
-          if (!deps.shouldAdoptServerTitle({
-            currentSource,
-            incomingTitle,
-            incomingSource,
-          })) {
+          if (
+            !deps.shouldAdoptServerTitle({
+              currentSource,
+              incomingTitle,
+              incomingSource,
+            })
+          ) {
             return t;
           }
 
@@ -1545,8 +1678,10 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
                     nickname: evt.nickname ?? rt.nickname,
                     requestedModel: evt.requestedModel ?? rt.requestedModel,
                     effectiveModel: evt.effectiveModel ?? rt.effectiveModel,
-                    requestedReasoningEffort: evt.requestedReasoningEffort ?? rt.requestedReasoningEffort,
-                    effectiveReasoningEffort: evt.effectiveReasoningEffort ?? rt.effectiveReasoningEffort,
+                    requestedReasoningEffort:
+                      evt.requestedReasoningEffort ?? rt.requestedReasoningEffort,
+                    effectiveReasoningEffort:
+                      evt.effectiveReasoningEffort ?? rt.effectiveReasoningEffort,
                     executionState: evt.executionState ?? rt.executionState,
                     lastMessagePreview: evt.lastMessagePreview ?? rt.lastMessagePreview,
                     agents: (evt.sessionKind ?? rt.sessionKind) === "agent" ? [] : rt.agents,
@@ -1628,7 +1763,11 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     }
 
     if (evt.type === "ask") {
-      const prompt: AskPrompt = { requestId: evt.requestId, question: evt.question, options: evt.options };
+      const prompt: AskPrompt = {
+        requestId: evt.requestId,
+        question: evt.question,
+        options: evt.options,
+      };
       set(() => ({ promptModal: { kind: "ask", threadId, prompt } }));
       return;
     }
@@ -1747,7 +1886,9 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       });
 
       set((s) => ({
-        threads: s.threads.map((t) => (t.id === threadId ? { ...t, lastMessageAt: deps.nowIso() } : t)),
+        threads: s.threads.map((t) =>
+          t.id === threadId ? { ...t, lastMessageAt: deps.nowIso() } : t,
+        ),
       }));
       void deps.persist(get);
       return;
@@ -1796,7 +1937,8 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
           id: deps.makeId(),
           ts: deps.nowIso(),
           kind: evt.type === "budget_exceeded" ? "error" : "info",
-          title: evt.type === "budget_exceeded" ? "Session hard cap exceeded" : "Session budget warning",
+          title:
+            evt.type === "budget_exceeded" ? "Session hard cap exceeded" : "Session budget warning",
           detail: evt.message,
         }),
       }));
@@ -1842,7 +1984,12 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       set((s) => ({
         latestTodosByThreadId: { ...s.latestTodosByThreadId, [threadId]: evt.todos },
       }));
-      pushFeedItem(set, threadId, { id: deps.makeId(), kind: "todos", ts: deps.nowIso(), todos: evt.todos });
+      pushFeedItem(set, threadId, {
+        id: deps.makeId(),
+        kind: "todos",
+        ts: deps.nowIso(),
+        todos: evt.todos,
+      });
       return;
     }
 
@@ -1850,7 +1997,12 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       if (shouldSuppressRawDebugLogLine(evt.line)) {
         return;
       }
-      pushFeedItem(set, threadId, { id: deps.makeId(), kind: "log", ts: deps.nowIso(), line: evt.line });
+      pushFeedItem(set, threadId, {
+        id: deps.makeId(),
+        kind: "log",
+        ts: deps.nowIso(),
+        line: evt.line,
+      });
       return;
     }
 
@@ -1927,9 +2079,9 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     if (!ensureWorkspaceJsonRpcSocket(get, set, workspaceId)) return;
 
     const existingSessionId =
-      get().threadRuntimeById[threadId]?.sessionId
-      ?? get().threads.find((thread) => thread.id === threadId)?.sessionId
-      ?? null;
+      get().threadRuntimeById[threadId]?.sessionId ??
+      get().threads.find((thread) => thread.id === threadId)?.sessionId ??
+      null;
 
     set((s) => ({
       threadRuntimeById: {
@@ -1969,26 +2121,25 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
           get,
           set,
           activeThreadId,
-          buildSyntheticServerHelloFromJsonRpcThread(thread, existingSessionId ? { isResume: true } : undefined) as any,
+          buildSyntheticServerHelloFromJsonRpcThread(
+            thread,
+            existingSessionId ? { isResume: true } : undefined,
+          ) as any,
           pendingFirstMessage,
           pendingFirstMessageQueued,
         );
         const runtime = get().threadRuntimeById[activeThreadId];
-        handleThreadEvent(
-          get,
-          set,
-          activeThreadId,
-          {
-            ...buildSyntheticSessionSettings(runtime, get().workspaces.find((workspace) => workspace.id === workspaceId)),
-            sessionId: thread.id,
-          } as any,
-        );
-        handleThreadEvent(
-          get,
-          set,
-          activeThreadId,
-          { ...buildSyntheticSessionInfoFromJsonRpcThread(thread), sessionId: thread.id } as any,
-        );
+        handleThreadEvent(get, set, activeThreadId, {
+          ...buildSyntheticSessionSettings(
+            runtime,
+            get().workspaces.find((workspace) => workspace.id === workspaceId),
+          ),
+          sessionId: thread.id,
+        } as any);
+        handleThreadEvent(get, set, activeThreadId, {
+          ...buildSyntheticSessionInfoFromJsonRpcThread(thread),
+          sessionId: thread.id,
+        } as any);
         const snapshot = await requestJsonRpcThreadRead(get, set, workspaceId, thread.id);
         if (isWorkspaceDisposed(workspaceId)) {
           return;

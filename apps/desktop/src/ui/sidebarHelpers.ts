@@ -23,7 +23,11 @@ export function formatSidebarRelativeAge(iso: string): string {
   return `${Math.floor(elapsedMs / year)}y`;
 }
 
-export function getVisibleSidebarThreads<T>(threads: T[], showAll: boolean, limit = MAX_VISIBLE_THREADS): {
+export function getVisibleSidebarThreads<T>(
+  threads: T[],
+  showAll: boolean,
+  limit = MAX_VISIBLE_THREADS,
+): {
   visibleThreads: T[];
   hiddenThreadCount: number;
 } {
@@ -56,7 +60,10 @@ export function reorderSidebarItemsById<T extends { id: string }>(
   return nextItems;
 }
 
-export function applyWorkspaceOrder<T extends { id: string }>(items: T[], orderedIds: string[]): T[] {
+export function applyWorkspaceOrder<T extends { id: string }>(
+  items: T[],
+  orderedIds: string[],
+): T[] {
   const itemsById = new Map(items.map((item) => [item.id, item]));
   const seenIds = new Set<string>();
   const nextItems: T[] = [];
@@ -80,8 +87,8 @@ export function applyWorkspaceOrder<T extends { id: string }>(items: T[], ordere
     nextItems.push(item);
   }
 
-  const unchanged = nextItems.length === items.length
-    && nextItems.every((item, index) => item === items[index]);
+  const unchanged =
+    nextItems.length === items.length && nextItems.every((item, index) => item === items[index]);
   return unchanged ? items : nextItems;
 }
 
@@ -101,7 +108,10 @@ export function swapSidebarItemsById<T extends { id: string }>(
   }
 
   const nextItems = [...items];
-  [nextItems[sourceIndex], nextItems[targetIndex]] = [nextItems[targetIndex] as T, nextItems[sourceIndex] as T];
+  [nextItems[sourceIndex], nextItems[targetIndex]] = [
+    nextItems[targetIndex] as T,
+    nextItems[sourceIndex] as T,
+  ];
   return nextItems;
 }
 

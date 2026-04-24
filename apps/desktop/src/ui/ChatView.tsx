@@ -1,9 +1,38 @@
-import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { defaultModelForProvider } from "@cowork/providers/catalog";
+import {
+  AlertTriangleIcon,
+  LoaderCircleIcon,
+  MessageSquareIcon,
+  MousePointerClickIcon,
+  PlusIcon,
+  RotateCcwIcon,
+} from "lucide-react";
 import type { ChangeEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
-
-import { AlertTriangleIcon, LoaderCircleIcon, MessageSquareIcon, MousePointerClickIcon, PlusIcon, RotateCcwIcon } from "lucide-react";
+import {
+  createContext,
+  memo,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { formatCost, formatTokenCount } from "../../../../src/session/pricing";
+import {
+  MAX_ATTACHMENT_INLINE_BYTE_SIZE,
+  MAX_TURN_ATTACHMENT_TOTAL_INLINE_BYTE_SIZE,
+} from "../../../../src/shared/attachments";
+import type { CitationSource } from "../../../../src/shared/displayCitationMarkers";
+import {
+  buildCitationOverflowFilePathsByMessageId,
+  buildCitationSourcesByMessageId,
+  buildCitationUrlsByMessageId,
+  extractCitationSourcesFromWebSearchResult,
+  extractCitationUrlsFromAnnotations,
+  extractCitationUrlsFromWebSearchResult,
+} from "../../../../src/shared/displayCitationMarkers";
 import coworkIconSvg from "../../build/icon.icon/Assets/svgviewer-output.svg";
-
 import {
   buildAttachmentSignature,
   encodeArrayBufferToBase64,
@@ -11,19 +40,23 @@ import {
   getAttachmentUploadValidationMessage,
 } from "../app/attachmentInputs";
 import { useAppStore } from "../app/store";
-import { uploadJsonRpcWorkspaceFile } from "../app/store.helpers/jsonRpcSocket";
 import type { FileAttachmentInput } from "../app/store.helpers/jsonRpcSocket";
-import type { FeedItem, ThreadAgentSummary, ThreadPendingSteer, ThreadPendingTurnStart, ThreadStatus } from "../app/types";
+import { uploadJsonRpcWorkspaceFile } from "../app/store.helpers/jsonRpcSocket";
+import type {
+  FeedItem,
+  SessionUsageSnapshot,
+  ThreadAgentSummary,
+  ThreadPendingSteer,
+  ThreadPendingTurnStart,
+  ThreadStatus,
+  TurnUsageSnapshot,
+} from "../app/types";
 import {
   Conversation,
   ConversationContent,
   ConversationEmptyState,
 } from "../components/ai-elements/conversation";
-import {
-  Message,
-  MessageContent,
-  MessageResponse,
-} from "../components/ai-elements/message";
+import { Message, MessageContent, MessageResponse } from "../components/ai-elements/message";
 import {
   PromptInputAttachmentPreviews,
   PromptInputBody,
@@ -35,10 +68,11 @@ import {
   PromptInputTextarea,
   PromptInputTools,
 } from "../components/ai-elements/prompt-input";
-import { MessageBarResizer } from "./layout/MessageBarResizer";
+import { SourcesCarousel } from "../components/ai-elements/sources-carousel";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog";
 import {
   Select,
   SelectContent,
@@ -48,44 +82,27 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../components/ui/select";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog";
-import {
-  MAX_ATTACHMENT_INLINE_BYTE_SIZE,
-  MAX_TURN_ATTACHMENT_TOTAL_INLINE_BYTE_SIZE,
-} from "../../../../src/shared/attachments";
+import { readFile } from "../lib/desktopCommands";
 import {
   availableProvidersFromCatalog,
+  type CatalogVisibilityOptions,
   decodeProviderModelSelection,
   encodeProviderModelSelection,
   modelChoicesFromCatalog,
   modelDisplayNamesFromCatalog,
   resolveModelDisplayLabel,
-  type CatalogVisibilityOptions,
 } from "../lib/modelChoices";
 import { displayProviderName } from "../lib/providerDisplayNames";
-import { readFile } from "../lib/desktopCommands";
-import { PROVIDER_NAMES, type ProviderName } from "../lib/wsProtocol";
 import { cn } from "../lib/utils";
-import { defaultModelForProvider } from "@cowork/providers/catalog";
-import { formatCost, formatTokenCount } from "../../../../src/session/pricing";
-import {
-  buildCitationOverflowFilePathsByMessageId,
-  buildCitationSourcesByMessageId,
-  buildCitationUrlsByMessageId,
-  extractCitationUrlsFromAnnotations,
-  extractCitationSourcesFromWebSearchResult,
-  extractCitationUrlsFromWebSearchResult,
-} from "../../../../src/shared/displayCitationMarkers";
-import type { CitationSource } from "../../../../src/shared/displayCitationMarkers";
-import { SourcesCarousel } from "../components/ai-elements/sources-carousel";
-import type { SessionUsageSnapshot, TurnUsageSnapshot } from "../app/types";
+import { PROVIDER_NAMES, type ProviderName } from "../lib/wsProtocol";
 import { ActivityGroupCard } from "./chat/ActivityGroupCard";
-import { buildChatRenderItems } from "./chat/activityGroups";
-import { normalizeFeedForToolCards } from "./chat/toolCards/legacyToolLogs";
-import { ToolCard } from "./chat/toolCards/ToolCard";
 import { A2uiInlineCard } from "./chat/a2ui/A2uiInlineCard";
 import { A2uiSurfaceDock } from "./chat/a2ui/A2uiSurfaceDock";
 import { A2uiSurfaceHistoryRow } from "./chat/a2ui/A2uiSurfaceHistoryRow";
+import { buildChatRenderItems } from "./chat/activityGroups";
+import { normalizeFeedForToolCards } from "./chat/toolCards/legacyToolLogs";
+import { ToolCard } from "./chat/toolCards/ToolCard";
+import { MessageBarResizer } from "./layout/MessageBarResizer";
 
 type ChatViewContextValue = {
   developerMode: boolean;
@@ -117,7 +134,9 @@ export function shouldToggleReasoningExpanded(key: string): boolean {
 
 export function isActiveChildAgent(agent: ThreadAgentSummary): boolean {
   if (agent.lifecycleState === "closed") return false;
-  return agent.busy || agent.executionState === "pending_init" || agent.executionState === "running";
+  return (
+    agent.busy || agent.executionState === "pending_init" || agent.executionState === "running"
+  );
 }
 
 export function countActiveChildAgents(agents: ThreadAgentSummary[]): number {
@@ -125,7 +144,9 @@ export function countActiveChildAgents(agents: ThreadAgentSummary[]): number {
 }
 
 export function filterFeedForDeveloperMode(feed: FeedItem[], developerMode: boolean): FeedItem[] {
-  return developerMode ? feed : feed.filter((item) => item.kind !== "system" && item.kind !== "log");
+  return developerMode
+    ? feed
+    : feed.filter((item) => item.kind !== "system" && item.kind !== "log");
 }
 
 export type A2uiActionMessage = {
@@ -165,16 +186,19 @@ export function parseA2uiActionMessage(text: string): A2uiActionMessage | null {
 }
 
 export function summarizeA2uiActionMessage(action: A2uiActionMessage): string {
-  const prefix = action.eventType === "click"
-    ? "Clicked"
-    : action.eventType === "submit"
-      ? "Submitted"
-      : action.eventType === "change"
-        ? "Changed"
-        : `Triggered ${action.eventType} on`;
+  const prefix =
+    action.eventType === "click"
+      ? "Clicked"
+      : action.eventType === "submit"
+        ? "Submitted"
+        : action.eventType === "change"
+          ? "Changed"
+          : `Triggered ${action.eventType} on`;
   const payloadValue = action.payload?.value;
   const valueSuffix =
-    typeof payloadValue === "string" || typeof payloadValue === "number" || typeof payloadValue === "boolean"
+    typeof payloadValue === "string" ||
+    typeof payloadValue === "number" ||
+    typeof payloadValue === "boolean"
       ? ` -> ${String(payloadValue)}`
       : "";
   return `${prefix} ${action.componentId}${valueSuffix}`;
@@ -242,11 +266,13 @@ export function canClearSessionHardCap(opts: {
   sessionId: string | null;
   threadStatus: ThreadStatus;
 }): boolean {
-  return opts.sessionUsage?.budgetStatus.stopTriggered === true
-    && !opts.transcriptOnly
-    && opts.connected
-    && Boolean(opts.sessionId)
-    && opts.threadStatus === "active";
+  return (
+    opts.sessionUsage?.budgetStatus.stopTriggered === true &&
+    !opts.transcriptOnly &&
+    opts.connected &&
+    Boolean(opts.sessionId) &&
+    opts.threadStatus === "active"
+  );
 }
 
 export function getComposerSubmitState(opts: {
@@ -259,15 +285,20 @@ export function getComposerSubmitState(opts: {
   pendingSteer: ThreadPendingSteer | null;
   sessionId: string | null;
   threadStatus: ThreadStatus;
-}): { status: "ready" | "pending" | "streaming"; disabled: boolean; mode: "send" | "steer-ready" | "steer-pending" } {
+}): {
+  status: "ready" | "pending" | "streaming";
+  disabled: boolean;
+  mode: "send" | "steer-ready" | "steer-pending";
+} {
   const composerText = opts.composerText.trim();
   const hasComposerText = composerText.length > 0;
   const hasPendingInput = hasComposerText || opts.hasPendingAttachments;
   const startPending = opts.pendingTurnStart?.status === "sending";
-  const steerPending = opts.busy
-    && hasPendingInput
-    && opts.pendingSteer?.status === "sending"
-    && opts.pendingSteer.text.trim() === composerText;
+  const steerPending =
+    opts.busy &&
+    hasPendingInput &&
+    opts.pendingSteer?.status === "sending" &&
+    opts.pendingSteer.text.trim() === composerText;
   const samePendingAttachments =
     (opts.pendingSteer?.attachmentSignature ?? "") === opts.pendingAttachmentSignature;
 
@@ -289,16 +320,23 @@ export function getComposerSubmitState(opts: {
 
   return {
     status: "ready",
-    mode: opts.busy && steerPending && samePendingAttachments ? "steer-pending" : (opts.busy ? "steer-ready" : "send"),
+    mode:
+      opts.busy && steerPending && samePendingAttachments
+        ? "steer-pending"
+        : opts.busy
+          ? "steer-ready"
+          : "send",
     disabled:
-      opts.hasPromptModal
-      || !hasPendingInput
-      || (steerPending && samePendingAttachments)
-      || (opts.busy && (!opts.sessionId || opts.threadStatus !== "active")),
+      opts.hasPromptModal ||
+      !hasPendingInput ||
+      (steerPending && samePendingAttachments) ||
+      (opts.busy && (!opts.sessionId || opts.threadStatus !== "active")),
   };
 }
 
-export function composerBusyHint(submitState: ReturnType<typeof getComposerSubmitState>): string | null {
+export function composerBusyHint(
+  submitState: ReturnType<typeof getComposerSubmitState>,
+): string | null {
   if (submitState.status === "pending") {
     return "Sending message. Waiting for the run to start.";
   }
@@ -327,21 +365,23 @@ type PendingComposerAttachment = {
   signature: string;
 };
 
-function buildPendingComposerAttachmentSignature(attachments: readonly PendingComposerAttachment[]): string {
+function buildPendingComposerAttachmentSignature(
+  attachments: readonly PendingComposerAttachment[],
+): string {
   if (attachments.length === 0) {
     return "";
   }
   return attachments
-    .map((attachment) => (
-      `${attachment.filename}\u0000${attachment.mimeType}\u0000${attachment.signature}`
-    ))
+    .map(
+      (attachment) =>
+        `${attachment.filename}\u0000${attachment.mimeType}\u0000${attachment.signature}`,
+    )
     .join("\u0001");
 }
 
 function createPendingComposerAttachment(file: File): PendingComposerAttachment {
-  const previewUrl = file.type.startsWith("image/") && file instanceof Blob
-    ? URL.createObjectURL(file)
-    : undefined;
+  const previewUrl =
+    file.type.startsWith("image/") && file instanceof Blob ? URL.createObjectURL(file) : undefined;
   return {
     filename: file.name,
     mimeType: file.type || "application/octet-stream",
@@ -406,14 +446,8 @@ export function ChatThreadHeader(props: {
   canClearHardCap: boolean;
   onClearHardCap: () => void;
 }) {
-  const {
-    title,
-    sessionUsage,
-    usageHeadline,
-    usageBudgetLine,
-    canClearHardCap,
-    onClearHardCap,
-  } = props;
+  const { title, sessionUsage, usageHeadline, usageBudgetLine, canClearHardCap, onClearHardCap } =
+    props;
   const hasUsageSummary = Boolean(usageHeadline || usageBudgetLine);
 
   return (
@@ -442,7 +476,9 @@ export function ChatThreadHeader(props: {
               sessionUsageTone(sessionUsage),
             )}
           >
-            <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Usage</span>
+            <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+              Usage
+            </span>
             {usageHeadline ? <span>{usageHeadline}</span> : null}
             {usageBudgetLine ? <span className="font-medium">{usageBudgetLine}</span> : null}
             {canClearHardCap ? (
@@ -473,9 +509,10 @@ const FeedRow = memo(function FeedRow(props: {
   const { developerMode } = useChatViewContext();
   const item = props.item;
   const hasSources = props.citationSources && props.citationSources.length > 0;
-  const hasInlineCitationChip = item.kind === "message"
-    && item.role === "assistant"
-    && extractCitationUrlsFromAnnotations(item.annotations).size > 0;
+  const hasInlineCitationChip =
+    item.kind === "message" &&
+    item.role === "assistant" &&
+    extractCitationUrlsFromAnnotations(item.annotations).size > 0;
 
   if (item.kind === "message") {
     if (item.role === "user") {
@@ -554,9 +591,11 @@ const FeedRow = memo(function FeedRow(props: {
     if (!props.a2uiEnabled) {
       return null;
     }
-    return props.isLatestUiSurface
-      ? <A2uiInlineCard item={item} />
-      : <A2uiSurfaceHistoryRow item={item} />;
+    return props.isLatestUiSurface ? (
+      <A2uiInlineCard item={item} />
+    ) : (
+      <A2uiSurfaceHistoryRow item={item} />
+    );
   }
 
   if (item.kind === "log") {
@@ -617,21 +656,25 @@ function DraftThreadModelSelector({
   const providerCatalog = useAppStore((s) => s.providerCatalog);
   const providerConnected = useAppStore((s) => s.providerConnected);
   const providerUiState = useAppStore((s) => s.providerUiState);
-  const chatCatalogVisibility = useMemo<CatalogVisibilityOptions>(() => ({
-    hiddenProviders: providerUiState.lmstudio.enabled ? [] : (["lmstudio"] as const),
-    hiddenModelsByProvider: {
-      lmstudio: providerUiState.lmstudio.hiddenModels,
-    },
-  }), [providerUiState]);
+  const chatCatalogVisibility = useMemo<CatalogVisibilityOptions>(
+    () => ({
+      hiddenProviders: providerUiState.lmstudio.enabled ? [] : (["lmstudio"] as const),
+      hiddenModelsByProvider: {
+        lmstudio: providerUiState.lmstudio.hiddenModels,
+      },
+    }),
+    [providerUiState],
+  );
   const choices = useMemo(
     () => modelChoicesFromCatalog(providerCatalog, chatCatalogVisibility),
     [providerCatalog, chatCatalogVisibility],
   );
   const providers = useMemo(
-    () => availableProvidersFromCatalog(providerCatalog, providerConnected, provider, {
-      ...chatCatalogVisibility,
-      visibleModelsByProvider: choices,
-    }),
+    () =>
+      availableProvidersFromCatalog(providerCatalog, providerConnected, provider, {
+        ...chatCatalogVisibility,
+        visibleModelsByProvider: choices,
+      }),
     [providerCatalog, providerConnected, provider, chatCatalogVisibility, choices],
   );
   const value = encodeProviderModelSelection(provider, model);
@@ -643,9 +686,13 @@ function DraftThreadModelSelector({
       disabled={disabled}
       onValueChange={(val) => {
         if (val === bedrockCustomSelection) {
-          const customModel = typeof window !== "undefined"
-            ? window.prompt("Enter a Bedrock model ID or ARN", provider === "bedrock" ? model : "")
-            : null;
+          const customModel =
+            typeof window !== "undefined"
+              ? window.prompt(
+                  "Enter a Bedrock model ID or ARN",
+                  provider === "bedrock" ? model : "",
+                )
+              : null;
           const normalized = customModel?.trim();
           if (normalized) {
             setThreadModel(threadId, "bedrock", normalized);
@@ -661,12 +708,16 @@ function DraftThreadModelSelector({
         size="sm"
         className="h-6 w-auto min-w-0 max-w-[220px] rounded-md border-none bg-transparent px-1.5 text-[11px] text-muted-foreground shadow-none transition-colors hover:bg-muted/40 hover:text-foreground focus:ring-0"
       >
-        <span className="truncate"><SelectValue placeholder="Model" /></span>
+        <span className="truncate">
+          <SelectValue placeholder="Model" />
+        </span>
       </SelectTrigger>
       <SelectContent>
         {providers.map((p) => (
           <SelectGroup key={p}>
-            <SelectLabel className="px-2 py-1.5 text-xs font-semibold">{displayProviderName(p)}</SelectLabel>
+            <SelectLabel className="px-2 py-1.5 text-xs font-semibold">
+              {displayProviderName(p)}
+            </SelectLabel>
             {(choices[p] ?? []).map((m) => {
               const sel = encodeProviderModelSelection(p, m);
               const label = resolveModelDisplayLabel(p, m, modelDisplayNames);
@@ -682,11 +733,17 @@ function DraftThreadModelSelector({
                 value={encodeProviderModelSelection(p, model)}
                 className="pl-6 text-xs"
               >
-                <span title={model}>{resolveModelDisplayLabel(p, model, modelDisplayNames)} (custom)</span>
+                <span title={model}>
+                  {resolveModelDisplayLabel(p, model, modelDisplayNames)} (custom)
+                </span>
               </SelectItem>
             ) : null}
             {p === "bedrock" ? (
-              <SelectItem key={bedrockCustomSelection} value={bedrockCustomSelection} className="pl-6 text-xs">
+              <SelectItem
+                key={bedrockCustomSelection}
+                value={bedrockCustomSelection}
+                className="pl-6 text-xs"
+              >
                 <span>Custom model ID / ARN...</span>
               </SelectItem>
             ) : null}
@@ -710,7 +767,9 @@ function ThreadModelIndicator({
   if (!id) return null;
   const friendly = resolveModelDisplayLabel(provider, id, modelDisplayNames);
   const title =
-    friendly !== id ? `${displayProviderName(provider)} / ${friendly} (${id})` : `${displayProviderName(provider)} / ${id}`;
+    friendly !== id
+      ? `${displayProviderName(provider)} / ${friendly} (${id})`
+      : `${displayProviderName(provider)} / ${id}`;
 
   return (
     <Badge
@@ -741,17 +800,19 @@ export function ChatView() {
   const developerMode = useAppStore((s) => s.developerMode);
   const desktopA2uiEnabled = useAppStore((s) => s.desktopFeatureFlags.a2ui);
   const messageBarHeight = useAppStore((s) => s.messageBarHeight);
-  const [overflowCitationUrlsByMessageId, setOverflowCitationUrlsByMessageId] = useState<Map<string, Map<number, string>>>(
-    () => new Map(),
-  );
-  const [overflowCitationSourcesByMessageId, setOverflowCitationSourcesByMessageId] = useState<Map<string, CitationSource[]>>(
-    () => new Map(),
-  );
+  const [overflowCitationUrlsByMessageId, setOverflowCitationUrlsByMessageId] = useState<
+    Map<string, Map<number, string>>
+  >(() => new Map());
+  const [overflowCitationSourcesByMessageId, setOverflowCitationSourcesByMessageId] = useState<
+    Map<string, CitationSource[]>
+  >(() => new Map());
   const [cancelScopeDialogOpen, setCancelScopeDialogOpen] = useState(false);
   const [pendingAttachments, setPendingAttachments] = useState<PendingComposerAttachment[]>([]);
   const [attachmentPickerError, setAttachmentPickerError] = useState<string | null>(null);
   const [preparingAttachments, setPreparingAttachments] = useState(false);
-  const [submittedAttachmentSignature, setSubmittedAttachmentSignature] = useState<string | null>(null);
+  const [submittedAttachmentSignature, setSubmittedAttachmentSignature] = useState<string | null>(
+    null,
+  );
 
   const setComposerText = useAppStore((s) => s.setComposerText);
   const sendMessage = useAppStore((s) => s.sendMessage);
@@ -790,19 +851,28 @@ export function ChatView() {
     setPreparingAttachments(false);
   }, [clearPendingAttachments, selectedThreadId]);
 
-  const ingestAttachmentFiles = useCallback(async (selectedFiles: File[]) => {
-    if (selectedFiles.length === 0) return;
+  const ingestAttachmentFiles = useCallback(
+    async (selectedFiles: File[]) => {
+      if (selectedFiles.length === 0) return;
 
-    const validationMessage = getAttachmentPickerValidationMessage(pendingAttachments, selectedFiles);
-    if (validationMessage) {
-      setAttachmentPickerError(validationMessage);
-      return;
-    }
+      const validationMessage = getAttachmentPickerValidationMessage(
+        pendingAttachments,
+        selectedFiles,
+      );
+      if (validationMessage) {
+        setAttachmentPickerError(validationMessage);
+        return;
+      }
 
-    setAttachmentPickerError(null);
-    setSubmittedAttachmentSignature(null);
-    setPendingAttachments((prev) => [...prev, ...selectedFiles.map(createPendingComposerAttachment)]);
-  }, [pendingAttachments]);
+      setAttachmentPickerError(null);
+      setSubmittedAttachmentSignature(null);
+      setPendingAttachments((prev) => [
+        ...prev,
+        ...selectedFiles.map(createPendingComposerAttachment),
+      ]);
+    },
+    [pendingAttachments],
+  );
 
   const handleFileSelect = useCallback(
     async (event: ChangeEvent<HTMLInputElement>) => {
@@ -837,7 +907,11 @@ export function ChatView() {
       return rt.sessionConfig.featureFlags.workspace.a2ui;
     }
     return desktopA2uiEnabled === true;
-  }, [desktopA2uiEnabled, rt?.sessionConfig?.enableA2ui, rt?.sessionConfig?.featureFlags?.workspace?.a2ui]);
+  }, [
+    desktopA2uiEnabled,
+    rt?.sessionConfig?.enableA2ui,
+    rt?.sessionConfig?.featureFlags?.workspace?.a2ui,
+  ]);
   const visibleFeed = useMemo(() => {
     const baseVisibleFeed = filterFeedForDeveloperMode(normalizedFeed, developerMode);
     if (a2uiEnabled) {
@@ -853,7 +927,10 @@ export function ChatView() {
       return true;
     });
   }, [a2uiEnabled, developerMode, normalizedFeed]);
-  const inlineCitationUrlsByMessageId = useMemo(() => buildCitationUrlsByMessageId(visibleFeed), [visibleFeed]);
+  const inlineCitationUrlsByMessageId = useMemo(
+    () => buildCitationUrlsByMessageId(visibleFeed),
+    [visibleFeed],
+  );
   const citationOverflowFilePathsByMessageId = useMemo(
     () => buildCitationOverflowFilePathsByMessageId(visibleFeed),
     [visibleFeed],
@@ -867,7 +944,10 @@ export function ChatView() {
     }
     return merged;
   }, [inlineCitationUrlsByMessageId, overflowCitationUrlsByMessageId]);
-  const inlineCitationSourcesByMessageId = useMemo(() => buildCitationSourcesByMessageId(visibleFeed), [visibleFeed]);
+  const inlineCitationSourcesByMessageId = useMemo(
+    () => buildCitationSourcesByMessageId(visibleFeed),
+    [visibleFeed],
+  );
   const citationSourcesByMessageId = useMemo(() => {
     const merged = new Map(inlineCitationSourcesByMessageId);
     for (const [messageId, sources] of overflowCitationSourcesByMessageId) {
@@ -881,7 +961,12 @@ export function ChatView() {
   const latestUiSurfaceItemId = useMemo(() => {
     for (let i = renderItems.length - 1; i >= 0; i--) {
       const entry = renderItems[i];
-      if (entry && entry.kind === "feed-item" && entry.item.kind === "ui_surface" && !entry.item.deleted) {
+      if (
+        entry &&
+        entry.kind === "feed-item" &&
+        entry.item.kind === "ui_surface" &&
+        !entry.item.deleted
+      ) {
         return entry.item.id;
       }
     }
@@ -905,7 +990,10 @@ export function ChatView() {
     return s.workspaces.find((w) => w.id === th.workspaceId) ?? null;
   });
   const providerCatalog = useAppStore((s) => s.providerCatalog);
-  const modelDisplayNames = useMemo(() => modelDisplayNamesFromCatalog(providerCatalog), [providerCatalog]);
+  const modelDisplayNames = useMemo(
+    () => modelDisplayNamesFromCatalog(providerCatalog),
+    [providerCatalog],
+  );
 
   const threadModelConfig = useMemo(() => {
     if (!selectedThreadId || !thread) return null;
@@ -945,11 +1033,14 @@ export function ChatView() {
     cancelThread(selectedThreadId);
   }, [activeChildAgentCount, cancelThread, selectedThreadId]);
 
-  const cancelWithScope = useCallback((includeSubagents: boolean) => {
-    if (!selectedThreadId) return;
-    cancelThread(selectedThreadId, { includeSubagents });
-    setCancelScopeDialogOpen(false);
-  }, [cancelThread, selectedThreadId]);
+  const cancelWithScope = useCallback(
+    (includeSubagents: boolean) => {
+      if (!selectedThreadId) return;
+      cancelThread(selectedThreadId, { includeSubagents });
+      setCancelScopeDialogOpen(false);
+    },
+    [cancelThread, selectedThreadId],
+  );
 
   useEffect(() => {
     const el = feedRef.current;
@@ -995,7 +1086,9 @@ export function ChatView() {
     const entries = [...citationOverflowFilePathsByMessageId.entries()];
     if (entries.length === 0) {
       setOverflowCitationUrlsByMessageId((current) => (current.size === 0 ? current : new Map()));
-      setOverflowCitationSourcesByMessageId((current) => (current.size === 0 ? current : new Map()));
+      setOverflowCitationSourcesByMessageId((current) =>
+        current.size === 0 ? current : new Map(),
+      );
       return;
     }
 
@@ -1026,7 +1119,10 @@ export function ChatView() {
   }, [activeChildAgentCount, rt?.busy]);
 
   const resolvePendingAttachmentsForSend = useCallback(
-    async (workspaceId: string, attachments: readonly PendingComposerAttachment[]): Promise<FileAttachmentInput[]> => {
+    async (
+      workspaceId: string,
+      attachments: readonly PendingComposerAttachment[],
+    ): Promise<FileAttachmentInput[]> => {
       let inlineByteLength = 0;
       const resolvedAttachments: FileAttachmentInput[] = [];
 
@@ -1037,10 +1133,9 @@ export function ChatView() {
         }
         const buffer = await attachment.file.arrayBuffer();
         const base64 = encodeArrayBufferToBase64(buffer);
-        const canInline = (
-          attachment.size <= MAX_ATTACHMENT_INLINE_BYTE_SIZE
-          && inlineByteLength + attachment.size <= MAX_TURN_ATTACHMENT_TOTAL_INLINE_BYTE_SIZE
-        );
+        const canInline =
+          attachment.size <= MAX_ATTACHMENT_INLINE_BYTE_SIZE &&
+          inlineByteLength + attachment.size <= MAX_TURN_ATTACHMENT_TOTAL_INLINE_BYTE_SIZE;
         if (canInline) {
           inlineByteLength += attachment.size;
           resolvedAttachments.push({
@@ -1074,64 +1169,68 @@ export function ChatView() {
   );
 
   const pendingAttachmentSignature = useMemo(
-    () => submittedAttachmentSignature ?? buildPendingComposerAttachmentSignature(pendingAttachments),
+    () =>
+      submittedAttachmentSignature ?? buildPendingComposerAttachmentSignature(pendingAttachments),
     [pendingAttachments, submittedAttachmentSignature],
   );
   const hasPendingAttachments = pendingAttachments.length > 0;
   const pendingTurnStart = rt?.pendingTurnStart ?? null;
 
-  const submitComposer = useCallback((busyPolicy: "reject" | "steer") => {
-    if (!thread) return;
-    if (preparingAttachments) return;
-    if (pendingTurnStart?.status === "sending") return;
-    if (!composerText.trim() && pendingAttachments.length === 0) return;
+  const submitComposer = useCallback(
+    (busyPolicy: "reject" | "steer") => {
+      if (!thread) return;
+      if (preparingAttachments) return;
+      if (pendingTurnStart?.status === "sending") return;
+      if (!composerText.trim() && pendingAttachments.length === 0) return;
 
-    const targetThreadId = thread.id;
-    const targetWorkspaceId = thread.workspaceId;
-    setPreparingAttachments(true);
-    setAttachmentPickerError(null);
-    void (async () => {
-      try {
-        const attachments = pendingAttachments.length > 0
-          ? await resolvePendingAttachmentsForSend(targetWorkspaceId, pendingAttachments)
-          : undefined;
-        const attachmentSignature = attachments && attachments.length > 0
-          ? buildAttachmentSignature(attachments)
-          : null;
-        setSubmittedAttachmentSignature(attachmentSignature);
+      const targetThreadId = thread.id;
+      const targetWorkspaceId = thread.workspaceId;
+      setPreparingAttachments(true);
+      setAttachmentPickerError(null);
+      void (async () => {
+        try {
+          const attachments =
+            pendingAttachments.length > 0
+              ? await resolvePendingAttachmentsForSend(targetWorkspaceId, pendingAttachments)
+              : undefined;
+          const attachmentSignature =
+            attachments && attachments.length > 0 ? buildAttachmentSignature(attachments) : null;
+          setSubmittedAttachmentSignature(attachmentSignature);
 
-        if (useAppStore.getState().selectedThreadId !== targetThreadId) {
+          if (useAppStore.getState().selectedThreadId !== targetThreadId) {
+            setSubmittedAttachmentSignature(null);
+            return;
+          }
+
+          const accepted = await sendMessage(composerText, busyPolicy, attachments);
+          if (accepted && busyPolicy !== "steer") {
+            clearPendingAttachments();
+            setAttachmentPickerError(null);
+            return;
+          }
+          if (!accepted) {
+            setSubmittedAttachmentSignature(null);
+          }
+        } catch (error) {
           setSubmittedAttachmentSignature(null);
-          return;
+          const message = error instanceof Error ? error.message : String(error);
+          setAttachmentPickerError(message);
+        } finally {
+          setPreparingAttachments(false);
         }
-
-        const accepted = await sendMessage(composerText, busyPolicy, attachments);
-        if (accepted && busyPolicy !== "steer") {
-          clearPendingAttachments();
-          setAttachmentPickerError(null);
-          return;
-        }
-        if (!accepted) {
-          setSubmittedAttachmentSignature(null);
-        }
-      } catch (error) {
-        setSubmittedAttachmentSignature(null);
-        const message = error instanceof Error ? error.message : String(error);
-        setAttachmentPickerError(message);
-      } finally {
-        setPreparingAttachments(false);
-      }
-    })();
-  }, [
-    clearPendingAttachments,
-    composerText,
-    pendingAttachments,
-    pendingTurnStart?.status,
-    preparingAttachments,
-    resolvePendingAttachmentsForSend,
-    sendMessage,
-    thread,
-  ]);
+      })();
+    },
+    [
+      clearPendingAttachments,
+      composerText,
+      pendingAttachments,
+      pendingTurnStart?.status,
+      preparingAttachments,
+      resolvePendingAttachmentsForSend,
+      sendMessage,
+      thread,
+    ],
+  );
 
   useEffect(() => {
     if (pendingAttachments.length === 0) return;
@@ -1139,7 +1238,12 @@ export function ChatView() {
     if ((rt.pendingSteer.attachmentSignature ?? "") !== pendingAttachmentSignature) return;
     clearPendingAttachments();
     setAttachmentPickerError(null);
-  }, [clearPendingAttachments, pendingAttachmentSignature, pendingAttachments.length, rt?.pendingSteer]);
+  }, [
+    clearPendingAttachments,
+    pendingAttachmentSignature,
+    pendingAttachments.length,
+    rt?.pendingSteer,
+  ]);
 
   const onComposerKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
@@ -1162,8 +1266,12 @@ export function ChatView() {
             className="h-24 w-24 select-none object-contain opacity-95"
           />
           <h2 className="text-[2rem] font-semibold tracking-tight">Let&apos;s build</h2>
-          <p className="max-w-xl text-sm text-muted-foreground">Pick a workspace and start a new thread.</p>
-          <Button type="button" onClick={() => void newThread()}>New thread</Button>
+          <p className="max-w-xl text-sm text-muted-foreground">
+            Pick a workspace and start a new thread.
+          </p>
+          <Button type="button" onClick={() => void newThread()}>
+            New thread
+          </Button>
         </div>
       </div>
     );
@@ -1172,7 +1280,9 @@ export function ChatView() {
   const busy = rt?.busy === true;
   const inputDisabled = hasPromptModal || hasFilePreview || preparingAttachments;
   const transcriptOnly = rt?.transcriptOnly === true;
-  const hydrating = rt?.hydrating === true || (bootstrapPending && Boolean(selectedThreadId) && Boolean(thread) && rt === null);
+  const hydrating =
+    rt?.hydrating === true ||
+    (bootstrapPending && Boolean(selectedThreadId) && Boolean(thread) && rt === null);
   const disconnected = !hydrating && !transcriptOnly && thread.status !== "active";
   const composerSubmitState = getComposerSubmitState({
     busy,
@@ -1194,7 +1304,7 @@ export function ChatView() {
         ? "Steer..."
         : pendingTurnStart
           ? "Sending..."
-        : "Message...";
+          : "Message...";
   const composerHint = composerBusyHint(composerSubmitState);
 
   return (
@@ -1208,7 +1318,9 @@ export function ChatView() {
                   <AlertTriangleIcon className="mt-0.5 size-4 text-primary" />
                   <div>
                     <div className="font-semibold">Transcript view</div>
-                    <div className="text-sm text-muted-foreground">Sending a message will continue in a new thread.</div>
+                    <div className="text-sm text-muted-foreground">
+                      Sending a message will continue in a new thread.
+                    </div>
                   </div>
                 </CardContent>
               </Card>
@@ -1219,9 +1331,16 @@ export function ChatView() {
                 <CardContent className="flex items-center justify-between gap-3 p-3">
                   <div>
                     <div className="font-semibold">Disconnected</div>
-                    <div className="text-sm text-muted-foreground">Reconnect to continue this thread.</div>
+                    <div className="text-sm text-muted-foreground">
+                      Reconnect to continue this thread.
+                    </div>
                   </div>
-                  <Button type="button" variant="outline" size="sm" onClick={() => void reconnectThread(selectedThreadId)}>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void reconnectThread(selectedThreadId)}
+                  >
                     <RotateCcwIcon data-icon="inline-start" />
                     Reconnect
                   </Button>
@@ -1255,7 +1374,7 @@ export function ChatView() {
                     isLatestUiSurface={item.item.id === latestUiSurfaceItemId}
                     a2uiEnabled={a2uiEnabled}
                   />
-                )
+                ),
               )
             )}
           </ConversationContent>
@@ -1276,7 +1395,9 @@ export function ChatView() {
           <PromptInputRoot
             className="max-w-[70rem]"
             fileDrop={
-              inputDisabled || transcriptOnly ? undefined : { onFiles: (files) => void ingestAttachmentFiles(files) }
+              inputDisabled || transcriptOnly
+                ? undefined
+                : { onFiles: (files) => void ingestAttachmentFiles(files) }
             }
           >
             <PromptInputAttachmentPreviews
@@ -1345,7 +1466,12 @@ export function ChatView() {
                     )
                   ) : null}
                 </PromptInputTools>
-                <div className={cn("flex shrink-0 items-center gap-2", busy ? "opacity-100" : "opacity-80")}>
+                <div
+                  className={cn(
+                    "flex shrink-0 items-center gap-2",
+                    busy ? "opacity-100" : "opacity-80",
+                  )}
+                >
                   <PromptInputSubmit
                     mode={composerSubmitState.mode}
                     status={composerSubmitState.status}
@@ -1364,11 +1490,16 @@ export function ChatView() {
             </DialogHeader>
             <div className="space-y-4">
               <p className="text-sm text-muted-foreground">
-                This run currently has {activeChildAgentCount} active subagent{activeChildAgentCount === 1 ? "" : "s"}.
-                You can stop only the main agent turn or cancel the subagents as well.
+                This run currently has {activeChildAgentCount} active subagent
+                {activeChildAgentCount === 1 ? "" : "s"}. You can stop only the main agent turn or
+                cancel the subagents as well.
               </p>
               <div className="flex flex-wrap justify-end gap-2">
-                <Button type="button" variant="outline" onClick={() => setCancelScopeDialogOpen(false)}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setCancelScopeDialogOpen(false)}
+                >
                   Keep running
                 </Button>
                 <Button type="button" variant="secondary" onClick={() => cancelWithScope(false)}>

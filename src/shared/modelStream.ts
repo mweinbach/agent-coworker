@@ -20,7 +20,13 @@ export type ModelStreamUpdate =
     }
   | { kind: "turn_abort"; turnId: string; reason?: unknown }
   | { kind: "turn_error"; turnId: string; error: unknown }
-  | { kind: "step_start"; turnId: string; stepNumber?: number; request?: unknown; warnings?: unknown }
+  | {
+      kind: "step_start";
+      turnId: string;
+      stepNumber?: number;
+      request?: unknown;
+      warnings?: unknown;
+    }
   | {
       kind: "step_finish";
       turnId: string;
@@ -47,7 +53,13 @@ export type ModelStreamUpdate =
       annotations?: Array<Record<string, unknown>>;
     }
   | { kind: "reasoning_start"; turnId: string; streamId: string; mode: "reasoning" | "summary" }
-  | { kind: "reasoning_delta"; turnId: string; streamId: string; mode: "reasoning" | "summary"; text: string }
+  | {
+      kind: "reasoning_delta";
+      turnId: string;
+      streamId: string;
+      mode: "reasoning" | "summary";
+      text: string;
+    }
   | { kind: "reasoning_end"; turnId: string; streamId: string; mode: "reasoning" | "summary" }
   | { kind: "tool_input_start"; turnId: string; key: string; name: string; args?: unknown }
   | { kind: "tool_input_delta"; turnId: string; key: string; delta: string }
@@ -121,11 +133,7 @@ function asReasoningMode(value: unknown): "reasoning" | "summary" {
 
 function toolKey(evt: ModelStreamChunkEvent): string {
   const part = asPartRecord(evt.part);
-  return (
-    asIdString(part.toolCallId) ??
-    asIdString(part.id) ??
-    `tool:${evt.turnId}:${evt.index}`
-  );
+  return asIdString(part.toolCallId) ?? asIdString(part.id) ?? `tool:${evt.turnId}:${evt.index}`;
 }
 
 function toolName(evt: ModelStreamChunkEvent): string {
@@ -158,7 +166,7 @@ function assistantPhase(value: unknown): string | undefined {
 function mapProviderStreamEvent(
   evt: ModelStreamChunkEvent,
   eventType: string,
-  payload: Record<string, unknown>
+  payload: Record<string, unknown>,
 ): ModelStreamUpdate | null {
   const normalizedType = eventType.toLowerCase();
 
@@ -361,7 +369,9 @@ export function mapModelStreamChunk(evt: ModelStreamChunkEvent): ModelStreamUpda
         kind: "assistant_text_end",
         turnId: evt.turnId,
         streamId: asString(part.id) ?? `text:${evt.index}`,
-        ...(asRecordArray(part.annotations) ? { annotations: asRecordArray(part.annotations) } : {}),
+        ...(asRecordArray(part.annotations)
+          ? { annotations: asRecordArray(part.annotations) }
+          : {}),
         ...(assistantPhase(part.phase) ? { phase: assistantPhase(part.phase) } : {}),
       };
     case "reasoning_start":
@@ -482,7 +492,8 @@ export function mapModelStreamChunk(evt: ModelStreamChunkEvent): ModelStreamUpda
     case "raw":
       {
         const rawPayload = asPartRecord(part.raw);
-        const fallbackRaw = Object.keys(rawPayload).length > 0 ? rawPayload : asPartRecord(evt.rawPart);
+        const fallbackRaw =
+          Object.keys(rawPayload).length > 0 ? rawPayload : asPartRecord(evt.rawPart);
         const payload = Object.keys(fallbackRaw).length > 0 ? fallbackRaw : rawPayload;
         const rawType = asString(payload.type) ?? asString(payload.event_type);
         const rawMapped = rawType ? mapProviderStreamEvent(evt, rawType, payload) : null;
@@ -497,12 +508,14 @@ export function mapModelStreamChunk(evt: ModelStreamChunkEvent): ModelStreamUpda
       {
         const sdkType = asString(part.sdkType) ?? asString(part.type);
         const rawPayload = asPartRecord(part.raw);
-        const fallbackRaw = Object.keys(rawPayload).length > 0 ? rawPayload : asPartRecord(evt.rawPart);
+        const fallbackRaw =
+          Object.keys(rawPayload).length > 0 ? rawPayload : asPartRecord(evt.rawPart);
         const payload = Object.keys(fallbackRaw).length > 0 ? fallbackRaw : rawPayload;
         const fallbackSdkType = asString(payload.type) ?? asString(payload.event_type);
-        const unknownMapped = (sdkType ?? fallbackSdkType)
-          ? mapProviderStreamEvent(evt, sdkType ?? (fallbackSdkType as string), payload)
-          : null;
+        const unknownMapped =
+          (sdkType ?? fallbackSdkType)
+            ? mapProviderStreamEvent(evt, sdkType ?? (fallbackSdkType as string), payload)
+            : null;
         if (unknownMapped) return unknownMapped;
       }
       return {
@@ -549,28 +562,32 @@ function mapNativeWebSearchRawEvent(evt: ModelStreamRawEvent): ModelStreamUpdate
 
   const key = rawProviderKey(item, `native-web-search:${evt.turnId}:${evt.index}`);
   if (eventType === "response.output_item.added") {
-    return [{
-      kind: "tool_input_start",
-      turnId: evt.turnId,
-      key,
-      name: "nativeWebSearch",
-      args: nativeWebSearchArgs(item),
-    }];
+    return [
+      {
+        kind: "tool_input_start",
+        turnId: evt.turnId,
+        key,
+        name: "nativeWebSearch",
+        args: nativeWebSearchArgs(item),
+      },
+    ];
   }
 
   if (eventType === "response.output_item.done") {
-    return [{
-      kind: "tool_result",
-      turnId: evt.turnId,
-      key,
-      name: "nativeWebSearch",
-      result: {
-        status: item.status ?? "completed",
-        action: webSearchCallAction(item),
-        sources: webSearchCallSources(item),
-        raw: item,
+    return [
+      {
+        kind: "tool_result",
+        turnId: evt.turnId,
+        key,
+        name: "nativeWebSearch",
+        result: {
+          status: item.status ?? "completed",
+          action: webSearchCallAction(item),
+          sources: webSearchCallSources(item),
+          raw: item,
+        },
       },
-    }];
+    ];
   }
 
   return [];

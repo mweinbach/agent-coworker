@@ -22,7 +22,10 @@ const { registerWorkspaceIpc } = await import("../electron/ipc/workspace");
 
 describe("workspace IPC", () => {
   test("updates approved roots before invalidating workspace cache", async () => {
-    const handlers = new Map<string, (event: unknown, args?: unknown) => Promise<unknown> | unknown>();
+    const handlers = new Map<
+      string,
+      (event: unknown, args?: unknown) => Promise<unknown> | unknown
+    >();
     const callOrder: string[] = [];
     let approvedRoots: string[] = [];
 
@@ -83,26 +86,29 @@ describe("workspace IPC", () => {
     const saveStateHandler = handlers.get(DESKTOP_IPC_CHANNELS.saveState);
     expect(saveStateHandler).toBeDefined();
 
-    await saveStateHandler?.({}, {
-      activeWorkspaceId: null,
-      activeThreadId: null,
-      workspaces: [
-        {
-          id: "ws-1",
-          title: "Workspace One",
-          path: "/tmp/ws-1",
-          threadIds: [],
-        },
-      ],
-      threadIndex: {},
-      expandedSkillSectionByWorkspaceId: {},
-      providersByWorkspaceId: {},
-      providerSettingsByWorkspaceId: {},
-      workspaceMcpConfigByWorkspaceId: {},
-      inputByThreadId: {},
-      modeByThreadId: {},
-      profileByThreadId: {},
-    });
+    await saveStateHandler?.(
+      {},
+      {
+        activeWorkspaceId: null,
+        activeThreadId: null,
+        workspaces: [
+          {
+            id: "ws-1",
+            title: "Workspace One",
+            path: "/tmp/ws-1",
+            threadIds: [],
+          },
+        ],
+        threadIndex: {},
+        expandedSkillSectionByWorkspaceId: {},
+        providersByWorkspaceId: {},
+        providerSettingsByWorkspaceId: {},
+        workspaceMcpConfigByWorkspaceId: {},
+        inputByThreadId: {},
+        modeByThreadId: {},
+        profileByThreadId: {},
+      },
+    );
 
     expect(callOrder).toEqual([
       "saveState",

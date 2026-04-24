@@ -1,14 +1,14 @@
 import type { z } from "zod";
 
 import {
-  configUpdatedEventSchema,
-  jsonRpcControlRequestSchemas,
-  jsonRpcControlResultSchemas,
-  sessionConfigEventSchema,
-  sessionSettingsEventSchema,
+  type configUpdatedEventSchema,
   type JsonRpcControlRequest,
   type JsonRpcControlRequestMethod,
   type JsonRpcControlResult,
+  jsonRpcControlRequestSchemas,
+  jsonRpcControlResultSchemas,
+  type sessionConfigEventSchema,
+  type sessionSettingsEventSchema,
 } from "../../../../../src/shared/jsonrpcControlSchemas";
 import { pickEditableOpenAiCompatibleProviderOptions } from "../../../../../src/shared/openaiCompatibleOptions";
 
@@ -75,7 +75,9 @@ export function parseWorkspaceControlSnapshot(
             ...event.config,
             ...(event.config.providerOptions !== undefined
               ? {
-                  providerOptions: pickEditableOpenAiCompatibleProviderOptions(event.config.providerOptions),
+                  providerOptions: pickEditableOpenAiCompatibleProviderOptions(
+                    event.config.providerOptions,
+                  ),
                 }
               : {}),
           },

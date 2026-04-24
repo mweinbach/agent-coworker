@@ -11,16 +11,20 @@ type CliState = {
 
 const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
 const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
-const cliStateSchema = z.object({
-  version: z.literal(1),
-  lastSessionByCwd: z.record(nonEmptyTrimmedStringSchema, nonEmptyTrimmedStringSchema).transform((raw) => {
-    const normalized: Record<string, string> = {};
-    for (const [cwd, sessionId] of Object.entries(raw)) {
-      normalized[path.resolve(cwd)] = sessionId;
-    }
-    return normalized;
-  }),
-}).strict();
+const cliStateSchema = z
+  .object({
+    version: z.literal(1),
+    lastSessionByCwd: z
+      .record(nonEmptyTrimmedStringSchema, nonEmptyTrimmedStringSchema)
+      .transform((raw) => {
+        const normalized: Record<string, string> = {};
+        for (const [cwd, sessionId] of Object.entries(raw)) {
+          normalized[path.resolve(cwd)] = sessionId;
+        }
+        return normalized;
+      }),
+  })
+  .strict();
 
 function getCliStateFilePath(): string {
   const home = process.env.HOME?.trim();

@@ -79,7 +79,10 @@ const stringSchema = z.string();
 const booleanSchema = z.boolean();
 const finiteNumberSchema = z.number().finite();
 type ParsedRawPart = z.infer<typeof typedRawPartSchema>;
-type EmitPart = (partType: ModelStreamPartType, part: Record<string, unknown>) => NormalizedModelStreamPart;
+type EmitPart = (
+  partType: ModelStreamPartType,
+  part: Record<string, unknown>,
+) => NormalizedModelStreamPart;
 type PartNormalizerContext = {
   emit: EmitPart;
   parsedRaw: ParsedRawPart;
@@ -92,7 +95,10 @@ type PartNormalizerContext = {
   san: (value: unknown) => unknown;
 };
 
-const streamPartNormalizers: Record<string, (ctx: PartNormalizerContext) => NormalizedModelStreamPart> = {
+const streamPartNormalizers: Record<
+  string,
+  (ctx: PartNormalizerContext) => NormalizedModelStreamPart
+> = {
   start: ({ emit }) => emit("start", {}),
   finish: ({ emit, parsedRaw, san }) =>
     emit("finish", {
@@ -281,7 +287,7 @@ function sanitizeUnknown(
   value: unknown,
   depth = 0,
   seen: WeakSet<object> = new WeakSet(),
-  limits: SanitizeLimits = DEFAULT_SANITIZE_LIMITS
+  limits: SanitizeLimits = DEFAULT_SANITIZE_LIMITS,
 ): unknown {
   if (value === null) return null;
 
@@ -312,7 +318,8 @@ function sanitizeUnknown(
     const out: unknown[] = [];
     const take = Math.min(value.length, limits.maxArrayItems);
     for (let i = 0; i < take; i++) out.push(sanitizeUnknown(value[i], depth + 1, seen, limits));
-    if (value.length > limits.maxArrayItems) out.push(`[truncated ${value.length - limits.maxArrayItems} items]`);
+    if (value.length > limits.maxArrayItems)
+      out.push(`[truncated ${value.length - limits.maxArrayItems} items]`);
     return out;
   }
 
@@ -347,17 +354,21 @@ export function reasoningModeForProvider(provider: ProviderName): ModelStreamRea
 
 export function normalizeModelStreamPart(
   raw: unknown,
-  opts: NormalizeModelStreamPartOptions
+  opts: NormalizeModelStreamPartOptions,
 ): NormalizedModelStreamPart {
   const includeRawPart = opts.includeRawPart ?? false;
-  const sanitizeLimits = opts.rawPartMode === "full" ? FULL_SANITIZE_LIMITS : DEFAULT_SANITIZE_LIMITS;
+  const sanitizeLimits =
+    opts.rawPartMode === "full" ? FULL_SANITIZE_LIMITS : DEFAULT_SANITIZE_LIMITS;
   const san = (value: unknown) => sanitizeUnknown(value, 0, new WeakSet<object>(), sanitizeLimits);
   const rawPart = san(raw);
   const mode = reasoningModeForProvider(opts.provider);
   const fallbackId = (kind: string) => `anon:${opts.fallbackIdSeed ?? "unseeded"}:${kind}`;
 
   /** Emit a normalized part, compacting undefined fields from the record. */
-  const emit = (partType: ModelStreamPartType, part: Record<string, unknown>): NormalizedModelStreamPart => {
+  const emit = (
+    partType: ModelStreamPartType,
+    part: Record<string, unknown>,
+  ): NormalizedModelStreamPart => {
     const payload = {
       partType,
       part: compactRecord(part),
@@ -374,7 +385,10 @@ export function normalizeModelStreamPart(
 
   const parsedRawPart = typedRawPartSchema.safeParse(raw);
   if (!parsedRawPart.success) {
-    return emit("unknown", { sdkType: typeof raw === "object" && raw !== null ? "invalid" : typeof raw, raw: rawPart });
+    return emit("unknown", {
+      sdkType: typeof raw === "object" && raw !== null ? "invalid" : typeof raw,
+      raw: rawPart,
+    });
   }
 
   const parsedRaw = parsedRawPart.data;
@@ -383,7 +397,8 @@ export function normalizeModelStreamPart(
 
   // Shorthand extractors used across multiple branches.
   const id = () => asIdString(parsedRaw.id) ?? fallbackId("id");
-  const toolCallId = () => asIdString(parsedRaw.toolCallId) ?? asIdString(parsedRaw.id) ?? fallbackId("tool");
+  const toolCallId = () =>
+    asIdString(parsedRaw.toolCallId) ?? asIdString(parsedRaw.id) ?? fallbackId("tool");
   const toolName = () => asString(parsedRaw.toolName) ?? "tool";
   const normalizer = streamPartNormalizers[type];
   if (normalizer) {

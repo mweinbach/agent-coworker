@@ -1,13 +1,13 @@
-import { Alert, Modal, Pressable, Text, View, ActivityIndicator, ScrollView } from "react-native";
+import { ActivityIndicator, Alert, Modal, Pressable, ScrollView, Text, View } from "react-native";
 
 import { StatusPill } from "@/components/ui/status-pill";
+import type { SessionSnapshotLike } from "@/features/cowork/protocolTypes";
+import { getActiveCoworkJsonRpcClient } from "@/features/cowork/runtimeClient";
+import { useThreadStore } from "@/features/cowork/threadStore";
 import { refreshWorkspaceBoundStores } from "@/features/cowork/workspaceBootstrap";
 import { useWorkspaceStore } from "@/features/cowork/workspaceStore";
-import { useThreadStore } from "@/features/cowork/threadStore";
-import { getActiveCoworkJsonRpcClient } from "@/features/cowork/runtimeClient";
 import { bootstrapWorkspaceSwitchSession } from "@/features/cowork/workspaceSwitchBootstrap";
 import { useAppTheme } from "@/theme/use-app-theme";
-import type { SessionSnapshotLike } from "@/features/cowork/protocolTypes";
 
 function createThreadSnapshot(thread: {
   id: string;
@@ -69,7 +69,10 @@ export function WorkspaceSwitcher({ visible, onClose }: WorkspaceSwitcherProps) 
             refreshWorkspaceBoundStores,
           });
         } catch (error) {
-          const message = error instanceof Error ? error.message : "Could not refresh workspace data after switching.";
+          const message =
+            error instanceof Error
+              ? error.message
+              : "Could not refresh workspace data after switching.";
           useWorkspaceStore.setState({ error: message, loading: false });
           Alert.alert("Workspace switch incomplete", message);
           return;
@@ -128,27 +131,40 @@ export function WorkspaceSwitcher({ visible, onClose }: WorkspaceSwitcherProps) 
                     borderRadius: 22,
                     borderCurve: "continuous",
                     borderWidth: isActive ? 2 : 1,
-                    borderColor: isActive ? theme.primary : pressed ? theme.primary : theme.borderMuted,
-                    backgroundColor: isActive ? theme.surfaceMuted : pressed ? theme.surfaceMuted : theme.surfaceElevated,
+                    borderColor: isActive
+                      ? theme.primary
+                      : pressed
+                        ? theme.primary
+                        : theme.borderMuted,
+                    backgroundColor: isActive
+                      ? theme.surfaceMuted
+                      : pressed
+                        ? theme.surfaceMuted
+                        : theme.surfaceElevated,
                     paddingHorizontal: 16,
                     paddingVertical: 14,
                   })}
                 >
-                  <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                    }}
+                  >
                     <Text style={{ color: theme.text, fontSize: 16, fontWeight: "700", flex: 1 }}>
                       {workspace.name}
                     </Text>
                     {isActive ? <StatusPill label="active" tone="success" /> : null}
                   </View>
-                  <Text
-                    numberOfLines={1}
-                    style={{ color: theme.textSecondary, fontSize: 13 }}
-                  >
+                  <Text numberOfLines={1} style={{ color: theme.textSecondary, fontSize: 13 }}>
                     {workspace.path}
                   </Text>
                   {workspace.defaultProvider || workspace.defaultModel ? (
                     <Text style={{ color: theme.textTertiary, fontSize: 12 }}>
-                      {[workspace.defaultProvider, workspace.defaultModel].filter(Boolean).join(" / ")}
+                      {[workspace.defaultProvider, workspace.defaultModel]
+                        .filter(Boolean)
+                        .join(" / ")}
                     </Text>
                   ) : null}
                 </Pressable>

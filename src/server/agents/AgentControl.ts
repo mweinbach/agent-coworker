@@ -1,13 +1,13 @@
-import type { AgentSession } from "../session/AgentSession";
 import {
-  agentTaskTypeSchema,
-  normalizeAgentTargetPaths,
-  resolveAgentSpawnContextOptions,
   type AgentExecutionState,
   type AgentInspectResult,
   type AgentMode,
+  agentTaskTypeSchema,
+  normalizeAgentTargetPaths,
   type PersistentAgentSummary,
+  resolveAgentSpawnContextOptions,
 } from "../../shared/agents";
+import type { AgentSession } from "../session/AgentSession";
 import type { SessionBinding } from "../startServer/types";
 
 import { routeAgentConfig } from "./modelRouter";
@@ -17,16 +17,19 @@ import { StatusBus } from "./StatusBus";
 import type {
   AgentCloseOptions,
   AgentControlDeps,
-  AgentInspectOptions,
-  AgentWaitResult,
   AgentControlSummaryOverrides,
+  AgentInspectOptions,
   AgentResumeOptions,
   AgentSendInputOptions,
   AgentSpawnOptions,
   AgentWaitOptions,
+  AgentWaitResult,
 } from "./types";
 
-function executionStateForSession(session: AgentSession, fallback: AgentExecutionState = "completed"): AgentExecutionState {
+function executionStateForSession(
+  session: AgentSession,
+  fallback: AgentExecutionState = "completed",
+): AgentExecutionState {
   const info = session.getSessionInfoEvent();
   if (session.persistenceStatus === "closed") return "closed";
   if (session.isBusy) return "running";
@@ -36,7 +39,9 @@ function executionStateForSession(session: AgentSession, fallback: AgentExecutio
   return fallback;
 }
 
-function shouldReadParentSeedContext(opts: ReturnType<typeof resolveAgentSpawnContextOptions>): boolean {
+function shouldReadParentSeedContext(
+  opts: ReturnType<typeof resolveAgentSpawnContextOptions>,
+): boolean {
   return opts.contextMode !== "none" || opts.includeParentTodos || opts.includeHarnessContext;
 }
 
@@ -82,7 +87,11 @@ export class AgentControl {
 
   private hydrateAgentSession(parentSessionId: string, agentId: string): AgentSession {
     const persisted = this.deps.sessionDb?.getSessionRecord(agentId);
-    if (!persisted || persisted.parentSessionId !== parentSessionId || persisted.sessionKind !== "agent") {
+    if (
+      !persisted ||
+      persisted.parentSessionId !== parentSessionId ||
+      persisted.sessionKind !== "agent"
+    ) {
       throw new Error(`Unknown child agent: ${agentId}`);
     }
 
@@ -125,8 +134,12 @@ export class AgentControl {
       ...(info.targetPaths !== undefined ? { targetPaths: info.targetPaths } : {}),
       ...(info.requestedModel ? { requestedModel: info.requestedModel } : {}),
       effectiveModel: info.effectiveModel ?? session.getPublicConfig().model,
-      ...(info.requestedReasoningEffort ? { requestedReasoningEffort: info.requestedReasoningEffort } : {}),
-      ...(info.effectiveReasoningEffort ? { effectiveReasoningEffort: info.effectiveReasoningEffort } : {}),
+      ...(info.requestedReasoningEffort
+        ? { requestedReasoningEffort: info.requestedReasoningEffort }
+        : {}),
+      ...(info.effectiveReasoningEffort
+        ? { effectiveReasoningEffort: info.effectiveReasoningEffort }
+        : {}),
       title: info.title,
       provider: info.provider,
       createdAt: info.createdAt,
@@ -134,14 +147,18 @@ export class AgentControl {
       lifecycleState: session.persistenceStatus === "closed" ? "closed" : "active",
       executionState,
       busy: overrides.busy ?? session.isBusy,
-      ...(info.lastMessagePreview ?? session.getLatestAssistantText()
+      ...((info.lastMessagePreview ?? session.getLatestAssistantText())
         ? { lastMessagePreview: info.lastMessagePreview ?? session.getLatestAssistantText()! }
         : {}),
     };
     return summary;
   }
 
-  private publish(parentSessionId: string, session: AgentSession, overrides: AgentControlSummaryOverrides = {}): PersistentAgentSummary {
+  private publish(
+    parentSessionId: string,
+    session: AgentSession,
+    overrides: AgentControlSummaryOverrides = {},
+  ): PersistentAgentSummary {
     const summary = this.buildAgentSummary(session, overrides);
     this.statusBus.publish(summary);
     this.deps.emitParentAgentStatus(parentSessionId, summary);
@@ -154,7 +171,8 @@ export class AgentControl {
     message: string,
     displayState: AgentExecutionState,
   ): PersistentAgentSummary {
-    const run = session.sendUserMessage(message)
+    const run = session
+      .sendUserMessage(message)
       .catch(() => {
         // Child session surfaces its own error event/history; parent notification is published below.
       })
@@ -180,7 +198,9 @@ export class AgentControl {
     if (shouldReadParentSeedContext(resolvedContext) && !parentSession) {
       throw new Error(`Unknown parent session: ${opts.parentSessionId}`);
     }
-    const seedContext = parentSession ? buildSeedContextForSpawn(parentSession, resolvedContext) : null;
+    const seedContext = parentSession
+      ? buildSeedContextForSpawn(parentSession, resolvedContext)
+      : null;
     const routed = routeAgentConfig(opts.parentConfig, {
       role: roleDefinition,
       ...(opts.model ? { model: opts.model } : {}),
@@ -191,7 +211,8 @@ export class AgentControl {
       this.deps.emitParentLog(opts.parentSessionId, routed.fallbackLine);
     }
     const nickname = normalizeNickname(opts.nickname);
-    const taskType = opts.taskType === undefined ? undefined : agentTaskTypeSchema.parse(opts.taskType);
+    const taskType =
+      opts.taskType === undefined ? undefined : agentTaskTypeSchema.parse(opts.taskType);
     const targetPaths = normalizeAgentTargetPaths(opts.targetPaths);
     const childSystem = await this.deps.loadAgentPrompt(routed.config, role);
     const binding: SessionBinding = { session: null, socket: null, sinks: new Map() };
@@ -311,7 +332,10 @@ export class AgentControl {
         session.cancel();
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        this.deps.emitParentLog(parentSessionId, `Failed to cancel child agent ${session.id}: ${message}`);
+        this.deps.emitParentLog(
+          parentSessionId,
+          `Failed to cancel child agent ${session.id}: ${message}`,
+        );
       }
     }
   }

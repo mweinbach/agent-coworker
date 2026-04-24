@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
-import { canonicalWorkspacePath, sameWorkspacePath, workspacePathOverlaps } from "../src/utils/workspacePath";
+import {
+  canonicalWorkspacePath,
+  sameWorkspacePath,
+  workspacePathOverlaps,
+} from "../src/utils/workspacePath";
 
 describe("workspacePath", () => {
   test("sameWorkspacePath keeps POSIX comparisons case-sensitive", () => {
@@ -14,7 +18,9 @@ describe("workspacePath", () => {
   });
 
   test("canonicalWorkspacePath normalizes Windows paths before case folding", () => {
-    expect(canonicalWorkspacePath("C:\\Repo\\..\\Repo\\Subdir\\.", "win32")).toBe("c:\\repo\\subdir");
+    expect(canonicalWorkspacePath("C:\\Repo\\..\\Repo\\Subdir\\.", "win32")).toBe(
+      "c:\\repo\\subdir",
+    );
   });
 
   describe("workspacePathOverlaps", () => {
@@ -23,11 +29,15 @@ describe("workspacePath", () => {
     });
 
     test("source is ancestor of target", () => {
-      expect(workspacePathOverlaps("/workspace", "/workspace/.agent/skills/foo", "linux")).toBe(true);
+      expect(workspacePathOverlaps("/workspace", "/workspace/.agent/skills/foo", "linux")).toBe(
+        true,
+      );
     });
 
     test("target is ancestor of source", () => {
-      expect(workspacePathOverlaps("/workspace/.agent/skills/foo", "/workspace", "linux")).toBe(true);
+      expect(workspacePathOverlaps("/workspace/.agent/skills/foo", "/workspace", "linux")).toBe(
+        true,
+      );
     });
 
     test("sibling paths do not overlap", () => {

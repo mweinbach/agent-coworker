@@ -1,13 +1,13 @@
 import {
-  getAiCoworkerPaths,
-  disconnectProvider,
-  readConnectionStore,
-  saveProviderConnectionConfig,
-  writeToolApiKey,
   type AiCoworkerPaths,
   type ConnectProviderResult,
   type DisconnectProviderResult,
+  disconnectProvider,
+  getAiCoworkerPaths,
   type OauthStdioMode,
+  readConnectionStore,
+  saveProviderConnectionConfig,
+  writeToolApiKey,
 } from "../connect";
 import {
   getDefaultProviderAuthMethods,
@@ -20,7 +20,12 @@ import {
 import type { ProviderName } from "../types";
 import { resolveAuthHomeDir } from "../utils/authHome";
 
-export type { ProviderAuthFieldKind, ProviderAuthMethod, ProviderAuthMethodField, ProviderAuthMethodType };
+export type {
+  ProviderAuthFieldKind,
+  ProviderAuthMethod,
+  ProviderAuthMethodField,
+  ProviderAuthMethodType,
+};
 
 export type ProviderAuthChallenge = {
   method: "auto" | "code";
@@ -48,7 +53,10 @@ export function listProviderAuthMethods(): Record<string, ProviderAuthMethod[]> 
   return listDefaultProviderAuthMethods();
 }
 
-export function resolveProviderAuthMethod(provider: ProviderName, methodId: string): ProviderAuthMethod | null {
+export function resolveProviderAuthMethod(
+  provider: ProviderName,
+  methodId: string,
+): ProviderAuthMethod | null {
   const methods = getDefaultProviderAuthMethods(provider);
   return methods.find((m) => m.id === methodId) ?? null;
 }
@@ -109,7 +117,10 @@ export function authorizeProviderAuth(opts: {
 }): { ok: true; challenge: ProviderAuthChallenge } | { ok: false; message: string } {
   const method = resolveProviderAuthMethod(opts.provider, opts.methodId);
   if (!method) {
-    return { ok: false, message: `Unsupported auth method "${opts.methodId}" for ${opts.provider}.` };
+    return {
+      ok: false,
+      message: `Unsupported auth method "${opts.methodId}" for ${opts.provider}.`,
+    };
   }
   if (method.type !== "oauth") {
     return { ok: false, message: `Auth method "${opts.methodId}" does not support authorization.` };
@@ -120,7 +131,8 @@ export function authorizeProviderAuth(opts: {
       ok: true,
       challenge: {
         method: method.oauthMode ?? "auto",
-        instructions: "Continue to browser-based ChatGPT sign-in. Cowork will open the official Codex OAuth flow and save the returned token locally.",
+        instructions:
+          "Continue to browser-based ChatGPT sign-in. Cowork will open the official Codex OAuth flow and save the returned token locally.",
       },
     };
   }
@@ -139,12 +151,23 @@ export async function setProviderApiKey(opts: {
   const paths = opts.paths ?? getAiCoworkerPaths({ homedir: resolveAuthHomeDir() });
   const method = resolveProviderAuthMethod(opts.provider, opts.methodId);
   if (!method) {
-    return { ok: false, provider: opts.provider, message: `Unsupported auth method "${opts.methodId}".` };
+    return {
+      ok: false,
+      provider: opts.provider,
+      message: `Unsupported auth method "${opts.methodId}".`,
+    };
   }
   if (method.type !== "api") {
-    return { ok: false, provider: opts.provider, message: `Method "${opts.methodId}" is not an API key method.` };
+    return {
+      ok: false,
+      provider: opts.provider,
+      message: `Method "${opts.methodId}" is not an API key method.`,
+    };
   }
-  if ((method.fields?.length ?? 0) > 0 && !(opts.provider === "google" && method.id === "exa_api_key")) {
+  if (
+    (method.fields?.length ?? 0) > 0 &&
+    !(opts.provider === "google" && method.id === "exa_api_key")
+  ) {
     return {
       ok: false,
       provider: opts.provider,
@@ -157,8 +180,8 @@ export async function setProviderApiKey(opts: {
   }
 
   if (
-    opts.provider === "google"
-    && (method.id === "exa_api_key" || method.id === "parallel_api_key")
+    opts.provider === "google" &&
+    (method.id === "exa_api_key" || method.id === "parallel_api_key")
   ) {
     try {
       const toolName = method.id === "parallel_api_key" ? "parallel" : "exa";
@@ -202,10 +225,18 @@ export async function setProviderConfig(opts: {
   const paths = opts.paths ?? getAiCoworkerPaths({ homedir: resolveAuthHomeDir() });
   const method = resolveProviderAuthMethod(opts.provider, opts.methodId);
   if (!method) {
-    return { ok: false, provider: opts.provider, message: `Unsupported auth method "${opts.methodId}".` };
+    return {
+      ok: false,
+      provider: opts.provider,
+      message: `Unsupported auth method "${opts.methodId}".`,
+    };
   }
   if (method.type !== "api") {
-    return { ok: false, provider: opts.provider, message: `Method "${opts.methodId}" is not a credential method.` };
+    return {
+      ok: false,
+      provider: opts.provider,
+      message: `Method "${opts.methodId}" is not a credential method.`,
+    };
   }
   if ((method.fields?.length ?? 0) === 0) {
     return {
@@ -240,15 +271,23 @@ export async function copyProviderApiKey(opts: {
   const paths = opts.paths ?? getAiCoworkerPaths({ homedir: resolveAuthHomeDir() });
   const method = resolveProviderAuthMethod(opts.provider, opts.methodId);
   if (!method) {
-    return { ok: false, provider: opts.provider, message: `Unsupported auth method "${opts.methodId}".` };
+    return {
+      ok: false,
+      provider: opts.provider,
+      message: `Unsupported auth method "${opts.methodId}".`,
+    };
   }
   if (method.type !== "api") {
-    return { ok: false, provider: opts.provider, message: `Method "${opts.methodId}" is not an API key method.` };
+    return {
+      ok: false,
+      provider: opts.provider,
+      message: `Method "${opts.methodId}" is not an API key method.`,
+    };
   }
 
   const store = await readConnectionStore(paths);
   const targetEntry = store.services[opts.provider];
-  const targetApiKey = targetEntry?.mode === "api_key" ? targetEntry.apiKey?.trim() ?? "" : "";
+  const targetApiKey = targetEntry?.mode === "api_key" ? (targetEntry.apiKey?.trim() ?? "") : "";
   if (targetApiKey) {
     return {
       ok: false,
@@ -257,7 +296,7 @@ export async function copyProviderApiKey(opts: {
     };
   }
   const sourceEntry = store.services[opts.sourceProvider];
-  const apiKey = sourceEntry?.mode === "api_key" ? sourceEntry.apiKey?.trim() ?? "" : "";
+  const apiKey = sourceEntry?.mode === "api_key" ? (sourceEntry.apiKey?.trim() ?? "") : "";
   if (!apiKey) {
     return {
       ok: false,
@@ -287,10 +326,18 @@ export async function callbackProviderAuth(opts: {
   const paths = opts.paths ?? getAiCoworkerPaths({ homedir: resolveAuthHomeDir() });
   const method = resolveProviderAuthMethod(opts.provider, opts.methodId);
   if (!method) {
-    return { ok: false, provider: opts.provider, message: `Unsupported auth method "${opts.methodId}".` };
+    return {
+      ok: false,
+      provider: opts.provider,
+      message: `Unsupported auth method "${opts.methodId}".`,
+    };
   }
   if (method.type !== "oauth") {
-    return { ok: false, provider: opts.provider, message: `Method "${opts.methodId}" is not an OAuth method.` };
+    return {
+      ok: false,
+      provider: opts.provider,
+      message: `Method "${opts.methodId}" is not an OAuth method.`,
+    };
   }
   const code = opts.code?.trim();
   if (method.oauthMode === "code" && !code) {

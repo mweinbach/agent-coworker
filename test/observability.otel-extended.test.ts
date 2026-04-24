@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
-
-import type { AgentConfig, ObservabilityHealth } from "../src/types";
 import { emitObservabilityEvent } from "../src/observability/otel";
+import type { AgentConfig, ObservabilityHealth } from "../src/types";
 
 function makeConfig(overrides?: Partial<AgentConfig>): AgentConfig {
   return {
@@ -88,7 +87,7 @@ describe("emitObservabilityEvent payload details", () => {
           noteSuccess: () => ({ changed: false, health: ready }),
           forceFlush: async () => {},
         },
-      }
+      },
     );
 
     const after = Date.now();
@@ -123,7 +122,7 @@ describe("emitObservabilityEvent payload details", () => {
           noteSuccess: () => ({ changed: false, health: ready }),
           forceFlush: async () => {},
         },
-      }
+      },
     );
 
     expect(capture.attributes["attempts"]).toBe(3);
@@ -156,7 +155,7 @@ describe("emitObservabilityEvent payload details", () => {
           noteSuccess: () => ({ changed: false, health: ready }),
           forceFlush: async () => {},
         },
-      }
+      },
     );
 
     const message = String(capture.attributes["message"] ?? "");

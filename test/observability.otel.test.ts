@@ -1,8 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { SpanStatusCode } from "@opentelemetry/api";
-
-import type { AgentConfig, ObservabilityHealth } from "../src/types";
 import { emitObservabilityEvent } from "../src/observability/otel";
+import type { AgentConfig, ObservabilityHealth } from "../src/types";
 
 function makeConfig(overrides?: Partial<AgentConfig>): AgentConfig {
   return {
@@ -36,7 +35,11 @@ function makeConfig(overrides?: Partial<AgentConfig>): AgentConfig {
   };
 }
 
-function makeHealth(status: ObservabilityHealth["status"], reason: string, message?: string): ObservabilityHealth {
+function makeHealth(
+  status: ObservabilityHealth["status"],
+  reason: string,
+  message?: string,
+): ObservabilityHealth {
   return {
     status,
     reason,
@@ -94,7 +97,7 @@ describe("emitObservabilityEvent (Langfuse runtime tracer)", () => {
           noteSuccess: () => ({ changed: false, health: degraded }),
           forceFlush: async () => {},
         },
-      }
+      },
     );
 
     expect(res.emitted).toBe(false);
@@ -130,7 +133,7 @@ describe("emitObservabilityEvent (Langfuse runtime tracer)", () => {
           noteSuccess: () => ({ changed: false, health: ready }),
           forceFlush: async () => {},
         },
-      }
+      },
     );
 
     expect(res.emitted).toBe(true);
@@ -177,7 +180,7 @@ describe("emitObservabilityEvent (Langfuse runtime tracer)", () => {
           noteSuccess: () => ({ changed: false, health: ready }),
           forceFlush: async () => {},
         },
-      }
+      },
     );
 
     expect(res.emitted).toBe(true);
@@ -215,7 +218,7 @@ describe("emitObservabilityEvent (Langfuse runtime tracer)", () => {
           noteSuccess: () => ({ changed: false, health: ready }),
           forceFlush: async () => {},
         },
-      }
+      },
     );
 
     expect(captured.statusCode).toBe(SpanStatusCode.OK);
@@ -245,7 +248,7 @@ describe("emitObservabilityEvent (Langfuse runtime tracer)", () => {
             throw new Error("ECONNRESET");
           },
         },
-      }
+      },
     );
 
     expect(res.emitted).toBe(true);

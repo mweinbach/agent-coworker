@@ -21,28 +21,37 @@ import {
 
 const jsonRpcIdSchema = z.union([z.string(), z.number().finite()]);
 
-const jsonRpcRequestSchema = z.object({
-  id: jsonRpcIdSchema,
-  method: z.string().trim().min(1),
-  params: z.unknown().optional(),
-}).strict();
+const jsonRpcRequestSchema = z
+  .object({
+    id: jsonRpcIdSchema,
+    method: z.string().trim().min(1),
+    params: z.unknown().optional(),
+  })
+  .strict();
 
-const jsonRpcNotificationSchema = z.object({
-  method: z.string().trim().min(1),
-  params: z.unknown().optional(),
-}).strict();
+const jsonRpcNotificationSchema = z
+  .object({
+    method: z.string().trim().min(1),
+    params: z.unknown().optional(),
+  })
+  .strict();
 
-const jsonRpcResponseSchema = z.object({
-  id: jsonRpcIdSchema,
-  result: z.unknown().optional(),
-  error: z.object({
-    code: z.number(),
-    message: z.string(),
-    data: z.unknown().optional(),
-  }).optional(),
-}).strict().refine((value) => value.result !== undefined || value.error !== undefined, {
-  message: "Response must include result or error.",
-});
+const jsonRpcResponseSchema = z
+  .object({
+    id: jsonRpcIdSchema,
+    result: z.unknown().optional(),
+    error: z
+      .object({
+        code: z.number(),
+        message: z.string(),
+        data: z.unknown().optional(),
+      })
+      .optional(),
+  })
+  .strict()
+  .refine((value) => value.result !== undefined || value.error !== undefined, {
+    message: "Response must include result or error.",
+  });
 
 export type JsonRpcId = z.infer<typeof jsonRpcIdSchema>;
 
@@ -104,7 +113,9 @@ type JsonRpcClientOptions = {
   requestTimeoutMs?: number;
 };
 
-function parseJsonMessage(raw: string): JsonRpcRequestMessage | JsonRpcNotificationMessage | JsonRpcResponseMessage {
+function parseJsonMessage(
+  raw: string,
+): JsonRpcRequestMessage | JsonRpcNotificationMessage | JsonRpcResponseMessage {
   const parsed = JSON.parse(raw) as unknown;
   const requestResult = jsonRpcRequestSchema.safeParse(parsed);
   if (requestResult.success) {
@@ -122,9 +133,12 @@ function normalizeNotification(message: JsonRpcNotificationMessage): JsonRpcNoti
     case "thread/started":
       return {
         method: "thread/started",
-        params: z.object({
-          thread: coworkThreadListResultSchema.shape.threads.element,
-        }).strict().parse(message.params),
+        params: z
+          .object({
+            thread: coworkThreadListResultSchema.shape.threads.element,
+          })
+          .strict()
+          .parse(message.params),
       };
     case "turn/started":
       return {
@@ -159,10 +173,13 @@ function normalizeNotification(message: JsonRpcNotificationMessage): JsonRpcNoti
     case "serverRequest/resolved":
       return {
         method: "serverRequest/resolved",
-        params: z.object({
-          threadId: z.string().trim().min(1),
-          requestId: z.string().trim().min(1),
-        }).strict().parse(message.params),
+        params: z
+          .object({
+            threadId: z.string().trim().min(1),
+            requestId: z.string().trim().min(1),
+          })
+          .strict()
+          .parse(message.params),
       };
     default:
       return null;
@@ -175,28 +192,34 @@ function normalizeServerRequest(message: JsonRpcRequestMessage): JsonRpcServerRe
       return {
         method: message.method,
         id: message.id,
-        params: z.object({
-          threadId: z.string().trim().min(1),
-          turnId: z.string().trim().min(1).nullable().optional(),
-          requestId: z.string().trim().min(1),
-          itemId: z.string().trim().min(1),
-          question: z.string(),
-          options: z.array(z.string()).optional(),
-        }).strict().parse(message.params),
+        params: z
+          .object({
+            threadId: z.string().trim().min(1),
+            turnId: z.string().trim().min(1).nullable().optional(),
+            requestId: z.string().trim().min(1),
+            itemId: z.string().trim().min(1),
+            question: z.string(),
+            options: z.array(z.string()).optional(),
+          })
+          .strict()
+          .parse(message.params),
       };
     case "item/commandExecution/requestApproval":
       return {
         method: message.method,
         id: message.id,
-        params: z.object({
-          threadId: z.string().trim().min(1),
-          turnId: z.string().trim().min(1).nullable().optional(),
-          requestId: z.string().trim().min(1),
-          itemId: z.string().trim().min(1),
-          command: z.string(),
-          dangerous: z.boolean(),
-          reason: z.string(),
-        }).strict().parse(message.params),
+        params: z
+          .object({
+            threadId: z.string().trim().min(1),
+            turnId: z.string().trim().min(1).nullable().optional(),
+            requestId: z.string().trim().min(1),
+            itemId: z.string().trim().min(1),
+            command: z.string(),
+            dangerous: z.boolean(),
+            reason: z.string(),
+          })
+          .strict()
+          .parse(message.params),
       };
     default:
       return null;
@@ -266,21 +289,20 @@ export class CoworkJsonRpcClient {
     return result as T;
   }
 
-  async respondServerRequest(
-    id: JsonRpcId,
-    result: unknown,
-  ): Promise<void> {
+  async respondServerRequest(id: JsonRpcId, result: unknown): Promise<void> {
     await this.sendTransport(JSON.stringify({ id, result }));
   }
 
   async rejectServerRequest(id: JsonRpcId, message: string): Promise<void> {
-    await this.sendTransport(JSON.stringify({
-      id,
-      error: {
-        code: -32000,
-        message,
-      },
-    }));
+    await this.sendTransport(
+      JSON.stringify({
+        id,
+        error: {
+          code: -32000,
+          message,
+        },
+      }),
+    );
   }
 
   async handleIncoming(raw: string): Promise<void> {
@@ -328,10 +350,12 @@ export class CoworkJsonRpcClient {
   }
 
   private async notify(method: string, params?: unknown): Promise<void> {
-    await this.sendTransport(JSON.stringify({
-      method,
-      ...(params !== undefined ? { params } : {}),
-    }));
+    await this.sendTransport(
+      JSON.stringify({
+        method,
+        ...(params !== undefined ? { params } : {}),
+      }),
+    );
   }
 
   private async request(method: string, params?: unknown): Promise<unknown> {
@@ -344,11 +368,13 @@ export class CoworkJsonRpcClient {
       this.pending.set(id, { resolve, reject, timeoutHandle });
     });
     try {
-      await this.sendTransport(JSON.stringify({
-        id,
-        method,
-        ...(params !== undefined ? { params } : {}),
-      }));
+      await this.sendTransport(
+        JSON.stringify({
+          id,
+          method,
+          ...(params !== undefined ? { params } : {}),
+        }),
+      );
     } catch (error) {
       this.rejectPending(id, error);
     }

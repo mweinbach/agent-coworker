@@ -1,14 +1,13 @@
 import { describe, expect, test } from "bun:test";
-
-import {
-  jsonRpcControlRequestSchemas,
-  jsonRpcControlResultSchemas,
-} from "../src/shared/jsonrpcControlSchemas";
 import {
   jsonRpcAgentNotificationSchemas,
   jsonRpcAgentRequestSchemas,
   jsonRpcAgentResultSchemas,
 } from "../src/server/jsonrpc/schema.agents";
+import {
+  jsonRpcControlRequestSchemas,
+  jsonRpcControlResultSchemas,
+} from "../src/shared/jsonrpcControlSchemas";
 
 describe("shared JSON-RPC control schemas", () => {
   test("parses provider auth and status envelopes", () => {
@@ -28,26 +27,30 @@ describe("shared JSON-RPC control schemas", () => {
       event: {
         type: "provider_status",
         sessionId: "session-1",
-        providers: [{
-          provider: "google",
-          authorized: true,
-          verified: true,
-          mode: "oauth",
-          account: {
-            email: "user@example.com",
+        providers: [
+          {
+            provider: "google",
+            authorized: true,
+            verified: true,
+            mode: "oauth",
+            account: {
+              email: "user@example.com",
+            },
+            message: "Authorized",
+            checkedAt: new Date(0).toISOString(),
+            usage: {
+              rateLimits: [
+                {
+                  limitName: "requests",
+                  primaryWindow: {
+                    usedPercent: 12,
+                    windowSeconds: 60,
+                  },
+                },
+              ],
+            },
           },
-          message: "Authorized",
-          checkedAt: new Date(0).toISOString(),
-          usage: {
-            rateLimits: [{
-              limitName: "requests",
-              primaryWindow: {
-                usedPercent: 12,
-                windowSeconds: 60,
-              },
-            }],
-          },
-        }],
+        ],
       },
     });
 
@@ -60,23 +63,25 @@ describe("shared JSON-RPC control schemas", () => {
       event: {
         type: "mcp_servers",
         sessionId: "session-1",
-        servers: [{
-          name: "docs",
-          transport: {
-            type: "stdio",
-            command: "uvx",
-            args: ["docs-mcp"],
+        servers: [
+          {
+            name: "docs",
+            transport: {
+              type: "stdio",
+              command: "uvx",
+              args: ["docs-mcp"],
+            },
+            auth: {
+              type: "oauth",
+              oauthMode: "code",
+            },
+            source: "workspace",
+            inherited: false,
+            authMode: "oauth_pending",
+            authScope: "workspace",
+            authMessage: "Waiting for callback",
           },
-          auth: {
-            type: "oauth",
-            oauthMode: "code",
-          },
-          source: "workspace",
-          inherited: false,
-          authMode: "oauth_pending",
-          authScope: "workspace",
-          authMessage: "Waiting for callback",
-        }],
+        ],
         legacy: {
           workspace: {
             path: "/tmp/project/.cowork/mcp-servers.json",
@@ -87,25 +92,28 @@ describe("shared JSON-RPC control schemas", () => {
             exists: false,
           },
         },
-        files: [{
-          source: "workspace",
-          path: "/tmp/project/.cowork/mcp-servers.json",
-          exists: true,
-          editable: true,
-          legacy: false,
-          serverCount: 1,
-        }, {
-          source: "plugin",
-          path: "/tmp/project/.agents/plugins/figma-toolkit/.mcp.json",
-          exists: true,
-          editable: false,
-          legacy: false,
-          serverCount: 1,
-          pluginId: "figma-toolkit",
-          pluginName: "figma-toolkit",
-          pluginDisplayName: "Figma Toolkit",
-          pluginScope: "workspace",
-        }],
+        files: [
+          {
+            source: "workspace",
+            path: "/tmp/project/.cowork/mcp-servers.json",
+            exists: true,
+            editable: true,
+            legacy: false,
+            serverCount: 1,
+          },
+          {
+            source: "plugin",
+            path: "/tmp/project/.agents/plugins/figma-toolkit/.mcp.json",
+            exists: true,
+            editable: false,
+            legacy: false,
+            serverCount: 1,
+            pluginId: "figma-toolkit",
+            pluginName: "figma-toolkit",
+            pluginDisplayName: "Figma Toolkit",
+            pluginScope: "workspace",
+          },
+        ],
         warnings: ["oauth pending"],
       },
     });
@@ -120,13 +128,15 @@ describe("shared JSON-RPC control schemas", () => {
       event: {
         type: "memory_list",
         sessionId: "session-1",
-        memories: [{
-          id: "hot",
-          scope: "workspace",
-          content: "Remember this",
-          createdAt: new Date(0).toISOString(),
-          updatedAt: new Date(0).toISOString(),
-        }],
+        memories: [
+          {
+            id: "hot",
+            scope: "workspace",
+            content: "Remember this",
+            createdAt: new Date(0).toISOString(),
+            updatedAt: new Date(0).toISOString(),
+          },
+        ],
       },
     });
 
@@ -139,30 +149,34 @@ describe("shared JSON-RPC control schemas", () => {
         type: "workspace_backups",
         sessionId: "session-1",
         workspacePath: "/tmp/project",
-        backups: [{
-          targetSessionId: "session-1",
-          title: "Main session",
-          provider: "google",
-          model: "gemini-2.5-pro",
-          lifecycle: "active",
-          status: "ready",
-          workingDirectory: "/tmp/project",
-          backupDirectory: "/tmp/project/.cowork/backups/session-1",
-          originalSnapshotKind: "directory",
-          originalSnapshotBytes: 100,
-          checkpointBytesTotal: 20,
-          totalBytes: 120,
-          checkpoints: [{
-            id: "cp-1",
-            index: 1,
+        backups: [
+          {
+            targetSessionId: "session-1",
+            title: "Main session",
+            provider: "google",
+            model: "gemini-2.5-pro",
+            lifecycle: "active",
+            status: "ready",
+            workingDirectory: "/tmp/project",
+            backupDirectory: "/tmp/project/.cowork/backups/session-1",
+            originalSnapshotKind: "directory",
+            originalSnapshotBytes: 100,
+            checkpointBytesTotal: 20,
+            totalBytes: 120,
+            checkpoints: [
+              {
+                id: "cp-1",
+                index: 1,
+                createdAt: new Date(0).toISOString(),
+                trigger: "manual",
+                changed: true,
+                patchBytes: 20,
+              },
+            ],
             createdAt: new Date(0).toISOString(),
-            trigger: "manual",
-            changed: true,
-            patchBytes: 20,
-          }],
-          createdAt: new Date(0).toISOString(),
-          updatedAt: new Date(0).toISOString(),
-        }],
+            updatedAt: new Date(0).toISOString(),
+          },
+        ],
       },
     });
 
@@ -289,47 +303,52 @@ describe("shared JSON-RPC control schemas", () => {
       timeoutMs: 250,
       mode: "all",
     });
-    const waitNotification = jsonRpcAgentNotificationSchemas["cowork/session/agentWaitResult"].parse({
+    const waitNotification = jsonRpcAgentNotificationSchemas[
+      "cowork/session/agentWaitResult"
+    ].parse({
       type: "agent_wait_result",
       sessionId: "thread-1",
       agentIds: ["agent-1", "agent-2"],
       timedOut: true,
       mode: "all",
-      agents: [{
-        agentId: "agent-1",
-        parentSessionId: "thread-1",
-        role: "worker",
-        mode: "collaborative",
-        depth: 1,
-        nickname: "verify-auth",
-        taskType: "verify",
-        targetPaths: ["src/auth", "test/auth"],
-        effectiveModel: "gpt-5.4",
-        title: "child",
-        provider: "openai",
-        createdAt: new Date(0).toISOString(),
-        updatedAt: new Date(0).toISOString(),
-        lifecycleState: "active",
-        executionState: "completed",
-        busy: false,
-      }, {
-        agentId: "agent-2",
-        parentSessionId: "thread-1",
-        role: "worker",
-        mode: "collaborative",
-        depth: 1,
-        nickname: "plan-auth",
-        taskType: "plan",
-        targetPaths: ["src/auth"],
-        effectiveModel: "gpt-5.4",
-        title: "child 2",
-        provider: "openai",
-        createdAt: new Date(0).toISOString(),
-        updatedAt: new Date(0).toISOString(),
-        lifecycleState: "active",
-        executionState: "running",
-        busy: true,
-      }],
+      agents: [
+        {
+          agentId: "agent-1",
+          parentSessionId: "thread-1",
+          role: "worker",
+          mode: "collaborative",
+          depth: 1,
+          nickname: "verify-auth",
+          taskType: "verify",
+          targetPaths: ["src/auth", "test/auth"],
+          effectiveModel: "gpt-5.4",
+          title: "child",
+          provider: "openai",
+          createdAt: new Date(0).toISOString(),
+          updatedAt: new Date(0).toISOString(),
+          lifecycleState: "active",
+          executionState: "completed",
+          busy: false,
+        },
+        {
+          agentId: "agent-2",
+          parentSessionId: "thread-1",
+          role: "worker",
+          mode: "collaborative",
+          depth: 1,
+          nickname: "plan-auth",
+          taskType: "plan",
+          targetPaths: ["src/auth"],
+          effectiveModel: "gpt-5.4",
+          title: "child 2",
+          provider: "openai",
+          createdAt: new Date(0).toISOString(),
+          updatedAt: new Date(0).toISOString(),
+          lifecycleState: "active",
+          executionState: "running",
+          busy: true,
+        },
+      ],
       readyAgentIds: ["agent-1"],
     });
 

@@ -1,7 +1,6 @@
 import { useMemo } from "react";
-
-import type { ResearchDetail } from "../../app/types";
 import type { CitationSource } from "../../../../../src/shared/displayCitationMarkers";
+import type { ResearchDetail } from "../../app/types";
 import { MessageResponse } from "../../components/ai-elements/message";
 
 type ResearchStatus = ResearchDetail["status"];
@@ -10,9 +9,9 @@ type ResearchSources = ResearchDetail["sources"];
 const CITE_MARKER_PATTERN = /\[cite:\s*([\d\s,]+?)\s*\]/g;
 
 function buildCitationSources(sources: ResearchSources): CitationSource[] {
-  return sources.map((source) => (source.title
-    ? { url: source.url, title: source.title }
-    : { url: source.url }));
+  return sources.map((source) =>
+    source.title ? { url: source.url, title: source.title } : { url: source.url },
+  );
 }
 
 function rewriteCiteMarkers(markdown: string, sources: readonly CitationSource[]): string {

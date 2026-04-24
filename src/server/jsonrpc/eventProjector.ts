@@ -1,5 +1,5 @@
-import type { ServerEvent } from "../protocol";
 import { createConversationProjection } from "../projection/conversationProjection";
+import type { ServerEvent } from "../protocol";
 
 type JsonRpcOutboundMessage =
   | { id: string | number; method: string; params?: unknown }

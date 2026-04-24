@@ -2,14 +2,15 @@ import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
-import type { AgentConfig } from "../types";
 import { discoverPlugins } from "../plugins/discovery";
 import { readPluginManifest } from "../plugins/manifest";
+import type { AgentConfig } from "../types";
 import { isPathInside } from "./paths";
 
 const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
 const WRITE_ROOT_LABEL = "workingDirectory/outputDirectory/uploadsDirectory/project root";
-const READ_ROOT_LABEL = "workingDirectory/outputDirectory/uploadsDirectory/project root/skills directories/plugin roots";
+const READ_ROOT_LABEL =
+  "workingDirectory/outputDirectory/uploadsDirectory/project root/skills directories/plugin roots";
 
 function writeRoots(config: AgentConfig): string[] {
   const projectRoot = path.dirname(config.projectAgentDir);
@@ -135,14 +136,12 @@ function isCanonicalPathInsideRoots(filePath: string, roots: string[]): boolean 
 export async function assertWritePathAllowed(
   filePath: string,
   config: AgentConfig,
-  action: "write" | "edit" | "notebookEdit"
+  action: "write" | "edit" | "notebookEdit",
 ): Promise<string> {
   const resolved = path.resolve(filePath);
   const roots = writeRoots(config);
   if (!isPathInsideAnyRoot(resolved, roots)) {
-    throw new Error(
-      `${action} blocked: path is outside ${WRITE_ROOT_LABEL}: ${resolved}`
-    );
+    throw new Error(`${action} blocked: path is outside ${WRITE_ROOT_LABEL}: ${resolved}`);
   }
 
   // Guard against symlink escapes such as:
@@ -155,7 +154,7 @@ export async function assertWritePathAllowed(
 
   if (!allowedRoots.some((root) => isPathInside(root, canonicalTarget))) {
     throw new Error(
-      `${action} blocked: canonical target resolves outside allowed directories: ${canonicalTarget}`
+      `${action} blocked: canonical target resolves outside allowed directories: ${canonicalTarget}`,
     );
   }
 
@@ -165,17 +164,12 @@ export async function assertWritePathAllowed(
 export async function assertReadPathAllowed(
   filePath: string,
   config: AgentConfig,
-  action: "read" | "glob" | "grep"
+  action: "read" | "glob" | "grep",
 ): Promise<string> {
   const resolved = path.resolve(filePath);
-  const roots = [
-    ...readRoots(config),
-    ...(await pluginReadRoots(config)),
-  ];
+  const roots = [...readRoots(config), ...(await pluginReadRoots(config))];
   if (!isPathInsideAnyRoot(resolved, roots)) {
-    throw new Error(
-      `${action} blocked: path is outside ${READ_ROOT_LABEL}: ${resolved}`
-    );
+    throw new Error(`${action} blocked: path is outside ${READ_ROOT_LABEL}: ${resolved}`);
   }
 
   const canonicalRoots = await Promise.all([
@@ -186,7 +180,7 @@ export async function assertReadPathAllowed(
 
   if (!allowedRoots.some((root) => isPathInside(root, canonicalTarget))) {
     throw new Error(
-      `${action} blocked: canonical target resolves outside allowed directories: ${canonicalTarget}`
+      `${action} blocked: canonical target resolves outside allowed directories: ${canonicalTarget}`,
     );
   }
 

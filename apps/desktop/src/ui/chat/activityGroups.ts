@@ -133,7 +133,15 @@ function toolMergeKey(name: string, args: unknown): string | null {
     return typeof question === "string" ? `question:${question}` : null;
   }
 
-  const common = getRecordValue(args, ["query", "command", "filePath", "path", "url", "pattern", "input"]);
+  const common = getRecordValue(args, [
+    "query",
+    "command",
+    "filePath",
+    "path",
+    "url",
+    "pattern",
+    "input",
+  ]);
   return typeof common === "string" ? common : null;
 }
 
@@ -142,7 +150,10 @@ function isCompactToolSummaryResult(result: unknown): boolean {
   return ["count", "chars", "ok", "exitCode", "provider"].some((key) => key in result);
 }
 
-function shouldMergeToolTraceItems(previous: ToolTraceItem, next: Extract<FeedItem, { kind: "tool" }>): boolean {
+function shouldMergeToolTraceItems(
+  previous: ToolTraceItem,
+  next: Extract<FeedItem, { kind: "tool" }>,
+): boolean {
   if (previous.name !== next.name) return false;
   if (!isTerminalToolState(previous.state)) return true;
 
@@ -151,23 +162,33 @@ function shouldMergeToolTraceItems(previous: ToolTraceItem, next: Extract<FeedIt
   const previousResult = toolValueSignature(previous.result);
   const nextResult = toolValueSignature(next.result);
   const argsCompatible = previousArgs === null || nextArgs === null || previousArgs === nextArgs;
-  const resultCompatible = previousResult === null || nextResult === null || previousResult === nextResult;
+  const resultCompatible =
+    previousResult === null || nextResult === null || previousResult === nextResult;
   const approvalsCompatible =
     previous.approval === undefined ||
     next.approval === undefined ||
     previous.approval.approvalId === next.approval.approvalId;
 
-  if (previousArgs !== null && nextArgs !== null && previousArgs === nextArgs && previousResult !== null && nextResult !== null && previousResult === nextResult) {
+  if (
+    previousArgs !== null &&
+    nextArgs !== null &&
+    previousArgs === nextArgs &&
+    previousResult !== null &&
+    nextResult !== null &&
+    previousResult === nextResult
+  ) {
     return true;
   }
 
   const previousSubtitle = toolTraceSubtitle(previous);
   const nextSubtitle = toolTraceSubtitle(next);
   const previousIsGeneric = isGenericToolSubtitle(previousSubtitle);
-  const nextIsMoreInformative = toolTraceInfoScore(next) > toolTraceInfoScore(previous) && !isGenericToolSubtitle(nextSubtitle);
+  const nextIsMoreInformative =
+    toolTraceInfoScore(next) > toolTraceInfoScore(previous) && !isGenericToolSubtitle(nextSubtitle);
   const previousMergeKey = toolMergeKey(previous.name, previous.args);
   const nextMergeKey = toolMergeKey(next.name, next.args);
-  const mergeKeysCompatible = previousMergeKey === null || nextMergeKey === null || previousMergeKey === nextMergeKey;
+  const mergeKeysCompatible =
+    previousMergeKey === null || nextMergeKey === null || previousMergeKey === nextMergeKey;
 
   if (previousIsGeneric && nextIsMoreInformative && argsCompatible && approvalsCompatible) {
     return true;
@@ -333,21 +354,26 @@ export function buildChatRenderItems(feed: FeedItem[]): ChatRenderItem[] {
 export function summarizeActivityGroup(items: ActivityFeedItem[]): ActivityGroupSummary {
   const entries = buildActivityTraceEntries(items);
   const reasoningItems = entries
-    .filter((entry): entry is Extract<ActivityTraceEntry, { kind: "reasoning" }> => entry.kind === "reasoning")
+    .filter(
+      (entry): entry is Extract<ActivityTraceEntry, { kind: "reasoning" }> =>
+        entry.kind === "reasoning",
+    )
     .map((entry) => entry.item);
   const toolItems = entries
-    .filter((entry): entry is Extract<ActivityTraceEntry, { kind: "tool" }> => entry.kind === "tool")
+    .filter(
+      (entry): entry is Extract<ActivityTraceEntry, { kind: "tool" }> => entry.kind === "tool",
+    )
     .map((entry) => entry.item);
   const primaryReasoning =
     [...reasoningItems].reverse().find((item) => item.mode === "summary") ??
     reasoningItems[reasoningItems.length - 1];
   const latestTool = toolItems[toolItems.length - 1];
-  const preview =
-    primaryReasoning?.text
-      ? buildMarkdownPreviewText(primaryReasoning.text, 2)
-      : latestTool
-        ? formatToolCard(latestTool.name, latestTool.args, latestTool.result, latestTool.state).subtitle
-        : "Reasoning and tool activity";
+  const preview = primaryReasoning?.text
+    ? buildMarkdownPreviewText(primaryReasoning.text, 2)
+    : latestTool
+      ? formatToolCard(latestTool.name, latestTool.args, latestTool.result, latestTool.state)
+          .subtitle
+      : "Reasoning and tool activity";
   const status = deriveStatus(toolItems);
 
   return {

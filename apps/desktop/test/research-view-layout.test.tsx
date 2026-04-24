@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createElement } from "react";
-import { act } from "react";
+import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
 import { setupJsdom } from "./jsdomHarness";
@@ -73,7 +72,9 @@ describe("research view layout", () => {
         throw new Error("missing research view root");
       }
 
-      const sections = Array.from(viewRoot.children).filter((child) => child instanceof harness.dom.window.HTMLElement);
+      const sections = Array.from(viewRoot.children).filter(
+        (child) => child instanceof harness.dom.window.HTMLElement,
+      );
       const runsPane = sections[0];
       const detailPane = sections[1];
 
@@ -148,7 +149,9 @@ describe("research view layout", () => {
         settings: DEFAULT_RESEARCH_SETTINGS,
         outputsMarkdown: "# Comprehensive analysis\n\nA concise report summary.",
         thoughtSummaries: [{ label: "Working set", text: "notes" }],
-        sources: [{ id: "source-1", title: "Source", url: "https://example.com", domain: "example.com" }],
+        sources: [
+          { id: "source-1", title: "Source", url: "https://example.com", domain: "example.com" },
+        ],
         createdAt: "2026-04-21T21:00:00.000Z",
         updatedAt: "2026-04-21T21:10:00.000Z",
         error: null,

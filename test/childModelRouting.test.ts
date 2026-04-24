@@ -27,8 +27,10 @@ describe("normalizeChildRoutingConfig", () => {
         childModelRoutingMode: "same-provider",
         preferredChildModel: "gemini-3.1-pro-preview",
         source: "test",
-      })
-    ).toThrow('Unsupported test preferred child target "gemini-3.1-pro-preview" for provider openai');
+      }),
+    ).toThrow(
+      'Unsupported test preferred child target "gemini-3.1-pro-preview" for provider openai',
+    );
   });
 
   test("cross-provider routing falls back deterministically when the canonical ref is invalid", () => {

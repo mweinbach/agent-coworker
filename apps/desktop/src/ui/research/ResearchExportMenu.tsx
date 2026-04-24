@@ -7,10 +7,9 @@ import {
   Loader2Icon,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-
+import type { ResearchExportFormat } from "../../../../../src/server/research/types";
 import { useAppStore } from "../../app/store";
 import { Button } from "../../components/ui/button";
-import type { ResearchExportFormat } from "../../../../../src/server/research/types";
 import { cn } from "../../lib/utils";
 
 type ExportTarget = {
@@ -46,7 +45,11 @@ export function ResearchExportMenu({
     }
 
     const onPointerDown = (event: MouseEvent) => {
-      if (rootRef.current && event.target instanceof Node && rootRef.current.contains(event.target)) {
+      if (
+        rootRef.current &&
+        event.target instanceof Node &&
+        rootRef.current.contains(event.target)
+      ) {
         return;
       }
       setOpen(false);
@@ -87,7 +90,9 @@ export function ResearchExportMenu({
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
-        title={disabled ? "Download becomes available when the report finishes." : "Download this report"}
+        title={
+          disabled ? "Download becomes available when the report finishes." : "Download this report"
+        }
       >
         {pending ? (
           <Loader2Icon className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
@@ -122,12 +127,17 @@ export function ResearchExportMenu({
                 onClick={() => void runExport(format)}
               >
                 {isPending ? (
-                  <Loader2Icon className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" aria-hidden="true" />
+                  <Loader2Icon
+                    className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground"
+                    aria-hidden="true"
+                  />
                 ) : (
                   <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
                 )}
                 <span className="flex-1 font-medium text-foreground">{label}</span>
-                <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">{hint}</span>
+                <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                  {hint}
+                </span>
               </button>
             );
           })}

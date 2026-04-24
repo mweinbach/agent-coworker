@@ -1,27 +1,33 @@
-import type {
-  AgentSpawnContextOptions,
-  AgentInspectResult,
-  AgentReasoningEffort,
-  PersistentAgentSummary,
-  AgentRole,
-} from "../shared/agents";
 import type { AgentShellPolicy } from "../server/agents/commandPolicy";
 import type { AgentWaitMode, AgentWaitResult } from "../server/agents/types";
-import type { AgentConfig, HarnessContextState } from "../types";
-import type { TodoItem } from "../types";
 import type { SessionCostTracker, SessionUsageSnapshot } from "../session/costTracker";
+import type {
+  AgentInspectResult,
+  AgentReasoningEffort,
+  AgentRole,
+  AgentSpawnContextOptions,
+  PersistentAgentSummary,
+} from "../shared/agents";
+import type { AgentConfig, HarnessContextState, TodoItem } from "../types";
+
 export type { AgentWaitMode, AgentWaitResult } from "../server/agents/types";
 
 export interface AgentControl {
-  spawn: (opts: AgentSpawnContextOptions & {
-    message: string;
-    role?: AgentRole;
-    model?: string;
-    reasoningEffort?: AgentReasoningEffort;
-  }) => Promise<PersistentAgentSummary>;
+  spawn: (
+    opts: AgentSpawnContextOptions & {
+      message: string;
+      role?: AgentRole;
+      model?: string;
+      reasoningEffort?: AgentReasoningEffort;
+    },
+  ) => Promise<PersistentAgentSummary>;
   list: () => Promise<PersistentAgentSummary[]>;
   sendInput: (opts: { agentId: string; message: string; interrupt?: boolean }) => Promise<void>;
-  wait: (opts: { agentIds: string[]; timeoutMs?: number; mode?: AgentWaitMode }) => Promise<AgentWaitResult>;
+  wait: (opts: {
+    agentIds: string[];
+    timeoutMs?: number;
+    mode?: AgentWaitMode;
+  }) => Promise<AgentWaitResult>;
   inspect: (opts: { agentId: string }) => Promise<AgentInspectResult>;
   resume: (opts: { agentId: string }) => Promise<PersistentAgentSummary>;
   close: (opts: { agentId: string }) => Promise<PersistentAgentSummary>;

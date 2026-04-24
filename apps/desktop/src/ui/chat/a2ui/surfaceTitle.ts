@@ -18,9 +18,9 @@ export function extractSurfaceTitle(
   while (queue.length > 0) {
     const current = queue.shift()!;
     if (
-      (current.type === "Heading" || current.type === "Text" || current.type === "Paragraph")
-      && current.props
-      && typeof current.props === "object"
+      (current.type === "Heading" || current.type === "Text" || current.type === "Paragraph") &&
+      current.props &&
+      typeof current.props === "object"
     ) {
       const props = current.props as Record<string, unknown>;
       const text = stringifyDynamic(

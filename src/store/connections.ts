@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
 
-import { resolveProviderName, type ProviderName } from "../types";
+import { type ProviderName, resolveProviderName } from "../types";
 import { writeTextFileAtomic } from "../utils/atomicFile";
 
 export type ConnectService = ProviderName;
@@ -40,48 +40,58 @@ export type AiCoworkerPaths = {
 
 const isoTimestampSchema = z.string().datetime({ offset: true });
 
-const storedConnectionSchema = z.object({
-  service: z.string().trim().min(1),
-  mode: z.enum(["api_key", "oauth", "oauth_pending", "credentials"]),
-  methodId: z.string().trim().min(1).optional(),
-  apiKey: z.string().trim().min(1).optional(),
-  values: z.record(z.string().trim().min(1), z.string()).optional(),
-  updatedAt: isoTimestampSchema,
-}).passthrough();
+const storedConnectionSchema = z
+  .object({
+    service: z.string().trim().min(1),
+    mode: z.enum(["api_key", "oauth", "oauth_pending", "credentials"]),
+    methodId: z.string().trim().min(1).optional(),
+    apiKey: z.string().trim().min(1).optional(),
+    values: z.record(z.string().trim().min(1), z.string()).optional(),
+    updatedAt: isoTimestampSchema,
+  })
+  .passthrough();
 
-const toolApiKeysSchema = z.object({
-  exa: z.string().trim().min(1).optional(),
-  parallel: z.string().trim().min(1).optional(),
-}).strict();
+const toolApiKeysSchema = z
+  .object({
+    exa: z.string().trim().min(1).optional(),
+    parallel: z.string().trim().min(1).optional(),
+  })
+  .strict();
 
-const connectionStoreSchema = z.object({
-  version: z.literal(1),
-  updatedAt: isoTimestampSchema,
-  services: z.record(z.string().trim().min(1), storedConnectionSchema.passthrough()).transform((rawServices, ctx) => {
-    const normalized: ConnectionStore["services"] = {};
+const connectionStoreSchema = z
+  .object({
+    version: z.literal(1),
+    updatedAt: isoTimestampSchema,
+    services: z
+      .record(z.string().trim().min(1), storedConnectionSchema.passthrough())
+      .transform((rawServices, ctx) => {
+        const normalized: ConnectionStore["services"] = {};
 
-    for (const [serviceRaw, connection] of Object.entries(rawServices) as Array<[string, any]>) {
-      const service = resolveProviderName(serviceRaw);
-      if (!service) {
-        // Skip unknown service keys instead of failing the parse.
-        continue;
-      }
-      const connectionService = resolveProviderName(connection.service);
-      if (connectionService !== service) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["services", serviceRaw, "service"],
-          message: `Connection service mismatch for key ${serviceRaw}`,
-        });
-        continue;
-      }
-      normalized[service] = { ...connection, service } as StoredConnection;
-    }
+        for (const [serviceRaw, connection] of Object.entries(rawServices) as Array<
+          [string, any]
+        >) {
+          const service = resolveProviderName(serviceRaw);
+          if (!service) {
+            // Skip unknown service keys instead of failing the parse.
+            continue;
+          }
+          const connectionService = resolveProviderName(connection.service);
+          if (connectionService !== service) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["services", serviceRaw, "service"],
+              message: `Connection service mismatch for key ${serviceRaw}`,
+            });
+            continue;
+          }
+          normalized[service] = { ...connection, service } as StoredConnection;
+        }
 
-    return normalized;
-  }),
-  toolApiKeys: toolApiKeysSchema.optional(),
-}).strict();
+        return normalized;
+      }),
+    toolApiKeys: toolApiKeysSchema.optional(),
+  })
+  .strict();
 const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
 
 class ConnectionStoreParseError extends Error {
@@ -100,7 +110,9 @@ function formatZodError(error: z.ZodError): string {
 export function parseConnectionStore(raw: unknown): ConnectionStore {
   const storeParsed = connectionStoreSchema.safeParse(raw);
   if (!storeParsed.success) {
-    throw new ConnectionStoreParseError(`Invalid connection store schema: ${formatZodError(storeParsed.error)}`);
+    throw new ConnectionStoreParseError(
+      `Invalid connection store schema: ${formatZodError(storeParsed.error)}`,
+    );
   }
 
   return {
@@ -116,7 +128,9 @@ export function parseConnectionStoreJson(raw: string, filePath: string): Connect
   try {
     parsed = JSON.parse(raw);
   } catch (error) {
-    throw new ConnectionStoreParseError(`Invalid JSON in connection store at ${filePath}: ${String(error)}`);
+    throw new ConnectionStoreParseError(
+      `Invalid JSON in connection store at ${filePath}: ${String(error)}`,
+    );
   }
   return parseConnectionStore(parsed);
 }
@@ -142,7 +156,14 @@ export async function ensureAiCoworkerHome(paths: AiCoworkerPaths): Promise<void
   await fs.mkdir(paths.skillsDir, { recursive: true, mode: 0o700 });
 
   // Best-effort hardening for secret-bearing dirs.
-  for (const dir of [paths.rootDir, paths.authDir, paths.configDir, paths.sessionsDir, paths.logsDir, paths.skillsDir]) {
+  for (const dir of [
+    paths.rootDir,
+    paths.authDir,
+    paths.configDir,
+    paths.sessionsDir,
+    paths.logsDir,
+    paths.skillsDir,
+  ]) {
     try {
       await fs.chmod(dir, 0o700);
     } catch {
@@ -174,7 +195,10 @@ export async function readConnectionStore(paths: AiCoworkerPaths): Promise<Conne
   return { version: 1, updatedAt: new Date().toISOString(), services: {} };
 }
 
-export async function writeConnectionStore(paths: AiCoworkerPaths, store: ConnectionStore): Promise<void> {
+export async function writeConnectionStore(
+  paths: AiCoworkerPaths,
+  store: ConnectionStore,
+): Promise<void> {
   await ensureAiCoworkerHome(paths);
   await writeTextFileAtomic(paths.connectionsFile, JSON.stringify(store, null, 2), { mode: 0o600 });
   try {

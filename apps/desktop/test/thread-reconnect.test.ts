@@ -76,54 +76,56 @@ const MOCK_UPDATE_STATE = {
   error: null,
 };
 
-mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
-  appendTranscriptBatch: async () => {},
-  appendTranscriptEvent: async () => {},
-  deleteTranscript: async ({ threadId }: { threadId: string }) => {
-    deleteTranscriptCalls.push(threadId);
-  },
-  listDirectory: async () => [],
-  loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
-  pickWorkspaceDirectory: async () => null,
-  readTranscript: async ({ threadId }: { threadId: string }) => {
-    readTranscriptCalls.push(threadId);
-    return [
-      {
-        ts: "2024-01-01T00:00:02.000Z",
-        threadId,
-        direction: "server",
-        payload: { type: "assistant_message", text: "Transcript fallback reply" },
-      },
-    ];
-  },
-  saveState: async () => {},
-  startWorkspaceServer: async () => ({ url: "ws://mock" }),
-  stopWorkspaceServer: async () => {},
-  showContextMenu: async () => null,
-  windowMinimize: async () => {},
-  windowMaximize: async () => {},
-  windowClose: async () => {},
-  getPlatform: async () => "linux",
-  readFile: async () => "",
-  previewOSFile: async () => {},
-  openPath: async () => {},
-  openExternalUrl: async () => {},
-  revealPath: async () => {},
-  copyPath: async () => {},
-  createDirectory: async () => {},
-  renamePath: async () => {},
-  trashPath: async () => {},
-  confirmAction: async () => true,
-  showNotification: async () => true,
-  getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  getUpdateState: async () => MOCK_UPDATE_STATE,
-  checkForUpdates: async () => {},
-  quitAndInstallUpdate: async () => {},
-  onSystemAppearanceChanged: () => () => {},
-  onMenuCommand: () => () => {},
-  onUpdateStateChanged: () => () => {},
-}));
+mock.module("../src/lib/desktopCommands", () =>
+  createDesktopCommandsMock({
+    appendTranscriptBatch: async () => {},
+    appendTranscriptEvent: async () => {},
+    deleteTranscript: async ({ threadId }: { threadId: string }) => {
+      deleteTranscriptCalls.push(threadId);
+    },
+    listDirectory: async () => [],
+    loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
+    pickWorkspaceDirectory: async () => null,
+    readTranscript: async ({ threadId }: { threadId: string }) => {
+      readTranscriptCalls.push(threadId);
+      return [
+        {
+          ts: "2024-01-01T00:00:02.000Z",
+          threadId,
+          direction: "server",
+          payload: { type: "assistant_message", text: "Transcript fallback reply" },
+        },
+      ];
+    },
+    saveState: async () => {},
+    startWorkspaceServer: async () => ({ url: "ws://mock" }),
+    stopWorkspaceServer: async () => {},
+    showContextMenu: async () => null,
+    windowMinimize: async () => {},
+    windowMaximize: async () => {},
+    windowClose: async () => {},
+    getPlatform: async () => "linux",
+    readFile: async () => "",
+    previewOSFile: async () => {},
+    openPath: async () => {},
+    openExternalUrl: async () => {},
+    revealPath: async () => {},
+    copyPath: async () => {},
+    createDirectory: async () => {},
+    renamePath: async () => {},
+    trashPath: async () => {},
+    confirmAction: async () => true,
+    showNotification: async () => true,
+    getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    getUpdateState: async () => MOCK_UPDATE_STATE,
+    checkForUpdates: async () => {},
+    quitAndInstallUpdate: async () => {},
+    onSystemAppearanceChanged: () => () => {},
+    onMenuCommand: () => () => {},
+    onUpdateStateChanged: () => () => {},
+  }),
+);
 
 mock.module("../src/lib/agentSocket", () => ({
   JsonRpcSocket: MockJsonRpcSocket,
@@ -142,10 +144,11 @@ async function flushAsyncWork(): Promise<void> {
 
 function canonicalThreadId(sessionId: string, fallbackThreadId?: string): string {
   const state = useAppStore.getState();
-  const thread = state.threads.find((item) =>
-    item.id === sessionId
-    || item.sessionId === sessionId
-    || (fallbackThreadId ? item.legacyTranscriptId === fallbackThreadId : false),
+  const thread = state.threads.find(
+    (item) =>
+      item.id === sessionId ||
+      item.sessionId === sessionId ||
+      (fallbackThreadId ? item.legacyTranscriptId === fallbackThreadId : false),
   );
   return thread?.id ?? state.selectedThreadId ?? fallbackThreadId ?? sessionId;
 }
@@ -264,7 +267,11 @@ function setDefaultJsonRpcHandlers(sessionId = "session-1") {
     event: {
       type: "skills_catalog",
       sessionId: "jsonrpc-control",
-      catalog: { installations: [], sources: [], stats: { totalInstallations: 0, enabledInstallations: 0 } },
+      catalog: {
+        installations: [],
+        sources: [],
+        stats: { totalInstallations: 0, enabledInstallations: 0 },
+      },
       mutationBlocked: false,
     },
   }));
@@ -297,7 +304,10 @@ function setDefaultJsonRpcHandlers(sessionId = "session-1") {
   }));
 }
 
-function seedStore(threadPatch: Record<string, unknown> = {}, runtimePatch: Record<string, unknown> = {}) {
+function seedStore(
+  threadPatch: Record<string, unknown> = {},
+  runtimePatch: Record<string, unknown> = {},
+) {
   const workspaceId = `ws-${crypto.randomUUID()}`;
   const threadId = `thread-${crypto.randomUUID()}`;
   useAppStore.setState({
@@ -443,18 +453,23 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
     expect(jsonRpcRequests.map((entry) => entry.method)).toContain("thread/resume");
     expect(jsonRpcRequests.map((entry) => entry.method)).toContain("thread/read");
     expect(useAppStore.getState().threadRuntimeById[activeThreadId]?.connected).toBe(true);
-    expect(useAppStore.getState().threads.find((thread) => thread.id === activeThreadId)?.status).toBe("active");
+    expect(
+      useAppStore.getState().threads.find((thread) => thread.id === activeThreadId)?.status,
+    ).toBe("active");
   });
 
   test("reconnectThread dedupes an in-flight connect after draft thread identity migration", async () => {
     const draftThreadId = "draft-thread-1";
-    seedStore({
-      id: draftThreadId,
-      sessionId: null,
-      draft: true,
-    }, {
-      sessionId: null,
-    });
+    seedStore(
+      {
+        id: draftThreadId,
+        sessionId: null,
+        draft: true,
+      },
+      {
+        sessionId: null,
+      },
+    );
 
     let releaseRead!: () => void;
     const readBlocked = new Promise<void>((resolve) => {
@@ -535,7 +550,9 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
     await flushAsyncWork();
     const disconnectedThreadId = canonicalThreadId("session-1", threadId);
     expect(useAppStore.getState().threadRuntimeById[disconnectedThreadId]?.connected).toBe(false);
-    expect(useAppStore.getState().threads.find((thread) => thread.id === disconnectedThreadId)?.status).toBe("disconnected");
+    expect(
+      useAppStore.getState().threads.find((thread) => thread.id === disconnectedThreadId)?.status,
+    ).toBe("disconnected");
 
     socket.reopen();
     await flushAsyncWork();
@@ -543,7 +560,9 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
     expect(jsonRpcRequests.filter((entry) => entry.method === "thread/resume")).toHaveLength(2);
     const resumedThreadId = canonicalThreadId("session-1", threadId);
     expect(useAppStore.getState().threadRuntimeById[resumedThreadId]?.connected).toBe(true);
-    expect(useAppStore.getState().threads.find((thread) => thread.id === resumedThreadId)?.status).toBe("active");
+    expect(
+      useAppStore.getState().threads.find((thread) => thread.id === resumedThreadId)?.status,
+    ).toBe("active");
   });
 
   test("stale shared JsonRpcSocket close after a serverUrl swap does not disconnect tracked threads", async () => {
@@ -555,7 +574,9 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
     const firstSocket = MockJsonRpcSocket.instances[0];
     expect(firstSocket).toBeDefined();
     expect(useAppStore.getState().threadRuntimeById[threadId]?.connected).toBe(true);
-    expect(useAppStore.getState().threads.find((thread) => thread.id === threadId)?.status).toBe("active");
+    expect(useAppStore.getState().threads.find((thread) => thread.id === threadId)?.status).toBe(
+      "active",
+    );
 
     MockJsonRpcSocket.deferClose = true;
     useAppStore.setState((state) => ({
@@ -577,13 +598,17 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
     expect((firstSocket as MockJsonRpcSocket).closed).toBe(true);
     expect(RUNTIME.jsonRpcSockets.get(workspaceId)).toBe(secondSocket);
     expect(useAppStore.getState().threadRuntimeById[threadId]?.connected).toBe(true);
-    expect(useAppStore.getState().threads.find((thread) => thread.id === threadId)?.status).toBe("active");
+    expect(useAppStore.getState().threads.find((thread) => thread.id === threadId)?.status).toBe(
+      "active",
+    );
 
     (firstSocket as MockJsonRpcSocket).emitDeferredClose();
     await flushAsyncWork();
 
     expect(RUNTIME.jsonRpcSockets.get(workspaceId)).toBe(secondSocket);
     expect(useAppStore.getState().threadRuntimeById[threadId]?.connected).toBe(true);
-    expect(useAppStore.getState().threads.find((thread) => thread.id === threadId)?.status).toBe("active");
+    expect(useAppStore.getState().threads.find((thread) => thread.id === threadId)?.status).toBe(
+      "active",
+    );
   });
 });

@@ -1,3 +1,4 @@
+import { useAutoAnimate } from "@formkit/auto-animate/react";
 import {
   BrainIcon,
   ChevronDownIcon,
@@ -7,7 +8,6 @@ import {
   Trash2Icon,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { useAutoAnimate } from "@formkit/auto-animate/react";
 
 import { useAppStore } from "../../../app/store";
 import type { MemoryListEntry } from "../../../app/types";
@@ -23,8 +23,8 @@ import {
   SelectValue,
 } from "../../../components/ui/select";
 import { Textarea } from "../../../components/ui/textarea";
-import { cn } from "../../../lib/utils";
 import { confirmAction } from "../../../lib/desktopCommands";
+import { cn } from "../../../lib/utils";
 
 type DraftMemory = {
   scope: "workspace" | "user";
@@ -134,13 +134,17 @@ export function MemoryPage() {
       return;
     }
 
-    const timer = window.setTimeout(() => {
-      setMemoryLoadStalled(true);
-    }, Math.max(0, MEMORY_LOADING_STALL_MS - (Date.now() - requestedAt)));
+    const timer = window.setTimeout(
+      () => {
+        setMemoryLoadStalled(true);
+      },
+      Math.max(0, MEMORY_LOADING_STALL_MS - (Date.now() - requestedAt)),
+    );
     return () => window.clearTimeout(timer);
   }, [memoriesLoading, memoryLoadRequestedAt, workspace?.id]);
 
-  const filtered = filterScope === "all" ? memories : memories.filter((m) => m.scope === filterScope);
+  const filtered =
+    filterScope === "all" ? memories : memories.filter((m) => m.scope === filterScope);
   const showMemoryLoading = memoriesLoading && !memoryLoadStalled;
 
   const toggleExpand = (key: string) => {
@@ -188,7 +192,8 @@ export function MemoryPage() {
     void deleteWorkspaceMemory(workspace.id, entry.scope, entry.id);
   };
 
-  const scopeLabel = (scope: "workspace" | "user") => (scope === "workspace" ? "Workspace" : "Global");
+  const scopeLabel = (scope: "workspace" | "user") =>
+    scope === "workspace" ? "Workspace" : "Global";
 
   return (
     <div className="space-y-5">
@@ -240,7 +245,12 @@ export function MemoryPage() {
         </div>
 
         {workspace ? (
-          <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground" onClick={openCreateDialog}>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-muted-foreground hover:text-foreground"
+            onClick={openCreateDialog}
+          >
             <PlusIcon className="w-4 h-4 mr-1.5" />
             Add memory
           </Button>
@@ -260,13 +270,22 @@ export function MemoryPage() {
           ) : null}
         </div>
       ) : (
-        <div className="rounded-xl border border-border/70 overflow-hidden bg-background/50" ref={parent}>
+        <div
+          className="rounded-xl border border-border/70 overflow-hidden bg-background/50"
+          ref={parent}
+        >
           {filtered.map((entry) => {
             const key = entryKey(entry);
             const isExpanded = expandedIds[key] ?? false;
 
             return (
-              <div key={key} className={cn("border-b border-border/70 last:border-b-0", isExpanded && "bg-card/40")}>
+              <div
+                key={key}
+                className={cn(
+                  "border-b border-border/70 last:border-b-0",
+                  isExpanded && "bg-card/40",
+                )}
+              >
                 <div
                   className="flex items-center justify-between p-4 cursor-pointer hover:bg-card/60 transition-colors"
                   onClick={() => toggleExpand(key)}
@@ -278,7 +297,10 @@ export function MemoryPage() {
                       <ChevronRightIcon className="w-4 h-4 text-muted-foreground" />
                     )}
                     <span className="font-medium text-foreground text-sm">{entry.id}</span>
-                    <Badge variant={entry.scope === "workspace" ? "default" : "secondary"} className="text-[10px] uppercase h-5">
+                    <Badge
+                      variant={entry.scope === "workspace" ? "default" : "secondary"}
+                      className="text-[10px] uppercase h-5"
+                    >
                       {scopeLabel(entry.scope)}
                     </Badge>
                   </div>
@@ -320,7 +342,12 @@ export function MemoryPage() {
         </div>
       )}
 
-      <Dialog open={dialogOpen} onOpenChange={(open) => { if (!open) closeDialog(); }}>
+      <Dialog
+        open={dialogOpen}
+        onOpenChange={(open) => {
+          if (!open) closeDialog();
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{editingEntry ? `Edit memory` : "Add memory"}</DialogTitle>
@@ -341,7 +368,9 @@ export function MemoryPage() {
               <Select
                 value={draft.scope}
                 disabled={!!editingEntry}
-                onValueChange={(value) => setDraft((prev) => ({ ...prev, scope: value as "workspace" | "user" }))}
+                onValueChange={(value) =>
+                  setDraft((prev) => ({ ...prev, scope: value as "workspace" | "user" }))
+                }
               >
                 <SelectTrigger aria-label="Memory scope">
                   <SelectValue />

@@ -1,12 +1,16 @@
+import { AnimatePresence, motion } from "framer-motion";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
-
+import coworkIconSvg from "../../../build/icon.icon/Assets/svgviewer-output.svg";
 import { useAppStore } from "../../app/store";
 import type { OnboardingStep } from "../../app/types";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../../components/ui/collapsible";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "../../components/ui/collapsible";
 import { Input } from "../../components/ui/input";
 import {
   Select,
@@ -17,29 +21,37 @@ import {
 } from "../../components/ui/select";
 import {
   availableProvidersFromCatalog,
+  type CatalogVisibilityOptions,
   modelChoicesFromCatalog,
   modelOptionsFromCatalog,
-  type CatalogVisibilityOptions,
   UI_DISABLED_PROVIDERS,
 } from "../../lib/modelChoices";
-import type { ProviderName, ServerEvent } from "../../lib/wsProtocol";
-import { PROVIDER_NAMES } from "../../lib/wsProtocol";
-import { cn } from "../../lib/utils";
 import {
   displayProviderName,
   fallbackAuthMethods,
   isProviderNameString,
   visibleAuthMethods,
 } from "../../lib/providerDisplayNames";
-import coworkIconSvg from "../../../build/icon.icon/Assets/svgviewer-output.svg";
+import { cn } from "../../lib/utils";
+import type { ProviderName, ServerEvent } from "../../lib/wsProtocol";
+import { PROVIDER_NAMES } from "../../lib/wsProtocol";
 
 const PROVIDER_STATUS_POLL_MS = 4000;
 const WORKSPACE_SERVER_TIMEOUT_MS = 30_000;
 const ONBOARDING_HIDDEN_PROVIDERS: readonly ProviderName[] = ["bedrock"];
 
-type ProviderAuthMethod = Extract<ServerEvent, { type: "provider_auth_methods" }>["methods"][string][number];
+type ProviderAuthMethod = Extract<
+  ServerEvent,
+  { type: "provider_auth_methods" }
+>["methods"][string][number];
 
-const STEP_ORDER: OnboardingStep[] = ["welcome", "workspace", "provider", "defaults", "firstThread"];
+const STEP_ORDER: OnboardingStep[] = [
+  "welcome",
+  "workspace",
+  "provider",
+  "defaults",
+  "firstThread",
+];
 
 function stepIndex(step: OnboardingStep): number {
   return STEP_ORDER.indexOf(step);
@@ -56,7 +68,11 @@ function StepIndicator({ current }: { current: OnboardingStep }) {
           key={step}
           className={cn(
             "h-1.5 rounded-full transition-all duration-300",
-            i === currentIdx ? "w-6 bg-primary" : i < currentIdx ? "w-1.5 bg-primary/50" : "w-1.5 bg-muted-foreground/25",
+            i === currentIdx
+              ? "w-6 bg-primary"
+              : i < currentIdx
+                ? "w-1.5 bg-primary/50"
+                : "w-1.5 bg-muted-foreground/25",
           )}
         />
       ))}
@@ -70,7 +86,13 @@ function WelcomeStep({ onContinue, onDismiss }: { onContinue: () => void; onDism
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-4">
-        <img src={coworkIconSvg} alt="" aria-hidden="true" className="h-12 w-12 shrink-0" draggable={false} />
+        <img
+          src={coworkIconSvg}
+          alt=""
+          aria-hidden="true"
+          className="h-12 w-12 shrink-0"
+          draggable={false}
+        />
         <div className="space-y-1">
           <h2 className="text-2xl font-semibold tracking-tight">Welcome to Cowork</h2>
           <p className="text-sm text-muted-foreground leading-relaxed">
@@ -79,9 +101,7 @@ function WelcomeStep({ onContinue, onDismiss }: { onContinue: () => void; onDism
         </div>
       </div>
 
-      <p className="text-sm text-muted-foreground leading-relaxed">
-        Here's what we'll set up:
-      </p>
+      <p className="text-sm text-muted-foreground leading-relaxed">Here's what we'll set up:</p>
 
       <div className="space-y-3">
         {[
@@ -168,8 +188,8 @@ function WorkspaceStep({ onContinue, onBack }: { onContinue: () => void; onBack:
           {!workspacePickerEnabled
             ? "This browser shell is connected to the workspace the Cowork server was started with."
             : hasMultipleWorkspaces
-            ? "Select an existing workspace or add a new one."
-            : "Choose a folder on your machine. This is where Cowork will read and write files."}
+              ? "Select an existing workspace or add a new one."
+              : "Choose a folder on your machine. This is where Cowork will read and write files."}
         </p>
       </div>
 
@@ -220,7 +240,8 @@ function WorkspaceStep({ onContinue, onBack }: { onContinue: () => void; onBack:
             ) : null}
             {timedOut && starting ? (
               <div className="mt-2 text-xs text-muted-foreground">
-                The workspace server is taking longer than expected. You can continue waiting or try choosing a different folder.
+                The workspace server is taking longer than expected. You can continue waiting or try
+                choosing a different folder.
               </div>
             ) : null}
           </CardContent>
@@ -229,7 +250,10 @@ function WorkspaceStep({ onContinue, onBack }: { onContinue: () => void; onBack:
 
       {workspaceLifecycleEnabled ? (
         <div className="flex gap-3">
-          <Button variant={hasWorkspace ? "outline" : "default"} onClick={() => void addWorkspace()}>
+          <Button
+            variant={hasWorkspace ? "outline" : "default"}
+            onClick={() => void addWorkspace()}
+          >
             {hasWorkspace ? "Add different folder" : "Choose folder"}
           </Button>
         </div>
@@ -267,9 +291,12 @@ function ProviderStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
   const [apiKeys, setApiKeys] = useState<Record<string, string>>({});
   const [oauthCodes, setOauthCodes] = useState<Record<string, string>>({});
 
-  const providerVisibility = useMemo<CatalogVisibilityOptions>(() => ({
-    hiddenProviders: ONBOARDING_HIDDEN_PROVIDERS,
-  }), []);
+  const providerVisibility = useMemo<CatalogVisibilityOptions>(
+    () => ({
+      hiddenProviders: ONBOARDING_HIDDEN_PROVIDERS,
+    }),
+    [],
+  );
   const modelChoices = useMemo(
     () => modelChoicesFromCatalog(providerCatalog, providerVisibility),
     [providerCatalog, providerVisibility],
@@ -280,22 +307,30 @@ function ProviderStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
       .map((entry) => entry.id)
       .filter((p): p is ProviderName => isProviderNameString(p));
     const source = fromCatalog.length > 0 ? fromCatalog : [...PROVIDER_NAMES];
-    const filtered = source.filter((p) => !UI_DISABLED_PROVIDERS.has(p) && !ONBOARDING_HIDDEN_PROVIDERS.includes(p));
-    return filtered.filter((p) => {
-      if (p === "lmstudio") return true;
-      const models = modelChoices[p];
-      return models && models.length > 0;
-    }).sort((a, b) => {
-      const aConnected = a === "lmstudio"
-        ? providerUiState.lmstudio.enabled && Boolean(providerStatusByName[a]?.authorized || providerStatusByName[a]?.verified)
-        : Boolean(providerStatusByName[a]?.authorized || providerStatusByName[a]?.verified);
-      const bConnected = b === "lmstudio"
-        ? providerUiState.lmstudio.enabled && Boolean(providerStatusByName[b]?.authorized || providerStatusByName[b]?.verified)
-        : Boolean(providerStatusByName[b]?.authorized || providerStatusByName[b]?.verified);
-      if (aConnected && !bConnected) return -1;
-      if (!aConnected && bConnected) return 1;
-      return displayProviderName(a).localeCompare(displayProviderName(b));
-    });
+    const filtered = source.filter(
+      (p) => !UI_DISABLED_PROVIDERS.has(p) && !ONBOARDING_HIDDEN_PROVIDERS.includes(p),
+    );
+    return filtered
+      .filter((p) => {
+        if (p === "lmstudio") return true;
+        const models = modelChoices[p];
+        return models && models.length > 0;
+      })
+      .sort((a, b) => {
+        const aConnected =
+          a === "lmstudio"
+            ? providerUiState.lmstudio.enabled &&
+              Boolean(providerStatusByName[a]?.authorized || providerStatusByName[a]?.verified)
+            : Boolean(providerStatusByName[a]?.authorized || providerStatusByName[a]?.verified);
+        const bConnected =
+          b === "lmstudio"
+            ? providerUiState.lmstudio.enabled &&
+              Boolean(providerStatusByName[b]?.authorized || providerStatusByName[b]?.verified)
+            : Boolean(providerStatusByName[b]?.authorized || providerStatusByName[b]?.verified);
+        if (aConnected && !bConnected) return -1;
+        if (!aConnected && bConnected) return 1;
+        return displayProviderName(a).localeCompare(displayProviderName(b));
+      });
   }, [providerCatalog, providerStatusByName, modelChoices, providerUiState]);
 
   const hasConnectedModelProvider = providerConnected.some((p) => {
@@ -355,8 +390,14 @@ function ProviderStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
           const lmStudioEnabled = providerUiState.lmstudio.enabled;
 
           return (
-            <Card key={provider} className={cn("border-border/80 bg-card/85", isExpanded && "border-primary/35")}>
-              <Collapsible open={isExpanded} onOpenChange={(nextOpen) => setExpandedProvider(nextOpen ? provider : null)}>
+            <Card
+              key={provider}
+              className={cn("border-border/80 bg-card/85", isExpanded && "border-primary/35")}
+            >
+              <Collapsible
+                open={isExpanded}
+                onOpenChange={(nextOpen) => setExpandedProvider(nextOpen ? provider : null)}
+              >
                 <CollapsibleTrigger asChild>
                   <Button
                     type="button"
@@ -370,158 +411,182 @@ function ProviderStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
                       <Badge variant={connected ? "default" : "secondary"}>
                         {provider === "lmstudio"
                           ? lmStudioEnabled
-                            ? (connected ? "Connected" : "Unavailable")
+                            ? connected
+                              ? "Connected"
+                              : "Unavailable"
                             : "Disabled"
                           : connected
                             ? "Connected"
                             : "Not connected"}
                       </Badge>
-                      <span className="text-xs text-muted-foreground">{isExpanded ? "▾" : "▸"}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {isExpanded ? "▾" : "▸"}
+                      </span>
                     </div>
                   </Button>
                 </CollapsibleTrigger>
 
                 <CollapsibleContent>
                   <CardContent className="space-y-3 border-t border-border/70 px-4 py-3">
-                  {provider === "lmstudio" ? (
-                    <div className="space-y-3">
-                      <div className="text-sm text-muted-foreground">
-                        LM Studio runs on a local server. Connect it once to make its local models available in Cowork.
-                      </div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Button
-                          type="button"
-                          onClick={() => {
-                            void setLmStudioEnabled(!lmStudioEnabled);
-                          }}
-                        >
-                          {lmStudioEnabled ? "Disable" : "Connect"}
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          onClick={() => void refreshProviderStatus()}
-                        >
-                          Refresh
-                        </Button>
-                      </div>
-                      <div className="text-xs text-muted-foreground">
-                        {lmStudioEnabled
-                          ? (status?.message || "Cowork will use the models exposed by your local LM Studio server.")
-                          : "Disabled providers stay out of the main chat UI until you connect them here."}
-                      </div>
-                    </div>
-                  ) : methods.map((method) => {
-                    const stateKey = `${provider}:${method.id}`;
-                    const apiKeyValue = apiKeys[stateKey] ?? "";
-                    const codeValue = oauthCodes[stateKey] ?? "";
-                    const challengeMatch =
-                      providerLastAuthChallenge?.provider === provider &&
-                      providerLastAuthChallenge?.methodId === method.id
-                        ? providerLastAuthChallenge
-                        : null;
-                    const resultMatch =
-                      providerLastAuthResult?.provider === provider &&
-                      providerLastAuthResult?.methodId === method.id
-                        ? providerLastAuthResult
-                        : null;
-                    const challengeUrl =
-                      provider === "codex-cli" && method.id === "oauth_cli"
-                        ? undefined
-                        : challengeMatch?.challenge.url;
-
-                    return (
-                      <div key={stateKey} className="space-y-2 border-t border-border/70 pt-3 first:border-t-0 first:pt-0">
-                        <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                          {method.label}
+                    {provider === "lmstudio" ? (
+                      <div className="space-y-3">
+                        <div className="text-sm text-muted-foreground">
+                          LM Studio runs on a local server. Connect it once to make its local models
+                          available in Cowork.
                         </div>
-                        {method.type === "api" ? (
-                          <div className="flex flex-wrap items-center gap-2">
-                            <Input
-                              className="max-w-xs"
-                              value={apiKeyValue}
-                              onChange={(e) =>
-                                setApiKeys((s) => ({ ...s, [stateKey]: e.currentTarget.value }))
-                              }
-                              placeholder="Paste your API key"
-                              type="password"
-                              aria-label={`${providerDisplayName} API key`}
-                            />
-                            <Button
-                              type="button"
-                              disabled={!apiKeyValue.trim()}
-                              onClick={() => {
-                                void setProviderApiKey(provider, method.id, apiKeyValue.trim());
-                              }}
-                            >
-                              Save
-                            </Button>
-                          </div>
-                        ) : (
-                          <div className="flex flex-wrap items-center gap-2">
-                            <Button
-                              type="button"
-                              onClick={() => startOauthSignIn(provider, method)}
-                            >
-                              Sign in
-                            </Button>
-                            {method.oauthMode === "code" ? (
-                              <>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Button
+                            type="button"
+                            onClick={() => {
+                              void setLmStudioEnabled(!lmStudioEnabled);
+                            }}
+                          >
+                            {lmStudioEnabled ? "Disable" : "Connect"}
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => void refreshProviderStatus()}
+                          >
+                            Refresh
+                          </Button>
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          {lmStudioEnabled
+                            ? status?.message ||
+                              "Cowork will use the models exposed by your local LM Studio server."
+                            : "Disabled providers stay out of the main chat UI until you connect them here."}
+                        </div>
+                      </div>
+                    ) : (
+                      methods.map((method) => {
+                        const stateKey = `${provider}:${method.id}`;
+                        const apiKeyValue = apiKeys[stateKey] ?? "";
+                        const codeValue = oauthCodes[stateKey] ?? "";
+                        const challengeMatch =
+                          providerLastAuthChallenge?.provider === provider &&
+                          providerLastAuthChallenge?.methodId === method.id
+                            ? providerLastAuthChallenge
+                            : null;
+                        const resultMatch =
+                          providerLastAuthResult?.provider === provider &&
+                          providerLastAuthResult?.methodId === method.id
+                            ? providerLastAuthResult
+                            : null;
+                        const challengeUrl =
+                          provider === "codex-cli" && method.id === "oauth_cli"
+                            ? undefined
+                            : challengeMatch?.challenge.url;
+
+                        return (
+                          <div
+                            key={stateKey}
+                            className="space-y-2 border-t border-border/70 pt-3 first:border-t-0 first:pt-0"
+                          >
+                            <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                              {method.label}
+                            </div>
+                            {method.type === "api" ? (
+                              <div className="flex flex-wrap items-center gap-2">
                                 <Input
                                   className="max-w-xs"
-                                  value={codeValue}
+                                  value={apiKeyValue}
                                   onChange={(e) =>
-                                    setOauthCodes((s) => ({
-                                      ...s,
-                                      [stateKey]: e.currentTarget.value,
-                                    }))
+                                    setApiKeys((s) => ({ ...s, [stateKey]: e.currentTarget.value }))
                                   }
-                                  placeholder="Paste authorization code"
-                                  type="text"
-                                  aria-label={`${providerDisplayName} authorization code`}
+                                  placeholder="Paste your API key"
+                                  type="password"
+                                  aria-label={`${providerDisplayName} API key`}
                                 />
                                 <Button
-                                  variant="outline"
                                   type="button"
+                                  disabled={!apiKeyValue.trim()}
                                   onClick={() => {
-                                    void callbackProviderAuth(provider, method.id, codeValue);
+                                    void setProviderApiKey(provider, method.id, apiKeyValue.trim());
                                   }}
                                 >
-                                  Submit
+                                  Save
                                 </Button>
-                              </>
-                            ) : null}
-                          </div>
-                        )}
+                              </div>
+                            ) : (
+                              <div className="flex flex-wrap items-center gap-2">
+                                <Button
+                                  type="button"
+                                  onClick={() => startOauthSignIn(provider, method)}
+                                >
+                                  Sign in
+                                </Button>
+                                {method.oauthMode === "code" ? (
+                                  <>
+                                    <Input
+                                      className="max-w-xs"
+                                      value={codeValue}
+                                      onChange={(e) =>
+                                        setOauthCodes((s) => ({
+                                          ...s,
+                                          [stateKey]: e.currentTarget.value,
+                                        }))
+                                      }
+                                      placeholder="Paste authorization code"
+                                      type="text"
+                                      aria-label={`${providerDisplayName} authorization code`}
+                                    />
+                                    <Button
+                                      variant="outline"
+                                      type="button"
+                                      onClick={() => {
+                                        void callbackProviderAuth(provider, method.id, codeValue);
+                                      }}
+                                    >
+                                      Submit
+                                    </Button>
+                                  </>
+                                ) : null}
+                              </div>
+                            )}
 
-                        {challengeMatch ? (
-                          <div className="text-xs text-muted-foreground">
-                            {challengeMatch.challenge.instructions}
-                            {challengeUrl ? (
-                              <>
-                                {" "}
-                                <a href={challengeUrl} target="_blank" rel="noreferrer" className="underline">
-                                  Open link
-                                </a>
-                              </>
+                            {challengeMatch ? (
+                              <div className="text-xs text-muted-foreground">
+                                {challengeMatch.challenge.instructions}
+                                {challengeUrl ? (
+                                  <>
+                                    {" "}
+                                    <a
+                                      href={challengeUrl}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="underline"
+                                    >
+                                      Open link
+                                    </a>
+                                  </>
+                                ) : null}
+                                {challengeMatch.challenge.command ? (
+                                  <>
+                                    {" "}
+                                    Run:{" "}
+                                    <code className="rounded bg-muted/45 px-1.5 py-0.5">
+                                      {challengeMatch.challenge.command}
+                                    </code>
+                                  </>
+                                ) : null}
+                              </div>
                             ) : null}
-                            {challengeMatch.challenge.command ? (
-                              <>
-                                {" "}
-                                Run: <code className="rounded bg-muted/45 px-1.5 py-0.5">{challengeMatch.challenge.command}</code>
-                              </>
-                            ) : null}
-                          </div>
-                        ) : null}
 
-                        {resultMatch ? (
-                          <div className={cn("text-xs", resultMatch.ok ? "text-success" : "text-destructive")}>
-                            {resultMatch.message}
+                            {resultMatch ? (
+                              <div
+                                className={cn(
+                                  "text-xs",
+                                  resultMatch.ok ? "text-success" : "text-destructive",
+                                )}
+                              >
+                                {resultMatch.message}
+                              </div>
+                            ) : null}
                           </div>
-                        ) : null}
-                      </div>
-                    );
-                  })}
+                        );
+                      })
+                    )}
                   </CardContent>
                 </CollapsibleContent>
               </Collapsible>
@@ -562,43 +627,66 @@ function DefaultsStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
   const enableMcp = workspace?.defaultEnableMcp ?? true;
   const backupsEnabled = workspace?.defaultBackupsEnabled ?? true;
 
-  const modelSelectorVisibility = useMemo<CatalogVisibilityOptions>(() => ({
-    hiddenProviders: [
-      ...(providerUiState.lmstudio.enabled ? [] : (["lmstudio"] as const)),
-      ...ONBOARDING_HIDDEN_PROVIDERS,
-    ],
-    hiddenModelsByProvider: {
-      lmstudio: providerUiState.lmstudio.hiddenModels,
-    },
-  }), [providerUiState]);
+  const modelSelectorVisibility = useMemo<CatalogVisibilityOptions>(
+    () => ({
+      hiddenProviders: [
+        ...(providerUiState.lmstudio.enabled ? [] : (["lmstudio"] as const)),
+        ...ONBOARDING_HIDDEN_PROVIDERS,
+      ],
+      hiddenModelsByProvider: {
+        lmstudio: providerUiState.lmstudio.hiddenModels,
+      },
+    }),
+    [providerUiState],
+  );
   const modelChoices = useMemo(
     () => modelChoicesFromCatalog(providerCatalog, modelSelectorVisibility),
     [providerCatalog, modelSelectorVisibility],
   );
   const availableProviders = useMemo(
-    () => availableProvidersFromCatalog(providerCatalog, providerConnected, provider, {
-      ...modelSelectorVisibility,
-      visibleModelsByProvider: modelChoices,
-    }),
+    () =>
+      availableProvidersFromCatalog(providerCatalog, providerConnected, provider, {
+        ...modelSelectorVisibility,
+        visibleModelsByProvider: modelChoices,
+      }),
     [providerCatalog, providerConnected, provider, modelChoices, modelSelectorVisibility],
   );
-  const effectiveProvider = availableProviders.includes(provider) ? provider : (availableProviders[0] ?? provider);
-  const modelOptions = modelOptionsFromCatalog(providerCatalog, effectiveProvider, model, modelSelectorVisibility);
+  const effectiveProvider = availableProviders.includes(provider)
+    ? provider
+    : (availableProviders[0] ?? provider);
+  const modelOptions = modelOptionsFromCatalog(
+    providerCatalog,
+    effectiveProvider,
+    model,
+    modelSelectorVisibility,
+  );
 
   // Auto-fix: if the current workspace default provider isn't connected but another is, swap it
   useEffect(() => {
     if (!workspace) return;
     const isDefaultConnected = providerConnected.includes(provider);
-    if (!isDefaultConnected && availableProviders.length > 0 && availableProviders[0] !== provider) {
+    if (
+      !isDefaultConnected &&
+      availableProviders.length > 0 &&
+      availableProviders[0] !== provider
+    ) {
       const newProvider = availableProviders[0]!;
-      const providerDefault = providerCatalog.find((entry) => entry.id === newProvider)?.defaultModel?.trim() || "";
+      const providerDefault =
+        providerCatalog.find((entry) => entry.id === newProvider)?.defaultModel?.trim() || "";
       const newModel = providerDefault || ((modelChoices[newProvider] ?? [])[0] ?? "");
       void updateWorkspaceDefaults(workspace.id, {
         defaultProvider: newProvider,
         defaultModel: newModel,
       });
     }
-  }, [workspace?.id, provider, providerConnected, availableProviders, modelChoices, updateWorkspaceDefaults]);
+  }, [
+    workspace?.id,
+    provider,
+    providerConnected,
+    availableProviders,
+    modelChoices,
+    updateWorkspaceDefaults,
+  ]);
 
   const defaultProviderConnected = providerConnected.includes(effectiveProvider);
 
@@ -609,7 +697,9 @@ function DefaultsStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
       <div className="space-y-2">
         <h2 className="text-2xl font-semibold tracking-tight">Review defaults</h2>
         <p className="text-sm text-muted-foreground leading-relaxed">
-          These are the defaults for <span className="font-medium text-foreground">{workspace.name}</span>. You can always change them later in settings.
+          These are the defaults for{" "}
+          <span className="font-medium text-foreground">{workspace.name}</span>. You can always
+          change them later in settings.
         </p>
       </div>
 
@@ -620,7 +710,8 @@ function DefaultsStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
             value={effectiveProvider}
             onValueChange={(value) => {
               if (!isProviderNameString(value)) return;
-              const providerDefault = providerCatalog.find((entry) => entry.id === value)?.defaultModel?.trim() || "";
+              const providerDefault =
+                providerCatalog.find((entry) => entry.id === value)?.defaultModel?.trim() || "";
               const newModel = providerDefault || ((modelChoices[value] ?? [])[0] ?? "");
               void updateWorkspaceDefaults(workspace.id, {
                 defaultProvider: value,
@@ -712,9 +803,21 @@ function DefaultsStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
 // ── Step 5: First Thread ──
 
 const STARTER_PROMPTS = [
-  { label: "Summarize this repo", message: "Give me a high-level summary of this repository — what it does, the key technologies, and how it's structured." },
-  { label: "Find setup risks", message: "Look through the repo for any setup issues, missing configs, or common gotchas a new contributor might hit." },
-  { label: "Plan first tasks", message: "Based on the current state of this repo, suggest 3-5 actionable first tasks I could work on." },
+  {
+    label: "Summarize this repo",
+    message:
+      "Give me a high-level summary of this repository — what it does, the key technologies, and how it's structured.",
+  },
+  {
+    label: "Find setup risks",
+    message:
+      "Look through the repo for any setup issues, missing configs, or common gotchas a new contributor might hit.",
+  },
+  {
+    label: "Plan first tasks",
+    message:
+      "Based on the current state of this repo, suggest 3-5 actionable first tasks I could work on.",
+  },
 ];
 
 function FirstThreadStep({ onComplete }: { onComplete: (firstMessage?: string) => Promise<void> }) {
@@ -746,7 +849,9 @@ function FirstThreadStep({ onComplete }: { onComplete: (firstMessage?: string) =
             disabled={creating}
           >
             <div className="text-sm font-medium">{prompt.label}</div>
-            <div className="mt-0.5 text-xs text-muted-foreground line-clamp-1">{prompt.message}</div>
+            <div className="mt-0.5 text-xs text-muted-foreground line-clamp-1">
+              {prompt.message}
+            </div>
           </Button>
         ))}
       </div>
@@ -808,7 +913,13 @@ function useFocusTrap(containerRef: React.RefObject<HTMLElement | null>, active:
 
 // ── Height-measuring wrapper for smooth step transitions ──
 
-function AnimatedStepContainer({ children, step }: { children: React.ReactNode; step: OnboardingStep }) {
+function AnimatedStepContainer({
+  children,
+  step,
+}: {
+  children: React.ReactNode;
+  step: OnboardingStep;
+}) {
   const contentRef = useRef<HTMLDivElement>(null);
   const [measuredHeight, setMeasuredHeight] = useState<number | "auto">("auto");
 
@@ -857,10 +968,7 @@ export function DesktopOnboarding() {
 
   useFocusTrap(cardRef, visible);
 
-  const goTo = useCallback(
-    (next: OnboardingStep) => setStep(next),
-    [setStep],
-  );
+  const goTo = useCallback((next: OnboardingStep) => setStep(next), [setStep]);
 
   const handleComplete = useCallback(
     async (firstMessage?: string) => {
@@ -889,7 +997,12 @@ export function DesktopOnboarding() {
   if (!visible) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center" role="dialog" aria-modal="true" aria-label="Onboarding">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Onboarding"
+    >
       {/* Backdrop */}
       <div className="absolute inset-0 bg-background/80 backdrop-blur-sm" />
 

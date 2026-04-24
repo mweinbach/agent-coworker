@@ -2,12 +2,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { ensurePrivateDirectory, hardenPrivateFile } from "../sessionDb/fileHardening";
-import { MAX_RESEARCH_UPLOAD_BYTES, type ResearchInputFile } from "./types";
 import {
   createResearchFileSearchStore,
   deleteResearchFileSearchStore,
   uploadFileToResearchFileSearchStore,
 } from "./researchRuntime";
+import { MAX_RESEARCH_UPLOAD_BYTES, type ResearchInputFile } from "./types";
 
 type ResearchFileStoreOptions = {
   rootDir: string;
@@ -17,7 +17,10 @@ const metadataVersion = 1;
 
 function sanitizeFilename(filename: string): string {
   const base = path.basename(filename).trim();
-  const normalized = base.replace(/[^\w.\- ]+/g, "_").replace(/\s+/g, " ").trim();
+  const normalized = base
+    .replace(/[^\w.\- ]+/g, "_")
+    .replace(/\s+/g, " ")
+    .trim();
   return normalized || "upload.bin";
 }
 
@@ -156,6 +159,8 @@ export class ResearchFileStore {
       });
     }
 
+    await Promise.all(opts.files.map((file) => this.deletePendingUpload(file)));
+
     return {
       files: uploadedFiles,
       fileSearchStoreName,
@@ -164,5 +169,19 @@ export class ResearchFileStore {
 
   async deleteResearchStore(apiKey: string, fileSearchStoreName: string): Promise<void> {
     await deleteResearchFileSearchStore({ apiKey, fileSearchStoreName });
+  }
+
+  private async deletePendingUpload(file: ResearchInputFile): Promise<void> {
+    const uploadsDir = this.uploadsDir();
+    const resolvedUploadsDir = path.resolve(uploadsDir);
+    const resolvedFilePath = path.resolve(file.path);
+    if (!resolvedFilePath.startsWith(`${resolvedUploadsDir}${path.sep}`)) {
+      return;
+    }
+
+    await Promise.all([
+      fs.rm(path.join(uploadsDir, `${file.fileId}.json`), { force: true }),
+      fs.rm(file.path, { force: true }),
+    ]);
   }
 }

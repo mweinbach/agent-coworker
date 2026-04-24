@@ -1,5 +1,5 @@
-import { createBedrockModelAdapter } from "./modelAdapter";
 import type { AgentConfig } from "../types";
+import { createBedrockModelAdapter } from "./modelAdapter";
 
 export const bedrockProvider = {
   keyCandidates: ["bedrock"] as const,

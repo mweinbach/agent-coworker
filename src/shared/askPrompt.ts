@@ -23,7 +23,7 @@ function looksLikeRawPayload(value: string): boolean {
   return (
     /^raw stream part:/i.test(trimmed) ||
     trimmed.startsWith("{") ||
-    trimmed.includes("\"type\":") ||
+    trimmed.includes('"type":') ||
     trimmed.includes("response.") ||
     trimmed.includes("obfuscation")
   );

@@ -1,8 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import path from "node:path";
-
-import type { AgentConfig, ProviderName } from "../src/types";
 import { DelegateRunner } from "../src/server/agents/DelegateRunner";
+import type { AgentConfig, ProviderName } from "../src/types";
 
 function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   const dir = "/tmp/delegate-runner";
@@ -151,10 +150,16 @@ describe("DelegateRunner", () => {
         system: expect.stringContaining("## Active Harness Context"),
       }),
     );
-    expect(runTurn.mock.calls[0]?.[0]?.system).toContain(`- Workspace root: ${path.dirname(config.projectAgentDir)}`);
-    expect(runTurn.mock.calls[0]?.[0]?.system).toContain(`- Execution working directory: ${config.workingDirectory}`);
+    expect(runTurn.mock.calls[0]?.[0]?.system).toContain(
+      `- Workspace root: ${path.dirname(config.projectAgentDir)}`,
+    );
+    expect(runTurn.mock.calls[0]?.[0]?.system).toContain(
+      `- Execution working directory: ${config.workingDirectory}`,
+    );
     expect(runTurn.mock.calls[0]?.[0]?.system).toContain("- Run ID: run-delegate");
-    expect(runTurn.mock.calls[0]?.[0]?.system).toContain("- Objective: Verify delegated prompt injection");
+    expect(runTurn.mock.calls[0]?.[0]?.system).toContain(
+      "- Objective: Verify delegated prompt injection",
+    );
   });
 
   test("seeds delegated todo state before the child turn starts", async () => {
@@ -187,6 +192,8 @@ describe("DelegateRunner", () => {
     });
 
     expect(updateTodos).toHaveBeenCalledWith(seededTodos);
-    expect(updateTodos.mock.invocationCallOrder[0]).toBeLessThan(runTurn.mock.invocationCallOrder[0]);
+    expect(updateTodos.mock.invocationCallOrder[0]).toBeLessThan(
+      runTurn.mock.invocationCallOrder[0],
+    );
   });
 });

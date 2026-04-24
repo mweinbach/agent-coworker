@@ -7,7 +7,7 @@ export const mcpTokenEndpointAuthMethods = [
   "client_secret_post",
   "none",
 ] as const;
-export type MCPTokenEndpointAuthMethod = typeof mcpTokenEndpointAuthMethods[number];
+export type MCPTokenEndpointAuthMethod = (typeof mcpTokenEndpointAuthMethods)[number];
 
 export interface MCPServerOAuthPending {
   challengeId: string;

@@ -93,7 +93,11 @@ describe("desktop token compliance", () => {
   });
 
   test("limits raw color literals to token definition files", () => {
-    const violations = collectMatches(readDesktopFiles(), rawColorPattern, allowedLiteralColorFiles);
+    const violations = collectMatches(
+      readDesktopFiles(),
+      rawColorPattern,
+      allowedLiteralColorFiles,
+    );
     expect(violations).toEqual([]);
   });
 
@@ -113,7 +117,9 @@ describe("desktop token compliance", () => {
         return [];
       }
 
-      return Array.from(content.matchAll(new RegExp(inlineStyleBlockPattern.source, inlineStyleBlockPattern.flags)))
+      return Array.from(
+        content.matchAll(new RegExp(inlineStyleBlockPattern.source, inlineStyleBlockPattern.flags)),
+      )
         .filter((match) => colorBearingInlineStylePattern.test(match[1] ?? ""))
         .map((match) => `${relativePath}: style={{${(match[1] ?? "").trim()}}}`);
     });

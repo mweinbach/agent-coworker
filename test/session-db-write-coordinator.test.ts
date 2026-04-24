@@ -35,10 +35,7 @@ async function pathExists(targetPath: string): Promise<boolean> {
   }
 }
 
-async function waitFor(
-  predicate: () => Promise<boolean>,
-  timeoutMs = 2_000,
-): Promise<void> {
+async function waitFor(predicate: () => Promise<boolean>, timeoutMs = 2_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (await predicate()) return;
@@ -118,17 +115,20 @@ describe("SessionDbWriteCoordinator", () => {
     await firstPromise;
     expect(await secondPromise).toBe("second-done");
 
-    expect(telemetry).toContainEqual(expect.objectContaining({
-      name: "session.db.write_lock_wait",
-      status: "ok",
-      attributes: expect.objectContaining({
-        operation: "second_writer",
+    expect(telemetry).toContainEqual(
+      expect.objectContaining({
+        name: "session.db.write_lock_wait",
+        status: "ok",
+        attributes: expect.objectContaining({
+          operation: "second_writer",
+        }),
       }),
-    }));
-    const waitEvent = telemetry.find((event) =>
-      event.name === "session.db.write_lock_wait"
-      && event.status === "ok"
-      && event.attributes?.operation === "second_writer",
+    );
+    const waitEvent = telemetry.find(
+      (event) =>
+        event.name === "session.db.write_lock_wait" &&
+        event.status === "ok" &&
+        event.attributes?.operation === "second_writer",
     );
     expect(Number(waitEvent?.attributes?.waitedMs ?? 0)).toBeGreaterThan(0);
   });
@@ -139,11 +139,19 @@ describe("SessionDbWriteCoordinator", () => {
     const lockDir = path.join(paths.rootDir, "locks", "session-db-write.lock");
     const ownerFile = path.join(lockDir, "owner.json");
     await fs.mkdir(lockDir, { recursive: true, mode: 0o700 });
-    await fs.writeFile(ownerFile, `${JSON.stringify({
-      pid: 999_999,
-      startedAt: "1970-01-01T00:00:00.000Z",
-      updatedAt: "1970-01-01T00:00:00.000Z",
-    }, null, 2)}\n`, "utf-8");
+    await fs.writeFile(
+      ownerFile,
+      `${JSON.stringify(
+        {
+          pid: 999_999,
+          startedAt: "1970-01-01T00:00:00.000Z",
+          updatedAt: "1970-01-01T00:00:00.000Z",
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
 
     const coordinator = new SessionDbWriteCoordinator({
       rootDir: paths.rootDir,
@@ -156,14 +164,16 @@ describe("SessionDbWriteCoordinator", () => {
 
     const result = await coordinator.runExclusive("stale_recovery", async () => "recovered");
     expect(result).toBe("recovered");
-    expect(telemetry).toContainEqual(expect.objectContaining({
-      name: "session.db.write_lock_wait",
-      status: "ok",
-      attributes: expect.objectContaining({
-        operation: "stale_recovery",
-        staleRecoveries: 1,
+    expect(telemetry).toContainEqual(
+      expect.objectContaining({
+        name: "session.db.write_lock_wait",
+        status: "ok",
+        attributes: expect.objectContaining({
+          operation: "stale_recovery",
+          staleRecoveries: 1,
+        }),
       }),
-    }));
+    );
   });
 
   test("times out cleanly when a live writer never releases the lock", async () => {
@@ -172,11 +182,19 @@ describe("SessionDbWriteCoordinator", () => {
     const lockDir = path.join(paths.rootDir, "locks", "session-db-write.lock");
     const ownerFile = path.join(lockDir, "owner.json");
     await fs.mkdir(lockDir, { recursive: true, mode: 0o700 });
-    await fs.writeFile(ownerFile, `${JSON.stringify({
-      pid: 123,
-      startedAt: "1970-01-01T00:00:00.000Z",
-      updatedAt: "1970-01-01T00:00:00.000Z",
-    }, null, 2)}\n`, "utf-8");
+    await fs.writeFile(
+      ownerFile,
+      `${JSON.stringify(
+        {
+          pid: 123,
+          startedAt: "1970-01-01T00:00:00.000Z",
+          updatedAt: "1970-01-01T00:00:00.000Z",
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
 
     let nowMs = 0;
     const coordinator = new SessionDbWriteCoordinator({
@@ -194,17 +212,19 @@ describe("SessionDbWriteCoordinator", () => {
       },
     });
 
-    await expect(
-      coordinator.runExclusive("timeout_writer", async () => "never"),
-    ).rejects.toThrow("Timed out acquiring session DB write lock");
+    await expect(coordinator.runExclusive("timeout_writer", async () => "never")).rejects.toThrow(
+      "Timed out acquiring session DB write lock",
+    );
 
-    expect(telemetry).toContainEqual(expect.objectContaining({
-      name: "session.db.write_lock_wait",
-      status: "error",
-      attributes: expect.objectContaining({
-        operation: "timeout_writer",
+    expect(telemetry).toContainEqual(
+      expect.objectContaining({
+        name: "session.db.write_lock_wait",
+        status: "error",
+        attributes: expect.objectContaining({
+          operation: "timeout_writer",
+        }),
       }),
-    }));
+    );
   });
 
   test("release tolerates crash-like lock removal while the writer is active", async () => {
@@ -226,7 +246,9 @@ describe("session DB shared write integration", () => {
       const paths = await makeTmpCoworkHome("session-db-integration-");
       const workerPath = path.join(repoRoot(), "test", "fixtures", "session-db-worker.ts");
       const sessionIds = ["worker-a", "worker-b", "worker-c"];
-      const outputPaths = sessionIds.map((sessionId) => path.join(paths.rootDir, `${sessionId}.json`));
+      const outputPaths = sessionIds.map((sessionId) =>
+        path.join(paths.rootDir, `${sessionId}.json`),
+      );
 
       const processes = sessionIds.map((sessionId, index) =>
         Bun.spawn({
@@ -245,23 +267,23 @@ describe("session DB shared write integration", () => {
         }),
       );
 
-      const outputs = await Promise.all(processes.map(async (proc, index) => {
-        const [exitCode, stderr] = await Promise.all([
-          proc.exited,
-          new Response(proc.stderr).text(),
-        ]);
-        const outputPath = outputPaths[index]!;
-        const output = exitCode === 0
-          ? (await fs.readFile(outputPath, "utf-8")).trim()
-          : "";
+      const outputs = await Promise.all(
+        processes.map(async (proc, index) => {
+          const [exitCode, stderr] = await Promise.all([
+            proc.exited,
+            new Response(proc.stderr).text(),
+          ]);
+          const outputPath = outputPaths[index]!;
+          const output = exitCode === 0 ? (await fs.readFile(outputPath, "utf-8")).trim() : "";
 
-        return {
-          sessionId: sessionIds[index],
-          exitCode,
-          output,
-          stderr: stderr.trim(),
-        };
-      }));
+          return {
+            sessionId: sessionIds[index],
+            exitCode,
+            output,
+            stderr: stderr.trim(),
+          };
+        }),
+      );
 
       for (const output of outputs) {
         expect(output.exitCode).toBe(0);
@@ -273,13 +295,18 @@ describe("session DB shared write integration", () => {
         };
         expect(parsed.sessionId).toBe(output.sessionId);
         expect(parsed.visibleSessionIds).toEqual(sessionIds);
-        expect(parsed.telemetry.some((event) => event.name === "session.db.sqlite_lock")).toBe(false);
+        expect(parsed.telemetry.some((event) => event.name === "session.db.sqlite_lock")).toBe(
+          false,
+        );
         expect(parsed.telemetry.some((event) => event.status === "error")).toBe(false);
       }
 
       const db = await SessionDb.create({ paths });
       try {
-        const sessions = db.listSessions().map((session) => session.sessionId).sort();
+        const sessions = db
+          .listSessions()
+          .map((session) => session.sessionId)
+          .sort();
         expect(sessions).toEqual(sessionIds);
         for (const sessionId of sessionIds) {
           const record = db.getSessionRecord(sessionId);

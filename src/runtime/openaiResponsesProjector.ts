@@ -13,7 +13,13 @@ type AssistantContentBlock =
       phase?: string;
       annotations?: ResponsesTextAnnotation[];
     }
-  | { type: "toolCall"; id: string; name: string; arguments: Record<string, unknown>; partialJson?: string };
+  | {
+      type: "toolCall";
+      id: string;
+      name: string;
+      arguments: Record<string, unknown>;
+      partialJson?: string;
+    };
 
 type ResponsesProjectorOutput = Record<string, any> & {
   content: AssistantContentBlock[];
@@ -146,7 +152,10 @@ export function projectResponsesStreamEvent(
   }
 
   if (event.type === "response.reasoning_summary_text.delta") {
-    if (projector.currentItem?.type === "reasoning" && projector.currentBlock?.type === "thinking") {
+    if (
+      projector.currentItem?.type === "reasoning" &&
+      projector.currentBlock?.type === "thinking"
+    ) {
       projector.currentItem.summary = projector.currentItem.summary || [];
       const lastPart = projector.currentItem.summary[projector.currentItem.summary.length - 1];
       if (lastPart) {
@@ -164,7 +173,10 @@ export function projectResponsesStreamEvent(
   }
 
   if (event.type === "response.reasoning_summary_part.done") {
-    if (projector.currentItem?.type === "reasoning" && projector.currentBlock?.type === "thinking") {
+    if (
+      projector.currentItem?.type === "reasoning" &&
+      projector.currentBlock?.type === "thinking"
+    ) {
       projector.currentItem.summary = projector.currentItem.summary || [];
       const lastPart = projector.currentItem.summary[projector.currentItem.summary.length - 1];
       if (lastPart) {
@@ -202,7 +214,9 @@ export function projectResponsesStreamEvent(
           contentIndex: blockIndex(),
           delta: event.delta,
           partial: output,
-          ...(typeof projector.currentBlock.phase === "string" ? { phase: projector.currentBlock.phase } : {}),
+          ...(typeof projector.currentBlock.phase === "string"
+            ? { phase: projector.currentBlock.phase }
+            : {}),
         });
       }
     }
@@ -220,7 +234,9 @@ export function projectResponsesStreamEvent(
           contentIndex: blockIndex(),
           delta: event.delta,
           partial: output,
-          ...(typeof projector.currentBlock.phase === "string" ? { phase: projector.currentBlock.phase } : {}),
+          ...(typeof projector.currentBlock.phase === "string"
+            ? { phase: projector.currentBlock.phase }
+            : {}),
         });
       }
     }
@@ -228,7 +244,10 @@ export function projectResponsesStreamEvent(
   }
 
   if (event.type === "response.function_call_arguments.delta") {
-    if (projector.currentItem?.type === "function_call" && projector.currentBlock?.type === "toolCall") {
+    if (
+      projector.currentItem?.type === "function_call" &&
+      projector.currentBlock?.type === "toolCall"
+    ) {
       projector.currentBlock.partialJson = `${projector.currentBlock.partialJson ?? ""}${event.delta}`;
       projector.currentBlock.arguments = parseStreamingJson(projector.currentBlock.partialJson);
       stream.push({
@@ -242,8 +261,12 @@ export function projectResponsesStreamEvent(
   }
 
   if (event.type === "response.function_call_arguments.done") {
-    if (projector.currentItem?.type === "function_call" && projector.currentBlock?.type === "toolCall") {
-      projector.currentBlock.partialJson = typeof event.arguments === "string" ? event.arguments : "";
+    if (
+      projector.currentItem?.type === "function_call" &&
+      projector.currentBlock?.type === "toolCall"
+    ) {
+      projector.currentBlock.partialJson =
+        typeof event.arguments === "string" ? event.arguments : "";
       projector.currentBlock.arguments = parseStreamingJson(projector.currentBlock.partialJson);
     }
     return;
@@ -252,7 +275,8 @@ export function projectResponsesStreamEvent(
   if (event.type === "response.output_item.done") {
     const item = event.item as Record<string, any>;
     if (item.type === "reasoning" && projector.currentBlock?.type === "thinking") {
-      projector.currentBlock.thinking = item.summary?.map((summary: { text: string }) => summary.text).join("\n\n") || "";
+      projector.currentBlock.thinking =
+        item.summary?.map((summary: { text: string }) => summary.text).join("\n\n") || "";
       projector.currentBlock.thinkingSignature = JSON.stringify(item);
       stream.push({
         type: "thinking_end",
@@ -275,7 +299,8 @@ export function projectResponsesStreamEvent(
         : [];
       projector.currentBlock.text = item.content
         .map((content: { type: string; text?: string; refusal?: string }) =>
-          content.type === "output_text" ? content.text : content.refusal)
+          content.type === "output_text" ? content.text : content.refusal,
+        )
         .join("");
       projector.currentBlock.textSignature = item.id;
       projector.currentBlock.annotations = annotations;
@@ -288,13 +313,16 @@ export function projectResponsesStreamEvent(
         content: projector.currentBlock.text,
         ...(annotations.length > 0 ? { annotations } : {}),
         partial: output,
-        ...(typeof projector.currentBlock.phase === "string" ? { phase: projector.currentBlock.phase } : {}),
+        ...(typeof projector.currentBlock.phase === "string"
+          ? { phase: projector.currentBlock.phase }
+          : {}),
       });
       projector.currentBlock = null;
     } else if (item.type === "function_call") {
-      const args = projector.currentBlock?.type === "toolCall" && projector.currentBlock.partialJson
-        ? parseStreamingJson(projector.currentBlock.partialJson)
-        : parseStreamingJson(item.arguments || "{}");
+      const args =
+        projector.currentBlock?.type === "toolCall" && projector.currentBlock.partialJson
+          ? parseStreamingJson(projector.currentBlock.partialJson)
+          : parseStreamingJson(item.arguments || "{}");
       const toolCall = {
         type: "toolCall",
         id: `${item.call_id}|${item.id}`,
@@ -318,13 +346,18 @@ export function projectResponsesStreamEvent(
         cacheWrite: 0,
         totalTokens: response.usage.total_tokens || 0,
       };
-      const projectedCost = projector.model ? calculateCost(projector.model, output.usage) : undefined;
+      const projectedCost = projector.model
+        ? calculateCost(projector.model, output.usage)
+        : undefined;
       if (projectedCost) {
         output.usage.cost = projectedCost;
       }
     }
     output.stopReason = mapStopReason(response?.status);
-    if (output.content.some((block: { type: string }) => block.type === "toolCall") && output.stopReason === "stop") {
+    if (
+      output.content.some((block: { type: string }) => block.type === "toolCall") &&
+      output.stopReason === "stop"
+    ) {
       output.stopReason = "toolUse";
     }
     return;

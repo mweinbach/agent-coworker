@@ -41,8 +41,8 @@ export function isSupportedBasicComponentType(
   value: unknown,
 ): value is SupportedBasicComponentType {
   return (
-    typeof value === "string"
-    && (SUPPORTED_BASIC_CATALOG_COMPONENT_TYPES as readonly string[]).includes(value)
+    typeof value === "string" &&
+    (SUPPORTED_BASIC_CATALOG_COMPONENT_TYPES as readonly string[]).includes(value)
   );
 }
 

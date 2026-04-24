@@ -2,12 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { z } from "zod";
-import {
-  MODEL_STREAM_NORMALIZER_VERSION,
-  normalizeModelStreamPart,
-  reasoningModeForProvider,
-} from "../modelStream";
-import { supportsOpenAiContinuation } from "../../shared/openaiContinuation";
+import { supportsImageInput } from "../../models/registry";
+import type { TurnUsage } from "../../session/costTracker";
+import type { AgentExecutionState } from "../../shared/agents";
 import {
   decodeBase64Strict,
   formatAttachmentDisplayText,
@@ -17,20 +14,23 @@ import {
   getAttachmentValidationMessage,
   MAX_TURN_ATTACHMENT_TOTAL_BASE64_SIZE,
 } from "../../shared/attachments";
+import { supportsOpenAiContinuation } from "../../shared/openaiContinuation";
 import { supportsProviderManagedContinuationProvider } from "../../shared/providerContinuation";
-import type { AgentExecutionState } from "../../shared/agents";
-import type { TurnUsage } from "../../session/costTracker";
 import {
+  type ModelMessage,
   SERVER_ERROR_CODES,
   SERVER_ERROR_SOURCES,
-  type ModelMessage,
   type ServerErrorCode,
   type ServerErrorSource,
 } from "../../types";
-import { supportsImageInput } from "../../models/registry";
 import { isPathInside } from "../../utils/paths";
-import type { FileAttachment, OrderedInputPart } from "../jsonrpc/routes/shared";
 import { getAgentRoleShellPolicy } from "../agents/roles";
+import type { FileAttachment, OrderedInputPart } from "../jsonrpc/routes/shared";
+import {
+  MODEL_STREAM_NORMALIZER_VERSION,
+  normalizeModelStreamPart,
+  reasoningModeForProvider,
+} from "../modelStream";
 import type { HistoryManager } from "./HistoryManager";
 import type { InteractionManager } from "./InteractionManager";
 import type { SessionBackupController } from "./SessionBackupController";
@@ -38,16 +38,20 @@ import type { SessionContext } from "./SessionContext";
 import type { SessionMetadataManager } from "./SessionMetadataManager";
 
 const assistantMessageContentArraySchema = z.array(z.unknown());
-const assistantMessageContentPartSchema = z.object({
-  type: z.enum(["text", "output_text"]),
-  text: z.string(),
-  phase: z.string().optional(),
-}).passthrough();
+const assistantMessageContentPartSchema = z
+  .object({
+    type: z.enum(["text", "output_text"]),
+    text: z.string(),
+    phase: z.string().optional(),
+  })
+  .passthrough();
 const errorWithCodeSchema = z.object({ code: z.unknown() }).passthrough();
-const errorWithCodeAndSourceSchema = z.object({
-  code: z.string(),
-  source: z.string().optional(),
-}).passthrough();
+const errorWithCodeAndSourceSchema = z
+  .object({
+    code: z.string(),
+    source: z.string().optional(),
+  })
+  .passthrough();
 const serverErrorCodeSet = new Set<string>(SERVER_ERROR_CODES);
 const serverErrorSourceSet = new Set<string>(SERVER_ERROR_SOURCES);
 const defaultSourceByErrorCode: Partial<Record<ServerErrorCode, ServerErrorSource>> = {
@@ -111,7 +115,9 @@ function getAttachmentContentPartType(
   return null;
 }
 
-function getUploadedMultimodalAttachmentValidationMessage(byteLengths: readonly number[]): string | null {
+function getUploadedMultimodalAttachmentValidationMessage(
+  byteLengths: readonly number[],
+): string | null {
   const message = getAttachmentByteLengthValidationMessage(byteLengths);
   if (message === "File too large to send inline (max 25MB)") {
     return "Uploaded multimodal file too large to send to the model (max 25MB)";
@@ -160,15 +166,21 @@ function makeStructuredSessionError(
   return Object.assign(new Error(message), { code, source: "session" as const });
 }
 
-function isInlineFileAttachment(attachment: FileAttachment): attachment is Extract<FileAttachment, { contentBase64: string }> {
+function isInlineFileAttachment(
+  attachment: FileAttachment,
+): attachment is Extract<FileAttachment, { contentBase64: string }> {
   return "contentBase64" in attachment;
 }
 
-function getInlineAttachments(attachments?: readonly FileAttachment[]): Array<Extract<FileAttachment, { contentBase64: string }>> {
+function getInlineAttachments(
+  attachments?: readonly FileAttachment[],
+): Array<Extract<FileAttachment, { contentBase64: string }>> {
   return (attachments ?? []).filter(isInlineFileAttachment);
 }
 
-function getTurnAttachmentValidationMessage(attachments?: readonly FileAttachment[]): string | null {
+function getTurnAttachmentValidationMessage(
+  attachments?: readonly FileAttachment[],
+): string | null {
   const filenameMessage = getAttachmentFilenameValidationMessage(attachments);
   if (filenameMessage) {
     return filenameMessage;
@@ -180,7 +192,9 @@ function getTurnAttachmentValidationMessage(attachments?: readonly FileAttachmen
   return getAttachmentValidationMessage(getInlineAttachments(attachments));
 }
 
-function isUploadedFileAttachment(attachment: FileAttachment): attachment is Extract<FileAttachment, { path: string }> {
+function isUploadedFileAttachment(
+  attachment: FileAttachment,
+): attachment is Extract<FileAttachment, { path: string }> {
   return "path" in attachment;
 }
 
@@ -232,7 +246,9 @@ function extractAssistantTextFromMessageContent(content: unknown): string {
   return chunks.join("");
 }
 
-function extractAssistantTextFromResponseMessages(messages: Array<{ role: string; content: unknown }>): string {
+function extractAssistantTextFromResponseMessages(
+  messages: Array<{ role: string; content: unknown }>,
+): string {
   const chunks: string[] = [];
   for (const message of messages) {
     if (message.role !== "assistant") continue;
@@ -259,7 +275,9 @@ function normalizePreviewText(text: string, maxChars = 800): string | undefined 
   return `${trimmed.slice(0, maxChars - 1)}…`;
 }
 
-function extractToolExecutionDiagnostics(messages: Array<{ role: string; content: unknown }>): ToolExecutionDiagnostics {
+function extractToolExecutionDiagnostics(
+  messages: Array<{ role: string; content: unknown }>,
+): ToolExecutionDiagnostics {
   const diagnostics: ToolExecutionDiagnostics = {
     totalResults: 0,
     successfulResults: 0,
@@ -285,9 +303,10 @@ function extractToolExecutionDiagnostics(messages: Array<{ role: string; content
       }
 
       const toolName = typeof record.toolName === "string" ? record.toolName : "";
-      const output = typeof record.output === "object" && record.output !== null
-        ? record.output as Record<string, unknown>
-        : null;
+      const output =
+        typeof record.output === "object" && record.output !== null
+          ? (record.output as Record<string, unknown>)
+          : null;
       const messageText = typeof output?.value === "string" ? output.value.trim() : "";
       if (messageText) {
         diagnostics.errorMessages.push(messageText);
@@ -316,14 +335,17 @@ function detectMalformedToolCallFailure(
   if (diagnostics.successfulResults > 0) return null;
   if (diagnostics.errorMessages.length < 3) return null;
 
-  const hasFormattingComplaint = /function call format|tool call format|proper parameters/i.test(assistantText);
+  const hasFormattingComplaint = /function call format|tool call format|proper parameters/i.test(
+    assistantText,
+  );
   const repeatedToolFailures =
-    diagnostics.unknownToolErrors + diagnostics.invalidToolInputErrors + diagnostics.malformedToolNameErrors >= 3;
+    diagnostics.unknownToolErrors +
+      diagnostics.invalidToolInputErrors +
+      diagnostics.malformedToolNameErrors >=
+    3;
   if (!hasFormattingComplaint && !repeatedToolFailures) return null;
 
-  const sampleErrors = [...new Set(diagnostics.errorMessages)]
-    .slice(0, 2)
-    .join("; ");
+  const sampleErrors = [...new Set(diagnostics.errorMessages)].slice(0, 2).join("; ");
   return sampleErrors
     ? `Model failed to produce valid tool calls after repeated attempts: ${sampleErrors}`
     : "Model failed to produce valid tool calls after repeated attempts.";
@@ -397,7 +419,9 @@ function mergeTurnUsage(
 }
 
 function isStartStepPart(part: unknown): boolean {
-  return typeof part === "object" && part !== null && (part as { type?: unknown }).type === "start-step";
+  return (
+    typeof part === "object" && part !== null && (part as { type?: unknown }).type === "start-step"
+  );
 }
 
 export class TurnExecutionManager {
@@ -427,8 +451,8 @@ export class TurnExecutionManager {
           warning?: string;
         };
       };
-    }
-  ) { }
+    },
+  ) {}
 
   private updateSessionExecutionState(executionState: AgentExecutionState) {
     if (this.context.state.sessionInfo.executionState === undefined) return;
@@ -464,7 +488,11 @@ export class TurnExecutionManager {
     }
 
     if (!this.context.state.acceptingSteers) {
-      this.context.emitError("validation_failed", "session", "Active turn no longer accepts steering.");
+      this.context.emitError(
+        "validation_failed",
+        "session",
+        "Active turn no longer accepts steering.",
+      );
       return;
     }
 
@@ -486,7 +514,8 @@ export class TurnExecutionManager {
     }
     const nextPendingSteerAttachmentBase64Size =
       this.context.state.pendingSteers.reduce(
-        (total, steer) => total + getAttachmentTotalBase64Size(getInlineAttachments(steer.attachments)),
+        (total, steer) =>
+          total + getAttachmentTotalBase64Size(getInlineAttachments(steer.attachments)),
         0,
       ) + getAttachmentTotalBase64Size(getInlineAttachments(attachments));
     if (nextPendingSteerAttachmentBase64Size > MAX_PENDING_STEER_ATTACHMENT_TOTAL_BASE64_SIZE) {
@@ -531,7 +560,11 @@ export class TurnExecutionManager {
 
     const steerMessages: ModelMessage[] = [];
     for (const steer of drained) {
-      const content = await this.buildUserMessageContent(steer.text, steer.attachments, steer.inputParts);
+      const content = await this.buildUserMessageContent(
+        steer.text,
+        steer.attachments,
+        steer.inputParts,
+      );
       steerMessages.push({ role: "user", content });
     }
     this.deps.historyManager.appendMessagesToHistory(steerMessages);
@@ -547,7 +580,9 @@ export class TurnExecutionManager {
     return steerMessages;
   }
 
-  private async drainPendingSteers(stepMessages: ModelMessage[]): Promise<{ messages: ModelMessage[] } | undefined> {
+  private async drainPendingSteers(
+    stepMessages: ModelMessage[],
+  ): Promise<{ messages: ModelMessage[] } | undefined> {
     const steerMessages = await this.commitPendingSteers();
     if (steerMessages.length === 0) return undefined;
     return {
@@ -573,11 +608,13 @@ export class TurnExecutionManager {
       return;
     }
     if (this.context.state.costTracker?.isBudgetExceeded()) {
-      this.log("[cost] Rejecting new turn because the session hard-stop budget has already been exceeded.");
+      this.log(
+        "[cost] Rejecting new turn because the session hard-stop budget has already been exceeded.",
+      );
       this.context.emitError(
         "validation_failed",
         "session",
-        "Session hard-stop budget has been exceeded. Raise or clear the stop threshold before sending another message."
+        "Session hard-stop budget has been exceeded. Raise or clear the stop threshold before sending another message.",
       );
       return;
     }
@@ -608,7 +645,9 @@ export class TurnExecutionManager {
     this.context.state.currentTurnId = turnId;
     this.context.state.currentTurnOutcome = "completed";
     this.updateSessionExecutionState("running");
-    const cause: "user_message" | "command" = visibleText.startsWith("/") ? "command" : "user_message";
+    const cause: "user_message" | "command" = visibleText.startsWith("/")
+      ? "command"
+      : "user_message";
     let lastStreamError: unknown = null;
     let lastMessagePreview: string | undefined;
     let aggregatedUsage: TurnUsage | undefined;
@@ -623,7 +662,12 @@ export class TurnExecutionManager {
       }
 
       persistedAggregatedUsage = true;
-      this.context.emit({ type: "turn_usage", sessionId: this.context.id, turnId, usage: aggregatedUsage });
+      this.context.emit({
+        type: "turn_usage",
+        sessionId: this.context.id,
+        turnId,
+        usage: aggregatedUsage,
+      });
 
       const tracker = this.context.state.costTracker;
       if (tracker) {
@@ -654,7 +698,8 @@ export class TurnExecutionManager {
         harnessContext,
         prepareStep: async ({ messages }) => this.drainPendingSteers(messages),
         agentControl:
-          this.context.state.sessionInfo.sessionKind === "agent" || !this.context.deps.createAgentSessionImpl
+          this.context.state.sessionInfo.sessionKind === "agent" ||
+          !this.context.deps.createAgentSessionImpl
             ? undefined
             : {
                 spawn: async ({
@@ -686,10 +731,14 @@ export class TurnExecutionManager {
                     ...(includeParentTodos !== undefined ? { includeParentTodos } : {}),
                     ...(includeHarnessContext !== undefined ? { includeHarnessContext } : {}),
                     ...(forkContext !== undefined ? { forkContext } : {}),
-                    parentDepth: typeof this.context.state.sessionInfo.depth === "number" ? this.context.state.sessionInfo.depth : 0,
+                    parentDepth:
+                      typeof this.context.state.sessionInfo.depth === "number"
+                        ? this.context.state.sessionInfo.depth
+                        : 0,
                   }),
                 list: async () =>
-                  await (this.context.deps.listAgentSessionsImpl?.(this.context.id) ?? Promise.resolve([])),
+                  await (this.context.deps.listAgentSessionsImpl?.(this.context.id) ??
+                    Promise.resolve([])),
                 sendInput: async ({ agentId, message, interrupt }) => {
                   if (!this.context.deps.sendAgentInputImpl) {
                     throw new Error("Child-agent input is unavailable.");
@@ -747,7 +796,10 @@ export class TurnExecutionManager {
         discoveredSkills: this.context.state.discoveredSkills,
         maxSteps,
         enableMcp: this.context.state.config.enableMcp,
-        spawnDepth: typeof this.context.state.sessionInfo.depth === "number" ? this.context.state.sessionInfo.depth : 0,
+        spawnDepth:
+          typeof this.context.state.sessionInfo.depth === "number"
+            ? this.context.state.sessionInfo.depth
+            : 0,
         agentRole: this.context.state.sessionInfo.role,
         shellPolicy: getAgentRoleShellPolicy(this.context.state.sessionInfo.role),
         telemetryContext: {
@@ -850,8 +902,19 @@ export class TurnExecutionManager {
       });
     };
     try {
-      this.context.emit({ type: "user_message", sessionId: this.context.id, text: visibleText, clientMessageId });
-      this.context.emit({ type: "session_busy", sessionId: this.context.id, busy: true, turnId, cause });
+      this.context.emit({
+        type: "user_message",
+        sessionId: this.context.id,
+        text: visibleText,
+        clientMessageId,
+      });
+      this.context.emit({
+        type: "session_busy",
+        sessionId: this.context.id,
+        busy: true,
+        turnId,
+        cause,
+      });
       this.context.emitTelemetry("agent.turn.started", "ok", {
         sessionId: this.context.id,
         provider: this.context.state.config.provider,
@@ -859,7 +922,9 @@ export class TurnExecutionManager {
       });
 
       const userMessageContent = await this.buildUserMessageContent(text, attachments, inputParts);
-      this.deps.historyManager.appendMessagesToHistory([{ role: "user", content: userMessageContent }]);
+      this.deps.historyManager.appendMessagesToHistory([
+        { role: "user", content: userMessageContent },
+      ]);
       this.deps.metadataManager.maybeGenerateTitleFromQuery(text || visibleText);
       this.context.queuePersistSessionSnapshot("session.user_message");
       let continueSameTurn = true;
@@ -867,7 +932,9 @@ export class TurnExecutionManager {
         const remainingSteps = this.context.state.maxSteps - startedStepCount;
         if (remainingSteps <= 0) {
           this.context.state.acceptingSteers = false;
-          this.rejectPendingSteers("Active turn reached its max step budget and can no longer accept steering.");
+          this.rejectPendingSteers(
+            "Active turn reached its max step budget and can no longer accept steering.",
+          );
           break;
         }
 
@@ -886,7 +953,7 @@ export class TurnExecutionManager {
           }
 
           this.log(
-            `[warn] stored ${this.context.state.config.provider} continuation handle was rejected; retrying from local transcript`
+            `[warn] stored ${this.context.state.config.provider} continuation handle was rejected; retrying from local transcript`,
           );
           this.context.state.providerState = null;
           this.context.queuePersistSessionSnapshot("session.provider_state_invalidated");
@@ -903,8 +970,7 @@ export class TurnExecutionManager {
         }
 
         const out =
-          (res.text || "").trim() ||
-          extractAssistantTextFromResponseMessages(res.responseMessages);
+          (res.text || "").trim() || extractAssistantTextFromResponseMessages(res.responseMessages);
         const malformedToolCallFailure = detectMalformedToolCallFailure(res.responseMessages, out);
         if (malformedToolCallFailure) {
           throw Object.assign(new Error(malformedToolCallFailure), {
@@ -919,7 +985,12 @@ export class TurnExecutionManager {
         const reasoning = (res.reasoningText || "").trim();
         if (reasoning) {
           const kind = reasoningModeForProvider(this.context.state.config.provider);
-          this.context.emit({ type: "reasoning", sessionId: this.context.id, kind, text: reasoning });
+          this.context.emit({
+            type: "reasoning",
+            sessionId: this.context.id,
+            kind,
+            text: reasoning,
+          });
         }
 
         if (out) {
@@ -931,7 +1002,9 @@ export class TurnExecutionManager {
 
         if (startedStepCount >= this.context.state.maxSteps) {
           this.context.state.acceptingSteers = false;
-          this.rejectPendingSteers("Active turn reached its max step budget and can no longer accept steering.");
+          this.rejectPendingSteers(
+            "Active turn reached its max step budget and can no longer accept steering.",
+          );
           continueSameTurn = false;
           continue;
         }
@@ -946,11 +1019,9 @@ export class TurnExecutionManager {
 
         const lateSteersCommitted = (await this.commitPendingSteers()).length > 0;
         continueSameTurn =
-          lateSteersCommitted &&
-          !this.context.state.abortController?.signal.aborted;
+          lateSteersCommitted && !this.context.state.abortController?.signal.aborted;
         this.context.state.acceptingSteers =
-          continueSameTurn &&
-          startedStepCount < this.context.state.maxSteps;
+          continueSameTurn && startedStepCount < this.context.state.maxSteps;
       }
 
       persistAggregatedUsage();
@@ -963,13 +1034,14 @@ export class TurnExecutionManager {
           provider: this.context.state.config.provider,
           model: this.context.state.config.model,
         },
-        Date.now() - turnStartedAt
+        Date.now() - turnStartedAt,
       );
     } catch (err) {
       // If the model pipeline reported no output but we saw a stream error chunk, surface the stream error instead.
-      const actualErr = (lastStreamError && this.context.formatError(err).includes("No output generated"))
-        ? lastStreamError
-        : err;
+      const actualErr =
+        lastStreamError && this.context.formatError(err).includes("No output generated")
+          ? lastStreamError
+          : err;
       const msg = this.context.formatError(actualErr);
       if (!this.isAbortLikeError(actualErr)) {
         this.context.state.currentTurnOutcome = "error";
@@ -985,7 +1057,7 @@ export class TurnExecutionManager {
             model: this.context.state.config.model,
             error: msg,
           },
-          Date.now() - turnStartedAt
+          Date.now() - turnStartedAt,
         );
       } else {
         this.context.state.currentTurnOutcome = "cancelled";
@@ -997,7 +1069,7 @@ export class TurnExecutionManager {
             provider: this.context.state.config.provider,
             model: this.context.state.config.model,
           },
-          Date.now() - turnStartedAt
+          Date.now() - turnStartedAt,
         );
       }
     } finally {
@@ -1036,7 +1108,10 @@ export class TurnExecutionManager {
   }
 
   cancel(opts?: { includeSubagents?: boolean }) {
-    if (opts?.includeSubagents === true && (this.context.state.sessionInfo.sessionKind ?? "root") === "root") {
+    if (
+      opts?.includeSubagents === true &&
+      (this.context.state.sessionInfo.sessionKind ?? "root") === "root"
+    ) {
       this.context.deps.cancelAgentSessionsImpl?.(this.context.id);
     }
     if (!this.context.state.running) return;
@@ -1071,7 +1146,10 @@ export class TurnExecutionManager {
     const appendAttachment = async (attachment: FileAttachment) => {
       const safeName = path.basename(attachment.filename);
       if (!safeName || safeName === "." || safeName === "..") {
-        throw makeStructuredSessionError("validation_failed", `Invalid attachment filename: ${attachment.filename}`);
+        throw makeStructuredSessionError(
+          "validation_failed",
+          `Invalid attachment filename: ${attachment.filename}`,
+        );
       }
 
       const inlineAttachment = isInlineFileAttachment(attachment) ? attachment : null;
@@ -1122,7 +1200,10 @@ export class TurnExecutionManager {
 
         const decoded = decodeBase64Strict(inlineAttachment.contentBase64);
         if (!decoded) {
-          throw makeStructuredSessionError("validation_failed", `Invalid base64 attachment: ${safeName}`);
+          throw makeStructuredSessionError(
+            "validation_failed",
+            `Invalid base64 attachment: ${safeName}`,
+          );
         }
         await fs.writeFile(diskPath, decoded);
         contentReadPath = diskPath;
@@ -1190,7 +1271,10 @@ export class TurnExecutionManager {
     const resolvedUploadsDir = path.resolve(this.getUploadsDirectory());
     const diskPath = path.resolve(uploadedPath);
     if (!isPathInside(resolvedUploadsDir, diskPath)) {
-      throw makeStructuredSessionError("validation_failed", "Uploaded file path is outside the uploads directory.");
+      throw makeStructuredSessionError(
+        "validation_failed",
+        "Uploaded file path is outside the uploads directory.",
+      );
     }
 
     try {
@@ -1200,21 +1284,32 @@ export class TurnExecutionManager {
         fs.stat(diskPath),
       ]);
       if (!isPathInside(canonicalUploadsDir, canonicalPath)) {
-        throw makeStructuredSessionError("validation_failed", "Uploaded file path is outside the uploads directory.");
+        throw makeStructuredSessionError(
+          "validation_failed",
+          "Uploaded file path is outside the uploads directory.",
+        );
       }
       if (!stat.isFile()) {
-        throw makeStructuredSessionError("validation_failed", `Uploaded attachment is not a file: ${diskPath}`);
+        throw makeStructuredSessionError(
+          "validation_failed",
+          `Uploaded attachment is not a file: ${diskPath}`,
+        );
       }
       return { canonicalPath, stat };
     } catch (error) {
       if (classifyStructuredTurnError(error)) {
         throw error;
       }
-      throw makeStructuredSessionError("validation_failed", `Uploaded file does not exist: ${diskPath}`);
+      throw makeStructuredSessionError(
+        "validation_failed",
+        `Uploaded file does not exist: ${diskPath}`,
+      );
     }
   }
 
-  private async validateUploadedFileAttachments(attachments?: readonly FileAttachment[]): Promise<void> {
+  private async validateUploadedFileAttachments(
+    attachments?: readonly FileAttachment[],
+  ): Promise<void> {
     const uploadedAttachments = (attachments ?? []).filter(isUploadedFileAttachment);
     if (uploadedAttachments.length === 0) {
       return;
@@ -1235,7 +1330,9 @@ export class TurnExecutionManager {
       }
     }
 
-    const validationMessage = getUploadedMultimodalAttachmentValidationMessage(multimodalUploadedByteLengths);
+    const validationMessage = getUploadedMultimodalAttachmentValidationMessage(
+      multimodalUploadedByteLengths,
+    );
     if (validationMessage) {
       throw makeStructuredSessionError("validation_failed", validationMessage);
     }
@@ -1258,7 +1355,7 @@ export class TurnExecutionManager {
         "blocked private/internal host",
         "blocked url protocol",
         "blocked url credentials",
-        "glob blocked:"
+        "glob blocked:",
       )
     ) {
       return { code: "permission_denied", source: "permissions" };

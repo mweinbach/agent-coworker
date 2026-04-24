@@ -1,6 +1,6 @@
-import { spawn, type ChildProcessByStdio } from "node:child_process";
-import fs from "node:fs/promises";
+import { type ChildProcessByStdio, spawn } from "node:child_process";
 import fsSync from "node:fs";
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
@@ -69,7 +69,11 @@ export type WebDesktopServiceLike = {
   listWorkspaces(fallbackCwd: string): Promise<Array<{ name: string; path: string }>>;
   getWorkspaceRoots(fallbackCwd: string): Promise<string[]>;
   resolveWorkspaceDirectory(workspacePath: string): Promise<string>;
-  startWorkspaceServer(opts: { workspaceId: string; workspacePath: string; yolo: boolean }): Promise<{ url: string }>;
+  startWorkspaceServer(opts: {
+    workspaceId: string;
+    workspacePath: string;
+    yolo: boolean;
+  }): Promise<{ url: string }>;
   stopWorkspaceServer(workspaceId: string): Promise<void>;
   readTranscript(threadId: string): Promise<DesktopTranscriptEvent[]>;
   appendTranscriptEvent(event: DesktopTranscriptEvent): Promise<void>;
@@ -109,17 +113,21 @@ type SourceWorkspaceServerManagerDeps = {
   gracefulKill?: (child: ChildProcessByStdio<null, Readable, Readable>) => Promise<void>;
 };
 
-const transcriptEventSchema = z.object({
-  ts: z.string().trim().min(1),
-  threadId: z.string().trim().min(1),
-  direction: z.enum(["server", "client"]),
-  payload: z.unknown(),
-}).passthrough();
+const transcriptEventSchema = z
+  .object({
+    ts: z.string().trim().min(1),
+    threadId: z.string().trim().min(1),
+    direction: z.enum(["server", "client"]),
+    payload: z.unknown(),
+  })
+  .passthrough();
 
-const serverListeningSchema = z.object({
-  type: z.literal("server_listening"),
-  url: z.string().trim().min(1),
-}).passthrough();
+const serverListeningSchema = z
+  .object({
+    type: z.literal("server_listening"),
+    url: z.string().trim().min(1),
+  })
+  .passthrough();
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -293,15 +301,17 @@ async function normalizeState(raw: unknown): Promise<DesktopPersistedState> {
   }
 
   return {
-    version: typeof raw.version === "number" && Number.isFinite(raw.version)
-      ? Math.max(2, Math.floor(raw.version))
-      : 2,
+    version:
+      typeof raw.version === "number" && Number.isFinite(raw.version)
+        ? Math.max(2, Math.floor(raw.version))
+        : 2,
     workspaces,
     threads,
     developerMode: asBoolean(raw.developerMode, false),
     showHiddenFiles: asBoolean(raw.showHiddenFiles, false),
     perWorkspaceSettings: asBoolean(raw.perWorkspaceSettings, false),
-    desktopFeatureFlagOverrides: normalizeDesktopFeatureFlagOverrides(raw.desktopFeatureFlagOverrides) ?? {},
+    desktopFeatureFlagOverrides:
+      normalizeDesktopFeatureFlagOverrides(raw.desktopFeatureFlagOverrides) ?? {},
     ...(raw.providerState !== undefined ? { providerState: raw.providerState } : {}),
     ...(raw.providerUiState !== undefined ? { providerUiState: raw.providerUiState } : {}),
     ...(raw.onboarding !== undefined ? { onboarding: raw.onboarding } : {}),
@@ -351,7 +361,9 @@ async function assertWorkspaceDirectory(workspacePath: string): Promise<string> 
   return await fs.realpath(resolved);
 }
 
-function waitForServerListening(child: ChildProcessByStdio<null, Readable, Readable>): Promise<{ url: string }> {
+function waitForServerListening(
+  child: ChildProcessByStdio<null, Readable, Readable>,
+): Promise<{ url: string }> {
   const monitor = createWorkspaceServerMonitor(child);
   void monitor.drained.catch(() => {});
   return monitor.ready;
@@ -431,7 +443,11 @@ function createWorkspaceServerMonitor(
     if (!cleanup()) {
       return;
     }
-    const error = new Error(withRecentLines(`Workspace server startup timed out after ${SERVER_STARTUP_TIMEOUT_MS / 1000} seconds`));
+    const error = new Error(
+      withRecentLines(
+        `Workspace server startup timed out after ${SERVER_STARTUP_TIMEOUT_MS / 1000} seconds`,
+      ),
+    );
     settleReadyReject(error);
     rejectDrained(error);
   };
@@ -451,7 +467,13 @@ function createWorkspaceServerMonitor(
       return;
     }
     if (!readySeen) {
-      settleReadyReject(new Error(withRecentLines(`Workspace server exited before reporting readiness (code=${code ?? "null"}, signal=${signal ?? "null"})`)));
+      settleReadyReject(
+        new Error(
+          withRecentLines(
+            `Workspace server exited before reporting readiness (code=${code ?? "null"}, signal=${signal ?? "null"})`,
+          ),
+        ),
+      );
     }
     resolveDrained();
   };
@@ -530,7 +552,9 @@ class SourceWorkspaceServerManager {
   private readonly repoRoot: string;
   private readonly sourceEntry: string;
   private readonly servers = new Map<string, WorkspaceServerHandle>();
-  private readonly launchWorkspaceServerImpl: NonNullable<SourceWorkspaceServerManagerDeps["launchWorkspaceServer"]>;
+  private readonly launchWorkspaceServerImpl: NonNullable<
+    SourceWorkspaceServerManagerDeps["launchWorkspaceServer"]
+  >;
   private readonly gracefulKillImpl: NonNullable<SourceWorkspaceServerManagerDeps["gracefulKill"]>;
 
   constructor(deps: SourceWorkspaceServerManagerDeps = {}) {
@@ -540,7 +564,11 @@ class SourceWorkspaceServerManager {
     this.gracefulKillImpl = deps.gracefulKill ?? gracefulKill;
   }
 
-  async startWorkspaceServer(opts: { workspaceId: string; workspacePath: string; yolo: boolean }): Promise<{ url: string }> {
+  async startWorkspaceServer(opts: {
+    workspaceId: string;
+    workspacePath: string;
+    yolo: boolean;
+  }): Promise<{ url: string }> {
     const workspaceId = asSafeId(opts.workspaceId);
     if (!workspaceId) {
       throw new Error("workspaceId contains invalid characters");
@@ -647,7 +675,13 @@ export class WebDesktopService implements WebDesktopServiceLike {
   private readonly userDataDir: string;
   private readonly serverManager: SourceWorkspaceServerManager;
 
-  constructor(opts: { userDataDir?: string; homedir?: string; serverManager?: SourceWorkspaceServerManager } = {}) {
+  constructor(
+    opts: {
+      userDataDir?: string;
+      homedir?: string;
+      serverManager?: SourceWorkspaceServerManager;
+    } = {},
+  ) {
     this.userDataDir = resolveDesktopUserDataDir(opts.userDataDir, opts.homedir);
     this.serverManager = opts.serverManager ?? new SourceWorkspaceServerManager();
   }
@@ -674,9 +708,10 @@ export class WebDesktopService implements WebDesktopServiceLike {
       const raw = await fs.readFile(this.stateFilePath, "utf8");
       state = await normalizeState(JSON.parse(raw));
     } catch (error) {
-      const code = typeof error === "object" && error !== null && "code" in error
-        ? String((error as { code?: unknown }).code)
-        : "";
+      const code =
+        typeof error === "object" && error !== null && "code" in error
+          ? String((error as { code?: unknown }).code)
+          : "";
       if (code !== "ENOENT" && !(error instanceof SyntaxError)) {
         throw error;
       }
@@ -698,11 +733,9 @@ export class WebDesktopService implements WebDesktopServiceLike {
   async saveState(state: unknown): Promise<DesktopPersistedState> {
     const normalized = await normalizeState(state);
     await fs.mkdir(this.userDataDir, { recursive: true, mode: PRIVATE_DIR_MODE });
-    await writeTextFileAtomic(
-      this.stateFilePath,
-      JSON.stringify(normalized, null, 2),
-      { mode: PRIVATE_FILE_MODE },
-    );
+    await writeTextFileAtomic(this.stateFilePath, JSON.stringify(normalized, null, 2), {
+      mode: PRIVATE_FILE_MODE,
+    });
     return normalized;
   }
 
@@ -724,7 +757,11 @@ export class WebDesktopService implements WebDesktopServiceLike {
     return await assertWorkspaceDirectory(workspacePath);
   }
 
-  async startWorkspaceServer(opts: { workspaceId: string; workspacePath: string; yolo: boolean }): Promise<{ url: string }> {
+  async startWorkspaceServer(opts: {
+    workspaceId: string;
+    workspacePath: string;
+    yolo: boolean;
+  }): Promise<{ url: string }> {
     return await this.serverManager.startWorkspaceServer(opts);
   }
 
@@ -737,9 +774,10 @@ export class WebDesktopService implements WebDesktopServiceLike {
     try {
       raw = await fs.readFile(this.transcriptFilePath(threadId), "utf8");
     } catch (error) {
-      const code = typeof error === "object" && error !== null && "code" in error
-        ? String((error as { code?: unknown }).code)
-        : "";
+      const code =
+        typeof error === "object" && error !== null && "code" in error
+          ? String((error as { code?: unknown }).code)
+          : "";
       if (code === "ENOENT") {
         return [];
       }
@@ -804,9 +842,10 @@ export class WebDesktopService implements WebDesktopServiceLike {
     try {
       await fs.unlink(this.transcriptFilePath(threadId));
     } catch (error) {
-      const code = typeof error === "object" && error !== null && "code" in error
-        ? String((error as { code?: unknown }).code)
-        : "";
+      const code =
+        typeof error === "object" && error !== null && "code" in error
+          ? String((error as { code?: unknown }).code)
+          : "";
       if (code !== "ENOENT") {
         throw error;
       }

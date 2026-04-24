@@ -171,19 +171,27 @@ describe("mobile relay security helpers", () => {
   });
 
   test("parses relay control messages and computes reconnect delay with jitter", () => {
-    expect(parseRelayControlMessage(JSON.stringify({
-      kind: "secureError",
-      message: "bad payload",
-    }))).toEqual({
+    expect(
+      parseRelayControlMessage(
+        JSON.stringify({
+          kind: "secureError",
+          message: "bad payload",
+        }),
+      ),
+    ).toEqual({
       kind: "secureError",
       message: "bad payload",
     });
 
-    expect(computeRelayReconnectDelayMs(3, {
-      random: () => 0,
-    })).toBe(3200);
-    expect(computeRelayReconnectDelayMs(3, {
-      random: () => 1,
-    })).toBe(4800);
+    expect(
+      computeRelayReconnectDelayMs(3, {
+        random: () => 0,
+      }),
+    ).toBe(3200);
+    expect(
+      computeRelayReconnectDelayMs(3, {
+        random: () => 1,
+      }),
+    ).toBe(4800);
   });
 });

@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-import { createElement } from "react";
-import { act } from "react";
+import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -27,49 +26,53 @@ const MOCK_UPDATE_STATE = {
   error: null,
 };
 
-mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
-  appendTranscriptBatch: async () => {},
-  appendTranscriptEvent: async () => {},
-  deleteTranscript: async () => {},
-  listDirectory: async () => [],
-  loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
-  pickWorkspaceDirectory: async () => null,
-  readTranscript: async () => [],
-  saveState: async () => {},
-  startWorkspaceServer: async () => ({ url: "ws://mock" }),
-  stopWorkspaceServer: async () => {},
-  showContextMenu: async () => null,
-  windowMinimize: async () => {},
-  windowMaximize: async () => {},
-  windowClose: async () => {},
-  getPlatform: async () => "linux",
-  readFile: async () => "",
-  previewOSFile: async () => {},
-  openPath: async () => {},
-  openExternalUrl: async () => {},
-  revealPath: async () => {},
-  copyPath: async () => {},
-  createDirectory: async () => {},
-  renamePath: async () => {},
-  trashPath: async () => {},
-  confirmAction: async () => true,
-  showNotification: async () => true,
-  getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  getUpdateState: async () => MOCK_UPDATE_STATE,
-  checkForUpdates: async () => {},
-  quitAndInstallUpdate: async () => {},
-  onSystemAppearanceChanged: () => () => {},
-  onMenuCommand: () => () => {},
-  onUpdateStateChanged: () => () => {},
-}));
+mock.module("../src/lib/desktopCommands", () =>
+  createDesktopCommandsMock({
+    appendTranscriptBatch: async () => {},
+    appendTranscriptEvent: async () => {},
+    deleteTranscript: async () => {},
+    listDirectory: async () => [],
+    loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
+    pickWorkspaceDirectory: async () => null,
+    readTranscript: async () => [],
+    saveState: async () => {},
+    startWorkspaceServer: async () => ({ url: "ws://mock" }),
+    stopWorkspaceServer: async () => {},
+    showContextMenu: async () => null,
+    windowMinimize: async () => {},
+    windowMaximize: async () => {},
+    windowClose: async () => {},
+    getPlatform: async () => "linux",
+    readFile: async () => "",
+    previewOSFile: async () => {},
+    openPath: async () => {},
+    openExternalUrl: async () => {},
+    revealPath: async () => {},
+    copyPath: async () => {},
+    createDirectory: async () => {},
+    renamePath: async () => {},
+    trashPath: async () => {},
+    confirmAction: async () => true,
+    showNotification: async () => true,
+    getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    getUpdateState: async () => MOCK_UPDATE_STATE,
+    checkForUpdates: async () => {},
+    quitAndInstallUpdate: async () => {},
+    onSystemAppearanceChanged: () => () => {},
+    onMenuCommand: () => () => {},
+    onUpdateStateChanged: () => () => {},
+  }),
+);
 
 mock.module("../src/lib/agentSocket", () => ({
   JsonRpcSocket: NoopJsonRpcSocket,
 }));
 
 const { useAppStore } = await import("../src/app/store");
-const { EXA_SECTION_ID, PARALLEL_SECTION_ID, ProvidersPage } = await import("../src/ui/settings/pages/ProvidersPage");
+const { EXA_SECTION_ID, PARALLEL_SECTION_ID, ProvidersPage } = await import(
+  "../src/ui/settings/pages/ProvidersPage"
+);
 
 const defaultProviderActions = {
   requestProviderCatalog: useAppStore.getState().requestProviderCatalog,
@@ -117,7 +120,12 @@ describe("desktop providers page", () => {
         ],
         openai: [{ id: "api_key", type: "api", label: "API key" }],
         "codex-cli": [
-          { id: "oauth_cli", type: "oauth", label: "Sign in with ChatGPT (browser)", oauthMode: "auto" },
+          {
+            id: "oauth_cli",
+            type: "oauth",
+            label: "Sign in with ChatGPT (browser)",
+            oauthMode: "auto",
+          },
         ],
       } as any,
       providerLastAuthChallenge: null,
@@ -179,7 +187,9 @@ describe("desktop providers page", () => {
       }),
     );
 
-    expect(html).toMatch(/class="[^"]*text-muted-foreground hover:text-foreground[^"]*"[^>]*>Model Providers<\/button>/);
+    expect(html).toMatch(
+      /class="[^"]*text-muted-foreground hover:text-foreground[^"]*"[^>]*>Model Providers<\/button>/,
+    );
     expect(html).toMatch(/class="[^"]*text-foreground[^"]*"[^>]*>.*Tool Providers<\/button>/);
   });
 
@@ -391,21 +401,58 @@ describe("desktop providers page", () => {
         {
           id: "bedrock",
           name: "Amazon Bedrock",
-          models: [{ id: "amazon.nova-lite-v1:0", displayName: "Amazon Nova Lite", knowledgeCutoff: "Unknown", supportsImageInput: true }],
+          models: [
+            {
+              id: "amazon.nova-lite-v1:0",
+              displayName: "Amazon Nova Lite",
+              knowledgeCutoff: "Unknown",
+              supportsImageInput: true,
+            },
+          ],
           defaultModel: "amazon.nova-lite-v1:0",
         },
       ] as any,
       providerAuthMethodsByProvider: {
         bedrock: [
-          { id: "aws_default", type: "api", label: "AWS default credentials", fields: [{ id: "region", label: "AWS region", kind: "text" }] },
-          { id: "aws_profile", type: "api", label: "AWS profile", fields: [{ id: "profile", label: "AWS profile", kind: "text", required: true }] },
-          { id: "aws_keys", type: "api", label: "AWS access keys", fields: [{ id: "accessKeyId", label: "Access key ID", kind: "text", required: true }] },
-          { id: "api_key", type: "api", label: "Bedrock API key", fields: [{ id: "apiKey", label: "Bedrock API key", kind: "password", required: true, secret: true }] },
+          {
+            id: "aws_default",
+            type: "api",
+            label: "AWS default credentials",
+            fields: [{ id: "region", label: "AWS region", kind: "text" }],
+          },
+          {
+            id: "aws_profile",
+            type: "api",
+            label: "AWS profile",
+            fields: [{ id: "profile", label: "AWS profile", kind: "text", required: true }],
+          },
+          {
+            id: "aws_keys",
+            type: "api",
+            label: "AWS access keys",
+            fields: [{ id: "accessKeyId", label: "Access key ID", kind: "text", required: true }],
+          },
+          {
+            id: "api_key",
+            type: "api",
+            label: "Bedrock API key",
+            fields: [
+              {
+                id: "apiKey",
+                label: "Bedrock API key",
+                kind: "password",
+                required: true,
+                secret: true,
+              },
+            ],
+          },
         ],
       } as any,
     });
 
-    const html = renderToStaticMarkup(createElement(ProvidersPage, { initialExpandedSectionId: "provider:bedrock" }));
+    const html = renderToStaticMarkup(
+      createElement(ProvidersPage, { initialExpandedSectionId: "provider:bedrock" }),
+    );
     expect(html).toContain("Amazon Bedrock");
     expect(html).toContain("AWS default credentials");
     expect(html).toContain("AWS profile");
@@ -500,7 +547,12 @@ describe("desktop providers page", () => {
         ],
         openai: [{ id: "api_key", type: "api", label: "API key" }],
         "codex-cli": [
-          { id: "oauth_cli", type: "oauth", label: "Sign in with ChatGPT (browser)", oauthMode: "auto" },
+          {
+            id: "oauth_cli",
+            type: "oauth",
+            label: "Sign in with ChatGPT (browser)",
+            oauthMode: "auto",
+          },
         ],
       } as any,
       providerLastAuthChallenge: null,
@@ -602,7 +654,12 @@ describe("desktop providers page", () => {
         ],
         openai: [{ id: "api_key", type: "api", label: "API key" }],
         "codex-cli": [
-          { id: "oauth_cli", type: "oauth", label: "Sign in with ChatGPT (browser)", oauthMode: "auto" },
+          {
+            id: "oauth_cli",
+            type: "oauth",
+            label: "Sign in with ChatGPT (browser)",
+            oauthMode: "auto",
+          },
         ],
       } as any,
       providerLastAuthChallenge: null,
@@ -757,8 +814,18 @@ describe("desktop providers page", () => {
           state: "ready",
           message: "LM Studio reachable.",
           models: [
-            { id: "qwen/qwen3-30b-a3b", displayName: "Qwen 3 30B", knowledgeCutoff: "Unknown", supportsImageInput: false },
-            { id: "llama/llama-3.2-vision", displayName: "Llama 3.2 Vision", knowledgeCutoff: "Unknown", supportsImageInput: true },
+            {
+              id: "qwen/qwen3-30b-a3b",
+              displayName: "Qwen 3 30B",
+              knowledgeCutoff: "Unknown",
+              supportsImageInput: false,
+            },
+            {
+              id: "llama/llama-3.2-vision",
+              displayName: "Llama 3.2 Vision",
+              knowledgeCutoff: "Unknown",
+              supportsImageInput: true,
+            },
           ],
           defaultModel: "qwen/qwen3-30b-a3b",
         },
@@ -857,7 +924,12 @@ describe("desktop providers page", () => {
               state: "unreachable",
               message: "LM Studio unavailable.",
               models: [
-                { id: "qwen/qwen3-30b-a3b", displayName: "Qwen 3 30B", knowledgeCutoff: "Unknown", supportsImageInput: false },
+                {
+                  id: "qwen/qwen3-30b-a3b",
+                  displayName: "Qwen 3 30B",
+                  knowledgeCutoff: "Unknown",
+                  supportsImageInput: false,
+                },
               ],
               defaultModel: "qwen/qwen3-30b-a3b",
             },
@@ -875,24 +947,32 @@ describe("desktop providers page", () => {
       });
 
       await act(async () => {
-        root.render(createElement(ProvidersPage, { initialExpandedSectionId: "provider:lmstudio" }));
+        root.render(
+          createElement(ProvidersPage, { initialExpandedSectionId: "provider:lmstudio" }),
+        );
       });
 
-      const connectButton = [...container.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Connect");
+      const connectButton = [...container.querySelectorAll("button")].find(
+        (button) => button.textContent?.trim() === "Connect",
+      );
       if (!connectButton) throw new Error("missing LM Studio connect button");
       await act(async () => {
         connectButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
       });
       expect(setLmStudioEnabled).toHaveBeenCalledWith(true);
 
-      const refreshButton = [...container.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Refresh");
+      const refreshButton = [...container.querySelectorAll("button")].find(
+        (button) => button.textContent?.trim() === "Refresh",
+      );
       if (!refreshButton) throw new Error("missing LM Studio refresh button");
       await act(async () => {
         refreshButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
       });
       expect(refreshProviderStatus).toHaveBeenCalledWith();
 
-      const modelCheckbox = container.querySelector('[aria-label="Show LM Studio model qwen/qwen3-30b-a3b in chat"]');
+      const modelCheckbox = container.querySelector(
+        '[aria-label="Show LM Studio model qwen/qwen3-30b-a3b in chat"]',
+      );
       if (!(modelCheckbox instanceof harness.dom.window.HTMLElement)) {
         throw new Error("missing LM Studio model checkbox");
       }

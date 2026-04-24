@@ -4,16 +4,16 @@ import {
   focusSurface,
   latestRevision,
   markSurfaceSeen,
+  type ProjectedUiSurface,
   recordSurfaceRevision,
   revisionByNumber,
   setActiveRevision,
   setExpanded,
-  type ProjectedUiSurface,
 } from "../src/app/a2uiDockReducer";
 import {
+  type A2uiThreadDock,
   createDefaultA2uiDock,
   MAX_A2UI_REVISIONS_PER_SURFACE,
-  type A2uiThreadDock,
 } from "../src/app/types";
 
 const catalogId = "https://a2ui.org/specification/v0_9/basic_catalog.json";
@@ -34,7 +34,11 @@ function makeProjected(partial: Partial<ProjectedUiSurface> = {}): ProjectedUiSu
 
 describe("a2uiDockReducer", () => {
   test("records the first revision and focuses the surface", () => {
-    const dock = recordSurfaceRevision(createDefaultA2uiDock(), makeProjected(), "2026-04-17T00:00:00.000Z");
+    const dock = recordSurfaceRevision(
+      createDefaultA2uiDock(),
+      makeProjected(),
+      "2026-04-17T00:00:00.000Z",
+    );
     expect(dock.focusedSurfaceId).toBe("s1");
     expect(dock.revisionsBySurfaceId.s1).toHaveLength(1);
     expect(dock.revisionsBySurfaceId.s1![0]!.revision).toBe(1);
@@ -71,7 +75,11 @@ describe("a2uiDockReducer", () => {
   test("caps revision history per surface", () => {
     let dock = createDefaultA2uiDock();
     for (let i = 1; i <= MAX_A2UI_REVISIONS_PER_SURFACE + 5; i++) {
-      dock = recordSurfaceRevision(dock, makeProjected({ revision: i }), `2026-04-17T00:00:${String(i).padStart(2, "0")}.000Z`);
+      dock = recordSurfaceRevision(
+        dock,
+        makeProjected({ revision: i }),
+        `2026-04-17T00:00:${String(i).padStart(2, "0")}.000Z`,
+      );
     }
     expect(dock.revisionsBySurfaceId.s1).toHaveLength(MAX_A2UI_REVISIONS_PER_SURFACE);
     // Oldest revisions are dropped.
@@ -101,7 +109,11 @@ describe("a2uiDockReducer", () => {
   test("latestRevision returns null when empty and last item otherwise", () => {
     expect(latestRevision([])).toBeNull();
     const revs = recordSurfaceRevision(
-      recordSurfaceRevision(createDefaultA2uiDock(), makeProjected({ revision: 1 }), "2026-04-17T00:00:00.000Z"),
+      recordSurfaceRevision(
+        createDefaultA2uiDock(),
+        makeProjected({ revision: 1 }),
+        "2026-04-17T00:00:00.000Z",
+      ),
       makeProjected({ revision: 2 }),
       "2026-04-17T00:00:01.000Z",
     ).revisionsBySurfaceId.s1!;
@@ -110,7 +122,11 @@ describe("a2uiDockReducer", () => {
 
   test("revisionByNumber looks up the right entry", () => {
     const dock = recordSurfaceRevision(
-      recordSurfaceRevision(createDefaultA2uiDock(), makeProjected({ revision: 1 }), "2026-04-17T00:00:00.000Z"),
+      recordSurfaceRevision(
+        createDefaultA2uiDock(),
+        makeProjected({ revision: 1 }),
+        "2026-04-17T00:00:00.000Z",
+      ),
       makeProjected({ revision: 2 }),
       "2026-04-17T00:00:01.000Z",
     );
@@ -122,17 +138,32 @@ describe("a2uiDockReducer", () => {
     let dock = createDefaultA2uiDock();
     dock = recordSurfaceRevision(
       dock,
-      makeProjected({ revision: 1, toolCallId: "tc1", reason: "Render", changeKind: "createSurface" }),
+      makeProjected({
+        revision: 1,
+        toolCallId: "tc1",
+        reason: "Render",
+        changeKind: "createSurface",
+      }),
       "2026-04-17T00:00:00.000Z",
     );
     dock = recordSurfaceRevision(
       dock,
-      makeProjected({ revision: 2, toolCallId: "tc1", reason: "Render", changeKind: "updateComponents" }),
+      makeProjected({
+        revision: 2,
+        toolCallId: "tc1",
+        reason: "Render",
+        changeKind: "updateComponents",
+      }),
       "2026-04-17T00:00:00.010Z",
     );
     dock = recordSurfaceRevision(
       dock,
-      makeProjected({ revision: 3, toolCallId: "tc1", reason: "Render", changeKind: "updateDataModel" }),
+      makeProjected({
+        revision: 3,
+        toolCallId: "tc1",
+        reason: "Render",
+        changeKind: "updateDataModel",
+      }),
       "2026-04-17T00:00:00.020Z",
     );
     expect(dock.revisionsBySurfaceId.s1).toHaveLength(1);
@@ -144,12 +175,22 @@ describe("a2uiDockReducer", () => {
     let dock = createDefaultA2uiDock();
     dock = recordSurfaceRevision(
       dock,
-      makeProjected({ revision: 1, toolCallId: "tc1", reason: "Render", changeKind: "createSurface" }),
+      makeProjected({
+        revision: 1,
+        toolCallId: "tc1",
+        reason: "Render",
+        changeKind: "createSurface",
+      }),
       "2026-04-17T00:00:00.000Z",
     );
     dock = recordSurfaceRevision(
       dock,
-      makeProjected({ revision: 2, toolCallId: "tc1", reason: "Render", changeKind: "updateDataModel" }),
+      makeProjected({
+        revision: 2,
+        toolCallId: "tc1",
+        reason: "Render",
+        changeKind: "updateDataModel",
+      }),
       "2026-04-17T00:00:05.000Z",
     );
     expect(dock.revisionsBySurfaceId.s1).toHaveLength(1);

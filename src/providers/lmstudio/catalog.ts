@@ -4,15 +4,11 @@ import {
   isLmStudioError,
   listLmStudioModels,
   loadLmStudioModel,
+  type ResolvedLmStudioProviderOptions,
   resolveLmStudioProviderOptions,
   unloadLmStudioModel,
-  type ResolvedLmStudioProviderOptions,
 } from "./client";
-import type {
-  LmStudioLoadedInstance,
-  LmStudioLoadResponse,
-  LmStudioModel,
-} from "./types";
+import type { LmStudioLoadedInstance, LmStudioLoadResponse, LmStudioModel } from "./types";
 
 type FetchLike = typeof fetch;
 
@@ -29,9 +25,7 @@ function normalizeModelKey(modelId: string, source = "model"): string {
 }
 
 export function listLmStudioLlms(models: readonly LmStudioModel[]): LmStudioModel[] {
-  return models
-    .filter((model) => model.type === "llm")
-    .sort(compareModelKeys);
+  return models.filter((model) => model.type === "llm").sort(compareModelKeys);
 }
 
 export function pickLmStudioLoadedInstance(
@@ -42,7 +36,8 @@ export function pickLmStudioLoadedInstance(
 }
 
 function loadConfigContextLength(load: LmStudioLoadResponse | undefined): number | undefined {
-  return typeof load?.load_config?.context_length === "number" && Number.isFinite(load.load_config.context_length)
+  return typeof load?.load_config?.context_length === "number" &&
+    Number.isFinite(load.load_config.context_length)
     ? load.load_config.context_length
     : undefined;
 }
@@ -62,11 +57,14 @@ export function buildLmStudioPlaceholderMetadata(modelId: string): ResolvedModel
   };
 }
 
-function metadataFromLoadResult(model: LmStudioModel, loadResult?: LmStudioLoadResponse): ResolvedModelMetadata {
+function metadataFromLoadResult(
+  model: LmStudioModel,
+  loadResult?: LmStudioLoadResponse,
+): ResolvedModelMetadata {
   const effectiveContextLength =
-    loadConfigContextLength(loadResult)
-    ?? pickLmStudioLoadedInstance(model.loaded_instances)?.config.context_length
-    ?? model.max_context_length;
+    loadConfigContextLength(loadResult) ??
+    pickLmStudioLoadedInstance(model.loaded_instances)?.config.context_length ??
+    model.max_context_length;
   return {
     ...mapLmStudioModelToResolvedMetadata(model),
     effectiveContextLength,
@@ -94,7 +92,10 @@ export function mapLmStudioModelToResolvedMetadata(model: LmStudioModel): Resolv
   };
 }
 
-export function selectDefaultLmStudioModel(models: readonly LmStudioModel[], baseUrl: string): LmStudioModel {
+export function selectDefaultLmStudioModel(
+  models: readonly LmStudioModel[],
+  baseUrl: string,
+): LmStudioModel {
   const llms = listLmStudioLlms(models);
   const loaded = llms.filter((model) => model.loaded_instances.length > 0);
   if (loaded.length > 0) {
@@ -117,11 +118,13 @@ export async function resolveLmStudioDiscoveredModelMetadata(opts: {
   fetchImpl?: FetchLike;
 }): Promise<ResolvedModelMetadata> {
   const provider = resolveLmStudioProviderOptions(opts.providerOptions, opts.env);
-  const models = (await listLmStudioModels({
-    baseUrl: provider.baseUrl,
-    apiKey: provider.apiKey,
-    fetchImpl: opts.fetchImpl,
-  })).models;
+  const models = (
+    await listLmStudioModels({
+      baseUrl: provider.baseUrl,
+      apiKey: provider.apiKey,
+      fetchImpl: opts.fetchImpl,
+    })
+  ).models;
   const model = models.find((entry) => entry.key === normalizeModelKey(opts.modelId));
   if (!model) {
     throw createLmStudioError(
@@ -146,15 +149,20 @@ export async function resolveDefaultLmStudioModelMetadata(opts: {
   fetchImpl?: FetchLike;
 }): Promise<ResolvedModelMetadata> {
   const provider = resolveLmStudioProviderOptions(opts.providerOptions, opts.env);
-  const models = (await listLmStudioModels({
-    baseUrl: provider.baseUrl,
-    apiKey: provider.apiKey,
-    fetchImpl: opts.fetchImpl,
-  })).models;
+  const models = (
+    await listLmStudioModels({
+      baseUrl: provider.baseUrl,
+      apiKey: provider.apiKey,
+      fetchImpl: opts.fetchImpl,
+    })
+  ).models;
   return mapLmStudioModelToResolvedMetadata(selectDefaultLmStudioModel(models, provider.baseUrl));
 }
 
-function metadataAfterLoad(model: LmStudioModel, loadResult: LmStudioLoadResponse): ResolvedModelMetadata {
+function metadataAfterLoad(
+  model: LmStudioModel,
+  loadResult: LmStudioLoadResponse,
+): ResolvedModelMetadata {
   const loadedInstance: LmStudioLoadedInstance = {
     id: loadResult.instance_id,
     config: {
@@ -173,10 +181,13 @@ function metadataAfterLoad(model: LmStudioModel, loadResult: LmStudioLoadRespons
         : {}),
     },
   };
-  return metadataFromLoadResult({
-    ...model,
-    loaded_instances: [loadedInstance],
-  }, loadResult);
+  return metadataFromLoadResult(
+    {
+      ...model,
+      loaded_instances: [loadedInstance],
+    },
+    loadResult,
+  );
 }
 
 async function unloadLoadedInstances(opts: {
@@ -238,7 +249,11 @@ export async function prepareLmStudioModelMetadataForInference(opts: {
     };
   }
 
-  if (loadedInstance && requestedContextLength !== undefined && requestedContextLength !== currentContextLength) {
+  if (
+    loadedInstance &&
+    requestedContextLength !== undefined &&
+    requestedContextLength !== currentContextLength
+  ) {
     if (provider.reloadOnContextMismatch === false) {
       opts.log?.(
         `[lmstudio] requested context length ${requestedContextLength} differs from loaded ${currentContextLength} for ${requestedModelId}; reusing the existing load because reloadOnContextMismatch=false.`,
@@ -287,7 +302,9 @@ export async function prepareLmStudioModelMetadataForInference(opts: {
   }
 
   if (!loadedInstance && provider.autoLoad) {
-    opts.log?.(`[lmstudio] loading ${requestedModelId} before inference to capture the active context window.`);
+    opts.log?.(
+      `[lmstudio] loading ${requestedModelId} before inference to capture the active context window.`,
+    );
     const loadResult = await loadLmStudioModel({
       baseUrl: provider.baseUrl,
       apiKey: provider.apiKey,
@@ -312,10 +329,7 @@ export async function prepareLmStudioModelMetadataForInference(opts: {
   };
 }
 
-export function lmStudioCatalogStateMessage(opts: {
-  error?: unknown;
-  baseUrl: string;
-}): string {
+export function lmStudioCatalogStateMessage(opts: { error?: unknown; baseUrl: string }): string {
   if (!opts.error) return "";
   if (isLmStudioError(opts.error)) {
     return opts.error.message;

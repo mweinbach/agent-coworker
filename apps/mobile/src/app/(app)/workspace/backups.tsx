@@ -39,10 +39,14 @@ export default function BackupsScreen() {
   };
 
   const handleRestoreOriginal = (targetSessionId: string) => {
-    Alert.alert("Restore original workspace?", "This restores the original snapshot instead of a checkpoint.", [
-      { text: "Cancel", style: "cancel" },
-      { text: "Restore", onPress: () => void restoreBackup(targetSessionId) },
-    ]);
+    Alert.alert(
+      "Restore original workspace?",
+      "This restores the original snapshot instead of a checkpoint.",
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Restore", onPress: () => void restoreBackup(targetSessionId) },
+      ],
+    );
   };
 
   const handleDelete = (targetSessionId: string, checkpointId: string) => {
@@ -57,10 +61,14 @@ export default function BackupsScreen() {
   };
 
   const handleDeleteEntry = (targetSessionId: string) => {
-    Alert.alert("Delete backup entry?", "This removes the original snapshot and all checkpoints for this session.", [
-      { text: "Cancel", style: "cancel" },
-      { text: "Delete", style: "destructive", onPress: () => void deleteEntry(targetSessionId) },
-    ]);
+    Alert.alert(
+      "Delete backup entry?",
+      "This removes the original snapshot and all checkpoints for this session.",
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Delete", style: "destructive", onPress: () => void deleteEntry(targetSessionId) },
+      ],
+    );
   };
 
   if (!isConnected) {
@@ -79,7 +87,8 @@ export default function BackupsScreen() {
     <Screen scroll contentStyle={{ gap: 18 }}>
       <SectionCard title="Backup" description={workspacePath ?? "Workspace backup metadata"}>
         <Text selectable style={{ color: theme.textSecondary, fontSize: 14, lineHeight: 21 }}>
-          Create checkpoints, inspect backup deltas, restore the original snapshot, or remove stale backup entries.
+          Create checkpoints, inspect backup deltas, restore the original snapshot, or remove stale
+          backup entries.
         </Text>
       </SectionCard>
 
@@ -112,7 +121,12 @@ export default function BackupsScreen() {
             key={backup.targetSessionId}
             title={backup.title ?? `Session ${backup.targetSessionId.slice(0, 8)}`}
             description={`${backup.checkpoints.length} checkpoints · ${backup.lifecycle} · ${backup.status}`}
-            action={<StatusPill label={backup.status} tone={backup.status === "failed" ? "danger" : "primary"} />}
+            action={
+              <StatusPill
+                label={backup.status}
+                tone={backup.status === "failed" ? "danger" : "primary"}
+              />
+            }
           >
             <View style={{ gap: 8 }}>
               <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
@@ -127,7 +141,9 @@ export default function BackupsScreen() {
                     paddingVertical: 8,
                   })}
                 >
-                  <Text style={{ color: theme.primaryText, fontSize: 12, fontWeight: "700" }}>Checkpoint</Text>
+                  <Text style={{ color: theme.primaryText, fontSize: 12, fontWeight: "700" }}>
+                    Checkpoint
+                  </Text>
                 </Pressable>
                 <Pressable
                   onPress={() => handleRestoreOriginal(backup.targetSessionId)}
@@ -140,7 +156,9 @@ export default function BackupsScreen() {
                     paddingVertical: 8,
                   })}
                 >
-                  <Text style={{ color: theme.text, fontSize: 12, fontWeight: "700" }}>Restore original</Text>
+                  <Text style={{ color: theme.text, fontSize: 12, fontWeight: "700" }}>
+                    Restore original
+                  </Text>
                 </Pressable>
                 <Pressable
                   onPress={() => handleDeleteEntry(backup.targetSessionId)}
@@ -153,7 +171,9 @@ export default function BackupsScreen() {
                     paddingVertical: 8,
                   })}
                 >
-                  <Text style={{ color: theme.danger, fontSize: 12, fontWeight: "700" }}>Delete entry</Text>
+                  <Text style={{ color: theme.danger, fontSize: 12, fontWeight: "700" }}>
+                    Delete entry
+                  </Text>
                 </Pressable>
               </View>
 
@@ -171,7 +191,14 @@ export default function BackupsScreen() {
                       paddingVertical: 10,
                     }}
                   >
-                    <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                    <View
+                      style={{
+                        flexDirection: "row",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        gap: 8,
+                      }}
+                    >
                       <View style={{ flex: 1, gap: 2 }}>
                         <Text style={{ color: theme.text, fontSize: 13, fontWeight: "600" }}>
                           Checkpoint {cp.index} · {cp.trigger}
@@ -180,7 +207,10 @@ export default function BackupsScreen() {
                           {cp.createdAt} · {cp.patchBytes.toLocaleString()} bytes
                         </Text>
                       </View>
-                      <StatusPill label={cp.changed ? "changed" : "no changes"} tone={cp.changed ? "warning" : "neutral"} />
+                      <StatusPill
+                        label={cp.changed ? "changed" : "no changes"}
+                        tone={cp.changed ? "warning" : "neutral"}
+                      />
                     </View>
 
                     <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
@@ -193,12 +223,16 @@ export default function BackupsScreen() {
                           paddingVertical: 5,
                         })}
                       >
-                        <Text style={{ color: theme.primaryText, fontSize: 12, fontWeight: "600" }}>Restore</Text>
+                        <Text style={{ color: theme.primaryText, fontSize: 12, fontWeight: "600" }}>
+                          Restore
+                        </Text>
                       </Pressable>
                       <Pressable
                         onPress={() => {
                           const checkpointKey = `${backup.targetSessionId}:${cp.id}`;
-                          setExpandedCheckpointKey((state) => state === checkpointKey ? null : checkpointKey);
+                          setExpandedCheckpointKey((state) =>
+                            state === checkpointKey ? null : checkpointKey,
+                          );
                           if (!deltasByCheckpointKey[checkpointKey]) {
                             void fetchDelta(backup.targetSessionId, cp.id);
                           }
@@ -213,7 +247,9 @@ export default function BackupsScreen() {
                         })}
                       >
                         <Text style={{ color: theme.text, fontSize: 12, fontWeight: "600" }}>
-                          {expandedCheckpointKey === `${backup.targetSessionId}:${cp.id}` ? "Hide delta" : "Inspect delta"}
+                          {expandedCheckpointKey === `${backup.targetSessionId}:${cp.id}`
+                            ? "Hide delta"
+                            : "Inspect delta"}
                         </Text>
                       </Pressable>
                       <Pressable
@@ -227,12 +263,15 @@ export default function BackupsScreen() {
                           paddingVertical: 5,
                         })}
                       >
-                        <Text style={{ color: theme.danger, fontSize: 12, fontWeight: "600" }}>Delete</Text>
+                        <Text style={{ color: theme.danger, fontSize: 12, fontWeight: "600" }}>
+                          Delete
+                        </Text>
                       </Pressable>
                     </View>
                   </View>
 
-                  {expandedCheckpointKey === `${backup.targetSessionId}:${cp.id}` && deltasByCheckpointKey[`${backup.targetSessionId}:${cp.id}`] ? (
+                  {expandedCheckpointKey === `${backup.targetSessionId}:${cp.id}` &&
+                  deltasByCheckpointKey[`${backup.targetSessionId}:${cp.id}`] ? (
                     <View
                       style={{
                         gap: 6,
@@ -246,13 +285,27 @@ export default function BackupsScreen() {
                       }}
                     >
                       <Text style={{ color: theme.text, fontSize: 13, fontWeight: "700" }}>
-                        Delta · +{deltasByCheckpointKey[`${backup.targetSessionId}:${cp.id}`].counts.added} / ~{deltasByCheckpointKey[`${backup.targetSessionId}:${cp.id}`].counts.modified} / -{deltasByCheckpointKey[`${backup.targetSessionId}:${cp.id}`].counts.deleted}
+                        Delta · +
+                        {deltasByCheckpointKey[`${backup.targetSessionId}:${cp.id}`].counts.added} /
+                        ~
+                        {
+                          deltasByCheckpointKey[`${backup.targetSessionId}:${cp.id}`].counts
+                            .modified
+                        }{" "}
+                        / -
+                        {deltasByCheckpointKey[`${backup.targetSessionId}:${cp.id}`].counts.deleted}
                       </Text>
-                      {deltasByCheckpointKey[`${backup.targetSessionId}:${cp.id}`].files.slice(0, 8).map((file) => (
-                        <Text key={file.path} selectable style={{ color: theme.textSecondary, fontSize: 12 }}>
-                          {file.change} · {file.path}
-                        </Text>
-                      ))}
+                      {deltasByCheckpointKey[`${backup.targetSessionId}:${cp.id}`].files
+                        .slice(0, 8)
+                        .map((file) => (
+                          <Text
+                            key={file.path}
+                            selectable
+                            style={{ color: theme.textSecondary, fontSize: 12 }}
+                          >
+                            {file.change} · {file.path}
+                          </Text>
+                        ))}
                     </View>
                   ) : null}
                 </View>
@@ -261,7 +314,10 @@ export default function BackupsScreen() {
           </SectionCard>
         ))
       ) : !loading ? (
-        <SectionCard title="No backups" description="No session backups found for this workspace." />
+        <SectionCard
+          title="No backups"
+          description="No session backups found for this workspace."
+        />
       ) : null}
     </Screen>
   );

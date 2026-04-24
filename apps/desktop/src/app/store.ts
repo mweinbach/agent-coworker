@@ -1,10 +1,13 @@
 import { create } from "zustand";
-
-import { createAppActions } from "./store.actions";
-import { buildCachedDesktopStateSeed } from "./store.actions/bootstrap";
 import { loadDesktopStateCacheRaw } from "./localStateCache";
 import { DEFAULT_PROVIDER_UI_STATE } from "./providerUiState";
-import { createDefaultUpdaterState, type AppStoreDataState, type AppStoreState } from "./store.helpers";
+import { createAppActions } from "./store.actions";
+import { buildCachedDesktopStateSeed } from "./store.actions/bootstrap";
+import {
+  type AppStoreDataState,
+  type AppStoreState,
+  createDefaultUpdaterState,
+} from "./store.helpers";
 import { DEFAULT_RESEARCH_SETTINGS } from "./types";
 
 const initialState: AppStoreDataState = {

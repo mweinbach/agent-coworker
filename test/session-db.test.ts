@@ -453,10 +453,20 @@ describe("sessionDb", () => {
         .query("UPDATE sessions SET provider = ? WHERE session_id IN (?, ?)")
         .run("future-local", "root-legacy", "child-legacy");
 
-      expect(db.listSessions().map((session) => session.sessionId).sort()).toEqual(["root-valid"]);
+      expect(
+        db
+          .listSessions()
+          .map((session) => session.sessionId)
+          .sort(),
+      ).toEqual(["root-valid"]);
       expect(db.getSessionRecord("root-valid")?.provider).toBe("openai");
       expect(db.getSessionRecord("root-legacy")).toBeNull();
-      expect(db.listAgentSessions("root-valid").map((agent) => agent.agentId).sort()).toEqual(["child-valid"]);
+      expect(
+        db
+          .listAgentSessions("root-valid")
+          .map((agent) => agent.agentId)
+          .sort(),
+      ).toEqual(["child-valid"]);
       expect(db.getSessionRecord("child-legacy")).toBeNull();
     } finally {
       db.close();
@@ -706,7 +716,9 @@ describe("sessionDb", () => {
 
       expect(db.listThreadJournalEvents("thread-1")).toHaveLength(1_005);
       expect(db.listThreadJournalEvents("thread-1", { limit: 10 })).toHaveLength(10);
-      expect(db.listThreadJournalEvents("thread-1").at(-1)?.payload).toMatchObject({ delta: "chunk-1004" });
+      expect(db.listThreadJournalEvents("thread-1").at(-1)?.payload).toMatchObject({
+        delta: "chunk-1004",
+      });
     } finally {
       db.close();
     }
@@ -779,12 +791,16 @@ describe("sessionDb", () => {
       });
       await db.persistSessionSnapshot("workspace-a", persistedSnapshot);
 
-      expect(db.listSessions({ workingDirectory: "/tmp/workspace-a" }).map((session) => session.sessionId)).toEqual([
-        "workspace-a",
-      ]);
-      expect(db.listSessions({ workingDirectory: "/tmp/workspace-b" }).map((session) => session.sessionId)).toEqual([
-        "workspace-b",
-      ]);
+      expect(
+        db
+          .listSessions({ workingDirectory: "/tmp/workspace-a" })
+          .map((session) => session.sessionId),
+      ).toEqual(["workspace-a"]);
+      expect(
+        db
+          .listSessions({ workingDirectory: "/tmp/workspace-b" })
+          .map((session) => session.sessionId),
+      ).toEqual(["workspace-b"]);
       expect(db.getSessionSnapshot("workspace-a")).toEqual(persistedSnapshot);
       expect(db.getSessionSnapshot("workspace-b")).toBeNull();
     } finally {
@@ -826,8 +842,12 @@ describe("sessionDb", () => {
           costTracker: null,
         },
       });
-      expect(db.listSessions({ workingDirectory: path.join(canonical, ".") }).map((s) => s.sessionId)).toEqual(["wd-norm"]);
-      expect(db.listSessions({ workingDirectory: `${canonical}${path.sep}` }).map((s) => s.sessionId)).toEqual(["wd-norm"]);
+      expect(
+        db.listSessions({ workingDirectory: path.join(canonical, ".") }).map((s) => s.sessionId),
+      ).toEqual(["wd-norm"]);
+      expect(
+        db.listSessions({ workingDirectory: `${canonical}${path.sep}` }).map((s) => s.sessionId),
+      ).toEqual(["wd-norm"]);
     } finally {
       db.close();
     }
@@ -1076,7 +1096,11 @@ describe("sessionDb", () => {
       }),
       "utf-8",
     );
-    await fs.writeFile(path.join(paths.sessionsDir, "legacy-bad-json.json"), "not valid json {{{", "utf-8");
+    await fs.writeFile(
+      path.join(paths.sessionsDir, "legacy-bad-json.json"),
+      "not valid json {{{",
+      "utf-8",
+    );
     await fs.writeFile(
       path.join(paths.sessionsDir, "legacy-bad-structure.json"),
       JSON.stringify({ version: 1, sessionId: "missing-fields" }),

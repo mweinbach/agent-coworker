@@ -3,25 +3,23 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
-
-import type { AgentConfig } from "../src/types";
-import type { ToolContext } from "../src/tools/context";
-
-import { createReadTool } from "../src/tools/read";
-import { createWriteTool } from "../src/tools/write";
-import { createEditTool } from "../src/tools/edit";
+import { getAiCoworkerPaths, writeConnectionStore } from "../src/connect";
+import { createAskTool } from "../src/tools/ask";
 import { __internal as bashInternal, createBashTool } from "../src/tools/bash";
+import type { ToolContext } from "../src/tools/context";
+import { createEditTool } from "../src/tools/edit";
 import { createGlobTool } from "../src/tools/glob";
 import { createGrepTool } from "../src/tools/grep";
-import { createWebSearchTool } from "../src/tools/webSearch";
-import { __internal as webFetchInternal, createWebFetchTool } from "../src/tools/webFetch";
-import { createAskTool } from "../src/tools/ask";
-import { createTodoWriteTool, currentTodos, onTodoChange } from "../src/tools/todoWrite";
-import { createNotebookEditTool } from "../src/tools/notebookEdit";
-import { createSkillTool } from "../src/tools/skill";
-import { createMemoryTool } from "../src/tools/memory";
 import { createTools, listSessionToolNames } from "../src/tools/index";
-import { getAiCoworkerPaths, writeConnectionStore } from "../src/connect";
+import { createMemoryTool } from "../src/tools/memory";
+import { createNotebookEditTool } from "../src/tools/notebookEdit";
+import { createReadTool } from "../src/tools/read";
+import { createSkillTool } from "../src/tools/skill";
+import { createTodoWriteTool, currentTodos, onTodoChange } from "../src/tools/todoWrite";
+import { createWebFetchTool, __internal as webFetchInternal } from "../src/tools/webFetch";
+import { createWebSearchTool } from "../src/tools/webSearch";
+import { createWriteTool } from "../src/tools/write";
+import type { AgentConfig } from "../src/types";
 import { __internal as webSafetyInternal } from "../src/utils/webSafety";
 
 // ---------------------------------------------------------------------------
@@ -147,7 +145,7 @@ describe("read tool", () => {
     const dir = await tmpDir();
     const t: any = createReadTool(makeCtx(dir));
     await expect(
-      t.execute({ filePath: path.join(dir, "nope.txt"), limit: 2000 })
+      t.execute({ filePath: path.join(dir, "nope.txt"), limit: 2000 }),
     ).rejects.toThrow();
   });
 
@@ -275,7 +273,7 @@ describe("write tool", () => {
 
     const t: any = createWriteTool(makeCtx(dir));
     await expect(
-      t.execute({ filePath: path.join(outsideDir, "bad.txt"), content: "nope" })
+      t.execute({ filePath: path.join(outsideDir, "bad.txt"), content: "nope" }),
     ).rejects.toThrow(/blocked/i);
   });
 
@@ -320,7 +318,7 @@ describe("write tool", () => {
 
     const t: any = createWriteTool(makeCtx(dir));
     await expect(
-      t.execute({ filePath: path.join(link, "blocked.txt"), content: "nope" })
+      t.execute({ filePath: path.join(link, "blocked.txt"), content: "nope" }),
     ).rejects.toThrow(/blocked/i);
   });
 });
@@ -354,7 +352,7 @@ describe("edit tool", () => {
 
     const t: any = createEditTool(makeCtx(dir));
     await expect(
-      t.execute({ filePath: p, oldString: "missing", newString: "x", replaceAll: false })
+      t.execute({ filePath: p, oldString: "missing", newString: "x", replaceAll: false }),
     ).rejects.toThrow(/oldString not found/);
   });
 
@@ -365,7 +363,7 @@ describe("edit tool", () => {
 
     const t: any = createEditTool(makeCtx(dir));
     await expect(
-      t.execute({ filePath: p, oldString: "foo", newString: "bar", replaceAll: false })
+      t.execute({ filePath: p, oldString: "foo", newString: "bar", replaceAll: false }),
     ).rejects.toThrow(/found 2 times/);
   });
 
@@ -404,7 +402,7 @@ describe("edit tool", () => {
 
     const t: any = createEditTool(makeCtx(dir));
     await expect(
-      t.execute({ filePath: p, oldString: "", newString: "new", replaceAll: false })
+      t.execute({ filePath: p, oldString: "", newString: "new", replaceAll: false }),
     ).rejects.toThrow("oldString cannot be empty");
   });
 
@@ -416,7 +414,7 @@ describe("edit tool", () => {
     const t: any = createEditTool(makeCtx(dir));
     // Lowercase "hello" should not match "Hello"
     await expect(
-      t.execute({ filePath: p, oldString: "hello", newString: "hi", replaceAll: false })
+      t.execute({ filePath: p, oldString: "hello", newString: "hi", replaceAll: false }),
     ).rejects.toThrow(/oldString not found/);
   });
 
@@ -428,7 +426,7 @@ describe("edit tool", () => {
 
     const t: any = createEditTool(makeCtx(dir));
     await expect(
-      t.execute({ filePath: p, oldString: "content", newString: "new", replaceAll: false })
+      t.execute({ filePath: p, oldString: "content", newString: "new", replaceAll: false }),
     ).rejects.toThrow(/blocked/i);
   });
 
@@ -450,7 +448,7 @@ describe("edit tool", () => {
         oldString: "outside",
         newString: "new",
         replaceAll: false,
-      })
+      }),
     ).rejects.toThrow(/blocked/i);
   });
 
@@ -488,7 +486,7 @@ describe("edit tool", () => {
 
     const t: any = createEditTool(makeCtx(dir));
     await expect(
-      t.execute({ filePath: p, oldString: "aaa", newString: "bbb", replaceAll: false })
+      t.execute({ filePath: p, oldString: "aaa", newString: "bbb", replaceAll: false }),
     ).rejects.toThrow(/found 3 times/);
   });
 });
@@ -932,7 +930,7 @@ describe("grep tool", () => {
     await fs.writeFile(
       path.join(dir, "haystack.txt"),
       "needle in the haystack\nno match here\nneedle again\n",
-      "utf-8"
+      "utf-8",
     );
 
     const t: any = createGrepTool(makeCtx(dir), {
@@ -962,7 +960,7 @@ describe("grep tool", () => {
         pattern: "secret",
         path: outsideDir,
         caseSensitive: true,
-      })
+      }),
     ).rejects.toThrow(/blocked/i);
   });
 
@@ -1227,7 +1225,7 @@ describe("webSearch tool", () => {
           model: "gemini-3-flash-preview",
           preferredChildModel: "gemini-3-flash-preview",
         }),
-      })
+      }),
     );
     expect(t.type).toBeUndefined();
     expect(typeof t.execute).toBe("function");
@@ -1244,7 +1242,7 @@ describe("webSearch tool", () => {
           model: "gpt-5.2",
           preferredChildModel: "gpt-5.2",
         }),
-      })
+      }),
     );
 
     expect(t.description).toContain("EXA_API_KEY");
@@ -1265,7 +1263,7 @@ describe("webSearch tool", () => {
               model: "gemini-3.1-pro-preview",
               preferredChildModel: "gemini-3.1-pro-preview",
             }),
-          })
+          }),
         );
         const out: string = await t.execute({ query: "test", maxResults: 1 });
         expect(out).toContain("set EXA_API_KEY");
@@ -1346,7 +1344,7 @@ describe("webSearch tool", () => {
             },
           ],
         }),
-        { status: 200, headers: { "Content-Type": "application/json" } }
+        { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }) as any;
 
@@ -1401,7 +1399,7 @@ describe("webSearch tool", () => {
           makeCtx(dir, {
             turnUserPrompt: "find recent bun releases",
             getTurnUserPrompt: () => "make it concise",
-          })
+          }),
         );
         await t.execute({});
         expect((globalThis.fetch as any).mock.calls).toHaveLength(1);
@@ -1439,7 +1437,7 @@ describe("webSearch tool", () => {
             },
           ],
         }),
-        { status: 200, headers: { "Content-Type": "application/json" } }
+        { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }) as any;
 
@@ -1499,7 +1497,7 @@ describe("webSearch tool", () => {
             },
           ],
         }),
-        { status: 200, headers: { "Content-Type": "application/json" } }
+        { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }) as any;
 
@@ -1551,7 +1549,7 @@ describe("webFetch tool", () => {
         .replace(/<template\b[\s\S]*?<\/template>/gi, " ")
         .replace(/<[^>]+>/g, " ")
         .replace(/\s+/g, " ")
-        .trim()
+        .trim(),
     );
     webFetchInternal.setMaxDownloadBytes(50 * 1024 * 1024);
     webFetchInternal.setResponseTimeoutMs(5_000);
@@ -1564,14 +1562,17 @@ describe("webFetch tool", () => {
   });
 
   const createStreamingResponse = (bytes: Uint8Array, init: ResponseInit, chunkSize = 4) => {
-    const response = new Response(new ReadableStream<Uint8Array>({
-      start(controller) {
-        for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-          controller.enqueue(bytes.slice(offset, offset + chunkSize));
-        }
-        controller.close();
-      },
-    }), init);
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+            controller.enqueue(bytes.slice(offset, offset + chunkSize));
+          }
+          controller.close();
+        },
+      }),
+      init,
+    );
     Object.defineProperty(response, "arrayBuffer", {
       value: async () => {
         throw new Error("should not buffer direct downloads");
@@ -1630,16 +1631,16 @@ describe("webFetch tool", () => {
           {
             status: 200,
             headers: { "Content-Type": "application/json" },
-          }
+          },
         );
       }
 
       return new Response(
         "<!doctype html><html><head><style>.bad{display:none}</style><script>window.hacked = true</script></head><body><main><article><h1>Hello world</h1><p>Local HTML should win.</p></article></main></body></html>",
         {
-        status: 200,
-        headers: { "Content-Type": "text/html" },
-      }
+          status: 200,
+          headers: { "Content-Type": "text/html" },
+        },
       );
     }) as any;
 
@@ -1674,7 +1675,7 @@ describe("webFetch tool", () => {
         const body = JSON.parse(String(init?.body));
         expect(body.urls).toEqual(["https://example.com/"]);
         expect(body.objective).toBe(
-          "Extract the most relevant content from https://example.com/ for browsing and follow-up reading."
+          "Extract the most relevant content from https://example.com/ for browsing and follow-up reading.",
         );
         expect(body.excerpts).toEqual({ max_chars_per_result: 4000, max_chars_total: 4000 });
         expect(body.full_content).toBe(false);
@@ -1692,7 +1693,7 @@ describe("webFetch tool", () => {
           {
             status: 200,
             headers: { "Content-Type": "application/json" },
-          }
+          },
         );
       }
 
@@ -1701,7 +1702,7 @@ describe("webFetch tool", () => {
         {
           status: 200,
           headers: { "Content-Type": "text/html" },
-        }
+        },
       );
     }) as any;
 
@@ -1715,7 +1716,7 @@ describe("webFetch tool", () => {
               },
             },
           }),
-        })
+        }),
       );
       const out: string = await t.execute({ url: "https://example.com", maxLength: 50000 });
       expect(out).toContain("Hello world");
@@ -1744,16 +1745,22 @@ describe("webFetch tool", () => {
         exaCalls += 1;
       }
 
-      return new Response("<html><body><article><h1>Offline page</h1><p>Rendered locally.</p></article></body></html>", {
-        status: 200,
-        headers: { "Content-Type": "text/html" },
-      });
+      return new Response(
+        "<html><body><article><h1>Offline page</h1><p>Rendered locally.</p></article></body></html>",
+        {
+          status: 200,
+          headers: { "Content-Type": "text/html" },
+        },
+      );
     }) as any;
 
     try {
       await withAuthHome(dir, async () => {
         const t: any = createWebFetchTool(makeCtx(dir));
-        const out: string = await t.execute({ url: "https://example.com/fallback", maxLength: 50000 });
+        const out: string = await t.execute({
+          url: "https://example.com/fallback",
+          maxLength: 50000,
+        });
         expect(out).toContain("Offline page");
         expect(out).toContain("Rendered locally.");
         expect(exaCalls).toBe(0);
@@ -1781,10 +1788,13 @@ describe("webFetch tool", () => {
         });
       }
 
-      return new Response("<html><body><article><h1>Fallback page</h1><p>Use local content.</p></article></body></html>", {
-        status: 200,
-        headers: { "Content-Type": "text/html" },
-      });
+      return new Response(
+        "<html><body><article><h1>Fallback page</h1><p>Use local content.</p></article></body></html>",
+        {
+          status: 200,
+          headers: { "Content-Type": "text/html" },
+        },
+      );
     }) as any;
 
     try {
@@ -1820,7 +1830,10 @@ describe("webFetch tool", () => {
 
     try {
       const t: any = createWebFetchTool(makeCtx(dir));
-      const out: string = await t.execute({ url: "https://example.com/data.json", maxLength: 50000 });
+      const out: string = await t.execute({
+        url: "https://example.com/data.json",
+        maxLength: 50000,
+      });
       expect(out).toBe('{"ok":true,"source":"origin"}');
       expect(exaCalls).toBe(0);
     } finally {
@@ -1857,7 +1870,9 @@ describe("webFetch tool", () => {
             status: 200,
             headers: {
               "Content-Type": testCase.contentType,
-              ...(testCase.contentDisposition ? { "Content-Disposition": testCase.contentDisposition } : {}),
+              ...(testCase.contentDisposition
+                ? { "Content-Disposition": testCase.contentDisposition }
+                : {}),
             },
           });
         }) as any;
@@ -1915,7 +1930,10 @@ describe("webFetch tool", () => {
 
     try {
       const t: any = createWebFetchTool(makeCtx(dir));
-      const out: string = await t.execute({ url: "https://example.com/docs/README.md", maxLength: 50000 });
+      const out: string = await t.execute({
+        url: "https://example.com/docs/README.md",
+        maxLength: 50000,
+      });
       const downloadedPath = path.join(dir, "Downloads", "README.md");
 
       expect(out).toBe(`File downloaded ${downloadedPath}`);
@@ -1942,7 +1960,10 @@ describe("webFetch tool", () => {
 
     try {
       const t: any = createWebFetchTool(makeCtx(dir));
-      const out: string = await t.execute({ url: "https://example.com/download", maxLength: 50000 });
+      const out: string = await t.execute({
+        url: "https://example.com/download",
+        maxLength: 50000,
+      });
       const downloadedPath = path.join(dir, "Downloads", "README.md");
 
       expect(out).toBe(`File downloaded ${downloadedPath}`);
@@ -1971,7 +1992,7 @@ describe("webFetch tool", () => {
     try {
       const t: any = createWebFetchTool(makeCtx(dir));
       await expect(
-        t.execute({ url: "https://example.com/reports/bodyless.pdf", maxLength: 50000 })
+        t.execute({ url: "https://example.com/reports/bodyless.pdf", maxLength: 50000 }),
       ).rejects.toThrow(/without a readable body or content-length header/i);
     } finally {
       globalThis.fetch = originalFetch;
@@ -1991,7 +2012,10 @@ describe("webFetch tool", () => {
 
     try {
       const t: any = createWebFetchTool(makeCtx(dir));
-      const out: string = await t.execute({ url: "https://example.com/notes.txt", maxLength: 1000 });
+      const out: string = await t.execute({
+        url: "https://example.com/notes.txt",
+        maxLength: 1000,
+      });
       expect(out.length).toBeLessThanOrEqual(1000);
     } finally {
       globalThis.fetch = originalFetch;
@@ -2008,9 +2032,9 @@ describe("webFetch tool", () => {
 
     try {
       const t: any = createWebFetchTool(makeCtx(dir));
-      await expect(
-        t.execute({ url: "https://example.com/bad", maxLength: 50000 })
-      ).rejects.toThrow("Network error");
+      await expect(t.execute({ url: "https://example.com/bad", maxLength: 50000 })).rejects.toThrow(
+        "Network error",
+      );
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -2019,9 +2043,9 @@ describe("webFetch tool", () => {
   test("blocks localhost/private URLs", async () => {
     const dir = await tmpDir();
     const t: any = createWebFetchTool(makeCtx(dir));
-    await expect(
-      t.execute({ url: "http://127.0.0.1/internal", maxLength: 50000 })
-    ).rejects.toThrow(/private\/internal host/i);
+    await expect(t.execute({ url: "http://127.0.0.1/internal", maxLength: 50000 })).rejects.toThrow(
+      /private\/internal host/i,
+    );
   });
 
   test("rejects redirect to blocked private host", async () => {
@@ -2037,9 +2061,9 @@ describe("webFetch tool", () => {
 
     try {
       const t: any = createWebFetchTool(makeCtx(dir));
-      await expect(
-        t.execute({ url: "https://example.com", maxLength: 50000 })
-      ).rejects.toThrow(/private\/internal host/i);
+      await expect(t.execute({ url: "https://example.com", maxLength: 50000 })).rejects.toThrow(
+        /private\/internal host/i,
+      );
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -2059,7 +2083,10 @@ describe("webFetch tool", () => {
 
     try {
       const t: any = createWebFetchTool(makeCtx(dir));
-      const out: string = await t.execute({ url: "https://example.com/reports/q1-summary.pdf", maxLength: 50000 });
+      const out: string = await t.execute({
+        url: "https://example.com/reports/q1-summary.pdf",
+        maxLength: 50000,
+      });
       const downloadedPath = path.join(dir, "Downloads", "q1-summary.pdf");
 
       expect(out).toBe(`File downloaded ${downloadedPath}`);
@@ -2075,22 +2102,25 @@ describe("webFetch tool", () => {
 
     const originalFetch = globalThis.fetch;
     globalThis.fetch = mock(async () => {
-      return new Response(new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(Buffer.from("12345"));
-          controller.enqueue(Buffer.from("67890"));
-          controller.close();
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(Buffer.from("12345"));
+            controller.enqueue(Buffer.from("67890"));
+            controller.close();
+          },
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/pdf" },
         },
-      }), {
-        status: 200,
-        headers: { "Content-Type": "application/pdf" },
-      });
+      );
     }) as any;
 
     try {
       const t: any = createWebFetchTool(makeCtx(dir));
       await expect(
-        t.execute({ url: "https://example.com/reports/too-large.pdf", maxLength: 50000 })
+        t.execute({ url: "https://example.com/reports/too-large.pdf", maxLength: 50000 }),
       ).rejects.toThrow(/8 bytes limit/i);
       expect(await fs.readdir(path.join(dir, "Downloads"))).toEqual([]);
     } finally {
@@ -2132,7 +2162,10 @@ describe("webFetch tool", () => {
         }) as any;
 
         const t: any = createWebFetchTool(makeCtx(dir));
-        const out: string = await t.execute({ url: "https://example.com/download", maxLength: 50000 });
+        const out: string = await t.execute({
+          url: "https://example.com/download",
+          maxLength: 50000,
+        });
         const downloadedPath = path.join(dir, "Downloads", testCase.fileName);
 
         expect(out).toBe(`File downloaded ${downloadedPath}`);
@@ -2194,7 +2227,10 @@ describe("webFetch tool", () => {
         }) as any;
 
         const t: any = createWebFetchTool(makeCtx(dir));
-        const out: string = await t.execute({ url: "https://example.com/download", maxLength: 50000 });
+        const out: string = await t.execute({
+          url: "https://example.com/download",
+          maxLength: 50000,
+        });
         const downloadedPath = path.join(dir, "Downloads", fileName);
 
         expect(out).toBe(`File downloaded ${downloadedPath}`);
@@ -2222,7 +2258,10 @@ describe("webFetch tool", () => {
 
     try {
       const t: any = createWebFetchTool(makeCtx(dir));
-      const out: string = await t.execute({ url: "https://example.com/download", maxLength: 50000 });
+      const out: string = await t.execute({
+        url: "https://example.com/download",
+        maxLength: 50000,
+      });
       const downloadedPath = path.join(dir, "Downloads", "report.pdf");
 
       expect(out).toBe(`File downloaded ${downloadedPath}`);
@@ -2282,9 +2321,15 @@ describe("webFetch tool", () => {
     );
 
     try {
-      const finalPath = await webFetchInternal.finalizeDownloadedFile(tempPath, downloadDir, "report.pdf");
+      const finalPath = await webFetchInternal.finalizeDownloadedFile(
+        tempPath,
+        downloadDir,
+        "report.pdf",
+      );
       expect(finalPath).toBe(path.join(downloadDir, "report-2.pdf"));
-      expect(await fs.readFile(path.join(downloadDir, "report.pdf"), "utf-8")).toBe("existing payload");
+      expect(await fs.readFile(path.join(downloadDir, "report.pdf"), "utf-8")).toBe(
+        "existing payload",
+      );
       expect(await fs.readFile(finalPath, "utf-8")).toBe("fresh payload");
       await expect(fs.stat(tempPath)).rejects.toThrow();
     } finally {
@@ -2306,7 +2351,7 @@ describe("webFetch tool", () => {
     try {
       const t: any = createWebFetchTool(makeCtx(dir));
       await expect(
-        t.execute({ url: "https://example.com/file.bin", maxLength: 50000 })
+        t.execute({ url: "https://example.com/file.bin", maxLength: 50000 }),
       ).rejects.toThrow(/non-text content type/i);
     } finally {
       globalThis.fetch = originalFetch;
@@ -2429,7 +2474,10 @@ describe("webFetch tool", () => {
 
     try {
       const webFetchTool: any = createWebFetchTool(makeCtx(dir));
-      const out = await webFetchTool.execute({ url: "https://example.com/preview.png", maxLength: 50000 });
+      const out = await webFetchTool.execute({
+        url: "https://example.com/preview.png",
+        maxLength: 50000,
+      });
       const downloadedPath = path.join(dir, "Downloads", "preview.png");
       expect(out).toBe(`File downloaded ${downloadedPath}`);
 
@@ -2460,8 +2508,10 @@ describe("webFetch tool", () => {
         const body = JSON.parse(String(init?.body));
         expect(body.urls).toEqual(["https://example.com/final"]);
         return new Response(
-          JSON.stringify({ results: [{ url: "https://example.com/final", text: "Redirected content" }] }),
-          { status: 200, headers: { "Content-Type": "application/json" } }
+          JSON.stringify({
+            results: [{ url: "https://example.com/final", text: "Redirected content" }],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
         );
       }
 
@@ -2473,16 +2523,19 @@ describe("webFetch tool", () => {
         });
       }
 
-      return new Response("<html><body><article><h1>Redirected page</h1><p>Final local HTML.</p></article></body></html>", {
-        status: 200,
-        headers: { "Content-Type": "text/html" },
-      });
+      return new Response(
+        "<html><body><article><h1>Redirected page</h1><p>Final local HTML.</p></article></body></html>",
+        {
+          status: 200,
+          headers: { "Content-Type": "text/html" },
+        },
+      );
     }) as any;
 
     try {
       const t: any = createWebFetchTool(makeCtx(dir));
       await expect(
-        t.execute({ url: "https://example.com/start", maxLength: 50000 })
+        t.execute({ url: "https://example.com/start", maxLength: 50000 }),
       ).resolves.toContain("Redirected page");
     } finally {
       globalThis.fetch = originalFetch;
@@ -2535,7 +2588,7 @@ describe("webFetch tool", () => {
     try {
       const t: any = createWebFetchTool(makeCtx(dir));
       await expect(
-        t.execute({ url: "https://example.com/missing", maxLength: 50000 })
+        t.execute({ url: "https://example.com/missing", maxLength: 50000 }),
       ).rejects.toThrow(/webFetch failed: 404/i);
     } finally {
       globalThis.fetch = originalFetch;
@@ -2551,25 +2604,20 @@ describe("webFetch tool", () => {
     globalThis.fetch = mock(async (_input: unknown, init?: RequestInit) => {
       const signal = init?.signal;
       return await new Promise<Response>((_resolve, reject) => {
-        signal?.addEventListener(
-          "abort",
-          () => reject(new Error("fetch aborted")),
-          { once: true },
-        );
+        signal?.addEventListener("abort", () => reject(new Error("fetch aborted")), { once: true });
       });
     }) as typeof fetch;
 
     try {
       const t: any = createWebFetchTool(makeCtx(dir));
       await expect(
-        t.execute({ url: "https://example.com/hangs", maxLength: 50000 })
+        t.execute({ url: "https://example.com/hangs", maxLength: 50000 }),
       ).rejects.toThrow(/timed out waiting for an initial response after 25ms/i);
     } finally {
       globalThis.fetch = originalFetch;
       webFetchInternal.setResponseTimeoutMs(5_000);
     }
   });
-
 });
 
 // ---------------------------------------------------------------------------
@@ -2628,7 +2676,7 @@ describe("ask tool", () => {
     await expect(
       t.execute({
         questions: [{ question: "   " }],
-      })
+      }),
     ).rejects.toThrow();
     expect(askFn).not.toHaveBeenCalled();
   });
@@ -2759,14 +2807,12 @@ describe("todoWrite tool", () => {
 
   test("calls updateTodos callback when provided", async () => {
     const dir = await tmpDir();
-    const updateFn = mock((_todos: any) => { });
+    const updateFn = mock((_todos: any) => {});
     const ctx = makeCtx(dir);
     ctx.updateTodos = updateFn;
 
     const t: any = createTodoWriteTool(ctx);
-    const todos = [
-      { content: "Step 1", status: "completed" as const, activeForm: "Stepping" },
-    ];
+    const todos = [{ content: "Step 1", status: "completed" as const, activeForm: "Stepping" }];
     await t.execute({ todos });
     expect(updateFn).toHaveBeenCalledTimes(1);
     expect(updateFn).toHaveBeenCalledWith(todos);
@@ -2799,16 +2845,12 @@ describe("todoWrite tool", () => {
 
     // First call
     await t.execute({
-      todos: [
-        { content: "Old task", status: "pending" as const, activeForm: "Old tasking" },
-      ],
+      todos: [{ content: "Old task", status: "pending" as const, activeForm: "Old tasking" }],
     });
 
     // Second call with different todos
     const res: string = await t.execute({
-      todos: [
-        { content: "New task", status: "in_progress" as const, activeForm: "New tasking" },
-      ],
+      todos: [{ content: "New task", status: "in_progress" as const, activeForm: "New tasking" }],
     });
     expect(res).toContain("[in_progress] New task");
     expect(res).not.toContain("Old task");
@@ -2834,7 +2876,7 @@ describe("notebookEdit tool", () => {
         })),
       },
       null,
-      1
+      1,
     );
   }
 
@@ -2846,7 +2888,7 @@ describe("notebookEdit tool", () => {
       makeNotebook([
         { cell_type: "code", source: ["print('old')\n"] },
         { cell_type: "markdown", source: ["# Title\n"] },
-      ])
+      ]),
     );
 
     const t: any = createNotebookEditTool(makeCtx(dir));
@@ -2870,7 +2912,7 @@ describe("notebookEdit tool", () => {
       makeNotebook([
         { cell_type: "code", source: "print('old')" },
         { cell_type: "markdown", source: ["# Title\n"] },
-      ])
+      ]),
     );
 
     const t: any = createNotebookEditTool(makeCtx(dir));
@@ -2888,10 +2930,7 @@ describe("notebookEdit tool", () => {
   test("inserts new cell", async () => {
     const dir = await tmpDir();
     const p = path.join(dir, "nb.ipynb");
-    await fs.writeFile(
-      p,
-      makeNotebook([{ cell_type: "code", source: ["x = 1\n"] }])
-    );
+    await fs.writeFile(p, makeNotebook([{ cell_type: "code", source: ["x = 1\n"] }]));
 
     const t: any = createNotebookEditTool(makeCtx(dir));
     const res: string = await t.execute({
@@ -2918,7 +2957,7 @@ describe("notebookEdit tool", () => {
         { cell_type: "code", source: ["a = 1\n"] },
         { cell_type: "code", source: ["b = 2\n"] },
         { cell_type: "code", source: ["c = 3\n"] },
-      ])
+      ]),
     );
 
     const t: any = createNotebookEditTool(makeCtx(dir));
@@ -2938,10 +2977,7 @@ describe("notebookEdit tool", () => {
   test("throws on index out of range for replace", async () => {
     const dir = await tmpDir();
     const p = path.join(dir, "nb.ipynb");
-    await fs.writeFile(
-      p,
-      makeNotebook([{ cell_type: "code", source: ["x = 1\n"] }])
-    );
+    await fs.writeFile(p, makeNotebook([{ cell_type: "code", source: ["x = 1\n"] }]));
 
     const t: any = createNotebookEditTool(makeCtx(dir));
     await expect(
@@ -2950,17 +2986,14 @@ describe("notebookEdit tool", () => {
         cellIndex: 5,
         newSource: "won't work",
         editMode: "replace",
-      })
+      }),
     ).rejects.toThrow(/out of range/);
   });
 
   test("rejects non-.ipynb file paths", async () => {
     const dir = await tmpDir();
     const p = path.join(dir, "notebook.json");
-    await fs.writeFile(
-      p,
-      makeNotebook([{ cell_type: "code", source: ["x = 1\n"] }])
-    );
+    await fs.writeFile(p, makeNotebook([{ cell_type: "code", source: ["x = 1\n"] }]));
 
     const t: any = createNotebookEditTool(makeCtx(dir));
     await expect(
@@ -2969,7 +3002,7 @@ describe("notebookEdit tool", () => {
         cellIndex: 0,
         newSource: "x = 2",
         editMode: "replace",
-      })
+      }),
     ).rejects.toThrow(/expected a \.ipynb file/i);
   });
 
@@ -2985,7 +3018,7 @@ describe("notebookEdit tool", () => {
         cellIndex: 0,
         newSource: "x = 2",
         editMode: "replace",
-      })
+      }),
     ).rejects.toThrow(/Invalid notebook JSON/);
   });
 
@@ -2993,10 +3026,7 @@ describe("notebookEdit tool", () => {
     const dir = await tmpDir();
     const outsideDir = await tmpDir();
     const p = path.join(outsideDir, "nb.ipynb");
-    await fs.writeFile(
-      p,
-      makeNotebook([{ cell_type: "code", source: ["x = 1\n"] }])
-    );
+    await fs.writeFile(p, makeNotebook([{ cell_type: "code", source: ["x = 1\n"] }]));
 
     const t: any = createNotebookEditTool(makeCtx(dir));
     await expect(
@@ -3005,7 +3035,7 @@ describe("notebookEdit tool", () => {
         cellIndex: 0,
         newSource: "nope",
         editMode: "replace",
-      })
+      }),
     ).rejects.toThrow(/blocked/i);
   });
 
@@ -3017,7 +3047,7 @@ describe("notebookEdit tool", () => {
     const outsideNotebook = path.join(outsideDir, "outside.ipynb");
     await fs.writeFile(
       outsideNotebook,
-      makeNotebook([{ cell_type: "code", source: ["print('x')\n"] }])
+      makeNotebook([{ cell_type: "code", source: ["print('x')\n"] }]),
     );
 
     const link = path.join(dir, "outside-link");
@@ -3030,17 +3060,14 @@ describe("notebookEdit tool", () => {
         cellIndex: 0,
         newSource: "print('nope')",
         editMode: "replace",
-      })
+      }),
     ).rejects.toThrow(/blocked/i);
   });
 
   test("insert creates code cell by default", async () => {
     const dir = await tmpDir();
     const p = path.join(dir, "nb.ipynb");
-    await fs.writeFile(
-      p,
-      makeNotebook([{ cell_type: "code", source: ["x = 1\n"] }])
-    );
+    await fs.writeFile(p, makeNotebook([{ cell_type: "code", source: ["x = 1\n"] }]));
 
     const t: any = createNotebookEditTool(makeCtx(dir));
     await t.execute({
@@ -3060,10 +3087,7 @@ describe("notebookEdit tool", () => {
   test("replaces cell type when cellType is provided in replace mode", async () => {
     const dir = await tmpDir();
     const p = path.join(dir, "nb.ipynb");
-    await fs.writeFile(
-      p,
-      makeNotebook([{ cell_type: "code", source: ["x = 1\n"] }])
-    );
+    await fs.writeFile(p, makeNotebook([{ cell_type: "code", source: ["x = 1\n"] }]));
 
     const t: any = createNotebookEditTool(makeCtx(dir));
     await t.execute({
@@ -3081,10 +3105,7 @@ describe("notebookEdit tool", () => {
   test("splits newSource into lines correctly", async () => {
     const dir = await tmpDir();
     const p = path.join(dir, "nb.ipynb");
-    await fs.writeFile(
-      p,
-      makeNotebook([{ cell_type: "code", source: ["old\n"] }])
-    );
+    await fs.writeFile(p, makeNotebook([{ cell_type: "code", source: ["old\n"] }]));
 
     const t: any = createNotebookEditTool(makeCtx(dir));
     await t.execute({
@@ -3138,7 +3159,7 @@ describe("notebookEdit tool", () => {
 
 describe("skill tool", () => {
   function skillDoc(name: string, description: string, body: string): string {
-    return ["---", `name: \"${name}\"`, `description: \"${description}\"`, "---", "", body].join("\n");
+    return ["---", `name: "${name}"`, `description: "${description}"`, "---", "", body].join("\n");
   }
 
   test("loads skill from SKILL.md in directory", async () => {
@@ -3148,7 +3169,7 @@ describe("skill tool", () => {
     await fs.writeFile(
       path.join(skillDir, "SKILL.md"),
       skillDoc("xlsx", "Spreadsheet helper skill.", "# XLSX Skill\nInstructions here."),
-      "utf-8"
+      "utf-8",
     );
 
     const config = makeConfig(dir);
@@ -3197,7 +3218,7 @@ describe("skill tool", () => {
     await fs.writeFile(
       path.join(skillDir, "SKILL.md"),
       skillDoc("cached-skill-unique", "Cached skill.", "Cached content"),
-      "utf-8"
+      "utf-8",
     );
 
     const config = makeConfig(dir);
@@ -3214,7 +3235,7 @@ describe("skill tool", () => {
     await fs.writeFile(
       path.join(skillDir, "SKILL.md"),
       skillDoc("cached-skill-unique", "Cached skill.", "Modified content"),
-      "utf-8"
+      "utf-8",
     );
 
     // Second call should reflect updated on-disk content.
@@ -3231,12 +3252,12 @@ describe("skill tool", () => {
     await fs.writeFile(
       path.join(dir1, "myskill-order", "SKILL.md"),
       skillDoc("myskill-order", "First version.", "First dir"),
-      "utf-8"
+      "utf-8",
     );
     await fs.writeFile(
       path.join(dir2, "myskill-order", "SKILL.md"),
       skillDoc("myskill-order", "Second version.", "Second dir"),
-      "utf-8"
+      "utf-8",
     );
 
     const config = makeConfig(dir);
@@ -3256,7 +3277,7 @@ describe("skill tool", () => {
     await fs.writeFile(
       path.join(skillDir, "SKILL.md"),
       skillDoc("a2ui", "A2UI helper skill.", "# A2UI Skill\nDo not load when disabled."),
-      "utf-8"
+      "utf-8",
     );
 
     const config = makeConfig(dir, {
@@ -3283,7 +3304,7 @@ describe("skill tool", () => {
     await fs.writeFile(
       path.join(skillDir, "SKILL.md"),
       skillDoc("a2ui", "A2UI helper skill.", "# A2UI Skill\nProtocol guidance."),
-      "utf-8"
+      "utf-8",
     );
 
     const config = makeConfig(dir, {
@@ -3310,7 +3331,7 @@ describe("skill tool", () => {
     await fs.writeFile(
       path.join(skillDir, "SKILL.md"),
       skillDoc("slides", "Slides helper skill.", "# Slides Skill\nBuild decks here."),
-      "utf-8"
+      "utf-8",
     );
 
     const config = makeConfig(dir);
@@ -3339,7 +3360,7 @@ describe("skill tool", () => {
     await fs.writeFile(
       path.join(builtInSkills, "slides", "SKILL.md"),
       skillDoc("slides", "Built-in slides skill.", "# Slides Skill\nBuilt-in deck workflow."),
-      "utf-8"
+      "utf-8",
     );
 
     const config = makeConfig(dir, {
@@ -3444,14 +3465,18 @@ describe("memory tool", () => {
     const dir = await tmpDir();
     const t: any = createMemoryTool(makeCtx(dir));
     await expect(t.execute({ action: "write", key: "test" })).rejects.toThrow(
-      /content is required/
+      /content is required/,
     );
   });
 
   test("searches sqlite-backed memory entries", async () => {
     const dir = await tmpDir();
     const t: any = createMemoryTool(makeCtx(dir));
-    await t.execute({ action: "write", key: "stack", content: "The project uses TypeScript and Bun runtime." });
+    await t.execute({
+      action: "write",
+      key: "stack",
+      content: "The project uses TypeScript and Bun runtime.",
+    });
 
     const res: string = await t.execute({ action: "search", query: "TypeScript" });
     expect(res).toContain("TypeScript");
@@ -3518,7 +3543,9 @@ describe("memory tool", () => {
 
   test("returns disabled message when enableMemory is false", async () => {
     const dir = await tmpDir();
-    const t: any = createMemoryTool(makeCtx(dir, { config: makeConfig(dir, { enableMemory: false }) }));
+    const t: any = createMemoryTool(
+      makeCtx(dir, { config: makeConfig(dir, { enableMemory: false }) }),
+    );
     const res: string = await t.execute({ action: "read" });
     expect(res).toContain("disabled");
   });
@@ -3533,7 +3560,7 @@ describe("memory tool", () => {
           prompted = true;
           return "approve";
         },
-      })
+      }),
     );
     const res: string = await t.execute({ action: "write", key: "pref", content: "Dark mode" });
     expect(prompted).toBe(true);
@@ -3546,7 +3573,7 @@ describe("memory tool", () => {
       makeCtx(dir, {
         config: makeConfig(dir, { memoryRequireApproval: true }),
         askUser: async () => "deny",
-      })
+      }),
     );
     const res: string = await t.execute({ action: "write", key: "pref", content: "Light mode" });
     expect(res).toContain("denied");
@@ -3689,69 +3716,80 @@ describe("createTools", () => {
 
   test("includes a2ui for non-google providers when enabled", async () => {
     const dir = await tmpDir();
-    const tools = createTools(makeCtx(dir, {
-      config: makeConfig(dir, {
-        provider: "openai",
-        model: "gpt-5.2",
-        preferredChildModel: "gpt-5.2",
-        enableA2ui: true,
+    const tools = createTools(
+      makeCtx(dir, {
+        config: makeConfig(dir, {
+          provider: "openai",
+          model: "gpt-5.2",
+          preferredChildModel: "gpt-5.2",
+          enableA2ui: true,
+        }),
+        applyA2uiEnvelope: () => ({ ok: true, surfaceId: "surface-1", change: "created" }),
       }),
-      applyA2uiEnvelope: () => ({ ok: true, surfaceId: "surface-1", change: "created" }),
-    }));
+    );
 
     expect(tools).toHaveProperty("a2ui");
   });
 
   test("includes a2ui for google when enabled", async () => {
     const dir = await tmpDir();
-    const tools = createTools(makeCtx(dir, {
-      config: makeConfig(dir, {
-        provider: "google",
-        model: "gemini-3-flash-preview",
-        preferredChildModel: "gemini-3-flash-preview",
-        enableA2ui: true,
+    const tools = createTools(
+      makeCtx(dir, {
+        config: makeConfig(dir, {
+          provider: "google",
+          model: "gemini-3-flash-preview",
+          preferredChildModel: "gemini-3-flash-preview",
+          enableA2ui: true,
+        }),
+        applyA2uiEnvelope: () => ({ ok: true, surfaceId: "surface-1", change: "created" }),
       }),
-      applyA2uiEnvelope: () => ({ ok: true, surfaceId: "surface-1", change: "created" }),
-    }));
+    );
 
     expect(tools).toHaveProperty("a2ui");
   });
 
   test("omits a2ui when explicitly disabled", async () => {
     const dir = await tmpDir();
-    const tools = createTools(makeCtx(dir, {
-      config: makeConfig(dir, {
-        provider: "openai",
-        model: "gpt-5.2",
-        preferredChildModel: "gpt-5.2",
-        enableA2ui: false,
+    const tools = createTools(
+      makeCtx(dir, {
+        config: makeConfig(dir, {
+          provider: "openai",
+          model: "gpt-5.2",
+          preferredChildModel: "gpt-5.2",
+          enableA2ui: false,
+        }),
+        applyA2uiEnvelope: () => ({ ok: true, surfaceId: "surface-1", change: "created" }),
       }),
-      applyA2uiEnvelope: () => ({ ok: true, surfaceId: "surface-1", change: "created" }),
-    }));
+    );
 
     expect(tools).not.toHaveProperty("a2ui");
   });
 
   test("listSessionToolNames includes root-session agent controls when requested", () => {
-    const names = listSessionToolNames({
-      provider: "google",
-      providerOptions: {
-        google: {
-          nativeWebSearch: true,
+    const names = listSessionToolNames(
+      {
+        provider: "google",
+        providerOptions: {
+          google: {
+            nativeWebSearch: true,
+          },
         },
+        enableMemory: false,
       },
-      enableMemory: false,
-    }, { includeAgentControl: true });
+      { includeAgentControl: true },
+    );
 
-    expect(names).toEqual(expect.arrayContaining([
-      "spawnAgent",
-      "listAgents",
-      "sendAgentInput",
-      "waitForAgent",
-      "inspectAgent",
-      "resumeAgent",
-      "closeAgent",
-    ]));
+    expect(names).toEqual(
+      expect.arrayContaining([
+        "spawnAgent",
+        "listAgents",
+        "sendAgentInput",
+        "waitForAgent",
+        "inspectAgent",
+        "resumeAgent",
+        "closeAgent",
+      ]),
+    );
     expect(names).not.toContain("memory");
     expect(names).not.toContain("webSearch");
   });
@@ -3770,10 +3808,12 @@ describe("createTools", () => {
 
   test("keeps bash but omits write tools for reviewer role", async () => {
     const dir = await tmpDir();
-    const tools = createTools(makeCtx(dir, {
-      agentRole: "reviewer",
-      shellPolicy: "no_project_write",
-    }));
+    const tools = createTools(
+      makeCtx(dir, {
+        agentRole: "reviewer",
+        shellPolicy: "no_project_write",
+      }),
+    );
 
     expect(tools).toHaveProperty("bash");
     expect(tools).toHaveProperty("read");
@@ -3792,7 +3832,7 @@ describe("createTools", () => {
           model: "glm-5",
           preferredChildModel: "glm-5",
         }),
-      })
+      }),
     );
 
     expect((tools.webSearch as any).type).toBeUndefined();
@@ -3809,7 +3849,7 @@ describe("createTools", () => {
           model: "moonshotai/Kimi-K2.5",
           preferredChildModel: "moonshotai/Kimi-K2.5",
         }),
-      })
+      }),
     );
 
     expect((tools.webSearch as any).type).toBeUndefined();
@@ -3826,7 +3866,7 @@ describe("createTools", () => {
           model: "moonshotai/Kimi-K2.5",
           preferredChildModel: "moonshotai/Kimi-K2.5",
         }),
-      })
+      }),
     );
 
     expect((tools.webSearch as any).type).toBeUndefined();
@@ -3843,7 +3883,7 @@ describe("createTools", () => {
           model: "nvidia/nemotron-3-super-120b-a12b",
           preferredChildModel: "nvidia/nemotron-3-super-120b-a12b",
         }),
-      })
+      }),
     );
 
     expect((tools.webSearch as any).type).toBeUndefined();
@@ -3856,7 +3896,9 @@ describe("createTools", () => {
     const tools = createTools(makeCtx(dir));
     for (const [name, tool] of Object.entries(tools)) {
       if (name === "webSearch") {
-        expect((tool as any).type === "provider" || typeof (tool as any).execute === "function").toBe(true);
+        expect(
+          (tool as any).type === "provider" || typeof (tool as any).execute === "function",
+        ).toBe(true);
         continue;
       }
       expect(typeof (tool as any).execute).toBe("function");
@@ -3945,7 +3987,8 @@ describe("createTools", () => {
         busy: false,
         lastMessagePreview: "done",
       },
-      latestAssistantText: "Done.\n\n<agent_report>{\"status\":\"completed\",\"summary\":\"Finished\"}</agent_report>",
+      latestAssistantText:
+        'Done.\n\n<agent_report>{"status":"completed","summary":"Finished"}</agent_report>',
       parsedReport: {
         status: "completed" as const,
         summary: "Finished",
@@ -4006,7 +4049,9 @@ describe("createTools", () => {
     const resumeTool: any = tools.resumeAgent;
     const closeTool: any = tools.closeAgent;
 
-    await expect(spawnTool.execute({ message: "Inspect" })).resolves.toMatchObject({ agentId: "child" });
+    await expect(spawnTool.execute({ message: "Inspect" })).resolves.toMatchObject({
+      agentId: "child",
+    });
     expect(spawn).toHaveBeenCalled();
 
     await expect(listTool.execute({})).resolves.toHaveLength(1);
@@ -4014,7 +4059,9 @@ describe("createTools", () => {
       agentId: "child",
       queued: true,
     });
-    await expect(waitTool.execute({ agentIds: ["child"], timeoutMs: 10, mode: "all" })).resolves.toEqual({
+    await expect(
+      waitTool.execute({ agentIds: ["child"], timeoutMs: 10, mode: "all" }),
+    ).resolves.toEqual({
       timedOut: false,
       mode: "all",
       agents: [
@@ -4027,11 +4074,13 @@ describe("createTools", () => {
       ],
       readyAgentIds: ["child"],
     });
-    await expect(inspectTool.execute({ agentId: "child" })).resolves.toEqual(expect.objectContaining({
-      agent: expect.objectContaining({ agentId: "child" }),
-      latestAssistantText: expect.stringContaining("Done."),
-      parsedReport: expect.objectContaining({ status: "completed", summary: "Finished" }),
-    }));
+    await expect(inspectTool.execute({ agentId: "child" })).resolves.toEqual(
+      expect.objectContaining({
+        agent: expect.objectContaining({ agentId: "child" }),
+        latestAssistantText: expect.stringContaining("Done."),
+        parsedReport: expect.objectContaining({ status: "completed", summary: "Finished" }),
+      }),
+    );
     await expect(resumeTool.execute({ agentId: "child" })).resolves.toMatchObject({
       agentId: "child",
       lifecycleState: "active",

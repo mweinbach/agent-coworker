@@ -61,7 +61,7 @@ function isAllowedDesktopRendererUrl(rawUrl: string, expectedPort: string): bool
 
 export function resolveDesktopRendererUrl(
   electronRendererUrl: string | undefined,
-  desktopRendererPort: string | undefined
+  desktopRendererPort: string | undefined,
 ): DesktopRendererUrlResolution {
   const expectedPort = normalizeDesktopRendererPort(desktopRendererPort);
   const fallbackUrl = formatFallbackUrl(expectedPort);

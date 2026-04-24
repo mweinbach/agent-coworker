@@ -46,9 +46,13 @@ type CodexAuthDirFsLike = Pick<typeof fs, "mkdir" | "chmod" | "access" | "writeF
 const nonEmptyStringSchema = z.string().trim().min(1);
 const isoTimestampSchema = z.string().datetime({ offset: true });
 const recordSchema = z.record(z.string(), z.unknown());
-const organizationsSchema = z.array(z.object({
-  id: nonEmptyStringSchema.optional(),
-}).passthrough());
+const organizationsSchema = z.array(
+  z
+    .object({
+      id: nonEmptyStringSchema.optional(),
+    })
+    .passthrough(),
+);
 const finiteNumberFromUnknownSchema = z.preprocess((value) => {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string" && value.trim()) {
@@ -57,44 +61,57 @@ const finiteNumberFromUnknownSchema = z.preprocess((value) => {
   }
   return undefined;
 }, z.number().finite());
-const codexOAuthTokenResponseSchema = z.object({
-  access_token: nonEmptyStringSchema,
-  refresh_token: nonEmptyStringSchema.optional(),
-  id_token: nonEmptyStringSchema.optional(),
-  expires_in: finiteNumberFromUnknownSchema.optional(),
-}).passthrough();
+const codexOAuthTokenResponseSchema = z
+  .object({
+    access_token: nonEmptyStringSchema,
+    refresh_token: nonEmptyStringSchema.optional(),
+    id_token: nonEmptyStringSchema.optional(),
+    expires_in: finiteNumberFromUnknownSchema.optional(),
+  })
+  .passthrough();
 const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
 const jsonStringSchema = z.string();
 const codexAuthPermissionDeniedCodeSchema = z.enum(["EACCES", "EPERM"]);
 
-const codexAuthDocumentSchema = z.object({
-  version: z.literal(1),
-  auth_mode: z.literal("chatgpt"),
-  issuer: nonEmptyStringSchema.optional(),
-  client_id: nonEmptyStringSchema.optional(),
-  tokens: z.object({
-    access_token: nonEmptyStringSchema,
-    refresh_token: nonEmptyStringSchema.optional(),
-    id_token: nonEmptyStringSchema.optional(),
-    expires_at: z.union([z.number().finite(), nonEmptyStringSchema]).optional(),
-  }).strict(),
-  account: z.object({
-    account_id: nonEmptyStringSchema.optional(),
+const codexAuthDocumentSchema = z
+  .object({
+    version: z.literal(1),
+    auth_mode: z.literal("chatgpt"),
+    issuer: nonEmptyStringSchema.optional(),
+    client_id: nonEmptyStringSchema.optional(),
+    tokens: z
+      .object({
+        access_token: nonEmptyStringSchema,
+        refresh_token: nonEmptyStringSchema.optional(),
+        id_token: nonEmptyStringSchema.optional(),
+        expires_at: z.union([z.number().finite(), nonEmptyStringSchema]).optional(),
+      })
+      .strict(),
+    account: z
+      .object({
+        account_id: nonEmptyStringSchema.optional(),
+        email: nonEmptyStringSchema.optional(),
+        plan_type: nonEmptyStringSchema.optional(),
+      })
+      .strict()
+      .optional(),
+    updated_at: isoTimestampSchema.optional(),
+    last_refresh: isoTimestampSchema.optional(),
+  })
+  .strict();
+
+const oauthNamespaceClaimsSchema = z
+  .object({
+    chatgpt_account_id: nonEmptyStringSchema.optional(),
+    chatgpt_plan_type: nonEmptyStringSchema.optional(),
+  })
+  .passthrough();
+
+const profileNamespaceClaimsSchema = z
+  .object({
     email: nonEmptyStringSchema.optional(),
-    plan_type: nonEmptyStringSchema.optional(),
-  }).strict().optional(),
-  updated_at: isoTimestampSchema.optional(),
-  last_refresh: isoTimestampSchema.optional(),
-}).strict();
-
-const oauthNamespaceClaimsSchema = z.object({
-  chatgpt_account_id: nonEmptyStringSchema.optional(),
-  chatgpt_plan_type: nonEmptyStringSchema.optional(),
-}).passthrough();
-
-const profileNamespaceClaimsSchema = z.object({
-  email: nonEmptyStringSchema.optional(),
-}).passthrough();
+  })
+  .passthrough();
 
 function parseWithSchema<T>(schema: z.ZodType<T>, value: unknown): T | undefined {
   const parsed = schema.safeParse(value);
@@ -103,7 +120,7 @@ function parseWithSchema<T>(schema: z.ZodType<T>, value: unknown): T | undefined
 
 function parseTokenResponse(
   payload: unknown,
-  errorMessage = "Token response missing access_token."
+  errorMessage = "Token response missing access_token.",
 ): z.infer<typeof codexOAuthTokenResponseSchema> {
   const parsedPayload = codexOAuthTokenResponseSchema.safeParse(payload);
   if (!parsedPayload.success) throw new Error(errorMessage);
@@ -151,7 +168,10 @@ export function extractAccountIdFromClaims(claims: Record<string, unknown>): str
   const direct = parseWithSchema(nonEmptyStringSchema, claims.chatgpt_account_id);
   if (direct) return direct;
 
-  const nestedAuth = parseWithSchema(oauthNamespaceClaimsSchema, claims["https://api.openai.com/auth"]);
+  const nestedAuth = parseWithSchema(
+    oauthNamespaceClaimsSchema,
+    claims["https://api.openai.com/auth"],
+  );
   const nested = nestedAuth?.chatgpt_account_id;
   if (nested) return nested;
 
@@ -174,15 +194,23 @@ export function extractAccountIdFromClaims(claims: Record<string, unknown>): str
 export function extractEmailFromClaims(claims: Record<string, unknown>): string | undefined {
   const direct = parseWithSchema(nonEmptyStringSchema, claims.email);
   if (direct) return direct;
-  const profile = parseWithSchema(profileNamespaceClaimsSchema, claims["https://api.openai.com/profile"]);
+  const profile = parseWithSchema(
+    profileNamespaceClaimsSchema,
+    claims["https://api.openai.com/profile"],
+  );
   const nested = profile?.email;
   if (nested) return nested;
   return undefined;
 }
 
 export function extractPlanTypeFromClaims(claims: Record<string, unknown>): string | undefined {
-  const nestedAuth = parseWithSchema(oauthNamespaceClaimsSchema, claims["https://api.openai.com/auth"]);
-  return nestedAuth?.chatgpt_plan_type ?? parseWithSchema(nonEmptyStringSchema, claims.chatgpt_plan_type);
+  const nestedAuth = parseWithSchema(
+    oauthNamespaceClaimsSchema,
+    claims["https://api.openai.com/auth"],
+  );
+  return (
+    nestedAuth?.chatgpt_plan_type ?? parseWithSchema(nonEmptyStringSchema, claims.chatgpt_plan_type)
+  );
 }
 
 export function codexAuthFilePath(paths: Pick<CodexAuthPaths, "authDir">): string {
@@ -199,7 +227,7 @@ function wrapCodexAuthWriteError(dirPath: string, error: unknown): Error {
   const deniedCode = codexAuthPermissionDeniedCodeSchema.safeParse(codeRaw);
   if (deniedCode.success) {
     return new Error(
-      `Cowork cannot write Codex auth under ${dirPath}: permission denied. If macOS blocked access, grant the app access to your home directory or Full Disk Access, then retry.`
+      `Cowork cannot write Codex auth under ${dirPath}: permission denied. If macOS blocked access, grant the app access to your home directory or Full Disk Access, then retry.`,
     );
   }
   return error instanceof Error ? error : new Error(String(error));
@@ -216,7 +244,7 @@ export async function ensureCodexAuthDirWritable(
   let probeCreated = false;
   const probePath = path.join(
     dir,
-    `.codex-auth-write-probe.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`
+    `.codex-auth-write-probe.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`,
   );
 
   try {
@@ -301,7 +329,9 @@ function parseAnyCodexAuthJson(file: string, json: unknown): CodexAuthMaterial |
 function parseCodexAuthJson(file: string, json: unknown): CodexAuthMaterial {
   const parsed = codexAuthDocumentSchema.safeParse(json);
   if (!parsed.success) {
-    throw new Error(`Invalid Codex auth schema at ${file}: ${parsed.error.issues[0]?.message ?? "validation_failed"}`);
+    throw new Error(
+      `Invalid Codex auth schema at ${file}: ${parsed.error.issues[0]?.message ?? "validation_failed"}`,
+    );
   }
 
   const doc = parsed.data;
@@ -426,7 +456,7 @@ function formatAuthJson(material: CodexAuthMaterial): Record<string, unknown> {
 
 export async function writeCodexAuthMaterial(
   paths: Pick<CodexAuthPaths, "authDir">,
-  material: Omit<CodexAuthMaterial, "file"> & { file?: string }
+  material: Omit<CodexAuthMaterial, "file"> & { file?: string },
 ): Promise<CodexAuthMaterial> {
   const file = material.file ?? codexAuthFilePath(paths);
   const dir = codexAuthDirPath(paths);
@@ -478,7 +508,7 @@ export async function clearCodexAuthMaterial(
 }
 
 export async function readCodexAuthMaterial(
-  paths: Pick<CodexAuthPaths, "authDir">
+  paths: Pick<CodexAuthPaths, "authDir">,
 ): Promise<CodexAuthMaterial | null> {
   const coworkFile = codexAuthFilePath(paths);
   let coworkJson: unknown | null = null;
@@ -509,7 +539,7 @@ export function codexMaterialFromTokenResponse(
   opts: {
     issuer?: string;
     clientId?: string;
-  } = {}
+  } = {},
 ): CodexAuthMaterial {
   const parsedPayload = parseTokenResponse(payload);
 
@@ -529,12 +559,11 @@ export function codexMaterialFromTokenResponse(
     (idClaims ? extractPlanTypeFromClaims(idClaims) : undefined) ??
     (accessClaims ? extractPlanTypeFromClaims(accessClaims) : undefined);
 
-  const expiresAtMs =
-    (() => {
-      const delta = expiresInMsFromResponse(payload);
-      if (delta !== undefined) return Date.now() + delta;
-      return extractJwtExpiryMs(accessToken);
-    })();
+  const expiresAtMs = (() => {
+    const delta = expiresInMsFromResponse(payload);
+    if (delta !== undefined) return Date.now() + delta;
+    return extractJwtExpiryMs(accessToken);
+  })();
 
   return {
     file,
@@ -557,7 +586,7 @@ export async function persistCodexAuthFromTokenResponse(
   opts: {
     issuer?: string;
     clientId?: string;
-  } = {}
+  } = {},
 ): Promise<CodexAuthMaterial> {
   const file = codexAuthFilePath(paths);
   const material = codexMaterialFromTokenResponse(file, payload, opts);
@@ -589,7 +618,9 @@ export async function refreshCodexAuthMaterial(opts: {
 
   if (!response.ok) {
     const text = await response.text().catch(() => "");
-    throw new Error(`Codex token refresh failed (${response.status}): ${text.slice(0, 500)}`.trim());
+    throw new Error(
+      `Codex token refresh failed (${response.status}): ${text.slice(0, 500)}`.trim(),
+    );
   }
 
   const payload = parseTokenResponse(

@@ -30,7 +30,7 @@ function createRouterHarness() {
   const session = { id: thread.id } as any;
 
   const context: JsonRpcRouteContext = {
-    getConfig: () => ({ workingDirectory: "C:/default" } as any),
+    getConfig: () => ({ workingDirectory: "C:/default" }) as any,
     threads: {
       create: ({ cwd, provider, model }) => {
         created.push({ cwd, provider, model });
@@ -152,7 +152,7 @@ function createThreadResumeHarness() {
   const binding = { session } as any;
 
   const context: JsonRpcRouteContext = {
-    getConfig: () => ({ workingDirectory: "C:/default" } as any),
+    getConfig: () => ({ workingDirectory: "C:/default" }) as any,
     threads: {
       create: (() => {
         throw new Error("not used");
@@ -254,36 +254,38 @@ function createThreadReadHarness(snapshotOverride?: any) {
       type: "loaded" as const,
     },
   };
-  const snapshot = snapshotOverride ?? {
-    feed: [
-      {
-        id: "assistant-1",
-        kind: "message",
-        role: "assistant",
-        ts: "2026-03-22T00:00:01.000Z",
-        text: "Hello",
-      },
-      {
-        id: "assistant-2",
-        kind: "message",
-        role: "assistant",
-        ts: "2026-03-22T00:00:02.000Z",
-        text: " world",
-      },
-      {
-        id: "user-1",
-        kind: "message",
-        role: "user",
-        ts: "2026-03-22T00:00:03.000Z",
-        text: "Thanks",
-      },
-    ],
-  } as any;
+  const snapshot =
+    snapshotOverride ??
+    ({
+      feed: [
+        {
+          id: "assistant-1",
+          kind: "message",
+          role: "assistant",
+          ts: "2026-03-22T00:00:01.000Z",
+          text: "Hello",
+        },
+        {
+          id: "assistant-2",
+          kind: "message",
+          role: "assistant",
+          ts: "2026-03-22T00:00:02.000Z",
+          text: " world",
+        },
+        {
+          id: "user-1",
+          kind: "message",
+          role: "user",
+          ts: "2026-03-22T00:00:03.000Z",
+          text: "Thanks",
+        },
+      ],
+    } as any);
   const waitForIdleCalls: string[] = [];
   const binding = { session: { id: thread.id } } as any;
 
   const context: JsonRpcRouteContext = {
-    getConfig: () => ({ workingDirectory: "C:/default" } as any),
+    getConfig: () => ({ workingDirectory: "C:/default" }) as any,
     threads: {
       create: (() => {
         throw new Error("not used");
@@ -440,7 +442,9 @@ describe("JSON-RPC request router", () => {
     ]);
     expect(harness.subscribeCalls).toHaveLength(1);
     expect((harness.subscribeCalls[0] as any).opts?.drainDisconnectedReplayBuffer).toBe(true);
-    expect((harness.subscribeCalls[0] as any).opts?.skipPendingPromptRequestIds).toEqual(new Set(["ask-1"]));
+    expect((harness.subscribeCalls[0] as any).opts?.skipPendingPromptRequestIds).toEqual(
+      new Set(["ask-1"]),
+    );
   });
 
   test("thread/read returns the canonical projected snapshot feed unchanged", async () => {
@@ -491,7 +495,8 @@ describe("JSON-RPC request router", () => {
       writable: true,
       value: async (input: RequestInfo | URL) => {
         fetchCalls += 1;
-        const url = input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url;
+        const url =
+          input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url;
         if (url.includes("/grounding-api-redirect/example")) {
           return new Response(null, {
             status: 302,
@@ -579,7 +584,8 @@ describe("JSON-RPC request router", () => {
                     {
                       type: "url_citation",
                       url: "https://www.foxnews.com/live-news/new-york-laguardia-plane-crash-march-23",
-                      title: "LaGuardia collision: 2 pilots killed after Air Canada jet hits fire truck, forcing airport closure",
+                      title:
+                        "LaGuardia collision: 2 pilots killed after Air Canada jet hits fire truck, forcing airport closure",
                       start_index: 0,
                       end_index: 5,
                     },
@@ -608,7 +614,8 @@ describe("JSON-RPC request router", () => {
       writable: true,
       value: async (input: RequestInfo | URL) => {
         fetchCalls += 1;
-        const url = input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url;
+        const url =
+          input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url;
         if (url.includes("/grounding-api-redirect/example")) {
           fetchStarted.resolve();
           return new Response(null, {
@@ -755,7 +762,8 @@ describe("JSON-RPC request router", () => {
                     {
                       type: "url_citation",
                       url: "https://www.foxnews.com/live-news/new-york-laguardia-plane-crash-march-23",
-                      title: "LaGuardia collision: 2 pilots killed after Air Canada jet hits fire truck, forcing airport closure",
+                      title:
+                        "LaGuardia collision: 2 pilots killed after Air Canada jet hits fire truck, forcing airport closure",
                       start_index: 0,
                       end_index: 5,
                     },

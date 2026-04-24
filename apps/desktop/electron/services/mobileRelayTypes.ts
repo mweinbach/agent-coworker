@@ -6,11 +6,7 @@ export type MobileRelayStatus =
   | "reconnecting"
   | "error";
 
-export type MobileRelaySource =
-  | "remodex"
-  | "managed"
-  | "override"
-  | "unavailable";
+export type MobileRelaySource = "remodex" | "managed" | "override" | "unavailable";
 
 export type MobileRelayServiceStatus =
   | "unknown"

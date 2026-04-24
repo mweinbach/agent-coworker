@@ -31,11 +31,7 @@ export function Screen({ children, scroll = false, contentStyle }: ScreenProps) 
   );
 
   if (!scroll) {
-    return (
-      <View style={{ flex: 1, backgroundColor: theme.background }}>
-        {inner}
-      </View>
-    );
+    return <View style={{ flex: 1, backgroundColor: theme.background }}>{inner}</View>;
   }
 
   return (

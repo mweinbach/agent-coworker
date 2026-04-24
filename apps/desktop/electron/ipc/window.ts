@@ -1,7 +1,14 @@
 import { BrowserWindow, Menu, type WebContents } from "electron";
 
-import { DESKTOP_IPC_CHANNELS, type ShowContextMenuInput, type WindowDragPointInput } from "../../src/lib/desktopApi";
-import { showContextMenuInputSchema, windowDragPointInputSchema } from "../../src/lib/desktopSchemas";
+import {
+  DESKTOP_IPC_CHANNELS,
+  type ShowContextMenuInput,
+  type WindowDragPointInput,
+} from "../../src/lib/desktopApi";
+import {
+  showContextMenuInputSchema,
+  windowDragPointInputSchema,
+} from "../../src/lib/desktopSchemas";
 import type { DesktopIpcModuleContext } from "./types";
 
 type ActiveWindowDrag = {
@@ -27,27 +34,31 @@ export function registerWindowIpc(context: DesktopIpcModuleContext): void {
     });
   };
 
-  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.showContextMenu, async (event, args: ShowContextMenuInput) => {
-    const input = parseWithSchema(showContextMenuInputSchema, args, "showContextMenu options");
-    return new Promise<string | null>((resolve) => {
-      const menu = Menu.buildFromTemplate(
-        input.items.map((item) => ({
-          id: item.id,
-          label: item.label,
-          enabled: item.enabled !== false,
-          click: () => resolve(item.id),
-        }))
-      );
+  handleDesktopInvoke(
+    DESKTOP_IPC_CHANNELS.showContextMenu,
+    async (event, args: ShowContextMenuInput) => {
+      const input = parseWithSchema(showContextMenuInputSchema, args, "showContextMenu options");
+      return new Promise<string | null>((resolve) => {
+        const menu = Menu.buildFromTemplate(
+          input.items.map((item) => ({
+            id: item.id,
+            label: item.label,
+            enabled: item.enabled !== false,
+            click: () => resolve(item.id),
+          })),
+        );
 
-      const ownerWindow = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getFocusedWindow();
-      if (!ownerWindow) {
-        resolve(null);
-        return;
-      }
+        const ownerWindow =
+          BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getFocusedWindow();
+        if (!ownerWindow) {
+          resolve(null);
+          return;
+        }
 
-      menu.popup({ window: ownerWindow, callback: () => resolve(null) });
-    });
-  });
+        menu.popup({ window: ownerWindow, callback: () => resolve(null) });
+      });
+    },
+  );
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.windowMinimize, (event) => {
     const win = BrowserWindow.fromWebContents(event.sender);

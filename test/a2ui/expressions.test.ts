@@ -1,4 +1,4 @@
-import { describe, test, expect } from "bun:test";
+import { describe, expect, test } from "bun:test";
 
 import {
   formatString,
@@ -91,9 +91,9 @@ describe("resolveDynamic", () => {
   });
 
   test("resolves { formatString }", () => {
-    expect(
-      resolveDynamic({ formatString: "Hello ${/name}, count=${/count}" }, model),
-    ).toBe("Hello Ada, count=2");
+    expect(resolveDynamic({ formatString: "Hello ${/name}, count=${/count}" }, model)).toBe(
+      "Hello Ada, count=2",
+    );
   });
 
   test("coerces booleans and numbers safely", () => {

@@ -1,13 +1,18 @@
+import { buildTurnSystemPrompt } from "../../harness/buildTurnSystemPrompt";
 import { buildRuntimeTelemetrySettings } from "../../observability/runtime";
 import { loadAgentPrompt } from "../../prompt";
 import { buildGooglePrepareStep } from "../../providers/googleReplay";
 import { createRuntime } from "../../runtime";
-import { createTools } from "../../tools";
-import type { ToolContext } from "../../tools";
-import { buildTurnSystemPrompt } from "../../harness/buildTurnSystemPrompt";
-import type { ModelMessage } from "../../types";
-import type { AgentConfig, HarnessContextState, ProviderName, TodoItem } from "../../types";
 import type { AgentReasoningEffort, AgentRole } from "../../shared/agents";
+import type { ToolContext } from "../../tools";
+import { createTools } from "../../tools";
+import type {
+  AgentConfig,
+  HarnessContextState,
+  ModelMessage,
+  ProviderName,
+  TodoItem,
+} from "../../types";
 
 import { routeAgentConfig } from "./modelRouter";
 import { getAgentRoleDefinition, getAgentRoleShellPolicy } from "./roles";
@@ -106,7 +111,10 @@ export class DelegateRunner {
     const result = await runtime.runTurn({
       config: routed.config,
       system,
-      messages: [...(opts.seedMessages ? structuredClone(opts.seedMessages) : []), { role: "user", content: opts.message }] as any,
+      messages: [
+        ...(opts.seedMessages ? structuredClone(opts.seedMessages) : []),
+        { role: "user", content: opts.message },
+      ] as any,
       tools,
       agentControl: undefined,
       spawnDepth: delegateContext.spawnDepth,
@@ -117,7 +125,9 @@ export class DelegateRunner {
       log: delegateContext.log,
       askUser: delegateContext.askUser,
       approveCommand: delegateContext.approveCommand,
-      ...(telemetry ? { telemetryContext: { functionId: "agent.delegate", metadata: { role: opts.role } } } : {}),
+      ...(telemetry
+        ? { telemetryContext: { functionId: "agent.delegate", metadata: { role: opts.role } } }
+        : {}),
       ...(googlePrepareStep ? { prepareStep: googlePrepareStep } : {}),
       enableMcp: routed.config.enableMcp,
     } as any);

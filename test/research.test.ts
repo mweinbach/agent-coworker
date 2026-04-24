@@ -2,22 +2,29 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
-import { SessionDb } from "../src/server/sessionDb";
-import { exportResearch } from "../src/server/research/export";
-import { researchRecordSchema, type ResearchRecord } from "../src/server/research/types";
 import { __internal as citationMetadataInternal } from "../src/server/citationMetadata";
+import { exportResearch } from "../src/server/research/export";
+import { type ResearchRecord, researchRecordSchema } from "../src/server/research/types";
+import { SessionDb } from "../src/server/sessionDb";
 
 type RuntimeEvent = Record<string, unknown>;
 
-let createResearchInteractionStreamImpl = async (): Promise<AsyncIterable<RuntimeEvent>> => emptyStream();
-let resumeResearchInteractionStreamImpl = async (): Promise<AsyncIterable<RuntimeEvent>> => emptyStream();
+let createResearchInteractionStreamImpl = async (): Promise<AsyncIterable<RuntimeEvent>> =>
+  emptyStream();
+let resumeResearchInteractionStreamImpl = async (): Promise<AsyncIterable<RuntimeEvent>> =>
+  emptyStream();
 
-const createResearchInteractionStreamMock = mock(async (opts: unknown) => await createResearchInteractionStreamImpl(opts));
-const resumeResearchInteractionStreamMock = mock(async (opts: unknown) => await resumeResearchInteractionStreamImpl(opts));
+const createResearchInteractionStreamMock = mock(
+  async (opts: unknown) => await createResearchInteractionStreamImpl(opts),
+);
+const resumeResearchInteractionStreamMock = mock(
+  async (opts: unknown) => await resumeResearchInteractionStreamImpl(opts),
+);
 const cancelResearchInteractionMock = mock(async () => {});
 const createResearchFileSearchStoreMock = mock(async () => "file-search-stores/mock-store");
-const uploadFileToResearchFileSearchStoreMock = mock(async () => ({ documentName: "documents/mock-doc" }));
+const uploadFileToResearchFileSearchStoreMock = mock(async () => ({
+  documentName: "documents/mock-doc",
+}));
 const deleteResearchFileSearchStoreMock = mock(async () => {});
 
 mock.module("../src/server/research/researchRuntime", () => ({
@@ -83,7 +90,11 @@ function makeResearchRecord(overrides: Partial<ResearchRecord> = {}): ResearchRe
   });
 }
 
-async function waitFor<T>(getter: () => T, predicate: (value: T) => boolean, timeoutMs = 5_000): Promise<T> {
+async function waitFor<T>(
+  getter: () => T,
+  predicate: (value: T) => boolean,
+  timeoutMs = 5_000,
+): Promise<T> {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     const value = getter();
@@ -117,6 +128,9 @@ describe("research service", () => {
     createResearchInteractionStreamMock.mockClear();
     resumeResearchInteractionStreamMock.mockClear();
     cancelResearchInteractionMock.mockClear();
+    createResearchFileSearchStoreMock.mockClear();
+    uploadFileToResearchFileSearchStoreMock.mockClear();
+    deleteResearchFileSearchStoreMock.mockClear();
   });
 
   afterEach(() => {
@@ -131,46 +145,52 @@ describe("research service", () => {
     const sent: Array<{ connectionId: string; payload: Record<string, unknown> }> = [];
     const gate = deferred();
 
-    createResearchInteractionStreamImpl = async () => (async function* () {
-      await gate.promise;
-      yield {
-        event_type: "interaction.start",
-        event_id: "evt-1",
-        interaction: { id: "interaction-123", status: "running" },
-      };
-      yield {
-        event_type: "content.delta",
-        event_id: "evt-2",
-        delta: { type: "text", text: "# Summary\n\nFindings in progress." },
-      };
-      yield {
-        event_type: "content.delta",
-        event_id: "evt-3",
-        delta: { type: "thought_summary", content: { text: "Compare the new run against the previous baseline." } },
-      };
-      yield {
-        event_type: "content.start",
-        event_id: "evt-4",
-        content: {
-          type: "text_annotation",
-          annotations: [{
-            type: "url_citation",
-            url: "https://example.com/report",
-            title: "Example report",
-          }],
-        },
-      };
-      yield {
-        event_type: "interaction.complete",
-        event_id: "evt-5",
-        interaction: { id: "interaction-123", status: "completed" },
-      };
-    })();
+    createResearchInteractionStreamImpl = async () =>
+      (async function* () {
+        await gate.promise;
+        yield {
+          event_type: "interaction.start",
+          event_id: "evt-1",
+          interaction: { id: "interaction-123", status: "running" },
+        };
+        yield {
+          event_type: "content.delta",
+          event_id: "evt-2",
+          delta: { type: "text", text: "# Summary\n\nFindings in progress." },
+        };
+        yield {
+          event_type: "content.delta",
+          event_id: "evt-3",
+          delta: {
+            type: "thought_summary",
+            content: { text: "Compare the new run against the previous baseline." },
+          },
+        };
+        yield {
+          event_type: "content.start",
+          event_id: "evt-4",
+          content: {
+            type: "text_annotation",
+            annotations: [
+              {
+                type: "url_citation",
+                url: "https://example.com/report",
+                title: "Example report",
+              },
+            ],
+          },
+        };
+        yield {
+          event_type: "interaction.complete",
+          event_id: "evt-5",
+          interaction: { id: "interaction-123", status: "completed" },
+        };
+      })();
 
     const service = new ResearchService({
       rootDir: paths.rootDir,
       sessionDb,
-      getConfig: () => ({ skillsDirs: [] } as any),
+      getConfig: () => ({ skillsDirs: [] }) as any,
       sendJsonRpc: (ws, payload) => {
         sent.push({
           connectionId: String(ws.data.connectionId),
@@ -188,10 +208,9 @@ describe("research service", () => {
       await service.subscribe(secondSubscriber, research.id);
       gate.resolve();
 
-      const completed = await waitFor(
-        () => sessionDb.getResearch(research.id),
-        (value) => value?.status === "completed",
-      );
+      await Bun.sleep(250);
+      const completed = sessionDb.getResearch(research.id);
+      expect(completed?.status).toBe("completed");
 
       expect(createResearchInteractionStreamMock).toHaveBeenCalledTimes(1);
       expect(completed?.interactionId).toBe("interaction-123");
@@ -208,7 +227,9 @@ describe("research service", () => {
       const completions = sent.filter((entry) => entry.payload.method === "research/completed");
       expect(textDeltas).toHaveLength(2);
       expect(completions).toHaveLength(2);
-      expect(new Set(textDeltas.map((entry) => entry.connectionId))).toEqual(new Set(["socket-a", "socket-b"]));
+      expect(new Set(textDeltas.map((entry) => entry.connectionId))).toEqual(
+        new Set(["socket-a", "socket-b"]),
+      );
     } finally {
       sessionDb.close();
       await fs.rm(paths.home, { recursive: true, force: true });
@@ -219,33 +240,34 @@ describe("research service", () => {
     const paths = await makeTmpCoworkHome();
     const sessionDb = await SessionDb.create({ paths });
 
-    createResearchInteractionStreamImpl = async () => (async function* () {
-      yield {
-        event_type: "content.delta",
-        event_id: "evt-1",
-        delta: { type: "text", text: "Hello" },
-      };
-      yield {
-        event_type: "content.delta",
-        event_id: "evt-2",
-        delta: { type: "text", text: " world" },
-      };
-      yield {
-        event_type: "content.delta",
-        event_id: "evt-3",
-        delta: { type: "text", text: "\n\n" },
-      };
-      yield {
-        event_type: "interaction.complete",
-        event_id: "evt-4",
-        interaction: { id: "interaction-space", status: "completed" },
-      };
-    })();
+    createResearchInteractionStreamImpl = async () =>
+      (async function* () {
+        yield {
+          event_type: "content.delta",
+          event_id: "evt-1",
+          delta: { type: "text", text: "Hello" },
+        };
+        yield {
+          event_type: "content.delta",
+          event_id: "evt-2",
+          delta: { type: "text", text: " world" },
+        };
+        yield {
+          event_type: "content.delta",
+          event_id: "evt-3",
+          delta: { type: "text", text: "\n\n" },
+        };
+        yield {
+          event_type: "interaction.complete",
+          event_id: "evt-4",
+          interaction: { id: "interaction-space", status: "completed" },
+        };
+      })();
 
     const service = new ResearchService({
       rootDir: paths.rootDir,
       sessionDb,
-      getConfig: () => ({ skillsDirs: [] } as any),
+      getConfig: () => ({ skillsDirs: [] }) as any,
       sendJsonRpc: () => {},
     });
 
@@ -268,47 +290,52 @@ describe("research service", () => {
     const sessionDb = await SessionDb.create({ paths });
     const sourceUrl = "https://example.com/shared-source";
 
-    createResearchInteractionStreamImpl = async () => (async function* () {
-      yield {
-        event_type: "interaction.start",
-        event_id: "evt-source-1",
-        interaction: { id: "interaction-source", status: "running" },
-      };
-      yield {
-        event_type: "content.start",
-        event_id: "evt-source-2",
-        content: {
-          type: "text_annotation",
-          annotations: [{
-            type: "url_citation",
-            url: sourceUrl,
-            title: sourceUrl,
-          }],
-        },
-      };
-      yield {
-        event_type: "content.start",
-        event_id: "evt-source-3",
-        content: {
-          type: "text_annotation",
-          annotations: [{
-            type: "url_citation",
-            url: sourceUrl,
-            title: "Readable source title",
-          }],
-        },
-      };
-      yield {
-        event_type: "interaction.complete",
-        event_id: "evt-source-4",
-        interaction: { id: "interaction-source", status: "completed" },
-      };
-    })();
+    createResearchInteractionStreamImpl = async () =>
+      (async function* () {
+        yield {
+          event_type: "interaction.start",
+          event_id: "evt-source-1",
+          interaction: { id: "interaction-source", status: "running" },
+        };
+        yield {
+          event_type: "content.start",
+          event_id: "evt-source-2",
+          content: {
+            type: "text_annotation",
+            annotations: [
+              {
+                type: "url_citation",
+                url: sourceUrl,
+                title: sourceUrl,
+              },
+            ],
+          },
+        };
+        yield {
+          event_type: "content.start",
+          event_id: "evt-source-3",
+          content: {
+            type: "text_annotation",
+            annotations: [
+              {
+                type: "url_citation",
+                url: sourceUrl,
+                title: "Readable source title",
+              },
+            ],
+          },
+        };
+        yield {
+          event_type: "interaction.complete",
+          event_id: "evt-source-4",
+          interaction: { id: "interaction-source", status: "completed" },
+        };
+      })();
 
     const service = new ResearchService({
       rootDir: paths.rootDir,
       sessionDb,
-      getConfig: () => ({ skillsDirs: [] } as any),
+      getConfig: () => ({ skillsDirs: [] }) as any,
       sendJsonRpc: () => {},
     });
 
@@ -331,21 +358,98 @@ describe("research service", () => {
     }
   });
 
+  test("prunes pending upload files and deletes remote file-search stores after terminal research", async () => {
+    const paths = await makeTmpCoworkHome();
+    const sessionDb = await SessionDb.create({ paths });
+
+    createResearchInteractionStreamImpl = async () =>
+      (async function* () {
+        yield {
+          event_type: "interaction.start",
+          event_id: "evt-file-1",
+          interaction: { id: "interaction-file", status: "running" },
+        };
+        yield {
+          event_type: "interaction.complete",
+          event_id: "evt-file-2",
+          interaction: { id: "interaction-file", status: "completed" },
+        };
+      })();
+
+    const service = new ResearchService({
+      rootDir: paths.rootDir,
+      sessionDb,
+      getConfig: () => ({ skillsDirs: [] }) as any,
+      sendJsonRpc: () => {},
+    });
+
+    try {
+      const uploaded = await service.uploadFile({
+        filename: "notes.txt",
+        mimeType: "text/plain",
+        contentBase64: Buffer.from("research notes").toString("base64"),
+      });
+      const pendingMetadataPath = path.join(
+        paths.rootDir,
+        "research",
+        "uploads",
+        `${uploaded.fileId}.json`,
+      );
+      await fs.stat(uploaded.path);
+      await fs.stat(pendingMetadataPath);
+
+      const research = await service.start({
+        input: "Use the attached notes.",
+        attachedFileIds: [uploaded.fileId],
+      });
+      const completed = await waitFor(
+        () => sessionDb.getResearch(research.id),
+        (value) => value?.status === "completed",
+      );
+      await waitFor(
+        () => deleteResearchFileSearchStoreMock.mock.calls.length,
+        (value) => value === 1,
+      );
+
+      expect(completed?.inputs.fileSearchStoreName).toBe("file-search-stores/mock-store");
+      expect(completed?.inputs.files[0]).toEqual(
+        expect.objectContaining({
+          fileId: uploaded.fileId,
+          documentName: "documents/mock-doc",
+        }),
+      );
+      expect(completed?.inputs.files[0]?.path).not.toBe(uploaded.path);
+      await expect(fs.stat(completed?.inputs.files[0]?.path ?? "")).resolves.toBeTruthy();
+      await expect(fs.stat(uploaded.path)).rejects.toThrow();
+      await expect(fs.stat(pendingMetadataPath)).rejects.toThrow();
+      expect(deleteResearchFileSearchStoreMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          fileSearchStoreName: "file-search-stores/mock-store",
+        }),
+      );
+    } finally {
+      sessionDb.close();
+      await fs.rm(paths.home, { recursive: true, force: true });
+    }
+  });
+
   test("cancels locally even when a remote cancellation key is unavailable", async () => {
     const paths = await makeTmpCoworkHome();
     const sessionDb = await SessionDb.create({ paths });
     delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
 
-    await sessionDb.upsertResearch(makeResearchRecord({
-      id: "research-cancel-no-key",
-      status: "running",
-      interactionId: "interaction-cancel-no-key",
-    }));
+    await sessionDb.upsertResearch(
+      makeResearchRecord({
+        id: "research-cancel-no-key",
+        status: "running",
+        interactionId: "interaction-cancel-no-key",
+      }),
+    );
 
     const service = new ResearchService({
       rootDir: paths.rootDir,
       sessionDb,
-      getConfig: () => ({ skillsDirs: [] } as any),
+      getConfig: () => ({ skillsDirs: [] }) as any,
       sendJsonRpc: () => {},
     });
 
@@ -365,17 +469,19 @@ describe("research service", () => {
     const paths = await makeTmpCoworkHome();
     const sessionDb = await SessionDb.create({ paths });
 
-    await sessionDb.upsertResearch(makeResearchRecord({
-      id: "research-already-done",
-      status: "completed",
-      interactionId: "interaction-already-done",
-      error: null,
-    }));
+    await sessionDb.upsertResearch(
+      makeResearchRecord({
+        id: "research-already-done",
+        status: "completed",
+        interactionId: "interaction-already-done",
+        error: null,
+      }),
+    );
 
     const service = new ResearchService({
       rootDir: paths.rootDir,
       sessionDb,
-      getConfig: () => ({ skillsDirs: [] } as any),
+      getConfig: () => ({ skillsDirs: [] }) as any,
       sendJsonRpc: () => {},
     });
 
@@ -395,22 +501,26 @@ describe("research service", () => {
     const paths = await makeTmpCoworkHome();
     const sessionDb = await SessionDb.create({ paths });
 
-    await sessionDb.upsertResearch(makeResearchRecord({
-      id: "research-terminal-attach",
-      status: "completed",
-      interactionId: "interaction-terminal-attach",
-      inputs: { files: [] },
-    }));
+    await sessionDb.upsertResearch(
+      makeResearchRecord({
+        id: "research-terminal-attach",
+        status: "completed",
+        interactionId: "interaction-terminal-attach",
+        inputs: { files: [] },
+      }),
+    );
 
     const service = new ResearchService({
       rootDir: paths.rootDir,
       sessionDb,
-      getConfig: () => ({ skillsDirs: [] } as any),
+      getConfig: () => ({ skillsDirs: [] }) as any,
       sendJsonRpc: () => {},
     });
 
     try {
-      await expect(service.attachUploadedFile("research-terminal-attach", "pending-file")).rejects.toThrow(/terminal/i);
+      await expect(
+        service.attachUploadedFile("research-terminal-attach", "pending-file"),
+      ).rejects.toThrow(/terminal/i);
       expect(sessionDb.getResearch("research-terminal-attach")?.inputs.files).toEqual([]);
     } finally {
       sessionDb.close();
@@ -423,24 +533,25 @@ describe("research service", () => {
     const sessionDb = await SessionDb.create({ paths });
     const completeGate = deferred();
 
-    createResearchInteractionStreamImpl = async () => (async function* () {
-      yield {
-        event_type: "interaction.start",
-        event_id: "evt-1",
-        interaction: { id: "interaction-late-complete", status: "running" },
-      };
-      await completeGate.promise;
-      yield {
-        event_type: "interaction.complete",
-        event_id: "evt-2",
-        interaction: { id: "interaction-late-complete", status: "completed" },
-      };
-    })();
+    createResearchInteractionStreamImpl = async () =>
+      (async function* () {
+        yield {
+          event_type: "interaction.start",
+          event_id: "evt-1",
+          interaction: { id: "interaction-late-complete", status: "running" },
+        };
+        await completeGate.promise;
+        yield {
+          event_type: "interaction.complete",
+          event_id: "evt-2",
+          interaction: { id: "interaction-late-complete", status: "completed" },
+        };
+      })();
 
     const service = new ResearchService({
       rootDir: paths.rootDir,
       sessionDb,
-      getConfig: () => ({ skillsDirs: [] } as any),
+      getConfig: () => ({ skillsDirs: [] }) as any,
       sendJsonRpc: () => {},
     });
 
@@ -470,22 +581,26 @@ describe("research service", () => {
     const paths = await makeTmpCoworkHome();
     const sessionDb = await SessionDb.create({ paths });
 
-    await sessionDb.upsertResearch(makeResearchRecord({
-      id: "research-workspace-a",
-      workspacePath: "/tmp/workspace-a",
-      status: "completed",
-    }));
-    await sessionDb.upsertResearch(makeResearchRecord({
-      id: "research-workspace-b",
-      workspacePath: "/tmp/workspace-b",
-      status: "completed",
-    }));
+    await sessionDb.upsertResearch(
+      makeResearchRecord({
+        id: "research-workspace-a",
+        workspacePath: "/tmp/workspace-a",
+        status: "completed",
+      }),
+    );
+    await sessionDb.upsertResearch(
+      makeResearchRecord({
+        id: "research-workspace-b",
+        workspacePath: "/tmp/workspace-b",
+        status: "completed",
+      }),
+    );
 
     const service = new ResearchService({
       rootDir: paths.rootDir,
       workspacePath: "/tmp/workspace-a",
       sessionDb,
-      getConfig: () => ({ skillsDirs: [] } as any),
+      getConfig: () => ({ skillsDirs: [] }) as any,
       sendJsonRpc: () => {},
     });
 
@@ -509,9 +624,13 @@ describe("research service", () => {
     const resolvedTitle = "Resolved report title";
 
     installFetchStub(async (input: RequestInfo | URL) => {
-      const url = input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url;
+      const url =
+        input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url;
       const host = input instanceof Request ? input.headers.get("host") : null;
-      if (url.includes("/grounding-api-redirect/source-1") || host === "vertexaisearch.cloud.google.com") {
+      if (
+        url.includes("/grounding-api-redirect/source-1") ||
+        host === "vertexaisearch.cloud.google.com"
+      ) {
         return new Response(null, {
           status: 302,
           headers: {
@@ -520,11 +639,14 @@ describe("research service", () => {
         });
       }
 
-      const response = new Response(`<html><head><title>${resolvedTitle}</title></head><body>ok</body></html>`, {
-        headers: {
-          "content-type": "text/html; charset=utf-8",
+      const response = new Response(
+        `<html><head><title>${resolvedTitle}</title></head><body>ok</body></html>`,
+        {
+          headers: {
+            "content-type": "text/html; charset=utf-8",
+          },
         },
-      });
+      );
       Object.defineProperty(response, "url", {
         configurable: true,
         value: resolvedUrl,
@@ -532,35 +654,38 @@ describe("research service", () => {
       return response;
     });
 
-    createResearchInteractionStreamImpl = async () => (async function* () {
-      yield {
-        event_type: "content.start",
-        event_id: "evt-1",
-        interaction: { id: "interaction-123", status: "running" },
-      };
-      yield {
-        event_type: "content.start",
-        event_id: "evt-2",
-        content: {
-          type: "text_annotation",
-          annotations: [{
-            type: "url_citation",
-            url: redirectUrl,
-            title: "vertexaisearch.cloud.google.com",
-          }],
-        },
-      };
-      yield {
-        event_type: "interaction.complete",
-        event_id: "evt-3",
-        interaction: { id: "interaction-123", status: "completed" },
-      };
-    })();
+    createResearchInteractionStreamImpl = async () =>
+      (async function* () {
+        yield {
+          event_type: "content.start",
+          event_id: "evt-1",
+          interaction: { id: "interaction-123", status: "running" },
+        };
+        yield {
+          event_type: "content.start",
+          event_id: "evt-2",
+          content: {
+            type: "text_annotation",
+            annotations: [
+              {
+                type: "url_citation",
+                url: redirectUrl,
+                title: "vertexaisearch.cloud.google.com",
+              },
+            ],
+          },
+        };
+        yield {
+          event_type: "interaction.complete",
+          event_id: "evt-3",
+          interaction: { id: "interaction-123", status: "completed" },
+        };
+      })();
 
     const service = new ResearchService({
       rootDir: paths.rootDir,
       sessionDb,
-      getConfig: () => ({ skillsDirs: [] } as any),
+      getConfig: () => ({ skillsDirs: [] }) as any,
       sendJsonRpc: () => {},
     });
 
@@ -591,7 +716,8 @@ describe("research service", () => {
     const resolvedTitle = "Resolved existing source";
 
     installFetchStub(async (input: RequestInfo | URL) => {
-      const url = input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url;
+      const url =
+        input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url;
       if (url.includes("/grounding-api-redirect/source-2")) {
         return new Response(null, {
           status: 302,
@@ -601,11 +727,14 @@ describe("research service", () => {
         });
       }
 
-      const response = new Response(`<html><head><title>${resolvedTitle}</title></head><body>ok</body></html>`, {
-        headers: {
-          "content-type": "text/html; charset=utf-8",
+      const response = new Response(
+        `<html><head><title>${resolvedTitle}</title></head><body>ok</body></html>`,
+        {
+          headers: {
+            "content-type": "text/html; charset=utf-8",
+          },
         },
-      });
+      );
       Object.defineProperty(response, "url", {
         configurable: true,
         value: resolvedUrl,
@@ -613,21 +742,25 @@ describe("research service", () => {
       return response;
     });
 
-    await sessionDb.upsertResearch(makeResearchRecord({
-      id: "research-existing",
-      status: "completed",
-      sources: [{
-        url: redirectUrl,
-        title: "vertexaisearch.cloud.google.com",
-        sourceType: "url",
-        host: "vertexaisearch.cloud.google.com",
-      }],
-    }));
+    await sessionDb.upsertResearch(
+      makeResearchRecord({
+        id: "research-existing",
+        status: "completed",
+        sources: [
+          {
+            url: redirectUrl,
+            title: "vertexaisearch.cloud.google.com",
+            sourceType: "url",
+            host: "vertexaisearch.cloud.google.com",
+          },
+        ],
+      }),
+    );
 
     const service = new ResearchService({
       rootDir: paths.rootDir,
       sessionDb,
-      getConfig: () => ({ skillsDirs: [] } as any),
+      getConfig: () => ({ skillsDirs: [] }) as any,
       sendJsonRpc: () => {},
     });
 
@@ -650,12 +783,14 @@ describe("research service", () => {
   test("resolves stored opaque Google grounding source URLs when listing research", async () => {
     const paths = await makeTmpCoworkHome();
     const sessionDb = await SessionDb.create({ paths });
-    const redirectUrl = "https://vertexaisearch.cloud.google.com/grounding-api-redirect/source-list";
+    const redirectUrl =
+      "https://vertexaisearch.cloud.google.com/grounding-api-redirect/source-list";
     const resolvedUrl = "https://example.com/resolved-list";
     const resolvedTitle = "Resolved listed source";
 
     installFetchStub(async (input: RequestInfo | URL) => {
-      const url = input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url;
+      const url =
+        input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url;
       if (url.includes("/grounding-api-redirect/source-list")) {
         return new Response(null, {
           status: 302,
@@ -665,11 +800,14 @@ describe("research service", () => {
         });
       }
 
-      const response = new Response(`<html><head><title>${resolvedTitle}</title></head><body>ok</body></html>`, {
-        headers: {
-          "content-type": "text/html; charset=utf-8",
+      const response = new Response(
+        `<html><head><title>${resolvedTitle}</title></head><body>ok</body></html>`,
+        {
+          headers: {
+            "content-type": "text/html; charset=utf-8",
+          },
         },
-      });
+      );
       Object.defineProperty(response, "url", {
         configurable: true,
         value: resolvedUrl,
@@ -677,21 +815,25 @@ describe("research service", () => {
       return response;
     });
 
-    await sessionDb.upsertResearch(makeResearchRecord({
-      id: "research-listed",
-      status: "completed",
-      sources: [{
-        url: redirectUrl,
-        title: "vertexaisearch.cloud.google.com",
-        sourceType: "url",
-        host: "vertexaisearch.cloud.google.com",
-      }],
-    }));
+    await sessionDb.upsertResearch(
+      makeResearchRecord({
+        id: "research-listed",
+        status: "completed",
+        sources: [
+          {
+            url: redirectUrl,
+            title: "vertexaisearch.cloud.google.com",
+            sourceType: "url",
+            host: "vertexaisearch.cloud.google.com",
+          },
+        ],
+      }),
+    );
 
     const service = new ResearchService({
       rootDir: paths.rootDir,
       sessionDb,
-      getConfig: () => ({ skillsDirs: [] } as any),
+      getConfig: () => ({ skillsDirs: [] }) as any,
       sendJsonRpc: () => {},
     });
 
@@ -717,30 +859,33 @@ describe("research service", () => {
     const paths = await makeTmpCoworkHome();
     const sessionDb = await SessionDb.create({ paths });
 
-    resumeResearchInteractionStreamImpl = async () => (async function* () {
-      yield {
-        event_type: "content.delta",
-        event_id: "evt-11",
-        delta: { type: "text", text: "Resumed output." },
-      };
-      yield {
-        event_type: "interaction.complete",
-        event_id: "evt-12",
-        interaction: { id: "interaction-resume", status: "completed" },
-      };
-    })();
+    resumeResearchInteractionStreamImpl = async () =>
+      (async function* () {
+        yield {
+          event_type: "content.delta",
+          event_id: "evt-11",
+          delta: { type: "text", text: "Resumed output." },
+        };
+        yield {
+          event_type: "interaction.complete",
+          event_id: "evt-12",
+          interaction: { id: "interaction-resume", status: "completed" },
+        };
+      })();
 
-    await sessionDb.upsertResearch(makeResearchRecord({
-      id: "research-resume",
-      interactionId: "interaction-resume",
-      lastEventId: "evt-10",
-      status: "running",
-    }));
+    await sessionDb.upsertResearch(
+      makeResearchRecord({
+        id: "research-resume",
+        interactionId: "interaction-resume",
+        lastEventId: "evt-10",
+        status: "running",
+      }),
+    );
 
     const service = new ResearchService({
       rootDir: paths.rootDir,
       sessionDb,
-      getConfig: () => ({ skillsDirs: [] } as any),
+      getConfig: () => ({ skillsDirs: [] }) as any,
       sendJsonRpc: () => {},
     });
 
@@ -770,19 +915,21 @@ describe("research service", () => {
     const paths = await makeTmpCoworkHome();
     const sessionDb = await SessionDb.create({ paths });
 
-    await sessionDb.upsertResearch(makeResearchRecord({
-      id: "research-parent-plan",
-      status: "completed",
-      interactionId: "interaction-parent-plan",
-      settings: {
-        planApproval: true,
-      },
-    }));
+    await sessionDb.upsertResearch(
+      makeResearchRecord({
+        id: "research-parent-plan",
+        status: "completed",
+        interactionId: "interaction-parent-plan",
+        settings: {
+          planApproval: true,
+        },
+      }),
+    );
 
     const service = new ResearchService({
       rootDir: paths.rootDir,
       sessionDb,
-      getConfig: () => ({ skillsDirs: [] } as any),
+      getConfig: () => ({ skillsDirs: [] }) as any,
       sendJsonRpc: () => {},
     });
 
@@ -810,23 +957,27 @@ describe("research service", () => {
     const paths = await makeTmpCoworkHome();
     const sessionDb = await SessionDb.create({ paths });
 
-    await sessionDb.upsertResearch(makeResearchRecord({
-      id: "research-parent-running",
-      status: "running",
-      interactionId: "interaction-parent-running",
-    }));
+    await sessionDb.upsertResearch(
+      makeResearchRecord({
+        id: "research-parent-running",
+        status: "running",
+        interactionId: "interaction-parent-running",
+      }),
+    );
 
     const service = new ResearchService({
       rootDir: paths.rootDir,
       sessionDb,
-      getConfig: () => ({ skillsDirs: [] } as any),
+      getConfig: () => ({ skillsDirs: [] }) as any,
       sendJsonRpc: () => {},
     });
 
     try {
-      await expect(service.followUp("research-parent-running", {
-        input: "Continue before completion.",
-      })).rejects.toThrow(/completed/i);
+      await expect(
+        service.followUp("research-parent-running", {
+          input: "Continue before completion.",
+        }),
+      ).rejects.toThrow(/completed/i);
       expect(createResearchInteractionStreamMock).not.toHaveBeenCalled();
     } finally {
       sessionDb.close();
@@ -838,24 +989,28 @@ describe("research service", () => {
     const paths = await makeTmpCoworkHome();
     const sessionDb = await SessionDb.create({ paths });
 
-    await sessionDb.upsertResearch(makeResearchRecord({
-      id: "research-parent-plan-pending",
-      status: "completed",
-      interactionId: "interaction-parent-plan-pending",
-      planPending: true,
-    }));
+    await sessionDb.upsertResearch(
+      makeResearchRecord({
+        id: "research-parent-plan-pending",
+        status: "completed",
+        interactionId: "interaction-parent-plan-pending",
+        planPending: true,
+      }),
+    );
 
     const service = new ResearchService({
       rootDir: paths.rootDir,
       sessionDb,
-      getConfig: () => ({ skillsDirs: [] } as any),
+      getConfig: () => ({ skillsDirs: [] }) as any,
       sendJsonRpc: () => {},
     });
 
     try {
-      await expect(service.followUp("research-parent-plan-pending", {
-        input: "Continue before plan approval.",
-      })).rejects.toThrow(/approved/i);
+      await expect(
+        service.followUp("research-parent-plan-pending", {
+          input: "Continue before plan approval.",
+        }),
+      ).rejects.toThrow(/approved/i);
       expect(createResearchInteractionStreamMock).not.toHaveBeenCalled();
     } finally {
       sessionDb.close();
@@ -868,18 +1023,20 @@ describe("research service", () => {
     const sessionDb = await SessionDb.create({ paths });
     const sent: Array<{ payload: Record<string, unknown> }> = [];
 
-    await sessionDb.upsertResearch(makeResearchRecord({
-      id: "research-rename",
-      status: "completed",
-      title: "Original title",
-      interactionId: "interaction-rename",
-      lastEventId: "evt-rename",
-    }));
+    await sessionDb.upsertResearch(
+      makeResearchRecord({
+        id: "research-rename",
+        status: "completed",
+        title: "Original title",
+        interactionId: "interaction-rename",
+        lastEventId: "evt-rename",
+      }),
+    );
 
     const service = new ResearchService({
       rootDir: paths.rootDir,
       sessionDb,
-      getConfig: () => ({ skillsDirs: [] } as any),
+      getConfig: () => ({ skillsDirs: [] }) as any,
       sendJsonRpc: (ws, payload) => {
         sent.push({ payload: payload as Record<string, unknown> });
       },
@@ -923,17 +1080,21 @@ describe("research export", () => {
         "- GPU utilization stayed stable",
         "- Thermal throttling did not appear",
       ].join("\n"),
-      thoughtSummaries: [{
-        id: "thought-1",
-        text: "Check the previous run for regressions before calling this stable.",
-        ts: "2026-04-21T00:05:00.000Z",
-      }],
-      sources: [{
-        url: "https://example.com/source",
-        title: "Primary source",
-        sourceType: "url",
-        host: "example.com",
-      }],
+      thoughtSummaries: [
+        {
+          id: "thought-1",
+          text: "Check the previous run for regressions before calling this stable.",
+          ts: "2026-04-21T00:05:00.000Z",
+        },
+      ],
+      sources: [
+        {
+          url: "https://example.com/source",
+          title: "Primary source",
+          sourceType: "url",
+          host: "example.com",
+        },
+      ],
     });
 
     try {

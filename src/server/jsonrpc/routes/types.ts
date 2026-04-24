@@ -85,8 +85,16 @@ export interface JsonRpcRouteContext {
   journal: {
     enqueue(event: Omit<PersistedThreadJournalEvent, "seq">): Promise<unknown>;
     waitForIdle(threadId: string): Promise<void>;
-    list(threadId: string, opts?: { afterSeq?: number; limit?: number }): PersistedThreadJournalEvent[];
-    replay(ws: StartServerSocket, threadId: string, afterSeq?: number, limit?: number): ReadonlySet<string>;
+    list(
+      threadId: string,
+      opts?: { afterSeq?: number; limit?: number },
+    ): PersistedThreadJournalEvent[];
+    replay(
+      ws: StartServerSocket,
+      threadId: string,
+      afterSeq?: number,
+      limit?: number,
+    ): ReadonlySet<string>;
   };
   events: {
     capture<T extends ServerEvent>(

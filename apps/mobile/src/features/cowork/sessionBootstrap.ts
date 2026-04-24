@@ -41,7 +41,8 @@ export function createSessionBootstrapController(options: SessionBootstrapContro
     }
     sessionRetryTimeout = setTimeout(() => {
       sessionRetryTimeout = null;
-      void options.getTransportSnapshot()
+      void options
+        .getTransportSnapshot()
         .then((snapshot) => {
           if (options.isTransportReady(snapshot)) {
             void ensureConnectedSession();

@@ -1,9 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-
-import { A2uiInlineCard } from "../src/ui/chat/a2ui/A2uiInlineCard";
 import type { FeedItem } from "../src/app/types";
+import { A2uiInlineCard } from "../src/ui/chat/a2ui/A2uiInlineCard";
 
 type UiSurfaceItem = Extract<FeedItem, { kind: "ui_surface" }>;
 
@@ -44,9 +43,7 @@ describe("A2uiInlineCard", () => {
   });
 
   test("shows an 'Updated' label when changeKind is missing (legacy items)", () => {
-    const html = renderToStaticMarkup(
-      createElement(A2uiInlineCard, { item: createItem() }),
-    );
+    const html = renderToStaticMarkup(createElement(A2uiInlineCard, { item: createItem() }));
     expect(html).toContain("Updated");
   });
 

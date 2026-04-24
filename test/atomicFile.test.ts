@@ -1,8 +1,7 @@
+import { afterEach, describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
-import { afterEach, describe, expect, test } from "bun:test";
 
 import { writeTextFileAtomic } from "../src/utils/atomicFile";
 
@@ -26,11 +25,11 @@ describe("writeTextFileAtomic", () => {
   test("replaces an existing file", async () => {
     const dir = await makeTmpDir();
     const target = path.join(dir, "config.json");
-    await fs.writeFile(target, "{\n  \"provider\": \"google\"\n}\n", "utf-8");
+    await fs.writeFile(target, '{\n  "provider": "google"\n}\n', "utf-8");
 
-    await writeTextFileAtomic(target, "{\n  \"provider\": \"openai\"\n}\n");
+    await writeTextFileAtomic(target, '{\n  "provider": "openai"\n}\n');
 
-    expect(await fs.readFile(target, "utf-8")).toBe("{\n  \"provider\": \"openai\"\n}\n");
+    expect(await fs.readFile(target, "utf-8")).toBe('{\n  "provider": "openai"\n}\n');
   });
 
   test("retries transient Windows rename failures", async () => {
@@ -41,7 +40,7 @@ describe("writeTextFileAtomic", () => {
 
     await writeTextFileAtomic(
       target,
-      "{\"model\":\"gpt-5.2\"}\n",
+      '{"model":"gpt-5.2"}\n',
       {},
       {
         platform: "win32",
@@ -62,10 +61,10 @@ describe("writeTextFileAtomic", () => {
             await fs.rename(from, to);
           },
         },
-      }
+      },
     );
 
-    expect(await fs.readFile(target, "utf-8")).toBe("{\"model\":\"gpt-5.2\"}\n");
+    expect(await fs.readFile(target, "utf-8")).toBe('{"model":"gpt-5.2"}\n');
     expect(renameCalls).toBe(3);
     expect(sleepCalls).toBe(2);
   });
@@ -73,7 +72,7 @@ describe("writeTextFileAtomic", () => {
   test("honors mode option when writing temp file", async () => {
     const dir = await makeTmpDir();
     const target = path.join(dir, "config.json");
-    let seenOptions: any = undefined;
+    let seenOptions: any;
 
     const fsImpl = {
       mkdir: fs.mkdir.bind(fs),
@@ -85,12 +84,7 @@ describe("writeTextFileAtomic", () => {
       rename: fs.rename.bind(fs),
     };
 
-    await writeTextFileAtomic(
-      target,
-      "{\"model\":\"gpt-5.2\"}\n",
-      { mode: 0o600 },
-      { fsImpl }
-    );
+    await writeTextFileAtomic(target, '{"model":"gpt-5.2"}\n', { mode: 0o600 }, { fsImpl });
 
     expect(seenOptions?.mode).toBe(0o600);
   });
@@ -103,7 +97,7 @@ describe("writeTextFileAtomic", () => {
 
       await writeTextFileAtomic(
         target,
-        "{\"model\":\"gpt-5.2\"}\n",
+        '{"model":"gpt-5.2"}\n',
         {},
         {
           platform: "win32",
@@ -122,7 +116,7 @@ describe("writeTextFileAtomic", () => {
             },
           },
           sleepImpl: async () => {},
-        }
+        },
       );
 
       expect(renameCalls).toBe(3);
@@ -141,7 +135,7 @@ describe("writeTextFileAtomic", () => {
     await expect(
       writeTextFileAtomic(
         target,
-        "{\"model\":\"gpt-5.2\"}\n",
+        '{"model":"gpt-5.2"}\n',
         { maxRenameAttempts: 2 },
         {
           platform: "win32",
@@ -160,8 +154,8 @@ describe("writeTextFileAtomic", () => {
             },
           },
           sleepImpl: async () => {},
-        }
-      )
+        },
+      ),
     ).rejects.toThrow("rename fail");
 
     expect(renameCalls).toBe(2);
@@ -177,7 +171,7 @@ describe("writeTextFileAtomic", () => {
     await expect(
       writeTextFileAtomic(
         target,
-        "{\"model\":\"gpt-5.2\"}\n",
+        '{"model":"gpt-5.2"}\n',
         {},
         {
           platform: "linux",
@@ -195,8 +189,8 @@ describe("writeTextFileAtomic", () => {
               throw err;
             },
           },
-        }
-      )
+        },
+      ),
     ).rejects.toThrow("locked");
 
     expect(renameCalls).toBe(1);

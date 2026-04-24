@@ -2,26 +2,23 @@ import { defaultModelForProvider } from "@cowork/providers/catalog";
 import { z } from "zod";
 
 import {
+  copyPath,
+  createDirectory,
   deleteTranscript,
   listDirectory,
   loadState,
+  openPath,
   pickWorkspaceDirectory,
   readTranscript,
-  stopWorkspaceServer,
-  openPath,
-  revealPath,
-  copyPath,
-  createDirectory,
   renamePath,
+  revealPath,
+  stopWorkspaceServer,
   trashPath,
 } from "../../lib/desktopCommands";
 import type { ProviderName } from "../../lib/wsProtocol";
 
 import {
   type AppStoreActions,
-  type StoreGet,
-  type StoreSet,
-  RUNTIME,
   appendThreadTranscript,
   basename,
   buildContextPreamble,
@@ -33,19 +30,25 @@ import {
   isProviderName,
   makeId,
   mapTranscriptToFeed,
+  normalizeThreadTitleSource,
   nowIso,
   persistNow,
   providerAuthMethodsFor,
   pushNotification,
   queuePendingThreadMessage,
+  RUNTIME,
+  type StoreGet,
+  type StoreSet,
   sendThread,
   sendUserMessageToThread,
-  normalizeThreadTitleSource,
   truncateTitle,
 } from "../store.helpers";
 import type { ThreadRecord, WorkspaceRecord } from "../types";
 
-export function createExplorerActions(set: StoreSet, get: StoreGet): Pick<
+export function createExplorerActions(
+  set: StoreSet,
+  get: StoreGet,
+): Pick<
   AppStoreActions,
   | "refreshWorkspaceFiles"
   | "navigateWorkspaceFiles"
@@ -87,7 +90,6 @@ export function createExplorerActions(set: StoreSet, get: StoreGet): Pick<
       await get().navigateWorkspaceFiles(workspaceId, targetPath);
     },
 
-
     navigateWorkspaceFiles: async (workspaceId: string, targetPath: string) => {
       const state = get();
       const ws = state.workspaces.find((w) => w.id === workspaceId);
@@ -107,12 +109,21 @@ export function createExplorerActions(set: StoreSet, get: StoreGet): Pick<
       set((s) => ({
         workspaceExplorerById: {
           ...s.workspaceExplorerById,
-          [workspaceId]: { ...prev, currentPath: targetPath, loading: true, error: null, requestId },
+          [workspaceId]: {
+            ...prev,
+            currentPath: targetPath,
+            loading: true,
+            error: null,
+            requestId,
+          },
         },
       }));
 
       try {
-        const entries = await listDirectory({ path: targetPath, includeHidden: get().showHiddenFiles });
+        const entries = await listDirectory({
+          path: targetPath,
+          includeHidden: get().showHiddenFiles,
+        });
         const current = get().workspaceExplorerById[workspaceId];
         if (current?.requestId !== requestId) return; // Stale
 
@@ -144,7 +155,6 @@ export function createExplorerActions(set: StoreSet, get: StoreGet): Pick<
       }
     },
 
-
     navigateWorkspaceFilesUp: async (workspaceId: string) => {
       const state = get();
       const ws = state.workspaces.find((w) => w.id === workspaceId);
@@ -154,8 +164,11 @@ export function createExplorerActions(set: StoreSet, get: StoreGet): Pick<
       // don't navigate above workspace root
       const normalizedRoot = ws.path.replace(/\\/g, "/").replace(/\/$/, "");
       const normalizedCurrent = currentPath.replace(/\\/g, "/").replace(/\/$/, "");
-      
-      if (normalizedCurrent === normalizedRoot || normalizedCurrent.length < normalizedRoot.length) {
+
+      if (
+        normalizedCurrent === normalizedRoot ||
+        normalizedCurrent.length < normalizedRoot.length
+      ) {
         return;
       }
 
@@ -164,7 +177,6 @@ export function createExplorerActions(set: StoreSet, get: StoreGet): Pick<
       const parent = parts.join("/") || "/";
       await get().navigateWorkspaceFiles(workspaceId, parent);
     },
-
 
     selectWorkspaceFile: (workspaceId: string, path: string | null) => {
       set((s) => {
@@ -179,7 +191,6 @@ export function createExplorerActions(set: StoreSet, get: StoreGet): Pick<
       });
     },
 
-
     openWorkspaceFile: async (workspaceId: string, targetPath: string, isDirectory: boolean) => {
       if (isDirectory) {
         await get().navigateWorkspaceFiles(workspaceId, targetPath);
@@ -188,16 +199,13 @@ export function createExplorerActions(set: StoreSet, get: StoreGet): Pick<
       }
     },
 
-
     revealWorkspaceFile: async (path: string) => {
       await revealPath({ path });
     },
 
-
     copyWorkspaceFilePath: async (path: string) => {
       await copyPath({ path });
     },
-
 
     createWorkspaceDirectory: async (workspaceId: string, parentPath: string, name: string) => {
       await createDirectory({ parentPath, name });
@@ -205,13 +213,11 @@ export function createExplorerActions(set: StoreSet, get: StoreGet): Pick<
       bumpWorkspaceExplorerRefresh(workspaceId);
     },
 
-
     renameWorkspacePath: async (workspaceId: string, targetPath: string, newName: string) => {
       await renamePath({ path: targetPath, newName });
       await get().refreshWorkspaceFiles(workspaceId);
       bumpWorkspaceExplorerRefresh(workspaceId);
     },
-
 
     trashWorkspacePath: async (workspaceId: string, targetPath: string) => {
       await trashPath({ path: targetPath });

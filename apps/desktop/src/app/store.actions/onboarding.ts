@@ -1,6 +1,6 @@
-import type { OnboardingStep, PersistedOnboardingState } from "../types";
 import type { AppStoreActions, StoreGet, StoreSet } from "../store.helpers";
 import { nowIso, persistNow } from "../store.helpers";
+import type { OnboardingStep, PersistedOnboardingState } from "../types";
 
 export const DEFAULT_ONBOARDING_STATE: PersistedOnboardingState = {
   status: "pending",
@@ -53,7 +53,10 @@ export function shouldBackfillOnboardingCompleted(opts: {
 export function createOnboardingActions(
   set: StoreSet,
   get: StoreGet,
-): Pick<AppStoreActions, "startOnboarding" | "dismissOnboarding" | "completeOnboarding" | "setOnboardingStep"> {
+): Pick<
+  AppStoreActions,
+  "startOnboarding" | "dismissOnboarding" | "completeOnboarding" | "setOnboardingStep"
+> {
   return {
     startOnboarding: () => {
       set({

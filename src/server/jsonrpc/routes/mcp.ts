@@ -8,9 +8,7 @@ import {
 import { toJsonRpcParams } from "./shared";
 import type { JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
 
-export function createMcpRouteHandlers(
-  context: JsonRpcRouteContext,
-): JsonRpcRequestHandlerMap {
+export function createMcpRouteHandlers(context: JsonRpcRouteContext): JsonRpcRequestHandlerMap {
   return {
     "cowork/mcp/servers/read": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
@@ -19,7 +17,8 @@ export function createMcpRouteHandlers(
         context,
         cwd,
         async (session) => await session.emitMcpServers(),
-        (event): event is Extract<ServerEvent, { type: "mcp_servers" }> => event.type === "mcp_servers",
+        (event): event is Extract<ServerEvent, { type: "mcp_servers" }> =>
+          event.type === "mcp_servers",
       );
       if (context.utils.isSessionError(outcome)) {
         sendSessionMutationError(context, ws, message.id, outcome);
@@ -32,7 +31,8 @@ export function createMcpRouteHandlers(
       const params = toJsonRpcParams(message.params);
       const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const server = params.server as any;
-      const previousName = typeof params.previousName === "string" ? params.previousName : undefined;
+      const previousName =
+        typeof params.previousName === "string" ? params.previousName : undefined;
       const mutationError = await captureWorkspaceControlMutationError(
         context,
         cwd,
@@ -46,7 +46,8 @@ export function createMcpRouteHandlers(
         context,
         cwd,
         async (session) => await session.emitMcpServers(),
-        (event): event is Extract<ServerEvent, { type: "mcp_servers" }> => event.type === "mcp_servers",
+        (event): event is Extract<ServerEvent, { type: "mcp_servers" }> =>
+          event.type === "mcp_servers",
       );
       if (context.utils.isSessionError(outcome)) {
         sendSessionMutationError(context, ws, message.id, outcome);
@@ -72,7 +73,8 @@ export function createMcpRouteHandlers(
         context,
         cwd,
         async (session) => await session.emitMcpServers(),
-        (event): event is Extract<ServerEvent, { type: "mcp_servers" }> => event.type === "mcp_servers",
+        (event): event is Extract<ServerEvent, { type: "mcp_servers" }> =>
+          event.type === "mcp_servers",
       );
       if (context.utils.isSessionError(outcome)) {
         sendSessionMutationError(context, ws, message.id, outcome);
@@ -107,10 +109,14 @@ export function createMcpRouteHandlers(
         context,
         cwd,
         async (session) => await session.authorizeMcpServerAuth(name),
-        (event): event is Extract<ServerEvent, { type: "mcp_server_auth_challenge" | "mcp_server_auth_result" }> => (
-          (event.type === "mcp_server_auth_challenge" || event.type === "mcp_server_auth_result")
-          && event.name === name
-        ),
+        (
+          event,
+        ): event is Extract<
+          ServerEvent,
+          { type: "mcp_server_auth_challenge" | "mcp_server_auth_result" }
+        > =>
+          (event.type === "mcp_server_auth_challenge" || event.type === "mcp_server_auth_result") &&
+          event.name === name,
       );
       if (context.utils.isSessionError(outcome)) {
         sendSessionMutationError(context, ws, message.id, outcome);
@@ -123,7 +129,8 @@ export function createMcpRouteHandlers(
       const params = toJsonRpcParams(message.params);
       const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const name = typeof params.name === "string" ? params.name.trim() : "";
-      const code = typeof params.code === "string" && params.code.trim() ? params.code.trim() : undefined;
+      const code =
+        typeof params.code === "string" && params.code.trim() ? params.code.trim() : undefined;
       const outcome = await captureWorkspaceControlOutcome(
         context,
         cwd,
@@ -174,7 +181,8 @@ export function createMcpRouteHandlers(
         context,
         cwd,
         async (session) => await session.emitMcpServers(),
-        (event): event is Extract<ServerEvent, { type: "mcp_servers" }> => event.type === "mcp_servers",
+        (event): event is Extract<ServerEvent, { type: "mcp_servers" }> =>
+          event.type === "mcp_servers",
       );
       if (context.utils.isSessionError(outcome)) {
         sendSessionMutationError(context, ws, message.id, outcome);

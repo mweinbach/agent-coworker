@@ -1,10 +1,20 @@
 import { useEffect, useState } from "react";
-import { ActivityIndicator, Alert, Modal, Pressable, ScrollView, Switch, Text, TextInput, View } from "react-native";
+import {
+  ActivityIndicator,
+  Alert,
+  Modal,
+  Pressable,
+  ScrollView,
+  Switch,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 
 import { Screen } from "@/components/ui/screen";
 import { SectionCard } from "@/components/ui/section-card";
 import { StatusPill } from "@/components/ui/status-pill";
-import { useMcpStore, type McpUpsertServer } from "@/features/cowork/mcpStore";
+import { type McpUpsertServer, useMcpStore } from "@/features/cowork/mcpStore";
 import { usePairingStore } from "@/features/pairing/pairingStore";
 import { isWorkspaceConnectionReady } from "@/features/relay/connectionState";
 import { useAppTheme } from "@/theme/use-app-theme";
@@ -65,35 +75,37 @@ function toServerConfig(draft: McpServerDraft): McpUpsertServer {
   return {
     name: draft.name.trim(),
     required: draft.required,
-    transport: draft.transportType === "stdio"
-      ? {
-          type: "stdio",
-          command: draft.command.trim(),
-          ...(draft.args.trim()
-            ? {
-                args: draft.args.split(/\s+/).filter(Boolean),
-              }
-            : {}),
-          ...(draft.cwd.trim() ? { cwd: draft.cwd.trim() } : {}),
-        }
-      : {
-          type: draft.transportType,
-          url: draft.url.trim(),
-        },
-    auth: draft.authType === "api_key"
-      ? {
-          type: "api_key",
-          ...(draft.headerName.trim() ? { headerName: draft.headerName.trim() } : {}),
-          ...(draft.prefix.trim() ? { prefix: draft.prefix.trim() } : {}),
-        }
-      : draft.authType === "oauth"
+    transport:
+      draft.transportType === "stdio"
         ? {
-            type: "oauth",
-            oauthMode: draft.oauthMode,
-            ...(draft.scope.trim() ? { scope: draft.scope.trim() } : {}),
-            ...(draft.resource.trim() ? { resource: draft.resource.trim() } : {}),
+            type: "stdio",
+            command: draft.command.trim(),
+            ...(draft.args.trim()
+              ? {
+                  args: draft.args.split(/\s+/).filter(Boolean),
+                }
+              : {}),
+            ...(draft.cwd.trim() ? { cwd: draft.cwd.trim() } : {}),
           }
-        : { type: "none" },
+        : {
+            type: draft.transportType,
+            url: draft.url.trim(),
+          },
+    auth:
+      draft.authType === "api_key"
+        ? {
+            type: "api_key",
+            ...(draft.headerName.trim() ? { headerName: draft.headerName.trim() } : {}),
+            ...(draft.prefix.trim() ? { prefix: draft.prefix.trim() } : {}),
+          }
+        : draft.authType === "oauth"
+          ? {
+              type: "oauth",
+              oauthMode: draft.oauthMode,
+              ...(draft.scope.trim() ? { scope: draft.scope.trim() } : {}),
+              ...(draft.resource.trim() ? { resource: draft.resource.trim() } : {}),
+            }
+          : { type: "none" },
   };
 }
 
@@ -182,8 +194,13 @@ export default function McpServersScreen() {
         presentationStyle="pageSheet"
         onRequestClose={() => setEditorVisible(false)}
       >
-        <ScrollView style={{ flex: 1, backgroundColor: theme.background }} contentContainerStyle={{ gap: 16, padding: 20 }}>
-          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+        <ScrollView
+          style={{ flex: 1, backgroundColor: theme.background }}
+          contentContainerStyle={{ gap: 16, padding: 20 }}
+        >
+          <View
+            style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}
+          >
             <Text style={{ color: theme.text, fontSize: 22, fontWeight: "800" }}>
               {previousName ? "Edit integration" : "New integration"}
             </Text>
@@ -221,13 +238,21 @@ export default function McpServersScreen() {
                     style={{
                       borderRadius: 999,
                       borderWidth: 1,
-                      borderColor: draft.transportType === transportType ? theme.primary : theme.border,
-                      backgroundColor: draft.transportType === transportType ? theme.primary : "transparent",
+                      borderColor:
+                        draft.transportType === transportType ? theme.primary : theme.border,
+                      backgroundColor:
+                        draft.transportType === transportType ? theme.primary : "transparent",
                       paddingHorizontal: 12,
                       paddingVertical: 7,
                     }}
                   >
-                    <Text style={{ color: draft.transportType === transportType ? theme.primaryText : theme.text, fontWeight: "700" }}>
+                    <Text
+                      style={{
+                        color:
+                          draft.transportType === transportType ? theme.primaryText : theme.text,
+                        fontWeight: "700",
+                      }}
+                    >
                       {transportType}
                     </Text>
                   </Pressable>
@@ -312,7 +337,13 @@ export default function McpServersScreen() {
                 />
               )}
 
-              <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+              <View
+                style={{
+                  flexDirection: "row",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                }}
+              >
                 <Text style={{ color: theme.text, fontSize: 15, fontWeight: "700" }}>Required</Text>
                 <Switch
                   value={draft.required}
@@ -323,7 +354,10 @@ export default function McpServersScreen() {
             </View>
           </SectionCard>
 
-          <SectionCard title="Authentication" description="Optional API key or OAuth auth for this integration.">
+          <SectionCard
+            title="Authentication"
+            description="Optional API key or OAuth auth for this integration."
+          >
             <View style={{ gap: 12 }}>
               <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
                 {(["none", "api_key", "oauth"] as const).map((authType) => (
@@ -339,7 +373,12 @@ export default function McpServersScreen() {
                       paddingVertical: 7,
                     }}
                   >
-                    <Text style={{ color: draft.authType === authType ? theme.primaryText : theme.text, fontWeight: "700" }}>
+                    <Text
+                      style={{
+                        color: draft.authType === authType ? theme.primaryText : theme.text,
+                        fontWeight: "700",
+                      }}
+                    >
                       {authType}
                     </Text>
                   </Pressable>
@@ -398,12 +437,18 @@ export default function McpServersScreen() {
                           borderRadius: 999,
                           borderWidth: 1,
                           borderColor: draft.oauthMode === oauthMode ? theme.primary : theme.border,
-                          backgroundColor: draft.oauthMode === oauthMode ? theme.primary : "transparent",
+                          backgroundColor:
+                            draft.oauthMode === oauthMode ? theme.primary : "transparent",
                           paddingHorizontal: 12,
                           paddingVertical: 7,
                         }}
                       >
-                        <Text style={{ color: draft.oauthMode === oauthMode ? theme.primaryText : theme.text, fontWeight: "700" }}>
+                        <Text
+                          style={{
+                            color: draft.oauthMode === oauthMode ? theme.primaryText : theme.text,
+                            fontWeight: "700",
+                          }}
+                        >
                           {oauthMode}
                         </Text>
                       </Pressable>
@@ -461,7 +506,14 @@ export default function McpServersScreen() {
               paddingVertical: 12,
             })}
           >
-            <Text style={{ color: theme.primaryText, fontSize: 15, fontWeight: "700", textAlign: "center" }}>
+            <Text
+              style={{
+                color: theme.primaryText,
+                fontSize: 15,
+                fontWeight: "700",
+                textAlign: "center",
+              }}
+            >
               Save integration
             </Text>
           </Pressable>
@@ -476,7 +528,10 @@ export default function McpServersScreen() {
 
       {error ? <SectionCard title="Error" description={error} /> : null}
 
-      <SectionCard title="Workspace integrations" description="Add, edit, validate, and migrate MCP servers.">
+      <SectionCard
+        title="Workspace integrations"
+        description="Add, edit, validate, and migrate MCP servers."
+      >
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
           <Pressable
             onPress={openCreate}
@@ -527,7 +582,10 @@ export default function McpServersScreen() {
       </SectionCard>
 
       {warnings.length > 0 ? (
-        <SectionCard title="Warnings" description="Some integration files or inherited servers need attention.">
+        <SectionCard
+          title="Warnings"
+          description="Some integration files or inherited servers need attention."
+        >
           <View style={{ gap: 8 }}>
             {warnings.map((warning) => (
               <Text key={warning} style={{ color: theme.warning, fontSize: 13, lineHeight: 18 }}>
@@ -557,20 +615,37 @@ export default function McpServersScreen() {
                     paddingVertical: 12,
                   }}
                 >
-                  <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                    }}
+                  >
                     <Text style={{ color: theme.text, fontSize: 15, fontWeight: "700", flex: 1 }}>
                       {server.name}
                     </Text>
                     <StatusPill
                       label={server.authMode}
-                      tone={server.authMode === "error" ? "danger" : server.authMode === "oauth_pending" ? "warning" : "neutral"}
+                      tone={
+                        server.authMode === "error"
+                          ? "danger"
+                          : server.authMode === "oauth_pending"
+                            ? "warning"
+                            : "neutral"
+                      }
                     />
                   </View>
-                  <Text selectable numberOfLines={1} style={{ fontSize: 12, color: theme.textSecondary }}>
+                  <Text
+                    selectable
+                    numberOfLines={1}
+                    style={{ fontSize: 12, color: theme.textSecondary }}
+                  >
                     {transportSummary(server)}
                   </Text>
                   <Text style={{ color: theme.textTertiary, fontSize: 11 }}>
-                    {server.source} {server.inherited ? "· inherited" : "· editable"} {server.authMessage ? `· ${server.authMessage}` : ""}
+                    {server.source} {server.inherited ? "· inherited" : "· editable"}{" "}
+                    {server.authMessage ? `· ${server.authMessage}` : ""}
                   </Text>
                   {validation ? (
                     <Text
@@ -580,7 +655,9 @@ export default function McpServersScreen() {
                         fontWeight: "600",
                       }}
                     >
-                      {validation.ok ? `Validated${validation.toolCount ? ` · ${validation.toolCount} tools` : ""}` : validation.message}
+                      {validation.ok
+                        ? `Validated${validation.toolCount ? ` · ${validation.toolCount} tools` : ""}`
+                        : validation.message}
                     </Text>
                   ) : null}
                   {server.auth?.type === "api_key" ? (
@@ -621,7 +698,9 @@ export default function McpServersScreen() {
                           paddingVertical: 8,
                         })}
                       >
-                        <Text style={{ color: theme.primaryText, fontWeight: "700", fontSize: 13 }}>Save key</Text>
+                        <Text style={{ color: theme.primaryText, fontWeight: "700", fontSize: 13 }}>
+                          Save key
+                        </Text>
                       </Pressable>
                     </View>
                   ) : null}
@@ -640,11 +719,15 @@ export default function McpServersScreen() {
                           paddingVertical: 8,
                         })}
                       >
-                        <Text style={{ color: theme.primaryText, fontWeight: "700", fontSize: 13 }}>Authenticate</Text>
+                        <Text style={{ color: theme.primaryText, fontWeight: "700", fontSize: 13 }}>
+                          Authenticate
+                        </Text>
                       </Pressable>
                       {lastAuthChallenge?.name === server.name ? (
                         <View style={{ gap: 8 }}>
-                          <Text style={{ color: theme.textSecondary, fontSize: 13, lineHeight: 18 }}>
+                          <Text
+                            style={{ color: theme.textSecondary, fontSize: 13, lineHeight: 18 }}
+                          >
                             {lastAuthChallenge.instructions}
                           </Text>
                           {lastAuthChallenge.url ? (
@@ -687,7 +770,9 @@ export default function McpServersScreen() {
                               paddingVertical: 8,
                             })}
                           >
-                            <Text style={{ color: theme.text, fontWeight: "700", fontSize: 13 }}>Complete auth</Text>
+                            <Text style={{ color: theme.text, fontWeight: "700", fontSize: 13 }}>
+                              Complete auth
+                            </Text>
                           </Pressable>
                         </View>
                       ) : null}
@@ -717,7 +802,9 @@ export default function McpServersScreen() {
                         paddingVertical: 5,
                       })}
                     >
-                      <Text style={{ color: theme.text, fontSize: 12, fontWeight: "600" }}>Edit</Text>
+                      <Text style={{ color: theme.text, fontSize: 12, fontWeight: "600" }}>
+                        Edit
+                      </Text>
                     </Pressable>
                     <Pressable
                       onPress={() => void validateServer(server.name)}
@@ -730,7 +817,9 @@ export default function McpServersScreen() {
                         paddingVertical: 5,
                       })}
                     >
-                      <Text style={{ color: theme.text, fontSize: 12, fontWeight: "600" }}>Validate</Text>
+                      <Text style={{ color: theme.text, fontSize: 12, fontWeight: "600" }}>
+                        Validate
+                      </Text>
                     </Pressable>
                     <Pressable
                       onPress={() => handleDelete(server.name)}
@@ -743,7 +832,9 @@ export default function McpServersScreen() {
                         paddingVertical: 5,
                       })}
                     >
-                      <Text style={{ color: theme.danger, fontSize: 12, fontWeight: "600" }}>Delete</Text>
+                      <Text style={{ color: theme.danger, fontSize: 12, fontWeight: "600" }}>
+                        Delete
+                      </Text>
                     </Pressable>
                   </View>
                 </View>
@@ -752,14 +843,24 @@ export default function McpServersScreen() {
           </View>
         </SectionCard>
       ) : !loading ? (
-        <SectionCard title="No servers" description="No MCP servers configured for this workspace." />
+        <SectionCard
+          title="No servers"
+          description="No MCP servers configured for this workspace."
+        />
       ) : null}
 
       {files.length > 0 ? (
-        <SectionCard title="Config files" description="Workspace and inherited integration files that contributed to this view.">
+        <SectionCard
+          title="Config files"
+          description="Workspace and inherited integration files that contributed to this view."
+        >
           <View style={{ gap: 8 }}>
             {files.map((file) => (
-              <Text key={`${file.source}:${file.path}`} selectable style={{ color: theme.textSecondary, fontSize: 13, lineHeight: 18 }}>
+              <Text
+                key={`${file.source}:${file.path}`}
+                selectable
+                style={{ color: theme.textSecondary, fontSize: 13, lineHeight: 18 }}
+              >
                 {file.source}: {file.path} {file.parseError ? `· ${file.parseError}` : ""}
               </Text>
             ))}

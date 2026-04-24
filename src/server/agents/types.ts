@@ -1,17 +1,16 @@
-import type { AgentSession } from "../session/AgentSession";
-import type { SessionDb } from "../sessionDb";
-import type { AgentConfig } from "../../types";
-import type { ProviderName } from "../../types";
 import type {
-  AgentSpawnContextOptions,
   AgentInspectResult,
   AgentMode,
   AgentReasoningEffort,
   AgentRole,
+  AgentSpawnContextOptions,
   PersistentAgentSummary,
 } from "../../shared/agents";
-import type { SessionBinding } from "../startServer/types";
+import type { AgentConfig, ProviderName } from "../../types";
+import type { AgentSession } from "../session/AgentSession";
 import type { SeededSessionContext } from "../session/SessionContext";
+import type { SessionDb } from "../sessionDb";
+import type { SessionBinding } from "../startServer/types";
 
 export type AgentSpawnOptions = AgentSpawnContextOptions & {
   parentSessionId: string;

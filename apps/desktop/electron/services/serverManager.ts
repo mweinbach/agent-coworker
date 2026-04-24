@@ -1,12 +1,11 @@
-import { spawn, type ChildProcessByStdio } from "node:child_process";
+import { type ChildProcessByStdio, spawn } from "node:child_process";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
 import type { Readable } from "node:stream";
-import { z } from "zod";
-
 import { app } from "electron";
+import { z } from "zod";
 
 import { resolvePackagedBuiltinDistDir } from "./desktopBuiltinPaths";
 import {
@@ -14,8 +13,8 @@ import {
   getServerTerminationSignal,
   getSourceStartupAttemptCount,
 } from "./serverPlatform";
-import { assertSafeId, assertWorkspaceDirectory } from "./validation";
 import { findPackagedSidecarLaunchCommand } from "./sidecar";
+import { assertSafeId, assertWorkspaceDirectory } from "./validation";
 
 const SERVER_STARTUP_TIMEOUT_MS = 15_000;
 const STDERR_TAIL_LIMIT = 16_384;
@@ -42,12 +41,14 @@ type ServerListening = {
   cwd: string;
 };
 
-const serverListeningSchema = z.object({
-  type: z.literal("server_listening"),
-  url: z.string().min(1),
-  port: z.number(),
-  cwd: z.string().min(1),
-}).passthrough();
+const serverListeningSchema = z
+  .object({
+    type: z.literal("server_listening"),
+    url: z.string().min(1),
+    port: z.number(),
+    cwd: z.string().min(1),
+  })
+  .passthrough();
 
 function resolveRepoRoot(): string {
   const fromEnv = process.env.COWORK_REPO_ROOT;
@@ -171,13 +172,23 @@ function waitForServerListening(child: ServerChildProcess): Promise<ServerListen
     const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
       cleanup();
       reject(
-        new Error(withRecentOutput(`Server exited before startup JSON (code=${code ?? "null"}, signal=${signal ?? "null"})`))
+        new Error(
+          withRecentOutput(
+            `Server exited before startup JSON (code=${code ?? "null"}, signal=${signal ?? "null"})`,
+          ),
+        ),
       );
     };
 
     const timeout = setTimeout(() => {
       cleanup();
-      reject(new Error(withRecentOutput(`Server startup timed out after ${SERVER_STARTUP_TIMEOUT_MS / 1000} seconds`)));
+      reject(
+        new Error(
+          withRecentOutput(
+            `Server startup timed out after ${SERVER_STARTUP_TIMEOUT_MS / 1000} seconds`,
+          ),
+        ),
+      );
     }, SERVER_STARTUP_TIMEOUT_MS);
 
     const cleanup = () => {
@@ -220,7 +231,7 @@ function buildSpawnArgs(workspacePath: string, yolo: boolean): string[] {
 
 function resolveSourceStartup(
   useSource: boolean,
-  resolveRepoRootImpl: () => string = resolveRepoRoot
+  resolveRepoRootImpl: () => string = resolveRepoRoot,
 ): { repoRoot: string | null; sourceEntry: string | null } {
   if (!useSource) {
     return { repoRoot: null, sourceEntry: null };
@@ -297,7 +308,11 @@ export class ServerManager {
   private readonly servers = new Map<string, ServerHandle>();
   private readonly pendingStarts = new Map<string, PendingServerHandle>();
 
-  async startWorkspaceServer(opts: { workspaceId: string; workspacePath: string; yolo: boolean }): Promise<{ url: string }> {
+  async startWorkspaceServer(opts: {
+    workspaceId: string;
+    workspacePath: string;
+    yolo: boolean;
+  }): Promise<{ url: string }> {
     const { workspaceId, workspacePath, yolo } = opts;
 
     assertSafeId(workspaceId, "workspaceId");
@@ -328,11 +343,13 @@ export class ServerManager {
     const sidecar = !useSource ? findSidecarLaunchCommand() : null;
     const builtInDir = !useSource ? resolvePackagedBuiltinDistDir() : null;
     if (!useSource && !builtInDir) {
-      throw new Error(`Bundled dist directory not found: ${path.join(process.resourcesPath, "dist")}`);
+      throw new Error(
+        `Bundled dist directory not found: ${path.join(process.resourcesPath, "dist")}`,
+      );
     }
 
     logServerManagerEvent(
-      `workspace=${workspaceId} start requested mode=${useSource ? "source" : "packaged"} workspacePath=${workspacePath}`
+      `workspace=${workspaceId} start requested mode=${useSource ? "source" : "packaged"} workspacePath=${workspacePath}`,
     );
 
     const attemptCount = getSourceStartupAttemptCount(useSource);
@@ -360,7 +377,7 @@ export class ServerManager {
           });
 
       logServerManagerEvent(
-        `workspace=${workspaceId} attempt=${attempt}/${attemptCount} spawn=${useSource ? "bun" : `${sidecar!.command} ${sidecar!.args.join(" ")}`.trim()}`
+        `workspace=${workspaceId} attempt=${attempt}/${attemptCount} spawn=${useSource ? "bun" : `${sidecar!.command} ${sidecar!.args.join(" ")}`.trim()}`,
       );
 
       let cleaned = false;
@@ -431,11 +448,11 @@ export class ServerManager {
         if (shouldRetry) {
           previousError = error;
           logServerManagerEvent(
-            `workspace=${workspaceId} retrying after Bun crash attempt=${attempt} error=${toErrorMessage(error)}`
+            `workspace=${workspaceId} retrying after Bun crash attempt=${attempt} error=${toErrorMessage(error)}`,
           );
           if (DEBUG_SERVER_STDERR) {
             process.stderr.write(
-              "[cowork-server] Bun crashed during startup; retrying with async transpiler disabled.\n"
+              "[cowork-server] Bun crashed during startup; retrying with async transpiler disabled.\n",
             );
           }
           continue;
@@ -443,16 +460,16 @@ export class ServerManager {
 
         if (isLikelyBunSegfault(stderrTail)) {
           logServerManagerEvent(
-            `workspace=${workspaceId} bun_crash error=${toErrorMessage(error)} stderrTail=${summarizeLogChunk(stderrTail)}`
+            `workspace=${workspaceId} bun_crash error=${toErrorMessage(error)} stderrTail=${summarizeLogChunk(stderrTail)}`,
           );
           throw new Error(
             `Cowork server crashed inside Bun while starting: ${toErrorMessage(error)}. ` +
-              "Try upgrading Bun and retrying."
+              "Try upgrading Bun and retrying.",
           );
         }
 
         logServerManagerEvent(
-          `workspace=${workspaceId} start_failed error=${toErrorMessage(error)} stderrTail=${summarizeLogChunk(stderrTail)}`
+          `workspace=${workspaceId} start_failed error=${toErrorMessage(error)} stderrTail=${summarizeLogChunk(stderrTail)}`,
         );
         throw error;
       }

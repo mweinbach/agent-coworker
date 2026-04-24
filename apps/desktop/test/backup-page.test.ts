@@ -1,6 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import { createElement } from "react";
-import { act } from "react";
+import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -27,42 +26,44 @@ const MOCK_UPDATE_STATE = {
   error: null,
 };
 
-mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
-  appendTranscriptBatch: async () => {},
-  appendTranscriptEvent: async () => {},
-  deleteTranscript: async () => {},
-  listDirectory: async () => [],
-  loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
-  pickWorkspaceDirectory: async () => null,
-  readTranscript: async () => [],
-  saveState: async () => {},
-  startWorkspaceServer: async () => ({ url: "ws://mock" }),
-  stopWorkspaceServer: async () => {},
-  showContextMenu: async () => null,
-  windowMinimize: async () => {},
-  windowMaximize: async () => {},
-  windowClose: async () => {},
-  getPlatform: async () => "linux",
-  readFile: async () => "",
-  previewOSFile: async () => {},
-  openPath: async () => {},
-  openExternalUrl: async () => {},
-  revealPath: async () => {},
-  copyPath: async () => {},
-  createDirectory: async () => {},
-  renamePath: async () => {},
-  trashPath: async () => {},
-  confirmAction: async () => true,
-  showNotification: async () => true,
-  getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  getUpdateState: async () => MOCK_UPDATE_STATE,
-  checkForUpdates: async () => {},
-  quitAndInstallUpdate: async () => {},
-  onSystemAppearanceChanged: () => () => {},
-  onMenuCommand: () => () => {},
-  onUpdateStateChanged: () => () => {},
-}));
+mock.module("../src/lib/desktopCommands", () =>
+  createDesktopCommandsMock({
+    appendTranscriptBatch: async () => {},
+    appendTranscriptEvent: async () => {},
+    deleteTranscript: async () => {},
+    listDirectory: async () => [],
+    loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
+    pickWorkspaceDirectory: async () => null,
+    readTranscript: async () => [],
+    saveState: async () => {},
+    startWorkspaceServer: async () => ({ url: "ws://mock" }),
+    stopWorkspaceServer: async () => {},
+    showContextMenu: async () => null,
+    windowMinimize: async () => {},
+    windowMaximize: async () => {},
+    windowClose: async () => {},
+    getPlatform: async () => "linux",
+    readFile: async () => "",
+    previewOSFile: async () => {},
+    openPath: async () => {},
+    openExternalUrl: async () => {},
+    revealPath: async () => {},
+    copyPath: async () => {},
+    createDirectory: async () => {},
+    renamePath: async () => {},
+    trashPath: async () => {},
+    confirmAction: async () => true,
+    showNotification: async () => true,
+    getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    getUpdateState: async () => MOCK_UPDATE_STATE,
+    checkForUpdates: async () => {},
+    quitAndInstallUpdate: async () => {},
+    onSystemAppearanceChanged: () => () => {},
+    onMenuCommand: () => () => {},
+    onUpdateStateChanged: () => () => {},
+  }),
+);
 
 mock.module("../src/lib/agentSocket", () => ({
   JsonRpcSocket: NoopJsonRpcSocket,
@@ -73,7 +74,9 @@ const { useAppStore } = await import("../src/app/store");
 
 describe("desktop backup page", () => {
   test("renders an empty-state prompt when no workspace is selected", () => {
-    const html = renderToStaticMarkup(createElement(BackupPage, { workspace: null, runtime: null }));
+    const html = renderToStaticMarkup(
+      createElement(BackupPage, { workspace: null, runtime: null }),
+    );
 
     expect(html).toContain("data-backup-page");
     expect(html).toContain("Select a workspace first to manage its backup history.");
@@ -370,7 +373,11 @@ describe("desktop backup page", () => {
   test("ignores stale delta previews from a different session with the same checkpoint id", async () => {
     const { dom, restore } = setupJsdom();
     const previousState = useAppStore.getState();
-    const deltaRequests: Array<{ workspaceId: string; targetSessionId: string; checkpointId: string }> = [];
+    const deltaRequests: Array<{
+      workspaceId: string;
+      targetSessionId: string;
+      checkpointId: string;
+    }> = [];
 
     useAppStore.setState({
       selectedWorkspaceId: "ws-1",
@@ -480,7 +487,11 @@ describe("desktop backup page", () => {
         },
       },
       requestWorkspaceBackups: async () => {},
-      requestWorkspaceBackupDelta: async (workspaceId: string, targetSessionId: string, checkpointId: string) => {
+      requestWorkspaceBackupDelta: async (
+        workspaceId: string,
+        targetSessionId: string,
+        checkpointId: string,
+      ) => {
         deltaRequests.push({ workspaceId, targetSessionId, checkpointId });
       },
     });
@@ -497,8 +508,9 @@ describe("desktop backup page", () => {
         await Promise.resolve();
       });
 
-      const checkpointButtons = Array.from(container.querySelectorAll("button"))
-        .filter((button) => button.textContent?.includes("cp-0001"));
+      const checkpointButtons = Array.from(container.querySelectorAll("button")).filter((button) =>
+        button.textContent?.includes("cp-0001"),
+      );
       expect(checkpointButtons).toHaveLength(2);
 
       await act(async () => {

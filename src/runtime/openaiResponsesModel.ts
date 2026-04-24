@@ -10,7 +10,7 @@ import {
 import type { AgentConfig } from "../types";
 import { resolveAuthHomeDir } from "../utils/authHome";
 
-import { pickKnownPiModel, type PiModel } from "./piRuntimeOptions";
+import { type PiModel, pickKnownPiModel } from "./piRuntimeOptions";
 import type { RuntimeRunTurnParams } from "./types";
 
 const OPENAI_RESPONSES_BASE_URL = "https://api.openai.com/v1";
@@ -88,11 +88,11 @@ function applySupportedOpenAiResponsesModel(
 ): PiModel {
   const supported = assertSupportedModel(provider, modelId, "model");
   const supportedLimits =
-    provider === "openai"
-      ? SUPPORTED_OPENAI_RESPONSES_MODEL_LIMITS[supported.id]
-      : undefined;
+    provider === "openai" ? SUPPORTED_OPENAI_RESPONSES_MODEL_LIMITS[supported.id] : undefined;
   if (provider === "openai" && !supportedLimits) {
-    throw new Error(`Missing supported OpenAI Responses model limits for openai model ${supported.id}.`);
+    throw new Error(
+      `Missing supported OpenAI Responses model limits for openai model ${supported.id}.`,
+    );
   }
   return {
     ...model,
@@ -116,7 +116,9 @@ function buildSupportedCodexResponsesModel(opts: {
       : SUPPORTED_OPENAI_RESPONSES_MODEL_LIMITS[opts.modelId];
 
   if (!supportedLimits) {
-    throw new Error(`Missing supported OpenAI Responses model limits for codex-cli model ${opts.modelId}.`);
+    throw new Error(
+      `Missing supported OpenAI Responses model limits for codex-cli model ${opts.modelId}.`,
+    );
   }
 
   return applySupportedOpenAiResponsesModel("codex-cli", opts.modelId, {
@@ -141,7 +143,9 @@ export async function resolveOpenAiResponsesModel(
   if (provider === "openai") {
     const model = pickKnownPiModel("openai", modelId);
     if (!model) {
-      throw new Error(`No OpenAI Responses model metadata available for provider openai (model: ${modelId}).`);
+      throw new Error(
+        `No OpenAI Responses model metadata available for provider openai (model: ${modelId}).`,
+      );
     }
     return {
       model: applySupportedOpenAiResponsesModel(provider, modelId, model),

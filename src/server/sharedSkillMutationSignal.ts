@@ -22,12 +22,12 @@ export async function readSharedSkillMutationSignal(
     const raw = await fs.readFile(signalPath, "utf-8");
     const parsed = JSON.parse(raw) as Partial<SharedSkillMutationSignal>;
     if (
-      typeof parsed.revision !== "string"
-      || parsed.revision.trim().length === 0
-      || typeof parsed.pid !== "number"
-      || !Number.isFinite(parsed.pid)
-      || typeof parsed.at !== "string"
-      || parsed.at.trim().length === 0
+      typeof parsed.revision !== "string" ||
+      parsed.revision.trim().length === 0 ||
+      typeof parsed.pid !== "number" ||
+      !Number.isFinite(parsed.pid) ||
+      typeof parsed.at !== "string" ||
+      parsed.at.trim().length === 0
     ) {
       return null;
     }

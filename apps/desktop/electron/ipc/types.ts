@@ -16,7 +16,7 @@ export type DesktopIpcDeps = {
 
 export type HandleDesktopInvoke = <TArgs extends unknown[], TResult>(
   channel: string,
-  handler: (event: IpcMainInvokeEvent, ...args: TArgs) => Promise<TResult> | TResult
+  handler: (event: IpcMainInvokeEvent, ...args: TArgs) => Promise<TResult> | TResult,
 ) => void;
 
 export type ParseWithSchema = <T>(schema: z.ZodType<T>, value: unknown, label: string) => T;

@@ -9,7 +9,10 @@ import { usePairingStore } from "@/features/pairing/pairingStore";
 import { isWorkspaceConnectionReady } from "@/features/relay/connectionState";
 import { useAppTheme } from "@/theme/use-app-theme";
 
-function providerTone(mode?: string, authorized?: boolean): "neutral" | "success" | "warning" | "danger" {
+function providerTone(
+  mode?: string,
+  authorized?: boolean,
+): "neutral" | "success" | "warning" | "danger" {
   if (authorized) return "success";
   if (mode === "oauth_pending") return "warning";
   if (mode === "error") return "danger";
@@ -95,7 +98,14 @@ export default function ProvidersScreen() {
                 <View style={{ gap: 12, marginTop: 4 }}>
                   {provider.models.length > 0 ? (
                     <View style={{ gap: 4 }}>
-                      <Text style={{ color: theme.textTertiary, fontSize: 11, fontWeight: "600", textTransform: "uppercase" }}>
+                      <Text
+                        style={{
+                          color: theme.textTertiary,
+                          fontSize: 11,
+                          fontWeight: "600",
+                          textTransform: "uppercase",
+                        }}
+                      >
                         Models
                       </Text>
                       <Text selectable style={{ color: theme.textSecondary, fontSize: 13 }}>
@@ -106,7 +116,14 @@ export default function ProvidersScreen() {
 
                   {status?.account ? (
                     <View style={{ gap: 4 }}>
-                      <Text style={{ color: theme.textTertiary, fontSize: 11, fontWeight: "600", textTransform: "uppercase" }}>
+                      <Text
+                        style={{
+                          color: theme.textTertiary,
+                          fontSize: 11,
+                          fontWeight: "600",
+                          textTransform: "uppercase",
+                        }}
+                      >
                         Account
                       </Text>
                       <Text selectable style={{ color: theme.textSecondary, fontSize: 13 }}>
@@ -117,12 +134,25 @@ export default function ProvidersScreen() {
 
                   {status?.usage?.rateLimits.length ? (
                     <View style={{ gap: 6 }}>
-                      <Text style={{ color: theme.textTertiary, fontSize: 11, fontWeight: "600", textTransform: "uppercase" }}>
+                      <Text
+                        style={{
+                          color: theme.textTertiary,
+                          fontSize: 11,
+                          fontWeight: "600",
+                          textTransform: "uppercase",
+                        }}
+                      >
                         Rate limits
                       </Text>
                       {status.usage.rateLimits.slice(0, 2).map((limit, index) => (
-                        <Text key={`${provider.id}:limit:${index}`} style={{ color: theme.textSecondary, fontSize: 13 }}>
-                          {(limit.limitName ?? "window")} {limit.primaryWindow ? `· ${Math.round(limit.primaryWindow.usedPercent)}% used` : ""}
+                        <Text
+                          key={`${provider.id}:limit:${index}`}
+                          style={{ color: theme.textSecondary, fontSize: 13 }}
+                        >
+                          {limit.limitName ?? "window"}{" "}
+                          {limit.primaryWindow
+                            ? `· ${Math.round(limit.primaryWindow.usedPercent)}% used`
+                            : ""}
                         </Text>
                       ))}
                     </View>
@@ -132,7 +162,14 @@ export default function ProvidersScreen() {
                     const draftKey = `${provider.id}:${method.id}`;
                     return (
                       <View key={method.id} style={{ gap: 8 }}>
-                        <Text style={{ color: theme.textTertiary, fontSize: 11, fontWeight: "600", textTransform: "uppercase" }}>
+                        <Text
+                          style={{
+                            color: theme.textTertiary,
+                            fontSize: 11,
+                            fontWeight: "600",
+                            textTransform: "uppercase",
+                          }}
+                        >
                           {method.label}
                         </Text>
                         <TextInput
@@ -171,7 +208,11 @@ export default function ProvidersScreen() {
                             paddingVertical: 9,
                           })}
                         >
-                          <Text style={{ color: theme.primaryText, fontWeight: "700", fontSize: 13 }}>Save key</Text>
+                          <Text
+                            style={{ color: theme.primaryText, fontWeight: "700", fontSize: 13 }}
+                          >
+                            Save key
+                          </Text>
                         </Pressable>
                       </View>
                     );
@@ -179,12 +220,23 @@ export default function ProvidersScreen() {
 
                   {oauthMethods.map((method) => {
                     const codeKey = `${provider.id}:${method.id}`;
-                    const isChallenge = lastAuthChallenge?.provider === provider.id && lastAuthChallenge.methodId === method.id;
-                    const isResult = lastAuthResult?.provider === provider.id && lastAuthResult.methodId === method.id;
+                    const isChallenge =
+                      lastAuthChallenge?.provider === provider.id &&
+                      lastAuthChallenge.methodId === method.id;
+                    const isResult =
+                      lastAuthResult?.provider === provider.id &&
+                      lastAuthResult.methodId === method.id;
 
                     return (
                       <View key={method.id} style={{ gap: 8 }}>
-                        <Text style={{ color: theme.textTertiary, fontSize: 11, fontWeight: "600", textTransform: "uppercase" }}>
+                        <Text
+                          style={{
+                            color: theme.textTertiary,
+                            fontSize: 11,
+                            fontWeight: "600",
+                            textTransform: "uppercase",
+                          }}
+                        >
                           {method.label}
                         </Text>
                         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
@@ -199,7 +251,9 @@ export default function ProvidersScreen() {
                               paddingVertical: 9,
                             })}
                           >
-                            <Text style={{ color: theme.primaryText, fontWeight: "700", fontSize: 13 }}>
+                            <Text
+                              style={{ color: theme.primaryText, fontWeight: "700", fontSize: 13 }}
+                            >
                               {status?.authorized ? "Reconnect" : "Connect"}
                             </Text>
                           </Pressable>
@@ -217,7 +271,11 @@ export default function ProvidersScreen() {
                                 paddingVertical: 9,
                               })}
                             >
-                              <Text style={{ color: theme.danger, fontWeight: "700", fontSize: 13 }}>Disconnect</Text>
+                              <Text
+                                style={{ color: theme.danger, fontWeight: "700", fontSize: 13 }}
+                              >
+                                Disconnect
+                              </Text>
                             </Pressable>
                           ) : null}
                         </View>
@@ -234,7 +292,10 @@ export default function ProvidersScreen() {
                               padding: 12,
                             }}
                           >
-                            <Text selectable style={{ color: theme.textSecondary, fontSize: 13, lineHeight: 18 }}>
+                            <Text
+                              selectable
+                              style={{ color: theme.textSecondary, fontSize: 13, lineHeight: 18 }}
+                            >
                               {lastAuthChallenge.instructions}
                             </Text>
                             {lastAuthChallenge.url ? (
@@ -277,7 +338,9 @@ export default function ProvidersScreen() {
                                 paddingVertical: 9,
                               })}
                             >
-                              <Text style={{ color: theme.text, fontWeight: "700", fontSize: 13 }}>Complete sign-in</Text>
+                              <Text style={{ color: theme.text, fontWeight: "700", fontSize: 13 }}>
+                                Complete sign-in
+                              </Text>
                             </Pressable>
                           </View>
                         ) : null}

@@ -1,14 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import type { ModelMessage } from "../src/types";
-
 import {
   extractPiAssistantText,
   extractPiReasoningText,
   mergePiUsage,
-  normalizePiUsage,
   modelMessagesToPiMessages,
+  normalizePiUsage,
   piTurnMessagesToModelMessages,
 } from "../src/runtime/piMessageBridge";
+import type { ModelMessage } from "../src/types";
 
 describe("pi message bridge", () => {
   test("converts model messages into pi messages for user/assistant/tool results", () => {
@@ -19,7 +18,12 @@ describe("pi message bridge", () => {
         content: [
           { type: "text", text: "Working on it." },
           { type: "reasoning", text: "Need to inspect file first." },
-          { type: "tool-call", toolCallId: "call-1", toolName: "read", input: { path: "/tmp/a.ts" } },
+          {
+            type: "tool-call",
+            toolCallId: "call-1",
+            toolName: "read",
+            input: { path: "/tmp/a.ts" },
+          },
         ],
       },
       {
@@ -91,14 +95,19 @@ describe("pi message bridge", () => {
         content: [
           { type: "text", text: "Done." },
           { type: "thinking", thinking: "I verified all requirements." },
-          { type: "toolCall", id: "call-2", name: "write", arguments: { path: "/tmp/a.ts", content: "ok" } },
+          {
+            type: "toolCall",
+            id: "call-2",
+            name: "write",
+            arguments: { path: "/tmp/a.ts", content: "ok" },
+          },
         ],
       },
       {
         role: "toolResult",
         toolCallId: "call-2",
         toolName: "write",
-        content: [{ type: "text", text: "{\"written\":true}" }],
+        content: [{ type: "text", text: '{"written":true}' }],
         isError: false,
       },
     ] as any[];
@@ -106,7 +115,9 @@ describe("pi message bridge", () => {
     const modelMessages = piTurnMessagesToModelMessages(piTurnMessages as any);
     expect(modelMessages).toHaveLength(2);
     expect(modelMessages[0].role).toBe("assistant");
-    expect((modelMessages[0] as any).content.some((part: any) => part.type === "reasoning")).toBe(true);
+    expect((modelMessages[0] as any).content.some((part: any) => part.type === "reasoning")).toBe(
+      true,
+    );
     expect(modelMessages[1].role).toBe("tool");
     expect((modelMessages[1] as any).content[0].type).toBe("tool-result");
   });
@@ -118,7 +129,12 @@ describe("pi message bridge", () => {
         content: [
           { type: "text", text: "progress note", phase: "commentary" },
           { type: "text", text: "final answer", phase: "final_answer" },
-          { type: "toolCall", id: "call-2", name: "write", arguments: { path: "/tmp/a.ts", content: "ok" } },
+          {
+            type: "toolCall",
+            id: "call-2",
+            name: "write",
+            arguments: { path: "/tmp/a.ts", content: "ok" },
+          },
         ],
       },
     ] as any[];
@@ -128,7 +144,12 @@ describe("pi message bridge", () => {
     expect(modelMessages[0].role).toBe("assistant");
     expect((modelMessages[0] as any).content).toEqual([
       { type: "text", text: "final answer", phase: "final_answer" },
-      { type: "tool-call", toolCallId: "call-2", toolName: "write", input: { path: "/tmp/a.ts", content: "ok" } },
+      {
+        type: "tool-call",
+        toolCallId: "call-2",
+        toolName: "write",
+        input: { path: "/tmp/a.ts", content: "ok" },
+      },
     ]);
   });
 

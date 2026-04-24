@@ -2,38 +2,42 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 
 import {
-  discoverOAuthProtectedResourceMetadata,
   discoverAuthorizationServerMetadata,
-  startAuthorization,
+  discoverOAuthProtectedResourceMetadata,
   exchangeAuthorization,
   registerClient,
+  startAuthorization,
 } from "@modelcontextprotocol/sdk/client/auth.js";
-import { checkResourceAllowed, resourceUrlFromServerUrl } from "@modelcontextprotocol/sdk/shared/auth-utils.js";
 import type {
   AuthorizationServerMetadata,
   OAuthClientInformationMixed,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
-import { z } from "zod";
-
-import type { MCPRegistryServer } from "./configRegistry";
 import {
-  mcpTokenEndpointAuthMethods,
+  checkResourceAllowed,
+  resourceUrlFromServerUrl,
+} from "@modelcontextprotocol/sdk/shared/auth-utils.js";
+import { z } from "zod";
+import { openExternalUrl, type UrlOpener } from "../utils/browser";
+import { nowIso } from "../utils/typeGuards";
+import {
   type MCPServerOAuthClientInfo,
   type MCPServerOAuthPending,
   type MCPServerOAuthTokens,
   type MCPTokenEndpointAuthMethod,
+  mcpTokenEndpointAuthMethods,
 } from "./authStore";
-import { nowIso } from "../utils/typeGuards";
-import { openExternalUrl, type UrlOpener } from "../utils/browser";
+import type { MCPRegistryServer } from "./configRegistry";
 
 /** Default client_id used when no dynamic registration endpoint is available. */
 const FALLBACK_CLIENT_ID = "agent-coworker-desktop";
 const nonEmptyStringSchema = z.string().trim().min(1);
 const nonEmptyStringArraySchema = z.array(nonEmptyStringSchema).min(1);
 const positiveFiniteNumberSchema = z.number().finite().positive();
-const authServerMetadataSchema = z.object({
-  registration_endpoint: nonEmptyStringSchema.optional(),
-}).passthrough();
+const authServerMetadataSchema = z
+  .object({
+    registration_endpoint: nonEmptyStringSchema.optional(),
+  })
+  .passthrough();
 
 export interface MCPOAuthChallenge {
   method: "auto" | "code";
@@ -74,15 +78,16 @@ function generateOpaqueValue(bytes: number): string {
   return toBase64Url(randomBytes(bytes));
 }
 
-function isHttpLikeServer(
-  server: MCPRegistryServer,
-): server is MCPRegistryServer & { transport: Extract<MCPRegistryServer["transport"], { type: "http" | "sse" }> } {
+function isHttpLikeServer(server: MCPRegistryServer): server is MCPRegistryServer & {
+  transport: Extract<MCPRegistryServer["transport"], { type: "http" | "sse" }>;
+} {
   return server.transport.type === "http" || server.transport.type === "sse";
 }
 
 function normalizeTokenEndpointAuthMethod(value: unknown): MCPTokenEndpointAuthMethod | undefined {
-  return typeof value === "string" && mcpTokenEndpointAuthMethods.includes(value as MCPTokenEndpointAuthMethod)
-    ? value as MCPTokenEndpointAuthMethod
+  return typeof value === "string" &&
+    mcpTokenEndpointAuthMethods.includes(value as MCPTokenEndpointAuthMethod)
+    ? (value as MCPTokenEndpointAuthMethod)
     : undefined;
 }
 
@@ -99,7 +104,11 @@ function closeCapture(capture: CallbackCapture, opts: { keepEntry?: boolean } = 
   }
 }
 
-async function createCallbackCapture(challengeId: string, state: string, expiresAt: string): Promise<CallbackCapture> {
+async function createCallbackCapture(
+  challengeId: string,
+  state: string,
+  expiresAt: string,
+): Promise<CallbackCapture> {
   const server = createServer((req, res) => {
     const requestUrl = new URL(req.url ?? "/", "http://127.0.0.1");
     if (requestUrl.pathname !== "/oauth/callback") {
@@ -131,7 +140,9 @@ async function createCallbackCapture(challengeId: string, state: string, expires
     capture.code = code;
     res.statusCode = 200;
     res.setHeader("content-type", "text/html; charset=utf-8");
-    res.end("<html><body><h1>Authorization complete</h1><p>You can close this window.</p></body></html>");
+    res.end(
+      "<html><body><h1>Authorization complete</h1><p>You can close this window.</p></body></html>",
+    );
     closeCapture(capture, { keepEntry: true });
   });
 
@@ -186,13 +197,16 @@ async function resolveAuthorizationServerUrl(serverUrl: string): Promise<string>
 }
 
 async function resolveOAuthResource(
-  server: MCPRegistryServer & { transport: Extract<MCPRegistryServer["transport"], { type: "http" | "sse" }> },
+  server: MCPRegistryServer & {
+    transport: Extract<MCPRegistryServer["transport"], { type: "http" | "sse" }>;
+  },
   pendingResource?: string,
 ): Promise<URL | undefined> {
   if (pendingResource?.trim()) {
     return new URL(pendingResource.trim());
   }
-  const configuredResource = server.auth?.type === "oauth" ? server.auth.resource?.trim() : undefined;
+  const configuredResource =
+    server.auth?.type === "oauth" ? server.auth.resource?.trim() : undefined;
   if (configuredResource) {
     return new URL(configuredResource);
   }
@@ -241,7 +255,8 @@ async function ensureClientInformation(opts: {
 }): Promise<{ clientInfo: OAuthClientInformationMixed; registered?: MCPServerOAuthClientInfo }> {
   const metadata = authServerMetadataSchema.safeParse(opts.metadata);
   const registrationEndpoint = metadata.success ? metadata.data.registration_endpoint : undefined;
-  const storedClientRedirectUris = opts.storedClientInfo?.redirectUris?.filter((value) => value.trim().length > 0) ?? [];
+  const storedClientRedirectUris =
+    opts.storedClientInfo?.redirectUris?.filter((value) => value.trim().length > 0) ?? [];
   const canReuseStoredClientInfo = (() => {
     if (!opts.storedClientInfo) return false;
     if (!registrationEndpoint) return true;
@@ -282,9 +297,15 @@ async function ensureClientInformation(opts: {
         clientId: registered.client_id,
         ...(registered.client_secret ? { clientSecret: registered.client_secret } : {}),
         ...(normalizeTokenEndpointAuthMethod(registered.token_endpoint_auth_method)
-          ? { tokenEndpointAuthMethod: normalizeTokenEndpointAuthMethod(registered.token_endpoint_auth_method) }
+          ? {
+              tokenEndpointAuthMethod: normalizeTokenEndpointAuthMethod(
+                registered.token_endpoint_auth_method,
+              ),
+            }
           : {}),
-        ...(registered.redirect_uris?.length ? { redirectUris: [...registered.redirect_uris] } : {}),
+        ...(registered.redirect_uris?.length
+          ? { redirectUris: [...registered.redirect_uris] }
+          : {}),
         updatedAt: nowIso(),
       };
 
@@ -310,7 +331,7 @@ export async function authorizeMCPServerOAuth(
     throw new Error("OAuth is only supported for HTTP/SSE MCP transports.");
   }
   if (!server.auth || server.auth.type !== "oauth") {
-    throw new Error(`Server \"${server.name}\" is not configured for OAuth.`);
+    throw new Error(`Server "${server.name}" is not configured for OAuth.`);
   }
   const transport = server.transport;
 
@@ -369,11 +390,12 @@ export async function authorizeMCPServerOAuth(
     ...(resource ? { resource: resource.href } : {}),
   };
 
-  const instructions = method === "auto"
-    ? openedBrowser
-      ? "Complete sign-in in your browser. If redirect fails, paste the OAuth code manually."
-      : "Open the OAuth URL in a browser, then paste the OAuth code manually."
-    : "Open the OAuth URL in a browser and paste the OAuth code.";
+  const instructions =
+    method === "auto"
+      ? openedBrowser
+        ? "Complete sign-in in your browser. If redirect fails, paste the OAuth code manually."
+        : "Open the OAuth URL in a browser, then paste the OAuth code manually."
+      : "Open the OAuth URL in a browser and paste the OAuth code.";
 
   return {
     challenge: {
@@ -416,7 +438,7 @@ export async function exchangeMCPServerOAuthCode(opts: {
     throw new Error("OAuth code is required.");
   }
   if (!opts.server.auth || opts.server.auth.type !== "oauth") {
-    throw new Error(`Server \"${opts.server.name}\" is not configured for OAuth.`);
+    throw new Error(`Server "${opts.server.name}" is not configured for OAuth.`);
   }
   if (!isHttpLikeServer(opts.server)) {
     throw new Error("OAuth is only supported for HTTP/SSE MCP transports.");
@@ -425,8 +447,8 @@ export async function exchangeMCPServerOAuthCode(opts: {
   const resource = await resolveOAuthResource(opts.server, opts.pending.resource);
 
   // Resolve authorization server URL — use stored value from pending, or re-discover.
-  const authServerUrl = opts.pending.authorizationServerUrl
-    ?? await resolveAuthorizationServerUrl(transport.url);
+  const authServerUrl =
+    opts.pending.authorizationServerUrl ?? (await resolveAuthorizationServerUrl(transport.url));
 
   // Discover metadata for the token endpoint.
   const metadata = await resolveAuthServerMetadata(authServerUrl);

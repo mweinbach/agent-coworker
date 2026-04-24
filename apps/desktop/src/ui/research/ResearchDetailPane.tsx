@@ -1,19 +1,24 @@
-import { useEffect, useId, useRef, useState, type CSSProperties } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { ActivityIcon, CheckIcon, MessageSquareIcon, PanelRightIcon, PencilIcon } from "lucide-react";
-
-import { usePrefersReducedMotion } from "../../lib/usePrefersReducedMotion";
+import {
+  ActivityIcon,
+  CheckIcon,
+  MessageSquareIcon,
+  PanelRightIcon,
+  PencilIcon,
+} from "lucide-react";
+import { type CSSProperties, useEffect, useId, useRef, useState } from "react";
+import { useAppStore } from "../../app/store";
 
 import type { ResearchDetail } from "../../app/types";
-import { useAppStore } from "../../app/store";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { formatRelativeAge } from "../../lib/time";
+import { usePrefersReducedMotion } from "../../lib/usePrefersReducedMotion";
+import { cn } from "../../lib/utils";
 import { ResearchExportMenu } from "./ResearchExportMenu";
 import { ResearchFollowUpComposer } from "./ResearchFollowUpComposer";
 import { ResearchReportRenderer } from "./ResearchReportRenderer";
 import { ResearchSourcesList } from "./ResearchSourcesList";
-import { cn } from "../../lib/utils";
 
 const RESEARCH_SOURCES_PANEL_WIDTH = "clamp(18rem, 30vw, 26rem)";
 const RESEARCH_INLINE_SOURCES_MIN_DETAIL_WIDTH = 36 * 16;
@@ -66,7 +71,10 @@ function useRunningElapsed(startedAtIso: string, running: boolean): number {
   return Math.max(0, nowMs - startedMs);
 }
 
-function useElementWidth<T extends HTMLElement>(ref: React.RefObject<T | null>, watchKey?: string | null): number {
+function useElementWidth<T extends HTMLElement>(
+  ref: React.RefObject<T | null>,
+  watchKey?: string | null,
+): number {
   const [width, setWidth] = useState(0);
 
   useEffect(() => {
@@ -132,10 +140,15 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
   const sourceCount = research.sources.length;
   const thoughtCount = research.thoughtSummaries.length;
   const showSourcesPanel = sourcesOpen && sourceCount > 0;
-  const sourcesOverlay = detailBodyWidth > 0 && detailBodyWidth < RESEARCH_INLINE_SOURCES_MIN_DETAIL_WIDTH;
+  const sourcesOverlay =
+    detailBodyWidth > 0 && detailBodyWidth < RESEARCH_INLINE_SOURCES_MIN_DETAIL_WIDTH;
   const sourcesPanelStyle = {
     "--research-sources-panel-width": RESEARCH_SOURCES_PANEL_WIDTH,
-    flexBasis: sourcesOverlay ? undefined : showSourcesPanel ? "var(--research-sources-panel-width)" : "0px",
+    flexBasis: sourcesOverlay
+      ? undefined
+      : showSourcesPanel
+        ? "var(--research-sources-panel-width)"
+        : "0px",
     width: showSourcesPanel
       ? sourcesOverlay
         ? "min(var(--research-sources-panel-width), calc(100% - 0.75rem))"
@@ -148,12 +161,21 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
       <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-border/55 px-4 py-2">
         <div className="flex min-w-0 flex-1 basis-[26rem] flex-wrap items-center gap-x-4 gap-y-2">
           <div className="flex min-w-0 flex-1 basis-48 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-            <Badge className={cn("shrink-0", research.planPending ? "border-info/25 bg-info/10 text-info" : statusClassName(research.status))}>
+            <Badge
+              className={cn(
+                "shrink-0",
+                research.planPending
+                  ? "border-info/25 bg-info/10 text-info"
+                  : statusClassName(research.status),
+              )}
+            >
               {research.planPending ? "Plan Ready" : statusLabel(research.status)}
             </Badge>
             {running ? (
               <>
-                <span className="whitespace-nowrap tabular-nums text-foreground/80">{formatElapsed(elapsedMs)}</span>
+                <span className="whitespace-nowrap tabular-nums text-foreground/80">
+                  {formatElapsed(elapsedMs)}
+                </span>
                 <span aria-hidden="true">·</span>
                 <span className="whitespace-nowrap">
                   <span className="tabular-nums text-foreground/80">{sourceCount}</span>{" "}
@@ -193,7 +215,10 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
                 sourcesOpen ? "bg-primary/10 border-primary/30 text-primary" : "bg-muted/15",
               )}
             >
-              <PanelRightIcon className={cn("h-3.5 w-3.5 transition-transform", sourcesOpen && "rotate-180")} aria-hidden="true" />
+              <PanelRightIcon
+                className={cn("h-3.5 w-3.5 transition-transform", sourcesOpen && "rotate-180")}
+                aria-hidden="true"
+              />
               Sources
               <span className="rounded-full bg-muted/80 px-1.5 text-[10px] font-medium tabular-nums text-muted-foreground">
                 {sourceCount}
@@ -206,7 +231,12 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
             disabled={!canExport}
           />
           {running ? (
-            <Button size="sm" variant="outline" type="button" onClick={() => void cancelResearch(research.id)}>
+            <Button
+              size="sm"
+              variant="outline"
+              type="button"
+              onClick={() => void cancelResearch(research.id)}
+            >
               Cancel
             </Button>
           ) : null}
@@ -226,7 +256,8 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
               <div className="rounded-2xl border border-info/25 bg-info/5 px-5 py-4">
                 <div className="mb-3 text-sm font-medium text-info">Research Plan</div>
                 <div className="mb-4 text-xs text-muted-foreground">
-                  Review the proposed plan below. Approve it to start the full research, or request changes.
+                  Review the proposed plan below. Approve it to start the full research, or request
+                  changes.
                 </div>
                 {!refineOpen ? (
                   <div className="flex flex-wrap gap-2">
@@ -236,7 +267,9 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
                       disabled={planActionLoading}
                       onClick={() => {
                         setPlanActionLoading(true);
-                        void approveResearchPlan(research.id).finally(() => setPlanActionLoading(false));
+                        void approveResearchPlan(research.id).finally(() =>
+                          setPlanActionLoading(false),
+                        );
                       }}
                     >
                       <CheckIcon className="h-3.5 w-3.5" />
@@ -506,21 +539,29 @@ function ResearchReasoningStream({
               <span
                 className={cn(
                   "relative z-10 mt-1 h-4 w-4 rounded-full border bg-background",
-                  isLatest ? "border-primary shadow-[0_0_0_5px_hsl(var(--primary)/0.12)]" : "border-primary/35",
+                  isLatest
+                    ? "border-primary shadow-[0_0_0_5px_hsl(var(--primary)/0.12)]"
+                    : "border-primary/35",
                 )}
                 aria-hidden="true"
               />
               <div
                 className={cn(
                   "rounded-xl border px-3.5 py-3",
-                  isLatest ? "border-primary/25 bg-background/80" : "border-border/45 bg-background/55",
+                  isLatest
+                    ? "border-primary/25 bg-background/80"
+                    : "border-border/45 bg-background/55",
                 )}
               >
                 <div className="mb-1 flex items-center gap-2 text-[11px] font-medium text-muted-foreground">
                   <span className="tabular-nums">Step {index + 1}</span>
                   <span aria-hidden="true">·</span>
                   <span>
-                    {new Date(thought.ts).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", second: "2-digit" })}
+                    {new Date(thought.ts).toLocaleTimeString(undefined, {
+                      hour: "numeric",
+                      minute: "2-digit",
+                      second: "2-digit",
+                    })}
                   </span>
                 </div>
                 <div className="whitespace-pre-wrap text-sm leading-6 text-foreground/90">

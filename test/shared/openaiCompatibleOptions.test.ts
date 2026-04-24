@@ -2,9 +2,9 @@ import { describe, expect, test } from "bun:test";
 
 import {
   getCodexWebSearchBackendFromProviderOptions,
-  getLocalWebSearchProviderFromProviderOptions,
   getGoogleNativeWebSearchFromProviderOptions,
   getGoogleThinkingLevelFromProviderOptions,
+  getLocalWebSearchProviderFromProviderOptions,
   mergeEditableOpenAiCompatibleProviderOptions,
   pickEditableOpenAiCompatibleProviderOptions,
 } from "../../src/shared/openaiCompatibleOptions";
@@ -175,26 +175,32 @@ describe("OpenAI compatible provider option helpers", () => {
 
   test("getCodexWebSearchBackendFromProviderOptions defaults codex sessions to native", () => {
     expect(getCodexWebSearchBackendFromProviderOptions(undefined)).toBe("native");
-    expect(getCodexWebSearchBackendFromProviderOptions({
-      "codex-cli": {
-        webSearchBackend: "exa",
-      },
-    })).toBe("exa");
+    expect(
+      getCodexWebSearchBackendFromProviderOptions({
+        "codex-cli": {
+          webSearchBackend: "exa",
+        },
+      }),
+    ).toBe("exa");
   });
 
   test("getLocalWebSearchProviderFromProviderOptions resolves explicit and fallback local providers", () => {
     expect(getLocalWebSearchProviderFromProviderOptions(undefined)).toBe("exa");
-    expect(getLocalWebSearchProviderFromProviderOptions({
-      "codex-cli": {
-        webSearchBackend: "parallel",
-      },
-    })).toBe("parallel");
-    expect(getLocalWebSearchProviderFromProviderOptions({
-      "codex-cli": {
-        webSearchBackend: "native",
-        webSearchFallbackBackend: "parallel",
-      },
-    })).toBe("parallel");
+    expect(
+      getLocalWebSearchProviderFromProviderOptions({
+        "codex-cli": {
+          webSearchBackend: "parallel",
+        },
+      }),
+    ).toBe("parallel");
+    expect(
+      getLocalWebSearchProviderFromProviderOptions({
+        "codex-cli": {
+          webSearchBackend: "native",
+          webSearchFallbackBackend: "parallel",
+        },
+      }),
+    ).toBe("parallel");
   });
 
   test("google provider option getters read editable Gemini tool toggles", () => {
@@ -211,16 +217,20 @@ describe("OpenAI compatible provider option helpers", () => {
 
   test("google native web search defaults to provider-native search when unset", () => {
     expect(getGoogleNativeWebSearchFromProviderOptions(undefined)).toBe(true);
-    expect(getGoogleNativeWebSearchFromProviderOptions({
-      "codex-cli": {
-        webSearchBackend: "native",
-      },
-    })).toBe(true);
-    expect(getGoogleNativeWebSearchFromProviderOptions({
-      "codex-cli": {
-        webSearchBackend: "parallel",
-      },
-    })).toBe(false);
+    expect(
+      getGoogleNativeWebSearchFromProviderOptions({
+        "codex-cli": {
+          webSearchBackend: "native",
+        },
+      }),
+    ).toBe(true);
+    expect(
+      getGoogleNativeWebSearchFromProviderOptions({
+        "codex-cli": {
+          webSearchBackend: "parallel",
+        },
+      }),
+    ).toBe(false);
   });
 
   test("mergeEditableOpenAiCompatibleProviderOptions preserves explicit empty Gemini thinkingConfig clears", () => {

@@ -48,7 +48,9 @@ export function createSkillTool(ctx: ToolContext) {
     typeof ctx.config.featureFlags?.workspace?.a2ui === "boolean"
       ? ctx.config.featureFlags.workspace.a2ui
       : (ctx.config.enableA2ui ?? false);
-  const skills = (ctx.availableSkills ?? []).filter((skill) => a2uiEnabled || skill.name !== "a2ui");
+  const skills = (ctx.availableSkills ?? []).filter(
+    (skill) => a2uiEnabled || skill.name !== "a2ui",
+  );
   const searchOrder = [
     "project",
     "global (~/.cowork/skills)",
@@ -69,7 +71,8 @@ export function createSkillTool(ctx: ToolContext) {
     const names = skills.map((s) => `'${s.name}'`).join(", ");
     paramDesc = `The skill to load. Available: ${names}`;
   } else {
-    paramDesc = "The skill to load (use the exact name from the Available Skills section of the system prompt)";
+    paramDesc =
+      "The skill to load (use the exact name from the Available Skills section of the system prompt)";
   }
 
   return defineTool({

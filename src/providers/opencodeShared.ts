@@ -11,8 +11,14 @@ export const OPENCODE_ZEN_EXTRA_MODELS = [
   "minimax-m2.5-free",
   "minimax-m2.5",
 ] as const;
-export const OPENCODE_ZEN_AVAILABLE_MODELS = [...OPENCODE_GO_AVAILABLE_MODELS, ...OPENCODE_ZEN_EXTRA_MODELS] as const;
-export const OPENCODE_MODEL_IDS = [...OPENCODE_GO_AVAILABLE_MODELS, ...OPENCODE_ZEN_EXTRA_MODELS] as const;
+export const OPENCODE_ZEN_AVAILABLE_MODELS = [
+  ...OPENCODE_GO_AVAILABLE_MODELS,
+  ...OPENCODE_ZEN_EXTRA_MODELS,
+] as const;
+export const OPENCODE_MODEL_IDS = [
+  ...OPENCODE_GO_AVAILABLE_MODELS,
+  ...OPENCODE_ZEN_EXTRA_MODELS,
+] as const;
 export type OpenCodeModelId = (typeof OPENCODE_MODEL_IDS)[number];
 
 export type OpenCodeModelSpec = {
@@ -147,11 +153,16 @@ const OPENCODE_ZEN_MODEL_PRICING: Partial<Record<OpenCodeModelId, OpenCodeModelP
 };
 
 export const OPENCODE_MODEL_METADATA_NOTES: Partial<Record<OpenCodeModelId, string>> = {
-  "nemotron-3-super-free": "Official NVIDIA docs publish a 1M-token context window, but not an authoritative max-output limit.",
-  "mimo-v2-flash-free": "Official Xiaomi docs publish a 256k context window, but not an authoritative max-output limit.",
-  "big-pickle": "OpenCode Zen currently publishes this model id and pricing, but not a public context-window or max-output spec.",
-  "minimax-m2.5-free": "Official MiniMax docs publish a 204,800-token input context window, but not an authoritative max-output limit.",
-  "minimax-m2.5": "Official MiniMax docs publish a 204,800-token input context window, but not an authoritative max-output limit.",
+  "nemotron-3-super-free":
+    "Official NVIDIA docs publish a 1M-token context window, but not an authoritative max-output limit.",
+  "mimo-v2-flash-free":
+    "Official Xiaomi docs publish a 256k context window, but not an authoritative max-output limit.",
+  "big-pickle":
+    "OpenCode Zen currently publishes this model id and pricing, but not a public context-window or max-output spec.",
+  "minimax-m2.5-free":
+    "Official MiniMax docs publish a 204,800-token input context window, but not an authoritative max-output limit.",
+  "minimax-m2.5":
+    "Official MiniMax docs publish a 204,800-token input context window, but not an authoritative max-output limit.",
 };
 
 export const OPENCODE_PROVIDER_CONFIGS: Record<OpenCodeProviderName, OpenCodeProviderConfig> = {
@@ -176,7 +187,9 @@ export const OPENCODE_PROVIDER_CONFIGS: Record<OpenCodeProviderName, OpenCodePro
 };
 
 export function isOpenCodeProviderName(value: unknown): value is OpenCodeProviderName {
-  return typeof value === "string" && (OPENCODE_PROVIDER_NAMES as readonly string[]).includes(value);
+  return (
+    typeof value === "string" && (OPENCODE_PROVIDER_NAMES as readonly string[]).includes(value)
+  );
 }
 
 export function getOpenCodeProviderConfig(provider: OpenCodeProviderName): OpenCodeProviderConfig {
@@ -191,7 +204,9 @@ export function isOpenCodeModelSupportedByProvider(
   provider: OpenCodeProviderName,
   modelId: string,
 ): modelId is OpenCodeModelId {
-  return (getOpenCodeProviderConfig(provider).availableModels as readonly string[]).includes(modelId);
+  return (getOpenCodeProviderConfig(provider).availableModels as readonly string[]).includes(
+    modelId,
+  );
 }
 
 export function getOpenCodeModelSpec(modelId: string): OpenCodeModelSpec | null {
@@ -231,7 +246,9 @@ export function isOpenCodeSiblingPair(
   provider: ProviderName,
   sourceProvider: ProviderName,
 ): provider is OpenCodeProviderName {
-  return isOpenCodeProviderName(provider)
-    && isOpenCodeProviderName(sourceProvider)
-    && provider !== sourceProvider;
+  return (
+    isOpenCodeProviderName(provider) &&
+    isOpenCodeProviderName(sourceProvider) &&
+    provider !== sourceProvider
+  );
 }

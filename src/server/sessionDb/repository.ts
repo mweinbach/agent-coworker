@@ -2,6 +2,18 @@ import type { Database } from "bun:sqlite";
 import { z } from "zod";
 
 import type { PersistentAgentSummary } from "../../shared/agents";
+import { type SessionSnapshot, sessionSnapshotSchema } from "../../shared/sessionSnapshot";
+import type { ModelMessage } from "../../types";
+import { isProviderName } from "../../types";
+import { sameWorkspacePath } from "../../utils/workspacePath";
+import {
+  researchInputsSchema,
+  researchRecordSchema,
+  researchSettingsSchema,
+  researchSourceSchema,
+  researchStatusSchema,
+  researchThoughtSummarySchema,
+} from "../research/types";
 import type {
   PersistedModelStreamChunk,
   PersistedResearchRecord,
@@ -10,12 +22,11 @@ import type {
   PersistedThreadJournalEvent,
 } from "../sessionDb";
 import type { PersistedSessionSnapshot, PersistedSessionSummary } from "../sessionStore";
-import type { ModelMessage } from "../../types";
-import { isProviderName } from "../../types";
-import { sessionSnapshotSchema, type SessionSnapshot } from "../../shared/sessionSnapshot";
-import { mapPersistedSessionRecordRow, mapPersistedSessionSubagentSummaryRow, mapPersistedSessionSummaryRow } from "./mappers";
-import { sameWorkspacePath } from "../../utils/workspacePath";
-import { researchInputsSchema, researchRecordSchema, researchSettingsSchema, researchSourceSchema, researchStatusSchema, researchThoughtSummarySchema } from "../research/types";
+import {
+  mapPersistedSessionRecordRow,
+  mapPersistedSessionSubagentSummaryRow,
+  mapPersistedSessionSummaryRow,
+} from "./mappers";
 import {
   parseBooleanInteger,
   parseJsonStringWithSchema,
@@ -42,12 +53,14 @@ export class SessionDbRepository {
   }
 
   listSessions(opts?: { workingDirectory?: string | null }): PersistedSessionSummary[] {
-    const filterWorkspace = opts?.workingDirectory != null && String(opts.workingDirectory).trim() !== "";
+    const filterWorkspace =
+      opts?.workingDirectory != null && String(opts.workingDirectory).trim() !== "";
 
-    const rows = (filterWorkspace
-      ? this.db
-          .query(
-            `SELECT
+    const rows = (
+      filterWorkspace
+        ? this.db
+            .query(
+              `SELECT
                session_id,
                title,
                title_source,
@@ -64,11 +77,11 @@ export class SessionDbRepository {
              FROM sessions
              WHERE session_kind = 'root'
              ORDER BY updated_at DESC`,
-          )
-          .all()
-      : this.db
-          .query(
-            `SELECT
+            )
+            .all()
+        : this.db
+            .query(
+              `SELECT
                session_id,
                title,
                title_source,
@@ -84,11 +97,14 @@ export class SessionDbRepository {
              FROM sessions
              WHERE session_kind = 'root'
              ORDER BY updated_at DESC`,
-          )
-          .all()) as Array<Record<string, unknown>>;
+            )
+            .all()
+    ) as Array<Record<string, unknown>>;
 
     const mapped = filterWorkspace
-      ? rows.filter((row) => sameWorkspacePath(String(row.working_directory ?? ""), opts!.workingDirectory!))
+      ? rows.filter((row) =>
+          sameWorkspacePath(String(row.working_directory ?? ""), opts!.workingDirectory!),
+        )
       : rows;
 
     return mapped.flatMap((row) => {
@@ -142,7 +158,9 @@ export class SessionDbRepository {
       )
       .all(parentSessionId) as Array<Record<string, unknown>>;
 
-    return rows.flatMap((row) => (hasCompatiblePersistedProvider(row) ? [mapPersistedSessionSubagentSummaryRow(row)] : []));
+    return rows.flatMap((row) =>
+      hasCompatiblePersistedProvider(row) ? [mapPersistedSessionSubagentSummaryRow(row)] : [],
+    );
   }
 
   deleteSession(sessionId: string): void {
@@ -150,14 +168,22 @@ export class SessionDbRepository {
     this.db.query("DELETE FROM sessions WHERE session_id = ?").run(sessionId);
   }
 
-  getMessages(sessionId: string, offset = 0, limit = 100): { messages: ModelMessage[]; total: number } {
+  getMessages(
+    sessionId: string,
+    offset = 0,
+    limit = 100,
+  ): { messages: ModelMessage[]; total: number } {
     const row = this.db
       .query("SELECT messages_json FROM session_state WHERE session_id = ?")
       .get(sessionId) as Record<string, unknown> | null;
     if (!row) return { messages: [], total: 0 };
     let all: ModelMessage[];
     try {
-      all = parseJsonStringWithSchema(row.messages_json, messagesJsonSchema, "messages_json") as ModelMessage[];
+      all = parseJsonStringWithSchema(
+        row.messages_json,
+        messagesJsonSchema,
+        "messages_json",
+      ) as ModelMessage[];
     } catch {
       all = [];
     }
@@ -235,7 +261,11 @@ export class SessionDbRepository {
       .query("SELECT snapshot_json FROM session_snapshots WHERE session_id = ? LIMIT 1")
       .get(sessionId) as Record<string, unknown> | null;
     if (!row) return null;
-    const rawSnapshot = parseJsonStringWithSchema(row.snapshot_json, z.unknown(), "session_snapshots.snapshot_json");
+    const rawSnapshot = parseJsonStringWithSchema(
+      row.snapshot_json,
+      z.unknown(),
+      "session_snapshots.snapshot_json",
+    );
     if (rawSnapshot && typeof rawSnapshot === "object") {
       const snapshotRecord = rawSnapshot as Record<string, unknown>;
       if (!("taskType" in snapshotRecord)) {
@@ -254,7 +284,9 @@ export class SessionDbRepository {
         .query("SELECT last_event_seq FROM sessions WHERE session_id = ?")
         .get(input.sessionId) as Record<string, unknown> | null;
 
-      const currentSeq = existing ? parseNonNegativeInteger(existing.last_event_seq, "sessions.last_event_seq") : 0;
+      const currentSeq = existing
+        ? parseNonNegativeInteger(existing.last_event_seq, "sessions.last_event_seq")
+        : 0;
       const nextSeq = currentSeq + 1;
       const snapshot = input.snapshot;
       const outputDirectory = snapshot.outputDirectory ?? null;
@@ -512,7 +544,10 @@ export class SessionDbRepository {
     return rows.map((row) => ({
       sessionId: String(row.session_id),
       turnId: String(row.turn_id),
-      chunkIndex: parseNonNegativeInteger(row.chunk_index, "session_model_stream_chunks.chunk_index"),
+      chunkIndex: parseNonNegativeInteger(
+        row.chunk_index,
+        "session_model_stream_chunks.chunk_index",
+      ),
       ts: parseRequiredIsoTimestamp(row.ts, "session_model_stream_chunks.ts"),
       provider: String(row.provider) as PersistedModelStreamChunk["provider"],
       model: String(row.model),
@@ -593,9 +628,10 @@ export class SessionDbRepository {
   ): PersistedThreadJournalEvent[] {
     const afterSeq = Math.max(0, Math.floor(opts?.afterSeq ?? 0));
     const limit = opts?.limit === undefined ? null : Math.max(1, Math.floor(opts.limit));
-    const query = limit === null
-      ? this.db.query(
-          `SELECT
+    const query =
+      limit === null
+        ? this.db.query(
+            `SELECT
              thread_id,
              seq,
              ts,
@@ -608,9 +644,9 @@ export class SessionDbRepository {
            WHERE thread_id = ?
              AND seq > ?
            ORDER BY seq ASC`,
-        )
-      : this.db.query(
-          `SELECT
+          )
+        : this.db.query(
+            `SELECT
              thread_id,
              seq,
              ts,
@@ -624,11 +660,9 @@ export class SessionDbRepository {
              AND seq > ?
            ORDER BY seq ASC
            LIMIT ?`,
-        );
+          );
     const rows = (
-      limit === null
-        ? query.all(threadId, afterSeq)
-        : query.all(threadId, afterSeq, limit)
+      limit === null ? query.all(threadId, afterSeq) : query.all(threadId, afterSeq, limit)
     ) as Array<Record<string, unknown>>;
 
     return rows.map((row) => ({
@@ -639,16 +673,21 @@ export class SessionDbRepository {
       turnId: typeof row.turn_id === "string" ? row.turn_id : null,
       itemId: typeof row.item_id === "string" ? row.item_id : null,
       requestId: typeof row.request_id === "string" ? row.request_id : null,
-      payload: parseJsonStringWithSchema(row.payload_json, z.unknown(), "thread_journal_events.payload_json"),
+      payload: parseJsonStringWithSchema(
+        row.payload_json,
+        z.unknown(),
+        "thread_journal_events.payload_json",
+      ),
     }));
   }
 
   listResearch(opts?: { workspacePath?: string | null }): PersistedResearchRecord[] {
     const workspacePath = opts?.workspacePath?.trim();
-    const rows = (workspacePath
-      ? this.db
-          .query(
-            `SELECT
+    const rows = (
+      workspacePath
+        ? this.db
+            .query(
+              `SELECT
                id,
                workspace_path,
                parent_research_id,
@@ -669,11 +708,11 @@ export class SessionDbRepository {
              FROM research
              WHERE workspace_path = ?
              ORDER BY updated_at DESC`,
-          )
-          .all(workspacePath)
-      : this.db
-          .query(
-            `SELECT
+            )
+            .all(workspacePath)
+        : this.db
+            .query(
+              `SELECT
                id,
                workspace_path,
                parent_research_id,
@@ -693,18 +732,20 @@ export class SessionDbRepository {
                error
              FROM research
              ORDER BY updated_at DESC`,
-          )
-          .all()) as Array<Record<string, unknown>>;
+            )
+            .all()
+    ) as Array<Record<string, unknown>>;
 
     return rows.map((row) => this.mapResearchRow(row));
   }
 
   listRunningResearch(opts?: { workspacePath?: string | null }): PersistedResearchRecord[] {
     const workspacePath = opts?.workspacePath?.trim();
-    const rows = (workspacePath
-      ? this.db
-          .query(
-            `SELECT
+    const rows = (
+      workspacePath
+        ? this.db
+            .query(
+              `SELECT
                id,
                workspace_path,
                parent_research_id,
@@ -725,11 +766,11 @@ export class SessionDbRepository {
              FROM research
              WHERE status IN ('pending', 'running') AND workspace_path = ?
              ORDER BY updated_at DESC`,
-          )
-          .all(workspacePath)
-      : this.db
-          .query(
-            `SELECT
+            )
+            .all(workspacePath)
+        : this.db
+            .query(
+              `SELECT
                id,
                workspace_path,
                parent_research_id,
@@ -750,18 +791,23 @@ export class SessionDbRepository {
              FROM research
              WHERE status IN ('pending', 'running')
              ORDER BY updated_at DESC`,
-          )
-          .all()) as Array<Record<string, unknown>>;
+            )
+            .all()
+    ) as Array<Record<string, unknown>>;
 
     return rows.map((row) => this.mapResearchRow(row));
   }
 
-  getResearch(researchId: string, opts?: { workspacePath?: string | null }): PersistedResearchRecord | null {
+  getResearch(
+    researchId: string,
+    opts?: { workspacePath?: string | null },
+  ): PersistedResearchRecord | null {
     const workspacePath = opts?.workspacePath?.trim();
-    const row = (workspacePath
-      ? this.db
-          .query(
-            `SELECT
+    const row = (
+      workspacePath
+        ? this.db
+            .query(
+              `SELECT
                id,
                workspace_path,
                parent_research_id,
@@ -782,11 +828,11 @@ export class SessionDbRepository {
              FROM research
              WHERE id = ? AND workspace_path = ?
              LIMIT 1`,
-          )
-          .get(researchId, workspacePath)
-      : this.db
-          .query(
-            `SELECT
+            )
+            .get(researchId, workspacePath)
+        : this.db
+            .query(
+              `SELECT
                id,
                workspace_path,
                parent_research_id,
@@ -807,8 +853,9 @@ export class SessionDbRepository {
              FROM research
              WHERE id = ?
              LIMIT 1`,
-          )
-          .get(researchId)) as Record<string, unknown> | null;
+            )
+            .get(researchId)
+    ) as Record<string, unknown> | null;
 
     return row ? this.mapResearchRow(row) : null;
   }
@@ -914,7 +961,7 @@ export class SessionDbRepository {
     );
 
     this.db.exec(
-         `CREATE TABLE IF NOT EXISTS session_state (
+      `CREATE TABLE IF NOT EXISTS session_state (
              session_id TEXT PRIMARY KEY REFERENCES sessions(session_id) ON DELETE CASCADE,
              system_prompt TEXT NOT NULL,
              messages_json TEXT NOT NULL,
@@ -998,16 +1045,30 @@ export class SessionDbRepository {
     );
 
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_updated_at ON sessions(updated_at DESC)");
-    this.db.exec("CREATE INDEX IF NOT EXISTS idx_session_events_seq_desc ON session_events(session_id, seq DESC)");
-    this.db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_status_updated ON sessions(status, updated_at DESC)");
-    this.db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_parent_updated ON sessions(parent_session_id, updated_at DESC)");
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_session_events_seq_desc ON session_events(session_id, seq DESC)",
+    );
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_sessions_status_updated ON sessions(status, updated_at DESC)",
+    );
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_sessions_parent_updated ON sessions(parent_session_id, updated_at DESC)",
+    );
     this.db.exec(
       "CREATE INDEX IF NOT EXISTS idx_session_model_stream_chunks_session_turn ON session_model_stream_chunks(session_id, turn_id, chunk_index)",
     );
-    this.db.exec("CREATE INDEX IF NOT EXISTS idx_thread_journal_events_thread_seq ON thread_journal_events(thread_id, seq)");
-    this.db.exec("CREATE INDEX IF NOT EXISTS idx_research_status_updated ON research(status, updated_at DESC)");
-    this.db.exec("CREATE INDEX IF NOT EXISTS idx_research_parent_updated ON research(parent_research_id, updated_at DESC)");
-    this.db.exec("CREATE INDEX IF NOT EXISTS idx_research_workspace_updated ON research(workspace_path, updated_at DESC)");
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_thread_journal_events_thread_seq ON thread_journal_events(thread_id, seq)",
+    );
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_research_status_updated ON research(status, updated_at DESC)",
+    );
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_research_parent_updated ON research(parent_research_id, updated_at DESC)",
+    );
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_research_workspace_updated ON research(workspace_path, updated_at DESC)",
+    );
   }
 
   markMigration(version: number): void {
@@ -1019,13 +1080,17 @@ export class SessionDbRepository {
   getAppliedMigrationVersions(): Set<number> {
     return new Set(
       (
-        this.db.query("SELECT version FROM schema_migrations ORDER BY version").all() as Array<{ version: number }>
+        this.db.query("SELECT version FROM schema_migrations ORDER BY version").all() as Array<{
+          version: number;
+        }>
       ).map((row) => row.version),
     );
   }
 
   hasSessionStateColumn(columnName: string): boolean {
-    const rows = this.db.query("PRAGMA table_info(session_state)").all() as Array<Record<string, unknown>>;
+    const rows = this.db.query("PRAGMA table_info(session_state)").all() as Array<
+      Record<string, unknown>
+    >;
     return rows.some((row) => row.name === columnName);
   }
 
@@ -1045,7 +1110,9 @@ export class SessionDbRepository {
   }
 
   hasSessionsColumn(columnName: string): boolean {
-    const rows = this.db.query("PRAGMA table_info(sessions)").all() as Array<Record<string, unknown>>;
+    const rows = this.db.query("PRAGMA table_info(sessions)").all() as Array<
+      Record<string, unknown>
+    >;
     return rows.some((row) => row.name === columnName);
   }
 
@@ -1090,7 +1157,9 @@ export class SessionDbRepository {
     if (!this.hasSessionsColumn("last_message_preview")) {
       this.db.exec("ALTER TABLE sessions ADD COLUMN last_message_preview TEXT NULL");
     }
-    this.db.exec("UPDATE sessions SET session_kind = 'root' WHERE session_kind IS NULL OR session_kind = ''");
+    this.db.exec(
+      "UPDATE sessions SET session_kind = 'root' WHERE session_kind IS NULL OR session_kind = ''",
+    );
     this.db.exec("UPDATE sessions SET session_kind = 'agent' WHERE session_kind = 'subagent'");
     this.db.exec(
       `UPDATE sessions
@@ -1102,7 +1171,9 @@ export class SessionDbRepository {
        END
        WHERE role IS NULL OR role = ''`,
     );
-    this.db.exec("UPDATE sessions SET effective_model = model WHERE effective_model IS NULL OR effective_model = ''");
+    this.db.exec(
+      "UPDATE sessions SET effective_model = model WHERE effective_model IS NULL OR effective_model = ''",
+    );
     this.db.exec(
       `UPDATE sessions
        SET execution_state = CASE
@@ -1111,7 +1182,9 @@ export class SessionDbRepository {
          ELSE 'completed'
        END`,
     );
-    this.db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_parent_updated ON sessions(parent_session_id, updated_at DESC)");
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_sessions_parent_updated ON sessions(parent_session_id, updated_at DESC)",
+    );
   }
 
   addAgentTaskMetadataColumns(): void {
@@ -1172,7 +1245,9 @@ export class SessionDbRepository {
          PRIMARY KEY(thread_id, seq)
        )`,
     );
-    this.db.exec("CREATE INDEX IF NOT EXISTS idx_thread_journal_events_thread_seq ON thread_journal_events(thread_id, seq)");
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_thread_journal_events_thread_seq ON thread_journal_events(thread_id, seq)",
+    );
   }
 
   addResearchTable(): void {
@@ -1197,13 +1272,21 @@ export class SessionDbRepository {
          error TEXT NULL
        )`,
     );
-    this.db.exec("CREATE INDEX IF NOT EXISTS idx_research_status_updated ON research(status, updated_at DESC)");
-    this.db.exec("CREATE INDEX IF NOT EXISTS idx_research_parent_updated ON research(parent_research_id, updated_at DESC)");
-    this.db.exec("CREATE INDEX IF NOT EXISTS idx_research_workspace_updated ON research(workspace_path, updated_at DESC)");
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_research_status_updated ON research(status, updated_at DESC)",
+    );
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_research_parent_updated ON research(parent_research_id, updated_at DESC)",
+    );
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_research_workspace_updated ON research(workspace_path, updated_at DESC)",
+    );
   }
 
   addResearchPlanColumns(): void {
-    const rows = this.db.query("PRAGMA table_info(research)").all() as Array<Record<string, unknown>>;
+    const rows = this.db.query("PRAGMA table_info(research)").all() as Array<
+      Record<string, unknown>
+    >;
     const hasPlanPending = rows.some((row) => row.name === "plan_pending");
     if (!hasPlanPending) {
       this.db.exec("ALTER TABLE research ADD COLUMN plan_pending INTEGER NOT NULL DEFAULT 0");
@@ -1211,18 +1294,24 @@ export class SessionDbRepository {
   }
 
   addResearchWorkspaceColumn(): void {
-    const rows = this.db.query("PRAGMA table_info(research)").all() as Array<Record<string, unknown>>;
+    const rows = this.db.query("PRAGMA table_info(research)").all() as Array<
+      Record<string, unknown>
+    >;
     const hasWorkspacePath = rows.some((row) => row.name === "workspace_path");
     if (!hasWorkspacePath) {
       this.db.exec("ALTER TABLE research ADD COLUMN workspace_path TEXT NULL");
     }
-    this.db.exec("CREATE INDEX IF NOT EXISTS idx_research_workspace_updated ON research(workspace_path, updated_at DESC)");
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_research_workspace_updated ON research(workspace_path, updated_at DESC)",
+    );
   }
 
   importLegacySnapshot(snapshot: PersistedSessionSnapshot): void {
     const run = this.db.transaction((legacy: PersistedSessionSnapshot) => {
       const existing = this.db
-        .query("SELECT status, has_pending_ask, has_pending_approval, last_event_seq FROM sessions WHERE session_id = ?")
+        .query(
+          "SELECT status, has_pending_ask, has_pending_approval, last_event_seq FROM sessions WHERE session_id = ?",
+        )
         .get(legacy.sessionId) as Record<string, unknown> | null;
 
       const existingLastEventSeq = existing
@@ -1230,54 +1319,67 @@ export class SessionDbRepository {
         : 0;
       const lastEventSeq = Math.max(existingLastEventSeq, 1);
       const existingStatus = existing?.status;
-      if (existingStatus !== undefined && existingStatus !== "active" && existingStatus !== "closed") {
-        throw new Error(`Invalid existing session status for ${legacy.sessionId}: ${String(existingStatus)}`);
+      if (
+        existingStatus !== undefined &&
+        existingStatus !== "active" &&
+        existingStatus !== "closed"
+      ) {
+        throw new Error(
+          `Invalid existing session status for ${legacy.sessionId}: ${String(existingStatus)}`,
+        );
       }
       const status = existingStatus ?? "active";
-      const hasPendingAsk = existing ? parseBooleanInteger(existing.has_pending_ask, "sessions.has_pending_ask") : 0;
+      const hasPendingAsk = existing
+        ? parseBooleanInteger(existing.has_pending_ask, "sessions.has_pending_ask")
+        : 0;
       const hasPendingApproval = existing
         ? parseBooleanInteger(existing.has_pending_approval, "sessions.has_pending_approval")
         : 0;
-      const providerState =
-        "providerState" in legacy.context ? legacy.context.providerState : null;
-      const costTracker =
-        "costTracker" in legacy.context ? legacy.context.costTracker : null;
+      const providerState = "providerState" in legacy.context ? legacy.context.providerState : null;
+      const costTracker = "costTracker" in legacy.context ? legacy.context.costTracker : null;
       const backupsEnabledOverride =
         legacy.version === 5 || legacy.version === 6 || legacy.version === 7
           ? legacy.config.backupsEnabledOverride
           : null;
-      const providerOptions =
-        legacy.version === 7 ? legacy.config.providerOptions : undefined;
+      const providerOptions = legacy.version === 7 ? legacy.config.providerOptions : undefined;
       const hasSubagentMetadata =
-        legacy.version === 3 || legacy.version === 4 || legacy.version === 5 || legacy.version === 6 || legacy.version === 7;
+        legacy.version === 3 ||
+        legacy.version === 4 ||
+        legacy.version === 5 ||
+        legacy.version === 6 ||
+        legacy.version === 7;
       const hasAgentExecutionMetadata = legacy.version === 6 || legacy.version === 7;
       const sessionKind = hasSubagentMetadata ? legacy.session.sessionKind : "root";
       const parentSessionId = hasSubagentMetadata ? legacy.session.parentSessionId : null;
       const role = hasSubagentMetadata ? legacy.session.role : null;
-      const effectiveModel =
-        hasAgentExecutionMetadata ? legacy.session.effectiveModel : legacy.config.model;
-      const requestedModel =
-        hasAgentExecutionMetadata ? legacy.session.requestedModel : null;
-      const requestedReasoningEffort =
-        hasAgentExecutionMetadata ? legacy.session.requestedReasoningEffort : null;
-      const effectiveReasoningEffort =
-        hasAgentExecutionMetadata ? legacy.session.effectiveReasoningEffort : null;
+      const effectiveModel = hasAgentExecutionMetadata
+        ? legacy.session.effectiveModel
+        : legacy.config.model;
+      const requestedModel = hasAgentExecutionMetadata ? legacy.session.requestedModel : null;
+      const requestedReasoningEffort = hasAgentExecutionMetadata
+        ? legacy.session.requestedReasoningEffort
+        : null;
+      const effectiveReasoningEffort = hasAgentExecutionMetadata
+        ? legacy.session.effectiveReasoningEffort
+        : null;
       const mode = hasAgentExecutionMetadata ? legacy.session.mode : null;
       const depth = hasAgentExecutionMetadata ? legacy.session.depth : null;
       const nickname = hasAgentExecutionMetadata ? legacy.session.nickname : null;
-      const taskType = hasAgentExecutionMetadata ? legacy.session.taskType ?? null : null;
+      const taskType = hasAgentExecutionMetadata ? (legacy.session.taskType ?? null) : null;
       const targetPathsJson =
-        hasAgentExecutionMetadata && legacy.session.targetPaths !== undefined && legacy.session.targetPaths !== null
+        hasAgentExecutionMetadata &&
+        legacy.session.targetPaths !== undefined &&
+        legacy.session.targetPaths !== null
           ? toJsonString(legacy.session.targetPaths)
           : null;
-      const executionState =
-        hasAgentExecutionMetadata
-          ? legacy.session.executionState
-          : status === "closed"
-            ? "closed"
-            : "completed";
-      const lastMessagePreview =
-        hasAgentExecutionMetadata ? legacy.session.lastMessagePreview : null;
+      const executionState = hasAgentExecutionMetadata
+        ? legacy.session.executionState
+        : status === "closed"
+          ? "closed"
+          : "completed";
+      const lastMessagePreview = hasAgentExecutionMetadata
+        ? legacy.session.lastMessagePreview
+        : null;
       const createdAt = parseRequiredIsoTimestamp(legacy.createdAt, "legacy.createdAt");
       const updatedAt = parseRequiredIsoTimestamp(legacy.updatedAt, "legacy.updatedAt");
 
@@ -1447,24 +1549,37 @@ export class SessionDbRepository {
   private mapResearchRow(row: Record<string, unknown>): PersistedResearchRecord {
     return researchRecordSchema.parse({
       id: String(row.id),
-      workspacePath: typeof row.workspace_path === "string" && row.workspace_path.trim() !== ""
-        ? row.workspace_path
-        : null,
+      workspacePath:
+        typeof row.workspace_path === "string" && row.workspace_path.trim() !== ""
+          ? row.workspace_path
+          : null,
       parentResearchId: typeof row.parent_research_id === "string" ? row.parent_research_id : null,
       title: String(row.title),
       prompt: String(row.prompt),
       status: researchStatusSchema.parse(row.status),
       interactionId: typeof row.interaction_id === "string" ? row.interaction_id : null,
       lastEventId: typeof row.last_event_id === "string" ? row.last_event_id : null,
-      inputs: parseJsonStringWithSchema(row.inputs_json, researchInputsSchema, "research.inputs_json"),
-      settings: parseJsonStringWithSchema(row.settings_json, researchSettingsSchema, "research.settings_json"),
+      inputs: parseJsonStringWithSchema(
+        row.inputs_json,
+        researchInputsSchema,
+        "research.inputs_json",
+      ),
+      settings: parseJsonStringWithSchema(
+        row.settings_json,
+        researchSettingsSchema,
+        "research.settings_json",
+      ),
       outputsMarkdown: String(row.outputs_markdown ?? ""),
       thoughtSummaries: parseJsonStringWithSchema(
         row.thought_summaries_json,
         researchThoughtSummariesJsonSchema,
         "research.thought_summaries_json",
       ),
-      sources: parseJsonStringWithSchema(row.sources_json, researchSourcesJsonSchema, "research.sources_json"),
+      sources: parseJsonStringWithSchema(
+        row.sources_json,
+        researchSourcesJsonSchema,
+        "research.sources_json",
+      ),
       planPending: row.plan_pending === 1 || row.plan_pending === true,
       createdAt: parseRequiredIsoTimestamp(row.created_at, "research.created_at"),
       updatedAt: parseRequiredIsoTimestamp(row.updated_at, "research.updated_at"),

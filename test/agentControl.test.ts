@@ -4,9 +4,9 @@ import path from "node:path";
 import { AgentControl } from "../src/server/agents/AgentControl";
 import { parseChildAgentReport } from "../src/server/agents/reportParser";
 import type { SeededSessionContext } from "../src/server/session/SessionContext";
-import type { AgentConfig } from "../src/types";
-import type { SessionBinding } from "../src/server/startServer/types";
 import type { PersistedSessionRecord } from "../src/server/sessionDb";
+import type { SessionBinding } from "../src/server/startServer/types";
+import type { AgentConfig } from "../src/types";
 
 function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   const dir = "/tmp/agent-control";
@@ -78,7 +78,10 @@ function makeChildSession(config: AgentConfig) {
   return session;
 }
 
-function makePersistedChildRecord(config: AgentConfig, overrides: Partial<PersistedSessionRecord> = {}): PersistedSessionRecord {
+function makePersistedChildRecord(
+  config: AgentConfig,
+  overrides: Partial<PersistedSessionRecord> = {},
+): PersistedSessionRecord {
   const now = "2026-03-16T15:00:00.000Z";
   return {
     sessionId: "child-1",
@@ -132,7 +135,9 @@ describe("AgentControl.spawn", () => {
         { role: "user", content: "Investigate this failure" },
         { role: "assistant", content: [{ type: "output_text", text: "I found the regression." }] },
       ],
-      todos: [{ content: "Reproduce the bug", status: "completed", activeForm: "Reproducing the bug" }],
+      todos: [
+        { content: "Reproduce the bug", status: "completed", activeForm: "Reproducing the bug" },
+      ],
       harnessContext: {
         runId: "run-1",
         objective: "Fix the review findings",
@@ -142,10 +147,16 @@ describe("AgentControl.spawn", () => {
       },
     };
     const childSession = makeChildSession(childConfig);
-    const buildSession = mock((binding: SessionBinding, _persistedSessionId?: string, overrides?: Record<string, unknown>) => {
-      binding.session = childSession;
-      return { session: childSession, isResume: false, resumedFromStorage: false, overrides };
-    });
+    const buildSession = mock(
+      (
+        binding: SessionBinding,
+        _persistedSessionId?: string,
+        overrides?: Record<string, unknown>,
+      ) => {
+        binding.session = childSession;
+        return { session: childSession, isResume: false, resumedFromStorage: false, overrides };
+      },
+    );
     const buildForkContextSeed = mock(() => seedContext);
     const buildContextSeed = mock(() => ({
       messages: [],
@@ -188,8 +199,12 @@ describe("AgentControl.spawn", () => {
   test("builds a briefing seed with optional structured context when contextMode is brief", async () => {
     const parentConfig = makeConfig();
     const seedContext: SeededSessionContext = {
-      messages: [{ role: "user", content: "Parent briefing:\nFocus on the parser regression only." }],
-      todos: [{ content: "Reproduce the bug", status: "completed", activeForm: "Reproducing the bug" }],
+      messages: [
+        { role: "user", content: "Parent briefing:\nFocus on the parser regression only." },
+      ],
+      todos: [
+        { content: "Reproduce the bug", status: "completed", activeForm: "Reproducing the bug" },
+      ],
       harnessContext: {
         runId: "run-1",
         objective: "Fix the review findings",
@@ -199,10 +214,16 @@ describe("AgentControl.spawn", () => {
       },
     };
     const childSession = makeChildSession(parentConfig);
-    const buildSession = mock((binding: SessionBinding, _persistedSessionId?: string, overrides?: Record<string, unknown>) => {
-      binding.session = childSession;
-      return { session: childSession, isResume: false, resumedFromStorage: false, overrides };
-    });
+    const buildSession = mock(
+      (
+        binding: SessionBinding,
+        _persistedSessionId?: string,
+        overrides?: Record<string, unknown>,
+      ) => {
+        binding.session = childSession;
+        return { session: childSession, isResume: false, resumedFromStorage: false, overrides };
+      },
+    );
     const buildForkContextSeed = mock(() => ({
       messages: [],
       todos: [],
@@ -330,7 +351,15 @@ describe("AgentControl.spawn", () => {
     const emitParentAgentStatus = mock(() => {});
     const control = new AgentControl({
       sessionBindings: new Map([
-        ["root-1", { session: { buildForkContextSeed: () => ({ messages: [], todos: [], harnessContext: null }) }, socket: null }],
+        [
+          "root-1",
+          {
+            session: {
+              buildForkContextSeed: () => ({ messages: [], todos: [], harnessContext: null }),
+            },
+            socket: null,
+          },
+        ],
       ]) as Map<string, SessionBinding>,
       sessionDb: null,
       getConnectedProviders: async () => ["openai"],
@@ -399,13 +428,27 @@ describe("AgentControl.spawn", () => {
       allowedChildModelRefs: ["opencode-zen:glm-5"],
     });
     const childSession = makeChildSession(childConfig);
-    const buildSession = mock((binding: SessionBinding, _persistedSessionId?: string, overrides?: Record<string, unknown>) => {
-      binding.session = childSession;
-      return { session: childSession, isResume: false, resumedFromStorage: false, overrides };
-    });
+    const buildSession = mock(
+      (
+        binding: SessionBinding,
+        _persistedSessionId?: string,
+        overrides?: Record<string, unknown>,
+      ) => {
+        binding.session = childSession;
+        return { session: childSession, isResume: false, resumedFromStorage: false, overrides };
+      },
+    );
     const control = new AgentControl({
       sessionBindings: new Map([
-        ["root-1", { session: { buildForkContextSeed: () => ({ messages: [], todos: [], harnessContext: null }) }, socket: null }],
+        [
+          "root-1",
+          {
+            session: {
+              buildForkContextSeed: () => ({ messages: [], todos: [], harnessContext: null }),
+            },
+            socket: null,
+          },
+        ],
       ]) as Map<string, SessionBinding>,
       sessionDb: null,
       getConnectedProviders: async () => ["codex-cli", "opencode-zen"],
@@ -447,14 +490,28 @@ describe("AgentControl.spawn", () => {
       allowedChildModelRefs: [],
     });
     const childSession = makeChildSession(parentConfig);
-    const buildSession = mock((binding: SessionBinding, _persistedSessionId?: string, overrides?: Record<string, unknown>) => {
-      binding.session = childSession;
-      return { session: childSession, isResume: false, resumedFromStorage: false, overrides };
-    });
+    const buildSession = mock(
+      (
+        binding: SessionBinding,
+        _persistedSessionId?: string,
+        overrides?: Record<string, unknown>,
+      ) => {
+        binding.session = childSession;
+        return { session: childSession, isResume: false, resumedFromStorage: false, overrides };
+      },
+    );
     const emitParentLog = mock(() => {});
     const control = new AgentControl({
       sessionBindings: new Map([
-        ["root-1", { session: { buildForkContextSeed: () => ({ messages: [], todos: [], harnessContext: null }) }, socket: null }],
+        [
+          "root-1",
+          {
+            session: {
+              buildForkContextSeed: () => ({ messages: [], todos: [], harnessContext: null }),
+            },
+            socket: null,
+          },
+        ],
       ]) as Map<string, SessionBinding>,
       sessionDb: null,
       getConnectedProviders: async () => ["codex-cli", "opencode-go"],
@@ -488,7 +545,6 @@ describe("AgentControl.spawn", () => {
       expect.stringContaining("falling back to codex-cli:gpt-5.4"),
     );
   });
-
 });
 
 describe("AgentControl persisted child control", () => {
@@ -497,7 +553,12 @@ describe("AgentControl persisted child control", () => {
     const childSession = makeChildSession(config);
     const buildSession = mock((binding: SessionBinding, persistedSessionId?: string) => {
       binding.session = childSession;
-      return { session: childSession, isResume: true, resumedFromStorage: true, persistedSessionId };
+      return {
+        session: childSession,
+        isResume: true,
+        resumedFromStorage: true,
+        persistedSessionId,
+      };
     });
     const control = new AgentControl({
       sessionBindings: new Map(),
@@ -578,7 +639,9 @@ describe("AgentControl persisted child control", () => {
       sessionBindings: new Map(),
       sessionDb: {
         getSessionRecord: (sessionId: string) =>
-          sessionId === "child-1" ? makePersistedChildRecord(config, { executionState: "running" }) : null,
+          sessionId === "child-1"
+            ? makePersistedChildRecord(config, { executionState: "running" })
+            : null,
       } as any,
       getConnectedProviders: async () => ["openai"],
       buildSession: ((binding: SessionBinding) => {
@@ -607,16 +670,17 @@ describe("AgentControl persisted child control", () => {
   test("inspect returns latest assistant text, parsed report, and usage for hydrated children", async () => {
     const config = makeConfig();
     const childSession = makeChildSession(config);
-    childSession.getLatestAssistantText = () => [
-      "Finished the task.",
-      "<agent_report>",
-      JSON.stringify({
-        status: "completed",
-        summary: "Task finished",
-        filesRead: ["src/agent.ts"],
-      }),
-      "</agent_report>",
-    ].join("\n");
+    childSession.getLatestAssistantText = () =>
+      [
+        "Finished the task.",
+        "<agent_report>",
+        JSON.stringify({
+          status: "completed",
+          summary: "Task finished",
+          filesRead: ["src/agent.ts"],
+        }),
+        "</agent_report>",
+      ].join("\n");
     childSession.getCompactUsageSnapshot = () => ({
       sessionId: "child-1",
       totalTurns: 1,
@@ -669,11 +733,13 @@ describe("AgentControl persisted child control", () => {
     expect(inspected.agent.agentId).toBe("child-1");
     expect(inspected.latestAssistantText).toContain("Finished the task.");
     expect(inspected.parsedReport).toEqual(parseChildAgentReport(inspected.latestAssistantText));
-    expect(inspected.parsedReport).toEqual(expect.objectContaining({
-      status: "completed",
-      summary: "Task finished",
-      filesRead: ["src/agent.ts"],
-    }));
+    expect(inspected.parsedReport).toEqual(
+      expect.objectContaining({
+        status: "completed",
+        summary: "Task finished",
+        filesRead: ["src/agent.ts"],
+      }),
+    );
     expect(inspected.sessionUsage?.totalTokens).toBe(12);
     expect(inspected.lastTurnUsage?.totalTokens).toBe(12);
   });
@@ -681,16 +747,17 @@ describe("AgentControl persisted child control", () => {
   test("inspect falls back to legacy fenced JSON when no tagged report exists", async () => {
     const config = makeConfig();
     const childSession = makeChildSession(config);
-    childSession.getLatestAssistantText = () => [
-      "Finished the task.",
-      "```json",
-      JSON.stringify({
-        status: "completed",
-        summary: "Legacy task finished",
-        filesRead: ["src/legacy-agent.ts"],
-      }),
-      "```",
-    ].join("\n");
+    childSession.getLatestAssistantText = () =>
+      [
+        "Finished the task.",
+        "```json",
+        JSON.stringify({
+          status: "completed",
+          summary: "Legacy task finished",
+          filesRead: ["src/legacy-agent.ts"],
+        }),
+        "```",
+      ].join("\n");
     const control = new AgentControl({
       sessionBindings: new Map(),
       sessionDb: {
@@ -714,11 +781,13 @@ describe("AgentControl persisted child control", () => {
     });
 
     expect(inspected.parsedReport).toEqual(parseChildAgentReport(inspected.latestAssistantText));
-    expect(inspected.parsedReport).toEqual(expect.objectContaining({
-      status: "completed",
-      summary: "Legacy task finished",
-      filesRead: ["src/legacy-agent.ts"],
-    }));
+    expect(inspected.parsedReport).toEqual(
+      expect.objectContaining({
+        status: "completed",
+        summary: "Legacy task finished",
+        filesRead: ["src/legacy-agent.ts"],
+      }),
+    );
   });
 
   test("list normalizes hydrated stale pending_init child status to completed when idle", async () => {
@@ -730,9 +799,10 @@ describe("AgentControl persisted child control", () => {
       executionState: "pending_init",
     });
     const control = new AgentControl({
-      sessionBindings: new Map([
-        ["child-1", { session: childSession, socket: null }],
-      ]) as Map<string, SessionBinding>,
+      sessionBindings: new Map([["child-1", { session: childSession, socket: null }]]) as Map<
+        string,
+        SessionBinding
+      >,
       sessionDb: {
         listAgentSessions: () => [],
       } as any,
@@ -855,6 +925,9 @@ describe("AgentControl persisted child control", () => {
     expect(() => control.cancelAll("root-1")).not.toThrow();
     expect(firstChild.cancel).toHaveBeenCalledTimes(1);
     expect(secondChild.cancel).toHaveBeenCalledTimes(1);
-    expect(emitParentLog).toHaveBeenCalledWith("root-1", "Failed to cancel child agent child-err: cancel exploded");
+    expect(emitParentLog).toHaveBeenCalledWith(
+      "root-1",
+      "Failed to cancel child agent child-err: cancel exploded",
+    );
   });
 });

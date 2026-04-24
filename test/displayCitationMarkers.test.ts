@@ -5,8 +5,8 @@ import {
   buildCitationSourcesByMessageId,
   buildCitationUrlsByMessageId,
   describeCitationSource,
-  extractCitationSourcesFromWebSearchResult,
   extractCitationOverflowFilePathFromWebSearchResult,
+  extractCitationSourcesFromWebSearchResult,
   extractCitationUrlsFromWebSearchResult,
   isOpaqueCitationRedirectUrl,
   normalizeDisplayCitationMarkers,
@@ -15,9 +15,7 @@ import {
 describe("display citation markers", () => {
   test("collapses repeated line citations for the same source", () => {
     expect(
-      normalizeDisplayCitationMarkers(
-        "Official details on Vera Rubin.[5†L1-L8][5†L20-L25]",
-      ),
+      normalizeDisplayCitationMarkers("Official details on Vera Rubin.[5†L1-L8][5†L20-L25]"),
     ).toBe("Official details on Vera Rubin. [5]");
   });
 
@@ -33,47 +31,47 @@ describe("display citation markers", () => {
           ]),
         },
       ),
-    ).toBe("Sessions on AI factories [1](https://example.com/1), [5](https://example.com/5) continue all week.");
+    ).toBe(
+      "Sessions on AI factories [1](https://example.com/1), [5](https://example.com/5) continue all week.",
+    );
   });
 
   test("renders superscript HTML links for desktop display", () => {
     expect(
-      normalizeDisplayCitationMarkers(
-        "Robotics updates[1†L1-L8].",
-        {
-          citationMode: "html",
-          citationUrlsByIndex: new Map([[1, "https://example.com/1"]]),
-        },
-      ),
+      normalizeDisplayCitationMarkers("Robotics updates[1†L1-L8].", {
+        citationMode: "html",
+        citationUrlsByIndex: new Map([[1, "https://example.com/1"]]),
+      }),
     ).toBe('Robotics updates<sup><a href="https://example.com/1">1</a></sup>.');
   });
 
   test("drops unresolved citations without leaving spacing artifacts", () => {
     expect(
-      normalizeDisplayCitationMarkers(
-        "Later source details[5†L1-L8].",
-        {
-          citationMode: "html",
-          citationUrlsByIndex: new Map([[1, "https://example.com/1"]]),
-        },
-      ),
+      normalizeDisplayCitationMarkers("Later source details[5†L1-L8].", {
+        citationMode: "html",
+        citationUrlsByIndex: new Map([[1, "https://example.com/1"]]),
+      }),
     ).toBe("Later source details.");
   });
 
   test("extracts ordered URLs from webSearch text results", () => {
     expect(
-      extractCitationUrlsFromWebSearchResult([
-        "Source One",
-        "https://example.com/one",
-        "Summary",
-        "",
-        "Source Two",
-        "https://example.com/two",
-      ].join("\n")),
-    ).toEqual(new Map([
-      [1, "https://example.com/one"],
-      [2, "https://example.com/two"],
-    ]));
+      extractCitationUrlsFromWebSearchResult(
+        [
+          "Source One",
+          "https://example.com/one",
+          "Summary",
+          "",
+          "Source Two",
+          "https://example.com/two",
+        ].join("\n"),
+      ),
+    ).toEqual(
+      new Map([
+        [1, "https://example.com/one"],
+        [2, "https://example.com/two"],
+      ]),
+    );
   });
 
   test("tracks latest webSearch citation context by assistant message id", () => {
@@ -85,18 +83,25 @@ describe("display citation markers", () => {
         name: "webSearch",
         result: {
           type: "text",
-          value: ["One", "https://example.com/one", "", "Two", "https://example.com/two"].join("\n"),
+          value: ["One", "https://example.com/one", "", "Two", "https://example.com/two"].join(
+            "\n",
+          ),
         },
       },
       { id: "assistant-1", kind: "message", role: "assistant" as const },
     ];
 
-    expect(buildCitationUrlsByMessageId(feed)).toEqual(new Map([
-      ["assistant-1", new Map([
-        [1, "https://example.com/one"],
-        [2, "https://example.com/two"],
-      ])],
-    ]));
+    expect(buildCitationUrlsByMessageId(feed)).toEqual(
+      new Map([
+        [
+          "assistant-1",
+          new Map([
+            [1, "https://example.com/one"],
+            [2, "https://example.com/two"],
+          ]),
+        ],
+      ]),
+    );
   });
 
   test("extracts ordered URLs and titles from structured webSearch results", () => {
@@ -111,10 +116,12 @@ describe("display citation markers", () => {
       },
     };
 
-    expect(extractCitationUrlsFromWebSearchResult(result)).toEqual(new Map([
-      [1, "https://example.com/one"],
-      [2, "https://example.com/two"],
-    ]));
+    expect(extractCitationUrlsFromWebSearchResult(result)).toEqual(
+      new Map([
+        [1, "https://example.com/one"],
+        [2, "https://example.com/two"],
+      ]),
+    );
     expect(extractCitationSourcesFromWebSearchResult(result)).toEqual([
       { title: "Source One", url: "https://example.com/one" },
       { title: "Source Two", url: "https://example.com/two" },
@@ -138,21 +145,27 @@ describe("display citation markers", () => {
   });
 
   test("extracts citation sources from overflowed JSON spill content", () => {
-    const spillContent = JSON.stringify({
-      provider: "exa",
-      count: 2,
-      response: {
-        results: [
-          { title: "Source One", url: "https://example.com/one" },
-          { title: "Source Two", url: "https://example.com/two" },
-        ],
+    const spillContent = JSON.stringify(
+      {
+        provider: "exa",
+        count: 2,
+        response: {
+          results: [
+            { title: "Source One", url: "https://example.com/one" },
+            { title: "Source Two", url: "https://example.com/two" },
+          ],
+        },
       },
-    }, null, 2);
+      null,
+      2,
+    );
 
-    expect(extractCitationUrlsFromWebSearchResult(spillContent)).toEqual(new Map([
-      [1, "https://example.com/one"],
-      [2, "https://example.com/two"],
-    ]));
+    expect(extractCitationUrlsFromWebSearchResult(spillContent)).toEqual(
+      new Map([
+        [1, "https://example.com/one"],
+        [2, "https://example.com/two"],
+      ]),
+    );
     expect(extractCitationSourcesFromWebSearchResult(spillContent)).toEqual([
       { title: "Source One", url: "https://example.com/one" },
       { title: "Source Two", url: "https://example.com/two" },
@@ -185,9 +198,9 @@ describe("display citation markers", () => {
       },
     ];
 
-    expect(buildCitationUrlsByMessageId(feed)).toEqual(new Map([
-      ["assistant-1", new Map([[1, "https://example.com/fresh"]])],
-    ]));
+    expect(buildCitationUrlsByMessageId(feed)).toEqual(
+      new Map([["assistant-1", new Map([[1, "https://example.com/fresh"]])]]),
+    );
   });
 
   test("falls back to native web search sources when annotations are unavailable", () => {
@@ -201,22 +214,24 @@ describe("display citation markers", () => {
           action: {
             type: "search",
             query: "openai responses",
-            sources: [
-              { url: "https://example.com/one" },
-              { url: "https://example.com/two" },
-            ],
+            sources: [{ url: "https://example.com/one" }, { url: "https://example.com/two" }],
           },
         },
       },
       { id: "assistant-1", kind: "message", role: "assistant" as const },
     ];
 
-    expect(buildCitationUrlsByMessageId(feed)).toEqual(new Map([
-      ["assistant-1", new Map([
-        [1, "https://example.com/one"],
-        [2, "https://example.com/two"],
-      ])],
-    ]));
+    expect(buildCitationUrlsByMessageId(feed)).toEqual(
+      new Map([
+        [
+          "assistant-1",
+          new Map([
+            [1, "https://example.com/one"],
+            [2, "https://example.com/two"],
+          ]),
+        ],
+      ]),
+    );
   });
 
   test("tracks latest structured webSearch sources by assistant message id", () => {
@@ -240,18 +255,28 @@ describe("display citation markers", () => {
       { id: "assistant-1", kind: "message", role: "assistant" as const },
     ];
 
-    expect(buildCitationUrlsByMessageId(feed)).toEqual(new Map([
-      ["assistant-1", new Map([
-        [1, "https://example.com/one"],
-        [2, "https://example.com/two"],
-      ])],
-    ]));
-    expect(buildCitationSourcesByMessageId(feed)).toEqual(new Map([
-      ["assistant-1", [
-        { title: "Source One", url: "https://example.com/one" },
-        { title: "Source Two", url: "https://example.com/two" },
-      ]],
-    ]));
+    expect(buildCitationUrlsByMessageId(feed)).toEqual(
+      new Map([
+        [
+          "assistant-1",
+          new Map([
+            [1, "https://example.com/one"],
+            [2, "https://example.com/two"],
+          ]),
+        ],
+      ]),
+    );
+    expect(buildCitationSourcesByMessageId(feed)).toEqual(
+      new Map([
+        [
+          "assistant-1",
+          [
+            { title: "Source One", url: "https://example.com/one" },
+            { title: "Source Two", url: "https://example.com/two" },
+          ],
+        ],
+      ]),
+    );
   });
 
   test("preserves url lookups for earlier cited assistant blocks in a contiguous stretch", () => {
@@ -274,32 +299,62 @@ describe("display citation markers", () => {
           filePath: "/tmp/search-results.txt",
         },
       },
-      { id: "assistant-1", kind: "message", role: "assistant" as const, text: "First block[1†L1-L3]" },
+      {
+        id: "assistant-1",
+        kind: "message",
+        role: "assistant" as const,
+        text: "First block[1†L1-L3]",
+      },
       { id: "reasoning-1", kind: "reasoning" as const },
-      { id: "assistant-2", kind: "message", role: "assistant" as const, text: "Bridge block without citations" },
-      { id: "assistant-3", kind: "message", role: "assistant" as const, text: "Second block[2†L1-L3]" },
+      {
+        id: "assistant-2",
+        kind: "message",
+        role: "assistant" as const,
+        text: "Bridge block without citations",
+      },
+      {
+        id: "assistant-3",
+        kind: "message",
+        role: "assistant" as const,
+        text: "Second block[2†L1-L3]",
+      },
     ];
 
-    expect(buildCitationUrlsByMessageId(feed)).toEqual(new Map([
-      ["assistant-1", new Map([
-        [1, "https://example.com/one"],
-        [2, "https://example.com/two"],
-      ])],
-      ["assistant-3", new Map([
-        [1, "https://example.com/one"],
-        [2, "https://example.com/two"],
-      ])],
-    ]));
-    expect(buildCitationSourcesByMessageId(feed)).toEqual(new Map([
-      ["assistant-3", [
-        { title: "Source One", url: "https://example.com/one" },
-        { title: "Source Two", url: "https://example.com/two" },
-      ]],
-    ]));
-    expect(buildCitationOverflowFilePathsByMessageId(feed)).toEqual(new Map([
-      ["assistant-1", "/tmp/search-results.txt"],
-      ["assistant-3", "/tmp/search-results.txt"],
-    ]));
+    expect(buildCitationUrlsByMessageId(feed)).toEqual(
+      new Map([
+        [
+          "assistant-1",
+          new Map([
+            [1, "https://example.com/one"],
+            [2, "https://example.com/two"],
+          ]),
+        ],
+        [
+          "assistant-3",
+          new Map([
+            [1, "https://example.com/one"],
+            [2, "https://example.com/two"],
+          ]),
+        ],
+      ]),
+    );
+    expect(buildCitationSourcesByMessageId(feed)).toEqual(
+      new Map([
+        [
+          "assistant-3",
+          [
+            { title: "Source One", url: "https://example.com/one" },
+            { title: "Source Two", url: "https://example.com/two" },
+          ],
+        ],
+      ]),
+    );
+    expect(buildCitationOverflowFilePathsByMessageId(feed)).toEqual(
+      new Map([
+        ["assistant-1", "/tmp/search-results.txt"],
+        ["assistant-3", "/tmp/search-results.txt"],
+      ]),
+    );
   });
 
   test("keeps overflow spill mappings on the latest assistant block even without inline citations", () => {
@@ -322,15 +377,27 @@ describe("display citation markers", () => {
           filePath: "/tmp/search-results.txt",
         },
       },
-      { id: "assistant-1", kind: "message", role: "assistant" as const, text: "First block[1†L1-L3]" },
+      {
+        id: "assistant-1",
+        kind: "message",
+        role: "assistant" as const,
+        text: "First block[1†L1-L3]",
+      },
       { id: "reasoning-1", kind: "reasoning" as const },
-      { id: "assistant-2", kind: "message", role: "assistant" as const, text: "Final summary without inline markers" },
+      {
+        id: "assistant-2",
+        kind: "message",
+        role: "assistant" as const,
+        text: "Final summary without inline markers",
+      },
     ];
 
-    expect(buildCitationOverflowFilePathsByMessageId(feed)).toEqual(new Map([
-      ["assistant-1", "/tmp/search-results.txt"],
-      ["assistant-2", "/tmp/search-results.txt"],
-    ]));
+    expect(buildCitationOverflowFilePathsByMessageId(feed)).toEqual(
+      new Map([
+        ["assistant-1", "/tmp/search-results.txt"],
+        ["assistant-2", "/tmp/search-results.txt"],
+      ]),
+    );
   });
 
   test("stops carrying tool-derived citations after a non-search tool breaks the assistant stretch", () => {
@@ -358,21 +425,31 @@ describe("display citation markers", () => {
       { id: "assistant-2", kind: "message", role: "assistant" as const },
     ];
 
-    expect(buildCitationUrlsByMessageId(feed)).toEqual(new Map([
-      ["assistant-1", new Map([
-        [1, "https://example.com/one"],
-        [2, "https://example.com/two"],
-      ])],
-    ]));
-    expect(buildCitationSourcesByMessageId(feed)).toEqual(new Map([
-      ["assistant-1", [
-        { title: "Source One", url: "https://example.com/one" },
-        { title: "Source Two", url: "https://example.com/two" },
-      ]],
-    ]));
-    expect(buildCitationOverflowFilePathsByMessageId(feed)).toEqual(new Map([
-      ["assistant-1", "/tmp/search-results.txt"],
-    ]));
+    expect(buildCitationUrlsByMessageId(feed)).toEqual(
+      new Map([
+        [
+          "assistant-1",
+          new Map([
+            [1, "https://example.com/one"],
+            [2, "https://example.com/two"],
+          ]),
+        ],
+      ]),
+    );
+    expect(buildCitationSourcesByMessageId(feed)).toEqual(
+      new Map([
+        [
+          "assistant-1",
+          [
+            { title: "Source One", url: "https://example.com/one" },
+            { title: "Source Two", url: "https://example.com/two" },
+          ],
+        ],
+      ]),
+    );
+    expect(buildCitationOverflowFilePathsByMessageId(feed)).toEqual(
+      new Map([["assistant-1", "/tmp/search-results.txt"]]),
+    );
   });
 
   test("clears stale webSearch citations when a later search returns no results", () => {
@@ -409,18 +486,28 @@ describe("display citation markers", () => {
       { id: "assistant-2", kind: "message", role: "assistant" as const },
     ];
 
-    expect(buildCitationUrlsByMessageId(feed)).toEqual(new Map([
-      ["assistant-1", new Map([
-        [1, "https://example.com/one"],
-        [2, "https://example.com/two"],
-      ])],
-    ]));
-    expect(buildCitationSourcesByMessageId(feed)).toEqual(new Map([
-      ["assistant-1", [
-        { title: "Source One", url: "https://example.com/one" },
-        { title: "Source Two", url: "https://example.com/two" },
-      ]],
-    ]));
+    expect(buildCitationUrlsByMessageId(feed)).toEqual(
+      new Map([
+        [
+          "assistant-1",
+          new Map([
+            [1, "https://example.com/one"],
+            [2, "https://example.com/two"],
+          ]),
+        ],
+      ]),
+    );
+    expect(buildCitationSourcesByMessageId(feed)).toEqual(
+      new Map([
+        [
+          "assistant-1",
+          [
+            { title: "Source One", url: "https://example.com/one" },
+            { title: "Source Two", url: "https://example.com/two" },
+          ],
+        ],
+      ]),
+    );
   });
 
   test("surfaces overflow file paths for later citation hydration", () => {
@@ -430,12 +517,16 @@ describe("display citation markers", () => {
       overflow: true,
       filePath: "/tmp/search-results.txt",
     };
-    expect(extractCitationOverflowFilePathFromWebSearchResult(result)).toBe("/tmp/search-results.txt");
-    expect(buildCitationOverflowFilePathsByMessageId([
-      { id: "user-1", kind: "message", role: "user" as const },
-      { id: "tool-1", kind: "tool" as const, name: "webSearch", result },
-      { id: "assistant-1", kind: "message", role: "assistant" as const },
-    ])).toEqual(new Map([["assistant-1", "/tmp/search-results.txt"]]));
+    expect(extractCitationOverflowFilePathFromWebSearchResult(result)).toBe(
+      "/tmp/search-results.txt",
+    );
+    expect(
+      buildCitationOverflowFilePathsByMessageId([
+        { id: "user-1", kind: "message", role: "user" as const },
+        { id: "tool-1", kind: "tool" as const, name: "webSearch", result },
+        { id: "assistant-1", kind: "message", role: "assistant" as const },
+      ]),
+    ).toEqual(new Map([["assistant-1", "/tmp/search-results.txt"]]));
   });
 
   test("inserts inline citation markers from native annotations", () => {
@@ -485,9 +576,9 @@ describe("display citation markers", () => {
       ],
     });
 
-    expect(out).toContain('* **The Collision:** Plane hit a truck.<cite');
-    expect(out).toContain('__cowork_citation_sources__:');
-    expect(out).toContain('>Collision Report</cite>');
+    expect(out).toContain("* **The Collision:** Plane hit a truck.<cite");
+    expect(out).toContain("__cowork_citation_sources__:");
+    expect(out).toContain(">Collision Report</cite>");
   });
 
   test("clusters native annotations into one paragraph-end chip per markdown block", () => {
@@ -503,16 +594,36 @@ describe("display citation markers", () => {
     const out = normalizeDisplayCitationMarkers(text, {
       citationMode: "html",
       annotations: [
-        { type: "url_citation", start_index: 0, end_index: afterTruckPeriod, title: "Collision Report", url: "https://example.com/collision" },
-        { type: "url_citation", start_index: 0, end_index: afterKilledPeriod, title: "Safety Memo", url: "https://example.com/killed" },
-        { type: "url_citation", start_index: 0, end_index: insideMost, title: "Hospital Update", url: "https://example.com/injuries" },
+        {
+          type: "url_citation",
+          start_index: 0,
+          end_index: afterTruckPeriod,
+          title: "Collision Report",
+          url: "https://example.com/collision",
+        },
+        {
+          type: "url_citation",
+          start_index: 0,
+          end_index: afterKilledPeriod,
+          title: "Safety Memo",
+          url: "https://example.com/killed",
+        },
+        {
+          type: "url_citation",
+          start_index: 0,
+          end_index: insideMost,
+          title: "Hospital Update",
+          url: "https://example.com/injuries",
+        },
       ],
     });
 
-    expect(out).toContain('* **The Collision:** Plane hit a truck.<cite');
-    expect(out).toContain('>Collision Report</cite>');
-    expect(out).toContain('* **Casualties:** The pilot was killed. Over 40 others were injured. Most have been released.<cite');
-    expect(out).toContain('>Safety Memo +1</cite>');
+    expect(out).toContain("* **The Collision:** Plane hit a truck.<cite");
+    expect(out).toContain(">Collision Report</cite>");
+    expect(out).toContain(
+      "* **Casualties:** The pilot was killed. Over 40 others were injured. Most have been released.<cite",
+    );
+    expect(out).toContain(">Safety Memo +1</cite>");
     expect(out).not.toContain("injured.<cite");
   });
 
@@ -532,9 +643,9 @@ describe("display citation markers", () => {
       { id: "assistant-1", kind: "message", role: "assistant" as const },
     ];
 
-    expect(buildCitationUrlsByMessageId(feed)).toEqual(new Map([
-      ["assistant-1", new Map([[1, "https://example.com/about"]])],
-    ]));
+    expect(buildCitationUrlsByMessageId(feed)).toEqual(
+      new Map([["assistant-1", new Map([[1, "https://example.com/about"]])]]),
+    );
   });
 
   test("clears stale native URL context citations and sources when a later result is empty", () => {
@@ -563,14 +674,12 @@ describe("display citation markers", () => {
       { id: "assistant-2", kind: "message", role: "assistant" as const },
     ];
 
-    expect(buildCitationUrlsByMessageId(feed)).toEqual(new Map([
-      ["assistant-1", new Map([[1, "https://example.com/about"]])],
-    ]));
-    expect(buildCitationSourcesByMessageId(feed)).toEqual(new Map([
-      ["assistant-1", [
-        { url: "https://example.com/about" },
-      ]],
-    ]));
+    expect(buildCitationUrlsByMessageId(feed)).toEqual(
+      new Map([["assistant-1", new Map([[1, "https://example.com/about"]])]]),
+    );
+    expect(buildCitationSourcesByMessageId(feed)).toEqual(
+      new Map([["assistant-1", [{ url: "https://example.com/about" }]]]),
+    );
   });
 
   test("clears stale native web search citations and sources when a later result is empty", () => {
@@ -607,18 +716,28 @@ describe("display citation markers", () => {
       { id: "assistant-2", kind: "message", role: "assistant" as const },
     ];
 
-    expect(buildCitationUrlsByMessageId(feed)).toEqual(new Map([
-      ["assistant-1", new Map([
-        [1, "https://example.com/one"],
-        [2, "https://example.com/two"],
-      ])],
-    ]));
-    expect(buildCitationSourcesByMessageId(feed)).toEqual(new Map([
-      ["assistant-1", [
-        { title: "Source One", url: "https://example.com/one" },
-        { title: "Source Two", url: "https://example.com/two" },
-      ]],
-    ]));
+    expect(buildCitationUrlsByMessageId(feed)).toEqual(
+      new Map([
+        [
+          "assistant-1",
+          new Map([
+            [1, "https://example.com/one"],
+            [2, "https://example.com/two"],
+          ]),
+        ],
+      ]),
+    );
+    expect(buildCitationSourcesByMessageId(feed)).toEqual(
+      new Map([
+        [
+          "assistant-1",
+          [
+            { title: "Source One", url: "https://example.com/one" },
+            { title: "Source Two", url: "https://example.com/two" },
+          ],
+        ],
+      ]),
+    );
   });
 
   test("appends a compact sources footer when native citations only exist out of band", () => {

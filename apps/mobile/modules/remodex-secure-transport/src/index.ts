@@ -65,7 +65,8 @@ type NativeSecureTransportModule = {
   removeAllListeners(eventName: keyof RemodexSecureTransportEvents): void;
 };
 
-const nativeModule = requireOptionalNativeModule<NativeSecureTransportModule>("RemodexSecureTransport");
+const nativeModule =
+  requireOptionalNativeModule<NativeSecureTransportModule>("RemodexSecureTransport");
 
 type SecureStoreLike = {
   getItemAsync(key: string): Promise<string | null>;
@@ -178,12 +179,14 @@ function buildRelaySocketHeaders(phoneIdentity: PersistedPhoneIdentity): Record<
 }
 
 function randomToken(prefix: string): string {
-  const cryptoObject = typeof globalThis === "object" && globalThis
-    ? (globalThis as { crypto?: { randomUUID?: () => string } }).crypto
-    : undefined;
-  const suffix = typeof cryptoObject?.randomUUID === "function"
-    ? cryptoObject.randomUUID()
-    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const cryptoObject =
+    typeof globalThis === "object" && globalThis
+      ? (globalThis as { crypto?: { randomUUID?: () => string } }).crypto
+      : undefined;
+  const suffix =
+    typeof cryptoObject?.randomUUID === "function"
+      ? cryptoObject.randomUUID()
+      : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   return `${prefix}-${suffix}`;
 }
 
@@ -200,7 +203,9 @@ function cloneTrustedMacRecord(record: PersistedTrustedMacRecord): PersistedTrus
   };
 }
 
-function clonePersistedRelayTransportState(state: PersistedRelayTransportState): PersistedRelayTransportState {
+function clonePersistedRelayTransportState(
+  state: PersistedRelayTransportState,
+): PersistedRelayTransportState {
   return {
     phoneIdentity: state.phoneIdentity
       ? {
@@ -228,7 +233,12 @@ function normalizePersistedTrustedMacRecord(value: unknown): PersistedTrustedMac
   const macDeviceId = normalizeNonEmptyString(record.macDeviceId);
   const macIdentityPublicKey = normalizeNonEmptyString(record.macIdentityPublicKey);
   const relay = normalizeNonEmptyString(record.relay);
-  if (!macDeviceId || !macIdentityPublicKey || !relay || !isValidRelayPublicKey(macIdentityPublicKey)) {
+  if (
+    !macDeviceId ||
+    !macIdentityPublicKey ||
+    !relay ||
+    !isValidRelayPublicKey(macIdentityPublicKey)
+  ) {
     return null;
   }
   return {
@@ -249,34 +259,41 @@ function normalizePersistedRelayTransportState(value: unknown): PersistedRelayTr
   }
   const record = value as Record<string, unknown>;
   const phoneIdentityValue = record.phoneIdentity;
-  const phoneIdentity = phoneIdentityValue && typeof phoneIdentityValue === "object" && !Array.isArray(phoneIdentityValue)
-    ? (() => {
-        const phoneRecord = phoneIdentityValue as Record<string, unknown>;
-        const phoneDeviceId = normalizeNonEmptyString(phoneRecord.phoneDeviceId);
-        const phoneIdentityPublicKey = normalizeNonEmptyString(phoneRecord.phoneIdentityPublicKey);
-        const phoneIdentityPrivateKey = normalizeNonEmptyString(phoneRecord.phoneIdentityPrivateKey);
-        if (
-          !phoneDeviceId
-          || !phoneIdentityPublicKey
-          || !phoneIdentityPrivateKey
-          || !isValidRelayKeyPair({
-            publicKeyBase64: phoneIdentityPublicKey,
-            privateKeyBase64: phoneIdentityPrivateKey,
-          })
-        ) {
-          return null;
-        }
-        return {
-          phoneDeviceId,
-          phoneIdentityPublicKey,
-          phoneIdentityPrivateKey,
-        };
-      })()
-    : null;
+  const phoneIdentity =
+    phoneIdentityValue &&
+    typeof phoneIdentityValue === "object" &&
+    !Array.isArray(phoneIdentityValue)
+      ? (() => {
+          const phoneRecord = phoneIdentityValue as Record<string, unknown>;
+          const phoneDeviceId = normalizeNonEmptyString(phoneRecord.phoneDeviceId);
+          const phoneIdentityPublicKey = normalizeNonEmptyString(
+            phoneRecord.phoneIdentityPublicKey,
+          );
+          const phoneIdentityPrivateKey = normalizeNonEmptyString(
+            phoneRecord.phoneIdentityPrivateKey,
+          );
+          if (
+            !phoneDeviceId ||
+            !phoneIdentityPublicKey ||
+            !phoneIdentityPrivateKey ||
+            !isValidRelayKeyPair({
+              publicKeyBase64: phoneIdentityPublicKey,
+              privateKeyBase64: phoneIdentityPrivateKey,
+            })
+          ) {
+            return null;
+          }
+          return {
+            phoneDeviceId,
+            phoneIdentityPublicKey,
+            phoneIdentityPrivateKey,
+          };
+        })()
+      : null;
   const trustedMacs = Array.isArray(record.trustedMacs)
     ? record.trustedMacs
-      .map((entry) => normalizePersistedTrustedMacRecord(entry))
-      .filter((entry): entry is PersistedTrustedMacRecord => entry !== null)
+        .map((entry) => normalizePersistedTrustedMacRecord(entry))
+        .filter((entry): entry is PersistedTrustedMacRecord => entry !== null)
     : [];
   return {
     phoneIdentity,
@@ -291,10 +308,7 @@ async function loadSecureStore(): Promise<SecureStoreLike | null> {
   secureStorePromise = (async () => {
     try {
       const module = await import("expo-secure-store");
-      if (
-        typeof module.getItemAsync === "function"
-        && typeof module.setItemAsync === "function"
-      ) {
+      if (typeof module.getItemAsync === "function" && typeof module.setItemAsync === "function") {
         return module;
       }
     } catch {
@@ -325,7 +339,9 @@ async function readPersistedRelayTransportState(): Promise<PersistedRelayTranspo
   return clonePersistedRelayTransportState(persistedRelayTransportState);
 }
 
-async function writePersistedRelayTransportState(nextState: PersistedRelayTransportState): Promise<void> {
+async function writePersistedRelayTransportState(
+  nextState: PersistedRelayTransportState,
+): Promise<void> {
   const normalized = clonePersistedRelayTransportState(nextState);
   persistedRelayTransportState = normalized;
   const secureStore = await loadSecureStore();
@@ -335,10 +351,7 @@ async function writePersistedRelayTransportState(nextState: PersistedRelayTransp
   await secureStore.setItemAsync(REMODEX_SECURE_TRANSPORT_STORAGE_KEY, JSON.stringify(normalized));
 }
 
-function queueMessage(
-  emitter: RemodexSecureTransportFallback,
-  payload: unknown,
-): void {
+function queueMessage(emitter: RemodexSecureTransportFallback, payload: unknown): void {
   queueMicrotask(() => {
     emitter.emitPlaintext(JSON.stringify(payload));
   });
@@ -358,31 +371,33 @@ class RemodexSecureTransportFallback extends EventEmitter<RemodexSecureTransport
   private pendingServerRequests = new Map<string, PendingServerRequestRecord>();
 
   private emitStateChanged(): void {
-    (this as unknown as { emit: (eventName: "stateChanged", payload: RemodexSecureTransportState) => void }).emit(
-      "stateChanged",
-      this.state,
-    );
+    (
+      this as unknown as {
+        emit: (eventName: "stateChanged", payload: RemodexSecureTransportState) => void;
+      }
+    ).emit("stateChanged", this.state);
   }
 
   private emitSecureError(message: string): void {
-    (this as unknown as { emit: (eventName: "secureError", payload: { message: string }) => void }).emit(
-      "secureError",
-      { message },
-    );
+    (
+      this as unknown as { emit: (eventName: "secureError", payload: { message: string }) => void }
+    ).emit("secureError", { message });
   }
 
   private emitSocketClosed(reason: string | null): void {
-    (this as unknown as { emit: (eventName: "socketClosed", payload: { reason?: string | null }) => void }).emit(
-      "socketClosed",
-      { reason },
-    );
+    (
+      this as unknown as {
+        emit: (eventName: "socketClosed", payload: { reason?: string | null }) => void;
+      }
+    ).emit("socketClosed", { reason });
   }
 
   emitPlaintext(text: string): void {
-    (this as unknown as { emit: (eventName: "plaintextMessage", payload: { text: string }) => void }).emit(
-      "plaintextMessage",
-      { text },
-    );
+    (
+      this as unknown as {
+        emit: (eventName: "plaintextMessage", payload: { text: string }) => void;
+      }
+    ).emit("plaintextMessage", { text });
   }
 
   private ensureDemoThreads(): void {
@@ -390,28 +405,30 @@ class RemodexSecureTransportFallback extends EventEmitter<RemodexSecureTransport
       return;
     }
     const createdAt = nowIso();
-    this.threads = [{
-      id: "mobile-demo-thread",
-      title: "Remote Access Demo",
-      createdAt,
-      updatedAt: createdAt,
-      lastEventSeq: 2,
-      feed: [
-        {
-          id: "mobile-demo:system",
-          kind: "system",
-          ts: createdAt,
-          line: "Remote Access demo thread hydrated from the secure transport fallback.",
-        },
-        {
-          id: "mobile-demo:assistant:welcome",
-          kind: "message",
-          role: "assistant",
-          ts: createdAt,
-          text: "You are connected to the mock Remodex transport. Send a prompt to exercise the mobile JSON-RPC flow.",
-        },
-      ],
-    }];
+    this.threads = [
+      {
+        id: "mobile-demo-thread",
+        title: "Remote Access Demo",
+        createdAt,
+        updatedAt: createdAt,
+        lastEventSeq: 2,
+        feed: [
+          {
+            id: "mobile-demo:system",
+            kind: "system",
+            ts: createdAt,
+            line: "Remote Access demo thread hydrated from the secure transport fallback.",
+          },
+          {
+            id: "mobile-demo:assistant:welcome",
+            kind: "message",
+            role: "assistant",
+            ts: createdAt,
+            text: "You are connected to the mock Remodex transport. Send a prompt to exercise the mobile JSON-RPC flow.",
+          },
+        ],
+      },
+    ];
   }
 
   private threadSummary(thread: MockThreadRecord) {
@@ -464,11 +481,7 @@ class RemodexSecureTransportFallback extends EventEmitter<RemodexSecureTransport
     });
   }
 
-  private appendAssistantResolution(
-    thread: MockThreadRecord,
-    turnId: string,
-    text: string,
-  ): void {
+  private appendAssistantResolution(thread: MockThreadRecord, turnId: string, text: string): void {
     const ts = nowIso();
     const assistantItemId = `${turnId}:assistant:resolution`;
     thread.lastEventSeq += 1;
@@ -525,10 +538,7 @@ class RemodexSecureTransportFallback extends EventEmitter<RemodexSecureTransport
     });
   }
 
-  private resolvePendingServerRequest(
-    requestId: string,
-    result: unknown,
-  ): void {
+  private resolvePendingServerRequest(requestId: string, result: unknown): void {
     const pending = this.pendingServerRequests.get(requestId);
     if (!pending) {
       return;
@@ -540,19 +550,20 @@ class RemodexSecureTransportFallback extends EventEmitter<RemodexSecureTransport
     }
     let resolutionText = "Request resolved from mobile.";
     if (pending.kind === "approval") {
-      const decision = result && typeof result === "object" && "decision" in result
-        ? String((result as { decision?: unknown }).decision ?? "accept")
-        : "accept";
-      resolutionText = decision === "accept"
-        ? `Approval accepted for command: ${pending.command}`
-        : `Approval declined for command: ${pending.command}`;
+      const decision =
+        result && typeof result === "object" && "decision" in result
+          ? String((result as { decision?: unknown }).decision ?? "accept")
+          : "accept";
+      resolutionText =
+        decision === "accept"
+          ? `Approval accepted for command: ${pending.command}`
+          : `Approval declined for command: ${pending.command}`;
     } else {
-      const answer = result && typeof result === "object" && "answer" in result
-        ? String((result as { answer?: unknown }).answer ?? "")
-        : "";
-      resolutionText = answer
-        ? `Input provided: ${answer}`
-        : "Input request resolved from mobile.";
+      const answer =
+        result && typeof result === "object" && "answer" in result
+          ? String((result as { answer?: unknown }).answer ?? "")
+          : "";
+      resolutionText = answer ? `Input provided: ${answer}` : "Input request resolved from mobile.";
     }
     queueMessage(this, {
       method: "serverRequest/resolved",
@@ -601,7 +612,8 @@ class RemodexSecureTransportFallback extends EventEmitter<RemodexSecureTransport
 
   async connectTrusted(macDeviceId: string): Promise<RemodexSecureTransportState> {
     this.ensureDemoThreads();
-    const trusted = this.state.trustedMacs.find((entry) => entry.macDeviceId === macDeviceId) ?? null;
+    const trusted =
+      this.state.trustedMacs.find((entry) => entry.macDeviceId === macDeviceId) ?? null;
     if (!trusted) {
       this.state = {
         ...this.state,
@@ -655,9 +667,8 @@ class RemodexSecureTransportFallback extends EventEmitter<RemodexSecureTransport
 
     const envelope = message as Record<string, unknown>;
     const method = typeof envelope.method === "string" ? envelope.method : "";
-    const id = typeof envelope.id === "string" || typeof envelope.id === "number"
-      ? envelope.id
-      : null;
+    const id =
+      typeof envelope.id === "string" || typeof envelope.id === "number" ? envelope.id : null;
 
     if (!method && id !== null && ("result" in envelope || "error" in envelope)) {
       this.resolvePendingServerRequest(String(id), envelope.result);
@@ -709,9 +720,10 @@ class RemodexSecureTransportFallback extends EventEmitter<RemodexSecureTransport
     }
 
     if (method === "thread/read" && id !== null) {
-      const params = envelope.params && typeof envelope.params === "object"
-        ? envelope.params as Record<string, unknown>
-        : {};
+      const params =
+        envelope.params && typeof envelope.params === "object"
+          ? (envelope.params as Record<string, unknown>)
+          : {};
       const threadId = typeof params.threadId === "string" ? params.threadId : "";
       const thread = this.threads.find((entry) => entry.id === threadId) ?? this.threads[0];
       if (!thread) {
@@ -732,14 +744,19 @@ class RemodexSecureTransportFallback extends EventEmitter<RemodexSecureTransport
     }
 
     if (method === "turn/start" && id !== null) {
-      const params = envelope.params && typeof envelope.params === "object"
-        ? envelope.params as Record<string, unknown>
-        : {};
-      const threadId = typeof params.threadId === "string" ? params.threadId : this.threads[0]?.id ?? "mobile-demo-thread";
+      const params =
+        envelope.params && typeof envelope.params === "object"
+          ? (envelope.params as Record<string, unknown>)
+          : {};
+      const threadId =
+        typeof params.threadId === "string"
+          ? params.threadId
+          : (this.threads[0]?.id ?? "mobile-demo-thread");
       const input = Array.isArray(params.input) ? params.input : [];
-      const textPart = input.find((entry) => entry && typeof entry === "object" && (entry as Record<string, unknown>).type === "text") as
-        | { text?: unknown }
-        | undefined;
+      const textPart = input.find(
+        (entry) =>
+          entry && typeof entry === "object" && (entry as Record<string, unknown>).type === "text",
+      ) as { text?: unknown } | undefined;
       const prompt = typeof textPart?.text === "string" ? textPart.text : "Hello from mobile";
       const thread = this.threads.find((entry) => entry.id === threadId) ?? this.threads[0];
       if (!thread) {
@@ -928,10 +945,14 @@ class RemodexSecureTransportFallback extends EventEmitter<RemodexSecureTransport
     }
 
     if (method === "turn/interrupt" && id !== null) {
-      const params = envelope.params && typeof envelope.params === "object"
-        ? envelope.params as Record<string, unknown>
-        : {};
-      const threadId = typeof params.threadId === "string" ? params.threadId : this.threads[0]?.id ?? "mobile-demo-thread";
+      const params =
+        envelope.params && typeof envelope.params === "object"
+          ? (envelope.params as Record<string, unknown>)
+          : {};
+      const threadId =
+        typeof params.threadId === "string"
+          ? params.threadId
+          : (this.threads[0]?.id ?? "mobile-demo-thread");
       const thread = this.threads.find((entry) => entry.id === threadId) ?? this.threads[0];
       if (thread) {
         const ts = nowIso();
@@ -984,31 +1005,36 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
   private replayCounterPersistInFlight = false;
 
   private emitStateChanged(): void {
-    (this as unknown as { emit: (eventName: "stateChanged", payload: RemodexSecureTransportState) => void }).emit(
-      "stateChanged",
-      this.state,
-    );
+    (
+      this as unknown as {
+        emit: (eventName: "stateChanged", payload: RemodexSecureTransportState) => void;
+      }
+    ).emit("stateChanged", this.state);
   }
 
   private emitPlaintext(text: string): void {
-    (this as unknown as { emit: (eventName: "plaintextMessage", payload: { text: string }) => void }).emit(
-      "plaintextMessage",
-      { text },
-    );
+    (
+      this as unknown as {
+        emit: (eventName: "plaintextMessage", payload: { text: string }) => void;
+      }
+    ).emit("plaintextMessage", { text });
   }
 
   private emitSecureError(message: string): void {
-    (this as unknown as { emit: (eventName: "secureError", payload: { message: string }) => void }).emit(
-      "secureError",
-      { message },
-    );
+    (
+      this as unknown as { emit: (eventName: "secureError", payload: { message: string }) => void }
+    ).emit("secureError", { message });
   }
 
   private emitSocketClosed(reason: string | null, code?: number): void {
-    (this as unknown as { emit: (eventName: "socketClosed", payload: { code?: number; reason?: string | null }) => void }).emit(
-      "socketClosed",
-      { code, reason },
-    );
+    (
+      this as unknown as {
+        emit: (
+          eventName: "socketClosed",
+          payload: { code?: number; reason?: string | null },
+        ) => void;
+      }
+    ).emit("socketClosed", { code, reason });
   }
 
   private async readPersistedState(): Promise<PersistedRelayTransportState> {
@@ -1042,9 +1068,13 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
     return persistedState.trustedMacs;
   }
 
-  private async upsertTrustedMacRecord(record: PersistedTrustedMacRecord): Promise<PersistedTrustedMacRecord[]> {
+  private async upsertTrustedMacRecord(
+    record: PersistedTrustedMacRecord,
+  ): Promise<PersistedTrustedMacRecord[]> {
     const persistedState = await this.readPersistedState();
-    const remaining = persistedState.trustedMacs.filter((entry) => entry.macDeviceId !== record.macDeviceId);
+    const remaining = persistedState.trustedMacs.filter(
+      (entry) => entry.macDeviceId !== record.macDeviceId,
+    );
     const trustedMacs = [record, ...remaining];
     await this.writePersistedState({
       ...persistedState,
@@ -1055,7 +1085,9 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
 
   private async removeTrustedMacRecord(macDeviceId: string): Promise<PersistedTrustedMacRecord[]> {
     const persistedState = await this.readPersistedState();
-    const trustedMacs = persistedState.trustedMacs.filter((entry) => entry.macDeviceId !== macDeviceId);
+    const trustedMacs = persistedState.trustedMacs.filter(
+      (entry) => entry.macDeviceId !== macDeviceId,
+    );
     await this.writePersistedState({
       ...persistedState,
       trustedMacs,
@@ -1094,7 +1126,9 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
       return;
     }
     const persistedState = await this.readPersistedState();
-    const targetIndex = persistedState.trustedMacs.findIndex((entry) => entry.macDeviceId === target.macDeviceId);
+    const targetIndex = persistedState.trustedMacs.findIndex(
+      (entry) => entry.macDeviceId === target.macDeviceId,
+    );
     if (targetIndex < 0) {
       return;
     }
@@ -1105,8 +1139,8 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
     const nextOutboundCounter = Math.max(existingRecord.lastOutboundCounter, this.outboundCounter);
     const nextInboundCounter = Math.max(existingRecord.lastInboundCounter, this.lastInboundCounter);
     if (
-      nextOutboundCounter === existingRecord.lastOutboundCounter
-      && nextInboundCounter === existingRecord.lastInboundCounter
+      nextOutboundCounter === existingRecord.lastOutboundCounter &&
+      nextInboundCounter === existingRecord.lastInboundCounter
     ) {
       return;
     }
@@ -1122,9 +1156,9 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
       trustedMacs,
     });
     if (
-      this.currentTarget
-      && this.currentTarget.macDeviceId === updatedRecord.macDeviceId
-      && this.currentTarget.lastSessionId === updatedRecord.lastSessionId
+      this.currentTarget &&
+      this.currentTarget.macDeviceId === updatedRecord.macDeviceId &&
+      this.currentTarget.lastSessionId === updatedRecord.lastSessionId
     ) {
       this.currentTarget = updatedRecord;
     }
@@ -1177,7 +1211,12 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
   }
 
   private queueOrSendApplicationMessage(text: string): void {
-    if (!this.socket || this.socket.readyState !== 1 || !this.sharedKey || !this.secureChannelReady) {
+    if (
+      !this.socket ||
+      this.socket.readyState !== 1 ||
+      !this.sharedKey ||
+      !this.secureChannelReady
+    ) {
       this.queuedOutboundMessages.push(text);
       return;
     }
@@ -1205,11 +1244,11 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
 
   private flushQueuedOutboundMessages(): void {
     if (
-      !this.socket
-      || this.socket.readyState !== 1
-      || !this.sharedKey
-      || !this.secureChannelReady
-      || this.queuedOutboundMessages.length === 0
+      !this.socket ||
+      this.socket.readyState !== 1 ||
+      !this.sharedKey ||
+      !this.secureChannelReady ||
+      this.queuedOutboundMessages.length === 0
     ) {
       return;
     }
@@ -1249,11 +1288,21 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
     return `${normalizeRelayUrl(relay)}/${sessionId}`;
   }
 
-  private createSocket(relay: string, sessionId: string, phoneIdentity: PersistedPhoneIdentity): RuntimeWebSocket {
+  private createSocket(
+    relay: string,
+    sessionId: string,
+    phoneIdentity: PersistedPhoneIdentity,
+  ): RuntimeWebSocket {
     const url = this.buildSocketUrl(relay, sessionId);
-    const WebSocketConstructor = globalThis.WebSocket as unknown as {
-      new (url: string, protocols?: string | string[], options?: { headers?: Record<string, string> }): RuntimeWebSocket;
-    } | undefined;
+    const WebSocketConstructor = globalThis.WebSocket as unknown as
+      | {
+          new (
+            url: string,
+            protocols?: string | string[],
+            options?: { headers?: Record<string, string> },
+          ): RuntimeWebSocket;
+        }
+      | undefined;
     if (!WebSocketConstructor) {
       throw new Error("This mobile build does not expose a WebSocket implementation.");
     }
@@ -1282,14 +1331,16 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
           return { handled: true, connected: false };
         }
         if (
-          message.registration.macDeviceId !== currentTarget.macDeviceId
-          || message.registration.macIdentityPublicKey !== currentTarget.macIdentityPublicKey
+          message.registration.macDeviceId !== currentTarget.macDeviceId ||
+          message.registration.macIdentityPublicKey !== currentTarget.macIdentityPublicKey
         ) {
           this.emitProtocolError("The desktop relay identity changed unexpectedly.");
           return { handled: true, connected: false };
         }
         const sessionId = message.registration.sessionId ?? this.state.sessionId;
-        const preserveReplayCounters = Boolean(sessionId && currentTarget.lastSessionId === sessionId);
+        const preserveReplayCounters = Boolean(
+          sessionId && currentTarget.lastSessionId === sessionId,
+        );
         const updatedRecord: PersistedTrustedMacRecord = {
           macDeviceId: message.registration.macDeviceId,
           macIdentityPublicKey: message.registration.macIdentityPublicKey,
@@ -1332,12 +1383,12 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
           phoneIdentityPublicKey: phoneIdentity.phoneIdentityPublicKey,
           pairingProof: this.currentPairingSecret
             ? buildRelayPairingProof({
-              pairingSecret: this.currentPairingSecret,
-              sessionId,
-              macDeviceId: updatedRecord.macDeviceId,
-              phoneDeviceId: phoneIdentity.phoneDeviceId,
-              phoneIdentityPublicKey: phoneIdentity.phoneIdentityPublicKey,
-            })
+                pairingSecret: this.currentPairingSecret,
+                sessionId,
+                macDeviceId: updatedRecord.macDeviceId,
+                phoneDeviceId: phoneIdentity.phoneDeviceId,
+                phoneIdentityPublicKey: phoneIdentity.phoneIdentityPublicKey,
+              })
             : undefined,
         };
         if (!this.sendControlMessage(clientHello)) {
@@ -1388,10 +1439,10 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
       };
       const trustedMacs = await this.upsertTrustedMacRecord(replayAwareTarget);
       if (
-        !this.socket
-        || !this.currentTarget
-        || this.currentTarget.macDeviceId !== target.macDeviceId
-        || this.currentTarget.lastSessionId !== target.lastSessionId
+        !this.socket ||
+        !this.currentTarget ||
+        this.currentTarget.macDeviceId !== target.macDeviceId ||
+        this.currentTarget.lastSessionId !== target.lastSessionId
       ) {
         return this.state;
       }
@@ -1411,26 +1462,34 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
       this.flushQueuedOutboundMessages();
       this.flushQueuedInboundPlaintextMessages();
       return connectedState;
-    })().catch((error) => {
-      this.queuedInboundPlaintextMessages = [];
-      throw error;
-    }).finally(() => {
-      if (this.secureFinalizePromise === finalizePromise) {
-        this.secureFinalizePromise = null;
-      }
-    });
+    })()
+      .catch((error) => {
+        this.queuedInboundPlaintextMessages = [];
+        throw error;
+      })
+      .finally(() => {
+        if (this.secureFinalizePromise === finalizePromise) {
+          this.secureFinalizePromise = null;
+        }
+      });
     this.secureFinalizePromise = finalizePromise;
     return await finalizePromise;
   }
 
-  private async openSocket(target: PersistedTrustedMacRecord, sessionId: string): Promise<RemodexSecureTransportState> {
+  private async openSocket(
+    target: PersistedTrustedMacRecord,
+    sessionId: string,
+  ): Promise<RemodexSecureTransportState> {
     const phoneIdentity = await this.ensurePhoneIdentity();
-    const preserveInMemoryReplayCounters = this.state.status === "reconnecting"
-      && this.currentTarget?.macDeviceId === target.macDeviceId
-      && this.currentTarget?.lastSessionId === sessionId;
-    const preservePersistedReplayCounters = target.lastSessionId === sessionId
-      && (target.lastOutboundCounter > 0 || target.lastInboundCounter > 0);
-    const preserveReplayCounters = preserveInMemoryReplayCounters || preservePersistedReplayCounters;
+    const preserveInMemoryReplayCounters =
+      this.state.status === "reconnecting" &&
+      this.currentTarget?.macDeviceId === target.macDeviceId &&
+      this.currentTarget?.lastSessionId === sessionId;
+    const preservePersistedReplayCounters =
+      target.lastSessionId === sessionId &&
+      (target.lastOutboundCounter > 0 || target.lastInboundCounter > 0);
+    const preserveReplayCounters =
+      preserveInMemoryReplayCounters || preservePersistedReplayCounters;
     this.disconnecting = true;
     this.clearReconnectTimer();
     this.resetSecureChannel({ clearQueue: false, resetCounters: !preserveReplayCounters });
@@ -1510,83 +1569,94 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
           return;
         }
         const text = typeof event.data === "string" ? event.data : String(event.data ?? "");
-        void this.handleRelayControlMessage(text, phoneIdentity).then(({ handled, connected }) => {
-          if (handled) {
-            if (connected || (!settled && this.state.status === "error")) {
-              settle(this.state);
-            }
-            return;
-          }
-          if (!this.sharedKey) {
-            this.emitProtocolError("Rejected relay payload before the secure channel was established.");
-            if (!settled) {
-              settle(this.state);
-            }
-            return;
-          }
-          const decoded = decodeRelaySecureEnvelope({
-            sharedKey: this.sharedKey,
-            rawMessage: text,
-            expectedSender: "mac",
-            lastAcceptedCounter: this.lastInboundCounter,
-          });
-          if (!decoded.ok) {
-            this.emitProtocolError(decoded.error);
-            if (!settled) {
-              settle(this.state);
-            }
-            return;
-          }
-          this.lastInboundCounter = decoded.envelope.counter;
-          this.queuePersistReplayCounters();
-          if (!this.secureChannelReady) {
-            if (!isRelayHandshakeProofPayload(decoded.plaintext)) {
-              if (this.secureFinalizePromise) {
-                this.queuedInboundPlaintextMessages.push(decoded.plaintext);
-                return;
+        void this.handleRelayControlMessage(text, phoneIdentity)
+          .then(({ handled, connected }) => {
+            if (handled) {
+              if (connected || (!settled && this.state.status === "error")) {
+                settle(this.state);
               }
-              this.emitProtocolError("Rejected relay payload before the secure channel was established.");
+              return;
+            }
+            if (!this.sharedKey) {
+              this.emitProtocolError(
+                "Rejected relay payload before the secure channel was established.",
+              );
               if (!settled) {
                 settle(this.state);
               }
               return;
             }
-            void this.finalizeSecureConnection().then((connectedState) => {
-              if (!settled) {
-                settle(connectedState);
-              }
-            }).catch((error) => {
-              this.emitProtocolError(error instanceof Error ? error.message : String(error));
+            const decoded = decodeRelaySecureEnvelope({
+              sharedKey: this.sharedKey,
+              rawMessage: text,
+              expectedSender: "mac",
+              lastAcceptedCounter: this.lastInboundCounter,
+            });
+            if (!decoded.ok) {
+              this.emitProtocolError(decoded.error);
               if (!settled) {
                 settle(this.state);
               }
-            });
-            return;
-          }
-          if (isRelayHandshakeProofPayload(decoded.plaintext)) {
-            return;
-          }
-          this.emitPlaintext(decoded.plaintext);
-        }).catch((error) => {
-          this.emitProtocolError(error instanceof Error ? error.message : String(error));
-          if (!settled) {
-            settle(this.state);
-          }
-        });
+              return;
+            }
+            this.lastInboundCounter = decoded.envelope.counter;
+            this.queuePersistReplayCounters();
+            if (!this.secureChannelReady) {
+              if (!isRelayHandshakeProofPayload(decoded.plaintext)) {
+                if (this.secureFinalizePromise) {
+                  this.queuedInboundPlaintextMessages.push(decoded.plaintext);
+                  return;
+                }
+                this.emitProtocolError(
+                  "Rejected relay payload before the secure channel was established.",
+                );
+                if (!settled) {
+                  settle(this.state);
+                }
+                return;
+              }
+              void this.finalizeSecureConnection()
+                .then((connectedState) => {
+                  if (!settled) {
+                    settle(connectedState);
+                  }
+                })
+                .catch((error) => {
+                  this.emitProtocolError(error instanceof Error ? error.message : String(error));
+                  if (!settled) {
+                    settle(this.state);
+                  }
+                });
+              return;
+            }
+            if (isRelayHandshakeProofPayload(decoded.plaintext)) {
+              return;
+            }
+            this.emitPlaintext(decoded.plaintext);
+          })
+          .catch((error) => {
+            this.emitProtocolError(error instanceof Error ? error.message : String(error));
+            if (!settled) {
+              settle(this.state);
+            }
+          });
       };
       socket.onerror = (event) => {
-        const message = normalizeNonEmptyString(event.message) ?? "Could not open the secure relay session.";
+        const message =
+          normalizeNonEmptyString(event.message) ?? "Could not open the secure relay session.";
         if (!settled) {
-          settle(this.setState(
-            {
-              status: "error",
-              connectedMacDeviceId: target.macDeviceId,
-              relay: target.relay,
-              sessionId,
-              lastError: message,
-            },
-            { emitSecureError: message },
-          ));
+          settle(
+            this.setState(
+              {
+                status: "error",
+                connectedMacDeviceId: target.macDeviceId,
+                relay: target.relay,
+                sessionId,
+                lastError: message,
+              },
+              { emitSecureError: message },
+            ),
+          );
           return;
         }
         this.setState(
@@ -1611,10 +1681,12 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
           return;
         }
         if (!this.currentTarget?.lastSessionId) {
-          settle(this.setState({
-            status: "idle",
-            lastError: null,
-          }));
+          settle(
+            this.setState({
+              status: "idle",
+              lastError: null,
+            }),
+          );
           return;
         }
         const reconnectState = this.setState({
@@ -1649,12 +1721,14 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
   }
 
   async listTrustedMacs(): Promise<RemodexTrustedMacSummary[]> {
-    return (await this.listTrustedMacRecords()).map(({
-      lastSessionId: _lastSessionId,
-      lastOutboundCounter: _lastOutboundCounter,
-      lastInboundCounter: _lastInboundCounter,
-      ...record
-    }) => record);
+    return (await this.listTrustedMacRecords()).map(
+      ({
+        lastSessionId: _lastSessionId,
+        lastOutboundCounter: _lastOutboundCounter,
+        lastInboundCounter: _lastInboundCounter,
+        ...record
+      }) => record,
+    );
   }
 
   async forgetTrustedMac(macDeviceId: string): Promise<RemodexSecureTransportState> {
@@ -1672,7 +1746,14 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
     const macDeviceId = normalizeNonEmptyString(payload.macDeviceId);
     const macIdentityPublicKey = normalizeNonEmptyString(payload.macIdentityPublicKey);
     const pairingSecret = normalizeNonEmptyString(payload.pairingSecret);
-    if (!relay || !sessionId || !macDeviceId || !macIdentityPublicKey || !pairingSecret || !isValidRelayPublicKey(macIdentityPublicKey)) {
+    if (
+      !relay ||
+      !sessionId ||
+      !macDeviceId ||
+      !macIdentityPublicKey ||
+      !pairingSecret ||
+      !isValidRelayPublicKey(macIdentityPublicKey)
+    ) {
       return this.setState(
         {
           status: "error",
@@ -1686,20 +1767,25 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
       );
     }
     this.currentPairingSecret = pairingSecret;
-    return await this.openSocket({
-      macDeviceId,
-      macIdentityPublicKey,
-      relay,
-      displayName: "Desktop bridge",
-      lastResolvedAt: nowIso(),
-      lastSessionId: sessionId,
-      lastOutboundCounter: 0,
-      lastInboundCounter: 0,
-    }, sessionId);
+    return await this.openSocket(
+      {
+        macDeviceId,
+        macIdentityPublicKey,
+        relay,
+        displayName: "Desktop bridge",
+        lastResolvedAt: nowIso(),
+        lastSessionId: sessionId,
+        lastOutboundCounter: 0,
+        lastInboundCounter: 0,
+      },
+      sessionId,
+    );
   }
 
   async connectTrusted(macDeviceId: string): Promise<RemodexSecureTransportState> {
-    const trustedMac = (await this.listTrustedMacRecords()).find((entry) => entry.macDeviceId === macDeviceId) ?? null;
+    const trustedMac =
+      (await this.listTrustedMacRecords()).find((entry) => entry.macDeviceId === macDeviceId) ??
+      null;
     if (!trustedMac?.lastSessionId) {
       return this.setState(
         {
@@ -1736,7 +1822,12 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
   }
 
   async sendPlaintext(text: string): Promise<void> {
-    if (!this.socket || this.socket.readyState !== 1 || !this.sharedKey || !this.secureChannelReady) {
+    if (
+      !this.socket ||
+      this.socket.readyState !== 1 ||
+      !this.sharedKey ||
+      !this.secureChannelReady
+    ) {
       throw new Error("Secure relay is not connected.");
     }
     this.queueOrSendApplicationMessage(text);
@@ -1757,10 +1848,11 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
 const fallbackModule = new RemodexSecureTransportFallback();
 const relayModule = new RemodexSecureTransportRelay();
 const preferDemoTransport = typeof globalThis === "object" && "Bun" in globalThis;
-const preferNativeTransport = !preferDemoTransport
-  && typeof process !== "undefined"
-  && process.env?.COWORK_MOBILE_USE_NATIVE_TRANSPORT === "1"
-  && nativeModule;
+const preferNativeTransport =
+  !preferDemoTransport &&
+  typeof process !== "undefined" &&
+  process.env?.COWORK_MOBILE_USE_NATIVE_TRANSPORT === "1" &&
+  nativeModule;
 const transport = preferDemoTransport
   ? fallbackModule
   : preferNativeTransport
@@ -1787,7 +1879,9 @@ export async function forgetTrustedMac(macDeviceId: string): Promise<RemodexSecu
   return await transport.forgetTrustedMac(macDeviceId);
 }
 
-export async function connectFromQr(payload: RemodexQrPairingPayload): Promise<RemodexSecureTransportState> {
+export async function connectFromQr(
+  payload: RemodexQrPairingPayload,
+): Promise<RemodexSecureTransportState> {
   return await transport.connectFromQr(payload);
 }
 

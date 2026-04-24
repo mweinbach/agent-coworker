@@ -1,5 +1,5 @@
-import { useMemo } from "react";
 import { RefreshCwIcon } from "lucide-react";
+import { useMemo } from "react";
 import { useAppStore } from "../../app/store";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -29,8 +29,9 @@ export function SkillsCatalogPage({
   const installations = useMemo(() => {
     let items = [...(catalog?.installations ?? [])];
     if (managementScope === "global") {
-      items = items.filter((installation) =>
-        installation.scope === "global" || installation.scope === "user");
+      items = items.filter(
+        (installation) => installation.scope === "global" || installation.scope === "user",
+      );
     }
 
     if (searchQuery.trim()) {
@@ -40,12 +41,14 @@ export function SkillsCatalogPage({
           i.name.toLowerCase().includes(q) ||
           i.interface?.displayName?.toLowerCase().includes(q) ||
           i.description?.toLowerCase().includes(q) ||
-          i.interface?.shortDescription?.toLowerCase().includes(q)
+          i.interface?.shortDescription?.toLowerCase().includes(q),
       );
     }
 
     return items.sort((left, right) =>
-      `${left.name}:${left.scope}:${left.installationId}`.localeCompare(`${right.name}:${right.scope}:${right.installationId}`),
+      `${left.name}:${left.scope}:${left.installationId}`.localeCompare(
+        `${right.name}:${right.scope}:${right.installationId}`,
+      ),
     );
   }, [catalog, managementScope, searchQuery]);
 
@@ -86,7 +89,9 @@ export function SkillsCatalogPage({
 
           {otherSkills.length > 0 && (
             <section>
-              <h2 className="mb-4 text-lg font-semibold text-muted-foreground">Other Installations</h2>
+              <h2 className="mb-4 text-lg font-semibold text-muted-foreground">
+                Other Installations
+              </h2>
               <InstallationCardGrid
                 installations={otherSkills}
                 onSelect={(id) => void selectSkillInstallation(id)}
@@ -119,7 +124,9 @@ export function SkillsCatalogPage({
             <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border/50 bg-muted/10 py-10 text-center">
               <div className="mb-1 text-base font-medium">No skills found</div>
               <div className="text-sm text-muted-foreground">
-                {searchQuery ? "Try adjusting your search query." : "Install a skill to give Codex superpowers."}
+                {searchQuery
+                  ? "Try adjusting your search query."
+                  : "Install a skill to give Codex superpowers."}
               </div>
             </div>
           )}

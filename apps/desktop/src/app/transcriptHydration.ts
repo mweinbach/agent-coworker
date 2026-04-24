@@ -5,7 +5,9 @@ import {
 } from "./store.feedMapping";
 import type { HydratedTranscriptSnapshot, TranscriptEvent } from "./types";
 
-export function hydrateTranscriptSnapshot(transcript: TranscriptEvent[]): HydratedTranscriptSnapshot {
+export function hydrateTranscriptSnapshot(
+  transcript: TranscriptEvent[],
+): HydratedTranscriptSnapshot {
   const usageState = extractUsageStateFromTranscript(transcript);
   return {
     feed: mapTranscriptToFeed(transcript),

@@ -1,10 +1,9 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-
+import { __internalResearchActionBindings } from "../src/app/store.actions/research";
+import { disposeAllJsonRpcSocketState } from "../src/app/store.helpers/jsonRpcSocket";
+import { defaultWorkspaceRuntime, RUNTIME } from "../src/app/store.helpers/runtimeState";
 import { NoopJsonRpcSocket } from "./helpers/jsonRpcSocketMock";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
-import { defaultWorkspaceRuntime, RUNTIME } from "../src/app/store.helpers/runtimeState";
-import { disposeAllJsonRpcSocketState } from "../src/app/store.helpers/jsonRpcSocket";
-import { __internalResearchActionBindings } from "../src/app/store.actions/research";
 
 const MOCK_SYSTEM_APPEARANCE = {
   platform: "linux",
@@ -31,75 +30,84 @@ let remoteAccessEnabled = true;
 let stopMobileRelayCalls = 0;
 let packagedApp = false;
 
-mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
-  appendTranscriptBatch: async () => {},
-  appendTranscriptEvent: async () => {},
-  deleteTranscript: async () => {},
-  listDirectory: async () => [],
-  loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
-  pickWorkspaceDirectory: async () => null,
-  readTranscript: async () => [],
-  saveState: async (state: any) => {
-    savedStates.push(structuredClone(state));
-  },
-  startWorkspaceServer: async () => {
-    startWorkspaceServerCalls += 1;
-    return { url: "ws://mock" };
-  },
-  stopWorkspaceServer: async () => {},
-  showContextMenu: async () => null,
-  windowMinimize: async () => {},
-  windowMaximize: async () => {},
-  windowClose: async () => {},
-  getPlatform: async () => "linux",
-  readFile: async () => "",
-  previewOSFile: async () => {},
-  openPath: async () => {},
-  openExternalUrl: async () => {},
-  revealPath: async () => {},
-  copyPath: async () => {},
-  createDirectory: async () => {},
-  renamePath: async () => {},
-  trashPath: async () => {},
-  confirmAction: async () => true,
-  showNotification: async () => true,
-  getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  getUpdateState: async () => MOCK_UPDATE_STATE,
-  checkForUpdates: async () => {},
-  quitAndInstallUpdate: async () => {},
-  getDesktopFeatureFlags: (featureOverrides) => ({
-    remoteAccess: typeof featureOverrides?.remoteAccess === "boolean" ? featureOverrides.remoteAccess : remoteAccessEnabled,
-    workspacePicker: typeof featureOverrides?.workspacePicker === "boolean" ? featureOverrides.workspacePicker : true,
-    workspaceLifecycle: typeof featureOverrides?.workspaceLifecycle === "boolean"
-      ? featureOverrides.workspaceLifecycle
-      : true,
-    a2ui: typeof featureOverrides?.a2ui === "boolean" ? featureOverrides.a2ui : false,
+mock.module("../src/lib/desktopCommands", () =>
+  createDesktopCommandsMock({
+    appendTranscriptBatch: async () => {},
+    appendTranscriptEvent: async () => {},
+    deleteTranscript: async () => {},
+    listDirectory: async () => [],
+    loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
+    pickWorkspaceDirectory: async () => null,
+    readTranscript: async () => [],
+    saveState: async (state: any) => {
+      savedStates.push(structuredClone(state));
+    },
+    startWorkspaceServer: async () => {
+      startWorkspaceServerCalls += 1;
+      return { url: "ws://mock" };
+    },
+    stopWorkspaceServer: async () => {},
+    showContextMenu: async () => null,
+    windowMinimize: async () => {},
+    windowMaximize: async () => {},
+    windowClose: async () => {},
+    getPlatform: async () => "linux",
+    readFile: async () => "",
+    previewOSFile: async () => {},
+    openPath: async () => {},
+    openExternalUrl: async () => {},
+    revealPath: async () => {},
+    copyPath: async () => {},
+    createDirectory: async () => {},
+    renamePath: async () => {},
+    trashPath: async () => {},
+    confirmAction: async () => true,
+    showNotification: async () => true,
+    getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    getUpdateState: async () => MOCK_UPDATE_STATE,
+    checkForUpdates: async () => {},
+    quitAndInstallUpdate: async () => {},
+    getDesktopFeatureFlags: (featureOverrides) => ({
+      remoteAccess:
+        typeof featureOverrides?.remoteAccess === "boolean"
+          ? featureOverrides.remoteAccess
+          : remoteAccessEnabled,
+      workspacePicker:
+        typeof featureOverrides?.workspacePicker === "boolean"
+          ? featureOverrides.workspacePicker
+          : true,
+      workspaceLifecycle:
+        typeof featureOverrides?.workspaceLifecycle === "boolean"
+          ? featureOverrides.workspaceLifecycle
+          : true,
+      a2ui: typeof featureOverrides?.a2ui === "boolean" ? featureOverrides.a2ui : false,
+    }),
+    isPackagedDesktopApp: () => packagedApp,
+    onSystemAppearanceChanged: () => () => {},
+    onMenuCommand: () => () => {},
+    onUpdateStateChanged: () => () => {},
+    stopMobileRelay: async () => {
+      stopMobileRelayCalls += 1;
+      return {
+        status: "idle",
+        workspaceId: null,
+        workspacePath: null,
+        relaySource: "unavailable",
+        relaySourceMessage: null,
+        relayServiceStatus: "unknown",
+        relayServiceMessage: null,
+        relayServiceUpdatedAt: null,
+        relayUrl: null,
+        sessionId: null,
+        pairingPayload: null,
+        trustedPhoneDeviceId: null,
+        trustedPhoneFingerprint: null,
+        lastError: null,
+      };
+    },
   }),
-  isPackagedDesktopApp: () => packagedApp,
-  onSystemAppearanceChanged: () => () => {},
-  onMenuCommand: () => () => {},
-  onUpdateStateChanged: () => () => {},
-  stopMobileRelay: async () => {
-    stopMobileRelayCalls += 1;
-    return {
-      status: "idle",
-      workspaceId: null,
-      workspacePath: null,
-      relaySource: "unavailable",
-      relaySourceMessage: null,
-      relayServiceStatus: "unknown",
-      relayServiceMessage: null,
-      relayServiceUpdatedAt: null,
-      relayUrl: null,
-      sessionId: null,
-      pairingPayload: null,
-      trustedPhoneDeviceId: null,
-      trustedPhoneFingerprint: null,
-      lastError: null,
-    };
-  },
-}));
+);
 
 mock.module("../src/lib/agentSocket", () => ({
   JsonRpcSocket: NoopJsonRpcSocket,

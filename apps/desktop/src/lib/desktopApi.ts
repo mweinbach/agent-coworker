@@ -1,7 +1,9 @@
+import type {
+  DesktopFeatureFlagOverrides,
+  DesktopFeatureFlags,
+} from "../../../../src/shared/featureFlags";
 import desktopPackage from "../../package.json";
-
 import type { HydratedTranscriptSnapshot, PersistedState, TranscriptEvent } from "../app/types";
-import type { DesktopFeatureFlagOverrides, DesktopFeatureFlags } from "../../../../src/shared/featureFlags";
 
 export type StartWorkspaceServerInput = {
   workspaceId: string;
@@ -230,7 +232,10 @@ export type UpdaterState = {
 
 const desktopAppVersion = desktopPackage.version;
 
-export function createDefaultUpdaterState(currentVersion = desktopAppVersion, packaged = false): UpdaterState {
+export function createDefaultUpdaterState(
+  currentVersion = desktopAppVersion,
+  packaged = false,
+): UpdaterState {
   return {
     phase: packaged ? "idle" : "disabled",
     packaged,
@@ -238,7 +243,9 @@ export function createDefaultUpdaterState(currentVersion = desktopAppVersion, pa
     lastCheckStartedAt: null,
     lastCheckedAt: null,
     downloadedAt: null,
-    message: packaged ? "Updates are ready to check." : "Updates are only available in packaged builds.",
+    message: packaged
+      ? "Updates are ready to check."
+      : "Updates are only available in packaged builds.",
     error: null,
     progress: null,
     release: null,

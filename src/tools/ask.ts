@@ -5,33 +5,37 @@ import { defineTool } from "./defineTool";
 
 const nonEmptyQuestionSchema = z.string().trim().min(1).describe("The question to ask");
 
-const askSingleInputSchema = z.object({
-  question: nonEmptyQuestionSchema,
-  options: z.array(z.string()).optional().describe("Multiple-choice options"),
-}).strict();
+const askSingleInputSchema = z
+  .object({
+    question: nonEmptyQuestionSchema,
+    options: z.array(z.string()).optional().describe("Multiple-choice options"),
+  })
+  .strict();
 
-const askStructuredInputSchema = z.object({
-  questions: z
-    .array(
-      z.object({
-        question: nonEmptyQuestionSchema.describe("The complete question to ask the user"),
-        header: z.string().optional().describe("Short label shown in UX"),
-        options: z
-          .array(
-            z.object({
-              label: z.string().describe("Option label"),
-              description: z.string().optional().describe("Option description"),
-            })
-          )
-          .optional()
-          .describe("Structured options for the question"),
-        multiSelect: z.boolean().optional().describe("Whether multiple options may be selected"),
-      })
-    )
-    .min(1)
-    .max(4)
-    .describe("Questions to ask the user"),
-}).strict();
+const askStructuredInputSchema = z
+  .object({
+    questions: z
+      .array(
+        z.object({
+          question: nonEmptyQuestionSchema.describe("The complete question to ask the user"),
+          header: z.string().optional().describe("Short label shown in UX"),
+          options: z
+            .array(
+              z.object({
+                label: z.string().describe("Option label"),
+                description: z.string().optional().describe("Option description"),
+              }),
+            )
+            .optional()
+            .describe("Structured options for the question"),
+          multiSelect: z.boolean().optional().describe("Whether multiple options may be selected"),
+        }),
+      )
+      .min(1)
+      .max(4)
+      .describe("Questions to ask the user"),
+  })
+  .strict();
 
 export const askInputSchema = z
   .object({

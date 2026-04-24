@@ -2,20 +2,20 @@ import type { ServerEvent } from "../../protocol";
 import { JSONRPC_ERROR_CODES } from "../protocol";
 import { jsonRpcThreadTurnRequestSchemas } from "../schema.threadTurn";
 
-import { captureBindingOutcome, type JsonRpcSessionError, sendSessionMutationError } from "./outcomes";
+import {
+  captureBindingOutcome,
+  type JsonRpcSessionError,
+  sendSessionMutationError,
+} from "./outcomes";
 import { toJsonRpcParams } from "./shared";
 import type { JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
 
-type JsonRpcTurnStartOutcome =
-  | Extract<ServerEvent, { type: "session_busy" }>
-  | JsonRpcSessionError;
+type JsonRpcTurnStartOutcome = Extract<ServerEvent, { type: "session_busy" }> | JsonRpcSessionError;
 type JsonRpcTurnSteerOutcome =
   | Extract<ServerEvent, { type: "steer_accepted" }>
   | JsonRpcSessionError;
 
-export function createTurnRouteHandlers(
-  context: JsonRpcRouteContext,
-): JsonRpcRequestHandlerMap {
+export function createTurnRouteHandlers(context: JsonRpcRouteContext): JsonRpcRequestHandlerMap {
   return {
     "turn/start": async (ws, message) => {
       const parsed = jsonRpcThreadTurnRequestSchemas["turn/start"].safeParse(message.params);
@@ -57,14 +57,13 @@ export function createTurnRouteHandlers(
             attachments.length > 0 ? attachments : undefined,
             orderedParts,
           ),
-        (event): event is JsonRpcTurnStartOutcome => (
-          (event.type === "session_busy"
-            && event.sessionId === binding.session!.id
-            && event.busy === true
-            && typeof event.turnId === "string"
-            && event.turnId.trim().length > 0)
-          || context.utils.isSessionError(event)
-        ),
+        (event): event is JsonRpcTurnStartOutcome =>
+          (event.type === "session_busy" &&
+            event.sessionId === binding.session!.id &&
+            event.busy === true &&
+            typeof event.turnId === "string" &&
+            event.turnId.trim().length > 0) ||
+          context.utils.isSessionError(event),
       );
       if (outcome.type === "error") {
         sendSessionMutationError(context, ws, message.id, outcome);
@@ -93,7 +92,8 @@ export function createTurnRouteHandlers(
 
       const { threadId, turnId, input, clientMessageId } = parsed.data;
       const { text, attachments, orderedParts } = context.utils.extractInput(input);
-      const expectedTurnId = turnId || (context.threads.getLive(threadId)?.session?.activeTurnId ?? "");
+      const expectedTurnId =
+        turnId || (context.threads.getLive(threadId)?.session?.activeTurnId ?? "");
       const session = context.threads.getLive(threadId)?.session;
       const hasSteerInput = text || attachments.length > 0;
       if (!session || !hasSteerInput || !expectedTurnId) {
@@ -122,12 +122,11 @@ export function createTurnRouteHandlers(
             attachments.length > 0 ? attachments : undefined,
             orderedParts,
           ),
-        (event): event is JsonRpcTurnSteerOutcome => (
-          (event.type === "steer_accepted"
-            && event.sessionId === session.id
-            && event.turnId === expectedTurnId)
-          || context.utils.isSessionError(event)
-        ),
+        (event): event is JsonRpcTurnSteerOutcome =>
+          (event.type === "steer_accepted" &&
+            event.sessionId === session.id &&
+            event.turnId === expectedTurnId) ||
+          context.utils.isSessionError(event),
       );
       if (outcome.type === "error") {
         sendSessionMutationError(context, ws, message.id, outcome);

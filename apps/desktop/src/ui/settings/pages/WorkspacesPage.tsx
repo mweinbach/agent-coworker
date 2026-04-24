@@ -1,10 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { defaultModelForProvider } from "@cowork/providers/catalog";
 import { motion } from "framer-motion";
 import { ChevronDownIcon, InfoIcon, PlusIcon, XIcon } from "lucide-react";
-
-import { defaultModelForProvider } from "@cowork/providers/catalog";
-
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  GOOGLE_DYNAMIC_REASONING_EFFORT,
+  googleThinkingLevelFromReasoningEffort,
+} from "../../../../../../src/shared/googleThinking";
+import {
+  type CodexCliProviderOptions,
+  type GoogleProviderOptions,
+  type GoogleReasoningEffortValue,
   getGoogleReasoningEffortValuesForModel,
   getWorkspaceGoogleNativeWebSearchEnabled,
   getWorkspaceGoogleReasoningEffort,
@@ -17,41 +22,44 @@ import {
   getWorkspaceWebSearchContextSize,
   getWorkspaceWebSearchLocation,
   getWorkspaceWebSearchMode,
-  mergeWorkspaceProviderOptions,
   LOCAL_WEB_SEARCH_PROVIDERS,
+  type LocalWebSearchProviderValue,
+  mergeWorkspaceProviderOptions,
+  type OpenAICompatibleProviderName,
   REASONING_EFFORT_VALUES,
   REASONING_SUMMARY_VALUES,
+  type ReasoningEffortValue,
+  type ReasoningSummaryValue,
   TEXT_VERBOSITY_VALUES,
+  type TextVerbosityValue,
   WEB_SEARCH_BACKEND_VALUES,
   WEB_SEARCH_CONTEXT_SIZE_VALUES,
   WEB_SEARCH_MODE_VALUES,
-  type CodexCliProviderOptions,
-  type GoogleReasoningEffortValue,
-  type GoogleProviderOptions,
-  type LocalWebSearchProviderValue,
-  type OpenAICompatibleProviderName,
-  type ReasoningEffortValue,
-  type ReasoningSummaryValue,
-  type TextVerbosityValue,
   type WebSearchBackendValue,
   type WebSearchContextSizeValue,
   type WebSearchModeValue,
 } from "../../../app/openaiCompatibleProviderOptions";
-import {
-  GOOGLE_DYNAMIC_REASONING_EFFORT,
-  googleThinkingLevelFromReasoningEffort,
-} from "../../../../../../src/shared/googleThinking";
+import { useAppStore } from "../../../app/store";
 import {
   normalizeWorkspaceUserProfile,
   type WorkspaceRecord,
   type WorkspaceUserProfile,
 } from "../../../app/types";
-import { useAppStore } from "../../../app/store";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "../../../components/ui/card";
 import { Checkbox } from "../../../components/ui/checkbox";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../../../components/ui/collapsible";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "../../../components/ui/collapsible";
 import { Input } from "../../../components/ui/input";
 import {
   Select,
@@ -61,7 +69,12 @@ import {
   SelectValue,
 } from "../../../components/ui/select";
 import { Textarea } from "../../../components/ui/textarea";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "../../../components/ui/tooltip";
 import { confirmAction } from "../../../lib/desktopCommands";
 import {
   type CatalogVisibilityOptions,
@@ -69,14 +82,14 @@ import {
   modelOptionsFromCatalog,
   UI_DISABLED_PROVIDERS,
 } from "../../../lib/modelChoices";
+import { displayProviderName } from "../../../lib/providerDisplayNames";
 import {
   sortProviderEntriesForSettings,
   sortProviderNamesForSettings,
 } from "../../../lib/providerOrdering";
+import { cn } from "../../../lib/utils";
 import type { ProviderName } from "../../../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../../../lib/wsProtocol";
-import { cn } from "../../../lib/utils";
-import { displayProviderName } from "../../../lib/providerDisplayNames";
 
 function toBoolean(checked: boolean | "indeterminate"): boolean {
   return checked === true;
@@ -99,9 +112,7 @@ function ToggleChip({
       aria-label={ariaLabel}
       className={cn(
         "relative inline-flex h-7 w-[52px] shrink-0 cursor-pointer items-center rounded-full border transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background",
-        pressed
-          ? "border-primary/60 bg-primary"
-          : "border-border bg-muted/50",
+        pressed ? "border-primary/60 bg-primary" : "border-border bg-muted/50",
       )}
       onClick={() => onPressedChange(!pressed)}
     >
@@ -124,7 +135,7 @@ function updateProviderOption(
     reasoningEffort?: ReasoningEffortValue;
     reasoningSummary?: ReasoningSummaryValue;
     textVerbosity?: TextVerbosityValue;
-  }
+  },
 ) {
   return mergeWorkspaceProviderOptions(providerOptions, {
     [provider]: patch,
@@ -145,16 +156,19 @@ function updateGoogleProviderOption(
   patch: Partial<GoogleProviderOptions>,
 ) {
   const current = providerOptions ? { ...providerOptions } : {};
-  const currentGoogle = (current.google && typeof current.google === "object" && !Array.isArray(current.google))
-    ? { ...current.google }
-    : {};
+  const currentGoogle =
+    current.google && typeof current.google === "object" && !Array.isArray(current.google)
+      ? { ...current.google }
+      : {};
 
   if ("nativeWebSearch" in patch) {
     currentGoogle.nativeWebSearch = patch.nativeWebSearch;
   }
   if ("thinkingConfig" in patch) {
     const currentThinkingConfig =
-      currentGoogle.thinkingConfig && typeof currentGoogle.thinkingConfig === "object" && !Array.isArray(currentGoogle.thinkingConfig)
+      currentGoogle.thinkingConfig &&
+      typeof currentGoogle.thinkingConfig === "object" &&
+      !Array.isArray(currentGoogle.thinkingConfig)
         ? { ...currentGoogle.thinkingConfig }
         : {};
     const patchThinkingConfig = patch.thinkingConfig ?? {};
@@ -168,7 +182,8 @@ function updateGoogleProviderOption(
     } else {
       delete currentThinkingConfig.thinkingLevel;
     }
-    currentGoogle.thinkingConfig = Object.keys(currentThinkingConfig).length > 0 ? currentThinkingConfig : {};
+    currentGoogle.thinkingConfig =
+      Object.keys(currentThinkingConfig).length > 0 ? currentThinkingConfig : {};
   }
 
   return mergeWorkspaceProviderOptions(providerOptions, {
@@ -220,7 +235,10 @@ function AllowedDomainsField({ domains, onChange }: AllowedDomainsFieldProps) {
     <div className="space-y-1.5">
       <div className="flex flex-wrap items-center gap-2">
         <div className="text-[13px] font-medium text-foreground">Allowed domains</div>
-        <Badge variant="outline" className="h-4 rounded-sm px-1.5 text-[9px] uppercase tracking-[0.12em] text-muted-foreground">
+        <Badge
+          variant="outline"
+          className="h-4 rounded-sm px-1.5 text-[9px] uppercase tracking-[0.12em] text-muted-foreground"
+        >
           Optional
         </Badge>
         <Tooltip delayDuration={0}>
@@ -275,7 +293,11 @@ function AllowedDomainsField({ domains, onChange }: AllowedDomainsFieldProps) {
         {domains.length > 0 ? (
           <div className="flex flex-wrap gap-2">
             {domains.map((domain) => (
-              <Badge key={domain} variant="outline" className="h-6 rounded-sm gap-1 pr-1 pl-1.5 text-[11px]">
+              <Badge
+                key={domain}
+                variant="outline"
+                className="h-6 rounded-sm gap-1 pr-1 pl-1.5 text-[11px]"
+              >
                 <span className="max-w-[12rem] truncate">{domain}</span>
                 <Button
                   type="button"
@@ -323,17 +345,16 @@ function childTargetGroupsFromCatalog(
   }
 
   return sortProviderEntriesForSettings(
-    PROVIDER_NAMES
-      .filter((provider) => !UI_DISABLED_PROVIDERS.has(provider))
+    PROVIDER_NAMES.filter((provider) => !UI_DISABLED_PROVIDERS.has(provider))
       .map((provider) => {
-      const models = new Set(choices[provider] ?? []);
-      for (const model of preserveByProvider.get(provider) ?? []) {
-        models.add(model);
-      }
-      return {
-        provider,
-        refs: [...models].map((model) => `${provider}:${model}`),
-      };
+        const models = new Set(choices[provider] ?? []);
+        for (const model of preserveByProvider.get(provider) ?? []) {
+          models.add(model);
+        }
+        return {
+          provider,
+          refs: [...models].map((model) => `${provider}:${model}`),
+        };
       })
       .filter((group) => group.refs.length > 0),
   );
@@ -365,7 +386,9 @@ function providerFromModelRef(ref: string): ProviderName | null {
   return PROVIDER_NAMES.includes(provider) ? provider : null;
 }
 
-function hasConfiguredProviderStatus(status: { verified?: boolean; authorized?: boolean } | undefined): boolean {
+function hasConfiguredProviderStatus(
+  status: { verified?: boolean; authorized?: boolean } | undefined,
+): boolean {
   return Boolean(status?.verified || status?.authorized);
 }
 
@@ -390,11 +413,13 @@ type OpenAiCompatibleModelSettingsCardProps = {
   providerStatusByName: Record<string, any>;
 };
 
-const MODEL_SETTINGS_SELECT_CLASS = "w-full min-w-0 rounded-sm border-border/70 bg-background/80 shadow-none sm:w-36";
+const MODEL_SETTINGS_SELECT_CLASS =
+  "w-full min-w-0 rounded-sm border-border/70 bg-background/80 shadow-none sm:w-36";
 const MODEL_SETTINGS_INPUT_CLASS = "h-8 rounded-sm border-border/70 bg-background/80 shadow-none";
 const MODEL_CARD_FIELD_CLASS = "space-y-1.5";
 const MODEL_CARD_PANEL_CLASS = "rounded-lg border border-border/60 bg-background/35 p-3";
-const MODEL_CARD_SELECT_CLASS = "w-full min-w-0 rounded-sm border-border/70 bg-background/80 shadow-none";
+const MODEL_CARD_SELECT_CLASS =
+  "w-full min-w-0 rounded-sm border-border/70 bg-background/80 shadow-none";
 
 const LOCAL_WEB_SEARCH_PROVIDER_LABELS: Record<LocalWebSearchProviderValue, string> = {
   exa: "Exa",
@@ -415,24 +440,29 @@ export function OpenAiCompatibleModelSettingsCard({
   const openAiReasoningSummary = getWorkspaceReasoningSummary(workspace.providerOptions, "openai");
   const codexVerbosity = getWorkspaceTextVerbosity(workspace.providerOptions, "codex-cli");
   const codexReasoningEffort = getWorkspaceReasoningEffort(workspace.providerOptions, "codex-cli");
-  const codexReasoningSummary = getWorkspaceReasoningSummary(workspace.providerOptions, "codex-cli");
+  const codexReasoningSummary = getWorkspaceReasoningSummary(
+    workspace.providerOptions,
+    "codex-cli",
+  );
 
-  const sections = ([
-    {
-      key: "codex-cli",
-      label: "ChatGPT Subscription",
-      verbosity: codexVerbosity,
-      reasoningEffort: codexReasoningEffort,
-      reasoningSummary: codexReasoningSummary,
-    },
-    {
-      key: "openai",
-      label: "OpenAI API",
-      verbosity: openAiVerbosity,
-      reasoningEffort: openAiReasoningEffort,
-      reasoningSummary: openAiReasoningSummary,
-    },
-  ] as const).filter((section) => {
+  const sections = (
+    [
+      {
+        key: "codex-cli",
+        label: "ChatGPT Subscription",
+        verbosity: codexVerbosity,
+        reasoningEffort: codexReasoningEffort,
+        reasoningSummary: codexReasoningSummary,
+      },
+      {
+        key: "openai",
+        label: "OpenAI API",
+        verbosity: openAiVerbosity,
+        reasoningEffort: openAiReasoningEffort,
+        reasoningSummary: openAiReasoningSummary,
+      },
+    ] as const
+  ).filter((section) => {
     const status = providerStatusByName[section.key];
     return hasConfiguredProviderStatus(status);
   });
@@ -461,13 +491,21 @@ export function OpenAiCompatibleModelSettingsCard({
                   value={section.verbosity}
                   onValueChange={(value) => {
                     void updateWorkspaceDefaults(workspace.id, {
-                      providerOptions: updateProviderOption(workspace.providerOptions, section.key, {
-                        textVerbosity: value as TextVerbosityValue,
-                      }),
+                      providerOptions: updateProviderOption(
+                        workspace.providerOptions,
+                        section.key,
+                        {
+                          textVerbosity: value as TextVerbosityValue,
+                        },
+                      ),
                     });
                   }}
                 >
-                  <SelectTrigger aria-label={`${section.label} verbosity`} className={MODEL_CARD_SELECT_CLASS} size="sm">
+                  <SelectTrigger
+                    aria-label={`${section.label} verbosity`}
+                    className={MODEL_CARD_SELECT_CLASS}
+                    size="sm"
+                  >
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -486,13 +524,21 @@ export function OpenAiCompatibleModelSettingsCard({
                   value={section.reasoningEffort}
                   onValueChange={(value) => {
                     void updateWorkspaceDefaults(workspace.id, {
-                      providerOptions: updateProviderOption(workspace.providerOptions, section.key, {
-                        reasoningEffort: value as ReasoningEffortValue,
-                      }),
+                      providerOptions: updateProviderOption(
+                        workspace.providerOptions,
+                        section.key,
+                        {
+                          reasoningEffort: value as ReasoningEffortValue,
+                        },
+                      ),
                     });
                   }}
                 >
-                  <SelectTrigger aria-label={`${section.label} reasoning effort`} className={MODEL_CARD_SELECT_CLASS} size="sm">
+                  <SelectTrigger
+                    aria-label={`${section.label} reasoning effort`}
+                    className={MODEL_CARD_SELECT_CLASS}
+                    size="sm"
+                  >
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -511,13 +557,21 @@ export function OpenAiCompatibleModelSettingsCard({
                   value={section.reasoningSummary}
                   onValueChange={(value) => {
                     void updateWorkspaceDefaults(workspace.id, {
-                      providerOptions: updateProviderOption(workspace.providerOptions, section.key, {
-                        reasoningSummary: value as ReasoningSummaryValue,
-                      }),
+                      providerOptions: updateProviderOption(
+                        workspace.providerOptions,
+                        section.key,
+                        {
+                          reasoningSummary: value as ReasoningSummaryValue,
+                        },
+                      ),
                     });
                   }}
                 >
-                  <SelectTrigger aria-label={`${section.label} reasoning summary`} className={MODEL_CARD_SELECT_CLASS} size="sm">
+                  <SelectTrigger
+                    aria-label={`${section.label} reasoning summary`}
+                    className={MODEL_CARD_SELECT_CLASS}
+                    size="sm"
+                  >
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -530,7 +584,6 @@ export function OpenAiCompatibleModelSettingsCard({
                 </Select>
               </div>
             </div>
-
           </div>
         ))}
       </CardContent>
@@ -554,21 +607,31 @@ export function SearchSettingsCard({
 }: SearchSettingsCardProps) {
   const [codexNativeAdvancedOpen, setCodexNativeAdvancedOpen] = useState(false);
   const webSearchBackend = getWorkspaceWebSearchBackend(workspace.providerOptions);
-  const googleUsesNativeWebSearch = getWorkspaceGoogleNativeWebSearchEnabled(workspace.providerOptions, true);
+  const googleUsesNativeWebSearch = getWorkspaceGoogleNativeWebSearchEnabled(
+    workspace.providerOptions,
+    true,
+  );
   const localFallbackProvider = getWorkspaceLocalWebSearchProvider(workspace.providerOptions);
   const codexUsesNativeWebSearch = webSearchBackend === "native";
-  const effectiveSearchProvider = codexUsesNativeWebSearch && !googleUsesNativeWebSearch
-    ? localFallbackProvider
-    : webSearchBackend;
+  const effectiveSearchProvider =
+    codexUsesNativeWebSearch && !googleUsesNativeWebSearch
+      ? localFallbackProvider
+      : webSearchBackend;
   const searchProviderUsesNative = effectiveSearchProvider === "native";
   const hasLegacyGeminiSearchOverride = codexUsesNativeWebSearch && !googleUsesNativeWebSearch;
   const codexWebSearchMode = getWorkspaceWebSearchMode(workspace.providerOptions);
   const codexWebSearchContextSize = getWorkspaceWebSearchContextSize(workspace.providerOptions);
-  const codexWebSearchAllowedDomains = getWorkspaceWebSearchAllowedDomains(workspace.providerOptions);
+  const codexWebSearchAllowedDomains = getWorkspaceWebSearchAllowedDomains(
+    workspace.providerOptions,
+  );
   const codexWebSearchLocation = getWorkspaceWebSearchLocation(workspace.providerOptions);
-  const selectedLocalProvider = searchProviderUsesNative ? localFallbackProvider : effectiveSearchProvider;
-  const selectedLocalProviderMethodId = selectedLocalProvider === "parallel" ? "parallel_api_key" : "exa_api_key";
-  const selectedLocalProviderMask = providerStatusByName.google?.savedApiKeyMasks?.[selectedLocalProviderMethodId];
+  const selectedLocalProvider = searchProviderUsesNative
+    ? localFallbackProvider
+    : effectiveSearchProvider;
+  const selectedLocalProviderMethodId =
+    selectedLocalProvider === "parallel" ? "parallel_api_key" : "exa_api_key";
+  const selectedLocalProviderMask =
+    providerStatusByName.google?.savedApiKeyMasks?.[selectedLocalProviderMethodId];
   const selectedLocalProviderConnected =
     typeof selectedLocalProviderMask === "string" && selectedLocalProviderMask.trim().length > 0;
 
@@ -600,7 +663,8 @@ export function SearchSettingsCard({
       <CardHeader>
         <CardTitle>Search</CardTitle>
         <CardDescription>
-          Choose whether Cowork uses provider-native search or a local search tool in this workspace.
+          Choose whether Cowork uses provider-native search or a local search tool in this
+          workspace.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -613,13 +677,20 @@ export function SearchSettingsCard({
                   {hasLegacyGeminiSearchOverride
                     ? `Google models still use local ${formatWebSearchBackendLabel(selectedLocalProvider)} search from an older workspace override. Changing Search provider here will sync Google and ChatGPT settings.`
                     : searchProviderUsesNative
-                    ? "Use provider-native search when the active model supports it."
-                    : `Use the local webSearch tool backed by ${formatWebSearchBackendLabel(effectiveSearchProvider)}.`}
+                      ? "Use provider-native search when the active model supports it."
+                      : `Use the local webSearch tool backed by ${formatWebSearchBackendLabel(effectiveSearchProvider)}.`}
                 </div>
               </div>
               <div className="w-full max-w-52">
-                <Select value={effectiveSearchProvider} onValueChange={(value) => applySearchProvider(value as WebSearchBackendValue)}>
-                  <SelectTrigger aria-label="Workspace search provider" className={MODEL_CARD_SELECT_CLASS} size="sm">
+                <Select
+                  value={effectiveSearchProvider}
+                  onValueChange={(value) => applySearchProvider(value as WebSearchBackendValue)}
+                >
+                  <SelectTrigger
+                    aria-label="Workspace search provider"
+                    className={MODEL_CARD_SELECT_CLASS}
+                    size="sm"
+                  >
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -637,13 +708,20 @@ export function SearchSettingsCard({
               <div className="grid gap-3 rounded-lg border border-border/60 bg-background/35 p-3">
                 <div className={MODEL_CARD_FIELD_CLASS}>
                   <div className="text-[13px] font-medium text-foreground">
-                    If your model provider doesn&apos;t include search, which search tool do you want to use?
+                    If your model provider doesn&apos;t include search, which search tool do you
+                    want to use?
                   </div>
                   <Select
                     value={localFallbackProvider}
-                    onValueChange={(value) => applyLocalFallbackProvider(value as LocalWebSearchProviderValue)}
+                    onValueChange={(value) =>
+                      applyLocalFallbackProvider(value as LocalWebSearchProviderValue)
+                    }
                   >
-                    <SelectTrigger aria-label="Workspace local search fallback provider" className={MODEL_CARD_SELECT_CLASS} size="sm">
+                    <SelectTrigger
+                      aria-label="Workspace local search fallback provider"
+                      className={MODEL_CARD_SELECT_CLASS}
+                      size="sm"
+                    >
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -655,7 +733,12 @@ export function SearchSettingsCard({
                     </SelectContent>
                   </Select>
                 </div>
-                <div className={cn("text-xs", selectedLocalProviderConnected ? "text-muted-foreground" : "text-warning")}>
+                <div
+                  className={cn(
+                    "text-xs",
+                    selectedLocalProviderConnected ? "text-muted-foreground" : "text-warning",
+                  )}
+                >
                   {selectedLocalProviderConnected
                     ? `${LOCAL_WEB_SEARCH_PROVIDER_LABELS[selectedLocalProvider]} is ready as the fallback local search tool.`
                     : `Add a ${LOCAL_WEB_SEARCH_PROVIDER_LABELS[selectedLocalProvider]} API key in Providers > Tool Providers to use it as the fallback local search tool.`}
@@ -675,7 +758,9 @@ export function SearchSettingsCard({
           <div className="rounded-lg border border-border/60 px-4 py-4">
             <div className="flex items-center justify-between gap-4">
               <div className="space-y-1">
-                <div className="text-sm font-medium text-foreground">Codex native advanced options</div>
+                <div className="text-sm font-medium text-foreground">
+                  Codex native advanced options
+                </div>
                 <div className="text-xs text-muted-foreground">
                   {hasLegacyGeminiSearchOverride
                     ? "These settings still apply to ChatGPT Subscription while Google models remain on the legacy local-search override above."
@@ -692,7 +777,10 @@ export function SearchSettingsCard({
                   <span>{codexNativeAdvancedOpen ? "Hide" : "Show"}</span>
                   <ChevronDownIcon
                     data-icon
-                    className={cn("size-3.5 transition-transform", codexNativeAdvancedOpen && "rotate-180")}
+                    className={cn(
+                      "size-3.5 transition-transform",
+                      codexNativeAdvancedOpen && "rotate-180",
+                    )}
                   />
                 </Button>
               </CollapsibleTrigger>
@@ -714,7 +802,11 @@ export function SearchSettingsCard({
                           });
                         }}
                       >
-                        <SelectTrigger aria-label="Codex web search mode" className={MODEL_CARD_SELECT_CLASS} size="sm">
+                        <SelectTrigger
+                          aria-label="Codex web search mode"
+                          className={MODEL_CARD_SELECT_CLASS}
+                          size="sm"
+                        >
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -744,7 +836,11 @@ export function SearchSettingsCard({
                           });
                         }}
                       >
-                        <SelectTrigger aria-label="Codex web search context size" className={MODEL_CARD_SELECT_CLASS} size="sm">
+                        <SelectTrigger
+                          aria-label="Codex web search context size"
+                          className={MODEL_CARD_SELECT_CLASS}
+                          size="sm"
+                        >
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -857,7 +953,8 @@ export function SearchSettingsCard({
                 </>
               ) : (
                 <div className="rounded-lg border border-border/60 bg-background/70 p-3 text-xs text-muted-foreground">
-                  Switch search provider to Native to use Codex native search mode, domain filters, and location settings.
+                  Switch search provider to Native to use Codex native search mode, domain filters,
+                  and location settings.
                 </div>
               )}
             </CollapsibleContent>
@@ -888,19 +985,21 @@ export function GeminiApiSettingsCard({
     return null;
   }
 
-  const selectedGoogleModel = workspace.defaultProvider === "google"
-    ? (workspace.defaultModel?.trim() || googleDefaultModel)
-    : googleDefaultModel;
-  const googleReasoningEffort = getWorkspaceGoogleReasoningEffort(workspace.providerOptions, selectedGoogleModel);
+  const selectedGoogleModel =
+    workspace.defaultProvider === "google"
+      ? workspace.defaultModel?.trim() || googleDefaultModel
+      : googleDefaultModel;
+  const googleReasoningEffort = getWorkspaceGoogleReasoningEffort(
+    workspace.providerOptions,
+    selectedGoogleModel,
+  );
   const googleReasoningEffortOptions = getGoogleReasoningEffortValuesForModel(selectedGoogleModel);
 
   return (
     <Card className="border-border/80 bg-card/85">
       <CardHeader>
         <CardTitle>Gemini API settings</CardTitle>
-        <CardDescription>
-          Workspace defaults for Gemini API reasoning behavior.
-        </CardDescription>
+        <CardDescription>Workspace defaults for Gemini API reasoning behavior.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="rounded-lg border border-border/60 px-4 py-4">
@@ -909,8 +1008,8 @@ export function GeminiApiSettingsCard({
               <div className="text-sm font-medium text-foreground">Reasoning effort</div>
               <div className="text-xs text-muted-foreground">
                 Applies to <span className="font-mono">{selectedGoogleModel}</span>. Dynamic leaves
-                Gemini&apos;s `thinking_level` unset and lets the model choose its own reasoning depth. Available
-                values depend on the selected Google model.
+                Gemini&apos;s `thinking_level` unset and lets the model choose its own reasoning
+                depth. Available values depend on the selected Google model.
               </div>
             </div>
             <div className="max-w-56">
@@ -928,7 +1027,11 @@ export function GeminiApiSettingsCard({
                   });
                 }}
               >
-                <SelectTrigger aria-label="Gemini reasoning effort" className={MODEL_CARD_SELECT_CLASS} size="sm">
+                <SelectTrigger
+                  aria-label="Gemini reasoning effort"
+                  className={MODEL_CARD_SELECT_CLASS}
+                  size="sm"
+                >
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -985,7 +1088,7 @@ export function WorkspaceUserProfileCard({
   ]);
 
   const currentProfile = normalizeWorkspaceUserProfile(workspace.userProfile);
-  const isDirty = 
+  const isDirty =
     draft.userName !== (workspace.userName ?? "") ||
     draft.instructions !== currentProfile.instructions ||
     draft.work !== currentProfile.work ||
@@ -995,7 +1098,7 @@ export function WorkspaceUserProfileCard({
     if (!isDirty) return;
     setSaving(true);
     setSaveSuccess(false);
-    
+
     try {
       await updateWorkspaceDefaults(workspace.id, {
         userName: draft.userName.trim(),
@@ -1003,7 +1106,7 @@ export function WorkspaceUserProfileCard({
           instructions: draft.instructions.trim(),
           work: draft.work.trim(),
           details: draft.details.trim(),
-        }
+        },
       });
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
@@ -1016,9 +1119,7 @@ export function WorkspaceUserProfileCard({
     <Card className="border-border/80 bg-card/85">
       <CardHeader>
         <CardTitle>How Cowork should understand you in this workspace</CardTitle>
-        <CardDescription>
-          Workspace-specific identity and prompt context.
-        </CardDescription>
+        <CardDescription>Workspace-specific identity and prompt context.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="space-y-2">
@@ -1165,18 +1266,23 @@ export function WorkspacesPage() {
   const model = (ws?.defaultModel ?? "").trim();
   const preferredChildModel = (ws?.defaultPreferredChildModel ?? ws?.defaultModel ?? "").trim();
   const childModelRoutingMode = ws?.defaultChildModelRoutingMode ?? "same-provider";
-  const preferredChildModelRef = (ws?.defaultPreferredChildModelRef ?? `${provider}:${preferredChildModel || model}`).trim();
+  const preferredChildModelRef = (
+    ws?.defaultPreferredChildModelRef ?? `${provider}:${preferredChildModel || model}`
+  ).trim();
   const allowedChildModelRefs = ws?.defaultAllowedChildModelRefs ?? [];
   const enableMcp = ws?.defaultEnableMcp ?? true;
   const backupsEnabled = ws?.defaultBackupsEnabled ?? true;
   const yolo = ws?.yolo ?? false;
 
-  const modelSelectorVisibility = useMemo<CatalogVisibilityOptions>(() => ({
-    hiddenProviders: providerUiState.lmstudio.enabled ? [] : (["lmstudio"] as const),
-    hiddenModelsByProvider: {
-      lmstudio: providerUiState.lmstudio.hiddenModels,
-    },
-  }), [providerUiState]);
+  const modelSelectorVisibility = useMemo<CatalogVisibilityOptions>(
+    () => ({
+      hiddenProviders: providerUiState.lmstudio.enabled ? [] : (["lmstudio"] as const),
+      hiddenModelsByProvider: {
+        lmstudio: providerUiState.lmstudio.hiddenModels,
+      },
+    }),
+    [providerUiState],
+  );
   const modelChoices = useMemo(
     () => modelChoicesFromCatalog(providerCatalog, modelSelectorVisibility),
     [providerCatalog, modelSelectorVisibility],
@@ -1184,9 +1290,7 @@ export function WorkspacesPage() {
   const availableProviders = useMemo(() => {
     const hiddenProviders = new Set(modelSelectorVisibility.hiddenProviders ?? []);
     const catalogProviders = (
-      providerCatalog.length === 0
-        ? PROVIDER_NAMES
-        : providerCatalog.map((entry) => entry.id)
+      providerCatalog.length === 0 ? PROVIDER_NAMES : providerCatalog.map((entry) => entry.id)
     ).filter((entry) => !UI_DISABLED_PROVIDERS.has(entry) && !hiddenProviders.has(entry));
     const visibleProviders = sortProviderNamesForSettings(
       [...new Set(catalogProviders)].filter((entry) => {
@@ -1200,11 +1304,18 @@ export function WorkspacesPage() {
     return visibleProviders;
   }, [modelSelectorVisibility, provider, providerCatalog, providerConnected, providerStatusByName]);
   const currentProviderIsConfigured = availableProviders.includes(provider);
-  const effectiveProvider = currentProviderIsConfigured ? provider : (availableProviders[0] ?? provider);
+  const effectiveProvider = currentProviderIsConfigured
+    ? provider
+    : (availableProviders[0] ?? provider);
   const modelControlsDisabled = !currentProviderIsConfigured;
   const configuredProviderSet = useMemo(() => new Set(availableProviders), [availableProviders]);
   const curatedModels = modelChoices[effectiveProvider] ?? [];
-  const modelOptions = modelOptionsFromCatalog(providerCatalog, effectiveProvider, model, modelSelectorVisibility);
+  const modelOptions = modelOptionsFromCatalog(
+    providerCatalog,
+    effectiveProvider,
+    model,
+    modelSelectorVisibility,
+  );
   const hasCustomModel = Boolean(model && !curatedModels.includes(model));
   const preferredChildModelOptions = modelOptionsFromCatalog(
     providerCatalog,
@@ -1212,7 +1323,9 @@ export function WorkspacesPage() {
     preferredChildModel,
     modelSelectorVisibility,
   );
-  const hasCustomChildModel = Boolean(preferredChildModel && !curatedModels.includes(preferredChildModel));
+  const hasCustomChildModel = Boolean(
+    preferredChildModel && !curatedModels.includes(preferredChildModel),
+  );
   const visibleAllowedChildModelRefs = useMemo(
     () =>
       allowedChildModelRefs.filter((ref) => {
@@ -1235,7 +1348,9 @@ export function WorkspacesPage() {
     return preferredChildModelRef ? [preferredChildModelRef] : [];
   }, [childModelRoutingMode, preferredChildModelRef, visibleAllowedChildModelRefs]);
 
-  const [activeTab, setActiveTab] = useState<"general" | "models" | "profile" | "advanced">("general");
+  const [activeTab, setActiveTab] = useState<"general" | "models" | "profile" | "advanced">(
+    "general",
+  );
   const [subagentModelsOpen, setSubagentModelsOpen] = useState(false);
   const subagentModelsOpenSeedKey = useRef<string | null>(null);
 
@@ -1245,7 +1360,10 @@ export function WorkspacesPage() {
       return;
     }
     subagentModelsOpenSeedKey.current = seedKey;
-    setSubagentModelsOpen(childModelRoutingMode === "cross-provider-allowlist" && visibleAllowedChildModelRefs.length === 0);
+    setSubagentModelsOpen(
+      childModelRoutingMode === "cross-provider-allowlist" &&
+        visibleAllowedChildModelRefs.length === 0,
+    );
   }, [childModelRoutingMode, visibleAllowedChildModelRefs.length, ws?.id]);
 
   return (
@@ -1258,7 +1376,9 @@ export function WorkspacesPage() {
                 Add workspace
               </Button>
             ) : (
-              <div className="text-sm text-muted-foreground">This browser shell stays attached to the current server workspace.</div>
+              <div className="text-sm text-muted-foreground">
+                This browser shell stays attached to the current server workspace.
+              </div>
             )}
           </CardContent>
         </Card>
@@ -1268,7 +1388,11 @@ export function WorkspacesPage() {
             provider={provider}
             model={model}
             childModelRoutingMode={childModelRoutingMode}
-            preferredChildLabel={childModelRoutingMode === "same-provider" ? (preferredChildModel || model) : friendlyModelRef(preferredChildModelRef)}
+            preferredChildLabel={
+              childModelRoutingMode === "same-provider"
+                ? preferredChildModel || model
+                : friendlyModelRef(preferredChildModelRef)
+            }
           />
 
           <div className="flex space-x-1 rounded-lg bg-muted p-1 border border-border/70 max-w-fit mb-2 relative">
@@ -1281,7 +1405,9 @@ export function WorkspacesPage() {
                 onClick={() => setActiveTab(tab)}
                 className={cn(
                   "relative h-auto rounded-md px-3 py-1.5 text-sm font-medium shadow-none transition-colors",
-                  activeTab === tab ? "text-foreground" : "text-muted-foreground hover:text-foreground"
+                  activeTab === tab
+                    ? "text-foreground"
+                    : "text-muted-foreground hover:text-foreground",
                 )}
               >
                 {activeTab === tab && (
@@ -1296,7 +1422,12 @@ export function WorkspacesPage() {
             ))}
           </div>
 
-          <div className={cn("space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-300", activeTab !== "general" && "hidden")}>
+          <div
+            className={cn(
+              "space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-300",
+              activeTab !== "general" && "hidden",
+            )}
+          >
             {perWorkspaceSettings && (
               <Card className="border-border/80 bg-card/85">
                 <CardHeader className="flex-row items-center justify-between space-y-0">
@@ -1336,13 +1467,17 @@ export function WorkspacesPage() {
             <Card className="border-border/80 bg-card/85">
               <CardHeader>
                 <CardTitle>Behavior</CardTitle>
-                <CardDescription>Execution and visibility options for this workspace.</CardDescription>
+                <CardDescription>
+                  Execution and visibility options for this workspace.
+                </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
                   <div>
                     <div className="text-sm font-medium">MCP tools</div>
-                    <div className="text-xs text-muted-foreground">Allow the agent to use MCP servers configured for this workspace.</div>
+                    <div className="text-xs text-muted-foreground">
+                      Allow the agent to use MCP servers configured for this workspace.
+                    </div>
                   </div>
                   <ToggleChip
                     pressed={enableMcp}
@@ -1357,7 +1492,9 @@ export function WorkspacesPage() {
                 <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
                   <div>
                     <div className="text-sm font-medium">Workspace backups</div>
-                    <div className="text-xs text-muted-foreground">Persist a default backup policy for new sessions in this workspace.</div>
+                    <div className="text-xs text-muted-foreground">
+                      Persist a default backup policy for new sessions in this workspace.
+                    </div>
                   </div>
                   <ToggleChip
                     pressed={backupsEnabled}
@@ -1372,7 +1509,9 @@ export function WorkspacesPage() {
                 <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
                   <div>
                     <div className="text-sm font-medium">Run shell commands without asking</div>
-                    <div className="text-xs text-muted-foreground">Skip confirmation prompts and run shell commands immediately without review.</div>
+                    <div className="text-xs text-muted-foreground">
+                      Skip confirmation prompts and run shell commands immediately without review.
+                    </div>
                   </div>
                   <ToggleChip
                     pressed={yolo}
@@ -1380,11 +1519,15 @@ export function WorkspacesPage() {
                     onPressedChange={async (next) => {
                       if (!ws) return;
                       const confirmed = await confirmAction({
-                        title: next ? "Enable auto-approve commands" : "Disable auto-approve commands",
+                        title: next
+                          ? "Enable auto-approve commands"
+                          : "Disable auto-approve commands",
                         message: next
                           ? "Enable auto-approve? The agent will run shell commands on your machine without asking for review first."
                           : "Disable auto-approve?",
-                        detail: next ? "This is a high-risk setting. The server will restart to apply this change." : undefined,
+                        detail: next
+                          ? "This is a high-risk setting. The server will restart to apply this change."
+                          : undefined,
                         confirmLabel: next ? "Enable" : "Disable",
                         cancelLabel: "Cancel",
                         kind: "warning",
@@ -1410,27 +1553,40 @@ export function WorkspacesPage() {
             />
           </div>
 
-          <div className={cn("space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-300", activeTab !== "models" && "hidden")}>
+          <div
+            className={cn(
+              "space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-300",
+              activeTab !== "models" && "hidden",
+            )}
+          >
             <Card className="border-border/80 bg-card/85">
               <CardHeader>
                 <CardTitle>Model</CardTitle>
-                <CardDescription>The default provider and model for new sessions in this workspace.</CardDescription>
+                <CardDescription>
+                  The default provider and model for new sessions in this workspace.
+                </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 {availableProviders.length === 0 ? (
                   <div className={MODEL_CARD_PANEL_CLASS}>
-                    <div className="text-sm font-medium text-foreground">No configured providers</div>
+                    <div className="text-sm font-medium text-foreground">
+                      No configured providers
+                    </div>
                     <div className="mt-1 text-xs text-muted-foreground">
-                      Set up a provider first. Only verified or authorized providers appear in this list.
+                      Set up a provider first. Only verified or authorized providers appear in this
+                      list.
                     </div>
                   </div>
                 ) : (
                   <>
                     {!currentProviderIsConfigured ? (
                       <div className={MODEL_CARD_PANEL_CLASS}>
-                        <div className="text-sm font-medium text-foreground">Current provider is not set up here</div>
+                        <div className="text-sm font-medium text-foreground">
+                          Current provider is not set up here
+                        </div>
                         <div className="mt-1 text-xs text-muted-foreground">
-                          Choose one of the configured providers below. Only verified or authorized providers are shown.
+                          Choose one of the configured providers below. Only verified or authorized
+                          providers are shown.
                         </div>
                       </div>
                     ) : (
@@ -1449,9 +1605,9 @@ export function WorkspacesPage() {
                             const nextProvider = value as ProviderName;
                             if (UI_DISABLED_PROVIDERS.has(nextProvider)) return;
                             const nextDefault =
-                              providerDefaultModelByProvider[nextProvider]?.trim()
-                              || modelChoices[nextProvider]?.[0]
-                              || defaultModelForProvider(nextProvider);
+                              providerDefaultModelByProvider[nextProvider]?.trim() ||
+                              modelChoices[nextProvider]?.[0] ||
+                              defaultModelForProvider(nextProvider);
                             if (!nextDefault) return;
                             void updateWorkspaceDefaults(ws.id, {
                               defaultProvider: nextProvider,
@@ -1464,7 +1620,11 @@ export function WorkspacesPage() {
                             });
                           }}
                         >
-                          <SelectTrigger aria-label="Default provider" className={MODEL_CARD_SELECT_CLASS} size="sm">
+                          <SelectTrigger
+                            aria-label="Default provider"
+                            className={MODEL_CARD_SELECT_CLASS}
+                            size="sm"
+                          >
                             <SelectValue placeholder="Choose configured provider" />
                           </SelectTrigger>
                           <SelectContent>
@@ -1494,7 +1654,11 @@ export function WorkspacesPage() {
                           }}
                           disabled={modelControlsDisabled}
                         >
-                          <SelectTrigger aria-label="Default model" className={MODEL_CARD_SELECT_CLASS} size="sm">
+                          <SelectTrigger
+                            aria-label="Default model"
+                            className={MODEL_CARD_SELECT_CLASS}
+                            size="sm"
+                          >
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
@@ -1541,12 +1705,18 @@ export function WorkspacesPage() {
                           }}
                           disabled={modelControlsDisabled}
                         >
-                          <SelectTrigger aria-label="Subagent routing" className={MODEL_CARD_SELECT_CLASS} size="sm">
+                          <SelectTrigger
+                            aria-label="Subagent routing"
+                            className={MODEL_CARD_SELECT_CLASS}
+                            size="sm"
+                          >
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
                             <SelectItem value="same-provider">Same model</SelectItem>
-                            <SelectItem value="cross-provider-allowlist">Multiple providers</SelectItem>
+                            <SelectItem value="cross-provider-allowlist">
+                              Multiple providers
+                            </SelectItem>
                           </SelectContent>
                         </Select>
                         <div className="text-xs text-muted-foreground">
@@ -1556,7 +1726,9 @@ export function WorkspacesPage() {
 
                       {childModelRoutingMode === "same-provider" ? (
                         <div className={MODEL_CARD_FIELD_CLASS}>
-                          <div className="text-sm font-medium text-foreground">Preferred subagent model</div>
+                          <div className="text-sm font-medium text-foreground">
+                            Preferred subagent model
+                          </div>
                           <Select
                             value={preferredChildModel}
                             onValueChange={(value) => {
@@ -1568,13 +1740,19 @@ export function WorkspacesPage() {
                             }}
                             disabled={modelControlsDisabled}
                           >
-                            <SelectTrigger aria-label="Preferred subagent model" className={MODEL_CARD_SELECT_CLASS} size="sm">
+                            <SelectTrigger
+                              aria-label="Preferred subagent model"
+                              className={MODEL_CARD_SELECT_CLASS}
+                              size="sm"
+                            >
                               <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
                               {preferredChildModelOptions.map((entry) => (
                                 <SelectItem key={entry} value={entry}>
-                                  {hasCustomChildModel && entry === preferredChildModel ? `${entry} (custom)` : entry}
+                                  {hasCustomChildModel && entry === preferredChildModel
+                                    ? `${entry} (custom)`
+                                    : entry}
                                 </SelectItem>
                               ))}
                             </SelectContent>
@@ -1582,16 +1760,30 @@ export function WorkspacesPage() {
                         </div>
                       ) : (
                         <div className={MODEL_CARD_FIELD_CLASS}>
-                          <div className="text-sm font-medium text-foreground">Preferred subagent model</div>
+                          <div className="text-sm font-medium text-foreground">
+                            Preferred subagent model
+                          </div>
                           <Select
-                            value={preferredChildTargetOptions.includes(preferredChildModelRef) ? preferredChildModelRef : undefined}
+                            value={
+                              preferredChildTargetOptions.includes(preferredChildModelRef)
+                                ? preferredChildModelRef
+                                : undefined
+                            }
                             onValueChange={(value) => {
                               if (!ws) return;
-                              void updateWorkspaceDefaults(ws.id, { defaultPreferredChildModelRef: value });
+                              void updateWorkspaceDefaults(ws.id, {
+                                defaultPreferredChildModelRef: value,
+                              });
                             }}
-                            disabled={modelControlsDisabled || preferredChildTargetOptions.length === 0}
+                            disabled={
+                              modelControlsDisabled || preferredChildTargetOptions.length === 0
+                            }
                           >
-                            <SelectTrigger aria-label="Preferred subagent model" className={MODEL_CARD_SELECT_CLASS} size="sm">
+                            <SelectTrigger
+                              aria-label="Preferred subagent model"
+                              className={MODEL_CARD_SELECT_CLASS}
+                              size="sm"
+                            >
                               <SelectValue placeholder="Select subagent models first" />
                             </SelectTrigger>
                             <SelectContent>
@@ -1615,7 +1807,9 @@ export function WorkspacesPage() {
                         >
                           <div className="flex flex-wrap items-center justify-between gap-2">
                             <div>
-                              <div className="text-sm font-medium text-foreground">Subagent Models</div>
+                              <div className="text-sm font-medium text-foreground">
+                                Subagent Models
+                              </div>
                               <div className="text-xs text-muted-foreground">
                                 Only providers you've set up are shown.
                               </div>
@@ -1633,7 +1827,10 @@ export function WorkspacesPage() {
                                 >
                                   {subagentModelsOpen ? "Hide" : "Show"}
                                   <ChevronDownIcon
-                                    className={cn("size-3.5 transition-transform", subagentModelsOpen && "rotate-180")}
+                                    className={cn(
+                                      "size-3.5 transition-transform",
+                                      subagentModelsOpen && "rotate-180",
+                                    )}
                                   />
                                 </Button>
                               </CollapsibleTrigger>
@@ -1660,13 +1857,19 @@ export function WorkspacesPage() {
                                               checked={checked}
                                               onCheckedChange={(nextChecked) => {
                                                 if (!ws) return;
-                                                const nextRefs = nextChecked === true
-                                                  ? [...visibleAllowedChildModelRefs, ref]
-                                                  : visibleAllowedChildModelRefs.filter((entry) => entry !== ref);
+                                                const nextRefs =
+                                                  nextChecked === true
+                                                    ? [...visibleAllowedChildModelRefs, ref]
+                                                    : visibleAllowedChildModelRefs.filter(
+                                                        (entry) => entry !== ref,
+                                                      );
                                                 const dedupedRefs = [...new Set(nextRefs)];
-                                                const nextPreferred = dedupedRefs.includes(preferredChildModelRef)
+                                                const nextPreferred = dedupedRefs.includes(
+                                                  preferredChildModelRef,
+                                                )
                                                   ? preferredChildModelRef
-                                                  : (dedupedRefs[0] ?? `${effectiveProvider}:${preferredChildModel || model}`);
+                                                  : (dedupedRefs[0] ??
+                                                    `${effectiveProvider}:${preferredChildModel || model}`);
                                                 void updateWorkspaceDefaults(ws.id, {
                                                   defaultAllowedChildModelRefs: dedupedRefs,
                                                   defaultPreferredChildModelRef: nextPreferred,
@@ -1690,7 +1893,6 @@ export function WorkspacesPage() {
                             )}
                           </CollapsibleContent>
                         </Collapsible>
-
                       </div>
                     )}
                   </>
@@ -1707,18 +1909,30 @@ export function WorkspacesPage() {
               workspace={ws}
               updateWorkspaceDefaults={updateWorkspaceDefaults}
               providerStatusByName={providerStatusByName}
-              googleDefaultModel={providerDefaultModelByProvider.google?.trim() || defaultModelForProvider("google")}
+              googleDefaultModel={
+                providerDefaultModelByProvider.google?.trim() || defaultModelForProvider("google")
+              }
             />
           </div>
 
-          <div className={cn("space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-300", activeTab !== "profile" && "hidden")}>
+          <div
+            className={cn(
+              "space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-300",
+              activeTab !== "profile" && "hidden",
+            )}
+          >
             <WorkspaceUserProfileCard
               workspace={ws}
               updateWorkspaceDefaults={updateWorkspaceDefaults}
             />
           </div>
 
-          <div className={cn("space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-300", activeTab !== "advanced" && "hidden")}>
+          <div
+            className={cn(
+              "space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-300",
+              activeTab !== "advanced" && "hidden",
+            )}
+          >
             <Card className="border-border/80 bg-card/85">
               <CardHeader>
                 <CardTitle>Advanced</CardTitle>
@@ -1728,7 +1942,10 @@ export function WorkspacesPage() {
                 <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
                   <div>
                     <div className="text-sm font-medium">Configure settings by workspace</div>
-                    <div className="text-xs text-muted-foreground">When enabled, each workspace has its own provider, model, and behavior settings.</div>
+                    <div className="text-xs text-muted-foreground">
+                      When enabled, each workspace has its own provider, model, and behavior
+                      settings.
+                    </div>
                   </div>
                   <Checkbox
                     checked={perWorkspaceSettings}
@@ -1738,8 +1955,10 @@ export function WorkspacesPage() {
                       if (!next && workspaces.length > 1) {
                         const confirmed = await confirmAction({
                           title: "Share settings across workspaces",
-                          message: "All workspaces will be synced to the current workspace's settings.",
-                          detail: "This will overwrite provider, model, and behavior settings on other workspaces.",
+                          message:
+                            "All workspaces will be synced to the current workspace's settings.",
+                          detail:
+                            "This will overwrite provider, model, and behavior settings on other workspaces.",
                           confirmLabel: "Share settings",
                           cancelLabel: "Cancel",
                           kind: "warning",
@@ -1756,9 +1975,15 @@ export function WorkspacesPage() {
                   <div className="flex items-center justify-between gap-3 max-[960px]:items-start max-[960px]:flex-col">
                     <div>
                       <div className="text-sm font-medium">Restart server</div>
-                      <div className="text-xs text-muted-foreground">Restart the workspace agent server if unresponsive.</div>
+                      <div className="text-xs text-muted-foreground">
+                        Restart the workspace agent server if unresponsive.
+                      </div>
                     </div>
-                    <Button variant="outline" type="button" onClick={() => void restartWorkspaceServer(ws.id)}>
+                    <Button
+                      variant="outline"
+                      type="button"
+                      onClick={() => void restartWorkspaceServer(ws.id)}
+                    >
                       Restart
                     </Button>
                   </div>
@@ -1768,7 +1993,9 @@ export function WorkspacesPage() {
                   <div className="flex items-center justify-between gap-3 max-[960px]:items-start max-[960px]:flex-col">
                     <div>
                       <div className="text-sm font-medium">Remove workspace</div>
-                      <div className="text-xs text-muted-foreground">Remove this workspace from the app. Your files on disk are not affected.</div>
+                      <div className="text-xs text-muted-foreground">
+                        Remove this workspace from the app. Your files on disk are not affected.
+                      </div>
                     </div>
                     <Button
                       variant="destructive"

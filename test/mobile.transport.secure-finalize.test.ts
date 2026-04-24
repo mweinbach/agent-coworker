@@ -122,17 +122,19 @@ describe("mobile relay secure finalize", () => {
     const phoneIdentity = persisted.phoneIdentity;
     expect(phoneIdentity).toBeTruthy();
 
-    socket.emitMessage(JSON.stringify({
-      kind: "relayMacRegistration",
-      registration: {
-        sessionId: "session-1",
-        macDeviceId: "mac-1",
-        macIdentityPublicKey: macKeyPair.publicKeyBase64,
-        displayName: "Desktop bridge",
-        trustedPhoneDeviceId: null,
-        trustedPhonePublicKey: null,
-      },
-    }));
+    socket.emitMessage(
+      JSON.stringify({
+        kind: "relayMacRegistration",
+        registration: {
+          sessionId: "session-1",
+          macDeviceId: "mac-1",
+          macIdentityPublicKey: macKeyPair.publicKeyBase64,
+          displayName: "Desktop bridge",
+          trustedPhoneDeviceId: null,
+          trustedPhonePublicKey: null,
+        },
+      }),
+    );
     await flushMicrotasks();
 
     const sharedKey = createRelaySharedKey(
@@ -140,24 +142,32 @@ describe("mobile relay secure finalize", () => {
       phoneIdentity.phoneIdentityPublicKey,
       "session-1",
     );
-    socket.emitMessage(JSON.stringify(encodeRelaySecureEnvelope({
-      sharedKey,
-      sender: "mac",
-      counter: 1,
-      plaintext: buildRelayHandshakeProofPayload(),
-    })));
-    socket.emitMessage(JSON.stringify(encodeRelaySecureEnvelope({
-      sharedKey,
-      sender: "mac",
-      counter: 2,
-      plaintext: JSON.stringify({
-        id: 7,
-        result: {
-          workspaces: [],
-          activeWorkspaceId: null,
-        },
-      }),
-    })));
+    socket.emitMessage(
+      JSON.stringify(
+        encodeRelaySecureEnvelope({
+          sharedKey,
+          sender: "mac",
+          counter: 1,
+          plaintext: buildRelayHandshakeProofPayload(),
+        }),
+      ),
+    );
+    socket.emitMessage(
+      JSON.stringify(
+        encodeRelaySecureEnvelope({
+          sharedKey,
+          sender: "mac",
+          counter: 2,
+          plaintext: JSON.stringify({
+            id: 7,
+            result: {
+              workspaces: [],
+              activeWorkspaceId: null,
+            },
+          }),
+        }),
+      ),
+    );
 
     await flushMicrotasks();
     expect(secureErrors).toEqual([]);
@@ -168,13 +178,15 @@ describe("mobile relay secure finalize", () => {
     await flushMicrotasks();
 
     expect(connectedState.status).toBe("connected");
-    expect(plaintextMessages).toContain(JSON.stringify({
-      id: 7,
-      result: {
-        workspaces: [],
-        activeWorkspaceId: null,
-      },
-    }));
+    expect(plaintextMessages).toContain(
+      JSON.stringify({
+        id: 7,
+        result: {
+          workspaces: [],
+          activeWorkspaceId: null,
+        },
+      }),
+    );
   });
 
   test("maps synchronous WebSocket construction failure to error state", async () => {
@@ -230,17 +242,19 @@ describe("mobile relay secure finalize", () => {
     const firstPhoneIdentity = firstPersistedState.phoneIdentity;
     expect(firstPhoneIdentity).toBeTruthy();
 
-    firstSocket.emitMessage(JSON.stringify({
-      kind: "relayMacRegistration",
-      registration: {
-        sessionId: "session-replay-restore",
-        macDeviceId: "mac-replay",
-        macIdentityPublicKey: macKeyPair.publicKeyBase64,
-        displayName: "Desktop bridge",
-        trustedPhoneDeviceId: null,
-        trustedPhonePublicKey: null,
-      },
-    }));
+    firstSocket.emitMessage(
+      JSON.stringify({
+        kind: "relayMacRegistration",
+        registration: {
+          sessionId: "session-replay-restore",
+          macDeviceId: "mac-replay",
+          macIdentityPublicKey: macKeyPair.publicKeyBase64,
+          displayName: "Desktop bridge",
+          trustedPhoneDeviceId: null,
+          trustedPhonePublicKey: null,
+        },
+      }),
+    );
     await flushMicrotasks();
 
     const sharedKey = createRelaySharedKey(
@@ -248,20 +262,26 @@ describe("mobile relay secure finalize", () => {
       firstPhoneIdentity.phoneIdentityPublicKey,
       "session-replay-restore",
     );
-    firstSocket.emitMessage(JSON.stringify(encodeRelaySecureEnvelope({
-      sharedKey,
-      sender: "mac",
-      counter: 1,
-      plaintext: buildRelayHandshakeProofPayload(),
-    })));
+    firstSocket.emitMessage(
+      JSON.stringify(
+        encodeRelaySecureEnvelope({
+          sharedKey,
+          sender: "mac",
+          counter: 1,
+          plaintext: buildRelayHandshakeProofPayload(),
+        }),
+      ),
+    );
     const firstConnectedState = await firstConnectPromise;
     expect(firstConnectedState.status).toBe("connected");
 
-    await relayFirstRun.sendPlaintext(JSON.stringify({
-      id: 11,
-      method: "workspace/list",
-      params: {},
-    }));
+    await relayFirstRun.sendPlaintext(
+      JSON.stringify({
+        id: 11,
+        method: "workspace/list",
+        params: {},
+      }),
+    );
     await flushMicrotasks(10);
 
     let trustedRecordBeforeRestart: {
@@ -271,7 +291,10 @@ describe("mobile relay secure finalize", () => {
     } | null = null;
     for (let index = 0; index < 20; index += 1) {
       const persisted = await relayFirstRun.readPersistedState();
-      trustedRecordBeforeRestart = persisted.trustedMacs.find((entry: { macDeviceId: string }) => entry.macDeviceId === "mac-replay") ?? null;
+      trustedRecordBeforeRestart =
+        persisted.trustedMacs.find(
+          (entry: { macDeviceId: string }) => entry.macDeviceId === "mac-replay",
+        ) ?? null;
       if (trustedRecordBeforeRestart && trustedRecordBeforeRestart.lastOutboundCounter > 1) {
         break;
       }
@@ -291,17 +314,19 @@ describe("mobile relay secure finalize", () => {
     const secondPhoneIdentity = secondPersistedState.phoneIdentity;
     expect(secondPhoneIdentity).toBeTruthy();
 
-    secondSocket.emitMessage(JSON.stringify({
-      kind: "relayMacRegistration",
-      registration: {
-        sessionId: "session-replay-restore",
-        macDeviceId: "mac-replay",
-        macIdentityPublicKey: macKeyPair.publicKeyBase64,
-        displayName: "Desktop bridge",
-        trustedPhoneDeviceId: null,
-        trustedPhonePublicKey: null,
-      },
-    }));
+    secondSocket.emitMessage(
+      JSON.stringify({
+        kind: "relayMacRegistration",
+        registration: {
+          sessionId: "session-replay-restore",
+          macDeviceId: "mac-replay",
+          macIdentityPublicKey: macKeyPair.publicKeyBase64,
+          displayName: "Desktop bridge",
+          trustedPhoneDeviceId: null,
+          trustedPhonePublicKey: null,
+        },
+      }),
+    );
     await flushMicrotasks();
 
     let decodedLastCounter = 0;
@@ -324,18 +349,24 @@ describe("mobile relay secure finalize", () => {
       outboundSecureCounters.push(decoded.envelope.counter);
     }
     expect(outboundSecureCounters.length).toBeGreaterThan(0);
-    expect(outboundSecureCounters[0]!).toBeGreaterThan(trustedRecordBeforeRestart!.lastOutboundCounter);
+    expect(outboundSecureCounters[0]!).toBeGreaterThan(
+      trustedRecordBeforeRestart!.lastOutboundCounter,
+    );
 
-    secondSocket.emitMessage(JSON.stringify(encodeRelaySecureEnvelope({
-      sharedKey: createRelaySharedKey(
-        macKeyPair.privateKeyBase64,
-        secondPhoneIdentity.phoneIdentityPublicKey,
-        "session-replay-restore",
+    secondSocket.emitMessage(
+      JSON.stringify(
+        encodeRelaySecureEnvelope({
+          sharedKey: createRelaySharedKey(
+            macKeyPair.privateKeyBase64,
+            secondPhoneIdentity.phoneIdentityPublicKey,
+            "session-replay-restore",
+          ),
+          sender: "mac",
+          counter: trustedRecordBeforeRestart!.lastInboundCounter + 1,
+          plaintext: buildRelayHandshakeProofPayload(),
+        }),
       ),
-      sender: "mac",
-      counter: trustedRecordBeforeRestart!.lastInboundCounter + 1,
-      plaintext: buildRelayHandshakeProofPayload(),
-    })));
+    );
 
     const secondConnectedState = await secondConnectPromise;
     expect(secondConnectedState.status).toBe("connected");

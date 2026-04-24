@@ -16,14 +16,19 @@ function makePayload(overrides?: Partial<HarnessContextPayload>): HarnessContext
 
 describe("HarnessContextStore", () => {
   test("normalizeHarnessContextPayload trims and filters consistently", () => {
-    expect(normalizeHarnessContextPayload({
-      runId: " run-1 ",
-      taskId: " task-1 ",
-      objective: " objective ",
-      acceptanceCriteria: [" keep ", " ", ""],
-      constraints: ["", " constrain "],
-      metadata: { " env ": " prod ", blank: "   " },
-    }, "2026-03-20T12:00:00.000Z")).toEqual({
+    expect(
+      normalizeHarnessContextPayload(
+        {
+          runId: " run-1 ",
+          taskId: " task-1 ",
+          objective: " objective ",
+          acceptanceCriteria: [" keep ", " ", ""],
+          constraints: ["", " constrain "],
+          metadata: { " env ": " prod ", blank: "   " },
+        },
+        "2026-03-20T12:00:00.000Z",
+      ),
+    ).toEqual({
       runId: "run-1",
       taskId: "task-1",
       objective: "objective",
@@ -54,7 +59,10 @@ describe("HarnessContextStore", () => {
 
   test("set trims whitespace from runId, taskId, objective", () => {
     const store = new HarnessContextStore();
-    store.set("s1", makePayload({ runId: "  run-2  ", taskId: "  task-2  ", objective: "  goal  " }));
+    store.set(
+      "s1",
+      makePayload({ runId: "  run-2  ", taskId: "  task-2  ", objective: "  goal  " }),
+    );
     const result = store.get("s1")!;
     expect(result.runId).toBe("run-2");
     expect(result.taskId).toBe("task-2");
@@ -68,7 +76,7 @@ describe("HarnessContextStore", () => {
       makePayload({
         acceptanceCriteria: ["  valid  ", "  ", "", "also valid"],
         constraints: ["", "  ", "  keep  "],
-      })
+      }),
     );
     const result = store.get("s1")!;
     expect(result.acceptanceCriteria).toEqual(["valid", "also valid"]);
@@ -98,13 +106,16 @@ describe("HarnessContextStore", () => {
 
   test("set trims metadata keys and values and drops blank entries", () => {
     const store = new HarnessContextStore();
-    store.set("s1", makePayload({
-      metadata: {
-        " env ": " prod ",
-        blank: "   ",
-        "   ": "ignored",
-      },
-    }));
+    store.set(
+      "s1",
+      makePayload({
+        metadata: {
+          " env ": " prod ",
+          blank: "   ",
+          "   ": "ignored",
+        },
+      }),
+    );
 
     const result = store.get("s1")!;
     expect(result.metadata).toEqual({ env: "prod" });

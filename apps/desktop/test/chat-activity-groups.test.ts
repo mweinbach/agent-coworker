@@ -6,11 +6,43 @@ import { buildChatRenderItems, summarizeActivityGroup } from "../src/ui/chat/act
 describe("desktop chat activity groups", () => {
   test("groups consecutive reasoning and tool items into one activity block", () => {
     const feed: FeedItem[] = [
-      { id: "m1", kind: "message", role: "user", ts: "2024-01-01T00:00:00.000Z", text: "review it" },
-      { id: "r1", kind: "reasoning", mode: "summary", ts: "2024-01-01T00:00:01.000Z", text: "Reviewing the model plan." },
-      { id: "t1", kind: "tool", ts: "2024-01-01T00:00:02.000Z", name: "read", state: "output-available", args: { path: "a.ts" } },
-      { id: "t2", kind: "tool", ts: "2024-01-01T00:00:03.000Z", name: "grep", state: "output-available", args: { pattern: "todo" } },
-      { id: "m2", kind: "message", role: "assistant", ts: "2024-01-01T00:00:04.000Z", text: "Here is the review." },
+      {
+        id: "m1",
+        kind: "message",
+        role: "user",
+        ts: "2024-01-01T00:00:00.000Z",
+        text: "review it",
+      },
+      {
+        id: "r1",
+        kind: "reasoning",
+        mode: "summary",
+        ts: "2024-01-01T00:00:01.000Z",
+        text: "Reviewing the model plan.",
+      },
+      {
+        id: "t1",
+        kind: "tool",
+        ts: "2024-01-01T00:00:02.000Z",
+        name: "read",
+        state: "output-available",
+        args: { path: "a.ts" },
+      },
+      {
+        id: "t2",
+        kind: "tool",
+        ts: "2024-01-01T00:00:03.000Z",
+        name: "grep",
+        state: "output-available",
+        args: { pattern: "todo" },
+      },
+      {
+        id: "m2",
+        kind: "message",
+        role: "assistant",
+        ts: "2024-01-01T00:00:04.000Z",
+        text: "Here is the review.",
+      },
     ];
 
     expect(buildChatRenderItems(feed)).toEqual([
@@ -23,9 +55,28 @@ describe("desktop chat activity groups", () => {
   test("buildChatRenderItems preserves feed order instead of sorting by timestamps", () => {
     const feed: FeedItem[] = [
       { id: "m1", kind: "message", role: "user", ts: "2024-01-01T00:00:10.000Z", text: "start" },
-      { id: "r1", kind: "reasoning", mode: "summary", ts: "2024-01-01T00:00:30.000Z", text: "Later timestamp first in the trace." },
-      { id: "t1", kind: "tool", ts: "2024-01-01T00:00:20.000Z", name: "read", state: "output-available", args: { path: "a.ts" } },
-      { id: "m2", kind: "message", role: "assistant", ts: "2024-01-01T00:00:05.000Z", text: "done" },
+      {
+        id: "r1",
+        kind: "reasoning",
+        mode: "summary",
+        ts: "2024-01-01T00:00:30.000Z",
+        text: "Later timestamp first in the trace.",
+      },
+      {
+        id: "t1",
+        kind: "tool",
+        ts: "2024-01-01T00:00:20.000Z",
+        name: "read",
+        state: "output-available",
+        args: { path: "a.ts" },
+      },
+      {
+        id: "m2",
+        kind: "message",
+        role: "assistant",
+        ts: "2024-01-01T00:00:05.000Z",
+        text: "done",
+      },
     ];
 
     expect(buildChatRenderItems(feed)).toEqual([
@@ -37,8 +88,21 @@ describe("desktop chat activity groups", () => {
 
   test("summary prefers reasoning preview and counts tools", () => {
     const summary = summarizeActivityGroup([
-      { id: "r1", kind: "reasoning", mode: "summary", ts: "2024-01-01T00:00:01.000Z", text: "Need to validate the tax assumptions before changing EBITDA." },
-      { id: "t1", kind: "tool", ts: "2024-01-01T00:00:02.000Z", name: "read", state: "output-available", args: { path: "model.py" } },
+      {
+        id: "r1",
+        kind: "reasoning",
+        mode: "summary",
+        ts: "2024-01-01T00:00:01.000Z",
+        text: "Need to validate the tax assumptions before changing EBITDA.",
+      },
+      {
+        id: "t1",
+        kind: "tool",
+        ts: "2024-01-01T00:00:02.000Z",
+        name: "read",
+        state: "output-available",
+        args: { path: "model.py" },
+      },
     ]);
 
     expect(summary.title).toBe("Thought process");
@@ -66,8 +130,22 @@ describe("desktop chat activity groups", () => {
 
   test("summary surfaces approval state ahead of completed tools", () => {
     const summary = summarizeActivityGroup([
-      { id: "t1", kind: "tool", ts: "2024-01-01T00:00:02.000Z", name: "bash", state: "output-available", args: { cmd: "echo ok" } },
-      { id: "t2", kind: "tool", ts: "2024-01-01T00:00:03.000Z", name: "bash", state: "approval-requested", args: { cmd: "rm -rf /tmp/x" } },
+      {
+        id: "t1",
+        kind: "tool",
+        ts: "2024-01-01T00:00:02.000Z",
+        name: "bash",
+        state: "output-available",
+        args: { cmd: "echo ok" },
+      },
+      {
+        id: "t2",
+        kind: "tool",
+        ts: "2024-01-01T00:00:03.000Z",
+        name: "bash",
+        state: "approval-requested",
+        args: { cmd: "rm -rf /tmp/x" },
+      },
     ]);
 
     expect(summary.status).toBe("approval");
@@ -76,8 +154,22 @@ describe("desktop chat activity groups", () => {
 
   test("summary collapses adjacent tool lifecycle updates into one trace row", () => {
     const summary = summarizeActivityGroup([
-      { id: "t1", kind: "tool", ts: "2024-01-01T00:00:02.000Z", name: "read", state: "input-available", args: { path: "model.py" } },
-      { id: "t2", kind: "tool", ts: "2024-01-01T00:00:03.000Z", name: "read", state: "output-available", result: { chars: 655 } },
+      {
+        id: "t1",
+        kind: "tool",
+        ts: "2024-01-01T00:00:02.000Z",
+        name: "read",
+        state: "input-available",
+        args: { path: "model.py" },
+      },
+      {
+        id: "t2",
+        kind: "tool",
+        ts: "2024-01-01T00:00:03.000Z",
+        name: "read",
+        state: "output-available",
+        result: { chars: 655 },
+      },
     ]);
 
     const toolEntries = summary.entries.filter((entry) => entry.kind === "tool");
@@ -94,8 +186,24 @@ describe("desktop chat activity groups", () => {
 
   test("summary keeps back-to-back completed tools as separate trace rows", () => {
     const summary = summarizeActivityGroup([
-      { id: "t1", kind: "tool", ts: "2024-01-01T00:00:02.000Z", name: "read", state: "output-available", args: { path: "a.py" }, result: { chars: 20 } },
-      { id: "t2", kind: "tool", ts: "2024-01-01T00:00:03.000Z", name: "read", state: "output-available", args: { path: "b.py" }, result: { chars: 30 } },
+      {
+        id: "t1",
+        kind: "tool",
+        ts: "2024-01-01T00:00:02.000Z",
+        name: "read",
+        state: "output-available",
+        args: { path: "a.py" },
+        result: { chars: 20 },
+      },
+      {
+        id: "t2",
+        kind: "tool",
+        ts: "2024-01-01T00:00:03.000Z",
+        name: "read",
+        state: "output-available",
+        args: { path: "b.py" },
+        result: { chars: 30 },
+      },
     ]);
 
     const toolEntries = summary.entries.filter((entry) => entry.kind === "tool");
@@ -132,7 +240,13 @@ describe("desktop chat activity groups", () => {
 
   test("summary merges a generic completed row with a richer adjacent completed row for the same tool", () => {
     const summary = summarizeActivityGroup([
-      { id: "t1", kind: "tool", ts: "2024-01-01T00:00:02.000Z", name: "todoWrite", state: "output-available" },
+      {
+        id: "t1",
+        kind: "tool",
+        ts: "2024-01-01T00:00:02.000Z",
+        name: "todoWrite",
+        state: "output-available",
+      },
       {
         id: "t2",
         kind: "tool",
@@ -192,11 +306,44 @@ describe("desktop chat activity groups", () => {
 
   test("summary preserves mixed reasoning and tool chronology", () => {
     const summary = summarizeActivityGroup([
-      { id: "t1", kind: "tool", ts: "2024-01-01T00:00:01.000Z", name: "read", state: "output-available", args: { path: "a.ts" } },
-      { id: "r1", kind: "reasoning", mode: "summary", ts: "2024-01-01T00:00:02.000Z", text: "Inspecting the file first." },
-      { id: "t2", kind: "tool", ts: "2024-01-01T00:00:03.000Z", name: "grep", state: "output-available", args: { pattern: "TODO" } },
-      { id: "t3", kind: "tool", ts: "2024-01-01T00:00:04.000Z", name: "glob", state: "output-available", args: { pattern: "**/*.ts" } },
-      { id: "r2", kind: "reasoning", mode: "summary", ts: "2024-01-01T00:00:05.000Z", text: "Now summarizing findings." },
+      {
+        id: "t1",
+        kind: "tool",
+        ts: "2024-01-01T00:00:01.000Z",
+        name: "read",
+        state: "output-available",
+        args: { path: "a.ts" },
+      },
+      {
+        id: "r1",
+        kind: "reasoning",
+        mode: "summary",
+        ts: "2024-01-01T00:00:02.000Z",
+        text: "Inspecting the file first.",
+      },
+      {
+        id: "t2",
+        kind: "tool",
+        ts: "2024-01-01T00:00:03.000Z",
+        name: "grep",
+        state: "output-available",
+        args: { pattern: "TODO" },
+      },
+      {
+        id: "t3",
+        kind: "tool",
+        ts: "2024-01-01T00:00:04.000Z",
+        name: "glob",
+        state: "output-available",
+        args: { pattern: "**/*.ts" },
+      },
+      {
+        id: "r2",
+        kind: "reasoning",
+        mode: "summary",
+        ts: "2024-01-01T00:00:05.000Z",
+        text: "Now summarizing findings.",
+      },
     ]);
 
     expect(summary.entries.map((entry) => entry.kind)).toEqual([
@@ -210,25 +357,70 @@ describe("desktop chat activity groups", () => {
 
   test("summary collapses adjacent duplicate reasoning notes", () => {
     const summary = summarizeActivityGroup([
-      { id: "r1", kind: "reasoning", mode: "summary", ts: "2024-01-01T00:00:01.000Z", text: "Inspecting files." },
-      { id: "r2", kind: "reasoning", mode: "summary", ts: "2024-01-01T00:00:02.000Z", text: "Inspecting files.\n" },
-      { id: "t1", kind: "tool", ts: "2024-01-01T00:00:03.000Z", name: "read", state: "output-available", args: { path: "a.ts" } },
-      { id: "r3", kind: "reasoning", mode: "summary", ts: "2024-01-01T00:00:04.000Z", text: "Summarizing findings." },
+      {
+        id: "r1",
+        kind: "reasoning",
+        mode: "summary",
+        ts: "2024-01-01T00:00:01.000Z",
+        text: "Inspecting files.",
+      },
+      {
+        id: "r2",
+        kind: "reasoning",
+        mode: "summary",
+        ts: "2024-01-01T00:00:02.000Z",
+        text: "Inspecting files.\n",
+      },
+      {
+        id: "t1",
+        kind: "tool",
+        ts: "2024-01-01T00:00:03.000Z",
+        name: "read",
+        state: "output-available",
+        args: { path: "a.ts" },
+      },
+      {
+        id: "r3",
+        kind: "reasoning",
+        mode: "summary",
+        ts: "2024-01-01T00:00:04.000Z",
+        text: "Summarizing findings.",
+      },
     ]);
 
-    expect(summary.entries.map((entry) => entry.kind === "reasoning" ? entry.item.id : entry.item.id)).toEqual([
-      "r1",
-      "t1",
-      "r3",
-    ]);
+    expect(
+      summary.entries.map((entry) => (entry.kind === "reasoning" ? entry.item.id : entry.item.id)),
+    ).toEqual(["r1", "t1", "r3"]);
     expect(summary.reasoningCount).toBe(2);
   });
 
   test("reasoning boundaries prevent tool merges across the gap", () => {
     const summary = summarizeActivityGroup([
-      { id: "t1", kind: "tool", ts: "2024-01-01T00:00:01.000Z", name: "read", state: "output-available", args: { path: "a.ts" }, result: { chars: 10 } },
-      { id: "r1", kind: "reasoning", mode: "summary", ts: "2024-01-01T00:00:02.000Z", text: "Need one more pass." },
-      { id: "t2", kind: "tool", ts: "2024-01-01T00:00:03.000Z", name: "read", state: "output-available", args: { path: "a.ts" }, result: { chars: 10 } },
+      {
+        id: "t1",
+        kind: "tool",
+        ts: "2024-01-01T00:00:01.000Z",
+        name: "read",
+        state: "output-available",
+        args: { path: "a.ts" },
+        result: { chars: 10 },
+      },
+      {
+        id: "r1",
+        kind: "reasoning",
+        mode: "summary",
+        ts: "2024-01-01T00:00:02.000Z",
+        text: "Need one more pass.",
+      },
+      {
+        id: "t2",
+        kind: "tool",
+        ts: "2024-01-01T00:00:03.000Z",
+        name: "read",
+        state: "output-available",
+        args: { path: "a.ts" },
+        result: { chars: 10 },
+      },
     ]);
 
     const toolEntries = summary.entries.filter((entry) => entry.kind === "tool");

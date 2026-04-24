@@ -78,10 +78,12 @@ export async function fetchGitHubContent(
     headers: githubHeaders(),
   });
   if (!response.ok) {
-    throw new Error(`Failed to fetch ${repo}/${githubPath}@${ref}: ${await responseError(response)}`);
+    throw new Error(
+      `Failed to fetch ${repo}/${githubPath}@${ref}: ${await responseError(response)}`,
+    );
   }
 
-  return await response.json() as GitHubContentEntry | GitHubContentEntry[];
+  return (await response.json()) as GitHubContentEntry | GitHubContentEntry[];
 }
 
 export async function fetchGitHubDirectoryEntries(

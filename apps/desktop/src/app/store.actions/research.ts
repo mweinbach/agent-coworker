@@ -1,5 +1,10 @@
+import {
+  MAX_RESEARCH_UPLOAD_BYTES,
+  type ResearchExportFormat,
+  type ResearchRecord,
+} from "../../../../../src/server/research/types";
 import { saveExportedFile } from "../../lib/desktopCommands";
-import { requestJsonRpc, registerWorkspaceJsonRpcLifecycle, registerWorkspaceJsonRpcRouter } from "../store.helpers/jsonRpcSocket";
+import type { AppStoreActions, StoreGet, StoreSet } from "../store.helpers";
 import {
   ensureControlSocket,
   ensureServerRunning,
@@ -10,12 +15,11 @@ import {
   syncDesktopStateCache,
   waitForControlSession,
 } from "../store.helpers";
-import type { AppStoreActions, StoreGet, StoreSet } from "../store.helpers";
 import {
-  MAX_RESEARCH_UPLOAD_BYTES,
-  type ResearchExportFormat,
-  type ResearchRecord,
-} from "../../../../../src/server/research/types";
+  registerWorkspaceJsonRpcLifecycle,
+  registerWorkspaceJsonRpcRouter,
+  requestJsonRpc,
+} from "../store.helpers/jsonRpcSocket";
 import type { ResearchSettingsState } from "../types";
 
 const researchRouterCleanupByWorkspace = new Map<string, () => void>();
@@ -59,14 +63,20 @@ const defaultResearchActionDeps: ResearchActionDeps = {
 };
 
 function isResearchRecord(value: unknown): value is ResearchRecord {
-  return typeof value === "object" && value !== null && typeof (value as { id?: unknown }).id === "string";
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { id?: unknown }).id === "string"
+  );
 }
 
 function isResearchTerminalStatus(status: ResearchRecord["status"]): boolean {
   return status === "completed" || status === "failed" || status === "cancelled";
 }
 
-function sourceIdentity(source: Pick<ResearchRecord["sources"][number], "sourceType" | "url">): string {
+function sourceIdentity(
+  source: Pick<ResearchRecord["sources"][number], "sourceType" | "url">,
+): string {
   return `${source.sourceType}:${source.url}`;
 }
 
@@ -120,7 +130,10 @@ function extensionForResearchExport(format: ResearchExportFormat): string {
   }
 }
 
-function buildResearchExportFileName(title: string | undefined, format: ResearchExportFormat): string {
+function buildResearchExportFileName(
+  title: string | undefined,
+  format: ResearchExportFormat,
+): string {
   const extension = extensionForResearchExport(format);
   const sanitizedTitle = (title ?? "")
     .normalize("NFKC")
@@ -272,7 +285,11 @@ export function createResearchActions(
               return {};
             }
             const thought = params.thought as ResearchRecord["thoughtSummaries"][number];
-            if (existing.thoughtSummaries.some((entry: ResearchRecord["thoughtSummaries"][number]) => entry.id === thought.id)) {
+            if (
+              existing.thoughtSummaries.some(
+                (entry: ResearchRecord["thoughtSummaries"][number]) => entry.id === thought.id,
+              )
+            ) {
               return {};
             }
             const nextResearch = {
@@ -312,9 +329,10 @@ export function createResearchActions(
               if (JSON.stringify(merged) === JSON.stringify(current)) {
                 return {};
               }
-              const sources = existing.sources.map((entry: ResearchRecord["sources"][number], index: number) => (
-                index === existingIndex ? merged : entry
-              ));
+              const sources = existing.sources.map(
+                (entry: ResearchRecord["sources"][number], index: number) =>
+                  index === existingIndex ? merged : entry,
+              );
               const nextResearch = {
                 ...existing,
                 sources,
@@ -372,7 +390,8 @@ export function createResearchActions(
                 researchSubscribedIds: s.researchSubscribedIds.filter((id) => id !== researchId),
               };
             }
-            const nextStatus: ResearchRecord["status"] = params.status === "cancelled" ? "cancelled" : "failed";
+            const nextStatus: ResearchRecord["status"] =
+              params.status === "cancelled" ? "cancelled" : "failed";
             const nextResearch = {
               ...existing,
               status: nextStatus,
@@ -404,10 +423,16 @@ export function createResearchActions(
             for (const researchId of get().researchSubscribedIds) {
               const record = get().researchById[researchId];
               try {
-                const result = await deps.requestJsonRpc(get, set, workspaceId, "research/subscribe", {
-                  researchId,
-                  ...(record?.lastEventId ? { afterEventId: record.lastEventId } : {}),
-                });
+                const result = await deps.requestJsonRpc(
+                  get,
+                  set,
+                  workspaceId,
+                  "research/subscribe",
+                  {
+                    researchId,
+                    ...(record?.lastEventId ? { afterEventId: record.lastEventId } : {}),
+                  },
+                );
                 if (isResearchRecord(result?.research)) {
                   applyResearchRecord(result.research);
                 }
@@ -488,13 +513,18 @@ export function createResearchActions(
       return {
         researchById,
         researchOrder,
-        selectedResearchId: opts?.select ? research.id : normalizeSelectedResearchId(s.selectedResearchId, researchOrder),
+        selectedResearchId: opts?.select
+          ? research.id
+          : normalizeSelectedResearchId(s.selectedResearchId, researchOrder),
       };
     });
   };
 
   const ensureResearchSubscription = async (workspaceId: string, research: ResearchRecord) => {
-    if (get().researchSubscribedIds.includes(research.id) || isResearchTerminalStatus(research.status)) {
+    if (
+      get().researchSubscribedIds.includes(research.id) ||
+      isResearchTerminalStatus(research.status)
+    ) {
       return;
     }
     const result = await deps.requestJsonRpc(get, set, workspaceId, "research/subscribe", {
@@ -519,7 +549,13 @@ export function createResearchActions(
     const fileIds: string[] = [];
     for (const file of files ?? []) {
       const payload = await serializeFile(file);
-      const result = await deps.requestJsonRpc(get, set, workspaceId, "research/uploadFile", payload);
+      const result = await deps.requestJsonRpc(
+        get,
+        set,
+        workspaceId,
+        "research/uploadFile",
+        payload,
+      );
       if (typeof result?.file?.fileId === "string") {
         fileIds.push(result.file.fileId);
       }
@@ -534,7 +570,9 @@ export function createResearchActions(
         if (!workspaceId) {
           return null;
         }
-        const result = await deps.requestJsonRpc(get, set, workspaceId, "research/approvePlan", { researchId });
+        const result = await deps.requestJsonRpc(get, set, workspaceId, "research/approvePlan", {
+          researchId,
+        });
         if (!isResearchRecord(result?.research)) {
           return null;
         }
@@ -542,7 +580,11 @@ export function createResearchActions(
         await ensureResearchSubscription(workspaceId, result.research);
         return result.research;
       } catch (error) {
-        notify("error", "Unable to approve plan", error instanceof Error ? error.message : String(error));
+        notify(
+          "error",
+          "Unable to approve plan",
+          error instanceof Error ? error.message : String(error),
+        );
         return null;
       }
     },
@@ -553,7 +595,10 @@ export function createResearchActions(
         if (!workspaceId) {
           return null;
         }
-        const result = await deps.requestJsonRpc(get, set, workspaceId, "research/refinePlan", { researchId, input });
+        const result = await deps.requestJsonRpc(get, set, workspaceId, "research/refinePlan", {
+          researchId,
+          input,
+        });
         if (!isResearchRecord(result?.research)) {
           return null;
         }
@@ -561,7 +606,11 @@ export function createResearchActions(
         await ensureResearchSubscription(workspaceId, result.research);
         return result.research;
       } catch (error) {
-        notify("error", "Unable to refine plan", error instanceof Error ? error.message : String(error));
+        notify(
+          "error",
+          "Unable to refine plan",
+          error instanceof Error ? error.message : String(error),
+        );
         return null;
       }
     },
@@ -601,14 +650,18 @@ export function createResearchActions(
         }
         const result = await deps.requestJsonRpc(get, set, workspaceId, "research/list", {});
         const research = Array.isArray(result?.research)
-          ? result.research.filter((entry: unknown): entry is ResearchRecord => isResearchRecord(entry))
+          ? result.research.filter((entry: unknown): entry is ResearchRecord =>
+              isResearchRecord(entry),
+            )
           : [];
         applyResearchCollection(research);
-        await Promise.allSettled(research.map(async (record: ResearchRecord) => {
-          if (record.status === "pending" || record.status === "running") {
-            await ensureResearchSubscription(workspaceId, record);
-          }
-        }));
+        await Promise.allSettled(
+          research.map(async (record: ResearchRecord) => {
+            if (record.status === "pending" || record.status === "running") {
+              await ensureResearchSubscription(workspaceId, record);
+            }
+          }),
+        );
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
         set({ researchListLoading: false, researchListError: detail });
@@ -626,13 +679,19 @@ export function createResearchActions(
         if (!workspaceId) {
           return;
         }
-        const result = await deps.requestJsonRpc(get, set, workspaceId, "research/get", { researchId });
+        const result = await deps.requestJsonRpc(get, set, workspaceId, "research/get", {
+          researchId,
+        });
         if (isResearchRecord(result?.research)) {
           applyResearchRecord(result.research);
           await ensureResearchSubscription(workspaceId, result.research);
         }
       } catch (error) {
-        notify("error", "Unable to load research", error instanceof Error ? error.message : String(error));
+        notify(
+          "error",
+          "Unable to load research",
+          error instanceof Error ? error.message : String(error),
+        );
       }
     },
 
@@ -665,7 +724,11 @@ export function createResearchActions(
         await ensureResearchSubscription(workspaceId, result.research);
         return result.research;
       } catch (error) {
-        notify("error", "Unable to start research", error instanceof Error ? error.message : String(error));
+        notify(
+          "error",
+          "Unable to start research",
+          error instanceof Error ? error.message : String(error),
+        );
         return null;
       }
     },
@@ -676,12 +739,18 @@ export function createResearchActions(
         if (!workspaceId) {
           return;
         }
-        const result = await deps.requestJsonRpc(get, set, workspaceId, "research/cancel", { researchId });
+        const result = await deps.requestJsonRpc(get, set, workspaceId, "research/cancel", {
+          researchId,
+        });
         if (isResearchRecord(result?.research)) {
           applyResearchRecord(result.research);
         }
       } catch (error) {
-        notify("error", "Unable to cancel research", error instanceof Error ? error.message : String(error));
+        notify(
+          "error",
+          "Unable to cancel research",
+          error instanceof Error ? error.message : String(error),
+        );
       }
     },
 
@@ -713,7 +782,11 @@ export function createResearchActions(
         if (previous) {
           applyResearchRecord(previous);
         }
-        notify("error", "Unable to rename research", error instanceof Error ? error.message : String(error));
+        notify(
+          "error",
+          "Unable to rename research",
+          error instanceof Error ? error.message : String(error),
+        );
       }
     },
 
@@ -741,7 +814,11 @@ export function createResearchActions(
         await ensureResearchSubscription(workspaceId, result.research);
         return result.research;
       } catch (error) {
-        notify("error", "Unable to send follow-up", error instanceof Error ? error.message : String(error));
+        notify(
+          "error",
+          "Unable to send follow-up",
+          error instanceof Error ? error.message : String(error),
+        );
         return null;
       }
     },
@@ -766,13 +843,23 @@ export function createResearchActions(
             ? s.researchExportPendingIds
             : [...s.researchExportPendingIds, researchId],
         }));
-        const result = await deps.requestJsonRpc(get, set, workspaceId, "research/export", { researchId, format });
+        const result = await deps.requestJsonRpc(get, set, workspaceId, "research/export", {
+          researchId,
+          format,
+        });
         const outputPath = typeof result?.path === "string" ? result.path : null;
         if (!outputPath) {
-          notify("error", "Unable to export research", "The export completed without a downloadable file path.");
+          notify(
+            "error",
+            "Unable to export research",
+            "The export completed without a downloadable file path.",
+          );
           return null;
         }
-        const defaultFileName = buildResearchExportFileName(get().researchById[researchId]?.title, format);
+        const defaultFileName = buildResearchExportFileName(
+          get().researchById[researchId]?.title,
+          format,
+        );
         const savedPath = await deps.saveExportedFile({
           sourcePath: outputPath,
           defaultFileName,
@@ -783,11 +870,17 @@ export function createResearchActions(
         notify("info", "Research exported", savedPath);
         return savedPath;
       } catch (error) {
-        notify("error", "Unable to export research", error instanceof Error ? error.message : String(error));
+        notify(
+          "error",
+          "Unable to export research",
+          error instanceof Error ? error.message : String(error),
+        );
         return null;
       } finally {
         set((s) => ({
-          researchExportPendingIds: s.researchExportPendingIds.filter((pendingId) => pendingId !== researchId),
+          researchExportPendingIds: s.researchExportPendingIds.filter(
+            (pendingId) => pendingId !== researchId,
+          ),
         }));
       }
     },

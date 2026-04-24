@@ -6,7 +6,10 @@ import { makeTmpProject, serverOpts, stopTestServer } from "./helpers/wsHarness"
 
 function waitForOpen(ws: WebSocket): Promise<void> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("Timed out waiting for websocket open")), 5_000);
+    const timer = setTimeout(
+      () => reject(new Error("Timed out waiting for websocket open")),
+      5_000,
+    );
     ws.onopen = () => {
       clearTimeout(timer);
       resolve();
@@ -20,7 +23,10 @@ function waitForOpen(ws: WebSocket): Promise<void> {
 
 function waitForNodeWsOpen(ws: NodeWebSocket): Promise<void> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("Timed out waiting for websocket open")), 5_000);
+    const timer = setTimeout(
+      () => reject(new Error("Timed out waiting for websocket open")),
+      5_000,
+    );
     ws.once("open", () => {
       clearTimeout(timer);
       resolve();
@@ -34,7 +40,10 @@ function waitForNodeWsOpen(ws: NodeWebSocket): Promise<void> {
 
 function waitForNodeWsJson(ws: NodeWebSocket): Promise<any> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("Timed out waiting for websocket message")), 5_000);
+    const timer = setTimeout(
+      () => reject(new Error("Timed out waiting for websocket message")),
+      5_000,
+    );
     ws.once("message", (data) => {
       clearTimeout(timer);
       resolve(JSON.parse(typeof data === "string" ? data : data.toString("utf8")));
@@ -48,7 +57,10 @@ function waitForNodeWsJson(ws: NodeWebSocket): Promise<any> {
 
 function waitForSingleMessage(ws: WebSocket): Promise<any> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("Timed out waiting for websocket message")), 5_000);
+    const timer = setTimeout(
+      () => reject(new Error("Timed out waiting for websocket message")),
+      5_000,
+    );
     ws.onmessage = (event) => {
       clearTimeout(timer);
       resolve(JSON.parse(typeof event.data === "string" ? event.data : ""));
@@ -68,7 +80,11 @@ async function expectNoMessage(ws: WebSocket, durationMs = 150): Promise<void> {
     }, durationMs);
     ws.onmessage = (event) => {
       clearTimeout(timer);
-      reject(new Error(`Unexpected websocket message: ${typeof event.data === "string" ? event.data : "<binary>"}`));
+      reject(
+        new Error(
+          `Unexpected websocket message: ${typeof event.data === "string" ? event.data : "<binary>"}`,
+        ),
+      );
     };
     ws.onerror = (event) => {
       clearTimeout(timer);
@@ -88,11 +104,13 @@ describe("server JSON-RPC websocket mode", () => {
       // JSON-RPC mode requires initialize handshake — no immediate server_hello
       await expectNoMessage(ws);
 
-      ws.send(JSON.stringify({
-        id: 1,
-        method: "thread/list",
-        params: {},
-      }));
+      ws.send(
+        JSON.stringify({
+          id: 1,
+          method: "thread/list",
+          params: {},
+        }),
+      );
       const notInitialized = await waitForSingleMessage(ws);
       expect(notInitialized.error?.code).toBe(-32002);
       ws.close();
@@ -110,11 +128,13 @@ describe("server JSON-RPC websocket mode", () => {
       await waitForOpen(ws);
       await expectNoMessage(ws);
 
-      ws.send(JSON.stringify({
-        id: 1,
-        method: "thread/list",
-        params: {},
-      }));
+      ws.send(
+        JSON.stringify({
+          id: 1,
+          method: "thread/list",
+          params: {},
+        }),
+      );
       const notInitialized = await waitForSingleMessage(ws);
       expect(notInitialized).toEqual({
         id: 1,
@@ -124,16 +144,18 @@ describe("server JSON-RPC websocket mode", () => {
         },
       });
 
-      ws.send(JSON.stringify({
-        id: 2,
-        method: "initialize",
-        params: {
-          clientInfo: {
-            name: "test-client",
-            version: "1.0.0",
+      ws.send(
+        JSON.stringify({
+          id: 2,
+          method: "initialize",
+          params: {
+            clientInfo: {
+              name: "test-client",
+              version: "1.0.0",
+            },
           },
-        },
-      }));
+        }),
+      );
       const initializeResponse = await waitForSingleMessage(ws);
       expect(initializeResponse.id).toBe(2);
       expect(initializeResponse.result.protocolVersion).toBe("0.1");
@@ -142,11 +164,13 @@ describe("server JSON-RPC websocket mode", () => {
       ws.send(JSON.stringify({ method: "initialized" }));
       await expectNoMessage(ws);
 
-      ws.send(JSON.stringify({
-        id: 3,
-        method: "thread/list",
-        params: {},
-      }));
+      ws.send(
+        JSON.stringify({
+          id: 3,
+          method: "thread/list",
+          params: {},
+        }),
+      );
       const listedThreads = await waitForSingleMessage(ws);
       expect(listedThreads).toEqual({
         id: 3,
@@ -170,15 +194,17 @@ describe("server JSON-RPC websocket mode", () => {
       await expectNoMessage(ws);
       expect(ws.protocol).toBe("cowork.jsonrpc.v1");
 
-      ws.send(JSON.stringify({
-        id: 1,
-        method: "initialize",
-        params: {
-          clientInfo: {
-            name: "subprotocol-client",
+      ws.send(
+        JSON.stringify({
+          id: 1,
+          method: "initialize",
+          params: {
+            clientInfo: {
+              name: "subprotocol-client",
+            },
           },
-        },
-      }));
+        }),
+      );
       const response = await waitForSingleMessage(ws);
       expect(response.id).toBe(1);
       expect(response.result.serverInfo.subprotocol).toBe("cowork.jsonrpc.v1");
@@ -197,15 +223,17 @@ describe("server JSON-RPC websocket mode", () => {
       await waitForNodeWsOpen(ws);
       expect(ws.protocol).toBe("cowork.jsonrpc.v1");
 
-      ws.send(JSON.stringify({
-        id: 1,
-        method: "initialize",
-        params: {
-          clientInfo: {
-            name: "multi-offer-client",
+      ws.send(
+        JSON.stringify({
+          id: 1,
+          method: "initialize",
+          params: {
+            clientInfo: {
+              name: "multi-offer-client",
+            },
           },
-        },
-      }));
+        }),
+      );
       const response = await waitForNodeWsJson(ws);
       expect(response.id).toBe(1);
       expect(response.result.serverInfo.subprotocol).toBe("cowork.jsonrpc.v1");
@@ -217,36 +245,42 @@ describe("server JSON-RPC websocket mode", () => {
 
   test("JSON-RPC returns -32001 when the request queue is overloaded", async () => {
     const tmpDir = await makeTmpProject();
-    const { server, url } = await startAgentServer(serverOpts(tmpDir, {
-      env: {
-        AGENT_WORKING_DIR: tmpDir,
-        AGENT_PROVIDER: "google",
-        COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1",
-        COWORK_WS_JSONRPC_MAX_PENDING_REQUESTS: "0",
-      },
-    }));
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
+        env: {
+          AGENT_WORKING_DIR: tmpDir,
+          AGENT_PROVIDER: "google",
+          COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1",
+          COWORK_WS_JSONRPC_MAX_PENDING_REQUESTS: "0",
+        },
+      }),
+    );
 
     try {
       const ws = new WebSocket(`${url}?protocol=jsonrpc`);
       await waitForOpen(ws);
-      ws.send(JSON.stringify({
-        id: 1,
-        method: "initialize",
-        params: {
-          clientInfo: {
-            name: "test-client",
+      ws.send(
+        JSON.stringify({
+          id: 1,
+          method: "initialize",
+          params: {
+            clientInfo: {
+              name: "test-client",
+            },
           },
-        },
-      }));
+        }),
+      );
       await waitForSingleMessage(ws);
       ws.send(JSON.stringify({ method: "initialized" }));
       await expectNoMessage(ws);
 
-      ws.send(JSON.stringify({
-        id: 2,
-        method: "thread/list",
-        params: {},
-      }));
+      ws.send(
+        JSON.stringify({
+          id: 2,
+          method: "thread/list",
+          params: {},
+        }),
+      );
       const overloaded = await waitForSingleMessage(ws);
       expect(overloaded).toEqual({
         id: 2,
@@ -268,24 +302,28 @@ describe("server JSON-RPC websocket mode", () => {
     try {
       const ws = new WebSocket(`${url}?protocol=jsonrpc`);
       await waitForOpen(ws);
-      ws.send(JSON.stringify({
-        id: 1,
-        method: "initialize",
-        params: {
-          clientInfo: {
-            name: "test-client",
+      ws.send(
+        JSON.stringify({
+          id: 1,
+          method: "initialize",
+          params: {
+            clientInfo: {
+              name: "test-client",
+            },
           },
-        },
-      }));
+        }),
+      );
       await waitForSingleMessage(ws);
       ws.send(JSON.stringify({ method: "initialized" }));
       await expectNoMessage(ws);
 
-      ws.send(JSON.stringify({
-        id: 2,
-        method: "cowork/provider/status/refresh",
-        params: {},
-      }));
+      ws.send(
+        JSON.stringify({
+          id: 2,
+          method: "cowork/provider/status/refresh",
+          params: {},
+        }),
+      );
       const response = await waitForSingleMessage(ws);
       expect(response.id).toBe(2);
       expect(response.result?.event?.type).toBe("provider_status");

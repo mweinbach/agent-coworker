@@ -31,10 +31,7 @@ export default function SettingsHubScreen() {
       <Stack.Screen
         options={{
           headerRight: () => (
-            <HeaderGlassButton
-              icon="desktopcomputer"
-              onPress={() => router.push("/(pairing)")}
-            />
+            <HeaderGlassButton icon="desktopcomputer" onPress={() => router.push("/(pairing)")} />
           ),
         }}
       />
@@ -81,7 +78,8 @@ export default function SettingsHubScreen() {
                 lineHeight: 22,
               }}
             >
-              Keep remote access, providers, integrations, memory, and workspace defaults close at hand from the phone.
+              Keep remote access, providers, integrations, memory, and workspace defaults close at
+              hand from the phone.
             </Text>
           </View>
 

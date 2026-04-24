@@ -1,11 +1,11 @@
-import { useEffect, useState } from "react";
 import { SearchIcon } from "lucide-react";
+import { useEffect, useState } from "react";
 import { resolvePluginCatalogWorkspaceSelection } from "../app/pluginManagement";
 import { useAppStore } from "../app/store";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
-import { SkillsCatalogPage } from "./skills";
 import { PluginsCatalogPage } from "./plugins/PluginsCatalogPage";
+import { SkillsCatalogPage } from "./skills";
 
 export function SkillsView() {
   const workspaces = useAppStore((s) => s.workspaces);
@@ -20,7 +20,9 @@ export function SkillsView() {
   });
   const catalogWorkspaceId = selection.catalogWorkspaceId;
   const managementScope = selection.managementScope;
-  const pluginViewMode = useAppStore((s) => s.workspaceRuntimeById[catalogWorkspaceId ?? ""]?.pluginViewMode ?? "plugins");
+  const pluginViewMode = useAppStore(
+    (s) => s.workspaceRuntimeById[catalogWorkspaceId ?? ""]?.pluginViewMode ?? "plugins",
+  );
   const setPluginViewMode = useAppStore((s) => s.setPluginViewMode);
   const [searchQuery, setSearchQuery] = useState("");
 
@@ -71,9 +73,19 @@ export function SkillsView() {
         </div>
       </div>
       <div className="min-h-0 flex-1 overflow-hidden">
-        {pluginViewMode === "plugins"
-          ? <PluginsCatalogPage workspaceId={catalogWorkspaceId} managementScope={managementScope} searchQuery={searchQuery} />
-          : <SkillsCatalogPage workspaceId={catalogWorkspaceId} managementScope={managementScope} searchQuery={searchQuery} />}
+        {pluginViewMode === "plugins" ? (
+          <PluginsCatalogPage
+            workspaceId={catalogWorkspaceId}
+            managementScope={managementScope}
+            searchQuery={searchQuery}
+          />
+        ) : (
+          <SkillsCatalogPage
+            workspaceId={catalogWorkspaceId}
+            managementScope={managementScope}
+            searchQuery={searchQuery}
+          />
+        )}
       </div>
     </div>
   );

@@ -1,9 +1,9 @@
 import {
+  type AiCoworkerPaths,
   getAiCoworkerPaths,
   readConnectionStore,
-  writeConnectionStore,
-  type AiCoworkerPaths,
   type ToolApiKeyName,
+  writeConnectionStore,
 } from "../store/connections";
 import { resolveAuthHomeDir } from "../utils/authHome";
 

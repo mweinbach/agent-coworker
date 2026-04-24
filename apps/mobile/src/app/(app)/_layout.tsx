@@ -34,7 +34,7 @@ export default function AppLayout() {
           title: "Conversation",
         }}
       />
-      
+
       {/* Settings Modal or Pushed Group */}
       <Stack.Screen
         name="settings/providers"
@@ -44,11 +44,8 @@ export default function AppLayout() {
         name="settings/mcp"
         options={{ title: "Integrations", headerLargeTitle: false }}
       />
-      <Stack.Screen
-        name="settings/usage"
-        options={{ title: "Usage", headerLargeTitle: false }}
-      />
-      
+      <Stack.Screen name="settings/usage" options={{ title: "Usage", headerLargeTitle: false }} />
+
       <Stack.Screen
         name="workspace/general"
         options={{ title: "General", headerLargeTitle: false }}
@@ -61,7 +58,6 @@ export default function AppLayout() {
         name="workspace/backups"
         options={{ title: "Backups", headerLargeTitle: false }}
       />
-
     </Stack>
   );
 }

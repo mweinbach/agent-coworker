@@ -16,9 +16,7 @@ describe("resolveMaybeRelative", () => {
     });
 
     test("absolute path with trailing slash is normalized", () => {
-      expect(resolveMaybeRelative("/usr/local/bin/", base)).toBe(
-        path.normalize("/usr/local/bin/"),
-      );
+      expect(resolveMaybeRelative("/usr/local/bin/", base)).toBe(path.normalize("/usr/local/bin/"));
     });
 
     test("absolute path with .. components is normalized", () => {
@@ -26,7 +24,9 @@ describe("resolveMaybeRelative", () => {
     });
 
     test("absolute path with . components is normalized", () => {
-      expect(resolveMaybeRelative("/usr/./local/./bin", base)).toBe(path.normalize("/usr/local/bin"));
+      expect(resolveMaybeRelative("/usr/./local/./bin", base)).toBe(
+        path.normalize("/usr/local/bin"),
+      );
     });
 
     test("root path", () => {
@@ -34,7 +34,9 @@ describe("resolveMaybeRelative", () => {
     });
 
     test("absolute path ignores baseDir entirely", () => {
-      expect(resolveMaybeRelative("/etc/config", "/some/other/dir")).toBe(path.normalize("/etc/config"));
+      expect(resolveMaybeRelative("/etc/config", "/some/other/dir")).toBe(
+        path.normalize("/etc/config"),
+      );
     });
   });
 
@@ -101,9 +103,7 @@ describe("resolveMaybeRelative", () => {
     });
 
     test("deeply nested baseDir", () => {
-      expect(resolveMaybeRelative("f.ts", "/a/b/c/d/e")).toBe(
-        path.normalize("/a/b/c/d/e/f.ts"),
-      );
+      expect(resolveMaybeRelative("f.ts", "/a/b/c/d/e")).toBe(path.normalize("/a/b/c/d/e/f.ts"));
     });
   });
 });

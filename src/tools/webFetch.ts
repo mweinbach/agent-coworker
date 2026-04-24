@@ -4,15 +4,14 @@ import path from "node:path";
 
 import TurndownService from "turndown";
 import { z } from "zod";
-
-import type { ToolContext } from "./context";
-import { defineTool } from "./defineTool";
-import { fetchExaContents, resolveExaApiKey } from "./exa";
 import { getLocalWebSearchProviderFromProviderOptions } from "../shared/openaiCompatibleOptions";
-import { fetchParallelContents, resolveParallelApiKey } from "./parallel";
 import { resolveMaybeRelative, truncateText } from "../utils/paths";
 import { assertWritePathAllowed } from "../utils/permissions";
 import { resolveSafeWebUrl } from "../utils/webSafety";
+import type { ToolContext } from "./context";
+import { defineTool } from "./defineTool";
+import { fetchExaContents, resolveExaApiKey } from "./exa";
+import { fetchParallelContents, resolveParallelApiKey } from "./parallel";
 
 const MAX_REDIRECTS = 5;
 const DEFAULT_MAX_WEBFETCH_DOWNLOAD_BYTES = 50 * 1024 * 1024;
@@ -154,7 +153,7 @@ function extractContentDispositionFilename(contentDisposition: string | null): s
     if (decoded.trim()) return decoded;
   }
 
-  const basicMatch = contentDisposition.match(/filename\s*=\s*("(?:[^\"]*)"|[^;]+)/i);
+  const basicMatch = contentDisposition.match(/filename\s*=\s*("(?:[^"]*)"|[^;]+)/i);
   if (!basicMatch?.[1]) return null;
   const unquoted = basicMatch[1].trim().replace(/^"(.*)"$/, "$1");
   return unquoted.trim() ? unquoted : null;
@@ -185,10 +184,12 @@ function fileExtensionFromMimeType(contentType: string | null): string | null {
 function isStructuredInlineMimeType(contentType: string | null): boolean {
   const normalized = normalizeMimeType(contentType);
   if (!normalized) return false;
-  return isHtmlMimeType(contentType)
-    || normalized.includes("json")
-    || normalized.includes("xml")
-    || normalized.includes("javascript");
+  return (
+    isHtmlMimeType(contentType) ||
+    normalized.includes("json") ||
+    normalized.includes("xml") ||
+    normalized.includes("javascript")
+  );
 }
 
 function isDownloadableDocumentFilename(fileName: string | null): boolean {
@@ -207,7 +208,10 @@ function sanitizeDownloadFileName(fileName: string): string {
   return sanitized && sanitized !== "." && sanitized !== ".." ? sanitized : "download";
 }
 
-function normalizeDownloadFileNameExtension(fileName: string, mimeExtension: string | null): string {
+function normalizeDownloadFileNameExtension(
+  fileName: string,
+  mimeExtension: string | null,
+): string {
   if (!mimeExtension) return fileName;
 
   const currentExtension = extensionFromName(fileName);
@@ -228,7 +232,7 @@ function chooseDownloadFileName(opts: {
   const mimeExtension = fileExtensionFromMimeType(opts.contentType);
 
   let fileName = sanitizeDownloadFileName(
-    opts.preferredFileName ?? contentDispositionName ?? urlBaseName ?? "download"
+    opts.preferredFileName ?? contentDispositionName ?? urlBaseName ?? "download",
   );
   fileName = normalizeDownloadFileNameExtension(fileName, mimeExtension);
 
@@ -242,7 +246,11 @@ function downloadCandidatePath(downloadDir: string, fileName: string, suffix: nu
   return path.join(downloadDir, candidateName);
 }
 
-async function finalizeDownloadedFile(tempPath: string, downloadDir: string, fileName: string): Promise<string> {
+async function finalizeDownloadedFile(
+  tempPath: string,
+  downloadDir: string,
+  fileName: string,
+): Promise<string> {
   // Claim the final path exclusively at finalize time so a late writer cannot
   // be overwritten by an atomic rename onto an existing destination.
   for (let suffix = 1; ; suffix += 1) {
@@ -288,12 +296,9 @@ function parseContentLength(response: Response): number | null {
 function temporaryDownloadPath(downloadDir: string, fileName: string): string {
   const ext = path.extname(fileName);
   const baseName = path.basename(fileName, ext) || "download";
-  const tempName = [
-    `.${baseName}`,
-    process.pid,
-    Date.now(),
-    Math.random().toString(16).slice(2),
-  ].join(".") + `${ext}.part`;
+  const tempName =
+    [`.${baseName}`, process.pid, Date.now(), Math.random().toString(16).slice(2)].join(".") +
+    `${ext}.part`;
   return path.join(downloadDir, tempName);
 }
 
@@ -318,7 +323,7 @@ async function downloadResponseToFile(opts: {
     if (!opts.response.body) {
       if (declaredLength === null) {
         throw new Error(
-          "webFetch cannot safely download a direct-download response without a readable body or content-length header"
+          "webFetch cannot safely download a direct-download response without a readable body or content-length header",
         );
       }
 
@@ -327,7 +332,11 @@ async function downloadResponseToFile(opts: {
         throw new DownloadSizeLimitError(opts.maxBytes);
       }
       await fs.writeFile(opts.tempPath, bytes);
-      const finalPath = await finalizeDownloadedFile(opts.tempPath, opts.downloadDir, opts.fileName);
+      const finalPath = await finalizeDownloadedFile(
+        opts.tempPath,
+        opts.downloadDir,
+        opts.fileName,
+      );
       return { bytesWritten: bytes.length, finalPath };
     }
 
@@ -371,7 +380,7 @@ async function downloadResponseToFile(opts: {
 function classifyResponseContent(
   contentType: string | null,
   resolvedUrl: string,
-  contentDisposition: string | null
+  contentDisposition: string | null,
 ): ClassifiedResponse {
   const normalized = normalizeMimeType(contentType);
   const contentDispositionName = extractContentDispositionFilename(contentDisposition);
@@ -381,24 +390,33 @@ function classifyResponseContent(
     return {
       kind: "download",
       category: "image",
-      fileName: chooseDownloadFileName({ contentType: supportedImageMimeType, resolvedUrl, contentDisposition }),
+      fileName: chooseDownloadFileName({
+        contentType: supportedImageMimeType,
+        resolvedUrl,
+        contentDisposition,
+      }),
     };
   }
 
   const inferredImageMimeType =
-    supportedImageMimeTypeFromFileName(contentDispositionName) ?? supportedImageMimeTypeFromFileName(urlBaseName);
+    supportedImageMimeTypeFromFileName(contentDispositionName) ??
+    supportedImageMimeTypeFromFileName(urlBaseName);
   if ((!normalized || normalized === "application/octet-stream") && inferredImageMimeType) {
     return {
       kind: "download",
       category: "image",
-      fileName: chooseDownloadFileName({ contentType: inferredImageMimeType, resolvedUrl, contentDisposition }),
+      fileName: chooseDownloadFileName({
+        contentType: inferredImageMimeType,
+        resolvedUrl,
+        contentDisposition,
+      }),
     };
   }
 
   const downloadableByMime = documentExtensionFromMimeType(contentType);
   const downloadableByName =
-    (isDownloadableDocumentFilename(contentDispositionName) ? contentDispositionName : null)
-    ?? (isDownloadableDocumentFilename(urlBaseName) ? urlBaseName : null);
+    (isDownloadableDocumentFilename(contentDispositionName) ? contentDispositionName : null) ??
+    (isDownloadableDocumentFilename(urlBaseName) ? urlBaseName : null);
 
   if (downloadableByName && !isStructuredInlineMimeType(contentType)) {
     return {
@@ -446,7 +464,7 @@ function buildPinnedUrl(resolved: { url: URL; addresses: { address: string; fami
 async function fetchWithInitialResponseTimeout(
   input: string | URL,
   init: RequestInit,
-  abortSignal?: AbortSignal
+  abortSignal?: AbortSignal,
 ): Promise<Response> {
   const timeoutController = new AbortController();
   let timedOut = false;
@@ -473,7 +491,9 @@ async function fetchWithInitialResponseTimeout(
     });
   } catch (error) {
     if (timedOut) {
-      throw new Error(`webFetch timed out waiting for an initial response after ${responseTimeoutMs}ms`);
+      throw new Error(
+        `webFetch timed out waiting for an initial response after ${responseTimeoutMs}ms`,
+      );
     }
     throw error;
   } finally {
@@ -484,7 +504,7 @@ async function fetchWithInitialResponseTimeout(
 
 async function fetchWithSafeRedirects(
   url: string,
-  abortSignal?: AbortSignal
+  abortSignal?: AbortSignal,
 ): Promise<{ response: Response; finalUrl: string }> {
   let current = await resolveSafeWebUrl(url);
 
@@ -499,7 +519,7 @@ async function fetchWithSafeRedirects(
           Host: hostHeader,
         },
       },
-      abortSignal
+      abortSignal,
     );
 
     if (!isRedirectStatus(response.status)) {
@@ -542,10 +562,10 @@ function stripHtmlNoise(html: string): string {
 
 function extractLikelyContentFragment(html: string): string {
   return (
-    html.match(/<main\b[\s\S]*?<\/main>/i)?.[0]
-    ?? html.match(/<article\b[\s\S]*?<\/article>/i)?.[0]
-    ?? html.match(/<body\b[\s\S]*?<\/body>/i)?.[0]
-    ?? html
+    html.match(/<main\b[\s\S]*?<\/main>/i)?.[0] ??
+    html.match(/<article\b[\s\S]*?<\/article>/i)?.[0] ??
+    html.match(/<body\b[\s\S]*?<\/body>/i)?.[0] ??
+    html
   );
 }
 
@@ -564,7 +584,7 @@ async function loadReadabilityDeps(): Promise<{
       ([readabilityMod, jsdomMod]) => ({
         Readability: readabilityMod.Readability,
         JSDOM: jsdomMod.JSDOM,
-      })
+      }),
     );
   }
 
@@ -598,7 +618,9 @@ async function htmlToMarkdown(html: string, finalUrl: string, ctx: ToolContext):
 
 function looksLikeHtmlDocument(text: string): boolean {
   const trimmed = text.trimStart();
-  return /^<(?:!doctype\s+html|html\b|head\b|body\b|article\b|main\b|section\b|div\b|p\b)/i.test(trimmed);
+  return /^<(?:!doctype\s+html|html\b|head\b|body\b|article\b|main\b|section\b|div\b|p\b)/i.test(
+    trimmed,
+  );
 }
 
 function shouldTreatAsHtml(contentType: string | null, resolvedUrl: string, body: string): boolean {
@@ -613,7 +635,10 @@ type WebFetchEnrichment = {
   imageLinks: string[];
 };
 
-async function maybeFetchSearchEnrichment(ctx: ToolContext, finalUrl: string): Promise<WebFetchEnrichment | null> {
+async function maybeFetchSearchEnrichment(
+  ctx: ToolContext,
+  finalUrl: string,
+): Promise<WebFetchEnrichment | null> {
   const provider = getLocalWebSearchProviderFromProviderOptions(ctx.config.providerOptions);
   if (provider === "parallel") {
     const parallelApiKey = await resolveParallelApiKey(ctx);
@@ -627,7 +652,9 @@ async function maybeFetchSearchEnrichment(ctx: ToolContext, finalUrl: string): P
         abortSignal: ctx.abortSignal,
       });
     } catch (error) {
-      ctx.log(`tool! webFetch parallel enrichment skipped ${JSON.stringify({ reason: String(error) })}`);
+      ctx.log(
+        `tool! webFetch parallel enrichment skipped ${JSON.stringify({ reason: String(error) })}`,
+      );
       return null;
     }
   }
@@ -647,10 +674,7 @@ async function maybeFetchSearchEnrichment(ctx: ToolContext, finalUrl: string): P
   }
 }
 
-function formatFetchedText(
-  baseText: string,
-  enrichment: WebFetchEnrichment | null
-): string {
+function formatFetchedText(baseText: string, enrichment: WebFetchEnrichment | null): string {
   const sections: string[] = [];
   const trimmedBase = baseText.trim();
   if (trimmedBase) {
@@ -675,7 +699,7 @@ export const __internal = {
   getResponseTimeoutMs: () => responseTimeoutMs,
   isDesktopBundleRuntime,
   setHtmlToMarkdownForTests(
-    renderer: (html: string, finalUrl: string, ctx: ToolContext) => Promise<string>
+    renderer: (html: string, finalUrl: string, ctx: ToolContext) => Promise<string>,
   ) {
     htmlToMarkdownOverrideForTests = renderer;
   },
@@ -709,7 +733,7 @@ export function createWebFetchTool(ctx: ToolContext) {
       const contentKind = classifyResponseContent(
         response.headers.get("content-type"),
         finalUrl,
-        response.headers.get("content-disposition")
+        response.headers.get("content-disposition"),
       );
 
       if (contentKind.kind === "download") {
@@ -720,7 +744,7 @@ export function createWebFetchTool(ctx: ToolContext) {
         const allowedTempPath = await assertWritePathAllowed(
           temporaryDownloadPath(allowedDownloadDir, path.basename(allowedTargetPath)),
           ctx.config,
-          "write"
+          "write",
         );
         await fs.mkdir(allowedDownloadDir, { recursive: true });
         const { bytesWritten, finalPath } = await downloadResponseToFile({
@@ -738,7 +762,7 @@ export function createWebFetchTool(ctx: ToolContext) {
             category: contentKind.category,
             path: finalPath,
             bytes: bytesWritten,
-          })}`
+          })}`,
         );
         return out;
       }
@@ -756,11 +780,13 @@ export function createWebFetchTool(ctx: ToolContext) {
           chars: out.length,
           finalUrl,
           kind: isHtml ? "html" : "text",
-          enrichmentProvider: isHtml ? getLocalWebSearchProviderFromProviderOptions(ctx.config.providerOptions) : null,
+          enrichmentProvider: isHtml
+            ? getLocalWebSearchProviderFromProviderOptions(ctx.config.providerOptions)
+            : null,
           enriched: Boolean(enrichment),
           links: enrichment?.links.length ?? 0,
           imageLinks: enrichment?.imageLinks.length ?? 0,
-        })}`
+        })}`,
       );
       return out;
     },

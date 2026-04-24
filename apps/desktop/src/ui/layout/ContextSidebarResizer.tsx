@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useAppStore } from "../../app/store";
 import { cn } from "../../lib/utils";
@@ -99,7 +99,10 @@ export function ContextSidebarResizer() {
 
   return (
     <div
-      className={cn("app-native-no-drag absolute -left-1 top-0 z-20 h-full w-3 cursor-col-resize touch-none", dragging && "bg-primary/20")}
+      className={cn(
+        "app-native-no-drag absolute -left-1 top-0 z-20 h-full w-3 cursor-col-resize touch-none",
+        dragging && "bg-primary/20",
+      )}
       role="separator"
       aria-orientation="vertical"
       aria-label="Resize context sidebar"

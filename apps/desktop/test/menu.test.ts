@@ -21,7 +21,9 @@ describe("desktop application menu", () => {
     const appMenu = template[0];
     expect(fileMenu?.submenu?.some((entry: any) => entry.label === "New Thread")).toBe(true);
     expect(appMenu?.submenu?.some((entry: any) => entry.label === "Check for Updates…")).toBe(true);
-    const updateEntry = appMenu?.submenu?.find((entry: any) => entry.label === "Check for Updates…");
+    const updateEntry = appMenu?.submenu?.find(
+      (entry: any) => entry.label === "Check for Updates…",
+    );
     updateEntry?.click?.();
     expect(commands).toContain("openUpdates");
   });
@@ -42,7 +44,9 @@ describe("desktop application menu", () => {
     expect(template[0]?.label).toBe("&File");
     const helpMenu = template.find((item: any) => item.label === "&Help");
     expect(helpMenu).toBeTruthy();
-    const updateEntry = helpMenu?.submenu?.find((entry: any) => entry.label === "Check for Updates…");
+    const updateEntry = helpMenu?.submenu?.find(
+      (entry: any) => entry.label === "Check for Updates…",
+    );
     expect(updateEntry).toBeTruthy();
     updateEntry?.click?.();
     expect(commands).toContain("openUpdates");

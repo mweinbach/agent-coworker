@@ -1,11 +1,15 @@
 import { describe, expect, test } from "bun:test";
 
 import type { MCPServerConfig } from "../src/lib/wsProtocol";
-import { __internal, buildServerFromDraft, draftFromServer } from "../src/ui/settings/pages/mcpServerDraft";
+import {
+  __internal,
+  buildServerFromDraft,
+  draftFromServer,
+} from "../src/ui/settings/pages/mcpServerDraft";
 
 describe("mcpServerDraft", () => {
   test("formats and parses stdio args without lossy round trips", () => {
-    const args = ["--label", "foo bar", "quote\"here", "it's", "", "a\\b", "$HOME"];
+    const args = ["--label", "foo bar", 'quote"here', "it's", "", "a\\b", "$HOME"];
 
     const formatted = __internal.formatArgs(args);
 

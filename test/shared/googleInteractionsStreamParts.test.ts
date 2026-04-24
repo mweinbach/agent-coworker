@@ -64,9 +64,9 @@ describe("googleInteractionsStreamParts", () => {
     expect(startBlock.type).toBe("toolCall");
     const fallbackId = startBlock.id;
 
-    expect(mapGoogleInteractionsEventToStreamParts(startEvent, contentBlocks, providerToolCallsById)).toEqual([
-      { type: "tool-input-start", id: fallbackId, toolName: "bash" },
-    ]);
+    expect(
+      mapGoogleInteractionsEventToStreamParts(startEvent, contentBlocks, providerToolCallsById),
+    ).toEqual([{ type: "tool-input-start", id: fallbackId, toolName: "bash" }]);
 
     const deltaEvent = {
       event_type: "content.delta",
@@ -85,15 +85,17 @@ describe("googleInteractionsStreamParts", () => {
     expect(block.id).toBe(fallbackId);
     expect(block.arguments).toEqual({ command: "ls" });
 
-    expect(mapGoogleInteractionsEventToStreamParts(deltaEvent, contentBlocks, providerToolCallsById)).toEqual([
-      { type: "tool-input-delta", id: fallbackId, delta: "{\"command\":\"ls\"}" },
-    ]);
+    expect(
+      mapGoogleInteractionsEventToStreamParts(deltaEvent, contentBlocks, providerToolCallsById),
+    ).toEqual([{ type: "tool-input-delta", id: fallbackId, delta: '{"command":"ls"}' }]);
 
-    expect(mapGoogleInteractionsEventToStreamParts(
-      { event_type: "content.stop", index: 0 },
-      contentBlocks,
-      providerToolCallsById,
-    )).toEqual([
+    expect(
+      mapGoogleInteractionsEventToStreamParts(
+        { event_type: "content.stop", index: 0 },
+        contentBlocks,
+        providerToolCallsById,
+      ),
+    ).toEqual([
       { type: "tool-input-end", id: fallbackId },
       { type: "tool-call", toolCallId: fallbackId, toolName: "bash", input: { command: "ls" } },
     ]);
@@ -117,8 +119,15 @@ describe("googleInteractionsStreamParts", () => {
     expect(startBlock.type).toBe("providerToolCall");
     const fallbackId = startBlock.id;
 
-    expect(mapGoogleInteractionsEventToStreamParts(startEvent, contentBlocks, providerToolCallsById)).toEqual([
-      { type: "tool-input-start", id: fallbackId, toolName: "nativeWebSearch", providerExecuted: true },
+    expect(
+      mapGoogleInteractionsEventToStreamParts(startEvent, contentBlocks, providerToolCallsById),
+    ).toEqual([
+      {
+        type: "tool-input-start",
+        id: fallbackId,
+        toolName: "nativeWebSearch",
+        providerExecuted: true,
+      },
     ]);
 
     const deltaEvent = {
@@ -138,8 +147,14 @@ describe("googleInteractionsStreamParts", () => {
     expect(block.id).toBe(fallbackId);
     expect(block.arguments).toEqual({ queries: ["latest Gemini announcements"] });
 
-    expect(mapGoogleInteractionsEventToStreamParts(deltaEvent, contentBlocks, providerToolCallsById)).toEqual([
-      { type: "tool-input-delta", id: fallbackId, delta: "{\"queries\":[\"latest Gemini announcements\"]}" },
+    expect(
+      mapGoogleInteractionsEventToStreamParts(deltaEvent, contentBlocks, providerToolCallsById),
+    ).toEqual([
+      {
+        type: "tool-input-delta",
+        id: fallbackId,
+        delta: '{"queries":["latest Gemini announcements"]}',
+      },
     ]);
 
     processGoogleInteractionsStreamEvent(
@@ -156,11 +171,13 @@ describe("googleInteractionsStreamParts", () => {
       providerToolCallsById,
     );
 
-    expect(mapGoogleInteractionsEventToStreamParts(
-      { event_type: "content.stop", index: 1 },
-      contentBlocks,
-      providerToolCallsById,
-    )).toEqual([
+    expect(
+      mapGoogleInteractionsEventToStreamParts(
+        { event_type: "content.stop", index: 1 },
+        contentBlocks,
+        providerToolCallsById,
+      ),
+    ).toEqual([
       {
         type: "tool-result",
         toolCallId: fallbackId,
@@ -210,14 +227,16 @@ describe("googleInteractionsStreamParts", () => {
       providerToolCallsById,
     );
 
-    expect(mapGoogleInteractionsEventToStreamParts(
-      {
-        event_type: "content.stop",
-        index: 1,
-      },
-      contentBlocks,
-      providerToolCallsById,
-    )).toEqual([
+    expect(
+      mapGoogleInteractionsEventToStreamParts(
+        {
+          event_type: "content.stop",
+          index: 1,
+        },
+        contentBlocks,
+        providerToolCallsById,
+      ),
+    ).toEqual([
       {
         type: "tool-result",
         toolCallId: "uc_shared_1",

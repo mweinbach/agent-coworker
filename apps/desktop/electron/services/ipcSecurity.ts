@@ -19,7 +19,10 @@ export function isTrustedDesktopSenderUrl(senderUrl: string, opts: TrustedSender
     return senderUrl.startsWith("file://");
   }
 
-  const { url: trustedUrl } = resolveDesktopRendererUrl(opts.electronRendererUrl, opts.desktopRendererPort);
+  const { url: trustedUrl } = resolveDesktopRendererUrl(
+    opts.electronRendererUrl,
+    opts.desktopRendererPort,
+  );
 
   try {
     const sender = new URL(senderUrl);
@@ -34,7 +37,10 @@ export function isTrustedDesktopSenderUrl(senderUrl: string, opts: TrustedSender
   }
 }
 
-export function resolveAllowedDirectoryPath(workspaceRoots: string[], requestedPath: string): string {
+export function resolveAllowedDirectoryPath(
+  workspaceRoots: string[],
+  requestedPath: string,
+): string {
   return assertPathWithinRoots(workspaceRoots, requestedPath, "path");
 }
 
@@ -63,7 +69,10 @@ export function resolveAllowedSaveExportSourcePath(
  * (see `resolveDesktopBuiltinSkillRootsForReveal`); pass a freshly resolved list
  * per invocation so env / packaged paths stay accurate.
  */
-export function getRevealPathRoots(workspaceRoots: string[], builtinSkillRoots: string[] = []): string[] {
+export function getRevealPathRoots(
+  workspaceRoots: string[],
+  builtinSkillRoots: string[] = [],
+): string[] {
   const home = os.homedir();
   const extra: string[] = [path.join(home, ".cowork"), path.join(home, ".agent")];
   for (const root of builtinSkillRoots) {
@@ -85,5 +94,9 @@ export function resolveAllowedRevealPath(
   requestedPath: string,
   builtinSkillRoots: string[] = [],
 ): string {
-  return assertPathWithinRoots(getRevealPathRoots(workspaceRoots, builtinSkillRoots), requestedPath, "path");
+  return assertPathWithinRoots(
+    getRevealPathRoots(workspaceRoots, builtinSkillRoots),
+    requestedPath,
+    "path",
+  );
 }

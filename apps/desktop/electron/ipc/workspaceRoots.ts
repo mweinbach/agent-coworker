@@ -65,7 +65,9 @@ export class WorkspaceRootsController implements WorkspaceRootsAccess {
     await this.ensureApprovedWorkspaceRoots();
     const normalized = await normalizeWorkspacePath(workspacePath);
     if (!this.approvedWorkspaceRoots.has(normalized)) {
-      throw new Error("Workspace path is not approved. Use the workspace picker before saving or starting.");
+      throw new Error(
+        "Workspace path is not approved. Use the workspace picker before saving or starting.",
+      );
     }
     return normalized;
   }

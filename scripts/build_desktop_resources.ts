@@ -4,9 +4,9 @@ import path from "node:path";
 
 import {
   buildSidecarManifest,
+  resolvePackagedSidecarFilename,
   SIDECAR_BUN_ENTRYPOINT_PATH,
   SIDECAR_BUN_EXECUTABLE_NAME,
-  resolvePackagedSidecarFilename,
   shouldUseBundledBunRuntime,
 } from "../apps/desktop/electron/services/sidecar";
 import {
@@ -31,7 +31,11 @@ type DesktopResourcesCache = {
   docsFingerprint: string | null;
 };
 
-async function walkForFingerprint(target: string, relativeTo: string, acc: string[]): Promise<void> {
+async function walkForFingerprint(
+  target: string,
+  relativeTo: string,
+  acc: string[],
+): Promise<void> {
   const stat = await fs.stat(target);
   if (stat.isDirectory()) {
     const entries = await fs.readdir(target, { withFileTypes: true });
@@ -72,16 +76,16 @@ async function loadCache(cachePath: string): Promise<DesktopResourcesCache | nul
     const raw = await fs.readFile(cachePath, "utf8");
     const parsed = JSON.parse(raw) as Partial<DesktopResourcesCache>;
     if (
-      parsed.version !== CACHE_VERSION
-      || typeof parsed.platform !== "string"
-      || parsed.platform.length === 0
-      || typeof parsed.arch !== "string"
-      || parsed.arch.length === 0
-      || typeof parsed.includeDocs !== "boolean"
-      || typeof parsed.sidecarFingerprint !== "string"
-      || typeof parsed.promptsFingerprint !== "string"
-      || typeof parsed.configFingerprint !== "string"
-      || (parsed.docsFingerprint !== null && typeof parsed.docsFingerprint !== "string")
+      parsed.version !== CACHE_VERSION ||
+      typeof parsed.platform !== "string" ||
+      parsed.platform.length === 0 ||
+      typeof parsed.arch !== "string" ||
+      parsed.arch.length === 0 ||
+      typeof parsed.includeDocs !== "boolean" ||
+      typeof parsed.sidecarFingerprint !== "string" ||
+      typeof parsed.promptsFingerprint !== "string" ||
+      typeof parsed.configFingerprint !== "string" ||
+      (parsed.docsFingerprint !== null && typeof parsed.docsFingerprint !== "string")
     ) {
       return null;
     }
@@ -103,8 +107,7 @@ async function syncCopiedDir(opts: {
   nextFingerprint: string;
 }): Promise<void> {
   const needsCopy =
-    opts.previousFingerprint !== opts.nextFingerprint
-    || !(await pathExists(opts.dest));
+    opts.previousFingerprint !== opts.nextFingerprint || !(await pathExists(opts.dest));
   if (!needsCopy) {
     console.log(`[resources] ${opts.label}: cached`);
     return;
@@ -148,18 +151,21 @@ async function main() {
   const sidecarFingerprint = await fingerprintInputs(sidecarInputs, root);
 
   const desktopBinariesDir = path.join(root, "apps", "desktop", "resources", "binaries");
-  const sidecarOutfile = path.join(desktopBinariesDir, resolvePackagedSidecarFilename(platform, arch));
+  const sidecarOutfile = path.join(
+    desktopBinariesDir,
+    resolvePackagedSidecarFilename(platform, arch),
+  );
   const sidecarManifestPath = path.join(desktopBinariesDir, "cowork-server-manifest.json");
   const bundledBunPath = path.join(desktopBinariesDir, SIDECAR_BUN_EXECUTABLE_NAME);
   const bundledEntrypointPath = path.join(desktopBinariesDir, SIDECAR_BUN_ENTRYPOINT_PATH);
   const useBundledBunRuntime = shouldUseBundledBunRuntime(platform, arch);
   const sidecarNeedsBuild =
-    cache?.platform !== platform
-    || cache?.arch !== arch
-    || cache?.includeDocs !== includeDocs
-    || cache?.sidecarFingerprint !== sidecarFingerprint
-    || !(await pathExists(sidecarManifestPath))
-    || (useBundledBunRuntime
+    cache?.platform !== platform ||
+    cache?.arch !== arch ||
+    cache?.includeDocs !== includeDocs ||
+    cache?.sidecarFingerprint !== sidecarFingerprint ||
+    !(await pathExists(sidecarManifestPath)) ||
+    (useBundledBunRuntime
       ? !(await pathExists(bundledBunPath)) || !(await pathExists(bundledEntrypointPath))
       : !(await pathExists(sidecarOutfile)));
 
@@ -189,18 +195,18 @@ async function main() {
         {
           cwd: root,
           env: { ...process.env, COWORK_DESKTOP_BUNDLE: "1" },
-        }
+        },
       );
 
       const { executablePath, version } = await ensureBundledBunRuntime(root, target);
       await fs.copyFile(executablePath, bundledBunPath);
       console.log(
-        `[resources] sidecar: rebuilt ${path.relative(root, bundledEntrypointPath)} with Bun runtime v${version}`
+        `[resources] sidecar: rebuilt ${path.relative(root, bundledEntrypointPath)} with Bun runtime v${version}`,
       );
     } else {
       if (platform !== process.platform || arch !== process.arch) {
         throw new Error(
-          `Cross-compiling desktop sidecars is unsupported for ${platform}/${arch} on ${process.platform}/${process.arch}`
+          `Cross-compiling desktop sidecars is unsupported for ${platform}/${arch} on ${process.platform}/${process.arch}`,
         );
       }
 

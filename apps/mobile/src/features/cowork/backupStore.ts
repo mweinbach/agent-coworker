@@ -45,7 +45,9 @@ export const useBackupStore = create<BackupStoreState>((set, get) => ({
     const { client, cwd } = getClientAndCwd();
     set({ loading: true, error: null });
     try {
-      const result = await callParsedControlMethod(client, "cowork/backups/workspace/read", { cwd });
+      const result = await callParsedControlMethod(client, "cowork/backups/workspace/read", {
+        cwd,
+      });
       set({
         backups: result.event.backups,
         workspacePath: result.event.workspacePath,
@@ -112,11 +114,15 @@ export const useBackupStore = create<BackupStoreState>((set, get) => ({
   async deleteCheckpoint(targetSessionId: string, checkpointId: string) {
     const { client, cwd } = getClientAndCwd();
     try {
-      const result = await callParsedControlMethod(client, "cowork/backups/workspace/deleteCheckpoint", {
-        cwd,
-        targetSessionId,
-        checkpointId,
-      });
+      const result = await callParsedControlMethod(
+        client,
+        "cowork/backups/workspace/deleteCheckpoint",
+        {
+          cwd,
+          targetSessionId,
+          checkpointId,
+        },
+      );
       const nextDeltas = { ...get().deltasByCheckpointKey };
       delete nextDeltas[`${targetSessionId}:${checkpointId}`];
       set({
@@ -137,7 +143,9 @@ export const useBackupStore = create<BackupStoreState>((set, get) => ({
         targetSessionId,
       });
       const nextDeltas = Object.fromEntries(
-        Object.entries(get().deltasByCheckpointKey).filter(([key]) => !key.startsWith(`${targetSessionId}:`)),
+        Object.entries(get().deltasByCheckpointKey).filter(
+          ([key]) => !key.startsWith(`${targetSessionId}:`),
+        ),
       );
       set({
         backups: result.event.backups,

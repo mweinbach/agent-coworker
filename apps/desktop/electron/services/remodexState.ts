@@ -75,7 +75,9 @@ export function resolveRemodexStateDir(options: ResolveRemodexStateOptions = {})
   return options.stateDir ?? path.join(options.homeDir ?? os.homedir(), REMODEX_STATE_DIRNAME);
 }
 
-export function readRemodexStateResult(options: ResolveRemodexStateOptions = {}): RemodexStateReadResult {
+export function readRemodexStateResult(
+  options: ResolveRemodexStateOptions = {},
+): RemodexStateReadResult {
   const stateDir = resolveRemodexStateDir(options);
   const daemonConfigPath = path.join(stateDir, REMODEX_DAEMON_CONFIG_FILE);
   const deviceStatePath = path.join(stateDir, REMODEX_DEVICE_STATE_FILE);
@@ -88,10 +90,11 @@ export function readRemodexStateResult(options: ResolveRemodexStateOptions = {})
   const deviceStateResult = readJsonFile(deviceStatePath);
   const bridgeStatusResult = readJsonFile(bridgeStatusPath);
   const pairingSessionResult = readJsonFile(pairingSessionPath);
-  const hasAnyStateFile = daemonConfigResult.exists
-    || deviceStateResult.exists
-    || bridgeStatusResult.exists
-    || pairingSessionResult.exists;
+  const hasAnyStateFile =
+    daemonConfigResult.exists ||
+    deviceStateResult.exists ||
+    bridgeStatusResult.exists ||
+    pairingSessionResult.exists;
 
   if (!daemonConfigResult.parsed) {
     return {
@@ -133,7 +136,10 @@ export function readRemodexStateResult(options: ResolveRemodexStateOptions = {})
       state: {
         stateDir,
         relayUrl,
-        identityState: parseIdentityState(normalizedDeviceState, pairingSession?.createdAt ?? serviceUpdatedAt),
+        identityState: parseIdentityState(
+          normalizedDeviceState,
+          pairingSession?.createdAt ?? serviceUpdatedAt,
+        ),
         serviceStatus,
         serviceMessage,
         serviceUpdatedAt,
@@ -149,7 +155,9 @@ export function readRemodexStateResult(options: ResolveRemodexStateOptions = {})
   }
 }
 
-export function readResolvedRemodexState(options: ResolveRemodexStateOptions = {}): ResolvedRemodexState {
+export function readResolvedRemodexState(
+  options: ResolveRemodexStateOptions = {},
+): ResolvedRemodexState {
   const result = readRemodexStateResult(options);
   if (result.status !== "resolved") {
     throw new Error(result.errorMessage);
@@ -262,10 +270,12 @@ function parseIdentityState(
   if (!macDeviceId || !macIdentityPublicKey || !macIdentityPrivateKey) {
     throw new Error("Remodex device state is incomplete.");
   }
-  if (!isValidRelayKeyPair({
-    publicKeyBase64: macIdentityPublicKey,
-    privateKeyBase64: macIdentityPrivateKey,
-  })) {
+  if (
+    !isValidRelayKeyPair({
+      publicKeyBase64: macIdentityPublicKey,
+      privateKeyBase64: macIdentityPrivateKey,
+    })
+  ) {
     throw new Error("Remodex device state contains invalid secure transport keys.");
   }
 
@@ -273,7 +283,12 @@ function parseIdentityState(
     macDeviceId,
     macIdentityPublicKey,
     macIdentityPrivateKey,
-    trustedPhone: selectTrustedPhoneRecord(value.trustedPhones, preferredPhoneDeviceId, lastPairedAt, lastConnectedAt),
+    trustedPhone: selectTrustedPhoneRecord(
+      value.trustedPhones,
+      preferredPhoneDeviceId,
+      lastPairedAt,
+      lastConnectedAt,
+    ),
   };
 }
 
@@ -284,10 +299,12 @@ function normalizeRemodexDeviceState(value: JsonRecord): JsonRecord {
   if (!macDeviceId || !macIdentityPublicKey || !macIdentityPrivateKey) {
     throw new Error("Remodex device state is incomplete.");
   }
-  if (isValidRelayKeyPair({
-    publicKeyBase64: macIdentityPublicKey,
-    privateKeyBase64: macIdentityPrivateKey,
-  })) {
+  if (
+    isValidRelayKeyPair({
+      publicKeyBase64: macIdentityPublicKey,
+      privateKeyBase64: macIdentityPrivateKey,
+    })
+  ) {
     return value;
   }
   if (!isValidRelayPrivateKey(macIdentityPrivateKey)) {
@@ -312,7 +329,7 @@ function selectTrustedPhoneRecord(
     return null;
   }
   const selected = preferredPhoneDeviceId
-    ? entries.find(([phoneDeviceId]) => phoneDeviceId === preferredPhoneDeviceId) ?? entries[0]!
+    ? (entries.find(([phoneDeviceId]) => phoneDeviceId === preferredPhoneDeviceId) ?? entries[0]!)
     : entries[0]!;
 
   return buildTrustedPhoneRecord(selected[0], selected[1], {
@@ -347,7 +364,11 @@ function parseTrustedPhones(value: unknown): Record<string, string> {
   for (const [phoneDeviceId, phoneIdentityPublicKey] of Object.entries(value as JsonRecord)) {
     const normalizedDeviceId = normalizeNonEmptyString(phoneDeviceId);
     const normalizedPublicKey = normalizeNonEmptyString(phoneIdentityPublicKey);
-    if (!normalizedDeviceId || !normalizedPublicKey || !isValidRelayPublicKey(normalizedPublicKey)) {
+    if (
+      !normalizedDeviceId ||
+      !normalizedPublicKey ||
+      !isValidRelayPublicKey(normalizedPublicKey)
+    ) {
       continue;
     }
     trustedPhones[normalizedDeviceId] = normalizedPublicKey;
@@ -360,7 +381,11 @@ function parsePairingSession(value: JsonRecord | null): RemodexPairingSessionSna
     return null;
   }
   const pairingPayloadValue = value.pairingPayload;
-  if (!pairingPayloadValue || typeof pairingPayloadValue !== "object" || Array.isArray(pairingPayloadValue)) {
+  if (
+    !pairingPayloadValue ||
+    typeof pairingPayloadValue !== "object" ||
+    Array.isArray(pairingPayloadValue)
+  ) {
     return {
       createdAt: normalizeNonEmptyString(value.createdAt) || null,
       pairingPayload: null,
@@ -377,7 +402,14 @@ function parsePairingSession(value: JsonRecord | null): RemodexPairingSessionSna
     ? Number(pairingPayloadRecord.expiresAt)
     : null;
 
-  if (!relay || !sessionId || !macDeviceId || !macIdentityPublicKey || !pairingSecret || expiresAt == null) {
+  if (
+    !relay ||
+    !sessionId ||
+    !macDeviceId ||
+    !macIdentityPublicKey ||
+    !pairingSecret ||
+    expiresAt == null
+  ) {
     return {
       createdAt: normalizeNonEmptyString(value.createdAt) || null,
       pairingPayload: null,
@@ -424,7 +456,10 @@ function readJsonFile(filePath: string): ReadJsonFileResult {
 
 async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
   await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.promises.writeFile(filePath, JSON.stringify(value, null, 2), { encoding: "utf8", mode: 0o600 });
+  await fs.promises.writeFile(filePath, JSON.stringify(value, null, 2), {
+    encoding: "utf8",
+    mode: 0o600,
+  });
 }
 
 function writeJsonFileSync(filePath: string, value: unknown): void {

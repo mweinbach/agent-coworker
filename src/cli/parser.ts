@@ -3,15 +3,31 @@ import type { ServerEvent } from "../server/protocol";
 export type ParsedCommand =
   | { type: "help" | "exit" | "new" | "restart" | "tools" | "sessions" | "clear-hard-cap" }
   | {
-      type: "model" | "provider" | "connect" | "cwd" | "resume" | "verbosity" | "reasoning-effort" | "effort" | "reasoning-summary";
+      type:
+        | "model"
+        | "provider"
+        | "connect"
+        | "cwd"
+        | "resume"
+        | "verbosity"
+        | "reasoning-effort"
+        | "effort"
+        | "reasoning-summary";
       arg: string;
     }
   | { type: "unknown"; name: string; arg: string }
   | { type: "message"; arg: string };
 
-export type ProviderAuthMethod = Extract<ServerEvent, { type: "provider_auth_methods" }>["methods"][string][number];
+export type ProviderAuthMethod = Extract<
+  ServerEvent,
+  { type: "provider_auth_methods" }
+>["methods"][string][number];
 
-const DEFAULT_API_AUTH_METHOD: ProviderAuthMethod = { id: "api_key", type: "api", label: "API key" };
+const DEFAULT_API_AUTH_METHOD: ProviderAuthMethod = {
+  id: "api_key",
+  type: "api",
+  label: "API key",
+};
 
 export function parseReplInput(input: string): ParsedCommand {
   const line = input.trim();
@@ -44,14 +60,16 @@ export function parseReplInput(input: string): ParsedCommand {
   }
 }
 
-export function normalizeProviderAuthMethods(methods: ProviderAuthMethod[] | undefined): ProviderAuthMethod[] {
+export function normalizeProviderAuthMethods(
+  methods: ProviderAuthMethod[] | undefined,
+): ProviderAuthMethod[] {
   if (methods && methods.length > 0) return methods;
   return [DEFAULT_API_AUTH_METHOD];
 }
 
 export function resolveProviderAuthMethodSelection(
   methods: ProviderAuthMethod[],
-  rawSelection: string
+  rawSelection: string,
 ): ProviderAuthMethod | null {
   if (methods.length === 0) return null;
 

@@ -11,9 +11,9 @@ import { createSessionRouteHandlers } from "./session";
 import { createSkillsRouteHandlers } from "./skills";
 import { createThreadRouteHandlers } from "./thread";
 import { createTurnRouteHandlers } from "./turn";
-import { createWorkspaceBackupRouteHandlers } from "./workspaceBackups";
-import { createWorkspaceRouteHandlers } from "./workspace";
 import type { JsonRpcRequestHandler, JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
+import { createWorkspaceRouteHandlers } from "./workspace";
+import { createWorkspaceBackupRouteHandlers } from "./workspaceBackups";
 
 export type { JsonRpcRequestHandler, JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
 

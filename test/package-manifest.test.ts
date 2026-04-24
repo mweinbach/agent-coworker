@@ -1,8 +1,7 @@
+import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
-import { describe, expect, test } from "bun:test";
 import fg from "fast-glob";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));

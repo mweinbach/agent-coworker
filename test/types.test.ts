@@ -100,7 +100,6 @@ describe("isProviderName", () => {
     test("opencode-zen", () => {
       expect(isProviderName("opencode-zen")).toBe(true);
     });
-
   });
 
   // ---- Invalid strings -----------------------------------------------------
@@ -221,5 +220,4 @@ describe("isProviderName", () => {
       expect(isProviderName("openai-v2")).toBe(false);
     });
   });
-
 });

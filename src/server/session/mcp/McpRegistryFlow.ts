@@ -89,7 +89,11 @@ export class McpRegistryFlow {
         ...(payload.warnings.length > 0 ? { warnings: payload.warnings } : {}),
       });
     } catch (err) {
-      this.context.emitError("internal_error", "session", `Failed to read MCP servers: ${String(err)}`);
+      this.context.emitError(
+        "internal_error",
+        "session",
+        `Failed to read MCP servers: ${String(err)}`,
+      );
     }
   }
 
@@ -104,7 +108,11 @@ export class McpRegistryFlow {
         this.context.emitError("validation_failed", "session", message);
         return null;
       }
-      this.context.emitError("internal_error", "session", `Failed to upsert MCP server: ${message}`);
+      this.context.emitError(
+        "internal_error",
+        "session",
+        `Failed to upsert MCP server: ${message}`,
+      );
       return null;
     }
 
@@ -118,11 +126,18 @@ export class McpRegistryFlow {
       await deleteWorkspaceMCPServer(this.context.state.config, nameRaw);
     } catch (err) {
       const message = String(err);
-      if (message.toLowerCase().includes("mcp-servers.json") || message.toLowerCase().includes("server name")) {
+      if (
+        message.toLowerCase().includes("mcp-servers.json") ||
+        message.toLowerCase().includes("server name")
+      ) {
         this.context.emitError("validation_failed", "session", message);
         return;
       }
-      this.context.emitError("internal_error", "session", `Failed to delete MCP server: ${message}`);
+      this.context.emitError(
+        "internal_error",
+        "session",
+        `Failed to delete MCP server: ${message}`,
+      );
       return;
     }
 
@@ -143,7 +158,11 @@ export class McpRegistryFlow {
           (result.archivedPath ? ` Archived legacy file to ${result.archivedPath}.` : ""),
       });
     } catch (err) {
-      this.context.emitError("internal_error", "session", `Failed to migrate legacy MCP servers: ${String(err)}`);
+      this.context.emitError(
+        "internal_error",
+        "session",
+        `Failed to migrate legacy MCP servers: ${String(err)}`,
+      );
       return;
     }
 

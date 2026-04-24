@@ -5,7 +5,8 @@ import { resolveAuthHomeDir } from "../utils/authHome";
 import { readToolApiKey } from "./api-keys";
 import type { ToolContext } from "./context";
 
-export const PARALLEL_MISSING_KEY_MESSAGE = "set PARALLEL_API_KEY or save Parallel API key in provider settings";
+export const PARALLEL_MISSING_KEY_MESSAGE =
+  "set PARALLEL_API_KEY or save Parallel API key in provider settings";
 
 export async function resolveParallelApiKey(ctx: ToolContext): Promise<string | undefined> {
   try {
@@ -42,18 +43,22 @@ export async function postParallelJson(opts: {
 const stringSchema = z.string();
 const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
 const recordSchema = z.record(z.string(), z.unknown());
-const parallelExtractResultSchema = z.object({
-  url: stringSchema.optional(),
-  title: z.union([stringSchema, z.null()]).optional(),
-  excerpts: z.union([z.array(z.string()), z.null()]).optional(),
-  full_content: z.union([z.array(z.string()), z.null()]).optional(),
-  links: z.array(z.unknown()).optional(),
-  image_links: z.array(z.unknown()).optional(),
-  imageLinks: z.array(z.unknown()).optional(),
-}).passthrough();
-const parallelExtractResponseSchema = z.object({
-  results: z.array(parallelExtractResultSchema).optional(),
-}).passthrough();
+const parallelExtractResultSchema = z
+  .object({
+    url: stringSchema.optional(),
+    title: z.union([stringSchema, z.null()]).optional(),
+    excerpts: z.union([z.array(z.string()), z.null()]).optional(),
+    full_content: z.union([z.array(z.string()), z.null()]).optional(),
+    links: z.array(z.unknown()).optional(),
+    image_links: z.array(z.unknown()).optional(),
+    imageLinks: z.array(z.unknown()).optional(),
+  })
+  .passthrough();
+const parallelExtractResponseSchema = z
+  .object({
+    results: z.array(parallelExtractResultSchema).optional(),
+  })
+  .passthrough();
 
 function firstNonEmptyString(...values: unknown[]): string | undefined {
   for (const value of values) {
@@ -108,7 +113,7 @@ function collectExplicitUrls(value: unknown): string[] {
       parsed.data.url,
       parsed.data.href,
       parsed.data.src,
-      parsed.data.link
+      parsed.data.link,
     );
     if (nested) urls.add(nested);
   }
@@ -141,7 +146,9 @@ export async function fetchParallelContents(opts: {
 
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`Parallel extract failed: ${res.status} ${res.statusText}: ${body.slice(0, 500)}`);
+    throw new Error(
+      `Parallel extract failed: ${res.status} ${res.statusText}: ${body.slice(0, 500)}`,
+    );
   }
 
   const data = await res.json();
@@ -152,17 +159,16 @@ export async function fetchParallelContents(opts: {
   }
 
   const text =
-    normalizeMarkdownSections(result.excerpts).trim()
-    || normalizeMarkdownSections(result.full_content).trim();
-  const links = [...new Set([
-    ...collectExplicitUrls(result.links),
-    ...collectMarkdownLinks(text),
-  ])];
-  const imageLinks = [...new Set([
-    ...collectExplicitUrls(result.image_links),
-    ...collectExplicitUrls(result.imageLinks),
-    ...collectImageLinks(text),
-  ])];
+    normalizeMarkdownSections(result.excerpts).trim() ||
+    normalizeMarkdownSections(result.full_content).trim();
+  const links = [...new Set([...collectExplicitUrls(result.links), ...collectMarkdownLinks(text)])];
+  const imageLinks = [
+    ...new Set([
+      ...collectExplicitUrls(result.image_links),
+      ...collectExplicitUrls(result.imageLinks),
+      ...collectImageLinks(text),
+    ]),
+  ];
   if (!text && links.length === 0 && imageLinks.length === 0) {
     throw new Error(`Parallel extract returned no content for ${opts.url}`);
   }

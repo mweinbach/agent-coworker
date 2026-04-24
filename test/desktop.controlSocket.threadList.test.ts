@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
 import { createControlSocketHelpers } from "../apps/desktop/src/app/store.helpers/controlSocket";
-import { defaultThreadRuntime, defaultWorkspaceRuntime } from "../apps/desktop/src/app/store.helpers/runtimeState";
+import {
+  defaultThreadRuntime,
+  defaultWorkspaceRuntime,
+} from "../apps/desktop/src/app/store.helpers/runtimeState";
 import { startAgentServer } from "../src/server/startServer";
 import { makeTmpProject, serverOpts, stopTestServer } from "./helpers/wsHarness";
 
@@ -37,7 +40,10 @@ async function connectJsonRpc(url: string): Promise<{
   };
 
   await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("Timed out waiting for websocket open")), 5_000);
+    const timer = setTimeout(
+      () => reject(new Error("Timed out waiting for websocket open")),
+      5_000,
+    );
     ws.onopen = () => {
       clearTimeout(timer);
       resolve();
@@ -90,12 +96,14 @@ async function connectJsonRpc(url: string): Promise<{
 describe("desktop control socket thread list mapping", () => {
   test("uses thread/list wire counts instead of cached thread state", async () => {
     const tmpDir = await makeTmpProject();
-    const { server, url } = await startAgentServer(serverOpts(tmpDir, {
-      runTurnImpl: (async () => ({
-        text: "streamed reply",
-        responseMessages: [],
-      })) as any,
-    }));
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
+        runTurnImpl: (async () => ({
+          text: "streamed reply",
+          responseMessages: [],
+        })) as any,
+      }),
+    );
 
     try {
       const rpc = await connectJsonRpc(url);
@@ -107,30 +115,36 @@ describe("desktop control socket thread list mapping", () => {
         clientMessageId: "msg-1",
         input: [{ type: "text", text: "hello there" }],
       });
-      await rpc.waitFor((message) => message.method === "turn/completed" && message.params.threadId === threadId);
+      await rpc.waitFor(
+        (message) => message.method === "turn/completed" && message.params.threadId === threadId,
+      );
       rpc.close();
 
       const workspaceId = "workspace-1";
       const staleMessageCount = 999;
       const staleLastEventSeq = 777;
       let state: any = {
-        workspaces: [{
-          id: workspaceId,
-          path: tmpDir,
-        }],
-        threads: [{
-          id: threadId,
-          workspaceId,
-          title: "Stale title",
-          titleSource: "manual",
-          createdAt: new Date().toISOString(),
-          lastMessageAt: new Date().toISOString(),
-          status: "active",
-          sessionId: threadId,
-          messageCount: staleMessageCount,
-          lastEventSeq: staleLastEventSeq,
-          draft: false,
-        }],
+        workspaces: [
+          {
+            id: workspaceId,
+            path: tmpDir,
+          },
+        ],
+        threads: [
+          {
+            id: threadId,
+            workspaceId,
+            title: "Stale title",
+            titleSource: "manual",
+            createdAt: new Date().toISOString(),
+            lastMessageAt: new Date().toISOString(),
+            status: "active",
+            sessionId: threadId,
+            messageCount: staleMessageCount,
+            lastEventSeq: staleLastEventSeq,
+            draft: false,
+          },
+        ],
         selectedWorkspaceId: workspaceId,
         selectedThreadId: threadId,
         workspaceRuntimeById: {

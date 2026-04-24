@@ -1,5 +1,5 @@
-import { spawn } from "bun";
 import path from "node:path";
+import { spawn } from "bun";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
 const desktopDir = path.join(repoRoot, "apps", "desktop");
@@ -71,7 +71,9 @@ export function createServerStdoutMonitor(
         handleLine(buf);
       }
       if (!readySeen) {
-        rejectReady(new Error("Server exited before reporting readiness. Check the log above for cause."));
+        rejectReady(
+          new Error("Server exited before reporting readiness. Check the log above for cause."),
+        );
       }
     } catch (error) {
       if (!readySeen) {
@@ -120,7 +122,10 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     },
   );
   const timeoutPromise = new Promise<string>((_, reject) =>
-    setTimeout(() => reject(new Error(`Server did not report ready within ${STARTUP_TIMEOUT_MS}ms`)), STARTUP_TIMEOUT_MS),
+    setTimeout(
+      () => reject(new Error(`Server did not report ready within ${STARTUP_TIMEOUT_MS}ms`)),
+      STARTUP_TIMEOUT_MS,
+    ),
   );
 
   let serverUrl: string;

@@ -5,9 +5,10 @@ type CryptoShim = {
   randomUUID?: typeof ExpoCrypto.randomUUID;
 };
 
-const existingCrypto = typeof globalThis.crypto === "object" && globalThis.crypto
-  ? (globalThis.crypto as CryptoShim)
-  : null;
+const existingCrypto =
+  typeof globalThis.crypto === "object" && globalThis.crypto
+    ? (globalThis.crypto as CryptoShim)
+    : null;
 
 const cryptoShim: CryptoShim = existingCrypto ?? {};
 

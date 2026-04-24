@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useAppStore } from "../../app/store";
 import { cn } from "../../lib/utils";
@@ -67,7 +67,10 @@ export function MessageBarResizer() {
 
   return (
     <div
-      className={cn("absolute -top-1 left-0 right-0 z-20 h-3 cursor-row-resize bg-transparent transition-colors", dragging && "bg-primary/20")}
+      className={cn(
+        "absolute -top-1 left-0 right-0 z-20 h-3 cursor-row-resize bg-transparent transition-colors",
+        dragging && "bg-primary/20",
+      )}
       role="separator"
       aria-orientation="horizontal"
       aria-label="Resize minimum message bar height"

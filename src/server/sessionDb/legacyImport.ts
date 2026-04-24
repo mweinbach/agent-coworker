@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { parsePersistedSessionSnapshot, type PersistedSessionSnapshot } from "../sessionStore";
+import { type PersistedSessionSnapshot, parsePersistedSessionSnapshot } from "../sessionStore";
 
 type ImportLegacySnapshotsOptions = {
   sessionsDir: string;

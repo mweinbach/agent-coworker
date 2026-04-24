@@ -1,15 +1,15 @@
 import { Stack, useLocalSearchParams } from "expo-router";
 import { useState } from "react";
-import { KeyboardAvoidingView, Pressable, FlatList, Text, View } from "react-native";
+import { FlatList, KeyboardAvoidingView, Pressable, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ComposerBar } from "@/components/ComposerBar";
+import { FileExplorerDrawer } from "@/components/FileExplorerDrawer";
 import { PendingRequestCard } from "@/components/thread/pending-request-card";
 import { ThreadFeedItem } from "@/components/thread/thread-feed-item";
 import { Screen } from "@/components/ui/screen";
 import { SFSymbol } from "@/components/ui/sf-symbol";
 import { StatusPill } from "@/components/ui/status-pill";
-import { FileExplorerDrawer } from "@/components/FileExplorerDrawer";
 import { getActiveCoworkJsonRpcClient } from "@/features/cowork/runtimeClient";
 import { useThreadStore } from "@/features/cowork/threadStore";
 import { useWorkspaceStore } from "@/features/cowork/workspaceStore";
@@ -32,13 +32,12 @@ export default function ThreadDetailScreen() {
   const controlSnapshot = useWorkspaceStore((state) => state.controlSnapshot);
 
   const isDraftThread = threadId.startsWith("draft-");
-  const a2uiEnabled = (
-    typeof controlSnapshot?.sessionConfig?.enableA2ui === "boolean"
+  const a2uiEnabled =
+    (typeof controlSnapshot?.sessionConfig?.enableA2ui === "boolean"
       ? controlSnapshot.sessionConfig.enableA2ui
       : typeof controlSnapshot?.sessionConfig?.featureFlags?.workspace?.a2ui === "boolean"
         ? controlSnapshot.sessionConfig.featureFlags.workspace.a2ui
-        : false
-  ) === true;
+        : false) === true;
 
   if (!thread) {
     return (
@@ -86,11 +85,19 @@ export default function ThreadDetailScreen() {
               <Pressable onPress={() => setDrawerVisible(true)}>
                 <SFSymbol name="folder" size={24} color={theme.text} />
               </Pressable>
-              <Pressable onPress={() => {/* open overflow */}}>
+              <Pressable
+                onPress={() => {
+                  /* open overflow */
+                }}
+              >
                 <SFSymbol name="ellipsis" size={24} color={theme.text} />
               </Pressable>
               {pendingRequest ? (
-                <Pressable onPress={() => { void interruptCurrentThread(); }}>
+                <Pressable
+                  onPress={() => {
+                    void interruptCurrentThread();
+                  }}
+                >
                   <Text style={{ color: theme.danger, fontWeight: "700" }}>Stop</Text>
                 </Pressable>
               ) : null}
@@ -117,13 +124,16 @@ export default function ThreadDetailScreen() {
             // Reversed feed + pending request at the top (visually bottom since it's inverted)
             [
               ...(pendingRequest ? [{ type: "pending", data: pendingRequest }] : []),
-              ...[...activeThread.feed].reverse().map(item => ({ type: "feed", data: item }))
+              ...[...activeThread.feed].reverse().map((item) => ({ type: "feed", data: item })),
             ]
           }
-          keyExtractor={(item) => item.type === "pending" ? "pending" : (item.data as any).id}
+          keyExtractor={(item) => (item.type === "pending" ? "pending" : (item.data as any).id)}
           ListFooterComponent={() => (
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
-              <StatusPill label={isDraftThread ? "local draft" : "remote session"} tone={isDraftThread ? "primary" : "success"} />
+              <StatusPill
+                label={isDraftThread ? "local draft" : "remote session"}
+                tone={isDraftThread ? "primary" : "success"}
+              />
               {pendingRequest ? <StatusPill label="needs response" tone="warning" /> : null}
             </View>
           )}
@@ -197,19 +207,21 @@ export default function ThreadDetailScreen() {
               }
               submitComposer(activeThread.id);
             }}
-            helperText={isDraftThread
-              ? "This draft stays local until you pair with a desktop."
-              : "Send follow-ups directly into the live desktop thread."}
+            helperText={
+              isDraftThread
+                ? "This draft stays local until you pair with a desktop."
+                : "Send follow-ups directly into the live desktop thread."
+            }
             submitLabel={isDraftThread ? "Save draft" : "Send"}
             disabled={!activeThread.composerDraft.trim()}
           />
         </View>
       </KeyboardAvoidingView>
 
-      <FileExplorerDrawer 
-        visible={drawerVisible} 
-        onClose={() => setDrawerVisible(false)} 
-        workspaceName="Cowork" 
+      <FileExplorerDrawer
+        visible={drawerVisible}
+        onClose={() => setDrawerVisible(false)}
+        workspaceName="Cowork"
       />
     </>
   );

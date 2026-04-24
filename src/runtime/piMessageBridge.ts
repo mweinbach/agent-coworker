@@ -134,7 +134,9 @@ function assistantContentFromModelContent(content: unknown): Array<Record<string
         type: "text",
         text,
         ...(phase ? { phase } : {}),
-        ...(asAnnotationArray(record.annotations) ? { annotations: asAnnotationArray(record.annotations) } : {}),
+        ...(asAnnotationArray(record.annotations)
+          ? { annotations: asAnnotationArray(record.annotations) }
+          : {}),
       });
     }
   }
@@ -206,9 +208,7 @@ export function toolResultContentFromOutput(output: unknown): PiToolResultConten
 function toolResultContentToText(content: unknown): string {
   const richContent = richToolResultContentFromOutput(content);
   if (richContent) {
-    return richContent
-      .map((part) => (part.type === "text" ? part.text : "[image]"))
-      .join("\n");
+    return richContent.map((part) => (part.type === "text" ? part.text : "[image]")).join("\n");
   }
   return safeJsonStringify(content);
 }
@@ -224,21 +224,25 @@ export function toolOutputFromPiToolResultContent(content: unknown): unknown {
 
 function toolResultMessagesFromModelMessage(message: Record<string, unknown>): PiMessage[] {
   const content = message.content;
-  const roleToolCallId = asNonEmptyString(message.toolCallId) ?? asNonEmptyString(message.tool_call_id);
-  const roleToolName = asNonEmptyString(message.toolName) ?? asNonEmptyString(message.tool_name) ?? "tool";
+  const roleToolCallId =
+    asNonEmptyString(message.toolCallId) ?? asNonEmptyString(message.tool_call_id);
+  const roleToolName =
+    asNonEmptyString(message.toolName) ?? asNonEmptyString(message.tool_name) ?? "tool";
   const timestamp = Date.now();
 
   if (!Array.isArray(content)) {
     const text = contentTextParts(content).join("\n").trim();
     if (!text) return [];
-    return [{
-      role: "toolResult",
-      toolCallId: roleToolCallId ?? `tool_${timestamp}`,
-      toolName: roleToolName,
-      content: [{ type: "text", text }],
-      isError: false,
-      timestamp,
-    }] as PiMessage[];
+    return [
+      {
+        role: "toolResult",
+        toolCallId: roleToolCallId ?? `tool_${timestamp}`,
+        toolName: roleToolName,
+        content: [{ type: "text", text }],
+        isError: false,
+        timestamp,
+      },
+    ] as PiMessage[];
   }
 
   const out: PiMessage[] = [];
@@ -269,7 +273,10 @@ function toolResultMessagesFromModelMessage(message: Record<string, unknown>): P
   return out;
 }
 
-export function modelMessagesToPiMessages(messages: ModelMessage[], provider: string = "openai"): PiMessage[] {
+export function modelMessagesToPiMessages(
+  messages: ModelMessage[],
+  provider: string = "openai",
+): PiMessage[] {
   const out: PiMessage[] = [];
   const now = Date.now();
   for (const rawMessage of messages) {
@@ -283,17 +290,22 @@ export function modelMessagesToPiMessages(messages: ModelMessage[], provider: st
         const parts = message.content as Array<unknown>;
         const hasMultimodal = parts.some((p) => {
           const rec = asRecord(p);
-          return rec &&
+          return (
+            rec &&
             (rec.type === "image" || rec.type === "input_image") &&
             typeof rec.data === "string" &&
-            typeof rec.mimeType === "string";
+            typeof rec.mimeType === "string"
+          );
         });
         if (hasMultimodal) {
           const piContent: Array<Record<string, unknown>> = [];
           for (const part of parts) {
             const rec = asRecord(part);
             if (!rec) continue;
-            if ((rec.type === "text" || rec.type === "input_text") && typeof rec.text === "string") {
+            if (
+              (rec.type === "text" || rec.type === "input_text") &&
+              typeof rec.text === "string"
+            ) {
               if (rec.text.trim()) piContent.push({ type: "text", text: rec.text });
             } else if (
               (rec.type === "image" || rec.type === "input_image") &&
@@ -355,7 +367,9 @@ export function modelMessagesToPiMessages(messages: ModelMessage[], provider: st
   return out;
 }
 
-function modelContentFromAssistantPart(part: Record<string, unknown>): Record<string, unknown> | null {
+function modelContentFromAssistantPart(
+  part: Record<string, unknown>,
+): Record<string, unknown> | null {
   const partType = asString(part.type);
   if (partType === "text") {
     const text = asString(part.text);
@@ -365,7 +379,9 @@ function modelContentFromAssistantPart(part: Record<string, unknown>): Record<st
       type: "text",
       text,
       ...(phase ? { phase } : {}),
-      ...(asAnnotationArray(part.annotations) ? { annotations: asAnnotationArray(part.annotations) } : {}),
+      ...(asAnnotationArray(part.annotations)
+        ? { annotations: asAnnotationArray(part.annotations) }
+        : {}),
     };
   }
   if (partType === "thinking") {
@@ -376,8 +392,7 @@ function modelContentFromAssistantPart(part: Record<string, unknown>): Record<st
     return {
       type: "tool-call",
       toolCallId:
-        asNonEmptyString(part.id) ??
-        `tool_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+        asNonEmptyString(part.id) ?? `tool_${Date.now()}_${Math.random().toString(16).slice(2)}`,
       toolName: asNonEmptyString(part.name) ?? "tool",
       input: asRecord(part.arguments) ?? {},
     };
@@ -417,13 +432,15 @@ export function piTurnMessagesToModelMessages(messages: PiMessage[]): ModelMessa
       const toolName = asNonEmptyString(rawMessage.toolName) ?? "tool";
       out.push({
         role: "tool",
-        content: [{
-          type: "tool-result",
-          toolCallId,
-          toolName,
-          output: toolOutputFromPiToolResultContent(rawMessage.content),
-          isError: rawMessage.isError === true,
-        }],
+        content: [
+          {
+            type: "tool-result",
+            toolCallId,
+            toolName,
+            output: toolOutputFromPiToolResultContent(rawMessage.content),
+            isError: rawMessage.isError === true,
+          },
+        ],
       } as ModelMessage);
     }
   }
@@ -433,7 +450,8 @@ export function piTurnMessagesToModelMessages(messages: PiMessage[]): ModelMessa
 export function extractPiAssistantText(messages: PiMessage[]): string {
   const chunks: string[] = [];
   for (const rawMessage of messages as any[]) {
-    if (!rawMessage || rawMessage.role !== "assistant" || !Array.isArray(rawMessage.content)) continue;
+    if (!rawMessage || rawMessage.role !== "assistant" || !Array.isArray(rawMessage.content))
+      continue;
     for (const rawPart of rawMessage.content) {
       const part = asRecord(rawPart);
       if (!part || part.type !== "text") continue;
@@ -448,7 +466,8 @@ export function extractPiAssistantText(messages: PiMessage[]): string {
 export function extractPiReasoningText(messages: PiMessage[]): string | undefined {
   const chunks: string[] = [];
   for (const rawMessage of messages as any[]) {
-    if (!rawMessage || rawMessage.role !== "assistant" || !Array.isArray(rawMessage.content)) continue;
+    if (!rawMessage || rawMessage.role !== "assistant" || !Array.isArray(rawMessage.content))
+      continue;
     for (const rawPart of rawMessage.content) {
       const part = asRecord(rawPart);
       if (!part || part.type !== "thinking") continue;
@@ -464,21 +483,23 @@ export function normalizePiUsage(usage: unknown): RuntimeUsage | undefined {
   const record = asRecord(usage);
   if (!record) return undefined;
 
-  const cachedPromptTokens = asFiniteNumber(record.cachedPromptTokens) ?? asFiniteNumber(record.cacheRead) ?? 0;
+  const cachedPromptTokens =
+    asFiniteNumber(record.cachedPromptTokens) ?? asFiniteNumber(record.cacheRead) ?? 0;
   const costRecord = asRecord(record.cost);
   const promptTokens =
-    asFiniteNumber(record.promptTokens) ??
-    ((asFiniteNumber(record.input) ?? 0) + cachedPromptTokens);
-  const completionTokens = asFiniteNumber(record.completionTokens) ?? asFiniteNumber(record.output) ?? 0;
-  const totalTokens = asFiniteNumber(record.totalTokens) ?? (promptTokens + completionTokens);
-  const estimatedCostUsd = asFiniteNumber(record.estimatedCostUsd) ?? asFiniteNumber(costRecord?.total);
+    asFiniteNumber(record.promptTokens) ?? (asFiniteNumber(record.input) ?? 0) + cachedPromptTokens;
+  const completionTokens =
+    asFiniteNumber(record.completionTokens) ?? asFiniteNumber(record.output) ?? 0;
+  const totalTokens = asFiniteNumber(record.totalTokens) ?? promptTokens + completionTokens;
+  const estimatedCostUsd =
+    asFiniteNumber(record.estimatedCostUsd) ?? asFiniteNumber(costRecord?.total);
 
   if (
-    promptTokens === 0
-    && completionTokens === 0
-    && totalTokens === 0
-    && cachedPromptTokens === 0
-    && estimatedCostUsd === undefined
+    promptTokens === 0 &&
+    completionTokens === 0 &&
+    totalTokens === 0 &&
+    cachedPromptTokens === 0 &&
+    estimatedCostUsd === undefined
   ) {
     return undefined;
   }
@@ -492,7 +513,10 @@ export function normalizePiUsage(usage: unknown): RuntimeUsage | undefined {
   };
 }
 
-export function mergePiUsage(into: RuntimeUsage | undefined, usage: unknown): RuntimeUsage | undefined {
+export function mergePiUsage(
+  into: RuntimeUsage | undefined,
+  usage: unknown,
+): RuntimeUsage | undefined {
   const normalized = normalizePiUsage(usage);
   if (!normalized) return into;
   if (!into) return normalized;

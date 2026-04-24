@@ -2,11 +2,18 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
+import {
+  loadMCPConfigRegistry,
+  migrateLegacyMCPServers,
+  upsertWorkspaceMCPServer,
+} from "../src/mcp/configRegistry";
 import type { AgentConfig } from "../src/types";
-import { loadMCPConfigRegistry, migrateLegacyMCPServers, upsertWorkspaceMCPServer } from "../src/mcp/configRegistry";
 
-function makeConfig(workspaceRoot: string, userHome: string, builtInConfigDir: string): AgentConfig {
+function makeConfig(
+  workspaceRoot: string,
+  userHome: string,
+  builtInConfigDir: string,
+): AgentConfig {
   return {
     provider: "google",
     model: "gemini-3-flash-preview",
@@ -85,7 +92,9 @@ describe("mcp config registry", () => {
   test("invalid workspace json records warning and still loads other layers", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-invalid-workspace-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-invalid-home-"));
-    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-invalid-builtin-"));
+    const builtInConfigDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "mcp-registry-invalid-builtin-"),
+    );
     const config = makeConfig(workspace, home, builtInConfigDir);
 
     try {
@@ -93,7 +102,11 @@ describe("mcp config registry", () => {
         servers: [{ name: "from-user", transport: { type: "stdio", command: "user" } }],
       });
       await fs.mkdir(path.join(workspace, ".cowork"), { recursive: true });
-      await fs.writeFile(path.join(workspace, ".cowork", "mcp-servers.json"), "{ bad json", "utf-8");
+      await fs.writeFile(
+        path.join(workspace, ".cowork", "mcp-servers.json"),
+        "{ bad json",
+        "utf-8",
+      );
       const snapshot = await loadMCPConfigRegistry(config);
 
       expect(snapshot.servers.find((server) => server.name === "from-user")?.source).toBe("user");
@@ -112,9 +125,13 @@ describe("mcp config registry", () => {
   });
 
   test("plugin MCP servers retain oauth auth config and plugin scope metadata", async () => {
-    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-oauth-workspace-"));
+    const workspace = await fs.mkdtemp(
+      path.join(os.tmpdir(), "mcp-registry-plugin-oauth-workspace-"),
+    );
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-oauth-home-"));
-    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-oauth-builtin-"));
+    const builtInConfigDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "mcp-registry-plugin-oauth-builtin-"),
+    );
     const config = makeConfig(workspace, home, builtInConfigDir);
 
     try {
@@ -122,28 +139,36 @@ describe("mcp config registry", () => {
       await fs.mkdir(path.join(pluginRoot, ".codex-plugin"), { recursive: true });
       await fs.writeFile(
         path.join(pluginRoot, ".codex-plugin", "plugin.json"),
-        `${JSON.stringify({
-          name: "oauth-toolkit",
-          description: "Plugin oauth helpers",
-          interface: { displayName: "OAuth Toolkit" },
-        }, null, 2)}\n`,
+        `${JSON.stringify(
+          {
+            name: "oauth-toolkit",
+            description: "Plugin oauth helpers",
+            interface: { displayName: "OAuth Toolkit" },
+          },
+          null,
+          2,
+        )}\n`,
         "utf-8",
       );
       await fs.writeFile(
         path.join(pluginRoot, ".mcp.json"),
-        `${JSON.stringify({
-          mcpServers: {
-            oauthPlugin: {
-              type: "http",
-              url: "https://mcp.plugin.example.com",
-              auth: {
-                type: "oauth",
-                oauthMode: "auto",
-                scope: "plugin.read",
+        `${JSON.stringify(
+          {
+            mcpServers: {
+              oauthPlugin: {
+                type: "http",
+                url: "https://mcp.plugin.example.com",
+                auth: {
+                  type: "oauth",
+                  oauthMode: "auto",
+                  scope: "plugin.read",
+                },
               },
             },
           },
-        }, null, 2)}\n`,
+          null,
+          2,
+        )}\n`,
         "utf-8",
       );
 
@@ -168,9 +193,13 @@ describe("mcp config registry", () => {
   });
 
   test("plugin MCP stdio transports rebase only filesystem paths against the plugin root", async () => {
-    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-stdio-workspace-"));
+    const workspace = await fs.mkdtemp(
+      path.join(os.tmpdir(), "mcp-registry-plugin-stdio-workspace-"),
+    );
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-stdio-home-"));
-    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-stdio-builtin-"));
+    const builtInConfigDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "mcp-registry-plugin-stdio-builtin-"),
+    );
     const config = makeConfig(workspace, home, builtInConfigDir);
 
     try {
@@ -182,11 +211,15 @@ describe("mcp config registry", () => {
       await fs.mkdir(path.join(pluginRoot, "runtime"), { recursive: true });
       await fs.writeFile(
         path.join(pluginRoot, ".codex-plugin", "plugin.json"),
-        `${JSON.stringify({
-          name: "stdio-toolkit",
-          description: "Plugin stdio helpers",
-          interface: { displayName: "Stdio Toolkit" },
-        }, null, 2)}\n`,
+        `${JSON.stringify(
+          {
+            name: "stdio-toolkit",
+            description: "Plugin stdio helpers",
+            interface: { displayName: "Stdio Toolkit" },
+          },
+          null,
+          2,
+        )}\n`,
         "utf-8",
       );
       await fs.writeFile(path.join(pluginRoot, "bin", "server.js"), "// server\n", "utf-8");
@@ -194,27 +227,31 @@ describe("mcp config registry", () => {
       await fs.writeFile(path.join(pluginRoot, "nested", "server.js"), "// nested\n", "utf-8");
       await fs.writeFile(
         path.join(pluginRoot, ".mcp.json"),
-        `${JSON.stringify({
-          mcpServers: {
-            bundledServer: {
-              type: "stdio",
-              command: "./bin/server.js",
-              args: [
-                "./dist/server.mjs",
-                "nested/server.js",
-                "@modelcontextprotocol/server-filesystem",
-                "https://api.example.com",
-                "--port",
-                "7337",
-              ],
-              cwd: "./runtime",
-            },
-            pathServer: {
-              type: "stdio",
-              command: "node",
+        `${JSON.stringify(
+          {
+            mcpServers: {
+              bundledServer: {
+                type: "stdio",
+                command: "./bin/server.js",
+                args: [
+                  "./dist/server.mjs",
+                  "nested/server.js",
+                  "@modelcontextprotocol/server-filesystem",
+                  "https://api.example.com",
+                  "--port",
+                  "7337",
+                ],
+                cwd: "./runtime",
+              },
+              pathServer: {
+                type: "stdio",
+                command: "node",
+              },
             },
           },
-        }, null, 2)}\n`,
+          null,
+          2,
+        )}\n`,
         "utf-8",
       );
 
@@ -248,9 +285,13 @@ describe("mcp config registry", () => {
   });
 
   test("plugin MCP stdio transports reject relative paths that escape the plugin root", async () => {
-    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-escape-workspace-"));
+    const workspace = await fs.mkdtemp(
+      path.join(os.tmpdir(), "mcp-registry-plugin-escape-workspace-"),
+    );
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-escape-home-"));
-    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-escape-builtin-"));
+    const builtInConfigDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "mcp-registry-plugin-escape-builtin-"),
+    );
     const config = makeConfig(workspace, home, builtInConfigDir);
 
     try {
@@ -258,25 +299,33 @@ describe("mcp config registry", () => {
       await fs.mkdir(path.join(pluginRoot, ".codex-plugin"), { recursive: true });
       await fs.writeFile(
         path.join(pluginRoot, ".codex-plugin", "plugin.json"),
-        `${JSON.stringify({
-          name: "escape-toolkit",
-          description: "Plugin escape helpers",
-          interface: { displayName: "Escape Toolkit" },
-        }, null, 2)}\n`,
+        `${JSON.stringify(
+          {
+            name: "escape-toolkit",
+            description: "Plugin escape helpers",
+            interface: { displayName: "Escape Toolkit" },
+          },
+          null,
+          2,
+        )}\n`,
         "utf-8",
       );
       await fs.writeFile(
         path.join(pluginRoot, ".mcp.json"),
-        `${JSON.stringify({
-          mcpServers: {
-            escapedServer: {
-              type: "stdio",
-              command: "node",
-              args: ["../outside/server.mjs"],
-              cwd: "../outside",
+        `${JSON.stringify(
+          {
+            mcpServers: {
+              escapedServer: {
+                type: "stdio",
+                command: "node",
+                args: ["../outside/server.mjs"],
+                cwd: "../outside",
+              },
             },
           },
-        }, null, 2)}\n`,
+          null,
+          2,
+        )}\n`,
         "utf-8",
       );
 
@@ -286,7 +335,9 @@ describe("mcp config registry", () => {
       expect(snapshot.warnings).toEqual([
         expect.stringContaining("Ignoring malformed plugin MCP config"),
       ]);
-      expect(snapshot.warnings[0]).toContain('resolves argument "../outside/server.mjs" outside the plugin root');
+      expect(snapshot.warnings[0]).toContain(
+        'resolves argument "../outside/server.mjs" outside the plugin root',
+      );
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
       await fs.rm(home, { recursive: true, force: true });
@@ -295,9 +346,13 @@ describe("mcp config registry", () => {
   });
 
   test("plugin MCP stdio transports reject absolute cwd paths outside the plugin root", async () => {
-    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-absolute-cwd-workspace-"));
+    const workspace = await fs.mkdtemp(
+      path.join(os.tmpdir(), "mcp-registry-plugin-absolute-cwd-workspace-"),
+    );
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-absolute-cwd-home-"));
-    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-absolute-cwd-builtin-"));
+    const builtInConfigDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "mcp-registry-plugin-absolute-cwd-builtin-"),
+    );
     const config = makeConfig(workspace, home, builtInConfigDir);
 
     try {
@@ -305,24 +360,32 @@ describe("mcp config registry", () => {
       await fs.mkdir(path.join(pluginRoot, ".codex-plugin"), { recursive: true });
       await fs.writeFile(
         path.join(pluginRoot, ".codex-plugin", "plugin.json"),
-        `${JSON.stringify({
-          name: "absolute-cwd-toolkit",
-          description: "Plugin absolute cwd helpers",
-          interface: { displayName: "Absolute Cwd Toolkit" },
-        }, null, 2)}\n`,
+        `${JSON.stringify(
+          {
+            name: "absolute-cwd-toolkit",
+            description: "Plugin absolute cwd helpers",
+            interface: { displayName: "Absolute Cwd Toolkit" },
+          },
+          null,
+          2,
+        )}\n`,
         "utf-8",
       );
       await fs.writeFile(
         path.join(pluginRoot, ".mcp.json"),
-        `${JSON.stringify({
-          mcpServers: {
-            escapedServer: {
-              type: "stdio",
-              command: "node",
-              cwd: os.tmpdir(),
+        `${JSON.stringify(
+          {
+            mcpServers: {
+              escapedServer: {
+                type: "stdio",
+                command: "node",
+                cwd: os.tmpdir(),
+              },
             },
           },
-        }, null, 2)}\n`,
+          null,
+          2,
+        )}\n`,
         "utf-8",
       );
 
@@ -345,9 +408,13 @@ describe("mcp config registry", () => {
       // Symlinks require elevated privileges on Windows
       return;
     }
-    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-symlink-workspace-"));
+    const workspace = await fs.mkdtemp(
+      path.join(os.tmpdir(), "mcp-registry-plugin-symlink-workspace-"),
+    );
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-symlink-home-"));
-    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-symlink-builtin-"));
+    const builtInConfigDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "mcp-registry-plugin-symlink-builtin-"),
+    );
     const config = makeConfig(workspace, home, builtInConfigDir);
 
     try {
@@ -358,11 +425,15 @@ describe("mcp config registry", () => {
       await fs.mkdir(outsideRoot, { recursive: true });
       await fs.writeFile(
         path.join(pluginRoot, ".codex-plugin", "plugin.json"),
-        `${JSON.stringify({
-          name: "symlink-toolkit",
-          description: "Plugin symlink helpers",
-          interface: { displayName: "Symlink Toolkit" },
-        }, null, 2)}\n`,
+        `${JSON.stringify(
+          {
+            name: "symlink-toolkit",
+            description: "Plugin symlink helpers",
+            interface: { displayName: "Symlink Toolkit" },
+          },
+          null,
+          2,
+        )}\n`,
         "utf-8",
       );
       const outsideCommand = path.join(outsideRoot, "server.js");
@@ -374,14 +445,18 @@ describe("mcp config registry", () => {
       );
       await fs.writeFile(
         path.join(pluginRoot, ".mcp.json"),
-        `${JSON.stringify({
-          mcpServers: {
-            escapedServer: {
-              type: "stdio",
-              command: "./bin/server.js",
+        `${JSON.stringify(
+          {
+            mcpServers: {
+              escapedServer: {
+                type: "stdio",
+                command: "./bin/server.js",
+              },
             },
           },
-        }, null, 2)}\n`,
+          null,
+          2,
+        )}\n`,
         "utf-8",
       );
 
@@ -391,7 +466,7 @@ describe("mcp config registry", () => {
       expect(snapshot.warnings).toEqual([
         expect.stringContaining("Ignoring malformed plugin MCP config"),
       ]);
-      expect(snapshot.warnings[0]).toContain('resolves command outside the plugin root');
+      expect(snapshot.warnings[0]).toContain("resolves command outside the plugin root");
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
       await fs.rm(home, { recursive: true, force: true });
@@ -402,7 +477,9 @@ describe("mcp config registry", () => {
   test("upsertWorkspaceMCPServer moves workspace credential keys when renaming", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-rename-workspace-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-rename-home-"));
-    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-rename-builtin-"));
+    const builtInConfigDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "mcp-registry-rename-builtin-"),
+    );
     const config = makeConfig(workspace, home, builtInConfigDir);
 
     try {
@@ -432,7 +509,10 @@ describe("mcp config registry", () => {
         "old",
       );
 
-      const authRaw = await fs.readFile(path.join(workspace, ".cowork", "auth", "mcp-credentials.json"), "utf-8");
+      const authRaw = await fs.readFile(
+        path.join(workspace, ".cowork", "auth", "mcp-credentials.json"),
+        "utf-8",
+      );
       const authDoc = JSON.parse(authRaw) as {
         servers: Record<string, { apiKey?: { value?: string } }>;
       };
@@ -448,7 +528,9 @@ describe("mcp config registry", () => {
   test("upsertWorkspaceMCPServer rejects rename when target name already exists", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-rename-collision-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-rename-collision-home-"));
-    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-rename-collision-builtin-"));
+    const builtInConfigDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "mcp-registry-rename-collision-builtin-"),
+    );
     const config = makeConfig(workspace, home, builtInConfigDir);
 
     try {
@@ -471,7 +553,9 @@ describe("mcp config registry", () => {
 
       // Verify neither entry was corrupted
       const raw = await fs.readFile(path.join(workspace, ".cowork", "mcp-servers.json"), "utf-8");
-      const doc = JSON.parse(raw) as { servers: Array<{ name: string; transport: { command: string; args?: string[] } }> };
+      const doc = JSON.parse(raw) as {
+        servers: Array<{ name: string; transport: { command: string; args?: string[] } }>;
+      };
       const names = doc.servers.map((s) => s.name);
       expect(names).toContain("server-a");
       expect(names).toContain("server-b");
@@ -486,7 +570,9 @@ describe("mcp config registry", () => {
   test("new-format config overrides legacy for same server name", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-override-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-override-home-"));
-    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-override-builtin-"));
+    const builtInConfigDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "mcp-registry-override-builtin-"),
+    );
     const config = makeConfig(workspace, home, builtInConfigDir);
 
     try {
@@ -511,12 +597,16 @@ describe("mcp config registry", () => {
   test("user legacy servers are included when no user new-format equivalent exists", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-user-legacy-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-user-legacy-home-"));
-    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-user-legacy-builtin-"));
+    const builtInConfigDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "mcp-registry-user-legacy-builtin-"),
+    );
     const config = makeConfig(workspace, home, builtInConfigDir);
 
     try {
       await writeJson(path.join(home, ".agent", "mcp-servers.json"), {
-        servers: [{ name: "user-legacy-server", transport: { type: "stdio", command: "user-legacy-cmd" } }],
+        servers: [
+          { name: "user-legacy-server", transport: { type: "stdio", command: "user-legacy-cmd" } },
+        ],
       });
 
       const snapshot = await loadMCPConfigRegistry(config);
@@ -538,7 +628,9 @@ describe("mcp config registry", () => {
   test("migrateLegacyMCPServers preserves existing .cowork entries and archives legacy file", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-migrate-workspace-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-migrate-home-"));
-    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-migrate-builtin-"));
+    const builtInConfigDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "mcp-registry-migrate-builtin-"),
+    );
     const config = makeConfig(workspace, home, builtInConfigDir);
 
     try {

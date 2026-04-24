@@ -1,6 +1,6 @@
+import { Select as HeroSelect, Separator as HeroSeparator, ListBox } from "@heroui/react";
 import * as React from "react";
 import { Header } from "react-aria-components";
-import { ListBox, Select as HeroSelect, Separator as HeroSeparator } from "@heroui/react";
 
 import { cn } from "@/lib/utils";
 
@@ -22,14 +22,7 @@ type SelectProps = Omit<
   onValueChange?: (value: string) => void;
 };
 
-function Select({
-  value,
-  defaultValue,
-  disabled,
-  children,
-  onValueChange,
-  ...props
-}: SelectProps) {
+function Select({ value, defaultValue, disabled, children, onValueChange, ...props }: SelectProps) {
   return (
     <HeroSelect
       data-slot="select"
@@ -68,18 +61,9 @@ type SelectValueProps = Omit<HeroSelectValueProps, "children"> & {
   placeholder?: React.ReactNode;
 };
 
-function SelectValue({
-  className,
-  children,
-  placeholder,
-  ...props
-}: SelectValueProps) {
+function SelectValue({ className, children, placeholder, ...props }: SelectValueProps) {
   return (
-    <HeroSelect.Value
-      data-slot="select-value"
-      className={cn("truncate", className)}
-      {...props}
-    >
+    <HeroSelect.Value data-slot="select-value" className={cn("truncate", className)} {...props}>
       {(values: { defaultChildren?: React.ReactNode; isPlaceholder?: boolean }) => {
         if (values.isPlaceholder && placeholder !== undefined) {
           return placeholder;
@@ -119,12 +103,7 @@ function SelectTrigger({
       )}
       {...props}
     >
-      <span
-        className={cn(
-          "min-w-0 overflow-hidden text-left",
-          compact ? "pr-0.5" : "flex-1",
-        )}
-      >
+      <span className={cn("min-w-0 overflow-hidden text-left", compact ? "pr-0.5" : "flex-1")}>
         {children}
       </span>
       <HeroSelect.Indicator className="!relative !right-auto !top-auto !translate-y-0 size-4 shrink-0 justify-self-end opacity-60" />
@@ -173,11 +152,7 @@ function SelectContent({
 
 type SelectLabelProps = React.HTMLAttributes<HTMLDivElement>;
 
-function SelectLabel({
-  className,
-  children,
-  ...props
-}: SelectLabelProps) {
+function SelectLabel({ className, children, ...props }: SelectLabelProps) {
   return (
     <Header
       data-slot="select-label"
@@ -211,12 +186,7 @@ function flattenSelectItemText(children: React.ReactNode): string {
     .trim();
 }
 
-function SelectItem({
-  className,
-  children,
-  textValue,
-  value,
-}: SelectItemProps) {
+function SelectItem({ className, children, textValue, value }: SelectItemProps) {
   const resolvedTextValue = (textValue ?? flattenSelectItemText(children)) || value;
 
   return (

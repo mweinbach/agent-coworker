@@ -87,8 +87,14 @@ function probeWebSocket(url: string, timeoutMs = 4000): Promise<void> {
   });
 }
 
-export function ConnectPage({ onConnect, initialError = null, initialServerUrl = null }: ConnectPageProps) {
-  const defaultUrl = normalizeWebServerUrl(initialServerUrl ?? getSavedServerUrl() ?? deriveSameOriginServerUrl());
+export function ConnectPage({
+  onConnect,
+  initialError = null,
+  initialServerUrl = null,
+}: ConnectPageProps) {
+  const defaultUrl = normalizeWebServerUrl(
+    initialServerUrl ?? getSavedServerUrl() ?? deriveSameOriginServerUrl(),
+  );
   const [serverUrl, setServerUrl] = useState(defaultUrl);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -140,7 +146,9 @@ export function ConnectPage({ onConnect, initialError = null, initialServerUrl =
         setStatus("Finding workspace…");
         const workspaces = await fetchServerWorkspaces(normalizedUrl);
         if (workspaces.length === 0) {
-          throw new Error("Server is running but reports no workspace. Restart it with --dir <path>.");
+          throw new Error(
+            "Server is running but reports no workspace. Restart it with --dir <path>.",
+          );
         }
         if (workspaces.length > 1) {
           // Surface the picker; don't auto-pick.
@@ -278,7 +286,9 @@ export function ConnectPage({ onConnect, initialError = null, initialServerUrl =
         ) : null}
 
         {error ? (
-          <p style={{ fontSize: 12, color: "var(--danger)", margin: 0, marginBottom: 12 }}>{error}</p>
+          <p style={{ fontSize: 12, color: "var(--danger)", margin: 0, marginBottom: 12 }}>
+            {error}
+          </p>
         ) : null}
 
         <button
@@ -336,7 +346,8 @@ export function ConnectPage({ onConnect, initialError = null, initialServerUrl =
                 margin: 0,
               }}
             >
-              Defaults to same-origin via the Vite dev proxy. Override to point at a different Cowork server.
+              Defaults to same-origin via the Vite dev proxy. Override to point at a different
+              Cowork server.
             </p>
           </>
         ) : null}

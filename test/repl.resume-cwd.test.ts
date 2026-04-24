@@ -71,7 +71,9 @@ class FakeWebSocket {
 
     if (parsed?.method === "initialize" && parsed?.id != null) {
       queueMicrotask(() => {
-        this.onmessage?.({ data: JSON.stringify({ id: parsed.id, result: { serverInfo: { name: "test" } } }) });
+        this.onmessage?.({
+          data: JSON.stringify({ id: parsed.id, result: { serverInfo: { name: "test" } } }),
+        });
       });
       return;
     }
@@ -103,56 +105,57 @@ class FakeWebSocket {
     }
 
     if (
-      (parsed?.method === "cowork/session/state/read"
-        || parsed?.method === "cowork/provider/catalog/read"
-        || parsed?.method === "cowork/provider/authMethods/read")
-      && parsed?.id != null
+      (parsed?.method === "cowork/session/state/read" ||
+        parsed?.method === "cowork/provider/catalog/read" ||
+        parsed?.method === "cowork/provider/authMethods/read") &&
+      parsed?.id != null
     ) {
       metadataRequests.push({
         method: parsed.method,
         cwd: String(parsed.params?.cwd ?? ""),
       });
 
-      const result = parsed.method === "cowork/session/state/read"
-        ? {
-            events: [
-              {
-                type: "config_updated",
-                sessionId: "thread-remote",
-                config: {
-                  provider: "openai",
-                  model: "gpt-5.4",
-                  workingDirectory: resumedThreadCwd,
-                },
-              },
-              {
-                type: "session_config",
-                sessionId: "thread-remote",
-                config: {
-                  enableMemory: true,
-                },
-              },
-            ],
-          }
-        : parsed.method === "cowork/provider/catalog/read"
+      const result =
+        parsed.method === "cowork/session/state/read"
           ? {
-              event: {
-                type: "provider_catalog",
-                sessionId: "thread-remote",
-                all: [{ id: "openai" }],
-                default: { openai: "gpt-5.4" },
-                connected: ["openai"],
-              },
-            }
-          : {
-              event: {
-                type: "provider_auth_methods",
-                sessionId: "thread-remote",
-                methods: {
-                  openai: [{ id: "api_key", type: "api", label: "API key" }],
+              events: [
+                {
+                  type: "config_updated",
+                  sessionId: "thread-remote",
+                  config: {
+                    provider: "openai",
+                    model: "gpt-5.4",
+                    workingDirectory: resumedThreadCwd,
+                  },
                 },
-              },
-            };
+                {
+                  type: "session_config",
+                  sessionId: "thread-remote",
+                  config: {
+                    enableMemory: true,
+                  },
+                },
+              ],
+            }
+          : parsed.method === "cowork/provider/catalog/read"
+            ? {
+                event: {
+                  type: "provider_catalog",
+                  sessionId: "thread-remote",
+                  all: [{ id: "openai" }],
+                  default: { openai: "gpt-5.4" },
+                  connected: ["openai"],
+                },
+              }
+            : {
+                event: {
+                  type: "provider_auth_methods",
+                  sessionId: "thread-remote",
+                  methods: {
+                    openai: [{ id: "api_key", type: "api", label: "API key" }],
+                  },
+                },
+              };
       queueMicrotask(() => {
         this.onmessage?.({ data: JSON.stringify({ id: parsed.id, result }) });
       });

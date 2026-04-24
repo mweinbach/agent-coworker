@@ -162,7 +162,9 @@ export function buildDirectoryTreeLines(rootAbs: string, displayRootLabel: strin
   }
 
   const lines: string[] = [];
-  const normalizedLabel = displayRootLabel.endsWith(path.sep) ? displayRootLabel.slice(0, -1) : displayRootLabel;
+  const normalizedLabel = displayRootLabel.endsWith(path.sep)
+    ? displayRootLabel.slice(0, -1)
+    : displayRootLabel;
   lines.push(`${sanitizeWorkspaceMapLabel(normalizedLabel)}/`);
 
   function walk(absDir: string, indent: string, treeDepth: number): void {
@@ -210,9 +212,9 @@ function collectMapRoots(config: AgentConfig, platform: NodeJS.Platform): MapRoo
   }
 
   if (
-    git
-    && !sameWorkspacePath(git, workspaceRoot, platform)
-    && !sameWorkspacePath(git, working, platform)
+    git &&
+    !sameWorkspacePath(git, workspaceRoot, platform) &&
+    !sameWorkspacePath(git, working, platform)
   ) {
     roots.push({ abs: git, heading: "Git repository root" });
   }
@@ -224,7 +226,10 @@ function collectMapRoots(config: AgentConfig, platform: NodeJS.Platform): MapRoo
  * Returns a markdown section (## Workspace Map …) with bounded directory trees (names only).
  * Omits duplicate trees when workspace, working directory, and git root coincide.
  */
-export function buildWorkspaceMapSection(config: AgentConfig, platform: NodeJS.Platform = process.platform): string {
+export function buildWorkspaceMapSection(
+  config: AgentConfig,
+  platform: NodeJS.Platform = process.platform,
+): string {
   const roots = collectMapRoots(config, platform);
   const intro = [
     "## Workspace Map",
@@ -244,9 +249,7 @@ export function buildWorkspaceMapSection(config: AgentConfig, platform: NodeJS.P
     const { abs, heading } = roots[i]!;
     const label = path.basename(abs) || abs;
     const subheading =
-      roots.length === 1
-        ? ""
-        : `### ${heading}\n\n\`${sanitizeWorkspaceMapLabel(abs)}\`\n\n`;
+      roots.length === 1 ? "" : `### ${heading}\n\n\`${sanitizeWorkspaceMapLabel(abs)}\`\n\n`;
     const fenceOpen = "```\n";
     const fenceClose = "\n```";
     const overhead = subheading.length + fenceOpen.length + fenceClose.length;

@@ -5,7 +5,10 @@ import path from "node:path";
 
 import { DESKTOP_IPC_CHANNELS } from "../src/lib/desktopApi";
 
-const showSaveDialogMock = mock(async () => ({ canceled: true, filePath: undefined as string | undefined }));
+const showSaveDialogMock = mock(async () => ({
+  canceled: true,
+  filePath: undefined as string | undefined,
+}));
 const getDownloadsPathMock = mock(() => path.join(os.tmpdir(), "cowork-downloads"));
 
 mock.module("electron", () => ({
@@ -46,7 +49,10 @@ describe("files IPC", () => {
     const sourcePath = path.join(tempWorkspace, "report.pdf");
     await fs.writeFile(sourcePath, "pdf payload", "utf-8");
 
-    const handlers = new Map<string, (event: unknown, args?: unknown) => Promise<unknown> | unknown>();
+    const handlers = new Map<
+      string,
+      (event: unknown, args?: unknown) => Promise<unknown> | unknown
+    >();
     registerFilesIpc({
       deps: {} as never,
       workspaceRoots: {
@@ -71,14 +77,20 @@ describe("files IPC", () => {
       },
     });
 
-    showSaveDialogMock.mockImplementationOnce(async () => ({ canceled: true, filePath: undefined }));
+    showSaveDialogMock.mockImplementationOnce(async () => ({
+      canceled: true,
+      filePath: undefined,
+    }));
     const handler = handlers.get(DESKTOP_IPC_CHANNELS.saveExportedFile);
     expect(handler).toBeDefined();
 
-    const result = await handler?.({ sender: {} }, {
-      sourcePath,
-      defaultFileName: "Research title.pdf",
-    });
+    const result = await handler?.(
+      { sender: {} },
+      {
+        sourcePath,
+        defaultFileName: "Research title.pdf",
+      },
+    );
 
     expect(result).toBeNull();
     await fs.rm(tempWorkspace, { recursive: true, force: true });
@@ -90,7 +102,10 @@ describe("files IPC", () => {
     const sourcePath = path.join(tempWorkspace, "report.pdf");
     await fs.writeFile(sourcePath, "pdf payload", "utf-8");
 
-    const handlers = new Map<string, (event: unknown, args?: unknown) => Promise<unknown> | unknown>();
+    const handlers = new Map<
+      string,
+      (event: unknown, args?: unknown) => Promise<unknown> | unknown
+    >();
     registerFilesIpc({
       deps: {} as never,
       workspaceRoots: {
@@ -124,10 +139,13 @@ describe("files IPC", () => {
     const handler = handlers.get(DESKTOP_IPC_CHANNELS.saveExportedFile);
     expect(handler).toBeDefined();
 
-    await handler?.({ sender: {} }, {
-      sourcePath,
-      defaultFileName: "Research title.pdf",
-    });
+    await handler?.(
+      { sender: {} },
+      {
+        sourcePath,
+        defaultFileName: "Research title.pdf",
+      },
+    );
 
     const [firstCallArgs] = showSaveDialogMock.mock.calls.slice(-1);
     expect(firstCallArgs).toHaveLength(1);
@@ -146,7 +164,10 @@ describe("files IPC", () => {
     const destinationPath = path.join(tempDownloads, "Research title.docx");
     await fs.writeFile(sourcePath, "docx payload", "utf-8");
 
-    const handlers = new Map<string, (event: unknown, args?: unknown) => Promise<unknown> | unknown>();
+    const handlers = new Map<
+      string,
+      (event: unknown, args?: unknown) => Promise<unknown> | unknown
+    >();
     registerFilesIpc({
       deps: {} as never,
       workspaceRoots: {
@@ -180,10 +201,13 @@ describe("files IPC", () => {
     const handler = handlers.get(DESKTOP_IPC_CHANNELS.saveExportedFile);
     expect(handler).toBeDefined();
 
-    const result = await handler?.({ sender: {} }, {
-      sourcePath,
-      defaultFileName: "Research title.docx",
-    });
+    const result = await handler?.(
+      { sender: {} },
+      {
+        sourcePath,
+        defaultFileName: "Research title.docx",
+      },
+    );
 
     expect(result).toBe(destinationPath);
     expect(await fs.readFile(destinationPath, "utf-8")).toBe("docx payload");
@@ -198,7 +222,10 @@ describe("files IPC", () => {
     const sourcePath = path.join(outsideDir, "report.pdf");
     await fs.writeFile(sourcePath, "pdf payload", "utf-8");
 
-    const handlers = new Map<string, (event: unknown, args?: unknown) => Promise<unknown> | unknown>();
+    const handlers = new Map<
+      string,
+      (event: unknown, args?: unknown) => Promise<unknown> | unknown
+    >();
     registerFilesIpc({
       deps: {} as never,
       workspaceRoots: {
@@ -227,10 +254,13 @@ describe("files IPC", () => {
     expect(handler).toBeDefined();
 
     await expect(
-      handler?.({ sender: {} }, {
-        sourcePath,
-        defaultFileName: "Research title.pdf",
-      }),
+      handler?.(
+        { sender: {} },
+        {
+          sourcePath,
+          defaultFileName: "Research title.pdf",
+        },
+      ),
     ).rejects.toThrow("outside allowed workspace roots");
 
     await fs.rm(tempWorkspace, { recursive: true, force: true });

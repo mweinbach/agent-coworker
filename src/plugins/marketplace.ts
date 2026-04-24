@@ -1,41 +1,57 @@
 import path from "node:path";
 import { z } from "zod";
 
-import { canonicalizePathForBoundaryCheckSync, isPathInside, resolveMaybeRelative } from "../utils/paths";
+import {
+  canonicalizePathForBoundaryCheckSync,
+  isPathInside,
+  resolveMaybeRelative,
+} from "../utils/paths";
 
 const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
 
-const marketplaceSourceSchema = z.object({
-  source: z.literal("local"),
-  path: nonEmptyTrimmedStringSchema,
-}).strict();
+const marketplaceSourceSchema = z
+  .object({
+    source: z.literal("local"),
+    path: nonEmptyTrimmedStringSchema,
+  })
+  .strict();
 
-const marketplacePluginPolicySchema = z.object({
-  installation: nonEmptyTrimmedStringSchema,
-  authentication: nonEmptyTrimmedStringSchema,
-}).strict();
+const marketplacePluginPolicySchema = z
+  .object({
+    installation: nonEmptyTrimmedStringSchema,
+    authentication: nonEmptyTrimmedStringSchema,
+  })
+  .strict();
 
-const marketplacePluginInterfaceSchema = z.object({
-  displayName: nonEmptyTrimmedStringSchema.optional(),
-}).strict();
+const marketplacePluginInterfaceSchema = z
+  .object({
+    displayName: nonEmptyTrimmedStringSchema.optional(),
+  })
+  .strict();
 
-const marketplacePluginEntrySchema = z.object({
-  name: nonEmptyTrimmedStringSchema,
-  source: marketplaceSourceSchema,
-  policy: marketplacePluginPolicySchema,
-  category: nonEmptyTrimmedStringSchema,
-  interface: marketplacePluginInterfaceSchema.optional(),
-}).strict();
+const marketplacePluginEntrySchema = z
+  .object({
+    name: nonEmptyTrimmedStringSchema,
+    source: marketplaceSourceSchema,
+    policy: marketplacePluginPolicySchema,
+    category: nonEmptyTrimmedStringSchema,
+    interface: marketplacePluginInterfaceSchema.optional(),
+  })
+  .strict();
 
-const marketplaceInterfaceSchema = z.object({
-  displayName: nonEmptyTrimmedStringSchema.optional(),
-}).strict();
+const marketplaceInterfaceSchema = z
+  .object({
+    displayName: nonEmptyTrimmedStringSchema.optional(),
+  })
+  .strict();
 
-const marketplaceDocumentSchema = z.object({
-  name: nonEmptyTrimmedStringSchema,
-  interface: marketplaceInterfaceSchema.optional(),
-  plugins: z.array(marketplacePluginEntrySchema),
-}).strict();
+const marketplaceDocumentSchema = z
+  .object({
+    name: nonEmptyTrimmedStringSchema,
+    interface: marketplaceInterfaceSchema.optional(),
+    plugins: z.array(marketplacePluginEntrySchema),
+  })
+  .strict();
 
 export interface ParsedMarketplacePluginEntry {
   name: string;
@@ -61,7 +77,10 @@ function formatZodError(error: z.ZodError): string {
   return `${issuePath}: ${issue.message}`;
 }
 
-export function parsePluginMarketplace(rawJson: string, marketplacePath: string): ParsedMarketplaceDocument {
+export function parsePluginMarketplace(
+  rawJson: string,
+  marketplacePath: string,
+): ParsedMarketplaceDocument {
   let parsed: unknown;
   try {
     parsed = JSON.parse(rawJson);
@@ -102,7 +121,9 @@ export function parsePluginMarketplace(rawJson: string, marketplacePath: string)
 
   return {
     name: validated.data.name,
-    ...(validated.data.interface?.displayName ? { displayName: validated.data.interface.displayName } : {}),
+    ...(validated.data.interface?.displayName
+      ? { displayName: validated.data.interface.displayName }
+      : {}),
     marketplacePath: path.resolve(marketplacePath),
     marketplaceRootDir,
     plugins,

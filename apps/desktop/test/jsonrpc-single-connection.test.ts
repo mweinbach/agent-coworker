@@ -32,7 +32,12 @@ class MockJsonRpcSocket {
   static instances: MockJsonRpcSocket[] = [];
   readonly readyPromise = Promise.resolve();
 
-  constructor(public readonly opts: { onOpen?: () => void; onNotification?: (message: { method: string; params?: unknown }) => void }) {
+  constructor(
+    public readonly opts: {
+      onOpen?: () => void;
+      onNotification?: (message: { method: string; params?: unknown }) => void;
+    },
+  ) {
     MockJsonRpcSocket.instances.push(this);
   }
 
@@ -125,7 +130,8 @@ class MockJsonRpcSocket {
       const event = {
         type: "session_info",
         sessionId: "jsonrpc-thread-1",
-        title: params && typeof (params as any).title === "string" ? (params as any).title : "Renamed",
+        title:
+          params && typeof (params as any).title === "string" ? (params as any).title : "Renamed",
         titleSource: "manual",
         titleModel: null,
         createdAt: "2026-03-21T00:00:00.000Z",
@@ -165,7 +171,8 @@ class MockJsonRpcSocket {
       };
     }
     if (method === "cowork/session/defaults/apply") {
-      const threadId = typeof (params as any)?.threadId === "string" ? (params as any).threadId : null;
+      const threadId =
+        typeof (params as any)?.threadId === "string" ? (params as any).threadId : null;
       const configEvent = {
         type: "session_config",
         sessionId: threadId ?? "jsonrpc-control",
@@ -187,7 +194,10 @@ class MockJsonRpcSocket {
         },
       };
       if (threadId) {
-        if (typeof (params as any)?.provider === "string" && typeof (params as any)?.model === "string") {
+        if (
+          typeof (params as any)?.provider === "string" &&
+          typeof (params as any)?.model === "string"
+        ) {
           this.notify("cowork/session/configUpdated", {
             type: "config_updated",
             sessionId: threadId,
@@ -218,7 +228,9 @@ class MockJsonRpcSocket {
         event: {
           type: "provider_catalog",
           sessionId: "jsonrpc-control",
-          all: [{ id: "google", name: "Google", models: [], defaultModel: "gemini-3.1-pro-preview" }],
+          all: [
+            { id: "google", name: "Google", models: [], defaultModel: "gemini-3.1-pro-preview" },
+          ],
           default: { google: "gemini-3.1-pro-preview" },
           connected: ["google"],
         },
@@ -229,7 +241,15 @@ class MockJsonRpcSocket {
         event: {
           type: "memory_list",
           sessionId: "jsonrpc-control",
-          memories: [{ id: "mem-1", scope: "workspace", content: "Remember this", createdAt: "2026-03-21T00:00:00.000Z", updatedAt: "2026-03-21T00:00:00.000Z" }],
+          memories: [
+            {
+              id: "mem-1",
+              scope: "workspace",
+              content: "Remember this",
+              createdAt: "2026-03-21T00:00:00.000Z",
+              updatedAt: "2026-03-21T00:00:00.000Z",
+            },
+          ],
         },
       };
     }
@@ -262,7 +282,11 @@ class MockJsonRpcSocket {
         event: {
           type: "skills_catalog",
           sessionId: "jsonrpc-control",
-          catalog: { installations: [], sources: [], stats: { totalInstallations: 0, enabledInstallations: 0 } },
+          catalog: {
+            installations: [],
+            sources: [],
+            stats: { totalInstallations: 0, enabledInstallations: 0 },
+          },
           mutationBlocked: false,
         },
       };
@@ -286,54 +310,62 @@ class MockJsonRpcSocket {
   close() {}
 }
 
-mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
-  appendTranscriptBatch: async () => {},
-  appendTranscriptEvent: async () => {},
-  deleteTranscript: async () => {},
-  listDirectory: async () => [],
-  loadState: async () => ({ version: 2, workspaces: [], threads: [] }),
-  pickWorkspaceDirectory: async () => null,
-  readTranscript: async () => [],
-  saveState: async (state: any) => {
-    savedStates.push(state);
-  },
-  startWorkspaceServer: async (opts: { workspaceId: string; workspacePath: string; yolo: boolean }) => {
-    startCalls.push(opts);
-    return { url: "ws://jsonrpc-workspace" };
-  },
-  stopWorkspaceServer: async () => {},
-  showContextMenu: async () => null,
-  windowMinimize: async () => {},
-  windowMaximize: async () => {},
-  windowClose: async () => {},
-  getPlatform: async () => "linux",
-  readFile: async () => "",
-  previewOSFile: async () => {},
-  openPath: async () => {},
-  openExternalUrl: async () => {},
-  revealPath: async () => {},
-  copyPath: async () => {},
-  createDirectory: async () => {},
-  renamePath: async () => {},
-  trashPath: async () => {},
-  confirmAction: async () => true,
-  showNotification: async () => true,
-  getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  getUpdateState: async () => MOCK_UPDATE_STATE,
-  checkForUpdates: async () => {},
-  quitAndInstallUpdate: async () => {},
-  onSystemAppearanceChanged: () => () => {},
-  onMenuCommand: () => () => {},
-  onUpdateStateChanged: () => () => {},
-}));
+mock.module("../src/lib/desktopCommands", () =>
+  createDesktopCommandsMock({
+    appendTranscriptBatch: async () => {},
+    appendTranscriptEvent: async () => {},
+    deleteTranscript: async () => {},
+    listDirectory: async () => [],
+    loadState: async () => ({ version: 2, workspaces: [], threads: [] }),
+    pickWorkspaceDirectory: async () => null,
+    readTranscript: async () => [],
+    saveState: async (state: any) => {
+      savedStates.push(state);
+    },
+    startWorkspaceServer: async (opts: {
+      workspaceId: string;
+      workspacePath: string;
+      yolo: boolean;
+    }) => {
+      startCalls.push(opts);
+      return { url: "ws://jsonrpc-workspace" };
+    },
+    stopWorkspaceServer: async () => {},
+    showContextMenu: async () => null,
+    windowMinimize: async () => {},
+    windowMaximize: async () => {},
+    windowClose: async () => {},
+    getPlatform: async () => "linux",
+    readFile: async () => "",
+    previewOSFile: async () => {},
+    openPath: async () => {},
+    openExternalUrl: async () => {},
+    revealPath: async () => {},
+    copyPath: async () => {},
+    createDirectory: async () => {},
+    renamePath: async () => {},
+    trashPath: async () => {},
+    confirmAction: async () => true,
+    showNotification: async () => true,
+    getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    getUpdateState: async () => MOCK_UPDATE_STATE,
+    checkForUpdates: async () => {},
+    quitAndInstallUpdate: async () => {},
+    onSystemAppearanceChanged: () => () => {},
+    onMenuCommand: () => () => {},
+    onUpdateStateChanged: () => () => {},
+  }),
+);
 
 mock.module("../src/lib/agentSocket", () => ({
   JsonRpcSocket: MockJsonRpcSocket,
 }));
 
 const { useAppStore } = await import("../src/app/store");
-const { RUNTIME, defaultThreadRuntime, defaultWorkspaceRuntime } = await import("../src/app/store.helpers/runtimeState");
+const { RUNTIME, defaultThreadRuntime, defaultWorkspaceRuntime } = await import(
+  "../src/app/store.helpers/runtimeState"
+);
 
 async function flushAsyncWork() {
   for (let i = 0; i < 8; i += 1) {
@@ -480,9 +512,8 @@ describe("desktop JSON-RPC single connection path", () => {
       "thread/read",
       "turn/start",
     ]);
-    const turnStartParams = jsonRpcRequests.find((entry) => entry.method === "turn/start")?.params as
-      | { threadId?: string; clientMessageId?: string }
-      | undefined;
+    const turnStartParams = jsonRpcRequests.find((entry) => entry.method === "turn/start")
+      ?.params as { threadId?: string; clientMessageId?: string } | undefined;
     expect(turnStartParams?.threadId).toBe("jsonrpc-thread-1");
     expect(turnStartParams?.clientMessageId).toEqual(expect.any(String));
 
@@ -542,7 +573,9 @@ describe("desktop JSON-RPC single connection path", () => {
     expect(firstAccepted).toBe(true);
     expect(secondAccepted).toBe(false);
     expect(jsonRpcRequests.filter((entry) => entry.method === "turn/start")).toHaveLength(1);
-    expect(useAppStore.getState().threadRuntimeById["jsonrpc-thread-1"]?.pendingTurnStart).toMatchObject({
+    expect(
+      useAppStore.getState().threadRuntimeById["jsonrpc-thread-1"]?.pendingTurnStart,
+    ).toMatchObject({
       text: "hello over jsonrpc",
       status: "sending",
     });
@@ -685,44 +718,61 @@ describe("desktop JSON-RPC single connection path", () => {
       },
     } as any);
 
-    await useAppStore.getState().sendMessage("", "steer", [{
-      filename: "first.png",
-      contentBase64: "Zmlyc3Q=",
-      mimeType: "image/png",
-    }]);
+    await useAppStore.getState().sendMessage("", "steer", [
+      {
+        filename: "first.png",
+        contentBase64: "Zmlyc3Q=",
+        mimeType: "image/png",
+      },
+    ]);
     await flushAsyncWork();
-    useAppStore.setState((state) => ({
-      selectedWorkspaceId: "ws-jsonrpc",
-      selectedThreadId: "jsonrpc-thread-1",
-      workspaces: state.workspaces.length > 0 ? state.workspaces : [{
-        id: "ws-jsonrpc",
-        name: "JSON-RPC Workspace",
-        path: "/tmp/jsonrpc-workspace",
-        createdAt: "2026-03-21T00:00:00.000Z",
-        lastOpenedAt: "2026-03-21T00:00:00.000Z",
-        wsProtocol: "jsonrpc",
-        defaultEnableMcp: true,
-        defaultBackupsEnabled: true,
-        yolo: false,
-      }],
-      threads: state.threads.length > 0 ? state.threads : [{
-        id: "jsonrpc-thread-1",
-        workspaceId: "ws-jsonrpc",
-        title: "New session",
-        createdAt: "2026-03-21T00:00:00.000Z",
-        lastMessageAt: "2026-03-21T00:00:00.000Z",
-        status: "active",
-        sessionId: "jsonrpc-thread-1",
-        messageCount: 0,
-        lastEventSeq: 0,
-      }],
-    }) as any);
+    useAppStore.setState(
+      (state) =>
+        ({
+          selectedWorkspaceId: "ws-jsonrpc",
+          selectedThreadId: "jsonrpc-thread-1",
+          workspaces:
+            state.workspaces.length > 0
+              ? state.workspaces
+              : [
+                  {
+                    id: "ws-jsonrpc",
+                    name: "JSON-RPC Workspace",
+                    path: "/tmp/jsonrpc-workspace",
+                    createdAt: "2026-03-21T00:00:00.000Z",
+                    lastOpenedAt: "2026-03-21T00:00:00.000Z",
+                    wsProtocol: "jsonrpc",
+                    defaultEnableMcp: true,
+                    defaultBackupsEnabled: true,
+                    yolo: false,
+                  },
+                ],
+          threads:
+            state.threads.length > 0
+              ? state.threads
+              : [
+                  {
+                    id: "jsonrpc-thread-1",
+                    workspaceId: "ws-jsonrpc",
+                    title: "New session",
+                    createdAt: "2026-03-21T00:00:00.000Z",
+                    lastMessageAt: "2026-03-21T00:00:00.000Z",
+                    status: "active",
+                    sessionId: "jsonrpc-thread-1",
+                    messageCount: 0,
+                    lastEventSeq: 0,
+                  },
+                ],
+        }) as any,
+    );
 
-    const secondAccepted = await useAppStore.getState().sendMessage("", "steer", [{
-      filename: "second.png",
-      contentBase64: "c2Vjb25k",
-      mimeType: "image/png",
-    }]);
+    const secondAccepted = await useAppStore.getState().sendMessage("", "steer", [
+      {
+        filename: "second.png",
+        contentBase64: "c2Vjb25k",
+        mimeType: "image/png",
+      },
+    ]);
     await flushAsyncWork();
 
     expect(secondAccepted).toBe(true);
@@ -805,7 +855,9 @@ describe("desktop JSON-RPC single connection path", () => {
     await flushAsyncWork();
 
     useAppStore.getState().renameThread("jsonrpc-thread-1", "Renamed thread");
-    useAppStore.getState().setThreadModel("jsonrpc-thread-1", "google", "gemini-3.1-flash-lite-preview");
+    useAppStore
+      .getState()
+      .setThreadModel("jsonrpc-thread-1", "google", "gemini-3.1-flash-lite-preview");
     useAppStore.getState().clearThreadUsageHardCap("jsonrpc-thread-1");
     await useAppStore.getState().updateWorkspaceDefaults("ws-jsonrpc", {
       defaultEnableMcp: false,
@@ -836,7 +888,9 @@ describe("desktop JSON-RPC single connection path", () => {
     ]);
 
     const runtime = useAppStore.getState().threadRuntimeById["jsonrpc-thread-1"];
-    expect(useAppStore.getState().threads.find((thread) => thread.id === "jsonrpc-thread-1")?.title).toBe("Renamed thread");
+    expect(
+      useAppStore.getState().threads.find((thread) => thread.id === "jsonrpc-thread-1")?.title,
+    ).toBe("Renamed thread");
     expect(runtime?.enableMcp).toBe(false);
   });
 
@@ -862,20 +916,30 @@ describe("desktop JSON-RPC single connection path", () => {
       "thread/read",
       "turn/start",
     ]);
-    expect(jsonRpcRequests.find((entry) => entry.method === "cowork/session/defaults/apply")?.params).toMatchObject({
+    expect(
+      jsonRpcRequests.find((entry) => entry.method === "cowork/session/defaults/apply")?.params,
+    ).toMatchObject({
       threadId: "jsonrpc-thread-1",
       provider: "openai",
       model: "gpt-5.4-mini",
     });
-    expect(useAppStore.getState().threadRuntimeById["jsonrpc-thread-1"]?.config?.model).toBe("gpt-5.4-mini");
-    expect(useAppStore.getState().threadRuntimeById["jsonrpc-thread-1"]?.config?.provider).toBe("openai");
+    expect(useAppStore.getState().threadRuntimeById["jsonrpc-thread-1"]?.config?.model).toBe(
+      "gpt-5.4-mini",
+    );
+    expect(useAppStore.getState().threadRuntimeById["jsonrpc-thread-1"]?.config?.provider).toBe(
+      "openai",
+    );
   });
 
   test("delayed thread/read does not clobber optimistic first-message feed items", async () => {
     let resolveThreadRead: ((value: unknown) => void) | null = null;
-    jsonRpcRequestHandlers.set("thread/read", async () => await new Promise((resolve) => {
-      resolveThreadRead = resolve;
-    }));
+    jsonRpcRequestHandlers.set(
+      "thread/read",
+      async () =>
+        await new Promise((resolve) => {
+          resolveThreadRead = resolve;
+        }),
+    );
 
     const newThreadPromise = useAppStore.getState().newThread({
       workspaceId: "ws-jsonrpc",
@@ -889,18 +953,19 @@ describe("desktop JSON-RPC single connection path", () => {
     const socket = MockJsonRpcSocket.instances[0];
     expect(socket).toBeDefined();
 
-    const turnStartParams = jsonRpcRequests.find((entry) => entry.method === "turn/start")?.params as
-      | { clientMessageId?: string }
-      | undefined;
+    const turnStartParams = jsonRpcRequests.find((entry) => entry.method === "turn/start")
+      ?.params as { clientMessageId?: string } | undefined;
     expect(turnStartParams?.clientMessageId).toEqual(expect.any(String));
 
     const optimisticRuntime = useAppStore.getState().threadRuntimeById["jsonrpc-thread-1"];
-    expect(optimisticRuntime?.feed).toContainEqual(expect.objectContaining({
-      id: turnStartParams?.clientMessageId,
-      kind: "message",
-      role: "user",
-      text: "hello over jsonrpc",
-    }));
+    expect(optimisticRuntime?.feed).toContainEqual(
+      expect.objectContaining({
+        id: turnStartParams?.clientMessageId,
+        kind: "message",
+        role: "user",
+        text: "hello over jsonrpc",
+      }),
+    );
 
     socket.notify("turn/started", {
       threadId: "jsonrpc-thread-1",
@@ -957,16 +1022,20 @@ describe("desktop JSON-RPC single connection path", () => {
     await flushAsyncWork();
 
     const runtime = useAppStore.getState().threadRuntimeById["jsonrpc-thread-1"];
-    expect(runtime?.feed).toContainEqual(expect.objectContaining({
-      id: turnStartParams?.clientMessageId,
-      kind: "message",
-      role: "user",
-      text: "hello over jsonrpc",
-    }));
-    expect(runtime?.feed).toContainEqual(expect.objectContaining({
-      kind: "message",
-      role: "assistant",
-      text: "Live answer",
-    }));
+    expect(runtime?.feed).toContainEqual(
+      expect.objectContaining({
+        id: turnStartParams?.clientMessageId,
+        kind: "message",
+        role: "user",
+        text: "hello over jsonrpc",
+      }),
+    );
+    expect(runtime?.feed).toContainEqual(
+      expect.objectContaining({
+        kind: "message",
+        role: "assistant",
+        text: "Live answer",
+      }),
+    );
   });
 });

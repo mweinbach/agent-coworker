@@ -7,8 +7,11 @@ import { createMemoryRouteHandlers } from "../src/server/jsonrpc/routes/memory";
 import { createProviderRouteHandlers } from "../src/server/jsonrpc/routes/provider";
 import { createSessionRouteHandlers } from "../src/server/jsonrpc/routes/session";
 import { createSkillsRouteHandlers } from "../src/server/jsonrpc/routes/skills";
+import type {
+  JsonRpcRequestHandlerMap,
+  JsonRpcRouteContext,
+} from "../src/server/jsonrpc/routes/types";
 import { createWorkspaceBackupRouteHandlers } from "../src/server/jsonrpc/routes/workspaceBackups";
-import type { JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "../src/server/jsonrpc/routes/types";
 import type { ServerEvent } from "../src/server/protocol";
 
 type RouteHarness = ReturnType<typeof createRouteHarness>;
@@ -22,10 +25,11 @@ function createRouteHarness(
   },
 ) {
   const results: Array<{ id: string | number | null; result: unknown }> = [];
-  const errors: Array<{ id: string | number | null; error: { code: number; message: string } }> = [];
+  const errors: Array<{ id: string | number | null; error: { code: number; message: string } }> =
+    [];
   const binding = { session } as any;
   const threadId = opts?.threadId ?? "thread-1";
-  const threadBinding = opts?.threadSession ? { session: opts.threadSession } as any : null;
+  const threadBinding = opts?.threadSession ? ({ session: opts.threadSession } as any) : null;
 
   const context = {
     getConfig: () => ({ workingDirectory: "C:/workspace" }),
@@ -33,8 +37,9 @@ function createRouteHarness(
       create: () => {
         throw new Error("unused");
       },
-      load: (candidateThreadId: string) => candidateThreadId === threadId ? threadBinding : null,
-      getLive: (candidateThreadId: string) => candidateThreadId === threadId ? threadBinding ?? undefined : undefined,
+      load: (candidateThreadId: string) => (candidateThreadId === threadId ? threadBinding : null),
+      getLive: (candidateThreadId: string) =>
+        candidateThreadId === threadId ? (threadBinding ?? undefined) : undefined,
       getPersisted: () => null,
       listPersisted: () => [],
       listLiveRoot: () => [],
@@ -45,8 +50,10 @@ function createRouteHarness(
     journal: {} as any,
     workspaceControl: {
       getOrCreateBinding: async () => binding,
-      withSession: async (_cwd: string, runner: (binding: any, activeSession: any) => Promise<unknown>) =>
-        await runner(binding, session),
+      withSession: async (
+        _cwd: string,
+        runner: (binding: any, activeSession: any) => Promise<unknown>,
+      ) => await runner(binding, session),
       readState: async () => [],
     },
     events: {
@@ -76,12 +83,17 @@ function createRouteHarness(
       sendResult: (_ws: any, id: string | number | null, result: unknown) => {
         results.push({ id, result });
       },
-      sendError: (_ws: any, id: string | number | null, error: { code: number; message: string }) => {
+      sendError: (
+        _ws: any,
+        id: string | number | null,
+        error: { code: number; message: string },
+      ) => {
         errors.push({ id, error });
       },
     },
     utils: {
-      resolveWorkspacePath: (params: Record<string, unknown>) => String(params.cwd ?? "C:/workspace"),
+      resolveWorkspacePath: (params: Record<string, unknown>) =>
+        String(params.cwd ?? "C:/workspace"),
       extractTextInput: () => "",
       buildThreadFromSession: () => {
         throw new Error("unused");
@@ -101,12 +113,19 @@ function createRouteHarness(
     emitted,
     results,
     errors,
-    async invoke(handlers: JsonRpcRequestHandlerMap, method: string, params: Record<string, unknown>) {
-      await handlers[method]({} as any, {
-        id: 1,
-        method,
-        params,
-      } as any);
+    async invoke(
+      handlers: JsonRpcRequestHandlerMap,
+      method: string,
+      params: Record<string, unknown>,
+    ) {
+      await handlers[method](
+        {} as any,
+        {
+          id: 1,
+          method,
+          params,
+        } as any,
+      );
       return {
         result: results.at(-1)?.result,
         error: errors.at(-1)?.error,
@@ -132,7 +151,9 @@ describe("JSON-RPC extracted route review fixes", () => {
   test("provider auth authorize returns a session error instead of a timeout result", async () => {
     const harness = createRouteHarness({
       authorizeProviderAuth: async () => {
-        harness.emitted.push(sessionError('Unsupported auth method "missing_method" for google.', "provider"));
+        harness.emitted.push(
+          sessionError('Unsupported auth method "missing_method" for google.', "provider"),
+        );
       },
     });
 
@@ -712,7 +733,9 @@ describe("JSON-RPC extracted route review fixes", () => {
   test("cowork/skills/installation/checkUpdate forwards emitted validation errors", async () => {
     const harness = createRouteHarness({
       checkSkillInstallationUpdate: async () => {
-        harness.emitted.push(sessionError('Skill installation "missing-installation" was not found'));
+        harness.emitted.push(
+          sessionError('Skill installation "missing-installation" was not found'),
+        );
       },
     });
 
@@ -722,7 +745,9 @@ describe("JSON-RPC extracted route review fixes", () => {
       installationId: "missing-installation",
     });
 
-    expect(response.error?.message).toContain('Skill installation "missing-installation" was not found');
+    expect(response.error?.message).toContain(
+      'Skill installation "missing-installation" was not found',
+    );
     expect(response.result).toBeUndefined();
   });
 
@@ -752,7 +777,9 @@ describe("JSON-RPC extracted route review fixes", () => {
     test(`${scenario.method} returns an emitted validation error instead of timing out`, async () => {
       const harness = createRouteHarness({
         [scenario.sessionMethod]: async () => {
-          harness.emitted.push(sessionError('Skill installation "missing-installation" was not found'));
+          harness.emitted.push(
+            sessionError('Skill installation "missing-installation" was not found'),
+          );
         },
       });
 
@@ -762,7 +789,9 @@ describe("JSON-RPC extracted route review fixes", () => {
         installationId: "missing-installation",
       });
 
-      expect(response.error?.message).toContain('Skill installation "missing-installation" was not found');
+      expect(response.error?.message).toContain(
+        'Skill installation "missing-installation" was not found',
+      );
       expect(response.result).toBeUndefined();
     });
   }

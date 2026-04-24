@@ -68,9 +68,7 @@ export default function MemoryScreen() {
     }
   }, [isConnected, fetchMemories]);
 
-  const filtered = filterScope === "all"
-    ? entries
-    : entries.filter((e) => e.scope === filterScope);
+  const filtered = filterScope === "all" ? entries : entries.filter((e) => e.scope === filterScope);
 
   const handleSave = async () => {
     if (!draftContent.trim()) return;
@@ -125,7 +123,14 @@ export default function MemoryScreen() {
         </View>
       ) : null}
 
-      <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 4 }}>
+      <View
+        style={{
+          flexDirection: "row",
+          justifyContent: "space-between",
+          alignItems: "center",
+          paddingHorizontal: 4,
+        }}
+      >
         <ScopeFilter />
         <View style={{ flexDirection: "row", gap: 8 }}>
           <Pressable
@@ -168,7 +173,10 @@ export default function MemoryScreen() {
       </View>
 
       {editorOpen ? (
-        <SectionCard title="Memory editor" description="Blank IDs default to hot so the current workspace cache updates immediately.">
+        <SectionCard
+          title="Memory editor"
+          description="Blank IDs default to hot so the current workspace cache updates immediately."
+        >
           <View style={{ gap: 10 }}>
             <View style={{ flexDirection: "row", gap: 8 }}>
               {(["workspace", "user"] as const).map((scope) => (
@@ -249,9 +257,7 @@ export default function MemoryScreen() {
         </SectionCard>
       ) : null}
 
-      {error ? (
-        <SectionCard title="Error" description={error} />
-      ) : null}
+      {error ? <SectionCard title="Error" description={error} /> : null}
 
       {filtered.length > 0 ? (
         <SectionCard title="Entries" description={`${filtered.length} memory entries`}>
@@ -270,9 +276,20 @@ export default function MemoryScreen() {
                   paddingVertical: 12,
                 }}
               >
-                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-                  <Text style={{ color: theme.text, fontSize: 14, fontWeight: "600" }}>{entry.id}</Text>
-                  <StatusPill label={entry.scope} tone={entry.scope === "workspace" ? "primary" : "neutral"} />
+                <View
+                  style={{
+                    flexDirection: "row",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                  }}
+                >
+                  <Text style={{ color: theme.text, fontSize: 14, fontWeight: "600" }}>
+                    {entry.id}
+                  </Text>
+                  <StatusPill
+                    label={entry.scope}
+                    tone={entry.scope === "workspace" ? "primary" : "neutral"}
+                  />
                 </View>
                 <Text
                   selectable
@@ -306,7 +323,9 @@ export default function MemoryScreen() {
                       paddingVertical: 5,
                     })}
                   >
-                    <Text style={{ color: theme.danger, fontSize: 12, fontWeight: "600" }}>Delete</Text>
+                    <Text style={{ color: theme.danger, fontSize: 12, fontWeight: "600" }}>
+                      Delete
+                    </Text>
                   </Pressable>
                 </View>
               </Pressable>

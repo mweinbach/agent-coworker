@@ -2,9 +2,8 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
-import { getAiCoworkerPaths, writeConnectionStore } from "../../src/connect";
 import { Bedrock } from "@aws-sdk/client-bedrock";
+import { getAiCoworkerPaths, writeConnectionStore } from "../../src/connect";
 
 import {
   bedrockClientConfig,
@@ -67,12 +66,14 @@ describe("providers/bedrockShared", () => {
   });
 
   test("keeps aws_profile on the Bedrock client config for profile-scoped discovery", () => {
-    const client = new Bedrock(bedrockClientConfig({
-      methodId: "aws_profile",
-      source: "saved",
-      profile: "sandbox",
-      region: "us-west-2",
-    }));
+    const client = new Bedrock(
+      bedrockClientConfig({
+        methodId: "aws_profile",
+        source: "saved",
+        profile: "sandbox",
+        region: "us-west-2",
+      }),
+    );
 
     expect(client.config.profile).toBe("sandbox");
     expect(typeof client.config.region).toBe("function");
@@ -112,11 +113,7 @@ describe("providers/bedrockShared", () => {
       "[default]\naws_access_key_id = AKIADEFAULT1234\naws_secret_access_key = secret-default-1234\n",
       "utf-8",
     );
-    await fs.writeFile(
-      path.join(awsDir, "config"),
-      "[default]\nregion = us-west-2\n",
-      "utf-8",
-    );
+    await fs.writeFile(path.join(awsDir, "config"), "[default]\nregion = us-west-2\n", "utf-8");
 
     const auth = await resolveBedrockAuthConfig({
       paths: getAiCoworkerPaths({ homedir: home }),
@@ -174,28 +171,33 @@ describe("providers/bedrockShared", () => {
     const originalListFoundationModels = Bedrock.prototype.listFoundationModels;
     const originalListInferenceProfiles = Bedrock.prototype.listInferenceProfiles;
     const originalListCustomModelDeployments = Bedrock.prototype.listCustomModelDeployments;
-    const originalListProvisionedModelThroughputs = Bedrock.prototype.listProvisionedModelThroughputs;
+    const originalListProvisionedModelThroughputs =
+      Bedrock.prototype.listProvisionedModelThroughputs;
     const originalListImportedModels = Bedrock.prototype.listImportedModels;
 
-    Bedrock.prototype.listFoundationModels = async () => ({
-      modelSummaries: [
-        {
-          modelId: "streaming-model",
-          modelName: "Streaming Model",
-          responseStreamingSupported: true,
-          inputModalities: ["TEXT"],
-        } as any,
-        {
-          modelId: "non-streaming-model",
-          modelName: "Non Streaming Model",
-          responseStreamingSupported: false,
-          inputModalities: ["TEXT"],
-        } as any,
-      ],
-    }) as any;
-    Bedrock.prototype.listInferenceProfiles = async () => ({ inferenceProfileSummaries: [] }) as any;
-    Bedrock.prototype.listCustomModelDeployments = async () => ({ modelDeploymentSummaries: [] }) as any;
-    Bedrock.prototype.listProvisionedModelThroughputs = async () => ({ provisionedModelSummaries: [] }) as any;
+    Bedrock.prototype.listFoundationModels = async () =>
+      ({
+        modelSummaries: [
+          {
+            modelId: "streaming-model",
+            modelName: "Streaming Model",
+            responseStreamingSupported: true,
+            inputModalities: ["TEXT"],
+          } as any,
+          {
+            modelId: "non-streaming-model",
+            modelName: "Non Streaming Model",
+            responseStreamingSupported: false,
+            inputModalities: ["TEXT"],
+          } as any,
+        ],
+      }) as any;
+    Bedrock.prototype.listInferenceProfiles = async () =>
+      ({ inferenceProfileSummaries: [] }) as any;
+    Bedrock.prototype.listCustomModelDeployments = async () =>
+      ({ modelDeploymentSummaries: [] }) as any;
+    Bedrock.prototype.listProvisionedModelThroughputs = async () =>
+      ({ provisionedModelSummaries: [] }) as any;
     Bedrock.prototype.listImportedModels = async () => ({ modelSummaries: [] }) as any;
 
     try {
@@ -230,42 +232,49 @@ describe("providers/bedrockShared", () => {
     const originalListFoundationModels = Bedrock.prototype.listFoundationModels;
     const originalListInferenceProfiles = Bedrock.prototype.listInferenceProfiles;
     const originalListCustomModelDeployments = Bedrock.prototype.listCustomModelDeployments;
-    const originalListProvisionedModelThroughputs = Bedrock.prototype.listProvisionedModelThroughputs;
+    const originalListProvisionedModelThroughputs =
+      Bedrock.prototype.listProvisionedModelThroughputs;
     const originalListImportedModels = Bedrock.prototype.listImportedModels;
 
-    Bedrock.prototype.listFoundationModels = async () => ({
-      modelSummaries: [
-        {
-          modelId: "non-streaming-model",
-          modelName: "Non Streaming Model",
-          responseStreamingSupported: false,
-          inputModalities: ["TEXT"],
-          modelArn: "arn:aws:bedrock:us-east-1::foundation-model/non-streaming-model",
-        } as any,
-      ],
-    }) as any;
-    Bedrock.prototype.listInferenceProfiles = async () => ({
-      inferenceProfileSummaries: [
-        {
-          inferenceProfileId: "profile-1",
-          inferenceProfileName: "Profile One",
-          status: "ACTIVE",
-          models: [{ modelArn: "arn:aws:bedrock:us-east-1::foundation-model/non-streaming-model" }],
-        } as any,
-      ],
-    }) as any;
-    Bedrock.prototype.listProvisionedModelThroughputs = async () => ({
-      provisionedModelSummaries: [
-        {
-          provisionedModelArn: "arn:aws:bedrock:us-east-1:123:provisioned-model/prov-1",
-          provisionedModelName: "Provisioned One",
-          status: "InService",
-          foundationModelArn: "arn:aws:bedrock:us-east-1::foundation-model/non-streaming-model",
-          modelArn: "arn:aws:bedrock:us-east-1::foundation-model/non-streaming-model",
-        } as any,
-      ],
-    }) as any;
-    Bedrock.prototype.listCustomModelDeployments = async () => ({ modelDeploymentSummaries: [] }) as any;
+    Bedrock.prototype.listFoundationModels = async () =>
+      ({
+        modelSummaries: [
+          {
+            modelId: "non-streaming-model",
+            modelName: "Non Streaming Model",
+            responseStreamingSupported: false,
+            inputModalities: ["TEXT"],
+            modelArn: "arn:aws:bedrock:us-east-1::foundation-model/non-streaming-model",
+          } as any,
+        ],
+      }) as any;
+    Bedrock.prototype.listInferenceProfiles = async () =>
+      ({
+        inferenceProfileSummaries: [
+          {
+            inferenceProfileId: "profile-1",
+            inferenceProfileName: "Profile One",
+            status: "ACTIVE",
+            models: [
+              { modelArn: "arn:aws:bedrock:us-east-1::foundation-model/non-streaming-model" },
+            ],
+          } as any,
+        ],
+      }) as any;
+    Bedrock.prototype.listProvisionedModelThroughputs = async () =>
+      ({
+        provisionedModelSummaries: [
+          {
+            provisionedModelArn: "arn:aws:bedrock:us-east-1:123:provisioned-model/prov-1",
+            provisionedModelName: "Provisioned One",
+            status: "InService",
+            foundationModelArn: "arn:aws:bedrock:us-east-1::foundation-model/non-streaming-model",
+            modelArn: "arn:aws:bedrock:us-east-1::foundation-model/non-streaming-model",
+          } as any,
+        ],
+      }) as any;
+    Bedrock.prototype.listCustomModelDeployments = async () =>
+      ({ modelDeploymentSummaries: [] }) as any;
     Bedrock.prototype.listImportedModels = async () => ({ modelSummaries: [] }) as any;
 
     try {

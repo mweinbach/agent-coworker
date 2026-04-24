@@ -1,7 +1,7 @@
 import { loadMCPServers, loadMCPTools } from "../../../mcp";
 import { resolveMCPServerAuthState } from "../../../mcp/authStore";
 import type { SessionContext } from "../SessionContext";
-import { McpServerResolver } from "./McpServerResolver";
+import type { McpServerResolver } from "./McpServerResolver";
 
 const MCP_VALIDATION_TIMEOUT_MS = 10_000;
 
@@ -29,13 +29,17 @@ export class McpValidationFlow {
           name,
           ok: false,
           mode: "error",
-          message: `MCP server \"${name}\" not found.`,
+          message: `MCP server "${name}" not found.`,
         });
         return;
       }
 
       const authState = await resolveMCPServerAuthState(this.context.state.config, server);
-      if (authState.mode === "missing" || authState.mode === "oauth_pending" || authState.mode === "error") {
+      if (
+        authState.mode === "missing" ||
+        authState.mode === "oauth_pending" ||
+        authState.mode === "error"
+      ) {
         this.context.emit({
           type: "mcp_server_validation",
           sessionId: this.context.id,
@@ -71,7 +75,9 @@ export class McpValidationFlow {
           new Promise<never>((_, reject) => {
             loadTimeout = setTimeout(() => {
               timedOut = true;
-              reject(new Error(`MCP server validation timed out after ${MCP_VALIDATION_TIMEOUT_MS}ms.`));
+              reject(
+                new Error(`MCP server validation timed out after ${MCP_VALIDATION_TIMEOUT_MS}ms.`),
+              );
             }, MCP_VALIDATION_TIMEOUT_MS);
           }),
         ]);
@@ -79,7 +85,9 @@ export class McpValidationFlow {
         const toolCount = Object.keys(loaded.tools).length;
         const latencyMs = Date.now() - startedAt;
         const ok = loaded.errors.length === 0;
-        const message = ok ? "MCP server validation succeeded." : loaded.errors[0] ?? "MCP server validation failed.";
+        const message = ok
+          ? "MCP server validation succeeded."
+          : (loaded.errors[0] ?? "MCP server validation failed.");
         const tools = Object.entries(loaded.tools).map(([toolName, toolDef]) => ({
           name: toolName,
           description:

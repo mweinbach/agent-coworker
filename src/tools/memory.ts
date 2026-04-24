@@ -2,10 +2,10 @@ import path from "node:path";
 
 import { z } from "zod";
 
-import { MemoryStore, type MemoryScope } from "../memoryStore";
+import { type MemoryScope, MemoryStore } from "../memoryStore";
+import { truncateText } from "../utils/paths";
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
-import { truncateText } from "../utils/paths";
 
 function scopeFromInput(scope?: "workspace" | "user"): MemoryScope {
   return scope ?? "workspace";
@@ -20,13 +20,10 @@ function defaultWriteKey(key?: string): string {
   return key?.trim() ? key : "hot";
 }
 
-export function createMemoryTool(
-  ctx: ToolContext,
-  _opts: { execFileImpl?: unknown } = {}
-) {
+export function createMemoryTool(ctx: ToolContext, _opts: { execFileImpl?: unknown } = {}) {
   const memoryStore = new MemoryStore(
     path.join(ctx.config.projectAgentDir, "memory.sqlite"),
-    path.join(ctx.config.userAgentDir, "memory.sqlite")
+    path.join(ctx.config.userAgentDir, "memory.sqlite"),
   );
 
   return defineTool({
@@ -57,7 +54,9 @@ Actions:
       query?: string;
       scope?: "workspace" | "user";
     }) => {
-      ctx.log(`tool> memory ${JSON.stringify({ action, key, hasContent: !!content, query, scope })}`);
+      ctx.log(
+        `tool> memory ${JSON.stringify({ action, key, hasContent: !!content, query, scope })}`,
+      );
 
       if (!(ctx.config.enableMemory ?? true)) {
         return "Memory is disabled for this workspace.";
@@ -71,7 +70,10 @@ Actions:
             return "Memory save denied by user.";
           }
         }
-        const saved = await memoryStore.upsert(scopeFromInput(scope), { id: defaultWriteKey(key), content });
+        const saved = await memoryStore.upsert(scopeFromInput(scope), {
+          id: defaultWriteKey(key),
+          content,
+        });
         return `Memory written: ${saved.id}`;
       }
 
@@ -97,10 +99,15 @@ Actions:
       if (!query?.trim()) throw new Error("query is required for search action");
       const normalizedQuery = query.toLowerCase();
       const matches = (await memoryStore.list(scope)).filter(
-        (entry) => entry.id.toLowerCase().includes(normalizedQuery) || entry.content.toLowerCase().includes(normalizedQuery)
+        (entry) =>
+          entry.id.toLowerCase().includes(normalizedQuery) ||
+          entry.content.toLowerCase().includes(normalizedQuery),
       );
       if (matches.length === 0) return `No memory found for "${query}".`;
-      return truncateText(matches.map((entry) => `[${entry.scope}] ${entry.id}: ${entry.content}`).join("\n"), 30000);
+      return truncateText(
+        matches.map((entry) => `[${entry.scope}] ${entry.id}: ${entry.content}`).join("\n"),
+        30000,
+      );
     },
   });
 }

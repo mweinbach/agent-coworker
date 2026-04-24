@@ -6,6 +6,7 @@ import { z } from "zod";
 import type { AgentConfig, PluginScope } from "../../types";
 import { nowIso } from "../../utils/typeGuards";
 import { resolveMcpConfigPaths } from "../configPaths";
+import type { MCPRegistryServer, MCPServerSource } from "../configRegistry/types";
 import { DEFAULT_MCP_CREDENTIALS_DOCUMENT, normalizeCredentialsDoc } from "./parser";
 import type {
   MCPAuthFileState,
@@ -13,7 +14,6 @@ import type {
   MCPServerCredentialRecord,
   MCPServerCredentialsDocument,
 } from "./types";
-import type { MCPRegistryServer, MCPServerSource } from "../configRegistry/types";
 
 const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
 
@@ -119,9 +119,14 @@ export function resolveScopeReadOrder(
   return ["user"];
 }
 
-export async function readMCPAuthFiles(config: AgentConfig): Promise<{ workspace: MCPAuthFileState; user: MCPAuthFileState }> {
+export async function readMCPAuthFiles(
+  config: AgentConfig,
+): Promise<{ workspace: MCPAuthFileState; user: MCPAuthFileState }> {
   const paths = resolveMcpConfigPaths(config);
-  const [workspaceDoc, userDoc] = await Promise.all([readDoc(paths.workspaceAuthFile), readDoc(paths.userAuthFile)]);
+  const [workspaceDoc, userDoc] = await Promise.all([
+    readDoc(paths.workspaceAuthFile),
+    readDoc(paths.userAuthFile),
+  ]);
   return {
     workspace: {
       scope: "workspace",
@@ -136,7 +141,10 @@ export async function readMCPAuthFiles(config: AgentConfig): Promise<{ workspace
   };
 }
 
-async function readMCPAuthFileByScope(config: AgentConfig, scope: MCPAuthScope): Promise<MCPAuthFileState> {
+async function readMCPAuthFileByScope(
+  config: AgentConfig,
+  scope: MCPAuthScope,
+): Promise<MCPAuthFileState> {
   const paths = resolveMcpConfigPaths(config);
   const filePath = scope === "workspace" ? paths.workspaceAuthFile : paths.userAuthFile;
   const doc = await readDoc(filePath);

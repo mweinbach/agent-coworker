@@ -11,14 +11,20 @@ import {
   Packer,
   PageNumber,
   Paragraph,
+  type ParagraphChild,
   ShadingType,
   TextRun,
-  type ParagraphChild,
 } from "docx";
 
 import type { ResearchRecord } from "../types";
-import { nodeChildren, nodeText, parseMarkdownAst, trimMarkdownText, type MarkdownNode } from "./markdownAst";
 import { buildResearchMarkdownDocument } from "./exportMarkdown";
+import {
+  type MarkdownNode,
+  nodeChildren,
+  nodeText,
+  parseMarkdownAst,
+  trimMarkdownText,
+} from "./markdownAst";
 
 function headingLevel(depth: number) {
   switch (depth) {
@@ -62,14 +68,16 @@ function inlineChildren(node: MarkdownNode): ParagraphChild[] {
         runs.push(new TextRun({ text: nodeText(child), italics: true }));
         break;
       case "inlineCode":
-        runs.push(new TextRun({
-          text: child.value ?? "",
-          font: "Courier New",
-          shading: {
-            fill: "F3F4F6",
-            type: ShadingType.CLEAR,
-          },
-        }));
+        runs.push(
+          new TextRun({
+            text: child.value ?? "",
+            font: "Courier New",
+            shading: {
+              fill: "F3F4F6",
+              type: ShadingType.CLEAR,
+            },
+          }),
+        );
         break;
       case "link":
         runs.push(
@@ -107,7 +115,10 @@ function inlineChildren(node: MarkdownNode): ParagraphChild[] {
   return runs;
 }
 
-function paragraphFromNode(node: MarkdownNode, options: Partial<IParagraphOptions> = {}): Paragraph {
+function paragraphFromNode(
+  node: MarkdownNode,
+  options: Partial<IParagraphOptions> = {},
+): Paragraph {
   const children = inlineChildren(node);
   return new Paragraph({
     children,
@@ -124,15 +135,13 @@ function renderList(node: MarkdownNode, depth = 0): Paragraph[] {
     const prefix = ordered ? `${start + index}.` : "\u2022";
     const firstBlock = children[0];
     const remainingBlocks = children.slice(1);
-    const baseRuns = firstBlock?.type === "paragraph"
-      ? inlineChildren(firstBlock)
-      : [new TextRun(trimMarkdownText(nodeText(item)))];
+    const baseRuns =
+      firstBlock?.type === "paragraph"
+        ? inlineChildren(firstBlock)
+        : [new TextRun(trimMarkdownText(nodeText(item)))];
     const paragraphs = [
       new Paragraph({
-        children: [
-          new TextRun({ text: `${prefix} `, bold: true }),
-          ...baseRuns,
-        ],
+        children: [new TextRun({ text: `${prefix} `, bold: true }), ...baseRuns],
         spacing: paragraphSpacing(120),
         indent: {
           left: 360 * (depth + 1),
@@ -258,24 +267,26 @@ export async function exportDocx(opts: {
   const blocks = parseMarkdownAst(markdown);
   const doc = new Document({
     title: opts.research.title,
-    sections: [{
-      footers: {
-        default: new Footer({
-          children: [
-            new Paragraph({
-              alignment: AlignmentType.CENTER,
-              children: [
-                new TextRun("Page "),
-                new TextRun({ children: [PageNumber.CURRENT] }),
-                new TextRun(" of "),
-                new TextRun({ children: [PageNumber.TOTAL_PAGES] }),
-              ],
-            }),
-          ],
-        }),
+    sections: [
+      {
+        footers: {
+          default: new Footer({
+            children: [
+              new Paragraph({
+                alignment: AlignmentType.CENTER,
+                children: [
+                  new TextRun("Page "),
+                  new TextRun({ children: [PageNumber.CURRENT] }),
+                  new TextRun(" of "),
+                  new TextRun({ children: [PageNumber.TOTAL_PAGES] }),
+                ],
+              }),
+            ],
+          }),
+        },
+        children: blocks.flatMap((block) => renderBlock(block)),
       },
-      children: blocks.flatMap((block) => renderBlock(block)),
-    }],
+    ],
   });
 
   const buffer = await Packer.toBuffer(doc);

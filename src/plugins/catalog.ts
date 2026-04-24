@@ -1,5 +1,5 @@
 import type { AgentConfig, PluginCatalogEntry, PluginCatalogSnapshot, PluginScope } from "../types";
-import { discoverPlugins, type DiscoveredPluginCandidate } from "./discovery";
+import { type DiscoveredPluginCandidate, discoverPlugins } from "./discovery";
 import {
   buildPluginCatalogEntry,
   readPluginAppSummaries,
@@ -34,7 +34,10 @@ async function readPluginMcpSummary(
   }
 }
 
-function entryWarnings(candidate: DiscoveredPluginCandidate, extraWarnings: string[] = []): string[] {
+function entryWarnings(
+  candidate: DiscoveredPluginCandidate,
+  extraWarnings: string[] = [],
+): string[] {
   return [...extraWarnings].filter((warning) => warning.trim().length > 0);
 }
 
@@ -53,7 +56,9 @@ export function comparePluginCatalogEntries(
   return `${left.displayName}:${left.id}`.localeCompare(`${right.displayName}:${right.id}`);
 }
 
-export async function buildPluginCatalogSnapshot(config: AgentConfig): Promise<PluginCatalogSnapshot> {
+export async function buildPluginCatalogSnapshot(
+  config: AgentConfig,
+): Promise<PluginCatalogSnapshot> {
   const discovery = await discoverPlugins(config);
   const overrides = await readPluginOverrides(config);
   const plugins: PluginCatalogEntry[] = [];
@@ -110,8 +115,12 @@ export async function buildPluginCatalogSnapshot(config: AgentConfig): Promise<P
           ? {
               marketplace: {
                 name: candidate.marketplace.name,
-                ...(candidate.marketplace.displayName ? { displayName: candidate.marketplace.displayName } : {}),
-                ...(candidate.marketplace.category ? { category: candidate.marketplace.category } : {}),
+                ...(candidate.marketplace.displayName
+                  ? { displayName: candidate.marketplace.displayName }
+                  : {}),
+                ...(candidate.marketplace.category
+                  ? { category: candidate.marketplace.category }
+                  : {}),
                 ...(candidate.marketplace.installationPolicy
                   ? { installationPolicy: candidate.marketplace.installationPolicy }
                   : {}),
@@ -125,7 +134,8 @@ export async function buildPluginCatalogSnapshot(config: AgentConfig): Promise<P
       entry.skills = entry.skills.map((skill) => {
         return {
           ...skill,
-          enabled: pluginEnabled && isPluginSkillEnabled(manifest.name, scope, skill.rawName, overrides),
+          enabled:
+            pluginEnabled && isPluginSkillEnabled(manifest.name, scope, skill.rawName, overrides),
         };
       });
       plugins.push(entry);
@@ -144,8 +154,10 @@ export function resolvePluginCatalogEntry(opts: {
   pluginId: string;
   scope?: PluginScope;
 }): { plugin: PluginCatalogEntry | null; error?: string } {
-  const matches = opts.catalog.plugins.filter((plugin) =>
-    plugin.id === opts.pluginId && (opts.scope === undefined || plugin.scope === opts.scope));
+  const matches = opts.catalog.plugins.filter(
+    (plugin) =>
+      plugin.id === opts.pluginId && (opts.scope === undefined || plugin.scope === opts.scope),
+  );
 
   if (matches.length === 1) {
     return { plugin: matches[0] ?? null };
@@ -154,9 +166,10 @@ export function resolvePluginCatalogEntry(opts: {
   if (matches.length === 0) {
     return {
       plugin: null,
-      error: opts.scope !== undefined
-        ? `Plugin "${opts.pluginId}" was not found in the ${opts.scope} scope.`
-        : `Plugin "${opts.pluginId}" was not found.`,
+      error:
+        opts.scope !== undefined
+          ? `Plugin "${opts.pluginId}" was not found in the ${opts.scope} scope.`
+          : `Plugin "${opts.pluginId}" was not found.`,
     };
   }
 

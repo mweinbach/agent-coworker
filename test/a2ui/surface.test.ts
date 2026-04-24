@@ -1,13 +1,12 @@
-import { describe, test, expect } from "bun:test";
-
-import {
-  applyEnvelope,
-  createEmptySurfaces,
-  type A2uiSurfaceState,
-  type A2uiSurfacesById,
-} from "../../src/shared/a2ui/surface";
+import { describe, expect, test } from "bun:test";
 import { A2UI_BASIC_CATALOG_ID } from "../../src/shared/a2ui/component";
 import type { A2uiEnvelope } from "../../src/shared/a2ui/protocol";
+import {
+  type A2uiSurfaceState,
+  type A2uiSurfacesById,
+  applyEnvelope,
+  createEmptySurfaces,
+} from "../../src/shared/a2ui/surface";
 
 const NOW = "2026-01-01T00:00:00.000Z";
 
@@ -64,9 +63,7 @@ describe("applyEnvelope", () => {
         version: "v0.9",
         updateComponents: {
           surfaceId: "s1",
-          components: [
-            { id: "title", type: "Heading", props: { text: "Updated" } },
-          ],
+          components: [{ id: "title", type: "Heading", props: { text: "Updated" } }],
         },
       },
       NOW,
@@ -164,10 +161,14 @@ describe("applyEnvelope", () => {
   test("input surfaces map is not mutated", () => {
     const base = applyEnvelope(createEmptySurfaces(), createSurface(), NOW).surfaces;
     const snapshot = structuredClone(base);
-    applyEnvelope(base, {
-      version: "v0.9",
-      updateDataModel: { surfaceId: "s1", path: "/message", value: "changed" },
-    }, NOW);
+    applyEnvelope(
+      base,
+      {
+        version: "v0.9",
+        updateDataModel: { surfaceId: "s1", path: "/message", value: "changed" },
+      },
+      NOW,
+    );
     expect(base).toEqual(snapshot);
   });
 });

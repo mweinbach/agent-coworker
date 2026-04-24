@@ -12,12 +12,14 @@ class MockJsonRpcSocket {
   closed = false;
   private closeDeferred = false;
 
-  constructor(public readonly opts: {
-    url?: string;
-    onOpen?: () => void;
-    onClose?: () => void;
-    onNotification?: (message: { method: string; params?: unknown }) => void;
-  }) {
+  constructor(
+    public readonly opts: {
+      url?: string;
+      onOpen?: () => void;
+      onClose?: () => void;
+      onNotification?: (message: { method: string; params?: unknown }) => void;
+    },
+  ) {
     MockJsonRpcSocket.instances.push(this);
   }
 
@@ -112,7 +114,8 @@ function createState(workspaceId: string, patch: Record<string, unknown> = {}) {
       [workspaceId]: {
         ...defaultWorkspaceRuntime(),
         serverUrl: "ws://mock",
-        ...((patch.workspaceRuntimeById as Record<string, unknown> | undefined)?.[workspaceId] ?? {}),
+        ...((patch.workspaceRuntimeById as Record<string, unknown> | undefined)?.[workspaceId] ??
+          {}),
       },
     },
     workspaces: [
@@ -149,7 +152,10 @@ function createState(workspaceId: string, patch: Record<string, unknown> = {}) {
   return { state, get, set };
 }
 
-function installFakeSocket(workspaceId: string, request: (method: string, params?: any) => any | Promise<any>) {
+function installFakeSocket(
+  workspaceId: string,
+  request: (method: string, params?: any) => any | Promise<any>,
+) {
   RUNTIME.jsonRpcSockets.set(workspaceId, {
     readyPromise: Promise.resolve(),
     request,
@@ -315,7 +321,12 @@ describe("control socket helpers over JSON-RPC", () => {
     });
 
     const helpers = createControlSocketHelpers(deps);
-    const snapshot = await helpers.requestSessionSnapshot(get as any, set as any, workspaceId, "session-1");
+    const snapshot = await helpers.requestSessionSnapshot(
+      get as any,
+      set as any,
+      workspaceId,
+      "session-1",
+    );
     expect(snapshot).toEqual({
       sessionId: "session-1",
       title: "Snapshot title",
@@ -404,13 +415,21 @@ describe("control socket helpers over JSON-RPC", () => {
     const { state, get, set } = createState(workspaceId);
     const helpers = createControlSocketHelpers(deps);
 
-    const firstSocket = helpers.ensureControlSocket(get as any, set as any, workspaceId) as MockJsonRpcSocket;
+    const firstSocket = helpers.ensureControlSocket(
+      get as any,
+      set as any,
+      workspaceId,
+    ) as MockJsonRpcSocket;
     await flushAsyncWork();
     expect(state.workspaceRuntimeById[workspaceId].controlSessionId).toBe(`jsonrpc:${workspaceId}`);
 
     MockJsonRpcSocket.deferClose = true;
     state.workspaceRuntimeById[workspaceId].serverUrl = "ws://changed";
-    const secondSocket = helpers.ensureControlSocket(get as any, set as any, workspaceId) as MockJsonRpcSocket;
+    const secondSocket = helpers.ensureControlSocket(
+      get as any,
+      set as any,
+      workspaceId,
+    ) as MockJsonRpcSocket;
     await flushAsyncWork();
 
     expect(secondSocket).not.toBe(firstSocket);
@@ -451,7 +470,9 @@ describe("control socket helpers over JSON-RPC", () => {
     expect(jsonRpcRequests.find((entry) => entry.method === "thread/list")?.params).toEqual({
       cwd: "/tmp/workspace-second",
     });
-    expect(jsonRpcRequests.find((entry) => entry.method === "cowork/provider/catalog/read")?.params).toEqual({
+    expect(
+      jsonRpcRequests.find((entry) => entry.method === "cowork/provider/catalog/read")?.params,
+    ).toEqual({
       cwd: "/tmp/workspace-second",
     });
   });
@@ -490,21 +511,28 @@ describe("control socket helpers over JSON-RPC", () => {
     await flushAsyncWork();
 
     expect(providerRefreshCalls).toBe(1);
-    expect(helpers.__internal.getWorkspaceStateSnapshot(workspaceId).hasBootstrapPromise).toBe(true);
+    expect(helpers.__internal.getWorkspaceStateSnapshot(workspaceId).hasBootstrapPromise).toBe(
+      true,
+    );
 
     firstProviderRefresh.resolve({});
     await new Promise((resolve) => setTimeout(resolve, 0));
     await flushAsyncWork();
 
     expect(providerRefreshCalls).toBe(2);
-    expect(jsonRpcRequests.filter((entry) => entry.method === "cowork/session/state/read")).toHaveLength(2);
+    expect(
+      jsonRpcRequests.filter((entry) => entry.method === "cowork/session/state/read"),
+    ).toHaveLength(2);
   });
 
   test("disposeWorkspaceControlState clears workspace-scoped lifecycle and bootstrap state", async () => {
     const workspaceId = "ws-dispose";
     const { state, get, set } = createState(workspaceId);
     const blockedProviderStatus = Promise.withResolvers<any>();
-    jsonRpcHandlers.set("cowork/provider/status/refresh", async () => await blockedProviderStatus.promise);
+    jsonRpcHandlers.set(
+      "cowork/provider/status/refresh",
+      async () => await blockedProviderStatus.promise,
+    );
 
     const helpers = createControlSocketHelpers(deps);
     helpers.ensureControlSocket(get as any, set as any, workspaceId);
@@ -562,14 +590,18 @@ describe("control socket helpers over JSON-RPC", () => {
     helpers.ensureControlSocket(get as any, set as any, workspaceId);
 
     let settled = false;
-    const readyPromise = helpers.waitForControlSession(get as any, set as any, workspaceId, 1_000).then((ready) => {
-      settled = true;
-      return ready;
-    });
+    const readyPromise = helpers
+      .waitForControlSession(get as any, set as any, workspaceId, 1_000)
+      .then((ready) => {
+        settled = true;
+        return ready;
+      });
 
     await flushAsyncWork();
     expect(settled).toBe(false);
-    expect(jsonRpcRequests.some((entry) => entry.method === "cowork/session/state/read")).toBe(true);
+    expect(jsonRpcRequests.some((entry) => entry.method === "cowork/session/state/read")).toBe(
+      true,
+    );
 
     sessionState.resolve({
       events: [
@@ -622,7 +654,9 @@ describe("control socket helpers over JSON-RPC", () => {
       workingDirectory: "/tmp/workspace",
     });
     expect(state.workspaceRuntimeById[workspaceId].controlEnableMcp).toBe(false);
-    expect(state.workspaceRuntimeById[workspaceId].controlSessionConfig?.preferredChildModel).toBe("gpt-5.2");
+    expect(state.workspaceRuntimeById[workspaceId].controlSessionConfig?.preferredChildModel).toBe(
+      "gpt-5.2",
+    );
   });
 
   test("pending waiter diagnostics reflect in-flight JSON-RPC waits", async () => {
@@ -661,7 +695,12 @@ describe("control socket helpers over JSON-RPC", () => {
       expect(method).toBe("thread/read");
       return await snapshot.promise;
     });
-    const snapshotPromise = helpers.requestSessionSnapshot(get as any, set as any, workspaceId, "session-1");
+    const snapshotPromise = helpers.requestSessionSnapshot(
+      get as any,
+      set as any,
+      workspaceId,
+      "session-1",
+    );
     expect(helpers.__internal.getPendingWaiterCounts().sessionSnapshotWaiters).toBe(1);
     snapshot.resolve({
       coworkSnapshot: {
@@ -696,7 +735,11 @@ describe("control socket helpers over JSON-RPC", () => {
         event: {
           type: "skills_catalog",
           sessionId: "jsonrpc-control",
-          catalog: { installations: [], sources: [], stats: { totalInstallations: 0, enabledInstallations: 0 } },
+          catalog: {
+            installations: [],
+            sources: [],
+            stats: { totalInstallations: 0, enabledInstallations: 0 },
+          },
           mutationBlocked: false,
           clearedMutationPendingKeys: ["install:project"],
         },
@@ -711,14 +754,22 @@ describe("control socket helpers over JSON-RPC", () => {
     });
 
     const helpers = createControlSocketHelpers(deps);
-    const ok = await helpers.requestJsonRpcControlEvent(get as any, set as any, workspaceId, "cowork/skills/catalog/read", {
-      cwd: "/tmp/workspace",
-    });
+    const ok = await helpers.requestJsonRpcControlEvent(
+      get as any,
+      set as any,
+      workspaceId,
+      "cowork/skills/catalog/read",
+      {
+        cwd: "/tmp/workspace",
+      },
+    );
 
     await resolved.promise;
     expect(ok).toBe(true);
     expect(RUNTIME.skillInstallWaiters.has(workspaceId)).toBe(false);
-    expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({ preview: true });
+    expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({
+      preview: true,
+    });
     expect(state.workspaceRuntimeById[workspaceId].skillCatalogLoading).toBe(false);
   });
 
@@ -758,7 +809,8 @@ describe("control socket helpers over JSON-RPC", () => {
                 discoveryKind: "marketplace",
                 enabled: true,
                 rootDir: "/tmp/workspace/.agents/plugins/figma-toolkit",
-                manifestPath: "/tmp/workspace/.agents/plugins/figma-toolkit/.codex-plugin/plugin.json",
+                manifestPath:
+                  "/tmp/workspace/.agents/plugins/figma-toolkit/.codex-plugin/plugin.json",
                 skillsPath: "/tmp/workspace/.agents/plugins/figma-toolkit/skills",
                 skills: [],
                 mcpServers: [],
@@ -785,7 +837,9 @@ describe("control socket helpers over JSON-RPC", () => {
     expect(state.workspaceRuntimeById[workspaceId].pluginsCatalog?.plugins).toHaveLength(1);
     expect(state.workspaceRuntimeById[workspaceId].selectedPlugin?.id).toBe("plugin-1");
     expect(state.workspaceRuntimeById[workspaceId].selectedPluginScope).toBe("workspace");
-    expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({ other: true });
+    expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({
+      other: true,
+    });
   });
 
   test("requestJsonRpcControlEvent applies plugin detail events", async () => {
@@ -839,7 +893,9 @@ describe("control socket helpers over JSON-RPC", () => {
     expect(ok).toBe(true);
     expect(state.workspaceRuntimeById[workspaceId].pluginsLoading).toBe(false);
     expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBeNull();
-    expect(state.workspaceRuntimeById[workspaceId].selectedPlugin?.displayName).toBe("Figma Toolkit");
+    expect(state.workspaceRuntimeById[workspaceId].selectedPlugin?.displayName).toBe(
+      "Figma Toolkit",
+    );
     expect(state.workspaceRuntimeById[workspaceId].selectedPluginScope).toBe("workspace");
   });
 
@@ -871,22 +927,24 @@ describe("control socket helpers over JSON-RPC", () => {
         sessionId: "jsonrpc-control",
         catalog: {
           warnings: [],
-          plugins: [{
-            id: "plugin-1",
-            name: "figma-toolkit",
-            displayName: "Figma Toolkit",
-            description: "Figma helpers",
-            scope: "user",
-            discoveryKind: "direct",
-            enabled: true,
-            rootDir: "/tmp/home/.agents/plugins/figma-toolkit",
-            manifestPath: "/tmp/home/.agents/plugins/figma-toolkit/.codex-plugin/plugin.json",
-            skillsPath: "/tmp/home/.agents/plugins/figma-toolkit/skills",
-            skills: [],
-            mcpServers: [],
-            apps: [],
-            warnings: [],
-          }],
+          plugins: [
+            {
+              id: "plugin-1",
+              name: "figma-toolkit",
+              displayName: "Figma Toolkit",
+              description: "Figma helpers",
+              scope: "user",
+              discoveryKind: "direct",
+              enabled: true,
+              rootDir: "/tmp/home/.agents/plugins/figma-toolkit",
+              manifestPath: "/tmp/home/.agents/plugins/figma-toolkit/.codex-plugin/plugin.json",
+              skillsPath: "/tmp/home/.agents/plugins/figma-toolkit/skills",
+              skills: [],
+              mcpServers: [],
+              apps: [],
+              warnings: [],
+            },
+          ],
         },
       },
     });
@@ -1207,11 +1265,17 @@ describe("control socket helpers over JSON-RPC", () => {
     const helpers = createControlSocketHelpers(deps);
     await expect(
       Promise.all([
-        helpers.requestJsonRpcControlEvent(get as any, set as any, workspaceId, "cowork/skills/install", {
-          cwd: "/tmp/workspace",
-          sourceInput: "foo",
-          targetScope: "global",
-        }),
+        helpers.requestJsonRpcControlEvent(
+          get as any,
+          set as any,
+          workspaceId,
+          "cowork/skills/install",
+          {
+            cwd: "/tmp/workspace",
+            sourceInput: "foo",
+            targetScope: "global",
+          },
+        ),
         rejected.promise,
       ]),
     ).rejects.toThrow("install failed on disk");
@@ -1219,7 +1283,9 @@ describe("control socket helpers over JSON-RPC", () => {
     expect(RUNTIME.skillInstallWaiters.has(workspaceId)).toBe(false);
     expect(state.workspaceRuntimeById[workspaceId].skillCatalogLoading).toBe(false);
     expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({});
-    expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBe("install failed on disk");
+    expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBe(
+      "install failed on disk",
+    );
     expect(state.notifications).toHaveLength(1);
   });
 
@@ -1305,7 +1371,10 @@ describe("control socket helpers over JSON-RPC", () => {
         }
         return {};
       }
-      if (method === "cowork/provider/catalog/read" || method === "cowork/provider/authMethods/read") {
+      if (
+        method === "cowork/provider/catalog/read" ||
+        method === "cowork/provider/authMethods/read"
+      ) {
         return {};
       }
       throw new Error(`unexpected method: ${method}`);
@@ -1328,19 +1397,13 @@ describe("control socket helpers over JSON-RPC", () => {
     expect(state.providerStatusRefreshing).toBe(true);
 
     const { refreshProviderStatusForWorkspace } = await import("../src/app/store.actions/provider");
-    await refreshProviderStatusForWorkspace(
-      get as any,
-      set as any,
-      workspaceId,
-      "/tmp/workspace",
-      {
-        makeId: () => "note-2",
-        nowIso: () => "2026-03-21T00:00:01.000Z",
-        pushNotification: (notifications: any[], entry: any) => [...notifications, entry],
-        requestJsonRpcControlEvent: ((...args: any[]) =>
-          helpers.requestJsonRpcControlEvent(args[0], args[1], args[2], args[3], args[4])) as any,
-      },
-    );
+    await refreshProviderStatusForWorkspace(get as any, set as any, workspaceId, "/tmp/workspace", {
+      makeId: () => "note-2",
+      nowIso: () => "2026-03-21T00:00:01.000Z",
+      pushNotification: (notifications: any[], entry: any) => [...notifications, entry],
+      requestJsonRpcControlEvent: ((...args: any[]) =>
+        helpers.requestJsonRpcControlEvent(args[0], args[1], args[2], args[3], args[4])) as any,
+    });
     expect(state.providerStatusRefreshing).toBe(false);
 
     releaseFirstRefresh?.();
@@ -1402,7 +1465,10 @@ describe("control socket helpers over JSON-RPC", () => {
         }
         return {};
       }
-      if (method === "cowork/provider/catalog/read" || method === "cowork/provider/authMethods/read") {
+      if (
+        method === "cowork/provider/catalog/read" ||
+        method === "cowork/provider/authMethods/read"
+      ) {
         return {};
       }
       throw new Error(`unexpected method: ${method}`);
@@ -1540,7 +1606,10 @@ describe("control socket helpers over JSON-RPC", () => {
           },
         };
       }
-      if (method === "cowork/provider/status/refresh" || method === "cowork/provider/catalog/read") {
+      if (
+        method === "cowork/provider/status/refresh" ||
+        method === "cowork/provider/catalog/read"
+      ) {
         return {};
       }
       throw new Error(`unexpected method: ${method}`);

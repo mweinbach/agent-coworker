@@ -66,7 +66,16 @@ samp {
   color: inherit;
 }
 
-:where(button, [role="button"], [role="treeitem"], a, input, textarea, select, [role="separator"]):focus-visible {
+:where(
+    button,
+    [role="button"],
+    [role="treeitem"],
+    a,
+    input,
+    textarea,
+    select,
+    [role="separator"]
+  ):focus-visible {
   outline: none;
   box-shadow: var(--focus-ring-shadow);
 }

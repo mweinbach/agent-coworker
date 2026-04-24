@@ -16,24 +16,26 @@ describe("assertSafeWebUrl", () => {
   });
 
   test("blocks IPv4-mapped IPv6 loopback URLs", async () => {
-    await expect(assertSafeWebUrl("http://[::ffff:127.0.0.1]/")).rejects.toThrow(/private\/internal host/i);
-    await expect(assertSafeWebUrl("http://[::ffff:7f00:1]/")).rejects.toThrow(/private\/internal host/i);
+    await expect(assertSafeWebUrl("http://[::ffff:127.0.0.1]/")).rejects.toThrow(
+      /private\/internal host/i,
+    );
+    await expect(assertSafeWebUrl("http://[::ffff:7f00:1]/")).rejects.toThrow(
+      /private\/internal host/i,
+    );
   });
 
   test("blocks IPv4-mapped IPv6 link-local metadata URLs", async () => {
     await expect(assertSafeWebUrl("http://[::ffff:169.254.169.254]/")).rejects.toThrow(
-      /private\/internal host/i
+      /private\/internal host/i,
     );
     await expect(assertSafeWebUrl("http://[::ffff:a9fe:a9fe]/")).rejects.toThrow(
-      /private\/internal host/i
+      /private\/internal host/i,
     );
   });
 
   test("allows IPv4-mapped IPv6 public URLs", async () => {
     expect((await assertSafeWebUrl("http://[::ffff:8.8.8.8]/")).hostname).toBe("[::ffff:808:808]");
-    expect((await assertSafeWebUrl("http://[::ffff:808:808]/")).hostname).toBe(
-      "[::ffff:808:808]"
-    );
+    expect((await assertSafeWebUrl("http://[::ffff:808:808]/")).hostname).toBe("[::ffff:808:808]");
   });
 
   test("blocks trailing-dot localhost hostname", async () => {
@@ -42,21 +44,21 @@ describe("assertSafeWebUrl", () => {
 
   test("blocks trailing-dot internal metadata hostname", async () => {
     await expect(assertSafeWebUrl("http://metadata.google.internal./")).rejects.toThrow(
-      /private\/internal host/i
+      /private\/internal host/i,
     );
   });
 
   test("blocks CGNAT range (100.64.x.x)", async () => {
     await expect(assertSafeWebUrl("http://100.64.0.1/")).rejects.toThrow(/private\/internal host/i);
     await expect(assertSafeWebUrl("http://100.127.255.254/")).rejects.toThrow(
-      /private\/internal host/i
+      /private\/internal host/i,
     );
   });
 
   test("blocks benchmark range (198.18.x.x)", async () => {
     await expect(assertSafeWebUrl("http://198.18.0.1/")).rejects.toThrow(/private\/internal host/i);
     await expect(assertSafeWebUrl("http://198.19.255.254/")).rejects.toThrow(
-      /private\/internal host/i
+      /private\/internal host/i,
     );
   });
 
@@ -68,7 +70,7 @@ describe("assertSafeWebUrl", () => {
   test("blocks hostnames that resolve to private addresses", async () => {
     __internal.setDnsLookup(async () => [{ address: "127.0.0.1", family: 4 }]);
     await expect(assertSafeWebUrl("https://anything.example/")).rejects.toThrow(
-      /private\/internal host/i
+      /private\/internal host/i,
     );
   });
 
@@ -79,7 +81,6 @@ describe("assertSafeWebUrl", () => {
     ]);
     expect((await assertSafeWebUrl("https://public.example/")).hostname).toBe("public.example");
   });
-
 
   test("returns resolved public addresses for pinned fetch use", async () => {
     __internal.setDnsLookup(async () => [

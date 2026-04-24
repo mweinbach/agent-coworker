@@ -4,9 +4,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
-
-import { __internal, WebDesktopService } from "../src/server/webDesktopService";
 import { handleWebDesktopRoute } from "../src/server/webDesktopRoutes";
+import { __internal, WebDesktopService } from "../src/server/webDesktopService";
 
 const cleanupPaths = new Set<string>();
 
@@ -98,11 +97,13 @@ describe("web desktop routes", () => {
       { cwd: workspaceA, desktopService: service },
     );
     expect(stateResponse).not.toBeNull();
-    expect(await readJson(stateResponse!)).toEqual(expect.objectContaining({
-      desktopFeatureFlagOverrides: {
-        remoteAccess: false,
-      },
-    }));
+    expect(await readJson(stateResponse!)).toEqual(
+      expect.objectContaining({
+        desktopFeatureFlagOverrides: {
+          remoteAccess: false,
+        },
+      }),
+    );
 
     const listResponse = await handleWebDesktopRoute(
       new Request(`http://localhost/cowork/fs/list?path=${encodeURIComponent(realWorkspaceB)}`),
@@ -201,7 +202,7 @@ describe("web desktop routes", () => {
     const svgPath = path.join(workspace, "vector.svg");
     const textPath = path.join(workspace, "notes.txt");
     await fs.writeFile(htmlPath, "<!doctype html><script>window.hacked = true</script>", "utf8");
-    await fs.writeFile(svgPath, "<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>", "utf8");
+    await fs.writeFile(svgPath, '<svg xmlns="http://www.w3.org/2000/svg"></svg>', "utf8");
     await fs.writeFile(textPath, "hello", "utf8");
 
     const htmlResponse = await handleWebDesktopRoute(
@@ -230,14 +231,11 @@ describe("web desktop routes", () => {
   test("workspace server monitor keeps draining stdout and stderr after readiness", async () => {
     const child = createMockWorkspaceChild();
     const seenLines: Array<{ source: string; line: string }> = [];
-    const monitor = __internal.createWorkspaceServerMonitor(
-      child as any,
-      (source, line) => {
-        seenLines.push({ source, line });
-      },
-    );
+    const monitor = __internal.createWorkspaceServerMonitor(child as any, (source, line) => {
+      seenLines.push({ source, line });
+    });
 
-    child.stdout.write("{\"type\":\"server_listening\",\"url\":\"ws://127.0.0.1:7337/ws\"}\n");
+    child.stdout.write('{"type":"server_listening","url":"ws://127.0.0.1:7337/ws"}\n');
     await expect(monitor.ready).resolves.toEqual({ url: "ws://127.0.0.1:7337/ws" });
 
     child.stdout.write("stdout after ready\n");

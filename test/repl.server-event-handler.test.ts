@@ -1,11 +1,10 @@
 import { describe, expect, mock, test } from "bun:test";
-
-import { CliStreamState } from "../src/cli/streamState";
 import {
   applyCliJsonRpcResult,
   createNotificationHandler,
   type ReplServerEventState,
 } from "../src/cli/repl/serverEventHandler";
+import { CliStreamState } from "../src/cli/streamState";
 
 function createState(): ReplServerEventState {
   return {
@@ -216,7 +215,10 @@ describe("CLI notification handler", () => {
     process.stdout.write = mock(() => true) as any;
 
     try {
-      handler({ method: "item/agentMessage/delta", params: { turnId: "turn-1", delta: "hello" } }, {} as any);
+      handler(
+        { method: "item/agentMessage/delta", params: { turnId: "turn-1", delta: "hello" } },
+        {} as any,
+      );
     } finally {
       process.stdout.write = originalWrite;
     }

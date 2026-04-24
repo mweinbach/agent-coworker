@@ -4,8 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { loadAgentPrompt, loadSystemPrompt, loadSubAgentPrompt, loadSystemPromptWithSkills } from "../src/prompt";
-import { buildWorkspaceMapSection } from "../src/workspace/map";
+import {
+  loadAgentPrompt,
+  loadSubAgentPrompt,
+  loadSystemPrompt,
+  loadSystemPromptWithSkills,
+} from "../src/prompt";
 import {
   AGENT_ROLE_DEFINITIONS,
   buildSpawnAgentRolePromptLines,
@@ -16,6 +20,7 @@ import {
   SPAWN_AGENT_WHEN_TO_USE,
 } from "../src/server/agents/roles";
 import type { AgentConfig } from "../src/types";
+import { buildWorkspaceMapSection } from "../src/workspace/map";
 
 function repoRoot(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
@@ -51,11 +56,7 @@ function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
       path.join(repoRoot(), "skills"),
     ],
     memoryDirs: ["/test/project/.agent/memory", "/test/home/.agent/memory"],
-    configDirs: [
-      "/test/project/.agent",
-      "/test/home/.agent",
-      path.join(repoRoot(), "config"),
-    ],
+    configDirs: ["/test/project/.agent", "/test/home/.agent", path.join(repoRoot(), "config")],
   };
   return { ...base, ...overrides };
 }
@@ -83,10 +84,7 @@ function extractSpawnAgentBody(prompt: string): string {
 }
 
 function expectedSpawnAgentRoleCatalog(): string {
-  return [
-    "Available child-agent roles:",
-    ...buildSpawnAgentRolePromptLines(),
-  ].join("\n");
+  return ["Available child-agent roles:", ...buildSpawnAgentRolePromptLines()].join("\n");
 }
 
 function expectedSpawnAgentSharedGuidance(): string {
@@ -110,7 +108,7 @@ function expectedSpawnAgentSharedGuidance(): string {
 function extractSpawnAgentRoleCatalog(prompt: string): string {
   const body = extractSpawnAgentBody(prompt);
   const match = body.match(
-    /Available child-agent roles:\n([\s\S]*?)(?=\n\n(?:Available allowed child target refs for this workspace:|Available model overrides for the current provider \(|$))/
+    /Available child-agent roles:\n([\s\S]*?)(?=\n\n(?:Available allowed child target refs for this workspace:|Available model overrides for the current provider \(|$))/,
   );
 
   if (!match?.[1]) {
@@ -120,10 +118,7 @@ function extractSpawnAgentRoleCatalog(prompt: string): string {
   return `Available child-agent roles:\n${match[1].trimEnd()}`;
 }
 
-async function withMockedFetch<T>(
-  fetchImpl: typeof fetch,
-  run: () => Promise<T>,
-): Promise<T> {
+async function withMockedFetch<T>(fetchImpl: typeof fetch, run: () => Promise<T>): Promise<T> {
   const previous = globalThis.fetch;
   globalThis.fetch = fetchImpl;
   try {
@@ -134,22 +129,20 @@ async function withMockedFetch<T>(
 }
 
 function skillDoc(name: string, description: string, body = "# Skill Body\n"): string {
-  return ["---", `name: \"${name}\"`, `description: \"${description}\"`, "---", "", body].join("\n");
+  return ["---", `name: "${name}"`, `description: "${description}"`, "---", "", body].join("\n");
 }
 
 function expectWorkspaceHygieneAndShellFirstGuidance(prompt: string) {
   expect(prompt).toContain(
-    "Do not create generic `/tmp`, `tmp`, `temp`, `output`, `outputs`, `scratch`"
+    "Do not create generic `/tmp`, `tmp`, `temp`, `output`, `outputs`, `scratch`",
   );
-  expect(prompt).toContain(
-    "prefer the smallest shell-first path before creating a helper script"
-  );
+  expect(prompt).toContain("prefer the smallest shell-first path before creating a helper script");
   expect(prompt).toContain("Only create an ad hoc Python or shell script");
 }
 
 function expectNoWorkspacePackageScaffoldingGuidance(prompt: string) {
   expect(prompt).toContain(
-    "Do not create `package.json`, `package-lock.json`, `bun.lock`, `yarn.lock`, `pnpm-lock.yaml`, or `node_modules`"
+    "Do not create `package.json`, `package-lock.json`, `bun.lock`, `yarn.lock`, `pnpm-lock.yaml`, or `node_modules`",
   );
   expect(prompt).toContain("stage them outside the user's deliverable folder");
 }
@@ -188,19 +181,27 @@ function expectSharedAgentReportContract(prompt: string) {
   expect(prompt).toContain("Completion contract:");
   expect(prompt).toContain("exactly one `<agent_report>...</agent_report>` footer");
   expect(prompt).toContain("Required footer fields: `status`, `summary`.");
-  expect(prompt).toContain("Optional footer fields: `filesChanged`, `filesRead`, `verification`, `residualRisks`.");
+  expect(prompt).toContain(
+    "Optional footer fields: `filesChanged`, `filesRead`, `verification`, `residualRisks`.",
+  );
   expect(prompt).toContain("`status` must be one of `completed`, `blocked`, or `failed`.");
 }
 
 function expectCoordinatorRoleMappingGuidance(prompt: string) {
   expect(prompt).toContain("choose a read-only discovery role from the available sub-agent types");
-  expect(prompt).toContain("choose a write-capable implementation role from the available sub-agent types");
-  expect(prompt).toContain("choose an independent read-only verification role from the available sub-agent types");
+  expect(prompt).toContain(
+    "choose a write-capable implementation role from the available sub-agent types",
+  );
+  expect(prompt).toContain(
+    "choose an independent read-only verification role from the available sub-agent types",
+  );
   expect(prompt).toContain("Use role discipline based on the currently available sub-agent types:");
   expect(prompt).toContain("default: `explorer`");
   expect(prompt).toContain("default: `worker`");
   expect(prompt).toContain("default: `reviewer`");
-  expect(prompt).toContain("spawn an independent read-only verification child (default: `reviewer`)");
+  expect(prompt).toContain(
+    "spawn an independent read-only verification child (default: `reviewer`)",
+  );
 
   for (const role of Object.values(AGENT_ROLE_DEFINITIONS)) {
     expect(prompt).toContain(`- \`${role.id}\`: ${role.description}`);
@@ -213,13 +214,19 @@ const IMAGE_GUIDANCE_PROMPT_CONFIGS = [
   { provider: "anthropic", model: "claude-haiku-4-5", preferredChildModel: "claude-haiku-4-5" },
   { provider: "anthropic", model: "claude-sonnet-4-6", preferredChildModel: "claude-sonnet-4-6" },
   { provider: "anthropic", model: "claude-opus-4-6", preferredChildModel: "claude-opus-4-6" },
-  { provider: "google", model: "gemini-3-flash-preview", preferredChildModel: "gemini-3-flash-preview" },
-  { provider: "google", model: "gemini-3.1-pro-preview", preferredChildModel: "gemini-3.1-pro-preview" },
+  {
+    provider: "google",
+    model: "gemini-3-flash-preview",
+    preferredChildModel: "gemini-3-flash-preview",
+  },
+  {
+    provider: "google",
+    model: "gemini-3.1-pro-preview",
+    preferredChildModel: "gemini-3.1-pro-preview",
+  },
 ] as const;
 
-const WEBFETCH_DOWNLOAD_GUIDANCE_PROMPT_CONFIGS = [
-  ...IMAGE_GUIDANCE_PROMPT_CONFIGS,
-] as const;
+const WEBFETCH_DOWNLOAD_GUIDANCE_PROMPT_CONFIGS = [...IMAGE_GUIDANCE_PROMPT_CONFIGS] as const;
 
 // ---------------------------------------------------------------------------
 // loadSystemPrompt
@@ -257,7 +264,11 @@ describe("loadSystemPrompt", () => {
   });
 
   test("replaces {{modelName}} template variable", async () => {
-    const config = makeConfig({ provider: "openai", model: "gpt-5.4", preferredChildModel: "gpt-5.4" });
+    const config = makeConfig({
+      provider: "openai",
+      model: "gpt-5.4",
+      preferredChildModel: "gpt-5.4",
+    });
     const prompt = await loadSystemPrompt(config);
     expect(prompt).toContain("GPT-5.4");
     expect(prompt).not.toContain("{{modelName}}");
@@ -288,11 +299,21 @@ describe("loadSystemPrompt", () => {
     const expectedSharedGuidance = `${expectedSpawnAgentSharedGuidance()}\n\n${expectedRoleCatalog}`;
     const promptConfigs = [
       makeConfig({ provider: "openai", model: "gpt-5.4", preferredChildModel: "gpt-5.4" }),
-      makeConfig({ provider: "google", model: "gemini-3.1-pro-preview", preferredChildModel: "gemini-3.1-pro-preview" }),
-      makeConfig({ provider: "anthropic", model: "claude-sonnet-4-6", preferredChildModel: "claude-sonnet-4-6" }),
+      makeConfig({
+        provider: "google",
+        model: "gemini-3.1-pro-preview",
+        preferredChildModel: "gemini-3.1-pro-preview",
+      }),
+      makeConfig({
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        preferredChildModel: "claude-sonnet-4-6",
+      }),
     ];
 
-    expect(buildSpawnAgentRolePromptLines()).toHaveLength(Object.keys(AGENT_ROLE_DEFINITIONS).length);
+    expect(buildSpawnAgentRolePromptLines()).toHaveLength(
+      Object.keys(AGENT_ROLE_DEFINITIONS).length,
+    );
 
     for (const config of promptConfigs) {
       const prompt = await loadSystemPrompt(config);
@@ -306,22 +327,32 @@ describe("loadSystemPrompt", () => {
   });
 
   test("renders dynamic spawnAgent model guidance for the current provider", async () => {
-    const config = makeConfig({ provider: "openai", model: "gpt-5.4", preferredChildModel: "gpt-5.4" });
+    const config = makeConfig({
+      provider: "openai",
+      model: "gpt-5.4",
+      preferredChildModel: "gpt-5.4",
+    });
     const prompt = await loadSystemPrompt(config);
     const spawnAgentBody = extractSpawnAgentBody(prompt);
 
     expect(spawnAgentBody).toContain("Orchestration rules:");
     expect(spawnAgentBody).toContain("Coordinator rules:");
-    expect(spawnAgentBody).toContain("Use multiple child agents in parallel when research tasks are independent.");
-    expect(spawnAgentBody).toContain("report only what was launched; do not predict their results.");
+    expect(spawnAgentBody).toContain(
+      "Use multiple child agents in parallel when research tasks are independent.",
+    );
+    expect(spawnAgentBody).toContain(
+      "report only what was launched; do not predict their results.",
+    );
     expect(spawnAgentBody).toContain("run an independent read-only verifier role for validation");
     expect(spawnAgentBody).toContain("Model override guidance:");
-    expect(spawnAgentBody).toContain("Available model overrides for the current provider (OpenAI):");
+    expect(spawnAgentBody).toContain(
+      "Available model overrides for the current provider (OpenAI):",
+    );
     expect(spawnAgentBody).toContain("**GPT-5.4** (`gpt-5.4`)");
     expect(spawnAgentBody).toContain("**GPT-5.4 Mini** (`gpt-5.4-mini`)");
     expect(spawnAgentBody).toContain("**GPT-5 Mini** (`gpt-5-mini`)");
     expect(spawnAgentBody).toContain("`preferredChildModelRef` is only a workspace/UI suggestion");
-    expect(prompt).toContain("spawnAgent with `role: \"explorer\"`");
+    expect(prompt).toContain('spawnAgent with `role: "explorer"`');
     expect(prompt).not.toContain("spawnAgent (explore type)");
     expect(spawnAgentBody).not.toContain("**explore**: Fast codebase exploration.");
     expect(spawnAgentBody).not.toContain("**general**: Full-capability agent for delegated tasks.");
@@ -337,7 +368,9 @@ describe("loadSystemPrompt", () => {
     const prompt = await loadSystemPrompt(config);
 
     expectCoordinatorRoleMappingGuidance(prompt);
-    expect(prompt).toContain("After launching child agents, only report what was launched; do not report predicted results.");
+    expect(prompt).toContain(
+      "After launching child agents, only report what was launched; do not report predicted results.",
+    );
     expect(prompt).toContain("Reuse a child when follow-up work has high context overlap.");
     expect(prompt).toContain("Keep at most one write-capable child per file area at a time");
   });
@@ -351,7 +384,9 @@ describe("loadSystemPrompt", () => {
     const prompt = await loadSystemPrompt(config);
 
     expect(prompt).toContain("Available model overrides for the current provider (Baseten):");
-    expect(prompt).toContain("No user-facing child model overrides are available for this provider.");
+    expect(prompt).toContain(
+      "No user-facing child model overrides are available for this provider.",
+    );
     expect(prompt).not.toContain("Nemotron 120B A12B");
     expect(prompt).not.toContain("moonshotai/Kimi-K2.5");
   });
@@ -425,7 +460,7 @@ describe("loadSystemPrompt", () => {
     const prompt = await loadSystemPrompt(config);
 
     expect(prompt).toContain(
-      "- User profile details the agent should know: Literal token {{workingDirectory}} should stay as written."
+      "- User profile details the agent should know: Literal token {{workingDirectory}} should stay as written.",
     );
     expect(prompt).toContain("/test/working");
   });
@@ -475,11 +510,11 @@ describe("loadSystemPrompt", () => {
 
     await writeFile(
       path.join(builtIn, "prompts", "system.md"),
-      "DEFAULT SYSTEM TEMPLATE {{modelName}}"
+      "DEFAULT SYSTEM TEMPLATE {{modelName}}",
     );
     await writeFile(
       path.join(builtIn, "prompts", "system-models", "gpt-5.2.md"),
-      "GPT-5.2 SYSTEM TEMPLATE {{modelName}}"
+      "GPT-5.2 SYSTEM TEMPLATE {{modelName}}",
     );
 
     const config = makeConfig({
@@ -499,17 +534,23 @@ describe("loadSystemPrompt", () => {
 
     await writeFile(
       path.join(builtIn, "prompts", "system.md"),
-      "DEFAULT SYSTEM TEMPLATE {{modelName}}"
+      "DEFAULT SYSTEM TEMPLATE {{modelName}}",
     );
     await writeFile(
       path.join(builtIn, "prompts", "system-models", "gpt-5.4.json"),
-      JSON.stringify({
-        extends: "../system.md",
-        replacements: [{
-          old: "DEFAULT SYSTEM TEMPLATE {{modelName}}",
-          new: "GPT-5.4 SYSTEM TEMPLATE {{modelName}}",
-        }],
-      }, null, 2),
+      JSON.stringify(
+        {
+          extends: "../system.md",
+          replacements: [
+            {
+              old: "DEFAULT SYSTEM TEMPLATE {{modelName}}",
+              new: "GPT-5.4 SYSTEM TEMPLATE {{modelName}}",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
     );
 
     const config = makeConfig({
@@ -533,21 +574,29 @@ describe("loadSystemPrompt", () => {
     );
     await writeFile(
       path.join(builtIn, "prompts", "system-models", "gpt-5.4.json"),
-      JSON.stringify({
-        extends: "../system.md",
-        replacements: [{
-          old: "DEFAULT SYSTEM TEMPLATE\n{{modelName}}",
-          new: "GPT-5.4 SYSTEM TEMPLATE\n{{modelName}}",
-        }],
-      }, null, 2),
+      JSON.stringify(
+        {
+          extends: "../system.md",
+          replacements: [
+            {
+              old: "DEFAULT SYSTEM TEMPLATE\n{{modelName}}",
+              new: "GPT-5.4 SYSTEM TEMPLATE\n{{modelName}}",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
     );
 
-    const prompt = await loadSystemPrompt(makeConfig({
-      builtInDir: builtIn,
-      provider: "openai",
-      model: "gpt-5.4",
-      skillsDirs: ["/nonexistent/skills"],
-    }));
+    const prompt = await loadSystemPrompt(
+      makeConfig({
+        builtInDir: builtIn,
+        provider: "openai",
+        model: "gpt-5.4",
+        skillsDirs: ["/nonexistent/skills"],
+      }),
+    );
 
     expect(prompt).toContain("GPT-5.4 SYSTEM TEMPLATE\nGPT-5.4");
     expect(prompt).not.toContain("DEFAULT SYSTEM TEMPLATE");
@@ -558,17 +607,23 @@ describe("loadSystemPrompt", () => {
 
     await writeFile(
       path.join(builtIn, "prompts", "system.md"),
-      "DEFAULT SYSTEM TEMPLATE {{modelName}}"
+      "DEFAULT SYSTEM TEMPLATE {{modelName}}",
     );
     await writeFile(
       path.join(builtIn, "prompts", "system-models", "gpt-5.4.json"),
-      JSON.stringify({
-        extends: "../system.md",
-        replacements: [{
-          old: "DEFAULT SYSTEM TEMPLATE {{modelName}}",
-          new: "Base system prompt.\nMini marker.",
-        }],
-      }, null, 2),
+      JSON.stringify(
+        {
+          extends: "../system.md",
+          replacements: [
+            {
+              old: "DEFAULT SYSTEM TEMPLATE {{modelName}}",
+              new: "Base system prompt.\nMini marker.",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
     );
 
     const prompt = await loadSystemPrompt(
@@ -633,20 +688,24 @@ describe("loadSystemPrompt", () => {
 
   test("all shipped prompt templates that document read/webFetch include image inspection guidance", async () => {
     for (const overrides of IMAGE_GUIDANCE_PROMPT_CONFIGS) {
-      const prompt = await loadSystemPrompt(makeConfig({
-        ...overrides,
-        skillsDirs: ["/nonexistent/skills"],
-      }));
+      const prompt = await loadSystemPrompt(
+        makeConfig({
+          ...overrides,
+          skillsDirs: ["/nonexistent/skills"],
+        }),
+      );
       expectImageInspectionGuidance(prompt);
     }
   });
 
   test("all shipped prompt templates that document webFetch include download guidance", async () => {
     for (const overrides of WEBFETCH_DOWNLOAD_GUIDANCE_PROMPT_CONFIGS) {
-      const prompt = await loadSystemPrompt(makeConfig({
-        ...overrides,
-        skillsDirs: ["/nonexistent/skills"],
-      }));
+      const prompt = await loadSystemPrompt(
+        makeConfig({
+          ...overrides,
+          skillsDirs: ["/nonexistent/skills"],
+        }),
+      );
       expectWebFetchDownloadGuidance(prompt);
     }
   });
@@ -657,7 +716,7 @@ describe("loadSystemPrompt", () => {
     await writeFile(path.join(builtIn, "prompts", "system.md"), "DEFAULT {{modelName}}");
     await writeFile(
       path.join(builtIn, "prompts", "system-models", "gemini-3.1-pro-preview.md"),
-      "GEMINI 3.1 PRO TEMPLATE {{modelName}}"
+      "GEMINI 3.1 PRO TEMPLATE {{modelName}}",
     );
 
     const config = makeConfig({
@@ -678,13 +737,19 @@ describe("loadSystemPrompt", () => {
     await writeFile(path.join(builtIn, "prompts", "system.md"), "DEFAULT {{modelName}}");
     await writeFile(
       path.join(builtIn, "prompts", "system-models", "claude-opus-4-6.json"),
-      JSON.stringify({
-        extends: "../system.md",
-        replacements: [{
-          old: "DEFAULT {{modelName}}",
-          new: "OPUS TEMPLATE {{modelName}}",
-        }],
-      }, null, 2),
+      JSON.stringify(
+        {
+          extends: "../system.md",
+          replacements: [
+            {
+              old: "DEFAULT {{modelName}}",
+              new: "OPUS TEMPLATE {{modelName}}",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
     );
 
     const config = makeConfig({
@@ -705,7 +770,7 @@ describe("loadSystemPrompt", () => {
     await writeFile(path.join(builtIn, "prompts", "system.md"), "DEFAULT {{modelName}}");
     await writeFile(
       path.join(builtIn, "prompts", "system-models", "claude-sonnet-4-6.md"),
-      "SONNET TEMPLATE {{modelName}}"
+      "SONNET TEMPLATE {{modelName}}",
     );
 
     const config = makeConfig({
@@ -721,12 +786,14 @@ describe("loadSystemPrompt", () => {
   });
 
   test("real Claude Haiku 4.5 prompt keeps its speed-focused guidance", async () => {
-    const prompt = await loadSystemPrompt(makeConfig({
-      provider: "anthropic",
-      model: "claude-haiku-4-5",
-      preferredChildModel: "claude-haiku-4-5",
-      skillsDirs: ["/nonexistent/skills"],
-    }));
+    const prompt = await loadSystemPrompt(
+      makeConfig({
+        provider: "anthropic",
+        model: "claude-haiku-4-5",
+        preferredChildModel: "claude-haiku-4-5",
+        skillsDirs: ["/nonexistent/skills"],
+      }),
+    );
 
     expect(prompt).toContain("You prioritize speed and conciseness while maintaining accuracy.");
     expect(prompt).toContain("<thinking_process>");
@@ -761,7 +828,9 @@ describe("loadSystemPrompt", () => {
 
     expect(normalized).not.toContain("if read returns an image");
     expect(normalized).not.toContain("download a direct image url and inspect it with `read`");
-    expect(normalized).not.toContain("do not ask the user to re-upload it just because it is visual");
+    expect(normalized).not.toContain(
+      "do not ask the user to re-upload it just because it is visual",
+    );
   });
 
   test("always appends strict skill loading policy", async () => {
@@ -793,7 +862,10 @@ describe("loadSystemPrompt", () => {
 
     // Create a skill directory with SKILL.md
     const skillMdPath = path.join(skillsDir, "test-skill", "SKILL.md");
-    await writeFile(skillMdPath, skillDoc("test-skill", "Test Skill Description", "# Test Skill\n"));
+    await writeFile(
+      skillMdPath,
+      skillDoc("test-skill", "Test Skill Description", "# Test Skill\n"),
+    );
 
     const config = makeConfig({
       skillsDirs: [skillsDir],
@@ -813,12 +885,12 @@ describe("loadSystemPrompt", () => {
 
     await writeFile(
       path.join(skillsDir, "skill-a", "SKILL.md"),
-      skillDoc("skill-a", "Skill A Description", "# Skill A\n")
+      skillDoc("skill-a", "Skill A Description", "# Skill A\n"),
     );
 
     await writeFile(
       path.join(skillsDir, "skill-b", "SKILL.md"),
-      skillDoc("skill-b", "Skill B Description", "# Skill B\n")
+      skillDoc("skill-b", "Skill B Description", "# Skill B\n"),
     );
 
     const config = makeConfig({
@@ -875,10 +947,7 @@ describe("loadSystemPrompt", () => {
 
   test("skips skills section when skills dirs do not exist", async () => {
     const config = makeConfig({
-      skillsDirs: [
-        "/nonexistent/path/skills1",
-        "/nonexistent/path/skills2",
-      ],
+      skillsDirs: ["/nonexistent/path/skills1", "/nonexistent/path/skills2"],
     });
 
     const prompt = await loadSystemPrompt(config);
@@ -892,7 +961,7 @@ describe("loadSystemPrompt", () => {
 
     await writeFile(
       path.join(projectAgentDir, "AGENT.md"),
-      "This is the project hot cache content."
+      "This is the project hot cache content.",
     );
 
     const config = makeConfig({
@@ -913,10 +982,7 @@ describe("loadSystemPrompt", () => {
     const userAgentDir = path.join(tmp, "home", ".agent");
 
     // Only user dir has AGENT.md, not project dir
-    await writeFile(
-      path.join(userAgentDir, "AGENT.md"),
-      "This is the user hot cache content."
-    );
+    await writeFile(path.join(userAgentDir, "AGENT.md"), "This is the user hot cache content.");
 
     const config = makeConfig({
       projectAgentDir,
@@ -935,15 +1001,9 @@ describe("loadSystemPrompt", () => {
     const projectAgentDir = path.join(tmp, "project", ".agent");
     const userAgentDir = path.join(tmp, "home", ".agent");
 
-    await writeFile(
-      path.join(projectAgentDir, "AGENT.md"),
-      "PROJECT cache wins."
-    );
+    await writeFile(path.join(projectAgentDir, "AGENT.md"), "PROJECT cache wins.");
 
-    await writeFile(
-      path.join(userAgentDir, "AGENT.md"),
-      "USER cache loses."
-    );
+    await writeFile(path.join(userAgentDir, "AGENT.md"), "USER cache loses.");
 
     const config = makeConfig({
       projectAgentDir,
@@ -962,7 +1022,10 @@ describe("loadSystemPrompt", () => {
     const userAgentDir = path.join(tmp, "home", ".agent");
 
     await writeFile(path.join(projectAgentDir, "AGENT.md"), "Hot cache summary.");
-    await writeFile(path.join(projectAgentDir, "memory", "people", "sarah.md"), "Sarah deep profile.");
+    await writeFile(
+      path.join(projectAgentDir, "memory", "people", "sarah.md"),
+      "Sarah deep profile.",
+    );
 
     const config = makeConfig({
       projectAgentDir,
@@ -1066,7 +1129,7 @@ describe("loadSystemPrompt", () => {
 
     await writeFile(
       path.join(skillsDir, "annotated-skill", "SKILL.md"),
-      skillDoc("annotated-skill", "Annotated Skill", "# Annotated Skill\n")
+      skillDoc("annotated-skill", "Annotated Skill", "# Annotated Skill\n"),
     );
 
     const config = makeConfig({
@@ -1083,7 +1146,7 @@ describe("loadSystemPrompt", () => {
 
     await writeFile(
       path.join(skillsDir, "xlsx", "SKILL.md"),
-      skillDoc("xlsx", "Excel Spreadsheet Skill", "# Excel Spreadsheet Skill\n")
+      skillDoc("xlsx", "Excel Spreadsheet Skill", "# Excel Spreadsheet Skill\n"),
     );
 
     const config = makeConfig({
@@ -1149,7 +1212,9 @@ describe("loadSubAgentPrompt", () => {
     const prompt = await loadAgentPrompt(config, "reviewer");
     expectSharedAgentReportContract(prompt);
     expect(prompt).toContain("Do not modify project files.");
-    expect(prompt).toContain("Every PASS claim must include the command you ran and the observed output");
+    expect(prompt).toContain(
+      "Every PASS claim must include the command you ran and the observed output",
+    );
     expect(prompt).toContain("Run at least one adversarial probe");
     expect(prompt).toContain("VERDICT: PASS");
     expect(prompt).toContain("PASS -> `completed`, PARTIAL -> `blocked`, FAIL -> `failed`");
@@ -1170,7 +1235,9 @@ describe("loadSubAgentPrompt", () => {
     const prompt = await loadAgentPrompt(config, "default");
     expectSharedAgentReportContract(prompt);
     expect(prompt).toContain("Role: default");
-    expect(prompt).toContain("Stay bounded, execute directly when appropriate, and verify relevant claims before finishing.");
+    expect(prompt).toContain(
+      "Stay bounded, execute directly when appropriate, and verify relevant claims before finishing.",
+    );
     expect(prompt).toContain("Summary");
     expect(prompt).toContain("Files changed");
     expect(prompt).toContain("Verification");
@@ -1183,14 +1250,8 @@ describe("loadSubAgentPrompt", () => {
 
     const basePrompt = "Shared base prompt.";
     const promptContent = "Custom explore agent prompt for testing.";
-    await writeFile(
-      path.join(builtIn, "prompts", "sub-agents", "base.md"),
-      basePrompt
-    );
-    await writeFile(
-      path.join(builtIn, "prompts", "sub-agents", "explorer.md"),
-      promptContent
-    );
+    await writeFile(path.join(builtIn, "prompts", "sub-agents", "base.md"), basePrompt);
+    await writeFile(path.join(builtIn, "prompts", "sub-agents", "explorer.md"), promptContent);
 
     const config = makeConfig({
       builtInDir: builtIn,
@@ -1213,10 +1274,7 @@ describe("loadHotCache (tested indirectly)", () => {
     const projectAgentDir = path.join(tmp, "project", ".agent");
     const userAgentDir = path.join(tmp, "home", ".agent");
 
-    await writeFile(
-      path.join(projectAgentDir, "AGENT.md"),
-      "Project-level memory content here."
-    );
+    await writeFile(path.join(projectAgentDir, "AGENT.md"), "Project-level memory content here.");
 
     const config = makeConfig({
       projectAgentDir,
@@ -1233,10 +1291,7 @@ describe("loadHotCache (tested indirectly)", () => {
     const projectAgentDir = path.join(tmp, "no-project", ".agent");
     const userAgentDir = path.join(tmp, "home", ".agent");
 
-    await writeFile(
-      path.join(userAgentDir, "AGENT.md"),
-      "User-level memory fallback content."
-    );
+    await writeFile(path.join(userAgentDir, "AGENT.md"), "User-level memory fallback content.");
 
     const config = makeConfig({
       projectAgentDir,
@@ -1319,14 +1374,11 @@ describe("loadHotCache (tested indirectly)", () => {
     const userAgentDir = path.join(tmp, "combo-home", ".agent");
     const skillsDir = path.join(tmp, "combo-skills");
 
-    await writeFile(
-      path.join(projectAgentDir, "AGENT.md"),
-      "Hot cache content present."
-    );
+    await writeFile(path.join(projectAgentDir, "AGENT.md"), "Hot cache content present.");
 
     await writeFile(
       path.join(skillsDir, "combo-skill", "SKILL.md"),
-      skillDoc("combo-skill", "Combo Skill", "# Combo Skill\n")
+      skillDoc("combo-skill", "Combo Skill", "# Combo Skill\n"),
     );
 
     const config = makeConfig({

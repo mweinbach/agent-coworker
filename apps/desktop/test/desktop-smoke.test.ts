@@ -1,12 +1,11 @@
+import { describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 
-import { describe, expect, test } from "bun:test";
-
 import {
-  connectDesktopSmokeJsonRpc,
-  runDesktopSmokePromptLoadCheck,
   type ConnectDesktopSmokeJsonRpcOptions,
+  connectDesktopSmokeJsonRpc,
   type DesktopSmokeJsonRpcConnection,
+  runDesktopSmokePromptLoadCheck,
 } from "../electron/services/desktopSmoke";
 
 class FakeWebSocket extends EventEmitter {
@@ -56,7 +55,9 @@ async function flushMicrotasks() {
   await new Promise<void>((resolve) => queueMicrotask(resolve));
 }
 
-function createSocketOptions(overrides: Partial<ConnectDesktopSmokeJsonRpcOptions> = {}): ConnectDesktopSmokeJsonRpcOptions {
+function createSocketOptions(
+  overrides: Partial<ConnectDesktopSmokeJsonRpcOptions> = {},
+): ConnectDesktopSmokeJsonRpcOptions {
   FakeWebSocket.instances = [];
   return {
     url: "ws://example.test/socket",
@@ -81,9 +82,10 @@ function createManualTimers() {
         return { id } as ReturnType<typeof setTimeout>;
       },
       clearTimeoutFn(handle: ReturnType<typeof setTimeout>) {
-        const id = typeof handle === "object" && handle !== null && "id" in handle
-          ? Number((handle as { id?: unknown }).id)
-          : NaN;
+        const id =
+          typeof handle === "object" && handle !== null && "id" in handle
+            ? Number((handle as { id?: unknown }).id)
+            : NaN;
         if (Number.isFinite(id)) {
           timeoutCallbacks.delete(id);
         }
@@ -132,7 +134,9 @@ describe("desktop smoke JSON-RPC helper", () => {
     ws.emitOpen();
     ws.emitMessage(JSON.stringify({ id: 1, result: { protocolVersion: "0.2" } }));
 
-    await expect(connectPromise).rejects.toThrow("Desktop smoke initialize returned an unexpected protocol version");
+    await expect(connectPromise).rejects.toThrow(
+      "Desktop smoke initialize returned an unexpected protocol version",
+    );
     expect(ws.closeCalls).toBe(1);
   });
 
@@ -150,7 +154,9 @@ describe("desktop smoke JSON-RPC helper", () => {
   test("surfaces request errors and still resolves queued notifications", async () => {
     const { rpc, ws } = await connectWithInitializedSocket();
 
-    ws.emitMessage(JSON.stringify({ method: "thread/started", params: { thread: { id: "thread-1" } } }));
+    ws.emitMessage(
+      JSON.stringify({ method: "thread/started", params: { thread: { id: "thread-1" } } }),
+    );
 
     const requestPromise = rpc.sendRequest("thread/start", { cwd: "/workspace" });
     expect(parseSentMessages(ws)[2]).toEqual({
@@ -206,14 +212,19 @@ describe("desktop smoke JSON-RPC helper", () => {
     const manualTimers = createManualTimers();
     const { rpc } = await connectWithInitializedSocket(manualTimers.timers);
 
-    const waitPromise = rpc.waitFor(() => false, { label: "turn/completed for turn-1", timeoutMs: 123 });
+    const waitPromise = rpc.waitFor(() => false, {
+      label: "turn/completed for turn-1",
+      timeoutMs: 123,
+    });
     const timerCallback = manualTimers.timeoutCallbacks.at(-1)?.[1];
     if (!timerCallback) {
       throw new Error("expected waitFor to register a timeout");
     }
     timerCallback();
 
-    await expect(waitPromise).rejects.toThrow("Timed out waiting for desktop smoke turn/completed for turn-1");
+    await expect(waitPromise).rejects.toThrow(
+      "Timed out waiting for desktop smoke turn/completed for turn-1",
+    );
     rpc.close();
   });
 });
@@ -245,7 +256,10 @@ describe("runDesktopSmokePromptLoadCheck", () => {
           expect(predicate(message)).toBe(true);
           return message;
         }
-        const message = { method: "turn/completed", params: { turn: { id: "turn-1", status: "completed" } } };
+        const message = {
+          method: "turn/completed",
+          params: { turn: { id: "turn-1", status: "completed" } },
+        };
         expect(predicate(message)).toBe(true);
         return message;
       },

@@ -1,4 +1,4 @@
-import { describe, test, expect } from "bun:test";
+import { describe, expect, test } from "bun:test";
 
 import { createA2uiTool } from "../../src/tools/a2ui";
 import type { ToolContext } from "../../src/tools/context";
@@ -43,9 +43,7 @@ describe("a2ui tool", () => {
     const tool = createA2uiTool(ctx);
     await expect(
       tool.execute({
-        envelopes: [
-          { version: "v0.9", createSurface: { surfaceId: "s", catalogId: "c" } },
-        ],
+        envelopes: [{ version: "v0.9", createSurface: { surfaceId: "s", catalogId: "c" } }],
       }),
     ).rejects.toThrow(/A2UI is not enabled/);
   });
@@ -77,9 +75,7 @@ describe("a2ui tool", () => {
     });
     const tool = createA2uiTool(ctx);
     const result = (await tool.execute({
-      envelopes: [
-        { version: "v0.9", deleteSurface: { surfaceId: "ghost" } },
-      ],
+      envelopes: [{ version: "v0.9", deleteSurface: { surfaceId: "ghost" } }],
     })) as { applied: number; failed: number; results: Array<{ error?: string }> };
     expect(result.applied).toBe(0);
     expect(result.failed).toBe(1);

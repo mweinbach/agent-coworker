@@ -12,9 +12,7 @@
       "resizeMode": "contain",
       "backgroundColor": "#0a0f1a"
     },
-    "assetBundlePatterns": [
-      "**/*"
-    ],
+    "assetBundlePatterns": ["**/*"],
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "co.weinbach.cowork.mobile",
@@ -30,16 +28,9 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#0a0f1a"
       },
-      "permissions": [
-        "android.permission.CAMERA"
-      ]
+      "permissions": ["android.permission.CAMERA"]
     },
-    "plugins": [
-      "expo-router",
-      "expo-dev-client",
-      "expo-camera",
-      "expo-secure-store"
-    ],
+    "plugins": ["expo-router", "expo-dev-client", "expo-camera", "expo-secure-store"],
     "experiments": {
       "typedRoutes": true
     }

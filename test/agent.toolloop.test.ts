@@ -1,10 +1,9 @@
-import { describe, expect, test, mock, beforeEach, afterEach } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import path from "node:path";
-
-import type { AgentConfig } from "../src/types";
 import type { RunTurnParams } from "../src/agent";
 import { createRunTurn } from "../src/agent";
 import { __internal as observabilityRuntimeInternal } from "../src/observability/runtime";
+import type { AgentConfig } from "../src/types";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -59,23 +58,24 @@ function makeStreamTextWithFullStream(
     reasoningText?: string | undefined;
     responseMessages?: any[];
     usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
-  } = {}
+  } = {},
 ) {
-  const {
-    text = "",
-    reasoningText = undefined,
-    responseMessages = [],
-    usage = undefined,
-  } = opts;
+  const { text = "", reasoningText = undefined, responseMessages = [], usage = undefined } = opts;
 
   return async () => {
     let resolveText!: (v: string) => void;
     let resolveReasoningText!: (v: string | undefined) => void;
     let resolveResponse!: (v: any) => void;
 
-    const textPromise = new Promise<string>((r) => { resolveText = r; });
-    const reasoningTextPromise = new Promise<string | undefined>((r) => { resolveReasoningText = r; });
-    const responsePromise = new Promise<any>((r) => { resolveResponse = r; });
+    const textPromise = new Promise<string>((r) => {
+      resolveText = r;
+    });
+    const reasoningTextPromise = new Promise<string | undefined>((r) => {
+      resolveReasoningText = r;
+    });
+    const responsePromise = new Promise<any>((r) => {
+      resolveResponse = r;
+    });
 
     const fullStream = (async function* () {
       for (const part of parts) {
@@ -180,7 +180,7 @@ describe("runTurn – multi-step tool loops", () => {
       makeStreamTextWithFullStream(streamParts, {
         text: "Here are the files.",
         responseMessages: [{ role: "assistant", content: "Here are the files." }],
-      })
+      }),
     );
 
     const seen: unknown[] = [];
@@ -189,7 +189,7 @@ describe("runTurn – multi-step tool loops", () => {
         onModelStreamPart: async (part) => {
           seen.push(part);
         },
-      })
+      }),
     );
 
     expect(seen).toEqual(streamParts);
@@ -221,9 +221,7 @@ describe("runTurn – multi-step tool loops", () => {
     };
     const toolResultMsg = {
       role: "tool",
-      content: [
-        { type: "tool-result", toolCallId: "tc-1", toolName: "bash", output: "file.txt" },
-      ],
+      content: [{ type: "tool-result", toolCallId: "tc-1", toolName: "bash", output: "file.txt" }],
     };
     const finalAssistantMsg = {
       role: "assistant",
@@ -233,19 +231,16 @@ describe("runTurn – multi-step tool loops", () => {
     const allResponseMessages = [toolCallMsg, toolResultMsg, finalAssistantMsg];
 
     deps.mockStreamText.mockImplementation(
-      makeStreamTextWithFullStream(
-        [{ type: "start" }, { type: "finish", finishReason: "stop" }],
-        {
-          text: "I found file.txt.",
-          responseMessages: allResponseMessages,
-        }
-      )
+      makeStreamTextWithFullStream([{ type: "start" }, { type: "finish", finishReason: "stop" }], {
+        text: "I found file.txt.",
+        responseMessages: allResponseMessages,
+      }),
     );
 
     const result = await runTurn(
       makeParams({
         onModelStreamPart: async () => {},
-      })
+      }),
     );
 
     expect(result.responseMessages).toEqual(allResponseMessages);
@@ -293,7 +288,7 @@ describe("runTurn – multi-step tool loops", () => {
           abortSignal: abortController.signal,
           onModelAbort,
           onModelStreamPart: async () => {},
-        })
+        }),
       ),
       new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 3000)),
     ]);
@@ -321,9 +316,9 @@ describe("runTurn – multi-step tool loops", () => {
 
     deps.mockStreamText.mockRejectedValue(new Error("Provider connection failed"));
 
-    await expect(
-      runTurn(makeParams({ enableMcp: true }))
-    ).rejects.toThrow("Provider connection failed");
+    await expect(runTurn(makeParams({ enableMcp: true }))).rejects.toThrow(
+      "Provider connection failed",
+    );
 
     expect(mockClose).toHaveBeenCalledTimes(1);
   });
@@ -346,8 +341,8 @@ describe("runTurn – multi-step tool loops", () => {
     deps.mockStreamText.mockImplementation(
       makeStreamTextWithFullStream(
         [{ type: "start" }, ...toolParts, { type: "finish", finishReason: "stop" }],
-        { text: "done" }
-      )
+        { text: "done" },
+      ),
     );
 
     const seen: unknown[] = [];
@@ -356,13 +351,13 @@ describe("runTurn – multi-step tool loops", () => {
         onModelStreamPart: async (part) => {
           seen.push(part);
         },
-      })
+      }),
     );
 
     // All tool-related parts should appear in the collected output
     for (const toolPart of toolParts) {
       const found = seen.find(
-        (s: any) => s.type === toolPart.type && s.toolCallId === (toolPart as any).toolCallId
+        (s: any) => s.type === toolPart.type && s.toolCallId === (toolPart as any).toolCallId,
       );
       expect(found).toBeDefined();
     }
@@ -407,7 +402,7 @@ describe("runTurn – multi-step tool loops", () => {
     ];
 
     deps.mockStreamText.mockImplementation(
-      makeStreamTextWithFullStream(parts, { text: "step zerostep one" })
+      makeStreamTextWithFullStream(parts, { text: "step zerostep one" }),
     );
 
     const seen: unknown[] = [];
@@ -416,7 +411,7 @@ describe("runTurn – multi-step tool loops", () => {
         onModelStreamPart: async (part) => {
           seen.push(part);
         },
-      })
+      }),
     );
 
     const startSteps = seen.filter((s: any) => s.type === "start-step");
@@ -450,7 +445,9 @@ describe("runTurn – multi-step tool loops", () => {
       return {
         text: Promise.resolve("partial response"),
         reasoningText: Promise.resolve(undefined),
-        response: Promise.resolve({ messages: [{ role: "assistant", content: "partial response" }] }),
+        response: Promise.resolve({
+          messages: [{ role: "assistant", content: "partial response" }],
+        }),
         fullStream: (async function* () {
           for (const part of partsBeforeError) {
             yield part;
@@ -470,7 +467,7 @@ describe("runTurn – multi-step tool loops", () => {
           onModelStreamPart: async (part) => {
             seen.push(part);
           },
-        })
+        }),
       ),
       new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 3000)),
     ]);
@@ -493,11 +490,10 @@ describe("runTurn – multi-step tool loops", () => {
     await new Promise((r) => setTimeout(r, 50));
     const logCalls = (log as any).mock.calls.map((c: any) => c[0]);
     const hasStreamError = logCalls.some(
-      (msg: string) =>
-        msg.includes("[warn]") && msg.includes("Stream interrupted")
+      (msg: string) => msg.includes("[warn]") && msg.includes("Stream interrupted"),
     );
-    const hasStreamDidNotDrain = logCalls.some(
-      (msg: string) => msg.includes("Model stream did not drain")
+    const hasStreamDidNotDrain = logCalls.some((msg: string) =>
+      msg.includes("Model stream did not drain"),
     );
     // At least one of the warning paths should have triggered
     expect(hasStreamError || hasStreamDidNotDrain).toBe(true);
@@ -519,9 +515,15 @@ describe("runTurn – multi-step tool loops", () => {
       let resolveReasoningText!: (v: undefined) => void;
       let resolveResponse!: (v: any) => void;
 
-      const textPromise = new Promise<string>((r) => { resolveText = r; });
-      const reasoningTextPromise = new Promise<undefined>((r) => { resolveReasoningText = r; });
-      const responsePromise = new Promise<any>((r) => { resolveResponse = r; });
+      const textPromise = new Promise<string>((r) => {
+        resolveText = r;
+      });
+      const reasoningTextPromise = new Promise<undefined>((r) => {
+        resolveReasoningText = r;
+      });
+      const responsePromise = new Promise<any>((r) => {
+        resolveResponse = r;
+      });
 
       const fullStream = (async function* () {
         yield { type: "start" };
@@ -550,7 +552,7 @@ describe("runTurn – multi-step tool loops", () => {
         onModelStreamPart: async (part) => {
           seen.push(part);
         },
-      })
+      }),
     );
 
     expect(streamDone).toBe(true);
@@ -584,7 +586,7 @@ describe("runTurn – multi-step tool loops", () => {
               ],
             },
           ] as any[],
-        })
+        }),
       );
 
       expect(capturedCtx.turnUserPrompt).toBe("first line\nsecond line");
@@ -602,12 +604,10 @@ describe("runTurn – multi-step tool loops", () => {
           messages: [
             {
               role: "user",
-              content: [
-                { type: "custom", inputText: "fallback input text" },
-              ],
+              content: [{ type: "custom", inputText: "fallback input text" }],
             },
           ] as any[],
-        })
+        }),
       );
 
       expect(capturedCtx.turnUserPrompt).toBe("fallback input text");
@@ -636,7 +636,7 @@ describe("runTurn – multi-step tool loops", () => {
               content: [{ type: "text", text: "   " }],
             },
           ] as any[],
-        })
+        }),
       );
 
       // The last user message has only whitespace, so extractTurnUserPrompt
@@ -659,7 +659,7 @@ describe("runTurn – multi-step tool loops", () => {
               content: "plain string prompt",
             },
           ] as any[],
-        })
+        }),
       );
 
       expect(capturedCtx.turnUserPrompt).toBe("plain string prompt");
@@ -678,7 +678,7 @@ describe("runTurn – multi-step tool loops", () => {
             { role: "user", content: "   " },
             { role: "user", content: [{ type: "text", text: "" }] },
           ] as any[],
-        })
+        }),
       );
 
       expect(capturedCtx.turnUserPrompt).toBeUndefined();
@@ -702,7 +702,7 @@ describe("runTurn – multi-step tool loops", () => {
               ],
             },
           ] as any[],
-        })
+        }),
       );
 
       expect(capturedCtx.turnUserPrompt).toBe("from text field\nfrom inputText field");

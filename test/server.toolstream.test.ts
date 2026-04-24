@@ -48,7 +48,10 @@ async function connectJsonRpc(url: string): Promise<JsonRpcConnection> {
   };
 
   await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("Timed out waiting for websocket open")), 5_000);
+    const timer = setTimeout(
+      () => reject(new Error("Timed out waiting for websocket open")),
+      5_000,
+    );
     ws.onopen = () => {
       clearTimeout(timer);
       resolve();
@@ -120,7 +123,9 @@ async function runTurnAndCollectNotifications(
   try {
     const started = await rpc.sendRequest("thread/start", { cwd });
     const threadId = started.result.thread.id as string;
-    await rpc.waitFor((message) => message.method === "thread/started" && message.params.thread.id === threadId);
+    await rpc.waitFor(
+      (message) => message.method === "thread/started" && message.params.thread.id === threadId,
+    );
 
     const turnStarted = await rpc.sendRequest("turn/start", {
       threadId,
@@ -131,7 +136,10 @@ async function runTurnAndCollectNotifications(
     const notifications: any[] = [];
 
     while (true) {
-      const message = await rpc.waitFor((candidate) => typeof candidate.method === "string", timeoutMs);
+      const message = await rpc.waitFor(
+        (candidate) => typeof candidate.method === "string",
+        timeoutMs,
+      );
       notifications.push(message);
       if (message.method === "turn/completed" && message.params.turn.id === turnId) {
         break;
@@ -155,8 +163,18 @@ describe("JSON-RPC tool loop notifications", () => {
       const emit = params.onModelStreamPart;
       await emit?.({ type: "start" });
       await emit?.({ type: "start-step", stepNumber: 0 });
-      await emit?.({ type: "tool-call", toolCallId: "tc1", toolName: "bash", input: { command: "ls" } });
-      await emit?.({ type: "tool-result", toolCallId: "tc1", toolName: "bash", output: "file.txt\nREADME.md" });
+      await emit?.({
+        type: "tool-call",
+        toolCallId: "tc1",
+        toolName: "bash",
+        input: { command: "ls" },
+      });
+      await emit?.({
+        type: "tool-result",
+        toolCallId: "tc1",
+        toolName: "bash",
+        output: "file.txt\nREADME.md",
+      });
       await emit?.({ type: "finish-step", stepNumber: 0, finishReason: "tool-calls" });
       await emit?.({ type: "start-step", stepNumber: 1 });
       await emit?.({ type: "text-delta", id: "t1", text: "Found 2 files." });
@@ -184,17 +202,29 @@ describe("JSON-RPC tool loop notifications", () => {
     });
 
     try {
-      const { threadId, turnId, notifications } = await runTurnAndCollectNotifications(url, tmpDir, "list files please");
+      const { threadId, turnId, notifications } = await runTurnAndCollectNotifications(
+        url,
+        tmpDir,
+        "list files please",
+      );
 
-      const toolStarted = notifications.find((message) =>
-        message.method === "item/started" && message.params.item.type === "toolCall");
-      const toolCompleted = notifications.find((message) =>
-        message.method === "item/completed" && message.params.item.type === "toolCall");
-      const agentStarted = notifications.find((message) =>
-        message.method === "item/started" && message.params.item.type === "agentMessage");
-      const agentDelta = notifications.find((message) => message.method === "item/agentMessage/delta");
-      const agentCompleted = notifications.find((message) =>
-        message.method === "item/completed" && message.params.item.type === "agentMessage");
+      const toolStarted = notifications.find(
+        (message) => message.method === "item/started" && message.params.item.type === "toolCall",
+      );
+      const toolCompleted = notifications.find(
+        (message) => message.method === "item/completed" && message.params.item.type === "toolCall",
+      );
+      const agentStarted = notifications.find(
+        (message) =>
+          message.method === "item/started" && message.params.item.type === "agentMessage",
+      );
+      const agentDelta = notifications.find(
+        (message) => message.method === "item/agentMessage/delta",
+      );
+      const agentCompleted = notifications.find(
+        (message) =>
+          message.method === "item/completed" && message.params.item.type === "agentMessage",
+      );
       const turnCompleted = notifications.find((message) => message.method === "turn/completed");
 
       expect(toolStarted).toBeDefined();
@@ -293,12 +323,24 @@ describe("JSON-RPC turn usage notifications", () => {
     });
 
     try {
-      const { turnId, notifications } = await runTurnAndCollectNotifications(url, tmpDir, "say hello");
-      const usageNotification = notifications.find((message) => message.method === "cowork/session/turnUsage");
-      const agentCompletedIndex = notifications.findIndex((message) =>
-        message.method === "item/completed" && message.params.item.type === "agentMessage");
-      const usageIndex = notifications.findIndex((message) => message.method === "cowork/session/turnUsage");
-      const turnCompletedIndex = notifications.findIndex((message) => message.method === "turn/completed");
+      const { turnId, notifications } = await runTurnAndCollectNotifications(
+        url,
+        tmpDir,
+        "say hello",
+      );
+      const usageNotification = notifications.find(
+        (message) => message.method === "cowork/session/turnUsage",
+      );
+      const agentCompletedIndex = notifications.findIndex(
+        (message) =>
+          message.method === "item/completed" && message.params.item.type === "agentMessage",
+      );
+      const usageIndex = notifications.findIndex(
+        (message) => message.method === "cowork/session/turnUsage",
+      );
+      const turnCompletedIndex = notifications.findIndex(
+        (message) => message.method === "turn/completed",
+      );
 
       expect(usageNotification).toBeDefined();
       expect(usageNotification.params).toMatchObject({

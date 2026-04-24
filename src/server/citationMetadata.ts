@@ -13,9 +13,7 @@ type ResolvedCitationReference = {
   title?: string;
 };
 
-const opaqueCitationRedirectHosts = new Set([
-  "vertexaisearch.cloud.google.com",
-]);
+const opaqueCitationRedirectHosts = new Set(["vertexaisearch.cloud.google.com"]);
 const citationResolutionTimeoutMs = 4_000;
 const citationResolutionMaxBytes = 96 * 1024;
 const citationResolutionMaxRedirects = 5;
@@ -65,7 +63,10 @@ function normalizeHostnameLikeLabel(value: string | undefined): string | null {
     return null;
   }
 
-  const trimmed = value.trim().replace(/^https?:\/\//i, "").replace(/^www\./i, "");
+  const trimmed = value
+    .trim()
+    .replace(/^https?:\/\//i, "")
+    .replace(/^www\./i, "");
   if (!trimmed || /[/?#\s]/.test(trimmed)) {
     return null;
   }
@@ -76,7 +77,10 @@ function normalizeHostnameLikeLabel(value: string | undefined): string | null {
 function isOpaqueCitationRedirectUrl(url: string): boolean {
   try {
     const parsed = new URL(url);
-    return opaqueCitationRedirectHosts.has(parsed.hostname) && parsed.pathname.startsWith("/grounding-api-redirect/");
+    return (
+      opaqueCitationRedirectHosts.has(parsed.hostname) &&
+      parsed.pathname.startsWith("/grounding-api-redirect/")
+    );
   } catch {
     return false;
   }
@@ -109,7 +113,11 @@ function resolveCitationFinalUrl(currentUrl: string, responseUrl: string | undef
 }
 
 function needsCitationResolution(reference: CitationReference): boolean {
-  return isOpaqueCitationRedirectUrl(reference.url) || !reference.title || normalizeHostnameLikeLabel(reference.title) !== null;
+  return (
+    isOpaqueCitationRedirectUrl(reference.url) ||
+    !reference.title ||
+    normalizeHostnameLikeLabel(reference.title) !== null
+  );
 }
 
 function decodeHtmlEntities(value: string): string {
@@ -123,7 +131,7 @@ function decodeHtmlEntities(value: string): string {
       case "gt":
         return ">";
       case "quot":
-        return "\"";
+        return '"';
       case "apos":
         return "'";
       case "nbsp":
@@ -177,7 +185,10 @@ function extractDocumentTitle(html: string): string | undefined {
   return normalizeResolvedTitle(match?.[1]);
 }
 
-function createTimeoutController(timeoutMs: number): { controller: AbortController; dispose: () => void } {
+function createTimeoutController(timeoutMs: number): {
+  controller: AbortController;
+  dispose: () => void;
+} {
   const controller = new AbortController();
   const handle = setTimeout(() => controller.abort(), timeoutMs);
   return {
@@ -190,7 +201,10 @@ function isRedirectStatus(status: number): boolean {
   return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
 }
 
-function buildPinnedCitationUrl(resolved: SafeWebResolution): { pinnedUrl: URL; hostHeader: string } {
+function buildPinnedCitationUrl(resolved: SafeWebResolution): {
+  pinnedUrl: URL;
+  hostHeader: string;
+} {
   const address = resolved.addresses[0];
   if (!address) {
     throw new Error(`Blocked unresolved host: ${resolved.url.hostname}`);
@@ -204,7 +218,7 @@ function buildPinnedCitationUrl(resolved: SafeWebResolution): { pinnedUrl: URL; 
 
 async function fetchCitationWithSafeRedirects(
   url: string,
-  signal: AbortSignal
+  signal: AbortSignal,
 ): Promise<{ response: Response; finalUrl: string }> {
   let current = await resolveSafeWebUrl(url);
 
@@ -296,14 +310,18 @@ async function resolveCitationReference(url: string): Promise<ResolvedCitationRe
   }
 }
 
-function getCachedResolvedCitationReference(url: string): ResolvedCitationReference | null | undefined {
+function getCachedResolvedCitationReference(
+  url: string,
+): ResolvedCitationReference | null | undefined {
   if (!settledCitationResolutionCache.has(url)) {
     return undefined;
   }
   return settledCitationResolutionCache.get(url) ?? null;
 }
 
-async function getResolvedCitationReference(url: string): Promise<ResolvedCitationReference | null> {
+async function getResolvedCitationReference(
+  url: string,
+): Promise<ResolvedCitationReference | null> {
   const cached = getCachedResolvedCitationReference(url);
   if (cached !== undefined) {
     return cached;
@@ -337,33 +355,37 @@ function primeCitationReference(url: string): void {
   });
 }
 
-export async function enrichCitationReferences<T extends CitationReference>(references: readonly T[]): Promise<T[]> {
+export async function enrichCitationReferences<T extends CitationReference>(
+  references: readonly T[],
+): Promise<T[]> {
   if (references.length === 0) {
     return [];
   }
 
-  return await Promise.all(references.map(async (reference) => {
-    if (!needsCitationResolution(reference)) {
-      return reference;
-    }
+  return await Promise.all(
+    references.map(async (reference) => {
+      if (!needsCitationResolution(reference)) {
+        return reference;
+      }
 
-    const resolved = await getResolvedCitationReference(reference.url);
-    if (!resolved) {
-      return reference;
-    }
+      const resolved = await getResolvedCitationReference(reference.url);
+      if (!resolved) {
+        return reference;
+      }
 
-    const nextTitle = resolved.title ?? reference.title;
-    const nextUrl = resolved.url || reference.url;
-    if (nextUrl === reference.url && nextTitle === reference.title) {
-      return reference;
-    }
+      const nextTitle = resolved.title ?? reference.title;
+      const nextUrl = resolved.url || reference.url;
+      if (nextUrl === reference.url && nextTitle === reference.title) {
+        return reference;
+      }
 
-    return {
-      ...reference,
-      url: nextUrl,
-      ...(nextTitle ? { title: nextTitle } : {}),
-    };
-  }));
+      return {
+        ...reference,
+        url: nextUrl,
+        ...(nextTitle ? { title: nextTitle } : {}),
+      };
+    }),
+  );
 }
 
 export function enrichCitationAnnotationsFromCache(
@@ -420,32 +442,34 @@ export async function enrichCitationAnnotations(
   }
 
   let changed = false;
-  const nextEntries = await Promise.all(entries.map(async (entry) => {
-    const url = asNonEmptyString(entry.url);
-    if (!url) {
-      return entry;
-    }
-    if (entry.type !== "url_citation" && entry.type !== "place_citation") {
-      return entry;
-    }
+  const nextEntries = await Promise.all(
+    entries.map(async (entry) => {
+      const url = asNonEmptyString(entry.url);
+      if (!url) {
+        return entry;
+      }
+      if (entry.type !== "url_citation" && entry.type !== "place_citation") {
+        return entry;
+      }
 
-    const title = asNonEmptyString(entry.title);
-    if (!needsCitationResolution({ url, title })) {
-      return entry;
-    }
+      const title = asNonEmptyString(entry.title);
+      if (!needsCitationResolution({ url, title })) {
+        return entry;
+      }
 
-    const [resolved] = await enrichCitationReferences([{ url, ...(title ? { title } : {}) }]);
-    if (!resolved || (resolved.url === url && resolved.title === title)) {
-      return entry;
-    }
+      const [resolved] = await enrichCitationReferences([{ url, ...(title ? { title } : {}) }]);
+      if (!resolved || (resolved.url === url && resolved.title === title)) {
+        return entry;
+      }
 
-    changed = true;
-    return {
-      ...entry,
-      url: resolved.url,
-      ...(resolved.title ? { title: resolved.title } : {}),
-    };
-  }));
+      changed = true;
+      return {
+        ...entry,
+        url: resolved.url,
+        ...(resolved.title ? { title: resolved.title } : {}),
+      };
+    }),
+  );
 
   return changed ? nextEntries : entries;
 }
@@ -462,7 +486,12 @@ function annotationsEqual(
 
 export function primeSessionSnapshotCitationCache(snapshot: SessionSnapshot): void {
   for (const item of snapshot.feed) {
-    if (item.kind !== "message" || item.role !== "assistant" || !Array.isArray(item.annotations) || item.annotations.length === 0) {
+    if (
+      item.kind !== "message" ||
+      item.role !== "assistant" ||
+      !Array.isArray(item.annotations) ||
+      item.annotations.length === 0
+    ) {
       continue;
     }
 
@@ -485,10 +514,17 @@ export function primeSessionSnapshotCitationCache(snapshot: SessionSnapshot): vo
   }
 }
 
-export function enrichSessionSnapshotCitationsFromCache(snapshot: SessionSnapshot): SessionSnapshot {
+export function enrichSessionSnapshotCitationsFromCache(
+  snapshot: SessionSnapshot,
+): SessionSnapshot {
   let changed = false;
   const feed = snapshot.feed.map((item) => {
-    if (item.kind !== "message" || item.role !== "assistant" || !Array.isArray(item.annotations) || item.annotations.length === 0) {
+    if (
+      item.kind !== "message" ||
+      item.role !== "assistant" ||
+      !Array.isArray(item.annotations) ||
+      item.annotations.length === 0
+    ) {
       return item;
     }
 
@@ -512,24 +548,33 @@ export function enrichSessionSnapshotCitationsFromCache(snapshot: SessionSnapsho
     : snapshot;
 }
 
-export async function enrichSessionSnapshotCitations(snapshot: SessionSnapshot): Promise<SessionSnapshot> {
+export async function enrichSessionSnapshotCitations(
+  snapshot: SessionSnapshot,
+): Promise<SessionSnapshot> {
   let changed = false;
-  const feed = await Promise.all(snapshot.feed.map(async (item) => {
-    if (item.kind !== "message" || item.role !== "assistant" || !Array.isArray(item.annotations) || item.annotations.length === 0) {
-      return item;
-    }
+  const feed = await Promise.all(
+    snapshot.feed.map(async (item) => {
+      if (
+        item.kind !== "message" ||
+        item.role !== "assistant" ||
+        !Array.isArray(item.annotations) ||
+        item.annotations.length === 0
+      ) {
+        return item;
+      }
 
-    const nextAnnotations = await enrichCitationAnnotations(item.annotations);
-    if (annotationsEqual(item.annotations, nextAnnotations)) {
-      return item;
-    }
+      const nextAnnotations = await enrichCitationAnnotations(item.annotations);
+      if (annotationsEqual(item.annotations, nextAnnotations)) {
+        return item;
+      }
 
-    changed = true;
-    return {
-      ...item,
-      ...(nextAnnotations ? { annotations: nextAnnotations } : {}),
-    };
-  }));
+      changed = true;
+      return {
+        ...item,
+        ...(nextAnnotations ? { annotations: nextAnnotations } : {}),
+      };
+    }),
+  );
 
   return changed
     ? {
@@ -550,10 +595,18 @@ export const __internal = {
   needsCitationResolution,
   normalizeHostnameLikeLabel,
   __testSetCitationCacheLimits: (limits: { maxSettled?: number; maxInflight?: number }) => {
-    if (typeof limits.maxSettled === "number" && Number.isFinite(limits.maxSettled) && limits.maxSettled > 0) {
+    if (
+      typeof limits.maxSettled === "number" &&
+      Number.isFinite(limits.maxSettled) &&
+      limits.maxSettled > 0
+    ) {
       maxSettledCitationCacheEntries = Math.floor(limits.maxSettled);
     }
-    if (typeof limits.maxInflight === "number" && Number.isFinite(limits.maxInflight) && limits.maxInflight > 0) {
+    if (
+      typeof limits.maxInflight === "number" &&
+      Number.isFinite(limits.maxInflight) &&
+      limits.maxInflight > 0
+    ) {
       maxInflightCitationResolutionEntries = Math.floor(limits.maxInflight);
     }
   },

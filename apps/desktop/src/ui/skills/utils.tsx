@@ -1,4 +1,4 @@
-import { useAppStore } from "../../app/store";
+import type { useAppStore } from "../../app/store";
 import type { SkillEntry, SkillInstallationEntry } from "../../lib/wsProtocol";
 
 export function skillSourceLabel(source: SkillEntry["source"]): string {
@@ -36,7 +36,9 @@ export function scopeLabel(scope: SkillInstallationEntry["scope"]): string {
   }
 }
 
-export function stateTone(state: SkillInstallationEntry["state"]): "default" | "secondary" | "outline" {
+export function stateTone(
+  state: SkillInstallationEntry["state"],
+): "default" | "secondary" | "outline" {
   switch (state) {
     case "effective":
       return "default";
@@ -66,7 +68,13 @@ export function actionPending(
 
 export function SkillIcon({ icon, className }: { icon: string; className?: string }) {
   if (icon.startsWith("data:") || icon.startsWith("http")) {
-    return <img src={icon} alt="Skill icon" className={`h-full w-full object-contain ${className || ""}`} />;
+    return (
+      <img
+        src={icon}
+        alt="Skill icon"
+        className={`h-full w-full object-contain ${className || ""}`}
+      />
+    );
   }
   return <span className={className}>{icon}</span>;
 }

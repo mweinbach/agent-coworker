@@ -1,6 +1,5 @@
-import type { ComponentProps } from "react";
-
 import { BrainIcon, ChevronDownIcon } from "lucide-react";
+import type { ComponentProps } from "react";
 
 import { cn } from "../../lib/utils";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible";
@@ -86,7 +85,9 @@ export function ReasoningTrigger({
         <BrainIcon className="size-3.5" />
         {label}
       </span>
-      {showChevron ? <ChevronDownIcon className="size-4 transition-transform group-data-[state=open]:rotate-180" /> : null}
+      {showChevron ? (
+        <ChevronDownIcon className="size-4 transition-transform group-data-[state=open]:rotate-180" />
+      ) : null}
     </CollapsibleTrigger>
   );
 }
@@ -96,7 +97,12 @@ export type ReasoningContentProps = ComponentProps<typeof CollapsibleContent> & 
   variant?: ReasoningVariant;
 };
 
-export function ReasoningContent({ className, children, variant = "default", ...props }: ReasoningContentProps) {
+export function ReasoningContent({
+  className,
+  children,
+  variant = "default",
+  ...props
+}: ReasoningContentProps) {
   return (
     <CollapsibleContent
       className={cn(

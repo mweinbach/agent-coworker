@@ -113,6 +113,8 @@ function ResearchListCard({
   );
   const inputRef = useRef<HTMLInputElement | null>(null);
   const statusLabel = research.planPending ? "plan ready" : research.status;
+  const sourceCount = research.sources.length;
+  const thoughtCount = research.thoughtSummaries.length;
 
   useEffect(() => {
     if (!editing) {
@@ -129,7 +131,7 @@ function ResearchListCard({
     return (
       <div
         className={cn(
-          "flex w-full min-w-0 items-center gap-2 rounded-lg border border-border/55 bg-foreground/[0.03] px-2.5 py-2",
+          "flex w-full min-w-0 items-center gap-2 rounded-xl border border-border/60 bg-background/80 px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]",
         )}
       >
         <Input
@@ -156,12 +158,14 @@ function ResearchListCard({
   return (
     <button
       type="button"
+      role="option"
+      aria-selected={selected}
       className={cn(
-        "group flex w-full min-w-0 items-start gap-2 rounded-lg px-2.5 py-2 text-left transition-colors",
-        isChild && "border-l border-border/55",
+        "group relative flex w-full min-w-0 items-start gap-2 rounded-xl border px-3 py-2.5 text-left transition-[border-color,background-color,box-shadow,transform] duration-200",
+        isChild && "before:absolute before:-left-3 before:top-1.5 before:bottom-1.5 before:w-px before:bg-border/55",
         selected
-          ? "bg-primary/10 text-foreground"
-          : "hover:bg-foreground/[0.035]",
+          ? "border-primary/45 bg-primary/[0.085] text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]"
+          : "border-border/45 bg-background/55 text-foreground/92 hover:border-border/70 hover:bg-background/80",
       )}
       onClick={onSelect}
       onContextMenu={onContextMenu}
@@ -172,20 +176,13 @@ function ResearchListCard({
     >
       {isChild ? (
         <CornerDownRightIcon
-          className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground/70"
+          className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground/60"
           aria-hidden="true"
         />
       ) : null}
       <div className="min-w-0 flex-1">
-        <div className="line-clamp-2 text-[13px] font-medium leading-snug text-foreground">
-          {displayTitle}
-        </div>
-        {snippet ? (
-          <div className="mt-1 line-clamp-2 text-[11.5px] leading-snug text-muted-foreground">
-            {snippet}
-          </div>
-        ) : null}
-        <div className="mt-1.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+        <div className="mb-1 flex items-center gap-2 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground/70">
+          <span>{isChild ? "Follow-up" : "Research"}</span>
           <span
             className={cn(
               "inline-block h-1.5 w-1.5 rounded-full",
@@ -194,13 +191,20 @@ function ResearchListCard({
             )}
             aria-label={`Status: ${statusLabel}`}
           />
-          {running ? (
-            <span className="capitalize">{research.status}</span>
-          ) : research.planPending ? (
-            <span className="capitalize text-info">Plan ready</span>
-          ) : timeLabel ? (
-            <span>{timeLabel}</span>
-          ) : null}
+          <span className="truncate capitalize">{research.planPending ? "Plan ready" : research.status}</span>
+        </div>
+        <div className="line-clamp-2 text-[13px] font-medium leading-snug tracking-[-0.015em] text-foreground">
+          {displayTitle}
+        </div>
+        {snippet ? (
+          <div className="mt-1 line-clamp-2 text-[11.5px] leading-snug text-muted-foreground">
+            {snippet}
+          </div>
+        ) : null}
+        <div className="mt-2 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px] text-muted-foreground">
+          {timeLabel ? <span>{timeLabel}</span> : null}
+          {sourceCount > 0 ? <span>{sourceCount} source{sourceCount === 1 ? "" : "s"}</span> : null}
+          {thoughtCount > 0 ? <span>{thoughtCount} note{thoughtCount === 1 ? "" : "s"}</span> : null}
         </div>
       </div>
     </button>
@@ -243,14 +247,14 @@ function renderResearchTree({
     const isChild = depth > 0;
 
     return (
-      <div key={research.id} className="space-y-1">
+      <div key={research.id} className="space-y-1.5">
         <Collapsible className="space-y-1" defaultOpen={descendantSelected || depth < 1}>
-          <div className={cn("flex items-start gap-1", isChild && "pl-3")}>
+          <div className={cn("flex items-start gap-1.5", isChild && "pl-3")}>
             {children.length > 0 ? (
               <CollapsibleTrigger asChild>
                 <button
                   type="button"
-                  className="group mt-1.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  className="group mt-2 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border border-transparent text-muted-foreground transition-colors hover:border-border/60 hover:bg-background/70 hover:text-foreground"
                   aria-label={descendantSelected ? "Collapse follow-ups" : "Expand follow-ups"}
                 >
                   <ChevronRightIcon className="h-3.5 w-3.5 transition-transform group-data-[state=open]:rotate-90" />
@@ -275,7 +279,7 @@ function renderResearchTree({
           </div>
           {children.length > 0 ? (
             <CollapsibleContent>
-              <div className="ml-5 space-y-1">
+              <div className="ml-5 border-l border-border/35 pl-3 space-y-1.5">
                 {renderResearchTree({
                   parentId: research.id,
                   childrenByParent,
@@ -368,7 +372,7 @@ export function ResearchCardGrid({
   }, [onSelectResearch, startEditing]);
 
   return (
-    <div className="space-y-1">
+    <div className="space-y-1.5" role="listbox" aria-label="Research history">
       {renderResearchTree({
         parentId: null,
         childrenByParent,

@@ -34,23 +34,31 @@ export function ResearchView() {
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-row">
-      <section className="flex min-h-0 min-w-[18rem] w-[clamp(18rem,26vw,23.75rem)] shrink-0 flex-col border-r border-border/40 bg-muted/[0.06]">
-        <div className="flex items-center justify-between gap-2 border-b border-border/30 px-4 py-2.5">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/80">
-            History
+      <section className="flex min-h-0 min-w-[18rem] w-[clamp(18rem,26vw,23.75rem)] shrink-0 flex-col border-r border-border/40 bg-[linear-gradient(180deg,hsl(var(--background))_0%,hsl(var(--muted)/0.16)_100%)]">
+        <div className="border-b border-border/35 px-4 py-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/70">
+                Research
+              </div>
+              <div className="mt-0.5 text-[13px] text-muted-foreground">
+                Select a run or follow-up
+              </div>
+            </div>
+            <Button
+              size="sm"
+              type="button"
+              variant="secondary"
+              className="h-8 gap-1.5 rounded-md border-border/60 bg-background/70 px-3 text-xs"
+              onClick={() => selectResearch(null)}
+              disabled={selectedResearchId === null}
+            >
+              <PlusIcon className="h-3.5 w-3.5" />
+              New
+            </Button>
           </div>
-          <Button
-            size="sm"
-            type="button"
-            className="h-7 gap-1.5 rounded-full px-3 text-xs"
-            onClick={() => selectResearch(null)}
-            disabled={selectedResearchId === null}
-          >
-            <PlusIcon className="h-3.5 w-3.5" />
-            New
-          </Button>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-2">
+        <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
           {researchListError ? (
             <div className="rounded-xl border border-destructive/35 bg-destructive/5 px-4 py-3 text-sm text-destructive">
               {researchListError}

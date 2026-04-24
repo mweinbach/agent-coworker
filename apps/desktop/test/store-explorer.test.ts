@@ -31,7 +31,7 @@ mock.module("../src/lib/desktopCommands", () =>
       const entries = [
         {
           name: "file1.txt",
-          path: path + "/file1.txt",
+          path: `${path}/file1.txt`,
           isDirectory: false,
           isHidden: false,
           sizeBytes: 10,
@@ -39,7 +39,7 @@ mock.module("../src/lib/desktopCommands", () =>
         },
         {
           name: "dir1",
-          path: path + "/dir1",
+          path: `${path}/dir1`,
           isDirectory: true,
           isHidden: false,
           sizeBytes: null,
@@ -47,7 +47,7 @@ mock.module("../src/lib/desktopCommands", () =>
         },
         {
           name: ".hidden",
-          path: path + "/.hidden",
+          path: `${path}/.hidden`,
           isDirectory: false,
           isHidden: true,
           sizeBytes: 10,
@@ -150,9 +150,9 @@ describe("store explorer actions", () => {
     await useAppStore.getState().navigateWorkspaceFilesUp(wsId);
     expect(useAppStore.getState().workspaceExplorerById[wsId]?.currentPath).toBe(rootPath);
 
-    await useAppStore.getState().navigateWorkspaceFiles(wsId, rootPath + "/dir1");
+    await useAppStore.getState().navigateWorkspaceFiles(wsId, `${rootPath}/dir1`);
     expect(useAppStore.getState().workspaceExplorerById[wsId]?.currentPath).toBe(
-      rootPath + "/dir1",
+      `${rootPath}/dir1`,
     );
 
     await useAppStore.getState().navigateWorkspaceFilesUp(wsId);
@@ -161,9 +161,9 @@ describe("store explorer actions", () => {
 
   test("selectWorkspaceFile sets selectedPath", async () => {
     await useAppStore.getState().navigateWorkspaceFiles(wsId, rootPath);
-    useAppStore.getState().selectWorkspaceFile(wsId, rootPath + "/file1.txt");
+    useAppStore.getState().selectWorkspaceFile(wsId, `${rootPath}/file1.txt`);
     expect(useAppStore.getState().workspaceExplorerById[wsId]?.selectedPath).toBe(
-      rootPath + "/file1.txt",
+      `${rootPath}/file1.txt`,
     );
   });
 

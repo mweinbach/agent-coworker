@@ -10,7 +10,6 @@ import {
   clearWorkspaceBoundStores,
   hydrateWorkspaceBoundStores,
 } from "../features/cowork/workspaceBootstrap";
-import { useWorkspaceStore } from "../features/cowork/workspaceStore";
 import { usePairingStore } from "../features/pairing/pairingStore";
 import { isWorkspaceConnectionReady } from "../features/relay/connectionState";
 import { defaultSecureTransportClient } from "../features/relay/secureTransportClient";

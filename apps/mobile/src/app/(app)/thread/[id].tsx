@@ -15,6 +15,20 @@ import { useThreadStore } from "@/features/cowork/threadStore";
 import { useWorkspaceStore } from "@/features/cowork/workspaceStore";
 import { useAppTheme } from "@/theme/use-app-theme";
 
+type ThreadDetailListItem =
+  | {
+      type: "pending";
+      data: NonNullable<ReturnType<typeof useThreadStore.getState>["getPendingRequest"]>;
+    }
+  | {
+      type: "feed";
+      data: ReturnType<typeof useThreadStore.getState>["getThread"] extends infer T
+        ? T extends { feed: Array<infer Item> }
+          ? Item
+          : never
+        : never;
+    };
+
 export default function ThreadDetailScreen() {
   const params = useLocalSearchParams<{ id?: string }>();
   const threadId = typeof params.id === "string" ? params.id : "";
@@ -121,13 +135,12 @@ export default function ThreadDetailScreen() {
           keyboardShouldPersistTaps="handled"
           inverted
           data={
-            // Reversed feed + pending request at the top (visually bottom since it's inverted)
             [
               ...(pendingRequest ? [{ type: "pending", data: pendingRequest }] : []),
               ...[...activeThread.feed].reverse().map((item) => ({ type: "feed", data: item })),
-            ]
+            ] as ThreadDetailListItem[]
           }
-          keyExtractor={(item) => (item.type === "pending" ? "pending" : (item.data as any).id)}
+          keyExtractor={(item) => (item.type === "pending" ? "pending" : item.data.id)}
           ListFooterComponent={() => (
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
               <StatusPill
@@ -159,9 +172,10 @@ export default function ThreadDetailScreen() {
           )}
           renderItem={({ item }) => {
             if (item.type === "pending") {
+              const request = item.data;
               return (
                 <PendingRequestCard
-                  request={pendingRequest!}
+                  request={request}
                   askDraft={askDraft}
                   onChangeAskDraft={setAskDraft}
                   onAnswerOption={(answer) => {
@@ -181,7 +195,7 @@ export default function ThreadDetailScreen() {
                 />
               );
             }
-            return <ThreadFeedItem item={item.data as any} a2uiEnabled={a2uiEnabled} />;
+            return <ThreadFeedItem item={item.data} a2uiEnabled={a2uiEnabled} />;
           }}
         />
 

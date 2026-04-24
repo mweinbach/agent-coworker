@@ -296,8 +296,13 @@ export async function loadMCPConfigRegistry(
   const merged = mergePluginLayers(mergeLayers(layers), pluginData.layers);
   warnings.push(...merged.warnings);
 
-  const fileForSource = (source: MCPServerSource) =>
-    layers.find((layer) => layer.source === source)!.file;
+  const fileForSource = (source: MCPServerSource) => {
+    const layer = layers.find((candidate) => candidate.source === source);
+    if (!layer) {
+      throw new Error(`Missing MCP registry layer for source ${source}`);
+    }
+    return layer.file;
+  };
 
   return {
     servers: merged.servers,

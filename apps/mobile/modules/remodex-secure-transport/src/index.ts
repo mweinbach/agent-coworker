@@ -2,7 +2,6 @@ import { EventEmitter, requireOptionalNativeModule } from "expo-modules-core";
 
 import {
   buildRelayHandshakeProofPayload,
-  buildRelayKeyFingerprint,
   buildRelayPairingProof,
   computeRelayReconnectDelayMs,
   createRelaySharedKey,

@@ -16,7 +16,6 @@ export function describeTransportMode(mode: RelayTransportMode): string {
       return "Fallback demo";
     case "unsupported":
       return "Unsupported";
-    case "native":
     default:
       return "Secure relay";
   }
@@ -43,7 +42,6 @@ export function describeTransportStatus(
       return "Connected";
     case "error":
       return "Needs attention";
-    case "idle":
     default:
       return "Ready";
   }

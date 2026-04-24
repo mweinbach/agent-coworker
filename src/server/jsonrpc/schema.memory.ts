@@ -1,7 +1,6 @@
 import {
   jsonRpcControlRequestSchemas,
   jsonRpcControlResultSchemas,
-  memoryListEventSchema,
 } from "../../shared/jsonrpcControlSchemas";
 
 export const jsonRpcMemoryRequestSchemas = {

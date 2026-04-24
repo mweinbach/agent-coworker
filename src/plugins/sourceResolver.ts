@@ -16,7 +16,6 @@ import type {
   PluginInstallPreview,
   PluginInstallPreviewCandidate,
   PluginInstallTargetScope,
-  PluginScope,
   PluginSourceDescriptor,
   SkillInstallationDiagnostic,
 } from "../types";

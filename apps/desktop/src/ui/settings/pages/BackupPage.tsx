@@ -358,7 +358,13 @@ function BackupDetailView({
               Restore Original Workspace
             </Button>
             {entry.backupDirectory ? (
-              <Button variant="outline" onClick={() => onRevealFolder(entry.backupDirectory)}>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  if (!entry.backupDirectory) return;
+                  onRevealFolder(entry.backupDirectory);
+                }}
+              >
                 <FolderOpenIcon className="mr-2 h-4 w-4" />
                 Reveal Folder
               </Button>

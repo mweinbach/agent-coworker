@@ -84,7 +84,8 @@ type GoogleSignatureProviderKey = "google" | "vertex";
 
 function convertToolCallId(id: string): string {
   // Strip PI-style composite IDs (call_id|item_id) → just call_id
-  return id.includes("|") ? id.split("|")[0]! : id;
+  const firstSegment = id.split("|")[0];
+  return firstSegment ?? id;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -523,7 +524,7 @@ export function googleTurnMessagesToModelMessages(messages: unknown[]): ModelMes
   return out;
 }
 
-function extractTextFromContent(content: unknown): string | undefined {
+function _extractTextFromContent(content: unknown): string | undefined {
   if (typeof content === "string") return content.trim() || undefined;
   if (!Array.isArray(content)) return undefined;
 
@@ -1324,7 +1325,8 @@ export const runGoogleNativeInteractionStep: RunGoogleNativeInteractionStep = as
     const contentArray: AssistantContentBlock[] = [];
     const sortedIndices = [...contentBlocks.keys()].sort((a, b) => a - b);
     for (const index of sortedIndices) {
-      const block = contentBlocks.get(index)!;
+      const block = contentBlocks.get(index);
+      if (!block) continue;
       contentArray.push(block);
     }
     assistant.content = contentArray;

@@ -7,11 +7,7 @@ import {
 import { effectiveToolOutputOverflowChars } from "../../shared/toolOutputOverflow";
 import type { AgentConfig, HarnessContextPayload } from "../../types";
 import type { SessionConfigPatch } from "../protocol";
-import {
-  DEFAULT_SESSION_TITLE,
-  heuristicTitleFromQuery,
-  type SessionTitleSource,
-} from "../sessionTitleService";
+import { DEFAULT_SESSION_TITLE, heuristicTitleFromQuery } from "../sessionTitleService";
 import type { SessionContext } from "./SessionContext";
 
 type PrepareConfigUpdateOptions = {

@@ -332,7 +332,9 @@ function sanitizeUnknown(
       const out: Record<string, unknown> = {};
       const take = Math.min(entries.length, limits.maxObjectKeys);
       for (let i = 0; i < take; i++) {
-        const [k, v] = entries[i]!;
+        const entry = entries[i];
+        if (!entry) continue;
+        const [k, v] = entry;
         const sanitized = sanitizeUnknown(v, depth + 1, seen, limits);
         if (sanitized !== undefined) out[k] = sanitized;
       }

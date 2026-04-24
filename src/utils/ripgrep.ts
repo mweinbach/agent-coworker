@@ -134,13 +134,13 @@ function resolveRipgrepAssets(): RipgrepAsset[] {
   throw new Error(`Unsupported platform/arch for ripgrep auto-download: ${platform}/${arch}`);
 }
 
-async function fetchText(url: string): Promise<string> {
+async function _fetchText(url: string): Promise<string> {
   const res = await fetch(url, { redirect: "follow" });
   if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${url}`);
   return await res.text();
 }
 
-async function fetchToFile(url: string, filePath: string): Promise<void> {
+async function _fetchToFile(url: string, filePath: string): Promise<void> {
   const res = await fetch(url, { redirect: "follow" });
   if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${url}`);
   const buf = new Uint8Array(await res.arrayBuffer());

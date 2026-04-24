@@ -144,12 +144,11 @@ export async function maybeSpillToolOutputToWorkspace(opts: {
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
   const scratchDir = path.join(opts.workingDirectory, MODEL_SCRATCHPAD_DIRNAME);
-  const fileName =
-    [
-      timestamp,
-      sanitizeFileSegment(opts.toolName, "tool"),
-      sanitizeFileSegment(opts.toolCallId, "call"),
-    ].join("__") + ".txt";
+  const fileName = `${[
+    timestamp,
+    sanitizeFileSegment(opts.toolName, "tool"),
+    sanitizeFileSegment(opts.toolCallId, "call"),
+  ].join("__")}.txt`;
   const filePath = path.join(scratchDir, fileName);
 
   try {

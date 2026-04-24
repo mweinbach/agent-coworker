@@ -33,7 +33,6 @@ function mapStatus(state: RemodexSecureTransportState["status"]): RelayConnectio
       return "reconnecting";
     case "error":
       return "error";
-    case "idle":
     default:
       return "idle";
   }
@@ -49,7 +48,6 @@ function mapTransportMode(mode: RemodexSecureTransportState["transportMode"]): R
       return "fallback";
     case "unsupported":
       return "unsupported";
-    case "native":
     default:
       return "native";
   }

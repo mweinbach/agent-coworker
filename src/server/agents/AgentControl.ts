@@ -147,9 +147,11 @@ export class AgentControl {
       lifecycleState: session.persistenceStatus === "closed" ? "closed" : "active",
       executionState,
       busy: overrides.busy ?? session.isBusy,
-      ...((info.lastMessagePreview ?? session.getLatestAssistantText())
-        ? { lastMessagePreview: info.lastMessagePreview ?? session.getLatestAssistantText()! }
-        : {}),
+      ...(() => {
+        const lastMessagePreview =
+          info.lastMessagePreview ?? session.getLatestAssistantText() ?? null;
+        return lastMessagePreview ? { lastMessagePreview } : {};
+      })(),
     };
     return summary;
   }
@@ -313,7 +315,7 @@ export class AgentControl {
   async close(opts: AgentCloseOptions): Promise<PersistentAgentSummary> {
     const session = this.ensureAgentSession(opts.parentSessionId, opts.agentId);
     const binding = this.deps.sessionBindings.get(session.id);
-    if (!binding?.session || !binding.session.isAgentOf(opts.parentSessionId)) {
+    if (!binding?.session?.isAgentOf(opts.parentSessionId)) {
       throw new Error(`Unknown child agent: ${opts.agentId}`);
     }
     binding.session.cancel();

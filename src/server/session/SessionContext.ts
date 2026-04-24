@@ -40,7 +40,7 @@ import type {
 } from "../sessionBackup";
 import type { SessionDb, SessionPersistenceStatus } from "../sessionDb";
 import type { writePersistedSessionSnapshot } from "../sessionStore";
-import type { generateSessionTitle, SessionTitleSource } from "../sessionTitleService";
+import type { generateSessionTitle } from "../sessionTitleService";
 
 export type SessionBackupFactory = (opts: SessionBackupInitOptions) => Promise<SessionBackupHandle>;
 

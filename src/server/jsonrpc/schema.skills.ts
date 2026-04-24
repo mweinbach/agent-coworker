@@ -1,12 +1,6 @@
 import {
   jsonRpcControlRequestSchemas,
   jsonRpcControlResultSchemas,
-  skillContentEventSchema,
-  skillInstallationEventSchema,
-  skillInstallPreviewEventSchema,
-  skillInstallUpdateCheckEventSchema,
-  skillsCatalogEventSchema,
-  skillsListEventSchema,
 } from "../../shared/jsonrpcControlSchemas";
 
 export const jsonRpcSkillsRequestSchemas = {

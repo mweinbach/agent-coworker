@@ -120,7 +120,7 @@ function toolNameFromApproval(toolCall: unknown): string {
           : typeof record.functionName === "string"
             ? record.functionName
             : null;
-    if (name && name.trim()) return name.trim();
+    if (name?.trim()) return name.trim();
   }
   return "tool";
 }

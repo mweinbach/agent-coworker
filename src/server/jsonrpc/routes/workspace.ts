@@ -1,7 +1,5 @@
 import { JSONRPC_ERROR_CODES } from "../protocol";
 import { jsonRpcWorkspaceRequestSchemas } from "../schema.workspace";
-
-import { toJsonRpcParams } from "./shared";
 import type { JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
 
 export function createWorkspaceRouteHandlers(

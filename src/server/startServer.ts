@@ -1589,8 +1589,9 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
         }
         if (url.pathname === "/ws") {
           const resumeSessionIdRaw = url.searchParams.get("resumeSessionId");
-          const resumeSessionId =
-            resumeSessionIdRaw && resumeSessionIdRaw.trim() ? resumeSessionIdRaw.trim() : undefined;
+          const resumeSessionId = resumeSessionIdRaw?.trim()
+            ? resumeSessionIdRaw.trim()
+            : undefined;
           const protocolResult = resolveWsProtocol({
             offeredSubprotocols: splitWebSocketSubprotocolHeader(
               req.headers.get("sec-websocket-protocol"),

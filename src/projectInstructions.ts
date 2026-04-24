@@ -78,7 +78,7 @@ function utf8PrefixWithinByteLimit(buf: Buffer, maxBytes: number): string {
   }
 
   let end = Math.min(maxBytes, buf.length);
-  while (end > 0 && end < buf.length && (buf[end]! & 0xc0) === 0x80) {
+  while (end > 0 && end < buf.length && ((buf[end] ?? 0) & 0xc0) === 0x80) {
     end -= 1;
   }
   return buf.subarray(0, end).toString("utf8");

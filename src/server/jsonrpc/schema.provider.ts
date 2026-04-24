@@ -1,11 +1,6 @@
 import {
   jsonRpcControlRequestSchemas,
   jsonRpcControlResultSchemas,
-  providerAuthChallengeEventSchema,
-  providerAuthMethodsEventSchema,
-  providerAuthResultEventSchema,
-  providerCatalogEventSchema,
-  providerStatusEventSchema,
 } from "../../shared/jsonrpcControlSchemas";
 
 export const jsonRpcProviderRequestSchemas = {

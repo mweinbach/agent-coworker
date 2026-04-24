@@ -644,7 +644,7 @@ function buildShellExecutionPolicySection(): string {
   ].join("\n");
 }
 
-async function loadHotCache(config: AgentConfig): Promise<string> {
+async function _loadHotCache(config: AgentConfig): Promise<string> {
   const candidates = [
     path.join(config.projectAgentDir, "AGENT.md"),
     path.join(config.userAgentDir, "AGENT.md"),

@@ -4,11 +4,7 @@ import { z } from "zod";
 
 import type { PluginDiscoveryKind, PluginScope } from "../types";
 import { manifestPathForPluginRoot } from "./manifest";
-import {
-  type ParsedMarketplaceDocument,
-  type ParsedMarketplacePluginEntry,
-  parsePluginMarketplace,
-} from "./marketplace";
+import { type ParsedMarketplaceDocument, parsePluginMarketplace } from "./marketplace";
 
 const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
 
@@ -43,7 +39,7 @@ async function pathExists(targetPath: string): Promise<boolean> {
   }
 }
 
-async function readMarketplaceDocument(
+async function __readMarketplaceDocument(
   marketplacePath: string,
 ): Promise<ParsedMarketplaceDocument | null> {
   try {

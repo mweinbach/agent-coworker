@@ -272,7 +272,10 @@ async function readAgentInterface(skillRoot: string): Promise<SkillInterfaceMeta
     return undefined;
   }
 
-  const primary = agentFiles.find((file) => file.toLowerCase() === "openai.yaml") ?? agentFiles[0]!;
+  const primary = agentFiles.find((file) => file.toLowerCase() === "openai.yaml") ?? agentFiles[0];
+  if (!primary) {
+    return undefined;
+  }
   let raw: string;
   try {
     raw = await fs.readFile(path.join(agentsDir, primary), "utf-8");
@@ -485,7 +488,7 @@ async function buildInstallationEntry(opts: {
   let triggers: string[] = [opts.dirent.name];
   let interfaceMeta: SkillEntry["interface"] | undefined;
   let fileModifiedAt: string | undefined;
-  let parsedSkill: ParsedSkillDocument | null = null;
+  let _parsedSkill: ParsedSkillDocument | null = null;
   let readableSkillPath: string | null = null;
 
   try {
@@ -504,7 +507,7 @@ async function buildInstallationEntry(opts: {
           buildDiagnostic("invalid_frontmatter", "error", "Invalid or missing skill frontmatter"),
         );
       } else {
-        parsedSkill = parsed;
+        _parsedSkill = parsed;
         readableSkillPath = skillPath;
         name = parsed.frontMatter.name;
         description = parsed.frontMatter.description;
@@ -523,7 +526,7 @@ async function buildInstallationEntry(opts: {
     }
   }
 
-  if (manifest && manifest.installationId.trim()) {
+  if (manifest?.installationId.trim()) {
     installationId = manifest.installationId.trim();
   }
 

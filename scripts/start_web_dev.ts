@@ -118,7 +118,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   const { ready: serverReady, drained: serverStdoutDrained } = createServerStdoutMonitor(
     serverProc.stdout,
     (line) => {
-      process.stdout.write(line + "\n");
+      process.stdout.write(`${line}\n`);
     },
   );
   const timeoutPromise = new Promise<string>((_, reject) =>

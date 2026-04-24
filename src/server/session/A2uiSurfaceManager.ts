@@ -101,7 +101,7 @@ export class A2uiSurfaceManager {
     // Emit deletion events for any still-active surfaces so clients can
     // flush their local renderers.
     const now = new Date().toISOString();
-    for (const [surfaceId, state] of Object.entries(this.surfaces)) {
+    for (const [_surfaceId, state] of Object.entries(this.surfaces)) {
       if (state.deleted) continue;
       this.deps.emit(
         this.resolvedEvent(
@@ -254,7 +254,8 @@ export class A2uiSurfaceManager {
     }
 
     const deletedIds = ids
-      .map((id) => surfaces[id]!)
+      .map((id) => surfaces[id])
+      .filter((state): state is A2uiSurfaceState => Boolean(state))
       .filter((state) => state.deleted)
       .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt))
       .map((state) => state.surfaceId);
@@ -265,7 +266,8 @@ export class A2uiSurfaceManager {
         Object.keys(nextSurfaces).length >= MAX_SURFACES_PER_SESSION &&
         deletedIds.length > 0
       ) {
-        const deletedSurfaceId = deletedIds.shift()!;
+        const deletedSurfaceId = deletedIds.shift();
+        if (!deletedSurfaceId) break;
         const { [deletedSurfaceId]: _pruned, ...rest } = nextSurfaces;
         nextSurfaces = rest;
       }
@@ -276,7 +278,8 @@ export class A2uiSurfaceManager {
 
     // Evict oldest non-deleted surface.
     const sorted = Object.keys(nextSurfaces)
-      .map((id) => nextSurfaces[id]!)
+      .map((id) => nextSurfaces[id])
+      .filter((state): state is A2uiSurfaceState => Boolean(state))
       .filter((state) => !state.deleted)
       .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
     const victim = sorted[0];

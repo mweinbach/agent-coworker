@@ -133,17 +133,15 @@ export function buildPiStreamOptions(
 
     const location = asRecord(webSearch?.location);
     if (location) {
+      const country = asNonEmptyString(location.country);
+      const region = asNonEmptyString(location.region);
+      const city = asNonEmptyString(location.city);
+      const timezone = asNonEmptyString(location.timezone);
       const webSearchLocation = {
-        ...(asNonEmptyString(location.country)
-          ? { country: asNonEmptyString(location.country)! }
-          : {}),
-        ...(asNonEmptyString(location.region)
-          ? { region: asNonEmptyString(location.region)! }
-          : {}),
-        ...(asNonEmptyString(location.city) ? { city: asNonEmptyString(location.city)! } : {}),
-        ...(asNonEmptyString(location.timezone)
-          ? { timezone: asNonEmptyString(location.timezone)! }
-          : {}),
+        ...(country ? { country } : {}),
+        ...(region ? { region } : {}),
+        ...(city ? { city } : {}),
+        ...(timezone ? { timezone } : {}),
       };
       if (Object.keys(webSearchLocation).length > 0) {
         options.webSearchLocation = webSearchLocation;
@@ -196,19 +194,15 @@ export function buildPiStreamOptions(
 
     const thinkingBudgets = asRecord(providerSection.thinkingBudgets);
     if (thinkingBudgets) {
+      const minimalBudget = asFiniteNumber(thinkingBudgets.minimal);
+      const lowBudget = asFiniteNumber(thinkingBudgets.low);
+      const mediumBudget = asFiniteNumber(thinkingBudgets.medium);
+      const highBudget = asFiniteNumber(thinkingBudgets.high);
       const mappedBudgets = {
-        ...(asFiniteNumber(thinkingBudgets.minimal) !== undefined
-          ? { minimal: asFiniteNumber(thinkingBudgets.minimal)! }
-          : {}),
-        ...(asFiniteNumber(thinkingBudgets.low) !== undefined
-          ? { low: asFiniteNumber(thinkingBudgets.low)! }
-          : {}),
-        ...(asFiniteNumber(thinkingBudgets.medium) !== undefined
-          ? { medium: asFiniteNumber(thinkingBudgets.medium)! }
-          : {}),
-        ...(asFiniteNumber(thinkingBudgets.high) !== undefined
-          ? { high: asFiniteNumber(thinkingBudgets.high)! }
-          : {}),
+        ...(minimalBudget !== undefined ? { minimal: minimalBudget } : {}),
+        ...(lowBudget !== undefined ? { low: lowBudget } : {}),
+        ...(mediumBudget !== undefined ? { medium: mediumBudget } : {}),
+        ...(highBudget !== undefined ? { high: highBudget } : {}),
       };
       if (Object.keys(mappedBudgets).length > 0) {
         options.thinkingBudgets = mappedBudgets;

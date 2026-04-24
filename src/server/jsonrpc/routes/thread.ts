@@ -3,6 +3,7 @@ import {
   enrichSessionSnapshotCitationsFromCache,
   primeSessionSnapshotCitationCache,
 } from "../../citationMetadata";
+import type { PersistedSessionRecord } from "../../sessionDb";
 import { JSONRPC_ERROR_CODES } from "../protocol";
 import { jsonRpcThreadTurnRequestSchemas } from "../schema.threadTurn";
 import { createThreadTurnProjector } from "../threadReadProjector";
@@ -140,9 +141,17 @@ export function createThreadRouteHandlers(context: JsonRpcRouteContext): JsonRpc
         return;
       }
       const binding = context.threads.getLive(threadId);
+      const persistedThread = context.threads.getPersisted(threadId);
+      if (!binding?.session && !persistedThread) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: `Unknown thread: ${threadId}`,
+        });
+        return;
+      }
       const thread = binding?.session
         ? context.utils.buildThreadFromSession(binding.session)
-        : context.utils.buildThreadFromRecord(context.threads.getPersisted(threadId)!);
+        : context.utils.buildThreadFromRecord(persistedThread as PersistedSessionRecord);
       await context.journal.waitForIdle(threadId);
       // Synchronous cache-only rewrite; network resolution runs in primeSessionSnapshotCitationCache (microtask).
       const enrichedSnapshot = enrichSessionSnapshotCitationsFromCache(snapshot);
@@ -203,9 +212,17 @@ export function createThreadRouteHandlers(context: JsonRpcRouteContext): JsonRpc
         return;
       }
       const liveBinding = context.threads.getLive(threadId);
+      const persistedThread = context.threads.getPersisted(threadId);
+      if (!liveBinding?.session && !persistedThread) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: `Unknown thread: ${threadId}`,
+        });
+        return;
+      }
       const thread = liveBinding?.session
         ? context.utils.buildThreadFromSession(liveBinding.session)
-        : context.utils.buildThreadFromRecord(context.threads.getPersisted(threadId)!);
+        : context.utils.buildThreadFromRecord(persistedThread as PersistedSessionRecord);
       await context.journal.waitForIdle(threadId);
       const enrichedSnapshot = enrichSessionSnapshotCitationsFromCache(snapshot);
       let journalTailSeq = afterSeq;

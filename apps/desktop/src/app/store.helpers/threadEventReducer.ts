@@ -38,6 +38,7 @@ import {
   createDefaultA2uiDock,
   type FeedItem,
   type Notification,
+  type SessionSnapshot,
   type ThreadAgentSummary,
   type ThreadBusyPolicy,
   type ThreadTitleSource,
@@ -122,31 +123,6 @@ type JsonRpcThreadStart = {
   createdAt?: string;
   updatedAt?: string;
   status?: { type?: string };
-};
-
-type JsonRpcSnapshot = {
-  feed?: FeedItem[];
-  lastEventSeq?: unknown;
-  messageCount?: unknown;
-  updatedAt: string;
-  title: string;
-  titleSource?: unknown;
-  sessionId: string;
-  sessionKind?: string | null;
-  parentSessionId?: string | null;
-  role?: string | null;
-  mode?: string | null;
-  depth?: number | null;
-  nickname?: string | null;
-  requestedModel?: string | null;
-  effectiveModel?: string | null;
-  requestedReasoningEffort?: string | null;
-  effectiveReasoningEffort?: string | null;
-  executionState?: string | null;
-  lastMessagePreview?: string | null;
-  agents?: ThreadAgentSummary[];
-  sessionUsage?: unknown;
-  lastTurnUsage?: unknown;
 };
 
 type ThreadOutboundMessage =
@@ -319,7 +295,9 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
             sessionId,
             requestId: String(message.id),
             question: String(requestParams.question ?? ""),
-            options: Array.isArray(requestParams.options) ? requestParams.options : undefined,
+            options: Array.isArray(requestParams.options)
+              ? requestParams.options.filter((entry): entry is string => typeof entry === "string")
+              : undefined,
           });
           return;
         }
@@ -1329,7 +1307,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     _get: StoreGet,
     set: StoreSet,
     threadId: string,
-    snapshot: JsonRpcSnapshot,
+    snapshot: SessionSnapshot,
   ) {
     set((s) => {
       const runtime = s.threadRuntimeById[threadId];

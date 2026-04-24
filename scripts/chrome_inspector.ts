@@ -24,7 +24,7 @@ async function main() {
         console.log(`- UI state check: ${errorText}`);
 
         // Also capture window errors or react errors if they are in some global
-        const logs = await page.evaluate(() => {
+        await page.evaluate(() => {
           return window.localStorage.getItem("cowork-state") || "No state";
         });
       }

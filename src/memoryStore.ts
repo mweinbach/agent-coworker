@@ -119,7 +119,7 @@ export class MemoryStore {
 
     const hotCachePath = path.join(agentDir, "AGENT.md");
     const hotCache = await readTextIfExists(hotCachePath);
-    if (hotCache && hotCache.trim()) {
+    if (hotCache?.trim()) {
       filesToImport.push({ id: HOT_MEMORY_ID, content: hotCache });
     }
 
@@ -128,7 +128,7 @@ export class MemoryStore {
       const memoryFiles = await walkMarkdownFiles(memoryDir);
       for (const filePath of memoryFiles) {
         const content = await readTextIfExists(filePath);
-        if (!content || !content.trim()) continue;
+        if (!content?.trim()) continue;
         const relative = path.relative(memoryDir, filePath);
         filesToImport.push({ id: normalizeMemoryId(relative), content });
       }

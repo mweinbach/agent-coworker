@@ -715,8 +715,12 @@ export class TurnExecutionManager {
                   includeParentTodos,
                   includeHarnessContext,
                   forkContext,
-                }) =>
-                  await this.context.deps.createAgentSessionImpl!({
+                }) => {
+                  const createAgentSession = this.context.deps.createAgentSessionImpl;
+                  if (!createAgentSession) {
+                    throw new Error("Child-agent spawning is unavailable.");
+                  }
+                  return await createAgentSession({
                     parentSessionId: this.context.id,
                     parentConfig: this.context.state.config,
                     message,
@@ -735,7 +739,8 @@ export class TurnExecutionManager {
                       typeof this.context.state.sessionInfo.depth === "number"
                         ? this.context.state.sessionInfo.depth
                         : 0,
-                  }),
+                  });
+                },
                 list: async () =>
                   await (this.context.deps.listAgentSessionsImpl?.(this.context.id) ??
                     Promise.resolve([])),
@@ -809,7 +814,7 @@ export class TurnExecutionManager {
             turnId,
           },
         },
-        abortSignal: this.context.state.abortController!.signal,
+        abortSignal: this.context.state.abortController?.signal,
         includeRawChunks,
         costTracker: this.context.state.costTracker ?? undefined,
         ...(this.context.state.config.enableA2ui === true && this.deps.getA2uiSurfaceManager
@@ -817,7 +822,15 @@ export class TurnExecutionManager {
               applyA2uiEnvelope: (
                 envelope: unknown,
                 meta?: { reason?: string; toolCallId?: string },
-              ) => this.deps.getA2uiSurfaceManager!().applyUnknown(envelope, meta),
+              ) => {
+                const manager = this.deps.getA2uiSurfaceManager?.();
+                return (
+                  manager?.applyUnknown(envelope, meta) ?? {
+                    ok: false,
+                    error: "A2UI surface manager is unavailable",
+                  }
+                );
+              },
             }
           : {}),
         onSessionUsageBudgetUpdated: (snapshot) => {

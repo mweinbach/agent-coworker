@@ -82,7 +82,7 @@ function CodeBlock({ language, content }: { language: string; content: string })
   const [expanded, setExpanded] = useState(false);
   const lines = content.split("\n");
   const isLong = lines.length > 12;
-  const displayContent = isLong && !expanded ? lines.slice(0, 10).join("\n") + "\n..." : content;
+  const displayContent = isLong && !expanded ? `${lines.slice(0, 10).join("\n")}\n...` : content;
 
   return (
     <View

@@ -296,7 +296,6 @@ describe("JSON-RPC extracted route review fixes", () => {
   });
 
   test("session agent spawn forwards valid role, reasoningEffort, and context options", async () => {
-    let harness!: RouteHarness;
     const threadSession = {
       id: "thread-1",
       createAgentSession: async (opts: {
@@ -315,7 +314,7 @@ describe("JSON-RPC extracted route review fixes", () => {
         expect(opts.includeHarnessContext).toBe(true);
       },
     };
-    harness = createRouteHarness({}, [], { threadSession });
+    const harness = createRouteHarness({}, [], { threadSession });
 
     const handlers = createAgentRouteHandlers(harness.context);
     const response = await harness.invoke(handlers, "cowork/session/agent/spawn", {

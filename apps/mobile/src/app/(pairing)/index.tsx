@@ -141,83 +141,6 @@ function DetailRow({ label, value, icon, emphasize = false, mono = false }: Deta
   );
 }
 
-type StepRowProps = {
-  step: number;
-  title: string;
-  description: string;
-  icon: string;
-  delay?: number;
-};
-
-function StepRow({ step, title, description, icon, delay = 0 }: StepRowProps) {
-  const theme = useAppTheme();
-
-  return (
-    <Animated.View
-      entering={FadeInUp.delay(delay).duration(500)}
-      style={{
-        flexDirection: "row",
-        alignItems: "flex-start",
-        gap: 14,
-      }}
-    >
-      <View
-        style={{
-          height: 36,
-          width: 36,
-          alignItems: "center",
-          justifyContent: "center",
-          borderRadius: 12,
-          borderCurve: "continuous",
-          backgroundColor: theme.primaryMuted,
-        }}
-      >
-        <SFSymbol name={icon} size={18} color={theme.primary} />
-      </View>
-      <View style={{ flex: 1, gap: 4, paddingTop: 2 }}>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-          <View
-            style={{
-              width: 18,
-              height: 18,
-              borderRadius: 9,
-              borderCurve: "continuous",
-              backgroundColor: theme.backgroundMuted,
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <Text
-              selectable
-              style={{
-                color: theme.textSecondary,
-                fontSize: 10,
-                fontWeight: "800",
-                fontVariant: ["tabular-nums"],
-              }}
-            >
-              {step}
-            </Text>
-          </View>
-          <Text selectable style={{ color: theme.text, fontSize: 15, fontWeight: "700" }}>
-            {title}
-          </Text>
-        </View>
-        <Text
-          selectable
-          style={{
-            color: theme.textSecondary,
-            fontSize: 14,
-            lineHeight: 20,
-          }}
-        >
-          {description}
-        </Text>
-      </View>
-    </Animated.View>
-  );
-}
-
 function PrimaryButton({
   children,
   onPress,
@@ -335,7 +258,6 @@ function describeHero(
           ? "Try reconnecting a saved desktop or rescan the QR from Cowork Desktop to refresh the secure session."
           : "Rescan the QR from Cowork Desktop to start a fresh secure session.",
       };
-    case "idle":
     default:
       return {
         title: "Connect a desktop to start",
@@ -373,7 +295,6 @@ function describeRelay(connectionState: {
       return "Relay connected.";
     case "error":
       return "Relay setup failed.";
-    case "idle":
     default:
       return "No relay selected yet.";
   }

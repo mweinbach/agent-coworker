@@ -333,12 +333,11 @@ export class SessionSnapshotProjector {
         emitTurnStarted: () => {},
         emitTurnCompleted: () => {},
         emitItemStarted: (_turnId, item) => {
+          const projectedTodos = projectedTodosFromItem(item);
           this.snapshot = {
             ...this.snapshot,
             feed: applyProjectedItemStarted(this.snapshot.feed, item, this.projectionTs),
-            ...(projectedTodosFromItem(item)
-              ? { todos: structuredClone(projectedTodosFromItem(item)!) }
-              : {}),
+            ...(projectedTodos ? { todos: structuredClone(projectedTodos) } : {}),
           };
         },
         emitReasoningDelta: (_turnId, itemId, mode, delta) => {
@@ -365,12 +364,11 @@ export class SessionSnapshotProjector {
           };
         },
         emitItemCompleted: (_turnId, item) => {
+          const projectedTodos = projectedTodosFromItem(item);
           this.snapshot = {
             ...this.snapshot,
             feed: applyProjectedItemCompleted(this.snapshot.feed, item, this.projectionTs),
-            ...(projectedTodosFromItem(item)
-              ? { todos: structuredClone(projectedTodosFromItem(item)!) }
-              : {}),
+            ...(projectedTodos ? { todos: structuredClone(projectedTodos) } : {}),
           };
         },
       },

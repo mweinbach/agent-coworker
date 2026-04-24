@@ -64,7 +64,9 @@ function formatDurationSeconds(totalSeconds: unknown): string {
   return `${Math.round(totalSeconds / 86400)}d`;
 }
 
-function summarizeRateLimitWindow(window: any): string | null {
+function summarizeRateLimitWindow(
+  window: { usedPercent?: number; resetAfterSeconds?: number } | null | undefined,
+): string | null {
   if (!window || typeof window !== "object") return null;
   const left =
     typeof window.usedPercent === "number" && Number.isFinite(window.usedPercent)
@@ -86,7 +88,7 @@ export async function resolveAndValidateDir(dirArg: string): Promise<string> {
   } catch {
     st = null;
   }
-  if (!st || !st.isDirectory()) throw new Error(`--dir is not a directory: ${resolved}`);
+  if (!st?.isDirectory()) throw new Error(`--dir is not a directory: ${resolved}`);
   return resolved;
 }
 
@@ -294,7 +296,12 @@ export async function runCliRepl(
         if (Array.isArray(status.usage?.rateLimits)) {
           for (const entry of status.usage.rateLimits.slice(0, 3)) {
             const name = entry.limitName ?? entry.limitId ?? "limit";
-            const summary = summarizeRateLimitWindow(entry.primaryWindow);
+            const summary = summarizeRateLimitWindow(
+              entry.primaryWindow as
+                | { usedPercent?: number; resetAfterSeconds?: number }
+                | null
+                | undefined,
+            );
             if (summary) console.log(`    ${name}: ${summary}`);
           }
         }
@@ -483,9 +490,6 @@ export async function runCliRepl(
     },
   };
 
-  // Lazily captured rl reference so the notification handler can access it.
-  let rlRef: readline.Interface | null = null;
-
   const handleNotification = createNotificationHandler({
     state: eventState,
     streamState,
@@ -513,7 +517,7 @@ export async function runCliRepl(
       clientInfo: { name: "cli", version: VERSION },
       allowQueryProtocolFallback: true,
       autoReconnect: false,
-      WebSocketImpl: WebSocketImpl as any,
+      WebSocketImpl: WebSocketImpl as unknown as typeof WebSocket,
       onOpen: () => {
         // Connection established; initialization handled after readyPromise.
       },
@@ -634,7 +638,6 @@ export async function runCliRepl(
   };
 
   const rl = createReadlineInterface();
-  rlRef = rl;
   rl.on("SIGINT", () => {
     rl.close();
   });
@@ -725,7 +728,7 @@ export async function runCliRepl(
               if (method === "thread/start" || method === "thread/resume") {
                 await applyThreadDescriptor(result, requestCwd);
               }
-              return result as any;
+              return true;
             } catch (err) {
               console.error(`Error: ${String(err)}`);
               if (!socket) {

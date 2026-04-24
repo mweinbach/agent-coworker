@@ -97,8 +97,10 @@ export function createNotebookEditTool(ctx: ToolContext) {
       } else {
         if (cellIndex >= cells.length)
           throw new Error(`Cell ${cellIndex} out of range (${cells.length})`);
-        cells[cellIndex]!.source = sourceLines;
-        if (cellType) cells[cellIndex]!.cell_type = cellType;
+        const targetCell = cells[cellIndex];
+        if (!targetCell) throw new Error(`Cell ${cellIndex} out of range (${cells.length})`);
+        targetCell.source = sourceLines;
+        if (cellType) targetCell.cell_type = cellType;
       }
 
       await fs.writeFile(abs, JSON.stringify(nb, null, 1), "utf-8");

@@ -23,10 +23,10 @@ const fastGeneral = {
 const deepReasoning = {
   bestFor: "highest-accuracy deep analysis and difficult tasks where latency matters less",
 } as const;
-const codeAgent = {
+const _codeAgent = {
   bestFor: "agentic coding, multi-file changes, and tool-heavy software work",
 } as const;
-const fastCodeAgent = {
+const _fastCodeAgent = {
   bestFor: "fast coding subtasks, quick fixes, and cheaper code verification",
 } as const;
 const claudeFrontier = {

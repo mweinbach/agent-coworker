@@ -103,7 +103,7 @@ export class SessionDbRepository {
 
     const mapped = filterWorkspace
       ? rows.filter((row) =>
-          sameWorkspacePath(String(row.working_directory ?? ""), opts!.workingDirectory!),
+          sameWorkspacePath(String(row.working_directory ?? ""), opts?.workingDirectory ?? ""),
         )
       : rows;
 
@@ -565,7 +565,7 @@ export class SessionDbRepository {
   }
 
   appendThreadJournalEvent(opts: Omit<PersistedThreadJournalEvent, "seq">): number {
-    return this.appendThreadJournalEvents([opts])[0]!;
+    return this.appendThreadJournalEvents([opts])[0] ?? 0;
   }
 
   appendThreadJournalEvents(opts: Array<Omit<PersistedThreadJournalEvent, "seq">>): number[] {

@@ -1,13 +1,7 @@
 import type readline from "node:readline";
 import type { ServerEvent } from "../../server/protocol";
-import {
-  type AgentConfig,
-  type ApprovalRiskCode,
-  isProviderName,
-  type TodoItem,
-} from "../../types";
+import { type AgentConfig, type ApprovalRiskCode, isProviderName } from "../../types";
 import type { ProviderAuthMethod } from "../parser";
-import { renderTodosToLines, renderToolsToLines } from "../render";
 import type { CliStreamState } from "../streamState";
 import { asString, previewStructured } from "./streamFormatting";
 
@@ -89,12 +83,6 @@ function logProviderAuthResult(event: Extract<ServerEvent, { type: "provider_aut
   const message = asString(event.message);
   if (message) {
     console.log(message);
-  }
-}
-
-function renderTodos(todos: TodoItem[]) {
-  for (const line of renderTodosToLines(todos)) {
-    console.log(line);
   }
 }
 
@@ -307,7 +295,7 @@ export function createNotificationHandler(ctx: ReplServerEventContext) {
 
         if (item.type === "agentMessage") {
           const text = asString(item.text);
-          if (!text || !text.trim()) break;
+          if (!text?.trim()) break;
           const out = text.trim();
           // Deduplicate if we already streamed this text
           if (ctx.state.lastStreamedAssistantTurnId) {
@@ -328,7 +316,6 @@ export function createNotificationHandler(ctx: ReplServerEventContext) {
         if (item.type === "reasoning") {
           const text = asString(item.text);
           if (!text) break;
-          const turnId = asString(params.turnId) ?? "unknown";
           if (
             ctx.state.lastStreamedReasoningTurnId &&
             ctx.streamState.hasReasoningTurn(ctx.state.lastStreamedReasoningTurnId)

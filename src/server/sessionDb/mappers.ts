@@ -13,7 +13,7 @@ import {
   persistentAgentSummarySchema,
 } from "../../shared/agents";
 import { providerContinuationStateSchema } from "../../shared/providerContinuation";
-import type { HarnessContextState, ModelMessage, TodoItem } from "../../types";
+import type { HarnessContextState, ModelMessage } from "../../types";
 import type { PersistedSessionRecord } from "../sessionDb";
 import type { PersistedSessionSummary } from "../sessionStore";
 import {

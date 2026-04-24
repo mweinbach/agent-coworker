@@ -189,7 +189,10 @@ async function resolveAuthorizationServerUrl(serverUrl: string): Promise<string>
   try {
     const resourceMeta = await discoverOAuthProtectedResourceMetadata(serverUrl);
     const authServers = nonEmptyStringArraySchema.safeParse(resourceMeta.authorization_servers);
-    if (authServers.success) return authServers.data[0]!;
+    if (authServers.success) {
+      const firstServer = authServers.data[0];
+      if (firstServer) return firstServer;
+    }
   } catch {
     // Discovery unavailable — fall through to default.
   }

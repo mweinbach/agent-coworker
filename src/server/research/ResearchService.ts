@@ -1,5 +1,3 @@
-import path from "node:path";
-
 import type { Interactions } from "@google/genai";
 
 import { getSavedProviderApiKey } from "../../config";
@@ -21,7 +19,6 @@ import {
   type ResearchExportFormat,
   type ResearchInputFile,
   type ResearchRecord,
-  type ResearchSettings,
   type ResearchSource,
   type ResearchStatus,
   type ResearchThoughtSummary,
@@ -1093,7 +1090,15 @@ export class ResearchService {
     const enrichedAnnotations =
       (await enrichCitationAnnotations(syntheticAnnotations)) ?? syntheticAnnotations;
     return enrichedAnnotations.map((annotation, index): ResearchSource => {
-      const original = sources[index]!;
+      const original = sources[index];
+      if (!original) {
+        return {
+          sourceType: "url",
+          url: "",
+          title: undefined,
+          host: undefined,
+        };
+      }
       const annotationRecord = asRecord(annotation);
       const url = asNonEmptyString(annotation.url) ?? original.url;
       const title =
@@ -1137,7 +1142,10 @@ export class ResearchService {
       (entry) => sourceIdentity(entry) === identity,
     );
     if (existingIndex !== -1) {
-      const existing = state.record.sources[existingIndex]!;
+      const existing = state.record.sources[existingIndex];
+      if (!existing) {
+        return;
+      }
       const merged = mergeResearchSource(existing, source);
       if (JSON.stringify(merged) === JSON.stringify(existing)) {
         return;

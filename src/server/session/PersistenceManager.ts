@@ -17,7 +17,7 @@ export class PersistenceManager {
       writePersistedSessionSnapshot: (opts: {
         paths: Pick<AiCoworkerPaths, "sessionsDir">;
         snapshot: PersistedSessionSnapshot;
-      }) => Promise<string | void>;
+      }) => Promise<string | undefined>;
       buildCanonicalSnapshot: (updatedAt: string) => PersistedSessionMutation["snapshot"];
       buildPersistedSnapshotAt: (updatedAt: string) => PersistedSessionSnapshot;
       buildSessionSnapshotAt: (updatedAt: string, lastEventSeq: number) => SessionSnapshot;

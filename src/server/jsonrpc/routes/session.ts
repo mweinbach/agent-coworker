@@ -28,7 +28,7 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
         return;
       }
       const event = await context.events.capture(
-        binding!,
+        binding,
         () => session.setSessionTitle(title),
         (event): event is Extract<ServerEvent, { type: "session_info" }> =>
           event.type === "session_info",
@@ -63,7 +63,7 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
       }
       const outcome = await captureBindingMutationOutcome(
         context,
-        binding!,
+        binding,
         async () => await session.setModel(model, provider),
         (event): event is Extract<ServerEvent, { type: "config_updated" }> =>
           event.type === "config_updated",
@@ -103,7 +103,7 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
           : undefined;
       const outcome = await captureBindingOutcome(
         context,
-        binding!,
+        binding,
         () => session.setSessionUsageBudget(warnAtUsd, stopAtUsd),
         (event): event is Extract<ServerEvent, { type: "session_usage" }> =>
           event.type === "session_usage",
@@ -118,7 +118,7 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
     "cowork/session/config/set": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
       const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
-      const configPatch = params.config as any;
+      const configPatch = params.config as Record<string, unknown> | undefined;
       const binding = context.threads.getLive(threadId);
       const session = binding?.session;
       if (!session || !configPatch || typeof configPatch !== "object") {
@@ -130,7 +130,7 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
       }
       const outcome = await captureBindingMutationOutcome(
         context,
-        binding!,
+        binding,
         async () => await session.setConfig(configPatch),
         (event): event is Extract<ServerEvent, { type: "session_config" }> =>
           event.type === "session_config",
@@ -158,7 +158,7 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
       }
 
       const outcome = await context.events.capture(
-        binding!,
+        binding,
         () => session.getHarnessContext(),
         (event): event is Extract<ServerEvent, { type: "harness_context" }> =>
           event.type === "harness_context",
@@ -191,7 +191,7 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
       }
 
       const outcome = await context.events.capture(
-        binding!,
+        binding,
         () => session.setHarnessContext(harnessPayload),
         (event): event is Extract<ServerEvent, { type: "harness_context" }> =>
           event.type === "harness_context",

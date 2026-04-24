@@ -130,7 +130,7 @@ function nativeEndpoint(baseUrl: string, pathname: string): string {
   return `${normalizeLmStudioBaseUrl(baseUrl)}/api/v1${pathname}`;
 }
 
-function requestHeaders(baseUrl: string, apiKey?: string, json = true): HeadersInit {
+function requestHeaders(_baseUrl: string, apiKey?: string, json = true): HeadersInit {
   const headers: Record<string, string> = {};
   if (json) {
     headers.accept = "application/json";

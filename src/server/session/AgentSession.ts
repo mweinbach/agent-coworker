@@ -4,7 +4,7 @@ import { HarnessContextStore } from "../../harness/contextStore";
 import type { MCPRegistryServer } from "../../mcp/configRegistry";
 import { type MemoryScope, MemoryStore } from "../../memoryStore";
 import { getKnownResolvedModelMetadata, isDynamicModelProvider } from "../../models/metadata";
-import { defaultSupportedModel, getSupportedModel } from "../../models/registry";
+import { defaultSupportedModel } from "../../models/registry";
 import type { loadSystemPromptWithSkills } from "../../prompt";
 import type { getProviderStatuses } from "../../providerStatus";
 import type { getProviderCatalog } from "../../providers/connectionCatalog";
@@ -952,10 +952,11 @@ export class AgentSession {
     );
     snapshot.todos = structuredClone(this.state.todos);
     snapshot.sessionUsage = this.state.costTracker?.getSnapshot() ?? null;
-    snapshot.lastTurnUsage = snapshot.sessionUsage?.turns?.length
+    const latestTurnUsage = snapshot.sessionUsage?.turns?.at(-1);
+    snapshot.lastTurnUsage = latestTurnUsage
       ? {
-          turnId: snapshot.sessionUsage.turns[snapshot.sessionUsage.turns.length - 1]!.turnId,
-          usage: { ...snapshot.sessionUsage.turns[snapshot.sessionUsage.turns.length - 1]!.usage },
+          turnId: latestTurnUsage.turnId,
+          usage: { ...latestTurnUsage.usage },
         }
       : snapshot.lastTurnUsage;
     snapshot.hasPendingAsk = this.hasPendingAsk;
@@ -993,10 +994,11 @@ export class AgentSession {
     );
     snapshot.todos = structuredClone(this.state.todos);
     snapshot.sessionUsage = this.state.costTracker?.getSnapshot() ?? null;
-    snapshot.lastTurnUsage = snapshot.sessionUsage?.turns?.length
+    const latestTurnUsage = snapshot.sessionUsage?.turns?.at(-1);
+    snapshot.lastTurnUsage = latestTurnUsage
       ? {
-          turnId: snapshot.sessionUsage.turns[snapshot.sessionUsage.turns.length - 1]!.turnId,
-          usage: { ...snapshot.sessionUsage.turns[snapshot.sessionUsage.turns.length - 1]!.usage },
+          turnId: latestTurnUsage.turnId,
+          usage: { ...latestTurnUsage.usage },
         }
       : snapshot.lastTurnUsage;
     snapshot.hasPendingAsk = this.hasPendingAsk;
@@ -1046,14 +1048,6 @@ export class AgentSession {
 
   get hasPendingApproval(): boolean {
     return this.interactionManager.hasPendingApproval;
-  }
-
-  private get pendingAskEvents() {
-    return this.interactionManager.pendingAskEventsForReplay;
-  }
-
-  private get pendingApprovalEvents() {
-    return this.interactionManager.pendingApprovalEventsForReplay;
   }
 
   getEnableMcp() {

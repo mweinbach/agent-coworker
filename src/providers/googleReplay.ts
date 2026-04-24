@@ -51,9 +51,9 @@ function getGoogleThoughtSignatureFromPart(part: Record<string, unknown>): strin
 }
 
 function withGoogleIncludeThoughts(
-  providerOptions: Record<string, any> | undefined,
+  providerOptions: Record<string, unknown> | undefined,
   includeThoughts: boolean,
-): Record<string, any> | undefined {
+): Record<string, unknown> | undefined {
   if (!isRecord(providerOptions)) return providerOptions;
   const providerKey = getGoogleProviderKey(providerOptions) ?? "google";
   const googleOptions = isRecord(providerOptions[providerKey]) ? providerOptions[providerKey] : {};

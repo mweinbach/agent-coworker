@@ -59,14 +59,14 @@ describe("desktop server manager startup parsing", () => {
     const waitPromise = __internal.waitForServerListening(child as any);
 
     child.stdout.write("warming up\n");
-    child.stdout.write(JSON.stringify({ type: "status", phase: "boot" }) + "\n");
+    child.stdout.write(`${JSON.stringify({ type: "status", phase: "boot" })}\n`);
     child.stdout.write(
-      JSON.stringify({
+      `${JSON.stringify({
         type: "server_listening",
         url: "ws://127.0.0.1:1234/ws",
         port: 1234,
         cwd: "C:\\tmp",
-      }) + "\n",
+      })}\n`,
     );
 
     const payload = await waitPromise;

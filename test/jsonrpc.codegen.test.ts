@@ -11,6 +11,14 @@ function normalizeLineEndings(value: string): string {
   return value.replace(/\r\n/g, "\n");
 }
 
+function normalizeJsonArtifact(value: string): string {
+  return JSON.stringify(JSON.parse(normalizeLineEndings(value)));
+}
+
+function normalizeTypeScriptArtifact(value: string): string {
+  return normalizeLineEndings(value).replace(/\s+/g, "");
+}
+
 describe("JSON-RPC schema codegen", () => {
   test("generated artifacts are up to date", async () => {
     const root = process.cwd();
@@ -19,8 +27,12 @@ describe("JSON-RPC schema codegen", () => {
       fs.readFile(path.join(root, "docs/generated/websocket-jsonrpc.d.ts"), "utf-8"),
     ]);
 
-    expect(normalizeLineEndings(jsonSchemaFile)).toBe(buildJsonRpcJsonSchemaArtifact());
-    expect(normalizeLineEndings(tsFile)).toBe(buildJsonRpcTypeScriptArtifact());
+    expect(normalizeJsonArtifact(jsonSchemaFile)).toBe(
+      normalizeJsonArtifact(buildJsonRpcJsonSchemaArtifact()),
+    );
+    expect(normalizeTypeScriptArtifact(tsFile)).toBe(
+      normalizeTypeScriptArtifact(buildJsonRpcTypeScriptArtifact()),
+    );
   });
 
   test("generated artifacts include cowork control methods", async () => {

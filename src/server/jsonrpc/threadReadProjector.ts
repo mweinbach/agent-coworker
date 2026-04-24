@@ -117,7 +117,7 @@ export function createThreadTurnProjector() {
   };
 
   const handle = (event: PersistedThreadJournalEvent) => {
-    const payload = event.payload as Record<string, any>;
+    const payload = event.payload as Record<string, unknown>;
     switch (event.eventType) {
       case "turn/started": {
         const turn = payload.turn as { id?: unknown; status?: unknown } | undefined;
@@ -200,13 +200,22 @@ export function createThreadTurnProjector() {
 
   const build = (): ProjectedTurn[] =>
     order.map((turnId) => {
-      const turn = turns.get(turnId)!;
+      const turn = turns.get(turnId);
+      if (!turn) {
+        return {
+          id: turnId,
+          status: "completed" as const,
+          items: [],
+        };
+      }
       return {
         id: turn.id,
         status: turn.status,
         items: dedupeReplayAssistantItems(
           dedupeReplayReasoningItems(
-            turn.itemOrder.map((itemId) => turn.items.get(itemId)!).filter(Boolean),
+            turn.itemOrder
+              .map((itemId) => turn.items.get(itemId))
+              .filter((item): item is NonNullable<typeof item> => Boolean(item)),
           ),
         ),
       };

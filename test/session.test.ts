@@ -2693,7 +2693,7 @@ describe("AgentSession", () => {
 
       const askEvt = events.find((e) => e.type === "ask");
       expect(askEvt).toBeDefined();
-      expect((sessionAny.pendingAskEvents as Map<string, unknown>).size).toBe(0);
+      expect(sessionAny.interactionManager.pendingAskEventsForReplay.size).toBe(0);
     });
 
     test("keeps the projector pending ask flag in sync after resolution", async () => {
@@ -2833,7 +2833,7 @@ describe("AgentSession", () => {
 
       const approvalEvt = events.find((e) => e.type === "approval");
       expect(approvalEvt).toBeDefined();
-      expect((sessionAny.pendingApprovalEvents as Map<string, unknown>).size).toBe(0);
+      expect(sessionAny.interactionManager.pendingApprovalEventsForReplay.size).toBe(0);
     });
 
     test("keeps the projector pending approval flag in sync after resolution", async () => {

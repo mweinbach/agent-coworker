@@ -106,7 +106,7 @@ export const useProviderStore = create<ProviderStoreState>((set, get) => ({
     try {
       const result = await callParsedControlMethod(client, "cowork/provider/auth/setApiKey", {
         cwd,
-        provider: provider as any,
+        provider: provider as ProviderCatalogEntry["id"],
         methodId,
         apiKey,
       });
@@ -130,8 +130,8 @@ export const useProviderStore = create<ProviderStoreState>((set, get) => ({
     try {
       const result = await callParsedControlMethod(client, "cowork/provider/auth/copyApiKey", {
         cwd,
-        provider: provider as any,
-        sourceProvider: sourceProvider as any,
+        provider: provider as ProviderCatalogEntry["id"],
+        sourceProvider: sourceProvider as ProviderCatalogEntry["id"],
       });
       set({
         lastAuthChallenge: null,

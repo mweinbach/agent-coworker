@@ -99,10 +99,12 @@ export function selectDefaultLmStudioModel(
   const llms = listLmStudioLlms(models);
   const loaded = llms.filter((model) => model.loaded_instances.length > 0);
   if (loaded.length > 0) {
-    return [...loaded].sort(compareModelKeys)[0]!;
+    const firstLoaded = [...loaded].sort(compareModelKeys)[0];
+    if (firstLoaded) return firstLoaded;
   }
   if (llms.length > 0) {
-    return llms[0]!;
+    const firstModel = llms[0];
+    if (firstModel) return firstModel;
   }
   throw createLmStudioError(
     "no_llms",

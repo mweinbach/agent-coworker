@@ -120,14 +120,14 @@ export async function readPluginOverrides(config: AgentConfig): Promise<PluginOv
     const rawSkillName = rest.join(":");
     if (!pluginId || !rawSkillName) continue;
     bySkill[pluginId] ??= {};
-    bySkill[pluginId]![rawSkillName] = { enabled };
+    bySkill[pluginId][rawSkillName] = { enabled };
   }
   for (const [compoundKey, enabled] of Object.entries(userDoc.skills ?? {})) {
     const [pluginId, ...rest] = compoundKey.split(":");
     const rawSkillName = rest.join(":");
     if (!pluginId || !rawSkillName) continue;
     bySkill[pluginId] ??= {};
-    bySkill[pluginId]![rawSkillName] = { enabled };
+    bySkill[pluginId][rawSkillName] = { enabled };
   }
   return {
     workspace: scopeOverridesFromDocument(workspaceDoc),

@@ -1,6 +1,6 @@
 import { isIP } from "node:net";
 
-import type { SessionFeedItem, SessionSnapshot } from "../shared/sessionSnapshot";
+import type { SessionSnapshot } from "../shared/sessionSnapshot";
 import { resolveSafeWebUrl, type SafeWebResolution } from "../utils/webSafety";
 
 export type CitationReference = {

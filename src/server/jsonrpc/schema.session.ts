@@ -11,7 +11,6 @@ import {
 import {
   anyObjectSchema,
   legacyEventEnvelope,
-  legacyEventsEnvelope,
   nonEmptyTrimmedStringSchema,
   optionalNonEmptyTrimmedStringSchema,
 } from "./schema.shared";

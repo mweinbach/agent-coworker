@@ -96,7 +96,10 @@ export function createA2uiTool(ctx: ToolContext) {
             }
           : undefined;
       const results = input.envelopes.map((envelope, index) => {
-        const applied = ctx.applyA2uiEnvelope!(envelope, meta);
+        const applied = ctx.applyA2uiEnvelope?.(envelope, meta) ?? {
+          ok: false,
+          error: "A2UI envelope application is unavailable in this session",
+        };
         return {
           index,
           ok: applied.ok,

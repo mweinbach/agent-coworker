@@ -1,7 +1,6 @@
 import { z } from "zod";
 
 import {
-  JSONRPC_ERROR_CODES,
   type JsonRpcLiteClientResponse,
   type JsonRpcLiteRequest,
   parseJsonRpcClientMessage,
@@ -369,7 +368,10 @@ export class JsonRpcSocket {
     this.reconnectExhausted = false;
     this.pendingInitializationFailure = null;
     this.pendingInitializationFailureAllowsFallback = false;
-    const target = this.connectionTargets[this.connectionTargetIndex] ?? this.connectionTargets[0]!;
+    const target = this.connectionTargets[this.connectionTargetIndex] ?? this.connectionTargets[0];
+    if (!target) {
+      throw new Error("No JSON-RPC connection targets available");
+    }
     const ws = new this.WebSocketImpl(target.url, target.protocols);
     this.ws = ws;
     this.armOpenTimeout(ws, target);

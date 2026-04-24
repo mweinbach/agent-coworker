@@ -1,10 +1,6 @@
 import {
   jsonRpcControlRequestSchemas,
   jsonRpcControlResultSchemas,
-  mcpAuthChallengeEventSchema,
-  mcpAuthResultEventSchema,
-  mcpServersEventSchema,
-  mcpValidationEventSchema,
 } from "../../shared/jsonrpcControlSchemas";
 
 export const jsonRpcMcpRequestSchemas = {

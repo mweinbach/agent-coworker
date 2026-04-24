@@ -40,6 +40,7 @@ import {
   type WebSearchModeValue,
 } from "../../../app/openaiCompatibleProviderOptions";
 import { useAppStore } from "../../../app/store";
+import type { PersistedProviderStatus } from "../../../app/types";
 import {
   normalizeWorkspaceUserProfile,
   type WorkspaceRecord,
@@ -413,7 +414,7 @@ type OpenAiCompatibleModelSettingsCardProps = {
     workspaceId: string,
     patch: { providerOptions?: ReturnType<typeof mergeWorkspaceProviderOptions> },
   ) => Promise<unknown> | undefined;
-  providerStatusByName: Record<string, any>;
+  providerStatusByName: Record<string, PersistedProviderStatus | undefined>;
 };
 const MODEL_SETTINGS_INPUT_CLASS = "h-8 rounded-sm border-border/70 bg-background/80 shadow-none";
 const MODEL_CARD_FIELD_CLASS = "space-y-1.5";
@@ -597,7 +598,7 @@ type SearchSettingsCardProps = {
     workspaceId: string,
     patch: { providerOptions?: ReturnType<typeof mergeWorkspaceProviderOptions> },
   ) => Promise<unknown> | undefined;
-  providerStatusByName: Record<string, any>;
+  providerStatusByName: Record<string, PersistedProviderStatus | undefined>;
 };
 
 export function SearchSettingsCard({
@@ -971,7 +972,7 @@ type GeminiApiSettingsCardProps = {
     workspaceId: string,
     patch: { providerOptions?: ReturnType<typeof mergeWorkspaceProviderOptions> },
   ) => Promise<unknown> | undefined;
-  providerStatusByName: Record<string, any>;
+  providerStatusByName: Record<string, PersistedProviderStatus | undefined>;
   googleDefaultModel: string;
 };
 

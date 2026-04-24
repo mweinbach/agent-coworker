@@ -15,7 +15,7 @@ const providerNameSchema = z.enum(PROVIDER_NAMES);
 const childModelRoutingModeSchema = z.enum(CHILD_MODEL_ROUTING_MODES);
 const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
 const optionalNonEmptyTrimmedStringSchema = nonEmptyTrimmedStringSchema.optional();
-const anyObjectSchema = z.record(z.string(), z.unknown());
+const _anyObjectSchema = z.record(z.string(), z.unknown());
 const targetScopeSchema = z.enum(["project", "global"]);
 const workspaceMemoryScopeSchema = z.enum(["workspace", "user"]);
 

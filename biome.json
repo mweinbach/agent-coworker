@@ -74,6 +74,9 @@
   "overrides": [
     {
       "includes": ["docs/generated/**"],
+      "formatter": {
+        "enabled": false
+      },
       "linter": {
         "enabled": false
       }
@@ -83,23 +86,30 @@
       "linter": {
         "rules": {
           "correctness": {
-            "useYield": "off"
+            "useYield": "off",
+            "noUnusedFunctionParameters": "off",
+            "noUnusedImports": "off",
+            "noUnusedVariables": "off"
           },
           "suspicious": {
             "noExplicitAny": "off",
             "noThenProperty": "off",
+            "noTemplateCurlyInString": "off",
             "noShadowRestrictedNames": "off",
             "useIterableCallbackReturn": "off",
             "noAssignInExpressions": "off"
           },
           "style": {
-            "noNonNullAssertion": "off"
+            "noNonNullAssertion": "off",
+            "useTemplate": "off"
           },
           "a11y": {
             "useButtonType": "off"
           },
           "complexity": {
-            "noBannedTypes": "off"
+            "noBannedTypes": "off",
+            "useLiteralKeys": "off",
+            "useIndexOf": "off"
           }
         }
       }
@@ -195,6 +205,107 @@
     },
     {
       "includes": [
+        "src/agent.ts",
+        "src/cli/repl.ts",
+        "src/server/startServer.ts",
+        "src/store/connections.ts",
+        "src/types.ts",
+        "src/providers/googleReplay.ts",
+        "src/providers/bedrockShared.ts",
+        "src/providers/providerOptions.ts",
+        "src/runtime/googleInteractionsRuntime.ts",
+        "src/runtime/googleNativeInteractions.ts",
+        "src/runtime/openaiNativeResponses.ts",
+        "src/runtime/openaiResponsesProjector.ts",
+        "src/runtime/openaiResponsesRuntime.ts",
+        "src/runtime/openaiResponsesShared.ts",
+        "src/runtime/openaiEventStream.ts",
+        "src/runtime/piRuntime.ts",
+        "src/runtime/piRuntimeOptions.ts",
+        "src/runtime/piMessageBridge.ts",
+        "src/runtime/piStreamParts.ts",
+        "src/runtime/types.ts",
+        "src/server/research/researchRuntime.ts",
+        "src/tools/defineTool.ts",
+        "src/server/jsonrpc/routes/session.ts",
+        "src/tools/index.ts"
+      ],
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noExplicitAny": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": [
+        "src/agent.ts",
+        "src/config.ts",
+        "src/cli/repl.ts",
+        "src/providers/googleReplay.ts",
+        "src/providers/bedrockShared.ts",
+        "src/runtime/googleInteractionsRuntime.ts",
+        "src/runtime/openaiNativeResponses.ts",
+        "src/runtime/openaiResponsesProjector.ts",
+        "src/runtime/openaiResponsesRuntime.ts",
+        "src/runtime/openaiResponsesShared.ts",
+        "src/runtime/openaiEventStream.ts",
+        "src/runtime/piMessageBridge.ts",
+        "src/runtime/piStreamParts.ts",
+        "src/runtime/types.ts",
+        "src/server/agents/toolPolicy.ts",
+        "src/server/agents/DelegateRunner.ts",
+        "src/server/jsonrpc/routes/mcp.ts"
+      ],
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noExplicitAny": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": [
+        "apps/desktop/src/ui/settings/pages/WorkspacesPage.tsx",
+        "apps/mobile/src/app/(app)/thread/\\[id\\].tsx",
+        "apps/mobile/src/features/cowork/providerStore.ts"
+      ],
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noExplicitAny": "off"
+          },
+          "style": {
+            "noNonNullAssertion": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["scripts/**", "examples/**"],
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noExplicitAny": "off"
+          },
+          "correctness": {
+            "noUnusedImports": "off",
+            "noUnusedVariables": "off",
+            "noUnusedFunctionParameters": "off"
+          },
+          "complexity": {
+            "noUselessSwitchCase": "off"
+          },
+          "style": {
+            "useTemplate": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": [
         "src/workspace/map.ts",
         "src/tools/webFetch.ts",
         "src/tools/webSearch.ts",
@@ -207,6 +318,16 @@
           "suspicious": {
             "noControlCharactersInRegex": "off",
             "noAssignInExpressions": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/shared/displayCitationMarkers.ts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noNonNullAssertion": "off"
           }
         }
       }

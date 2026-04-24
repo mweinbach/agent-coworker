@@ -168,9 +168,12 @@ export function normalizeChildRoutingConfig(opts: {
       }
     }
     if (allowedChildModelRefs.length > 0) {
-      preferredRef = allowedChildModelRefs.includes(preferredRef)
-        ? preferredRef
-        : allowedChildModelRefs[0]!;
+      const firstAllowedRef = allowedChildModelRefs[0];
+      if (firstAllowedRef) {
+        preferredRef = allowedChildModelRefs.includes(preferredRef)
+          ? preferredRef
+          : firstAllowedRef;
+      }
     } else {
       preferredRef = fallbackRef;
     }

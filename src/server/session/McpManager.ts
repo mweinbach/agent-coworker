@@ -11,7 +11,7 @@ export class McpManager {
   private readonly validationFlow: McpValidationFlow;
   private readonly authFlow: McpAuthFlow;
 
-  constructor(private readonly context: SessionContext) {
+  constructor(context: SessionContext) {
     this.resolver = new McpServerResolver(context);
     this.registryFlow = new McpRegistryFlow(context);
     this.validationFlow = new McpValidationFlow(context, this.resolver);

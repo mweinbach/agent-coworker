@@ -49,17 +49,22 @@ export function createTurnRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
       const outcome = await captureBindingOutcome(
         context,
         binding,
-        () =>
-          binding.session!.sendUserMessage(
+        () => {
+          const session = binding.session;
+          if (!session) {
+            throw new Error("Thread session is unavailable");
+          }
+          return session.sendUserMessage(
             text,
             clientMessageId,
             undefined,
             attachments.length > 0 ? attachments : undefined,
             orderedParts,
-          ),
+          );
+        },
         (event): event is JsonRpcTurnStartOutcome =>
           (event.type === "session_busy" &&
-            event.sessionId === binding.session!.id &&
+            event.sessionId === binding.session?.id &&
             event.busy === true &&
             typeof event.turnId === "string" &&
             event.turnId.trim().length > 0) ||

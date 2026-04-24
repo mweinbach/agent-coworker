@@ -17,7 +17,8 @@ export async function promptForProviderMethod(
 
   console.log(`Auth methods for ${provider}:`);
   for (let i = 0; i < methods.length; i++) {
-    const method = methods[i]!;
+    const method = methods[i];
+    if (!method) continue;
     const mode =
       method.type === "oauth"
         ? `oauth${method.oauthMode ? ` (${method.oauthMode})` : ""}`

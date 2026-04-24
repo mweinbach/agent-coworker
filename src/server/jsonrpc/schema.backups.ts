@@ -1,8 +1,6 @@
 import {
   jsonRpcControlRequestSchemas,
   jsonRpcControlResultSchemas,
-  workspaceBackupDeltaEventSchema,
-  workspaceBackupsEventSchema,
 } from "../../shared/jsonrpcControlSchemas";
 
 export const jsonRpcBackupsRequestSchemas = {

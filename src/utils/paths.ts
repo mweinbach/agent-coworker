@@ -14,7 +14,7 @@ export function isPathInside(parent: string, child: string): boolean {
   // relative result (e.g. "D:\\target"), which must be treated as outside.
   if (path.isAbsolute(rel)) return false;
 
-  return rel === "" || (!rel.startsWith(".." + path.sep) && rel !== "..");
+  return rel === "" || (!rel.startsWith(`..${path.sep}`) && rel !== "..");
 }
 
 function canonicalizePathFromExistingAncestorSync(targetPath: string): string {
@@ -59,5 +59,5 @@ export function truncateText(s: string, maxChars: number): string {
 
 export function truncateLine(s: string, maxChars: number): string {
   if (s.length <= maxChars) return s;
-  return s.slice(0, maxChars) + "...";
+  return `${s.slice(0, maxChars)}...`;
 }

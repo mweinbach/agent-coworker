@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -11,40 +11,51 @@ const showSaveDialogMock = mock(async () => ({
 }));
 const getDownloadsPathMock = mock(() => path.join(os.tmpdir(), "cowork-downloads"));
 
-mock.module("electron", () => ({
-  app: {
-    getPath(name: string) {
-      return getDownloadsPathMock(name);
-    },
-  },
-  clipboard: {
-    writeText() {},
-  },
-  dialog: {
-    showSaveDialog(...args: unknown[]) {
-      return showSaveDialogMock(...args);
-    },
-  },
-  shell: {
-    openPath: async () => "",
-    showItemInFolder() {},
-    trashItem: async () => {},
-  },
-  BrowserWindow: {
-    fromWebContents() {
-      return null;
-    },
-    getFocusedWindow() {
-      return null;
-    },
-  },
-}));
+let filesModuleImportNonce = 0;
 
-const { registerFilesIpc } = await import("../electron/ipc/files");
-mock.restore();
+async function loadRegisterFilesIpc() {
+  mock.restore();
+  mock.module("electron", () => ({
+    app: {
+      getPath(name: string) {
+        return getDownloadsPathMock(name);
+      },
+    },
+    clipboard: {
+      writeText() {},
+    },
+    dialog: {
+      showSaveDialog(...args: unknown[]) {
+        return showSaveDialogMock(...args);
+      },
+    },
+    shell: {
+      openPath: async () => "",
+      showItemInFolder() {},
+      trashItem: async () => {},
+    },
+    BrowserWindow: {
+      fromWebContents() {
+        return null;
+      },
+      getFocusedWindow() {
+        return null;
+      },
+    },
+  }));
+
+  const module = await import(`../electron/ipc/files?ipc-files-test=${filesModuleImportNonce++}`);
+  mock.restore();
+  return module.registerFilesIpc;
+}
+
+afterEach(() => {
+  mock.restore();
+});
 
 describe("files IPC", () => {
   test("saveExportedFile returns null when the user cancels", async () => {
+    const registerFilesIpc = await loadRegisterFilesIpc();
     const tempWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-save-export-ws-"));
     const sourcePath = path.join(tempWorkspace, "report.pdf");
     await fs.writeFile(sourcePath, "pdf payload", "utf-8");
@@ -97,6 +108,7 @@ describe("files IPC", () => {
   });
 
   test("saveExportedFile passes the suggested filename in the default downloads path", async () => {
+    const registerFilesIpc = await loadRegisterFilesIpc();
     const tempWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-save-export-ws-"));
     const tempDownloads = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-save-export-downloads-"));
     const sourcePath = path.join(tempWorkspace, "report.pdf");
@@ -158,6 +170,7 @@ describe("files IPC", () => {
   });
 
   test("saveExportedFile copies the source file to the selected destination", async () => {
+    const registerFilesIpc = await loadRegisterFilesIpc();
     const tempWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-save-export-ws-"));
     const tempDownloads = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-save-export-downloads-"));
     const sourcePath = path.join(tempWorkspace, "report.docx");
@@ -217,6 +230,7 @@ describe("files IPC", () => {
   });
 
   test("saveExportedFile rejects source paths outside the allowed roots", async () => {
+    const registerFilesIpc = await loadRegisterFilesIpc();
     const tempWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-save-export-ws-"));
     const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-save-export-outside-"));
     const sourcePath = path.join(outsideDir, "report.pdf");

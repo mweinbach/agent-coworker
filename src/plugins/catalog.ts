@@ -34,8 +34,8 @@ async function readPluginMcpSummary(
   }
 }
 
-function entryWarnings(
-  candidate: DiscoveredPluginCandidate,
+function _entryWarnings(
+  _candidate: DiscoveredPluginCandidate,
   extraWarnings: string[] = [],
 ): string[] {
   return [...extraWarnings].filter((warning) => warning.trim().length > 0);
@@ -107,7 +107,7 @@ export async function buildPluginCatalogSnapshot(
         })),
         mcpServers: mcpSummary.serverNames,
         apps: await readPluginAppSummaries(manifest.appPath),
-        warnings: entryWarnings(candidate, [
+        warnings: _entryWarnings(candidate, [
           ...skillWarnings,
           ...(mcpSummary.warning ? [mcpSummary.warning] : []),
         ]),

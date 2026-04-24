@@ -15,7 +15,6 @@ import { workspacePathOverlaps } from "../utils/workspacePath";
 import {
   getInstallationById,
   getSkillScopeDescriptors,
-  scanSkillCatalog,
   scanSkillCatalogFromSources,
 } from "./catalog";
 import {
@@ -42,7 +41,7 @@ function requireWritableScope(
   const descriptor = getSkillScopeDescriptors(config.skillsDirs).find(
     (entry) => entry.scope === scope,
   );
-  if (!descriptor || !descriptor.disabledSkillsDir || !descriptor.writable) {
+  if (!descriptor?.disabledSkillsDir || !descriptor.writable) {
     throw new Error(`Writable scope "${scope}" is not configured`);
   }
 

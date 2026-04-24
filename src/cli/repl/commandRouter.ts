@@ -86,13 +86,14 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
   }
 
   if (cmd === "clear-hard-cap") {
-    if (!threadId()) {
+    const activeThreadId = threadId();
+    if (!activeThreadId) {
       console.log("not connected: cannot clear the session hard cap yet");
       ctx.activateNextPrompt();
       return true;
     }
     const ok = await ctx.tryRequest("cowork/session/usageBudget/set", {
-      threadId: threadId()!,
+      threadId: activeThreadId,
       stopAtUsd: null,
     });
     if (!ok) return true;
@@ -108,9 +109,10 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
       ctx.activateNextPrompt();
       return true;
     }
-    if (threadId()) {
+    const activeThreadId = threadId();
+    if (activeThreadId) {
       const ok = await ctx.tryRequest("cowork/session/model/set", {
-        threadId: threadId()!,
+        threadId: activeThreadId,
         model: id,
       });
       if (!ok) return true;
@@ -136,9 +138,10 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
       ctx.activateNextPrompt();
       return true;
     }
-    if (threadId()) {
+    const activeThreadId = threadId();
+    if (activeThreadId) {
       const ok = await ctx.tryRequest("cowork/session/model/set", {
-        threadId: threadId()!,
+        threadId: activeThreadId,
         provider: name,
         model: nextModel,
       });
@@ -166,14 +169,15 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
       return true;
     }
 
-    if (!threadId()) {
+    const activeThreadId = threadId();
+    if (!activeThreadId) {
       console.log("not connected: cannot change verbosity yet");
       ctx.activateNextPrompt();
       return true;
     }
 
     const ok = await ctx.tryRequest("cowork/session/config/set", {
-      threadId: threadId()!,
+      threadId: activeThreadId,
       config: {
         providerOptions: {
           [provider]: {
@@ -205,14 +209,15 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
       return true;
     }
 
-    if (!threadId()) {
+    const activeThreadId = threadId();
+    if (!activeThreadId) {
       console.log("not connected: cannot change reasoning effort yet");
       ctx.activateNextPrompt();
       return true;
     }
 
     const ok = await ctx.tryRequest("cowork/session/config/set", {
-      threadId: threadId()!,
+      threadId: activeThreadId,
       config: {
         providerOptions: {
           [provider]: {
@@ -244,14 +249,15 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
       return true;
     }
 
-    if (!threadId()) {
+    const activeThreadId = threadId();
+    if (!activeThreadId) {
       console.log("not connected: cannot change reasoning summary yet");
       ctx.activateNextPrompt();
       return true;
     }
 
     const ok = await ctx.tryRequest("cowork/session/config/set", {
-      threadId: threadId()!,
+      threadId: activeThreadId,
       config: {
         providerOptions: {
           [provider]: {

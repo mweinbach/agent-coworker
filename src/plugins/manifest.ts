@@ -8,7 +8,6 @@ import type {
   PluginDiscoveryKind,
   PluginInterfaceMeta,
   PluginScope,
-  PluginSkillSummary,
   SkillInterfaceMeta,
 } from "../types";
 import { isPathInside, resolveMaybeRelative } from "../utils/paths";
@@ -236,7 +235,8 @@ async function readSkillInterface(skillRoot: string): Promise<SkillInterfaceMeta
     .map((entry) => entry.name)
     .sort((left, right) => left.localeCompare(right));
   if (agentFiles.length === 0) return undefined;
-  const primary = agentFiles.find((file) => file.toLowerCase() === "openai.yaml") ?? agentFiles[0]!;
+  const primary = agentFiles.find((file) => file.toLowerCase() === "openai.yaml") ?? agentFiles[0];
+  if (!primary) return undefined;
   try {
     const raw = await fs.readFile(path.join(agentsDir, primary), "utf-8");
     return {

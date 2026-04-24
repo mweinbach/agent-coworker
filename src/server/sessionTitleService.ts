@@ -73,7 +73,7 @@ function limitTokenCount(value: string, maxTokens: number): string {
 function truncateToCharLimit(value: string, maxChars: number): string {
   if (value.length <= maxChars) return value;
   const truncated = value.slice(0, maxChars).replace(/\s+\S*$/, "");
-  return (truncated || value.slice(0, maxChars)).trimEnd() + "…";
+  return `${(truncated || value.slice(0, maxChars)).trimEnd()}…`;
 }
 
 function sanitizeModelTitle(value: string): string {

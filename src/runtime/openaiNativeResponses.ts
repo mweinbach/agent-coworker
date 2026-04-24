@@ -178,7 +178,7 @@ function convertPiMessagesToResponsesInput(
 }
 
 function convertPiToolsToResponsesTools(
-  provider: OpenAiCompatibleProvider,
+  _provider: OpenAiCompatibleProvider,
   tools: Array<Record<string, unknown>>,
 ): Array<Record<string, unknown>> {
   return convertResponsesTools(tools, {
@@ -228,13 +228,15 @@ function normalizeWebSearchLocation(value: unknown): Record<string, string> | un
   const location = asRecord(value);
   if (!location) return undefined;
 
+  const country = asNonEmptyString(location.country);
+  const region = asNonEmptyString(location.region);
+  const city = asNonEmptyString(location.city);
+  const timezone = asNonEmptyString(location.timezone);
   const normalized = {
-    ...(asNonEmptyString(location.country) ? { country: asNonEmptyString(location.country)! } : {}),
-    ...(asNonEmptyString(location.region) ? { region: asNonEmptyString(location.region)! } : {}),
-    ...(asNonEmptyString(location.city) ? { city: asNonEmptyString(location.city)! } : {}),
-    ...(asNonEmptyString(location.timezone)
-      ? { timezone: asNonEmptyString(location.timezone)! }
-      : {}),
+    ...(country ? { country } : {}),
+    ...(region ? { region } : {}),
+    ...(city ? { city } : {}),
+    ...(timezone ? { timezone } : {}),
   };
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
@@ -294,7 +296,7 @@ export function buildOpenAiNativeRequest(opts: OpenAiNativeStepRequest): Record<
     instructions: opts.systemPrompt,
     input,
     stream: true,
-    store: useCodexChatGptBackend ? false : true,
+    store: !useCodexChatGptBackend,
     ...continuationOptions,
   };
 

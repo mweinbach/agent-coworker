@@ -1,29 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 
-const requestJsonRpcMock = mock(async () => ({ path: "/tmp/report.pdf" }));
-const saveExportedFileMock = mock(async () => "/Users/test/Downloads/report.pdf");
-
-mock.module("../src/lib/desktopCommands", () => ({
-  saveExportedFile: (...args: unknown[]) => saveExportedFileMock(...args),
-}));
-
-mock.module("../src/app/store.helpers/jsonRpcSocket", () => ({
-  requestJsonRpc: (...args: unknown[]) => requestJsonRpcMock(...args),
-  registerWorkspaceJsonRpcLifecycle: () => () => {},
-  registerWorkspaceJsonRpcRouter: () => () => {},
-}));
-
-mock.module("../src/app/store.helpers", () => ({
-  ensureControlSocket() {},
-  ensureServerRunning: async () => {},
-  ensureWorkspaceRuntime() {},
-  makeId: () => "note-1",
-  nowIso: () => "2026-04-23T12:00:00.000Z",
-  pushNotification: <T>(notifications: T[], entry: T) => [...notifications, entry],
-  syncDesktopStateCache() {},
-  waitForControlSession: async () => true,
-}));
-
 const { createResearchActions } = await import("../src/app/store.actions/research");
 
 type TestState = {
@@ -70,6 +46,21 @@ function createHarness(overrides: Partial<TestState> = {}) {
 }
 
 describe("research actions", () => {
+  const requestJsonRpcMock = mock(async () => ({ path: "/tmp/report.pdf" }));
+  const saveExportedFileMock = mock(async () => "/Users/test/Downloads/report.pdf");
+
+  const deps = {
+    saveExportedFile: (...args: Parameters<typeof saveExportedFileMock>) => saveExportedFileMock(...args),
+    requestJsonRpc: (...args: Parameters<typeof requestJsonRpcMock>) => requestJsonRpcMock(...args),
+    registerWorkspaceJsonRpcLifecycle: () => () => {},
+    registerWorkspaceJsonRpcRouter: () => () => {},
+    ensureControlSocket() {},
+    ensureServerRunning: async () => {},
+    ensureWorkspaceRuntime() {},
+    syncDesktopStateCache() {},
+    waitForControlSession: async () => true,
+  };
+
   beforeEach(() => {
     requestJsonRpcMock.mockReset();
     requestJsonRpcMock.mockImplementation(async () => ({ path: "/tmp/report.pdf" }));
@@ -79,7 +70,7 @@ describe("research actions", () => {
 
   test("exportResearch saves with a sanitized title-derived filename and clears pending state", async () => {
     const harness = createHarness();
-    const actions = createResearchActions(harness.set as never, harness.get as never);
+    const actions = createResearchActions(harness.set as never, harness.get as never, deps);
 
     const result = await actions.exportResearch("research-1", "pdf");
 
@@ -96,20 +87,15 @@ describe("research actions", () => {
     });
     expect(result).toBe("/Users/test/Downloads/report.pdf");
     expect(harness.state.researchExportPendingIds).toEqual([]);
-    expect(harness.state.notifications).toEqual([
-      {
-        id: "note-1",
-        ts: "2026-04-23T12:00:00.000Z",
-        kind: "info",
-        title: "Research exported",
-        detail: "/Users/test/Downloads/report.pdf",
-      },
-    ]);
+    expect(harness.state.notifications).toHaveLength(1);
+    expect(harness.state.notifications[0]?.kind).toBe("info");
+    expect(harness.state.notifications[0]?.title).toBe("Research exported");
+    expect(harness.state.notifications[0]?.detail).toBe("/Users/test/Downloads/report.pdf");
   });
 
   test("exportResearch treats save dialog cancel as a silent no-op", async () => {
     const harness = createHarness();
-    const actions = createResearchActions(harness.set as never, harness.get as never);
+    const actions = createResearchActions(harness.set as never, harness.get as never, deps);
     saveExportedFileMock.mockImplementationOnce(async () => null);
 
     const result = await actions.exportResearch("research-1", "docx");
@@ -125,7 +111,7 @@ describe("research actions", () => {
 
   test("exportResearch reports save failures and still clears pending state", async () => {
     const harness = createHarness();
-    const actions = createResearchActions(harness.set as never, harness.get as never);
+    const actions = createResearchActions(harness.set as never, harness.get as never, deps);
     saveExportedFileMock.mockImplementationOnce(async () => {
       throw new Error("disk full");
     });
@@ -134,20 +120,15 @@ describe("research actions", () => {
 
     expect(result).toBeNull();
     expect(harness.state.researchExportPendingIds).toEqual([]);
-    expect(harness.state.notifications).toEqual([
-      {
-        id: "note-1",
-        ts: "2026-04-23T12:00:00.000Z",
-        kind: "error",
-        title: "Unable to export research",
-        detail: "disk full",
-      },
-    ]);
+    expect(harness.state.notifications).toHaveLength(1);
+    expect(harness.state.notifications[0]?.kind).toBe("error");
+    expect(harness.state.notifications[0]?.title).toBe("Unable to export research");
+    expect(harness.state.notifications[0]?.detail).toBe("disk full");
   });
 
   test("exportResearch reports a missing export path and clears pending state", async () => {
     const harness = createHarness();
-    const actions = createResearchActions(harness.set as never, harness.get as never);
+    const actions = createResearchActions(harness.set as never, harness.get as never, deps);
     requestJsonRpcMock.mockImplementationOnce(async () => ({}));
 
     const result = await actions.exportResearch("research-1", "pdf");
@@ -155,14 +136,9 @@ describe("research actions", () => {
     expect(result).toBeNull();
     expect(saveExportedFileMock).not.toHaveBeenCalled();
     expect(harness.state.researchExportPendingIds).toEqual([]);
-    expect(harness.state.notifications).toEqual([
-      {
-        id: "note-1",
-        ts: "2026-04-23T12:00:00.000Z",
-        kind: "error",
-        title: "Unable to export research",
-        detail: "The export completed without a downloadable file path.",
-      },
-    ]);
+    expect(harness.state.notifications).toHaveLength(1);
+    expect(harness.state.notifications[0]?.kind).toBe("error");
+    expect(harness.state.notifications[0]?.title).toBe("Unable to export research");
+    expect(harness.state.notifications[0]?.detail).toBe("The export completed without a downloadable file path.");
   });
 });

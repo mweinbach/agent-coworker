@@ -38,6 +38,7 @@ mock.module("electron", () => ({
 }));
 
 const { registerFilesIpc } = await import("../electron/ipc/files");
+mock.restore();
 
 describe("files IPC", () => {
   test("saveExportedFile returns null when the user cancels", async () => {

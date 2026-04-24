@@ -16,7 +16,7 @@ const UNAVAILABLE_RELEASE_FEED_MESSAGE =
   "Updates are unavailable for this platform because no update feed is published.";
 const require = createRequire(import.meta.url);
 
-type UpdaterEventHandler = (...args: any[]) => void;
+type UpdaterEventHandler = (...args: unknown[]) => void;
 
 export interface UpdaterClient {
   autoDownload: boolean;

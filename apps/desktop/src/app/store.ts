@@ -89,7 +89,7 @@ const cachedStateSeed = buildCachedDesktopStateSeed(loadDesktopStateCacheRaw());
 export const useAppStore = create<AppStoreState>((set, get) => ({
   ...initialState,
   ...cachedStateSeed,
-  ...createAppActions((partial) => set(partial as any), get),
+  ...createAppActions((partial) => set(partial as Parameters<typeof set>[0]), get),
 }));
 
 export type { AppStoreState } from "./store.helpers";

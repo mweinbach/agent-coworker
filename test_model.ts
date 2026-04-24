@@ -8,6 +8,17 @@ import { createRuntime } from "./src/runtime";
 
 dotenv.config();
 
+function readTextDelta(part: unknown): string | null {
+  if (!part || typeof part !== "object") {
+    return null;
+  }
+  const candidate = part as { type?: unknown; text?: unknown };
+  if (candidate.type !== "text-delta" || typeof candidate.text !== "string") {
+    return null;
+  }
+  return candidate.text;
+}
+
 async function main() {
   const testDir = join(tmpdir(), `cowork-test-model-${Date.now()}`);
   mkdirSync(testDir, { recursive: true });
@@ -56,8 +67,9 @@ async function main() {
       maxSteps: 3,
       providerOptions: config.providerOptions,
       onModelStreamPart: async (part) => {
-        if ((part as any)?.type === "text-delta") {
-          process.stdout.write(String((part as any).text ?? ""));
+        const textDelta = readTextDelta(part);
+        if (textDelta !== null) {
+          process.stdout.write(textDelta);
         }
       },
     });

@@ -1,5 +1,5 @@
 import { execFile as execFileCallback } from "node:child_process";
-import fs from "node:fs/promises";
+import fs, { type FileHandle } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -107,7 +107,7 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
     await workspaceRoots.ensureApprovedWorkspaceRoots();
     const safePath = resolveAllowedPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
 
-    let fh;
+    let fh: FileHandle | null = null;
     try {
       fh = await fs.open(safePath, "r");
       const buffer = Buffer.alloc(256 * 1024); // max 256KB preview

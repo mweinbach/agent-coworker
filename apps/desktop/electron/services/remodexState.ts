@@ -328,9 +328,13 @@ function selectTrustedPhoneRecord(
   if (entries.length === 0) {
     return null;
   }
+  const firstEntry = entries[0];
+  if (!firstEntry) {
+    return null;
+  }
   const selected = preferredPhoneDeviceId
-    ? (entries.find(([phoneDeviceId]) => phoneDeviceId === preferredPhoneDeviceId) ?? entries[0]!)
-    : entries[0]!;
+    ? (entries.find(([phoneDeviceId]) => phoneDeviceId === preferredPhoneDeviceId) ?? firstEntry)
+    : firstEntry;
 
   return buildTrustedPhoneRecord(selected[0], selected[1], {
     lastPairedAt: lastPairedAt ?? new Date(0).toISOString(),

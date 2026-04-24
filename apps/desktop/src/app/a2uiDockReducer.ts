@@ -182,9 +182,8 @@ export function seedDockFromFeed(
   for (const item of feed) {
     if (item.kind !== "ui_surface") continue;
     const existingRevs = dock.revisionsBySurfaceId[item.surfaceId] ?? [];
-    const existingMaxRev = existingRevs.length
-      ? existingRevs[existingRevs.length - 1]!.revision
-      : -1;
+    const latestExistingRev = existingRevs[existingRevs.length - 1];
+    const existingMaxRev = latestExistingRev?.revision ?? -1;
     if (item.revision <= existingMaxRev) continue;
     const projected: ProjectedUiSurface = {
       type: "uiSurface",
@@ -208,7 +207,7 @@ export function seedDockFromFeed(
 export function latestRevision(
   revisions: readonly A2uiSurfaceRevision[],
 ): A2uiSurfaceRevision | null {
-  return revisions.length === 0 ? null : revisions[revisions.length - 1]!;
+  return revisions[revisions.length - 1] ?? null;
 }
 
 export function revisionByNumber(

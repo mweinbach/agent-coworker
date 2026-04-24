@@ -65,8 +65,6 @@ export function buildConfirmDialog(
   switch (platform) {
     case "darwin":
       return buildDarwinConfirmDialog(input, confirmLabel, cancelLabel);
-    case "win32":
-    case "linux":
     default:
       return buildDefaultConfirmDialog(input, confirmLabel, cancelLabel);
   }

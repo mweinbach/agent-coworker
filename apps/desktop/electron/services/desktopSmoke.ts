@@ -175,7 +175,10 @@ export async function connectDesktopSmokeJsonRpc(
   ): Promise<DesktopSmokeJsonRpcMessage> => {
     const existingIndex = queue.findIndex(predicate);
     if (existingIndex >= 0) {
-      return queue.splice(existingIndex, 1)[0]!;
+      const existing = queue.splice(existingIndex, 1)[0];
+      if (existing) {
+        return existing;
+      }
     }
     if (terminalError) {
       throw terminalError;

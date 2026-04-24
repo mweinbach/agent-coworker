@@ -360,24 +360,36 @@ export class ServerManager {
       const sourceEnvForAttempt = useSource ? buildSourceEnvForAttempt(serverEnv, attempt) : null;
       const cleanup = sourceEnvForAttempt?.cleanup ?? (() => {});
 
-      const child = useSource
-        ? spawn("bun", [sourceEntry!, ...spawnArgs], {
-            cwd: repoRoot!,
-            stdio: ["ignore", "pipe", "pipe"],
-            env: sourceEnvForAttempt!.env,
-          })
-        : spawn(sidecar!.command, [...sidecar!.args, ...spawnArgs], {
-            cwd: process.resourcesPath,
-            stdio: ["ignore", "pipe", "pipe"],
-            env: {
-              ...serverEnv,
-              COWORK_BUILTIN_DIR: builtInDir!,
-              COWORK_DESKTOP_BUNDLE: "1",
-            },
-          });
+      let child: ServerChildProcess;
+      let spawnDescription: string;
+      if (useSource) {
+        if (!sourceEntry || !repoRoot || !sourceEnvForAttempt) {
+          throw new Error("Source server startup configuration is incomplete.");
+        }
+        child = spawn("bun", [sourceEntry, ...spawnArgs], {
+          cwd: repoRoot,
+          stdio: ["ignore", "pipe", "pipe"],
+          env: sourceEnvForAttempt.env,
+        });
+        spawnDescription = "bun";
+      } else {
+        if (!sidecar || !builtInDir) {
+          throw new Error("Packaged server startup configuration is incomplete.");
+        }
+        child = spawn(sidecar.command, [...sidecar.args, ...spawnArgs], {
+          cwd: process.resourcesPath,
+          stdio: ["ignore", "pipe", "pipe"],
+          env: {
+            ...serverEnv,
+            COWORK_BUILTIN_DIR: builtInDir,
+            COWORK_DESKTOP_BUNDLE: "1",
+          },
+        });
+        spawnDescription = `${sidecar.command} ${sidecar.args.join(" ")}`.trim();
+      }
 
       logServerManagerEvent(
-        `workspace=${workspaceId} attempt=${attempt}/${attemptCount} spawn=${useSource ? "bun" : `${sidecar!.command} ${sidecar!.args.join(" ")}`.trim()}`,
+        `workspace=${workspaceId} attempt=${attempt}/${attemptCount} spawn=${spawnDescription}`,
       );
 
       let cleaned = false;

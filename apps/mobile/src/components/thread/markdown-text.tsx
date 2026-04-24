@@ -41,7 +41,7 @@ function InlineText({ text, color }: { text: string; color: string }) {
 
   return (
     <Text selectable style={{ color, fontSize: 15, lineHeight: 22 }}>
-      {parts.map((part, i) => {
+      {parts.map((part) => {
         const partKey = `part:${part}`;
         if (part.startsWith("`") && part.endsWith("`")) {
           return (

@@ -96,6 +96,59 @@ const JSONRPC_THREAD_EVENT_METHODS = new Set([
   "cowork/session/agentWaitResult",
 ]);
 
+type JsonRpcMessageParams = Record<string, unknown> & {
+  threadId?: string;
+  thread_id?: string;
+  thread?: { id?: string; status?: string };
+  sessionId?: string;
+  question?: string;
+  options?: unknown[];
+  command?: string;
+  dangerous?: boolean;
+  reason?: string;
+  type?: string;
+  turn?: { id?: string; status?: string };
+  item?: unknown;
+  itemId?: string;
+  mode?: string;
+  delta?: unknown;
+};
+
+type JsonRpcThreadStart = {
+  id: string;
+  title?: string;
+  modelProvider?: string;
+  model?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  status?: { type?: string };
+};
+
+type JsonRpcSnapshot = {
+  feed?: FeedItem[];
+  lastEventSeq?: unknown;
+  messageCount?: unknown;
+  updatedAt: string;
+  title: string;
+  titleSource?: unknown;
+  sessionId: string;
+  sessionKind?: string | null;
+  parentSessionId?: string | null;
+  role?: string | null;
+  mode?: string | null;
+  depth?: number | null;
+  nickname?: string | null;
+  requestedModel?: string | null;
+  effectiveModel?: string | null;
+  requestedReasoningEffort?: string | null;
+  effectiveReasoningEffort?: string | null;
+  executionState?: string | null;
+  lastMessagePreview?: string | null;
+  agents?: ThreadAgentSummary[];
+  sessionUsage?: unknown;
+  lastTurnUsage?: unknown;
+};
+
 type ThreadOutboundMessage =
   | { type: "cancel"; sessionId: string; includeSubagents?: boolean }
   | { type: "session_close"; sessionId: string }
@@ -247,7 +300,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
         return;
       }
       if (message.kind === "request") {
-        const requestParams = (message.params ?? {}) as any;
+        const requestParams = (message.params ?? {}) as JsonRpcMessageParams;
         const threadId = findThreadIdForJsonRpcNotification(
           get,
           workspaceId,
@@ -278,12 +331,12 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
             command: String(requestParams.command ?? ""),
             dangerous: requestParams.dangerous === true,
             reasonCode: requestParams.reason ?? "requires_manual_review",
-          } as any);
+          } as ServerEvent);
         }
         return;
       }
 
-      const params = (message.params ?? {}) as any;
+      const params = (message.params ?? {}) as JsonRpcMessageParams;
       const mappedThreadId = findThreadIdForJsonRpcNotification(
         get,
         workspaceId,
@@ -533,7 +586,10 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
 
       const nextLatestTodosByThreadId = { ...s.latestTodosByThreadId };
       if (fromThreadId in nextLatestTodosByThreadId && !(toThreadId in nextLatestTodosByThreadId)) {
-        nextLatestTodosByThreadId[toThreadId] = nextLatestTodosByThreadId[fromThreadId]!;
+        const nextTodos = nextLatestTodosByThreadId[fromThreadId];
+        if (nextTodos) {
+          nextLatestTodosByThreadId[toThreadId] = nextTodos;
+        }
       }
       delete nextLatestTodosByThreadId[fromThreadId];
 
@@ -759,7 +815,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     }
     if (cmid) {
       const seen = RUNTIME.optimisticUserMessageIds.get(threadId);
-      if (seen && seen.has(cmid)) return;
+      if (seen?.has(cmid)) return;
     }
 
     updateThreadFeed(
@@ -794,7 +850,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       const cmid = typeof item.clientMessageId === "string" ? item.clientMessageId : null;
       if (cmid) {
         const seen = RUNTIME.optimisticUserMessageIds.get(threadId);
-        if (seen && seen.has(cmid)) return;
+        if (seen?.has(cmid)) return;
       }
     }
 
@@ -1251,7 +1307,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     runtimeBusy: boolean,
     threadLastEventSeq: number,
     currentFeed: FeedItem[],
-    snapshot: any,
+    snapshot: { feed?: unknown; lastEventSeq?: unknown },
   ): boolean {
     if (currentFeed.length === 0) {
       return false;
@@ -1270,10 +1326,10 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
   }
 
   function applyJsonRpcThreadSnapshot(
-    get: StoreGet,
+    _get: StoreGet,
     set: StoreSet,
     threadId: string,
-    snapshot: any,
+    snapshot: JsonRpcSnapshot,
   ) {
     set((s) => {
       const runtime = s.threadRuntimeById[threadId];
@@ -1437,7 +1493,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
         { allowBeforeHydration: !evt.isResume },
       );
       let acceptedPendingFirstMessage = false;
-      if (pendingFirstMessage && pendingFirstMessage.trim()) {
+      if (pendingFirstMessage?.trim()) {
         if (resumedBusy) {
           if (!pendingFirstMessageQueued) {
             prependPendingThreadMessage(threadId, pendingFirstMessage);
@@ -1832,7 +1888,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       });
       if (cmid) {
         const seen = RUNTIME.optimisticUserMessageIds.get(threadId);
-        if (seen && seen.has(cmid)) return;
+        if (seen?.has(cmid)) return;
       }
 
       pushFeedItem(set, threadId, {
@@ -2101,7 +2157,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
         if (isWorkspaceDisposed(workspaceId)) {
           return;
         }
-        const thread = (result as any)?.thread;
+        const thread = (result as { thread?: JsonRpcThreadStart } | null)?.thread;
         if (!thread) return;
 
         if (!existingSessionId && activeThreadId !== thread.id) {
@@ -2121,7 +2177,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
           buildSyntheticServerHelloFromJsonRpcThread(
             thread,
             existingSessionId ? { isResume: true } : undefined,
-          ) as any,
+          ) as ServerEvent,
           pendingFirstMessage,
           pendingFirstMessageQueued,
         );
@@ -2132,11 +2188,11 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
             get().workspaces.find((workspace) => workspace.id === workspaceId),
           ),
           sessionId: thread.id,
-        } as any);
+        } as ServerEvent);
         handleThreadEvent(get, set, activeThreadId, {
           ...buildSyntheticSessionInfoFromJsonRpcThread(thread),
           sessionId: thread.id,
-        } as any);
+        } as ServerEvent);
         const snapshot = await requestJsonRpcThreadRead(get, set, workspaceId, thread.id);
         if (isWorkspaceDisposed(workspaceId)) {
           return;

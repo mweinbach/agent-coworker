@@ -26,7 +26,7 @@ function getClientAndCwd() {
   return { client, cwd };
 }
 
-export const useMemoryStore = create<MemoryStoreState>((set, get) => ({
+export const useMemoryStore = create<MemoryStoreState>((set, _get) => ({
   entries: [],
   loading: false,
   error: null,

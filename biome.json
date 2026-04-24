@@ -169,6 +169,31 @@
       }
     },
     {
+      "includes": ["apps/desktop/src/ui/settings/pages/ProvidersPage.tsx"],
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noExplicitAny": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": [
+        "apps/desktop/src/app/store.actions/research.ts",
+        "apps/desktop/src/app/store.helpers/controlSocket.ts",
+        "apps/desktop/src/app/store.helpers/jsonRpcSocket.ts",
+        "apps/desktop/src/app/store.helpers.ts"
+      ],
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noExplicitAny": "off"
+          }
+        }
+      }
+    },
+    {
       "includes": [
         "src/workspace/map.ts",
         "src/tools/webFetch.ts",

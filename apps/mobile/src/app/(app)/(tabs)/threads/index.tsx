@@ -1,10 +1,9 @@
-import { Link, Stack, useRouter } from "expo-router";
+import { Link, Stack } from "expo-router";
 import { Fragment, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 
 import { Screen } from "@/components/ui/screen";
 import { SectionCard } from "@/components/ui/section-card";
-import { SFSymbol } from "@/components/ui/sf-symbol";
 import { StatusPill } from "@/components/ui/status-pill";
 import { useThreadStore } from "@/features/cowork/threadStore";
 import { useWorkspaceStore } from "@/features/cowork/workspaceStore";

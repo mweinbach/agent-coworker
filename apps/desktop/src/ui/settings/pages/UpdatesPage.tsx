@@ -240,8 +240,9 @@ export function UpdatesPage(props: UpdatesPageProps = {}) {
                   type="button"
                   variant="outline"
                   onClick={() => {
+                    if (!updateState.release?.releasePageUrl) return;
                     window.open(
-                      updateState.release!.releasePageUrl,
+                      updateState.release.releasePageUrl,
                       "_blank",
                       "noopener,noreferrer",
                     );

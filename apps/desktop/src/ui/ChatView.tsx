@@ -177,8 +177,13 @@ export function parseA2uiActionMessage(text: string): A2uiActionMessage | null {
     }
   }
 
+  const surfaceId = header[1];
+  if (!surfaceId) {
+    return null;
+  }
+
   return {
-    surfaceId: header[1]!,
+    surfaceId,
     componentId: lines[1].slice("component: ".length).trim(),
     eventType: lines[2].slice("event: ".length).trim(),
     ...(payload ? { payload } : {}),
@@ -560,9 +565,9 @@ const FeedRow = memo(function FeedRow(props: {
             <div className="whitespace-pre-wrap">{item.text}</div>
           )}
         </MessageContent>
-        {hasSources && !hasInlineCitationChip && (
-          <SourcesCarousel sources={props.citationSources!} className="mt-1" />
-        )}
+        {hasSources && !hasInlineCitationChip && props.citationSources ? (
+          <SourcesCarousel sources={props.citationSources} className="mt-1" />
+        ) : null}
       </Message>
     );
   }

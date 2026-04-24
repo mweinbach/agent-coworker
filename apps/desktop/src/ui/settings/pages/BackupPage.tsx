@@ -357,12 +357,12 @@ function BackupDetailView({
               <RotateCcwIcon className="mr-2 h-4 w-4 text-destructive/70" />
               Restore Original Workspace
             </Button>
-            {entry.backupDirectory && (
-              <Button variant="outline" onClick={() => onRevealFolder(entry.backupDirectory!)}>
+            {entry.backupDirectory ? (
+              <Button variant="outline" onClick={() => onRevealFolder(entry.backupDirectory)}>
                 <FolderOpenIcon className="mr-2 h-4 w-4" />
                 Reveal Folder
               </Button>
-            )}
+            ) : null}
             <Button
               variant="outline"
               className="border-destructive/30 text-destructive hover:bg-destructive/10 hover:text-destructive"

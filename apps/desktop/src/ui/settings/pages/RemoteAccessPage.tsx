@@ -30,7 +30,6 @@ export function describeRelaySource(
       return "Cowork-managed";
     case "override":
       return "Custom override";
-    case "unavailable":
     default:
       return "Unavailable";
   }
@@ -48,7 +47,6 @@ export function describeRelayServiceStatus(
       return "disconnected";
     case "unavailable":
       return "unavailable";
-    case "unknown":
     default:
       return "unknown";
   }

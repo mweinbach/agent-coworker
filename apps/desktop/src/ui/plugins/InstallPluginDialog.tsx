@@ -268,7 +268,9 @@ export function InstallPluginDialog({ workspaceId }: { workspaceId: string }) {
 
             {showPreview ? (
               <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-3 text-xs text-muted-foreground">
-                <div className="font-medium text-foreground">{previewSummary(pluginPreview!)}</div>
+                <div className="font-medium text-foreground">
+                  {pluginPreview ? previewSummary(pluginPreview) : "No plugin preview"}
+                </div>
                 <div className="mt-1 text-[11px] text-muted-foreground">
                   Previewed for{" "}
                   {pluginPreview?.targetScope === "workspace" ? "workspace" : "global"} install.

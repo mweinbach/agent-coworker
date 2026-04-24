@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { Linking, Pressable, Text, View } from "react-native";
 
 import type { SessionFeedItem } from "@/features/cowork/protocolTypes";

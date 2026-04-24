@@ -56,7 +56,7 @@ function recordStringArray(record: Record<string, unknown>, key: string): string
 
 function firstStringArrayValue(record: Record<string, unknown>, key: string): string | null {
   const values = recordStringArray(record, key);
-  return values.length > 0 ? values[0]! : null;
+  return values[0] ?? null;
 }
 
 function humanizeToolName(name: string): string {
@@ -133,7 +133,7 @@ function summarizeArgs(name: string, args: unknown): string {
   }
   if (nativeKind === "url-context") {
     const urls = recordStringArray(args, "urls");
-    if (urls.length === 1) return `Reading: ${truncate(urls[0]!, 90)}`;
+    if (urls.length === 1 && urls[0]) return `Reading: ${truncate(urls[0], 90)}`;
     if (urls.length > 1) return `Reading ${urls.length} URLs`;
     return "Reading URL context";
   }
@@ -242,7 +242,7 @@ function summarizeResult(name: string, state: ToolFeedState, result: unknown): s
       const action = nativeWebSearchAction(result);
       if (action) return nativeWebSearchActionSummary(action);
       const queries = recordStringArray(result, "queries");
-      if (queries.length === 1) return `Search: ${truncate(queries[0]!, 90)}`;
+      if (queries.length === 1 && queries[0]) return `Search: ${truncate(queries[0], 90)}`;
       if (queries.length > 1) return `Searches: ${queries.length}`;
       return "Completed";
     }
@@ -250,7 +250,7 @@ function summarizeResult(name: string, state: ToolFeedState, result: unknown): s
     if (nativeKind === "url-context") {
       const urls = recordStringArray(result, "urls");
       const urlResults = Array.isArray(result.results) ? result.results.length : 0;
-      if (urls.length === 1) return `Read: ${truncate(urls[0]!, 90)}`;
+      if (urls.length === 1 && urls[0]) return `Read: ${truncate(urls[0], 90)}`;
       if (urls.length > 1) return `Read ${urls.length} URLs`;
       if (urlResults > 0) return `URL results: ${urlResults}`;
       return "Completed";
@@ -343,9 +343,10 @@ function buildDetailsRows(
     if (url) rows.push({ label: "URL", value: truncate(toText(url), 140) });
     if (pattern) rows.push({ label: "Pattern", value: truncate(toText(pattern), 140) });
     if (count !== undefined) rows.push({ label: "Count", value: toText(count) });
-    if (urls.length === 1) rows.push({ label: "URL", value: truncate(urls[0]!, 140) });
+    if (urls.length === 1 && urls[0]) rows.push({ label: "URL", value: truncate(urls[0], 140) });
     if (urls.length > 1) rows.push({ label: "URLs", value: toText(urls.length) });
-    if (queries.length === 1) rows.push({ label: "Query", value: truncate(queries[0]!, 140) });
+    if (queries.length === 1 && queries[0])
+      rows.push({ label: "Query", value: truncate(queries[0], 140) });
     if (queries.length > 1) rows.push({ label: "Queries", value: toText(queries.length) });
   }
 

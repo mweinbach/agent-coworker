@@ -354,6 +354,7 @@ describe("research service", () => {
 
       expect(cancelled?.status).toBe("cancelled");
       expect(sessionDb.getResearch("research-cancel-no-key")?.status).toBe("cancelled");
+      expect(resumeResearchInteractionStreamMock).not.toHaveBeenCalled();
     } finally {
       sessionDb.close();
       await fs.rm(paths.home, { recursive: true, force: true });

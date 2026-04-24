@@ -398,13 +398,16 @@ export class ResearchService {
   }
 
   async cancel(id: string): Promise<ResearchRecord | null> {
-    await this.init();
-    const existing = await this.get(id);
+    const activeState = this.states.get(id);
+    const existing = activeState?.record ?? this.sessionDb.getResearch(id, { workspacePath: this.workspacePath });
     if (!existing) {
       return null;
     }
+    if (!this.recordBelongsToWorkspace(existing)) {
+      return null;
+    }
 
-    const state = this.getOrCreateState(existing);
+    const state = activeState ?? this.getOrCreateState(existing);
     if (isTerminalResearchStatus(state.record.status)) {
       return state.record;
     }
@@ -1282,6 +1285,9 @@ export class ResearchService {
         state.streamPromise = this.consumeInteractionStream(state, stream)
           .catch(async (error) => {
             const message = error instanceof Error ? error.message : String(error);
+            if (state.cancelRequested || state.record.status === "cancelled") {
+              return;
+            }
             this.updateRecord(state, {
               status: "failed",
               error: message,
@@ -1294,6 +1300,9 @@ export class ResearchService {
           });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        if (state.cancelRequested || state.record.status === "cancelled") {
+          return;
+        }
         this.updateRecord(state, {
           status: "failed",
           error: message,

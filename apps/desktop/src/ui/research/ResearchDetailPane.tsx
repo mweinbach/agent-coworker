@@ -284,7 +284,6 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
                       placeholder="What would you like to change about the plan?"
                       value={refineInput}
                       onChange={(e) => setRefineInput(e.target.value)}
-                      autoFocus
                     />
                     <div className="flex flex-wrap gap-2">
                       <Button

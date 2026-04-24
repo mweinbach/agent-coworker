@@ -18,7 +18,7 @@ export type PromptInputAttachmentPreviewItem = {
   previewUrl?: string;
 };
 
-type PromptInputRootProps = ComponentProps<"div"> & {
+type PromptInputRootProps = ComponentProps<"fieldset"> & {
   fileDrop?: PromptInputFileDropOptions;
 };
 
@@ -76,8 +76,9 @@ export function PromptInputRoot({ className, fileDrop, ...props }: PromptInputRo
   );
 
   return (
-    <div
+    <fieldset
       {...props}
+      aria-label="Prompt input"
       data-slot="prompt-input"
       data-file-drag-active={dragActive ? "" : undefined}
       onDragEnter={onDragEnter}
@@ -112,8 +113,7 @@ export function PromptInputAttachmentPreviews({
   if (attachments.length === 0) return null;
 
   return (
-    <div
-      role="region"
+    <section
       aria-label="Attached files"
       className={cn("flex w-full min-w-0 flex-col gap-2 px-0.5 pb-1", className)}
     >
@@ -122,7 +122,7 @@ export function PromptInputAttachmentPreviews({
           const src = attachmentPreviewSrc(item);
           return (
             <div
-              key={`${item.filename}-${index}`}
+              key={`${item.filename}:${item.mimeType}:${item.previewUrl ?? ""}`}
               className="group relative inline-flex min-w-0 max-w-full items-center gap-2 rounded-full border border-border/50 bg-muted/35 py-1 pl-1 pr-9 text-sm shadow-[inset_0_1px_0_var(--border-glass)]"
             >
               <div className="flex size-7 shrink-0 items-center justify-center overflow-hidden rounded-full bg-background/80 ring-1 ring-border/45">
@@ -150,7 +150,7 @@ export function PromptInputAttachmentPreviews({
           );
         })}
       </div>
-    </div>
+    </section>
   );
 }
 

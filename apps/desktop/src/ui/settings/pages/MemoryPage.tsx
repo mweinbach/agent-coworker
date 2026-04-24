@@ -290,8 +290,9 @@ export function MemoryPage() {
                   isExpanded && "bg-card/40",
                 )}
               >
-                <div
-                  className="flex items-center justify-between p-4 cursor-pointer hover:bg-card/60 transition-colors"
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between p-4 text-left transition-colors hover:bg-card/60"
                   onClick={() => toggleExpand(key)}
                 >
                   <div className="flex items-center gap-3">
@@ -311,19 +312,22 @@ export function MemoryPage() {
                   <span className="text-xs text-muted-foreground/60">
                     Updated {relativeTime(entry.updatedAt)}
                   </span>
-                </div>
+                </button>
 
                 {isExpanded && (
                   <div className="px-10 pb-4 text-xs space-y-3">
                     <pre className="whitespace-pre-wrap text-muted-foreground font-sans text-[13px] leading-relaxed">
                       {entry.content}
                     </pre>
-                    <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                    <div className="flex items-center gap-2">
                       <Button
                         variant="ghost"
                         size="sm"
                         className="h-7 text-xs text-muted-foreground hover:text-foreground"
-                        onClick={() => openEditDialog(entry)}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          openEditDialog(entry);
+                        }}
                       >
                         <PencilIcon className="w-3.5 h-3.5 mr-1" />
                         Edit
@@ -332,7 +336,10 @@ export function MemoryPage() {
                         variant="ghost"
                         size="sm"
                         className="h-7 text-xs text-destructive/70 hover:text-destructive hover:bg-destructive/10"
-                        onClick={() => void handleDelete(entry)}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void handleDelete(entry);
+                        }}
                       >
                         <Trash2Icon className="w-3.5 h-3.5 mr-1" />
                         Delete
@@ -358,8 +365,11 @@ export function MemoryPage() {
           </DialogHeader>
           <div className="space-y-4 pt-2">
             <div className="space-y-1.5">
-              <label className="text-xs font-medium text-foreground">Title</label>
+              <label htmlFor="memory-title" className="text-xs font-medium text-foreground">
+                Title
+              </label>
               <Input
+                id="memory-title"
                 placeholder="Optional — leave blank for general memory"
                 value={draft.id}
                 disabled={!!editingEntry}
@@ -368,7 +378,9 @@ export function MemoryPage() {
             </div>
 
             <div className="space-y-1.5">
-              <label className="text-xs font-medium text-foreground">Scope</label>
+              <label htmlFor="memory-scope" className="text-xs font-medium text-foreground">
+                Scope
+              </label>
               <Select
                 value={draft.scope}
                 disabled={!!editingEntry}
@@ -376,7 +388,7 @@ export function MemoryPage() {
                   setDraft((prev) => ({ ...prev, scope: value as "workspace" | "user" }))
                 }
               >
-                <SelectTrigger aria-label="Memory scope">
+                <SelectTrigger id="memory-scope" aria-label="Memory scope">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -387,8 +399,11 @@ export function MemoryPage() {
             </div>
 
             <div className="space-y-1.5">
-              <label className="text-xs font-medium text-foreground">Content</label>
+              <label htmlFor="memory-content" className="text-xs font-medium text-foreground">
+                Content
+              </label>
               <Textarea
+                id="memory-content"
                 placeholder="What should Cowork remember?"
                 className="min-h-[100px]"
                 value={draft.content}

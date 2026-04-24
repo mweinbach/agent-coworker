@@ -225,6 +225,7 @@ export function ConnectPage({
             <div style={{ marginBottom: 16 }}>
               {discovered.map((ws) => (
                 <button
+                  type="button"
                   key={ws.path}
                   onClick={() => void connectWithPath(serverUrl, ws.path)}
                   disabled={busy}
@@ -259,6 +260,7 @@ export function ConnectPage({
         ) : null}
 
         <button
+          type="button"
           onClick={handleConnect}
           disabled={busy || !serverUrl}
           style={{
@@ -309,6 +311,7 @@ export function ConnectPage({
         {showAdvanced ? (
           <>
             <label
+              htmlFor="connect-server-url"
               style={{
                 display: "block",
                 fontSize: 12,
@@ -320,6 +323,7 @@ export function ConnectPage({
               Server URL
             </label>
             <input
+              id="connect-server-url"
               type="text"
               value={serverUrl}
               onChange={(e) => setServerUrl(e.target.value)}

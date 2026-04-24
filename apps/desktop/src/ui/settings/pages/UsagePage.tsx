@@ -319,8 +319,9 @@ export function UsagePage(props: UsagePageProps = {}) {
               return (
                 <div key={group.provider} className="border-b border-border/70 last:border-b-0">
                   {/* Provider header */}
-                  <div
-                    className="flex items-center justify-between p-4 cursor-pointer hover:bg-card/60 transition-colors"
+                  <button
+                    type="button"
+                    className="flex w-full items-center justify-between p-4 text-left transition-colors hover:bg-card/60"
                     onClick={() => toggleProvider(group.provider)}
                   >
                     <div className="flex items-center gap-3">
@@ -345,7 +346,7 @@ export function UsagePage(props: UsagePageProps = {}) {
                         <Badge variant="outline">{formatCost(group.estimatedCostUsd)}</Badge>
                       ) : null}
                     </div>
-                  </div>
+                  </button>
 
                   {/* Model rows */}
                   {isExpanded && (

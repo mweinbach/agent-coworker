@@ -1848,12 +1848,14 @@ export function WorkspacesPage() {
                                     <div className="grid gap-2 xl:grid-cols-2">
                                       {group.refs.map((ref) => {
                                         const checked = visibleAllowedChildModelRefs.includes(ref);
+                                        const childModelCheckboxId = `allowed-child-model-${ws?.id ?? "workspace"}-${ref}`;
                                         return (
-                                          <label
+                                          <div
                                             key={ref}
                                             className="flex items-center gap-2 rounded-sm border border-border/60 px-3 py-2 text-sm"
                                           >
                                             <Checkbox
+                                              id={childModelCheckboxId}
                                               checked={checked}
                                               onCheckedChange={(nextChecked) => {
                                                 if (!ws) return;
@@ -1878,8 +1880,10 @@ export function WorkspacesPage() {
                                               aria-label={`Allow subagent model ${ref}`}
                                               disabled={modelControlsDisabled}
                                             />
-                                            <span>{childTargetLabel(ref)}</span>
-                                          </label>
+                                            <label htmlFor={childModelCheckboxId}>
+                                              {childTargetLabel(ref)}
+                                            </label>
+                                          </div>
                                         );
                                       })}
                                     </div>

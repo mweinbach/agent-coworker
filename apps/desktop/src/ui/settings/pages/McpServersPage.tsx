@@ -397,11 +397,12 @@ export function McpServersPage() {
                 isExpanded && "bg-card/40",
               )}
             >
-              <div
-                className="flex items-center justify-between p-4 cursor-pointer hover:bg-card/60 transition-colors"
-                onClick={() => toggleExpand(server.name)}
-              >
-                <div className="flex items-center gap-3">
+              <div className="flex items-center justify-between p-4 transition-colors hover:bg-card/60">
+                <button
+                  type="button"
+                  className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                  onClick={() => toggleExpand(server.name)}
+                >
                   {isExpanded ? (
                     <ChevronDownIcon className="w-4 h-4 text-muted-foreground" />
                   ) : (
@@ -418,15 +419,16 @@ export function McpServersPage() {
                   ) : validation && !validation.ok ? (
                     <XCircleIcon className="w-4 h-4 text-destructive" />
                   ) : null}
-                </div>
+                </button>
 
-                <div className="flex items-center gap-3" onClick={(e) => e.stopPropagation()}>
+                <div className="flex items-center gap-3">
                   {canEdit && (
                     <Button
                       variant="ghost"
                       size="icon"
                       className="h-8 w-8 text-muted-foreground hover:text-foreground"
-                      onClick={() => {
+                      onClick={(event) => {
+                        event.stopPropagation();
                         if (!isExpanded) toggleExpand(server.name);
                         clearAutoValidateTimer();
                         setEditorState({ mode: "edit", name: server.name });

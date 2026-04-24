@@ -176,7 +176,15 @@ export const SourcesCarousel = memo(function SourcesCarousel({
             className="app-shadow-surface absolute -left-2 top-1/2 z-10 h-6 w-6 min-w-6 -translate-y-1/2 rounded-full border border-border bg-card p-0 opacity-0 transition-opacity group-hover/carousel:opacity-100"
             onClick={() => scrollBy(-180)}
           >
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="text-foreground">
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 12 12"
+              fill="none"
+              className="text-foreground"
+              aria-hidden="true"
+              focusable="false"
+            >
               <path
                 d="M7.5 2.5L4 6l3.5 3.5"
                 stroke="currentColor"
@@ -195,7 +203,15 @@ export const SourcesCarousel = memo(function SourcesCarousel({
             className="app-shadow-surface absolute -right-2 top-1/2 z-10 h-6 w-6 min-w-6 -translate-y-1/2 rounded-full border border-border bg-card p-0 opacity-0 transition-opacity group-hover/carousel:opacity-100"
             onClick={() => scrollBy(180)}
           >
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="text-foreground">
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 12 12"
+              fill="none"
+              className="text-foreground"
+              aria-hidden="true"
+              focusable="false"
+            >
               <path
                 d="M4.5 2.5L8 6l-3.5 3.5"
                 stroke="currentColor"

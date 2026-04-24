@@ -34,20 +34,20 @@
   },
   "linter": {
     "enabled": true,
-    "rules": {
-      "recommended": true,
-      "style": {
-        "useImportType": "warn",
-        "noNonNullAssertion": "off"
-      },
-      "suspicious": {
-        "noExplicitAny": "off"
-      },
-      "complexity": {
-        "noStaticOnlyClass": "off",
-        "noBannedTypes": "warn"
-      }
-    }
+		"rules": {
+			"recommended": true,
+			"style": {
+				"useImportType": "warn",
+				"noNonNullAssertion": "warn"
+			},
+			"suspicious": {
+				"noExplicitAny": "warn"
+			},
+			"complexity": {
+				"noStaticOnlyClass": "off",
+				"noBannedTypes": "error"
+			}
+		}
   },
   "javascript": {
     "formatter": {

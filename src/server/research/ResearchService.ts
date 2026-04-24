@@ -106,6 +106,19 @@ function sourceHost(url: string): string | undefined {
   }
 }
 
+function sourceIdentity(source: Pick<ResearchSource, "sourceType" | "url">): string {
+  return `${source.sourceType}:${source.url}`;
+}
+
+function mergeResearchSource(existing: ResearchSource, source: ResearchSource): ResearchSource {
+  return {
+    ...existing,
+    ...source,
+    title: source.title ?? existing.title,
+    host: source.host ?? existing.host,
+  };
+}
+
 function buildResearchTitle(prompt: string): string {
   const firstLine = prompt
     .split("\n")
@@ -307,6 +320,9 @@ export class ResearchService {
     }
     if (!parent.interactionId) {
       throw new Error("The selected research has not started yet.");
+    }
+    if (parent.status !== "completed") {
+      throw new Error("Follow-up is only available after the selected research has completed.");
     }
     const input = params.input.trim();
     if (!input) {
@@ -1075,11 +1091,30 @@ export class ResearchService {
     source: ResearchSource,
     eventId: string | null,
   ): void {
-    const signature = `${source.sourceType}:${source.url}:${source.title ?? ""}`;
-    const existingSignatures = new Set(
-      state.record.sources.map((entry) => `${entry.sourceType}:${entry.url}:${entry.title ?? ""}`),
-    );
-    if (existingSignatures.has(signature)) {
+    const identity = sourceIdentity(source);
+    const existingIndex = state.record.sources.findIndex((entry) => sourceIdentity(entry) === identity);
+    if (existingIndex !== -1) {
+      const existing = state.record.sources[existingIndex]!;
+      const merged = mergeResearchSource(existing, source);
+      if (JSON.stringify(merged) === JSON.stringify(existing)) {
+        return;
+      }
+      const sources = state.record.sources.map((entry, index) => index === existingIndex ? merged : entry);
+      this.updateRecord(state, {
+        sources,
+        updatedAt: new Date().toISOString(),
+      });
+      this.schedulePersist(state);
+      this.broadcast(
+        state,
+        "research/sourceFound",
+        {
+          researchId: state.record.id,
+          source: merged,
+          ...(eventId ? { eventId } : {}),
+        },
+        eventId,
+      );
       return;
     }
 

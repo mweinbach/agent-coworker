@@ -263,6 +263,74 @@ describe("research service", () => {
     }
   });
 
+  test("deduplicates repeated research sources by URL and merges richer metadata", async () => {
+    const paths = await makeTmpCoworkHome();
+    const sessionDb = await SessionDb.create({ paths });
+    const sourceUrl = "https://example.com/shared-source";
+
+    createResearchInteractionStreamImpl = async () => (async function* () {
+      yield {
+        event_type: "interaction.start",
+        event_id: "evt-source-1",
+        interaction: { id: "interaction-source", status: "running" },
+      };
+      yield {
+        event_type: "content.start",
+        event_id: "evt-source-2",
+        content: {
+          type: "text_annotation",
+          annotations: [{
+            type: "url_citation",
+            url: sourceUrl,
+            title: sourceUrl,
+          }],
+        },
+      };
+      yield {
+        event_type: "content.start",
+        event_id: "evt-source-3",
+        content: {
+          type: "text_annotation",
+          annotations: [{
+            type: "url_citation",
+            url: sourceUrl,
+            title: "Readable source title",
+          }],
+        },
+      };
+      yield {
+        event_type: "interaction.complete",
+        event_id: "evt-source-4",
+        interaction: { id: "interaction-source", status: "completed" },
+      };
+    })();
+
+    const service = new ResearchService({
+      rootDir: paths.rootDir,
+      sessionDb,
+      getConfig: () => ({ skillsDirs: [] } as any),
+      sendJsonRpc: () => {},
+    });
+
+    try {
+      const research = await service.start({ input: "Find duplicate sources." });
+      const completed = await waitFor(
+        () => sessionDb.getResearch(research.id),
+        (value) => value?.status === "completed",
+      );
+
+      expect(completed?.sources).toEqual([
+        expect.objectContaining({
+          url: sourceUrl,
+          title: "Readable source title",
+        }),
+      ]);
+    } finally {
+      sessionDb.close();
+      await fs.rm(paths.home, { recursive: true, force: true });
+    }
+  });
+
   test("cancels locally even when a remote cancellation key is unavailable", async () => {
     const paths = await makeTmpCoworkHome();
     const sessionDb = await SessionDb.create({ paths });
@@ -704,6 +772,34 @@ describe("research service", () => {
           collaborativePlanning: true,
         }),
       );
+    } finally {
+      sessionDb.close();
+      await fs.rm(paths.home, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects follow-up requests until the parent research has completed", async () => {
+    const paths = await makeTmpCoworkHome();
+    const sessionDb = await SessionDb.create({ paths });
+
+    await sessionDb.upsertResearch(makeResearchRecord({
+      id: "research-parent-running",
+      status: "running",
+      interactionId: "interaction-parent-running",
+    }));
+
+    const service = new ResearchService({
+      rootDir: paths.rootDir,
+      sessionDb,
+      getConfig: () => ({ skillsDirs: [] } as any),
+      sendJsonRpc: () => {},
+    });
+
+    try {
+      await expect(service.followUp("research-parent-running", {
+        input: "Continue before completion.",
+      })).rejects.toThrow(/completed/i);
+      expect(createResearchInteractionStreamMock).not.toHaveBeenCalled();
     } finally {
       sessionDb.close();
       await fs.rm(paths.home, { recursive: true, force: true });

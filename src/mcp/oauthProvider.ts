@@ -211,7 +211,9 @@ async function resolveOAuthResource(
     return new URL(configuredResource);
   }
 
-  let resourceMetadata;
+  let resourceMetadata:
+    | Awaited<ReturnType<typeof discoverOAuthProtectedResourceMetadata>>
+    | undefined;
   try {
     resourceMetadata = await discoverOAuthProtectedResourceMetadata(server.transport.url);
   } catch {

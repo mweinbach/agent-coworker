@@ -49,11 +49,11 @@ function extractHints(template: string): string[] {
 function tokenizeArguments(argumentsText: string): string[] {
   const tokens: string[] = [];
   const re = /(?:\[Image\s+\d+\]|"[^"]*"|'[^']*'|[^\s"']+)/gi;
-  let match: RegExpExecArray | null = null;
-
-  while ((match = re.exec(argumentsText)) !== null) {
+  let match = re.exec(argumentsText);
+  while (match !== null) {
     const token = (match[0] ?? "").replace(/^["']|["']$/g, "");
     tokens.push(token);
+    match = re.exec(argumentsText);
   }
 
   return tokens;

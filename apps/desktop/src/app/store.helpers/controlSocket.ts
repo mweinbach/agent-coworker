@@ -10,6 +10,7 @@ import {
   requestJsonRpc,
   requestJsonRpcThreadList,
   requestJsonRpcThreadRead,
+  type WorkspaceJsonRpcSocket,
 } from "./jsonRpcSocket";
 import { RUNTIME } from "./runtimeState";
 
@@ -218,7 +219,10 @@ export function createControlSocketHelpers(
     return nextPendingKeys;
   }
 
-  function waitForReady(socket: any, timeoutMs = requestTimeoutMs): Promise<boolean> {
+  function waitForReady(
+    socket: Pick<WorkspaceJsonRpcSocket, "readyPromise">,
+    timeoutMs = requestTimeoutMs,
+  ): Promise<boolean> {
     return new Promise<boolean>((resolve) => {
       let settled = false;
       const timer = setTimeout(() => {
@@ -520,7 +524,7 @@ export function createControlSocketHelpers(
       if (isWorkspaceDisposed(workspaceId)) {
         return null;
       }
-      let threads: any[] = [];
+      let threads: unknown[] = [];
       try {
         threads = await requestJsonRpcThreadList(get, set, workspaceId);
       } catch {
@@ -529,7 +533,7 @@ export function createControlSocketHelpers(
       if (isWorkspaceDisposed(workspaceId)) {
         return null;
       }
-      const sessions = threads.map((thread) => {
+      const sessions = (threads as any[]).map((thread: any) => {
         const existingThread = get().threads.find(
           (entry) =>
             entry.workspaceId === workspaceId &&
@@ -800,9 +804,8 @@ export function createControlSocketHelpers(
     }
 
     if (evt.type === "session_config") {
-      const providerOptions = normalizeWorkspaceProviderOptions(
-        (evt.config as any).providerOptions,
-      );
+      const sessionConfig = evt.config as Record<string, unknown>;
+      const providerOptions = normalizeWorkspaceProviderOptions(sessionConfig.providerOptions);
       const userProfile = evt.config.userProfile
         ? normalizeWorkspaceUserProfile(evt.config.userProfile)
         : undefined;
@@ -1245,7 +1248,7 @@ export function createControlSocketHelpers(
       const connected = evt.connected.filter((provider): provider is ProviderName =>
         deps.isProviderName(provider),
       );
-      set((s) => ({
+      set(() => ({
         providerCatalog: evt.all,
         providerDefaultModelByProvider: evt.default,
         providerConnected: connected,

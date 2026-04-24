@@ -177,6 +177,19 @@ export function createWorkspaceDefaultsActions(
     };
   }): ApplySessionDefaultsMessage | null => {
     const configPatch: NonNullable<ApplySessionDefaultsMessage["config"]> = {};
+    const currentSessionConfig = (opts.current.sessionConfig ?? {}) as {
+      defaultBackupsEnabled?: boolean;
+      defaultToolOutputOverflowChars?: number | null;
+      preferredChildModel?: string;
+      childModelRoutingMode?: WorkspaceRecord["defaultChildModelRoutingMode"];
+      preferredChildModelRef?: string;
+      allowedChildModelRefs?: string[];
+      providerOptions?: unknown;
+      userName?: string;
+      userProfile?: WorkspaceRecord["userProfile"];
+      enableA2ui?: boolean;
+      featureFlags?: { workspace?: { a2ui?: boolean } };
+    };
     const currentProvider =
       opts.current.config?.provider && isProviderName(opts.current.config.provider)
         ? opts.current.config.provider
@@ -194,13 +207,12 @@ export function createWorkspaceDefaultsActions(
 
     if (
       typeof opts.desired.backupsEnabled === "boolean" &&
-      opts.desired.backupsEnabled !== opts.current.sessionConfig?.defaultBackupsEnabled
+      opts.desired.backupsEnabled !== currentSessionConfig.defaultBackupsEnabled
     ) {
       configPatch.backupsEnabled = opts.desired.backupsEnabled;
     }
 
-    const currentDefaultToolOutputOverflow =
-      opts.current.sessionConfig?.defaultToolOutputOverflowChars;
+    const currentDefaultToolOutputOverflow = currentSessionConfig.defaultToolOutputOverflowChars;
     if (opts.desired.toolOutputOverflowChars !== currentDefaultToolOutputOverflow) {
       if (opts.desired.toolOutputOverflowChars !== undefined) {
         configPatch.toolOutputOverflowChars = opts.desired.toolOutputOverflowChars;
@@ -212,19 +224,19 @@ export function createWorkspaceDefaultsActions(
     if (
       opts.desired.childModelRoutingMode !== "cross-provider-allowlist" &&
       opts.desired.preferredChildModel &&
-      opts.desired.preferredChildModel !== opts.current.sessionConfig?.preferredChildModel
+      opts.desired.preferredChildModel !== currentSessionConfig.preferredChildModel
     ) {
       configPatch.preferredChildModel = opts.desired.preferredChildModel;
     }
     if (
       opts.desired.childModelRoutingMode &&
-      opts.desired.childModelRoutingMode !== opts.current.sessionConfig?.childModelRoutingMode
+      opts.desired.childModelRoutingMode !== currentSessionConfig.childModelRoutingMode
     ) {
       configPatch.childModelRoutingMode = opts.desired.childModelRoutingMode;
     }
     if (
       opts.desired.preferredChildModelRef &&
-      opts.desired.preferredChildModelRef !== opts.current.sessionConfig?.preferredChildModelRef
+      opts.desired.preferredChildModelRef !== currentSessionConfig.preferredChildModelRef
     ) {
       configPatch.preferredChildModelRef = opts.desired.preferredChildModelRef;
     }
@@ -232,7 +244,7 @@ export function createWorkspaceDefaultsActions(
       opts.desired.allowedChildModelRefs &&
       !stringArrayEqual(
         opts.desired.allowedChildModelRefs,
-        opts.current.sessionConfig?.allowedChildModelRefs,
+        currentSessionConfig.allowedChildModelRefs,
       )
     ) {
       configPatch.allowedChildModelRefs = opts.desired.allowedChildModelRefs;
@@ -240,7 +252,7 @@ export function createWorkspaceDefaultsActions(
 
     const desiredProviderOptions = normalizeWorkspaceProviderOptions(opts.desired.providerOptions);
     const currentProviderOptions = normalizeWorkspaceProviderOptions(
-      opts.current.sessionConfig?.providerOptions,
+      currentSessionConfig.providerOptions,
     );
     if (
       JSON.stringify(desiredProviderOptions ?? null) !==
@@ -253,22 +265,22 @@ export function createWorkspaceDefaultsActions(
 
     if (
       opts.desired.userName !== undefined &&
-      opts.desired.userName !== opts.current.sessionConfig?.userName
+      opts.desired.userName !== currentSessionConfig.userName
     ) {
       configPatch.userName = opts.desired.userName;
     }
     if (
       opts.desired.userProfile !== undefined &&
-      !userProfileEqual(opts.desired.userProfile, opts.current.sessionConfig?.userProfile)
+      !userProfileEqual(opts.desired.userProfile, currentSessionConfig.userProfile)
     ) {
       configPatch.userProfile = normalizeWorkspaceUserProfile(opts.desired.userProfile);
     }
 
     const currentA2uiEnabled =
-      typeof opts.current.sessionConfig?.enableA2ui === "boolean"
-        ? opts.current.sessionConfig.enableA2ui
-        : typeof opts.current.sessionConfig?.featureFlags?.workspace?.a2ui === "boolean"
-          ? opts.current.sessionConfig.featureFlags.workspace.a2ui
+      typeof currentSessionConfig.enableA2ui === "boolean"
+        ? currentSessionConfig.enableA2ui
+        : typeof currentSessionConfig.featureFlags?.workspace?.a2ui === "boolean"
+          ? currentSessionConfig.featureFlags.workspace.a2ui
           : undefined;
     if (
       typeof opts.desired.a2uiEnabled === "boolean" &&

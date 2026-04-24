@@ -884,6 +884,7 @@ function useFocusTrap(containerRef: React.RefObject<HTMLElement | null>, active:
 
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key !== "Tab") return;
+      if (!container) return;
       const focusable = container.querySelectorAll<HTMLElement>(
         'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
       );

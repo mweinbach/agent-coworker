@@ -111,7 +111,7 @@ export class ProviderAuthManager {
 
     const currentConfig = baseConfig ?? this.opts.getConfig();
     const nextProvider = providerRaw ?? currentConfig.provider;
-    let resolvedModel;
+    let resolvedModel: Awaited<ReturnType<typeof resolveModelMetadata>> | undefined;
     try {
       resolvedModel = await resolveModelMetadata(nextProvider, modelId, {
         providerOptions: currentConfig.providerOptions,

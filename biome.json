@@ -66,6 +66,127 @@
       "arrowParentheses": "always"
     }
   },
+  "css": {
+    "parser": {
+      "tailwindDirectives": true
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["docs/generated/**"],
+      "linter": {
+        "enabled": false
+      }
+    },
+    {
+      "includes": ["test/**", "apps/desktop/test/**", "scripts/**", "test_model.ts"],
+      "linter": {
+        "rules": {
+          "correctness": {
+            "useYield": "off"
+          },
+          "suspicious": {
+            "noExplicitAny": "off",
+            "noThenProperty": "off",
+            "noShadowRestrictedNames": "off",
+            "useIterableCallbackReturn": "off",
+            "noAssignInExpressions": "off"
+          },
+          "style": {
+            "noNonNullAssertion": "off"
+          },
+          "a11y": {
+            "useButtonType": "off"
+          },
+          "complexity": {
+            "noBannedTypes": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["apps/desktop/src/ui/FilePreviewModal.tsx"],
+      "linter": {
+        "rules": {
+          "security": {
+            "noDangerouslySetInnerHtml": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["apps/desktop/src/components/ai-elements/message.tsx"],
+      "linter": {
+        "rules": {
+          "a11y": {
+            "noStaticElementInteractions": "off",
+            "noSvgWithoutTitle": "off",
+            "useSemanticElements": "off"
+          },
+          "correctness": {
+            "noChildrenProp": "off",
+            "useExhaustiveDependencies": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": [
+        "apps/mobile/src/components/thread/**",
+        "apps/mobile/src/app/(app)/settings/providers.tsx",
+        "apps/desktop/src/ui/chat/a2ui/**"
+      ],
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noArrayIndexKey": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": [
+        "apps/desktop/src/ui/file-explorer/WorkspaceFileExplorer.tsx",
+        "apps/desktop/src/ui/ChatView.tsx",
+        "apps/mobile/src/app/(pairing)/index.tsx"
+      ],
+      "linter": {
+        "rules": {
+          "correctness": {
+            "useExhaustiveDependencies": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["apps/desktop/src/ui/settings/pages/BackupPage.tsx"],
+      "linter": {
+        "rules": {
+          "a11y": {
+            "noLabelWithoutControl": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": [
+        "src/workspace/map.ts",
+        "src/tools/webFetch.ts",
+        "src/tools/webSearch.ts",
+        "src/server/agents/commandPolicy.ts",
+        "src/server/commands.ts",
+        "src/utils/approval.ts"
+      ],
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noControlCharactersInRegex": "off",
+            "noAssignInExpressions": "off"
+          }
+        }
+      }
+    }
+  ],
   "assist": {
     "enabled": true,
     "actions": {

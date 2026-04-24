@@ -26,9 +26,9 @@ const noopSet: StoreSet = () => {};
 const DESKTOP_JSONRPC_OPEN_TIMEOUT_MS = 1_500;
 const DESKTOP_JSONRPC_HANDSHAKE_TIMEOUT_MS = 1_500;
 
-type WorkspaceJsonRpcSocket = JsonRpcSocket & {
+export type WorkspaceJsonRpcSocket = JsonRpcSocket & {
   readyPromise?: Promise<void>;
-  request?: (method: string, params?: unknown, options?: unknown) => Promise<unknown>;
+  request?: (method: string, params?: unknown, options?: unknown) => Promise<any>;
   respond?: (requestId: string | number, result: unknown) => boolean;
   connect: () => void;
   close?: () => void;
@@ -263,6 +263,9 @@ export function ensureWorkspaceJsonRpcSocket(
       if (!isActiveWorkspaceJsonRpcSocketGeneration(workspaceId, socket.__coworkGeneration)) {
         return;
       }
+      if (message.id === undefined) {
+        return;
+      }
       emitToWorkspaceRouters(workspaceId, {
         kind: "request",
         id: message.id,
@@ -304,7 +307,7 @@ export async function requestJsonRpc(
   workspaceId: string,
   method: string,
   params?: unknown,
-): Promise<unknown> {
+): Promise<any> {
   const socket = ensureWorkspaceJsonRpcSocket(get, set, workspaceId);
   if (!socket) {
     throw new Error("JSON-RPC workspace socket is unavailable");
@@ -316,15 +319,12 @@ export async function requestJsonRpcThreadList(
   get: StoreGet,
   set: StoreSet | undefined,
   workspaceId: string,
-): Promise<unknown[]> {
+): Promise<any[]> {
   const workspace = getWorkspaceById(get, workspaceId);
   const result = await requestJsonRpc(get, set, workspaceId, "thread/list", {
     cwd: workspace?.path,
   });
-  if (!isRecord(result) || !Array.isArray(result.threads)) {
-    return [];
-  }
-  return result.threads;
+  return Array.isArray((result as any)?.threads) ? (result as any).threads : [];
 }
 
 export async function requestJsonRpcThreadRead(
@@ -332,14 +332,11 @@ export async function requestJsonRpcThreadRead(
   set: StoreSet | undefined,
   workspaceId: string,
   threadId: string,
-): Promise<unknown | null> {
+): Promise<any | null> {
   const result = await requestJsonRpc(get, set, workspaceId, "thread/read", {
     threadId,
   });
-  if (!isRecord(result)) {
-    return null;
-  }
-  return result.coworkSnapshot ?? null;
+  return (result as any)?.coworkSnapshot ?? null;
 }
 
 export async function startJsonRpcThread(

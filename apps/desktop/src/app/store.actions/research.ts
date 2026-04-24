@@ -432,7 +432,7 @@ export function createResearchActions(
             for (const researchId of get().researchSubscribedIds) {
               const record = get().researchById[researchId];
               try {
-                const result = await deps.requestJsonRpc(
+                const result: any = await deps.requestJsonRpc(
                   get,
                   set,
                   workspaceId,
@@ -536,7 +536,7 @@ export function createResearchActions(
     ) {
       return;
     }
-    const result = await deps.requestJsonRpc(get, set, workspaceId, "research/subscribe", {
+    const result: any = await deps.requestJsonRpc(get, set, workspaceId, "research/subscribe", {
       researchId: research.id,
       ...(research.lastEventId ? { afterEventId: research.lastEventId } : {}),
     });
@@ -558,7 +558,7 @@ export function createResearchActions(
     const fileIds: string[] = [];
     for (const file of files ?? []) {
       const payload = await serializeFile(file);
-      const result = await deps.requestJsonRpc(
+      const result: any = await deps.requestJsonRpc(
         get,
         set,
         workspaceId,
@@ -579,9 +579,15 @@ export function createResearchActions(
         if (!workspaceId) {
           return null;
         }
-        const result = await deps.requestJsonRpc(get, set, workspaceId, "research/approvePlan", {
-          researchId,
-        });
+        const result: any = await deps.requestJsonRpc(
+          get,
+          set,
+          workspaceId,
+          "research/approvePlan",
+          {
+            researchId,
+          },
+        );
         if (!isResearchRecord(result?.research)) {
           return null;
         }
@@ -604,10 +610,16 @@ export function createResearchActions(
         if (!workspaceId) {
           return null;
         }
-        const result = await deps.requestJsonRpc(get, set, workspaceId, "research/refinePlan", {
-          researchId,
-          input,
-        });
+        const result: any = await deps.requestJsonRpc(
+          get,
+          set,
+          workspaceId,
+          "research/refinePlan",
+          {
+            researchId,
+            input,
+          },
+        );
         if (!isResearchRecord(result?.research)) {
           return null;
         }
@@ -657,7 +669,7 @@ export function createResearchActions(
           set({ researchListLoading: false });
           return;
         }
-        const result = await deps.requestJsonRpc(get, set, workspaceId, "research/list", {});
+        const result: any = await deps.requestJsonRpc(get, set, workspaceId, "research/list", {});
         const research = Array.isArray(result?.research)
           ? result.research.filter((entry: unknown): entry is ResearchRecord =>
               isResearchRecord(entry),
@@ -688,7 +700,7 @@ export function createResearchActions(
         if (!workspaceId) {
           return;
         }
-        const result = await deps.requestJsonRpc(get, set, workspaceId, "research/get", {
+        const result: any = await deps.requestJsonRpc(get, set, workspaceId, "research/get", {
           researchId,
         });
         if (isResearchRecord(result?.research)) {
@@ -717,7 +729,7 @@ export function createResearchActions(
         }));
         deps.syncDesktopStateCache(get);
         const attachedFileIds = await uploadFiles(workspaceId, files);
-        const result = await deps.requestJsonRpc(get, set, workspaceId, "research/start", {
+        const result: any = await deps.requestJsonRpc(get, set, workspaceId, "research/start", {
           input,
           ...(title ? { title } : {}),
           settings: {
@@ -748,7 +760,7 @@ export function createResearchActions(
         if (!workspaceId) {
           return;
         }
-        const result = await deps.requestJsonRpc(get, set, workspaceId, "research/cancel", {
+        const result: any = await deps.requestJsonRpc(get, set, workspaceId, "research/cancel", {
           researchId,
         });
         if (isResearchRecord(result?.research)) {
@@ -780,7 +792,7 @@ export function createResearchActions(
         if (!workspaceId) {
           return;
         }
-        const result = await deps.requestJsonRpc(get, set, workspaceId, "research/rename", {
+        const result: any = await deps.requestJsonRpc(get, set, workspaceId, "research/rename", {
           researchId,
           title: trimmed,
         });
@@ -806,7 +818,7 @@ export function createResearchActions(
           return null;
         }
         const attachedFileIds = await uploadFiles(workspaceId, files);
-        const result = await deps.requestJsonRpc(get, set, workspaceId, "research/followup", {
+        const result: any = await deps.requestJsonRpc(get, set, workspaceId, "research/followup", {
           parentResearchId,
           input,
           ...(title ? { title } : {}),
@@ -852,7 +864,7 @@ export function createResearchActions(
             ? s.researchExportPendingIds
             : [...s.researchExportPendingIds, researchId],
         }));
-        const result = await deps.requestJsonRpc(get, set, workspaceId, "research/export", {
+        const result: any = await deps.requestJsonRpc(get, set, workspaceId, "research/export", {
           researchId,
           format,
         });

@@ -151,14 +151,7 @@ export function AppTopBar({
 
   useEffect(() => {
     setDetailsOpen(false);
-  }, [
-    title,
-    subtitle,
-    sessionUsage?.sessionId,
-    sidebarCollapsed,
-    managementMode,
-    managementWorkspaceId,
-  ]);
+  }, []);
 
   useEffect(() => {
     if (!detailsOpen) {

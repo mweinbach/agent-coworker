@@ -27,7 +27,7 @@ export function PromptInputRoot({ className, fileDrop, ...props }: PromptInputRo
   const dropEnabled = Boolean(fileDrop) && !fileDrop?.disabled;
 
   const onDragEnter = useCallback(
-    (event: DragEvent<HTMLDivElement>) => {
+    (event: DragEvent<HTMLFieldSetElement>) => {
       if (!dropEnabled || !fileDrop) return;
       if (!event.dataTransfer.types.includes("Files")) return;
       event.preventDefault();
@@ -40,7 +40,7 @@ export function PromptInputRoot({ className, fileDrop, ...props }: PromptInputRo
   );
 
   const onDragLeave = useCallback(
-    (event: DragEvent<HTMLDivElement>) => {
+    (event: DragEvent<HTMLFieldSetElement>) => {
       if (!dropEnabled || !fileDrop) return;
       event.preventDefault();
       event.stopPropagation();
@@ -52,7 +52,7 @@ export function PromptInputRoot({ className, fileDrop, ...props }: PromptInputRo
   );
 
   const onDragOver = useCallback(
-    (event: DragEvent<HTMLDivElement>) => {
+    (event: DragEvent<HTMLFieldSetElement>) => {
       if (!dropEnabled || !fileDrop) return;
       if (!event.dataTransfer.types.includes("Files")) return;
       event.preventDefault();
@@ -63,7 +63,7 @@ export function PromptInputRoot({ className, fileDrop, ...props }: PromptInputRo
   );
 
   const onDrop = useCallback(
-    (event: DragEvent<HTMLDivElement>) => {
+    (event: DragEvent<HTMLFieldSetElement>) => {
       if (!dropEnabled || !fileDrop) return;
       event.preventDefault();
       event.stopPropagation();

@@ -95,9 +95,9 @@ export const ContextSidebar = memo(function ContextSidebar() {
         ) : (
           <ScrollShadow className={compactSectionScrollerClassName} data-sidebar-section="tasks">
             <div className="space-y-1.5">
-              {todos.map((todo, index) => (
+              {todos.map((todo) => (
                 <div
-                  key={`${todo.content}:${index}`}
+                  key={`${todo.status}:${todo.content}`}
                   className="flex items-start gap-2 text-[11px]"
                 >
                   {todo.status === "completed" ? (

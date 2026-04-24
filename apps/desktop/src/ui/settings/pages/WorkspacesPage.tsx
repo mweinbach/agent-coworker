@@ -413,7 +413,7 @@ type OpenAiCompatibleModelSettingsCardProps = {
     workspaceId: string,
     patch: { providerOptions?: ReturnType<typeof mergeWorkspaceProviderOptions> },
   ) => Promise<unknown> | undefined;
-  providerStatusByName: Record<string, { verified?: boolean; authorized?: boolean } | undefined>;
+  providerStatusByName: Record<string, any>;
 };
 const MODEL_SETTINGS_INPUT_CLASS = "h-8 rounded-sm border-border/70 bg-background/80 shadow-none";
 const MODEL_CARD_FIELD_CLASS = "space-y-1.5";
@@ -597,7 +597,7 @@ type SearchSettingsCardProps = {
     workspaceId: string,
     patch: { providerOptions?: ReturnType<typeof mergeWorkspaceProviderOptions> },
   ) => Promise<unknown> | undefined;
-  providerStatusByName: Record<string, { verified?: boolean; authorized?: boolean } | undefined>;
+  providerStatusByName: Record<string, any>;
 };
 
 export function SearchSettingsCard({
@@ -971,7 +971,7 @@ type GeminiApiSettingsCardProps = {
     workspaceId: string,
     patch: { providerOptions?: ReturnType<typeof mergeWorkspaceProviderOptions> },
   ) => Promise<unknown> | undefined;
-  providerStatusByName: Record<string, { verified?: boolean; authorized?: boolean } | undefined>;
+  providerStatusByName: Record<string, any>;
   googleDefaultModel: string;
 };
 

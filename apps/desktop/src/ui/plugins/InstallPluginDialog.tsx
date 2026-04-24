@@ -313,7 +313,7 @@ export function InstallPluginDialog({ workspaceId }: { workspaceId: string }) {
                     </div>
                   ))}
                 </div>
-                {pluginPreview?.warnings.length > 0 ? (
+                {(pluginPreview?.warnings?.length ?? 0) > 0 ? (
                   <div className="mt-2 space-y-1 text-[11px] text-destructive">
                     {pluginPreview?.warnings.map((warning) => (
                       <div key={warning}>{warning}</div>

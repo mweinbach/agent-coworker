@@ -103,7 +103,8 @@ export function normalizeFeedForToolCards(feed: FeedItem[], developerMode: boole
 
     const pending = pendingByName.get(parsed.name);
     if (pending && pending.length > 0) {
-      const idx = pending.shift()!;
+      const idx = pending.shift();
+      if (idx === undefined) continue;
       const existing = out[idx];
       if (existing && existing.kind === "tool") {
         out[idx] = {

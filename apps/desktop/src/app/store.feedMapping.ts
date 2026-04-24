@@ -1,6 +1,12 @@
 import { z } from "zod";
 import { sessionUsageSnapshotSchema } from "../../../../src/session/sessionUsageSchema";
 import { parseStructuredToolInput } from "../../../../src/shared/structuredInput";
+import {
+  SERVER_ERROR_CODES,
+  SERVER_ERROR_SOURCES,
+  type ServerErrorCode,
+  type ServerErrorSource,
+} from "../../../../src/types";
 import type { ServerEvent } from "../lib/wsProtocol";
 import { safeParseServerEvent } from "../lib/wsProtocol";
 import {
@@ -52,6 +58,21 @@ type DeveloperDiagnosticServerEvent = Extract<
     type: "observability_status" | "session_backup_state" | "harness_context";
   }
 >;
+
+const serverErrorCodeSet = new Set<string>(SERVER_ERROR_CODES);
+const serverErrorSourceSet = new Set<string>(SERVER_ERROR_SOURCES);
+
+function normalizeServerErrorCode(value: unknown): ServerErrorCode {
+  return typeof value === "string" && serverErrorCodeSet.has(value)
+    ? (value as ServerErrorCode)
+    : "internal_error";
+}
+
+function normalizeServerErrorSource(value: unknown): ServerErrorSource {
+  return typeof value === "string" && serverErrorSourceSet.has(value)
+    ? (value as ServerErrorSource)
+    : "session";
+}
 
 function yesNo(value: boolean): string {
   return value ? "yes" : "no";
@@ -922,7 +943,9 @@ function appendModelStreamUpdateToFeed(
     updateFeedItem: (itemId, updateItem) => {
       const idx = out.findIndex((item) => item.id === itemId);
       if (idx < 0) return;
-      out[idx] = updateItem(out[idx]!);
+      const current = out[idx];
+      if (!current) return;
+      out[idx] = updateItem(current);
     },
   });
 }
@@ -1238,8 +1261,8 @@ export function mapTranscriptToFeed(events: TranscriptEvent[]): FeedItem[] {
         kind: "error",
         ts: evt.ts,
         message: String(payload.message ?? ""),
-        code: String(payload.code ?? "internal_error") as any,
-        source: String(payload.source ?? "session") as any,
+        code: normalizeServerErrorCode(payload.code),
+        source: normalizeServerErrorSource(payload.source),
       });
       continue;
     }

@@ -98,12 +98,11 @@ export function ContextSidebarResizer() {
   }, [dragging, setContextSidebarWidth]);
 
   return (
-    <div
+    <hr
       className={cn(
         "app-native-no-drag absolute -left-1 top-0 z-20 h-full w-3 cursor-col-resize touch-none",
         dragging && "bg-primary/20",
       )}
-      role="separator"
       aria-orientation="vertical"
       aria-label="Resize context sidebar"
       aria-valuemin={200}

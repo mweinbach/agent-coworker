@@ -578,7 +578,11 @@ function convertToolConfig(tools, toolChoice) {
       inputSchema: { json: tool.parameters },
     },
   }));
-  let bedrockToolChoice;
+  let bedrockToolChoice:
+    | { auto: Record<string, never> }
+    | { any: Record<string, never> }
+    | { tool: { name: string } }
+    | undefined;
   switch (toolChoice) {
     case "auto":
       bedrockToolChoice = { auto: {} };
@@ -645,7 +649,7 @@ function buildAdditionalModelRequestFields(model, options) {
 }
 
 function createImageBlock(mimeType, data) {
-  let format;
+  let format: ImageFormat;
   switch (mimeType) {
     case "image/jpeg":
     case "image/jpg":

@@ -28,7 +28,7 @@ export function SkillsView() {
 
   useEffect(() => {
     setSearchQuery("");
-  }, [pluginViewMode]);
+  }, []);
 
   if (!catalogWorkspaceId) {
     return (

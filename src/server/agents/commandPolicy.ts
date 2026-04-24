@@ -798,11 +798,11 @@ function stripSingleAndDoubleQuotedSegments(command: string): string {
 function extractCommandSubstitutionSegments(command: string): string[] {
   const segments: string[] = [];
   const re = /\$\(((?:\\.|[^()\\])*)\)|`((?:\\.|[^`\\])*)`/g;
-  let match: RegExpExecArray | null = null;
-
-  while ((match = re.exec(command)) !== null) {
+  let match = re.exec(command);
+  while (match !== null) {
     const segment = (match[1] ?? match[2] ?? "").replace(/\\`/g, "`").trim();
     if (segment) segments.push(segment);
+    match = re.exec(command);
   }
 
   return segments;

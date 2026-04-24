@@ -587,30 +587,26 @@ class SourceWorkspaceServerManager {
       await this.gracefulKillImpl(existing.child);
     }
 
-    try {
-      const listening = await this.launchWorkspaceServerImpl({
-        repoRoot: this.repoRoot,
-        sourceEntry: this.sourceEntry,
-        workspacePath,
-        yolo: opts.yolo,
-      });
-      const handle: WorkspaceServerHandle = {
-        child: listening.child,
-        url: listening.url,
-        workspacePath,
-        yolo: opts.yolo,
-      };
-      this.servers.set(workspaceId, handle);
-      listening.child.once("exit", () => {
-        const active = this.servers.get(workspaceId);
-        if (active?.child === listening.child) {
-          this.servers.delete(workspaceId);
-        }
-      });
-      return { url: handle.url };
-    } catch (error) {
-      throw error;
-    }
+    const listening = await this.launchWorkspaceServerImpl({
+      repoRoot: this.repoRoot,
+      sourceEntry: this.sourceEntry,
+      workspacePath,
+      yolo: opts.yolo,
+    });
+    const handle: WorkspaceServerHandle = {
+      child: listening.child,
+      url: listening.url,
+      workspacePath,
+      yolo: opts.yolo,
+    };
+    this.servers.set(workspaceId, handle);
+    listening.child.once("exit", () => {
+      const active = this.servers.get(workspaceId);
+      if (active?.child === listening.child) {
+        this.servers.delete(workspaceId);
+      }
+    });
+    return { url: handle.url };
   }
 
   async stopWorkspaceServer(workspaceId: string): Promise<void> {

@@ -485,6 +485,33 @@ export function createThreadActions(
     ];
   };
 
+  const readTranscriptEvents = async (
+    thread: Pick<ThreadRecord, "id" | "sessionId" | "legacyTranscriptId">,
+  ): Promise<TranscriptEvent[] | null> => {
+    const transcriptIds = transcriptIdsForThread(thread);
+    if (transcriptIds.length === 0) return null;
+
+    const transcripts: TranscriptEvent[][] = [];
+    let successfulReads = 0;
+    let firstError: unknown = null;
+
+    for (const transcriptId of transcriptIds) {
+      try {
+        const events = await desktopCommands.readTranscript({ threadId: transcriptId });
+        transcripts.push(events);
+        successfulReads += 1;
+      } catch (error) {
+        firstError ??= error;
+      }
+    }
+
+    if (successfulReads === 0 && firstError) {
+      throw firstError;
+    }
+
+    return transcripts.flat().sort((left, right) => left.ts.localeCompare(right.ts));
+  };
+
   return {
     removeThread: async (threadId: string) => {
       const thread = get().threads.find((t) => t.id === threadId);

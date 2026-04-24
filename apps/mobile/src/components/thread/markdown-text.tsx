@@ -16,14 +16,14 @@ function parseBlocks(text: string): Block[] {
   const blocks: Block[] = [];
   const codeBlockRegex = /```(\w*)\n([\s\S]*?)```/g;
   let lastIndex = 0;
-  let match: RegExpExecArray | null;
-
-  while ((match = codeBlockRegex.exec(text)) !== null) {
+  let match = codeBlockRegex.exec(text);
+  while (match !== null) {
     if (match.index > lastIndex) {
       blocks.push({ type: "text", content: text.slice(lastIndex, match.index) });
     }
     blocks.push({ type: "code", language: match[1] || "", content: match[2] });
     lastIndex = match.index + match[0].length;
+    match = codeBlockRegex.exec(text);
   }
 
   if (lastIndex < text.length) {
@@ -42,10 +42,11 @@ function InlineText({ text, color }: { text: string; color: string }) {
   return (
     <Text selectable style={{ color, fontSize: 15, lineHeight: 22 }}>
       {parts.map((part, i) => {
+        const partKey = `part:${part}`;
         if (part.startsWith("`") && part.endsWith("`")) {
           return (
             <Text
-              key={i}
+              key={partKey}
               style={{
                 fontFamily: "Menlo",
                 fontSize: 13,
@@ -60,15 +61,16 @@ function InlineText({ text, color }: { text: string; color: string }) {
 
         // Bold
         const boldParts = part.split(/(\*\*[^*]+\*\*)/g);
-        return boldParts.map((bp, j) => {
+        return boldParts.map((bp) => {
+          const boldKey = `${partKey}:${bp}`;
           if (bp.startsWith("**") && bp.endsWith("**")) {
             return (
-              <Text key={`${i}-${j}`} style={{ fontWeight: "700" }}>
+              <Text key={boldKey} style={{ fontWeight: "700" }}>
                 {bp.slice(2, -2)}
               </Text>
             );
           }
-          return <Text key={`${i}-${j}`}>{bp}</Text>;
+          return <Text key={boldKey}>{bp}</Text>;
         });
       })}
     </Text>
@@ -156,11 +158,15 @@ export function MarkdownText({ text, color }: MarkdownTextProps) {
 
   return (
     <View style={{ gap: 8 }}>
-      {blocks.map((block, i) => {
+      {blocks.map((block) => {
+        const blockKey =
+          block.type === "code"
+            ? `code:${block.language}:${block.content}`
+            : `text:${block.content}`;
         if (block.type === "code") {
-          return <CodeBlock key={i} language={block.language} content={block.content} />;
+          return <CodeBlock key={blockKey} language={block.language} content={block.content} />;
         }
-        return <InlineText key={i} text={block.content} color={textColor} />;
+        return <InlineText key={blockKey} text={block.content} color={textColor} />;
       })}
     </View>
   );

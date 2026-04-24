@@ -453,7 +453,7 @@ export type AppStoreState = {
 };
 
 export type AppStoreActionKeys = {
-  [K in keyof AppStoreState]: AppStoreState[K] extends (...args: unknown[]) => unknown ? K : never;
+  [K in keyof AppStoreState]: AppStoreState[K] extends (...args: never[]) => unknown ? K : never;
 }[keyof AppStoreState];
 
 export type AppStoreActions = Pick<AppStoreState, AppStoreActionKeys>;

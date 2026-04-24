@@ -247,25 +247,26 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
         return;
       }
       if (message.kind === "request") {
+        const requestParams = (message.params ?? {}) as any;
         const threadId = findThreadIdForJsonRpcNotification(
           get,
           workspaceId,
-          message.params?.threadId ?? message.params?.thread_id ?? null,
+          requestParams.threadId ?? requestParams.thread_id ?? null,
         );
         if (!threadId) return;
         const sessionId =
           get().threadRuntimeById[threadId]?.sessionId ??
           get().threads.find((thread) => thread.id === threadId)?.sessionId ??
-          message.params?.threadId ??
-          message.params?.thread_id ??
+          requestParams.threadId ??
+          requestParams.thread_id ??
           threadId;
         if (message.method === "item/tool/requestUserInput") {
           handleThreadEvent(get, set, threadId, {
             type: "ask",
             sessionId,
             requestId: String(message.id),
-            question: String(message.params?.question ?? ""),
-            options: Array.isArray(message.params?.options) ? message.params.options : undefined,
+            question: String(requestParams.question ?? ""),
+            options: Array.isArray(requestParams.options) ? requestParams.options : undefined,
           });
           return;
         }
@@ -274,15 +275,15 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
             type: "approval",
             sessionId,
             requestId: String(message.id),
-            command: String(message.params?.command ?? ""),
-            dangerous: message.params?.dangerous === true,
-            reasonCode: message.params?.reason ?? "requires_manual_review",
+            command: String(requestParams.command ?? ""),
+            dangerous: requestParams.dangerous === true,
+            reasonCode: requestParams.reason ?? "requires_manual_review",
           } as any);
         }
         return;
       }
 
-      const params = message.params ?? {};
+      const params = (message.params ?? {}) as any;
       const mappedThreadId = findThreadIdForJsonRpcNotification(
         get,
         workspaceId,

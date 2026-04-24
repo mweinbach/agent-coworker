@@ -1036,7 +1036,7 @@ export function DesktopMessageLink({
           className,
         )}
         data-streamdown="link"
-        onClick={(event) => {
+        onClick={(_event) => {
           if (!href) {
             return;
           }

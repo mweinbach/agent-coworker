@@ -616,6 +616,10 @@ function RenderNode({
           })
         : [];
       const rows = Array.isArray(rowsRaw) ? rowsRaw : [];
+      const rowKeyFor = (row: unknown, rowIndex: number) =>
+        typeof row === "object" && row !== null && typeof (row as { id?: unknown }).id === "string"
+          ? `row-${(row as { id: string }).id}`
+          : `row-${columns.map((col) => String(tableCellRender(row, col.key))).join("|") || rowIndex}`;
       if (columns.length === 0) {
         return (
           <UnknownComponent
@@ -644,7 +648,7 @@ function RenderNode({
             <tbody>
               {rows.map((row, rowIndex) => (
                 <tr
-                  key={`row-${rowIndex}`}
+                  key={rowKeyFor(row, rowIndex)}
                   className={cn(
                     "border-b border-border/[0.14] transition-colors last:border-b-0",
                     rowIndex % 2 === 1 && "bg-muted/[0.045]",
@@ -653,7 +657,7 @@ function RenderNode({
                 >
                   {columns.map((col, colIndex) => (
                     <td
-                      key={`cell-${rowIndex}-${col.key}`}
+                      key={`${rowKeyFor(row, rowIndex)}:${col.key}`}
                       className={cn(
                         "px-4 py-3.5 align-top text-[13px] leading-relaxed text-foreground/88 sm:py-4",
                         colIndex === 0 && "font-medium text-foreground",

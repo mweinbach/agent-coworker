@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
 import { Badge } from "../../../components/ui/badge";
@@ -391,11 +391,14 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
     return map;
   }, [providerCatalog]);
 
-  const authMethodsForProvider = (provider: ProviderName): ProviderAuthMethod[] => {
-    const fromStore = providerAuthMethodsByProvider[provider];
-    if (Array.isArray(fromStore) && fromStore.length > 0) return fromStore;
-    return fallbackAuthMethods(provider);
-  };
+  const authMethodsForProvider = useCallback(
+    (provider: ProviderName): ProviderAuthMethod[] => {
+      const fromStore = providerAuthMethodsByProvider[provider];
+      if (Array.isArray(fromStore) && fromStore.length > 0) return fromStore;
+      return fallbackAuthMethods(provider);
+    },
+    [providerAuthMethodsByProvider],
+  );
 
   useEffect(() => {
     if (!canConnectProvider) return;
@@ -461,7 +464,7 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
     setApiKeyEditingByMethod((s) => ({ ...s, [stateKey]: false }));
     setRevealApiKeyByMethod((s) => ({ ...s, [stateKey]: false }));
     setOptimisticApiKeyMaskByMethod((s) => ({ ...s, [stateKey]: nextMask }));
-  }, [providerAuthMethodsByProvider, providerLastAuthResult, providerStatusByName]);
+  }, [authMethodsForProvider, providerLastAuthResult, providerStatusByName]);
 
   const startOauthSignIn = (provider: ProviderName, method: ProviderAuthMethod, code?: string) => {
     void (async () => {
@@ -916,19 +919,21 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
                       <div className="grid gap-2">
                         {lmStudioModels.map((model) => {
                           const checked = !hiddenModels.has(model.id);
+                          const checkboxId = `lmstudio-model-${model.id}`;
                           return (
-                            <label
+                            <div
                               key={model.id}
                               className="flex items-start gap-3 rounded-sm border border-border/60 px-3 py-2 text-sm"
                             >
                               <Checkbox
+                                id={checkboxId}
                                 checked={checked}
                                 onCheckedChange={(nextChecked) => {
                                   void setLmStudioModelVisible(model.id, nextChecked === true);
                                 }}
                                 aria-label={`Show LM Studio model ${model.id} in chat`}
                               />
-                              <div className="min-w-0">
+                              <label htmlFor={checkboxId} className="min-w-0">
                                 <div className="truncate font-medium text-foreground">
                                   {typeof model.displayName === "string" && model.displayName.trim()
                                     ? model.displayName
@@ -937,8 +942,8 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
                                 <div className="truncate text-xs text-muted-foreground">
                                   {model.id}
                                 </div>
-                              </div>
-                            </label>
+                              </label>
+                            </div>
                           );
                         })}
                       </div>
@@ -1057,7 +1062,7 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
                         Rate limits
                       </div>
                       <div className="divide-y divide-border/50 rounded-sm border border-border/50 bg-muted/5">
-                        {visibleRateLimits.map((entry: any, index: number) => {
+                        {visibleRateLimits.map((entry: any) => {
                           const creditsSummary = formatCreditsSummary(entry);
                           const primaryUsedPercent = usedPercentFromWindow(entry?.primaryWindow);
                           const primaryRemainingPercent = remainingPercentFromWindow(
@@ -1075,7 +1080,13 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
                             .join(" • ");
                           return (
                             <div
-                              key={`${entry?.limitId ?? "limit"}:${index}`}
+                              key={[
+                                entry?.limitId ?? "limit",
+                                formatRateLimitName(entry),
+                                creditsSummary,
+                                primaryMeta,
+                                secondaryMeta,
+                              ].join(":")}
                               className="space-y-1 px-2.5 py-2"
                             >
                               <div className="flex items-baseline justify-between gap-3">

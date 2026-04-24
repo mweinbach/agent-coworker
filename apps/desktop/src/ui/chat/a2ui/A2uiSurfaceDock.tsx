@@ -86,8 +86,9 @@ export function selectDockView(dock: A2uiThreadDock): A2uiSurfaceDockView | null
     dock.activeRevisionBySurfaceId[focusedId] ?? revisions[revisions.length - 1]?.revision;
   const activeIndex = revisions.findIndex((r) => r.revision === activeRevNumber);
   const resolvedIndex = activeIndex >= 0 ? activeIndex : revisions.length - 1;
-  const activeRevision = revisions[resolvedIndex]!;
-  const latestRevision = revisions[revisions.length - 1]!;
+  const activeRevision = revisions[resolvedIndex];
+  const latestRevision = revisions[revisions.length - 1];
+  if (!activeRevision || !latestRevision) return null;
   const root = toRenderable(activeRevision.root);
   const title = extractSurfaceTitle(root, activeRevision.dataModel) ?? focusedId;
   const lastSeen = dock.lastSeenRevisionBySurfaceId[focusedId] ?? -1;
@@ -121,7 +122,8 @@ export const A2uiSurfaceDock = memo(function A2uiSurfaceDock({ threadId }: A2uiS
   // When the dock opens, mark the latest revision as seen so the pulse fades.
   useEffect(() => {
     if (!view || !dock || !expanded) return;
-    const latest = view.revisions[view.revisions.length - 1]!;
+    const latest = view.revisions[view.revisions.length - 1];
+    if (!latest) return;
     markSeen(threadId, view.surfaceId, latest.revision);
   }, [dock, expanded, markSeen, threadId, view]);
 
@@ -227,9 +229,8 @@ export const A2uiSurfaceDock = memo(function A2uiSurfaceDock({ threadId }: A2uiS
             </span>
             <span className="flex flex-none items-center gap-1 text-muted-foreground">
               {expanded ? (
-                <span
-                  role="button"
-                  tabIndex={0}
+                <button
+                  type="button"
                   aria-label="Open in larger view"
                   title="Open in larger view"
                   onClick={(event) => {
@@ -240,7 +241,7 @@ export const A2uiSurfaceDock = memo(function A2uiSurfaceDock({ threadId }: A2uiS
                   className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-muted/30 hover:text-foreground"
                 >
                   <ExpandIcon className="size-3.5" />
-                </span>
+                </button>
               ) : null}
               <ChevronDownIcon
                 className={cn(
@@ -358,7 +359,8 @@ function RevisionControls({
   onStep: (direction: -1 | 1) => void;
   onJumpLatest: () => void;
 }) {
-  const active = revisions[activeIndex]!;
+  const active = revisions[activeIndex];
+  if (!active) return null;
   const relAge = formatRelativeAge(Date.now(), active.ts);
   const kindLabel = changeKindLabel(active.changeKind);
   return (

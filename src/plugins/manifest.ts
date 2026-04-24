@@ -389,7 +389,7 @@ async function resolvePluginSkillsPaths(
     }
 
     if (shouldValidateExistingPaths) {
-      let skillsStat;
+      let skillsStat: Awaited<ReturnType<typeof fs.stat>> | undefined;
       try {
         skillsStat = await fs.stat(skillsPath);
       } catch (error) {

@@ -29,9 +29,27 @@ const MAX_DISPLAY_LABEL_CHARS = 512;
  * Prevents newlines/backticks/control characters from breaking fences or injecting prompt text.
  */
 export function sanitizeWorkspaceMapLabel(value: string): string {
+  const replaceUnsafeControlChars = (input: string): string =>
+    Array.from(input, (char) => {
+      const codePoint = char.codePointAt(0);
+      if (codePoint === undefined) {
+        return char;
+      }
+      if (
+        char === "\n" ||
+        (codePoint >= 0x00 && codePoint <= 0x08) ||
+        codePoint === 0x0b ||
+        codePoint === 0x0c ||
+        (codePoint >= 0x0e && codePoint <= 0x1f) ||
+        codePoint === 0x7f
+      ) {
+        return "?";
+      }
+      return char;
+    }).join("");
   let s = value.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   s = s.replace(/\u2028|\u2029/g, "?");
-  s = s.replace(/[\n\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "?");
+  s = replaceUnsafeControlChars(s);
   s = s.replace(/`/g, "'");
   if (s.length > MAX_DISPLAY_LABEL_CHARS) {
     return `${s.slice(0, MAX_DISPLAY_LABEL_CHARS - 1)}…`;
@@ -246,7 +264,9 @@ export function buildWorkspaceMapSection(
   let remaining = MAX_TOTAL_CHARS - intro.length;
 
   for (let i = 0; i < roots.length; i++) {
-    const { abs, heading } = roots[i]!;
+    const root = roots[i];
+    if (!root) continue;
+    const { abs, heading } = root;
     const label = path.basename(abs) || abs;
     const subheading =
       roots.length === 1 ? "" : `### ${heading}\n\n\`${sanitizeWorkspaceMapLabel(abs)}\`\n\n`;

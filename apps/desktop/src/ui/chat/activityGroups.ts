@@ -276,7 +276,8 @@ type UiSurfaceFeed = Extract<FeedItem, { kind: "ui_surface" }>;
 function shouldDropA2uiRevision(item: UiSurfaceFeed, followers: FeedItem[]): boolean {
   if (!item.toolCallId) return false;
   for (let i = 0; i < followers.length; i++) {
-    const next = followers[i]!;
+    const next = followers[i];
+    if (!next) continue;
     if (next.kind !== "ui_surface") continue;
     if (next.surfaceId !== item.surfaceId) continue;
     if (next.toolCallId === item.toolCallId && next.revision > item.revision) {
@@ -301,7 +302,8 @@ export function buildChatRenderItems(feed: FeedItem[]): ChatRenderItem[] {
   };
 
   for (let i = 0; i < feed.length; i++) {
-    const item = feed[i]!;
+    const item = feed[i];
+    if (!item) continue;
     if (item.kind === "todos") {
       continue;
     }

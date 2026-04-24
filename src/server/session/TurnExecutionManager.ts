@@ -939,7 +939,7 @@ export class TurnExecutionManager {
         }
 
         const startedStepsBeforePass = startedStepCount;
-        let res;
+        let res: Awaited<ReturnType<typeof invokeRunTurn>>;
         try {
           res = await invokeRunTurn(remainingSteps);
         } catch (error) {

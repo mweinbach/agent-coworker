@@ -49,7 +49,8 @@ function looksMostlyText(bytes: Uint8Array): boolean {
   let suspicious = 0;
   const sample = Math.min(bytes.length, 8000);
   for (let i = 0; i < sample; i++) {
-    const b = bytes[i]!;
+    const b = bytes[i];
+    if (b === undefined) continue;
     if (b === 9 || b === 10 || b === 13) continue;
     if (b < 32 || b === 127) suspicious++;
   }
@@ -90,7 +91,7 @@ function resolveRelativePath(base: string, relative: string): string {
     else if (segment !== ".") parts.push(segment);
   }
   const joined = parts.join("/");
-  return dir.startsWith("/") ? "/" + joined : joined;
+  return dir.startsWith("/") ? `/${joined}` : joined;
 }
 
 const previewStreamdownPlugins = { cjk, code, math, mermaid };
@@ -496,6 +497,7 @@ export function FilePreviewModal() {
                   />
                 </div>
               ) : null}
+              {/* biome-ignore lint/security/noDangerouslySetInnerHtml: docx preview HTML is sanitized via DOMPurify before render */}
               <div dangerouslySetInnerHTML={{ __html: docxHtml }} />
               {docxLayout?.footerText ? (
                 <div
@@ -507,10 +509,13 @@ export function FilePreviewModal() {
               ) : null}
             </div>
           ) : kind === "xlsx" && xlsxHtml ? (
-            <div
-              className="preview-xlsx overflow-x-auto text-sm [&_table]:w-full [&_table]:border-collapse [&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-border [&_th]:px-2 [&_th]:py-1"
-              dangerouslySetInnerHTML={{ __html: xlsxHtml }}
-            />
+            <>
+              {/* biome-ignore lint/security/noDangerouslySetInnerHtml: xlsx preview HTML is sanitized via DOMPurify before render */}
+              <div
+                className="preview-xlsx overflow-x-auto text-sm [&_table]:w-full [&_table]:border-collapse [&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-border [&_th]:px-2 [&_th]:py-1"
+                dangerouslySetInnerHTML={{ __html: xlsxHtml }}
+              />
+            </>
           ) : showUnknownAsText ? (
             <CodeFilePreview content={textContent} filePath={path ?? ""} />
           ) : showFallback || showUnknownFallback ? (

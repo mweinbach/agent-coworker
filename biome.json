@@ -34,20 +34,29 @@
   },
   "linter": {
     "enabled": true,
-		"rules": {
-			"recommended": true,
-			"style": {
-				"useImportType": "warn",
-				"noNonNullAssertion": "warn"
-			},
-			"suspicious": {
-				"noExplicitAny": "warn"
-			},
-			"complexity": {
-				"noStaticOnlyClass": "off",
-				"noBannedTypes": "error"
-			}
-		}
+    "rules": {
+      "recommended": true,
+      "correctness": {
+        "useExhaustiveDependencies": "error",
+        "noRenderReturnValue": "error",
+        "noVoidElementsWithChildren": "error"
+      },
+      "style": {
+        "useImportType": "warn",
+        "noNonNullAssertion": "warn"
+      },
+      "suspicious": {
+        "noExplicitAny": "warn",
+        "noAssignInExpressions": "error",
+        "noArrayIndexKey": "error",
+        "noEmptyBlock": "error"
+      },
+      "complexity": {
+        "noStaticOnlyClass": "off",
+        "noBannedTypes": "error",
+        "noUselessCatch": "error"
+      }
+    }
   },
   "javascript": {
     "formatter": {

@@ -107,6 +107,7 @@ For headless/cloud testing, prefer `bun run serve` and interact via WebSocket (s
 - `bun test` runs the full suite. All tests are deterministic and require no network or API keys. Test files live in `test/` (~156 files) and `apps/desktop/test/` (~66 files).
 - A small number of tests are skipped by default (remote MCP integration tests requiring network).
 - Biome is configured for linting and formatting (`bun lint`, `bun format:write`, `bun check:write`). `bun run typecheck` is the primary code quality check; it runs the repo-root core typecheck plus `apps/desktop` (including `electron/*`).
+- **Lint philosophy**: `biome.json` is tuned to catch LLM-generated code failure modes. Type-safety erosion (`noExplicitAny`, `noNonNullAssertion`, `noBannedTypes`), React lifecycle bugs (`useExhaustiveDependencies`, `noAssignInExpressions`, `noArrayIndexKey`), and error-handling camouflage (`noUselessCatch`, `noEmptyBlock`) are all surfaced. New code should not introduce new violations.
 
 ### Desktop App
 

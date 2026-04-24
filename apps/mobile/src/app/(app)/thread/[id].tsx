@@ -11,6 +11,7 @@ import { Screen } from "@/components/ui/screen";
 import { SFSymbol } from "@/components/ui/sf-symbol";
 import { StatusPill } from "@/components/ui/status-pill";
 import { getActiveCoworkJsonRpcClient } from "@/features/cowork/runtimeClient";
+import type { MobileThreadFeedEntry, PendingServerRequest } from "@/features/cowork/threadStore";
 import { useThreadStore } from "@/features/cowork/threadStore";
 import { useWorkspaceStore } from "@/features/cowork/workspaceStore";
 import { useAppTheme } from "@/theme/use-app-theme";
@@ -18,15 +19,11 @@ import { useAppTheme } from "@/theme/use-app-theme";
 type ThreadDetailListItem =
   | {
       type: "pending";
-      data: NonNullable<ReturnType<typeof useThreadStore.getState>["getPendingRequest"]>;
+      data: PendingServerRequest;
     }
   | {
       type: "feed";
-      data: ReturnType<typeof useThreadStore.getState>["getThread"] extends infer T
-        ? T extends { feed: Array<infer Item> }
-          ? Item
-          : never
-        : never;
+      data: MobileThreadFeedEntry;
     };
 
 export default function ThreadDetailScreen() {

@@ -7,7 +7,7 @@ import {
   PlusIcon,
   Trash2Icon,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
 import type { MemoryListEntry } from "../../../app/types";
@@ -92,6 +92,7 @@ export function MemoryPage() {
   const runtime = workspace ? workspaceRuntimeById[workspace.id] : null;
   const memories = runtime?.memories ?? [];
   const memoriesLoading = runtime?.memoriesLoading ?? false;
+  const activeWorkspaceId = workspace?.id ?? null;
 
   const [draft, setDraft] = useState<DraftMemory>(emptyDraft);
   const [editingEntry, setEditingEntry] = useState<MemoryListEntry | null>(null);
@@ -103,19 +104,22 @@ export function MemoryPage() {
 
   const [parent] = useAutoAnimate();
 
-  const requestMemories = (workspaceId: string) => {
-    setMemoryLoadRequestedAt(Date.now());
-    setMemoryLoadStalled(false);
-    void requestWorkspaceMemories(workspaceId);
-  };
+  const requestMemories = useCallback(
+    (workspaceId: string) => {
+      setMemoryLoadRequestedAt(Date.now());
+      setMemoryLoadStalled(false);
+      void requestWorkspaceMemories(workspaceId);
+    },
+    [requestWorkspaceMemories],
+  );
 
   useEffect(() => {
-    if (!workspace) return;
+    if (!activeWorkspaceId) return;
     setEditingEntry(null);
     setDraft(emptyDraft());
     setDialogOpen(false);
-    requestMemories(workspace.id);
-  }, [workspace?.id]);
+    requestMemories(activeWorkspaceId);
+  }, [activeWorkspaceId, requestMemories]);
 
   useEffect(() => {
     if (!memoriesLoading) {
@@ -141,7 +145,7 @@ export function MemoryPage() {
       Math.max(0, MEMORY_LOADING_STALL_MS - (Date.now() - requestedAt)),
     );
     return () => window.clearTimeout(timer);
-  }, [memoriesLoading, memoryLoadRequestedAt, workspace?.id]);
+  }, [memoriesLoading, memoryLoadRequestedAt]);
 
   const filtered =
     filterScope === "all" ? memories : memories.filter((m) => m.scope === filterScope);

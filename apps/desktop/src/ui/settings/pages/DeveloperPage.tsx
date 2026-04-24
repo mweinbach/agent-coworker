@@ -49,7 +49,7 @@ export function DeveloperPage() {
   );
   const workspaceRuntime = useMemo(
     () => (workspace ? (workspaceRuntimeById[workspace.id] ?? null) : null),
-    [workspace?.id, workspaceRuntimeById],
+    [workspace, workspaceRuntimeById],
   );
   const inheritedOverflowThreshold =
     workspaceRuntime?.controlSessionConfig?.toolOutputOverflowChars;
@@ -73,7 +73,7 @@ export function DeveloperPage() {
 
   useEffect(() => {
     setOverflowThresholdDraft(String(persistedOverflowThreshold));
-  }, [persistedOverflowThreshold, workspace?.id]);
+  }, [persistedOverflowThreshold]);
 
   const enableOverflowWithDefault = () => {
     if (!workspace) return;

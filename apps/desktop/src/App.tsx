@@ -107,6 +107,10 @@ const ChatShell = memo(function ChatShell({
   const contextSidebarCollapsed = useAppStore((s) => s.contextSidebarCollapsed);
   const toggleContextSidebar = useAppStore((s) => s.toggleContextSidebar);
   const hasAnimatedSidebarsRef = useRef(false);
+  const previousSidebarStateRef = useRef({
+    sidebarCollapsed,
+    contextSidebarCollapsed,
+  });
 
   const activeThread = useMemo(
     () => threads.find((thread) => thread.id === selectedThreadId) ?? null,
@@ -160,10 +164,20 @@ const ChatShell = memo(function ChatShell({
     runtime?.connected === true &&
     Boolean(runtime?.sessionId) &&
     activeThread?.status === "active";
-
   useEffect(() => {
+    const sidebarStateChanged =
+      previousSidebarStateRef.current.sidebarCollapsed !== sidebarCollapsed ||
+      previousSidebarStateRef.current.contextSidebarCollapsed !== contextSidebarCollapsed;
+    previousSidebarStateRef.current = {
+      sidebarCollapsed,
+      contextSidebarCollapsed,
+    };
+
     if (!hasAnimatedSidebarsRef.current) {
       hasAnimatedSidebarsRef.current = true;
+      return;
+    }
+    if (!sidebarStateChanged) {
       return;
     }
     document.body.classList.add("app-animating-sidebars");
@@ -174,7 +188,7 @@ const ChatShell = memo(function ChatShell({
       window.clearTimeout(timer);
       document.body.classList.remove("app-animating-sidebars");
     };
-  }, [sidebarCollapsed, contextSidebarCollapsed]);
+  }, [contextSidebarCollapsed, sidebarCollapsed]);
 
   return (
     <div className="app-shell app-shell--chat flex h-full min-h-0 flex-col text-foreground">

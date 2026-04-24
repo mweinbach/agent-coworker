@@ -71,10 +71,7 @@ function useRunningElapsed(startedAtIso: string, running: boolean): number {
   return Math.max(0, nowMs - startedMs);
 }
 
-function useElementWidth<T extends HTMLElement>(
-  ref: React.RefObject<T | null>,
-  watchKey?: string | null,
-): number {
+function useElementWidth<T extends HTMLElement>(ref: React.RefObject<T | null>): number {
   const [width, setWidth] = useState(0);
 
   useEffect(() => {
@@ -98,7 +95,7 @@ function useElementWidth<T extends HTMLElement>(
 
     observer.observe(node);
     return () => observer.disconnect();
-  }, [ref, watchKey]);
+  }, [ref]);
 
   return width;
 }
@@ -117,14 +114,7 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
   const [refineOpen, setRefineOpen] = useState(false);
   const [refineInput, setRefineInput] = useState("");
   const [planActionLoading, setPlanActionLoading] = useState(false);
-  const detailBodyWidth = useElementWidth(detailBodyRef, research?.id ?? null);
-
-  useEffect(() => {
-    setSourcesOpen(false);
-    setRefineOpen(false);
-    setRefineInput("");
-    setPlanActionLoading(false);
-  }, [research?.id]);
+  const detailBodyWidth = useElementWidth(detailBodyRef);
 
   if (!research) {
     return (
@@ -392,10 +382,6 @@ function ResearchFollowUpFab({ parentResearchId }: { parentResearchId: string })
   const [expanded, setExpanded] = useState(false);
   const prefersReducedMotion = usePrefersReducedMotion();
   const composerShellRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    setExpanded(false);
-  }, [parentResearchId]);
 
   useEffect(() => {
     if (!expanded) {

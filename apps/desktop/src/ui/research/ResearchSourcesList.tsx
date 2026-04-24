@@ -1,5 +1,5 @@
 import { ExternalLinkIcon } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { describeCitationSource } from "../../../../../src/shared/displayCitationMarkers";
 import type { ResearchDetail } from "../../app/types";
 import { Button } from "../../components/ui/button";
@@ -7,6 +7,10 @@ import { openExternalUrl } from "../../lib/desktopCommands";
 import { cn } from "../../lib/utils";
 
 type SourceRow = ResearchDetail["sources"][number];
+
+function sourceListKey(source: SourceRow): string {
+  return [source.sourceType, source.url, source.title ?? ""].join(":");
+}
 
 export function ResearchSourcesList({
   sources,
@@ -22,8 +26,8 @@ export function ResearchSourcesList({
   if (variant === "inline") {
     return (
       <ul className="space-y-0.5">
-        {sources.map((source, index) => (
-          <li key={`${source.sourceType}:${source.url}:${index}`}>
+        {sources.map((source) => (
+          <li key={sourceListKey(source)}>
             <SourceRow source={source} />
           </li>
         ))}
@@ -40,9 +44,9 @@ export function ResearchSourcesList({
         </div>
       </div>
       <div className="space-y-2">
-        {sources.map((source, index) => (
+        {sources.map((source) => (
           <div
-            key={`${source.sourceType}:${source.url}:${index}`}
+            key={sourceListKey(source)}
             className="flex items-center justify-between gap-2 rounded-xl border border-border/60 bg-muted/10 px-3 py-2.5"
           >
             <div className="min-w-0 flex-1">
@@ -87,7 +91,11 @@ function SourceRow({ source }: { source: SourceRow }) {
       className="group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-foreground/[0.035] focus-visible:bg-foreground/[0.05] focus-visible:outline-none"
       title={display.displayUrl ?? display.hostLabel}
     >
-      <SourceFavicon src={faviconSrc} letter={display.hostLabel.charAt(0)} />
+      <SourceFavicon
+        key={`${faviconSrc ?? "no-favicon"}:${display.hostLabel}`}
+        src={faviconSrc}
+        letter={display.hostLabel.charAt(0)}
+      />
       <div className="min-w-0 flex-1">
         <div className="truncate text-[12.5px] font-medium leading-tight text-foreground">
           {display.titleLabel}
@@ -107,11 +115,6 @@ function SourceRow({ source }: { source: SourceRow }) {
 function SourceFavicon({ src, letter }: { src: string | null; letter: string }) {
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
-
-  useEffect(() => {
-    setLoaded(false);
-    setFailed(false);
-  }, [src]);
 
   return (
     <div

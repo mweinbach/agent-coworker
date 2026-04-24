@@ -660,32 +660,41 @@ function DefaultsStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
     model,
     modelSelectorVisibility,
   );
+  const workspaceId = workspace?.id ?? null;
+  const providerDefaultById = useMemo(
+    () =>
+      new Map(
+        providerCatalog.map((entry) => [entry.id, entry.defaultModel?.trim() || ""] as const),
+      ),
+    [providerCatalog],
+  );
 
   // Auto-fix: if the current workspace default provider isn't connected but another is, swap it
   useEffect(() => {
-    if (!workspace) return;
+    if (!workspaceId) return;
     const isDefaultConnected = providerConnected.includes(provider);
     if (
       !isDefaultConnected &&
       availableProviders.length > 0 &&
       availableProviders[0] !== provider
     ) {
-      const newProvider = availableProviders[0]!;
-      const providerDefault =
-        providerCatalog.find((entry) => entry.id === newProvider)?.defaultModel?.trim() || "";
+      const newProvider = availableProviders[0];
+      if (!newProvider) return;
+      const providerDefault = providerDefaultById.get(newProvider) ?? "";
       const newModel = providerDefault || ((modelChoices[newProvider] ?? [])[0] ?? "");
-      void updateWorkspaceDefaults(workspace.id, {
+      void updateWorkspaceDefaults(workspaceId, {
         defaultProvider: newProvider,
         defaultModel: newModel,
       });
     }
   }, [
-    workspace?.id,
+    workspaceId,
     provider,
     providerConnected,
     availableProviders,
     modelChoices,
     updateWorkspaceDefaults,
+    providerDefaultById,
   ]);
 
   const defaultProviderConnected = providerConnected.includes(effectiveProvider);
@@ -875,13 +884,14 @@ function useFocusTrap(containerRef: React.RefObject<HTMLElement | null>, active:
 
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key !== "Tab") return;
-      const focusable = container!.querySelectorAll<HTMLElement>(
+      const focusable = container.querySelectorAll<HTMLElement>(
         'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
       );
       if (focusable.length === 0) return;
 
-      const first = focusable[0]!;
-      const last = focusable[focusable.length - 1]!;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (!first || !last) return;
 
       if (event.shiftKey) {
         if (document.activeElement === first) {

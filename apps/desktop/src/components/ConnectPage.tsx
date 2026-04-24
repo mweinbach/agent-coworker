@@ -164,7 +164,7 @@ export function ConnectPage({
         setBusy(false);
       }
     },
-    [connectWithPath],
+    [connectWithPath, onConnect],
   );
 
   // On first mount, try the auto-connect flow (same-origin URL should Just Work behind Vite proxy).
@@ -172,8 +172,7 @@ export function ConnectPage({
     if (triedAutoConnect.current) return;
     triedAutoConnect.current = true;
     void connectViaDiscovery(serverUrl);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [connectViaDiscovery, serverUrl]);
 
   const handleConnect = () => {
     void connectViaDiscovery(serverUrl);

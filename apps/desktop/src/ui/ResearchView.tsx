@@ -73,7 +73,7 @@ export function ResearchView() {
 
       <section className="min-h-0 min-w-0 flex-1">
         {selectedResearch ? (
-          <ResearchDetailPane research={selectedResearch} />
+          <ResearchDetailPane key={selectedResearch.id} research={selectedResearch} />
         ) : (
           <div className="flex h-full items-center justify-center px-6">
             <NewResearchComposer />

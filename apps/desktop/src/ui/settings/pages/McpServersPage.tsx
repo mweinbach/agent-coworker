@@ -8,7 +8,7 @@ import {
   WrenchIcon,
   XCircleIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
 import { Badge } from "../../../components/ui/badge";
@@ -88,9 +88,9 @@ export function McpServersPage() {
     }),
   );
 
-  const clearAutoValidateTimer = () => {
+  const clearAutoValidateTimer = useCallback(() => {
     autoValidateSchedulerRef.current.cancel();
-  };
+  }, []);
 
   const isCreating = editorState?.mode === "create";
 

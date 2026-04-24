@@ -218,6 +218,7 @@ export function createResearchActions(
           if (!delta) {
             return;
           }
+          const eventId = typeof params.eventId === "string" ? params.eventId : null;
           set((s) => {
             const existing = s.researchById[researchId];
             if (!existing) {
@@ -226,6 +227,7 @@ export function createResearchActions(
             const nextResearch = {
               ...existing,
               outputsMarkdown: `${existing.outputsMarkdown}${delta}`,
+              lastEventId: eventId ?? existing.lastEventId,
               updatedAt: new Date().toISOString(),
             };
             const researchById = {
@@ -356,10 +358,13 @@ export function createResearchActions(
             for (const researchId of get().researchSubscribedIds) {
               const record = get().researchById[researchId];
               try {
-                await deps.requestJsonRpc(get, set, workspaceId, "research/subscribe", {
+                const result = await deps.requestJsonRpc(get, set, workspaceId, "research/subscribe", {
                   researchId,
                   ...(record?.lastEventId ? { afterEventId: record.lastEventId } : {}),
                 });
+                if (isResearchRecord(result?.research)) {
+                  applyResearchRecord(result.research);
+                }
               } catch {
                 // Ignore reconnect races; list refresh below will reconcile.
               }
@@ -446,10 +451,17 @@ export function createResearchActions(
     if (get().researchSubscribedIds.includes(research.id) || isResearchTerminalStatus(research.status)) {
       return;
     }
-    await deps.requestJsonRpc(get, set, workspaceId, "research/subscribe", {
+    const result = await deps.requestJsonRpc(get, set, workspaceId, "research/subscribe", {
       researchId: research.id,
       ...(research.lastEventId ? { afterEventId: research.lastEventId } : {}),
     });
+    const subscribedResearch = isResearchRecord(result?.research) ? result.research : research;
+    if (isResearchRecord(result?.research)) {
+      applyResearchRecord(result.research);
+    }
+    if (isResearchTerminalStatus(subscribedResearch.status)) {
+      return;
+    }
     set((s) => ({
       researchSubscribedIds: s.researchSubscribedIds.includes(research.id)
         ? s.researchSubscribedIds

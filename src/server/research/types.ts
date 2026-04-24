@@ -44,6 +44,7 @@ export const researchInputsSchema = z.object({
 
 export const researchRecordSchema = z.object({
   id: nonEmptyTrimmedStringSchema,
+  workspacePath: z.string().trim().min(1).nullable().default(null),
   parentResearchId: z.string().trim().min(1).nullable(),
   title: z.string(),
   prompt: z.string(),

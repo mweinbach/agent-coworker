@@ -71,7 +71,6 @@ export function createResearchRouteHandlers(
         title: params.title,
         settings: params.settings,
         attachedFileIds: params.attachedFileIds,
-        attachedFiles: params.attachedFiles,
       }),
     })),
     "research/uploadFile": createResearchHandler(context, "research/uploadFile", async (params) => ({

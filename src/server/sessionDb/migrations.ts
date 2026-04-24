@@ -16,6 +16,7 @@ const THREAD_JOURNAL_MIGRATION = 11;
 const AGENT_TASK_METADATA_MIGRATION = 12;
 const RESEARCH_TABLE_MIGRATION = 13;
 const RESEARCH_PLAN_COLUMNS_MIGRATION = 14;
+const RESEARCH_WORKSPACE_COLUMN_MIGRATION = 15;
 
 type BootstrapSessionDbOptions = {
   db: Database;
@@ -36,6 +37,7 @@ type BootstrapSessionDbOptions = {
     | "addAgentTaskMetadataColumns"
     | "addResearchTable"
     | "addResearchPlanColumns"
+    | "addResearchWorkspaceColumn"
   >;
   importLegacySnapshots: () => Promise<void>;
 };
@@ -118,6 +120,11 @@ export async function bootstrapSessionDb(opts: BootstrapSessionDbOptions): Promi
   if (!appliedMigrations.has(RESEARCH_PLAN_COLUMNS_MIGRATION)) {
     opts.repository.addResearchPlanColumns();
     opts.repository.markMigration(RESEARCH_PLAN_COLUMNS_MIGRATION);
+  }
+
+  if (!appliedMigrations.has(RESEARCH_WORKSPACE_COLUMN_MIGRATION)) {
+    opts.repository.addResearchWorkspaceColumn();
+    opts.repository.markMigration(RESEARCH_WORKSPACE_COLUMN_MIGRATION);
   }
 
   if (!appliedMigrations.has(LEGACY_IMPORT_MIGRATION)) {

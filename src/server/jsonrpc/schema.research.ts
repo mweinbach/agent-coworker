@@ -8,9 +8,11 @@ import {
   researchSourceSchema,
   researchThoughtSummarySchema,
 } from "../research/types";
+import { MAX_RESEARCH_UPLOAD_BYTES } from "../research/researchFileStore";
 import { nonEmptyTrimmedStringSchema } from "./schema.shared";
 
 const researchSummarySchema = researchRecordSchema;
+export const MAX_RESEARCH_UPLOAD_BASE64_LENGTH = Math.ceil(MAX_RESEARCH_UPLOAD_BYTES / 3) * 4;
 
 export const jsonRpcResearchRequestSchemas = {
   "research/start": z.object({
@@ -18,7 +20,6 @@ export const jsonRpcResearchRequestSchemas = {
     title: z.string().optional(),
     settings: researchSettingsSchema.optional(),
     attachedFileIds: z.array(nonEmptyTrimmedStringSchema).optional(),
-    attachedFiles: z.array(researchInputFileSchema).optional(),
   }).strict(),
   "research/list": z.object({}).strict(),
   "research/get": z.object({
@@ -37,12 +38,11 @@ export const jsonRpcResearchRequestSchemas = {
     title: z.string().optional(),
     settings: researchSettingsSchema.optional(),
     attachedFileIds: z.array(nonEmptyTrimmedStringSchema).optional(),
-    attachedFiles: z.array(researchInputFileSchema).optional(),
   }).strict(),
   "research/uploadFile": z.object({
     filename: nonEmptyTrimmedStringSchema,
     mimeType: nonEmptyTrimmedStringSchema,
-    contentBase64: z.string().min(1),
+    contentBase64: z.string().min(1).max(MAX_RESEARCH_UPLOAD_BASE64_LENGTH),
   }).strict(),
   "research/attachFile": z.object({
     researchId: nonEmptyTrimmedStringSchema,

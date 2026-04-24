@@ -180,6 +180,7 @@ const ChatShell = memo(function ChatShell({
         title={topBarTitle}
         subtitle={topBarSubtitle}
         managementMode={view === "skills" ? "plugins" : "thread"}
+        suppressThreadDetails={view === "research"}
         managementWorkspaceId={pluginSelection.displayWorkspaceId}
         managementWorkspaces={workspaces.map((workspace) => ({
           id: workspace.id,

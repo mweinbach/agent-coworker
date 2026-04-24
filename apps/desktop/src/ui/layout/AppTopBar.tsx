@@ -27,6 +27,7 @@ interface AppTopBarProps {
   onClearHardCap?: () => void;
   showContextToggle?: boolean;
   managementMode?: "thread" | "plugins";
+  suppressThreadDetails?: boolean;
   managementWorkspaceId?: string | null;
   managementWorkspaces?: Array<{ id: string; name: string }>;
   onSelectManagementWorkspace?: (workspaceId: string | null) => void;
@@ -54,6 +55,7 @@ export function AppTopBar({
   onClearHardCap,
   showContextToggle = true,
   managementMode = "thread",
+  suppressThreadDetails = false,
   managementWorkspaceId = null,
   managementWorkspaces = [],
   onSelectManagementWorkspace,
@@ -289,7 +291,7 @@ export function AppTopBar({
             )}
             style={collapsedThreadAnchorStyle}
           >
-            {title === "Research" ? (
+            {suppressThreadDetails ? (
               <span className="app-topbar__thread-title truncate text-sm font-medium">{title}</span>
             ) : (
               <button

@@ -432,6 +432,7 @@ export async function startAgentServer(
   const aiCoworkerPaths = getAiCoworkerPathsImpl({ homedir: opts.homedir });
   const research = new ResearchService({
     rootDir: aiCoworkerPaths.rootDir,
+    workspacePath: config.workingDirectory,
     sessionDb,
     getConfig: () => config,
     sendJsonRpc: (ws, payload) => sendJsonRpc(ws, payload),

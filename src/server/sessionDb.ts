@@ -314,16 +314,16 @@ export class SessionDb {
     return this.repository.listThreadJournalEvents(threadId, opts);
   }
 
-  listResearch(): PersistedResearchRecord[] {
-    return this.repository.listResearch();
+  listResearch(opts?: { workspacePath?: string | null }): PersistedResearchRecord[] {
+    return this.repository.listResearch(opts);
   }
 
-  listRunningResearch(): PersistedResearchRecord[] {
-    return this.repository.listRunningResearch();
+  listRunningResearch(opts?: { workspacePath?: string | null }): PersistedResearchRecord[] {
+    return this.repository.listRunningResearch(opts);
   }
 
-  getResearch(researchId: string): PersistedResearchRecord | null {
-    return this.repository.getResearch(researchId);
+  getResearch(researchId: string, opts?: { workspacePath?: string | null }): PersistedResearchRecord | null {
+    return this.repository.getResearch(researchId, opts);
   }
 
   async upsertResearch(record: PersistedResearchRecord): Promise<void> {

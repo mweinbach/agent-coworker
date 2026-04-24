@@ -215,6 +215,196 @@ describe("research service", () => {
     }
   });
 
+  test("preserves whitespace-only and leading-space streamed text chunks", async () => {
+    const paths = await makeTmpCoworkHome();
+    const sessionDb = await SessionDb.create({ paths });
+
+    createResearchInteractionStreamImpl = async () => (async function* () {
+      yield {
+        event_type: "content.delta",
+        event_id: "evt-1",
+        delta: { type: "text", text: "Hello" },
+      };
+      yield {
+        event_type: "content.delta",
+        event_id: "evt-2",
+        delta: { type: "text", text: " world" },
+      };
+      yield {
+        event_type: "content.delta",
+        event_id: "evt-3",
+        delta: { type: "text", text: "\n\n" },
+      };
+      yield {
+        event_type: "interaction.complete",
+        event_id: "evt-4",
+        interaction: { id: "interaction-space", status: "completed" },
+      };
+    })();
+
+    const service = new ResearchService({
+      rootDir: paths.rootDir,
+      sessionDb,
+      getConfig: () => ({ skillsDirs: [] } as any),
+      sendJsonRpc: () => {},
+    });
+
+    try {
+      const research = await service.start({ input: "Keep spaces." });
+      const completed = await waitFor(
+        () => sessionDb.getResearch(research.id),
+        (value) => value?.status === "completed",
+      );
+
+      expect(completed?.outputsMarkdown).toBe("Hello world\n\n");
+    } finally {
+      sessionDb.close();
+      await fs.rm(paths.home, { recursive: true, force: true });
+    }
+  });
+
+  test("cancels locally even when a remote cancellation key is unavailable", async () => {
+    const paths = await makeTmpCoworkHome();
+    const sessionDb = await SessionDb.create({ paths });
+    delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+
+    await sessionDb.upsertResearch(makeResearchRecord({
+      id: "research-cancel-no-key",
+      status: "running",
+      interactionId: "interaction-cancel-no-key",
+    }));
+
+    const service = new ResearchService({
+      rootDir: paths.rootDir,
+      sessionDb,
+      getConfig: () => ({ skillsDirs: [] } as any),
+      sendJsonRpc: () => {},
+    });
+
+    try {
+      const cancelled = await service.cancel("research-cancel-no-key");
+
+      expect(cancelled?.status).toBe("cancelled");
+      expect(sessionDb.getResearch("research-cancel-no-key")?.status).toBe("cancelled");
+    } finally {
+      sessionDb.close();
+      await fs.rm(paths.home, { recursive: true, force: true });
+    }
+  });
+
+  test("ignores cancellation for terminal research records", async () => {
+    const paths = await makeTmpCoworkHome();
+    const sessionDb = await SessionDb.create({ paths });
+
+    await sessionDb.upsertResearch(makeResearchRecord({
+      id: "research-already-done",
+      status: "completed",
+      interactionId: "interaction-already-done",
+      error: null,
+    }));
+
+    const service = new ResearchService({
+      rootDir: paths.rootDir,
+      sessionDb,
+      getConfig: () => ({ skillsDirs: [] } as any),
+      sendJsonRpc: () => {},
+    });
+
+    try {
+      const result = await service.cancel("research-already-done");
+
+      expect(result?.status).toBe("completed");
+      expect(result?.error).toBeNull();
+      expect(cancelResearchInteractionMock).not.toHaveBeenCalled();
+    } finally {
+      sessionDb.close();
+      await fs.rm(paths.home, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps locally cancelled research cancelled when a late completion event arrives", async () => {
+    const paths = await makeTmpCoworkHome();
+    const sessionDb = await SessionDb.create({ paths });
+    const completeGate = deferred();
+
+    createResearchInteractionStreamImpl = async () => (async function* () {
+      yield {
+        event_type: "interaction.start",
+        event_id: "evt-1",
+        interaction: { id: "interaction-late-complete", status: "running" },
+      };
+      await completeGate.promise;
+      yield {
+        event_type: "interaction.complete",
+        event_id: "evt-2",
+        interaction: { id: "interaction-late-complete", status: "completed" },
+      };
+    })();
+
+    const service = new ResearchService({
+      rootDir: paths.rootDir,
+      sessionDb,
+      getConfig: () => ({ skillsDirs: [] } as any),
+      sendJsonRpc: () => {},
+    });
+
+    try {
+      const research = await service.start({ input: "Cancel before completion." });
+      await waitFor(
+        () => sessionDb.getResearch(research.id),
+        (value) => value?.interactionId === "interaction-late-complete",
+      );
+
+      await service.cancel(research.id);
+      completeGate.resolve();
+
+      const cancelled = await waitFor(
+        () => sessionDb.getResearch(research.id),
+        (value) => value?.lastEventId === "evt-2",
+      );
+      expect(cancelled?.status).toBe("cancelled");
+      expect(cancelled?.error).toBe("cancelled");
+    } finally {
+      sessionDb.close();
+      await fs.rm(paths.home, { recursive: true, force: true });
+    }
+  });
+
+  test("scopes research list and get operations to the configured workspace", async () => {
+    const paths = await makeTmpCoworkHome();
+    const sessionDb = await SessionDb.create({ paths });
+
+    await sessionDb.upsertResearch(makeResearchRecord({
+      id: "research-workspace-a",
+      workspacePath: "/tmp/workspace-a",
+      status: "completed",
+    }));
+    await sessionDb.upsertResearch(makeResearchRecord({
+      id: "research-workspace-b",
+      workspacePath: "/tmp/workspace-b",
+      status: "completed",
+    }));
+
+    const service = new ResearchService({
+      rootDir: paths.rootDir,
+      workspacePath: "/tmp/workspace-a",
+      sessionDb,
+      getConfig: () => ({ skillsDirs: [] } as any),
+      sendJsonRpc: () => {},
+    });
+
+    try {
+      const listed = await service.list();
+
+      expect(listed.map((record) => record.id)).toEqual(["research-workspace-a"]);
+      expect(await service.get("research-workspace-a")).not.toBeNull();
+      expect(await service.get("research-workspace-b")).toBeNull();
+    } finally {
+      sessionDb.close();
+      await fs.rm(paths.home, { recursive: true, force: true });
+    }
+  });
+
   test("resolves opaque Google grounding source URLs before persisting research sources", async () => {
     const paths = await makeTmpCoworkHome();
     const sessionDb = await SessionDb.create({ paths });
@@ -474,6 +664,46 @@ describe("research service", () => {
         }),
       );
       expect(completed?.outputsMarkdown).toContain("Resumed output.");
+    } finally {
+      sessionDb.close();
+      await fs.rm(paths.home, { recursive: true, force: true });
+    }
+  });
+
+  test("propagates plan approval mode to follow-up research streams", async () => {
+    const paths = await makeTmpCoworkHome();
+    const sessionDb = await SessionDb.create({ paths });
+
+    await sessionDb.upsertResearch(makeResearchRecord({
+      id: "research-parent-plan",
+      status: "completed",
+      interactionId: "interaction-parent-plan",
+      settings: {
+        planApproval: true,
+      },
+    }));
+
+    const service = new ResearchService({
+      rootDir: paths.rootDir,
+      sessionDb,
+      getConfig: () => ({ skillsDirs: [] } as any),
+      sendJsonRpc: () => {},
+    });
+
+    try {
+      await service.followUp("research-parent-plan", {
+        input: "Continue with approval.",
+      });
+
+      await waitFor(
+        () => createResearchInteractionStreamMock.mock.calls.length,
+        (count) => count > 0,
+      );
+      expect(createResearchInteractionStreamMock.mock.calls[0]?.[0]).toEqual(
+        expect.objectContaining({
+          collaborativePlanning: true,
+        }),
+      );
     } finally {
       sessionDb.close();
       await fs.rm(paths.home, { recursive: true, force: true });

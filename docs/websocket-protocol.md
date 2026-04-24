@@ -260,18 +260,18 @@ The desktop JSON-RPC path now uses this namespace so one workspace connection ca
 
 ### Research JSON-RPC methods
 
-Research traffic is global to the auth home and separate from chat threads. The desktop `Research` tab currently reaches the service through one workspace JSON-RPC connection, but the persisted data lives under `~/.cowork/research/*` and the canonical metadata rows live in the shared SQLite database.
+Research traffic is scoped to the active workspace and separate from chat threads. The desktop `Research` tab reaches the service through that workspace's JSON-RPC connection. Export artifacts and staged uploads live under `~/.cowork/research/*`; canonical metadata rows live in the shared SQLite database with a workspace discriminator.
 
 Requests:
 
 - `research/start`
-  - params: `{ input, title?, settings?, attachedFileIds?, attachedFiles? }`
+  - params: `{ input, title?, settings?, attachedFileIds? }`
   - result: `{ research }`
   - starts a new Deep Research interaction and begins background streaming
 - `research/list`
   - params: `{}`
   - result: `{ research: ResearchRecord[] }`
-  - lists all persisted research rows ordered by `updatedAt DESC`
+  - lists persisted research rows for the active workspace ordered by `updatedAt DESC`
 - `research/get`
   - params: `{ researchId }`
   - result: `{ research: ResearchRecord | null }`
@@ -284,13 +284,13 @@ Requests:
   - result: `{ research: ResearchRecord | null }`
   - updates the stored `title` on a research row, persists, and broadcasts `research/updated`
 - `research/followup`
-  - params: `{ parentResearchId, input, title?, settings?, attachedFileIds?, attachedFiles? }`
+  - params: `{ parentResearchId, input, title?, settings?, attachedFileIds? }`
   - result: `{ research }`
   - starts a child research row using `previous_interaction_id`
 - `research/uploadFile`
   - params: `{ filename, mimeType, contentBase64 }`
   - result: `{ file }`
-  - stages a pending upload under `~/.cowork/research/uploads`
+  - stages a pending upload under `~/.cowork/research/uploads`; payloads are capped at 20 MiB decoded size
 - `research/attachFile`
   - params: `{ researchId, fileId }`
   - result: `{ research: ResearchRecord | null }`
@@ -310,6 +310,7 @@ Requests:
 `ResearchRecord` currently persists:
 
 - `id`
+- `workspacePath`
 - `parentResearchId`
 - `title`
 - `prompt`

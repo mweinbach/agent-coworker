@@ -18,7 +18,6 @@ import {
 import { ResearchFileStore } from "./researchFileStore";
 import {
   normalizeResearchSettings,
-  researchInputFileSchema,
   researchRecordSchema,
   type ResearchExportFormat,
   type ResearchInputFile,
@@ -47,6 +46,7 @@ type ResearchRuntimeState = {
 
 type ResearchServiceOptions = {
   rootDir: string;
+  workspacePath?: string | null;
   sessionDb: SessionDb;
   getConfig: () => AgentConfig;
   sendJsonRpc: (ws: StartServerSocket, payload: unknown) => void;
@@ -84,8 +84,18 @@ function asNonEmptyString(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
+  return value.trim().length > 0 ? value : undefined;
+}
+
+function asTextChunk(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  return value.length > 0 ? value : undefined;
+}
+
+function isTerminalResearchStatus(status: ResearchStatus): boolean {
+  return status === "completed" || status === "failed" || status === "cancelled";
 }
 
 function sourceHost(url: string): string | undefined {
@@ -178,6 +188,7 @@ function isErrorEvent(
 
 export class ResearchService {
   private readonly sessionDb: SessionDb;
+  private readonly workspacePath: string | null;
   private readonly getConfigImpl: () => AgentConfig;
   private readonly sendJsonRpc: (ws: StartServerSocket, payload: unknown) => void;
   private readonly fileStore: ResearchFileStore;
@@ -187,6 +198,7 @@ export class ResearchService {
 
   constructor(opts: ResearchServiceOptions) {
     this.sessionDb = opts.sessionDb;
+    this.workspacePath = opts.workspacePath?.trim() || null;
     this.getConfigImpl = opts.getConfig;
     this.sendJsonRpc = opts.sendJsonRpc;
     this.fileStore = new ResearchFileStore({ rootDir: opts.rootDir });
@@ -204,10 +216,12 @@ export class ResearchService {
 
   async list(): Promise<ResearchRecord[]> {
     await this.init();
-    const persisted = this.sessionDb.listResearch();
+    const persisted = this.sessionDb.listResearch({ workspacePath: this.workspacePath });
     const byId = new Map(persisted.map((record) => [record.id, record]));
     for (const [id, state] of this.states) {
-      byId.set(id, state.record);
+      if (this.recordBelongsToWorkspace(state.record)) {
+        byId.set(id, state.record);
+      }
     }
     const resolved = await Promise.all([...byId.values()].map(async (record) => {
       const nextRecord = await this.resolveStoredSourceDestinations(record);
@@ -224,10 +238,13 @@ export class ResearchService {
     await this.init();
     const activeState = this.states.get(id);
     if (activeState) {
+      if (!this.recordBelongsToWorkspace(activeState.record)) {
+        return null;
+      }
       activeState.record = await this.resolveStoredSourceDestinations(activeState.record);
       return activeState.record;
     }
-    const record = this.sessionDb.getResearch(id);
+    const record = this.sessionDb.getResearch(id, { workspacePath: this.workspacePath });
     return record ? await this.resolveStoredSourceDestinations(record) : null;
   }
 
@@ -241,6 +258,7 @@ export class ResearchService {
     const now = new Date().toISOString();
     const record = researchRecordSchema.parse({
       id: crypto.randomUUID(),
+      workspacePath: this.workspacePath,
       parentResearchId: null,
       title: params.title?.trim() || buildResearchTitle(input),
       prompt: input,
@@ -298,6 +316,7 @@ export class ResearchService {
     const now = new Date().toISOString();
     const record = researchRecordSchema.parse({
       id: crypto.randomUUID(),
+      workspacePath: this.workspacePath,
       parentResearchId,
       title: params.title?.trim() || buildResearchTitle(input),
       prompt: input,
@@ -332,6 +351,7 @@ export class ResearchService {
       prompt: input,
       previousInteractionId: parent.interactionId,
       attachedFiles,
+      collaborativePlanning: record.settings.planApproval,
     });
 
     return state.record;
@@ -366,11 +386,14 @@ export class ResearchService {
     }
 
     const state = this.getOrCreateState(existing);
+    if (isTerminalResearchStatus(state.record.status)) {
+      return state.record;
+    }
     state.cancelRequested = true;
-    const apiKey = this.resolveGoogleApiKey();
 
     if (state.record.interactionId) {
       try {
+        const apiKey = this.resolveGoogleApiKey();
         await cancelResearchInteraction({
           apiKey,
           interactionId: state.record.interactionId,
@@ -398,6 +421,7 @@ export class ResearchService {
       { researchId: state.record.id, status: state.record.status, error: state.record.error ?? "cancelled" },
       state.record.lastEventId,
     );
+    this.evictTerminalState(state);
     return state.record;
   }
 
@@ -565,6 +589,9 @@ export class ResearchService {
   ): Promise<void> {
     try {
       state.planExecutionMode = opts.collaborativePlanning ?? false;
+      if (state.cancelRequested) {
+        return;
+      }
       const apiKey = this.resolveGoogleApiKey();
       if (opts.attachedFiles.length > 0) {
         const prepared = await this.fileStore.prepareResearchFiles({
@@ -582,6 +609,10 @@ export class ResearchService {
         });
         await this.flushPersistNow(state);
         this.broadcast(state, "research/updated", { research: state.record }, state.record.lastEventId);
+      }
+
+      if (state.cancelRequested || state.record.status === "cancelled") {
+        return;
       }
 
       this.updateRecord(state, {
@@ -623,6 +654,9 @@ export class ResearchService {
       );
     } finally {
       state.streamPromise = null;
+      if (isTerminalResearchStatus(state.record.status)) {
+        this.evictTerminalState(state);
+      }
     }
   }
 
@@ -655,6 +689,9 @@ export class ResearchService {
     }
 
     if (isInteractionStartEvent(event)) {
+      if (state.cancelRequested || state.record.status === "cancelled") {
+        return;
+      }
       this.updateRecord(state, {
         interactionId: event.interaction.id ?? state.record.interactionId,
         status: normalizeInteractionStatus(event.interaction.status),
@@ -666,6 +703,9 @@ export class ResearchService {
     }
 
     if (isInteractionStatusUpdateEvent(event)) {
+      if (state.cancelRequested || state.record.status === "cancelled") {
+        return;
+      }
       this.updateRecord(state, {
         status: normalizeInteractionStatus(event.status),
         updatedAt: new Date().toISOString(),
@@ -688,6 +728,17 @@ export class ResearchService {
     if (isInteractionCompleteEvent(event)) {
       const wasPlanExecution = state.planExecutionMode;
       state.planExecutionMode = false;
+      if (state.cancelRequested || state.record.status === "cancelled") {
+        this.updateRecord(state, {
+          status: "cancelled",
+          error: "cancelled",
+          updatedAt: new Date().toISOString(),
+        });
+        await this.flushPersistNow(state);
+        this.broadcast(state, "research/updated", { research: state.record }, eventId);
+        this.evictTerminalState(state);
+        return;
+      }
       this.updateRecord(state, {
         interactionId: event.interaction.id ?? state.record.interactionId,
         status: normalizeInteractionStatus(event.interaction.status),
@@ -722,6 +773,9 @@ export class ResearchService {
           eventId,
         );
       }
+      if (isTerminalResearchStatus(state.record.status)) {
+        this.evictTerminalState(state);
+      }
       return;
     }
 
@@ -745,7 +799,7 @@ export class ResearchService {
     }
 
     if (contentType === "text") {
-      const text = asNonEmptyString(content.text);
+      const text = asTextChunk(content.text);
       if (text) {
         this.appendTextDelta(state, text, eventId);
       }
@@ -790,7 +844,7 @@ export class ResearchService {
     }
 
     if (deltaType === "text") {
-      const text = asNonEmptyString(delta.text);
+      const text = asTextChunk(delta.text);
       if (text) {
         this.appendTextDelta(state, text, eventId);
       }
@@ -1066,6 +1120,25 @@ export class ResearchService {
     return created;
   }
 
+  private recordBelongsToWorkspace(record: ResearchRecord): boolean {
+    if (!this.workspacePath) {
+      return true;
+    }
+    return record.workspacePath === this.workspacePath;
+  }
+
+  private evictTerminalState(state: ResearchRuntimeState): void {
+    if (state.persistTimer) {
+      clearTimeout(state.persistTimer);
+      state.persistTimer = null;
+    }
+    state.subscribers.clear();
+    state.ringBuffer = [];
+    if (this.states.get(state.record.id) === state) {
+      this.states.delete(state.record.id);
+    }
+  }
+
   private schedulePersist(state: ResearchRuntimeState): void {
     if (state.persistTimer) {
       clearTimeout(state.persistTimer);
@@ -1139,11 +1212,6 @@ export class ResearchService {
   }
 
   private async resolveAttachedFiles(params: StartResearchParams): Promise<ResearchInputFile[]> {
-    const inlineFiles = (params.attachedFiles ?? [])
-      .map((file) => researchInputFileSchema.parse(file));
-    if (inlineFiles.length > 0) {
-      return inlineFiles;
-    }
     const resolved: ResearchInputFile[] = [];
     for (const fileId of params.attachedFileIds ?? []) {
       const file = await this.fileStore.readPendingUpload(fileId);
@@ -1155,7 +1223,7 @@ export class ResearchService {
   }
 
   private async resumeInFlight(): Promise<void> {
-    const runningResearch = this.sessionDb.listRunningResearch();
+    const runningResearch = this.sessionDb.listRunningResearch({ workspacePath: this.workspacePath });
     await Promise.allSettled(runningResearch.map(async (record) => {
       const state = this.getOrCreateState(record);
       if (!record.interactionId) {

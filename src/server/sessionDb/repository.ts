@@ -643,88 +643,172 @@ export class SessionDbRepository {
     }));
   }
 
-  listResearch(): PersistedResearchRecord[] {
-    const rows = this.db
-      .query(
-        `SELECT
-           id,
-           parent_research_id,
-           title,
-           prompt,
-           status,
-           interaction_id,
-           last_event_id,
-           inputs_json,
-           settings_json,
-           outputs_markdown,
-           thought_summaries_json,
-           sources_json,
-           plan_pending,
-           created_at,
-           updated_at,
-           error
-         FROM research
-         ORDER BY updated_at DESC`,
-      )
-      .all() as Array<Record<string, unknown>>;
+  listResearch(opts?: { workspacePath?: string | null }): PersistedResearchRecord[] {
+    const workspacePath = opts?.workspacePath?.trim();
+    const rows = (workspacePath
+      ? this.db
+          .query(
+            `SELECT
+               id,
+               workspace_path,
+               parent_research_id,
+               title,
+               prompt,
+               status,
+               interaction_id,
+               last_event_id,
+               inputs_json,
+               settings_json,
+               outputs_markdown,
+               thought_summaries_json,
+               sources_json,
+               plan_pending,
+               created_at,
+               updated_at,
+               error
+             FROM research
+             WHERE workspace_path = ?
+             ORDER BY updated_at DESC`,
+          )
+          .all(workspacePath)
+      : this.db
+          .query(
+            `SELECT
+               id,
+               workspace_path,
+               parent_research_id,
+               title,
+               prompt,
+               status,
+               interaction_id,
+               last_event_id,
+               inputs_json,
+               settings_json,
+               outputs_markdown,
+               thought_summaries_json,
+               sources_json,
+               plan_pending,
+               created_at,
+               updated_at,
+               error
+             FROM research
+             ORDER BY updated_at DESC`,
+          )
+          .all()) as Array<Record<string, unknown>>;
 
     return rows.map((row) => this.mapResearchRow(row));
   }
 
-  listRunningResearch(): PersistedResearchRecord[] {
-    const rows = this.db
-      .query(
-        `SELECT
-           id,
-           parent_research_id,
-           title,
-           prompt,
-           status,
-           interaction_id,
-           last_event_id,
-           inputs_json,
-           settings_json,
-           outputs_markdown,
-           thought_summaries_json,
-           sources_json,
-           plan_pending,
-           created_at,
-           updated_at,
-           error
-         FROM research
-         WHERE status IN ('pending', 'running')
-         ORDER BY updated_at DESC`,
-      )
-      .all() as Array<Record<string, unknown>>;
+  listRunningResearch(opts?: { workspacePath?: string | null }): PersistedResearchRecord[] {
+    const workspacePath = opts?.workspacePath?.trim();
+    const rows = (workspacePath
+      ? this.db
+          .query(
+            `SELECT
+               id,
+               workspace_path,
+               parent_research_id,
+               title,
+               prompt,
+               status,
+               interaction_id,
+               last_event_id,
+               inputs_json,
+               settings_json,
+               outputs_markdown,
+               thought_summaries_json,
+               sources_json,
+               plan_pending,
+               created_at,
+               updated_at,
+               error
+             FROM research
+             WHERE status IN ('pending', 'running') AND workspace_path = ?
+             ORDER BY updated_at DESC`,
+          )
+          .all(workspacePath)
+      : this.db
+          .query(
+            `SELECT
+               id,
+               workspace_path,
+               parent_research_id,
+               title,
+               prompt,
+               status,
+               interaction_id,
+               last_event_id,
+               inputs_json,
+               settings_json,
+               outputs_markdown,
+               thought_summaries_json,
+               sources_json,
+               plan_pending,
+               created_at,
+               updated_at,
+               error
+             FROM research
+             WHERE status IN ('pending', 'running')
+             ORDER BY updated_at DESC`,
+          )
+          .all()) as Array<Record<string, unknown>>;
 
     return rows.map((row) => this.mapResearchRow(row));
   }
 
-  getResearch(researchId: string): PersistedResearchRecord | null {
-    const row = this.db
-      .query(
-        `SELECT
-           id,
-           parent_research_id,
-           title,
-           prompt,
-           status,
-           interaction_id,
-           last_event_id,
-           inputs_json,
-           settings_json,
-           outputs_markdown,
-           thought_summaries_json,
-           sources_json,
-           plan_pending,
-           created_at,
-           updated_at,
-           error
-         FROM research
-         WHERE id = ?
-         LIMIT 1`,
-      )
-      .get(researchId) as Record<string, unknown> | null;
+  getResearch(researchId: string, opts?: { workspacePath?: string | null }): PersistedResearchRecord | null {
+    const workspacePath = opts?.workspacePath?.trim();
+    const row = (workspacePath
+      ? this.db
+          .query(
+            `SELECT
+               id,
+               workspace_path,
+               parent_research_id,
+               title,
+               prompt,
+               status,
+               interaction_id,
+               last_event_id,
+               inputs_json,
+               settings_json,
+               outputs_markdown,
+               thought_summaries_json,
+               sources_json,
+               plan_pending,
+               created_at,
+               updated_at,
+               error
+             FROM research
+             WHERE id = ? AND workspace_path = ?
+             LIMIT 1`,
+          )
+          .get(researchId, workspacePath)
+      : this.db
+          .query(
+            `SELECT
+               id,
+               workspace_path,
+               parent_research_id,
+               title,
+               prompt,
+               status,
+               interaction_id,
+               last_event_id,
+               inputs_json,
+               settings_json,
+               outputs_markdown,
+               thought_summaries_json,
+               sources_json,
+               plan_pending,
+               created_at,
+               updated_at,
+               error
+             FROM research
+             WHERE id = ?
+             LIMIT 1`,
+          )
+          .get(researchId)) as Record<string, unknown> | null;
 
     return row ? this.mapResearchRow(row) : null;
   }
@@ -735,6 +819,7 @@ export class SessionDbRepository {
       .query(
         `INSERT INTO research (
            id,
+           workspace_path,
            parent_research_id,
            title,
            prompt,
@@ -750,8 +835,9 @@ export class SessionDbRepository {
            created_at,
            updated_at,
            error
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
+           workspace_path = excluded.workspace_path,
            parent_research_id = excluded.parent_research_id,
            title = excluded.title,
            prompt = excluded.prompt,
@@ -769,6 +855,7 @@ export class SessionDbRepository {
       )
       .run(
         parsed.id,
+        parsed.workspacePath,
         parsed.parentResearchId,
         parsed.title,
         parsed.prompt,
@@ -891,6 +978,7 @@ export class SessionDbRepository {
     this.db.exec(
       `CREATE TABLE IF NOT EXISTS research (
          id TEXT PRIMARY KEY,
+         workspace_path TEXT NULL,
          parent_research_id TEXT NULL REFERENCES research(id) ON DELETE SET NULL,
          title TEXT NOT NULL,
          prompt TEXT NOT NULL,
@@ -919,6 +1007,7 @@ export class SessionDbRepository {
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_thread_journal_events_thread_seq ON thread_journal_events(thread_id, seq)");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_research_status_updated ON research(status, updated_at DESC)");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_research_parent_updated ON research(parent_research_id, updated_at DESC)");
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_research_workspace_updated ON research(workspace_path, updated_at DESC)");
   }
 
   markMigration(version: number): void {
@@ -1090,6 +1179,7 @@ export class SessionDbRepository {
     this.db.exec(
       `CREATE TABLE IF NOT EXISTS research (
          id TEXT PRIMARY KEY,
+         workspace_path TEXT NULL,
          parent_research_id TEXT NULL REFERENCES research(id) ON DELETE SET NULL,
          title TEXT NOT NULL,
          prompt TEXT NOT NULL,
@@ -1109,6 +1199,7 @@ export class SessionDbRepository {
     );
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_research_status_updated ON research(status, updated_at DESC)");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_research_parent_updated ON research(parent_research_id, updated_at DESC)");
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_research_workspace_updated ON research(workspace_path, updated_at DESC)");
   }
 
   addResearchPlanColumns(): void {
@@ -1117,6 +1208,15 @@ export class SessionDbRepository {
     if (!hasPlanPending) {
       this.db.exec("ALTER TABLE research ADD COLUMN plan_pending INTEGER NOT NULL DEFAULT 0");
     }
+  }
+
+  addResearchWorkspaceColumn(): void {
+    const rows = this.db.query("PRAGMA table_info(research)").all() as Array<Record<string, unknown>>;
+    const hasWorkspacePath = rows.some((row) => row.name === "workspace_path");
+    if (!hasWorkspacePath) {
+      this.db.exec("ALTER TABLE research ADD COLUMN workspace_path TEXT NULL");
+    }
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_research_workspace_updated ON research(workspace_path, updated_at DESC)");
   }
 
   importLegacySnapshot(snapshot: PersistedSessionSnapshot): void {
@@ -1347,6 +1447,9 @@ export class SessionDbRepository {
   private mapResearchRow(row: Record<string, unknown>): PersistedResearchRecord {
     return researchRecordSchema.parse({
       id: String(row.id),
+      workspacePath: typeof row.workspace_path === "string" && row.workspace_path.trim() !== ""
+        ? row.workspace_path
+        : null,
       parentResearchId: typeof row.parent_research_id === "string" ? row.parent_research_id : null,
       title: String(row.title),
       prompt: String(row.prompt),

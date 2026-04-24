@@ -14,11 +14,17 @@ type ResearchFileStoreOptions = {
 };
 
 const metadataVersion = 1;
+export const MAX_RESEARCH_UPLOAD_BYTES = 20 * 1024 * 1024;
 
 function sanitizeFilename(filename: string): string {
   const base = path.basename(filename).trim();
   const normalized = base.replace(/[^\w.\- ]+/g, "_").replace(/\s+/g, " ").trim();
   return normalized || "upload.bin";
+}
+
+function estimateBase64DecodedBytes(contentBase64: string): number {
+  const padding = contentBase64.endsWith("==") ? 2 : contentBase64.endsWith("=") ? 1 : 0;
+  return Math.floor((contentBase64.length * 3) / 4) - padding;
 }
 
 export class ResearchFileStore {
@@ -48,10 +54,17 @@ export class ResearchFileStore {
     const fileId = crypto.randomUUID();
     const safeFilename = sanitizeFilename(opts.filename);
     const uploadedAt = new Date().toISOString();
+    if (estimateBase64DecodedBytes(opts.contentBase64) > MAX_RESEARCH_UPLOAD_BYTES) {
+      throw new Error(`Research uploads are limited to ${MAX_RESEARCH_UPLOAD_BYTES} bytes.`);
+    }
+    const decoded = Buffer.from(opts.contentBase64, "base64");
+    if (decoded.byteLength > MAX_RESEARCH_UPLOAD_BYTES) {
+      throw new Error(`Research uploads are limited to ${MAX_RESEARCH_UPLOAD_BYTES} bytes.`);
+    }
     const uploadsDir = this.uploadsDir();
     await ensurePrivateDirectory(uploadsDir);
     const filePath = path.join(uploadsDir, `${fileId}-${safeFilename}`);
-    await fs.writeFile(filePath, Buffer.from(opts.contentBase64, "base64"));
+    await fs.writeFile(filePath, decoded);
     await hardenPrivateFile(filePath);
 
     const record: ResearchInputFile = {
@@ -154,4 +167,3 @@ export class ResearchFileStore {
     await deleteResearchFileSearchStore({ apiKey, fileSearchStoreName });
   }
 }
-

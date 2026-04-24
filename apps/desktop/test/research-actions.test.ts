@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 
-const { createResearchActions } = await import("../src/app/store.actions/research");
+const { createResearchActions, __internalResearchActionBindings } = await import("../src/app/store.actions/research");
 
 type TestState = {
   notifications: Array<{
@@ -14,7 +14,20 @@ type TestState = {
   selectedWorkspaceId: string | null;
   researchTransportWorkspaceId: string | null;
   workspaces: Array<{ id: string; path: string }>;
-  researchById: Record<string, { id: string; title: string }>;
+  view: "chat" | "skills" | "research" | "settings";
+  researchById: Record<string, {
+    id: string;
+    title: string;
+    status?: "pending" | "running" | "completed" | "cancelled" | "failed";
+    outputsMarkdown?: string;
+    lastEventId?: string | null;
+    updatedAt?: string;
+  }>;
+  researchOrder: string[];
+  selectedResearchId: string | null;
+  researchListLoading: boolean;
+  researchListError: string | null;
+  researchSubscribedIds: string[];
   researchExportPendingIds: string[];
 };
 
@@ -25,12 +38,22 @@ function createHarness(overrides: Partial<TestState> = {}) {
     selectedWorkspaceId: "ws-1",
     researchTransportWorkspaceId: null,
     workspaces: [{ id: "ws-1", path: "/tmp/ws-1" }],
+    view: "chat",
     researchById: {
       "research-1": {
         id: "research-1",
         title: "Quarterly: Findings / 2026",
+        status: "completed",
+        outputsMarkdown: "",
+        lastEventId: null,
+        updatedAt: "2026-04-21T00:00:00.000Z",
       },
     },
+    researchOrder: ["research-1"],
+    selectedResearchId: "research-1",
+    researchListLoading: false,
+    researchListError: null,
+    researchSubscribedIds: [],
     researchExportPendingIds: [],
     ...overrides,
   };
@@ -62,6 +85,7 @@ describe("research actions", () => {
   };
 
   beforeEach(() => {
+    __internalResearchActionBindings.reset();
     requestJsonRpcMock.mockReset();
     requestJsonRpcMock.mockImplementation(async () => ({ path: "/tmp/report.pdf" }));
     saveExportedFileMock.mockReset();
@@ -140,5 +164,93 @@ describe("research actions", () => {
     expect(harness.state.notifications[0]?.kind).toBe("error");
     expect(harness.state.notifications[0]?.title).toBe("Unable to export research");
     expect(harness.state.notifications[0]?.detail).toBe("The export completed without a downloadable file path.");
+  });
+
+  test("research text deltas advance the local event cursor", async () => {
+    const harness = createHarness({
+      researchById: {
+        "research-1": {
+          id: "research-1",
+          title: "Live run",
+          status: "running",
+          outputsMarkdown: "Hello",
+          lastEventId: "evt-1",
+          updatedAt: "2026-04-21T00:00:00.000Z",
+        },
+      },
+      researchOrder: ["research-1"],
+    });
+    let routeHandler: ((message: { kind: "notification"; method: string; params?: Record<string, unknown> }) => void) | null = null;
+    const actions = createResearchActions(harness.set as never, harness.get as never, {
+      ...deps,
+      registerWorkspaceJsonRpcRouter: (_workspaceId: string, handler: NonNullable<typeof routeHandler>) => {
+        routeHandler = handler;
+        return () => {};
+      },
+      requestJsonRpc: async () => ({ path: "/tmp/report.pdf" }),
+    } as never);
+
+    await actions.exportResearch("research-1", "pdf");
+    routeHandler?.({
+      kind: "notification",
+      method: "research/textDelta",
+      params: {
+        researchId: "research-1",
+        delta: " world",
+        eventId: "evt-2",
+      },
+    });
+
+    expect(harness.state.researchById["research-1"]?.outputsMarkdown).toBe("Hello world");
+    expect(harness.state.researchById["research-1"]?.lastEventId).toBe("evt-2");
+  });
+
+  test("research subscriptions apply the returned catch-up snapshot", async () => {
+    const harness = createHarness({
+      researchById: {},
+      researchOrder: [],
+      selectedResearchId: null,
+    });
+    const runningResearch = {
+      id: "research-running",
+      title: "Running",
+      status: "running",
+      outputsMarkdown: "old",
+      lastEventId: "evt-1",
+      updatedAt: "2026-04-21T00:00:00.000Z",
+      parentResearchId: null,
+      prompt: "Run",
+      interactionId: "interaction-running",
+      inputs: { files: [] },
+      settings: { planApproval: false },
+      thoughtSummaries: [],
+      sources: [],
+      createdAt: "2026-04-21T00:00:00.000Z",
+      error: null,
+    };
+    const snapshot = {
+      ...runningResearch,
+      outputsMarkdown: "fresh",
+      lastEventId: "evt-4",
+      updatedAt: "2026-04-21T00:01:00.000Z",
+    };
+    const actions = createResearchActions(harness.set as never, harness.get as never, {
+      ...deps,
+      requestJsonRpc: async (_get: unknown, _set: unknown, _workspaceId: string, method: string) => {
+        if (method === "research/list") {
+          return { research: [runningResearch] };
+        }
+        if (method === "research/subscribe") {
+          return { research: snapshot };
+        }
+        return {};
+      },
+    } as never);
+
+    await actions.refreshResearchList();
+
+    expect(harness.state.researchById["research-running"]?.outputsMarkdown).toBe("fresh");
+    expect(harness.state.researchById["research-running"]?.lastEventId).toBe("evt-4");
+    expect(harness.state.researchSubscribedIds).toEqual(["research-running"]);
   });
 });

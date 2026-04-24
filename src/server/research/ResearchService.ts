@@ -2,6 +2,7 @@ import type { Interactions } from "@google/genai";
 
 import { getSavedProviderApiKey } from "../../config";
 import type { AgentConfig } from "../../types";
+import { canonicalWorkspacePath, sameWorkspacePath } from "../../utils/workspacePath";
 import { enrichCitationAnnotations } from "../citationMetadata";
 import type { SessionDb } from "../sessionDb";
 import type { StartServerSocket } from "../startServer/types";
@@ -209,7 +210,7 @@ export class ResearchService {
 
   constructor(opts: ResearchServiceOptions) {
     this.sessionDb = opts.sessionDb;
-    this.workspacePath = opts.workspacePath?.trim() || null;
+    this.workspacePath = opts.workspacePath ? canonicalWorkspacePath(opts.workspacePath) : null;
     this.getConfigImpl = opts.getConfig;
     this.sendJsonRpc = opts.sendJsonRpc;
     this.fileStore = new ResearchFileStore({ rootDir: opts.rootDir });
@@ -448,7 +449,9 @@ export class ResearchService {
       },
       state.record.lastEventId,
     );
-    await this.cleanupTerminalState(state);
+    if (!state.streamPromise) {
+      await this.cleanupTerminalState(state);
+    }
     return state.record;
   }
 
@@ -630,6 +633,16 @@ export class ResearchService {
           files: opts.attachedFiles,
           currentStoreName: state.record.inputs.fileSearchStoreName ?? null,
         });
+        if (state.cancelRequested || state.record.status === "cancelled") {
+          this.updateRecord(state, {
+            inputs: {
+              fileSearchStoreName: prepared.fileSearchStoreName,
+              files: prepared.files,
+            },
+            updatedAt: new Date().toISOString(),
+          });
+          return;
+        }
         this.updateRecord(state, {
           inputs: {
             fileSearchStoreName: prepared.fileSearchStoreName,
@@ -702,7 +715,10 @@ export class ResearchService {
       );
     } finally {
       state.streamPromise = null;
-      if (isTerminalResearchStatus(state.record.status)) {
+      if (this.shouldCleanupTerminalState(state.record)) {
+        if (state.record.status !== "completed") {
+          await this.fileStore.deletePendingUploads(opts.attachedFiles);
+        }
         await this.cleanupTerminalState(state);
       }
     }
@@ -820,7 +836,7 @@ export class ResearchService {
           eventId,
         );
       }
-      if (isTerminalResearchStatus(state.record.status)) {
+      if (this.shouldCleanupTerminalState(state.record)) {
         await this.cleanupTerminalState(state);
       }
       return;
@@ -1212,7 +1228,7 @@ export class ResearchService {
     if (!this.workspacePath) {
       return true;
     }
-    return record.workspacePath === this.workspacePath;
+    return typeof record.workspacePath === "string" && sameWorkspacePath(record.workspacePath, this.workspacePath);
   }
 
   private async cleanupTerminalState(state: ResearchRuntimeState): Promise<void> {
@@ -1287,7 +1303,13 @@ export class ResearchService {
     if (!afterEventId) {
       return;
     }
-    const startIndex = state.ringBuffer.findIndex((entry) => entry.eventId === afterEventId);
+    let startIndex = -1;
+    for (let index = state.ringBuffer.length - 1; index >= 0; index -= 1) {
+      if (state.ringBuffer[index]?.eventId === afterEventId) {
+        startIndex = index;
+        break;
+      }
+    }
     const replay = startIndex >= 0 ? state.ringBuffer.slice(startIndex + 1) : [];
     for (const entry of replay) {
       this.sendJsonRpc(ws, {
@@ -1295,6 +1317,10 @@ export class ResearchService {
         params: entry.params,
       });
     }
+  }
+
+  private shouldCleanupTerminalState(record: ResearchRecord): boolean {
+    return isTerminalResearchStatus(record.status) && !record.planPending;
   }
 
   private resolveGoogleApiKey(): string {
@@ -1338,6 +1364,7 @@ export class ResearchService {
             updatedAt: new Date().toISOString(),
           });
           await this.flushPersistNow(state);
+          await this.cleanupTerminalState(state);
           return;
         }
         try {
@@ -1358,6 +1385,7 @@ export class ResearchService {
                 updatedAt: new Date().toISOString(),
               });
               await this.flushPersistNow(state);
+              await this.cleanupTerminalState(state);
             })
             .finally(() => {
               state.streamPromise = null;
@@ -1373,6 +1401,7 @@ export class ResearchService {
             updatedAt: new Date().toISOString(),
           });
           await this.flushPersistNow(state);
+          await this.cleanupTerminalState(state);
         }
       }),
     );

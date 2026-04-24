@@ -132,43 +132,63 @@ export class ResearchFileStore {
     }
 
     let fileSearchStoreName = opts.currentStoreName ?? undefined;
-    if (!fileSearchStoreName) {
-      fileSearchStoreName = await createResearchFileSearchStore({
-        apiKey: opts.apiKey,
-        displayName: `Research ${opts.researchId}`,
-      });
-    }
-
-    const uploadedFiles: ResearchInputFile[] = [];
-    for (const file of promotedFiles) {
-      if (file.documentName) {
-        uploadedFiles.push(file);
-        continue;
+    let createdStoreName: string | null = null;
+    try {
+      if (!fileSearchStoreName) {
+        fileSearchStoreName = await createResearchFileSearchStore({
+          apiKey: opts.apiKey,
+          displayName: `Research ${opts.researchId}`,
+        });
+        createdStoreName = fileSearchStoreName;
       }
 
-      const uploaded = await uploadFileToResearchFileSearchStore({
-        apiKey: opts.apiKey,
+      const uploadedFiles: ResearchInputFile[] = [];
+      for (const file of promotedFiles) {
+        if (file.documentName) {
+          uploadedFiles.push(file);
+          continue;
+        }
+
+        const uploaded = await uploadFileToResearchFileSearchStore({
+          apiKey: opts.apiKey,
+          fileSearchStoreName,
+          filePath: file.path,
+          mimeType: file.mimeType,
+          displayName: file.filename,
+        });
+        uploadedFiles.push({
+          ...file,
+          ...(uploaded.documentName ? { documentName: uploaded.documentName } : {}),
+        });
+      }
+
+      await this.deletePendingUploads(opts.files);
+
+      return {
+        files: uploadedFiles,
         fileSearchStoreName,
-        filePath: file.path,
-        mimeType: file.mimeType,
-        displayName: file.filename,
-      });
-      uploadedFiles.push({
-        ...file,
-        ...(uploaded.documentName ? { documentName: uploaded.documentName } : {}),
-      });
+      };
+    } catch (error) {
+      if (createdStoreName) {
+        try {
+          await deleteResearchFileSearchStore({
+            apiKey: opts.apiKey,
+            fileSearchStoreName: createdStoreName,
+          });
+        } catch {
+          // Best effort rollback; preserve the original upload failure.
+        }
+      }
+      throw error;
     }
-
-    await Promise.all(opts.files.map((file) => this.deletePendingUpload(file)));
-
-    return {
-      files: uploadedFiles,
-      fileSearchStoreName,
-    };
   }
 
   async deleteResearchStore(apiKey: string, fileSearchStoreName: string): Promise<void> {
     await deleteResearchFileSearchStore({ apiKey, fileSearchStoreName });
+  }
+
+  async deletePendingUploads(files: ResearchInputFile[]): Promise<void> {
+    await Promise.all(files.map((file) => this.deletePendingUpload(file)));
   }
 
   private async deletePendingUpload(file: ResearchInputFile): Promise<void> {

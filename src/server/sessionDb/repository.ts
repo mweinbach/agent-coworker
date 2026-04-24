@@ -5,7 +5,7 @@ import type { PersistentAgentSummary } from "../../shared/agents";
 import { type SessionSnapshot, sessionSnapshotSchema } from "../../shared/sessionSnapshot";
 import type { ModelMessage } from "../../types";
 import { isProviderName } from "../../types";
-import { sameWorkspacePath } from "../../utils/workspacePath";
+import { canonicalWorkspacePath, sameWorkspacePath } from "../../utils/workspacePath";
 import {
   researchInputsSchema,
   researchRecordSchema,
@@ -682,182 +682,126 @@ export class SessionDbRepository {
   }
 
   listResearch(opts?: { workspacePath?: string | null }): PersistedResearchRecord[] {
-    const workspacePath = opts?.workspacePath?.trim();
+    const workspacePath = opts?.workspacePath ? canonicalWorkspacePath(opts.workspacePath) : null;
     const rows = (
-      workspacePath
-        ? this.db
-            .query(
-              `SELECT
-               id,
-               workspace_path,
-               parent_research_id,
-               title,
-               prompt,
-               status,
-               interaction_id,
-               last_event_id,
-               inputs_json,
-               settings_json,
-               outputs_markdown,
-               thought_summaries_json,
-               sources_json,
-               plan_pending,
-               created_at,
-               updated_at,
-               error
-             FROM research
-             WHERE workspace_path = ?
-             ORDER BY updated_at DESC`,
-            )
-            .all(workspacePath)
-        : this.db
-            .query(
-              `SELECT
-               id,
-               workspace_path,
-               parent_research_id,
-               title,
-               prompt,
-               status,
-               interaction_id,
-               last_event_id,
-               inputs_json,
-               settings_json,
-               outputs_markdown,
-               thought_summaries_json,
-               sources_json,
-               plan_pending,
-               created_at,
-               updated_at,
-               error
-             FROM research
-             ORDER BY updated_at DESC`,
-            )
-            .all()
+      this.db
+        .query(
+          `SELECT
+             id,
+             workspace_path,
+             parent_research_id,
+             title,
+             prompt,
+             status,
+             interaction_id,
+             last_event_id,
+             inputs_json,
+             settings_json,
+             outputs_markdown,
+             thought_summaries_json,
+             sources_json,
+             plan_pending,
+             created_at,
+             updated_at,
+             error
+           FROM research
+           ORDER BY updated_at DESC`,
+        )
+        .all()
     ) as Array<Record<string, unknown>>;
 
-    return rows.map((row) => this.mapResearchRow(row));
+    return rows
+      .map((row) => this.mapResearchRow(row))
+      .filter((row) =>
+        workspacePath
+          ? typeof row.workspacePath === "string" && sameWorkspacePath(row.workspacePath, workspacePath)
+          : true,
+      );
   }
 
   listRunningResearch(opts?: { workspacePath?: string | null }): PersistedResearchRecord[] {
-    const workspacePath = opts?.workspacePath?.trim();
+    const workspacePath = opts?.workspacePath ? canonicalWorkspacePath(opts.workspacePath) : null;
     const rows = (
-      workspacePath
-        ? this.db
-            .query(
-              `SELECT
-               id,
-               workspace_path,
-               parent_research_id,
-               title,
-               prompt,
-               status,
-               interaction_id,
-               last_event_id,
-               inputs_json,
-               settings_json,
-               outputs_markdown,
-               thought_summaries_json,
-               sources_json,
-               plan_pending,
-               created_at,
-               updated_at,
-               error
-             FROM research
-             WHERE status IN ('pending', 'running') AND workspace_path = ?
-             ORDER BY updated_at DESC`,
-            )
-            .all(workspacePath)
-        : this.db
-            .query(
-              `SELECT
-               id,
-               workspace_path,
-               parent_research_id,
-               title,
-               prompt,
-               status,
-               interaction_id,
-               last_event_id,
-               inputs_json,
-               settings_json,
-               outputs_markdown,
-               thought_summaries_json,
-               sources_json,
-               plan_pending,
-               created_at,
-               updated_at,
-               error
-             FROM research
-             WHERE status IN ('pending', 'running')
-             ORDER BY updated_at DESC`,
-            )
-            .all()
+      this.db
+        .query(
+          `SELECT
+             id,
+             workspace_path,
+             parent_research_id,
+             title,
+             prompt,
+             status,
+             interaction_id,
+             last_event_id,
+             inputs_json,
+             settings_json,
+             outputs_markdown,
+             thought_summaries_json,
+             sources_json,
+             plan_pending,
+             created_at,
+             updated_at,
+             error
+           FROM research
+           WHERE status IN ('pending', 'running')
+           ORDER BY updated_at DESC`,
+        )
+        .all()
     ) as Array<Record<string, unknown>>;
 
-    return rows.map((row) => this.mapResearchRow(row));
+    return rows
+      .map((row) => this.mapResearchRow(row))
+      .filter((row) =>
+        workspacePath
+          ? typeof row.workspacePath === "string" && sameWorkspacePath(row.workspacePath, workspacePath)
+          : true,
+      );
   }
 
   getResearch(
     researchId: string,
     opts?: { workspacePath?: string | null },
   ): PersistedResearchRecord | null {
-    const workspacePath = opts?.workspacePath?.trim();
+    const workspacePath = opts?.workspacePath ? canonicalWorkspacePath(opts.workspacePath) : null;
     const row = (
-      workspacePath
-        ? this.db
-            .query(
-              `SELECT
-               id,
-               workspace_path,
-               parent_research_id,
-               title,
-               prompt,
-               status,
-               interaction_id,
-               last_event_id,
-               inputs_json,
-               settings_json,
-               outputs_markdown,
-               thought_summaries_json,
-               sources_json,
-               plan_pending,
-               created_at,
-               updated_at,
-               error
-             FROM research
-             WHERE id = ? AND workspace_path = ?
-             LIMIT 1`,
-            )
-            .get(researchId, workspacePath)
-        : this.db
-            .query(
-              `SELECT
-               id,
-               workspace_path,
-               parent_research_id,
-               title,
-               prompt,
-               status,
-               interaction_id,
-               last_event_id,
-               inputs_json,
-               settings_json,
-               outputs_markdown,
-               thought_summaries_json,
-               sources_json,
-               plan_pending,
-               created_at,
-               updated_at,
-               error
-             FROM research
-             WHERE id = ?
-             LIMIT 1`,
-            )
-            .get(researchId)
+      this.db
+        .query(
+          `SELECT
+             id,
+             workspace_path,
+             parent_research_id,
+             title,
+             prompt,
+             status,
+             interaction_id,
+             last_event_id,
+             inputs_json,
+             settings_json,
+             outputs_markdown,
+             thought_summaries_json,
+             sources_json,
+             plan_pending,
+             created_at,
+             updated_at,
+             error
+           FROM research
+           WHERE id = ?
+           LIMIT 1`,
+        )
+        .get(researchId)
     ) as Record<string, unknown> | null;
 
-    return row ? this.mapResearchRow(row) : null;
+    if (!row) {
+      return null;
+    }
+    const mapped = this.mapResearchRow(row);
+    if (
+      workspacePath &&
+      !(typeof mapped.workspacePath === "string" && sameWorkspacePath(mapped.workspacePath, workspacePath))
+    ) {
+      return null;
+    }
+    return mapped;
   }
 
   upsertResearch(record: PersistedResearchRecord): void {
@@ -902,7 +846,7 @@ export class SessionDbRepository {
       )
       .run(
         parsed.id,
-        parsed.workspacePath,
+        parsed.workspacePath ? canonicalWorkspacePath(parsed.workspacePath) : null,
         parsed.parentResearchId,
         parsed.title,
         parsed.prompt,

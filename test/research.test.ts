@@ -13,6 +13,11 @@ let createResearchInteractionStreamImpl = async (): Promise<AsyncIterable<Runtim
   emptyStream();
 let resumeResearchInteractionStreamImpl = async (): Promise<AsyncIterable<RuntimeEvent>> =>
   emptyStream();
+let createResearchFileSearchStoreImpl = async () => "file-search-stores/mock-store";
+let uploadFileToResearchFileSearchStoreImpl = async () => ({
+  documentName: "documents/mock-doc",
+});
+let deleteResearchFileSearchStoreImpl = async () => {};
 
 const createResearchInteractionStreamMock = mock(
   async (opts: unknown) => await createResearchInteractionStreamImpl(opts),
@@ -21,11 +26,15 @@ const resumeResearchInteractionStreamMock = mock(
   async (opts: unknown) => await resumeResearchInteractionStreamImpl(opts),
 );
 const cancelResearchInteractionMock = mock(async () => {});
-const createResearchFileSearchStoreMock = mock(async () => "file-search-stores/mock-store");
-const uploadFileToResearchFileSearchStoreMock = mock(async () => ({
-  documentName: "documents/mock-doc",
-}));
-const deleteResearchFileSearchStoreMock = mock(async () => {});
+const createResearchFileSearchStoreMock = mock(
+  async (opts: unknown) => await createResearchFileSearchStoreImpl(opts),
+);
+const uploadFileToResearchFileSearchStoreMock = mock(
+  async (opts: unknown) => await uploadFileToResearchFileSearchStoreImpl(opts),
+);
+const deleteResearchFileSearchStoreMock = mock(
+  async (opts: unknown) => await deleteResearchFileSearchStoreImpl(opts),
+);
 
 mock.module("../src/server/research/researchRuntime", () => ({
   createResearchInteractionStream: createResearchInteractionStreamMock,
@@ -125,6 +134,11 @@ describe("research service", () => {
     process.env.GOOGLE_GENERATIVE_AI_API_KEY = "test-google-key";
     createResearchInteractionStreamImpl = async () => emptyStream();
     resumeResearchInteractionStreamImpl = async () => emptyStream();
+    createResearchFileSearchStoreImpl = async () => "file-search-stores/mock-store";
+    uploadFileToResearchFileSearchStoreImpl = async () => ({
+      documentName: "documents/mock-doc",
+    });
+    deleteResearchFileSearchStoreImpl = async () => {};
     createResearchInteractionStreamMock.mockClear();
     resumeResearchInteractionStreamMock.mockClear();
     cancelResearchInteractionMock.mockClear();
@@ -267,7 +281,10 @@ describe("research service", () => {
     const service = new ResearchService({
       rootDir: paths.rootDir,
       sessionDb,
-      getConfig: () => ({ skillsDirs: [] }) as any,
+      getConfig: () =>
+        ({
+          skillsDirs: [path.join(paths.rootDir, "skills")],
+        }) as any,
       sendJsonRpc: () => {},
     });
 
@@ -335,7 +352,10 @@ describe("research service", () => {
     const service = new ResearchService({
       rootDir: paths.rootDir,
       sessionDb,
-      getConfig: () => ({ skillsDirs: [] }) as any,
+      getConfig: () =>
+        ({
+          skillsDirs: [path.join(paths.rootDir, "skills")],
+        }) as any,
       sendJsonRpc: () => {},
     });
 
@@ -610,6 +630,37 @@ describe("research service", () => {
       expect(listed.map((record) => record.id)).toEqual(["research-workspace-a"]);
       expect(await service.get("research-workspace-a")).not.toBeNull();
       expect(await service.get("research-workspace-b")).toBeNull();
+    } finally {
+      sessionDb.close();
+      await fs.rm(paths.home, { recursive: true, force: true });
+    }
+  });
+
+  test("canonicalizes workspace paths when reading research rows", async () => {
+    const paths = await makeTmpCoworkHome();
+    const sessionDb = await SessionDb.create({ paths });
+
+    await sessionDb.upsertResearch(
+      makeResearchRecord({
+        id: "research-workspace-canonical",
+        workspacePath: "/tmp/demo/./workspace",
+        status: "completed",
+      }),
+    );
+
+    const service = new ResearchService({
+      rootDir: paths.rootDir,
+      workspacePath: "/tmp/demo/workspace",
+      sessionDb,
+      getConfig: () => ({ skillsDirs: [] }) as any,
+      sendJsonRpc: () => {},
+    });
+
+    try {
+      expect((await service.list()).map((record) => record.id)).toEqual([
+        "research-workspace-canonical",
+      ]);
+      expect(await service.get("research-workspace-canonical")).not.toBeNull();
     } finally {
       sessionDb.close();
       await fs.rm(paths.home, { recursive: true, force: true });
@@ -905,6 +956,312 @@ describe("research service", () => {
         }),
       );
       expect(completed?.outputsMarkdown).toContain("Resumed output.");
+    } finally {
+      sessionDb.close();
+      await fs.rm(paths.home, { recursive: true, force: true });
+    }
+  });
+
+  test("replays notifications only after the last buffered match for an event id", async () => {
+    const paths = await makeTmpCoworkHome();
+    const sessionDb = await SessionDb.create({ paths });
+    const gate = deferred();
+    const replayed: Array<Record<string, unknown>> = [];
+
+    createResearchInteractionStreamImpl = async () =>
+      (async function* () {
+        yield {
+          event_type: "content.delta",
+          event_id: "evt-replay-1",
+          delta: { type: "text", text: "# Better title" },
+        };
+        await gate.promise;
+      })();
+
+    const service = new ResearchService({
+      rootDir: paths.rootDir,
+      sessionDb,
+      getConfig: () => ({ skillsDirs: [] }) as any,
+      sendJsonRpc: (_ws, payload) => {
+        replayed.push(payload as Record<string, unknown>);
+      },
+    });
+
+    try {
+      const research = await service.start({ input: "Original title" });
+      await waitFor(
+        () => sessionDb.getResearch(research.id),
+        (value) => value?.outputsMarkdown === "# Better title",
+      );
+
+      await service.subscribe({ data: { connectionId: "replay-socket" } } as any, research.id, "evt-replay-1");
+      expect(replayed).toEqual([]);
+
+      const cancelPromise = service.cancel(research.id);
+      gate.resolve();
+      await cancelPromise;
+      await waitFor(
+        () => sessionDb.getResearch(research.id),
+        (value) => value?.status === "cancelled",
+      );
+    } finally {
+      sessionDb.close();
+      await fs.rm(paths.home, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps attachment stores alive while plan approval is pending and reuses them after approval", async () => {
+    const paths = await makeTmpCoworkHome();
+    const sessionDb = await SessionDb.create({ paths });
+    let runCount = 0;
+
+    createResearchInteractionStreamImpl = async () =>
+      (async function* () {
+        runCount += 1;
+        yield {
+          event_type: "interaction.start",
+          event_id: `evt-plan-${runCount}-1`,
+          interaction: { id: `interaction-plan-${runCount}`, status: "running" },
+        };
+        yield {
+          event_type: "interaction.complete",
+          event_id: `evt-plan-${runCount}-2`,
+          interaction: { id: `interaction-plan-${runCount}`, status: "completed" },
+        };
+      })();
+
+    const service = new ResearchService({
+      rootDir: paths.rootDir,
+      sessionDb,
+      getConfig: () => ({ skillsDirs: [] }) as any,
+      sendJsonRpc: () => {},
+    });
+
+    try {
+      const uploaded = await service.uploadFile({
+        filename: "plan.txt",
+        mimeType: "text/plain",
+        contentBase64: Buffer.from("plan attachment").toString("base64"),
+      });
+      const research = await service.start({
+        input: "Create a plan first.",
+        settings: { planApproval: true },
+        attachedFileIds: [uploaded.fileId],
+      });
+      const planPending = await waitFor(
+        () => sessionDb.getResearch(research.id),
+        (value) => value?.planPending === true,
+      );
+
+      expect(planPending?.inputs.fileSearchStoreName).toBe("file-search-stores/mock-store");
+      expect(deleteResearchFileSearchStoreMock).not.toHaveBeenCalled();
+
+      await service.approvePlan(research.id);
+      const completed = await waitFor(
+        () => sessionDb.getResearch(research.id),
+        (value) => value?.status === "completed" && value.planPending === false,
+      );
+
+      expect(createResearchInteractionStreamMock.mock.calls.at(-1)?.[0]).toEqual(
+        expect.objectContaining({
+          tools: expect.arrayContaining([
+            expect.objectContaining({
+              type: "file_search",
+              file_search_store_names: ["file-search-stores/mock-store"],
+            }),
+          ]),
+        }),
+      );
+      expect(completed?.inputs.fileSearchStoreName).toBe("file-search-stores/mock-store");
+      expect(deleteResearchFileSearchStoreMock).toHaveBeenCalledTimes(1);
+    } finally {
+      sessionDb.close();
+      await fs.rm(paths.home, { recursive: true, force: true });
+    }
+  });
+
+  test("fails resumed research cleanly and deletes attachment stores when stream consumption throws", async () => {
+    const paths = await makeTmpCoworkHome();
+    const sessionDb = await SessionDb.create({ paths });
+
+    resumeResearchInteractionStreamImpl = async () =>
+      (async function* () {
+        throw new Error("resume stream exploded");
+      })();
+
+    await sessionDb.upsertResearch(
+      makeResearchRecord({
+        id: "research-resume-failure",
+        status: "running",
+        interactionId: "interaction-resume-failure",
+        inputs: {
+          fileSearchStoreName: "file-search-stores/resume-store",
+          files: [],
+        },
+      }),
+    );
+
+    const service = new ResearchService({
+      rootDir: paths.rootDir,
+      sessionDb,
+      getConfig: () => ({ skillsDirs: [] }) as any,
+      sendJsonRpc: () => {},
+    });
+
+    try {
+      await service.init();
+      const failed = await waitFor(
+        () => sessionDb.getResearch("research-resume-failure"),
+        (value) => value?.status === "failed",
+      );
+
+      expect(failed?.error).toContain("resume stream exploded");
+      expect(deleteResearchFileSearchStoreMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          fileSearchStoreName: "file-search-stores/resume-store",
+        }),
+      );
+    } finally {
+      sessionDb.close();
+      await fs.rm(paths.home, { recursive: true, force: true });
+    }
+  });
+
+  test("prunes pending uploads when research fails before file preparation starts", async () => {
+    const paths = await makeTmpCoworkHome();
+    const sessionDb = await SessionDb.create({ paths });
+    delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+    delete process.env.GOOGLE_API_KEY;
+
+    const service = new ResearchService({
+      rootDir: paths.rootDir,
+      sessionDb,
+      getConfig: () =>
+        ({
+          skillsDirs: [path.join(paths.rootDir, "skills")],
+        }) as any,
+      sendJsonRpc: () => {},
+    });
+
+    try {
+      const uploaded = await service.uploadFile({
+        filename: "early-failure.txt",
+        mimeType: "text/plain",
+        contentBase64: Buffer.from("early failure").toString("base64"),
+      });
+      const metadataPath = path.join(paths.rootDir, "research", "uploads", `${uploaded.fileId}.json`);
+
+      const research = await service.start({
+        input: "This should fail before preparation.",
+        attachedFileIds: [uploaded.fileId],
+      });
+      const failed = await waitFor(
+        () => sessionDb.getResearch(research.id),
+        (value) => value?.status === "failed",
+      );
+
+      expect(failed?.error).toContain("Google Deep Research requires");
+      await expect(fs.stat(uploaded.path)).rejects.toThrow();
+      await expect(fs.stat(metadataPath)).rejects.toThrow();
+    } finally {
+      sessionDb.close();
+      await fs.rm(paths.home, { recursive: true, force: true });
+    }
+  });
+
+  test("rolls back a freshly created file-search store when attachment upload fails", async () => {
+    const paths = await makeTmpCoworkHome();
+    const sessionDb = await SessionDb.create({ paths });
+    uploadFileToResearchFileSearchStoreImpl = async () => {
+      throw new Error("upload failed");
+    };
+
+    const service = new ResearchService({
+      rootDir: paths.rootDir,
+      sessionDb,
+      getConfig: () => ({ skillsDirs: [] }) as any,
+      sendJsonRpc: () => {},
+    });
+
+    try {
+      const uploaded = await service.uploadFile({
+        filename: "broken.txt",
+        mimeType: "text/plain",
+        contentBase64: Buffer.from("broken").toString("base64"),
+      });
+
+      const research = await service.start({
+        input: "Trigger upload rollback.",
+        attachedFileIds: [uploaded.fileId],
+      });
+      const failed = await waitFor(
+        () => sessionDb.getResearch(research.id),
+        (value) => value?.status === "failed",
+      );
+
+      expect(failed?.inputs.fileSearchStoreName).toBeUndefined();
+      expect(deleteResearchFileSearchStoreMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          fileSearchStoreName: "file-search-stores/mock-store",
+        }),
+      );
+    } finally {
+      sessionDb.close();
+      await fs.rm(paths.home, { recursive: true, force: true });
+    }
+  });
+
+  test("defers terminal cleanup until attachment preparation finishes after cancellation", async () => {
+    const paths = await makeTmpCoworkHome();
+    const sessionDb = await SessionDb.create({ paths });
+    const uploadGate = deferred();
+
+    uploadFileToResearchFileSearchStoreImpl = async () => {
+      await uploadGate.promise;
+      return { documentName: "documents/race-doc" };
+    };
+    createResearchInteractionStreamImpl = async () => emptyStream();
+
+    const service = new ResearchService({
+      rootDir: paths.rootDir,
+      sessionDb,
+      getConfig: () => ({ skillsDirs: [] }) as any,
+      sendJsonRpc: () => {},
+    });
+
+    try {
+      const uploaded = await service.uploadFile({
+        filename: "cancel-race.txt",
+        mimeType: "text/plain",
+        contentBase64: Buffer.from("cancel race").toString("base64"),
+      });
+      const research = await service.start({
+        input: "Cancel during preparation.",
+        attachedFileIds: [uploaded.fileId],
+      });
+
+      await waitFor(
+        () => uploadFileToResearchFileSearchStoreMock.mock.calls.length,
+        (count) => count === 1,
+      );
+
+      const cancelPromise = service.cancel(research.id);
+      expect(deleteResearchFileSearchStoreMock).not.toHaveBeenCalled();
+
+      uploadGate.resolve();
+      await cancelPromise;
+
+      const cancelled = await waitFor(
+        () => sessionDb.getResearch(research.id),
+        (value) => value?.status === "cancelled",
+      );
+
+      expect(cancelled?.inputs.fileSearchStoreName).toBeUndefined();
+      expect(deleteResearchFileSearchStoreMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          fileSearchStoreName: "file-search-stores/mock-store",
+        }),
+      );
     } finally {
       sessionDb.close();
       await fs.rm(paths.home, { recursive: true, force: true });

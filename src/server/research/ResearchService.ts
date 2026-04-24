@@ -236,14 +236,7 @@ export class ResearchService {
       }
     }
     const resolved = await Promise.all(
-      [...byId.values()].map(async (record) => {
-        const nextRecord = await this.resolveStoredSourceDestinations(record);
-        const activeState = this.states.get(record.id);
-        if (activeState) {
-          activeState.record = nextRecord;
-        }
-        return nextRecord;
-      }),
+      [...byId.values()].map(async (record) => await this.resolveRecordForRead(record)),
     );
     return resolved.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   }
@@ -255,11 +248,10 @@ export class ResearchService {
       if (!this.recordBelongsToWorkspace(activeState.record)) {
         return null;
       }
-      activeState.record = await this.resolveStoredSourceDestinations(activeState.record);
-      return activeState.record;
+      return await this.resolveRecordForRead(activeState.record);
     }
     const record = this.sessionDb.getResearch(id, { workspacePath: this.workspacePath });
-    return record ? await this.resolveStoredSourceDestinations(record) : null;
+    return record ? await this.resolveRecordForRead(record) : null;
   }
 
   async start(params: StartResearchParams): Promise<ResearchRecord> {
@@ -1139,16 +1131,45 @@ export class ResearchService {
     }
 
     const sources = await this.resolveSourcesViaCitationAnnotations(record.sources);
-    if (JSON.stringify(sources) === JSON.stringify(record.sources)) {
-      return record;
-    }
+    return JSON.stringify(sources) === JSON.stringify(record.sources)
+      ? record
+      : {
+          ...record,
+          sources,
+        };
+  }
 
-    const nextRecord = {
-      ...record,
-      sources,
-    };
-    await this.sessionDb.upsertResearch(nextRecord);
-    return nextRecord;
+  private async resolveRecordForRead(record: ResearchRecord): Promise<ResearchRecord> {
+    const resolved = await this.resolveStoredSourceDestinations(record);
+    const activeState = this.states.get(record.id);
+    if (activeState) {
+      const activeRecord = activeState.record;
+      const resolvedSourcesChanged =
+        JSON.stringify(resolved.sources) !== JSON.stringify(record.sources);
+      const activeSourcesUnchanged =
+        JSON.stringify(activeRecord.sources) === JSON.stringify(record.sources);
+      if (resolvedSourcesChanged && activeSourcesUnchanged) {
+        const nextRecord = {
+          ...activeRecord,
+          sources: resolved.sources,
+        };
+        activeState.record = nextRecord;
+        await this.sessionDb.upsertResearch(nextRecord);
+        return nextRecord;
+      }
+      if (activeRecord === record) {
+        if (resolved !== record) {
+          activeState.record = resolved;
+          await this.sessionDb.upsertResearch(resolved);
+        }
+        return resolved;
+      }
+      return activeRecord;
+    }
+    if (resolved !== record) {
+      await this.sessionDb.upsertResearch(resolved);
+    }
+    return resolved;
   }
 
   private upsertSource(

@@ -844,10 +844,7 @@ export function createResearchActions(
           parentResearchId,
           input,
           ...(title ? { title } : {}),
-          settings: {
-            ...get().researchDraftSettings,
-            ...(settings ?? {}),
-          },
+          ...(settings ? { settings } : {}),
           ...(attachedFileIds.length > 0 ? { attachedFileIds } : {}),
         });
         if (!isResearchRecord(result?.research)) {

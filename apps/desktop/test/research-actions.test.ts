@@ -281,6 +281,98 @@ describe("research actions", () => {
     expect(harness.state.notifications.at(-1)?.title).toBe("Unable to send follow-up");
   });
 
+  test("sendResearchFollowUp omits settings when no explicit overrides are provided", async () => {
+    const harness = createHarness();
+    const actions = createResearchActions(harness.set as never, harness.get as never, deps);
+    requestJsonRpcMock.mockImplementation(async (_get, _set, _workspaceId, method, params) => {
+      if (method === "research/followup") {
+        return {
+          research: {
+            id: "research-2",
+            title: "Follow-up",
+            status: "running",
+            outputsMarkdown: "",
+            lastEventId: null,
+            updatedAt: "2026-04-21T00:00:00.000Z",
+            parentResearchId: "research-1",
+            prompt: "Continue the run.",
+            interactionId: "interaction-2",
+            inputs: { files: [] },
+            settings: { planApproval: true },
+            thoughtSummaries: [],
+            sources: [],
+            createdAt: "2026-04-21T00:00:00.000Z",
+            error: null,
+          },
+        };
+      }
+      return params ?? {};
+    });
+
+    await actions.sendResearchFollowUp({
+      parentResearchId: "research-1",
+      input: "Continue the run.",
+    });
+
+    expect(requestJsonRpcMock).toHaveBeenCalledWith(
+      harness.get,
+      harness.set,
+      "ws-1",
+      "research/followup",
+      {
+        parentResearchId: "research-1",
+        input: "Continue the run.",
+      },
+    );
+  });
+
+  test("sendResearchFollowUp forwards explicit settings overrides when provided", async () => {
+    const harness = createHarness();
+    const actions = createResearchActions(harness.set as never, harness.get as never, deps);
+    requestJsonRpcMock.mockImplementation(async (_get, _set, _workspaceId, method, params) => {
+      if (method === "research/followup") {
+        return {
+          research: {
+            id: "research-2",
+            title: "Follow-up",
+            status: "running",
+            outputsMarkdown: "",
+            lastEventId: null,
+            updatedAt: "2026-04-21T00:00:00.000Z",
+            parentResearchId: "research-1",
+            prompt: "Continue the run.",
+            interactionId: "interaction-2",
+            inputs: { files: [] },
+            settings: { planApproval: true },
+            thoughtSummaries: [],
+            sources: [],
+            createdAt: "2026-04-21T00:00:00.000Z",
+            error: null,
+          },
+        };
+      }
+      return params ?? {};
+    });
+
+    await actions.sendResearchFollowUp({
+      parentResearchId: "research-1",
+      input: "Continue the run.",
+      settings: { planApproval: true },
+    });
+
+    expect(requestJsonRpcMock).toHaveBeenCalledWith(
+      harness.get,
+      harness.set,
+      "ws-1",
+      "research/followup",
+      {
+        parentResearchId: "research-1",
+        input: "Continue the run.",
+        settings: { planApproval: true },
+      },
+    );
+  });
+
   test("startResearch does not discard uploaded blobs when start fails after upload success", async () => {
     const harness = createHarness();
     const actions = createResearchActions(harness.set as never, harness.get as never, deps);

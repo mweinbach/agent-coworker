@@ -969,6 +969,99 @@ describe("research service", () => {
     }
   });
 
+  test("list preserves newer runtime state while merging resolved sources", async () => {
+    const paths = await makeTmpCoworkHome();
+    const sessionDb = await SessionDb.create({ paths });
+    const redirectUrl = "https://vertexaisearch.cloud.google.com/grounding-api-redirect/source-live";
+    const resolvedUrl = "https://example.com/resolved-live";
+    const resolvedTitle = "Resolved live source";
+    const fetchGate = deferred<void>();
+    const fetchStarted = deferred<void>();
+
+    installFetchStub(async (input: RequestInfo | URL) => {
+      const url =
+        input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url;
+      if (url.includes("/grounding-api-redirect/source-live")) {
+        fetchStarted.resolve();
+        await fetchGate.promise;
+        return new Response(null, {
+          status: 302,
+          headers: {
+            location: resolvedUrl,
+          },
+        });
+      }
+
+      const response = new Response(
+        `<html><head><title>${resolvedTitle}</title></head><body>ok</body></html>`,
+        {
+          headers: {
+            "content-type": "text/html; charset=utf-8",
+          },
+        },
+      );
+      Object.defineProperty(response, "url", {
+        configurable: true,
+        value: resolvedUrl,
+      });
+      return response;
+    });
+
+    const service = new ResearchService({
+      rootDir: paths.rootDir,
+      sessionDb,
+      getConfig: () => ({ skillsDirs: [] }) as any,
+      sendJsonRpc: () => {},
+    });
+
+    const initialRecord = makeResearchRecord({
+      id: "research-live",
+      status: "running",
+      outputsMarkdown: "initial",
+      lastEventId: "evt-1",
+      updatedAt: "2026-04-21T00:00:00.000Z",
+      sources: [
+        {
+          url: redirectUrl,
+          title: "vertexaisearch.cloud.google.com",
+          sourceType: "url",
+          host: "vertexaisearch.cloud.google.com",
+        },
+      ],
+    });
+
+    try {
+      const state = (service as any).getOrCreateState(initialRecord);
+      const listPromise = service.list();
+      await fetchStarted.promise;
+      (service as any).updateRecord(state, {
+        outputsMarkdown: "newer runtime output",
+        lastEventId: "evt-2",
+        updatedAt: "2026-04-21T00:00:01.000Z",
+      });
+      fetchGate.resolve();
+
+      const listed = await listPromise;
+      const live = listed.find((record) => record.id === "research-live");
+      expect(live?.outputsMarkdown).toBe("newer runtime output");
+      expect(live?.lastEventId).toBe("evt-2");
+      expect(live?.sources).toEqual([
+        expect.objectContaining({
+          url: resolvedUrl,
+          title: resolvedTitle,
+          host: "example.com",
+        }),
+      ]);
+      expect((service as any).states.get("research-live")?.record.outputsMarkdown).toBe(
+        "newer runtime output",
+      );
+      expect(sessionDb.getResearch("research-live")?.outputsMarkdown).toBe("newer runtime output");
+    } finally {
+      sessionDb.close();
+      await fs.rm(paths.home, { recursive: true, force: true });
+    }
+  });
+
   test("resumes running research from the stored event id on service init", async () => {
     const paths = await makeTmpCoworkHome();
     const sessionDb = await SessionDb.create({ paths });

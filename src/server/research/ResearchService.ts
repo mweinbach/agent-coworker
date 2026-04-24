@@ -561,6 +561,11 @@ export class ResearchService {
     return await this.fileStore.savePendingUpload(opts);
   }
 
+  async discardUploadedFiles(fileIds: string[]): Promise<void> {
+    await this.init();
+    await this.fileStore.deletePendingUploadsByIds(fileIds);
+  }
+
   async subscribe(
     ws: StartServerSocket,
     researchId: string,
@@ -1341,11 +1346,17 @@ export class ResearchService {
 
   private async resolveAttachedFiles(params: StartResearchParams): Promise<ResearchInputFile[]> {
     const resolved: ResearchInputFile[] = [];
+    const missing: string[] = [];
     for (const fileId of params.attachedFileIds ?? []) {
       const file = await this.fileStore.readPendingUpload(fileId);
       if (file) {
         resolved.push(file);
+      } else {
+        missing.push(fileId);
       }
+    }
+    if (missing.length > 0) {
+      throw new Error(`Unknown uploaded research file${missing.length === 1 ? "" : "s"}: ${missing.join(", ")}`);
     }
     return resolved;
   }

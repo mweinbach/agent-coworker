@@ -191,6 +191,10 @@ export class ResearchFileStore {
     await Promise.all(files.map((file) => this.deletePendingUpload(file)));
   }
 
+  async deletePendingUploadsByIds(fileIds: string[]): Promise<void> {
+    await Promise.all(fileIds.map((fileId) => this.deletePendingUploadById(fileId)));
+  }
+
   private async deletePendingUpload(file: ResearchInputFile): Promise<void> {
     const uploadsDir = this.uploadsDir();
     const resolvedUploadsDir = path.resolve(uploadsDir);
@@ -203,5 +207,18 @@ export class ResearchFileStore {
       fs.rm(path.join(uploadsDir, `${file.fileId}.json`), { force: true }),
       fs.rm(file.path, { force: true }),
     ]);
+  }
+
+  private async deletePendingUploadById(fileId: string): Promise<void> {
+    const uploadsDir = this.uploadsDir();
+    try {
+      const entries = await fs.readdir(uploadsDir);
+      const matches = entries
+        .filter((entry) => entry === `${fileId}.json` || entry.startsWith(`${fileId}-`))
+        .map((entry) => fs.rm(path.join(uploadsDir, entry), { force: true }));
+      await Promise.all(matches);
+    } catch {
+      // Missing uploads directories or files are already effectively deleted.
+    }
   }
 }

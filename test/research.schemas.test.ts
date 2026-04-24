@@ -21,6 +21,9 @@ describe("research JSON-RPC schemas", () => {
       path: "/tmp/report.pdf",
       sizeBytes: 4096,
     });
+    const discard = jsonRpcRequestSchemas["research/discardUploads"].parse({
+      fileIds: ["file-1", "file-2"],
+    });
 
     const notification = jsonRpcNotificationSchemas["research/completed"].parse({
       researchId: "research-1",
@@ -48,6 +51,7 @@ describe("research JSON-RPC schemas", () => {
     });
 
     expect(request.attachedFileIds).toEqual(["file-1"]);
+    expect(discard.fileIds).toEqual(["file-1", "file-2"]);
     expect(result.path).toBe("/tmp/report.pdf");
     expect(notification.research.status).toBe("completed");
   });

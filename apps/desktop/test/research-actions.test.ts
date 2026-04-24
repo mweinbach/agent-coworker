@@ -200,6 +200,94 @@ describe("research actions", () => {
     expect(harness.state.notifications[0]?.detail).toContain(String(MAX_RESEARCH_UPLOAD_BYTES));
   });
 
+  test("startResearch discards already-uploaded blobs when a later attachment upload fails", async () => {
+    const harness = createHarness();
+    const actions = createResearchActions(harness.set as never, harness.get as never, deps);
+    const files = [
+      {
+        name: "first.txt",
+        type: "text/plain",
+        size: 5,
+        arrayBuffer: async () => Buffer.from("first").buffer,
+      },
+      {
+        name: "second.txt",
+        type: "text/plain",
+        size: 6,
+        arrayBuffer: async () => Buffer.from("second").buffer,
+      },
+    ] as unknown as File[];
+
+    requestJsonRpcMock.mockImplementation(async (_get, _set, _workspaceId, method) => {
+      if (method === "research/uploadFile") {
+        const callCount = requestJsonRpcMock.mock.calls.filter((call) => call[3] === method).length;
+        if (callCount === 1) {
+          return { file: { fileId: "file-1" } };
+        }
+        throw new Error("upload failed");
+      }
+      if (method === "research/discardUploads") {
+        return { status: "discarded" };
+      }
+      return {};
+    });
+
+    const result = await actions.startResearch({
+      input: "Analyze these files.",
+      files,
+    });
+
+    expect(result).toBeNull();
+    expect(requestJsonRpcMock).toHaveBeenCalledWith(
+      harness.get,
+      harness.set,
+      "ws-1",
+      "research/discardUploads",
+      { fileIds: ["file-1"] },
+    );
+    expect(harness.state.notifications.at(-1)?.title).toBe("Unable to start research");
+  });
+
+  test("sendResearchFollowUp discards uploaded blobs when follow-up start fails", async () => {
+    const harness = createHarness();
+    const actions = createResearchActions(harness.set as never, harness.get as never, deps);
+    const file = {
+      name: "followup.txt",
+      type: "text/plain",
+      size: 8,
+      arrayBuffer: async () => Buffer.from("followup").buffer,
+    } as unknown as File;
+
+    requestJsonRpcMock.mockImplementation(async (_get, _set, _workspaceId, method) => {
+      if (method === "research/uploadFile") {
+        return { file: { fileId: "file-2" } };
+      }
+      if (method === "research/followup") {
+        throw new Error("follow-up failed");
+      }
+      if (method === "research/discardUploads") {
+        return { status: "discarded" };
+      }
+      return {};
+    });
+
+    const result = await actions.sendResearchFollowUp({
+      parentResearchId: "research-1",
+      input: "Continue the run.",
+      files: [file],
+    });
+
+    expect(result).toBeNull();
+    expect(requestJsonRpcMock).toHaveBeenCalledWith(
+      harness.get,
+      harness.set,
+      "ws-1",
+      "research/discardUploads",
+      { fileIds: ["file-2"] },
+    );
+    expect(harness.state.notifications.at(-1)?.title).toBe("Unable to send follow-up");
+  });
+
   test("research text deltas advance the local event cursor", async () => {
     const harness = createHarness({
       researchById: {

@@ -291,6 +291,10 @@ Requests:
   - params: `{ filename, mimeType, contentBase64 }`
   - result: `{ file }`
   - stages a pending upload under `~/.cowork/research/uploads`; payloads are capped at 20 MiB decoded size
+- `research/discardUploads`
+  - params: `{ fileIds }`
+  - result: `{ status: "discarded" }`
+  - best-effort deletes staged uploads that were never consumed by `research/start` or `research/followup`
 - `research/attachFile`
   - params: `{ researchId, fileId }`
   - result: `{ research: ResearchRecord | null }`

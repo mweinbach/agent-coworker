@@ -548,6 +548,31 @@ describe("research service", () => {
     }
   });
 
+  test("rejects start requests when any requested attachment id is missing", async () => {
+    const paths = await makeTmpCoworkHome();
+    const sessionDb = await SessionDb.create({ paths });
+
+    const service = new ResearchService({
+      rootDir: paths.rootDir,
+      sessionDb,
+      getConfig: () => ({ skillsDirs: [] }) as any,
+      sendJsonRpc: () => {},
+    });
+
+    try {
+      await expect(
+        service.start({
+          input: "Use the missing upload.",
+          attachedFileIds: ["missing-file-id"],
+        }),
+      ).rejects.toThrow(/Unknown uploaded research file/);
+      expect(createResearchInteractionStreamMock).not.toHaveBeenCalled();
+    } finally {
+      sessionDb.close();
+      await fs.rm(paths.home, { recursive: true, force: true });
+    }
+  });
+
   test("keeps locally cancelled research cancelled when a late completion event arrives", async () => {
     const paths = await makeTmpCoworkHome();
     const sessionDb = await SessionDb.create({ paths });

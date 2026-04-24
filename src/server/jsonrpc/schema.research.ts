@@ -56,6 +56,11 @@ export const jsonRpcResearchRequestSchemas = {
       contentBase64: z.string().min(1).max(MAX_RESEARCH_UPLOAD_BASE64_LENGTH),
     })
     .strict(),
+  "research/discardUploads": z
+    .object({
+      fileIds: z.array(nonEmptyTrimmedStringSchema).min(1),
+    })
+    .strict(),
   "research/attachFile": z
     .object({
       researchId: nonEmptyTrimmedStringSchema,
@@ -126,6 +131,11 @@ export const jsonRpcResearchResultSchemas = {
   "research/uploadFile": z
     .object({
       file: researchInputFileSchema,
+    })
+    .strict(),
+  "research/discardUploads": z
+    .object({
+      status: z.enum(["discarded"]),
     })
     .strict(),
   "research/attachFile": z

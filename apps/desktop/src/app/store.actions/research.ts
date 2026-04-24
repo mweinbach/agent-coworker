@@ -556,20 +556,40 @@ export function createResearchActions(
 
   const uploadFiles = async (workspaceId: string, files: File[] | undefined): Promise<string[]> => {
     const fileIds: string[] = [];
-    for (const file of files ?? []) {
-      const payload = await serializeFile(file);
-      const result: any = await deps.requestJsonRpc(
-        get,
-        set,
-        workspaceId,
-        "research/uploadFile",
-        payload,
-      );
-      if (typeof result?.file?.fileId === "string") {
-        fileIds.push(result.file.fileId);
+    try {
+      for (const file of files ?? []) {
+        const payload = await serializeFile(file);
+        const result: any = await deps.requestJsonRpc(
+          get,
+          set,
+          workspaceId,
+          "research/uploadFile",
+          payload,
+        );
+        if (typeof result?.file?.fileId === "string") {
+          fileIds.push(result.file.fileId);
+        }
       }
+      return fileIds;
+    } catch (error) {
+      if (fileIds.length > 0) {
+        await discardUploadedFiles(workspaceId, fileIds);
+      }
+      throw error;
     }
-    return fileIds;
+  };
+
+  const discardUploadedFiles = async (workspaceId: string, fileIds: string[]): Promise<void> => {
+    if (fileIds.length === 0) {
+      return;
+    }
+    try {
+      await deps.requestJsonRpc(get, set, workspaceId, "research/discardUploads", {
+        fileIds,
+      });
+    } catch {
+      // Best effort cleanup; keep the original upload/start failure surfaced to the user.
+    }
   };
 
   return {
@@ -717,8 +737,10 @@ export function createResearchActions(
     },
 
     startResearch: async ({ input, title, files, settings }) => {
+      let workspaceId: string | null = null;
+      let attachedFileIds: string[] = [];
       try {
-        const workspaceId = await ensureResearchTransportWorkspace();
+        workspaceId = await ensureResearchTransportWorkspace();
         if (!workspaceId) {
           return null;
         }
@@ -728,7 +750,7 @@ export function createResearchActions(
           researchTransportWorkspaceId: workspaceId,
         }));
         deps.syncDesktopStateCache(get);
-        const attachedFileIds = await uploadFiles(workspaceId, files);
+        attachedFileIds = await uploadFiles(workspaceId, files);
         const result: any = await deps.requestJsonRpc(get, set, workspaceId, "research/start", {
           input,
           ...(title ? { title } : {}),
@@ -745,6 +767,9 @@ export function createResearchActions(
         await ensureResearchSubscription(workspaceId, result.research);
         return result.research;
       } catch (error) {
+        if (workspaceId && attachedFileIds.length > 0) {
+          await discardUploadedFiles(workspaceId, attachedFileIds);
+        }
         notify(
           "error",
           "Unable to start research",
@@ -812,12 +837,14 @@ export function createResearchActions(
     },
 
     sendResearchFollowUp: async ({ parentResearchId, input, title, files, settings }) => {
+      let workspaceId: string | null = null;
+      let attachedFileIds: string[] = [];
       try {
-        const workspaceId = await ensureResearchTransportWorkspace();
+        workspaceId = await ensureResearchTransportWorkspace();
         if (!workspaceId) {
           return null;
         }
-        const attachedFileIds = await uploadFiles(workspaceId, files);
+        attachedFileIds = await uploadFiles(workspaceId, files);
         const result: any = await deps.requestJsonRpc(get, set, workspaceId, "research/followup", {
           parentResearchId,
           input,
@@ -835,6 +862,9 @@ export function createResearchActions(
         await ensureResearchSubscription(workspaceId, result.research);
         return result.research;
       } catch (error) {
+        if (workspaceId && attachedFileIds.length > 0) {
+          await discardUploadedFiles(workspaceId, attachedFileIds);
+        }
         notify(
           "error",
           "Unable to send follow-up",

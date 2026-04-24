@@ -86,6 +86,14 @@ export function createResearchRouteHandlers(
         file: await context.research.uploadFile(params),
       }),
     ),
+    "research/discardUploads": createResearchHandler(
+      context,
+      "research/discardUploads",
+      async (params) => {
+        await context.research.discardUploadedFiles(params.fileIds);
+        return { status: "discarded" as const };
+      },
+    ),
     "research/attachFile": createResearchHandler(
       context,
       "research/attachFile",

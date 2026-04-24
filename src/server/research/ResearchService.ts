@@ -521,6 +521,9 @@ export class ResearchService {
     if (!existing) {
       return null;
     }
+    if (isTerminalResearchStatus(existing.status)) {
+      throw new Error("Cannot attach files to terminal research.");
+    }
     const file = await this.fileStore.readPendingUpload(fileId);
     if (!file) {
       throw new Error(`Unknown uploaded research file: ${fileId}`);

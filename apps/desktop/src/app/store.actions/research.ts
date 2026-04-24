@@ -66,6 +66,22 @@ function isResearchTerminalStatus(status: ResearchRecord["status"]): boolean {
   return status === "completed" || status === "failed" || status === "cancelled";
 }
 
+function sourceIdentity(source: Pick<ResearchRecord["sources"][number], "sourceType" | "url">): string {
+  return `${source.sourceType}:${source.url}`;
+}
+
+function mergeResearchSource(
+  existing: ResearchRecord["sources"][number],
+  source: ResearchRecord["sources"][number],
+): ResearchRecord["sources"][number] {
+  return {
+    ...existing,
+    ...source,
+    title: source.title ?? existing.title,
+    host: source.host ?? existing.host,
+  };
+}
+
 function orderResearchIds(byId: Record<string, ResearchRecord>): string[] {
   return Object.values(byId)
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
@@ -283,12 +299,35 @@ export function createResearchActions(
             if (!existing || !source) {
               return {};
             }
-            const signature = `${source.sourceType}:${source.url}:${source.title ?? ""}`;
-            const known = new Set(
-              existing.sources.map((entry: ResearchRecord["sources"][number]) => `${entry.sourceType}:${entry.url}:${entry.title ?? ""}`),
+            const identity = sourceIdentity(source);
+            const existingIndex = existing.sources.findIndex(
+              (entry: ResearchRecord["sources"][number]) => sourceIdentity(entry) === identity,
             );
-            if (known.has(signature)) {
-              return {};
+            if (existingIndex !== -1) {
+              const current = existing.sources[existingIndex];
+              if (!current) {
+                return {};
+              }
+              const merged = mergeResearchSource(current, source);
+              if (JSON.stringify(merged) === JSON.stringify(current)) {
+                return {};
+              }
+              const sources = existing.sources.map((entry: ResearchRecord["sources"][number], index: number) => (
+                index === existingIndex ? merged : entry
+              ));
+              const nextResearch = {
+                ...existing,
+                sources,
+                updatedAt: new Date().toISOString(),
+              };
+              const researchById = {
+                ...s.researchById,
+                [researchId]: nextResearch,
+              };
+              return {
+                researchById,
+                researchOrder: orderResearchIds(researchById),
+              };
             }
             const nextResearch = {
               ...existing,

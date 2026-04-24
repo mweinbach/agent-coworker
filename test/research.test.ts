@@ -391,6 +391,33 @@ describe("research service", () => {
     }
   });
 
+  test("rejects attaching files to terminal research records", async () => {
+    const paths = await makeTmpCoworkHome();
+    const sessionDb = await SessionDb.create({ paths });
+
+    await sessionDb.upsertResearch(makeResearchRecord({
+      id: "research-terminal-attach",
+      status: "completed",
+      interactionId: "interaction-terminal-attach",
+      inputs: { files: [] },
+    }));
+
+    const service = new ResearchService({
+      rootDir: paths.rootDir,
+      sessionDb,
+      getConfig: () => ({ skillsDirs: [] } as any),
+      sendJsonRpc: () => {},
+    });
+
+    try {
+      await expect(service.attachUploadedFile("research-terminal-attach", "pending-file")).rejects.toThrow(/terminal/i);
+      expect(sessionDb.getResearch("research-terminal-attach")?.inputs.files).toEqual([]);
+    } finally {
+      sessionDb.close();
+      await fs.rm(paths.home, { recursive: true, force: true });
+    }
+  });
+
   test("keeps locally cancelled research cancelled when a late completion event arrives", async () => {
     const paths = await makeTmpCoworkHome();
     const sessionDb = await SessionDb.create({ paths });

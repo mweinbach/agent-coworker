@@ -30,12 +30,7 @@ describe("main CI workflow", () => {
     expect(workflow).toContain("run: bun run typecheck");
     expect(workflow).toContain("- name: Unit tests");
     expect(workflow).toContain("run: bun run test:stable -- --max-concurrency 1");
-    expect(workflow).toContain("- name: Stable per-file unit tests");
-    expect(workflow).toContain("run: bun run test:stable -- --max-concurrency 1");
-  });
-
-  test("runs stable per-file tests only on push events", () => {
-    expect(workflow).toContain("if: github.event_name == 'push'");
+    expect(workflow).not.toContain("- name: Stable per-file unit tests");
   });
 
   test("keeps remote MCP smoke opt-in via secrets-backed environment", () => {

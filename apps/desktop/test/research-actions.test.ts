@@ -231,6 +231,60 @@ describe("research actions", () => {
     expect(harness.state.researchById["research-1"]?.lastEventId).toBe("evt-2");
   });
 
+  test("research source events merge by stable url identity", async () => {
+    const harness = createHarness({
+      researchById: {
+        "research-1": {
+          id: "research-1",
+          title: "Live run",
+          status: "running",
+          outputsMarkdown: "",
+          lastEventId: "evt-1",
+          thoughtSummaries: [],
+          sources: [{
+            sourceType: "url",
+            url: "https://example.com/report",
+            title: "url_context_result",
+            host: "example.com",
+          }],
+          updatedAt: "2026-04-21T00:00:00.000Z",
+        },
+      },
+      researchOrder: ["research-1"],
+    });
+    let routeHandler: ((message: { kind: "notification"; method: string; params?: Record<string, unknown> }) => void) | null = null;
+    const actions = createResearchActions(harness.set as never, harness.get as never, {
+      ...deps,
+      registerWorkspaceJsonRpcRouter: (_workspaceId: string, handler: NonNullable<typeof routeHandler>) => {
+        routeHandler = handler;
+        return () => {};
+      },
+      requestJsonRpc: async () => ({ path: "/tmp/report.pdf" }),
+    } as never);
+
+    await actions.exportResearch("research-1", "pdf");
+    routeHandler?.({
+      kind: "notification",
+      method: "research/sourceFound",
+      params: {
+        researchId: "research-1",
+        source: {
+          sourceType: "url",
+          url: "https://example.com/report",
+          title: "Final report title",
+          host: "example.com",
+        },
+      },
+    });
+
+    expect(harness.state.researchById["research-1"]?.sources).toEqual([{
+      sourceType: "url",
+      url: "https://example.com/report",
+      title: "Final report title",
+      host: "example.com",
+    }]);
+  });
+
   test("research subscriptions apply the returned catch-up snapshot", async () => {
     const harness = createHarness({
       researchById: {},

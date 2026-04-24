@@ -131,7 +131,7 @@ function ResearchListCard({
     return (
       <div
         className={cn(
-          "flex w-full min-w-0 items-center gap-2 rounded-xl border border-border/60 bg-background/80 px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]",
+          "flex w-full min-w-0 items-center gap-2 rounded-xl border border-border/60 bg-background/80 px-3 py-2.5 app-shadow-surface",
         )}
       >
         <Input
@@ -164,7 +164,7 @@ function ResearchListCard({
         "group relative flex w-full min-w-0 items-start gap-2 rounded-xl border px-3 py-2.5 text-left transition-[border-color,background-color,box-shadow,transform] duration-200",
         isChild && "before:absolute before:-left-3 before:top-1.5 before:bottom-1.5 before:w-px before:bg-border/55",
         selected
-          ? "border-primary/45 bg-primary/[0.085] text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]"
+          ? "border-primary/45 bg-primary/[0.085] text-foreground app-shadow-surface"
           : "border-border/45 bg-background/55 text-foreground/92 hover:border-border/70 hover:bg-background/80",
       )}
       onClick={onSelect}

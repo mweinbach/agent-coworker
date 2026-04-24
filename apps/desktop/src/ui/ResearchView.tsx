@@ -34,7 +34,7 @@ export function ResearchView() {
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-row">
-      <section className="flex min-h-0 min-w-[18rem] w-[clamp(18rem,26vw,23.75rem)] shrink-0 flex-col border-r border-border/40 bg-[linear-gradient(180deg,hsl(var(--background))_0%,hsl(var(--muted)/0.16)_100%)]">
+      <section className="flex min-h-0 min-w-[18rem] w-[clamp(18rem,26vw,23.75rem)] shrink-0 flex-col border-r border-border/40 bg-background/95">
         <div className="border-b border-border/35 px-4 py-3">
           <div className="flex items-center justify-between gap-3">
             <div>

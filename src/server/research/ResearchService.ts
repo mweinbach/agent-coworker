@@ -324,6 +324,9 @@ export class ResearchService {
     if (parent.status !== "completed") {
       throw new Error("Follow-up is only available after the selected research has completed.");
     }
+    if (parent.planPending) {
+      throw new Error("Follow-up is only available after the selected research plan has been approved.");
+    }
     const input = params.input.trim();
     if (!input) {
       throw new Error("Follow-up input is required.");

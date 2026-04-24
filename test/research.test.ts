@@ -806,6 +806,35 @@ describe("research service", () => {
     }
   });
 
+  test("rejects follow-up requests while parent research plan approval is pending", async () => {
+    const paths = await makeTmpCoworkHome();
+    const sessionDb = await SessionDb.create({ paths });
+
+    await sessionDb.upsertResearch(makeResearchRecord({
+      id: "research-parent-plan-pending",
+      status: "completed",
+      interactionId: "interaction-parent-plan-pending",
+      planPending: true,
+    }));
+
+    const service = new ResearchService({
+      rootDir: paths.rootDir,
+      sessionDb,
+      getConfig: () => ({ skillsDirs: [] } as any),
+      sendJsonRpc: () => {},
+    });
+
+    try {
+      await expect(service.followUp("research-parent-plan-pending", {
+        input: "Continue before plan approval.",
+      })).rejects.toThrow(/approved/i);
+      expect(createResearchInteractionStreamMock).not.toHaveBeenCalled();
+    } finally {
+      sessionDb.close();
+      await fs.rm(paths.home, { recursive: true, force: true });
+    }
+  });
+
   test("renames a research row, persists, and broadcasts research/updated", async () => {
     const paths = await makeTmpCoworkHome();
     const sessionDb = await SessionDb.create({ paths });

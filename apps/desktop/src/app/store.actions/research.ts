@@ -11,7 +11,11 @@ import {
   waitForControlSession,
 } from "../store.helpers";
 import type { AppStoreActions, StoreGet, StoreSet } from "../store.helpers";
-import type { ResearchExportFormat, ResearchRecord } from "../../../../../src/server/research/types";
+import {
+  MAX_RESEARCH_UPLOAD_BYTES,
+  type ResearchExportFormat,
+  type ResearchRecord,
+} from "../../../../../src/server/research/types";
 import type { ResearchSettingsState } from "../types";
 
 const researchRouterCleanupByWorkspace = new Map<string, () => void>();
@@ -117,6 +121,9 @@ async function serializeFile(file: File): Promise<{
   mimeType: string;
   contentBase64: string;
 }> {
+  if (file.size > MAX_RESEARCH_UPLOAD_BYTES) {
+    throw new Error(`Research uploads are limited to ${MAX_RESEARCH_UPLOAD_BYTES} bytes.`);
+  }
   const arrayBuffer = await file.arrayBuffer();
   return {
     filename: file.name || "upload.bin",

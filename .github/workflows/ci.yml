@@ -52,7 +52,7 @@ jobs:
   test:
     name: Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -76,10 +76,10 @@ jobs:
       - name: Install dependencies
         run: bun install
 
-      # Serialize async tests: many desktop tests swap global JSDOM document/window and
-      # cannot run concurrently without clobbering each other on shared globalThis.
+      # Run files in isolated Bun processes: the aggregate runner can retain JSDOM/global
+      # state until shutdown and hang after the final desktop test on CI.
       - name: Unit tests
-        run: bun test --max-concurrency 1
+        run: bun run test:stable -- --max-concurrency 1
 
   test-stable:
     name: Stable per-file tests

@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 
+import { MAX_RESEARCH_UPLOAD_BYTES } from "../../../src/server/research/types";
+
 const { createResearchActions, __internalResearchActionBindings } = await import("../src/app/store.actions/research");
 
 type TestState = {
@@ -164,6 +166,30 @@ describe("research actions", () => {
     expect(harness.state.notifications[0]?.kind).toBe("error");
     expect(harness.state.notifications[0]?.title).toBe("Unable to export research");
     expect(harness.state.notifications[0]?.detail).toBe("The export completed without a downloadable file path.");
+  });
+
+  test("startResearch rejects oversized files before reading attachment bytes", async () => {
+    const harness = createHarness();
+    const arrayBufferMock = mock(async () => new ArrayBuffer(0));
+    const oversizedFile = {
+      name: "huge.pdf",
+      type: "application/pdf",
+      size: MAX_RESEARCH_UPLOAD_BYTES + 1,
+      arrayBuffer: arrayBufferMock,
+    } as unknown as File;
+    const actions = createResearchActions(harness.set as never, harness.get as never, deps);
+
+    const result = await actions.startResearch({
+      input: "Analyze this large file.",
+      files: [oversizedFile],
+    });
+
+    expect(result).toBeNull();
+    expect(arrayBufferMock).not.toHaveBeenCalled();
+    expect(requestJsonRpcMock).not.toHaveBeenCalled();
+    expect(harness.state.notifications).toHaveLength(1);
+    expect(harness.state.notifications[0]?.title).toBe("Unable to start research");
+    expect(harness.state.notifications[0]?.detail).toContain(String(MAX_RESEARCH_UPLOAD_BYTES));
   });
 
   test("research text deltas advance the local event cursor", async () => {

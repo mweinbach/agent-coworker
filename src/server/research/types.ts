@@ -6,6 +6,7 @@ const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
 export const RESEARCH_STATUS_VALUES = ["pending", "running", "completed", "cancelled", "failed"] as const;
 export const RESEARCH_EXPORT_FORMAT_VALUES = ["markdown", "pdf", "docx"] as const;
 export const RESEARCH_SOURCE_TYPE_VALUES = ["url", "file", "place"] as const;
+export const MAX_RESEARCH_UPLOAD_BYTES = 20 * 1024 * 1024;
 
 export const researchStatusSchema = z.enum(RESEARCH_STATUS_VALUES);
 export const researchExportFormatSchema = z.enum(RESEARCH_EXPORT_FORMAT_VALUES);

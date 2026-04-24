@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { ensurePrivateDirectory, hardenPrivateFile } from "../sessionDb/fileHardening";
-import type { ResearchInputFile } from "./types";
+import { MAX_RESEARCH_UPLOAD_BYTES, type ResearchInputFile } from "./types";
 import {
   createResearchFileSearchStore,
   deleteResearchFileSearchStore,
@@ -14,7 +14,6 @@ type ResearchFileStoreOptions = {
 };
 
 const metadataVersion = 1;
-export const MAX_RESEARCH_UPLOAD_BYTES = 20 * 1024 * 1024;
 
 function sanitizeFilename(filename: string): string {
   const base = path.basename(filename).trim();

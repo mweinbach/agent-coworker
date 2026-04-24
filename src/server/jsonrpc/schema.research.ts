@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import {
+  MAX_RESEARCH_UPLOAD_BYTES,
   researchExportFormatSchema,
   researchInputFileSchema,
   researchRecordSchema,
@@ -8,7 +9,6 @@ import {
   researchSourceSchema,
   researchThoughtSummarySchema,
 } from "../research/types";
-import { MAX_RESEARCH_UPLOAD_BYTES } from "../research/researchFileStore";
 import { nonEmptyTrimmedStringSchema } from "./schema.shared";
 
 const researchSummarySchema = researchRecordSchema;

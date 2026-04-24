@@ -18,6 +18,7 @@ import {
   type OpenPathInput,
   type PreferredFileAppInput,
   type PreviewOSFileInput,
+  type SaveExportedFileInput,
   type ReadFileForPreviewInput,
   type ReadFileInput,
   type ReadTranscriptInput,
@@ -48,6 +49,7 @@ import {
   preferredFileAppInputSchema,
   openExternalUrlInputSchema,
   previewOSFileInputSchema,
+  saveExportedFileInputSchema,
   readFileForPreviewInputSchema,
   readFileInputSchema,
   persistedStateInputSchema,
@@ -126,6 +128,10 @@ function assertPreviewOSFileInput(opts: PreviewOSFileInput): void {
 
 function assertOpenPathInput(opts: OpenPathInput): void {
   parseWithSchema(openPathInputSchema, opts, "openPath options");
+}
+
+function assertSaveExportedFileInput(opts: SaveExportedFileInput): void {
+  parseWithSchema(saveExportedFileInputSchema, opts, "saveExportedFile options");
 }
 
 function assertPreferredFileAppInput(opts: PreferredFileAppInput): void {
@@ -336,6 +342,11 @@ const desktopApi = Object.freeze<DesktopApi>({
   openPath: (opts: OpenPathInput) => {
     assertOpenPathInput(opts);
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.openPath, opts);
+  },
+
+  saveExportedFile: (opts: SaveExportedFileInput) => {
+    assertSaveExportedFileInput(opts);
+    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.saveExportedFile, opts);
   },
 
   openExternalUrl: (opts: OpenExternalUrlInput) => {

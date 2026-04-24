@@ -527,6 +527,10 @@ export function createWebAdapter(): DesktopApi {
     async openPath(opts): Promise<void> {
       openWindow(buildWebRouteUrl("/cowork/fs/open", { path: opts.path }));
     },
+    async saveExportedFile(opts): Promise<string | null> {
+      openWindow(buildWebRouteUrl("/cowork/fs/open", { path: opts.sourcePath }));
+      return opts.sourcePath;
+    },
     async openExternalUrl(opts): Promise<void> {
       window.open(opts.url, "_blank", "noopener");
     },

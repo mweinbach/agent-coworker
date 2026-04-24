@@ -8,6 +8,7 @@ import {
   resolveAllowedDirectoryPath,
   resolveAllowedPath,
   resolveAllowedRevealPath,
+  resolveAllowedSaveExportSourcePath,
 } from "../electron/services/ipcSecurity";
 
 describe("desktop IPC security helpers", () => {
@@ -97,6 +98,23 @@ describe("desktop IPC security helpers", () => {
       const coworkSkill = path.join(home, ".cowork", "skills", "some-skill", "SKILL.md");
       expect(() => resolveAllowedPath([workspaceRoot], coworkSkill)).toThrow("outside allowed workspace roots");
       expect(() => resolveAllowedRevealPath([workspaceRoot], coworkSkill)).not.toThrow();
+    } finally {
+      await fs.rm(tempWorkspace, { recursive: true, force: true });
+    }
+  });
+
+  test("resolveAllowedSaveExportSourcePath allows ~/.cowork/research exports and rejects other home paths", async () => {
+    const tempWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-ws-"));
+    const workspaceRoot = await fs.realpath(tempWorkspace);
+    const home = os.homedir();
+    try {
+      const researchExport = path.join(home, ".cowork", "research", "research-1", "report.pdf");
+      const unrelatedHomePath = path.join(home, ".cowork", "auth", "codex-cli", "auth.json");
+
+      expect(resolveAllowedSaveExportSourcePath([workspaceRoot], researchExport)).toBe(researchExport);
+      expect(() => resolveAllowedSaveExportSourcePath([workspaceRoot], unrelatedHomePath)).toThrow(
+        "outside allowed workspace roots",
+      );
     } finally {
       await fs.rm(tempWorkspace, { recursive: true, force: true });
     }

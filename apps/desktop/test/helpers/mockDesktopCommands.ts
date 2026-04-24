@@ -88,6 +88,7 @@ export function createDesktopCommandsMock(
     getPreferredFileApp: async () => null,
     previewOSFile: async () => {},
     openPath: async () => {},
+    saveExportedFile: async () => null,
     openExternalUrl: async () => {},
     revealPath: async () => {},
     copyPath: async () => {},

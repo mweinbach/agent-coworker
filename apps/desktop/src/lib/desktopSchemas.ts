@@ -23,6 +23,7 @@ import type {
   OpenPathInput,
   PreferredFileAppInput,
   PreviewOSFileInput,
+  SaveExportedFileInput,
   ReadFileForPreviewInput,
   ReadFileInput,
   ReadTranscriptInput,
@@ -165,6 +166,10 @@ export const listDirectoryInputSchema: z.ZodType<ListDirectoryInput> = z.object(
 });
 
 export const openPathInputSchema: z.ZodType<OpenPathInput> = sharedPathSchema;
+export const saveExportedFileInputSchema: z.ZodType<SaveExportedFileInput> = z.object({
+  sourcePath: nonEmptyStringSchema,
+  defaultFileName: validatedSegmentSchema,
+});
 export const preferredFileAppInputSchema: z.ZodType<PreferredFileAppInput> = sharedPathSchema;
 export const openExternalUrlInputSchema: z.ZodType<OpenExternalUrlInput> = z.object({
   url: nonEmptyStringSchema,

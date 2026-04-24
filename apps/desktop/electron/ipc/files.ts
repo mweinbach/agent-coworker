@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 
-import { clipboard, shell, BrowserWindow } from "electron";
+import { app, clipboard, dialog, shell, BrowserWindow } from "electron";
 
 import {
   DESKTOP_IPC_CHANNELS,
@@ -17,6 +18,7 @@ import {
   type ReadFileInput,
   type RenamePathInput,
   type RevealPathInput,
+  type SaveExportedFileInput,
   type TrashPathInput,
 } from "../../src/lib/desktopApi";
 import {
@@ -30,6 +32,7 @@ import {
   readFileInputSchema,
   renamePathInputSchema,
   revealPathInputSchema,
+  saveExportedFileInputSchema,
   trashPathInputSchema,
 } from "../../src/lib/desktopSchemas";
 import { resolveDesktopBuiltinSkillRootsForReveal } from "../services/desktopBuiltinPaths";
@@ -37,6 +40,7 @@ import {
   resolveAllowedDirectoryPath,
   resolveAllowedPath,
   resolveAllowedRevealPath,
+  resolveAllowedSaveExportSourcePath,
 } from "../services/ipcSecurity";
 import { isExplorerEntryHidden } from "../services/explorerVisibility";
 import { DEFAULT_PREVIEW_MAX_BYTES, readCappedFilePreview } from "../services/filePreviewRead";
@@ -149,6 +153,40 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
     if (errString) {
       throw new Error(errString);
     }
+  });
+
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.saveExportedFile, async (event, args: SaveExportedFileInput) => {
+    const input = parseWithSchema(saveExportedFileInputSchema, args, "saveExportedFile options");
+    await workspaceRoots.ensureApprovedWorkspaceRoots();
+    const safeSourcePath = resolveAllowedSaveExportSourcePath(
+      workspaceRoots.getApprovedWorkspaceRoots(),
+      input.sourcePath,
+    );
+    const downloadsPath = (() => {
+      try {
+        return app.getPath("downloads");
+      } catch {
+        return os.homedir();
+      }
+    })();
+    const defaultPath = path.join(downloadsPath || os.homedir(), input.defaultFileName);
+    const ownerWindow = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getFocusedWindow() ?? undefined;
+    const result = ownerWindow
+      ? await dialog.showSaveDialog(ownerWindow, {
+          title: "Save research export",
+          defaultPath,
+        })
+      : await dialog.showSaveDialog({
+          title: "Save research export",
+          defaultPath,
+        });
+
+    if (result.canceled || !result.filePath) {
+      return null;
+    }
+
+    await fs.copyFile(safeSourcePath, result.filePath);
+    return result.filePath;
   });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.revealPath, async (_event, args: RevealPathInput) => {

@@ -1,4 +1,4 @@
-import { revealPath } from "../../lib/desktopCommands";
+import { saveExportedFile } from "../../lib/desktopCommands";
 import { requestJsonRpc, registerWorkspaceJsonRpcLifecycle, registerWorkspaceJsonRpcRouter } from "../store.helpers/jsonRpcSocket";
 import {
   ensureControlSocket,
@@ -63,6 +63,29 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
     binary += String.fromCharCode(...chunk);
   }
   return btoa(binary);
+}
+
+function extensionForResearchExport(format: ResearchExportFormat): string {
+  switch (format) {
+    case "markdown":
+      return "md";
+    case "pdf":
+      return "pdf";
+    case "docx":
+      return "docx";
+  }
+}
+
+function buildResearchExportFileName(title: string | undefined, format: ResearchExportFormat): string {
+  const extension = extensionForResearchExport(format);
+  const sanitizedTitle = (title ?? "")
+    .normalize("NFKC")
+    .replace(/[<>:"/\\|?*\u0000-\u001F]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[. ]+$/g, "");
+  const baseName = sanitizedTitle.length > 0 ? sanitizedTitle : "report";
+  return `${baseName}.${extension}`;
 }
 
 async function serializeFile(file: File): Promise<{
@@ -721,11 +744,19 @@ export function createResearchActions(
         const result = await requestJsonRpc(get, set, workspaceId, "research/export", { researchId, format });
         const outputPath = typeof result?.path === "string" ? result.path : null;
         if (!outputPath) {
+          notify("error", "Unable to export research", "The export completed without a downloadable file path.");
           return null;
         }
-        await revealPath({ path: outputPath });
-        notify("info", "Research exported", outputPath);
-        return outputPath;
+        const defaultFileName = buildResearchExportFileName(get().researchById[researchId]?.title, format);
+        const savedPath = await saveExportedFile({
+          sourcePath: outputPath,
+          defaultFileName,
+        });
+        if (!savedPath) {
+          return null;
+        }
+        notify("info", "Research exported", savedPath);
+        return savedPath;
       } catch (error) {
         notify("error", "Unable to export research", error instanceof Error ? error.message : String(error));
         return null;

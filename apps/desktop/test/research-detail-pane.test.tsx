@@ -5,8 +5,11 @@ import { createRoot } from "react-dom/client";
 
 import { setupJsdom } from "./jsdomHarness";
 
-mock.module("../src/ui/research/ResearchExportMenu", () => ({
-  ResearchExportMenu: () => createElement("div", { "data-testid": "research-export-menu" }, "export"),
+mock.module("../src/components/ui/button", () => ({
+  Button: ({
+    children,
+    ...props
+  }: any) => createElement("button", props, children),
 }));
 
 mock.module("../src/ui/research/ResearchFollowUpComposer", () => ({
@@ -328,6 +331,80 @@ describe("research detail pane layout", () => {
         "width: min(var(--research-sources-panel-width), calc(100% - 0.75rem))",
       );
       expect(openDrawer.getAttribute("style")).not.toContain("flex-basis");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      resetAppStore();
+      harness.restore();
+    }
+  });
+
+  test("passes export availability to the export menu based on completion and report content", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      const root = createRoot(container);
+      resetAppStore({
+        researchExportPendingIds: ["research-complete"],
+      });
+
+      await act(async () => {
+        root.render(
+          createElement("div", null,
+            createElement(ResearchDetailPane, {
+              research: {
+                id: "research-empty",
+                parentResearchId: null,
+                title: "Empty report",
+                prompt: "Research prompt",
+                status: "completed",
+                interactionId: null,
+                lastEventId: null,
+                inputs: { fileSearchStoreName: undefined, files: [] },
+                settings: DEFAULT_RESEARCH_SETTINGS,
+                outputsMarkdown: "   ",
+                thoughtSummaries: [],
+                sources: [],
+                createdAt: "2026-04-21T21:00:00.000Z",
+                updatedAt: "2026-04-21T21:05:00.000Z",
+                error: null,
+              },
+            }),
+            createElement(ResearchDetailPane, {
+              research: {
+                id: "research-complete",
+                parentResearchId: null,
+                title: "Completed report",
+                prompt: "Research prompt",
+                status: "completed",
+                interactionId: null,
+                lastEventId: null,
+                inputs: { fileSearchStoreName: undefined, files: [] },
+                settings: DEFAULT_RESEARCH_SETTINGS,
+                outputsMarkdown: "# Completed report",
+                thoughtSummaries: [],
+                sources: [],
+                createdAt: "2026-04-21T21:00:00.000Z",
+                updatedAt: "2026-04-21T21:05:00.000Z",
+                error: null,
+              },
+            }),
+          ),
+        );
+      });
+
+      const exportButtons = [...container.querySelectorAll('button[aria-haspopup="menu"]')];
+      expect(exportButtons).toHaveLength(2);
+
+      expect((exportButtons[0] as HTMLButtonElement).disabled).toBe(true);
+      expect((exportButtons[1] as HTMLButtonElement).disabled).toBe(false);
 
       await act(async () => {
         root.unmount();

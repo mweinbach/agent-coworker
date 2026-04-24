@@ -131,7 +131,7 @@ function ResearchListCard({
     return (
       <div
         className={cn(
-          "flex w-full min-w-0 items-center gap-2 rounded-xl border border-border/60 bg-background/80 px-3 py-2.5 app-shadow-surface",
+          "mx-3 flex w-auto min-w-0 items-center gap-2 rounded-md border border-border/60 bg-background px-3 py-2",
         )}
       >
         <Input
@@ -161,11 +161,11 @@ function ResearchListCard({
       role="option"
       aria-selected={selected}
       className={cn(
-        "group relative flex w-full min-w-0 items-start gap-2 rounded-xl border px-3 py-2.5 text-left transition-[border-color,background-color,box-shadow,transform] duration-200",
-        isChild && "before:absolute before:-left-3 before:top-1.5 before:bottom-1.5 before:w-px before:bg-border/55",
+        "group relative flex w-full min-w-0 items-start gap-2 px-4 py-3 text-left transition-colors duration-150",
+        isChild && "pl-9",
         selected
-          ? "border-primary/45 bg-primary/[0.085] text-foreground app-shadow-surface"
-          : "border-border/45 bg-background/55 text-foreground/92 hover:border-border/70 hover:bg-background/80",
+          ? "bg-primary/[0.08] text-foreground"
+          : "text-foreground/92 hover:bg-muted/35",
       )}
       onClick={onSelect}
       onContextMenu={onContextMenu}
@@ -174,9 +174,12 @@ function ResearchListCard({
         onStartEditing();
       }}
     >
+      {selected ? (
+        <span className="absolute inset-y-1 left-0 w-0.5 rounded-full bg-primary" aria-hidden="true" />
+      ) : null}
       {isChild ? (
         <CornerDownRightIcon
-          className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground/60"
+          className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground/55"
           aria-hidden="true"
         />
       ) : null}
@@ -197,11 +200,11 @@ function ResearchListCard({
           {displayTitle}
         </div>
         {snippet ? (
-          <div className="mt-1 line-clamp-2 text-[11.5px] leading-snug text-muted-foreground">
+          <div className="mt-0.5 line-clamp-2 text-[11.5px] leading-snug text-muted-foreground">
             {snippet}
           </div>
         ) : null}
-        <div className="mt-2 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px] text-muted-foreground">
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px] text-muted-foreground">
           {timeLabel ? <span>{timeLabel}</span> : null}
           {sourceCount > 0 ? <span>{sourceCount} source{sourceCount === 1 ? "" : "s"}</span> : null}
           {thoughtCount > 0 ? <span>{thoughtCount} note{thoughtCount === 1 ? "" : "s"}</span> : null}
@@ -247,21 +250,24 @@ function renderResearchTree({
     const isChild = depth > 0;
 
     return (
-      <div key={research.id} className="space-y-1.5">
+      <div key={research.id} className="border-b border-border/35 last:border-b-0">
         <Collapsible className="space-y-1" defaultOpen={descendantSelected || depth < 1}>
-          <div className={cn("flex items-start gap-1.5", isChild && "pl-3")}>
+          <div className="flex items-start">
             {children.length > 0 ? (
               <CollapsibleTrigger asChild>
                 <button
                   type="button"
-                  className="group mt-2 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border border-transparent text-muted-foreground transition-colors hover:border-border/60 hover:bg-background/70 hover:text-foreground"
+                  className={cn(
+                    "group mt-3 ml-2 flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground",
+                    isChild && "ml-5",
+                  )}
                   aria-label={descendantSelected ? "Collapse follow-ups" : "Expand follow-ups"}
                 >
                   <ChevronRightIcon className="h-3.5 w-3.5 transition-transform group-data-[state=open]:rotate-90" />
                 </button>
               </CollapsibleTrigger>
             ) : (
-              <div className="mt-1.5 h-5 w-5 shrink-0" />
+              <div className={cn("mt-3 h-5 w-5 shrink-0", isChild ? "ml-5" : "ml-2")} />
             )}
             <ResearchListCard
               research={research}
@@ -279,7 +285,7 @@ function renderResearchTree({
           </div>
           {children.length > 0 ? (
             <CollapsibleContent>
-              <div className="ml-5 border-l border-border/35 pl-3 space-y-1.5">
+              <div className="space-y-0">
                 {renderResearchTree({
                   parentId: research.id,
                   childrenByParent,
@@ -372,7 +378,7 @@ export function ResearchCardGrid({
   }, [onSelectResearch, startEditing]);
 
   return (
-    <div className="space-y-1.5" role="listbox" aria-label="Research history">
+    <div role="listbox" aria-label="Research history">
       {renderResearchTree({
         parentId: null,
         childrenByParent,

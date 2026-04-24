@@ -1,54 +1,23 @@
-import { defaultModelForProvider } from "@cowork/providers/catalog";
-import { z } from "zod";
-
-import {
-  copyPath,
-  createDirectory,
-  deleteTranscript,
-  listDirectory,
-  loadState,
-  openPath,
-  pickWorkspaceDirectory,
-  readTranscript,
-  renamePath,
-  revealPath,
-  stopWorkspaceServer,
-  trashPath,
-} from "../../lib/desktopCommands";
-import type { PluginCatalogEntry, ProviderName } from "../../lib/wsProtocol";
+import type { PluginCatalogEntry } from "../../lib/wsProtocol";
 import {
   resolvePluginCatalogWorkspaceSelection,
   resolvePluginManagementWorkspaceId,
 } from "../pluginManagement";
 import {
   type AppStoreActions,
-  appendThreadTranscript,
-  basename,
-  buildContextPreamble,
   ensureControlSocket,
   ensureServerRunning,
-  ensureThreadRuntime,
-  ensureThreadSocket,
   ensureWorkspaceRuntime,
-  isProviderName,
   makeId,
-  mapTranscriptToFeed,
-  normalizeThreadTitleSource,
   nowIso,
-  persistNow,
-  providerAuthMethodsFor,
   pushNotification,
-  queuePendingThreadMessage,
   RUNTIME,
   requestJsonRpcControlEvent,
   type StoreGet,
   type StoreSet,
-  sendThread,
-  sendUserMessageToThread,
   syncDesktopStateCache,
-  truncateTitle,
 } from "../store.helpers";
-import type { ThreadRecord, WorkspaceRecord, WorkspaceRuntime } from "../types";
+import type { WorkspaceRuntime } from "../types";
 
 type PluginSelection = Pick<PluginCatalogEntry, "id" | "scope">;
 

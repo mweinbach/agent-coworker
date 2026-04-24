@@ -11,7 +11,6 @@ import type {
   ExplorerEntry,
   MobileRelayBridgeState,
   ReadFileForPreviewOutput,
-  SetWindowAppearanceInput,
   SystemAppearance,
   UpdaterState,
 } from "./desktopApi";
@@ -19,7 +18,6 @@ import { createDefaultUpdaterState } from "./desktopApi";
 import {
   getSavedServerUrl,
   getSavedWorkspacePath,
-  loadPersistedState,
   savePersistedState,
   saveServerUrl,
   saveWorkspacePath,
@@ -507,7 +505,7 @@ export function createWebAdapter(): DesktopApi {
 
     async pickWorkspaceDirectory(): Promise<string | null> {
       const candidate = window.prompt("Workspace path");
-      if (!candidate || !candidate.trim()) {
+      if (!candidate?.trim()) {
         return null;
       }
       const resolved = await maybePostWebJson<{ path: string }>(

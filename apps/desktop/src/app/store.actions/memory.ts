@@ -1,5 +1,3 @@
-import type { MemoryScope } from "../../../../../src/memoryStore";
-
 import {
   type AppStoreActions,
   ensureControlSocket,

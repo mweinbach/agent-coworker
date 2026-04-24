@@ -206,30 +206,6 @@ function shouldMergeToolTraceItems(
   return argsCompatible && resultCompatible && approvalsCompatible;
 }
 
-function mergeToolTraceItems(toolItems: Extract<FeedItem, { kind: "tool" }>[]): ToolTraceItem[] {
-  const traceItems: ToolTraceItem[] = [];
-
-  for (const item of toolItems) {
-    const previous = traceItems[traceItems.length - 1];
-    if (previous && shouldMergeToolTraceItems(previous, item)) {
-      traceItems[traceItems.length - 1] = {
-        ...previous,
-        ts: item.ts,
-        state: item.state,
-        args: item.args ?? previous.args,
-        result: item.result ?? previous.result,
-        approval: item.approval ?? previous.approval,
-        sourceIds: [...previous.sourceIds, item.id],
-      };
-      continue;
-    }
-
-    traceItems.push({ ...item, sourceIds: [item.id] });
-  }
-
-  return traceItems;
-}
-
 function buildActivityTraceEntries(items: ActivityFeedItem[]): ActivityTraceEntry[] {
   const entries: ActivityTraceEntry[] = [];
 

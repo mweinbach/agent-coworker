@@ -13,15 +13,12 @@ import type {
   PluginCatalogSnapshot,
   PluginInstallPreview,
   ProviderName,
-  ServerErrorCode,
-  ServerErrorSource,
   ServerEvent,
   SkillCatalogSnapshot,
   SkillEntry,
   SkillInstallationEntry,
   SkillInstallPreview,
   SkillUpdateCheckResult,
-  TodoItem,
 } from "../lib/wsProtocol";
 import type { WorkspaceProviderOptions } from "./openaiCompatibleProviderOptions";
 

@@ -1,27 +1,10 @@
 import { defaultModelForProvider } from "@cowork/providers/catalog";
-import { z } from "zod";
 
-import {
-  copyPath,
-  createDirectory,
-  deleteTranscript,
-  listDirectory,
-  loadState,
-  openPath,
-  pickWorkspaceDirectory,
-  readTranscript,
-  renamePath,
-  revealPath,
-  stopWorkspaceServer,
-  trashPath,
-} from "../../lib/desktopCommands";
-import type { ProviderName } from "../../lib/wsProtocol";
+import { pickWorkspaceDirectory, stopWorkspaceServer } from "../../lib/desktopCommands";
 import { applyWorkspaceOrder, reorderSidebarItemsById } from "../../ui/sidebarHelpers";
 import {
   type AppStoreActions,
-  appendThreadTranscript,
   basename,
-  buildContextPreamble,
   bumpWorkspaceJsonRpcSocketGeneration,
   bumpWorkspaceStartGeneration,
   clearPendingThreadSteers,
@@ -30,26 +13,17 @@ import {
   disposeWorkspaceJsonRpcState,
   ensureControlSocket,
   ensureServerRunning,
-  ensureThreadSocket,
   ensureWorkspaceRuntime,
-  isProviderName,
   makeId,
-  mapTranscriptToFeed,
-  normalizeThreadTitleSource,
   nowIso,
   persistNow,
-  providerAuthMethodsFor,
-  pushNotification,
-  queuePendingThreadMessage,
   RUNTIME,
   requestWorkspaceSessions,
   type StoreGet,
   type StoreSet,
   sendThread,
-  sendUserMessageToThread,
-  truncateTitle,
 } from "../store.helpers";
-import type { ThreadRecord, WorkspaceRecord } from "../types";
+import type { WorkspaceRecord } from "../types";
 import { hydrateThreadSelection } from "./thread";
 
 export function createWorkspaceActions(

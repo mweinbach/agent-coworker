@@ -48,7 +48,6 @@ import {
 import {
   createMcpAutoValidateScheduler,
   type EditorState,
-  getEditingServerName,
   getMcpEditorSubmitLabel,
   getMcpEditorTitle,
   getPreviousNameForUpsert,
@@ -62,8 +61,6 @@ export function McpServersPage() {
   const workspaces = useAppStore((s) => s.workspaces);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const workspaceRuntimeById = useAppStore((s) => s.workspaceRuntimeById);
-  const selectWorkspace = useAppStore((s) => s.selectWorkspace);
-
   const requestWorkspaceMcpServers = useAppStore((s) => s.requestWorkspaceMcpServers);
   const upsertWorkspaceMcpServer = useAppStore((s) => s.upsertWorkspaceMcpServer);
   const deleteWorkspaceMcpServer = useAppStore((s) => s.deleteWorkspaceMcpServer);
@@ -95,7 +92,6 @@ export function McpServersPage() {
     autoValidateSchedulerRef.current.cancel();
   };
 
-  const editingName = getEditingServerName(editorState);
   const isCreating = editorState?.mode === "create";
 
   useEffect(() => {
@@ -104,9 +100,9 @@ export function McpServersPage() {
     setEditorState(null);
     setDraft(defaultDraftState());
     void requestWorkspaceMcpServers(workspace.id);
-  }, [workspace?.id]);
+  }, [workspace?.id, requestWorkspaceMcpServers, workspace, clearAutoValidateTimer]);
 
-  useEffect(() => clearAutoValidateTimer, []);
+  useEffect(() => clearAutoValidateTimer, [clearAutoValidateTimer]);
 
   const servers = runtime?.mcpServers ?? [];
   const files = runtime?.mcpFiles ?? [];
@@ -417,7 +413,7 @@ export function McpServersPage() {
                       {sourceLabel(server.source)}
                     </Badge>
                   )}
-                  {validation && validation.ok ? (
+                  {validation?.ok ? (
                     <CheckCircle2Icon className="w-4 h-4 text-success" />
                   ) : validation && !validation.ok ? (
                     <XCircleIcon className="w-4 h-4 text-destructive" />

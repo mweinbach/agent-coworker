@@ -1,13 +1,8 @@
-import { defaultModelForProvider } from "@cowork/providers/catalog";
-import { z } from "zod";
-
 import * as desktopCommands from "../../lib/desktopCommands";
-import type { ProviderName } from "../../lib/wsProtocol";
 import { seedDockFromFeed } from "../a2uiDockReducer";
 import {
   type AppStoreActions,
   appendThreadTranscript,
-  basename,
   beginThreadSelectionRequest,
   buildContextPreamble,
   clearPendingThreadSteers,
@@ -16,15 +11,11 @@ import {
   ensureServerRunning,
   ensureThreadRuntime,
   ensureThreadSocket,
-  ensureWorkspaceRuntime,
   extractUsageStateFromTranscript,
   isCurrentThreadSelectionRequest,
-  isProviderName,
   makeId,
-  normalizeThreadTitleSource,
   nowIso,
   persistNow,
-  providerAuthMethodsFor,
   pushNotification,
   queuePendingThreadMessage,
   RUNTIME,
@@ -208,39 +199,14 @@ export async function hydrateThreadSelection(
     ];
   };
 
-  const readTranscriptEvents = async (
-    candidate: Pick<ThreadRecord, "id" | "sessionId" | "legacyTranscriptId">,
-  ): Promise<TranscriptEvent[] | null> => {
-    const transcriptIds = transcriptIdsForThread(candidate);
-    if (transcriptIds.length === 0) return null;
-
-    const transcripts: TranscriptEvent[][] = [];
-    let successfulReads = 0;
-    let firstError: unknown = null;
-
-    for (const transcriptId of transcriptIds) {
-      try {
-        const events = await desktopCommands.readTranscript({ threadId: transcriptId });
-        transcripts.push(events);
-        successfulReads += 1;
-      } catch (error) {
-        firstError ??= error;
-      }
-    }
-
-    if (successfulReads === 0 && firstError) {
-      throw firstError;
-    }
-
-    return transcripts.flat().sort((left, right) => left.ts.localeCompare(right.ts));
-  };
-
   const hydrateLegacyTranscript = async (candidate: ThreadRecord) => {
     const transcriptIds = transcriptIdsForThread(candidate);
     if (transcriptIds.length === 0) return null;
 
     if (transcriptIds.length === 1 && typeof desktopCommands.hydrateTranscript === "function") {
-      return await desktopCommands.hydrateTranscript({ threadId: transcriptIds[0]! });
+      const firstTranscriptId = transcriptIds[0];
+      if (!firstTranscriptId) return null;
+      return await desktopCommands.hydrateTranscript({ threadId: firstTranscriptId });
     }
 
     const transcript: TranscriptEvent[] = [];
@@ -488,137 +454,8 @@ export function createThreadActions(
   | "dismissPrompt"
   | "loadAllThreadUsage"
 > {
-  const waitForSelectionFrame = async () => {
-    await new Promise<void>((resolve) => {
-      if (typeof window === "undefined") {
-        setTimeout(resolve, 0);
-        return;
-      }
-
-      const schedule =
-        typeof window.requestAnimationFrame === "function"
-          ? window.requestAnimationFrame.bind(window)
-          : (callback: FrameRequestCallback) => setTimeout(() => callback(Date.now()), 0);
-
-      schedule(() => {
-        setTimeout(resolve, 0);
-      });
-    });
-  };
-
-  const isSelectionCurrent = (threadId: string, requestId: number) =>
-    get().selectedThreadId === threadId && isCurrentThreadSelectionRequest(threadId, requestId);
-
-  const clearThreadHydrationIfCurrent = (threadId: string, requestId: number) => {
-    if (!isCurrentThreadSelectionRequest(threadId, requestId)) {
-      return;
-    }
-    set((s) => {
-      const rt = s.threadRuntimeById[threadId];
-      if (!rt) return {};
-      return {
-        threadRuntimeById: {
-          ...s.threadRuntimeById,
-          [threadId]: {
-            ...rt,
-            hydrating: false,
-            transcriptOnly: false,
-          },
-        },
-      };
-    });
-    clearThreadSelectionRequest(threadId, requestId);
-  };
-
   const closeThreadSession = (threadId: string) => {
     sendThread(get, threadId, (sessionId) => ({ type: "session_close", sessionId }));
-  };
-
-  const threadFingerprint = (thread: ThreadRecord): SessionSnapshotFingerprint => ({
-    updatedAt: thread.lastMessageAt,
-    messageCount: thread.messageCount,
-    lastEventSeq: thread.lastEventSeq,
-  });
-
-  const fingerprintMatches = (
-    left: SessionSnapshotFingerprint,
-    right: SessionSnapshotFingerprint,
-  ): boolean =>
-    left.updatedAt === right.updatedAt &&
-    left.messageCount === right.messageCount &&
-    left.lastEventSeq === right.lastEventSeq;
-
-  const cacheSessionSnapshot = (snapshot: SessionSnapshot) => {
-    RUNTIME.sessionSnapshots.set(snapshot.sessionId, {
-      fingerprint: {
-        updatedAt: snapshot.updatedAt,
-        messageCount: snapshot.messageCount,
-        lastEventSeq: snapshot.lastEventSeq,
-      },
-      snapshot,
-    });
-    syncDesktopStateCache(get);
-  };
-
-  const applySessionSnapshot = (threadId: string, sessionId: string, snapshot: SessionSnapshot) => {
-    set((s) => {
-      const nextThreads = s.threads.map((thread) =>
-        thread.id === threadId
-          ? {
-              ...thread,
-              title: snapshot.title,
-              titleSource: snapshot.titleSource,
-              lastMessageAt: snapshot.updatedAt,
-              sessionId,
-              messageCount: snapshot.messageCount,
-              lastEventSeq: snapshot.lastEventSeq,
-            }
-          : thread,
-      );
-      const currentRuntime = s.threadRuntimeById[threadId];
-      return {
-        threads: nextThreads,
-        threadRuntimeById: {
-          ...s.threadRuntimeById,
-          [threadId]: {
-            ...currentRuntime,
-            sessionId,
-            sessionKind: snapshot.sessionKind,
-            parentSessionId: snapshot.parentSessionId,
-            role: snapshot.role,
-            mode: snapshot.mode,
-            depth: snapshot.depth ?? 0,
-            nickname: snapshot.nickname,
-            requestedModel: snapshot.requestedModel,
-            effectiveModel: snapshot.effectiveModel,
-            requestedReasoningEffort: snapshot.requestedReasoningEffort,
-            effectiveReasoningEffort: snapshot.effectiveReasoningEffort,
-            executionState: snapshot.executionState,
-            lastMessagePreview: snapshot.lastMessagePreview,
-            agents: snapshot.agents,
-            sessionUsage: snapshot.sessionUsage,
-            lastTurnUsage: snapshot.lastTurnUsage,
-            feed: snapshot.feed,
-            a2uiDock: seedDockFromFeed(
-              currentRuntime?.a2uiDock ?? createDefaultA2uiDock(),
-              snapshot.feed,
-              nowIso(),
-            ),
-            hydrating: false,
-            transcriptOnly: false,
-            connected: currentRuntime?.connected ?? false,
-            config: currentRuntime?.config ?? null,
-            sessionConfig: currentRuntime?.sessionConfig ?? null,
-            enableMcp: currentRuntime?.enableMcp ?? null,
-            busy: currentRuntime?.busy ?? false,
-            busySince: currentRuntime?.busySince ?? null,
-            activeTurnId: currentRuntime?.activeTurnId ?? null,
-            pendingSteer: currentRuntime?.pendingSteer ?? null,
-            wsUrl: currentRuntime?.wsUrl ?? null,
-          },
-        },
-      };
-    });
   };
 
   const transcriptIdsForThread = (
@@ -646,61 +483,6 @@ export function createThreadActions(
         ),
       ),
     ];
-  };
-
-  const readTranscriptEvents = async (
-    thread: Pick<ThreadRecord, "id" | "sessionId" | "legacyTranscriptId">,
-  ): Promise<TranscriptEvent[] | null> => {
-    const transcriptIds = transcriptIdsForThread(thread);
-    if (transcriptIds.length === 0) return null;
-
-    const transcripts: TranscriptEvent[][] = [];
-    let successfulReads = 0;
-    let firstError: unknown = null;
-
-    for (const transcriptId of transcriptIds) {
-      try {
-        const events = await desktopCommands.readTranscript({ threadId: transcriptId });
-        transcripts.push(events);
-        successfulReads += 1;
-      } catch (error) {
-        firstError ??= error;
-      }
-    }
-
-    if (successfulReads === 0 && firstError) {
-      throw firstError;
-    }
-
-    return transcripts.flat().sort((left, right) => left.ts.localeCompare(right.ts));
-  };
-
-  const hydrateLegacyTranscript = async (thread: ThreadRecord) => {
-    const transcriptIds = transcriptIdsForThread(thread);
-    if (transcriptIds.length === 0) return null;
-
-    if (transcriptIds.length === 1 && typeof desktopCommands.hydrateTranscript === "function") {
-      return await desktopCommands.hydrateTranscript({ threadId: transcriptIds[0]! });
-    }
-
-    const transcript: TranscriptEvent[] = [];
-    let successfulReads = 0;
-    let firstError: unknown = null;
-    for (const transcriptId of transcriptIds) {
-      try {
-        transcript.push(...(await desktopCommands.readTranscript({ threadId: transcriptId })));
-        successfulReads += 1;
-      } catch (error) {
-        firstError ??= error;
-      }
-    }
-
-    if (successfulReads === 0 && firstError) {
-      throw firstError;
-    }
-
-    transcript.sort((left, right) => left.ts.localeCompare(right.ts));
-    return hydrateTranscriptSnapshot(transcript);
   };
 
   return {
@@ -986,7 +768,7 @@ export function createThreadActions(
       }
       if (!isReconnectCurrent()) return false;
 
-      const hasFirstMessage = firstMessage && firstMessage.trim();
+      const hasFirstMessage = firstMessage?.trim();
       if (hasFirstMessage || hasQueuedAttachments) {
         queuePendingThreadMessage(threadId, firstMessage ?? "", opts?.attachments);
       }

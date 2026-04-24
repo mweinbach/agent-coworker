@@ -1,20 +1,6 @@
 import { defaultModelForProvider } from "@cowork/providers/catalog";
 import type { OpenAiCompatibleProviderOptionsByProvider } from "@cowork/shared/openaiCompatibleOptions";
 import type { SessionConfigPatch } from "../../../../../src/server/protocol";
-import {
-  copyPath,
-  createDirectory,
-  deleteTranscript,
-  listDirectory,
-  loadState,
-  openPath,
-  pickWorkspaceDirectory,
-  readTranscript,
-  renamePath,
-  revealPath,
-  stopWorkspaceServer,
-  trashPath,
-} from "../../lib/desktopCommands";
 import type { ProviderName } from "../../lib/wsProtocol";
 import {
   mergeWorkspaceProviderOptions,
@@ -23,36 +9,26 @@ import {
 import {
   type AppStoreActions,
   appendThreadTranscript,
-  basename,
-  buildContextPreamble,
   ensureControlSocket,
   ensureServerRunning,
-  ensureThreadRuntime,
-  ensureThreadSocket,
-  ensureWorkspaceRuntime,
   isProviderName,
   makeId,
-  mapTranscriptToFeed,
-  normalizeThreadTitleSource,
   nowIso,
   persistNow,
   prependPendingThreadMessageWithAttachments,
-  providerAuthMethodsFor,
   pushNotification,
   RUNTIME,
   requestJsonRpcControlEvent,
   type StoreGet,
   type StoreSet,
-  sendThread,
   sendUserMessageToThread,
   shiftPendingThreadAttachments,
   shiftPendingThreadMessage,
-  truncateTitle,
   waitForControlSession,
 } from "../store.helpers";
 import { requestJsonRpc } from "../store.helpers/jsonRpcSocket";
 import type { DraftModelSelection } from "../store.helpers/runtimeState";
-import type { ThreadRecord, WorkspaceDefaultsPatch, WorkspaceRecord } from "../types";
+import type { WorkspaceDefaultsPatch, WorkspaceRecord } from "../types";
 import { normalizeWorkspaceUserProfile } from "../types";
 
 export function createWorkspaceDefaultsActions(

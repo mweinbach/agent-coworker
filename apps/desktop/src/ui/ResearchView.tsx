@@ -12,7 +12,6 @@ export function ResearchView() {
   const researchById = useAppStore((s) => s.researchById);
   const researchOrder = useAppStore((s) => s.researchOrder);
   const selectedResearchId = useAppStore((s) => s.selectedResearchId);
-  const researchListLoading = useAppStore((s) => s.researchListLoading);
   const researchListError = useAppStore((s) => s.researchListError);
   const refreshResearchList = useAppStore((s) => s.refreshResearchList);
   const selectResearch = useAppStore((s) => s.selectResearch);

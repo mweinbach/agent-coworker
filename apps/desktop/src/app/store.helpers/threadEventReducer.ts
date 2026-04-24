@@ -127,10 +127,6 @@ function sortAgentSummaries(agents: ThreadAgentSummary[]): ThreadAgentSummary[] 
   });
 }
 
-function occurrenceItemId(baseId: string, occurrence: number): string {
-  return occurrence <= 1 ? baseId : `${baseId}:${occurrence}`;
-}
-
 type ThreadEventReducerDeps = {
   nowIso: () => string;
   makeId: () => string;

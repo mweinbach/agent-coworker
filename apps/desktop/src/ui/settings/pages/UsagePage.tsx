@@ -2,7 +2,6 @@ import { useAutoAnimate } from "@formkit/auto-animate/react";
 
 import { AlertTriangleIcon, ChevronDownIcon, ChevronRightIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import type { ModelUsageSummary } from "../../../../../../src/session/costTracker";
 import { formatCost, formatTokenCount } from "../../../../../../src/session/pricing";
 import { useAppStore } from "../../../app/store";
 import type { ThreadRuntime } from "../../../app/types";
@@ -16,7 +15,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../../../components/ui/dialog";
-import { cn } from "../../../lib/utils";
 import { useOptionalSettingsChrome } from "../SettingsChromeContext";
 
 // ── Aggregation types ────────────────────────────────────────────────
@@ -188,7 +186,7 @@ export function UsagePage(props: UsagePageProps = {}) {
   useEffect(() => {
     if (props.aggregate !== undefined) return; // skip when overridden (tests)
     void loadAllThreadUsage();
-  }, []);
+  }, [props.aggregate, loadAllThreadUsage]);
 
   const computedAggregate = useMemo(
     () => aggregateUsageFromRuntimes(threadRuntimeById),

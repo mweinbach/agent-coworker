@@ -1,4 +1,4 @@
-import type { PersistedState, ThreadRecord, WorkspaceRecord } from "../app/types";
+import type { PersistedState } from "../app/types";
 
 const LEGACY_STATE_KEY = "cowork:web:state";
 const STATE_KEY_PREFIX = "cowork:web:state:v2";

@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { resolveAllowedDirectoryPath, resolveAllowedPath } from "../electron/services/ipcSecurity";
+import { resolveAllowedPath } from "../electron/services/ipcSecurity";
 import { assertValidFileName } from "../electron/services/validation";
 
 describe("IPC file ops validation", () => {

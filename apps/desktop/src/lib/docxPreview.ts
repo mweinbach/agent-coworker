@@ -2,7 +2,6 @@ import * as mammothZipfile from "mammoth/lib/zipfile";
 
 const OOXML_WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const OOXML_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
-const OOXML_PACKAGE_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships";
 const OOXML_DRAWING_NS = "http://schemas.openxmlformats.org/drawingml/2006/main";
 const OOXML_WORD_DRAWING_NS =
   "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";

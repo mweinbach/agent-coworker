@@ -11,7 +11,7 @@ import { memo, useCallback, useEffect, useMemo, useState } from "react";
 
 import { isBasicCatalogId } from "../../../../../../src/shared/a2ui/component";
 import { useAppStore } from "../../../app/store";
-import type { A2uiChangeKind, A2uiSurfaceRevision, A2uiThreadDock } from "../../../app/types";
+import type { A2uiSurfaceRevision, A2uiThreadDock } from "../../../app/types";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
 import { cn } from "../../../lib/utils";
 import {
@@ -83,7 +83,7 @@ export function selectDockView(dock: A2uiThreadDock): A2uiSurfaceDockView | null
   const revisions = dock.revisionsBySurfaceId[focusedId];
   if (!revisions || revisions.length === 0) return null;
   const activeRevNumber =
-    dock.activeRevisionBySurfaceId[focusedId] ?? revisions[revisions.length - 1]!.revision;
+    dock.activeRevisionBySurfaceId[focusedId] ?? revisions[revisions.length - 1]?.revision;
   const activeIndex = revisions.findIndex((r) => r.revision === activeRevNumber);
   const resolvedIndex = activeIndex >= 0 ? activeIndex : revisions.length - 1;
   const activeRevision = revisions[resolvedIndex]!;
@@ -115,7 +115,7 @@ export const A2uiSurfaceDock = memo(function A2uiSurfaceDock({ threadId }: A2uiS
 
   const [poppedOut, setPoppedOut] = useState(false);
 
-  const view = useMemo(() => (dock && dock.focusedSurfaceId ? selectDockView(dock) : null), [dock]);
+  const view = useMemo(() => (dock?.focusedSurfaceId ? selectDockView(dock) : null), [dock]);
   const expanded = dock?.expanded ?? false;
 
   // When the dock opens, mark the latest revision as seen so the pulse fades.
@@ -155,7 +155,7 @@ export const A2uiSurfaceDock = memo(function A2uiSurfaceDock({ threadId }: A2uiS
         Math.min(view.revisions.length - 1, view.activeIndex + direction),
       );
       if (nextIndex === view.activeIndex) return;
-      setActiveRevision(threadId, view.surfaceId, view.revisions[nextIndex]!.revision);
+      setActiveRevision(threadId, view.surfaceId, view.revisions[nextIndex]?.revision);
     },
     [setActiveRevision, threadId, view],
   );
@@ -274,7 +274,7 @@ export const A2uiSurfaceDock = memo(function A2uiSurfaceDock({ threadId }: A2uiS
                       setActiveRevision(
                         threadId,
                         view.surfaceId,
-                        view.revisions[view.revisions.length - 1]!.revision,
+                        view.revisions[view.revisions.length - 1]?.revision,
                       )
                     }
                   />

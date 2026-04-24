@@ -134,14 +134,6 @@ export function InstallPluginDialog({ workspaceId }: { workspaceId: string }) {
     : showPluginsError
       ? (runtime?.pluginsError ?? null)
       : null;
-  const requiresFreshPreviewForScope = (targetScope: PluginPreviewScope) =>
-    shouldRequireFreshPluginPreviewForScope({
-      normalizedSourceInput,
-      lastPreviewSourceInput,
-      lastPreviewTargetScope,
-      pluginPreview,
-      targetScope,
-    });
   const disableInstallForScope = (targetScope: PluginPreviewScope) =>
     shouldDisablePluginInstallForScope({
       normalizedSourceInput,
@@ -279,10 +271,10 @@ export function InstallPluginDialog({ workspaceId }: { workspaceId: string }) {
                 <div className="font-medium text-foreground">{previewSummary(pluginPreview!)}</div>
                 <div className="mt-1 text-[11px] text-muted-foreground">
                   Previewed for{" "}
-                  {pluginPreview!.targetScope === "workspace" ? "workspace" : "global"} install.
+                  {pluginPreview?.targetScope === "workspace" ? "workspace" : "global"} install.
                 </div>
                 <div className="mt-2 space-y-1.5">
-                  {pluginPreview!.candidates.map((candidate) => (
+                  {pluginPreview?.candidates.map((candidate) => (
                     <div
                       key={`${candidate.pluginId}:${candidate.relativeRootPath}`}
                       className="rounded border border-border/60 bg-background/40 px-2.5 py-2"
@@ -321,9 +313,9 @@ export function InstallPluginDialog({ workspaceId }: { workspaceId: string }) {
                     </div>
                   ))}
                 </div>
-                {pluginPreview!.warnings.length > 0 ? (
+                {pluginPreview?.warnings.length > 0 ? (
                   <div className="mt-2 space-y-1 text-[11px] text-destructive">
-                    {pluginPreview!.warnings.map((warning) => (
+                    {pluginPreview?.warnings.map((warning) => (
                       <div key={warning}>{warning}</div>
                     ))}
                   </div>

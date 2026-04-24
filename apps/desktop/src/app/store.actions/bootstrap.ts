@@ -6,24 +6,13 @@ import {
   normalizeDesktopFeatureFlagOverrides,
 } from "../../../../../src/shared/featureFlags";
 import {
-  copyPath,
-  createDirectory,
-  deleteTranscript,
   getDesktopFeatureFlags,
   getUpdateState,
   isPackagedDesktopApp,
-  listDirectory,
   loadState,
-  openPath,
-  pickWorkspaceDirectory,
-  readTranscript,
-  renamePath,
-  revealPath,
   quitAndInstallUpdate as runQuitAndInstallUpdate,
   checkForUpdates as runUpdateCheck,
   stopMobileRelay,
-  stopWorkspaceServer,
-  trashPath,
 } from "../../lib/desktopCommands";
 import type { ChildModelRoutingMode } from "../../lib/wsProtocol";
 import { type ProviderName, safeParseServerEvent } from "../../lib/wsProtocol";
@@ -43,33 +32,22 @@ import {
 import {
   type AppStoreActions,
   type AppStoreDataState,
-  appendThreadTranscript,
-  basename,
-  buildContextPreamble,
   defaultThreadRuntime,
   ensureControlSocket,
   ensureServerRunning,
-  ensureThreadRuntime,
-  ensureThreadSocket,
   ensureWorkspaceRuntime,
   isProviderName,
   makeId,
-  mapTranscriptToFeed,
   normalizeThreadTitleSource,
   nowIso,
   persistNow,
-  providerAuthMethodsFor,
   pushNotification,
-  queuePendingThreadMessage,
   RUNTIME,
   requestJsonRpcControlEvent,
   type StoreGet,
   type StoreSet,
-  sendThread,
-  sendUserMessageToThread,
   syncDesktopStateCache,
   syncDesktopStateCacheNow,
-  truncateTitle,
 } from "../store.helpers";
 import {
   type CachedDesktopUiState,
@@ -79,7 +57,6 @@ import {
   type PersistedProviderState,
   type SettingsPageId,
   type ThreadRecord,
-  type ViewId,
   type WorkspaceRecord,
 } from "../types";
 import {

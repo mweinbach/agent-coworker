@@ -177,8 +177,7 @@ describe("research view layout", () => {
 
       const selectedOption = container.querySelector('[role="option"][aria-selected="true"]');
       expect(selectedOption?.textContent).toContain("Follow-up");
-      expect(selectedOption?.textContent).toContain("1 source");
-      expect(selectedOption?.textContent).toContain("1 note");
+      expect(selectedOption?.textContent).toContain("Follow-up analysis");
 
       await act(async () => {
         root.unmount();

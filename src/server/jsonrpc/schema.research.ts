@@ -66,9 +66,6 @@ export const jsonRpcResearchRequestSchemas = {
     researchId: nonEmptyTrimmedStringSchema,
     input: z.string().trim().min(1),
   }).strict(),
-  "research/listMcpServers": z.object({
-    cwd: nonEmptyTrimmedStringSchema.optional(),
-  }).strict(),
 } as const;
 
 export const jsonRpcResearchResultSchemas = {
@@ -112,13 +109,6 @@ export const jsonRpcResearchResultSchemas = {
   "research/refinePlan": z.object({
     research: researchSummarySchema.nullable(),
   }).strict(),
-  "research/listMcpServers": z.object({
-    servers: z.array(z.object({
-      name: nonEmptyTrimmedStringSchema,
-      source: z.string(),
-      authMode: z.string(),
-    }).strict()),
-  }).strict(),
 } as const;
 
 export const jsonRpcResearchNotificationSchemas = {
@@ -150,4 +140,3 @@ export const jsonRpcResearchNotificationSchemas = {
     error: z.string(),
   }).strict(),
 } as const;
-

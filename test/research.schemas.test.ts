@@ -11,12 +11,7 @@ describe("research JSON-RPC schemas", () => {
     const request = jsonRpcRequestSchemas["research/start"].parse({
       input: "Summarize the current vendor landscape.",
       settings: {
-        googleSearch: true,
-        urlContext: true,
-        codeExecution: true,
-        mcpServersEnabled: false,
         planApproval: false,
-        mcpServerNames: [],
       },
       attachedFileIds: ["file-1"],
     });
@@ -40,12 +35,7 @@ describe("research JSON-RPC schemas", () => {
           files: [],
         },
         settings: {
-          googleSearch: true,
-          urlContext: true,
-          codeExecution: true,
-          mcpServersEnabled: false,
           planApproval: false,
-          mcpServerNames: [],
         },
         outputsMarkdown: "## Report\n\nDone.",
         thoughtSummaries: [],

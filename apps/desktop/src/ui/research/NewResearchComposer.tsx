@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { PaperclipIcon, Settings2Icon } from "lucide-react";
 
 import { useAppStore } from "../../app/store";
@@ -13,24 +13,8 @@ import {
   PromptInputTools,
 } from "../../components/ai-elements/prompt-input";
 import { Button } from "../../components/ui/button";
-import { ResearchMcpPickerDialog } from "./ResearchMcpPickerDialog";
 import { ResearchSettingsDialog } from "./ResearchSettingsPopover";
-
-type AttachmentDraft = {
-  file: File;
-  filename: string;
-  mimeType: string;
-  previewUrl?: string;
-};
-
-function toAttachmentDraft(file: File): AttachmentDraft {
-  return {
-    file,
-    filename: file.name || "upload.bin",
-    mimeType: file.type || "application/octet-stream",
-    ...(file.type.startsWith("image/") ? { previewUrl: URL.createObjectURL(file) } : {}),
-  };
-}
+import { useResearchAttachments } from "./useResearchAttachments";
 
 export function NewResearchComposer({
   onSubmitted,
@@ -38,32 +22,11 @@ export function NewResearchComposer({
   onSubmitted?: () => void;
 }) {
   const startResearch = useAppStore((s) => s.startResearch);
-  const researchDraftSettings = useAppStore((s) => s.researchDraftSettings);
   const [input, setInput] = useState("");
-  const [attachments, setAttachments] = useState<AttachmentDraft[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [mcpDialogOpen, setMcpDialogOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-
-  useEffect(() => {
-    return () => {
-      for (const attachment of attachments) {
-        if (attachment.previewUrl) {
-          URL.revokeObjectURL(attachment.previewUrl);
-        }
-      }
-    };
-  }, [attachments]);
-
-  const attachmentPreviews = useMemo(
-    () => attachments.map((attachment) => ({
-      filename: attachment.filename,
-      mimeType: attachment.mimeType,
-      previewUrl: attachment.previewUrl,
-    })),
-    [attachments],
-  );
+  const { attachments, attachmentPreviews, addFiles, removeAttachment, clearAttachments } = useResearchAttachments();
 
   const submit = async () => {
     const trimmed = input.trim();
@@ -77,13 +40,8 @@ export function NewResearchComposer({
         files: attachments.map((attachment) => attachment.file),
       });
       if (created) {
-        for (const attachment of attachments) {
-          if (attachment.previewUrl) {
-            URL.revokeObjectURL(attachment.previewUrl);
-          }
-        }
         setInput("");
-        setAttachments([]);
+        clearAttachments();
         setSettingsOpen(false);
         onSubmitted?.();
       }
@@ -98,7 +56,7 @@ export function NewResearchComposer({
         fileDrop={{
           disabled: submitting,
           onFiles: async (files) => {
-            setAttachments((current) => [...current, ...files.map((file) => toAttachmentDraft(file))]);
+            addFiles(files);
           },
         }}
       >
@@ -110,16 +68,7 @@ export function NewResearchComposer({
         >
           <PromptInputAttachmentPreviews
             attachments={attachmentPreviews}
-            onRemove={(index) => {
-              setAttachments((current) => {
-                const next = [...current];
-                const [removed] = next.splice(index, 1);
-                if (removed?.previewUrl) {
-                  URL.revokeObjectURL(removed.previewUrl);
-                }
-                return next;
-              });
-            }}
+            onRemove={removeAttachment}
           />
 
           <PromptInputBody>
@@ -154,11 +103,6 @@ export function NewResearchComposer({
               >
                 <PaperclipIcon className="h-4 w-4" />
               </Button>
-              <div className="text-xs text-muted-foreground">
-                {researchDraftSettings.mcpServersEnabled && researchDraftSettings.mcpServerNames.length > 0
-                  ? `${researchDraftSettings.mcpServerNames.length} MCP server${researchDraftSettings.mcpServerNames.length === 1 ? "" : "s"} saved for later`
-                  : "Google Search and URL Context stay on by default"}
-              </div>
             </PromptInputTools>
             <PromptInputSubmit
               status={submitting ? "pending" : "ready"}
@@ -171,7 +115,6 @@ export function NewResearchComposer({
       <ResearchSettingsDialog
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
-        onOpenMcpPicker={() => setMcpDialogOpen(true)}
       />
 
       <input
@@ -181,14 +124,10 @@ export function NewResearchComposer({
         multiple
         onChange={(event) => {
           const files = event.target.files ? Array.from(event.target.files) : [];
-          if (files.length > 0) {
-            setAttachments((current) => [...current, ...files.map((file) => toAttachmentDraft(file))]);
-          }
+          addFiles(files);
           event.currentTarget.value = "";
         }}
       />
-
-      <ResearchMcpPickerDialog open={mcpDialogOpen} onOpenChange={setMcpDialogOpen} />
     </div>
   );
 }

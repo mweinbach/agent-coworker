@@ -61,9 +61,6 @@ function inlineChildren(node: MarkdownNode): ParagraphChild[] {
       case "emphasis":
         runs.push(new TextRun({ text: nodeText(child), italics: true }));
         break;
-      case "delete":
-        runs.push(new TextRun({ text: nodeText(child), strike: true }));
-        break;
       case "inlineCode":
         runs.push(new TextRun({
           text: child.value ?? "",

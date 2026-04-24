@@ -18,7 +18,6 @@ import type {
   PromptModalState,
   ResearchCard,
   ResearchDetail,
-  ResearchMcpServer,
   ResearchSettingsState,
   SettingsPageId,
   ThreadRecord,
@@ -198,9 +197,6 @@ export type AppStoreState = {
   researchListLoading: boolean;
   researchListError: string | null;
   researchDraftSettings: ResearchSettingsState;
-  researchMcpServers: ResearchMcpServer[];
-  researchMcpServersLoading: boolean;
-  researchMcpServersError: string | null;
   researchSubscribedIds: string[];
   researchExportPendingIds: string[];
 
@@ -293,7 +289,6 @@ export type AppStoreState = {
     settings?: Partial<ResearchSettingsState>;
   }) => Promise<ResearchCard | null>;
   setResearchDraftSettings: (patch: Partial<ResearchSettingsState>) => void;
-  loadResearchMcpServers: () => Promise<void>;
   exportResearch: (researchId: string, format: import("../../../../src/server/research/types").ResearchExportFormat) => Promise<string | null>;
   approveResearchPlan: (researchId: string) => Promise<ResearchCard | null>;
   refineResearchPlan: (researchId: string, input: string) => Promise<ResearchCard | null>;

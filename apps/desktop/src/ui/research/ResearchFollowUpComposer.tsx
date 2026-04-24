@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { PaperclipIcon } from "lucide-react";
 
 import { useAppStore } from "../../app/store";
@@ -14,22 +14,7 @@ import {
 } from "../../components/ai-elements/prompt-input";
 import { Button } from "../../components/ui/button";
 import { cn } from "../../lib/utils";
-
-type AttachmentDraft = {
-  file: File;
-  filename: string;
-  mimeType: string;
-  previewUrl?: string;
-};
-
-function toAttachmentDraft(file: File): AttachmentDraft {
-  return {
-    file,
-    filename: file.name || "upload.bin",
-    mimeType: file.type || "application/octet-stream",
-    ...(file.type.startsWith("image/") ? { previewUrl: URL.createObjectURL(file) } : {}),
-  };
-}
+import { useResearchAttachments } from "./useResearchAttachments";
 
 export function ResearchFollowUpComposer({
   parentResearchId,
@@ -49,28 +34,9 @@ export function ResearchFollowUpComposer({
   const sendResearchFollowUp = useAppStore((s) => s.sendResearchFollowUp);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [input, setInput] = useState("");
-  const [attachments, setAttachments] = useState<AttachmentDraft[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-
-  useEffect(() => {
-    return () => {
-      for (const attachment of attachments) {
-        if (attachment.previewUrl) {
-          URL.revokeObjectURL(attachment.previewUrl);
-        }
-      }
-    };
-  }, [attachments]);
-
-  const attachmentPreviews = useMemo(
-    () => attachments.map((attachment) => ({
-      filename: attachment.filename,
-      mimeType: attachment.mimeType,
-      previewUrl: attachment.previewUrl,
-    })),
-    [attachments],
-  );
+  const { attachments, attachmentPreviews, addFiles, removeAttachment, clearAttachments } = useResearchAttachments();
 
   const submit = async () => {
     const trimmed = input.trim();
@@ -85,13 +51,8 @@ export function ResearchFollowUpComposer({
         files: attachments.map((attachment) => attachment.file),
       });
       if (created) {
-        for (const attachment of attachments) {
-          if (attachment.previewUrl) {
-            URL.revokeObjectURL(attachment.previewUrl);
-          }
-        }
         setInput("");
-        setAttachments([]);
+        clearAttachments();
         onSubmitted?.();
       }
     } finally {
@@ -112,7 +73,7 @@ export function ResearchFollowUpComposer({
         fileDrop={{
           disabled: disabled || submitting,
           onFiles: async (files) => {
-            setAttachments((current) => [...current, ...files.map((file) => toAttachmentDraft(file))]);
+            addFiles(files);
           },
         }}
       >
@@ -124,16 +85,7 @@ export function ResearchFollowUpComposer({
         >
           <PromptInputAttachmentPreviews
             attachments={attachmentPreviews}
-            onRemove={(index) => {
-              setAttachments((current) => {
-                const next = [...current];
-                const [removed] = next.splice(index, 1);
-                if (removed?.previewUrl) {
-                  URL.revokeObjectURL(removed.previewUrl);
-                }
-                return next;
-              });
-            }}
+            onRemove={removeAttachment}
           />
           <PromptInputBody>
             <PromptInputTextarea
@@ -174,9 +126,7 @@ export function ResearchFollowUpComposer({
         multiple
         onChange={(event) => {
           const files = event.target.files ? Array.from(event.target.files) : [];
-          if (files.length > 0) {
-            setAttachments((current) => [...current, ...files.map((file) => toAttachmentDraft(file))]);
-          }
+          addFiles(files);
           event.currentTarget.value = "";
         }}
       />

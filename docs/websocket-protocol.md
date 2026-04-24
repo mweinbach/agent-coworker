@@ -306,10 +306,6 @@ Requests:
   - params: `{ researchId, format: "markdown" | "pdf" | "docx" }`
   - result: `{ path, sizeBytes }`
   - writes `report.md`, `report.pdf`, or `report.docx` under `~/.cowork/research/<id>/`
-- `research/listMcpServers`
-  - params: `{ cwd? }`
-  - result: `{ servers: [{ name, source, authMode }] }`
-  - returns workspace MCP server summaries for UI-only selection storage; current Deep Research API does not yet accept MCP tool pass-through
 
 `ResearchRecord` currently persists:
 
@@ -321,7 +317,7 @@ Requests:
 - `interactionId`
 - `lastEventId`
 - `inputs` (`fileSearchStoreName?`, attached files)
-- `settings`
+- `settings` including plan-approval preference
 - `outputsMarkdown`
 - `thoughtSummaries`
 - `sources`
@@ -333,8 +329,7 @@ Current Google Deep Research wiring notes:
 
 - `background: true` is always used
 - `google_search` and `url_context` remain effectively always on
-- only `file_search` is forwarded today
-- `codeExecution`, MCP selections, and plan-approval toggles are persisted locally for later use but not yet forwarded upstream
+- attached files are forwarded through `file_search`
 
 ### Research notifications
 

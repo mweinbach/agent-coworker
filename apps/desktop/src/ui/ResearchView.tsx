@@ -26,11 +26,8 @@ export function ResearchView() {
   const selectedResearch = selectedResearchId ? researchById[selectedResearchId] ?? null : null;
 
   useEffect(() => {
-    if (researchOrder.length > 0 || researchListLoading) {
-      return;
-    }
     void refreshResearchList();
-  }, [refreshResearchList, researchListLoading, researchOrder.length]);
+  }, [refreshResearchList]);
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-row">

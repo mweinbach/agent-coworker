@@ -20,11 +20,7 @@ import type { SessionFeedItem } from "../../../../src/shared/sessionSnapshot";
 import type {
   DesktopFeatureFlagOverrides,
 } from "../../../../src/shared/featureFlags";
-import type {
-  ResearchExportFormat,
-  ResearchRecord,
-  ResearchSettings,
-} from "../../../../src/server/research/types";
+import type { ResearchExportFormat, ResearchRecord, ResearchSettings } from "../../../../src/server/research/types";
 import type { WorkspaceProviderOptions } from "./openaiCompatibleProviderOptions";
 
 export type WorkspaceUserProfile = {
@@ -184,25 +180,12 @@ export type DesktopStateCache = {
   sessionSnapshots?: Record<string, CachedSessionSnapshot>;
 };
 
-export type ResearchMcpServer = {
-  name: string;
-  source: string;
-  authMode: string;
-  workspaceId: string;
-  workspaceName: string;
-};
-
 export type ResearchSettingsState = ResearchSettings;
 export type ResearchCard = ResearchRecord;
 export type ResearchDetail = ResearchRecord;
 
 export const DEFAULT_RESEARCH_SETTINGS: ResearchSettingsState = {
-  googleSearch: true,
-  urlContext: true,
-  codeExecution: true,
-  mcpServersEnabled: false,
   planApproval: false,
-  mcpServerNames: [],
 };
 
 export type ResearchExportRequest = {

@@ -12,7 +12,7 @@ import {
 } from "../store.helpers";
 import type { AppStoreActions, StoreGet, StoreSet } from "../store.helpers";
 import type { ResearchExportFormat, ResearchRecord } from "../../../../../src/server/research/types";
-import type { ResearchMcpServer, ResearchSettingsState } from "../types";
+import type { ResearchSettingsState } from "../types";
 
 const researchRouterCleanupByWorkspace = new Map<string, () => void>();
 const researchLifecycleCleanupByWorkspace = new Map<string, () => void>();
@@ -139,7 +139,6 @@ export function createResearchActions(
   | "renameResearch"
   | "sendResearchFollowUp"
   | "setResearchDraftSettings"
-  | "loadResearchMcpServers"
   | "exportResearch"
   | "approveResearchPlan"
   | "refineResearchPlan"
@@ -470,17 +469,6 @@ export function createResearchActions(
     return fileIds;
   };
 
-  const aggregateResearchMcpServers = (servers: ResearchMcpServer[]): ResearchMcpServer[] => {
-    const deduped = new Map<string, ResearchMcpServer>();
-    for (const server of servers) {
-      const key = `${server.workspaceId}:${server.source}:${server.name}`;
-      if (!deduped.has(key)) {
-        deduped.set(key, server);
-      }
-    }
-    return [...deduped.values()].sort((left, right) => left.name.localeCompare(right.name));
-  };
-
   return {
     approveResearchPlan: async (researchId: string) => {
       try {
@@ -707,56 +695,6 @@ export function createResearchActions(
           ...patch,
         } as ResearchSettingsState,
       }));
-    },
-
-    loadResearchMcpServers: async () => {
-      set({ researchMcpServersLoading: true, researchMcpServersError: null });
-      try {
-        const results = await Promise.allSettled(
-          get().workspaces.map(async (workspace) => {
-            deps.ensureWorkspaceRuntime(get, set, workspace.id);
-            await deps.ensureServerRunning(get, set, workspace.id);
-            deps.ensureControlSocket(get, set, workspace.id);
-            const ready = await deps.waitForControlSession(get, set, workspace.id);
-            if (!ready) {
-              return [] as ResearchMcpServer[];
-            }
-            const result = await deps.requestJsonRpc(get, set, workspace.id, "research/listMcpServers", {
-              cwd: workspace.path,
-            });
-            const servers = Array.isArray(result?.servers) ? result.servers : [];
-            return servers.flatMap((server: unknown): ResearchMcpServer[] => {
-              const record = server as Record<string, unknown>;
-              if (typeof record?.name !== "string" || typeof record?.source !== "string" || typeof record?.authMode !== "string") {
-                return [];
-              }
-              return [{
-                name: record.name,
-                source: record.source,
-                authMode: record.authMode,
-                workspaceId: workspace.id,
-                workspaceName: workspace.name,
-              }];
-            });
-          }),
-        );
-
-        const servers = aggregateResearchMcpServers(
-          results.flatMap((entry) => (entry.status === "fulfilled" ? entry.value : [])),
-        );
-        set({
-          researchMcpServers: servers,
-          researchMcpServersLoading: false,
-          researchMcpServersError: null,
-        });
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        set({
-          researchMcpServersLoading: false,
-          researchMcpServersError: detail,
-        });
-        notify("error", "Unable to load MCP servers", detail);
-      }
     },
 
     exportResearch: async (researchId, format) => {

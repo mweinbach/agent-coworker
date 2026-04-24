@@ -71,9 +71,6 @@ const initialState: AppStoreDataState = {
   researchListLoading: false,
   researchListError: null,
   researchDraftSettings: DEFAULT_RESEARCH_SETTINGS,
-  researchMcpServers: [],
-  researchMcpServersLoading: false,
-  researchMcpServersError: null,
   researchSubscribedIds: [],
   researchExportPendingIds: [],
 

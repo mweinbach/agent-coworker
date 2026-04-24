@@ -7,7 +7,8 @@ import type { AgentConfig } from "../../types";
 import { enrichCitationAnnotations } from "../citationMetadata";
 import type { SessionDb } from "../sessionDb";
 import type { StartServerSocket } from "../startServer/types";
-import { buildInteractionToolsFromSettings } from "./settings";
+import { exportResearch } from "./export";
+import { buildInteractionTools } from "./settings";
 import {
   cancelResearchInteraction,
   createResearchInteractionStream,
@@ -19,6 +20,7 @@ import {
   normalizeResearchSettings,
   researchInputFileSchema,
   researchRecordSchema,
+  type ResearchExportFormat,
   type ResearchInputFile,
   type ResearchRecord,
   type ResearchSettings,
@@ -537,8 +539,19 @@ export class ResearchService {
     }
   }
 
-  exportPathFor(researchId: string, filename: string): string {
-    return this.fileStore.exportPath(researchId, filename);
+  async export(
+    researchId: string,
+    format: ResearchExportFormat,
+  ): Promise<{ path: string; sizeBytes: number }> {
+    const research = await this.get(researchId);
+    if (!research) {
+      throw new Error(`Unknown research id: ${researchId}`);
+    }
+    return await exportResearch({
+      rootDir: this.fileStore.researchDir(researchId),
+      research,
+      format,
+    });
   }
 
   private async executeResearch(
@@ -579,10 +592,7 @@ export class ResearchService {
       await this.flushPersistNow(state);
       this.broadcast(state, "research/updated", { research: state.record }, state.record.lastEventId);
 
-      const tools = buildInteractionToolsFromSettings(
-        state.record.settings,
-        state.record.inputs.fileSearchStoreName,
-      );
+      const tools = buildInteractionTools(state.record.inputs.fileSearchStoreName);
       const stream = await createResearchInteractionStream({
         apiKey,
         input: opts.prompt,

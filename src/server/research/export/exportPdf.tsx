@@ -134,9 +134,6 @@ const styles = StyleSheet.create({
     color: "#1D4ED8",
     textDecoration: "underline",
   },
-  deleted: {
-    textDecoration: "line-through",
-  },
 });
 
 function headingStyle(depth: number) {
@@ -165,12 +162,6 @@ function renderInline(node: MarkdownNode, key: string): React.ReactNode {
     case "emphasis":
       return (
         <Text key={key} style={styles.emphasis}>
-          {nodeChildren(node).map((child, index) => renderInline(child, `${key}:${index}`))}
-        </Text>
-      );
-    case "delete":
-      return (
-        <Text key={key} style={styles.deleted}>
           {nodeChildren(node).map((child, index) => renderInline(child, `${key}:${index}`))}
         </Text>
       );

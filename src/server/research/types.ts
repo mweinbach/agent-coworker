@@ -12,13 +12,8 @@ export const researchExportFormatSchema = z.enum(RESEARCH_EXPORT_FORMAT_VALUES);
 export const researchSourceTypeSchema = z.enum(RESEARCH_SOURCE_TYPE_VALUES);
 
 export const researchSettingsSchema = z.object({
-  googleSearch: z.boolean().default(true),
-  urlContext: z.boolean().default(true),
-  codeExecution: z.boolean().default(true),
-  mcpServersEnabled: z.boolean().default(false),
   planApproval: z.boolean().default(false),
-  mcpServerNames: z.array(nonEmptyTrimmedStringSchema).default([]),
-}).strict();
+});
 
 export const researchSourceSchema = z.object({
   url: nonEmptyTrimmedStringSchema,
@@ -78,4 +73,3 @@ export type ResearchRecord = z.infer<typeof researchRecordSchema>;
 export function normalizeResearchSettings(value: unknown): ResearchSettings {
   return researchSettingsSchema.parse(value ?? {});
 }
-

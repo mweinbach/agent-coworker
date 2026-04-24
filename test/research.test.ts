@@ -71,12 +71,7 @@ function makeResearchRecord(overrides: Partial<ResearchRecord> = {}): ResearchRe
       files: [],
     },
     settings: {
-      googleSearch: true,
-      urlContext: true,
-      codeExecution: true,
-      mcpServersEnabled: false,
       planApproval: false,
-      mcpServerNames: [],
     },
     outputsMarkdown: "",
     thoughtSummaries: [],

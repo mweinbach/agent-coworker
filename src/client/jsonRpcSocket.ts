@@ -101,6 +101,10 @@ export type JsonRpcSocketInvalidMessage = {
   raw: unknown;
 };
 
+export type JsonRpcRequestError = Error & {
+  jsonRpcCode?: number;
+};
+
 export type JsonRpcSocketOpts = {
   url: string;
   clientInfo: {
@@ -576,7 +580,9 @@ export class JsonRpcSocket {
     }
     this.pendingRequests.delete(message.id);
     if (message.error) {
-      pending.reject(new Error(message.error.message));
+      const error = new Error(message.error.message) as JsonRpcRequestError;
+      error.jsonRpcCode = message.error.code;
+      pending.reject(error);
       return;
     }
     pending.resolve(message.result);

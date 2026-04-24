@@ -245,6 +245,35 @@ describe("JsonRpcSocket runtime", () => {
     });
   });
 
+  test("preserves JSON-RPC error codes on request failures", async () => {
+    FakeWebSocket.instances = [];
+    const socket = new JsonRpcSocket({
+      url: "ws://example.test/socket",
+      clientInfo: { name: "desktop" },
+      WebSocketImpl: FakeWebSocket as any,
+    });
+
+    socket.connect();
+    await flushMicrotasks();
+
+    const ws = FakeWebSocket.instances[0]!;
+    await ws.emitMessage(JSON.stringify({ id: 1, result: { protocolVersion: "0.1" } }));
+    await flushMicrotasks();
+
+    const requestPromise = socket.request("research/followup", { parentResearchId: "research-1" });
+    await ws.emitMessage(
+      JSON.stringify({
+        id: 2,
+        error: { code: -32602, message: "parent research is not completed" },
+      }),
+    );
+
+    await expect(requestPromise).rejects.toMatchObject({
+      message: "parent research is not completed",
+      jsonRpcCode: -32602,
+    });
+  });
+
   test("queues only retryable operations and enforces queue bounds across reconnect", async () => {
     FakeWebSocket.instances = [];
     const timers = createManualTimers();

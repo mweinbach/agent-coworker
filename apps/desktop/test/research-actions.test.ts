@@ -281,6 +281,50 @@ describe("research actions", () => {
     expect(harness.state.notifications.at(-1)?.title).toBe("Unable to send follow-up");
   });
 
+  test("sendResearchFollowUp discards uploaded blobs when the server definitively rejects the request", async () => {
+    const harness = createHarness();
+    const actions = createResearchActions(harness.set as never, harness.get as never, deps);
+    const file = {
+      name: "followup.txt",
+      type: "text/plain",
+      size: 8,
+      arrayBuffer: async () => Buffer.from("followup").buffer,
+    } as unknown as File;
+
+    requestJsonRpcMock.mockImplementation(async (_get, _set, _workspaceId, method) => {
+      if (method === "research/uploadFile") {
+        return { file: { fileId: "file-4" } };
+      }
+      if (method === "research/followup") {
+        const error = new Error("parent research is not completed") as Error & {
+          jsonRpcCode?: number;
+        };
+        error.jsonRpcCode = -32602;
+        throw error;
+      }
+      if (method === "research/discardUploads") {
+        return { status: "discarded" };
+      }
+      return {};
+    });
+
+    const result = await actions.sendResearchFollowUp({
+      parentResearchId: "research-1",
+      input: "Continue the run.",
+      files: [file],
+    });
+
+    expect(result).toBeNull();
+    expect(requestJsonRpcMock).toHaveBeenCalledWith(
+      harness.get,
+      harness.set,
+      "ws-1",
+      "research/discardUploads",
+      { fileIds: ["file-4"] },
+    );
+    expect(harness.state.notifications.at(-1)?.title).toBe("Unable to send follow-up");
+  });
+
   test("sendResearchFollowUp omits settings when no explicit overrides are provided", async () => {
     const harness = createHarness();
     const actions = createResearchActions(harness.set as never, harness.get as never, deps);
@@ -402,6 +446,49 @@ describe("research actions", () => {
     expect(
       requestJsonRpcMock.mock.calls.some((call) => call[3] === "research/discardUploads"),
     ).toBeFalse();
+    expect(harness.state.notifications.at(-1)?.title).toBe("Unable to start research");
+  });
+
+  test("startResearch discards uploaded blobs when the server definitively rejects the request", async () => {
+    const harness = createHarness();
+    const actions = createResearchActions(harness.set as never, harness.get as never, deps);
+    const file = {
+      name: "start.txt",
+      type: "text/plain",
+      size: 5,
+      arrayBuffer: async () => Buffer.from("start").buffer,
+    } as unknown as File;
+
+    requestJsonRpcMock.mockImplementation(async (_get, _set, _workspaceId, method) => {
+      if (method === "research/uploadFile") {
+        return { file: { fileId: "file-5" } };
+      }
+      if (method === "research/start") {
+        const error = new Error("research input is required") as Error & {
+          jsonRpcCode?: number;
+        };
+        error.jsonRpcCode = -32602;
+        throw error;
+      }
+      if (method === "research/discardUploads") {
+        return { status: "discarded" };
+      }
+      return {};
+    });
+
+    const result = await actions.startResearch({
+      input: "Analyze this file.",
+      files: [file],
+    });
+
+    expect(result).toBeNull();
+    expect(requestJsonRpcMock).toHaveBeenCalledWith(
+      harness.get,
+      harness.set,
+      "ws-1",
+      "research/discardUploads",
+      { fileIds: ["file-5"] },
+    );
     expect(harness.state.notifications.at(-1)?.title).toBe("Unable to start research");
   });
 

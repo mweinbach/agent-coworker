@@ -248,7 +248,7 @@ describe("research actions", () => {
     expect(harness.state.notifications.at(-1)?.title).toBe("Unable to start research");
   });
 
-  test("sendResearchFollowUp discards uploaded blobs when follow-up start fails", async () => {
+  test("sendResearchFollowUp does not discard uploaded blobs when follow-up start fails after upload success", async () => {
     const harness = createHarness();
     const actions = createResearchActions(harness.set as never, harness.get as never, deps);
     const file = {
@@ -265,9 +265,6 @@ describe("research actions", () => {
       if (method === "research/followup") {
         throw new Error("follow-up failed");
       }
-      if (method === "research/discardUploads") {
-        return { status: "discarded" };
-      }
       return {};
     });
 
@@ -278,14 +275,42 @@ describe("research actions", () => {
     });
 
     expect(result).toBeNull();
-    expect(requestJsonRpcMock).toHaveBeenCalledWith(
-      harness.get,
-      harness.set,
-      "ws-1",
-      "research/discardUploads",
-      { fileIds: ["file-2"] },
-    );
+    expect(
+      requestJsonRpcMock.mock.calls.some((call) => call[3] === "research/discardUploads"),
+    ).toBeFalse();
     expect(harness.state.notifications.at(-1)?.title).toBe("Unable to send follow-up");
+  });
+
+  test("startResearch does not discard uploaded blobs when start fails after upload success", async () => {
+    const harness = createHarness();
+    const actions = createResearchActions(harness.set as never, harness.get as never, deps);
+    const file = {
+      name: "start.txt",
+      type: "text/plain",
+      size: 5,
+      arrayBuffer: async () => Buffer.from("start").buffer,
+    } as unknown as File;
+
+    requestJsonRpcMock.mockImplementation(async (_get, _set, _workspaceId, method) => {
+      if (method === "research/uploadFile") {
+        return { file: { fileId: "file-3" } };
+      }
+      if (method === "research/start") {
+        throw new Error("socket closed");
+      }
+      return {};
+    });
+
+    const result = await actions.startResearch({
+      input: "Analyze this file.",
+      files: [file],
+    });
+
+    expect(result).toBeNull();
+    expect(
+      requestJsonRpcMock.mock.calls.some((call) => call[3] === "research/discardUploads"),
+    ).toBeFalse();
+    expect(harness.state.notifications.at(-1)?.title).toBe("Unable to start research");
   });
 
   test("research text deltas advance the local event cursor", async () => {

@@ -738,7 +738,6 @@ export function createResearchActions(
 
     startResearch: async ({ input, title, files, settings }) => {
       let workspaceId: string | null = null;
-      let attachedFileIds: string[] = [];
       try {
         workspaceId = await ensureResearchTransportWorkspace();
         if (!workspaceId) {
@@ -750,7 +749,7 @@ export function createResearchActions(
           researchTransportWorkspaceId: workspaceId,
         }));
         deps.syncDesktopStateCache(get);
-        attachedFileIds = await uploadFiles(workspaceId, files);
+        const attachedFileIds = await uploadFiles(workspaceId, files);
         const result: any = await deps.requestJsonRpc(get, set, workspaceId, "research/start", {
           input,
           ...(title ? { title } : {}),
@@ -767,9 +766,6 @@ export function createResearchActions(
         await ensureResearchSubscription(workspaceId, result.research);
         return result.research;
       } catch (error) {
-        if (workspaceId && attachedFileIds.length > 0) {
-          await discardUploadedFiles(workspaceId, attachedFileIds);
-        }
         notify(
           "error",
           "Unable to start research",
@@ -838,13 +834,12 @@ export function createResearchActions(
 
     sendResearchFollowUp: async ({ parentResearchId, input, title, files, settings }) => {
       let workspaceId: string | null = null;
-      let attachedFileIds: string[] = [];
       try {
         workspaceId = await ensureResearchTransportWorkspace();
         if (!workspaceId) {
           return null;
         }
-        attachedFileIds = await uploadFiles(workspaceId, files);
+        const attachedFileIds = await uploadFiles(workspaceId, files);
         const result: any = await deps.requestJsonRpc(get, set, workspaceId, "research/followup", {
           parentResearchId,
           input,
@@ -862,9 +857,6 @@ export function createResearchActions(
         await ensureResearchSubscription(workspaceId, result.research);
         return result.research;
       } catch (error) {
-        if (workspaceId && attachedFileIds.length > 0) {
-          await discardUploadedFiles(workspaceId, attachedFileIds);
-        }
         notify(
           "error",
           "Unable to send follow-up",

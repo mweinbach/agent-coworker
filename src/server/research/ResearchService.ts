@@ -268,6 +268,7 @@ export class ResearchService {
     if (!input) {
       throw new Error("Research input is required.");
     }
+    const attachedFiles = await this.resolveAttachedFiles(params);
 
     const now = new Date().toISOString();
     const record = researchRecordSchema.parse({
@@ -301,8 +302,6 @@ export class ResearchService {
       },
       null,
     );
-
-    const attachedFiles = await this.resolveAttachedFiles(params);
     state.streamPromise = this.executeResearch(state, {
       prompt: record.prompt,
       previousInteractionId: undefined,
@@ -337,6 +336,7 @@ export class ResearchService {
     if (!input) {
       throw new Error("Follow-up input is required.");
     }
+    const attachedFiles = await this.resolveAttachedFiles(params);
 
     const now = new Date().toISOString();
     const record = researchRecordSchema.parse({
@@ -370,8 +370,6 @@ export class ResearchService {
       },
       null,
     );
-
-    const attachedFiles = await this.resolveAttachedFiles(params);
     state.streamPromise = this.executeResearch(state, {
       prompt: input,
       previousInteractionId: parent.interactionId,

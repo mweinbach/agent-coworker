@@ -567,6 +567,44 @@ describe("research service", () => {
         }),
       ).rejects.toThrow(/Unknown uploaded research file/);
       expect(createResearchInteractionStreamMock).not.toHaveBeenCalled();
+      expect(sessionDb.listResearch({ workspacePath: paths.rootDir })).toEqual([]);
+      expect(sessionDb.listRunningResearch({ workspacePath: paths.rootDir })).toEqual([]);
+    } finally {
+      sessionDb.close();
+      await fs.rm(paths.home, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects follow-up requests when any requested attachment id is missing without creating a pending row", async () => {
+    const paths = await makeTmpCoworkHome();
+    const sessionDb = await SessionDb.create({ paths });
+
+    await sessionDb.upsertResearch(
+      makeResearchRecord({
+        id: "research-parent-complete",
+        status: "completed",
+        interactionId: "interaction-parent-complete",
+      }),
+    );
+
+    const service = new ResearchService({
+      rootDir: paths.rootDir,
+      sessionDb,
+      getConfig: () => ({ skillsDirs: [] }) as any,
+      sendJsonRpc: () => {},
+    });
+
+    try {
+      await expect(
+        service.followUp("research-parent-complete", {
+          input: "Use the missing upload in a follow-up.",
+          attachedFileIds: ["missing-file-id"],
+        }),
+      ).rejects.toThrow(/Unknown uploaded research file/);
+      expect(createResearchInteractionStreamMock).not.toHaveBeenCalled();
+      expect(sessionDb.getResearch("research-parent-complete")).not.toBeNull();
+      expect(sessionDb.listResearch({ workspacePath: paths.rootDir })).toEqual([]);
+      expect(sessionDb.listRunningResearch({ workspacePath: paths.rootDir })).toEqual([]);
     } finally {
       sessionDb.close();
       await fs.rm(paths.home, { recursive: true, force: true });

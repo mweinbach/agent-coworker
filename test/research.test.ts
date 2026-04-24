@@ -431,7 +431,7 @@ describe("research service", () => {
         (value) => value === 1,
       );
 
-      expect(completed?.inputs.fileSearchStoreName).toBe("file-search-stores/mock-store");
+      expect(completed?.inputs.fileSearchStoreName).toBeUndefined();
       expect(completed?.inputs.files[0]).toEqual(
         expect.objectContaining({
           fileId: uploaded.fileId,
@@ -1160,6 +1160,10 @@ describe("research service", () => {
         () => sessionDb.getResearch(research.id),
         (value) => value?.status === "cancelled",
       );
+      await waitFor(
+        () => (service as any).states.has(research.id),
+        (value) => value === false,
+      );
     } finally {
       sessionDb.close();
       await fs.rm(paths.home, { recursive: true, force: true });
@@ -1215,7 +1219,10 @@ describe("research service", () => {
       await service.approvePlan(research.id);
       const completed = await waitFor(
         () => sessionDb.getResearch(research.id),
-        (value) => value?.status === "completed" && value.planPending === false,
+        (value) =>
+          value?.status === "completed" &&
+          value.planPending === false &&
+          value.inputs.fileSearchStoreName === undefined,
       );
 
       expect(createResearchInteractionStreamMock.mock.calls.at(-1)?.[0]).toEqual(
@@ -1228,8 +1235,79 @@ describe("research service", () => {
           ]),
         }),
       );
-      expect(completed?.inputs.fileSearchStoreName).toBe("file-search-stores/mock-store");
+      expect(completed?.inputs.fileSearchStoreName).toBeUndefined();
       expect(deleteResearchFileSearchStoreMock).toHaveBeenCalledTimes(1);
+      await waitFor(
+        () => (service as any).states.has(research.id),
+        (value) => value === false,
+      );
+    } finally {
+      sessionDb.close();
+      await fs.rm(paths.home, { recursive: true, force: true });
+    }
+  });
+
+  test("allows cancelling plan-pending research runs and cleans up attachment stores", async () => {
+    const paths = await makeTmpCoworkHome();
+    const sessionDb = await SessionDb.create({ paths });
+
+    createResearchInteractionStreamImpl = async () =>
+      (async function* () {
+        yield {
+          event_type: "interaction.start",
+          event_id: "evt-1",
+          interaction: { id: "interaction-plan-cancel", status: "running" },
+        };
+        yield {
+          event_type: "content.start",
+          event_id: "evt-2",
+          content: { type: "text", text: "Draft plan" },
+        };
+        yield {
+          event_type: "interaction.complete",
+          event_id: "evt-3",
+          interaction: { id: "interaction-plan-cancel", status: "completed" },
+        };
+      })();
+
+    const service = new ResearchService({
+      rootDir: paths.rootDir,
+      sessionDb,
+      getConfig: () => ({ skillsDirs: [] }) as any,
+      sendJsonRpc: () => {},
+    });
+
+    try {
+      const uploaded = await service.uploadFile({
+        filename: "plan.txt",
+        mimeType: "text/plain",
+        contentBase64: Buffer.from("plan attachment").toString("base64"),
+      });
+      const research = await service.start({
+        input: "Create a plan first.",
+        settings: { planApproval: true },
+        attachedFileIds: [uploaded.fileId],
+      });
+      const planPending = await waitFor(
+        () => sessionDb.getResearch(research.id),
+        (value) => value?.planPending === true,
+      );
+
+      expect(planPending?.status).toBe("completed");
+      expect(planPending?.inputs.fileSearchStoreName).toBe("file-search-stores/mock-store");
+      expect(deleteResearchFileSearchStoreMock).not.toHaveBeenCalled();
+
+      const cancelled = await service.cancel(research.id);
+
+      expect(cancelled?.status).toBe("cancelled");
+      expect(cancelled?.planPending).toBeTrue();
+      expect(deleteResearchFileSearchStoreMock).toHaveBeenCalledTimes(1);
+      expect(sessionDb.getResearch(research.id)?.status).toBe("cancelled");
+      expect(sessionDb.getResearch(research.id)?.inputs.fileSearchStoreName).toBeUndefined();
+      await waitFor(
+        () => (service as any).states.has(research.id),
+        (value) => value === false,
+      );
     } finally {
       sessionDb.close();
       await fs.rm(paths.home, { recursive: true, force: true });
@@ -1418,6 +1496,10 @@ describe("research service", () => {
           fileSearchStoreName: "file-search-stores/mock-store",
         }),
       );
+      await waitFor(
+        () => (service as any).states.has(research.id),
+        (value) => value === false,
+      );
     } finally {
       sessionDb.close();
       await fs.rm(paths.home, { recursive: true, force: true });
@@ -1427,6 +1509,20 @@ describe("research service", () => {
   test("propagates plan approval mode to follow-up research streams", async () => {
     const paths = await makeTmpCoworkHome();
     const sessionDb = await SessionDb.create({ paths });
+
+    createResearchInteractionStreamImpl = async () =>
+      (async function* () {
+        yield {
+          event_type: "interaction.start",
+          event_id: "evt-followup-plan-1",
+          interaction: { id: "interaction-followup-plan", status: "running" },
+        };
+        yield {
+          event_type: "interaction.complete",
+          event_id: "evt-followup-plan-2",
+          interaction: { id: "interaction-followup-plan", status: "completed" },
+        };
+      })();
 
     await sessionDb.upsertResearch(
       makeResearchRecord({
@@ -1447,7 +1543,7 @@ describe("research service", () => {
     });
 
     try {
-      await service.followUp("research-parent-plan", {
+      const followUp = await service.followUp("research-parent-plan", {
         input: "Continue with approval.",
       });
 
@@ -1459,6 +1555,15 @@ describe("research service", () => {
         expect.objectContaining({
           collaborativePlanning: true,
         }),
+      );
+      await waitFor(
+        () => sessionDb.getResearch(followUp.id),
+        (value) => value?.planPending === true,
+      );
+      await service.cancel(followUp.id);
+      await waitFor(
+        () => (service as any).states.has(followUp.id),
+        (value) => value === false,
       );
     } finally {
       sessionDb.close();

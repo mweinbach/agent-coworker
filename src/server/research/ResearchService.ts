@@ -405,7 +405,7 @@ export class ResearchService {
     }
 
     const state = activeState ?? this.getOrCreateState(existing);
-    if (isTerminalResearchStatus(state.record.status)) {
+    if (isTerminalResearchStatus(state.record.status) && !state.record.planPending) {
       return state.record;
     }
     state.cancelRequested = true;
@@ -1265,6 +1265,20 @@ export class ResearchService {
         await this.fileStore.deleteResearchStore(this.resolveGoogleApiKey(), fileSearchStoreName);
       } catch {
         // Remote store deletion is best effort; local terminal cleanup must still complete.
+      }
+    }
+    if (fileSearchStoreName) {
+      state.record = {
+        ...state.record,
+        inputs: {
+          ...state.record.inputs,
+          fileSearchStoreName: undefined,
+        },
+      };
+      try {
+        await this.sessionDb.upsertResearch(state.record);
+      } catch {
+        // Local cleanup persistence is best effort during shutdown/teardown races.
       }
     }
     if (state.persistTimer) {

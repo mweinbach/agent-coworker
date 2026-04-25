@@ -6,6 +6,7 @@ import path from "node:path";
 import { WEBSOCKET_PROTOCOL_VERSION } from "../../../src/server/protocol";
 
 type CheckResult = { ok: true } | { ok: false; message: string };
+const REPO_ROOT = path.resolve(import.meta.dir, "..", "..", "..");
 const REPO_PATH_PREFIXES = [
   "src/",
   "docs/",
@@ -196,7 +197,7 @@ async function validateReferencedPaths(
 }
 
 async function main() {
-  const cwd = process.cwd();
+  const cwd = REPO_ROOT;
   const requiredFiles = [
     "docs/harness/index.md",
     "docs/harness/config.md",

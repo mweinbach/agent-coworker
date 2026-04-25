@@ -68,6 +68,8 @@ import {
   validateWithOptionalRepair,
 } from "./rawLoopValidation";
 
+const REPO_ROOT = path.resolve(import.meta.dir, "..", "..", "..");
+
 type AskEvent = {
   at: string;
   question: string;
@@ -2035,7 +2037,7 @@ async function emitHarnessRunEvent(
 
 async function main() {
   const cliArgs = parseArgs(process.argv.slice(2));
-  const repoDir = process.cwd();
+  const repoDir = REPO_ROOT;
 
   const baseConfig = await loadConfig({
     cwd: repoDir,

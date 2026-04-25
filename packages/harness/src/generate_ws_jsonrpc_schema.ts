@@ -6,8 +6,10 @@ import {
   buildJsonRpcTypeScriptArtifact,
 } from "../../../src/server/jsonrpc/codegen";
 
+const REPO_ROOT = path.resolve(import.meta.dir, "..", "..", "..");
+
 async function main() {
-  const outputDir = path.join(process.cwd(), "docs", "generated");
+  const outputDir = path.join(REPO_ROOT, "docs", "generated");
   await fs.mkdir(outputDir, { recursive: true });
 
   await fs.writeFile(

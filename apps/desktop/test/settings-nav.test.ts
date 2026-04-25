@@ -69,8 +69,7 @@ mock.module("../src/lib/desktopCommands", () =>
     checkForUpdates: async () => {},
     quitAndInstallUpdate: async () => {},
     getDesktopFeatureFlags: (featureOverrides) => ({
-      menuBar:
-        typeof featureOverrides?.menuBar === "boolean" ? featureOverrides.menuBar : true,
+      menuBar: typeof featureOverrides?.menuBar === "boolean" ? featureOverrides.menuBar : true,
       remoteAccess:
         typeof featureOverrides?.remoteAccess === "boolean"
           ? featureOverrides.remoteAccess
@@ -260,7 +259,7 @@ describe("settings nav (store)", () => {
     expect(useAppStore.getState().settingsPage).toBe("providers");
   });
 
-  test("openSettings keeps feature flags available in packaged builds", () => {
+  test("openSettings falls back from feature flags in packaged builds", () => {
     useAppStore.setState({
       updateState: {
         ...useAppStore.getState().updateState,
@@ -269,7 +268,18 @@ describe("settings nav (store)", () => {
     });
     useAppStore.getState().openSettings("featureFlags");
     expect(useAppStore.getState().view).toBe("settings");
-    expect(useAppStore.getState().settingsPage).toBe("featureFlags");
+    expect(useAppStore.getState().settingsPage).toBe("providers");
+  });
+
+  test("setSettingsPage falls back from feature flags in packaged builds", () => {
+    useAppStore.setState({
+      updateState: {
+        ...useAppStore.getState().updateState,
+        packaged: true,
+      },
+    });
+    useAppStore.getState().setSettingsPage("featureFlags");
+    expect(useAppStore.getState().settingsPage).toBe("providers");
   });
 
   test("disabling remote access tears down an active relay and falls back from the remote access page", async () => {

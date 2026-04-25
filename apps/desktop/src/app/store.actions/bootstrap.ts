@@ -18,6 +18,7 @@ import { normalizeQuickChatShortcutAccelerator } from "../../lib/quickChatShortc
 import type { ChildModelRoutingMode } from "../../lib/wsProtocol";
 import { type ProviderName, safeParseSessionEvent } from "../../lib/wsProtocol";
 import { normalizeWorkspaceProviderOptions } from "../openaiCompatibleProviderOptions";
+import { isSettingsPageAvailable } from "../settingsPageAvailability";
 import {
   deriveConnectedProviders,
   normalizePersistedProviderState,
@@ -107,10 +108,11 @@ const normalizedViewSchema = z.preprocess(
 function normalizeSettingsPageId(
   value: unknown,
   desktopFeatures: DesktopFeatureFlags = getDesktopFeatureFlags(),
+  packaged = isPackagedDesktopApp(),
 ): SettingsPageId {
   const normalized = normalizeKnownSettingsPageId(value);
 
-  if (normalized === "remoteAccess" && desktopFeatures.remoteAccess !== true) {
+  if (!isSettingsPageAvailable(normalized, { desktopFeatures, packaged })) {
     return "providers";
   }
 
@@ -885,7 +887,11 @@ export function createBootstrapActions(
     openSettings: (page) => {
       set((s) => ({
         view: "settings",
-        settingsPage: normalizeSettingsPageId(page ?? s.settingsPage, s.desktopFeatureFlags),
+        settingsPage: normalizeSettingsPageId(
+          page ?? s.settingsPage,
+          s.desktopFeatureFlags,
+          s.updateState.packaged || isPackagedDesktopApp(),
+        ),
         lastNonSettingsView: s.view === "settings" ? s.lastNonSettingsView : s.view,
       }));
       syncDesktopStateCache(get);
@@ -900,7 +906,11 @@ export function createBootstrapActions(
 
     setSettingsPage: (page) => {
       set((state) => ({
-        settingsPage: normalizeSettingsPageId(page, state.desktopFeatureFlags),
+        settingsPage: normalizeSettingsPageId(
+          page,
+          state.desktopFeatureFlags,
+          state.updateState.packaged || isPackagedDesktopApp(),
+        ),
       }));
       syncDesktopStateCache(get);
     },
@@ -1023,7 +1033,11 @@ export function createBootstrapActions(
       set((state) => ({
         desktopFeatureFlagOverrides: nextOverrides,
         desktopFeatureFlags: nextFeatureFlags,
-        settingsPage: normalizeSettingsPageId(state.settingsPage, nextFeatureFlags),
+        settingsPage: normalizeSettingsPageId(
+          state.settingsPage,
+          nextFeatureFlags,
+          state.updateState.packaged || isPackagedDesktopApp(),
+        ),
       }));
       void persistNow(get);
       if (flagId === "a2ui") {
@@ -1110,6 +1124,7 @@ export function createBootstrapActions(
         const nextSettingsPage = normalizeSettingsPageId(
           state.settingsPage,
           state.desktopFeatureFlags,
+          updateState.packaged || isPackagedDesktopApp(),
         );
         settingsPageChanged = nextSettingsPage !== state.settingsPage;
         return {

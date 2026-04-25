@@ -1,9 +1,11 @@
 import { ArrowLeftIcon } from "lucide-react";
 import { type ReactNode, useCallback, useState } from "react";
 
+import { includeDevelopmentSettings } from "../../app/settingsPageAvailability";
 import { useAppStore } from "../../app/store";
 import type { SettingsPageId } from "../../app/types";
 import { Button } from "../../components/ui/button";
+import { isPackagedDesktopApp } from "../../lib/desktopCommands";
 import { cn } from "../../lib/utils";
 import { BackupPage } from "./pages/BackupPage";
 import { DeveloperPage } from "./pages/DeveloperPage";
@@ -71,10 +73,14 @@ const SETTINGS_PAGE_META: Record<SettingsPageId, { title: string; description: s
   },
 };
 
-export function getSettingsGroups(remoteAccessAvailable: boolean): Array<{
+export function getSettingsGroups(
+  remoteAccessAvailable: boolean,
+  opts: { includeDevelopmentPages?: boolean } = {},
+): Array<{
   label: string;
   pages: SettingsPageDefinition[];
 }> {
+  const includeDevelopmentPages = opts.includeDevelopmentPages ?? true;
   return [
     {
       label: "Models & tools",
@@ -110,7 +116,15 @@ export function getSettingsGroups(remoteAccessAvailable: boolean): Array<{
       label: "Advanced",
       pages: [
         { id: "desktop", label: "Desktop", render: () => <DesktopPage /> },
-        { id: "featureFlags", label: "Feature flags", render: () => <FeatureFlagsPage /> },
+        ...(includeDevelopmentPages
+          ? [
+              {
+                id: "featureFlags",
+                label: "Feature flags",
+                render: () => <FeatureFlagsPage />,
+              } satisfies SettingsPageDefinition,
+            ]
+          : []),
         { id: "developer", label: "Developer", render: () => <DeveloperPage /> },
         { id: "updates", label: "Updates", render: () => <UpdatesPage /> },
       ],
@@ -197,11 +211,14 @@ function SettingsNavigation({
 export function SettingsShell() {
   const desktopFeatureFlags = useAppStore((s) => s.desktopFeatureFlags);
   const remoteAccessAvailable = desktopFeatureFlags.remoteAccess === true;
+  const packaged = useAppStore((s) => s.updateState.packaged);
   const settingsPage = useAppStore((s) => s.settingsPage);
   const setSettingsPage = useAppStore((s) => s.setSettingsPage);
   const closeSettings = useAppStore((s) => s.closeSettings);
   const sidebarWidth = useAppStore((s) => s.sidebarWidth);
-  const settingsGroups = getSettingsGroups(remoteAccessAvailable);
+  const settingsGroups = getSettingsGroups(remoteAccessAvailable, {
+    includeDevelopmentPages: includeDevelopmentSettings(packaged || isPackagedDesktopApp()),
+  });
   const settingsPages = settingsGroups.flatMap((group) => group.pages);
   const activePage = settingsPages.find((page) => page.id === settingsPage) ?? settingsPages[0];
   const meta = SETTINGS_PAGE_META[activePage.id];
@@ -220,7 +237,7 @@ export function SettingsShell() {
     >
       <div className="settings-shell__drag-zone absolute inset-x-0 top-0" aria-hidden="true" />
       <SettingsNavigation
-        activePage={settingsPage}
+        activePage={activePage.id}
         onSelectPage={setSettingsPage}
         onBack={closeSettings}
         settingsGroups={settingsGroups}

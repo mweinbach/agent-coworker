@@ -480,7 +480,7 @@ describe("desktop bootstrap cache", () => {
     expect(seed?.settingsPage).toBe("remoteAccess");
   });
 
-  test("buildCachedDesktopStateSeed preserves the feature flags page during packaged startup", () => {
+  test("buildCachedDesktopStateSeed falls back from feature flags during packaged startup", () => {
     packagedApp = true;
     const seed = buildCachedDesktopStateSeed({
       ...cachedState,
@@ -493,7 +493,7 @@ describe("desktop bootstrap cache", () => {
     });
 
     expect(seed?.view).toBe("settings");
-    expect(seed?.settingsPage).toBe("featureFlags");
+    expect(seed?.settingsPage).toBe("providers");
     expect(seed?.desktopFeatureFlags.remoteAccess).toBe(false);
   });
 

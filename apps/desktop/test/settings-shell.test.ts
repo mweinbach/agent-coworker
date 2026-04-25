@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { useAppStore } from "../src/app/store";
 import { getSettingsGroups, SettingsShell } from "../src/ui/settings/SettingsShell";
 
 describe("settings shell", () => {
@@ -12,37 +11,28 @@ describe("settings shell", () => {
     expect(pageIds).toContain("featureFlags");
   });
 
-  test("keeps the feature flags nav entry in packaged (installable) builds", () => {
-    const previousState = useAppStore.getState();
-    useAppStore.setState({
-      ...previousState,
-      settingsPage: "featureFlags",
-      desktopFeatureFlags: {
-        remoteAccess: false,
-        workspacePicker: true,
-        workspaceLifecycle: true,
-        a2ui: false,
-      },
-      updateState: {
-        ...previousState.updateState,
-        packaged: true,
-      },
-    });
-
-    try {
-      const markup = renderToStaticMarkup(createElement(SettingsShell));
-      expect(markup).toContain("Feature flags");
-      expect(markup).toContain("Developer");
-      expect(markup).not.toContain("Remote access");
-    } finally {
-      useAppStore.setState(previousState);
-    }
+  test("hides development-only settings in packaged builds", () => {
+    const pageIds = getSettingsGroups(false, { includeDevelopmentPages: false }).flatMap((group) =>
+      group.pages.map((page) => page.id),
+    );
+    expect(pageIds).not.toContain("featureFlags");
+    expect(pageIds).toContain("developer");
+    expect(pageIds).not.toContain("remoteAccess");
+    expect(pageIds).toContain("providers");
   });
 
   test("hides remote access when the feature is disabled", () => {
     const pageIds = getSettingsGroups(false).flatMap((group) => group.pages.map((page) => page.id));
     expect(pageIds).not.toContain("remoteAccess");
     expect(pageIds).toContain("featureFlags");
+  });
+
+  test("getSettingsGroups omits development pages when requested", () => {
+    const pageIds = getSettingsGroups(true, { includeDevelopmentPages: false }).flatMap((group) =>
+      group.pages.map((page) => page.id),
+    );
+    expect(pageIds).toContain("remoteAccess");
+    expect(pageIds).not.toContain("featureFlags");
   });
 
   test("keeps the drag zone out of normal layout flow", () => {

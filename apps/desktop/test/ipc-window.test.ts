@@ -10,11 +10,15 @@ type FakeWindow = {
   fullScreen: boolean;
   bounds: { x: number; y: number };
   setPositionCalls: Array<{ x: number; y: number }>;
+  closeCalls: number;
+  hideCalls: number;
   isDestroyed(): boolean;
   isMaximized(): boolean;
   isFullScreen(): boolean;
   getBounds(): { x: number; y: number };
   setPosition(x: number, y: number): void;
+  close(): void;
+  hide(): void;
 };
 
 const windowsBySenderId = new Map<number, FakeWindow>();
@@ -57,8 +61,12 @@ mock.module("electron", () => createElectronMock());
 const { registerWindowIpc } = await import("../electron/ipc/window");
 
 class FakeWebContents extends EventEmitter {
-  constructor(readonly id: number) {
+  constructor(readonly id: number, private readonly url = "file:///renderer/index.html") {
     super();
+  }
+
+  getURL() {
+    return this.url;
   }
 }
 
@@ -69,6 +77,8 @@ function createFakeWindow(x = 40, y = 50): FakeWindow {
     fullScreen: false,
     bounds: { x, y },
     setPositionCalls: [],
+    closeCalls: 0,
+    hideCalls: 0,
     isDestroyed() {
       return this.destroyed;
     },
@@ -83,6 +93,12 @@ function createFakeWindow(x = 40, y = 50): FakeWindow {
     },
     setPosition(nextX: number, nextY: number) {
       this.setPositionCalls.push({ x: nextX, y: nextY });
+    },
+    close() {
+      this.closeCalls += 1;
+    },
+    hide() {
+      this.hideCalls += 1;
     },
   };
 }
@@ -169,5 +185,31 @@ describe("window IPC", () => {
     expect(consumePendingMenuCommands).toHaveBeenCalledTimes(1);
     expect(showQuickChatWindow).toHaveBeenCalledTimes(1);
     expect(showQuickChatWindow).toHaveBeenCalledWith({ threadId: "thread-21" });
+  });
+
+  test("hides popup windows instead of closing them", () => {
+    windowsBySenderId.clear();
+    const { handlers } = createHandlers();
+    const sender = new FakeWebContents(31, "file:///renderer/index.html?window=utility");
+    const win = createFakeWindow();
+    windowsBySenderId.set(sender.id, win);
+
+    handlers.get(DESKTOP_IPC_CHANNELS.windowClose)?.({ sender });
+
+    expect(win.hideCalls).toBe(1);
+    expect(win.closeCalls).toBe(0);
+  });
+
+  test("keeps normal close behavior for the main window", () => {
+    windowsBySenderId.clear();
+    const { handlers } = createHandlers();
+    const sender = new FakeWebContents(32, "file:///renderer/index.html");
+    const win = createFakeWindow();
+    windowsBySenderId.set(sender.id, win);
+
+    handlers.get(DESKTOP_IPC_CHANNELS.windowClose)?.({ sender });
+
+    expect(win.closeCalls).toBe(1);
+    expect(win.hideCalls).toBe(0);
   });
 });

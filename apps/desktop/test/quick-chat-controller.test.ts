@@ -402,4 +402,51 @@ describe("resolveTrayIconPath", () => {
     expect(retargetQuickChatWindow).toHaveBeenCalledTimes(1);
     expect(retargetQuickChatWindow).toHaveBeenCalledWith(quickChatWindow, { threadId: "thread-1" });
   });
+
+  test("passes new-thread requests when creating quick chat windows", async () => {
+    createdTrays.length = 0;
+    const quickChatWindow = new FakeWindow();
+    const createQuickChatWindow = mock(async () => quickChatWindow as never);
+    const controller = new QuickChatController({
+      appName: "Cowork",
+      platform: "darwin",
+      trayIconPath: "/tmp/icon.png",
+      getMainWindow: () => null,
+      createMainWindow: async () => new FakeWindow() as never,
+      createQuickChatWindow,
+      retargetQuickChatWindow: async () => {},
+      createUtilityWindow: async () => new FakeWindow() as never,
+    });
+
+    controller.initialize();
+    await controller.showQuickChatWindow({ newThread: true });
+
+    expect(createQuickChatWindow).toHaveBeenCalledTimes(1);
+    expect(createQuickChatWindow).toHaveBeenCalledWith({ newThread: true });
+  });
+
+  test("retargets existing quick chat windows for new-thread requests", async () => {
+    createdTrays.length = 0;
+    const quickChatWindow = new FakeWindow();
+    const createQuickChatWindow = mock(async () => quickChatWindow as never);
+    const retargetQuickChatWindow = mock(async () => {});
+    const controller = new QuickChatController({
+      appName: "Cowork",
+      platform: "darwin",
+      trayIconPath: "/tmp/icon.png",
+      getMainWindow: () => null,
+      createMainWindow: async () => new FakeWindow() as never,
+      createQuickChatWindow,
+      retargetQuickChatWindow,
+      createUtilityWindow: async () => new FakeWindow() as never,
+    });
+
+    controller.initialize();
+    await controller.showQuickChatWindow();
+    await controller.showQuickChatWindow({ newThread: true });
+
+    expect(createQuickChatWindow).toHaveBeenCalledTimes(1);
+    expect(retargetQuickChatWindow).toHaveBeenCalledTimes(1);
+    expect(retargetQuickChatWindow).toHaveBeenCalledWith(quickChatWindow, { newThread: true });
+  });
 });

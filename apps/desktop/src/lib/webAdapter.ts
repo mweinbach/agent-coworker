@@ -11,6 +11,7 @@ import type {
   ExplorerEntry,
   MobileRelayBridgeState,
   ReadFileForPreviewOutput,
+  ShowQuickChatWindowInput,
   SystemAppearance,
   UpdaterState,
 } from "./desktopApi";
@@ -535,7 +536,7 @@ export function createWebAdapter(): DesktopApi {
 
     async showMainWindow(): Promise<void> {},
 
-    async showQuickChatWindow(_opts?: { threadId?: string }): Promise<void> {},
+    async showQuickChatWindow(_opts?: ShowQuickChatWindowInput): Promise<void> {},
 
     async listDirectory(opts): Promise<ExplorerEntry[]> {
       return await readWebJson<ExplorerEntry[]>("/cowork/fs/list", {

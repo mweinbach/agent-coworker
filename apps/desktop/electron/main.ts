@@ -455,20 +455,19 @@ async function createQuickChatWindow(opts?: ShowQuickChatWindowInput): Promise<B
     win.setBackgroundColor("#00000000");
   }
   win.setAlwaysOnTop(true, process.platform === "darwin" ? "pop-up-menu" : "normal");
-  await loadRendererWindow(
-    win,
-    "quick-chat",
-    opts?.threadId ? { threadId: opts.threadId } : {},
-  );
+  await loadRendererWindow(win, "quick-chat", quickChatWindowQuery(opts));
   return win;
 }
 
 async function retargetQuickChatWindow(win: BrowserWindow, opts?: ShowQuickChatWindowInput): Promise<void> {
-  await loadRendererWindow(
-    win,
-    "quick-chat",
-    opts?.threadId ? { threadId: opts.threadId } : {},
-  );
+  await loadRendererWindow(win, "quick-chat", quickChatWindowQuery(opts));
+}
+
+function quickChatWindowQuery(opts?: ShowQuickChatWindowInput): Record<string, string> {
+  return {
+    ...(opts?.threadId ? { threadId: opts.threadId } : {}),
+    ...(opts?.newThread ? { newThread: "true" } : {}),
+  };
 }
 
 async function createUtilityWindow(): Promise<BrowserWindow> {

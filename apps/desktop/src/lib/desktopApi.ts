@@ -81,6 +81,7 @@ export type WindowDragPointInput = {
 
 export type ShowQuickChatWindowInput = {
   threadId?: string;
+  newThread?: boolean;
 };
 
 export type ListDirectoryInput = {

@@ -6,6 +6,7 @@ import {
   mobileRelayBridgeStateSchema,
   mobileRelayStartInputSchema,
   persistedStateInputSchema,
+  showQuickChatWindowInputSchema,
   updaterStateSchema,
 } from "../src/lib/desktopSchemas";
 
@@ -139,6 +140,12 @@ describe("desktop persisted-state schema defaults", () => {
 
   test("accepts openUpdates desktop menu command", () => {
     expect(desktopMenuCommandSchema.parse("openUpdates")).toBe("openUpdates");
+  });
+
+  test("accepts quick chat new-thread requests", () => {
+    expect(showQuickChatWindowInputSchema.parse({ newThread: true })).toEqual({
+      newThread: true,
+    });
   });
 
   test("accepts mobile relay start input", () => {

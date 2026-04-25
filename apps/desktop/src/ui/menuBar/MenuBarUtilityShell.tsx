@@ -70,7 +70,7 @@ export function MenuBarUtilityShell({ init, ready, startupError }: MenuBarUtilit
                   type="button"
                   variant="outline"
                   className="justify-start rounded-2xl"
-                  onClick={() => void showQuickChatWindow().then(() => windowClose())}
+                  onClick={() => void showQuickChatWindow({ newThread: true }).then(() => windowClose())}
                 >
                   <MessageSquarePlusIcon className="mr-2 h-4 w-4" />
                   Open Quick Chat

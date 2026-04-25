@@ -202,6 +202,7 @@ export const windowDragPointInputSchema: z.ZodType<WindowDragPointInput> = z.obj
 
 export const showQuickChatWindowInputSchema: z.ZodType<ShowQuickChatWindowInput> = z.object({
   threadId: safeIdSchema.optional(),
+  newThread: z.boolean().optional(),
 });
 
 export const listDirectoryInputSchema: z.ZodType<ListDirectoryInput> = z.object({

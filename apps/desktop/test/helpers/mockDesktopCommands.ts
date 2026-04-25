@@ -92,7 +92,7 @@ export function createDesktopCommandsMock(
     windowDragEnd: async () => {},
     getPlatform: async () => "linux",
     showMainWindow: async () => {},
-    showQuickChatWindow: async (_opts?: { threadId?: string }) => {},
+    showQuickChatWindow: async (_opts?: { threadId?: string; newThread?: boolean }) => {},
     listDirectory: async () => [],
     readFile: async () => "",
     readFileForPreview: async () => ({ bytes: new Uint8Array(), byteLength: 0, truncated: false }),

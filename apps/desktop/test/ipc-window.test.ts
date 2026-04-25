@@ -179,12 +179,15 @@ describe("window IPC", () => {
 
     await handlers.get(DESKTOP_IPC_CHANNELS.showMainWindow)?.({ sender });
     expect(await handlers.get(DESKTOP_IPC_CHANNELS.consumePendingMenuCommands)?.({ sender })).toEqual(["openSettings"]);
-    await handlers.get(DESKTOP_IPC_CHANNELS.showQuickChatWindow)?.({ sender }, { threadId: "thread-21" });
+    await handlers.get(DESKTOP_IPC_CHANNELS.showQuickChatWindow)?.(
+      { sender },
+      { threadId: "thread-21", newThread: true },
+    );
 
     expect(showMainWindow).toHaveBeenCalledTimes(1);
     expect(consumePendingMenuCommands).toHaveBeenCalledTimes(1);
     expect(showQuickChatWindow).toHaveBeenCalledTimes(1);
-    expect(showQuickChatWindow).toHaveBeenCalledWith({ threadId: "thread-21" });
+    expect(showQuickChatWindow).toHaveBeenCalledWith({ threadId: "thread-21", newThread: true });
   });
 
   test("hides popup windows instead of closing them", () => {

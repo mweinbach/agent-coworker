@@ -105,7 +105,7 @@ export class QuickChatController {
 
   async showQuickChatWindow(opts: ShowQuickChatWindowInput & { anchorBounds?: Rectangle } = {}): Promise<void> {
     this.hideUtilityWindow();
-    const win = await this.ensureQuickChatWindow(opts.threadId);
+    const win = await this.ensureQuickChatWindow(opts);
     this.positionPopupWindow(win, opts.anchorBounds ?? this.tray?.getBounds());
     if (win.isMinimized()) {
       win.restore();
@@ -290,18 +290,18 @@ export class QuickChatController {
     return resized;
   }
 
-  private async ensureQuickChatWindow(threadId?: string): Promise<BrowserWindow> {
+  private async ensureQuickChatWindow(opts: ShowQuickChatWindowInput = {}): Promise<BrowserWindow> {
     if (this.quickChatWindow && !this.quickChatWindow.isDestroyed()) {
-      if (threadId) {
-        await this.retargetQuickChatWindow(this.quickChatWindow, { threadId });
-        this.quickChatThreadId = threadId;
+      if (opts.threadId || opts.newThread) {
+        await this.retargetQuickChatWindow(this.quickChatWindow, opts);
+        this.quickChatThreadId = opts.threadId ?? null;
       }
       return this.quickChatWindow;
     }
 
-    const win = await this.createQuickChatWindow(threadId ? { threadId } : undefined);
+    const win = await this.createQuickChatWindow(opts.threadId || opts.newThread ? opts : undefined);
     this.quickChatWindow = win;
-    this.quickChatThreadId = threadId ?? null;
+    this.quickChatThreadId = opts.threadId ?? null;
     win.on("close", (event) => {
       if (this.quitting || !this.shouldKeepPopupWindowsAlive()) {
         return;

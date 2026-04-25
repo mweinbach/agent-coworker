@@ -1,11 +1,11 @@
-import { useEffect, useMemo, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, type CSSProperties } from "react";
 
 import { ArrowUpRightIcon, SquarePenIcon, XIcon } from "lucide-react";
 
 import { useAppStore } from "../../app/store";
 import { Button } from "../../components/ui/button";
 import { showMainWindow, windowClose } from "../../lib/desktopCommands";
-import { getDesktopWindowThreadId } from "../../lib/windowMode";
+import { getDesktopWindowThreadId, shouldStartNewQuickChatThread } from "../../lib/windowMode";
 import { ChatView } from "../ChatView";
 
 type QuickChatShellProps = {
@@ -21,6 +21,8 @@ export function QuickChatShell({ init, ready, startupError }: QuickChatShellProp
   const newThread = useAppStore((s) => s.newThread);
   const selectThread = useAppStore((s) => s.selectThread);
   const requestedThreadId = getDesktopWindowThreadId();
+  const requestedNewThread = shouldStartNewQuickChatThread();
+  const startedRequestedNewThreadRef = useRef(false);
 
   const activeThread = useMemo(
     () => threads.find((thread) => thread.id === selectedThreadId) ?? null,
@@ -45,14 +47,34 @@ export function QuickChatShell({ init, ready, startupError }: QuickChatShellProp
   }, [ready, requestedThreadId, selectThread, selectedThreadId, startupError, threads]);
 
   useEffect(() => {
-    if (!ready || startupError || selectedThreadId || workspaces.length === 0) {
+    if (!ready || startupError || workspaces.length === 0) {
       return;
     }
     if (requestedThreadId && threads.some((thread) => thread.id === requestedThreadId)) {
       return;
     }
+    if (requestedNewThread) {
+      if (startedRequestedNewThreadRef.current) {
+        return;
+      }
+      startedRequestedNewThreadRef.current = true;
+      void newThread();
+      return;
+    }
+    if (selectedThreadId) {
+      return;
+    }
     void newThread();
-  }, [newThread, ready, requestedThreadId, selectedThreadId, startupError, threads, workspaces.length]);
+  }, [
+    newThread,
+    ready,
+    requestedNewThread,
+    requestedThreadId,
+    selectedThreadId,
+    startupError,
+    threads,
+    workspaces.length,
+  ]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {

@@ -29,3 +29,8 @@ export function getDesktopWindowThreadId(): string | null {
   const threadId = params?.get("threadId")?.trim();
   return threadId ? threadId : null;
 }
+
+export function shouldStartNewQuickChatThread(): boolean {
+  const params = readWindowSearchParams();
+  return params?.get("newThread") === "true";
+}

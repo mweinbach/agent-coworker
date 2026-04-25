@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import type { RunTurnParams } from "../src/agent";
 import { createRunTurn } from "../src/agent";
-import { buildTurnSystemPrompt } from "../src/harness/buildTurnSystemPrompt";
+import { buildTurnSystemPrompt } from "../src/turnSystemPrompt";
 import { __internal as observabilityRuntimeInternal } from "../src/observability/runtime";
 import { SessionCostTracker } from "../src/session/costTracker";
 import type { AgentConfig } from "../src/types";

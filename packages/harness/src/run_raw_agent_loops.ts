@@ -5,44 +5,38 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { z } from "zod";
-import { runTurnWithDeps } from "../src/agent";
-import { loadConfig } from "../src/config";
-import { getAiCoworkerPaths } from "../src/connect";
-import { normalizeHarnessContextPayload } from "../src/harness/contextStore";
-import {
-  buildPathArtifactAssertions,
-  type FinalContract,
-  type ValidationIssue,
-  validateWithOptionalRepair,
-} from "../src/harness/rawLoopValidation";
-import { emitObservabilityEvent } from "../src/observability/otel";
-import { getObservabilityHealth } from "../src/observability/runtime";
-import { loadSystemPromptWithSkills } from "../src/prompt";
-import { DEFAULT_PROVIDER_OPTIONS } from "../src/providers";
-import { getProviderCatalog } from "../src/providers/connectionCatalog";
-import { DelegateRunner } from "../src/server/agents/DelegateRunner";
-import { routeAgentConfig } from "../src/server/agents/modelRouter";
-import { parseChildAgentReport } from "../src/server/agents/reportParser";
-import { getAgentRoleDefinition } from "../src/server/agents/roles";
-import { StatusBus } from "../src/server/agents/StatusBus";
-import type { SessionUsageSnapshot, TurnUsage } from "../src/session/costTracker";
+import { runTurnWithDeps } from "../../../src/agent";
+import { loadConfig } from "../../../src/config";
+import { getAiCoworkerPaths } from "../../../src/connect";
+import { normalizeHarnessContextPayload } from "../../../src/sessionContext/HarnessContextStore";
+import { emitObservabilityEvent } from "../../../src/observability/otel";
+import { getObservabilityHealth } from "../../../src/observability/runtime";
+import { loadSystemPromptWithSkills } from "../../../src/prompt";
+import { DEFAULT_PROVIDER_OPTIONS } from "../../../src/providers";
+import { getProviderCatalog } from "../../../src/providers/connectionCatalog";
+import { DelegateRunner } from "../../../src/server/agents/DelegateRunner";
+import { routeAgentConfig } from "../../../src/server/agents/modelRouter";
+import { parseChildAgentReport } from "../../../src/server/agents/reportParser";
+import { getAgentRoleDefinition } from "../../../src/server/agents/roles";
+import { StatusBus } from "../../../src/server/agents/StatusBus";
+import type { SessionUsageSnapshot, TurnUsage } from "../../../src/session/costTracker";
 import {
   type AgentInspectResult,
   type AgentReasoningEffort,
   type AgentRole,
   type PersistentAgentSummary,
   resolveAgentSpawnContextOptions,
-} from "../src/shared/agents";
-import { ensureDefaultGlobalSkillsReady } from "../src/skills/defaultGlobalSkills";
-import type { ToolContext } from "../src/tools";
-import { createAskTool } from "../src/tools/ask";
-import { createBashTool } from "../src/tools/bash";
-import { defineTool } from "../src/tools/defineTool";
-import { createEditTool } from "../src/tools/edit";
-import { createGlobTool } from "../src/tools/glob";
-import { createGrepTool } from "../src/tools/grep";
-import { createMemoryTool } from "../src/tools/memory";
-import { createNotebookEditTool } from "../src/tools/notebookEdit";
+} from "../../../src/shared/agents";
+import { ensureDefaultGlobalSkillsReady } from "../../../src/skills/defaultGlobalSkills";
+import type { ToolContext } from "../../../src/tools";
+import { createAskTool } from "../../../src/tools/ask";
+import { createBashTool } from "../../../src/tools/bash";
+import { defineTool } from "../../../src/tools/defineTool";
+import { createEditTool } from "../../../src/tools/edit";
+import { createGlobTool } from "../../../src/tools/glob";
+import { createGrepTool } from "../../../src/tools/grep";
+import { createMemoryTool } from "../../../src/tools/memory";
+import { createNotebookEditTool } from "../../../src/tools/notebookEdit";
 import {
   createCloseAgentTool,
   createInspectAgentTool,
@@ -50,21 +44,29 @@ import {
   createResumeAgentTool,
   createSendAgentInputTool,
   createWaitForAgentTool,
-} from "../src/tools/persistentAgents";
-import { createReadTool } from "../src/tools/read";
-import { createSkillTool } from "../src/tools/skill";
-import { createSpawnAgentTool } from "../src/tools/spawnAgent";
-import { createTodoWriteTool } from "../src/tools/todoWrite";
-import { createWebFetchTool } from "../src/tools/webFetch";
-import { createWebSearchTool } from "../src/tools/webSearch";
-import { createWriteTool } from "../src/tools/write";
+} from "../../../src/tools/persistentAgents";
+import { createReadTool } from "../../../src/tools/read";
+import { createSkillTool } from "../../../src/tools/skill";
+import { createSpawnAgentTool } from "../../../src/tools/spawnAgent";
+import { createTodoWriteTool } from "../../../src/tools/todoWrite";
+import { createWebFetchTool } from "../../../src/tools/webFetch";
+import { createWebSearchTool } from "../../../src/tools/webSearch";
+import { createWriteTool } from "../../../src/tools/write";
 import type {
   AgentConfig,
   HarnessContextPayload,
+  HarnessContextState,
   ModelMessage,
   ProviderName,
   TodoItem,
-} from "../src/types";
+} from "../../../src/types";
+import { isProviderName } from "../../../src/types";
+import {
+  buildPathArtifactAssertions,
+  type FinalContract,
+  type ValidationIssue,
+  validateWithOptionalRepair,
+} from "./rawLoopValidation";
 
 type AskEvent = {
   at: string;
@@ -87,6 +89,14 @@ type TodoEvent = {
 type TracedStep = {
   scope: string;
   step: unknown;
+};
+
+type JsonRecord = Record<string, unknown>;
+
+type RawLoopToolDefinition = {
+  description?: unknown;
+  inputSchema?: unknown;
+  execute?: (input: never) => Promise<unknown> | unknown;
 };
 
 type ValidationSummary = {
@@ -182,7 +192,7 @@ function parseArgs(argv: string[]): RawLoopArgs {
     }
     if (a === "--help" || a === "-h") {
       console.log(
-        "Usage: bun scripts/run_raw_agent_loops.ts [--report-only] [--strict-mode|--no-strict-mode] [--scenario mixed|dcf-model-matrix|gpt-skill-reliability|google-customtools-tool-coverage|codex-gpt-5.4-smoke] [--only-run <run-id>] [--only-model <model>]",
+        "Usage: bun run harness:run -- [--report-only] [--strict-mode|--no-strict-mode] [--scenario mixed|dcf-model-matrix|gpt-skill-reliability|google-customtools-tool-coverage|codex-gpt-5.4-smoke] [--only-run <run-id>] [--only-model <model>]",
       );
       process.exit(0);
     }
@@ -241,7 +251,7 @@ type RunSpec = {
   maxSteps?: number;
   maxAttempts?: number;
   minIntervalMs?: number;
-  providerOptionsOverride?: Record<string, any>;
+  providerOptionsOverride?: JsonRecord;
   requiredToolCalls?: string[];
   requiredFirstNonTodoToolCall?: string;
   requiredSkillBeforeTools?: string;
@@ -505,20 +515,21 @@ function traceToolExecution(
 }
 
 function withExecuteGuard(
-  original: any,
+  original: RawLoopToolDefinition | undefined,
   shouldBlock: () => boolean,
   errorMessage: string,
-  onSuccess?: (input: any, output: any) => void,
-): any {
+  onSuccess?: (input: unknown, output: unknown) => void,
+): RawLoopToolDefinition | undefined {
   if (!original || typeof original.execute !== "function") return original;
+  const executeOriginal = original.execute as (input: unknown) => Promise<unknown> | unknown;
   return defineTool({
     description: String(original.description ?? ""),
     inputSchema: original.inputSchema,
-    execute: async (input: any) => {
+    execute: async (input: unknown) => {
       if (shouldBlock()) {
         throw new Error(errorMessage);
       }
-      const out = await original.execute(input);
+      const out = await executeOriginal(input);
       onSuccess?.(input, out);
       return out;
     },
@@ -787,7 +798,7 @@ export function createToolsWithTracing(
   steps: TracedStep[],
   skillGuard?: SkillGuardConfig,
   prerequisiteToolGuard?: PrerequisiteToolGuardConfig,
-): Record<string, any> {
+): Record<string, RawLoopToolDefinition> {
   const baseTools = {
     bash: createBashTool(ctx),
     read: createReadTool(ctx),
@@ -815,10 +826,10 @@ export function createToolsWithTracing(
     memory: createMemoryTool(ctx),
   };
 
-  const wrapped: Record<string, any> = { ...baseTools };
+  const wrapped: Record<string, RawLoopToolDefinition | undefined> = { ...baseTools };
 
   for (const [toolName, toolDef] of Object.entries(wrapped)) {
-    wrapped[toolName] = withExecuteGuard(
+    const guardedTool = withExecuteGuard(
       toolDef,
       () => false,
       "",
@@ -826,6 +837,7 @@ export function createToolsWithTracing(
         traceToolExecution(steps, toolName, input, output);
       },
     );
+    if (guardedTool) wrapped[toolName] = guardedTool;
   }
 
   if (
@@ -837,25 +849,31 @@ export function createToolsWithTracing(
     const required = skillGuard.requiredSkillName;
     const guarded = new Set(skillGuard.guardedToolNames);
 
-    wrapped.skill = withExecuteGuard(
+    const skillTool = withExecuteGuard(
       wrapped.skill,
       () => false,
       "",
       (input) => {
-        if (input && typeof input.skillName === "string" && input.skillName === required) {
+        if (
+          isPlainObject(input) &&
+          typeof input.skillName === "string" &&
+          input.skillName === required
+        ) {
           requiredSkillLoaded = true;
         }
       },
     );
+    if (skillTool) wrapped.skill = skillTool;
 
     for (const toolName of guarded) {
       if (toolName === "skill") continue;
       const original = wrapped[toolName];
-      wrapped[toolName] = withExecuteGuard(
+      const guardedTool = withExecuteGuard(
         original,
         () => !requiredSkillLoaded,
         `Required skill "${required}" must be loaded via the skill tool before calling "${toolName}".`,
       );
+      if (guardedTool) wrapped[toolName] = guardedTool;
     }
   }
 
@@ -869,7 +887,7 @@ export function createToolsWithTracing(
     const guardedTools = new Set(prerequisiteToolGuard.guardedToolNames);
 
     if (wrapped[requiredTool]) {
-      wrapped[requiredTool] = withExecuteGuard(
+      const guardedTool = withExecuteGuard(
         wrapped[requiredTool],
         () => false,
         "",
@@ -877,20 +895,26 @@ export function createToolsWithTracing(
           requiredToolCalled = true;
         },
       );
+      if (guardedTool) wrapped[requiredTool] = guardedTool;
     }
 
     for (const toolName of guardedTools) {
       if (toolName === requiredTool) continue;
       const original = wrapped[toolName];
-      wrapped[toolName] = withExecuteGuard(
+      const guardedTool = withExecuteGuard(
         original,
         () => !requiredToolCalled,
         `Tool "${requiredTool}" must be called before "${toolName}".`,
       );
+      if (guardedTool) wrapped[toolName] = guardedTool;
     }
   }
 
-  return wrapped;
+  return Object.fromEntries(
+    Object.entries(wrapped).filter((entry): entry is [string, RawLoopToolDefinition] =>
+      Boolean(entry[1]),
+    ),
+  );
 }
 
 async function ensureDir(p: string) {
@@ -906,14 +930,18 @@ async function sleep(ms: number) {
 }
 
 function extractRetryDelayMs(err: unknown): number | null {
-  const asAny = err as any;
+  const errorRecord = isPlainObject(err) ? err : {};
 
   // Common structured-ish fields.
-  const directMs = asAny?.retryAfterMs ?? asAny?.retryDelayMs ?? asAny?.retry_ms;
+  const directMs =
+    errorRecord.retryAfterMs ?? errorRecord.retryDelayMs ?? errorRecord.retry_ms;
   if (typeof directMs === "number" && Number.isFinite(directMs) && directMs > 0)
     return Math.ceil(directMs);
 
-  const directSeconds = asAny?.retryAfterSeconds ?? asAny?.retryDelaySeconds ?? asAny?.retry_after;
+  const directSeconds =
+    errorRecord.retryAfterSeconds ??
+    errorRecord.retryDelaySeconds ??
+    errorRecord.retry_after;
   if (typeof directSeconds === "number" && Number.isFinite(directSeconds) && directSeconds > 0) {
     return Math.ceil(directSeconds * 1000);
   }
@@ -1018,7 +1046,8 @@ function resolveAnthropicAlias(
     // Pick newest dated opus-4-6 model id when the alias form is used.
     const candidates = availableIds.filter((id) => id.startsWith("claude-opus-4-6-"));
     if (candidates.length > 0) {
-      const resolvedModel = candidates.slice().sort().at(-1)!;
+      const resolvedModel = candidates.slice().sort().at(-1);
+      if (!resolvedModel) return { requestedModel, resolvedModel: requestedModel, resolvedFrom: "fallback" };
       return { requestedModel, resolvedModel, resolvedFrom: "alias" };
     }
     if (availableIds.includes("claude-opus-4-6")) {
@@ -1030,7 +1059,8 @@ function resolveAnthropicAlias(
   if (requestedModel === "claude-4-6-sonnet") {
     const candidates = availableIds.filter((id) => id.startsWith("claude-sonnet-4-6-"));
     if (candidates.length > 0) {
-      const resolvedModel = candidates.slice().sort().at(-1)!;
+      const resolvedModel = candidates.slice().sort().at(-1);
+      if (!resolvedModel) return { requestedModel, resolvedModel: requestedModel, resolvedFrom: "fallback" };
       return { requestedModel, resolvedModel, resolvedFrom: "alias" };
     }
     if (availableIds.includes("claude-sonnet-4-6")) {
@@ -1046,7 +1076,8 @@ function resolveAnthropicAlias(
   // Pick the newest dated haiku-4-5 model id if present.
   const candidates = availableIds.filter((id) => id.startsWith("claude-haiku-4-5-"));
   if (candidates.length > 0) {
-    const resolvedModel = candidates.slice().sort().at(-1)!;
+    const resolvedModel = candidates.slice().sort().at(-1);
+    if (!resolvedModel) return { requestedModel, resolvedModel: requestedModel, resolvedFrom: "fallback" };
     return { requestedModel, resolvedModel, resolvedFrom: "alias" };
   }
 
@@ -1058,19 +1089,19 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function cloneRecord(record: Record<string, any> | undefined): Record<string, any> {
+function cloneRecord(record: JsonRecord | undefined): JsonRecord {
   if (!record) return {};
-  return JSON.parse(JSON.stringify(record)) as Record<string, any>;
+  return JSON.parse(JSON.stringify(record)) as JsonRecord;
 }
 
 function deepMergeRecords(
-  base: Record<string, any>,
-  override: Record<string, any>,
-): Record<string, any> {
-  const out: Record<string, any> = { ...base };
+  base: JsonRecord,
+  override: JsonRecord,
+): JsonRecord {
+  const out: JsonRecord = { ...base };
   for (const [k, v] of Object.entries(override)) {
     if (isPlainObject(out[k]) && isPlainObject(v)) {
-      out[k] = deepMergeRecords(out[k] as Record<string, any>, v as Record<string, any>);
+      out[k] = deepMergeRecords(out[k], v);
       continue;
     }
     out[k] = v;
@@ -1079,9 +1110,9 @@ function deepMergeRecords(
 }
 
 function mergeProviderOptions(
-  defaults: Record<string, any>,
-  override?: Record<string, any>,
-): Record<string, any> {
+  defaults: JsonRecord,
+  override?: JsonRecord,
+): JsonRecord {
   const merged = cloneRecord(defaults);
   if (!override) return merged;
   return deepMergeRecords(merged, override);
@@ -1179,7 +1210,7 @@ function buildDcfModelMatrixRuns(): RunSpec[] {
     modelGuidance: string;
     maxSteps: number;
     maxAttempts: number;
-    providerOptionsOverride?: Record<string, any>;
+    providerOptionsOverride?: JsonRecord;
   }> = [
     {
       id: "dcf-01-openai-gpt-5.2",
@@ -2093,9 +2124,9 @@ async function main() {
         "utf-8",
       );
       if (modelsRes.ok) {
-        const parsed = JSON.parse(modelsRes.bodyText) as any;
-        anthropicModelIds = Array.isArray(parsed?.data)
-          ? parsed.data.map((m: any) => String(m?.id || "")).filter(Boolean)
+        const parsed = JSON.parse(modelsRes.bodyText) as { data?: Array<{ id?: unknown }> };
+        anthropicModelIds = Array.isArray(parsed.data)
+          ? parsed.data.map((model) => String(model.id || "")).filter(Boolean)
           : [];
       }
     } catch (err) {
@@ -2108,15 +2139,14 @@ async function main() {
     }
   }
 
-  const connectedProviders = (
+  const connectedProviders: ProviderName[] = (
     await getProviderCatalog({
       paths: getAiCoworkerPaths(),
     })
-  ).connected;
+  ).connected.filter(isProviderName);
 
-  for (let i = 0; i < runs.length; i++) {
+  for (const [i, run] of runs.entries()) {
     const runIndex = i + 1;
-    const run = runs[i]!;
 
     const resolved =
       run.provider === "anthropic"
@@ -2152,7 +2182,7 @@ async function main() {
 
     const config = await loadConfig({ cwd: repoDir, env });
     config.providerOptions = mergeProviderOptions(
-      DEFAULT_PROVIDER_OPTIONS as Record<string, any>,
+      DEFAULT_PROVIDER_OPTIONS as JsonRecord,
       run.providerOptionsOverride,
     );
     config.enableMcp = false;
@@ -2269,7 +2299,7 @@ async function main() {
 
       const askUser = async (question: string, options?: string[]) => {
         const idx = options && options.length > 0 ? (runIndex - 1) % options.length : 0;
-        const answer = options && options.length > 0 ? options[idx]! : "OK";
+        const answer = options?.[idx] ?? "OK";
         askEvents.push({ at: isoSafeNow(), question, options, answer });
         return answer;
       };
@@ -2345,7 +2375,7 @@ async function main() {
                 },
               },
               {
-                createTools: createToolsOverride as any,
+                createTools: createToolsOverride,
               },
             );
           } finally {
@@ -2427,7 +2457,7 @@ async function main() {
                     enableMcp: false,
                   },
                   {
-                    createTools: (() => ({})) as any,
+                    createTools: () => ({}),
                   },
                 );
               } finally {
@@ -2522,7 +2552,7 @@ async function main() {
           result: {
             text: finalRes.text,
             reasoningText: finalRes.reasoningText,
-            responseMessages: finalRes.responseMessages as any[],
+            responseMessages: finalRes.responseMessages,
             error: undefined,
           },
         };
@@ -2608,7 +2638,7 @@ async function main() {
       result: {
         text: finalRes?.text ?? "",
         reasoningText: finalRes?.reasoningText,
-        responseMessages: (finalRes?.responseMessages ?? []) as any[],
+        responseMessages: finalRes?.responseMessages ?? [],
         error: finalError ? String(finalError) : undefined,
       },
     };

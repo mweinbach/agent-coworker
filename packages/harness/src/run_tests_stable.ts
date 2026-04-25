@@ -10,7 +10,7 @@ const TEST_FILE_PATTERNS = [
 ];
 
 function printUsageAndExit(): never {
-  console.error("Usage: bun scripts/run_tests_stable.ts [--batch-size N] [-- <bun test args>]");
+  console.error("Usage: bun run test:stable -- [--batch-size N] [-- <bun test args>]");
   process.exit(1);
 }
 
@@ -19,7 +19,8 @@ function parseCli(argv: string[]): { batchSize: number; bunTestArgs: string[] } 
   const bunTestArgs: string[] = [];
 
   for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i]!;
+    const arg = argv[i];
+    if (!arg) continue;
     if (arg === "--") {
       bunTestArgs.push(...argv.slice(i + 1));
       break;

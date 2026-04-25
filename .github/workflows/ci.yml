@@ -35,7 +35,6 @@ jobs:
           path: |
             node_modules
             apps/desktop/node_modules
-            apps/mobile/node_modules
             ~/.bun/install/cache
           key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
           restore-keys: ${{ runner.os }}-bun-
@@ -68,7 +67,6 @@ jobs:
           path: |
             node_modules
             apps/desktop/node_modules
-            apps/mobile/node_modules
             ~/.bun/install/cache
           key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
           restore-keys: ${{ runner.os }}-bun-
@@ -104,7 +102,6 @@ jobs:
           path: |
             node_modules
             apps/desktop/node_modules
-            apps/mobile/node_modules
             ~/.bun/install/cache
           key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
           restore-keys: ${{ runner.os }}-bun-
@@ -134,7 +131,6 @@ jobs:
           path: |
             node_modules
             apps/desktop/node_modules
-            apps/mobile/node_modules
             ~/.bun/install/cache
           key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
           restore-keys: ${{ runner.os }}-bun-
@@ -149,4 +145,4 @@ jobs:
         run: bun run build:server-binary
 
       - name: Mobile typecheck
-        run: bunx tsc --noEmit -p apps/mobile/tsconfig.json
+        run: bun install --cwd apps/mobile && bunx tsc --noEmit -p apps/mobile/tsconfig.json

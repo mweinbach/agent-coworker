@@ -2,9 +2,9 @@
 
 A local-first coding agent backend with CLI and desktop clients.
 
-`agent-coworker` is built around one architectural decision: the agent lives behind a WebSocket server, not inside a single UI. The server owns sessions, tool execution, provider auth, MCP, persistence, safety checks, and streaming. The CLI REPL, Electron app, and any custom client are thin clients on top of the same protocol.
+`agent-coworker` is built around one architectural decision: the product runtime lives behind a WebSocket server, not inside a single UI or developer harness. The server owns sessions, tool execution, provider auth, MCP, persistence, safety checks, and streaming. The CLI REPL, Electron app, and any custom client are thin clients on top of the same protocol.
 
-If you want "an AI terminal app", you can use it that way. If you want "an agent backend with a documented control plane and multiple frontends", that is what this repo actually is.
+If you want "an AI terminal app", you can use it that way. If you want "an agent backend with a documented control plane and multiple frontends", that is what this repo actually is. Developer harnesses and validation scripts are repo tooling, not the runtime package boundary.
 
 ## Why this project exists
 
@@ -27,7 +27,7 @@ Cowork takes the opposite approach:
 - Opt-in workspace backup APIs for manual recovery snapshots when git-native checkpointing is not available.
 - Layered skills and MCP configuration for project, user, global, and built-in capabilities.
 - Provider catalog, auth, and status flows for Google, OpenAI, Anthropic, Bedrock, Together, Fireworks, NVIDIA, LM Studio, Baseten, and `codex-cli`.
-- Harness and observability hooks for repeatable runs, traces, and artifact capture.
+- Product runtime is kept in `src/`; developer harnesses live under `packages/harness`.
 
 ## Quickstart
 
@@ -269,8 +269,8 @@ bun run test:stable         # sequential per-file test runner for flake detectio
 
 Notes:
 
-- `bun install` at the repo root triggers a postinstall script that also installs `apps/desktop` and `apps/mobile` dependencies.
-- `bun run typecheck` covers both the root project and `apps/desktop`.
+- `bun install` at the repo root installs the product runtime, desktop app, and harness workspace. The mobile app remains optional under `apps/mobile`.
+- `bun run typecheck` covers the root runtime, `packages/harness`, and `apps/desktop`.
 - `bun run dev` watches `src/index.ts` (the CLI entry point), not the desktop app. Use `bun run desktop:dev` for the Electron app.
 - The test suite is deterministic and does not require provider credentials.
 
@@ -290,12 +290,13 @@ Notes:
 | `src/mcp/` | MCP config, auth, and client lifecycle |
 | `src/skills/` | Skill discovery and trigger extraction |
 | `src/observability/` | OpenTelemetry + Langfuse integration |
+| `packages/harness/` | Developer harness scripts, raw-loop validation, docs generation, and stable test runner |
 | `apps/desktop/` | Electron desktop app |
-| `apps/mobile/` | Expo mobile app (React Native) |
+| `apps/mobile/` | Optional Expo mobile app (React Native); not installed by default |
 | `config/` | Built-in defaults and per-provider model configs (`config/models/`) |
 | `skills/` | Bundled built-in skills |
 | `prompts/` | System prompts, sub-agent prompts, and model-specific prompt snippets |
-| `scripts/` | Build helpers, doc checker, harness runner, release utilities |
+| `scripts/` | Runtime packaging and release build helpers |
 | `test/` | All test files (`*.test.ts`) |
 | `docs/` | Protocol, architecture, storage, MCP, and harness docs |
 

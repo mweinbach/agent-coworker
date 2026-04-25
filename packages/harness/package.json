@@ -1,0 +1,17 @@
+{
+  "name": "@agent-coworker/harness",
+  "version": "0.1.47",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check-docs": "bun src/check_docs.ts",
+    "generate-jsonrpc": "bun src/generate_ws_jsonrpc_schema.ts",
+    "run": "bun src/run_raw_agent_loops.ts --report-only",
+    "test-stable": "bun src/run_tests_stable.ts",
+    "typecheck": "bunx tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "bun-types": "^1.3.13",
+    "typescript": "^5.9.3"
+  }
+}

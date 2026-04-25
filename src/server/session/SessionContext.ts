@@ -4,7 +4,7 @@ import type {
   connectProvider as connectModelProvider,
   getAiCoworkerPaths,
 } from "../../connect";
-import type { HarnessContextStore } from "../../harness/contextStore";
+import type { HarnessContextStore } from "../../sessionContext/HarnessContextStore";
 import type { MCPRegistryServer } from "../../mcp/configRegistry";
 import type { loadSystemPromptWithSkills } from "../../prompt";
 import type { getProviderStatuses } from "../../providerStatus";

@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import { getModel as realGetModel } from "./config";
-import { buildTurnSystemPrompt } from "./harness/buildTurnSystemPrompt";
+import { buildTurnSystemPrompt } from "./turnSystemPrompt";
 import { loadMCPServers, loadMCPTools } from "./mcp";
 import { buildRuntimeTelemetrySettings } from "./observability/runtime";
 import { buildGooglePrepareStep } from "./providers/googleReplay";

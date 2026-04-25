@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { renderHarnessContextSection } from "../src/harness/renderHarnessContextSection";
+import { renderHarnessContextSection } from "../src/sessionContext/renderHarnessContextSection";
 
 describe("renderHarnessContextSection", () => {
   test("returns empty string when context is absent", () => {

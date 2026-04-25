@@ -1,7 +1,7 @@
 import path from "node:path";
 import { spawn } from "bun";
 
-const repoRoot = path.resolve(import.meta.dir, "..");
+const repoRoot = path.resolve(import.meta.dir, "..", "..", "..");
 const desktopDir = path.join(repoRoot, "apps", "desktop");
 
 const STARTUP_TIMEOUT_MS = 15_000;

@@ -4,7 +4,7 @@ import path from "node:path";
 import {
   buildJsonRpcJsonSchemaArtifact,
   buildJsonRpcTypeScriptArtifact,
-} from "../src/server/jsonrpc/codegen";
+} from "../../../src/server/jsonrpc/codegen";
 
 async function main() {
   const outputDir = path.join(process.cwd(), "docs", "generated");

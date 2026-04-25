@@ -1,11 +1,11 @@
 import path from "node:path";
 
-import type { AgentConfig, HarnessContextState } from "../types";
+import type { AgentConfig, HarnessContextState } from "./types";
 import {
   deriveActiveWorkspaceContext,
   renderActiveWorkspaceContextSection,
-} from "../workspace/context";
-import { renderHarnessContextSection } from "./renderHarnessContextSection";
+} from "./workspace/context";
+import { renderHarnessContextSection } from "./sessionContext/renderHarnessContextSection";
 
 const MCP_NAMESPACING_TOKEN = "`mcp__{serverName}__{toolName}`";
 

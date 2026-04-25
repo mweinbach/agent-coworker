@@ -34,7 +34,6 @@ jobs:
           path: |
             node_modules
             apps/desktop/node_modules
-            apps/mobile/node_modules
             ~/.bun/install/cache
           key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
           restore-keys: ${{ runner.os }}-bun-
@@ -98,7 +97,6 @@ jobs:
           path: |
             node_modules
             apps/desktop/node_modules
-            apps/mobile/node_modules
             ~/.bun/install/cache
           key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
           restore-keys: ${{ runner.os }}-bun-

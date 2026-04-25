@@ -11,7 +11,7 @@ import {
   countObservedLoopSteps,
   createRawLoopAgentControl,
   createToolsWithTracing,
-} from "../scripts/run_raw_agent_loops";
+} from "../packages/harness/src/run_raw_agent_loops";
 import type { AgentConfig, ModelMessage } from "../src/types";
 
 function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {

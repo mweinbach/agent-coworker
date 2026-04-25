@@ -1,6 +1,6 @@
 import type { runTurn } from "../../agent";
 import type { ConnectProviderResult, connectProvider as connectModelProvider } from "../../connect";
-import { HarnessContextStore } from "../../harness/contextStore";
+import { HarnessContextStore } from "../../sessionContext/HarnessContextStore";
 import type { MCPRegistryServer } from "../../mcp/configRegistry";
 import { type MemoryScope, MemoryStore } from "../../memoryStore";
 import { getKnownResolvedModelMetadata, isDynamicModelProvider } from "../../models/metadata";

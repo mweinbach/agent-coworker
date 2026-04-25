@@ -3,7 +3,7 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 
-const APP_DIRS = ["apps/desktop", "apps/mobile"] as const;
+const APP_DIRS = ["apps/desktop"] as const;
 
 if (process.env.CI || process.env.SKIP_POSTINSTALL) {
   console.log("[postinstall] skipping sub-app installs (CI/SKIP_POSTINSTALL set)");

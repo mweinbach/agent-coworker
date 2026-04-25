@@ -3,12 +3,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { WEBSOCKET_PROTOCOL_VERSION } from "../src/server/protocol";
+import { WEBSOCKET_PROTOCOL_VERSION } from "../../../src/server/protocol";
 
 type CheckResult = { ok: true } | { ok: false; message: string };
 const REPO_PATH_PREFIXES = [
   "src/",
   "docs/",
+  "packages/",
   "scripts/",
   "apps/",
   "config/",

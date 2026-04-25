@@ -7,12 +7,12 @@ import { z } from "zod";
 import {
   resolveRawLoopHarnessConfig,
   summarizeRawLoopBudgets,
-} from "../scripts/run_raw_agent_loops";
+} from "../packages/harness/src/run_raw_agent_loops";
 import {
   buildPathArtifactAssertions,
   validateFinalContract,
   validateWithOptionalRepair,
-} from "../src/harness/rawLoopValidation";
+} from "../packages/harness/src/rawLoopValidation";
 
 async function makeRunDir(): Promise<string> {
   return await fs.mkdtemp(path.join(os.tmpdir(), "raw-loop-validation-"));

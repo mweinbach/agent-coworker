@@ -72,7 +72,7 @@ describe("package manifest", () => {
     expect(paths).not.toContain("src/server/jsonrpc/schema.misc.ts");
     expect(paths).not.toContain("src/shared/jsonrpcControlSchemas.ts");
     expect(paths).not.toContain("src/server/agents/DelegateRunner.ts");
-    expect(paths).not.toContain("src/harness/rawLoopValidation.ts");
+    expect(paths).not.toContain("packages/harness/src/rawLoopValidation.ts");
     expect(paths).not.toContain("src/client/modelStreamReplay.ts");
     expect(paths).not.toContain("src/shared/displayCitationMarkers.ts");
     expect(paths).not.toContain("src/shared/mobileRelaySecurity.ts");
@@ -92,6 +92,7 @@ describe("package manifest", () => {
 
     expect(paths.some((path) => path.startsWith(".agents/"))).toBeFalse();
     expect(paths.some((path) => path.startsWith("apps/"))).toBeFalse();
+    expect(paths.some((path) => path.startsWith("packages/"))).toBeFalse();
     expect(paths.some((path) => path.startsWith("examples/"))).toBeFalse();
     expect(paths.some((path) => path.startsWith("tasks/"))).toBeFalse();
     expect(paths.some((path) => path.startsWith("test/"))).toBeFalse();
@@ -101,7 +102,7 @@ describe("package manifest", () => {
     expect(paths).not.toContain("docs/desktop-settings-ui-ux-audit-2026-03-13.md");
     expect(paths).not.toContain("docs/mobile-remote-access.md");
     expect(paths).not.toContain("docs/session-storage-architecture.md");
-    expect(paths).not.toContain("scripts/check_docs.ts");
-    expect(paths).not.toContain("scripts/run_raw_agent_loops.ts");
+    expect(paths).not.toContain("packages/harness/src/check_docs.ts");
+    expect(paths).not.toContain("packages/harness/src/run_raw_agent_loops.ts");
   });
 });

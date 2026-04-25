@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
 const workflowPath = new URL("../.github/workflows/ci.yml", import.meta.url);
-const stableTestRunnerPath = new URL("../scripts/run_tests_stable.ts", import.meta.url);
+const stableTestRunnerPath = new URL("../packages/harness/src/run_tests_stable.ts", import.meta.url);
 const workflow = readFileSync(workflowPath, "utf8");
 const stableTestRunner = readFileSync(stableTestRunnerPath, "utf8");
 
@@ -17,7 +17,7 @@ describe("main CI workflow", () => {
     expect(workflow).toContain("uses: actions/cache@v4");
     expect(workflow).toContain("node_modules");
     expect(workflow).toContain("apps/desktop/node_modules");
-    expect(workflow).toContain("apps/mobile/node_modules");
+    expect(workflow).not.toContain("apps/mobile/node_modules");
     expect(workflow).toContain("~/.bun/install/cache");
     expect(workflow).toContain("${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}");
   });

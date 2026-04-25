@@ -76,18 +76,20 @@ src/
   plugins/              # Plugin system
   store/                # Store utilities
   auth/                 # Auth helpers
-  harness/              # Evaluation harness
+  sessionContext/       # Runtime session context stores/rendering
   observability/        # OpenTelemetry + Langfuse integration
   utils/                # Shared utilities
 apps/
   desktop/              # Electron desktop app
-  mobile/               # Expo mobile app (React Native)
+  mobile/               # Optional Expo mobile app (React Native)
+packages/
+  harness/              # Developer harness, docs generation, stable test runner
 config/
   defaults.json         # Built-in default configuration
   mcp-servers.json      # System-level MCP server definitions
 skills/                 # Built-in skills (doc, pdf, slides, spreadsheet, frontend-skill, git-workflow)
 prompts/                # System prompts, sub-agent prompts, command templates
-scripts/                # Build helpers, doc checker, harness runner
+scripts/                # Runtime packaging and release build helpers
 docs/                   # Architecture docs, protocol spec, harness docs
 test/                   # All test files (*.test.ts)
 ```

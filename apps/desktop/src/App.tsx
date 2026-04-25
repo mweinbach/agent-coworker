@@ -443,7 +443,7 @@ export default function App() {
       )}
       <PromptModal />
       <FilePreviewModal />
-      <DesktopOnboarding />
+      {windowMode === "main" ? <DesktopOnboarding /> : null}
     </>
   );
 }

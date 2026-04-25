@@ -103,6 +103,7 @@ class FakeWindow extends EventEmitter {
   visible = false;
   focused = false;
   bounds = { x: 0, y: 0, width: 420, height: 520 };
+  closeCalls = 0;
 
   isDestroyed() {
     return this.destroyed;
@@ -133,6 +134,20 @@ class FakeWindow extends EventEmitter {
   hide() {
     this.visible = false;
     this.focused = false;
+  }
+
+  close() {
+    this.closeCalls += 1;
+    const event = {
+      defaultPrevented: false,
+      preventDefault() {
+        this.defaultPrevented = true;
+      },
+    };
+    this.emit("close", event);
+    if (!event.defaultPrevented) {
+      this.destroy();
+    }
   }
 
   destroy() {
@@ -376,6 +391,57 @@ describe("resolveTrayIconPath", () => {
     expect(quickChatWindow.destroyed).toBe(false);
     expect(createdTrays).toHaveLength(0);
     expect(controller.hasTray()).toBe(false);
+  });
+
+  test("closes quick chat when opening the main window without popup keep-alive", async () => {
+    createdTrays.length = 0;
+    const mainWindow = new FakeWindow();
+    const quickChatWindow = new FakeWindow();
+    const controller = new QuickChatController({
+      appName: "Cowork",
+      platform: "linux",
+      trayIconPath: "/tmp/icon.png",
+      getMainWindow: () => mainWindow as never,
+      createMainWindow: async () => mainWindow as never,
+      createQuickChatWindow: async () => quickChatWindow as never,
+      retargetQuickChatWindow: async () => {},
+      createUtilityWindow: async () => new FakeWindow() as never,
+    });
+
+    controller.initialize();
+    await controller.showQuickChatWindow();
+    await controller.showMainWindow();
+
+    expect(quickChatWindow.closeCalls).toBe(1);
+    expect(quickChatWindow.destroyed).toBe(true);
+    expect(mainWindow.visible).toBe(true);
+    expect(mainWindow.focused).toBe(true);
+  });
+
+  test("hides quick chat when opening the main window with popup keep-alive", async () => {
+    createdTrays.length = 0;
+    const mainWindow = new FakeWindow();
+    const quickChatWindow = new FakeWindow();
+    const controller = new QuickChatController({
+      appName: "Cowork",
+      platform: "darwin",
+      trayIconPath: "/tmp/icon.png",
+      getMainWindow: () => mainWindow as never,
+      createMainWindow: async () => mainWindow as never,
+      createQuickChatWindow: async () => quickChatWindow as never,
+      retargetQuickChatWindow: async () => {},
+      createUtilityWindow: async () => new FakeWindow() as never,
+    });
+
+    controller.initialize();
+    await controller.showQuickChatWindow();
+    await controller.showMainWindow();
+
+    expect(quickChatWindow.closeCalls).toBe(0);
+    expect(quickChatWindow.destroyed).toBe(false);
+    expect(quickChatWindow.visible).toBe(false);
+    expect(mainWindow.visible).toBe(true);
+    expect(mainWindow.focused).toBe(true);
   });
 
   test("retargets existing quick chat windows for explicit thread requests", async () => {

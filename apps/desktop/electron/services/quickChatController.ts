@@ -321,7 +321,11 @@ export class QuickChatController {
     if (!this.quickChatWindow || this.quickChatWindow.isDestroyed()) {
       return;
     }
-    this.quickChatWindow.hide();
+    if (this.shouldKeepPopupWindowsAlive()) {
+      this.quickChatWindow.hide();
+      return;
+    }
+    this.quickChatWindow.close();
   }
 
   private async ensureUtilityWindow(): Promise<BrowserWindow> {
@@ -355,7 +359,11 @@ export class QuickChatController {
     if (!this.utilityWindow || this.utilityWindow.isDestroyed()) {
       return;
     }
-    this.utilityWindow.hide();
+    if (this.shouldKeepPopupWindowsAlive()) {
+      this.utilityWindow.hide();
+      return;
+    }
+    this.utilityWindow.close();
   }
 
   private destroyWindow(win: BrowserWindow | null): void {

@@ -13,6 +13,7 @@
   },
   "files": [
     "src/**/*.ts",
+    "src/**/*.tsx",
     "!src/server/jsonrpc/codegen.ts",
     "!src/server/jsonrpc/schema.ts",
     "!src/server/jsonrpc/schema.provider.ts",

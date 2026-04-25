@@ -53,6 +53,7 @@ describe("package manifest", () => {
 
     expect(paths).toContain("src/index.ts");
     expect(paths).toContain("src/server/index.ts");
+    expect(paths).toContain("src/server/research/export/exportPdf.tsx");
     expect(paths).toContain("config/defaults.json");
     expect(paths).not.toContain("docs/architecture.md");
     expect(paths).not.toContain("docs/bundling-guide.md");

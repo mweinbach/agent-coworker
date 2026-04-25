@@ -1,4 +1,4 @@
-import { buildTurnSystemPrompt } from "../../harness/buildTurnSystemPrompt";
+import { buildTurnSystemPrompt } from "../../turnSystemPrompt";
 import { buildRuntimeTelemetrySettings } from "../../observability/runtime";
 import { loadAgentPrompt } from "../../prompt";
 import { buildGooglePrepareStep } from "../../providers/googleReplay";

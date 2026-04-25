@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { createServerStdoutMonitor, normalizeProcessExitCode } from "../scripts/start_web_dev";
+import { createServerStdoutMonitor, normalizeProcessExitCode } from "../apps/desktop/scripts/start_web_dev";
 
 const encoder = new TextEncoder();
 

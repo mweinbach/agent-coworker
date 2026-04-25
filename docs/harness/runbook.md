@@ -2,7 +2,7 @@
 
 This runbook covers both harness layers:
 
-- the **raw-loop harness** in [`scripts/run_raw_agent_loops.ts`](../../scripts/run_raw_agent_loops.ts)
+- the **raw-loop harness** in [`packages/harness/src/run_raw_agent_loops.ts`](../../packages/harness/src/run_raw_agent_loops.ts)
 - the **real-boundary WebSocket/session harness** exercised by deterministic server tests
 
 ## Prerequisites
@@ -30,21 +30,21 @@ If telemetry is enabled but credentials are missing, runs continue and emit a wa
 ## Command Reference
 
 - `bun run harness:run`
-  - Equivalent to `bun scripts/run_raw_agent_loops.ts --report-only`
+  - Equivalent to `bun packages/harness/src/run_raw_agent_loops.ts --report-only`
   - Uses the default `mixed` scenario
-- `bun scripts/run_raw_agent_loops.ts --scenario <name>`
+- `bun packages/harness/src/run_raw_agent_loops.ts --scenario <name>`
   - Selects one of the supported scenarios
-- `bun scripts/run_raw_agent_loops.ts --only-run <run-id>`
+- `bun packages/harness/src/run_raw_agent_loops.ts --only-run <run-id>`
   - Repeatable filter; keeps only the named run IDs within the selected scenario
-- `bun scripts/run_raw_agent_loops.ts --only-model <model>`
+- `bun packages/harness/src/run_raw_agent_loops.ts --only-model <model>`
   - Repeatable filter; keeps only the named model IDs within the selected scenario
-- `bun scripts/run_raw_agent_loops.ts --report-only`
+- `bun packages/harness/src/run_raw_agent_loops.ts --report-only`
   - Sets the harness config flag carried into run metadata; current raw-loop invocations already default to this mode
-- `bun scripts/run_raw_agent_loops.ts --strict-mode`
+- `bun packages/harness/src/run_raw_agent_loops.ts --strict-mode`
   - Forces strict raw-loop validation for the selected runs
-- `bun scripts/run_raw_agent_loops.ts --no-strict-mode`
+- `bun packages/harness/src/run_raw_agent_loops.ts --no-strict-mode`
   - Explicitly disables strict validation even if config/env enabled it
-- `bun scripts/run_raw_agent_loops.ts --help`
+- `bun packages/harness/src/run_raw_agent_loops.ts --help`
   - Prints the accepted flags and scenario names
 
 ## Scenarios
@@ -59,13 +59,13 @@ Examples:
 
 ```bash
 bun run harness:run
-bun scripts/run_raw_agent_loops.ts --scenario mixed
-bun scripts/run_raw_agent_loops.ts --scenario dcf-model-matrix
-bun scripts/run_raw_agent_loops.ts --scenario gpt-skill-reliability
-bun scripts/run_raw_agent_loops.ts --scenario google-customtools-tool-coverage
-bun scripts/run_raw_agent_loops.ts --scenario codex-gpt-5.4-smoke
-bun scripts/run_raw_agent_loops.ts --scenario mixed --only-run claude-spreadsheet --only-run gpt-research
-bun scripts/run_raw_agent_loops.ts --scenario mixed --only-model gpt-5.2
+bun packages/harness/src/run_raw_agent_loops.ts --scenario mixed
+bun packages/harness/src/run_raw_agent_loops.ts --scenario dcf-model-matrix
+bun packages/harness/src/run_raw_agent_loops.ts --scenario gpt-skill-reliability
+bun packages/harness/src/run_raw_agent_loops.ts --scenario google-customtools-tool-coverage
+bun packages/harness/src/run_raw_agent_loops.ts --scenario codex-gpt-5.4-smoke
+bun packages/harness/src/run_raw_agent_loops.ts --scenario mixed --only-run claude-spreadsheet --only-run gpt-research
+bun packages/harness/src/run_raw_agent_loops.ts --scenario mixed --only-model gpt-5.2
 ```
 
 ## Output Layout

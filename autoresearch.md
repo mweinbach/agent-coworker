@@ -28,12 +28,12 @@ Both scripts print diagnostics on failure; the benchmark also prints structured 
 ## Files in Scope
 - `.github/workflows/ci.yml` — main CI job definition and test invocation.
 - `package.json` — test/typecheck/docs scripts.
-- `scripts/run_tests_stable.ts` — sequential/batched test runner useful for flake detection.
+- `packages/harness/src/run_tests_stable.ts` — sequential/batched test runner useful for flake detection.
 - `test/ci.workflow.test.ts` — workflow regression coverage for CI guardrails.
 - `test/**/*.test.ts` — unit tests and helpers.
 - `test/shared/**` — shared test utilities/diagnostics.
 - `src/**` — production code implicated by failing or flaky tests.
-- `docs/**` / `scripts/check_docs.ts` — documentation consistency checks run by CI.
+- `docs/**` / `packages/harness/src/check_docs.ts` — documentation consistency checks run by CI.
 
 ## Off Limits
 - Do not delete/skip/weaken tests just to get green.

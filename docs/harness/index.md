@@ -4,7 +4,7 @@ This directory is the system-of-record for harness engineering in `agent-coworke
 
 The harness has two complementary layers:
 
-- the **fast inner loop** (`scripts/run_raw_agent_loops.ts`)
+- the **fast inner loop** (`packages/harness/src/run_raw_agent_loops.ts`)
 - the **real-boundary session layer** (the WebSocket server/session/runtime path)
 
 Harness context now lives in both worlds: it is persisted session state and also injected into runtime turns as structured task contract data.
@@ -22,4 +22,4 @@ See also:
 
 - `docs/websocket-protocol.md` for the wire-level protocol contract.
 - `docs/session-storage-architecture.md` for shared SQLite + research-row persistence.
-- `scripts/run_raw_agent_loops.ts` for the harness runner implementation.
+- `packages/harness/src/run_raw_agent_loops.ts` for the harness runner implementation.

@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
+import path from "node:path";
 import fg from "fast-glob";
 
+const REPO_ROOT = path.resolve(import.meta.dir, "..", "..", "..");
 const DEFAULT_BATCH_SIZE = 1;
 const TEST_FILE_PATTERNS = [
   "test/**/*.test.ts",
@@ -10,7 +12,7 @@ const TEST_FILE_PATTERNS = [
 ];
 
 function printUsageAndExit(): never {
-  console.error("Usage: bun scripts/run_tests_stable.ts [--batch-size N] [-- <bun test args>]");
+  console.error("Usage: bun run test:stable -- [--batch-size N] [-- <bun test args>]");
   process.exit(1);
 }
 
@@ -19,7 +21,8 @@ function parseCli(argv: string[]): { batchSize: number; bunTestArgs: string[] } 
   const bunTestArgs: string[] = [];
 
   for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i]!;
+    const arg = argv[i];
+    if (!arg) continue;
     if (arg === "--") {
       bunTestArgs.push(...argv.slice(i + 1));
       break;
@@ -49,7 +52,7 @@ function parseCli(argv: string[]): { batchSize: number; bunTestArgs: string[] } 
 async function runBun(args: string[]): Promise<number> {
   return await new Promise((resolve, reject) => {
     const child = spawn(process.execPath, args, {
-      cwd: process.cwd(),
+      cwd: REPO_ROOT,
       env: process.env,
       stdio: "inherit",
     });
@@ -63,7 +66,7 @@ async function main() {
   const { batchSize, bunTestArgs } = parseCli(process.argv.slice(2));
   const testFiles = (
     await fg(TEST_FILE_PATTERNS, {
-      cwd: process.cwd(),
+      cwd: REPO_ROOT,
       onlyFiles: true,
       unique: true,
       followSymbolicLinks: false,

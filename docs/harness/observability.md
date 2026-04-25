@@ -43,7 +43,7 @@ Equivalent config-file keys:
 
 ## Harness Runner Emissions
 
-`scripts/run_raw_agent_loops.ts` emits lifecycle events:
+`packages/harness/src/run_raw_agent_loops.ts` emits lifecycle events:
 
 - `harness.run.started`
 - `harness.run.completed`

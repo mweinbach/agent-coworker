@@ -8,7 +8,7 @@ import {
   extractMarkdownLinks,
   protocolVersionNeedle,
   resolveDocReferencePath,
-} from "../scripts/check_docs";
+} from "../packages/harness/src/check_docs";
 import { WEBSOCKET_PROTOCOL_VERSION } from "../src/server/protocol";
 
 function repoRoot(): string {

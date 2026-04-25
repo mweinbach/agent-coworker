@@ -1,4 +1,4 @@
-import type { HarnessContextStore } from "../../harness/contextStore";
+import type { HarnessContextStore } from "../../sessionContext/HarnessContextStore";
 import type { AgentExecutionState } from "../../shared/agents";
 import type { PersistedSessionMutation } from "../sessionDb";
 import type { PersistedSessionSnapshot } from "../sessionStore";

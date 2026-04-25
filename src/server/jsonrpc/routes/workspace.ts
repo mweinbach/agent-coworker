@@ -38,8 +38,8 @@ export function createWorkspaceRouteHandlers(
         }
         threads.set(record.sessionId, context.utils.buildThreadFromRecord(record));
       }
-      for (const session of context.threads.listLiveRoot({ cwd })) {
-        threads.set(session.id, context.utils.buildThreadFromSession(session));
+      for (const runtime of context.threads.listLiveRoot({ cwd })) {
+        threads.set(runtime.id, context.utils.buildThreadFromSession(runtime));
       }
 
       const state = await context.workspaceControl.readState(cwd);

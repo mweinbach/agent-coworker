@@ -1,10 +1,11 @@
 import { execFile as execFileCallback } from "node:child_process";
 import fs, { type FileHandle } from "node:fs/promises";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 
-import { app, BrowserWindow, clipboard, dialog, shell } from "electron";
+import type * as Electron from "electron";
 
 import {
   type CopyPathInput,
@@ -47,6 +48,8 @@ import {
 import type { DesktopIpcModuleContext } from "./types";
 
 const execFile = promisify(execFileCallback);
+const require = createRequire(import.meta.url);
+const { app, BrowserWindow, clipboard, dialog, shell } = require("electron") as typeof Electron;
 
 export function registerFilesIpc(context: DesktopIpcModuleContext): void {
   const { handleDesktopInvoke, parseWithSchema, workspaceRoots } = context;

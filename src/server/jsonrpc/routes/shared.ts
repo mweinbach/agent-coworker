@@ -1,5 +1,5 @@
 import type { SessionEvent } from "../../protocol";
-import type { AgentSession } from "../../session/AgentSession";
+import type { SessionRuntime } from "../../session/SessionRuntime";
 import type { PersistedSessionRecord } from "../../sessionDb";
 import type { JsonRpcThread, JsonRpcThreadSummaryFilter } from "./types";
 
@@ -148,22 +148,22 @@ export function extractJsonRpcInput(input: unknown): ExtractedInput {
   return { text, attachments, ...(orderedParts.length > 0 ? { orderedParts } : {}) };
 }
 
-export function buildJsonRpcThreadFromSession(session: AgentSession): JsonRpcThread {
-  const info = session.getSessionInfoEvent();
-  const snapshot = session.peekSessionSnapshot();
+export function buildJsonRpcThreadFromSession(runtime: SessionRuntime): JsonRpcThread {
+  const info = runtime.read.info;
+  const snapshot = runtime.snapshot.peek();
   return {
-    id: session.id,
+    id: runtime.id,
     title: info.title,
-    preview: info.lastMessagePreview ?? session.getLatestAssistantText() ?? "",
+    preview: info.lastMessagePreview ?? runtime.read.getLatestAssistantText() ?? "",
     modelProvider: info.provider,
     model: info.model,
-    cwd: session.getWorkingDirectory(),
+    cwd: runtime.read.workingDirectory,
     createdAt: info.createdAt,
     updatedAt: info.updatedAt,
     messageCount: snapshot.messageCount,
     lastEventSeq: snapshot.lastEventSeq,
     status: {
-      type: session.isBusy ? "running" : "loaded",
+      type: runtime.read.isBusy ? "running" : "loaded",
     },
   };
 }
@@ -197,21 +197,21 @@ export function shouldIncludeJsonRpcThreadSummary(summary: JsonRpcThreadSummaryF
   );
 }
 
-export function buildControlSessionStateEvents(session: AgentSession): SessionEvent[] {
+export function buildControlSessionStateEvents(runtime: SessionRuntime): SessionEvent[] {
   return [
     {
       type: "config_updated",
-      sessionId: session.id,
-      config: session.getPublicConfig(),
+      sessionId: runtime.id,
+      config: runtime.settings.publicConfig,
     },
     {
       type: "session_settings",
-      sessionId: session.id,
-      enableMcp: session.getEnableMcp(),
-      enableMemory: session.getEnableMemory(),
-      memoryRequireApproval: session.getMemoryRequireApproval(),
+      sessionId: runtime.id,
+      enableMcp: runtime.settings.enableMcp,
+      enableMemory: runtime.settings.enableMemory,
+      memoryRequireApproval: runtime.settings.memoryRequireApproval,
     },
-    session.getSessionConfigEvent(),
+    runtime.settings.configEvent,
   ];
 }
 

@@ -20,6 +20,24 @@ type SessionMock = {
   sendSteerMessage?: (text: string, turnId: string, cmid?: string) => void;
 };
 
+function createRuntime(session: SessionMock) {
+  return {
+    id: session.id,
+    a2ui: {
+      enabled: true,
+      validateAction: session.validateA2uiAction,
+    },
+    turns: {
+      get activeTurnId() {
+        return session.activeTurnId;
+      },
+      sendUserMessage: async (text: string, cmid?: string) => session.sendUserMessage?.(text, cmid),
+      sendSteerMessage: async (text: string, turnId: string, cmid?: string) =>
+        session.sendSteerMessage?.(text, turnId, cmid),
+    },
+  };
+}
+
 function createHarness(opts: { session?: SessionMock; activeTurnId?: string | null }) {
   const sent: any[] = [];
   const session: SessionMock = opts.session ?? {
@@ -32,6 +50,7 @@ function createHarness(opts: { session?: SessionMock; activeTurnId?: string | nu
   let capturedClientMessageId: string | undefined;
   let capturedTurnId: string | null = null;
 
+  const binding = { session, runtime: createRuntime(session) } as any;
   const context: JsonRpcRouteContext = {
     getConfig: () => ({ workingDirectory: "/w" }) as any,
     threads: {
@@ -39,11 +58,11 @@ function createHarness(opts: { session?: SessionMock; activeTurnId?: string | nu
         throw new Error("nope");
       }) as any,
       load: () => null,
-      getLive: () => ({ session }) as any,
+      getLive: () => binding,
       getPersisted: () => null,
       listPersisted: () => [],
       listLiveRoot: () => [],
-      subscribe: () => ({ session }) as any,
+      subscribe: () => binding,
       unsubscribe: () => "notSubscribed",
       readSnapshot: () => null,
     },

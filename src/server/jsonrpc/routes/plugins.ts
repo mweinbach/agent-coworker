@@ -42,7 +42,7 @@ export function createPluginsRouteHandlers(context: JsonRpcRouteContext): JsonRp
       const event = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => await session.getPluginsCatalog(),
+        async (runtime) => await runtime.plugins.getCatalog(),
         (event): event is Extract<SessionEvent, { type: "plugins_catalog" }> =>
           event.type === "plugins_catalog",
       );
@@ -62,7 +62,7 @@ export function createPluginsRouteHandlers(context: JsonRpcRouteContext): JsonRp
       const event = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => await session.getPlugin(pluginId, scope),
+        async (runtime) => await runtime.plugins.get(pluginId, scope),
         (event): event is Extract<SessionEvent, { type: "plugin_detail" }> =>
           event.type === "plugin_detail",
       );
@@ -81,7 +81,7 @@ export function createPluginsRouteHandlers(context: JsonRpcRouteContext): JsonRp
       const event = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => await session.previewPluginInstall(sourceInput, targetScope),
+        async (runtime) => await runtime.plugins.previewInstall(sourceInput, targetScope),
         (event): event is Extract<SessionEvent, { type: "plugin_install_preview" }> =>
           event.type === "plugin_install_preview",
       );
@@ -100,7 +100,7 @@ export function createPluginsRouteHandlers(context: JsonRpcRouteContext): JsonRp
       const events = await captureWorkspaceControlMutationEvents(
         context,
         cwd,
-        async (session) => await session.installPlugins(sourceInput, targetScope),
+        async (runtime) => await runtime.plugins.install(sourceInput, targetScope),
         isPluginInstallResponseEvent,
         { timeoutMs: PLUGIN_INSTALL_EVENTS_TIMEOUT_MS },
       );
@@ -121,7 +121,7 @@ export function createPluginsRouteHandlers(context: JsonRpcRouteContext): JsonRp
       const events = await captureWorkspaceControlMutationEvents(
         context,
         cwd,
-        async (session) => await session.enablePlugin(pluginId, scope),
+        async (runtime) => await runtime.plugins.enable(pluginId, scope),
         isPluginMutationResponseEvent,
       );
       const error = events.find(context.utils.isSessionError);
@@ -141,7 +141,7 @@ export function createPluginsRouteHandlers(context: JsonRpcRouteContext): JsonRp
       const events = await captureWorkspaceControlMutationEvents(
         context,
         cwd,
-        async (session) => await session.disablePlugin(pluginId, scope),
+        async (runtime) => await runtime.plugins.disable(pluginId, scope),
         isPluginMutationResponseEvent,
       );
       const error = events.find(context.utils.isSessionError);

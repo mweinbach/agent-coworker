@@ -4,10 +4,6 @@ import { createRoot } from "react-dom/client";
 
 import { setupJsdom } from "./jsdomHarness";
 
-mock.module("../src/components/ui/button", () => ({
-  Button: ({ children, ...props }: any) => createElement("button", props, children),
-}));
-
 mock.module("../src/ui/research/ResearchFollowUpComposer", () => ({
   ResearchFollowUpComposer: () =>
     createElement("div", { "data-testid": "research-follow-up-composer" }, "follow-up"),

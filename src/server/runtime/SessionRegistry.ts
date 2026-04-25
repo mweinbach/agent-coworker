@@ -15,6 +15,7 @@ import type {
   SessionDependencies,
   SessionInfoState,
 } from "../session/SessionContext";
+import { SessionRuntime } from "../session/SessionRuntime";
 import type { PersistedSessionRecord, SessionDb } from "../sessionDb";
 import type { SessionBinding } from "../startServer/types";
 import type { WorkspaceBackupService } from "../workspaceBackups";
@@ -89,15 +90,15 @@ export class SessionRegistry {
 
   addBindingSink(binding: SessionBinding, sinkId: string, sink: (evt: SessionEvent) => void): void {
     binding.sinks.set(sinkId, sink);
-    if (binding.session && !sinkId.startsWith("journal:")) {
-      this.sessionIdleSince.delete(binding.session.id);
+    if (binding.runtime && !sinkId.startsWith("journal:")) {
+      this.sessionIdleSince.delete(binding.runtime.id);
     }
   }
 
   removeBindingSink(binding: SessionBinding, sinkId: string): void {
     binding.sinks.delete(sinkId);
-    if (binding.session && binding.sinks.size === 0) {
-      this.sessionIdleSince.set(binding.session.id, Date.now());
+    if (binding.runtime && binding.sinks.size === 0) {
+      this.sessionIdleSince.set(binding.runtime.id, Date.now());
     }
   }
 
@@ -106,14 +107,14 @@ export class SessionRegistry {
   }
 
   disposeBinding(binding: SessionBinding, reason: string): void {
-    if (!binding.session) return;
+    if (!binding.runtime) return;
     try {
-      binding.session.cancel();
+      binding.runtime.turns.cancel();
     } catch {
       // ignore
     }
     try {
-      binding.session.dispose(reason);
+      binding.runtime.lifecycle.dispose(reason);
     } catch {
       // ignore
     }
@@ -128,8 +129,13 @@ export class SessionRegistry {
     cwd: string,
     provider?: AgentConfig["provider"],
     model?: string,
-  ): AgentSession {
-    const binding: SessionBinding = { session: null, socket: null, sinks: new Map() };
+  ): SessionRuntime {
+    const binding: SessionBinding = {
+      session: null,
+      runtime: null,
+      socket: null,
+      sinks: new Map(),
+    };
     const threadConfig: AgentConfig = {
       ...this.config,
       workingDirectory: cwd,
@@ -140,16 +146,17 @@ export class SessionRegistry {
       config: threadConfig,
     });
     binding.session = built.session;
+    binding.runtime = built.runtime;
     this.options.threadJournal.ensureSink(binding, built.session.id, (sinkBinding, sinkId, sink) =>
       this.addBindingSink(sinkBinding, sinkId, sink),
     );
-    this.sessionBindings.set(built.session.id, binding);
-    return built.session;
+    this.sessionBindings.set(built.runtime.id, binding);
+    return built.runtime;
   }
 
   loadThreadBinding(threadId: string): SessionBinding | null {
     const existing = this.sessionBindings.get(threadId);
-    if (existing?.session) {
+    if (existing?.runtime) {
       this.options.threadJournal.ensureSink(existing, threadId, (binding, sinkId, sink) =>
         this.addBindingSink(binding, sinkId, sink),
       );
@@ -157,9 +164,15 @@ export class SessionRegistry {
     }
     const persisted = this.options.sessionDb.getSessionRecord(threadId);
     if (!persisted) return null;
-    const binding: SessionBinding = { session: null, socket: null, sinks: new Map() };
+    const binding: SessionBinding = {
+      session: null,
+      runtime: null,
+      socket: null,
+      sinks: new Map(),
+    };
     const built = this.buildSession(binding, threadId);
     binding.session = built.session;
+    binding.runtime = built.runtime;
     this.options.threadJournal.ensureSink(binding, built.session.id, (sinkBinding, sinkId, sink) =>
       this.addBindingSink(sinkBinding, sinkId, sink),
     );
@@ -167,27 +180,28 @@ export class SessionRegistry {
     return binding;
   }
 
-  readThreadSnapshot(threadId: string): ReturnType<AgentSession["buildSessionSnapshot"]> | null {
-    const liveSnapshot = this.sessionBindings.get(threadId)?.session?.peekSessionSnapshot() ?? null;
+  readThreadSnapshot(threadId: string): ReturnType<SessionRuntime["snapshot"]["build"]> | null {
+    const liveSnapshot = this.sessionBindings.get(threadId)?.runtime?.snapshot.peek() ?? null;
     if (liveSnapshot) return liveSnapshot;
     const persisted = this.options.sessionDb.getSessionRecord(threadId);
     if (!persisted) return null;
     return this.loadInitialSessionSnapshot(persisted);
   }
 
-  listLiveRoot(options: { cwd?: string } = {}): AgentSession[] {
+  listLiveRoot(options: { cwd?: string } = {}): SessionRuntime[] {
     return [...this.sessionBindings.values()]
-      .flatMap((binding) => (binding.session ? [binding.session] : []))
+      .flatMap((binding) => (binding.runtime ? [binding.runtime] : []))
       .filter(
-        (session) =>
-          session.sessionKind === "root" &&
-          (!options.cwd || session.getWorkingDirectory() === options.cwd),
+        (runtime) =>
+          runtime.read.sessionKind === "root" &&
+          (!options.cwd || runtime.read.workingDirectory === options.cwd),
       );
   }
 
   createWorkspaceControlBinding(controlConfig: AgentConfig): SessionBinding {
     const binding: SessionBinding = {
       session: null,
+      runtime: null,
       socket: null,
       sinks: new Map(),
     };
@@ -196,16 +210,17 @@ export class SessionRegistry {
       persistenceEnabled: false,
     });
     binding.session = built.session;
+    binding.runtime = built.runtime;
     return binding;
   }
 
   evictIdleSessionBindings(idleTimeoutMs: number): void {
     const now = Date.now();
     for (const [sessionId, binding] of this.sessionBindings) {
-      if (binding.session && binding.sinks.size === 0 && !binding.session.isBusy) {
+      if (binding.runtime && binding.sinks.size === 0 && !binding.runtime.read.isBusy) {
         const idleSince = this.sessionIdleSince.get(sessionId) ?? 0;
         if (idleSince > 0 && now - idleSince > idleTimeoutMs) {
-          binding.session.dispose("idle eviction");
+          binding.runtime.lifecycle.dispose("idle eviction");
           this.sessionBindings.delete(sessionId);
           this.sessionIdleSince.delete(sessionId);
         }
@@ -216,18 +231,18 @@ export class SessionRegistry {
   async disposeAll(reason: string): Promise<void> {
     const persistenceFlushes: Promise<void>[] = [];
     for (const [id, binding] of this.sessionBindings) {
-      if (!binding.session) {
+      if (!binding.runtime) {
         this.sessionBindings.delete(id);
         this.sessionIdleSince.delete(id);
         continue;
       }
       try {
-        binding.session.dispose(reason);
+        binding.runtime.lifecycle.dispose(reason);
       } catch {
         // ignore
       }
       try {
-        persistenceFlushes.push(binding.session.waitForPersistenceIdle());
+        persistenceFlushes.push(binding.runtime.lifecycle.waitForPersistenceIdle());
       } catch {
         // ignore
       }
@@ -311,12 +326,12 @@ export class SessionRegistry {
       deleteSessionImpl: async (opts) => {
         void opts.requesterSessionId;
         const liveChildIds = [...this.sessionBindings.values()]
-          .map((childBinding) => childBinding.session)
+          .map((childBinding) => childBinding.runtime)
           .filter(
-            (session): session is AgentSession =>
-              !!session && session.isAgentOf(opts.targetSessionId),
+            (runtime): runtime is SessionRuntime =>
+              !!runtime && runtime.read.isAgentOf(opts.targetSessionId),
           )
-          .map((session) => session.id);
+          .map((runtime) => runtime.id);
         const persistedChildIds = this.options.sessionDb
           .listAgentSessions(opts.targetSessionId)
           .map((summary) => summary.agentId);
@@ -328,7 +343,7 @@ export class SessionRegistry {
 
         for (const sessionId of sessionIdsToDispose) {
           const candidateBinding = this.sessionBindings.get(sessionId);
-          if (!candidateBinding?.session) continue;
+          if (!candidateBinding?.runtime) continue;
           this.disposeBinding(candidateBinding, `session ${opts.targetSessionId} deleted`);
           this.sessionBindings.delete(sessionId);
           this.sessionIdleSince.delete(sessionId);
@@ -367,21 +382,21 @@ export class SessionRegistry {
           opts.checkpointId,
         ),
       getLiveSessionSnapshotImpl: (sessionId) =>
-        this.sessionBindings.get(sessionId)?.session?.peekSessionSnapshot() ?? null,
+        this.sessionBindings.get(sessionId)?.runtime?.snapshot.peek() ?? null,
       getLiveSessionWorkingDirectoryImpl: (sessionId) =>
-        this.sessionBindings.get(sessionId)?.session?.getWorkingDirectory() ?? null,
+        this.sessionBindings.get(sessionId)?.runtime?.read.workingDirectory ?? null,
       buildLegacySessionSnapshotImpl: (record: PersistedSessionRecord) =>
         loadSessionSnapshotProjectorModule().createLegacySessionSnapshot(record),
       getSkillMutationBlockReasonImpl: (workingDirectory) => {
-        const busySession = [...this.sessionBindings.values()]
-          .map((candidate) => candidate.session)
+        const busyRuntime = [...this.sessionBindings.values()]
+          .map((candidate) => candidate.runtime)
           .find(
-            (candidate): candidate is AgentSession =>
+            (candidate): candidate is SessionRuntime =>
               !!candidate &&
-              candidate.getWorkingDirectory() === workingDirectory &&
-              candidate.isBusy,
+              candidate.read.workingDirectory === workingDirectory &&
+              candidate.read.isBusy,
           );
-        if (!busySession) {
+        if (!busyRuntime) {
           return null;
         }
         return "Skill mutations are blocked while another session in this workspace is running.";
@@ -402,6 +417,7 @@ export class SessionRegistry {
     },
   ): Partial<SessionDependencies> & {
     session: AgentSession;
+    runtime: SessionRuntime;
     isResume: boolean;
     resumedFromStorage: boolean;
   } {
@@ -416,7 +432,12 @@ export class SessionRegistry {
           baseConfig: { ...this.config },
           ...common,
         });
-        return { session, isResume: true, resumedFromStorage: true };
+        return {
+          session,
+          runtime: new SessionRuntime(session),
+          isResume: true,
+          resumedFromStorage: true,
+        };
       }
     }
 
@@ -434,7 +455,12 @@ export class SessionRegistry {
       ...(overrides?.sessionInfoPatch ? { sessionInfoPatch: overrides.sessionInfoPatch } : {}),
       ...common,
     });
-    return { session, isResume: false, resumedFromStorage: false };
+    return {
+      session,
+      runtime: new SessionRuntime(session),
+      isResume: false,
+      resumedFromStorage: false,
+    };
   }
 
   private loadInitialSessionSnapshot(persisted: PersistedSessionRecord) {
@@ -510,22 +536,22 @@ export class SessionRegistry {
       homedir: this.options.homedir,
       sessionDb: this.options.sessionDb,
       getLiveSession: (sessionId) => {
-        const session = this.sessionBindings.get(sessionId)?.session;
-        if (!session) return null;
-        const info = session.getSessionInfoEvent();
+        const runtime = this.sessionBindings.get(sessionId)?.runtime;
+        if (!runtime) return null;
+        const info = runtime.read.info;
         return {
-          sessionId: session.id,
+          sessionId: runtime.id,
           title: info.title,
           provider: info.provider,
           model: info.model,
           updatedAt: info.updatedAt,
-          status: session.persistenceStatus,
-          busy: session.isBusy,
+          status: runtime.session.persistenceStatus,
+          busy: runtime.read.isBusy,
           setBackupsEnabledOverride: async (enabled) => {
-            await session.setBackupsEnabledOverride(enabled);
+            await runtime.session.setBackupsEnabledOverride(enabled);
           },
           reloadBackupStateFromDisk: async () => {
-            await session.reloadSessionBackupStateFromDisk();
+            await runtime.backups.reloadStateFromDisk();
           },
         };
       },

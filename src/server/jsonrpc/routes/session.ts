@@ -19,8 +19,8 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
       const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
       const title = typeof params.title === "string" ? params.title : "";
       const binding = context.threads.getLive(threadId);
-      const session = binding?.session;
-      if (!session || !title.trim()) {
+      const runtime = binding?.runtime;
+      if (!runtime || !title.trim()) {
         context.jsonrpc.sendError(ws, message.id, {
           code: JSONRPC_ERROR_CODES.invalidParams,
           message: `${message.method} requires threadId and title`,
@@ -29,7 +29,7 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
       }
       const event = await context.events.capture(
         binding,
-        () => session.setSessionTitle(title),
+        () => runtime.settings.setTitle(title),
         (event): event is Extract<SessionEvent, { type: "session_info" }> =>
           event.type === "session_info",
       );
@@ -53,8 +53,8 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
           ? (params.provider as AgentConfig["provider"])
           : undefined;
       const binding = context.threads.getLive(threadId);
-      const session = binding?.session;
-      if (!session || !model.trim()) {
+      const runtime = binding?.runtime;
+      if (!runtime || !model.trim()) {
         context.jsonrpc.sendError(ws, message.id, {
           code: JSONRPC_ERROR_CODES.invalidParams,
           message: `${message.method} requires threadId and model`,
@@ -64,7 +64,7 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
       const outcome = await captureBindingMutationOutcome(
         context,
         binding,
-        async () => await session.setModel(model, provider),
+        async () => await runtime.settings.setModel(model, provider),
         (event): event is Extract<SessionEvent, { type: "config_updated" }> =>
           event.type === "config_updated",
       );
@@ -75,8 +75,8 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
       context.jsonrpc.sendResult(ws, message.id, {
         event: outcome ?? {
           type: "config_updated",
-          sessionId: session.id,
-          config: session.getPublicConfig(),
+          sessionId: runtime.id,
+          config: runtime.settings.publicConfig,
         },
       });
     },
@@ -85,8 +85,8 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
       const params = toJsonRpcParams(message.params);
       const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
       const binding = context.threads.getLive(threadId);
-      const session = binding?.session;
-      if (!session) {
+      const runtime = binding?.runtime;
+      if (!runtime) {
         context.jsonrpc.sendError(ws, message.id, {
           code: JSONRPC_ERROR_CODES.invalidParams,
           message: `${message.method} requires threadId`,
@@ -104,7 +104,7 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
       const outcome = await captureBindingOutcome(
         context,
         binding,
-        () => session.setSessionUsageBudget(warnAtUsd, stopAtUsd),
+        () => runtime.settings.setSessionUsageBudget(warnAtUsd, stopAtUsd),
         (event): event is Extract<SessionEvent, { type: "session_usage" }> =>
           event.type === "session_usage",
       );
@@ -120,8 +120,8 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
       const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
       const configPatch = params.config as Record<string, unknown> | undefined;
       const binding = context.threads.getLive(threadId);
-      const session = binding?.session;
-      if (!session || !configPatch || typeof configPatch !== "object") {
+      const runtime = binding?.runtime;
+      if (!runtime || !configPatch || typeof configPatch !== "object") {
         context.jsonrpc.sendError(ws, message.id, {
           code: JSONRPC_ERROR_CODES.invalidParams,
           message: `${message.method} requires threadId and config`,
@@ -131,7 +131,7 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
       const outcome = await captureBindingMutationOutcome(
         context,
         binding,
-        async () => await session.setConfig(configPatch),
+        async () => await runtime.settings.setConfig(configPatch),
         (event): event is Extract<SessionEvent, { type: "session_config" }> =>
           event.type === "session_config",
       );
@@ -140,7 +140,7 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
         return;
       }
       context.jsonrpc.sendResult(ws, message.id, {
-        event: outcome ?? session.getSessionConfigEvent(),
+        event: outcome ?? runtime.settings.configEvent,
       });
     },
 
@@ -148,8 +148,8 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
       const params = toJsonRpcParams(message.params);
       const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
       const binding = context.threads.getLive(threadId);
-      const session = binding?.session;
-      if (!session) {
+      const runtime = binding?.runtime;
+      if (!runtime) {
         context.jsonrpc.sendError(ws, message.id, {
           code: JSONRPC_ERROR_CODES.invalidParams,
           message: `${message.method} requires threadId`,
@@ -159,7 +159,7 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
 
       const outcome = await context.events.capture(
         binding,
-        () => session.getHarnessContext(),
+        () => runtime.settings.getHarnessContext(),
         (event): event is Extract<SessionEvent, { type: "harness_context" }> =>
           event.type === "harness_context",
       );
@@ -181,8 +181,8 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
 
       const { threadId, context: harnessPayload } = parsed.data;
       const binding = context.threads.getLive(threadId);
-      const session = binding?.session;
-      if (!session) {
+      const runtime = binding?.runtime;
+      if (!runtime) {
         context.jsonrpc.sendError(ws, message.id, {
           code: JSONRPC_ERROR_CODES.invalidParams,
           message: `${message.method} requires threadId`,
@@ -192,7 +192,7 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
 
       const outcome = await context.events.capture(
         binding,
-        () => session.setHarnessContext(harnessPayload),
+        () => runtime.settings.setHarnessContext(harnessPayload),
         (event): event is Extract<SessionEvent, { type: "harness_context" }> =>
           event.type === "harness_context",
       );
@@ -214,8 +214,8 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
       const result = threadId
         ? await (async () => {
             const binding = context.threads.load(threadId);
-            const session = binding?.session;
-            if (!binding || !session) {
+            const runtime = binding?.runtime;
+            if (!binding || !runtime) {
               context.jsonrpc.sendError(ws, message.id, {
                 code: JSONRPC_ERROR_CODES.invalidParams,
                 message: `${message.method} requires a live workspace control session or threadId`,
@@ -225,7 +225,7 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
             const outcome = await context.events.captureMutationOutcome(
               binding,
               async () =>
-                await session.applySessionDefaults({
+                await runtime.settings.applyDefaults({
                   ...(provider !== undefined && model !== undefined ? { provider, model } : {}),
                   ...(enableMcp !== undefined ? { enableMcp } : {}),
                   ...(configPatch && typeof configPatch === "object"
@@ -251,13 +251,13 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
                 event.type === "session_info" ||
                 event.type === "error",
             );
-            return { outcome, fallback: session.getSessionConfigEvent() };
+            return { outcome, fallback: runtime.settings.configEvent };
           })()
-        : await context.workspaceControl.withSession(cwd, async (binding, session) => {
+        : await context.workspaceControl.withSession(cwd, async (binding, runtime) => {
             const outcome = await context.events.captureMutationOutcome(
               binding,
               async () =>
-                await session.applySessionDefaults({
+                await runtime.settings.applyDefaults({
                   ...(provider !== undefined && model !== undefined ? { provider, model } : {}),
                   ...(enableMcp !== undefined ? { enableMcp } : {}),
                   ...(configPatch && typeof configPatch === "object"
@@ -283,7 +283,7 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
                 event.type === "session_info" ||
                 event.type === "error",
             );
-            return { outcome, fallback: session.getSessionConfigEvent() };
+            return { outcome, fallback: runtime.settings.configEvent };
           });
       if (result === null) {
         return;
@@ -310,8 +310,8 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
       const outcome = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) =>
-          await session.uploadFile(parsed.data.filename, parsed.data.contentBase64),
+        async (runtime) =>
+          await runtime.files.upload(parsed.data.filename, parsed.data.contentBase64),
         (event): event is Extract<SessionEvent, { type: "file_uploaded" }> =>
           event.type === "file_uploaded",
       );
@@ -330,7 +330,7 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
       const outcome = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => await session.deleteSession(targetSessionId),
+        async (runtime) => await runtime.lifecycle.delete(targetSessionId),
         (event): event is Extract<SessionEvent, { type: "session_deleted" }> =>
           event.type === "session_deleted" && event.targetSessionId === targetSessionId,
       );

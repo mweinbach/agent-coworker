@@ -1,5 +1,6 @@
 import type { JsonRpcInitializeParams } from "../jsonrpc/protocol";
 import type { AgentSession } from "../session/AgentSession";
+import type { SessionRuntime } from "../session/SessionRuntime";
 
 export type JsonRpcConnectionState = {
   initializeRequestReceived: boolean;
@@ -36,6 +37,7 @@ export type SessionEventSink = (evt: import("../protocol").SessionEvent) => void
 
 export type SessionBinding = {
   session: AgentSession | null;
+  runtime: SessionRuntime | null;
   socket: StartServerSocket | null;
   sinks: Map<string, SessionEventSink>;
 };

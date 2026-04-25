@@ -249,6 +249,53 @@ function buildInitialSessionSnapshot(opts: {
   };
 }
 
+function decorateSessionSnapshot(
+  snapshot: SessionSnapshot,
+  opts: {
+    state: SessionRuntimeState;
+    lastEventSeq: number;
+    hasPendingAsk: boolean;
+    hasPendingApproval: boolean;
+  },
+): SessionSnapshot {
+  snapshot.title = opts.state.sessionInfo.title;
+  snapshot.titleSource = opts.state.sessionInfo.titleSource;
+  snapshot.titleModel = opts.state.sessionInfo.titleModel;
+  snapshot.provider = opts.state.sessionInfo.provider;
+  snapshot.model = opts.state.sessionInfo.model;
+  snapshot.sessionKind = opts.state.sessionInfo.sessionKind ?? "root";
+  snapshot.parentSessionId = opts.state.sessionInfo.parentSessionId ?? null;
+  snapshot.role = opts.state.sessionInfo.role ?? null;
+  snapshot.mode = opts.state.sessionInfo.mode ?? null;
+  snapshot.depth =
+    typeof opts.state.sessionInfo.depth === "number" ? opts.state.sessionInfo.depth : null;
+  snapshot.nickname = opts.state.sessionInfo.nickname ?? null;
+  snapshot.taskType = opts.state.sessionInfo.taskType ?? null;
+  snapshot.targetPaths = opts.state.sessionInfo.targetPaths ?? null;
+  snapshot.requestedModel = opts.state.sessionInfo.requestedModel ?? null;
+  snapshot.effectiveModel = opts.state.sessionInfo.effectiveModel ?? null;
+  snapshot.requestedReasoningEffort = opts.state.sessionInfo.requestedReasoningEffort ?? null;
+  snapshot.effectiveReasoningEffort = opts.state.sessionInfo.effectiveReasoningEffort ?? null;
+  snapshot.executionState = opts.state.sessionInfo.executionState ?? null;
+  snapshot.lastMessagePreview = opts.state.sessionInfo.lastMessagePreview ?? null;
+  snapshot.createdAt = opts.state.sessionInfo.createdAt;
+  snapshot.updatedAt = opts.state.sessionInfo.updatedAt;
+  snapshot.messageCount = opts.state.allMessages.length;
+  snapshot.lastEventSeq = opts.lastEventSeq;
+  snapshot.todos = structuredClone(opts.state.todos);
+  snapshot.sessionUsage = opts.state.costTracker?.getSnapshot() ?? null;
+  const latestTurnUsage = snapshot.sessionUsage?.turns?.at(-1);
+  snapshot.lastTurnUsage = latestTurnUsage
+    ? {
+        turnId: latestTurnUsage.turnId,
+        usage: { ...latestTurnUsage.usage },
+      }
+    : snapshot.lastTurnUsage;
+  snapshot.hasPendingAsk = opts.hasPendingAsk;
+  snapshot.hasPendingApproval = opts.hasPendingApproval;
+  return snapshot;
+}
+
 const MAX_DISCONNECTED_REPLAY_EVENTS = 256;
 const DISCONNECTED_REPLAY_EVENT_TYPES = new Set<SessionEvent["type"]>([
   "user_message",
@@ -923,87 +970,21 @@ export class AgentSession {
   }
 
   buildSessionSnapshot(): SessionSnapshot {
-    const snapshot = this.sessionSnapshotProjector.getSnapshot();
-    snapshot.title = this.state.sessionInfo.title;
-    snapshot.titleSource = this.state.sessionInfo.titleSource;
-    snapshot.titleModel = this.state.sessionInfo.titleModel;
-    snapshot.provider = this.state.sessionInfo.provider;
-    snapshot.model = this.state.sessionInfo.model;
-    snapshot.sessionKind = this.state.sessionInfo.sessionKind ?? "root";
-    snapshot.parentSessionId = this.state.sessionInfo.parentSessionId ?? null;
-    snapshot.role = this.state.sessionInfo.role ?? null;
-    snapshot.mode = this.state.sessionInfo.mode ?? null;
-    snapshot.depth =
-      typeof this.state.sessionInfo.depth === "number" ? this.state.sessionInfo.depth : null;
-    snapshot.nickname = this.state.sessionInfo.nickname ?? null;
-    snapshot.taskType = this.state.sessionInfo.taskType ?? null;
-    snapshot.targetPaths = this.state.sessionInfo.targetPaths ?? null;
-    snapshot.requestedModel = this.state.sessionInfo.requestedModel ?? null;
-    snapshot.effectiveModel = this.state.sessionInfo.effectiveModel ?? null;
-    snapshot.requestedReasoningEffort = this.state.sessionInfo.requestedReasoningEffort ?? null;
-    snapshot.effectiveReasoningEffort = this.state.sessionInfo.effectiveReasoningEffort ?? null;
-    snapshot.executionState = this.state.sessionInfo.executionState ?? null;
-    snapshot.lastMessagePreview = this.state.sessionInfo.lastMessagePreview ?? null;
-    snapshot.createdAt = this.state.sessionInfo.createdAt;
-    snapshot.updatedAt = this.state.sessionInfo.updatedAt;
-    snapshot.messageCount = this.state.allMessages.length;
-    snapshot.lastEventSeq = this.persistenceManager.getProjectedLastEventSeq(
-      this.persistedLastEventSeq,
-    );
-    snapshot.todos = structuredClone(this.state.todos);
-    snapshot.sessionUsage = this.state.costTracker?.getSnapshot() ?? null;
-    const latestTurnUsage = snapshot.sessionUsage?.turns?.at(-1);
-    snapshot.lastTurnUsage = latestTurnUsage
-      ? {
-          turnId: latestTurnUsage.turnId,
-          usage: { ...latestTurnUsage.usage },
-        }
-      : snapshot.lastTurnUsage;
-    snapshot.hasPendingAsk = this.hasPendingAsk;
-    snapshot.hasPendingApproval = this.hasPendingApproval;
-    return snapshot;
+    return decorateSessionSnapshot(this.sessionSnapshotProjector.getSnapshot(), {
+      state: this.state,
+      lastEventSeq: this.persistenceManager.getProjectedLastEventSeq(this.persistedLastEventSeq),
+      hasPendingAsk: this.hasPendingAsk,
+      hasPendingApproval: this.hasPendingApproval,
+    });
   }
 
   peekSessionSnapshot(): SessionSnapshot {
-    const snapshot = this.sessionSnapshotProjector.peekSnapshot();
-    snapshot.title = this.state.sessionInfo.title;
-    snapshot.titleSource = this.state.sessionInfo.titleSource;
-    snapshot.titleModel = this.state.sessionInfo.titleModel;
-    snapshot.provider = this.state.sessionInfo.provider;
-    snapshot.model = this.state.sessionInfo.model;
-    snapshot.sessionKind = this.state.sessionInfo.sessionKind ?? "root";
-    snapshot.parentSessionId = this.state.sessionInfo.parentSessionId ?? null;
-    snapshot.role = this.state.sessionInfo.role ?? null;
-    snapshot.mode = this.state.sessionInfo.mode ?? null;
-    snapshot.depth =
-      typeof this.state.sessionInfo.depth === "number" ? this.state.sessionInfo.depth : null;
-    snapshot.nickname = this.state.sessionInfo.nickname ?? null;
-    snapshot.taskType = this.state.sessionInfo.taskType ?? null;
-    snapshot.targetPaths = this.state.sessionInfo.targetPaths ?? null;
-    snapshot.requestedModel = this.state.sessionInfo.requestedModel ?? null;
-    snapshot.effectiveModel = this.state.sessionInfo.effectiveModel ?? null;
-    snapshot.requestedReasoningEffort = this.state.sessionInfo.requestedReasoningEffort ?? null;
-    snapshot.effectiveReasoningEffort = this.state.sessionInfo.effectiveReasoningEffort ?? null;
-    snapshot.executionState = this.state.sessionInfo.executionState ?? null;
-    snapshot.lastMessagePreview = this.state.sessionInfo.lastMessagePreview ?? null;
-    snapshot.createdAt = this.state.sessionInfo.createdAt;
-    snapshot.updatedAt = this.state.sessionInfo.updatedAt;
-    snapshot.messageCount = this.state.allMessages.length;
-    snapshot.lastEventSeq = this.persistenceManager.getProjectedLastEventSeq(
-      this.persistedLastEventSeq,
-    );
-    snapshot.todos = structuredClone(this.state.todos);
-    snapshot.sessionUsage = this.state.costTracker?.getSnapshot() ?? null;
-    const latestTurnUsage = snapshot.sessionUsage?.turns?.at(-1);
-    snapshot.lastTurnUsage = latestTurnUsage
-      ? {
-          turnId: latestTurnUsage.turnId,
-          usage: { ...latestTurnUsage.usage },
-        }
-      : snapshot.lastTurnUsage;
-    snapshot.hasPendingAsk = this.hasPendingAsk;
-    snapshot.hasPendingApproval = this.hasPendingApproval;
-    return snapshot;
+    return decorateSessionSnapshot(this.sessionSnapshotProjector.peekSnapshot(), {
+      state: this.state,
+      lastEventSeq: this.persistenceManager.getProjectedLastEventSeq(this.persistedLastEventSeq),
+      hasPendingAsk: this.hasPendingAsk,
+      hasPendingApproval: this.hasPendingApproval,
+    });
   }
 
   getPublicConfig() {

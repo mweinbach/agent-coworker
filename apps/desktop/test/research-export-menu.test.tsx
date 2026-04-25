@@ -1,19 +1,8 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
 import { setupJsdom } from "./jsdomHarness";
-
-const actualButtonModule = await import("../src/components/ui/button");
-let exportMenuButtonMockEnabled = false;
-
-mock.module("../src/components/ui/button", () => ({
-  ...actualButtonModule,
-  Button: ({ children, ...props }: any) =>
-    exportMenuButtonMockEnabled
-      ? createElement("button", props, children)
-      : createElement(actualButtonModule.Button, props, children),
-}));
 
 const { useAppStore } = await import("../src/app/store");
 
@@ -27,14 +16,6 @@ function resetAppStore(overrides: Record<string, unknown> = {}) {
 }
 
 describe("research export menu", () => {
-  beforeEach(() => {
-    exportMenuButtonMockEnabled = true;
-  });
-
-  afterEach(() => {
-    exportMenuButtonMockEnabled = false;
-  });
-
   test("dispatches each export format through the store action", async () => {
     const harness = setupJsdom();
     const exportResearchMock = mock(async () => "/Users/test/Downloads/report.pdf");

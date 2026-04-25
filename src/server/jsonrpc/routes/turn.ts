@@ -10,7 +10,9 @@ import {
 import { toJsonRpcParams } from "./shared";
 import type { JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
 
-type JsonRpcTurnStartOutcome = Extract<SessionEvent, { type: "session_busy" }> | JsonRpcSessionError;
+type JsonRpcTurnStartOutcome =
+  | Extract<SessionEvent, { type: "session_busy" }>
+  | JsonRpcSessionError;
 type JsonRpcTurnSteerOutcome =
   | Extract<SessionEvent, { type: "steer_accepted" }>
   | JsonRpcSessionError;
@@ -39,7 +41,7 @@ export function createTurnRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
         return;
       }
       const binding = context.threads.subscribe(ws, threadId);
-      if (!binding?.session) {
+      if (!binding?.runtime) {
         context.jsonrpc.sendError(ws, message.id, {
           code: JSONRPC_ERROR_CODES.invalidParams,
           message: `Unknown thread: ${threadId}`,
@@ -50,11 +52,11 @@ export function createTurnRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
         context,
         binding,
         () => {
-          const session = binding.session;
-          if (!session) {
-            throw new Error("Thread session is unavailable");
+          const runtime = binding.runtime;
+          if (!runtime) {
+            throw new Error("Thread runtime is unavailable");
           }
-          return session.sendUserMessage(
+          return runtime.turns.sendUserMessage(
             text,
             clientMessageId,
             undefined,
@@ -64,7 +66,7 @@ export function createTurnRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
         },
         (event): event is JsonRpcTurnStartOutcome =>
           (event.type === "session_busy" &&
-            event.sessionId === binding.session?.id &&
+            event.sessionId === binding.runtime?.id &&
             event.busy === true &&
             typeof event.turnId === "string" &&
             event.turnId.trim().length > 0) ||
@@ -97,11 +99,10 @@ export function createTurnRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
 
       const { threadId, turnId, input, clientMessageId } = parsed.data;
       const { text, attachments, orderedParts } = context.utils.extractInput(input);
-      const expectedTurnId =
-        turnId || (context.threads.getLive(threadId)?.session?.activeTurnId ?? "");
-      const session = context.threads.getLive(threadId)?.session;
+      const runtime = context.threads.getLive(threadId)?.runtime;
+      const expectedTurnId = turnId || (runtime?.turns.activeTurnId ?? "");
       const hasSteerInput = text || attachments.length > 0;
-      if (!session || !hasSteerInput || !expectedTurnId) {
+      if (!runtime || !hasSteerInput || !expectedTurnId) {
         context.jsonrpc.sendError(ws, message.id, {
           code: JSONRPC_ERROR_CODES.invalidParams,
           message: "turn/steer requires threadId, active turnId, and non-empty input",
@@ -120,7 +121,7 @@ export function createTurnRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
         context,
         binding,
         () =>
-          session.sendSteerMessage(
+          runtime.turns.sendSteerMessage(
             text,
             expectedTurnId,
             clientMessageId,
@@ -129,7 +130,7 @@ export function createTurnRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
           ),
         (event): event is JsonRpcTurnSteerOutcome =>
           (event.type === "steer_accepted" &&
-            event.sessionId === session.id &&
+            event.sessionId === runtime.id &&
             event.turnId === expectedTurnId) ||
           context.utils.isSessionError(event),
       );
@@ -145,15 +146,15 @@ export function createTurnRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
     "turn/interrupt": (ws, message) => {
       const params = toJsonRpcParams(message.params);
       const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
-      const session = context.threads.getLive(threadId)?.session;
-      if (!session) {
+      const runtime = context.threads.getLive(threadId)?.runtime;
+      if (!runtime) {
         context.jsonrpc.sendError(ws, message.id, {
           code: JSONRPC_ERROR_CODES.invalidParams,
           message: `Unknown thread: ${threadId}`,
         });
         return;
       }
-      session.cancel();
+      runtime.turns.cancel();
       context.jsonrpc.sendResult(ws, message.id, {});
     },
   };

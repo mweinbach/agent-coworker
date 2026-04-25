@@ -14,7 +14,7 @@ export function createWorkspaceBackupRouteHandlers(
       const event = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => await session.listWorkspaceBackups(),
+        async (runtime) => await runtime.backups.listWorkspaceBackups(),
         (event): event is Extract<SessionEvent, { type: "workspace_backups" }> =>
           event.type === "workspace_backups",
       );
@@ -35,7 +35,7 @@ export function createWorkspaceBackupRouteHandlers(
       const event = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => await session.getWorkspaceBackupDelta(targetSessionId, checkpointId),
+        async (runtime) => await runtime.backups.getWorkspaceDelta(targetSessionId, checkpointId),
         (event): event is Extract<SessionEvent, { type: "workspace_backup_delta" }> =>
           event.type === "workspace_backup_delta",
       );
@@ -54,8 +54,8 @@ export function createWorkspaceBackupRouteHandlers(
       const event = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => {
-          await session.createWorkspaceBackupCheckpoint(targetSessionId);
+        async (runtime) => {
+          await runtime.backups.createWorkspaceCheckpoint(targetSessionId);
         },
         (event): event is Extract<SessionEvent, { type: "workspace_backups" }> =>
           event.type === "workspace_backups",
@@ -79,8 +79,8 @@ export function createWorkspaceBackupRouteHandlers(
       const event = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => {
-          await session.restoreWorkspaceBackup(targetSessionId, checkpointId);
+        async (runtime) => {
+          await runtime.backups.restoreWorkspaceBackup(targetSessionId, checkpointId);
         },
         (event): event is Extract<SessionEvent, { type: "workspace_backups" }> =>
           event.type === "workspace_backups",
@@ -104,9 +104,9 @@ export function createWorkspaceBackupRouteHandlers(
       const event = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => {
+        async (runtime) => {
           if (checkpointId) {
-            await session.deleteWorkspaceBackupCheckpoint(targetSessionId, checkpointId);
+            await runtime.backups.deleteWorkspaceCheckpoint(targetSessionId, checkpointId);
           }
         },
         (event): event is Extract<SessionEvent, { type: "workspace_backups" }> =>
@@ -127,8 +127,8 @@ export function createWorkspaceBackupRouteHandlers(
       const event = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => {
-          await session.deleteWorkspaceBackupEntry(targetSessionId);
+        async (runtime) => {
+          await runtime.backups.deleteWorkspaceEntry(targetSessionId);
         },
         (event): event is Extract<SessionEvent, { type: "workspace_backups" }> =>
           event.type === "workspace_backups",

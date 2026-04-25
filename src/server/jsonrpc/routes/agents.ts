@@ -35,8 +35,8 @@ export function createAgentRouteHandlers(context: JsonRpcRouteContext): JsonRpcR
         forkContext,
       } = parsed.data;
       const binding = context.threads.getLive(threadId);
-      const session = binding?.session;
-      if (!session || !prompt.trim()) {
+      const runtime = binding?.runtime;
+      if (!runtime || !prompt.trim()) {
         context.jsonrpc.sendError(ws, message.id, {
           code: JSONRPC_ERROR_CODES.invalidParams,
           message: `${message.method} requires threadId and message`,
@@ -44,7 +44,7 @@ export function createAgentRouteHandlers(context: JsonRpcRouteContext): JsonRpcR
         return;
       }
 
-      await session.createAgentSession({
+      await runtime.agents.create({
         message: prompt,
         ...(role !== undefined ? { role } : {}),
         ...(nickname !== undefined ? { nickname } : {}),
@@ -65,8 +65,8 @@ export function createAgentRouteHandlers(context: JsonRpcRouteContext): JsonRpcR
       const params = toJsonRpcParams(message.params);
       const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
       const binding = context.threads.getLive(threadId);
-      const session = binding?.session;
-      if (!session) {
+      const runtime = binding?.runtime;
+      if (!runtime) {
         context.jsonrpc.sendError(ws, message.id, {
           code: JSONRPC_ERROR_CODES.invalidParams,
           message: `${message.method} requires threadId`,
@@ -74,7 +74,7 @@ export function createAgentRouteHandlers(context: JsonRpcRouteContext): JsonRpcR
         return;
       }
 
-      await session.listAgentSessions();
+      await runtime.agents.list();
       context.jsonrpc.sendResult(ws, message.id, {});
     },
 
@@ -84,8 +84,8 @@ export function createAgentRouteHandlers(context: JsonRpcRouteContext): JsonRpcR
       const agentId = typeof params.agentId === "string" ? params.agentId.trim() : "";
       const prompt = typeof params.message === "string" ? params.message : "";
       const binding = context.threads.getLive(threadId);
-      const session = binding?.session;
-      if (!session || !agentId || !prompt.trim()) {
+      const runtime = binding?.runtime;
+      if (!runtime || !agentId || !prompt.trim()) {
         context.jsonrpc.sendError(ws, message.id, {
           code: JSONRPC_ERROR_CODES.invalidParams,
           message: `${message.method} requires threadId, agentId, and message`,
@@ -93,7 +93,7 @@ export function createAgentRouteHandlers(context: JsonRpcRouteContext): JsonRpcR
         return;
       }
 
-      await session.sendAgentInput(
+      await runtime.agents.sendInput(
         agentId,
         prompt,
         typeof params.interrupt === "boolean" ? params.interrupt : undefined,
@@ -116,8 +116,8 @@ export function createAgentRouteHandlers(context: JsonRpcRouteContext): JsonRpcR
 
       const { threadId, agentIds, timeoutMs, mode } = parsed.data;
       const binding = context.threads.getLive(threadId);
-      const session = binding?.session;
-      if (!session || agentIds.length === 0) {
+      const runtime = binding?.runtime;
+      if (!runtime || agentIds.length === 0) {
         context.jsonrpc.sendError(ws, message.id, {
           code: JSONRPC_ERROR_CODES.invalidParams,
           message: `${message.method} requires threadId and at least one agentId`,
@@ -125,7 +125,7 @@ export function createAgentRouteHandlers(context: JsonRpcRouteContext): JsonRpcR
         return;
       }
 
-      await session.waitForAgents(agentIds, timeoutMs, mode);
+      await runtime.agents.wait(agentIds, timeoutMs, mode);
       context.jsonrpc.sendResult(ws, message.id, {});
     },
 
@@ -144,8 +144,8 @@ export function createAgentRouteHandlers(context: JsonRpcRouteContext): JsonRpcR
 
       const { threadId, agentId } = parsed.data;
       const binding = context.threads.getLive(threadId);
-      const session = binding?.session;
-      if (!session) {
+      const runtime = binding?.runtime;
+      if (!runtime) {
         context.jsonrpc.sendError(ws, message.id, {
           code: JSONRPC_ERROR_CODES.invalidParams,
           message: `${message.method} requires threadId`,
@@ -153,7 +153,7 @@ export function createAgentRouteHandlers(context: JsonRpcRouteContext): JsonRpcR
         return;
       }
 
-      const event = await session.inspectAgent(agentId);
+      const event = await runtime.agents.inspect(agentId);
       context.jsonrpc.sendResult(ws, message.id, { event });
     },
 
@@ -162,8 +162,8 @@ export function createAgentRouteHandlers(context: JsonRpcRouteContext): JsonRpcR
       const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
       const agentId = typeof params.agentId === "string" ? params.agentId.trim() : "";
       const binding = context.threads.getLive(threadId);
-      const session = binding?.session;
-      if (!session || !agentId) {
+      const runtime = binding?.runtime;
+      if (!runtime || !agentId) {
         context.jsonrpc.sendError(ws, message.id, {
           code: JSONRPC_ERROR_CODES.invalidParams,
           message: `${message.method} requires threadId and agentId`,
@@ -171,7 +171,7 @@ export function createAgentRouteHandlers(context: JsonRpcRouteContext): JsonRpcR
         return;
       }
 
-      await session.resumeAgent(agentId);
+      await runtime.agents.resume(agentId);
       context.jsonrpc.sendResult(ws, message.id, {});
     },
 
@@ -180,8 +180,8 @@ export function createAgentRouteHandlers(context: JsonRpcRouteContext): JsonRpcR
       const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
       const agentId = typeof params.agentId === "string" ? params.agentId.trim() : "";
       const binding = context.threads.getLive(threadId);
-      const session = binding?.session;
-      if (!session || !agentId) {
+      const runtime = binding?.runtime;
+      if (!runtime || !agentId) {
         context.jsonrpc.sendError(ws, message.id, {
           code: JSONRPC_ERROR_CODES.invalidParams,
           message: `${message.method} requires threadId and agentId`,
@@ -189,7 +189,7 @@ export function createAgentRouteHandlers(context: JsonRpcRouteContext): JsonRpcR
         return;
       }
 
-      await session.closeAgent(agentId);
+      await runtime.agents.close(agentId);
       context.jsonrpc.sendResult(ws, message.id, {});
     },
   };

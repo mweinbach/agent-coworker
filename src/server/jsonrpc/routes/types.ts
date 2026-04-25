@@ -1,7 +1,7 @@
 import type { AgentConfig } from "../../../types";
 import type { SessionEvent } from "../../protocol";
 import type { ResearchService } from "../../research/ResearchService";
-import type { AgentSession } from "../../session/AgentSession";
+import type { SessionRuntime } from "../../session/SessionRuntime";
 import type { PersistedSessionRecord, PersistedThreadJournalEvent } from "../../sessionDb";
 import type { SessionBinding, StartServerSocket } from "../../startServer/types";
 import type { JsonRpcLiteError, JsonRpcLiteId, JsonRpcLiteRequest } from "../protocol";
@@ -57,12 +57,12 @@ export interface JsonRpcRouteContext {
       cwd: string;
       provider?: AgentConfig["provider"];
       model?: string;
-    }): AgentSession;
+    }): SessionRuntime;
     load(threadId: string): SessionBinding | null;
     getLive(threadId: string): SessionBinding | undefined;
     getPersisted(threadId: string): PersistedSessionRecord | null;
     listPersisted(options?: { cwd?: string }): PersistedSessionRecord[];
-    listLiveRoot(options?: { cwd?: string }): AgentSession[];
+    listLiveRoot(options?: { cwd?: string }): SessionRuntime[];
     subscribe(
       ws: StartServerSocket,
       threadId: string,
@@ -72,13 +72,15 @@ export interface JsonRpcRouteContext {
       ws: StartServerSocket,
       threadId: string,
     ): "unsubscribed" | "notSubscribed" | "notLoaded";
-    readSnapshot(threadId: string): ReturnType<AgentSession["buildSessionSnapshot"]> | null;
+    readSnapshot(
+      threadId: string,
+    ): import("../../../shared/sessionSnapshot").SessionSnapshot | null;
   };
   workspaceControl: {
     getOrCreateBinding(cwd: string): Promise<SessionBinding>;
     withSession<T>(
       cwd: string,
-      runner: (binding: SessionBinding, session: AgentSession) => Promise<T>,
+      runner: (binding: SessionBinding, runtime: SessionRuntime) => Promise<T>,
     ): Promise<T>;
     readState(cwd: string): Promise<SessionEvent[]>;
   };
@@ -127,10 +129,10 @@ export interface JsonRpcRouteContext {
     resolveWorkspacePath(params: Record<string, unknown>, method: string): string;
     extractTextInput(input: unknown): string;
     extractInput(input: unknown): import("./shared").ExtractedInput;
-    buildThreadFromSession(session: AgentSession): JsonRpcThread;
+    buildThreadFromSession(runtime: SessionRuntime): JsonRpcThread;
     buildThreadFromRecord(record: PersistedSessionRecord): JsonRpcThread;
     shouldIncludeThreadSummary(summary: JsonRpcThreadSummaryFilter): boolean;
-    buildControlSessionStateEvents(session: AgentSession): SessionEvent[];
+    buildControlSessionStateEvents(runtime: SessionRuntime): SessionEvent[];
     isSessionError(event: SessionEvent): event is Extract<SessionEvent, { type: "error" }>;
   };
 }

@@ -16,7 +16,7 @@ export function createProviderRouteHandlers(
       const outcome = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => await session.emitProviderCatalog(),
+        async (runtime) => await runtime.provider.emitCatalog(),
         (event): event is Extract<SessionEvent, { type: "provider_catalog" }> =>
           event.type === "provider_catalog",
       );
@@ -33,7 +33,7 @@ export function createProviderRouteHandlers(
       const outcome = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        (session) => session.emitProviderAuthMethods(),
+        (runtime) => runtime.provider.emitAuthMethods(),
         (event): event is Extract<SessionEvent, { type: "provider_auth_methods" }> =>
           event.type === "provider_auth_methods",
       );
@@ -51,7 +51,7 @@ export function createProviderRouteHandlers(
       const outcome = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => await session.refreshProviderStatus({ refreshBedrockDiscovery }),
+        async (runtime) => await runtime.provider.refreshStatus({ refreshBedrockDiscovery }),
         (event): event is Extract<SessionEvent, { type: "provider_status" }> =>
           event.type === "provider_status",
       );
@@ -80,7 +80,7 @@ export function createProviderRouteHandlers(
       const outcome = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => await session.authorizeProviderAuth(provider, methodId),
+        async (runtime) => await runtime.provider.authorizeAuth(provider, methodId),
         (
           event,
         ): event is Extract<
@@ -115,7 +115,7 @@ export function createProviderRouteHandlers(
       const outcome = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => await session.logoutProviderAuth(provider),
+        async (runtime) => await runtime.provider.logoutAuth(provider),
         (event): event is Extract<SessionEvent, { type: "provider_auth_result" }> =>
           event.type === "provider_auth_result" && event.provider === provider,
       );
@@ -146,7 +146,7 @@ export function createProviderRouteHandlers(
       const outcome = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => await session.callbackProviderAuth(provider, methodId, code),
+        async (runtime) => await runtime.provider.callbackAuth(provider, methodId, code),
         (event): event is Extract<SessionEvent, { type: "provider_auth_result" }> =>
           event.type === "provider_auth_result" &&
           event.provider === provider &&
@@ -178,7 +178,7 @@ export function createProviderRouteHandlers(
       const outcome = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => await session.setProviderApiKey(provider, methodId, apiKey),
+        async (runtime) => await runtime.provider.setApiKey(provider, methodId, apiKey),
         (event): event is Extract<SessionEvent, { type: "provider_auth_result" }> =>
           event.type === "provider_auth_result" &&
           event.provider === provider &&
@@ -217,7 +217,7 @@ export function createProviderRouteHandlers(
       const outcome = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => await session.setProviderConfig(provider, methodId, values),
+        async (runtime) => await runtime.provider.setConfig(provider, methodId, values),
         (event): event is Extract<SessionEvent, { type: "provider_auth_result" }> =>
           event.type === "provider_auth_result" &&
           event.provider === provider &&
@@ -251,7 +251,7 @@ export function createProviderRouteHandlers(
       const outcome = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => await session.copyProviderApiKey(provider, sourceProvider),
+        async (runtime) => await runtime.provider.copyApiKey(provider, sourceProvider),
         (event): event is Extract<SessionEvent, { type: "provider_auth_result" }> =>
           event.type === "provider_auth_result" && event.provider === provider,
       );

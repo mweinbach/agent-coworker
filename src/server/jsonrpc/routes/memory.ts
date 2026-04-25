@@ -14,7 +14,7 @@ export function createMemoryRouteHandlers(context: JsonRpcRouteContext): JsonRpc
       const event = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => await session.emitMemories(scope),
+        async (runtime) => await runtime.memory.list(scope),
         (event): event is Extract<SessionEvent, { type: "memory_list" }> =>
           event.type === "memory_list",
       );
@@ -34,7 +34,7 @@ export function createMemoryRouteHandlers(context: JsonRpcRouteContext): JsonRpc
       const event = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => await session.upsertMemory(scope, id, content),
+        async (runtime) => await runtime.memory.upsert(scope, id, content),
         (event): event is Extract<SessionEvent, { type: "memory_list" }> =>
           event.type === "memory_list",
       );
@@ -53,7 +53,7 @@ export function createMemoryRouteHandlers(context: JsonRpcRouteContext): JsonRpc
       const event = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => await session.deleteMemory(scope, id),
+        async (runtime) => await runtime.memory.delete(scope, id),
         (event): event is Extract<SessionEvent, { type: "memory_list" }> =>
           event.type === "memory_list",
       );

@@ -9,7 +9,9 @@ import {
 } from "./outcomes";
 import type { JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
 
-type JsonRpcTurnStartOutcome = Extract<SessionEvent, { type: "session_busy" }> | JsonRpcSessionError;
+type JsonRpcTurnStartOutcome =
+  | Extract<SessionEvent, { type: "session_busy" }>
+  | JsonRpcSessionError;
 type JsonRpcTurnSteerOutcome =
   | Extract<SessionEvent, { type: "steer_accepted" }>
   | JsonRpcSessionError;
@@ -32,8 +34,8 @@ export function createA2uiRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
       const { threadId, surfaceId, componentId, eventType, payload, clientMessageId } = parsed.data;
 
       const binding = context.threads.getLive(threadId);
-      const session = binding?.session;
-      if (!binding || !session) {
+      const runtime = binding?.runtime;
+      if (!binding || !runtime) {
         context.jsonrpc.sendError(ws, message.id, {
           code: JSONRPC_ERROR_CODES.invalidParams,
           message: `Unknown thread: ${threadId}`,
@@ -41,11 +43,7 @@ export function createA2uiRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
         return;
       }
 
-      const enableA2ui =
-        typeof session.getSessionConfigEvent === "function"
-          ? session.getSessionConfigEvent().config.enableA2ui === true
-          : true;
-      if (!enableA2ui) {
+      if (!runtime.a2ui.enabled) {
         context.jsonrpc.sendError(ws, message.id, {
           code: JSONRPC_ERROR_CODES.invalidParams,
           message: `${message.method}: A2UI is disabled for this workspace`,
@@ -53,7 +51,7 @@ export function createA2uiRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
         return;
       }
 
-      const validation = session.validateA2uiAction({ surfaceId, componentId });
+      const validation = runtime.a2ui.validateAction({ surfaceId, componentId });
       if (!validation.ok) {
         context.jsonrpc.sendError(ws, message.id, {
           code: JSONRPC_ERROR_CODES.invalidParams,
@@ -71,15 +69,15 @@ export function createA2uiRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
 
       // If a turn is currently running, deliver the action as a steer.
       // Otherwise, start a new turn carrying the action as the user message.
-      const activeTurnId = session.activeTurnId;
+      const activeTurnId = runtime.turns.activeTurnId;
       if (activeTurnId) {
         const outcome = await captureBindingOutcome(
           context,
           binding,
-          () => session.sendSteerMessage(text, activeTurnId, clientMessageId),
+          () => runtime.turns.sendSteerMessage(text, activeTurnId, clientMessageId),
           (event): event is JsonRpcTurnSteerOutcome =>
             (event.type === "steer_accepted" &&
-              event.sessionId === session.id &&
+              event.sessionId === runtime.id &&
               event.turnId === activeTurnId) ||
             context.utils.isSessionError(event),
         );
@@ -97,10 +95,10 @@ export function createA2uiRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
       const outcome = await captureBindingOutcome(
         context,
         binding,
-        () => session.sendUserMessage(text, clientMessageId),
+        () => runtime.turns.sendUserMessage(text, clientMessageId),
         (event): event is JsonRpcTurnStartOutcome =>
           (event.type === "session_busy" &&
-            event.sessionId === session.id &&
+            event.sessionId === runtime.id &&
             event.busy === true &&
             typeof event.turnId === "string" &&
             event.turnId.trim().length > 0) ||

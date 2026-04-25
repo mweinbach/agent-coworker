@@ -1,5 +1,5 @@
 import type { SessionEvent } from "../../protocol";
-import type { AgentSession } from "../../session/AgentSession";
+import type { SessionRuntime } from "../../session/SessionRuntime";
 import type { SessionBinding } from "../../startServer/types";
 import { JSONRPC_ERROR_CODES, type JsonRpcLiteId } from "../protocol";
 
@@ -86,7 +86,7 @@ export async function captureBindingMutationEvents<T extends SessionEvent>(
 export async function captureWorkspaceControlEvent<T extends SessionEvent>(
   context: JsonRpcRouteContext,
   cwd: string,
-  action: (session: AgentSession) => Promise<void> | void,
+  action: (runtime: SessionRuntime) => Promise<void> | void,
   predicate: (event: SessionEvent) => event is T,
 ): Promise<T> {
   return await context.workspaceControl.withSession(
@@ -99,7 +99,7 @@ export async function captureWorkspaceControlEvent<T extends SessionEvent>(
 export async function captureWorkspaceControlOutcome<T extends SessionEvent>(
   context: JsonRpcRouteContext,
   cwd: string,
-  action: (session: AgentSession) => Promise<void> | void,
+  action: (runtime: SessionRuntime) => Promise<void> | void,
   predicate: (event: SessionEvent) => event is T,
 ): Promise<JsonRpcSessionOutcome<T>> {
   return await context.workspaceControl.withSession(
@@ -112,7 +112,7 @@ export async function captureWorkspaceControlOutcome<T extends SessionEvent>(
 export async function captureWorkspaceControlMutationOutcome<T extends SessionEvent>(
   context: JsonRpcRouteContext,
   cwd: string,
-  action: (session: AgentSession) => Promise<void> | void,
+  action: (runtime: SessionRuntime) => Promise<void> | void,
   predicate: (event: SessionEvent) => event is T,
 ): Promise<JsonRpcSessionOutcome<T> | null> {
   return await context.workspaceControl.withSession(
@@ -130,7 +130,7 @@ export async function captureWorkspaceControlMutationOutcome<T extends SessionEv
 export async function captureWorkspaceControlMutationError(
   context: JsonRpcRouteContext,
   cwd: string,
-  action: (session: AgentSession) => Promise<void> | void,
+  action: (runtime: SessionRuntime) => Promise<void> | void,
 ): Promise<JsonRpcSessionError | null> {
   return await context.workspaceControl.withSession(
     cwd,
@@ -142,7 +142,7 @@ export async function captureWorkspaceControlMutationError(
 export async function captureWorkspaceControlMutationEvents<T extends SessionEvent>(
   context: JsonRpcRouteContext,
   cwd: string,
-  action: (session: AgentSession) => Promise<void> | void,
+  action: (runtime: SessionRuntime) => Promise<void> | void,
   predicate: (event: SessionEvent) => event is T,
   options?: MutationEventCaptureOptions,
 ): Promise<JsonRpcSessionOutcome<T>[]> {

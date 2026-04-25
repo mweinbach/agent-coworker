@@ -7,6 +7,25 @@ import {
 import { JSONRPC_ERROR_CODES } from "../src/server/jsonrpc/protocol";
 import { createJsonRpcRequestRouter, type JsonRpcRouteContext } from "../src/server/jsonrpc/routes";
 
+function createRuntime(session: any) {
+  return {
+    id: session.id,
+    read: {
+      getLatestAssistantText: () => session.getLatestAssistantText?.() ?? "",
+    },
+    replay: {
+      beginDisconnectedReplayBuffer: () => session.beginDisconnectedReplayBuffer?.(),
+      ensureDisconnectedReplayBuffer: () => session.ensureDisconnectedReplayBuffer?.(),
+      getPendingPromptEventsForReplay: () => session.getPendingPromptEventsForReplay?.() ?? [],
+    },
+    turns: {
+      get activeTurnId() {
+        return session.activeTurnId ?? null;
+      },
+    },
+  };
+}
+
 function createRouterHarness() {
   const sent: unknown[] = [];
   const enqueued: unknown[] = [];
@@ -28,13 +47,14 @@ function createRouterHarness() {
     },
   };
   const session = { id: thread.id } as any;
+  const runtime = createRuntime(session) as any;
 
   const context: JsonRpcRouteContext = {
     getConfig: () => ({ workingDirectory: "C:/default" }) as any,
     threads: {
       create: ({ cwd, provider, model }) => {
         created.push({ cwd, provider, model });
-        return session;
+        return runtime;
       },
       load: () => null,
       getLive: () => undefined,
@@ -149,7 +169,7 @@ function createThreadResumeHarness() {
       },
     ],
   } as any;
-  const binding = { session } as any;
+  const binding = { session, runtime: createRuntime(session) } as any;
 
   const context: JsonRpcRouteContext = {
     getConfig: () => ({ workingDirectory: "C:/default" }) as any,
@@ -282,7 +302,8 @@ function createThreadReadHarness(snapshotOverride?: any) {
       ],
     } as any);
   const waitForIdleCalls: string[] = [];
-  const binding = { session: { id: thread.id } } as any;
+  const session = { id: thread.id } as any;
+  const binding = { session, runtime: createRuntime(session) } as any;
 
   const context: JsonRpcRouteContext = {
     getConfig: () => ({ workingDirectory: "C:/default" }) as any,

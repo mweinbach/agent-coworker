@@ -95,9 +95,15 @@ export class AgentControl {
       throw new Error(`Unknown child agent: ${agentId}`);
     }
 
-    const binding: SessionBinding = { session: null, socket: null, sinks: new Map() };
+    const binding: SessionBinding = {
+      session: null,
+      runtime: null,
+      socket: null,
+      sinks: new Map(),
+    };
     const built = this.deps.buildSession(binding, agentId);
     binding.session = built.session;
+    binding.runtime = built.runtime;
     built.session.beginDisconnectedReplayBuffer();
     this.deps.sessionBindings.set(built.session.id, binding);
     return built.session;
@@ -217,7 +223,12 @@ export class AgentControl {
       opts.taskType === undefined ? undefined : agentTaskTypeSchema.parse(opts.taskType);
     const targetPaths = normalizeAgentTargetPaths(opts.targetPaths);
     const childSystem = await this.deps.loadAgentPrompt(routed.config, role);
-    const binding: SessionBinding = { session: null, socket: null, sinks: new Map() };
+    const binding: SessionBinding = {
+      session: null,
+      runtime: null,
+      socket: null,
+      sinks: new Map(),
+    };
     const built = this.deps.buildSession(binding, undefined, {
       config: routed.config,
       system: childSystem,
@@ -239,6 +250,7 @@ export class AgentControl {
       },
     });
     binding.session = built.session;
+    binding.runtime = built.runtime;
     built.session.beginDisconnectedReplayBuffer();
     this.deps.sessionBindings.set(built.session.id, binding);
     this.publish(opts.parentSessionId, built.session, {

@@ -6,7 +6,7 @@ import { mergeRuntimeProviderOptions, resolveWorkspaceA2ui } from "./ConfigPatch
 import type { SessionRegistry } from "./SessionRegistry";
 import type { SocketSendQueue } from "./SocketSendQueue";
 import type { SessionEvent } from "../protocol";
-import type { AgentSession } from "../session/AgentSession";
+import type { SessionRuntime } from "../session/SessionRuntime";
 import type { SessionBinding, StartServerSocket } from "../startServer/types";
 
 type WorkspaceControlRefreshEvent = Extract<
@@ -75,14 +75,14 @@ export class WorkspaceControl {
 
   async withSession<T>(
     cwd: string,
-    runner: (binding: SessionBinding, session: AgentSession) => Promise<T>,
+    runner: (binding: SessionBinding, runtime: SessionRuntime) => Promise<T>,
   ): Promise<T> {
     const binding = await this.getOrCreateBinding(cwd);
-    if (!binding.session) {
+    if (!binding.runtime) {
       throw new Error(`Unable to create workspace control session for ${cwd}`);
     }
     try {
-      return await runner(binding, binding.session);
+      return await runner(binding, binding.runtime);
     } finally {
       this.options.registry.disposeBinding(
         binding,
@@ -239,7 +239,7 @@ export class WorkspaceControl {
       return [];
     }
     const binding = await this.getOrCreateBinding(cwd);
-    if (!binding.session) {
+    if (!binding.runtime) {
       return [];
     }
     const captureRefreshEvent = async <T extends SessionEvent>(
@@ -253,25 +253,28 @@ export class WorkspaceControl {
       }
     };
     try {
-      const session = binding.session;
+      const runtime = binding.runtime;
+      if (!runtime) {
+        return [];
+      }
       const events = [
         await captureRefreshEvent(
-          async () => await session.listSkills(),
+          async () => await runtime.skills.list(),
           (event): event is Extract<SessionEvent, { type: "skills_list" }> =>
             event.type === "skills_list",
         ),
         await captureRefreshEvent(
-          async () => await session.getSkillsCatalog(),
+          async () => await runtime.skills.getCatalog(),
           (event): event is Extract<SessionEvent, { type: "skills_catalog" }> =>
             event.type === "skills_catalog",
         ),
         await captureRefreshEvent(
-          async () => await session.getPluginsCatalog(),
+          async () => await runtime.plugins.getCatalog(),
           (event): event is Extract<SessionEvent, { type: "plugins_catalog" }> =>
             event.type === "plugins_catalog",
         ),
         await captureRefreshEvent(
-          async () => await session.emitMcpServers(),
+          async () => await runtime.mcp.emitServers(),
           (event): event is Extract<SessionEvent, { type: "mcp_servers" }> =>
             event.type === "mcp_servers",
         ),

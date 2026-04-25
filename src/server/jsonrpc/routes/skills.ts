@@ -16,7 +16,7 @@ export function createSkillsRouteHandlers(context: JsonRpcRouteContext): JsonRpc
       const event = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => await session.getSkillsCatalog(),
+        async (runtime) => await runtime.skills.getCatalog(),
         (event): event is Extract<SessionEvent, { type: "skills_catalog" }> =>
           event.type === "skills_catalog",
       );
@@ -33,7 +33,7 @@ export function createSkillsRouteHandlers(context: JsonRpcRouteContext): JsonRpc
       const event = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => await session.listSkills(),
+        async (runtime) => await runtime.skills.list(),
         (event): event is Extract<SessionEvent, { type: "skills_list" }> =>
           event.type === "skills_list",
       );
@@ -51,7 +51,7 @@ export function createSkillsRouteHandlers(context: JsonRpcRouteContext): JsonRpc
       const event = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => await session.readSkill(skillName),
+        async (runtime) => await runtime.skills.read(skillName),
         (event): event is Extract<SessionEvent, { type: "skill_content" }> =>
           event.type === "skill_content" && event.skill.name === skillName,
       );
@@ -69,7 +69,7 @@ export function createSkillsRouteHandlers(context: JsonRpcRouteContext): JsonRpc
       const outcome = await captureWorkspaceControlMutationError(
         context,
         cwd,
-        async (session) => await session.disableSkill(skillName),
+        async (runtime) => await runtime.skills.disable(skillName),
       );
       if (outcome) {
         sendSessionMutationError(context, ws, message.id, outcome);
@@ -78,7 +78,7 @@ export function createSkillsRouteHandlers(context: JsonRpcRouteContext): JsonRpc
       const event = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => await session.listSkills(),
+        async (runtime) => await runtime.skills.list(),
         (event): event is Extract<SessionEvent, { type: "skills_list" }> =>
           event.type === "skills_list",
       );
@@ -96,7 +96,7 @@ export function createSkillsRouteHandlers(context: JsonRpcRouteContext): JsonRpc
       const outcome = await captureWorkspaceControlMutationError(
         context,
         cwd,
-        async (session) => await session.enableSkill(skillName),
+        async (runtime) => await runtime.skills.enable(skillName),
       );
       if (outcome) {
         sendSessionMutationError(context, ws, message.id, outcome);
@@ -105,7 +105,7 @@ export function createSkillsRouteHandlers(context: JsonRpcRouteContext): JsonRpc
       const event = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => await session.listSkills(),
+        async (runtime) => await runtime.skills.list(),
         (event): event is Extract<SessionEvent, { type: "skills_list" }> =>
           event.type === "skills_list",
       );
@@ -123,7 +123,7 @@ export function createSkillsRouteHandlers(context: JsonRpcRouteContext): JsonRpc
       const outcome = await captureWorkspaceControlMutationError(
         context,
         cwd,
-        async (session) => await session.deleteSkill(skillName),
+        async (runtime) => await runtime.skills.delete(skillName),
       );
       if (outcome) {
         sendSessionMutationError(context, ws, message.id, outcome);
@@ -132,7 +132,7 @@ export function createSkillsRouteHandlers(context: JsonRpcRouteContext): JsonRpc
       const event = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => await session.listSkills(),
+        async (runtime) => await runtime.skills.list(),
         (event): event is Extract<SessionEvent, { type: "skills_list" }> =>
           event.type === "skills_list",
       );
@@ -151,7 +151,7 @@ export function createSkillsRouteHandlers(context: JsonRpcRouteContext): JsonRpc
       const event = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => await session.getSkillInstallation(installationId),
+        async (runtime) => await runtime.skills.getInstallation(installationId),
         (event): event is Extract<SessionEvent, { type: "skill_installation" }> =>
           event.type === "skill_installation",
       );
@@ -170,7 +170,7 @@ export function createSkillsRouteHandlers(context: JsonRpcRouteContext): JsonRpc
       const event = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => await session.previewSkillInstall(sourceInput, targetScope),
+        async (runtime) => await runtime.skills.previewInstall(sourceInput, targetScope),
         (event): event is Extract<SessionEvent, { type: "skill_install_preview" }> =>
           event.type === "skill_install_preview",
       );
@@ -189,7 +189,7 @@ export function createSkillsRouteHandlers(context: JsonRpcRouteContext): JsonRpc
       const event = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => await session.installSkills(sourceInput, targetScope),
+        async (runtime) => await runtime.skills.install(sourceInput, targetScope),
         (event): event is Extract<SessionEvent, { type: "skills_catalog" }> =>
           event.type === "skills_catalog",
       );
@@ -208,8 +208,8 @@ export function createSkillsRouteHandlers(context: JsonRpcRouteContext): JsonRpc
       const event = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => {
-          await session.enableSkillInstallation(installationId);
+        async (runtime) => {
+          await runtime.skills.enableInstallation(installationId);
         },
         (event): event is Extract<SessionEvent, { type: "skills_catalog" }> =>
           event.type === "skills_catalog",
@@ -229,8 +229,8 @@ export function createSkillsRouteHandlers(context: JsonRpcRouteContext): JsonRpc
       const event = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => {
-          await session.disableSkillInstallation(installationId);
+        async (runtime) => {
+          await runtime.skills.disableInstallation(installationId);
         },
         (event): event is Extract<SessionEvent, { type: "skills_catalog" }> =>
           event.type === "skills_catalog",
@@ -250,8 +250,8 @@ export function createSkillsRouteHandlers(context: JsonRpcRouteContext): JsonRpc
       const event = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => {
-          await session.deleteSkillInstallation(installationId);
+        async (runtime) => {
+          await runtime.skills.deleteInstallation(installationId);
         },
         (event): event is Extract<SessionEvent, { type: "skills_catalog" }> =>
           event.type === "skills_catalog",
@@ -271,8 +271,8 @@ export function createSkillsRouteHandlers(context: JsonRpcRouteContext): JsonRpc
       const event = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => {
-          await session.updateSkillInstallation(installationId);
+        async (runtime) => {
+          await runtime.skills.updateInstallation(installationId);
         },
         (event): event is Extract<SessionEvent, { type: "skills_catalog" }> =>
           event.type === "skills_catalog",
@@ -293,7 +293,7 @@ export function createSkillsRouteHandlers(context: JsonRpcRouteContext): JsonRpc
       const event = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => await session.copySkillInstallation(installationId, targetScope),
+        async (runtime) => await runtime.skills.copyInstallation(installationId, targetScope),
         (event): event is Extract<SessionEvent, { type: "skills_catalog" }> =>
           event.type === "skills_catalog",
       );
@@ -312,7 +312,7 @@ export function createSkillsRouteHandlers(context: JsonRpcRouteContext): JsonRpc
       const event = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => await session.checkSkillInstallationUpdate(installationId),
+        async (runtime) => await runtime.skills.checkInstallationUpdate(installationId),
         (event): event is Extract<SessionEvent, { type: "skill_installation_update_check" }> =>
           event.type === "skill_installation_update_check",
       );

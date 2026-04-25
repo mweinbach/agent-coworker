@@ -26,12 +26,12 @@ export function createThreadRouteHandlers(context: JsonRpcRouteContext): JsonRpc
         typeof params.cwd === "string" && params.cwd.trim()
           ? params.cwd.trim()
           : context.getConfig().workingDirectory;
-      const session = context.threads.create({ cwd, provider, model });
-      context.threads.subscribe(ws, session.id);
-      const thread = context.utils.buildThreadFromSession(session);
+      const runtime = context.threads.create({ cwd, provider, model });
+      context.threads.subscribe(ws, runtime.id);
+      const thread = context.utils.buildThreadFromSession(runtime);
       void context.journal
         .enqueue({
-          threadId: session.id,
+          threadId: runtime.id,
           ts: new Date().toISOString(),
           eventType: "thread/started",
           turnId: null,
@@ -61,26 +61,26 @@ export function createThreadRouteHandlers(context: JsonRpcRouteContext): JsonRpc
         return;
       }
       const binding = context.threads.load(threadId);
-      if (!binding?.session) {
+      if (!binding?.runtime) {
         context.jsonrpc.sendError(ws, message.id, {
           code: JSONRPC_ERROR_CODES.invalidParams,
           message: `Unknown thread: ${threadId}`,
         });
         return;
       }
-      const thread = context.utils.buildThreadFromSession(binding.session);
+      const thread = context.utils.buildThreadFromSession(binding.runtime);
       let replayedRequestIds: ReadonlySet<string> | undefined;
       if (afterSeq > 0) {
         await context.journal.waitForIdle(threadId);
-        binding.session.beginDisconnectedReplayBuffer();
+        binding.runtime.replay.beginDisconnectedReplayBuffer();
         replayedRequestIds = context.journal.replay(ws, threadId, afterSeq);
       }
-      const pendingPromptEvents = binding.session.getPendingPromptEventsForReplay();
+      const pendingPromptEvents = binding.runtime.replay.getPendingPromptEventsForReplay();
       context.threads.subscribe(ws, threadId, {
-        ...(binding.session.activeTurnId
+        ...(binding.runtime.turns.activeTurnId
           ? {
-              initialActiveTurnId: binding.session.activeTurnId,
-              initialAgentText: binding.session.getLatestAssistantText() ?? "",
+              initialActiveTurnId: binding.runtime.turns.activeTurnId,
+              initialAgentText: binding.runtime.read.getLatestAssistantText() ?? "",
             }
           : {}),
         ...(afterSeq > 0 ? { drainDisconnectedReplayBuffer: true } : {}),
@@ -112,8 +112,8 @@ export function createThreadRouteHandlers(context: JsonRpcRouteContext): JsonRpc
         }
         threads.set(record.sessionId, context.utils.buildThreadFromRecord(record));
       }
-      for (const session of context.threads.listLiveRoot({ cwd })) {
-        threads.set(session.id, context.utils.buildThreadFromSession(session));
+      for (const runtime of context.threads.listLiveRoot({ cwd })) {
+        threads.set(runtime.id, context.utils.buildThreadFromSession(runtime));
       }
       context.jsonrpc.sendResult(ws, message.id, {
         threads: [...threads.values()].sort((left, right) =>
@@ -142,15 +142,15 @@ export function createThreadRouteHandlers(context: JsonRpcRouteContext): JsonRpc
       }
       const binding = context.threads.getLive(threadId);
       const persistedThread = context.threads.getPersisted(threadId);
-      if (!binding?.session && !persistedThread) {
+      if (!binding?.runtime && !persistedThread) {
         context.jsonrpc.sendError(ws, message.id, {
           code: JSONRPC_ERROR_CODES.invalidParams,
           message: `Unknown thread: ${threadId}`,
         });
         return;
       }
-      const thread = binding?.session
-        ? context.utils.buildThreadFromSession(binding.session)
+      const thread = binding?.runtime
+        ? context.utils.buildThreadFromSession(binding.runtime)
         : context.utils.buildThreadFromRecord(persistedThread as PersistedSessionRecord);
       await context.journal.waitForIdle(threadId);
       // Synchronous cache-only rewrite; network resolution runs in primeSessionSnapshotCitationCache (microtask).
@@ -213,15 +213,15 @@ export function createThreadRouteHandlers(context: JsonRpcRouteContext): JsonRpc
       }
       const liveBinding = context.threads.getLive(threadId);
       const persistedThread = context.threads.getPersisted(threadId);
-      if (!liveBinding?.session && !persistedThread) {
+      if (!liveBinding?.runtime && !persistedThread) {
         context.jsonrpc.sendError(ws, message.id, {
           code: JSONRPC_ERROR_CODES.invalidParams,
           message: `Unknown thread: ${threadId}`,
         });
         return;
       }
-      const thread = liveBinding?.session
-        ? context.utils.buildThreadFromSession(liveBinding.session)
+      const thread = liveBinding?.runtime
+        ? context.utils.buildThreadFromSession(liveBinding.runtime)
         : context.utils.buildThreadFromRecord(persistedThread as PersistedSessionRecord);
       await context.journal.waitForIdle(threadId);
       const enrichedSnapshot = enrichSessionSnapshotCitationsFromCache(snapshot);

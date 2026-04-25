@@ -16,6 +16,128 @@ import type { SessionEvent } from "../src/server/protocol";
 
 type RouteHarness = ReturnType<typeof createRouteHarness>;
 
+function createRuntimeDouble(session: Record<string, any>) {
+  return {
+    id: session.id ?? "session-1",
+    read: {
+      get info() {
+        return session.getSessionInfoEvent?.();
+      },
+      get workingDirectory() {
+        return session.getWorkingDirectory?.() ?? "C:/workspace";
+      },
+      get isBusy() {
+        return session.isBusy ?? false;
+      },
+    },
+    settings: {
+      get publicConfig() {
+        return session.getPublicConfig?.();
+      },
+      get configEvent() {
+        return session.getSessionConfigEvent?.();
+      },
+      setTitle: (title: string) => session.setSessionTitle?.(title),
+      setModel: async (model: string, provider?: string) =>
+        await session.setModel?.(model, provider),
+      setConfig: async (patch: Record<string, unknown>) => await session.setConfig?.(patch),
+      applyDefaults: async (opts: Record<string, unknown>) =>
+        await session.applySessionDefaults?.(opts),
+      getHarnessContext: () => session.getHarnessContext?.(),
+      setHarnessContext: (context: unknown) => session.setHarnessContext?.(context),
+      setSessionUsageBudget: (warnAtUsd?: number | null, stopAtUsd?: number | null) =>
+        session.setSessionUsageBudget?.(warnAtUsd, stopAtUsd),
+    },
+    provider: {
+      emitCatalog: async () => await session.emitProviderCatalog?.(),
+      emitAuthMethods: () => session.emitProviderAuthMethods?.(),
+      refreshStatus: async (opts: Record<string, unknown>) =>
+        await session.refreshProviderStatus?.(opts),
+      authorizeAuth: async (provider: string, methodId: string) =>
+        await session.authorizeProviderAuth?.(provider, methodId),
+      logoutAuth: async (provider: string) => await session.logoutProviderAuth?.(provider),
+      callbackAuth: async (provider: string, methodId: string, code?: string) =>
+        await session.callbackProviderAuth?.(provider, methodId, code),
+      setApiKey: async (provider: string, methodId: string, apiKey: string) =>
+        await session.setProviderApiKey?.(provider, methodId, apiKey),
+      setConfig: async (provider: string, methodId: string, values: Record<string, string>) =>
+        await session.setProviderConfig?.(provider, methodId, values),
+      copyApiKey: async (provider: string, sourceProvider: string) =>
+        await session.copyProviderApiKey?.(provider, sourceProvider),
+    },
+    mcp: {
+      emitServers: async () => await session.emitMcpServers?.(),
+      upsert: async (server: unknown, previousName?: string) =>
+        await session.upsertMcpServer?.(server, previousName),
+      delete: async (name: string) => await session.deleteMcpServer?.(name),
+      validate: async (name: string) => await session.validateMcpServer?.(name),
+      authorizeAuth: async (name: string) => await session.authorizeMcpServerAuth?.(name),
+      callbackAuth: async (name: string, code?: string) =>
+        await session.callbackMcpServerAuth?.(name, code),
+      setApiKey: async (name: string, apiKey: string) =>
+        await session.setMcpServerApiKey?.(name, apiKey),
+      migrateLegacyServers: async (scope: "workspace" | "user") =>
+        await session.migrateLegacyMcpServers?.(scope),
+    },
+    memory: {
+      list: async (scope?: string) => await session.emitMemories?.(scope),
+      upsert: async (scope: string, id: string | undefined, content: string) =>
+        await session.upsertMemory?.(scope, id, content),
+      delete: async (scope: string, id: string) => await session.deleteMemory?.(scope, id),
+    },
+    skills: {
+      getCatalog: async () => await session.getSkillsCatalog?.(),
+      list: async () => await session.listSkills?.(),
+      read: async (skillName: string) => await session.readSkill?.(skillName),
+      disable: async (skillName: string) => await session.disableSkill?.(skillName),
+      enable: async (skillName: string) => await session.enableSkill?.(skillName),
+      delete: async (skillName: string) => await session.deleteSkill?.(skillName),
+      getInstallation: async (installationId: string) =>
+        await session.getSkillInstallation?.(installationId),
+      previewInstall: async (sourceInput: string, targetScope: "project" | "global") =>
+        await session.previewSkillInstall?.(sourceInput, targetScope),
+      install: async (sourceInput: string, targetScope: "project" | "global") =>
+        await session.installSkills?.(sourceInput, targetScope),
+      enableInstallation: async (installationId: string) =>
+        await session.enableSkillInstallation?.(installationId),
+      disableInstallation: async (installationId: string) =>
+        await session.disableSkillInstallation?.(installationId),
+      deleteInstallation: async (installationId: string) =>
+        await session.deleteSkillInstallation?.(installationId),
+      updateInstallation: async (installationId: string) =>
+        await session.updateSkillInstallation?.(installationId),
+      copyInstallation: async (installationId: string, targetScope: "project" | "global") =>
+        await session.copySkillInstallation?.(installationId, targetScope),
+      checkInstallationUpdate: async (installationId: string) =>
+        await session.checkSkillInstallationUpdate?.(installationId),
+    },
+    agents: {
+      create: async (opts: Record<string, unknown>) => await session.createAgentSession?.(opts),
+      inspect: async (agentId: string) => await session.inspectAgent?.(agentId),
+    },
+    backups: {
+      listWorkspaceBackups: async () => await session.listWorkspaceBackups?.(),
+      getWorkspaceDelta: async (targetSessionId: string, checkpointId: string) =>
+        await session.getWorkspaceBackupDelta?.(targetSessionId, checkpointId),
+      createWorkspaceCheckpoint: async (targetSessionId: string) =>
+        await session.createWorkspaceBackupCheckpoint?.(targetSessionId),
+      restoreWorkspaceBackup: async (targetSessionId: string, checkpointId?: string) =>
+        await session.restoreWorkspaceBackup?.(targetSessionId, checkpointId),
+      deleteWorkspaceCheckpoint: async (targetSessionId: string, checkpointId: string) =>
+        await session.deleteWorkspaceBackupCheckpoint?.(targetSessionId, checkpointId),
+      deleteWorkspaceEntry: async (targetSessionId: string) =>
+        await session.deleteWorkspaceBackupEntry?.(targetSessionId),
+    },
+    files: {
+      upload: async (filename: string, contentBase64: string) =>
+        await session.uploadFile?.(filename, contentBase64),
+    },
+    lifecycle: {
+      delete: async (targetSessionId: string) => await session.deleteSession?.(targetSessionId),
+    },
+  };
+}
+
 function createRouteHarness(
   session: Record<string, any>,
   emitted: SessionEvent[] = [],
@@ -27,9 +149,12 @@ function createRouteHarness(
   const results: Array<{ id: string | number | null; result: unknown }> = [];
   const errors: Array<{ id: string | number | null; error: { code: number; message: string } }> =
     [];
-  const binding = { session } as any;
+  const runtime = createRuntimeDouble(session);
+  const binding = { session, runtime } as any;
   const threadId = opts?.threadId ?? "thread-1";
-  const threadBinding = opts?.threadSession ? ({ session: opts.threadSession } as any) : null;
+  const threadBinding = opts?.threadSession
+    ? ({ session: opts.threadSession, runtime: createRuntimeDouble(opts.threadSession) } as any)
+    : null;
 
   const context = {
     getConfig: () => ({ workingDirectory: "C:/workspace" }),
@@ -52,8 +177,8 @@ function createRouteHarness(
       getOrCreateBinding: async () => binding,
       withSession: async (
         _cwd: string,
-        runner: (binding: any, activeSession: any) => Promise<unknown>,
-      ) => await runner(binding, session),
+        runner: (binding: any, activeRuntime: any) => Promise<unknown>,
+      ) => await runner(binding, runtime),
       readState: async () => [],
     },
     events: {

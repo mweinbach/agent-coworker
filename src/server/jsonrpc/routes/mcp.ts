@@ -16,7 +16,7 @@ export function createMcpRouteHandlers(context: JsonRpcRouteContext): JsonRpcReq
       const outcome = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => await session.emitMcpServers(),
+        async (runtime) => await runtime.mcp.emitServers(),
         (event): event is Extract<SessionEvent, { type: "mcp_servers" }> =>
           event.type === "mcp_servers",
       );
@@ -36,7 +36,7 @@ export function createMcpRouteHandlers(context: JsonRpcRouteContext): JsonRpcReq
       const mutationError = await captureWorkspaceControlMutationError(
         context,
         cwd,
-        async (session) => await session.upsertMcpServer(server, previousName),
+        async (runtime) => await runtime.mcp.upsert(server, previousName),
       );
       if (mutationError) {
         sendSessionMutationError(context, ws, message.id, mutationError);
@@ -45,7 +45,7 @@ export function createMcpRouteHandlers(context: JsonRpcRouteContext): JsonRpcReq
       const outcome = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => await session.emitMcpServers(),
+        async (runtime) => await runtime.mcp.emitServers(),
         (event): event is Extract<SessionEvent, { type: "mcp_servers" }> =>
           event.type === "mcp_servers",
       );
@@ -63,7 +63,7 @@ export function createMcpRouteHandlers(context: JsonRpcRouteContext): JsonRpcReq
       const mutationError = await captureWorkspaceControlMutationError(
         context,
         cwd,
-        async (session) => await session.deleteMcpServer(name),
+        async (runtime) => await runtime.mcp.delete(name),
       );
       if (mutationError) {
         sendSessionMutationError(context, ws, message.id, mutationError);
@@ -72,7 +72,7 @@ export function createMcpRouteHandlers(context: JsonRpcRouteContext): JsonRpcReq
       const outcome = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => await session.emitMcpServers(),
+        async (runtime) => await runtime.mcp.emitServers(),
         (event): event is Extract<SessionEvent, { type: "mcp_servers" }> =>
           event.type === "mcp_servers",
       );
@@ -90,7 +90,7 @@ export function createMcpRouteHandlers(context: JsonRpcRouteContext): JsonRpcReq
       const outcome = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => await session.validateMcpServer(name),
+        async (runtime) => await runtime.mcp.validate(name),
         (event): event is Extract<SessionEvent, { type: "mcp_server_validation" }> =>
           event.type === "mcp_server_validation" && event.name === name,
       );
@@ -108,7 +108,7 @@ export function createMcpRouteHandlers(context: JsonRpcRouteContext): JsonRpcReq
       const outcome = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => await session.authorizeMcpServerAuth(name),
+        async (runtime) => await runtime.mcp.authorizeAuth(name),
         (
           event,
         ): event is Extract<
@@ -134,7 +134,7 @@ export function createMcpRouteHandlers(context: JsonRpcRouteContext): JsonRpcReq
       const outcome = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => await session.callbackMcpServerAuth(name, code),
+        async (runtime) => await runtime.mcp.callbackAuth(name, code),
         (event): event is Extract<SessionEvent, { type: "mcp_server_auth_result" }> =>
           event.type === "mcp_server_auth_result" && event.name === name,
       );
@@ -153,7 +153,7 @@ export function createMcpRouteHandlers(context: JsonRpcRouteContext): JsonRpcReq
       const outcome = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => await session.setMcpServerApiKey(name, apiKey),
+        async (runtime) => await runtime.mcp.setApiKey(name, apiKey),
         (event): event is Extract<SessionEvent, { type: "mcp_server_auth_result" }> =>
           event.type === "mcp_server_auth_result" && event.name === name,
       );
@@ -171,7 +171,7 @@ export function createMcpRouteHandlers(context: JsonRpcRouteContext): JsonRpcReq
       const mutationError = await captureWorkspaceControlMutationError(
         context,
         cwd,
-        async (session) => await session.migrateLegacyMcpServers(scope),
+        async (runtime) => await runtime.mcp.migrateLegacyServers(scope),
       );
       if (mutationError) {
         sendSessionMutationError(context, ws, message.id, mutationError);
@@ -180,7 +180,7 @@ export function createMcpRouteHandlers(context: JsonRpcRouteContext): JsonRpcReq
       const outcome = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => await session.emitMcpServers(),
+        async (runtime) => await runtime.mcp.emitServers(),
         (event): event is Extract<SessionEvent, { type: "mcp_servers" }> =>
           event.type === "mcp_servers",
       );

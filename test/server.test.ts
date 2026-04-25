@@ -236,6 +236,21 @@ describe("Server Startup", () => {
           calls.push(`${id}:external:${reason}`);
         },
       }) as unknown as AgentSession;
+    const runtimeFor = (session: AgentSession) =>
+      ({
+        id: session.id,
+        read: {
+          workingDirectory: session.getWorkingDirectory(),
+        },
+        skills: {
+          refreshSystemPrompt: async (reason: string) => {
+            await session.refreshSystemPromptWithSkills(reason);
+          },
+          refreshFromExternalMutation: async (reason: string) => {
+            await session.refreshSkillStateFromExternalMutation(reason);
+          },
+        },
+      }) as any;
     const sourceSession = makeSession("source", "/tmp/workspace-a");
     const workspacePeer = makeSession("workspace-peer", "/tmp/workspace-a");
     const controlPeer = makeSession("control-peer", "/tmp/workspace-a");
@@ -243,6 +258,7 @@ describe("Server Startup", () => {
 
     const bindingFor = (session: AgentSession) => ({
       session,
+      runtime: runtimeFor(session),
       socket: null,
       sinks: new Map(),
     });

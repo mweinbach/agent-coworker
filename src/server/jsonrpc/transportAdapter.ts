@@ -67,10 +67,10 @@ export function createJsonRpcTransportAdapter({
   };
 
   const maybeBeginDisconnectedReplayBuffer = (binding: SessionBinding | null | undefined) => {
-    if (!binding?.session || binding.socket || countLiveConnectionSinks(binding) !== 0) {
+    if (!binding?.runtime || binding.socket || countLiveConnectionSinks(binding) !== 0) {
       return;
     }
-    binding.session.beginDisconnectedReplayBuffer();
+    binding.runtime.replay.beginDisconnectedReplayBuffer();
   };
 
   const emitServerRequestResolved = (
@@ -133,7 +133,7 @@ export function createJsonRpcTransportAdapter({
     }
 
     const binding = loadThreadBinding(threadId);
-    if (!binding?.session) {
+    if (!binding?.runtime) {
       return null;
     }
 
@@ -175,7 +175,7 @@ export function createJsonRpcTransportAdapter({
 
     const replayedPromptRequestIds = new Set(opts?.skipPendingPromptRequestIds ?? []);
     if (shouldReplayBufferedEvents) {
-      for (const event of binding.session.drainDisconnectedReplayEvents()) {
+      for (const event of binding.runtime.replay.drainDisconnectedReplayEvents()) {
         if (event.type === "ask" || event.type === "approval") {
           replayedPromptRequestIds.add(event.requestId);
         }
@@ -247,8 +247,8 @@ export function createJsonRpcTransportAdapter({
     }
 
     const binding = getThreadBinding(pending.threadId);
-    const session = binding?.session;
-    if (!session) {
+    const runtime = binding?.runtime;
+    if (!runtime) {
       ws.data.rpc?.pendingServerRequests.delete(message.id);
       emitServerRequestResolved(ws, pending.threadId, pending.requestId);
       return;
@@ -261,7 +261,7 @@ export function createJsonRpcTransportAdapter({
       const decision = typeof result?.decision === "string" ? result.decision : undefined;
       const approved =
         result?.approved === true || decision === "accept" || decision === "acceptForSession";
-      session.handleApprovalResponse(pending.requestId, approved);
+      runtime.lifecycle.handleApprovalResponse(pending.requestId, approved);
     } else {
       const result = message.result as Record<string, unknown> | undefined;
       const answer =
@@ -270,7 +270,7 @@ export function createJsonRpcTransportAdapter({
           : Array.isArray(result?.content)
             ? extractTextInput(result.content)
             : "";
-      session.handleAskResponse(pending.requestId, answer);
+      runtime.lifecycle.handleAskResponse(pending.requestId, answer);
     }
 
     ws.data.rpc?.pendingServerRequests.delete(message.id);
@@ -278,7 +278,7 @@ export function createJsonRpcTransportAdapter({
       threadId: pending.threadId,
       ts: new Date().toISOString(),
       eventType: "serverRequest/resolved",
-      turnId: session.activeTurnId ?? null,
+      turnId: runtime.turns.activeTurnId ?? null,
       itemId: null,
       requestId: pending.requestId,
       payload: {

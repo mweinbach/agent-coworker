@@ -230,6 +230,9 @@ export class QuickChatController {
     if (!this.tray) {
       return;
     }
+    if (this.platform === "darwin") {
+      return;
+    }
     this.tray.setContextMenu(this.buildTrayMenu());
   }
 

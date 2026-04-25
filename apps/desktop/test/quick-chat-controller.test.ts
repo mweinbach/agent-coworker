@@ -239,6 +239,34 @@ describe("resolveTrayIconPath", () => {
     expect(createUtilityWindow).toHaveBeenCalledTimes(1);
     expect(createQuickChatWindow).toHaveBeenCalledTimes(0);
     expect(retargetQuickChatWindow).toHaveBeenCalledTimes(0);
+    expect(tray.contextMenu).toBe(null);
+  });
+
+  test("opens the native tray menu only from the secondary tray click on macOS", () => {
+    createdTrays.length = 0;
+    const controller = new QuickChatController({
+      appName: "Cowork",
+      platform: "darwin",
+      trayIconPath: "/tmp/icon.png",
+      getMainWindow: () => null,
+      createMainWindow: async () => new FakeWindow() as never,
+      createQuickChatWindow: async () => new FakeWindow() as never,
+      retargetQuickChatWindow: async () => {},
+      createUtilityWindow: async () => new FakeWindow() as never,
+    });
+
+    controller.initialize();
+
+    const tray = createdTrays[0];
+    if (!tray) {
+      throw new Error("expected tray to be created");
+    }
+
+    expect(tray.contextMenu).toBe(null);
+
+    tray.emit("right-click");
+
+    expect(Array.isArray(tray.contextMenu)).toBe(true);
   });
 
   test("removes the tray when the menu bar feature flag is disabled", () => {

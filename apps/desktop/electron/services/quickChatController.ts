@@ -51,7 +51,6 @@ export class QuickChatController {
   private tray: Tray | null = null;
   private quickChatWindow: BrowserWindow | null = null;
   private utilityWindow: BrowserWindow | null = null;
-  private quickChatThreadId: string | null = null;
   private quickChatShortcutEnabled = false;
   private quickChatShortcutAccelerator = DEFAULT_QUICK_CHAT_SHORTCUT_ACCELERATOR;
   private registeredShortcutAccelerator: string | null = null;
@@ -152,7 +151,6 @@ export class QuickChatController {
     this.destroyWindow(this.quickChatWindow);
     this.utilityWindow = null;
     this.quickChatWindow = null;
-    this.quickChatThreadId = null;
   }
 
   hasTray(): boolean {
@@ -266,7 +264,7 @@ export class QuickChatController {
 
   private buildTrayIcon() {
     const iconPathCandidates = path.extname(this.trayIconPath).toLowerCase() === ".ico"
-      ? [this.trayIconPath, this.trayIconPath.slice(0, -4) + ".png"]
+      ? [this.trayIconPath, `${this.trayIconPath.slice(0, -4)}.png`]
       : [this.trayIconPath];
     const image = iconPathCandidates
       .map((candidatePath) => electron.nativeImage.createFromPath(candidatePath))
@@ -294,14 +292,12 @@ export class QuickChatController {
     if (this.quickChatWindow && !this.quickChatWindow.isDestroyed()) {
       if (opts.threadId || opts.newThread) {
         await this.retargetQuickChatWindow(this.quickChatWindow, opts);
-        this.quickChatThreadId = opts.threadId ?? null;
       }
       return this.quickChatWindow;
     }
 
     const win = await this.createQuickChatWindow(opts.threadId || opts.newThread ? opts : undefined);
     this.quickChatWindow = win;
-    this.quickChatThreadId = opts.threadId ?? null;
     win.on("close", (event) => {
       if (this.quitting || !this.shouldKeepPopupWindowsAlive()) {
         return;
@@ -312,7 +308,6 @@ export class QuickChatController {
     win.on("closed", () => {
       if (this.quickChatWindow === win) {
         this.quickChatWindow = null;
-        this.quickChatThreadId = null;
       }
     });
     return win;

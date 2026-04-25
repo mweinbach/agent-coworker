@@ -72,8 +72,6 @@ const defaultDialog = {
 };
 
 class DefaultTray {
-  constructor(_icon: unknown) {}
-
   setToolTip() {}
 
   setContextMenu() {}

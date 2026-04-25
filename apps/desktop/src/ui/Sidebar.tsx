@@ -1,6 +1,5 @@
 import { Reorder, useDragControls } from "framer-motion";
 import {
-  ArrowUpRightIcon,
   BookOpenIcon,
   ChevronRightIcon,
   FolderIcon,
@@ -28,7 +27,7 @@ import type { ThreadRecord, ThreadRuntime, WorkspaceRecord } from "../app/types"
 import { Button } from "../components/ui/button";
 import { Collapsible, CollapsibleTrigger } from "../components/ui/collapsible";
 import { Input } from "../components/ui/input";
-import { confirmAction, showContextMenu, showQuickChatWindow } from "../lib/desktopCommands";
+import { confirmAction, showContextMenu } from "../lib/desktopCommands";
 import { usePrefersReducedMotion } from "../lib/usePrefersReducedMotion";
 import { cn } from "../lib/utils";
 import { useWindowDragHandle } from "./layout/useWindowDragHandle";

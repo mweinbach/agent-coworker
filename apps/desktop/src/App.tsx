@@ -262,6 +262,13 @@ export default function App() {
   const seenNotificationIds = useRef(new Set<string>());
 
   useEffect(() => {
+    document.documentElement.dataset.windowMode = windowMode;
+    return () => {
+      delete document.documentElement.dataset.windowMode;
+    };
+  }, [windowMode]);
+
+  useEffect(() => {
     if (ready && !bootstrapPending) return;
     void init().catch((err) => {
       console.error(err);

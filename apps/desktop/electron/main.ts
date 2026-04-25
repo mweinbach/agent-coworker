@@ -480,11 +480,11 @@ async function createUtilityWindow(): Promise<BrowserWindow> {
   const win = new BrowserWindow({
     title: "Cowork Menu",
     width: 252,
-    height: 520,
+    height: 400,
     minWidth: 252,
-    minHeight: 420,
+    minHeight: 300,
     maxWidth: 312,
-    maxHeight: 680,
+    maxHeight: 560,
     show: false,
     frame: false,
     resizable: false,
@@ -493,7 +493,9 @@ async function createUtilityWindow(): Promise<BrowserWindow> {
     fullscreenable: false,
     skipTaskbar: true,
     autoHideMenuBar: true,
-    roundedCorners: !isDarwin,
+    // macOS: match the system rounded (menu-style) window shape so a transparent
+    // frameless host does not show ragged/empty crescents; renderer draws edge-to-edge.
+    roundedCorners: true,
     hasShadow: true,
     backgroundColor: useDarkColors ? "#1f1d1a" : "#f5f0e5",
     ...getInitialWindowAppearanceOptions({ useDarkColors, useMacosNativeGlass }),

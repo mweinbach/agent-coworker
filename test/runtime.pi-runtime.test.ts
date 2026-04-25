@@ -238,6 +238,21 @@ describe("pi runtime regressions", () => {
     expect(resolved.model.maxTokens).toBe(128000);
   });
 
+  test("openai responses model resolution keeps supported token limits for gpt-5.5", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-openai-gpt55-"));
+    const config = makeConfig(homeDir, {
+      provider: "openai",
+      model: "gpt-5.5",
+      preferredChildModel: "gpt-5.5",
+    });
+
+    const resolved = await resolveOpenAiResponsesModel(makeParams(config));
+
+    expect(resolved.model.api).toBe("openai-responses");
+    expect(resolved.model.contextWindow).toBe(1050000);
+    expect(resolved.model.maxTokens).toBe(128000);
+  });
+
   test("openai responses model resolution keeps supported token limits for gpt-5.4-mini", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-openai-gpt54mini-"));
     const config = makeConfig(homeDir, {
@@ -607,6 +622,35 @@ describe("pi runtime regressions", () => {
     expect(resolved.apiKey).toBe("sk-codex");
     expect(resolved.model.api).toBe("openai-responses");
     expect(resolved.model.baseUrl).toBe("https://api.openai.com/v1");
+    expect(resolved.model.contextWindow).toBe(400000);
+    expect(resolved.model.maxTokens).toBe(128000);
+  });
+
+  test("codex runtime model resolution keeps codex backend token limits for gpt-5.5", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-codex-gpt55-"));
+    const paths = getAiCoworkerPaths({ homedir: homeDir });
+    const workspaceDir = path.join(homeDir, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
+
+    await writeCodexAuthMaterial(paths, {
+      accessToken: "tok_live",
+      refreshToken: "refresh_live",
+      expiresAtMs: Date.now() + 10 * 60_000,
+      issuer: "https://auth.example.invalid",
+      clientId: "client-id",
+    });
+
+    const config = makeConfig(homeDir, {
+      provider: "codex-cli",
+      model: "gpt-5.5",
+      preferredChildModel: "gpt-5.5",
+      userAgentDir: path.join(workspaceDir, ".agent"),
+    });
+
+    const resolved = await resolveOpenAiResponsesModel(makeParams(config));
+
+    expect(resolved.model.api).toBe("openai-codex-responses");
+    expect(resolved.model.baseUrl).toBe(CODEX_BACKEND_BASE_URL);
     expect(resolved.model.contextWindow).toBe(400000);
     expect(resolved.model.maxTokens).toBe(128000);
   });

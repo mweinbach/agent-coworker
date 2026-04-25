@@ -134,6 +134,11 @@ const BASE_PRICING_TABLE: Record<string, ModelPricing> = {
   },
 
   // ── OpenAI ───────────────────────────────────────────────────────────
+  "openai:gpt-5.5": {
+    inputPerMillion: 5,
+    outputPerMillion: 30,
+    cachedInputPerMillion: 0.5,
+  },
   "openai:gpt-5.4": {
     inputPerMillion: 2.5,
     outputPerMillion: 15,
@@ -161,6 +166,11 @@ const BASE_PRICING_TABLE: Record<string, ModelPricing> = {
   },
 
   // ── Codex CLI (same pricing as OpenAI) ───────────────────────────────
+  "codex-cli:gpt-5.5": {
+    inputPerMillion: 5,
+    outputPerMillion: 30,
+    cachedInputPerMillion: 0.5,
+  },
   "codex-cli:gpt-5.4": {
     inputPerMillion: 2.5,
     outputPerMillion: 15,

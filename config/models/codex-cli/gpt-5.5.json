@@ -1,0 +1,14 @@
+{
+  "id": "gpt-5.5",
+  "provider": "codex-cli",
+  "displayName": "GPT-5.5 (Codex CLI)",
+  "knowledgeCutoff": "December 01, 2025",
+  "supportsImageInput": true,
+  "promptTemplate": "system-models/gpt-5.4.json",
+  "providerOptionsDefaults": {
+    "reasoningEffort": "high",
+    "reasoningSummary": "detailed",
+    "textVerbosity": "medium"
+  },
+  "isDefault": false
+}

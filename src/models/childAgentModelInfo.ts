@@ -71,12 +71,14 @@ const freeExperimental = {
 } as const;
 
 const CHILD_AGENT_MODEL_INFO_BY_KEY: Readonly<Record<string, ChildAgentModelInfo>> = {
+  [key("openai", "gpt-5.5")]: frontierCoding,
   [key("openai", "gpt-5.4")]: frontierCoding,
   [key("openai", "gpt-5.4-mini")]: frontierCoding,
   [key("openai", "gpt-5.2")]: balancedGeneral,
   [key("openai", "gpt-5.2-pro")]: deepReasoning,
   [key("openai", "gpt-5-mini")]: fastGeneral,
 
+  [key("codex-cli", "gpt-5.5")]: frontierCoding,
   [key("codex-cli", "gpt-5.4")]: frontierCoding,
   [key("codex-cli", "gpt-5.4-mini")]: frontierCoding,
 

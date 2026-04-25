@@ -4,6 +4,9 @@ import type {
 } from "../../../../src/shared/featureFlags";
 import desktopPackage from "../../package.json";
 import type { HydratedTranscriptSnapshot, PersistedState, TranscriptEvent } from "../app/types";
+export {
+  DEFAULT_QUICK_CHAT_SHORTCUT_ACCELERATOR as QUICK_CHAT_SHORTCUT_ACCELERATOR,
+} from "./quickChatShortcut";
 
 export type StartWorkspaceServerInput = {
   workspaceId: string;
@@ -74,6 +77,11 @@ export type ShowContextMenuInput = {
 export type WindowDragPointInput = {
   screenX: number;
   screenY: number;
+};
+
+export type ShowQuickChatWindowInput = {
+  threadId?: string;
+  newThread?: boolean;
 };
 
 export type ListDirectoryInput = {
@@ -284,6 +292,8 @@ export interface DesktopApi {
   windowDragMove(opts: WindowDragPointInput): Promise<void>;
   windowDragEnd(): Promise<void>;
   getPlatform(): Promise<string>;
+  showMainWindow(): Promise<void>;
+  showQuickChatWindow(opts?: ShowQuickChatWindowInput): Promise<void>;
   listDirectory(opts: ListDirectoryInput): Promise<ExplorerEntry[]>;
   readFile(opts: ReadFileInput): Promise<ReadFileOutput>;
   readFileForPreview(opts: ReadFileForPreviewInput): Promise<ReadFileForPreviewOutput>;
@@ -334,6 +344,9 @@ export const DESKTOP_IPC_CHANNELS = {
   windowDragMove: "desktop:windowDragMove",
   windowDragEnd: "desktop:windowDragEnd",
   getPlatform: "desktop:getPlatform",
+  showMainWindow: "desktop:showMainWindow",
+  consumePendingMenuCommands: "desktop:consumePendingMenuCommands",
+  showQuickChatWindow: "desktop:showQuickChatWindow",
   listDirectory: "desktop:listDirectory",
   readFile: "desktop:readFile",
   readFileForPreview: "desktop:readFileForPreview",

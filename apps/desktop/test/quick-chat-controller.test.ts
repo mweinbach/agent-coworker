@@ -1,0 +1,518 @@
+import path from "node:path";
+import { EventEmitter } from "node:events";
+
+import { beforeEach, describe, expect, mock, test } from "bun:test";
+
+import { resolveTrayIconPath } from "../electron/services/trayIcon";
+import { createTrayMaskBitmap } from "../electron/services/trayImage";
+import { createElectronMock, setElectronMockOverrides } from "./helpers/mockElectron";
+
+const createdTrays: FakeTray[] = [];
+
+class FakeTray extends EventEmitter {
+  tooltip: string | null = null;
+  contextMenu: unknown = null;
+  destroyed = false;
+
+  constructor(readonly _icon: unknown) {
+    super();
+    createdTrays.push(this);
+  }
+
+  setToolTip(value: string) {
+    this.tooltip = value;
+  }
+
+  setContextMenu(menu: unknown) {
+    this.contextMenu = menu;
+  }
+
+  getBounds() {
+    return { x: 20, y: 20, width: 20, height: 20 };
+  }
+
+  popUpContextMenu(menu: unknown) {
+    this.contextMenu = menu;
+  }
+
+  destroy() {
+    this.destroyed = true;
+  }
+}
+
+const electronMockOverrides = {
+  app: {
+    quit: () => {},
+  },
+  globalShortcut: {
+    register: () => true,
+    unregister: () => {},
+  },
+  Menu: {
+    buildFromTemplate(template: unknown) {
+      return template;
+    },
+  },
+  Tray: FakeTray,
+  nativeImage: {
+    createFromPath() {
+      return {
+        isEmpty: () => false,
+        resize: () => ({
+          isEmpty: () => false,
+          getSize: () => ({ width: 18, height: 18 }),
+          toBitmap: () => Buffer.alloc(18 * 18 * 4),
+        }),
+      };
+    },
+    createEmpty() {
+      return {
+        isEmpty: () => true,
+        resize: () => ({
+          isEmpty: () => true,
+        }),
+      };
+    },
+    createFromBitmap() {
+      return {
+        setTemplateImage: () => {},
+      };
+    },
+  },
+  screen: {
+    getDisplayMatching() {
+      return { workArea: { x: 0, y: 0, width: 1440, height: 900 } };
+    },
+    getDisplayNearestPoint() {
+      return { workArea: { x: 0, y: 0, width: 1440, height: 900 } };
+    },
+    getCursorScreenPoint() {
+      return { x: 0, y: 0 };
+    },
+  },
+};
+
+setElectronMockOverrides(electronMockOverrides);
+
+mock.module("electron", () => createElectronMock());
+
+const { QuickChatController } = await import("../electron/services/quickChatController");
+
+class FakeWindow extends EventEmitter {
+  destroyed = false;
+  visible = false;
+  focused = false;
+  bounds = { x: 0, y: 0, width: 420, height: 520 };
+  closeCalls = 0;
+
+  isDestroyed() {
+    return this.destroyed;
+  }
+
+  isVisible() {
+    return this.visible;
+  }
+
+  isFocused() {
+    return this.focused;
+  }
+
+  isMinimized() {
+    return false;
+  }
+
+  restore() {}
+
+  show() {
+    this.visible = true;
+  }
+
+  focus() {
+    this.focused = true;
+  }
+
+  hide() {
+    this.visible = false;
+    this.focused = false;
+  }
+
+  close() {
+    this.closeCalls += 1;
+    const event = {
+      defaultPrevented: false,
+      preventDefault() {
+        this.defaultPrevented = true;
+      },
+    };
+    this.emit("close", event);
+    if (!event.defaultPrevented) {
+      this.destroy();
+    }
+  }
+
+  destroy() {
+    this.destroyed = true;
+    this.emit("closed");
+  }
+
+  getBounds() {
+    return this.bounds;
+  }
+
+  setBounds(bounds: typeof this.bounds) {
+    this.bounds = bounds;
+  }
+}
+
+describe("resolveTrayIconPath", () => {
+  beforeEach(() => {
+    setElectronMockOverrides(electronMockOverrides);
+  });
+
+  test("uses the packaged resources tray asset on macOS", () => {
+    const resolvedPath = resolveTrayIconPath("/tmp/app.asar/out/main", {
+      isPackaged: true,
+      platform: "darwin",
+      resourcesPath: "/Applications/Cowork.app/Contents/Resources",
+    });
+
+    expect(resolvedPath).toBe("/Applications/Cowork.app/Contents/Resources/tray/icon.png");
+  });
+
+  test("uses the packaged resources tray asset on Windows", () => {
+    const resolvedPath = resolveTrayIconPath("C:\\Program Files\\Cowork\\resources\\app.asar\\out\\main", {
+      isPackaged: true,
+      platform: "win32",
+      resourcesPath: "C:\\Program Files\\Cowork\\resources",
+    });
+
+    expect(resolvedPath).toBe(path.join("C:\\Program Files\\Cowork\\resources", "tray", "icon.ico"));
+  });
+
+  test("prefers the desktop build directory when running from out/main", () => {
+    const rootDir = "/Users/jasoncantor/Downloads/agent-coworker/apps/desktop/out/main";
+    const resolvedPath = resolveTrayIconPath(rootDir, {
+      isPackaged: false,
+      platform: "darwin",
+      pathExists: (candidatePath) => candidatePath === "/Users/jasoncantor/Downloads/agent-coworker/apps/desktop/build/icon.png",
+    });
+
+    expect(resolvedPath).toBe("/Users/jasoncantor/Downloads/agent-coworker/apps/desktop/build/icon.png");
+  });
+
+  test("falls back to the primary dev candidate when probing cannot find the asset", () => {
+    const rootDir = "/Users/jasoncantor/Downloads/agent-coworker/apps/desktop/out/main";
+    const resolvedPath = resolveTrayIconPath(rootDir, {
+      isPackaged: false,
+      platform: "darwin",
+      pathExists: () => false,
+    });
+
+    expect(resolvedPath).toBe("/Users/jasoncantor/Downloads/agent-coworker/apps/desktop/build/icon.png");
+  });
+
+  test("builds a black alpha mask for macOS tray icons", () => {
+    const bitmap = Buffer.from([
+      255, 255, 255, 255,
+      0, 0, 0, 255,
+    ]);
+
+    const masked = createTrayMaskBitmap(bitmap);
+
+    expect([...masked]).toEqual([
+      0, 0, 0, 0,
+      0, 0, 0, 255,
+    ]);
+  });
+
+  test("opens the utility window when the tray icon is clicked", async () => {
+    createdTrays.length = 0;
+    const createUtilityWindow = mock(async () => new FakeWindow() as never);
+    const createQuickChatWindow = mock(async () => new FakeWindow() as never);
+    const retargetQuickChatWindow = mock(async () => {});
+    const controller = new QuickChatController({
+      appName: "Cowork",
+      platform: "darwin",
+      trayIconPath: "/tmp/icon.png",
+      getMainWindow: () => null,
+      createMainWindow: async () => new FakeWindow() as never,
+      createQuickChatWindow,
+      retargetQuickChatWindow,
+      createUtilityWindow,
+    });
+
+    controller.initialize();
+
+    const tray = createdTrays[0];
+    if (!tray) {
+      throw new Error("expected tray to be created");
+    }
+
+    tray.emit("click");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(createUtilityWindow).toHaveBeenCalledTimes(1);
+    expect(createQuickChatWindow).toHaveBeenCalledTimes(0);
+    expect(retargetQuickChatWindow).toHaveBeenCalledTimes(0);
+    expect(tray.contextMenu).toBe(null);
+  });
+
+  test("opens the native tray menu only from the secondary tray click on macOS", () => {
+    createdTrays.length = 0;
+    const controller = new QuickChatController({
+      appName: "Cowork",
+      platform: "darwin",
+      trayIconPath: "/tmp/icon.png",
+      getMainWindow: () => null,
+      createMainWindow: async () => new FakeWindow() as never,
+      createQuickChatWindow: async () => new FakeWindow() as never,
+      retargetQuickChatWindow: async () => {},
+      createUtilityWindow: async () => new FakeWindow() as never,
+    });
+
+    controller.initialize();
+
+    const tray = createdTrays[0];
+    if (!tray) {
+      throw new Error("expected tray to be created");
+    }
+
+    expect(tray.contextMenu).toBe(null);
+
+    tray.emit("right-click");
+
+    expect(Array.isArray(tray.contextMenu)).toBe(true);
+  });
+
+  test("removes the tray when the menu bar feature flag is disabled", () => {
+    createdTrays.length = 0;
+    const controller = new QuickChatController({
+      appName: "Cowork",
+      platform: "darwin",
+      trayIconPath: "/tmp/icon.png",
+      getMainWindow: () => null,
+      createMainWindow: async () => new FakeWindow() as never,
+      createQuickChatWindow: async () => new FakeWindow() as never,
+      retargetQuickChatWindow: async () => {},
+      createUtilityWindow: async () => new FakeWindow() as never,
+    });
+
+    controller.initialize();
+    expect(createdTrays).toHaveLength(1);
+    expect(createdTrays[0]?.destroyed).toBe(false);
+
+    controller.applyPersistedState({
+      version: 2,
+      workspaces: [],
+      threads: [],
+      desktopFeatureFlagOverrides: {
+        menuBar: false,
+      },
+    });
+
+    expect(createdTrays[0]?.destroyed).toBe(true);
+    expect(controller.hasTray()).toBe(false);
+  });
+
+  test("reports tray availability while the tray surface is active", () => {
+    createdTrays.length = 0;
+    const controller = new QuickChatController({
+      appName: "Cowork",
+      platform: "win32",
+      trayIconPath: "/tmp/icon.ico",
+      getMainWindow: () => null,
+      createMainWindow: async () => new FakeWindow() as never,
+      createQuickChatWindow: async () => new FakeWindow() as never,
+      retargetQuickChatWindow: async () => {},
+      createUtilityWindow: async () => new FakeWindow() as never,
+    });
+
+    controller.initialize();
+
+    expect(controller.hasTray()).toBe(true);
+  });
+
+  test("destroys utility windows but keeps quick chat usable when the menu bar feature is disabled", async () => {
+    createdTrays.length = 0;
+    const quickChatWindow = new FakeWindow();
+    const utilityWindow = new FakeWindow();
+    const controller = new QuickChatController({
+      appName: "Cowork",
+      platform: "win32",
+      trayIconPath: "/tmp/icon.ico",
+      getMainWindow: () => null,
+      createMainWindow: async () => new FakeWindow() as never,
+      createQuickChatWindow: async () => quickChatWindow as never,
+      retargetQuickChatWindow: async () => {},
+      createUtilityWindow: async () => utilityWindow as never,
+    });
+
+    controller.initialize();
+    await controller.showQuickChatWindow();
+    await controller.showUtilityWindow();
+
+    controller.applyPersistedState({
+      version: 2,
+      workspaces: [],
+      threads: [],
+      desktopFeatureFlagOverrides: {
+        menuBar: false,
+      },
+    });
+
+    expect(quickChatWindow.destroyed).toBe(false);
+    expect(utilityWindow.destroyed).toBe(true);
+    expect(controller.hasTray()).toBe(false);
+  });
+
+  test("keeps quick chat windows alive on trayless platforms during state sync", async () => {
+    createdTrays.length = 0;
+    const quickChatWindow = new FakeWindow();
+    const controller = new QuickChatController({
+      appName: "Cowork",
+      platform: "linux",
+      trayIconPath: "/tmp/icon.png",
+      getMainWindow: () => null,
+      createMainWindow: async () => new FakeWindow() as never,
+      createQuickChatWindow: async () => quickChatWindow as never,
+      retargetQuickChatWindow: async () => {},
+      createUtilityWindow: async () => new FakeWindow() as never,
+    });
+
+    controller.initialize();
+    await controller.showQuickChatWindow();
+
+    controller.applyPersistedState({
+      version: 2,
+      workspaces: [],
+      threads: [],
+    });
+
+    expect(quickChatWindow.destroyed).toBe(false);
+    expect(createdTrays).toHaveLength(0);
+    expect(controller.hasTray()).toBe(false);
+  });
+
+  test("closes quick chat when opening the main window without popup keep-alive", async () => {
+    createdTrays.length = 0;
+    const mainWindow = new FakeWindow();
+    const quickChatWindow = new FakeWindow();
+    const controller = new QuickChatController({
+      appName: "Cowork",
+      platform: "linux",
+      trayIconPath: "/tmp/icon.png",
+      getMainWindow: () => mainWindow as never,
+      createMainWindow: async () => mainWindow as never,
+      createQuickChatWindow: async () => quickChatWindow as never,
+      retargetQuickChatWindow: async () => {},
+      createUtilityWindow: async () => new FakeWindow() as never,
+    });
+
+    controller.initialize();
+    await controller.showQuickChatWindow();
+    await controller.showMainWindow();
+
+    expect(quickChatWindow.closeCalls).toBe(1);
+    expect(quickChatWindow.destroyed).toBe(true);
+    expect(mainWindow.visible).toBe(true);
+    expect(mainWindow.focused).toBe(true);
+  });
+
+  test("hides quick chat when opening the main window with popup keep-alive", async () => {
+    createdTrays.length = 0;
+    const mainWindow = new FakeWindow();
+    const quickChatWindow = new FakeWindow();
+    const controller = new QuickChatController({
+      appName: "Cowork",
+      platform: "darwin",
+      trayIconPath: "/tmp/icon.png",
+      getMainWindow: () => mainWindow as never,
+      createMainWindow: async () => mainWindow as never,
+      createQuickChatWindow: async () => quickChatWindow as never,
+      retargetQuickChatWindow: async () => {},
+      createUtilityWindow: async () => new FakeWindow() as never,
+    });
+
+    controller.initialize();
+    await controller.showQuickChatWindow();
+    await controller.showMainWindow();
+
+    expect(quickChatWindow.closeCalls).toBe(0);
+    expect(quickChatWindow.destroyed).toBe(false);
+    expect(quickChatWindow.visible).toBe(false);
+    expect(mainWindow.visible).toBe(true);
+    expect(mainWindow.focused).toBe(true);
+  });
+
+  test("retargets existing quick chat windows for explicit thread requests", async () => {
+    createdTrays.length = 0;
+    const quickChatWindow = new FakeWindow();
+    const createQuickChatWindow = mock(async () => quickChatWindow as never);
+    const retargetQuickChatWindow = mock(async () => {});
+    const controller = new QuickChatController({
+      appName: "Cowork",
+      platform: "darwin",
+      trayIconPath: "/tmp/icon.png",
+      getMainWindow: () => null,
+      createMainWindow: async () => new FakeWindow() as never,
+      createQuickChatWindow,
+      retargetQuickChatWindow,
+      createUtilityWindow: async () => new FakeWindow() as never,
+    });
+
+    controller.initialize();
+    await controller.showQuickChatWindow({ threadId: "thread-1" });
+    await controller.showQuickChatWindow({ threadId: "thread-1" });
+
+    expect(createQuickChatWindow).toHaveBeenCalledTimes(1);
+    expect(retargetQuickChatWindow).toHaveBeenCalledTimes(1);
+    expect(retargetQuickChatWindow).toHaveBeenCalledWith(quickChatWindow, { threadId: "thread-1" });
+  });
+
+  test("passes new-thread requests when creating quick chat windows", async () => {
+    createdTrays.length = 0;
+    const quickChatWindow = new FakeWindow();
+    const createQuickChatWindow = mock(async () => quickChatWindow as never);
+    const controller = new QuickChatController({
+      appName: "Cowork",
+      platform: "darwin",
+      trayIconPath: "/tmp/icon.png",
+      getMainWindow: () => null,
+      createMainWindow: async () => new FakeWindow() as never,
+      createQuickChatWindow,
+      retargetQuickChatWindow: async () => {},
+      createUtilityWindow: async () => new FakeWindow() as never,
+    });
+
+    controller.initialize();
+    await controller.showQuickChatWindow({ newThread: true });
+
+    expect(createQuickChatWindow).toHaveBeenCalledTimes(1);
+    expect(createQuickChatWindow).toHaveBeenCalledWith({ newThread: true });
+  });
+
+  test("retargets existing quick chat windows for new-thread requests", async () => {
+    createdTrays.length = 0;
+    const quickChatWindow = new FakeWindow();
+    const createQuickChatWindow = mock(async () => quickChatWindow as never);
+    const retargetQuickChatWindow = mock(async () => {});
+    const controller = new QuickChatController({
+      appName: "Cowork",
+      platform: "darwin",
+      trayIconPath: "/tmp/icon.png",
+      getMainWindow: () => null,
+      createMainWindow: async () => new FakeWindow() as never,
+      createQuickChatWindow,
+      retargetQuickChatWindow,
+      createUtilityWindow: async () => new FakeWindow() as never,
+    });
+
+    controller.initialize();
+    await controller.showQuickChatWindow();
+    await controller.showQuickChatWindow({ newThread: true });
+
+    expect(createQuickChatWindow).toHaveBeenCalledTimes(1);
+    expect(retargetQuickChatWindow).toHaveBeenCalledTimes(1);
+    expect(retargetQuickChatWindow).toHaveBeenCalledWith(quickChatWindow, { newThread: true });
+  });
+});

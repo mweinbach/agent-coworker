@@ -30,6 +30,7 @@ import {
   type RevealPathInput,
   type SaveExportedFileInput,
   type SetWindowAppearanceInput,
+  type ShowQuickChatWindowInput,
   type ShowContextMenuInput,
   type StartWorkspaceServerInput,
   type StopWorkspaceServerInput,
@@ -61,6 +62,7 @@ import {
   revealPathInputSchema,
   saveExportedFileInputSchema,
   setWindowAppearanceInputSchema,
+  showQuickChatWindowInputSchema,
   showContextMenuInputSchema,
   startWorkspaceServerInputSchema,
   stopWorkspaceServerInputSchema,
@@ -312,6 +314,15 @@ const desktopApi = Object.freeze<DesktopApi>({
 
   getPlatform: () => ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.getPlatform),
 
+  showMainWindow: () => ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.showMainWindow),
+
+  showQuickChatWindow: (opts?: ShowQuickChatWindowInput) => {
+    if (opts !== undefined) {
+      parseWithSchema(showQuickChatWindowInputSchema, opts, "showQuickChatWindow options");
+    }
+    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.showQuickChatWindow, opts);
+  },
+
   listDirectory: (opts: ListDirectoryInput) => {
     assertListDirectoryInput(opts);
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.listDirectory, opts);
@@ -442,12 +453,25 @@ const desktopApi = Object.freeze<DesktopApi>({
     if (typeof listener !== "function") {
       throw new Error("onMenuCommand listener must be a function");
     }
+    let active = true;
     const wrapped = (_event: unknown, payload: unknown) => {
       assertDesktopMenuCommand(payload);
       listener(payload);
     };
     ipcRenderer.on(DESKTOP_EVENT_CHANNELS.menuCommand, wrapped);
+    void ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.consumePendingMenuCommands).then((payload: unknown) => {
+      if (!active || !Array.isArray(payload)) {
+        return;
+      }
+      for (const command of payload) {
+        assertDesktopMenuCommand(command);
+        listener(command);
+      }
+    }).catch(() => {
+      // Keep live menu-command delivery even if pending startup commands are unavailable.
+    });
     return () => {
+      active = false;
       ipcRenderer.off(DESKTOP_EVENT_CHANNELS.menuCommand, wrapped);
     };
   },

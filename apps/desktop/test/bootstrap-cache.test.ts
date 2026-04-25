@@ -265,6 +265,7 @@ mock.module("../src/lib/desktopCommands", () =>
     setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
     getUpdateState: async () => MOCK_UPDATE_STATE,
     getDesktopFeatureFlags: (featureOverrides) => ({
+      menuBar: typeof featureOverrides?.menuBar === "boolean" ? featureOverrides.menuBar : true,
       remoteAccess:
         typeof featureOverrides?.remoteAccess === "boolean"
           ? featureOverrides.remoteAccess

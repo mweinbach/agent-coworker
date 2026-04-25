@@ -3,10 +3,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { createElectronMock, setElectronMockOverrides } from "./helpers/mockElectron";
+
 let userDataDir = "";
 let appDataDir = "";
 
-mock.module("electron", () => ({
+const electronMockOverrides = {
   app: {
     getPath: (name: string) => (name === "appData" ? appDataDir : userDataDir),
   },
@@ -22,13 +24,21 @@ mock.module("electron", () => ({
       };
     },
   },
-}));
+};
+
+setElectronMockOverrides(electronMockOverrides);
+
+mock.module("electron", () => createElectronMock());
 
 const { PersistenceService } = await import("../electron/services/persistence");
 
 const TS = "2024-01-01T00:00:00.000Z";
 
 describe("desktop persistence state validation", () => {
+  beforeEach(() => {
+    setElectronMockOverrides(electronMockOverrides);
+  });
+
   beforeEach(async () => {
     appDataDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-appdata-"));
     userDataDir = path.join(appDataDir, "Cowork");
@@ -194,6 +204,41 @@ describe("desktop persistence state validation", () => {
         hiddenModels: ["llama-3.2-vision"],
       },
     });
+  });
+
+  test("saveState persists quick chat shortcut preferences", async () => {
+    const persistence = new PersistenceService();
+    const validWorkspace = path.join(userDataDir, "workspace-quick-chat");
+    await fs.mkdir(validWorkspace, { recursive: true });
+
+    await persistence.saveState({
+      version: 2,
+      workspaces: [
+        {
+          id: "ws_quick_chat",
+          name: "Quick chat workspace",
+          path: validWorkspace,
+          createdAt: TS,
+          lastOpenedAt: TS,
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      threads: [],
+      developerMode: false,
+      showHiddenFiles: false,
+      desktopSettings: {
+        quickChat: {
+          shortcutEnabled: true,
+          shortcutAccelerator: "Alt+Space",
+        },
+      },
+    });
+
+    const loaded = await persistence.loadState();
+    expect(loaded.desktopSettings?.quickChat?.shortcutEnabled).toBe(true);
+    expect(loaded.desktopSettings?.quickChat?.shortcutAccelerator).toBe("Alt+Space");
   });
 
   test("loadState enables LM Studio UI by default when the saved provider status is already connected", async () => {
@@ -536,6 +581,12 @@ describe("desktop persistence state validation", () => {
       developerMode: false,
       showHiddenFiles: false,
       perWorkspaceSettings: false,
+      desktopSettings: {
+        quickChat: {
+          shortcutEnabled: false,
+          shortcutAccelerator: "CommandOrControl+Shift+Space",
+        },
+      },
       desktopFeatureFlagOverrides: {},
       providerUiState: {
         lmstudio: {

@@ -11,6 +11,7 @@ import type {
   DesktopNotificationInput,
   ExplorerEntry,
   ReadFileForPreviewOutput,
+  ShowQuickChatWindowInput,
   SetWindowAppearanceInput,
   SystemAppearance,
   UpdaterState,
@@ -30,6 +31,7 @@ function requireDesktopApi(): DesktopApi {
 
 function getDefaultDesktopFeatureFlags(): DesktopFeatureFlags {
   return {
+    menuBar: true,
     remoteAccess: false,
     workspacePicker: false,
     workspaceLifecycle: false,
@@ -158,6 +160,14 @@ export async function windowDragEnd(): Promise<void> {
 
 export async function getPlatform(): Promise<string> {
   return await requireDesktopApi().getPlatform();
+}
+
+export async function showMainWindow(): Promise<void> {
+  await requireDesktopApi().showMainWindow();
+}
+
+export async function showQuickChatWindow(opts?: ShowQuickChatWindowInput): Promise<void> {
+  await requireDesktopApi().showQuickChatWindow(opts);
 }
 
 export async function listDirectory(opts: {

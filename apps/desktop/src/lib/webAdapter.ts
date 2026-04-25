@@ -11,6 +11,7 @@ import type {
   ExplorerEntry,
   MobileRelayBridgeState,
   ReadFileForPreviewOutput,
+  ShowQuickChatWindowInput,
   SystemAppearance,
   UpdaterState,
 } from "./desktopApi";
@@ -400,6 +401,7 @@ export function createWebAdapter(): DesktopApi {
         ? overrides.workspaceLifecycle
         : fullDesktopMode;
     return {
+      menuBar: false,
       remoteAccess: false,
       workspacePicker: normalizedPicker,
       workspaceLifecycle: normalizedLifecycle,
@@ -531,6 +533,10 @@ export function createWebAdapter(): DesktopApi {
     async getPlatform(): Promise<string> {
       return "web";
     },
+
+    async showMainWindow(): Promise<void> {},
+
+    async showQuickChatWindow(_opts?: ShowQuickChatWindowInput): Promise<void> {},
 
     async listDirectory(opts): Promise<ExplorerEntry[]> {
       return await readWebJson<ExplorerEntry[]>("/cowork/fs/list", {

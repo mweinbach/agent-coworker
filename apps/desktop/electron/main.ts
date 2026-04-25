@@ -4,9 +4,11 @@ import { fileURLToPath } from "node:url";
 
 import { app, BrowserWindow, Menu, Notification, shell } from "electron";
 
+import type { PersistedState } from "../src/app/types";
 import {
   DESKTOP_EVENT_CHANNELS,
   type DesktopMenuCommand,
+  type ShowQuickChatWindowInput,
   type UpdaterState,
 } from "../src/lib/desktopApi";
 import { registerDesktopIpc } from "./ipc";
@@ -19,12 +21,15 @@ import {
 } from "./services/appearance";
 import { runDesktopSmokePromptLoadCheck } from "./services/desktopSmoke";
 import { installDesktopApplicationMenu } from "./services/menu";
+import { createMenuCommandDispatcher } from "./services/menuCommandDispatcher";
 import { MobileRelayBridge } from "./services/mobileRelayBridge";
 import { PersistenceService } from "./services/persistence";
+import { QuickChatController } from "./services/quickChatController";
 import { resolveElectronRemoteDebugConfig } from "./services/remoteDebug";
 import { resolveDesktopRendererUrl } from "./services/rendererUrl";
 import { ServerManager } from "./services/serverManager";
 import { createBeforeQuitHandler } from "./services/shutdown";
+import { resolveTrayIconPath } from "./services/trayIcon";
 import { DesktopUpdaterService } from "./services/updater";
 import {
   applyPlatformWindowCreated,
@@ -65,6 +70,8 @@ const updater = new DesktopUpdaterService({
 });
 let unregisterAppearanceListener = () => {};
 let mainWindow: BrowserWindow | null = null;
+let quickChatController: QuickChatController | null = null;
+const menuCommandDispatcher = createMenuCommandDispatcher();
 const WINDOW_SHOW_FALLBACK_TIMEOUT_MS = 2_000;
 
 const electronRemoteDebug = resolveElectronRemoteDebugConfig({
@@ -98,9 +105,7 @@ function showUpdateReadyNotification(state: UpdaterState): void {
   const isWindows = process.platform === "win32";
   const notification = new Notification({
     title: "Update ready",
-    body: version
-      ? `Cowork ${version} is ready. Restart to install.`
-      : "Cowork update is ready. Restart to install.",
+    body: version ? `Cowork ${version} is ready. Restart to install.` : "Cowork update is ready. Restart to install.",
     silent: false,
     ...(isWindows
       ? {
@@ -125,27 +130,27 @@ function showUpdateReadyNotification(state: UpdaterState): void {
     if (win && !win.isDestroyed()) {
       if (win.isMinimized()) win.restore();
       win.focus();
-      sendMenuCommand("openUpdates");
+      void sendMenuCommand("openUpdates");
     }
   });
 
   notification.show();
 }
 
-function sendMenuCommand(command: DesktopMenuCommand): void {
-  const target = BrowserWindow.getFocusedWindow() ?? mainWindow;
-  if (!target || target.isDestroyed()) {
-    return;
-  }
-  target.webContents.send(DESKTOP_EVENT_CHANNELS.menuCommand, command);
+async function sendMenuCommand(command: DesktopMenuCommand): Promise<void> {
+  const existingMainWindow = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+  const target = await ensureMainWindow();
+  menuCommandDispatcher.dispatch(command, existingMainWindow ? {
+    send(nextCommand) {
+      target.webContents.send(DESKTOP_EVENT_CHANNELS.menuCommand, nextCommand);
+    },
+  } : null);
 }
 
 function isExternalUrl(rawUrl: string): boolean {
   try {
     const parsed = new URL(rawUrl);
-    return (
-      parsed.protocol === "http:" || parsed.protocol === "https:" || parsed.protocol === "mailto:"
-    );
+    return parsed.protocol === "http:" || parsed.protocol === "https:" || parsed.protocol === "mailto:";
   } catch {
     return false;
   }
@@ -168,7 +173,7 @@ function isTrustedRendererNavigation(rawUrl: string): boolean {
 
   const { url } = resolveDesktopRendererUrl(
     process.env.ELECTRON_RENDERER_URL,
-    process.env.COWORK_DESKTOP_RENDERER_PORT,
+    process.env.COWORK_DESKTOP_RENDERER_PORT
   );
 
   try {
@@ -244,20 +249,16 @@ async function maybeRunPackagedSmoke(): Promise<boolean> {
     await fs.mkdir(path.dirname(smokeConfig.outputPath), { recursive: true });
     await fs.writeFile(
       smokeConfig.outputPath,
-      `${JSON.stringify(
-        {
-          ok: true,
-          type: "server_listening",
-          promptLoaded: true,
-          turnCompleted: true,
-          url: listening.url,
-          platform: process.platform,
-          arch: process.arch,
-        },
-        null,
-        2,
-      )}\n`,
-      "utf8",
+      `${JSON.stringify({
+        ok: true,
+        type: "server_listening",
+        promptLoaded: true,
+        turnCompleted: true,
+        url: listening.url,
+        platform: process.platform,
+        arch: process.arch,
+      }, null, 2)}\n`,
+      "utf8"
     );
     await serverManager.stopWorkspaceServer(workspaceId);
     app.exit(0);
@@ -266,17 +267,13 @@ async function maybeRunPackagedSmoke(): Promise<boolean> {
     await fs.mkdir(path.dirname(smokeConfig.outputPath), { recursive: true });
     await fs.writeFile(
       smokeConfig.outputPath,
-      `${JSON.stringify(
-        {
-          ok: false,
-          error: error instanceof Error ? error.message : String(error),
-          platform: process.platform,
-          arch: process.arch,
-        },
-        null,
-        2,
-      )}\n`,
-      "utf8",
+      `${JSON.stringify({
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+        platform: process.platform,
+        arch: process.arch,
+      }, null, 2)}\n`,
+      "utf8"
     );
     try {
       await serverManager.stopWorkspaceServer(workspaceId);
@@ -288,7 +285,37 @@ async function maybeRunPackagedSmoke(): Promise<boolean> {
   }
 }
 
-async function createWindow(): Promise<void> {
+async function loadRendererWindow(
+  win: BrowserWindow,
+  windowMode: "main" | "quick-chat" | "utility",
+  query: Record<string, string> = {},
+): Promise<void> {
+  if (!app.isPackaged) {
+    const { url, warning } = resolveDesktopRendererUrl(
+      process.env.ELECTRON_RENDERER_URL,
+      process.env.COWORK_DESKTOP_RENDERER_PORT
+    );
+    if (warning) {
+      console.warn(`[desktop] ${warning}`);
+    }
+    const target = new URL(url);
+    if (windowMode !== "main") {
+      target.searchParams.set("window", windowMode);
+    }
+    for (const [key, value] of Object.entries(query)) {
+      target.searchParams.set(key, value);
+    }
+    await win.loadURL(target.toString());
+    return;
+  }
+
+  await win.loadFile(
+    path.join(__dirname, "../renderer/index.html"),
+    windowMode === "main" ? undefined : { query: { window: windowMode, ...query } },
+  );
+}
+
+async function createMainWindow(): Promise<BrowserWindow> {
   const useMacosNativeGlass = shouldUseMacosNativeGlass(process.platform, process.env, {
     prefersReducedTransparency: getSystemAppearanceSnapshot().prefersReducedTransparency,
   });
@@ -348,7 +375,11 @@ async function createWindow(): Promise<void> {
         { role: "selectAll" },
       );
     } else if (hasSelection) {
-      menuItems.push({ role: "copy" }, { type: "separator" }, { role: "selectAll" });
+      menuItems.push(
+        { role: "copy" },
+        { type: "separator" },
+        { role: "selectAll" },
+      );
     } else {
       menuItems.push({ role: "selectAll" });
     }
@@ -367,18 +398,152 @@ async function createWindow(): Promise<void> {
     emitSystemAppearance();
   });
 
-  if (!app.isPackaged) {
-    const { url, warning } = resolveDesktopRendererUrl(
-      process.env.ELECTRON_RENDERER_URL,
-      process.env.COWORK_DESKTOP_RENDERER_PORT,
-    );
-    if (warning) {
-      console.warn(`[desktop] ${warning}`);
-    }
-    await win.loadURL(url);
-  } else {
-    await win.loadFile(path.join(__dirname, "../renderer/index.html"));
+  await loadRendererWindow(win, "main");
+  return win;
+}
+
+async function createQuickChatWindow(opts?: ShowQuickChatWindowInput): Promise<BrowserWindow> {
+  const useMacosNativeGlass = shouldUseMacosNativeGlass(process.platform, process.env, {
+    prefersReducedTransparency: getSystemAppearanceSnapshot().prefersReducedTransparency,
+  });
+  const useDarkColors = getSystemAppearanceSnapshot().shouldUseDarkColors;
+  const isDarwin = process.platform === "darwin";
+
+  const win = new BrowserWindow({
+    title: "Cowork Quick Chat",
+    width: 337,
+    height: 552,
+    minWidth: 275,
+    minHeight: 449,
+    show: false,
+    frame: false,
+    resizable: true,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    autoHideMenuBar: true,
+    roundedCorners: !isDarwin,
+    hasShadow: true,
+    backgroundColor: useDarkColors ? "#1f1d1a" : "#f5f0e5",
+    ...getInitialWindowAppearanceOptions({ useDarkColors, useMacosNativeGlass }),
+    ...(isDarwin ? { transparent: true, backgroundColor: "#00000000" } : {}),
+    webPreferences: {
+      preload: path.join(__dirname, "../preload/preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      webviewTag: false,
+      safeDialogs: true,
+      devTools: !app.isPackaged,
+    },
+  });
+
+  applyPlatformWindowCreated(win, process.platform);
+  if (process.platform === "darwin") {
+    win.setWindowButtonVisibility(false);
   }
+  applyWindowSecurity(win);
+  syncWindowAppearance(win, {
+    platform: process.platform,
+    useDarkColors,
+    useMacosNativeGlass,
+  });
+  if (isDarwin) {
+    win.setBackgroundColor("#00000000");
+  }
+  win.setAlwaysOnTop(true, process.platform === "darwin" ? "pop-up-menu" : "normal");
+  await loadRendererWindow(win, "quick-chat", quickChatWindowQuery(opts));
+  return win;
+}
+
+async function retargetQuickChatWindow(win: BrowserWindow, opts?: ShowQuickChatWindowInput): Promise<void> {
+  await loadRendererWindow(win, "quick-chat", quickChatWindowQuery(opts));
+}
+
+function quickChatWindowQuery(opts?: ShowQuickChatWindowInput): Record<string, string> {
+  return {
+    ...(opts?.threadId ? { threadId: opts.threadId } : {}),
+    ...(opts?.newThread ? { newThread: "true" } : {}),
+  };
+}
+
+async function createUtilityWindow(): Promise<BrowserWindow> {
+  const useMacosNativeGlass = shouldUseMacosNativeGlass(process.platform, process.env, {
+    prefersReducedTransparency: getSystemAppearanceSnapshot().prefersReducedTransparency,
+  });
+  const useDarkColors = getSystemAppearanceSnapshot().shouldUseDarkColors;
+  const isDarwin = process.platform === "darwin";
+
+  const win = new BrowserWindow({
+    title: "Cowork Menu",
+    width: 252,
+    height: 400,
+    minWidth: 252,
+    minHeight: 300,
+    maxWidth: 312,
+    maxHeight: 560,
+    show: false,
+    frame: false,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    autoHideMenuBar: true,
+    // macOS: match the system rounded (menu-style) window shape so a transparent
+    // frameless host does not show ragged/empty crescents; renderer draws edge-to-edge.
+    roundedCorners: true,
+    hasShadow: true,
+    backgroundColor: useDarkColors ? "#1f1d1a" : "#f5f0e5",
+    ...getInitialWindowAppearanceOptions({ useDarkColors, useMacosNativeGlass }),
+    ...(isDarwin ? { transparent: true, backgroundColor: "#00000000" } : {}),
+    webPreferences: {
+      preload: path.join(__dirname, "../preload/preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      webviewTag: false,
+      safeDialogs: true,
+      devTools: !app.isPackaged,
+    },
+  });
+
+  applyPlatformWindowCreated(win, process.platform);
+  if (process.platform === "darwin") {
+    win.setWindowButtonVisibility(false);
+  }
+  applyWindowSecurity(win);
+  syncWindowAppearance(win, {
+    platform: process.platform,
+    useDarkColors,
+    useMacosNativeGlass,
+  });
+  if (isDarwin) {
+    win.setBackgroundColor("#00000000");
+  }
+  win.setAlwaysOnTop(true, process.platform === "darwin" ? "pop-up-menu" : "normal");
+  await loadRendererWindow(win, "utility");
+  return win;
+}
+
+async function ensureMainWindow(): Promise<BrowserWindow> {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) {
+      mainWindow.restore();
+    }
+    mainWindow.show();
+    mainWindow.focus();
+    return mainWindow;
+  }
+  const win = await createMainWindow();
+  win.show();
+  win.focus();
+  return win;
 }
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
@@ -386,14 +551,7 @@ if (!gotSingleInstanceLock) {
   app.quit();
 } else {
   app.on("second-instance", () => {
-    if (!mainWindow) {
-      return;
-    }
-
-    if (mainWindow.isMinimized()) {
-      mainWindow.restore();
-    }
-    mainWindow.focus();
+    void quickChatController?.showMainWindow();
   });
 
   app.whenReady().then(async () => {
@@ -401,11 +559,33 @@ if (!gotSingleInstanceLock) {
       return;
     }
 
+    quickChatController = new QuickChatController({
+      appName: DESKTOP_APP_NAME,
+      trayIconPath: resolveTrayIconPath(__dirname),
+      getMainWindow: () => mainWindow,
+      createMainWindow,
+      createQuickChatWindow,
+      retargetQuickChatWindow,
+      createUtilityWindow,
+    });
+    const initialState: PersistedState | null = await persistence.loadState().catch(() => null);
+    if (initialState) {
+      quickChatController.applyPersistedState(initialState);
+    }
+    quickChatController.initialize();
+
     registerDesktopIpc({
       mobileRelayBridge,
       persistence,
       serverManager,
       updater,
+      showMainWindow: () => quickChatController?.showMainWindow(),
+      consumePendingMenuCommands: () => menuCommandDispatcher.drainPending(),
+      showQuickChatWindow: (opts) => quickChatController?.showQuickChatWindow(opts),
+      shouldKeepPopupWindowsAlive: () => quickChatController?.shouldKeepPopupWindowsAlive() === true,
+      applyPersistedState: (state) => {
+        quickChatController?.applyPersistedState(state);
+      },
     });
     unregisterAppearanceListener = registerSystemAppearanceListener((appearance) => {
       for (const win of BrowserWindow.getAllWindows()) {
@@ -422,16 +602,19 @@ if (!gotSingleInstanceLock) {
       openExternal: (url) => {
         void shell.openExternal(url);
       },
-      sendCommand: (command) => sendMenuCommand(command),
+      openQuickChat: () => {
+        void quickChatController?.showQuickChatWindow();
+      },
+      sendCommand: (command) => {
+        void sendMenuCommand(command);
+      },
     });
 
     updater.start();
-    void createWindow();
+    void ensureMainWindow();
 
     app.on("activate", () => {
-      if (BrowserWindow.getAllWindows().length === 0) {
-        void createWindow();
-      }
+      void ensureMainWindow();
     });
   });
 
@@ -443,18 +626,17 @@ if (!gotSingleInstanceLock) {
       stopMobileRelayBridge: async () => {
         await mobileRelayBridge.stop();
       },
+      stopQuickChat: () => quickChatController?.dispose(),
       stopAllServers: () => serverManager.stopAll(),
       quit: () => app.quit(),
       onError: (error) => {
-        console.error(
-          `[desktop] Failed to stop workspace servers during shutdown: ${String(error)}`,
-        );
+        console.error(`[desktop] Failed to stop workspace servers during shutdown: ${String(error)}`);
       },
-    }),
+    })
   );
 
   app.on("window-all-closed", () => {
-    if (process.platform !== "darwin") {
+    if (process.platform === "linux" || (process.platform === "win32" && !quickChatController?.hasTray())) {
       app.quit();
     }
   });

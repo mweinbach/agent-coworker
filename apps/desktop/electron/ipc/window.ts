@@ -3,10 +3,12 @@ import { BrowserWindow, Menu, type WebContents } from "electron";
 import {
   DESKTOP_IPC_CHANNELS,
   type ShowContextMenuInput,
+  type ShowQuickChatWindowInput,
   type WindowDragPointInput,
 } from "../../src/lib/desktopApi";
 import {
   showContextMenuInputSchema,
+  showQuickChatWindowInputSchema,
   windowDragPointInputSchema,
 } from "../../src/lib/desktopSchemas";
 import type { DesktopIpcModuleContext } from "./types";
@@ -18,8 +20,25 @@ type ActiveWindowDrag = {
   startWindowY: number;
 };
 
+type DesktopWindowMode = "main" | "quick-chat" | "utility";
+
+function resolveDesktopWindowMode(event: { sender?: { getURL?: () => string } }): DesktopWindowMode {
+  const rawUrl = typeof event.sender?.getURL === "function" ? event.sender.getURL() : "";
+  if (!rawUrl) {
+    return "main";
+  }
+
+  try {
+    const parsed = new URL(rawUrl);
+    const mode = parsed.searchParams.get("window");
+    return mode === "quick-chat" || mode === "utility" ? mode : "main";
+  } catch {
+    return "main";
+  }
+}
+
 export function registerWindowIpc(context: DesktopIpcModuleContext): void {
-  const { handleDesktopInvoke, parseWithSchema } = context;
+  const { deps, handleDesktopInvoke, parseWithSchema } = context;
   const activeWindowDrags = new Map<number, ActiveWindowDrag>();
   const trackedWindowDragSenders = new Set<number>();
 
@@ -79,7 +98,16 @@ export function registerWindowIpc(context: DesktopIpcModuleContext): void {
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.windowClose, (event) => {
     const win = BrowserWindow.fromWebContents(event.sender);
-    win?.close();
+    if (!win) {
+      return;
+    }
+
+    if (resolveDesktopWindowMode(event) !== "main" && deps.shouldKeepPopupWindowsAlive?.() === true) {
+      win.hide();
+      return;
+    }
+
+    win.close();
   });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.windowDragStart, (event, args: WindowDragPointInput) => {
@@ -121,5 +149,18 @@ export function registerWindowIpc(context: DesktopIpcModuleContext): void {
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.getPlatform, () => {
     return process.platform;
+  });
+
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.showMainWindow, async () => {
+    await deps.showMainWindow();
+  });
+
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.consumePendingMenuCommands, () => {
+    return deps.consumePendingMenuCommands();
+  });
+
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.showQuickChatWindow, async (_event, args?: ShowQuickChatWindowInput) => {
+    const input = parseWithSchema(showQuickChatWindowInputSchema, args ?? {}, "showQuickChatWindow options");
+    await deps.showQuickChatWindow(input);
   });
 }

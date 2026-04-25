@@ -4,9 +4,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { createElectronMock, setElectronMockOverrides } from "./helpers/mockElectron";
+
 let userDataDir = "";
 
-mock.module("electron", () => ({
+const electronMockOverrides = {
   app: {
     getPath: (name: string) => (name === "userData" ? userDataDir : process.cwd()),
     getName: () => "Cowork Test",
@@ -23,7 +25,11 @@ mock.module("electron", () => ({
       };
     },
   },
-}));
+};
+
+setElectronMockOverrides(electronMockOverrides);
+
+mock.module("electron", () => createElectronMock());
 
 const {
   buildRelayHandshakeProofPayload,
@@ -209,6 +215,7 @@ describe("mobile relay bridge", () => {
   let relaySockets: FakeSocket[];
 
   beforeEach(async () => {
+    setElectronMockOverrides(electronMockOverrides);
     userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-mobile-relay-"));
     remodexStateDir = userDataDir;
     sidecarSocket = new FakeSocket();

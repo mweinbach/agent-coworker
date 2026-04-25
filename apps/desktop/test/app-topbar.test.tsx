@@ -394,6 +394,53 @@ describe("desktop app top bar", () => {
 
       expect(titleButton).not.toBeNull();
       expect(titleButton?.textContent).toContain("Research");
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("opens quick chat from the active chat top bar", async () => {
+    const harness = setupJsdom();
+    const onPopOutQuickChat = mock(() => {});
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          createElement(AppTopBar, {
+            busy: false,
+            onToggleSidebar: () => {},
+            onNewChat: () => {},
+            sidebarCollapsed: false,
+            sidebarWidth: 280,
+            contextSidebarCollapsed: false,
+            onToggleContextSidebar: () => {},
+            onPopOutQuickChat,
+            title: "Refine desktop app UI",
+            subtitle: "agent-coworker",
+            sessionUsage: null,
+            lastTurnUsage: null,
+            managementMode: "thread",
+          }),
+        );
+      });
+
+      const popOutButton = container.querySelector('button[aria-label="Open quick chat"]');
+      if (!(popOutButton instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing quick chat pop-out button");
+      }
+
+      await act(async () => {
+        popOutButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(onPopOutQuickChat).toHaveBeenCalledTimes(1);
 
       await act(async () => {
         root.unmount();

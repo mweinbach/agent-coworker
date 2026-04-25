@@ -1,7 +1,8 @@
-import { describe, expect, mock, test } from "bun:test";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { EventEmitter } from "node:events";
 
 import { DESKTOP_IPC_CHANNELS } from "../src/lib/desktopApi";
+import { createElectronMock, setElectronMockOverrides } from "./helpers/mockElectron";
 
 type FakeWindow = {
   destroyed: boolean;
@@ -9,16 +10,20 @@ type FakeWindow = {
   fullScreen: boolean;
   bounds: { x: number; y: number };
   setPositionCalls: Array<{ x: number; y: number }>;
+  closeCalls: number;
+  hideCalls: number;
   isDestroyed(): boolean;
   isMaximized(): boolean;
   isFullScreen(): boolean;
   getBounds(): { x: number; y: number };
   setPosition(x: number, y: number): void;
+  close(): void;
+  hide(): void;
 };
 
 const windowsBySenderId = new Map<number, FakeWindow>();
 
-mock.module("electron", () => ({
+const electronMockOverrides = {
   app: {
     getPath: () => process.cwd(),
     getAppPath: () => process.cwd(),
@@ -47,13 +52,21 @@ mock.module("electron", () => ({
       return { canceled: true, filePaths: [] };
     },
   },
-}));
+};
+
+setElectronMockOverrides(electronMockOverrides);
+
+mock.module("electron", () => createElectronMock());
 
 const { registerWindowIpc } = await import("../electron/ipc/window");
 
 class FakeWebContents extends EventEmitter {
-  constructor(readonly id: number) {
+  constructor(readonly id: number, private readonly url = "file:///renderer/index.html") {
     super();
+  }
+
+  getURL() {
+    return this.url;
   }
 }
 
@@ -64,6 +77,8 @@ function createFakeWindow(x = 40, y = 50): FakeWindow {
     fullScreen: false,
     bounds: { x, y },
     setPositionCalls: [],
+    closeCalls: 0,
+    hideCalls: 0,
     isDestroyed() {
       return this.destroyed;
     },
@@ -79,16 +94,27 @@ function createFakeWindow(x = 40, y = 50): FakeWindow {
     setPosition(nextX: number, nextY: number) {
       this.setPositionCalls.push({ x: nextX, y: nextY });
     },
+    close() {
+      this.closeCalls += 1;
+    },
+    hide() {
+      this.hideCalls += 1;
+    },
   };
 }
 
-function createHandlers() {
-  const handlers = new Map<
-    string,
-    (event: { sender: FakeWebContents }, args?: unknown) => unknown
-  >();
+function createHandlers(options: { shouldKeepPopupWindowsAlive?: () => boolean } = {}) {
+  const handlers = new Map<string, (event: { sender: FakeWebContents }, args?: unknown) => unknown>();
+  const showMainWindow = mock(async () => {});
+  const consumePendingMenuCommands = mock(() => ["openSettings"] as const);
+  const showQuickChatWindow = mock(async () => {});
   registerWindowIpc({
-    deps: {} as never,
+    deps: {
+      showMainWindow,
+      consumePendingMenuCommands,
+      showQuickChatWindow,
+      shouldKeepPopupWindowsAlive: options.shouldKeepPopupWindowsAlive,
+    } as never,
     workspaceRoots: {} as never,
     handleDesktopInvoke(channel, handler) {
       handlers.set(channel, handler as never);
@@ -97,13 +123,17 @@ function createHandlers() {
       return value as never;
     },
   });
-  return handlers;
+  return { handlers, consumePendingMenuCommands, showMainWindow, showQuickChatWindow };
 }
 
 describe("window IPC", () => {
+  beforeEach(() => {
+    setElectronMockOverrides(electronMockOverrides);
+  });
+
   test("cleans up drag state when the renderer is destroyed", () => {
     windowsBySenderId.clear();
-    const handlers = createHandlers();
+    const { handlers } = createHandlers();
     const sender = new FakeWebContents(7);
     const win = createFakeWindow();
     windowsBySenderId.set(sender.id, win);
@@ -115,7 +145,10 @@ describe("window IPC", () => {
 
     sender.emit("destroyed");
 
-    handlers.get(DESKTOP_IPC_CHANNELS.windowDragMove)?.({ sender }, { screenX: 140, screenY: 150 });
+    handlers.get(DESKTOP_IPC_CHANNELS.windowDragMove)?.(
+      { sender },
+      { screenX: 140, screenY: 150 },
+    );
 
     expect(win.setPositionCalls).toEqual([]);
   });
@@ -126,18 +159,74 @@ describe("window IPC", () => {
     const win = createFakeWindow();
     windowsBySenderId.set(sender.id, win);
 
-    const firstRegistrationHandlers = createHandlers();
+    const { handlers: firstRegistrationHandlers } = createHandlers();
     firstRegistrationHandlers.get(DESKTOP_IPC_CHANNELS.windowDragStart)?.(
       { sender },
       { screenX: 100, screenY: 100 },
     );
 
-    const secondRegistrationHandlers = createHandlers();
+    const { handlers: secondRegistrationHandlers } = createHandlers();
     secondRegistrationHandlers.get(DESKTOP_IPC_CHANNELS.windowDragMove)?.(
       { sender },
       { screenX: 140, screenY: 150 },
     );
 
     expect(win.setPositionCalls).toEqual([]);
+  });
+
+  test("exposes show window IPC actions", async () => {
+    const { handlers, consumePendingMenuCommands, showMainWindow, showQuickChatWindow } = createHandlers();
+    const sender = new FakeWebContents(21);
+
+    await handlers.get(DESKTOP_IPC_CHANNELS.showMainWindow)?.({ sender });
+    expect(await handlers.get(DESKTOP_IPC_CHANNELS.consumePendingMenuCommands)?.({ sender })).toEqual(["openSettings"]);
+    await handlers.get(DESKTOP_IPC_CHANNELS.showQuickChatWindow)?.(
+      { sender },
+      { threadId: "thread-21", newThread: true },
+    );
+
+    expect(showMainWindow).toHaveBeenCalledTimes(1);
+    expect(consumePendingMenuCommands).toHaveBeenCalledTimes(1);
+    expect(showQuickChatWindow).toHaveBeenCalledTimes(1);
+    expect(showQuickChatWindow).toHaveBeenCalledWith({ threadId: "thread-21", newThread: true });
+  });
+
+  test("hides popup windows while popup keep-alive is active", () => {
+    windowsBySenderId.clear();
+    const { handlers } = createHandlers({ shouldKeepPopupWindowsAlive: () => true });
+    const sender = new FakeWebContents(31, "file:///renderer/index.html?window=utility");
+    const win = createFakeWindow();
+    windowsBySenderId.set(sender.id, win);
+
+    handlers.get(DESKTOP_IPC_CHANNELS.windowClose)?.({ sender });
+
+    expect(win.hideCalls).toBe(1);
+    expect(win.closeCalls).toBe(0);
+  });
+
+  test("closes popup windows when popup keep-alive is inactive", () => {
+    windowsBySenderId.clear();
+    const { handlers } = createHandlers({ shouldKeepPopupWindowsAlive: () => false });
+    const sender = new FakeWebContents(33, "file:///renderer/index.html?window=quick-chat");
+    const win = createFakeWindow();
+    windowsBySenderId.set(sender.id, win);
+
+    handlers.get(DESKTOP_IPC_CHANNELS.windowClose)?.({ sender });
+
+    expect(win.closeCalls).toBe(1);
+    expect(win.hideCalls).toBe(0);
+  });
+
+  test("keeps normal close behavior for the main window", () => {
+    windowsBySenderId.clear();
+    const { handlers } = createHandlers();
+    const sender = new FakeWebContents(32, "file:///renderer/index.html");
+    const win = createFakeWindow();
+    windowsBySenderId.set(sender.id, win);
+
+    handlers.get(DESKTOP_IPC_CHANNELS.windowClose)?.({ sender });
+
+    expect(win.closeCalls).toBe(1);
+    expect(win.hideCalls).toBe(0);
   });
 });

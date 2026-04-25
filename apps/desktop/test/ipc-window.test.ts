@@ -103,7 +103,7 @@ function createFakeWindow(x = 40, y = 50): FakeWindow {
   };
 }
 
-function createHandlers() {
+function createHandlers(options: { shouldKeepPopupWindowsAlive?: () => boolean } = {}) {
   const handlers = new Map<string, (event: { sender: FakeWebContents }, args?: unknown) => unknown>();
   const showMainWindow = mock(async () => {});
   const consumePendingMenuCommands = mock(() => ["openSettings"] as const);
@@ -113,6 +113,7 @@ function createHandlers() {
       showMainWindow,
       consumePendingMenuCommands,
       showQuickChatWindow,
+      shouldKeepPopupWindowsAlive: options.shouldKeepPopupWindowsAlive,
     } as never,
     workspaceRoots: {} as never,
     handleDesktopInvoke(channel, handler) {
@@ -190,9 +191,9 @@ describe("window IPC", () => {
     expect(showQuickChatWindow).toHaveBeenCalledWith({ threadId: "thread-21", newThread: true });
   });
 
-  test("hides popup windows instead of closing them", () => {
+  test("hides popup windows while popup keep-alive is active", () => {
     windowsBySenderId.clear();
-    const { handlers } = createHandlers();
+    const { handlers } = createHandlers({ shouldKeepPopupWindowsAlive: () => true });
     const sender = new FakeWebContents(31, "file:///renderer/index.html?window=utility");
     const win = createFakeWindow();
     windowsBySenderId.set(sender.id, win);
@@ -201,6 +202,19 @@ describe("window IPC", () => {
 
     expect(win.hideCalls).toBe(1);
     expect(win.closeCalls).toBe(0);
+  });
+
+  test("closes popup windows when popup keep-alive is inactive", () => {
+    windowsBySenderId.clear();
+    const { handlers } = createHandlers({ shouldKeepPopupWindowsAlive: () => false });
+    const sender = new FakeWebContents(33, "file:///renderer/index.html?window=quick-chat");
+    const win = createFakeWindow();
+    windowsBySenderId.set(sender.id, win);
+
+    handlers.get(DESKTOP_IPC_CHANNELS.windowClose)?.({ sender });
+
+    expect(win.closeCalls).toBe(1);
+    expect(win.hideCalls).toBe(0);
   });
 
   test("keeps normal close behavior for the main window", () => {

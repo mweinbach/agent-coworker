@@ -582,6 +582,7 @@ if (!gotSingleInstanceLock) {
       showMainWindow: () => quickChatController?.showMainWindow(),
       consumePendingMenuCommands: () => menuCommandDispatcher.drainPending(),
       showQuickChatWindow: (opts) => quickChatController?.showQuickChatWindow(opts),
+      shouldKeepPopupWindowsAlive: () => quickChatController?.shouldKeepPopupWindowsAlive() === true,
       applyPersistedState: (state) => {
         quickChatController?.applyPersistedState(state);
       },

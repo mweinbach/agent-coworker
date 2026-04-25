@@ -16,6 +16,7 @@ export type DesktopIpcDeps = {
   showMainWindow: () => Promise<void> | void;
   consumePendingMenuCommands: () => DesktopMenuCommand[];
   showQuickChatWindow: (opts?: ShowQuickChatWindowInput) => Promise<void> | void;
+  shouldKeepPopupWindowsAlive?: () => boolean;
   applyPersistedState?: (state: PersistedState) => void;
 };
 

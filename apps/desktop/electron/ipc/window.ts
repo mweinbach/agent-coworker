@@ -102,7 +102,7 @@ export function registerWindowIpc(context: DesktopIpcModuleContext): void {
       return;
     }
 
-    if (resolveDesktopWindowMode(event) !== "main") {
+    if (resolveDesktopWindowMode(event) !== "main" && deps.shouldKeepPopupWindowsAlive?.() === true) {
       win.hide();
       return;
     }

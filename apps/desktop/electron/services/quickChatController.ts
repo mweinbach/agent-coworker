@@ -157,6 +157,10 @@ export class QuickChatController {
     return this.tray !== null;
   }
 
+  shouldKeepPopupWindowsAlive(): boolean {
+    return (this.platform === "darwin" || this.platform === "win32") && this.menuBarEnabled && this.tray !== null;
+  }
+
   private syncShortcutRegistration(): void {
     this.unregisterCurrentShortcut();
     if (!this.menuBarEnabled || !this.quickChatShortcutEnabled) {
@@ -358,10 +362,6 @@ export class QuickChatController {
     if (win && !win.isDestroyed()) {
       win.destroy();
     }
-  }
-
-  private shouldKeepPopupWindowsAlive(): boolean {
-    return (this.platform === "darwin" || this.platform === "win32") && this.menuBarEnabled && this.tray !== null;
   }
 
   private positionPopupWindow(win: BrowserWindow, anchorBounds?: Rectangle): void {

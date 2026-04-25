@@ -109,16 +109,11 @@ function mergeMainWindowThreads(
 ): PersistedState["threads"] {
   const currentThreads = Array.isArray(current) ? current : [];
   const incomingThreads = Array.isArray(incoming) ? incoming : [];
-  const currentById = new Map(currentThreads.map((thread) => [thread.id, thread]));
   const incomingIds = new Set(incomingThreads.map((thread) => thread.id));
   const merged = new Map<string, PersistedState["threads"][number]>();
 
   for (const thread of incomingThreads) {
-    const existing = currentById.get(thread.id);
-    const next = existing
-      ? mergePopupThreads([existing], [thread], new Set())[0] ?? thread
-      : thread;
-    merged.set(thread.id, next);
+    merged.set(thread.id, thread);
   }
 
   for (const thread of currentThreads) {
@@ -176,8 +171,13 @@ export function registerWorkspaceIpc(context: DesktopIpcModuleContext): void {
     await deps.serverManager.stopWorkspaceServer(input.workspaceId);
   });
 
-  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.loadState, async () => {
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.loadState, async (_event) => {
     const state = await deps.persistence.loadState();
+    if (resolveDesktopWindowMode(_event) === "main") {
+      for (const thread of state.threads) {
+        popupThreadIds.delete(thread.id);
+      }
+    }
     await workspaceRoots.refreshApprovedWorkspaceRootsFromState(state);
     deps.applyPersistedState?.(state);
     return state;

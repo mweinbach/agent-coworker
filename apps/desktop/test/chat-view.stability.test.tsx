@@ -210,6 +210,7 @@ describe("desktop chat view stability", () => {
       selectedWorkspaceId: "ws-1",
       selectedThreadId: "thread-1",
       desktopFeatureFlags: {
+        menuBar: true,
         remoteAccess: true,
         workspacePicker: true,
         workspaceLifecycle: true,

@@ -11,8 +11,11 @@ import {
   onSystemAppearanceChanged,
   onUpdateStateChanged,
   setWindowAppearance,
+  showQuickChatWindow,
   showNotification,
 } from "./lib/desktopCommands";
+import { canPopOutQuickChatThread } from "./lib/quickChatPopout";
+import { getDesktopWindowMode } from "./lib/windowMode";
 import { ASK_SKIP_TOKEN } from "./lib/wsProtocol";
 import { ContextSidebar } from "./ui/ContextSidebar";
 import { FilePreviewModal } from "./ui/FilePreviewModal";
@@ -23,6 +26,8 @@ import { SettingsContent } from "./ui/layout/SettingsContent";
 import { SidebarResizer } from "./ui/layout/SidebarResizer";
 import { DesktopOnboarding } from "./ui/onboarding/DesktopOnboarding";
 import { PromptModal } from "./ui/PromptModal";
+import { MenuBarUtilityShell } from "./ui/menuBar/MenuBarUtilityShell";
+import { QuickChatShell } from "./ui/quickChat/QuickChatShell";
 import { Sidebar } from "./ui/Sidebar";
 
 const LeftSidebarPane = memo(function LeftSidebarPane({ collapsed }: { collapsed: boolean }) {
@@ -164,6 +169,7 @@ const ChatShell = memo(function ChatShell({
     runtime?.connected === true &&
     Boolean(runtime?.sessionId) &&
     activeThread?.status === "active";
+  const quickChatPopOutThreadId = activeThread && canPopOutQuickChatThread(activeThread) ? activeThread.id : null;
   useEffect(() => {
     const sidebarStateChanged =
       previousSidebarStateRef.current.sidebarCollapsed !== sidebarCollapsed ||
@@ -201,6 +207,7 @@ const ChatShell = memo(function ChatShell({
         sidebarWidth={sidebarWidth}
         contextSidebarCollapsed={contextSidebarCollapsed}
         onToggleContextSidebar={toggleContextSidebar}
+        onPopOutQuickChat={quickChatPopOutThreadId ? () => void showQuickChatWindow({ threadId: quickChatPopOutThreadId }) : undefined}
         title={topBarTitle}
         subtitle={topBarSubtitle}
         managementMode={view === "skills" ? "plugins" : "thread"}
@@ -244,6 +251,7 @@ const ChatShell = memo(function ChatShell({
 });
 
 export default function App() {
+  const windowMode = getDesktopWindowMode();
   const ready = useAppStore((s) => s.ready);
   const bootstrapPending = useAppStore((s) => s.bootstrapPending);
   const startupError = useAppStore((s) => s.startupError);
@@ -252,6 +260,13 @@ export default function App() {
   const notifications = useAppStore((s) => s.notifications);
   const setUpdateState = useAppStore((s) => s.setUpdateState);
   const seenNotificationIds = useRef(new Set<string>());
+
+  useEffect(() => {
+    document.documentElement.dataset.windowMode = windowMode;
+    return () => {
+      delete document.documentElement.dataset.windowMode;
+    };
+  }, [windowMode]);
 
   useEffect(() => {
     if (ready && !bootstrapPending) return;
@@ -412,7 +427,11 @@ export default function App() {
 
   return (
     <>
-      {view === "settings" ? (
+      {windowMode === "quick-chat" ? (
+        <QuickChatShell init={init} ready={ready} startupError={startupError} />
+      ) : windowMode === "utility" ? (
+        <MenuBarUtilityShell init={init} ready={ready} startupError={startupError} />
+      ) : view === "settings" ? (
         <div className="app-shell app-shell--settings flex h-full min-h-0 flex-col text-foreground">
           <div className="app-window-drag-strip" aria-hidden="true" />
           <div className="min-h-0 flex-1">
@@ -424,7 +443,7 @@ export default function App() {
       )}
       <PromptModal />
       <FilePreviewModal />
-      <DesktopOnboarding />
+      {windowMode === "main" ? <DesktopOnboarding /> : null}
     </>
   );
 }

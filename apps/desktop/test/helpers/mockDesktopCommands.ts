@@ -45,11 +45,13 @@ export function createDesktopCommandsMock(
   overrides: Partial<DesktopCommandsModule> = {},
 ): DesktopCommandsModule {
   const resolveFlags = (featureOverrides?: {
+    menuBar?: boolean;
     remoteAccess?: boolean;
     workspacePicker?: boolean;
     workspaceLifecycle?: boolean;
     a2ui?: boolean;
   }) => ({
+    menuBar: typeof featureOverrides?.menuBar === "boolean" ? featureOverrides.menuBar : true,
     remoteAccess:
       typeof featureOverrides?.remoteAccess === "boolean" ? featureOverrides.remoteAccess : true,
     workspacePicker:
@@ -89,6 +91,8 @@ export function createDesktopCommandsMock(
     windowDragMove: async () => {},
     windowDragEnd: async () => {},
     getPlatform: async () => "linux",
+    showMainWindow: async () => {},
+    showQuickChatWindow: async (_opts?: { threadId?: string; newThread?: boolean }) => {},
     listDirectory: async () => [],
     readFile: async () => "",
     readFileForPreview: async () => ({ bytes: new Uint8Array(), byteLength: 0, truncated: false }),

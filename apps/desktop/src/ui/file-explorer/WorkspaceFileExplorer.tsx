@@ -1023,8 +1023,10 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
                       onPress={() => toggleDirectory(entry.path)}
                     >
                       <ChevronRightIcon
+                        strokeWidth={1.5}
                         className={cn(
                           "h-3.25 w-3.25 transition-transform duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none",
+                          isSelected ? "text-link/80" : "text-inherit",
                           row.expanded && "rotate-90",
                         )}
                       />
@@ -1036,21 +1038,29 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
                   {isDirectory ? (
                     row.expanded ? (
                       <FolderOpenIcon
+                        strokeWidth={1.5}
                         className={cn(
                           "h-3.25 w-3.25 shrink-0 transition-opacity duration-150 ease-out motion-reduce:transition-none",
-                          isSelected ? "text-accent-foreground" : "text-link/85",
+                          isSelected ? "text-link/80" : "text-link/85",
                         )}
                       />
                     ) : (
                       <FolderIcon
+                        strokeWidth={1.5}
                         className={cn(
                           "h-3.25 w-3.25 shrink-0 transition-opacity duration-150 ease-out motion-reduce:transition-none",
-                          isSelected ? "text-accent-foreground" : "text-link/85",
+                          isSelected ? "text-link/80" : "text-link/85",
                         )}
                       />
                     )
                   ) : (
-                    <FileIcon className="h-3.25 w-3.25 shrink-0 transition-opacity duration-150 ease-out motion-reduce:transition-none" />
+                    <FileIcon
+                      strokeWidth={1.5}
+                      className={cn(
+                        "h-3.25 w-3.25 shrink-0 transition-opacity duration-150 ease-out motion-reduce:transition-none",
+                        isSelected ? "text-link/80" : "text-inherit",
+                      )}
+                    />
                   )}
 
                   <div className="min-w-0 flex-1">
@@ -1079,7 +1089,10 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
                     data-file-explorer-control="true"
                     onPress={() => void openEntryMenu(entry)}
                   >
-                    <MoreVerticalIcon className="h-3.25 w-3.25" />
+                    <MoreVerticalIcon
+                      strokeWidth={1.5}
+                      className={cn("h-3.25 w-3.25", isSelected ? "text-link/80" : "text-inherit")}
+                    />
                   </Button>
                 </div>
               );

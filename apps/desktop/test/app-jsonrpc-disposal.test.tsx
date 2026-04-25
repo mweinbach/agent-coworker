@@ -346,4 +346,39 @@ describe("App JSON-RPC shutdown disposal", () => {
       harness.restore();
     }
   });
+
+  test("does not render onboarding overlay in popup window modes", async () => {
+    const harness = setupAppJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      harness.dom.reconfigure({ url: "http://localhost/?window=quick-chat" });
+      seedWorkspaceState();
+      useAppStore.setState({
+        onboardingVisible: true,
+        onboardingStep: "welcome",
+      });
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+      root = createRoot(container);
+
+      await act(async () => {
+        root?.render(createElement(StrictMode, null, createElement(App)));
+        await flushAsyncWork();
+      });
+
+      expect(
+        harness.dom.window.document.querySelector('[aria-label="Onboarding"]'),
+      ).toBeNull();
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
 });

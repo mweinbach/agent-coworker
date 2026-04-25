@@ -1,5 +1,6 @@
 appId: com.cowork.desktop
 productName: Cowork
+electronVersion: 41.2.0
 asar: true
 compression: maximum
 directories:
@@ -12,6 +13,10 @@ extraResources:
     to: dist/prompts
   - from: ../../dist/config
     to: dist/config
+  - from: build/icon.png
+    to: tray/icon.png
+  - from: build/icon.ico
+    to: tray/icon.ico
   - from: resources/binaries
     to: binaries
 afterSign: scripts/notarize.cjs

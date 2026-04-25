@@ -69,6 +69,8 @@ mock.module("../src/lib/desktopCommands", () =>
     checkForUpdates: async () => {},
     quitAndInstallUpdate: async () => {},
     getDesktopFeatureFlags: (featureOverrides) => ({
+      menuBar:
+        typeof featureOverrides?.menuBar === "boolean" ? featureOverrides.menuBar : true,
       remoteAccess:
         typeof featureOverrides?.remoteAccess === "boolean"
           ? featureOverrides.remoteAccess
@@ -148,6 +150,7 @@ describe("settings nav (store)", () => {
       settingsPage: "providers",
       updateState: MOCK_UPDATE_STATE,
       desktopFeatureFlags: {
+        menuBar: true,
         remoteAccess: true,
         workspacePicker: true,
         workspaceLifecycle: true,
@@ -201,6 +204,11 @@ describe("settings nav (store)", () => {
     expect(useAppStore.getState().settingsPage).toBe("mcp");
   });
 
+  test("setSettingsPage accepts desktop page", () => {
+    useAppStore.getState().setSettingsPage("desktop");
+    expect(useAppStore.getState().settingsPage).toBe("desktop");
+  });
+
   test("setSettingsPage accepts backup page", () => {
     useAppStore.getState().setSettingsPage("backup");
     expect(useAppStore.getState().settingsPage).toBe("backup");
@@ -224,6 +232,12 @@ describe("settings nav (store)", () => {
     expect(useAppStore.getState().settingsPage).toBe("updates");
   });
 
+  test("openSettings accepts desktop page", () => {
+    useAppStore.getState().openSettings("desktop");
+    expect(useAppStore.getState().view).toBe("settings");
+    expect(useAppStore.getState().settingsPage).toBe("desktop");
+  });
+
   test("openSettings accepts remote access page", () => {
     useAppStore.getState().openSettings("remoteAccess");
     expect(useAppStore.getState().view).toBe("settings");
@@ -234,6 +248,7 @@ describe("settings nav (store)", () => {
     remoteAccessEnabled = false;
     useAppStore.setState({
       desktopFeatureFlags: {
+        menuBar: true,
         remoteAccess: false,
         workspacePicker: true,
         workspaceLifecycle: true,
@@ -261,6 +276,7 @@ describe("settings nav (store)", () => {
     useAppStore.setState({
       settingsPage: "remoteAccess",
       desktopFeatureFlags: {
+        menuBar: true,
         remoteAccess: true,
         workspacePicker: true,
         workspaceLifecycle: true,
@@ -284,6 +300,7 @@ describe("settings nav (store)", () => {
         packaged: true,
       },
       desktopFeatureFlags: {
+        menuBar: true,
         remoteAccess: false,
         workspacePicker: true,
         workspaceLifecycle: true,
@@ -307,6 +324,7 @@ describe("settings nav (store)", () => {
         packaged: true,
       },
       desktopFeatureFlags: {
+        menuBar: true,
         remoteAccess: false,
         workspacePicker: true,
         workspaceLifecycle: true,
@@ -330,6 +348,7 @@ describe("settings nav (store)", () => {
         packaged: false,
       },
       desktopFeatureFlags: {
+        menuBar: true,
         remoteAccess: false,
         workspacePicker: true,
         workspaceLifecycle: true,
@@ -347,6 +366,38 @@ describe("settings nav (store)", () => {
   test("setDeveloperMode updates developer mode state", () => {
     useAppStore.getState().setDeveloperMode(true);
     expect(useAppStore.getState().developerMode).toBe(true);
+  });
+
+  test("setQuickChatShortcutEnabled updates persisted desktop settings", () => {
+    useAppStore.setState({
+      desktopSettings: {
+        quickChat: {
+          shortcutEnabled: false,
+          shortcutAccelerator: "CommandOrControl+Shift+Space",
+        },
+      },
+    });
+
+    useAppStore.getState().setQuickChatShortcutEnabled(true);
+
+    expect(useAppStore.getState().desktopSettings.quickChat.shortcutEnabled).toBe(true);
+    expect(savedStates.at(-1)?.desktopSettings?.quickChat?.shortcutEnabled).toBe(true);
+  });
+
+  test("setQuickChatShortcutAccelerator normalizes and persists the shortcut", () => {
+    useAppStore.setState({
+      desktopSettings: {
+        quickChat: {
+          shortcutEnabled: true,
+          shortcutAccelerator: "CommandOrControl+Shift+Space",
+        },
+      },
+    });
+
+    useAppStore.getState().setQuickChatShortcutAccelerator(" alt + space ");
+
+    expect(useAppStore.getState().desktopSettings.quickChat.shortcutAccelerator).toBe("Alt+Space");
+    expect(savedStates.at(-1)?.desktopSettings?.quickChat?.shortcutAccelerator).toBe("Alt+Space");
   });
 
   test("openSkills shows guidance when no workspace is available", async () => {

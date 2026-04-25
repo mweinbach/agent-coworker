@@ -322,15 +322,13 @@ const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
                       <Button
                         key={thread.id}
                         className={cn(
-                          "sidebar-thread-item sidebar-lift flex w-full items-center gap-2.5 rounded-lg border border-transparent px-2.5 py-1.5 text-left",
+                          "sidebar-thread-item sidebar-lift flex min-w-0 w-full items-center gap-2.5 rounded-lg border border-transparent px-2.5 py-1.5 text-left",
                           isActive
                             ? "border-border/45 bg-foreground/[0.05] text-foreground"
                             : "text-foreground/82 hover:border-border/35 hover:bg-foreground/[0.035] hover:text-foreground",
                         )}
                         onClick={() => selectThread(thread.id)}
-                        onContextMenu={(event) =>
-                          onThreadContextMenu(event, thread.id, displayTitle)
-                        }
+                        onContextMenu={(event) => onThreadContextMenu(event, thread.id, displayTitle)}
                         onDoubleClick={() => onStartEditing(thread.id, displayTitle)}
                         type="button"
                         variant="ghost"
@@ -343,15 +341,10 @@ const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
 
                         <span className="flex shrink-0 items-center gap-2 pl-2">
                           {busy ? (
-                            <span
-                              className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse"
-                              aria-hidden="true"
-                            />
+                            <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" aria-hidden="true" />
                           ) : null}
                           {ageLabel ? (
-                            <span className="text-[11px] font-medium text-muted-foreground">
-                              {ageLabel}
-                            </span>
+                            <span className="text-[11px] font-medium text-muted-foreground">{ageLabel}</span>
                           ) : null}
                         </span>
                       </Button>

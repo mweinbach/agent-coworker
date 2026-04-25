@@ -6,6 +6,7 @@ import { normalizePersistedProviderUiState } from "../providerUiState";
 import type { AppStoreState } from "../store.helpers";
 import type { CachedDesktopUiState, PersistedState } from "../types";
 import { RUNTIME } from "./runtimeState";
+import { getDesktopWindowMode } from "../../lib/windowMode";
 
 const PERSIST_DEBOUNCE_MS = 300;
 const DESKTOP_CACHE_DEBOUNCE_MS = 120;
@@ -47,6 +48,7 @@ function buildPersistedState(state: AppStoreState): PersistedState {
     developerMode: state.developerMode,
     showHiddenFiles: state.showHiddenFiles,
     perWorkspaceSettings: state.perWorkspaceSettings,
+    desktopSettings: state.desktopSettings,
     desktopFeatureFlagOverrides: state.desktopFeatureFlagOverrides,
     ...(providerState ? { providerState } : {}),
     providerUiState,
@@ -82,6 +84,9 @@ function buildCachedDesktopUiState(state: AppStoreState): CachedDesktopUiState {
 
 function syncDesktopStateCacheState(state: AppStoreState): PersistedState {
   const persistedState = buildPersistedState(state);
+  if (getDesktopWindowMode() !== "main") {
+    return persistedState;
+  }
   saveDesktopStateCache({
     version: 2,
     persistedState,

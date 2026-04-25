@@ -12,6 +12,7 @@ import { EventEmitter as NodeEventEmitter } from "node:events";
 import path from "node:path";
 
 const rnMobilePath = path.resolve("apps/mobile/node_modules/react-native");
+const rnRootPath = path.resolve("node_modules/react-native");
 const emcMobilePath = path.resolve("apps/mobile/node_modules/expo-modules-core");
 
 const expoModulesCoreMockFactory = () => ({
@@ -95,6 +96,7 @@ const reactNativeMockFactory = () => {
 // Mock the workspace-local react-native (has Flow syntax Bun can't parse)
 mock.module("react-native", reactNativeMockFactory);
 mock.module(rnMobilePath, reactNativeMockFactory);
+mock.module(rnRootPath, reactNativeMockFactory);
 // Mock the root-hoisted expo-modules-core (resolved from test/)
 mock.module("expo-modules-core", expoModulesCoreMockFactory);
 // Mock the workspace-local expo-modules-core (resolved from apps/mobile/modules/...)

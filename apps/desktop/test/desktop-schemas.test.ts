@@ -6,6 +6,7 @@ import {
   mobileRelayBridgeStateSchema,
   mobileRelayStartInputSchema,
   persistedStateInputSchema,
+  showQuickChatWindowInputSchema,
   updaterStateSchema,
 } from "../src/lib/desktopSchemas";
 
@@ -34,6 +35,7 @@ describe("desktop persisted-state schema defaults", () => {
     expect(parsed.workspaces[0]?.yolo).toBe(false);
     expect(parsed.developerMode).toBe(false);
     expect(parsed.showHiddenFiles).toBe(false);
+    expect(parsed.desktopSettings).toBeUndefined();
   });
 
   test("normalizes legacy workspace protocol values to jsonrpc", () => {
@@ -81,6 +83,12 @@ describe("desktop persisted-state schema defaults", () => {
       threads: [],
       developerMode: true,
       showHiddenFiles: true,
+      desktopSettings: {
+        quickChat: {
+          shortcutEnabled: true,
+          shortcutAccelerator: "Alt+Space",
+        },
+      },
     });
 
     expect(parsed.workspaces[0]?.defaultEnableMcp).toBe(false);
@@ -96,6 +104,8 @@ describe("desktop persisted-state schema defaults", () => {
     expect(parsed.workspaces[0]?.yolo).toBe(true);
     expect(parsed.developerMode).toBe(true);
     expect(parsed.showHiddenFiles).toBe(true);
+    expect(parsed.desktopSettings?.quickChat?.shortcutEnabled).toBe(true);
+    expect(parsed.desktopSettings?.quickChat?.shortcutAccelerator).toBe("Alt+Space");
   });
 
   test("accepts updater state payloads", () => {
@@ -130,6 +140,12 @@ describe("desktop persisted-state schema defaults", () => {
 
   test("accepts openUpdates desktop menu command", () => {
     expect(desktopMenuCommandSchema.parse("openUpdates")).toBe("openUpdates");
+  });
+
+  test("accepts quick chat new-thread requests", () => {
+    expect(showQuickChatWindowInputSchema.parse({ newThread: true })).toEqual({
+      newThread: true,
+    });
   });
 
   test("accepts mobile relay start input", () => {

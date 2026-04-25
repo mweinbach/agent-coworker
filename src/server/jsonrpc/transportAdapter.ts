@@ -1,9 +1,9 @@
-import type { ServerEvent } from "../protocol";
+import type { SessionEvent } from "../protocol";
 import type { PersistedThreadJournalEvent } from "../sessionDb";
 import type { SessionBinding, StartServerSocket } from "../startServer/types";
 
 import { dispatchJsonRpcMessage } from "./dispatchJsonRpcMessage";
-import { createJsonRpcEventProjector } from "./eventProjector";
+import { createJsonRpcNotificationProjector } from "./notificationProjector";
 import {
   buildJsonRpcErrorResponse,
   JSONRPC_ERROR_CODES,
@@ -17,7 +17,7 @@ export type JsonRpcThreadSubscriptionOptions = {
   initialAgentText?: string | null;
   drainDisconnectedReplayBuffer?: boolean;
   pendingPromptEvents?: ReadonlyArray<
-    Extract<ServerEvent, { type: "ask" }> | Extract<ServerEvent, { type: "approval" }>
+    Extract<SessionEvent, { type: "ask" }> | Extract<SessionEvent, { type: "approval" }>
   >;
   skipPendingPromptRequestIds?: ReadonlySet<string>;
 };
@@ -29,7 +29,7 @@ type CreateJsonRpcTransportAdapterDeps = {
   addBindingSink: (
     binding: SessionBinding,
     sinkId: string,
-    sink: (event: ServerEvent) => void,
+    sink: (event: SessionEvent) => void,
   ) => void;
   removeBindingSink: (binding: SessionBinding, sinkId: string) => void;
   countLiveConnectionSinks: (binding: SessionBinding) => number;
@@ -146,7 +146,7 @@ export function createJsonRpcTransportAdapter({
       opts?.drainDisconnectedReplayBuffer ||
       (!binding.socket && countLiveConnectionSinks(binding) === 0);
     const sinkId = `jsonrpc:${connectionId}:${threadId}`;
-    const projector = createJsonRpcEventProjector({
+    const projector = createJsonRpcNotificationProjector({
       threadId,
       send: (message) => sendJsonRpc(ws, message),
       shouldSendNotification: (method) => shouldSendNotification(ws, method),

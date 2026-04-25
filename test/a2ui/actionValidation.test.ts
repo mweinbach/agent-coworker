@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { formatA2uiActionDeliveryText } from "../../src/server/jsonrpc/schema.a2ui";
-import type { ServerEvent } from "../../src/server/protocol";
+import type { SessionEvent } from "../../src/server/protocol";
 import { A2uiSurfaceManager } from "../../src/server/session/A2uiSurfaceManager";
 import type { A2uiEnvelope } from "../../src/shared/a2ui";
 import { A2UI_BASIC_CATALOG_ID } from "../../src/shared/a2ui/component";
 
 function seededManager() {
-  const events: ServerEvent[] = [];
+  const events: SessionEvent[] = [];
   const manager = new A2uiSurfaceManager({ sessionId: "sess", emit: (e) => events.push(e) });
 
   const envelope: A2uiEnvelope = {

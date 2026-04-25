@@ -7,8 +7,8 @@ import {
   type ServerErrorCode,
   type ServerErrorSource,
 } from "../../../../src/types";
-import type { ServerEvent } from "../lib/wsProtocol";
-import { safeParseServerEvent } from "../lib/wsProtocol";
+import type { SessionEvent } from "../lib/wsProtocol";
+import { safeParseSessionEvent } from "../lib/wsProtocol";
 import {
   clearModelStreamReplayRuntime,
   createModelStreamReplayRuntime,
@@ -52,8 +52,8 @@ export type ThreadModelStreamFeedOps = {
 
 export type TranscriptUsageState = Pick<ThreadRuntime, "sessionUsage" | "lastTurnUsage">;
 
-type DeveloperDiagnosticServerEvent = Extract<
-  ServerEvent,
+type DeveloperDiagnosticSessionEvent = Extract<
+  SessionEvent,
   {
     type: "observability_status" | "session_backup_state" | "harness_context";
   }
@@ -143,8 +143,8 @@ function formatHarnessContextDiagnosticLine(evt: { context?: unknown }): string 
     : "Harness context updated";
 }
 
-export function developerDiagnosticSystemLineFromServerEvent(
-  evt: DeveloperDiagnosticServerEvent,
+export function developerDiagnosticSystemLineFromSessionEvent(
+  evt: DeveloperDiagnosticSessionEvent,
 ): string {
   switch (evt.type) {
     case "observability_status":
@@ -1101,7 +1101,7 @@ export function extractAgentStateFromTranscript(events: TranscriptEvent[]): Thre
   let agents: ThreadAgentSummary[] = [];
 
   for (const evt of events) {
-    const parsed = safeParseServerEvent(evt.payload);
+    const parsed = safeParseSessionEvent(evt.payload);
     if (!parsed) continue;
 
     if (parsed.type === "agent_spawned" || parsed.type === "agent_status") {

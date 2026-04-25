@@ -1,4 +1,4 @@
-import type { ProviderName, ServerEvent } from "../../lib/wsProtocol";
+import type { ProviderName, SessionEvent } from "../../lib/wsProtocol";
 import { normalizeWorkspaceProviderOptions } from "../openaiCompatibleProviderOptions";
 import type { StoreGet, StoreSet } from "../store.helpers";
 import type { Notification, SessionSnapshot, ThreadRecord } from "../types";
@@ -14,9 +14,9 @@ import {
 } from "./jsonRpcSocket";
 import { RUNTIME } from "./runtimeState";
 
-type ProviderStatusEvent = Extract<ServerEvent, { type: "provider_status" }>;
+type ProviderStatusEvent = Extract<SessionEvent, { type: "provider_status" }>;
 type ProviderStatus = ProviderStatusEvent["providers"][number];
-type ProviderAuthChallengeEvent = Extract<ServerEvent, { type: "provider_auth_challenge" }>;
+type ProviderAuthChallengeEvent = Extract<SessionEvent, { type: "provider_auth_challenge" }>;
 
 function sanitizeProviderAuthChallenge(
   evt: ProviderAuthChallengeEvent,
@@ -76,7 +76,7 @@ export function createControlSocketHelpers(
     allThreads: ThreadRecord[],
     threadRuntimeById: ReturnType<StoreGet>["threadRuntimeById"],
     workspaceId: string,
-    sessions: Extract<ServerEvent, { type: "sessions" }>["sessions"],
+    sessions: Extract<SessionEvent, { type: "sessions" }>["sessions"],
   ): ThreadRecord[] {
     const workspaceThreads = allThreads.filter((thread) => thread.workspaceId === workspaceId);
     const serverBackedBySessionId = new Map<string, ThreadRecord>();
@@ -161,7 +161,7 @@ export function createControlSocketHelpers(
     allThreads: ThreadRecord[],
     threadRuntimeById: ReturnType<StoreGet>["threadRuntimeById"],
     workspaceId: string,
-    sessions: Extract<ServerEvent, { type: "sessions" }>["sessions"],
+    sessions: Extract<SessionEvent, { type: "sessions" }>["sessions"],
   ): string[] {
     const liveSessionIds = new Set(sessions.map((session) => session.sessionId));
     const removedSessionIds: string[] = [];
@@ -438,7 +438,7 @@ export function createControlSocketHelpers(
       if (!currentGet || !currentSet) {
         return;
       }
-      const evt = message.params as ServerEvent | undefined;
+      const evt = message.params as SessionEvent | undefined;
       if (!evt || typeof evt !== "object" || typeof evt.type !== "string") {
         return;
       }
@@ -507,7 +507,7 @@ export function createControlSocketHelpers(
     get: StoreGet,
     set: StoreSet,
     workspaceId: string,
-  ): Promise<Extract<ServerEvent, { type: "sessions" }>["sessions"] | null> {
+  ): Promise<Extract<SessionEvent, { type: "sessions" }>["sessions"] | null> {
     if (isWorkspaceDisposed(workspaceId)) {
       return null;
     }
@@ -738,7 +738,7 @@ export function createControlSocketHelpers(
     get: StoreGet,
     set: StoreSet,
     workspaceId: string,
-    evt: ServerEvent,
+    evt: SessionEvent,
   ) {
     if (isWorkspaceDisposed(workspaceId)) {
       return;
@@ -1450,10 +1450,10 @@ export function createControlSocketHelpers(
     }
     try {
       const result = await requestJsonRpc(get, set, workspaceId, method, params);
-      const events = Array.isArray((result as { events?: ServerEvent[] }).events)
-        ? (result as { events: ServerEvent[] }).events
+      const events = Array.isArray((result as { events?: SessionEvent[] }).events)
+        ? (result as { events: SessionEvent[] }).events
         : [];
-      const event = (result as { event?: ServerEvent }).event;
+      const event = (result as { event?: SessionEvent }).event;
       const normalizedEvents = events.length > 0 ? events : event ? [event] : [];
       if (isWorkspaceDisposed(workspaceId)) {
         setErrorDetail("Workspace control session was disposed.");
@@ -1467,8 +1467,8 @@ export function createControlSocketHelpers(
         applyJsonRpcControlEvent(get, set, workspaceId, nextEvent);
         if (nextEvent.type === "error") {
           ok = false;
-          if (typeof (nextEvent as Extract<ServerEvent, { type: "error" }>).message === "string") {
-            setErrorDetail((nextEvent as Extract<ServerEvent, { type: "error" }>).message);
+          if (typeof (nextEvent as Extract<SessionEvent, { type: "error" }>).message === "string") {
+            setErrorDetail((nextEvent as Extract<SessionEvent, { type: "error" }>).message);
           }
         }
       }

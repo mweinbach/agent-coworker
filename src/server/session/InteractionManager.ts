@@ -2,7 +2,7 @@ import path from "node:path";
 
 import type { AgentConfig, ServerErrorCode, ServerErrorSource } from "../../types";
 import { classifyCommandDetailed } from "../../utils/approval";
-import { ASK_SKIP_TOKEN, type ServerEvent } from "../protocol";
+import { ASK_SKIP_TOKEN, type SessionEvent } from "../protocol";
 
 function makeId(): string {
   return crypto.randomUUID();
@@ -10,22 +10,22 @@ function makeId(): string {
 
 type PromptBucket<T> = Map<string, PromiseWithResolvers<T>>;
 export type PendingPromptReplayEvent =
-  | Extract<ServerEvent, { type: "ask" }>
-  | Extract<ServerEvent, { type: "approval" }>;
+  | Extract<SessionEvent, { type: "ask" }>
+  | Extract<SessionEvent, { type: "approval" }>;
 
 export class InteractionManager {
   private readonly pendingAsk = new Map<string, PromiseWithResolvers<string>>();
   private readonly pendingApproval = new Map<string, PromiseWithResolvers<boolean>>();
-  private readonly pendingAskEvents = new Map<string, Extract<ServerEvent, { type: "ask" }>>();
+  private readonly pendingAskEvents = new Map<string, Extract<SessionEvent, { type: "ask" }>>();
   private readonly pendingApprovalEvents = new Map<
     string,
-    Extract<ServerEvent, { type: "approval" }>
+    Extract<SessionEvent, { type: "approval" }>
   >();
 
   constructor(
     private readonly opts: {
       sessionId: string;
-      emit: (evt: ServerEvent) => void;
+      emit: (evt: SessionEvent) => void;
       emitError: (code: ServerErrorCode, source: ServerErrorSource, message: string) => void;
       log: (line: string) => void;
       queuePersistSessionSnapshot: (reason: string) => void;
@@ -43,13 +43,13 @@ export class InteractionManager {
     return this.pendingApproval.size > 0;
   }
 
-  get pendingAskEventsForReplay(): ReadonlyMap<string, Extract<ServerEvent, { type: "ask" }>> {
+  get pendingAskEventsForReplay(): ReadonlyMap<string, Extract<SessionEvent, { type: "ask" }>> {
     return this.pendingAskEvents;
   }
 
   get pendingApprovalEventsForReplay(): ReadonlyMap<
     string,
-    Extract<ServerEvent, { type: "approval" }>
+    Extract<SessionEvent, { type: "approval" }>
   > {
     return this.pendingApprovalEvents;
   }
@@ -124,7 +124,7 @@ export class InteractionManager {
     const pending = Promise.withResolvers<string>();
     this.pendingAsk.set(requestId, pending);
 
-    const evt: Extract<ServerEvent, { type: "ask" }> = {
+    const evt: Extract<SessionEvent, { type: "ask" }> = {
       type: "ask",
       sessionId: this.opts.sessionId,
       requestId,
@@ -158,7 +158,7 @@ export class InteractionManager {
     const pending = Promise.withResolvers<boolean>();
     this.pendingApproval.set(requestId, pending);
 
-    const evt: Extract<ServerEvent, { type: "approval" }> = {
+    const evt: Extract<SessionEvent, { type: "approval" }> = {
       type: "approval",
       sessionId: this.opts.sessionId,
       requestId,

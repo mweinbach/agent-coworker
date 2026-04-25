@@ -19,14 +19,14 @@ const _anyObjectSchema = z.record(z.string(), z.unknown());
 const targetScopeSchema = z.enum(["project", "global"]);
 const workspaceMemoryScopeSchema = z.enum(["workspace", "user"]);
 
-export const legacyEventEnvelope = <T extends z.ZodTypeAny>(eventSchema: T) =>
+export const sessionEventEnvelope = <T extends z.ZodTypeAny>(eventSchema: T) =>
   z
     .object({
       event: eventSchema,
     })
     .strict();
 
-export const legacyEventsEnvelope = <T extends z.ZodTypeAny>(eventSchema: T) =>
+export const sessionEventsEnvelope = <T extends z.ZodTypeAny>(eventSchema: T) =>
   z
     .object({
       events: z.array(eventSchema),
@@ -383,7 +383,7 @@ export const mcpServerConfigSchema = z
   })
   .passthrough();
 
-export const mcpServerEventSourceSchema = z.enum([
+export const mcpSessionEventSourceSchema = z.enum([
   "workspace",
   "user",
   "system",
@@ -408,7 +408,7 @@ export const mcpServersEventSchema = z
     servers: z.array(
       mcpServerConfigSchema
         .extend({
-          source: mcpServerEventSourceSchema,
+          source: mcpSessionEventSourceSchema,
           inherited: z.boolean(),
           authMode: mcpServerAuthModeSchema,
           authScope: z.enum(["workspace", "user"]),
@@ -439,7 +439,7 @@ export const mcpServersEventSchema = z
     files: z.array(
       z
         .object({
-          source: mcpServerEventSourceSchema,
+          source: mcpSessionEventSourceSchema,
           path: z.string(),
           exists: z.boolean(),
           editable: z.boolean(),
@@ -1387,61 +1387,61 @@ export const jsonRpcControlRequestSchemas = {
 } as const;
 
 export const jsonRpcControlResultSchemas = {
-  "cowork/provider/catalog/read": legacyEventEnvelope(providerCatalogEventSchema),
-  "cowork/provider/authMethods/read": legacyEventEnvelope(providerAuthMethodsEventSchema),
-  "cowork/provider/status/refresh": legacyEventEnvelope(providerStatusEventSchema),
-  "cowork/provider/auth/authorize": legacyEventEnvelope(
+  "cowork/provider/catalog/read": sessionEventEnvelope(providerCatalogEventSchema),
+  "cowork/provider/authMethods/read": sessionEventEnvelope(providerAuthMethodsEventSchema),
+  "cowork/provider/status/refresh": sessionEventEnvelope(providerStatusEventSchema),
+  "cowork/provider/auth/authorize": sessionEventEnvelope(
     z.union([providerAuthChallengeEventSchema, providerAuthResultEventSchema]),
   ),
-  "cowork/provider/auth/logout": legacyEventEnvelope(providerAuthResultEventSchema),
-  "cowork/provider/auth/callback": legacyEventEnvelope(providerAuthResultEventSchema),
-  "cowork/provider/auth/setApiKey": legacyEventEnvelope(providerAuthResultEventSchema),
-  "cowork/provider/auth/setConfig": legacyEventEnvelope(providerAuthResultEventSchema),
-  "cowork/provider/auth/copyApiKey": legacyEventEnvelope(providerAuthResultEventSchema),
-  "cowork/mcp/servers/read": legacyEventEnvelope(mcpServersEventSchema),
-  "cowork/mcp/server/upsert": legacyEventEnvelope(mcpServersEventSchema),
-  "cowork/mcp/server/delete": legacyEventEnvelope(mcpServersEventSchema),
-  "cowork/mcp/server/validate": legacyEventEnvelope(mcpValidationEventSchema),
-  "cowork/mcp/server/auth/authorize": legacyEventEnvelope(
+  "cowork/provider/auth/logout": sessionEventEnvelope(providerAuthResultEventSchema),
+  "cowork/provider/auth/callback": sessionEventEnvelope(providerAuthResultEventSchema),
+  "cowork/provider/auth/setApiKey": sessionEventEnvelope(providerAuthResultEventSchema),
+  "cowork/provider/auth/setConfig": sessionEventEnvelope(providerAuthResultEventSchema),
+  "cowork/provider/auth/copyApiKey": sessionEventEnvelope(providerAuthResultEventSchema),
+  "cowork/mcp/servers/read": sessionEventEnvelope(mcpServersEventSchema),
+  "cowork/mcp/server/upsert": sessionEventEnvelope(mcpServersEventSchema),
+  "cowork/mcp/server/delete": sessionEventEnvelope(mcpServersEventSchema),
+  "cowork/mcp/server/validate": sessionEventEnvelope(mcpValidationEventSchema),
+  "cowork/mcp/server/auth/authorize": sessionEventEnvelope(
     z.union([mcpAuthChallengeEventSchema, mcpAuthResultEventSchema]),
   ),
-  "cowork/mcp/server/auth/callback": legacyEventEnvelope(mcpAuthResultEventSchema),
-  "cowork/mcp/server/auth/setApiKey": legacyEventEnvelope(mcpAuthResultEventSchema),
-  "cowork/mcp/legacy/migrate": legacyEventEnvelope(mcpServersEventSchema),
-  "cowork/skills/catalog/read": legacyEventEnvelope(skillsCatalogEventSchema),
-  "cowork/skills/list": legacyEventEnvelope(skillsListEventSchema),
-  "cowork/skills/read": legacyEventEnvelope(skillContentEventSchema),
-  "cowork/skills/disable": legacyEventEnvelope(skillsListEventSchema),
-  "cowork/skills/enable": legacyEventEnvelope(skillsListEventSchema),
-  "cowork/skills/delete": legacyEventEnvelope(skillsListEventSchema),
-  "cowork/skills/installation/read": legacyEventEnvelope(skillInstallationEventSchema),
-  "cowork/skills/install/preview": legacyEventEnvelope(skillInstallPreviewEventSchema),
-  "cowork/skills/install": legacyEventEnvelope(skillsCatalogEventSchema),
-  "cowork/skills/installation/enable": legacyEventEnvelope(skillsCatalogEventSchema),
-  "cowork/skills/installation/disable": legacyEventEnvelope(skillsCatalogEventSchema),
-  "cowork/skills/installation/delete": legacyEventEnvelope(skillsCatalogEventSchema),
-  "cowork/skills/installation/update": legacyEventEnvelope(skillsCatalogEventSchema),
-  "cowork/skills/installation/copy": legacyEventEnvelope(skillsCatalogEventSchema),
-  "cowork/skills/installation/checkUpdate": legacyEventEnvelope(skillInstallUpdateCheckEventSchema),
-  "cowork/plugins/catalog/read": legacyEventEnvelope(pluginsCatalogEventSchema),
-  "cowork/plugins/read": legacyEventEnvelope(pluginDetailEventSchema),
-  "cowork/plugins/enable": legacyEventsEnvelope(pluginMutationResultEventSchema),
-  "cowork/plugins/disable": legacyEventsEnvelope(pluginMutationResultEventSchema),
-  "cowork/plugins/install/preview": legacyEventEnvelope(pluginInstallPreviewEventSchema),
-  "cowork/plugins/install": legacyEventsEnvelope(pluginInstallResultEventSchema),
-  "cowork/memory/list": legacyEventEnvelope(memoryListEventSchema),
-  "cowork/memory/upsert": legacyEventEnvelope(memoryListEventSchema),
-  "cowork/memory/delete": legacyEventEnvelope(memoryListEventSchema),
-  "cowork/backups/workspace/read": legacyEventEnvelope(workspaceBackupsEventSchema),
-  "cowork/backups/workspace/delta/read": legacyEventEnvelope(workspaceBackupDeltaEventSchema),
-  "cowork/backups/workspace/checkpoint": legacyEventEnvelope(workspaceBackupsEventSchema),
-  "cowork/backups/workspace/restore": legacyEventEnvelope(workspaceBackupsEventSchema),
-  "cowork/backups/workspace/deleteCheckpoint": legacyEventEnvelope(workspaceBackupsEventSchema),
-  "cowork/backups/workspace/deleteEntry": legacyEventEnvelope(workspaceBackupsEventSchema),
-  "cowork/session/state/read": legacyEventsEnvelope(
+  "cowork/mcp/server/auth/callback": sessionEventEnvelope(mcpAuthResultEventSchema),
+  "cowork/mcp/server/auth/setApiKey": sessionEventEnvelope(mcpAuthResultEventSchema),
+  "cowork/mcp/legacy/migrate": sessionEventEnvelope(mcpServersEventSchema),
+  "cowork/skills/catalog/read": sessionEventEnvelope(skillsCatalogEventSchema),
+  "cowork/skills/list": sessionEventEnvelope(skillsListEventSchema),
+  "cowork/skills/read": sessionEventEnvelope(skillContentEventSchema),
+  "cowork/skills/disable": sessionEventEnvelope(skillsListEventSchema),
+  "cowork/skills/enable": sessionEventEnvelope(skillsListEventSchema),
+  "cowork/skills/delete": sessionEventEnvelope(skillsListEventSchema),
+  "cowork/skills/installation/read": sessionEventEnvelope(skillInstallationEventSchema),
+  "cowork/skills/install/preview": sessionEventEnvelope(skillInstallPreviewEventSchema),
+  "cowork/skills/install": sessionEventEnvelope(skillsCatalogEventSchema),
+  "cowork/skills/installation/enable": sessionEventEnvelope(skillsCatalogEventSchema),
+  "cowork/skills/installation/disable": sessionEventEnvelope(skillsCatalogEventSchema),
+  "cowork/skills/installation/delete": sessionEventEnvelope(skillsCatalogEventSchema),
+  "cowork/skills/installation/update": sessionEventEnvelope(skillsCatalogEventSchema),
+  "cowork/skills/installation/copy": sessionEventEnvelope(skillsCatalogEventSchema),
+  "cowork/skills/installation/checkUpdate": sessionEventEnvelope(skillInstallUpdateCheckEventSchema),
+  "cowork/plugins/catalog/read": sessionEventEnvelope(pluginsCatalogEventSchema),
+  "cowork/plugins/read": sessionEventEnvelope(pluginDetailEventSchema),
+  "cowork/plugins/enable": sessionEventsEnvelope(pluginMutationResultEventSchema),
+  "cowork/plugins/disable": sessionEventsEnvelope(pluginMutationResultEventSchema),
+  "cowork/plugins/install/preview": sessionEventEnvelope(pluginInstallPreviewEventSchema),
+  "cowork/plugins/install": sessionEventsEnvelope(pluginInstallResultEventSchema),
+  "cowork/memory/list": sessionEventEnvelope(memoryListEventSchema),
+  "cowork/memory/upsert": sessionEventEnvelope(memoryListEventSchema),
+  "cowork/memory/delete": sessionEventEnvelope(memoryListEventSchema),
+  "cowork/backups/workspace/read": sessionEventEnvelope(workspaceBackupsEventSchema),
+  "cowork/backups/workspace/delta/read": sessionEventEnvelope(workspaceBackupDeltaEventSchema),
+  "cowork/backups/workspace/checkpoint": sessionEventEnvelope(workspaceBackupsEventSchema),
+  "cowork/backups/workspace/restore": sessionEventEnvelope(workspaceBackupsEventSchema),
+  "cowork/backups/workspace/deleteCheckpoint": sessionEventEnvelope(workspaceBackupsEventSchema),
+  "cowork/backups/workspace/deleteEntry": sessionEventEnvelope(workspaceBackupsEventSchema),
+  "cowork/session/state/read": sessionEventsEnvelope(
     z.union([configUpdatedEventSchema, sessionSettingsEventSchema, sessionConfigEventSchema]),
   ),
-  "cowork/session/defaults/apply": legacyEventEnvelope(sessionConfigEventSchema),
+  "cowork/session/defaults/apply": sessionEventEnvelope(sessionConfigEventSchema),
 } as const;
 
 export type JsonRpcControlRequestMethod = keyof typeof jsonRpcControlRequestSchemas;

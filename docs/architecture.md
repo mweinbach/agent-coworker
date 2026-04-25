@@ -52,7 +52,7 @@ Agent-coworker follows a **WebSocket-first** architecture where the server manag
 The server is the heart of the system. It handles:
 
 - **Session Management**: Each WebSocket connection gets an `AgentSession` instance
-- **Protocol Handling**: Validates and routes `ClientMessage` types to appropriate handlers
+- **Protocol Handling**: Validates JSON-RPC requests and notifications, then routes them to the appropriate handlers
 - **Turn Orchestration**: Manages the agent turn lifecycle (start, stream, complete)
 - **State Persistence**: SQLite-based session storage with backup/restore
 
@@ -60,8 +60,8 @@ The server is the heart of the system. It handles:
 
 - `startServer.ts` — Server initialization and WebSocket routing
 - `session/AgentSession.ts` — Per-session orchestration facade over focused managers (`TurnExecutionManager`, `HistoryManager`, `InteractionManager`, `McpManager`, `PersistenceManager`, `ProviderAuthManager`, `ProviderCatalogManager`, `SessionAdminManager`, `SkillManager`, etc.)
-- `protocol.ts` — Legacy `ServerEvent` union types
-- `jsonrpc/` — JSON-RPC transport, schemas, routes, and event projectors
+- `protocol.ts` — Internal `SessionEvent` payload types used by session managers, control envelopes, and persistence
+- `jsonrpc/` — JSON-RPC transport, schemas, routes, and notification projectors
 - `sessionBackup/` — Filesystem backup and checkpoint management (multiple modules: `command.ts`, `snapshot.ts`, `tar.ts`, `delta.ts`, etc.)
 - `sessionDb/` — SQLite persistence (`repository.ts`, `migrations.ts`, `writeCoordinator.ts`, etc.)
 
@@ -214,7 +214,7 @@ JSON-RPC flow (`cowork.jsonrpc.v1` subprotocol):
 6. Turn completes → turn/completed notification
 ```
 
-Legacy event names (e.g. `server_hello`, `model_stream_chunk`, `assistant_message`) are defined in `src/server/protocol.ts` and projected to JSON-RPC notifications by `eventProjector.ts`.
+Canonical chat UI updates are JSON-RPC notifications. `src/server/jsonrpc/notificationProjector.ts` maps internal `SessionEvent` payloads into `turn/*`, `item/*`, and `cowork/session/*` notifications, while `src/server/jsonrpc/threadJournalNotificationProjector.ts` writes the same notification stream to the thread journal for replay.
 
 ### Session Persistence
 
@@ -270,8 +270,8 @@ Configuration merges across three tiers (each overrides the previous):
 
 ### Adding a WebSocket Message
 
-1. Add legacy event typing in `src/server/protocol.ts` when needed, and add JSON-RPC request/result/notification schemas in `src/server/jsonrpc/schema.ts` plus the relevant module in `src/server/jsonrpc/`
-2. Add validation in the JSON-RPC schema bundle and parser helpers (for client messages)
+1. Add JSON-RPC request/result/notification schemas in `src/server/jsonrpc/schema.ts` plus the relevant module in `src/server/jsonrpc/`
+2. Add a `SessionEvent` type in `src/server/protocol.ts` only when server-internal session managers need a reusable event shape
 3. Add handler in `src/server/jsonrpc/routes/` or the appropriate manager under `src/server/session/`
 4. Document in `docs/websocket-protocol.md`
 

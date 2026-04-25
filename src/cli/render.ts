@@ -1,7 +1,7 @@
-import type { ServerEvent } from "../server/protocol";
+import type { SessionEvent } from "../server/protocol";
 import type { TodoItem } from "../types";
 
-type ToolListEntry = Extract<ServerEvent, { type: "tools" }>["tools"][number] | string;
+type ToolListEntry = Extract<SessionEvent, { type: "tools" }>["tools"][number] | string;
 
 export function renderTodosToLines(todos: TodoItem[]): string[] {
   if (todos.length === 0) return [];

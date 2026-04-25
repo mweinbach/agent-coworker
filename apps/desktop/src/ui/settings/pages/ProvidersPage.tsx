@@ -21,16 +21,16 @@ import {
 } from "../../../lib/providerDisplayNames";
 import { compareProviderNamesForSettings } from "../../../lib/providerOrdering";
 import { cn } from "../../../lib/utils";
-import type { ProviderName, ServerEvent } from "../../../lib/wsProtocol";
+import type { ProviderName, SessionEvent } from "../../../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../../../lib/wsProtocol";
 import { useOptionalSettingsChrome } from "../SettingsChromeContext";
 
 type ProviderAuthMethod = Extract<
-  ServerEvent,
+  SessionEvent,
   { type: "provider_auth_methods" }
 >["methods"][string][number];
-type ProviderCatalogEntry = Extract<ServerEvent, { type: "provider_catalog" }>["all"][number];
-type ProviderStatus = Extract<ServerEvent, { type: "provider_status" }>["providers"][number];
+type ProviderCatalogEntry = Extract<SessionEvent, { type: "provider_catalog" }>["all"][number];
+type ProviderStatus = Extract<SessionEvent, { type: "provider_status" }>["providers"][number];
 
 const EXA_AUTH_METHOD_ID = "exa_api_key";
 const PARALLEL_AUTH_METHOD_ID = "parallel_api_key";

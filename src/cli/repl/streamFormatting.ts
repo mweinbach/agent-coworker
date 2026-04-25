@@ -1,8 +1,8 @@
 import { z } from "zod";
 
-import type { ServerEvent } from "../../server/protocol";
+import type { SessionEvent } from "../../server/protocol";
 
-type ModelStreamChunkEvent = Extract<ServerEvent, { type: "model_stream_chunk" }>;
+type ModelStreamChunkEvent = Extract<SessionEvent, { type: "model_stream_chunk" }>;
 const partRecordSchema = z.record(z.string(), z.unknown());
 const stringSchema = z.string();
 

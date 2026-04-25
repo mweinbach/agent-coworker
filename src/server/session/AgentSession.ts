@@ -31,7 +31,7 @@ import type {
   ServerErrorSource,
 } from "../../types";
 import type { AgentWaitMode } from "../agents/types";
-import type { ServerEvent, SessionConfigPatch } from "../protocol";
+import type { SessionEvent, SessionConfigPatch } from "../protocol";
 import {
   type SessionBackupHandle,
   type SessionBackupInitOptions,
@@ -250,7 +250,7 @@ function buildInitialSessionSnapshot(opts: {
 }
 
 const MAX_DISCONNECTED_REPLAY_EVENTS = 256;
-const DISCONNECTED_REPLAY_EVENT_TYPES = new Set<ServerEvent["type"]>([
+const DISCONNECTED_REPLAY_EVENT_TYPES = new Set<SessionEvent["type"]>([
   "user_message",
   "session_busy",
   "model_stream_chunk",
@@ -277,7 +277,7 @@ const DISCONNECTED_REPLAY_EVENT_TYPES = new Set<ServerEvent["type"]>([
   "a2ui_surface",
 ]);
 
-function shouldReplayDisconnectedEvent(evt: ServerEvent): boolean {
+function shouldReplayDisconnectedEvent(evt: SessionEvent): boolean {
   return DISCONNECTED_REPLAY_EVENT_TYPES.has(evt.type);
 }
 
@@ -334,7 +334,7 @@ export class AgentSession {
   private readonly memoryStore: MemoryStore;
   private systemPromptLoadPromise: Promise<boolean> | null = null;
   private bufferDisconnectedEvents = false;
-  private disconnectedReplayEvents: ServerEvent[] = [];
+  private disconnectedReplayEvents: SessionEvent[] = [];
   private persistedLastEventSeq: number;
   private costTrackerUnsubscribe?: () => void;
 
@@ -344,7 +344,7 @@ export class AgentSession {
     sessionInfoPatch?: Partial<SessionInfoState>;
     discoveredSkills?: Array<{ name: string; description: string }>;
     yolo?: boolean;
-    emit: (evt: ServerEvent) => void;
+    emit: (evt: SessionEvent) => void;
     connectProviderImpl?: typeof connectModelProvider;
     getAiCoworkerPathsImpl?: typeof getAiCoworkerPaths;
     loadSystemPromptWithSkillsImpl?: typeof loadSystemPromptWithSkills;
@@ -529,7 +529,7 @@ export class AgentSession {
       this.deps.harnessContextStore.set(this.id, seededHarnessContext);
     }
 
-    const emit = (evt: ServerEvent) => {
+    const emit = (evt: SessionEvent) => {
       if (this.bufferDisconnectedEvents && shouldReplayDisconnectedEvent(evt)) {
         this.disconnectedReplayEvents.push(evt);
         if (this.disconnectedReplayEvents.length > MAX_DISCONNECTED_REPLAY_EVENTS) {
@@ -769,7 +769,7 @@ export class AgentSession {
     baseConfig: AgentConfig;
     discoveredSkills?: Array<{ name: string; description: string }>;
     yolo?: boolean;
-    emit: (evt: ServerEvent) => void;
+    emit: (evt: SessionEvent) => void;
     connectProviderImpl?: typeof connectModelProvider;
     getAiCoworkerPathsImpl?: typeof getAiCoworkerPaths;
     getProviderCatalogImpl?: typeof getProviderCatalog;
@@ -1128,7 +1128,7 @@ export class AgentSession {
     this.bufferDisconnectedEvents = true;
   }
 
-  drainDisconnectedReplayEvents(): ServerEvent[] {
+  drainDisconnectedReplayEvents(): SessionEvent[] {
     this.bufferDisconnectedEvents = false;
     const drained = this.disconnectedReplayEvents;
     this.disconnectedReplayEvents = [];

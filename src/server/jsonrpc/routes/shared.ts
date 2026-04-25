@@ -1,4 +1,4 @@
-import type { ServerEvent } from "../../protocol";
+import type { SessionEvent } from "../../protocol";
 import type { AgentSession } from "../../session/AgentSession";
 import type { PersistedSessionRecord } from "../../sessionDb";
 import type { JsonRpcThread, JsonRpcThreadSummaryFilter } from "./types";
@@ -197,7 +197,7 @@ export function shouldIncludeJsonRpcThreadSummary(summary: JsonRpcThreadSummaryF
   );
 }
 
-export function buildControlSessionStateEvents(session: AgentSession): ServerEvent[] {
+export function buildControlSessionStateEvents(session: AgentSession): SessionEvent[] {
   return [
     {
       type: "config_updated",
@@ -216,7 +216,7 @@ export function buildControlSessionStateEvents(session: AgentSession): ServerEve
 }
 
 export function isJsonRpcSessionError(
-  event: ServerEvent,
-): event is Extract<ServerEvent, { type: "error" }> {
+  event: SessionEvent,
+): event is Extract<SessionEvent, { type: "error" }> {
   return event.type === "error";
 }

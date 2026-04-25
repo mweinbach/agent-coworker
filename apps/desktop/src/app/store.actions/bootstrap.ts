@@ -16,7 +16,7 @@ import {
 } from "../../lib/desktopCommands";
 import { normalizeQuickChatShortcutAccelerator } from "../../lib/quickChatShortcut";
 import type { ChildModelRoutingMode } from "../../lib/wsProtocol";
-import { type ProviderName, safeParseServerEvent } from "../../lib/wsProtocol";
+import { type ProviderName, safeParseSessionEvent } from "../../lib/wsProtocol";
 import { normalizeWorkspaceProviderOptions } from "../openaiCompatibleProviderOptions";
 import {
   deriveConnectedProviders,
@@ -554,7 +554,7 @@ function normalizeCachedSessionSnapshot(
   }
 
   const snapshot = (value as { snapshot?: unknown }).snapshot;
-  const parsed = safeParseServerEvent({
+  const parsed = safeParseSessionEvent({
     type: "session_snapshot",
     sessionId: "__desktop_cache__",
     targetSessionId: sessionId,

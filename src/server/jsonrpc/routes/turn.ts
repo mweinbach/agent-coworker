@@ -1,4 +1,4 @@
-import type { ServerEvent } from "../../protocol";
+import type { SessionEvent } from "../../protocol";
 import { JSONRPC_ERROR_CODES } from "../protocol";
 import { jsonRpcThreadTurnRequestSchemas } from "../schema.threadTurn";
 
@@ -10,9 +10,9 @@ import {
 import { toJsonRpcParams } from "./shared";
 import type { JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
 
-type JsonRpcTurnStartOutcome = Extract<ServerEvent, { type: "session_busy" }> | JsonRpcSessionError;
+type JsonRpcTurnStartOutcome = Extract<SessionEvent, { type: "session_busy" }> | JsonRpcSessionError;
 type JsonRpcTurnSteerOutcome =
-  | Extract<ServerEvent, { type: "steer_accepted" }>
+  | Extract<SessionEvent, { type: "steer_accepted" }>
   | JsonRpcSessionError;
 
 export function createTurnRouteHandlers(context: JsonRpcRouteContext): JsonRpcRequestHandlerMap {

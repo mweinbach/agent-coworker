@@ -70,7 +70,7 @@ Each workspace runs its own `cowork-server` process:
 
 ### Protocol
 
-Desktop renderer protocol types are re-exported from `@cowork/server/protocol`. Messages follow `src/server/protocol.ts` in the core package.
+Desktop renderer WebSocket traffic uses JSON-RPC over `cowork.jsonrpc.v1`. Shared JSON-RPC schemas live under `src/server/jsonrpc/`; internal session event payload types are re-exported from `src/server/protocol.ts`.
 
 ## Security & Configuration
 
@@ -83,8 +83,8 @@ Desktop renderer protocol types are re-exported from `@cowork/server/protocol`. 
 
 ### Adding a new WebSocket message type
 
-1. Add type to `src/server/protocol.ts` in core package
-2. Add handler in `src/app/store.ts`
+1. Add the JSON-RPC schema/route in `src/server/jsonrpc/`
+2. Add renderer handling in `src/app/store.ts` or the focused helper module
 3. Update protocol re-exports if needed in `src/lib/wsProtocol.ts`
 
 ### Adding a new desktop command

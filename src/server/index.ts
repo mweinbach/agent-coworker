@@ -10,7 +10,7 @@ globalSettings.AI_SDK_LOG_WARNINGS = false;
 
 function printUsage() {
   console.log(
-    "Usage: bun src/server/index.ts [--dir <directory_path>] [--host <hostname>] [--port <port>] [--yolo] [--json] [--ws-protocol-default <jsonrpc>]",
+    "Usage: bun src/server/index.ts [--dir <directory_path>] [--host <hostname>] [--port <port>] [--yolo] [--json]",
   );
 }
 
@@ -27,14 +27,12 @@ function parseArgs(argv: string[]): {
   port: number;
   yolo: boolean;
   json: boolean;
-  wsProtocolDefault?: "jsonrpc";
 } {
   let dir: string | undefined;
   let host = "127.0.0.1";
   let port = 7337;
   let yolo = false;
   let json = false;
-  let wsProtocolDefault: "jsonrpc" | undefined;
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -74,20 +72,10 @@ function parseArgs(argv: string[]): {
       json = true;
       continue;
     }
-    if (a === "--ws-protocol-default") {
-      const v = argv[i + 1];
-      if (!v) throw new Error(`Missing value for ${a}`);
-      if (v !== "jsonrpc") {
-        throw new Error(`Invalid value for ${a}: ${v}. Only "jsonrpc" is supported.`);
-      }
-      wsProtocolDefault = v;
-      i++;
-      continue;
-    }
     throw new Error(`Unknown argument: ${a}`);
   }
 
-  return { dir, host, port, yolo, json, wsProtocolDefault };
+  return { dir, host, port, yolo, json };
 }
 
 function resolveListeningHints(host: string): string[] {
@@ -105,7 +93,7 @@ function resolveListeningHints(host: string): string[] {
 }
 
 async function main() {
-  const { dir, host, port, yolo, json, wsProtocolDefault } = parseArgs(process.argv.slice(2));
+  const { dir, host, port, yolo, json } = parseArgs(process.argv.slice(2));
 
   const cwd = dir ? await resolveAndValidateDir(dir) : process.cwd();
   if (dir) process.chdir(cwd);
@@ -123,7 +111,6 @@ async function main() {
     providerOptions: DEFAULT_PROVIDER_OPTIONS,
     yolo,
     preloadSystemPrompt: false,
-    ...(wsProtocolDefault ? { wsProtocolDefault } : {}),
   });
 
   // Graceful shutdown on signals so child processes are cleaned up.
@@ -160,7 +147,6 @@ async function main() {
         hostHints,
         port: server.port,
         cwd: config.workingDirectory,
-        wsProtocolDefault: "jsonrpc",
       }),
     );
     return;

@@ -13,7 +13,7 @@ import type {
 } from "../../shared/sessionSnapshot";
 import type { ModelMessage, TodoItem } from "../../types";
 import { createConversationProjection } from "../projection/conversationProjection";
-import type { ServerEvent } from "../protocol";
+import type { SessionEvent } from "../protocol";
 import type { PersistedSessionRecord } from "../sessionDb";
 
 function sortAgentSummaries(agents: PersistentAgentSummary[]): PersistentAgentSummary[] {
@@ -180,7 +180,7 @@ export class SessionSnapshotProjector {
     this.conversationProjection = this.createProjection();
   }
 
-  applyEvent(evt: ServerEvent, ts = new Date().toISOString()): void {
+  applyEvent(evt: SessionEvent, ts = new Date().toISOString()): void {
     this.projectionTs = ts;
 
     if (evt.type === "server_hello") {

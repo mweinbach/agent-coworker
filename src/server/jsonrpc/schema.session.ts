@@ -10,7 +10,7 @@ import {
 } from "./schema.sessionRuntime";
 import {
   anyObjectSchema,
-  legacyEventEnvelope,
+  sessionEventEnvelope,
   nonEmptyTrimmedStringSchema,
   optionalNonEmptyTrimmedStringSchema,
 } from "./schema.shared";
@@ -166,14 +166,14 @@ export const jsonRpcSessionNotificationSchemas = {
 } as const;
 
 export const jsonRpcSessionResultSchemas = {
-  "cowork/session/title/set": legacyEventEnvelope(sessionInfoEventSchema),
+  "cowork/session/title/set": sessionEventEnvelope(sessionInfoEventSchema),
   "cowork/session/state/read": sessionStateReadResultSchema,
-  "cowork/session/model/set": legacyEventEnvelope(configUpdatedEventSchema),
-  "cowork/session/usageBudget/set": legacyEventEnvelope(sessionUsageEventSchema),
-  "cowork/session/config/set": legacyEventEnvelope(sessionConfigEventSchema),
-  "cowork/session/harnessContext/get": legacyEventEnvelope(harnessContextEventSchema),
-  "cowork/session/harnessContext/set": legacyEventEnvelope(harnessContextEventSchema),
+  "cowork/session/model/set": sessionEventEnvelope(configUpdatedEventSchema),
+  "cowork/session/usageBudget/set": sessionEventEnvelope(sessionUsageEventSchema),
+  "cowork/session/config/set": sessionEventEnvelope(sessionConfigEventSchema),
+  "cowork/session/harnessContext/get": sessionEventEnvelope(harnessContextEventSchema),
+  "cowork/session/harnessContext/set": sessionEventEnvelope(harnessContextEventSchema),
   "cowork/session/defaults/apply": sessionDefaultsApplyResultSchema,
-  "cowork/session/file/upload": legacyEventEnvelope(fileUploadedEventSchema),
-  "cowork/session/delete": legacyEventEnvelope(sessionDeletedEventSchema),
+  "cowork/session/file/upload": sessionEventEnvelope(fileUploadedEventSchema),
+  "cowork/session/delete": sessionEventEnvelope(sessionDeletedEventSchema),
 } as const;

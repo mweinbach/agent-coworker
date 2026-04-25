@@ -12,7 +12,7 @@ import {
 } from "../../shared/agents";
 import { AGENT_WAIT_MODE_VALUES } from "../agents/types";
 import {
-  legacyEventEnvelope,
+  sessionEventEnvelope,
   nonEmptyTrimmedStringSchema,
   optionalNonEmptyTrimmedStringSchema,
 } from "./schema.shared";
@@ -140,7 +140,7 @@ export const jsonRpcAgentResultSchemas = {
   "cowork/session/agent/list": z.object({}).strict(),
   "cowork/session/agent/input/send": z.object({}).strict(),
   "cowork/session/agent/wait": z.object({}).strict(),
-  "cowork/session/agent/inspect": legacyEventEnvelope(agentInspectResultSchema),
+  "cowork/session/agent/inspect": sessionEventEnvelope(agentInspectResultSchema),
   "cowork/session/agent/resume": z.object({}).strict(),
   "cowork/session/agent/close": z.object({}).strict(),
 } as const;

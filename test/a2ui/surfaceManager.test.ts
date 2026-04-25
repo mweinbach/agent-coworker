@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import type { ServerEvent } from "../../src/server/protocol";
+import type { SessionEvent } from "../../src/server/protocol";
 import { A2uiSurfaceManager } from "../../src/server/session/A2uiSurfaceManager";
 import type { A2uiEnvelope } from "../../src/shared/a2ui";
 import { A2UI_BASIC_CATALOG_ID } from "../../src/shared/a2ui/component";
 
 function createManager() {
-  const events: ServerEvent[] = [];
+  const events: SessionEvent[] = [];
   const logs: string[] = [];
   const manager = new A2uiSurfaceManager({
     sessionId: "sess-1",
@@ -34,7 +34,7 @@ describe("A2uiSurfaceManager", () => {
     expect(result.ok).toBe(true);
     expect(result.change).toBe("created");
     expect(events).toHaveLength(1);
-    const evt = events[0] as Extract<ServerEvent, { type: "a2ui_surface" }>;
+    const evt = events[0] as Extract<SessionEvent, { type: "a2ui_surface" }>;
     expect(evt.type).toBe("a2ui_surface");
     expect(evt.surfaceId).toBe("s1");
     expect(evt.revision).toBe(1);
@@ -64,7 +64,7 @@ describe("A2uiSurfaceManager", () => {
     manager.reset();
     expect(events.every((e) => e.type === "a2ui_surface")).toBe(true);
     expect(events).toHaveLength(2);
-    for (const evt of events as Array<Extract<ServerEvent, { type: "a2ui_surface" }>>) {
+    for (const evt of events as Array<Extract<SessionEvent, { type: "a2ui_surface" }>>) {
       expect(evt.deleted).toBe(true);
     }
   });
@@ -82,7 +82,7 @@ describe("A2uiSurfaceManager", () => {
     });
     expect(res.ok).toBe(true);
     expect(res.change).toBe("updated");
-    const evt = events[0] as Extract<ServerEvent, { type: "a2ui_surface" }>;
+    const evt = events[0] as Extract<SessionEvent, { type: "a2ui_surface" }>;
     expect(evt.revision).toBe(2);
     const rootRecord = evt.root as Record<string, unknown>;
     expect(rootRecord.type).toBe("Row");
@@ -121,7 +121,7 @@ describe("A2uiSurfaceManager", () => {
       (event) => event.type === "a2ui_surface" && event.surfaceId === "s1",
     );
     expect(deleteEvent).toBeTruthy();
-    expect((deleteEvent as Extract<ServerEvent, { type: "a2ui_surface" }>).deleted).toBe(true);
+    expect((deleteEvent as Extract<SessionEvent, { type: "a2ui_surface" }>).deleted).toBe(true);
   });
 
   test("prunes deleted tombstones before creating a new surface at the cap", () => {

@@ -13,7 +13,7 @@ async function connectJsonRpc(url: string): Promise<{
   request: (method: string, params?: unknown) => Promise<any>;
   waitFor: (predicate: (message: any) => boolean) => Promise<any>;
 }> {
-  const ws = new WebSocket(`${url}?protocol=jsonrpc`);
+  const ws = new WebSocket(url, "cowork.jsonrpc.v1");
   const queue: any[] = [];
   const waiters = new Set<{
     predicate: (message: any) => boolean;

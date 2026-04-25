@@ -50,7 +50,7 @@ async function connectJsonRpc(
   url: string,
   onMessage: (message: any) => void,
 ): Promise<JsonRpcConnection> {
-  const ws = new WebSocket(`${url}?protocol=jsonrpc`);
+  const ws = new WebSocket(url, "cowork.jsonrpc.v1");
   const pending = new Map<
     number,
     { resolve: (value: any) => void; reject: (error: Error) => void }

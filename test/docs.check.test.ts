@@ -59,7 +59,7 @@ describe("docs checker parity", () => {
 
   test("extractInlineRepoPaths ignores non-path inline code", () => {
     expect(
-      extractInlineRepoPaths("Use `bun test`, `camelCase`, and `ServerEvent` in prose."),
+      extractInlineRepoPaths("Use `bun test`, `camelCase`, and `SessionEvent` in prose."),
     ).toEqual([]);
   });
 

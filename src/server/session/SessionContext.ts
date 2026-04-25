@@ -30,7 +30,7 @@ import type {
   TodoItem,
 } from "../../types";
 import type { AgentWaitMode, AgentWaitResult } from "../agents/types";
-import type { ServerEvent } from "../protocol";
+import type { SessionEvent } from "../protocol";
 import type {
   SessionBackupHandle,
   SessionBackupInitOptions,
@@ -79,7 +79,7 @@ export type PersistedProjectConfigPatch = Partial<
 };
 
 export type SessionInfoState = Omit<
-  Extract<ServerEvent, { type: "session_info" }>,
+  Extract<SessionEvent, { type: "session_info" }>,
   "type" | "sessionId"
 >;
 
@@ -247,7 +247,7 @@ export type SessionContext = {
   id: string;
   state: SessionRuntimeState;
   deps: SessionDependencies;
-  emit: (evt: ServerEvent) => void;
+  emit: (evt: SessionEvent) => void;
   emitError: (code: ServerErrorCode, source: ServerErrorSource, message: string) => void;
   emitTelemetry: (
     name: string,

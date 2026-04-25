@@ -1,7 +1,7 @@
-import type { ServerEvent } from "../protocol";
+import type { SessionEvent } from "../protocol";
 import type { SessionBinding } from "../startServer/types";
 
-type BindingSink = (event: ServerEvent) => void;
+type BindingSink = (event: SessionEvent) => void;
 
 type SessionEventCaptureDeps = {
   addBindingSink: (binding: SessionBinding, sinkId: string, sink: BindingSink) => void;
@@ -14,10 +14,10 @@ export function createSessionEventCapture({
   removeBindingSink,
   createSinkId = () => `capture:${crypto.randomUUID()}`,
 }: SessionEventCaptureDeps) {
-  const capture = async <T extends ServerEvent>(
+  const capture = async <T extends SessionEvent>(
     binding: SessionBinding,
     action: () => Promise<void> | void,
-    predicate: (event: ServerEvent) => event is T,
+    predicate: (event: SessionEvent) => event is T,
     timeoutMs = 5_000,
   ): Promise<T> => {
     const sinkId = createSinkId();
@@ -42,10 +42,10 @@ export function createSessionEventCapture({
     });
   };
 
-  const captureMutationOutcome = async <T extends ServerEvent>(
+  const captureMutationOutcome = async <T extends SessionEvent>(
     binding: SessionBinding,
     action: () => Promise<void> | void,
-    predicate: (event: ServerEvent) => event is T,
+    predicate: (event: SessionEvent) => event is T,
     timeoutMs = 5_000,
     idleMs = 25,
   ): Promise<T | null> => {
@@ -103,10 +103,10 @@ export function createSessionEventCapture({
     });
   };
 
-  const captureMutationEvents = async <T extends ServerEvent>(
+  const captureMutationEvents = async <T extends SessionEvent>(
     binding: SessionBinding,
     action: () => Promise<void> | void,
-    predicate: (event: ServerEvent) => event is T,
+    predicate: (event: SessionEvent) => event is T,
     timeoutMs = 5_000,
     idleMs = 25,
   ): Promise<T[]> => {

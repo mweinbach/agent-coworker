@@ -673,8 +673,6 @@ async function launchWorkspaceServer(opts: {
     "--port",
     "0",
     "--json",
-    "--ws-protocol-default",
-    "jsonrpc",
   ];
   if (opts.yolo) {
     args.push("--yolo");

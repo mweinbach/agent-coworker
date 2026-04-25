@@ -32,7 +32,7 @@ export type StartServerSocketData = {
 
 export type StartServerSocket = Bun.ServerWebSocket<StartServerSocketData>;
 
-export type SessionEventSink = (evt: import("../protocol").ServerEvent) => void;
+export type SessionEventSink = (evt: import("../protocol").SessionEvent) => void;
 
 export type SessionBinding = {
   session: AgentSession | null;

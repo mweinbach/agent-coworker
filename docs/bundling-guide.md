@@ -4,7 +4,7 @@ This guide explains how to build custom applications on top of the cowork server
 
 ## Architecture Recap
 
-Cowork is designed around one principle: **the server is the product boundary**. All business logic — sessions, tool execution, provider auth, MCP, persistence, safety checks, and streaming — lives server-side. Clients are thin rendering layers that send typed `ClientMessage` objects and receive typed `ServerEvent` objects over a single WebSocket.
+Cowork is designed around one principle: **the server is the product boundary**. All business logic — sessions, tool execution, provider auth, MCP, persistence, safety checks, and streaming — lives server-side. Clients are thin rendering layers that send JSON-RPC requests and receive JSON-RPC notifications over a single WebSocket.
 
 ```
 ┌────────────────────────────┐
@@ -111,58 +111,47 @@ This is how the CLI entrypoint works (`src/index.ts`): it launches the REPL, whi
 
 ## Connecting a Client
 
-### Using AgentSocket (TypeScript/JavaScript)
+### Using JsonRpcSocket (TypeScript/JavaScript)
 
 The repo ships a production-ready JSON-RPC WebSocket client at `src/client/jsonRpcSocket.ts`:
 
 ```typescript
-import { AgentSocket } from "agent-coworker/src/client";
+import { JsonRpcSocket } from "agent-coworker/src/client/jsonRpcSocket";
 
-const socket = new AgentSocket({
+const socket = new JsonRpcSocket({
   url: "ws://127.0.0.1:54321/ws",
-  client: "my-app",           // identifies your client in server logs
-  version: "1.0.0",           // optional version tag
-
-  onEvent(evt) {
-    // Handle all ServerEvent types here
-    switch (evt.type) {
-      case "server_hello":
-        console.log("Session:", evt.sessionId);
+  clientInfo: { name: "my-app", version: "1.0.0" },
+  onNotification(message) {
+    switch (message.method) {
+      case "thread/started":
+        console.log("Thread:", message.params);
         break;
-      case "assistant_message":
-        console.log("Agent:", evt.text);
+      case "item/agentMessage/delta":
+        console.log("Agent delta:", message.params);
         break;
-      case "ask":
-        // Agent is asking the user a question
-        break;
-      case "approval":
-        // Agent needs permission to run a command
-        break;
-      // ... handle other event types
     }
   },
-
-  onClose(reason) {
-    console.log("Disconnected:", reason);
-  },
-
-  // Optional: automatic reconnection
+  onClose: (reason) => console.log("Disconnected:", reason),
   autoReconnect: true,
   maxReconnectAttempts: 10,
-
-  // Optional: resume a previous session
-  resumeSessionId: "previous-session-id",
 });
 
 socket.connect();
+await socket.readyPromise;
+const { thread } = await socket.request("thread/start", { cwd: "/path/to/workspace" }) as {
+  thread: { id: string };
+};
+await socket.request("turn/start", {
+  threadId: thread.id,
+  input: [{ type: "text", text: "Refactor the login component to use hooks" }],
+});
 ```
 
-**Key `AgentSocket` features:**
+**Key `JsonRpcSocket` features:**
 
-- **Automatic handshake**: Sends `client_hello` on connect, captures `sessionId` from `server_hello`
-- **Session resume**: Pass `resumeSessionId` to reconnect to an existing session
+- **Automatic handshake**: Sends `initialize`, waits for the result, then sends `initialized`
+- **Thread resume**: Call `thread/resume` with a persisted `threadId`
 - **Auto-reconnect**: Exponential backoff with jitter (500ms base, 30s cap)
-- **Keepalive**: Sends `ping` every 30s (configurable via `pingIntervalMs`)
 - **Message queueing**: Messages sent during disconnection are queued and flushed on reconnect
 - **Custom WebSocket**: Pass `WebSocketImpl` to use a non-standard WebSocket (React Native, etc.)
 
@@ -170,64 +159,60 @@ socket.connect();
 
 If you are not using TypeScript, connect with any WebSocket client. The protocol is plain JSON over WebSocket text frames.
 
-**1. Connect** to `ws://<host>:<port>/ws` (append `?resumeSessionId=<id>` to resume).
+**1. Connect** to `ws://<host>:<port>/ws`, optionally offering the `cowork.jsonrpc.v1` WebSocket subprotocol.
 
-**2. Send `client_hello`:**
-
-```json
-{ "type": "client_hello", "client": "my-app", "version": "1.0.0" }
-```
-
-**3. Receive `server_hello`:**
+**2. Send `initialize`:**
 
 ```json
-{
-  "type": "server_hello",
-  "sessionId": "abc-123",
-  "protocolVersion": "7.28",
-  "config": { "provider": "anthropic", "model": "claude-sonnet-4-6", "workingDirectory": "/home/user/project" },
-  "isResume": false,
-  "busy": false
-}
+{ "id": 1, "method": "initialize", "params": { "clientInfo": { "name": "my-app", "version": "1.0.0" } } }
 ```
 
-**4. Send messages, receive events.** All messages include `"sessionId"` and `"type"`.
+**3. Receive the `initialize` result, then send `initialized`:**
+
+```json
+{ "id": 1, "result": { "protocolVersion": "0.1", "transport": { "type": "websocket", "protocolMode": "jsonrpc" } } }
+{ "method": "initialized" }
+```
+
+**4. Send JSON-RPC requests and receive notifications.** Start or resume a thread, then use `turn/start` and render `turn/*` + `item/*` notifications.
 
 See [websocket-protocol.md](websocket-protocol.md) for the full contract — every message type, every field, every validation rule.
 
-## Core Event Loop
+## Core JSON-RPC Loop
 
-A minimal client must handle these events:
+A minimal client must handle these notifications and server requests:
 
-| Event | When | What to Do |
+| Method | When | What to Do |
 |-------|------|------------|
-| `server_hello` | On connect | Store `sessionId`, read config |
-| `session_busy` | Turn starts/ends | Show/hide loading indicator (`busy: true/false`) |
-| `model_stream_chunk` | During a turn | Render streaming text/tool calls (see below) |
-| `assistant_message` | Turn completes | Display final assistant response |
-| `ask` | Agent needs input | Show question to user, send `ask_response` back |
-| `approval` | Agent needs permission | Show command, send `approval_response` back |
-| `error` | Something went wrong | Display error, check `source` field |
-| `log` | Agent emits a log line | Optionally display in a debug pane |
+| `thread/started` | Thread binds | Store thread metadata |
+| `turn/started` / `turn/completed` | Turn lifecycle | Show/hide loading indicator |
+| `item/started` / `item/completed` | Feed item lifecycle | Render the latest item snapshot |
+| `item/agentMessage/delta` | Assistant text streams | Append text to the active agent message |
+| `item/reasoning/delta` | Reasoning streams | Append reasoning to the active reasoning item |
+| `item/tool/requestUserInput` | Server request | Show question and respond with the same JSON-RPC id |
+| `item/commandExecution/requestApproval` | Server request | Show command and respond with the same JSON-RPC id |
 
 ### Sending a User Message
 
 ```json
 {
-  "type": "user_message",
-  "sessionId": "abc-123",
-  "text": "Refactor the login component to use hooks"
+  "id": 2,
+  "method": "turn/start",
+  "params": {
+    "threadId": "abc-123",
+    "input": [{ "type": "text", "text": "Refactor the login component to use hooks" }]
+  }
 }
 ```
 
 ### Responding to Asks and Approvals
 
 ```json
-{ "type": "ask_response", "sessionId": "abc-123", "requestId": "req-1", "answer": "Yes, use JWT" }
+{ "id": "req-1", "result": { "answer": "Yes, use JWT" } }
 ```
 
 ```json
-{ "type": "approval_response", "sessionId": "abc-123", "requestId": "req-2", "approved": true }
+{ "id": "req-2", "result": { "approved": true } }
 ```
 
 ## Model Stream Events
@@ -331,7 +316,7 @@ The Electron desktop app (`apps/desktop/`) is the canonical example of a native 
 | Sidecar spawn & lifecycle | `electron/services/serverManager.ts` | Spawn binary, parse startup JSON, graceful kill |
 | Socket management | `src/app/store.helpers/controlSocket.ts` | Per-workspace control sockets |
 | Thread sockets | `src/app/store.helpers/runtimeState.ts` | Per-thread AgentSocket map |
-| Event reduction | `src/app/store.helpers/threadEventReducer.ts` | ServerEvent -> Zustand state |
+| Feed reduction | `src/app/store.helpers/threadEventReducer.ts` | JSON-RPC notifications -> Zustand state |
 | State management | `src/app/store.tsx` | Zustand store with action namespaces |
 | IPC bridge | `electron/ipc.ts` | Electron main <-> renderer communication |
 

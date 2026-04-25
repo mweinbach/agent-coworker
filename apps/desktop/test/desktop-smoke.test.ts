@@ -12,12 +12,14 @@ class FakeWebSocket extends EventEmitter {
   static instances: FakeWebSocket[] = [];
 
   readonly url: string;
+  readonly protocols?: string | string[];
   sent: string[] = [];
   closeCalls = 0;
 
-  constructor(url: string) {
+  constructor(url: string, protocols?: string | string[]) {
     super();
     this.url = url;
+    this.protocols = protocols;
     FakeWebSocket.instances.push(this);
   }
 
@@ -62,7 +64,8 @@ function createSocketOptions(
   return {
     url: "ws://example.test/socket",
     clientVersion: "1.2.3",
-    createWebSocket: (url: string) => new FakeWebSocket(url) as any,
+    createWebSocket: (url: string, protocols?: string | string[]) =>
+      new FakeWebSocket(url, protocols) as any,
     ...overrides,
   };
 }
@@ -120,10 +123,11 @@ async function connectWithInitializedSocket(
 }
 
 describe("desktop smoke JSON-RPC helper", () => {
-  test("appends protocol=jsonrpc, initializes, and sends initialized", async () => {
+  test("connects with the JSON-RPC subprotocol, initializes, and sends initialized", async () => {
     const { rpc, ws } = await connectWithInitializedSocket();
 
-    expect(ws.url).toBe("ws://example.test/socket?protocol=jsonrpc");
+    expect(ws.url).toBe("ws://example.test/socket");
+    expect(ws.protocols).toBe("cowork.jsonrpc.v1");
     rpc.close();
   });
 

@@ -1,4 +1,4 @@
-import type { ServerEvent } from "../../protocol";
+import type { SessionEvent } from "../../protocol";
 
 import {
   captureWorkspaceControlMutationError,
@@ -17,7 +17,7 @@ export function createSkillsRouteHandlers(context: JsonRpcRouteContext): JsonRpc
         context,
         cwd,
         async (session) => await session.getSkillsCatalog(),
-        (event): event is Extract<ServerEvent, { type: "skills_catalog" }> =>
+        (event): event is Extract<SessionEvent, { type: "skills_catalog" }> =>
           event.type === "skills_catalog",
       );
       if (context.utils.isSessionError(event)) {
@@ -34,7 +34,7 @@ export function createSkillsRouteHandlers(context: JsonRpcRouteContext): JsonRpc
         context,
         cwd,
         async (session) => await session.listSkills(),
-        (event): event is Extract<ServerEvent, { type: "skills_list" }> =>
+        (event): event is Extract<SessionEvent, { type: "skills_list" }> =>
           event.type === "skills_list",
       );
       if (context.utils.isSessionError(event)) {
@@ -52,7 +52,7 @@ export function createSkillsRouteHandlers(context: JsonRpcRouteContext): JsonRpc
         context,
         cwd,
         async (session) => await session.readSkill(skillName),
-        (event): event is Extract<ServerEvent, { type: "skill_content" }> =>
+        (event): event is Extract<SessionEvent, { type: "skill_content" }> =>
           event.type === "skill_content" && event.skill.name === skillName,
       );
       if (context.utils.isSessionError(event)) {
@@ -79,7 +79,7 @@ export function createSkillsRouteHandlers(context: JsonRpcRouteContext): JsonRpc
         context,
         cwd,
         async (session) => await session.listSkills(),
-        (event): event is Extract<ServerEvent, { type: "skills_list" }> =>
+        (event): event is Extract<SessionEvent, { type: "skills_list" }> =>
           event.type === "skills_list",
       );
       if (context.utils.isSessionError(event)) {
@@ -106,7 +106,7 @@ export function createSkillsRouteHandlers(context: JsonRpcRouteContext): JsonRpc
         context,
         cwd,
         async (session) => await session.listSkills(),
-        (event): event is Extract<ServerEvent, { type: "skills_list" }> =>
+        (event): event is Extract<SessionEvent, { type: "skills_list" }> =>
           event.type === "skills_list",
       );
       if (context.utils.isSessionError(event)) {
@@ -133,7 +133,7 @@ export function createSkillsRouteHandlers(context: JsonRpcRouteContext): JsonRpc
         context,
         cwd,
         async (session) => await session.listSkills(),
-        (event): event is Extract<ServerEvent, { type: "skills_list" }> =>
+        (event): event is Extract<SessionEvent, { type: "skills_list" }> =>
           event.type === "skills_list",
       );
       if (context.utils.isSessionError(event)) {
@@ -152,7 +152,7 @@ export function createSkillsRouteHandlers(context: JsonRpcRouteContext): JsonRpc
         context,
         cwd,
         async (session) => await session.getSkillInstallation(installationId),
-        (event): event is Extract<ServerEvent, { type: "skill_installation" }> =>
+        (event): event is Extract<SessionEvent, { type: "skill_installation" }> =>
           event.type === "skill_installation",
       );
       if (context.utils.isSessionError(event)) {
@@ -171,7 +171,7 @@ export function createSkillsRouteHandlers(context: JsonRpcRouteContext): JsonRpc
         context,
         cwd,
         async (session) => await session.previewSkillInstall(sourceInput, targetScope),
-        (event): event is Extract<ServerEvent, { type: "skill_install_preview" }> =>
+        (event): event is Extract<SessionEvent, { type: "skill_install_preview" }> =>
           event.type === "skill_install_preview",
       );
       if (context.utils.isSessionError(event)) {
@@ -190,7 +190,7 @@ export function createSkillsRouteHandlers(context: JsonRpcRouteContext): JsonRpc
         context,
         cwd,
         async (session) => await session.installSkills(sourceInput, targetScope),
-        (event): event is Extract<ServerEvent, { type: "skills_catalog" }> =>
+        (event): event is Extract<SessionEvent, { type: "skills_catalog" }> =>
           event.type === "skills_catalog",
       );
       if (context.utils.isSessionError(event)) {
@@ -211,7 +211,7 @@ export function createSkillsRouteHandlers(context: JsonRpcRouteContext): JsonRpc
         async (session) => {
           await session.enableSkillInstallation(installationId);
         },
-        (event): event is Extract<ServerEvent, { type: "skills_catalog" }> =>
+        (event): event is Extract<SessionEvent, { type: "skills_catalog" }> =>
           event.type === "skills_catalog",
       );
       if (context.utils.isSessionError(event)) {
@@ -232,7 +232,7 @@ export function createSkillsRouteHandlers(context: JsonRpcRouteContext): JsonRpc
         async (session) => {
           await session.disableSkillInstallation(installationId);
         },
-        (event): event is Extract<ServerEvent, { type: "skills_catalog" }> =>
+        (event): event is Extract<SessionEvent, { type: "skills_catalog" }> =>
           event.type === "skills_catalog",
       );
       if (context.utils.isSessionError(event)) {
@@ -253,7 +253,7 @@ export function createSkillsRouteHandlers(context: JsonRpcRouteContext): JsonRpc
         async (session) => {
           await session.deleteSkillInstallation(installationId);
         },
-        (event): event is Extract<ServerEvent, { type: "skills_catalog" }> =>
+        (event): event is Extract<SessionEvent, { type: "skills_catalog" }> =>
           event.type === "skills_catalog",
       );
       if (context.utils.isSessionError(event)) {
@@ -274,7 +274,7 @@ export function createSkillsRouteHandlers(context: JsonRpcRouteContext): JsonRpc
         async (session) => {
           await session.updateSkillInstallation(installationId);
         },
-        (event): event is Extract<ServerEvent, { type: "skills_catalog" }> =>
+        (event): event is Extract<SessionEvent, { type: "skills_catalog" }> =>
           event.type === "skills_catalog",
       );
       if (context.utils.isSessionError(event)) {
@@ -294,7 +294,7 @@ export function createSkillsRouteHandlers(context: JsonRpcRouteContext): JsonRpc
         context,
         cwd,
         async (session) => await session.copySkillInstallation(installationId, targetScope),
-        (event): event is Extract<ServerEvent, { type: "skills_catalog" }> =>
+        (event): event is Extract<SessionEvent, { type: "skills_catalog" }> =>
           event.type === "skills_catalog",
       );
       if (context.utils.isSessionError(event)) {
@@ -313,7 +313,7 @@ export function createSkillsRouteHandlers(context: JsonRpcRouteContext): JsonRpc
         context,
         cwd,
         async (session) => await session.checkSkillInstallationUpdate(installationId),
-        (event): event is Extract<ServerEvent, { type: "skill_installation_update_check" }> =>
+        (event): event is Extract<SessionEvent, { type: "skill_installation_update_check" }> =>
           event.type === "skill_installation_update_check",
       );
       if (context.utils.isSessionError(event)) {

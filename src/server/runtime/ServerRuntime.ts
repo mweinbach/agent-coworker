@@ -66,7 +66,6 @@ export interface StartAgentServerOptions {
   connectProviderImpl?: typeof connectModelProvider;
   getAiCoworkerPathsImpl?: typeof getAiCoworkerPaths;
   runTurnImpl?: typeof runTurnFn;
-  wsProtocolDefault?: "jsonrpc";
   preloadSystemPrompt?: boolean;
 }
 

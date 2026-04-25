@@ -245,7 +245,6 @@ export function ensureWorkspaceJsonRpcSocket(
       title: "Cowork Desktop",
       version: "0.1.0",
     },
-    allowQueryProtocolFallback: true,
     autoReconnect: true,
     openTimeoutMs: DESKTOP_JSONRPC_OPEN_TIMEOUT_MS,
     handshakeTimeoutMs: DESKTOP_JSONRPC_HANDSHAKE_TIMEOUT_MS,

@@ -1,5 +1,5 @@
 import type { AgentConfig } from "../../../types";
-import type { ServerEvent } from "../../protocol";
+import type { SessionEvent } from "../../protocol";
 import { JSONRPC_ERROR_CODES } from "../protocol";
 import { jsonRpcSessionRequestSchemas } from "../schema.session";
 
@@ -30,7 +30,7 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
       const event = await context.events.capture(
         binding,
         () => session.setSessionTitle(title),
-        (event): event is Extract<ServerEvent, { type: "session_info" }> =>
+        (event): event is Extract<SessionEvent, { type: "session_info" }> =>
           event.type === "session_info",
       );
       context.jsonrpc.sendResult(ws, message.id, { event });
@@ -65,7 +65,7 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
         context,
         binding,
         async () => await session.setModel(model, provider),
-        (event): event is Extract<ServerEvent, { type: "config_updated" }> =>
+        (event): event is Extract<SessionEvent, { type: "config_updated" }> =>
           event.type === "config_updated",
       );
       if (outcome?.type === "error") {
@@ -105,7 +105,7 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
         context,
         binding,
         () => session.setSessionUsageBudget(warnAtUsd, stopAtUsd),
-        (event): event is Extract<ServerEvent, { type: "session_usage" }> =>
+        (event): event is Extract<SessionEvent, { type: "session_usage" }> =>
           event.type === "session_usage",
       );
       if (outcome.type === "error") {
@@ -132,7 +132,7 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
         context,
         binding,
         async () => await session.setConfig(configPatch),
-        (event): event is Extract<ServerEvent, { type: "session_config" }> =>
+        (event): event is Extract<SessionEvent, { type: "session_config" }> =>
           event.type === "session_config",
       );
       if (outcome?.type === "error") {
@@ -160,7 +160,7 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
       const outcome = await context.events.capture(
         binding,
         () => session.getHarnessContext(),
-        (event): event is Extract<ServerEvent, { type: "harness_context" }> =>
+        (event): event is Extract<SessionEvent, { type: "harness_context" }> =>
           event.type === "harness_context",
       );
       context.jsonrpc.sendResult(ws, message.id, { event: outcome });
@@ -193,7 +193,7 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
       const outcome = await context.events.capture(
         binding,
         () => session.setHarnessContext(harnessPayload),
-        (event): event is Extract<ServerEvent, { type: "harness_context" }> =>
+        (event): event is Extract<SessionEvent, { type: "harness_context" }> =>
           event.type === "harness_context",
       );
       context.jsonrpc.sendResult(ws, message.id, { event: outcome });
@@ -235,7 +235,7 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
               (
                 event,
               ): event is Extract<
-                ServerEvent,
+                SessionEvent,
                 {
                   type:
                     | "session_config"
@@ -267,7 +267,7 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
               (
                 event,
               ): event is Extract<
-                ServerEvent,
+                SessionEvent,
                 {
                   type:
                     | "session_config"
@@ -312,7 +312,7 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
         cwd,
         async (session) =>
           await session.uploadFile(parsed.data.filename, parsed.data.contentBase64),
-        (event): event is Extract<ServerEvent, { type: "file_uploaded" }> =>
+        (event): event is Extract<SessionEvent, { type: "file_uploaded" }> =>
           event.type === "file_uploaded",
       );
       if (outcome.type === "error") {
@@ -331,7 +331,7 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
         context,
         cwd,
         async (session) => await session.deleteSession(targetSessionId),
-        (event): event is Extract<ServerEvent, { type: "session_deleted" }> =>
+        (event): event is Extract<SessionEvent, { type: "session_deleted" }> =>
           event.type === "session_deleted" && event.targetSessionId === targetSessionId,
       );
       if (outcome.type === "error") {

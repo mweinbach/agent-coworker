@@ -11,7 +11,7 @@ import {
   envelopeSurfaceId,
   parseA2uiEnvelope,
 } from "../../shared/a2ui";
-import type { ServerEvent } from "../protocol";
+import type { SessionEvent } from "../protocol";
 
 /**
  * Upper bound on distinct surfaces held per session. When exceeded, the
@@ -71,13 +71,13 @@ function findComponentType(root: unknown, componentId: string, depth = 0): strin
 
 export type A2uiSurfaceManagerDeps = {
   sessionId: string;
-  emit: (evt: ServerEvent) => void;
+  emit: (evt: SessionEvent) => void;
   log?: (line: string) => void;
 };
 
 /**
  * Per-session state machine that folds incoming A2UI envelopes into
- * resolved surfaces and broadcasts a matching `a2ui_surface` ServerEvent.
+ * resolved surfaces and broadcasts a matching `a2ui_surface` SessionEvent.
  *
  * The manager is intentionally synchronous — it lives inside the active turn
  * and is invoked from the `a2ui` tool. All state is held in memory; surfaces
@@ -116,7 +116,7 @@ export class A2uiSurfaceManager {
   /**
    * Apply a single envelope. Returns a structured result that the tool
    * layer can fold into the tool's return value. Optional `meta` gets
-   * attached to the emitted ServerEvent so clients can surface a reason
+   * attached to the emitted SessionEvent so clients can surface a reason
    * and coalesce revisions that share a tool call.
    */
   applyEnvelope(
@@ -228,7 +228,7 @@ export class A2uiSurfaceManager {
   private resolvedEvent(
     state: A2uiSurfaceState,
     meta: A2uiApplyMeta & { changeKind?: A2uiEnvelopeKind } = {},
-  ): ServerEvent {
+  ): SessionEvent {
     return {
       type: "a2ui_surface",
       sessionId: this.deps.sessionId,

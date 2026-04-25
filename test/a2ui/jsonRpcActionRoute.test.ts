@@ -5,7 +5,7 @@ import {
   createJsonRpcRequestRouter,
   type JsonRpcRouteContext,
 } from "../../src/server/jsonrpc/routes";
-import type { ServerEvent } from "../../src/server/protocol";
+import type { SessionEvent } from "../../src/server/protocol";
 
 type SessionMock = {
   id: string;
@@ -113,7 +113,7 @@ function createHarness(opts: { session?: SessionMock; activeTurnId?: string | nu
       }) as any,
       shouldIncludeThreadSummary: () => true,
       buildControlSessionStateEvents: () => [],
-      isSessionError: (event): event is Extract<ServerEvent, { type: "error" }> =>
+      isSessionError: (event): event is Extract<SessionEvent, { type: "error" }> =>
         event.type === "error",
     },
   };

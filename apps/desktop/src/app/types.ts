@@ -13,7 +13,7 @@ import type {
   PluginCatalogSnapshot,
   PluginInstallPreview,
   ProviderName,
-  ServerEvent,
+  SessionEvent,
   SkillCatalogSnapshot,
   SkillEntry,
   SkillInstallationEntry,
@@ -120,7 +120,7 @@ export type ThreadPendingTurnStart = {
 };
 
 export type PersistedProviderStatus = Extract<
-  ServerEvent,
+  SessionEvent,
   { type: "provider_status" }
 >["providers"][number];
 
@@ -314,26 +314,26 @@ export function createDefaultA2uiDock(): A2uiThreadDock {
   };
 }
 
-export type SessionConfigSubset = Extract<ServerEvent, { type: "session_config" }>["config"];
-export type MCPServersEvent = Extract<ServerEvent, { type: "mcp_servers" }>;
-export type MCPServerValidationEvent = Extract<ServerEvent, { type: "mcp_server_validation" }>;
+export type SessionConfigSubset = Extract<SessionEvent, { type: "session_config" }>["config"];
+export type MCPServersEvent = Extract<SessionEvent, { type: "mcp_servers" }>;
+export type MCPServerValidationEvent = Extract<SessionEvent, { type: "mcp_server_validation" }>;
 export type MCPServerAuthChallengeEvent = Extract<
-  ServerEvent,
+  SessionEvent,
   { type: "mcp_server_auth_challenge" }
 >;
-export type MCPServerAuthResultEvent = Extract<ServerEvent, { type: "mcp_server_auth_result" }>;
+export type MCPServerAuthResultEvent = Extract<SessionEvent, { type: "mcp_server_auth_result" }>;
 export type SessionUsageSnapshot = NonNullable<
-  Extract<ServerEvent, { type: "session_usage" }>["usage"]
+  Extract<SessionEvent, { type: "session_usage" }>["usage"]
 >;
 export type TurnUsageSnapshot = Pick<
-  Extract<ServerEvent, { type: "turn_usage" }>,
+  Extract<SessionEvent, { type: "turn_usage" }>,
   "turnId" | "usage"
 >;
-export type WorkspaceBackupsEvent = Extract<ServerEvent, { type: "workspace_backups" }>;
-export type WorkspaceBackupDeltaEvent = Extract<ServerEvent, { type: "workspace_backup_delta" }>;
-export type PluginsCatalogEvent = Extract<ServerEvent, { type: "plugins_catalog" }>;
-export type PluginDetailEvent = Extract<ServerEvent, { type: "plugin_detail" }>;
-export type SessionSnapshot = Extract<ServerEvent, { type: "session_snapshot" }>["snapshot"];
+export type WorkspaceBackupsEvent = Extract<SessionEvent, { type: "workspace_backups" }>;
+export type WorkspaceBackupDeltaEvent = Extract<SessionEvent, { type: "workspace_backup_delta" }>;
+export type PluginsCatalogEvent = Extract<SessionEvent, { type: "plugins_catalog" }>;
+export type PluginDetailEvent = Extract<SessionEvent, { type: "plugin_detail" }>;
+export type SessionSnapshot = Extract<SessionEvent, { type: "session_snapshot" }>["snapshot"];
 export type SessionSnapshotFingerprint = Pick<
   SessionSnapshot,
   "updatedAt" | "messageCount" | "lastEventSeq"
@@ -343,16 +343,16 @@ export type CachedSessionSnapshot = {
   snapshot: SessionSnapshot;
 };
 export type WorkspaceBackupEntry = WorkspaceBackupsEvent["backups"][number];
-export type ThreadAgentSummary = Extract<ServerEvent, { type: "agent_status" }>["agent"];
-export type ThreadSessionKind = Extract<ServerEvent, { type: "server_hello" }>["sessionKind"];
-export type ThreadAgentRole = Extract<ServerEvent, { type: "server_hello" }>["role"];
-export type ThreadAgentMode = Extract<ServerEvent, { type: "server_hello" }>["mode"];
+export type ThreadAgentSummary = Extract<SessionEvent, { type: "agent_status" }>["agent"];
+export type ThreadSessionKind = Extract<SessionEvent, { type: "server_hello" }>["sessionKind"];
+export type ThreadAgentRole = Extract<SessionEvent, { type: "server_hello" }>["role"];
+export type ThreadAgentMode = Extract<SessionEvent, { type: "server_hello" }>["mode"];
 export type ThreadAgentReasoningEffort = Extract<
-  ServerEvent,
+  SessionEvent,
   { type: "server_hello" }
 >["effectiveReasoningEffort"];
 export type ThreadAgentExecutionState = Extract<
-  ServerEvent,
+  SessionEvent,
   { type: "server_hello" }
 >["executionState"];
 

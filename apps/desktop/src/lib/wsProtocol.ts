@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import type { ServerEvent as CoreServerEvent } from "../../../../src/server/protocol";
+import type { SessionEvent as CoreSessionEvent } from "../../../../src/server/protocol";
 
 export { ASK_SKIP_TOKEN } from "../../../../src/shared/ask";
 export { DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS } from "../../../../src/shared/toolOutputOverflow";
@@ -8,7 +8,7 @@ export { DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS } from "../../../../src/shared/toolO
 import { persistentAgentSummarySchema } from "../../../../src/shared/agents";
 import { sessionSnapshotSchema } from "../../../../src/shared/sessionSnapshot";
 
-export type { ServerEvent } from "../../../../src/server/protocol";
+export type { SessionEvent } from "../../../../src/server/protocol";
 export type {
   ApprovalRiskCode,
   ChildModelRoutingMode,
@@ -29,7 +29,7 @@ export type {
 } from "../../../../src/types";
 export { PROVIDER_NAMES } from "../../../../src/types";
 
-export type ConfigSubset = Extract<CoreServerEvent, { type: "server_hello" }>["config"];
+export type ConfigSubset = Extract<CoreSessionEvent, { type: "server_hello" }>["config"];
 
 export function safeJsonParse(raw: unknown): unknown | null {
   if (typeof raw !== "string") return null;
@@ -54,7 +54,7 @@ const agentWaitResultEventSchema = z
   })
   .strict();
 
-const desktopServerEventSchema = z.discriminatedUnion("type", [
+const desktopSessionEventSchema = z.discriminatedUnion("type", [
   z
     .object({
       type: z.literal("session_snapshot"),
@@ -113,7 +113,7 @@ function normalizeLegacySessionSnapshotEvent(raw: unknown): unknown {
   };
 }
 
-export function safeParseServerEvent(raw: unknown): CoreServerEvent | null {
-  const parsed = desktopServerEventSchema.safeParse(normalizeLegacySessionSnapshotEvent(raw));
-  return parsed.success ? (parsed.data as CoreServerEvent) : null;
+export function safeParseSessionEvent(raw: unknown): CoreSessionEvent | null {
+  const parsed = desktopSessionEventSchema.safeParse(normalizeLegacySessionSnapshotEvent(raw));
+  return parsed.success ? (parsed.data as CoreSessionEvent) : null;
 }

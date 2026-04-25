@@ -6,7 +6,7 @@ import * as REAL_AGENT from "../src/agent";
 import { defaultSupportedModel, getSupportedModel } from "../src/models/registry";
 import { __internal as observabilityRuntimeInternal } from "../src/observability/runtime";
 import { createRuntime } from "../src/runtime";
-import { ASK_SKIP_TOKEN, type ServerEvent } from "../src/server/protocol";
+import { ASK_SKIP_TOKEN, type SessionEvent } from "../src/server/protocol";
 import type { SessionInfoState } from "../src/server/session/SessionContext";
 import type {
   SessionBackupHandle,
@@ -107,9 +107,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function makeEmit(): { emit: (evt: ServerEvent) => void; events: ServerEvent[] } {
-  const events: ServerEvent[] = [];
-  const emit = (event: ServerEvent) => {
+function makeEmit(): { emit: (evt: SessionEvent) => void; events: SessionEvent[] } {
+  const events: SessionEvent[] = [];
+  const emit = (event: SessionEvent) => {
     events.push(event);
   };
   return { emit, events };
@@ -176,7 +176,7 @@ function makeSession(
     config: AgentConfig;
     system: string;
     yolo: boolean;
-    emit: (evt: ServerEvent) => void;
+    emit: (evt: SessionEvent) => void;
     connectProviderImpl: (opts: any) => Promise<any>;
     getAiCoworkerPathsImpl: (opts?: { homedir?: string }) => {
       rootDir: string;
@@ -555,7 +555,7 @@ describe("AgentSession", () => {
       expect(session.getEnableMcp()).toBe(false);
       expect(events.some((evt) => evt.type === "session_settings")).toBe(true);
       const errEvt = events.find(
-        (evt): evt is Extract<ServerEvent, { type: "error" }> => evt.type === "error",
+        (evt): evt is Extract<SessionEvent, { type: "error" }> => evt.type === "error",
       );
       expect(errEvt).toBeDefined();
       if (errEvt) {
@@ -762,7 +762,7 @@ describe("AgentSession", () => {
 
       expect(loadSystemPromptWithSkillsImpl).not.toHaveBeenCalled();
       const errEvt = events.find(
-        (evt): evt is Extract<ServerEvent, { type: "error" }> => evt.type === "error",
+        (evt): evt is Extract<SessionEvent, { type: "error" }> => evt.type === "error",
       );
       expect(errEvt).toBeDefined();
       if (errEvt) {
@@ -788,7 +788,7 @@ describe("AgentSession", () => {
 
       expect(loadSystemPromptWithSkillsImpl).not.toHaveBeenCalled();
       const errEvt = events.find(
-        (evt): evt is Extract<ServerEvent, { type: "error" }> => evt.type === "error",
+        (evt): evt is Extract<SessionEvent, { type: "error" }> => evt.type === "error",
       );
       expect(errEvt).toBeDefined();
       if (errEvt) {
@@ -1285,7 +1285,7 @@ describe("AgentSession", () => {
       expect(cfgEvt).toBeUndefined();
 
       const errEvt = events.find(
-        (evt): evt is Extract<ServerEvent, { type: "error" }> => evt.type === "error",
+        (evt): evt is Extract<SessionEvent, { type: "error" }> => evt.type === "error",
       );
       expect(errEvt).toBeDefined();
       if (errEvt) {
@@ -1737,7 +1737,7 @@ describe("AgentSession", () => {
       expect(session.getPublicConfig().provider).toBe("google");
       expect(session.getPublicConfig().model).toBe("gemini-3-flash-preview");
       const updated = events.find(
-        (e): e is Extract<ServerEvent, { type: "config_updated" }> => e.type === "config_updated",
+        (e): e is Extract<SessionEvent, { type: "config_updated" }> => e.type === "config_updated",
       );
       expect(updated).toBeDefined();
       if (updated) {
@@ -1754,7 +1754,7 @@ describe("AgentSession", () => {
       expect(session.getPublicConfig().provider).toBe("anthropic");
       expect(session.getPublicConfig().model).toBe("claude-sonnet-4-5");
       const updated = events.find(
-        (e): e is Extract<ServerEvent, { type: "config_updated" }> => e.type === "config_updated",
+        (e): e is Extract<SessionEvent, { type: "config_updated" }> => e.type === "config_updated",
       );
       expect(updated).toBeDefined();
       if (updated) {
@@ -1800,7 +1800,7 @@ describe("AgentSession", () => {
       const { session, events } = makeSession();
       await session.setModel("gpt-5.2", "openai");
       const info = events.find(
-        (e): e is Extract<ServerEvent, { type: "session_info" }> => e.type === "session_info",
+        (e): e is Extract<SessionEvent, { type: "session_info" }> => e.type === "session_info",
       );
       expect(info).toBeDefined();
       if (info) {
@@ -1887,12 +1887,12 @@ describe("AgentSession", () => {
       await session.setModel("gemini-3-flash-preview");
 
       const updated = events.find(
-        (e): e is Extract<ServerEvent, { type: "config_updated" }> => e.type === "config_updated",
+        (e): e is Extract<SessionEvent, { type: "config_updated" }> => e.type === "config_updated",
       );
       expect(updated).toBeDefined();
       expect(session.getPublicConfig().model).toBe("gemini-3-flash-preview");
       const err = events.find(
-        (e): e is Extract<ServerEvent, { type: "error" }> =>
+        (e): e is Extract<SessionEvent, { type: "error" }> =>
           e.type === "error" && e.message.includes("Model updated for this session"),
       );
       expect(err).toBeDefined();
@@ -1946,7 +1946,7 @@ describe("AgentSession", () => {
 
       expect(session.getPublicConfig()).toEqual(before);
       const err = events.find(
-        (e): e is Extract<ServerEvent, { type: "error" }> => e.type === "error",
+        (e): e is Extract<SessionEvent, { type: "error" }> => e.type === "error",
       );
       expect(err).toBeDefined();
       if (err) {
@@ -3214,7 +3214,7 @@ describe("AgentSession", () => {
       await session.sendSteerMessage("narrow the scope", busyTrue.turnId, "steer-1");
 
       const steerAccepted = events.find((e) => e.type === "steer_accepted") as
-        | Extract<ServerEvent, { type: "steer_accepted" }>
+        | Extract<SessionEvent, { type: "steer_accepted" }>
         | undefined;
       expect(steerAccepted).toBeDefined();
       expect(steerAccepted?.turnId).toBe(busyTrue.turnId);
@@ -3252,7 +3252,7 @@ describe("AgentSession", () => {
       await session.sendSteerMessage("continue", "wrong-turn", "steer-wrong");
 
       const errorEvt = events.find((e) => e.type === "error") as
-        | Extract<ServerEvent, { type: "error" }>
+        | Extract<SessionEvent, { type: "error" }>
         | undefined;
       expect(errorEvt?.message).toBe("Active turn mismatch.");
       expect(events.some((e) => e.type === "steer_accepted")).toBe(false);
@@ -3426,7 +3426,7 @@ describe("AgentSession", () => {
       );
 
       const errorEvt = events.findLast((e) => e.type === "error") as
-        | Extract<ServerEvent, { type: "error" }>
+        | Extract<SessionEvent, { type: "error" }>
         | undefined;
       expect(errorEvt?.message).toBe(
         "Pending steer attachments are too large. Wait for the current turn to consume queued steers.",
@@ -3582,7 +3582,7 @@ describe("AgentSession", () => {
       ).toHaveLength(1);
 
       const usageEvents = events.filter((e) => e.type === "turn_usage") as Array<
-        Extract<ServerEvent, { type: "turn_usage" }>
+        Extract<SessionEvent, { type: "turn_usage" }>
       >;
       expect(usageEvents).toHaveLength(1);
       expect(usageEvents[0]?.turnId).toBe(seenTurnIds[0]);
@@ -3733,12 +3733,12 @@ describe("AgentSession", () => {
       expect(runCount).toBe(2);
 
       const busyTrue = events.find((e) => e.type === "session_busy" && (e as any).busy === true) as
-        | Extract<ServerEvent, { type: "session_busy" }>
+        | Extract<SessionEvent, { type: "session_busy" }>
         | undefined;
       expect(busyTrue?.turnId).toBeTruthy();
 
       const usageEvents = events.filter((e) => e.type === "turn_usage") as Array<
-        Extract<ServerEvent, { type: "turn_usage" }>
+        Extract<SessionEvent, { type: "turn_usage" }>
       >;
       expect(usageEvents).toHaveLength(1);
       expect(usageEvents[0]?.turnId).toBe(busyTrue?.turnId);
@@ -3760,19 +3760,19 @@ describe("AgentSession", () => {
       });
 
       const sessionUsageEvents = events.filter((e) => e.type === "session_usage") as Array<
-        Extract<ServerEvent, { type: "session_usage" }>
+        Extract<SessionEvent, { type: "session_usage" }>
       >;
       expect(sessionUsageEvents).toHaveLength(1);
       expect(sessionUsageEvents[0]?.usage?.totalTurns).toBe(1);
       expect(sessionUsageEvents[0]?.usage?.turns[0]?.turnId).toBe(busyTrue?.turnId);
 
       const errorEvt = events.find((e) => e.type === "error") as
-        | Extract<ServerEvent, { type: "error" }>
+        | Extract<SessionEvent, { type: "error" }>
         | undefined;
       expect(errorEvt?.message).toContain("follow-up provider failed");
 
       const busyFalse = events.find((e) => e.type === "session_busy" && !(e as any).busy) as
-        | Extract<ServerEvent, { type: "session_busy" }>
+        | Extract<SessionEvent, { type: "session_busy" }>
         | undefined;
       expect(busyFalse?.outcome).toBe("error");
     });
@@ -3799,7 +3799,7 @@ describe("AgentSession", () => {
       await session.sendSteerMessage("too late", activeTurnId!, "steer-closed");
 
       const errorEvt = events.findLast((e) => e.type === "error") as
-        | Extract<ServerEvent, { type: "error" }>
+        | Extract<SessionEvent, { type: "error" }>
         | undefined;
       expect(errorEvt?.message).toBe("Active turn no longer accepts steering.");
       expect(
@@ -4202,7 +4202,7 @@ describe("AgentSession", () => {
       ]);
 
       const errorEvt = events.findLast((e) => e.type === "error") as
-        | Extract<ServerEvent, { type: "error" }>
+        | Extract<SessionEvent, { type: "error" }>
         | undefined;
       expect(errorEvt).toMatchObject({
         code: "validation_failed",
@@ -4230,7 +4230,7 @@ describe("AgentSession", () => {
       ]);
 
       const errorEvt = events.findLast((e) => e.type === "error") as
-        | Extract<ServerEvent, { type: "error" }>
+        | Extract<SessionEvent, { type: "error" }>
         | undefined;
       expect(errorEvt).toMatchObject({
         code: "validation_failed",
@@ -4339,7 +4339,7 @@ describe("AgentSession", () => {
       ]);
 
       const errorEvt = events.find((e) => e.type === "error") as
-        | Extract<ServerEvent, { type: "error" }>
+        | Extract<SessionEvent, { type: "error" }>
         | undefined;
       expect(errorEvt).toMatchObject({
         code: "validation_failed",
@@ -4363,7 +4363,7 @@ describe("AgentSession", () => {
       ]);
 
       const errorEvt = events.find((e) => e.type === "error") as
-        | Extract<ServerEvent, { type: "error" }>
+        | Extract<SessionEvent, { type: "error" }>
         | undefined;
       expect(errorEvt).toMatchObject({
         code: "validation_failed",
@@ -4390,7 +4390,7 @@ describe("AgentSession", () => {
       );
 
       const errorEvt = events.find((e) => e.type === "error") as
-        | Extract<ServerEvent, { type: "error" }>
+        | Extract<SessionEvent, { type: "error" }>
         | undefined;
       expect(errorEvt).toMatchObject({
         code: "validation_failed",
@@ -4424,7 +4424,7 @@ describe("AgentSession", () => {
         query: "first question",
       });
       const infoEvents = events.filter(
-        (evt): evt is Extract<ServerEvent, { type: "session_info" }> => evt.type === "session_info",
+        (evt): evt is Extract<SessionEvent, { type: "session_info" }> => evt.type === "session_info",
       );
       expect(infoEvents.some((evt) => evt.title === "First prompt title")).toBe(true);
     });
@@ -4740,7 +4740,7 @@ describe("AgentSession", () => {
       await session.sendUserMessage("hi");
 
       const chunks = events.filter((e) => e.type === "model_stream_chunk") as Extract<
-        ServerEvent,
+        SessionEvent,
         { type: "model_stream_chunk" }
       >[];
       expect(chunks).toHaveLength(4);
@@ -4908,7 +4908,7 @@ describe("AgentSession", () => {
 
       const chunk = events.find(
         (e) => e.type === "model_stream_chunk" && e.partType === "reasoning_delta",
-      ) as Extract<ServerEvent, { type: "model_stream_chunk" }> | undefined;
+      ) as Extract<SessionEvent, { type: "model_stream_chunk" }> | undefined;
       expect(chunk).toBeDefined();
       if (chunk) {
         expect(chunk.part.mode).toBe("summary");
@@ -4965,7 +4965,7 @@ describe("AgentSession", () => {
 
       const chunk = events.find(
         (e) => e.type === "model_stream_chunk" && e.partType === "reasoning_delta",
-      ) as Extract<ServerEvent, { type: "model_stream_chunk" }> | undefined;
+      ) as Extract<SessionEvent, { type: "model_stream_chunk" }> | undefined;
       expect(chunk).toBeDefined();
       if (chunk) {
         expect(chunk.part.mode).toBe("reasoning");
@@ -4989,7 +4989,7 @@ describe("AgentSession", () => {
       await session.sendUserMessage("go");
 
       const chunk = events.find((e) => e.type === "model_stream_chunk") as
-        | Extract<ServerEvent, { type: "model_stream_chunk" }>
+        | Extract<SessionEvent, { type: "model_stream_chunk" }>
         | undefined;
       expect(chunk).toBeDefined();
       if (!chunk) return;
@@ -5041,7 +5041,7 @@ describe("AgentSession", () => {
       await session.sendUserMessage("go");
 
       const errorEvt = events.find((e) => e.type === "error") as
-        | Extract<ServerEvent, { type: "error" }>
+        | Extract<SessionEvent, { type: "error" }>
         | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
@@ -5059,7 +5059,7 @@ describe("AgentSession", () => {
       await session.sendUserMessage("go");
 
       const errorEvt = events.find((e) => e.type === "error") as
-        | Extract<ServerEvent, { type: "error" }>
+        | Extract<SessionEvent, { type: "error" }>
         | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
@@ -5077,7 +5077,7 @@ describe("AgentSession", () => {
       await session.sendUserMessage("go");
 
       const errorEvt = events.find((e) => e.type === "error") as
-        | Extract<ServerEvent, { type: "error" }>
+        | Extract<SessionEvent, { type: "error" }>
         | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
@@ -5095,7 +5095,7 @@ describe("AgentSession", () => {
       await session.sendUserMessage("go");
 
       const errorEvt = events.find((e) => e.type === "error") as
-        | Extract<ServerEvent, { type: "error" }>
+        | Extract<SessionEvent, { type: "error" }>
         | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
@@ -5113,7 +5113,7 @@ describe("AgentSession", () => {
       await session.sendUserMessage("go");
 
       const errorEvt = events.find((e) => e.type === "error") as
-        | Extract<ServerEvent, { type: "error" }>
+        | Extract<SessionEvent, { type: "error" }>
         | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
@@ -5367,7 +5367,7 @@ describe("AgentSession", () => {
       }
 
       const backupEvents = events.filter((e) => e.type === "session_backup_state") as Array<
-        Extract<ServerEvent, { type: "session_backup_state" }>
+        Extract<SessionEvent, { type: "session_backup_state" }>
       >;
       const auto = backupEvents.find((e) => e.reason === "auto_checkpoint");
       expect(auto).toBeDefined();
@@ -5384,7 +5384,7 @@ describe("AgentSession", () => {
 
       const manual = events.find(
         (e) => e.type === "session_backup_state" && e.reason === "manual_checkpoint",
-      ) as Extract<ServerEvent, { type: "session_backup_state" }> | undefined;
+      ) as Extract<SessionEvent, { type: "session_backup_state" }> | undefined;
       expect(manual).toBeDefined();
       if (manual) {
         expect(manual.backup.checkpoints).toHaveLength(2);
@@ -5459,7 +5459,7 @@ describe("AgentSession", () => {
       expect(restoreCheckpointCalls).toEqual(["cp-0001"]);
       const restoreEvents = events.filter(
         (e) => e.type === "session_backup_state" && e.reason === "restore",
-      ) as Array<Extract<ServerEvent, { type: "session_backup_state" }>>;
+      ) as Array<Extract<SessionEvent, { type: "session_backup_state" }>>;
       expect(restoreEvents).toHaveLength(2);
       expect(restoreEvents.every((evt) => evt.backup.status === "ready")).toBe(true);
     });
@@ -5485,7 +5485,7 @@ describe("AgentSession", () => {
 
       const manualEvents = events.filter(
         (e) => e.type === "session_backup_state" && e.reason === "manual_checkpoint",
-      ) as Array<Extract<ServerEvent, { type: "session_backup_state" }>>;
+      ) as Array<Extract<SessionEvent, { type: "session_backup_state" }>>;
       expect(manualEvents.length).toBe(2);
       expect(manualEvents[1]?.backup.checkpoints.length).toBe(3);
     });
@@ -5533,7 +5533,7 @@ describe("AgentSession", () => {
       await session.sendUserMessage("go");
 
       const errorEvt = events.find((e) => e.type === "error") as
-        | Extract<ServerEvent, { type: "error" }>
+        | Extract<SessionEvent, { type: "error" }>
         | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
@@ -5551,7 +5551,7 @@ describe("AgentSession", () => {
       await session.sendUserMessage("go");
 
       const errorEvt = events.find((e) => e.type === "error") as
-        | Extract<ServerEvent, { type: "error" }>
+        | Extract<SessionEvent, { type: "error" }>
         | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
@@ -5569,7 +5569,7 @@ describe("AgentSession", () => {
       await session.sendUserMessage("go");
 
       const errorEvt = events.find((e) => e.type === "error") as
-        | Extract<ServerEvent, { type: "error" }>
+        | Extract<SessionEvent, { type: "error" }>
         | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
@@ -5587,7 +5587,7 @@ describe("AgentSession", () => {
       await session.sendUserMessage("go");
 
       const errorEvt = events.find((e) => e.type === "error") as
-        | Extract<ServerEvent, { type: "error" }>
+        | Extract<SessionEvent, { type: "error" }>
         | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
@@ -5605,7 +5605,7 @@ describe("AgentSession", () => {
       await session.sendUserMessage("go");
 
       const errorEvt = events.find((e) => e.type === "error") as
-        | Extract<ServerEvent, { type: "error" }>
+        | Extract<SessionEvent, { type: "error" }>
         | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
@@ -5623,7 +5623,7 @@ describe("AgentSession", () => {
       await session.sendUserMessage("go");
 
       const errorEvt = events.find((e) => e.type === "error") as
-        | Extract<ServerEvent, { type: "error" }>
+        | Extract<SessionEvent, { type: "error" }>
         | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
@@ -5641,7 +5641,7 @@ describe("AgentSession", () => {
       await session.sendUserMessage("go");
 
       const errorEvt = events.find((e) => e.type === "error") as
-        | Extract<ServerEvent, { type: "error" }>
+        | Extract<SessionEvent, { type: "error" }>
         | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
@@ -5659,7 +5659,7 @@ describe("AgentSession", () => {
       await session.sendUserMessage("go");
 
       const errorEvt = events.find((e) => e.type === "error") as
-        | Extract<ServerEvent, { type: "error" }>
+        | Extract<SessionEvent, { type: "error" }>
         | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
@@ -5677,7 +5677,7 @@ describe("AgentSession", () => {
       await session.sendUserMessage("go");
 
       const errorEvt = events.find((e) => e.type === "error") as
-        | Extract<ServerEvent, { type: "error" }>
+        | Extract<SessionEvent, { type: "error" }>
         | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
@@ -5695,7 +5695,7 @@ describe("AgentSession", () => {
       await session.sendUserMessage("go");
 
       const errorEvt = events.find((e) => e.type === "error") as
-        | Extract<ServerEvent, { type: "error" }>
+        | Extract<SessionEvent, { type: "error" }>
         | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
@@ -5713,7 +5713,7 @@ describe("AgentSession", () => {
       await session.sendUserMessage("go");
 
       const errorEvt = events.find((e) => e.type === "error") as
-        | Extract<ServerEvent, { type: "error" }>
+        | Extract<SessionEvent, { type: "error" }>
         | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
@@ -5731,7 +5731,7 @@ describe("AgentSession", () => {
       await session.sendUserMessage("go");
 
       const errorEvt = events.find((e) => e.type === "error") as
-        | Extract<ServerEvent, { type: "error" }>
+        | Extract<SessionEvent, { type: "error" }>
         | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
@@ -5749,7 +5749,7 @@ describe("AgentSession", () => {
       await session.sendUserMessage("go");
 
       const errorEvt = events.find((e) => e.type === "error") as
-        | Extract<ServerEvent, { type: "error" }>
+        | Extract<SessionEvent, { type: "error" }>
         | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
@@ -5767,7 +5767,7 @@ describe("AgentSession", () => {
       await session.sendUserMessage("go");
 
       const errorEvt = events.find((e) => e.type === "error") as
-        | Extract<ServerEvent, { type: "error" }>
+        | Extract<SessionEvent, { type: "error" }>
         | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
@@ -5785,7 +5785,7 @@ describe("AgentSession", () => {
       await session.sendUserMessage("go");
 
       const errorEvt = events.find((e) => e.type === "error") as
-        | Extract<ServerEvent, { type: "error" }>
+        | Extract<SessionEvent, { type: "error" }>
         | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
@@ -5803,7 +5803,7 @@ describe("AgentSession", () => {
       await session.sendUserMessage("go");
 
       const errorEvt = events.find((e) => e.type === "error") as
-        | Extract<ServerEvent, { type: "error" }>
+        | Extract<SessionEvent, { type: "error" }>
         | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
@@ -5849,7 +5849,7 @@ describe("AgentSession", () => {
       await session.sendUserMessage("go");
 
       const usageEvt = events.find((e) => e.type === "turn_usage") as
-        | Extract<ServerEvent, { type: "turn_usage" }>
+        | Extract<SessionEvent, { type: "turn_usage" }>
         | undefined;
       expect(usageEvt).toBeDefined();
       if (usageEvt) {
@@ -6064,7 +6064,7 @@ describe("AgentSession", () => {
 
       expect(mockRunTurn.mock.calls.length).toBe(1);
       const errorEvt = events.find((e) => e.type === "error") as
-        | Extract<ServerEvent, { type: "error" }>
+        | Extract<SessionEvent, { type: "error" }>
         | undefined;
       expect(errorEvt).toBeDefined();
       if (errorEvt) {
@@ -6105,7 +6105,7 @@ describe("AgentSession", () => {
       session.setSessionUsageBudget(20, null);
 
       const usageEvt = events.find((e) => e.type === "session_usage") as
-        | Extract<ServerEvent, { type: "session_usage" }>
+        | Extract<SessionEvent, { type: "session_usage" }>
         | undefined;
       expect(usageEvt).toBeDefined();
       if (usageEvt?.usage) {
@@ -6146,7 +6146,7 @@ describe("AgentSession", () => {
       }
 
       const usageEvt = events.findLast((e) => e.type === "session_usage") as
-        | Extract<ServerEvent, { type: "session_usage" }>
+        | Extract<SessionEvent, { type: "session_usage" }>
         | undefined;
       expect(usageEvt).toBeDefined();
       expect(usageEvt?.usage?.totalTurns).toBe(10);
@@ -6182,21 +6182,21 @@ describe("AgentSession", () => {
       await session.sendUserMessage("first");
 
       const warningEvt = events.find((e) => e.type === "budget_warning") as
-        | Extract<ServerEvent, { type: "budget_warning" }>
+        | Extract<SessionEvent, { type: "budget_warning" }>
         | undefined;
       expect(warningEvt).toBeDefined();
       expect(warningEvt?.currentCostUsd).toBe(15.75);
       expect(warningEvt?.thresholdUsd).toBe(1);
 
       const exceededEvt = events.find((e) => e.type === "budget_exceeded") as
-        | Extract<ServerEvent, { type: "budget_exceeded" }>
+        | Extract<SessionEvent, { type: "budget_exceeded" }>
         | undefined;
       expect(exceededEvt).toBeDefined();
       expect(exceededEvt?.currentCostUsd).toBe(15.75);
       expect(exceededEvt?.thresholdUsd).toBe(2);
 
       const costLogs = events
-        .filter((e): e is Extract<ServerEvent, { type: "log" }> => e.type === "log")
+        .filter((e): e is Extract<SessionEvent, { type: "log" }> => e.type === "log")
         .map((e) => e.line);
       expect(costLogs.some((line) => line.includes("Budget warning"))).toBe(true);
       expect(costLogs.some((line) => line.includes("Budget exceeded"))).toBe(true);
@@ -6222,7 +6222,7 @@ describe("AgentSession", () => {
       session.setSessionUsageBudget(undefined, null);
 
       const usageEvt = events.find((e) => e.type === "session_usage") as
-        | Extract<ServerEvent, { type: "session_usage" }>
+        | Extract<SessionEvent, { type: "session_usage" }>
         | undefined;
       expect(usageEvt?.usage?.budgetStatus).toMatchObject({
         warnAtUsd: 2,
@@ -6238,7 +6238,7 @@ describe("AgentSession", () => {
       session.setSessionUsageBudget(6, undefined);
 
       const errorEvt = events.find((e) => e.type === "error") as
-        | Extract<ServerEvent, { type: "error" }>
+        | Extract<SessionEvent, { type: "error" }>
         | undefined;
       expect(errorEvt).toBeDefined();
       expect(errorEvt?.code).toBe("validation_failed");
@@ -6308,7 +6308,7 @@ describe("AgentSession", () => {
       session.getSessionUsage();
 
       const usageEvt = events.find((e) => e.type === "session_usage") as
-        | Extract<ServerEvent, { type: "session_usage" }>
+        | Extract<SessionEvent, { type: "session_usage" }>
         | undefined;
       expect(usageEvt?.usage).toEqual(tracker.getCompactSnapshot());
       expect(usageEvt?.usage?.totalTurns).toBe(10);
@@ -6706,7 +6706,7 @@ describe("AgentSession", () => {
       expect(session.getSessionInfoEvent().model).toBe(expectedModel);
 
       const migrationLog = events.find(
-        (event): event is Extract<ServerEvent, { type: "log" }> =>
+        (event): event is Extract<SessionEvent, { type: "log" }> =>
           event.type === "log" && event.line.includes("unsupported model"),
       );
       expect(migrationLog).toBeDefined();
@@ -6782,7 +6782,7 @@ describe("AgentSession", () => {
       expect(session.getSessionInfoEvent().model).toBe(expectedModel);
 
       const migrationLog = events.find(
-        (event): event is Extract<ServerEvent, { type: "log" }> =>
+        (event): event is Extract<SessionEvent, { type: "log" }> =>
           event.type === "log" && event.line.includes("legacy model alias"),
       );
       expect(migrationLog).toBeDefined();

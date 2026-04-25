@@ -6,7 +6,7 @@ import type {
 import { createDefaultUpdaterState, type UpdaterState } from "../lib/desktopApi";
 import { startWorkspaceServer } from "../lib/desktopCommands";
 import { fallbackAuthMethods } from "../lib/providerDisplayNames";
-import type { MCPServerConfig, ProviderName, ServerEvent, TodoItem } from "../lib/wsProtocol";
+import type { MCPServerConfig, ProviderName, SessionEvent, TodoItem } from "../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../lib/wsProtocol";
 import {
   buildContextPreamble,
@@ -126,14 +126,14 @@ function shouldAdoptServerTitle(opts: {
 
 const MAX_NOTIFICATIONS = 50;
 
-type ProviderStatusEvent = Extract<ServerEvent, { type: "provider_status" }>;
+type ProviderStatusEvent = Extract<SessionEvent, { type: "provider_status" }>;
 type ProviderStatus = ProviderStatusEvent["providers"][number];
-type ProviderCatalogEvent = Extract<ServerEvent, { type: "provider_catalog" }>;
+type ProviderCatalogEvent = Extract<SessionEvent, { type: "provider_catalog" }>;
 type ProviderCatalogEntry = ProviderCatalogEvent["all"][number];
-type ProviderAuthMethodsEvent = Extract<ServerEvent, { type: "provider_auth_methods" }>;
+type ProviderAuthMethodsEvent = Extract<SessionEvent, { type: "provider_auth_methods" }>;
 type ProviderAuthMethod = ProviderAuthMethodsEvent["methods"][string][number];
-type ProviderAuthChallengeEvent = Extract<ServerEvent, { type: "provider_auth_challenge" }>;
-type ProviderAuthResultEvent = Extract<ServerEvent, { type: "provider_auth_result" }>;
+type ProviderAuthChallengeEvent = Extract<SessionEvent, { type: "provider_auth_challenge" }>;
+type ProviderAuthResultEvent = Extract<SessionEvent, { type: "provider_auth_result" }>;
 
 function isProviderName(v: unknown): v is ProviderName {
   return typeof v === "string" && (PROVIDER_NAMES as readonly string[]).includes(v);

@@ -1,5 +1,20 @@
 import { startAgentServer } from "../src/server/startServer";
 
+type JsonRpcSmokeMessage = {
+  id?: string | number;
+  method?: string;
+  result?: {
+    thread?: {
+      id?: string;
+    };
+  };
+  params?: {
+    item?: {
+      type?: string;
+    };
+  };
+};
+
 async function main() {
   const { server, url } = await startAgentServer({
     cwd: process.cwd(),
@@ -18,7 +33,6 @@ async function main() {
 
   const ws = new WebSocket(url, "cowork.jsonrpc.v1");
   let nextId = 0;
-  let activeThreadId = "";
 
   const sendRequest = (method: string, params?: unknown) => {
     const id = ++nextId;
@@ -46,7 +60,7 @@ async function main() {
   };
 
   ws.onmessage = (event) => {
-    const message = JSON.parse(typeof event.data === "string" ? event.data : "");
+    const message = JSON.parse(typeof event.data === "string" ? event.data : "") as JsonRpcSmokeMessage;
     console.log(JSON.stringify(message));
 
     if (message.id === 1) {
@@ -56,9 +70,13 @@ async function main() {
     }
 
     if (message.id === 2) {
-      activeThreadId = message.result.thread.id;
+      const threadId = message.result?.thread?.id ?? "";
+      if (!threadId) {
+        void shutdown(1);
+        return;
+      }
       sendRequest("turn/start", {
-        threadId: activeThreadId,
+        threadId,
         input: [{ type: "text", text: "reply with exactly: jsonrpc smoke ok" }],
       });
       return;

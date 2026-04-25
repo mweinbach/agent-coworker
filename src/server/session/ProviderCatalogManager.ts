@@ -3,7 +3,7 @@ import type { getProviderStatuses } from "../../providerStatus";
 import { listProviderAuthMethods } from "../../providers/authRegistry";
 import type { getProviderCatalog } from "../../providers/connectionCatalog";
 import type { AgentConfig, ServerErrorCode, ServerErrorSource } from "../../types";
-import type { ServerEvent } from "../protocol";
+import type { SessionEvent } from "../protocol";
 
 export class ProviderCatalogManager {
   private refreshingProviderStatus = false;
@@ -15,7 +15,7 @@ export class ProviderCatalogManager {
       getGlobalAuthPaths: () => ReturnType<typeof getAiCoworkerPaths>;
       getProviderCatalog: typeof getProviderCatalog;
       getProviderStatuses: typeof getProviderStatuses;
-      emit: (evt: ServerEvent) => void;
+      emit: (evt: SessionEvent) => void;
       emitError: (code: ServerErrorCode, source: ServerErrorSource, message: string) => void;
       emitTelemetry: (
         name: string,

@@ -49,7 +49,7 @@ These apply to `bun run cli`, `bun run serve`, and `bun src/index.ts` / `cowork`
 *   **WebSocket-First Logic:**
     *   All business logic MUST reside in the server/agent layer.
     *   UIs are thin clients that communicate via the protocol defined in `docs/websocket-protocol.md`.
-    *   New features should be exposed as JSON-RPC methods in `src/server/jsonrpc/routes/` and schemas in `src/server/jsonrpc/schema.ts`. Legacy event types live in `src/server/protocol.ts`.
+    *   New features should be exposed as JSON-RPC methods in `src/server/jsonrpc/routes/` and schemas in `src/server/jsonrpc/schema.ts`. Internal session event types live in `src/server/protocol.ts`.
 *   **Testing:**
     *   Tests are written using `bun:test` and located in the `test/` directory.
     *   Files are named `*.test.ts`.
@@ -62,7 +62,7 @@ These apply to `bun run cli`, `bun run serve`, and `bun src/index.ts` / `cowork`
 
 *   `src/index.ts`: Main terminal entry point (CLI REPL).
 *   `src/agent.ts`: The core agent loop and LLM logic.
-*   `src/server/protocol.ts`: Legacy `ServerEvent` union types. JSON-RPC schemas live in `src/server/jsonrpc/`.
+*   `src/server/protocol.ts`: Internal `SessionEvent` union types. JSON-RPC schemas live in `src/server/jsonrpc/`.
 *   `docs/websocket-protocol.md`: Detailed documentation for building alternative clients.
 *   `docs/harness/index.md`: Harness docs map for context, config, observability, and the runbook.
 *   `skills/`: Directory for domain-specific best practice guides (e.g., `pdf`, `slides`) loaded by the agent.

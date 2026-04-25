@@ -25,15 +25,10 @@ const JSONRPC_REPLAY_WAIT_TIMEOUT_MS = 30_000;
 async function connectJsonRpc(
   url: string,
   opts?: {
-    protocol?: "query" | "subprotocol";
     optOutNotificationMethods?: string[];
   },
 ): Promise<JsonRpcConnection> {
-  const endpoint = opts?.protocol === "subprotocol" ? url : `${url}?protocol=jsonrpc`;
-  const ws =
-    opts?.protocol === "subprotocol"
-      ? new WebSocket(endpoint, "cowork.jsonrpc.v1")
-      : new WebSocket(endpoint);
+  const ws = new WebSocket(url, "cowork.jsonrpc.v1");
 
   const queue: any[] = [];
   const waiters = new Set<{

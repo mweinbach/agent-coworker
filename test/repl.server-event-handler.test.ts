@@ -2,11 +2,11 @@ import { describe, expect, mock, test } from "bun:test";
 import {
   applyCliJsonRpcResult,
   createNotificationHandler,
-  type ReplServerEventState,
+  type ReplSessionEventState,
 } from "../src/cli/repl/serverEventHandler";
 import { CliStreamState } from "../src/cli/streamState";
 
-function createState(): ReplServerEventState {
+function createState(): ReplSessionEventState {
   return {
     threadId: null,
     lastKnownThreadId: null,

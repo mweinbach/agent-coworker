@@ -119,12 +119,12 @@ describe("server JSON-RPC websocket mode", () => {
     }
   });
 
-  test("query-param JSON-RPC mode requires initialize handshake", async () => {
+  test("JSON-RPC subprotocol mode requires initialize handshake", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
 
     try {
-      const ws = new WebSocket(`${url}?protocol=jsonrpc`);
+      const ws = new WebSocket(url, "cowork.jsonrpc.v1");
       await waitForOpen(ws);
       await expectNoMessage(ws);
 
@@ -184,7 +184,7 @@ describe("server JSON-RPC websocket mode", () => {
     }
   });
 
-  test("subprotocol JSON-RPC mode initializes without sending legacy hello", async () => {
+  test("subprotocol JSON-RPC mode initializes without sending an implicit hello", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
 
@@ -257,7 +257,7 @@ describe("server JSON-RPC websocket mode", () => {
     );
 
     try {
-      const ws = new WebSocket(`${url}?protocol=jsonrpc`);
+      const ws = new WebSocket(url, "cowork.jsonrpc.v1");
       await waitForOpen(ws);
       ws.send(
         JSON.stringify({
@@ -300,7 +300,7 @@ describe("server JSON-RPC websocket mode", () => {
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
 
     try {
-      const ws = new WebSocket(`${url}?protocol=jsonrpc`);
+      const ws = new WebSocket(url, "cowork.jsonrpc.v1");
       await waitForOpen(ws);
       ws.send(
         JSON.stringify({

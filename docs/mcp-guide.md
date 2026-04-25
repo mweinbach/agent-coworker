@@ -50,9 +50,9 @@ For MCP servers that require secure access, agent-coworker supports standard aut
 Credentials are NEVER stored in the plain text configuration files. Once authenticated, credentials and tokens are securely saved in `.cowork/auth/mcp-credentials.json`. This file should be heavily restricted and is automatically added to the project's `.gitignore` to prevent accidental commits.
 
 ## Desktop UI & WebSocket Integration
-All MCP management is built on top of the core WebSocket protocol, ensuring that the CLI, TUI, and Desktop UI remain thin clients.
+All MCP management is built on top of the JSON-RPC WebSocket protocol, ensuring that the CLI, TUI, and Desktop UI remain thin clients.
 
-When interacting with the Desktop UI or the TUI, the clients send specific `ClientMessage` events to the server to manage MCP configurations:
+Clients call JSON-RPC methods to manage MCP configurations:
 
 - **`mcp_server_upsert`**: Sent by the client to add a new MCP server or update an existing configuration. The core server handles writing this to the appropriate configuration layer (usually Workspace or User).
 - **`mcp_server_validate`**: Triggered to test the connection to an MCP server. The server attempts to initialize the transport and perform a handshake, returning a success or failure event to the UI.

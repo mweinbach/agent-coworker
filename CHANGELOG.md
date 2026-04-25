@@ -33,7 +33,7 @@ All notable changes to this project will be documented in this file.
   - New `a2ui` tool lets the agent emit v0.9 envelopes
     (`createSurface`, `updateComponents`, `updateDataModel`, `deleteSurface`).
   - Per-session `A2uiSurfaceManager` folds envelopes into a resolved
-    surface and broadcasts a new `a2ui_surface` `ServerEvent` plus a
+    surface and broadcasts a new `a2ui_surface` `SessionEvent` plus a
     `uiSurface` `ProjectedItem` through the existing conversation
     projection. Desktop + mobile render the surface inline in the feed.
   - Client → server action channel: the new

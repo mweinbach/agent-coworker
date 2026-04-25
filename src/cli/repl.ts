@@ -25,7 +25,7 @@ import {
   type ProviderStatus,
   type PublicConfig,
   type PublicSessionConfig,
-  type ReplServerEventState,
+  type ReplSessionEventState,
 } from "./repl/serverEventHandler";
 import { getStoredSessionForCwd, setStoredSessionForCwd } from "./repl/stateStore";
 import { CliStreamState } from "./streamState";
@@ -379,7 +379,7 @@ export async function runCliRepl(
     }
   };
 
-  const eventState: ReplServerEventState = {
+  const eventState: ReplSessionEventState = {
     get threadId() {
       return threadId;
     },
@@ -515,7 +515,6 @@ export async function runCliRepl(
     const nextSocket = new JsonRpcSocket({
       url,
       clientInfo: { name: "cli", version: VERSION },
-      allowQueryProtocolFallback: true,
       autoReconnect: false,
       WebSocketImpl: WebSocketImpl as unknown as typeof WebSocket,
       onOpen: () => {

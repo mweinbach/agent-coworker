@@ -4,21 +4,14 @@ export type WsProtocolMode = typeof WS_PROTOCOL_MODE;
 
 export const WS_SUBPROTOCOL = "cowork.jsonrpc.v1";
 
-export type WsProtocolNegotiationSource = "subprotocol" | "query" | "default";
-
 export type ResolvedWsProtocol = {
   mode: WsProtocolMode;
   selectedSubprotocol: string | null;
-  source: WsProtocolNegotiationSource;
 };
 
 export type WsProtocolNegotiationResult =
   | { ok: true; protocol: ResolvedWsProtocol }
   | { ok: false; error: string };
-
-export function parseWsProtocolDefault(_value: string | null | undefined): WsProtocolMode {
-  return "jsonrpc";
-}
 
 export function splitWebSocketSubprotocolHeader(value: string | null | undefined): string[] {
   if (!value) return [];
@@ -31,8 +24,15 @@ export function splitWebSocketSubprotocolHeader(value: string | null | undefined
 export function resolveWsProtocol(opts: {
   offeredSubprotocols: string[];
   requestedProtocol: string | null | undefined;
-  defaultProtocol: WsProtocolMode;
 }): WsProtocolNegotiationResult {
+  if (opts.requestedProtocol?.trim()) {
+    return {
+      ok: false,
+      error:
+        "The ?protocol= WebSocket query parameter is no longer supported. Use the cowork.jsonrpc.v1 subprotocol or omit protocol negotiation.",
+    };
+  }
+
   for (const offeredSubprotocol of opts.offeredSubprotocols) {
     if (offeredSubprotocol === WS_SUBPROTOCOL) {
       return {
@@ -40,7 +40,6 @@ export function resolveWsProtocol(opts: {
         protocol: {
           mode: "jsonrpc",
           selectedSubprotocol: offeredSubprotocol,
-          source: "subprotocol",
         },
       };
     }
@@ -53,30 +52,11 @@ export function resolveWsProtocol(opts: {
     };
   }
 
-  const normalizedRequestedProtocol = opts.requestedProtocol?.trim().toLowerCase();
-  if (normalizedRequestedProtocol) {
-    if (normalizedRequestedProtocol !== "jsonrpc") {
-      return {
-        ok: false,
-        error: `Unsupported WebSocket protocol mode: ${opts.requestedProtocol}. Only "jsonrpc" is supported.`,
-      };
-    }
-    return {
-      ok: true,
-      protocol: {
-        mode: "jsonrpc",
-        selectedSubprotocol: null,
-        source: "query",
-      },
-    };
-  }
-
   return {
     ok: true,
     protocol: {
       mode: "jsonrpc",
       selectedSubprotocol: null,
-      source: "default",
     },
   };
 }

@@ -232,7 +232,7 @@ async function main() {
     assertContains(readme, "docs/harness/index.md", "README.md"),
     assertContains(readme, "docs/harness/config.md", "README.md"),
     assertContains(readme, "docs/websocket-protocol.md", "README.md"),
-    assertContains(wsProtocol, "harness_context_get", "docs/websocket-protocol.md"),
+    assertContains(wsProtocol, "cowork/session/harnessContext/get", "docs/websocket-protocol.md"),
     assertContains(wsProtocol, "observability_status", "docs/websocket-protocol.md"),
     assertContains(wsProtocol, protocolVersionNeedle(), "docs/websocket-protocol.md"),
   ];

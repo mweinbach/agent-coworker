@@ -634,7 +634,7 @@ export class SessionAdminManager {
     implKey: K,
     label: string,
     execute: (impl: NonNullable<import("./SessionContext").SessionDependencies[K]>) => Promise<T>,
-    buildEvent: (result: T) => import("../protocol").ServerEvent,
+    buildEvent: (result: T) => import("../protocol").SessionEvent,
   ): Promise<void> {
     if ((this.context.state.sessionInfo.sessionKind ?? "root") !== "root") {
       this.context.emitError("validation_failed", "backup", `Only root sessions can ${label}`);

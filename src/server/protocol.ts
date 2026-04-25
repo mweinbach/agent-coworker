@@ -61,8 +61,8 @@ export type MCPServerAuthMode =
   | "oauth_pending"
   | "error";
 
-// Keep the legacy websocket version string exported for docs/tests that still
-// reference the pre-JSON-RPC protocol metadata.
+// Version of the internal session event payload schema documented for JSON-RPC
+// control envelopes and persisted session artifacts.
 export const WEBSOCKET_PROTOCOL_VERSION = "7.30";
 
 export type SessionConfigPatch = {
@@ -118,7 +118,7 @@ export type SessionConfigState = {
   };
 };
 
-export type ServerEvent =
+export type SessionEvent =
   | {
       type: "server_hello";
       sessionId: string;

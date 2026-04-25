@@ -33,7 +33,7 @@ import {
   visibleAuthMethods,
 } from "../../lib/providerDisplayNames";
 import { cn } from "../../lib/utils";
-import type { ProviderName, ServerEvent } from "../../lib/wsProtocol";
+import type { ProviderName, SessionEvent } from "../../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../../lib/wsProtocol";
 
 const PROVIDER_STATUS_POLL_MS = 4000;
@@ -41,7 +41,7 @@ const WORKSPACE_SERVER_TIMEOUT_MS = 30_000;
 const ONBOARDING_HIDDEN_PROVIDERS: readonly ProviderName[] = ["bedrock"];
 
 type ProviderAuthMethod = Extract<
-  ServerEvent,
+  SessionEvent,
   { type: "provider_auth_methods" }
 >["methods"][string][number];
 

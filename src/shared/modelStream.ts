@@ -1,13 +1,13 @@
 import { z } from "zod";
 
-import type { ServerEvent } from "../server/protocol";
+import type { SessionEvent } from "../server/protocol";
 
 const stringSchema = z.string();
 const finiteNumberSchema = z.number().finite();
 const partRecordSchema = z.record(z.string(), z.unknown());
 
-export type ModelStreamChunkEvent = Extract<ServerEvent, { type: "model_stream_chunk" }>;
-export type ModelStreamRawEvent = Extract<ServerEvent, { type: "model_stream_raw" }>;
+export type ModelStreamChunkEvent = Extract<SessionEvent, { type: "model_stream_chunk" }>;
+export type ModelStreamRawEvent = Extract<SessionEvent, { type: "model_stream_raw" }>;
 
 export type ModelStreamUpdate =
   | { kind: "turn_start"; turnId: string }

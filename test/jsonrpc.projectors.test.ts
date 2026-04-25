@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
-import { createJsonRpcEventProjector } from "../src/server/jsonrpc/eventProjector";
-import { createThreadJournalProjector } from "../src/server/jsonrpc/journalProjector";
-import type { ServerEvent } from "../src/server/protocol";
+import { createJsonRpcNotificationProjector } from "../src/server/jsonrpc/notificationProjector";
+import { createThreadJournalNotificationProjector } from "../src/server/jsonrpc/threadJournalNotificationProjector";
+import type { SessionEvent } from "../src/server/protocol";
 
 const sessionId = "session-1";
 const turnId = "turn-1";
@@ -17,9 +17,9 @@ const PI_PROVIDER_CASES = [
 ] as const;
 
 function streamChunk(
-  partType: Extract<ServerEvent, { type: "model_stream_chunk" }>["partType"],
+  partType: Extract<SessionEvent, { type: "model_stream_chunk" }>["partType"],
   part: Record<string, unknown>,
-): ServerEvent {
+): SessionEvent {
   return {
     type: "model_stream_chunk",
     sessionId,
@@ -35,9 +35,9 @@ function streamChunk(
 function piChunk(
   provider: (typeof PI_PROVIDER_CASES)[number]["provider"],
   model: string,
-  partType: Extract<ServerEvent, { type: "model_stream_chunk" }>["partType"],
+  partType: Extract<SessionEvent, { type: "model_stream_chunk" }>["partType"],
   part: Record<string, unknown>,
-): ServerEvent {
+): SessionEvent {
   return {
     type: "model_stream_chunk",
     sessionId,
@@ -50,7 +50,7 @@ function piChunk(
   };
 }
 
-function googleRaw(index: number, event: Record<string, unknown>): ServerEvent {
+function googleRaw(index: number, event: Record<string, unknown>): SessionEvent {
   return {
     type: "model_stream_raw",
     sessionId,
@@ -65,9 +65,9 @@ function googleRaw(index: number, event: Record<string, unknown>): ServerEvent {
 }
 
 describe("JSON-RPC projectors", () => {
-  test("legacy projector emits a visible user item when a steer commits during an active turn", () => {
+  test("notification projector emits a visible user item when a steer commits during an active turn", () => {
     const outbound: Array<{ method: string; params?: any }> = [];
-    const projector = createJsonRpcEventProjector({
+    const projector = createJsonRpcNotificationProjector({
       threadId: sessionId,
       send: (message) => outbound.push(message as { method: string; params?: any }),
     });
@@ -106,7 +106,7 @@ describe("JSON-RPC projectors", () => {
 
   test("journal projector emits a visible user item when a steer commits during an active turn", () => {
     const emissions: Array<{ eventType: string; payload: any }> = [];
-    const projector = createThreadJournalProjector({
+    const projector = createThreadJournalNotificationProjector({
       threadId: sessionId,
       emit: (event) => emissions.push({ eventType: event.eventType, payload: event.payload }),
     });
@@ -142,9 +142,9 @@ describe("JSON-RPC projectors", () => {
     expect(userCompleted?.payload?.item).toEqual(userStarted?.payload?.item);
   });
 
-  test("legacy projector suppresses commentary deltas and streams reasoning items from live chunks", () => {
+  test("notification projector suppresses commentary deltas and streams reasoning items from live chunks", () => {
     const outbound: Array<{ method: string; params?: any }> = [];
-    const projector = createJsonRpcEventProjector({
+    const projector = createJsonRpcNotificationProjector({
       threadId: sessionId,
       send: (message) => outbound.push(message as { method: string; params?: any }),
     });
@@ -233,7 +233,7 @@ describe("JSON-RPC projectors", () => {
 
   test("journal projector suppresses commentary deltas and records streamed reasoning events from live chunks", () => {
     const emissions: Array<{ eventType: string; payload: any }> = [];
-    const projector = createThreadJournalProjector({
+    const projector = createThreadJournalNotificationProjector({
       threadId: sessionId,
       emit: (event) => emissions.push({ eventType: event.eventType, payload: event.payload }),
     });
@@ -306,9 +306,9 @@ describe("JSON-RPC projectors", () => {
     });
   });
 
-  test("legacy projector splits assistant segments when reasoning resumes within the same turn", () => {
+  test("notification projector splits assistant segments when reasoning resumes within the same turn", () => {
     const outbound: Array<{ method: string; params?: any }> = [];
-    const projector = createJsonRpcEventProjector({
+    const projector = createJsonRpcNotificationProjector({
       threadId: sessionId,
       send: (message) => outbound.push(message as { method: string; params?: any }),
     });
@@ -369,7 +369,7 @@ describe("JSON-RPC projectors", () => {
 
   test("journal projector splits assistant segments when reasoning resumes within the same turn", () => {
     const emissions: Array<{ eventType: string; payload: any }> = [];
-    const projector = createThreadJournalProjector({
+    const projector = createThreadJournalNotificationProjector({
       threadId: sessionId,
       emit: (event) => emissions.push({ eventType: event.eventType, payload: event.payload }),
     });
@@ -426,9 +426,9 @@ describe("JSON-RPC projectors", () => {
     expect(reasoningCompletedIndex).toBeLessThan(secondAssistantStartedIndex);
   });
 
-  test("legacy projector drops a cumulative final assistant message when streamed output only differs by leading boundary whitespace", () => {
+  test("notification projector drops a cumulative final assistant message when streamed output only differs by leading boundary whitespace", () => {
     const outbound: Array<{ method: string; params?: any }> = [];
-    const projector = createJsonRpcEventProjector({
+    const projector = createJsonRpcNotificationProjector({
       threadId: sessionId,
       send: (message) => outbound.push(message as { method: string; params?: any }),
     });
@@ -467,7 +467,7 @@ describe("JSON-RPC projectors", () => {
 
   test("journal projector drops a cumulative final assistant message when streamed output only differs by leading boundary whitespace", () => {
     const emissions: Array<{ eventType: string; payload: any }> = [];
-    const projector = createThreadJournalProjector({
+    const projector = createThreadJournalNotificationProjector({
       threadId: sessionId,
       emit: (event) => emissions.push({ eventType: event.eventType, payload: event.payload }),
     });
@@ -504,9 +504,9 @@ describe("JSON-RPC projectors", () => {
     expect(String(assistantCompleted[0]?.payload?.item?.text ?? "")).toBe("Final answer.");
   });
 
-  test("legacy projector replays raw Gemini search tool items and drops aggregate final reasoning duplicates", () => {
+  test("notification projector replays raw Gemini search tool items and drops aggregate final reasoning duplicates", () => {
     const outbound: Array<{ method: string; params?: any }> = [];
-    const projector = createJsonRpcEventProjector({
+    const projector = createJsonRpcNotificationProjector({
       threadId: sessionId,
       send: (message) => outbound.push(message as { method: string; params?: any }),
     });
@@ -631,7 +631,7 @@ describe("JSON-RPC projectors", () => {
 
   test("journal projector replays raw Gemini search tool items and drops aggregate final reasoning duplicates", () => {
     const emissions: Array<{ eventType: string; payload: any }> = [];
-    const projector = createThreadJournalProjector({
+    const projector = createThreadJournalNotificationProjector({
       threadId: sessionId,
       emit: (event) => emissions.push({ eventType: event.eventType, payload: event.payload }),
     });
@@ -758,15 +758,15 @@ describe("JSON-RPC projectors", () => {
     test(`projectors keep repeated PI reasoning and tool occurrences distinct for ${provider}`, () => {
       const outbound: Array<{ method: string; params?: any }> = [];
       const emissions: Array<{ eventType: string; payload: any }> = [];
-      const legacy = createJsonRpcEventProjector({
+      const live = createJsonRpcNotificationProjector({
         threadId: sessionId,
         send: (message) => outbound.push(message as { method: string; params?: any }),
       });
-      const journal = createThreadJournalProjector({
+      const journal = createThreadJournalNotificationProjector({
         threadId: sessionId,
         emit: (event) => emissions.push({ eventType: event.eventType, payload: event.payload }),
       });
-      const both = [legacy, journal] as const;
+      const both = [live, journal] as const;
 
       for (const projector of both) {
         projector.handle({
@@ -873,28 +873,28 @@ describe("JSON-RPC projectors", () => {
         });
       }
 
-      const legacyCompletedReasoning = outbound
+      const liveCompletedReasoning = outbound
         .filter((message) => message.method === "item/completed")
         .filter((message) => message.params?.item?.type === "reasoning");
-      expect(legacyCompletedReasoning.map((message) => message.params?.item?.text)).toEqual([
+      expect(liveCompletedReasoning.map((message) => message.params?.item?.text)).toEqual([
         "First step.",
         "Second step.",
       ]);
       expect(
-        new Set(legacyCompletedReasoning.map((message) => message.params?.item?.id)).size,
+        new Set(liveCompletedReasoning.map((message) => message.params?.item?.id)).size,
       ).toBe(2);
 
-      const legacyCompletedTools = outbound
+      const liveCompletedTools = outbound
         .filter((message) => message.method === "item/completed")
         .filter((message) => message.params?.item?.type === "toolCall");
-      const legacyFinalTools = legacyCompletedTools.filter(
+      const liveFinalTools = liveCompletedTools.filter(
         (message) => message.params?.item?.state === "output-available",
       );
-      expect(legacyFinalTools.map((message) => message.params?.item?.args)).toEqual([
+      expect(liveFinalTools.map((message) => message.params?.item?.args)).toEqual([
         { query: "first" },
         { query: "second" },
       ]);
-      expect(new Set(legacyFinalTools.map((message) => message.params?.item?.id)).size).toBe(2);
+      expect(new Set(liveFinalTools.map((message) => message.params?.item?.id)).size).toBe(2);
 
       const journalCompletedReasoning = emissions
         .filter((event) => event.eventType === "item/completed")

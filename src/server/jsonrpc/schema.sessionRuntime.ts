@@ -13,8 +13,8 @@ import {
 import { CHILD_MODEL_ROUTING_MODES, PROVIDER_NAMES } from "../../types";
 
 import {
-  legacyEventEnvelope,
-  legacyEventsEnvelope,
+  sessionEventEnvelope,
+  sessionEventsEnvelope,
   nonEmptyTrimmedStringSchema,
   optionalNonEmptyTrimmedStringSchema,
 } from "./schema.shared";
@@ -196,8 +196,8 @@ export const sessionConfigEventSchema = z
   })
   .passthrough();
 
-export const sessionStateReadResultSchema = legacyEventsEnvelope(
+export const sessionStateReadResultSchema = sessionEventsEnvelope(
   z.union([configUpdatedEventSchema, sessionSettingsEventSchema, sessionConfigEventSchema]),
 );
 
-export const sessionDefaultsApplyResultSchema = legacyEventEnvelope(sessionConfigEventSchema);
+export const sessionDefaultsApplyResultSchema = sessionEventEnvelope(sessionConfigEventSchema);

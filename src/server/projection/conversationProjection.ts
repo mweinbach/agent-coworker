@@ -12,7 +12,7 @@ import {
   shouldIgnoreNormalizedChunkForRawBackedTurn,
 } from "../../shared/modelStreamReplay";
 import type { ProjectedItem, ProjectedToolState } from "../../shared/projectedItems";
-import type { ServerEvent } from "../protocol";
+import type { SessionEvent } from "../protocol";
 import {
   hasVisibleAssistantText,
   makeItemId,
@@ -177,12 +177,12 @@ function normalizeQuestionPreview(question: string, maxChars = 220): string {
   return `${normalized.slice(0, maxChars - 1)}...`;
 }
 
-function formatAskSystemLine(evt: Extract<ServerEvent, { type: "ask" }>): string {
+function formatAskSystemLine(evt: Extract<SessionEvent, { type: "ask" }>): string {
   const preview = normalizeQuestionPreview(evt.question);
   return preview ? `question: ${preview}` : "question:";
 }
 
-function formatApprovalSystemLine(evt: Extract<ServerEvent, { type: "approval" }>): string {
+function formatApprovalSystemLine(evt: Extract<SessionEvent, { type: "approval" }>): string {
   const command = evt.command.trim();
   return command ? `approval requested: ${command}` : "approval requested";
 }
@@ -248,9 +248,9 @@ function formatHarnessContextDiagnosticLine(evt: { context?: unknown }): string 
     : "Harness context updated";
 }
 
-function developerDiagnosticSystemLineFromServerEvent(
+function developerDiagnosticSystemLineFromSessionEvent(
   evt: Extract<
-    ServerEvent,
+    SessionEvent,
     { type: "observability_status" | "session_backup_state" | "harness_context" }
   >,
 ): string {
@@ -665,7 +665,7 @@ export function createConversationProjection(opts: CreateConversationProjectionO
     opts.sink.emitItemCompleted(null, item);
   };
 
-  const emitTodosItem = (todos: Extract<ServerEvent, { type: "todos" }>["todos"]) => {
+  const emitTodosItem = (todos: Extract<SessionEvent, { type: "todos" }>["todos"]) => {
     const item: ProjectedItem = {
       id: makeItemId("todos", crypto.randomUUID()),
       type: "todos",
@@ -675,7 +675,7 @@ export function createConversationProjection(opts: CreateConversationProjectionO
     opts.sink.emitItemCompleted(null, item);
   };
 
-  const emitA2uiSurfaceItem = (evt: Extract<ServerEvent, { type: "a2ui_surface" }>) => {
+  const emitA2uiSurfaceItem = (evt: Extract<SessionEvent, { type: "a2ui_surface" }>) => {
     // Each revision gets its own feed item so the transcript shows a full
     // history of surface updates. The client coalesces batches from the same
     // tool call at render time.
@@ -698,7 +698,7 @@ export function createConversationProjection(opts: CreateConversationProjectionO
     opts.sink.emitItemCompleted(null, item);
   };
 
-  const emitErrorItem = (evt: Extract<ServerEvent, { type: "error" }>) => {
+  const emitErrorItem = (evt: Extract<SessionEvent, { type: "error" }>) => {
     const item: ProjectedItem = {
       id: makeItemId("error", crypto.randomUUID()),
       type: "error",
@@ -855,7 +855,7 @@ export function createConversationProjection(opts: CreateConversationProjectionO
 
   return {
     replayRuntime,
-    handle(event: ServerEvent) {
+    handle(event: SessionEvent) {
       switch (event.type) {
         case "user_message":
           if (activeTurnId) {
@@ -988,7 +988,7 @@ export function createConversationProjection(opts: CreateConversationProjectionO
         case "observability_status":
         case "session_backup_state":
         case "harness_context":
-          emitSystemItem(developerDiagnosticSystemLineFromServerEvent(event));
+          emitSystemItem(developerDiagnosticSystemLineFromSessionEvent(event));
           return;
         case "log":
           emitLogItem(event.line);

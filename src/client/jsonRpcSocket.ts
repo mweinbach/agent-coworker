@@ -115,7 +115,6 @@ export type JsonRpcSocketOpts = {
   experimentalApi?: boolean;
   optOutNotificationMethods?: string[];
   protocols?: string | string[];
-  allowQueryProtocolFallback?: boolean;
   WebSocketImpl?: WebSocketConstructorLike;
   autoReconnect?: boolean;
   maxReconnectAttempts?: number;
@@ -133,54 +132,13 @@ export type JsonRpcSocketOpts = {
 type JsonRpcConnectionTarget = {
   url: string;
   protocols?: string | string[];
-  mode: "subprotocol" | "query";
 };
 
-function normalizeProtocols(protocols: string | string[] | undefined): string[] {
-  if (typeof protocols === "string") {
-    return protocols.trim() ? [protocols.trim()] : [];
-  }
-  return (protocols ?? []).map((entry) => entry.trim()).filter(Boolean);
-}
-
-function buildQueryProtocolFallbackUrl(url: string): string {
-  try {
-    const next = new URL(url);
-    next.searchParams.set("protocol", "jsonrpc");
-    return next.toString();
-  } catch {
-    return url.includes("?") ? `${url}&protocol=jsonrpc` : `${url}?protocol=jsonrpc`;
-  }
-}
-
-function buildConnectionTargets(
-  url: string,
-  protocols: string | string[] | undefined,
-  allowQueryProtocolFallback: boolean,
-): JsonRpcConnectionTarget[] {
-  const normalizedProtocols = normalizeProtocols(protocols);
-  const targets: JsonRpcConnectionTarget[] = [
-    {
-      url,
-      protocols,
-      mode: normalizedProtocols.length > 0 ? "subprotocol" : "query",
-    },
-  ];
-  if (!allowQueryProtocolFallback) {
-    return targets;
-  }
-  if (!normalizedProtocols.includes(DEFAULT_JSONRPC_SUBPROTOCOL)) {
-    return targets;
-  }
-  const fallbackUrl = buildQueryProtocolFallbackUrl(url);
-  if (fallbackUrl === url) {
-    return targets;
-  }
-  targets.push({
-    url: fallbackUrl,
-    mode: "query",
-  });
-  return targets;
+function buildConnectionTarget(url: string, protocols: string | string[] | undefined): JsonRpcConnectionTarget {
+  return {
+    url,
+    protocols,
+  };
 }
 
 export class JsonRpcSocket {
@@ -188,7 +146,7 @@ export class JsonRpcSocket {
   private readonly clientInfo: JsonRpcSocketOpts["clientInfo"];
   private readonly experimentalApi: boolean;
   private readonly optOutNotificationMethods: string[];
-  private readonly connectionTargets: JsonRpcConnectionTarget[];
+  private readonly connectionTarget: JsonRpcConnectionTarget;
   private readonly WebSocketImpl: WebSocketConstructorLike;
   private readonly autoReconnect: boolean;
   private readonly maxReconnectAttempts: number;
@@ -211,9 +169,7 @@ export class JsonRpcSocket {
   private handshakeTimeoutHandle: unknown = null;
   private intentionalClose = false;
   private reconnectExhausted = false;
-  private connectionTargetIndex = 0;
   private pendingInitializationFailure: Error | null = null;
-  private pendingInitializationFailureAllowsFallback = false;
   private nextId = 0;
   private pendingRequests = new Map<
     string | number,
@@ -226,11 +182,7 @@ export class JsonRpcSocket {
     this.clientInfo = opts.clientInfo;
     this.experimentalApi = opts.experimentalApi === true;
     this.optOutNotificationMethods = [...(opts.optOutNotificationMethods ?? [])];
-    this.connectionTargets = buildConnectionTargets(
-      opts.url,
-      opts.protocols ?? DEFAULT_JSONRPC_SUBPROTOCOL,
-      opts.allowQueryProtocolFallback ?? true,
-    );
+    this.connectionTarget = buildConnectionTarget(opts.url, opts.protocols ?? DEFAULT_JSONRPC_SUBPROTOCOL);
     this.autoReconnect = opts.autoReconnect ?? false;
     this.maxReconnectAttempts = opts.maxReconnectAttempts ?? 10;
     this.maxQueuedMessages = Math.max(1, opts.maxQueuedMessages ?? DEFAULT_MAX_QUEUED_MESSAGES);
@@ -269,7 +221,6 @@ export class JsonRpcSocket {
     if (this.ws) return;
     this.intentionalClose = false;
     this.reconnectExhausted = false;
-    this.connectionTargetIndex = 0;
     this.resetReadyPromise();
     this.doConnect();
   }
@@ -281,7 +232,6 @@ export class JsonRpcSocket {
     this.clearConnectionTimeouts();
     this.initialized = false;
     this.pendingInitializationFailure = null;
-    this.pendingInitializationFailureAllowsFallback = false;
     const closedError = new Error("socket closed");
     this.rejectQueuedRequests(closedError);
     this.rejectPendingRequests(closedError);
@@ -371,21 +321,17 @@ export class JsonRpcSocket {
     this.initialized = false;
     this.reconnectExhausted = false;
     this.pendingInitializationFailure = null;
-    this.pendingInitializationFailureAllowsFallback = false;
-    const target = this.connectionTargets[this.connectionTargetIndex] ?? this.connectionTargets[0];
-    if (!target) {
-      throw new Error("No JSON-RPC connection targets available");
-    }
+    const target = this.connectionTarget;
     const ws = new this.WebSocketImpl(target.url, target.protocols);
     this.ws = ws;
-    this.armOpenTimeout(ws, target);
+    this.armOpenTimeout(ws);
 
     bindSocketHandler(ws, "open", () => {
       this.clearOpenTimeout();
-      this.armHandshakeTimeout(ws, target);
+      this.armHandshakeTimeout(ws);
       void this.performHandshake().catch((error) => {
         const formatted = error instanceof Error ? error : new Error(String(error));
-        this.failInitialization(ws, formatted, false);
+        this.failInitialization(ws, formatted);
       });
     });
 
@@ -430,23 +376,10 @@ export class JsonRpcSocket {
     bindSocketHandler(ws, "close", () => {
       const wasInitialized = this.initialized;
       const failure = this.pendingInitializationFailure ?? new Error("websocket closed");
-      const allowFallback =
-        this.pendingInitializationFailureAllowsFallback ||
-        (!this.pendingInitializationFailure && !wasInitialized);
       this.initialized = false;
       this.ws = null;
       this.pendingInitializationFailure = null;
-      this.pendingInitializationFailureAllowsFallback = false;
       this.clearConnectionTimeouts();
-      if (
-        !wasInitialized &&
-        !this.intentionalClose &&
-        allowFallback &&
-        this.advanceConnectionTarget()
-      ) {
-        this.doConnect();
-        return;
-      }
       this.rejectPendingRequests(failure);
       if (!this.intentionalClose && this.autoReconnect) {
         if (wasInitialized) {
@@ -486,7 +419,7 @@ export class JsonRpcSocket {
     this.onOpen?.();
   }
 
-  private armOpenTimeout(ws: WebSocketLike, target: JsonRpcConnectionTarget) {
+  private armOpenTimeout(ws: WebSocketLike) {
     this.clearOpenTimeout();
     if (this.openTimeoutMs <= 0) {
       return;
@@ -497,13 +430,12 @@ export class JsonRpcSocket {
       }
       this.failInitialization(
         ws,
-        new Error(`Timed out opening JSON-RPC ${target.mode} socket after ${this.openTimeoutMs}ms`),
-        true,
+        new Error(`Timed out opening JSON-RPC socket after ${this.openTimeoutMs}ms`),
       );
     }, this.openTimeoutMs);
   }
 
-  private armHandshakeTimeout(ws: WebSocketLike, target: JsonRpcConnectionTarget) {
+  private armHandshakeTimeout(ws: WebSocketLike) {
     this.clearHandshakeTimeout();
     if (this.handshakeTimeoutMs <= 0) {
       return;
@@ -515,9 +447,8 @@ export class JsonRpcSocket {
       this.failInitialization(
         ws,
         new Error(
-          `Timed out waiting for JSON-RPC initialize response over ${target.mode} socket after ${this.handshakeTimeoutMs}ms`,
+          `Timed out waiting for JSON-RPC initialize response after ${this.handshakeTimeoutMs}ms`,
         ),
-        true,
       );
     }, this.handshakeTimeoutMs);
   }
@@ -541,12 +472,11 @@ export class JsonRpcSocket {
     this.clearHandshakeTimeout();
   }
 
-  private failInitialization(ws: WebSocketLike, error: Error, allowFallback: boolean) {
+  private failInitialization(ws: WebSocketLike, error: Error) {
     if (this.ws !== ws || this.initialized) {
       return;
     }
     this.pendingInitializationFailure = error;
-    this.pendingInitializationFailureAllowsFallback = allowFallback;
     this.clearConnectionTimeouts();
     try {
       ws.close();
@@ -607,14 +537,6 @@ export class JsonRpcSocket {
           operation.reject(error instanceof Error ? error : new Error(String(error)));
         });
     }
-  }
-
-  private advanceConnectionTarget(): boolean {
-    if (this.connectionTargetIndex + 1 >= this.connectionTargets.length) {
-      return false;
-    }
-    this.connectionTargetIndex += 1;
-    return true;
   }
 
   private scheduleReconnect() {

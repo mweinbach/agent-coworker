@@ -267,7 +267,7 @@ export class SessionMetadataManager {
     });
   }
 
-  getSessionConfigEvent(): Extract<import("../protocol").ServerEvent, { type: "session_config" }> {
+  getSessionConfigEvent(): Extract<import("../protocol").SessionEvent, { type: "session_config" }> {
     const providerOptions = pickEditableOpenAiCompatibleProviderOptions(
       this.context.state.config.providerOptions,
     );
@@ -311,7 +311,7 @@ export class SessionMetadataManager {
     };
   }
 
-  getSessionInfoEvent(): Extract<import("../protocol").ServerEvent, { type: "session_info" }> {
+  getSessionInfoEvent(): Extract<import("../protocol").SessionEvent, { type: "session_info" }> {
     return {
       type: "session_info",
       sessionId: this.context.id,
@@ -320,7 +320,7 @@ export class SessionMetadataManager {
   }
 
   getObservabilityStatusEvent(): Extract<
-    import("../protocol").ServerEvent,
+    import("../protocol").SessionEvent,
     { type: "observability_status" }
   > {
     const observability = this.context.state.config.observability;

@@ -67,7 +67,7 @@ TurnExecutionManager (src/server/session/TurnExecutionManager.ts)
    ▼
 A2uiSurfaceManager (src/server/session/A2uiSurfaceManager.ts)
    │  applyEnvelope() — pure reducer from src/shared/a2ui
-   │  emit "a2ui_surface" ServerEvent
+   │  emit "a2ui_surface" SessionEvent
    ▼
 Event fan-out:
    • JSON-RPC projector → cowork/session/a2ui/surface
@@ -92,9 +92,9 @@ reused by any alternative UI (mobile, web, CLI) in the future.
 | Supported basic-catalog types | `src/shared/a2ui/component.ts` |
 | Session-scoped manager | `src/server/session/A2uiSurfaceManager.ts` |
 | `a2ui` tool | `src/tools/a2ui.ts` |
-| ServerEvent type | `src/server/protocol.ts` (look for `a2ui_surface`) |
+| SessionEvent type | `src/server/protocol.ts` (look for `a2ui_surface`) |
 | Projection into session feed | `src/server/projection/conversationProjection.ts` |
-| JSON-RPC notification routing | `src/server/jsonrpc/eventProjector.ts` |
+| JSON-RPC notification routing | `src/server/jsonrpc/notificationProjector.ts` |
 | Feed item variant | `src/shared/sessionSnapshot.ts` |
 | Desktop renderer | `apps/desktop/src/ui/chat/a2ui/` |
 | Agent-facing guide | `skills/a2ui/SKILL.md` |

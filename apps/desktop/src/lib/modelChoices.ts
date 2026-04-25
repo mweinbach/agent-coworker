@@ -2,7 +2,7 @@ import {
   isUserFacingProviderEnabled,
   userFacingAvailableModelsForProvider,
 } from "@cowork/providers/catalog";
-import type { ProviderName, ServerEvent } from "./wsProtocol";
+import type { ProviderName, SessionEvent } from "./wsProtocol";
 import { PROVIDER_NAMES } from "./wsProtocol";
 
 export const UI_DISABLED_PROVIDERS = new Set<ProviderName>(
@@ -24,7 +24,7 @@ export function modelOptionsForProvider(
   return [normalized, ...base];
 }
 
-type ProviderCatalogEntry = Extract<ServerEvent, { type: "provider_catalog" }>["all"][number];
+type ProviderCatalogEntry = Extract<SessionEvent, { type: "provider_catalog" }>["all"][number];
 
 /** Select value is `provider:modelId` with a single separator (model ids may contain `:`). */
 export function encodeProviderModelSelection(provider: ProviderName, modelId: string): string {

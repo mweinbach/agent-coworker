@@ -113,7 +113,7 @@ describe("startServer backpressure integration", () => {
     const tmpDir = await makeTmpProject();
     const { server } = await startAgentServer(serverOpts(tmpDir));
 
-    const ws = new WebSocket(`ws://127.0.0.1:${server.port}/ws?protocol=jsonrpc`);
+    const ws = new WebSocket(`ws://127.0.0.1:${server.port}/ws`, "cowork.jsonrpc.v1");
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(
         () => reject(new Error("Timed out waiting for websocket open")),

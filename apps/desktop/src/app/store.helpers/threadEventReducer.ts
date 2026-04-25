@@ -7,7 +7,7 @@ import {
   projectedItemSchema,
   projectedTodosFromItem,
 } from "../../../../../src/shared/projectedItems";
-import type { ServerEvent } from "../../lib/wsProtocol";
+import type { SessionEvent } from "../../lib/wsProtocol";
 import {
   type ProjectedUiSurface,
   recordSurfaceRevision,
@@ -22,7 +22,7 @@ import {
 } from "../modelStream";
 import {
   applyModelStreamUpdateToThreadFeed as applyModelStreamUpdateToThreadFeedCore,
-  developerDiagnosticSystemLineFromServerEvent,
+  developerDiagnosticSystemLineFromSessionEvent,
   hasMatchingStreamedReasoningText,
   reasoningInsertBeforeAssistantAfterStreamReplay,
   shouldSkipAssistantMessageAfterStreamReplay,
@@ -309,7 +309,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
             command: String(requestParams.command ?? ""),
             dangerous: requestParams.dangerous === true,
             reasonCode: requestParams.reason ?? "requires_manual_review",
-          } as ServerEvent);
+          } as SessionEvent);
         }
         return;
       }
@@ -334,7 +334,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
         handleThreadEvent(get, set, mappedThreadId, {
           ...(params as Record<string, unknown>),
           sessionId: typeof params.sessionId === "string" ? params.sessionId : mappedSessionId,
-        } as ServerEvent);
+        } as SessionEvent);
         return;
       }
 
@@ -1386,7 +1386,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     get: StoreGet,
     set: StoreSet,
     threadId: string,
-    evt: ServerEvent,
+    evt: SessionEvent,
     pendingFirstMessage?: string,
     pendingFirstMessageQueued = false,
   ) {
@@ -1508,7 +1508,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
         id: deps.makeId(),
         kind: "system",
         ts: deps.nowIso(),
-        line: developerDiagnosticSystemLineFromServerEvent(evt),
+        line: developerDiagnosticSystemLineFromSessionEvent(evt),
       });
       return;
     }
@@ -1733,7 +1733,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
         id: deps.makeId(),
         kind: "system",
         ts: deps.nowIso(),
-        line: developerDiagnosticSystemLineFromServerEvent(evt),
+        line: developerDiagnosticSystemLineFromSessionEvent(evt),
       });
       return;
     }
@@ -2155,7 +2155,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
           buildSyntheticServerHelloFromJsonRpcThread(
             thread,
             existingSessionId ? { isResume: true } : undefined,
-          ) as ServerEvent,
+          ) as SessionEvent,
           pendingFirstMessage,
           pendingFirstMessageQueued,
         );
@@ -2166,11 +2166,11 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
             get().workspaces.find((workspace) => workspace.id === workspaceId),
           ),
           sessionId: thread.id,
-        } as ServerEvent);
+        } as SessionEvent);
         handleThreadEvent(get, set, activeThreadId, {
           ...buildSyntheticSessionInfoFromJsonRpcThread(thread),
           sessionId: thread.id,
-        } as ServerEvent);
+        } as SessionEvent);
         const snapshot = await requestJsonRpcThreadRead(get, set, workspaceId, thread.id);
         if (isWorkspaceDisposed(workspaceId)) {
           return;

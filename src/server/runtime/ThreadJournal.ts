@@ -1,5 +1,5 @@
-import { createThreadJournalProjector } from "../jsonrpc/journalProjector";
-import type { ServerEvent } from "../protocol";
+import { createThreadJournalNotificationProjector } from "../jsonrpc/threadJournalNotificationProjector";
+import type { SessionEvent } from "../protocol";
 import type { PersistedThreadJournalEvent, SessionDb } from "../sessionDb";
 import type { SessionBinding } from "../startServer/types";
 
@@ -63,14 +63,14 @@ export class ThreadJournal {
     addBindingSink: (
       binding: SessionBinding,
       sinkId: string,
-      sink: (event: ServerEvent) => void,
+      sink: (event: SessionEvent) => void,
     ) => void,
   ): void {
     const sinkId = `journal:${threadId}`;
     if (binding.sinks.has(sinkId)) {
       return;
     }
-    const projector = createThreadJournalProjector({
+    const projector = createThreadJournalNotificationProjector({
       threadId,
       emit: (event) => {
         void this.enqueue(event).catch(() => {

@@ -19,7 +19,7 @@ import {
 import { supportsProviderManagedContinuationProvider } from "../../shared/providerContinuation";
 import type { AgentConfig, ServerErrorCode, ServerErrorSource } from "../../types";
 import { defaultRuntimeNameForProvider, isProviderName } from "../../types";
-import type { ServerEvent } from "../protocol";
+import type { SessionEvent } from "../protocol";
 
 type PreparedModelSelection = {
   nextConfig: AgentConfig;
@@ -52,7 +52,7 @@ export class ProviderAuthManager {
       isRunning: () => boolean;
       guardBusy: () => boolean;
       setConnecting: (connecting: boolean) => void;
-      emit: (evt: ServerEvent) => void;
+      emit: (evt: SessionEvent) => void;
       emitError: (code: ServerErrorCode, source: ServerErrorSource, message: string) => void;
       emitTelemetry: (
         name: string,

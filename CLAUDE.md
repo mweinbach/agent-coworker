@@ -34,7 +34,7 @@ There is no linter or formatter configured. TypeScript strict mode is the primar
 
 ### Server & Protocol
 
-`src/server/session/AgentSession.ts` — `AgentSession` manages per-session state: message history, turn execution, backups, harness context, and pending ask/approval requests via deferred promises. The server uses a JSON-RPC-lite protocol over WebSocket (`cowork.jsonrpc.v1`). Internal event types are defined as `ServerEvent` in `src/server/protocol.ts`; the JSON-RPC protocol types are in `src/server/jsonrpc/protocol.ts`.
+`src/server/session/AgentSession.ts` — `AgentSession` manages per-session state: message history, turn execution, backups, harness context, and pending ask/approval requests via deferred promises. The server uses a JSON-RPC-lite protocol over WebSocket (`cowork.jsonrpc.v1`). Internal event types are defined as `SessionEvent` in `src/server/protocol.ts`; the JSON-RPC protocol types are in `src/server/jsonrpc/protocol.ts`.
 
 ### Provider System
 
@@ -65,7 +65,7 @@ When adding a new JSON-RPC method or notification:
 
 1. Add the route handler in the appropriate file under `src/server/jsonrpc/routes/`.
 2. Register it in `src/server/jsonrpc/routes/index.ts`.
-3. If it produces streaming events, add projection logic in `src/server/jsonrpc/eventProjector.ts` or `src/server/jsonrpc/journalProjector.ts`.
+3. If it produces streaming events, add projection logic in `src/server/jsonrpc/notificationProjector.ts` or `src/server/jsonrpc/threadJournalNotificationProjector.ts`.
 4. **Update `docs/websocket-protocol.md`** with the new method, params, result, and where it fits in the flow.
 
 The protocol doc (`docs/websocket-protocol.md`) is the source of truth for anyone building an alternative UI. Keep it accurate and complete.

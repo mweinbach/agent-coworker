@@ -1,4 +1,4 @@
-import type { ServerEvent } from "../../protocol";
+import type { SessionEvent } from "../../protocol";
 
 import { captureWorkspaceControlOutcome, sendSessionMutationError } from "./outcomes";
 import { toJsonRpcParams } from "./shared";
@@ -15,7 +15,7 @@ export function createMemoryRouteHandlers(context: JsonRpcRouteContext): JsonRpc
         context,
         cwd,
         async (session) => await session.emitMemories(scope),
-        (event): event is Extract<ServerEvent, { type: "memory_list" }> =>
+        (event): event is Extract<SessionEvent, { type: "memory_list" }> =>
           event.type === "memory_list",
       );
       if (context.utils.isSessionError(event)) {
@@ -35,7 +35,7 @@ export function createMemoryRouteHandlers(context: JsonRpcRouteContext): JsonRpc
         context,
         cwd,
         async (session) => await session.upsertMemory(scope, id, content),
-        (event): event is Extract<ServerEvent, { type: "memory_list" }> =>
+        (event): event is Extract<SessionEvent, { type: "memory_list" }> =>
           event.type === "memory_list",
       );
       if (context.utils.isSessionError(event)) {
@@ -54,7 +54,7 @@ export function createMemoryRouteHandlers(context: JsonRpcRouteContext): JsonRpc
         context,
         cwd,
         async (session) => await session.deleteMemory(scope, id),
-        (event): event is Extract<ServerEvent, { type: "memory_list" }> =>
+        (event): event is Extract<SessionEvent, { type: "memory_list" }> =>
           event.type === "memory_list",
       );
       if (context.utils.isSessionError(event)) {

@@ -1,4 +1,4 @@
-import type { ServerEvent } from "../../protocol";
+import type { SessionEvent } from "../../protocol";
 
 import {
   captureWorkspaceControlMutationError,
@@ -17,7 +17,7 @@ export function createMcpRouteHandlers(context: JsonRpcRouteContext): JsonRpcReq
         context,
         cwd,
         async (session) => await session.emitMcpServers(),
-        (event): event is Extract<ServerEvent, { type: "mcp_servers" }> =>
+        (event): event is Extract<SessionEvent, { type: "mcp_servers" }> =>
           event.type === "mcp_servers",
       );
       if (context.utils.isSessionError(outcome)) {
@@ -46,7 +46,7 @@ export function createMcpRouteHandlers(context: JsonRpcRouteContext): JsonRpcReq
         context,
         cwd,
         async (session) => await session.emitMcpServers(),
-        (event): event is Extract<ServerEvent, { type: "mcp_servers" }> =>
+        (event): event is Extract<SessionEvent, { type: "mcp_servers" }> =>
           event.type === "mcp_servers",
       );
       if (context.utils.isSessionError(outcome)) {
@@ -73,7 +73,7 @@ export function createMcpRouteHandlers(context: JsonRpcRouteContext): JsonRpcReq
         context,
         cwd,
         async (session) => await session.emitMcpServers(),
-        (event): event is Extract<ServerEvent, { type: "mcp_servers" }> =>
+        (event): event is Extract<SessionEvent, { type: "mcp_servers" }> =>
           event.type === "mcp_servers",
       );
       if (context.utils.isSessionError(outcome)) {
@@ -91,7 +91,7 @@ export function createMcpRouteHandlers(context: JsonRpcRouteContext): JsonRpcReq
         context,
         cwd,
         async (session) => await session.validateMcpServer(name),
-        (event): event is Extract<ServerEvent, { type: "mcp_server_validation" }> =>
+        (event): event is Extract<SessionEvent, { type: "mcp_server_validation" }> =>
           event.type === "mcp_server_validation" && event.name === name,
       );
       if (context.utils.isSessionError(outcome)) {
@@ -112,7 +112,7 @@ export function createMcpRouteHandlers(context: JsonRpcRouteContext): JsonRpcReq
         (
           event,
         ): event is Extract<
-          ServerEvent,
+          SessionEvent,
           { type: "mcp_server_auth_challenge" | "mcp_server_auth_result" }
         > =>
           (event.type === "mcp_server_auth_challenge" || event.type === "mcp_server_auth_result") &&
@@ -135,7 +135,7 @@ export function createMcpRouteHandlers(context: JsonRpcRouteContext): JsonRpcReq
         context,
         cwd,
         async (session) => await session.callbackMcpServerAuth(name, code),
-        (event): event is Extract<ServerEvent, { type: "mcp_server_auth_result" }> =>
+        (event): event is Extract<SessionEvent, { type: "mcp_server_auth_result" }> =>
           event.type === "mcp_server_auth_result" && event.name === name,
       );
       if (context.utils.isSessionError(outcome)) {
@@ -154,7 +154,7 @@ export function createMcpRouteHandlers(context: JsonRpcRouteContext): JsonRpcReq
         context,
         cwd,
         async (session) => await session.setMcpServerApiKey(name, apiKey),
-        (event): event is Extract<ServerEvent, { type: "mcp_server_auth_result" }> =>
+        (event): event is Extract<SessionEvent, { type: "mcp_server_auth_result" }> =>
           event.type === "mcp_server_auth_result" && event.name === name,
       );
       if (context.utils.isSessionError(outcome)) {
@@ -181,7 +181,7 @@ export function createMcpRouteHandlers(context: JsonRpcRouteContext): JsonRpcReq
         context,
         cwd,
         async (session) => await session.emitMcpServers(),
-        (event): event is Extract<ServerEvent, { type: "mcp_servers" }> =>
+        (event): event is Extract<SessionEvent, { type: "mcp_servers" }> =>
           event.type === "mcp_servers",
       );
       if (context.utils.isSessionError(outcome)) {

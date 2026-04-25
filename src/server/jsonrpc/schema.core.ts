@@ -46,7 +46,7 @@ export const jsonRpcCoreResultSchemas = {
       transport: z
         .object({
           type: z.literal("websocket"),
-          protocolMode: z.enum(["legacy", "jsonrpc"]),
+          protocolMode: z.literal("jsonrpc"),
         })
         .strict(),
     })

@@ -1,4 +1,4 @@
-import type { ServerEvent } from "../../protocol";
+import type { SessionEvent } from "../../protocol";
 
 import { captureWorkspaceControlOutcome, sendSessionMutationError } from "./outcomes";
 import { toJsonRpcParams } from "./shared";
@@ -15,7 +15,7 @@ export function createWorkspaceBackupRouteHandlers(
         context,
         cwd,
         async (session) => await session.listWorkspaceBackups(),
-        (event): event is Extract<ServerEvent, { type: "workspace_backups" }> =>
+        (event): event is Extract<SessionEvent, { type: "workspace_backups" }> =>
           event.type === "workspace_backups",
       );
       if (context.utils.isSessionError(event)) {
@@ -36,7 +36,7 @@ export function createWorkspaceBackupRouteHandlers(
         context,
         cwd,
         async (session) => await session.getWorkspaceBackupDelta(targetSessionId, checkpointId),
-        (event): event is Extract<ServerEvent, { type: "workspace_backup_delta" }> =>
+        (event): event is Extract<SessionEvent, { type: "workspace_backup_delta" }> =>
           event.type === "workspace_backup_delta",
       );
       if (context.utils.isSessionError(event)) {
@@ -57,7 +57,7 @@ export function createWorkspaceBackupRouteHandlers(
         async (session) => {
           await session.createWorkspaceBackupCheckpoint(targetSessionId);
         },
-        (event): event is Extract<ServerEvent, { type: "workspace_backups" }> =>
+        (event): event is Extract<SessionEvent, { type: "workspace_backups" }> =>
           event.type === "workspace_backups",
       );
       if (context.utils.isSessionError(event)) {
@@ -82,7 +82,7 @@ export function createWorkspaceBackupRouteHandlers(
         async (session) => {
           await session.restoreWorkspaceBackup(targetSessionId, checkpointId);
         },
-        (event): event is Extract<ServerEvent, { type: "workspace_backups" }> =>
+        (event): event is Extract<SessionEvent, { type: "workspace_backups" }> =>
           event.type === "workspace_backups",
       );
       if (context.utils.isSessionError(event)) {
@@ -109,7 +109,7 @@ export function createWorkspaceBackupRouteHandlers(
             await session.deleteWorkspaceBackupCheckpoint(targetSessionId, checkpointId);
           }
         },
-        (event): event is Extract<ServerEvent, { type: "workspace_backups" }> =>
+        (event): event is Extract<SessionEvent, { type: "workspace_backups" }> =>
           event.type === "workspace_backups",
       );
       if (context.utils.isSessionError(event)) {
@@ -130,7 +130,7 @@ export function createWorkspaceBackupRouteHandlers(
         async (session) => {
           await session.deleteWorkspaceBackupEntry(targetSessionId);
         },
-        (event): event is Extract<ServerEvent, { type: "workspace_backups" }> =>
+        (event): event is Extract<SessionEvent, { type: "workspace_backups" }> =>
           event.type === "workspace_backups",
       );
       if (context.utils.isSessionError(event)) {

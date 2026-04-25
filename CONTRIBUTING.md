@@ -161,9 +161,9 @@ The `ToolContext` interface (defined in `src/tools/context.ts`) provides:
 
 ## Adding a WebSocket Message
 
-Follow these four steps whenever you add a new client message or server event:
+Follow these four steps whenever you add a new JSON-RPC request, result, or notification:
 
-1. **Add the type/schema** to `src/server/protocol.ts` for any legacy event projection that still needs typing, and to `src/server/jsonrpc/schema.ts` plus the relevant module in `src/server/jsonrpc/` for supported JSON-RPC requests, results, or notifications.
+1. **Add the type/schema** to `src/server/jsonrpc/schema.ts` plus the relevant module in `src/server/jsonrpc/` for supported JSON-RPC requests, results, or notifications. Add a `SessionEvent` in `src/server/protocol.ts` only when server-internal session managers need a reusable event shape.
 2. **Add validation** in the JSON-RPC schema bundle (`src/server/jsonrpc/schema.ts`) and parser helpers when the message is client-originated.
 3. **Add the handler** in `src/server/jsonrpc/routes/` (request routing) and/or the appropriate manager under `src/server/session/` (session logic).
 4. **Update `docs/websocket-protocol.md`** with the new message format, fields, example JSON, and where it fits in the flow.

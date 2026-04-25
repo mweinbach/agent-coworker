@@ -1,5 +1,5 @@
 import type { AgentConfig } from "../../../types";
-import type { ServerEvent } from "../../protocol";
+import type { SessionEvent } from "../../protocol";
 import { JSONRPC_ERROR_CODES } from "../protocol";
 
 import { captureWorkspaceControlOutcome, sendSessionMutationError } from "./outcomes";
@@ -17,7 +17,7 @@ export function createProviderRouteHandlers(
         context,
         cwd,
         async (session) => await session.emitProviderCatalog(),
-        (event): event is Extract<ServerEvent, { type: "provider_catalog" }> =>
+        (event): event is Extract<SessionEvent, { type: "provider_catalog" }> =>
           event.type === "provider_catalog",
       );
       if (context.utils.isSessionError(outcome)) {
@@ -34,7 +34,7 @@ export function createProviderRouteHandlers(
         context,
         cwd,
         (session) => session.emitProviderAuthMethods(),
-        (event): event is Extract<ServerEvent, { type: "provider_auth_methods" }> =>
+        (event): event is Extract<SessionEvent, { type: "provider_auth_methods" }> =>
           event.type === "provider_auth_methods",
       );
       if (context.utils.isSessionError(outcome)) {
@@ -52,7 +52,7 @@ export function createProviderRouteHandlers(
         context,
         cwd,
         async (session) => await session.refreshProviderStatus({ refreshBedrockDiscovery }),
-        (event): event is Extract<ServerEvent, { type: "provider_status" }> =>
+        (event): event is Extract<SessionEvent, { type: "provider_status" }> =>
           event.type === "provider_status",
       );
       if (context.utils.isSessionError(outcome)) {
@@ -84,7 +84,7 @@ export function createProviderRouteHandlers(
         (
           event,
         ): event is Extract<
-          ServerEvent,
+          SessionEvent,
           { type: "provider_auth_challenge" | "provider_auth_result" }
         > =>
           (event.type === "provider_auth_challenge" || event.type === "provider_auth_result") &&
@@ -116,7 +116,7 @@ export function createProviderRouteHandlers(
         context,
         cwd,
         async (session) => await session.logoutProviderAuth(provider),
-        (event): event is Extract<ServerEvent, { type: "provider_auth_result" }> =>
+        (event): event is Extract<SessionEvent, { type: "provider_auth_result" }> =>
           event.type === "provider_auth_result" && event.provider === provider,
       );
       if (context.utils.isSessionError(outcome)) {
@@ -147,7 +147,7 @@ export function createProviderRouteHandlers(
         context,
         cwd,
         async (session) => await session.callbackProviderAuth(provider, methodId, code),
-        (event): event is Extract<ServerEvent, { type: "provider_auth_result" }> =>
+        (event): event is Extract<SessionEvent, { type: "provider_auth_result" }> =>
           event.type === "provider_auth_result" &&
           event.provider === provider &&
           event.methodId === methodId,
@@ -179,7 +179,7 @@ export function createProviderRouteHandlers(
         context,
         cwd,
         async (session) => await session.setProviderApiKey(provider, methodId, apiKey),
-        (event): event is Extract<ServerEvent, { type: "provider_auth_result" }> =>
+        (event): event is Extract<SessionEvent, { type: "provider_auth_result" }> =>
           event.type === "provider_auth_result" &&
           event.provider === provider &&
           event.methodId === methodId,
@@ -218,7 +218,7 @@ export function createProviderRouteHandlers(
         context,
         cwd,
         async (session) => await session.setProviderConfig(provider, methodId, values),
-        (event): event is Extract<ServerEvent, { type: "provider_auth_result" }> =>
+        (event): event is Extract<SessionEvent, { type: "provider_auth_result" }> =>
           event.type === "provider_auth_result" &&
           event.provider === provider &&
           event.methodId === methodId,
@@ -252,7 +252,7 @@ export function createProviderRouteHandlers(
         context,
         cwd,
         async (session) => await session.copyProviderApiKey(provider, sourceProvider),
-        (event): event is Extract<ServerEvent, { type: "provider_auth_result" }> =>
+        (event): event is Extract<SessionEvent, { type: "provider_auth_result" }> =>
           event.type === "provider_auth_result" && event.provider === provider,
       );
       if (context.utils.isSessionError(outcome)) {

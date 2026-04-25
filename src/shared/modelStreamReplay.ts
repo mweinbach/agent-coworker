@@ -5,7 +5,7 @@ import {
 } from "../runtime/openaiResponsesProjector";
 import { mapPiEventToRawParts } from "../runtime/piStreamParts";
 import { normalizeModelStreamPart } from "../server/modelStream";
-import type { ServerEvent } from "../server/protocol";
+import type { SessionEvent } from "../server/protocol";
 import {
   type GoogleInteractionsContentBlock,
   type GoogleInteractionsProviderToolCallState,
@@ -20,7 +20,7 @@ import {
   mapModelStreamRawEvent,
 } from "./modelStream";
 
-export type ModelStreamRawEvent = Extract<ServerEvent, { type: "model_stream_raw" }>;
+export type ModelStreamRawEvent = Extract<SessionEvent, { type: "model_stream_raw" }>;
 
 export type ModelStreamReplayRuntime = {
   rawBackedTurns: Set<string>;

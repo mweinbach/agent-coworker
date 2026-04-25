@@ -1,4 +1,4 @@
-import type { ServerEvent } from "../server/protocol";
+import type { SessionEvent } from "../server/protocol";
 
 export type ParsedCommand =
   | { type: "help" | "exit" | "new" | "restart" | "tools" | "sessions" | "clear-hard-cap" }
@@ -19,7 +19,7 @@ export type ParsedCommand =
   | { type: "message"; arg: string };
 
 export type ProviderAuthMethod = Extract<
-  ServerEvent,
+  SessionEvent,
   { type: "provider_auth_methods" }
 >["methods"][string][number];
 

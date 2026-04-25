@@ -53,10 +53,10 @@ Always run tests while doing work, make sure you run these tests.
 
 ## WebSocket-First Development
 
-All new features MUST be built on top of the CLI/core logic and exposed via WebSocket controls in the server protocol. UIs are thin clients that consume `ServerEvent`s and send `ClientMessage`s — never put business logic directly in a UI layer.
+All new features MUST be built on top of the CLI/core logic and exposed via JSON-RPC WebSocket controls. UIs are thin clients that send typed JSON-RPC requests and consume typed JSON-RPC notifications — never put business logic directly in a UI layer.
 
 When adding a new WebSocket message or event:
-1. Define the legacy event type in `src/server/protocol.ts` when needed, and add JSON-RPC request/result/notification schemas under `src/server/jsonrpc/schema.ts` and the relevant module in `src/server/jsonrpc/` for supported live traffic.
+1. Add JSON-RPC request/result/notification schemas under `src/server/jsonrpc/schema.ts` and the relevant module in `src/server/jsonrpc/` for supported live traffic.
 2. Add validation in the relevant JSON-RPC schema bundle (`src/server/jsonrpc/schema.ts`) and parser helpers when the message is client-originated.
 3. Wire the handler in `src/server/jsonrpc/routes/` and/or the appropriate manager under `src/server/session/`.
 4. **Document it in `docs/websocket-protocol.md`** — this is the source of truth for alternative UI builders.

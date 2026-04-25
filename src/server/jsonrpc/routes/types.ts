@@ -1,5 +1,5 @@
 import type { AgentConfig } from "../../../types";
-import type { ServerEvent } from "../../protocol";
+import type { SessionEvent } from "../../protocol";
 import type { ResearchService } from "../../research/ResearchService";
 import type { AgentSession } from "../../session/AgentSession";
 import type { PersistedSessionRecord, PersistedThreadJournalEvent } from "../../sessionDb";
@@ -31,8 +31,8 @@ export type JsonRpcThreadSummaryFilter = {
 };
 
 export type JsonRpcPendingPromptEvent =
-  | Extract<ServerEvent, { type: "ask" }>
-  | Extract<ServerEvent, { type: "approval" }>;
+  | Extract<SessionEvent, { type: "ask" }>
+  | Extract<SessionEvent, { type: "approval" }>;
 
 export type JsonRpcThreadSubscriptionOptions = {
   initialActiveTurnId?: string | null;
@@ -80,7 +80,7 @@ export interface JsonRpcRouteContext {
       cwd: string,
       runner: (binding: SessionBinding, session: AgentSession) => Promise<T>,
     ): Promise<T>;
-    readState(cwd: string): Promise<ServerEvent[]>;
+    readState(cwd: string): Promise<SessionEvent[]>;
   };
   journal: {
     enqueue(event: Omit<PersistedThreadJournalEvent, "seq">): Promise<unknown>;
@@ -97,23 +97,23 @@ export interface JsonRpcRouteContext {
     ): ReadonlySet<string>;
   };
   events: {
-    capture<T extends ServerEvent>(
+    capture<T extends SessionEvent>(
       binding: SessionBinding,
       action: () => Promise<void> | void,
-      predicate: (event: ServerEvent) => event is T,
+      predicate: (event: SessionEvent) => event is T,
       timeoutMs?: number,
     ): Promise<T>;
-    captureMutationOutcome<T extends ServerEvent>(
+    captureMutationOutcome<T extends SessionEvent>(
       binding: SessionBinding,
       action: () => Promise<void> | void,
-      predicate: (event: ServerEvent) => event is T,
+      predicate: (event: SessionEvent) => event is T,
       timeoutMs?: number,
       idleMs?: number,
     ): Promise<T | null>;
-    captureMutationEvents<T extends ServerEvent>(
+    captureMutationEvents<T extends SessionEvent>(
       binding: SessionBinding,
       action: () => Promise<void> | void,
-      predicate: (event: ServerEvent) => event is T,
+      predicate: (event: SessionEvent) => event is T,
       timeoutMs?: number,
       idleMs?: number,
     ): Promise<T[]>;
@@ -130,7 +130,7 @@ export interface JsonRpcRouteContext {
     buildThreadFromSession(session: AgentSession): JsonRpcThread;
     buildThreadFromRecord(record: PersistedSessionRecord): JsonRpcThread;
     shouldIncludeThreadSummary(summary: JsonRpcThreadSummaryFilter): boolean;
-    buildControlSessionStateEvents(session: AgentSession): ServerEvent[];
-    isSessionError(event: ServerEvent): event is Extract<ServerEvent, { type: "error" }>;
+    buildControlSessionStateEvents(session: AgentSession): SessionEvent[];
+    isSessionError(event: SessionEvent): event is Extract<SessionEvent, { type: "error" }>;
   };
 }

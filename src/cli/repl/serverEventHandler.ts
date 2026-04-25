@@ -1,5 +1,5 @@
 import type readline from "node:readline";
-import type { ServerEvent } from "../../server/protocol";
+import type { SessionEvent } from "../../server/protocol";
 import { type AgentConfig, type ApprovalRiskCode, isProviderName } from "../../types";
 import type { ProviderAuthMethod } from "../parser";
 import type { CliStreamState } from "../streamState";
@@ -33,7 +33,7 @@ export type ProviderStatus = {
 };
 export type ReplPromptMode = "user" | "ask" | "approval";
 
-export type ReplServerEventState = {
+export type ReplSessionEventState = {
   threadId: string | null;
   lastKnownThreadId: string | null;
   config: PublicConfig | null;
@@ -54,15 +54,15 @@ export type ReplServerEventState = {
   lastStreamedReasoningTurnId: string | null;
 };
 
-export type ReplServerEventContext = {
-  state: ReplServerEventState;
+export type ReplSessionEventContext = {
+  state: ReplSessionEventState;
   streamState: CliStreamState;
   activateNextPrompt: (rl: readline.Interface) => void;
   resetModelStreamState: () => void;
 };
 
 function logProviderAuthChallenge(
-  event: Extract<ServerEvent, { type: "provider_auth_challenge" }>,
+  event: Extract<SessionEvent, { type: "provider_auth_challenge" }>,
 ) {
   const instructions = asString(event.challenge?.instructions);
   const url = asString(event.challenge?.url);
@@ -79,7 +79,7 @@ function logProviderAuthChallenge(
   }
 }
 
-function logProviderAuthResult(event: Extract<ServerEvent, { type: "provider_auth_result" }>) {
+function logProviderAuthResult(event: Extract<SessionEvent, { type: "provider_auth_result" }>) {
   const message = asString(event.message);
   if (message) {
     console.log(message);
@@ -119,9 +119,9 @@ function providerNamesFromCatalog(all: unknown): string[] {
   });
 }
 
-export function applyCliServerEvent(
-  state: ReplServerEventState,
-  event: ServerEvent,
+export function applyCliSessionEvent(
+  state: ReplSessionEventState,
+  event: SessionEvent,
   opts: { logConfigUpdate?: boolean } = {},
 ) {
   switch (event.type) {
@@ -174,7 +174,7 @@ export function applyCliServerEvent(
 }
 
 export function applyCliJsonRpcResult(
-  state: ReplServerEventState,
+  state: ReplSessionEventState,
   result: unknown,
   opts: { logConfigUpdate?: boolean } = {},
 ) {
@@ -185,7 +185,7 @@ export function applyCliJsonRpcResult(
     if (!eventLike || typeof eventLike !== "object") return;
     const type = asString((eventLike as Record<string, unknown>).type);
     if (!type) return;
-    applyCliServerEvent(state, eventLike as ServerEvent, opts);
+    applyCliSessionEvent(state, eventLike as SessionEvent, opts);
   };
 
   if (Array.isArray(record.events)) {
@@ -199,7 +199,7 @@ export function applyCliJsonRpcResult(
   }
 }
 
-export function createNotificationHandler(ctx: ReplServerEventContext) {
+export function createNotificationHandler(ctx: ReplSessionEventContext) {
   return (notification: { method: string; params?: unknown }, rl: readline.Interface) => {
     const params = (notification.params ?? {}) as Record<string, unknown>;
 
@@ -331,7 +331,7 @@ export function createNotificationHandler(ctx: ReplServerEventContext) {
       }
 
       case "cowork/session/configUpdated": {
-        applyCliServerEvent(
+        applyCliSessionEvent(
           ctx.state,
           {
             type: "config_updated",

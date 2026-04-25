@@ -11,7 +11,7 @@ import { WorkspaceBackupService } from "../src/server/workspaceBackups";
 import { makeTmpProject, serverOpts, stopTestServer } from "./helpers/wsHarness";
 
 async function connectJsonRpc(url: string) {
-  const ws = new WebSocket(`${url}?protocol=jsonrpc`);
+  const ws = new WebSocket(url, "cowork.jsonrpc.v1");
   const queue: any[] = [];
   const waiters = new Set<{
     predicate: (message: any) => boolean;
@@ -929,7 +929,7 @@ describe("server JSON-RPC control methods", () => {
     }
   });
 
-  test("provider catalog read returns a legacy-compatible provider_catalog event payload", async () => {
+  test("provider catalog read returns a session-event provider_catalog event payload", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
 
@@ -948,7 +948,7 @@ describe("server JSON-RPC control methods", () => {
     }
   });
 
-  test("provider auth methods read returns a legacy-compatible provider_auth_methods event payload", async () => {
+  test("provider auth methods read returns a session-event provider_auth_methods event payload", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
 
@@ -966,7 +966,7 @@ describe("server JSON-RPC control methods", () => {
     }
   });
 
-  test("provider status refresh returns a legacy-compatible provider_status event payload", async () => {
+  test("provider status refresh returns a session-event provider_status event payload", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
 
@@ -985,7 +985,7 @@ describe("server JSON-RPC control methods", () => {
     }
   });
 
-  test("memory list returns a legacy-compatible memory_list event payload", async () => {
+  test("memory list returns a session-event memory_list event payload", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
 
@@ -1006,7 +1006,7 @@ describe("server JSON-RPC control methods", () => {
     }
   });
 
-  test("MCP servers read returns a legacy-compatible mcp_servers event payload", async () => {
+  test("MCP servers read returns a session-event mcp_servers event payload", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
 
@@ -1025,7 +1025,7 @@ describe("server JSON-RPC control methods", () => {
     }
   });
 
-  test("skills catalog read returns a legacy-compatible skills_catalog event payload", async () => {
+  test("skills catalog read returns a session-event skills_catalog event payload", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
 
@@ -1043,7 +1043,7 @@ describe("server JSON-RPC control methods", () => {
     }
   });
 
-  test("workspace backups read returns a legacy-compatible workspace_backups event payload", async () => {
+  test("workspace backups read returns a session-event workspace_backups event payload", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
 
@@ -1247,7 +1247,7 @@ describe("server JSON-RPC control methods", () => {
     });
   }
 
-  test("session control methods return legacy-compatible event payloads", async () => {
+  test("session control methods return session-event event payloads", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
 
@@ -1335,7 +1335,7 @@ describe("server JSON-RPC control methods", () => {
     }
   });
 
-  test("workspace file upload returns the saved path in a legacy event envelope", async () => {
+  test("workspace file upload returns the saved path in a session event envelope", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
 

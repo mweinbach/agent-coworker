@@ -2,7 +2,7 @@ import type { MCPRegistryServer } from "../../mcp/configRegistry";
 import type { ServerErrorCode, ServerErrorSource } from "../../types";
 import { resolveAuthHomeDir } from "../../utils/authHome";
 import { resolveCoworkHomedir } from "../../utils/coworkHome";
-import type { ServerEvent } from "../protocol";
+import type { SessionEvent } from "../protocol";
 import type { SessionDependencies, SessionRuntimeState } from "./SessionContext";
 
 type PromptBucket<T> = Map<string, PromiseWithResolvers<T>>;
@@ -13,7 +13,7 @@ export class SessionRuntimeSupport {
       sessionId: string;
       state: SessionRuntimeState;
       deps: SessionDependencies;
-      emit: (evt: ServerEvent) => void;
+      emit: (evt: SessionEvent) => void;
       emitObservabilityStatusChanged: () => void;
     },
   ) {}

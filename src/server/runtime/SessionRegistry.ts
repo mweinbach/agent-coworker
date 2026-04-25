@@ -8,7 +8,7 @@ import { defaultRuntimeNameForProvider } from "../../types";
 import { resolveAuthHomeDir } from "../../utils/authHome";
 import type { AgentControl } from "../agents/AgentControl";
 import { createSessionEventCapture } from "../jsonrpc/sessionEventCapture";
-import type { ServerEvent } from "../protocol";
+import type { SessionEvent } from "../protocol";
 import type { AgentSession } from "../session/AgentSession";
 import type {
   SeededSessionContext,
@@ -87,7 +87,7 @@ export class SessionRegistry {
     this.options.setConfig(config);
   }
 
-  addBindingSink(binding: SessionBinding, sinkId: string, sink: (evt: ServerEvent) => void): void {
+  addBindingSink(binding: SessionBinding, sinkId: string, sink: (evt: SessionEvent) => void): void {
     binding.sinks.set(sinkId, sink);
     if (binding.session && !sinkId.startsWith("journal:")) {
       this.sessionIdleSince.delete(binding.session.id);
@@ -254,9 +254,9 @@ export class SessionRegistry {
     discoveredSkills: Array<{ name: string; description: string }>;
     yolo?: boolean;
     sessionDb: SessionDb;
-    emit: (evt: ServerEvent) => void;
+    emit: (evt: SessionEvent) => void;
   } {
-    const emit = (evt: ServerEvent) => {
+    const emit = (evt: SessionEvent) => {
       for (const sink of binding.sinks.values()) {
         try {
           sink(evt);

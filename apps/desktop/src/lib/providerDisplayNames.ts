@@ -1,9 +1,9 @@
 import { getDefaultProviderAuthMethods } from "../../../../src/shared/providerAuthMethods";
-import type { ProviderName, ServerEvent } from "./wsProtocol";
+import type { ProviderName, SessionEvent } from "./wsProtocol";
 import { PROVIDER_NAMES } from "./wsProtocol";
 
 type ProviderAuthMethod = Extract<
-  ServerEvent,
+  SessionEvent,
   { type: "provider_auth_methods" }
 >["methods"][string][number];
 const EXA_AUTH_METHOD_ID = "exa_api_key";

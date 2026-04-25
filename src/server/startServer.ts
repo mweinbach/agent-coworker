@@ -1,11 +1,7 @@
 import { createAgentServerRuntime, type StartAgentServerOptions } from "./runtime/ServerRuntime";
 import { handleWebDesktopRoute } from "./webDesktopRoutes";
 import { WebDesktopService } from "./webDesktopService";
-import {
-  parseWsProtocolDefault,
-  resolveWsProtocol,
-  splitWebSocketSubprotocolHeader,
-} from "./wsProtocol/negotiation";
+import { resolveWsProtocol, splitWebSocketSubprotocolHeader } from "./wsProtocol/negotiation";
 import type { StartServerSocketData } from "./startServer/types";
 
 export type { StartAgentServerOptions } from "./runtime/ServerRuntime";
@@ -37,8 +33,6 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
 }> {
   const hostname = opts.hostname ?? "127.0.0.1";
   const runtime = await createAgentServerRuntime(opts);
-  const wsProtocolDefault =
-    opts.wsProtocolDefault ?? parseWsProtocolDefault(runtime.env.COWORK_WS_DEFAULT_PROTOCOL);
   const requestedPort = opts.port ?? 7337;
   const webDesktopService =
     runtime.env.COWORK_WEB_DESKTOP_SERVICE === "1"
@@ -79,7 +73,6 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
               req.headers.get("sec-websocket-protocol"),
             ),
             requestedProtocol: url.searchParams.get("protocol"),
-            defaultProtocol: wsProtocolDefault,
           });
           if (!protocolResult.ok) {
             return new Response(protocolResult.error, { status: 400, headers: corsHeaders });

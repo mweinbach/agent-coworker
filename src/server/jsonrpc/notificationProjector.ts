@@ -1,11 +1,11 @@
 import { createConversationProjection } from "../projection/conversationProjection";
-import type { ServerEvent } from "../protocol";
+import type { SessionEvent } from "../protocol";
 
 type JsonRpcOutboundMessage =
   | { id: string | number; method: string; params?: unknown }
   | { method: string; params?: unknown };
 
-type CreateJsonRpcEventProjectorOptions = {
+type CreateJsonRpcNotificationProjectorOptions = {
   threadId: string;
   send: (message: JsonRpcOutboundMessage) => void;
   shouldSendNotification?: (method: string) => boolean;
@@ -20,7 +20,9 @@ type CreateJsonRpcEventProjectorOptions = {
   }) => void;
 };
 
-export function createJsonRpcEventProjector(opts: CreateJsonRpcEventProjectorOptions) {
+export function createJsonRpcNotificationProjector(
+  opts: CreateJsonRpcNotificationProjectorOptions,
+) {
   const shouldSendNotification = (method: string) => opts.shouldSendNotification?.(method) ?? true;
   const sendNotification = (method: string, params?: unknown) => {
     if (!shouldSendNotification(method)) return;
@@ -97,7 +99,7 @@ export function createJsonRpcEventProjector(opts: CreateJsonRpcEventProjectorOpt
   });
 
   return {
-    handle(event: ServerEvent) {
+    handle(event: SessionEvent) {
       if (event.sessionId !== opts.threadId) return;
 
       switch (event.type) {

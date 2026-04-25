@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createConversationProjection } from "../../src/server/projection/conversationProjection";
-import type { ServerEvent } from "../../src/server/protocol";
+import type { SessionEvent } from "../../src/server/protocol";
 import { A2uiSurfaceManager } from "../../src/server/session/A2uiSurfaceManager";
 import type { ProjectedItem } from "../../src/shared/projectedItems";
 import {
@@ -15,14 +15,14 @@ import type { AgentConfig } from "../../src/types";
 /**
  * Drives the full A2UI path that the harness wires up in production:
  *   agent → a2ui tool → ToolContext.applyA2uiEnvelope → A2uiSurfaceManager →
- *     ServerEvent "a2ui_surface" → conversationProjection → uiSurface ProjectedItem →
+ *     SessionEvent "a2ui_surface" → conversationProjection → uiSurface ProjectedItem →
  *     session feed (SessionFeedItem.kind === "ui_surface")
  *
  * Any one of those hops being broken would show up in this test.
  */
 describe("A2UI end-to-end (manager → projection → feed)", () => {
   test("rendering a surface through the tool lands a ui_surface feed item", async () => {
-    const events: ServerEvent[] = [];
+    const events: SessionEvent[] = [];
     const manager = new A2uiSurfaceManager({
       sessionId: "sess-1",
       emit: (evt) => events.push(evt),
@@ -79,7 +79,7 @@ describe("A2UI end-to-end (manager → projection → feed)", () => {
 
     // Server event should fire exactly once
     expect(events).toHaveLength(1);
-    const evt = events[0] as Extract<ServerEvent, { type: "a2ui_surface" }>;
+    const evt = events[0] as Extract<SessionEvent, { type: "a2ui_surface" }>;
     expect(evt.type).toBe("a2ui_surface");
 
     // Feed the event into the projection the way the live server does

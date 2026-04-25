@@ -53,7 +53,7 @@ export type DesktopSmokeJsonRpcConnection = {
 export type ConnectDesktopSmokeJsonRpcOptions = DesktopSmokeTimerFns & {
   url: string;
   clientVersion: string;
-  createWebSocket?: (url: string) => DesktopSmokeSocket;
+  createWebSocket?: (url: string, protocols?: string | string[]) => DesktopSmokeSocket;
 };
 
 export type RunDesktopSmokePromptLoadCheckOptions = {
@@ -78,16 +78,14 @@ function formatUnknownError(error: unknown): Error {
 export async function connectDesktopSmokeJsonRpc(
   options: ConnectDesktopSmokeJsonRpcOptions,
 ): Promise<DesktopSmokeJsonRpcConnection> {
-  const endpoint = new URL(options.url);
-  endpoint.searchParams.set("protocol", "jsonrpc");
-
   const createWebSocket =
     options.createWebSocket ??
-    ((url: string) => new WebSocket(url) as unknown as DesktopSmokeSocket);
+    ((url: string) =>
+      new WebSocket(url, "cowork.jsonrpc.v1") as unknown as DesktopSmokeSocket);
   const setTimeoutFn = options.setTimeoutFn ?? setTimeout;
   const clearTimeoutFn = options.clearTimeoutFn ?? clearTimeout;
 
-  const ws = createWebSocket(endpoint.toString());
+  const ws = createWebSocket(options.url, "cowork.jsonrpc.v1");
   const queue: DesktopSmokeJsonRpcMessage[] = [];
   const waiters = new Set<DesktopSmokeWaiter>();
   let terminalError: Error | null = null;

@@ -1,15 +1,17 @@
 import { createConversationProjection } from "../projection/conversationProjection";
-import type { ServerEvent } from "../protocol";
+import type { SessionEvent } from "../protocol";
 import type { PersistedThreadJournalEvent } from "../sessionDb";
 
 type ThreadJournalEmission = Omit<PersistedThreadJournalEvent, "seq">;
 
-type CreateThreadJournalProjectorOptions = {
+type CreateThreadJournalNotificationProjectorOptions = {
   threadId: string;
   emit: (event: ThreadJournalEmission) => void;
 };
 
-export function createThreadJournalProjector(opts: CreateThreadJournalProjectorOptions) {
+export function createThreadJournalNotificationProjector(
+  opts: CreateThreadJournalNotificationProjectorOptions,
+) {
   const emit = (
     eventType: string,
     payload: unknown,
@@ -124,7 +126,7 @@ export function createThreadJournalProjector(opts: CreateThreadJournalProjectorO
   });
 
   return {
-    handle(event: ServerEvent) {
+    handle(event: SessionEvent) {
       if (event.sessionId !== opts.threadId) return;
       projection.handle(event);
     },

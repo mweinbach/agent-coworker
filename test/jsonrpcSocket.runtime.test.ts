@@ -403,7 +403,7 @@ describe("JsonRpcSocket runtime", () => {
     expect(ws.readyState).toBe(FakeWebSocket.CLOSED);
   });
 
-  test("falls back to query-param JSON-RPC when the subprotocol handshake times out", async () => {
+  test("rejects readiness when the JSON-RPC subprotocol handshake times out", async () => {
     FakeWebSocket.instances = [];
     const timers = createManualTimers();
     const socket = new JsonRpcSocket({
@@ -426,31 +426,8 @@ describe("JsonRpcSocket runtime", () => {
     timers.timeoutCallbacks[0]!();
     await flushMicrotasks();
 
-    const ws2 = FakeWebSocket.instances[1]!;
-    expect(ws2.url).toBe("ws://example.test/socket?protocol=jsonrpc");
-    expect(ws2.protocols).toBeUndefined();
-    expect(parseSentMessages(ws2)).toEqual([
-      {
-        id: 2,
-        method: "initialize",
-        params: {
-          clientInfo: {
-            name: "desktop",
-          },
-          capabilities: {
-            experimentalApi: false,
-          },
-        },
-      },
-    ]);
-
-    await ws2.emitMessage(JSON.stringify({ id: 2, result: { protocolVersion: "0.1" } }));
-    await flushMicrotasks();
-
-    await expect(ready).resolves.toBeUndefined();
-    expect(parseSentMessages(ws2)[1]).toEqual({
-      method: "initialized",
-    });
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    await expect(ready).rejects.toThrow("Timed out waiting for JSON-RPC initialize response");
   });
 
   test("preserves queued retryable requests across a transient reconnect handshake failure", async () => {

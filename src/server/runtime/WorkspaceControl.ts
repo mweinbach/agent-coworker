@@ -5,12 +5,12 @@ import type { AgentConfig } from "../../types";
 import { mergeRuntimeProviderOptions, resolveWorkspaceA2ui } from "./ConfigPatchStore";
 import type { SessionRegistry } from "./SessionRegistry";
 import type { SocketSendQueue } from "./SocketSendQueue";
-import type { ServerEvent } from "../protocol";
+import type { SessionEvent } from "../protocol";
 import type { AgentSession } from "../session/AgentSession";
 import type { SessionBinding, StartServerSocket } from "../startServer/types";
 
 type WorkspaceControlRefreshEvent = Extract<
-  ServerEvent,
+  SessionEvent,
   { type: "skills_list" | "skills_catalog" | "plugins_catalog" | "mcp_servers" }
 >;
 
@@ -91,7 +91,7 @@ export class WorkspaceControl {
     }
   }
 
-  async readState(cwd: string): Promise<ServerEvent[]> {
+  async readState(cwd: string): Promise<SessionEvent[]> {
     return this.buildStateEventsFromConfig(await this.loadConfig(cwd));
   }
 
@@ -141,7 +141,7 @@ export class WorkspaceControl {
     return nextConfig;
   }
 
-  private buildStateEventsFromConfig(controlConfig: AgentConfig): ServerEvent[] {
+  private buildStateEventsFromConfig(controlConfig: AgentConfig): SessionEvent[] {
     const sessionId = this.getOrCreateStateId(controlConfig.workingDirectory);
     const providerOptions = pickEditableOpenAiCompatibleProviderOptions(
       controlConfig.providerOptions,
@@ -242,9 +242,9 @@ export class WorkspaceControl {
     if (!binding.session) {
       return [];
     }
-    const captureRefreshEvent = async <T extends ServerEvent>(
+    const captureRefreshEvent = async <T extends SessionEvent>(
       action: () => Promise<void>,
-      predicate: (event: ServerEvent) => event is T,
+      predicate: (event: SessionEvent) => event is T,
     ): Promise<T | null> => {
       try {
         return await this.options.registry.sessionEventCapture.capture(binding, action, predicate);
@@ -257,22 +257,22 @@ export class WorkspaceControl {
       const events = [
         await captureRefreshEvent(
           async () => await session.listSkills(),
-          (event): event is Extract<ServerEvent, { type: "skills_list" }> =>
+          (event): event is Extract<SessionEvent, { type: "skills_list" }> =>
             event.type === "skills_list",
         ),
         await captureRefreshEvent(
           async () => await session.getSkillsCatalog(),
-          (event): event is Extract<ServerEvent, { type: "skills_catalog" }> =>
+          (event): event is Extract<SessionEvent, { type: "skills_catalog" }> =>
             event.type === "skills_catalog",
         ),
         await captureRefreshEvent(
           async () => await session.getPluginsCatalog(),
-          (event): event is Extract<ServerEvent, { type: "plugins_catalog" }> =>
+          (event): event is Extract<SessionEvent, { type: "plugins_catalog" }> =>
             event.type === "plugins_catalog",
         ),
         await captureRefreshEvent(
           async () => await session.emitMcpServers(),
-          (event): event is Extract<ServerEvent, { type: "mcp_servers" }> =>
+          (event): event is Extract<SessionEvent, { type: "mcp_servers" }> =>
             event.type === "mcp_servers",
         ),
       ];

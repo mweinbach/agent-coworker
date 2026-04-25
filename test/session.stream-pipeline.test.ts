@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 import path from "node:path";
 import * as REAL_AGENT from "../src/agent";
 import { __internal as observabilityRuntimeInternal } from "../src/observability/runtime";
-import type { ServerEvent } from "../src/server/protocol";
+import type { SessionEvent } from "../src/server/protocol";
 import type { AgentConfig } from "../src/types";
 
 const mockRunTurn = mock(async () => ({
@@ -47,10 +47,10 @@ function makeConfig(dir: string): AgentConfig {
   };
 }
 
-function makeEmit(): { emit: (evt: ServerEvent) => void; events: ServerEvent[] } {
-  const events: ServerEvent[] = [];
+function makeEmit(): { emit: (evt: SessionEvent) => void; events: SessionEvent[] } {
+  const events: SessionEvent[] = [];
   return {
-    emit: (event: ServerEvent) => {
+    emit: (event: SessionEvent) => {
       events.push(event);
     },
     events,
@@ -77,14 +77,14 @@ function makeSession(overrides?: { config?: AgentConfig; provider?: string }) {
 // Helpers
 // ---------------------------------------------------------------------------
 
-type StreamChunkEvent = Extract<ServerEvent, { type: "model_stream_chunk" }>;
-type RawStreamEvent = Extract<ServerEvent, { type: "model_stream_raw" }>;
+type StreamChunkEvent = Extract<SessionEvent, { type: "model_stream_chunk" }>;
+type RawStreamEvent = Extract<SessionEvent, { type: "model_stream_raw" }>;
 
-function getStreamChunks(events: ServerEvent[]): StreamChunkEvent[] {
+function getStreamChunks(events: SessionEvent[]): StreamChunkEvent[] {
   return events.filter((e): e is StreamChunkEvent => e.type === "model_stream_chunk");
 }
 
-function getRawStreamEvents(events: ServerEvent[]): RawStreamEvent[] {
+function getRawStreamEvents(events: SessionEvent[]): RawStreamEvent[] {
   return events.filter((e): e is RawStreamEvent => e.type === "model_stream_raw");
 }
 

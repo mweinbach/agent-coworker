@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { MCPRegistryServer } from "../src/mcp/configRegistry";
-import type { ServerEvent } from "../src/server/protocol";
+import type { SessionEvent } from "../src/server/protocol";
 import { McpAuthFlow } from "../src/server/session/mcp/McpAuthFlow";
 import type { AgentConfig } from "../src/types";
 
@@ -63,7 +63,7 @@ async function waitForCondition(
 }
 
 function createHarness(config: AgentConfig, server: MCPRegistryServer) {
-  const events: ServerEvent[] = [];
+  const events: SessionEvent[] = [];
   const state = {
     config,
     connecting: false,
@@ -72,7 +72,7 @@ function createHarness(config: AgentConfig, server: MCPRegistryServer) {
   const context = {
     id: "session-mcp-auth-flow",
     state,
-    emit: (event: ServerEvent) => {
+    emit: (event: SessionEvent) => {
       events.push(event);
     },
     guardBusy: () => !state.running && !state.connecting,

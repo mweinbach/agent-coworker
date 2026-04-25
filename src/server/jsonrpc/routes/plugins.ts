@@ -1,4 +1,4 @@
-import type { ServerEvent } from "../../protocol";
+import type { SessionEvent } from "../../protocol";
 
 import {
   captureWorkspaceControlMutationEvents,
@@ -9,15 +9,15 @@ import { toJsonRpcParams } from "./shared";
 import type { JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
 
 type PluginMutationResponseEvent = Extract<
-  ServerEvent,
+  SessionEvent,
   { type: "skills_list" | "skills_catalog" | "plugins_catalog" | "mcp_servers" }
 >;
 type PluginInstallResponseEvent =
   | PluginMutationResponseEvent
-  | Extract<ServerEvent, { type: "plugin_install_preview" | "plugin_detail" }>;
+  | Extract<SessionEvent, { type: "plugin_install_preview" | "plugin_detail" }>;
 const PLUGIN_INSTALL_EVENTS_TIMEOUT_MS = 60_000;
 
-function isPluginMutationResponseEvent(event: ServerEvent): event is PluginMutationResponseEvent {
+function isPluginMutationResponseEvent(event: SessionEvent): event is PluginMutationResponseEvent {
   return (
     event.type === "skills_list" ||
     event.type === "skills_catalog" ||
@@ -26,7 +26,7 @@ function isPluginMutationResponseEvent(event: ServerEvent): event is PluginMutat
   );
 }
 
-function isPluginInstallResponseEvent(event: ServerEvent): event is PluginInstallResponseEvent {
+function isPluginInstallResponseEvent(event: SessionEvent): event is PluginInstallResponseEvent {
   return (
     isPluginMutationResponseEvent(event) ||
     event.type === "plugin_install_preview" ||
@@ -43,7 +43,7 @@ export function createPluginsRouteHandlers(context: JsonRpcRouteContext): JsonRp
         context,
         cwd,
         async (session) => await session.getPluginsCatalog(),
-        (event): event is Extract<ServerEvent, { type: "plugins_catalog" }> =>
+        (event): event is Extract<SessionEvent, { type: "plugins_catalog" }> =>
           event.type === "plugins_catalog",
       );
       if (context.utils.isSessionError(event)) {
@@ -63,7 +63,7 @@ export function createPluginsRouteHandlers(context: JsonRpcRouteContext): JsonRp
         context,
         cwd,
         async (session) => await session.getPlugin(pluginId, scope),
-        (event): event is Extract<ServerEvent, { type: "plugin_detail" }> =>
+        (event): event is Extract<SessionEvent, { type: "plugin_detail" }> =>
           event.type === "plugin_detail",
       );
       if (context.utils.isSessionError(event)) {
@@ -82,7 +82,7 @@ export function createPluginsRouteHandlers(context: JsonRpcRouteContext): JsonRp
         context,
         cwd,
         async (session) => await session.previewPluginInstall(sourceInput, targetScope),
-        (event): event is Extract<ServerEvent, { type: "plugin_install_preview" }> =>
+        (event): event is Extract<SessionEvent, { type: "plugin_install_preview" }> =>
           event.type === "plugin_install_preview",
       );
       if (context.utils.isSessionError(event)) {

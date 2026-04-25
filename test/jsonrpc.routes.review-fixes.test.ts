@@ -12,13 +12,13 @@ import type {
   JsonRpcRouteContext,
 } from "../src/server/jsonrpc/routes/types";
 import { createWorkspaceBackupRouteHandlers } from "../src/server/jsonrpc/routes/workspaceBackups";
-import type { ServerEvent } from "../src/server/protocol";
+import type { SessionEvent } from "../src/server/protocol";
 
 type RouteHarness = ReturnType<typeof createRouteHarness>;
 
 function createRouteHarness(
   session: Record<string, any>,
-  emitted: ServerEvent[] = [],
+  emitted: SessionEvent[] = [],
   opts?: {
     threadId?: string;
     threadSession?: Record<string, any>;
@@ -60,7 +60,7 @@ function createRouteHarness(
       capture: async (
         _binding: any,
         action: () => Promise<void> | void,
-        predicate: (event: ServerEvent) => boolean,
+        predicate: (event: SessionEvent) => boolean,
       ) => {
         await action();
         const match = emitted.find((event) => predicate(event));
@@ -72,7 +72,7 @@ function createRouteHarness(
       captureMutationOutcome: async (
         _binding: any,
         action: () => Promise<void> | void,
-        predicate: (event: ServerEvent) => boolean,
+        predicate: (event: SessionEvent) => boolean,
       ) => {
         await action();
         return emitted.find((event) => predicate(event)) ?? null;
@@ -103,7 +103,7 @@ function createRouteHarness(
       },
       shouldIncludeThreadSummary: () => true,
       buildControlSessionStateEvents: () => [],
-      isSessionError: (event: ServerEvent): event is Extract<ServerEvent, { type: "error" }> =>
+      isSessionError: (event: SessionEvent): event is Extract<SessionEvent, { type: "error" }> =>
         event.type === "error",
     },
   } satisfies Partial<JsonRpcRouteContext>;
@@ -136,8 +136,8 @@ function createRouteHarness(
 
 function sessionError(
   message: string,
-  source: Extract<ServerEvent, { type: "error" }>["source"] = "session",
-): Extract<ServerEvent, { type: "error" }> {
+  source: Extract<SessionEvent, { type: "error" }>["source"] = "session",
+): Extract<SessionEvent, { type: "error" }> {
   return {
     type: "error",
     sessionId: "session-1",

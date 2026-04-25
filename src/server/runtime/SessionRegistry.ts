@@ -16,6 +16,7 @@ import type {
   SessionInfoState,
 } from "../session/SessionContext";
 import type { PersistedSessionRecord, SessionDb } from "../sessionDb";
+import type { SessionBinding } from "../startServer/types";
 import type { WorkspaceBackupService } from "../workspaceBackups";
 import {
   mergeConfigPatch,
@@ -23,7 +24,6 @@ import {
   type ProjectConfigPatch,
 } from "./ConfigPatchStore";
 import type { ThreadJournal } from "./ThreadJournal";
-import type { SessionBinding } from "../startServer/types";
 
 let agentSessionModule: typeof import("../session/AgentSession") | null = null;
 let sessionSnapshotProjectorModule: typeof import("../session/SessionSnapshotProjector") | null =
@@ -250,7 +250,7 @@ export class SessionRegistry {
     syncConfig: (nextConfig: AgentConfig) => void = (nextConfig) => {
       this.syncConfig(nextConfig);
     },
-  ): Omit<SessionDependencies, "config" | "system"> & {
+  ): Partial<SessionDependencies> & {
     discoveredSkills: Array<{ name: string; description: string }>;
     yolo?: boolean;
     sessionDb: SessionDb;
@@ -400,7 +400,7 @@ export class SessionRegistry {
       seedContext?: SeededSessionContext;
       sessionInfoPatch?: Partial<SessionInfoState>;
     },
-  ): {
+  ): Partial<SessionDependencies> & {
     session: AgentSession;
     isResume: boolean;
     resumedFromStorage: boolean;

@@ -29,6 +29,7 @@ describe("main CI workflow", () => {
     expect(workflow).toContain("run: bun run typecheck");
     expect(workflow).toContain("- name: Unit tests");
     expect(workflow).toContain("run: bun run test:stable -- --max-concurrency 1");
+    expect(workflow).not.toContain("- name: Mobile typecheck");
     expect(workflow).not.toContain("- name: Stable per-file unit tests");
   });
 

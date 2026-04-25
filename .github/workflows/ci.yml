@@ -143,6 +143,3 @@ jobs:
 
       - name: Build cowork-server binary
         run: bun run build:server-binary
-
-      - name: Mobile typecheck
-        run: bun install --cwd apps/mobile && bunx tsc --noEmit -p apps/mobile/tsconfig.json

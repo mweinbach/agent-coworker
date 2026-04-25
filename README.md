@@ -270,7 +270,7 @@ bun run test:stable         # sequential per-file test runner for flake detectio
 Notes:
 
 - `bun install` at the repo root installs the product runtime, desktop app, and harness workspace. The mobile app remains optional under `apps/mobile`.
-- `bun run typecheck` covers the root runtime, `packages/harness`, and `apps/desktop`.
+- `bun run typecheck` covers the root runtime, `packages/harness`, and `apps/desktop`; use `bun run app:mobile:typecheck` after installing `apps/mobile` dependencies when working on the optional mobile app.
 - `bun run dev` watches `src/index.ts` (the CLI entry point), not the desktop app. Use `bun run desktop:dev` for the Electron app.
 - The test suite is deterministic and does not require provider credentials.
 

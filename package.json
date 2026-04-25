@@ -52,7 +52,7 @@
     "app:mobile:ios": "cd apps/mobile && npx expo run:ios",
     "app:mobile:android": "cd apps/mobile && npx expo run:android",
     "app:mobile:xcode": "cd apps/mobile && open ios/CoworkMobile.xcworkspace",
-    "app:mobile:typecheck": "bunx tsc --noEmit -p apps/mobile/tsconfig.json",
+    "app:mobile:typecheck": "cd apps/mobile && bun run typecheck",
     "build:desktop-resources": "bun scripts/build_desktop_resources.ts",
     "docs:check": "bun packages/harness/src/check_docs.ts",
     "docs:generate-jsonrpc": "bun packages/harness/src/generate_ws_jsonrpc_schema.ts",

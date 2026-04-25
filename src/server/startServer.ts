@@ -1,6 +1,4 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import path from "node:path";
 import { z } from "zod";
 import type { runTurn as runTurnFn } from "../agent";
 import { loadConfig } from "../config";
@@ -13,21 +11,12 @@ import type {
 } from "../prompt";
 import { getProviderCatalog } from "../providers/connectionCatalog";
 import type { SessionKind } from "../shared/agents";
-import type { OpenAiCompatibleProviderOptionsByProvider } from "../shared/openaiCompatibleOptions";
-import {
-  EDITABLE_PROVIDER_OPTIONS_PROVIDER_NAMES,
-  mergeEditableOpenAiCompatibleProviderOptions,
-  pickEditableOpenAiCompatibleProviderOptions,
-} from "../shared/openaiCompatibleOptions";
-import { effectiveToolOutputOverflowChars } from "../shared/toolOutputOverflow";
 import { ensureDefaultGlobalSkillsReady } from "../skills/defaultGlobalSkills";
 import { type AgentConfig, defaultRuntimeNameForProvider } from "../types";
-import { writeTextFileAtomic } from "../utils/atomicFile";
 import { resolveAuthHomeDir } from "../utils/authHome";
 
 import type { AgentControl } from "./agents/AgentControl";
 import { decodeJsonRpcMessage } from "./jsonrpc/decodeJsonRpcMessage";
-import { createThreadJournalProjector } from "./jsonrpc/journalProjector";
 import { buildJsonRpcErrorResponse, buildJsonRpcResultResponse } from "./jsonrpc/protocol";
 import { createJsonRpcRequestRouter } from "./jsonrpc/routes";
 import {
@@ -44,6 +33,19 @@ import { createSessionEventCapture } from "./jsonrpc/sessionEventCapture";
 import { createJsonRpcTransportAdapter } from "./jsonrpc/transportAdapter";
 import type { ServerEvent } from "./protocol";
 import { ResearchService } from "./research/ResearchService";
+import {
+  deepMerge,
+  isPlainObject,
+  mergeConfigPatch,
+  type ProjectConfigPatch,
+  persistProjectConfigPatch,
+} from "./runtime/ConfigPatchStore";
+import type { ServerRuntime } from "./runtime/ServerRuntime";
+import { SessionRegistry } from "./runtime/SessionRegistry";
+import { SkillMutationBus } from "./runtime/SkillMutationBus";
+import { SocketSendQueue } from "./runtime/SocketSendQueue";
+import { ThreadJournal } from "./runtime/ThreadJournal";
+import { WorkspaceControl } from "./runtime/WorkspaceControl";
 import type { AgentSession } from "./session/AgentSession";
 import type {
   SeededSessionContext,
@@ -51,11 +53,6 @@ import type {
   SessionInfoState,
 } from "./session/SessionContext";
 import { type PersistedSessionRecord, SessionDb } from "./sessionDb";
-import {
-  readSharedSkillMutationSignal,
-  resolveSharedSkillMutationSignalPath,
-  writeSharedSkillMutationSignal,
-} from "./sharedSkillMutationSignal";
 import { refreshSessionsForSkillMutation } from "./skillMutationRefresh";
 import type { SessionBinding, StartServerSocketData } from "./startServer/types";
 import { handleWebDesktopRoute } from "./webDesktopRoutes";
@@ -67,13 +64,11 @@ import {
   splitWebSocketSubprotocolHeader,
 } from "./wsProtocol/negotiation";
 
-const jsonObjectSchema = z.record(z.string(), z.unknown());
 const errorWithCodeSchema = z
   .object({
     code: z.string().optional(),
   })
   .passthrough();
-const SHARED_SKILL_MUTATION_POLL_MS = 250;
 let observabilityOtelModulePromise: Promise<typeof import("../observability/otel")> | null = null;
 let promptModulePromise: Promise<typeof import("../prompt")> | null = null;
 let agentSessionModule: typeof import("./session/AgentSession") | null = null;
@@ -108,251 +103,6 @@ const lazyLoadAgentPrompt: typeof loadAgentPromptFn = async (...args) =>
 
 const lazyLoadSystemPromptWithSkills: typeof loadSystemPromptWithSkillsFn = async (...args) =>
   await (await loadPromptModule()).loadSystemPromptWithSkills(...args);
-
-function isPlainObject(v: unknown): v is Record<string, unknown> {
-  return jsonObjectSchema.safeParse(v).success;
-}
-
-function deepMerge<T extends Record<string, unknown>>(base: T, override: T): T {
-  const out: Record<string, unknown> = { ...base };
-  for (const [k, v] of Object.entries(override)) {
-    if (isPlainObject(out[k]) && isPlainObject(v)) {
-      out[k] = deepMerge(out[k] as Record<string, unknown>, v as Record<string, unknown>);
-      continue;
-    }
-    out[k] = v;
-  }
-  return out as T;
-}
-
-function readWorkspaceA2uiFlag(value: unknown): boolean | undefined {
-  if (!isPlainObject(value)) {
-    return undefined;
-  }
-  return typeof value.a2ui === "boolean" ? value.a2ui : undefined;
-}
-
-function withWorkspaceA2uiFeatureFlags(
-  featureFlags: AgentConfig["featureFlags"] | undefined,
-  a2ui: boolean,
-): AgentConfig["featureFlags"] {
-  return {
-    ...featureFlags,
-    workspace: { a2ui },
-  };
-}
-
-function resolveWorkspaceA2ui(config: Pick<AgentConfig, "featureFlags" | "enableA2ui">): boolean {
-  const workspaceFlag = config.featureFlags?.workspace?.a2ui;
-  return typeof workspaceFlag === "boolean" ? workspaceFlag : (config.enableA2ui ?? false);
-}
-
-async function loadJsonObjectSafe(filePath: string): Promise<Record<string, unknown>> {
-  try {
-    const raw = await fs.readFile(filePath, "utf-8");
-    let parsedJson: unknown;
-    try {
-      parsedJson = JSON.parse(raw);
-    } catch (error) {
-      throw new Error(`Invalid JSON in config file ${filePath}: ${String(error)}`);
-    }
-    const parsedObject = jsonObjectSchema.safeParse(parsedJson);
-    if (!parsedObject.success) {
-      throw new Error(`Config file must contain a JSON object: ${filePath}`);
-    }
-    return parsedObject.data;
-  } catch (error) {
-    const parsedCode = errorWithCodeSchema.safeParse(error);
-    const code = parsedCode.success ? parsedCode.data.code : undefined;
-    if (code === "ENOENT") return {};
-    if (error instanceof Error) throw error;
-    throw new Error(`Failed to load config file ${filePath}: ${String(error)}`);
-  }
-}
-
-async function persistProjectConfigPatch(
-  projectAgentDir: string,
-  patch: Partial<
-    Pick<
-      AgentConfig,
-      | "provider"
-      | "model"
-      | "preferredChildModel"
-      | "childModelRoutingMode"
-      | "preferredChildModelRef"
-      | "allowedChildModelRefs"
-      | "enableMcp"
-      | "enableA2ui"
-      | "enableMemory"
-      | "memoryRequireApproval"
-      | "observabilityEnabled"
-      | "backupsEnabled"
-      | "toolOutputOverflowChars"
-      | "userName"
-      | "featureFlags"
-    >
-  > & {
-    userProfile?: Partial<NonNullable<AgentConfig["userProfile"]>>;
-    clearToolOutputOverflowChars?: boolean;
-    providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
-  },
-  runtimeProviderOptions?: AgentConfig["providerOptions"],
-): Promise<void> {
-  const entries = Object.entries(patch).filter(
-    ([key, value]) => key !== "clearToolOutputOverflowChars" && value !== undefined,
-  );
-  const shouldClearToolOutputOverflowChars = patch.clearToolOutputOverflowChars === true;
-  if (entries.length === 0 && !shouldClearToolOutputOverflowChars) return;
-  const configPath = path.join(projectAgentDir, "config.json");
-  const current = await loadJsonObjectSafe(configPath);
-  const next: Record<string, unknown> = { ...current };
-  for (const [key, value] of entries) {
-    if (key === "enableA2ui" && typeof value === "boolean") {
-      const currentFeatureFlags = isPlainObject(current.featureFlags)
-        ? (current.featureFlags as AgentConfig["featureFlags"])
-        : undefined;
-      next.featureFlags = withWorkspaceA2uiFeatureFlags(currentFeatureFlags, value);
-      next.enableA2ui = value;
-      continue;
-    }
-    if (key === "providerOptions") {
-      const currentProviderOptions = isPlainObject(current[key]) ? { ...current[key] } : {};
-      for (const provider of EDITABLE_PROVIDER_OPTIONS_PROVIDER_NAMES) {
-        const sectionPatch = patch.providerOptions?.[provider];
-        if (!sectionPatch) continue;
-
-        const runtimeSection =
-          isPlainObject(runtimeProviderOptions) && isPlainObject(runtimeProviderOptions[provider])
-            ? { ...runtimeProviderOptions[provider] }
-            : {};
-        const currentSection = isPlainObject(currentProviderOptions[provider])
-          ? { ...currentProviderOptions[provider] }
-          : {};
-
-        // Merge order (lowest → highest priority):
-        //   runtimeSection  — options passed at server startup (e.g. CLI flags or desktop launch config)
-        //   currentSection  — previously persisted values in .agent/config.json
-        //   sectionPatch    — the incoming patch from this set_config call
-        // Launch-time options are intentionally overridable by persisted config and new patches so
-        // that user changes made via the UI/CLI survive server restarts.
-        currentProviderOptions[provider] = {
-          ...runtimeSection,
-          ...currentSection,
-          ...sectionPatch,
-        };
-      }
-      next[key] =
-        Object.keys(currentProviderOptions).length > 0 ? currentProviderOptions : undefined;
-      continue;
-    }
-    if (key === "userProfile" && isPlainObject(value)) {
-      const currentUserProfile = isPlainObject(current.userProfile) ? current.userProfile : {};
-      next[key] = {
-        ...currentUserProfile,
-        ...value,
-      };
-      continue;
-    }
-    if (key === "featureFlags" && isPlainObject(value)) {
-      const currentFeatureFlags = isPlainObject(current.featureFlags)
-        ? (current.featureFlags as Record<string, unknown>)
-        : {};
-      const incomingFeatureFlags: Record<string, unknown> = value;
-      const incomingA2ui = readWorkspaceA2uiFlag(incomingFeatureFlags.workspace);
-      const currentA2ui = readWorkspaceA2uiFlag(currentFeatureFlags.workspace);
-      const resolvedA2ui = incomingA2ui ?? currentA2ui;
-      next[key] = {
-        ...currentFeatureFlags,
-        ...(resolvedA2ui !== undefined ? { workspace: { a2ui: resolvedA2ui } } : {}),
-      };
-      if (resolvedA2ui !== undefined) {
-        next.enableA2ui = resolvedA2ui;
-      }
-      continue;
-    }
-    next[key] = value;
-  }
-  if (shouldClearToolOutputOverflowChars) {
-    delete next.toolOutputOverflowChars;
-  }
-  await fs.mkdir(projectAgentDir, { recursive: true });
-  const payload = `${JSON.stringify(next, null, 2)}\n`;
-  await writeTextFileAtomic(configPath, payload);
-}
-
-function mergeConfigPatch(
-  config: AgentConfig,
-  patch: Partial<
-    Pick<
-      AgentConfig,
-      | "provider"
-      | "model"
-      | "preferredChildModel"
-      | "childModelRoutingMode"
-      | "preferredChildModelRef"
-      | "allowedChildModelRefs"
-      | "enableMcp"
-      | "enableA2ui"
-      | "enableMemory"
-      | "memoryRequireApproval"
-      | "observabilityEnabled"
-      | "backupsEnabled"
-      | "toolOutputOverflowChars"
-      | "userName"
-      | "featureFlags"
-    >
-  > & {
-    userProfile?: Partial<NonNullable<AgentConfig["userProfile"]>>;
-    clearToolOutputOverflowChars?: boolean;
-    providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
-  },
-): AgentConfig {
-  const {
-    clearToolOutputOverflowChars: _clearToolOutputOverflowChars,
-    enableA2ui: legacyEnableA2uiPatch,
-    ...configPatch
-  } = patch;
-  const next: AgentConfig = { ...config, ...configPatch };
-  if (patch.provider !== undefined && patch.provider !== config.provider) {
-    next.runtime = defaultRuntimeNameForProvider(patch.provider);
-  }
-  if (patch.toolOutputOverflowChars !== undefined) {
-    next.projectConfigOverrides = {
-      ...config.projectConfigOverrides,
-      toolOutputOverflowChars: patch.toolOutputOverflowChars,
-    };
-  }
-  if (patch.clearToolOutputOverflowChars) {
-    const { toolOutputOverflowChars: _ignored, ...remainingOverrides } =
-      config.projectConfigOverrides ?? {};
-    next.toolOutputOverflowChars = config.inheritedToolOutputOverflowChars;
-    next.projectConfigOverrides =
-      Object.keys(remainingOverrides).length > 0 ? remainingOverrides : undefined;
-  }
-  if (patch.providerOptions !== undefined) {
-    next.providerOptions = mergeEditableOpenAiCompatibleProviderOptions(
-      config.providerOptions,
-      patch.providerOptions,
-    );
-  }
-  if (patch.userProfile !== undefined) {
-    next.userProfile = {
-      ...config.userProfile,
-      ...patch.userProfile,
-    };
-  }
-  const patchedWorkspaceA2ui = readWorkspaceA2uiFlag(patch.featureFlags?.workspace);
-  const nextWorkspaceA2ui =
-    legacyEnableA2uiPatch ??
-    patchedWorkspaceA2ui ??
-    config.featureFlags?.workspace?.a2ui ??
-    config.enableA2ui;
-  if (nextWorkspaceA2ui !== undefined) {
-    next.featureFlags = withWorkspaceA2uiFeatureFlags(config.featureFlags, nextWorkspaceA2ui);
-    next.enableA2ui = nextWorkspaceA2ui;
-  }
-  return next;
-}
 
 export interface StartAgentServerOptions {
   cwd: string;
@@ -450,22 +200,14 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
     getConfig: () => config,
     sendJsonRpc: (ws, payload) => sendJsonRpc(ws, payload),
   });
-  const sessionBindings = new Map<string, SessionBinding>();
-  const sessionIdleSince = new Map<string, number>();
-  const workspaceControlStateIds = new Map<string, string>();
-  const workspaceControlSubscribers = new Map<
-    string,
-    Map<string, Bun.ServerWebSocket<StartServerSocketData>>
-  >();
-  const sharedSkillMutationSignalPath = resolveSharedSkillMutationSignalPath(config.userAgentDir);
+  const sessions = new SessionRegistry();
+  const sessionBindings = sessions.bindings;
+  const socketSendQueue = new SocketSendQueue();
+  let workspaceControl: WorkspaceControl;
+  let skillMutationBus: SkillMutationBus;
   let workspaceBackupService: WorkspaceBackupService | null = null;
   let getAgentControl: () => AgentControl;
   let serverStopped = false;
-  let sharedSkillMutationWatcher: fsSync.FSWatcher | null = null;
-  let sharedSkillMutationPollTimer: ReturnType<typeof setInterval> | null = null;
-  let lastSharedSkillMutationRevision: string | null = null;
-  let sharedSkillMutationRefreshLoop: Promise<void> | null = null;
-  let sharedSkillMutationRefreshQueued = false;
 
   const refreshLocalSkillState = async ({
     workingDirectory,
@@ -477,14 +219,14 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
     allWorkspaces?: boolean;
   }) => {
     await refreshSessionsForSkillMutation({
-      sessionBindings: sessionBindings.values(),
+      sessionBindings: sessions.listBindings(),
       workspaceControlBindings: [],
       workingDirectory,
       sourceSessionId,
       allWorkspaces,
     });
     try {
-      await emitWorkspaceControlRefreshNotifications({
+      await workspaceControl.emitRefreshNotifications({
         workingDirectory,
         allWorkspaces,
       });
@@ -492,66 +234,6 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
       // Best-effort only; explicit control refreshes remain available on demand.
     }
   };
-
-  const publishSharedSkillMutationSignal = async () => {
-    const signal = {
-      revision: crypto.randomUUID(),
-      pid: process.pid,
-      at: new Date().toISOString(),
-    };
-    lastSharedSkillMutationRevision = signal.revision;
-    await writeSharedSkillMutationSignal(sharedSkillMutationSignalPath, signal);
-  };
-
-  const applySharedSkillMutationSignal = async () => {
-    const signal = await readSharedSkillMutationSignal(sharedSkillMutationSignalPath);
-    if (!signal || signal.revision === lastSharedSkillMutationRevision) {
-      return;
-    }
-    lastSharedSkillMutationRevision = signal.revision;
-    if (signal.pid === process.pid) {
-      return;
-    }
-    await refreshLocalSkillState({
-      workingDirectory: config.workingDirectory,
-      allWorkspaces: true,
-    });
-  };
-
-  const scheduleSharedSkillMutationRefresh = () => {
-    if (serverStopped) {
-      return;
-    }
-    if (sharedSkillMutationRefreshLoop) {
-      sharedSkillMutationRefreshQueued = true;
-      return;
-    }
-    sharedSkillMutationRefreshLoop = (async () => {
-      do {
-        sharedSkillMutationRefreshQueued = false;
-        await applySharedSkillMutationSignal();
-      } while (sharedSkillMutationRefreshQueued && !serverStopped);
-    })().finally(() => {
-      sharedSkillMutationRefreshLoop = null;
-    });
-  };
-
-  await fs.mkdir(config.userAgentDir, { recursive: true });
-  lastSharedSkillMutationRevision =
-    (await readSharedSkillMutationSignal(sharedSkillMutationSignalPath))?.revision ?? null;
-  try {
-    sharedSkillMutationWatcher = fsSync.watch(config.userAgentDir, () => {
-      if (serverStopped) {
-        return;
-      }
-      scheduleSharedSkillMutationRefresh();
-    });
-  } catch {
-    // Cross-process refresh remains best-effort when file watching is unavailable.
-  }
-  sharedSkillMutationPollTimer = setInterval(() => {
-    scheduleSharedSkillMutationRefresh();
-  }, SHARED_SKILL_MUTATION_POLL_MS);
 
   const getWorkspaceBackupService = (): WorkspaceBackupService => {
     if (workspaceBackupService) {
@@ -563,7 +245,7 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
       homedir: opts.homedir,
       sessionDb,
       getLiveSession: (sessionId) => {
-        const session = sessionBindings.get(sessionId)?.session;
+        const session = sessions.getSession(sessionId);
         if (!session) return null;
         const info = session.getSessionInfoEvent();
         return {
@@ -590,37 +272,18 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
     binding: SessionBinding,
     sinkId: string,
     sink: (evt: ServerEvent) => void,
-  ) => {
-    binding.sinks.set(sinkId, sink);
-    if (binding.session && !sinkId.startsWith("journal:")) {
-      sessionIdleSince.delete(binding.session.id);
-    }
-  };
+  ) => sessions.addSink(binding, sinkId, sink);
 
-  const removeBindingSink = (binding: SessionBinding, sinkId: string) => {
-    binding.sinks.delete(sinkId);
-    if (binding.session && binding.sinks.size === 0) {
-      sessionIdleSince.set(binding.session.id, Date.now());
-    }
-  };
+  const removeBindingSink = (binding: SessionBinding, sinkId: string) =>
+    sessions.removeSink(binding, sinkId);
 
   const countLiveConnectionSinks = (binding: SessionBinding) =>
-    [...binding.sinks.keys()].filter((sinkId) => !sinkId.startsWith("journal:")).length;
+    sessions.countLiveConnectionSinks(binding);
 
   const sessionEventCapture = createSessionEventCapture({
     addBindingSink,
     removeBindingSink,
   });
-
-  const getOrCreateWorkspaceControlStateId = (cwd: string): string => {
-    const existing = workspaceControlStateIds.get(cwd);
-    if (existing) {
-      return existing;
-    }
-    const created = `jsonrpc-control:${crypto.randomUUID()}`;
-    workspaceControlStateIds.set(cwd, created);
-    return created;
-  };
 
   const loadWorkspaceControlConfig = async (cwd: string): Promise<AgentConfig> => {
     const nextConfig = await loadConfig({
@@ -647,81 +310,6 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
       nextConfig.providerOptions = providerOptions;
     }
     return nextConfig;
-  };
-
-  const buildWorkspaceControlStateEventsFromConfig = (
-    controlConfig: AgentConfig,
-  ): ServerEvent[] => {
-    const sessionId = getOrCreateWorkspaceControlStateId(controlConfig.workingDirectory);
-    const providerOptions = pickEditableOpenAiCompatibleProviderOptions(
-      controlConfig.providerOptions,
-    );
-    const defaultBackupsEnabled = controlConfig.backupsEnabled ?? true;
-    const defaultToolOutputOverflowChars =
-      controlConfig.projectConfigOverrides?.toolOutputOverflowChars;
-    const toolOutputOverflowChars = effectiveToolOutputOverflowChars(
-      controlConfig.toolOutputOverflowChars,
-    );
-    const workspaceA2ui = resolveWorkspaceA2ui(controlConfig);
-    const preferredChildModelRef =
-      controlConfig.preferredChildModelRef ??
-      `${controlConfig.provider}:${controlConfig.preferredChildModel}`;
-
-    return [
-      {
-        type: "config_updated",
-        sessionId,
-        config: {
-          provider: controlConfig.provider,
-          model: controlConfig.model,
-          workingDirectory: controlConfig.workingDirectory,
-          ...(controlConfig.outputDirectory
-            ? { outputDirectory: controlConfig.outputDirectory }
-            : {}),
-        },
-      },
-      {
-        type: "session_settings",
-        sessionId,
-        enableMcp: controlConfig.enableMcp ?? false,
-        enableMemory: controlConfig.enableMemory ?? true,
-        memoryRequireApproval: controlConfig.memoryRequireApproval ?? false,
-      },
-      {
-        type: "session_config",
-        sessionId,
-        config: {
-          yolo: opts.yolo === true,
-          observabilityEnabled: controlConfig.observabilityEnabled ?? false,
-          backupsEnabled: defaultBackupsEnabled,
-          defaultBackupsEnabled,
-          enableA2ui: workspaceA2ui,
-          enableMemory: controlConfig.enableMemory ?? true,
-          memoryRequireApproval: controlConfig.memoryRequireApproval ?? false,
-          preferredChildModel: controlConfig.preferredChildModel,
-          childModelRoutingMode: controlConfig.childModelRoutingMode ?? "same-provider",
-          preferredChildModelRef,
-          allowedChildModelRefs: controlConfig.allowedChildModelRefs ?? [],
-          maxSteps: 100,
-          toolOutputOverflowChars,
-          ...(defaultToolOutputOverflowChars !== undefined
-            ? { defaultToolOutputOverflowChars }
-            : {}),
-          ...(providerOptions ? { providerOptions } : {}),
-          userName: controlConfig.userName,
-          userProfile: {
-            instructions: controlConfig.userProfile?.instructions ?? "",
-            work: controlConfig.userProfile?.work ?? "",
-            details: controlConfig.userProfile?.details ?? "",
-          },
-          featureFlags: {
-            workspace: {
-              a2ui: workspaceA2ui,
-            },
-          },
-        },
-      },
-    ];
   };
 
   const buildSessionCommon = (
@@ -769,29 +357,7 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
           : undefined,
       persistProjectConfigPatchImpl:
         sessionKind === "root"
-          ? async (
-              patch: Partial<
-                Pick<
-                  AgentConfig,
-                  | "provider"
-                  | "model"
-                  | "preferredChildModel"
-                  | "childModelRoutingMode"
-                  | "preferredChildModelRef"
-                  | "allowedChildModelRefs"
-                  | "enableMcp"
-                  | "enableA2ui"
-                  | "enableMemory"
-                  | "memoryRequireApproval"
-                  | "observabilityEnabled"
-                  | "backupsEnabled"
-                  | "toolOutputOverflowChars"
-                >
-              > & {
-                clearToolOutputOverflowChars?: boolean;
-                providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
-              },
-            ) => {
+          ? async (patch: ProjectConfigPatch) => {
               await persistProjectConfigPatch(
                 currentConfig.projectAgentDir,
                 patch,
@@ -851,9 +417,7 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
         for (const sessionId of sessionIdsToDispose) {
           const candidateBinding = sessionBindings.get(sessionId);
           if (!candidateBinding?.session) continue;
-          disposeBinding(candidateBinding, `session ${opts.targetSessionId} deleted`);
-          sessionBindings.delete(sessionId);
-          sessionIdleSince.delete(sessionId);
+          sessions.removeBindingForDeletedSession(sessionId, opts.targetSessionId);
         }
 
         await sessionDb.deleteSession(opts.targetSessionId);
@@ -910,21 +474,13 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
           opts.targetSessionId,
           opts.checkpointId,
         ),
-      getLiveSessionSnapshotImpl: (sessionId: string) =>
-        sessionBindings.get(sessionId)?.session?.peekSessionSnapshot() ?? null,
+      getLiveSessionSnapshotImpl: (sessionId: string) => sessions.getLiveSessionSnapshot(sessionId),
       getLiveSessionWorkingDirectoryImpl: (sessionId: string) =>
-        sessionBindings.get(sessionId)?.session?.getWorkingDirectory() ?? null,
+        sessions.getLiveSessionWorkingDirectory(sessionId),
       buildLegacySessionSnapshotImpl: (record: import("./sessionDb").PersistedSessionRecord) =>
         loadSessionSnapshotProjectorModule().createLegacySessionSnapshot(record),
       getSkillMutationBlockReasonImpl: (workingDirectory: string) => {
-        const busySession = [...sessionBindings.values()]
-          .map((candidate) => candidate.session)
-          .find(
-            (candidate): candidate is AgentSession =>
-              !!candidate &&
-              candidate.getWorkingDirectory() === workingDirectory &&
-              candidate.isBusy,
-          );
+        const busySession = sessions.findBusyWorkspaceSession(workingDirectory);
         if (!busySession) {
           return null;
         }
@@ -945,7 +501,7 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
           allWorkspaces,
         });
         if (allWorkspaces) {
-          await publishSharedSkillMutationSignal();
+          await skillMutationBus.publish();
         }
       },
     };
@@ -1078,288 +634,16 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
     return agentControl;
   };
 
-  const threadJournalWriteQueues = new Map<string, Promise<void>>();
-  const pendingThreadJournalEvents = new Map<
-    string,
-    Array<{
-      threadId: string;
-      ts: string;
-      eventType: string;
-      turnId: string | null;
-      itemId: string | null;
-      requestId: string | null;
-      payload: unknown;
-    }>
-  >();
-  const scheduledThreadJournalFlushes = new Set<string>();
-
-  const pendingSends = new Map<string, string[]>();
-  const SEND_QUEUE_MAX = 500;
-
-  const evictLeastCriticalSend = (queue: string[]) => {
-    for (let i = 0; i < queue.length; i++) {
-      try {
-        const parsed = JSON.parse(queue[i]) as {
-          method?: string;
-          params?: { type?: string };
-        };
-        if (
-          parsed.method === "model_stream_chunk" ||
-          parsed.params?.type === "agentMessage/delta"
-        ) {
-          queue.splice(i, 1);
-          return;
-        }
-      } catch {
-        // ignore malformed JSON
-      }
-    }
-    queue.shift();
-  };
-
-  const flushPendingSends = (ws: Bun.ServerWebSocket<StartServerSocketData>) => {
-    const connectionId = ws.data.connectionId;
-    if (!connectionId) return;
-    const queue = pendingSends.get(connectionId);
-    if (!queue) return;
-    while (queue.length > 0) {
-      try {
-        const status = ws.send(queue[0]);
-        if (status === -1) {
-          break;
-        }
-        queue.shift();
-      } catch {
-        queue.shift();
-      }
-    }
-    if (queue.length === 0) {
-      pendingSends.delete(connectionId);
-    }
-  };
-
-  const sendJsonRpc = (ws: Bun.ServerWebSocket<StartServerSocketData>, payload: unknown) => {
-    let serialized: string;
-    try {
-      serialized = JSON.stringify(payload);
-    } catch {
-      return;
-    }
-
-    try {
-      const status = ws.send(serialized);
-      if (status === 0 || status === -1) {
-        const connectionId = ws.data.connectionId;
-        if (!connectionId) return;
-        const queue = pendingSends.get(connectionId) ?? [];
-        if (queue.length >= SEND_QUEUE_MAX) {
-          evictLeastCriticalSend(queue);
-        }
-        queue.push(serialized);
-        pendingSends.set(connectionId, queue);
-      }
-    } catch {
-      // Socket closed or send failed; drop the message
-    }
-  };
+  const threadJournal = new ThreadJournal(sessionDb, {
+    addBindingSink,
+  });
+  const sendJsonRpc = (ws: Bun.ServerWebSocket<StartServerSocketData>, payload: unknown) =>
+    socketSendQueue.sendJsonRpc(ws, payload);
 
   const shouldSendJsonRpcNotification = (
     ws: Bun.ServerWebSocket<StartServerSocketData>,
     method: string,
   ) => !ws.data.rpc?.capabilities.optOutNotificationMethods.includes(method);
-
-  const registerWorkspaceControlSubscriber = (
-    ws: Bun.ServerWebSocket<StartServerSocketData>,
-    cwd: string,
-  ) => {
-    const connectionId = ws.data.connectionId;
-    if (!connectionId) {
-      return;
-    }
-    for (const [registeredCwd, subscribers] of workspaceControlSubscribers) {
-      if (registeredCwd === cwd) {
-        continue;
-      }
-      subscribers.delete(connectionId);
-      if (subscribers.size === 0) {
-        workspaceControlSubscribers.delete(registeredCwd);
-        workspaceControlStateIds.delete(registeredCwd);
-      }
-    }
-    const subscribers =
-      workspaceControlSubscribers.get(cwd) ??
-      new Map<string, Bun.ServerWebSocket<StartServerSocketData>>();
-    subscribers.set(connectionId, ws);
-    workspaceControlSubscribers.set(cwd, subscribers);
-  };
-
-  const removeWorkspaceControlSubscriber = (ws: Bun.ServerWebSocket<StartServerSocketData>) => {
-    const connectionId = ws.data.connectionId;
-    if (!connectionId) {
-      return;
-    }
-    for (const [cwd, subscribers] of workspaceControlSubscribers) {
-      subscribers.delete(connectionId);
-      if (subscribers.size === 0) {
-        workspaceControlSubscribers.delete(cwd);
-        workspaceControlStateIds.delete(cwd);
-      }
-    }
-  };
-
-  const notifyWorkspaceControlSubscribers = (
-    cwd: string,
-    event: Extract<
-      ServerEvent,
-      { type: "skills_list" | "skills_catalog" | "plugins_catalog" | "mcp_servers" }
-    >,
-  ) => {
-    const subscribers = workspaceControlSubscribers.get(cwd);
-    if (!subscribers || subscribers.size === 0) {
-      return;
-    }
-    for (const ws of subscribers.values()) {
-      if (!shouldSendJsonRpcNotification(ws, "cowork/control/event")) {
-        continue;
-      }
-      sendJsonRpc(ws, {
-        method: "cowork/control/event",
-        params: {
-          cwd,
-          ...event,
-        },
-      });
-    }
-  };
-
-  const readWorkspaceControlRefreshEvents = async (
-    cwd: string,
-  ): Promise<
-    Array<
-      Extract<
-        ServerEvent,
-        { type: "skills_list" | "skills_catalog" | "plugins_catalog" | "mcp_servers" }
-      >
-    >
-  > => {
-    const subscribers = workspaceControlSubscribers.get(cwd);
-    if (!subscribers || subscribers.size === 0) {
-      return [];
-    }
-    const binding = await getOrCreateWorkspaceControlBinding(cwd);
-    if (!binding.session) {
-      return [];
-    }
-    const captureRefreshEvent = async <T extends ServerEvent>(
-      action: () => Promise<void>,
-      predicate: (event: ServerEvent) => event is T,
-    ): Promise<T | null> => {
-      try {
-        return await sessionEventCapture.capture(binding, action, predicate);
-      } catch {
-        return null;
-      }
-    };
-    try {
-      const session = binding.session;
-      const events = [
-        await captureRefreshEvent(
-          async () => await session.listSkills(),
-          (event): event is Extract<ServerEvent, { type: "skills_list" }> =>
-            event.type === "skills_list",
-        ),
-        await captureRefreshEvent(
-          async () => await session.getSkillsCatalog(),
-          (event): event is Extract<ServerEvent, { type: "skills_catalog" }> =>
-            event.type === "skills_catalog",
-        ),
-        await captureRefreshEvent(
-          async () => await session.getPluginsCatalog(),
-          (event): event is Extract<ServerEvent, { type: "plugins_catalog" }> =>
-            event.type === "plugins_catalog",
-        ),
-        await captureRefreshEvent(
-          async () => await session.emitMcpServers(),
-          (event): event is Extract<ServerEvent, { type: "mcp_servers" }> =>
-            event.type === "mcp_servers",
-        ),
-      ];
-      return events.filter(
-        (
-          event,
-        ): event is Extract<
-          ServerEvent,
-          { type: "skills_list" | "skills_catalog" | "plugins_catalog" | "mcp_servers" }
-        > => event !== null,
-      );
-    } finally {
-      disposeBinding(binding, `workspace control refresh capture completed for ${cwd}`);
-    }
-  };
-
-  const emitWorkspaceControlRefreshNotifications = async ({
-    workingDirectory,
-    allWorkspaces = false,
-  }: {
-    workingDirectory: string;
-    allWorkspaces?: boolean;
-  }) => {
-    const targetWorkspaces = allWorkspaces
-      ? [...workspaceControlSubscribers.keys()]
-      : [workingDirectory];
-    for (const cwd of targetWorkspaces) {
-      const events = await readWorkspaceControlRefreshEvents(cwd);
-      for (const event of events) {
-        notifyWorkspaceControlSubscribers(cwd, event);
-      }
-    }
-  };
-
-  const enqueueThreadJournalEvent = (event: {
-    threadId: string;
-    ts: string;
-    eventType: string;
-    turnId: string | null;
-    itemId: string | null;
-    requestId: string | null;
-    payload: unknown;
-  }) => {
-    const pending = pendingThreadJournalEvents.get(event.threadId) ?? [];
-    pending.push(event);
-    pendingThreadJournalEvents.set(event.threadId, pending);
-
-    if (scheduledThreadJournalFlushes.has(event.threadId)) {
-      return threadJournalWriteQueues.get(event.threadId) ?? Promise.resolve();
-    }
-
-    scheduledThreadJournalFlushes.add(event.threadId);
-    const previous = threadJournalWriteQueues.get(event.threadId) ?? Promise.resolve();
-    const next = previous
-      .catch(() => {
-        // keep queue alive after prior failure
-      })
-      .then(async () => {
-        while (true) {
-          const batch = pendingThreadJournalEvents.get(event.threadId) ?? [];
-          if (batch.length === 0) {
-            pendingThreadJournalEvents.delete(event.threadId);
-            scheduledThreadJournalFlushes.delete(event.threadId);
-            threadJournalWriteQueues.delete(event.threadId);
-            return;
-          }
-          pendingThreadJournalEvents.set(event.threadId, []);
-          await sessionDb.appendThreadJournalEvents(batch);
-        }
-      });
-    threadJournalWriteQueues.set(event.threadId, next);
-    return next;
-  };
-
-  const waitForThreadJournalIdle = async (threadId: string) => {
-    await (threadJournalWriteQueues.get(threadId) ?? Promise.resolve()).catch(() => {
-      // best-effort only
-    });
-  };
 
   const createJsonRpcThreadSession = (
     cwd: string,
@@ -1377,31 +661,15 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
       config: threadConfig,
     });
     binding.session = built.session;
-    ensureThreadJournalSink(binding, built.session.id);
-    sessionBindings.set(built.session.id, binding);
+    threadJournal.ensureSink(binding, built.session.id);
+    sessions.addBinding(built.session.id, binding);
     return built.session;
   };
 
-  const ensureThreadJournalSink = (binding: SessionBinding, threadId: string) => {
-    const sinkId = `journal:${threadId}`;
-    if (binding.sinks.has(sinkId)) {
-      return;
-    }
-    const projector = createThreadJournalProjector({
-      threadId,
-      emit: (event) => {
-        void enqueueThreadJournalEvent(event).catch(() => {
-          // Best-effort journal persistence; session state snapshots remain authoritative fallback state.
-        });
-      },
-    });
-    addBindingSink(binding, sinkId, (event) => projector.handle(event));
-  };
-
   const loadThreadBinding = (threadId: string): SessionBinding | null => {
-    const existing = sessionBindings.get(threadId);
+    const existing = sessions.getBinding(threadId);
     if (existing?.session) {
-      ensureThreadJournalSink(existing, threadId);
+      threadJournal.ensureSink(existing, threadId);
       return existing;
     }
     const persisted = sessionDb.getSessionRecord(threadId);
@@ -1409,13 +677,13 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
     const binding: SessionBinding = { session: null, socket: null, sinks: new Map() };
     const built = buildSession(binding, threadId);
     binding.session = built.session;
-    ensureThreadJournalSink(binding, built.session.id);
-    sessionBindings.set(built.session.id, binding);
+    threadJournal.ensureSink(binding, built.session.id);
+    sessions.addBinding(built.session.id, binding);
     return binding;
   };
 
   const readThreadSnapshot = (threadId: string) => {
-    const liveSnapshot = sessionBindings.get(threadId)?.session?.peekSessionSnapshot() ?? null;
+    const liveSnapshot = sessions.getLiveSessionSnapshot(threadId);
     if (liveSnapshot) return liveSnapshot;
     const persisted = sessionDb.getSessionRecord(threadId);
     if (!persisted) return null;
@@ -1425,82 +693,75 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
   const jsonRpcTransport = createJsonRpcTransportAdapter({
     maxPendingRequests: jsonRpcMaxPendingRequests,
     loadThreadBinding,
-    getThreadBinding: (threadId) => sessionBindings.get(threadId),
+    getThreadBinding: (threadId) => sessions.getBinding(threadId),
     addBindingSink,
     removeBindingSink,
     countLiveConnectionSinks,
-    listThreadJournalEvents: (threadId, opts) => sessionDb.listThreadJournalEvents(threadId, opts),
-    enqueueThreadJournalEvent: async (event) => await enqueueThreadJournalEvent(event),
+    listThreadJournalEvents: (threadId, opts) => threadJournal.list(threadId, opts),
+    enqueueThreadJournalEvent: async (event) => await threadJournal.enqueue(event),
     shouldSendNotification: (ws, method) => shouldSendJsonRpcNotification(ws, method),
     sendJsonRpc,
     extractTextInput: extractJsonRpcTextInput,
   });
 
-  const getOrCreateWorkspaceControlBinding = async (cwd: string): Promise<SessionBinding> => {
-    const binding: SessionBinding = {
-      session: null,
-      socket: null,
-      sinks: new Map(),
-    };
-    const built = buildSession(binding, undefined, {
-      config: await loadWorkspaceControlConfig(cwd),
-      persistenceEnabled: false,
-    });
-    binding.session = built.session;
-    return binding;
-  };
+  workspaceControl = new WorkspaceControl({
+    yolo: opts.yolo,
+    sendJsonRpc,
+    shouldSendJsonRpcNotification,
+    buildSession,
+    loadWorkspaceControlConfig,
+    disposeBinding,
+    captureEvent: sessionEventCapture.capture,
+  });
 
-  const withWorkspaceControlSession = async <T>(
-    cwd: string,
-    runner: (binding: SessionBinding, session: AgentSession) => Promise<T>,
-  ): Promise<T> => {
-    const binding = await getOrCreateWorkspaceControlBinding(cwd);
-    if (!binding.session) {
-      throw new Error(`Unable to create workspace control session for ${cwd}`);
-    }
-    try {
-      return await runner(binding, binding.session);
-    } finally {
-      disposeBinding(binding, `workspace control request completed for ${cwd}`);
-    }
-  };
+  skillMutationBus = new SkillMutationBus({
+    userAgentDir: config.userAgentDir,
+    workingDirectory: config.workingDirectory,
+    refreshLocalSkillState,
+  });
+  await skillMutationBus.start();
 
-  const readWorkspaceControlState = async (cwd: string): Promise<ServerEvent[]> =>
-    buildWorkspaceControlStateEventsFromConfig(await loadWorkspaceControlConfig(cwd));
+  const runtime: ServerRuntime = {
+    getConfig: () => config,
+    setConfig: (nextConfig) => {
+      config = nextConfig;
+    },
+    sessionDb,
+    research,
+    sessions,
+    workspaceControl,
+    threadJournal,
+    socketSendQueue,
+    skillMutationBus,
+  };
 
   const jsonRpcRequestRouter = createJsonRpcRequestRouter({
-    getConfig: () => config,
-    research,
+    getConfig: runtime.getConfig,
+    research: runtime.research,
     threads: {
       create: ({ cwd, provider, model }) => createJsonRpcThreadSession(cwd, provider, model),
       load: (threadId) => loadThreadBinding(threadId),
-      getLive: (threadId) => sessionBindings.get(threadId),
+      getLive: (threadId) => sessions.getBinding(threadId),
       getPersisted: (threadId) => sessionDb.getSessionRecord(threadId),
       listPersisted: ({ cwd } = {}) =>
         sessionDb
           .listSessions({ ...(cwd ? { workingDirectory: cwd } : {}) })
           .map((record) => sessionDb.getSessionRecord(record.sessionId))
           .filter((record): record is PersistedSessionRecord => record !== null),
-      listLiveRoot: ({ cwd } = {}) =>
-        [...sessionBindings.values()]
-          .flatMap((binding) => (binding.session ? [binding.session] : []))
-          .filter(
-            (session) =>
-              session.sessionKind === "root" && (!cwd || session.getWorkingDirectory() === cwd),
-          ),
+      listLiveRoot: ({ cwd } = {}) => sessions.listRootSessions({ ...(cwd ? { cwd } : {}) }),
       subscribe: (ws, threadId, opts) => jsonRpcTransport.subscribeThread(ws, threadId, opts),
       unsubscribe: (ws, threadId) => jsonRpcTransport.unsubscribeThread(ws, threadId),
       readSnapshot: (threadId) => readThreadSnapshot(threadId),
     },
     workspaceControl: {
-      getOrCreateBinding: async (cwd) => await getOrCreateWorkspaceControlBinding(cwd),
-      withSession: async (cwd, runner) => await withWorkspaceControlSession(cwd, runner),
-      readState: async (cwd) => await readWorkspaceControlState(cwd),
+      getOrCreateBinding: async (cwd) => await runtime.workspaceControl.getOrCreateBinding(cwd),
+      withSession: async (cwd, runner) => await runtime.workspaceControl.withSession(cwd, runner),
+      readState: async (cwd) => await runtime.workspaceControl.readState(cwd),
     },
     journal: {
-      enqueue: async (event) => await enqueueThreadJournalEvent(event),
-      waitForIdle: async (threadId) => await waitForThreadJournalIdle(threadId),
-      list: (threadId, opts) => sessionDb.listThreadJournalEvents(threadId, opts),
+      enqueue: async (event) => await runtime.threadJournal.enqueue(event),
+      waitForIdle: async (threadId) => await runtime.threadJournal.waitForIdle(threadId),
+      list: (threadId, opts) => runtime.threadJournal.list(threadId, opts),
       replay: (ws, threadId, afterSeq, limit) =>
         jsonRpcTransport.replayJournal(ws, threadId, afterSeq, limit),
     },
@@ -1534,7 +795,7 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
     const params = isPlainObject(message.params) ? message.params : undefined;
     if (params) {
       try {
-        registerWorkspaceControlSubscriber(
+        runtime.workspaceControl.registerSubscriber(
           ws,
           requireWorkspacePath(params, message.method, config.workingDirectory),
         );
@@ -1643,13 +904,13 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
           jsonRpcTransport.handleMessage(ws, decoded.message, routeJsonRpcRequest);
         },
         close(ws) {
-          removeWorkspaceControlSubscriber(ws);
+          runtime.workspaceControl.removeSubscriber(ws);
           research.unsubscribeAll(ws);
           jsonRpcTransport.closeConnection(ws);
-          pendingSends.delete(ws.data.connectionId ?? "");
+          runtime.socketSendQueue.delete(ws.data.connectionId);
         },
         drain(ws) {
-          flushPendingSends(ws);
+          runtime.socketSendQueue.flush(ws);
         },
       },
     });
@@ -1698,21 +959,7 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
   const originalStop = server.stop.bind(server) as (
     closeActiveConnections?: boolean,
   ) => Promise<void>;
-  const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
-  const evictIdleSessionBindings = () => {
-    const now = Date.now();
-    for (const [sessionId, binding] of sessionBindings) {
-      if (binding.session && binding.sinks.size === 0 && !binding.session.isBusy) {
-        const idleSince = sessionIdleSince.get(sessionId) ?? 0;
-        if (idleSince > 0 && now - idleSince > IDLE_TIMEOUT_MS) {
-          binding.session.dispose("idle eviction");
-          sessionBindings.delete(sessionId);
-          sessionIdleSince.delete(sessionId);
-        }
-      }
-    }
-  };
-  const evictionTimer = setInterval(evictIdleSessionBindings, 60_000);
+  const evictionTimer = setInterval(() => sessions.evictIdleBindings(), 60_000);
 
   const stoppableServer = server as typeof server & {
     stop: (closeActiveConnections?: boolean) => Promise<void>;
@@ -1721,44 +968,9 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
     if (serverStopped) return;
     serverStopped = true;
     clearInterval(evictionTimer);
-    try {
-      sharedSkillMutationWatcher?.close();
-    } catch {
-      // ignore
-    }
-    if (sharedSkillMutationPollTimer) {
-      clearInterval(sharedSkillMutationPollTimer);
-      sharedSkillMutationPollTimer = null;
-    }
-    workspaceControlSubscribers.clear();
-    // Dispose all active sessions to abort running turns and close MCP child processes.
-    const persistenceFlushes: Promise<void>[] = [];
-    for (const [id, binding] of sessionBindings) {
-      if (!binding.session) {
-        sessionBindings.delete(id);
-        sessionIdleSince.delete(id);
-        continue;
-      }
-      try {
-        binding.session.dispose("server stopping");
-      } catch {
-        // ignore
-      }
-      try {
-        persistenceFlushes.push(binding.session.waitForPersistenceIdle());
-      } catch {
-        // ignore
-      }
-      try {
-        binding.socket?.close();
-      } catch {
-        // ignore
-      }
-    }
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    await Promise.allSettled(persistenceFlushes);
-    sessionBindings.clear();
-    sessionIdleSince.clear();
+    runtime.skillMutationBus.stop();
+    runtime.workspaceControl.clearSubscribers();
+    await runtime.sessions.disposeAll("server stopping");
     try {
       sessionDb.close();
     } catch {

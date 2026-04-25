@@ -101,6 +101,42 @@ function mergePopupThreads(
     .filter((thread): thread is NonNullable<typeof thread> => Boolean(thread));
 }
 
+function mergeMainWindowThreads(
+  current: PersistedState["threads"],
+  incoming: PersistedState["threads"],
+  popupThreadIds: ReadonlySet<string>,
+  workspaceIds: ReadonlySet<string>,
+): PersistedState["threads"] {
+  const currentThreads = Array.isArray(current) ? current : [];
+  const incomingThreads = Array.isArray(incoming) ? incoming : [];
+  const currentById = new Map(currentThreads.map((thread) => [thread.id, thread]));
+  const incomingIds = new Set(incomingThreads.map((thread) => thread.id));
+  const merged = new Map<string, PersistedState["threads"][number]>();
+
+  for (const thread of incomingThreads) {
+    const existing = currentById.get(thread.id);
+    const next = existing
+      ? mergePopupThreads([existing], [thread], new Set())[0] ?? thread
+      : thread;
+    merged.set(thread.id, next);
+  }
+
+  for (const thread of currentThreads) {
+    if (incomingIds.has(thread.id) || !popupThreadIds.has(thread.id)) {
+      continue;
+    }
+    if (!workspaceIds.has(thread.workspaceId)) {
+      continue;
+    }
+    merged.set(thread.id, thread);
+  }
+
+  return [...incomingThreads.map((thread) => thread.id), ...currentThreads.map((thread) => thread.id)]
+    .filter((threadId, index, ids) => ids.indexOf(threadId) === index)
+    .map((threadId) => merged.get(threadId))
+    .filter((thread): thread is NonNullable<typeof thread> => Boolean(thread));
+}
+
 async function mergePopupPersistedState(
   current: PersistedState,
   incoming: PersistedState,
@@ -121,6 +157,7 @@ async function mergePopupPersistedState(
 export function registerWorkspaceIpc(context: DesktopIpcModuleContext): void {
   const { deps, handleDesktopInvoke, parseWithSchema, workspaceRoots } = context;
   const removedThreadIds = new Set<string>();
+  const popupThreadIds = new Set<string>();
 
   handleDesktopInvoke(
     DESKTOP_IPC_CHANNELS.startWorkspaceServer,
@@ -151,11 +188,15 @@ export function registerWorkspaceIpc(context: DesktopIpcModuleContext): void {
     const windowMode = resolveDesktopWindowMode(_event);
     const nextState = await (async () => {
       if (windowMode !== "main") {
-        return await mergePopupPersistedState(
-          await deps.persistence.loadState(),
-          input,
-          removedThreadIds,
-        );
+        const currentState = await deps.persistence.loadState();
+        const nextPopupState = await mergePopupPersistedState(currentState, input, removedThreadIds);
+        const currentThreadIds = new Set(currentState.threads.map((thread) => thread.id));
+        for (const thread of nextPopupState.threads) {
+          if (!currentThreadIds.has(thread.id)) {
+            popupThreadIds.add(thread.id);
+          }
+        }
+        return nextPopupState;
       }
 
       const currentState = await deps.persistence.loadState();
@@ -165,10 +206,16 @@ export function registerWorkspaceIpc(context: DesktopIpcModuleContext): void {
           path: await workspaceRoots.assertApprovedWorkspacePath(workspace.path),
         }))
       );
+      const workspaceIds = new Set(workspaces.map((workspace) => workspace.id));
+      const threads = mergeMainWindowThreads(currentState.threads, input.threads, popupThreadIds, workspaceIds);
       const nextState = {
         ...input,
         workspaces,
+        threads,
       } satisfies PersistedState;
+      for (const thread of Array.isArray(input.threads) ? input.threads : []) {
+        popupThreadIds.delete(thread.id);
+      }
       trackRemovedThreadIds(removedThreadIds, currentState.threads, nextState.threads);
       return nextState;
     })();

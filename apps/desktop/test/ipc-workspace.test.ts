@@ -293,6 +293,134 @@ describe("workspace IPC", () => {
     expect(savedState.showHiddenFiles).toBe(true);
   });
 
+  test("main saveState preserves popup-created threads until the main window observes them", async () => {
+    const handlers = new Map<string, (event: unknown, args?: unknown) => Promise<unknown> | unknown>();
+    let persistedState: any = {
+      version: 2,
+      workspaces: [
+        {
+          id: "ws-main",
+          name: "Main workspace",
+          path: "/tmp/ws-main",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          lastOpenedAt: "2026-04-21T10:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      threads: [
+        {
+          id: "thread-main",
+          workspaceId: "ws-main",
+          title: "Main thread",
+          titleSource: "manual",
+          createdAt: "2026-04-21T09:00:00.000Z",
+          lastMessageAt: "2026-04-21T11:00:00.000Z",
+          status: "active",
+          sessionId: "session-main",
+          messageCount: 4,
+          lastEventSeq: 4,
+        },
+      ],
+      developerMode: false,
+      showHiddenFiles: false,
+    };
+
+    registerWorkspaceIpc({
+      deps: {
+        mobileRelayBridge: {
+          invalidateWorkspaceListCache() {},
+        },
+        persistence: {
+          async saveState(state: unknown) {
+            persistedState = state;
+          },
+          async loadState() {
+            return persistedState;
+          },
+          async readTranscript() {
+            return [];
+          },
+          async appendTranscriptEvent() {},
+          async appendTranscriptBatch() {},
+          async deleteTranscript() {},
+        },
+        serverManager: {
+          async startWorkspaceServer() {
+            return { workspaceId: "ws", url: "ws://127.0.0.1:7337/ws" };
+          },
+          async stopWorkspaceServer() {},
+        },
+        updater: {} as never,
+      } as never,
+      workspaceRoots: {
+        async ensureApprovedWorkspaceRoots() {},
+        async refreshApprovedWorkspaceRootsFromState() {},
+        async assertApprovedWorkspacePath(workspacePath: string) {
+          return workspacePath;
+        },
+        async addApprovedWorkspacePath(workspacePath: string) {
+          return workspacePath;
+        },
+        setApprovedWorkspaceRoots() {},
+        getApprovedWorkspaceRoots() {
+          return [];
+        },
+      },
+      handleDesktopInvoke(channel, handler) {
+        handlers.set(channel, handler as never);
+      },
+      parseWithSchema(_schema, value) {
+        return value as never;
+      },
+    });
+
+    const saveStateHandler = handlers.get(DESKTOP_IPC_CHANNELS.saveState);
+    expect(saveStateHandler).toBeDefined();
+
+    await saveStateHandler?.(
+      {
+        sender: {
+          getURL: () => "file:///renderer/index.html?window=quick-chat",
+        },
+      },
+      {
+        ...persistedState,
+        threads: [
+          ...persistedState.threads,
+          {
+            id: "thread-popup",
+            workspaceId: "ws-main",
+            title: "Popup thread",
+            titleSource: "manual",
+            createdAt: "2026-04-21T11:45:00.000Z",
+            lastMessageAt: "2026-04-21T11:45:00.000Z",
+            status: "active",
+            sessionId: "session-popup",
+            messageCount: 1,
+            lastEventSeq: 1,
+          },
+        ],
+      },
+    );
+
+    await saveStateHandler?.(
+      {},
+      {
+        ...persistedState,
+        threads: persistedState.threads.filter((thread: { id: string }) => thread.id === "thread-main"),
+        developerMode: true,
+      },
+    );
+
+    expect(persistedState.threads.map((thread: { id: string }) => thread.id)).toEqual([
+      "thread-main",
+      "thread-popup",
+    ]);
+    expect(persistedState.developerMode).toBe(true);
+  });
+
   test("popup saveState does not resurrect thread ids removed by the main window", async () => {
     const handlers = new Map<string, (event: unknown, args?: unknown) => Promise<unknown> | unknown>();
     let savedState: any = null;

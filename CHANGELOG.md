@@ -9,67 +9,55 @@ All notable changes to this project will be documented in this file.
 ### Added
 
 - **Experimental OpenAI native connectors** — Workspace-scoped ChatGPT apps
-  for Codex: discovery and enablement flow, synthetic `codex_apps` MCP
-  injection when enabled, JSON-RPC connector controls
-  (`cowork/connectors/*`), provider/MCP wiring for the OpenAI Responses
-  path, and an optional desktop settings page (behind
-  `COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS`, with `codex-cli` OAuth
-  required). Protocol and generated schema updates in
-  `docs/websocket-protocol.md`.
-
+for Codex: discovery and enablement flow, synthetic `codex_apps` MCP
+injection when enabled, JSON-RPC connector controls
+(`cowork/connectors/*`), provider/MCP wiring for the OpenAI Responses
+path, and an optional desktop settings page (behind
+`COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS`, with `codex-cli` OAuth
+required). Protocol and generated schema updates in
+`docs/websocket-protocol.md`.
 - **Desktop Deep Research workflow and exports** (#88) — Deep Research
-  flow in the desktop app with export handling and related IPC wiring.
-
+flow in the desktop app with export handling and related IPC wiring.
 - **GPT-5.5 model support** (#89) — Registry and runtime support for GPT-5.5.
-
 - **Menu bar quick chat** (#87, Jason Cantor) — macOS menu bar and system tray
-  entry to Quick Chat, with the tray “utility” window split from the Quick Chat
-  popout so each surface keeps its own behavior. Global shortcut for Quick Chat
-  is registered only when the menu bar / tray feature is enabled; shortcut and
-  related controls live in Desktop feature settings. Popups use transparent
-  macOS window chrome so the rounded in-app card owns the corners (no dark frame
-  bleed), with narrowed popup sizing and follow-up fixes for popup lifecycle,
-  workspace persistence, tray shutdown, and “new chat” from the menu bar.
-  Shared shortcut resolution lives in `src/shared/quickChatShortcut.ts` with
-  cross-platform tests.
+entry to Quick Chat, with the tray “utility” window split from the Quick Chat
+popout so each surface keeps its own behavior. Global shortcut for Quick Chat
+is registered only when the menu bar / tray feature is enabled; shortcut and
+related controls live in Desktop feature settings. Popups use transparent
+macOS window chrome so the rounded in-app card owns the corners (no dark frame
+bleed), with narrowed popup sizing and follow-up fixes for popup lifecycle,
+workspace persistence, tray shutdown, and “new chat” from the menu bar.
+Shared shortcut resolution lives in `src/shared/quickChatShortcut.ts` with
+cross-platform tests.
 
 ### Changed
 
 - **Canonical JSON-RPC WebSocket** (#92) — JSON-RPC-lite on
-  `cowork.jsonrpc.v1` is the only supported live protocol; removed
-  `?protocol=` and server-side protocol default override so negotiation
-  matches a single wire contract.
-
+`cowork.jsonrpc.v1` is the only supported live protocol; removed
+`?protocol=` and server-side protocol default override so negotiation
+matches a single wire contract.
 - **Server/runtime structure** (#91) — Split large server runtime modules for
-  clearer boundaries and maintenance.
-
+clearer boundaries and maintenance.
 - **Developer harness package** (#93) — Split developer-oriented harness
-  code into `packages/harness`.
-
+code into `packages/harness`.
 - **Cowork config namespace** — Normalized config namespace usage and related
-  documentation (companion to harness split).
-
+documentation (companion to harness split).
 - **Feature flags UX** — Feature flags are managed from Desktop settings
-  with updated tests; replaces the older standalone feature-flags page flow.
-
+with updated tests; replaces the older standalone feature-flags page flow.
 - **Task bar / Quick Chat icon** — Workspace-driven icon loading for the
-  task bar and quick chat chrome.
-
+task bar and quick chat chrome.
 - **Backups opt-in** — Checkpoints/backups are opt-in rather than wired as a
-  default core behavior.
-
+default core behavior.
 - **A2UI experiment gate** — A2UI is gated behind the experiment flag instead
-  of always on.
-
+of always on.
 - **Skills refresh** — Refreshes skill metadata without background polling
-  (explicit actions, filesystem signals, or pre-turn checks).
-
+(explicit actions, filesystem signals, or pre-turn checks).
 - **Efficiency** — Miscellaneous performance and allocation improvements.
 
 ### Fixed
 
 - **Desktop release publishing** — Tag-based desktop releases publish
-  correctly in the release workflow.
+correctly in the release workflow.
 
 ## 0.1.47 - 2026-04-21
 
@@ -82,131 +70,114 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 
 - **Windows ARM64 desktop release gating** — Stopped using a silent
-  installer execution on x64 GitHub runners as the release blocker for
-  ARM64 sidecar validation. The release workflow now verifies the
-  unpacked ARM64 desktop bundle directly and still requires the native
-  `windows-11-arm` smoke run before publish, avoiding false negatives
-  while keeping ARM64 packaged-sidecar coverage in the release lane.
+installer execution on x64 GitHub runners as the release blocker for
+ARM64 sidecar validation. The release workflow now verifies the
+unpacked ARM64 desktop bundle directly and still requires the native
+`windows-11-arm` smoke run before publish, avoiding false negatives
+while keeping ARM64 packaged-sidecar coverage in the release lane.
 
 ## 0.1.45 - 2026-04-20
 
 ### Added
 
 - **A2UI (Agent-to-UI) generative UI** — End-to-end support for
-  [Google's A2UI v0.9 protocol](https://a2ui.org/specification/v0.9-a2ui/).
-  Agents render rich, stateful UI surfaces directly in the main chat view
-  (forms, cards, tables, progress, etc.) instead of settling for plain
-  markdown.
+[Google's A2UI v0.9 protocol](https://a2ui.org/specification/v0.9-a2ui/).
+Agents render rich, stateful UI surfaces directly in the main chat view
+(forms, cards, tables, progress, etc.) instead of settling for plain
+markdown.
   - New `a2ui` tool lets the agent emit v0.9 envelopes
-    (`createSurface`, `updateComponents`, `updateDataModel`, `deleteSurface`).
+  (`createSurface`, `updateComponents`, `updateDataModel`, `deleteSurface`).
   - Per-session `A2uiSurfaceManager` folds envelopes into a resolved
-    surface and broadcasts a new `a2ui_surface` `SessionEvent` plus a
-    `uiSurface` `ProjectedItem` through the existing conversation
-    projection. Desktop + mobile render the surface inline in the feed.
+  surface and broadcasts a new `a2ui_surface` `SessionEvent` plus a
+  `uiSurface` `ProjectedItem` through the existing conversation
+  projection. Desktop + mobile render the surface inline in the feed.
   - Client → server action channel: the new
-    `cowork/session/a2ui/action` JSON-RPC method routes button clicks,
-    text-field submits, and checkbox toggles back to the agent as a
-    structured steer (or fresh turn) so the model can update the surface.
+  `cowork/session/a2ui/action` JSON-RPC method routes button clicks,
+  text-field submits, and checkbox toggles back to the agent as a
+  structured steer (or fresh turn) so the model can update the surface.
   - Desktop renderer covers the v0.9 basic catalog — Text, Heading,
-    Paragraph, Column, Row, Stack, Divider, Spacer, Card, List, Button,
-    TextField, TextArea, Checkbox, Select, Link, ProgressBar, Badge,
-    Table, Image — and supports the core client-side Functions subset
-    (`if`, `not`, `eq`, `neq`, `and`, `or`, `concat`, `length`, `join`,
-    `map`, `coalesce`).
+  Paragraph, Column, Row, Stack, Divider, Spacer, Card, List, Button,
+  TextField, TextArea, Checkbox, Select, Link, ProgressBar, Badge,
+  Table, Image — and supports the core client-side Functions subset
+  (`if`, `not`, `eq`, `neq`, `and`, `or`, `concat`, `length`, `join`,
+  `map`, `coalesce`).
   - Expand button pops a surface into a larger modal without leaving
-    the feed.
+  the feed.
   - Mobile (Expo) gains a read-only React Native renderer that keeps
-    parity with the desktop basic catalog.
+  parity with the desktop basic catalog.
   - Enabled by default for all model providers that receive the standard
-    built-in toolbelt. You can still disable it per config layer with
-    `enableA2ui: false` or via `AGENT_ENABLE_A2UI=false`.
+  built-in toolbelt. You can still disable it per config layer with
+  `enableA2ui: false` or via `AGENT_ENABLE_A2UI=false`.
   - Bundled `skills/a2ui/SKILL.md` documents the envelope shape,
-    supported components, Functions subset, and interaction contract for
-    the agent. Full protocol reference in `docs/websocket-protocol.md`
-    and architecture notes in `docs/a2ui.md`.
-
+  supported components, Functions subset, and interaction contract for
+  the agent. Full protocol reference in `docs/websocket-protocol.md`
+  and architecture notes in `docs/a2ui.md`.
 - **Desktop file preview modal** — In-app preview for workspace files
-  accessible from chat markdown links. Supports code files with syntax
-  highlighting and Word documents (DOCX) rendered with native page
-  chrome, inline (no nested iframe scrollbars), and full opacity on all
-  platforms. HTML is sanitized, in-flight reads can be aborted, and
-  Office lockfiles are hidden.
-
+accessible from chat markdown links. Supports code files with syntax
+highlighting and Word documents (DOCX) rendered with native page
+chrome, inline (no nested iframe scrollbars), and full opacity on all
+platforms. HTML is sanitized, in-flight reads can be aborted, and
+Office lockfiles are hidden.
 - **Persistent settings shell** — Desktop settings now use a persistent
-  shell with shared chrome context, platform-appropriate caption reserves,
-  native sidebar resize interaction, and full-width edge-to-edge
-  navigation buttons.
-
+shell with shared chrome context, platform-appropriate caption reserves,
+native sidebar resize interaction, and full-width edge-to-edge
+navigation buttons.
 - **Full desktop browser mode** — Expose a complete desktop browser
-  surface with collapsible shell controls anchored to the topbar.
-
+surface with collapsible shell controls anchored to the topbar.
 - **Workspace reordering** — Drag-and-drop and keyboard-driven workspace
-  reordering in the desktop sidebar.
-
+reordering in the desktop sidebar.
 - **Design skill docs** — Bundled `skills/design-taste-frontend/SKILL.md`
-  and `skills/high-end-visual-design/SKILL.md` for premium UI/UX
-  guidance.
+and `skills/high-end-visual-design/SKILL.md` for premium UI/UX
+guidance.
 
 ### Changed
 
 - **Desktop palette** — Retuned to warm olive tones with improved
-  settings navigation contrast, visible switch off-state thumbs, and
-  proper checkbox checked/unchecked distinction.
-
+settings navigation contrast, visible switch off-state thumbs, and
+proper checkbox checked/unchecked distinction.
 - **Typography** — Bundled IBM Plex Sans and Mono fonts for consistent
-  cross-platform rendering.
-
+cross-platform rendering.
 - **Fireworks tool schemas** — Relaxed JSON Schema constraints for
-  Fireworks tool calling compatibility, with fallback budgeting for
-  provider-safe schema variants.
+Fireworks tool calling compatibility, with fallback budgeting for
+provider-safe schema variants.
 
 ### Fixed
 
 - **Memory leaks & backpressure** — Fixed critical memory leaks and
-  WebSocket backpressure issues; added consolidation endpoints for
-  long-running sessions.
-
+WebSocket backpressure issues; added consolidation endpoints for
+long-running sessions.
 - **Desktop chat stalls** — Prevented silent chat stalls before runs
-  start and eliminated false-success exits in web desktop mode.
-
+start and eliminated false-success exits in web desktop mode.
 - **A2UI review follow-ups** — Preserved surfaces across rejected
-  overflow envelopes, enforced envelope byte caps, aligned Google A2UI
-  sessions with bounded surface state, and hardened web desktop preview
-  server pipes.
+overflow envelopes, enforced envelope byte caps, aligned Google A2UI
+sessions with bounded surface state, and hardened web desktop preview
+server pipes.
 
 ### Docs
 
 - `docs/a2ui.md` — Phase 2/3 architecture, component table, Functions
-  subset, and roadmap follow-ups.
+subset, and roadmap follow-ups.
 
 ## 0.1.44 - 2026-04-15
 
 ### Added
 
 - **Amazon Bedrock** (#74) — First-class Bedrock provider on the existing PI runtime path: structured auth methods (AWS default profile, named profile, explicit keys, API key), saved credentials without mutating process-wide AWS env, dynamic catalog/discovery with streaming-capable models only, desktop settings forms, and cache-first status polling so passive refreshes avoid repeated live discovery. Bedrock stays out of first-run onboarding until onboarding can handle structured auth; LM Studio and other provider refreshes no longer trigger unrelated Bedrock discovery.
-
 - **Configurable search providers** — Choose Exa or Parallel for local `webSearch` and for HTML enrichment in `webFetch` (provider options), with `PARALLEL_API_KEY` / `EXA_API_KEY` resolution.
-
 - **Parallel extract-backed `webFetch`** — Optional Parallel-based extract path for web fetch enrichment alongside Exa.
-
 - **Bounded Workspace Map** (#76) — Depth- and size-limited directory name tree (no file contents) injected into system and subagent prompts after project instructions; skips noisy dirs (e.g. `node_modules`), sanitizes labels for markdown safety, and hardens syscalls (readdir + typed roots, no symlink directory escape).
-
 - **Hierarchical `AGENTS.md`** (#77) — Walk from git root toward workspace root, prefer `AGENTS.override.md` per directory, cap rendered section at 32 KiB UTF-8, load into system and sub-agent prompts with fixes for nested loading and truncation order.
-
 - **Active workspace context** — Workspace context included in turn prompts, with follow-up fixes for paths, git root detection, tool names, and macOS handling.
 
 ### Changed
 
 - **Desktop tooling** — Upgraded the Electron app to Vite 8 and current Electron-related dev dependencies.
-
 - **Prompt cleanup** (#78) — Reduced static prompt overhead by trimming cowork/workspace internals and deferring exact path details to runtime workspace context; aligned upload guidance with runtime behavior.
-
 - **License** — Expanded `LICENSE` and wired `package.json` to `SEE LICENSE IN LICENSE`; README license section updated accordingly.
 
 ### Fixed
 
 - **Gemini search / citations** — Preserved citation context across blocks, fixed search defaults, backfilled citation task metadata, and preserved overflow citation mappings across assistant message chunks.
-
 - **Bedrock follow-ups** (#74) — Narrowed live discovery to Bedrock-specific flows, aligned ChatView provider display names with shared helpers, fixed derived catalog entries when backing models are non-streaming, and added regression coverage for profile wiring in discovery config.
 
 ### Docs
@@ -230,27 +201,20 @@ All notable changes to this project will be documented in this file.
   - JSON-RPC control-plane events for real-time plugin state updates
   - Support for GitHub, local, and URL plugin sources
   - Hardened install validation, rollback, and symlinked bundle discovery
-
 - **Child Agent Inspection** (#69) — `inspectAgent` tool for real-time child agent state inspection during orchestration
-
 - **Explicit Child Agent Context Modes** (#70) — Configurable context modes for spawned child agents with dynamic role defaults from available subagent definitions
-
 - **Parent Orchestration Guidance** (#73) — Strengthened parent child-agent orchestration with explicit coordinator rules, plan-mode explorer/worker/reviewer roles, and dynamic subagent role defaults
 
 ### Changed
 
 - **Child-Agent Report Parsing** (#71) — Made child-agent reports parseable with explicit tagged footers, server-owned parsing module, and backward-compatible fallback for legacy plain/fenced JSON reports
-
 - **Read-Only Shell Policy** (#72) — Comprehensive read-only shell enforcement:
   - Syntax-aware command tokenizer covering bash, fish, zsh, and sh
   - Detection of write operations through redirections, pipes, subshells, env/prefix commands, and package managers
   - Quote-aware redirect scanning to block quoted write targets without regressing benign inspection commands
   - Centralized shared parser as the single enforcement boundary
-
 - **Child-Agent Wait Semantics** — StatusBus wait results now support explicit any/all semantics and always return the latest known status snapshot for every requested child. Default omitted mode is `any` with `readyAgentIds` for terminal subset consumers
-
 - Removed legacy GPT-5 model entries and aliased persisted sessions to `gpt-5.4`
-
 - Removed legacy external Codex auth import so Cowork now relies only on its own `~/.cowork/auth/codex-cli/auth.json` credentials
 
 ### Fixed
@@ -260,7 +224,6 @@ All notable changes to this project will be documented in this file.
   - Newer child-agent states preserved during wait replay
   - Cached session snapshots preserved without task metadata
   - Predictable child-agent waits across timeout boundaries
-
 - **Desktop** — Windows compatibility tweaks and ChatView update
 - Fixed raw-loop child todo seeding for delegated agents
 - Clarified provider mismatch errors for custom model IDs with better OpenAI-vs-Anthropic guidance
@@ -421,7 +384,7 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- Added a dedicated `cowork-server` release track with Bun-built macOS and Windows binaries plus a GitHub Actions workflow that publishes them from `cowork-server-v*` tags.
+- Added a dedicated `cowork-server` release track with Bun-built macOS and Windows binaries plus a GitHub Actions workflow that publishes them from `cowork-server-v`* tags.
 - Added OpenCode provider support for the harness, including the new OpenCode Zen path, shared provider metadata, and saved-key aware auth handling for compatible provider flows.
 - Added file-spill handling for oversized tool output so long tool responses can be written to disk with consistent preview text across the runtime, desktop UI, and docs.
 
@@ -455,3 +418,4 @@ All notable changes to this project will be documented in this file.
 - Fixed Codex auth persistence so desktop restarts no longer make recoverable Cowork-owned auth look lost after refresh failures or cross-process token races.
 - Fixed Cowork auth recovery so valid Codex credentials persisted in the Cowork auth store are preserved instead of leaving users unexpectedly signed out.
 - Fixed the desktop Backup settings page freeze-on-open loop by stabilizing its initial refresh path.
+

@@ -3,6 +3,7 @@ import type {
   DesktopFeatureFlagOverrides,
   DesktopFeatureFlags,
 } from "../../../../src/shared/featureFlags";
+import { resolveFeatureFlags } from "../../../../src/shared/featureFlags";
 import type { HydratedTranscriptSnapshot, PersistedState, TranscriptEvent } from "../app/types";
 import type {
   ConfirmActionInput,
@@ -30,14 +31,7 @@ function requireDesktopApi(): DesktopApi {
 }
 
 function getDefaultDesktopFeatureFlags(): DesktopFeatureFlags {
-  return {
-    menuBar: true,
-    remoteAccess: false,
-    workspacePicker: false,
-    workspaceLifecycle: false,
-    a2ui: false,
-    openAiNativeConnectors: false,
-  };
+  return resolveFeatureFlags({ isPackaged: false });
 }
 
 export function getDesktopFeatureFlags(

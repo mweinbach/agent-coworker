@@ -1,11 +1,10 @@
 # Mobile Remote Access
 
-This repo now includes the first vertical slices for mobile remote access:
-
-- desktop Electron remote-access bridge and Settings UI
-- standalone Expo app scaffold at `apps/mobile`
-- local Expo native module scaffold for Remodex secure transport
-- workspace-scoped JSON-RPC methods that no longer require the mobile client to know host filesystem paths
+Cowork mobile remote access now uses a direct device-to-device HTTP/3 (QUIC) pairing path.
+The desktop app shows a `cowork-pair://` QR code. The mobile app scans it, verifies the
+desktop's ephemeral certificate fingerprint, exchanges a one-time pairing nonce, and then sends
+the normal Cowork JSON-RPC messages directly to the desktop sidecar. There is no hosted relay in
+the data path.
 
 ## What is in place
 
@@ -21,12 +20,13 @@ If you need to suppress it in development, start the desktop app with `COWORK_EN
 From there you can:
 
 - start remote access for the selected workspace
-- view current relay state
-- render a pairing QR payload
-- rotate the active relay session
+- view the local direct endpoint
+- render a direct pairing QR ticket
+- rotate the QR and ephemeral certificate
 - forget the currently trusted phone
 
-The desktop bridge keeps its trust state and private identity material in Cowork-owned storage under `~/.cowork/mobile-relay`, not in renderer-persisted workspace state or `~/.remodex`.
+The desktop sidecar keeps trusted mobile device records under `~/.cowork/mobile-pairing`.
+Renderer-persisted workspace state never stores pairing tokens or device trust state.
 
 ### Mobile app
 
@@ -39,30 +39,21 @@ Important structure:
 - routes are under `apps/mobile/src/app`
 - there is intentionally no `apps/mobile/app` route tree
 
-Included scaffolded areas:
+Included areas:
 
 - pairing landing + QR scan routes
 - app tabs for threads and settings
 - thread detail screen
 - shared pairing store
 - shared thread/feed store
-- local Expo module scaffold:
-  - `apps/mobile/modules/remodex-secure-transport`
 
-The current mobile implementation is a scaffolded vertical slice:
+The mobile implementation is a direct H3 vertical slice:
 
-- the secure transport module exposes the intended JS/native API surface
-- the fallback JS path simulates trust/connect flows plus a mock Cowork JSON-RPC sidecar for development
+- QR validation parses `cowork-pair://` tickets
+- pairing calls the desktop `/pair` endpoint and stores the returned session token in secure storage
+- JSON-RPC requests are sent to `/rpc`
+- server notifications are streamed from `/events` as SSE
 - the thread UI is wired around `coworkSnapshot.feed`-compatible types and reducers
-- the mobile fallback can now exercise:
-  - `initialize` / `initialized`
-  - `thread/list`
-  - `thread/read`
-  - `turn/start`
-  - `turn/interrupt`
-  - approval request round-trips
-  - ask-for-input round-trips
-- end-to-end native secure transport parity with the real Remodex wire protocol is still the next step
 
 ## Commands
 
@@ -88,7 +79,7 @@ bun run typecheck
 bun run app:mobile:typecheck
 ```
 
-## Pairing flow today
+## Pairing flow
 
 1. Start the desktop app in development mode.
 2. Select a workspace.
@@ -96,39 +87,24 @@ bun run app:mobile:typecheck
 4. Enable remote access.
 5. Scan the QR from the mobile app pairing flow.
 
-At this stage, the QR payload and trusted-device state flow are scaffolded and typed end-to-end. Cowork Desktop now owns the relay identity/trust state directly under `~/.cowork/mobile-relay`, while the Expo fallback path can demo the secure-transport-facing JSON-RPC client and approval/input UX locally on Linux.
-
-## Local mobile fallback demo
-
-The Expo-side fallback transport now acts like a tiny mock desktop session once you pair:
-
-1. Open the mobile app and scan the desktop QR.
-2. The fallback transport will hydrate a demo thread list.
-3. Open the demo thread and send prompts.
-4. Use prompts containing:
-   - `approval` to trigger a command approval request
-   - `input` to trigger an ask-for-input request
-
-This gives a local end-to-end demo of the mobile JSON-RPC client, thread hydration, turn streaming, and server-request response handling without requiring iOS/Xcode or the full native Remodex transport to be present on this Linux VM.
+The QR ticket contains the local endpoint, certificate pins, and one-time nonce. Mobile must be on
+the same network as the desktop for the v1 flow. See `docs/quic-pairing.md` for the route contract.
 
 ## Scope notes
 
 Current implementation status:
 
-- desktop bridge/service/UI: implemented
-- mobile Expo project scaffold: implemented
-- native secure-transport module surface: scaffolded
-- mobile JSON-RPC client + fallback transport integration: implemented
-- mobile transcript/thread UI shell: implemented for fallback/demo path
-- final secure transport handshake parity for the app-owned mobile transport: pending
-- raw Cowork JSON-RPC over encrypted mobile transport: pending
+- desktop direct pairing service/UI: implemented
+- mobile QR parsing and direct H3 transport scaffold: implemented
+- mobile transcript/thread UI shell: implemented
+- native platform certificate pinning shim: pending
+- mDNS/mobile local-network entitlement: pending
 
 ## Validation run
 
 The current slices were validated with:
 
 ```bash
-bun test test/server.jsonrpc.flow.test.ts test/mobile.pairing-qrcode.test.ts test/mobile.jsonrpc-client.test.ts test/mobile.transport-integration.test.ts apps/desktop/test/mobile-relay-bridge.test.ts apps/desktop/test/remote-access-page.test.ts apps/desktop/test/settings-nav.test.ts apps/desktop/test/desktop-schemas.test.ts
+bun test test/shared.cowork-ticket.test.ts test/shared.quic-cert.test.ts test/mobile.pairing-qrcode.test.ts test/mobile.pairing-scan-handler.test.ts apps/desktop/test/remote-access-page.test.ts apps/desktop/test/desktop-schemas.test.ts
 bun run typecheck
-bun run app:mobile:typecheck
 ```

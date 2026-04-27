@@ -129,8 +129,7 @@ export default function WorkspaceGeneralScreen() {
           description="Connect to a desktop to manage workspace defaults."
         >
           <Text selectable style={{ color: theme.textSecondary, fontSize: 14, lineHeight: 21 }}>
-            Workspace defaults stay disabled until the secure relay is connected to a desktop
-            session.
+            Workspace defaults stay disabled until the direct desktop connection is active.
           </Text>
         </SectionCard>
       </Screen>

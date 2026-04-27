@@ -11,6 +11,21 @@ Cowork supports one live WebSocket protocol on `/ws`: JSON-RPC-lite. The canonic
 - Current protocol version: `7.31`
 - WebSocket protocol mode: `jsonrpc`
 
+## Mobile direct HTTP/3 transport
+
+Cowork Mobile uses the same JSON-RPC schema through a direct local HTTPS/HTTP/3 listener
+started by the desktop sidecar. Pairing details are in
+[`docs/quic-pairing.md`](./quic-pairing.md).
+
+- `POST /pair` accepts a scanned `cowork-pair://` ticket, nonce, and mobile identity,
+  then returns a bearer session token.
+- `POST /rpc` accepts one JSON-RPC-lite request/notification/response per body and returns
+  the JSON-RPC response payload.
+- `GET /events` streams JSON-RPC-lite notifications and server requests as Server-Sent Events.
+
+The JSON-RPC handshake (`initialize`, then `initialized`) is still required before calling
+`thread/*`, `turn/*`, or `cowork/*`.
+
 ## Protocol negotiation
 
 Cowork negotiates JSON-RPC only. When multiple subprotocols are offered, the server selects `cowork.jsonrpc.v1` if present and rejects any unsupported subprotocol list that does not include it. The `?protocol=` query parameter and server-side protocol default override have been removed.

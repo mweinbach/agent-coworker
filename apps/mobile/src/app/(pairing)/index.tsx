@@ -226,8 +226,8 @@ function describeHero(
     return {
       title: "Native transport unavailable",
       body: hasTrustedDesktop
-        ? "This mobile build cannot open a real Remodex secure session yet. Re-scan a QR once native transport support lands."
-        : "This mobile build cannot open a real Remodex secure session yet. Scan a QR again once native transport support lands.",
+        ? "This mobile build cannot open a direct desktop session yet. Re-scan a QR once the direct transport is available."
+        : "This mobile build cannot open a direct desktop session yet. Scan a QR again once the direct transport is available.",
     };
   }
   switch (status) {
@@ -239,7 +239,7 @@ function describeHero(
     case "pairing":
       return {
         title: "Finishing secure pairing",
-        body: "Keep Cowork Desktop open while the phone and computer establish their secure relay session.",
+        body: "Keep Cowork Desktop open while the phone and computer establish their direct session.",
       };
     case "connecting":
       return {
@@ -279,7 +279,7 @@ function describeRelay(connectionState: {
       : "Fallback demo transport is active.";
   }
   if (connectionState.transportMode === "unsupported") {
-    return "Native relay transport is not available in this build.";
+    return "Direct desktop transport is not available in this build.";
   }
   if (connectionState.relayUrl) {
     return connectionState.relayUrl;
@@ -290,13 +290,13 @@ function describeRelay(connectionState: {
       return "Waiting for the QR payload to finish pairing.";
     case "connecting":
     case "reconnecting":
-      return "Contacting the secure relay.";
+      return "Contacting the desktop endpoint.";
     case "connected":
-      return "Relay connected.";
+      return "Desktop endpoint connected.";
     case "error":
-      return "Relay setup failed.";
+      return "Direct connection setup failed.";
     default:
-      return "No relay selected yet.";
+      return "No desktop selected yet.";
   }
 }
 

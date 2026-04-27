@@ -76,7 +76,6 @@ describe("package manifest", () => {
     expect(paths).not.toContain("packages/harness/src/rawLoopValidation.ts");
     expect(paths).not.toContain("src/client/modelStreamReplay.ts");
     expect(paths).not.toContain("src/shared/displayCitationMarkers.ts");
-    expect(paths).not.toContain("src/shared/mobileRelaySecurity.ts");
     expect(paths).not.toContain("src/shared/askPrompt.ts");
     expect(paths).not.toContain("src/runtime/openaiEventStream.ts");
     expect(paths).not.toContain("CHANGELOG.md");

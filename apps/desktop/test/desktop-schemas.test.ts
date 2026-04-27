@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 
-import { RELAY_PAIRING_QR_VERSION } from "../../../src/shared/mobileRelaySecurity";
 import {
   desktopMenuCommandSchema,
   mobileRelayBridgeStateSchema,
@@ -169,15 +168,15 @@ describe("desktop persisted-state schema defaults", () => {
       workspaceId: "ws_1",
       workspacePath: "/tmp/workspace",
       relaySource: "managed",
-      relaySourceMessage: "Using Cowork-managed relay state at /tmp/.cowork/mobile-relay.",
+      relaySourceMessage: "Direct mobile pairing state is stored under ~/.cowork/mobile-pairing.",
       relayServiceStatus: "running",
-      relayServiceMessage: "Cowork Desktop manages the relay session directly.",
+      relayServiceMessage: "Cowork Desktop serves the direct mobile endpoint locally.",
       relayServiceUpdatedAt: null,
-      relayUrl: "wss://api.phodex.app/relay",
+      relayUrl: "https://127.0.0.1:34443",
       sessionId: "relay-session",
       pairingPayload: {
-        v: RELAY_PAIRING_QR_VERSION,
-        relay: "wss://api.phodex.app/relay",
+        v: 1,
+        relay: "https://127.0.0.1:34443",
         sessionId: "relay-session",
         macDeviceId: "mac-1",
         macIdentityPublicKey: "ZmFrZQ==",

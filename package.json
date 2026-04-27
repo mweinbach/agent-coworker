@@ -26,7 +26,6 @@
     "!src/server/agents/DelegateRunner.ts",
     "!src/client/modelStreamReplay.ts",
     "!src/shared/displayCitationMarkers.ts",
-    "!src/shared/mobileRelaySecurity.ts",
     "!src/shared/askPrompt.ts",
     "!src/runtime/openaiEventStream.ts",
     "config/**/*",
@@ -89,7 +88,6 @@
     "reflect-metadata": "^0.2.2",
     "remark-parse": "^11.0.0",
     "turndown": "^7.2.4",
-    "tweetnacl": "^1.0.3",
     "unified": "^11.0.5",
     "zod": "^4.3.6"
   },

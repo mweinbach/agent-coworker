@@ -70,48 +70,58 @@ export class SecureTransportClient {
     this.lastError = null;
     this.emitState("pairing");
 
-    const endpointUrls = buildEndpointUrls(payload);
-    const deviceId = `cowork-mobile-${randomBase64Url(12)}`;
-    const identityPub = randomBase64Url(32);
-    const { endpointUrl, response } = await pairWithAnyEndpoint(endpointUrls, {
-      ticket: payload.rawTicket,
-      nonce: payload.nonce,
-      deviceId,
-      identityPub,
-      displayName: "Cowork Mobile",
-    });
-    const body = (await response.json()) as {
-      sessionToken?: string;
-      trustedDevice?: { fingerprint?: string };
-    };
-    if (!body.sessionToken) {
-      throw new Error("Pairing response did not include a session token.");
-    }
+    try {
+      const endpointUrls = buildEndpointUrls(payload);
+      const deviceId = `cowork-mobile-${randomBase64Url(12)}`;
+      const identityPub = randomBase64Url(32);
+      const { endpointUrl, response } = await pairWithAnyEndpoint(endpointUrls, {
+        ticket: payload.rawTicket,
+        nonce: payload.nonce,
+        deviceId,
+        identityPub,
+        displayName: "Cowork Mobile",
+      });
+      const body = (await response.json()) as {
+        sessionToken?: string;
+        trustedDevice?: { fingerprint?: string };
+      };
+      if (!body.sessionToken) {
+        throw new Error("Pairing response did not include a session token.");
+      }
 
-    const trusted: TrustedDesktopRecord = {
-      macDeviceId: payload.identityPub,
-      relayUrl: endpointUrl,
-      displayName: "Cowork Desktop",
-      publicKey: payload.identityPub,
-      fingerprint: body.trustedDevice?.fingerprint ?? payload.certSha256.slice(0, 16),
-      lastConnectedAt: new Date().toISOString(),
-      sessionToken: body.sessionToken,
-      endpointUrl,
-      certSha256: payload.certSha256,
-      spkiSha256: payload.spkiSha256,
-    };
-    this.trustedDesktops = [
-      trusted,
-      ...this.trustedDesktops.filter((entry) => entry.macDeviceId !== trusted.macDeviceId),
-    ];
-    this.activeSession = {
-      macDeviceId: trusted.macDeviceId,
-      endpointUrl,
-      sessionToken: body.sessionToken,
-    };
-    await this.persistTrustedState();
-    this.openEventStream();
-    return this.emitState("connected");
+      const trusted: TrustedDesktopRecord = {
+        macDeviceId: payload.identityPub,
+        relayUrl: endpointUrl,
+        displayName: "Cowork Desktop",
+        publicKey: payload.identityPub,
+        fingerprint: body.trustedDevice?.fingerprint ?? payload.certSha256.slice(0, 16),
+        lastConnectedAt: new Date().toISOString(),
+        sessionToken: body.sessionToken,
+        endpointUrl,
+        certSha256: payload.certSha256,
+        spkiSha256: payload.spkiSha256,
+      };
+      this.trustedDesktops = [
+        trusted,
+        ...this.trustedDesktops.filter((entry) => entry.macDeviceId !== trusted.macDeviceId),
+      ];
+      this.activeSession = {
+        macDeviceId: trusted.macDeviceId,
+        endpointUrl,
+        sessionToken: body.sessionToken,
+      };
+      await this.persistTrustedState();
+      this.openEventStream();
+      return this.emitState("connected");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.activeSession = null;
+      this.lastError = message;
+      await this.persistTrustedState();
+      this.emitSecureError(message);
+      this.emitState("error");
+      throw error;
+    }
   }
 
   async reconnectTrustedDesktop(macDeviceId: string): Promise<SecureTransportSnapshot> {
@@ -120,6 +130,7 @@ export class SecureTransportClient {
     if (!trusted) {
       throw new Error("Trusted desktop not found.");
     }
+    this.lastError = null;
     this.activeSession = {
       macDeviceId: trusted.macDeviceId,
       endpointUrl: trusted.endpointUrl,

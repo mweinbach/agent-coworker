@@ -45,6 +45,7 @@ type ServerListening = {
     port: number;
     hostHints: string[];
     ticket: string;
+    adminToken: string;
     certSha256: string;
     spkiSha256: string;
     identityPub: string;
@@ -73,6 +74,7 @@ const serverListeningSchema = z
         port: z.number(),
         hostHints: z.array(z.string()),
         ticket: z.string().min(1),
+        adminToken: z.string().min(1),
         certSha256: z.string().min(1),
         spkiSha256: z.string().min(1),
         identityPub: z.string().min(1),
@@ -307,6 +309,12 @@ function toErrorMessage(error: unknown): string {
     return error.message;
   }
   return String(error);
+}
+
+function toHttpServerUrl(websocketUrl: string): string {
+  const url = new URL(websocketUrl);
+  url.protocol = url.protocol === "wss:" ? "https:" : "http:";
+  return url.origin;
 }
 
 function getServerLogPath(): string {
@@ -566,6 +574,26 @@ export class ServerManager {
   ): Promise<{ url: string; mobileH3: ServerListening["mobileH3"] }> {
     await this.stopWorkspaceServer(opts.workspaceId);
     return await this.startWorkspaceServer(opts);
+  }
+
+  async revokeMobileH3TrustedDevice(workspaceId: string, deviceId: string): Promise<void> {
+    assertSafeId(workspaceId, "workspaceId");
+    const handle = this.servers.get(workspaceId);
+    if (!handle?.mobileH3) {
+      throw new Error("Mobile H3 endpoint is not running.");
+    }
+    const response = await fetch(
+      `${toHttpServerUrl(handle.url)}/mobile-h3/trusted/${encodeURIComponent(deviceId)}`,
+      {
+        method: "DELETE",
+        headers: {
+          authorization: `Bearer ${handle.mobileH3.adminToken}`,
+        },
+      },
+    );
+    if (!response.ok) {
+      throw new Error(`Failed to revoke mobile trust record: HTTP ${response.status}.`);
+    }
   }
 
   async stopAll(): Promise<void> {

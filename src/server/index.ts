@@ -191,6 +191,7 @@ async function main() {
               port: mobileServer.port,
               hostHints: mobileServer.hostHints,
               ticket: mobileServer.ticketUrl,
+              adminToken: mobileServer.adminToken,
               certSha256: mobileServer.certSha256,
               spkiSha256: mobileServer.spkiSha256,
               identityPub: mobileServer.identityPub,

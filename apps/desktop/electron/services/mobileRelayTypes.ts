@@ -8,12 +8,7 @@ export type MobileRelayStatus =
 
 export type MobileRelaySource = "direct" | "remodex" | "managed" | "override" | "unavailable";
 
-export type MobileRelayServiceStatus =
-  | "unknown"
-  | "running"
-  | "not-running"
-  | "disconnected"
-  | "unavailable";
+export type MobileRelayServiceStatus = "unknown" | "running" | "not-running" | "unavailable";
 
 export type MobileRelayPairingPayload = {
   v: number;

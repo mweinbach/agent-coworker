@@ -1,0 +1,55 @@
+import { describe, expect, test } from "bun:test";
+import type { JsonRpcLiteNotification, JsonRpcLiteRequest } from "../src/server/jsonrpc/protocol";
+import { __internal } from "../src/server/transport/h3/server";
+
+describe("H3 mobile HTTP JSON-RPC connection", () => {
+  test("keeps initialization state across dispatched HTTP requests", async () => {
+    let initialized = false;
+    const closedConnectionIds: string[] = [];
+    const runtime = {
+      openHttpConnection() {},
+      handleDecodedMessage(
+        connection: { send(message: string): number },
+        message: JsonRpcLiteRequest | JsonRpcLiteNotification,
+      ) {
+        if (message.method === "initialize" && "id" in message) {
+          connection.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: {} }));
+          return;
+        }
+        if (message.method === "initialized") {
+          initialized = true;
+          return;
+        }
+        if ("id" in message) {
+          connection.send(
+            JSON.stringify(
+              initialized
+                ? { jsonrpc: "2.0", id: message.id, result: { ok: true } }
+                : {
+                    jsonrpc: "2.0",
+                    id: message.id,
+                    error: { code: -32002, message: "Not initialized" },
+                  },
+            ),
+          );
+        }
+      },
+      closeConnection(connection: { data: { connectionId: string } }) {
+        closedConnectionIds.push(connection.data.connectionId);
+      },
+    };
+    const connection = __internal.createHttpJsonRpcConnection(runtime as never);
+
+    await expect(
+      connection.dispatch({ id: 1, method: "initialize", params: {} }),
+    ).resolves.toMatchObject({ id: 1, result: {} });
+    await expect(connection.dispatch({ method: "initialized" })).resolves.toBeNull();
+    await expect(connection.dispatch({ id: 2, method: "thread/list" })).resolves.toMatchObject({
+      id: 2,
+      result: { ok: true },
+    });
+
+    connection.close();
+    expect(closedConnectionIds).toEqual([connection.data.connectionId]);
+  });
+});

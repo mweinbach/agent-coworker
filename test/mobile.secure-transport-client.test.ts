@@ -101,4 +101,53 @@ describe("mobile secure transport client", () => {
       relayUrl: null,
     });
   });
+
+  test("emits an error state when pairing fails", async () => {
+    const states: string[] = [];
+    const secureErrors: string[] = [];
+    const client = new SecureTransportClient();
+    client.subscribe({
+      onStateChanged: (snapshot) => states.push(snapshot.status),
+      onSecureError: (message) => secureErrors.push(message),
+    });
+    globalThis.fetch = mock(
+      async () => new Response("", { status: 503 }),
+    ) as unknown as typeof fetch;
+
+    await expect(
+      client.connectFromQrPayload(buildPayload({ hosts: ["192.168.1.10"] })),
+    ).rejects.toThrow("Pairing failed against all advertised hosts");
+
+    expect(states).toEqual(["pairing", "error"]);
+    expect(secureErrors[0]).toContain("Pairing failed against all advertised hosts");
+    expect(await client.getSnapshot()).toMatchObject({
+      status: "idle",
+      connectedMacDeviceId: null,
+      lastError: expect.stringContaining("Pairing failed against all advertised hosts"),
+    });
+  });
+
+  test("clears stale errors when reconnecting a trusted desktop", async () => {
+    const socketClosed = mock((_reason: string | null) => {});
+    const client = new SecureTransportClient();
+    client.subscribe({ onSocketClosed: socketClosed });
+    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/pair")) {
+        return Response.json({ sessionToken: "session-token" });
+      }
+      return new Response("", { status: 200 });
+    }) as unknown as typeof fetch;
+
+    await client.connectFromQrPayload(buildPayload({ hosts: ["192.168.1.10"] }));
+    await waitFor(() => socketClosed.mock.calls.length === 1);
+
+    const snapshot = await client.reconnectTrustedDesktop("desktop-identity");
+
+    expect(snapshot).toMatchObject({
+      status: "connected",
+      connectedMacDeviceId: "desktop-identity",
+      lastError: null,
+    });
+  });
 });

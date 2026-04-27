@@ -178,6 +178,25 @@ export async function verifyH3SessionToken(
   return match;
 }
 
+export async function forgetH3TrustedDevice(
+  storeRootPath: string | undefined,
+  deviceId: string,
+): Promise<boolean> {
+  const normalizedDeviceId = deviceId.trim();
+  if (!normalizedDeviceId) {
+    return false;
+  }
+  const state = await loadH3PairingStoreState(storeRootPath);
+  const trustedDevices = state.trustedDevices.filter(
+    (device) => device.deviceId !== normalizedDeviceId,
+  );
+  if (trustedDevices.length === state.trustedDevices.length) {
+    return false;
+  }
+  await persistH3PairingStoreState({ version: 1, trustedDevices }, storeRootPath);
+  return true;
+}
+
 export async function forgetH3TrustedDevices(
   storeRootPath = resolveDefaultStoreRoot(),
 ): Promise<void> {

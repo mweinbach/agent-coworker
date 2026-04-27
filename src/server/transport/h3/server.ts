@@ -13,6 +13,7 @@ import type { AgentServerRuntime } from "../../runtime/ServerRuntime";
 import type { StartServerSocketData } from "../../startServer/types";
 import {
   createH3PairingSession,
+  forgetH3TrustedDevice,
   type H3PairingSession,
   rememberH3TrustedDevice,
   verifyH3SessionToken,
@@ -24,7 +25,9 @@ type H3Connection = {
 };
 
 type H3JsonRpcConnection = H3Connection & {
-  waitForResponsePayload(): Promise<unknown>;
+  addEventSink(controller: ReadableStreamDefaultController<Uint8Array>): () => void;
+  dispatch(message: JsonRpcLiteRequest | JsonRpcLiteNotification): Promise<unknown | null>;
+  close(): void;
 };
 
 const HTTP_RPC_RESPONSE_TIMEOUT_MS = 30_000;
@@ -44,6 +47,7 @@ export type H3MobileServerState = {
   hostHints: string[];
   ticket: CoworkPairingTicket;
   ticketUrl: string;
+  adminToken: string;
   certSha256: string;
   spkiSha256: string;
   identityPub: string;
@@ -53,6 +57,7 @@ export type H3MobileServerState = {
 
 type H3MobileServerHandle = H3MobileServerState & {
   server: ReturnType<typeof Bun.serve>;
+  revokeTrustedDevice(deviceId: string): Promise<boolean>;
   stop(): Promise<void>;
 };
 
@@ -118,12 +123,22 @@ function parseJsonRpcPayload(
   };
 }
 
+function getJsonRpcIdKey(message: JsonRpcLiteRequest | JsonRpcLiteClientResponse): string {
+  return `${typeof message.id}:${String(message.id)}`;
+}
+
+function tryParseJsonRpcSendPayload(message: string): unknown {
+  try {
+    return JSON.parse(message) as unknown;
+  } catch {
+    return message;
+  }
+}
+
 function createHttpJsonRpcConnection(runtime: AgentServerRuntime): H3JsonRpcConnection {
-  let responsePayload: unknown = null;
-  let resolveResponse: (payload: unknown) => void = () => {};
-  const responsePromise = new Promise<unknown>((resolve) => {
-    resolveResponse = resolve;
-  });
+  const encoder = new TextEncoder();
+  const pendingResponses = new Map<string, (payload: unknown) => void>();
+  const eventSinks = new Set<ReadableStreamDefaultController<Uint8Array>>();
   const connection: H3Connection = {
     data: {
       connectionId: crypto.randomUUID(),
@@ -131,21 +146,55 @@ function createHttpJsonRpcConnection(runtime: AgentServerRuntime): H3JsonRpcConn
       selectedSubprotocol: "cowork.jsonrpc.v1",
     },
     send(message: string) {
-      try {
-        responsePayload = JSON.parse(message) as unknown;
-        resolveResponse(responsePayload);
-        return 1;
-      } catch {
-        responsePayload = message;
-        resolveResponse(responsePayload);
-        return 1;
+      const payload = tryParseJsonRpcSendPayload(message);
+      if (payload && typeof payload === "object" && !Array.isArray(payload) && "id" in payload) {
+        const response = payload as JsonRpcLiteClientResponse;
+        const resolve = pendingResponses.get(getJsonRpcIdKey(response));
+        if (resolve) {
+          pendingResponses.delete(getJsonRpcIdKey(response));
+          resolve(payload);
+          return 1;
+        }
       }
+      for (const sink of eventSinks) {
+        try {
+          sink.enqueue(encoder.encode(`data: ${message}\n\n`));
+        } catch {
+          eventSinks.delete(sink);
+        }
+      }
+      return 1;
     },
   };
   runtime.openHttpConnection(connection as never);
   return Object.assign(connection, {
-    async waitForResponsePayload() {
-      return await responsePromise;
+    addEventSink(controller: ReadableStreamDefaultController<Uint8Array>) {
+      eventSinks.add(controller);
+      controller.enqueue(encoder.encode(": cowork events\n\n"));
+      return () => {
+        eventSinks.delete(controller);
+      };
+    },
+    async dispatch(message: JsonRpcLiteRequest | JsonRpcLiteNotification) {
+      if (!("id" in message)) {
+        runtime.handleDecodedMessage(connection as never, message);
+        return null;
+      }
+      const idKey = getJsonRpcIdKey(message);
+      const responsePromise = new Promise<unknown>((resolve) => {
+        pendingResponses.set(idKey, resolve);
+      });
+      runtime.handleDecodedMessage(connection as never, message);
+      try {
+        return await withResponseTimeout(responsePromise);
+      } finally {
+        pendingResponses.delete(idKey);
+      }
+    },
+    close() {
+      pendingResponses.clear();
+      eventSinks.clear();
+      runtime.closeConnection(connection as never);
     },
   });
 }
@@ -166,26 +215,6 @@ async function withResponseTimeout(response: Promise<unknown>): Promise<unknown>
   }
 }
 
-function createSseConnection(
-  runtime: AgentServerRuntime,
-  controller: ReadableStreamDefaultController<Uint8Array>,
-): H3Connection {
-  const encoder = new TextEncoder();
-  const connection: H3Connection = {
-    data: {
-      connectionId: crypto.randomUUID(),
-      protocolMode: "jsonrpc",
-      selectedSubprotocol: "cowork.jsonrpc.v1",
-    },
-    send(message: string) {
-      controller.enqueue(encoder.encode(`data: ${message}\n\n`));
-      return 1;
-    },
-  };
-  runtime.openHttpConnection(connection as never);
-  return connection;
-}
-
 export async function startH3MobileServer(
   options: StartH3MobileServerOptions,
 ): Promise<H3MobileServerHandle> {
@@ -194,6 +223,18 @@ export async function startH3MobileServer(
   const pairing = createH3PairingSession();
   const hostHints = options.hostHints?.length ? options.hostHints : ["127.0.0.1"];
   const pairingSessions = new Map<string, H3PairingSession>([[pairing.nonce, pairing]]);
+  const adminToken = crypto.randomUUID() + crypto.randomUUID().replaceAll("-", "");
+  const httpConnections = new Map<string, H3JsonRpcConnection>();
+
+  const getConnection = (deviceId: string): H3JsonRpcConnection => {
+    const existing = httpConnections.get(deviceId);
+    if (existing) {
+      return existing;
+    }
+    const connection = createHttpJsonRpcConnection(options.runtime);
+    httpConnections.set(deviceId, connection);
+    return connection;
+  };
 
   const createTicket = (port: number): CoworkPairingTicket => ({
     v: 1,
@@ -263,43 +304,42 @@ export async function startH3MobileServer(
       if (!trustedDevice) {
         return jsonResponse({ error: "Unauthorized." }, { status: 401 });
       }
-    }
 
-    if (req.method === "POST" && url.pathname === "/rpc") {
-      const raw = await req.json().catch(() => null);
-      const message = parseJsonRpcPayload(raw);
-      const connection = createHttpJsonRpcConnection(options.runtime) as H3Connection & {
-        waitForResponsePayload(): Promise<unknown>;
-      };
-      try {
-        options.runtime.handleDecodedMessage(connection as never, message);
+      if (req.method === "POST" && url.pathname === "/rpc") {
+        const raw = await req.json().catch(() => null);
+        const message = parseJsonRpcPayload(raw);
+        if (!("method" in message)) {
+          return jsonResponse(
+            { error: "Client responses are not supported over HTTP RPC." },
+            { status: 400 },
+          );
+        }
+        const response = await getConnection(trustedDevice.deviceId).dispatch(message);
         if (!("id" in message)) {
           return jsonResponse({ ok: true }, { status: 202 });
         }
-        return jsonResponse((await withResponseTimeout(connection.waitForResponsePayload())) ?? {});
-      } finally {
-        options.runtime.closeConnection(connection as never);
+        return jsonResponse(response ?? {});
       }
-    }
 
-    if (req.method === "GET" && url.pathname === "/events") {
-      let connection: H3Connection | null = null;
-      const stream = new ReadableStream<Uint8Array>({
-        start(controller) {
-          connection = createSseConnection(options.runtime, controller);
-          controller.enqueue(new TextEncoder().encode(": cowork events\n\n"));
-        },
-        cancel() {
-          if (connection) options.runtime.closeConnection(connection as never);
-        },
-      });
-      return new Response(stream, {
-        headers: {
-          "content-type": "text/event-stream",
-          "cache-control": "no-cache",
-          connection: "keep-alive",
-        },
-      });
+      if (req.method === "GET" && url.pathname === "/events") {
+        const connection = getConnection(trustedDevice.deviceId);
+        let removeSink: (() => void) | null = null;
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            removeSink = connection.addEventSink(controller);
+          },
+          cancel() {
+            removeSink?.();
+          },
+        });
+        return new Response(stream, {
+          headers: {
+            "content-type": "text/event-stream",
+            "cache-control": "no-cache",
+            connection: "keep-alive",
+          },
+        });
+      }
     }
 
     return textResponse("Not found", { status: 404 });
@@ -329,13 +369,30 @@ export async function startH3MobileServer(
     hostHints,
     ticket,
     ticketUrl: encodeCoworkPairingTicket(ticket),
+    adminToken,
     certSha256: certificate.certSha256,
     spkiSha256: certificate.spkiSha256,
     identityPub: certificate.identityPub,
     nonce: pairing.nonce,
     expiresAt: pairing.expiresAt,
+    async revokeTrustedDevice(deviceId: string) {
+      const connection = httpConnections.get(deviceId);
+      if (connection) {
+        httpConnections.delete(deviceId);
+        connection.close();
+      }
+      return await forgetH3TrustedDevice(options.storeRootPath, deviceId);
+    },
     async stop() {
+      for (const connection of httpConnections.values()) {
+        connection.close();
+      }
+      httpConnections.clear();
       await server.stop(true);
     },
   };
 }
+
+export const __internal = {
+  createHttpJsonRpcConnection,
+};

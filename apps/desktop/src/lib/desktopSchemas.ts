@@ -538,7 +538,7 @@ export const mobileRelayBridgeStateSchema = z.object({
   workspacePath: z.string().nullable(),
   relaySource: z.enum(["direct", "remodex", "managed", "override", "unavailable"]),
   relaySourceMessage: z.string().nullable(),
-  relayServiceStatus: z.enum(["unknown", "running", "not-running", "disconnected", "unavailable"]),
+  relayServiceStatus: z.enum(["unknown", "running", "not-running", "unavailable"]),
   relayServiceMessage: z.string().nullable(),
   relayServiceUpdatedAt: z.string().nullable(),
   relayUrl: z.string().nullable(),

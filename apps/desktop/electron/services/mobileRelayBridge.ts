@@ -143,7 +143,33 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
   }
 
   async stop(): Promise<MobileRelaySnapshot> {
+    const options = this.currentStartOptions;
     this.currentStartOptions = null;
+    if (options) {
+      this.state = {
+        ...this.state,
+        status: "starting",
+        relayServiceStatus: "unknown",
+        relayServiceMessage: "Stopping local mobile HTTP/3 endpoint...",
+      };
+      this.emitState();
+      try {
+        await this.serverManager.restartWorkspaceServer({
+          ...options,
+          mobileH3: false,
+        });
+      } catch (error) {
+        this.state = {
+          ...buildIdleState(),
+          status: "error",
+          workspaceId: options.workspaceId,
+          workspacePath: options.workspacePath,
+          lastError: error instanceof Error ? error.message : String(error),
+        };
+        this.emitState();
+        return this.getSnapshot();
+      }
+    }
     this.state = buildIdleState();
     this.emitState();
     return this.getSnapshot();
@@ -183,6 +209,22 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
   }
 
   async forgetTrustedPhone(): Promise<MobileRelaySnapshot> {
+    if (this.state.workspaceId && this.state.trustedPhoneDeviceId) {
+      try {
+        await this.serverManager.revokeMobileH3TrustedDevice(
+          this.state.workspaceId,
+          this.state.trustedPhoneDeviceId,
+        );
+      } catch (error) {
+        this.state = {
+          ...this.state,
+          status: "error",
+          lastError: error instanceof Error ? error.message : String(error),
+        };
+        this.emitState();
+        return this.getSnapshot();
+      }
+    }
     this.state = {
       ...this.state,
       trustedPhoneDeviceId: null,

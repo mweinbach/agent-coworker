@@ -1,12 +1,11 @@
 import * as SecureStore from "expo-secure-store";
-
+import type { PairingQrPayload } from "../pairing/pairingTypes";
 import type {
   RelayConnectionStatus,
   RelayTransportMode,
   RelayTrustedDesktop,
   SecureTransportClientEvents,
 } from "./relayTypes";
-import type { PairingQrPayload } from "../pairing/pairingTypes";
 
 const TRUSTED_DESKTOPS_KEY = "cowork.h3.trustedDesktops.v1";
 const ACTIVE_SESSION_KEY = "cowork.h3.activeSession.v1";
@@ -136,7 +135,9 @@ export class SecureTransportClient {
 
   async forgetTrustedDesktop(macDeviceId: string): Promise<SecureTransportSnapshot> {
     await this.loadTrustedState();
-    this.trustedDesktops = this.trustedDesktops.filter((entry) => entry.macDeviceId !== macDeviceId);
+    this.trustedDesktops = this.trustedDesktops.filter(
+      (entry) => entry.macDeviceId !== macDeviceId,
+    );
     if (this.activeSession?.macDeviceId === macDeviceId) {
       this.activeSession = null;
       this.eventAbortController?.abort();
@@ -181,7 +182,9 @@ export class SecureTransportClient {
     };
   }
 
-  private snapshot(status: RelayConnectionStatus = this.activeSession ? "connected" : "idle"): SecureTransportSnapshot {
+  private snapshot(
+    status: RelayConnectionStatus = this.activeSession ? "connected" : "idle",
+  ): SecureTransportSnapshot {
     return {
       status,
       transportMode: "native",
@@ -224,18 +227,22 @@ export class SecureTransportClient {
     this.eventAbortController?.abort();
     const controller = new AbortController();
     this.eventAbortController = controller;
-    void readSseStream(`${this.activeSession.endpointUrl}/events`, this.activeSession.sessionToken, {
-      signal: controller.signal,
-      onMessage: (text) => {
-        for (const listener of this.plaintextListeners) {
-          listener(text);
-        }
+    void readSseStream(
+      `${this.activeSession.endpointUrl}/events`,
+      this.activeSession.sessionToken,
+      {
+        signal: controller.signal,
+        onMessage: (text) => {
+          for (const listener of this.plaintextListeners) {
+            listener(text);
+          }
+        },
+        onError: (message) => {
+          this.lastError = message;
+          this.emitState("error");
+        },
       },
-      onError: (message) => {
-        this.lastError = message;
-        this.emitState("error");
-      },
-    });
+    );
   }
 }
 

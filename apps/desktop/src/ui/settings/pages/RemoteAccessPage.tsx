@@ -86,10 +86,7 @@ export function RemoteAccessPage() {
     };
   }, []);
 
-  const qrValue = useMemo(
-    () => state?.ticketUrl ?? null,
-    [state?.ticketUrl],
-  );
+  const qrValue = useMemo(() => state?.ticketUrl ?? null, [state?.ticketUrl]);
 
   async function runAction(action: string, runner: () => Promise<unknown>) {
     setBusyAction(action);
@@ -157,9 +154,9 @@ export function RemoteAccessPage() {
             <div className="mt-1 text-muted-foreground">
               {loading ? "Loading…" : (state?.status ?? "idle")}
             </div>
-              <div className="mt-2 text-xs text-muted-foreground">Transport: direct HTTP/3</div>
+            <div className="mt-2 text-xs text-muted-foreground">Transport: direct HTTP/3</div>
             <div className="mt-1 text-xs text-muted-foreground">
-                Relay service: {describeRelayServiceStatus(state?.relayServiceStatus ?? "unknown")}
+              Relay service: {describeRelayServiceStatus(state?.relayServiceStatus ?? "unknown")}
             </div>
             {state?.directUrl ? (
               <div className="mt-1 text-xs text-muted-foreground">Endpoint: {state.directUrl}</div>
@@ -238,8 +235,8 @@ export function RemoteAccessPage() {
           <CardHeader>
             <CardTitle>Trusted phone</CardTitle>
             <CardDescription>
-              Cowork Desktop keeps direct pairing trust state in `~/.cowork/mobile-pairing`,
-              outside the renderer.
+              Cowork Desktop keeps direct pairing trust state in `~/.cowork/mobile-pairing`, outside
+              the renderer.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -247,7 +244,7 @@ export function RemoteAccessPage() {
               <div className="space-y-3 rounded-lg border border-border/60 bg-background/40 p-4">
                 <div className="flex items-center gap-2 text-sm font-medium text-foreground">
                   <SmartphoneIcon className="size-4" />
-Paired device
+                  Paired device
                 </div>
                 <div className="space-y-1 text-xs text-muted-foreground">
                   <div>Device ID: {state.trustedPhoneDeviceId}</div>
@@ -264,7 +261,7 @@ Paired device
                   disabled={busyAction !== null}
                 >
                   <Trash2Icon data-icon />
-Forget paired device
+                  Forget paired device
                 </Button>
               </div>
             ) : (

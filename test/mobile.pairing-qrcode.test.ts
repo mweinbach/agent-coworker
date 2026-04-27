@@ -29,7 +29,7 @@ describe("mobile pairing QR validation", () => {
     const payload = buildPayload();
     expect(parsePairingQrPayload(encodeCoworkPairingTicket(payload))).toEqual({
       ...payload,
-      ticket: encodeCoworkPairingTicket(payload),
+      rawTicket: encodeCoworkPairingTicket(payload),
     });
   });
 

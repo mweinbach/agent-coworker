@@ -184,5 +184,11 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
   };
 
   const url = `ws://${hostname}:${server.port}/ws`;
-  return { server: stoppableServer, mobileServer, config: runtime.config, system: runtime.system, url };
+  return {
+    server: stoppableServer,
+    mobileServer,
+    config: runtime.config,
+    system: runtime.system,
+    url,
+  };
 }

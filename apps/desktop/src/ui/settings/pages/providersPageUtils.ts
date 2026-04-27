@@ -18,19 +18,47 @@ export const PARALLEL_AUTH_METHOD_ID = "parallel_api_key";
 export const EXA_SECTION_ID = "provider:exa-search";
 export const PARALLEL_SECTION_ID = "provider:parallel-search";
 
-export function formatAccount(account: any): string {
+type ProviderAccount = {
+  name?: unknown;
+  email?: unknown;
+};
+
+export type ProviderUsageWindow = {
+  usedPercent?: unknown;
+  windowSeconds?: unknown;
+  resetAfterSeconds?: unknown;
+  resetAt?: unknown;
+};
+
+type ProviderCredits = {
+  unlimited?: unknown;
+  hasCredits?: unknown;
+  balance?: unknown;
+};
+
+export type ProviderRateLimitEntry = {
+  limitId?: unknown;
+  limitName?: unknown;
+  limitReached?: unknown;
+  allowed?: unknown;
+  primaryWindow?: ProviderUsageWindow | null;
+  secondaryWindow?: ProviderUsageWindow | null;
+  credits?: ProviderCredits | null;
+};
+
+export function formatAccount(account: ProviderAccount | null | undefined): string {
   const name = typeof account?.name === "string" ? account.name.trim() : "";
   const email = typeof account?.email === "string" ? account.email.trim() : "";
   if (name && email) return `${name} <${email}>`;
   return name || email || "";
 }
 
-export function providerStatusLabel(status: any): string {
+export function providerStatusLabel(status: ProviderStatus | null | undefined): string {
   if (!status) return "Not connected";
   if (
     Array.isArray(status.usage?.rateLimits) &&
     status.usage.rateLimits.some(
-      (entry: any) =>
+      (entry: ProviderRateLimitEntry) =>
         (entry?.limitReached === true || entry?.allowed === false) && !isUsingCredits(entry),
     )
   ) {
@@ -122,7 +150,7 @@ export function describeLmStudioCard(opts: {
   };
 }
 
-export function formatRateLimitName(entry: any): string {
+export function formatRateLimitName(entry: ProviderRateLimitEntry): string {
   const raw: string =
     typeof entry?.limitName === "string" && entry.limitName.trim() ? entry.limitName.trim() : "";
   if (raw) return raw;
@@ -150,19 +178,23 @@ export function clampPercent(value: number): number {
   return Math.max(0, Math.min(100, value));
 }
 
-export function usedPercentFromWindow(window: any): number | null {
+export function usedPercentFromWindow(
+  window: ProviderUsageWindow | null | undefined,
+): number | null {
   if (!window || typeof window !== "object") return null;
   if (typeof window.usedPercent !== "number" || !Number.isFinite(window.usedPercent)) return null;
   return clampPercent(window.usedPercent);
 }
 
-export function remainingPercentFromWindow(window: any): number | null {
+export function remainingPercentFromWindow(
+  window: ProviderUsageWindow | null | undefined,
+): number | null {
   const usedPercent = usedPercentFromWindow(window);
   if (usedPercent === null) return null;
   return clampPercent(100 - usedPercent);
 }
 
-export function formatWindowMeta(window: any): string {
+export function formatWindowMeta(window: ProviderUsageWindow | null | undefined): string {
   if (!window || typeof window !== "object") return "No usage data";
   const windowSize =
     typeof window.windowSeconds === "number" && Number.isFinite(window.windowSeconds)
@@ -184,7 +216,7 @@ export function formatCreditsBalance(balance: unknown): string | null {
   return new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(parsed);
 }
 
-export function hasUsableCredits(credits: any): boolean {
+export function hasUsableCredits(credits: ProviderCredits | null | undefined): boolean {
   if (!credits || typeof credits !== "object") return false;
   if (credits.unlimited === true) return true;
   if (credits.hasCredits === true) return true;
@@ -192,11 +224,11 @@ export function hasUsableCredits(credits: any): boolean {
   return Number.isFinite(parsedBalance) && parsedBalance > 0;
 }
 
-export function isUsingCredits(entry: any): boolean {
+export function isUsingCredits(entry: ProviderRateLimitEntry): boolean {
   return remainingPercentFromWindow(entry?.primaryWindow) === 0 && hasUsableCredits(entry?.credits);
 }
 
-export function formatCreditsSummary(entry: any): string {
+export function formatCreditsSummary(entry: ProviderRateLimitEntry): string {
   const credits = entry?.credits;
   if (!credits || typeof credits !== "object") return "";
 
@@ -215,7 +247,7 @@ export function formatCreditsSummary(entry: any): string {
   return "";
 }
 
-export function isVisibleUsageRateLimit(entry: any): boolean {
+export function isVisibleUsageRateLimit(entry: ProviderRateLimitEntry): boolean {
   const limitId = typeof entry?.limitId === "string" ? entry.limitId.trim().toLowerCase() : "";
   const limitName =
     typeof entry?.limitName === "string" ? entry.limitName.trim().toLowerCase() : "";

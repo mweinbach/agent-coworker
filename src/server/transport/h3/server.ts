@@ -1,21 +1,21 @@
+import {
+  type CoworkPairingTicket,
+  decodeCoworkPairingTicket,
+  encodeCoworkPairingTicket,
+} from "../../../shared/coworkTicket";
+import { createEphemeralQuicCertificate } from "../../../shared/quicCert";
+import type {
+  JsonRpcLiteClientResponse,
+  JsonRpcLiteNotification,
+  JsonRpcLiteRequest,
+} from "../../jsonrpc/protocol";
 import type { AgentServerRuntime } from "../../runtime/ServerRuntime";
 import type { StartServerSocketData } from "../../startServer/types";
 import {
-  type JsonRpcLiteClientResponse,
-  type JsonRpcLiteNotification,
-  type JsonRpcLiteRequest,
-} from "../../jsonrpc/protocol";
-import {
-  decodeCoworkPairingTicket,
-  encodeCoworkPairingTicket,
-  type CoworkPairingTicket,
-} from "../../../shared/coworkTicket";
-import { createEphemeralQuicCertificate } from "../../../shared/quicCert";
-import {
   createH3PairingSession,
+  type H3PairingSession,
   rememberH3TrustedDevice,
   verifyH3SessionToken,
-  type H3PairingSession,
 } from "./pairing";
 
 type H3Connection = {
@@ -24,8 +24,10 @@ type H3Connection = {
 };
 
 type H3JsonRpcConnection = H3Connection & {
-  getResponsePayload(): unknown;
+  waitForResponsePayload(): Promise<unknown>;
 };
+
+const HTTP_RPC_RESPONSE_TIMEOUT_MS = 30_000;
 
 type StartH3MobileServerOptions = {
   runtime: AgentServerRuntime;
@@ -116,6 +118,10 @@ function parseJsonRpcPayload(
 
 function createHttpJsonRpcConnection(runtime: AgentServerRuntime): H3JsonRpcConnection {
   let responsePayload: unknown = null;
+  let resolveResponse: (payload: unknown) => void = () => {};
+  const responsePromise = new Promise<unknown>((resolve) => {
+    resolveResponse = resolve;
+  });
   const connection: H3Connection = {
     data: {
       connectionId: crypto.randomUUID(),
@@ -125,22 +131,43 @@ function createHttpJsonRpcConnection(runtime: AgentServerRuntime): H3JsonRpcConn
     send(message: string) {
       try {
         responsePayload = JSON.parse(message) as unknown;
+        resolveResponse(responsePayload);
         return 1;
       } catch {
         responsePayload = message;
+        resolveResponse(responsePayload);
         return 1;
       }
     },
   };
   runtime.openHttpConnection(connection as never);
   return Object.assign(connection, {
-    getResponsePayload() {
-      return responsePayload;
+    async waitForResponsePayload() {
+      return await responsePromise;
     },
   });
 }
 
-function createSseConnection(runtime: AgentServerRuntime, controller: ReadableStreamDefaultController<Uint8Array>): H3Connection {
+async function withResponseTimeout(response: Promise<unknown>): Promise<unknown> {
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      response,
+      new Promise<unknown>((_, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error("Timed out waiting for JSON-RPC response."));
+        }, HTTP_RPC_RESPONSE_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+function createSseConnection(
+  runtime: AgentServerRuntime,
+  controller: ReadableStreamDefaultController<Uint8Array>,
+): H3Connection {
   const encoder = new TextEncoder();
   const connection: H3Connection = {
     data: {
@@ -240,12 +267,14 @@ export async function startH3MobileServer(
       const raw = await req.json().catch(() => null);
       const message = parseJsonRpcPayload(raw);
       const connection = createHttpJsonRpcConnection(options.runtime) as H3Connection & {
-        getResponsePayload(): unknown;
+        waitForResponsePayload(): Promise<unknown>;
       };
       try {
         options.runtime.handleDecodedMessage(connection as never, message);
-        await Promise.resolve();
-        return jsonResponse(connection.getResponsePayload() ?? {});
+        if (!("id" in message)) {
+          return jsonResponse({ ok: true }, { status: 202 });
+        }
+        return jsonResponse((await withResponseTimeout(connection.waitForResponsePayload())) ?? {});
       } finally {
         options.runtime.closeConnection(connection as never);
       }

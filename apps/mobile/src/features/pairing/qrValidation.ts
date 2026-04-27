@@ -53,7 +53,7 @@ export function parsePairingQrPayload(rawValue: string): PairingQrPayload {
   if (payload.expiresAt <= Date.now()) {
     throw new Error("This pairing code has expired. Generate a new QR code from desktop.");
   }
-  return { ...payload, ticket: trimmed };
+  return { ...payload, rawTicket: trimmed };
 }
 
 export function validatePairingPayload(

@@ -70,10 +70,10 @@ function execFileAsync(
           timedOut = true;
         }
 
-        if (timedOut) {
+        if (timedOut && opts.timeoutMs) {
           resolve({
             stdout: String(stdout ?? ""),
-            stderr: `Command timed out after ${opts.timeoutMs! / 1000}s. The child process was terminated.`,
+            stderr: `Command timed out after ${opts.timeoutMs / 1000}s. The child process was terminated.`,
             exitCode: 124,
             errorCode: "TIMEOUT",
           });

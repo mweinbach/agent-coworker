@@ -51,6 +51,14 @@ type ServerListening = {
   } | null;
 };
 
+type StartWorkspaceServerOptions = {
+  workspaceId: string;
+  workspacePath: string;
+  yolo: boolean;
+  featureFlags?: { openAiNativeConnectors?: boolean };
+  mobileH3?: boolean;
+};
+
 const serverListeningSchema = z
   .object({
     type: z.literal("server_listening"),
@@ -336,13 +344,9 @@ export class ServerManager {
   private readonly servers = new Map<string, ServerHandle>();
   private readonly pendingStarts = new Map<string, PendingServerHandle>();
 
-  async startWorkspaceServer(opts: {
-    workspaceId: string;
-    workspacePath: string;
-    yolo: boolean;
-    featureFlags?: { openAiNativeConnectors?: boolean };
-    mobileH3?: boolean;
-  }): Promise<{ url: string; mobileH3: ServerListening["mobileH3"] }> {
+  async startWorkspaceServer(
+    opts: StartWorkspaceServerOptions,
+  ): Promise<{ url: string; mobileH3: ServerListening["mobileH3"] }> {
     const { workspaceId, workspacePath, yolo } = opts;
 
     assertSafeId(workspaceId, "workspaceId");
@@ -351,10 +355,18 @@ export class ServerManager {
     const existing = this.servers.get(workspaceId);
     if (existing) {
       if (existing.child.exitCode === null && existing.child.signalCode === null) {
-        return { url: existing.url, mobileH3: existing.mobileH3 };
+        if (opts.mobileH3 === true && !existing.mobileH3) {
+          this.servers.delete(workspaceId);
+          await gracefulKill(existing.child);
+          existing.cleanup();
+        } else {
+          return { url: existing.url, mobileH3: existing.mobileH3 };
+        }
       }
-      this.servers.delete(workspaceId);
-      existing.cleanup();
+      if (this.servers.get(workspaceId) === existing) {
+        this.servers.delete(workspaceId);
+        existing.cleanup();
+      }
     }
 
     const pending = this.pendingStarts.get(workspaceId);
@@ -458,7 +470,12 @@ export class ServerManager {
           this.pendingStarts.delete(workspaceId);
         }
 
-        this.servers.set(workspaceId, { child, url, mobileH3: listening.mobileH3 ?? null, cleanup: cleanupOnce });
+        this.servers.set(workspaceId, {
+          child,
+          url,
+          mobileH3: listening.mobileH3 ?? null,
+          cleanup: cleanupOnce,
+        });
 
         child.once("exit", () => {
           const pendingExit = this.pendingStarts.get(workspaceId);
@@ -538,6 +555,13 @@ export class ServerManager {
     this.servers.delete(workspaceId);
     await gracefulKill(handle.child);
     handle.cleanup();
+  }
+
+  async restartWorkspaceServer(
+    opts: StartWorkspaceServerOptions,
+  ): Promise<{ url: string; mobileH3: ServerListening["mobileH3"] }> {
+    await this.stopWorkspaceServer(opts.workspaceId);
+    return await this.startWorkspaceServer(opts);
   }
 
   async stopAll(): Promise<void> {

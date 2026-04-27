@@ -113,6 +113,11 @@ function normalizeToolArguments(input: unknown): Record<string, unknown> {
   return input as Record<string, unknown>;
 }
 
+function normalizeToolMeta(input: unknown): Record<string, unknown> | undefined {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) return undefined;
+  return input as Record<string, unknown>;
+}
+
 function normalizeMcpJsonSchema(value: unknown, root = false): unknown {
   if (typeof value === "boolean") return value;
   if (Array.isArray(value)) return value.map((entry) => normalizeMcpJsonSchema(entry));
@@ -223,12 +228,15 @@ async function createRuntimeMcpClient(opts: {
           ...(entry._meta ? { _meta: entry._meta } : {}),
           ...(entry.connector_id ? { connectorId: entry.connector_id } : {}),
           ...(entry.connector_name ? { connectorName: entry.connector_name } : {}),
-          execute: async (input: unknown) =>
-            await client.callTool({
+          execute: async (input: unknown) => {
+            const meta = normalizeToolMeta(entry._meta);
+            const request: Parameters<McpClient["callTool"]>[0] = {
               name,
               arguments: normalizeToolArguments(input),
-              ...(entry._meta ? { _meta: entry._meta } : {}),
-            } as any),
+              ...(meta ? { _meta: meta } : {}),
+            };
+            return await client.callTool(request);
+          },
         };
       }
       return discovered;

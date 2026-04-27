@@ -29,13 +29,15 @@ import {
   EXA_AUTH_METHOD_ID,
   EXA_SECTION_ID,
   formatAccount,
-  formatDurationSeconds,
+  formatCreditsSummary,
   formatRateLimitName,
+  formatWindowMeta,
+  isUsingCredits,
+  isVisibleUsageRateLimit,
   PARALLEL_AUTH_METHOD_ID,
   PARALLEL_SECTION_ID,
   type ProviderAuthMethod,
   type ProviderCatalogEntry,
-  type ProviderStatus,
   providerStatusLabel,
   remainingPercentFromWindow,
   usedPercentFromWindow,
@@ -46,66 +48,6 @@ export { EXA_SECTION_ID, PARALLEL_SECTION_ID } from "./providersPageUtils";
 type ProvidersPageProps = {
   initialExpandedSectionId?: string | null;
 };
-
-function formatWindowMeta(window: any): string {
-  if (!window || typeof window !== "object") return "No usage data";
-  const windowSize =
-    typeof window.windowSeconds === "number" && Number.isFinite(window.windowSeconds)
-      ? `${formatDurationSeconds(window.windowSeconds)} window`
-      : "window unknown";
-  const reset =
-    typeof window.resetAfterSeconds === "number" && Number.isFinite(window.resetAfterSeconds)
-      ? `resets in ${formatDurationSeconds(window.resetAfterSeconds)}`
-      : typeof window.resetAt === "string" && window.resetAt.trim()
-        ? `resets ${window.resetAt}`
-        : "reset unknown";
-  return `${windowSize} • ${reset}`;
-}
-
-function formatCreditsBalance(balance: unknown): string | null {
-  if (typeof balance !== "string" || !balance.trim()) return null;
-  const parsed = Number(balance);
-  if (!Number.isFinite(parsed)) return balance.trim();
-  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(parsed);
-}
-
-function hasUsableCredits(credits: any): boolean {
-  if (!credits || typeof credits !== "object") return false;
-  if (credits.unlimited === true) return true;
-  if (credits.hasCredits === true) return true;
-  const parsedBalance = Number(credits.balance);
-  return Number.isFinite(parsedBalance) && parsedBalance > 0;
-}
-
-function isUsingCredits(entry: any): boolean {
-  return remainingPercentFromWindow(entry?.primaryWindow) === 0 && hasUsableCredits(entry?.credits);
-}
-
-function formatCreditsSummary(entry: any): string {
-  const credits = entry?.credits;
-  if (!credits || typeof credits !== "object") return "";
-
-  const usingCredits = isUsingCredits(entry);
-  const balance = formatCreditsBalance(credits.balance);
-
-  if (usingCredits) {
-    if (credits.unlimited === true) return "Using credits";
-    if (balance) return `Using credits • ${balance} remaining`;
-    return "Using credits";
-  }
-
-  if (credits.unlimited === true) return "Unlimited credits";
-  if (balance && hasUsableCredits(credits)) return `${balance} credits remaining`;
-  if (credits.hasCredits === true) return "Credits available";
-  return "";
-}
-
-function isVisibleUsageRateLimit(entry: any): boolean {
-  const limitId = typeof entry?.limitId === "string" ? entry.limitId.trim().toLowerCase() : "";
-  const limitName =
-    typeof entry?.limitName === "string" ? entry.limitName.trim().toLowerCase() : "";
-  return limitId !== "code_review" && limitName !== "code review";
-}
 
 function siblingOpenCodeProvider(provider: ProviderName): ProviderName | null {
   if (provider === "opencode-go") return "opencode-zen";

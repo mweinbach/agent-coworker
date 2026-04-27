@@ -9,7 +9,6 @@ const CERT_COMMON_NAME = "Cowork Mobile Pairing";
 function arrayBufferToBase64(buffer: ArrayBuffer): string {
   return Buffer.from(buffer).toString("base64");
 }
-
 function pemEncode(label: string, der: ArrayBuffer): string {
   const base64 = arrayBufferToBase64(der);
   const lines = base64.match(/.{1,64}/g) ?? [];
@@ -85,4 +84,3 @@ export async function createEphemeralQuicCertificate(
     notAfter: notAfter.toISOString(),
   };
 }
-

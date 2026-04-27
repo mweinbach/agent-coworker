@@ -1,7 +1,7 @@
+import { timingSafeEqual } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { timingSafeEqual } from "node:crypto";
 
 import { createPairingNonce } from "../../../shared/coworkTicket";
 
@@ -106,10 +106,14 @@ export async function persistH3PairingStoreState(
 ): Promise<H3PairingStoreState> {
   const normalized = normalizeStoreState(state);
   await fs.mkdir(resolveH3PairingStoreDir(storeRootPath), { recursive: true });
-  await fs.writeFile(resolveH3PairingDevicesFile(storeRootPath), JSON.stringify(normalized, null, 2), {
-    encoding: "utf8",
-    mode: 0o600,
-  });
+  await fs.writeFile(
+    resolveH3PairingDevicesFile(storeRootPath),
+    JSON.stringify(normalized, null, 2),
+    {
+      encoding: "utf8",
+      mode: 0o600,
+    },
+  );
   return normalized;
 }
 

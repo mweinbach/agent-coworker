@@ -62,7 +62,15 @@ function stateFromMobileH3(
     relayServiceUpdatedAt: new Date().toISOString(),
     relayUrl: mobileH3.url,
     sessionId: null,
-    pairingPayload: null,
+    pairingPayload: {
+      v: 1,
+      scheme: "h3",
+      hosts: mobileH3.hostHints,
+      port: mobileH3.port,
+      certSha256: mobileH3.certSha256,
+      spkiSha256: mobileH3.spkiSha256,
+      expiresAt: mobileH3.expiresAt,
+    },
     trustedPhoneDeviceId: null,
     trustedPhoneFingerprint: null,
     directUrl: mobileH3.url,
@@ -77,6 +85,7 @@ function stateFromMobileH3(
 export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelaySnapshot] }> {
   private readonly serverManager: ServerManager;
   private state: MobileRelayBridgeState = buildIdleState();
+  private currentStartOptions: StartOptions | null = null;
 
   constructor(options: MobileRelayBridgeOptions) {
     super();
@@ -100,6 +109,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
   }
 
   async start(options: StartOptions): Promise<MobileRelaySnapshot> {
+    this.currentStartOptions = options;
     this.state = {
       ...buildIdleState(),
       status: "starting",
@@ -131,25 +141,43 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
   }
 
   async stop(): Promise<MobileRelaySnapshot> {
-    if (this.state.workspaceId) {
-      await this.serverManager.stopWorkspaceServer(this.state.workspaceId).catch(() => {
-        // Best effort; workspace server may already be gone.
-      });
-    }
+    this.currentStartOptions = null;
     this.state = buildIdleState();
     this.emitState();
     return this.getSnapshot();
   }
 
   async rotateSession(): Promise<MobileRelaySnapshot> {
-    if (!this.state.workspaceId || !this.state.workspacePath) {
+    const options = this.currentStartOptions;
+    if (!options) {
       return this.getSnapshot();
     }
-    return await this.start({
-      workspaceId: this.state.workspaceId,
-      workspacePath: this.state.workspacePath,
-      yolo: false,
-    });
+    this.state = {
+      ...this.state,
+      status: "starting",
+      relayServiceStatus: "unknown",
+      relayServiceMessage: "Rotating local mobile HTTP/3 endpoint...",
+    };
+    this.emitState();
+
+    try {
+      const listening = await this.serverManager.restartWorkspaceServer({
+        ...options,
+        mobileH3: true,
+      });
+      this.state = stateFromMobileH3(options, listening.mobileH3);
+    } catch (error) {
+      this.state = {
+        ...buildIdleState(),
+        status: "error",
+        workspaceId: options.workspaceId,
+        workspacePath: options.workspacePath,
+        lastError: error instanceof Error ? error.message : String(error),
+      };
+    }
+
+    this.emitState();
+    return this.getSnapshot();
   }
 
   async forgetTrustedPhone(): Promise<MobileRelaySnapshot> {

@@ -16,7 +16,6 @@ import {
   buildJsonRpcErrorResponse,
   buildJsonRpcResultResponse,
   type JsonRpcLiteClientResponse,
-  type JsonRpcLiteId,
   type JsonRpcLiteNotification,
 } from "../jsonrpc/protocol";
 import { createJsonRpcRequestRouter, type JsonRpcRouteContext } from "../jsonrpc/routes";

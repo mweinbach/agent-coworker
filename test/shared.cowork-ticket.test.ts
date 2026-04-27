@@ -3,10 +3,10 @@ import { describe, expect, test } from "bun:test";
 import {
   base32Decode,
   base32Encode,
+  type CoworkPairingTicket,
   createPairingNonce,
   decodeCoworkPairingTicket,
   encodeCoworkPairingTicket,
-  type CoworkPairingTicket,
 } from "../src/shared/coworkTicket";
 
 describe("cowork pairing tickets", () => {

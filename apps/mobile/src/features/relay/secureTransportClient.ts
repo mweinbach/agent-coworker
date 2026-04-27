@@ -1,4 +1,3 @@
-import * as SecureStore from "expo-secure-store";
 import type { PairingQrPayload } from "../pairing/pairingTypes";
 import type {
   RelayConnectionStatus,
@@ -9,6 +8,15 @@ import type {
 
 const TRUSTED_DESKTOPS_KEY = "cowork.h3.trustedDesktops.v1";
 const ACTIVE_SESSION_KEY = "cowork.h3.activeSession.v1";
+
+type SecureStoreModule = {
+  getItemAsync(key: string): Promise<string | null>;
+  setItemAsync(key: string, value: string): Promise<void>;
+  deleteItemAsync(key: string): Promise<void>;
+};
+
+let secureStorePromise: Promise<SecureStoreModule> | null = null;
+let secureStoreOverride: SecureStoreModule | null = null;
 
 type TrustedDesktopRecord = RelayTrustedDesktop & {
   sessionToken: string;
@@ -39,6 +47,8 @@ export class SecureTransportClient {
   private lastError: string | null = null;
   private plaintextListeners = new Set<(text: string) => void>();
   private stateListeners = new Set<(snapshot: SecureTransportSnapshot) => void>();
+  private secureErrorListeners = new Set<(message: string) => void>();
+  private socketClosedListeners = new Set<(reason: string | null) => void>();
   private eventAbortController: AbortController | null = null;
 
   async listTrustedDesktops(): Promise<RelayTrustedDesktop[]> {
@@ -60,23 +70,16 @@ export class SecureTransportClient {
     this.lastError = null;
     this.emitState("pairing");
 
-    const endpointUrl = buildEndpointUrl(payload);
+    const endpointUrls = buildEndpointUrls(payload);
     const deviceId = `cowork-mobile-${randomBase64Url(12)}`;
     const identityPub = randomBase64Url(32);
-    const response = await fetch(`${endpointUrl}/pair`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        ticket: payload.rawTicket,
-        nonce: payload.nonce,
-        deviceId,
-        identityPub,
-        displayName: "Cowork Mobile",
-      }),
+    const { endpointUrl, response } = await pairWithAnyEndpoint(endpointUrls, {
+      ticket: payload.rawTicket,
+      nonce: payload.nonce,
+      deviceId,
+      identityPub,
+      displayName: "Cowork Mobile",
     });
-    if (!response.ok) {
-      throw new Error(`Pairing failed with HTTP ${response.status}.`);
-    }
     const body = (await response.json()) as {
       sessionToken?: string;
       trustedDevice?: { fingerprint?: string };
@@ -175,10 +178,22 @@ export class SecureTransportClient {
     const stateListener = (snapshot: SecureTransportSnapshot) => events.onStateChanged?.(snapshot);
     this.plaintextListeners.add(plaintextListener);
     this.stateListeners.add(stateListener);
+    if (events.onSecureError) {
+      this.secureErrorListeners.add(events.onSecureError);
+    }
+    if (events.onSocketClosed) {
+      this.socketClosedListeners.add(events.onSocketClosed);
+    }
 
     return () => {
       this.plaintextListeners.delete(plaintextListener);
       this.stateListeners.delete(stateListener);
+      if (events.onSecureError) {
+        this.secureErrorListeners.delete(events.onSecureError);
+      }
+      if (events.onSocketClosed) {
+        this.socketClosedListeners.delete(events.onSocketClosed);
+      }
     };
   }
 
@@ -204,7 +219,20 @@ export class SecureTransportClient {
     return snapshot;
   }
 
+  private emitSecureError(message: string): void {
+    for (const listener of this.secureErrorListeners) {
+      listener(message);
+    }
+  }
+
+  private emitSocketClosed(reason: string | null): void {
+    for (const listener of this.socketClosedListeners) {
+      listener(reason);
+    }
+  }
+
   private async loadTrustedState(): Promise<void> {
+    const SecureStore = await loadSecureStore();
     const [trustedRaw, activeRaw] = await Promise.all([
       SecureStore.getItemAsync(TRUSTED_DESKTOPS_KEY),
       SecureStore.getItemAsync(ACTIVE_SESSION_KEY),
@@ -214,6 +242,7 @@ export class SecureTransportClient {
   }
 
   private async persistTrustedState(): Promise<void> {
+    const SecureStore = await loadSecureStore();
     await Promise.all([
       SecureStore.setItemAsync(TRUSTED_DESKTOPS_KEY, JSON.stringify(this.trustedDesktops)),
       this.activeSession
@@ -238,8 +267,26 @@ export class SecureTransportClient {
           }
         },
         onError: (message) => {
+          if (this.eventAbortController !== controller) {
+            return;
+          }
+          this.eventAbortController = null;
+          this.activeSession = null;
           this.lastError = message;
+          this.emitSecureError(message);
+          void this.persistTrustedState();
           this.emitState("error");
+        },
+        onClose: (reason) => {
+          if (this.eventAbortController !== controller) {
+            return;
+          }
+          this.eventAbortController = null;
+          this.activeSession = null;
+          this.lastError = reason;
+          this.emitSocketClosed(reason);
+          void this.persistTrustedState();
+          this.emitState("idle");
         },
       },
     );
@@ -247,6 +294,21 @@ export class SecureTransportClient {
 }
 
 export const defaultSecureTransportClient = new SecureTransportClient();
+
+async function loadSecureStore(): Promise<SecureStoreModule> {
+  if (secureStoreOverride) {
+    return secureStoreOverride;
+  }
+  secureStorePromise ??= import("expo-secure-store") as Promise<SecureStoreModule>;
+  return await secureStorePromise;
+}
+
+export const __internal = {
+  setSecureStoreForTesting(store: SecureStoreModule | null): void {
+    secureStoreOverride = store;
+    secureStorePromise = null;
+  },
+};
 
 function toPublicTrustedDesktop(entry: TrustedDesktopRecord): RelayTrustedDesktop {
   return {
@@ -259,12 +321,41 @@ function toPublicTrustedDesktop(entry: TrustedDesktopRecord): RelayTrustedDeskto
   };
 }
 
-function buildEndpointUrl(payload: PairingQrPayload): string {
-  const host = payload.hosts[0];
-  if (!host) {
+function buildEndpointUrls(payload: PairingQrPayload): string[] {
+  if (payload.hosts.length === 0) {
     throw new Error("Pairing ticket does not include a host.");
   }
-  return `https://${host}:${payload.port}`;
+  return payload.hosts.map((host) => `https://${host}:${payload.port}`);
+}
+
+async function pairWithAnyEndpoint(
+  endpointUrls: string[],
+  body: {
+    ticket: string;
+    nonce: string;
+    deviceId: string;
+    identityPub: string;
+    displayName: string;
+  },
+): Promise<{ endpointUrl: string; response: Response }> {
+  let lastError: unknown = null;
+  for (const endpointUrl of endpointUrls) {
+    try {
+      const response = await fetch(`${endpointUrl}/pair`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (response.ok) {
+        return { endpointUrl, response };
+      }
+      lastError = new Error(`HTTP ${response.status}`);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  const reason = lastError instanceof Error ? lastError.message : String(lastError ?? "unknown");
+  throw new Error(`Pairing failed against all advertised hosts: ${reason}.`);
 }
 
 function randomBase64Url(byteLength: number): string {
@@ -284,6 +375,7 @@ async function readSseStream(
     signal: AbortSignal;
     onMessage(text: string): void;
     onError(message: string): void;
+    onClose(reason: string | null): void;
   },
 ): Promise<void> {
   try {
@@ -299,7 +391,10 @@ async function readSseStream(
     let buffer = "";
     while (!opts.signal.aborted) {
       const { value, done } = await reader.read();
-      if (done) break;
+      if (done) {
+        opts.onClose("Event stream closed.");
+        break;
+      }
       buffer += decoder.decode(value, { stream: true });
       let index = buffer.indexOf("\n\n");
       while (index >= 0) {

@@ -193,6 +193,8 @@ async function main() {
               ticket: mobileServer.ticketUrl,
               certSha256: mobileServer.certSha256,
               spkiSha256: mobileServer.spkiSha256,
+              identityPub: mobileServer.identityPub,
+              nonce: mobileServer.nonce,
               expiresAt: mobileServer.expiresAt,
             }
           : null,

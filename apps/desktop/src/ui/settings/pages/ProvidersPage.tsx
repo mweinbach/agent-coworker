@@ -28,18 +28,25 @@ import {
   describeLmStudioCard,
   EXA_AUTH_METHOD_ID,
   EXA_SECTION_ID,
+  fallbackExaAuthMethod,
+  fallbackParallelAuthMethod,
   formatAccount,
   formatCreditsSummary,
   formatRateLimitName,
   formatWindowMeta,
+  initialTabForSection,
   isUsingCredits,
   isVisibleUsageRateLimit,
+  methodStateKey,
   PARALLEL_AUTH_METHOD_ID,
   PARALLEL_SECTION_ID,
   type ProviderAuthMethod,
   type ProviderCatalogEntry,
+  providerSectionId,
   providerStatusLabel,
   remainingPercentFromWindow,
+  siblingOpenCodeProvider,
+  toolProviderConnectionSummary,
   usedPercentFromWindow,
 } from "./providersPageUtils";
 
@@ -48,46 +55,6 @@ export { EXA_SECTION_ID, PARALLEL_SECTION_ID } from "./providersPageUtils";
 type ProvidersPageProps = {
   initialExpandedSectionId?: string | null;
 };
-
-function siblingOpenCodeProvider(provider: ProviderName): ProviderName | null {
-  if (provider === "opencode-go") return "opencode-zen";
-  if (provider === "opencode-zen") return "opencode-go";
-  return null;
-}
-
-function fallbackExaAuthMethod(): ProviderAuthMethod {
-  return { id: EXA_AUTH_METHOD_ID, type: "api", label: "Exa API key (web search)" };
-}
-function fallbackParallelAuthMethod(): ProviderAuthMethod {
-  return { id: PARALLEL_AUTH_METHOD_ID, type: "api", label: "Parallel API key (web search)" };
-}
-function methodStateKey(provider: ProviderName, methodId: string): string {
-  return `${provider}:${methodId}`;
-}
-
-function providerSectionId(provider: ProviderName): string {
-  return `provider:${provider}`;
-}
-function toolProviderConnectionSummary(label: string, hasSavedApiKey: boolean): string {
-  return hasSavedApiKey
-    ? "Web search API key saved"
-    : `Add a key to use ${label} for local web search`;
-}
-
-function initialTabForSection(
-  initialExpandedSectionId: string | null,
-  toolProviders: ProviderName[],
-): "models" | "tools" {
-  if (
-    initialExpandedSectionId === EXA_SECTION_ID ||
-    initialExpandedSectionId === PARALLEL_SECTION_ID
-  )
-    return "tools";
-  if (!initialExpandedSectionId?.startsWith("provider:")) return "models";
-
-  const requestedProvider = initialExpandedSectionId.slice("provider:".length);
-  return toolProviders.some((provider) => provider === requestedProvider) ? "tools" : "models";
-}
 
 export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPageProps = {}) {
   const workspacesFromStore = useAppStore((s) => s.workspaces);

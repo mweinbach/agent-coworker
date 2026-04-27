@@ -6,6 +6,7 @@ import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { CallToolRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { buildCodexAppsMcpServer } from "../server/connectors/openaiNativeConnectors";
 import { CODEX_APPS_MCP_SERVER_NAME } from "../shared/openaiNativeConnectors";
@@ -230,12 +231,12 @@ async function createRuntimeMcpClient(opts: {
           ...(entry.connector_name ? { connectorName: entry.connector_name } : {}),
           execute: async (input: unknown) => {
             const meta = normalizeToolMeta(entry._meta);
-            const request: Parameters<McpClient["callTool"]>[0] = {
+            const params: CallToolRequest["params"] = {
               name,
               arguments: normalizeToolArguments(input),
               ...(meta ? { _meta: meta } : {}),
             };
-            return await client.callTool(request);
+            return await client.callTool(params);
           },
         };
       }

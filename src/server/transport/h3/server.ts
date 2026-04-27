@@ -46,6 +46,8 @@ export type H3MobileServerState = {
   ticketUrl: string;
   certSha256: string;
   spkiSha256: string;
+  identityPub: string;
+  nonce: string;
   expiresAt: number;
 };
 
@@ -329,6 +331,8 @@ export async function startH3MobileServer(
     ticketUrl: encodeCoworkPairingTicket(ticket),
     certSha256: certificate.certSha256,
     spkiSha256: certificate.spkiSha256,
+    identityPub: certificate.identityPub,
+    nonce: pairing.nonce,
     expiresAt: pairing.expiresAt,
     async stop() {
       await server.stop(true);

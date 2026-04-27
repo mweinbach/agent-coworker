@@ -12,41 +12,17 @@ export type ProviderStatus = Extract<
   SessionEvent,
   { type: "provider_status" }
 >["providers"][number];
+type ProviderUsage = NonNullable<ProviderStatus["usage"]>;
+type ProviderRateLimitEntry = ProviderUsage["rateLimits"][number];
+type ProviderRateLimitWindow = NonNullable<ProviderRateLimitEntry["primaryWindow"]>;
+type ProviderCredits = NonNullable<ProviderRateLimitEntry["credits"]>;
 
 export const EXA_AUTH_METHOD_ID = "exa_api_key";
 export const PARALLEL_AUTH_METHOD_ID = "parallel_api_key";
 export const EXA_SECTION_ID = "provider:exa-search";
 export const PARALLEL_SECTION_ID = "provider:parallel-search";
 
-type ProviderAccount = {
-  name?: unknown;
-  email?: unknown;
-};
-
-export type ProviderUsageWindow = {
-  usedPercent?: unknown;
-  windowSeconds?: unknown;
-  resetAfterSeconds?: unknown;
-  resetAt?: unknown;
-};
-
-type ProviderCredits = {
-  unlimited?: unknown;
-  hasCredits?: unknown;
-  balance?: unknown;
-};
-
-export type ProviderRateLimitEntry = {
-  limitId?: unknown;
-  limitName?: unknown;
-  limitReached?: unknown;
-  allowed?: unknown;
-  primaryWindow?: ProviderUsageWindow | null;
-  secondaryWindow?: ProviderUsageWindow | null;
-  credits?: ProviderCredits | null;
-};
-
-export function formatAccount(account: ProviderAccount | null | undefined): string {
+export function formatAccount(account: ProviderStatus["account"]): string {
   const name = typeof account?.name === "string" ? account.name.trim() : "";
   const email = typeof account?.email === "string" ? account.email.trim() : "";
   if (name && email) return `${name} <${email}>`;
@@ -58,7 +34,7 @@ export function providerStatusLabel(status: ProviderStatus | null | undefined): 
   if (
     Array.isArray(status.usage?.rateLimits) &&
     status.usage.rateLimits.some(
-      (entry: ProviderRateLimitEntry) =>
+      (entry) =>
         (entry?.limitReached === true || entry?.allowed === false) && !isUsingCredits(entry),
     )
   ) {
@@ -179,7 +155,7 @@ export function clampPercent(value: number): number {
 }
 
 export function usedPercentFromWindow(
-  window: ProviderUsageWindow | null | undefined,
+  window: ProviderRateLimitWindow | null | undefined,
 ): number | null {
   if (!window || typeof window !== "object") return null;
   if (typeof window.usedPercent !== "number" || !Number.isFinite(window.usedPercent)) return null;
@@ -187,14 +163,14 @@ export function usedPercentFromWindow(
 }
 
 export function remainingPercentFromWindow(
-  window: ProviderUsageWindow | null | undefined,
+  window: ProviderRateLimitWindow | null | undefined,
 ): number | null {
   const usedPercent = usedPercentFromWindow(window);
   if (usedPercent === null) return null;
   return clampPercent(100 - usedPercent);
 }
 
-export function formatWindowMeta(window: ProviderUsageWindow | null | undefined): string {
+export function formatWindowMeta(window: ProviderRateLimitWindow | null | undefined): string {
   if (!window || typeof window !== "object") return "No usage data";
   const windowSize =
     typeof window.windowSeconds === "number" && Number.isFinite(window.windowSeconds)

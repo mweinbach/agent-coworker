@@ -69,6 +69,8 @@ function stateFromMobileH3(
       port: mobileH3.port,
       certSha256: mobileH3.certSha256,
       spkiSha256: mobileH3.spkiSha256,
+      identityPub: mobileH3.identityPub,
+      nonce: mobileH3.nonce,
       expiresAt: mobileH3.expiresAt,
     },
     trustedPhoneDeviceId: null,

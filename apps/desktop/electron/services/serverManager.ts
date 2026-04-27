@@ -47,6 +47,8 @@ type ServerListening = {
     ticket: string;
     certSha256: string;
     spkiSha256: string;
+    identityPub: string;
+    nonce: string;
     expiresAt: number;
   } | null;
 };
@@ -73,6 +75,8 @@ const serverListeningSchema = z
         ticket: z.string().min(1),
         certSha256: z.string().min(1),
         spkiSha256: z.string().min(1),
+        identityPub: z.string().min(1),
+        nonce: z.string().min(1),
         expiresAt: z.number(),
       })
       .nullable()

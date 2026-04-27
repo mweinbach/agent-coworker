@@ -15,6 +15,7 @@ import {
 type DispatchJsonRpcMessageArgs = {
   ws: StartServerSocket;
   message: JsonRpcLiteRequest | JsonRpcLiteNotification | JsonRpcLiteClientResponse;
+  transportType?: "websocket" | "h3";
   onRequest?: (message: JsonRpcLiteRequest) => void;
   onNotification?: (message: JsonRpcLiteNotification) => void;
   onResponse?: (message: JsonRpcLiteClientResponse) => void;
@@ -44,6 +45,7 @@ function isJsonRpcResponse(
 export function dispatchJsonRpcMessage({
   ws,
   message,
+  transportType = "websocket",
   onRequest,
   onNotification,
   onResponse,
@@ -113,7 +115,7 @@ export function dispatchJsonRpcMessage({
           experimentalApi: true,
         },
         transport: {
-          type: "websocket",
+          type: transportType,
           protocolMode: ws.data.protocolMode ?? "jsonrpc",
         },
       }),

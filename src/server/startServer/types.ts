@@ -22,16 +22,23 @@ export type JsonRpcConnectionState = {
   >;
 };
 
-export type StartServerSocketData = {
+export type ServerTransportData = {
   session?: AgentSession;
   resumeSessionId?: string;
-  protocolMode?: "jsonrpc";
+  protocolMode?: "jsonrpc" | "h3";
   selectedSubprotocol?: string | null;
   connectionId?: string;
   rpc?: JsonRpcConnectionState;
 };
 
+export type StartServerSocketData = ServerTransportData;
+
 export type StartServerSocket = Bun.ServerWebSocket<StartServerSocketData>;
+
+export type ServerTransportConnection = {
+  data: ServerTransportData;
+  send(payload: string): number;
+};
 
 export type SessionEventSink = (evt: import("../protocol").SessionEvent) => void;
 

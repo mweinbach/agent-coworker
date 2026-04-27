@@ -22,6 +22,7 @@ export function evictLeastCriticalSend(queue: string[]): void {
 
 export class SocketSendQueue {
   private readonly pendingSends = new Map<string, string[]>();
+  private readonly externalSinks = new Map<string, (serialized: string) => boolean>();
 
   constructor(private readonly maxQueuedSends = DEFAULT_SEND_QUEUE_MAX) {}
 
@@ -33,10 +34,21 @@ export class SocketSendQueue {
       return;
     }
 
+    const connectionId = ws.data.connectionId;
+    const externalSink = connectionId ? this.externalSinks.get(connectionId) : undefined;
+    if (externalSink) {
+      try {
+        if (externalSink(serialized)) {
+          return;
+        }
+      } catch {
+        return;
+      }
+    }
+
     try {
       const status = ws.send(serialized);
       if (status === 0 || status === -1) {
-        const connectionId = ws.data.connectionId;
         if (!connectionId) return;
         const queue = this.pendingSends.get(connectionId) ?? [];
         if (queue.length >= this.maxQueuedSends) {
@@ -74,9 +86,18 @@ export class SocketSendQueue {
   deleteConnection(connectionId: string | undefined): void {
     if (!connectionId) return;
     this.pendingSends.delete(connectionId);
+    this.externalSinks.delete(connectionId);
   }
 
   shouldSendNotification(ws: StartServerSocket, method: string): boolean {
     return !ws.data.rpc?.capabilities.optOutNotificationMethods.includes(method);
+  }
+
+  setExternalSink(connectionId: string, sink: ((serialized: string) => boolean) | null): void {
+    if (sink) {
+      this.externalSinks.set(connectionId, sink);
+      return;
+    }
+    this.externalSinks.delete(connectionId);
   }
 }

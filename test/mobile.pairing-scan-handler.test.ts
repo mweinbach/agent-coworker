@@ -1,17 +1,19 @@
 import { describe, expect, mock, test } from "bun:test";
 import type { PairingQrPayload } from "../apps/mobile/src/features/pairing/pairingTypes";
 import { createPairingScanHandler } from "../apps/mobile/src/features/pairing/scanHandler";
-import { RELAY_PAIRING_QR_VERSION } from "../src/shared/mobileRelaySecurity";
 
 function buildPayload(): PairingQrPayload {
   return {
-    v: RELAY_PAIRING_QR_VERSION,
-    relay: "wss://relay.example.test/relay",
-    sessionId: "session-1",
-    macDeviceId: "mac-1",
-    macIdentityPublicKey: "ZmFrZS1rZXk=",
-    pairingSecret: "pairing-secret-1",
+    v: 1,
+    scheme: "h3",
+    hosts: ["192.168.1.10"],
+    port: 9443,
+    certSha256: "a".repeat(64),
+    spkiSha256: "b".repeat(43),
+    identityPub: "identity-public-key",
+    nonce: "pairing-nonce",
     expiresAt: Date.now() + 60_000,
+    rawTicket: "cowork-pair://ticket",
   };
 }
 

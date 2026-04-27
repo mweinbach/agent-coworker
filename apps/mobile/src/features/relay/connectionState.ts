@@ -17,7 +17,7 @@ export function describeTransportMode(mode: RelayTransportMode): string {
     case "unsupported":
       return "Unsupported";
     default:
-      return "Secure relay";
+      return "Direct HTTP/3";
   }
 }
 

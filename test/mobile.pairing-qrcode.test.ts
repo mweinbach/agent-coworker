@@ -3,25 +3,23 @@ import {
   parsePairingQrPayload,
   validatePairingPayload,
 } from "../apps/mobile/src/features/pairing/qrValidation";
-import { RELAY_PAIRING_QR_VERSION } from "../src/shared/mobileRelaySecurity";
+import { encodeCoworkPairingTicket } from "../src/shared/coworkTicket";
 
 function buildPayload(
   overrides?: Partial<{
     expiresAt: number;
-    relay: string;
-    sessionId: string;
-    macDeviceId: string;
-    macIdentityPublicKey: string;
-    pairingSecret: string;
+    hosts: string[];
   }>,
 ) {
   return {
-    v: RELAY_PAIRING_QR_VERSION,
-    relay: overrides?.relay ?? "wss://relay.example.test/relay",
-    sessionId: overrides?.sessionId ?? "session-1",
-    macDeviceId: overrides?.macDeviceId ?? "mac-1",
-    macIdentityPublicKey: overrides?.macIdentityPublicKey ?? "ZmFrZS1rZXk=",
-    pairingSecret: overrides?.pairingSecret ?? "pairing-secret-1",
+    v: 1 as const,
+    scheme: "h3" as const,
+    hosts: overrides?.hosts ?? ["127.0.0.1"],
+    port: 12345,
+    certSha256: "a".repeat(64),
+    spkiSha256: "b".repeat(43),
+    identityPub: "identity-pub",
+    nonce: "nonce-value-123456789012",
     expiresAt: overrides?.expiresAt ?? Date.now() + 60_000,
   };
 }
@@ -29,12 +27,15 @@ function buildPayload(
 describe("mobile pairing QR validation", () => {
   test("parses a valid pairing payload", () => {
     const payload = buildPayload();
-    expect(parsePairingQrPayload(JSON.stringify(payload))).toEqual(payload);
+    expect(parsePairingQrPayload(encodeCoworkPairingTicket(payload))).toEqual({
+      ...payload,
+      ticket: encodeCoworkPairingTicket(payload),
+    });
   });
 
   test("rejects expired pairing payloads", () => {
     const parsed = validatePairingPayload(
-      JSON.stringify(
+      encodeCoworkPairingTicket(
         buildPayload({
           expiresAt: Date.now() - 1_000,
         }),
@@ -47,21 +48,17 @@ describe("mobile pairing QR validation", () => {
   });
 
   test("rejects malformed payloads", () => {
-    const parsed = validatePairingPayload(
-      JSON.stringify({
-        v: RELAY_PAIRING_QR_VERSION,
-        relay: "",
-      }),
-    );
+    const parsed = validatePairingPayload("not-a-ticket");
     expect(parsed.success).toBe(false);
   });
 
   test("rejects unsupported pairing payload versions", () => {
+    const invalid = {
+      ...buildPayload(),
+      v: 2,
+    };
     const parsed = validatePairingPayload(
-      JSON.stringify({
-        ...buildPayload(),
-        v: RELAY_PAIRING_QR_VERSION - 1,
-      }),
+      `cowork-pair://${Buffer.from(JSON.stringify(invalid)).toString("base64url")}`,
     );
     expect(parsed.success).toBe(false);
   });

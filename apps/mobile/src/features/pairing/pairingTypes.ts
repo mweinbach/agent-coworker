@@ -1,11 +1,14 @@
 export type PairingQrPayload = {
-  v: number;
-  relay: string;
-  sessionId: string;
-  macDeviceId: string;
-  macIdentityPublicKey: string;
-  pairingSecret: string;
+  v: 1;
+  scheme: "h3";
+  hosts: string[];
+  port: number;
+  certSha256: string;
+  spkiSha256: string;
+  identityPub: string;
+  nonce: string;
   expiresAt: number;
+  rawTicket: string;
 };
 
 export type TrustedDesktopSummary = {

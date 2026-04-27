@@ -185,7 +185,7 @@ export default function PairingScanScreen() {
                 <SFSymbol name="lock.shield.fill" size={22} color={theme.primary} />
               </View>
               <Text selectable style={{ color: theme.textSecondary, fontSize: 15, flex: 1 }}>
-                Setting up secure relay session...
+                Connecting directly to your desktop...
               </Text>
             </View>
           </SectionCard>
@@ -196,7 +196,7 @@ export default function PairingScanScreen() {
         <Animated.View entering={FadeInUp.delay(400).duration(400)}>
           <SectionCard
             title="Last scanned payload"
-            description="Debug-only QR payload preview for relay troubleshooting."
+            description="Debug-only QR payload preview for direct pairing troubleshooting."
           >
             <Text
               selectable

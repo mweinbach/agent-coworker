@@ -20,6 +20,21 @@ import {
   stopMobileRelay,
 } from "../../../lib/desktopCommands";
 
+export function describeRelayServiceStatus(
+  status: Awaited<ReturnType<typeof getMobileRelayState>>["relayServiceStatus"],
+): string {
+  switch (status) {
+    case "running":
+      return "running";
+    case "not-running":
+      return "not running";
+    case "unavailable":
+      return "unavailable";
+    default:
+      return "unknown";
+  }
+}
+
 export function describeRelaySource(
   source: Awaited<ReturnType<typeof getMobileRelayState>>["relaySource"],
 ): string {
@@ -32,23 +47,6 @@ export function describeRelaySource(
       return "Custom override";
     default:
       return "Unavailable";
-  }
-}
-
-export function describeRelayServiceStatus(
-  status: Awaited<ReturnType<typeof getMobileRelayState>>["relayServiceStatus"],
-): string {
-  switch (status) {
-    case "running":
-      return "running";
-    case "not-running":
-      return "not running";
-    case "disconnected":
-      return "disconnected";
-    case "unavailable":
-      return "unavailable";
-    default:
-      return "unknown";
   }
 }
 
@@ -89,8 +87,8 @@ export function RemoteAccessPage() {
   }, []);
 
   const qrValue = useMemo(
-    () => (state?.pairingPayload ? JSON.stringify(state.pairingPayload) : null),
-    [state?.pairingPayload],
+    () => state?.ticketUrl ?? null,
+    [state?.ticketUrl],
   );
 
   async function runAction(action: string, runner: () => Promise<unknown>) {
@@ -159,14 +157,17 @@ export function RemoteAccessPage() {
             <div className="mt-1 text-muted-foreground">
               {loading ? "Loading…" : (state?.status ?? "idle")}
             </div>
-            <div className="mt-2 text-xs text-muted-foreground">
-              Relay source: {describeRelaySource(state?.relaySource ?? "unavailable")}
-            </div>
+              <div className="mt-2 text-xs text-muted-foreground">Transport: direct HTTP/3</div>
             <div className="mt-1 text-xs text-muted-foreground">
-              Relay service: {describeRelayServiceStatus(state?.relayServiceStatus ?? "unknown")}
+                Relay service: {describeRelayServiceStatus(state?.relayServiceStatus ?? "unknown")}
             </div>
-            {state?.relayUrl ? (
-              <div className="mt-1 text-xs text-muted-foreground">Relay URL: {state.relayUrl}</div>
+            {state?.directUrl ? (
+              <div className="mt-1 text-xs text-muted-foreground">Endpoint: {state.directUrl}</div>
+            ) : null}
+            {state?.hostHints?.length ? (
+              <div className="mt-1 text-xs text-muted-foreground">
+                Reachable hosts: {state.hostHints.join(", ")}
+              </div>
             ) : null}
             {state?.relayServiceUpdatedAt ? (
               <div className="mt-1 text-xs text-muted-foreground">
@@ -191,7 +192,7 @@ export function RemoteAccessPage() {
           <CardHeader>
             <CardTitle>Pairing QR</CardTitle>
             <CardDescription>
-              Scan this QR from Cowork Mobile to create an encrypted relay session.
+              Scan this QR from Cowork Mobile to connect directly over HTTP/3. No relay is used.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -199,7 +200,7 @@ export function RemoteAccessPage() {
               <div className="flex flex-col items-center gap-4 rounded-lg border border-dashed border-border/60 bg-white p-6">
                 <QRCodeSVG value={qrValue} size={220} includeMargin />
                 <div className="space-y-1 text-center text-xs text-muted-foreground">
-                  <div>Session: {state?.pairingPayload?.sessionId}</div>
+                  <div>Certificate: {state?.certSha256?.slice(0, 16) ?? "—"}…</div>
                   <div>
                     Expires:{" "}
                     {state?.pairingPayload?.expiresAt
@@ -227,7 +228,7 @@ export function RemoteAccessPage() {
                 disabled={!state?.pairingPayload || busyAction !== null}
               >
                 <RefreshCwIcon data-icon />
-                Rotate QR / session
+                Rotate QR / certificate
               </Button>
             </div>
           </CardContent>
@@ -237,7 +238,7 @@ export function RemoteAccessPage() {
           <CardHeader>
             <CardTitle>Trusted phone</CardTitle>
             <CardDescription>
-              Cowork Desktop keeps trust state and relay secrets in `~/.cowork/mobile-relay`,
+              Cowork Desktop keeps direct pairing trust state in `~/.cowork/mobile-pairing`,
               outside the renderer.
             </CardDescription>
           </CardHeader>
@@ -246,7 +247,7 @@ export function RemoteAccessPage() {
               <div className="space-y-3 rounded-lg border border-border/60 bg-background/40 p-4">
                 <div className="flex items-center gap-2 text-sm font-medium text-foreground">
                   <SmartphoneIcon className="size-4" />
-                  Paired phone
+Paired device
                 </div>
                 <div className="space-y-1 text-xs text-muted-foreground">
                   <div>Device ID: {state.trustedPhoneDeviceId}</div>
@@ -263,12 +264,12 @@ export function RemoteAccessPage() {
                   disabled={busyAction !== null}
                 >
                   <Trash2Icon data-icon />
-                  Forget paired phone
+Forget paired device
                 </Button>
               </div>
             ) : (
               <div className="rounded-lg border border-dashed border-border/60 bg-background/35 p-4 text-sm text-muted-foreground">
-                No trusted phone yet. Scan the QR to pair the first device.
+                No trusted device yet. Scan the QR to pair the first device.
               </div>
             )}
           </CardContent>

@@ -1,5 +1,6 @@
 import { createAgentServerRuntime, type StartAgentServerOptions } from "./runtime/ServerRuntime";
 import type { StartServerSocketData } from "./startServer/types";
+import { startH3MobileServer } from "./transport/h3/server";
 import { handleWebDesktopRoute } from "./webDesktopRoutes";
 import { WebDesktopService } from "./webDesktopService";
 import { resolveWsProtocol, splitWebSocketSubprotocolHeader } from "./wsProtocol/negotiation";
@@ -23,6 +24,7 @@ function pickLoopbackOrigin(req: Request): string | null {
 
 export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
   server: ReturnType<typeof Bun.serve>;
+  mobileServer?: Awaited<ReturnType<typeof startH3MobileServer>>;
   config: ReturnType<typeof createAgentServerRuntime> extends Promise<infer Runtime>
     ? Runtime extends { config: infer Config }
       ? Config
@@ -146,6 +148,17 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
   };
 
   const server = serveWithPortFallback(requestedPort);
+  const mobileServer =
+    opts.mobileH3 || runtime.env.COWORK_H3_MOBILE_PAIRING === "1"
+      ? await startH3MobileServer({
+          runtime,
+          hostname: opts.mobileH3?.hostname ?? "0.0.0.0",
+          port: opts.mobileH3?.port,
+          hostHints: opts.mobileH3?.hostHints,
+          storeRootPath: opts.homedir,
+          enableH3: runtime.env.COWORK_H3_MOBILE_DISABLE_H3 !== "1",
+        })
+      : undefined;
   const originalStop = server.stop.bind(server) as (
     closeActiveConnections?: boolean,
   ) => Promise<void>;
@@ -159,6 +172,9 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
     stopped = true;
     clearInterval(evictionTimer);
     await runtime.stop();
+    await mobileServer?.stop().catch(() => {
+      // ignore
+    });
     try {
       await webDesktopService?.stopAll();
     } catch {
@@ -168,5 +184,5 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
   };
 
   const url = `ws://${hostname}:${server.port}/ws`;
-  return { server: stoppableServer, config: runtime.config, system: runtime.system, url };
+  return { server: stoppableServer, mobileServer, config: runtime.config, system: runtime.system, url };
 }

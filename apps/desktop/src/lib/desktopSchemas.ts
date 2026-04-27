@@ -499,7 +499,7 @@ export const systemAppearanceSchema: z.ZodType<SystemAppearance> = z.object({
   inForcedColorsMode: z.boolean(),
 });
 
-const mobileRelayPairingPayloadSchema = z.object({
+const legacyMobileRelayPairingPayloadSchema = z.object({
   v: z.number().int().nonnegative(),
   relay: nonEmptyStringSchema,
   sessionId: nonEmptyStringSchema,
@@ -508,6 +508,23 @@ const mobileRelayPairingPayloadSchema = z.object({
   pairingSecret: nonEmptyStringSchema,
   expiresAt: z.number().int().nonnegative(),
 });
+
+const h3MobileRelayPairingPayloadSchema = z.object({
+  v: z.literal(1),
+  scheme: z.literal("h3"),
+  hosts: z.array(nonEmptyStringSchema).min(1),
+  port: z.number().int().min(1).max(65535),
+  certSha256: nonEmptyStringSchema,
+  spkiSha256: nonEmptyStringSchema,
+  identityPub: z.string(),
+  nonce: z.string(),
+  expiresAt: z.number().int().nonnegative(),
+});
+
+const mobileRelayPairingPayloadSchema = z.union([
+  legacyMobileRelayPairingPayloadSchema,
+  h3MobileRelayPairingPayloadSchema,
+]);
 
 export const mobileRelayStartInputSchema = z.object({
   workspaceId: safeIdSchema,
@@ -519,15 +536,24 @@ export const mobileRelayBridgeStateSchema = z.object({
   status: z.enum(["idle", "starting", "pairing", "connected", "reconnecting", "error"]),
   workspaceId: z.string().nullable(),
   workspacePath: z.string().nullable(),
-  relaySource: z.enum(["remodex", "managed", "override", "unavailable"]),
+  relaySource: z.enum(["direct", "remodex", "managed", "override", "unavailable"]),
   relaySourceMessage: z.string().nullable(),
   relayServiceStatus: z.enum(["unknown", "running", "not-running", "disconnected", "unavailable"]),
   relayServiceMessage: z.string().nullable(),
   relayServiceUpdatedAt: z.string().nullable(),
   relayUrl: z.string().nullable(),
   sessionId: z.string().nullable(),
+  transport: z.enum(["h3", "relay", "unavailable"]).optional(),
+  transportMessage: z.string().nullable().optional(),
+  endpointUrl: z.string().nullable().optional(),
+  pairingTicket: z.string().nullable().optional(),
   pairingPayload: mobileRelayPairingPayloadSchema.nullable(),
   trustedPhoneDeviceId: z.string().nullable(),
   trustedPhoneFingerprint: z.string().nullable(),
+  directUrl: z.string().nullable().optional(),
+  ticketUrl: z.string().nullable().optional(),
+  certSha256: z.string().nullable().optional(),
+  spkiSha256: z.string().nullable().optional(),
+  hostHints: z.array(z.string()).optional(),
   lastError: z.string().nullable(),
 });

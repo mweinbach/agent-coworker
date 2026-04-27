@@ -27,12 +27,18 @@ function parseArgs(argv: string[]): {
   port: number;
   yolo: boolean;
   json: boolean;
+  mobileH3: boolean;
+  mobileH3Host: string;
+  mobileH3Port: number;
 } {
   let dir: string | undefined;
   let host = "127.0.0.1";
   let port = 7337;
   let yolo = false;
   let json = false;
+  let mobileH3 = false;
+  let mobileH3Host = "0.0.0.0";
+  let mobileH3Port = 0;
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -72,10 +78,31 @@ function parseArgs(argv: string[]): {
       json = true;
       continue;
     }
+    if (a === "--mobile-h3") {
+      mobileH3 = true;
+      continue;
+    }
+    if (a === "--mobile-h3-host") {
+      const v = argv[i + 1];
+      if (!v) throw new Error(`Missing value for ${a}`);
+      mobileH3Host = v;
+      i++;
+      continue;
+    }
+    if (a === "--mobile-h3-port") {
+      const v = argv[i + 1];
+      if (!v) throw new Error(`Missing value for ${a}`);
+      mobileH3Port = Number(v);
+      if (!Number.isFinite(mobileH3Port) || mobileH3Port < 0 || mobileH3Port > 65535) {
+        throw new Error(`Invalid mobile H3 port: ${v}`);
+      }
+      i++;
+      continue;
+    }
     throw new Error(`Unknown argument: ${a}`);
   }
 
-  return { dir, host, port, yolo, json };
+  return { dir, host, port, yolo, json, mobileH3, mobileH3Host, mobileH3Port };
 }
 
 function resolveListeningHints(host: string): string[] {
@@ -93,7 +120,9 @@ function resolveListeningHints(host: string): string[] {
 }
 
 async function main() {
-  const { dir, host, port, yolo, json } = parseArgs(process.argv.slice(2));
+  const { dir, host, port, yolo, json, mobileH3, mobileH3Host, mobileH3Port } = parseArgs(
+    process.argv.slice(2),
+  );
 
   const cwd = dir ? await resolveAndValidateDir(dir) : process.cwd();
   if (dir) process.chdir(cwd);
@@ -103,7 +132,7 @@ async function main() {
     import("./startServer"),
   ]);
 
-  const { server, config, url } = await startAgentServer({
+  const { server, mobileServer, config, url } = await startAgentServer({
     cwd,
     hostname: host,
     port,
@@ -111,6 +140,15 @@ async function main() {
     providerOptions: DEFAULT_PROVIDER_OPTIONS,
     yolo,
     preloadSystemPrompt: false,
+    ...(mobileH3
+      ? {
+          mobileH3: {
+            hostname: mobileH3Host,
+            port: mobileH3Port,
+            hostHints: resolveListeningHints(mobileH3Host),
+          },
+        }
+      : {}),
   });
 
   // Graceful shutdown on signals so child processes are cleaned up.
@@ -147,6 +185,17 @@ async function main() {
         hostHints,
         port: server.port,
         cwd: config.workingDirectory,
+        mobileH3: mobileServer
+          ? {
+              url: mobileServer.url,
+              port: mobileServer.port,
+              hostHints: mobileServer.hostHints,
+              ticket: mobileServer.ticketUrl,
+              certSha256: mobileServer.certSha256,
+              spkiSha256: mobileServer.spkiSha256,
+              expiresAt: mobileServer.expiresAt,
+            }
+          : null,
       }),
     );
     return;

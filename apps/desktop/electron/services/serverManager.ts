@@ -24,6 +24,7 @@ const DEBUG_SERVER_STDERR = process.env.COWORK_DESKTOP_DEBUG_SERVER_STDERR === "
 type ServerHandle = {
   child: ServerChildProcess;
   url: string;
+  mobileH3: ServerListening["mobileH3"];
   cleanup: () => void;
 };
 
@@ -39,6 +40,15 @@ type ServerListening = {
   url: string;
   port: number;
   cwd: string;
+  mobileH3?: {
+    url: string;
+    port: number;
+    hostHints: string[];
+    ticket: string;
+    certSha256: string;
+    spkiSha256: string;
+    expiresAt: number;
+  } | null;
 };
 
 const serverListeningSchema = z
@@ -47,6 +57,18 @@ const serverListeningSchema = z
     url: z.string().min(1),
     port: z.number(),
     cwd: z.string().min(1),
+    mobileH3: z
+      .object({
+        url: z.string().min(1),
+        port: z.number(),
+        hostHints: z.array(z.string()),
+        ticket: z.string().min(1),
+        certSha256: z.string().min(1),
+        spkiSha256: z.string().min(1),
+        expiresAt: z.number(),
+      })
+      .nullable()
+      .optional(),
   })
   .passthrough();
 
@@ -221,8 +243,11 @@ function waitForServerListening(child: ServerChildProcess): Promise<ServerListen
   });
 }
 
-function buildSpawnArgs(workspacePath: string, yolo: boolean): string[] {
+function buildSpawnArgs(workspacePath: string, yolo: boolean, mobileH3 = false): string[] {
   const args = ["--dir", workspacePath, "--port", "0", "--json"];
+  if (mobileH3) {
+    args.push("--mobile-h3");
+  }
   if (yolo) {
     args.push("--yolo");
   }
@@ -316,7 +341,8 @@ export class ServerManager {
     workspacePath: string;
     yolo: boolean;
     featureFlags?: { openAiNativeConnectors?: boolean };
-  }): Promise<{ url: string }> {
+    mobileH3?: boolean;
+  }): Promise<{ url: string; mobileH3: ServerListening["mobileH3"] }> {
     const { workspaceId, workspacePath, yolo } = opts;
 
     assertSafeId(workspaceId, "workspaceId");
@@ -325,7 +351,7 @@ export class ServerManager {
     const existing = this.servers.get(workspaceId);
     if (existing) {
       if (existing.child.exitCode === null && existing.child.signalCode === null) {
-        return { url: existing.url };
+        return { url: existing.url, mobileH3: existing.mobileH3 };
       }
       this.servers.delete(workspaceId);
       existing.cleanup();
@@ -341,7 +367,7 @@ export class ServerManager {
     }
 
     const useSource = !app.isPackaged || process.env.COWORK_DESKTOP_USE_SOURCE === "1";
-    const spawnArgs = buildSpawnArgs(workspacePath, yolo);
+    const spawnArgs = buildSpawnArgs(workspacePath, yolo, opts.mobileH3 === true);
     const { repoRoot, sourceEntry } = resolveSourceStartup(useSource);
 
     const sidecar = !useSource ? findSidecarLaunchCommand() : null;
@@ -432,7 +458,7 @@ export class ServerManager {
           this.pendingStarts.delete(workspaceId);
         }
 
-        this.servers.set(workspaceId, { child, url, cleanup: cleanupOnce });
+        this.servers.set(workspaceId, { child, url, mobileH3: listening.mobileH3 ?? null, cleanup: cleanupOnce });
 
         child.once("exit", () => {
           const pendingExit = this.pendingStarts.get(workspaceId);
@@ -446,7 +472,7 @@ export class ServerManager {
           }
         });
 
-        return { url };
+        return { url, mobileH3: listening.mobileH3 ?? null };
       } catch (error) {
         await gracefulKill(child);
         const pendingHandle = this.pendingStarts.get(workspaceId);

@@ -67,6 +67,11 @@ export interface StartAgentServerOptions {
   cwd: string;
   hostname?: string;
   port?: number;
+  mobileH3?: {
+    hostname?: string;
+    port?: number;
+    hostHints?: string[];
+  };
   env?: Record<string, string | undefined>;
   providerOptions?: Record<string, unknown>;
   yolo?: boolean;

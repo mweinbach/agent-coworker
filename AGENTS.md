@@ -56,6 +56,7 @@ Always run tests while doing work, make sure you run these tests.
 All new features MUST be built on top of the CLI/core logic and exposed via JSON-RPC WebSocket controls. UIs are thin clients that send typed JSON-RPC requests and consume typed JSON-RPC notifications — never put business logic directly in a UI layer.
 
 When adding a new WebSocket message or event:
+
 1. Add JSON-RPC request/result/notification schemas under `src/server/jsonrpc/schema.ts` and the relevant module in `src/server/jsonrpc/` for supported live traffic.
 2. Add validation in the relevant JSON-RPC schema bundle (`src/server/jsonrpc/schema.ts`) and parser helpers when the message is client-originated.
 3. Wire the handler in `src/server/jsonrpc/routes/` and/or the appropriate manager under `src/server/session/`.
@@ -82,6 +83,7 @@ When adding a new supported model:
 ## Electron Desktop App
 
 For the Electron desktop app (`apps/desktop`):
+
 - Start app in dev mode: `bun run desktop:dev`
 - Set `COWORK_ELECTRON_REMOTE_DEBUG=1` when you need to expose a CDP port for external inspection or automation.
 - Override `COWORK_ELECTRON_REMOTE_DEBUG_PORT` if `9222` is already in use.
@@ -94,17 +96,19 @@ Bun is installed at `~/.bun/bin/bun`. Ensure `$BUN_INSTALL/bin` is on `PATH` (th
 
 ### Services
 
-| Service | Command | Notes |
-|---|---|---|
+
+| Service          | Command         | Notes                                                                                  |
+| ---------------- | --------------- | -------------------------------------------------------------------------------------- |
 | WebSocket server | `bun run serve` | Listens on `ws://127.0.0.1:7337/ws`. Add `--json` for machine-readable startup output. |
-| Desktop app | `bun run start` | Starts the server automatically. |
-| CLI REPL | `bun run cli` | Also auto-starts the server. Needs TTY input. |
+| Desktop app      | `bun run start` | Starts the server automatically.                                                       |
+| CLI REPL         | `bun run cli`   | Also auto-starts the server. Needs TTY input.                                          |
+
 
 For headless/cloud testing, prefer `bun run serve` and interact via WebSocket (see `docs/websocket-protocol.md`).
 
 ### Testing
 
-- `bun test` runs the full suite. All tests are deterministic and require no network or API keys. Test files live in `test/` (~156 files) and `apps/desktop/test/` (~66 files).
+- `bun test` runs the full suite. All tests are deterministic and require no network or API keys. Test files live in `test/` (~~156 files) and `apps/desktop/test/` (~~66 files).
 - A small number of tests are skipped by default (remote MCP integration tests requiring network).
 - Biome is configured for linting and formatting (`bun lint`, `bun format:write`, `bun check:write`). `bun run typecheck` is the primary code quality check; it runs the repo-root core typecheck plus `apps/desktop` (including `electron/*`).
 - **Lint philosophy**: `biome.json` is tuned to catch LLM-generated code failure modes. Type-safety erosion (`noExplicitAny`, `noNonNullAssertion`, `noBannedTypes`), React lifecycle bugs (`useExhaustiveDependencies`, `noAssignInExpressions`, `noArrayIndexKey`), and error-handling camouflage (`noUselessCatch`, `noEmptyBlock`) are all surfaced. New code should not introduce new violations.
@@ -116,40 +120,54 @@ For headless/cloud testing, prefer `bun run serve` and interact via WebSocket (s
 ## Workflow Orchestration
 
 ### 1. Plan Node Default
+
 Enter plan mode for ANY non-trivial task (3+ steps or architectural decisions)
 If something goes sideways, STOP and re-plan immediately don't keep pushing
 Use plan mode for verification steps, not just building
 Write detailed specs upfront to reduce ambiguity
+
 ### 2. Subagent Strategy
+
 Use subagents liberally to keep main context window clean
 Offload research, exploration, and parallel analysis to subagents
 For complex problems, throw more compute at it via subagents
 One tack per subagent for focused execution
+
 ### 3. Self-Improvement
+
 After ANY correction from the user, distill the pattern into a durable rule and add it to the Engineering Rules section below.
 Apply existing rules before editing, not after.
 Review the rules at session start.
+
 ### 4. Verification Before Done
+
 Never mark a task complete without proving it works
 Diff behavior between main and your changes when relevant
 Ask yourself: "Would a staff engineer approve this?"
 Run tests, check logs, demonstrate correctness
+
 ### 5. Demand Elegance (Balanced)
+
 For non-trivial changes: pause and ask "is there a more elegant way?"
 If a fix feels hacky: "Knowing everything I know now, implement the elegant solution"
 Skip this for simple, obvious fixes don't over-engineer
 Challenge your own work before presenting it
+
 ### 6. Autonomous Bug Fixing
+
 When given a bug report: just fix it. Don't ask for hand-holding Point at logs, errors, failing tests then resolve them
 Zero context switching required from the user
 Go fix failing CI tests without being told how
+
 ## Task Management
+
 1. **Plan First**: Write a plan with checkable items, use your todo or tasks tool if available.
 2. **Verify Plan**: Check in before starting implementation.
 3. **Track Progress**: Mark items complete as you go.
 4. **Explain Changes**: High-level summary at each step.
 
 ## Core Principles
+
 **Simplicity First**: Make every change as simple as possible. Impact minimal code.
 **No Laziness**: Find root causes. No temporary fixes. Senior developer standards.
 **Minimal Impact**: Changes should only touch what's necessary. Avoid introducing bugs.
@@ -159,6 +177,7 @@ Go fix failing CI tests without being told how
 Durable rules distilled from prior corrections. Apply before editing, not after. When the user corrects you, add the new rule here.
 
 ### PR Review Workflow
+
 - Re-fetch unresolved review threads and verify each comment against current `HEAD` before editing — don't assume an open thread is still real.
 - After fixing locally, reply on each addressed GitHub thread and resolve it in the same pass.
 - Re-scan the latest SHA for both unresolved threads AND newer top-level review bodies before declaring PR feedback handled.
@@ -167,6 +186,7 @@ Durable rules distilled from prior corrections. Apply before editing, not after.
 - Inspect the latest GitHub Actions run when babysitting a PR; flaky lanes (e.g. remote MCP smoke) can still be the real blocker after comments resolve.
 
 ### Scope & Plan Discipline
+
 - When the user narrows a contract, apply that exact direction; don't preserve broader backward-compat assumptions.
 - When the user excludes an artifact type for delivery, remove it from the final output and any PR metadata instead of keeping it as optional context.
 - When the user excludes screenshots or recordings from a PR, keep the PR body text-only and summarize verification in prose.
@@ -178,12 +198,14 @@ Durable rules distilled from prior corrections. Apply before editing, not after.
 - When the user says a surface is "retired" or "archived", do the full deletion in one pass: code, tests, docs, entrypoints, now-unused deps. No dormant compatibility shells.
 
 ### Verification Before Done
+
 - Run the same lane CI runs (`bun test --max-concurrency 1` plus `bun run typecheck` and `bun run docs:check`); cross-file Bun module mocks can pass in isolation and still fail in the full suite. Always run full bun test, not just specific tests. 
 - For desktop UI changes, verify the live running app via the Playwright/CDP workflow with `COWORK_ELECTRON_REMOTE_DEBUG=1`. Tests alone are not proof.
 - For Expo mobile changes, run an explicit Metro bundle path (e.g. `expo export`) — `run:ios`/`run:android` success alone misses repo-root import and Babel/plugin drift.
 - Before creating a GitHub release from a local tag, confirm the tag has been pushed to `origin`.
 
 ### Repo-Specific Contracts
+
 - **Auth home**: `~/.cowork` is the only auth home. Never derive auth from a workspace `.agent` path. Pin `HOME` in tests that fabricate auth state.
 - **Codex auth**: lives only at `~/.cowork/auth/codex-cli/auth.json`. No copies, restores, or fallbacks to other tool stores.
 - **Canonical config roots**: `.cowork/` and `~/.cowork/` are the only runtime config/skills/memory/MCP namespaces; support legacy `.agent` only through an explicit one-time migration command, not permanent dual lookups.
@@ -202,11 +224,12 @@ Durable rules distilled from prior corrections. Apply before editing, not after.
 - **Tool output overflow**: spill-to-workspace truncation is the default; the `read` tool is exempted so large file contents stay inline when explicitly requested.
 
 ### Desktop UI Patterns
+
 - Use the Playwright/CDP workflow (`COWORK_ELECTRON_REMOTE_DEBUG=1`) before declaring a UI change done.
 - For macOS menu bar and Windows tray features, verify the packaged app bundles and resolves the tray asset correctly; dev-only checks are not enough.
 - When both an installed app and a repo-local app bundle exist, verify the exact on-disk bundle path for the running process instead of trusting the shared app name or bundle ID.
 - When a tray/menu-bar utility window and a quick chat window both exist, treat them as separate surfaces: tray clicks should open the explicitly requested utility popup instead of reusing quick chat.
-- For shared dialogs/modals: portal to `document.body`, own the centered overlay, never let the backdrop sit at a higher `z-*` than the dialog body.
+- For shared dialogs/modals: portal to `document.body`, own the centered overlay, never let the backdrop sit at a higher `z-`* than the dialog body.
 - For desktop renderer wrappers re-exporting core types, prefer repo-root relative imports over `@cowork/*` aliases — `electron-vite` accepts the alias in TS but Rollup can fail at renderer build.
 - For Electron preloads, bundle deps like `zod` into `out/preload/preload.js`; do not externalize runtime deps.
 - For Electron main-process CommonJS deps, use `createRequire` interop, not named ESM imports.

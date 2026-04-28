@@ -429,6 +429,8 @@ export async function startH3MobileServer(
           },
           cancel() {
             removeSink?.();
+            httpConnections.delete(trustedDevice.deviceId);
+            connection.close();
           },
         });
         return new Response(stream, {

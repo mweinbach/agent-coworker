@@ -185,6 +185,26 @@ describe("mobile relay bridge", () => {
 
   test("revokes the server trust record before clearing a paired phone", async () => {
     const serverManager = createServerManagerMock();
+    serverManager.startWorkspaceServer.mockImplementationOnce(async () => ({
+      url: "ws://127.0.0.1:7337/ws",
+      mobileH3: {
+        url: "https://127.0.0.1:9443",
+        port: 9443,
+        hostHints: ["127.0.0.1"],
+        ticket: "cowork-pair://ticket",
+        adminToken: "admin-token",
+        certSha256: "a".repeat(64),
+        spkiSha256: "b".repeat(43),
+        identityPub: "desktop-identity",
+        nonce: "nonce-value-123456789012",
+        expiresAt: Date.now() + 60_000,
+        trustedDevice: {
+          deviceId: "phone-1",
+          fingerprint: "fingerprint",
+          displayName: "Phone",
+        },
+      },
+    }));
     const bridge = new MobileRelayBridge({ serverManager: serverManager as never });
 
     await bridge.start({
@@ -207,6 +227,7 @@ describe("mobile relay bridge", () => {
 
     expect(serverManager.revokeMobileH3TrustedDevice).toHaveBeenCalledWith("ws_1", "phone-1");
     expect(snapshot).toMatchObject({
+      status: "pairing",
       trustedPhoneDeviceId: null,
       trustedPhoneFingerprint: null,
       lastError: null,
@@ -267,6 +288,24 @@ describe("mobile relay bridge", () => {
 
     await bridge.stop();
     expect(serverManager.restartWorkspaceServer).toHaveBeenCalledTimes(1);
+  });
+
+  test("clears relay state for shutdown without spawning a replacement server", async () => {
+    const serverManager = createServerManagerMock();
+    const bridge = new MobileRelayBridge({ serverManager: serverManager as never });
+
+    await bridge.start({
+      workspaceId: "ws_1",
+      workspacePath: "/workspace",
+      yolo: false,
+    });
+    const snapshot = bridge.stopForShutdown();
+
+    expect(serverManager.restartWorkspaceServer).not.toHaveBeenCalled();
+    expect(snapshot).toMatchObject({
+      status: "idle",
+      relayServiceStatus: "not-running",
+    });
   });
 
   test("does not restart a workspace server when stopping after a failed start", async () => {

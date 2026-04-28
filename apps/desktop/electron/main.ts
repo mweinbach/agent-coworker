@@ -643,7 +643,7 @@ if (!gotSingleInstanceLock) {
       unregisterAppearanceListener: () => unregisterAppearanceListener(),
       stopUpdater: () => updater.dispose(),
       stopMobileRelayBridge: async () => {
-        await mobileRelayBridge.stop();
+        mobileRelayBridge.stopForShutdown();
       },
       stopQuickChat: () => quickChatController?.dispose(),
       stopAllServers: () => serverManager.stopAll(),

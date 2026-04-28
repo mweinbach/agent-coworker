@@ -191,6 +191,13 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     return this.getSnapshot();
   }
 
+  stopForShutdown(): MobileRelaySnapshot {
+    this.currentStartOptions = null;
+    this.state = buildIdleState();
+    this.emitState();
+    return this.getSnapshot();
+  }
+
   async rotateSession(): Promise<MobileRelaySnapshot> {
     const options = this.currentStartOptions;
     if (!options) {
@@ -260,6 +267,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     }
     this.state = {
       ...this.state,
+      status: this.state.status === "connected" ? "pairing" : this.state.status,
       trustedPhoneDeviceId: null,
       trustedPhoneFingerprint: null,
     };

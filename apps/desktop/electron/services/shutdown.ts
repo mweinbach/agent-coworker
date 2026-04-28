@@ -30,8 +30,7 @@ export function createBeforeQuitHandler(deps: ShutdownDeps): (event: QuitEvent) 
     event.preventDefault();
 
     void (async () => {
-      // Stop mobile relay bridge first to set stopping=true before killing servers
-      // This prevents spurious reconnect attempts during shutdown
+      // Clear mobile relay bridge state before killing managed workspace servers.
       if (deps.stopMobileRelayBridge) {
         try {
           await deps.stopMobileRelayBridge();

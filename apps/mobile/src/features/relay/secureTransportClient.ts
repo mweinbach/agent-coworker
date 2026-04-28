@@ -85,6 +85,78 @@ type ActiveSession = {
   spkiSha256: string;
 };
 
+function parseJsonObject(value: string | null): Record<string, unknown> | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function readString(record: Record<string, unknown>, key: string): string {
+  const value = record[key];
+  return typeof value === "string" ? value : "";
+}
+
+function readNullableString(record: Record<string, unknown>, key: string): string | null {
+  const value = record[key];
+  return typeof value === "string" ? value : null;
+}
+
+function parseTrustedDesktopRecord(raw: unknown): TrustedDesktopRecord | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return null;
+  }
+  const record = raw as Record<string, unknown>;
+  const trusted: TrustedDesktopRecord = {
+    macDeviceId: readString(record, "macDeviceId"),
+    relayUrl: readString(record, "relayUrl"),
+    displayName: readString(record, "displayName"),
+    publicKey: readString(record, "publicKey"),
+    fingerprint: readString(record, "fingerprint"),
+    lastConnectedAt: readNullableString(record, "lastConnectedAt"),
+    sessionToken: readString(record, "sessionToken"),
+    endpointUrl: readString(record, "endpointUrl"),
+    certSha256: readString(record, "certSha256"),
+    spkiSha256: readString(record, "spkiSha256"),
+  };
+  return trusted.macDeviceId &&
+    trusted.sessionToken &&
+    trusted.endpointUrl &&
+    trusted.certSha256 &&
+    trusted.spkiSha256
+    ? trusted
+    : null;
+}
+
+function parseTrustedDesktopRecords(value: string | null): TrustedDesktopRecord[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? parsed
+          .map((entry) => parseTrustedDesktopRecord(entry))
+          .filter((entry): entry is TrustedDesktopRecord => entry !== null)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseActiveSession(value: string | null): Partial<ActiveSession> | null {
+  const record = parseJsonObject(value);
+  if (!record) return null;
+  return {
+    macDeviceId: readString(record, "macDeviceId"),
+    endpointUrl: readString(record, "endpointUrl"),
+    sessionToken: readString(record, "sessionToken"),
+    certSha256: readString(record, "certSha256"),
+    spkiSha256: readString(record, "spkiSha256"),
+  };
+}
+
 export type SecureTransportSnapshot = {
   status: RelayConnectionStatus;
   transportMode: RelayTransportMode;
@@ -325,8 +397,8 @@ export class SecureTransportClient {
       SecureStore.getItemAsync(TRUSTED_DESKTOPS_KEY),
       SecureStore.getItemAsync(ACTIVE_SESSION_KEY),
     ]);
-    this.trustedDesktops = trustedRaw ? (JSON.parse(trustedRaw) as TrustedDesktopRecord[]) : [];
-    const active = activeRaw ? (JSON.parse(activeRaw) as Partial<ActiveSession>) : null;
+    this.trustedDesktops = parseTrustedDesktopRecords(trustedRaw);
+    const active = parseActiveSession(activeRaw);
     const trusted = active
       ? this.trustedDesktops.find((entry) => entry.macDeviceId === active.macDeviceId)
       : null;

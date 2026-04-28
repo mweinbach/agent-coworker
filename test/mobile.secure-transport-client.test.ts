@@ -389,4 +389,44 @@ describe("mobile secure transport client", () => {
       spkiSha256: "b".repeat(43),
     });
   });
+
+  test("falls back to empty trusted state when secure store JSON is malformed", async () => {
+    secureStoreValues.set("cowork.h3.trustedDesktops.v1", "{not-json");
+    secureStoreValues.set(
+      "cowork.h3.activeSession.v1",
+      JSON.stringify({
+        macDeviceId: "desktop-identity",
+        endpointUrl: "https://192.168.1.10:9443",
+        sessionToken: "session-token",
+      }),
+    );
+
+    const client = new SecureTransportClient();
+    const snapshot = await client.getSnapshot();
+
+    expect(snapshot).toMatchObject({
+      status: "idle",
+      connectedMacDeviceId: null,
+      relayUrl: null,
+      trustedDesktops: [],
+    });
+  });
+
+  test("ignores unexpected secure store shapes during restore", async () => {
+    secureStoreValues.set(
+      "cowork.h3.trustedDesktops.v1",
+      JSON.stringify({ macDeviceId: "desktop-identity" }),
+    );
+    secureStoreValues.set("cowork.h3.activeSession.v1", JSON.stringify(["not", "an", "object"]));
+
+    const client = new SecureTransportClient();
+    const snapshot = await client.getSnapshot();
+
+    expect(snapshot).toMatchObject({
+      status: "idle",
+      connectedMacDeviceId: null,
+      relayUrl: null,
+      trustedDesktops: [],
+    });
+  });
 });

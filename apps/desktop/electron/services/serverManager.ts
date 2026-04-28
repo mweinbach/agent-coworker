@@ -381,7 +381,9 @@ export class ServerManager {
     const existing = this.servers.get(workspaceId);
     if (existing) {
       if (existing.child.exitCode === null && existing.child.signalCode === null) {
-        if (opts.mobileH3 === true && !existing.mobileH3) {
+        const wantsMobileH3 = opts.mobileH3 === true;
+        const hasMobileH3 = Boolean(existing.mobileH3);
+        if (wantsMobileH3 !== hasMobileH3) {
           const replacementPending = { child: existing.child, cleanup: existing.cleanup };
           this.pendingStarts.set(workspaceId, replacementPending);
           this.servers.delete(workspaceId);

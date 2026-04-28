@@ -169,10 +169,11 @@ export function registerWorkspaceIpc(context: DesktopIpcModuleContext): void {
         "startWorkspaceServer options",
       );
       const workspacePath = await workspaceRoots.assertApprovedWorkspacePath(input.workspacePath);
-      return await deps.serverManager.startWorkspaceServer({
+      const listening = await deps.serverManager.startWorkspaceServer({
         ...input,
         workspacePath,
       });
+      return { url: listening.url };
     },
   );
 

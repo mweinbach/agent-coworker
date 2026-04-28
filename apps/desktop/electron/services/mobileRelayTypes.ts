@@ -11,19 +11,14 @@ export type MobileRelaySource = "direct" | "remodex" | "managed" | "override" | 
 export type MobileRelayServiceStatus = "unknown" | "running" | "not-running" | "unavailable";
 
 export type MobileRelayPairingPayload = {
-  v: number;
-  relay?: string;
-  sessionId?: string;
-  macDeviceId?: string;
-  macIdentityPublicKey?: string;
-  pairingSecret?: string;
-  scheme?: "h3";
-  hosts?: string[];
-  port?: number;
-  certSha256?: string;
-  spkiSha256?: string;
-  identityPub?: string;
-  nonce?: string;
+  v: 1;
+  scheme: "h3";
+  hosts: string[];
+  port: number;
+  certSha256: string;
+  spkiSha256: string;
+  identityPub: string;
+  nonce: string;
   expiresAt: number;
 };
 

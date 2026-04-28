@@ -307,6 +307,57 @@ describe("mobile secure transport client", () => {
     });
   });
 
+  test("aborts an existing event stream before retrying QR pairing", async () => {
+    const plaintextMessages: string[] = [];
+    let pairAttempts = 0;
+    let cleanupCalls = 0;
+    let streamHandlers:
+      | Parameters<NonNullable<Parameters<typeof __internal.setPinnedHttpsStreamForTesting>[0]>>[1]
+      | null = null;
+    __internal.setPinnedHttpsFetchForTesting(
+      mock(async (request: { url: string }) => {
+        if (request.url.endsWith("/pair")) {
+          pairAttempts += 1;
+          if (pairAttempts === 1) {
+            return Response.json({ sessionToken: "session-token" }) as unknown as Response;
+          }
+          return new Response("", { status: 503 });
+        }
+        return new Response("", { status: 404 });
+      }) as never,
+    );
+    __internal.setPinnedHttpsStreamForTesting(
+      mock(async (_request, handlers) => {
+        streamHandlers = handlers;
+        return () => {
+          cleanupCalls += 1;
+        };
+      }),
+    );
+
+    const client = new SecureTransportClient();
+    client.subscribe({
+      onPlaintextMessage: (text) => plaintextMessages.push(text),
+    });
+
+    await client.connectFromQrPayload(buildPayload({ hosts: ["192.168.1.10"] }));
+    await waitFor(() => streamHandlers !== null);
+
+    await expect(
+      client.connectFromQrPayload(buildPayload({ hosts: ["192.168.1.10"] })),
+    ).rejects.toThrow("Pairing failed against all advertised hosts");
+
+    streamHandlers?.onChunk("data: stale\n\n");
+
+    expect(cleanupCalls).toBe(1);
+    expect(plaintextMessages).toEqual([]);
+    expect(await client.getSnapshot()).toMatchObject({
+      status: "idle",
+      connectedMacDeviceId: null,
+      lastError: expect.stringContaining("Pairing failed against all advertised hosts"),
+    });
+  });
+
   test("clears stale errors when reconnecting a trusted desktop", async () => {
     const socketClosed = mock((_reason: string | null) => {});
     const client = new SecureTransportClient();

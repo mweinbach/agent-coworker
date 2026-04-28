@@ -123,6 +123,8 @@ export class SecureTransportClient {
       throw new Error("Unsupported pairing payload.");
     }
     await this.loadTrustedState();
+    this.eventAbortController?.abort();
+    this.eventAbortController = null;
     this.activeSession = null;
     this.lastError = null;
     this.emitState("pairing");

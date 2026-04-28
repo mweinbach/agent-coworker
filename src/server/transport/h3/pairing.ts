@@ -8,6 +8,7 @@ import { createPairingNonce } from "../../../shared/coworkTicket";
 const COWORK_HOME_DIRNAME = ".cowork";
 const MOBILE_PAIRING_DIRNAME = "mobile-pairing";
 const DEVICES_FILE_NAME = "devices.json";
+const pairingStoreLocks = new Map<string, Promise<void>>();
 
 export type H3TrustedDeviceRecord = {
   deviceId: string;
@@ -31,6 +32,34 @@ export type H3PairingSession = {
 
 function resolveDefaultStoreRoot(): string {
   return path.join(os.homedir(), COWORK_HOME_DIRNAME);
+}
+
+function resolvePairingStoreLockKey(storeRootPath: string | undefined): string {
+  return path.resolve(storeRootPath ?? resolveDefaultStoreRoot());
+}
+
+async function withPairingStoreLock<T>(
+  storeRootPath: string | undefined,
+  task: () => Promise<T>,
+): Promise<T> {
+  const lockKey = resolvePairingStoreLockKey(storeRootPath);
+  const previous = pairingStoreLocks.get(lockKey) ?? Promise.resolve();
+  let releaseCurrentLock!: () => void;
+  const current = new Promise<void>((resolve) => {
+    releaseCurrentLock = resolve;
+  });
+  const next = previous.catch(() => undefined).then(() => current);
+  pairingStoreLocks.set(lockKey, next);
+
+  await previous.catch(() => undefined);
+  try {
+    return await task();
+  } finally {
+    releaseCurrentLock();
+    if (pairingStoreLocks.get(lockKey) === next) {
+      pairingStoreLocks.delete(lockKey);
+    }
+  }
 }
 
 export function resolveH3PairingStoreDir(storeRootPath = resolveDefaultStoreRoot()): string {
@@ -142,22 +171,26 @@ export async function rememberH3TrustedDevice(
     sessionToken: string;
   },
 ): Promise<H3TrustedDeviceRecord> {
-  const now = new Date().toISOString();
-  const fingerprint = (await sha256Base64Url(device.identityPub)).slice(0, 16);
-  const record: H3TrustedDeviceRecord = {
-    deviceId: device.deviceId,
-    identityPub: device.identityPub,
-    displayName: device.displayName ?? null,
-    fingerprint,
-    sessionTokenHash: await sha256Base64Url(device.sessionToken),
-    lastPairedAt: now,
-    lastConnectedAt: now,
-  };
-  const state = await loadH3PairingStoreState(storeRootPath);
-  const trustedDevices = state.trustedDevices.filter((entry) => entry.deviceId !== device.deviceId);
-  trustedDevices.unshift(record);
-  await persistH3PairingStoreState({ version: 1, trustedDevices }, storeRootPath);
-  return record;
+  return await withPairingStoreLock(storeRootPath, async () => {
+    const now = new Date().toISOString();
+    const fingerprint = (await sha256Base64Url(device.identityPub)).slice(0, 16);
+    const record: H3TrustedDeviceRecord = {
+      deviceId: device.deviceId,
+      identityPub: device.identityPub,
+      displayName: device.displayName ?? null,
+      fingerprint,
+      sessionTokenHash: await sha256Base64Url(device.sessionToken),
+      lastPairedAt: now,
+      lastConnectedAt: now,
+    };
+    const state = await loadH3PairingStoreState(storeRootPath);
+    const trustedDevices = state.trustedDevices.filter(
+      (entry) => entry.deviceId !== device.deviceId,
+    );
+    trustedDevices.unshift(record);
+    await persistH3PairingStoreState({ version: 1, trustedDevices }, storeRootPath);
+    return record;
+  });
 }
 
 export async function verifyH3SessionToken(
@@ -167,15 +200,17 @@ export async function verifyH3SessionToken(
   if (!sessionToken) {
     return null;
   }
-  const state = await loadH3PairingStoreState(storeRootPath);
-  const tokenHash = await sha256Base64Url(sessionToken);
-  const match = state.trustedDevices.find((device) => device.sessionTokenHash === tokenHash);
-  if (!match) {
-    return null;
-  }
-  match.lastConnectedAt = new Date().toISOString();
-  await persistH3PairingStoreState(state, storeRootPath);
-  return match;
+  return await withPairingStoreLock(storeRootPath, async () => {
+    const state = await loadH3PairingStoreState(storeRootPath);
+    const tokenHash = await sha256Base64Url(sessionToken);
+    const match = state.trustedDevices.find((device) => device.sessionTokenHash === tokenHash);
+    if (!match) {
+      return null;
+    }
+    match.lastConnectedAt = new Date().toISOString();
+    await persistH3PairingStoreState(state, storeRootPath);
+    return match;
+  });
 }
 
 export async function forgetH3TrustedDevice(
@@ -186,19 +221,23 @@ export async function forgetH3TrustedDevice(
   if (!normalizedDeviceId) {
     return false;
   }
-  const state = await loadH3PairingStoreState(storeRootPath);
-  const trustedDevices = state.trustedDevices.filter(
-    (device) => device.deviceId !== normalizedDeviceId,
-  );
-  if (trustedDevices.length === state.trustedDevices.length) {
-    return false;
-  }
-  await persistH3PairingStoreState({ version: 1, trustedDevices }, storeRootPath);
-  return true;
+  return await withPairingStoreLock(storeRootPath, async () => {
+    const state = await loadH3PairingStoreState(storeRootPath);
+    const trustedDevices = state.trustedDevices.filter(
+      (device) => device.deviceId !== normalizedDeviceId,
+    );
+    if (trustedDevices.length === state.trustedDevices.length) {
+      return false;
+    }
+    await persistH3PairingStoreState({ version: 1, trustedDevices }, storeRootPath);
+    return true;
+  });
 }
 
 export async function forgetH3TrustedDevices(
   storeRootPath = resolveDefaultStoreRoot(),
 ): Promise<void> {
-  await persistH3PairingStoreState({ version: 1, trustedDevices: [] }, storeRootPath);
+  await withPairingStoreLock(storeRootPath, async () => {
+    await persistH3PairingStoreState({ version: 1, trustedDevices: [] }, storeRootPath);
+  });
 }

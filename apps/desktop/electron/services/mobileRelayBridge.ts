@@ -105,7 +105,8 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
   }
 
   async start(options: StartOptions): Promise<MobileRelaySnapshot> {
-    this.currentStartOptions = options;
+    const previousOptions = this.currentStartOptions;
+    let switchedToNewOptions = false;
     this.state = {
       ...buildIdleState(),
       status: "starting",
@@ -117,14 +118,23 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     this.emitState();
 
     try {
+      if (previousOptions && !isSameStartTarget(previousOptions, options)) {
+        await this.disableMobileH3(previousOptions);
+      }
+      this.currentStartOptions = options;
+      switchedToNewOptions = true;
       const listening = await this.serverManager.startWorkspaceServer({
         ...options,
         mobileH3: true,
       });
       this.state = stateFromMobileH3(options, listening.mobileH3);
     } catch (error) {
-      this.currentStartOptions = null;
-      await this.recoverWorkspaceServer(options);
+      if (switchedToNewOptions) {
+        this.currentStartOptions = null;
+        await this.recoverWorkspaceServer(options);
+      } else {
+        this.currentStartOptions = previousOptions;
+      }
       this.state = {
         ...buildIdleState(),
         status: "error",
@@ -136,6 +146,13 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
 
     this.emitState();
     return this.getSnapshot();
+  }
+
+  private async disableMobileH3(options: StartOptions): Promise<void> {
+    await this.serverManager.restartWorkspaceServer({
+      ...options,
+      mobileH3: false,
+    });
   }
 
   async stop(): Promise<MobileRelaySnapshot> {
@@ -150,10 +167,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
       };
       this.emitState();
       try {
-        await this.serverManager.restartWorkspaceServer({
-          ...options,
-          mobileH3: false,
-        });
+        await this.disableMobileH3(options);
       } catch (error) {
         this.state = {
           ...buildIdleState(),
@@ -249,4 +263,8 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
   private emitState(): void {
     this.emit("stateChanged", this.getSnapshot());
   }
+}
+
+function isSameStartTarget(left: StartOptions, right: StartOptions): boolean {
+  return left.workspaceId === right.workspaceId && left.workspacePath === right.workspacePath;
 }

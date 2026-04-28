@@ -81,6 +81,35 @@ describe("mobile relay bridge", () => {
     });
   });
 
+  test("disables the previous workspace H3 endpoint before switching workspaces", async () => {
+    const serverManager = createServerManagerMock();
+    const bridge = new MobileRelayBridge({ serverManager: serverManager as never });
+
+    await bridge.start({
+      workspaceId: "ws_1",
+      workspacePath: "/workspace-one",
+      yolo: true,
+    });
+    await bridge.start({
+      workspaceId: "ws_2",
+      workspacePath: "/workspace-two",
+      yolo: false,
+    });
+
+    expect(serverManager.restartWorkspaceServer).toHaveBeenCalledWith({
+      workspaceId: "ws_1",
+      workspacePath: "/workspace-one",
+      yolo: true,
+      mobileH3: false,
+    });
+    expect(serverManager.startWorkspaceServer).toHaveBeenLastCalledWith({
+      workspaceId: "ws_2",
+      workspacePath: "/workspace-two",
+      yolo: false,
+      mobileH3: true,
+    });
+  });
+
   test("loads the current trusted phone from the server H3 state", async () => {
     const serverManager = createServerManagerMock();
     serverManager.startWorkspaceServer.mockImplementationOnce(async () => ({

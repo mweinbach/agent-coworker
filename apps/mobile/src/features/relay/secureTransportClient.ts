@@ -112,6 +112,9 @@ export class SecureTransportClient {
 
   async getSnapshot(): Promise<SecureTransportSnapshot> {
     await this.loadTrustedState();
+    if (this.activeSession && !this.eventAbortController) {
+      this.openEventStream();
+    }
     return this.snapshot();
   }
 
@@ -206,9 +209,12 @@ export class SecureTransportClient {
   }
 
   async disconnect(): Promise<SecureTransportSnapshot> {
+    await this.loadTrustedState();
     this.eventAbortController?.abort();
     this.eventAbortController = null;
     this.activeSession = null;
+    this.lastError = null;
+    await this.persistTrustedState();
     return this.emitState("idle");
   }
 

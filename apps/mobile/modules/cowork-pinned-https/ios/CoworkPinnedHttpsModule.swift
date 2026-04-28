@@ -28,6 +28,9 @@ internal struct PinnedHttpsRequest: Record {
 
 public final class CoworkPinnedHttpsModule: Module {
   private var streamTasks: [String: URLSessionDataTask] = [:]
+  private let streamTasksQueue = DispatchQueue(
+    label: "co.weinbach.cowork.mobile.pinnedhttps.streamTasks"
+  )
 
   public func definition() -> ModuleDefinition {
     Name("CoworkPinnedHttps")
@@ -74,7 +77,7 @@ public final class CoworkPinnedHttpsModule: Module {
     }
 
     AsyncFunction("closePinnedHttpsStream") { (streamId: String) -> Void in
-      self.streamTasks.removeValue(forKey: streamId)?.cancel()
+      self.removeStreamTask(for: streamId)?.cancel()
     }
   }
 
@@ -101,13 +104,25 @@ public final class CoworkPinnedHttpsModule: Module {
         self?.sendEvent("pinnedHttpsStreamEvent", event)
       },
       onComplete: { [weak self] in
-        self?.streamTasks.removeValue(forKey: streamId)
+        self?.removeStreamTask(for: streamId)
       }
     )
     let session = URLSession(configuration: .ephemeral, delegate: delegate, delegateQueue: nil)
     let task = session.dataTask(with: urlRequest)
-    streamTasks[streamId] = task
+    setStreamTask(task, for: streamId)
     task.resume()
+  }
+
+  private func setStreamTask(_ task: URLSessionDataTask, for streamId: String) {
+    streamTasksQueue.sync {
+      streamTasks[streamId] = task
+    }
+  }
+
+  private func removeStreamTask(for streamId: String) -> URLSessionDataTask? {
+    streamTasksQueue.sync {
+      streamTasks.removeValue(forKey: streamId)
+    }
   }
 }
 
@@ -136,12 +151,7 @@ private class PinnedHttpsSessionDelegate: NSObject, URLSessionDelegate {
 
     let certData = SecCertificateCopyData(certificate) as Data
     let certHash = sha256Hex(certData)
-    var keyHash: String?
-    if let publicKey = SecTrustCopyKey(trust),
-       let keyData = SecKeyCopyExternalRepresentation(publicKey, nil) as Data?,
-       let spkiData = ecP256SubjectPublicKeyInfo(fromRawKey: keyData) {
-      keyHash = sha256Base64Url(spkiData)
-    }
+    let keyHash = subjectPublicKeyInfo(fromCertificateDer: certData).map(sha256Base64Url)
 
     if certHash == certSha256 || keyHash == spkiSha256 {
       completionHandler(.useCredential, URLCredential(trust: trust))
@@ -231,17 +241,119 @@ private func sha256Base64Url(_ data: Data) -> String {
     .replacingOccurrences(of: "=", with: "")
 }
 
-private func ecP256SubjectPublicKeyInfo(fromRawKey rawKey: Data) -> Data? {
-  guard rawKey.count == 65 else {
+private struct DerElement {
+  let tag: UInt8
+  let contentRange: Range<Int>
+  let fullRange: Range<Int>
+}
+
+private func readDerElement(in data: Data, offset: inout Int, limit: Int) -> DerElement? {
+  guard offset < limit else {
     return nil
   }
-  let spkiHeader = Data([
-    0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2A, 0x86,
-    0x48, 0xCE, 0x3D, 0x02, 0x01, 0x06, 0x08, 0x2A,
-    0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07, 0x03,
-    0x42, 0x00,
-  ])
-  return spkiHeader + rawKey
+  let start = offset
+  let tag = data[offset]
+  offset += 1
+
+  guard offset < limit else {
+    return nil
+  }
+  let firstLengthByte = data[offset]
+  offset += 1
+
+  let length: Int
+  if firstLengthByte & 0x80 == 0 {
+    length = Int(firstLengthByte)
+  } else {
+    let lengthByteCount = Int(firstLengthByte & 0x7f)
+    guard
+      lengthByteCount > 0,
+      lengthByteCount <= MemoryLayout<Int>.size,
+      offset + lengthByteCount <= limit
+    else {
+      return nil
+    }
+
+    var decodedLength = 0
+    for _ in 0..<lengthByteCount {
+      decodedLength = (decodedLength << 8) | Int(data[offset])
+      offset += 1
+    }
+    length = decodedLength
+  }
+
+  let contentStart = offset
+  guard length <= limit - contentStart else {
+    return nil
+  }
+  let contentEnd = contentStart + length
+  offset = contentEnd
+  return DerElement(
+    tag: tag,
+    contentRange: contentStart..<contentEnd,
+    fullRange: start..<contentEnd
+  )
+}
+
+private func subjectPublicKeyInfo(fromCertificateDer certificateDer: Data) -> Data? {
+  var certificateOffset = 0
+  guard
+    let certificate = readDerElement(
+      in: certificateDer,
+      offset: &certificateOffset,
+      limit: certificateDer.count
+    ),
+    certificate.tag == 0x30
+  else {
+    return nil
+  }
+
+  var certificateContentOffset = certificate.contentRange.lowerBound
+  guard
+    let tbsCertificate = readDerElement(
+      in: certificateDer,
+      offset: &certificateContentOffset,
+      limit: certificate.contentRange.upperBound
+    ),
+    tbsCertificate.tag == 0x30
+  else {
+    return nil
+  }
+
+  var tbsOffset = tbsCertificate.contentRange.lowerBound
+  guard let firstTbsElement = readDerElement(
+    in: certificateDer,
+    offset: &tbsOffset,
+    limit: tbsCertificate.contentRange.upperBound
+  ) else {
+    return nil
+  }
+  if firstTbsElement.tag != 0xA0 {
+    tbsOffset = firstTbsElement.fullRange.lowerBound
+  }
+
+  for _ in 0..<5 {
+    guard readDerElement(
+      in: certificateDer,
+      offset: &tbsOffset,
+      limit: tbsCertificate.contentRange.upperBound
+    ) != nil else {
+      return nil
+    }
+  }
+
+  guard
+    let subjectPublicKeyInfo = readDerElement(
+      in: certificateDer,
+      offset: &tbsOffset,
+      limit: tbsCertificate.contentRange.upperBound
+    ),
+    subjectPublicKeyInfo.tag == 0x30
+  else {
+    return nil
+  }
+
+  return certificateDer.subdata(in: subjectPublicKeyInfo.fullRange)
 }
 
 private final class InvalidPinnedHttpsUrlException: GenericException<String> {

@@ -71,7 +71,7 @@ class CoworkPinnedHttpsModule : Module() {
       hostnameVerifier = HostnameVerifier { _, _ -> true }
       requestMethod = request.method
       connectTimeout = 15_000
-      readTimeout = 0
+      readTimeout = REQUEST_READ_TIMEOUT_MS
       doInput = true
       request.headers?.forEach { (name, value) -> setRequestProperty(name, value) }
     }
@@ -116,10 +116,20 @@ class CoworkPinnedHttpsModule : Module() {
           return@Thread
         }
 
-        connection.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
+        connection.inputStream.use { stream ->
+          val buffer = ByteArray(STREAM_BUFFER_SIZE)
           while (true) {
-            val line = reader.readLine() ?: break
-            sendStreamEvent(streamId, "data", data = "$line\n")
+            val bytesRead = stream.read(buffer)
+            if (bytesRead == -1) {
+              break
+            }
+            if (bytesRead > 0) {
+              sendStreamEvent(
+                streamId,
+                "data",
+                data = buffer.copyOf(bytesRead).toString(Charsets.UTF_8),
+              )
+            }
           }
         }
         sendStreamEvent(streamId, "close", message = "Event stream closed.")
@@ -173,6 +183,9 @@ class CoworkPinnedHttpsModule : Module() {
     }
   }
 }
+
+private const val REQUEST_READ_TIMEOUT_MS = 30_000
+private const val STREAM_BUFFER_SIZE = 8 * 1024
 
 private class PinnedTrustManager(
   certSha256: String,

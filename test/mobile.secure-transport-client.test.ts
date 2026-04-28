@@ -169,6 +169,74 @@ describe("mobile secure transport client", () => {
     expect(plaintextMessages).toEqual(["first", "second\nline"]);
   });
 
+  test("reopens the event stream when restoring a persisted active session snapshot", async () => {
+    const streamUrls: string[] = [];
+    __internal.setPinnedHttpsFetchForTesting(
+      mock(async (request: { url: string }) => {
+        if (request.url.endsWith("/pair")) {
+          return Response.json({ sessionToken: "session-token" }) as unknown as Response;
+        }
+        return new Response("", { status: 404 });
+      }) as never,
+    );
+    __internal.setPinnedHttpsStreamForTesting(
+      mock(async (request) => {
+        streamUrls.push(request.url);
+        return () => {};
+      }),
+    );
+
+    const client = new SecureTransportClient();
+    await client.connectFromQrPayload(buildPayload({ hosts: ["192.168.1.10"] }));
+    expect(streamUrls).toEqual(["https://192.168.1.10:9443/events"]);
+
+    const restoredClient = new SecureTransportClient();
+    const restoredSnapshot = await restoredClient.getSnapshot();
+
+    expect(restoredSnapshot).toMatchObject({
+      status: "connected",
+      connectedMacDeviceId: "desktop-identity",
+      relayUrl: "https://192.168.1.10:9443",
+    });
+    expect(streamUrls).toEqual([
+      "https://192.168.1.10:9443/events",
+      "https://192.168.1.10:9443/events",
+    ]);
+  });
+
+  test("persists disconnect by clearing the stored active session", async () => {
+    let cleanupCalls = 0;
+    __internal.setPinnedHttpsFetchForTesting(
+      mock(async (request: { url: string }) => {
+        if (request.url.endsWith("/pair")) {
+          return Response.json({ sessionToken: "session-token" }) as unknown as Response;
+        }
+        return new Response("", { status: 404 });
+      }) as never,
+    );
+    __internal.setPinnedHttpsStreamForTesting(
+      mock(async () => {
+        return () => {
+          cleanupCalls += 1;
+        };
+      }),
+    );
+
+    const client = new SecureTransportClient();
+    await client.connectFromQrPayload(buildPayload({ hosts: ["192.168.1.10"] }));
+    await client.disconnect();
+
+    expect(cleanupCalls).toBe(1);
+    expect(secureStoreValues.has("cowork.h3.activeSession.v1")).toBe(false);
+
+    const restoredSnapshot = await new SecureTransportClient().getSnapshot();
+    expect(restoredSnapshot).toMatchObject({
+      status: "idle",
+      connectedMacDeviceId: null,
+      relayUrl: null,
+    });
+  });
+
   test("clears active connection and emits close when the event stream ends", async () => {
     const socketClosed = mock((_reason: string | null) => {});
     const client = new SecureTransportClient();

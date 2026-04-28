@@ -197,6 +197,49 @@ describe("desktop persisted-state schema defaults", () => {
     expect(parsed.pairingPayload?.macDeviceId).toBe("mac-1");
   });
 
+  test("strips unused mobile relay bridge transport fields", () => {
+    const parsed = mobileRelayBridgeStateSchema.parse({
+      status: "pairing",
+      workspaceId: "ws_1",
+      workspacePath: "/tmp/workspace",
+      relaySource: "managed",
+      relaySourceMessage: "Direct mobile pairing state is stored under ~/.cowork/mobile-pairing.",
+      relayServiceStatus: "running",
+      relayServiceMessage: "Cowork Desktop serves the direct mobile endpoint locally.",
+      relayServiceUpdatedAt: null,
+      relayUrl: "https://127.0.0.1:34443",
+      sessionId: null,
+      transport: "h3",
+      transportMessage: "Direct",
+      endpointUrl: "https://127.0.0.1:34443",
+      pairingTicket: "ticket",
+      pairingPayload: {
+        v: 1,
+        scheme: "h3",
+        hosts: ["127.0.0.1"],
+        port: 34443,
+        certSha256: "a".repeat(64),
+        spkiSha256: "b".repeat(43),
+        identityPub: "mac-identity",
+        nonce: "pairing-nonce",
+        expiresAt: 1_700_000_000_000,
+      },
+      trustedPhoneDeviceId: null,
+      trustedPhoneFingerprint: null,
+      directUrl: "https://127.0.0.1:34443",
+      ticketUrl: "cowork-pair://ticket",
+      certSha256: "a".repeat(64),
+      spkiSha256: "b".repeat(43),
+      hostHints: ["127.0.0.1"],
+      lastError: null,
+    });
+
+    expect("transport" in parsed).toBe(false);
+    expect("transportMessage" in parsed).toBe(false);
+    expect("endpointUrl" in parsed).toBe(false);
+    expect("pairingTicket" in parsed).toBe(false);
+  });
+
   test("rejects empty H3 mobile pairing identity fields", () => {
     const payload = {
       status: "pairing",

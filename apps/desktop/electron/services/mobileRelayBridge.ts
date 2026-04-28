@@ -169,6 +169,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
       try {
         await this.disableMobileH3(options);
       } catch (error) {
+        await this.recoverWorkspaceServer(options);
         this.state = {
           ...buildIdleState(),
           status: "error",

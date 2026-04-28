@@ -249,4 +249,33 @@ describe("mobile relay bridge", () => {
       relayServiceStatus: "not-running",
     });
   });
+
+  test("recovers the workspace server without H3 when stopping mobile access fails", async () => {
+    const serverManager = createServerManagerMock();
+    const bridge = new MobileRelayBridge({ serverManager: serverManager as never });
+
+    await bridge.start({
+      workspaceId: "ws_1",
+      workspacePath: "/workspace",
+      yolo: false,
+    });
+    serverManager.restartWorkspaceServer.mockImplementationOnce(async () => {
+      throw new Error("restart failed");
+    });
+
+    const snapshot = await bridge.stop();
+
+    expect(serverManager.startWorkspaceServer).toHaveBeenLastCalledWith({
+      workspaceId: "ws_1",
+      workspacePath: "/workspace",
+      yolo: false,
+      mobileH3: false,
+    });
+    expect(snapshot).toMatchObject({
+      status: "error",
+      workspaceId: "ws_1",
+      workspacePath: "/workspace",
+      lastError: "restart failed",
+    });
+  });
 });

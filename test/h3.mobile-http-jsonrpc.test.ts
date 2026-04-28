@@ -100,6 +100,24 @@ describe("H3 mobile HTTP JSON-RPC connection", () => {
     await expect(reader.read()).resolves.toEqual({ done: true, value: undefined });
   });
 
+  test("rejects pending RPC requests when the HTTP JSON-RPC connection closes", async () => {
+    const runtime = {
+      openHttpConnection() {},
+      handleDecodedMessage() {},
+      closeConnection() {},
+    };
+    const connection = __internal.createHttpJsonRpcConnection(runtime as never);
+    const pending = __internal.dispatchHttpRpcPayload({ id: 1, method: "thread/list" }, connection);
+
+    connection.close();
+
+    const response = await pending;
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      error: "H3 JSON-RPC connection closed.",
+    });
+  });
+
   test("returns 400 for malformed HTTP RPC payloads", async () => {
     const runtime = {
       openHttpConnection() {},

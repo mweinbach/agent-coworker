@@ -160,7 +160,17 @@ async function dispatchHttpRpcPayload(
     );
   }
 
-  const response = await connection.dispatch(message);
+  let response: unknown | null;
+  try {
+    response = await connection.dispatch(message);
+  } catch (error) {
+    return jsonResponse(
+      {
+        error: error instanceof Error ? error.message : "JSON-RPC connection closed.",
+      },
+      { status: 503 },
+    );
+  }
   if (!("method" in message) || !("id" in message)) {
     return jsonResponse({ ok: true }, { status: 202 });
   }
@@ -189,7 +199,10 @@ function tryParseJsonRpcSendPayload(message: string): unknown {
 
 function createHttpJsonRpcConnection(runtime: AgentServerRuntime): H3JsonRpcConnection {
   const encoder = new TextEncoder();
-  const pendingResponses = new Map<string, (payload: unknown) => void>();
+  const pendingResponses = new Map<
+    string,
+    { resolve(payload: unknown): void; reject(error: Error): void }
+  >();
   const eventSinks = new Set<ReadableStreamDefaultController<Uint8Array>>();
   const connection: H3Connection = {
     data: {
@@ -201,10 +214,10 @@ function createHttpJsonRpcConnection(runtime: AgentServerRuntime): H3JsonRpcConn
       const payload = tryParseJsonRpcSendPayload(message);
       if (payload && typeof payload === "object" && !Array.isArray(payload) && "id" in payload) {
         const response = payload as JsonRpcLiteClientResponse;
-        const resolve = pendingResponses.get(getJsonRpcIdKey(response));
-        if (resolve) {
+        const pending = pendingResponses.get(getJsonRpcIdKey(response));
+        if (pending) {
           pendingResponses.delete(getJsonRpcIdKey(response));
-          resolve(payload);
+          pending.resolve(payload);
           return 1;
         }
       }
@@ -239,8 +252,8 @@ function createHttpJsonRpcConnection(runtime: AgentServerRuntime): H3JsonRpcConn
         return null;
       }
       const idKey = getJsonRpcIdKey(message);
-      const responsePromise = new Promise<unknown>((resolve) => {
-        pendingResponses.set(idKey, resolve);
+      const responsePromise = new Promise<unknown>((resolve, reject) => {
+        pendingResponses.set(idKey, { resolve, reject });
       });
       runtime.handleDecodedMessage(connection as never, message);
       try {
@@ -250,6 +263,9 @@ function createHttpJsonRpcConnection(runtime: AgentServerRuntime): H3JsonRpcConn
       }
     },
     close() {
+      for (const pending of pendingResponses.values()) {
+        pending.reject(new Error("H3 JSON-RPC connection closed."));
+      }
       pendingResponses.clear();
       for (const sink of eventSinks) {
         try {

@@ -177,6 +177,7 @@ describe("mobile relay bridge", () => {
     });
 
     expect(snapshot).toMatchObject({
+      status: "connected",
       trustedPhoneDeviceId: "phone-1",
       trustedPhoneFingerprint: "fingerprint",
     });

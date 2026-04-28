@@ -54,7 +54,7 @@ function stateFromMobileH3(
   }
 
   return {
-    status: "pairing",
+    status: mobileH3.trustedDevice ? "connected" : "pairing",
     workspaceId: options.workspaceId,
     workspacePath: options.workspacePath,
     relaySource: "direct",
@@ -133,14 +133,12 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
       if (switchedToNewOptions) {
         this.currentStartOptions = null;
         await this.recoverWorkspaceServer(options);
+      } else if (previousOptions) {
+        errorOptions = previousOptions;
+        this.currentStartOptions = null;
+        await this.recoverWorkspaceServer(previousOptions);
       } else {
-        if (previousOptions && !isSameStartTarget(previousOptions, options)) {
-          errorOptions = previousOptions;
-          this.currentStartOptions = null;
-          await this.recoverWorkspaceServer(previousOptions);
-        } else {
-          this.currentStartOptions = previousOptions;
-        }
+        this.currentStartOptions = null;
       }
       this.state = {
         ...buildIdleState(),

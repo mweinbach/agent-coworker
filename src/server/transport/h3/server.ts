@@ -387,7 +387,6 @@ export async function startH3MobileServer(
       if (!session || decoded.nonce !== nonce || session.expiresAt < Date.now()) {
         return jsonResponse({ error: "Pairing session expired." }, { status: 401 });
       }
-      pairingSessions.delete(nonce);
       const sessionToken = crypto.randomUUID() + crypto.randomUUID().replaceAll("-", "");
       const trustedDevice = await rememberH3TrustedDevice(options.storeRootPath, {
         deviceId,
@@ -395,6 +394,7 @@ export async function startH3MobileServer(
         displayName,
         sessionToken,
       });
+      pairingSessions.delete(nonce);
       latestTrustedDevice = trustedDevice;
       return jsonResponse({
         sessionToken,

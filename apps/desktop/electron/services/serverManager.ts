@@ -366,6 +366,13 @@ function summarizeLogChunk(chunk: string): string {
   return chunk.replace(/\s+/g, " ").trim().slice(0, 1000);
 }
 
+function shouldReplaceForMobileH3Request(
+  requestedMobileH3: boolean | undefined,
+  existingMobileH3: ServerListening["mobileH3"],
+): boolean {
+  return requestedMobileH3 !== undefined && requestedMobileH3 !== Boolean(existingMobileH3);
+}
+
 export class ServerManager {
   private readonly servers = new Map<string, ServerHandle>();
   private readonly pendingStarts = new Map<string, PendingServerHandle>();
@@ -381,9 +388,7 @@ export class ServerManager {
     const existing = this.servers.get(workspaceId);
     if (existing) {
       if (existing.child.exitCode === null && existing.child.signalCode === null) {
-        const wantsMobileH3 = opts.mobileH3 === true;
-        const hasMobileH3 = Boolean(existing.mobileH3);
-        if (wantsMobileH3 !== hasMobileH3) {
+        if (shouldReplaceForMobileH3Request(opts.mobileH3, existing.mobileH3)) {
           const replacementPending = { child: existing.child, cleanup: existing.cleanup };
           this.pendingStarts.set(workspaceId, replacementPending);
           this.servers.delete(workspaceId);
@@ -663,6 +668,7 @@ export const __internal = {
   logServerManagerEvent,
   flushServerManagerLogWrites,
   resolveSourceStartup,
+  shouldReplaceForMobileH3Request,
   summarizeLogChunk,
   waitForServerListening,
 };

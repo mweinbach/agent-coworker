@@ -105,18 +105,26 @@ function parseArgs(argv: string[]): {
   return { dir, host, port, yolo, json, mobileH3, mobileH3Host, mobileH3Port };
 }
 
-function resolveListeningHints(host: string): string[] {
-  if (host !== "0.0.0.0") return [host];
+export function resolveListeningHintsFromInterfaces(
+  host: string,
+  interfaces: ReturnType<typeof os.networkInterfaces>,
+): string[] {
+  if (host !== "0.0.0.0" && host !== "::") return [host];
 
   const hints = new Set<string>();
-  for (const addresses of Object.values(os.networkInterfaces())) {
+  for (const addresses of Object.values(interfaces)) {
     for (const address of addresses ?? []) {
-      if (address.internal || address.family !== "IPv4") continue;
+      if (address.internal) continue;
+      if (address.family !== "IPv4" && address.family !== "IPv6") continue;
       hints.add(address.address);
     }
   }
 
-  return hints.size > 0 ? [...hints] : ["127.0.0.1"];
+  return hints.size > 0 ? [...hints] : [host === "::" ? "::1" : "127.0.0.1"];
+}
+
+export function resolveListeningHints(host: string): string[] {
+  return resolveListeningHintsFromInterfaces(host, os.networkInterfaces());
 }
 
 async function main() {

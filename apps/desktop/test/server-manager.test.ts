@@ -221,6 +221,41 @@ describe("desktop server manager startup mode", () => {
       linuxAttempt.cleanup();
     }
   });
+
+  test("preserves existing H3 state when mobileH3 is omitted", () => {
+    expect(
+      __internal.shouldReplaceForMobileH3Request(undefined, {
+        url: "https://127.0.0.1:9443",
+        port: 9443,
+        hostHints: ["127.0.0.1"],
+        ticket: "cowork-pair://ticket",
+        adminToken: "admin-token",
+        certSha256: "cert",
+        spkiSha256: "spki",
+        identityPub: "identity",
+        nonce: "nonce",
+        expiresAt: Date.now() + 60_000,
+        trustedDevice: null,
+      }),
+    ).toBe(false);
+    expect(__internal.shouldReplaceForMobileH3Request(false, null)).toBe(false);
+    expect(
+      __internal.shouldReplaceForMobileH3Request(false, {
+        url: "https://127.0.0.1:9443",
+        port: 9443,
+        hostHints: ["127.0.0.1"],
+        ticket: "cowork-pair://ticket",
+        adminToken: "admin-token",
+        certSha256: "cert",
+        spkiSha256: "spki",
+        identityPub: "identity",
+        nonce: "nonce",
+        expiresAt: Date.now() + 60_000,
+        trustedDevice: null,
+      }),
+    ).toBe(true);
+    expect(__internal.shouldReplaceForMobileH3Request(true, null)).toBe(true);
+  });
 });
 
 describe("desktop server manager bun crash detection", () => {

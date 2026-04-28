@@ -141,6 +141,23 @@ describe("H3 mobile HTTP JSON-RPC connection", () => {
     expect(__internal.decodePairingTicketForRequest("not-a-ticket")).toBeNull();
   });
 
+  test("requires the admin bearer token before serving pairing tickets", async () => {
+    const unauthorized = __internal.requireAdminToken(
+      new Request("https://127.0.0.1:9443/ticket"),
+      "admin-token",
+    );
+    expect(unauthorized?.status).toBe(401);
+    await expect(unauthorized?.json()).resolves.toEqual({ error: "Unauthorized." });
+
+    const authorized = __internal.requireAdminToken(
+      new Request("https://127.0.0.1:9443/ticket", {
+        headers: { authorization: "Bearer admin-token" },
+      }),
+      "admin-token",
+    );
+    expect(authorized).toBeNull();
+  });
+
   test("brackets IPv6 host hints for advertised mobile H3 URLs", () => {
     expect(__internal.formatUrlHost("::1")).toBe("[::1]");
     expect(__internal.formatUrlHost("2001:db8::1")).toBe("[2001:db8::1]");

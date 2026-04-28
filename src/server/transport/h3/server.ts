@@ -108,6 +108,13 @@ function parseBearerToken(header: string | null): string | null {
   return match?.[1]?.trim() || null;
 }
 
+function requireAdminToken(req: Request, adminToken: string): Response | null {
+  if (parseBearerToken(req.headers.get("authorization")) === adminToken) {
+    return null;
+  }
+  return jsonResponse({ error: "Unauthorized." }, { status: 401 });
+}
+
 function parseJsonRpcPayload(
   raw: unknown,
 ): JsonRpcLiteRequest | JsonRpcLiteNotification | JsonRpcLiteClientResponse {
@@ -354,6 +361,8 @@ export async function startH3MobileServer(
     }
 
     if (req.method === "GET" && url.pathname === "/ticket") {
+      const unauthorized = requireAdminToken(req, adminToken);
+      if (unauthorized) return unauthorized;
       if (!server) return textResponse("Not ready", { status: 503 });
       const port = server.port;
       if (port === undefined) return textResponse("Not ready", { status: 503 });
@@ -502,4 +511,5 @@ export const __internal = {
   decodePairingTicketForRequest,
   dispatchHttpRpcPayload,
   formatUrlHost,
+  requireAdminToken,
 };

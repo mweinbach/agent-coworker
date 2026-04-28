@@ -75,11 +75,11 @@ export type MobileRelayBridgeState = {
   pairingPayload: MobileRelayPairingPayload | null;
   trustedPhoneDeviceId: string | null;
   trustedPhoneFingerprint: string | null;
-  directUrl?: string | null;
-  ticketUrl?: string | null;
-  certSha256?: string | null;
-  spkiSha256?: string | null;
-  hostHints?: string[];
+  directUrl: string | null;
+  ticketUrl: string | null;
+  certSha256: string | null;
+  spkiSha256: string | null;
+  hostHints: string[];
   lastError: string | null;
 };
 

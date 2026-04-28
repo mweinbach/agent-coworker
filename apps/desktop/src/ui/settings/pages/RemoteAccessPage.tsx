@@ -43,6 +43,8 @@ export function describeRelaySource(
       return "Remodex";
     case "managed":
       return "Cowork-managed";
+    case "direct":
+      return "Direct";
     case "override":
       return "Custom override";
     default:

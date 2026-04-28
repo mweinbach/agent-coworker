@@ -79,11 +79,52 @@ describe("mobile secure transport client", () => {
     expect(requestedUrls).toEqual([
       "https://unreachable.local:9443/pair",
       "https://192.168.1.10:9443/pair",
+      "https://192.168.1.10:9443/events",
     ]);
     expect(fetchMock.mock.calls[1]?.[0]).toMatchObject({
       certSha256: "a".repeat(64),
       spkiSha256: "b".repeat(43),
     });
+    expect(fetchMock.mock.calls[2]?.[0]).toMatchObject({
+      certSha256: "a".repeat(64),
+      spkiSha256: "b".repeat(43),
+    });
+  });
+
+  test("uses pinned HTTPS for RPC messages after pairing", async () => {
+    const requests: Array<{ url: string; method: string; body?: string }> = [];
+    const plaintextMessages: string[] = [];
+    __internal.setPinnedHttpsFetchForTesting(
+      mock(async (request: { url: string; method: string; body?: string }) => {
+        requests.push(request);
+        if (request.url.endsWith("/pair")) {
+          return Response.json({ sessionToken: "session-token" }) as unknown as Response;
+        }
+        if (request.url.endsWith("/events")) {
+          return await new Promise<Response>(() => {});
+        }
+        if (request.url.endsWith("/rpc")) {
+          return new Response("server-response", { status: 200 });
+        }
+        return new Response("", { status: 404 });
+      }) as never,
+    );
+    const client = new SecureTransportClient();
+    client.subscribe({
+      onPlaintextMessage: (text) => plaintextMessages.push(text),
+    });
+
+    await client.connectFromQrPayload(buildPayload({ hosts: ["192.168.1.10"] }));
+    await client.sendPlaintext('{"jsonrpc":"2.0","method":"thread/list","id":1}');
+
+    expect(requests.find((request) => request.url.endsWith("/rpc"))).toMatchObject({
+      url: "https://192.168.1.10:9443/rpc",
+      method: "POST",
+      body: '{"jsonrpc":"2.0","method":"thread/list","id":1}',
+      certSha256: "a".repeat(64),
+      spkiSha256: "b".repeat(43),
+    });
+    expect(plaintextMessages).toEqual(["server-response"]);
   });
 
   test("clears active connection and emits close when the event stream ends", async () => {

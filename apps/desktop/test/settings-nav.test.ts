@@ -108,6 +108,11 @@ mock.module("../src/lib/desktopCommands", () =>
         pairingPayload: null,
         trustedPhoneDeviceId: null,
         trustedPhoneFingerprint: null,
+        directUrl: null,
+        ticketUrl: null,
+        certSha256: null,
+        spkiSha256: null,
+        hostHints: [],
         lastError: null,
       };
     },

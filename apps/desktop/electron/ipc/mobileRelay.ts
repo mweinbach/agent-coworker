@@ -58,6 +58,11 @@ export function registerMobileRelayIpc(context: DesktopIpcModuleContext): void {
       pairingPayload: null,
       trustedPhoneDeviceId: null,
       trustedPhoneFingerprint: null,
+      directUrl: null,
+      ticketUrl: null,
+      certSha256: null,
+      spkiSha256: null,
+      hostHints: [],
       lastError: REMOTE_ACCESS_DISABLED_MESSAGE,
     });
 

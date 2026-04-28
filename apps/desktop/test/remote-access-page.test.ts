@@ -24,6 +24,60 @@ const MOCK_UPDATE_STATE = {
   error: null,
 };
 
+const H3_PAIRING_PAYLOAD = {
+  v: 1,
+  scheme: "h3",
+  hosts: ["127.0.0.1"],
+  port: 34443,
+  certSha256: "a".repeat(64),
+  spkiSha256: "b".repeat(43),
+  identityPub: "desktop-identity",
+  nonce: "nonce-value-123456789012",
+  expiresAt: 1_700_000_000_000,
+} as const;
+
+function buildMobileRelayState(
+  overrides: Partial<{
+    status: string;
+    workspaceId: string | null;
+    workspacePath: string | null;
+    relaySource: string;
+    relayUrl: string | null;
+    sessionId: string | null;
+    pairingPayload: typeof H3_PAIRING_PAYLOAD | null;
+    trustedPhoneDeviceId: string | null;
+    trustedPhoneFingerprint: string | null;
+    directUrl: string | null;
+    ticketUrl: string | null;
+    certSha256: string | null;
+    spkiSha256: string | null;
+    hostHints: string[];
+  }> = {},
+) {
+  return {
+    status: "pairing",
+    workspaceId: "ws-1",
+    workspacePath: "/tmp/workspace",
+    relaySource: "direct",
+    relaySourceMessage: "Direct HTTP/3 pairing is served by this desktop app.",
+    relayServiceStatus: "running",
+    relayServiceMessage: "Scan the QR from Cowork Mobile on the same network.",
+    relayServiceUpdatedAt: "2026-03-25T17:00:00.000Z",
+    relayUrl: "https://127.0.0.1:34443",
+    sessionId: null,
+    pairingPayload: H3_PAIRING_PAYLOAD,
+    trustedPhoneDeviceId: null,
+    trustedPhoneFingerprint: null,
+    directUrl: "https://127.0.0.1:34443",
+    ticketUrl: "cowork-pair://ticket",
+    certSha256: H3_PAIRING_PAYLOAD.certSha256,
+    spkiSha256: H3_PAIRING_PAYLOAD.spkiSha256,
+    hostHints: ["127.0.0.1"],
+    lastError: null,
+    ...overrides,
+  };
+}
+
 mock.module("../src/lib/desktopCommands", () =>
   createDesktopCommandsMock({
     appendTranscriptBatch: async () => {},
@@ -60,110 +114,34 @@ mock.module("../src/lib/desktopCommands", () =>
     onSystemAppearanceChanged: () => () => {},
     onMenuCommand: () => () => {},
     onUpdateStateChanged: () => () => {},
-    startMobileRelay: async () => ({
-      status: "pairing",
-      workspaceId: "ws-1",
-      workspacePath: "/tmp/workspace",
-      relaySource: "managed",
-      relaySourceMessage: "Direct mobile pairing state is stored under ~/.cowork/mobile-pairing.",
-      relayServiceStatus: "running",
-      relayServiceMessage: "Cowork Desktop serves the direct mobile endpoint locally.",
-      relayServiceUpdatedAt: "2026-03-25T17:00:00.000Z",
-      relayUrl: "https://127.0.0.1:34443",
-      sessionId: "sess-1",
-      pairingPayload: {
-        v: 2,
-        relay: "https://127.0.0.1:34443",
-        sessionId: "sess-1",
-        macDeviceId: "mac-1",
-        macIdentityPublicKey: "pub-key",
-        pairingSecret: "pairing-secret-1",
-        expiresAt: 1_700_000_000_000,
-      },
-      trustedPhoneDeviceId: null,
-      trustedPhoneFingerprint: null,
-      lastError: null,
-    }),
-    stopMobileRelay: async () => ({
-      status: "idle",
-      workspaceId: null,
-      workspacePath: null,
-      relaySource: "managed",
-      relaySourceMessage: "Direct mobile pairing state is stored under ~/.cowork/mobile-pairing.",
-      relayServiceStatus: "running",
-      relayServiceMessage: "Cowork Desktop serves the direct mobile endpoint locally.",
-      relayServiceUpdatedAt: "2026-03-25T17:00:00.000Z",
-      relayUrl: null,
-      sessionId: null,
-      pairingPayload: null,
-      trustedPhoneDeviceId: null,
-      trustedPhoneFingerprint: null,
-      lastError: null,
-    }),
-    getMobileRelayState: async () => ({
-      status: "pairing",
-      workspaceId: "ws-1",
-      workspacePath: "/tmp/workspace",
-      relaySource: "managed",
-      relaySourceMessage: "Direct mobile pairing state is stored under ~/.cowork/mobile-pairing.",
-      relayServiceStatus: "running",
-      relayServiceMessage: "Cowork Desktop serves the direct mobile endpoint locally.",
-      relayServiceUpdatedAt: "2026-03-25T17:00:00.000Z",
-      relayUrl: "https://127.0.0.1:34443",
-      sessionId: "sess-1",
-      pairingPayload: {
-        v: 2,
-        relay: "https://127.0.0.1:34443",
-        sessionId: "sess-1",
-        macDeviceId: "mac-1",
-        macIdentityPublicKey: "pub-key",
-        pairingSecret: "pairing-secret-1",
-        expiresAt: 1_700_000_000_000,
-      },
-      trustedPhoneDeviceId: "phone-1",
-      trustedPhoneFingerprint: "abc123",
-      lastError: null,
-    }),
-    rotateMobileRelaySession: async () => ({
-      status: "pairing",
-      workspaceId: "ws-1",
-      workspacePath: "/tmp/workspace",
-      relaySource: "managed",
-      relaySourceMessage: "Direct mobile pairing state is stored under ~/.cowork/mobile-pairing.",
-      relayServiceStatus: "running",
-      relayServiceMessage: "Cowork Desktop serves the direct mobile endpoint locally.",
-      relayServiceUpdatedAt: "2026-03-25T17:00:00.000Z",
-      relayUrl: "https://127.0.0.1:34443",
-      sessionId: "sess-2",
-      pairingPayload: {
-        v: 2,
-        relay: "https://127.0.0.1:34443",
-        sessionId: "sess-2",
-        macDeviceId: "mac-1",
-        macIdentityPublicKey: "pub-key",
-        pairingSecret: "pairing-secret-2",
-        expiresAt: 1_700_000_000_000,
-      },
-      trustedPhoneDeviceId: "phone-1",
-      trustedPhoneFingerprint: "abc123",
-      lastError: null,
-    }),
-    forgetMobileRelayTrustedPhone: async () => ({
-      status: "pairing",
-      workspaceId: "ws-1",
-      workspacePath: "/tmp/workspace",
-      relaySource: "managed",
-      relaySourceMessage: "Direct mobile pairing state is stored under ~/.cowork/mobile-pairing.",
-      relayServiceStatus: "running",
-      relayServiceMessage: "Cowork Desktop serves the direct mobile endpoint locally.",
-      relayServiceUpdatedAt: "2026-03-25T17:00:00.000Z",
-      relayUrl: "https://127.0.0.1:34443",
-      sessionId: "sess-1",
-      pairingPayload: null,
-      trustedPhoneDeviceId: null,
-      trustedPhoneFingerprint: null,
-      lastError: null,
-    }),
+    startMobileRelay: async () => buildMobileRelayState(),
+    stopMobileRelay: async () =>
+      buildMobileRelayState({
+        status: "idle",
+        workspaceId: null,
+        workspacePath: null,
+        relayUrl: null,
+        pairingPayload: null,
+        directUrl: null,
+        ticketUrl: null,
+        certSha256: null,
+        spkiSha256: null,
+        hostHints: [],
+      }),
+    getMobileRelayState: async () =>
+      buildMobileRelayState({
+        trustedPhoneDeviceId: "phone-1",
+        trustedPhoneFingerprint: "abc123",
+      }),
+    rotateMobileRelaySession: async () =>
+      buildMobileRelayState({
+        trustedPhoneDeviceId: "phone-1",
+        trustedPhoneFingerprint: "abc123",
+      }),
+    forgetMobileRelayTrustedPhone: async () =>
+      buildMobileRelayState({
+        pairingPayload: null,
+      }),
     onMobileRelayStateChanged: () => () => {},
   }),
 );
@@ -209,5 +187,9 @@ describe("desktop remote access page", () => {
 
   test("describes the managed relay source", () => {
     expect(describeRelaySource("managed")).toBe("Cowork-managed");
+  });
+
+  test("describes the direct relay source", () => {
+    expect(describeRelaySource("direct")).toBe("Direct");
   });
 });

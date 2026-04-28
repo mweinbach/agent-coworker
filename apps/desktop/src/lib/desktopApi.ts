@@ -52,7 +52,7 @@ export type MobileRelayBridgeState = {
   ticketUrl: string | null;
   certSha256: string | null;
   spkiSha256: string | null;
-  hostHints?: string[];
+  hostHints: string[];
   lastError: string | null;
 };
 

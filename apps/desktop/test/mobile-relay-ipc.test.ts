@@ -107,6 +107,11 @@ describe("mobile relay IPC", () => {
       pairingPayload: null,
       trustedPhoneDeviceId: null,
       trustedPhoneFingerprint: null,
+      directUrl: null,
+      ticketUrl: null,
+      certSha256: null,
+      spkiSha256: null,
+      hostHints: [],
       lastError: null,
     }));
     const handlers = new Map<string, (_event: unknown, args?: unknown) => Promise<unknown>>();
@@ -168,6 +173,11 @@ describe("mobile relay IPC", () => {
       pairingPayload: null,
       trustedPhoneDeviceId: null,
       trustedPhoneFingerprint: null,
+      directUrl: null,
+      ticketUrl: null,
+      certSha256: null,
+      spkiSha256: null,
+      hostHints: [],
       lastError: null,
     }));
     const handlers = new Map<string, (_event: unknown, args?: unknown) => Promise<unknown>>();
@@ -241,6 +251,11 @@ describe("mobile relay IPC", () => {
       status: "idle",
       relaySource: "unavailable",
       relayServiceStatus: "unavailable",
+      directUrl: null,
+      ticketUrl: null,
+      certSha256: null,
+      spkiSha256: null,
+      hostHints: [],
       lastError: "Remote access is disabled.",
     });
     expect(stop).toHaveBeenCalledTimes(1);

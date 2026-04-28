@@ -38,6 +38,11 @@ const DEFAULT_MOBILE_RELAY_STATE = {
   pairingPayload: null,
   trustedPhoneDeviceId: null,
   trustedPhoneFingerprint: null,
+  directUrl: null,
+  ticketUrl: null,
+  certSha256: null,
+  spkiSha256: null,
+  hostHints: [],
   lastError: null,
 } satisfies Awaited<ReturnType<typeof import("../../src/lib/desktopCommands").getMobileRelayState>>;
 

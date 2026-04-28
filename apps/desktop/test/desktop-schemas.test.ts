@@ -185,6 +185,11 @@ describe("desktop persisted-state schema defaults", () => {
       },
       trustedPhoneDeviceId: null,
       trustedPhoneFingerprint: null,
+      directUrl: "https://127.0.0.1:34443",
+      ticketUrl: "cowork-pair://ticket",
+      certSha256: "a".repeat(64),
+      spkiSha256: "b".repeat(43),
+      hostHints: ["127.0.0.1"],
       lastError: null,
     });
 
@@ -217,6 +222,11 @@ describe("desktop persisted-state schema defaults", () => {
       },
       trustedPhoneDeviceId: null,
       trustedPhoneFingerprint: null,
+      directUrl: "https://127.0.0.1:34443",
+      ticketUrl: "cowork-pair://ticket",
+      certSha256: "a".repeat(64),
+      spkiSha256: "b".repeat(43),
+      hostHints: ["127.0.0.1"],
       lastError: null,
     };
 

@@ -1,0 +1,9 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "modules": ["CoworkPinnedHttpsModule"]
+  },
+  "android": {
+    "modules": ["co.weinbach.cowork.mobile.pinnedhttps.CoworkPinnedHttpsModule"]
+  }
+}

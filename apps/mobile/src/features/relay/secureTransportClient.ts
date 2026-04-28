@@ -59,6 +59,8 @@ type ActiveSession = {
   macDeviceId: string;
   endpointUrl: string;
   sessionToken: string;
+  certSha256: string;
+  spkiSha256: string;
 };
 
 export type SecureTransportSnapshot = {
@@ -146,6 +148,8 @@ export class SecureTransportClient {
         macDeviceId: trusted.macDeviceId,
         endpointUrl,
         sessionToken: body.sessionToken,
+        certSha256: trusted.certSha256,
+        spkiSha256: trusted.spkiSha256,
       };
       await this.persistTrustedState();
       this.openEventStream();
@@ -172,6 +176,8 @@ export class SecureTransportClient {
       macDeviceId: trusted.macDeviceId,
       endpointUrl: trusted.endpointUrl,
       sessionToken: trusted.sessionToken,
+      certSha256: trusted.certSha256,
+      spkiSha256: trusted.spkiSha256,
     };
     this.openEventStream();
     return this.emitState("connected");
@@ -202,13 +208,16 @@ export class SecureTransportClient {
     if (!this.activeSession) {
       throw new Error("No active desktop connection.");
     }
-    const response = await fetch(`${this.activeSession.endpointUrl}/rpc`, {
+    const response = await fetchPinnedHttps({
+      url: `${this.activeSession.endpointUrl}/rpc`,
       method: "POST",
       headers: {
         authorization: `Bearer ${this.activeSession.sessionToken}`,
         "content-type": "application/json",
       },
       body: text,
+      certSha256: this.activeSession.certSha256,
+      spkiSha256: this.activeSession.spkiSha256,
     });
     if (!response.ok) {
       throw new Error(`Desktop request failed with HTTP ${response.status}.`);
@@ -286,7 +295,20 @@ export class SecureTransportClient {
       SecureStore.getItemAsync(ACTIVE_SESSION_KEY),
     ]);
     this.trustedDesktops = trustedRaw ? (JSON.parse(trustedRaw) as TrustedDesktopRecord[]) : [];
-    this.activeSession = activeRaw ? (JSON.parse(activeRaw) as ActiveSession) : null;
+    const active = activeRaw ? (JSON.parse(activeRaw) as Partial<ActiveSession>) : null;
+    const trusted = active
+      ? this.trustedDesktops.find((entry) => entry.macDeviceId === active.macDeviceId)
+      : null;
+    this.activeSession =
+      active?.macDeviceId && active.endpointUrl && active.sessionToken && trusted
+        ? {
+            macDeviceId: active.macDeviceId,
+            endpointUrl: active.endpointUrl,
+            sessionToken: active.sessionToken,
+            certSha256: active.certSha256 ?? trusted.certSha256,
+            spkiSha256: active.spkiSha256 ?? trusted.spkiSha256,
+          }
+        : null;
   }
 
   private async persistTrustedState(): Promise<void> {
@@ -307,6 +329,10 @@ export class SecureTransportClient {
     void readSseStream(
       `${this.activeSession.endpointUrl}/events`,
       this.activeSession.sessionToken,
+      {
+        certSha256: this.activeSession.certSha256,
+        spkiSha256: this.activeSession.spkiSha256,
+      },
       {
         signal: controller.signal,
         onMessage: (text) => {
@@ -467,6 +493,10 @@ function randomBase64Url(byteLength: number): string {
 async function readSseStream(
   url: string,
   sessionToken: string,
+  pins: {
+    certSha256: string;
+    spkiSha256: string;
+  },
   opts: {
     signal: AbortSignal;
     onMessage(text: string): void;
@@ -475,36 +505,32 @@ async function readSseStream(
   },
 ): Promise<void> {
   try {
-    const response = await fetch(url, {
+    const response = await fetchPinnedHttps({
+      url,
+      method: "GET",
       headers: { authorization: `Bearer ${sessionToken}` },
-      signal: opts.signal,
+      certSha256: pins.certSha256,
+      spkiSha256: pins.spkiSha256,
     });
-    if (!response.ok || !response.body) {
+    if (opts.signal.aborted) {
+      return;
+    }
+    if (!response.ok) {
       throw new Error(`Event stream failed with HTTP ${response.status}.`);
     }
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    while (!opts.signal.aborted) {
-      const { value, done } = await reader.read();
-      if (done) {
-        opts.onClose("Event stream closed.");
-        break;
-      }
-      buffer += decoder.decode(value, { stream: true });
-      let index = buffer.indexOf("\n\n");
-      while (index >= 0) {
-        const chunk = buffer.slice(0, index);
-        buffer = buffer.slice(index + 2);
-        const data = chunk
-          .split("\n")
-          .filter((line) => line.startsWith("data:"))
-          .map((line) => line.slice("data:".length).trimStart())
-          .join("\n");
-        if (data) opts.onMessage(data);
-        index = buffer.indexOf("\n\n");
-      }
+    const body = await response.text();
+    if (opts.signal.aborted) {
+      return;
     }
+    for (const chunk of body.split("\n\n")) {
+      const data = chunk
+        .split("\n")
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice("data:".length).trimStart())
+        .join("\n");
+      if (data) opts.onMessage(data);
+    }
+    opts.onClose("Event stream closed.");
   } catch (error) {
     if (!opts.signal.aborted) {
       opts.onError(error instanceof Error ? error.message : String(error));

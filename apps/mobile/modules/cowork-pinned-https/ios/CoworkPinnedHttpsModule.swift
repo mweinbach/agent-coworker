@@ -165,6 +165,7 @@ private final class PinnedHttpsStreamDelegate: PinnedHttpsSessionDelegate, URLSe
   private let streamId: String
   private let onEvent: ([String: Any?]) -> Void
   private let onComplete: () -> Void
+  private var pendingUtf8 = Data()
   private var didSendTerminalEvent = false
 
   init(
@@ -200,11 +201,7 @@ private final class PinnedHttpsStreamDelegate: PinnedHttpsSessionDelegate, URLSe
   }
 
   func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-    onEvent([
-      "streamId": streamId,
-      "type": "data",
-      "data": String(data: data, encoding: .utf8) ?? "",
-    ])
+    emitUtf8Data(data)
   }
 
   func urlSession(
@@ -219,6 +216,7 @@ private final class PinnedHttpsStreamDelegate: PinnedHttpsSessionDelegate, URLSe
         "message": error.localizedDescription,
       ])
     } else {
+      flushUtf8Data()
       sendTerminalEvent([
         "streamId": streamId,
         "type": "close",
@@ -227,6 +225,61 @@ private final class PinnedHttpsStreamDelegate: PinnedHttpsSessionDelegate, URLSe
     }
     onComplete()
     session.finishTasksAndInvalidate()
+  }
+
+  private func emitUtf8Data(_ data: Data) {
+    pendingUtf8.append(data)
+    emitDecodableUtf8Prefix()
+  }
+
+  private func emitDecodableUtf8Prefix() {
+    guard !pendingUtf8.isEmpty else {
+      return
+    }
+
+    let maxCarryCount = min(3, pendingUtf8.count)
+    for carryCount in 0...maxCarryCount {
+      let prefixLength = pendingUtf8.count - carryCount
+      if prefixLength == 0 {
+        continue
+      }
+      let prefix = Data(pendingUtf8.prefix(prefixLength))
+      if let text = String(data: prefix, encoding: .utf8) {
+        sendDataEvent(text)
+        pendingUtf8 = Data(pendingUtf8.suffix(carryCount))
+        return
+      }
+    }
+
+    guard pendingUtf8.count > 3 else {
+      return
+    }
+    let prefixLength = pendingUtf8.count - 3
+    sendDataEvent(String(decoding: pendingUtf8.prefix(prefixLength), as: UTF8.self))
+    pendingUtf8 = Data(pendingUtf8.suffix(3))
+  }
+
+  private func flushUtf8Data() {
+    guard !pendingUtf8.isEmpty else {
+      return
+    }
+    if let text = String(data: pendingUtf8, encoding: .utf8) {
+      sendDataEvent(text)
+    } else {
+      sendDataEvent(String(decoding: pendingUtf8, as: UTF8.self))
+    }
+    pendingUtf8.removeAll()
+  }
+
+  private func sendDataEvent(_ data: String) {
+    guard !data.isEmpty else {
+      return
+    }
+    onEvent([
+      "streamId": streamId,
+      "type": "data",
+      "data": data,
+    ])
   }
 
   private func sendTerminalEvent(_ event: [String: Any?]) {

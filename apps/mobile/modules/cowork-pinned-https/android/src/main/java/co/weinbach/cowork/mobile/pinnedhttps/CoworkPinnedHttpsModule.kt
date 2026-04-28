@@ -121,18 +121,18 @@ class CoworkPinnedHttpsModule : Module() {
           return@Thread
         }
 
-        connection.inputStream.use { stream ->
-          val buffer = ByteArray(STREAM_BUFFER_SIZE)
+        connection.inputStream.reader(Charsets.UTF_8).use { reader ->
+          val buffer = CharArray(STREAM_BUFFER_SIZE)
           while (true) {
-            val bytesRead = stream.read(buffer)
-            if (bytesRead == -1) {
+            val charsRead = reader.read(buffer)
+            if (charsRead == -1) {
               break
             }
-            if (bytesRead > 0) {
+            if (charsRead > 0) {
               sendStreamEvent(
                 streamId,
                 "data",
-                data = buffer.copyOf(bytesRead).toString(Charsets.UTF_8),
+                data = String(buffer, 0, charsRead),
               )
             }
           }

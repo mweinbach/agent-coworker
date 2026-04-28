@@ -307,5 +307,12 @@ describe("mobile secure transport client", () => {
       connectedMacDeviceId: "desktop-identity",
       lastError: null,
     });
+    expect(JSON.parse(secureStoreValues.get("cowork.h3.activeSession.v1") ?? "null")).toEqual({
+      macDeviceId: "desktop-identity",
+      endpointUrl: "https://192.168.1.10:9443",
+      sessionToken: "session-token",
+      certSha256: "a".repeat(64),
+      spkiSha256: "b".repeat(43),
+    });
   });
 });

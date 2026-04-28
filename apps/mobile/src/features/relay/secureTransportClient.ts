@@ -204,6 +204,7 @@ export class SecureTransportClient {
       certSha256: trusted.certSha256,
       spkiSha256: trusted.spkiSha256,
     };
+    await this.persistTrustedState();
     this.openEventStream();
     return this.emitState("connected");
   }

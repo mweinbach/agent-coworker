@@ -125,6 +125,29 @@ function parseJsonRpcPayload(
   };
 }
 
+async function dispatchHttpRpcPayload(
+  raw: unknown,
+  connection: H3JsonRpcConnection,
+): Promise<Response> {
+  let message: JsonRpcLiteRequest | JsonRpcLiteNotification | JsonRpcLiteClientResponse;
+  try {
+    message = parseJsonRpcPayload(raw);
+  } catch (error) {
+    return jsonResponse(
+      {
+        error: error instanceof Error ? error.message : "Invalid JSON-RPC payload.",
+      },
+      { status: 400 },
+    );
+  }
+
+  const response = await connection.dispatch(message);
+  if (!("method" in message) || !("id" in message)) {
+    return jsonResponse({ ok: true }, { status: 202 });
+  }
+  return jsonResponse(response ?? {});
+}
+
 function getJsonRpcIdKey(message: JsonRpcLiteRequest | JsonRpcLiteClientResponse): string {
   return `${typeof message.id}:${String(message.id)}`;
 }
@@ -315,12 +338,7 @@ export async function startH3MobileServer(
 
       if (req.method === "POST" && url.pathname === "/rpc") {
         const raw = await req.json().catch(() => null);
-        const message = parseJsonRpcPayload(raw);
-        const response = await getConnection(trustedDevice.deviceId).dispatch(message);
-        if (!("method" in message) || !("id" in message)) {
-          return jsonResponse({ ok: true }, { status: 202 });
-        }
-        return jsonResponse(response ?? {});
+        return await dispatchHttpRpcPayload(raw, getConnection(trustedDevice.deviceId));
       }
 
       if (req.method === "GET" && url.pathname === "/events") {
@@ -397,4 +415,5 @@ export async function startH3MobileServer(
 
 export const __internal = {
   createHttpJsonRpcConnection,
+  dispatchHttpRpcPayload,
 };

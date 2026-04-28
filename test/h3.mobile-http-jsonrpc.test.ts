@@ -79,4 +79,23 @@ describe("H3 mobile HTTP JSON-RPC connection", () => {
     expect(handled).toEqual([{ id: "server-request-1", result: { approved: true } }]);
     connection.close();
   });
+
+  test("returns 400 for malformed HTTP RPC payloads", async () => {
+    const runtime = {
+      openHttpConnection() {},
+      handleDecodedMessage() {
+        throw new Error("malformed payloads must not reach the runtime");
+      },
+      closeConnection() {},
+    };
+    const connection = __internal.createHttpJsonRpcConnection(runtime as never);
+
+    const response = await __internal.dispatchHttpRpcPayload(null, connection);
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "JSON-RPC payload must be an object.",
+    });
+    connection.close();
+  });
 });

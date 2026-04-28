@@ -80,6 +80,26 @@ describe("H3 mobile HTTP JSON-RPC connection", () => {
     connection.close();
   });
 
+  test("closes active event streams when the HTTP JSON-RPC connection closes", async () => {
+    const runtime = {
+      openHttpConnection() {},
+      handleDecodedMessage() {},
+      closeConnection() {},
+    };
+    const connection = __internal.createHttpJsonRpcConnection(runtime as never);
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        connection.addEventSink(controller);
+      },
+    });
+    const reader = stream.getReader();
+
+    await expect(reader.read()).resolves.toMatchObject({ done: false });
+    connection.close();
+
+    await expect(reader.read()).resolves.toEqual({ done: true, value: undefined });
+  });
+
   test("returns 400 for malformed HTTP RPC payloads", async () => {
     const runtime = {
       openHttpConnection() {},

@@ -77,7 +77,7 @@ const serverListeningSchema = z
       .object({
         url: z.string().min(1),
         port: z.number(),
-        hostHints: z.array(z.string()),
+        hostHints: z.array(z.string().min(1)).min(1),
         ticket: z.string().min(1),
         adminToken: z.string().min(1),
         certSha256: z.string().min(1),

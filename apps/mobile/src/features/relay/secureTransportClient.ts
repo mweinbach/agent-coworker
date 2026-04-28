@@ -436,7 +436,15 @@ function buildEndpointUrls(payload: PairingQrPayload): string[] {
   if (payload.hosts.length === 0) {
     throw new Error("Pairing ticket does not include a host.");
   }
-  return payload.hosts.map((host) => `https://${host}:${payload.port}`);
+  return payload.hosts.map((host) => `https://${formatUrlHost(host)}:${payload.port}`);
+}
+
+function formatUrlHost(host: string): string {
+  const trimmed = host.trim();
+  if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+    return trimmed;
+  }
+  return trimmed.includes(":") ? `[${trimmed}]` : trimmed;
 }
 
 async function pairWithAnyEndpoint(

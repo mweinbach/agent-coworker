@@ -243,6 +243,13 @@ function createHttpJsonRpcConnection(runtime: AgentServerRuntime): H3JsonRpcConn
     },
     close() {
       pendingResponses.clear();
+      for (const sink of eventSinks) {
+        try {
+          sink.close();
+        } catch {
+          // The stream may already be canceled by the client.
+        }
+      }
       eventSinks.clear();
       runtime.closeConnection(connection as never);
     },

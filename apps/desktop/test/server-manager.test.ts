@@ -84,6 +84,55 @@ describe("desktop server manager startup parsing", () => {
     expect(payload.port).toBe(1234);
   });
 
+  test("waitForServerListening ignores mobile H3 payloads without host hints", async () => {
+    const child = createFakeChild();
+    const waitPromise = __internal.waitForServerListening(child as any);
+
+    child.stdout.write(
+      `${JSON.stringify({
+        type: "server_listening",
+        url: "ws://127.0.0.1:1234/ws",
+        port: 1234,
+        cwd: "/tmp/workspace",
+        mobileH3: {
+          url: "https://127.0.0.1:9443",
+          port: 9443,
+          hostHints: [],
+          ticket: "cowork-pair://ticket",
+          adminToken: "admin-token",
+          certSha256: "a".repeat(64),
+          spkiSha256: "b".repeat(43),
+          identityPub: "desktop-identity",
+          nonce: "nonce-value-123456789012",
+          expiresAt: Date.now() + 60_000,
+        },
+      })}\n`,
+    );
+    child.stdout.write(
+      `${JSON.stringify({
+        type: "server_listening",
+        url: "ws://127.0.0.1:1234/ws",
+        port: 1234,
+        cwd: "/tmp/workspace",
+        mobileH3: {
+          url: "https://127.0.0.1:9443",
+          port: 9443,
+          hostHints: ["127.0.0.1"],
+          ticket: "cowork-pair://ticket",
+          adminToken: "admin-token",
+          certSha256: "a".repeat(64),
+          spkiSha256: "b".repeat(43),
+          identityPub: "desktop-identity",
+          nonce: "nonce-value-123456789012",
+          expiresAt: Date.now() + 60_000,
+        },
+      })}\n`,
+    );
+
+    const payload = await waitPromise;
+    expect(payload.mobileH3?.hostHints).toEqual(["127.0.0.1"]);
+  });
+
   test("waitForServerListening includes recent stdout lines when process exits early", async () => {
     const child = createFakeChild();
     const waitPromise = __internal.waitForServerListening(child as any);

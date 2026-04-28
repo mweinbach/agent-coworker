@@ -94,6 +94,29 @@ describe("mobile secure transport client", () => {
     });
   });
 
+  test("brackets IPv6 literal hosts when building pairing endpoint URLs", async () => {
+    const requestedUrls: string[] = [];
+    const fetchMock = mock(async (request: { url: string }) => {
+      requestedUrls.push(request.url);
+      if (request.url === "https://[2001:db8::1]:9443/pair") {
+        return Response.json({ sessionToken: "session-token" }) as unknown as Response;
+      }
+      return new Response("", { status: 200 });
+    });
+    __internal.setPinnedHttpsFetchForTesting(fetchMock as never);
+
+    const client = new SecureTransportClient();
+    const snapshot = await client.connectFromQrPayload(buildPayload({ hosts: ["2001:db8::1"] }));
+    await waitFor(() => requestedUrls.some((url) => url.endsWith("/events")));
+
+    expect(snapshot.status).toBe("connected");
+    expect(snapshot.relayUrl).toBe("https://[2001:db8::1]:9443");
+    expect(requestedUrls).toEqual([
+      "https://[2001:db8::1]:9443/pair",
+      "https://[2001:db8::1]:9443/events",
+    ]);
+  });
+
   test("uses pinned HTTPS for RPC messages after pairing", async () => {
     const requests: Array<{ url: string; method: string; body?: string }> = [];
     const plaintextMessages: string[] = [];

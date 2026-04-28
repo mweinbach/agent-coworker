@@ -42,6 +42,7 @@ class PinnedHttpsRequest : Record {
 
 class CoworkPinnedHttpsModule : Module() {
   private val streamConnections = ConcurrentHashMap<String, HttpsURLConnection>()
+  private val closingStreamIds = ConcurrentHashMap.newKeySet<String>()
 
   override fun definition() = ModuleDefinition {
     Name("CoworkPinnedHttps")
@@ -109,6 +110,10 @@ class CoworkPinnedHttpsModule : Module() {
           readTimeout = 0
         }
         streamConnections[streamId] = connection
+        if (closingStreamIds.remove(streamId)) {
+          sendStreamEvent(streamId, "close", message = "Event stream closed.")
+          return@Thread
+        }
 
         val status = connection.responseCode
         if (status < 200 || status >= 300) {
@@ -134,9 +139,14 @@ class CoworkPinnedHttpsModule : Module() {
         }
         sendStreamEvent(streamId, "close", message = "Event stream closed.")
       } catch (error: Exception) {
-        sendStreamEvent(streamId, "error", message = error.message ?: error.toString())
+        if (closingStreamIds.remove(streamId)) {
+          sendStreamEvent(streamId, "close", message = "Event stream closed.")
+        } else {
+          sendStreamEvent(streamId, "error", message = error.message ?: error.toString())
+        }
       } finally {
         streamConnections.remove(streamId)
+        closingStreamIds.remove(streamId)
         connection?.disconnect()
       }
     }.apply {
@@ -147,6 +157,7 @@ class CoworkPinnedHttpsModule : Module() {
   }
 
   private fun closePinnedHttpsStream(streamId: String) {
+    closingStreamIds.add(streamId)
     streamConnections.remove(streamId)?.disconnect()
   }
 

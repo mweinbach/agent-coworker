@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import type { JsonRpcLiteNotification, JsonRpcLiteRequest } from "../src/server/jsonrpc/protocol";
+import type {
+  JsonRpcLiteClientResponse,
+  JsonRpcLiteNotification,
+  JsonRpcLiteRequest,
+} from "../src/server/jsonrpc/protocol";
 import { __internal } from "../src/server/transport/h3/server";
 
 describe("H3 mobile HTTP JSON-RPC connection", () => {
@@ -51,5 +55,28 @@ describe("H3 mobile HTTP JSON-RPC connection", () => {
 
     connection.close();
     expect(closedConnectionIds).toEqual([connection.data.connectionId]);
+  });
+
+  test("accepts client responses from HTTP RPC without waiting for a reply", async () => {
+    const handled: Array<JsonRpcLiteRequest | JsonRpcLiteNotification | JsonRpcLiteClientResponse> =
+      [];
+    const runtime = {
+      openHttpConnection() {},
+      handleDecodedMessage(
+        _connection: { send(message: string): number },
+        message: JsonRpcLiteRequest | JsonRpcLiteNotification | JsonRpcLiteClientResponse,
+      ) {
+        handled.push(message);
+      },
+      closeConnection() {},
+    };
+    const connection = __internal.createHttpJsonRpcConnection(runtime as never);
+
+    await expect(
+      connection.dispatch({ id: "server-request-1", result: { approved: true } }),
+    ).resolves.toBeNull();
+
+    expect(handled).toEqual([{ id: "server-request-1", result: { approved: true } }]);
+    connection.close();
   });
 });

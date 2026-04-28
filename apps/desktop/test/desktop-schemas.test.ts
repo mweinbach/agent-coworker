@@ -191,6 +191,37 @@ describe("desktop persisted-state schema defaults", () => {
     expect(parsed.status).toBe("pairing");
     expect(parsed.pairingPayload?.macDeviceId).toBe("mac-1");
   });
+
+  test("rejects empty H3 mobile pairing identity fields", () => {
+    const payload = {
+      status: "pairing",
+      workspaceId: "ws_1",
+      workspacePath: "/tmp/workspace",
+      relaySource: "managed",
+      relaySourceMessage: "Direct mobile pairing state is stored under ~/.cowork/mobile-pairing.",
+      relayServiceStatus: "running",
+      relayServiceMessage: "Cowork Desktop serves the direct mobile endpoint locally.",
+      relayServiceUpdatedAt: null,
+      relayUrl: "https://127.0.0.1:34443",
+      sessionId: null,
+      pairingPayload: {
+        v: 1,
+        scheme: "h3",
+        hosts: ["127.0.0.1"],
+        port: 34443,
+        certSha256: "a".repeat(64),
+        spkiSha256: "b".repeat(43),
+        identityPub: "",
+        nonce: "",
+        expiresAt: 1_700_000_000_000,
+      },
+      trustedPhoneDeviceId: null,
+      trustedPhoneFingerprint: null,
+      lastError: null,
+    };
+
+    expect(() => mobileRelayBridgeStateSchema.parse(payload)).toThrow();
+  });
 });
 
 describe("openExternalUrlInputSchema", () => {

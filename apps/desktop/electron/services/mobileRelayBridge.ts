@@ -129,6 +129,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
       });
       this.state = stateFromMobileH3(options, listening.mobileH3);
     } catch (error) {
+      this.currentStartOptions = null;
       this.state = {
         ...buildIdleState(),
         status: "error",

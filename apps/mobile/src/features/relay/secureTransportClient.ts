@@ -15,8 +15,38 @@ type SecureStoreModule = {
   deleteItemAsync(key: string): Promise<void>;
 };
 
+type PinnedHttpsRequest = {
+  url: string;
+  method: "GET" | "POST";
+  headers?: Record<string, string>;
+  body?: string;
+  certSha256: string;
+  spkiSha256: string;
+};
+
+type PinnedHttpsNativeResponse = {
+  status: number;
+  headers?: Record<string, string>;
+  body?: string;
+};
+
+type PinnedHttpsResponse = {
+  ok: boolean;
+  status: number;
+  json(): Promise<unknown>;
+  text(): Promise<string>;
+};
+
+type PinnedHttpsModule = {
+  fetchPinnedHttps(request: PinnedHttpsRequest): Promise<PinnedHttpsNativeResponse>;
+};
+
+type PinnedHttpsFetch = (request: PinnedHttpsRequest) => Promise<PinnedHttpsResponse>;
+
 let secureStorePromise: Promise<SecureStoreModule> | null = null;
 let secureStoreOverride: SecureStoreModule | null = null;
+let pinnedHttpsModulePromise: Promise<PinnedHttpsModule | null> | null = null;
+let pinnedHttpsFetchOverride: PinnedHttpsFetch | null = null;
 
 type TrustedDesktopRecord = RelayTrustedDesktop & {
   sessionToken: string;
@@ -74,13 +104,20 @@ export class SecureTransportClient {
       const endpointUrls = buildEndpointUrls(payload);
       const deviceId = `cowork-mobile-${randomBase64Url(12)}`;
       const identityPub = randomBase64Url(32);
-      const { endpointUrl, response } = await pairWithAnyEndpoint(endpointUrls, {
-        ticket: payload.rawTicket,
-        nonce: payload.nonce,
-        deviceId,
-        identityPub,
-        displayName: "Cowork Mobile",
-      });
+      const { endpointUrl, response } = await pairWithAnyEndpoint(
+        endpointUrls,
+        {
+          ticket: payload.rawTicket,
+          nonce: payload.nonce,
+          deviceId,
+          identityPub,
+          displayName: "Cowork Mobile",
+        },
+        {
+          certSha256: payload.certSha256,
+          spkiSha256: payload.spkiSha256,
+        },
+      );
       const body = (await response.json()) as {
         sessionToken?: string;
         trustedDevice?: { fingerprint?: string };
@@ -319,6 +356,10 @@ export const __internal = {
     secureStoreOverride = store;
     secureStorePromise = null;
   },
+  setPinnedHttpsFetchForTesting(fetcher: PinnedHttpsFetch | null): void {
+    pinnedHttpsFetchOverride = fetcher;
+    pinnedHttpsModulePromise = null;
+  },
 };
 
 function toPublicTrustedDesktop(entry: TrustedDesktopRecord): RelayTrustedDesktop {
@@ -348,14 +389,21 @@ async function pairWithAnyEndpoint(
     identityPub: string;
     displayName: string;
   },
-): Promise<{ endpointUrl: string; response: Response }> {
+  pins: {
+    certSha256: string;
+    spkiSha256: string;
+  },
+): Promise<{ endpointUrl: string; response: PinnedHttpsResponse }> {
   let lastError: unknown = null;
   for (const endpointUrl of endpointUrls) {
     try {
-      const response = await fetch(`${endpointUrl}/pair`, {
+      const response = await fetchPinnedHttps({
+        url: `${endpointUrl}/pair`,
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
+        certSha256: pins.certSha256,
+        spkiSha256: pins.spkiSha256,
       });
       if (response.ok) {
         return { endpointUrl, response };
@@ -367,6 +415,43 @@ async function pairWithAnyEndpoint(
   }
   const reason = lastError instanceof Error ? lastError.message : String(lastError ?? "unknown");
   throw new Error(`Pairing failed against all advertised hosts: ${reason}.`);
+}
+
+async function fetchPinnedHttps(request: PinnedHttpsRequest): Promise<PinnedHttpsResponse> {
+  if (pinnedHttpsFetchOverride) {
+    return await pinnedHttpsFetchOverride(request);
+  }
+  const module = await loadPinnedHttpsModule();
+  if (!module) {
+    throw new Error("Pinned HTTPS transport is unavailable on this mobile build.");
+  }
+  return toPinnedHttpsResponse(await module.fetchPinnedHttps(request));
+}
+
+async function loadPinnedHttpsModule(): Promise<PinnedHttpsModule | null> {
+  if (typeof globalThis === "object" && "Bun" in globalThis) {
+    return null;
+  }
+  pinnedHttpsModulePromise ??= import("expo-modules-core")
+    .then(({ requireOptionalNativeModule }) =>
+      requireOptionalNativeModule<PinnedHttpsModule>("CoworkPinnedHttps"),
+    )
+    .catch(() => null);
+  return await pinnedHttpsModulePromise;
+}
+
+function toPinnedHttpsResponse(response: PinnedHttpsNativeResponse): PinnedHttpsResponse {
+  const body = response.body ?? "";
+  return {
+    ok: response.status >= 200 && response.status < 300,
+    status: response.status,
+    async json() {
+      return JSON.parse(body) as unknown;
+    },
+    async text() {
+      return body;
+    },
+  };
 }
 
 function randomBase64Url(byteLength: number): string {

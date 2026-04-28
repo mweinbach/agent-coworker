@@ -47,47 +47,55 @@ describe("mobile secure transport client", () => {
   beforeEach(() => {
     secureStoreValues.clear();
     __internal.setSecureStoreForTesting(secureStore);
+    __internal.setPinnedHttpsFetchForTesting(null);
     globalThis.fetch = originalFetch;
   });
 
   afterEach(() => {
     __internal.setSecureStoreForTesting(null);
+    __internal.setPinnedHttpsFetchForTesting(null);
     globalThis.fetch = originalFetch;
   });
 
   test("tries later advertised hosts when the first pairing endpoint is unreachable", async () => {
     const requestedUrls: string[] = [];
-    const fetchMock = mock(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      requestedUrls.push(url);
-      if (url.startsWith("https://unreachable.local:9443")) {
+    const fetchMock = mock(async (request: { url: string }) => {
+      requestedUrls.push(request.url);
+      if (request.url.startsWith("https://unreachable.local:9443")) {
         throw new Error("network unreachable");
       }
-      if (url === "https://192.168.1.10:9443/pair") {
-        return Response.json({ sessionToken: "session-token" });
+      if (request.url === "https://192.168.1.10:9443/pair") {
+        return Response.json({ sessionToken: "session-token" }) as unknown as Response;
       }
       return new Response("", { status: 200 });
     });
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    __internal.setPinnedHttpsFetchForTesting(fetchMock as never);
 
     const client = new SecureTransportClient();
     const snapshot = await client.connectFromQrPayload(buildPayload());
 
     expect(snapshot.status).toBe("connected");
     expect(snapshot.relayUrl).toBe("https://192.168.1.10:9443");
-    expect(requestedUrls).toContain("https://unreachable.local:9443/pair");
-    expect(requestedUrls).toContain("https://192.168.1.10:9443/pair");
+    expect(requestedUrls).toEqual([
+      "https://unreachable.local:9443/pair",
+      "https://192.168.1.10:9443/pair",
+    ]);
+    expect(fetchMock.mock.calls[1]?.[0]).toMatchObject({
+      certSha256: "a".repeat(64),
+      spkiSha256: "b".repeat(43),
+    });
   });
 
   test("clears active connection and emits close when the event stream ends", async () => {
     const socketClosed = mock((_reason: string | null) => {});
     const client = new SecureTransportClient();
     client.subscribe({ onSocketClosed: socketClosed });
-    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.endsWith("/pair")) {
-        return Response.json({ sessionToken: "session-token" });
-      }
+    __internal.setPinnedHttpsFetchForTesting(
+      mock(
+        async () => Response.json({ sessionToken: "session-token" }) as unknown as Response,
+      ) as never,
+    );
+    globalThis.fetch = mock(async (_input: RequestInfo | URL) => {
       return new Response("", { status: 200 });
     }) as unknown as typeof fetch;
 
@@ -110,9 +118,7 @@ describe("mobile secure transport client", () => {
       onStateChanged: (snapshot) => states.push(snapshot.status),
       onSecureError: (message) => secureErrors.push(message),
     });
-    globalThis.fetch = mock(
-      async () => new Response("", { status: 503 }),
-    ) as unknown as typeof fetch;
+    __internal.setPinnedHttpsFetchForTesting(async () => new Response("", { status: 503 }));
 
     await expect(
       client.connectFromQrPayload(buildPayload({ hosts: ["192.168.1.10"] })),
@@ -131,11 +137,12 @@ describe("mobile secure transport client", () => {
     const socketClosed = mock((_reason: string | null) => {});
     const client = new SecureTransportClient();
     client.subscribe({ onSocketClosed: socketClosed });
-    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.endsWith("/pair")) {
-        return Response.json({ sessionToken: "session-token" });
-      }
+    __internal.setPinnedHttpsFetchForTesting(
+      mock(
+        async () => Response.json({ sessionToken: "session-token" }) as unknown as Response,
+      ) as never,
+    );
+    globalThis.fetch = mock(async (_input: RequestInfo | URL) => {
       return new Response("", { status: 200 });
     }) as unknown as typeof fetch;
 

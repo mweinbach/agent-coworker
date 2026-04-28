@@ -516,8 +516,8 @@ const h3MobileRelayPairingPayloadSchema = z.object({
   port: z.number().int().min(1).max(65535),
   certSha256: nonEmptyStringSchema,
   spkiSha256: nonEmptyStringSchema,
-  identityPub: z.string(),
-  nonce: z.string(),
+  identityPub: nonEmptyStringSchema,
+  nonce: nonEmptyStringSchema,
   expiresAt: z.number().int().nonnegative(),
 });
 

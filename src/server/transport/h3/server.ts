@@ -26,7 +26,9 @@ type H3Connection = {
 
 type H3JsonRpcConnection = H3Connection & {
   addEventSink(controller: ReadableStreamDefaultController<Uint8Array>): () => void;
-  dispatch(message: JsonRpcLiteRequest | JsonRpcLiteNotification): Promise<unknown | null>;
+  dispatch(
+    message: JsonRpcLiteRequest | JsonRpcLiteNotification | JsonRpcLiteClientResponse,
+  ): Promise<unknown | null>;
   close(): void;
 };
 
@@ -175,7 +177,13 @@ function createHttpJsonRpcConnection(runtime: AgentServerRuntime): H3JsonRpcConn
         eventSinks.delete(controller);
       };
     },
-    async dispatch(message: JsonRpcLiteRequest | JsonRpcLiteNotification) {
+    async dispatch(
+      message: JsonRpcLiteRequest | JsonRpcLiteNotification | JsonRpcLiteClientResponse,
+    ) {
+      if (!("method" in message)) {
+        runtime.handleDecodedMessage(connection as never, message);
+        return null;
+      }
       if (!("id" in message)) {
         runtime.handleDecodedMessage(connection as never, message);
         return null;
@@ -308,14 +316,8 @@ export async function startH3MobileServer(
       if (req.method === "POST" && url.pathname === "/rpc") {
         const raw = await req.json().catch(() => null);
         const message = parseJsonRpcPayload(raw);
-        if (!("method" in message)) {
-          return jsonResponse(
-            { error: "Client responses are not supported over HTTP RPC." },
-            { status: 400 },
-          );
-        }
         const response = await getConnection(trustedDevice.deviceId).dispatch(message);
-        if (!("id" in message)) {
+        if (!("method" in message) || !("id" in message)) {
           return jsonResponse({ ok: true }, { status: 202 });
         }
         return jsonResponse(response ?? {});

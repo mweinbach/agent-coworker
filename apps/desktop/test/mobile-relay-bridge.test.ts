@@ -79,4 +79,25 @@ describe("mobile relay bridge", () => {
       lastError: null,
     });
   });
+
+  test("does not restart a workspace server when stopping after a failed start", async () => {
+    const serverManager = createServerManagerMock();
+    serverManager.startWorkspaceServer.mockImplementationOnce(async () => {
+      throw new Error("bind failed");
+    });
+    const bridge = new MobileRelayBridge({ serverManager: serverManager as never });
+
+    await bridge.start({
+      workspaceId: "ws_1",
+      workspacePath: "/workspace",
+      yolo: false,
+    });
+    const snapshot = await bridge.stop();
+
+    expect(serverManager.restartWorkspaceServer).not.toHaveBeenCalled();
+    expect(snapshot).toMatchObject({
+      status: "idle",
+      relayServiceStatus: "not-running",
+    });
+  });
 });

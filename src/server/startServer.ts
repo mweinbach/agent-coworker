@@ -166,17 +166,30 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
   };
 
   const server = serveWithPortFallback(requestedPort);
-  mobileServer =
-    opts.mobileH3 || runtime.env.COWORK_H3_MOBILE_PAIRING === "1"
-      ? await startH3MobileServer({
-          runtime,
-          hostname: opts.mobileH3?.hostname ?? "0.0.0.0",
-          port: opts.mobileH3?.port,
-          hostHints: opts.mobileH3?.hostHints,
-          storeRootPath: opts.homedir,
-          enableH3: runtime.env.COWORK_H3_MOBILE_DISABLE_H3 !== "1",
-        })
-      : undefined;
+  try {
+    mobileServer =
+      opts.mobileH3 || runtime.env.COWORK_H3_MOBILE_PAIRING === "1"
+        ? await startH3MobileServer({
+            runtime,
+            hostname: opts.mobileH3?.hostname ?? "0.0.0.0",
+            port: opts.mobileH3?.port,
+            hostHints: opts.mobileH3?.hostHints,
+            storeRootPath: opts.homedir,
+            enableH3: runtime.env.COWORK_H3_MOBILE_DISABLE_H3 !== "1",
+          })
+        : undefined;
+  } catch (error) {
+    await runtime.stop().catch(() => {
+      // ignore cleanup errors during failed startup
+    });
+    await webDesktopService?.stopAll().catch(() => {
+      // ignore cleanup errors during failed startup
+    });
+    await Promise.resolve(server.stop(true)).catch(() => {
+      // ignore cleanup errors during failed startup
+    });
+    throw error;
+  }
   const originalStop = server.stop.bind(server) as (
     closeActiveConnections?: boolean,
   ) => Promise<void>;

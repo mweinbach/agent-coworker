@@ -24,6 +24,13 @@ type PinnedHttpsRequest = {
   spkiSha256: string;
 };
 
+type PinnedHttpsStreamEvent = {
+  streamId: string;
+  type: "data" | "close" | "error";
+  data?: string;
+  message?: string;
+};
+
 type PinnedHttpsNativeResponse = {
   status: number;
   headers?: Record<string, string>;
@@ -39,14 +46,29 @@ type PinnedHttpsResponse = {
 
 type PinnedHttpsModule = {
   fetchPinnedHttps(request: PinnedHttpsRequest): Promise<PinnedHttpsNativeResponse>;
+  openPinnedHttpsStream?(request: PinnedHttpsRequest & { streamId: string }): Promise<void>;
+  closePinnedHttpsStream?(streamId: string): Promise<void> | void;
+  addListener?(
+    eventName: "pinnedHttpsStreamEvent",
+    listener: (event: PinnedHttpsStreamEvent) => void,
+  ): { remove(): void };
 };
 
 type PinnedHttpsFetch = (request: PinnedHttpsRequest) => Promise<PinnedHttpsResponse>;
+type PinnedHttpsStream = (
+  request: PinnedHttpsRequest,
+  handlers: {
+    onChunk(chunk: string): void;
+    onClose(reason: string | null): void;
+    onError(message: string): void;
+  },
+) => Promise<() => void>;
 
 let secureStorePromise: Promise<SecureStoreModule> | null = null;
 let secureStoreOverride: SecureStoreModule | null = null;
 let pinnedHttpsModulePromise: Promise<PinnedHttpsModule | null> | null = null;
 let pinnedHttpsFetchOverride: PinnedHttpsFetch | null = null;
+let pinnedHttpsStreamOverride: PinnedHttpsStream | null = null;
 
 type TrustedDesktopRecord = RelayTrustedDesktop & {
   sessionToken: string;
@@ -386,6 +408,10 @@ export const __internal = {
     pinnedHttpsFetchOverride = fetcher;
     pinnedHttpsModulePromise = null;
   },
+  setPinnedHttpsStreamForTesting(streamer: PinnedHttpsStream | null): void {
+    pinnedHttpsStreamOverride = streamer;
+    pinnedHttpsModulePromise = null;
+  },
 };
 
 function toPublicTrustedDesktop(entry: TrustedDesktopRecord): RelayTrustedDesktop {
@@ -454,6 +480,52 @@ async function fetchPinnedHttps(request: PinnedHttpsRequest): Promise<PinnedHttp
   return toPinnedHttpsResponse(await module.fetchPinnedHttps(request));
 }
 
+async function openPinnedHttpsStream(
+  request: PinnedHttpsRequest,
+  handlers: {
+    onChunk(chunk: string): void;
+    onClose(reason: string | null): void;
+    onError(message: string): void;
+  },
+): Promise<(() => void) | null> {
+  if (pinnedHttpsStreamOverride) {
+    return await pinnedHttpsStreamOverride(request, handlers);
+  }
+  const module = await loadPinnedHttpsModule();
+  if (!module?.openPinnedHttpsStream || !module.addListener) {
+    return null;
+  }
+
+  const streamId = randomBase64Url(16);
+  const subscription = module.addListener("pinnedHttpsStreamEvent", (event) => {
+    if (event.streamId !== streamId) {
+      return;
+    }
+    if (event.type === "data") {
+      handlers.onChunk(event.data ?? "");
+      return;
+    }
+    subscription.remove();
+    if (event.type === "error") {
+      handlers.onError(event.message ?? "Event stream failed.");
+    } else {
+      handlers.onClose(event.message ?? "Event stream closed.");
+    }
+  });
+
+  try {
+    await module.openPinnedHttpsStream({ ...request, streamId });
+  } catch (error) {
+    subscription.remove();
+    throw error;
+  }
+
+  return () => {
+    subscription.remove();
+    void module.closePinnedHttpsStream?.(streamId);
+  };
+}
+
 async function loadPinnedHttpsModule(): Promise<PinnedHttpsModule | null> {
   if (typeof globalThis === "object" && "Bun" in globalThis) {
     return null;
@@ -505,6 +577,43 @@ async function readSseStream(
   },
 ): Promise<void> {
   try {
+    const parser = createSseParser(opts.onMessage);
+    const streamCleanup = await openPinnedHttpsStream(
+      {
+        url,
+        method: "GET",
+        headers: { authorization: `Bearer ${sessionToken}` },
+        certSha256: pins.certSha256,
+        spkiSha256: pins.spkiSha256,
+      },
+      {
+        onChunk: (chunk) => {
+          if (!opts.signal.aborted) {
+            parser.push(chunk);
+          }
+        },
+        onClose: (reason) => {
+          if (!opts.signal.aborted) {
+            parser.flush();
+            opts.onClose(reason);
+          }
+        },
+        onError: (message) => {
+          if (!opts.signal.aborted) {
+            opts.onError(message);
+          }
+        },
+      },
+    );
+    if (streamCleanup) {
+      if (opts.signal.aborted) {
+        streamCleanup();
+        return;
+      }
+      opts.signal.addEventListener("abort", streamCleanup, { once: true });
+      return;
+    }
+
     const response = await fetchPinnedHttps({
       url,
       method: "GET",
@@ -522,18 +631,49 @@ async function readSseStream(
     if (opts.signal.aborted) {
       return;
     }
-    for (const chunk of body.split("\n\n")) {
-      const data = chunk
-        .split("\n")
-        .filter((line) => line.startsWith("data:"))
-        .map((line) => line.slice("data:".length).trimStart())
-        .join("\n");
-      if (data) opts.onMessage(data);
-    }
+    parser.push(body);
+    parser.flush();
     opts.onClose("Event stream closed.");
   } catch (error) {
     if (!opts.signal.aborted) {
       opts.onError(error instanceof Error ? error.message : String(error));
     }
   }
+}
+
+function createSseParser(onMessage: (text: string) => void): {
+  push(chunk: string): void;
+  flush(): void;
+} {
+  let buffer = "";
+
+  const drain = (flush: boolean) => {
+    const normalized = buffer.replace(/\r\n/g, "\n");
+    const parts = normalized.split("\n\n");
+    const completeParts = flush ? parts : parts.slice(0, -1);
+    buffer = flush ? "" : (parts.at(-1) ?? "");
+    for (const part of completeParts) {
+      const data = part
+        .split("\n")
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice("data:".length).trimStart())
+        .join("\n");
+      if (data) {
+        onMessage(data);
+      }
+    }
+  };
+
+  return {
+    push(chunk: string) {
+      buffer += chunk;
+      drain(false);
+    },
+    flush() {
+      if (buffer.trim()) {
+        buffer += "\n\n";
+      }
+      drain(true);
+    },
+  };
 }

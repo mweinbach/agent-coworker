@@ -48,12 +48,14 @@ describe("mobile secure transport client", () => {
     secureStoreValues.clear();
     __internal.setSecureStoreForTesting(secureStore);
     __internal.setPinnedHttpsFetchForTesting(null);
+    __internal.setPinnedHttpsStreamForTesting(null);
     globalThis.fetch = originalFetch;
   });
 
   afterEach(() => {
     __internal.setSecureStoreForTesting(null);
     __internal.setPinnedHttpsFetchForTesting(null);
+    __internal.setPinnedHttpsStreamForTesting(null);
     globalThis.fetch = originalFetch;
   });
 
@@ -73,6 +75,7 @@ describe("mobile secure transport client", () => {
 
     const client = new SecureTransportClient();
     const snapshot = await client.connectFromQrPayload(buildPayload());
+    await waitFor(() => requestedUrls.some((url) => url.endsWith("/events")));
 
     expect(snapshot.status).toBe("connected");
     expect(snapshot.relayUrl).toBe("https://192.168.1.10:9443");
@@ -125,6 +128,45 @@ describe("mobile secure transport client", () => {
       spkiSha256: "b".repeat(43),
     });
     expect(plaintextMessages).toEqual(["server-response"]);
+  });
+
+  test("delivers SSE messages as native pinned stream chunks arrive", async () => {
+    const plaintextMessages: string[] = [];
+    let streamHandlers:
+      | Parameters<NonNullable<Parameters<typeof __internal.setPinnedHttpsStreamForTesting>[0]>>[1]
+      | null = null;
+    __internal.setPinnedHttpsFetchForTesting(
+      mock(async (request: { url: string }) => {
+        if (request.url.endsWith("/pair")) {
+          return Response.json({ sessionToken: "session-token" }) as unknown as Response;
+        }
+        return new Response("", { status: 404 });
+      }) as never,
+    );
+    __internal.setPinnedHttpsStreamForTesting(
+      mock(async (_request, handlers) => {
+        streamHandlers = handlers;
+        return () => {};
+      }),
+    );
+
+    const client = new SecureTransportClient();
+    client.subscribe({
+      onPlaintextMessage: (text) => plaintextMessages.push(text),
+    });
+
+    await client.connectFromQrPayload(buildPayload({ hosts: ["192.168.1.10"] }));
+    await waitFor(() => streamHandlers !== null);
+    expect(plaintextMessages).toEqual([]);
+
+    streamHandlers?.onChunk("data: first");
+    expect(plaintextMessages).toEqual([]);
+
+    streamHandlers?.onChunk("\n\ndata: second\n");
+    expect(plaintextMessages).toEqual(["first"]);
+
+    streamHandlers?.onChunk("data: line\n\n");
+    expect(plaintextMessages).toEqual(["first", "second\nline"]);
   });
 
   test("clears active connection and emits close when the event stream ends", async () => {

@@ -67,6 +67,13 @@ function makeAbortError(): Error & { name: string } {
   return Object.assign(new Error("Aborted"), { name: "AbortError" });
 }
 
+async function reservePort(): Promise<number> {
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("OK") });
+  const port = server.port;
+  await Promise.resolve(server.stop(true));
+  return port;
+}
+
 async function waitForAbort(signal: AbortSignal, onAbort?: () => void): Promise<never> {
   if (signal.aborted) {
     onAbort?.();
@@ -371,6 +378,39 @@ describe("HTTP Handler", () => {
         process.env.COWORK_WEB_DESKTOP_SERVICE = previous;
       }
       await stopTestServer(server);
+    }
+  });
+
+  test("stops the WebSocket server when mobile H3 startup fails", async () => {
+    const tmpDir = await makeTmpProject();
+    const mainPort = await reservePort();
+    const occupiedMobileServer = Bun.serve({
+      hostname: "0.0.0.0",
+      port: 0,
+      fetch: () => new Response("occupied"),
+    });
+
+    try {
+      await expect(
+        startAgentServer(
+          serverOpts(tmpDir, {
+            port: mainPort,
+            mobileH3: {
+              hostname: "0.0.0.0",
+              port: occupiedMobileServer.port,
+            },
+          }),
+        ),
+      ).rejects.toThrow();
+
+      const reboundServer = Bun.serve({
+        hostname: "127.0.0.1",
+        port: mainPort,
+        fetch: () => new Response("OK"),
+      });
+      await Promise.resolve(reboundServer.stop(true));
+    } finally {
+      await Promise.resolve(occupiedMobileServer.stop(true));
     }
   });
 });

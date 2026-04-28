@@ -94,6 +94,14 @@ function textResponse(body: string, init?: ResponseInit): Response {
   });
 }
 
+function formatUrlHost(host: string): string {
+  const trimmed = host.trim();
+  if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+    return trimmed;
+  }
+  return trimmed.includes(":") ? `[${trimmed}]` : trimmed;
+}
+
 function parseBearerToken(header: string | null): string | null {
   if (!header) return null;
   const match = /^Bearer\s+(.+)$/i.exec(header.trim());
@@ -430,7 +438,7 @@ export async function startH3MobileServer(
   const ticket = createTicket(port);
   return {
     server,
-    url: `https://${hostHints[0] ?? "127.0.0.1"}:${port}`,
+    url: `https://${formatUrlHost(hostHints[0] ?? "127.0.0.1")}:${port}`,
     port,
     hostHints,
     ticket,
@@ -477,4 +485,5 @@ export const __internal = {
   createHttpJsonRpcConnection,
   decodePairingTicketForRequest,
   dispatchHttpRpcPayload,
+  formatUrlHost,
 };

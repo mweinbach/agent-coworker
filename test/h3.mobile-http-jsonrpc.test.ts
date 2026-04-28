@@ -122,4 +122,11 @@ describe("H3 mobile HTTP JSON-RPC connection", () => {
   test("rejects malformed pairing ticket payloads without throwing", () => {
     expect(__internal.decodePairingTicketForRequest("not-a-ticket")).toBeNull();
   });
+
+  test("brackets IPv6 host hints for advertised mobile H3 URLs", () => {
+    expect(__internal.formatUrlHost("::1")).toBe("[::1]");
+    expect(__internal.formatUrlHost("2001:db8::1")).toBe("[2001:db8::1]");
+    expect(__internal.formatUrlHost("[2001:db8::1]")).toBe("[2001:db8::1]");
+    expect(__internal.formatUrlHost("127.0.0.1")).toBe("127.0.0.1");
+  });
 });

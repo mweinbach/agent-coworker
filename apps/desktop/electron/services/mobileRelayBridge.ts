@@ -129,6 +129,9 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
         mobileH3: true,
       });
       this.state = stateFromMobileH3(options, listening.mobileH3);
+      if (!listening.mobileH3) {
+        this.currentStartOptions = null;
+      }
     } catch (error) {
       if (switchedToNewOptions) {
         this.currentStartOptions = null;
@@ -267,9 +270,10 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     }
     this.state = {
       ...this.state,
-      status: this.state.status === "connected" ? "pairing" : this.state.status,
+      status: this.state.relayServiceStatus === "running" ? "pairing" : this.state.status,
       trustedPhoneDeviceId: null,
       trustedPhoneFingerprint: null,
+      lastError: null,
     };
     this.emitState();
     return this.getSnapshot();

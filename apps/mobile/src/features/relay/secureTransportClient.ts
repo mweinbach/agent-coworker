@@ -8,6 +8,7 @@ import type {
 
 const TRUSTED_DESKTOPS_KEY = "cowork.h3.trustedDesktops.v1";
 const ACTIVE_SESSION_KEY = "cowork.h3.activeSession.v1";
+const MOBILE_DEVICE_ID_KEY = "cowork.h3.mobileDeviceId.v1";
 
 type SecureStoreModule = {
   getItemAsync(key: string): Promise<string | null>;
@@ -203,7 +204,7 @@ export class SecureTransportClient {
 
     try {
       const endpointUrls = buildEndpointUrls(payload);
-      const deviceId = `cowork-mobile-${randomBase64Url(12)}`;
+      const deviceId = await getOrCreateMobileDeviceId();
       const identityPub = randomBase64Url(32);
       const { endpointUrl, response } = await pairWithAnyEndpoint(
         endpointUrls,
@@ -468,6 +469,17 @@ export class SecureTransportClient {
       },
     );
   }
+}
+
+async function getOrCreateMobileDeviceId(): Promise<string> {
+  const SecureStore = await loadSecureStore();
+  const existing = await SecureStore.getItemAsync(MOBILE_DEVICE_ID_KEY);
+  if (typeof existing === "string" && existing.trim()) {
+    return existing;
+  }
+  const deviceId = `cowork-mobile-${randomBase64Url(12)}`;
+  await SecureStore.setItemAsync(MOBILE_DEVICE_ID_KEY, deviceId);
+  return deviceId;
 }
 
 export const defaultSecureTransportClient = new SecureTransportClient();

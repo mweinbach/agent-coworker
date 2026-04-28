@@ -153,6 +153,28 @@ describe("mobile secure transport client", () => {
     expect(plaintextMessages).toEqual(["server-response"]);
   });
 
+  test("reuses a stable mobile device id across QR pairing attempts", async () => {
+    const pairedDeviceIds: string[] = [];
+    __internal.setPinnedHttpsFetchForTesting(
+      mock(async (request: { url: string; body?: string }) => {
+        if (request.url.endsWith("/pair")) {
+          pairedDeviceIds.push(JSON.parse(request.body ?? "{}").deviceId);
+          return Response.json({ sessionToken: `session-${pairedDeviceIds.length}` }) as never;
+        }
+        return new Response("", { status: 404 }) as never;
+      }) as never,
+    );
+    __internal.setPinnedHttpsStreamForTesting(mock(async () => () => {}));
+
+    const client = new SecureTransportClient();
+    await client.connectFromQrPayload(buildPayload({ nonce: "pairing-nonce-1" }));
+    await client.connectFromQrPayload(buildPayload({ nonce: "pairing-nonce-2" }));
+
+    expect(pairedDeviceIds).toHaveLength(2);
+    expect(pairedDeviceIds[0]).toBe(pairedDeviceIds[1]);
+    expect(secureStoreValues.get("cowork.h3.mobileDeviceId.v1")).toBe(pairedDeviceIds[0]);
+  });
+
   test("delivers SSE messages as native pinned stream chunks arrive", async () => {
     const plaintextMessages: string[] = [];
     let streamHandlers:

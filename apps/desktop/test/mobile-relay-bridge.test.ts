@@ -183,6 +183,28 @@ describe("mobile relay bridge", () => {
     });
   });
 
+  test("does not track active mobile start options when H3 is unavailable", async () => {
+    const serverManager = createServerManagerMock();
+    serverManager.startWorkspaceServer.mockImplementationOnce(async () => ({
+      url: "ws://127.0.0.1:7337/ws",
+      mobileH3: null,
+    }));
+    const bridge = new MobileRelayBridge({ serverManager: serverManager as never });
+
+    const snapshot = await bridge.start({
+      workspaceId: "ws_1",
+      workspacePath: "/workspace",
+      yolo: false,
+    });
+    await bridge.stop();
+
+    expect(snapshot).toMatchObject({
+      status: "error",
+      lastError: "Workspace server did not return a mobile H3 endpoint.",
+    });
+    expect(serverManager.restartWorkspaceServer).not.toHaveBeenCalled();
+  });
+
   test("revokes the server trust record before clearing a paired phone", async () => {
     const serverManager = createServerManagerMock();
     serverManager.startWorkspaceServer.mockImplementationOnce(async () => ({
@@ -226,6 +248,49 @@ describe("mobile relay bridge", () => {
     const snapshot = await bridge.forgetTrustedPhone();
 
     expect(serverManager.revokeMobileH3TrustedDevice).toHaveBeenCalledWith("ws_1", "phone-1");
+    expect(snapshot).toMatchObject({
+      status: "pairing",
+      trustedPhoneDeviceId: null,
+      trustedPhoneFingerprint: null,
+      lastError: null,
+    });
+  });
+
+  test("clears stale forget errors after a successful retry", async () => {
+    const serverManager = createServerManagerMock();
+    serverManager.startWorkspaceServer.mockImplementationOnce(async () => ({
+      url: "ws://127.0.0.1:7337/ws",
+      mobileH3: {
+        url: "https://127.0.0.1:9443",
+        port: 9443,
+        hostHints: ["127.0.0.1"],
+        ticket: "cowork-pair://ticket",
+        adminToken: "admin-token",
+        certSha256: "a".repeat(64),
+        spkiSha256: "b".repeat(43),
+        identityPub: "desktop-identity",
+        nonce: "nonce-value-123456789012",
+        expiresAt: Date.now() + 60_000,
+        trustedDevice: {
+          deviceId: "phone-1",
+          fingerprint: "fingerprint",
+          displayName: "Phone",
+        },
+      },
+    }));
+    serverManager.revokeMobileH3TrustedDevice.mockImplementationOnce(async () => {
+      throw new Error("revoke failed");
+    });
+    const bridge = new MobileRelayBridge({ serverManager: serverManager as never });
+
+    await bridge.start({
+      workspaceId: "ws_1",
+      workspacePath: "/workspace",
+      yolo: false,
+    });
+    await bridge.forgetTrustedPhone();
+    const snapshot = await bridge.forgetTrustedPhone();
+
     expect(snapshot).toMatchObject({
       status: "pairing",
       trustedPhoneDeviceId: null,

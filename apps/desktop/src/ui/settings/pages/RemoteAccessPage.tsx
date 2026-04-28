@@ -57,6 +57,7 @@ export function RemoteAccessPage() {
     (state) =>
       state.workspaces.find((workspace) => workspace.id === state.selectedWorkspaceId) ?? null,
   );
+  const desktopFeatureFlags = useAppStore((state) => state.desktopFeatureFlags);
   const [state, setState] = useState<Awaited<ReturnType<typeof getMobileRelayState>> | null>(null);
   const [loading, setLoading] = useState(true);
   const [busyAction, setBusyAction] = useState<string | null>(null);
@@ -128,6 +129,7 @@ export function RemoteAccessPage() {
                       workspaceId: selectedWorkspace.id,
                       workspacePath: selectedWorkspace.path,
                       yolo: selectedWorkspace.yolo,
+                      featureFlags: desktopFeatureFlags,
                     });
                   })
                 }
@@ -156,7 +158,9 @@ export function RemoteAccessPage() {
             <div className="mt-1 text-muted-foreground">
               {loading ? "Loading…" : (state?.status ?? "idle")}
             </div>
-            <div className="mt-2 text-xs text-muted-foreground">Transport: direct HTTP/3</div>
+            <div className="mt-2 text-xs text-muted-foreground">
+              Transport: {describeRelaySource(state?.relaySource ?? "direct")} HTTP/3
+            </div>
             <div className="mt-1 text-xs text-muted-foreground">
               Relay service: {describeRelayServiceStatus(state?.relayServiceStatus ?? "unknown")}
             </div>

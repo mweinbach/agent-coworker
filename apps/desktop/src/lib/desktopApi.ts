@@ -22,6 +22,7 @@ export type MobileRelayStartInput = {
   workspaceId: string;
   workspacePath: string;
   yolo: boolean;
+  featureFlags?: DesktopFeatureFlagOverrides;
 };
 
 export type MobileRelayBridgeState = {

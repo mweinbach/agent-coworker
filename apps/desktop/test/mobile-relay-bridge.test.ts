@@ -52,6 +52,35 @@ describe("mobile relay bridge", () => {
     });
   });
 
+  test("preserves feature flags when starting and stopping mobile H3", async () => {
+    const serverManager = createServerManagerMock();
+    const bridge = new MobileRelayBridge({ serverManager: serverManager as never });
+    const featureFlags = { openAiNativeConnectors: true };
+
+    await bridge.start({
+      workspaceId: "ws_1",
+      workspacePath: "/workspace",
+      yolo: true,
+      featureFlags,
+    });
+    await bridge.stop();
+
+    expect(serverManager.startWorkspaceServer).toHaveBeenCalledWith({
+      workspaceId: "ws_1",
+      workspacePath: "/workspace",
+      yolo: true,
+      featureFlags,
+      mobileH3: true,
+    });
+    expect(serverManager.restartWorkspaceServer).toHaveBeenCalledWith({
+      workspaceId: "ws_1",
+      workspacePath: "/workspace",
+      yolo: true,
+      featureFlags,
+      mobileH3: false,
+    });
+  });
+
   test("loads the current trusted phone from the server H3 state", async () => {
     const serverManager = createServerManagerMock();
     serverManager.startWorkspaceServer.mockImplementationOnce(async () => ({
@@ -136,6 +165,38 @@ describe("mobile relay bridge", () => {
       trustedPhoneDeviceId: null,
       trustedPhoneFingerprint: null,
       lastError: null,
+    });
+  });
+
+  test("recovers the workspace server without H3 when rotation fails", async () => {
+    const serverManager = createServerManagerMock();
+    const bridge = new MobileRelayBridge({ serverManager: serverManager as never });
+    const featureFlags = { openAiNativeConnectors: true };
+
+    await bridge.start({
+      workspaceId: "ws_1",
+      workspacePath: "/workspace",
+      yolo: false,
+      featureFlags,
+    });
+    serverManager.restartWorkspaceServer.mockImplementationOnce(async () => {
+      throw new Error("H3 restart failed");
+    });
+
+    const snapshot = await bridge.rotateSession();
+
+    expect(serverManager.startWorkspaceServer).toHaveBeenLastCalledWith({
+      workspaceId: "ws_1",
+      workspacePath: "/workspace",
+      yolo: false,
+      featureFlags,
+      mobileH3: false,
+    });
+    expect(snapshot).toMatchObject({
+      status: "error",
+      workspaceId: "ws_1",
+      workspacePath: "/workspace",
+      lastError: "H3 restart failed",
     });
   });
 

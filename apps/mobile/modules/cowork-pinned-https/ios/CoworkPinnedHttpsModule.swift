@@ -165,6 +165,7 @@ private final class PinnedHttpsStreamDelegate: PinnedHttpsSessionDelegate, URLSe
   private let streamId: String
   private let onEvent: ([String: Any?]) -> Void
   private let onComplete: () -> Void
+  private var didSendTerminalEvent = false
 
   init(
     streamId: String,
@@ -187,7 +188,7 @@ private final class PinnedHttpsStreamDelegate: PinnedHttpsSessionDelegate, URLSe
   ) {
     if let httpResponse = response as? HTTPURLResponse,
        !(200..<300).contains(httpResponse.statusCode) {
-      onEvent([
+      sendTerminalEvent([
         "streamId": streamId,
         "type": "error",
         "message": "Event stream failed with HTTP \(httpResponse.statusCode).",
@@ -212,13 +213,13 @@ private final class PinnedHttpsStreamDelegate: PinnedHttpsSessionDelegate, URLSe
     didCompleteWithError error: Error?
   ) {
     if let error {
-      onEvent([
+      sendTerminalEvent([
         "streamId": streamId,
         "type": "error",
         "message": error.localizedDescription,
       ])
     } else {
-      onEvent([
+      sendTerminalEvent([
         "streamId": streamId,
         "type": "close",
         "message": "Event stream closed.",
@@ -226,6 +227,14 @@ private final class PinnedHttpsStreamDelegate: PinnedHttpsSessionDelegate, URLSe
     }
     onComplete()
     session.finishTasksAndInvalidate()
+  }
+
+  private func sendTerminalEvent(_ event: [String: Any?]) {
+    guard !didSendTerminalEvent else {
+      return
+    }
+    didSendTerminalEvent = true
+    onEvent(event)
   }
 }
 

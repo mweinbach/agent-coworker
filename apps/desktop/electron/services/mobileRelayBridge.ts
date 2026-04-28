@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 
+import type { DesktopFeatureFlagOverrides } from "../../../../src/shared/featureFlags";
 import type { MobileRelayBridgeState, MobileRelaySnapshot } from "./mobileRelayTypes";
 import type { ServerManager } from "./serverManager";
 
@@ -11,6 +12,7 @@ type StartOptions = {
   workspaceId: string;
   workspacePath: string;
   yolo: boolean;
+  featureFlags?: DesktopFeatureFlagOverrides;
 };
 
 function buildIdleState(): MobileRelayBridgeState {
@@ -130,6 +132,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
       this.state = stateFromMobileH3(options, listening.mobileH3);
     } catch (error) {
       this.currentStartOptions = null;
+      await this.recoverWorkspaceServer(options);
       this.state = {
         ...buildIdleState(),
         status: "error",
@@ -196,6 +199,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
       });
       this.state = stateFromMobileH3(options, listening.mobileH3);
     } catch (error) {
+      await this.recoverWorkspaceServer(options);
       this.state = {
         ...buildIdleState(),
         status: "error",
@@ -207,6 +211,17 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
 
     this.emitState();
     return this.getSnapshot();
+  }
+
+  private async recoverWorkspaceServer(options: StartOptions): Promise<void> {
+    try {
+      await this.serverManager.startWorkspaceServer({
+        ...options,
+        mobileH3: false,
+      });
+    } catch {
+      // Preserve the original rotation error. Recovery is best effort to keep the workspace alive.
+    }
   }
 
   async forgetTrustedPhone(): Promise<MobileRelaySnapshot> {

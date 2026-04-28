@@ -270,6 +270,7 @@ export async function startMobileRelay(opts: {
   workspaceId: string;
   workspacePath: string;
   yolo: boolean;
+  featureFlags?: import("./desktopApi").MobileRelayStartInput["featureFlags"];
 }): Promise<import("./desktopApi").MobileRelayBridgeState> {
   return await requireDesktopApi().startMobileRelay(opts);
 }

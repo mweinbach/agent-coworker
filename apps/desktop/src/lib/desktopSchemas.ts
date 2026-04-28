@@ -20,6 +20,7 @@ import type {
   DesktopMenuCommand,
   DesktopNotificationInput,
   ListDirectoryInput,
+  MobileRelayStartInput,
   OpenExternalUrlInput,
   OpenPathInput,
   PreferredFileAppInput,
@@ -499,16 +500,6 @@ export const systemAppearanceSchema: z.ZodType<SystemAppearance> = z.object({
   inForcedColorsMode: z.boolean(),
 });
 
-const legacyMobileRelayPairingPayloadSchema = z.object({
-  v: z.number().int().nonnegative(),
-  relay: nonEmptyStringSchema,
-  sessionId: nonEmptyStringSchema,
-  macDeviceId: nonEmptyStringSchema,
-  macIdentityPublicKey: nonEmptyStringSchema,
-  pairingSecret: nonEmptyStringSchema,
-  expiresAt: z.number().int().nonnegative(),
-});
-
 const h3MobileRelayPairingPayloadSchema = z.object({
   v: z.literal(1),
   scheme: z.literal("h3"),
@@ -521,15 +512,13 @@ const h3MobileRelayPairingPayloadSchema = z.object({
   expiresAt: z.number().int().nonnegative(),
 });
 
-const mobileRelayPairingPayloadSchema = z.union([
-  legacyMobileRelayPairingPayloadSchema,
-  h3MobileRelayPairingPayloadSchema,
-]);
+const mobileRelayPairingPayloadSchema = h3MobileRelayPairingPayloadSchema;
 
-export const mobileRelayStartInputSchema = z.object({
+export const mobileRelayStartInputSchema: z.ZodType<MobileRelayStartInput> = z.object({
   workspaceId: safeIdSchema,
   workspacePath: nonEmptyStringSchema,
   yolo: z.boolean(),
+  featureFlags: desktopFeatureFlagOverridesSchema.optional(),
 });
 
 export const mobileRelayBridgeStateSchema = z.object({

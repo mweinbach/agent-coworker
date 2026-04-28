@@ -110,6 +110,42 @@ describe("mobile relay bridge", () => {
     });
   });
 
+  test("recovers the previous workspace without H3 when switching workspaces fails", async () => {
+    const serverManager = createServerManagerMock();
+    const bridge = new MobileRelayBridge({ serverManager: serverManager as never });
+
+    await bridge.start({
+      workspaceId: "ws_1",
+      workspacePath: "/workspace-one",
+      yolo: true,
+    });
+    serverManager.restartWorkspaceServer.mockImplementationOnce(async () => {
+      throw new Error("previous restart failed");
+    });
+
+    const snapshot = await bridge.start({
+      workspaceId: "ws_2",
+      workspacePath: "/workspace-two",
+      yolo: false,
+    });
+    const afterStop = await bridge.stop();
+
+    expect(serverManager.startWorkspaceServer).toHaveBeenLastCalledWith({
+      workspaceId: "ws_1",
+      workspacePath: "/workspace-one",
+      yolo: true,
+      mobileH3: false,
+    });
+    expect(snapshot).toMatchObject({
+      status: "error",
+      workspaceId: "ws_1",
+      workspacePath: "/workspace-one",
+      lastError: "previous restart failed",
+    });
+    expect(afterStop).toMatchObject({ status: "idle" });
+    expect(serverManager.restartWorkspaceServer).toHaveBeenCalledTimes(1);
+  });
+
   test("loads the current trusted phone from the server H3 state", async () => {
     const serverManager = createServerManagerMock();
     serverManager.startWorkspaceServer.mockImplementationOnce(async () => ({
@@ -227,6 +263,9 @@ describe("mobile relay bridge", () => {
       workspacePath: "/workspace",
       lastError: "H3 restart failed",
     });
+
+    await bridge.stop();
+    expect(serverManager.restartWorkspaceServer).toHaveBeenCalledTimes(1);
   });
 
   test("does not restart a workspace server when stopping after a failed start", async () => {

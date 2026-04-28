@@ -107,6 +107,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
   async start(options: StartOptions): Promise<MobileRelaySnapshot> {
     const previousOptions = this.currentStartOptions;
     let switchedToNewOptions = false;
+    let errorOptions = options;
     this.state = {
       ...buildIdleState(),
       status: "starting",
@@ -133,13 +134,19 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
         this.currentStartOptions = null;
         await this.recoverWorkspaceServer(options);
       } else {
-        this.currentStartOptions = previousOptions;
+        if (previousOptions && !isSameStartTarget(previousOptions, options)) {
+          errorOptions = previousOptions;
+          this.currentStartOptions = null;
+          await this.recoverWorkspaceServer(previousOptions);
+        } else {
+          this.currentStartOptions = previousOptions;
+        }
       }
       this.state = {
         ...buildIdleState(),
         status: "error",
-        workspaceId: options.workspaceId,
-        workspacePath: options.workspacePath,
+        workspaceId: errorOptions.workspaceId,
+        workspacePath: errorOptions.workspacePath,
         lastError: error instanceof Error ? error.message : String(error),
       };
     }
@@ -207,6 +214,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
       this.state = stateFromMobileH3(options, listening.mobileH3);
     } catch (error) {
       await this.recoverWorkspaceServer(options);
+      this.currentStartOptions = null;
       this.state = {
         ...buildIdleState(),
         status: "error",

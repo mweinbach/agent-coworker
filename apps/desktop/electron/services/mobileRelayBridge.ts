@@ -73,8 +73,8 @@ function stateFromMobileH3(
       nonce: mobileH3.nonce,
       expiresAt: mobileH3.expiresAt,
     },
-    trustedPhoneDeviceId: null,
-    trustedPhoneFingerprint: null,
+    trustedPhoneDeviceId: mobileH3.trustedDevice?.deviceId ?? null,
+    trustedPhoneFingerprint: mobileH3.trustedDevice?.fingerprint ?? null,
     directUrl: mobileH3.url,
     ticketUrl: mobileH3.ticket,
     certSha256: mobileH3.certSha256,
@@ -210,12 +210,16 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
   }
 
   async forgetTrustedPhone(): Promise<MobileRelaySnapshot> {
-    if (this.state.workspaceId && this.state.trustedPhoneDeviceId) {
+    if (this.state.workspaceId) {
       try {
-        await this.serverManager.revokeMobileH3TrustedDevice(
-          this.state.workspaceId,
-          this.state.trustedPhoneDeviceId,
-        );
+        if (this.state.trustedPhoneDeviceId) {
+          await this.serverManager.revokeMobileH3TrustedDevice(
+            this.state.workspaceId,
+            this.state.trustedPhoneDeviceId,
+          );
+        } else {
+          await this.serverManager.revokeMobileH3TrustedDevices(this.state.workspaceId);
+        }
       } catch (error) {
         this.state = {
           ...this.state,

@@ -14,7 +14,10 @@ import type { StartServerSocketData } from "../../startServer/types";
 import {
   createH3PairingSession,
   forgetH3TrustedDevice,
+  forgetH3TrustedDevices,
   type H3PairingSession,
+  type H3TrustedDeviceRecord,
+  loadH3PairingStoreState,
   rememberH3TrustedDevice,
   verifyH3SessionToken,
 } from "./pairing";
@@ -55,12 +58,20 @@ export type H3MobileServerState = {
   identityPub: string;
   nonce: string;
   expiresAt: number;
+  trustedDevice: H3MobileTrustedDeviceSummary | null;
 };
 
 type H3MobileServerHandle = H3MobileServerState & {
   server: ReturnType<typeof Bun.serve>;
   revokeTrustedDevice(deviceId: string): Promise<boolean>;
+  revokeTrustedDevices(): Promise<void>;
   stop(): Promise<void>;
+};
+
+type H3MobileTrustedDeviceSummary = {
+  deviceId: string;
+  fingerprint: string;
+  displayName: string | null;
 };
 
 function jsonResponse(body: unknown, init?: ResponseInit): Response {
@@ -148,6 +159,14 @@ async function dispatchHttpRpcPayload(
   return jsonResponse(response ?? {});
 }
 
+function decodePairingTicketForRequest(rawTicket: string): CoworkPairingTicket | null {
+  try {
+    return decodeCoworkPairingTicket(rawTicket);
+  } catch {
+    return null;
+  }
+}
+
 function getJsonRpcIdKey(message: JsonRpcLiteRequest | JsonRpcLiteClientResponse): string {
   return `${typeof message.id}:${String(message.id)}`;
 }
@@ -230,6 +249,19 @@ function createHttpJsonRpcConnection(runtime: AgentServerRuntime): H3JsonRpcConn
   });
 }
 
+function summarizeTrustedDevice(
+  trustedDevice: H3TrustedDeviceRecord | null | undefined,
+): H3MobileTrustedDeviceSummary | null {
+  if (!trustedDevice) {
+    return null;
+  }
+  return {
+    deviceId: trustedDevice.deviceId,
+    fingerprint: trustedDevice.fingerprint,
+    displayName: trustedDevice.displayName,
+  };
+}
+
 async function withResponseTimeout(response: Promise<unknown>): Promise<unknown> {
   let timeout: ReturnType<typeof setTimeout> | null = null;
   try {
@@ -256,6 +288,9 @@ export async function startH3MobileServer(
   const pairingSessions = new Map<string, H3PairingSession>([[pairing.nonce, pairing]]);
   const adminToken = crypto.randomUUID() + crypto.randomUUID().replaceAll("-", "");
   const httpConnections = new Map<string, H3JsonRpcConnection>();
+  const initialStoreState = await loadH3PairingStoreState(options.storeRootPath);
+  let latestTrustedDevice: H3TrustedDeviceRecord | null =
+    initialStoreState.trustedDevices[0] ?? null;
 
   const getConnection = (deviceId: string): H3JsonRpcConnection => {
     const existing = httpConnections.get(deviceId);
@@ -304,7 +339,10 @@ export async function startH3MobileServer(
       if (!rawTicket || !nonce || !deviceId || !identityPub) {
         return jsonResponse({ error: "Invalid pairing request." }, { status: 400 });
       }
-      const decoded = decodeCoworkPairingTicket(rawTicket);
+      const decoded = decodePairingTicketForRequest(rawTicket);
+      if (!decoded) {
+        return jsonResponse({ error: "Invalid pairing request." }, { status: 400 });
+      }
       const session = pairingSessions.get(nonce);
       if (!session || decoded.nonce !== nonce || session.expiresAt < Date.now()) {
         return jsonResponse({ error: "Pairing session expired." }, { status: 401 });
@@ -317,6 +355,7 @@ export async function startH3MobileServer(
         displayName,
         sessionToken,
       });
+      latestTrustedDevice = trustedDevice;
       return jsonResponse({
         sessionToken,
         trustedDevice: {
@@ -395,13 +434,27 @@ export async function startH3MobileServer(
     identityPub: certificate.identityPub,
     nonce: pairing.nonce,
     expiresAt: pairing.expiresAt,
+    trustedDevice: summarizeTrustedDevice(latestTrustedDevice),
     async revokeTrustedDevice(deviceId: string) {
       const connection = httpConnections.get(deviceId);
       if (connection) {
         httpConnections.delete(deviceId);
         connection.close();
       }
-      return await forgetH3TrustedDevice(options.storeRootPath, deviceId);
+      const removed = await forgetH3TrustedDevice(options.storeRootPath, deviceId);
+      if (latestTrustedDevice?.deviceId === deviceId) {
+        const state = await loadH3PairingStoreState(options.storeRootPath);
+        latestTrustedDevice = state.trustedDevices[0] ?? null;
+      }
+      return removed;
+    },
+    async revokeTrustedDevices() {
+      for (const connection of httpConnections.values()) {
+        connection.close();
+      }
+      httpConnections.clear();
+      await forgetH3TrustedDevices(options.storeRootPath);
+      latestTrustedDevice = null;
     },
     async stop() {
       for (const connection of httpConnections.values()) {
@@ -415,5 +468,6 @@ export async function startH3MobileServer(
 
 export const __internal = {
   createHttpJsonRpcConnection,
+  decodePairingTicketForRequest,
   dispatchHttpRpcPayload,
 };

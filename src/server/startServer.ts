@@ -113,6 +113,16 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
           const removed = await mobileServer.revokeTrustedDevice(deviceId);
           return Response.json({ ok: true, removed });
         }
+        if (req.method === "DELETE" && url.pathname === "/mobile-h3/trusted") {
+          if (!mobileServer) {
+            return Response.json({ error: "Mobile H3 endpoint is not running." }, { status: 404 });
+          }
+          if (parseBearerToken(req.headers.get("authorization")) !== mobileServer.adminToken) {
+            return Response.json({ error: "Unauthorized." }, { status: 401 });
+          }
+          await mobileServer.revokeTrustedDevices();
+          return Response.json({ ok: true });
+        }
         const webDesktopRoute = await handleWebDesktopRoute(req, {
           cwd: opts.cwd,
           desktopService: webDesktopService,

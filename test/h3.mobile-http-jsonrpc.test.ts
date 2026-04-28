@@ -98,4 +98,8 @@ describe("H3 mobile HTTP JSON-RPC connection", () => {
     });
     connection.close();
   });
+
+  test("rejects malformed pairing ticket payloads without throwing", () => {
+    expect(__internal.decodePairingTicketForRequest("not-a-ticket")).toBeNull();
+  });
 });

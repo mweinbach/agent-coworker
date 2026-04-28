@@ -51,6 +51,11 @@ type ServerListening = {
     identityPub: string;
     nonce: string;
     expiresAt: number;
+    trustedDevice: {
+      deviceId: string;
+      fingerprint: string;
+      displayName: string | null;
+    } | null;
   } | null;
 };
 
@@ -80,6 +85,15 @@ const serverListeningSchema = z
         identityPub: z.string().min(1),
         nonce: z.string().min(1),
         expiresAt: z.number(),
+        trustedDevice: z
+          .object({
+            deviceId: z.string().min(1),
+            fingerprint: z.string().min(1),
+            displayName: z.string().nullable(),
+          })
+          .nullable()
+          .optional()
+          .default(null),
       })
       .nullable()
       .optional(),
@@ -593,6 +607,23 @@ export class ServerManager {
     );
     if (!response.ok) {
       throw new Error(`Failed to revoke mobile trust record: HTTP ${response.status}.`);
+    }
+  }
+
+  async revokeMobileH3TrustedDevices(workspaceId: string): Promise<void> {
+    assertSafeId(workspaceId, "workspaceId");
+    const handle = this.servers.get(workspaceId);
+    if (!handle?.mobileH3) {
+      throw new Error("Mobile H3 endpoint is not running.");
+    }
+    const response = await fetch(`${toHttpServerUrl(handle.url)}/mobile-h3/trusted`, {
+      method: "DELETE",
+      headers: {
+        authorization: `Bearer ${handle.mobileH3.adminToken}`,
+      },
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to revoke mobile trust records: HTTP ${response.status}.`);
     }
   }
 

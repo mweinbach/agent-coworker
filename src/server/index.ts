@@ -197,6 +197,7 @@ async function main() {
               identityPub: mobileServer.identityPub,
               nonce: mobileServer.nonce,
               expiresAt: mobileServer.expiresAt,
+              trustedDevice: mobileServer.trustedDevice,
             }
           : null,
       }),

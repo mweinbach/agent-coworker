@@ -19,9 +19,23 @@ function createServerManagerMock() {
         trustedDevice: null,
       },
     })),
-    restartWorkspaceServer: mock(async () => ({
+    restartWorkspaceServer: mock(async (options?: { mobileH3?: boolean }) => ({
       url: "ws://127.0.0.1:7337/ws",
-      mobileH3: null,
+      mobileH3: options?.mobileH3
+        ? {
+            url: "https://127.0.0.1:9443",
+            port: 9443,
+            hostHints: ["127.0.0.1"],
+            ticket: "cowork-pair://rotated-ticket",
+            adminToken: "admin-token",
+            certSha256: "a".repeat(64),
+            spkiSha256: "b".repeat(43),
+            identityPub: "desktop-identity",
+            nonce: "rotated-nonce-value-1234",
+            expiresAt: Date.now() + 60_000,
+            trustedDevice: null,
+          }
+        : null,
     })),
     revokeMobileH3TrustedDevice: mock(async () => {}),
     revokeMobileH3TrustedDevices: mock(async () => {}),
@@ -248,8 +262,15 @@ describe("mobile relay bridge", () => {
     const snapshot = await bridge.forgetTrustedPhone();
 
     expect(serverManager.revokeMobileH3TrustedDevice).toHaveBeenCalledWith("ws_1", "phone-1");
+    expect(serverManager.restartWorkspaceServer).toHaveBeenCalledWith({
+      workspaceId: "ws_1",
+      workspacePath: "/workspace",
+      yolo: false,
+      mobileH3: true,
+    });
     expect(snapshot).toMatchObject({
       status: "pairing",
+      ticketUrl: "cowork-pair://rotated-ticket",
       trustedPhoneDeviceId: null,
       trustedPhoneFingerprint: null,
       lastError: null,

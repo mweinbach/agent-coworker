@@ -268,6 +268,9 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
         return this.getSnapshot();
       }
     }
+    if (this.currentStartOptions) {
+      return await this.rotateSession();
+    }
     this.state = {
       ...this.state,
       status: this.state.relayServiceStatus === "running" ? "pairing" : this.state.status,

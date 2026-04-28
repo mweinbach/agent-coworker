@@ -250,7 +250,6 @@ export function registerWorkspaceIpc(context: DesktopIpcModuleContext): void {
     workspaceRoots.setApprovedWorkspaceRoots(
       nextState.workspaces.map((workspace) => workspace.path),
     );
-    deps.mobileRelayBridge.invalidateWorkspaceListCache();
     deps.applyPersistedState?.(nextState);
   });
 

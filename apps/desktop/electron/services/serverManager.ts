@@ -382,8 +382,13 @@ export class ServerManager {
     if (existing) {
       if (existing.child.exitCode === null && existing.child.signalCode === null) {
         if (opts.mobileH3 === true && !existing.mobileH3) {
+          const replacementPending = { child: existing.child, cleanup: existing.cleanup };
+          this.pendingStarts.set(workspaceId, replacementPending);
           this.servers.delete(workspaceId);
           await gracefulKill(existing.child);
+          if (this.pendingStarts.get(workspaceId) === replacementPending) {
+            this.pendingStarts.delete(workspaceId);
+          }
           existing.cleanup();
         } else {
           return { url: existing.url, mobileH3: existing.mobileH3 };

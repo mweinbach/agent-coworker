@@ -30,7 +30,7 @@ describe("workspace IPC", () => {
     setElectronMockOverrides(electronMockOverrides);
   });
 
-  test("updates approved roots before invalidating workspace cache", async () => {
+  test("updates approved roots after saving workspace state", async () => {
     const handlers = new Map<
       string,
       (event: unknown, args?: unknown) => Promise<unknown> | unknown
@@ -40,11 +40,7 @@ describe("workspace IPC", () => {
 
     registerWorkspaceIpc({
       deps: {
-        mobileRelayBridge: {
-          invalidateWorkspaceListCache() {
-            callOrder.push("invalidateWorkspaceListCache");
-          },
-        },
+        mobileRelayBridge: {},
         persistence: {
           async saveState() {
             callOrder.push("saveState");
@@ -119,11 +115,7 @@ describe("workspace IPC", () => {
       },
     );
 
-    expect(callOrder).toEqual([
-      "saveState",
-      "setApprovedWorkspaceRoots",
-      "invalidateWorkspaceListCache",
-    ]);
+    expect(callOrder).toEqual(["saveState", "setApprovedWorkspaceRoots"]);
     expect(approvedRoots).toEqual(["/tmp/ws-1"]);
   });
 
@@ -136,9 +128,7 @@ describe("workspace IPC", () => {
 
     registerWorkspaceIpc({
       deps: {
-        mobileRelayBridge: {
-          invalidateWorkspaceListCache() {},
-        },
+        mobileRelayBridge: {},
         persistence: {
           async saveState(state: unknown) {
             savedState = state;
@@ -342,9 +332,7 @@ describe("workspace IPC", () => {
 
     registerWorkspaceIpc({
       deps: {
-        mobileRelayBridge: {
-          invalidateWorkspaceListCache() {},
-        },
+        mobileRelayBridge: {},
         persistence: {
           async saveState(state: unknown) {
             persistedState = state;
@@ -473,9 +461,7 @@ describe("workspace IPC", () => {
 
     registerWorkspaceIpc({
       deps: {
-        mobileRelayBridge: {
-          invalidateWorkspaceListCache() {},
-        },
+        mobileRelayBridge: {},
         persistence: {
           async saveState(state: unknown) {
             persistedState = state;
@@ -575,9 +561,7 @@ describe("workspace IPC", () => {
 
     registerWorkspaceIpc({
       deps: {
-        mobileRelayBridge: {
-          invalidateWorkspaceListCache() {},
-        },
+        mobileRelayBridge: {},
         persistence: {
           async saveState(state: unknown) {
             persistedState = state;
@@ -719,9 +703,7 @@ describe("workspace IPC", () => {
 
     registerWorkspaceIpc({
       deps: {
-        mobileRelayBridge: {
-          invalidateWorkspaceListCache() {},
-        },
+        mobileRelayBridge: {},
         persistence: {
           async saveState(state: unknown) {
             savedState = state;
@@ -839,9 +821,7 @@ describe("workspace IPC", () => {
 
     registerWorkspaceIpc({
       deps: {
-        mobileRelayBridge: {
-          invalidateWorkspaceListCache() {},
-        },
+        mobileRelayBridge: {},
         persistence: {
           async saveState(state: unknown) {
             savedState = state;
@@ -991,9 +971,7 @@ describe("workspace IPC", () => {
 
     registerWorkspaceIpc({
       deps: {
-        mobileRelayBridge: {
-          invalidateWorkspaceListCache() {},
-        },
+        mobileRelayBridge: {},
         persistence: {
           async saveState(state: unknown) {
             savedState = state;

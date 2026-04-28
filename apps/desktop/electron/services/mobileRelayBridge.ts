@@ -104,14 +104,6 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     return { ...this.state };
   }
 
-  setWorkspaceListProvider(..._args: unknown[]): void {
-    // Direct H3 uses the real harness JSON-RPC routes instead of bridge-only workspace routes.
-  }
-
-  invalidateWorkspaceListCache(): void {
-    // No bridge-level workspace cache exists for the direct H3 transport.
-  }
-
   async start(options: StartOptions): Promise<MobileRelaySnapshot> {
     this.currentStartOptions = options;
     this.state = {

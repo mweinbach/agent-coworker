@@ -28,10 +28,6 @@ mock.module("electron", () => createElectronMock());
 
 const { registerMobileRelayIpc } = await import("../electron/ipc/mobileRelay");
 
-function flushMicrotasks() {
-  return new Promise<void>((resolve) => queueMicrotask(resolve));
-}
-
 describe("mobile relay IPC", () => {
   beforeEach(() => {
     process.env.COWORK_ENABLE_REMOTE_ACCESS = "1";
@@ -41,54 +37,6 @@ describe("mobile relay IPC", () => {
   afterEach(() => {
     getAllWindowsMock.mockClear();
     delete process.env.COWORK_ENABLE_REMOTE_ACCESS;
-  });
-
-  test("throws workspace list errors when cache refresh fails", async () => {
-    let workspaceListProvider: (() => Promise<unknown[]>) | null = null;
-    const loadState = mock(async () => {
-      throw new Error("disk offline");
-    });
-    const warn = mock(() => {});
-    const originalWarn = console.warn;
-    console.warn = warn;
-
-    try {
-      registerMobileRelayIpc({
-        deps: {
-          persistence: { loadState } as never,
-          mobileRelayBridge: {
-            setWorkspaceListProvider(provider: () => Promise<unknown[]>) {
-              workspaceListProvider = provider;
-            },
-            on() {},
-            start: async () => ({}),
-            stop: async () => ({}),
-            getSnapshot: () => ({}),
-            rotateSession: async () => ({}),
-            forgetTrustedPhone: async () => ({}),
-          } as never,
-        } as never,
-        workspaceRoots: {} as never,
-        handleDesktopInvoke() {},
-        parseWithSchema(_schema, value) {
-          return value as never;
-        },
-      });
-
-      await flushMicrotasks();
-
-      expect(workspaceListProvider).toBeTruthy();
-      await expect(workspaceListProvider?.()).rejects.toThrow(
-        "Could not load workspace list: disk offline",
-      );
-
-      expect(loadState).toHaveBeenCalledTimes(1);
-      expect(warn).toHaveBeenCalledWith(
-        "[desktop] Failed to refresh mobile relay workspace cache during initial load: disk offline",
-      );
-    } finally {
-      console.warn = originalWarn;
-    }
   });
 
   test("validates the mobile relay workspace path against approved roots", async () => {
@@ -120,7 +68,6 @@ describe("mobile relay IPC", () => {
       deps: {
         persistence: { loadState: async () => ({ workspaces: [] }) } as never,
         mobileRelayBridge: {
-          setWorkspaceListProvider() {},
           on() {},
           start,
           stop: async () => ({}),
@@ -186,7 +133,6 @@ describe("mobile relay IPC", () => {
       deps: {
         persistence: { loadState: async () => ({ workspaces: [] }) } as never,
         mobileRelayBridge: {
-          setWorkspaceListProvider() {},
           on() {},
           initialize,
           start: async () => ({}),
@@ -225,7 +171,6 @@ describe("mobile relay IPC", () => {
       deps: {
         persistence: { loadState: async () => ({ workspaces: [] }) } as never,
         mobileRelayBridge: {
-          setWorkspaceListProvider() {},
           on() {},
           initialize,
           start: async () => ({}),
@@ -272,7 +217,6 @@ describe("mobile relay IPC", () => {
       deps: {
         persistence: { loadState: async () => ({ workspaces: [] }) } as never,
         mobileRelayBridge: {
-          setWorkspaceListProvider() {},
           on() {},
           start,
           stop: async () => ({}),
@@ -303,85 +247,5 @@ describe("mobile relay IPC", () => {
       }),
     ).rejects.toThrow("Remote access is disabled.");
     expect(start).not.toHaveBeenCalled();
-  });
-
-  test("invalidates the mobile relay workspace cache after the save-state hook fires", async () => {
-    let workspaceListProvider:
-      | (() => Promise<Array<{ id: string; name: string; path: string; yolo: boolean }>>)
-      | null = null;
-    let invalidateWorkspaceCache: (() => void) | null = null;
-    let currentWorkspaces = [
-      {
-        id: "ws-1",
-        name: "Workspace One",
-        path: "/tmp/workspace-one",
-        yolo: false,
-      },
-    ];
-    const loadState = mock(async () => ({
-      version: 2,
-      workspaces: currentWorkspaces,
-      threads: [],
-    }));
-
-    registerMobileRelayIpc({
-      deps: {
-        persistence: { loadState } as never,
-        mobileRelayBridge: {
-          setWorkspaceListProvider(
-            provider: () => Promise<
-              Array<{ id: string; name: string; path: string; yolo: boolean }>
-            >,
-            invalidator?: () => void,
-          ) {
-            workspaceListProvider = provider;
-            if (invalidator) invalidateWorkspaceCache = invalidator;
-          },
-          on() {},
-          start: async () => ({}),
-          stop: async () => ({}),
-          getSnapshot: () => ({}),
-          rotateSession: async () => ({}),
-          forgetTrustedPhone: async () => ({}),
-        } as never,
-      } as never,
-      workspaceRoots: {} as never,
-      handleDesktopInvoke() {},
-      parseWithSchema(_schema: unknown, value: unknown) {
-        return value as never;
-      },
-    });
-
-    await flushMicrotasks();
-
-    expect(await workspaceListProvider?.()).toEqual([
-      {
-        id: "ws-1",
-        name: "Workspace One",
-        path: "/tmp/workspace-one",
-        yolo: false,
-      },
-    ]);
-    expect(loadState).toHaveBeenCalledTimes(1);
-
-    currentWorkspaces = [
-      {
-        id: "ws-2",
-        name: "Workspace Two",
-        path: "/tmp/workspace-two",
-        yolo: true,
-      },
-    ];
-    invalidateWorkspaceCache?.();
-
-    expect(await workspaceListProvider?.()).toEqual([
-      {
-        id: "ws-2",
-        name: "Workspace Two",
-        path: "/tmp/workspace-two",
-        yolo: true,
-      },
-    ]);
-    expect(loadState).toHaveBeenCalledTimes(2);
   });
 });

@@ -96,8 +96,14 @@ Desktop renderer WebSocket traffic uses JSON-RPC over `cowork.jsonrpc.v1`. Share
 
 ### Styling Guidelines
 
-- Use CSS custom properties for theming (`src/styles.css`)
-- Prefer flexbox for layout
-- Keep styles co-located: global styles in `src/styles.css`, component styles in `src/App.css` or colocated files
+- Use shadcn/ui specifically for desktop renderer UI. Do not add HeroUI or another component library.
+- The shadcn config is `components.json`: Vite, Tailwind v4, radix base, lucide icons, `@/components/ui/*` imports, and `@/lib/utils`.
+- Run shadcn commands from `apps/desktop` with Bun: `bunx --bun shadcn@latest info --json`, `bunx --bun shadcn@latest docs <component>`, and `bunx --bun shadcn@latest add <component>`.
+- Prefer existing shadcn primitives in `src/components/ui` before custom markup. The full registry component set should be present there, alongside any app-specific local components.
+- Compose components using shadcn conventions: full `Card` structure, `Dialog`/`Sheet` titles, `TabsTrigger` inside `TabsList`, `SelectItem` inside groups where applicable, `Field`/`FieldGroup` and `InputGroup` for form layout, `Separator`/`Skeleton`/`Badge` instead of custom one-off divs.
+- Style with semantic CSS tokens from `src/styles.css`, component variants, `gap-*` instead of `space-*`, `size-*` for equal dimensions, and `cn()` for conditional classes.
+- Use lucide icons with `data-icon="inline-start"` or `data-icon="inline-end"` inside `Button`; let the component own icon sizing.
+- Use the shared `Switch` for binary settings and reserve `Checkbox` for checklist selection.
+- Preview updates to existing components with `--dry-run` or `--diff`; do not overwrite desktop-customized wrappers without checking the diff and running relevant tests.
 
 <!-- HEROUI-REACT-AGENTS-MD-END -->

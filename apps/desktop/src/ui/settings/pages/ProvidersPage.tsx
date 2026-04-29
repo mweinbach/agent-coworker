@@ -1,4 +1,5 @@
 import { motion } from "framer-motion";
+import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
@@ -612,7 +613,7 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
               <Button
                 type="button"
                 variant="ghost"
-                className="h-auto w-full justify-between gap-3 rounded-none px-5 py-4 text-left hover:bg-transparent"
+                className="h-auto w-full justify-between gap-3 rounded-none px-4 py-3 text-left hover:bg-transparent"
               >
                 <div className="min-w-0">
                   <div className="truncate text-sm font-semibold text-foreground">
@@ -622,11 +623,15 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
                     {lmStudioCard.subtitle}
                   </div>
                 </div>
-                <div className="flex shrink-0 items-center gap-2">
+                <div className="flex shrink-0 items-center gap-2 [&>[data-icon]]:size-4 [&>[data-icon]]:shrink-0">
                   <Badge variant={lmStudioEnabled && connected ? "default" : "secondary"}>
                     {lmStudioCard.badgeLabel}
                   </Badge>
-                  <span className="text-xs text-muted-foreground">{isExpanded ? "▾" : "▸"}</span>
+                  {isExpanded ? (
+                    <ChevronDownIcon data-icon="inline-end" className="text-muted-foreground" />
+                  ) : (
+                    <ChevronRightIcon data-icon="inline-end" className="text-muted-foreground" />
+                  )}
                 </div>
               </Button>
             </CollapsibleTrigger>
@@ -753,7 +758,7 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
             <Button
               type="button"
               variant="ghost"
-              className="h-auto w-full justify-between gap-3 rounded-none px-5 py-4 text-left hover:bg-transparent"
+              className="h-auto w-full justify-between gap-3 rounded-none px-4 py-3 text-left hover:bg-transparent"
             >
               <div className="min-w-0">
                 <div className="truncate text-sm font-semibold text-foreground">
@@ -767,9 +772,13 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
                     : "Click to set up"}
                 </div>
               </div>
-              <div className="flex shrink-0 items-center gap-2">
+              <div className="flex shrink-0 items-center gap-2 [&>[data-icon]]:size-4 [&>[data-icon]]:shrink-0">
                 <Badge variant={connected ? "default" : "secondary"}>{label}</Badge>
-                <span className="text-xs text-muted-foreground">{isExpanded ? "▾" : "▸"}</span>
+                {isExpanded ? (
+                  <ChevronDownIcon data-icon="inline-end" className="text-muted-foreground" />
+                ) : (
+                  <ChevronRightIcon data-icon="inline-end" className="text-muted-foreground" />
+                )}
               </div>
             </Button>
           </CollapsibleTrigger>
@@ -972,7 +981,7 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
             <Button
               type="button"
               variant="ghost"
-              className="h-auto w-full justify-between gap-3 rounded-none px-5 py-4 text-left hover:bg-transparent"
+              className="h-auto w-full justify-between gap-3 rounded-none px-4 py-3 text-left hover:bg-transparent"
             >
               <div className="min-w-0">
                 <div className="truncate text-sm font-semibold text-foreground">{opts.title}</div>
@@ -980,11 +989,15 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
                   {toolProviderConnectionSummary(opts.title, connected)}
                 </div>
               </div>
-              <div className="flex shrink-0 items-center gap-2">
+              <div className="flex shrink-0 items-center gap-2 [&>[data-icon]]:size-4 [&>[data-icon]]:shrink-0">
                 <Badge variant={connected ? "default" : "secondary"}>
                   {connected ? "Connected" : "Not connected"}
                 </Badge>
-                <span className="text-xs text-muted-foreground">{expanded ? "▾" : "▸"}</span>
+                {expanded ? (
+                  <ChevronDownIcon data-icon="inline-end" className="text-muted-foreground" />
+                ) : (
+                  <ChevronRightIcon data-icon="inline-end" className="text-muted-foreground" />
+                )}
               </div>
             </Button>
           </CollapsibleTrigger>
@@ -1075,7 +1088,7 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
         </Card>
       ) : null}
 
-      <div className="app-shadow-surface relative mb-2 flex max-w-fit space-x-1 rounded-xl border border-border/70 bg-foreground/[0.04] p-1.5 backdrop-blur-sm">
+      <div className="app-shadow-surface relative mb-2 flex max-w-fit gap-1 rounded-xl border border-border/70 bg-foreground/[0.04] p-1.5 backdrop-blur-sm">
         {(["models", "tools"] as const).map((tab) => (
           <Button
             key={tab}

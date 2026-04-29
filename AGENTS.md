@@ -88,6 +88,17 @@ For the Electron desktop app (`apps/desktop`):
 - Set `COWORK_ELECTRON_REMOTE_DEBUG=1` when you need to expose a CDP port for external inspection or automation.
 - Override `COWORK_ELECTRON_REMOTE_DEBUG_PORT` if `9222` is already in use.
 
+### Desktop UI and shadcn/ui
+
+- The desktop renderer uses shadcn/ui as the component system. Do not add HeroUI or custom component libraries for new desktop UI.
+- The shadcn project root is `apps/desktop`; its registry config is `apps/desktop/components.json`, with Tailwind v4 CSS in `apps/desktop/src/styles.css`, imports from `@/components/ui/*`, utilities from `@/lib/utils`, and lucide icons.
+- Before adding or changing a shadcn component, run `bunx --bun shadcn@latest info --json` from `apps/desktop` and use that output as the source of truth for aliases, base (`radix`), icon library, and installed components.
+- Use the CLI for registry work: `bunx --bun shadcn@latest add <component>` from `apps/desktop`. For existing components, preview first with `--dry-run` or `--diff` and do not overwrite local wrappers without checking their desktop-specific behavior and tests.
+- Compose existing shadcn primitives first: `Button`, `Card`, `Dialog`, `Sheet`, `Tabs`, `Select`, `Switch`, `Checkbox`, `Tooltip`, `DropdownMenu`, `Command`, `Field`, `InputGroup`, `Separator`, `Skeleton`, `Badge`, etc. The full shadcn component set should live under `apps/desktop/src/components/ui`.
+- Follow shadcn composition rules: use variants before custom styling, semantic tokens (`bg-background`, `text-muted-foreground`, `border-border`) instead of raw colors, `gap-*` instead of `space-*`, `size-*` for square icons/controls, and `cn()` for conditional classes.
+- Buttons with icons should use lucide icons with `data-icon="inline-start"` or `data-icon="inline-end"` and let the `Button` component own icon sizing. For binary settings use the shared `Switch`; reserve `Checkbox` for checklist selection.
+- Keep desktop UI thin. Business logic still belongs in the harness/server and must be exposed through JSON-RPC/WebSocket controls.
+
 ## Cursor Cloud specific instructions
 
 ### Runtime

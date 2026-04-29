@@ -18,6 +18,42 @@ function OpenTooltip() {
 }
 
 describe("desktop tooltip component", () => {
+  test.serial("links trigger and content with tooltip semantics", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(OpenTooltip));
+      });
+
+      const trigger = harness.dom.window.document.querySelector('[data-slot="tooltip-trigger"]');
+      const tooltip = harness.dom.window.document.querySelector('[data-slot="tooltip-content"]');
+      if (!(trigger instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing tooltip trigger");
+      }
+      if (!(tooltip instanceof harness.dom.window.HTMLDivElement)) {
+        throw new Error("missing tooltip content");
+      }
+
+      expect(tooltip.getAttribute("role")).toBe("tooltip");
+      expect(tooltip.id).toBeTruthy();
+      expect(trigger.getAttribute("aria-describedby")).toBe(tooltip.id);
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
   test.serial("clamps the rendered tooltip box inside the viewport", async () => {
     const harness = setupJsdom({
       setupWindow: (dom) => {

@@ -16,8 +16,10 @@ type TooltipRootProps = {
 };
 
 type TooltipContextValue = {
+  contentId: string;
   delayDuration: number;
   open: boolean;
+  setContentId: (id: string) => void;
   setOpen: (open: boolean) => void;
   setTriggerNode: (node: HTMLElement | null) => void;
   triggerNode: HTMLElement | null;
@@ -35,6 +37,8 @@ function TooltipProvider({ children, delayDuration }: TooltipProviderProps) {
 
 function Tooltip({ children, defaultOpen, delayDuration, onOpenChange, open }: TooltipRootProps) {
   const provider = React.useContext(TooltipProviderContext);
+  const generatedContentId = React.useId();
+  const [contentId, setContentId] = React.useState(generatedContentId);
   const [uncontrolledOpen, setUncontrolledOpen] = React.useState(defaultOpen ?? false);
   const [triggerNode, setTriggerNode] = React.useState<HTMLElement | null>(null);
   const resolvedDelayDuration = delayDuration ?? provider?.delayDuration ?? 200;
@@ -52,8 +56,10 @@ function Tooltip({ children, defaultOpen, delayDuration, onOpenChange, open }: T
   return (
     <TooltipContext.Provider
       value={{
+        contentId,
         delayDuration: resolvedDelayDuration,
         open: isOpen,
+        setContentId,
         setOpen,
         setTriggerNode,
         triggerNode,
@@ -86,8 +92,9 @@ function TooltipTrigger({
   onMouseLeave,
   ...props
 }: TooltipTriggerProps) {
-  const { delayDuration, open, setOpen, setTriggerNode } = useTooltipContext();
+  const { contentId, delayDuration, open, setOpen, setTriggerNode } = useTooltipContext();
   const timeoutRef = React.useRef<number | null>(null);
+  const describedBy = props["aria-describedby"];
   const setNodeRef = React.useCallback(
     (node: HTMLElement | null) => {
       setTriggerNode(node);
@@ -117,6 +124,7 @@ function TooltipTrigger({
 
   const triggerProps = {
     ...props,
+    "aria-describedby": open ? cn(describedBy, contentId) : describedBy,
     "aria-expanded": open,
     "data-slot": "tooltip-trigger",
     className: cn(!asChild && "inline-flex", className),
@@ -197,9 +205,14 @@ function TooltipContent({
   children,
   ...props
 }: TooltipContentProps) {
-  const { open, triggerNode } = useTooltipContext();
+  const { contentId, open, setContentId, triggerNode } = useTooltipContext();
   const contentRef = React.useRef<HTMLDivElement | null>(null);
   const [position, setPosition] = React.useState({ left: 16, top: 16 });
+  const id = props.id ?? contentId;
+
+  React.useEffect(() => {
+    setContentId(id);
+  }, [id, setContentId]);
 
   React.useLayoutEffect(() => {
     if (!open || !triggerNode || typeof window === "undefined") {
@@ -241,8 +254,10 @@ function TooltipContent({
   return createPortal(
     <div
       ref={contentRef}
+      id={id}
       data-slot="tooltip-content"
       data-side={side}
+      role="tooltip"
       className={cn(
         "app-surface-overlay app-border-subtle app-shadow-overlay pointer-events-none fixed z-50 max-w-xs overflow-hidden rounded-[10px] border px-2 py-1 text-xs",
         className,

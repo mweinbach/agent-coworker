@@ -1,6 +1,5 @@
 @import "./styles/fonts.css";
 @import "tailwindcss";
-@import "@heroui/styles";
 @import "./styles/tokens.css";
 @import "./styles/theme-bridge.css";
 @import "./styles/token-utilities.css";

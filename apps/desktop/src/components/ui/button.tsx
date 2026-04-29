@@ -1,4 +1,4 @@
-import { Button as HeroButton } from "@heroui/react";
+import { Slot } from "@radix-ui/react-slot";
 import * as React from "react";
 
 import { cn } from "@/lib/utils";
@@ -6,82 +6,12 @@ import { cn } from "@/lib/utils";
 type ButtonVariant = "default" | "secondary" | "destructive" | "outline" | "ghost" | "link";
 type ButtonSize = "default" | "sm" | "lg" | "icon" | "icon-sm";
 
-type HeroButtonPressEvent = Parameters<
-  NonNullable<React.ComponentProps<typeof HeroButton>["onPress"]>
->[0];
-
-function assignRef<T>(ref: React.Ref<T> | undefined, value: T | null) {
-  if (!ref) {
-    return;
-  }
-  if (typeof ref === "function") {
-    ref(value);
-    return;
-  }
-  (ref as React.MutableRefObject<T | null>).current = value;
-}
-
-function composeRefs<T>(...refs: Array<React.Ref<T> | undefined>): React.RefCallback<T> {
-  return (value) => {
-    for (const ref of refs) {
-      assignRef(ref, value);
-    }
-  };
-}
-
-function getElementRef<T>(element: React.ReactElement): React.Ref<T> | undefined {
-  const withPossibleRef = element as React.ReactElement & {
-    ref?: React.Ref<T>;
-    props: { ref?: React.Ref<T> };
-  };
-  return withPossibleRef.props.ref ?? withPossibleRef.ref;
-}
-
-type ButtonProps = Omit<
-  React.ComponentProps<typeof HeroButton>,
-  "variant" | "size" | "onPress" | "isDisabled"
-> & {
+type ButtonProps = Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, "disabled"> & {
   variant?: ButtonVariant;
   size?: ButtonSize;
   asChild?: boolean;
-  onClick?: React.MouseEventHandler<HTMLButtonElement>;
-  onPress?: React.ComponentProps<typeof HeroButton>["onPress"];
   disabled?: boolean;
-  title?: string;
 };
-
-function mapVariant(
-  variant: ButtonVariant | undefined,
-): NonNullable<React.ComponentProps<typeof HeroButton>["variant"]> {
-  switch (variant) {
-    case "secondary":
-      return "secondary";
-    case "destructive":
-      return "danger";
-    case "outline":
-      return "outline";
-    case "ghost":
-      return "ghost";
-    case "link":
-      return "ghost";
-    default:
-      return "primary";
-  }
-}
-
-function mapSize(
-  size: ButtonSize | undefined,
-): NonNullable<React.ComponentProps<typeof HeroButton>["size"]> {
-  switch (size) {
-    case "sm":
-    case "icon-sm":
-      return "sm";
-    case "lg":
-      return "lg";
-    default:
-      return "md";
-  }
-}
 
 const buttonVariantStyles: Record<ButtonVariant, string> = {
   default:
@@ -123,55 +53,31 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
     variant = "default",
     size = "default",
     asChild = false,
-    onClick,
-    onPress,
     disabled,
     children,
     ...props
   },
   ref,
 ) {
-  if (asChild && React.isValidElement(children)) {
-    const child = children as React.ReactElement<React.HTMLAttributes<HTMLElement>>;
-    const childProps = {
-      ...child.props,
-      ...props,
-      className: buttonVariants({
-        variant,
-        size,
-        className: cn(className, child.props.className),
-      }),
-      onClick: (event: React.MouseEvent<HTMLElement>) => {
-        child.props.onClick?.(event);
-        onClick?.(event as React.MouseEvent<HTMLButtonElement>);
-      },
-      ref: composeRefs(getElementRef<HTMLElement>(child), ref as React.Ref<HTMLElement>),
-    } as React.HTMLAttributes<HTMLElement>;
-
-    return React.cloneElement(child, childProps);
-  }
+  const Comp = asChild ? Slot : "button";
 
   return (
-    <HeroButton
+    <Comp
       {...props}
       ref={ref}
       className={buttonVariants({
         variant,
         size,
-        className: typeof className === "string" ? className : undefined,
+        className,
       })}
       data-size={size}
       data-slot="button"
       data-variant={variant}
-      isDisabled={disabled}
-      isIconOnly={size === "icon" || size === "icon-sm"}
-      onClick={onClick as React.ComponentProps<typeof HeroButton>["onClick"]}
-      onPress={onPress as ((event: HeroButtonPressEvent) => void) | undefined}
-      size={mapSize(size)}
-      variant={mapVariant(variant)}
+      disabled={asChild ? undefined : disabled}
+      aria-disabled={asChild && disabled ? true : props["aria-disabled"]}
     >
       {children}
-    </HeroButton>
+    </Comp>
   );
 });
 

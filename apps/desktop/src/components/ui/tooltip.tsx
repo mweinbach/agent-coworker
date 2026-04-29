@@ -1,4 +1,4 @@
-import { Tooltip as HeroTooltip } from "@heroui/react";
+import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import type * as React from "react";
 
 import { cn } from "@/lib/utils";
@@ -15,8 +15,12 @@ type TooltipRootProps = {
   onOpenChange?: (open: boolean) => void;
 };
 
-function TooltipProvider({ children }: TooltipProviderProps) {
-  return <>{children}</>;
+function TooltipProvider({ children, delayDuration }: TooltipProviderProps) {
+  return (
+    <TooltipPrimitive.Provider delayDuration={delayDuration}>
+      {children}
+    </TooltipPrimitive.Provider>
+  );
 }
 
 function Tooltip({
@@ -27,34 +31,35 @@ function Tooltip({
   open,
 }: TooltipRootProps) {
   return (
-    <HeroTooltip
+    <TooltipPrimitive.Root
       defaultOpen={defaultOpen}
-      delay={delayDuration}
-      isOpen={open}
+      delayDuration={delayDuration}
+      open={open}
       onOpenChange={onOpenChange}
     >
       {children}
-    </HeroTooltip>
+    </TooltipPrimitive.Root>
   );
 }
 
-type TooltipTriggerProps = React.ComponentProps<typeof HeroTooltip.Trigger> & {
+type TooltipTriggerProps = React.ComponentProps<typeof TooltipPrimitive.Trigger> & {
   asChild?: boolean;
 };
 
 function TooltipTrigger({ children, className, asChild, ...props }: TooltipTriggerProps) {
   return (
-    <HeroTooltip.Trigger
+    <TooltipPrimitive.Trigger
       data-slot="tooltip-trigger"
       className={cn(!asChild && "inline-flex", className)}
+      asChild={asChild}
       {...props}
     >
       {children}
-    </HeroTooltip.Trigger>
+    </TooltipPrimitive.Trigger>
   );
 }
 
-type TooltipContentProps = React.ComponentProps<typeof HeroTooltip.Content> & {
+type TooltipContentProps = React.ComponentProps<typeof TooltipPrimitive.Content> & {
   side?: "bottom" | "left" | "right" | "top";
   sideOffset?: number;
 };
@@ -67,18 +72,20 @@ function TooltipContent({
   ...props
 }: TooltipContentProps) {
   return (
-    <HeroTooltip.Content
-      data-slot="tooltip-content"
-      className={cn(
-        "app-surface-overlay app-border-subtle app-shadow-overlay rounded-[10px] border px-2 py-1 text-xs",
-        className,
-      )}
-      offset={sideOffset}
-      placement={side}
-      {...props}
-    >
-      {children}
-    </HeroTooltip.Content>
+    <TooltipPrimitive.Portal>
+      <TooltipPrimitive.Content
+        data-slot="tooltip-content"
+        className={cn(
+          "app-surface-overlay app-border-subtle app-shadow-overlay z-50 overflow-hidden rounded-[10px] border px-2 py-1 text-xs",
+          className,
+        )}
+        side={side}
+        sideOffset={sideOffset}
+        {...props}
+      >
+        {children}
+      </TooltipPrimitive.Content>
+    </TooltipPrimitive.Portal>
   );
 }
 

@@ -1,21 +1,18 @@
-import { Input as HeroInput } from "@heroui/react";
 import * as React from "react";
 
 import { cn } from "@/lib/utils";
 
-const Input = React.forwardRef<HTMLInputElement, React.ComponentPropsWithoutRef<typeof HeroInput>>(
+const Input = React.forwardRef<HTMLInputElement, React.ComponentProps<"input">>(
   function Input({ className, type, ...props }, ref) {
     return (
-      <HeroInput
+      <input
         ref={ref}
         data-slot="input"
         className={cn(
-          "app-focus-ring app-surface-field app-border-subtle app-shadow-field h-9 w-full rounded-[10px] border text-[13px] transition-colors [&_[data-slot=input]]:h-9 [&_[data-slot=input]]:bg-transparent [&_[data-slot=input]]:px-3 [&_[data-slot=input]]:py-0 [&_[data-slot=input]]:text-[13px] [&_[data-slot=input]]:text-foreground [&_[data-slot=input]]:placeholder:text-muted-foreground [&_[data-slot=input]]:outline-none",
+          "app-focus-ring app-surface-field app-border-subtle app-shadow-field h-9 w-full rounded-[10px] border bg-transparent px-3 py-0 text-[13px] text-foreground transition-colors placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50",
           className,
         )}
-        fullWidth
         type={type}
-        variant="secondary"
         {...props}
       />
     );

@@ -1,56 +1,37 @@
-import { Chip, type ChipVariants, chipVariants } from "@heroui/react";
-import type * as React from "react";
+import { type VariantProps, cva } from "class-variance-authority";
+import * as React from "react";
 
 import { cn } from "@/lib/utils";
 
-type BadgeVariant = "default" | "secondary" | "destructive" | "outline";
+const badgeVariants = cva(
+  "inline-flex min-h-0 w-fit shrink-0 items-center justify-center gap-1 overflow-hidden rounded-md border px-2 py-0.5 text-xs font-medium whitespace-nowrap shadow-none transition-colors [&>svg]:pointer-events-none [&>svg]:size-3",
+  {
+    variants: {
+      variant: {
+        default: "border-transparent bg-primary text-primary-foreground",
+        secondary: "border-transparent bg-muted/50 text-foreground",
+        destructive: "border-transparent bg-destructive/10 text-destructive",
+        outline: "border-border/70 bg-transparent text-foreground",
+      },
+    },
+    defaultVariants: {
+      variant: "default",
+    },
+  },
+);
 
-const BADGE_VARIANT_MAP: Record<BadgeVariant, NonNullable<ChipVariants["variant"]>> = {
-  default: "primary",
-  secondary: "secondary",
-  destructive: "primary",
-  outline: "tertiary",
-};
-
-const BADGE_COLOR_MAP: Record<BadgeVariant, NonNullable<ChipVariants["color"]>> = {
-  default: "accent",
-  secondary: "default",
-  destructive: "danger",
-  outline: "default",
-};
-
-const badgeVariants = ({
-  variant = "default",
-  className,
-}: {
-  variant?: BadgeVariant | null;
-  className?: string;
-} = {}) =>
-  chipVariants({
-    color: BADGE_COLOR_MAP[variant ?? "default"],
-    size: "sm",
-    variant: BADGE_VARIANT_MAP[variant ?? "default"],
-    className,
-  });
-
-type BadgeProps = Omit<React.ComponentProps<typeof Chip>, "color" | "variant" | "size"> & {
-  variant?: BadgeVariant;
-  title?: string;
-};
+type BadgeProps = React.ComponentProps<"span"> & VariantProps<typeof badgeVariants>;
 
 function Badge({ className, variant = "default", children, ...props }: BadgeProps) {
   return (
-    <Chip
+    <span
       data-slot="badge"
       data-variant={variant}
-      color={BADGE_COLOR_MAP[variant]}
-      size="sm"
-      variant={BADGE_VARIANT_MAP[variant]}
-      className={cn("min-h-0 rounded-md shadow-none", className)}
+      className={cn(badgeVariants({ variant }), className)}
       {...props}
     >
       {children}
-    </Chip>
+    </span>
   );
 }
 

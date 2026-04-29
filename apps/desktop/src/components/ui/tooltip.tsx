@@ -31,14 +31,16 @@ function Tooltip({
   open,
 }: TooltipRootProps) {
   return (
-    <TooltipPrimitive.Root
-      defaultOpen={defaultOpen}
-      delayDuration={delayDuration}
-      open={open}
-      onOpenChange={onOpenChange}
-    >
-      {children}
-    </TooltipPrimitive.Root>
+    <TooltipPrimitive.Provider delayDuration={delayDuration}>
+      <TooltipPrimitive.Root
+        defaultOpen={defaultOpen}
+        delayDuration={delayDuration}
+        open={open}
+        onOpenChange={onOpenChange}
+      >
+        {children}
+      </TooltipPrimitive.Root>
+    </TooltipPrimitive.Provider>
   );
 }
 

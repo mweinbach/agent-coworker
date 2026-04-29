@@ -109,6 +109,48 @@ describe("desktop button component", () => {
     }
   });
 
+  test("lets child className override variant classes in asChild mode", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          createElement(
+            Button,
+            { asChild: true },
+            createElement(
+              "button",
+              { className: "bg-red-500", id: "child-button", type: "button" },
+              "Child button",
+            ),
+          ),
+        );
+      });
+
+      const button = harness.dom.window.document.getElementById("child-button");
+      if (!(button instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing child button");
+      }
+
+      const classNames = button.className.split(/\s+/);
+      expect(classNames).toContain("bg-red-500");
+      expect(classNames).not.toContain("bg-primary");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
   test("defaults native buttons to type button", async () => {
     const harness = setupJsdom();
 
@@ -287,7 +329,9 @@ describe("desktop button component", () => {
 
       expect(container.querySelector("button")).toBeNull();
       expect(container.textContent).toBe("");
-      expect(warnings).toContain("Button with asChild expects exactly one valid React element child.");
+      expect(warnings).toContain(
+        "Button with asChild expects exactly one valid React element child.",
+      );
 
       await act(async () => {
         root.unmount();

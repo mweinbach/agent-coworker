@@ -102,7 +102,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
 
     return React.cloneElement(child, {
       ...sharedProps,
-      className: cn(child.props.className, sharedProps.className),
+      className: cn(sharedProps.className, child.props.className),
       onClick: (event: React.MouseEvent<HTMLButtonElement>) => {
         if (disabled) {
           event.preventDefault();

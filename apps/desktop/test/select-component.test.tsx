@@ -204,4 +204,50 @@ describe("desktop select component", () => {
       harness.restore();
     }
   });
+
+  test.serial("closes the open menu when tabbing away from the select", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(PositionedSelect));
+      });
+
+      const selectTrigger = harness.dom.window.document.querySelector(
+        '[data-slot="select-trigger"]',
+      );
+      if (!(selectTrigger instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing select trigger");
+      }
+
+      await act(async () => {
+        selectTrigger.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(
+        harness.dom.window.document.querySelector('[data-slot="select-content"]'),
+      ).not.toBeNull();
+
+      await act(async () => {
+        selectTrigger.dispatchEvent(
+          new harness.dom.window.KeyboardEvent("keydown", { bubbles: true, key: "Tab" }),
+        );
+      });
+
+      expect(harness.dom.window.document.querySelector('[data-slot="select-content"]')).toBeNull();
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
 });

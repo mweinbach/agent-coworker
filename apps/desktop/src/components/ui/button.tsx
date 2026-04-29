@@ -84,10 +84,10 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
     "data-size": size,
     "data-slot": "button",
     "data-variant": variant,
-    disabled,
     onClick: handleClick,
     tabIndex: asChild && disabled ? -1 : tabIndex,
     "aria-disabled": asChild && disabled ? true : props["aria-disabled"],
+    ...(disabled !== undefined ? { disabled } : {}),
     ...(asChild && type !== undefined ? { type } : {}),
   } as const;
 
@@ -122,11 +122,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
   }
 
   return (
-    <button
-      {...sharedProps}
-      ref={ref}
-      type={type ?? "button"}
-    >
+    <button {...sharedProps} ref={ref} type={type ?? "button"}>
       {children}
     </button>
   );

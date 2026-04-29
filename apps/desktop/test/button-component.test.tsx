@@ -108,4 +108,56 @@ describe("desktop button component", () => {
       harness.restore();
     }
   });
+
+  test("blocks activation for disabled asChild buttons", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      const root = createRoot(container);
+      let clickCount = 0;
+
+      await act(async () => {
+        root.render(
+          createElement(
+            Button,
+            {
+              asChild: true,
+              disabled: true,
+              onClick: () => {
+                clickCount += 1;
+              },
+            },
+            createElement("button", { id: "child-button", type: "button" }, "Child button"),
+          ),
+        );
+      });
+
+      const button = harness.dom.window.document.getElementById("child-button");
+      if (!(button instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing child button");
+      }
+
+      expect(button.disabled).toBe(true);
+      expect(button.tabIndex).toBe(-1);
+
+      await act(async () => {
+        button.dispatchEvent(
+          new harness.dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+        );
+      });
+
+      expect(clickCount).toBe(0);
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
 });

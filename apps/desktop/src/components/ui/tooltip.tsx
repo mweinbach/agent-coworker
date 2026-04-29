@@ -17,9 +17,7 @@ type TooltipRootProps = {
 
 function TooltipProvider({ children, delayDuration }: TooltipProviderProps) {
   return (
-    <TooltipPrimitive.Provider delayDuration={delayDuration}>
-      {children}
-    </TooltipPrimitive.Provider>
+    <TooltipPrimitive.Provider delayDuration={delayDuration}>{children}</TooltipPrimitive.Provider>
   );
 }
 

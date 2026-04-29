@@ -264,13 +264,14 @@ function SelectSeparator({ className, ...props }: React.HTMLAttributes<HTMLDivEl
   );
 }
 
-function isSelectItemElement(
-  child: React.ReactNode,
-): child is React.ReactElement<SelectItemProps> {
+function isSelectItemElement(child: React.ReactNode): child is React.ReactElement<SelectItemProps> {
   return React.isValidElement<SelectItemProps>(child) && child.type === SelectItem;
 }
 
-function findSelectItemLabel(children: React.ReactNode, value: string | undefined): React.ReactNode {
+function findSelectItemLabel(
+  children: React.ReactNode,
+  value: string | undefined,
+): React.ReactNode {
   if (value === undefined) {
     return null;
   }

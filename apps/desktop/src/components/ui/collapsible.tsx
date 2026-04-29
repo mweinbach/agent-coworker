@@ -44,10 +44,7 @@ type CollapsibleProps = React.HTMLAttributes<HTMLDivElement> & {
   open?: boolean;
 };
 
-const Collapsible = React.forwardRef<
-  HTMLDivElement,
-  CollapsibleProps
->(function Collapsible(
+const Collapsible = React.forwardRef<HTMLDivElement, CollapsibleProps>(function Collapsible(
   { children, defaultOpen, disabled = false, onOpenChange, open, ...props },
   ref,
 ) {
@@ -65,9 +62,7 @@ const Collapsible = React.forwardRef<
   );
 
   return (
-    <CollapsibleContext.Provider
-      value={{ disabled, open: isOpen, setOpen: handleOpenChange }}
-    >
+    <CollapsibleContext.Provider value={{ disabled, open: isOpen, setOpen: handleOpenChange }}>
       <div
         ref={ref}
         data-disabled={disabled ? "" : undefined}
@@ -87,57 +82,56 @@ type CollapsibleTriggerProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
   asChild?: boolean;
 };
 
-const CollapsibleTrigger = React.forwardRef<
-  HTMLButtonElement,
-  CollapsibleTriggerProps
->(function CollapsibleTrigger({ asChild = false, children, onClick, type, ...props }, ref) {
-  const { disabled, open, setOpen } = useCollapsibleContext();
+const CollapsibleTrigger = React.forwardRef<HTMLButtonElement, CollapsibleTriggerProps>(
+  function CollapsibleTrigger({ asChild = false, children, onClick, type, ...props }, ref) {
+    const { disabled, open, setOpen } = useCollapsibleContext();
 
-  const handleClick = (event: React.MouseEvent<HTMLElement>) => {
-    onClick?.(event as React.MouseEvent<HTMLButtonElement>);
-    if (!event.defaultPrevented && !disabled) {
-      setOpen(!open);
+    const handleClick = (event: React.MouseEvent<HTMLElement>) => {
+      onClick?.(event as React.MouseEvent<HTMLButtonElement>);
+      if (!event.defaultPrevented && !disabled) {
+        setOpen(!open);
+      }
+    };
+
+    const sharedProps = {
+      ...props,
+      "aria-disabled": disabled ? true : props["aria-disabled"],
+      "aria-expanded": open,
+      "data-state": open ? "open" : "closed",
+      "data-expanded": open ? "true" : "false",
+    } as const;
+
+    if (asChild && React.isValidElement(children)) {
+      const child = children as React.ReactElement<{
+        onClick?: React.MouseEventHandler<HTMLElement>;
+        ref?: React.Ref<HTMLElement>;
+      }>;
+
+      return React.cloneElement(child, {
+        ...sharedProps,
+        onClick: (event: React.MouseEvent<HTMLElement>) => {
+          child.props.onClick?.(event);
+          handleClick(event);
+        },
+        ref: (node: HTMLElement | null) => {
+          setComposedRefs(node, getElementRef<HTMLElement>(child), ref as React.Ref<HTMLElement>);
+        },
+      });
     }
-  };
 
-  const sharedProps = {
-    ...props,
-    "aria-disabled": disabled ? true : props["aria-disabled"],
-    "aria-expanded": open,
-    "data-state": open ? "open" : "closed",
-    "data-expanded": open ? "true" : "false",
-  } as const;
-
-  if (asChild && React.isValidElement(children)) {
-    const child = children as React.ReactElement<{
-      onClick?: React.MouseEventHandler<HTMLElement>;
-      ref?: React.Ref<HTMLElement>;
-    }>;
-
-    return React.cloneElement(child, {
-      ...sharedProps,
-      onClick: (event: React.MouseEvent<HTMLElement>) => {
-        child.props.onClick?.(event);
-        handleClick(event);
-      },
-      ref: (node: HTMLElement | null) => {
-        setComposedRefs(node, getElementRef<HTMLElement>(child), ref as React.Ref<HTMLElement>);
-      },
-    });
-  }
-
-  return (
-    <button
-      ref={ref}
-      type={type ?? "button"}
-      onClick={handleClick as React.MouseEventHandler<HTMLButtonElement>}
-      disabled={disabled}
-      {...sharedProps}
-    >
-      {children}
-    </button>
-  );
-});
+    return (
+      <button
+        ref={ref}
+        type={type ?? "button"}
+        onClick={handleClick as React.MouseEventHandler<HTMLButtonElement>}
+        disabled={disabled}
+        {...sharedProps}
+      >
+        {children}
+      </button>
+    );
+  },
+);
 
 CollapsibleTrigger.displayName = "CollapsibleTrigger";
 
@@ -145,26 +139,25 @@ type CollapsibleContentProps = React.HTMLAttributes<HTMLDivElement> & {
   forceMount?: true;
 };
 
-const CollapsibleContent = React.forwardRef<
-  HTMLDivElement,
-  CollapsibleContentProps
->(function CollapsibleContent({ forceMount, hidden, ...props }, ref) {
-  const { open } = useCollapsibleContext();
+const CollapsibleContent = React.forwardRef<HTMLDivElement, CollapsibleContentProps>(
+  function CollapsibleContent({ forceMount, hidden, ...props }, ref) {
+    const { open } = useCollapsibleContext();
 
-  if (!forceMount && !open) {
-    return null;
-  }
+    if (!forceMount && !open) {
+      return null;
+    }
 
-  return (
-    <div
-      ref={ref}
-      data-state={open ? "open" : "closed"}
-      data-expanded={open ? "true" : "false"}
-      hidden={hidden ?? (!open && forceMount ? true : undefined)}
-      {...props}
-    />
-  );
-});
+    return (
+      <div
+        ref={ref}
+        data-state={open ? "open" : "closed"}
+        data-expanded={open ? "true" : "false"}
+        hidden={hidden ?? (!open && forceMount ? true : undefined)}
+        {...props}
+      />
+    );
+  },
+);
 
 CollapsibleContent.displayName = "CollapsibleContent";
 

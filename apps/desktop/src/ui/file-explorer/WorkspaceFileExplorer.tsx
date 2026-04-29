@@ -1087,7 +1087,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
                         : "group-hover:opacity-100 hover:bg-muted",
                     )}
                     data-file-explorer-control="true"
-                      onClick={() => void openEntryMenu(entry)}
+                    onClick={() => void openEntryMenu(entry)}
                   >
                     <MoreVerticalIcon
                       strokeWidth={1.5}

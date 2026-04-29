@@ -65,7 +65,7 @@ type CollapsibleTriggerProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
 
 const CollapsibleTrigger = React.forwardRef<HTMLButtonElement, CollapsibleTriggerProps>(
   function CollapsibleTrigger(
-    { asChild = false, children, disabled: disabledProp, onClick, type, ...props },
+    { asChild = false, children, className, disabled: disabledProp, onClick, type, ...props },
     ref,
   ) {
     const { disabled: contextDisabled, open, setOpen } = useCollapsibleContext();
@@ -95,7 +95,7 @@ const CollapsibleTrigger = React.forwardRef<HTMLButtonElement, CollapsibleTrigge
 
       return React.cloneElement(child, {
         ...sharedProps,
-        className: cn(child.props.className, sharedProps.className),
+        className: cn(child.props.className, className),
         onClick: (event: React.MouseEvent<HTMLElement>) => {
           child.props.onClick?.(event);
           handleClick(event);
@@ -116,6 +116,7 @@ const CollapsibleTrigger = React.forwardRef<HTMLButtonElement, CollapsibleTrigge
         type={type ?? "button"}
         onClick={handleClick as React.MouseEventHandler<HTMLButtonElement>}
         {...sharedProps}
+        className={className}
         disabled={disabled}
       >
         {children}

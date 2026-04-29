@@ -89,6 +89,7 @@ const CollapsibleTrigger = React.forwardRef<HTMLButtonElement, CollapsibleTrigge
     if (asChild && React.isValidElement(children)) {
       const child = children as React.ReactElement<{
         className?: string;
+        disabled?: boolean;
         onClick?: React.MouseEventHandler<HTMLElement>;
         ref?: React.Ref<HTMLElement>;
       }>;
@@ -96,6 +97,7 @@ const CollapsibleTrigger = React.forwardRef<HTMLButtonElement, CollapsibleTrigge
       return React.cloneElement(child, {
         ...sharedProps,
         className: cn(child.props.className, className),
+        disabled,
         onClick: (event: React.MouseEvent<HTMLElement>) => {
           child.props.onClick?.(event);
           handleClick(event);

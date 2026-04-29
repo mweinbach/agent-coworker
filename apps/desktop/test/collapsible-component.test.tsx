@@ -8,10 +8,16 @@ const { Collapsible, CollapsibleTrigger } = await import(
   new URL("../src/components/ui/collapsible.tsx?collapsible-component-test", import.meta.url).href
 );
 
-function CollapsibleClassNameFixture({ asChild }: { asChild: boolean }) {
+function CollapsibleClassNameFixture({
+  asChild,
+  disabled = false,
+}: {
+  asChild: boolean;
+  disabled?: boolean;
+}) {
   return createElement(
     Collapsible,
-    null,
+    { disabled },
     createElement(
       CollapsibleTrigger,
       {
@@ -79,6 +85,37 @@ describe("desktop collapsible component", () => {
 
       expect(trigger.className).toContain("child-class");
       expect(trigger.className).toContain("trigger-class");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test.serial("forwards native disabled state in the asChild path", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(CollapsibleClassNameFixture, { asChild: true, disabled: true }));
+      });
+
+      const trigger = harness.dom.window.document.querySelector("[data-testid='as-child-trigger']");
+      if (!(trigger instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing asChild trigger");
+      }
+
+      expect(trigger.disabled).toBe(true);
+      expect(trigger.getAttribute("aria-disabled")).toBe("true");
 
       await act(async () => {
         root.unmount();

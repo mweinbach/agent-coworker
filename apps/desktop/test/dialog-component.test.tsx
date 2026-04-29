@@ -85,6 +85,40 @@ function DisabledAsChildDialogTrigger() {
   );
 }
 
+function PreventedAsChildDialogTrigger({
+  onTriggerClick,
+}: {
+  onTriggerClick: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+
+  return createElement(
+    Dialog,
+    { open, onOpenChange: setOpen },
+    createElement(
+      DialogTrigger,
+      {
+        asChild: true,
+        onClick: onTriggerClick,
+      },
+      createElement(
+        "button",
+        {
+          id: "prevented-as-child-trigger",
+          onClick: (event) => event.preventDefault(),
+          type: "button",
+        },
+        "Open dialog",
+      ),
+    ),
+    createElement(
+      DialogContent,
+      null,
+      createElement("button", { id: "prevented-dialog-button", type: "button" }, "Inside dialog"),
+    ),
+  );
+}
+
 function StackedDialogs() {
   const [outerOpen, setOuterOpen] = useState(true);
   const [innerOpen, setInnerOpen] = useState(true);
@@ -396,6 +430,50 @@ describe("desktop dialog component", () => {
         trigger.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
       });
 
+      expect(harness.dom.window.document.querySelector("[role='dialog']")).toBeNull();
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test.serial("respects prevented child clicks before running asChild trigger handlers", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      const root = createRoot(container);
+      let triggerClickCount = 0;
+
+      await act(async () => {
+        root.render(
+          createElement(PreventedAsChildDialogTrigger, {
+            onTriggerClick: () => {
+              triggerClickCount += 1;
+            },
+          }),
+        );
+      });
+
+      const trigger = harness.dom.window.document.getElementById("prevented-as-child-trigger");
+      if (!(trigger instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing asChild trigger");
+      }
+
+      await act(async () => {
+        trigger.dispatchEvent(
+          new harness.dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+        );
+      });
+
+      expect(triggerClickCount).toBe(0);
       expect(harness.dom.window.document.querySelector("[role='dialog']")).toBeNull();
 
       await act(async () => {

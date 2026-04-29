@@ -190,6 +190,9 @@ function DialogTrigger({
           return;
         }
         child.props.onClick?.(event);
+        if (event.defaultPrevented) {
+          return;
+        }
         handleClick(event);
       },
       ref: (node: HTMLElement | null) => {

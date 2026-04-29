@@ -113,6 +113,7 @@ function SelectTrigger({
   const { disabled, open, setOpen, setTriggerNode } = useSelectContext();
   return (
     <button
+      {...props}
       ref={setTriggerNode}
       type="button"
       data-size={size}
@@ -135,7 +136,6 @@ function SelectTrigger({
           setOpen(!open);
         }
       }}
-      {...props}
     >
       <span className={cn("min-w-0 overflow-hidden text-left", compact ? "pr-0.5" : "flex-1")}>
         {children}
@@ -180,7 +180,7 @@ function SelectContent({
   placement = "bottom",
   ...props
 }: SelectContentProps) {
-  const { open, setOpen, triggerNode } = useSelectContext();
+  const { open, setOpen, triggerNode, value } = useSelectContext();
   const contentRef = React.useRef<HTMLDivElement | null>(null);
   const [position, setPosition] = React.useState<SelectContentPosition>({
     left: SELECT_VIEWPORT_PADDING,
@@ -260,7 +260,45 @@ function SelectContent({
       if (event.key === "Escape") {
         setOpen(false);
         triggerNode?.focus();
+        return;
       }
+
+      if (
+        event.key !== "ArrowDown" &&
+        event.key !== "ArrowUp" &&
+        event.key !== "Home" &&
+        event.key !== "End"
+      ) {
+        return;
+      }
+
+      const content = contentRef.current;
+      if (!content) {
+        return;
+      }
+
+      const items = Array.from(content.querySelectorAll<HTMLElement>('[data-slot="select-item"]'));
+      if (items.length === 0) {
+        return;
+      }
+
+      event.preventDefault();
+      const activeIndex =
+        document.activeElement instanceof HTMLElement ? items.indexOf(document.activeElement) : -1;
+      const selectedIndex = items.findIndex((item) => item.dataset.value === value);
+      const fallbackIndex = selectedIndex >= 0 ? selectedIndex : 0;
+      const currentIndex = activeIndex >= 0 ? activeIndex : fallbackIndex;
+      const nextIndex =
+        event.key === "Home"
+          ? 0
+          : event.key === "End"
+            ? items.length - 1
+            : event.key === "ArrowUp"
+              ? (currentIndex - 1 + items.length) % items.length
+              : (currentIndex + 1) % items.length;
+
+      items[nextIndex]?.focus();
+      items[nextIndex]?.scrollIntoView({ block: "nearest" });
     };
 
     window.addEventListener("resize", updatePosition);
@@ -273,7 +311,7 @@ function SelectContent({
       document.removeEventListener("pointerdown", handlePointerDown);
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [open, setOpen, triggerNode, updatePosition]);
+  }, [open, setOpen, triggerNode, updatePosition, value]);
 
   if (!open || typeof document === "undefined") {
     return null;

@@ -321,6 +321,10 @@ function DialogContent({
         return;
       }
 
+      if (!isTopmostDialog(dialogIdRef.current)) {
+        return;
+      }
+
       const focusable = getFocusableElements(contentRef.current);
       if (focusable.length === 0) {
         event.preventDefault();

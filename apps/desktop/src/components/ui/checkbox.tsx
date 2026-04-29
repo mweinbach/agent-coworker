@@ -1,5 +1,5 @@
 import { CheckIcon } from "lucide-react";
-import type { ComponentProps } from "react";
+import { type ComponentProps, useState } from "react";
 
 import { cn } from "@/lib/utils";
 
@@ -7,7 +7,17 @@ type CheckboxProps = Omit<ComponentProps<"input">, "children" | "onChange" | "ty
   onCheckedChange?: (checked: boolean) => void;
 };
 
-function Checkbox({ className, checked, disabled, onCheckedChange, ...props }: CheckboxProps) {
+function Checkbox({
+  className,
+  checked,
+  defaultChecked = false,
+  disabled,
+  onCheckedChange,
+  ...props
+}: CheckboxProps) {
+  const [uncontrolledChecked, setUncontrolledChecked] = useState(Boolean(defaultChecked));
+  const isChecked = checked ?? uncontrolledChecked;
+
   return (
     <span
       data-slot="checkbox"
@@ -23,13 +33,21 @@ function Checkbox({ className, checked, disabled, onCheckedChange, ...props }: C
         {...props}
         type="checkbox"
         className="peer absolute inset-0 m-0 cursor-pointer opacity-0 disabled:cursor-not-allowed"
-        checked={checked}
+        checked={isChecked}
         disabled={disabled}
-        onChange={(event) => onCheckedChange?.(event.currentTarget.checked)}
+        onChange={(event) => {
+          const nextChecked = event.currentTarget.checked;
+          if (checked === undefined) {
+            setUncontrolledChecked(nextChecked);
+          }
+          onCheckedChange?.(nextChecked);
+        }}
       />
-      <span data-slot="checkbox-indicator" className="flex items-center justify-center">
-        <CheckIcon className="size-3.5" />
-      </span>
+      {isChecked ? (
+        <span data-slot="checkbox-indicator" className="flex items-center justify-center">
+          <CheckIcon className="size-3.5" />
+        </span>
+      ) : null}
     </span>
   );
 }

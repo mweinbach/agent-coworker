@@ -36,7 +36,7 @@ function TooltipProvider({ children, delayDuration }: TooltipProviderProps) {
 function Tooltip({
   children,
   defaultOpen,
-  delayDuration = 200,
+  delayDuration,
   onOpenChange,
   open,
 }: TooltipRootProps) {

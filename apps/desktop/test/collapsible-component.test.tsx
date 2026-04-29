@@ -32,6 +32,45 @@ function CollapsibleClassNameFixture({
   );
 }
 
+function CollapsibleAsChildClickFixture({
+  childPreventsDefault = false,
+  disabled = false,
+  onChildClick,
+  onTriggerClick,
+}: {
+  childPreventsDefault?: boolean;
+  disabled?: boolean;
+  onChildClick: () => void;
+  onTriggerClick: () => void;
+}) {
+  return createElement(
+    Collapsible,
+    { disabled },
+    createElement(
+      CollapsibleTrigger,
+      {
+        asChild: true,
+        "data-testid": "trigger",
+        onClick: onTriggerClick,
+      },
+      createElement(
+        "div",
+        {
+          onClick: (event) => {
+            onChildClick();
+            if (childPreventsDefault) {
+              event.preventDefault();
+            }
+          },
+          role: "button",
+          tabIndex: 0,
+        },
+        "Toggle",
+      ),
+    ),
+  );
+}
+
 describe("desktop collapsible component", () => {
   test.serial("applies trigger className in the button fallback path", async () => {
     const harness = setupJsdom();
@@ -116,6 +155,106 @@ describe("desktop collapsible component", () => {
 
       expect(trigger.disabled).toBe(true);
       expect(trigger.getAttribute("aria-disabled")).toBe("true");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test.serial("blocks child and trigger clicks for disabled asChild triggers", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      const root = createRoot(container);
+      let childClickCount = 0;
+      let triggerClickCount = 0;
+
+      await act(async () => {
+        root.render(
+          createElement(CollapsibleAsChildClickFixture, {
+            disabled: true,
+            onChildClick: () => {
+              childClickCount += 1;
+            },
+            onTriggerClick: () => {
+              triggerClickCount += 1;
+            },
+          }),
+        );
+      });
+
+      const trigger = harness.dom.window.document.querySelector("[data-testid='trigger']");
+      if (!(trigger instanceof harness.dom.window.HTMLElement)) {
+        throw new Error("missing trigger");
+      }
+
+      await act(async () => {
+        trigger.dispatchEvent(
+          new harness.dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+        );
+      });
+
+      expect(childClickCount).toBe(0);
+      expect(triggerClickCount).toBe(0);
+      expect(trigger.getAttribute("data-expanded")).toBe("false");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test.serial("respects child preventDefault before running trigger clicks", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      const root = createRoot(container);
+      let childClickCount = 0;
+      let triggerClickCount = 0;
+
+      await act(async () => {
+        root.render(
+          createElement(CollapsibleAsChildClickFixture, {
+            childPreventsDefault: true,
+            onChildClick: () => {
+              childClickCount += 1;
+            },
+            onTriggerClick: () => {
+              triggerClickCount += 1;
+            },
+          }),
+        );
+      });
+
+      const trigger = harness.dom.window.document.querySelector("[data-testid='trigger']");
+      if (!(trigger instanceof harness.dom.window.HTMLElement)) {
+        throw new Error("missing trigger");
+      }
+
+      await act(async () => {
+        trigger.dispatchEvent(
+          new harness.dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+        );
+      });
+
+      expect(childClickCount).toBe(1);
+      expect(triggerClickCount).toBe(0);
+      expect(trigger.getAttribute("data-expanded")).toBe("false");
 
       await act(async () => {
         root.unmount();

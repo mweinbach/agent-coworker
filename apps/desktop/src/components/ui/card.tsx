@@ -6,13 +6,21 @@ type CardProps = React.HTMLAttributes<HTMLDivElement> & {
   variant?: "default" | "secondary" | "tertiary" | "transparent";
 };
 
+const cardVariantClassNames: Record<NonNullable<CardProps["variant"]>, string> = {
+  default: "app-surface-card app-border-subtle shadow-none",
+  secondary: "app-surface-card-elevated app-border-default app-shadow-surface",
+  tertiary: "app-surface-muted-fill app-border-subtle shadow-none",
+  transparent: "border-transparent bg-transparent shadow-none",
+};
+
 function Card({ className, variant = "default", ...props }: CardProps) {
   return (
     <div
       data-slot="card"
       data-variant={variant}
       className={cn(
-        "app-surface-card app-border-subtle rounded-[calc(var(--radius)*1.35)] border text-card-foreground shadow-none",
+        "rounded-[calc(var(--radius)*1.35)] border text-card-foreground",
+        cardVariantClassNames[variant],
         className,
       )}
       {...props}

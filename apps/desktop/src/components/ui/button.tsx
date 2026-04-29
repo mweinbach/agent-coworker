@@ -36,7 +36,7 @@ function buttonVariants({
   className?: string;
 } = {}): string {
   return cn(
-    "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-[calc(var(--radius)*0.95)] font-medium transition-colors [&>[data-icon]]:pointer-events-none [&>[data-icon]]:shrink-0",
+    "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-[calc(var(--radius)*0.95)] font-medium transition-colors disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:cursor-not-allowed aria-disabled:opacity-50 [&>[data-icon]]:pointer-events-none [&>[data-icon]]:shrink-0",
     size === "default" && "h-9 px-3.5 text-[13px] [&>[data-icon]]:size-4",
     size === "sm" && "h-8 px-3 text-[12px] [&>[data-icon]]:size-3.5",
     size === "lg" && "h-10 px-4 text-[13px] [&>[data-icon]]:size-4",

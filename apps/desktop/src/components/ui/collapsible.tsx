@@ -1,5 +1,7 @@
 import * as React from "react";
 
+import { cn } from "@/lib/utils";
+
 function setComposedRefs<T>(node: T | null, ...refs: Array<React.Ref<T> | undefined>) {
   for (const ref of refs) {
     if (!ref) {
@@ -103,12 +105,14 @@ const CollapsibleTrigger = React.forwardRef<HTMLButtonElement, CollapsibleTrigge
 
     if (asChild && React.isValidElement(children)) {
       const child = children as React.ReactElement<{
+        className?: string;
         onClick?: React.MouseEventHandler<HTMLElement>;
         ref?: React.Ref<HTMLElement>;
       }>;
 
       return React.cloneElement(child, {
         ...sharedProps,
+        className: cn(child.props.className, sharedProps.className),
         onClick: (event: React.MouseEvent<HTMLElement>) => {
           child.props.onClick?.(event);
           handleClick(event);

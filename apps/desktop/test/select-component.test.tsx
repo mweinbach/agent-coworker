@@ -250,4 +250,60 @@ describe("desktop select component", () => {
       harness.restore();
     }
   });
+
+  test.serial("closes the open menu when focus leaves the select", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          createElement(
+            "div",
+            null,
+            createElement(PositionedSelect),
+            createElement("button", { id: "outside-button", type: "button" }, "Outside"),
+          ),
+        );
+      });
+
+      const selectTrigger = harness.dom.window.document.querySelector(
+        '[data-slot="select-trigger"]',
+      );
+      if (!(selectTrigger instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing select trigger");
+      }
+
+      await act(async () => {
+        selectTrigger.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(
+        harness.dom.window.document.querySelector('[data-slot="select-content"]'),
+      ).not.toBeNull();
+
+      const outsideButton = harness.dom.window.document.getElementById("outside-button");
+      if (!(outsideButton instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing outside button");
+      }
+
+      await act(async () => {
+        outsideButton.focus();
+      });
+
+      expect(harness.dom.window.document.querySelector('[data-slot="select-content"]')).toBeNull();
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
 });

@@ -19,6 +19,9 @@ const ScrollShadow = React.forwardRef<HTMLDivElement, ScrollShadowProps>(functio
       data-slot="scroll-shadow"
       className={cn(
         "relative overflow-auto",
+        orientation === "vertical"
+          ? "[mask-image:linear-gradient(to_bottom,transparent,black_var(--scroll-shadow-size),black_calc(100%_-_var(--scroll-shadow-size)),transparent)]"
+          : "[mask-image:linear-gradient(to_right,transparent,black_var(--scroll-shadow-size),black_calc(100%_-_var(--scroll-shadow-size)),transparent)]",
         hideScrollBar && "[scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
         className,
       )}

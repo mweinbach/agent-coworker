@@ -24,9 +24,13 @@ type TooltipContextValue = {
 };
 
 const TooltipContext = React.createContext<TooltipContextValue | null>(null);
+const TooltipProviderContext = React.createContext<TooltipProviderProps | null>(null);
 
-function TooltipProvider({ children }: TooltipProviderProps) {
-  return <>{children}</>;
+function TooltipProvider({ children, delayDuration }: TooltipProviderProps) {
+  const value = React.useMemo(() => ({ delayDuration }), [delayDuration]);
+  return (
+    <TooltipProviderContext.Provider value={value}>{children}</TooltipProviderContext.Provider>
+  );
 }
 
 function Tooltip({
@@ -36,8 +40,10 @@ function Tooltip({
   onOpenChange,
   open,
 }: TooltipRootProps) {
+  const provider = React.useContext(TooltipProviderContext);
   const [uncontrolledOpen, setUncontrolledOpen] = React.useState(defaultOpen ?? false);
   const [triggerNode, setTriggerNode] = React.useState<HTMLElement | null>(null);
+  const resolvedDelayDuration = delayDuration ?? provider?.delayDuration ?? 200;
   const isOpen = open ?? uncontrolledOpen;
   const setOpen = React.useCallback(
     (nextOpen: boolean) => {
@@ -51,7 +57,13 @@ function Tooltip({
 
   return (
     <TooltipContext.Provider
-      value={{ delayDuration, open: isOpen, setOpen, setTriggerNode, triggerNode }}
+      value={{
+        delayDuration: resolvedDelayDuration,
+        open: isOpen,
+        setOpen,
+        setTriggerNode,
+        triggerNode,
+      }}
     >
       {children}
     </TooltipContext.Provider>

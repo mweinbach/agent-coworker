@@ -33,13 +33,7 @@ function TooltipProvider({ children, delayDuration }: TooltipProviderProps) {
   );
 }
 
-function Tooltip({
-  children,
-  defaultOpen,
-  delayDuration,
-  onOpenChange,
-  open,
-}: TooltipRootProps) {
+function Tooltip({ children, defaultOpen, delayDuration, onOpenChange, open }: TooltipRootProps) {
   const provider = React.useContext(TooltipProviderContext);
   const [uncontrolledOpen, setUncontrolledOpen] = React.useState(defaultOpen ?? false);
   const [triggerNode, setTriggerNode] = React.useState<HTMLElement | null>(null);

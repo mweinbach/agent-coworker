@@ -60,7 +60,7 @@ export function PendingRequestCard({
           <Text
             selectable
             style={{
-              fontFamily: "Menlo",
+              fontFamily: theme.fontFamilyMono,
               fontSize: 13,
               lineHeight: 18,
               color: theme.text,

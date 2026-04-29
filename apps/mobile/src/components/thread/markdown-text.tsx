@@ -48,7 +48,7 @@ function InlineText({ text, color }: { text: string; color: string }) {
             <Text
               key={partKey}
               style={{
-                fontFamily: "Menlo",
+                fontFamily: theme.fontFamilyMono,
                 fontSize: 13,
                 backgroundColor: theme.surfaceMuted,
                 color: theme.accent,
@@ -119,7 +119,7 @@ function CodeBlock({ language, content }: { language: string; content: string })
       <Text
         selectable
         style={{
-          fontFamily: "Menlo",
+          fontFamily: theme.fontFamilyMono,
           fontSize: 12,
           lineHeight: 18,
           color: theme.text,

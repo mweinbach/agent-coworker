@@ -88,7 +88,7 @@ function CollapsibleJson({ label, data }: { label: string; data: unknown }) {
       <Text
         selectable
         style={{
-          fontFamily: "Menlo",
+          fontFamily: theme.fontFamilyMono,
           fontSize: 11,
           lineHeight: 16,
           color: theme.textSecondary,

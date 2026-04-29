@@ -205,7 +205,7 @@ export default function PairingScanScreen() {
                 fontSize: 12,
                 lineHeight: 18,
                 fontVariant: ["tabular-nums"],
-                fontFamily: "monospace",
+                fontFamily: theme.fontFamilyMono,
               }}
             >
               {scannedPayload ?? "No QR scanned yet."}

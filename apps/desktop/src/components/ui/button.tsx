@@ -55,16 +55,30 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
     asChild = false,
     disabled,
     children,
+    onClick,
+    tabIndex,
     ...props
   },
   ref,
 ) {
   const Comp = asChild ? Slot : "button";
+  const handleClick = React.useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      if (disabled) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      onClick?.(event);
+    },
+    [disabled, onClick],
+  );
 
   return (
     <Comp
       {...props}
       ref={ref}
+      onClick={handleClick}
       className={buttonVariants({
         variant,
         size,
@@ -73,7 +87,8 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
       data-size={size}
       data-slot="button"
       data-variant={variant}
-      disabled={asChild ? undefined : disabled}
+      disabled={disabled}
+      tabIndex={asChild && disabled ? -1 : tabIndex}
       aria-disabled={asChild && disabled ? true : props["aria-disabled"]}
     >
       {children}

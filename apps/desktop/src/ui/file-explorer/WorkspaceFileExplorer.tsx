@@ -1020,7 +1020,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
                         isSelected ? "hover:bg-accent-foreground/15" : "hover:bg-muted",
                       )}
                       data-file-explorer-control="true"
-                      onPress={() => toggleDirectory(entry.path)}
+                      onClick={() => toggleDirectory(entry.path)}
                     >
                       <ChevronRightIcon
                         strokeWidth={1.5}
@@ -1087,7 +1087,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
                         : "group-hover:opacity-100 hover:bg-muted",
                     )}
                     data-file-explorer-control="true"
-                    onPress={() => void openEntryMenu(entry)}
+                      onClick={() => void openEntryMenu(entry)}
                   >
                     <MoreVerticalIcon
                       strokeWidth={1.5}

@@ -1,19 +1,15 @@
-import { Select as HeroSelect, Separator as HeroSeparator, ListBox } from "@heroui/react";
+import { CheckIcon, ChevronDownIcon, ChevronUpIcon } from "lucide-react";
+import * as SelectPrimitive from "@radix-ui/react-select";
 import * as React from "react";
-import { Header } from "react-aria-components";
 
 import { cn } from "@/lib/utils";
 
 type SelectSize = "default" | "sm";
-type HeroSelectProps = React.ComponentProps<typeof HeroSelect>;
-type HeroSelectTriggerProps = React.ComponentProps<typeof HeroSelect.Trigger>;
-type HeroSelectValueProps = React.ComponentProps<typeof HeroSelect.Value>;
-type HeroSelectPopoverProps = React.ComponentProps<typeof HeroSelect.Popover>;
-type HeroSelectPlacement = HeroSelectPopoverProps["placement"];
+type SelectPlacement = "bottom" | "top" | "left" | "right";
 
 type SelectProps = Omit<
-  HeroSelectProps,
-  "children" | "defaultValue" | "isDisabled" | "onChange" | "value" | "variant"
+  React.ComponentPropsWithoutRef<typeof SelectPrimitive.Root>,
+  "defaultValue" | "disabled" | "onValueChange" | "value"
 > & {
   value?: string;
   defaultValue?: string;
@@ -24,57 +20,34 @@ type SelectProps = Omit<
 
 function Select({ value, defaultValue, disabled, children, onValueChange, ...props }: SelectProps) {
   return (
-    <HeroSelect
-      data-slot="select"
+    <SelectPrimitive.Root
       defaultValue={defaultValue}
-      isDisabled={disabled}
-      onChange={(nextValue) => {
-        if (nextValue == null || Array.isArray(nextValue)) {
-          return;
-        }
-        onValueChange?.(String(nextValue));
-      }}
+      disabled={disabled}
+      onValueChange={onValueChange}
       value={value}
-      variant="secondary"
       {...props}
     >
       {children}
-    </HeroSelect>
+    </SelectPrimitive.Root>
   );
 }
 
-type SelectGroupProps = {
-  children?: React.ReactNode;
-  className?: string;
-};
+const SelectGroup = SelectPrimitive.Group;
 
-function SelectGroup({ className, children }: SelectGroupProps) {
-  return (
-    <ListBox.Section data-slot="select-group" className={cn(className)}>
-      {children}
-    </ListBox.Section>
-  );
-}
-
-type SelectValueProps = Omit<HeroSelectValueProps, "children"> & {
+type SelectValueProps = React.ComponentPropsWithoutRef<typeof SelectPrimitive.Value> & {
   children?: React.ReactNode;
   placeholder?: React.ReactNode;
 };
 
-function SelectValue({ className, children, placeholder, ...props }: SelectValueProps) {
+function SelectValue({ children, placeholder, ...props }: SelectValueProps) {
   return (
-    <HeroSelect.Value data-slot="select-value" className={cn("truncate", className)} {...props}>
-      {(values: { defaultChildren?: React.ReactNode; isPlaceholder?: boolean }) => {
-        if (values.isPlaceholder && placeholder !== undefined) {
-          return placeholder;
-        }
-        return children ?? values.defaultChildren;
-      }}
-    </HeroSelect.Value>
+    <SelectPrimitive.Value placeholder={placeholder} {...props}>
+      {children}
+    </SelectPrimitive.Value>
   );
 }
 
-type SelectTriggerProps = Omit<HeroSelectTriggerProps, "children"> & {
+type SelectTriggerProps = React.ComponentPropsWithoutRef<typeof SelectPrimitive.Trigger> & {
   children?: React.ReactNode;
   size?: SelectSize;
   /** When true, the label stays next to the chevron (width follows content). When false, the label grows to fill the trigger (full-width fields). */
@@ -89,7 +62,7 @@ function SelectTrigger({
   ...props
 }: SelectTriggerProps) {
   return (
-    <HeroSelect.Trigger
+    <SelectPrimitive.Trigger
       data-size={size}
       data-slot="select-trigger"
       data-compact={compact ? "true" : undefined}
@@ -106,23 +79,50 @@ function SelectTrigger({
       <span className={cn("min-w-0 overflow-hidden text-left", compact ? "pr-0.5" : "flex-1")}>
         {children}
       </span>
-      <HeroSelect.Indicator className="!relative !right-auto !top-auto !translate-y-0 size-4 shrink-0 justify-self-end opacity-60" />
-    </HeroSelect.Trigger>
+      <SelectPrimitive.Icon asChild>
+        <ChevronDownIcon
+          data-icon="inline-end"
+          className="size-4 shrink-0 justify-self-end opacity-60"
+        />
+      </SelectPrimitive.Icon>
+    </SelectPrimitive.Trigger>
   );
 }
 
-function SelectScrollUpButton() {
-  return null;
+function SelectScrollUpButton({
+  className,
+  ...props
+}: React.ComponentPropsWithoutRef<typeof SelectPrimitive.ScrollUpButton>) {
+  return (
+    <SelectPrimitive.ScrollUpButton
+      data-slot="select-scroll-up-button"
+      className={cn("flex cursor-default items-center justify-center py-1", className)}
+      {...props}
+    >
+      <ChevronUpIcon className="size-4" />
+    </SelectPrimitive.ScrollUpButton>
+  );
 }
 
-function SelectScrollDownButton() {
-  return null;
+function SelectScrollDownButton({
+  className,
+  ...props
+}: React.ComponentPropsWithoutRef<typeof SelectPrimitive.ScrollDownButton>) {
+  return (
+    <SelectPrimitive.ScrollDownButton
+      data-slot="select-scroll-down-button"
+      className={cn("flex cursor-default items-center justify-center py-1", className)}
+      {...props}
+    >
+      <ChevronDownIcon className="size-4" />
+    </SelectPrimitive.ScrollDownButton>
+  );
 }
 
 type SelectContentProps = {
   children?: React.ReactNode;
   className?: string;
-  placement?: HeroSelectPlacement;
+  placement?: SelectPlacement;
 };
 
 function SelectContent({
@@ -132,35 +132,41 @@ function SelectContent({
   ...props
 }: SelectContentProps) {
   return (
-    <HeroSelect.Popover
-      data-slot="select-content"
-      className={cn(
-        // Do not use min-w-full here: it resolves against a wide ancestor (often the viewport)
-        // and produces a huge empty popover with the item indicator stranded on the far right.
-        "w-max max-w-[min(24rem,calc(100vw-2rem))] min-w-[10rem] rounded-[12px]",
-        className,
-      )}
-      placement={placement}
-      {...props}
-    >
-      <ListBox data-slot="select-viewport" className="max-h-96 w-full overflow-auto p-1.5">
-        {children}
-      </ListBox>
-    </HeroSelect.Popover>
+    <SelectPrimitive.Portal>
+      <SelectPrimitive.Content
+        data-slot="select-content"
+        className={cn(
+          "app-surface-overlay app-border-subtle app-shadow-overlay relative z-50 w-max max-w-[min(24rem,calc(100vw-2rem))] min-w-[10rem] overflow-hidden rounded-[12px] border text-popover-foreground",
+          className,
+        )}
+        position="popper"
+        side={placement}
+        sideOffset={4}
+        {...props}
+      >
+        <SelectScrollUpButton />
+        <SelectPrimitive.Viewport
+          data-slot="select-viewport"
+          className="max-h-96 w-full overflow-auto p-1.5"
+        >
+          {children}
+        </SelectPrimitive.Viewport>
+        <SelectScrollDownButton />
+      </SelectPrimitive.Content>
+    </SelectPrimitive.Portal>
   );
 }
 
-type SelectLabelProps = React.HTMLAttributes<HTMLDivElement>;
-
-function SelectLabel({ className, children, ...props }: SelectLabelProps) {
+function SelectLabel({
+  className,
+  ...props
+}: React.ComponentPropsWithoutRef<typeof SelectPrimitive.Label>) {
   return (
-    <Header
+    <SelectPrimitive.Label
       data-slot="select-label"
       className={cn("px-2 py-1.5 text-sm font-semibold", className)}
       {...props}
-    >
-      {children}
-    </Header>
+    />
   );
 }
 
@@ -190,33 +196,39 @@ function SelectItem({ className, children, textValue, value }: SelectItemProps) 
   const resolvedTextValue = (textValue ?? flattenSelectItemText(children)) || value;
 
   return (
-    <ListBox.Item
+    <SelectPrimitive.Item
       data-slot="select-item"
-      id={value}
+      value={value}
       textValue={resolvedTextValue}
       className={cn(
+        "relative",
         "flex w-full min-w-0 cursor-pointer items-center justify-between gap-2 rounded-[8px] px-2 py-1.5 text-sm outline-none transition-colors",
         // Hover - subtle
-        "hover:bg-accent/40 data-[hovered]:bg-accent/40",
+        "hover:bg-accent/40 data-[highlighted]:bg-accent/40",
         // Selected - more prominent
-        "data-[selected]:bg-accent/90 data-[selected]:font-medium",
+        "data-[state=checked]:bg-accent/90 data-[state=checked]:font-medium",
+        "data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
         className,
       )}
     >
-      <span className="min-w-0 flex-1 truncate">{children}</span>
-      <ListBox.ItemIndicator className="shrink-0" />
-    </ListBox.Item>
+      <SelectPrimitive.ItemText asChild>
+        <span className="min-w-0 flex-1 truncate">{children}</span>
+      </SelectPrimitive.ItemText>
+      <SelectPrimitive.ItemIndicator className="shrink-0">
+        <CheckIcon className="size-4" />
+      </SelectPrimitive.ItemIndicator>
+    </SelectPrimitive.Item>
   );
 }
 
 function SelectSeparator({
   className,
   ...props
-}: React.ComponentPropsWithoutRef<typeof HeroSeparator>) {
+}: React.ComponentPropsWithoutRef<typeof SelectPrimitive.Separator>) {
   return (
-    <HeroSeparator
+    <SelectPrimitive.Separator
       data-slot="select-separator"
-      className={cn("-mx-1 my-1", className)}
+      className={cn("-mx-1 my-1 h-px bg-border/70", className)}
       {...props}
     />
   );

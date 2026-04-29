@@ -1,11 +1,11 @@
-import { Switch as HeroSwitch } from "@heroui/react";
+import * as SwitchPrimitive from "@radix-ui/react-switch";
 import type { ComponentProps } from "react";
 
 import { cn } from "@/lib/utils";
 
 type SwitchProps = Omit<
-  ComponentProps<typeof HeroSwitch>,
-  "children" | "isSelected" | "onChange" | "isDisabled"
+  ComponentProps<typeof SwitchPrimitive.Root>,
+  "children" | "checked" | "onCheckedChange" | "disabled"
 > & {
   checked?: boolean;
   disabled?: boolean;
@@ -14,31 +14,23 @@ type SwitchProps = Omit<
 
 function Switch({ className, checked, disabled, onCheckedChange, ...props }: SwitchProps) {
   return (
-    <HeroSwitch
+    <SwitchPrimitive.Root
       data-slot="switch"
       className={cn(
-        "inline-flex items-center justify-center",
-        "[&_[data-slot=switch-control]]:flex [&_[data-slot=switch-control]]:h-6 [&_[data-slot=switch-control]]:w-10 [&_[data-slot=switch-control]]:shrink-0 [&_[data-slot=switch-control]]:items-center [&_[data-slot=switch-control]]:overflow-hidden [&_[data-slot=switch-control]]:rounded-full",
-        "[&_[data-slot=switch-control]]:border [&_[data-slot=switch-control]]:border-transparent [&_[data-slot=switch-control]]:bg-foreground/[0.12]",
-        "[&_[data-slot=switch-control]]:shadow-[var(--shadow-surface)] [&_[data-slot=switch-control]]:transition-colors [&_[data-slot=switch-control]]:duration-150",
-        "[&[data-focus-visible=true]_[data-slot=switch-control]]:ring-2 [&[data-focus-visible=true]_[data-slot=switch-control]]:ring-primary",
-        "[&[data-selected=true]_[data-slot=switch-control]]:bg-primary",
-        "[&_[data-slot=switch-thumb]]:ms-0.5 [&_[data-slot=switch-thumb]]:size-5 [&_[data-slot=switch-thumb]]:rounded-full",
-        "[&_[data-slot=switch-thumb]]:!bg-[var(--panel-bg)] [&_[data-slot=switch-thumb]]:border [&_[data-slot=switch-thumb]]:border-border/60 [&_[data-slot=switch-thumb]]:shadow-sm",
-        "[&_[data-slot=switch-thumb]]:transition-[margin,background-color] [&_[data-slot=switch-thumb]]:duration-150",
-        "[&[data-selected=true]_[data-slot=switch-thumb]]:ms-[1.125rem]",
+        "inline-flex h-6 w-10 shrink-0 cursor-pointer items-center overflow-hidden rounded-full border border-transparent bg-foreground/[0.12] shadow-[var(--shadow-surface)] transition-colors duration-150 outline-none data-[state=checked]:bg-primary focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50",
         "disabled:cursor-not-allowed disabled:opacity-50",
         className,
       )}
-      isDisabled={disabled}
-      isSelected={checked}
-      onChange={onCheckedChange}
+      checked={checked}
+      disabled={disabled}
+      onCheckedChange={onCheckedChange}
       {...props}
     >
-      <HeroSwitch.Control data-slot="switch-control">
-        <HeroSwitch.Thumb data-slot="switch-thumb" />
-      </HeroSwitch.Control>
-    </HeroSwitch>
+      <SwitchPrimitive.Thumb
+        data-slot="switch-thumb"
+        className="ms-0.5 size-5 rounded-full border border-border/60 !bg-[var(--panel-bg)] shadow-sm transition-transform duration-150 data-[state=checked]:translate-x-[1.125rem]"
+      />
+    </SwitchPrimitive.Root>
   );
 }
 

@@ -198,6 +198,7 @@ function TooltipContent({
   ...props
 }: TooltipContentProps) {
   const { open, triggerNode } = useTooltipContext();
+  const contentRef = React.useRef<HTMLDivElement | null>(null);
   const [position, setPosition] = React.useState({ left: 16, top: 16 });
 
   React.useLayoutEffect(() => {
@@ -209,23 +210,26 @@ function TooltipContent({
     const centerX = rect.left + rect.width / 2;
     const centerY = rect.top + rect.height / 2;
     const viewportPadding = 8;
+    const contentRect = contentRef.current?.getBoundingClientRect();
+    const contentWidth = contentRect?.width ?? 0;
+    const contentHeight = contentRect?.height ?? 0;
     const nextPosition =
       side === "bottom"
-        ? { left: centerX, top: rect.bottom + sideOffset }
+        ? { left: centerX - contentWidth / 2, top: rect.bottom + sideOffset }
         : side === "left"
-          ? { left: rect.left - sideOffset, top: centerY }
+          ? { left: rect.left - sideOffset - contentWidth, top: centerY - contentHeight / 2 }
           : side === "right"
-            ? { left: rect.right + sideOffset, top: centerY }
-            : { left: centerX, top: rect.top - sideOffset };
+            ? { left: rect.right + sideOffset, top: centerY - contentHeight / 2 }
+            : { left: centerX - contentWidth / 2, top: rect.top - sideOffset - contentHeight };
 
     setPosition({
       left: Math.max(
         viewportPadding,
-        Math.min(window.innerWidth - viewportPadding, nextPosition.left),
+        Math.min(window.innerWidth - viewportPadding - contentWidth, nextPosition.left),
       ),
       top: Math.max(
         viewportPadding,
-        Math.min(window.innerHeight - viewportPadding, nextPosition.top),
+        Math.min(window.innerHeight - viewportPadding - contentHeight, nextPosition.top),
       ),
     });
   }, [open, side, sideOffset, triggerNode]);
@@ -236,6 +240,7 @@ function TooltipContent({
 
   return createPortal(
     <div
+      ref={contentRef}
       data-slot="tooltip-content"
       data-side={side}
       className={cn(
@@ -246,14 +251,6 @@ function TooltipContent({
       style={{
         left: position.left,
         top: position.top,
-        transform:
-          side === "bottom"
-            ? "translate(-50%, 0)"
-            : side === "left"
-              ? "translate(-100%, -50%)"
-              : side === "right"
-                ? "translate(0, -50%)"
-                : "translate(-50%, -100%)",
         ...props.style,
       }}
     >

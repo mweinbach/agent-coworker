@@ -214,8 +214,7 @@ function SelectContent({
           ? "bottom"
           : placement;
 
-    const maxHeight =
-      resolvedPlacement === "top" ? Math.max(120, spaceAbove) : Math.max(120, spaceBelow);
+    const maxHeight = Math.max(0, resolvedPlacement === "top" ? spaceAbove : spaceBelow);
     const contentHeight = Math.min(contentRef.current?.scrollHeight ?? maxHeight, maxHeight);
     const top =
       resolvedPlacement === "top"

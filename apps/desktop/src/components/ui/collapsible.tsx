@@ -99,7 +99,14 @@ const CollapsibleTrigger = React.forwardRef<HTMLButtonElement, CollapsibleTrigge
         className: cn(child.props.className, className),
         disabled,
         onClick: (event: React.MouseEvent<HTMLElement>) => {
+          if (disabled) {
+            event.preventDefault();
+            return;
+          }
           child.props.onClick?.(event);
+          if (event.defaultPrevented) {
+            return;
+          }
           handleClick(event);
         },
         ref: (node: HTMLElement | null) => {

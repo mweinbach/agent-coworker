@@ -264,4 +264,37 @@ describe("desktop button component", () => {
       harness.restore();
     }
   });
+
+  test("warns and renders nothing when asChild receives non-element children", async () => {
+    const harness = setupJsdom();
+    const originalWarn = console.warn;
+    const warnings: string[] = [];
+    console.warn = (message?: unknown) => {
+      warnings.push(String(message));
+    };
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(Button, { asChild: true }, "Not an element"));
+      });
+
+      expect(container.querySelector("button")).toBeNull();
+      expect(container.textContent).toBe("");
+      expect(warnings).toContain("Button with asChild expects exactly one valid React element child.");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      console.warn = originalWarn;
+      harness.restore();
+    }
+  });
 });

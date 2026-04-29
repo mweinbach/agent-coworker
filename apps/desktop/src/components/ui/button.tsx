@@ -121,6 +121,11 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
     });
   }
 
+  if (asChild) {
+    console.warn("Button with asChild expects exactly one valid React element child.");
+    return null;
+  }
+
   return (
     <button {...sharedProps} ref={ref} type={type ?? "button"}>
       {children}

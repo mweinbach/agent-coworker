@@ -221,6 +221,57 @@ describe("desktop collapsible component", () => {
     }
   });
 
+  test.serial("stops disabled asChild trigger clicks from bubbling to parents", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      const root = createRoot(container);
+      let parentClickCount = 0;
+
+      await act(async () => {
+        root.render(
+          createElement(
+            "div",
+            {
+              onClick: () => {
+                parentClickCount += 1;
+              },
+            },
+            createElement(CollapsibleAsChildClickFixture, {
+              disabled: true,
+              onChildClick: () => {},
+              onTriggerClick: () => {},
+            }),
+          ),
+        );
+      });
+
+      const trigger = harness.dom.window.document.querySelector("[data-testid='trigger']");
+      if (!(trigger instanceof harness.dom.window.HTMLElement)) {
+        throw new Error("missing trigger");
+      }
+
+      await act(async () => {
+        trigger.dispatchEvent(
+          new harness.dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+        );
+      });
+
+      expect(parentClickCount).toBe(0);
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
   test.serial("respects child preventDefault before running trigger clicks", async () => {
     const harness = setupJsdom();
 

@@ -2,6 +2,7 @@ import { XIcon } from "lucide-react";
 import * as React from "react";
 import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
+import { assignElementRef, getElementRef } from "@/lib/react-ref";
 import { cn } from "@/lib/utils";
 
 type DialogContextValue = {
@@ -51,25 +52,6 @@ function isElementNode(value: unknown): value is HTMLElement {
 
 function getActiveElement(doc: Document): HTMLElement | null {
   return isElementNode(doc.activeElement) ? doc.activeElement : null;
-}
-
-function assignElementRef<T>(ref: React.Ref<T> | undefined, value: T | null) {
-  if (!ref) {
-    return;
-  }
-  if (typeof ref === "function") {
-    ref(value);
-    return;
-  }
-  (ref as React.MutableRefObject<T | null>).current = value;
-}
-
-function getElementRef<T>(element: React.ReactElement): React.Ref<T> | undefined {
-  const withPossibleRef = element as React.ReactElement & {
-    ref?: React.Ref<T>;
-    props: { ref?: React.Ref<T> };
-  };
-  return withPossibleRef.props.ref ?? withPossibleRef.ref;
 }
 
 function registerDialogLayer(dialogId: symbol) {

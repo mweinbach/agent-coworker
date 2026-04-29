@@ -1,27 +1,6 @@
 import * as React from "react";
-
+import { assignComposedRefs, getElementRef } from "@/lib/react-ref";
 import { cn } from "@/lib/utils";
-
-function setComposedRefs<T>(node: T | null, ...refs: Array<React.Ref<T> | undefined>) {
-  for (const ref of refs) {
-    if (!ref) {
-      continue;
-    }
-    if (typeof ref === "function") {
-      ref(node);
-      continue;
-    }
-    (ref as React.MutableRefObject<T | null>).current = node;
-  }
-}
-
-function getElementRef<T>(element: React.ReactElement): React.Ref<T> | undefined {
-  const withPossibleRef = element as React.ReactElement & {
-    ref?: React.Ref<T>;
-    props: { ref?: React.Ref<T> };
-  };
-  return withPossibleRef.props.ref ?? withPossibleRef.ref;
-}
 
 type CollapsibleContextValue = {
   disabled: boolean;
@@ -85,8 +64,12 @@ type CollapsibleTriggerProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
 };
 
 const CollapsibleTrigger = React.forwardRef<HTMLButtonElement, CollapsibleTriggerProps>(
-  function CollapsibleTrigger({ asChild = false, children, onClick, type, ...props }, ref) {
-    const { disabled, open, setOpen } = useCollapsibleContext();
+  function CollapsibleTrigger(
+    { asChild = false, children, disabled: disabledProp, onClick, type, ...props },
+    ref,
+  ) {
+    const { disabled: contextDisabled, open, setOpen } = useCollapsibleContext();
+    const disabled = contextDisabled || Boolean(disabledProp);
 
     const handleClick = (event: React.MouseEvent<HTMLElement>) => {
       onClick?.(event as React.MouseEvent<HTMLButtonElement>);
@@ -118,7 +101,11 @@ const CollapsibleTrigger = React.forwardRef<HTMLButtonElement, CollapsibleTrigge
           handleClick(event);
         },
         ref: (node: HTMLElement | null) => {
-          setComposedRefs(node, getElementRef<HTMLElement>(child), ref as React.Ref<HTMLElement>);
+          assignComposedRefs(
+            node,
+            getElementRef<HTMLElement>(child),
+            ref as React.Ref<HTMLElement>,
+          );
         },
       });
     }
@@ -128,8 +115,8 @@ const CollapsibleTrigger = React.forwardRef<HTMLButtonElement, CollapsibleTrigge
         ref={ref}
         type={type ?? "button"}
         onClick={handleClick as React.MouseEventHandler<HTMLButtonElement>}
-        disabled={disabled}
         {...sharedProps}
+        disabled={disabled}
       >
         {children}
       </button>

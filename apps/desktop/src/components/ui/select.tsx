@@ -346,6 +346,8 @@ function SelectContent({
     >
       <div
         data-slot="select-viewport"
+        role="listbox"
+        aria-orientation="vertical"
         className="w-full overflow-auto p-1.5"
         style={{ maxHeight: position.maxHeight }}
       >

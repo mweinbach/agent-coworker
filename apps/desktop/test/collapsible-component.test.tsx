@@ -37,11 +37,13 @@ function CollapsibleAsChildClickFixture({
   disabled = false,
   onChildClick,
   onTriggerClick,
+  triggerPreventsDefault = false,
 }: {
   childPreventsDefault?: boolean;
   disabled?: boolean;
   onChildClick: () => void;
   onTriggerClick: () => void;
+  triggerPreventsDefault?: boolean;
 }) {
   return createElement(
     Collapsible,
@@ -51,7 +53,12 @@ function CollapsibleAsChildClickFixture({
       {
         asChild: true,
         "data-testid": "trigger",
-        onClick: onTriggerClick,
+        onClick: (event) => {
+          onTriggerClick();
+          if (triggerPreventsDefault) {
+            event.preventDefault();
+          }
+        },
       },
       createElement(
         "div",
@@ -254,6 +261,56 @@ describe("desktop collapsible component", () => {
 
       expect(childClickCount).toBe(1);
       expect(triggerClickCount).toBe(0);
+      expect(trigger.getAttribute("data-expanded")).toBe("false");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test.serial("respects trigger preventDefault before toggling asChild triggers", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      const root = createRoot(container);
+      let childClickCount = 0;
+      let triggerClickCount = 0;
+
+      await act(async () => {
+        root.render(
+          createElement(CollapsibleAsChildClickFixture, {
+            onChildClick: () => {
+              childClickCount += 1;
+            },
+            onTriggerClick: () => {
+              triggerClickCount += 1;
+            },
+            triggerPreventsDefault: true,
+          }),
+        );
+      });
+
+      const trigger = harness.dom.window.document.querySelector("[data-testid='trigger']");
+      if (!(trigger instanceof harness.dom.window.HTMLElement)) {
+        throw new Error("missing trigger");
+      }
+
+      await act(async () => {
+        trigger.dispatchEvent(
+          new harness.dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+        );
+      });
+
+      expect(childClickCount).toBe(1);
+      expect(triggerClickCount).toBe(1);
       expect(trigger.getAttribute("data-expanded")).toBe("false");
 
       await act(async () => {

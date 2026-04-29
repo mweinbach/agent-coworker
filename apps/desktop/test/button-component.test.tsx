@@ -109,6 +109,54 @@ describe("desktop button component", () => {
     }
   });
 
+  test("defaults native buttons to type button", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      const root = createRoot(container);
+      let submitCount = 0;
+
+      await act(async () => {
+        root.render(
+          createElement(
+            "form",
+            {
+              onSubmit: (event) => {
+                event.preventDefault();
+                submitCount += 1;
+              },
+            },
+            createElement(Button, null, "Press me"),
+          ),
+        );
+      });
+
+      const button = harness.dom.window.document.querySelector("button");
+      if (!(button instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing rendered button");
+      }
+
+      expect(button.type).toBe("button");
+
+      await act(async () => {
+        button.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(submitCount).toBe(0);
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
   test("blocks activation for disabled asChild buttons", async () => {
     const harness = setupJsdom();
 

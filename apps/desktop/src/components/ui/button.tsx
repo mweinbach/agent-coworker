@@ -57,6 +57,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
     children,
     onClick,
     tabIndex,
+    type,
     ...props
   },
   ref,
@@ -87,6 +88,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
     onClick: handleClick,
     tabIndex: asChild && disabled ? -1 : tabIndex,
     "aria-disabled": asChild && disabled ? true : props["aria-disabled"],
+    ...(asChild && type !== undefined ? { type } : {}),
   } as const;
 
   if (asChild && React.isValidElement(children)) {
@@ -123,6 +125,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
     <button
       {...sharedProps}
       ref={ref}
+      type={type ?? "button"}
     >
       {children}
     </button>

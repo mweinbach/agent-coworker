@@ -61,6 +61,30 @@ function ControlledDialogWithExternalTrigger() {
   );
 }
 
+function DisabledAsChildDialogTrigger() {
+  const [open, setOpen] = useState(false);
+
+  return createElement(
+    Dialog,
+    { open, onOpenChange: setOpen },
+    createElement(
+      DialogTrigger,
+      {
+        asChild: true,
+        className: "trigger-forwarded",
+        "data-testid": "as-child-trigger",
+        disabled: true,
+      },
+      createElement("button", { className: "child-class", type: "button" }, "Open dialog"),
+    ),
+    createElement(
+      DialogContent,
+      null,
+      createElement("button", { id: "as-child-dialog-button", type: "button" }, "Inside dialog"),
+    ),
+  );
+}
+
 function StackedDialogs() {
   const [outerOpen, setOuterOpen] = useState(true);
   const [innerOpen, setInnerOpen] = useState(true);
@@ -334,6 +358,45 @@ describe("desktop dialog component", () => {
 
       expect(harness.dom.window.document.querySelector("[role='dialog']")).toBeNull();
       expect(harness.dom.window.document.activeElement).toBe(trigger);
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test.serial("forwards props and disabled state to asChild triggers", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(DisabledAsChildDialogTrigger));
+      });
+
+      const trigger = harness.dom.window.document.querySelector("[data-testid='as-child-trigger']");
+      if (!(trigger instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing asChild trigger");
+      }
+
+      expect(trigger.disabled).toBe(true);
+      expect(trigger.getAttribute("aria-disabled")).toBe("true");
+      expect(trigger.className).toContain("child-class");
+      expect(trigger.className).toContain("trigger-forwarded");
+
+      await act(async () => {
+        trigger.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(harness.dom.window.document.querySelector("[role='dialog']")).toBeNull();
 
       await act(async () => {
         root.unmount();

@@ -151,6 +151,7 @@ type DialogTriggerProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
 function DialogTrigger({
   children,
   asChild = false,
+  disabled,
   onClick,
   type,
   ...props
@@ -158,6 +159,10 @@ function DialogTrigger({
   const { setOpen, triggerRef } = useDialogContext();
 
   const handleClick = (event: React.MouseEvent<HTMLElement>) => {
+    if (disabled) {
+      event.preventDefault();
+      return;
+    }
     onClick?.(event as unknown as React.MouseEvent<HTMLButtonElement>);
     if (!event.defaultPrevented) {
       setOpen(true);
@@ -166,12 +171,24 @@ function DialogTrigger({
 
   if (asChild && React.isValidElement(children)) {
     const child = children as React.ReactElement<{
+      className?: string;
       onClick?: (event: React.MouseEvent<HTMLElement>) => void;
       ref?: React.Ref<HTMLElement>;
     }>;
 
-    const childProps: React.HTMLAttributes<HTMLElement> & React.RefAttributes<HTMLElement> = {
+    const childProps: React.HTMLAttributes<HTMLElement> &
+      React.RefAttributes<HTMLElement> & {
+        disabled?: boolean;
+      } = {
+      ...props,
+      disabled,
+      "aria-disabled": disabled ? true : props["aria-disabled"],
+      className: cn(child.props.className, props.className),
       onClick: (event: React.MouseEvent<HTMLElement>) => {
+        if (disabled) {
+          event.preventDefault();
+          return;
+        }
         child.props.onClick?.(event);
         handleClick(event);
       },
@@ -192,6 +209,7 @@ function DialogTrigger({
       type={type ?? "button"}
       onClick={handleClick as React.MouseEventHandler<HTMLButtonElement>}
       {...props}
+      disabled={disabled}
     >
       {children}
     </button>

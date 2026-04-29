@@ -36,6 +36,20 @@ function DialogWithSelect() {
   );
 }
 
+function PositionedSelect() {
+  return createElement(
+    Select,
+    { defaultValue: "alpha" },
+    createElement(SelectTrigger, { "aria-label": "Select value" }, createElement(SelectValue)),
+    createElement(
+      SelectContent,
+      null,
+      createElement(SelectItem, { value: "alpha" }, "Alpha"),
+      createElement(SelectItem, { value: "beta" }, "Beta"),
+    ),
+  );
+}
+
 describe("desktop select component", () => {
   test.serial("Escape closes an open select without dismissing the parent dialog", async () => {
     const harness = setupJsdom();
@@ -83,6 +97,65 @@ describe("desktop select component", () => {
 
       expect(harness.dom.window.document.querySelector('[data-slot="select-content"]')).toBeNull();
       expect(harness.dom.window.document.querySelector("[role='dialog']")).not.toBeNull();
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test.serial("clamps menu height to the available viewport space", async () => {
+    const harness = setupJsdom({
+      setupWindow: (dom) => {
+        Object.defineProperty(dom.window, "innerHeight", { configurable: true, value: 100 });
+        Object.defineProperty(dom.window, "innerWidth", { configurable: true, value: 320 });
+      },
+    });
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(PositionedSelect));
+      });
+
+      const selectTrigger = harness.dom.window.document.querySelector(
+        '[data-slot="select-trigger"]',
+      );
+      if (!(selectTrigger instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing select trigger");
+      }
+
+      selectTrigger.getBoundingClientRect = () =>
+        ({
+          bottom: 55,
+          height: 10,
+          left: 20,
+          right: 180,
+          top: 45,
+          width: 160,
+          x: 20,
+          y: 45,
+          toJSON: () => ({}),
+        }) as DOMRect;
+
+      await act(async () => {
+        selectTrigger.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      const viewport = harness.dom.window.document.querySelector('[data-slot="select-viewport"]');
+      if (!(viewport instanceof harness.dom.window.HTMLDivElement)) {
+        throw new Error("missing select viewport");
+      }
+
+      expect(viewport.style.maxHeight).toBe("31px");
 
       await act(async () => {
         root.unmount();

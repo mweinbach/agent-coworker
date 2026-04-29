@@ -71,6 +71,7 @@ export default defineConfig({
     plugins: [react(), tailwindcss()],
     future: "warn",
     resolve: {
+      dedupe: ["react", "react-dom"],
       alias: {
         "@": path.resolve(appRoot, "src"),
         ...coworkAlias,

@@ -68,7 +68,7 @@ export function MessageBarResizer() {
   return (
     <hr
       className={cn(
-        "absolute -top-1 left-0 right-0 z-20 h-3 cursor-row-resize bg-transparent transition-colors",
+        "absolute -top-1 left-0 right-0 z-20 m-0 h-3 cursor-row-resize border-0 bg-transparent p-0 outline-none transition-colors focus-visible:bg-primary/15",
         dragging && "bg-primary/20",
       )}
       aria-orientation="horizontal"

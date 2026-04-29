@@ -71,6 +71,16 @@ When adding a new JSON-RPC method or notification:
 The protocol doc (`docs/websocket-protocol.md`) is the source of truth for anyone building an alternative UI. Keep it accurate and complete.
 The harness docs index (`docs/harness/index.md`) is the system-of-record map for harness behavior, context, and runbook guidance.
 
+## Desktop UI and shadcn/ui
+
+The Electron renderer in `apps/desktop` uses shadcn/ui specifically. Do not add HeroUI or another UI component system for desktop work.
+
+- Run shadcn commands from `apps/desktop` with Bun: `bunx --bun shadcn@latest info --json`, `bunx --bun shadcn@latest docs <component>`, and `bunx --bun shadcn@latest add <component>`.
+- Treat `apps/desktop/components.json` as the source of truth: Vite, Tailwind v4, radix base, lucide icons, `@/components/ui/*` imports, and `@/lib/utils`.
+- Use existing shadcn source components from `apps/desktop/src/components/ui` before writing custom markup. Compose `Button`, `Card`, `Dialog`, `Sheet`, `Tabs`, `Select`, `Switch`, `Checkbox`, `Tooltip`, `DropdownMenu`, `Command`, `Field`, `InputGroup`, `Separator`, `Skeleton`, `Badge`, and related primitives.
+- Follow shadcn usage patterns: variants before ad hoc classes, semantic tokens instead of raw colors, `gap-*` instead of `space-*`, `size-*` for equal dimensions, `cn()` for conditionals, and lucide icons with `data-icon` inside buttons.
+- Preview existing component updates with `--dry-run` or `--diff`; do not overwrite local desktop-customized wrappers unless you have checked the diff and run the relevant desktop tests.
+
 ## Testing
 
 Tests live in `test/` and use Bun's built-in test runner (`bun:test`). Test files follow `*.test.ts` naming. Provider-specific tests are under `test/providers/`. Tests extensively use the dependency injection factories to mock AI SDK calls without patching modules.

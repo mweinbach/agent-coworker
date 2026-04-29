@@ -100,7 +100,7 @@ export function ContextSidebarResizer() {
   return (
     <hr
       className={cn(
-        "app-native-no-drag absolute -left-1 top-0 z-20 h-full w-3 cursor-col-resize touch-none",
+        "app-native-no-drag absolute -left-1 top-0 z-20 m-0 h-full w-3 cursor-col-resize touch-none border-0 bg-transparent p-0 outline-none transition-colors focus-visible:bg-primary/15",
         dragging && "bg-primary/20",
       )}
       aria-orientation="vertical"

@@ -21,6 +21,17 @@ This directory contains the desktop application for the Agent Coworker project. 
 
 Desktop scripts rebuild bundled resources (`cowork-server` sidecar + `dist` assets) via root `build:desktop-resources`.
 
+## UI Components
+
+Use shadcn/ui specifically for the desktop renderer. Do not add HeroUI or another component system.
+
+- `components.json` is the source of truth: Vite, Tailwind v4, radix base, lucide icons, `@/components/ui/*`, and `@/lib/utils`.
+- Run shadcn commands from this directory with Bun: `bunx --bun shadcn@latest info --json`, `bunx --bun shadcn@latest docs <component>`, and `bunx --bun shadcn@latest add <component>`.
+- Use the source components in `src/components/ui` before writing custom markup. The full shadcn registry component set should be present there.
+- Follow shadcn patterns: component variants, semantic tokens, `gap-*` instead of `space-*`, `size-*` for square controls/icons, `cn()` for conditionals, and lucide icons with `data-icon` inside buttons.
+- Use `Field`/`FieldGroup` and `InputGroup` for form layout, `Separator` instead of custom divider divs, `Skeleton` for loading states, `Badge` for status labels, `Switch` for binary settings, and `Checkbox` for checklist selection.
+- Preview changes to existing shadcn files with `--dry-run` or `--diff`; do not overwrite local wrappers without checking desktop behavior and tests.
+
 ## Key Paths
 
 - `src/app/store.ts`: Zustand store and socket orchestration

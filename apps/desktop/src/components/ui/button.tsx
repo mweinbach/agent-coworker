@@ -1,6 +1,6 @@
-import { Slot } from "@radix-ui/react-slot";
 import * as React from "react";
 
+import { assignComposedRefs, getElementRef } from "@/lib/react-ref";
 import { cn } from "@/lib/utils";
 
 type ButtonVariant = "default" | "secondary" | "destructive" | "outline" | "ghost" | "link";
@@ -61,7 +61,6 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
   },
   ref,
 ) {
-  const Comp = asChild ? Slot : "button";
   const handleClick = React.useCallback(
     (event: React.MouseEvent<HTMLButtonElement>) => {
       if (disabled) {
@@ -74,25 +73,59 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
     [disabled, onClick],
   );
 
+  const sharedProps = {
+    ...props,
+    className: buttonVariants({
+      variant,
+      size,
+      className,
+    }),
+    "data-size": size,
+    "data-slot": "button",
+    "data-variant": variant,
+    disabled,
+    onClick: handleClick,
+    tabIndex: asChild && disabled ? -1 : tabIndex,
+    "aria-disabled": asChild && disabled ? true : props["aria-disabled"],
+  } as const;
+
+  if (asChild && React.isValidElement(children)) {
+    const child = children as React.ReactElement<{
+      className?: string;
+      disabled?: boolean;
+      onClick?: React.MouseEventHandler<HTMLButtonElement>;
+      ref?: React.Ref<HTMLElement>;
+      tabIndex?: number;
+    }>;
+
+    return React.cloneElement(child, {
+      ...sharedProps,
+      className: cn(child.props.className, sharedProps.className),
+      onClick: (event: React.MouseEvent<HTMLButtonElement>) => {
+        if (disabled) {
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+        child.props.onClick?.(event);
+        if (event.defaultPrevented) {
+          return;
+        }
+        onClick?.(event);
+      },
+      ref: (node: HTMLElement | null) => {
+        assignComposedRefs(node, getElementRef<HTMLElement>(child), ref as React.Ref<HTMLElement>);
+      },
+    });
+  }
+
   return (
-    <Comp
-      {...props}
+    <button
+      {...sharedProps}
       ref={ref}
-      onClick={handleClick}
-      className={buttonVariants({
-        variant,
-        size,
-        className,
-      })}
-      data-size={size}
-      data-slot="button"
-      data-variant={variant}
-      disabled={disabled}
-      tabIndex={asChild && disabled ? -1 : tabIndex}
-      aria-disabled={asChild && disabled ? true : props["aria-disabled"]}
     >
       {children}
-    </Comp>
+    </button>
   );
 });
 

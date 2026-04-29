@@ -164,4 +164,44 @@ describe("desktop select component", () => {
       harness.restore();
     }
   });
+
+  test.serial("does not add every option to the tab order", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(PositionedSelect));
+      });
+
+      const selectTrigger = harness.dom.window.document.querySelector(
+        '[data-slot="select-trigger"]',
+      );
+      if (!(selectTrigger instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing select trigger");
+      }
+
+      await act(async () => {
+        selectTrigger.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      const items = Array.from(
+        harness.dom.window.document.querySelectorAll('[data-slot="select-item"]'),
+      );
+      expect(items).toHaveLength(2);
+      expect(items.every((item) => item.getAttribute("tabindex") === "-1")).toBe(true);
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
 });

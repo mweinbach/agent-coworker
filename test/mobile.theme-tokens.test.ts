@@ -38,8 +38,12 @@ describe("mobile theme tokens", () => {
 
   test("semantic tokens derive surfaces using same ratios as desktop bridge", () => {
     expect(semanticTokens.light.surfaceWindow).toBe(palette.light.appBg);
-    expect(semanticTokens.light.surfaceCard).toBe(mix(palette.light.panelBg, palette.light.appBg, 94));
-    expect(semanticTokens.light.surfaceField).toBe(mix(palette.light.panelBg, palette.light.appBg, 90));
+    expect(semanticTokens.light.surfaceCard).toBe(
+      mix(palette.light.panelBg, palette.light.appBg, 94),
+    );
+    expect(semanticTokens.light.surfaceField).toBe(
+      mix(palette.light.panelBg, palette.light.appBg, 90),
+    );
     expect(semanticTokens.light.surfaceMutedFill).toBe(alpha(palette.light.textBase, 0.06));
     expect(semanticTokens.light.borderSubtle).toBe(alpha(palette.light.borderBase, 0.76));
     expect(semanticTokens.light.accent).toBe(palette.light.accentBase);
@@ -60,7 +64,15 @@ describe("mobile theme tokens", () => {
   });
 
   test("spacing scale is monotonic", () => {
-    const scale = [spacing.xs, spacing.sm, spacing.md, spacing.lg, spacing.xl, spacing["2xl"], spacing["3xl"]];
+    const scale = [
+      spacing.xs,
+      spacing.sm,
+      spacing.md,
+      spacing.lg,
+      spacing.xl,
+      spacing["2xl"],
+      spacing["3xl"],
+    ];
     for (let i = 1; i < scale.length; i += 1) {
       expect(scale[i]).toBeGreaterThan(scale[i - 1]);
     }

@@ -120,6 +120,7 @@ describe("desktop button component", () => {
 
       const root = createRoot(container);
       let clickCount = 0;
+      let childClickCount = 0;
 
       await act(async () => {
         root.render(
@@ -132,7 +133,17 @@ describe("desktop button component", () => {
                 clickCount += 1;
               },
             },
-            createElement("button", { id: "child-button", type: "button" }, "Child button"),
+            createElement(
+              "button",
+              {
+                id: "child-button",
+                onClick: () => {
+                  childClickCount += 1;
+                },
+                type: "button",
+              },
+              "Child button",
+            ),
           ),
         );
       });
@@ -152,6 +163,7 @@ describe("desktop button component", () => {
       });
 
       expect(clickCount).toBe(0);
+      expect(childClickCount).toBe(0);
 
       await act(async () => {
         root.unmount();

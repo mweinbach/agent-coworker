@@ -405,7 +405,7 @@ function SelectItem({ className, children, textValue, value }: SelectItemProps) 
       data-state={selected ? "checked" : "unchecked"}
       role="option"
       aria-selected={selected}
-      tabIndex={0}
+      tabIndex={-1}
       className={cn(
         "relative",
         "flex w-full min-w-0 cursor-pointer items-center justify-between gap-2 rounded-[8px] px-2 py-1.5 text-sm outline-none transition-colors",

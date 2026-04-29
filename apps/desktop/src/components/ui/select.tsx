@@ -62,7 +62,9 @@ function Select({ value, defaultValue, disabled, children, onValueChange, ...pro
         value: selectedValue,
       }}
     >
-      {props.name ? <input name={props.name} type="hidden" value={selectedValue ?? ""} /> : null}
+      {props.name ? (
+        <input disabled={disabled} name={props.name} type="hidden" value={selectedValue ?? ""} />
+      ) : null}
       {children}
     </SelectContext.Provider>
   );

@@ -85,11 +85,7 @@ function DisabledAsChildDialogTrigger() {
   );
 }
 
-function PreventedAsChildDialogTrigger({
-  onTriggerClick,
-}: {
-  onTriggerClick: () => void;
-}) {
+function PreventedAsChildDialogTrigger({ onTriggerClick }: { onTriggerClick: () => void }) {
   const [open, setOpen] = useState(false);
 
   return createElement(
@@ -440,49 +436,52 @@ describe("desktop dialog component", () => {
     }
   });
 
-  test.serial("respects prevented child clicks before running asChild trigger handlers", async () => {
-    const harness = setupJsdom();
+  test.serial(
+    "respects prevented child clicks before running asChild trigger handlers",
+    async () => {
+      const harness = setupJsdom();
 
-    try {
-      const container = harness.dom.window.document.getElementById("root");
-      if (!container) {
-        throw new Error("missing root");
+      try {
+        const container = harness.dom.window.document.getElementById("root");
+        if (!container) {
+          throw new Error("missing root");
+        }
+
+        const root = createRoot(container);
+        let triggerClickCount = 0;
+
+        await act(async () => {
+          root.render(
+            createElement(PreventedAsChildDialogTrigger, {
+              onTriggerClick: () => {
+                triggerClickCount += 1;
+              },
+            }),
+          );
+        });
+
+        const trigger = harness.dom.window.document.getElementById("prevented-as-child-trigger");
+        if (!(trigger instanceof harness.dom.window.HTMLButtonElement)) {
+          throw new Error("missing asChild trigger");
+        }
+
+        await act(async () => {
+          trigger.dispatchEvent(
+            new harness.dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+          );
+        });
+
+        expect(triggerClickCount).toBe(0);
+        expect(harness.dom.window.document.querySelector("[role='dialog']")).toBeNull();
+
+        await act(async () => {
+          root.unmount();
+        });
+      } finally {
+        harness.restore();
       }
-
-      const root = createRoot(container);
-      let triggerClickCount = 0;
-
-      await act(async () => {
-        root.render(
-          createElement(PreventedAsChildDialogTrigger, {
-            onTriggerClick: () => {
-              triggerClickCount += 1;
-            },
-          }),
-        );
-      });
-
-      const trigger = harness.dom.window.document.getElementById("prevented-as-child-trigger");
-      if (!(trigger instanceof harness.dom.window.HTMLButtonElement)) {
-        throw new Error("missing asChild trigger");
-      }
-
-      await act(async () => {
-        trigger.dispatchEvent(
-          new harness.dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
-        );
-      });
-
-      expect(triggerClickCount).toBe(0);
-      expect(harness.dom.window.document.querySelector("[role='dialog']")).toBeNull();
-
-      await act(async () => {
-        root.unmount();
-      });
-    } finally {
-      harness.restore();
-    }
-  });
+    },
+  );
 
   test.serial(
     "only the topmost dialog handles Escape and preserves body scroll lock until the last close",

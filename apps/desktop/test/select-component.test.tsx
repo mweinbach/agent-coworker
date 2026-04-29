@@ -24,11 +24,7 @@ function DialogWithSelect() {
       createElement(
         Select,
         { defaultValue: "alpha" },
-        createElement(
-          SelectTrigger,
-          { "aria-label": "Select value" },
-          createElement(SelectValue),
-        ),
+        createElement(SelectTrigger, { "aria-label": "Select value" }, createElement(SelectValue)),
         createElement(
           SelectContent,
           null,

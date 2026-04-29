@@ -68,7 +68,12 @@ const ScrollShadow = React.forwardRef<HTMLDivElement, ScrollShadowProps>(functio
 
     const mutationObserver =
       typeof MutationObserver === "undefined" ? null : new MutationObserver(updateShadowState);
-    mutationObserver?.observe(node, { childList: true, subtree: true });
+    mutationObserver?.observe(node, {
+      attributes: true,
+      characterData: true,
+      childList: true,
+      subtree: true,
+    });
 
     return () => {
       node.removeEventListener("scroll", updateShadowState);

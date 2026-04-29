@@ -77,7 +77,7 @@ const ScrollShadow = React.forwardRef<HTMLDivElement, ScrollShadowProps>(functio
     };
   }, [updateShadowState]);
 
-  const shadowColor = "rgb(0 0 0 / 0.28)";
+  const shadowColor = "var(--border-strong)";
   const scrollShadow = [
     shadowState.showStart
       ? orientation === "vertical"

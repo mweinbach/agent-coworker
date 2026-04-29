@@ -535,4 +535,59 @@ describe("desktop dialog component", () => {
       }
     },
   );
+
+  test.serial("only the topmost dialog handles Tab focus trapping", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(StackedDialogs));
+      });
+
+      const outerButton = harness.dom.window.document.getElementById("outer-dialog-button");
+      const innerButton = harness.dom.window.document.getElementById("inner-dialog-button");
+      if (
+        !(outerButton instanceof harness.dom.window.HTMLElement) ||
+        !(innerButton instanceof harness.dom.window.HTMLElement)
+      ) {
+        throw new Error("missing stacked dialog buttons");
+      }
+
+      const focusElement = harness.dom.window.HTMLElement.prototype.focus;
+      let outerFocusCount = 0;
+      let innerFocusCount = 0;
+      outerButton.focus = function focusOuter() {
+        outerFocusCount += 1;
+        focusElement.call(this);
+      };
+      innerButton.focus = function focusInner() {
+        innerFocusCount += 1;
+        focusElement.call(this);
+      };
+      harness.dom.window.document.body.focus();
+
+      await act(async () => {
+        harness.dom.window.document.dispatchEvent(
+          new harness.dom.window.KeyboardEvent("keydown", { bubbles: true, key: "Tab" }),
+        );
+      });
+
+      expect(outerFocusCount).toBe(0);
+      expect(innerFocusCount).toBe(1);
+      expect(harness.dom.window.document.activeElement).toBe(innerButton);
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
 });

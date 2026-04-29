@@ -257,6 +257,16 @@ function SelectContent({
       }
       setOpen(false);
     };
+    const handleFocusIn = (event: FocusEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) {
+        return;
+      }
+      if (triggerNode?.contains(target) || contentRef.current?.contains(target)) {
+        return;
+      }
+      setOpen(false);
+    };
     const handleKeyDown = (event: KeyboardEvent) => {
       const target = event.target;
       const content = contentRef.current;
@@ -320,11 +330,13 @@ function SelectContent({
 
     window.addEventListener("resize", updatePosition);
     window.addEventListener("scroll", updatePosition, true);
+    document.addEventListener("focusin", handleFocusIn);
     document.addEventListener("pointerdown", handlePointerDown);
     document.addEventListener("keydown", handleKeyDown, true);
     return () => {
       window.removeEventListener("resize", updatePosition);
       window.removeEventListener("scroll", updatePosition, true);
+      document.removeEventListener("focusin", handleFocusIn);
       document.removeEventListener("pointerdown", handlePointerDown);
       document.removeEventListener("keydown", handleKeyDown, true);
     };

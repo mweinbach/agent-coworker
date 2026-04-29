@@ -12,25 +12,104 @@ const ScrollShadow = React.forwardRef<HTMLDivElement, ScrollShadowProps>(functio
   { className, hideScrollBar = false, orientation = "vertical", size = 24, style, ...props },
   ref,
 ) {
+  const scrollRef = React.useRef<HTMLDivElement | null>(null);
+  const [shadowState, setShadowState] = React.useState({
+    showEnd: false,
+    showStart: false,
+  });
+
+  const setRefs = React.useCallback(
+    (node: HTMLDivElement | null) => {
+      scrollRef.current = node;
+      if (typeof ref === "function") {
+        ref(node);
+      } else if (ref) {
+        ref.current = node;
+      }
+    },
+    [ref],
+  );
+
+  const updateShadowState = React.useCallback(() => {
+    const node = scrollRef.current;
+    if (!node) {
+      return;
+    }
+
+    const maxScroll =
+      orientation === "vertical"
+        ? node.scrollHeight - node.clientHeight
+        : node.scrollWidth - node.clientWidth;
+    const scrollPosition = orientation === "vertical" ? node.scrollTop : node.scrollLeft;
+    const nextState = {
+      showEnd: maxScroll > 1 && scrollPosition < maxScroll - 1,
+      showStart: maxScroll > 1 && scrollPosition > 1,
+    };
+
+    setShadowState((currentState) =>
+      currentState.showStart === nextState.showStart && currentState.showEnd === nextState.showEnd
+        ? currentState
+        : nextState,
+    );
+  }, [orientation]);
+
+  React.useEffect(() => {
+    const node = scrollRef.current;
+    if (!node) {
+      return;
+    }
+
+    updateShadowState();
+    node.addEventListener("scroll", updateShadowState, { passive: true });
+
+    const resizeObserver =
+      typeof ResizeObserver === "undefined" ? null : new ResizeObserver(updateShadowState);
+    resizeObserver?.observe(node);
+
+    const mutationObserver =
+      typeof MutationObserver === "undefined" ? null : new MutationObserver(updateShadowState);
+    mutationObserver?.observe(node, { childList: true, subtree: true });
+
+    return () => {
+      node.removeEventListener("scroll", updateShadowState);
+      resizeObserver?.disconnect();
+      mutationObserver?.disconnect();
+    };
+  }, [updateShadowState]);
+
+  const shadowColor = "rgb(0 0 0 / 0.28)";
+  const scrollShadow = [
+    shadowState.showStart
+      ? orientation === "vertical"
+        ? `inset 0 ${size}px ${size}px -${size}px ${shadowColor}`
+        : `inset ${size}px 0 ${size}px -${size}px ${shadowColor}`
+      : null,
+    shadowState.showEnd
+      ? orientation === "vertical"
+        ? `inset 0 -${size}px ${size}px -${size}px ${shadowColor}`
+        : `inset -${size}px 0 ${size}px -${size}px ${shadowColor}`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(", ");
+
+  const resolvedStyle = {
+    ...style,
+    "--scroll-shadow-size": `${size}px`,
+    boxShadow: [style?.boxShadow, scrollShadow].filter(Boolean).join(", ") || undefined,
+  } as React.CSSProperties;
+
   return (
     <div
-      ref={ref}
+      ref={setRefs}
       data-orientation={orientation}
       data-slot="scroll-shadow"
       className={cn(
         "relative overflow-auto",
-        orientation === "vertical"
-          ? "[mask-image:linear-gradient(to_bottom,transparent,black_var(--scroll-shadow-size),black_calc(100%_-_var(--scroll-shadow-size)),transparent)]"
-          : "[mask-image:linear-gradient(to_right,transparent,black_var(--scroll-shadow-size),black_calc(100%_-_var(--scroll-shadow-size)),transparent)]",
         hideScrollBar && "[scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
         className,
       )}
-      style={
-        {
-          "--scroll-shadow-size": `${size}px`,
-          ...style,
-        } as React.CSSProperties
-      }
+      style={resolvedStyle}
       {...props}
     />
   );

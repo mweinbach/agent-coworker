@@ -257,6 +257,15 @@ function SelectContent({
       setOpen(false);
     };
     const handleKeyDown = (event: KeyboardEvent) => {
+      const target = event.target;
+      const content = contentRef.current;
+      const eventFromSelect =
+        target instanceof Node && (triggerNode?.contains(target) || content?.contains(target));
+
+      if (!eventFromSelect) {
+        return;
+      }
+
       if (event.key === "Escape") {
         setOpen(false);
         triggerNode?.focus();
@@ -272,7 +281,6 @@ function SelectContent({
         return;
       }
 
-      const content = contentRef.current;
       if (!content) {
         return;
       }

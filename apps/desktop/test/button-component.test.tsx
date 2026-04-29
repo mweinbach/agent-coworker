@@ -220,4 +220,48 @@ describe("desktop button component", () => {
       harness.restore();
     }
   });
+
+  test("preserves a child disabled prop when asChild button is not disabled", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          createElement(
+            Button,
+            { asChild: true },
+            createElement(
+              "button",
+              {
+                disabled: true,
+                id: "child-button",
+                type: "button",
+              },
+              "Child button",
+            ),
+          ),
+        );
+      });
+
+      const button = harness.dom.window.document.getElementById("child-button");
+      if (!(button instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing child button");
+      }
+
+      expect(button.disabled).toBe(true);
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
 });

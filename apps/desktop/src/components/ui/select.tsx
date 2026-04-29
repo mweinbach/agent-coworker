@@ -276,6 +276,11 @@ function SelectContent({
         return;
       }
 
+      if (event.key === "Tab") {
+        setOpen(false);
+        return;
+      }
+
       if (
         event.key !== "ArrowDown" &&
         event.key !== "ArrowUp" &&

@@ -9,6 +9,13 @@ import { Tool, ToolContent, ToolHeader } from "../src/components/ai-elements/too
 import { Card, CardDescription } from "../src/components/ui/card";
 import { Dialog, DialogContent } from "../src/components/ui/dialog";
 import { Input } from "../src/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../src/components/ui/select";
 import { Textarea } from "../src/components/ui/textarea";
 import { setupJsdom } from "./jsdomHarness";
 
@@ -92,6 +99,85 @@ describe("desktop token consumers", () => {
       expect(dialog?.className).toContain("app-surface-overlay");
       expect(dialog?.className).toContain("app-border-strong");
       expect(dialog?.className).toContain("app-shadow-overlay");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("select content anchors to the trigger instead of the window corner", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      Object.defineProperty(harness.dom.window, "innerWidth", {
+        configurable: true,
+        value: 1200,
+      });
+      Object.defineProperty(harness.dom.window, "innerHeight", {
+        configurable: true,
+        value: 800,
+      });
+
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          createElement(
+            Select,
+            { defaultValue: "same" },
+            createElement(
+              SelectTrigger,
+              { "aria-label": "Subagent routing" },
+              createElement(SelectValue, null),
+            ),
+            createElement(
+              SelectContent,
+              null,
+              createElement(SelectItem, { value: "same" }, "Same model"),
+              createElement(SelectItem, { value: "cross" }, "Multiple providers"),
+            ),
+          ),
+        );
+      });
+
+      const trigger = container.querySelector('[aria-label="Subagent routing"]');
+      if (!(trigger instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing select trigger");
+      }
+      trigger.getBoundingClientRect = () =>
+        ({
+          bottom: 240,
+          height: 40,
+          left: 460,
+          right: 760,
+          top: 200,
+          width: 300,
+          x: 460,
+          y: 200,
+          toJSON: () => ({}),
+        }) as DOMRect;
+
+      await act(async () => {
+        trigger.click();
+      });
+
+      const content = harness.dom.window.document.querySelector('[data-slot="select-content"]');
+      if (!(content instanceof harness.dom.window.HTMLElement)) {
+        throw new Error("missing select content");
+      }
+
+      expect(content.style.left).toBe("460px");
+      expect(content.style.top).toBe("246px");
+      expect(content.style.width).toBe("300px");
+      expect(content.className).toContain("z-[1000]");
 
       await act(async () => {
         root.unmount();

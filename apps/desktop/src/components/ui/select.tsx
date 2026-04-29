@@ -12,7 +12,9 @@ type SelectContextValue = {
   open: boolean;
   selectedLabel: React.ReactNode;
   setOpen: (open: boolean) => void;
+  setTriggerNode: (node: HTMLButtonElement | null) => void;
   setValue: (value: string) => void;
+  triggerNode: HTMLButtonElement | null;
   value: string | undefined;
 };
 
@@ -30,6 +32,7 @@ type SelectProps = {
 function Select({ value, defaultValue, disabled, children, onValueChange, ...props }: SelectProps) {
   const [uncontrolledValue, setUncontrolledValue] = React.useState(defaultValue);
   const [open, setOpen] = React.useState(false);
+  const [triggerNode, setTriggerNode] = React.useState<HTMLButtonElement | null>(null);
   const selectedValue = value ?? uncontrolledValue;
   const selectedLabel = React.useMemo(
     () => findSelectItemLabel(children, selectedValue),
@@ -53,7 +56,9 @@ function Select({ value, defaultValue, disabled, children, onValueChange, ...pro
         open,
         selectedLabel,
         setOpen,
+        setTriggerNode,
         setValue,
+        triggerNode,
         value: selectedValue,
       }}
     >
@@ -105,9 +110,10 @@ function SelectTrigger({
   compact = false,
   ...props
 }: SelectTriggerProps) {
-  const { disabled, open, setOpen } = useSelectContext();
+  const { disabled, open, setOpen, setTriggerNode } = useSelectContext();
   return (
     <button
+      ref={setTriggerNode}
       type="button"
       data-size={size}
       data-slot="select-trigger"
@@ -156,28 +162,145 @@ type SelectContentProps = {
   placement?: SelectPlacement;
 };
 
+type SelectContentPosition = {
+  left: number;
+  maxHeight: number;
+  minWidth: number;
+  placement: SelectPlacement;
+  top: number;
+  width: number | undefined;
+};
+
+const SELECT_VIEWPORT_PADDING = 8;
+const SELECT_TRIGGER_GAP = 6;
+
 function SelectContent({
   className,
   children,
   placement = "bottom",
   ...props
 }: SelectContentProps) {
-  const { open } = useSelectContext();
+  const { open, setOpen, triggerNode } = useSelectContext();
+  const contentRef = React.useRef<HTMLDivElement | null>(null);
+  const [position, setPosition] = React.useState<SelectContentPosition>({
+    left: SELECT_VIEWPORT_PADDING,
+    maxHeight: 384,
+    minWidth: 160,
+    placement,
+    top: SELECT_VIEWPORT_PADDING,
+    width: undefined,
+  });
+
+  const updatePosition = React.useCallback(() => {
+    if (!triggerNode || typeof window === "undefined") {
+      return;
+    }
+
+    const rect = triggerNode.getBoundingClientRect();
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const contentWidth = Math.min(
+      Math.max(rect.width, 160),
+      viewportWidth - SELECT_VIEWPORT_PADDING * 2,
+    );
+    const spaceBelow = viewportHeight - rect.bottom - SELECT_TRIGGER_GAP - SELECT_VIEWPORT_PADDING;
+    const spaceAbove = rect.top - SELECT_TRIGGER_GAP - SELECT_VIEWPORT_PADDING;
+    const resolvedPlacement =
+      placement === "bottom" && spaceBelow < 180 && spaceAbove > spaceBelow
+        ? "top"
+        : placement === "top" && spaceAbove < 180 && spaceBelow > spaceAbove
+          ? "bottom"
+          : placement;
+
+    const maxHeight =
+      resolvedPlacement === "top" ? Math.max(120, spaceAbove) : Math.max(120, spaceBelow);
+    const contentHeight = Math.min(contentRef.current?.scrollHeight ?? maxHeight, maxHeight);
+    const top =
+      resolvedPlacement === "top"
+        ? Math.max(SELECT_VIEWPORT_PADDING, rect.top - SELECT_TRIGGER_GAP - contentHeight)
+        : Math.min(rect.bottom + SELECT_TRIGGER_GAP, viewportHeight - SELECT_VIEWPORT_PADDING);
+    const left = Math.max(
+      SELECT_VIEWPORT_PADDING,
+      Math.min(rect.left, viewportWidth - contentWidth - SELECT_VIEWPORT_PADDING),
+    );
+
+    setPosition({
+      left,
+      maxHeight,
+      minWidth: Math.max(160, rect.width),
+      placement: resolvedPlacement,
+      top,
+      width: rect.width,
+    });
+  }, [placement, triggerNode]);
+
+  React.useLayoutEffect(() => {
+    if (!open) {
+      return;
+    }
+    updatePosition();
+  }, [open, updatePosition]);
+
+  React.useEffect(() => {
+    if (!open || typeof window === "undefined" || typeof document === "undefined") {
+      return;
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) {
+        return;
+      }
+      if (triggerNode?.contains(target) || contentRef.current?.contains(target)) {
+        return;
+      }
+      setOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+        triggerNode?.focus();
+      }
+    };
+
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [open, setOpen, triggerNode, updatePosition]);
+
   if (!open || typeof document === "undefined") {
     return null;
   }
 
   return createPortal(
     <div
+      ref={contentRef}
       data-slot="select-content"
-      data-placement={placement}
+      data-placement={position.placement}
       className={cn(
-        "app-surface-overlay app-border-subtle app-shadow-overlay fixed left-4 top-4 z-50 w-max max-w-[min(24rem,calc(100vw-2rem))] min-w-[10rem] overflow-hidden rounded-[12px] border text-popover-foreground",
+        "app-surface-overlay app-border-subtle app-shadow-overlay fixed z-[1000] max-w-[min(24rem,calc(100vw-2rem))] overflow-hidden rounded-[12px] border text-popover-foreground",
         className,
       )}
+      style={{
+        left: position.left,
+        minWidth: position.minWidth,
+        top: position.top,
+        width: position.width,
+      }}
       {...props}
     >
-      <div data-slot="select-viewport" className="max-h-96 w-full overflow-auto p-1.5">
+      <div
+        data-slot="select-viewport"
+        className="w-full overflow-auto p-1.5"
+        style={{ maxHeight: position.maxHeight }}
+      >
         {children}
       </div>
     </div>,

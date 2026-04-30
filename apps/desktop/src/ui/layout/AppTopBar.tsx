@@ -2,9 +2,7 @@ import {
   ArrowUpRightIcon,
   ChevronDownIcon,
   LoaderCircleIcon,
-  PanelLeftIcon,
   PanelRightIcon,
-  SquarePenIcon,
 } from "lucide-react";
 import { type CSSProperties, useEffect, useId, useMemo, useRef, useState } from "react";
 import { formatCost, formatTokenCount } from "../../../../../src/session/pricing";
@@ -18,9 +16,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../../components/ui/select";
+import { useDesktopPlatform } from "../../lib/useDesktopPlatform";
 import { cn } from "../../lib/utils";
-import { SidebarCollapseControl } from "./SidebarCollapseControl";
-import { useWindowDragHandle } from "./useWindowDragHandle";
+import { PlatformTopBarChrome } from "./PlatformTopBarChrome";
 
 interface AppTopBarProps {
   busy: boolean;
@@ -76,12 +74,10 @@ export function AppTopBar({
   const [detailsOpen, setDetailsOpen] = useState(false);
   const detailsRef = useRef<HTMLDivElement | null>(null);
   const detailsId = useId();
-  const platform =
-    typeof document !== "undefined" ? document.documentElement.dataset.platform : undefined;
-  const isDarwin = platform === "darwin";
-  const isWin32 = platform === "win32";
+  const platformInfo = useDesktopPlatform();
+  const isDarwin = platformInfo.platform === "macos";
+  const isWin32 = platformInfo.platform === "windows";
   const showWin32CollapsedStrip = isWin32 && sidebarCollapsed;
-  const win32LeftButtonDragHandle = useWindowDragHandle<HTMLButtonElement>(showWin32CollapsedStrip);
   const sidebarLabel = sidebarCollapsed ? "Show sidebar" : "Hide sidebar";
   const rightSidebarLabel = contextSidebarCollapsed ? "Show context" : "Hide context";
   const hasUsage = sessionUsage !== null || lastTurnUsage !== null;
@@ -214,68 +210,13 @@ export function AppTopBar({
         aria-hidden="true"
         style={{ left: sidebarCollapsed ? 0 : sidebarWidth }}
       />
-      {isDarwin ? (
-        <SidebarCollapseControl
-          onToggleSidebar={onToggleSidebar}
-          onNewChat={onNewChat}
-          sidebarCollapsed={sidebarCollapsed}
-        />
-      ) : null}
-      {/* On Windows, the expanded sidebar owns New Chat + collapse; topbar only shows expand + New Chat when collapsed. */}
-      {showWin32CollapsedStrip ? (
-        <div className="app-topbar__win32-left-rail absolute inset-y-0 left-0">
-          <div className="app-topbar__win32-left-drag-zone" aria-hidden="true" />
-          <div className="app-topbar__sidebar-strip app-topbar__win32-left-strip app-topbar__toolbar-layer app-topbar__controls absolute inset-0 flex min-w-0 items-center gap-1 px-1.5">
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              onClick={onNewChat}
-              title="New Chat"
-              aria-label="New Chat"
-              className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
-              {...win32LeftButtonDragHandle}
-            >
-              <SquarePenIcon className="h-4 w-4" />
-            </Button>
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              onClick={onToggleSidebar}
-              title={sidebarLabel}
-              aria-label={sidebarLabel}
-              className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
-              {...win32LeftButtonDragHandle}
-            >
-              <PanelLeftIcon className="h-4 w-4" />
-            </Button>
-          </div>
-        </div>
-      ) : isWin32 ? null : (
-        <div className="app-topbar__inline-sidebar-toggle app-topbar__toolbar-layer app-topbar__controls absolute left-3 top-1/2 flex min-w-0 -translate-y-1/2 items-center gap-1">
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            onClick={onToggleSidebar}
-            title={sidebarLabel}
-            aria-label={sidebarLabel}
-            className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
-          >
-            <PanelLeftIcon className="h-4 w-4" />
-          </Button>
-          {sidebarCollapsed ? (
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              onClick={onNewChat}
-              title="New Chat"
-              aria-label="New Chat"
-              className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
-            >
-              <SquarePenIcon className="h-4 w-4" />
-            </Button>
-          ) : null}
-        </div>
-      )}
+      <PlatformTopBarChrome
+        platformInfo={platformInfo}
+        sidebarCollapsed={sidebarCollapsed}
+        onToggleSidebar={onToggleSidebar}
+        onNewChat={onNewChat}
+        sidebarLabel={sidebarLabel}
+      />
 
       <div
         className="app-topbar__thread-shell absolute inset-y-0 flex min-w-0 items-center"

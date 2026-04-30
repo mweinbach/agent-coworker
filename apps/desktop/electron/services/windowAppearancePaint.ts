@@ -1,4 +1,5 @@
 import type { WindowsBackgroundMaterial } from "../../src/lib/desktopApi";
+import { getPlatformChrome } from "./windowChrome/platformChrome";
 
 export const LIGHT_SHELL_BACKGROUND = "#dfe2cc";
 export const DARK_SHELL_BACKGROUND = "#171d13";
@@ -11,10 +12,8 @@ export function desktopShellBackgroundColor(useDarkColors: boolean): string {
 export function windowsBackgroundMaterialForPlatform(
   platform: NodeJS.Platform,
 ): WindowsBackgroundMaterial | undefined {
-  if (platform !== "win32") {
-    return undefined;
-  }
-  return "mica";
+  const chrome = getPlatformChrome(platform);
+  return chrome.windowMaterial;
 }
 
 export type WindowChromePaintInput = {

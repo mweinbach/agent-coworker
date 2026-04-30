@@ -3,6 +3,7 @@
 @import "./styles/tokens.css";
 @import "./styles/theme-bridge.css";
 @import "./styles/token-utilities.css";
+@import "./styles/platform/shared.css";
 @import "./styles/platform/darwin.css";
 @import "./styles/platform/win32.css";
 @import "./styles/platform/linux.css";

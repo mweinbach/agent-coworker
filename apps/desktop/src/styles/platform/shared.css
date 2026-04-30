@@ -1,0 +1,27 @@
+/* Shared platform chrome CSS — uses CSS variables set from platform chrome contract */
+
+:root {
+  /* Fallback values if platform chrome data is not loaded */
+  --platform-titlebar-height: 48px;
+  --platform-drag-strip-height: 10px;
+  --platform-left-native-reserve: 0px;
+  --platform-right-native-reserve: 0px;
+  --platform-caption-button-reserve: 0px;
+}
+
+.app-topbar--frame {
+  height: var(--platform-titlebar-height);
+}
+
+.app-window-drag-strip {
+  height: var(--platform-drag-strip-height);
+}
+
+/* Disable CSS blur when platform requests it (e.g., macOS vibrancy) */
+:root[data-disable-css-blur="true"] .app-topbar__sidebar-fill,
+:root[data-disable-css-blur="true"] .app-topbar__content-fill,
+:root[data-disable-css-blur="true"] .app-left-sidebar-pane,
+:root[data-disable-css-blur="true"] .app-sidebar {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}

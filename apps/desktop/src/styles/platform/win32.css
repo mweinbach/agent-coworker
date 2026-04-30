@@ -1,8 +1,4 @@
-/* Windows title bar overlay + caption button reserve
- *
- * titleBarOverlay height = WINDOWS_TITLE_BAR_HEIGHT in electron/services/windowChrome/win32.ts.
- * Keep .settings-shell__drag-zone and .app-topbar--frame aligned to that pixel height here.
- */
+/* Windows title bar overlay + caption button reserve */
 
 /*
  * Disable the blanket drag on the topbar. The content-fill provides a drag
@@ -33,7 +29,7 @@
 
 /* Right toolbar sits just left of the native caption buttons. */
 :root[data-platform="win32"] .app-topbar__toolbar--right {
-  right: calc(var(--win32-caption-button-reserve) + var(--win32-toolbar-gap));
+  right: calc(var(--platform-caption-button-reserve) + var(--win32-toolbar-gap));
   z-index: 3;
 }
 
@@ -64,16 +60,11 @@
   -webkit-app-region: no-drag;
 }
 
-:root[data-platform="win32"] .app-topbar--frame {
-  height: 48px;
-}
-
 :root[data-platform="win32"] .app-window-drag-strip {
   position: absolute;
   top: 0;
   left: 0;
   right: 0;
-  height: 0.625rem;
   z-index: 60;
   -webkit-app-region: drag;
 }
@@ -85,7 +76,7 @@
  * the topbar.
  */
 :root[data-platform="win32"] .app-chat-body {
-  margin-top: -48px;
+  margin-top: calc(-1 * var(--platform-titlebar-height));
 }
 
 :root[data-platform="win32"] .app-chat-body > .app-left-sidebar-pane {
@@ -95,7 +86,7 @@
 }
 
 :root[data-platform="win32"] .app-chat-body > .app-main-content {
-  padding-top: 48px;
+  padding-top: var(--platform-titlebar-height);
 }
 
 :root[data-platform="win32"] .app-sidebar {
@@ -110,7 +101,7 @@
   position: relative;
   display: flex;
   align-items: center;
-  min-height: 48px;
+  min-height: var(--platform-titlebar-height);
   padding-top: 4px;
 }
 
@@ -163,7 +154,7 @@
   top: 0;
   left: 0;
   right: 0;
-  height: 48px;
+  height: var(--platform-titlebar-height);
   z-index: 80;
   -webkit-app-region: drag;
 }

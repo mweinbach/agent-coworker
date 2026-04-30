@@ -1,14 +1,5 @@
 /* macOS-only title bar, traffic lights, vibrancy interaction */
 
-:root[data-platform="darwin"]:not([data-reduced-transparency="true"]) .app-topbar__sidebar-fill {
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-}
-
-:root[data-platform="darwin"] .app-topbar--frame {
-  height: 2.375rem;
-}
-
 :root[data-platform="darwin"] .app-topbar__inline-sidebar-toggle {
   display: none;
 }
@@ -36,7 +27,6 @@
   top: 0;
   left: 0;
   right: 0;
-  height: 0.625rem;
   z-index: 60;
   -webkit-app-region: drag;
 }
@@ -62,10 +52,4 @@
   height: 2.75rem;
   z-index: 80;
   -webkit-app-region: drag;
-}
-
-/* Native vibrancy already blurs; CSS backdrop-filter composites an opaque-ish layer on macOS glass */
-:root[data-platform="darwin"]:not([data-reduced-transparency="true"]) .app-left-sidebar-pane {
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
 }

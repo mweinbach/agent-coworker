@@ -28,6 +28,7 @@ import { Button } from "../components/ui/button";
 import { Collapsible, CollapsibleTrigger } from "../components/ui/collapsible";
 import { Input } from "../components/ui/input";
 import { confirmAction, showContextMenu } from "../lib/desktopCommands";
+import { useDesktopPlatform } from "../lib/useDesktopPlatform";
 import { usePrefersReducedMotion } from "../lib/usePrefersReducedMotion";
 import { cn } from "../lib/utils";
 import { useWindowDragHandle } from "./layout/useWindowDragHandle";
@@ -397,9 +398,10 @@ const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
 });
 
 export const Sidebar = memo(function Sidebar() {
-  const platform =
-    typeof document !== "undefined" ? document.documentElement.dataset.platform : undefined;
-  const isWin32 = platform === "win32";
+  const platformInfo = useDesktopPlatform();
+  // Windows owns the native titleband inside the sidebar, so drag zones
+  // and collapse toggle are active there. Other platforms let the topbar own it.
+  const isWin32 = platformInfo.sidebarTitlebandMode === "native";
   const view = useAppStore((s) => s.view);
   const workspaces = useAppStore((s) => s.workspaces);
   const threads = useAppStore((s) => s.threads);

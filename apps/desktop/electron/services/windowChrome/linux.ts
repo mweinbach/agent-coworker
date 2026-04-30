@@ -1,19 +1,16 @@
 import type { BrowserWindow } from "electron";
 
 import type { WindowChromeModule } from "./types";
-
-/** Match Windows overlay height so shared renderer topbar/drag CSS stays aligned. */
-const LINUX_TITLE_BAR_HEIGHT = 48;
-const LINUX_LIGHT_SYMBOL_COLOR = "#556041";
-const LINUX_DARK_SYMBOL_COLOR = "#eef0dc";
+import { getPlatformChrome, getTitlebarSymbolColor } from "./platformChrome";
 
 function linuxTitleBarOverlay(
   useDarkColors: boolean,
 ): Parameters<BrowserWindow["setTitleBarOverlay"]>[0] {
+  const chrome = getPlatformChrome("linux");
   return {
     color: "#00000000",
-    symbolColor: useDarkColors ? LINUX_DARK_SYMBOL_COLOR : LINUX_LIGHT_SYMBOL_COLOR,
-    height: LINUX_TITLE_BAR_HEIGHT,
+    symbolColor: getTitlebarSymbolColor(useDarkColors),
+    height: chrome.titlebarHeight,
   };
 }
 

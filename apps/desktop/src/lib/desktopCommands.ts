@@ -11,6 +11,7 @@ import type {
   DesktopMenuCommand,
   DesktopNotificationInput,
   ExplorerEntry,
+  PlatformChromeInfo,
   ReadFileForPreviewOutput,
   SetWindowAppearanceInput,
   ShowQuickChatWindowInput,
@@ -258,6 +259,10 @@ export async function quitAndInstallUpdate(): Promise<void> {
 
 export async function getSystemAppearance(): Promise<SystemAppearance> {
   return await requireDesktopApi().getSystemAppearance();
+}
+
+export async function getPlatformChrome(): Promise<PlatformChromeInfo> {
+  return await requireDesktopApi().getPlatformChrome();
 }
 
 export async function setWindowAppearance(

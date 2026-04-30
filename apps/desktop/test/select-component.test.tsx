@@ -393,6 +393,76 @@ describe("desktop select component", () => {
     }
   });
 
+  test.serial(
+    "does not wrap page focus when tabbing from the last open select outside a dialog",
+    async () => {
+      const harness = setupJsdom();
+
+      try {
+        const container = harness.dom.window.document.getElementById("root");
+        if (!container) {
+          throw new Error("missing root");
+        }
+
+        const root = createRoot(container);
+
+        await act(async () => {
+          root.render(
+            createElement(
+              "div",
+              null,
+              createElement("button", { id: "first-button", type: "button" }, "First"),
+              createElement(PositionedSelect),
+            ),
+          );
+        });
+
+        const selectTrigger = harness.dom.window.document.querySelector(
+          '[data-slot="select-trigger"]',
+        );
+        if (!(selectTrigger instanceof harness.dom.window.HTMLButtonElement)) {
+          throw new Error("missing select trigger");
+        }
+
+        await act(async () => {
+          selectTrigger.dispatchEvent(
+            new harness.dom.window.MouseEvent("click", { bubbles: true }),
+          );
+        });
+
+        const selectItem = harness.dom.window.document.querySelector('[data-slot="select-item"]');
+        const firstButton = harness.dom.window.document.getElementById("first-button");
+        if (!(selectItem instanceof harness.dom.window.HTMLDivElement)) {
+          throw new Error("missing select item");
+        }
+        if (!(firstButton instanceof harness.dom.window.HTMLButtonElement)) {
+          throw new Error("missing first button");
+        }
+
+        await act(async () => {
+          selectItem.dispatchEvent(
+            new harness.dom.window.KeyboardEvent("keydown", {
+              bubbles: true,
+              cancelable: true,
+              key: "Tab",
+            }),
+          );
+        });
+
+        expect(
+          harness.dom.window.document.querySelector('[data-slot="select-content"]'),
+        ).toBeNull();
+        expect(harness.dom.window.document.activeElement).not.toBe(firstButton);
+
+        await act(async () => {
+          root.unmount();
+        });
+      } finally {
+        harness.restore();
+      }
+    },
+  );
+
   test.serial("closes the open menu when focus leaves the select", async () => {
     const harness = setupJsdom();
 

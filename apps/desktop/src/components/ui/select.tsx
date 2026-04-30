@@ -40,6 +40,7 @@ function getSelectFocusScope(triggerNode: HTMLButtonElement): HTMLElement {
 
 function moveFocusFromSelectTrigger(triggerNode: HTMLButtonElement, shiftKey: boolean) {
   const scope = getSelectFocusScope(triggerNode);
+  const shouldWrapFocus = scope !== document.body;
   const focusable = Array.from(
     scope.querySelectorAll<HTMLElement>(SELECT_FOCUSABLE_SELECTOR),
   ).filter(
@@ -54,10 +55,14 @@ function moveFocusFromSelectTrigger(triggerNode: HTMLButtonElement, shiftKey: bo
     return;
   }
 
-  const nextIndex = shiftKey
-    ? (currentIndex - 1 + focusable.length) % focusable.length
-    : (currentIndex + 1) % focusable.length;
-  focusable[nextIndex]?.focus();
+  const nextIndex = shiftKey ? currentIndex - 1 : currentIndex + 1;
+  if (!shouldWrapFocus && (nextIndex < 0 || nextIndex >= focusable.length)) {
+    triggerNode.blur();
+    return;
+  }
+
+  const wrappedIndex = (nextIndex + focusable.length) % focusable.length;
+  focusable[wrappedIndex]?.focus();
 }
 
 type SelectProps = {

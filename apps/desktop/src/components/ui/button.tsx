@@ -93,6 +93,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
 
   if (asChild && React.isValidElement(children)) {
     const child = children as React.ReactElement<{
+      "aria-disabled"?: boolean | "false" | "true";
       className?: string;
       disabled?: boolean;
       onClick?: React.MouseEventHandler<HTMLButtonElement>;
@@ -100,13 +101,21 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
       tabIndex?: number;
       type?: React.ButtonHTMLAttributes<HTMLButtonElement>["type"];
     }>;
+    const childAriaDisabled = child.props["aria-disabled"];
+    const childDisabled =
+      child.props.disabled === true || childAriaDisabled === true || childAriaDisabled === "true";
+    const asChildDisabled = disabled === true || childDisabled;
 
     return React.cloneElement(child, {
       ...sharedProps,
+      "aria-disabled": asChildDisabled
+        ? true
+        : (child.props["aria-disabled"] ?? props["aria-disabled"]),
       className: cn(sharedProps.className, child.props.className),
+      tabIndex: asChildDisabled ? -1 : (child.props.tabIndex ?? tabIndex),
       type: child.props.type ?? type,
       onClick: (event: React.MouseEvent<HTMLButtonElement>) => {
-        if (disabled) {
+        if (asChildDisabled) {
           event.preventDefault();
           event.stopPropagation();
           return;
@@ -124,7 +133,9 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
   }
 
   if (asChild) {
-    console.warn("Button with asChild expects exactly one valid React element child.");
+    if (process.env.NODE_ENV !== "production") {
+      console.warn("Button with asChild expects exactly one valid React element child.");
+    }
     return null;
   }
 

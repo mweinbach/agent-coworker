@@ -10,6 +10,7 @@ import {
   formatQuickChatShortcutLabel,
 } from "../../src/lib/quickChatShortcut";
 import { createTrayMaskBitmap } from "./trayImage";
+import { revealAndActivateWindow } from "./windowActivation";
 
 const QUICK_CHAT_WINDOW_EDGE_PADDING = 12;
 const QUICK_CHAT_WINDOW_OFFSET = 10;
@@ -102,11 +103,7 @@ export class QuickChatController {
       existingWindow && !existingWindow.isDestroyed()
         ? existingWindow
         : await this.createMainWindow();
-    if (win.isMinimized()) {
-      win.restore();
-    }
-    win.show();
-    win.focus();
+    revealAndActivateWindow(electron.app, win, this.platform);
   }
 
   async showQuickChatWindow(
@@ -115,11 +112,7 @@ export class QuickChatController {
     this.hideUtilityWindow();
     const win = await this.ensureQuickChatWindow(opts);
     this.positionPopupWindow(win, opts.anchorBounds ?? this.tray?.getBounds());
-    if (win.isMinimized()) {
-      win.restore();
-    }
-    win.show();
-    win.focus();
+    revealAndActivateWindow(electron.app, win, this.platform);
   }
 
   async toggleQuickChatWindow(anchorBounds?: Rectangle): Promise<void> {
@@ -135,11 +128,7 @@ export class QuickChatController {
     this.hideQuickChatWindow();
     const win = await this.ensureUtilityWindow();
     this.positionPopupWindow(win, anchorBounds ?? this.tray?.getBounds());
-    if (win.isMinimized()) {
-      win.restore();
-    }
-    win.show();
-    win.focus();
+    revealAndActivateWindow(electron.app, win, this.platform);
   }
 
   async toggleUtilityWindow(anchorBounds?: Rectangle): Promise<void> {

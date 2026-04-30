@@ -88,6 +88,7 @@ function TooltipTrigger({
   asChild,
   onBlur,
   onFocus,
+  onKeyDown,
   onMouseEnter,
   onMouseLeave,
   ...props
@@ -136,6 +137,14 @@ function TooltipTrigger({
       onFocus?.(event);
       openWithDelay();
     },
+    onKeyDown: (event: React.KeyboardEvent<HTMLButtonElement>) => {
+      onKeyDown?.(event);
+      if (!event.defaultPrevented && event.key === "Escape" && open) {
+        event.preventDefault();
+        event.stopPropagation();
+        close();
+      }
+    },
     onMouseEnter: (event: React.MouseEvent<HTMLButtonElement>) => {
       onMouseEnter?.(event);
       openWithDelay();
@@ -162,6 +171,15 @@ function TooltipTrigger({
         child.props.onFocus?.(event);
         onFocus?.(event as React.FocusEvent<HTMLButtonElement>);
         openWithDelay();
+      },
+      onKeyDown: (event: React.KeyboardEvent<HTMLElement>) => {
+        child.props.onKeyDown?.(event);
+        onKeyDown?.(event as React.KeyboardEvent<HTMLButtonElement>);
+        if (!event.defaultPrevented && event.key === "Escape" && open) {
+          event.preventDefault();
+          event.stopPropagation();
+          close();
+        }
       },
       onMouseEnter: (event: React.MouseEvent<HTMLElement>) => {
         child.props.onMouseEnter?.(event);
@@ -214,8 +232,8 @@ function TooltipContent({
     setContentId(id);
   }, [id, setContentId]);
 
-  React.useLayoutEffect(() => {
-    if (!open || !triggerNode || typeof window === "undefined") {
+  const updatePosition = React.useCallback(() => {
+    if (!triggerNode || typeof window === "undefined") {
       return;
     }
 
@@ -245,7 +263,27 @@ function TooltipContent({
         Math.min(window.innerHeight - viewportPadding - contentHeight, nextPosition.top),
       ),
     });
-  }, [open, side, sideOffset, triggerNode]);
+  }, [side, sideOffset, triggerNode]);
+
+  React.useLayoutEffect(() => {
+    if (!open) {
+      return;
+    }
+    updatePosition();
+  }, [open, updatePosition]);
+
+  React.useEffect(() => {
+    if (!open || typeof window === "undefined") {
+      return;
+    }
+
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [open, updatePosition]);
 
   if (!open || typeof document === "undefined") {
     return null;

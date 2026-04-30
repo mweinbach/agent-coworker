@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 
 import { setupJsdom } from "./jsdomHarness";
 
-const { Dialog, DialogContent, DialogTrigger } = await import(
+const { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } = await import(
   new URL("../src/components/ui/dialog.tsx?dialog-component-test", import.meta.url).href
 );
 
@@ -81,6 +81,45 @@ function DisabledAsChildDialogTrigger() {
       DialogContent,
       null,
       createElement("button", { id: "as-child-dialog-button", type: "button" }, "Inside dialog"),
+    ),
+  );
+}
+
+function LabelledDialog() {
+  const [open, setOpen] = useState(false);
+
+  return createElement(
+    Dialog,
+    { open, onOpenChange: setOpen },
+    createElement(DialogTrigger, null, "Open dialog"),
+    createElement(
+      DialogContent,
+      null,
+      createElement(DialogTitle, null, "Dialog title"),
+      createElement(DialogDescription, null, "Dialog description"),
+      createElement("button", { id: "labelled-dialog-button", type: "button" }, "Inside dialog"),
+    ),
+  );
+}
+
+function AsChildDialogTriggerWithClick({ onTriggerClick }: { onTriggerClick: () => void }) {
+  const [open, setOpen] = useState(false);
+
+  return createElement(
+    Dialog,
+    { open, onOpenChange: setOpen },
+    createElement(
+      DialogTrigger,
+      {
+        asChild: true,
+        onClick: onTriggerClick,
+      },
+      createElement("button", { id: "as-child-trigger-click", type: "button" }, "Open dialog"),
+    ),
+    createElement(
+      DialogContent,
+      null,
+      createElement("button", { id: "as-child-click-dialog-button", type: "button" }, "Inside"),
     ),
   );
 }
@@ -427,6 +466,98 @@ describe("desktop dialog component", () => {
       });
 
       expect(harness.dom.window.document.querySelector("[role='dialog']")).toBeNull();
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test.serial("labels dialog content from title and description", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(LabelledDialog));
+      });
+
+      const trigger = harness.dom.window.document.querySelector("button");
+      if (!(trigger instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing trigger button");
+      }
+
+      await act(async () => {
+        trigger.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      const dialog = harness.dom.window.document.querySelector("[role='dialog']");
+      const title = harness.dom.window.document.querySelector("[data-slot='dialog-title']");
+      const description = harness.dom.window.document.querySelector(
+        "[data-slot='dialog-description']",
+      );
+      if (
+        !(dialog instanceof harness.dom.window.HTMLDivElement) ||
+        !(title instanceof harness.dom.window.HTMLHeadingElement) ||
+        !(description instanceof harness.dom.window.HTMLParagraphElement)
+      ) {
+        throw new Error("missing labelled dialog elements");
+      }
+
+      expect(dialog.getAttribute("aria-labelledby")).toBe(title.id);
+      expect(dialog.getAttribute("aria-describedby")).toBe(description.id);
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test.serial("calls asChild trigger onClick only once", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      const root = createRoot(container);
+      let triggerClickCount = 0;
+
+      await act(async () => {
+        root.render(
+          createElement(AsChildDialogTriggerWithClick, {
+            onTriggerClick: () => {
+              triggerClickCount += 1;
+            },
+          }),
+        );
+      });
+
+      const trigger = harness.dom.window.document.getElementById("as-child-trigger-click");
+      if (!(trigger instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing asChild trigger");
+      }
+
+      await act(async () => {
+        trigger.dispatchEvent(
+          new harness.dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+        );
+      });
+
+      expect(triggerClickCount).toBe(1);
+      expect(harness.dom.window.document.querySelector("[role='dialog']")).not.toBeNull();
 
       await act(async () => {
         root.unmount();

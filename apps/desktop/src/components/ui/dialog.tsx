@@ -6,10 +6,18 @@ import { assignElementRef, getElementRef } from "@/lib/react-ref";
 import { cn } from "@/lib/utils";
 
 type DialogContextValue = {
+  descriptionId: string;
+  descriptionMounted: boolean;
   open: boolean;
   restoreFocusRef: React.MutableRefObject<HTMLElement | null>;
-  triggerRef: React.MutableRefObject<HTMLElement | null>;
+  setDescriptionId: (id: string) => void;
+  setDescriptionMounted: (mounted: boolean) => void;
+  setTitleId: (id: string) => void;
+  setTitleMounted: (mounted: boolean) => void;
   setOpen: (open: boolean) => void;
+  titleId: string;
+  titleMounted: boolean;
+  triggerRef: React.MutableRefObject<HTMLElement | null>;
 };
 
 const DialogContext = React.createContext<DialogContextValue | null>(null);
@@ -99,6 +107,10 @@ function useDialogContext(): DialogContextValue {
   return context;
 }
 
+function useOptionalDialogContext(): DialogContextValue | null {
+  return React.useContext(DialogContext);
+}
+
 type DialogProps = React.PropsWithChildren<{
   open?: boolean;
   defaultOpen?: boolean;
@@ -107,7 +119,13 @@ type DialogProps = React.PropsWithChildren<{
 
 function Dialog({ children, open, defaultOpen, onOpenChange }: DialogProps) {
   const [uncontrolledOpen, setUncontrolledOpen] = React.useState(defaultOpen ?? false);
+  const [titleMounted, setTitleMounted] = React.useState(false);
+  const [descriptionMounted, setDescriptionMounted] = React.useState(false);
   const restoreFocusRef = React.useRef<HTMLElement | null>(null);
+  const defaultTitleId = React.useId();
+  const defaultDescriptionId = React.useId();
+  const [titleId, setTitleId] = React.useState(defaultTitleId);
+  const [descriptionId, setDescriptionId] = React.useState(defaultDescriptionId);
   const triggerRef = React.useRef<HTMLElement | null>(null);
   const isOpen = open ?? uncontrolledOpen;
   const setOpen = React.useCallback(
@@ -138,7 +156,22 @@ function Dialog({ children, open, defaultOpen, onOpenChange }: DialogProps) {
   }, [isOpen]);
 
   return (
-    <DialogContext.Provider value={{ open: isOpen, restoreFocusRef, triggerRef, setOpen }}>
+    <DialogContext.Provider
+      value={{
+        descriptionId,
+        descriptionMounted,
+        open: isOpen,
+        restoreFocusRef,
+        setDescriptionId,
+        setDescriptionMounted,
+        setTitleId,
+        setTitleMounted,
+        setOpen,
+        titleId,
+        titleMounted,
+        triggerRef,
+      }}
+    >
       {children}
     </DialogContext.Provider>
   );
@@ -158,15 +191,19 @@ function DialogTrigger({
 }: React.PropsWithChildren<DialogTriggerProps>) {
   const { setOpen, triggerRef } = useDialogContext();
 
+  const openFromClick = (event: React.MouseEvent<HTMLElement>) => {
+    if (!event.defaultPrevented) {
+      setOpen(true);
+    }
+  };
+
   const handleClick = (event: React.MouseEvent<HTMLElement>) => {
     if (disabled) {
       event.preventDefault();
       return;
     }
     onClick?.(event as unknown as React.MouseEvent<HTMLButtonElement>);
-    if (!event.defaultPrevented) {
-      setOpen(true);
-    }
+    openFromClick(event);
   };
 
   if (asChild && React.isValidElement(children)) {
@@ -193,7 +230,8 @@ function DialogTrigger({
         if (event.defaultPrevented) {
           return;
         }
-        handleClick(event);
+        onClick?.(event as unknown as React.MouseEvent<HTMLButtonElement>);
+        openFromClick(event);
       },
       ref: (node: HTMLElement | null) => {
         triggerRef.current = node;
@@ -255,7 +293,16 @@ function DialogContent({
   onKeyDown,
   ...props
 }: DialogContentProps) {
-  const { open, restoreFocusRef, setOpen, triggerRef } = useDialogContext();
+  const {
+    descriptionId,
+    descriptionMounted,
+    open,
+    restoreFocusRef,
+    setOpen,
+    titleId,
+    titleMounted,
+    triggerRef,
+  } = useDialogContext();
   const allowDismissRef = React.useRef(true);
   const contentRef = React.useRef<HTMLDivElement | null>(null);
   const dialogIdRef = React.useRef<symbol>(Symbol("dialog"));
@@ -421,6 +468,10 @@ function DialogContent({
             data-slot="dialog-content"
             role="dialog"
             aria-modal="true"
+            aria-describedby={
+              props["aria-describedby"] ?? (descriptionMounted ? descriptionId : undefined)
+            }
+            aria-labelledby={props["aria-labelledby"] ?? (titleMounted ? titleId : undefined)}
             tabIndex={-1}
             className={cn(
               "app-surface-overlay app-border-strong app-shadow-overlay relative grid w-[min(96vw,42rem)] gap-4 rounded-xl border p-5 text-card-foreground",
@@ -468,9 +519,24 @@ function DialogFooter({ className, ...props }: React.ComponentProps<"div">) {
   );
 }
 
-function DialogTitle({ className, ...props }: React.ComponentProps<"h2">) {
+function DialogTitle({ className, id, ...props }: React.ComponentProps<"h2">) {
+  const context = useOptionalDialogContext();
+  const titleId = id ?? context?.titleId;
+  const setTitleId = context?.setTitleId;
+  const setTitleMounted = context?.setTitleMounted;
+
+  React.useEffect(() => {
+    if (!titleId || !setTitleId || !setTitleMounted) {
+      return;
+    }
+    setTitleId(titleId);
+    setTitleMounted(true);
+    return () => setTitleMounted(false);
+  }, [setTitleId, setTitleMounted, titleId]);
+
   return (
     <h2
+      id={titleId}
       data-slot="dialog-title"
       className={cn("text-lg font-semibold leading-none tracking-tight", className)}
       {...props}
@@ -479,10 +545,25 @@ function DialogTitle({ className, ...props }: React.ComponentProps<"h2">) {
 }
 
 const DialogDescription = React.forwardRef<HTMLParagraphElement, React.ComponentProps<"p">>(
-  function DialogDescription({ className, ...props }, ref) {
+  function DialogDescription({ className, id, ...props }, ref) {
+    const context = useOptionalDialogContext();
+    const descriptionId = id ?? context?.descriptionId;
+    const setDescriptionId = context?.setDescriptionId;
+    const setDescriptionMounted = context?.setDescriptionMounted;
+
+    React.useEffect(() => {
+      if (!descriptionId || !setDescriptionId || !setDescriptionMounted) {
+        return;
+      }
+      setDescriptionId(descriptionId);
+      setDescriptionMounted(true);
+      return () => setDescriptionMounted(false);
+    }, [descriptionId, setDescriptionId, setDescriptionMounted]);
+
     return (
       <p
         ref={ref}
+        id={descriptionId}
         data-slot="dialog-description"
         className={cn("app-text-muted text-sm", className)}
         {...props}

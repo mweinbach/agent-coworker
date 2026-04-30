@@ -102,6 +102,26 @@ function LabelledDialog() {
   );
 }
 
+function LabelledDialogWithUndefinedAriaProps() {
+  const [open, setOpen] = useState(false);
+
+  return createElement(
+    Dialog,
+    { open, onOpenChange: setOpen },
+    createElement(DialogTrigger, null, "Open dialog"),
+    createElement(
+      DialogContent,
+      {
+        "aria-describedby": undefined,
+        "aria-labelledby": undefined,
+      },
+      createElement(DialogTitle, null, "Dialog title"),
+      createElement(DialogDescription, null, "Dialog description"),
+      createElement("button", { id: "labelled-dialog-button", type: "button" }, "Inside dialog"),
+    ),
+  );
+}
+
 function AsChildDialogTriggerWithClick({ onTriggerClick }: { onTriggerClick: () => void }) {
   const [open, setOpen] = useState(false);
 
@@ -590,6 +610,54 @@ describe("desktop dialog component", () => {
 
       await act(async () => {
         root.render(createElement(LabelledDialog));
+      });
+
+      const trigger = harness.dom.window.document.querySelector("button");
+      if (!(trigger instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing trigger button");
+      }
+
+      await act(async () => {
+        trigger.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      const dialog = harness.dom.window.document.querySelector("[role='dialog']");
+      const title = harness.dom.window.document.querySelector("[data-slot='dialog-title']");
+      const description = harness.dom.window.document.querySelector(
+        "[data-slot='dialog-description']",
+      );
+      if (
+        !(dialog instanceof harness.dom.window.HTMLDivElement) ||
+        !(title instanceof harness.dom.window.HTMLHeadingElement) ||
+        !(description instanceof harness.dom.window.HTMLParagraphElement)
+      ) {
+        throw new Error("missing labelled dialog elements");
+      }
+
+      expect(dialog.getAttribute("aria-labelledby")).toBe(title.id);
+      expect(dialog.getAttribute("aria-describedby")).toBe(description.id);
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test.serial("keeps computed dialog labels when aria props are undefined", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(LabelledDialogWithUndefinedAriaProps));
       });
 
       const trigger = harness.dom.window.document.querySelector("button");

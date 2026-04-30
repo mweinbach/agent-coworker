@@ -16,7 +16,9 @@ type TooltipRootProps = {
 };
 
 type TooltipContextValue = {
+  cancelCloseTimer: () => void;
   contentId: string;
+  closeWithDelay: () => void;
   delayDuration: number;
   open: boolean;
   setContentId: (id: string) => void;
@@ -41,22 +43,40 @@ function Tooltip({ children, defaultOpen, delayDuration, onOpenChange, open }: T
   const [contentId, setContentId] = React.useState(generatedContentId);
   const [uncontrolledOpen, setUncontrolledOpen] = React.useState(defaultOpen ?? false);
   const [triggerNode, setTriggerNode] = React.useState<HTMLElement | null>(null);
+  const closeTimeoutRef = React.useRef<number | null>(null);
   const resolvedDelayDuration = delayDuration ?? provider?.delayDuration ?? 200;
   const isOpen = open ?? uncontrolledOpen;
+  const cancelCloseTimer = React.useCallback(() => {
+    if (closeTimeoutRef.current !== null) {
+      window.clearTimeout(closeTimeoutRef.current);
+      closeTimeoutRef.current = null;
+    }
+  }, []);
   const setOpen = React.useCallback(
     (nextOpen: boolean) => {
+      if (nextOpen) {
+        cancelCloseTimer();
+      }
       if (open === undefined) {
         setUncontrolledOpen(nextOpen);
       }
       onOpenChange?.(nextOpen);
     },
-    [onOpenChange, open],
+    [cancelCloseTimer, onOpenChange, open],
   );
+  const closeWithDelay = React.useCallback(() => {
+    cancelCloseTimer();
+    closeTimeoutRef.current = window.setTimeout(() => setOpen(false), 120);
+  }, [cancelCloseTimer, setOpen]);
+
+  React.useEffect(() => cancelCloseTimer, [cancelCloseTimer]);
 
   return (
     <TooltipContext.Provider
       value={{
+        cancelCloseTimer,
         contentId,
+        closeWithDelay,
         delayDuration: resolvedDelayDuration,
         open: isOpen,
         setContentId,
@@ -93,7 +113,15 @@ function TooltipTrigger({
   onMouseLeave,
   ...props
 }: TooltipTriggerProps) {
-  const { contentId, delayDuration, open, setOpen, setTriggerNode } = useTooltipContext();
+  const {
+    cancelCloseTimer,
+    closeWithDelay,
+    contentId,
+    delayDuration,
+    open,
+    setOpen,
+    setTriggerNode,
+  } = useTooltipContext();
   const timeoutRef = React.useRef<number | null>(null);
   const describedBy = props["aria-describedby"];
   const setNodeRef = React.useCallback(
@@ -147,11 +175,12 @@ function TooltipTrigger({
     },
     onMouseEnter: (event: React.MouseEvent<HTMLButtonElement>) => {
       onMouseEnter?.(event);
+      cancelCloseTimer();
       openWithDelay();
     },
     onMouseLeave: (event: React.MouseEvent<HTMLButtonElement>) => {
       onMouseLeave?.(event);
-      close();
+      closeWithDelay();
     },
   } as const;
 
@@ -184,12 +213,13 @@ function TooltipTrigger({
       onMouseEnter: (event: React.MouseEvent<HTMLElement>) => {
         child.props.onMouseEnter?.(event);
         onMouseEnter?.(event as React.MouseEvent<HTMLButtonElement>);
+        cancelCloseTimer();
         openWithDelay();
       },
       onMouseLeave: (event: React.MouseEvent<HTMLElement>) => {
         child.props.onMouseLeave?.(event);
         onMouseLeave?.(event as React.MouseEvent<HTMLButtonElement>);
-        close();
+        closeWithDelay();
       },
       ref: (node: HTMLElement | null) => {
         setNodeRef(node);
@@ -223,7 +253,8 @@ function TooltipContent({
   children,
   ...props
 }: TooltipContentProps) {
-  const { contentId, open, setContentId, triggerNode } = useTooltipContext();
+  const { cancelCloseTimer, contentId, closeWithDelay, open, setContentId, triggerNode } =
+    useTooltipContext();
   const contentRef = React.useRef<HTMLDivElement | null>(null);
   const [position, setPosition] = React.useState({ left: 16, top: 16 });
   const id = props.id ?? contentId;
@@ -297,10 +328,19 @@ function TooltipContent({
       data-side={side}
       role="tooltip"
       className={cn(
-        "app-surface-overlay app-border-subtle app-shadow-overlay pointer-events-none fixed z-50 max-w-xs overflow-hidden rounded-[10px] border px-2 py-1 text-xs",
+        "app-surface-overlay app-border-subtle app-shadow-overlay fixed z-50 max-w-xs overflow-hidden rounded-[10px] border px-2 py-1 text-xs",
         className,
       )}
       {...props}
+      onMouseEnter={(event) => {
+        props.onMouseEnter?.(event);
+        cancelCloseTimer();
+        setContentId(id);
+      }}
+      onMouseLeave={(event) => {
+        props.onMouseLeave?.(event);
+        closeWithDelay();
+      }}
       style={{
         left: position.left,
         top: position.top,

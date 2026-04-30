@@ -36,6 +36,32 @@ function DialogWithSelect() {
   );
 }
 
+function DialogWithSelectAndField() {
+  const [open, setOpen] = useState(false);
+
+  return createElement(
+    Dialog,
+    { open, onOpenChange: setOpen },
+    createElement(DialogTrigger, null, "Open dialog"),
+    createElement(
+      DialogContent,
+      null,
+      createElement(
+        Select,
+        { defaultValue: "alpha" },
+        createElement(SelectTrigger, { "aria-label": "Select value" }, createElement(SelectValue)),
+        createElement(
+          SelectContent,
+          null,
+          createElement(SelectItem, { value: "alpha" }, "Alpha"),
+          createElement(SelectItem, { value: "beta" }, "Beta"),
+        ),
+      ),
+      createElement("button", { "aria-label": "Next field", type: "button" }, "Next field"),
+    ),
+  );
+}
+
 function PositionedSelect() {
   return createElement(
     Select,
@@ -293,6 +319,71 @@ describe("desktop select component", () => {
       });
 
       expect(harness.dom.window.document.querySelector('[data-slot="select-content"]')).toBeNull();
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test.serial("preserves dialog tab progression when tabbing out from an open option", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(DialogWithSelectAndField));
+      });
+
+      const dialogTrigger = harness.dom.window.document.querySelector("#root > button");
+      if (!(dialogTrigger instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing dialog trigger");
+      }
+
+      await act(async () => {
+        dialogTrigger.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      const selectTrigger = harness.dom.window.document.querySelector(
+        '[data-slot="select-trigger"]',
+      );
+      if (!(selectTrigger instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing select trigger");
+      }
+
+      await act(async () => {
+        selectTrigger.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      const selectItem = harness.dom.window.document.querySelector('[data-slot="select-item"]');
+      const nextField = harness.dom.window.document.querySelector('[aria-label="Next field"]');
+      if (!(selectItem instanceof harness.dom.window.HTMLDivElement)) {
+        throw new Error("missing select item");
+      }
+      if (!(nextField instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing next field");
+      }
+
+      await act(async () => {
+        selectItem.dispatchEvent(
+          new harness.dom.window.KeyboardEvent("keydown", {
+            bubbles: true,
+            cancelable: true,
+            key: "Tab",
+          }),
+        );
+      });
+
+      expect(harness.dom.window.document.querySelector('[data-slot="select-content"]')).toBeNull();
+      expect(harness.dom.window.document.activeElement).toBe(nextField);
 
       await act(async () => {
         root.unmount();

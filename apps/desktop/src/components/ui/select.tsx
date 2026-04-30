@@ -24,6 +24,42 @@ const SelectContext = React.createContext<SelectContextValue | null>(null);
 
 type SelectInitialFocus = "selected" | "first" | "last";
 
+const SELECT_FOCUSABLE_SELECTOR = [
+  "a[href]",
+  "button:not([disabled])",
+  "input:not([disabled]):not([type='hidden'])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  "[tabindex]:not([tabindex='-1'])",
+  "[contenteditable='true']",
+].join(",");
+
+function getSelectFocusScope(triggerNode: HTMLButtonElement): HTMLElement {
+  return triggerNode.closest<HTMLElement>('[role="dialog"]') ?? document.body;
+}
+
+function moveFocusFromSelectTrigger(triggerNode: HTMLButtonElement, shiftKey: boolean) {
+  const scope = getSelectFocusScope(triggerNode);
+  const focusable = Array.from(
+    scope.querySelectorAll<HTMLElement>(SELECT_FOCUSABLE_SELECTOR),
+  ).filter(
+    (element) =>
+      !element.hasAttribute("disabled") &&
+      element.getAttribute("aria-hidden") !== "true" &&
+      !element.closest('[data-slot="select-content"]'),
+  );
+  const currentIndex = focusable.indexOf(triggerNode);
+  if (focusable.length === 0 || currentIndex === -1) {
+    triggerNode.focus();
+    return;
+  }
+
+  const nextIndex = shiftKey
+    ? (currentIndex - 1 + focusable.length) % focusable.length
+    : (currentIndex + 1) % focusable.length;
+  focusable[nextIndex]?.focus();
+}
+
 type SelectProps = {
   value?: string;
   defaultValue?: string;
@@ -343,7 +379,13 @@ function SelectContent({
       }
 
       if (event.key === "Tab") {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
         setOpen(false);
+        if (triggerNode) {
+          moveFocusFromSelectTrigger(triggerNode, event.shiftKey);
+        }
         return;
       }
 

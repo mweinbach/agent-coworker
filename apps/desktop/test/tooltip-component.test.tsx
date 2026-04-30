@@ -243,4 +243,52 @@ describe("desktop tooltip component", () => {
       harness.restore();
     }
   });
+
+  test.serial("keeps hover tooltip open when pointer moves to the tooltip content", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(OpenTooltip));
+      });
+
+      const trigger = harness.dom.window.document.querySelector('[data-slot="tooltip-trigger"]');
+      const tooltip = harness.dom.window.document.querySelector('[data-slot="tooltip-content"]');
+      if (!(trigger instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing tooltip trigger");
+      }
+      if (!(tooltip instanceof harness.dom.window.HTMLDivElement)) {
+        throw new Error("missing tooltip content");
+      }
+
+      await act(async () => {
+        trigger.dispatchEvent(
+          new harness.dom.window.MouseEvent("mouseleave", {
+            bubbles: true,
+            relatedTarget: tooltip,
+          }),
+        );
+        tooltip.dispatchEvent(new harness.dom.window.MouseEvent("mouseenter", { bubbles: true }));
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 140));
+
+      expect(harness.dom.window.document.querySelector('[data-slot="tooltip-content"]')).toBe(
+        tooltip,
+      );
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
 });

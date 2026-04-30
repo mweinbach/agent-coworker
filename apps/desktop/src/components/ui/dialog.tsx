@@ -305,6 +305,8 @@ type DialogContentProps = React.HTMLAttributes<HTMLDivElement> & {
 };
 
 function DialogContent({
+  "aria-describedby": ariaDescribedBy,
+  "aria-labelledby": ariaLabelledBy,
   className,
   children,
   showClose = false,
@@ -519,17 +521,15 @@ function DialogContent({
             data-slot="dialog-content"
             role="dialog"
             aria-modal="true"
-            aria-describedby={
-              props["aria-describedby"] ?? (descriptionMounted ? descriptionId : undefined)
-            }
-            aria-labelledby={props["aria-labelledby"] ?? (titleMounted ? titleId : undefined)}
+            {...props}
+            aria-describedby={ariaDescribedBy ?? (descriptionMounted ? descriptionId : undefined)}
+            aria-labelledby={ariaLabelledBy ?? (titleMounted ? titleId : undefined)}
             tabIndex={-1}
             className={cn(
               "app-surface-overlay app-border-strong app-shadow-overlay relative grid w-[min(96vw,42rem)] gap-4 rounded-xl border p-5 text-card-foreground",
               className,
             )}
             onKeyDown={handleKeyDown}
-            {...props}
           >
             {children}
             {showClose ? (

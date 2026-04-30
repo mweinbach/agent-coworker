@@ -181,6 +181,16 @@ type DialogTriggerProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
   asChild?: boolean;
 };
 
+const nativeDisabledElements = new Set([
+  "button",
+  "fieldset",
+  "input",
+  "optgroup",
+  "option",
+  "select",
+  "textarea",
+]);
+
 function DialogTrigger({
   children,
   asChild = false,
@@ -226,17 +236,23 @@ function DialogTrigger({
   if (asChild && React.isValidElement(children)) {
     const child = children as React.ReactElement<{
       className?: string;
+      disabled?: boolean;
       onClick?: (event: React.MouseEvent<HTMLElement>) => void;
       ref?: React.Ref<HTMLElement>;
       tabIndex?: number;
     }>;
+    const childSupportsNativeDisabled =
+      typeof child.type === "string" && nativeDisabledElements.has(child.type);
 
     const childProps: React.HTMLAttributes<HTMLElement> &
       React.RefAttributes<HTMLElement> & {
         disabled?: boolean;
       } = {
       ...props,
-      disabled,
+      disabled:
+        child.props.disabled === true || (disabled && childSupportsNativeDisabled)
+          ? true
+          : undefined,
       "aria-disabled": disabled ? true : props["aria-disabled"],
       className: cn(child.props.className, props.className),
       tabIndex: disabled ? -1 : child.props.tabIndex,

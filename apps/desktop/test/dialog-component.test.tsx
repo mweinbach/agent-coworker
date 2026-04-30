@@ -518,7 +518,7 @@ describe("desktop dialog component", () => {
         throw new Error("missing asChild trigger");
       }
 
-      expect(trigger.getAttribute("disabled")).toBe("");
+      expect(trigger.hasAttribute("disabled")).toBe(false);
       expect(trigger.getAttribute("aria-disabled")).toBe("true");
       expect(trigger.getAttribute("tabindex")).toBe("-1");
       expect(trigger.className).toContain("child-class");

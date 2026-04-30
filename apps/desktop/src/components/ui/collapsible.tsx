@@ -63,6 +63,16 @@ type CollapsibleTriggerProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
   asChild?: boolean;
 };
 
+const nativeDisabledElements = new Set([
+  "button",
+  "fieldset",
+  "input",
+  "optgroup",
+  "option",
+  "select",
+  "textarea",
+]);
+
 const CollapsibleTrigger = React.forwardRef<HTMLButtonElement, CollapsibleTriggerProps>(
   function CollapsibleTrigger(
     { asChild = false, children, className, disabled: disabledProp, onClick, type, ...props },
@@ -115,11 +125,16 @@ const CollapsibleTrigger = React.forwardRef<HTMLButtonElement, CollapsibleTrigge
         ref?: React.Ref<HTMLElement>;
         tabIndex?: number;
       }>;
+      const childSupportsNativeDisabled =
+        typeof child.type === "string" && nativeDisabledElements.has(child.type);
 
       return React.cloneElement(child, {
         ...sharedProps,
         className: cn(child.props.className, className),
-        disabled,
+        disabled:
+          child.props.disabled === true || (disabled && childSupportsNativeDisabled)
+            ? true
+            : undefined,
         tabIndex: disabled ? -1 : child.props.tabIndex,
         onClick: (event: React.MouseEvent<HTMLElement>) => {
           if (disabled) {

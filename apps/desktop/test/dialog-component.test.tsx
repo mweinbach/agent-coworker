@@ -182,6 +182,33 @@ function StackedDialogs() {
   );
 }
 
+function DialogWithInlineEscapeRerender() {
+  const [renderCount, setRenderCount] = useState(0);
+
+  return createElement(
+    Dialog,
+    { defaultOpen: true },
+    createElement(DialogTrigger, null, "Open dialog"),
+    createElement(
+      DialogContent,
+      {
+        onEscapeKeyDown: () => {
+          void renderCount;
+        },
+      },
+      createElement(
+        "button",
+        {
+          id: "rerender-dialog-button",
+          type: "button",
+          onClick: () => setRenderCount((count) => count + 1),
+        },
+        "Rerender",
+      ),
+    ),
+  );
+}
+
 describe("desktop dialog component", () => {
   test.serial("moves focus into the dialog and restores it to the trigger on close", async () => {
     const harness = setupJsdom();
@@ -589,6 +616,45 @@ describe("desktop dialog component", () => {
 
       expect(dialog.getAttribute("aria-labelledby")).toBe(title.id);
       expect(dialog.getAttribute("aria-describedby")).toBe(description.id);
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test.serial("keeps focus inside an open dialog when listener props rerender", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(DialogWithInlineEscapeRerender));
+      });
+
+      const rerenderButton = harness.dom.window.document.getElementById("rerender-dialog-button");
+      if (!(rerenderButton instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing rerender dialog button");
+      }
+
+      expect(harness.dom.window.document.activeElement).toBe(rerenderButton);
+
+      await act(async () => {
+        rerenderButton.dispatchEvent(
+          new harness.dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+        );
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(harness.dom.window.document.activeElement).toBe(rerenderButton);
 
       await act(async () => {
         root.unmount();

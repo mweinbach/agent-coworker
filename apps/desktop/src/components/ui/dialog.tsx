@@ -326,6 +326,7 @@ function DialogContent({
   const allowDismissRef = React.useRef(true);
   const contentRef = React.useRef<HTMLDivElement | null>(null);
   const dialogIdRef = React.useRef<symbol>(Symbol("dialog"));
+  const restoreFocusOnCloseRef = React.useRef(false);
 
   React.useEffect(() => {
     if (!open || typeof document === "undefined") {
@@ -345,6 +346,53 @@ function DialogContent({
       }
     },
     [onEscapeKeyDown, setOpen],
+  );
+
+  const restoreFocusToTrigger = React.useCallback(() => {
+    const restoreTarget = restoreFocusRef.current;
+    const fallbackTrigger = triggerRef.current;
+    const restoreFocus = () => {
+      if (restoreTarget?.isConnected) {
+        restoreTarget.focus();
+        return;
+      }
+      if (fallbackTrigger?.isConnected) {
+        fallbackTrigger.focus();
+      }
+    };
+
+    restoreFocus();
+    const timer = setTimeout(() => {
+      restoreFocus();
+      restoreFocusRef.current = null;
+    }, 0);
+
+    return () => clearTimeout(timer);
+  }, [restoreFocusRef, triggerRef]);
+
+  React.useEffect(() => {
+    if (open) {
+      restoreFocusOnCloseRef.current = true;
+      return;
+    }
+
+    if (!restoreFocusOnCloseRef.current) {
+      return;
+    }
+
+    restoreFocusOnCloseRef.current = false;
+    return restoreFocusToTrigger();
+  }, [open, restoreFocusToTrigger]);
+
+  React.useEffect(
+    () => () => {
+      if (!restoreFocusOnCloseRef.current) {
+        return;
+      }
+      restoreFocusOnCloseRef.current = false;
+      restoreFocusToTrigger();
+    },
+    [restoreFocusToTrigger],
   );
 
   React.useEffect(() => {
@@ -425,25 +473,8 @@ function DialogContent({
 
     return () => {
       document.removeEventListener("keydown", handleDocumentKeyDown);
-      const restoreTarget = restoreFocusRef.current;
-      const fallbackTrigger = triggerRef.current;
-      const restoreFocus = () => {
-        if (restoreTarget?.isConnected) {
-          restoreTarget.focus();
-          return;
-        }
-        if (fallbackTrigger?.isConnected) {
-          fallbackTrigger.focus();
-        }
-      };
-
-      restoreFocus();
-      setTimeout(() => {
-        restoreFocus();
-        restoreFocusRef.current = null;
-      }, 0);
     };
-  }, [handleEscapeDismiss, open, restoreFocusRef, triggerRef]);
+  }, [handleEscapeDismiss, open]);
 
   const handleBackdropClick = React.useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {

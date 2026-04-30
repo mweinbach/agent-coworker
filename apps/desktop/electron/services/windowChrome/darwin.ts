@@ -1,5 +1,5 @@
+import { getPlatformChrome } from "./platformChrome";
 import type { WindowChromeModule } from "./types";
-import { getPlatformChrome, getTitlebarSymbolColor } from "./platformChrome";
 
 const darwinWindowChrome: WindowChromeModule = {
   getBrowserWindowOptions({ useMacosNativeGlass }) {

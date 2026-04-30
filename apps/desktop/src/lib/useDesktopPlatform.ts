@@ -1,9 +1,6 @@
 import { useEffect, useState } from "react";
 
-import {
-  type DesktopPlatformInfo,
-  getDesktopPlatformInfo,
-} from "./desktopPlatform";
+import { type DesktopPlatformInfo, getDesktopPlatformInfo } from "./desktopPlatform";
 
 /**
  * React hook that returns current desktop platform info.

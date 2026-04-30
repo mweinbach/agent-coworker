@@ -72,8 +72,11 @@ const CollapsibleTrigger = React.forwardRef<HTMLButtonElement, CollapsibleTrigge
     const disabled = contextDisabled || Boolean(disabledProp);
 
     const handleClick = (event: React.MouseEvent<HTMLButtonElement>) => {
+      if (disabled) {
+        return;
+      }
       onClick?.(event as React.MouseEvent<HTMLButtonElement>);
-      if (!event.defaultPrevented && !disabled) {
+      if (!event.defaultPrevented) {
         setOpen(!open);
       }
     };

@@ -1,19 +1,16 @@
 import type { BrowserWindow } from "electron";
 
 import type { WindowChromeModule } from "./types";
-
-/** Keep in sync with renderer: apps/desktop/src/styles/platform/win32.css (drag zone + .app-topbar--frame). */
-const WINDOWS_TITLE_BAR_HEIGHT = 48;
-const WINDOWS_LIGHT_SYMBOL_COLOR = "#556041";
-const WINDOWS_DARK_SYMBOL_COLOR = "#eef0dc";
+import { getPlatformChrome, getTitlebarSymbolColor } from "./platformChrome";
 
 function windowsTitleBarOverlay(
   useDarkColors: boolean,
 ): Parameters<BrowserWindow["setTitleBarOverlay"]>[0] {
+  const chrome = getPlatformChrome("win32");
   return {
     color: "#00000000",
-    symbolColor: useDarkColors ? WINDOWS_DARK_SYMBOL_COLOR : WINDOWS_LIGHT_SYMBOL_COLOR,
-    height: WINDOWS_TITLE_BAR_HEIGHT,
+    symbolColor: getTitlebarSymbolColor(useDarkColors),
+    height: chrome.titlebarHeight,
   };
 }
 

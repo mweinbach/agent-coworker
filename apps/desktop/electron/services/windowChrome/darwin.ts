@@ -1,12 +1,12 @@
 import type { WindowChromeModule } from "./types";
-
-const MACOS_TRAFFIC_LIGHT_POSITION = { x: 14, y: 14 } as const;
+import { getPlatformChrome, getTitlebarSymbolColor } from "./platformChrome";
 
 const darwinWindowChrome: WindowChromeModule = {
   getBrowserWindowOptions({ useMacosNativeGlass }) {
+    const chrome = getPlatformChrome("darwin");
     return {
       titleBarStyle: "hiddenInset",
-      trafficLightPosition: MACOS_TRAFFIC_LIGHT_POSITION,
+      trafficLightPosition: chrome.trafficLightPosition,
       transparent: useMacosNativeGlass,
       ...(useMacosNativeGlass
         ? {

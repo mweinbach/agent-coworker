@@ -402,7 +402,8 @@ function DialogContent({
         return;
       }
       restoreFocusOnCloseRef.current = false;
-      restoreFocusToTrigger();
+      const cancelDeferredRestore = restoreFocusToTrigger();
+      cancelDeferredRestore();
     },
     [restoreFocusToTrigger],
   );

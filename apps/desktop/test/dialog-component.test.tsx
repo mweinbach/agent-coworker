@@ -280,6 +280,69 @@ describe("desktop dialog component", () => {
     }
   });
 
+  test.serial("clears deferred focus restoration when content unmounts while open", async () => {
+    const originalSetTimeout = globalThis.setTimeout.bind(globalThis);
+    const originalClearTimeout = globalThis.clearTimeout.bind(globalThis);
+    const restoreTimer = { id: "dialog-restore-timer" } as unknown as ReturnType<typeof setTimeout>;
+    let interceptRestoreTimer = false;
+    let restoreTimerScheduled = false;
+    let restoreTimerCleared = false;
+
+    const harness = setupJsdom({
+      extraGlobals: {
+        setTimeout: ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+          if (interceptRestoreTimer && timeout === 0) {
+            restoreTimerScheduled = true;
+            return restoreTimer;
+          }
+          return originalSetTimeout(handler, timeout, ...(args as []));
+        }) as typeof setTimeout,
+        clearTimeout: ((handle?: ReturnType<typeof setTimeout>) => {
+          if (handle === restoreTimer) {
+            restoreTimerCleared = true;
+            return;
+          }
+          return originalClearTimeout(handle);
+        }) as typeof clearTimeout,
+      },
+    });
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          createElement(
+            Dialog,
+            { defaultOpen: true },
+            createElement(DialogTrigger, null, "Open dialog"),
+            createElement(
+              DialogContent,
+              null,
+              createElement("button", { id: "open-dialog-button", type: "button" }, "Inside"),
+            ),
+          ),
+        );
+      });
+
+      interceptRestoreTimer = true;
+      await act(async () => {
+        root.unmount();
+      });
+      interceptRestoreTimer = false;
+
+      expect(restoreTimerScheduled).toBe(true);
+      expect(restoreTimerCleared).toBe(true);
+    } finally {
+      harness.restore();
+    }
+  });
+
   test.serial("traps focus within the dialog when tabbing", async () => {
     const harness = setupJsdom();
 

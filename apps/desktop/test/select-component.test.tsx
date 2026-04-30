@@ -205,6 +205,57 @@ describe("desktop select component", () => {
     }
   });
 
+  test.serial("opens from the focused trigger with arrow keys", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(PositionedSelect));
+      });
+
+      const selectTrigger = harness.dom.window.document.querySelector(
+        '[data-slot="select-trigger"]',
+      );
+      if (!(selectTrigger instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing select trigger");
+      }
+
+      await act(async () => {
+        selectTrigger.focus();
+        selectTrigger.dispatchEvent(
+          new harness.dom.window.KeyboardEvent("keydown", {
+            bubbles: true,
+            cancelable: true,
+            key: "ArrowDown",
+          }),
+        );
+      });
+
+      expect(
+        harness.dom.window.document.querySelector('[data-slot="select-content"]'),
+      ).not.toBeNull();
+
+      const items = Array.from(
+        harness.dom.window.document.querySelectorAll('[data-slot="select-item"]'),
+      );
+      expect(items).toHaveLength(2);
+      expect(harness.dom.window.document.activeElement).toBe(items[0]);
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
   test.serial("closes the open menu when tabbing away from the select", async () => {
     const harness = setupJsdom();
 

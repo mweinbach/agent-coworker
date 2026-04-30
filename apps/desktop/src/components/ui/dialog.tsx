@@ -519,7 +519,7 @@ function DialogContent({
 
   return (
     <DialogPortal>
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6">
+      <div className="fixed inset-0 z-50 overflow-y-auto">
         <DialogOverlay
           onClick={(event) => {
             allowDismissRef.current = true;
@@ -529,7 +529,7 @@ function DialogContent({
             }
           }}
         />
-        <div className="relative z-10 flex justify-center">
+        <div className="relative z-10 flex min-h-full items-start justify-center p-4 sm:items-center sm:p-6">
           <div
             ref={contentRef}
             data-slot="dialog-content"

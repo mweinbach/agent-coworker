@@ -1101,4 +1101,47 @@ describe("desktop dialog component", () => {
       harness.restore();
     }
   });
+
+  test.serial("dialog viewport wrapper stays scrollable for tall content", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(Dialog, { defaultOpen: true }, createElement(DialogContent)));
+      });
+
+      const dialogContent = harness.dom.window.document.querySelector("[data-slot='dialog-content']");
+      if (!(dialogContent instanceof harness.dom.window.HTMLDivElement)) {
+        throw new Error("missing dialog content");
+      }
+
+      const viewport = dialogContent.parentElement;
+      if (!(viewport instanceof harness.dom.window.HTMLDivElement)) {
+        throw new Error("missing dialog viewport wrapper");
+      }
+
+      const wrapper = viewport.parentElement;
+      if (!(wrapper instanceof harness.dom.window.HTMLDivElement)) {
+        throw new Error("missing dialog wrapper");
+      }
+
+      expect(wrapper.className).toContain("overflow-y-auto");
+      expect(viewport.className).toContain("min-h-full");
+      expect(viewport.className).toContain("items-start");
+      expect(viewport.className).toContain("sm:items-center");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
 });

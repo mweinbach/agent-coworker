@@ -21,6 +21,7 @@ import {
   type MobileRelayStartInput,
   type OpenExternalUrlInput,
   type OpenPathInput,
+  type PlatformChromeInfo,
   type PreferredFileAppInput,
   type PreviewOSFileInput,
   type ReadFileForPreviewInput,
@@ -412,6 +413,11 @@ const desktopApi = Object.freeze<DesktopApi>({
     const appearance = await ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.getSystemAppearance);
     assertSystemAppearance(appearance);
     return appearance;
+  },
+
+  getPlatformChrome: async () => {
+    const chrome = await ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.getPlatformChrome);
+    return chrome;
   },
 
   setWindowAppearance: async (opts: SetWindowAppearanceInput) => {

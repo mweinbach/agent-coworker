@@ -2,6 +2,7 @@ import { BrowserWindow, Menu, type WebContents } from "electron";
 
 import {
   DESKTOP_IPC_CHANNELS,
+  type PlatformChromeInfo,
   type ShowContextMenuInput,
   type ShowQuickChatWindowInput,
   type WindowDragPointInput,
@@ -12,6 +13,7 @@ import {
   windowDragPointInputSchema,
 } from "../../src/lib/desktopSchemas";
 import type { DesktopIpcModuleContext } from "./types";
+import { getPlatformChrome } from "../services/windowChrome/platformChrome";
 
 type ActiveWindowDrag = {
   startScreenX: number;
@@ -154,6 +156,22 @@ export function registerWindowIpc(context: DesktopIpcModuleContext): void {
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.getPlatform, () => {
     return process.platform;
+  });
+
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.getPlatformChrome, (): PlatformChromeInfo => {
+    const chrome = getPlatformChrome(process.platform as NodeJS.Platform);
+    return {
+      platform: chrome.platform,
+      titlebarHeight: chrome.titlebarHeight,
+      dragStripHeight: chrome.dragStripHeight,
+      leftNativeReserve: chrome.leftNativeReserve,
+      rightNativeReserve: chrome.rightNativeReserve,
+      captionButtonReserve: chrome.captionButtonReserve,
+      sidebarTitlebandMode: chrome.sidebarTitlebandMode,
+      topbarControlPlacement: chrome.topbarControlPlacement,
+      usesNativeGlass: chrome.usesNativeGlass,
+      disableCssBlur: chrome.disableCssBlur,
+    };
   });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.showMainWindow, async () => {

@@ -627,6 +627,21 @@ export function createWebAdapter(): DesktopApi {
       return buildSystemAppearance();
     },
 
+    async getPlatformChrome() {
+      return {
+        platform: "web",
+        titlebarHeight: 0,
+        dragStripHeight: 0,
+        leftNativeReserve: 0,
+        rightNativeReserve: 0,
+        captionButtonReserve: 0,
+        sidebarTitlebandMode: "topbar" as const,
+        topbarControlPlacement: "inline" as const,
+        usesNativeGlass: false,
+        disableCssBlur: false,
+      };
+    },
+
     async setWindowAppearance(): Promise<SystemAppearance> {
       return buildSystemAppearance();
     },

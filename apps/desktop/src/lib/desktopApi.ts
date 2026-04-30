@@ -273,6 +273,19 @@ export type SetWindowAppearanceInput = {
   backgroundMaterial?: WindowsBackgroundMaterial;
 };
 
+export type PlatformChromeInfo = {
+  platform: string;
+  titlebarHeight: number;
+  dragStripHeight: number;
+  leftNativeReserve: number;
+  rightNativeReserve: number;
+  captionButtonReserve: number;
+  sidebarTitlebandMode: "native" | "topbar";
+  topbarControlPlacement: "left-rail" | "sidebar" | "inline";
+  usesNativeGlass: boolean;
+  disableCssBlur: boolean;
+};
+
 export interface DesktopApi {
   readonly features: DesktopFeatureFlags;
   readonly isPackaged?: boolean;
@@ -321,6 +334,7 @@ export interface DesktopApi {
   checkForUpdates(): Promise<void>;
   quitAndInstallUpdate(): Promise<void>;
   getSystemAppearance(): Promise<SystemAppearance>;
+  getPlatformChrome(): Promise<PlatformChromeInfo>;
   setWindowAppearance(opts: SetWindowAppearanceInput): Promise<SystemAppearance>;
   onUpdateStateChanged(listener: (state: UpdaterState) => void): () => void;
   onSystemAppearanceChanged(listener: (appearance: SystemAppearance) => void): () => void;
@@ -374,6 +388,7 @@ export const DESKTOP_IPC_CHANNELS = {
   checkForUpdates: "desktop:checkForUpdates",
   quitAndInstallUpdate: "desktop:quitAndInstallUpdate",
   getSystemAppearance: "desktop:getSystemAppearance",
+  getPlatformChrome: "desktop:getPlatformChrome",
   setWindowAppearance: "desktop:setWindowAppearance",
 } as const;
 

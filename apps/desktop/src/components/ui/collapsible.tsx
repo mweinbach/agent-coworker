@@ -46,10 +46,10 @@ const Collapsible = React.forwardRef<HTMLDivElement, CollapsibleProps>(function 
     <CollapsibleContext.Provider value={{ disabled, open: isOpen, setOpen: handleOpenChange }}>
       <div
         ref={ref}
+        {...props}
         data-disabled={disabled ? "" : undefined}
         data-state={isOpen ? "open" : "closed"}
         data-expanded={isOpen ? "true" : "false"}
-        {...props}
       >
         {children}
       </div>

@@ -364,6 +364,71 @@ describe("desktop button component", () => {
     }
   });
 
+  test("does not leak native disabled onto non-button asChild children", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      const root = createRoot(container);
+      let clickCount = 0;
+      let childClickCount = 0;
+
+      await act(async () => {
+        root.render(
+          createElement(
+            Button,
+            {
+              asChild: true,
+              disabled: true,
+              onClick: () => {
+                clickCount += 1;
+              },
+            },
+            createElement(
+              "a",
+              {
+                href: "#target",
+                id: "child-link",
+                onClick: () => {
+                  childClickCount += 1;
+                },
+              },
+              "Child link",
+            ),
+          ),
+        );
+      });
+
+      const link = harness.dom.window.document.getElementById("child-link");
+      if (!(link instanceof harness.dom.window.HTMLAnchorElement)) {
+        throw new Error("missing child link");
+      }
+
+      expect(link.hasAttribute("disabled")).toBe(false);
+      expect(link.getAttribute("aria-disabled")).toBe("true");
+      expect(link.tabIndex).toBe(-1);
+
+      await act(async () => {
+        link.dispatchEvent(
+          new harness.dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+        );
+      });
+
+      expect(clickCount).toBe(0);
+      expect(childClickCount).toBe(0);
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
   test("warns and renders nothing when asChild receives non-element children", async () => {
     const harness = setupJsdom();
     const originalWarn = console.warn;

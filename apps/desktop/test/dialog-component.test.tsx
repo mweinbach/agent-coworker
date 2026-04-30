@@ -446,9 +446,20 @@ describe("desktop dialog component", () => {
       }
 
       const root = createRoot(container);
+      let parentClickCount = 0;
 
       await act(async () => {
-        root.render(createElement(DisabledAsChildDialogTrigger));
+        root.render(
+          createElement(
+            "div",
+            {
+              onClick: () => {
+                parentClickCount += 1;
+              },
+            },
+            createElement(DisabledAsChildDialogTrigger),
+          ),
+        );
       });
 
       const trigger = harness.dom.window.document.querySelector("[data-testid='as-child-trigger']");
@@ -465,6 +476,70 @@ describe("desktop dialog component", () => {
         trigger.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
       });
 
+      expect(harness.dom.window.document.querySelector("[role='dialog']")).toBeNull();
+      expect(parentClickCount).toBe(0);
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test.serial("stops disabled native trigger clicks from bubbling to parents", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      const root = createRoot(container);
+      let parentClickCount = 0;
+
+      await act(async () => {
+        root.render(
+          createElement(
+            "div",
+            {
+              onClick: () => {
+                parentClickCount += 1;
+              },
+            },
+            createElement(
+              Dialog,
+              null,
+              createElement(
+                DialogTrigger,
+                { disabled: true, "data-testid": "native-disabled-trigger" },
+                "Open dialog",
+              ),
+              createElement(
+                DialogContent,
+                null,
+                createElement("button", { id: "native-disabled-button", type: "button" }, "Inside"),
+              ),
+            ),
+          ),
+        );
+      });
+
+      const trigger = harness.dom.window.document.querySelector(
+        "[data-testid='native-disabled-trigger']",
+      );
+      if (!(trigger instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing native trigger");
+      }
+
+      await act(async () => {
+        trigger.dispatchEvent(
+          new harness.dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+        );
+      });
+
+      expect(parentClickCount).toBe(0);
       expect(harness.dom.window.document.querySelector("[role='dialog']")).toBeNull();
 
       await act(async () => {

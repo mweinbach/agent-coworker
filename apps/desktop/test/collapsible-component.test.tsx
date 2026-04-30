@@ -232,21 +232,30 @@ describe("desktop collapsible component", () => {
 
       const root = createRoot(container);
       let triggerClickCount = 0;
+      let parentClickCount = 0;
 
       await act(async () => {
         root.render(
           createElement(
-            Collapsible,
-            { disabled: true },
-            createElement(
-              CollapsibleTrigger,
-              {
-                "data-testid": "button-trigger",
-                onClick: () => {
-                  triggerClickCount += 1;
-                },
+            "div",
+            {
+              onClick: () => {
+                parentClickCount += 1;
               },
-              "Toggle",
+            },
+            createElement(
+              Collapsible,
+              { disabled: true },
+              createElement(
+                CollapsibleTrigger,
+                {
+                  "data-testid": "button-trigger",
+                  onClick: () => {
+                    triggerClickCount += 1;
+                  },
+                },
+                "Toggle",
+              ),
             ),
           ),
         );
@@ -264,6 +273,7 @@ describe("desktop collapsible component", () => {
       });
 
       expect(triggerClickCount).toBe(0);
+      expect(parentClickCount).toBe(0);
       expect(trigger.getAttribute("data-expanded")).toBe("false");
 
       await act(async () => {

@@ -190,6 +190,22 @@ function DialogTrigger({
   ...props
 }: React.PropsWithChildren<DialogTriggerProps>) {
   const { setOpen, triggerRef } = useDialogContext();
+  const [triggerNode, setTriggerNode] = React.useState<HTMLElement | null>(null);
+
+  React.useEffect(() => {
+    if (!disabled || !triggerNode) {
+      return;
+    }
+
+    const stopDisabledClick = (event: MouseEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+    };
+
+    triggerNode.addEventListener("click", stopDisabledClick, true);
+    return () => triggerNode.removeEventListener("click", stopDisabledClick, true);
+  }, [disabled, triggerNode]);
 
   const openFromClick = (event: React.MouseEvent<HTMLElement>) => {
     if (!event.defaultPrevented) {
@@ -200,6 +216,7 @@ function DialogTrigger({
   const handleClick = (event: React.MouseEvent<HTMLElement>) => {
     if (disabled) {
       event.preventDefault();
+      event.stopPropagation();
       return;
     }
     onClick?.(event as unknown as React.MouseEvent<HTMLButtonElement>);
@@ -224,6 +241,7 @@ function DialogTrigger({
       onClick: (event: React.MouseEvent<HTMLElement>) => {
         if (disabled) {
           event.preventDefault();
+          event.stopPropagation();
           return;
         }
         child.props.onClick?.(event);
@@ -234,6 +252,7 @@ function DialogTrigger({
         openFromClick(event);
       },
       ref: (node: HTMLElement | null) => {
+        setTriggerNode(node);
         triggerRef.current = node;
         assignElementRef(getElementRef<HTMLElement>(child), node);
       },
@@ -245,6 +264,7 @@ function DialogTrigger({
   return (
     <button
       ref={(node) => {
+        setTriggerNode(node);
         triggerRef.current = node;
       }}
       type={type ?? "button"}

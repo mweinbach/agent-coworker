@@ -46,6 +46,19 @@ const DEFAULT_MOBILE_RELAY_STATE = {
   lastError: null,
 } satisfies Awaited<ReturnType<typeof import("../../src/lib/desktopCommands").getMobileRelayState>>;
 
+const DEFAULT_PLATFORM_CHROME = {
+  platform: "linux",
+  titlebarHeight: 0,
+  dragStripHeight: 8,
+  leftNativeReserve: 0,
+  rightNativeReserve: 0,
+  captionButtonReserve: 0,
+  sidebarTitlebandMode: "topbar",
+  topbarControlPlacement: "inline",
+  usesNativeGlass: false,
+  disableCssBlur: true,
+} satisfies Awaited<ReturnType<typeof import("../../src/lib/desktopCommands").getPlatformChrome>>;
+
 export function createDesktopCommandsMock(
   overrides: Partial<DesktopCommandsModule> = {},
 ): DesktopCommandsModule {
@@ -101,6 +114,7 @@ export function createDesktopCommandsMock(
     windowDragMove: async () => {},
     windowDragEnd: async () => {},
     getPlatform: async () => "linux",
+    getPlatformChrome: async () => DEFAULT_PLATFORM_CHROME,
     showMainWindow: async () => {},
     showQuickChatWindow: async (_opts?: { threadId?: string; newThread?: boolean }) => {},
     listDirectory: async () => [],

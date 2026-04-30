@@ -1,7 +1,6 @@
 import type { BrowserWindow } from "electron";
-
-import type { WindowChromeModule } from "./types";
 import { getPlatformChrome, getTitlebarSymbolColor } from "./platformChrome";
+import type { WindowChromeModule } from "./types";
 
 function windowsTitleBarOverlay(
   useDarkColors: boolean,

@@ -1,11 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import {
-  isLinux,
-  isMacos,
-  isWindows,
-  normalizePlatform,
-} from "../src/lib/desktopPlatform";
+import { isLinux, isMacos, isWindows, normalizePlatform } from "../src/lib/desktopPlatform";
 
 describe("normalizePlatform", () => {
   test("maps darwin to macos", () => {

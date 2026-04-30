@@ -21,7 +21,6 @@ import {
   type MobileRelayStartInput,
   type OpenExternalUrlInput,
   type OpenPathInput,
-  type PlatformChromeInfo,
   type PreferredFileAppInput,
   type PreviewOSFileInput,
   type ReadFileForPreviewInput,

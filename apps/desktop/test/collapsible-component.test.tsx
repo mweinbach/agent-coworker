@@ -221,6 +221,59 @@ describe("desktop collapsible component", () => {
     }
   });
 
+  test.serial("blocks trigger clicks for disabled button triggers", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      const root = createRoot(container);
+      let triggerClickCount = 0;
+
+      await act(async () => {
+        root.render(
+          createElement(
+            Collapsible,
+            { disabled: true },
+            createElement(
+              CollapsibleTrigger,
+              {
+                "data-testid": "button-trigger",
+                onClick: () => {
+                  triggerClickCount += 1;
+                },
+              },
+              "Toggle",
+            ),
+          ),
+        );
+      });
+
+      const trigger = harness.dom.window.document.querySelector("[data-testid='button-trigger']");
+      if (!(trigger instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing button trigger");
+      }
+
+      await act(async () => {
+        trigger.dispatchEvent(
+          new harness.dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+        );
+      });
+
+      expect(triggerClickCount).toBe(0);
+      expect(trigger.getAttribute("data-expanded")).toBe("false");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
   test.serial("stops disabled asChild trigger clicks from bubbling to parents", async () => {
     const harness = setupJsdom();
 

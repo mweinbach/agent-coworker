@@ -314,6 +314,50 @@ describe("desktop collapsible component", () => {
     }
   });
 
+  test.serial("preserves wrapper tabIndex in the asChild path", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          createElement(
+            Collapsible,
+            null,
+            createElement(
+              CollapsibleTrigger,
+              {
+                asChild: true,
+                "data-testid": "trigger",
+                tabIndex: 0,
+              },
+              createElement("div", { role: "button" }, "Toggle"),
+            ),
+          ),
+        );
+      });
+
+      const trigger = harness.dom.window.document.querySelector("[data-testid='trigger']");
+      if (!(trigger instanceof harness.dom.window.HTMLElement)) {
+        throw new Error("missing trigger");
+      }
+
+      expect(trigger.getAttribute("tabindex")).toBe("0");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
   test.serial("blocks trigger clicks for disabled button triggers", async () => {
     const harness = setupJsdom();
 

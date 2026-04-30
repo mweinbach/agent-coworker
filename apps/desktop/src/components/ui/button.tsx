@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import { supportsNativeDisabled } from "@/lib/nativeDisabled";
 import { assignComposedRefs, getElementRef } from "@/lib/react-ref";
 import { cn } from "@/lib/utils";
 
@@ -12,16 +13,6 @@ type ButtonProps = Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, "disabled
   asChild?: boolean;
   disabled?: boolean;
 };
-
-const nativeDisabledElements = new Set([
-  "button",
-  "fieldset",
-  "input",
-  "optgroup",
-  "option",
-  "select",
-  "textarea",
-]);
 
 const buttonVariantStyles: Record<ButtonVariant, string> = {
   default:
@@ -110,8 +101,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
     const childDisabled =
       child.props.disabled === true || childAriaDisabled === true || childAriaDisabled === "true";
     const asChildDisabled = disabled === true || childDisabled;
-    const childSupportsNativeDisabled =
-      typeof child.type === "string" && nativeDisabledElements.has(child.type);
+    const childSupportsNativeDisabled = supportsNativeDisabled(child.type);
 
     return React.cloneElement(child, {
       ...commonProps,

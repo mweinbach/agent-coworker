@@ -1,4 +1,5 @@
 import * as React from "react";
+import { supportsNativeDisabled } from "@/lib/nativeDisabled";
 import { assignComposedRefs, getElementRef } from "@/lib/react-ref";
 import { cn } from "@/lib/utils";
 
@@ -63,19 +64,18 @@ type CollapsibleTriggerProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
   asChild?: boolean;
 };
 
-const nativeDisabledElements = new Set([
-  "button",
-  "fieldset",
-  "input",
-  "optgroup",
-  "option",
-  "select",
-  "textarea",
-]);
-
 const CollapsibleTrigger = React.forwardRef<HTMLButtonElement, CollapsibleTriggerProps>(
   function CollapsibleTrigger(
-    { asChild = false, children, className, disabled: disabledProp, onClick, type, ...props },
+    {
+      asChild = false,
+      children,
+      className,
+      disabled: disabledProp,
+      onClick,
+      tabIndex,
+      type,
+      ...props
+    },
     ref,
   ) {
     const { disabled: contextDisabled, open, setOpen } = useCollapsibleContext();
@@ -125,8 +125,7 @@ const CollapsibleTrigger = React.forwardRef<HTMLButtonElement, CollapsibleTrigge
         ref?: React.Ref<HTMLElement>;
         tabIndex?: number;
       }>;
-      const childSupportsNativeDisabled =
-        typeof child.type === "string" && nativeDisabledElements.has(child.type);
+      const childSupportsNativeDisabled = supportsNativeDisabled(child.type);
 
       return React.cloneElement(child, {
         ...sharedProps,
@@ -135,7 +134,7 @@ const CollapsibleTrigger = React.forwardRef<HTMLButtonElement, CollapsibleTrigge
           child.props.disabled === true || (disabled && childSupportsNativeDisabled)
             ? true
             : undefined,
-        tabIndex: disabled ? -1 : child.props.tabIndex,
+        tabIndex: disabled ? -1 : (child.props.tabIndex ?? tabIndex),
         onClick: (event: React.MouseEvent<HTMLElement>) => {
           if (disabled) {
             event.preventDefault();
@@ -174,6 +173,7 @@ const CollapsibleTrigger = React.forwardRef<HTMLButtonElement, CollapsibleTrigge
         onClick={handleClick}
         className={className}
         disabled={disabled}
+        tabIndex={tabIndex}
       >
         {children}
       </button>

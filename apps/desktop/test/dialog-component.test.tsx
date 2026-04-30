@@ -539,6 +539,51 @@ describe("desktop dialog component", () => {
     }
   });
 
+  test.serial("preserves wrapper tabIndex in the asChild trigger path", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          createElement(
+            Dialog,
+            null,
+            createElement(
+              DialogTrigger,
+              {
+                asChild: true,
+                "data-testid": "as-child-trigger",
+                tabIndex: 0,
+              },
+              createElement("div", { role: "button" }, "Open dialog"),
+            ),
+            createElement(DialogContent, null, createElement(DialogTitle, null, "Title")),
+          ),
+        );
+      });
+
+      const trigger = harness.dom.window.document.querySelector("[data-testid='as-child-trigger']");
+      if (!(trigger instanceof harness.dom.window.HTMLElement)) {
+        throw new Error("missing asChild trigger");
+      }
+
+      expect(trigger.getAttribute("tabindex")).toBe("0");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
   test.serial("stops disabled native trigger clicks from bubbling to parents", async () => {
     const harness = setupJsdom();
 

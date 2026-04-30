@@ -2,6 +2,7 @@ import { XIcon } from "lucide-react";
 import * as React from "react";
 import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
+import { supportsNativeDisabled } from "@/lib/nativeDisabled";
 import { assignElementRef, getElementRef } from "@/lib/react-ref";
 import { cn } from "@/lib/utils";
 
@@ -181,21 +182,12 @@ type DialogTriggerProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
   asChild?: boolean;
 };
 
-const nativeDisabledElements = new Set([
-  "button",
-  "fieldset",
-  "input",
-  "optgroup",
-  "option",
-  "select",
-  "textarea",
-]);
-
 function DialogTrigger({
   children,
   asChild = false,
   disabled,
   onClick,
+  tabIndex,
   type,
   ...props
 }: React.PropsWithChildren<DialogTriggerProps>) {
@@ -241,8 +233,7 @@ function DialogTrigger({
       ref?: React.Ref<HTMLElement>;
       tabIndex?: number;
     }>;
-    const childSupportsNativeDisabled =
-      typeof child.type === "string" && nativeDisabledElements.has(child.type);
+    const childSupportsNativeDisabled = supportsNativeDisabled(child.type);
 
     const childProps: React.HTMLAttributes<HTMLElement> &
       React.RefAttributes<HTMLElement> & {
@@ -255,7 +246,7 @@ function DialogTrigger({
           : undefined,
       "aria-disabled": disabled ? true : props["aria-disabled"],
       className: cn(child.props.className, props.className),
-      tabIndex: disabled ? -1 : child.props.tabIndex,
+      tabIndex: disabled ? -1 : (child.props.tabIndex ?? tabIndex),
       onClick: (event: React.MouseEvent<HTMLElement>) => {
         if (disabled) {
           event.preventDefault();
@@ -289,6 +280,7 @@ function DialogTrigger({
       onClick={handleClick as React.MouseEventHandler<HTMLButtonElement>}
       {...props}
       disabled={disabled}
+      tabIndex={tabIndex}
     >
       {children}
     </button>

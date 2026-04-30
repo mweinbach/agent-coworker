@@ -124,7 +124,7 @@ describe("desktop button component", () => {
         root.render(
           createElement(
             Button,
-            { asChild: true },
+            { asChild: true, disabled: false },
             createElement(
               "button",
               { className: "bg-red-500", id: "child-button", type: "button" },

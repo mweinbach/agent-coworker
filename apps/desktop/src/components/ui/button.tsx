@@ -87,7 +87,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
     onClick: handleClick,
     tabIndex: asChild && disabled ? -1 : tabIndex,
     "aria-disabled": asChild && disabled ? true : props["aria-disabled"],
-    ...(disabled !== undefined ? { disabled } : {}),
+    ...(disabled ? { disabled } : {}),
     ...(asChild && type !== undefined ? { type } : {}),
   } as const;
 

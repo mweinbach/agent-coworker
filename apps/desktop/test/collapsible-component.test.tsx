@@ -140,6 +140,53 @@ describe("desktop collapsible component", () => {
     }
   });
 
+  test.serial("keeps root state data attributes authoritative over consumer props", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          createElement(
+            Collapsible,
+            {
+              "data-disabled": "consumer-disabled",
+              "data-expanded": "false",
+              "data-state": "closed",
+              "data-testid": "collapsible-root",
+              defaultOpen: true,
+              disabled: true,
+            },
+            createElement(CollapsibleTrigger, null, "Toggle"),
+          ),
+        );
+      });
+
+      const collapsible = harness.dom.window.document.querySelector(
+        "[data-testid='collapsible-root']",
+      );
+      if (!(collapsible instanceof harness.dom.window.HTMLDivElement)) {
+        throw new Error("missing collapsible root");
+      }
+
+      expect(collapsible.getAttribute("data-disabled")).toBe("");
+      expect(collapsible.getAttribute("data-expanded")).toBe("true");
+      expect(collapsible.getAttribute("data-state")).toBe("open");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
   test.serial("forwards native disabled state in the asChild path", async () => {
     const harness = setupJsdom();
 

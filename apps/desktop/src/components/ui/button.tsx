@@ -13,6 +13,16 @@ type ButtonProps = Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, "disabled
   disabled?: boolean;
 };
 
+const nativeDisabledElements = new Set([
+  "button",
+  "fieldset",
+  "input",
+  "optgroup",
+  "option",
+  "select",
+  "textarea",
+]);
+
 const buttonVariantStyles: Record<ButtonVariant, string> = {
   default:
     "border border-transparent bg-primary text-primary-foreground shadow-none hover:bg-primary/85",
@@ -87,7 +97,6 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
     onClick: handleClick,
     tabIndex: asChild && disabled ? -1 : tabIndex,
     "aria-disabled": asChild && disabled ? true : props["aria-disabled"],
-    ...(disabled ? { disabled } : {}),
     ...(asChild && type !== undefined ? { type } : {}),
   } as const;
 
@@ -105,6 +114,8 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
     const childDisabled =
       child.props.disabled === true || childAriaDisabled === true || childAriaDisabled === "true";
     const asChildDisabled = disabled === true || childDisabled;
+    const childSupportsNativeDisabled =
+      typeof child.type === "string" && nativeDisabledElements.has(child.type);
 
     return React.cloneElement(child, {
       ...sharedProps,
@@ -112,6 +123,10 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
         ? true
         : (child.props["aria-disabled"] ?? props["aria-disabled"]),
       className: cn(sharedProps.className, child.props.className),
+      disabled:
+        child.props.disabled === true || (disabled === true && childSupportsNativeDisabled)
+          ? true
+          : undefined,
       tabIndex: asChildDisabled ? -1 : (child.props.tabIndex ?? tabIndex),
       type: child.props.type ?? type,
       onClick: (event: React.MouseEvent<HTMLButtonElement>) => {
@@ -140,7 +155,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
   }
 
   return (
-    <button {...sharedProps} ref={ref} type={type ?? "button"}>
+    <button {...sharedProps} ref={ref} type={type ?? "button"} disabled={disabled}>
       {children}
     </button>
   );

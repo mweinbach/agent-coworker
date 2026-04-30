@@ -303,6 +303,7 @@ describe("desktop collapsible component", () => {
       expect(childClickCount).toBe(0);
       expect(triggerClickCount).toBe(0);
       expect(trigger.getAttribute("data-expanded")).toBe("false");
+      expect(trigger.getAttribute("tabindex")).toBe("-1");
 
       await act(async () => {
         root.unmount();

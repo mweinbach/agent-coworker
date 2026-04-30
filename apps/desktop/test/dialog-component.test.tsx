@@ -75,7 +75,11 @@ function DisabledAsChildDialogTrigger() {
         "data-testid": "as-child-trigger",
         disabled: true,
       },
-      createElement("button", { className: "child-class", type: "button" }, "Open dialog"),
+      createElement(
+        "div",
+        { className: "child-class", role: "button", tabIndex: 0 },
+        "Open dialog",
+      ),
     ),
     createElement(
       DialogContent,
@@ -510,12 +514,13 @@ describe("desktop dialog component", () => {
       });
 
       const trigger = harness.dom.window.document.querySelector("[data-testid='as-child-trigger']");
-      if (!(trigger instanceof harness.dom.window.HTMLButtonElement)) {
+      if (!(trigger instanceof harness.dom.window.HTMLDivElement)) {
         throw new Error("missing asChild trigger");
       }
 
-      expect(trigger.disabled).toBe(true);
+      expect(trigger.getAttribute("disabled")).toBe("");
       expect(trigger.getAttribute("aria-disabled")).toBe("true");
+      expect(trigger.getAttribute("tabindex")).toBe("-1");
       expect(trigger.className).toContain("child-class");
       expect(trigger.className).toContain("trigger-forwarded");
 

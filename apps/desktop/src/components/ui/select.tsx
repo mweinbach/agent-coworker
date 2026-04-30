@@ -9,8 +9,10 @@ type SelectPlacement = "bottom" | "top" | "left" | "right";
 
 type SelectContextValue = {
   disabled: boolean;
+  initialFocus: SelectInitialFocus | null;
   open: boolean;
   selectedLabel: React.ReactNode;
+  setInitialFocus: (focus: SelectInitialFocus | null) => void;
   setOpen: (open: boolean) => void;
   setTriggerNode: (node: HTMLButtonElement | null) => void;
   setValue: (value: string) => void;
@@ -19,6 +21,8 @@ type SelectContextValue = {
 };
 
 const SelectContext = React.createContext<SelectContextValue | null>(null);
+
+type SelectInitialFocus = "selected" | "first" | "last";
 
 type SelectProps = {
   value?: string;
@@ -32,6 +36,7 @@ type SelectProps = {
 function Select({ value, defaultValue, disabled, children, onValueChange, ...props }: SelectProps) {
   const [uncontrolledValue, setUncontrolledValue] = React.useState(defaultValue);
   const [open, setOpen] = React.useState(false);
+  const [initialFocus, setInitialFocus] = React.useState<SelectInitialFocus | null>(null);
   const [triggerNode, setTriggerNode] = React.useState<HTMLButtonElement | null>(null);
   const selectedValue = value ?? uncontrolledValue;
   const selectedLabel = React.useMemo(
@@ -53,8 +58,10 @@ function Select({ value, defaultValue, disabled, children, onValueChange, ...pro
     <SelectContext.Provider
       value={{
         disabled: disabled ?? false,
+        initialFocus,
         open,
         selectedLabel,
+        setInitialFocus,
         setOpen,
         setTriggerNode,
         setValue,
@@ -112,7 +119,7 @@ function SelectTrigger({
   compact = false,
   ...props
 }: SelectTriggerProps) {
-  const { disabled, open, setOpen, setTriggerNode } = useSelectContext();
+  const { disabled, open, setInitialFocus, setOpen, setTriggerNode } = useSelectContext();
   return (
     <button
       {...props}
@@ -135,8 +142,27 @@ function SelectTrigger({
       onClick={(event) => {
         props.onClick?.(event);
         if (!event.defaultPrevented && !disabled && !props.disabled) {
+          setInitialFocus(null);
           setOpen(!open);
         }
+      }}
+      onKeyDown={(event) => {
+        props.onKeyDown?.(event);
+        if (event.defaultPrevented || disabled || props.disabled) {
+          return;
+        }
+        if (
+          event.key !== "ArrowDown" &&
+          event.key !== "ArrowUp" &&
+          event.key !== "Home" &&
+          event.key !== "End"
+        ) {
+          return;
+        }
+
+        event.preventDefault();
+        setInitialFocus(event.key === "Home" ? "first" : event.key === "End" ? "last" : "selected");
+        setOpen(true);
       }}
     >
       <span className={cn("min-w-0 overflow-hidden text-left", compact ? "pr-0.5" : "flex-1")}>
@@ -182,7 +208,7 @@ function SelectContent({
   placement = "bottom",
   ...props
 }: SelectContentProps) {
-  const { open, setOpen, triggerNode, value } = useSelectContext();
+  const { initialFocus, open, setInitialFocus, setOpen, triggerNode, value } = useSelectContext();
   const contentRef = React.useRef<HTMLDivElement | null>(null);
   const [position, setPosition] = React.useState<SelectContentPosition>({
     left: SELECT_VIEWPORT_PADDING,
@@ -241,6 +267,36 @@ function SelectContent({
     }
     updatePosition();
   }, [open, updatePosition]);
+
+  React.useLayoutEffect(() => {
+    if (!open || !initialFocus) {
+      return;
+    }
+
+    const content = contentRef.current;
+    if (!content) {
+      return;
+    }
+
+    const items = Array.from(content.querySelectorAll<HTMLElement>('[data-slot="select-item"]'));
+    if (items.length === 0) {
+      setInitialFocus(null);
+      return;
+    }
+
+    const selectedIndex = items.findIndex((item) => item.dataset.value === value);
+    const focusIndex =
+      initialFocus === "first"
+        ? 0
+        : initialFocus === "last"
+          ? items.length - 1
+          : selectedIndex >= 0
+            ? selectedIndex
+            : 0;
+
+    items[focusIndex]?.focus();
+    setInitialFocus(null);
+  }, [initialFocus, open, setInitialFocus, value]);
 
   React.useEffect(() => {
     if (!open || typeof window === "undefined" || typeof document === "undefined") {

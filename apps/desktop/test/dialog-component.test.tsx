@@ -710,6 +710,64 @@ describe("desktop dialog component", () => {
     }
   });
 
+  test.serial("respects preventDefault in native trigger onClick before opening", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          createElement(
+            Dialog,
+            null,
+            createElement(
+              DialogTrigger,
+              {
+                "data-testid": "native-prevented-trigger",
+                onClick: (event) => {
+                  event.preventDefault();
+                },
+              },
+              "Open dialog",
+            ),
+            createElement(
+              DialogContent,
+              null,
+              createElement("button", { id: "prevented-native-button", type: "button" }, "Inside"),
+            ),
+          ),
+        );
+      });
+
+      const trigger = harness.dom.window.document.querySelector(
+        "[data-testid='native-prevented-trigger']",
+      );
+      if (!(trigger instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing native trigger");
+      }
+
+      await act(async () => {
+        trigger.dispatchEvent(
+          new harness.dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+        );
+      });
+
+      expect(harness.dom.window.document.querySelector("[role='dialog']")).toBeNull();
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
   test.serial("labels dialog content from title and description", async () => {
     const harness = setupJsdom();
 

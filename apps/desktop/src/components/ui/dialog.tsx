@@ -228,6 +228,7 @@ function DialogTrigger({
       className?: string;
       onClick?: (event: React.MouseEvent<HTMLElement>) => void;
       ref?: React.Ref<HTMLElement>;
+      tabIndex?: number;
     }>;
 
     const childProps: React.HTMLAttributes<HTMLElement> &
@@ -238,6 +239,7 @@ function DialogTrigger({
       disabled,
       "aria-disabled": disabled ? true : props["aria-disabled"],
       className: cn(child.props.className, props.className),
+      tabIndex: disabled ? -1 : child.props.tabIndex,
       onClick: (event: React.MouseEvent<HTMLElement>) => {
         if (disabled) {
           event.preventDefault();

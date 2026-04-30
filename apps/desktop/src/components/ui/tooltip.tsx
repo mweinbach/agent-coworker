@@ -154,7 +154,6 @@ function TooltipTrigger({
   const triggerProps = {
     ...props,
     "aria-describedby": open ? cn(describedBy, contentId) : describedBy,
-    "aria-expanded": open,
     "data-slot": "tooltip-trigger",
     className: cn(!asChild && "inline-flex", className),
     onBlur: (event: React.FocusEvent<HTMLButtonElement>) => {

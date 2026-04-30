@@ -54,6 +54,7 @@ describe("desktop tooltip component", () => {
       expect(tooltip.getAttribute("role")).toBe("tooltip");
       expect(tooltip.id).toBeTruthy();
       expect(trigger.getAttribute("aria-describedby")).toBe(tooltip.id);
+      expect(trigger.hasAttribute("aria-expanded")).toBe(false);
 
       await act(async () => {
         root.unmount();

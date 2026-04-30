@@ -113,12 +113,14 @@ const CollapsibleTrigger = React.forwardRef<HTMLButtonElement, CollapsibleTrigge
         disabled?: boolean;
         onClick?: React.MouseEventHandler<HTMLElement>;
         ref?: React.Ref<HTMLElement>;
+        tabIndex?: number;
       }>;
 
       return React.cloneElement(child, {
         ...sharedProps,
         className: cn(child.props.className, className),
         disabled,
+        tabIndex: disabled ? -1 : child.props.tabIndex,
         onClick: (event: React.MouseEvent<HTMLElement>) => {
           if (disabled) {
             event.preventDefault();

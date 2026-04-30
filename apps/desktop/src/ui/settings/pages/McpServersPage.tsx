@@ -423,10 +423,10 @@ export function McpServersPage() {
                     <Button
                       variant="ghost"
                       size="icon"
+                      aria-label={`Edit ${server.name}`}
                       className="h-8 w-8 text-muted-foreground hover:text-foreground"
                       onClick={(event) => {
                         event.stopPropagation();
-                        if (!isExpanded) toggleExpand(server.name);
                         clearAutoValidateTimer();
                         setEditorState({ mode: "edit", name: server.name });
                         setDraft(draftFromServer(server));

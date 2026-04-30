@@ -122,4 +122,87 @@ describe("MCP servers settings page", () => {
       harness.restore();
     }
   });
+
+  test("edit icon opens the server editor without expanding inline details", async () => {
+    const harness = setupJsdom({
+      includeAnimationFrame: true,
+      setupWindow: (dom) => {
+        (dom.window.HTMLElement.prototype as { attachEvent?: () => void }).attachEvent =
+          () => {};
+        (dom.window.HTMLElement.prototype as { detachEvent?: () => void }).detachEvent =
+          () => {};
+      },
+    });
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        useAppStore.setState({
+          workspaces: [
+            {
+              id: "ws-1",
+              name: "Workspace",
+              path: "/tmp/workspace",
+              createdAt: "2026-04-28T00:00:00.000Z",
+              lastOpenedAt: "2026-04-28T00:00:00.000Z",
+              defaultProvider: "openai",
+              defaultModel: "gpt-5.5",
+              defaultPreferredChildModel: "gpt-5.5",
+              defaultEnableMcp: true,
+              yolo: false,
+            },
+          ],
+          selectedWorkspaceId: "ws-1",
+          workspaceRuntimeById: {
+            "ws-1": {
+              ...useAppStore.getState().workspaceRuntimeById["ws-1"],
+              serverUrl: "ws://mock",
+              starting: false,
+              error: null,
+              controlSessionId: "control",
+              mcpServers: [
+                {
+                  name: "grep",
+                  transport: { type: "http", url: "https://mcp.grep.app" },
+                  enabled: true,
+                  source: "workspace",
+                  inherited: false,
+                  authMode: "none",
+                  authScope: "workspace",
+                  authMessage: "",
+                },
+              ],
+              mcpFiles: [],
+              mcpWarnings: [],
+              mcpValidationByName: {},
+            },
+          },
+          requestWorkspaceMcpServers: mock(async () => {}),
+        });
+      });
+
+      await act(async () => {
+        root.render(createElement(McpServersPage));
+      });
+
+      const editButton = container.querySelector('[aria-label="Edit grep"]');
+      expect(editButton).not.toBeNull();
+
+      await act(async () => {
+        editButton?.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(container.textContent).not.toContain("Command");
+      expect(harness.dom.window.document.querySelector("[role='dialog']")).not.toBeNull();
+      expect(harness.dom.window.document.body.textContent).toContain("Edit grep");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
 });

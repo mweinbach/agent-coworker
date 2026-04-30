@@ -439,6 +439,9 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (windowMode !== "main") {
+      return;
+    }
     for (const notification of notifications) {
       if (seenNotificationIds.current.has(notification.id)) {
         continue;
@@ -451,7 +454,7 @@ export default function App() {
         // Browser-style in-app notifications already exist; OS toast is best effort.
       });
     }
-  }, [notifications]);
+  }, [notifications, windowMode]);
 
   return (
     <>

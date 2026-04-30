@@ -98,11 +98,13 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
       onClick?: React.MouseEventHandler<HTMLButtonElement>;
       ref?: React.Ref<HTMLElement>;
       tabIndex?: number;
+      type?: React.ButtonHTMLAttributes<HTMLButtonElement>["type"];
     }>;
 
     return React.cloneElement(child, {
       ...sharedProps,
       className: cn(sharedProps.className, child.props.className),
+      type: child.props.type ?? type,
       onClick: (event: React.MouseEvent<HTMLButtonElement>) => {
         if (disabled) {
           event.preventDefault();

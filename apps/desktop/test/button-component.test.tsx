@@ -299,7 +299,7 @@ describe("desktop button component", () => {
     }
   });
 
-  test("preserves a child disabled prop when asChild button is not disabled", async () => {
+  test("preserves and honors a child disabled prop when asChild button is not disabled", async () => {
     const harness = setupJsdom();
 
     try {
@@ -309,17 +309,28 @@ describe("desktop button component", () => {
       }
 
       const root = createRoot(container);
+      let clickCount = 0;
+      let childClickCount = 0;
 
       await act(async () => {
         root.render(
           createElement(
             Button,
-            { asChild: true },
+            {
+              asChild: true,
+              disabled: false,
+              onClick: () => {
+                clickCount += 1;
+              },
+            },
             createElement(
               "button",
               {
                 disabled: true,
                 id: "child-button",
+                onClick: () => {
+                  childClickCount += 1;
+                },
                 type: "button",
               },
               "Child button",
@@ -334,6 +345,16 @@ describe("desktop button component", () => {
       }
 
       expect(button.disabled).toBe(true);
+      expect(button.tabIndex).toBe(-1);
+
+      await act(async () => {
+        button.dispatchEvent(
+          new harness.dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+        );
+      });
+
+      expect(clickCount).toBe(0);
+      expect(childClickCount).toBe(0);
 
       await act(async () => {
         root.unmount();
@@ -373,6 +394,46 @@ describe("desktop button component", () => {
         root.unmount();
       });
     } finally {
+      console.warn = originalWarn;
+      harness.restore();
+    }
+  });
+
+  test("does not warn in production when asChild receives non-element children", async () => {
+    const harness = setupJsdom();
+    const originalEnv = process.env.NODE_ENV;
+    const originalWarn = console.warn;
+    const warnings: string[] = [];
+    process.env.NODE_ENV = "production";
+    console.warn = (message?: unknown) => {
+      warnings.push(String(message));
+    };
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(Button, { asChild: true }, "Not an element"));
+      });
+
+      expect(container.querySelector("button")).toBeNull();
+      expect(container.textContent).toBe("");
+      expect(warnings).toEqual([]);
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      if (originalEnv === undefined) {
+        delete process.env.NODE_ENV;
+      } else {
+        process.env.NODE_ENV = originalEnv;
+      }
       console.warn = originalWarn;
       harness.restore();
     }

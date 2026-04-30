@@ -12,6 +12,7 @@ type ButtonProps = Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, "disabled
   size?: ButtonSize;
   asChild?: boolean;
   disabled?: boolean;
+  "data-size"?: ButtonSize | string | null;
 };
 
 const buttonVariantStyles: Record<ButtonVariant, string> = {
@@ -59,6 +60,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
     onClick,
     tabIndex,
     type,
+    "data-size": dataSize,
     ...props
   },
   ref,
@@ -82,7 +84,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
       size,
       className,
     }),
-    "data-size": size,
+    "data-size": dataSize ?? size,
     "data-slot": "button",
     "data-variant": variant,
   } as const;

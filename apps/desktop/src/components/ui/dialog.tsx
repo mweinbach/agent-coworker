@@ -222,6 +222,9 @@ function DialogTrigger({
       return;
     }
     onClick?.(event as unknown as React.MouseEvent<HTMLButtonElement>);
+    if (event.defaultPrevented) {
+      return;
+    }
     openFromClick(event);
   };
 

@@ -181,10 +181,10 @@ const CollapsibleContent = React.forwardRef<HTMLDivElement, CollapsibleContentPr
     return (
       <div
         ref={ref}
+        {...props}
         data-state={open ? "open" : "closed"}
         data-expanded={open ? "true" : "false"}
         hidden={hidden ?? (!open && forceMount ? true : undefined)}
-        {...props}
       />
     );
   },

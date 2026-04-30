@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 
 import { setupJsdom } from "./jsdomHarness";
 
-const { Collapsible, CollapsibleTrigger } = await import(
+const { Collapsible, CollapsibleContent, CollapsibleTrigger } = await import(
   new URL("../src/components/ui/collapsible.tsx?collapsible-component-test", import.meta.url).href
 );
 
@@ -178,6 +178,50 @@ describe("desktop collapsible component", () => {
       expect(collapsible.getAttribute("data-disabled")).toBe("");
       expect(collapsible.getAttribute("data-expanded")).toBe("true");
       expect(collapsible.getAttribute("data-state")).toBe("open");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test.serial("keeps content state data attributes authoritative over consumer props", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          createElement(
+            Collapsible,
+            { defaultOpen: true },
+            createElement(CollapsibleTrigger, null, "Toggle"),
+            createElement(CollapsibleContent, {
+              "data-expanded": "false",
+              "data-state": "closed",
+              "data-testid": "collapsible-content",
+            }),
+          ),
+        );
+      });
+
+      const content = harness.dom.window.document.querySelector(
+        "[data-testid='collapsible-content']",
+      );
+      if (!(content instanceof harness.dom.window.HTMLDivElement)) {
+        throw new Error("missing collapsible content");
+      }
+
+      expect(content.getAttribute("data-expanded")).toBe("true");
+      expect(content.getAttribute("data-state")).toBe("open");
 
       await act(async () => {
         root.unmount();

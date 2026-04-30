@@ -90,9 +90,10 @@ function Select({ value, defaultValue, disabled, children, onValueChange, ...pro
         setUncontrolledValue(nextValue);
       }
       onValueChange?.(nextValue);
+      triggerNode?.focus();
       setOpen(false);
     },
-    [onValueChange, value],
+    [onValueChange, triggerNode, value],
   );
 
   return (

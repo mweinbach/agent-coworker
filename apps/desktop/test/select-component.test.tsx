@@ -282,6 +282,66 @@ describe("desktop select component", () => {
     }
   });
 
+  test.serial("restores focus to the trigger after keyboard selection", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(PositionedSelect));
+      });
+
+      const selectTrigger = harness.dom.window.document.querySelector(
+        '[data-slot="select-trigger"]',
+      );
+      if (!(selectTrigger instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing select trigger");
+      }
+
+      await act(async () => {
+        selectTrigger.focus();
+        selectTrigger.dispatchEvent(
+          new harness.dom.window.KeyboardEvent("keydown", {
+            bubbles: true,
+            cancelable: true,
+            key: "ArrowDown",
+          }),
+        );
+      });
+
+      const selectItem = harness.dom.window.document.querySelector('[data-slot="select-item"]');
+      if (!(selectItem instanceof harness.dom.window.HTMLDivElement)) {
+        throw new Error("missing select item");
+      }
+      expect(harness.dom.window.document.activeElement).toBe(selectItem);
+
+      await act(async () => {
+        selectItem.dispatchEvent(
+          new harness.dom.window.KeyboardEvent("keydown", {
+            bubbles: true,
+            cancelable: true,
+            key: "Enter",
+          }),
+        );
+      });
+
+      expect(harness.dom.window.document.querySelector('[data-slot="select-content"]')).toBeNull();
+      expect(harness.dom.window.document.activeElement).toBe(selectTrigger);
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
   test.serial("closes the open menu when tabbing away from the select", async () => {
     const harness = setupJsdom();
 

@@ -84,7 +84,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
     [disabled, onClick],
   );
 
-  const sharedProps = {
+  const commonProps = {
     ...props,
     className: buttonVariants({
       variant,
@@ -94,10 +94,6 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
     "data-size": size,
     "data-slot": "button",
     "data-variant": variant,
-    onClick: handleClick,
-    tabIndex: asChild && disabled ? -1 : tabIndex,
-    "aria-disabled": asChild && disabled ? true : props["aria-disabled"],
-    ...(asChild && type !== undefined ? { type } : {}),
   } as const;
 
   if (asChild && React.isValidElement(children)) {
@@ -118,11 +114,11 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
       typeof child.type === "string" && nativeDisabledElements.has(child.type);
 
     return React.cloneElement(child, {
-      ...sharedProps,
+      ...commonProps,
       "aria-disabled": asChildDisabled
         ? true
         : (child.props["aria-disabled"] ?? props["aria-disabled"]),
-      className: cn(sharedProps.className, child.props.className),
+      className: cn(commonProps.className, child.props.className),
       disabled:
         child.props.disabled === true || (disabled === true && childSupportsNativeDisabled)
           ? true
@@ -155,7 +151,15 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
   }
 
   return (
-    <button {...sharedProps} ref={ref} type={type ?? "button"} disabled={disabled}>
+    <button
+      {...commonProps}
+      ref={ref}
+      type={type ?? "button"}
+      onClick={handleClick}
+      tabIndex={tabIndex}
+      aria-disabled={props["aria-disabled"]}
+      disabled={disabled}
+    >
       {children}
     </button>
   );

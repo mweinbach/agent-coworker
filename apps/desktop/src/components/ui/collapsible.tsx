@@ -148,13 +148,13 @@ const CollapsibleTrigger = React.forwardRef<HTMLButtonElement, CollapsibleTrigge
 
     return (
       <button
+        {...sharedProps}
         ref={(node) => {
           setTriggerNode(node);
           assignComposedRefs(node, ref);
         }}
         type={type ?? "button"}
         onClick={handleClick}
-        {...sharedProps}
         className={className}
         disabled={disabled}
       >

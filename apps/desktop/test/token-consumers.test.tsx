@@ -147,4 +147,26 @@ describe("desktop token consumers", () => {
       /\.app-skills-view\s*\{[^}]*background:\s*var\(--surface-workspace-pane\);/s,
     );
   });
+
+  test("desktop portal slots render above the Electron chrome layer", () => {
+    const stylesCss = readFileSync(resolve(import.meta.dir, "../src/styles.css"), "utf8");
+    const portalLayer = stylesCss.match(/--desktop-portal-layer:\s*(\d+);/);
+
+    expect(portalLayer).not.toBeNull();
+    expect(Number(portalLayer?.[1])).toBeGreaterThan(81);
+
+    for (const slot of [
+      "dialog-content",
+      "dropdown-menu-content",
+      "popover-content",
+      "select-content",
+      "sheet-content",
+      "tooltip-content",
+    ]) {
+      expect(stylesCss).toContain(`[data-slot="${slot}"]`);
+    }
+    expect(stylesCss).toMatch(
+      /\[data-slot="tooltip-content"\]\s*\{\s*z-index:\s*var\(--desktop-portal-layer\);/s,
+    );
+  });
 });

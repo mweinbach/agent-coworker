@@ -430,7 +430,6 @@ describe("desktop developer page", () => {
         "Save oversized tool output to scratch files",
       ]) {
         expect(container.querySelector(`[role="switch"][aria-label="${label}"]`)).not.toBeNull();
-        expect(container.querySelector(`button[aria-label="${label}"]`)).toBeNull();
       }
 
       await act(async () => {

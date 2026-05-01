@@ -1,82 +1,33 @@
-import type { ComponentProps } from "react";
-import * as React from "react";
+import * as React from "react"
+import { Switch as SwitchPrimitive } from "radix-ui"
 
-import { cn } from "@/lib/utils";
-
-type SwitchProps = Omit<ComponentProps<"span">, "children" | "onChange"> & {
-  checked?: boolean;
-  defaultChecked?: boolean;
-  disabled?: boolean;
-  onCheckedChange?: (checked: boolean) => void;
-};
+import { cn } from "@/lib/utils"
 
 function Switch({
   className,
-  checked,
-  defaultChecked = false,
-  disabled,
-  onKeyDown,
-  onCheckedChange,
-  onClick,
-  tabIndex,
+  size = "default",
   ...props
-}: SwitchProps) {
-  const [uncontrolledChecked, setUncontrolledChecked] = React.useState(defaultChecked);
-  const nodeRef = React.useRef<HTMLSpanElement | null>(null);
-  const isChecked = checked ?? uncontrolledChecked;
-
-  const setChecked = React.useCallback(
-    (nextChecked: boolean) => {
-      if (checked === undefined) {
-        setUncontrolledChecked(nextChecked);
-      }
-      onCheckedChange?.(nextChecked);
-    },
-    [checked, onCheckedChange],
-  );
-
-  React.useLayoutEffect(() => {
-    nodeRef.current?.toggleAttribute("disabled", disabled ?? false);
-  }, [disabled]);
-
+}: React.ComponentProps<typeof SwitchPrimitive.Root> & {
+  size?: "sm" | "default"
+}) {
   return (
-    <span
-      ref={nodeRef}
-      role="switch"
-      aria-checked={isChecked}
-      aria-disabled={disabled || undefined}
+    <SwitchPrimitive.Root
       data-slot="switch"
-      data-state={isChecked ? "checked" : "unchecked"}
-      tabIndex={disabled ? undefined : (tabIndex ?? 0)}
+      data-size={size}
       className={cn(
-        "inline-flex h-6 w-10 shrink-0 cursor-pointer items-center overflow-hidden rounded-full border border-transparent bg-foreground/[0.12] shadow-[var(--shadow-surface)] transition-colors duration-150 outline-none data-[state=checked]:bg-primary focus-visible:ring-2 focus-visible:ring-primary aria-disabled:cursor-not-allowed aria-disabled:opacity-50",
-        className,
+        "peer group/switch inline-flex shrink-0 items-center rounded-full border border-transparent shadow-xs transition-all outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 data-[size=default]:h-[1.15rem] data-[size=default]:w-8 data-[size=sm]:h-3.5 data-[size=sm]:w-6 data-[state=checked]:bg-primary data-[state=unchecked]:bg-input dark:data-[state=unchecked]:bg-input/80",
+        className
       )}
-      onClick={(event) => {
-        onClick?.(event);
-        if (!event.defaultPrevented && !disabled) {
-          setChecked(!isChecked);
-        }
-      }}
-      onKeyDown={(event) => {
-        onKeyDown?.(event);
-        if (event.defaultPrevented || disabled) {
-          return;
-        }
-        if (event.key === " " || event.key === "Enter") {
-          event.preventDefault();
-          setChecked(!isChecked);
-        }
-      }}
       {...props}
     >
-      <span
+      <SwitchPrimitive.Thumb
         data-slot="switch-thumb"
-        data-state={isChecked ? "checked" : "unchecked"}
-        className="ms-0.5 block size-5 rounded-full border border-border/60 !bg-[var(--panel-bg)] shadow-sm transition-transform duration-150 data-[state=checked]:translate-x-[1.125rem]"
+        className={cn(
+          "pointer-events-none block rounded-full bg-background ring-0 transition-transform group-data-[size=default]/switch:size-4 group-data-[size=sm]/switch:size-3 data-[state=checked]:translate-x-[calc(100%-2px)] data-[state=unchecked]:translate-x-0 dark:data-[state=checked]:bg-primary-foreground dark:data-[state=unchecked]:bg-foreground"
+        )}
       />
-    </span>
-  );
+    </SwitchPrimitive.Root>
+  )
 }
 
-export { Switch };
+export { Switch }

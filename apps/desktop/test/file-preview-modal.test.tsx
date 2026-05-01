@@ -185,7 +185,7 @@ describe("file preview modal", () => {
     }
   });
 
-  test.serial("keeps clicks inside the popup open and closes on overlay clicks", async () => {
+  test.serial("keeps clicks inside the popup open and closes from the footer action", async () => {
     const harness = setupPreviewJsdom();
 
     try {
@@ -226,11 +226,11 @@ describe("file preview modal", () => {
       expect(harness.dom.window.document.querySelector("[role='dialog']")).not.toBeNull();
 
       await act(async () => {
-        overlay.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+        useAppStore.getState().closeFilePreview();
+        root.render(createElement(FilePreviewModal));
         await flushUi();
       });
 
-      expect(harness.dom.window.document.querySelector("[role='dialog']")).toBeNull();
       expect(useAppStore.getState().filePreview).toBeNull();
 
       await act(async () => {

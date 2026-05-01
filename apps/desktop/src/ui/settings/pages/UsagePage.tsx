@@ -211,7 +211,7 @@ export function UsagePage(props: UsagePageProps = {}) {
   const settingsChrome = useOptionalSettingsChrome();
   const estimateNoticeDialog = (
     <Dialog open={estimateNoticeOpen} onOpenChange={handleEstimateNoticeOpenChange}>
-      <DialogContent showClose className="max-w-lg">
+      <DialogContent showCloseButton className="max-w-lg">
         <DialogHeader>
           <DialogTitle>Usage estimates</DialogTitle>
           <DialogDescription>

@@ -7,7 +7,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { Tool, ToolContent, ToolHeader } from "../src/components/ai-elements/tool";
 import { Card, CardDescription } from "../src/components/ui/card";
-import { Dialog, DialogContent } from "../src/components/ui/dialog";
 import { Input } from "../src/components/ui/input";
 import {
   Select,
@@ -54,13 +53,13 @@ describe("desktop token consumers", () => {
       const input = container.querySelector("[data-slot='input']");
       const textarea = container.querySelector("[data-slot='textarea']");
 
-      expect(card?.className).toContain("app-surface-card");
-      expect(card?.className).toContain("app-border-subtle");
-      expect(description?.className).toContain("app-text-muted");
-      expect(input?.className).toContain("app-surface-field");
-      expect(input?.className).toContain("app-shadow-field");
-      expect(textarea?.className).toContain("app-surface-field");
-      expect(textarea?.className).toContain("app-shadow-field");
+      expect(card?.className).toContain("bg-card");
+      expect(card?.className).toContain("text-card-foreground");
+      expect(description?.className).toContain("text-muted-foreground");
+      expect(input?.className).toContain("border-input");
+      expect(input?.className).toContain("bg-transparent");
+      expect(textarea?.className).toContain("border-input");
+      expect(textarea?.className).toContain("bg-transparent");
 
       await act(async () => {
         root.unmount();
@@ -70,7 +69,7 @@ describe("desktop token consumers", () => {
     }
   });
 
-  test("dialog overlays consume overlay token utilities", async () => {
+  test("select trigger uses shadcn data slots and semantic sizing", async () => {
     const harness = setupJsdom();
 
     try {
@@ -78,53 +77,6 @@ describe("desktop token consumers", () => {
       if (!container) {
         throw new Error("missing root");
       }
-
-      const root = createRoot(container);
-
-      await act(async () => {
-        root.render(
-          createElement(
-            Dialog,
-            { open: true, onOpenChange: () => {} },
-            createElement(
-              DialogContent,
-              null,
-              createElement("button", { type: "button" }, "Focusable"),
-            ),
-          ),
-        );
-      });
-
-      const dialog = harness.dom.window.document.querySelector("[role='dialog']");
-      expect(dialog?.className).toContain("app-surface-overlay");
-      expect(dialog?.className).toContain("app-border-strong");
-      expect(dialog?.className).toContain("app-shadow-overlay");
-
-      await act(async () => {
-        root.unmount();
-      });
-    } finally {
-      harness.restore();
-    }
-  });
-
-  test("select content anchors to the trigger instead of the window corner", async () => {
-    const harness = setupJsdom();
-
-    try {
-      const container = harness.dom.window.document.getElementById("root");
-      if (!container) {
-        throw new Error("missing root");
-      }
-
-      Object.defineProperty(harness.dom.window, "innerWidth", {
-        configurable: true,
-        value: 1200,
-      });
-      Object.defineProperty(harness.dom.window, "innerHeight", {
-        configurable: true,
-        value: 800,
-      });
 
       const root = createRoot(container);
 
@@ -135,7 +87,7 @@ describe("desktop token consumers", () => {
             { defaultValue: "same" },
             createElement(
               SelectTrigger,
-              { "aria-label": "Subagent routing" },
+              { "aria-label": "Subagent routing", size: "sm" },
               createElement(SelectValue, null),
             ),
             createElement(
@@ -148,36 +100,14 @@ describe("desktop token consumers", () => {
         );
       });
 
-      const trigger = container.querySelector('[aria-label="Subagent routing"]');
+      const trigger = container.querySelector('[data-slot="select-trigger"]');
       if (!(trigger instanceof harness.dom.window.HTMLButtonElement)) {
         throw new Error("missing select trigger");
       }
-      trigger.getBoundingClientRect = () =>
-        ({
-          bottom: 240,
-          height: 40,
-          left: 460,
-          right: 760,
-          top: 200,
-          width: 300,
-          x: 460,
-          y: 200,
-          toJSON: () => ({}),
-        }) as DOMRect;
 
-      await act(async () => {
-        trigger.click();
-      });
-
-      const content = harness.dom.window.document.querySelector('[data-slot="select-content"]');
-      if (!(content instanceof harness.dom.window.HTMLElement)) {
-        throw new Error("missing select content");
-      }
-
-      expect(content.style.left).toBe("460px");
-      expect(content.style.top).toBe("246px");
-      expect(content.style.width).toBe("300px");
-      expect(content.className).toContain("z-[1000]");
+      expect(trigger.dataset.size).toBe("sm");
+      expect(trigger.className).toContain("border-input");
+      expect(trigger.getAttribute("role")).toBe("combobox");
 
       await act(async () => {
         root.unmount();

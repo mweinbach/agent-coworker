@@ -4,6 +4,7 @@ import { extname, join, relative, resolve } from "node:path";
 
 const desktopSrcDir = resolve(import.meta.dir, "../src");
 const allowedLiteralColorFiles = new Set([
+  resolve(desktopSrcDir, "components/ui/chart.tsx"),
   resolve(desktopSrcDir, "styles/theme-bridge.css"),
   resolve(desktopSrcDir, "styles/tokens/base.css"),
   resolve(desktopSrcDir, "styles/tokens/platform.css"),
@@ -11,6 +12,7 @@ const allowedLiteralColorFiles = new Set([
 const allowedColorMixFiles = new Set(allowedLiteralColorFiles);
 const allowedInlineStyleFiles = new Set<string>([
   // Keep this narrow. Add entries only for intentional renderer exceptions that cannot use tokens.
+  resolve(desktopSrcDir, "components/ui/chart.tsx"),
   resolve(desktopSrcDir, "components/ConnectPage.tsx"),
   resolve(desktopSrcDir, "main.web.tsx"),
 ]);

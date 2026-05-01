@@ -86,14 +86,26 @@ export function shouldDisablePluginInstallForScope(opts: {
   );
 }
 
-export function InstallPluginDialog({ workspaceId }: { workspaceId: string }) {
-  const [open, setOpen] = useState(false);
-  const [sourceInput, setSourceInput] = useState("");
+export function InstallPluginDialog({
+  workspaceId,
+  initialOpen = false,
+  initialSourceInput = "",
+  initialMutationSourceInput = null,
+}: {
+  workspaceId: string;
+  initialOpen?: boolean;
+  initialSourceInput?: string;
+  initialMutationSourceInput?: string | null;
+}) {
+  const [open, setOpen] = useState(initialOpen);
+  const [sourceInput, setSourceInput] = useState(initialSourceInput);
   const [lastPreviewSourceInput, setLastPreviewSourceInput] = useState<string | null>(null);
   const [lastPreviewTargetScope, setLastPreviewTargetScope] = useState<"workspace" | "user" | null>(
     null,
   );
-  const [lastMutationSourceInput, setLastMutationSourceInput] = useState<string | null>(null);
+  const [lastMutationSourceInput, setLastMutationSourceInput] = useState<string | null>(
+    initialMutationSourceInput,
+  );
   const [lastMutationTargetScope, setLastMutationTargetScope] = useState<
     "workspace" | "user" | null
   >(null);
@@ -167,6 +179,9 @@ export function InstallPluginDialog({ workspaceId }: { workspaceId: string }) {
   };
 
   const handleOpenChange = (nextOpen: boolean) => {
+    if (!nextOpen && !open) {
+      return;
+    }
     setOpen(nextOpen);
     if (!nextOpen) {
       resetDialogState();
@@ -196,7 +211,13 @@ export function InstallPluginDialog({ workspaceId }: { workspaceId: string }) {
 
   return (
     <>
-      <Button size="sm" className="rounded-full px-4" type="button" onClick={openDialog}>
+      <Button
+        size="sm"
+        className="rounded-full px-4"
+        type="button"
+        onPointerDown={openDialog}
+        onClick={openDialog}
+      >
         + New plugin
       </Button>
       <Dialog open={open} onOpenChange={handleOpenChange}>

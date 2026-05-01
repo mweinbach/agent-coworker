@@ -1,162 +1,64 @@
-import * as React from "react";
+import * as React from "react"
+import { cva, type VariantProps } from "class-variance-authority"
+import { Slot } from "radix-ui"
 
-import { supportsNativeDisabled } from "@/lib/nativeDisabled";
-import { assignComposedRefs, getElementRef } from "@/lib/react-ref";
-import { cn } from "@/lib/utils";
+import { cn } from "@/lib/utils"
 
-type ButtonVariant = "default" | "secondary" | "destructive" | "outline" | "ghost" | "link";
-type ButtonSize = "default" | "sm" | "lg" | "icon" | "icon-sm";
+const buttonVariants = cva(
+  "inline-flex shrink-0 items-center justify-center gap-2 rounded-md text-sm font-medium whitespace-nowrap transition-all outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+  {
+    variants: {
+      variant: {
+        default: "bg-primary text-primary-foreground hover:bg-primary/90",
+        destructive:
+          "bg-destructive text-white hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:bg-destructive/60 dark:focus-visible:ring-destructive/40",
+        outline:
+          "border bg-background shadow-xs hover:bg-accent hover:text-accent-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
+        secondary:
+          "bg-secondary text-secondary-foreground hover:bg-secondary/80",
+        ghost:
+          "hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50",
+        link: "text-primary underline-offset-4 hover:underline",
+      },
+      size: {
+        default: "h-9 px-4 py-2 has-[>svg]:px-3",
+        xs: "h-6 gap-1 rounded-md px-2 text-xs has-[>svg]:px-1.5 [&_svg:not([class*='size-'])]:size-3",
+        sm: "h-8 gap-1.5 rounded-md px-3 has-[>svg]:px-2.5",
+        lg: "h-10 rounded-md px-6 has-[>svg]:px-4",
+        icon: "size-9",
+        "icon-xs": "size-6 rounded-md [&_svg:not([class*='size-'])]:size-3",
+        "icon-sm": "size-8",
+        "icon-lg": "size-10",
+      },
+    },
+    defaultVariants: {
+      variant: "default",
+      size: "default",
+    },
+  }
+)
 
-type ButtonProps = Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, "disabled"> & {
-  variant?: ButtonVariant;
-  size?: ButtonSize;
-  asChild?: boolean;
-  disabled?: boolean;
-  "data-size"?: ButtonSize | string | null;
-};
-
-const buttonVariantStyles: Record<ButtonVariant, string> = {
-  default:
-    "border border-transparent bg-primary text-primary-foreground shadow-none hover:bg-primary/85",
-  secondary: "border border-border/70 bg-muted/40 text-foreground shadow-none hover:bg-muted/60",
-  destructive:
-    "border border-transparent bg-destructive/10 text-destructive shadow-none hover:bg-destructive/20 hover:text-destructive",
-  outline:
-    "border border-border/70 bg-background/80 text-foreground shadow-none hover:bg-muted/30 hover:text-foreground",
-  ghost:
-    "border border-transparent bg-transparent text-foreground shadow-none hover:bg-muted/40 hover:text-foreground",
-  link: "h-auto px-0 py-0 text-primary underline-offset-4 hover:underline",
-};
-
-function buttonVariants({
+function Button({
+  className,
   variant = "default",
   size = "default",
-  className,
-}: {
-  variant?: ButtonVariant;
-  size?: ButtonSize;
-  className?: string;
-} = {}): string {
-  return cn(
-    "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-[calc(var(--radius)*0.95)] font-medium transition-colors disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:cursor-not-allowed aria-disabled:opacity-50 [&>[data-icon]]:pointer-events-none [&>[data-icon]]:shrink-0",
-    size === "default" && "h-9 px-3.5 text-[13px] [&>[data-icon]]:size-4",
-    size === "sm" && "h-8 px-3 text-[12px] [&>[data-icon]]:size-3.5",
-    size === "lg" && "h-10 px-4 text-[13px] [&>[data-icon]]:size-4",
-    size === "icon" && "size-8 min-w-8 px-0 [&>[data-icon]]:size-4",
-    size === "icon-sm" && "size-7 min-w-7 px-0 [&>[data-icon]]:size-3.5",
-    buttonVariantStyles[variant],
-    className,
-  );
-}
-
-const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
-  {
-    className,
-    variant = "default",
-    size = "default",
-    asChild = false,
-    disabled,
-    children,
-    onClick,
-    tabIndex,
-    type,
-    "data-size": dataSize,
-    ...props
-  },
-  ref,
-) {
-  const handleClick = React.useCallback(
-    (event: React.MouseEvent<HTMLButtonElement>) => {
-      if (disabled) {
-        event.preventDefault();
-        event.stopPropagation();
-        return;
-      }
-      onClick?.(event);
-    },
-    [disabled, onClick],
-  );
-
-  const commonProps = {
-    ...props,
-    className: buttonVariants({
-      variant,
-      size,
-      className,
-    }),
-    "data-size": dataSize ?? size,
-    "data-slot": "button",
-    "data-variant": variant,
-  } as const;
-
-  if (asChild && React.isValidElement(children)) {
-    const child = children as React.ReactElement<{
-      "aria-disabled"?: boolean | "false" | "true";
-      className?: string;
-      disabled?: boolean;
-      onClick?: React.MouseEventHandler<HTMLButtonElement>;
-      ref?: React.Ref<HTMLElement>;
-      tabIndex?: number;
-      type?: React.ButtonHTMLAttributes<HTMLButtonElement>["type"];
-    }>;
-    const childAriaDisabled = child.props["aria-disabled"];
-    const childDisabled =
-      child.props.disabled === true || childAriaDisabled === true || childAriaDisabled === "true";
-    const asChildDisabled = disabled === true || childDisabled;
-    const childSupportsNativeDisabled = supportsNativeDisabled(child.type);
-
-    return React.cloneElement(child, {
-      ...commonProps,
-      "aria-disabled": asChildDisabled
-        ? true
-        : (child.props["aria-disabled"] ?? props["aria-disabled"]),
-      className: cn(commonProps.className, child.props.className),
-      disabled:
-        child.props.disabled === true || (disabled === true && childSupportsNativeDisabled)
-          ? true
-          : undefined,
-      tabIndex: asChildDisabled ? -1 : (child.props.tabIndex ?? tabIndex),
-      type: child.props.type ?? type,
-      onClick: (event: React.MouseEvent<HTMLButtonElement>) => {
-        if (asChildDisabled) {
-          event.preventDefault();
-          event.stopPropagation();
-          return;
-        }
-        child.props.onClick?.(event);
-        if (event.defaultPrevented) {
-          return;
-        }
-        onClick?.(event);
-      },
-      ref: (node: HTMLElement | null) => {
-        assignComposedRefs(node, getElementRef<HTMLElement>(child), ref as React.Ref<HTMLElement>);
-      },
-    });
-  }
-
-  if (asChild) {
-    if (process.env.NODE_ENV !== "production") {
-      console.warn("Button with asChild expects exactly one valid React element child.");
-    }
-    return null;
-  }
+  asChild = false,
+  ...props
+}: React.ComponentProps<"button"> &
+  VariantProps<typeof buttonVariants> & {
+    asChild?: boolean
+  }) {
+  const Comp = asChild ? Slot.Root : "button"
 
   return (
-    <button
-      {...commonProps}
-      ref={ref}
-      type={type ?? "button"}
-      onClick={handleClick}
-      tabIndex={tabIndex}
-      aria-disabled={props["aria-disabled"]}
-      disabled={disabled}
-    >
-      {children}
-    </button>
-  );
-});
+    <Comp
+      data-slot="button"
+      data-variant={variant}
+      data-size={size}
+      className={cn(buttonVariants({ variant, size, className }))}
+      {...props}
+    />
+  )
+}
 
-Button.displayName = "Button";
-
-export { Button, buttonVariants };
+export { Button, buttonVariants }

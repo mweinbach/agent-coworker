@@ -85,6 +85,7 @@ const {
   WorkspacesPage,
   WorkspaceUserProfileCard,
 } = await import("../src/ui/settings/pages/WorkspacesPage");
+const { TooltipProvider } = await import("../src/components/ui/tooltip");
 const App = (await import("../src/App")).default;
 const { useAppStore } = await import("../src/app/store");
 const defaultStoreActions = {
@@ -175,39 +176,43 @@ describe("desktop workspaces page", () => {
 
       await act(async () => {
         root.render(
-          createElement(SearchSettingsCard, {
-            workspace: {
-              id: "ws-1",
-              providerOptions: {
-                "codex-cli": {
-                  reasoningEffort: "medium",
-                  reasoningSummary: "concise",
-                  textVerbosity: "low",
-                  webSearchBackend: "native",
-                  webSearchFallbackBackend: "parallel",
-                  webSearchMode: "live",
-                  webSearch: {
-                    contextSize: "high",
-                    location: {
-                      country: "US",
-                      timezone: "America/New_York",
+          createElement(
+            TooltipProvider,
+            null,
+            createElement(SearchSettingsCard, {
+              workspace: {
+                id: "ws-1",
+                providerOptions: {
+                  "codex-cli": {
+                    reasoningEffort: "medium",
+                    reasoningSummary: "concise",
+                    textVerbosity: "low",
+                    webSearchBackend: "native",
+                    webSearchFallbackBackend: "parallel",
+                    webSearchMode: "live",
+                    webSearch: {
+                      contextSize: "high",
+                      location: {
+                        country: "US",
+                        timezone: "America/New_York",
+                      },
                     },
                   },
+                  google: {
+                    nativeWebSearch: true,
+                  },
                 },
+              },
+              providerStatusByName: {
                 google: {
-                  nativeWebSearch: true,
+                  savedApiKeyMasks: {
+                    parallel_api_key: "para...1234",
+                  },
                 },
               },
-            },
-            providerStatusByName: {
-              google: {
-                savedApiKeyMasks: {
-                  parallel_api_key: "para...1234",
-                },
-              },
-            },
-            updateWorkspaceDefaults,
-          }),
+              updateWorkspaceDefaults,
+            }),
+          ),
         );
       });
 

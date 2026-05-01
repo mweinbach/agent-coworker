@@ -1489,7 +1489,7 @@ export function ChatView() {
           </PromptInputRoot>
         </div>
         <Dialog open={cancelScopeDialogOpen} onOpenChange={setCancelScopeDialogOpen}>
-          <DialogContent showClose className="max-w-md">
+          <DialogContent showCloseButton className="max-w-md">
             <DialogHeader>
               <DialogTitle>Stop Subagents Too?</DialogTitle>
             </DialogHeader>

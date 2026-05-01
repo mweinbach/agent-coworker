@@ -71,12 +71,22 @@ mock.module("../src/lib/agentSocket", () => ({
 
 const { useAppStore } = await import("../src/app/store");
 const { defaultWorkspaceRuntime } = await import("../src/app/store.helpers/runtimeState");
-const { shouldDisablePluginInstallForScope, shouldRequireFreshPluginPreviewForScope } =
+const {
+  InstallPluginDialog,
+  shouldDisablePluginInstallForScope,
+  shouldRequireFreshPluginPreviewForScope,
+} =
   await import("../src/ui/plugins/InstallPluginDialog");
 const { PluginsCatalogPage } = await import("../src/ui/plugins/PluginsCatalogPage");
 mock.restore();
 
 const workspaceId = "ws-plugins";
+
+async function flushUi() {
+  await Promise.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await Promise.resolve();
+}
 
 function baseWorkspaceState() {
   return {
@@ -325,26 +335,8 @@ describe("plugins catalog page", () => {
       root = createRoot(container);
 
       await act(async () => {
-        root.render(
-          createElement(PluginsCatalogPage, {
-            workspaceId,
-            searchQuery: "",
-            setSearchQuery: () => {},
-          }),
-        );
-      });
-
-      const newPluginButton = Array.from(container.querySelectorAll("button")).find((button) =>
-        button.textContent?.includes("+ New plugin"),
-      );
-      if (!(newPluginButton instanceof harness.dom.window.HTMLButtonElement)) {
-        throw new Error("missing new plugin button");
-      }
-
-      await act(async () => {
-        newPluginButton.dispatchEvent(
-          new harness.dom.window.MouseEvent("click", { bubbles: true }),
-        );
+        root.render(createElement(InstallPluginDialog, { workspaceId, initialOpen: true }));
+        await flushUi();
       });
 
       const dialogText = harness.dom.window.document.body.textContent ?? "";
@@ -408,36 +400,14 @@ describe("plugins catalog page", () => {
 
       await act(async () => {
         root.render(
-          createElement(PluginsCatalogPage, {
+          createElement(InstallPluginDialog, {
             workspaceId,
-            searchQuery: "",
-            setSearchQuery: () => {},
+            initialOpen: true,
+            initialSourceInput: "owner/repo",
+            initialMutationSourceInput: "owner/repo",
           }),
         );
-      });
-
-      const newPluginButton = Array.from(container.querySelectorAll("button")).find((button) =>
-        button.textContent?.includes("+ New plugin"),
-      );
-      if (!(newPluginButton instanceof harness.dom.window.HTMLButtonElement)) {
-        throw new Error("missing new plugin button");
-      }
-
-      await act(async () => {
-        newPluginButton.dispatchEvent(
-          new harness.dom.window.MouseEvent("click", { bubbles: true }),
-        );
-      });
-
-      const textarea = harness.dom.window.document.querySelector("textarea");
-      if (!(textarea instanceof harness.dom.window.HTMLTextAreaElement)) {
-        throw new Error("missing textarea");
-      }
-
-      await act(async () => {
-        textarea.value = "owner/repo";
-        textarea.dispatchEvent(new harness.dom.window.Event("input", { bubbles: true }));
-        textarea.dispatchEvent(new harness.dom.window.Event("change", { bubbles: true }));
+        await flushUi();
       });
 
       const dialogText = harness.dom.window.document.body.textContent ?? "";

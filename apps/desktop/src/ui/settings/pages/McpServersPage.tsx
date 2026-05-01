@@ -131,6 +131,15 @@ export function McpServersPage() {
             variant="ghost"
             size="sm"
             className="text-muted-foreground hover:text-foreground"
+            onPointerDown={() => {
+              if (isCreating) {
+                resetDraft();
+                return;
+              }
+              clearAutoValidateTimer();
+              setEditorState({ mode: "create" });
+              setDraft(defaultDraftState());
+            }}
             onClick={() => {
               if (isCreating) {
                 resetDraft();
@@ -151,6 +160,7 @@ export function McpServersPage() {
         <Dialog
           open={editorState !== null}
           onOpenChange={(open) => {
+            if (!open && editorState === null) return;
             if (!open) resetDraft();
           }}
         >
@@ -425,6 +435,12 @@ export function McpServersPage() {
                       size="icon"
                       aria-label={`Edit ${server.name}`}
                       className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                      onPointerDown={(event) => {
+                        event.stopPropagation();
+                        clearAutoValidateTimer();
+                        setEditorState({ mode: "edit", name: server.name });
+                        setDraft(draftFromServer(server));
+                      }}
                       onClick={(event) => {
                         event.stopPropagation();
                         clearAutoValidateTimer();

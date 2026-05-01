@@ -237,7 +237,7 @@ export function AppTopBar({
               <SelectTrigger
                 aria-label="Select plugin management workspace"
                 className="app-topbar__thread-button app-topbar__controls h-8 border-transparent bg-transparent px-0 text-sm font-medium shadow-none hover:bg-transparent"
-                compact
+                size="sm"
               >
                 <span className="app-topbar__thread-title truncate">{title}</span>
                 <span

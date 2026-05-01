@@ -14,7 +14,7 @@ export function ResearchSettingsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent showClose className="w-[min(96vw,28rem)]">
+      <DialogContent showCloseButton className="w-[min(96vw,28rem)]">
         <DialogHeader>
           <DialogTitle>Research settings</DialogTitle>
         </DialogHeader>

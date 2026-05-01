@@ -1,5 +1,6 @@
 import React, { useCallback, useRef, useState } from "react";
 import ReactDOM from "react-dom/client";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { ConnectPage } from "./components/ConnectPage";
 import { configureWebAdapter, createWebAdapter } from "./lib/webAdapter";
 import "./styles.css";
@@ -55,6 +56,8 @@ function WebEntry() {
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    <WebEntry />
+    <TooltipProvider>
+      <WebEntry />
+    </TooltipProvider>
   </React.StrictMode>,
 );

@@ -1,55 +1,32 @@
-import { CheckIcon } from "lucide-react";
-import { type ComponentProps, useState } from "react";
+"use client"
 
-import { cn } from "@/lib/utils";
+import * as React from "react"
+import { CheckIcon } from "lucide-react"
+import { Checkbox as CheckboxPrimitive } from "radix-ui"
 
-type CheckboxProps = Omit<ComponentProps<"input">, "children" | "onChange" | "type"> & {
-  onCheckedChange?: (checked: boolean) => void;
-};
+import { cn } from "@/lib/utils"
 
 function Checkbox({
   className,
-  checked,
-  defaultChecked = false,
-  disabled,
-  onCheckedChange,
   ...props
-}: CheckboxProps) {
-  const [uncontrolledChecked, setUncontrolledChecked] = useState(Boolean(defaultChecked));
-  const isChecked = checked ?? uncontrolledChecked;
-
+}: React.ComponentProps<typeof CheckboxPrimitive.Root>) {
   return (
-    <span
+    <CheckboxPrimitive.Root
       data-slot="checkbox"
       className={cn(
-        "relative inline-flex size-[18px] shrink-0 items-center justify-center rounded-[5px] border border-border bg-foreground/[0.06] text-transparent shadow-[var(--shadow-surface)] transition-colors duration-150",
-        "has-[:checked]:border-primary has-[:checked]:bg-primary has-[:checked]:text-primary-foreground",
-        "has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-primary",
-        "has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-50",
-        className,
+        "peer size-4 shrink-0 rounded-[4px] border border-input shadow-xs transition-shadow outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 data-[state=checked]:border-primary data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground dark:bg-input/30 dark:aria-invalid:ring-destructive/40 dark:data-[state=checked]:bg-primary",
+        className
       )}
+      {...props}
     >
-      <input
-        {...props}
-        type="checkbox"
-        className="peer absolute inset-0 m-0 cursor-pointer opacity-0 disabled:cursor-not-allowed"
-        checked={isChecked}
-        disabled={disabled}
-        onChange={(event) => {
-          const nextChecked = event.currentTarget.checked;
-          if (checked === undefined) {
-            setUncontrolledChecked(nextChecked);
-          }
-          onCheckedChange?.(nextChecked);
-        }}
-      />
-      {isChecked ? (
-        <span data-slot="checkbox-indicator" className="flex items-center justify-center">
-          <CheckIcon className="size-3.5" />
-        </span>
-      ) : null}
-    </span>
-  );
+      <CheckboxPrimitive.Indicator
+        data-slot="checkbox-indicator"
+        className="grid place-content-center text-current transition-none"
+      >
+        <CheckIcon className="size-3.5" />
+      </CheckboxPrimitive.Indicator>
+    </CheckboxPrimitive.Root>
+  )
 }
 
-export { Checkbox };
+export { Checkbox }

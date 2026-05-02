@@ -164,7 +164,7 @@ describe("desktop workspaces page", () => {
     expect(html).toContain("OpenAI API");
   });
 
-  test("reveals shared search controls and manages optional allowed domains", async () => {
+  test("renders shared search controls and Codex app-server web search mode", async () => {
     const harness = setupWorkspacePageJsdom();
     let root: ReturnType<typeof createRoot> | null = null;
     const updateWorkspaceDefaults = mock(async () => {});
@@ -220,90 +220,14 @@ describe("desktop workspaces page", () => {
       expect(container.textContent).toContain("doesn't include search");
       expect(container.textContent).not.toContain("Allowed domains");
 
-      const advancedButton = [...container.querySelectorAll("button")].find((button) =>
-        button.textContent?.includes("Show"),
-      );
-      if (!(advancedButton instanceof harness.dom.window.HTMLButtonElement)) {
-        throw new Error("missing search advanced options button");
-      }
-
-      await act(async () => {
-        advancedButton.click();
-      });
-
       const text = container.textContent ?? "";
-      expect(text).toContain("Search mode");
-      expect(text).toContain("Context size");
-      expect(text).toContain("Allowed domains");
-      expect(text).toContain("Country");
-      expect(text).toContain("Timezone");
-      expect(text).toContain("Open to all domains unless you add one or more here.");
-
-      const helpButton = container.querySelector('[aria-label="Allowed domains help"]');
-      if (!(helpButton instanceof harness.dom.window.HTMLButtonElement)) {
-        throw new Error("missing allowed domains help button");
-      }
-      expect(helpButton.getAttribute("aria-label")).toBe("Allowed domains help");
-
-      const domainInput = container.querySelector('[aria-label="Codex allowed domains input"]');
-      if (!(domainInput instanceof harness.dom.window.HTMLInputElement)) {
-        throw new Error("missing allowed domains input");
-      }
-
-      const addButton = [...container.querySelectorAll("button")].find(
-        (button) => button.textContent?.trim() === "Add",
+      expect(text).toContain("Codex web search mode");
+      expect(text).toContain(
+        "Cowork passes this through to Codex app-server as the thread web search setting.",
       );
-      if (!(addButton instanceof harness.dom.window.HTMLButtonElement)) {
-        throw new Error("missing add domains button");
-      }
-      expect(addButton.disabled).toBe(true);
-
-      await act(async () => {
-        domainInput.value = "https://OpenAI.com/docs, example.com/path; api.example.com:443";
-        domainInput.dispatchEvent(new harness.dom.window.Event("input", { bubbles: true }));
-        domainInput.dispatchEvent(new harness.dom.window.Event("change", { bubbles: true }));
-      });
-
-      const addButtonAfterInput = [...container.querySelectorAll("button")].find(
-        (button) => button.textContent?.trim() === "Add",
-      );
-      if (!(addButtonAfterInput instanceof harness.dom.window.HTMLButtonElement)) {
-        throw new Error("missing add domains button after input");
-      }
-      expect(addButtonAfterInput.disabled).toBe(false);
-
-      await act(async () => {
-        addButtonAfterInput.click();
-      });
-
-      expect(domainInput.value).toBe("");
-      expect(updateWorkspaceDefaults).toHaveBeenCalledTimes(1);
-      expect(updateWorkspaceDefaults.mock.calls[0]).toEqual([
-        "ws-1",
-        {
-          providerOptions: {
-            "codex-cli": {
-              reasoningEffort: "medium",
-              reasoningSummary: "concise",
-              textVerbosity: "low",
-              webSearchBackend: "native",
-              webSearchFallbackBackend: "parallel",
-              webSearchMode: "live",
-              webSearch: {
-                contextSize: "high",
-                allowedDomains: ["openai.com", "example.com", "api.example.com"],
-                location: {
-                  country: "US",
-                  timezone: "America/New_York",
-                },
-              },
-            },
-            google: {
-              nativeWebSearch: true,
-            },
-          },
-        },
-      ]);
+      expect(text).not.toContain("Context size");
+      expect(text).not.toContain("Country");
+      expect(updateWorkspaceDefaults).not.toHaveBeenCalled();
     } finally {
       if (root) {
         await act(async () => {
@@ -372,9 +296,7 @@ describe("desktop workspaces page", () => {
     expect(html).toContain(
       "Choose Native above to restore provider-native search for both providers.",
     );
-    expect(html).toContain(
-      "These settings still apply to ChatGPT Subscription while Google models remain on the legacy local-search override above.",
-    );
+    expect(html).toContain("Codex web search mode");
   });
 
   test("renders workspace controls for user profile context", () => {

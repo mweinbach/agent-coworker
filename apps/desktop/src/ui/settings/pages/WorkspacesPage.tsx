@@ -2,6 +2,7 @@ import { defaultModelForProvider } from "@cowork/providers/catalog";
 import { motion } from "framer-motion";
 import { ChevronDownIcon, InfoIcon, PlusIcon, XIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Switch } from "../../../components/ui/switch";
 import {
   GOOGLE_DYNAMIC_REASONING_EFFORT,
   googleThinkingLevelFromReasoningEffort,
@@ -106,26 +107,11 @@ function ToggleChip({
   "aria-label"?: string;
 }) {
   return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={pressed}
+    <Switch
+      checked={pressed}
+      onCheckedChange={onPressedChange}
       aria-label={ariaLabel}
-      className={cn(
-        "relative inline-flex h-7 w-[52px] shrink-0 cursor-pointer items-center rounded-full border transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background",
-        pressed ? "border-primary/60 bg-primary" : "border-border bg-muted/50",
-      )}
-      onClick={() => onPressedChange(!pressed)}
-    >
-      <span
-        className={cn(
-          "pointer-events-none block size-5 rounded-full shadow-sm transition-transform duration-200",
-          pressed
-            ? "translate-x-[26px] bg-primary-foreground"
-            : "translate-x-[3px] bg-foreground/60",
-        )}
-      />
-    </button>
+    />
   );
 }
 

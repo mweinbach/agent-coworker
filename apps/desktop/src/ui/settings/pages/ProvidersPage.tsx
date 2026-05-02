@@ -185,7 +185,7 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
       headerActions: canConnectProvider ? (
         <button
           type="button"
-          className={buttonVariants({ variant: "outline", size: "sm", className: "shrink-0" })}
+          className={buttonVariants({ variant: "ghost", size: "sm", className: "shrink-0" })}
           onClick={() => void refreshProviderStatus({ refreshBedrockDiscovery: true })}
           disabled={providerStatusRefreshing}
         >

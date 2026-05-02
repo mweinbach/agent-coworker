@@ -3,7 +3,11 @@ import readline from "node:readline";
 
 import { asRecord, asString } from "../runtime/piRuntimeOptions";
 import { VERSION } from "../version";
-import { resolveCodexAppServerCommand, spawnCodexAppServer } from "./codexAppServerResolver";
+import {
+  type CodexAppServerCommand,
+  resolveCodexAppServerCommand,
+  spawnCodexAppServer,
+} from "./codexAppServerResolver";
 
 type PendingRequest = {
   resolve: (value: unknown) => void;
@@ -22,6 +26,7 @@ export type CodexAppServerJsonRpcRequest = {
 };
 
 export type CodexAppServerClient = {
+  command: CodexAppServerCommand;
   request: (method: string, params?: unknown) => Promise<unknown>;
   notify: (method: string, params?: unknown) => void;
   onNotification: (
@@ -140,6 +145,7 @@ export async function startCodexAppServerClient(
   };
 
   return {
+    command,
     request: (method, params) =>
       new Promise((resolve, reject) => {
         const id = nextId++;

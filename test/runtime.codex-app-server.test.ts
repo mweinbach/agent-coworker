@@ -64,6 +64,10 @@ rl.on("line", (line) => {
     return;
   }
   if (msg.method === "initialized") return;
+  if (msg.method === "model/list") {
+    send({ id: msg.id, result: { data: [{ id: "gpt-5.4", model: "gpt-5.4", displayName: "GPT-5.4", isDefault: true }], nextCursor: null } });
+    return;
+  }
   if (msg.method === "thread/start") {
     send({ id: msg.id, result: { thread: { id: "thread_1", modelProvider: "openai", turns: [] }, model: "gpt-5.4", modelProvider: "openai", cwd: process.cwd(), approvalPolicy: msg.params.approvalPolicy, sandbox: msg.params.sandbox, reasoningEffort: "high" } });
     return;
@@ -212,6 +216,89 @@ rl.on("line", (line) => {
       expect.objectContaining({
         format: "codex-app-server-v2",
       }),
+    );
+  });
+
+  test("uses app-server default model when stored Codex model is not available", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-model-"));
+    const script = path.join(dir, "model-gated-codex-app-server.js");
+    const capturePath = path.join(dir, "requests.jsonl");
+    await fs.writeFile(
+      script,
+      `
+const readline = require("node:readline");
+const fs = require("node:fs");
+const rl = readline.createInterface({ input: process.stdin });
+function send(value) { process.stdout.write(JSON.stringify(value) + "\\n"); }
+function capture(msg) {
+  if (!process.env.CODEX_APP_SERVER_CAPTURE_PATH) return;
+  if (msg.method === "thread/start" || msg.method === "turn/start") {
+    fs.appendFileSync(process.env.CODEX_APP_SERVER_CAPTURE_PATH, JSON.stringify({ method: msg.method, params: msg.params }) + "\\n");
+  }
+}
+rl.on("line", (line) => {
+  const msg = JSON.parse(line);
+  capture(msg);
+  if (msg.method === "initialize") {
+    send({ id: msg.id, result: { userAgent: "mock" } });
+    return;
+  }
+  if (msg.method === "initialized") return;
+  if (msg.method === "model/list") {
+    send({ id: msg.id, result: { data: [
+      { id: "gpt-5.3-codex-spark", model: "gpt-5.3-codex-spark", displayName: "Spark", isDefault: true }
+    ], nextCursor: null } });
+    return;
+  }
+  if (msg.method === "thread/start") {
+    if (msg.params.model !== "gpt-5.3-codex-spark") {
+      send({ id: msg.id, error: { message: "The '" + msg.params.model + "' model requires a newer version of Codex. Please upgrade to the latest app or CLI and try again." } });
+      return;
+    }
+    send({ id: msg.id, result: { thread: { id: "thread_1", modelProvider: "openai", turns: [] } } });
+    return;
+  }
+  if (msg.method === "turn/start") {
+    if (msg.params.model !== "gpt-5.3-codex-spark") {
+      send({ id: msg.id, error: { message: "wrong model" } });
+      return;
+    }
+    send({ id: msg.id, result: { turn: { id: "turn_1", status: "inProgress", items: [], error: null } } });
+    send({ method: "turn/completed", params: { turn: { id: "turn_1", status: "completed", items: [{ type: "agentMessage", id: "item_1", text: "fallback ok" }], error: null } } });
+  }
+});
+`,
+      "utf-8",
+    );
+    process.env.COWORK_CODEX_APP_SERVER_COMMAND = process.execPath;
+    process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
+    process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
+
+    const logs: string[] = [];
+    const runtime = createRuntime(makeConfig(dir));
+    const result = await runtime.runTurn({
+      config: makeConfig(dir),
+      system: "You are Codex.",
+      messages: [{ role: "user", content: "Say hi" }],
+      tools: {},
+      maxSteps: 1,
+      log: (line) => logs.push(line),
+    });
+
+    expect(result.text).toBe("fallback ok");
+    expect(result.providerState).toMatchObject({
+      provider: "codex-cli",
+      model: "gpt-5.3-codex-spark",
+    });
+    expect(logs.join("\n")).toContain(
+      'model "gpt-5.4" is not available from the resolved app-server',
+    );
+    const requests = await readCapturedRequests(capturePath);
+    expect(requests.find((entry) => entry.method === "thread/start")?.params.model).toBe(
+      "gpt-5.3-codex-spark",
+    );
+    expect(requests.find((entry) => entry.method === "turn/start")?.params.model).toBe(
+      "gpt-5.3-codex-spark",
     );
   });
 

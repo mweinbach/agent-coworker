@@ -5,12 +5,19 @@ import {
   codexAppServerInitializeParams,
   startCodexAppServerClient,
 } from "../providers/codexAppServerClient";
+import type { CodexAppServerCommand } from "../providers/codexAppServerResolver";
+import { getSupportedModel, listSupportedModels } from "../models/registry";
 import { isCodexAppServerContinuationState } from "../shared/providerContinuation";
 import type { ModelMessage } from "../types";
 import { asRecord, asString } from "./piRuntimeOptions";
 import type { LlmRuntime, RuntimeRunTurnParams, RuntimeRunTurnResult, RuntimeUsage } from "./types";
 
 const CODEX_APP_SERVER_PROVIDER = "codex-cli" as const;
+type CodexAppServerModelListEntry = {
+  id: string;
+  model: string;
+  isDefault: boolean;
+};
 type CodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 type CodexApprovalPolicy = "on-request" | "never";
 type CodexSandboxPolicy =
@@ -30,6 +37,19 @@ function asArray(value: unknown): unknown[] {
 
 function asNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function normalizeModelListEntry(value: unknown): CodexAppServerModelListEntry | null {
+  const record = asRecord(value);
+  const id = asString(record?.id);
+  const model = asString(record?.model);
+  const canonicalId = model || id;
+  if (!canonicalId) return null;
+  return {
+    id: canonicalId,
+    model: model || canonicalId,
+    isDefault: record?.isDefault === true,
+  };
 }
 
 function extractTextContent(content: unknown): string {
@@ -101,6 +121,94 @@ function codexBaseInstructions(system: string): string {
       "Cowork custom tools and Cowork-managed MCP tools are not injected into Codex app-server turns; do not assume Cowork-only tool names are callable unless Codex app-server exposes them.",
     ].join("\n"),
   ].join("\n\n");
+}
+
+function formatCommandForDiagnostics(command: CodexAppServerCommand): string {
+  return [
+    `source=${command.source}`,
+    `command=${command.command}`,
+    command.args.length > 0 ? `args=${JSON.stringify(command.args)}` : "args=[]",
+    `version=${command.version ?? "unknown"}`,
+  ].join(", ");
+}
+
+function withCodexAppServerDiagnostics(error: unknown, command: CodexAppServerCommand): Error {
+  const message = error instanceof Error ? error.message : String(error);
+  const diagnostic = `Codex app-server ${formatCommandForDiagnostics(command)}`;
+  if (message.includes(diagnostic)) return error instanceof Error ? error : new Error(message);
+  const next = new Error(`${message} (${diagnostic})`);
+  if (error instanceof Error) {
+    next.stack = error.stack;
+    next.cause = error;
+  }
+  return next;
+}
+
+async function listAppServerModels(
+  client: CodexAppServerClient,
+): Promise<CodexAppServerModelListEntry[]> {
+  const models: CodexAppServerModelListEntry[] = [];
+  let cursor: string | undefined;
+  do {
+    const result = asRecord(
+      await client.request("model/list", {
+        limit: 100,
+        cursor: cursor ?? null,
+      }),
+    );
+    const items = Array.isArray(result?.data)
+      ? result.data
+      : Array.isArray(result?.items)
+        ? result.items
+        : [];
+    for (const item of items) {
+      const model = normalizeModelListEntry(item);
+      if (model) models.push(model);
+    }
+    cursor = asString(result?.nextCursor) ?? asString(result?.next_cursor);
+  } while (cursor);
+  return models;
+}
+
+async function resolveEffectiveCodexModel(
+  client: CodexAppServerClient,
+  configuredModel: string,
+  log?: (line: string) => void,
+): Promise<string> {
+  const appServerModels = await listAppServerModels(client);
+  const supportedById = new Map(
+    listSupportedModels(CODEX_APP_SERVER_PROVIDER).map((model) => [model.id, model.id]),
+  );
+  const availableSupportedIds: string[] = [];
+  for (const model of appServerModels) {
+    const supportedId = supportedById.get(model.model) ?? supportedById.get(model.id);
+    if (supportedId && !availableSupportedIds.includes(supportedId)) {
+      availableSupportedIds.push(supportedId);
+    }
+  }
+
+  if (availableSupportedIds.includes(configuredModel)) return configuredModel;
+
+  const defaultFromAppServer = appServerModels.find((model) => model.isDefault);
+  const fallback =
+    (defaultFromAppServer
+      ? (supportedById.get(defaultFromAppServer.model) ?? supportedById.get(defaultFromAppServer.id))
+      : undefined) ?? availableSupportedIds[0];
+  if (!fallback) {
+    throw new Error(
+      `Codex app-server did not report any Cowork-supported models. Reported models: ${
+        appServerModels.map((model) => model.model).join(", ") || "none"
+      }`,
+    );
+  }
+
+  const configuredIsKnown = getSupportedModel(CODEX_APP_SERVER_PROVIDER, configuredModel) !== null;
+  log?.(
+    `[codex-app-server] model ${JSON.stringify(configuredModel)} is ${
+      configuredIsKnown ? "not available from" : "not supported by"
+    } the resolved app-server; using ${JSON.stringify(fallback)} from model/list.`,
+  );
+  return fallback;
 }
 
 function codexSandboxMode(params: RuntimeRunTurnParams): CodexSandboxMode {
@@ -325,6 +433,11 @@ export function createCodexAppServerRuntime(): LlmRuntime {
         await client.request("initialize", codexAppServerInitializeParams());
         client.notify("initialized");
 
+        const effectiveModel = await resolveEffectiveCodexModel(
+          client,
+          params.config.model,
+          params.log,
+        );
         const currentState = isCodexAppServerContinuationState(params.providerState)
           ? params.providerState
           : null;
@@ -333,11 +446,11 @@ export function createCodexAppServerRuntime(): LlmRuntime {
         const sandboxPolicy = codexSandboxPolicy(params);
         const threadConfig = codexThreadConfig(params);
         const threadResult =
-          currentState?.model === params.config.model
+          currentState?.model === effectiveModel
             ? await client.request("thread/resume", {
                 threadId: currentState.threadId,
                 cwd: params.config.workingDirectory,
-                model: params.config.model,
+                model: effectiveModel,
                 modelProvider: "openai",
                 approvalPolicy,
                 sandbox: sandboxMode,
@@ -346,7 +459,7 @@ export function createCodexAppServerRuntime(): LlmRuntime {
               })
             : await client.request("thread/start", {
                 cwd: params.config.workingDirectory,
-                model: params.config.model,
+                model: effectiveModel,
                 modelProvider: "openai",
                 approvalPolicy,
                 sandbox: sandboxMode,
@@ -360,12 +473,12 @@ export function createCodexAppServerRuntime(): LlmRuntime {
 
         await params.onModelStreamPart?.({
           type: "start",
-          request: { model: params.config.model, provider: params.config.provider },
+          request: { model: effectiveModel, provider: params.config.provider },
         });
         await params.onModelStreamPart?.({
           type: "start-step",
           stepNumber: 1,
-          request: { model: params.config.model, provider: params.config.provider },
+          request: { model: effectiveModel, provider: params.config.provider },
         });
 
         const userText = latestUserText(params.messages);
@@ -382,7 +495,7 @@ export function createCodexAppServerRuntime(): LlmRuntime {
           threadId,
           input: [{ type: "text", text: userText, text_elements: [] }],
           cwd: params.config.workingDirectory,
-          model: params.config.model,
+          model: effectiveModel,
           approvalPolicy,
           sandboxPolicy,
           effort: normalizeEffort(providerOptionString(params.providerOptions, "reasoningEffort")),
@@ -432,18 +545,19 @@ export function createCodexAppServerRuntime(): LlmRuntime {
           ...(usage ? { usage } : {}),
           providerState: {
             provider: CODEX_APP_SERVER_PROVIDER,
-            model: params.config.model,
+            model: effectiveModel,
             threadId,
             updatedAt: new Date().toISOString(),
           },
         };
       } catch (error) {
+        const contextualError = withCodexAppServerDiagnostics(error, client.command);
         if (params.abortSignal?.aborted) {
           await params.onModelAbort?.();
         } else {
-          await params.onModelError?.(error);
+          await params.onModelError?.(contextualError);
         }
-        throw error;
+        throw contextualError;
       } finally {
         unregisterSteerHandler?.();
         await client.close();

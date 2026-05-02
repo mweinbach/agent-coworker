@@ -1,48 +1,32 @@
-import { Checkbox as HeroCheckbox } from "@heroui/react";
-import { CheckIcon } from "lucide-react";
-import type { ComponentProps } from "react";
+"use client"
 
-import { cn } from "@/lib/utils";
+import * as React from "react"
+import { CheckIcon } from "lucide-react"
+import { Checkbox as CheckboxPrimitive } from "radix-ui"
 
-type CheckboxProps = Omit<
-  ComponentProps<typeof HeroCheckbox>,
-  "children" | "isSelected" | "onChange" | "isDisabled"
-> & {
-  checked?: boolean;
-  disabled?: boolean;
-  onCheckedChange?: (checked: boolean) => void;
-};
+import { cn } from "@/lib/utils"
 
-function Checkbox({ className, checked, disabled, onCheckedChange, ...props }: CheckboxProps) {
+function Checkbox({
+  className,
+  ...props
+}: React.ComponentProps<typeof CheckboxPrimitive.Root>) {
   return (
-    <HeroCheckbox
+    <CheckboxPrimitive.Root
       data-slot="checkbox"
       className={cn(
-        "inline-flex items-center justify-center",
-        "[&_[data-slot=checkbox-control]]:size-[18px] [&_[data-slot=checkbox-control]]:shrink-0 [&_[data-slot=checkbox-control]]:rounded-[5px]",
-        "[&_[data-slot=checkbox-control]]:border [&_[data-slot=checkbox-control]]:border-border [&_[data-slot=checkbox-control]]:bg-foreground/[0.06]",
-        "[&_[data-slot=checkbox-control]]:shadow-[var(--shadow-surface)]",
-        "[&_[data-slot=checkbox-control]]:transition-colors [&_[data-slot=checkbox-control]]:duration-150",
-        "[&_[data-slot=checkbox-control]]:data-[selected=true]:border-primary [&_[data-slot=checkbox-control]]:data-[selected=true]:bg-primary",
-        "[&_[data-slot=checkbox-control]]:data-[selected=false]:text-transparent",
-        "[&_[data-slot=checkbox-control]]:data-[selected=true]:text-primary-foreground",
-        "[&_[data-slot=checkbox-control]]:outline-none [&_[data-slot=checkbox-control]]:focus-visible:ring-2 [&_[data-slot=checkbox-control]]:focus-visible:ring-primary",
-        "[&_[data-slot=checkbox-indicator]]:flex [&_[data-slot=checkbox-indicator]]:items-center [&_[data-slot=checkbox-indicator]]:justify-center",
-        "disabled:cursor-not-allowed disabled:opacity-50",
-        className,
+        "peer size-4 shrink-0 rounded-[4px] border border-input shadow-xs transition-shadow outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 data-[state=checked]:border-primary data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground dark:bg-input/30 dark:aria-invalid:ring-destructive/40 dark:data-[state=checked]:bg-primary",
+        className
       )}
-      isDisabled={disabled}
-      isSelected={checked}
-      onChange={onCheckedChange}
       {...props}
     >
-      <HeroCheckbox.Control data-slot="checkbox-control">
-        <HeroCheckbox.Indicator data-slot="checkbox-indicator">
-          <CheckIcon className="size-3.5" />
-        </HeroCheckbox.Indicator>
-      </HeroCheckbox.Control>
-    </HeroCheckbox>
-  );
+      <CheckboxPrimitive.Indicator
+        data-slot="checkbox-indicator"
+        className="grid place-content-center text-current transition-none"
+      >
+        <CheckIcon className="size-3.5" />
+      </CheckboxPrimitive.Indicator>
+    </CheckboxPrimitive.Root>
+  )
 }
 
-export { Checkbox };
+export { Checkbox }

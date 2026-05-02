@@ -313,7 +313,7 @@ export const A2uiSurfaceDock = memo(function A2uiSurfaceDock({ threadId }: A2uiS
         </div>
       </div>
       <Dialog open={poppedOut} onOpenChange={setPoppedOut}>
-        <DialogContent showClose className="max-w-5xl">
+        <DialogContent showCloseButton className="max-w-5xl">
           <DialogHeader>
             <DialogTitle>
               <span className="flex items-center gap-2 text-sm font-semibold">

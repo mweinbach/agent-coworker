@@ -12,8 +12,8 @@ import {
   showQuickChatWindowInputSchema,
   windowDragPointInputSchema,
 } from "../../src/lib/desktopSchemas";
-import type { DesktopIpcModuleContext } from "./types";
 import { getPlatformChrome } from "../services/windowChrome/platformChrome";
+import type { DesktopIpcModuleContext } from "./types";
 
 type ActiveWindowDrag = {
   startScreenX: number;

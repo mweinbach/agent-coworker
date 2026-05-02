@@ -1,27 +1,21 @@
-import { Input as HeroInput } from "@heroui/react";
-import * as React from "react";
+import * as React from "react"
 
-import { cn } from "@/lib/utils";
+import { cn } from "@/lib/utils"
 
-const Input = React.forwardRef<HTMLInputElement, React.ComponentPropsWithoutRef<typeof HeroInput>>(
-  function Input({ className, type, ...props }, ref) {
-    return (
-      <HeroInput
-        ref={ref}
-        data-slot="input"
-        className={cn(
-          "app-focus-ring app-surface-field app-border-subtle app-shadow-field h-9 w-full rounded-[10px] border text-[13px] transition-colors [&_[data-slot=input]]:h-9 [&_[data-slot=input]]:bg-transparent [&_[data-slot=input]]:px-3 [&_[data-slot=input]]:py-0 [&_[data-slot=input]]:text-[13px] [&_[data-slot=input]]:text-foreground [&_[data-slot=input]]:placeholder:text-muted-foreground [&_[data-slot=input]]:outline-none",
-          className,
-        )}
-        fullWidth
-        type={type}
-        variant="secondary"
-        {...props}
-      />
-    );
-  },
-);
+function Input({ className, type, ...props }: React.ComponentProps<"input">) {
+  return (
+    <input
+      type={type}
+      data-slot="input"
+      className={cn(
+        "h-9 w-full min-w-0 rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-xs transition-[color,box-shadow] outline-none selection:bg-primary selection:text-primary-foreground file:inline-flex file:h-7 file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-foreground placeholder:text-muted-foreground disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 md:text-sm dark:bg-input/30",
+        "focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50",
+        "aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40",
+        className
+      )}
+      {...props}
+    />
+  )
+}
 
-Input.displayName = "Input";
-
-export { Input };
+export { Input }

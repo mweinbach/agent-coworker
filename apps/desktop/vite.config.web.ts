@@ -80,6 +80,7 @@ export default defineConfig({
     },
   ],
   resolve: {
+    dedupe: ["react", "react-dom"],
     alias: {
       "@": path.resolve(appRoot, "src"),
       "@cowork": path.resolve(repoRoot, "src"),

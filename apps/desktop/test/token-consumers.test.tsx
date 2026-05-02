@@ -7,8 +7,14 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { Tool, ToolContent, ToolHeader } from "../src/components/ai-elements/tool";
 import { Card, CardDescription } from "../src/components/ui/card";
-import { Dialog, DialogContent } from "../src/components/ui/dialog";
 import { Input } from "../src/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../src/components/ui/select";
 import { Textarea } from "../src/components/ui/textarea";
 import { setupJsdom } from "./jsdomHarness";
 
@@ -47,13 +53,13 @@ describe("desktop token consumers", () => {
       const input = container.querySelector("[data-slot='input']");
       const textarea = container.querySelector("[data-slot='textarea']");
 
-      expect(card?.className).toContain("app-surface-card");
-      expect(card?.className).toContain("app-border-subtle");
-      expect(description?.className).toContain("app-text-muted");
-      expect(input?.className).toContain("app-surface-field");
-      expect(input?.className).toContain("app-shadow-field");
-      expect(textarea?.className).toContain("app-surface-field");
-      expect(textarea?.className).toContain("app-shadow-field");
+      expect(card?.className).toContain("bg-card");
+      expect(card?.className).toContain("text-card-foreground");
+      expect(description?.className).toContain("text-muted-foreground");
+      expect(input?.className).toContain("border-input");
+      expect(input?.className).toContain("bg-transparent");
+      expect(textarea?.className).toContain("border-input");
+      expect(textarea?.className).toContain("bg-transparent");
 
       await act(async () => {
         root.unmount();
@@ -63,7 +69,7 @@ describe("desktop token consumers", () => {
     }
   });
 
-  test("dialog overlays consume overlay token utilities", async () => {
+  test("select trigger uses shadcn data slots and semantic sizing", async () => {
     const harness = setupJsdom();
 
     try {
@@ -77,21 +83,31 @@ describe("desktop token consumers", () => {
       await act(async () => {
         root.render(
           createElement(
-            Dialog,
-            { open: true, onOpenChange: () => {} },
+            Select,
+            { defaultValue: "same" },
             createElement(
-              DialogContent,
+              SelectTrigger,
+              { "aria-label": "Subagent routing", size: "sm" },
+              createElement(SelectValue, null),
+            ),
+            createElement(
+              SelectContent,
               null,
-              createElement("button", { type: "button" }, "Focusable"),
+              createElement(SelectItem, { value: "same" }, "Same model"),
+              createElement(SelectItem, { value: "cross" }, "Multiple providers"),
             ),
           ),
         );
       });
 
-      const dialog = harness.dom.window.document.querySelector("[role='dialog']");
-      expect(dialog?.className).toContain("app-surface-overlay");
-      expect(dialog?.className).toContain("app-border-strong");
-      expect(dialog?.className).toContain("app-shadow-overlay");
+      const trigger = container.querySelector('[data-slot="select-trigger"]');
+      if (!(trigger instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing select trigger");
+      }
+
+      expect(trigger.dataset.size).toBe("sm");
+      expect(trigger.className).toContain("border-input");
+      expect(trigger.getAttribute("role")).toBe("combobox");
 
       await act(async () => {
         root.unmount();
@@ -129,6 +145,28 @@ describe("desktop token consumers", () => {
     );
     expect(stylesCss).toMatch(
       /\.app-skills-view\s*\{[^}]*background:\s*var\(--surface-workspace-pane\);/s,
+    );
+  });
+
+  test("desktop portal slots render above the Electron chrome layer", () => {
+    const stylesCss = readFileSync(resolve(import.meta.dir, "../src/styles.css"), "utf8");
+    const portalLayer = stylesCss.match(/--desktop-portal-layer:\s*(\d+);/);
+
+    expect(portalLayer).not.toBeNull();
+    expect(Number(portalLayer?.[1])).toBeGreaterThan(81);
+
+    for (const slot of [
+      "dialog-content",
+      "dropdown-menu-content",
+      "popover-content",
+      "select-content",
+      "sheet-content",
+      "tooltip-content",
+    ]) {
+      expect(stylesCss).toContain(`[data-slot="${slot}"]`);
+    }
+    expect(stylesCss).toMatch(
+      /\[data-slot="tooltip-content"\]\s*\{\s*z-index:\s*var\(--desktop-portal-layer\);/s,
     );
   });
 });

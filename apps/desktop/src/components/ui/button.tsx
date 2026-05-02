@@ -1,180 +1,64 @@
-import { Button as HeroButton } from "@heroui/react";
-import * as React from "react";
+import * as React from "react"
+import { cva, type VariantProps } from "class-variance-authority"
+import { Slot } from "radix-ui"
 
-import { cn } from "@/lib/utils";
+import { cn } from "@/lib/utils"
 
-type ButtonVariant = "default" | "secondary" | "destructive" | "outline" | "ghost" | "link";
-type ButtonSize = "default" | "sm" | "lg" | "icon" | "icon-sm";
-
-type HeroButtonPressEvent = Parameters<
-  NonNullable<React.ComponentProps<typeof HeroButton>["onPress"]>
->[0];
-
-function assignRef<T>(ref: React.Ref<T> | undefined, value: T | null) {
-  if (!ref) {
-    return;
+const buttonVariants = cva(
+  "inline-flex shrink-0 items-center justify-center gap-2 rounded-md text-sm font-medium whitespace-nowrap transition-all outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+  {
+    variants: {
+      variant: {
+        default: "bg-primary text-primary-foreground hover:bg-primary/90",
+        destructive:
+          "bg-destructive text-white hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:bg-destructive/60 dark:focus-visible:ring-destructive/40",
+        outline:
+          "border bg-background shadow-xs hover:bg-accent hover:text-accent-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
+        secondary:
+          "bg-secondary text-secondary-foreground hover:bg-secondary/80",
+        ghost:
+          "hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50",
+        link: "text-primary underline-offset-4 hover:underline",
+      },
+      size: {
+        default: "h-9 px-4 py-2 has-[>svg]:px-3",
+        xs: "h-6 gap-1 rounded-md px-2 text-xs has-[>svg]:px-1.5 [&_svg:not([class*='size-'])]:size-3",
+        sm: "h-8 gap-1.5 rounded-md px-3 has-[>svg]:px-2.5",
+        lg: "h-10 rounded-md px-6 has-[>svg]:px-4",
+        icon: "size-9",
+        "icon-xs": "size-6 rounded-md [&_svg:not([class*='size-'])]:size-3",
+        "icon-sm": "size-8",
+        "icon-lg": "size-10",
+      },
+    },
+    defaultVariants: {
+      variant: "default",
+      size: "default",
+    },
   }
-  if (typeof ref === "function") {
-    ref(value);
-    return;
-  }
-  (ref as React.MutableRefObject<T | null>).current = value;
-}
+)
 
-function composeRefs<T>(...refs: Array<React.Ref<T> | undefined>): React.RefCallback<T> {
-  return (value) => {
-    for (const ref of refs) {
-      assignRef(ref, value);
-    }
-  };
-}
-
-function getElementRef<T>(element: React.ReactElement): React.Ref<T> | undefined {
-  const withPossibleRef = element as React.ReactElement & {
-    ref?: React.Ref<T>;
-    props: { ref?: React.Ref<T> };
-  };
-  return withPossibleRef.props.ref ?? withPossibleRef.ref;
-}
-
-type ButtonProps = Omit<
-  React.ComponentProps<typeof HeroButton>,
-  "variant" | "size" | "onPress" | "isDisabled"
-> & {
-  variant?: ButtonVariant;
-  size?: ButtonSize;
-  asChild?: boolean;
-  onClick?: React.MouseEventHandler<HTMLButtonElement>;
-  onPress?: React.ComponentProps<typeof HeroButton>["onPress"];
-  disabled?: boolean;
-  title?: string;
-};
-
-function mapVariant(
-  variant: ButtonVariant | undefined,
-): NonNullable<React.ComponentProps<typeof HeroButton>["variant"]> {
-  switch (variant) {
-    case "secondary":
-      return "secondary";
-    case "destructive":
-      return "danger";
-    case "outline":
-      return "outline";
-    case "ghost":
-      return "ghost";
-    case "link":
-      return "ghost";
-    default:
-      return "primary";
-  }
-}
-
-function mapSize(
-  size: ButtonSize | undefined,
-): NonNullable<React.ComponentProps<typeof HeroButton>["size"]> {
-  switch (size) {
-    case "sm":
-    case "icon-sm":
-      return "sm";
-    case "lg":
-      return "lg";
-    default:
-      return "md";
-  }
-}
-
-const buttonVariantStyles: Record<ButtonVariant, string> = {
-  default:
-    "border border-transparent bg-primary text-primary-foreground shadow-none hover:bg-primary/85",
-  secondary: "border border-border/70 bg-muted/40 text-foreground shadow-none hover:bg-muted/60",
-  destructive:
-    "border border-transparent bg-destructive/10 text-destructive shadow-none hover:bg-destructive/20 hover:text-destructive",
-  outline:
-    "border border-border/70 bg-background/80 text-foreground shadow-none hover:bg-muted/30 hover:text-foreground",
-  ghost:
-    "border border-transparent bg-transparent text-foreground shadow-none hover:bg-muted/40 hover:text-foreground",
-  link: "h-auto px-0 py-0 text-primary underline-offset-4 hover:underline",
-};
-
-function buttonVariants({
+function Button({
+  className,
   variant = "default",
   size = "default",
-  className,
-}: {
-  variant?: ButtonVariant;
-  size?: ButtonSize;
-  className?: string;
-} = {}): string {
-  return cn(
-    "rounded-[calc(var(--radius)*0.95)] font-medium transition-colors [&>[data-icon]]:pointer-events-none [&>[data-icon]]:shrink-0",
-    size === "default" && "h-9 px-3.5 text-[13px] [&>[data-icon]]:size-4",
-    size === "sm" && "h-8 px-3 text-[12px] [&>[data-icon]]:size-3.5",
-    size === "lg" && "h-10 px-4 text-[13px] [&>[data-icon]]:size-4",
-    size === "icon" && "size-8 min-w-8 px-0 [&>[data-icon]]:size-4",
-    size === "icon-sm" && "size-7 min-w-7 px-0 [&>[data-icon]]:size-3.5",
-    buttonVariantStyles[variant],
-    className,
-  );
-}
-
-const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
-  {
-    className,
-    variant = "default",
-    size = "default",
-    asChild = false,
-    onClick,
-    onPress,
-    disabled,
-    children,
-    ...props
-  },
-  ref,
-) {
-  if (asChild && React.isValidElement(children)) {
-    const child = children as React.ReactElement<React.HTMLAttributes<HTMLElement>>;
-    const childProps = {
-      ...child.props,
-      ...props,
-      className: buttonVariants({
-        variant,
-        size,
-        className: cn(className, child.props.className),
-      }),
-      onClick: (event: React.MouseEvent<HTMLElement>) => {
-        child.props.onClick?.(event);
-        onClick?.(event as React.MouseEvent<HTMLButtonElement>);
-      },
-      ref: composeRefs(getElementRef<HTMLElement>(child), ref as React.Ref<HTMLElement>),
-    } as React.HTMLAttributes<HTMLElement>;
-
-    return React.cloneElement(child, childProps);
-  }
+  asChild = false,
+  ...props
+}: React.ComponentProps<"button"> &
+  VariantProps<typeof buttonVariants> & {
+    asChild?: boolean
+  }) {
+  const Comp = asChild ? Slot.Root : "button"
 
   return (
-    <HeroButton
-      {...props}
-      ref={ref}
-      className={buttonVariants({
-        variant,
-        size,
-        className: typeof className === "string" ? className : undefined,
-      })}
-      data-size={size}
+    <Comp
       data-slot="button"
       data-variant={variant}
-      isDisabled={disabled}
-      isIconOnly={size === "icon" || size === "icon-sm"}
-      onClick={onClick as React.ComponentProps<typeof HeroButton>["onClick"]}
-      onPress={onPress as ((event: HeroButtonPressEvent) => void) | undefined}
-      size={mapSize(size)}
-      variant={mapVariant(variant)}
-    >
-      {children}
-    </HeroButton>
-  );
-});
+      data-size={size}
+      className={cn(buttonVariants({ variant, size, className }))}
+      {...props}
+    />
+  )
+}
 
-Button.displayName = "Button";
-
-export { Button, buttonVariants };
+export { Button, buttonVariants }

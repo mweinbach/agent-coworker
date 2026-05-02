@@ -5,6 +5,7 @@ import { useAppStore } from "./app/store";
 import { disposeAllJsonRpcState } from "./app/store.helpers";
 import type { DesktopMenuCommand, SystemAppearance } from "./lib/desktopApi";
 import {
+  getPlatformChrome,
   getSystemAppearance,
   getUpdateState,
   onMenuCommand,
@@ -17,7 +18,6 @@ import {
 import { canPopOutQuickChatThread } from "./lib/quickChatPopout";
 import { getDesktopWindowMode } from "./lib/windowMode";
 import { ASK_SKIP_TOKEN } from "./lib/wsProtocol";
-import { getPlatformChrome } from "./lib/desktopCommands";
 import { ContextSidebar } from "./ui/ContextSidebar";
 import { FilePreviewModal } from "./ui/FilePreviewModal";
 import { AppTopBar } from "./ui/layout/AppTopBar";
@@ -417,23 +417,31 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    void getPlatformChrome().then((chrome) => {
-      const root = document.documentElement;
-      root.style.setProperty("--platform-titlebar-height", `${chrome.titlebarHeight}px`);
-      root.style.setProperty("--platform-drag-strip-height", `${chrome.dragStripHeight}px`);
-      root.style.setProperty("--platform-left-native-reserve", `${chrome.leftNativeReserve}px`);
-      root.style.setProperty("--platform-right-native-reserve", `${chrome.rightNativeReserve}px`);
-      root.style.setProperty("--platform-caption-button-reserve", `${chrome.captionButtonReserve}px`);
-      root.dataset.sidebarTitlebandMode = chrome.sidebarTitlebandMode;
-      root.dataset.topbarControlPlacement = chrome.topbarControlPlacement;
-      root.dataset.usesNativeGlass = chrome.usesNativeGlass ? "true" : "false";
-      root.dataset.disableCssBlur = chrome.disableCssBlur ? "true" : "false";
-    }).catch(() => {
-      // Fallback to defaults if platform chrome cannot be loaded.
-    });
+    void getPlatformChrome()
+      .then((chrome) => {
+        const root = document.documentElement;
+        root.style.setProperty("--platform-titlebar-height", `${chrome.titlebarHeight}px`);
+        root.style.setProperty("--platform-drag-strip-height", `${chrome.dragStripHeight}px`);
+        root.style.setProperty("--platform-left-native-reserve", `${chrome.leftNativeReserve}px`);
+        root.style.setProperty("--platform-right-native-reserve", `${chrome.rightNativeReserve}px`);
+        root.style.setProperty(
+          "--platform-caption-button-reserve",
+          `${chrome.captionButtonReserve}px`,
+        );
+        root.dataset.sidebarTitlebandMode = chrome.sidebarTitlebandMode;
+        root.dataset.topbarControlPlacement = chrome.topbarControlPlacement;
+        root.dataset.usesNativeGlass = chrome.usesNativeGlass ? "true" : "false";
+        root.dataset.disableCssBlur = chrome.disableCssBlur ? "true" : "false";
+      })
+      .catch(() => {
+        // Fallback to defaults if platform chrome cannot be loaded.
+      });
   }, []);
 
   useEffect(() => {
+    if (windowMode !== "main") {
+      return;
+    }
     for (const notification of notifications) {
       if (seenNotificationIds.current.has(notification.id)) {
         continue;
@@ -446,7 +454,7 @@ export default function App() {
         // Browser-style in-app notifications already exist; OS toast is best effort.
       });
     }
-  }, [notifications]);
+  }, [notifications, windowMode]);
 
   return (
     <>

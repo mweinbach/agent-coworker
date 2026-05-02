@@ -46,6 +46,13 @@ These apply to `bun run cli`, `bun run serve`, and `bun src/index.ts` / `cowork`
     *   ES Modules (ESM) throughout the project.
     *   2-space indentation.
     *   `camelCase` for variables and functions; `PascalCase` for types and components.
+*   **Desktop UI and shadcn/ui:**
+    *   The Electron renderer in `apps/desktop` uses shadcn/ui. Do not introduce HeroUI or another component system for desktop UI.
+    *   Run shadcn commands from `apps/desktop` with Bun, for example `bunx --bun shadcn@latest info --json`, `bunx --bun shadcn@latest docs button dialog`, and `bunx --bun shadcn@latest add <component>`.
+    *   Use `apps/desktop/components.json` as the source of truth: Vite, Tailwind v4, radix base, lucide icons, `@/components/ui/*` imports, and `@/lib/utils`.
+    *   Prefer existing shadcn primitives before custom markup. Use components such as `Button`, `Card`, `Dialog`, `Sheet`, `Tabs`, `Select`, `Switch`, `Checkbox`, `Tooltip`, `DropdownMenu`, `Command`, `Field`, `InputGroup`, `Separator`, `Skeleton`, and `Badge`.
+    *   Follow shadcn conventions: semantic CSS tokens, component variants, `gap-*` instead of `space-*`, `size-*` for equal dimensions, `cn()` for conditional classes, and lucide icons with `data-icon` inside buttons.
+    *   Preview updates to existing shadcn files with `--dry-run` or `--diff`; do not overwrite desktop-customized wrappers without checking their behavior and tests.
 *   **WebSocket-First Logic:**
     *   All business logic MUST reside in the server/agent layer.
     *   UIs are thin clients that communicate via the protocol defined in `docs/websocket-protocol.md`.

@@ -1,6 +1,5 @@
 @import "./styles/fonts.css";
 @import "tailwindcss";
-@import "@heroui/styles";
 @import "./styles/tokens.css";
 @import "./styles/theme-bridge.css";
 @import "./styles/token-utilities.css";
@@ -9,12 +8,18 @@
 @import "./styles/platform/win32.css";
 @import "./styles/platform/linux.css";
 
+@custom-variant dark (&:is(.dark *));
+
 @source "../node_modules/streamdown/dist/*.js";
 
 html,
 body,
 #root {
   height: 100%;
+}
+
+:root {
+  --desktop-portal-layer: 120;
 }
 
 body {
@@ -116,6 +121,27 @@ samp {
 
 .app-native-no-drag {
   -webkit-app-region: no-drag;
+}
+
+[data-slot="alert-dialog-overlay"],
+[data-slot="alert-dialog-content"],
+[data-slot="context-menu-content"],
+[data-slot="context-menu-sub-content"],
+[data-slot="dialog-overlay"],
+[data-slot="dialog-content"],
+[data-slot="drawer-overlay"],
+[data-slot="drawer-content"],
+[data-slot="dropdown-menu-content"],
+[data-slot="dropdown-menu-sub-content"],
+[data-slot="hover-card-content"],
+[data-slot="menubar-content"],
+[data-slot="menubar-sub-content"],
+[data-slot="popover-content"],
+[data-slot="select-content"],
+[data-slot="sheet-overlay"],
+[data-slot="sheet-content"],
+[data-slot="tooltip-content"] {
+  z-index: var(--desktop-portal-layer);
 }
 
 .app-topbar__toolbar-layer {
@@ -541,4 +567,37 @@ body.app-animating-sidebars .app-topbar__content-fill {
   .sidebar-thread-region {
     transition: none;
   }
+}
+
+:root {
+  --sidebar: hsl(0 0% 98%);
+  --sidebar-foreground: hsl(240 5.3% 26.1%);
+  --sidebar-primary: hsl(240 5.9% 10%);
+  --sidebar-primary-foreground: hsl(0 0% 98%);
+  --sidebar-accent: hsl(240 4.8% 95.9%);
+  --sidebar-accent-foreground: hsl(240 5.9% 10%);
+  --sidebar-border: hsl(220 13% 91%);
+  --sidebar-ring: hsl(217.2 91.2% 59.8%);
+}
+
+.dark {
+  --sidebar: hsl(240 5.9% 10%);
+  --sidebar-foreground: hsl(240 4.8% 95.9%);
+  --sidebar-primary: hsl(224.3 76.3% 48%);
+  --sidebar-primary-foreground: hsl(0 0% 100%);
+  --sidebar-accent: hsl(240 3.7% 15.9%);
+  --sidebar-accent-foreground: hsl(240 4.8% 95.9%);
+  --sidebar-border: hsl(240 3.7% 15.9%);
+  --sidebar-ring: hsl(217.2 91.2% 59.8%);
+}
+
+@theme inline {
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
 }

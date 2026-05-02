@@ -49,7 +49,13 @@ export function PlatformTopBarChrome({
     if (!sidebarCollapsed) {
       return null;
     }
-    return <Win32CollapsedLeftRail onNewChat={onNewChat} onToggleSidebar={onToggleSidebar} sidebarLabel={sidebarLabel} />;
+    return (
+      <Win32CollapsedLeftRail
+        onNewChat={onNewChat}
+        onToggleSidebar={onToggleSidebar}
+        sidebarLabel={sidebarLabel}
+      />
+    );
   }
 
   // Linux / other: inline toggle at left

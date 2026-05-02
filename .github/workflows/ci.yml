@@ -37,7 +37,6 @@ jobs:
             apps/desktop/node_modules
             ~/.bun/install/cache
           key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
-          restore-keys: ${{ runner.os }}-bun-
 
       - name: Install dependencies
         run: bun install
@@ -81,7 +80,6 @@ jobs:
             apps/desktop/node_modules
             ~/.bun/install/cache
           key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
-          restore-keys: ${{ runner.os }}-bun-
 
       - name: Install dependencies
         run: bun install
@@ -116,7 +114,6 @@ jobs:
             apps/desktop/node_modules
             ~/.bun/install/cache
           key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
-          restore-keys: ${{ runner.os }}-bun-
 
       - name: Install dependencies
         run: bun install
@@ -145,7 +142,6 @@ jobs:
             apps/desktop/node_modules
             ~/.bun/install/cache
           key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
-          restore-keys: ${{ runner.os }}-bun-
 
       - name: Install dependencies
         run: bun install

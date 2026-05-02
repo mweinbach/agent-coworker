@@ -31,6 +31,7 @@ import { ServerManager } from "./services/serverManager";
 import { createBeforeQuitHandler } from "./services/shutdown";
 import { resolveTrayIconPath } from "./services/trayIcon";
 import { DesktopUpdaterService } from "./services/updater";
+import { revealAndActivateWindow } from "./services/windowActivation";
 import {
   applyPlatformWindowCreated,
   getPlatformBrowserWindowOptions,
@@ -551,16 +552,11 @@ async function createUtilityWindow(): Promise<BrowserWindow> {
 
 async function ensureMainWindow(): Promise<BrowserWindow> {
   if (mainWindow && !mainWindow.isDestroyed()) {
-    if (mainWindow.isMinimized()) {
-      mainWindow.restore();
-    }
-    mainWindow.show();
-    mainWindow.focus();
+    revealAndActivateWindow(app, mainWindow);
     return mainWindow;
   }
   const win = await createMainWindow();
-  win.show();
-  win.focus();
+  revealAndActivateWindow(app, win);
   return win;
 }
 

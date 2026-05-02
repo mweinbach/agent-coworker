@@ -6,44 +6,34 @@ import { Button, buttonVariants } from "../src/components/ui/button";
 import { setupJsdom } from "./jsdomHarness";
 
 describe("desktop button component", () => {
-  test("buttonVariants includes variant styling for standalone usage", () => {
+  test("uses the stock shadcn variant contract", () => {
     expect(buttonVariants({ variant: "default" })).toContain("bg-primary");
-    expect(buttonVariants({ variant: "secondary" })).toContain("bg-muted/40");
-    expect(buttonVariants({ variant: "destructive" })).toContain("bg-destructive/10");
-    expect(buttonVariants({ variant: "outline" })).toContain("border-border/70");
-    expect(buttonVariants({ variant: "ghost" })).toContain("hover:bg-muted/40");
+    expect(buttonVariants({ variant: "secondary" })).toContain("bg-secondary");
+    expect(buttonVariants({ variant: "destructive" })).toContain("bg-destructive");
+    expect(buttonVariants({ variant: "outline" })).toContain("border");
+    expect(buttonVariants({ variant: "ghost" })).toContain("hover:bg-accent");
     expect(buttonVariants({ variant: "link" })).toContain("underline");
   });
 
-  test("passes a real click event through onClick", async () => {
+  test("renders stock data attributes and click behavior", async () => {
     const harness = setupJsdom();
 
     try {
       const container = harness.dom.window.document.getElementById("root");
-      if (!container) {
-        throw new Error("missing root");
-      }
+      if (!container) throw new Error("missing root");
 
       const root = createRoot(container);
-      const seen: {
-        currentTargetTag: string;
-        hasNativeEvent: boolean;
-        targetTag: string;
-        type: string;
-      }[] = [];
+      let clickCount = 0;
 
       await act(async () => {
         root.render(
           createElement(
             Button,
             {
-              onClick: (event) => {
-                seen.push({
-                  currentTargetTag: event.currentTarget.tagName,
-                  hasNativeEvent: Boolean(event.nativeEvent),
-                  targetTag: (event.target as HTMLElement).tagName,
-                  type: event.type,
-                });
+              variant: "secondary",
+              size: "sm",
+              onClick: () => {
+                clickCount += 1;
               },
             },
             "Press me",
@@ -56,17 +46,15 @@ describe("desktop button component", () => {
         throw new Error("missing rendered button");
       }
 
+      expect(button.dataset.slot).toBe("button");
+      expect(button.dataset.variant).toBe("secondary");
+      expect(button.dataset.size).toBe("sm");
+
       await act(async () => {
-        button.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+        button.click();
       });
 
-      expect(seen).toHaveLength(1);
-      expect(seen[0]).toEqual({
-        currentTargetTag: "BUTTON",
-        hasNativeEvent: true,
-        targetTag: "BUTTON",
-        type: "click",
-      });
+      expect(clickCount).toBe(1);
 
       await act(async () => {
         root.unmount();
@@ -76,30 +64,33 @@ describe("desktop button component", () => {
     }
   });
 
-  test("forwards refs in asChild mode", async () => {
+  test("composes asChild through Radix Slot", async () => {
     const harness = setupJsdom();
 
     try {
       const container = harness.dom.window.document.getElementById("root");
-      if (!container) {
-        throw new Error("missing root");
-      }
+      if (!container) throw new Error("missing root");
 
       const root = createRoot(container);
-      const refObject: { current: HTMLElement | null } = { current: null };
 
       await act(async () => {
         root.render(
           createElement(
             Button,
-            { asChild: true, ref: refObject as unknown as React.Ref<HTMLButtonElement> },
+            { asChild: true, className: "custom-link" },
             createElement("a", { href: "#target", id: "child-link" }, "Child link"),
           ),
         );
       });
 
       const link = harness.dom.window.document.getElementById("child-link");
-      expect(refObject.current).toBe(link);
+      if (!(link instanceof harness.dom.window.HTMLAnchorElement)) {
+        throw new Error("missing child link");
+      }
+
+      expect(link.dataset.slot).toBe("button");
+      expect(link.className).toContain("custom-link");
+      expect(link.className).toContain("bg-primary");
 
       await act(async () => {
         root.unmount();

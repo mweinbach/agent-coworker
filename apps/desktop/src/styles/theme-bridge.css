@@ -1,4 +1,4 @@
-/* Maps desktop design tokens to Tailwind v4 + HeroUI semantic variables */
+/* Maps desktop design tokens to Tailwind v4 + shadcn/Radix semantic variables */
 
 @theme inline {
   --font-sans:

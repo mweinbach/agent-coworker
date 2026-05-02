@@ -6,16 +6,26 @@ type JsdomGlobalKey =
   | "navigator"
   | "CSS"
   | "HTMLElement"
+  | "Element"
   | "HTMLButtonElement"
   | "HTMLInputElement"
   | "HTMLTextAreaElement"
   | "HTMLSelectElement"
   | "Image"
   | "MutationObserver"
+  | "ResizeObserver"
   | "NodeFilter"
   | "SVGElement"
   | "Node"
+  | "DocumentFragment"
+  | "Event"
+  | "CustomEvent"
+  | "KeyboardEvent"
+  | "MouseEvent"
+  | "PointerEvent"
   | "getComputedStyle"
+  | "setTimeout"
+  | "clearTimeout"
   | "requestAnimationFrame"
   | "cancelAnimationFrame";
 
@@ -71,16 +81,26 @@ export function setupJsdom(options: SetupJsdomOptions = {}): JsdomHarness {
     "navigator",
     "CSS",
     "HTMLElement",
+    "Element",
     "HTMLButtonElement",
     "HTMLInputElement",
     "HTMLTextAreaElement",
     "HTMLSelectElement",
     "Image",
     "MutationObserver",
+    "ResizeObserver",
     "NodeFilter",
     "SVGElement",
     "Node",
+    "DocumentFragment",
+    "Event",
+    "CustomEvent",
+    "KeyboardEvent",
+    "MouseEvent",
+    "PointerEvent",
     "getComputedStyle",
+    "setTimeout",
+    "clearTimeout",
     "IS_REACT_ACT_ENVIRONMENT",
   ].map((key) => ({
     key,
@@ -91,12 +111,21 @@ export function setupJsdom(options: SetupJsdomOptions = {}): JsdomHarness {
   setGlobalProperty("document", dom.window.document);
   setGlobalProperty("navigator", dom.window.navigator);
   setGlobalProperty("HTMLElement", dom.window.HTMLElement);
+  setGlobalProperty("Element", dom.window.Element);
   setGlobalProperty("HTMLButtonElement", dom.window.HTMLButtonElement);
   setGlobalProperty("HTMLInputElement", dom.window.HTMLInputElement);
   setGlobalProperty("HTMLTextAreaElement", dom.window.HTMLTextAreaElement);
   setGlobalProperty("HTMLSelectElement", dom.window.HTMLSelectElement);
   setGlobalProperty("Image", dom.window.Image);
   setGlobalProperty("MutationObserver", dom.window.MutationObserver);
+  setGlobalProperty(
+    "ResizeObserver",
+    class ResizeObserver {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
   Object.defineProperty(dom.window, "CSS", {
     configurable: true,
     writable: true,
@@ -106,39 +135,75 @@ export function setupJsdom(options: SetupJsdomOptions = {}): JsdomHarness {
   setGlobalProperty("NodeFilter", dom.window.NodeFilter);
   setGlobalProperty("SVGElement", dom.window.SVGElement);
   setGlobalProperty("Node", dom.window.Node);
+  setGlobalProperty("DocumentFragment", dom.window.DocumentFragment);
+  setGlobalProperty("Event", dom.window.Event);
+  setGlobalProperty("CustomEvent", dom.window.CustomEvent);
+  setGlobalProperty("KeyboardEvent", dom.window.KeyboardEvent);
+  setGlobalProperty("MouseEvent", dom.window.MouseEvent);
+  setGlobalProperty("PointerEvent", dom.window.PointerEvent);
   setGlobalProperty("getComputedStyle", dom.window.getComputedStyle.bind(dom.window));
 
-  if (options.includeAnimationFrame) {
-    const requestAnimationFrame =
-      typeof options.includeAnimationFrame === "object" &&
-      options.includeAnimationFrame.requestAnimationFrame
-        ? options.includeAnimationFrame.requestAnimationFrame
-        : (dom.window.requestAnimationFrame?.bind(dom.window) ??
-          ((callback: FrameRequestCallback) =>
-            dom.window.setTimeout(() => callback(Date.now()), 0)));
-    const cancelAnimationFrame =
-      typeof options.includeAnimationFrame === "object" &&
-      options.includeAnimationFrame.cancelAnimationFrame
-        ? options.includeAnimationFrame.cancelAnimationFrame
-        : (dom.window.cancelAnimationFrame?.bind(dom.window) ??
-          ((handle: number) => dom.window.clearTimeout(handle)));
+  const nativeSetTimeout = globalThis.setTimeout.bind(globalThis);
+  const nativeClearTimeout = globalThis.clearTimeout.bind(globalThis);
+  const runWithCurrentDomGlobals = (callback: () => void) => {
+    const previous = {
+      window: Object.getOwnPropertyDescriptor(globalThis, "window"),
+      document: Object.getOwnPropertyDescriptor(globalThis, "document"),
+      Event: Object.getOwnPropertyDescriptor(globalThis, "Event"),
+      CustomEvent: Object.getOwnPropertyDescriptor(globalThis, "CustomEvent"),
+    };
+    setGlobalProperty("window", dom.window);
+    setGlobalProperty("document", dom.window.document);
+    setGlobalProperty("Event", dom.window.Event);
+    setGlobalProperty("CustomEvent", dom.window.CustomEvent);
+    try {
+      callback();
+    } finally {
+      restoreGlobalProperty({ key: "window", descriptor: previous.window });
+      restoreGlobalProperty({ key: "document", descriptor: previous.document });
+      restoreGlobalProperty({ key: "Event", descriptor: previous.Event });
+      restoreGlobalProperty({ key: "CustomEvent", descriptor: previous.CustomEvent });
+    }
+  };
+  setGlobalProperty("setTimeout", (handler: TimerHandler, timeout?: number, ...args: unknown[]) =>
+    nativeSetTimeout(() => {
+      if (typeof handler === "function") {
+        runWithCurrentDomGlobals(() => handler(...args));
+        return;
+      }
+      nativeSetTimeout(handler, 0);
+    }, timeout),
+  );
+  setGlobalProperty("clearTimeout", nativeClearTimeout);
 
-    saved.push(
-      {
-        key: "requestAnimationFrame",
-        descriptor: Object.getOwnPropertyDescriptor(globalThis, "requestAnimationFrame"),
-      },
-      {
-        key: "cancelAnimationFrame",
-        descriptor: Object.getOwnPropertyDescriptor(globalThis, "cancelAnimationFrame"),
-      },
-    );
+  const requestAnimationFrame =
+    typeof options.includeAnimationFrame === "object" &&
+    options.includeAnimationFrame.requestAnimationFrame
+      ? options.includeAnimationFrame.requestAnimationFrame
+      : (dom.window.requestAnimationFrame?.bind(dom.window) ??
+        ((callback: FrameRequestCallback) => dom.window.setTimeout(() => callback(Date.now()), 0)));
+  const cancelAnimationFrame =
+    typeof options.includeAnimationFrame === "object" &&
+    options.includeAnimationFrame.cancelAnimationFrame
+      ? options.includeAnimationFrame.cancelAnimationFrame
+      : (dom.window.cancelAnimationFrame?.bind(dom.window) ??
+        ((handle: number) => dom.window.clearTimeout(handle)));
 
-    setGlobalProperty("requestAnimationFrame", requestAnimationFrame);
-    setGlobalProperty("cancelAnimationFrame", cancelAnimationFrame);
-    dom.window.requestAnimationFrame = requestAnimationFrame;
-    dom.window.cancelAnimationFrame = cancelAnimationFrame;
-  }
+  saved.push(
+    {
+      key: "requestAnimationFrame",
+      descriptor: Object.getOwnPropertyDescriptor(globalThis, "requestAnimationFrame"),
+    },
+    {
+      key: "cancelAnimationFrame",
+      descriptor: Object.getOwnPropertyDescriptor(globalThis, "cancelAnimationFrame"),
+    },
+  );
+
+  setGlobalProperty("requestAnimationFrame", requestAnimationFrame);
+  setGlobalProperty("cancelAnimationFrame", cancelAnimationFrame);
+  dom.window.requestAnimationFrame = requestAnimationFrame;
+  dom.window.cancelAnimationFrame = cancelAnimationFrame;
 
   if (options.extraGlobals) {
     for (const [key, value] of Object.entries(options.extraGlobals)) {

@@ -41,6 +41,9 @@ class FakeTray extends EventEmitter {
 
 const electronMockOverrides = {
   app: {
+    focus: () => {},
+    isHidden: () => false,
+    show: () => {},
     quit: () => {},
   },
   globalShortcut: {

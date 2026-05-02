@@ -2,6 +2,7 @@ import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import readline from "node:readline";
 
 import { asRecord, asString } from "../runtime/piRuntimeOptions";
+import { VERSION } from "../version";
 
 type PendingRequest = {
   resolve: (value: unknown) => void;
@@ -41,6 +42,14 @@ export type CodexAppServerClientOptions = {
 
 const DEFAULT_CODEX_COMMAND = "codex";
 const DEFAULT_CODEX_ARGS = ["app-server"] as const;
+
+export function codexAppServerClientInfo(): { name: string; title: string; version: string } {
+  return {
+    name: "agent-coworker",
+    title: "Agent Coworker",
+    version: VERSION,
+  };
+}
 
 function codexCommand(): { command: string; args: string[] } {
   return {
@@ -206,11 +215,7 @@ export async function withCodexAppServerClient<T>(
   const client = startCodexAppServerClient(opts);
   try {
     await client.request("initialize", {
-      clientInfo: {
-        name: "agent-coworker",
-        title: "Agent Coworker",
-        version: "0.1.0",
-      },
+      clientInfo: codexAppServerClientInfo(),
     });
     client.notify("initialized");
     return await fn(client);

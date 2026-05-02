@@ -2,6 +2,7 @@ import {
   type CodexAppServerClient,
   type CodexAppServerJsonRpcNotification,
   type CodexAppServerJsonRpcRequest,
+  codexAppServerClientInfo,
   startCodexAppServerClient,
 } from "../providers/codexAppServerClient";
 import { isCodexAppServerContinuationState } from "../shared/providerContinuation";
@@ -309,11 +310,7 @@ export function createCodexAppServerRuntime(): LlmRuntime {
       try {
         params.abortSignal?.throwIfAborted();
         await client.request("initialize", {
-          clientInfo: {
-            name: "agent-coworker",
-            title: "Agent Coworker",
-            version: "0.1.0",
-          },
+          clientInfo: codexAppServerClientInfo(),
         });
         client.notify("initialized");
 

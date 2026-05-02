@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { createRuntime } from "../src/runtime";
 import type { AgentConfig } from "../src/types";
+import { VERSION } from "../src/version";
 
 const previousCommand = process.env.COWORK_CODEX_APP_SERVER_COMMAND;
 const previousArgs = process.env.COWORK_CODEX_APP_SERVER_ARGS;
@@ -43,7 +44,7 @@ const rl = readline.createInterface({ input: process.stdin });
 function send(value) { process.stdout.write(JSON.stringify(value) + "\\n"); }
 function capture(msg) {
   if (!process.env.CODEX_APP_SERVER_CAPTURE_PATH) return;
-  if (msg.method === "thread/start" || msg.method === "thread/resume" || msg.method === "turn/start" || msg.method === "turn/steer") {
+  if (msg.method === "initialize" || msg.method === "thread/start" || msg.method === "thread/resume" || msg.method === "turn/start" || msg.method === "turn/steer") {
     fs.appendFileSync(process.env.CODEX_APP_SERVER_CAPTURE_PATH, JSON.stringify({ method: msg.method, params: msg.params }) + "\\n");
   }
 }
@@ -109,6 +110,33 @@ afterEach(() => {
 });
 
 describe("codex app-server runtime", () => {
+  test("initializes app-server with the Cowork package version", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-init-"));
+    const script = await writeMockAppServer(dir);
+    const capturePath = path.join(dir, "requests.jsonl");
+    process.env.COWORK_CODEX_APP_SERVER_COMMAND = process.execPath;
+    process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
+    process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
+
+    const runtime = createRuntime(makeConfig(dir));
+    await runtime.runTurn({
+      config: makeConfig(dir),
+      system: "You are Codex.",
+      messages: [{ role: "user", content: "Say hi" }],
+      tools: {},
+      maxSteps: 1,
+    });
+
+    const requests = await readCapturedRequests(capturePath);
+    expect(requests.find((entry) => entry.method === "initialize")?.params).toEqual({
+      clientInfo: {
+        name: "agent-coworker",
+        title: "Agent Coworker",
+        version: VERSION,
+      },
+    });
+  });
+
   test("drives a turn through codex app-server JSONL", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-runtime-"));
     const script = await writeMockAppServer(dir);

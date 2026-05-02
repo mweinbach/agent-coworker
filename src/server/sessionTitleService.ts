@@ -1,16 +1,16 @@
 import type { AgentConfig } from "../types";
 
-const TITLE_MODEL_BY_PROVIDER: Partial<Record<AgentConfig["provider"], string>> = {
-  anthropic: "claude-haiku-4-5",
-  baseten: "moonshotai/Kimi-K2.5",
-  "codex-cli": "gpt-5.4-mini",
-  google: "gemini-3-flash-preview",
-  nvidia: "nvidia/nemotron-3-super-120b-a12b",
-  openai: "gpt-5-mini",
-  together: "moonshotai/Kimi-K2.5",
-  fireworks: "accounts/fireworks/models/glm-5",
-  "opencode-go": "glm-5",
-  "opencode-zen": "glm-5",
+const TITLE_MODELS_BY_PROVIDER: Partial<Record<AgentConfig["provider"], readonly string[]>> = {
+  anthropic: ["claude-haiku-4-5"],
+  baseten: ["moonshotai/Kimi-K2.5"],
+  "codex-cli": ["gpt-5.4-mini", "gpt-5.3-codex-spark"],
+  google: ["gemini-3-flash-preview"],
+  nvidia: ["nvidia/nemotron-3-super-120b-a12b"],
+  openai: ["gpt-5-mini"],
+  together: ["moonshotai/Kimi-K2.5"],
+  fireworks: ["accounts/fireworks/models/glm-5"],
+  "opencode-go": ["glm-5"],
+  "opencode-zen": ["glm-5"],
 };
 
 const TITLE_MAX_TOKENS = 150;
@@ -101,11 +101,8 @@ function modelCandidatesForProvider(
   currentModel: string,
   defaultModelForProviderImpl: SessionTitleDeps["defaultModelForProvider"],
 ): string[] {
-  const candidates = [
-    TITLE_MODEL_BY_PROVIDER[provider],
-    currentModel,
-    defaultModelForProviderImpl(provider),
-  ];
+  const titleModels = TITLE_MODELS_BY_PROVIDER[provider];
+  const candidates = [...(titleModels ?? []), currentModel, defaultModelForProviderImpl(provider)];
 
   const unique: string[] = [];
   for (const candidate of candidates) {

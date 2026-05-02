@@ -10,6 +10,7 @@ import basetenZaiOrgGlm5 from "../../config/models/baseten/zai-org-glm-5.json";
 import bedrockAmazonNovaLiteV10 from "../../config/models/bedrock/amazon.nova-lite-v1-0.json";
 import bedrockAmazonNovaMicroV10 from "../../config/models/bedrock/amazon.nova-micro-v1-0.json";
 import bedrockAnthropicClaude35Haiku20241022V10 from "../../config/models/bedrock/anthropic.claude-3-5-haiku-20241022-v1-0.json";
+import codexCliGpt53CodexSpark from "../../config/models/codex-cli/gpt-5.3-codex-spark.json";
 import codexCliGpt54 from "../../config/models/codex-cli/gpt-5.4.json";
 import codexCliGpt54Mini from "../../config/models/codex-cli/gpt-5.4-mini.json";
 import codexCliGpt55 from "../../config/models/codex-cli/gpt-5.5.json";
@@ -90,6 +91,7 @@ const RAW_MODEL_REGISTRY_ENTRIES = [
   codexCliGpt55,
   codexCliGpt54,
   codexCliGpt54Mini,
+  codexCliGpt53CodexSpark,
   fireworksGlm5,
   fireworksKimiK2p5,
   fireworksKimiK2p5Turbo,

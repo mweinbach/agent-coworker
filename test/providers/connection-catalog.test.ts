@@ -356,6 +356,12 @@ describe("providers/connectionCatalog", () => {
           isDefault: false,
         },
         {
+          id: "gpt-5.3-codex-spark",
+          model: "gpt-5.3-codex-spark",
+          displayName: "GPT-5.3 Codex Spark from app-server",
+          isDefault: false,
+        },
+        {
           id: "gpt-5.3-codex",
           model: "gpt-5.3-codex",
           displayName: "Unsupported alias",
@@ -376,11 +382,13 @@ describe("providers/connectionCatalog", () => {
       "gpt-5.5",
       "gpt-5.4",
       "gpt-5.4-mini",
+      "gpt-5.3-codex-spark",
     ]);
     expect(codex?.models.map((model) => model.displayName)).toEqual([
       "GPT-5.5 from app-server",
       "GPT-5.4 from app-server",
       "GPT-5.4 Mini from app-server",
+      "GPT-5.3 Codex Spark from app-server",
     ]);
     expect(payload.connected).toContain("codex-cli");
   });

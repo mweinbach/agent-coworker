@@ -91,6 +91,68 @@ describe("sessionTitleService", () => {
     expect(runTurn).toHaveBeenCalledTimes(2);
   });
 
+  test("uses codex app-server title models with spark fallback", async () => {
+    const runTurn = mock(async ({ config }: { config: AgentConfig }) => {
+      if (config.model === "gpt-5.4-mini") {
+        throw new Error("mini unavailable");
+      }
+      return {
+        text: "Codex Spark Title",
+        reasoningText: undefined,
+        responseMessages: [] as any[],
+        usage: undefined,
+      };
+    });
+    const createRuntime = mock((config: AgentConfig) => ({
+      name: "codex-app-server",
+      runTurn,
+      model: config.model,
+    }));
+    const defaultModelForProvider = mock((_provider: AgentConfig["provider"]) => "gpt-5.4");
+
+    const generateSessionTitle = createSessionTitleGenerator({
+      createRuntime: createRuntime as any,
+      defaultModelForProvider: defaultModelForProvider as any,
+    });
+    const config = {
+      ...makeConfig("codex-cli"),
+      model: "gpt-5.4",
+      preferredChildModel: "gpt-5.4",
+      providerOptions: {
+        "codex-cli": {
+          reasoningEffort: "high",
+          reasoningSummary: "detailed",
+          textVerbosity: "medium",
+        },
+      },
+    } satisfies AgentConfig;
+
+    const result = await generateSessionTitle({
+      config,
+      query: "make the title service use app-server model fallback",
+    });
+
+    expect(result).toEqual({
+      title: "Codex Spark Title",
+      source: "model",
+      model: "gpt-5.3-codex-spark",
+    });
+    expect(createRuntime.mock.calls.map(([runtimeConfig]) => runtimeConfig.model)).toEqual([
+      "gpt-5.4-mini",
+      "gpt-5.3-codex-spark",
+    ]);
+    expect(runTurn).toHaveBeenCalledTimes(2);
+    expect(runTurn.mock.calls[1]?.[0]).toMatchObject({
+      config: {
+        provider: "codex-cli",
+        model: "gpt-5.3-codex-spark",
+      },
+      tools: {},
+      maxSteps: 1,
+      providerOptions: config.providerOptions,
+    });
+  });
+
   test("falls back to deterministic heuristic when all model attempts fail", async () => {
     const runTurn = mock(async (_args: any) => {
       throw new Error("all failed");

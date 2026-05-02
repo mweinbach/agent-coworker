@@ -256,14 +256,15 @@ OpenAI native connectors are workspace-scoped ChatGPT apps owned by `codex app-s
 - `cowork/connectors/openai-native/list`
   - Params: `{ "cwd"?: string }`
   - Result event: `{ "type": "openai_native_connectors", "connectors": OpenAiNativeConnector[], "enabledConnectorIds": string[], "authenticated": boolean, "message"?: string }`
+  - Connector entries are derived from the Codex app-server `mcpServerStatus/list` `codex_apps` tool metadata (`connector_id`, `connector_name`, and `connector_description`) plus `config/read` app enablement flags.
 - `cowork/connectors/openai-native/refresh`
   - Params: `{ "cwd"?: string }`
-  - Result: same event shape as `list`, after forcing Codex app-server to refresh its app list.
+  - Result: same event shape as `list`, after re-reading Codex app-server MCP status and app config.
 - `cowork/connectors/openai-native/setEnabled`
   - Params: `{ "cwd"?: string, "connectorId": string, "enabled": boolean }`
   - Result: same event shape as `list`, after writing `apps.<connectorId>.enabled` through Codex app-server config.
 
-Cowork no longer injects a direct streamable HTTP MCP server at the ChatGPT Codex apps endpoint. Connector execution, app listing, and app enablement are delegated to `codex app-server`.
+Cowork no longer injects a direct streamable HTTP MCP server at the ChatGPT Codex apps endpoint. Connector execution, connector discovery, and app enablement are delegated to `codex app-server`.
 
 ### Research JSON-RPC methods
 

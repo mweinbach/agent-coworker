@@ -32,6 +32,74 @@ function makeConfig(workspaceRoot: string, home: string): AgentConfig {
 }
 
 describe("OpenAI native connectors", () => {
+  test("derives apps from Codex app-server MCP status metadata", () => {
+    const appsConfig = codexAppServerAuthInternal.normalizeAppConfig({
+      _default: null,
+      connector_gmail: { enabled: false },
+    });
+    const apps = codexAppServerAuthInternal.appsFromMcpServerStatuses(
+      [
+        {
+          name: "codex_apps",
+          tools: {
+            gmail_search: {
+              name: "gmail_search",
+              description: "Search Gmail",
+              _meta: {
+                connector_id: "connector_gmail",
+                connector_name: "Gmail",
+                connector_description: "Search mail from Gmail.",
+                link_id: "link_gmail",
+              },
+            },
+            drive_search: {
+              name: "drive_search",
+              _meta: {
+                connector_id: "connector_drive",
+                connector_name: "Google Drive",
+                connector_description: "Search Drive files.",
+                link_id: "link_drive",
+              },
+            },
+            unowned_tool: {
+              name: "unowned_tool",
+              _meta: {
+                resource_name: "Local tool",
+              },
+            },
+          },
+          resources: [],
+          resourceTemplates: [],
+          authStatus: "unsupported",
+        },
+      ],
+      appsConfig,
+    );
+
+    expect(apps).toEqual([
+      expect.objectContaining({
+        id: "connector_gmail",
+        name: "Gmail",
+        description: "Search mail from Gmail.",
+        isAccessible: true,
+        isEnabled: false,
+      }),
+      expect.objectContaining({
+        id: "connector_drive",
+        name: "Google Drive",
+        description: "Search Drive files.",
+        isAccessible: true,
+        isEnabled: true,
+      }),
+    ]);
+    expect(apps[0]?.appMetadata).toMatchObject({
+      source: "mcpServerStatus/list",
+      toolCount: 1,
+      serverNames: ["codex_apps"],
+      linkIds: ["link_gmail"],
+    });
+  });
+
   test("lists Codex app-server apps when Codex is signed in", async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "connectors-workspace-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "connectors-home-"));

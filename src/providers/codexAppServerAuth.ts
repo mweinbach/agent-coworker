@@ -46,6 +46,15 @@ export type CodexAppServerApp = {
   labels?: Record<string, string>;
 };
 
+type CodexAppServerAppConfigEntry = {
+  enabled?: boolean | null;
+};
+
+type CodexAppServerAppsConfig = {
+  defaultEnabled?: boolean | null;
+  entries: Map<string, CodexAppServerAppConfigEntry>;
+};
+
 type ReadAccountOptions = {
   refreshToken?: boolean;
   log?: (line: string) => void;
@@ -165,6 +174,177 @@ function normalizeApp(value: unknown): CodexAppServerApp | null {
   };
 }
 
+function normalizeAppConfig(value: unknown): CodexAppServerAppsConfig {
+  const apps = asRecord(value);
+  const entries = new Map<string, CodexAppServerAppConfigEntry>();
+  let defaultEnabled: boolean | null | undefined;
+  if (!apps) return { entries };
+
+  for (const [key, entryValue] of Object.entries(apps)) {
+    const entry = asRecord(entryValue);
+    if (key === "_default") {
+      defaultEnabled = entry?.enabled === true ? true : entry?.enabled === false ? false : null;
+      continue;
+    }
+    entries.set(key, {
+      enabled: entry?.enabled === true ? true : entry?.enabled === false ? false : null,
+    });
+  }
+
+  return {
+    ...(defaultEnabled !== undefined ? { defaultEnabled } : {}),
+    entries,
+  };
+}
+
+function isUnknownMethodError(error: unknown, method: string): boolean {
+  if (!(error instanceof Error)) return false;
+  return (
+    error.message.includes("unknown variant") ||
+    error.message.includes("Unknown method") ||
+    error.message.includes(`unknown method ${method}`) ||
+    error.message.includes(`method not found: ${method}`)
+  );
+}
+
+async function readCodexAppServerAppsConfig(
+  client: CodexAppServerClient,
+): Promise<CodexAppServerAppsConfig> {
+  const result = asRecord(await client.request("config/read", {}));
+  const config = asRecord(result?.config);
+  return normalizeAppConfig(config?.apps);
+}
+
+async function listCodexAppServerMcpStatuses(client: CodexAppServerClient): Promise<unknown[]> {
+  const statuses: unknown[] = [];
+  let cursor: string | undefined;
+  do {
+    const result = asRecord(
+      await client.request("mcpServerStatus/list", {
+        limit: 100,
+        cursor: cursor ?? null,
+      }),
+    );
+    const items = Array.isArray(result?.data) ? result.data : [];
+    statuses.push(...items);
+    cursor = asString(result?.nextCursor) ?? asString(result?.next_cursor);
+  } while (cursor);
+  return statuses;
+}
+
+function appsFromMcpServerStatuses(
+  statuses: unknown[],
+  appsConfig: CodexAppServerAppsConfig,
+): CodexAppServerApp[] {
+  const apps = new Map<
+    string,
+    CodexAppServerApp & { appMetadata: NonNullable<CodexAppServerApp["appMetadata"]> }
+  >();
+
+  for (const statusValue of statuses) {
+    const status = asRecord(statusValue);
+    const serverName = asString(status?.name);
+    const tools = asRecord(status?.tools);
+    if (!tools) continue;
+
+    for (const toolValue of Object.values(tools)) {
+      const tool = asRecord(toolValue);
+      const meta = asRecord(tool?._meta);
+      const connectorId = asString(meta?.connector_id);
+      if (!connectorId) continue;
+
+      const existing = apps.get(connectorId);
+      const name = asString(meta?.connector_name) ?? connectorId;
+      const description = asString(meta?.connector_description);
+      const appConfig = appsConfig.entries.get(connectorId);
+      const isEnabled = appConfig?.enabled ?? appsConfig.defaultEnabled ?? true;
+      const app =
+        existing ??
+        ({
+          id: connectorId,
+          name,
+          ...(description ? { description } : {}),
+          isAccessible: true,
+          isEnabled,
+          appMetadata: {
+            source: "mcpServerStatus/list",
+            toolCount: 0,
+            serverNames: [],
+            linkIds: [],
+          },
+        } satisfies CodexAppServerApp & {
+          appMetadata: NonNullable<CodexAppServerApp["appMetadata"]>;
+        });
+
+      app.isEnabled = isEnabled;
+      if (!app.description && description) app.description = description;
+      const metadata = app.appMetadata;
+      metadata.toolCount = Number(metadata.toolCount ?? 0) + 1;
+      const serverNames = Array.isArray(metadata.serverNames) ? metadata.serverNames : [];
+      if (serverName && !serverNames.includes(serverName)) serverNames.push(serverName);
+      metadata.serverNames = serverNames;
+      const linkId = asString(meta?.link_id);
+      const linkIds = Array.isArray(metadata.linkIds) ? metadata.linkIds : [];
+      if (linkId && !linkIds.includes(linkId)) linkIds.push(linkId);
+      metadata.linkIds = linkIds;
+      apps.set(connectorId, app);
+    }
+  }
+
+  for (const [appId, appConfig] of appsConfig.entries) {
+    if (apps.has(appId)) continue;
+    if (appConfig.enabled !== false) continue;
+    apps.set(appId, {
+      id: appId,
+      name: appId,
+      isAccessible: false,
+      isEnabled: false,
+      appMetadata: {
+        source: "config/read",
+        toolCount: 0,
+        serverNames: [],
+        linkIds: [],
+      },
+    });
+  }
+
+  return [...apps.values()];
+}
+
+async function listCodexAppServerAppsViaMcpStatus(
+  client: CodexAppServerClient,
+): Promise<CodexAppServerApp[]> {
+  const [statuses, appsConfig] = await Promise.all([
+    listCodexAppServerMcpStatuses(client),
+    readCodexAppServerAppsConfig(client),
+  ]);
+  return appsFromMcpServerStatuses(statuses, appsConfig);
+}
+
+async function listCodexAppServerAppsViaLegacyAppList(
+  client: CodexAppServerClient,
+  opts: ListAppsOptions,
+): Promise<CodexAppServerApp[]> {
+  const apps: CodexAppServerApp[] = [];
+  let cursor: string | undefined;
+  do {
+    const result = asRecord(
+      await client.request("app/list", {
+        limit: 100,
+        cursor: cursor ?? null,
+        forceRefetch: opts.forceRefetch === true,
+      }),
+    );
+    const items = Array.isArray(result?.data) ? result.data : [];
+    for (const item of items) {
+      const app = normalizeApp(item);
+      if (app) apps.push(app);
+    }
+    cursor = asString(result?.nextCursor) ?? asString(result?.next_cursor);
+  } while (cursor);
+  return apps;
+}
+
 export async function listCodexAppServerModels(
   opts: ListModelsOptions = {},
 ): Promise<CodexAppServerModel[]> {
@@ -199,24 +379,12 @@ export async function listCodexAppServerApps(
 ): Promise<CodexAppServerApp[]> {
   if (appServerAuthOverrides.listApps) return await appServerAuthOverrides.listApps(opts);
   return await withClient(async (client) => {
-    const apps: CodexAppServerApp[] = [];
-    let cursor: string | undefined;
-    do {
-      const result = asRecord(
-        await client.request("app/list", {
-          limit: 100,
-          cursor: cursor ?? null,
-          forceRefetch: opts.forceRefetch === true,
-        }),
-      );
-      const items = Array.isArray(result?.data) ? result.data : [];
-      for (const item of items) {
-        const app = normalizeApp(item);
-        if (app) apps.push(app);
-      }
-      cursor = asString(result?.nextCursor) ?? asString(result?.next_cursor);
-    } while (cursor);
-    return apps;
+    try {
+      return await listCodexAppServerAppsViaMcpStatus(client);
+    } catch (error) {
+      if (!isUnknownMethodError(error, "mcpServerStatus/list")) throw error;
+      return await listCodexAppServerAppsViaLegacyAppList(client, opts);
+    }
   }, opts.log);
 }
 
@@ -285,6 +453,8 @@ export async function loginCodexAppServerChatGpt(
 }
 
 export const __internal = {
+  appsFromMcpServerStatuses,
+  normalizeAppConfig,
   setAuthOverridesForTests(overrides: AppServerAuthOverrides): void {
     appServerAuthOverrides.readAccount = overrides.readAccount;
     appServerAuthOverrides.readRateLimits = overrides.readRateLimits;

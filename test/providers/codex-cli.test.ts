@@ -24,7 +24,7 @@ describe(`Codex provider (${DEFAULT_CODEX_MODEL})`, () => {
 
     expect(model).toBeDefined();
     expect(model.modelId).toBe(DEFAULT_CODEX_MODEL);
-    expect(model.provider).toBe("codex-cli.responses");
+    expect(model.provider).toBe("codex-app-server");
     expect(model.specificationVersion).toBe("v3");
   });
 
@@ -53,9 +53,9 @@ describe(`Codex provider (${DEFAULT_CODEX_MODEL})`, () => {
       const headers = await viaGetModel.config.headers();
 
       expect(viaGetModel.modelId).toBe(DEFAULT_CODEX_MODEL);
-      expect(viaGetModel.provider).toBe("codex-cli.responses");
+      expect(viaGetModel.provider).toBe("codex-app-server");
       expect(viaGetModel.specificationVersion).toBe("v3");
-      expect(headers).toEqual({ authorization: "Bearer test_codex_key" });
+      expect(headers).toEqual({});
     });
   });
 
@@ -105,7 +105,7 @@ describe(`Codex provider (${DEFAULT_CODEX_MODEL})`, () => {
       const model = getModel(cfg);
 
       expect(model.modelId).toBe("gpt-5.4-mini");
-      expect(model.provider).toBe("codex-cli.responses");
+      expect(model.provider).toBe("codex-app-server");
       expect(model.specificationVersion).toBe("v3");
     });
   });

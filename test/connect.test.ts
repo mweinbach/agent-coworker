@@ -9,29 +9,29 @@ import { parseConnectionStoreJson } from "../src/store/connections";
 
 const mockedAuthorizeUrl = `https://auth.openai.com/oauth/authorize?response_type=code&client_id=app_EMoamEEZ73f0CkXaXp7hrann&redirect_uri=${encodeURIComponent(`http://${OAUTH_LOOPBACK_HOST}:1455/auth/callback`)}&scope=openid%20profile%20email%20offline_access%20api.connectors.read%20api.connectors.invoke&code_challenge=mock-challenge&code_challenge_method=S256&id_token_add_organizations=true&codex_cli_simplified_flow=true&state=mock-state&originator=codex_cli_rs`;
 
-function buildMockCodexMaterial(
-  paths: { authDir: string },
-  overrides: Partial<Record<string, unknown>> = {},
-) {
+function buildMockCodexLogin(overrides: Partial<Record<string, unknown>> = {}) {
   return {
-    file: path.join(paths.authDir, "codex-cli", "auth.json"),
-    issuer: "https://auth.openai.com",
-    clientId: "app_EMoamEEZ73f0CkXaXp7hrann",
-    accessToken: "mock-access-token",
-    refreshToken: "mock-refresh-token",
-    expiresAtMs: Date.now() + 3_600_000,
-    accountId: "acc_mock",
-    ...overrides,
+    account: {
+      type: "chatgpt",
+      email: "mock@example.com",
+      ...overrides,
+    },
   };
 }
 
 const runCodexLoginMock = mock(async (opts: any) => {
   await opts.openUrl?.(mockedAuthorizeUrl);
-  return buildMockCodexMaterial(opts.paths);
+  return buildMockCodexLogin();
 });
 
-const { connectProvider, getAiCoworkerPaths, isOauthCliProvider, maskApiKey, readConnectionStore } =
-  await import("../src/connect");
+const {
+  connectProvider,
+  disconnectProvider,
+  getAiCoworkerPaths,
+  isOauthCliProvider,
+  maskApiKey,
+  readConnectionStore,
+} = await import("../src/connect");
 
 async function makeTmpHome(): Promise<string> {
   return await fs.mkdtemp(path.join(os.tmpdir(), "cowork-connect-test-"));
@@ -83,7 +83,7 @@ describe("connectProvider", () => {
     runCodexLoginMock.mockReset();
     runCodexLoginMock.mockImplementation(async (opts: any) => {
       await opts.openUrl?.(mockedAuthorizeUrl);
-      return buildMockCodexMaterial(opts.paths);
+      return buildMockCodexLogin();
     });
   });
 
@@ -224,7 +224,7 @@ describe("connectProvider", () => {
     expect(entry?.apiKey).toBe("opencode-zen-test-key-5678");
   });
 
-  test("codex-cli Cowork-owned oauth succeeds and stores oauth mode", async () => {
+  test("codex-cli app-server login succeeds and stores oauth mode", async () => {
     const home = await makeTmpHome();
     const paths = getAiCoworkerPaths({ homedir: home });
     const openedUrls: string[] = [];
@@ -241,14 +241,11 @@ describe("connectProvider", () => {
     if (!result.ok) return;
     expect(result.mode).toBe("oauth");
     expect(openedUrls).toEqual([mockedAuthorizeUrl]);
+    expect(result.message).toContain("mock@example.com");
     expect(runCodexLoginMock).toHaveBeenCalledTimes(1);
-
-    const persisted = JSON.parse(
-      await fs.readFile(path.join(home, ".cowork", "auth", "codex-cli", "auth.json"), "utf-8"),
-    ) as any;
-    expect(persisted?.tokens?.access_token).toBe("mock-access-token");
-    expect(persisted?.tokens?.refresh_token).toBe("mock-refresh-token");
-    expect(persisted?.account?.account_id).toBe("acc_mock");
+    await expect(
+      fs.readFile(path.join(home, ".cowork", "auth", "codex-cli", "auth.json"), "utf-8"),
+    ).rejects.toThrow();
 
     const store = await readConnectionStore(paths);
     const entry = store.services["codex-cli"];
@@ -256,7 +253,7 @@ describe("connectProvider", () => {
     expect(entry?.mode).toBe("oauth");
   });
 
-  test("codex-cli ignores legacy external auth and runs Cowork-owned oauth", async () => {
+  test("codex-cli ignores legacy external auth and runs app-server login", async () => {
     const home = await makeTmpHome();
     const paths = getAiCoworkerPaths({ homedir: home });
     const accessToken = makeJwt({ exp: Math.floor(Date.now() / 1000) + 3_600 });
@@ -290,117 +287,21 @@ describe("connectProvider", () => {
       paths,
       openUrl: async (url) => url === mockedAuthorizeUrl,
       fetchImpl: async () => {
-        throw new Error("Unexpected network call during fresh Codex OAuth login.");
+        throw new Error("Unexpected network call during Codex app-server login.");
       },
     });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.mode).toBe("oauth");
-    expect(result.message).toContain("Codex OAuth sign-in completed.");
-    expect(result.oauthCredentialsFile).toBe(
-      path.join(home, ".cowork", "auth", "codex-cli", "auth.json"),
-    );
+    expect(result.message).toContain("Codex app-server ChatGPT sign-in completed");
     expect(runCodexLoginMock).toHaveBeenCalledTimes(1);
-
-    const persisted = JSON.parse(
-      await fs.readFile(path.join(home, ".cowork", "auth", "codex-cli", "auth.json"), "utf-8"),
-    ) as any;
-    expect(persisted?.tokens?.access_token).toBe("mock-access-token");
-    expect(persisted?.tokens?.refresh_token).toBe("mock-refresh-token");
-    expect(persisted?.account?.account_id).toBe("acc_mock");
+    await expect(
+      fs.readFile(path.join(home, ".cowork", "auth", "codex-cli", "auth.json"), "utf-8"),
+    ).rejects.toThrow();
   });
 
-  test("codex-cli stale credentials trigger new oauth flow", async () => {
-    const home = await makeTmpHome();
-    const paths = getAiCoworkerPaths({ homedir: home });
-    const authFile = path.join(home, ".cowork", "auth", "codex-cli", "auth.json");
-    await fs.mkdir(path.dirname(authFile), { recursive: true });
-    await fs.writeFile(
-      authFile,
-      JSON.stringify(
-        {
-          version: 1,
-          auth_mode: "chatgpt",
-          issuer: "https://auth.openai.com",
-          client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
-          tokens: {
-            access_token: "expired-access-token",
-            expires_at: Date.now() - 60_000,
-          },
-        },
-        null,
-        2,
-      ),
-    );
-
-    const openedUrls: string[] = [];
-    runCodexLoginMock.mockImplementationOnce(async (opts: any) => {
-      await opts.openUrl?.(mockedAuthorizeUrl);
-      return buildMockCodexMaterial(opts.paths, {
-        accessToken: "fresh-access-token",
-        refreshToken: "fresh-refresh-token",
-        accountId: "acc_789",
-      });
-    });
-
-    const result = await connectProvider({
-      provider: "codex-cli",
-      paths,
-      openUrl: async (url) => {
-        openedUrls.push(url);
-        return true;
-      },
-    });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.mode).toBe("oauth");
-    expect(result.message).toContain("Codex OAuth sign-in completed");
-    expect(openedUrls).toEqual([mockedAuthorizeUrl]);
-
-    const persisted = JSON.parse(await fs.readFile(authFile, "utf-8")) as any;
-    expect(persisted?.tokens?.access_token).toBe("fresh-access-token");
-  });
-
-  test("codex-cli rewrites oauth credentials into Cowork auth.json even if helper returns a different file path", async () => {
-    const home = await makeTmpHome();
-    const paths = getAiCoworkerPaths({ homedir: home });
-    const nonCoworkFile = path.join(home, "tmp", "codex-auth.json");
-
-    runCodexLoginMock.mockImplementationOnce(async (opts: any) => {
-      await opts.openUrl?.(mockedAuthorizeUrl);
-      return buildMockCodexMaterial(opts.paths, {
-        file: nonCoworkFile,
-        accessToken: "rewritten-access-token",
-        refreshToken: "rewritten-refresh-token",
-        accountId: "acc_rewritten",
-      });
-    });
-
-    const result = await connectProvider({
-      provider: "codex-cli",
-      paths,
-      openUrl: async () => true,
-    });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.oauthCredentialsFile).toBe(
-      path.join(home, ".cowork", "auth", "codex-cli", "auth.json"),
-    );
-
-    await expect(fs.readFile(nonCoworkFile, "utf-8")).rejects.toThrow();
-
-    const persisted = JSON.parse(
-      await fs.readFile(path.join(home, ".cowork", "auth", "codex-cli", "auth.json"), "utf-8"),
-    ) as any;
-    expect(persisted?.tokens?.access_token).toBe("rewritten-access-token");
-    expect(persisted?.tokens?.refresh_token).toBe("rewritten-refresh-token");
-    expect(persisted?.account?.account_id).toBe("acc_rewritten");
-  });
-
-  test("codex-cli rejects pasted authorization codes because Cowork owns the browser handoff", async () => {
+  test("codex-cli rejects pasted authorization codes because app-server owns the browser handoff", async () => {
     const home = await makeTmpHome();
     const paths = getAiCoworkerPaths({ homedir: home });
 
@@ -412,7 +313,28 @@ describe("connectProvider", () => {
 
     expect(result.ok).toBe(false);
     expect(runCodexLoginMock).not.toHaveBeenCalled();
-    expect(result.message).toContain("browser-managed by Cowork");
+    expect(result.message).toContain("Codex app-server ChatGPT login is browser-managed");
+    await expect(
+      fs.readFile(path.join(home, ".cowork", "auth", "codex-cli", "auth.json"), "utf-8"),
+    ).rejects.toThrow();
+  });
+
+  test("codex-cli disconnect clears Cowork connection state without touching app-server auth", async () => {
+    const home = await makeTmpHome();
+    const paths = getAiCoworkerPaths({ homedir: home });
+    await connectProvider({
+      provider: "codex-cli",
+      paths,
+      openUrl: async (url) => url === mockedAuthorizeUrl,
+    });
+
+    const result = await disconnectProvider({ provider: "codex-cli", paths });
+
+    expect(result.ok).toBe(true);
+    expect(result.message).toContain("auth was preserved");
+    expect(runCodexLoginMock).toHaveBeenCalledTimes(1);
+    const store = await readConnectionStore(paths);
+    expect(store.services["codex-cli"]).toBeUndefined();
     await expect(
       fs.readFile(path.join(home, ".cowork", "auth", "codex-cli", "auth.json"), "utf-8"),
     ).rejects.toThrow();

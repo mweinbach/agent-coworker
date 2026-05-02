@@ -389,9 +389,31 @@ function isInvalidGoogleContinuationError(error: unknown): boolean {
   );
 }
 
+function isInvalidCodexAppServerContinuationError(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  const normalized = text.toLowerCase();
+  const mentionsThreadId =
+    normalized.includes("thread_id") ||
+    normalized.includes("thread id") ||
+    normalized.includes("threadid") ||
+    normalized.includes("thread");
+  if (!mentionsThreadId) return false;
+
+  return (
+    normalized.includes("not found") ||
+    normalized.includes("invalid") ||
+    normalized.includes("expired") ||
+    normalized.includes("unknown") ||
+    normalized.includes("does not exist")
+  );
+}
+
 function isInvalidProviderManagedContinuationError(provider: unknown, error: unknown): boolean {
   if (supportsOpenAiContinuation(provider)) {
     return isInvalidOpenAiContinuationError(error);
+  }
+  if (provider === "codex-cli") {
+    return isInvalidCodexAppServerContinuationError(error);
   }
   if (provider === "google") {
     return isInvalidGoogleContinuationError(error);

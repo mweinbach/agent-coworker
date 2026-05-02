@@ -5,8 +5,6 @@ import path from "node:path";
 
 import { z } from "zod";
 import { getAiCoworkerPaths } from "../src/connect";
-import { defaultSupportedModel } from "../src/models/registry";
-import { CODEX_BACKEND_BASE_URL, writeCodexAuthMaterial } from "../src/providers/codex-auth";
 import { resolveOpenAiResponsesModel } from "../src/runtime/openaiResponsesModel";
 import { createPiRuntime, __internal as piRuntimeInternal } from "../src/runtime/piRuntime";
 import type { RuntimeRunTurnParams } from "../src/runtime/types";
@@ -15,20 +13,6 @@ import {
   TOOL_OUTPUT_OVERFLOW_PREVIEW_CHARS,
 } from "../src/shared/toolOutputOverflow";
 import type { AgentConfig, ModelMessage } from "../src/types";
-
-function b64url(input: string): string {
-  return Buffer.from(input, "utf8")
-    .toString("base64")
-    .replace(/=/g, "")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_");
-}
-
-function makeJwt(payload: Record<string, unknown>): string {
-  const header = b64url(JSON.stringify({ alg: "none", typ: "JWT" }));
-  const body = b64url(JSON.stringify(payload));
-  return `${header}.${body}.`;
-}
 
 function makeConfig(homeDir: string, overrides: Partial<AgentConfig> = {}): AgentConfig {
   return {
@@ -63,10 +47,6 @@ function makeParams(
     maxSteps: 1,
     ...overrides,
   };
-}
-
-function pickCodexModelId(): string {
-  return defaultSupportedModel("codex-cli").id;
 }
 
 async function withEnv<T>(
@@ -116,104 +96,8 @@ describe("pi runtime regressions", () => {
     expect(onModelAbort).toHaveBeenCalledTimes(1);
   });
 
-  test("codex runtime model resolution preserves ChatGPT account headers", async () => {
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-codex-"));
-    const paths = getAiCoworkerPaths({ homedir: homeDir });
-    const workspaceDir = path.join(homeDir, "workspace");
-    await fs.mkdir(workspaceDir, { recursive: true });
-
-    await writeCodexAuthMaterial(paths, {
-      accessToken: "tok_live",
-      refreshToken: "refresh_live",
-      accountId: "acct_123",
-      isFedrampAccount: true,
-      expiresAtMs: Date.now() + 10 * 60_000,
-      issuer: "https://auth.example.invalid",
-      clientId: "client-id",
-    });
-
-    const config = makeConfig(homeDir, {
-      provider: "codex-cli",
-      model: pickCodexModelId(),
-      preferredChildModel: pickCodexModelId(),
-      userCoworkDir: path.join(homeDir, ".cowork"),
-    });
-
-    const resolved = await resolveOpenAiResponsesModel(makeParams(config));
-
-    expect(resolved.apiKey).toBe("tok_live");
-    expect(resolved.headers).toEqual({
-      "ChatGPT-Account-ID": "acct_123",
-      "X-OpenAI-Fedramp": "true",
-    });
-    expect(resolved.model.baseUrl).toBe(CODEX_BACKEND_BASE_URL);
-    expect(resolved.model.headers).toMatchObject({
-      "ChatGPT-Account-ID": "acct_123",
-      "X-OpenAI-Fedramp": "true",
-    });
-    expect(resolved.model.contextWindow).toBe(272000);
-    expect(resolved.model.maxTokens).toBe(128000);
-  });
-
-  test("codex runtime model resolution ignores legacy external auth without Cowork credentials", async () => {
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-codex-legacy-"));
-    const workspaceDir = path.join(homeDir, "workspace");
-    await fs.mkdir(workspaceDir, { recursive: true });
-    const legacyPath = path.join(homeDir, ".codex", "auth.json");
-    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
-    await fs.writeFile(
-      legacyPath,
-      JSON.stringify({
-        auth_mode: "chatgpt",
-        tokens: {
-          access_token: "legacy-access-token",
-          refresh_token: "legacy-refresh-token",
-          id_token: makeJwt({
-            "https://api.openai.com/auth": { chatgpt_account_id: "acct_legacy" },
-          }),
-        },
-      }),
-      "utf-8",
-    );
-
-    const config = makeConfig(homeDir, {
-      provider: "codex-cli",
-      model: pickCodexModelId(),
-      preferredChildModel: pickCodexModelId(),
-      userCoworkDir: path.join(homeDir, ".cowork"),
-    });
-
-    await expect(resolveOpenAiResponsesModel(makeParams(config))).rejects.toThrow(
-      "Codex auth is missing. Run /connect codex-cli to authenticate.",
-    );
-    await expect(
-      fs.readFile(path.join(homeDir, ".cowork", "auth", "codex-cli", "auth.json"), "utf-8"),
-    ).rejects.toThrow();
-  });
-
-  test("codex runtime model resolution keeps supported OpenAI token limits when using a saved API key", async () => {
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-codex-saved-key-"));
-    const paths = getAiCoworkerPaths({ homedir: homeDir });
-    const workspaceDir = path.join(homeDir, "workspace");
-    await fs.mkdir(workspaceDir, { recursive: true });
-    await fs.mkdir(path.dirname(paths.connectionsFile), { recursive: true });
-    await fs.writeFile(
-      paths.connectionsFile,
-      JSON.stringify({
-        version: 1,
-        updatedAt: new Date().toISOString(),
-        services: {
-          "codex-cli": {
-            service: "codex-cli",
-            mode: "api_key",
-            apiKey: "sk-codex",
-            updatedAt: new Date().toISOString(),
-          },
-        },
-      }),
-      "utf-8",
-    );
-
+  test("openai responses model rejects codex-cli after app-server migration", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-codex-rejected-"));
     const config = makeConfig(homeDir, {
       provider: "codex-cli",
       model: "gpt-5.4",
@@ -221,13 +105,9 @@ describe("pi runtime regressions", () => {
       userCoworkDir: path.join(homeDir, ".cowork"),
     });
 
-    const resolved = await resolveOpenAiResponsesModel(makeParams(config));
-
-    expect(resolved.apiKey).toBe("sk-codex");
-    expect(resolved.model.api).toBe("openai-responses");
-    expect(resolved.model.baseUrl).toBe("https://api.openai.com/v1");
-    expect(resolved.model.contextWindow).toBe(400000);
-    expect(resolved.model.maxTokens).toBe(128000);
+    await expect(resolveOpenAiResponsesModel(makeParams(config))).rejects.toThrow(
+      "Unsupported provider for OpenAI Responses runtime: codex-cli",
+    );
   });
 
   test("openai responses model resolution keeps supported token limits for gpt-5.4", async () => {
@@ -592,74 +472,6 @@ describe("pi runtime regressions", () => {
       content: [{ type: "text", text: '{"ok":true}' }],
     });
     expect(piMessages[3]?.content).toBe("follow-up question");
-  });
-
-  test("codex openai-key runtime model resolution keeps supported token limits for gpt-5.4-mini", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-codex-gpt54mini-"));
-    const homeDir = path.join(workspaceDir, "home");
-    await fs.mkdir(homeDir, { recursive: true });
-    const paths = getAiCoworkerPaths({ homedir: homeDir });
-    await fs.mkdir(path.dirname(paths.connectionsFile), { recursive: true });
-    await fs.writeFile(
-      paths.connectionsFile,
-      JSON.stringify({
-        version: 1,
-        updatedAt: new Date().toISOString(),
-        services: {
-          "codex-cli": {
-            service: "codex-cli",
-            mode: "api_key",
-            apiKey: "sk-codex",
-            updatedAt: new Date().toISOString(),
-          },
-        },
-      }),
-      "utf-8",
-    );
-
-    const config = makeConfig(homeDir, {
-      provider: "codex-cli",
-      model: "gpt-5.4-mini",
-      preferredChildModel: "gpt-5.4-mini",
-      userCoworkDir: path.join(homeDir, ".cowork"),
-    });
-
-    const resolved = await resolveOpenAiResponsesModel(makeParams(config));
-
-    expect(resolved.apiKey).toBe("sk-codex");
-    expect(resolved.model.api).toBe("openai-responses");
-    expect(resolved.model.baseUrl).toBe("https://api.openai.com/v1");
-    expect(resolved.model.contextWindow).toBe(400000);
-    expect(resolved.model.maxTokens).toBe(128000);
-  });
-
-  test("codex runtime model resolution keeps codex backend token limits for gpt-5.5", async () => {
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-codex-gpt55-"));
-    const paths = getAiCoworkerPaths({ homedir: homeDir });
-    const workspaceDir = path.join(homeDir, "workspace");
-    await fs.mkdir(workspaceDir, { recursive: true });
-
-    await writeCodexAuthMaterial(paths, {
-      accessToken: "tok_live",
-      refreshToken: "refresh_live",
-      expiresAtMs: Date.now() + 10 * 60_000,
-      issuer: "https://auth.example.invalid",
-      clientId: "client-id",
-    });
-
-    const config = makeConfig(homeDir, {
-      provider: "codex-cli",
-      model: "gpt-5.5",
-      preferredChildModel: "gpt-5.5",
-      userCoworkDir: path.join(homeDir, ".cowork"),
-    });
-
-    const resolved = await resolveOpenAiResponsesModel(makeParams(config));
-
-    expect(resolved.model.api).toBe("openai-codex-responses");
-    expect(resolved.model.baseUrl).toBe(CODEX_BACKEND_BASE_URL);
-    expect(resolved.model.contextWindow).toBe(272000);
-    expect(resolved.model.maxTokens).toBe(128000);
   });
 
   test("opencode-go runtime model resolution returns explicit GLM-5 PI metadata", async () => {

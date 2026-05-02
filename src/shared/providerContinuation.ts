@@ -10,9 +10,10 @@ import {
 
 export const PROVIDER_MANAGED_CONTINUATION_PROVIDER_NAMES = [
   ...OPENAI_CONTINUATION_PROVIDER_NAMES,
+  "codex-cli",
   "google",
 ] as const;
-export type ProviderManagedContinuationProvider = OpenAiContinuationProvider | "google";
+export type ProviderManagedContinuationProvider = OpenAiContinuationProvider | "codex-cli" | "google";
 
 export type GoogleContinuationState = {
   provider: "google";
@@ -60,7 +61,7 @@ export const providerContinuationStateSchema = z.union([
 export function supportsProviderManagedContinuationProvider(
   provider: unknown,
 ): provider is ProviderManagedContinuationProvider {
-  return provider === "google" || supportsOpenAiContinuation(provider);
+  return provider === "codex-cli" || provider === "google" || supportsOpenAiContinuation(provider);
 }
 
 export function isGoogleContinuationState(

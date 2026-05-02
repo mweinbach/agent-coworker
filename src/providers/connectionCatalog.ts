@@ -7,7 +7,7 @@ import {
 import { PROVIDER_NAMES, type ProviderName } from "../types";
 import { resolveAuthHomeDir } from "../utils/authHome";
 import { readBedrockCatalogSnapshot } from "./bedrockShared";
-import { readCodexAuthMaterial } from "./codex-auth";
+import { readCodexAppServerAccount } from "./codexAppServerAuth";
 import {
   listLmStudioLlms,
   lmStudioCatalogStateMessage,
@@ -62,7 +62,7 @@ const PROVIDER_LABELS: Record<ProviderName, string> = {
   lmstudio: "LM Studio",
   "opencode-go": getOpenCodeDisplayName("opencode-go"),
   "opencode-zen": getOpenCodeDisplayName("opencode-zen"),
-  "codex-cli": "Codex CLI",
+  "codex-cli": "Codex",
 };
 
 function staticCatalogEntry(provider: Exclude<ProviderName, "lmstudio">): ProviderCatalogEntry {
@@ -202,7 +202,7 @@ export async function getProviderCatalog(
     homedir?: string;
     paths?: AiCoworkerPaths;
     readStore?: typeof readConnectionStore;
-    readCodexAuthMaterialImpl?: typeof readCodexAuthMaterial;
+    readCodexAppServerAccountImpl?: typeof readCodexAppServerAccount;
     providerOptions?: unknown;
     env?: NodeJS.ProcessEnv;
     lmstudioFetchImpl?: typeof fetch;
@@ -210,7 +210,8 @@ export async function getProviderCatalog(
 ): Promise<ProviderCatalogPayload> {
   const paths = opts.paths ?? getAiCoworkerPaths({ homedir: opts.homedir ?? resolveAuthHomeDir() });
   const readStore = opts.readStore ?? readConnectionStore;
-  const readCodexAuthMaterialImpl = opts.readCodexAuthMaterialImpl ?? readCodexAuthMaterial;
+  const readCodexAppServerAccountImpl =
+    opts.readCodexAppServerAccountImpl ?? readCodexAppServerAccount;
   const store = await readStore(paths);
   const bedrock = await bedrockCatalogEntry({
     paths,
@@ -230,7 +231,12 @@ export async function getProviderCatalog(
   });
   const defaults: Record<string, string> = {};
   for (const entry of all) defaults[entry.id] = entry.defaultModel;
-  const hasCodexOauth = Boolean((await readCodexAuthMaterialImpl(paths))?.accessToken);
+  const hasCodexAccount = Boolean(
+    await readCodexAppServerAccountImpl({ refreshToken: false }).then(
+      (result) => result.account,
+      () => null,
+    ),
+  );
   const connected = PROVIDER_NAMES.filter((provider) => {
     if (provider === "lmstudio") {
       return lmstudio.connected;
@@ -240,7 +246,7 @@ export async function getProviderCatalog(
     }
     const entry = store.services[provider];
     if (entry?.mode === "api_key" || entry?.mode === "oauth") return true;
-    return provider === "codex-cli" && hasCodexOauth;
+    return provider === "codex-cli" && hasCodexAccount;
   });
   return { all, default: defaults, connected };
 }

@@ -676,7 +676,7 @@ export async function resolvePiModel(
   }
 
   if (provider === "codex-cli") {
-    throw new Error("codex-cli is handled by the OpenAI Responses runtime model resolver.");
+    throw new Error("codex-cli is handled by the Codex app-server runtime.");
   }
 
   const exhaustive: never = provider;

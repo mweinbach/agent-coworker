@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { getAiCoworkerPaths } from "../src/connect";
 import {
   DEFAULT_MCP_SERVERS_DOCUMENT,
   loadMCPServers,
@@ -15,7 +14,6 @@ import {
   writeWorkspaceMCPServersDocument,
 } from "../src/mcp";
 import { setMCPServerEnabled } from "../src/mcp/configRegistry";
-import { writeCodexAuthMaterial } from "../src/providers/codex-auth";
 import { setOpenAiNativeConnectorEnabled } from "../src/server/connectors/openaiNativeConnectors";
 import { CODEX_APPS_MCP_SERVER_NAME } from "../src/shared/openaiNativeConnectors";
 import type { AgentConfig, MCPServerConfig } from "../src/types";
@@ -294,7 +292,7 @@ describe("mcp layered snapshot", () => {
 });
 
 describe("codex apps MCP bridge", () => {
-  test("loadMCPServers injects the reserved codex_apps server when a connector is enabled", async () => {
+  test("loadMCPServers does not inject a direct codex_apps server", async () => {
     const tmpWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-codex-apps-workspace-"));
     const tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-codex-apps-home-"));
     const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-codex-apps-builtin-"));
@@ -304,27 +302,12 @@ describe("codex apps MCP bridge", () => {
       config.userCoworkDir = path.join(tmpHome, ".cowork");
       config.skillsDirs = [path.join(tmpHome, ".cowork", "skills")];
       config.experimentalFeatures = { openAiNativeConnectors: true };
-      await writeCodexAuthMaterial(getAiCoworkerPaths({ homedir: tmpHome }), {
-        issuer: "https://auth.example.invalid",
-        clientId: "client-id",
-        accessToken: "access-token",
-        refreshToken: "refresh-token",
-        accountId: "acct-1",
-        expiresAtMs: Date.now() + 10 * 60_000,
-      });
       await setOpenAiNativeConnectorEnabled(config, "connector_gmail", true);
 
       const servers = await loadMCPServers(config);
       const codexApps = servers.find((server) => server.name === CODEX_APPS_MCP_SERVER_NAME);
 
-      expect(codexApps?.transport.type).toBe("http");
-      if (codexApps?.transport.type === "http") {
-        expect(codexApps.transport.url).toBe("https://chatgpt.com/backend-api/wham/apps");
-        expect(codexApps.transport.headers).toMatchObject({
-          authorization: "Bearer access-token",
-          "ChatGPT-Account-ID": "acct-1",
-        });
-      }
+      expect(codexApps).toBeUndefined();
     } finally {
       await fs.rm(tmpWorkspace, { recursive: true, force: true });
       await fs.rm(tmpHome, { recursive: true, force: true });
@@ -337,7 +320,7 @@ describe("codex apps MCP bridge", () => {
       [
         {
           name: CODEX_APPS_MCP_SERVER_NAME,
-          transport: { type: "http", url: "https://chatgpt.com/backend-api/wham/apps" },
+          transport: { type: "http", url: "https://apps.example.invalid/mcp" },
           enabledConnectorIds: ["connector_gmail"],
         } as MCPServerConfig & { enabledConnectorIds: string[] },
       ],

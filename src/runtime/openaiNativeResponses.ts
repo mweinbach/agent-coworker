@@ -1,5 +1,4 @@
 import OpenAI from "openai";
-import { CODEX_OAUTH_ORIGINATOR } from "../providers/codex-auth";
 import {
   convertResponsesMessages,
   convertResponsesTools,
@@ -13,7 +12,7 @@ import {
   type PiModel,
 } from "./piRuntimeOptions";
 
-type OpenAiCompatibleProvider = "openai" | "codex-cli";
+type OpenAiCompatibleProvider = "openai";
 
 type OpenAiNativeStreamOptions = {
   signal?: AbortSignal;
@@ -57,23 +56,7 @@ export type RunOpenAiNativeResponseStep = (
   opts: OpenAiNativeStepRequest,
 ) => Promise<OpenAiNativeStepResult>;
 
-const CODEX_RESPONSE_STATUSES = new Set([
-  "completed",
-  "incomplete",
-  "failed",
-  "cancelled",
-  "queued",
-  "in_progress",
-]);
-
-const OPENAI_ALLOWED_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex"]);
-
-function usesCodexChatGptBackend(
-  opts: Pick<OpenAiNativeStepRequest, "provider" | "model">,
-): boolean {
-  if (opts.provider !== "codex-cli") return false;
-  return opts.model.api === "openai-codex-responses" || opts.model.provider === "openai-codex";
-}
+const OPENAI_ALLOWED_TOOL_CALL_PROVIDERS = new Set(["openai"]);
 
 function resolveOpenAiApiKey(provider: OpenAiCompatibleProvider, explicitApiKey?: string): string {
   const direct = explicitApiKey?.trim();
@@ -87,47 +70,17 @@ function resolveOpenAiApiKey(provider: OpenAiCompatibleProvider, explicitApiKey?
   throw new Error(`No API key for provider: ${provider}`);
 }
 
-export function resolveCodexClientBaseUrl(baseUrl: string): string {
-  const normalized = baseUrl.trim().replace(/\/+$/, "");
-  if (normalized.endsWith("/codex/responses")) {
-    return normalized.replace(/\/responses$/, "");
-  }
-  if (normalized.endsWith("/codex")) {
-    return normalized;
-  }
-  return `${normalized}/codex`;
-}
-
-function resolveOpenAiClientBaseUrl(opts: OpenAiNativeStepRequest): string {
-  if (!usesCodexChatGptBackend(opts)) {
-    return opts.model.baseUrl;
-  }
-  return resolveCodexClientBaseUrl(opts.model.baseUrl);
-}
-
-function resolveOpenAiClientHeaders(opts: OpenAiNativeStepRequest): Record<string, string> {
-  const defaultHeaders = {
-    ...(opts.model.headers ?? {}),
-    ...(opts.headers ?? {}),
-  };
-
-  if (usesCodexChatGptBackend(opts) && !defaultHeaders.originator) {
-    defaultHeaders.originator = CODEX_OAUTH_ORIGINATOR;
-  }
-
-  return defaultHeaders;
-}
-
 function createOpenAiClient(opts: OpenAiNativeStepRequest): OpenAI {
   const apiKey = resolveOpenAiApiKey(opts.provider, opts.apiKey);
-  const baseURL = resolveOpenAiClientBaseUrl(opts);
-  const defaultHeaders = resolveOpenAiClientHeaders(opts);
 
   return new OpenAI({
     apiKey,
-    baseURL,
+    baseURL: opts.model.baseUrl,
     dangerouslyAllowBrowser: true,
-    defaultHeaders,
+    defaultHeaders: {
+      ...(opts.model.headers ?? {}),
+      ...(opts.headers ?? {}),
+    },
   });
 }
 
@@ -137,30 +90,14 @@ function maybeBuildReasoningPayload(
   provider: OpenAiCompatibleProvider,
   modelId: string,
 ): Record<string, unknown> | undefined {
-  if (provider === "codex-cli") {
-    if (reasoningEffort === undefined) return undefined;
-    return {
-      effort: clampCodexReasoningEffort(modelId, reasoningEffort),
-      summary: reasoningSummary ?? "auto",
-    };
-  }
+  void provider;
+  void modelId;
 
   if (!reasoningEffort && !reasoningSummary) return undefined;
   return {
     effort: reasoningEffort ?? "medium",
     summary: reasoningSummary ?? "auto",
   };
-}
-
-export function clampCodexReasoningEffort(modelId: string, effort: string): string {
-  const id = modelId.includes("/")
-    ? (() => {
-        const parts = modelId.split("/");
-        return parts[parts.length - 1] ?? modelId;
-      })()
-    : modelId;
-  if ((id.startsWith("gpt-5.2") || id.startsWith("gpt-5.3")) && effort === "minimal") return "low";
-  return effort;
 }
 
 function convertPiMessagesToResponsesInput(
@@ -241,67 +178,20 @@ function normalizeWebSearchLocation(value: unknown): Record<string, string> | un
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
-function resolveCodexWebSearchBackend(opts: OpenAiNativeStepRequest): "native" | "local" {
-  const configured = asNonEmptyString(opts.streamOptions.webSearchBackend)?.toLowerCase();
-  return configured === "exa" || configured === "parallel" ? "local" : "native";
-}
-
-function resolveCodexNativeWebSearchMode(
-  opts: OpenAiNativeStepRequest,
-): "disabled" | "cached" | "live" {
-  if (resolveCodexWebSearchBackend(opts) !== "native") {
-    return "disabled";
-  }
-
-  const configured = asNonEmptyString(opts.streamOptions.webSearchMode)?.toLowerCase();
-  if (configured === "disabled" || configured === "cached" || configured === "live") {
-    return configured;
-  }
-  return "live";
-}
-
-function buildCodexNativeWebSearchTool(
-  opts: OpenAiNativeStepRequest,
-): Record<string, unknown> | null {
-  if (opts.provider !== "codex-cli") return null;
-  if (resolveCodexWebSearchBackend(opts) !== "native") return null;
-
-  const mode = resolveCodexNativeWebSearchMode(opts);
-  if (mode === "disabled") return null;
-
-  const allowedDomains = normalizeAllowedDomains(opts.streamOptions.webSearchAllowedDomains);
-  const location = normalizeWebSearchLocation(opts.streamOptions.webSearchLocation);
-  const contextSize = asNonEmptyString(opts.streamOptions.webSearchContextSize);
-
-  return {
-    type: "web_search",
-    external_web_access: mode === "live",
-    ...(contextSize ? { search_context_size: contextSize } : {}),
-    ...(allowedDomains.length > 0 ? { filters: { allowed_domains: allowedDomains } } : {}),
-    ...(location ? { user_location: { type: "approximate", ...location } } : {}),
-  };
-}
-
 export function buildOpenAiNativeRequest(opts: OpenAiNativeStepRequest): Record<string, unknown> {
   const input = convertPiMessagesToResponsesInput(opts.model, opts.piMessages);
-  const useCodexChatGptBackend = usesCodexChatGptBackend(opts);
-  const nativeWebSearchTool = buildCodexNativeWebSearchTool(opts);
-  const stripLegacyWebSearch =
-    opts.provider === "codex-cli" && resolveCodexWebSearchBackend(opts) === "native";
-  const continuationOptions = useCodexChatGptBackend
-    ? {}
-    : buildOpenAiContinuationRequestOptions(opts.previousResponseId);
+  const continuationOptions = buildOpenAiContinuationRequestOptions(opts.previousResponseId);
   const request: Record<string, unknown> = {
     model: opts.model.id,
     instructions: opts.systemPrompt,
     input,
     stream: true,
-    store: !useCodexChatGptBackend,
+    store: true,
     ...continuationOptions,
   };
 
   const maxOutputTokens = asFiniteNumber((opts.streamOptions as Record<string, unknown>).maxTokens);
-  if (!useCodexChatGptBackend && maxOutputTokens !== undefined) {
+  if (maxOutputTokens !== undefined) {
     request.max_output_tokens = maxOutputTokens;
   }
 
@@ -324,36 +214,16 @@ export function buildOpenAiNativeRequest(opts: OpenAiNativeStepRequest): Record<
   }
 
   const textVerbosity = asNonEmptyString(opts.streamOptions.textVerbosity);
-  if (useCodexChatGptBackend) {
-    request.text = { verbosity: "medium" };
-  } else if (textVerbosity) {
+  if (textVerbosity) {
     request.text = { verbosity: textVerbosity };
-  } else if (opts.provider === "codex-cli") {
-    request.text = { verbosity: "medium" };
   }
 
-  const functionTools = convertPiToolsToResponsesTools(
-    opts.provider,
-    stripLegacyWebSearch
-      ? opts.tools.filter((tool) => asNonEmptyString(tool.name) !== "webSearch")
-      : opts.tools,
-  );
-  const requestTools = [...functionTools, ...(nativeWebSearchTool ? [nativeWebSearchTool] : [])];
+  const requestTools = convertPiToolsToResponsesTools(opts.provider, opts.tools);
   if (requestTools.length > 0) {
     request.tools = requestTools;
   }
 
-  if (opts.provider === "codex-cli") {
-    request.parallel_tool_calls = true;
-    request.tool_choice = "auto";
-    const include = mergeUniqueStrings(
-      request.include,
-      nativeWebSearchTool ? ["web_search_call.action.sources"] : [],
-    );
-    if (include) {
-      request.include = include;
-    }
-  } else if (!reasoning && opts.model.reasoning && opts.model.name.startsWith("gpt-5")) {
+  if (!reasoning && opts.model.reasoning && opts.model.name.startsWith("gpt-5")) {
     input.push({
       role: "developer",
       content: [{ type: "input_text", text: "# Juice: 0 !important" }],
@@ -361,51 +231,6 @@ export function buildOpenAiNativeRequest(opts: OpenAiNativeStepRequest): Record<
   }
 
   return request;
-}
-
-function normalizeCodexStatus(status: unknown): string | undefined {
-  if (typeof status !== "string") return undefined;
-  return CODEX_RESPONSE_STATUSES.has(status) ? status : undefined;
-}
-
-export async function* normalizeCodexEvents(
-  events: AsyncIterable<unknown>,
-): AsyncIterable<unknown> {
-  for await (const event of events) {
-    const record = asRecord(event);
-    const type = typeof record?.type === "string" ? record.type : undefined;
-    if (!type) continue;
-
-    if (type === "error") {
-      const code = asNonEmptyString(record?.code) ?? "";
-      const message = asNonEmptyString(record?.message) ?? "";
-      throw new Error(`Codex error: ${message || code || JSON.stringify(event)}`);
-    }
-
-    if (type === "response.failed") {
-      const response = asRecord(record?.response);
-      const error = asRecord(response?.error);
-      const message = asNonEmptyString(error?.message);
-      throw new Error(message ?? "Codex response failed");
-    }
-
-    if (type === "response.done" || type === "response.completed") {
-      const response = asRecord(record?.response);
-      yield {
-        ...record,
-        type: "response.completed",
-        response: response
-          ? {
-              ...response,
-              status: normalizeCodexStatus(response.status),
-            }
-          : response,
-      };
-      continue;
-    }
-
-    yield record;
-  }
 }
 
 async function emitOpenAiNativeEvent(
@@ -457,10 +282,6 @@ export const runOpenAiNativeResponseStep: RunOpenAiNativeResponseStep = async (
     request as any,
     opts.streamOptions.signal ? { signal: opts.streamOptions.signal } : undefined,
   );
-  const normalizedEvents =
-    opts.provider === "codex-cli"
-      ? normalizeCodexEvents(rawStream as unknown as AsyncIterable<unknown>)
-      : (rawStream as unknown as AsyncIterable<unknown>);
 
   let responseId: string | undefined;
   let pendingEventDelivery = Promise.resolve();
@@ -477,9 +298,12 @@ export const runOpenAiNativeResponseStep: RunOpenAiNativeResponseStep = async (
 
   try {
     await processResponsesStream(
-      tapOpenAiResponseIds(tapOpenAiRawEvents(opts, normalizedEvents), (nextResponseId) => {
-        responseId = nextResponseId;
-      }) as AsyncIterable<any>,
+      tapOpenAiResponseIds(
+        tapOpenAiRawEvents(opts, rawStream as unknown as AsyncIterable<unknown>),
+        (nextResponseId) => {
+          responseId = nextResponseId;
+        },
+      ) as AsyncIterable<any>,
       assistant as Record<string, any>,
       {
         push: (event) => {
@@ -517,17 +341,9 @@ export const runOpenAiNativeResponseStep: RunOpenAiNativeResponseStep = async (
 
 export const __internal = {
   buildOpenAiNativeRequest,
-  buildCodexNativeWebSearchTool,
   convertPiMessagesToResponsesInput,
   convertPiToolsToResponsesTools,
   mergeUniqueStrings,
   normalizeAllowedDomains,
   normalizeWebSearchLocation,
-  resolveCodexWebSearchBackend,
-  resolveCodexNativeWebSearchMode,
-  resolveCodexClientBaseUrl,
-  resolveOpenAiClientBaseUrl,
-  resolveOpenAiClientHeaders,
-  normalizeCodexEvents,
-  clampCodexReasoningEffort,
 } as const;

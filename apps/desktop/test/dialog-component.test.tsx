@@ -41,7 +41,7 @@ describe("desktop dialog component", () => {
       );
 
       expect(dialog?.getAttribute("role")).toBe("dialog");
-      expect(dialog?.className).toContain("bg-background");
+      expect(dialog?.className).toContain("bg-popover");
       expect(close).not.toBeNull();
       expect(title?.textContent).toBe("Title");
       expect(description?.textContent).toBe("Description");

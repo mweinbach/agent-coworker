@@ -282,25 +282,9 @@ describe("providers/connectionCatalog", () => {
     expect(payload.connected).not.toContain("anthropic");
   });
 
-  test("connected providers include codex-cli when Cowork auth exists even if connections.json is empty", async () => {
+  test("connected providers include codex-cli when app-server account exists even if connections.json is empty", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "connection-catalog-cowork-"));
     const paths = getAiCoworkerPaths({ homedir: home });
-    const authPath = path.join(home, ".cowork", "auth", "codex-cli", "auth.json");
-    await fs.mkdir(path.dirname(authPath), { recursive: true });
-    await fs.writeFile(
-      authPath,
-      JSON.stringify({
-        version: 1,
-        auth_mode: "chatgpt",
-        issuer: "https://auth.openai.com",
-        client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
-        tokens: {
-          access_token: "cowork-access-token",
-          refresh_token: "cowork-refresh-token",
-        },
-      }),
-      "utf-8",
-    );
 
     const payload = await getProviderCatalog({
       paths,
@@ -309,30 +293,18 @@ describe("providers/connectionCatalog", () => {
         updatedAt: "2026-02-17T00:00:00.000Z",
         services: {},
       }),
+      readCodexAppServerAccountImpl: async () => ({
+        account: { type: "chatgpt", email: "tester@example.com" },
+        requiresOpenaiAuth: false,
+      }),
     });
 
     expect(payload.connected).toContain("codex-cli");
   });
 
-  test("codex-cli only appears once in connected when both store oauth and cowork auth exist", async () => {
+  test("codex-cli only appears once in connected when both store oauth and app-server account exist", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "connection-catalog-codex-dedupe-"));
     const paths = getAiCoworkerPaths({ homedir: home });
-    const authPath = path.join(home, ".cowork", "auth", "codex-cli", "auth.json");
-    await fs.mkdir(path.dirname(authPath), { recursive: true });
-    await fs.writeFile(
-      authPath,
-      JSON.stringify({
-        version: 1,
-        auth_mode: "chatgpt",
-        issuer: "https://auth.openai.com",
-        client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
-        tokens: {
-          access_token: "cowork-access-token",
-          refresh_token: "cowork-refresh-token",
-        },
-      }),
-      "utf-8",
-    );
 
     const payload = await getProviderCatalog({
       paths,
@@ -346,6 +318,10 @@ describe("providers/connectionCatalog", () => {
             updatedAt: "2026-02-17T00:00:00.000Z",
           },
         },
+      }),
+      readCodexAppServerAccountImpl: async () => ({
+        account: { type: "chatgpt", email: "tester@example.com" },
+        requiresOpenaiAuth: false,
       }),
     });
 

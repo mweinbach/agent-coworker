@@ -19,7 +19,7 @@ describe("Cross-provider model creation", () => {
     { name: "google", providerPrefix: "google.generative-ai" },
     { name: "opencode-go", providerPrefix: "opencode-go.completions" },
     { name: "opencode-zen", providerPrefix: "opencode-zen.completions" },
-    { name: "codex-cli", providerPrefix: "codex-cli.responses" },
+    { name: "codex-cli", providerPrefix: "codex-app-server" },
   ];
 
   for (const { name, providerPrefix } of providers) {

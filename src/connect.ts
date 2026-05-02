@@ -1,13 +1,4 @@
-import {
-  type CodexAuthMaterial,
-  clearCodexAuthMaterial,
-  codexAuthFilePath,
-  isTokenExpiring,
-  readCodexAuthMaterial,
-  refreshCodexAuthMaterial,
-  writeCodexAuthMaterial,
-} from "./providers/codex-auth";
-import { isOauthCliProvider, runCodexBrowserOAuth } from "./providers/codex-oauth-flows";
+import { loginCodexAppServerChatGpt } from "./providers/codexAppServerAuth";
 import {
   type AiCoworkerPaths,
   type ConnectionMode,
@@ -23,7 +14,7 @@ import {
 } from "./store/connections";
 import { maskApiKey, readToolApiKey, writeToolApiKey } from "./tools/api-keys";
 import { resolveAuthHomeDir } from "./utils/authHome";
-import { openExternalUrl, type UrlOpener } from "./utils/browser";
+import type { UrlOpener } from "./utils/browser";
 
 export type {
   AiCoworkerPaths,
@@ -46,9 +37,13 @@ export {
   writeToolApiKey,
 };
 
+function isOauthCliProvider(service: ConnectService): service is "codex-cli" {
+  return service === "codex-cli";
+}
+
 const connectOauthDepsDefaults = {
   isOauthCliProvider,
-  runCodexLogin: runCoworkCodexLogin,
+  runCodexLogin: loginCodexAppServerChatGpt,
 };
 
 const connectOauthDeps = {
@@ -144,39 +139,6 @@ export async function saveProviderConnectionConfig(opts: {
   };
 }
 
-async function runCoworkCodexLogin(opts: {
-  paths: AiCoworkerPaths;
-  onOauthLine?: (line: string) => void;
-  openUrl?: UrlOpener;
-  fetchImpl?: typeof fetch;
-}): Promise<CodexAuthMaterial> {
-  opts.onOauthLine?.("[auth] starting Cowork-owned Codex browser login.");
-  return await runCodexBrowserOAuth({
-    paths: opts.paths,
-    fetchImpl: opts.fetchImpl ?? fetch,
-    onLine: opts.onOauthLine,
-    openUrl: opts.openUrl ?? openExternalUrl,
-  });
-}
-
-async function persistCoworkCodexAuth(
-  paths: AiCoworkerPaths,
-  material: CodexAuthMaterial,
-): Promise<CodexAuthMaterial> {
-  const persisted = await writeCodexAuthMaterial(paths, {
-    ...material,
-    file: codexAuthFilePath(paths),
-  });
-  const reloaded = await readCodexAuthMaterial(paths);
-  if (!reloaded?.accessToken) {
-    throw new Error(`Codex auth was not persisted to ${persisted.file}.`);
-  }
-  if (reloaded.accessToken !== persisted.accessToken) {
-    throw new Error(`Codex auth at ${persisted.file} did not round-trip after write.`);
-  }
-  return reloaded;
-}
-
 export async function connectProvider(opts: {
   provider: ConnectService;
   methodId?: string;
@@ -232,65 +194,23 @@ export async function connectProvider(opts: {
     };
   }
 
-  const fetchImpl = opts.fetchImpl ?? fetch;
   const methodId = (opts.methodId ?? "oauth_cli").trim() || "oauth_cli";
-
-  let existing = await readCodexAuthMaterial(paths);
-  if (existing?.accessToken && isTokenExpiring(existing)) {
-    if (existing.refreshToken) {
-      try {
-        existing = await refreshCodexAuthMaterial({
-          paths,
-          material: existing,
-          fetchImpl,
-        });
-        opts.onOauthLine?.("[auth] refreshed existing Codex credentials.");
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        opts.onOauthLine?.(`[auth] existing Codex credentials are stale: ${message}`);
-      }
-    } else {
-      opts.onOauthLine?.(
-        "[auth] existing Codex credentials are expired and missing refresh token.",
-      );
-    }
-  }
-  if (existing?.accessToken && !isTokenExpiring(existing, 0)) {
-    store.services[provider] = {
-      service: provider,
-      mode: "oauth",
-      updatedAt: now,
-    };
-    store.updatedAt = now;
-    await writeConnectionStore(paths, store);
-    return {
-      ok: true,
-      provider,
-      mode: "oauth",
-      storageFile: paths.connectionsFile,
-      message: "Existing Codex OAuth credentials detected.",
-      oauthCredentialsFile: existing.file,
-    };
-  }
 
   try {
     if (methodId !== "oauth_cli") {
       opts.onOauthLine?.(
-        `[auth] deprecated Codex auth method "${methodId}" requested; using Codex-native browser login.`,
+        `[auth] deprecated Codex auth method "${methodId}" requested; using codex app-server ChatGPT login.`,
       );
     }
     if (opts.code?.trim()) {
       throw new Error(
-        "Codex OAuth is browser-managed by Cowork. Start sign-in without a pasted authorization code.",
+        "Codex app-server ChatGPT login is browser-managed. Start sign-in without a pasted authorization code.",
       );
     }
-    const oauthCredentials = await connectOauthDeps.runCodexLogin({
-      paths,
-      onOauthLine: opts.onOauthLine,
+    const login = await connectOauthDeps.runCodexLogin({
+      log: opts.onOauthLine,
       openUrl: opts.openUrl,
-      fetchImpl,
     });
-    const persistedAuth = await persistCoworkCodexAuth(paths, oauthCredentials);
 
     store.services[provider] = {
       service: provider,
@@ -304,15 +224,16 @@ export async function connectProvider(opts: {
       provider,
       mode: "oauth",
       storageFile: paths.connectionsFile,
-      message: "Codex OAuth sign-in completed.",
-      oauthCredentialsFile: persistedAuth.file,
+      message: login.account?.email
+        ? `Codex app-server ChatGPT sign-in completed for ${login.account.email}.`
+        : "Codex app-server ChatGPT sign-in completed.",
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return {
       ok: false,
       provider,
-      message: `Codex OAuth sign-in failed: ${message}`,
+      message: `Codex app-server sign-in failed: ${message}`,
     };
   }
 }
@@ -326,7 +247,6 @@ export async function disconnectProvider(opts: {
   const now = new Date().toISOString();
 
   if (opts.provider === "codex-cli") {
-    const cleared = await clearCodexAuthMaterial(paths);
     if (store.services["codex-cli"]) {
       delete store.services["codex-cli"];
     }
@@ -336,8 +256,7 @@ export async function disconnectProvider(opts: {
       ok: true,
       provider: opts.provider,
       storageFile: paths.connectionsFile,
-      message: cleared.removed ? "Codex OAuth credentials cleared." : "Codex connection cleared.",
-      oauthCredentialsFile: cleared.file,
+      message: "Codex connection cleared. Codex app-server auth was preserved.",
     };
   }
 

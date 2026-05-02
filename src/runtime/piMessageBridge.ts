@@ -343,7 +343,7 @@ export function modelMessagesToPiMessages(
       out.push({
         role: "assistant",
         content: content as any,
-        api: provider === "codex-cli" ? "openai-codex-responses" : `${provider}-responses`,
+        api: `${provider}-responses`,
         provider: provider,
         model: "unknown",
         usage: {

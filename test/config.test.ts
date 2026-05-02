@@ -318,7 +318,7 @@ describe("loadConfig", () => {
     });
 
     expect(cfg.provider).toBe("codex-cli");
-    expect(cfg.runtime).toBe("openai-responses");
+    expect(cfg.runtime).toBe("codex-app-server");
   });
 
   test("stale OpenAI Responses runtime config is normalized away for non-OpenAI providers", async () => {

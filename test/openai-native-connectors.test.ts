@@ -3,8 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { getAiCoworkerPaths } from "../src/connect";
-import { writeCodexAuthMaterial } from "../src/providers/codex-auth";
+import { __internal as codexAppServerAuthInternal } from "../src/providers/codexAppServerAuth";
 import {
   listOpenAiNativeConnectors,
   openAiNativeConnectorsConfigPath,
@@ -34,74 +33,34 @@ function makeConfig(workspaceRoot: string, home: string): AgentConfig {
 }
 
 describe("OpenAI native connectors", () => {
-  test("lists paginated directory connectors and keeps directory-only entries disabled", async () => {
+  test("reports app-server connector ownership when Codex is signed in", async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "connectors-workspace-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "connectors-home-"));
     const config = makeConfig(workspaceRoot, home);
-    await writeCodexAuthMaterial(getAiCoworkerPaths({ homedir: home }), {
-      issuer: "https://auth.example.invalid",
-      clientId: "client-id",
-      accessToken: "access-token",
-      refreshToken: "refresh-token",
-      accountId: "acct-1",
-      expiresAtMs: Date.now() + 10 * 60_000,
+    codexAppServerAuthInternal.setAuthOverridesForTests({
+      readAccount: async () => ({
+        account: { type: "chatgpt", email: "tester@example.com" },
+        requiresOpenaiAuth: true,
+      }),
     });
-    await setOpenAiNativeConnectorEnabled(config, "connector_gmail", true);
+    try {
+      await setOpenAiNativeConnectorEnabled(config, "connector_gmail", true);
 
-    const requestedUrls: string[] = [];
-    const fetchImpl = (async (url: string, init?: RequestInit) => {
-      requestedUrls.push(String(url));
-      expect(init?.headers).toMatchObject({
-        authorization: "Bearer access-token",
-        "ChatGPT-Account-ID": "acct-1",
+      const snapshot = await listOpenAiNativeConnectors({
+        config,
+        fetchImpl: async () => {
+          throw new Error("direct connector fetch should not run");
+        },
+        discoverAccessible: false,
       });
-      if (String(url).includes("token=page-2")) {
-        return new Response(
-          JSON.stringify({
-            apps: [
-              {
-                id: "connector_dropbox",
-                name: "Dropbox",
-                description: null,
-                logoUrl: null,
-                logoUrlDark: null,
-                appMetadata: null,
-                branding: null,
-                labels: { category: "files" },
-              },
-            ],
-            nextToken: null,
-          }),
-        );
-      }
-      if (String(url).includes("list_workspace")) {
-        return new Response(JSON.stringify({ apps: [{ id: "connector_workspace", name: "WS" }] }));
-      }
-      return new Response(
-        JSON.stringify({
-          apps: [{ id: "connector_gmail", name: "Gmail", description: "Mail" }],
-          nextToken: "page-2",
-        }),
-      );
-    }) as typeof fetch;
 
-    const snapshot = await listOpenAiNativeConnectors({
-      config,
-      fetchImpl,
-      discoverAccessible: false,
-    });
-
-    expect(snapshot.authenticated).toBe(true);
-    expect(snapshot.enabledConnectorIds).toEqual([]);
-    expect(snapshot.connectors.map((connector) => connector.id).sort()).toEqual([
-      "connector_dropbox",
-      "connector_gmail",
-      "connector_workspace",
-    ]);
-    expect(
-      snapshot.connectors.find((connector) => connector.id === "connector_gmail")?.isEnabled,
-    ).toBe(false);
-    expect(requestedUrls.some((url) => url.includes("token=page-2"))).toBe(true);
+      expect(snapshot.authenticated).toBe(true);
+      expect(snapshot.enabledConnectorIds).toEqual([]);
+      expect(snapshot.connectors).toEqual([]);
+      expect(snapshot.message).toContain("app-server owns ChatGPT apps/connectors");
+    } finally {
+      codexAppServerAuthInternal.resetAuthOverridesForTests();
+    }
   });
 
   test("persists connector enabled state in the workspace .cowork directory", async () => {

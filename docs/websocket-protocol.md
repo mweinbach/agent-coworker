@@ -251,19 +251,19 @@ The desktop JSON-RPC path now uses this namespace so one workspace connection ca
 
 ### OpenAI Native Connector JSON-RPC Methods
 
-OpenAI native connectors are workspace-scoped ChatGPT apps exposed to Codex through a reserved synthetic MCP server named `codex_apps`. They are experimental and disabled by default; set `COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS=1` to expose the desktop settings page and enable backend connector discovery/injection. They also require an existing `codex-cli` OAuth login. The connector controls below return an `openai_native_connectors` event inside `{ "event": ... }`.
+OpenAI native connectors are workspace-scoped ChatGPT apps owned by `codex app-server`. They are experimental and disabled by default; set `COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS=1` to expose the desktop settings page and read the app-server-backed connector state. They also require an existing Codex app-server login. The connector controls below return an `openai_native_connectors` event inside `{ "event": ... }`.
 
 - `cowork/connectors/openai-native/list`
   - Params: `{ "cwd"?: string }`
   - Result event: `{ "type": "openai_native_connectors", "connectors": OpenAiNativeConnector[], "enabledConnectorIds": string[], "codexAppsMcpServerName": "codex_apps", "authenticated": boolean, "message"?: string }`
 - `cowork/connectors/openai-native/refresh`
   - Params: `{ "cwd"?: string }`
-  - Result: same event shape as `list`, after re-reading ChatGPT connector directory state.
+  - Result: same event shape as `list`, after re-reading Codex app-server connector state.
 - `cowork/connectors/openai-native/setEnabled`
   - Params: `{ "cwd"?: string, "connectorId": string, "enabled": boolean }`
   - Result: same event shape as `list`, after persisting workspace connector enablement under `.cowork/openai-native-connectors.json`.
 
-When one or more connectors are enabled, the runtime injects a streamable HTTP MCP server at the ChatGPT Codex apps endpoint. Connector MCP tools are namespaced as `mcp__codex_apps__...` and filtered to enabled connector IDs.
+Cowork no longer injects a direct streamable HTTP MCP server at the ChatGPT Codex apps endpoint. The reserved `codex_apps` name remains in the event schema for backward-compatible UI rendering, but connector execution and ChatGPT app access are delegated to `codex app-server`.
 
 ### Research JSON-RPC methods
 
@@ -829,7 +829,7 @@ Returned in `server_hello` and `config_updated`:
 | `methodId` | `string?` | Optional active auth/config method identifier |
 | `savedApiKeyMasks` | `Record<string, string>?` | Optional masked key values keyed by method id. Never includes raw secrets |
 | `savedFieldMasks` | `Record<string, string>?` | Optional masked saved structured credential values keyed by field id |
-| `usage` | `{ planType?: string, accountId?: string, email?: string, rateLimits: ProviderRateLimitSnapshot[] }?` | Optional backend usage snapshot data, currently populated for Codex OAuth verification |
+| `usage` | `{ planType?: string, accountId?: string, email?: string, rateLimits: ProviderRateLimitSnapshot[] }?` | Optional backend usage snapshot data, currently populated for Codex app-server account verification |
 | `tokenRecoverable` | `boolean?` | When `authorized` is `false`, indicates the token is expired but a refresh token exists. Clients should avoid persisting a "not connected" state when this is `true`, since the next refresh attempt may succeed |
 
 ### TodoItem
@@ -1677,7 +1677,7 @@ Auth challenge payload returned after `provider_auth_authorize`.
   "methodId": "oauth_cli",
   "challenge": {
     "method": "auto",
-    "instructions": "Cowork will open the browser sign-in flow and save the returned token locally."
+    "instructions": "Codex app-server owns the browser sign-in flow and local credential storage."
   }
 }
 ```
@@ -1878,7 +1878,7 @@ Provider-native raw model stream event. Emitted before any derived `model_stream
 | `index` | `number` | Sequential raw-event index within the turn (starting at 0). Fallback: `-1` |
 | `provider` | `ProviderName \| "unknown"` | Provider that generated this event. Fallback: `"unknown"` |
 | `model` | `string` | Model that generated this event. Fallback: `"unknown"` |
-| `format` | `"openai-responses-v1" \| "google-interactions-v1"` | Raw event envelope format |
+| `format` | `"openai-responses-v1" \| "google-interactions-v1" \| "codex-app-server-v2"` | Raw event envelope format |
 | `normalizerVersion` | `number` | Version identifier for the client/server raw-event normalizer |
 | `event` | `object` | Provider-native raw event payload. If a non-object payload is received, it is normalized to `{ "value": <original> }` |
 

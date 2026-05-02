@@ -1,11 +1,4 @@
-import { getAiCoworkerPaths } from "../connect";
 import type { AgentConfig } from "../types";
-import { resolveAuthHomeDir } from "../utils/authHome";
-import {
-  isTokenExpiring,
-  readCodexAuthMaterial,
-  refreshCodexAuthMaterialCoalesced,
-} from "./codex-auth";
 import {
   getOpenCodeProviderConfig,
   isOpenCodeModelSupportedByProvider,
@@ -193,49 +186,14 @@ export function createOpenCodeZenModelAdapter(
   return createOpenCodeModelAdapter("opencode-zen", modelId, savedKey);
 }
 
-async function resolveCodexAuthHeaders(config: AgentConfig): Promise<HeaderMap> {
-  void config;
-  // Model adapter auth must read the user-global Cowork auth store so a
-  // workspace-local `.cowork` directory cannot hide an existing login.
-  const paths = getAiCoworkerPaths({ homedir: resolveAuthHomeDir(config) });
-
-  let material = await readCodexAuthMaterial(paths);
-  if (!material?.accessToken) return {};
-
-  if (isTokenExpiring(material) && material.refreshToken) {
-    material = await refreshCodexAuthMaterialCoalesced({
-      paths,
-      material,
-      fetchImpl: fetch,
-    });
-  }
-
-  if (isTokenExpiring(material, 0)) {
-    throw new Error("Codex token is expired. Run /connect codex-cli to re-authenticate.");
-  }
-
-  const headers: HeaderMap = {
-    authorization: `Bearer ${material.accessToken}`,
-  };
-  if (material.accountId?.trim()) {
-    headers["ChatGPT-Account-ID"] = material.accountId.trim();
-  }
-  if (material.isFedrampAccount) {
-    headers["X-OpenAI-Fedramp"] = "true";
-  }
-  return headers;
-}
-
-export function createCodexCliModelAdapter(
+export function createCodexAppServerModelAdapter(
   config: AgentConfig,
   modelId: string,
   savedKey?: string,
 ): ProviderModelAdapter {
-  return createModelAdapter(modelId, "codex-cli.responses", async () => {
-    const key = firstNonEmpty(savedKey);
-    if (key) return { authorization: `Bearer ${key}` };
-    return await resolveCodexAuthHeaders(config);
-  });
+  void config;
+  void savedKey;
+  return createModelAdapter(modelId, "codex-app-server", async () => ({}));
 }
 
 export function createLmStudioModelAdapter(

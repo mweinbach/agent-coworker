@@ -4,6 +4,7 @@ import path from "node:path";
 
 import {
   buildSidecarManifest,
+  resolvePackagedCodexAppServerFilename,
   resolvePackagedSidecarFilename,
   SIDECAR_BUN_ENTRYPOINT_PATH,
   SIDECAR_BUN_EXECUTABLE_NAME,
@@ -12,6 +13,7 @@ import {
 import {
   copyDir,
   ensureBundledBunRuntime,
+  ensureBundledCodexAppServer,
   pathExists,
   resolveBuildTarget,
   rmrf,
@@ -26,6 +28,7 @@ type DesktopResourcesCache = {
   arch: string;
   includeDocs: boolean;
   sidecarFingerprint: string;
+  codexAppServerVersion: string | null;
   promptsFingerprint: string;
   configFingerprint: string;
   docsFingerprint: string | null;
@@ -83,6 +86,7 @@ async function loadCache(cachePath: string): Promise<DesktopResourcesCache | nul
       parsed.arch.length === 0 ||
       typeof parsed.includeDocs !== "boolean" ||
       typeof parsed.sidecarFingerprint !== "string" ||
+      (parsed.codexAppServerVersion !== null && typeof parsed.codexAppServerVersion !== "string") ||
       typeof parsed.promptsFingerprint !== "string" ||
       typeof parsed.configFingerprint !== "string" ||
       (parsed.docsFingerprint !== null && typeof parsed.docsFingerprint !== "string")
@@ -97,6 +101,13 @@ async function loadCache(cachePath: string): Promise<DesktopResourcesCache | nul
 
 async function writeCache(cachePath: string, cache: DesktopResourcesCache): Promise<void> {
   await fs.writeFile(cachePath, `${JSON.stringify(cache, null, 2)}\n`, "utf8");
+}
+
+function normalizeCodexAppServerVersionOverride(version: string | undefined): string | null {
+  if (!version) {
+    return null;
+  }
+  return version.startsWith("rust-v") ? version.slice("rust-v".length) : version;
 }
 
 async function syncCopiedDir(opts: {
@@ -124,6 +135,9 @@ async function main() {
   const root = path.resolve(import.meta.dirname, "..");
   const distDir = path.join(root, "dist");
   const includeDocs = process.env.COWORK_BUNDLE_DESKTOP_DOCS === "1";
+  const codexAppServerVersionOverride =
+    process.env.COWORK_CODEX_APP_SERVER_VERSION?.trim() || undefined;
+  const shouldBundleCodexAppServer = process.env.COWORK_BUNDLE_CODEX_APP_SERVER !== "0";
   const cachePath = path.join(distDir, `.desktop-resources-cache-${platform}-${arch}.json`);
 
   await fs.mkdir(distDir, { recursive: true });
@@ -155,6 +169,8 @@ async function main() {
     desktopBinariesDir,
     resolvePackagedSidecarFilename(platform, arch),
   );
+  const codexAppServerFilename = resolvePackagedCodexAppServerFilename(platform, arch);
+  const codexAppServerOutfile = path.join(desktopBinariesDir, codexAppServerFilename);
   const sidecarManifestPath = path.join(desktopBinariesDir, "cowork-server-manifest.json");
   const bundledBunPath = path.join(desktopBinariesDir, SIDECAR_BUN_EXECUTABLE_NAME);
   const bundledEntrypointPath = path.join(desktopBinariesDir, SIDECAR_BUN_ENTRYPOINT_PATH);
@@ -165,6 +181,7 @@ async function main() {
     cache?.includeDocs !== includeDocs ||
     cache?.sidecarFingerprint !== sidecarFingerprint ||
     !(await pathExists(sidecarManifestPath)) ||
+    (shouldBundleCodexAppServer && !(await pathExists(codexAppServerOutfile))) ||
     (useBundledBunRuntime
       ? !(await pathExists(bundledBunPath)) || !(await pathExists(bundledEntrypointPath))
       : !(await pathExists(sidecarOutfile)));
@@ -240,6 +257,37 @@ async function main() {
     console.log("[resources] sidecar: cached");
   }
 
+  let codexAppServerVersion: string | null = cache?.codexAppServerVersion ?? null;
+  if (shouldBundleCodexAppServer) {
+    const pinnedVersion = normalizeCodexAppServerVersionOverride(codexAppServerVersionOverride);
+    const cachedVersionMatches =
+      cache?.platform === platform &&
+      cache?.arch === arch &&
+      cache?.codexAppServerVersion &&
+      (pinnedVersion === null || cache.codexAppServerVersion === pinnedVersion);
+    if (cachedVersionMatches && (await pathExists(codexAppServerOutfile))) {
+      codexAppServerVersion = cache.codexAppServerVersion;
+      console.log(`[resources] codex app-server: cached v${codexAppServerVersion}`);
+    } else {
+      const codexBundle = await ensureBundledCodexAppServer(root, target, {
+        version: codexAppServerVersionOverride,
+        outputName: codexAppServerFilename,
+      });
+      codexAppServerVersion = codexBundle.version;
+      await fs.copyFile(codexBundle.executablePath, codexAppServerOutfile);
+      if (platform !== "win32") {
+        await fs.chmod(codexAppServerOutfile, 0o755);
+      }
+      console.log(
+        `[resources] codex app-server: bundled ${codexBundle.assetName} v${codexBundle.version}`,
+      );
+    }
+  } else {
+    await fs.rm(codexAppServerOutfile, { force: true });
+    codexAppServerVersion = null;
+    console.log("[resources] codex app-server: disabled");
+  }
+
   const promptsDest = path.join(distDir, "prompts");
   const configDest = path.join(distDir, "config");
   await rmrf(path.join(distDir, "skills"));
@@ -280,6 +328,7 @@ async function main() {
     arch,
     includeDocs,
     sidecarFingerprint,
+    codexAppServerVersion,
     promptsFingerprint,
     configFingerprint,
     docsFingerprint,

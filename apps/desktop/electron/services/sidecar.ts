@@ -5,6 +5,7 @@ export const SIDECAR_BASE_NAME = "cowork-server";
 export const SIDECAR_MANIFEST_NAME = "cowork-server-manifest.json";
 export const SIDECAR_BUN_EXECUTABLE_NAME = "bun.exe";
 export const SIDECAR_BUN_ENTRYPOINT_PATH = "server/index.js";
+export const CODEX_APP_SERVER_BASE_NAME = "codex-app-server";
 
 export type ExecutableSidecarLaunchSpec = {
   kind: "executable";
@@ -79,6 +80,14 @@ export function resolvePackagedSidecarFilename(
 ): string {
   const ext = platform === "win32" ? ".exe" : "";
   return `${SIDECAR_BASE_NAME}-${resolveDesktopTargetTriple(platform, arch)}${ext}`;
+}
+
+export function resolvePackagedCodexAppServerFilename(
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch,
+): string {
+  const ext = platform === "win32" ? ".exe" : "";
+  return `${CODEX_APP_SERVER_BASE_NAME}-${resolveDesktopTargetTriple(platform, arch)}${ext}`;
 }
 
 export function buildSidecarManifest(

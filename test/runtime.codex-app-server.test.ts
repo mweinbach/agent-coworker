@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { withCodexAppServerClient } from "../src/providers/codexAppServerClient";
 import { createRuntime } from "../src/runtime";
 import type { AgentConfig } from "../src/types";
 import { VERSION } from "../src/version";
@@ -110,6 +111,37 @@ afterEach(() => {
 });
 
 describe("codex app-server runtime", () => {
+  test("runs an explicit standalone app-server command without implicit args", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-standalone-"));
+    const script = path.join(dir, "standalone-codex-app-server.js");
+    const capturePath = path.join(dir, "argv.json");
+    await fs.writeFile(
+      script,
+      `#!${process.execPath}
+const readline = require("node:readline");
+const fs = require("node:fs");
+fs.writeFileSync(process.env.CODEX_APP_SERVER_CAPTURE_PATH, JSON.stringify(process.argv.slice(2)));
+const rl = readline.createInterface({ input: process.stdin });
+rl.on("line", (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === "initialize") {
+    process.stdout.write(JSON.stringify({ id: msg.id, result: { userAgent: "standalone-mock" } }) + "\\n");
+  }
+});
+`,
+      "utf-8",
+    );
+    await fs.chmod(script, 0o755);
+    process.env.COWORK_CODEX_APP_SERVER_COMMAND = script;
+    process.env.COWORK_CODEX_APP_SERVER_ARGS = "";
+    process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
+
+    await withCodexAppServerClient(async () => {});
+
+    const argv = JSON.parse(await fs.readFile(capturePath, "utf-8"));
+    expect(argv).toEqual([]);
+  });
+
   test("initializes app-server with the Cowork package version", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-init-"));
     const script = await writeMockAppServer(dir);

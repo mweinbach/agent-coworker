@@ -40,7 +40,7 @@ COWORK_ELECTRON_REMOTE_DEBUG=0 bun run dev # opt out
 bun run build
 ```
 
-The build pipeline rebuilds bundled desktop resources (`cowork-server` sidecar + prompts/config by default, with docs opt-in via `COWORK_BUNDLE_DESKTOP_DOCS=1`) via the root `build:desktop-resources` script. Curated default skills are bootstrapped by the shared agent runtime into `~/.cowork/skills` from GitHub instead of being bundled into the app.
+The build pipeline rebuilds bundled desktop resources (`cowork-server` sidecar + Codex app-server + prompts/config by default, with docs opt-in via `COWORK_BUNDLE_DESKTOP_DOCS=1`) via the root `build:desktop-resources` script. The Codex app-server binary is downloaded from `openai/codex` releases for the current build target; set `COWORK_CODEX_APP_SERVER_VERSION` to pin a release version such as `0.128.0`, or `COWORK_BUNDLE_CODEX_APP_SERVER=0` to skip bundling. Curated default skills are bootstrapped by the shared agent runtime into `~/.cowork/skills` from GitHub instead of being bundled into the app.
 `build:desktop-resources` is target-aware. It defaults to the host platform and arch locally, and CI can override that with `COWORK_BUILD_PLATFORM` / `COWORK_BUILD_ARCH` (or explicit `--platform` / `--arch` flags when invoking the script directly).
 Desktop packaging clears `apps/desktop/resources/binaries/`, emits exactly one target-specific sidecar payload, and writes `cowork-server-manifest.json` beside it so the packaged app launches that pinned payload instead of scanning for an arbitrary match.
 Most targets still bundle a compiled `cowork-server-*` executable. Windows ARM64 instead bundles `bun.exe` plus `server/index.js`, and the manifest tells the packaged app to launch that runtime bundle.

@@ -52,11 +52,11 @@ export function codexAppServerClientInfo(): { name: string; title: string; versi
 }
 
 function codexCommand(): { command: string; args: string[] } {
+  const command = process.env.COWORK_CODEX_APP_SERVER_COMMAND?.trim();
+  const args = process.env.COWORK_CODEX_APP_SERVER_ARGS?.trim();
   return {
-    command: process.env.COWORK_CODEX_APP_SERVER_COMMAND?.trim() || DEFAULT_CODEX_COMMAND,
-    args: process.env.COWORK_CODEX_APP_SERVER_ARGS?.trim().split(/\s+/).filter(Boolean) ?? [
-      ...DEFAULT_CODEX_ARGS,
-    ],
+    command: command || DEFAULT_CODEX_COMMAND,
+    args: args ? args.split(/\s+/).filter(Boolean) : command ? [] : [...DEFAULT_CODEX_ARGS],
   };
 }
 

@@ -191,6 +191,32 @@ describe("desktop server manager startup mode", () => {
     );
   });
 
+  test("buildServerEnv points packaged server at the bundled Codex app-server when present", async () => {
+    const previousOverride = process.env.COWORK_CODEX_APP_SERVER_COMMAND;
+    const previousDesktopOverride = process.env.COWORK_DESKTOP_CODEX_APP_SERVER_PATH;
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-bundle-"));
+    const bundled = path.join(dir, "codex-app-server-aarch64-apple-darwin");
+
+    try {
+      delete process.env.COWORK_CODEX_APP_SERVER_COMMAND;
+      process.env.COWORK_DESKTOP_CODEX_APP_SERVER_PATH = bundled;
+      await fs.writeFile(bundled, "");
+
+      const env = __internal.buildServerEnv();
+      expect(env.COWORK_CODEX_APP_SERVER_COMMAND).toBe(bundled);
+      expect(env.COWORK_CODEX_APP_SERVER_ARGS).toBe("");
+    } finally {
+      if (previousOverride === undefined) delete process.env.COWORK_CODEX_APP_SERVER_COMMAND;
+      else process.env.COWORK_CODEX_APP_SERVER_COMMAND = previousOverride;
+      if (previousDesktopOverride === undefined) {
+        delete process.env.COWORK_DESKTOP_CODEX_APP_SERVER_PATH;
+      } else {
+        process.env.COWORK_DESKTOP_CODEX_APP_SERVER_PATH = previousDesktopOverride;
+      }
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("only retries source startup automatically on Windows", () => {
     expect(__internal.getSourceStartupAttemptCount(true)).toBe(
       process.platform === "win32" ? 2 : 1,

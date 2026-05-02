@@ -13,7 +13,7 @@ import {
   getServerTerminationSignal,
   getSourceStartupAttemptCount,
 } from "./serverPlatform";
-import { findPackagedSidecarLaunchCommand } from "./sidecar";
+import { findPackagedSidecarLaunchCommand, resolvePackagedCodexAppServerFilename } from "./sidecar";
 import { assertSafeId, assertWorkspaceDirectory } from "./validation";
 
 const SERVER_STARTUP_TIMEOUT_MS = 15_000;
@@ -139,6 +139,22 @@ function findSidecarLaunchCommand() {
   return findPackagedSidecarLaunchCommand(getSidecarSearchDirs(), {
     explicitPath: process.env.COWORK_DESKTOP_SIDECAR_PATH,
   });
+}
+
+function findBundledCodexAppServerPath(): string | null {
+  const fromEnv = process.env.COWORK_DESKTOP_CODEX_APP_SERVER_PATH;
+  if (fromEnv && fs.existsSync(fromEnv)) {
+    return fromEnv;
+  }
+
+  const expectedFilename = resolvePackagedCodexAppServerFilename();
+  for (const dir of getSidecarSearchDirs()) {
+    const candidate = path.join(dir, expectedFilename);
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
 }
 
 function waitForExit(child: ServerChildProcess, timeoutMs: number): Promise<boolean> {
@@ -300,9 +316,15 @@ function resolveSourceStartup(
 }
 
 function buildServerEnv(featureFlags?: { openAiNativeConnectors?: boolean }): NodeJS.ProcessEnv {
+  const bundledCodexAppServer = process.env.COWORK_CODEX_APP_SERVER_COMMAND
+    ? null
+    : findBundledCodexAppServerPath();
   return {
     ...process.env,
     COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: process.env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP ?? "1",
+    ...(bundledCodexAppServer
+      ? { COWORK_CODEX_APP_SERVER_COMMAND: bundledCodexAppServer, COWORK_CODEX_APP_SERVER_ARGS: "" }
+      : {}),
     ...(featureFlags?.openAiNativeConnectors
       ? { COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS: "1" }
       : {}),
@@ -660,6 +682,7 @@ export class ServerManager {
 export const __internal = {
   buildServerEnv,
   buildSourceEnvForAttempt,
+  findBundledCodexAppServerPath,
   findSidecarLaunchCommand,
   getServerTerminationSignal,
   getServerLogPath,

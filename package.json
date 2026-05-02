@@ -90,7 +90,7 @@
     "remark-parse": "^11.0.0",
     "turndown": "^7.2.4",
     "unified": "^11.0.5",
-    "zod": "^4.3.6"
+    "zod": "4.3.6"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.13",

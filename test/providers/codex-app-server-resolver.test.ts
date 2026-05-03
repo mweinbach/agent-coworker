@@ -59,16 +59,57 @@ describe("codex app-server resolver", () => {
 
   test("uses system codex when it is available and no managed install exists", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-system-"));
+    const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-system-bin-"));
+    const codexPath = path.join(binDir, "codex");
+    await fs.writeFile(codexPath, "#!/bin/sh\n", "utf8");
+    await fs.chmod(codexPath, 0o755);
+
     const command = await resolveCodexAppServerCommand({
       homeDir,
+      pathEnv: binDir,
       spawnForResult: async (cmd, args) => {
-        expect([cmd, ...args]).toEqual(["codex", "--version"]);
+        expect([cmd, ...args]).toEqual([codexPath, "--version"]);
         return { ok: true, stdout: "codex-cli 0.128.0\n", stderr: "" };
       },
     });
 
     expect(command).toEqual({
-      command: "codex",
+      command: codexPath,
+      args: ["app-server"],
+      source: "system",
+      version: "0.128.0",
+    });
+  });
+
+  test("skips repo-local node_modules codex binaries when resolving system codex", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-shadow-home-"));
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-shadow-root-"));
+    const localBinDir = path.join(rootDir, "node_modules", ".bin");
+    const systemBinDir = path.join(rootDir, "system-bin");
+    await fs.mkdir(localBinDir, { recursive: true });
+    await fs.mkdir(systemBinDir, { recursive: true });
+    const staleCodexPath = path.join(localBinDir, "codex");
+    const systemCodexPath = path.join(systemBinDir, "codex");
+    await fs.writeFile(staleCodexPath, "#!/bin/sh\n", "utf8");
+    await fs.writeFile(systemCodexPath, "#!/bin/sh\n", "utf8");
+    await fs.chmod(staleCodexPath, 0o755);
+    await fs.chmod(systemCodexPath, 0o755);
+    const probedCommands: string[] = [];
+
+    const command = await resolveCodexAppServerCommand({
+      homeDir,
+      pathEnv: [localBinDir, systemBinDir].join(path.delimiter),
+      spawnForResult: async (cmd) => {
+        probedCommands.push(cmd);
+        if (cmd === staleCodexPath) return { ok: true, stdout: "codex-cli 0.87.0\n", stderr: "" };
+        if (cmd === systemCodexPath) return { ok: true, stdout: "codex-cli 0.128.0\n", stderr: "" };
+        return { ok: false, stdout: "", stderr: "" };
+      },
+    });
+
+    expect(probedCommands).toEqual([systemCodexPath]);
+    expect(command).toEqual({
+      command: systemCodexPath,
       args: ["app-server"],
       source: "system",
       version: "0.128.0",

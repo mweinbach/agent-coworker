@@ -53,6 +53,7 @@ export type CodexAppServerResolverOverrides = {
   spawnForResult?: (command: string, args: string[]) => Promise<ProcessResult>;
   spawnAppServer?: typeof spawn;
   homeDir?: string;
+  pathEnv?: string;
   platform?: NodeJS.Platform;
   arch?: string;
 };
@@ -160,6 +161,43 @@ async function pathExists(target: string): Promise<boolean> {
   }
 }
 
+function isNodeModulesBinPath(candidateDir: string): boolean {
+  const parts = path.resolve(candidateDir).split(path.sep).filter(Boolean);
+  for (let index = 0; index < parts.length - 1; index += 1) {
+    if (parts[index] === "node_modules" && parts[index + 1] === ".bin") return true;
+  }
+  return false;
+}
+
+function codexExecutableNames(platform: NodeJS.Platform): string[] {
+  if (platform !== "win32") return [DEFAULT_CODEX_COMMAND];
+  const extensions = (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM")
+    .split(";")
+    .map((part) => part.trim().toLowerCase())
+    .filter(Boolean);
+  return [DEFAULT_CODEX_COMMAND, ...extensions.map((ext) => `${DEFAULT_CODEX_COMMAND}${ext}`)];
+}
+
+async function resolveSystemCodexCandidates(
+  overrides: CodexAppServerResolverOverrides,
+): Promise<string[]> {
+  const pathEnv = overrides.pathEnv ?? process.env.PATH ?? "";
+  const platform = overrides.platform ?? process.platform;
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+  for (const rawDir of pathEnv.split(path.delimiter)) {
+    if (!rawDir || isNodeModulesBinPath(rawDir)) continue;
+    const dir = path.resolve(rawDir);
+    for (const executableName of codexExecutableNames(platform)) {
+      const candidate = path.join(dir, executableName);
+      if (seen.has(candidate)) continue;
+      seen.add(candidate);
+      if (await pathExists(candidate)) candidates.push(candidate);
+    }
+  }
+  return candidates;
+}
+
 function defaultSpawnForResult(command: string, args: string[]): Promise<ProcessResult> {
   return new Promise((resolve) => {
     const child = spawn(command, args, {
@@ -215,14 +253,17 @@ async function resolveSystemCommand(
   overrides: CodexAppServerResolverOverrides,
 ): Promise<CodexAppServerCommand | null> {
   const spawnForResult = overrides.spawnForResult ?? defaultSpawnForResult;
-  const result = await spawnForResult(DEFAULT_CODEX_COMMAND, ["--version"]);
-  if (!result.ok) return null;
-  return {
-    command: DEFAULT_CODEX_COMMAND,
-    args: [...DEFAULT_CODEX_ARGS],
-    source: "system",
-    version: parseCodexVersion(`${result.stdout}\n${result.stderr}`),
-  };
+  for (const command of await resolveSystemCodexCandidates(overrides)) {
+    const result = await spawnForResult(command, ["--version"]);
+    if (!result.ok) continue;
+    return {
+      command,
+      args: [...DEFAULT_CODEX_ARGS],
+      source: "system",
+      version: parseCodexVersion(`${result.stdout}\n${result.stderr}`),
+    };
+  }
+  return null;
 }
 
 async function resolveManagedCommand(
@@ -491,6 +532,7 @@ export const __internal = {
   managedExecutablePath,
   managedCurrentPath,
   installCodexAppServer,
+  resolveSystemCodexCandidates,
   resolveSystemCommand,
   resolveManagedCommand,
 } as const;

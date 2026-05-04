@@ -14,7 +14,6 @@ import {
   writeWorkspaceMCPServersDocument,
 } from "../src/mcp";
 import { setMCPServerEnabled } from "../src/mcp/configRegistry";
-import { setOpenAiNativeConnectorEnabled } from "../src/server/connectors/openaiNativeConnectors";
 import { CODEX_APPS_MCP_SERVER_NAME } from "../src/shared/openaiNativeConnectors";
 import type { AgentConfig, MCPServerConfig } from "../src/types";
 
@@ -302,7 +301,6 @@ describe("codex apps MCP bridge", () => {
       config.userCoworkDir = path.join(tmpHome, ".cowork");
       config.skillsDirs = [path.join(tmpHome, ".cowork", "skills")];
       config.experimentalFeatures = { openAiNativeConnectors: true };
-      await setOpenAiNativeConnectorEnabled(config, "connector_gmail", true);
 
       const servers = await loadMCPServers(config);
       const codexApps = servers.find((server) => server.name === CODEX_APPS_MCP_SERVER_NAME);

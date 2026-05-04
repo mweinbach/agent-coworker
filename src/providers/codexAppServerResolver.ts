@@ -237,7 +237,7 @@ async function readVersionFile(executablePath: string): Promise<string | undefin
 }
 
 async function resolveOverrideCommand(
-  overrides: CodexAppServerResolverOverrides,
+  _overrides: CodexAppServerResolverOverrides,
 ): Promise<CodexAppServerCommand | null> {
   const command = process.env.COWORK_CODEX_APP_SERVER_COMMAND?.trim();
   const rawArgs = process.env.COWORK_CODEX_APP_SERVER_ARGS?.trim();

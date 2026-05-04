@@ -86,8 +86,6 @@ export type ProviderStatus = {
   tokenRecoverable?: boolean;
 };
 
-const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
-const finiteNumberSchema = z.number().finite();
 const providerStatusModeSchema = z.enum([
   "api_key",
   "oauth",
@@ -99,11 +97,6 @@ const providerStatusModeSchema = z.enum([
 function normalizeProviderStatusMode(mode: unknown): ProviderStatusMode {
   const parsed = providerStatusModeSchema.safeParse(mode);
   return parsed.success ? parsed.data : "missing";
-}
-
-function asNonEmptyString(value: unknown): string | undefined {
-  const parsed = nonEmptyTrimmedStringSchema.safeParse(value);
-  return parsed.success ? parsed.data : undefined;
 }
 
 function buildSavedApiKeyMasks(opts: {

@@ -528,7 +528,7 @@ Changes in `7.21`:
 
 Changes in `7.20`:
 
-- `set_config.config.providerOptions.codex-cli` and `session_config.config.providerOptions.codex-cli` now support `webSearchMode`. Cowork forwards this to Codex app-server as the thread `web_search` config override for Codex turns.
+- `set_config.config.providerOptions.codex-cli` and `session_config.config.providerOptions.codex-cli` now support `textVerbosity`, `webSearchMode`, and rich `webSearch` controls. Cowork forwards these to Codex app-server as thread `model_verbosity`, `web_search`, and `tools.web_search` config overrides for Codex turns.
 - `model_stream_raw` may now carry OpenAI Responses `web_search_call` items so clients can synthesize native web-search activity alongside normalized stream chunks.
 
 Changes in `7.19`:
@@ -3055,9 +3055,12 @@ Current runtime config. Sent on connection and after `set_config`.
 | `config.providerOptions.openai.textVerbosity` | `"low" \| "medium" \| "high"` | Current editable OpenAI verbosity |
 | `config.providerOptions.codex-cli.reasoningEffort` | `"none" \| "low" \| "medium" \| "high" \| "xhigh"` | Current editable Codex CLI reasoning effort |
 | `config.providerOptions.codex-cli.reasoningSummary` | `"auto" \| "concise" \| "detailed"` | Current editable Codex CLI reasoning summary |
-| `config.providerOptions.codex-cli.textVerbosity` | `"low" \| "medium" \| "high"` | Current editable Codex CLI verbosity |
+| `config.providerOptions.codex-cli.textVerbosity` | `"low" \| "medium" \| "high"` | Current editable Codex CLI verbosity forwarded to Codex app-server as `model_verbosity` |
 | `config.providerOptions.codex-cli.webSearchBackend` | `"native" \| "exa"` | Current Codex web search backend. Omitted means the workspace is using the default `"native"` backend |
 | `config.providerOptions.codex-cli.webSearchMode` | `"disabled" \| "cached" \| "live"` | Codex native web-search mode forwarded to Codex app-server as `web_search` |
+| `config.providerOptions.codex-cli.webSearch.contextSize` | `"low" \| "medium" \| "high"` | Codex native web-search context size forwarded to Codex app-server as `tools.web_search.context_size` |
+| `config.providerOptions.codex-cli.webSearch.allowedDomains` | `string[]` | Codex native web-search allowed domains forwarded to Codex app-server as `tools.web_search.allowed_domains` |
+| `config.providerOptions.codex-cli.webSearch.location` | `{ country?, region?, city?, timezone? }` | Codex native web-search approximate location forwarded to Codex app-server as `tools.web_search.location` |
 | `config.providerOptions.google.nativeWebSearch` | `boolean` | Current Gemini built-in Search + URL Context toggle |
 | `config.providerOptions.google.thinkingConfig.thinkingLevel` | `"minimal" \| "low" \| "medium" \| "high"` | Current explicit Gemini `thinking_level` override when set. Omitted means the workspace is using Gemini's dynamic default |
 | `config.providerOptions.lmstudio.baseUrl` | `string` | Current LM Studio base URL override |

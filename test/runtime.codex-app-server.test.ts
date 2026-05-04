@@ -517,6 +517,98 @@ describe("codex app-server runtime", () => {
     expect(rawDeltaIndex).toBeLessThanOrEqual(textDeltaIndex);
   });
 
+  test.serial("forwards Codex verbosity and rich web search config to app-server threads", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-config-"));
+    const script = await writeMockAppServer(dir);
+    const capturePath = path.join(dir, "requests.jsonl");
+    process.env.COWORK_CODEX_APP_SERVER_COMMAND = testNodeCommand;
+    process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
+    process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
+
+    const config = {
+      ...makeConfig(dir),
+      providerOptions: {
+        "codex-cli": {
+          textVerbosity: "high",
+          webSearchMode: "live",
+          webSearch: {
+            contextSize: "high",
+            allowedDomains: ["openai.com", "platform.openai.com"],
+            location: {
+              country: "US",
+              region: "CA",
+              city: "San Francisco",
+              timezone: "America/Los_Angeles",
+            },
+          },
+        },
+      },
+    };
+    const runtime = createRuntime(config);
+    await runtime.runTurn({
+      config,
+      providerOptions: config.providerOptions,
+      system: "You are Codex.",
+      messages: [{ role: "user", content: "Say hi" }],
+      tools: {},
+      maxSteps: 1,
+    });
+
+    const requests = await readCapturedRequests(capturePath);
+    expect(requests.find((entry) => entry.method === "thread/start")?.params.config).toEqual({
+      web_search: "live",
+      model_verbosity: "high",
+      tools: {
+        web_search: {
+          context_size: "high",
+          allowed_domains: ["openai.com", "platform.openai.com"],
+          location: {
+            country: "US",
+            region: "CA",
+            city: "San Francisco",
+            timezone: "America/Los_Angeles",
+          },
+        },
+      },
+    });
+  });
+
+  test.serial("does not emit empty rich web search config", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-empty-web-"));
+    const script = await writeMockAppServer(dir);
+    const capturePath = path.join(dir, "requests.jsonl");
+    process.env.COWORK_CODEX_APP_SERVER_COMMAND = testNodeCommand;
+    process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
+    process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
+
+    const config = {
+      ...makeConfig(dir),
+      providerOptions: {
+        "codex-cli": {
+          webSearchMode: "cached",
+          webSearch: {
+            allowedDomains: [],
+            location: {},
+          },
+        },
+      },
+    };
+    const runtime = createRuntime(config);
+    await runtime.runTurn({
+      config,
+      providerOptions: config.providerOptions,
+      system: "You are Codex.",
+      messages: [{ role: "user", content: "Say hi" }],
+      tools: {},
+      maxSteps: 1,
+    });
+
+    const requests = await readCapturedRequests(capturePath);
+    expect(requests.find((entry) => entry.method === "thread/start")?.params.config).toEqual({
+      web_search: "cached",
+    });
+  });
+
   test.serial("uses app-server default model when stored Codex model is not available", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-model-"));
     const script = path.join(dir, "model-gated-codex-app-server.js");

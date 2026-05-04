@@ -161,6 +161,13 @@ function providerOptionString(
   return asString(codex?.[key]);
 }
 
+function codexProviderOptions(
+  providerOptions: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  const root = asRecord(providerOptions);
+  return asRecord(root?.[CODEX_APP_SERVER_PROVIDER]) ?? undefined;
+}
+
 function normalizeEffort(value: string | undefined): string | undefined {
   if (!value) return undefined;
   return ["none", "minimal", "low", "medium", "high", "xhigh"].includes(value) ? value : undefined;
@@ -176,11 +183,55 @@ function normalizeWebSearchMode(value: string | undefined): string | undefined {
   return ["disabled", "cached", "live"].includes(value) ? value : undefined;
 }
 
-function codexThreadConfig(params: RuntimeRunTurnParams): Record<string, unknown> | undefined {
-  const webSearchMode = normalizeWebSearchMode(
-    providerOptionString(params.providerOptions, "webSearchMode"),
+function normalizeTextVerbosity(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  return ["low", "medium", "high"].includes(value) ? value : undefined;
+}
+
+function normalizeWebSearchContextSize(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  return ["low", "medium", "high"].includes(value) ? value : undefined;
+}
+
+function normalizeWebSearchLocation(value: unknown): Record<string, string> | undefined {
+  const location = asRecord(value);
+  if (!location) return undefined;
+  const next: Record<string, string> = {};
+  for (const key of ["country", "region", "city", "timezone"]) {
+    const locationValue = asString(location[key]);
+    if (locationValue) next[key] = locationValue;
+  }
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
+function codexWebSearchToolConfig(codexOptions: Record<string, unknown>): Record<string, unknown> | undefined {
+  const webSearch = asRecord(codexOptions.webSearch);
+  if (!webSearch) return undefined;
+
+  const contextSize = normalizeWebSearchContextSize(asString(webSearch.contextSize));
+  const allowedDomains = asArray(webSearch.allowedDomains).filter(
+    (domain): domain is string => typeof domain === "string" && domain.length > 0,
   );
-  return webSearchMode ? { web_search: webSearchMode } : undefined;
+  const location = normalizeWebSearchLocation(webSearch.location);
+  const toolConfig: Record<string, unknown> = {};
+  if (contextSize) toolConfig.context_size = contextSize;
+  if (allowedDomains.length > 0) toolConfig.allowed_domains = allowedDomains;
+  if (location) toolConfig.location = location;
+  return Object.keys(toolConfig).length > 0 ? toolConfig : undefined;
+}
+
+function codexThreadConfig(params: RuntimeRunTurnParams): Record<string, unknown> | undefined {
+  const codexOptions = codexProviderOptions(params.providerOptions);
+  if (!codexOptions) return undefined;
+
+  const webSearchMode = normalizeWebSearchMode(asString(codexOptions.webSearchMode));
+  const textVerbosity = normalizeTextVerbosity(asString(codexOptions.textVerbosity));
+  const webSearchToolConfig = codexWebSearchToolConfig(codexOptions);
+  const config: Record<string, unknown> = {};
+  if (webSearchMode) config.web_search = webSearchMode;
+  if (textVerbosity) config.model_verbosity = textVerbosity;
+  if (webSearchToolConfig) config.tools = { web_search: webSearchToolConfig };
+  return Object.keys(config).length > 0 ? config : undefined;
 }
 
 function codexBaseInstructions(system: string): string {

@@ -18,7 +18,7 @@ import type { SessionCostTracker, SessionUsageSnapshot } from "./session/costTra
 import type { AgentRole } from "./shared/agents";
 import type { ProviderContinuationState } from "./shared/providerContinuation";
 import type { AgentControl } from "./tools";
-import { createTools } from "./tools";
+import { createTools, filterToolsForCodexDynamicBoundary } from "./tools";
 import { buildTurnSystemPrompt } from "./turnSystemPrompt";
 import type { AgentConfig, HarnessContextState, ModelMessage, TodoItem } from "./types";
 
@@ -330,10 +330,13 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       applyA2uiEnvelope: params.applyA2uiEnvelope,
     };
     const useProviderNativeTools = providerOwnsExecutableTools(config);
-    const builtInTools = useProviderNativeTools ? {} : deps.createTools(toolCtx);
+    const rawBuiltInTools = deps.createTools(toolCtx);
+    const builtInTools = useProviderNativeTools
+      ? filterToolsForCodexDynamicBoundary(rawBuiltInTools)
+      : rawBuiltInTools;
 
     let mcpTools: Record<string, any> = {};
-    const enableMcp = !useProviderNativeTools && (params.enableMcp ?? config.enableMcp ?? false);
+    const enableMcp = params.enableMcp ?? config.enableMcp ?? false;
     let closeMcp: undefined | (() => Promise<void>);
     if (enableMcp) {
       const servers = await deps.loadMCPServers(config);

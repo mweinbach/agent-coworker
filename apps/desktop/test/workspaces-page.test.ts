@@ -217,13 +217,13 @@ describe("desktop workspaces page", () => {
       });
 
       expect(container.textContent).toContain("Search provider");
-      expect(container.textContent).toContain("doesn't include search");
+      expect(container.textContent).toContain("non-Codex models without native search");
       expect(container.textContent).not.toContain("Allowed domains");
 
       const text = container.textContent ?? "";
       expect(text).toContain("Codex web search mode");
       expect(text).toContain(
-        "Cowork passes this through to Codex app-server as the thread web search setting.",
+        "ChatGPT Subscription/Codex uses hybrid mode: Codex app-server owns native web search",
       );
       expect(text).not.toContain("Context size");
       expect(text).not.toContain("Country");

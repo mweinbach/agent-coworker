@@ -3869,6 +3869,48 @@ describe("createTools", () => {
     expect(names).not.toContain("webSearch");
   });
 
+  test("listSessionToolNames reports the Codex hybrid dynamic-tool boundary", () => {
+    const names = listSessionToolNames(
+      {
+        provider: "codex-cli",
+        providerOptions: {
+          "codex-cli": {
+            webSearchBackend: "native",
+          },
+        },
+        enableMemory: true,
+      },
+      { includeAgentControl: true },
+    );
+
+    expect(names).toEqual(
+      expect.arrayContaining([
+        "AskUserQuestion",
+        "ask",
+        "todoWrite",
+        "skill",
+        "memory",
+        "usage",
+        "spawnAgent",
+        "listAgents",
+        "sendAgentInput",
+        "waitForAgent",
+        "inspectAgent",
+        "resumeAgent",
+        "closeAgent",
+      ]),
+    );
+    expect(names).not.toContain("bash");
+    expect(names).not.toContain("read");
+    expect(names).not.toContain("write");
+    expect(names).not.toContain("edit");
+    expect(names).not.toContain("glob");
+    expect(names).not.toContain("grep");
+    expect(names).not.toContain("webSearch");
+    expect(names).not.toContain("webFetch");
+    expect(names).not.toContain("notebookEdit");
+  });
+
   test("omits child-agent lifecycle tools when child-agent control is unavailable", async () => {
     const dir = await tmpDir();
     const tools = createTools(makeCtx(dir));

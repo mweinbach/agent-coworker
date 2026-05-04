@@ -524,7 +524,7 @@ Changes in `7.22`:
 
 Changes in `7.21`:
 
-- `set_config.config.providerOptions.codex-cli` and `session_config.config.providerOptions.codex-cli` now support `webSearchBackend: "native" | "exa"` so Codex workspaces can deliberately choose between built-in Responses web search and the local Exa tool. Native is the default when the field is omitted.
+- `set_config.config.providerOptions.codex-cli` and `session_config.config.providerOptions.codex-cli` now support `webSearchBackend: "native" | "exa"` for legacy configuration. In current Codex app-server hybrid mode, Codex-native web search/fetch owns Codex turns; the local Exa/Parallel `webSearch` tool is only exposed to non-Codex providers.
 
 Changes in `7.20`:
 
@@ -2079,7 +2079,7 @@ Tool metadata list response to `list_tools`.
 |-------|------|-------------|
 | `type` | `"tools"` | — |
 | `sessionId` | `string` | Session identifier |
-| `tools` | `Array<{ name: string; description: string }>` | Sorted list of tools with name and first line of description. Note: MCP tools are loaded dynamically during turns and not included |
+| `tools` | `Array<{ name: string; description: string }>` | Sorted list of effective tools with name and first line of description. For `codex-cli`, this reports the hybrid boundary: Cowork coordination tools are listed, while Cowork local shell/file/search/web tools are omitted because Codex app-server owns them natively. Note: MCP tools are loaded dynamically during turns and not included in this list |
 
 ---
 
@@ -3056,7 +3056,7 @@ Current runtime config. Sent on connection and after `set_config`.
 | `config.providerOptions.codex-cli.reasoningEffort` | `"none" \| "low" \| "medium" \| "high" \| "xhigh"` | Current editable Codex CLI reasoning effort |
 | `config.providerOptions.codex-cli.reasoningSummary` | `"auto" \| "concise" \| "detailed"` | Current editable Codex CLI reasoning summary |
 | `config.providerOptions.codex-cli.textVerbosity` | `"low" \| "medium" \| "high"` | Current editable Codex CLI verbosity forwarded to Codex app-server as `model_verbosity` |
-| `config.providerOptions.codex-cli.webSearchBackend` | `"native" \| "exa"` | Current Codex web search backend. Omitted means the workspace is using the default `"native"` backend |
+| `config.providerOptions.codex-cli.webSearchBackend` | `"native" \| "exa"` | Legacy Codex web search backend preference. Hybrid Codex app-server turns use Codex-native web search/fetch; local Exa/Parallel tools are reserved for non-Codex providers |
 | `config.providerOptions.codex-cli.webSearchMode` | `"disabled" \| "cached" \| "live"` | Codex native web-search mode forwarded to Codex app-server as `web_search` |
 | `config.providerOptions.codex-cli.webSearch.contextSize` | `"low" \| "medium" \| "high"` | Codex native web-search context size forwarded to Codex app-server as `tools.web_search.context_size` |
 | `config.providerOptions.codex-cli.webSearch.allowedDomains` | `string[]` | Codex native web-search allowed domains forwarded to Codex app-server as `tools.web_search.allowed_domains` |

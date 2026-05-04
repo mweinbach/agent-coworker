@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { z } from "zod";
 
 import {
   type CodexAppServerClient,
@@ -281,6 +282,36 @@ function createMockClient(): CodexAppServerClient {
       result = { turn: { id: turnId, status: "inProgress", items: [], error: null } };
       if (process.env.CODEX_APP_SERVER_DELAY_COMPLETION !== "1") {
         queueMicrotask(async () => {
+          if (process.env.COWORK_CODEX_APP_SERVER_ARGS?.includes("dynamic-tool-call")) {
+            await sendServerRequest("item/tool/call", {
+              threadId: "thread_1",
+              turnId,
+              callId: "call_structured",
+              tool: "structuredTool",
+              arguments: { value: "ok" },
+            });
+            await sendServerRequest("item/tool/call", {
+              threadId: "thread_1",
+              turnId,
+              callId: "call_unknown",
+              tool: "unknownTool",
+              arguments: {},
+            });
+            await sendServerRequest("item/tool/call", {
+              threadId: "thread_1",
+              turnId,
+              callId: "call_invalid",
+              tool: "validatedTool",
+              arguments: { count: "bad" },
+            });
+            await sendServerRequest("item/tool/call", {
+              threadId: "thread_1",
+              turnId,
+              callId: "call_throws",
+              tool: "throwsTool",
+              arguments: {},
+            });
+          }
           if (process.env.COWORK_CODEX_APP_SERVER_ARGS?.includes("eventful")) {
             await sendServerRequest("requestUserInput", { question: "Need detail?", options: ["yes"] });
             sendNotification({
@@ -694,7 +725,7 @@ rl.on("line", (line) => {
     );
   });
 
-  test.serial("marks Codex app-server as owner of native tools, apps, and plugins", async () => {
+  test.serial("registers Cowork coordination tools as Codex dynamic tools", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-tools-"));
     const script = await writeMockAppServer(dir);
     const capturePath = path.join(dir, "requests.jsonl");
@@ -708,8 +739,18 @@ rl.on("line", (line) => {
       system: "You are Codex.\n\n## Enabled Plugin Bundles\n\nCowork plugin example.",
       messages: [{ role: "user", content: "Say hi" }],
       tools: {
-        localOnlyTool: {
-          description: "A Cowork-only custom tool.",
+        spawnAgent: {
+          description: "Spawn a Cowork subagent.",
+          inputSchema: z.object({ task: z.string() }),
+          execute: () => "spawned",
+        },
+        mcp__srv__custom: {
+          description: "A Cowork-managed MCP tool.",
+          inputSchema: { type: "object", properties: { query: { type: "string" } } },
+          execute: () => "mcp ok",
+        },
+        bash: {
+          description: "Cowork bash should already be filtered before runtime.",
           execute: () => "should not be called",
         },
       },
@@ -723,13 +764,95 @@ rl.on("line", (line) => {
       experimentalRawEvents: true,
     });
     expect(startParams).not.toHaveProperty("tools");
+    expect(startParams?.dynamicTools).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "spawnAgent",
+          description: "Spawn a Cowork subagent.",
+          inputSchema: expect.objectContaining({ type: "object" }),
+        }),
+        expect.objectContaining({
+          name: "mcp__srv__custom",
+          description: "A Cowork-managed MCP tool.",
+          inputSchema: expect.objectContaining({ type: "object" }),
+        }),
+      ]),
+    );
+    expect(
+      (startParams?.dynamicTools as Array<{ name?: string }>).map((tool) => tool.name),
+    ).not.toContain("bash");
     expect(startParams?.baseInstructions).toContain("## Codex App-Server Tool Boundary");
     expect(startParams?.baseInstructions).toContain(
-      "Executable tools, MCP servers, ChatGPT apps/connectors, and Codex plugins for this turn are owned by Codex app-server.",
+      "Codex app-server handles shell, filesystem, sandboxing, approvals, and native web search/fetch for this turn.",
     );
     expect(startParams?.baseInstructions).toContain(
-      "Cowork custom tools and Cowork-managed MCP tools are not injected into Codex app-server turns",
+      "Cowork exposes coordination tools and Cowork MCP as dynamic tools.",
     );
+  });
+
+  test.serial("handles Codex dynamic tool call server requests", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-dynamic-tools-"));
+    process.env.COWORK_CODEX_APP_SERVER_ARGS = "dynamic-tool-call";
+
+    const rawEvents: unknown[] = [];
+    const runtime = createRuntime(makeConfig(dir));
+    await runtime.runTurn({
+      config: makeConfig(dir),
+      system: "You are Codex.",
+      messages: [{ role: "user", content: "Use dynamic tools" }],
+      tools: {
+        structuredTool: {
+          description: "Return structured data.",
+          inputSchema: z.object({ value: z.string() }),
+          execute: (input) => ({ ok: true, input }),
+        },
+        validatedTool: {
+          description: "Validate input.",
+          inputSchema: z.object({ count: z.number() }),
+          execute: () => "valid",
+        },
+        throwsTool: {
+          description: "Throw for testing.",
+          execute: () => {
+            throw new Error("boom");
+          },
+        },
+      },
+      maxSteps: 1,
+      onModelRawEvent: (event) => {
+        rawEvents.push(event);
+      },
+    });
+
+    const dynamicResponses = rawEvents
+      .map((event) => (event as { event?: { direction?: string; message?: unknown } }).event)
+      .filter((event) => event?.direction === "client_response")
+      .map((event) => event?.message as { result?: unknown })
+      .map((message) => message.result)
+      .filter((result) => {
+        const record = result as { contentItems?: unknown };
+        return Array.isArray(record?.contentItems);
+      }) as Array<{ success: boolean; contentItems: Array<{ text: string }> }>;
+
+    expect(dynamicResponses).toHaveLength(4);
+    const structuredText = dynamicResponses[0]?.contentItems[0]?.text;
+    expect(dynamicResponses[0]).toMatchObject({
+      success: true,
+      contentItems: [{ type: "inputText", text: expect.stringContaining('"ok": true') }],
+    });
+    expect(structuredText).toContain('"value": "ok"');
+    expect(dynamicResponses[1]).toMatchObject({
+      success: false,
+      contentItems: [{ text: expect.stringContaining("unknownTool") }],
+    });
+    expect(dynamicResponses[2]).toMatchObject({
+      success: false,
+      contentItems: [{ text: expect.stringContaining("validatedTool") }],
+    });
+    expect(dynamicResponses[3]).toMatchObject({
+      success: false,
+      contentItems: [{ text: expect.stringContaining("boom") }],
+    });
   });
 
   test.serial("passes workspace-write sandbox and approval prompts for regular Codex turns", async () => {

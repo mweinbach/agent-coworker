@@ -565,6 +565,52 @@ describe("REPL slash command routing", () => {
     expect(activateNextPrompt).toHaveBeenCalled();
   });
 
+  test("/tools lists Codex hybrid dynamic tools instead of Cowork local execution tools", async () => {
+    const tryRequest = mock(async () => true);
+    const activateNextPrompt = mock(() => {});
+    const log = mock(() => {});
+    const ctx = makeCommandContext({
+      tryRequest,
+      activateNextPrompt,
+      getConfig: () => ({
+        provider: "codex-cli",
+        model: "gpt-5.4",
+        workingDirectory: "/tmp",
+      }),
+      getSessionConfig: () => ({
+        enableMemory: true,
+        providerOptions: {
+          "codex-cli": {
+            webSearchBackend: "native",
+          },
+        },
+      }),
+    });
+    const originalLog = console.log;
+    console.log = log as any;
+    try {
+      const handled = await handleSlashCommand("/tools", ctx);
+      expect(handled).toBe(true);
+    } finally {
+      console.log = originalLog;
+    }
+
+    const rendered = log.mock.calls[0]?.[0];
+    expect(typeof rendered).toBe("string");
+    expect(rendered).toContain("  - spawnAgent");
+    expect(rendered).toContain("  - memory");
+    expect(rendered).toContain("  - usage");
+    expect(rendered).not.toContain("  - bash");
+    expect(rendered).not.toContain("  - read");
+    expect(rendered).not.toContain("  - write");
+    expect(rendered).not.toContain("  - edit");
+    expect(rendered).not.toContain("  - glob");
+    expect(rendered).not.toContain("  - grep");
+    expect(rendered).not.toContain("  - webSearch");
+    expect(rendered).not.toContain("  - webFetch");
+    expect(rendered).not.toContain("  - notebookEdit");
+  });
+
   test("/reasoning-effort refuses non-openai-compatible providers", async () => {
     const tryRequest = mock(async () => true);
     const activateNextPrompt = mock(() => {});

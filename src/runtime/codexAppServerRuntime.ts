@@ -8,9 +8,16 @@ import {
 import type { CodexAppServerCommand } from "../providers/codexAppServerResolver";
 import { getSupportedModel, listSupportedModels } from "../models/registry";
 import { isCodexAppServerContinuationState } from "../shared/providerContinuation";
+import { isCodexDynamicCoworkToolName } from "../tools/codexBoundary";
 import type { ModelMessage, TodoItem } from "../types";
-import { asRecord, asString } from "./piRuntimeOptions";
-import type { LlmRuntime, RuntimeRunTurnParams, RuntimeRunTurnResult, RuntimeUsage } from "./types";
+import { asRecord, asString, isZodSchema, toPiJsonSchema } from "./piRuntimeOptions";
+import type {
+  LlmRuntime,
+  RuntimeRunTurnParams,
+  RuntimeRunTurnResult,
+  RuntimeToolDefinition,
+  RuntimeUsage,
+} from "./types";
 
 const CODEX_APP_SERVER_PROVIDER = "codex-cli" as const;
 type CodexAppServerModelListEntry = {
@@ -62,6 +69,17 @@ type CodexTurnInputPart = {
   type: "text";
   text: string;
   text_elements: CodexTextElement[];
+};
+type CodexDynamicToolSpec = {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  namespace?: string;
+};
+
+type CodexDynamicToolCallResponse = {
+  success: boolean;
+  contentItems: Array<{ type: "inputText"; text: string }>;
 };
 
 function extractTextContent(content: unknown): string {
@@ -240,11 +258,57 @@ function codexBaseInstructions(system: string): string {
     [
       "## Codex App-Server Tool Boundary",
       "",
-      "Executable tools, MCP servers, ChatGPT apps/connectors, and Codex plugins for this turn are owned by Codex app-server.",
-      "Use only the tools and plugins that Codex app-server exposes natively in the active thread.",
-      "Cowork custom tools and Cowork-managed MCP tools are not injected into Codex app-server turns; do not assume Cowork-only tool names are callable unless Codex app-server exposes them.",
+      "Codex app-server handles shell, filesystem, sandboxing, approvals, and native web search/fetch for this turn.",
+      "Cowork exposes coordination tools and Cowork MCP as dynamic tools.",
+      "Use Codex-native tools for local files, commands, and web access. Use Cowork dynamic tools for subagents, memory, skills, todos, usage, A2UI, and `mcp__...` tools.",
     ].join("\n"),
   ].join("\n\n");
+}
+
+function codexDynamicToolSpecs(tools: RuntimeRunTurnParams["tools"]): CodexDynamicToolSpec[] {
+  return Object.entries(tools)
+    .filter(([name]) => isCodexDynamicCoworkToolName(name))
+    .map(([name, tool]): CodexDynamicToolSpec | null => {
+      const record = asRecord(tool);
+      if (!record) return null;
+      return {
+        name,
+        description: asString(record.description) ?? name,
+        inputSchema: toPiJsonSchema(record.inputSchema, CODEX_APP_SERVER_PROVIDER),
+      };
+    })
+    .filter((tool): tool is CodexDynamicToolSpec => tool !== null);
+}
+
+function validateDynamicToolInput(tool: RuntimeToolDefinition, input: unknown): unknown {
+  if (!isZodSchema(tool.inputSchema)) return input;
+  const parsed = tool.inputSchema.safeParse(input);
+  if (parsed.success) return parsed.data;
+  const issue = parsed.error.issues[0];
+  throw new Error(issue?.message ?? "Invalid tool input.");
+}
+
+function compactToolError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const trimmed = message.trim() || "Unknown error.";
+  return trimmed.length > 1200 ? `${trimmed.slice(0, 1197)}...` : trimmed;
+}
+
+function dynamicToolResultText(result: unknown): string {
+  if (result === undefined) return "";
+  if (typeof result === "string") return result;
+  try {
+    return JSON.stringify(result, null, 2);
+  } catch {
+    return String(result);
+  }
+}
+
+function dynamicToolResponse(success: boolean, text: string): CodexDynamicToolCallResponse {
+  return {
+    success,
+    contentItems: [{ type: "inputText", text }],
+  };
 }
 
 function formatCommandForDiagnostics(command: CodexAppServerCommand): string {
@@ -432,6 +496,9 @@ async function handleServerRequest(
   params: RuntimeRunTurnParams,
 ): Promise<unknown> {
   const method = request.method;
+  if (method === "item/tool/call") {
+    return await handleDynamicToolCall(request, params);
+  }
   if (method === "item/tool/requestUserInput" || method === "requestUserInput") {
     const requestParams = asRecord(request.params);
     const question =
@@ -459,6 +526,39 @@ async function handleServerRequest(
     return { decision: approved ? "accept" : "decline" };
   }
   return {};
+}
+
+async function handleDynamicToolCall(
+  request: CodexAppServerJsonRpcRequest,
+  params: RuntimeRunTurnParams,
+): Promise<CodexDynamicToolCallResponse> {
+  const requestParams = asRecord(request.params);
+  const toolName = asString(requestParams?.tool);
+  if (!toolName) {
+    return dynamicToolResponse(false, "Dynamic tool call is missing a tool name.");
+  }
+  if (!isCodexDynamicCoworkToolName(toolName)) {
+    return dynamicToolResponse(
+      false,
+      `Dynamic tool ${JSON.stringify(toolName)} is owned by Codex app-server natively.`,
+    );
+  }
+
+  const tool = params.tools[toolName];
+  if (!tool) {
+    return dynamicToolResponse(false, `Dynamic tool ${JSON.stringify(toolName)} is not available.`);
+  }
+
+  try {
+    const input = validateDynamicToolInput(tool, requestParams?.arguments ?? {});
+    const result = await tool.execute(input);
+    return dynamicToolResponse(true, dynamicToolResultText(result));
+  } catch (error) {
+    return dynamicToolResponse(
+      false,
+      `Dynamic tool ${JSON.stringify(toolName)} failed: ${compactToolError(error)}`,
+    );
+  }
 }
 
 function approvalPromptForRequest(request: CodexAppServerJsonRpcRequest): string {
@@ -566,6 +666,13 @@ async function handleNotification(
           input: item.arguments ?? {},
           providerExecuted: true,
         });
+      } else if (item?.type === "dynamicToolCall") {
+        await params.onModelStreamPart?.({
+          type: "tool-call",
+          toolCallId: asString(item.id) ?? asString(item.callId),
+          toolName: asString(item.tool) ?? "dynamicTool",
+          input: item.arguments ?? {},
+        });
       } else if (item?.type === "fileChange") {
         await params.onModelStreamPart?.({
           type: "tool-call",
@@ -638,6 +745,15 @@ async function handleNotification(
           output: item.result ?? null,
           error: item.error ?? undefined,
           providerExecuted: true,
+        });
+      } else if (item?.type === "dynamicToolCall") {
+        const statusFailed = item.status === "failed" || item.success === false;
+        await params.onModelStreamPart?.({
+          type: statusFailed ? "tool-error" : "tool-result",
+          toolCallId: asString(item.id) ?? asString(item.callId),
+          toolName: asString(item.tool) ?? "dynamicTool",
+          output: item.result ?? item.contentItems ?? null,
+          error: statusFailed ? (item.error ?? "dynamic tool failed") : undefined,
         });
       } else if (item?.type === "fileChange") {
         await params.onModelStreamPart?.({
@@ -760,6 +876,7 @@ export function createCodexAppServerRuntime(): LlmRuntime {
         const sandboxMode = codexSandboxMode(params);
         const sandboxPolicy = codexSandboxPolicy(params);
         const threadConfig = codexThreadConfig(params);
+        const dynamicTools = codexDynamicToolSpecs(params.tools);
         const shouldResumeThread = currentState?.model === effectiveModel;
         const threadResult =
           shouldResumeThread
@@ -781,6 +898,7 @@ export function createCodexAppServerRuntime(): LlmRuntime {
                 ...(threadConfig ? { config: threadConfig } : {}),
                 baseInstructions: codexBaseInstructions(params.system),
                 experimentalRawEvents: params.includeRawChunks ?? true,
+                ...(dynamicTools.length > 0 ? { dynamicTools } : {}),
               });
         const thread = asRecord(asRecord(threadResult)?.thread);
         threadId = asString(thread?.id);

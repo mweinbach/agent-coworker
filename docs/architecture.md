@@ -78,17 +78,18 @@ User Message → System Prompt + History + Tools → AI Model → Tool Calls →
 **Turn Lifecycle:**
 
 1. Build system prompt with skills, memory, and context
-2. Call the configured LLM runtime (`google-interactions` for Google, `pi` for Anthropic/OpenCode/local-compatible providers, `openai-responses` for OpenAI/Codex) with model, tools, and history
+2. Call the configured LLM runtime (`google-interactions` for Google, `pi` for Anthropic/OpenCode/local-compatible providers, `openai-responses` for OpenAI Responses flows, or `codex-app-server` for ChatGPT Subscription/Codex) with model, tools, and history
 3. Execute tool calls (with approval for risky operations)
 4. Stream results back to client via WebSocket events
 5. Update message history
 
 The runtime boundary lives in `src/runtime/`:
 
-- `createRuntime()` selects `google-interactions`, `pi`, or `openai-responses`; providers are normalized back to their supported default runtime when stale saved values are encountered
+- `createRuntime()` selects `google-interactions`, `pi`, `openai-responses`, or `codex-app-server`; providers are normalized back to their supported default runtime when stale saved values are encountered
 - `googleInteractionsRuntime` handles Gemini Interactions API turns, including server-side interaction continuation and Google-native stream/raw event handling
 - `piRuntime` handles Anthropic/OpenCode/local-compatible streaming/tool loops and shared tool execution utilities
-- `openaiResponsesRuntime` handles OpenAI and Codex Responses flows, including the ChatGPT Codex backend path
+- `openaiResponsesRuntime` handles OpenAI Responses flows
+- `codexAppServerRuntime` handles ChatGPT Subscription/Codex turns through Codex app-server
 
 ### 3. Tools (`src/tools/`)
 
@@ -116,7 +117,9 @@ Built-in capabilities exposed to the agent:
 
 When agent control is enabled, the following tools are also available: `listAgents`, `sendAgentInput`, `waitForAgent`, `inspectAgent`, `resumeAgent`, `closeAgent`.
 
-`webSearch` is backed by either Exa or Parallel depending on configured credentials (`EXA_API_KEY` / `PARALLEL_API_KEY`). Supporting modules like `exa.ts`, `parallel.ts`, and `api-keys.ts` are implementation helpers, not standalone tools.
+For non-Codex providers, Cowork exposes the full built-in toolbelt plus loaded MCP tools. For `codex-cli`, Cowork uses a hybrid boundary: Codex app-server owns local shell execution, sandboxing, approvals, filesystem reads/writes/edits/search, and native web search/fetch. Cowork exposes only coordination tools such as subagents, ask/todos/memory/skills/usage/A2UI, plus Cowork-managed MCP tools as Codex app-server `dynamicTools`.
+
+`webSearch` is backed by either Exa or Parallel depending on configured credentials (`EXA_API_KEY` / `PARALLEL_API_KEY`) and is not exposed to `codex-cli` turns in hybrid mode. Supporting modules like `exa.ts`, `parallel.ts`, and `api-keys.ts` are implementation helpers, not standalone tools.
 
 Each tool is a factory function accepting a `ToolContext` with access to:
 
@@ -341,4 +344,3 @@ Write operations are restricted to:
 - [Harness Config Guide](harness/config.md) — Config precedence and harness/runtime flags
 - [Bundling & Integration Guide](bundling-guide.md) — How to build custom apps on top of the cowork server
 - [Custom Tools Guide](custom-tools.md) — Tool extension and customization reference
-

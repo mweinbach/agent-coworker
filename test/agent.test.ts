@@ -194,7 +194,7 @@ describe("runTurn", () => {
     expect(callArg.system).toContain("`mcp__{serverName}__{toolName}`");
   });
 
-  test("codex app-server turns leave Cowork custom tools and MCP out of the runtime tool map", async () => {
+  test("codex app-server turns pass Cowork coordination and MCP tools through the hybrid boundary", async () => {
     const runtimeRunTurn = mock(async (input: any) => ({
       text: "ok",
       responseMessages: [{ role: "assistant", content: "ok" }],
@@ -206,14 +206,19 @@ describe("runTurn", () => {
     }));
     const createToolsForCodex = mock((_ctx: any) => ({
       bash: { type: "builtin" },
+      read: { type: "builtin" },
+      webFetch: { type: "builtin" },
+      spawnAgent: { type: "builtin" },
       usage: { type: "builtin" },
     }));
     const loadMCPServersForCodex = mock(async (_config: AgentConfig) => [
       { name: "srv", transport: { type: "stdio", command: "x", args: [] } },
     ]);
+    const closeMcpForCodex = mock(async () => {});
     const loadMCPToolsForCodex = mock(async (_servers: any[], _opts?: any) => ({
       tools: { mcp__srv__custom: { type: "mcp-tool" } },
       errors: [],
+      close: closeMcpForCodex,
     }));
     const runCodexTurn = createRunTurn({
       createRuntime: createRuntimeForCodex,
@@ -237,14 +242,22 @@ describe("runTurn", () => {
       }),
     );
 
-    expect(createToolsForCodex).not.toHaveBeenCalled();
-    expect(loadMCPServersForCodex).not.toHaveBeenCalled();
-    expect(loadMCPToolsForCodex).not.toHaveBeenCalled();
+    expect(createToolsForCodex).toHaveBeenCalledTimes(1);
+    expect(loadMCPServersForCodex).toHaveBeenCalledTimes(1);
+    expect(loadMCPToolsForCodex).toHaveBeenCalledTimes(1);
+    expect(closeMcpForCodex).toHaveBeenCalledTimes(1);
     expect(runtimeRunTurn).toHaveBeenCalledTimes(1);
     const runtimeParams = runtimeRunTurn.mock.calls[0][0] as any;
-    expect(runtimeParams.tools).toEqual({});
-    expect(runtimeParams.system).not.toContain("## Active MCP Tools");
-    expect(runtimeParams.system).not.toContain("`mcp__{serverName}__{toolName}`");
+    expect(Object.keys(runtimeParams.tools).sort()).toEqual([
+      "mcp__srv__custom",
+      "spawnAgent",
+      "usage",
+    ]);
+    expect(runtimeParams.tools).not.toHaveProperty("bash");
+    expect(runtimeParams.tools).not.toHaveProperty("read");
+    expect(runtimeParams.tools).not.toHaveProperty("webFetch");
+    expect(runtimeParams.system).toContain("## Active MCP Tools");
+    expect(runtimeParams.system).toContain("`mcp__{serverName}__{toolName}`");
   });
 
   test("buildTurnSystemPrompt appends harness context when present", () => {

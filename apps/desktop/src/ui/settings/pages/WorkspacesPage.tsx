@@ -499,8 +499,7 @@ export function SearchSettingsCard({
       <CardHeader>
         <CardTitle>Search</CardTitle>
         <CardDescription>
-          Choose whether Cowork uses provider-native search or a local search tool in this
-          workspace.
+          Choose provider-native search or a local search tool for models that need one.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -513,7 +512,7 @@ export function SearchSettingsCard({
                   {hasLegacyGeminiSearchOverride
                     ? `Google models still use local ${formatWebSearchBackendLabel(selectedLocalProvider)} search from an older workspace override. Changing Search provider here will sync Google and ChatGPT settings.`
                     : searchProviderUsesNative
-                      ? "Use provider-native search when the active model supports it."
+                      ? "Use provider-native search when the active model supports it. Codex uses Codex app-server native web search in this mode."
                       : `Use the local webSearch tool backed by ${formatWebSearchBackendLabel(effectiveSearchProvider)}.`}
                 </div>
               </div>
@@ -544,7 +543,7 @@ export function SearchSettingsCard({
               <div className="grid gap-3 rounded-lg border border-border/60 bg-background/35 p-3">
                 <div className={MODEL_CARD_FIELD_CLASS}>
                   <div className="text-[13px] font-medium text-foreground">
-                    If your model provider doesn&apos;t include search, which search tool do you
+                    For non-Codex models without native search, which local search tool do you
                     want to use?
                   </div>
                   <Select
@@ -576,8 +575,8 @@ export function SearchSettingsCard({
                   )}
                 >
                   {selectedLocalProviderConnected
-                    ? `${LOCAL_WEB_SEARCH_PROVIDER_LABELS[selectedLocalProvider]} is ready as the fallback local search tool.`
-                    : `Add a ${LOCAL_WEB_SEARCH_PROVIDER_LABELS[selectedLocalProvider]} API key in Providers > Tool Providers to use it as the fallback local search tool.`}
+                    ? `${LOCAL_WEB_SEARCH_PROVIDER_LABELS[selectedLocalProvider]} is ready as the fallback local search tool for non-Codex models.`
+                    : `Add a ${LOCAL_WEB_SEARCH_PROVIDER_LABELS[selectedLocalProvider]} API key in Providers > Tool Providers to use it as the non-Codex fallback local search tool.`}
                 </div>
               </div>
             ) : (
@@ -595,7 +594,8 @@ export function SearchSettingsCard({
             <div className="space-y-1">
               <div className="text-sm font-medium text-foreground">Codex web search mode</div>
               <div className="text-xs text-muted-foreground">
-                Cowork passes this through to Codex app-server as the thread web search setting.
+                ChatGPT Subscription/Codex uses hybrid mode: Codex app-server owns native web
+                search, while Cowork keeps coordination tools separate.
               </div>
             </div>
             <div className="w-full max-w-52">
@@ -629,7 +629,7 @@ export function SearchSettingsCard({
           </div>
           {!codexUsesNativeWebSearch ? (
             <div className="mt-3 rounded-lg border border-border/60 bg-background/70 p-3 text-xs text-muted-foreground">
-              Switch search provider to Native to use Codex app-server web search mode.
+              Switch search provider to Native to use Codex app-server native web search mode.
             </div>
           ) : null}
         </div>
@@ -1143,7 +1143,9 @@ export function WorkspacesPage() {
                   <div>
                     <div className="text-sm font-medium">MCP tools</div>
                     <div className="text-xs text-muted-foreground">
-                      Allow the agent to use MCP servers configured for this workspace.
+                      Allow configured MCP servers. In ChatGPT Subscription/Codex hybrid mode,
+                      Cowork exposes these as dynamic tools while Codex keeps local shell, files,
+                      and web native.
                     </div>
                   </div>
                   <ToggleChip
@@ -1387,7 +1389,8 @@ export function WorkspacesPage() {
                           </SelectContent>
                         </Select>
                         <div className="text-xs text-muted-foreground">
-                          Lets subagents use models from different providers you've set up.
+                          Lets Cowork subagents use models from different providers you've set up.
+                          Codex can call these subagents through hybrid dynamic tools.
                         </div>
                       </div>
 

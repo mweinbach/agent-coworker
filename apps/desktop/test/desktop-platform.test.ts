@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
 
-import { isLinux, isMacos, isWindows, normalizePlatform } from "../src/lib/desktopPlatform";
+import {
+  getDesktopPlatformInfo,
+  isLinux,
+  isMacos,
+  isWindows,
+  normalizePlatform,
+} from "../src/lib/desktopPlatform";
+import { setupJsdom } from "./jsdomHarness";
 
 describe("normalizePlatform", () => {
   test("maps darwin to macos", () => {
@@ -35,5 +42,69 @@ describe("platform booleans", () => {
   test("isLinux only returns true for linux", () => {
     expect(isLinux({ platform: "linux" } as never)).toBe(true);
     expect(isLinux({ platform: "other" } as never)).toBe(false);
+  });
+});
+
+describe("getDesktopPlatformInfo", () => {
+  test("uses platform-specific defaults before IPC chrome attributes are applied", () => {
+    const harness = setupJsdom();
+    try {
+      const root = harness.dom.window.document.documentElement;
+
+      root.dataset.platform = "darwin";
+      expect(getDesktopPlatformInfo()).toEqual({
+        platform: "macos",
+        rawPlatform: "darwin",
+        sidebarTitlebandMode: "topbar",
+        topbarControlPlacement: "sidebar",
+        usesNativeGlass: true,
+        disableCssBlur: true,
+      });
+
+      root.dataset.platform = "win32";
+      expect(getDesktopPlatformInfo()).toEqual({
+        platform: "windows",
+        rawPlatform: "win32",
+        sidebarTitlebandMode: "native",
+        topbarControlPlacement: "left-rail",
+        usesNativeGlass: false,
+        disableCssBlur: false,
+      });
+
+      root.dataset.platform = "linux";
+      expect(getDesktopPlatformInfo()).toEqual({
+        platform: "linux",
+        rawPlatform: "linux",
+        sidebarTitlebandMode: "topbar",
+        topbarControlPlacement: "inline",
+        usesNativeGlass: false,
+        disableCssBlur: false,
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("prefers IPC chrome attributes over platform defaults", () => {
+    const harness = setupJsdom();
+    try {
+      const root = harness.dom.window.document.documentElement;
+      root.dataset.platform = "win32";
+      root.dataset.sidebarTitlebandMode = "topbar";
+      root.dataset.topbarControlPlacement = "inline";
+      root.dataset.usesNativeGlass = "true";
+      root.dataset.disableCssBlur = "true";
+
+      expect(getDesktopPlatformInfo()).toEqual({
+        platform: "windows",
+        rawPlatform: "win32",
+        sidebarTitlebandMode: "topbar",
+        topbarControlPlacement: "inline",
+        usesNativeGlass: true,
+        disableCssBlur: true,
+      });
+    } finally {
+      harness.restore();
+    }
   });
 });

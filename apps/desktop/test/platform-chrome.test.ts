@@ -12,6 +12,9 @@ describe("getPlatformChrome", () => {
     expect(chrome.platform).toBe("macos");
     expect(chrome.titlebarHeight).toBe(38);
     expect(chrome.dragStripHeight).toBe(10);
+    expect(chrome.leftNativeReserve).toBe(86);
+    expect(chrome.rightNativeReserve).toBe(0);
+    expect(chrome.captionButtonReserve).toBe(0);
     expect(chrome.trafficLightPosition).toEqual({ x: 14, y: 14 });
     expect(chrome.windowMaterial).toBeUndefined();
     expect(chrome.sidebarTitlebandMode).toBe("topbar");
@@ -25,11 +28,13 @@ describe("getPlatformChrome", () => {
     expect(chrome.platform).toBe("windows");
     expect(chrome.titlebarHeight).toBe(48);
     expect(chrome.dragStripHeight).toBe(10);
+    expect(chrome.leftNativeReserve).toBe(0);
+    expect(chrome.rightNativeReserve).toBe(136);
+    expect(chrome.captionButtonReserve).toBe(136);
     expect(chrome.trafficLightPosition).toBeUndefined();
     expect(chrome.windowMaterial).toBe("mica");
     expect(chrome.sidebarTitlebandMode).toBe("native");
     expect(chrome.topbarControlPlacement).toBe("left-rail");
-    expect(chrome.captionButtonReserve).toBe(136);
     expect(chrome.usesNativeGlass).toBe(false);
     expect(chrome.disableCssBlur).toBe(false);
   });
@@ -39,6 +44,9 @@ describe("getPlatformChrome", () => {
     expect(chrome.platform).toBe("linux");
     expect(chrome.titlebarHeight).toBe(48);
     expect(chrome.dragStripHeight).toBe(10);
+    expect(chrome.leftNativeReserve).toBe(0);
+    expect(chrome.rightNativeReserve).toBe(192);
+    expect(chrome.captionButtonReserve).toBe(0);
     expect(chrome.trafficLightPosition).toBeUndefined();
     expect(chrome.windowMaterial).toBeUndefined();
     expect(chrome.sidebarTitlebandMode).toBe("topbar");
@@ -51,6 +59,9 @@ describe("getPlatformChrome", () => {
     const chrome = getPlatformChrome("freebsd");
     expect(chrome.platform).toBe("other");
     expect(chrome.titlebarHeight).toBe(48);
+    expect(chrome.leftNativeReserve).toBe(0);
+    expect(chrome.rightNativeReserve).toBe(0);
+    expect(chrome.captionButtonReserve).toBe(0);
     expect(chrome.usesNativeGlass).toBe(false);
   });
 });

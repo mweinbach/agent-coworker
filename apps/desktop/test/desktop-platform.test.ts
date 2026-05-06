@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
 
-import { isLinux, isMacos, isWindows, normalizePlatform } from "../src/lib/desktopPlatform";
+import {
+  getDesktopPlatformInfo,
+  isLinux,
+  isMacos,
+  isWindows,
+  normalizePlatform,
+} from "../src/lib/desktopPlatform";
+import { setupJsdom } from "./jsdomHarness";
 
 describe("normalizePlatform", () => {
   test("maps darwin to macos", () => {
@@ -35,5 +42,77 @@ describe("platform booleans", () => {
   test("isLinux only returns true for linux", () => {
     expect(isLinux({ platform: "linux" } as never)).toBe(true);
     expect(isLinux({ platform: "other" } as never)).toBe(false);
+  });
+});
+
+describe("getDesktopPlatformInfo", () => {
+  test("returns safe fallback platform info when document is unavailable", () => {
+    expect(getDesktopPlatformInfo()).toEqual({
+      platform: "other",
+      rawPlatform: "other",
+      sidebarTitlebandMode: "topbar",
+      topbarControlPlacement: "inline",
+      usesNativeGlass: false,
+      disableCssBlur: false,
+    });
+  });
+
+  test("uses Windows defaults when chrome attributes have not loaded yet", () => {
+    const harness = setupJsdom();
+    try {
+      document.documentElement.dataset.platform = "win32";
+
+      expect(getDesktopPlatformInfo()).toEqual({
+        platform: "windows",
+        rawPlatform: "win32",
+        sidebarTitlebandMode: "native",
+        topbarControlPlacement: "left-rail",
+        usesNativeGlass: false,
+        disableCssBlur: false,
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("forces native-glass flags for macOS even before explicit chrome attributes load", () => {
+    const harness = setupJsdom();
+    try {
+      document.documentElement.dataset.platform = "darwin";
+
+      expect(getDesktopPlatformInfo()).toEqual({
+        platform: "macos",
+        rawPlatform: "darwin",
+        sidebarTitlebandMode: "topbar",
+        topbarControlPlacement: "sidebar",
+        usesNativeGlass: true,
+        disableCssBlur: true,
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("prefers explicit chrome attributes over platform defaults", () => {
+    const harness = setupJsdom();
+    try {
+      const { dataset } = document.documentElement;
+      dataset.platform = "linux";
+      dataset.sidebarTitlebandMode = "native";
+      dataset.topbarControlPlacement = "left-rail";
+      dataset.usesNativeGlass = "true";
+      dataset.disableCssBlur = "true";
+
+      expect(getDesktopPlatformInfo()).toEqual({
+        platform: "linux",
+        rawPlatform: "linux",
+        sidebarTitlebandMode: "native",
+        topbarControlPlacement: "left-rail",
+        usesNativeGlass: true,
+        disableCssBlur: true,
+      });
+    } finally {
+      harness.restore();
+    }
   });
 });

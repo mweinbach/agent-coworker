@@ -25,7 +25,12 @@ import {
 import { cn } from "../../lib/utils";
 import type { ActivityFeedItem, ActivityGroupSummary } from "./activityGroups";
 
-import { summarizeActivityGroup } from "./activityGroups";
+import {
+  activityTimestampMs,
+  firstActivityTimestampMs,
+  formatActivityElapsedMs,
+  summarizeActivityGroup,
+} from "./activityGroups";
 import { formatToolCard } from "./toolCards/toolCardFormatting";
 
 /* ── Small helpers ──────────────────────────────────────────────────────────── */
@@ -168,28 +173,65 @@ function ActivityTimeline({ summary }: { summary: ActivityGroupSummary }) {
 
 export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
   items: ActivityFeedItem[];
+  live?: boolean;
+  liveNowMs?: number;
+  liveStartedAt?: string | null;
 }) {
+  const liveNowMsProp = props.liveNowMs;
+  const [nowMs, setNowMs] = useState(() => liveNowMsProp ?? Date.now());
+
+  useEffect(() => {
+    if (!props.live || liveNowMsProp !== undefined) {
+      return;
+    }
+    setNowMs(Date.now());
+    const interval = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, [props.live, liveNowMsProp]);
+
   const summary = useMemo(() => summarizeActivityGroup(props.items), [props.items]);
-  const shouldAutoExpand = summary.status === "approval" || summary.status === "issue";
+  const displayStatus = props.live && summary.status === "done" ? "running" : summary.status;
+  const liveStartedAtMs =
+    props.liveStartedAt !== null && props.liveStartedAt !== undefined
+      ? activityTimestampMs(props.liveStartedAt)
+      : null;
+  const liveElapsedLabel =
+    props.live === true
+      ? formatActivityElapsedMs(
+          nowMs - (liveStartedAtMs ?? firstActivityTimestampMs(props.items) ?? nowMs),
+        )
+      : null;
+  const displayElapsedLabel = liveElapsedLabel ?? summary.elapsedLabel;
+  const shouldAutoExpand = displayStatus === "approval" || displayStatus === "issue";
   const [expanded, setExpanded] = useState(shouldAutoExpand);
 
   useEffect(() => {
     if (shouldAutoExpand) setExpanded(true);
   }, [shouldAutoExpand]);
 
-  const showStateBadge = summary.status === "approval" || summary.status === "issue";
-  const isPendingReasoning = summary.status === "running" && summary.preview === "Thinking...";
+  const showStateBadge = displayStatus === "approval" || displayStatus === "issue";
+  const isPendingReasoning = displayStatus === "running" && summary.preview === "Thinking...";
   const useThinkingTreatment =
     isPendingReasoning ||
     (summary.reasoningCount > 0 && summary.toolCount === 0 && !showStateBadge);
-  const isComplete = summary.status === "done";
+  const isComplete = displayStatus === "done";
+  const useCompactElapsedHeader = isComplete || (props.live === true && !showStateBadge);
 
-  if (isComplete) {
+  if (useCompactElapsedHeader) {
     return (
       <Collapsible open={expanded} onOpenChange={setExpanded}>
         <CollapsibleTrigger className="group flex w-full max-w-3xl items-center gap-2 border-b border-border/35 px-1 pb-3 pt-1 text-left outline-none transition-colors hover:border-border/55 focus-visible:ring-1 focus-visible:ring-border/45 focus-visible:ring-inset">
+          {props.live ? (
+            <ClockIcon className="size-4 shrink-0 text-primary/70 animate-pulse" />
+          ) : null}
           <span className="text-[15px] font-medium leading-6 text-muted-foreground/90">
-            {summary.elapsedLabel ? `Worked for ${summary.elapsedLabel}` : "Worked"}
+            {props.live
+              ? displayElapsedLabel
+                ? `Working for ${displayElapsedLabel}`
+                : "Working"
+              : displayElapsedLabel
+                ? `Worked for ${displayElapsedLabel}`
+                : "Worked"}
           </span>
           <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground/55 transition-transform group-data-[state=open]:rotate-90" />
         </CollapsibleTrigger>

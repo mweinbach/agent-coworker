@@ -963,6 +963,16 @@ export function ChatView() {
     return merged;
   }, [inlineCitationSourcesByMessageId, overflowCitationSourcesByMessageId]);
   const renderItems = useMemo(() => buildChatRenderItems(visibleFeed), [visibleFeed]);
+  const liveActivityGroupId = useMemo(() => {
+    if (rt?.busy !== true) return null;
+    for (let i = renderItems.length - 1; i >= 0; i--) {
+      const entry = renderItems[i];
+      if (entry?.kind === "activity-group") {
+        return entry.id;
+      }
+    }
+    return null;
+  }, [renderItems, rt?.busy]);
   const latestUiSurfaceItemId = useMemo(() => {
     for (let i = renderItems.length - 1; i >= 0; i--) {
       const entry = renderItems[i];
@@ -1369,7 +1379,12 @@ export function ChatView() {
             ) : (
               renderItems.map((item) =>
                 item.kind === "activity-group" ? (
-                  <ActivityGroupCard key={item.id} items={item.items} />
+                  <ActivityGroupCard
+                    key={item.id}
+                    items={item.items}
+                    live={item.id === liveActivityGroupId}
+                    liveStartedAt={rt?.busySince ?? null}
+                  />
                 ) : (
                   <FeedRow
                     key={item.item.id}

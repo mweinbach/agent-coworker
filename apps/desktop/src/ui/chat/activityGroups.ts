@@ -273,12 +273,12 @@ function statusLabel(status: ActivityGroupStatus, toolCount: number): string {
   return "Summary";
 }
 
-function timestampMs(value: string): number | null {
+export function activityTimestampMs(value: string): number | null {
   const ms = Date.parse(value);
   return Number.isFinite(ms) ? ms : null;
 }
 
-function formatElapsedMs(durationMs: number): string {
+export function formatActivityElapsedMs(durationMs: number): string {
   const totalSeconds = durationMs > 0 ? Math.max(1, Math.floor(durationMs / 1000)) : 0;
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
@@ -290,11 +290,17 @@ function formatElapsedMs(durationMs: number): string {
 }
 
 function activityElapsedLabel(items: ActivityFeedItem[]): string | null {
-  const timestamps = items.map((item) => timestampMs(item.ts)).filter((ms) => ms !== null);
+  const timestamps = items.map((item) => activityTimestampMs(item.ts)).filter((ms) => ms !== null);
   if (timestamps.length < 2) return null;
   const startedAt = Math.min(...timestamps);
   const endedAt = Math.max(...timestamps);
-  return formatElapsedMs(endedAt - startedAt);
+  return formatActivityElapsedMs(endedAt - startedAt);
+}
+
+export function firstActivityTimestampMs(items: ActivityFeedItem[]): number | null {
+  const timestamps = items.map((item) => activityTimestampMs(item.ts)).filter((ms) => ms !== null);
+  if (timestamps.length === 0) return null;
+  return Math.min(...timestamps);
 }
 
 type UiSurfaceFeed = Extract<FeedItem, { kind: "ui_surface" }>;

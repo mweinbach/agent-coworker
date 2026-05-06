@@ -212,6 +212,57 @@ describe("desktop activity group card", () => {
     expect(html).not.toContain("Checking the current leadership context.");
   });
 
+  test("renders live terminal-looking activity as a compact working-for row", () => {
+    const html = renderToStaticMarkup(
+      createElement(ActivityGroupCard, {
+        live: true,
+        liveStartedAt: "2024-01-01T00:00:00.000Z",
+        liveNowMs: Date.parse("2024-01-01T00:00:56.000Z"),
+        items: [
+          {
+            id: "r1",
+            kind: "reasoning",
+            mode: "summary",
+            ts: "2024-01-01T00:00:10.000Z",
+            text: "Checking the files.",
+          },
+          {
+            id: "t1",
+            kind: "tool",
+            ts: "2024-01-01T00:00:12.000Z",
+            name: "read",
+            state: "output-available",
+            result: { status: "completed" },
+          },
+        ],
+      }),
+    );
+
+    expect(html).toContain("Working for 56s");
+    expect(html).not.toContain("Worked for");
+    expect(html).not.toContain("rounded-xl border border-border/32");
+  });
+
+  test("falls back to the first activity timestamp for live elapsed time", () => {
+    const html = renderToStaticMarkup(
+      createElement(ActivityGroupCard, {
+        live: true,
+        liveNowMs: Date.parse("2024-01-01T00:01:10.000Z"),
+        items: [
+          {
+            id: "t1",
+            kind: "tool",
+            ts: "2024-01-01T00:00:10.000Z",
+            name: "read",
+            state: "output-available",
+          },
+        ],
+      }),
+    );
+
+    expect(html).toContain("Working for 1m 0s");
+  });
+
   test("skips blank reasoning placeholders and keeps Codex native web search visible", () => {
     const html = renderToStaticMarkup(
       createElement(ActivityGroupCard, {

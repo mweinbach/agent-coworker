@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
+import type { StoreGet, StoreSet } from "../src/app/store.helpers";
 import type { WorkspaceJsonRpcSocket } from "../src/app/store.helpers/jsonRpcSocket";
 import { NoopJsonRpcSocket } from "./helpers/jsonRpcSocketMock";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
@@ -18,6 +19,7 @@ const { useAppStore } = await import("../src/app/store");
 const { __controlSocketInternal, defaultWorkspaceRuntime, RUNTIME } = await import(
   "../src/app/store.helpers"
 );
+const { createOpenAiNativeConnectorActions } = await import("../src/app/store.actions/connectors");
 const { disposeAllJsonRpcSocketState } = await import("../src/app/store.helpers/jsonRpcSocket");
 
 const workspaceId = "ws-1";
@@ -51,7 +53,12 @@ function resetConnectorState() {
   RUNTIME.workspaceJsonRpcSocketGenerations.clear();
   RUNTIME.workspaceStartPromises.clear();
   RUNTIME.workspaceStartGenerations.clear();
+  const actions = createOpenAiNativeConnectorActions(
+    useAppStore.setState as unknown as StoreSet,
+    useAppStore.getState as unknown as StoreGet,
+  );
   useAppStore.setState({
+    ...actions,
     selectedWorkspaceId: workspaceId,
     workspaces: [
       {

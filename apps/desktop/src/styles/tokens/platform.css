@@ -38,11 +38,9 @@
  * Scoped so it's overridden when reduced-transparency is on (handled below).
  */
 :root[data-platform="win32"]:not([data-reduced-transparency="true"]) {
-  --surface-main-card: color-mix(in srgb, var(--panel-bg) 88%, transparent);
-  --main-card-radius: 12px;
-  --main-card-shadow:
-    0 1px 0 color-mix(in srgb, var(--text-base) 6%, transparent),
-    0 12px 32px color-mix(in srgb, var(--app-bg) 32%, transparent);
+  --surface-main-card: color-mix(in srgb, var(--panel-bg) 94%, transparent);
+  --main-card-radius: 10px;
+  --main-card-shadow: none;
   --main-card-inset-top: 8px;
   --main-card-inset-right: 8px;
   --main-card-inset-bottom: 8px;

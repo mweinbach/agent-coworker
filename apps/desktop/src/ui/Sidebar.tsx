@@ -5,7 +5,6 @@ import {
   FolderIcon,
   FolderOpenIcon,
   FolderPlusIcon,
-  PanelLeftIcon,
   Settings2Icon,
   SparklesIcon,
   SquarePenIcon,
@@ -31,7 +30,6 @@ import { confirmAction, showContextMenu } from "../lib/desktopCommands";
 import { useDesktopPlatform } from "../lib/useDesktopPlatform";
 import { usePrefersReducedMotion } from "../lib/usePrefersReducedMotion";
 import { cn } from "../lib/utils";
-import { useWindowDragHandle } from "./layout/useWindowDragHandle";
 import {
   formatSidebarRelativeAge,
   getVisibleSidebarThreads,
@@ -399,8 +397,8 @@ const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
 
 export const Sidebar = memo(function Sidebar() {
   const platformInfo = useDesktopPlatform();
-  // Windows owns the native titleband inside the sidebar, so drag zones
-  // and collapse toggle are active there. Other platforms let the topbar own it.
+  // Windows owns the native titleband inside the sidebar for drag space, while
+  // the topbar rail owns the persistent collapse control.
   const isWin32 = platformInfo.sidebarTitlebandMode === "native";
   const view = useAppStore((s) => s.view);
   const workspaces = useAppStore((s) => s.workspaces);
@@ -659,8 +657,6 @@ export const Sidebar = memo(function Sidebar() {
     }
   };
 
-  const toggleSidebar = useAppStore((s) => s.toggleSidebar);
-  const win32TitlebandButtonDragHandle = useWindowDragHandle<HTMLButtonElement>(isWin32);
   const workspaceItems = visibleWorkspaces.map((workspace) => {
     const active = workspace.id === activeWorkspaceId;
     const expanded = expandedWorkspaceSections[workspace.id] ?? false;
@@ -714,32 +710,36 @@ export const Sidebar = memo(function Sidebar() {
       <div className="app-sidebar__titleband">
         <div className="app-sidebar__titleband-drag-zone" aria-hidden="true" />
         <div className="app-sidebar__titleband-row flex w-full items-center gap-1">
-          <Button
-            variant="ghost"
-            size="sm"
-            className={cn(
-              "sidebar-lift h-8 min-w-0 flex-1 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] text-foreground/80",
-              "hover:bg-foreground/[0.045] hover:text-foreground",
-            )}
-            onClick={() => void newThread()}
-            {...win32TitlebandButtonDragHandle}
-          >
-            <SquarePenIcon className="h-4 w-4 text-muted-foreground" />
-            New Chat
-          </Button>
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            onClick={toggleSidebar}
-            title="Hide sidebar"
-            aria-label="Hide sidebar"
-            className="app-sidebar__collapse-toggle sidebar-lift ml-auto shrink-0 text-muted-foreground hover:bg-foreground/[0.045] hover:text-foreground"
-            {...win32TitlebandButtonDragHandle}
-          >
-            <PanelLeftIcon className="h-4 w-4" />
-          </Button>
+          {!isWin32 ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              className={cn(
+                "sidebar-lift h-8 min-w-0 flex-1 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] text-foreground/80",
+                "hover:bg-foreground/[0.045] hover:text-foreground",
+              )}
+              onClick={() => void newThread()}
+            >
+              <SquarePenIcon className="h-4 w-4 text-muted-foreground" />
+              New Chat
+            </Button>
+          ) : null}
         </div>
       </div>
+      {isWin32 ? (
+        <Button
+          variant="ghost"
+          size="sm"
+          className={cn(
+            "app-sidebar__new-chat-button sidebar-lift h-8 w-full min-w-0 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] text-foreground/80",
+            "hover:bg-foreground/[0.045] hover:text-foreground",
+          )}
+          onClick={() => void newThread()}
+        >
+          <SquarePenIcon className="h-4 w-4 text-muted-foreground" />
+          New Chat
+        </Button>
+      ) : null}
       <nav className="grid w-full gap-1.5">
         <Button
           variant="ghost"

@@ -8,7 +8,7 @@
  */
 :root[data-platform="win32"] .app-topbar {
   position: relative;
-  z-index: 4;
+  z-index: 6;
   -webkit-app-region: no-drag;
 }
 
@@ -40,25 +40,23 @@
 }
 
 /*
- * The collapsed left rail gets its own drag layer so the empty space around
- * the buttons can drag the window while the buttons remain clickable.
+ * The Windows left rail owns the sidebar toggle in both expanded and collapsed
+ * states so the icon remains mounted in one place during sidebar animations.
+ * Empty space around the buttons can drag the window while the buttons remain
+ * clickable.
  */
 :root[data-platform="win32"] .app-topbar__win32-left-rail {
   width: var(--win32-collapsed-left-rail-width);
   z-index: 3;
-}
-
-:root[data-platform="win32"] .app-topbar__win32-left-drag-zone {
-  position: absolute;
-  inset: 0;
-  pointer-events: auto;
   -webkit-app-region: drag;
 }
 
 :root[data-platform="win32"] .app-topbar__win32-left-strip {
-  pointer-events: none;
+  pointer-events: auto;
   align-items: center;
   height: 100%;
+  z-index: 1;
+  -webkit-app-region: drag;
 }
 
 :root[data-platform="win32"] .app-topbar__win32-left-strip > * {

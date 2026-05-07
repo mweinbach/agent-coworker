@@ -191,6 +191,31 @@ describe("desktop server manager startup mode", () => {
     );
   });
 
+  test("buildServerEnv enables OpenAI native connectors only from the desktop feature flag", () => {
+    const previous = process.env.COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS;
+    delete process.env.COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS;
+
+    try {
+      expect(__internal.buildServerEnv().COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS).toBe(
+        undefined,
+      );
+      expect(
+        __internal.buildServerEnv({ openAiNativeConnectors: false })
+          .COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS,
+      ).toBe(undefined);
+      expect(
+        __internal.buildServerEnv({ openAiNativeConnectors: true })
+          .COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS,
+      ).toBe("1");
+    } finally {
+      if (typeof previous === "string") {
+        process.env.COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS = previous;
+      } else {
+        delete process.env.COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS;
+      }
+    }
+  });
+
   test("only retries source startup automatically on Windows", () => {
     expect(__internal.getSourceStartupAttemptCount(true)).toBe(
       process.platform === "win32" ? 2 : 1,

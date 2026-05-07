@@ -15,8 +15,10 @@ mock.module("../src/lib/agentSocket", () => ({
 }));
 
 const { useAppStore } = await import("../src/app/store");
-const { __controlSocketInternal, defaultWorkspaceRuntime, disposeAllJsonRpcSocketState, RUNTIME } =
-  await import("../src/app/store.helpers");
+const { __controlSocketInternal, defaultWorkspaceRuntime, RUNTIME } = await import(
+  "../src/app/store.helpers"
+);
+const { disposeAllJsonRpcSocketState } = await import("../src/app/store.helpers/jsonRpcSocket");
 
 const workspaceId = "ws-1";
 const workspacePath = "/tmp/ws-1";

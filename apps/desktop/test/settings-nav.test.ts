@@ -285,6 +285,22 @@ describe("settings nav (store)", () => {
     expect(useAppStore.getState().settingsPage).toBe("providers");
   });
 
+  test("openSettings falls back when OpenAI native connectors are unavailable", () => {
+    useAppStore.setState({
+      desktopFeatureFlags: {
+        menuBar: true,
+        remoteAccess: true,
+        workspacePicker: true,
+        workspaceLifecycle: true,
+        a2ui: false,
+        openAiNativeConnectors: false,
+      },
+    });
+    useAppStore.getState().openSettings("openAiNativeConnectors");
+    expect(useAppStore.getState().view).toBe("settings");
+    expect(useAppStore.getState().settingsPage).toBe("providers");
+  });
+
   test("openSettings falls back from feature flags in packaged builds", () => {
     useAppStore.setState({
       updateState: {

@@ -119,6 +119,23 @@ function normalizeToolMeta(input: unknown): Record<string, unknown> | undefined 
   return input as Record<string, unknown>;
 }
 
+function normalizeMcpSchemaArray(value: unknown): unknown[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((entry) => normalizeMcpJsonSchema(entry)).filter((entry) => entry !== undefined);
+}
+
+function collapseMcpTupleSchemas(entries: unknown[]): unknown | undefined {
+  if (entries.length === 0) return undefined;
+  if (entries.length === 1) return entries[0];
+
+  const first = JSON.stringify(entries[0]);
+  if (entries.every((entry) => JSON.stringify(entry) === first)) {
+    return entries[0];
+  }
+
+  return { anyOf: entries };
+}
+
 function normalizeMcpJsonSchema(value: unknown, root = false): unknown {
   if (typeof value === "boolean") return value;
   if (Array.isArray(value)) return value.map((entry) => normalizeMcpJsonSchema(entry));
@@ -126,7 +143,13 @@ function normalizeMcpJsonSchema(value: unknown, root = false): unknown {
 
   const input = value as Record<string, unknown>;
   const output: Record<string, unknown> = {};
+  const tupleItems = Array.isArray(input.items) ? normalizeMcpSchemaArray(input.items) : [];
+  const prefixItems = normalizeMcpSchemaArray(input.prefixItems);
+  const normalizedItems = collapseMcpTupleSchemas(
+    tupleItems.length > 0 ? tupleItems : prefixItems,
+  );
   for (const [key, entry] of Object.entries(input)) {
+    if (key === "$schema" || key === "additionalItems" || key === "prefixItems") continue;
     if (
       key === "properties" &&
       typeof entry === "object" &&
@@ -142,6 +165,12 @@ function normalizeMcpJsonSchema(value: unknown, root = false): unknown {
       continue;
     }
     if (key === "items") {
+      if (Array.isArray(entry)) {
+        if (normalizedItems !== undefined) {
+          output.items = normalizedItems;
+        }
+        continue;
+      }
       output.items = normalizeMcpJsonSchema(entry);
       continue;
     }
@@ -152,6 +181,26 @@ function normalizeMcpJsonSchema(value: unknown, root = false): unknown {
       continue;
     }
     output[key] = normalizeMcpJsonSchema(entry);
+  }
+
+  if (output.items === undefined && prefixItems.length > 0 && normalizedItems !== undefined) {
+    output.items = normalizedItems;
+  }
+  if (
+    tupleItems.length > 0 &&
+    input.additionalItems === false &&
+    typeof output.maxItems !== "number" &&
+    typeof input.maxItems !== "number"
+  ) {
+    output.maxItems = tupleItems.length;
+  }
+  if (
+    prefixItems.length > 0 &&
+    input.items === undefined &&
+    typeof output.maxItems !== "number" &&
+    typeof input.maxItems !== "number"
+  ) {
+    output.maxItems = prefixItems.length;
   }
 
   const hasTypeLike =
@@ -638,3 +687,7 @@ export async function loadMCPTools(
 
   return { tools, errors, close };
 }
+
+export const __internal = {
+  normalizeMcpJsonSchema,
+};

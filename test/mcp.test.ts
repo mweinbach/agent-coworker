@@ -5,6 +5,7 @@ import path from "node:path";
 import { getAiCoworkerPaths } from "../src/connect";
 import {
   DEFAULT_MCP_SERVERS_DOCUMENT,
+  __internal as mcpInternal,
   loadMCPServers,
   loadMCPTools,
   parseMCPServersDocument,
@@ -595,5 +596,91 @@ describe("loadMCPTools", () => {
     const result = await loadMCPTools(servers, { createClient: mockCreateMCPClient as any });
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]).toContain("flaky");
+  });
+});
+
+describe("mcp json schema normalization", () => {
+  test("normalizes tuple array items into provider-safe item schemas", () => {
+    const normalized = mcpInternal.normalizeMcpJsonSchema(
+      {
+        type: "object",
+        properties: {
+          position: {
+            type: "array",
+            items: [{ type: "number" }, { type: "number" }],
+            additionalItems: false,
+          },
+        },
+        required: ["position"],
+      },
+      true,
+    ) as {
+      properties: Record<
+        string,
+        {
+          items?: unknown;
+          maxItems?: unknown;
+          additionalItems?: unknown;
+        }
+      >;
+    };
+
+    const position = normalized.properties.position;
+    expect(Array.isArray(position?.items)).toBe(false);
+    expect(position?.items).toEqual({ type: "number" });
+    expect(position?.maxItems).toBe(2);
+    expect(position?.additionalItems).toBeUndefined();
+  });
+
+  test("normalizes nested prefixItems and adds missing object types", () => {
+    const normalized = mcpInternal.normalizeMcpJsonSchema(
+      {
+        properties: {
+          command: {
+            properties: {
+              name: { enum: ["start", "stop"] },
+            },
+          },
+          choices: {
+            anyOf: [
+              {
+                type: "array",
+                prefixItems: [{ const: "workspace" }, { const: "user" }],
+              },
+            ],
+          },
+        },
+      },
+      true,
+    ) as {
+      type?: unknown;
+      properties: {
+        command?: {
+          type?: unknown;
+          properties?: Record<string, unknown>;
+        };
+        choices?: {
+          anyOf?: Array<{
+            items?: unknown;
+            maxItems?: unknown;
+            prefixItems?: unknown;
+          }>;
+        };
+      };
+    };
+
+    expect(normalized.type).toBe("object");
+    expect(normalized.properties.command?.type).toBe("object");
+    expect(normalized.properties.command?.properties?.name).toEqual({
+      enum: ["start", "stop"],
+    });
+
+    const choicesArray = normalized.properties.choices?.anyOf?.[0];
+    expect(Array.isArray(choicesArray?.items)).toBe(false);
+    expect(choicesArray?.items).toEqual({
+      anyOf: [{ const: "workspace" }, { const: "user" }],
+    });
+    expect(choicesArray?.maxItems).toBe(2);
+    expect(choicesArray?.prefixItems).toBeUndefined();
   });
 });

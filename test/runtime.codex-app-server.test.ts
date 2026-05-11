@@ -1055,7 +1055,7 @@ rl.on("line", (line) => {
     expect(steerHandler).toBeUndefined();
   });
 
-  test.serial("omits base instructions and only sends latest user input on resume", async () => {
+  test.serial("refreshes dynamic tools and only sends latest user input on resume", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-resume-"));
     const capturePath = path.join(dir, "requests.jsonl");
     process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
@@ -1070,7 +1070,22 @@ rl.on("line", (line) => {
         { role: "user", content: "Newest question" },
       ],
       messages: [{ role: "user", content: "Newest question" }],
-      tools: {},
+      tools: {
+        spawnAgent: {
+          description: "Spawn a Cowork subagent.",
+          inputSchema: z.object({ task: z.string() }),
+          execute: () => "spawned",
+        },
+        mcp__srv__custom: {
+          description: "A Cowork-managed MCP tool.",
+          inputSchema: { type: "object", properties: { query: { type: "string" } } },
+          execute: () => "mcp ok",
+        },
+        bash: {
+          description: "Cowork bash should stay native to app-server.",
+          execute: () => "should not be called",
+        },
+      },
       maxSteps: 1,
       providerState: {
         provider: "codex-cli",
@@ -1081,9 +1096,25 @@ rl.on("line", (line) => {
     });
 
     const requests = await readCapturedRequests(capturePath);
-    expect(requests.find((entry) => entry.method === "thread/resume")?.params).not.toHaveProperty(
-      "baseInstructions",
+    const resumeParams = requests.find((entry) => entry.method === "thread/resume")?.params;
+    expect(resumeParams).not.toHaveProperty("baseInstructions");
+    expect(resumeParams?.dynamicTools).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "spawnAgent",
+          description: "Spawn a Cowork subagent.",
+          inputSchema: expect.objectContaining({ type: "object" }),
+        }),
+        expect.objectContaining({
+          name: "mcp__srv__custom",
+          description: "A Cowork-managed MCP tool.",
+          inputSchema: expect.objectContaining({ type: "object" }),
+        }),
+      ]),
     );
+    expect(
+      (resumeParams?.dynamicTools as Array<{ name?: string }>).map((tool) => tool.name),
+    ).not.toContain("bash");
     expect(requests.find((entry) => entry.method === "turn/start")?.params.input).toEqual([
       { type: "text", text: "Newest question", text_elements: [] },
     ]);

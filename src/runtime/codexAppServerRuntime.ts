@@ -945,6 +945,7 @@ export function createCodexAppServerRuntime(): LlmRuntime {
                   approvalPolicy,
                   sandbox: sandboxMode,
                   ...(threadConfig ? { config: threadConfig } : {}),
+                  ...(dynamicTools.length > 0 ? { dynamicTools } : {}),
                 },
                 CODEX_STARTUP_RPC_TIMEOUT_MS,
               )

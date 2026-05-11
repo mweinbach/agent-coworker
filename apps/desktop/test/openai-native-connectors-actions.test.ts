@@ -107,7 +107,6 @@ describe("OpenAI native connector actions", () => {
           },
         ],
         enabledConnectorIds: ["connector_gmail"],
-        codexAppsMcpServerName: "codex_apps",
         authenticated: true,
         message: "Codex authenticated",
       },
@@ -126,7 +125,6 @@ describe("OpenAI native connector actions", () => {
     expect(runtime?.openAiNativeConnectorsError).toBeNull();
     expect(runtime?.openAiNativeConnectorsAuthenticated).toBe(true);
     expect(runtime?.openAiNativeConnectorsEnabledIds).toEqual(["connector_gmail"]);
-    expect(runtime?.openAiNativeConnectorsServerName).toBe("codex_apps");
     expect(runtime?.openAiNativeConnectors).toEqual([
       {
         id: "connector_gmail",

@@ -1,6 +1,46 @@
 import { describe, expect, test } from "bun:test";
 
-import { isLinux, isMacos, isWindows, normalizePlatform } from "../src/lib/desktopPlatform";
+import {
+  getDesktopPlatformInfo,
+  isLinux,
+  isMacos,
+  isWindows,
+  normalizePlatform,
+} from "../src/lib/desktopPlatform";
+import { setupJsdom } from "./jsdomHarness";
+
+type DesktopRootDataset = Partial<
+  Record<
+    | "platform"
+    | "sidebarTitlebandMode"
+    | "topbarControlPlacement"
+    | "usesNativeGlass"
+    | "disableCssBlur",
+    string
+  >
+>;
+
+function readPlatformInfoWithDataset(dataset: DesktopRootDataset) {
+  const harness = setupJsdom();
+  try {
+    Object.assign(document.documentElement.dataset, dataset);
+    return getDesktopPlatformInfo();
+  } finally {
+    harness.restore();
+  }
+}
+
+function withoutDocument(run: () => void) {
+  const documentDescriptor = Object.getOwnPropertyDescriptor(globalThis, "document");
+  delete (globalThis as Record<string, unknown>).document;
+  try {
+    run();
+  } finally {
+    if (documentDescriptor) {
+      Object.defineProperty(globalThis, "document", documentDescriptor);
+    }
+  }
+}
 
 describe("normalizePlatform", () => {
   test("maps darwin to macos", () => {
@@ -18,6 +58,81 @@ describe("normalizePlatform", () => {
   test("maps unknown to other", () => {
     expect(normalizePlatform("freebsd")).toBe("other");
     expect(normalizePlatform(undefined)).toBe("other");
+  });
+});
+
+describe("getDesktopPlatformInfo", () => {
+  test("returns a stable fallback when document is unavailable", () => {
+    withoutDocument(() => {
+      expect(getDesktopPlatformInfo()).toEqual({
+        platform: "other",
+        rawPlatform: "other",
+        sidebarTitlebandMode: "topbar",
+        topbarControlPlacement: "inline",
+        usesNativeGlass: false,
+        disableCssBlur: false,
+      });
+    });
+  });
+
+  test("defaults Windows titleband chrome before async chrome attrs load", () => {
+    expect(readPlatformInfoWithDataset({ platform: "win32" })).toEqual({
+      platform: "windows",
+      rawPlatform: "win32",
+      sidebarTitlebandMode: "native",
+      topbarControlPlacement: "left-rail",
+      usesNativeGlass: false,
+      disableCssBlur: false,
+    });
+  });
+
+  test("defaults macOS to sidebar controls and native glass before chrome attrs load", () => {
+    expect(readPlatformInfoWithDataset({ platform: "darwin" })).toEqual({
+      platform: "macos",
+      rawPlatform: "darwin",
+      sidebarTitlebandMode: "topbar",
+      topbarControlPlacement: "sidebar",
+      usesNativeGlass: true,
+      disableCssBlur: true,
+    });
+  });
+
+  test("reads renderer chrome attrs from the document root dataset", () => {
+    expect(
+      readPlatformInfoWithDataset({
+        platform: "linux",
+        sidebarTitlebandMode: "native",
+        topbarControlPlacement: "left-rail",
+        usesNativeGlass: "true",
+        disableCssBlur: "true",
+      }),
+    ).toEqual({
+      platform: "linux",
+      rawPlatform: "linux",
+      sidebarTitlebandMode: "native",
+      topbarControlPlacement: "left-rail",
+      usesNativeGlass: true,
+      disableCssBlur: true,
+    });
+  });
+
+  test("keeps web chrome attrs as non-native inline controls", () => {
+    expect(
+      readPlatformInfoWithDataset({
+        platform: "web",
+        sidebarTitlebandMode: "topbar",
+        topbarControlPlacement: "inline",
+        usesNativeGlass: "false",
+        disableCssBlur: "false",
+      }),
+    ).toEqual({
+      platform: "other",
+      rawPlatform: "web",
+      sidebarTitlebandMode: "topbar",
+      topbarControlPlacement: "inline",
+      usesNativeGlass: false,
+      disableCssBlur: false,
+    });
   });
 });
 

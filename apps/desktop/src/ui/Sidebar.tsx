@@ -37,7 +37,7 @@ import {
   swapSidebarItemsById,
 } from "./sidebarHelpers";
 
-const MAX_VISIBLE_THREADS = 10;
+const MAX_VISIBLE_THREADS = 5;
 const WORKSPACE_ITEM_CLASSNAME = "sidebar-workspace-item [&:not(:last-child)]:mb-3";
 /** Matches `.sidebar-thread-region` transition duration in styles.css (fallback when transitionend does not fire). */
 const SIDEBAR_THREAD_REGION_DURATION_MS = 240;

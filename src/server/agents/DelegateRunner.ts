@@ -4,7 +4,7 @@ import { buildGooglePrepareStep } from "../../providers/googleReplay";
 import { createRuntime } from "../../runtime";
 import type { AgentReasoningEffort, AgentRole } from "../../shared/agents";
 import type { ToolContext } from "../../tools";
-import { createTools } from "../../tools";
+import { createTools, filterToolsForCodexDynamicBoundary } from "../../tools";
 import { buildTurnSystemPrompt } from "../../turnSystemPrompt";
 import type {
   AgentConfig,
@@ -94,9 +94,10 @@ export class DelegateRunner {
       agentRole: opts.role,
       shellPolicy: getAgentRoleShellPolicy(opts.role),
     };
+    const rawTools = filterToolsForRole(this.deps.createTools(delegateContext), roleDefinition);
     const tools = providerOwnsExecutableTools(routed.config)
-      ? {}
-      : filterToolsForRole(this.deps.createTools(delegateContext), roleDefinition);
+      ? filterToolsForCodexDynamicBoundary(rawTools)
+      : rawTools;
     const googlePrepareStep =
       routed.config.provider === "google" && Object.keys(tools).length > 0
         ? this.deps.buildGooglePrepareStep(routed.config.providerOptions, delegateContext.log)

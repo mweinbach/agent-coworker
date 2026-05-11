@@ -108,7 +108,7 @@ describe("DelegateRunner", () => {
     );
   });
 
-  test("codex app-server delegates leave Cowork custom tools out of the runtime tool map", async () => {
+  test("codex app-server delegates keep Cowork dynamic tools while filtering native execution tools", async () => {
     const runTurn = mock(async () => ({
       text: "ok",
       reasoningText: undefined as string | undefined,
@@ -118,6 +118,8 @@ describe("DelegateRunner", () => {
     const createTools = mock(() => ({
       bash: { type: "builtin" },
       read: { type: "builtin" },
+      skill: { type: "dynamic" },
+      todoWrite: { type: "dynamic" },
     }));
     const runner = new DelegateRunner({
       loadAgentPrompt: async () => "delegate system prompt",
@@ -143,10 +145,13 @@ describe("DelegateRunner", () => {
         model: "gpt-5.4",
       }),
     );
-    expect(createTools).not.toHaveBeenCalled();
+    expect(createTools).toHaveBeenCalled();
     expect(runTurn).toHaveBeenCalledWith(
       expect.objectContaining({
-        tools: {},
+        tools: {
+          skill: { type: "dynamic" },
+          todoWrite: { type: "dynamic" },
+        },
       }),
     );
   });

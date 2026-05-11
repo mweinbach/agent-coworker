@@ -331,7 +331,7 @@ describe("connectProvider", () => {
     const result = await disconnectProvider({ provider: "codex-cli", paths });
 
     expect(result.ok).toBe(true);
-    expect(result.message).toContain("auth was preserved");
+    expect(result.message).toContain("Codex connection cleared from Cowork");
     expect(runCodexLoginMock).toHaveBeenCalledTimes(1);
     const store = await readConnectionStore(paths);
     expect(store.services["codex-cli"]).toBeUndefined();

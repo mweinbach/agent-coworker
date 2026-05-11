@@ -1,4 +1,7 @@
-import { loginCodexAppServerChatGpt } from "./providers/codexAppServerAuth";
+import {
+  loginCodexAppServerChatGpt,
+  logoutCodexAppServer,
+} from "./providers/codexAppServerAuth";
 import {
   type AiCoworkerPaths,
   type ConnectionMode,
@@ -245,11 +248,18 @@ export async function disconnectProvider(opts: {
     }
     store.updatedAt = now;
     await writeConnectionStore(paths, store);
+    let logoutMessage = "";
+    try {
+      const logoutResult = await logoutCodexAppServer();
+      logoutMessage = logoutResult.message;
+    } catch {
+      // Best-effort logout; do not fail disconnect if app-server is unreachable.
+    }
     return {
       ok: true,
       provider: opts.provider,
       storageFile: paths.connectionsFile,
-      message: "Codex connection cleared. Codex app-server auth was preserved.",
+      message: `Codex connection cleared from Cowork. ${logoutMessage || "The app-server retains its own auth state; use the Codex CLI directly to fully revoke access."}`,
     };
   }
 

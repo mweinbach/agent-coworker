@@ -20,6 +20,7 @@ import type {
 } from "./types";
 
 const CODEX_APP_SERVER_PROVIDER = "codex-cli" as const;
+const CODEX_STARTUP_RPC_TIMEOUT_MS = 60_000;
 type CodexAppServerModelListEntry = {
   id: string;
   model: string;
@@ -258,7 +259,6 @@ function codexThreadConfig(params: RuntimeRunTurnParams): Record<string, unknown
 
 function codexBaseInstructions(system: string): string {
   return [
-    system,
     [
       "## Codex App-Server Tool Boundary",
       "",
@@ -266,6 +266,7 @@ function codexBaseInstructions(system: string): string {
       "Cowork exposes coordination tools and Cowork MCP as dynamic tools.",
       "Use Codex-native tools for local files, commands, and web access. Use Cowork dynamic tools for subagents, memory, skills, todos, usage, A2UI, and `mcp__...` tools.",
     ].join("\n"),
+    system,
   ].join("\n\n");
 }
 
@@ -365,15 +366,19 @@ function withCodexAppServerDiagnostics(error: unknown, command: CodexAppServerCo
 async function listAppServerModels(
   client: CodexAppServerClient,
 ): Promise<CodexAppServerModelListEntry[]> {
-  const models: CodexAppServerModelListEntry[] = [];
-  let cursor: string | undefined;
-  do {
-    const result = asRecord(
-      await client.request("model/list", {
-        limit: 100,
-        cursor: cursor ?? null,
-      }),
-    );
+    const models: CodexAppServerModelListEntry[] = [];
+    let cursor: string | undefined;
+    do {
+      const result = asRecord(
+        await client.request(
+          "model/list",
+          {
+            limit: 100,
+            cursor: cursor ?? null,
+          },
+          CODEX_STARTUP_RPC_TIMEOUT_MS,
+        ),
+      );
     const items = Array.isArray(result?.data)
       ? result.data
       : Array.isArray(result?.items)
@@ -918,6 +923,7 @@ export function createCodexAppServerRuntime(): LlmRuntime {
           params.config.model,
           params.log,
         );
+        params.abortSignal?.throwIfAborted();
         const currentState = isCodexAppServerContinuationState(params.providerState)
           ? params.providerState
           : null;
@@ -929,26 +935,35 @@ export function createCodexAppServerRuntime(): LlmRuntime {
         const shouldResumeThread = currentState?.model === effectiveModel;
         const threadResult =
           shouldResumeThread
-            ? await client.request("thread/resume", {
-                threadId: currentState.threadId,
-                cwd: params.config.workingDirectory,
-                model: effectiveModel,
-                modelProvider: "openai",
-                approvalPolicy,
-                sandbox: sandboxMode,
-                ...(threadConfig ? { config: threadConfig } : {}),
-              })
-            : await client.request("thread/start", {
-                cwd: params.config.workingDirectory,
-                model: effectiveModel,
-                modelProvider: "openai",
-                approvalPolicy,
-                sandbox: sandboxMode,
-                ...(threadConfig ? { config: threadConfig } : {}),
-                baseInstructions: codexBaseInstructions(params.system),
-                experimentalRawEvents: params.includeRawChunks ?? true,
-                ...(dynamicTools.length > 0 ? { dynamicTools } : {}),
-              });
+            ? await client.request(
+                "thread/resume",
+                {
+                  threadId: currentState.threadId,
+                  cwd: params.config.workingDirectory,
+                  model: effectiveModel,
+                  modelProvider: "openai",
+                  approvalPolicy,
+                  sandbox: sandboxMode,
+                  ...(threadConfig ? { config: threadConfig } : {}),
+                },
+                CODEX_STARTUP_RPC_TIMEOUT_MS,
+              )
+            : await client.request(
+                "thread/start",
+                {
+                  cwd: params.config.workingDirectory,
+                  model: effectiveModel,
+                  modelProvider: "openai",
+                  approvalPolicy,
+                  sandbox: sandboxMode,
+                  ...(threadConfig ? { config: threadConfig } : {}),
+                  baseInstructions: codexBaseInstructions(params.system),
+                  experimentalRawEvents: params.includeRawChunks ?? true,
+                  ...(dynamicTools.length > 0 ? { dynamicTools } : {}),
+                },
+                CODEX_STARTUP_RPC_TIMEOUT_MS,
+              );
+        params.abortSignal?.throwIfAborted();
         const thread = asRecord(asRecord(threadResult)?.thread);
         threadId = asString(thread?.id);
         if (!threadId) throw new Error("codex app-server did not return a thread id.");
@@ -967,6 +982,7 @@ export function createCodexAppServerRuntime(): LlmRuntime {
           resumedThread: shouldResumeThread,
         });
         if (input.length === 0) throw new Error("codex app-server runtime requires a user message.");
+        params.abortSignal?.throwIfAborted();
         const completion = waitForTurnCompletion(
           client,
           () => threadId,
@@ -985,18 +1001,22 @@ export function createCodexAppServerRuntime(): LlmRuntime {
             },
           },
         );
-        const turnResult = await client.request("turn/start", {
-          threadId,
-          input,
-          cwd: params.config.workingDirectory,
-          model: effectiveModel,
-          approvalPolicy,
-          sandboxPolicy,
-          effort: normalizeEffort(providerOptionString(params.providerOptions, "reasoningEffort")),
-          summary: normalizeSummary(
-            providerOptionString(params.providerOptions, "reasoningSummary"),
-          ),
-        });
+        const turnResult = await client.request(
+          "turn/start",
+          {
+            threadId,
+            input,
+            cwd: params.config.workingDirectory,
+            model: effectiveModel,
+            approvalPolicy,
+            sandboxPolicy,
+            effort: normalizeEffort(providerOptionString(params.providerOptions, "reasoningEffort")),
+            summary: normalizeSummary(
+              providerOptionString(params.providerOptions, "reasoningSummary"),
+            ),
+          },
+          CODEX_STARTUP_RPC_TIMEOUT_MS,
+        );
 
         const startedTurn = asRecord(asRecord(turnResult)?.turn);
         startedTurnId = asString(startedTurn?.id);
@@ -1012,14 +1032,18 @@ export function createCodexAppServerRuntime(): LlmRuntime {
               [{ role: "user", content: steer.content ?? steer.text }],
               { resumedThread: true },
             );
-            await client.request("turn/steer", {
-              threadId,
-              expectedTurnId: startedTurnId,
-              input:
-                steerInput.length > 0
-                  ? steerInput
-                  : [{ type: "text", text: steer.text, text_elements: [] }],
-            });
+            await client.request(
+              "turn/steer",
+              {
+                threadId,
+                expectedTurnId: startedTurnId,
+                input:
+                  steerInput.length > 0
+                    ? steerInput
+                    : [{ type: "text", text: steer.text, text_elements: [] }],
+              },
+              CODEX_STARTUP_RPC_TIMEOUT_MS,
+            );
           });
         }
         const finalTurn = await completion;

@@ -2,6 +2,8 @@ import { asRecord, asString } from "../runtime/piRuntimeOptions";
 import { openExternalUrl, type UrlOpener } from "../utils/browser";
 import { type CodexAppServerClient, getPooledCodexAppServerClient } from "./codexAppServerClient";
 
+const CODEX_AUTH_RPC_TIMEOUT_MS = 60_000;
+
 export type CodexAppServerAccount = {
   type: "apiKey" | "chatgpt";
   email?: string;
@@ -449,6 +451,30 @@ export async function loginCodexAppServerChatGpt(
     return {
       account: normalizeAccount(result?.account),
     };
+  }, opts.log);
+}
+
+export async function logoutCodexAppServer(opts: { log?: (line: string) => void } = {}): Promise<{
+  revoked: boolean;
+  message: string;
+}> {
+  return await withClient(async (client) => {
+    let revoked = false;
+    let message = "Codex app-server does not expose a logout method.";
+    for (const method of ["account/logout", "auth/revoke"]) {
+      try {
+        await client.request(method, {}, CODEX_AUTH_RPC_TIMEOUT_MS);
+        revoked = true;
+        message = `Codex app-server auth revoked via ${method}.`;
+        break;
+      } catch (error) {
+        if (!isUnknownMethodError(error, method)) {
+          message = `Codex app-server ${method} failed: ${error instanceof Error ? error.message : String(error)}`;
+          break;
+        }
+      }
+    }
+    return { revoked, message };
   }, opts.log);
 }
 

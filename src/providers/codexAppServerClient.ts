@@ -42,7 +42,7 @@ export type CodexAppServerJsonRpcRequest = {
 export type CodexAppServerClient = {
   command: CodexAppServerCommand;
   isClosed: () => boolean;
-  request: (method: string, params?: unknown) => Promise<unknown>;
+  request: (method: string, params?: unknown, timeoutMs?: number) => Promise<unknown>;
   notify: (method: string, params?: unknown) => void;
   interruptTurn: (params: { threadId: string; turnId?: string }) => Promise<void>;
   onNotification: (
@@ -186,9 +186,9 @@ export async function startCodexAppServerClient(
     child.stdin.write(`${JSON.stringify(payload)}\n`);
   };
 
-  const request = (method: string, params?: unknown): Promise<unknown> =>
-    new Promise((resolve, reject) => {
-      const id = nextId++;
+  const request = (method: string, params?: unknown, timeoutMs?: number): Promise<unknown> => {
+    const id = nextId++;
+    const requestPromise = new Promise<unknown>((resolve, reject) => {
       pending.set(id, { method, resolve, reject });
       try {
         write({ id, method, ...(params !== undefined ? { params } : {}) }, "client_request");
@@ -197,6 +197,19 @@ export async function startCodexAppServerClient(
         reject(error instanceof Error ? error : new Error(String(error)));
       }
     });
+    if (!timeoutMs || timeoutMs <= 0) return requestPromise;
+    const timeoutPromise = new Promise<unknown>((_, reject) => {
+      const timer = setTimeout(() => {
+        const pendingRequest = pending.get(id);
+        if (pendingRequest) {
+          pending.delete(id);
+          reject(new Error(`codex app-server request '${method}' timed out after ${timeoutMs}ms`));
+        }
+      }, timeoutMs);
+      requestPromise.then(() => clearTimeout(timer)).catch(() => clearTimeout(timer));
+    });
+    return Promise.race([requestPromise, timeoutPromise]);
+  };
 
   await new Promise<void>((resolve) => {
     setImmediate(resolve);

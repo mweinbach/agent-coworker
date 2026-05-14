@@ -11,6 +11,10 @@ import type { AgentSession } from "../src/server/session/AgentSession";
 import { SessionDb } from "../src/server/sessionDb";
 import { refreshSessionsForSkillMutation } from "../src/server/skillMutationRefresh";
 import { type StartAgentServerOptions, startAgentServer } from "../src/server/startServer";
+import {
+  loadH3PairingStoreState,
+  rememberH3TrustedDevice,
+} from "../src/server/transport/h3/pairing";
 import { stopTestServer } from "./helpers/wsHarness";
 
 function repoRoot(): string {
@@ -330,6 +334,22 @@ describe("HTTP Handler", () => {
     }
   });
 
+  test("/ws rejects retired query parameter protocol negotiation", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server } = await startAgentServer(serverOpts(tmpDir));
+    try {
+      const httpUrl = `http://127.0.0.1:${server.port}/ws?protocol=jsonrpc`;
+      const res = await fetch(httpUrl);
+      expect(res.status).toBe(400);
+      const text = await res.text();
+      expect(text).toBe(
+        "The ?protocol= WebSocket query parameter is no longer supported. Use the cowork.jsonrpc.v1 subprotocol or omit protocol negotiation.",
+      );
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
   test("loopback CORS preflight advertises DELETE for transcript routes", async () => {
     const tmpDir = await makeTmpProject();
     const { server } = await startAgentServer(serverOpts(tmpDir));
@@ -377,6 +397,53 @@ describe("HTTP Handler", () => {
       } else {
         process.env.COWORK_WEB_DESKTOP_SERVICE = previous;
       }
+      await stopTestServer(server);
+    }
+  });
+
+  test("mobile H3 trusted-device DELETE requires admin token and revokes encoded device id", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, mobileServer } = await startAgentServer(
+      serverOpts(tmpDir, {
+        mobileH3: {
+          hostname: "127.0.0.1",
+          port: 0,
+        },
+      }),
+    );
+    try {
+      if (!mobileServer) {
+        throw new Error("Expected mobile H3 server to start for admin route test");
+      }
+      const deviceId = "phone 1/alpha";
+      await rememberH3TrustedDevice(tmpDir, {
+        deviceId,
+        identityPub: "phone-identity",
+        displayName: "Phone",
+        sessionToken: "session-token",
+      });
+      const httpUrl = `http://127.0.0.1:${server.port}/mobile-h3/trusted/${encodeURIComponent(deviceId)}`;
+
+      const unauthorized = await fetch(httpUrl, { method: "DELETE" });
+      expect(unauthorized.status).toBe(401);
+      await expect(unauthorized.json()).resolves.toEqual({ error: "Unauthorized." });
+      await expect(loadH3PairingStoreState(tmpDir)).resolves.toMatchObject({
+        trustedDevices: [expect.objectContaining({ deviceId })],
+      });
+
+      const authorized = await fetch(httpUrl, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${mobileServer.adminToken}`,
+        },
+      });
+      expect(authorized.status).toBe(200);
+      await expect(authorized.json()).resolves.toEqual({ ok: true, removed: true });
+      await expect(loadH3PairingStoreState(tmpDir)).resolves.toEqual({
+        version: 1,
+        trustedDevices: [],
+      });
+    } finally {
       await stopTestServer(server);
     }
   });

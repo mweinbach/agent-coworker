@@ -381,22 +381,36 @@ export function FilePreviewModal() {
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
       <DialogContent
+        showCloseButton={false}
         className={cn(
-          "app-surface-opaque flex flex-col gap-0 overflow-hidden p-0",
-          kind === "pdf" ? "h-[96vh] max-w-6xl" : "max-h-[90vh] max-w-5xl",
+          "app-surface-opaque flex flex-col gap-0 overflow-hidden p-0 border border-border/45 rounded-xl shadow-2xl",
+          kind === "pdf" ? "h-[96vh] w-[96vw] max-w-8xl" : "max-h-[92vh] w-[95vw] max-w-7xl",
         )}
       >
         <DialogHeader className="shrink-0 space-y-3 border-b border-border/60 px-5 py-4">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="flex min-w-0 flex-wrap items-center gap-2">
-                <DialogTitle className="truncate text-lg">{titleName}</DialogTitle>
-                <Badge variant="secondary">{kindLabel}</Badge>
+          <div className="flex items-center justify-between gap-4 min-w-0">
+            <div className="min-w-0 flex-1">
+              <div className="flex min-w-0 items-center gap-2">
+                <DialogTitle className="truncate text-base font-medium text-foreground" title={titleName}>
+                  {titleName}
+                </DialogTitle>
+                <Badge
+                  variant="secondary"
+                  className="shrink-0 font-normal bg-muted/30 text-muted-foreground/90 border-transparent shadow-none"
+                >
+                  {kindLabel}
+                </Badge>
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              <Button type="button" variant="outline" size="sm" onClick={openExternal}>
-                <ExternalLinkIcon className="mr-1 size-3.5" />
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={openExternal}
+                className="font-medium bg-muted/30 hover:bg-muted/45 text-foreground border-none transition-all duration-150 active:scale-98 shadow-sm"
+              >
+                <ExternalLinkIcon className="mr-1.5 size-3.5" />
                 {openButtonLabel}
               </Button>
             </div>
@@ -407,7 +421,13 @@ export function FilePreviewModal() {
                 Preview truncated — only the first portion of this file is shown. Open the file in
                 its default app for the full contents.
               </span>
-              <Button type="button" size="sm" variant="outline" onClick={openExternal}>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                onClick={openExternal}
+                className="font-medium bg-muted/30 hover:bg-muted/45 text-foreground border-none transition-all duration-150 active:scale-98 shadow-sm"
+              >
                 <ExternalLinkIcon className="mr-1 size-3.5" />
                 Open full file
               </Button>

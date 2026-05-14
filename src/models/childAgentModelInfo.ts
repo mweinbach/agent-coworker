@@ -92,6 +92,7 @@ const CHILD_AGENT_MODEL_INFO_BY_KEY: Readonly<Record<string, ChildAgentModelInfo
   [key("bedrock", "amazon.nova-micro-v1:0")]: fastGeneral,
   [key("bedrock", "anthropic.claude-3-5-haiku-20241022-v1:0")]: claudeFast,
 
+  [key("google", "ajax")]: geminiPro,
   [key("google", "gemini-3.1-pro-preview")]: geminiPro,
   [key("google", "gemini-3.1-pro-preview-customtools")]: geminiPro,
   [key("google", "gemini-3-flash-preview")]: geminiFlash,

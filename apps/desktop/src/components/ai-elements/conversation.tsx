@@ -79,20 +79,34 @@ export function ConversationScrollButton({
     return null;
   }
 
+  const peerBottom = bottomOffset === undefined ? undefined : bottomOffset - 14;
+
   return (
-    <Button
-      type="button"
-      size="icon"
-      variant="outline"
-      className={cn(
-        "absolute left-1/2 z-30 -translate-x-1/2 rounded-lg bg-card/88 backdrop-blur-sm",
-        bottomOffset === undefined && "bottom-3.5",
-      )}
-      style={bottomOffset === undefined ? undefined : { bottom: bottomOffset }}
-      onClick={onClick}
-      aria-label="Scroll to bottom"
-    >
-      <ArrowDownIcon data-icon="scroll" />
-    </Button>
+    <>
+      <div
+        className="absolute left-1/2 z-30 -translate-x-1/2 peer w-24 h-16 pointer-events-auto"
+        style={
+          peerBottom === undefined
+            ? { bottom: "4px" }
+            : {
+                bottom: peerBottom,
+              }
+        }
+      />
+      <Button
+        type="button"
+        size="icon"
+        variant="outline"
+        className={cn(
+          "absolute left-1/2 z-30 -translate-x-1/2 rounded-full border border-border/40 bg-background/80 hover:bg-background/95 hover:text-foreground text-muted-foreground shadow-md backdrop-blur-md transition-all duration-300 hover:scale-110 active:scale-95 size-9 opacity-0 scale-90 pointer-events-none hover:opacity-100 hover:scale-100 hover:pointer-events-auto peer-hover:opacity-100 peer-hover:scale-100 peer-hover:pointer-events-auto",
+          bottomOffset === undefined && "bottom-3.5",
+        )}
+        style={bottomOffset === undefined ? undefined : { bottom: bottomOffset }}
+        onClick={onClick}
+        aria-label="Scroll to bottom"
+      >
+        <ArrowDownIcon className="size-4" data-icon="scroll" />
+      </Button>
+    </>
   );
 }

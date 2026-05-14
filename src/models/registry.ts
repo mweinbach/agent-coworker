@@ -18,6 +18,7 @@ import fireworksGlm5 from "../../config/models/fireworks/accounts-fireworks-mode
 import fireworksKimiK2p5 from "../../config/models/fireworks/accounts-fireworks-models-kimi-k2p5.json";
 import fireworksMinimaxM2p5 from "../../config/models/fireworks/accounts-fireworks-models-minimax-m2p5.json";
 import fireworksKimiK2p5Turbo from "../../config/models/fireworks/accounts-fireworks-routers-kimi-k2p5-turbo.json";
+import googleAjax from "../../config/models/google/ajax.json";
 import googleGemini31FlashLitePreview from "../../config/models/google/gemini-3.1-flash-lite-preview.json";
 import googleGemini31ProPreview from "../../config/models/google/gemini-3.1-pro-preview.json";
 import googleGemini31ProPreviewCustomtools from "../../config/models/google/gemini-3.1-pro-preview-customtools.json";
@@ -96,6 +97,7 @@ const RAW_MODEL_REGISTRY_ENTRIES = [
   fireworksKimiK2p5,
   fireworksKimiK2p5Turbo,
   fireworksMinimaxM2p5,
+  googleAjax,
   googleGemini3FlashPreview,
   googleGemini31FlashLitePreview,
   googleGemini31ProPreview,

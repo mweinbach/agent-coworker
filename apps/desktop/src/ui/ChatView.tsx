@@ -717,7 +717,7 @@ function DraftThreadModelSelector({
     >
       <SelectTrigger
         size="sm"
-        className="h-6 w-auto min-w-0 max-w-[220px] rounded-md border-none bg-transparent px-1.5 text-[11px] text-muted-foreground shadow-none transition-colors hover:bg-muted/40 hover:text-foreground focus:ring-0"
+        className="h-7 w-auto min-w-0 max-w-[220px] rounded-md border-none bg-transparent px-2 text-xs font-medium text-muted-foreground/85 shadow-none transition-colors hover:bg-muted/30 hover:text-foreground focus:ring-0"
       >
         <span className="truncate">
           <SelectValue placeholder="Model" />
@@ -785,7 +785,7 @@ function ThreadModelIndicator({
   return (
     <Badge
       variant="outline"
-      className="h-8 max-w-[220px] rounded-none border-0 bg-transparent px-1.5 text-[13px] font-medium text-foreground/80 shadow-none"
+      className="h-7 max-w-[220px] rounded-md border-none bg-transparent px-2 text-xs font-medium text-foreground/80 shadow-none"
     >
       <span className="truncate" title={title}>
         {friendly}
@@ -1459,6 +1459,12 @@ export function ChatView() {
                 ),
               )
             )}
+            <div
+              aria-hidden="true"
+              className="shrink-0"
+              data-slot="message-bar-reserved-space"
+              style={{ height: composerOverlayHeight }}
+            />
           </ConversationContent>
         </Conversation>
         <ConversationScrollButton
@@ -1473,12 +1479,6 @@ export function ChatView() {
           </div>
         ) : null}
 
-        <div
-          aria-hidden="true"
-          className="shrink-0"
-          data-slot="message-bar-reserved-space"
-          style={{ height: composerOverlayHeight }}
-        />
         <div
           ref={messageBarOverlayRef}
           data-slot="message-bar-overlay"

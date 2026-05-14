@@ -28,7 +28,7 @@
   --warning-base: oklch(0.78 0.16 80);
   --warning-foreground-base: #232a18;
   --radius-base: 0.5rem;
-  --shadow-surface-base: 0 1px 3px rgba(0, 0, 0, 0.05);
+  --shadow-surface-base: 0 1px 3px rgba(0, 0, 0, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.4);
   --shadow-overlay-base: 0 12px 30px rgba(0, 0, 0, 0.1);
 
   color-scheme: light;
@@ -59,7 +59,7 @@
   --success-foreground-base: #121a10;
   --warning-base: oklch(0.8 0.16 80);
   --warning-foreground-base: #1a2012;
-  --shadow-surface-base: 0 1px 2px rgba(0, 0, 0, 0.24);
+  --shadow-surface-base: 0 1px 2px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.08);
   --shadow-overlay-base: 0 12px 30px rgba(0, 0, 0, 0.35);
 
   color-scheme: dark;
@@ -91,7 +91,7 @@
     --success-foreground-base: #121a10;
     --warning-base: oklch(0.8 0.16 80);
     --warning-foreground-base: #1a2012;
-    --shadow-surface-base: 0 1px 2px rgba(0, 0, 0, 0.24);
+    --shadow-surface-base: 0 1px 2px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.08);
     --shadow-overlay-base: 0 12px 30px rgba(0, 0, 0, 0.35);
 
     color-scheme: dark;

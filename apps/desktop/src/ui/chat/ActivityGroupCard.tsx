@@ -220,13 +220,18 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
   if (useCompactElapsedHeader) {
     return (
       <Collapsible open={expanded} onOpenChange={setExpanded}>
-        <CollapsibleTrigger className="group flex w-full max-w-3xl items-center gap-2 rounded-md border-b border-border/35 px-2 pb-3 pt-1 text-left outline-none transition-colors hover:border-border/55 hover:bg-muted/[0.06] focus-visible:ring-1 focus-visible:ring-border/45 focus-visible:ring-inset">
-          {props.live ? (
-            <ClockIcon className="size-4 shrink-0 text-primary/70 animate-pulse" />
-          ) : (
-            <ClockIcon className="size-4 shrink-0 text-muted-foreground/40" />
-          )}
-          <span className="text-[15px] font-medium leading-6 text-muted-foreground/90">
+        <CollapsibleTrigger className="group flex w-full max-w-3xl items-center gap-3 py-2 text-left outline-none">
+          <div className="relative flex h-8 items-center justify-center">
+            <div className="absolute inset-y-0 left-1/2 w-0.5 border-l-2 border-dashed border-border/40 -translate-x-1/2" />
+            <div className="relative z-10 flex size-6 items-center justify-center rounded-full border border-border/60 bg-panel shadow-sm transition-transform duration-200 group-hover:scale-105">
+              {props.live ? (
+                <ClockIcon className="size-3.5 text-primary animate-pulse" />
+              ) : (
+                <ClockIcon className="size-3.5 text-muted-foreground/60" />
+              )}
+            </div>
+          </div>
+          <span className="text-sm font-mono tracking-tight text-muted-foreground/80 transition-colors group-hover:text-foreground">
             {props.live
               ? displayElapsedLabel
                 ? `Working for ${displayElapsedLabel}`
@@ -235,7 +240,7 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
                 ? `Worked for ${displayElapsedLabel}`
                 : "Worked"}
           </span>
-          <ChevronRightIcon className="ml-auto size-4 shrink-0 text-muted-foreground/65 transition-transform duration-200 group-data-[state=open]:rotate-90" />
+          <ChevronRightIcon className="ml-auto size-3.5 shrink-0 text-muted-foreground/50 transition-transform duration-200 group-data-[state=open]:rotate-90 group-hover:text-foreground" />
         </CollapsibleTrigger>
 
         <CollapsibleContent className="max-w-3xl overflow-hidden">

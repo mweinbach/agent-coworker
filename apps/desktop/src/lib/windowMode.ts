@@ -4,7 +4,12 @@ function readWindowSearchParams(): URLSearchParams | null {
   if (typeof window === "undefined") {
     return null;
   }
-  const search = window.location?.search;
+  let search: unknown;
+  try {
+    search = window.location?.search;
+  } catch {
+    return null;
+  }
   if (typeof search !== "string") {
     return null;
   }

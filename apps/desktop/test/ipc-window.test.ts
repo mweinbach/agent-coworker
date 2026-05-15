@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { EventEmitter } from "node:events";
 
+import { getPlatformChrome } from "../electron/services/windowChrome/platformChrome";
 import { DESKTOP_IPC_CHANNELS } from "../src/lib/desktopApi";
 import { createElectronMock, setElectronMockOverrides } from "./helpers/mockElectron";
 
@@ -195,6 +196,26 @@ describe("window IPC", () => {
     expect(consumePendingMenuCommands).toHaveBeenCalledTimes(1);
     expect(showQuickChatWindow).toHaveBeenCalledTimes(1);
     expect(showQuickChatWindow).toHaveBeenCalledWith({ threadId: "thread-21", newThread: true });
+  });
+
+  test("exposes renderer-safe platform chrome values", () => {
+    const { handlers } = createHandlers();
+    const sender = new FakeWebContents(22);
+    const expected = getPlatformChrome(process.platform as NodeJS.Platform);
+    const result = handlers.get(DESKTOP_IPC_CHANNELS.getPlatformChrome)?.({ sender });
+
+    expect(result).toEqual({
+      platform: expected.platform,
+      titlebarHeight: expected.titlebarHeight,
+      dragStripHeight: expected.dragStripHeight,
+      leftNativeReserve: expected.leftNativeReserve,
+      rightNativeReserve: expected.rightNativeReserve,
+      captionButtonReserve: expected.captionButtonReserve,
+      sidebarTitlebandMode: expected.sidebarTitlebandMode,
+      topbarControlPlacement: expected.topbarControlPlacement,
+      usesNativeGlass: expected.usesNativeGlass,
+      disableCssBlur: expected.disableCssBlur,
+    });
   });
 
   test("hides popup windows while popup keep-alive is active", () => {

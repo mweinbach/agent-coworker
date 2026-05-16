@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
-import { getExtensionLower, getFilePreviewKind, isCanvasSupportedFile } from "../src/lib/filePreviewKind";
+import {
+  getExtensionLower,
+  getFilePreviewKind,
+  isCanvasSupportedFile,
+} from "../src/lib/filePreviewKind";
 
 describe("filePreviewKind", () => {
   test("getExtensionLower handles posix paths", () => {
@@ -24,9 +28,9 @@ describe("filePreviewKind", () => {
     expect(getFilePreviewKind("/x/unknown.bin")).toBe("unknown");
   });
 
-  test("spreadsheet files are preview-supported but not editable canvas files", () => {
+  test("spreadsheet files are preview-supported canvas files", () => {
     expect(isCanvasSupportedFile("/x/readme.md")).toBe(true);
-    expect(isCanvasSupportedFile("/x/data.csv")).toBe(false);
-    expect(isCanvasSupportedFile("/x/s.xlsx")).toBe(false);
+    expect(isCanvasSupportedFile("/x/data.csv")).toBe(true);
+    expect(isCanvasSupportedFile("/x/s.xlsx")).toBe(true);
   });
 });

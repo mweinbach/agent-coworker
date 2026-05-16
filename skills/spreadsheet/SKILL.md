@@ -143,3 +143,17 @@ If the spreadsheet is an IB-style model (LBO, DCF, 3-statement, valuation):
 - Section headers should be merged cells with dark fill and white text.
 - Column labels for numeric data should be right-aligned; row labels should be left-aligned.
 - Indent submetrics under their parent line items.
+
+## Real-Time Collaborative Canvas Edits
+When requests come in via the `[Spreadsheet Collaborative Edit]` interface, the user is viewing the spreadsheet on their live interactive desktop canvas in real-time. Follow these rules to handle these requests successfully:
+- **Parse the Context Block**: Extract the specified `Active sheet`, `Visible viewport`, `Selected cell`, and `Search query`. Treat these as the focal points of the request.
+- **Relative Reference Resolution**: If the user's prompt is relative (e.g. "change this cell to 12.5" or "add a row below this"), use the `Selected cell` address and values as the target for your edits.
+- **Real-Time Synchronized Styling**: Because the desktop client renders cell values, styles, fonts, and formulas live, make sure to apply clean styles (bold, alignments, colors, borders) and correct number formats.
+- **Formula Integrity and Recalculation**: Always write uppercase formula names (e.g., `=SUM(...)`, `=AVERAGE(...)`, `=IF(...)`). When updating cell values, preserve any dependent formulas so that the user's live preview automatically recalculates and displays the updated values.
+- **Describe Edits Concisely**: After applying the edits, describe exactly which sheet, cells, or ranges were updated so the user can easily locate them. Remind them that their interactive spreadsheet canvas has been synchronized with the new data.
+
+## Programming Pitfalls (openpyxl & pandas)
+- **Always Save Workbook**: At the end of any script editing an `.xlsx` file, make sure to save the workbook: `wb.save(path)`.
+- **Uppercase Formula Functions**: Excel requires uppercase function names. Always use uppercase names like `=SUM(...)` or `=AVERAGE(...)` instead of lowercase `=sum(...)` or `=average(...)`. Lowercase formulas may fail to evaluate.
+- **Preserve Existing Formatting**: When editing existing sheets with `openpyxl`, read and reuse cell styles (fonts, alignments, borders, number formats) to ensure newly written cells blend seamlessly with the original layout.
+- **Keep Sheets Ordered and Stable**: When writing modifications, do not delete, reorder, or rename workbook sheets unless explicitly requested.

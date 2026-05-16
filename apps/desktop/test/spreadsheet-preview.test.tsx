@@ -224,4 +224,78 @@ describe("SpreadsheetPreview", () => {
       }
     },
   );
+
+  test.serial("renders in compact mode for canvas integration", async () => {
+    const harness = setupJsdom({ includeAnimationFrame: true });
+    resetAppStore();
+
+    try {
+      const path = "/Users/mweinbach/Projects/preview-workspace/model.xlsx";
+      const requestMock = mock(async () => {
+        return {
+          ok: true,
+          preview: {
+            kind: "xlsx",
+            path,
+            filename: "model.xlsx",
+            sheets: [{ name: "Summary", rowCount: 1, colCount: 1 }],
+            selectedSheetName: "Summary",
+            viewport: {
+              startRow: 0,
+              startCol: 0,
+              rowCount: 1,
+              colCount: 1,
+              endRow: 0,
+              endCol: 0,
+              totalRows: 1,
+              totalCols: 1,
+              truncatedRows: false,
+              truncatedCols: false,
+            },
+            cells: [[{ row: 0, col: 0, address: "A1", value: "Metric" }]],
+            mergedCells: [],
+            columnWidths: [],
+            warnings: [],
+          },
+        };
+      });
+      RUNTIME.jsonRpcSockets.set("ws-1", {
+        readyPromise: Promise.resolve(),
+        connect: () => {},
+        close: () => {},
+        respond: () => true,
+        request: requestMock,
+      } as never);
+
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(SpreadsheetPreview, { path, compact: true }));
+        await flushUi();
+        await flushUi();
+      });
+
+      const doc = harness.dom.window.document;
+      // Should render compact viewport label in pagination bar
+      expect(doc.body.textContent).toContain("Rows 1-1 of 1");
+      // Should NOT render duplicate top header with filename
+      const titleElement = Array.from(doc.querySelectorAll("div")).find(
+        (div) => div.textContent === "model.xlsx",
+      );
+      expect(titleElement).toBeUndefined();
+
+      // Should render table container with flex-1
+      const tableWrapper = doc.querySelector(".overflow-auto.rounded-md.border");
+      expect(tableWrapper?.className).toContain("flex-1");
+      expect(tableWrapper?.className).not.toContain("max-h-[58vh]");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
 });

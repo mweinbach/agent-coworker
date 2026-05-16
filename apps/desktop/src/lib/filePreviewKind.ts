@@ -96,5 +96,5 @@ export function mimeForPreviewKind(kind: FilePreviewKind, ext: string): string {
 
 export function isCanvasSupportedFile(filePath: string): boolean {
   const kind = getFilePreviewKind(filePath);
-  return kind === "markdown" || kind === "text";
+  return kind === "markdown" || kind === "text" || kind === "csv" || kind === "xlsx";
 }

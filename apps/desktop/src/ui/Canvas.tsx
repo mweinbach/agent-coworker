@@ -9,6 +9,8 @@ import {
   MoreVerticalIcon,
   PenIcon,
   SparklesIcon,
+  TableIcon,
+  XIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -28,6 +30,7 @@ import { readFile, writeFile } from "../lib/desktopCommands";
 import { getFilePreviewKind } from "../lib/filePreviewKind";
 import { cn } from "../lib/utils";
 import { getDesktopWindowMode } from "../lib/windowMode";
+import { SpreadsheetPreview } from "./SpreadsheetPreview";
 
 function basenamePath(p: string): string {
   const parts = p.replace(/\\/g, "/").split("/").filter(Boolean);
@@ -257,6 +260,7 @@ export function Canvas({ path }: { path: string }) {
     selectedThreadId ? s.threadRuntimeById[selectedThreadId] : null,
   );
   const sendMessage = useAppStore((s) => s.sendMessage);
+  const closeFilePreview = useAppStore((s) => s.closeFilePreview);
 
   const activeTab = useAppStore((s) => s.canvasActiveTab);
   const setActiveTab = useAppStore((s) => s.setCanvasActiveTab);
@@ -280,8 +284,12 @@ export function Canvas({ path }: { path: string }) {
 
   const previewKind = getFilePreviewKind(path);
   const isMarkdown = previewKind === "markdown";
+  const isSpreadsheet = useMemo(() => {
+    return previewKind === "csv" || previewKind === "xlsx";
+  }, [previewKind]);
 
   const loadContent = useCallback(async () => {
+    if (isSpreadsheet) return;
     try {
       setLoading(true);
       const fileContent = await readFile({ path });
@@ -297,13 +305,15 @@ export function Canvas({ path }: { path: string }) {
     } finally {
       setLoading(false);
     }
-  }, [path, isMarkdown]);
+  }, [path, isMarkdown, isSpreadsheet]);
 
   useEffect(() => {
+    if (isSpreadsheet) return;
     void loadContent();
-  }, [loadContent]);
+  }, [loadContent, isSpreadsheet]);
 
   useEffect(() => {
+    if (isSpreadsheet) return;
     let active = true;
     const interval = setInterval(async () => {
       if (isEditingRef.current) return;
@@ -326,9 +336,10 @@ export function Canvas({ path }: { path: string }) {
       active = false;
       clearInterval(interval);
     };
-  }, [path, isMarkdown]);
+  }, [path, isMarkdown, isSpreadsheet]);
 
   useEffect(() => {
+    if (isSpreadsheet) return;
     const timer = setTimeout(async () => {
       if (content === lastSavedContentRef.current) return;
       try {
@@ -341,7 +352,75 @@ export function Canvas({ path }: { path: string }) {
     }, 500);
 
     return () => clearTimeout(timer);
-  }, [content, path]);
+  }, [content, path, isSpreadsheet]);
+
+  const fileName = basenamePath(path);
+  const isAgentBusy = threadRuntime?.busy === true;
+
+  if (isSpreadsheet) {
+    return (
+      <div
+        className={cn(
+          "flex h-full w-full min-w-0 flex-col",
+          isCanvasMode ? "bg-background" : "bg-[var(--surface-sidebar-pane)]",
+          isCanvasMode && "app-canvas-mode-window",
+        )}
+      >
+        <div className="flex min-h-0 flex-1 flex-col gap-0">
+          {isCanvasMode ? (
+            <div
+              className="flex shrink-0 items-center justify-between border-b border-border/40 px-2.5 gap-2 select-none bg-transparent"
+              style={
+                {
+                  height: "var(--platform-titlebar-height, 38px)",
+                  paddingLeft: "calc(var(--platform-left-native-reserve, 0px) + 12px)",
+                  paddingRight: "calc(var(--platform-right-native-reserve, 0px) + 12px)",
+                  WebkitAppRegion: "drag",
+                } as React.CSSProperties
+              }
+            >
+              <div className="flex min-w-0 items-center gap-1.5 flex-1">
+                <TableIcon className="size-3.5 text-muted-foreground shrink-0" />
+                <div className="flex min-w-0 items-center gap-1">
+                  <span
+                    className="truncate text-xs font-semibold tracking-wide text-foreground"
+                    title={fileName}
+                  >
+                    {fileName}
+                  </span>
+                  <span className="text-[10px] text-muted-foreground shrink-0 uppercase">
+                    ({previewKind})
+                  </span>
+                </div>
+                {isAgentBusy ? (
+                  <Loader2Icon className="size-2.5 animate-spin text-primary shrink-0" />
+                ) : null}
+              </div>
+
+              <div
+                className="flex items-center gap-1 shrink-0 flex-1 justify-end"
+                style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+              >
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  onClick={closeFilePreview}
+                  title="Close Window"
+                  className="size-6 text-muted-foreground hover:text-foreground hover:bg-muted/50 rounded-md"
+                >
+                  <XIcon className="size-3.5" />
+                </Button>
+              </div>
+            </div>
+          ) : null}
+          <div className={cn("flex-1 min-h-0 p-3", isCanvasMode && "p-5")}>
+            <SpreadsheetPreview path={path} compact />
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   useEffect(() => {
     if (!floatingCoords) {
@@ -614,9 +693,6 @@ ${textToSend}`;
       }
     }
   };
-
-  const fileName = basenamePath(path);
-  const isAgentBusy = threadRuntime?.busy === true;
 
   return (
     <div

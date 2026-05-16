@@ -23,6 +23,7 @@ import { cn } from "../lib/utils";
 
 type SpreadsheetPreviewProps = {
   path: string;
+  compact?: boolean;
 };
 
 type CellSpan = {
@@ -107,7 +108,7 @@ function formatViewportLabel(viewport: SpreadsheetPreviewViewport): string {
   )}-${columnLabel(viewport.endCol)} of ${viewport.totalCols}`;
 }
 
-export function SpreadsheetPreview({ path }: SpreadsheetPreviewProps) {
+export function SpreadsheetPreview({ path, compact = false }: SpreadsheetPreviewProps) {
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const workspaces = useAppStore((s) => s.workspaces);
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
@@ -135,7 +136,7 @@ export function SpreadsheetPreview({ path }: SpreadsheetPreviewProps) {
     setSearch("");
     setSelectedCellAddress(null);
     setPromptText("");
-  }, [path]);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -290,24 +291,26 @@ ${instructions}`;
 
   return (
     <div
-      className="flex min-h-0 flex-col gap-3"
+      className={cn("flex min-h-0 flex-col gap-3", compact && "h-full")}
       data-file-preview-spreadsheet="true"
       data-spreadsheet-preview="true"
     >
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-2">
-          <TableIcon className="size-4 shrink-0 text-muted-foreground" />
-          <div className="min-w-0">
-            <div className="truncate text-sm font-medium">{preview.filename}</div>
-            <div className="text-xs text-muted-foreground">
-              {formatViewportLabel(preview.viewport)}
+      {!compact ? (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <TableIcon className="size-4 shrink-0 text-muted-foreground" />
+            <div className="min-w-0">
+              <div className="truncate text-sm font-medium">{preview.filename}</div>
+              <div className="text-xs text-muted-foreground">
+                {formatViewportLabel(preview.viewport)}
+              </div>
             </div>
           </div>
+          <Badge variant="secondary" className="shrink-0 font-normal uppercase">
+            {preview.kind}
+          </Badge>
         </div>
-        <Badge variant="secondary" className="shrink-0 font-normal uppercase">
-          {preview.kind}
-        </Badge>
-      </div>
+      ) : null}
 
       {preview.sheets.length > 1 ? (
         <div className="flex gap-1 overflow-x-auto" role="tablist" aria-label="Workbook sheets">
@@ -352,7 +355,15 @@ ${instructions}`;
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-        <div className="flex items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+          {compact ? (
+            <span
+              className="font-medium text-foreground mr-1.5 truncate max-w-[200px]"
+              title={formatViewportLabel(preview.viewport)}
+            >
+              {formatViewportLabel(preview.viewport)}
+            </span>
+          ) : null}
           <Button
             type="button"
             variant="outline"
@@ -394,10 +405,15 @@ ${instructions}`;
             <ChevronRightIcon className="ml-1 size-3.5" />
           </Button>
         </div>
-        {preview.warnings[0] ? <span>{preview.warnings[0]}</span> : null}
+        {preview.warnings[0] ? <span className="truncate">{preview.warnings[0]}</span> : null}
       </div>
 
-      <div className="max-h-[58vh] overflow-auto rounded-md border border-border/70 bg-background">
+      <div
+        className={cn(
+          "overflow-auto rounded-md border border-border/70 bg-background",
+          compact ? "flex-1 min-h-0" : "max-h-[58vh]",
+        )}
+      >
         <table
           className="w-full border-collapse text-sm"
           aria-label={`${preview.filename} spreadsheet preview`}

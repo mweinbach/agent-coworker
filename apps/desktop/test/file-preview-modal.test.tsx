@@ -54,6 +54,7 @@ const docxPreviewModule = await import("../src/lib/docxPreview");
 spyOn(docxPreviewModule, "loadDocxPreviewLayout").mockImplementation(loadDocxPreviewLayoutMock);
 
 const { useAppStore } = await import("../src/app/store");
+const { RUNTIME } = await import("../src/app/store.helpers/runtimeState");
 const { FilePreviewModal } = await import("../src/ui/FilePreviewModal");
 
 function setupPreviewJsdom() {
@@ -70,8 +71,36 @@ function setupPreviewJsdom() {
 
 function resetAppStore() {
   const state = useAppStore.getState();
+  RUNTIME.jsonRpcSockets.clear();
+  RUNTIME.jsonRpcSockets.set("ws-1", {
+    readyPromise: Promise.resolve(),
+    connect: () => {},
+    close: () => {},
+    respond: () => true,
+    request: async () => ({}),
+  } as any);
   useAppStore.setState({
     ...state,
+    workspaces: [
+      {
+        id: "ws-1",
+        name: "Workspace",
+        path: "/Users/mweinbach/Projects/preview-workspace",
+        createdAt: "2026-05-16T00:00:00.000Z",
+        lastOpenedAt: "2026-05-16T00:00:00.000Z",
+        defaultEnableMcp: true,
+        defaultBackupsEnabled: true,
+        yolo: false,
+      },
+    ],
+    selectedWorkspaceId: "ws-1",
+    workspaceRuntimeById: {
+      ...state.workspaceRuntimeById,
+      "ws-1": {
+        ...state.workspaceRuntimeById["ws-1"],
+        serverUrl: "ws://mock",
+      },
+    },
     filePreview: null,
   } as any);
 }
@@ -80,6 +109,14 @@ async function flushUi() {
   await Promise.resolve();
   await new Promise((resolve) => setTimeout(resolve, 0));
   await Promise.resolve();
+}
+
+async function waitForUi(predicate: () => boolean) {
+  for (let i = 0; i < 20; i++) {
+    await flushUi();
+    if (predicate()) return;
+  }
+  throw new Error("timed out waiting for UI update");
 }
 
 afterAll(() => {
@@ -232,6 +269,129 @@ describe("file preview modal", () => {
       });
 
       expect(useAppStore.getState().filePreview).toBeNull();
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test.serial("loads spreadsheet preview data over JSON-RPC and switches sheets", async () => {
+    const harness = setupPreviewJsdom();
+
+    try {
+      const path = "/Users/mweinbach/Projects/preview-workspace/model.xlsx";
+      const requestMock = mock(async (method: string, params?: any) => {
+        if (method !== "cowork/workspace/spreadsheet/preview") return {};
+        const selectedSheetName = params?.sheetName === "Data" ? "Data" : "Summary";
+        return {
+          ok: true,
+          preview: {
+            kind: "xlsx",
+            path,
+            filename: "model.xlsx",
+            sheets: [
+              { name: "Summary", rowCount: 2, colCount: 2 },
+              { name: "Data", rowCount: 2, colCount: 2 },
+            ],
+            selectedSheetName,
+            viewport: {
+              startRow: 0,
+              startCol: 0,
+              rowCount: 2,
+              colCount: 2,
+              endRow: 1,
+              endCol: 1,
+              totalRows: 240,
+              totalCols: 2,
+              truncatedRows: selectedSheetName === "Summary",
+              truncatedCols: false,
+            },
+            cells:
+              selectedSheetName === "Data"
+                ? [
+                    [
+                      { row: 0, col: 0, address: "A1", value: "id" },
+                      { row: 0, col: 1, address: "B1", value: "count" },
+                    ],
+                    [
+                      { row: 1, col: 0, address: "A2", value: "GPU-1" },
+                      { row: 1, col: 1, address: "B2", value: "8" },
+                    ],
+                  ]
+                : [
+                    [
+                      { row: 0, col: 0, address: "A1", value: "Metric" },
+                      { row: 0, col: 1, address: "B1", value: "Value" },
+                    ],
+                    [
+                      { row: 1, col: 0, address: "A2", value: "Revenue" },
+                      { row: 1, col: 1, address: "B2", value: "$12.50" },
+                    ],
+                  ],
+            mergedCells: [],
+            columnWidths: [],
+            warnings:
+              selectedSheetName === "Summary"
+                ? ["Showing rows 1-2 and columns 1-2 of 240 rows and 2 columns."]
+                : [],
+          },
+        };
+      });
+      RUNTIME.jsonRpcSockets.set("ws-1", {
+        readyPromise: Promise.resolve(),
+        connect: () => {},
+        close: () => {},
+        respond: () => true,
+        request: requestMock,
+      } as any);
+
+      useAppStore.setState({ filePreview: { path } });
+
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(FilePreviewModal));
+        await flushUi();
+        await flushUi();
+      });
+
+      const doc = harness.dom.window.document;
+      expect(readFileForPreviewMock).not.toHaveBeenCalled();
+      expect(requestMock.mock.calls[0]?.[0]).toBe("cowork/workspace/spreadsheet/preview");
+      expect(requestMock.mock.calls[0]?.[1]).toMatchObject({
+        cwd: "/Users/mweinbach/Projects/preview-workspace",
+        path,
+      });
+      expect(doc.querySelector("[data-file-preview-spreadsheet='true']")).not.toBeNull();
+      expect(doc.body.textContent).toContain("Revenue");
+      expect(doc.body.textContent).toContain("Showing rows 1-2");
+
+      const dataTab = Array.from(doc.querySelectorAll("button")).find(
+        (button) => button.textContent === "Data",
+      );
+      if (!dataTab) throw new Error("missing Data sheet tab");
+
+      await act(async () => {
+        dataTab.dispatchEvent(
+          new harness.dom.window.MouseEvent("click", {
+            bubbles: true,
+            cancelable: true,
+            view: harness.dom.window,
+          }),
+        );
+        await flushUi();
+      });
+      await waitForUi(
+        () => harness.dom.window.document.body.textContent?.includes("GPU-1") === true,
+      );
+
+      expect(requestMock.mock.calls.at(-1)?.[1]).toMatchObject({ sheetName: "Data" });
+      expect(doc.body.textContent).toContain("GPU-1");
 
       await act(async () => {
         root.unmount();

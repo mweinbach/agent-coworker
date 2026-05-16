@@ -94,6 +94,7 @@ Any request before the handshake completes is rejected with a JSON-RPC error:
 - `turn/steer`
 - `turn/interrupt`
 - `cowork/workspace/bootstrap`
+- `cowork/workspace/spreadsheet/preview`
 
 `turn/start` and `turn/steer` also accept an optional `clientMessageId` string so JSON-RPC clients can correlate optimistic user UI state with the projected `user_message` notification stream.
 
@@ -246,6 +247,8 @@ The desktop JSON-RPC path now uses this namespace so one workspace connection ca
 `cowork/session/defaults/apply` remains the composite "apply provider/model, editable defaults, and MCP enablement" write. Supplying only `cwd` targets the workspace control session; supplying `threadId` as well applies the same composite write directly to that loaded thread session.
 
 `cowork/session/file/upload` writes a file into the workspace uploads directory and returns a `file_uploaded` session event envelope. JSON-RPC clients can then reference that saved file from `turn/start` or `turn/steer` with an `uploadedFile` input part when the file is too large to send inline.
+
+`cowork/workspace/spreadsheet/preview` reads a CSV or `.xlsx` file from the active workspace and returns structured sheet, viewport, cell, merged-range, and column-width data. The request accepts `path`, optional `sheetName`, and optional `viewport` (`startRow`, `startCol`, `rowCount`, `colCount`) so clients can render workbook previews without parsing spreadsheet bytes in the UI layer. Paths are resolved under the workspace root and symlink escapes are rejected.
 
 `cowork/session/agent/inspect` is a thread-scoped, root-only read for child agents. It returns the same detailed inspection payload as the root `inspectAgent` tool: the latest child summary, the full latest assistant text, a parsed structured child report when the final assistant text includes a recognized JSON footer, and compact session/last-turn usage snapshots for the child.
 
@@ -405,6 +408,7 @@ Sockets subscribed with `research/subscribe` can receive:
 - `thread/hydrate` returns the same payload as `thread/read` (thread summary, turns, and snapshot) without subscribing the client to live thread events. Optional `afterSeq` skips journal events up to and including that cursor when building the `turns` array (useful for pull-based catchup); `journalTailSeq` is returned when `includeTurns: true` so callers can advance the cursor. Ideal for lightweight previews.
 - `thread/resume` accepts `afterSeq` to replay journaled notifications after a known cursor, then reattaches the live thread sink so reconnecting clients do not receive the same journaled events twice
 - `cowork/workspace/bootstrap` returns persisted and live threads for a workspace plus workspace control state; used by desktop/mobile clients on initial load
+- `cowork/workspace/spreadsheet/preview` returns bounded spreadsheet preview data for workspace CSV and `.xlsx` files; desktop uses it to keep spreadsheet parsing in the harness.
 - Cowork persists canonical thread journal events in sqlite so reconnect / restart replay is no longer limited to an in-memory socket buffer
 
 ### Projected Conversation Contract

@@ -1,3 +1,7 @@
+import type {
+  SpreadsheetPreviewResult,
+  SpreadsheetPreviewViewportRequest,
+} from "../../../../../src/shared/spreadsheetPreview";
 import { JsonRpcSocket } from "../../lib/agentSocket";
 import type { StoreGet, StoreSet } from "../store.helpers";
 import type { ThreadRuntime, WorkspaceRecord } from "../types";
@@ -503,6 +507,25 @@ export async function uploadJsonRpcWorkspaceFile(
     filename: typeof event?.filename === "string" ? event.filename : filename,
     path: typeof event?.path === "string" ? event.path : "",
   };
+}
+
+export async function previewJsonRpcWorkspaceSpreadsheet(
+  get: StoreGet,
+  set: StoreSet | undefined,
+  workspaceId: string,
+  filePath: string,
+  opts: {
+    sheetName?: string;
+    viewport?: SpreadsheetPreviewViewportRequest;
+  } = {},
+): Promise<SpreadsheetPreviewResult> {
+  const workspace = getWorkspaceById(get, workspaceId);
+  return (await requestJsonRpc(get, set, workspaceId, "cowork/workspace/spreadsheet/preview", {
+    cwd: workspace?.path,
+    path: filePath,
+    ...(opts.sheetName ? { sheetName: opts.sheetName } : {}),
+    ...(opts.viewport ? { viewport: opts.viewport } : {}),
+  })) as SpreadsheetPreviewResult;
 }
 
 export async function unsubscribeJsonRpcThread(

@@ -35,9 +35,7 @@ import {
 } from "../lib/filePreviewKind";
 import { cn } from "../lib/utils";
 import { CodeFilePreview } from "./CodeFilePreview";
-
-const XLSX_MAX_ROWS = 200;
-const XLSX_MAX_COLS = 40;
+import { SpreadsheetPreview } from "./SpreadsheetPreview";
 
 function decodeUtf8(bytes: Uint8Array): string {
   return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
@@ -163,7 +161,6 @@ export function FilePreviewModal() {
   const [docxHtml, setDocxHtml] = useState<string | null>(null);
   const [docxLayout, setDocxLayout] = useState<DocxPreviewLayout | null>(null);
   const [preferredFileApp, setPreferredFileApp] = useState<string | null>(null);
-  const [xlsxHtml, setXlsxHtml] = useState<string | null>(null);
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
 
   const revokeBlob = useCallback(() => {
@@ -182,7 +179,6 @@ export function FilePreviewModal() {
       setDocxHtml(null);
       setDocxLayout(null);
       setPreferredFileApp(null);
-      setXlsxHtml(null);
       revokeBlob();
       return;
     }
@@ -195,20 +191,29 @@ export function FilePreviewModal() {
     setDocxHtml(null);
     setDocxLayout(null);
     setPreferredFileApp(null);
-    setXlsxHtml(null);
     revokeBlob();
 
     void (async () => {
       try {
+        const previewKind = getFilePreviewKind(path);
+        const preferredAppPromise = getPreferredFileApp({ path }).catch(() => null);
+
+        if (previewKind === "csv" || previewKind === "xlsx") {
+          const preferredApp = await preferredAppPromise;
+          if (controller.signal.aborted) return;
+          setPreferredFileApp(preferredApp);
+          setLoading(false);
+          return;
+        }
+
         const [result, preferredApp] = await Promise.all([
           readFileForPreview({ path }),
-          getPreferredFileApp({ path }).catch(() => null),
+          preferredAppPromise,
         ]);
         if (controller.signal.aborted) return;
         setTruncated(result.truncated);
         setPreferredFileApp(preferredApp);
         const bytes = result.bytes;
-        const previewKind = getFilePreviewKind(path);
 
         if (previewKind === "pdf" || previewKind === "image") {
           const mime = mimeForPreviewKind(previewKind, getExtensionLower(path));
@@ -252,43 +257,6 @@ export function FilePreviewModal() {
           return;
         }
 
-        if (previewKind === "xlsx") {
-          const XLSX = await import("xlsx");
-          if (controller.signal.aborted) return;
-          const wb = XLSX.read(bytes, { type: "array" });
-          const firstName = wb.SheetNames[0];
-          if (!firstName) {
-            setXlsxHtml('<p class="text-muted-foreground">Empty workbook.</p>');
-          } else {
-            const sheet = wb.Sheets[firstName];
-            if (!sheet) {
-              setXlsxHtml('<p class="text-muted-foreground">Could not read sheet.</p>');
-            } else {
-              const range = XLSX.utils.decode_range(sheet["!ref"] ?? "A1");
-              const cappedRange = {
-                s: range.s,
-                e: {
-                  r: Math.min(range.e.r, range.s.r + XLSX_MAX_ROWS - 1),
-                  c: Math.min(range.e.c, range.s.c + XLSX_MAX_COLS - 1),
-                },
-              };
-              const cappedRef = XLSX.utils.encode_range(cappedRange);
-              const cappedSheet = { ...sheet, "!ref": cappedRef };
-              const html = XLSX.utils.sheet_to_html(cappedSheet, { id: "preview-sheet" });
-              const note =
-                range.e.r - range.s.r + 1 > XLSX_MAX_ROWS ||
-                range.e.c - range.s.c + 1 > XLSX_MAX_COLS
-                  ? `<p class="text-xs text-muted-foreground mb-2">Showing up to ${XLSX_MAX_ROWS} rows and ${XLSX_MAX_COLS} columns.</p>`
-                  : "";
-              const sanitized = await sanitizePreviewHtml(note + html);
-              if (controller.signal.aborted) return;
-              setXlsxHtml(sanitized);
-            }
-          }
-          setLoading(false);
-          return;
-        }
-
         if (previewKind === "unsupported") {
           setLoading(false);
           return;
@@ -325,6 +293,7 @@ export function FilePreviewModal() {
       pdf: "PDF",
       image: "Image",
       docx: "Word",
+      csv: "CSV",
       xlsx: "Excel",
       unsupported: "Unsupported",
       unknown: "File",
@@ -353,13 +322,7 @@ export function FilePreviewModal() {
   const isOpen = path !== null && !isCanvasFile;
 
   const showFallback =
-    !loading &&
-    !error &&
-    kind === "unsupported" &&
-    !textContent &&
-    !docxHtml &&
-    !xlsxHtml &&
-    !blobUrl;
+    !loading && !error && kind === "unsupported" && !textContent && !docxHtml && !blobUrl;
 
   const showUnknownAsText =
     !loading && !error && kind === "unknown" && textContent !== null && !blobUrl;
@@ -533,11 +496,8 @@ export function FilePreviewModal() {
                 </div>
               ) : null}
             </div>
-          ) : kind === "xlsx" && xlsxHtml ? (
-            <div
-              className="preview-xlsx overflow-x-auto text-sm [&_table]:w-full [&_table]:border-collapse [&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-border [&_th]:px-2 [&_th]:py-1"
-              dangerouslySetInnerHTML={{ __html: xlsxHtml }}
-            />
+          ) : (kind === "csv" || kind === "xlsx") && path ? (
+            <SpreadsheetPreview key={path} path={path} />
           ) : showUnknownAsText ? (
             <CodeFilePreview content={textContent} filePath={path ?? ""} />
           ) : showFallback || showUnknownFallback ? (

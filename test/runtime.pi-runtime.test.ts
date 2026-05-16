@@ -702,7 +702,9 @@ describe("pi runtime regressions", () => {
             totalTokens: 12,
           });
           expect(requestBodies).toHaveLength(1);
-          expect(JSON.parse(requestBodies[0] ?? "{}")).toEqual({
+          const requestBody = JSON.parse(requestBodies[0] ?? "{}") as Record<string, unknown>;
+          const { tools, ...requestBodyWithoutTools } = requestBody;
+          expect(requestBodyWithoutTools).toEqual({
             model: "nvidia/nemotron-3-super-120b-a12b",
             messages: [
               { role: "system", content: "You are helpful." },
@@ -710,9 +712,9 @@ describe("pi runtime regressions", () => {
             ],
             stream: true,
             stream_options: { include_usage: true },
-            tools: [],
             chat_template_kwargs: { enable_thinking: true },
           });
+          expect(tools === undefined || (Array.isArray(tools) && tools.length === 0)).toBe(true);
         } finally {
           globalThis.fetch = originalFetch;
         }

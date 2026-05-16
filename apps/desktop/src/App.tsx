@@ -18,7 +18,8 @@ import {
   showNotification,
   showQuickChatWindow,
 } from "./lib/desktopCommands";
-import { isCanvasSupportedFile } from "./lib/filePreviewKind";
+import { showCanvasWindow } from "./lib/desktopCommands";
+import { isCanvasSupportedFile, getFilePreviewKind } from "./lib/filePreviewKind";
 import { applyPlatformChromeToDocument } from "./lib/platformChromeDom";
 import { canPopOutQuickChatThread } from "./lib/quickChatPopout";
 import { getDesktopWindowMode } from "./lib/windowMode";
@@ -128,6 +129,13 @@ const ChatShell = memo(function ChatShell({
   const clearThreadUsageHardCap = useAppStore((s) => s.clearThreadUsageHardCap);
   const contextSidebarCollapsed = useAppStore((s) => s.contextSidebarCollapsed);
   const toggleContextSidebar = useAppStore((s) => s.toggleContextSidebar);
+  const filePreview = useAppStore((s) => s.filePreview);
+  const canvasEnabled = useAppStore((s) => s.desktopFeatureFlags?.canvas === true);
+  const closeFilePreview = useAppStore((s) => s.closeFilePreview);
+  const canvasActiveTab = useAppStore((s) => s.canvasActiveTab);
+  const setCanvasActiveTab = useAppStore((s) => s.setCanvasActiveTab);
+  const canvasShowFormattingBar = useAppStore((s) => s.canvasShowFormattingBar);
+  const setCanvasShowFormattingBar = useAppStore((s) => s.setCanvasShowFormattingBar);
   const hasAnimatedSidebarsRef = useRef(false);
   const previousSidebarStateRef = useRef({
     sidebarCollapsed,
@@ -185,7 +193,9 @@ const ChatShell = memo(function ChatShell({
       ? (pluginManagementWorkspace?.name ?? "Global")
       : effectiveView === "research"
         ? null
-        : (activeWorkspace?.name ?? "Cowork");
+        : isOneOffChatWorkspace(activeWorkspace)
+          ? null
+          : (activeWorkspace?.name ?? "Cowork");
   const canClearHardCap =
     runtime?.sessionUsage?.budgetStatus.stopTriggered === true &&
     runtime?.transcriptOnly !== true &&
@@ -194,6 +204,15 @@ const ChatShell = memo(function ChatShell({
     activeThread?.status === "active";
   const quickChatPopOutThreadId =
     activeThread && canPopOutQuickChatThread(activeThread) ? activeThread.id : null;
+  const canvasPath = filePreview?.path ?? null;
+  const showCanvasInTopBar =
+    effectiveView === "chat" &&
+    canvasEnabled &&
+    canvasPath !== null &&
+    isCanvasSupportedFile(canvasPath) &&
+    !contextSidebarCollapsed;
+  const canvasIsMarkdown =
+    canvasPath !== null && getFilePreviewKind(canvasPath) === "markdown";
   useEffect(() => {
     const sidebarStateChanged =
       previousSidebarStateRef.current.sidebarCollapsed !== sidebarCollapsed ||
@@ -256,7 +275,24 @@ const ChatShell = memo(function ChatShell({
         onClearHardCap={
           selectedThreadId ? () => clearThreadUsageHardCap(selectedThreadId) : undefined
         }
-        showContextToggle={showContextSidebar}
+        showContextToggle={showContextSidebar && !showCanvasInTopBar}
+        canvasMode={showCanvasInTopBar}
+        canvasIsMarkdown={canvasIsMarkdown}
+        canvasActiveTab={canvasActiveTab}
+        onSetCanvasActiveTab={setCanvasActiveTab}
+        canvasShowFormattingBar={canvasShowFormattingBar}
+        onToggleCanvasFormattingBar={() =>
+          setCanvasShowFormattingBar(!canvasShowFormattingBar)
+        }
+        onPopOutCanvas={
+          showCanvasInTopBar && canvasPath
+            ? () => {
+                void showCanvasWindow({ path: canvasPath }).catch(() => {});
+                closeFilePreview();
+              }
+            : undefined
+        }
+        onCloseCanvas={showCanvasInTopBar ? closeFilePreview : undefined}
       />
       <div className="app-chat-body flex min-h-0 min-w-0 flex-1 flex-row">
         <LeftSidebarPane collapsed={sidebarCollapsed} />

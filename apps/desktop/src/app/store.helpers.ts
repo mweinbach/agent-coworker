@@ -181,6 +181,8 @@ export type AppStoreState = {
 
   promptModal: PromptModalState;
   filePreview: { path: string } | null;
+  canvasActiveTab: "preview" | "edit";
+  canvasShowFormattingBar: boolean;
   notifications: Notification[];
 
   providerStatusByName: Partial<Record<ProviderName, ProviderStatus>>;
@@ -485,6 +487,8 @@ export type AppStoreState = {
 
   openFilePreview: (opts: { path: string }) => void;
   closeFilePreview: () => void;
+  setCanvasActiveTab: (tab: "preview" | "edit") => void;
+  setCanvasShowFormattingBar: (show: boolean) => void;
 
   setA2uiDockExpanded: (threadId: string, expanded: boolean) => void;
   focusA2uiSurface: (threadId: string, surfaceId: string | null) => void;

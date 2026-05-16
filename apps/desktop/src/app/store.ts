@@ -36,6 +36,8 @@ const initialState: AppStoreDataState = {
 
   promptModal: null,
   filePreview: null,
+  canvasActiveTab: "preview",
+  canvasShowFormattingBar: true,
   notifications: [],
 
   providerStatusByName: {},

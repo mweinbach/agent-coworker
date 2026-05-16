@@ -1,7 +1,6 @@
 import {
   BoldIcon,
   CheckIcon,
-  ExternalLinkIcon,
   EyeIcon,
   FileTextIcon,
   ItalicIcon,
@@ -10,12 +9,10 @@ import {
   MoreVerticalIcon,
   PenIcon,
   SparklesIcon,
-  XIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useAppStore } from "../app/store";
-import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import {
   DropdownMenu,
@@ -25,9 +22,9 @@ import {
 } from "../components/ui/dropdown-menu";
 import { Input } from "../components/ui/input";
 import { ScrollArea } from "../components/ui/scroll-area";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
+import { Tabs, TabsContent } from "../components/ui/tabs";
 import { Textarea } from "../components/ui/textarea";
-import { readFile, showCanvasWindow, writeFile } from "../lib/desktopCommands";
+import { readFile, writeFile } from "../lib/desktopCommands";
 import { getFilePreviewKind } from "../lib/filePreviewKind";
 import { cn } from "../lib/utils";
 import { getDesktopWindowMode } from "../lib/windowMode";
@@ -246,7 +243,6 @@ function cleanMarkdown(md: string): string {
 }
 
 export function Canvas({ path }: { path: string }) {
-  const closeFilePreview = useAppStore((s) => s.closeFilePreview);
   const isCanvasMode = getDesktopWindowMode() === "canvas";
   const pxClass = isCanvasMode ? "px-5" : "px-3";
   const workspaces = useAppStore((s) => s.workspaces);
@@ -262,7 +258,10 @@ export function Canvas({ path }: { path: string }) {
   );
   const sendMessage = useAppStore((s) => s.sendMessage);
 
-  const [activeTab, setActiveTab] = useState<"preview" | "edit">("preview");
+  const activeTab = useAppStore((s) => s.canvasActiveTab);
+  const setActiveTab = useAppStore((s) => s.setCanvasActiveTab);
+  const showFormattingBar = useAppStore((s) => s.canvasShowFormattingBar);
+  const setShowFormattingBar = useAppStore((s) => s.setCanvasShowFormattingBar);
   const [content, setContent] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -270,7 +269,6 @@ export function Canvas({ path }: { path: string }) {
   const [selectedText, setSelectedText] = useState<string>("");
   const [floatingCoords, setFloatingCoords] = useState<{ x: number; y: number } | null>(null);
   const [floatingPromptText, setFloatingPromptText] = useState<string>("");
-  const [showFormattingBar, setShowFormattingBar] = useState<boolean>(true);
 
   const contentRef = useRef<string>("");
   const isEditingRef = useRef<boolean>(false);
@@ -617,11 +615,6 @@ ${textToSend}`;
     }
   };
 
-  const popOutCanvas = () => {
-    void showCanvasWindow({ path }).catch(() => {});
-    closeFilePreview();
-  };
-
   const fileName = basenamePath(path);
   const isAgentBusy = threadRuntime?.busy === true;
 
@@ -647,23 +640,18 @@ ${textToSend}`;
         }}
         className="flex min-h-0 flex-1 flex-col gap-0"
       >
-        <div
-          className={cn(
-            "flex shrink-0 items-center justify-between border-b border-border/40 h-[52px] px-3 gap-3 select-none",
-            isCanvasMode ? "bg-transparent" : "bg-background",
-          )}
-          style={
-            isCanvasMode
-              ? ({
-                  height: "var(--platform-titlebar-height, 38px)",
-                  paddingLeft: "calc(var(--platform-left-native-reserve, 0px) + 12px)",
-                  paddingRight: "calc(var(--platform-right-native-reserve, 0px) + 12px)",
-                  WebkitAppRegion: "drag",
-                } as React.CSSProperties)
-              : undefined
-          }
-        >
-          {isCanvasMode ? (
+        {isCanvasMode ? (
+          <div
+            className="flex shrink-0 items-center justify-between border-b border-border/40 px-2.5 gap-2 select-none bg-transparent"
+            style={
+              {
+                height: "var(--platform-titlebar-height, 38px)",
+                paddingLeft: "calc(var(--platform-left-native-reserve, 0px) + 12px)",
+                paddingRight: "calc(var(--platform-right-native-reserve, 0px) + 12px)",
+                WebkitAppRegion: "drag",
+              } as React.CSSProperties
+            }
+          >
             <div className="flex min-w-0 items-center gap-1.5 flex-1">
               <FileTextIcon className="size-3.5 text-muted-foreground shrink-0" />
               <div className="flex min-w-0 items-center gap-1">
@@ -676,50 +664,10 @@ ${textToSend}`;
                 </span>
               </div>
               {isAgentBusy ? (
-                <Badge
-                  variant="secondary"
-                  className="gap-1 animate-pulse bg-primary/10 text-primary border-primary/20 hover:bg-primary/10 shrink-0 px-1 h-4 text-[9px]"
-                >
-                  <Loader2Icon className="size-2.5 animate-spin" />
-                </Badge>
+                <Loader2Icon className="size-2.5 animate-spin text-primary shrink-0" />
               ) : null}
             </div>
-          ) : (
-            <div className="flex min-w-0 items-center gap-2 flex-1">
-              <FileTextIcon className="size-4.5 text-muted-foreground shrink-0" />
-              <span
-                className="truncate text-sm font-semibold tracking-wide text-foreground"
-                title={fileName}
-              >
-                {fileName}
-              </span>
-              {isAgentBusy ? (
-                <Badge
-                  variant="secondary"
-                  className="gap-1 animate-pulse bg-primary/10 text-primary border-primary/20 hover:bg-primary/10 shrink-0"
-                >
-                  <Loader2Icon className="size-3 animate-spin" />
-                </Badge>
-              ) : null}
-            </div>
-          )}
 
-          {!isCanvasMode && isMarkdown && (
-            <div className="flex shrink-0 justify-center">
-              <TabsList className="grid w-[180px] grid-cols-2 bg-muted/50 p-0.5 h-8">
-                <TabsTrigger value="preview" className="text-xs py-1 gap-1.5 shadow-sm">
-                  <EyeIcon className="size-3.5" />
-                  <span>Document</span>
-                </TabsTrigger>
-                <TabsTrigger value="edit" className="text-xs py-1 gap-1.5 shadow-sm">
-                  <PenIcon className="size-3.5" />
-                  <span>Raw Source</span>
-                </TabsTrigger>
-              </TabsList>
-            </div>
-          )}
-
-          {isCanvasMode ? (
             <div
               className="flex items-center gap-1 shrink-0 flex-1 justify-end"
               style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
@@ -772,148 +720,96 @@ ${textToSend}`;
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>
-          ) : (
-            <div className="flex items-center gap-1 shrink-0 flex-1 justify-end">
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="size-8 text-muted-foreground hover:text-foreground hover:bg-muted/50"
-                    title="Formatting options"
-                  >
-                    <MoreVerticalIcon className="size-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-44 outline-none">
-                  <DropdownMenuItem
-                    onClick={() => setShowFormattingBar(!showFormattingBar)}
-                    className="flex items-center justify-between cursor-pointer"
-                  >
-                    <span className="flex items-center">
-                      <BoldIcon className="mr-2 size-3.5" />
-                      Show Styling Bar
-                    </span>
-                    {showFormattingBar && <CheckIcon className="size-3.5 text-primary" />}
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                onClick={popOutCanvas}
-                title="Open in window"
-                className="size-8 text-muted-foreground hover:text-foreground hover:bg-muted/50"
-              >
-                <ExternalLinkIcon className="size-4" />
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                onClick={closeFilePreview}
-                title="Close Canvas"
-                className="size-8 text-muted-foreground hover:text-foreground hover:bg-muted/50"
-              >
-                <XIcon className="size-4" />
-              </Button>
-            </div>
-          )}
-        </div>
+          </div>
+        ) : null}
 
         {showFormattingBar && isMarkdown && activeTab === "preview" && (
-          <div className="flex flex-wrap items-center gap-1.5 px-4 py-2 border-b border-border/40 bg-muted/20 shrink-0 select-none">
+          <div className="flex items-center gap-0.5 px-2.5 py-1 border-b border-border/40 bg-muted/15 shrink-0 select-none">
             <Button
               type="button"
-              size="xs"
               variant="ghost"
+              size="icon"
               onPointerDown={(e) => e.preventDefault()}
               onClick={() => executeCommand("bold")}
-              className="h-8 w-8 p-0"
+              className="size-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/60"
               title="Bold"
             >
-              <BoldIcon className="size-4" />
+              <BoldIcon className="size-3.5" />
             </Button>
             <Button
               type="button"
-              size="xs"
               variant="ghost"
+              size="icon"
               onPointerDown={(e) => e.preventDefault()}
               onClick={() => executeCommand("italic")}
-              className="h-8 w-8 p-0"
+              className="size-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/60"
               title="Italic"
             >
-              <ItalicIcon className="size-4" />
+              <ItalicIcon className="size-3.5" />
             </Button>
-            <div className="h-4 w-px bg-border/40 mx-1" />
+            <div className="h-4 w-px bg-border/50 mx-1" aria-hidden />
             <Button
               type="button"
-              size="xs"
               variant="ghost"
               onPointerDown={(e) => e.preventDefault()}
               onClick={() => executeCommand("formatBlock", "H1")}
-              className="h-8 px-2 font-bold text-xs"
+              className="h-7 px-1.5 rounded-md font-semibold text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted/60"
               title="Heading 1"
             >
               H1
             </Button>
             <Button
               type="button"
-              size="xs"
               variant="ghost"
               onPointerDown={(e) => e.preventDefault()}
               onClick={() => executeCommand("formatBlock", "H2")}
-              className="h-8 px-2 font-bold text-xs"
+              className="h-7 px-1.5 rounded-md font-semibold text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted/60"
               title="Heading 2"
             >
               H2
             </Button>
             <Button
               type="button"
-              size="xs"
               variant="ghost"
               onPointerDown={(e) => e.preventDefault()}
               onClick={() => executeCommand("formatBlock", "H3")}
-              className="h-8 px-2 font-bold text-xs"
+              className="h-7 px-1.5 rounded-md font-semibold text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted/60"
               title="Heading 3"
             >
               H3
             </Button>
             <Button
               type="button"
-              size="xs"
               variant="ghost"
               onPointerDown={(e) => e.preventDefault()}
               onClick={() => executeCommand("formatBlock", "P")}
-              className="h-8 px-2 text-xs"
+              className="h-7 px-1.5 rounded-md text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted/60"
               title="Normal Text"
             >
               Normal
             </Button>
-            <div className="h-4 w-px bg-border/40 mx-1" />
+            <div className="h-4 w-px bg-border/50 mx-1" aria-hidden />
             <Button
               type="button"
-              size="xs"
               variant="ghost"
+              size="icon"
               onPointerDown={(e) => e.preventDefault()}
               onClick={() => executeCommand("insertUnorderedList")}
-              className="h-8 w-8 p-0"
+              className="size-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/60"
               title="Bullet List"
             >
-              <ListIcon className="size-4" />
+              <ListIcon className="size-3.5" />
             </Button>
             <Button
               type="button"
-              size="xs"
               variant="ghost"
+              size="icon"
               onPointerDown={(e) => e.preventDefault()}
               onClick={() => executeCommand("insertOrderedList")}
-              className="h-8 w-8 p-0"
+              className="size-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/60"
               title="Numbered List"
             >
-              <span className="font-bold text-xs font-mono">1.</span>
+              <span className="font-semibold text-[10px] font-mono">1.</span>
             </Button>
           </div>
         )}

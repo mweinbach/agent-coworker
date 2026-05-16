@@ -28,6 +28,8 @@ export function createExplorerActions(
   | "trashWorkspacePath"
   | "openFilePreview"
   | "closeFilePreview"
+  | "setCanvasActiveTab"
+  | "setCanvasShowFormattingBar"
 > {
   const bumpWorkspaceExplorerRefresh = (workspaceId: string) => {
     set((state) => ({
@@ -56,6 +58,14 @@ export function createExplorerActions(
 
     closeFilePreview: () => {
       set({ filePreview: null });
+    },
+
+    setCanvasActiveTab: (tab: "preview" | "edit") => {
+      set({ canvasActiveTab: tab });
+    },
+
+    setCanvasShowFormattingBar: (show: boolean) => {
+      set({ canvasShowFormattingBar: show });
     },
 
     refreshWorkspaceFiles: async (workspaceId: string) => {

@@ -107,6 +107,11 @@ samp {
   box-shadow: none;
 }
 
+[data-slot="command-input"]:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
 .app-topbar {
   -webkit-app-region: drag;
 }

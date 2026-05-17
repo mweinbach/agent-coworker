@@ -1027,17 +1027,27 @@ function NewChatLanding() {
                   </PopoverTrigger>
                   <PopoverContent
                     align="start"
-                    className="w-[min(24rem,calc(100vw-3rem))] overflow-hidden p-0"
+                    sideOffset={8}
+                    className="w-[min(23rem,calc(100vw-3rem))] overflow-hidden rounded-xl border-border/70 bg-popover p-1 shadow-xl shadow-foreground/10"
                   >
-                    <Command>
-                      <CommandInput placeholder="Search projects" />
-                      <CommandList>
-                        <CommandEmpty>No projects found.</CommandEmpty>
-                        <CommandGroup heading="Projects">
+                    <Command className="rounded-lg bg-transparent text-[15px] [&_[data-slot=command-input-wrapper]]:h-12 [&_[data-slot=command-input-wrapper]]:rounded-t-lg [&_[data-slot=command-input-wrapper]]:border-b-border/60 [&_[data-slot=command-input-wrapper]]:bg-background/70 [&_[data-slot=command-input-wrapper]]:px-3.5 [&_[data-slot=command-input-wrapper]_svg]:opacity-60">
+                      <CommandInput
+                        placeholder="Search projects"
+                        className="h-11 text-[15px]"
+                      />
+                      <CommandList className="max-h-[20rem] py-1">
+                        <CommandEmpty className="py-8 text-sm text-muted-foreground">
+                          No projects found.
+                        </CommandEmpty>
+                        <CommandGroup
+                          heading="Projects"
+                          className="p-1.5 [&_[cmdk-group-heading]]:px-2.5 [&_[cmdk-group-heading]]:py-2 [&_[cmdk-group-heading]]:text-[0.72rem] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-[0.08em]"
+                        >
                           {projectWorkspaces.map((workspace) => (
                             <CommandItem
                               key={workspace.id}
                               value={workspace.name}
+                              className="h-10 rounded-lg px-2.5 text-[15px] data-[selected=true]:bg-muted/70"
                               onSelect={() => {
                                 setTarget({ kind: "project", workspaceId: workspace.id });
                                 setSelectorOpen(false);
@@ -1052,16 +1062,21 @@ function NewChatLanding() {
                             </CommandItem>
                           ))}
                         </CommandGroup>
-                        <CommandSeparator />
-                        <CommandGroup>
+                        <CommandSeparator className="-mx-1 my-1 bg-border/60" />
+                        <CommandGroup className="p-1.5">
                           {workspaceLifecycleEnabled ? (
-                            <CommandItem value="Add new project" onSelect={addProjectFromSelector}>
+                            <CommandItem
+                              value="Add new project"
+                              className="h-10 rounded-lg px-2.5 text-[15px] data-[selected=true]:bg-muted/70"
+                              onSelect={addProjectFromSelector}
+                            >
                               <FolderPlusIcon className="size-4" />
                               <span>Add new project</span>
                             </CommandItem>
                           ) : null}
                           <CommandItem
                             value="Don't work in a project"
+                            className="h-10 rounded-lg px-2.5 text-[15px] data-[selected=true]:bg-muted/70"
                             onSelect={() => {
                               setTarget({ kind: "oneOff" });
                               setSelectorOpen(false);

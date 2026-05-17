@@ -452,6 +452,7 @@ export function createThreadActions(
   | "deleteThreadHistory"
   | "renameThread"
   | "newThread"
+  | "openNewChatLanding"
   | "selectThread"
   | "reconnectThread"
   | "sendMessage"
@@ -913,6 +914,16 @@ export function createThreadActions(
       }
       ensureThreadSocket(get, set, threadId, url, opts?.firstMessage, hasFirstMessage);
       return true;
+    },
+
+    openNewChatLanding: async () => {
+      set({
+        selectedThreadId: null,
+        view: "chat",
+        composerText: "",
+      });
+      syncDesktopStateCache(get);
+      await persistNow(get);
     },
 
     selectThread: async (threadId: string) => {

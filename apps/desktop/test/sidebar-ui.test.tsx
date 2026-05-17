@@ -436,7 +436,7 @@ describe("desktop sidebar", () => {
     }
   });
 
-  test.serial("New Chat creates a one-off chat from the sidebar", async () => {
+  test.serial("New Chat opens the universal landing from the sidebar", async () => {
     const harness = setupSidebarJsdom();
     let root: ReturnType<typeof createRoot> | null = null;
 
@@ -466,14 +466,12 @@ describe("desktop sidebar", () => {
       });
 
       const state = useAppStore.getState();
-      const selectedWorkspace = state.workspaces.find(
-        (workspace) => workspace.id === state.selectedWorkspaceId,
-      );
-      expect(selectedWorkspace?.workspaceKind).toBe("oneOffChat");
-      expect(state.threads[0]).toMatchObject({
-        workspaceId: selectedWorkspace?.id,
-        draft: true,
-      });
+      expect(state.workspaces).toHaveLength(1);
+      expect(state.workspaces[0]?.workspaceKind).toBe("project");
+      expect(state.selectedWorkspaceId).toBe("ws-1");
+      expect(state.selectedThreadId).toBeNull();
+      expect(state.threads).toEqual([]);
+      expect(state.view).toBe("chat");
     } finally {
       if (root) {
         await act(async () => {

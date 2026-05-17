@@ -250,6 +250,7 @@ export type AppStoreState = {
     mode?: "draft" | "session";
     attachments?: import("./store.helpers/jsonRpcSocket").FileAttachmentInput[];
   }) => Promise<boolean>;
+  openNewChatLanding: () => Promise<void>;
   removeThread: (threadId: string) => Promise<void>;
   archiveThread: (threadId: string) => Promise<void>;
   restoreThread: (threadId: string) => Promise<void>;

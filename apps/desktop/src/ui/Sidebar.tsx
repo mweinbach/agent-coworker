@@ -626,6 +626,7 @@ export const Sidebar = memo(function Sidebar() {
   const selectWorkspace = useAppStore((s) => s.selectWorkspace);
   const setPluginManagementWorkspace = useAppStore((s) => s.setPluginManagementWorkspace);
   const newThread = useAppStore((s) => s.newThread);
+  const openNewChatLanding = useAppStore((s) => s.openNewChatLanding);
   const deleteThreadHistory = useAppStore((s) => s.deleteThreadHistory);
   const selectThread = useAppStore((s) => s.selectThread);
   const renameThread = useAppStore((s) => s.renameThread);
@@ -1008,7 +1009,7 @@ export const Sidebar = memo(function Sidebar() {
             variant="ghost"
             className="sidebar-lift size-6 rounded-md text-muted-foreground hover:bg-foreground/[0.045] hover:text-foreground opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-opacity duration-150"
             data-sidebar-section-action="true"
-            onClick={() => void newThread()}
+            onClick={() => void openNewChatLanding()}
             aria-label="New chat"
           >
             <PlusIcon className="h-4 w-4" />
@@ -1142,7 +1143,7 @@ export const Sidebar = memo(function Sidebar() {
                 "sidebar-lift h-8 min-w-0 flex-1 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] text-foreground/80",
                 "hover:bg-foreground/[0.045] hover:text-foreground",
               )}
-              onClick={() => void newThread()}
+              onClick={() => void openNewChatLanding()}
             >
               <SquarePenIcon className="h-4 w-4 text-muted-foreground" />
               New Chat
@@ -1158,7 +1159,7 @@ export const Sidebar = memo(function Sidebar() {
             "app-sidebar__new-chat-button sidebar-lift h-8 w-full min-w-0 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] text-foreground/80",
             "hover:bg-foreground/[0.045] hover:text-foreground",
           )}
-          onClick={() => void newThread()}
+          onClick={() => void openNewChatLanding()}
         >
           <SquarePenIcon className="h-4 w-4 text-muted-foreground" />
           New Chat

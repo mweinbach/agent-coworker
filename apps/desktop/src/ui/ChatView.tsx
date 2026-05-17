@@ -1,13 +1,17 @@
 import { defaultModelForProvider } from "@cowork/providers/catalog";
 import {
   AlertTriangleIcon,
+  CheckIcon,
+  ChevronsUpDownIcon,
+  FolderIcon,
+  FolderPlusIcon,
   LoaderCircleIcon,
   MessageSquareIcon,
   MousePointerClickIcon,
   PlusIcon,
   RotateCcwIcon,
 } from "lucide-react";
-import type { ChangeEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
+import type { ChangeEvent, FormEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
 import {
   createContext,
   memo,
@@ -33,7 +37,6 @@ import {
   extractCitationUrlsFromAnnotations,
   extractCitationUrlsFromWebSearchResult,
 } from "../../../../src/shared/displayCitationMarkers";
-import coworkIconSvg from "../../build/icon.icon/Assets/svgviewer-output.svg";
 import {
   buildAttachmentSignature,
   encodeArrayBufferToBase64,
@@ -51,7 +54,9 @@ import type {
   ThreadPendingTurnStart,
   ThreadStatus,
   TurnUsageSnapshot,
+  WorkspaceRecord,
 } from "../app/types";
+import { isOneOffChatWorkspace } from "../app/types";
 import {
   Conversation,
   ConversationContent,
@@ -74,7 +79,17 @@ import { SourcesCarousel } from "../components/ai-elements/sources-carousel";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+  CommandSeparator,
+} from "../components/ui/command";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog";
+import { Popover, PopoverContent, PopoverTrigger } from "../components/ui/popover";
 import {
   Select,
   SelectContent,
@@ -851,6 +866,231 @@ function ThreadModelIndicator({
   );
 }
 
+type NewChatTarget =
+  | {
+      kind: "project";
+      workspaceId: string;
+    }
+  | {
+      kind: "oneOff";
+    };
+
+function resolveDefaultNewChatTarget(
+  workspaces: WorkspaceRecord[],
+  selectedWorkspaceId: string | null,
+): NewChatTarget {
+  const projectWorkspaces = workspaces.filter((workspace) => !isOneOffChatWorkspace(workspace));
+  const selectedProject = projectWorkspaces.find(
+    (workspace) => workspace.id === selectedWorkspaceId,
+  );
+  if (selectedProject) {
+    return { kind: "project", workspaceId: selectedProject.id };
+  }
+  const firstProject = projectWorkspaces[0];
+  return firstProject ? { kind: "project", workspaceId: firstProject.id } : { kind: "oneOff" };
+}
+
+function NewChatLanding() {
+  const workspaces = useAppStore((s) => s.workspaces);
+  const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
+  const workspaceLifecycleEnabled = useAppStore(
+    (s) => s.desktopFeatureFlags.workspaceLifecycle !== false,
+  );
+  const composerText = useAppStore((s) => s.composerText);
+  const setComposerText = useAppStore((s) => s.setComposerText);
+  const addWorkspace = useAppStore((s) => s.addWorkspace);
+  const newThread = useAppStore((s) => s.newThread);
+  const [target, setTarget] = useState<NewChatTarget>(() =>
+    resolveDefaultNewChatTarget(workspaces, selectedWorkspaceId),
+  );
+  const [selectorOpen, setSelectorOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const projectWorkspaces = useMemo(
+    () => workspaces.filter((workspace) => !isOneOffChatWorkspace(workspace)),
+    [workspaces],
+  );
+  const targetWorkspace =
+    target.kind === "project"
+      ? (projectWorkspaces.find((workspace) => workspace.id === target.workspaceId) ?? null)
+      : null;
+  const targetLabel = targetWorkspace?.name ?? "Don't work in a project";
+  const trimmedComposerText = composerText.trim();
+
+  useEffect(() => {
+    setTarget((current) => {
+      if (current.kind === "oneOff") {
+        return current;
+      }
+      if (projectWorkspaces.some((workspace) => workspace.id === current.workspaceId)) {
+        return current;
+      }
+      return resolveDefaultNewChatTarget(workspaces, selectedWorkspaceId);
+    });
+  }, [projectWorkspaces, selectedWorkspaceId, workspaces]);
+
+  useEffect(() => {
+    textareaRef.current?.focus();
+  }, []);
+
+  const submitNewChat = useCallback(
+    async (event?: FormEvent<HTMLFormElement>) => {
+      event?.preventDefault();
+      if (!trimmedComposerText || submitting) {
+        return;
+      }
+
+      setSubmitting(true);
+      const ok =
+        target.kind === "project"
+          ? await newThread({
+              scope: "project",
+              workspaceId: target.workspaceId,
+              firstMessage: trimmedComposerText,
+              titleHint: trimmedComposerText,
+              mode: "session",
+            })
+          : await newThread({
+              scope: "oneOff",
+              firstMessage: trimmedComposerText,
+              titleHint: trimmedComposerText,
+              mode: "session",
+            });
+      if (!ok) {
+        setSubmitting(false);
+      }
+    },
+    [newThread, submitting, target, trimmedComposerText],
+  );
+
+  const addProjectFromSelector = useCallback(async () => {
+    setSelectorOpen(false);
+    await addWorkspace();
+    const state = useAppStore.getState();
+    const selectedProject = state.workspaces.find(
+      (workspace) =>
+        workspace.id === state.selectedWorkspaceId && !isOneOffChatWorkspace(workspace),
+    );
+    if (selectedProject) {
+      setTarget({ kind: "project", workspaceId: selectedProject.id });
+    }
+  }, [addWorkspace]);
+
+  return (
+    <div className="flex h-full min-h-0 flex-col items-center justify-center bg-panel px-5 py-10">
+      <div className="flex w-full max-w-[56rem] -translate-y-8 flex-col items-center gap-7">
+        <h1 className="text-center text-[2rem] font-semibold text-foreground sm:text-[2.55rem]">
+          What should we work on?
+        </h1>
+        <PromptInputRoot className="w-full max-w-full rounded-[22px] border-border/50 bg-background/92 app-shadow-overlay backdrop-blur-md">
+          <PromptInputForm onSubmit={submitNewChat}>
+            <PromptInputStatusRow>
+              {submitting ? "Starting a new chat..." : null}
+            </PromptInputStatusRow>
+            <PromptInputBody>
+              <PromptInputTextarea
+                ref={textareaRef}
+                value={composerText}
+                disabled={submitting}
+                placeholder="Message Cowork..."
+                onChange={(event) => setComposerText(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    void submitNewChat();
+                  }
+                }}
+                aria-label="New chat message"
+              />
+            </PromptInputBody>
+            <PromptInputFooter className="gap-3 pt-1">
+              <PromptInputTools className="gap-2">
+                <Popover open={selectorOpen} onOpenChange={setSelectorOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 min-w-0 max-w-full gap-1.5 rounded-md px-2 text-sm font-medium text-muted-foreground/90 hover:bg-muted/35 hover:text-foreground"
+                      aria-label="Select chat target"
+                      disabled={submitting}
+                    >
+                      {target.kind === "project" ? (
+                        <FolderIcon className="size-4 shrink-0" />
+                      ) : (
+                        <MessageSquareIcon className="size-4 shrink-0" />
+                      )}
+                      <span className="truncate">{targetLabel}</span>
+                      <ChevronsUpDownIcon className="size-3.5 shrink-0 opacity-70" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent
+                    align="start"
+                    className="w-[min(24rem,calc(100vw-3rem))] overflow-hidden p-0"
+                  >
+                    <Command>
+                      <CommandInput placeholder="Search projects" />
+                      <CommandList>
+                        <CommandEmpty>No projects found.</CommandEmpty>
+                        <CommandGroup heading="Projects">
+                          {projectWorkspaces.map((workspace) => (
+                            <CommandItem
+                              key={workspace.id}
+                              value={workspace.name}
+                              onSelect={() => {
+                                setTarget({ kind: "project", workspaceId: workspace.id });
+                                setSelectorOpen(false);
+                              }}
+                            >
+                              <FolderIcon className="size-4" />
+                              <span className="truncate">{workspace.name}</span>
+                              {target.kind === "project" &&
+                              target.workspaceId === workspace.id ? (
+                                <CheckIcon className="ml-auto size-4 text-primary" />
+                              ) : null}
+                            </CommandItem>
+                          ))}
+                        </CommandGroup>
+                        <CommandSeparator />
+                        <CommandGroup>
+                          {workspaceLifecycleEnabled ? (
+                            <CommandItem value="Add new project" onSelect={addProjectFromSelector}>
+                              <FolderPlusIcon className="size-4" />
+                              <span>Add new project</span>
+                            </CommandItem>
+                          ) : null}
+                          <CommandItem
+                            value="Don't work in a project"
+                            onSelect={() => {
+                              setTarget({ kind: "oneOff" });
+                              setSelectorOpen(false);
+                            }}
+                          >
+                            <MessageSquareIcon className="size-4" />
+                            <span>Don't work in a project</span>
+                            {target.kind === "oneOff" ? (
+                              <CheckIcon className="ml-auto size-4 text-primary" />
+                            ) : null}
+                          </CommandItem>
+                        </CommandGroup>
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
+              </PromptInputTools>
+              <PromptInputSubmit
+                status={submitting ? "pending" : "ready"}
+                disabled={!trimmedComposerText || submitting}
+              />
+            </PromptInputFooter>
+          </PromptInputForm>
+        </PromptInputRoot>
+      </div>
+    </div>
+  );
+}
+
 export function ChatView() {
   const bootstrapPending = useAppStore((s) => s.bootstrapPending);
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
@@ -889,7 +1129,6 @@ export function ChatView() {
   const sendMessage = useAppStore((s) => s.sendMessage);
   const cancelThread = useAppStore((s) => s.cancelThread);
   const reconnectThread = useAppStore((s) => s.reconnectThread);
-  const newThread = useAppStore((s) => s.newThread);
 
   const feedRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -1393,25 +1632,7 @@ export function ChatView() {
   );
 
   if (!selectedThreadId || !thread) {
-    return (
-      <div className="flex h-full items-center justify-center px-6">
-        <div className="flex -translate-y-10 flex-col items-center justify-center gap-3.5 text-center">
-          <img
-            src={coworkIconSvg}
-            alt=""
-            aria-hidden="true"
-            className="h-24 w-24 select-none object-contain opacity-95"
-          />
-          <h2 className="text-[2rem] font-semibold tracking-tight">Let&apos;s build</h2>
-          <p className="max-w-xl text-sm text-muted-foreground">
-            Pick a workspace and start a new thread.
-          </p>
-          <Button type="button" onClick={() => void newThread()}>
-            New thread
-          </Button>
-        </div>
-      </div>
-    );
+    return <NewChatLanding />;
   }
 
   const busy = rt?.busy === true;

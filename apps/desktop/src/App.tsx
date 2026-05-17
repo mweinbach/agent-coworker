@@ -125,7 +125,7 @@ const ChatShell = memo(function ChatShell({
   const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed);
   const sidebarWidth = useAppStore((s) => s.sidebarWidth);
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
-  const newThread = useAppStore((s) => s.newThread);
+  const openNewChatLanding = useAppStore((s) => s.openNewChatLanding);
   const clearThreadUsageHardCap = useAppStore((s) => s.clearThreadUsageHardCap);
   const contextSidebarCollapsed = useAppStore((s) => s.contextSidebarCollapsed);
   const toggleContextSidebar = useAppStore((s) => s.toggleContextSidebar);
@@ -244,7 +244,7 @@ const ChatShell = memo(function ChatShell({
       <AppTopBar
         busy={effectiveView === "chat" ? busy : false}
         onToggleSidebar={toggleSidebar}
-        onNewChat={() => void newThread()}
+        onNewChat={() => void openNewChatLanding()}
         sidebarCollapsed={sidebarCollapsed}
         sidebarWidth={sidebarWidth}
         contextSidebarCollapsed={contextSidebarCollapsed}
@@ -258,6 +258,7 @@ const ChatShell = memo(function ChatShell({
         subtitle={topBarSubtitle}
         managementMode={effectiveView === "skills" ? "plugins" : "thread"}
         suppressThreadDetails={effectiveView === "research"}
+        hideThreadShell={effectiveView === "chat" && activeThread === null}
         managementWorkspaceId={pluginSelection.displayWorkspaceId}
         managementWorkspaces={projectWorkspaces.map((workspace) => ({
           id: workspace.id,
@@ -404,7 +405,7 @@ export default function App() {
     function handleMenuCommand(command: DesktopMenuCommand): void {
       const state = useAppStore.getState();
       if (command === "newThread") {
-        void state.newThread();
+        void state.openNewChatLanding();
         return;
       }
       if (command === "toggleSidebar") {

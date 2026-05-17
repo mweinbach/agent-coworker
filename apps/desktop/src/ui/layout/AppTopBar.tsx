@@ -51,6 +51,7 @@ interface AppTopBarProps {
   showContextToggle?: boolean;
   managementMode?: "thread" | "plugins";
   suppressThreadDetails?: boolean;
+  hideThreadShell?: boolean;
   managementWorkspaceId?: string | null;
   managementWorkspaces?: Array<{ id: string; name: string }>;
   onSelectManagementWorkspace?: (workspaceId: string | null) => void;
@@ -88,6 +89,7 @@ export function AppTopBar({
   showContextToggle = true,
   managementMode = "thread",
   suppressThreadDetails = false,
+  hideThreadShell = false,
   managementWorkspaceId = null,
   managementWorkspaces = [],
   onSelectManagementWorkspace,
@@ -259,7 +261,7 @@ export function AppTopBar({
         className="app-topbar__thread-shell absolute inset-y-0 flex min-w-0 items-center"
         style={{ left: titleOffset, right: titleRightInset }}
       >
-        {managementMode === "plugins" ? (
+        {hideThreadShell ? null : managementMode === "plugins" ? (
           <div
             className={cn(
               "app-topbar__thread-anchor relative flex min-w-0 items-center",

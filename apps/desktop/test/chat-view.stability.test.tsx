@@ -131,6 +131,8 @@ describe("desktop chat view stability", () => {
           lastOpenedAt: "2026-03-12T00:00:00.000Z",
           defaultEnableMcp: true,
           defaultBackupsEnabled: true,
+          defaultProvider: "openai",
+          defaultModel: "gpt-5.4",
           yolo: false,
         },
       ],
@@ -154,6 +156,7 @@ describe("desktop chat view stability", () => {
       expect(container.textContent).toContain("Workspace 1");
       expect(container.textContent).not.toContain("Let's build");
       expect(container.textContent).not.toContain("New thread");
+      expect(container.querySelector('[data-slot="select-trigger"]')).not.toBeNull();
     } finally {
       if (root) {
         await act(async () => {
@@ -211,6 +214,10 @@ describe("desktop chat view stability", () => {
         draft: false,
       });
       expect(state.selectedThreadId).toBe(state.threads[0]?.id);
+      expect(state.threadRuntimeById[state.threads[0]?.id ?? ""]?.draftComposerProvider).toBe(
+        "google",
+      );
+      expect(state.threadRuntimeById[state.threads[0]?.id ?? ""]?.draftComposerModel).toBeTruthy();
     } finally {
       if (root) {
         await act(async () => {
@@ -278,6 +285,12 @@ describe("desktop chat view stability", () => {
         draft: false,
       });
       expect(state.selectedThreadId).toBe(state.threads[0]?.id);
+      expect(state.threadRuntimeById[state.threads[0]?.id ?? ""]?.draftComposerProvider).toBe(
+        "openai",
+      );
+      expect(state.threadRuntimeById[state.threads[0]?.id ?? ""]?.draftComposerModel).toBe(
+        "gpt-5.4",
+      );
     } finally {
       if (root) {
         await act(async () => {

@@ -249,6 +249,8 @@ export type AppStoreState = {
     firstMessage?: string;
     mode?: "draft" | "session";
     attachments?: import("./store.helpers/jsonRpcSocket").FileAttachmentInput[];
+    provider?: ProviderName;
+    model?: string;
   }) => Promise<boolean>;
   openNewChatLanding: () => Promise<void>;
   removeThread: (threadId: string) => Promise<void>;

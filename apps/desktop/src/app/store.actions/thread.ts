@@ -895,7 +895,12 @@ export function createThreadActions(
       set((s) => ({
         threadRuntimeById: {
           ...s.threadRuntimeById,
-          [threadId]: { ...s.threadRuntimeById[threadId], transcriptOnly: false },
+          [threadId]: {
+            ...s.threadRuntimeById[threadId],
+            transcriptOnly: false,
+            draftComposerProvider: opts?.provider ?? null,
+            draftComposerModel: opts?.model?.trim() || null,
+          },
         },
       }));
       await persistNow(get);

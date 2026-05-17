@@ -722,20 +722,24 @@ function isChatProviderName(value: unknown): value is ProviderName {
   return typeof value === "string" && (PROVIDER_NAMES as readonly string[]).includes(value);
 }
 
-function DraftThreadModelSelector({
-  threadId,
+type ComposerModelSelection = {
+  provider: ProviderName;
+  model: string;
+};
+
+function ComposerModelSelector({
   provider,
   model,
   modelDisplayNames,
   disabled,
+  onChange,
 }: {
-  threadId: string;
   provider: ProviderName;
   model: string;
   modelDisplayNames: Record<ProviderName, Record<string, string>>;
   disabled?: boolean;
+  onChange: (selection: ComposerModelSelection) => void;
 }) {
-  const setThreadModel = useAppStore((s) => s.setThreadModel);
   const providerCatalog = useAppStore((s) => s.providerCatalog);
   const providerConnected = useAppStore((s) => s.providerConnected);
   const providerUiState = useAppStore((s) => s.providerUiState);
@@ -778,13 +782,13 @@ function DraftThreadModelSelector({
               : null;
           const normalized = customModel?.trim();
           if (normalized) {
-            setThreadModel(threadId, "bedrock", normalized);
+            onChange({ provider: "bedrock", model: normalized });
           }
           return;
         }
         const parsed = decodeProviderModelSelection(val);
         if (!parsed) return;
-        setThreadModel(threadId, parsed.provider, parsed.modelId);
+        onChange({ provider: parsed.provider, model: parsed.modelId });
       }}
     >
       <SelectTrigger
@@ -834,6 +838,32 @@ function DraftThreadModelSelector({
         ))}
       </SelectContent>
     </Select>
+  );
+}
+
+function DraftThreadModelSelector({
+  threadId,
+  provider,
+  model,
+  modelDisplayNames,
+  disabled,
+}: {
+  threadId: string;
+  provider: ProviderName;
+  model: string;
+  modelDisplayNames: Record<ProviderName, Record<string, string>>;
+  disabled?: boolean;
+}) {
+  const setThreadModel = useAppStore((s) => s.setThreadModel);
+
+  return (
+    <ComposerModelSelector
+      provider={provider}
+      model={model}
+      modelDisplayNames={modelDisplayNames}
+      disabled={disabled}
+      onChange={(selection) => setThreadModel(threadId, selection.provider, selection.model)}
+    />
   );
 }
 
@@ -890,9 +920,21 @@ function resolveDefaultNewChatTarget(
   return firstProject ? { kind: "project", workspaceId: firstProject.id } : { kind: "oneOff" };
 }
 
+function resolveDefaultNewChatModel(workspace: WorkspaceRecord | null): ComposerModelSelection {
+  const provider =
+    workspace?.defaultProvider && isChatProviderName(workspace.defaultProvider)
+      ? workspace.defaultProvider
+      : "google";
+  return {
+    provider,
+    model: workspace?.defaultModel?.trim() || defaultModelForProvider(provider) || "",
+  };
+}
+
 function NewChatLanding() {
   const workspaces = useAppStore((s) => s.workspaces);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
+  const providerCatalog = useAppStore((s) => s.providerCatalog);
   const workspaceLifecycleEnabled = useAppStore(
     (s) => s.desktopFeatureFlags.workspaceLifecycle !== false,
   );
@@ -905,6 +947,7 @@ function NewChatLanding() {
   );
   const [selectorOpen, setSelectorOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [modelTouched, setModelTouched] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   const projectWorkspaces = useMemo(
@@ -915,8 +958,22 @@ function NewChatLanding() {
     target.kind === "project"
       ? (projectWorkspaces.find((workspace) => workspace.id === target.workspaceId) ?? null)
       : null;
+  const selectedProjectWorkspace =
+    projectWorkspaces.find((workspace) => workspace.id === selectedWorkspaceId) ?? null;
+  const fallbackModelWorkspace =
+    targetWorkspace ?? selectedProjectWorkspace ?? projectWorkspaces[0] ?? null;
   const targetLabel = targetWorkspace?.name ?? "Don't work in a project";
   const trimmedComposerText = composerText.trim();
+  const modelDisplayNames = useMemo(
+    () => modelDisplayNamesFromCatalog(providerCatalog),
+    [providerCatalog],
+  );
+  const defaultModelSelection = useMemo(
+    () => resolveDefaultNewChatModel(fallbackModelWorkspace),
+    [fallbackModelWorkspace],
+  );
+  const [modelSelection, setModelSelection] =
+    useState<ComposerModelSelection>(defaultModelSelection);
 
   useEffect(() => {
     setTarget((current) => {
@@ -929,6 +986,12 @@ function NewChatLanding() {
       return resolveDefaultNewChatTarget(workspaces, selectedWorkspaceId);
     });
   }, [projectWorkspaces, selectedWorkspaceId, workspaces]);
+
+  useEffect(() => {
+    if (!modelTouched) {
+      setModelSelection(defaultModelSelection);
+    }
+  }, [defaultModelSelection, modelTouched]);
 
   useEffect(() => {
     textareaRef.current?.focus();
@@ -950,18 +1013,22 @@ function NewChatLanding() {
               firstMessage: trimmedComposerText,
               titleHint: trimmedComposerText,
               mode: "session",
+              provider: modelSelection.provider,
+              model: modelSelection.model,
             })
           : await newThread({
               scope: "oneOff",
               firstMessage: trimmedComposerText,
               titleHint: trimmedComposerText,
               mode: "session",
+              provider: modelSelection.provider,
+              model: modelSelection.model,
             });
       if (!ok) {
         setSubmitting(false);
       }
     },
-    [newThread, submitting, target, trimmedComposerText],
+    [modelSelection, newThread, submitting, target, trimmedComposerText],
   );
 
   const addProjectFromSelector = useCallback(async () => {
@@ -1093,6 +1160,18 @@ function NewChatLanding() {
                     </Command>
                   </PopoverContent>
                 </Popover>
+                {modelSelection.model ? (
+                  <ComposerModelSelector
+                    provider={modelSelection.provider}
+                    model={modelSelection.model}
+                    modelDisplayNames={modelDisplayNames}
+                    disabled={submitting}
+                    onChange={(selection) => {
+                      setModelTouched(true);
+                      setModelSelection(selection);
+                    }}
+                  />
+                ) : null}
               </PromptInputTools>
               <PromptInputSubmit
                 status={submitting ? "pending" : "ready"}

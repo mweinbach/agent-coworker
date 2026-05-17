@@ -329,6 +329,7 @@ export class SessionRegistry {
             }
           : undefined,
       sessionDb: this.options.sessionDb,
+      toolEnv: this.options.env,
       emit,
       createAgentSessionImpl: async (agentOpts) => await this.getAgentControl().spawn(agentOpts),
       listAgentSessionsImpl: async (parentSessionId) =>

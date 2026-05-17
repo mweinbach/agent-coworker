@@ -855,6 +855,10 @@ export class ResearchService {
           planPending: true,
         });
       }
+      const cleanupAfterTerminalEvent = this.shouldCleanupTerminalState(state.record);
+      if (cleanupAfterTerminalEvent) {
+        await this.clearTerminalFileSearchStore(state);
+      }
       await this.flushPersistNow(state);
       this.broadcast(state, "research/updated", { research: state.record }, eventId);
       if (state.record.status === "completed") {
@@ -879,7 +883,7 @@ export class ResearchService {
           eventId,
         );
       }
-      if (this.shouldCleanupTerminalState(state.record)) {
+      if (cleanupAfterTerminalEvent) {
         await this.cleanupTerminalState(state);
       }
       return;
@@ -1323,22 +1327,7 @@ export class ResearchService {
     if (this.states.get(state.record.id) !== state) {
       return;
     }
-    const fileSearchStoreName = state.record.inputs.fileSearchStoreName;
-    if (fileSearchStoreName) {
-      try {
-        await this.fileStore.deleteResearchStore(this.resolveGoogleApiKey(), fileSearchStoreName);
-      } catch {
-        // Remote store deletion is best effort; local terminal cleanup must still complete.
-      }
-    }
-    if (fileSearchStoreName) {
-      state.record = {
-        ...state.record,
-        inputs: {
-          ...state.record.inputs,
-          fileSearchStoreName: undefined,
-        },
-      };
+    if (await this.clearTerminalFileSearchStore(state)) {
       try {
         await this.sessionDb.upsertResearch(state.record);
       } catch {
@@ -1354,6 +1343,26 @@ export class ResearchService {
     if (this.states.get(state.record.id) === state) {
       this.states.delete(state.record.id);
     }
+  }
+
+  private async clearTerminalFileSearchStore(state: ResearchRuntimeState): Promise<boolean> {
+    const fileSearchStoreName = state.record.inputs.fileSearchStoreName;
+    if (!fileSearchStoreName) {
+      return false;
+    }
+    try {
+      await this.fileStore.deleteResearchStore(this.resolveGoogleApiKey(), fileSearchStoreName);
+    } catch {
+      // Remote store deletion is best effort; local terminal cleanup must still complete.
+    }
+    state.record = {
+      ...state.record,
+      inputs: {
+        ...state.record.inputs,
+        fileSearchStoreName: undefined,
+      },
+    };
+    return true;
   }
 
   private schedulePersist(state: ResearchRuntimeState): void {

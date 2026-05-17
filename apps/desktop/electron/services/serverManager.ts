@@ -157,6 +157,20 @@ function findBundledCodexAppServerPath(): string | null {
   return null;
 }
 
+function findBundledCodexPrimaryRuntimeDir(): string | null {
+  const fromEnv = process.env.COWORK_BUNDLED_CODEX_PRIMARY_RUNTIME_DIR;
+  if (fromEnv && fs.existsSync(fromEnv)) {
+    return fromEnv;
+  }
+
+  const builtInDist = resolvePackagedBuiltinDistDir();
+  if (!builtInDist) {
+    return null;
+  }
+  const candidate = path.join(builtInDist, "codex-primary-runtime");
+  return fs.existsSync(candidate) ? candidate : null;
+}
+
 function waitForExit(child: ServerChildProcess, timeoutMs: number): Promise<boolean> {
   if (child.exitCode !== null || child.signalCode !== null) {
     return Promise.resolve(true);
@@ -319,11 +333,15 @@ function buildServerEnv(featureFlags?: { openAiNativeConnectors?: boolean }): No
   const bundledCodexAppServer = process.env.COWORK_CODEX_APP_SERVER_COMMAND
     ? null
     : findBundledCodexAppServerPath();
+  const bundledCodexPrimaryRuntime = findBundledCodexPrimaryRuntimeDir();
   return {
     ...process.env,
     COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: process.env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP ?? "1",
     ...(bundledCodexAppServer
       ? { COWORK_CODEX_APP_SERVER_COMMAND: bundledCodexAppServer, COWORK_CODEX_APP_SERVER_ARGS: "" }
+      : {}),
+    ...(bundledCodexPrimaryRuntime
+      ? { COWORK_BUNDLED_CODEX_PRIMARY_RUNTIME_DIR: bundledCodexPrimaryRuntime }
       : {}),
     ...(featureFlags?.openAiNativeConnectors
       ? { COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS: "1" }

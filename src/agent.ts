@@ -101,6 +101,9 @@ export interface RunTurnParams {
   /** Session cost tracker instance, if available. */
   costTracker?: SessionCostTracker;
 
+  /** Environment variables inherited by child processes launched from tools. */
+  toolEnv?: Record<string, string | undefined>;
+
   /** Persist/emit session usage when a tool mutates budget thresholds mid-turn. */
   onSessionUsageBudgetUpdated?: (snapshot: SessionUsageSnapshot) => void;
 
@@ -326,6 +329,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       shellPolicy: params.shellPolicy ?? getAgentRoleShellPolicy(params.agentRole),
       agentControl: params.agentControl,
       costTracker: params.costTracker,
+      toolEnv: params.toolEnv,
       onSessionUsageBudgetUpdated: params.onSessionUsageBudgetUpdated,
       applyA2uiEnvelope: params.applyA2uiEnvelope,
     };

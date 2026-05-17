@@ -13,6 +13,10 @@ extraResources:
     to: dist/prompts
   - from: ../../dist/config
     to: dist/config
+  - from: ../../dist/skills
+    to: dist/skills
+  - from: ../../dist/codex-primary-runtime
+    to: dist/codex-primary-runtime
   - from: build/icon.png
     to: tray/icon.png
   - from: build/icon.ico

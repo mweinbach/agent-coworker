@@ -30,7 +30,13 @@ type ExecResult = { stdout: string; stderr: string; exitCode: number; errorCode?
 type ExecRunner = (
   file: string,
   args: string[],
-  opts: { cwd: string; maxBuffer: number; signal?: AbortSignal; timeoutMs?: number },
+  opts: {
+    cwd: string;
+    maxBuffer: number;
+    signal?: AbortSignal;
+    timeoutMs?: number;
+    env?: Record<string, string | undefined>;
+  },
 ) => Promise<ExecResult>;
 
 const abortByNameSchema = z.object({ name: z.literal("AbortError") }).passthrough();
@@ -39,7 +45,13 @@ const errorCodeSchema = z.object({ code: z.union([z.string(), z.number()]) }).pa
 function execFileAsync(
   file: string,
   args: string[],
-  opts: { cwd: string; maxBuffer: number; signal?: AbortSignal; timeoutMs?: number },
+  opts: {
+    cwd: string;
+    maxBuffer: number;
+    signal?: AbortSignal;
+    timeoutMs?: number;
+    env?: Record<string, string | undefined>;
+  },
 ): Promise<ExecResult> {
   return new Promise((resolve) => {
     let timedOut = false;
@@ -50,6 +62,7 @@ function execFileAsync(
         cwd: opts.cwd,
         maxBuffer: opts.maxBuffer,
         windowsHide: true,
+        ...(opts.env ? { env: opts.env } : {}),
         ...(opts.timeoutMs ? { timeout: opts.timeoutMs, killSignal: "SIGTERM" } : {}),
         ...(opts.signal ? { signal: opts.signal } : {}),
       },
@@ -108,6 +121,7 @@ async function runShellCommand(opts: {
   cwd: string;
   abortSignal?: AbortSignal;
   timeoutMs?: number;
+  env?: Record<string, string | undefined>;
 }): Promise<ExecResult> {
   return await runShellCommandWithExec({
     ...opts,
@@ -122,6 +136,7 @@ let runShellCommandOverrideForTests:
       cwd: string;
       abortSignal?: AbortSignal;
       timeoutMs?: number;
+      env?: Record<string, string | undefined>;
     }) => Promise<ExecResult>)
   | null = null;
 
@@ -157,6 +172,7 @@ async function runShellCommandWithExec(opts: {
   cwd: string;
   abortSignal?: AbortSignal;
   timeoutMs?: number;
+  env?: Record<string, string | undefined>;
   platform: NodeJS.Platform;
   execRunner: ExecRunner;
 }): Promise<ExecResult> {
@@ -169,6 +185,7 @@ async function runShellCommandWithExec(opts: {
       maxBuffer,
       signal: opts.abortSignal,
       timeoutMs: opts.timeoutMs,
+      env: opts.env,
     });
     if (result.errorCode !== "ENOENT") return result;
   }
@@ -260,6 +277,7 @@ export function createBashTool(ctx: ToolContext) {
           cwd: ctx.config.workingDirectory,
           abortSignal: ctx.abortSignal,
           timeoutMs,
+          env: ctx.toolEnv,
         }).then(({ stdout, stderr, exitCode }) => {
           const res = {
             stdout: String(stdout ?? ""),
@@ -289,6 +307,7 @@ export const __internal = {
       cwd: string;
       abortSignal?: AbortSignal;
       timeoutMs?: number;
+      env?: Record<string, string | undefined>;
     }) => Promise<ExecResult>,
   ) {
     runShellCommandOverrideForTests = runner;

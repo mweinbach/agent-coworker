@@ -186,6 +186,7 @@ export type SessionDependencies = {
   persistProjectConfigPatchImpl?: (patch: PersistedProjectConfigPatch) => Promise<void> | void;
   generateSessionTitleImpl: typeof generateSessionTitle;
   sessionDb: SessionDb | null;
+  toolEnv?: Record<string, string | undefined>;
   writePersistedSessionSnapshotImpl: typeof writePersistedSessionSnapshot;
   createAgentSessionImpl?: (
     opts: AgentSpawnContextOptions & {

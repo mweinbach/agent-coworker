@@ -559,6 +559,18 @@ describe("bash tool", () => {
     expect(res.exitCode).toBe(0);
   });
 
+  test("passes tool environment into shell execution", async () => {
+    const dir = await tmpDir();
+    let observedEnv: Record<string, string | undefined> | undefined;
+    bashInternal.setRunShellCommandForTests(async (opts) => {
+      observedEnv = opts.env;
+      return { stdout: "ok\n", stderr: "", exitCode: 0 };
+    });
+    const t: any = createBashTool(makeCtx(dir, { toolEnv: { COWORK_TEST_ENV: "present" } }));
+    await t.execute({ command: "echo ok" });
+    expect(observedEnv?.COWORK_TEST_ENV).toBe("present");
+  });
+
   test("returns exit code on failure", async () => {
     const dir = await tmpDir();
     const t: any = createBashTool(makeCtx(dir));

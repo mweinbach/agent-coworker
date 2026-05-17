@@ -1,6 +1,7 @@
 interface:
-  display_name: "Spreadsheet Skill"
-  short_description: "Create, edit, and analyze spreadsheets"
-  icon_small: "./assets/spreadsheet-small.svg"
-  icon_large: "./assets/spreadsheet.png"
-  default_prompt: "Use $spreadsheet to create or update a spreadsheet for this task with the right formulas, structure, and formatting."
+  display_name: "Spreadsheets"
+  short_description: "Create and edit spreadsheet or Google Sheets-ready files"
+  icon_small: "./assets/file-spreadsheet.png"
+  icon_large: "./assets/file-spreadsheet.png"
+  brand_color: "#107C41"
+  default_prompt: "Use $Spreadsheets to build or update a spreadsheet artifact with formulas, formatting, and verification."

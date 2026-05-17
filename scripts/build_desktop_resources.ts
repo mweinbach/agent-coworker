@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 import {
@@ -20,7 +21,7 @@ import {
   runCommand,
 } from "./releaseBuildUtils";
 
-const CACHE_VERSION = 2;
+const CACHE_VERSION = 3;
 
 type DesktopResourcesCache = {
   version: number;
@@ -31,6 +32,8 @@ type DesktopResourcesCache = {
   codexAppServerVersion: string | null;
   promptsFingerprint: string;
   configFingerprint: string;
+  skillsFingerprint: string;
+  codexPrimaryRuntimeFingerprint: string | null;
   docsFingerprint: string | null;
 };
 
@@ -89,6 +92,9 @@ async function loadCache(cachePath: string): Promise<DesktopResourcesCache | nul
       (parsed.codexAppServerVersion !== null && typeof parsed.codexAppServerVersion !== "string") ||
       typeof parsed.promptsFingerprint !== "string" ||
       typeof parsed.configFingerprint !== "string" ||
+      typeof parsed.skillsFingerprint !== "string" ||
+      (parsed.codexPrimaryRuntimeFingerprint !== null &&
+        typeof parsed.codexPrimaryRuntimeFingerprint !== "string") ||
       (parsed.docsFingerprint !== null && typeof parsed.docsFingerprint !== "string")
     ) {
       return null;
@@ -108,6 +114,31 @@ function normalizeCodexAppServerVersionOverride(version: string | undefined): st
     return null;
   }
   return version.startsWith("rust-v") ? version.slice("rust-v".length) : version;
+}
+
+async function resolveCodexPrimaryRuntimeSource(): Promise<string | null> {
+  const fromEnv = process.env.COWORK_CODEX_PRIMARY_RUNTIME_DIR?.trim();
+  if (fromEnv) {
+    const resolved = path.resolve(fromEnv);
+    if (!(await pathExists(path.join(resolved, "runtime.json")))) {
+      throw new Error(
+        `COWORK_CODEX_PRIMARY_RUNTIME_DIR does not contain runtime.json: ${resolved}`,
+      );
+    }
+    return resolved;
+  }
+
+  const defaultRuntimeDir = path.join(
+    os.homedir(),
+    ".cache",
+    "codex-runtimes",
+    "codex-primary-runtime",
+  );
+  if (await pathExists(path.join(defaultRuntimeDir, "runtime.json"))) {
+    return defaultRuntimeDir;
+  }
+
+  return null;
 }
 
 async function syncCopiedDir(opts: {
@@ -135,6 +166,7 @@ async function main() {
   const root = path.resolve(import.meta.dirname, "..");
   const distDir = path.join(root, "dist");
   const includeDocs = process.env.COWORK_BUNDLE_DESKTOP_DOCS === "1";
+  const shouldBundleCodexPrimaryRuntime = process.env.COWORK_BUNDLE_CODEX_PRIMARY_RUNTIME === "1";
   const codexAppServerVersionOverride =
     process.env.COWORK_CODEX_APP_SERVER_VERSION?.trim() || undefined;
   const shouldBundleCodexAppServer = process.env.COWORK_BUNDLE_CODEX_APP_SERVER === "1";
@@ -158,9 +190,22 @@ async function main() {
   ];
   const promptsSrc = path.join(root, "prompts");
   const configSrc = path.join(root, "config");
+  const skillsSrc = path.join(root, "skills");
   const docsSrc = path.join(root, "docs");
+  const codexPrimaryRuntimeSource = shouldBundleCodexPrimaryRuntime
+    ? await resolveCodexPrimaryRuntimeSource()
+    : null;
+  if (shouldBundleCodexPrimaryRuntime && !codexPrimaryRuntimeSource) {
+    throw new Error(
+      "COWORK_BUNDLE_CODEX_PRIMARY_RUNTIME=1 but no Codex primary runtime cache was found. Set COWORK_CODEX_PRIMARY_RUNTIME_DIR or run the Codex runtime setup first.",
+    );
+  }
   const promptsFingerprint = await fingerprintInputs([promptsSrc], root);
   const configFingerprint = await fingerprintInputs([configSrc], root);
+  const skillsFingerprint = await fingerprintInputs([skillsSrc], root);
+  const codexPrimaryRuntimeFingerprint = codexPrimaryRuntimeSource
+    ? await fingerprintInputs([codexPrimaryRuntimeSource], codexPrimaryRuntimeSource)
+    : null;
   const docsFingerprint = includeDocs ? await fingerprintInputs([docsSrc], root) : null;
   const sidecarFingerprint = await fingerprintInputs(sidecarInputs, root);
 
@@ -290,7 +335,8 @@ async function main() {
 
   const promptsDest = path.join(distDir, "prompts");
   const configDest = path.join(distDir, "config");
-  await rmrf(path.join(distDir, "skills"));
+  const skillsDest = path.join(distDir, "skills");
+  const codexPrimaryRuntimeDest = path.join(distDir, "codex-primary-runtime");
 
   await syncCopiedDir({
     label: "prompts",
@@ -307,6 +353,28 @@ async function main() {
     previousFingerprint: cache?.configFingerprint ?? null,
     nextFingerprint: configFingerprint,
   });
+
+  await syncCopiedDir({
+    label: "skills",
+    src: skillsSrc,
+    dest: skillsDest,
+    previousFingerprint: cache?.skillsFingerprint ?? null,
+    nextFingerprint: skillsFingerprint,
+  });
+
+  if (codexPrimaryRuntimeSource && codexPrimaryRuntimeFingerprint) {
+    await syncCopiedDir({
+      label: "codex primary runtime",
+      src: codexPrimaryRuntimeSource,
+      dest: codexPrimaryRuntimeDest,
+      previousFingerprint: cache?.codexPrimaryRuntimeFingerprint ?? null,
+      nextFingerprint: codexPrimaryRuntimeFingerprint,
+    });
+  } else {
+    await rmrf(codexPrimaryRuntimeDest);
+    await fs.mkdir(codexPrimaryRuntimeDest, { recursive: true });
+    console.log("[resources] codex primary runtime: disabled");
+  }
 
   const docsDest = path.join(distDir, "docs");
   if (!includeDocs) {
@@ -331,6 +399,8 @@ async function main() {
     codexAppServerVersion,
     promptsFingerprint,
     configFingerprint,
+    skillsFingerprint,
+    codexPrimaryRuntimeFingerprint,
     docsFingerprint,
   });
 

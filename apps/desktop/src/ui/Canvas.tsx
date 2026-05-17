@@ -12,6 +12,7 @@ import {
   TableIcon,
   XIcon,
 } from "lucide-react";
+import type { CSSProperties } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useAppStore } from "../app/store";
@@ -31,6 +32,8 @@ import { getFilePreviewKind } from "../lib/filePreviewKind";
 import { cn } from "../lib/utils";
 import { getDesktopWindowMode } from "../lib/windowMode";
 import { SpreadsheetPreview } from "./SpreadsheetPreview";
+
+const noDragRegionStyle = { WebkitAppRegion: "no-drag" } as CSSProperties;
 
 function basenamePath(p: string): string {
   const parts = p.replace(/\\/g, "/").split("/").filter(Boolean);
@@ -399,7 +402,7 @@ export function Canvas({ path }: { path: string }) {
 
               <div
                 className="flex items-center gap-1 shrink-0 flex-1 justify-end"
-                style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+                style={noDragRegionStyle}
               >
                 <Button
                   type="button"
@@ -746,7 +749,7 @@ ${textToSend}`;
 
             <div
               className="flex items-center gap-1 shrink-0 flex-1 justify-end"
-              style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+              style={noDragRegionStyle}
             >
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>

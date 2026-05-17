@@ -1,6 +1,7 @@
 interface:
-  display_name: "Slides"
-  short_description: "Create and edit PPTX slide decks"
-  icon_small: "./assets/slides-small.svg"
-  icon_large: "./assets/slides.png"
-  default_prompt: "Use $slides to create or update this PPTX slide deck with PptxGenJS and validate the layout."
+  display_name: "Presentations"
+  short_description: "Create polished PowerPoint and Google Slides decks"
+  icon_small: "./assets/file-presentation.png"
+  icon_large: "./assets/file-presentation.png"
+  brand_color: "#C43E1C"
+  default_prompt: "Create a presentation slide deck with $Presentations."

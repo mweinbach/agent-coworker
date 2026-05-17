@@ -71,6 +71,9 @@ export interface ToolContext {
   /** Effective shell mutation policy. Defaults to "full" when omitted. */
   shellPolicy?: AgentShellPolicy;
 
+  /** Environment variables inherited by child processes launched from tools. */
+  toolEnv?: Record<string, string | undefined>;
+
   /** Session-backed persistent agent lifecycle callbacks. */
   agentControl?: AgentControl;
 

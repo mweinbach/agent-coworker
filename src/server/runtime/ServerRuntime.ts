@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import type { runTurn as runTurnFn } from "../../agent";
+import { ensureCodexPrimaryRuntimeReady } from "../../codexPrimaryRuntime";
 import { loadConfig } from "../../config";
 import type { connectProvider as connectModelProvider, getAiCoworkerPaths } from "../../connect";
 import { getAiCoworkerPaths as getAiCoworkerPathsDefault } from "../../connect";
@@ -136,6 +138,20 @@ export async function createAgentServerRuntime(
     config.providerOptions,
   );
   if (mergedProviderOptions) config.providerOptions = mergedProviderOptions;
+
+  const codexRuntimeSetup = await ensureCodexPrimaryRuntimeReady({
+    homedir: opts.homedir,
+    workspaceDir: config.workingDirectory,
+    builtInSkillsDir: path.join(config.builtInDir, "skills"),
+    globalSkillsDir: getAiCoworkerPathsDefault({ homedir: opts.homedir }).skillsDir,
+    env,
+    log: (line) => {
+      console.warn(`[codex-primary-runtime] ${line}`);
+    },
+  });
+  if (codexRuntimeSetup) {
+    Object.assign(env, codexRuntimeSetup.runtimeEnv);
+  }
 
   await fs.mkdir(config.projectCoworkDir, { recursive: true });
 

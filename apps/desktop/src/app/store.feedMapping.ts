@@ -293,6 +293,10 @@ function clearStepLocalToolRuntime(runtime: ThreadModelStreamRuntime) {
   runtime.toolInputByKey.clear();
 }
 
+function isTerminalToolState(state: Extract<FeedItem, { kind: "tool" }>["state"]): boolean {
+  return state === "output-available" || state === "output-error" || state === "output-denied";
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -412,6 +416,12 @@ function previewValue(value: unknown, maxChars = 160): string {
     const fallback = String(value);
     return fallback.length > maxChars ? `${fallback.slice(0, maxChars - 1)}...` : fallback;
   }
+}
+
+function incompleteToolStreamResult(error?: unknown): Record<string, unknown> {
+  return {
+    error: error ?? "Turn failed before the tool call completed.",
+  };
 }
 
 function normalizeToolArgsFromInput(inputText: string, existingArgs?: unknown): unknown {
@@ -661,6 +671,17 @@ function applyModelStreamUpdate(
     ops.pushFeedItem(item);
   };
 
+  const failActiveToolStreams = (turnId: string | null, error?: unknown) => {
+    for (const [fullKey, itemId] of [...stream.toolItemIdByKey.entries()]) {
+      if (turnId && !fullKey.startsWith(`${turnId}:`)) continue;
+      ops.updateFeedItem(itemId, (item) => {
+        if (item.kind !== "tool" || isTerminalToolState(item.state)) return item;
+        return { ...item, state: "output-error", result: incompleteToolStreamResult(error) };
+      });
+    }
+    ops.onToolTerminal?.();
+  };
+
   if (update.kind === "turn_start") {
     if (stream.activeTurnId !== update.turnId) {
       clearThreadModelStreamRuntime(stream);
@@ -680,6 +701,14 @@ function applyModelStreamUpdate(
   ) {
     // Keep these as state-only boundaries to avoid noisy transcript/feed reconstruction.
     return;
+  }
+
+  if (update.kind === "turn_error") {
+    failActiveToolStreams(update.turnId, update.error);
+  }
+
+  if (update.kind === "turn_abort") {
+    failActiveToolStreams(update.turnId, update.reason);
   }
 
   if (update.kind === "assistant_text_end") {
@@ -949,6 +978,22 @@ function appendModelStreamUpdateToFeed(
       out[idx] = updateItem(current);
     },
   });
+}
+
+function failActiveToolStreamsInFeed(
+  out: FeedItem[],
+  stream: ThreadModelStreamRuntime,
+  turnId: string | null,
+  error?: unknown,
+) {
+  for (const [fullKey, itemId] of [...stream.toolItemIdByKey.entries()]) {
+    if (turnId && !fullKey.startsWith(`${turnId}:`)) continue;
+    const idx = out.findIndex((item) => item.id === itemId);
+    if (idx < 0) continue;
+    const current = out[idx];
+    if (!current || current.kind !== "tool" || isTerminalToolState(current.state)) continue;
+    out[idx] = { ...current, state: "output-error", result: incompleteToolStreamResult(error) };
+  }
 }
 
 const transcriptPayloadTypeSchema = z
@@ -1257,6 +1302,7 @@ export function mapTranscriptToFeed(events: TranscriptEvent[]): FeedItem[] {
     }
 
     if (payload.type === "error") {
+      failActiveToolStreamsInFeed(out, stream, stream.activeTurnId, payload.message);
       out.push({
         id: makeId(),
         kind: "error",
@@ -1270,6 +1316,14 @@ export function mapTranscriptToFeed(events: TranscriptEvent[]): FeedItem[] {
 
     if (payload.type === "session_busy") {
       if (payload.busy === false) {
+        const failed =
+          isRecord(payload) &&
+          (payload.outcome === "error" || payload.outcome === "cancelled");
+        const turnId =
+          isRecord(payload) && typeof payload.turnId === "string" ? payload.turnId : null;
+        if (failed) {
+          failActiveToolStreamsInFeed(out, stream, turnId ?? stream.activeTurnId);
+        }
         clearThreadModelStreamRuntime(stream);
       }
       out.push({

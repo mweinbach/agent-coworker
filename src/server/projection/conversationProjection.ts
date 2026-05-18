@@ -142,6 +142,12 @@ function isTerminalToolState(state: ProjectedToolState): boolean {
   return state === "output-available" || state === "output-error" || state === "output-denied";
 }
 
+function incompleteToolStreamError(error?: unknown): Record<string, unknown> {
+  return {
+    error: error ?? "Turn failed before the tool call completed.",
+  };
+}
+
 function previewValue(value: unknown, maxChars = 160): string {
   if (value === undefined) return "";
   if (typeof value === "string") {
@@ -668,6 +674,16 @@ export function createConversationProjection(opts: CreateConversationProjectionO
     opts.sink.emitItemCompleted(turnId, item);
   };
 
+  const failActiveToolStreamsForTurn = (turnId: string, error?: unknown) => {
+    for (const [fullKey, state] of [...toolByKey.entries()]) {
+      if (!fullKey.startsWith(`${turnId}:`)) continue;
+      if (isTerminalToolState(state.state)) continue;
+      state.state = "output-error";
+      state.result = incompleteToolStreamError(error);
+      publishToolCompleted(turnId, state);
+    }
+  };
+
   const emitSystemItem = (line: string) => {
     const item: ProjectedItem = {
       id: makeItemId("system", crypto.randomUUID()),
@@ -875,6 +891,16 @@ export function createConversationProjection(opts: CreateConversationProjectionO
       publishToolStartedOrCompleted(update.turnId, state);
       return;
     }
+
+    if (update.kind === "turn_error") {
+      failActiveToolStreamsForTurn(update.turnId, update.error);
+      return;
+    }
+
+    if (update.kind === "turn_abort") {
+      failActiveToolStreamsForTurn(update.turnId, update.reason);
+      return;
+    }
   };
 
   return {
@@ -918,6 +944,9 @@ export function createConversationProjection(opts: CreateConversationProjectionO
           if (event.turnId) {
             completeAssistantStateBeforeStep(event.turnId);
             completeReasoningStateForTurn(event.turnId);
+            if (event.outcome === "error" || event.outcome === "cancelled") {
+              failActiveToolStreamsForTurn(event.turnId);
+            }
             clearTurnProjectionState(event.turnId);
             opts.sink.emitTurnCompleted(
               event.turnId,
@@ -1022,6 +1051,9 @@ export function createConversationProjection(opts: CreateConversationProjectionO
           emitTodosItem(event.todos);
           return;
         case "error":
+          if (activeTurnId) {
+            failActiveToolStreamsForTurn(activeTurnId, event.message);
+          }
           emitErrorItem(event);
           return;
         case "a2ui_surface":

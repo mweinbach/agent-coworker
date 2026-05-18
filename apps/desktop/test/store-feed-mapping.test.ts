@@ -1748,6 +1748,83 @@ describe("desktop transcript feed mapping", () => {
     });
   });
 
+  test("marks unfinished raw google tool inputs as failed when the turn errors", () => {
+    const transcript: TranscriptEvent[] = [
+      {
+        ts: "2024-01-01T00:00:00.000Z",
+        threadId: "thread-1",
+        direction: "client",
+        payload: { type: "user_message", text: "Transcribe this audio" },
+      },
+      {
+        ts: "2024-01-01T00:00:01.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_raw",
+          sessionId: "thread-session",
+          turnId: "turn-google-error",
+          index: 0,
+          provider: "google",
+          model: "gemini-3.1-pro-preview-customtools",
+          format: "google-interactions-v1",
+          normalizerVersion: 1,
+          event: {
+            event_type: "step.start",
+            index: 0,
+            step: { type: "function_call", id: "call_read", name: "read" },
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:02.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_raw",
+          sessionId: "thread-session",
+          turnId: "turn-google-error",
+          index: 1,
+          provider: "google",
+          model: "gemini-3.1-pro-preview-customtools",
+          format: "google-interactions-v1",
+          normalizerVersion: 1,
+          event: {
+            event_type: "step.delta",
+            index: 0,
+            delta: {
+              type: "arguments_delta",
+              arguments: '{"path":"audio.mp3","limit":100}',
+            },
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:03.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "error",
+          message: "Gemini generated response exceeded the provider size limit.",
+          code: "provider_error",
+          source: "provider",
+        },
+      },
+    ];
+
+    const feed = mapTranscriptToFeed(transcript);
+    const tool = feed.find((item) => item.kind === "tool");
+
+    expect(tool?.kind).toBe("tool");
+    if (!tool || tool.kind !== "tool") throw new Error("Expected tool item");
+    expect(tool).toMatchObject({
+      name: "read",
+      state: "output-error",
+      args: { path: "audio.mp3", limit: 100 },
+      result: { error: "Gemini generated response exceeded the provider size limit." },
+    });
+  });
+
   test("keeps repeated google interaction loops inline within the same persisted turn", () => {
     const transcript: TranscriptEvent[] = [
       {

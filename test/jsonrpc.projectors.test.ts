@@ -811,6 +811,92 @@ describe("JSON-RPC projectors", () => {
     });
   });
 
+  test("projectors fail unfinished raw Gemini tool inputs when a turn errors", () => {
+    const outbound: Array<{ method: string; params?: any }> = [];
+    const emissions: Array<{ eventType: string; payload: any }> = [];
+    const live = createJsonRpcNotificationProjector({
+      threadId: sessionId,
+      send: (message) => outbound.push(message as { method: string; params?: any }),
+    });
+    const journal = createThreadJournalNotificationProjector({
+      threadId: sessionId,
+      emit: (event) => emissions.push({ eventType: event.eventType, payload: event.payload }),
+    });
+
+    for (const projector of [live, journal] as const) {
+      projector.handle({
+        type: "session_busy",
+        sessionId,
+        busy: true,
+        turnId,
+        cause: "user_message",
+      });
+      projector.handle(
+        googleRaw(0, {
+          event_type: "step.start",
+          index: 0,
+          step: { type: "function_call", id: "call_read", name: "read" },
+        }),
+      );
+      projector.handle(
+        googleRaw(1, {
+          event_type: "step.delta",
+          index: 0,
+          delta: {
+            type: "arguments_delta",
+            arguments: '{"path":"audio.mp3","limit":100}',
+          },
+        }),
+      );
+      projector.handle({
+        type: "error",
+        sessionId,
+        message: "Gemini generated response exceeded the provider size limit.",
+        code: "provider_error",
+        source: "provider",
+      });
+      projector.handle({
+        type: "session_busy",
+        sessionId,
+        busy: false,
+        turnId,
+        outcome: "error",
+      });
+    }
+
+    const liveFailedTool = outbound
+      .filter((message) => message.method === "item/completed")
+      .find(
+        (message) =>
+          message.params?.item?.type === "toolCall" &&
+          message.params?.item?.state === "output-error",
+      );
+    expect(liveFailedTool?.params?.item).toMatchObject({
+      id: `toolCall:${turnId}:call_read`,
+      type: "toolCall",
+      toolName: "read",
+      state: "output-error",
+      args: { path: "audio.mp3", limit: 100 },
+      result: { error: "Gemini generated response exceeded the provider size limit." },
+    });
+
+    const journalFailedTool = emissions
+      .filter((event) => event.eventType === "item/completed")
+      .find(
+        (event) =>
+          event.payload?.item?.type === "toolCall" &&
+          event.payload?.item?.state === "output-error",
+      );
+    expect(journalFailedTool?.payload?.item).toMatchObject({
+      id: `toolCall:${turnId}:call_read`,
+      type: "toolCall",
+      toolName: "read",
+      state: "output-error",
+      args: { path: "audio.mp3", limit: 100 },
+      result: { error: "Gemini generated response exceeded the provider size limit." },
+    });
+  });
+
   test("projectors do not reuse completed tool items for later same-name calls", () => {
     const emissions: Array<{ eventType: string; payload: any }> = [];
     const projector = createThreadJournalNotificationProjector({

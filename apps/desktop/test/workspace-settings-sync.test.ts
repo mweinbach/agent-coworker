@@ -982,7 +982,7 @@ describe("workspace settings sync", () => {
   test("control session_config hydrates the workspace defaults from the harness", async () => {
     primeWorkspaceConnection();
     setControlSessionConfigResponse({
-      yolo: false,
+      yolo: true,
       observabilityEnabled: true,
       backupsEnabled: false,
       defaultBackupsEnabled: false,
@@ -1008,6 +1008,7 @@ describe("workspace settings sync", () => {
     expect(ok).toBe(true);
     const workspace = useAppStore.getState().workspaces.find((entry) => entry.id === workspaceId);
     const runtime = useAppStore.getState().workspaceRuntimeById[workspaceId];
+    expect(workspace?.yolo).toBe(true);
     expect(workspace?.defaultPreferredChildModel).toBe("gpt-5-mini");
     expect(workspace?.defaultChildModelRoutingMode).toBe("cross-provider-allowlist");
     expect(workspace?.defaultPreferredChildModelRef).toBe("opencode-zen:glm-5");
@@ -1019,6 +1020,7 @@ describe("workspace settings sync", () => {
     expect(workspace?.defaultToolOutputOverflowChars).toBe(12000);
     expect(workspace?.userName).toBe("Alex");
     expect(workspace?.userProfile).toEqual({ instructions: "", work: "", details: "" });
+    expect(runtime?.controlSessionConfig?.yolo).toBe(true);
     expect(runtime?.controlSessionConfig?.preferredChildModel).toBe("gpt-5-mini");
     expect(runtime?.controlSessionConfig?.childModelRoutingMode).toBe("cross-provider-allowlist");
     expect(runtime?.controlSessionConfig?.preferredChildModelRef).toBe("opencode-zen:glm-5");
@@ -1301,6 +1303,7 @@ describe("workspace settings sync", () => {
                   textVerbosity: "medium",
                 },
               },
+              yolo: true,
             }
           : workspace,
       ),
@@ -1314,6 +1317,7 @@ describe("workspace settings sync", () => {
       cwd: "/tmp/workspace",
       config: {
         toolOutputOverflowChars: 25000,
+        yolo: true,
         childModelRoutingMode: "cross-provider-allowlist",
         preferredChildModelRef: "opencode-zen:glm-5",
         allowedChildModelRefs: ["opencode-zen:glm-5", "opencode-go:glm-5"],

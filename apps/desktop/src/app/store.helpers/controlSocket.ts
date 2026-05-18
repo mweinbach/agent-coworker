@@ -821,6 +821,7 @@ export function createControlSocketHelpers(
                 defaultAllowedChildModelRefs: evt.config.allowedChildModelRefs,
                 defaultToolOutputOverflowChars: evt.config.defaultToolOutputOverflowChars,
                 providerOptions,
+                ...(typeof evt.config.yolo === "boolean" ? { yolo: evt.config.yolo } : {}),
                 ...(typeof evt.config.userName === "string"
                   ? { userName: evt.config.userName }
                   : {}),

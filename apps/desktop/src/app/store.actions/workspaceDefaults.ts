@@ -174,6 +174,7 @@ export function createWorkspaceDefaultsActions(
       userName?: string;
       userProfile?: WorkspaceRecord["userProfile"];
       a2uiEnabled?: boolean;
+      yolo?: boolean;
     };
   }): ApplySessionDefaultsMessage | null => {
     const configPatch: NonNullable<ApplySessionDefaultsMessage["config"]> = {};
@@ -189,6 +190,7 @@ export function createWorkspaceDefaultsActions(
       userProfile?: WorkspaceRecord["userProfile"];
       enableA2ui?: boolean;
       featureFlags?: { workspace?: { a2ui?: boolean } };
+      yolo?: boolean;
     };
     const currentProvider =
       opts.current.config?.provider && isProviderName(opts.current.config.provider)
@@ -210,6 +212,13 @@ export function createWorkspaceDefaultsActions(
       opts.desired.backupsEnabled !== currentSessionConfig.defaultBackupsEnabled
     ) {
       configPatch.backupsEnabled = opts.desired.backupsEnabled;
+    }
+
+    if (
+      typeof opts.desired.yolo === "boolean" &&
+      opts.desired.yolo !== currentSessionConfig.yolo
+    ) {
+      configPatch.yolo = opts.desired.yolo;
     }
 
     const currentDefaultToolOutputOverflow = currentSessionConfig.defaultToolOutputOverflowChars;
@@ -373,6 +382,10 @@ export function createWorkspaceDefaultsActions(
         typeof controlSessionConfig?.defaultBackupsEnabled === "boolean"
           ? controlSessionConfig.defaultBackupsEnabled
           : workspace.defaultBackupsEnabled,
+      yolo:
+        typeof controlSessionConfig?.yolo === "boolean"
+          ? controlSessionConfig.yolo
+          : workspace.yolo,
     };
   };
 
@@ -566,6 +579,7 @@ export function createWorkspaceDefaultsActions(
                   mode === "explicit" ? ws.defaultBackupsEnabled : harnessBackupsDefault,
               }
             : {}),
+          yolo: ws.yolo,
           ...(mode === "explicit"
             ? { toolOutputOverflowChars: ws.defaultToolOutputOverflowChars }
             : harnessToolOutputOverflowChars !== undefined
@@ -675,7 +689,8 @@ export function createWorkspaceDefaultsActions(
         workspacePatch.defaultBackupsEnabled !== undefined ||
         workspacePatch.providerOptions !== undefined ||
         workspacePatch.userName !== undefined ||
-        userProfilePatch !== undefined;
+        userProfilePatch !== undefined ||
+        workspacePatch.yolo !== undefined;
       if (!shouldSyncCoreSettings) {
         return;
       }
@@ -733,6 +748,7 @@ export function createWorkspaceDefaultsActions(
                 enableMcp: nextWorkspace.defaultEnableMcp,
                 backupsEnabled: nextWorkspace.defaultBackupsEnabled,
                 toolOutputOverflowChars,
+                yolo: nextWorkspace.yolo,
                 ...(preferredChildModel ? { preferredChildModel } : {}),
                 childModelRoutingMode,
                 ...(preferredChildModelRef ? { preferredChildModelRef } : {}),

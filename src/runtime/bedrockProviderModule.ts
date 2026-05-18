@@ -777,3 +777,12 @@ function createImageBlock(mimeType, data) {
   }
   return { source: { bytes }, format };
 }
+
+export const __internal = {
+  buildAdditionalModelRequestFields,
+  getStandardBedrockEndpointRegion,
+  isGovCloudBedrockTarget,
+  mapThinkingLevelToEffort,
+  shouldUseExplicitBedrockEndpoint,
+  supportsAdaptiveThinking,
+};

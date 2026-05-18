@@ -233,6 +233,18 @@ const IMAGE_GUIDANCE_PROMPT_CONFIGS = [
 ] as const;
 
 const WEBFETCH_DOWNLOAD_GUIDANCE_PROMPT_CONFIGS = [...IMAGE_GUIDANCE_PROMPT_CONFIGS] as const;
+const GEMINI_PROMPT_CONFIGS = [
+  {
+    provider: "google",
+    model: "gemini-3.1-pro-preview",
+    preferredChildModel: "gemini-3.1-pro-preview",
+  },
+  {
+    provider: "google",
+    model: "gemini-3-flash-preview",
+    preferredChildModel: "gemini-3-flash-preview",
+  },
+] as const;
 
 // ---------------------------------------------------------------------------
 // loadSystemPrompt
@@ -738,16 +750,7 @@ describe("loadSystemPrompt", () => {
   test("default and Gemini prompts tell models to chunk very long generated artifacts into files", async () => {
     const configs = [
       { provider: "opencode-go" as const, model: "kimi-k2.5", preferredChildModel: "kimi-k2.5" },
-      {
-        provider: "google" as const,
-        model: "gemini-3.1-pro-preview",
-        preferredChildModel: "gemini-3.1-pro-preview",
-      },
-      {
-        provider: "google" as const,
-        model: "gemini-3-flash-preview",
-        preferredChildModel: "gemini-3-flash-preview",
-      },
+      ...GEMINI_PROMPT_CONFIGS,
     ];
 
     for (const overrides of configs) {
@@ -758,6 +761,20 @@ describe("loadSystemPrompt", () => {
         }),
       );
       expectChunkedLongOutputGuidance(prompt);
+    }
+  });
+
+  test("Gemini prompts avoid rereading media that is already attached", async () => {
+    for (const overrides of GEMINI_PROMPT_CONFIGS) {
+      const prompt = await loadSystemPrompt(
+        makeConfig({
+          ...overrides,
+          skillsDirs: ["/nonexistent/skills"],
+        }),
+      );
+      expect(prompt.toLowerCase()).toContain("do not call read on");
+      expect(prompt.toLowerCase()).toContain("already attached in the current message");
+      expect(prompt.toLowerCase()).toContain("use the attached content directly");
     }
   });
 

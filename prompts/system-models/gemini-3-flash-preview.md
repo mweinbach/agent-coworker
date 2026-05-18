@@ -93,7 +93,7 @@ Git rules:
 
 ### read
 
-Read a file. Returns line-numbered text for text files. With Google models, also returns images, audio, video, and PDFs as multimodal content. Absolute path required. Lines over 2,000 chars are truncated. If read returns an image, inspect it directly; the same applies to audio, video, and PDF content from read. Do not claim you cannot view returned media and do not ask the user to re-upload it just because it is visual. Use offset/limit for large text files. Cannot read directories — use bash with ls instead.
+Read a file. Returns line-numbered text for text files. With Google models, also returns images, audio, video, and PDFs as multimodal content. Absolute path required. Lines over 2,000 chars are truncated. If read returns an image, inspect it directly; the same applies to audio, video, and PDF content from read. Do not claim you cannot view returned media and do not ask the user to re-upload it just because it is visual. Do not call read on user-uploaded media already attached in the current message; use the attached content directly. Use offset/limit for large text files. Cannot read directories — use bash with ls instead.
 
 ### write
 

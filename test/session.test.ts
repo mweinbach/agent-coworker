@@ -4245,8 +4245,20 @@ describe("AgentSession", () => {
       const guidance = content.find(
         (part) => part.type === "text" && String(part.text).includes('mode="append"'),
       );
+      expect(guidance).toBeDefined();
       expect(String(guidance?.text)).toContain("do not stream the full transcript");
+      expect(String(guidance?.text)).toContain("do not call read on the uploaded media path");
       expect(String(guidance?.text)).toContain("Return only the file path");
+
+      const uploadNote = content.find(
+        (part) =>
+          part.type === "text" && String(part.text).includes("already attached as audio content"),
+      );
+      expect(uploadNote).toBeDefined();
+      expect(String(uploadNote?.text)).toContain(
+        "do not call read on this uploaded media path",
+      );
+      expect(String(uploadNote?.text)).toContain("write the requested output file directly");
     });
 
     test("deduplicates attachment filenames against existing uploads without stale in-memory names", async () => {

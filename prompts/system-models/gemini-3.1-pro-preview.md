@@ -90,6 +90,7 @@ Read a file from the filesystem. Returns line-numbered text for text files. With
 - Lines longer than 2,000 characters are truncated.
 - Can read text files, images, audio, video, and PDFs (each returned as multimodal content when supported).
 - If read returns an image, inspect that image directly. The same applies to audio, video, and PDF content returned by read. Do not claim you cannot perceive returned media, and do not ask the user to re-upload it just because it is visual.
+- Do not call read on a user-uploaded media path when that image, audio, video, or PDF is already attached in the current message. Use the attached content directly.
 - Use offset and limit for large files.
 - Can only read files, not directories — use bash with ls to list directory contents.
 </read>

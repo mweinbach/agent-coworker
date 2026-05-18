@@ -76,7 +76,7 @@ const defaultSourceByErrorCode: Partial<Record<ServerErrorCode, ServerErrorSourc
 type ClassifiedTurnError = { code: ServerErrorCode; source: ServerErrorSource };
 
 const LARGE_MULTIMODAL_OUTPUT_GUIDANCE =
-  '[System: For large audio, video, or PDF transcription/extraction tasks, do not stream the full transcript or extracted text in chat. Create the requested file in the workspace with the write tool. Use mode="overwrite" for the first chunk and mode="append" for later chunks, keeping each chunk bounded. Return only the file path and a concise summary in chat.]';
+  '[System: For large audio, video, or PDF transcription/extraction tasks, do not stream the full transcript, extracted text, or detailed summary in chat. The uploaded media is already attached to this message, so do not call read on the uploaded media path just to inspect, transcribe, or summarize it. Create the requested file in the workspace with the write tool. Use mode="overwrite" for the first chunk and mode="append" for later chunks, keeping each chunk bounded. Return only the file path and a concise summary in chat.]';
 const largeMultimodalOutputRequestPattern =
   /\b(transcribe|transcribed|transcribing|transcript|transcription|markdown|file|document|extract|extraction|extracting|ocr|caption|captions|subtitle|subtitles|srt|notes|minutes)\b/i;
 const largeMultimodalOutputPartTypes = new Set<MultimodalContentPartType>([
@@ -1318,14 +1318,20 @@ export class TurnExecutionManager {
         contentReadPath = uploadedFile.canonicalPath;
       }
 
-      contentParts.push({
-        type: "text",
-        text: `[System: The user uploaded a file which has been saved to ${diskPath}]`,
-      });
-
       const contentPartType = getAttachmentContentPartType(attachment.mimeType, {
         modelSupportsImages,
         isGoogleProvider,
+      });
+      const hasTargetedLargeOutputGuidance =
+        shouldAddLargeOutputGuidance &&
+        typeof contentPartType === "string" &&
+        largeMultimodalOutputPartTypes.has(contentPartType);
+
+      contentParts.push({
+        type: "text",
+        text: hasTargetedLargeOutputGuidance
+          ? `[System: The user uploaded a file which has been saved to ${diskPath}. The file is already attached as ${contentPartType} content below; do not call read on this uploaded media path just to inspect, transcribe, or summarize it. Use the attached media content and write the requested output file directly.]`
+          : `[System: The user uploaded a file which has been saved to ${diskPath}]`,
       });
 
       if (!multimodalData && contentPartType) {

@@ -50,9 +50,9 @@ async function writeFakeCuratedArchive(destinationDir: string): Promise<void> {
   );
 
   const specs = [
-    ["documents", "documents", "doc", "documents"],
-    ["presentations", "presentations", "slides", "Presentations"],
-    ["spreadsheets", "spreadsheets", "spreadsheet", "Spreadsheets"],
+    ["documents", "documents", "documents", "documents"],
+    ["presentations", "presentations", "presentations", "Presentations"],
+    ["spreadsheets", "spreadsheets", "spreadsheets", "Spreadsheets"],
   ] as const;
   for (const [pluginName, sourceSkillName, targetName, sourceName] of specs) {
     const skillRoot = path.join(
@@ -98,9 +98,9 @@ async function writeFakeBundledRuntime(runtimeRoot: string): Promise<string> {
   await fs.writeFile(path.join(runtimeRoot, "python", executableBasename("python")), "", "utf-8");
 
   const specs = [
-    ["documents", "documents", "doc", "documents"],
-    ["presentations", "presentations", "slides", "Presentations"],
-    ["spreadsheets", "spreadsheets", "spreadsheet", "Spreadsheets"],
+    ["documents", "documents", "documents", "documents"],
+    ["presentations", "presentations", "presentations", "Presentations"],
+    ["spreadsheets", "spreadsheets", "spreadsheets", "Spreadsheets"],
   ] as const;
   for (const [pluginName, sourceSkillName, targetName, sourceName] of specs) {
     const skillRoot = path.join(
@@ -161,18 +161,21 @@ describe("Codex primary runtime bootstrap", () => {
         source: oaiSource,
       });
       await expect(fs.stat(path.join(workspace, "node_modules"))).rejects.toThrow();
-      expect(await fs.readFile(path.join(builtInSkillsDir, "doc", "SKILL.md"), "utf-8")).toContain(
-        "doc body",
-      );
       expect(
-        await fs.readFile(path.join(builtInSkillsDir, "slides", "SKILL.md"), "utf-8"),
-      ).toContain("name: slides");
+        await fs.readFile(path.join(builtInSkillsDir, "documents", "SKILL.md"), "utf-8"),
+      ).toContain("documents body");
       expect(
-        await fs.readFile(path.join(globalSkillsDir, "spreadsheet", "SKILL.md"), "utf-8"),
-      ).toContain("spreadsheet body");
+        await fs.readFile(path.join(builtInSkillsDir, "presentations", "SKILL.md"), "utf-8"),
+      ).toContain("name: presentations");
       expect(
-        await fs.readFile(path.join(globalSkillsDir, "spreadsheet", ".cowork-skill.json"), "utf-8"),
-      ).toContain("bootstrap-codex-primary-runtime-spreadsheet");
+        await fs.readFile(path.join(globalSkillsDir, "spreadsheets", "SKILL.md"), "utf-8"),
+      ).toContain("spreadsheets body");
+      expect(
+        await fs.readFile(
+          path.join(globalSkillsDir, "spreadsheets", ".cowork-skill.json"),
+          "utf-8",
+        ),
+      ).toContain("bootstrap-codex-primary-runtime-spreadsheets");
       expect(fetchImpl).toHaveBeenCalledTimes(2);
     } finally {
       await fs.rm(home, { recursive: true, force: true });
@@ -248,8 +251,8 @@ describe("Codex primary runtime bootstrap", () => {
       });
       await expect(fs.stat(path.join(workspace, "node_modules"))).rejects.toThrow();
       expect(
-        await fs.readFile(path.join(builtInRoot, "skills", "slides", "SKILL.md"), "utf-8"),
-      ).toContain("name: slides");
+        await fs.readFile(path.join(builtInRoot, "skills", "presentations", "SKILL.md"), "utf-8"),
+      ).toContain("name: presentations");
       expect(fetchImpl).not.toHaveBeenCalled();
     } finally {
       await fs.rm(home, { recursive: true, force: true });
@@ -262,6 +265,7 @@ describe("Codex primary runtime bootstrap", () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-runtime-global-"));
     const globalSkillsDir = path.join(home, ".cowork", "skills");
     const managedSpreadsheet = path.join(globalSkillsDir, "spreadsheet");
+    const managedSpreadsheets = path.join(globalSkillsDir, "spreadsheets");
     const manualDoc = path.join(globalSkillsDir, "doc");
 
     await fs.mkdir(managedSpreadsheet, { recursive: true });
@@ -295,8 +299,9 @@ describe("Codex primary runtime bootstrap", () => {
         },
       });
 
-      expect(await fs.readFile(path.join(managedSpreadsheet, "SKILL.md"), "utf-8")).toContain(
-        "spreadsheet body",
+      await expect(fs.access(managedSpreadsheet)).rejects.toThrow();
+      expect(await fs.readFile(path.join(managedSpreadsheets, "SKILL.md"), "utf-8")).toContain(
+        "spreadsheets body",
       );
       expect(await fs.readFile(path.join(manualDoc, "SKILL.md"), "utf-8")).toBe("manual doc\n");
     } finally {

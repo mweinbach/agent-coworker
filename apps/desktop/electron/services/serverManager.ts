@@ -163,6 +163,18 @@ function findBundledCodexPrimaryRuntimeDir(): string | null {
     return fromEnv;
   }
 
+  if (!app.isPackaged) {
+    try {
+      const devRepoRoot = resolveRepoRoot();
+      const candidate = path.join(devRepoRoot, "dist", "codex-primary-runtime");
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   const builtInDist = resolvePackagedBuiltinDistDir();
   if (!builtInDist) {
     return null;

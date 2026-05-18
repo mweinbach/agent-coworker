@@ -811,6 +811,67 @@ describe("JSON-RPC projectors", () => {
     });
   });
 
+  test("projectors do not reuse completed tool items for later same-name calls", () => {
+    const emissions: Array<{ eventType: string; payload: any }> = [];
+    const projector = createThreadJournalNotificationProjector({
+      threadId: sessionId,
+      emit: (event) => emissions.push({ eventType: event.eventType, payload: event.payload }),
+    });
+
+    projector.handle({
+      type: "session_busy",
+      sessionId,
+      busy: true,
+      turnId,
+      cause: "user_message",
+    });
+
+    for (const [id, query] of [
+      ["call-1", "first"],
+      ["call-2", "second"],
+    ] as const) {
+      projector.handle(streamChunk("tool_input_start", { id, toolName: "webSearch" }));
+      projector.handle(
+        streamChunk("tool_call", {
+          toolCallId: id,
+          toolName: "webSearch",
+          input: { query },
+        }),
+      );
+      projector.handle(
+        streamChunk("tool_result", {
+          toolCallId: id,
+          toolName: "webSearch",
+          output: { result: query },
+        }),
+      );
+    }
+
+    const toolStarted = emissions
+      .filter((event) => event.eventType === "item/started")
+      .filter((event) => event.payload?.item?.type === "toolCall");
+    const toolCompleted = emissions
+      .filter((event) => event.eventType === "item/completed")
+      .filter((event) => event.payload?.item?.type === "toolCall");
+    const toolOutputAvailable = toolCompleted.filter(
+      (event) => event.payload?.item?.state === "output-available",
+    );
+
+    expect(toolStarted.map((event) => event.payload?.item?.id)).toEqual([
+      `toolCall:${turnId}:call-1`,
+      `toolCall:${turnId}:call-2`,
+    ]);
+    expect(toolOutputAvailable.map((event) => event.payload?.item?.id)).toEqual([
+      `toolCall:${turnId}:call-1`,
+      `toolCall:${turnId}:call-2`,
+    ]);
+    expect(toolOutputAvailable.map((event) => event.payload?.item?.args)).toEqual([
+      { query: "first" },
+      { query: "second" },
+    ]);
+    expect(new Set(toolOutputAvailable.map((event) => event.payload?.item?.id)).size).toBe(2);
+  });
+
   for (const { provider, model } of PI_PROVIDER_CASES) {
     test(`projectors keep repeated PI reasoning and tool occurrences distinct for ${provider}`, () => {
       const outbound: Array<{ method: string; params?: any }> = [];

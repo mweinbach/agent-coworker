@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import path from "node:path";
 import { z } from "zod";
 
 import { getShellCommandPolicyViolation } from "../server/agents/commandPolicy";
@@ -159,12 +160,21 @@ function buildShellExecutionPlan(
     ];
   }
 
-  return [
+  const userShell = process.env.SHELL?.trim();
+  const plan: Array<{ file: string; args: string[] }> = [];
+
+  if (userShell) {
+    plan.push({ file: userShell, args: ["-lc", command] });
+  }
+
+  plan.push(
     { file: "/bin/bash", args: ["-lc", command] },
     { file: "/bin/sh", args: ["-lc", command] },
     { file: "bash", args: ["-lc", command] },
     { file: "sh", args: ["-lc", command] },
-  ];
+  );
+
+  return plan;
 }
 
 async function runShellCommandWithExec(opts: {
@@ -177,7 +187,37 @@ async function runShellCommandWithExec(opts: {
   execRunner: ExecRunner;
 }): Promise<ExecResult> {
   const maxBuffer = 1024 * 1024 * 10;
-  const plan = buildShellExecutionPlan(opts.platform, opts.command);
+
+  let command = opts.command;
+  const env = opts.env || process.env;
+  const runtimePython = env.COWORK_CODEX_RUNTIME_PYTHON;
+  const runtimeNode = env.COWORK_CODEX_RUNTIME_NODE;
+
+  if (runtimePython || runtimeNode) {
+    const pathDirs: string[] = [];
+    if (runtimeNode) {
+      pathDirs.push(path.dirname(runtimeNode));
+    }
+    if (runtimePython) {
+      const pythonDir = path.dirname(runtimePython);
+      pathDirs.push(pythonDir);
+      if (opts.platform === "win32") {
+        pathDirs.push(path.join(pythonDir, "Scripts"));
+      }
+    }
+
+    if (pathDirs.length > 0) {
+      if (opts.platform === "win32") {
+        const pathPrefix = pathDirs.join(";");
+        command = `$env:PATH = "${pathPrefix};" + $env:PATH; ${command}`;
+      } else {
+        const pathPrefix = pathDirs.join(":");
+        command = `export PATH="${pathPrefix}:$PATH" && ${command}`;
+      }
+    }
+  }
+
+  const plan = buildShellExecutionPlan(opts.platform, command);
 
   for (const candidate of plan) {
     const result = await opts.execRunner(candidate.file, candidate.args, {

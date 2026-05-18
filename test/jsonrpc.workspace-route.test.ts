@@ -1,18 +1,17 @@
 import { describe, expect, test } from "bun:test";
-
-import { JSONRPC_ERROR_CODES } from "../src/server/jsonrpc/protocol";
 import type {
   JsonRpcLiteError,
   JsonRpcLiteId,
   JsonRpcLiteRequest,
 } from "../src/server/jsonrpc/protocol";
-import { createWorkspaceRouteHandlers } from "../src/server/jsonrpc/routes/workspace";
+import { JSONRPC_ERROR_CODES } from "../src/server/jsonrpc/protocol";
 import type {
   JsonRpcRequestHandlerMap,
   JsonRpcRouteContext,
   JsonRpcThread,
   JsonRpcThreadSummaryFilter,
 } from "../src/server/jsonrpc/routes/types";
+import { createWorkspaceRouteHandlers } from "../src/server/jsonrpc/routes/workspace";
 import { jsonRpcWorkspaceResultSchemas } from "../src/server/jsonrpc/schema.workspace";
 
 const WORKSPACE_BOOTSTRAP_METHOD = "cowork/workspace/bootstrap";

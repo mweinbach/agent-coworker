@@ -157,10 +157,10 @@ Domain-specific instruction packages loaded on demand:
 
 ```
 skills/
-├── spreadsheet/SKILL.md   # Excel/CSV creation guidance
-├── slides/SKILL.md        # PowerPoint/presentation guidance
+├── spreadsheets/SKILL.md  # Excel/CSV creation guidance
+├── presentations/SKILL.md # PowerPoint/presentation guidance
 ├── pdf/SKILL.md           # PDF creation guidance
-└── doc/SKILL.md           # Word document guidance
+└── documents/SKILL.md     # Word document guidance
 ```
 
 Skills are discovered from layered directories:

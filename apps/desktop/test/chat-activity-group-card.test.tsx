@@ -318,7 +318,7 @@ describe("desktop activity group card", () => {
     expect(html).toContain("Web Search");
     expect(html).toContain("Search: LGA crash 2026");
     expect(reasoningRows[0]?.textContent).not.toContain("Summary");
-    expect(reasoningRows[0]?.textContent).toContain("Checking local sources first.");
+    expect(reasoningRows[0]?.textContent).toContain("Searching for crash details");
   });
 
   test("renders a pending reasoning placeholder before summary text arrives", () => {

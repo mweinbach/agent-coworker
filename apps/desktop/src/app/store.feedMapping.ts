@@ -739,6 +739,7 @@ function applyModelStreamUpdate(
 
   if (update.kind === "tool_input_start") {
     const { fullKey, itemId } = resolveToolItem(stream, update.turnId, update.key, update.name);
+    stream.toolInputByKey.delete(fullKey);
     if (itemId) {
       ops.updateFeedItem(itemId, (item) =>
         item.kind === "tool"

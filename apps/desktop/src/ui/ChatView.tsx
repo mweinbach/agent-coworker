@@ -1098,10 +1098,7 @@ function NewChatLanding() {
                     className="w-[min(23rem,calc(100vw-3rem))] overflow-hidden rounded-xl border-border/70 bg-popover p-1 shadow-xl shadow-foreground/10"
                   >
                     <Command className="rounded-lg bg-transparent text-[15px] [&_[data-slot=command-input-wrapper]]:h-12 [&_[data-slot=command-input-wrapper]]:rounded-t-lg [&_[data-slot=command-input-wrapper]]:border-b-border/60 [&_[data-slot=command-input-wrapper]]:bg-background/70 [&_[data-slot=command-input-wrapper]]:px-3.5 [&_[data-slot=command-input-wrapper]_svg]:opacity-60">
-                      <CommandInput
-                        placeholder="Search projects"
-                        className="h-11 text-[15px]"
-                      />
+                      <CommandInput placeholder="Search projects" className="h-11 text-[15px]" />
                       <CommandList className="max-h-[20rem] py-1">
                         <CommandEmpty className="py-8 text-sm text-muted-foreground">
                           No projects found.
@@ -1122,8 +1119,7 @@ function NewChatLanding() {
                             >
                               <FolderIcon className="size-4" />
                               <span className="truncate">{workspace.name}</span>
-                              {target.kind === "project" &&
-                              target.workspaceId === workspace.id ? (
+                              {target.kind === "project" && target.workspaceId === workspace.id ? (
                                 <CheckIcon className="ml-auto size-4 text-primary" />
                               ) : null}
                             </CommandItem>

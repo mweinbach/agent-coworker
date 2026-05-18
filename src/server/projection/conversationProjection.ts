@@ -621,7 +621,7 @@ export function createConversationProjection(opts: CreateConversationProjectionO
       const latestKey = latestToolKeyByTurnAndName.get(toolTurnNameKey(turnId, name));
       if (latestKey) {
         const latestState = toolByKey.get(latestKey);
-        if (latestState) {
+        if (latestState && !isTerminalToolState(latestState.state)) {
           toolByKey.delete(latestKey);
           toolByKey.set(fullKey, latestState);
           const latestInput = toolInputByKey.get(latestKey);

@@ -918,7 +918,7 @@ describe("loadSystemPrompt", () => {
     expect(prompt).not.toContain("## Available Skills");
   });
 
-  test("includes built-in slides in the prompt and discovered skills when earlier skill dirs are empty", async () => {
+  test("includes built-in presentations in the prompt and discovered skills when earlier skill dirs are empty", async () => {
     const { tmp } = await makeTmpDirs();
     const projectSkills = path.join(tmp, "project-skills");
     const globalSkills = path.join(tmp, "global-skills");
@@ -927,10 +927,10 @@ describe("loadSystemPrompt", () => {
     await fs.mkdir(projectSkills, { recursive: true });
     await fs.mkdir(globalSkills, { recursive: true });
     await fs.mkdir(userSkills, { recursive: true });
-    await fs.mkdir(path.join(builtInSkills, "slides"), { recursive: true });
+    await fs.mkdir(path.join(builtInSkills, "presentations"), { recursive: true });
     await fs.writeFile(
-      path.join(builtInSkills, "slides", "SKILL.md"),
-      skillDoc("slides", "Built-in slides skill.", "# Slides\n"),
+      path.join(builtInSkills, "presentations", "SKILL.md"),
+      skillDoc("presentations", "Built-in presentations skill.", "# Presentations\n"),
       "utf-8",
     );
 
@@ -940,9 +940,9 @@ describe("loadSystemPrompt", () => {
 
     const { prompt, discoveredSkills } = await loadSystemPromptWithSkills(config);
     expect(prompt).toContain("## Available Skills");
-    expect(prompt).toContain("**slides**");
+    expect(prompt).toContain("**presentations**");
     expect(prompt).toContain("source: built-in");
-    expect(discoveredSkills.map((skill) => skill.name)).toContain("slides");
+    expect(discoveredSkills.map((skill) => skill.name)).toContain("presentations");
   });
 
   test("skips skills section when skills dirs do not exist", async () => {

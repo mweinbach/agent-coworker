@@ -16,7 +16,7 @@ type SkillCacheEntry = {
 
 const loadedSkills = new Map<string, SkillCacheEntry>();
 const SKILL_POLICY_OVERLAYS: Record<string, string> = {
-  slides: [
+  presentations: [
     "## Cowork Addendum",
     "",
     "- Keep slide task folders clean. For one-off deck work, do not create `package.json`, lockfiles, or `node_modules` in the user's deck/output folder just to run PptxGenJS.",

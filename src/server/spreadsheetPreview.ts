@@ -113,7 +113,12 @@ function buildSpreadsheetPreview(opts: {
 }): SpreadsheetPreview {
   const sheetNames = opts.kind === "csv" ? ["CSV"] : opts.workbook.SheetNames;
   const sheets = sheetNames.map((name, index) =>
-    summarizeSheet(name, readWorksheet(opts.workbook, opts.kind, name, index), opts.workbook, index),
+    summarizeSheet(
+      name,
+      readWorksheet(opts.workbook, opts.kind, name, index),
+      opts.workbook,
+      index,
+    ),
   );
   if (sheets.length === 0) {
     throw new Error("Workbook does not contain any sheets.");
@@ -195,11 +200,21 @@ function buildViewport(
   const requestedRows = requested?.rowCount ?? SPREADSHEET_PREVIEW_DEFAULT_ROW_COUNT;
   const requestedCols = requested?.colCount ?? SPREADSHEET_PREVIEW_DEFAULT_COL_COUNT;
   const rowCount = Math.min(
-    clampInteger(requestedRows, 1, SPREADSHEET_PREVIEW_MAX_ROW_COUNT, SPREADSHEET_PREVIEW_DEFAULT_ROW_COUNT),
+    clampInteger(
+      requestedRows,
+      1,
+      SPREADSHEET_PREVIEW_MAX_ROW_COUNT,
+      SPREADSHEET_PREVIEW_DEFAULT_ROW_COUNT,
+    ),
     Math.max(sheet.rowCount - startRow, 0),
   );
   const colCount = Math.min(
-    clampInteger(requestedCols, 1, SPREADSHEET_PREVIEW_MAX_COL_COUNT, SPREADSHEET_PREVIEW_DEFAULT_COL_COUNT),
+    clampInteger(
+      requestedCols,
+      1,
+      SPREADSHEET_PREVIEW_MAX_COL_COUNT,
+      SPREADSHEET_PREVIEW_DEFAULT_COL_COUNT,
+    ),
     Math.max(sheet.colCount - startCol, 0),
   );
   const endRow = rowCount > 0 ? startRow + rowCount - 1 : startRow;

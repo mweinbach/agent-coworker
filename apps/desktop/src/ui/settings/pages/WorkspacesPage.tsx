@@ -58,6 +58,7 @@ import {
   CollapsibleTrigger,
 } from "../../../components/ui/collapsible";
 import { Input } from "../../../components/ui/input";
+import { Label } from "../../../components/ui/label";
 import {
   Select,
   SelectContent,
@@ -97,12 +98,14 @@ function ToggleChip({
   pressed,
   onPressedChange,
   "aria-label": ariaLabel,
+  id,
 }: {
   pressed: boolean;
   onPressedChange: (next: boolean) => void;
   "aria-label"?: string;
+  id?: string;
 }) {
-  return <Switch checked={pressed} onCheckedChange={onPressedChange} aria-label={ariaLabel} />;
+  return <Switch id={id} checked={pressed} onCheckedChange={onPressedChange} aria-label={ariaLabel} />;
 }
 
 function updateProviderOption(
@@ -1149,8 +1152,10 @@ export function WorkspacesPage() {
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
-                  <div>
-                    <div className="text-sm font-medium">MCP tools</div>
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="mcp-toggle" className="text-sm font-medium leading-none cursor-pointer">
+                      MCP tools
+                    </Label>
                     <div className="text-xs text-muted-foreground">
                       Allow configured MCP servers. In ChatGPT Subscription/Codex hybrid mode,
                       Cowork exposes these as dynamic tools while Codex keeps local shell, files,
@@ -1158,6 +1163,7 @@ export function WorkspacesPage() {
                     </div>
                   </div>
                   <ToggleChip
+                    id="mcp-toggle"
                     pressed={enableMcp}
                     aria-label="Enable MCP tools"
                     onPressedChange={(next) => {
@@ -1168,13 +1174,16 @@ export function WorkspacesPage() {
                 </div>
 
                 <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
-                  <div>
-                    <div className="text-sm font-medium">Workspace backups</div>
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="backups-toggle" className="text-sm font-medium leading-none cursor-pointer">
+                      Workspace backups
+                    </Label>
                     <div className="text-xs text-muted-foreground">
                       Opt into Cowork-managed recovery snapshots for sessions in this workspace.
                     </div>
                   </div>
                   <ToggleChip
+                    id="backups-toggle"
                     pressed={backupsEnabled}
                     aria-label="Enable workspace backups"
                     onPressedChange={(next) => {
@@ -1185,13 +1194,16 @@ export function WorkspacesPage() {
                 </div>
 
                 <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
-                  <div>
-                    <div className="text-sm font-medium">Run shell commands without asking</div>
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="yolo-toggle" className="text-sm font-medium leading-none cursor-pointer">
+                      Run shell commands without asking
+                    </Label>
                     <div className="text-xs text-muted-foreground">
                       Skip confirmation prompts and run shell commands immediately without review.
                     </div>
                   </div>
                   <ToggleChip
+                    id="yolo-toggle"
                     pressed={yolo}
                     aria-label="Run shell commands without asking"
                     onPressedChange={async (next) => {

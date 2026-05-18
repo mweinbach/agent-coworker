@@ -878,12 +878,14 @@ describe("glob tool", () => {
     await expect(t.execute({ pattern: "../outside/*.ts" })).rejects.toThrow(/blocked/i);
   });
 
-  test("rejects glob with absolute pattern", async () => {
+  test("supports glob with absolute pattern by converting it", async () => {
     const dir = await tmpDir();
+    await fs.writeFile(path.join(dir, "match.ts"), "", "utf-8");
     const absolutePattern = path.join(dir, "*.ts");
 
     const t: any = createGlobTool(makeCtx(dir));
-    await expect(t.execute({ pattern: absolutePattern })).rejects.toThrow(/blocked/i);
+    const res: string = await t.execute({ pattern: absolutePattern });
+    expect(res).toContain("match.ts");
   });
 
   test("limits results when maxResults is provided", async () => {
@@ -3407,13 +3409,17 @@ describe("skill tool", () => {
     });
   });
 
-  test("appends deck-workspace hygiene guidance to slides skill loads", async () => {
+  test("appends deck-workspace hygiene guidance to presentations skill loads", async () => {
     const dir = await tmpDir();
-    const skillDir = path.join(dir, "skills", "slides");
+    const skillDir = path.join(dir, "skills", "presentations");
     await fs.mkdir(skillDir, { recursive: true });
     await fs.writeFile(
       path.join(skillDir, "SKILL.md"),
-      skillDoc("slides", "Slides helper skill.", "# Slides Skill\nBuild decks here."),
+      skillDoc(
+        "presentations",
+        "Presentations helper skill.",
+        "# Presentations Skill\nBuild decks here.",
+      ),
       "utf-8",
     );
 
@@ -3423,14 +3429,14 @@ describe("skill tool", () => {
     ctx.config = config;
 
     const t: any = createSkillTool(ctx);
-    const res: string = await t.execute({ skillName: "slides" });
+    const res: string = await t.execute({ skillName: "presentations" });
     expect(res).toContain("Build decks here.");
     expect(res).toContain("## Cowork Addendum");
     expect(res).toContain("do not create `package.json`, lockfiles, or `node_modules`");
     expect(res).toContain("shared Cowork cache");
   });
 
-  test("loads built-in slides when project/global/user skill dirs are empty", async () => {
+  test("loads built-in presentations when project/global/user skill dirs are empty", async () => {
     const dir = await tmpDir();
     const projectSkills = path.join(dir, "project-skills");
     const globalSkills = path.join(dir, "global-skills");
@@ -3439,10 +3445,14 @@ describe("skill tool", () => {
     await fs.mkdir(projectSkills, { recursive: true });
     await fs.mkdir(globalSkills, { recursive: true });
     await fs.mkdir(userSkills, { recursive: true });
-    await fs.mkdir(path.join(builtInSkills, "slides"), { recursive: true });
+    await fs.mkdir(path.join(builtInSkills, "presentations"), { recursive: true });
     await fs.writeFile(
-      path.join(builtInSkills, "slides", "SKILL.md"),
-      skillDoc("slides", "Built-in slides skill.", "# Slides Skill\nBuilt-in deck workflow."),
+      path.join(builtInSkills, "presentations", "SKILL.md"),
+      skillDoc(
+        "presentations",
+        "Built-in presentations skill.",
+        "# Presentations Skill\nBuilt-in deck workflow.",
+      ),
       "utf-8",
     );
 
@@ -3453,7 +3463,7 @@ describe("skill tool", () => {
     ctx.config = config;
 
     const t: any = createSkillTool(ctx);
-    const res: string = await t.execute({ skillName: "slides" });
+    const res: string = await t.execute({ skillName: "presentations" });
     expect(res).toContain("Built-in deck workflow.");
     expect(res).toContain("## Cowork Addendum");
   });

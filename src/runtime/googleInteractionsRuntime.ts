@@ -84,17 +84,22 @@ function buildGoogleRequestFingerprint(input: {
 function matchingGoogleProviderState(
   params: RuntimeRunTurnParams,
   modelId: string,
-  requestFingerprint: string,
 ): GoogleContinuationState | null {
   const providerState = params.providerState;
   if (!isGoogleContinuationState(providerState)) {
     return null;
   }
   if (providerState.model !== modelId) return null;
-  if (providerState.requestFingerprint && providerState.requestFingerprint !== requestFingerprint) {
-    return null;
-  }
   return providerState;
+}
+
+function googleContinuationRequestContextChanged(
+  providerState: GoogleContinuationState | null,
+  requestFingerprint: string,
+): boolean {
+  return Boolean(
+    providerState?.requestFingerprint && providerState.requestFingerprint !== requestFingerprint,
+  );
 }
 
 function nextGoogleProviderState(
@@ -112,6 +117,78 @@ function nextGoogleProviderState(
     updatedAt: new Date().toISOString(),
     requestFingerprint,
   };
+}
+
+function isGoogleNotImplementedError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("501") ||
+    normalized.includes("not_implemented") ||
+    normalized.includes("not implemented")
+  );
+}
+
+function sanitizedTextFromContent(content: unknown): string {
+  if (typeof content === "string") return content.trim();
+  if (!Array.isArray(content)) return "";
+
+  const parts: string[] = [];
+  for (const rawPart of content) {
+    if (typeof rawPart === "string") {
+      if (rawPart.trim()) parts.push(rawPart.trim());
+      continue;
+    }
+
+    const part = asRecord(rawPart);
+    if (!part) continue;
+    const partType = asString(part.type);
+    if (partType === "text" || partType === "input_text" || partType === "output_text") {
+      const text = asString(part.text) ?? asString(part.inputText) ?? asString(part.outputText);
+      if (text?.trim()) parts.push(text.trim());
+      continue;
+    }
+
+    if (
+      partType === "image" ||
+      partType === "input_image" ||
+      partType === "audio" ||
+      partType === "video" ||
+      partType === "document" ||
+      partType === "file"
+    ) {
+      parts.push(`[${partType}]`);
+    }
+  }
+
+  return parts.join("\n").trim();
+}
+
+function sanitizeGoogleReplayMessages(messages: ModelMessage[]): ModelMessage[] {
+  const sanitized: ModelMessage[] = [];
+  for (const message of messages) {
+    if (message.role === "tool") continue;
+
+    if (message.role === "user" || message.role === "system") {
+      const text = sanitizedTextFromContent(message.content);
+      if (text) sanitized.push({ ...message, content: text });
+      continue;
+    }
+
+    if (message.role === "assistant") {
+      const text = sanitizedTextFromContent(message.content);
+      if (text) sanitized.push({ role: "assistant", content: [{ type: "text", text }] });
+    }
+  }
+
+  return sanitized;
+}
+
+function googleReplayMessagesWereSanitized(
+  original: ModelMessage[],
+  sanitized: ModelMessage[],
+): boolean {
+  return stableFingerprintStringify(original) !== stableFingerprintStringify(sanitized);
 }
 
 function isDisabledGoogleCodeExecutionPart(part: unknown): boolean {
@@ -237,10 +314,17 @@ export function createGoogleInteractionsRuntime(
           params.allMessages ?? params.messages,
         )
           ? null
-          : matchingGoogleProviderState(params, resolved.model.id, initialRequestFingerprint);
+          : matchingGoogleProviderState(params, resolved.model.id);
         if (isGoogleContinuationState(params.providerState) && !activeProviderState) {
           params.log?.(
-            "google-interactions: Not reusing stored continuation because request context changed.",
+            "google-interactions: Not reusing stored continuation because model or history is incompatible.",
+          );
+        } else if (
+          activeProviderState &&
+          googleContinuationRequestContextChanged(activeProviderState, initialRequestFingerprint)
+        ) {
+          params.log?.(
+            "google-interactions: Stored continuation request context changed; attempting previous_interaction_id and will retry from transcript if rejected.",
           );
         }
         let finalProviderState = undefined as GoogleContinuationState | undefined;
@@ -336,11 +420,27 @@ export function createGoogleInteractionsRuntime(
               },
             });
 
+          const retryWithTextOnlyReplay = async (messages: ModelMessage[], error: unknown) => {
+            const sanitizedMessages = sanitizeGoogleReplayMessages(messages);
+            if (
+              sanitizedMessages.length === 0 ||
+              !googleReplayMessagesWereSanitized(messages, sanitizedMessages)
+            ) {
+              markModelCallSpanError(span, error);
+              throw error;
+            }
+            params.log?.(
+              "google-interactions: request is not implemented for full replay; retrying with text-only replay.",
+            );
+            return await callGoogleStep(sanitizedMessages, undefined);
+          };
+
           let assistantRecord: Record<string, unknown> = {};
           let interactionId: string | undefined;
+          let requestMessages: ModelMessage[] = stepMessages;
           try {
             const requestStartIndex = Math.min(nextInteractionInputStartIndex, stepMessages.length);
-            const requestMessages = previousInteractionId
+            requestMessages = previousInteractionId
               ? stepMessages.slice(requestStartIndex)
               : stepMessages;
             let result: Awaited<ReturnType<RunGoogleNativeInteractionStep>> | undefined;
@@ -378,7 +478,21 @@ export function createGoogleInteractionsRuntime(
               const cleanStateMessages = activeProviderState
                 ? [...(params.allMessages ?? params.messages)]
                 : stepMessages;
-              const result = await callGoogleStep(cleanStateMessages, undefined);
+              let result: Awaited<ReturnType<RunGoogleNativeInteractionStep>>;
+              try {
+                result = await callGoogleStep(cleanStateMessages, undefined);
+              } catch (cleanStateError) {
+                if (!isGoogleNotImplementedError(cleanStateError)) {
+                  markModelCallSpanError(span, cleanStateError);
+                  throw cleanStateError;
+                }
+                result = await retryWithTextOnlyReplay(cleanStateMessages, cleanStateError);
+              }
+              assistantRecord = asRecord(result.assistant) ?? {};
+              interactionId = result.interactionId;
+              markModelCallSpanSuccess(span, telemetry, assistantRecord);
+            } else if (!previousInteractionId && isGoogleNotImplementedError(error)) {
+              const result = await retryWithTextOnlyReplay(requestMessages, error);
               assistantRecord = asRecord(result.assistant) ?? {};
               interactionId = result.interactionId;
               markModelCallSpanSuccess(span, telemetry, assistantRecord);

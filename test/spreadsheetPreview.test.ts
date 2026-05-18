@@ -19,7 +19,7 @@ describe("spreadsheet preview parser", () => {
   test("parses CSV with quoted commas, newlines, empty cells, and viewport truncation", async () => {
     await withTempDir(async (dir) => {
       const rows = [
-        'name,note,amount',
+        "name,note,amount",
         '"Alice","quoted, comma",10',
         '"Bob","line one\nline two",',
       ];

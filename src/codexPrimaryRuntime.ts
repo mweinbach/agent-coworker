@@ -13,7 +13,7 @@ type FetchLike = typeof fetch;
 
 type ExtractZipArchive = (archivePath: string, destinationDir: string) => Promise<void>;
 
-type CodexRuntimeSkillName = "doc" | "slides" | "spreadsheet";
+type CodexRuntimeSkillName = "documents" | "presentations" | "spreadsheets";
 
 type SkillSourceSpec = {
   name: CodexRuntimeSkillName;
@@ -22,10 +22,12 @@ type SkillSourceSpec = {
 };
 
 const CODEX_RUNTIME_SKILLS: readonly SkillSourceSpec[] = [
-  { name: "doc", pluginName: "documents", sourceSkillName: "documents" },
-  { name: "slides", pluginName: "presentations", sourceSkillName: "presentations" },
-  { name: "spreadsheet", pluginName: "spreadsheets", sourceSkillName: "spreadsheets" },
+  { name: "documents", pluginName: "documents", sourceSkillName: "documents" },
+  { name: "presentations", pluginName: "presentations", sourceSkillName: "presentations" },
+  { name: "spreadsheets", pluginName: "spreadsheets", sourceSkillName: "spreadsheets" },
 ] as const;
+
+const LEGACY_CODEX_RUNTIME_SKILLS = ["doc", "slides", "spreadsheet"] as const;
 
 export type CodexPrimaryRuntimeSkillResult = {
   name: CodexRuntimeSkillName;
@@ -525,6 +527,49 @@ async function shouldOverwriteGlobalSkill(destination: string, force: boolean): 
   return manifest?.origin?.kind === "bootstrap";
 }
 
+function isManagedLegacyRuntimeSkillManifest(
+  manifest: Awaited<ReturnType<typeof readSkillInstallManifest>>,
+  skillName: (typeof LEGACY_CODEX_RUNTIME_SKILLS)[number],
+): boolean {
+  if (manifest?.origin?.kind !== "bootstrap") return false;
+  if (
+    manifest.installationId === `bootstrap-${skillName}` ||
+    manifest.installationId === `bootstrap-codex-primary-runtime-${skillName}`
+  ) {
+    return true;
+  }
+
+  const subdir = manifest.origin.subdir ?? "";
+  const url = manifest.origin.url ?? "";
+  return (
+    subdir === `skills/.curated/${skillName}` ||
+    subdir.endsWith(`/skills/.curated/${skillName}`) ||
+    subdir.endsWith(`/skills/${skillName}`) ||
+    url.includes(`/skills/.curated/${skillName}`)
+  );
+}
+
+async function removeLegacyRuntimeSkills(opts: {
+  destinationRoot?: string;
+  global: boolean;
+  log?: (line: string) => void;
+}): Promise<void> {
+  if (!opts.destinationRoot) return;
+
+  for (const skillName of LEGACY_CODEX_RUNTIME_SKILLS) {
+    const destination = path.join(opts.destinationRoot, skillName);
+    if (!(await pathExists(destination))) continue;
+
+    if (opts.global) {
+      const manifest = await readSkillInstallManifest(destination);
+      if (!isManagedLegacyRuntimeSkillManifest(manifest, skillName)) continue;
+    }
+
+    opts.log?.(`Removing legacy Codex ${skillName} skill from ${destination}`);
+    await fs.rm(destination, { recursive: true, force: true });
+  }
+}
+
 async function installSkill(opts: {
   spec: SkillSourceSpec;
   source: string | null;
@@ -695,6 +740,16 @@ export async function ensureCodexPrimaryRuntimeReady(
     const artifactTool = await resolveArtifactTool({
       home,
       runtimeRoots,
+    });
+    await removeLegacyRuntimeSkills({
+      destinationRoot: opts.builtInSkillsDir,
+      global: false,
+      log: opts.log,
+    });
+    await removeLegacyRuntimeSkills({
+      destinationRoot: opts.globalSkillsDir,
+      global: true,
+      log: opts.log,
     });
     const builtInSkillResults = await installSkills({
       home,

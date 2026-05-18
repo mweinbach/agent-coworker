@@ -94,6 +94,156 @@ function TimelineNode({
   );
 }
 
+type ReasoningSection = {
+  title: string;
+  body: string;
+};
+
+function parseReasoningSections(text: string): ReasoningSection[] {
+  const normalized = text.replace(/\r\n/g, "\n").trim();
+  if (!normalized) return [];
+
+  // Match bold headings like **Heading** or markdown headings like ### Heading
+  const headingRegex = /(?:^|\n+)(?:#+\s+|\*\*|__)([^*#\n_]+?)(?:\*\*|__)?\s*(?:\n+|$)/g;
+  const matches: { title: string; index: number; length: number }[] = [];
+
+  let match;
+  while ((match = headingRegex.exec(normalized)) !== null) {
+    matches.push({
+      title: match[1].trim(),
+      index: match.index,
+      length: match[0].length,
+    });
+  }
+
+  if (matches.length === 0) {
+    return [{ title: "", body: normalized }];
+  }
+
+  const sections: ReasoningSection[] = [];
+  for (let i = 0; i < matches.length; i++) {
+    const currentMatch = matches[i];
+    const nextMatch = matches[i + 1];
+
+    const contentStart = currentMatch.index + currentMatch.length;
+    const contentEnd = nextMatch ? nextMatch.index : normalized.length;
+    const body = normalized.slice(contentStart, contentEnd).trim();
+
+    sections.push({
+      title: currentMatch.title,
+      body,
+    });
+  }
+
+  if (matches[0].index > 0) {
+    const leadingBody = normalized.slice(0, matches[0].index).trim();
+    if (leadingBody) {
+      sections.unshift({ title: "", body: leadingBody });
+    }
+  }
+
+  return sections;
+}
+
+function ReasoningSectionNode({
+  title,
+  body,
+  isMostRecent,
+}: {
+  title: string;
+  body: string;
+  isMostRecent: boolean;
+}) {
+  const [open, setOpen] = useState(isMostRecent);
+
+  useEffect(() => {
+    setOpen(isMostRecent);
+  }, [isMostRecent]);
+
+  if (!title) {
+    return (
+      <MessageResponse
+        normalizeDisplayCitations
+        className="text-[13px] leading-snug text-foreground/82"
+      >
+        {body}
+      </MessageResponse>
+    );
+  }
+
+  return (
+    <div className="min-w-0 py-1 border-b border-border/12 last:border-b-0 pb-3 last:pb-0 mb-2.5 last:mb-0">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="flex items-center gap-1.5 text-left text-[13px] font-medium text-foreground outline-none hover:text-foreground/80"
+      >
+        <span>{title}</span>
+        <ChevronRightIcon
+          className={cn(
+            "size-3.5 text-muted-foreground/50 transition-transform duration-150",
+            open && "rotate-90",
+          )}
+        />
+      </button>
+      {open && body && (
+        <div className="mt-1.5 text-[12.5px] leading-relaxed text-muted-foreground/80 pl-0.5 select-text">
+          <MessageResponse normalizeDisplayCitations className="prose-sm leading-relaxed">
+            {body}
+          </MessageResponse>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ReasoningTimelineNode({
+  text,
+  isLast,
+  live,
+  isMostRecent,
+}: {
+  text: string;
+  isLast: boolean;
+  live?: boolean;
+  isMostRecent: boolean;
+}) {
+  const reasoningText = text.trim();
+
+  if (!reasoningText) {
+    return (
+      <TimelineNode
+        icon={<ClockIcon className="size-3 text-muted-foreground/38" />}
+        isLast={isLast}
+      >
+        <span className="activity-thinking-shimmer inline-flex items-center text-[13px] leading-snug">
+          Thinking
+        </span>
+      </TimelineNode>
+    );
+  }
+
+  const sections = useMemo(() => parseReasoningSections(reasoningText), [reasoningText]);
+
+  return (
+    <TimelineNode icon={<ClockIcon className="size-3 text-muted-foreground/38" />} isLast={isLast}>
+      <div className="flex flex-col gap-1.5 min-w-0">
+        {sections.map((section, idx) => {
+          const isSectionMostRecent = live ? isMostRecent && idx === sections.length - 1 : true;
+          return (
+            <ReasoningSectionNode
+              key={idx}
+              title={section.title}
+              body={section.body}
+              isMostRecent={isSectionMostRecent}
+            />
+          );
+        })}
+      </div>
+    </TimelineNode>
+  );
+}
+
 function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; live?: boolean }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
 
@@ -102,6 +252,12 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
       containerRef.current.scrollTop = containerRef.current.scrollHeight;
     }
   }, [live, summary]);
+
+  const lastReasoningEntryId = useMemo(() => {
+    const reasoningEntries = summary.entries.filter((e) => e.kind === "reasoning");
+    if (reasoningEntries.length === 0) return null;
+    return reasoningEntries[reasoningEntries.length - 1].item.id;
+  }, [summary.entries]);
 
   return (
     <div
@@ -115,26 +271,15 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
         const isLast = i === summary.entries.length - 1;
 
         if (entry.kind === "reasoning") {
-          const reasoningText = entry.item.text.trim();
+          const isMostRecent = entry.item.id === lastReasoningEntryId;
           return (
             <div key={entry.item.id} data-activity-entry-kind="reasoning">
-              <TimelineNode
-                icon={<ClockIcon className="size-3 text-muted-foreground/38" />}
+              <ReasoningTimelineNode
+                text={entry.item.text}
                 isLast={isLast}
-              >
-                {reasoningText ? (
-                  <MessageResponse
-                    normalizeDisplayCitations
-                    className="text-[13px] leading-snug text-foreground/82"
-                  >
-                    {reasoningText}
-                  </MessageResponse>
-                ) : (
-                  <span className="activity-thinking-shimmer inline-flex items-center text-[13px] leading-snug">
-                    Thinking
-                  </span>
-                )}
-              </TimelineNode>
+                live={live}
+                isMostRecent={isMostRecent}
+              />
             </div>
           );
         }

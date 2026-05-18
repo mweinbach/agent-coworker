@@ -1,7 +1,0 @@
-interface:
-  display_name: "Presentations"
-  short_description: "Create polished PowerPoint and Google Slides decks"
-  icon_small: "./assets/file-presentation.png"
-  icon_large: "./assets/file-presentation.png"
-  brand_color: "#C43E1C"
-  default_prompt: "Create a presentation slide deck with $Presentations."

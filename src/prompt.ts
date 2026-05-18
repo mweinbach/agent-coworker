@@ -596,12 +596,12 @@ function buildSkillPolicySection(
   return [
     "## Skill Loading Policy (Strict)",
     "",
-    "- Before creating any domain deliverable (spreadsheet, document, slides, PDF), call the `skill` tool first.",
+    "- Before creating any domain deliverable (spreadsheet, document, presentation, PDF), call the `skill` tool first.",
     "- If the user prompt explicitly says to use the `skill` tool, that call is mandatory and must happen before related artifact creation.",
     "- Do not write build scripts or output artifacts for those domains before loading the corresponding skill.",
     "- If the task spans multiple deliverable domains, load each required skill before creating files.",
     "- Never claim a skill was loaded unless the `skill` tool call actually occurred in this run.",
-    "- If the `slides` skill is available and the task is presentation authoring, use that path instead of defaulting to ad hoc `python-pptx` generation. `python-pptx` is an inspection or last-resort fallback, not the default deck-authoring path.",
+    "- If the `presentations` skill is available and the task is presentation authoring, use that path instead of defaulting to ad hoc `python-pptx` generation. `python-pptx` is an inspection or last-resort fallback, not the default deck-authoring path.",
     "- Do not count search result pages, article URLs, provider-native search metadata, or HTML previews as images. Only claim images were added after direct image assets were downloaded or local image files were read.",
     "- Placeholder, stock stand-ins, or unrelated fallback images are degraded output and must be disclosed explicitly instead of being presented as if they satisfy the original image request.",
     "- For one-off deliverables, keep the user's workspace focused on the requested artifacts and source files instead of scaffolding a disposable package-managed project.",
@@ -702,13 +702,13 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
     defaultImplementationRole: defaultSubagentRoles.implementationRoleId,
     defaultVerificationRole: defaultSubagentRoles.verificationRoleId,
     knowledgeCutoff: supportedModel.knowledgeCutoff,
-    skillNames: skillNames || '"pdf", "doc", "slides", "spreadsheet"',
+    skillNames: skillNames || '"pdf", "documents", "presentations", "spreadsheets"',
     skillExamples:
       skillExamples ||
       [
-        '- Creating a presentation → load the "slides" skill before starting',
-        '- Creating a spreadsheet → load the "spreadsheet" skill before starting',
-        '- Creating a Word document → load the "doc" skill before starting',
+        '- Creating a presentation → load the "presentations" skill before starting',
+        '- Creating a spreadsheet → load the "spreadsheets" skill before starting',
+        '- Creating a Word document → load the "documents" skill before starting',
         '- Creating a PDF → load the "pdf" skill before starting',
       ].join("\n"),
   };

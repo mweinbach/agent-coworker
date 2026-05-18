@@ -20,7 +20,6 @@ import {
 } from "./server/agents/roles";
 import type { AgentRole } from "./shared/agents";
 import {
-  getCodexWebSearchBackendFromProviderOptions,
   getGoogleNativeWebSearchFromProviderOptions,
   getLocalWebSearchProviderFromProviderOptions,
 } from "./shared/openaiCompatibleOptions";
@@ -316,13 +315,7 @@ function renderCodexNativeWebSearchPrompt(prompt: string, config: AgentConfig): 
     return prompt;
   }
 
-  const backend = getCodexWebSearchBackendFromProviderOptions(config.providerOptions);
-  if (backend !== "native") {
-    const providerName = backend === "parallel" ? "Parallel" : "Exa";
-    return `${prompt}\n\n## Codex Web Search Backend\n\nThis Codex CLI session is configured to use the local ${providerName}-backed webSearch tool instead of provider-native web search.\n\n- Use the local webSearch tool for current web lookup.\n- Use local webFetch when you need the full contents of a specific page or need to download a direct file.\n- Do not assume provider-native citations or provider-native web-search actions are available in this session.`;
-  }
-
-  return prompt;
+  return `${prompt}\n\n## Codex Web Search Backend\n\nCodex app-server owns web search and page fetching for this Codex CLI session.\n\n- Use Codex-native web search/fetch capabilities for current web lookup and page reading.\n- Do not call local Cowork webSearch or webFetch tools; they are reserved for non-Codex providers.`;
 }
 
 function renderGoogleNativeToolsPrompt(prompt: string, config: AgentConfig): string {

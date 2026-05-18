@@ -388,6 +388,25 @@ function withCodexAppServerDiagnostics(error: unknown, command: CodexAppServerCo
   return next;
 }
 
+function isInvalidCodexThreadError(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  const normalized = text.toLowerCase();
+  const mentionsThread =
+    normalized.includes("thread_id") ||
+    normalized.includes("thread id") ||
+    normalized.includes("threadid") ||
+    normalized.includes("thread");
+  if (!mentionsThread) return false;
+
+  return (
+    normalized.includes("not found") ||
+    normalized.includes("invalid") ||
+    normalized.includes("expired") ||
+    normalized.includes("unknown") ||
+    normalized.includes("does not exist")
+  );
+}
+
 async function listAppServerModels(
   client: CodexAppServerClient,
 ): Promise<CodexAppServerModelListEntry[]> {
@@ -787,7 +806,12 @@ async function handleNotification(
           notification.method === "item/commandExecution/outputDelta"
             ? "commandExecution"
             : "fileChange",
-        output: asString(payload?.delta) ?? "",
+        output:
+          asString(payload?.delta) ??
+          asString(payload?.diff) ??
+          asString(payload?.patch) ??
+          asString(payload?.summary) ??
+          "",
         providerExecuted: true,
       });
       break;
@@ -961,37 +985,53 @@ export function createCodexAppServerRuntime(): LlmRuntime {
         const sandboxPolicy = codexSandboxPolicy(params);
         const threadConfig = codexThreadConfig(params);
         const dynamicTools = codexDynamicToolSpecs(params.tools);
-        const shouldResumeThread = currentState?.model === effectiveModel;
-        const threadResult = shouldResumeThread
-          ? await client.request(
+        const resumeState = currentState?.model === effectiveModel ? currentState : null;
+        let resumedThread = resumeState !== null;
+        const startThread = async () =>
+          await client.request(
+            "thread/start",
+            {
+              cwd: params.config.workingDirectory,
+              model: effectiveModel,
+              modelProvider: "openai",
+              approvalPolicy,
+              sandbox: sandboxMode,
+              ...(threadConfig ? { config: threadConfig } : {}),
+              baseInstructions: codexBaseInstructions(params.system),
+              experimentalRawEvents: params.includeRawChunks ?? true,
+              ...(dynamicTools.length > 0 ? { dynamicTools } : {}),
+            },
+            CODEX_STARTUP_RPC_TIMEOUT_MS,
+          );
+        let threadResult: unknown;
+        if (resumeState) {
+          try {
+            threadResult = await client.request(
               "thread/resume",
               {
-                threadId: currentState.threadId,
+                threadId: resumeState.threadId,
                 cwd: params.config.workingDirectory,
                 model: effectiveModel,
                 modelProvider: "openai",
                 approvalPolicy,
                 sandbox: sandboxMode,
                 ...(threadConfig ? { config: threadConfig } : {}),
-                ...(dynamicTools.length > 0 ? { dynamicTools } : {}),
-              },
-              CODEX_STARTUP_RPC_TIMEOUT_MS,
-            )
-          : await client.request(
-              "thread/start",
-              {
-                cwd: params.config.workingDirectory,
-                model: effectiveModel,
-                modelProvider: "openai",
-                approvalPolicy,
-                sandbox: sandboxMode,
-                ...(threadConfig ? { config: threadConfig } : {}),
-                baseInstructions: codexBaseInstructions(params.system),
                 experimentalRawEvents: params.includeRawChunks ?? true,
                 ...(dynamicTools.length > 0 ? { dynamicTools } : {}),
               },
               CODEX_STARTUP_RPC_TIMEOUT_MS,
             );
+          } catch (error) {
+            if (!isInvalidCodexThreadError(error)) throw error;
+            params.log?.(
+              `[codex-app-server] stored thread ${resumeState.threadId} was rejected; starting a fresh app-server thread.`,
+            );
+            resumedThread = false;
+            threadResult = await startThread();
+          }
+        } else {
+          threadResult = await startThread();
+        }
         params.abortSignal?.throwIfAborted();
         const thread = asRecord(asRecord(threadResult)?.thread);
         threadId = asString(thread?.id);
@@ -1008,7 +1048,7 @@ export function createCodexAppServerRuntime(): LlmRuntime {
         });
 
         const input = buildCodexTurnInput(params.allMessages ?? params.messages, {
-          resumedThread: shouldResumeThread,
+          resumedThread,
         });
         if (input.length === 0)
           throw new Error("codex app-server runtime requires a user message.");

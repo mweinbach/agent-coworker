@@ -531,7 +531,7 @@ Changes in `7.22`:
 
 Changes in `7.21`:
 
-- `set_config.config.providerOptions.codex-cli` and `session_config.config.providerOptions.codex-cli` now support `webSearchBackend: "native" | "exa"` for legacy configuration. In current Codex app-server hybrid mode, Codex-native web search/fetch owns Codex turns; the local Exa/Parallel `webSearch` tool is only exposed to non-Codex providers.
+- `set_config.config.providerOptions.codex-cli` and `session_config.config.providerOptions.codex-cli` now support `webSearchBackend: "native" | "exa" | "parallel"` for legacy configuration. In current Codex app-server hybrid mode, Codex-native web search/fetch owns Codex turns; the local Exa/Parallel `webSearch` tool is only exposed to non-Codex providers.
 
 Changes in `7.20`:
 
@@ -3069,7 +3069,7 @@ Current runtime config. Sent on connection and after `set_config`.
 | `config.providerOptions.codex-cli.reasoningEffort` | `"none" \| "low" \| "medium" \| "high" \| "xhigh"` | Current editable Codex CLI reasoning effort |
 | `config.providerOptions.codex-cli.reasoningSummary` | `"auto" \| "concise" \| "detailed"` | Current editable Codex CLI reasoning summary |
 | `config.providerOptions.codex-cli.textVerbosity` | `"low" \| "medium" \| "high"` | Current editable Codex CLI verbosity forwarded to Codex app-server as `model_verbosity` |
-| `config.providerOptions.codex-cli.webSearchBackend` | `"native" \| "exa"` | Legacy Codex web search backend preference. Hybrid Codex app-server turns use Codex-native web search/fetch; local Exa/Parallel tools are reserved for non-Codex providers |
+| `config.providerOptions.codex-cli.webSearchBackend` | `"native" \| "exa" \| "parallel"` | Legacy Codex web search backend preference. Hybrid Codex app-server turns use Codex-native web search/fetch; local Exa/Parallel tools are reserved for non-Codex providers |
 | `config.providerOptions.codex-cli.webSearchMode` | `"disabled" \| "cached" \| "live"` | Codex native web-search mode forwarded to Codex app-server as `web_search` |
 | `config.providerOptions.codex-cli.webSearch.contextSize` | `"low" \| "medium" \| "high"` | Codex native web-search context size forwarded to Codex app-server as `tools.web_search.context_size` |
 | `config.providerOptions.codex-cli.webSearch.allowedDomains` | `string[]` | Codex native web-search allowed domains forwarded to Codex app-server as `tools.web_search.allowed_domains` |

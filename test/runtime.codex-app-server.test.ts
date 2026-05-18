@@ -284,6 +284,9 @@ function createMockClient(): CodexAppServerClient {
         approvalPolicy?: string;
         sandbox?: string;
       };
+      if (process.env.COWORK_CODEX_APP_SERVER_ARGS?.includes("stale-resume")) {
+        throw new Error(`thread ${record.threadId ?? "unknown"} not found`);
+      }
       result = {
         thread: { id: record.threadId ?? "thread_1", modelProvider: "openai", turns: [] },
         model: record.model ?? "gpt-5.4",
@@ -1154,6 +1157,49 @@ rl.on("line", (line) => {
     ]);
   });
 
+  test.serial("starts a fresh thread when stored app-server thread is stale", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-stale-"));
+    const capturePath = path.join(dir, "requests.jsonl");
+    process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
+    process.env.COWORK_CODEX_APP_SERVER_ARGS = "stale-resume";
+
+    const runtime = createRuntime(makeConfig(dir));
+    const result = await runtime.runTurn({
+      config: makeConfig(dir),
+      system: "You are Codex.",
+      allMessages: [
+        { role: "user", content: "Earlier question" },
+        { role: "assistant", content: "Earlier answer" },
+        { role: "user", content: "Newest question" },
+      ],
+      messages: [{ role: "user", content: "Newest question" }],
+      tools: {},
+      maxSteps: 1,
+      providerState: {
+        provider: "codex-cli",
+        model: "gpt-5.4",
+        threadId: "stale_thread",
+        updatedAt: new Date().toISOString(),
+      },
+    });
+
+    const requests = await readCapturedRequests(capturePath);
+    expect(requests.map((entry) => entry.method)).toEqual(
+      expect.arrayContaining(["thread/resume", "thread/start", "turn/start"]),
+    );
+    expect(requests.find((entry) => entry.method === "thread/start")?.params).toHaveProperty(
+      "baseInstructions",
+    );
+    expect(requests.find((entry) => entry.method === "turn/start")?.params.input).toEqual([
+      { type: "text", text: "User: Earlier question", text_elements: [] },
+      { type: "text", text: "Assistant: Earlier answer", text_elements: [] },
+      { type: "text", text: "User: Newest question", text_elements: [] },
+    ]);
+    expect(result.providerState).toEqual(
+      expect.objectContaining({ provider: "codex-cli", model: "gpt-5.4", threadId: "thread_1" }),
+    );
+  });
+
   test.serial(
     "preserves fresh conversation history and attachment order in text_elements",
     async () => {
@@ -1228,6 +1274,7 @@ rl.on("line", (line) => {
     process.env.COWORK_CODEX_APP_SERVER_ARGS = "eventful";
     const todos: unknown[] = [];
     const streamParts: unknown[] = [];
+    const prompts: unknown[] = [];
     const runtime = createRuntime(makeConfig(dir));
 
     await runtime.runTurn({
@@ -1236,7 +1283,10 @@ rl.on("line", (line) => {
       messages: [{ role: "user", content: "Do work" }],
       tools: {},
       maxSteps: 1,
-      askUser: async () => "yes",
+      askUser: async (question, options) => {
+        prompts.push({ question, options });
+        return "yes";
+      },
       updateTodos: (nextTodos) => todos.push(nextTodos),
       onModelStreamPart: (part) => streamParts.push(part),
     });
@@ -1258,8 +1308,9 @@ rl.on("line", (line) => {
       expect.objectContaining({
         type: "tool-result",
         toolName: "fileChange",
-        output: expect.stringContaining("src/example.ts"),
+        output: expect.stringContaining("--- a/src/example.ts"),
       }),
     );
+    expect(prompts).toEqual([{ question: "Need detail?", options: ["yes"] }]);
   });
 });

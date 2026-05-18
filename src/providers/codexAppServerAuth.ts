@@ -3,6 +3,7 @@ import { openExternalUrl, type UrlOpener } from "../utils/browser";
 import { type CodexAppServerClient, getPooledCodexAppServerClient } from "./codexAppServerClient";
 
 const CODEX_AUTH_RPC_TIMEOUT_MS = 60_000;
+const CODEX_STATUS_RPC_TIMEOUT_MS = 15_000;
 
 export type CodexAppServerAccount = {
   type: "apiKey" | "chatgpt";
@@ -219,7 +220,7 @@ function isUnknownMethodError(error: unknown, method: string): boolean {
 async function readCodexAppServerAppsConfig(
   client: CodexAppServerClient,
 ): Promise<CodexAppServerAppsConfig> {
-  const result = asRecord(await client.request("config/read", {}));
+  const result = asRecord(await client.request("config/read", {}, CODEX_STATUS_RPC_TIMEOUT_MS));
   const config = asRecord(result?.config);
   return normalizeAppConfig(config?.apps);
 }
@@ -229,10 +230,14 @@ async function listCodexAppServerMcpStatuses(client: CodexAppServerClient): Prom
   let cursor: string | undefined;
   do {
     const result = asRecord(
-      await client.request("mcpServerStatus/list", {
-        limit: 100,
-        cursor: cursor ?? null,
-      }),
+      await client.request(
+        "mcpServerStatus/list",
+        {
+          limit: 100,
+          cursor: cursor ?? null,
+        },
+        CODEX_STATUS_RPC_TIMEOUT_MS,
+      ),
     );
     const items = Array.isArray(result?.data) ? result.data : [];
     statuses.push(...items);
@@ -338,11 +343,15 @@ async function listCodexAppServerAppsViaLegacyAppList(
   let cursor: string | undefined;
   do {
     const result = asRecord(
-      await client.request("app/list", {
-        limit: 100,
-        cursor: cursor ?? null,
-        forceRefetch: opts.forceRefetch === true,
-      }),
+      await client.request(
+        "app/list",
+        {
+          limit: 100,
+          cursor: cursor ?? null,
+          forceRefetch: opts.forceRefetch === true,
+        },
+        CODEX_STATUS_RPC_TIMEOUT_MS,
+      ),
     );
     const items = Array.isArray(result?.data) ? result.data : [];
     for (const item of items) {
@@ -358,43 +367,55 @@ export async function listCodexAppServerModels(
   opts: ListModelsOptions = {},
 ): Promise<CodexAppServerModel[]> {
   if (appServerAuthOverrides.listModels) return await appServerAuthOverrides.listModels(opts);
-  return await withClient(async (client) => {
-    const models: CodexAppServerModel[] = [];
-    let cursor: string | undefined;
-    do {
-      const result = asRecord(
-        await client.request("model/list", {
-          limit: 100,
-          cursor: cursor ?? null,
-        }),
-      );
-      const items = Array.isArray(result?.data)
-        ? result.data
-        : Array.isArray(result?.items)
-          ? result.items
-          : [];
-      for (const item of items) {
-        const model = normalizeModel(item);
-        if (model) models.push(model);
-      }
-      cursor = asString(result?.nextCursor) ?? asString(result?.next_cursor);
-    } while (cursor);
-    return models;
-  }, opts.log, opts.codexHome);
+  return await withClient(
+    async (client) => {
+      const models: CodexAppServerModel[] = [];
+      let cursor: string | undefined;
+      do {
+        const result = asRecord(
+          await client.request(
+            "model/list",
+            {
+              limit: 100,
+              cursor: cursor ?? null,
+            },
+            CODEX_STATUS_RPC_TIMEOUT_MS,
+          ),
+        );
+        const items = Array.isArray(result?.data)
+          ? result.data
+          : Array.isArray(result?.items)
+            ? result.items
+            : [];
+        for (const item of items) {
+          const model = normalizeModel(item);
+          if (model) models.push(model);
+        }
+        cursor = asString(result?.nextCursor) ?? asString(result?.next_cursor);
+      } while (cursor);
+      return models;
+    },
+    opts.log,
+    opts.codexHome,
+  );
 }
 
 export async function listCodexAppServerApps(
   opts: ListAppsOptions = {},
 ): Promise<CodexAppServerApp[]> {
   if (appServerAuthOverrides.listApps) return await appServerAuthOverrides.listApps(opts);
-  return await withClient(async (client) => {
-    try {
-      return await listCodexAppServerAppsViaMcpStatus(client);
-    } catch (error) {
-      if (!isUnknownMethodError(error, "mcpServerStatus/list")) throw error;
-      return await listCodexAppServerAppsViaLegacyAppList(client, opts);
-    }
-  }, opts.log, opts.codexHome);
+  return await withClient(
+    async (client) => {
+      try {
+        return await listCodexAppServerAppsViaMcpStatus(client);
+      } catch (error) {
+        if (!isUnknownMethodError(error, "mcpServerStatus/list")) throw error;
+        return await listCodexAppServerAppsViaLegacyAppList(client, opts);
+      }
+    },
+    opts.log,
+    opts.codexHome,
+  );
 }
 
 export async function setCodexAppServerAppEnabled(opts: SetAppEnabledOptions): Promise<void> {
@@ -404,28 +425,44 @@ export async function setCodexAppServerAppEnabled(opts: SetAppEnabledOptions): P
   }
   const appId = opts.appId.trim();
   if (!appId) throw new Error("App id is required.");
-  await withClient(async (client) => {
-    await client.request("config/value/write", {
-      keyPath: `apps.${appId}.enabled`,
-      value: opts.enabled,
-      mergeStrategy: "upsert",
-    });
-  }, opts.log, opts.codexHome);
+  await withClient(
+    async (client) => {
+      await client.request(
+        "config/value/write",
+        {
+          keyPath: `apps.${appId}.enabled`,
+          value: opts.enabled,
+          mergeStrategy: "upsert",
+        },
+        CODEX_AUTH_RPC_TIMEOUT_MS,
+      );
+    },
+    opts.log,
+    opts.codexHome,
+  );
 }
 
 export async function readCodexAppServerAccount(
   opts: ReadAccountOptions,
 ): Promise<{ account: CodexAppServerAccount | null; requiresOpenaiAuth: boolean }> {
   if (appServerAuthOverrides.readAccount) return await appServerAuthOverrides.readAccount(opts);
-  return await withClient(async (client) => {
-    const result = asRecord(
-      await client.request("account/read", { refreshToken: opts.refreshToken ?? false }),
-    );
-    return {
-      account: normalizeAccount(result?.account),
-      requiresOpenaiAuth: result?.requiresOpenaiAuth === true,
-    };
-  }, opts.log, opts.codexHome);
+  return await withClient(
+    async (client) => {
+      const result = asRecord(
+        await client.request(
+          "account/read",
+          { refreshToken: opts.refreshToken ?? false },
+          CODEX_STATUS_RPC_TIMEOUT_MS,
+        ),
+      );
+      return {
+        account: normalizeAccount(result?.account),
+        requiresOpenaiAuth: result?.requiresOpenaiAuth === true,
+      };
+    },
+    opts.log,
+    opts.codexHome,
+  );
 }
 
 export async function readCodexAppServerRateLimits(
@@ -434,31 +471,50 @@ export async function readCodexAppServerRateLimits(
   if (appServerAuthOverrides.readRateLimits) {
     return await appServerAuthOverrides.readRateLimits(opts);
   }
-  return await withClient(async (client) => {
-    const result = asRecord(await client.request("account/rateLimits/read"));
-    return (asRecord(result?.rateLimits) as CodexAppServerRateLimits | null) ?? null;
-  }, opts.log, opts.codexHome);
+  return await withClient(
+    async (client) => {
+      const result = asRecord(
+        await client.request("account/rateLimits/read", {}, CODEX_STATUS_RPC_TIMEOUT_MS),
+      );
+      return (asRecord(result?.rateLimits) as CodexAppServerRateLimits | null) ?? null;
+    },
+    opts.log,
+    opts.codexHome,
+  );
 }
 
 export async function loginCodexAppServerChatGpt(
   opts: LoginOptions,
 ): Promise<{ account: CodexAppServerAccount | null }> {
   if (appServerAuthOverrides.login) return await appServerAuthOverrides.login(opts);
-  return await withClient(async (client) => {
-    const started = asRecord(await client.request("account/login/start", { type: "chatgpt" }));
-    const authUrl = asString(started?.authUrl);
-    const loginId = asString(started?.loginId);
-    if (!authUrl || !loginId) {
-      throw new Error("codex app-server did not return a ChatGPT login URL.");
-    }
-    opts.log?.("[auth] opening Codex app-server ChatGPT login URL.");
-    await (opts.openUrl ?? openExternalUrl)(authUrl);
-    await waitForLogin(client, loginId);
-    const result = asRecord(await client.request("account/read", { refreshToken: true }));
-    return {
-      account: normalizeAccount(result?.account),
-    };
-  }, opts.log, opts.codexHome);
+  return await withClient(
+    async (client) => {
+      const started = asRecord(
+        await client.request("account/login/start", { type: "chatgpt" }, CODEX_AUTH_RPC_TIMEOUT_MS),
+      );
+      const authUrl = asString(started?.authUrl);
+      const loginId = asString(started?.loginId);
+      if (!authUrl || !loginId) {
+        throw new Error("codex app-server did not return a ChatGPT login URL.");
+      }
+      opts.log?.("[auth] opening Codex app-server ChatGPT login URL.");
+      const opened = await (opts.openUrl ?? openExternalUrl)(authUrl);
+      if (!opened) {
+        throw new Error(
+          "Unable to open the Codex app-server ChatGPT login URL. Open a browser and try again.",
+        );
+      }
+      await waitForLogin(client, loginId);
+      const result = asRecord(
+        await client.request("account/read", { refreshToken: true }, CODEX_AUTH_RPC_TIMEOUT_MS),
+      );
+      return {
+        account: normalizeAccount(result?.account),
+      };
+    },
+    opts.log,
+    opts.codexHome,
+  );
 }
 
 export async function logoutCodexAppServer(
@@ -467,24 +523,28 @@ export async function logoutCodexAppServer(
   revoked: boolean;
   message: string;
 }> {
-  return await withClient(async (client) => {
-    let revoked = false;
-    let message = "Codex app-server does not expose a logout method.";
-    for (const method of ["account/logout", "auth/revoke"]) {
-      try {
-        await client.request(method, {}, CODEX_AUTH_RPC_TIMEOUT_MS);
-        revoked = true;
-        message = `Codex app-server auth revoked via ${method}.`;
-        break;
-      } catch (error) {
-        if (!isUnknownMethodError(error, method)) {
-          message = `Codex app-server ${method} failed: ${error instanceof Error ? error.message : String(error)}`;
+  return await withClient(
+    async (client) => {
+      let revoked = false;
+      let message = "Codex app-server does not expose a logout method.";
+      for (const method of ["account/logout", "auth/revoke"]) {
+        try {
+          await client.request(method, {}, CODEX_AUTH_RPC_TIMEOUT_MS);
+          revoked = true;
+          message = `Codex app-server auth revoked via ${method}.`;
           break;
+        } catch (error) {
+          if (!isUnknownMethodError(error, method)) {
+            message = `Codex app-server ${method} failed: ${error instanceof Error ? error.message : String(error)}`;
+            break;
+          }
         }
       }
-    }
-    return { revoked, message };
-  }, opts.log, opts.codexHome);
+      return { revoked, message };
+    },
+    opts.log,
+    opts.codexHome,
+  );
 }
 
 export const __internal = {

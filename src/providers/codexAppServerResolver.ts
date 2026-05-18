@@ -381,7 +381,7 @@ async function installCodexAppServer(
   const release = await fetchCodexRelease({ version: opts.version }, overrides);
   const executablePath = managedExecutablePath(homeDir, release.version, target);
   const currentPath = managedCurrentPath(homeDir, target);
-  const key = `${target.platform}-${target.arch}-${release.version}`;
+  const key = `${homeDir}-${target.platform}-${target.arch}-${release.version}`;
   const existing = await pathExists(executablePath);
   if (existing && !opts.force) {
     await promoteManagedInstall(executablePath, currentPath, release.version, target);

@@ -105,7 +105,9 @@ function ToggleChip({
   "aria-label"?: string;
   id?: string;
 }) {
-  return <Switch id={id} checked={pressed} onCheckedChange={onPressedChange} aria-label={ariaLabel} />;
+  return (
+    <Switch id={id} checked={pressed} onCheckedChange={onPressedChange} aria-label={ariaLabel} />
+  );
 }
 
 function updateProviderOption(
@@ -525,7 +527,7 @@ export function SearchSettingsCard({
                     ? `Google models still use local ${formatWebSearchBackendLabel(selectedLocalProvider)} search from an older workspace override. Changing Search provider here will sync Google and ChatGPT settings.`
                     : searchProviderUsesNative
                       ? "Use provider-native search when the active model supports it. Codex uses Codex app-server native web search in this mode."
-                      : `Use the local webSearch tool backed by ${formatWebSearchBackendLabel(effectiveSearchProvider)}.`}
+                      : `Use the local webSearch tool backed by ${formatWebSearchBackendLabel(effectiveSearchProvider)} for non-Codex models.`}
                 </div>
               </div>
               <div className="w-full max-w-52">
@@ -595,7 +597,7 @@ export function SearchSettingsCard({
               <div className="rounded-lg border border-border/60 bg-background/35 p-3 text-xs text-muted-foreground">
                 {hasLegacyGeminiSearchOverride
                   ? `Google models currently use local ${LOCAL_WEB_SEARCH_PROVIDER_LABELS[selectedLocalProvider]} search because this workspace still has a Gemini-specific override. Choose Native above to restore provider-native search for both providers.`
-                  : `${LOCAL_WEB_SEARCH_PROVIDER_LABELS[selectedLocalProvider]} is the active local search tool for this workspace.`}
+                  : `${LOCAL_WEB_SEARCH_PROVIDER_LABELS[selectedLocalProvider]} is the active local search tool for non-Codex models in this workspace.`}
               </div>
             )}
           </div>
@@ -1153,7 +1155,10 @@ export function WorkspacesPage() {
               <CardContent className="space-y-4">
                 <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
                   <div className="grid gap-1.5">
-                    <Label htmlFor="mcp-toggle" className="text-sm font-medium leading-none cursor-pointer">
+                    <Label
+                      htmlFor="mcp-toggle"
+                      className="text-sm font-medium leading-none cursor-pointer"
+                    >
                       MCP tools
                     </Label>
                     <div className="text-xs text-muted-foreground">
@@ -1175,7 +1180,10 @@ export function WorkspacesPage() {
 
                 <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
                   <div className="grid gap-1.5">
-                    <Label htmlFor="backups-toggle" className="text-sm font-medium leading-none cursor-pointer">
+                    <Label
+                      htmlFor="backups-toggle"
+                      className="text-sm font-medium leading-none cursor-pointer"
+                    >
                       Workspace backups
                     </Label>
                     <div className="text-xs text-muted-foreground">
@@ -1195,7 +1203,10 @@ export function WorkspacesPage() {
 
                 <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
                   <div className="grid gap-1.5">
-                    <Label htmlFor="yolo-toggle" className="text-sm font-medium leading-none cursor-pointer">
+                    <Label
+                      htmlFor="yolo-toggle"
+                      className="text-sm font-medium leading-none cursor-pointer"
+                    >
                       Run shell commands without asking
                     </Label>
                     <div className="text-xs text-muted-foreground">

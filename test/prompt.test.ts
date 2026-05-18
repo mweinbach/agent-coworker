@@ -375,6 +375,25 @@ describe("loadSystemPrompt", () => {
     expect(prompt).toContain("Keep at most one write-capable child per file area at a time");
   });
 
+  test("codex-cli prompt uses app-server native web search even with legacy local preference", async () => {
+    const prompt = await loadSystemPrompt(
+      makeConfig({
+        provider: "codex-cli",
+        model: "gpt-5.4",
+        preferredChildModel: "gpt-5.4",
+        providerOptions: {
+          "codex-cli": {
+            webSearchBackend: "parallel",
+          },
+        },
+      }),
+    );
+
+    expect(prompt).toContain("Codex app-server owns web search and page fetching");
+    expect(prompt).toContain("Do not call local Cowork webSearch or webFetch tools");
+    expect(prompt).not.toContain("configured to use the local Parallel-backed webSearch tool");
+  });
+
   test("does not list Baseten child models in the spawnAgent summary", async () => {
     const config = makeConfig({
       provider: "baseten",

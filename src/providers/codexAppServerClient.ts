@@ -170,7 +170,12 @@ export async function startCodexAppServerClient(
       pending.delete(id);
       const error = asRecord(record.error);
       if (error) {
-        request.reject(new Error(asString(error.message) ?? "codex app-server request failed"));
+        const rpcError = new Error(asString(error.message) ?? "codex app-server request failed");
+        Object.assign(rpcError, {
+          ...(error.code !== undefined ? { code: error.code } : {}),
+          ...(error.data !== undefined ? { data: error.data } : {}),
+        });
+        request.reject(rpcError);
       } else {
         request.resolve(record.result);
       }
@@ -281,13 +286,21 @@ async function respondToServerRequest(
   handlers: ReadonlySet<CodexAppServerRequestHandler>,
   onJsonRpcMessage: (message: CodexAppServerJsonRpcRawMessage) => void,
 ) {
+  const writeResponse = (response: Record<string, unknown>) => {
+    onJsonRpcMessage({ direction: "client_response", message: response });
+    try {
+      child.stdin.write(`${JSON.stringify(response)}\n`);
+    } catch {
+      // The app-server may have exited after issuing a request. There is no
+      // live peer to receive the response, so keep the client shutdown local.
+    }
+  };
   try {
     let result: unknown = {};
     const handler = [...handlers].at(-1);
     if (handler) result = await handler(request);
     const response = { id: request.id, result: result ?? {} };
-    onJsonRpcMessage({ direction: "client_response", message: response });
-    child.stdin.write(`${JSON.stringify(response)}\n`);
+    writeResponse(response);
   } catch (error) {
     const response = {
       id: request.id,
@@ -296,8 +309,7 @@ async function respondToServerRequest(
         message: error instanceof Error ? error.message : String(error),
       },
     };
-    onJsonRpcMessage({ direction: "client_response", message: response });
-    child.stdin.write(`${JSON.stringify(response)}\n`);
+    writeResponse(response);
   }
 }
 
@@ -307,7 +319,7 @@ async function stopProcess(child: ChildProcessWithoutNullStreams): Promise<void>
     const timeout = setTimeout(() => {
       child.kill("SIGKILL");
       resolve();
-    }, 500);
+    }, 5_000);
     child.once("exit", () => {
       clearTimeout(timeout);
       resolve();
@@ -321,13 +333,31 @@ export async function withCodexAppServerClient<T>(
   opts: CodexAppServerClientOptions = {},
 ): Promise<T> {
   const client = await startCodexAppServerClient(opts);
+  let originalError: unknown;
+  let result: { value: T } | undefined;
   try {
     await client.request("initialize", codexAppServerInitializeParams());
     client.notify("initialized");
-    return await fn(client);
-  } finally {
-    await client.close();
+    result = { value: await fn(client) };
+  } catch (error) {
+    originalError = error;
   }
+  try {
+    await client.close();
+  } catch (closeError) {
+    if (originalError !== undefined) {
+      opts.log?.(`[codex-app-server] close failed after error: ${String(closeError)}`);
+    } else {
+      throw closeError;
+    }
+  }
+  if (originalError !== undefined) {
+    throw originalError;
+  }
+  if (!result) {
+    throw new Error("Codex app-server client closed before returning a result.");
+  }
+  return result.value;
 }
 
 const pooledClients = new Map<string, Promise<CodexAppServerClient>>();

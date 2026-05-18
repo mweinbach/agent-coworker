@@ -107,13 +107,14 @@ function parseReasoningSections(text: string): ReasoningSection[] {
   const headingRegex = /(?:^|\n+)(?:#+\s+|\*\*|__)([^*#\n_]+?)(?:\*\*|__)?\s*(?:\n+|$)/g;
   const matches: { title: string; index: number; length: number }[] = [];
 
-  let match;
-  while ((match = headingRegex.exec(normalized)) !== null) {
+  let match: RegExpExecArray | null = headingRegex.exec(normalized);
+  while (match !== null) {
     matches.push({
       title: match[1].trim(),
       index: match.index,
       length: match[0].length,
     });
+    match = headingRegex.exec(normalized);
   }
 
   if (matches.length === 0) {
@@ -232,7 +233,7 @@ function ReasoningTimelineNode({
           const isSectionMostRecent = live ? isMostRecent && idx === sections.length - 1 : true;
           return (
             <ReasoningSectionNode
-              key={idx}
+              key={`${section.title || "reasoning"}-${section.body.slice(0, 32)}`}
               title={section.title}
               body={section.body}
               isMostRecent={isSectionMostRecent}

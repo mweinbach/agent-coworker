@@ -707,6 +707,35 @@ describe("desktop JSON-RPC single connection path", () => {
     });
   });
 
+  test("shows attached MP3s in text turns without adding placeholder text to JSON-RPC input", async () => {
+    seedActiveThreadState();
+    const attachment = {
+      filename: "io-recap.mp3",
+      contentBase64: "YXVkaW8=",
+      mimeType: "audio/mpeg",
+    };
+
+    await useAppStore
+      .getState()
+      .sendMessage("what do you think of IO this year", "reject", [attachment]);
+    await flushAsyncWork();
+
+    const runtime = useAppStore.getState().threadRuntimeById["jsonrpc-thread-1"];
+    expect(runtime?.feed.at(-1)).toMatchObject({
+      kind: "message",
+      role: "user",
+      text: "what do you think of IO this year\n\nAttached: [io-recap.mp3]",
+    });
+    expect(jsonRpcRequests.find((entry) => entry.method === "turn/start")?.params).toMatchObject({
+      threadId: "jsonrpc-thread-1",
+      input: [
+        { type: "text", text: "what do you think of IO this year" },
+        { type: "file", ...attachment },
+      ],
+      clientMessageId: expect.any(String),
+    });
+  });
+
   test("attachment-only transcript sends create a live session immediately", async () => {
     useAppStore.setState({
       selectedWorkspaceId: "ws-jsonrpc",

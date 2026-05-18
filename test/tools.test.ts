@@ -227,7 +227,9 @@ describe("read tool", () => {
     await fs.writeFile(audioPath, "audio-bytes");
     await fs.writeFile(videoPath, "video-bytes");
 
-    const t: any = createReadTool(makeCtx(dir, { config: makeConfig(dir, { provider: "google" }) }));
+    const t: any = createReadTool(
+      makeCtx(dir, { config: makeConfig(dir, { provider: "google" }) }),
+    );
     const audioOut = await t.execute({ filePath: audioPath, limit: 2000 });
     const videoOut = await t.execute({ filePath: videoPath, limit: 2000 });
 
@@ -260,7 +262,9 @@ describe("read tool", () => {
     const pdfPath = path.join(dir, "notes.pdf");
     await fs.writeFile(pdfPath, "pdf-bytes");
 
-    const t: any = createReadTool(makeCtx(dir, { config: makeConfig(dir, { provider: "google" }) }));
+    const t: any = createReadTool(
+      makeCtx(dir, { config: makeConfig(dir, { provider: "google" }) }),
+    );
     const out = await t.execute({ filePath: pdfPath, limit: 2000 });
 
     expect(out).toEqual({
@@ -282,7 +286,9 @@ describe("read tool", () => {
     await fs.writeFile(audioPath, "audio-bytes");
 
     const t: any = createReadTool(
-      makeCtx(dir, { config: makeConfig(dir, { provider: "anthropic", model: "claude-sonnet-4-6" }) }),
+      makeCtx(dir, {
+        config: makeConfig(dir, { provider: "anthropic", model: "claude-sonnet-4-6" }),
+      }),
     );
     const out: string = await t.execute({ filePath: audioPath, limit: 2000 });
 

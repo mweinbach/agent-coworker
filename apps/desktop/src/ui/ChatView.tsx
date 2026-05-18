@@ -3,6 +3,11 @@ import {
   AlertTriangleIcon,
   CheckIcon,
   ChevronsUpDownIcon,
+  FileAudioIcon,
+  FileIcon,
+  FileImageIcon,
+  FileTextIcon,
+  FileVideoIcon,
   FolderIcon,
   FolderPlusIcon,
   LoaderCircleIcon,
@@ -24,6 +29,7 @@ import {
   useState,
 } from "react";
 import { formatCost, formatTokenCount } from "../../../../src/session/pricing";
+import { getAttachmentCountValidationMessage } from "../../../../src/shared/attachments";
 import type { CitationSource } from "../../../../src/shared/displayCitationMarkers";
 import {
   buildCitationOverflowFilePathsByMessageId,
@@ -40,16 +46,7 @@ import {
 } from "../app/attachmentInputs";
 import { useAppStore } from "../app/store";
 import { ensureServerRunning } from "../app/store.helpers";
-import { getAttachmentCountValidationMessage } from "../../../../src/shared/attachments";
 import type { FileAttachmentInput } from "../app/store.helpers/jsonRpcSocket";
-import {
-  appendAttachmentSkippedNotes,
-  buildComposerAttachmentSignature,
-  createComposerAttachmentFile,
-  resolveComposerAttachmentsForWorkspace,
-  revokeComposerAttachmentPreview,
-  type ComposerAttachmentFile,
-} from "../lib/composerAttachments";
 import type {
   FeedItem,
   SessionUsageSnapshot,
@@ -61,7 +58,6 @@ import type {
   WorkspaceRecord,
 } from "../app/types";
 import { isOneOffChatWorkspace } from "../app/types";
-import { resolveNewChatLandingTarget } from "../lib/newChatLanding";
 import {
   Conversation,
   ConversationContent,
@@ -95,6 +91,7 @@ import {
 } from "../components/ui/command";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "../components/ui/popover";
+import { Progress } from "../components/ui/progress";
 import {
   Select,
   SelectContent,
@@ -104,6 +101,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../components/ui/select";
+import {
+  appendAttachmentSkippedNotes,
+  buildComposerAttachmentSignature,
+  type ComposerAttachmentFile,
+  createComposerAttachmentFile,
+  resolveComposerAttachmentsForWorkspace,
+  revokeComposerAttachmentPreview,
+} from "../lib/composerAttachments";
 import { readFile } from "../lib/desktopCommands";
 import {
   availableProvidersFromCatalog,
@@ -114,6 +119,7 @@ import {
   modelDisplayNamesFromCatalog,
   resolveModelDisplayLabel,
 } from "../lib/modelChoices";
+import { resolveNewChatLandingTarget } from "../lib/newChatLanding";
 import { displayProviderName } from "../lib/providerDisplayNames";
 import { cn } from "../lib/utils";
 import { PROVIDER_NAMES, type ProviderName } from "../lib/wsProtocol";
@@ -526,6 +532,34 @@ function parseCanvasEditMessage(text: string) {
   };
 }
 
+function parseUserMessageAttachments(text: string): {
+  cleanText: string;
+  fileNames: string[];
+} {
+  // Case 1: text + Attached suffix
+  const attachedMatch = text.match(/\n\nAttached:\s+\[(.*?)\]$/);
+  if (attachedMatch) {
+    const fileNames = attachedMatch[1]
+      .split(/,\s+/)
+      .map((f) => f.trim())
+      .filter(Boolean);
+    const cleanText = text.substring(0, attachedMatch.index).trim();
+    return { cleanText, fileNames };
+  }
+
+  // Case 2: ONLY attachments (e.g. "[file1, file2]")
+  const onlyAttachmentsMatch = text.match(/^\[(.*?)\]$/);
+  if (onlyAttachmentsMatch) {
+    const fileNames = onlyAttachmentsMatch[1]
+      .split(/,\s+/)
+      .map((f) => f.trim())
+      .filter(Boolean);
+    return { cleanText: "", fileNames };
+  }
+
+  return { cleanText: text, fileNames: [] };
+}
+
 const FeedRow = memo(function FeedRow(props: {
   item: FeedItem;
   citationUrlsByIndex?: ReadonlyMap<number, string>;
@@ -588,20 +622,60 @@ const FeedRow = memo(function FeedRow(props: {
           ) : (
             <div className="whitespace-pre-wrap">
               {(() => {
-                const parsed = parseCanvasEditMessage(item.text);
-                if (parsed) {
-                  return (
-                    <div className="flex flex-col gap-1.5">
-                      {parsed.selection && (
-                        <div className="text-[10px] font-semibold text-primary/70 uppercase tracking-wider flex items-center gap-1 select-none">
-                          <span>Selected Text</span>
-                        </div>
-                      )}
-                      <div>{parsed.instructions}</div>
-                    </div>
-                  );
-                }
-                return item.text;
+                const { cleanText, fileNames } = parseUserMessageAttachments(item.text);
+                const parsed = parseCanvasEditMessage(cleanText);
+
+                return (
+                  <div className="flex flex-col gap-3">
+                    {cleanText ? (
+                      <div>
+                        {parsed ? (
+                          <div className="flex flex-col gap-1.5">
+                            {parsed.selection && (
+                              <div className="text-[10px] font-semibold text-primary/70 uppercase tracking-wider flex items-center gap-1 select-none">
+                                <span>Selected Text</span>
+                              </div>
+                            )}
+                            <div>{parsed.instructions}</div>
+                          </div>
+                        ) : (
+                          cleanText
+                        )}
+                      </div>
+                    ) : null}
+                    {fileNames.length > 0 && (
+                      <div className="flex flex-wrap gap-2 mt-1">
+                        {fileNames.map((fileName) => {
+                          const isAudio = /\.(mp3|wav|ogg|m4a|aac|flac)$/i.test(fileName);
+                          const isImage = /\.(png|jpe?g|gif|webp|svg)$/i.test(fileName);
+                          const isPdf = /\.pdf$/i.test(fileName);
+                          const isVideo = /\.(mp4|mov|avi|mkv|webm)$/i.test(fileName);
+
+                          let IconComponent = FileIcon;
+                          if (isAudio) IconComponent = FileAudioIcon;
+                          else if (isImage) IconComponent = FileImageIcon;
+                          else if (isVideo) IconComponent = FileVideoIcon;
+                          else if (isPdf) IconComponent = FileTextIcon;
+
+                          return (
+                            <div
+                              key={fileName}
+                              className="inline-flex items-center gap-2 rounded-lg border border-border/40 bg-muted/40 px-2.5 py-1.5 text-xs shadow-sm"
+                            >
+                              <IconComponent className="size-4 text-muted-foreground shrink-0" />
+                              <span
+                                className="font-medium text-foreground truncate max-w-[16rem]"
+                                title={fileName}
+                              >
+                                {fileName}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
               })()}
             </div>
           )}
@@ -859,15 +933,6 @@ function ThreadModelIndicator({
   );
 }
 
-type NewChatTarget =
-  | {
-      kind: "project";
-      workspaceId: string;
-    }
-  | {
-      kind: "oneOff";
-    };
-
 function resolveDefaultNewChatModel(workspace: WorkspaceRecord | null): ComposerModelSelection {
   const provider =
     workspace?.defaultProvider && isChatProviderName(workspace.defaultProvider)
@@ -972,7 +1037,10 @@ function NewChatLanding() {
       }
 
       setAttachmentPickerError(null);
-      setPendingAttachments((prev) => [...prev, ...selectedFiles.map(createComposerAttachmentFile)]);
+      setPendingAttachments((prev) => [
+        ...prev,
+        ...selectedFiles.map(createComposerAttachmentFile),
+      ]);
     },
     [pendingAttachments.length, submitting],
   );
@@ -1032,8 +1100,7 @@ function NewChatLanding() {
               target.workspaceId,
               pendingAttachments,
             );
-            attachments =
-              resolved.attachments.length > 0 ? resolved.attachments : undefined;
+            attachments = resolved.attachments.length > 0 ? resolved.attachments : undefined;
             firstMessage = appendAttachmentSkippedNotes(firstMessage, resolved.skippedNotes);
           } else {
             attachmentFiles = pendingAttachments.map((attachment) => attachment.file);
@@ -1229,7 +1296,10 @@ function NewChatLanding() {
                               value={workspace.name}
                               className="h-10 rounded-lg px-2.5 text-[15px] data-[selected=true]:bg-muted/70"
                               onSelect={() => {
-                                setNewChatLandingTarget({ kind: "project", workspaceId: workspace.id });
+                                setNewChatLandingTarget({
+                                  kind: "project",
+                                  workspaceId: workspace.id,
+                                });
                                 setSelectorOpen(false);
                               }}
                             >
@@ -1330,6 +1400,28 @@ export function ChatView() {
   const [submittedAttachmentSignature, setSubmittedAttachmentSignature] = useState<string | null>(
     null,
   );
+
+  const pendingTurnStart = rt?.pendingTurnStart ?? null;
+  const isUploading = preparingAttachments || pendingTurnStart?.status === "sending";
+  const [uploadProgress, setUploadProgress] = useState(0);
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setInterval> | undefined;
+    if (isUploading) {
+      setUploadProgress(10);
+      timer = setInterval(() => {
+        setUploadProgress((prev) => {
+          if (prev >= 95) return prev;
+          return prev + Math.floor(Math.random() * 5) + 1;
+        });
+      }, 500);
+    } else {
+      setUploadProgress(100);
+    }
+    return () => {
+      if (timer) clearInterval(timer);
+    };
+  }, [isUploading]);
 
   const setComposerText = useAppStore((s) => s.setComposerText);
   const sendMessage = useAppStore((s) => s.sendMessage);
@@ -1721,12 +1813,10 @@ export function ChatView() {
   );
 
   const pendingAttachmentSignature = useMemo(
-    () =>
-      submittedAttachmentSignature ?? buildComposerAttachmentSignature(pendingAttachments),
+    () => submittedAttachmentSignature ?? buildComposerAttachmentSignature(pendingAttachments),
     [pendingAttachments, submittedAttachmentSignature],
   );
   const hasPendingAttachments = pendingAttachments.length > 0;
-  const pendingTurnStart = rt?.pendingTurnStart ?? null;
 
   const submitComposer = useCallback(
     (busyPolicy: "reject" | "steer") => {
@@ -1972,6 +2062,18 @@ export function ChatView() {
                   : { onFiles: (files) => void ingestAttachmentFiles(files) }
               }
             >
+              {isUploading && (
+                <div className="w-full mb-3 px-3 pt-2.5">
+                  <Progress value={uploadProgress} className="h-1 bg-primary/10 rounded-full" />
+                  <div className="flex items-center gap-2 mt-1.5 px-0.5 text-xs text-muted-foreground select-none font-medium">
+                    <LoaderCircleIcon className="size-3.5 animate-spin text-primary shrink-0" />
+                    <span>
+                      Uploading and preparing message...{" "}
+                      {uploadProgress < 100 ? `${uploadProgress}%` : "Done"}
+                    </span>
+                  </div>
+                </div>
+              )}
               <PromptInputAttachmentPreviews
                 attachments={pendingAttachments}
                 onRemove={removeAttachment}

@@ -4,6 +4,7 @@ import path from "node:path";
 import readline from "node:readline";
 
 import { z } from "zod";
+import { supportsImageInput } from "../models/registry";
 import { getAttachmentByteLengthValidationMessage } from "../shared/attachments";
 import {
   googleMultimodalPartTypeForMime,
@@ -12,7 +13,6 @@ import {
   mimeTypeFromPath,
   multimodalPartLabel,
 } from "../shared/multimodalMime";
-import { supportsImageInput } from "../models/registry";
 import { resolveMaybeRelative, truncateLine } from "../utils/paths";
 import { assertReadPathAllowed } from "../utils/permissions";
 import type { ToolContext } from "./context";

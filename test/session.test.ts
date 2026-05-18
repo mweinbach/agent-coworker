@@ -4168,6 +4168,45 @@ describe("AgentSession", () => {
       await expect(fs.readFile(path.join(uploadsDir, "photo.png"), "utf8")).resolves.toBe("hello");
     });
 
+    test("includes attached MP3 label in text user_message events without mutating model input text", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-attachments-"));
+      const uploadsDir = path.join(dir, "custom-uploads");
+      const { session, events } = makeSession({
+        config: {
+          ...makeConfig(dir),
+          uploadsDirectory: uploadsDir,
+        },
+      });
+
+      await session.sendUserMessage("what do you think of IO this year", "msg-mp3", undefined, [
+        {
+          filename: "io-recap.mp3",
+          contentBase64: Buffer.from("audio bytes").toString("base64"),
+          mimeType: "audio/mpeg",
+        },
+      ]);
+
+      const userEvt = events.find((e) => e.type === "user_message") as any;
+      expect(userEvt).toMatchObject({
+        text: "what do you think of IO this year\n\nAttached: [io-recap.mp3]",
+        clientMessageId: "msg-mp3",
+      });
+
+      const call = mockRunTurn.mock.calls.at(-1)?.[0] as any;
+      expect(call.messages.at(-1)?.content).toContainEqual({
+        type: "text",
+        text: "what do you think of IO this year",
+      });
+      expect(call.messages.at(-1)?.content).toContainEqual({
+        type: "audio",
+        data: Buffer.from("audio bytes").toString("base64"),
+        mimeType: "audio/mpeg",
+      });
+      await expect(fs.readFile(path.join(uploadsDir, "io-recap.mp3"))).resolves.toEqual(
+        Buffer.from("audio bytes"),
+      );
+    });
+
     test("deduplicates attachment filenames against existing uploads without stale in-memory names", async () => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-attachments-"));
       const uploadsDir = path.join(dir, "custom-uploads");

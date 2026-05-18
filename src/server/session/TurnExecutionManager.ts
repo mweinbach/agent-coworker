@@ -8,18 +8,18 @@ import type { TurnUsage } from "../../session/costTracker";
 import type { AgentExecutionState } from "../../shared/agents";
 import {
   decodeBase64Strict,
-  formatAttachmentDisplayText,
+  formatUserInputDisplayText,
   getAttachmentByteLengthValidationMessage,
   getAttachmentCountValidationMessage,
   getAttachmentTotalBase64Size,
   getAttachmentValidationMessage,
   MAX_TURN_ATTACHMENT_TOTAL_BASE64_SIZE,
 } from "../../shared/attachments";
-import { supportsOpenAiContinuation } from "../../shared/openaiContinuation";
 import {
   googleMultimodalPartTypeForMime,
   type MultimodalContentPartType,
 } from "../../shared/multimodalMime";
+import { supportsOpenAiContinuation } from "../../shared/openaiContinuation";
 import {
   isInvalidGoogleContinuationError as isInvalidGoogleContinuationHandleError,
   supportsProviderManagedContinuationProvider,
@@ -193,16 +193,10 @@ function resolveUserInputDisplayText(
   text: string,
   attachments?: readonly Pick<FileAttachment, "filename">[],
 ): string {
-  const trimmed = text.trim();
-  if (trimmed) {
-    return trimmed;
-  }
-  if (!attachments || attachments.length === 0) {
-    return "";
-  }
-  return formatAttachmentDisplayText(
+  return formatUserInputDisplayText(
+    text,
     attachments
-      .map((attachment) => path.basename(attachment.filename))
+      ?.map((attachment) => path.basename(attachment.filename))
       .filter((fileName) => fileName && fileName !== "." && fileName !== ".."),
   );
 }

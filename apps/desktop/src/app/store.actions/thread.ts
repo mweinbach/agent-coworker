@@ -1,15 +1,11 @@
 import { defaultModelForProvider } from "@cowork/providers/catalog";
-
-import * as desktopCommands from "../../lib/desktopCommands";
 import {
   appendAttachmentSkippedNotes,
   createComposerAttachmentFile,
   resolveComposerAttachmentsForWorkspace,
 } from "../../lib/composerAttachments";
-import {
-  resolveDefaultNewChatTarget,
-  type NewChatLandingTarget,
-} from "../../lib/newChatLanding";
+import * as desktopCommands from "../../lib/desktopCommands";
+import { type NewChatLandingTarget, resolveDefaultNewChatTarget } from "../../lib/newChatLanding";
 import { seedDockFromFeed } from "../a2uiDockReducer";
 import {
   type AppStoreActions,
@@ -936,15 +932,12 @@ export function createThreadActions(
           workspaceId,
           opts.attachmentFiles.map(createComposerAttachmentFile),
         );
-        resolvedAttachments =
-          resolved.attachments.length > 0 ? resolved.attachments : undefined;
+        resolvedAttachments = resolved.attachments.length > 0 ? resolved.attachments : undefined;
         firstMessage = appendAttachmentSkippedNotes(firstMessage, resolved.skippedNotes);
       }
 
       const hasFirstMessage = Boolean(firstMessage.trim());
-      const hasResolvedAttachments = Boolean(
-        resolvedAttachments && resolvedAttachments.length > 0,
-      );
+      const hasResolvedAttachments = Boolean(resolvedAttachments && resolvedAttachments.length > 0);
       if (hasFirstMessage || hasResolvedAttachments) {
         queuePendingThreadMessage(threadId, firstMessage, resolvedAttachments);
       }

@@ -13,7 +13,7 @@ import {
   recordSurfaceRevision,
   seedDockFromFeed,
 } from "../a2uiDockReducer";
-import { buildAttachmentDisplayText, buildAttachmentSignature } from "../attachmentInputs";
+import { buildAttachmentSignature, buildUserInputDisplayText } from "../attachmentInputs";
 import {
   type ModelStreamUpdate,
   mapModelStreamChunk,
@@ -977,7 +977,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     const hasAttachments = attachments && attachments.length > 0;
     if (!trimmed && !hasAttachments) return false;
     const attachmentSignature = buildAttachmentSignature(attachments);
-    const displayText = trimmed || buildAttachmentDisplayText(attachments);
+    const displayText = buildUserInputDisplayText(trimmed, attachments);
 
     const thread = get().threads.find((t) => t.id === threadId);
     if (!thread) return false;

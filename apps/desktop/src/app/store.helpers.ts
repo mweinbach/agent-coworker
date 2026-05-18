@@ -4,8 +4,8 @@ import type {
   DesktopFeatureFlags,
 } from "../../../../src/shared/featureFlags";
 import { createDefaultUpdaterState, type UpdaterState } from "../lib/desktopApi";
-import type { NewChatLandingTarget } from "../lib/newChatLanding";
 import { startWorkspaceServer } from "../lib/desktopCommands";
+import type { NewChatLandingTarget } from "../lib/newChatLanding";
 import { fallbackAuthMethods } from "../lib/providerDisplayNames";
 import type {
   CodexAppServerInstallStatus,

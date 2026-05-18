@@ -143,3 +143,15 @@ export function formatAttachmentDisplayText(fileNames: readonly string[]): strin
   }
   return `[${visibleNames.join(", ")}]`;
 }
+
+export function formatUserInputDisplayText(text: string, fileNames?: readonly string[]): string {
+  const trimmed = text.trim();
+  const attachmentText = fileNames ? formatAttachmentDisplayText(fileNames) : "";
+  if (!trimmed) {
+    return attachmentText;
+  }
+  if (!attachmentText) {
+    return trimmed;
+  }
+  return `${trimmed}\n\nAttached: ${attachmentText}`;
+}

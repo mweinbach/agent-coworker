@@ -6,9 +6,9 @@ import {
   encodeArrayBufferToBase64,
   getAttachmentUploadValidationMessage,
 } from "../app/attachmentInputs";
+import type { StoreGet, StoreSet } from "../app/store.helpers";
 import type { FileAttachmentInput } from "../app/store.helpers/jsonRpcSocket";
 import { uploadJsonRpcWorkspaceFile } from "../app/store.helpers/jsonRpcSocket";
-import type { StoreGet, StoreSet } from "../app/store.helpers";
 
 export type ComposerAttachmentFile = {
   filename: string;
@@ -105,7 +105,13 @@ export async function resolveComposerAttachmentsForWorkspace(
       continue;
     }
 
-    const uploaded = await uploadJsonRpcWorkspaceFile(get, set, workspaceId, attachment.filename, base64);
+    const uploaded = await uploadJsonRpcWorkspaceFile(
+      get,
+      set,
+      workspaceId,
+      attachment.filename,
+      base64,
+    );
     if (!uploaded.path) {
       skippedNotes.push(
         buildAttachmentSkippedNote(attachment.filename, "upload to the project folder failed"),

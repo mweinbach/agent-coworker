@@ -1,11 +1,10 @@
 import { describe, expect, test } from "bun:test";
-
+import type { WorkspaceRecord } from "../src/app/types";
 import {
   resolveDefaultNewChatTarget,
   resolveNewChatLandingProjectWorkspaceId,
   resolveNewChatLandingTarget,
 } from "../src/lib/newChatLanding";
-import type { WorkspaceRecord } from "../src/app/types";
 
 const projectWorkspace = (id: string, name: string): WorkspaceRecord => ({
   id,

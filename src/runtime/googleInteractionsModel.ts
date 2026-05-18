@@ -90,7 +90,9 @@ function resolveGoogleInteractionsModelInfo(modelId: string): GoogleInteractions
   };
 }
 
-function googleInteractionsInputForModel(supportsImageInput: boolean): GoogleInteractionsModelInputModality[] {
+function googleInteractionsInputForModel(
+  supportsImageInput: boolean,
+): GoogleInteractionsModelInputModality[] {
   if (supportsImageInput) return GOOGLE_MULTIMODAL_INPUT;
   return ["text", "audio", "video", "document"];
 }

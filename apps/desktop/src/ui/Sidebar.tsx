@@ -678,12 +678,7 @@ export const Sidebar = memo(function Sidebar() {
             selectedWorkspaceId,
           )
         : null,
-    [
-      isOnNewChatLanding,
-      newChatLandingTarget,
-      projectWorkspaces,
-      selectedWorkspaceId,
-    ],
+    [isOnNewChatLanding, newChatLandingTarget, projectWorkspaces, selectedWorkspaceId],
   );
   const activeWorkspaceId =
     effectiveView === "skills"

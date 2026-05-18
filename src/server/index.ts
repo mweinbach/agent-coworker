@@ -1,5 +1,7 @@
 #!/usr/bin/env bun
 
+import "reflect-metadata";
+
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

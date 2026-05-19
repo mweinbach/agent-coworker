@@ -307,6 +307,17 @@ function codexHomeFromPaths(paths: AiCoworkerPaths): string {
   return path.join(paths.authDir, "codex-cli");
 }
 
+function isCodexAppServerAuthExpiredError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes("token_expired") ||
+    message.includes("Provided authentication token is expired") ||
+    message.includes("could not be refreshed") ||
+    message.includes("Please sign in again") ||
+    message.includes("401 Unauthorized")
+  );
+}
+
 async function getCodexCliStatus(opts: {
   paths: AiCoworkerPaths;
   store: ConnectionStore;
@@ -348,7 +359,22 @@ async function getCodexCliStatus(opts: {
       };
     }
 
-    const rateLimits = await readCodexAppServerRateLimits({ codexHome }).catch(() => null);
+    let rateLimits: CodexAppServerRateLimits | null = null;
+    try {
+      rateLimits = await readCodexAppServerRateLimits({ codexHome });
+    } catch (error) {
+      if (isCodexAppServerAuthExpiredError(error)) {
+        return {
+          ...base,
+          provider: "codex-cli",
+          authorized: false,
+          verified: false,
+          mode: "missing",
+          account: null,
+          message: "Codex app-server auth expired. Sign in again to refresh ChatGPT access.",
+        };
+      }
+    }
     const usage: ProviderUsageStatus | undefined = rateLimits
       ? {
           ...(accountResult.account.email ? { email: accountResult.account.email } : {}),

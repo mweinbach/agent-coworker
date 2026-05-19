@@ -512,10 +512,10 @@ export async function resolveCodexAppServerCommand(
 ): Promise<CodexAppServerCommand> {
   const override = await resolveOverrideCommand(overrides);
   if (override) return override;
-  const managed = await resolveManagedCommand(overrides);
-  if (managed) return managed;
   const system = await resolveSystemCommand(overrides);
   if (system) return system;
+  const managed = await resolveManagedCommand(overrides);
+  if (managed) return managed;
   return await installCodexAppServer({}, overrides);
 }
 
@@ -526,8 +526,8 @@ export async function getCodexAppServerInstallStatus(
   const latest = opts.checkLatest ? await fetchCodexRelease({}, overrides).catch(() => null) : null;
   const command =
     (await resolveOverrideCommand(overrides)) ??
-    (await resolveManagedCommand(overrides)) ??
-    (await resolveSystemCommand(overrides));
+    (await resolveSystemCommand(overrides)) ??
+    (await resolveManagedCommand(overrides));
   if (!command) {
     return {
       available: false,

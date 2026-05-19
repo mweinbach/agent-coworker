@@ -134,14 +134,37 @@ describe("codex app-server resolver", () => {
     expect(status.command).toContain(path.join(".cowork", "codex-app-server", "current"));
     expect(await fs.readFile(status.command!, "utf8")).toBe("managed app-server");
 
+    const managed = await resolveCodexAppServerCommand({
+      homeDir,
+      platform: "win32",
+      arch: "x64",
+      spawnForResult: async () => ({ ok: false, stdout: "", stderr: "" }),
+    });
+    expect(managed.source).toBe("managed");
+    expect(managed.version).toBe("0.129.0");
+  });
+
+  test("prefers system codex over an existing managed app-server", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-system-managed-"));
+    await updateManagedCodexAppServer(
+      {},
+      {
+        homeDir,
+        platform: "win32",
+        arch: "x64",
+        fetchImpl: fakeReleaseFetch("0.129.0"),
+        spawnForResult: async () => ({ ok: false, stdout: "", stderr: "" }),
+      },
+    );
+
     const resolved = await resolveCodexAppServerCommand({
       homeDir,
       platform: "win32",
       arch: "x64",
       spawnForResult: async () => ({ ok: true, stdout: "codex-cli 0.128.0\n", stderr: "" }),
     });
-    expect(resolved.source).toBe("managed");
-    expect(resolved.version).toBe("0.129.0");
+    expect(resolved.source).toBe("system");
+    expect(resolved.version).toBe("0.128.0");
   });
 
   test("reports update availability for older system codex", async () => {

@@ -340,6 +340,34 @@ describe("getProviderStatuses", () => {
     }
   });
 
+  test("codex-cli: reports missing when cached account token is expired", async () => {
+    const home = await makeTmpHome();
+    const paths = getAiCoworkerPaths({ homedir: home });
+    codexAppServerAuthInternal.setAuthOverridesForTests({
+      readAccount: async () => ({
+        account: { type: "chatgpt", email: "backend.com", planType: "pro" },
+        requiresOpenaiAuth: true,
+      }),
+      readRateLimits: async () => {
+        throw new Error(
+          "failed to fetch codex rate limits: 401 Unauthorized token_expired. Please sign in again.",
+        );
+      },
+    });
+    try {
+      const statuses = await getProviderStatuses({ paths });
+      const codex = statuses.find((s) => s.provider === "codex-cli");
+      expect(codex).toBeDefined();
+      expect(codex?.authorized).toBe(false);
+      expect(codex?.verified).toBe(false);
+      expect(codex?.mode).toBe("missing");
+      expect(codex?.account).toBeNull();
+      expect(codex?.message).toContain("auth expired");
+    } finally {
+      codexAppServerAuthInternal.resetAuthOverridesForTests();
+    }
+  });
+
   test("codex-cli: app-server status errors surface as provider errors", async () => {
     const home = await makeTmpHome();
     const paths = getAiCoworkerPaths({ homedir: home });

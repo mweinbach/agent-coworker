@@ -528,7 +528,21 @@ export async function previewJsonRpcWorkspaceSpreadsheet(
   })) as SpreadsheetPreviewResult;
 }
 
+export async function previewJsonRpcWorkspacePresentation(
+  get: StoreGet,
+  set: StoreSet | undefined,
+  workspaceId: string,
+  filePath: string,
+): Promise<any> {
+  const workspace = getWorkspaceById(get, workspaceId);
+  return await requestJsonRpc(get, set, workspaceId, "cowork/workspace/presentation/preview", {
+    cwd: workspace?.path,
+    path: filePath,
+  });
+}
+
 export async function unsubscribeJsonRpcThread(
+
   get: StoreGet,
   set: StoreSet | undefined,
   workspaceId: string,

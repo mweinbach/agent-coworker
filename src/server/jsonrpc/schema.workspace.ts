@@ -116,6 +116,35 @@ const spreadsheetPreviewResultSchema = z.discriminatedUnion("ok", [
     .strict(),
 ]);
 
+const presentationSlideSchema = z
+  .object({
+    slideIndex: z.number().int().nonnegative(),
+    slideId: z.string().optional(),
+    title: z.string().optional(),
+    pngBase64: z.string(),
+  })
+  .strict();
+
+export const presentationPreviewResultSchema = z.discriminatedUnion("ok", [
+  z
+    .object({
+      ok: z.literal(true),
+      slides: z.array(presentationSlideSchema),
+    })
+    .strict(),
+  z
+    .object({
+      ok: z.literal(false),
+      error: z
+        .object({
+          kind: z.enum(["unsupported_format", "compile_error", "no_slides"]),
+          message: z.string(),
+        })
+        .strict(),
+    })
+    .strict(),
+]);
+
 export const jsonRpcWorkspaceRequestSchemas = {
   "cowork/workspace/bootstrap": z
     .object({
@@ -130,6 +159,12 @@ export const jsonRpcWorkspaceRequestSchemas = {
       viewport: spreadsheetViewportRequestSchema.optional(),
     })
     .strict(),
+  "cowork/workspace/presentation/preview": z
+    .object({
+      cwd: nonEmptyTrimmedStringSchema.optional(),
+      path: nonEmptyTrimmedStringSchema,
+    })
+    .strict(),
 } as const;
 
 export const jsonRpcWorkspaceResultSchemas = {
@@ -140,4 +175,6 @@ export const jsonRpcWorkspaceResultSchemas = {
     })
     .strict(),
   "cowork/workspace/spreadsheet/preview": spreadsheetPreviewResultSchema,
+  "cowork/workspace/presentation/preview": presentationPreviewResultSchema,
 } as const;
+

@@ -28,10 +28,13 @@ import { ScrollArea } from "../components/ui/scroll-area";
 import { Tabs, TabsContent } from "../components/ui/tabs";
 import { Textarea } from "../components/ui/textarea";
 import { readFile, writeFile } from "../lib/desktopCommands";
-import { getFilePreviewKind } from "../lib/filePreviewKind";
+import { getFilePreviewKind, isSlideModule } from "../lib/filePreviewKind";
 import { cn } from "../lib/utils";
 import { getDesktopWindowMode } from "../lib/windowMode";
 import { SpreadsheetPreview } from "./SpreadsheetPreview";
+import { PptxPreview } from "./PptxPreview";
+import { SlidePreview } from "./SlidePreview";
+
 
 const noDragRegionStyle = { WebkitAppRegion: "no-drag" } as CSSProperties;
 
@@ -290,9 +293,15 @@ export function Canvas({ path }: { path: string }) {
   const isSpreadsheet = useMemo(() => {
     return previewKind === "csv" || previewKind === "xlsx";
   }, [previewKind]);
+  const isPptx = useMemo(() => {
+    return previewKind === "pptx";
+  }, [previewKind]);
+  const isSlide = useMemo(() => {
+    return isSlideModule(path);
+  }, [path]);
 
   const loadContent = useCallback(async () => {
-    if (isSpreadsheet) return;
+    if (isSpreadsheet || isPptx) return;
     try {
       setLoading(true);
       const fileContent = await readFile({ path });
@@ -308,15 +317,15 @@ export function Canvas({ path }: { path: string }) {
     } finally {
       setLoading(false);
     }
-  }, [path, isMarkdown, isSpreadsheet]);
+  }, [path, isMarkdown, isSpreadsheet, isPptx]);
 
   useEffect(() => {
-    if (isSpreadsheet) return;
+    if (isSpreadsheet || isPptx) return;
     void loadContent();
-  }, [loadContent, isSpreadsheet]);
+  }, [loadContent, isSpreadsheet, isPptx]);
 
   useEffect(() => {
-    if (isSpreadsheet) return;
+    if (isSpreadsheet || isPptx) return;
     let active = true;
     const interval = setInterval(async () => {
       if (isEditingRef.current) return;
@@ -339,10 +348,10 @@ export function Canvas({ path }: { path: string }) {
       active = false;
       clearInterval(interval);
     };
-  }, [path, isMarkdown, isSpreadsheet]);
+  }, [path, isMarkdown, isSpreadsheet, isPptx]);
 
   useEffect(() => {
-    if (isSpreadsheet) return;
+    if (isSpreadsheet || isPptx) return;
     const timer = setTimeout(async () => {
       if (content === lastSavedContentRef.current) return;
       try {
@@ -355,7 +364,8 @@ export function Canvas({ path }: { path: string }) {
     }, 500);
 
     return () => clearTimeout(timer);
-  }, [content, path, isSpreadsheet]);
+  }, [content, path, isSpreadsheet, isPptx]);
+
 
   const fileName = basenamePath(path);
   const isAgentBusy = threadRuntime?.busy === true;
@@ -424,6 +434,72 @@ export function Canvas({ path }: { path: string }) {
       </div>
     );
   }
+
+  if (isPptx) {
+    return (
+      <div
+        className={cn(
+          "flex h-full w-full min-w-0 flex-col",
+          isCanvasMode ? "bg-background" : "bg-[var(--surface-sidebar-pane)]",
+          isCanvasMode && "app-canvas-mode-window",
+        )}
+      >
+        <div className="flex min-h-0 flex-1 flex-col gap-0">
+          {isCanvasMode ? (
+            <div
+              className="flex shrink-0 items-center justify-between border-b border-border/40 px-2.5 gap-2 select-none bg-transparent"
+              style={
+                {
+                  height: "var(--platform-titlebar-height, 38px)",
+                  paddingLeft: "calc(var(--platform-left-native-reserve, 0px) + 12px)",
+                  paddingRight: "calc(var(--platform-right-native-reserve, 0px) + 12px)",
+                  WebkitAppRegion: "drag",
+                } as React.CSSProperties
+              }
+            >
+              <div className="flex min-w-0 items-center gap-1.5 flex-1">
+                <TableIcon className="size-3.5 text-muted-foreground shrink-0" />
+                <div className="flex min-w-0 items-center gap-1">
+                  <span
+                    className="truncate text-xs font-semibold tracking-wide text-foreground"
+                    title={fileName}
+                  >
+                    {fileName}
+                  </span>
+                  <span className="text-[10px] text-muted-foreground shrink-0 uppercase">
+                    ({previewKind})
+                  </span>
+                </div>
+                {isAgentBusy ? (
+                  <Loader2Icon className="size-2.5 animate-spin text-primary shrink-0" />
+                ) : null}
+              </div>
+
+              <div
+                className="flex items-center gap-1 shrink-0 flex-1 justify-end"
+                style={noDragRegionStyle}
+              >
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  onClick={closeFilePreview}
+                  title="Close Window"
+                  className="size-6 text-muted-foreground hover:text-foreground hover:bg-muted/50 rounded-md"
+                >
+                  <XIcon className="size-3.5" />
+                </Button>
+              </div>
+            </div>
+          ) : null}
+          <div className={cn("flex-1 min-h-0 p-3", isCanvasMode && "p-5")}>
+            <PptxPreview path={path} />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
 
   useEffect(() => {
     if (!floatingCoords) {
@@ -764,7 +840,7 @@ ${textToSend}`;
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-44 outline-none">
-                  {isMarkdown && (
+                  {(isMarkdown || isSlide) && (
                     <>
                       <DropdownMenuItem
                         onClick={() => setActiveTab("preview")}
@@ -773,7 +849,7 @@ ${textToSend}`;
                         )}
                       >
                         <EyeIcon className="mr-2 size-3.5" />
-                        <span>Document</span>
+                        <span>{isSlide ? "Slide View" : "Document"}</span>
                       </DropdownMenuItem>
                       <DropdownMenuItem
                         onClick={() => setActiveTab("edit")}
@@ -786,6 +862,7 @@ ${textToSend}`;
                       </DropdownMenuItem>
                     </>
                   )}
+
                   <DropdownMenuItem
                     onClick={() => setShowFormattingBar(!showFormattingBar)}
                     className="flex items-center justify-between cursor-pointer"
@@ -944,7 +1021,30 @@ ${textToSend}`;
                 </div>
               </TabsContent>
             </>
+          ) : isSlide ? (
+            <>
+              <TabsContent value="preview" className="h-full m-0 p-0 outline-none">
+                <SlidePreview path={path} />
+              </TabsContent>
+
+              <TabsContent value="edit" className="h-full m-0 p-0 outline-none bg-background">
+                <div className={cn("flex h-full flex-col pb-2.5 pt-1.5 gap-2", pxClass)}>
+                  <div className="text-[10px] text-muted-foreground px-1 flex items-center justify-between shrink-0">
+                    <span>Slide Source Code</span>
+                    <span className="tabular-nums font-mono">{content.length} characters</span>
+                  </div>
+                  <Textarea
+                    value={content}
+                    onChange={(e) => handleContentChange(e.target.value)}
+                    onBlur={handleBlur}
+                    placeholder="Type your slide code here..."
+                    className="flex-1 min-h-0 resize-none font-mono text-sm leading-relaxed p-4 bg-background/50 border border-border/60 focus-visible:ring-1 focus-visible:ring-primary focus-visible:border-primary/80"
+                  />
+                </div>
+              </TabsContent>
+            </>
           ) : (
+
             <div className="h-full flex flex-col pb-2.5 pt-1.5 gap-2 bg-background">
               <div
                 className={cn(

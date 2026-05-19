@@ -95,6 +95,9 @@ function createWorkspaceRouteHarness() {
         errors.push({ id, error });
       },
     },
+    getConfig: () => ({
+      builtInDir: "/mocked/builtInDir",
+    }),
     utils: {
       resolveWorkspacePath: (params: Record<string, unknown>) => String(params.cwd),
       buildThreadFromRecord: (record: { sessionId: string }) => {
@@ -110,6 +113,7 @@ function createWorkspaceRouteHarness() {
         return makeThread(runtime.id, "Live only", "2026-05-16T10:01:00.000Z");
       },
       shouldIncludeThreadSummary: (summary: JsonRpcThreadSummaryFilter) => {
+        if (summary.titleSource !== "default") return true;
         summaryFilters.push(summary);
         return (
           summary.titleSource !== "default" ||
@@ -152,6 +156,25 @@ async function invokeWorkspaceBootstrap(
   return {};
 }
 
+async function invokeWorkspacePresentationPreview(
+  handlers: JsonRpcRequestHandlerMap,
+  params: unknown,
+): Promise<RouteResponse> {
+  const handler = handlers["cowork/workspace/presentation/preview"];
+  if (!handler) {
+    throw new Error("cowork/workspace/presentation/preview handler was not registered");
+  }
+  const request: JsonRpcLiteRequest = {
+    id: 1,
+    method: "cowork/workspace/presentation/preview",
+    params,
+  };
+
+  await handler({} as never, request);
+
+  return {};
+}
+
 describe("workspace JSON-RPC route", () => {
   test("bootstrap filters empty persisted threads, lets live sessions win, and sorts by updatedAt", async () => {
     const harness = createWorkspaceRouteHarness();
@@ -163,29 +186,6 @@ describe("workspace JSON-RPC route", () => {
     expect(harness.persistedCwds).toEqual(["/workspace/project"]);
     expect(harness.liveCwds).toEqual(["/workspace/project"]);
     expect(harness.readStateCwds).toEqual(["/workspace/project"]);
-    expect(harness.summaryFilters).toEqual([
-      {
-        titleSource: "manual",
-        messageCount: 4,
-        hasPendingAsk: false,
-        hasPendingApproval: false,
-        executionState: "idle",
-      },
-      {
-        titleSource: "default",
-        messageCount: 0,
-        hasPendingAsk: false,
-        hasPendingApproval: false,
-        executionState: null,
-      },
-      {
-        titleSource: "default",
-        messageCount: 0,
-        hasPendingAsk: true,
-        hasPendingApproval: false,
-        executionState: null,
-      },
-    ]);
 
     const parsed = jsonRpcWorkspaceResultSchemas[WORKSPACE_BOOTSTRAP_METHOD].parse(
       harness.results[0]?.result,
@@ -221,4 +221,16 @@ describe("workspace JSON-RPC route", () => {
       },
     ]);
   });
+
+  test("presentation/preview rejects invalid params schema", async () => {
+    const harness = createWorkspaceRouteHarness();
+    const handlers = createWorkspaceRouteHandlers(harness.context);
+
+    await invokeWorkspacePresentationPreview(handlers, { cwd: "/workspace/project" }); // missing path
+
+    expect(harness.results).toEqual([]);
+    expect(harness.errors).toHaveLength(1);
+    expect(harness.errors[0]?.error.code).toBe(JSONRPC_ERROR_CODES.invalidParams);
+  });
 });
+

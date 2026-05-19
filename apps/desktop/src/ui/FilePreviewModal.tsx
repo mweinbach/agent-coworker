@@ -36,6 +36,8 @@ import {
 import { cn } from "../lib/utils";
 import { CodeFilePreview } from "./CodeFilePreview";
 import { SpreadsheetPreview } from "./SpreadsheetPreview";
+import { PptxPreview } from "./PptxPreview";
+
 
 function decodeUtf8(bytes: Uint8Array): string {
   return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
@@ -295,9 +297,11 @@ export function FilePreviewModal() {
       docx: "Word",
       csv: "CSV",
       xlsx: "Excel",
+      pptx: "Presentation",
       unsupported: "Unsupported",
       unknown: "File",
     };
+
     return labels[kind];
   }, [kind]);
 
@@ -498,12 +502,16 @@ export function FilePreviewModal() {
             </div>
           ) : (kind === "csv" || kind === "xlsx") && path ? (
             <SpreadsheetPreview key={path} path={path} />
+          ) : kind === "pptx" && path ? (
+            <PptxPreview key={path} path={path} />
           ) : showUnknownAsText ? (
             <CodeFilePreview content={textContent} filePath={path ?? ""} />
+
           ) : showFallback || showUnknownFallback ? (
             <div className="space-y-4 py-8 text-center">
               <p className="text-sm text-muted-foreground">
                 {kind === "unsupported"
+
                   ? "No in-app preview for this format."
                   : "Could not detect a text preview for this file."}
               </p>

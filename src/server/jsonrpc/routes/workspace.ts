@@ -1,4 +1,5 @@
 import { previewSpreadsheetFile } from "../../spreadsheetPreview";
+import { previewPresentationFile } from "../../presentationPreview";
 import { JSONRPC_ERROR_CODES } from "../protocol";
 import { jsonRpcWorkspaceRequestSchemas } from "../schema.workspace";
 import type { JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
@@ -82,5 +83,35 @@ export function createWorkspaceRouteHandlers(
         });
       }
     },
+
+    "cowork/workspace/presentation/preview": async (ws, message) => {
+      const parsed = jsonRpcWorkspaceRequestSchemas[
+        "cowork/workspace/presentation/preview"
+      ].safeParse(message.params);
+      if (!parsed.success) {
+        const detail = parsed.error.issues[0]?.message;
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: detail ? `${message.method}: ${detail}` : `${message.method}: invalid params`,
+        });
+        return;
+      }
+
+      try {
+        const cwd = context.utils.resolveWorkspacePath(parsed.data, message.method);
+        const result = await previewPresentationFile({
+          cwd,
+          filePath: parsed.data.path,
+          builtInDir: context.getConfig().builtInDir,
+        });
+        context.jsonrpc.sendResult(ws, message.id, result);
+      } catch (error) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    },
   };
 }
+

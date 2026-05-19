@@ -11,6 +11,8 @@ import bedrockAmazonNovaLiteV10 from "../../config/models/bedrock/amazon.nova-li
 import bedrockAmazonNovaMicroV10 from "../../config/models/bedrock/amazon.nova-micro-v1-0.json";
 import bedrockAnthropicClaude35Haiku20241022V10 from "../../config/models/bedrock/anthropic.claude-3-5-haiku-20241022-v1-0.json";
 import codexCliGpt53CodexSpark from "../../config/models/codex-cli/gpt-5.3-codex-spark.json";
+import cursorAgentAuto from "../../config/models/cursor-agent/auto.json";
+import cursorAgentComposer25 from "../../config/models/cursor-agent/composer-2.5.json";
 import codexCliGpt54 from "../../config/models/codex-cli/gpt-5.4.json";
 import codexCliGpt54Mini from "../../config/models/codex-cli/gpt-5.4-mini.json";
 import codexCliGpt55 from "../../config/models/codex-cli/gpt-5.5.json";
@@ -56,6 +58,7 @@ export const STATIC_MODEL_PROVIDER_NAMES = [
   "opencode-go",
   "opencode-zen",
   "codex-cli",
+  "cursor-agent",
 ] as const satisfies readonly ProviderName[];
 
 export type StaticModelProviderName = (typeof STATIC_MODEL_PROVIDER_NAMES)[number];
@@ -93,6 +96,8 @@ const RAW_MODEL_REGISTRY_ENTRIES = [
   codexCliGpt54,
   codexCliGpt54Mini,
   codexCliGpt53CodexSpark,
+  cursorAgentComposer25,
+  cursorAgentAuto,
   fireworksGlm5,
   fireworksKimiK2p5,
   fireworksKimiK2p5Turbo,
@@ -138,6 +143,7 @@ function buildRegistry(entries: SupportedModel[]) {
     "opencode-go": [],
     "opencode-zen": [],
     "codex-cli": [],
+    "cursor-agent": [],
   };
   const byKey = new Map<string, SupportedModel>();
   const defaults = new Map<StaticModelProviderName, SupportedModel>();

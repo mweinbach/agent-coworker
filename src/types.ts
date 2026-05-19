@@ -13,6 +13,7 @@ export const PROVIDER_NAMES = [
   "opencode-go",
   "opencode-zen",
   "codex-cli",
+  "cursor-agent",
 ] as const;
 
 export type ProviderName = (typeof PROVIDER_NAMES)[number];
@@ -52,6 +53,7 @@ export const RUNTIME_NAMES = [
   "openai-responses",
   "google-interactions",
   "codex-app-server",
+  "cursor-sdk",
 ] as const;
 
 export type RuntimeName = (typeof RUNTIME_NAMES)[number];
@@ -65,6 +67,9 @@ export function resolveRuntimeName(v: unknown): RuntimeName | null {
 export function defaultRuntimeNameForProvider(provider: ProviderName): RuntimeName {
   if (provider === "codex-cli") {
     return "codex-app-server";
+  }
+  if (provider === "cursor-agent") {
+    return "cursor-sdk";
   }
   if (provider === "openai") {
     return "openai-responses";
@@ -82,6 +87,9 @@ export function normalizeRuntimeNameForProvider(
   if (provider === "codex-cli") {
     return "codex-app-server";
   }
+  if (provider === "cursor-agent") {
+    return "cursor-sdk";
+  }
   if (provider === "openai") {
     return "openai-responses";
   }
@@ -91,7 +99,8 @@ export function normalizeRuntimeNameForProvider(
   if (
     runtime === "openai-responses" ||
     runtime === "google-interactions" ||
-    runtime === "codex-app-server"
+    runtime === "codex-app-server" ||
+    runtime === "cursor-sdk"
   ) {
     return defaultRuntimeNameForProvider(provider);
   }

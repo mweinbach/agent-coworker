@@ -20,6 +20,7 @@ describe("Cross-provider model creation", () => {
     { name: "opencode-go", providerPrefix: "opencode-go.completions" },
     { name: "opencode-zen", providerPrefix: "opencode-zen.completions" },
     { name: "codex-cli", providerPrefix: "codex-app-server" },
+    { name: "cursor-agent", providerPrefix: "cursor-agent.sdk" },
   ];
 
   for (const { name, providerPrefix } of providers) {

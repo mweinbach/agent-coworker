@@ -115,6 +115,7 @@ const DEFAULT_PROVIDER_AUTH_METHODS: Record<ProviderName, ProviderAuthMethod[]> 
   "codex-cli": [
     { id: "oauth_cli", type: "oauth", label: "Sign in with ChatGPT (browser)", oauthMode: "auto" },
   ],
+  "cursor-agent": [{ id: "api_key", type: "api", label: "Cursor API key" }],
 };
 
 function cloneProviderAuthMethod(method: ProviderAuthMethod): ProviderAuthMethod {

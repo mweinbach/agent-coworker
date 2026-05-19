@@ -357,6 +357,7 @@ const PROVIDER_DISPLAY_NAMES: Record<ProviderName, string> = {
   "opencode-go": "OpenCode Go",
   "opencode-zen": "OpenCode Zen",
   "codex-cli": "Codex CLI",
+  "cursor-agent": "Cursor Agent",
 };
 
 const SPAWN_AGENT_MARKDOWN_SECTION_PLACEHOLDER = "{{spawnAgentMarkdownSection}}";

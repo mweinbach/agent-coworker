@@ -1,5 +1,6 @@
 import { type AgentConfig, normalizeRuntimeNameForProvider, type RuntimeName } from "../types";
 import { createCodexAppServerRuntime } from "./codexAppServerRuntime";
+import { createCursorSdkRuntime } from "./cursorSdkRuntime";
 import { createGoogleInteractionsRuntime } from "./googleInteractionsRuntime";
 import { createOpenAiResponsesRuntime } from "./openaiResponsesRuntime";
 import { createPiRuntime } from "./piRuntime";
@@ -27,6 +28,13 @@ export function createRuntime(config: AgentConfig): LlmRuntime {
         );
       }
       return createCodexAppServerRuntime();
+    case "cursor-sdk":
+      if (config.provider !== "cursor-agent") {
+        throw new Error(
+          `Provider ${config.provider} does not support the Cursor SDK runtime.`,
+        );
+      }
+      return createCursorSdkRuntime();
     case "google-interactions":
       if (config.provider !== "google") {
         throw new Error(

@@ -6,6 +6,7 @@ import { basetenProvider } from "./baseten";
 import { bedrockProvider } from "./bedrock";
 import { PROVIDER_MODEL_CATALOG } from "./catalog";
 import { codexCliProvider } from "./codex-cli";
+import { cursorAgentProvider } from "./cursor-agent";
 import { fireworksProvider } from "./fireworks";
 import { googleProvider } from "./google";
 import { lmstudioProvider } from "./lmstudio";
@@ -66,6 +67,7 @@ const PROVIDER_RUNTIMES: Record<ProviderName, ProviderRuntimeDefinition> = {
   "opencode-go": opencodeGoProvider,
   "opencode-zen": opencodeZenProvider,
   "codex-cli": codexCliProvider,
+  "cursor-agent": cursorAgentProvider,
   google: googleProvider,
   openai: openaiProvider,
 };
@@ -84,6 +86,7 @@ export const PROVIDERS: Record<ProviderName, ProviderDefinition> = {
     ...PROVIDER_MODEL_CATALOG["opencode-zen"],
   },
   "codex-cli": { ...PROVIDER_RUNTIMES["codex-cli"], ...PROVIDER_MODEL_CATALOG["codex-cli"] },
+  "cursor-agent": { ...PROVIDER_RUNTIMES["cursor-agent"], ...PROVIDER_MODEL_CATALOG["cursor-agent"] },
   google: { ...PROVIDER_RUNTIMES.google, ...PROVIDER_MODEL_CATALOG.google },
   openai: { ...PROVIDER_RUNTIMES.openai, ...PROVIDER_MODEL_CATALOG.openai },
 };

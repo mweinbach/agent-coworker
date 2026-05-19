@@ -531,9 +531,15 @@ Changes in `7.22`:
 
 Changes in `7.21`:
 
+
+- `cursor-agent` uses the **Cursor SDK** runtime (`cursor-sdk`) with a local agent in the workspace directory. Connect with a Cursor API key (`CURSOR_API_KEY` or saved `cursor-agent` connection). Cowork does not run local shell/file/web tools for this provider; the Cursor agent owns execution. Raw stream events use `cursor-sdk-v1`.
+
 - `set_config.config.providerOptions.codex-cli` and `session_config.config.providerOptions.codex-cli` now support `webSearchBackend: "native" | "exa" | "parallel"` for legacy configuration. In current Codex app-server hybrid mode, Codex-native web search/fetch owns Codex turns; the local Exa/Parallel `webSearch` tool is only exposed to non-Codex providers.
 
 Changes in `7.20`:
+
+
+- `cursor-agent` uses the **Cursor SDK** runtime (`cursor-sdk`) with a local agent in the workspace directory. Connect with a Cursor API key (`CURSOR_API_KEY` or saved `cursor-agent` connection). Cowork does not run local shell/file/web tools for this provider; the Cursor agent owns execution. Raw stream events use `cursor-sdk-v1`.
 
 - `set_config.config.providerOptions.codex-cli` and `session_config.config.providerOptions.codex-cli` now support `textVerbosity`, `webSearchMode`, and rich `webSearch` controls. Cowork forwards these to Codex app-server as thread `model_verbosity`, `web_search`, and `tools.web_search` config overrides for Codex turns.
 - `model_stream_raw` may now carry OpenAI Responses `web_search_call` items so clients can synthesize native web-search activity alongside normalized stream chunks.
@@ -727,7 +733,7 @@ Types referenced across multiple messages.
 ### ProviderName
 
 ```
-"google" | "openai" | "anthropic" | "bedrock" | "baseten" | "together" | "fireworks" | "nvidia" | "lmstudio" | "opencode-go" | "opencode-zen" | "codex-cli"
+"google" | "openai" | "anthropic" | "bedrock" | "baseten" | "together" | "fireworks" | "nvidia" | "lmstudio" | "opencode-go" | "opencode-zen" | "codex-cli" | "cursor-agent"
 ```
 
 ### PublicConfig

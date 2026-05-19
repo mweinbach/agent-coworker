@@ -69,6 +69,7 @@ const PROVIDER_LABELS: Record<ProviderName, string> = {
   "opencode-go": getOpenCodeDisplayName("opencode-go"),
   "opencode-zen": getOpenCodeDisplayName("opencode-zen"),
   "codex-cli": "Codex",
+  "cursor-agent": "Cursor Agent",
 };
 
 function staticCatalogEntry(provider: Exclude<ProviderName, "lmstudio">): ProviderCatalogEntry {

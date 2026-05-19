@@ -1,11 +1,11 @@
 import { mock } from "bun:test";
 
-import * as desktopReact from "../apps/desktop/node_modules/react";
-import * as desktopJsxDevRuntime from "../apps/desktop/node_modules/react/jsx-dev-runtime";
-import * as desktopJsxRuntime from "../apps/desktop/node_modules/react/jsx-runtime";
-import * as desktopReactDom from "../apps/desktop/node_modules/react-dom";
-import * as desktopReactDomClient from "../apps/desktop/node_modules/react-dom/client";
-import * as desktopReactDomServer from "../apps/desktop/node_modules/react-dom/server";
+import * as desktopReact from "../node_modules/react";
+import * as desktopJsxDevRuntime from "../node_modules/react/jsx-dev-runtime";
+import * as desktopJsxRuntime from "../node_modules/react/jsx-runtime";
+import * as desktopReactDom from "../node_modules/react-dom";
+import * as desktopReactDomClient from "../node_modules/react-dom/client";
+import * as desktopReactDomServer from "../node_modules/react-dom/server";
 
 // Bun's bare-module test resolver can load one React copy through repo-root
 // transitive dependencies (for example `radix-ui`) and another through the

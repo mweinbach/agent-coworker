@@ -2,6 +2,7 @@ import type { ProviderName } from "./wsProtocol";
 import { PROVIDER_NAMES } from "./wsProtocol";
 
 export const SETTINGS_PROVIDER_ORDER: readonly ProviderName[] = [
+  "cursor-agent",
   "codex-cli",
   "opencode-go",
   "google",

@@ -186,6 +186,16 @@ export function createOpenCodeZenModelAdapter(
   return createOpenCodeModelAdapter("opencode-zen", modelId, savedKey);
 }
 
+export function createCursorAgentModelAdapter(
+  config: AgentConfig,
+  modelId: string,
+  savedKey?: string,
+): ProviderModelAdapter {
+  void config;
+  void savedKey;
+  return createModelAdapter(modelId, "cursor-agent.sdk", async () => ({}));
+}
+
 export function createCodexAppServerModelAdapter(
   config: AgentConfig,
   modelId: string,

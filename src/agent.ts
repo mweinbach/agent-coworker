@@ -18,7 +18,11 @@ import type { SessionCostTracker, SessionUsageSnapshot } from "./session/costTra
 import type { AgentRole } from "./shared/agents";
 import type { ProviderContinuationState } from "./shared/providerContinuation";
 import type { AgentControl } from "./tools";
-import { createTools, filterToolsForCodexDynamicBoundary } from "./tools";
+import {
+  createTools,
+  filterToolsForCodexDynamicBoundary,
+  usesCursorAgentProvider,
+} from "./tools";
 import { buildTurnSystemPrompt } from "./turnSystemPrompt";
 import type { AgentConfig, HarnessContextState, ModelMessage, TodoItem } from "./types";
 
@@ -243,7 +247,7 @@ function extractTurnUserPrompt(messages: ModelMessage[]): string | undefined {
 }
 
 function providerOwnsExecutableTools(config: AgentConfig): boolean {
-  return config.provider === "codex-cli";
+  return config.provider === "codex-cli" || config.provider === "cursor-agent";
 }
 
 type RunTurnDeps = {
@@ -336,13 +340,15 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
     const useProviderNativeTools = providerOwnsExecutableTools(config);
     const rawBuiltInTools = deps.createTools(toolCtx);
     const builtInTools = useProviderNativeTools
-      ? filterToolsForCodexDynamicBoundary(rawBuiltInTools)
+      ? config.provider === "cursor-agent"
+        ? {}
+        : filterToolsForCodexDynamicBoundary(rawBuiltInTools)
       : rawBuiltInTools;
 
     let mcpTools: Record<string, any> = {};
     const enableMcp = params.enableMcp ?? config.enableMcp ?? false;
     let closeMcp: undefined | (() => Promise<void>);
-    if (enableMcp) {
+    if (enableMcp && !usesCursorAgentProvider(config)) {
       const servers = await deps.loadMCPServers(config);
       if (servers.length > 0) {
         const loaded = await deps.loadMCPTools(servers, { log });

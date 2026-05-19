@@ -40,6 +40,7 @@ const modelStreamRawFormatSchema = z.enum([
   "openai-responses-v1",
   "google-interactions-v1",
   "codex-app-server-v2",
+  "cursor-sdk-v1",
 ]);
 const researchSourcesJsonSchema = z.array(researchSourceSchema);
 const researchThoughtSummariesJsonSchema = z.array(researchThoughtSummarySchema);

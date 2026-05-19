@@ -36,6 +36,18 @@ export {
   filterToolsForCodexDynamicBoundary,
   isCodexDynamicCoworkToolName,
 } from "./codexBoundary";
+export {
+  filterToolsForCursorDynamicBoundary,
+  isCursorDynamicCoworkToolName,
+} from "./cursorBoundary";
+
+export function usesCursorAgentProvider(config: { provider: string }): boolean {
+  return config.provider === "cursor-agent";
+}
+
+function usesCursorNativeTools(ctx: ToolContext): boolean {
+  return ctx.config.provider === "cursor-agent";
+}
 
 function usesLegacyCodexWebSearch(ctx: ToolContext): boolean {
   if (ctx.config.provider !== "codex-cli") return false;
@@ -70,6 +82,7 @@ export function listSessionToolNames(
   opts: ListSessionToolNameOptions = {},
 ): string[] {
   const providerIsCodex = config.provider === "codex-cli";
+  const providerIsCursor = config.provider === "cursor-agent";
   const includeLegacyWebSearch =
     !usesGoogleNativeWebToolsConfig(config) &&
     (!providerIsCodex || usesLegacyCodexWebSearchConfig(config));
@@ -105,7 +118,8 @@ export function listSessionToolNames(
         ]
       : []),
   ];
-  const names = providerIsCodex ? coworkToolNames : [...localToolNames, ...coworkToolNames];
+  const names =
+    providerIsCodex || providerIsCursor ? coworkToolNames : [...localToolNames, ...coworkToolNames];
 
   return [...names].sort((left, right) => left.localeCompare(right));
 }
@@ -114,7 +128,8 @@ export function createTools(ctx: ToolContext): Record<string, any> {
   const askTool = createAskTool(ctx);
   const includeLegacyWebSearch =
     !usesGoogleNativeWebTools(ctx) &&
-    (ctx.config.provider !== "codex-cli" || usesLegacyCodexWebSearch(ctx));
+    ((ctx.config.provider !== "codex-cli" || usesLegacyCodexWebSearch(ctx)) &&
+      !usesCursorNativeTools(ctx));
   const baseTools = {
     bash: createBashTool(ctx),
     read: createReadTool(ctx),

@@ -1,0 +1,12 @@
+{
+  "id": "composer-2.5",
+  "provider": "cursor-agent",
+  "displayName": "Composer 2.5",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system-models/composer-2.5.md",
+  "providerOptionsDefaults": {
+    "thinking": "high"
+  },
+  "isDefault": true
+}

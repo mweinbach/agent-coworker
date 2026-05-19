@@ -34,7 +34,8 @@ export const MODEL_STREAM_NORMALIZER_VERSION = 1;
 export type ModelStreamRawFormat =
   | "openai-responses-v1"
   | "google-interactions-v1"
-  | "codex-app-server-v2";
+  | "codex-app-server-v2"
+  | "cursor-sdk-v1";
 
 export interface ModelStreamRawEvent {
   format: ModelStreamRawFormat;

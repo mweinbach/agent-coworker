@@ -2,7 +2,7 @@ import type { ProviderContinuationState } from "../shared/providerContinuation";
 import type { AgentConfig, ModelMessage, TodoItem } from "../types";
 
 export type RuntimeModelRawEvent = {
-  format: "openai-responses-v1" | "google-interactions-v1" | "codex-app-server-v2";
+  format: "openai-responses-v1" | "google-interactions-v1" | "codex-app-server-v2" | "cursor-sdk-v1";
   event: Record<string, unknown>;
 };
 

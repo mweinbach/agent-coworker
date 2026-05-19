@@ -1,0 +1,10 @@
+{
+  "id": "auto",
+  "provider": "cursor-agent",
+  "displayName": "Auto",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system-models/composer-2.5.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

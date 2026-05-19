@@ -678,6 +678,9 @@ export async function resolvePiModel(
   if (provider === "codex-cli") {
     throw new Error("codex-cli is handled by the Codex app-server runtime.");
   }
+  if (provider === "cursor-agent") {
+    throw new Error("cursor-agent is handled by the Cursor SDK runtime.");
+  }
 
   const exhaustive: never = provider;
   throw new Error(`Unsupported provider for PI runtime: ${String(exhaustive)}`);

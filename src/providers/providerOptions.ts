@@ -1,5 +1,6 @@
 import anthropicClaudeOpus46 from "../../config/models/anthropic/claude-opus-4-6.json";
 import codexCliGpt54 from "../../config/models/codex-cli/gpt-5.4.json";
+import cursorAgentComposer25 from "../../config/models/cursor-agent/composer-2.5.json";
 import googleGemini31ProPreview from "../../config/models/google/gemini-3.1-pro-preview.json";
 import openaiGpt54 from "../../config/models/openai/gpt-5.4.json";
 
@@ -11,4 +12,5 @@ export const DEFAULT_PROVIDER_OPTIONS: Record<string, any> = {
   google: googleGemini31ProPreview.providerOptionsDefaults,
   anthropic: anthropicClaudeOpus46.providerOptionsDefaults,
   "codex-cli": codexCliGpt54.providerOptionsDefaults,
+  "cursor-agent": cursorAgentComposer25.providerOptionsDefaults,
 };

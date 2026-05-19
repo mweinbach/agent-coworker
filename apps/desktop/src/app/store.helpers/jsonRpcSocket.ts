@@ -231,6 +231,9 @@ export function ensureWorkspaceJsonRpcSocket(
       const controlSessionId =
         (get() as { workspaceRuntimeById?: Record<string, { controlSessionId?: string | null }> })
           .workspaceRuntimeById?.[workspaceId]?.controlSessionId ?? null;
+      if (existing.__coworkOpened === false) {
+        existing.connect();
+      }
       if (set && existing.__coworkOpened === true && !controlSessionId) {
         syncWorkspaceSocketState(workspaceId, true);
       }

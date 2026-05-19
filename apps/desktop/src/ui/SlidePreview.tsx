@@ -6,9 +6,10 @@ import { Button } from "../components/ui/button";
 
 type SlidePreviewProps = {
   path: string;
+  refreshTrigger?: any;
 };
 
-export function SlidePreview({ path }: SlidePreviewProps) {
+export function SlidePreview({ path, refreshTrigger }: SlidePreviewProps) {
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const workspaces = useAppStore((s) => s.workspaces);
 
@@ -52,7 +53,7 @@ export function SlidePreview({ path }: SlidePreviewProps) {
     } finally {
       setLoading(false);
     }
-  }, [hasActiveWorkspace, path, selectedWorkspaceId, refreshKey]);
+  }, [hasActiveWorkspace, path, selectedWorkspaceId, refreshKey, refreshTrigger]);
 
   useEffect(() => {
     loadSlide();

@@ -273,6 +273,7 @@ export function Canvas({ path }: { path: string }) {
   const showFormattingBar = useAppStore((s) => s.canvasShowFormattingBar);
   const setShowFormattingBar = useAppStore((s) => s.setCanvasShowFormattingBar);
   const [content, setContent] = useState<string>("");
+  const [previewRefreshTrigger, setPreviewRefreshTrigger] = useState<number>(0);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [promptText, setPromptText] = useState<string>("");
@@ -340,6 +341,7 @@ export function Canvas({ path }: { path: string }) {
           if (editorRef.current && isMarkdown) {
             editorRef.current.innerHTML = markdownToHtml(diskContent);
           }
+          setPreviewRefreshTrigger((t) => t + 1);
         }
       } catch {}
     }, 1500);
@@ -358,6 +360,7 @@ export function Canvas({ path }: { path: string }) {
         await writeFile({ path, content });
         lastSavedContentRef.current = content;
         contentRef.current = content;
+        setPreviewRefreshTrigger((t) => t + 1);
       } catch (err) {
         console.error("Failed to auto-save file:", err);
       }
@@ -365,6 +368,12 @@ export function Canvas({ path }: { path: string }) {
 
     return () => clearTimeout(timer);
   }, [content, path, isSpreadsheet, isPptx]);
+
+  useEffect(() => {
+    if (activeTab === "preview") {
+      setPreviewRefreshTrigger((t) => t + 1);
+    }
+  }, [activeTab]);
 
 
   const fileName = basenamePath(path);
@@ -1024,7 +1033,7 @@ ${textToSend}`;
           ) : isSlide ? (
             <>
               <TabsContent value="preview" className="h-full m-0 p-0 outline-none">
-                <SlidePreview path={path} />
+                <SlidePreview path={path} refreshTrigger={previewRefreshTrigger} />
               </TabsContent>
 
               <TabsContent value="edit" className="h-full m-0 p-0 outline-none bg-background">

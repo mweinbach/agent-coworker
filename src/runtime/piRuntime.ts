@@ -26,10 +26,6 @@ import {
 } from "../shared/openaiContinuation";
 import type { ModelMessage, ProviderName } from "../types";
 import {
-  streamBedrock as coworkStreamBedrock,
-  streamSimpleBedrock as coworkStreamSimpleBedrock,
-} from "./bedrockProviderModule";
-import {
   extractPiAssistantText,
   extractPiReasoningText,
   mergePiUsage,
@@ -63,10 +59,17 @@ import type {
 
 const LM_STUDIO_LOCAL_SENTINEL_API_KEY = "lmstudio-local";
 
-setBedrockProviderModule({
-  streamBedrock: coworkStreamBedrock,
-  streamSimpleBedrock: coworkStreamSimpleBedrock,
-});
+let bedrockProviderModuleRegistered = false;
+
+async function ensureBedrockProviderModuleRegistered(): Promise<void> {
+  if (bedrockProviderModuleRegistered) return;
+  const module = await import("./bedrockProviderModule");
+  setBedrockProviderModule({
+    streamBedrock: module.streamBedrock,
+    streamSimpleBedrock: module.streamSimpleBedrock,
+  });
+  bedrockProviderModuleRegistered = true;
+}
 
 function safeJsonStringify(value: unknown): string {
   try {
@@ -1090,6 +1093,9 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
       };
 
       try {
+        if (params.config.provider === "bedrock") {
+          await ensureBedrockProviderModuleRegistered();
+        }
         const resolved = await resolvePiModel(params);
         const telemetry = parseTelemetrySettings(params.telemetry);
         const piTools = toolMapToPiTools(params.tools, params.config.provider);

@@ -73,10 +73,22 @@ function isInvalidCursorAgentError(error: unknown): boolean {
   );
 }
 
+type CursorSdkRuntimeOverrides = {
+  resolveApiKey?: (config: RuntimeRunTurnParams["config"]) => string;
+  resolveEffectiveModelId?: (
+    config: RuntimeRunTurnParams["config"],
+    modelId: string,
+    log?: (line: string) => void,
+  ) => Promise<string>;
+  createAgent?: typeof Agent.create;
+  resumeAgent?: typeof Agent.resume;
+};
+
 async function createOrResumeCursorAgent(
   params: RuntimeRunTurnParams,
   apiKey: string,
   modelId: string,
+  overrides: CursorSdkRuntimeOverrides,
 ): Promise<{ agent: SDKAgent; resumed: boolean }> {
   const resumeState = isCursorSdkContinuationState(params.providerState)
     ? params.providerState
@@ -86,7 +98,7 @@ async function createOrResumeCursorAgent(
 
   if (resumeState?.agentId) {
     try {
-      const agent = await Agent.resume(resumeState.agentId, {
+      const agent = await (overrides.resumeAgent ?? Agent.resume)(resumeState.agentId, {
         apiKey,
         model,
         local,
@@ -100,7 +112,7 @@ async function createOrResumeCursorAgent(
     }
   }
 
-  const agent = await Agent.create({
+  const agent = await (overrides.createAgent ?? Agent.create)({
     apiKey,
     model,
     local,
@@ -108,13 +120,13 @@ async function createOrResumeCursorAgent(
   return { agent, resumed: false };
 }
 
-export function createCursorSdkRuntime(): LlmRuntime {
+export function createCursorSdkRuntime(overrides: CursorSdkRuntimeOverrides = {}): LlmRuntime {
   return {
     name: CURSOR_SDK_RUNTIME,
     runTurn: async (params: RuntimeRunTurnParams): Promise<RuntimeRunTurnResult> => {
-      const apiKey = resolveCursorApiKey(params.config);
+      const apiKey = (overrides.resolveApiKey ?? resolveCursorApiKey)(params.config);
       const configuredModel = params.config.model;
-      const effectiveModel = await resolveEffectiveCursorModelId(
+      const effectiveModel = await (overrides.resolveEffectiveModelId ?? resolveEffectiveCursorModelId)(
         params.config,
         configuredModel,
         params.log,
@@ -123,7 +135,7 @@ export function createCursorSdkRuntime(): LlmRuntime {
       let usage: RuntimeUsage | undefined;
 
       try {
-        const opened = await createOrResumeCursorAgent(params, apiKey, effectiveModel);
+        const opened = await createOrResumeCursorAgent(params, apiKey, effectiveModel, overrides);
         const { agent } = opened;
 
         await params.onModelStreamPart?.({

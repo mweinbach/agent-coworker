@@ -19,7 +19,7 @@ describe("Provider options structure", () => {
 
   test("no extra unknown providers in options", () => {
     const providers = Object.keys(DEFAULT_PROVIDER_OPTIONS);
-    expect(providers).toEqual(["openai", "google", "anthropic", "codex-cli"]);
+    expect(providers).toEqual(["openai", "google", "anthropic", "codex-cli", "cursor-agent"]);
   });
 
   test("each provider options is a plain object", () => {

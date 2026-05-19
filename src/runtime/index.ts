@@ -1,11 +1,10 @@
+import { createRequire } from "node:module";
+
 import { type AgentConfig, normalizeRuntimeNameForProvider, type RuntimeName } from "../types";
-import { createCodexAppServerRuntime } from "./codexAppServerRuntime";
-import { createCursorSdkRuntime } from "./cursorSdkRuntime";
-import { createGoogleInteractionsRuntime } from "./googleInteractionsRuntime";
-import { createOpenAiResponsesRuntime } from "./openaiResponsesRuntime";
-import { createPiRuntime } from "./piRuntime";
 
 import type { LlmRuntime } from "./types";
+
+const requireRuntime = createRequire(import.meta.url);
 
 export function resolveRuntimeName(config: AgentConfig): RuntimeName {
   return normalizeRuntimeNameForProvider(config.provider, config.runtime);
@@ -20,30 +19,38 @@ export function createRuntime(config: AgentConfig): LlmRuntime {
           `Provider ${config.provider} does not support the OpenAI Responses runtime.`,
         );
       }
-      return createOpenAiResponsesRuntime();
+      return (
+        requireRuntime("./openaiResponsesRuntime.ts") as typeof import("./openaiResponsesRuntime")
+      ).createOpenAiResponsesRuntime();
     case "codex-app-server":
       if (config.provider !== "codex-cli") {
         throw new Error(
           `Provider ${config.provider} does not support the Codex app-server runtime.`,
         );
       }
-      return createCodexAppServerRuntime();
+      return (
+        requireRuntime("./codexAppServerRuntime.ts") as typeof import("./codexAppServerRuntime")
+      ).createCodexAppServerRuntime();
     case "cursor-sdk":
       if (config.provider !== "cursor-agent") {
         throw new Error(
           `Provider ${config.provider} does not support the Cursor SDK runtime.`,
         );
       }
-      return createCursorSdkRuntime();
+      return (
+        requireRuntime("./cursorSdkRuntime.ts") as typeof import("./cursorSdkRuntime")
+      ).createCursorSdkRuntime();
     case "google-interactions":
       if (config.provider !== "google") {
         throw new Error(
           `Provider ${config.provider} does not support the Google Interactions runtime.`,
         );
       }
-      return createGoogleInteractionsRuntime();
+      return (
+        requireRuntime("./googleInteractionsRuntime.ts") as typeof import("./googleInteractionsRuntime")
+      ).createGoogleInteractionsRuntime();
     case "pi":
-      return createPiRuntime();
+      return (requireRuntime("./piRuntime.ts") as typeof import("./piRuntime")).createPiRuntime();
   }
 }
 

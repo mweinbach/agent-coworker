@@ -10,11 +10,13 @@ export function resolveCursorApiKey(config: AgentConfig, savedKey?: string): str
   const fromSaved =
     savedKey?.trim() ||
     getSavedProviderApiKeyForHome(resolveAuthHomeDir(config), CURSOR_AGENT_PROVIDER)?.trim();
-  const fromEnv = process.env.CURSOR_API_KEY?.trim();
+  const fromEnv =
+    process.env.CURSOR_API_KEY?.trim() ||
+    process.env.CURSOR_AGENT_API_KEY?.trim();
   const apiKey = fromSaved || fromEnv;
   if (!apiKey) {
     throw new Error(
-      "Cursor API key is missing. Connect cursor-agent with an API key or set CURSOR_API_KEY.",
+      "Cursor API key is missing. Connect cursor-agent with an API key or set CURSOR_API_KEY (or CURSOR_AGENT_API_KEY in automation).",
     );
   }
   return apiKey;

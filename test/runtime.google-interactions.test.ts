@@ -2126,9 +2126,7 @@ describe("google native interactions request building", () => {
     const sizeLimitError = new Error(
       "The generated response exceeds the maximum allowed size limit (temporary limitation).",
     );
-    expect(googleNativeInternal.classifyGoogleInteractionError(sizeLimitError)).toBe(
-      "output_size",
-    );
+    expect(googleNativeInternal.classifyGoogleInteractionError(sizeLimitError)).toBe("output_size");
     expect(googleNativeInternal.isRetryableGoogleInteractionError(sizeLimitError)).toBe(false);
     expect(
       googleNativeInternal.classifyGoogleInteractionError(

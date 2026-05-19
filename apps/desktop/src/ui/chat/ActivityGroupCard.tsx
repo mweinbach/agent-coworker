@@ -261,13 +261,7 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
   }, [summary.entries]);
 
   return (
-    <div
-      ref={containerRef}
-      className="max-h-[26rem] overflow-y-auto pr-0.5"
-      style={{
-        maskImage: "linear-gradient(to bottom, black calc(100% - 1.5rem), transparent)",
-      }}
-    >
+    <div ref={containerRef} className="max-h-[26rem] overflow-y-auto pr-0.5">
       {summary.entries.map((entry, i) => {
         const isLast = i === summary.entries.length - 1;
 

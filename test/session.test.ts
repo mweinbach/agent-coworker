@@ -4255,9 +4255,7 @@ describe("AgentSession", () => {
           part.type === "text" && String(part.text).includes("already attached as audio content"),
       );
       expect(uploadNote).toBeDefined();
-      expect(String(uploadNote?.text)).toContain(
-        "do not call read on this uploaded media path",
-      );
+      expect(String(uploadNote?.text)).toContain("do not call read on this uploaded media path");
       expect(String(uploadNote?.text)).toContain("write the requested output file directly");
     });
 

@@ -281,7 +281,9 @@ function buildBinaryContent(
   } as InteractionsContent;
 }
 
-function unsupportedFunctionResultBinaryPlaceholder(part: InteractionsContent): Interactions.TextContent {
+function unsupportedFunctionResultBinaryPlaceholder(
+  part: InteractionsContent,
+): Interactions.TextContent {
   const record = part as unknown as Record<string, unknown>;
   const partType = asNonEmptyString(record.type) ?? "binary";
   const mimeType = asNonEmptyString(record.mime_type);

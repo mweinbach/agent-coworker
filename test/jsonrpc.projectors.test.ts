@@ -884,8 +884,7 @@ describe("JSON-RPC projectors", () => {
       .filter((event) => event.eventType === "item/completed")
       .find(
         (event) =>
-          event.payload?.item?.type === "toolCall" &&
-          event.payload?.item?.state === "output-error",
+          event.payload?.item?.type === "toolCall" && event.payload?.item?.state === "output-error",
       );
     expect(journalFailedTool?.payload?.item).toMatchObject({
       id: `toolCall:${turnId}:call_read`,

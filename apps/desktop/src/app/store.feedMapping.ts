@@ -1317,8 +1317,7 @@ export function mapTranscriptToFeed(events: TranscriptEvent[]): FeedItem[] {
     if (payload.type === "session_busy") {
       if (payload.busy === false) {
         const failed =
-          isRecord(payload) &&
-          (payload.outcome === "error" || payload.outcome === "cancelled");
+          isRecord(payload) && (payload.outcome === "error" || payload.outcome === "cancelled");
         const turnId =
           isRecord(payload) && typeof payload.turnId === "string" ? payload.turnId : null;
         if (failed) {

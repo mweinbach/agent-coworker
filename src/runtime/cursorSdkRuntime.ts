@@ -1,10 +1,9 @@
 import { Agent, type SDKAgent, type SDKUserMessage } from "@cursor/sdk";
-
+import { CURSOR_AGENT_PROVIDER, resolveCursorApiKey } from "../providers/cursorSdkAuth";
 import {
   buildCursorModelSelection,
   resolveEffectiveCursorModelId,
 } from "../providers/cursorSdkModels";
-import { CURSOR_AGENT_PROVIDER, resolveCursorApiKey } from "../providers/cursorSdkAuth";
 import { isCursorSdkContinuationState } from "../shared/providerContinuation";
 import type { ModelMessage } from "../types";
 import {
@@ -126,11 +125,9 @@ export function createCursorSdkRuntime(overrides: CursorSdkRuntimeOverrides = {}
     runTurn: async (params: RuntimeRunTurnParams): Promise<RuntimeRunTurnResult> => {
       const apiKey = (overrides.resolveApiKey ?? resolveCursorApiKey)(params.config);
       const configuredModel = params.config.model;
-      const effectiveModel = await (overrides.resolveEffectiveModelId ?? resolveEffectiveCursorModelId)(
-        params.config,
-        configuredModel,
-        params.log,
-      );
+      const effectiveModel = await (
+        overrides.resolveEffectiveModelId ?? resolveEffectiveCursorModelId
+      )(params.config, configuredModel, params.log);
       const bridge = createCursorSdkStreamBridge(params);
       let usage: RuntimeUsage | undefined;
 

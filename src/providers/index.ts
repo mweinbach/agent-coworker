@@ -86,7 +86,10 @@ export const PROVIDERS: Record<ProviderName, ProviderDefinition> = {
     ...PROVIDER_MODEL_CATALOG["opencode-zen"],
   },
   "codex-cli": { ...PROVIDER_RUNTIMES["codex-cli"], ...PROVIDER_MODEL_CATALOG["codex-cli"] },
-  "cursor-agent": { ...PROVIDER_RUNTIMES["cursor-agent"], ...PROVIDER_MODEL_CATALOG["cursor-agent"] },
+  "cursor-agent": {
+    ...PROVIDER_RUNTIMES["cursor-agent"],
+    ...PROVIDER_MODEL_CATALOG["cursor-agent"],
+  },
   google: { ...PROVIDER_RUNTIMES.google, ...PROVIDER_MODEL_CATALOG.google },
   openai: { ...PROVIDER_RUNTIMES.openai, ...PROVIDER_MODEL_CATALOG.openai },
 };

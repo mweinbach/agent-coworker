@@ -146,12 +146,21 @@ describe("codex app-server resolver", () => {
 
   test("reports update availability for older system codex", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-status-"));
+    const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-status-bin-"));
+    const codexPath = path.join(binDir, "codex");
+    await fs.writeFile(codexPath, "#!/bin/sh\n", "utf8");
+    await fs.chmod(codexPath, 0o755);
+
     const status = await getCodexAppServerInstallStatus(
       { checkLatest: true },
       {
         homeDir,
+        pathEnv: binDir,
         fetchImpl: fakeReleaseFetch("0.129.0"),
-        spawnForResult: async () => ({ ok: true, stdout: "codex-cli 0.128.0\n", stderr: "" }),
+        spawnForResult: async (cmd, args) => {
+          expect([cmd, ...args]).toEqual([codexPath, "--version"]);
+          return { ok: true, stdout: "codex-cli 0.128.0\n", stderr: "" };
+        },
       },
     );
 

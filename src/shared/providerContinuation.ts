@@ -28,7 +28,6 @@ export type GoogleContinuationState = {
   requestFingerprint?: string;
 };
 
-
 export type CursorSdkContinuationState = {
   provider: "cursor-agent";
   model: string;
@@ -59,7 +58,6 @@ export const googleContinuationStateSchema = z
   })
   .strict();
 
-
 export const cursorSdkContinuationStateSchema = z
   .object({
     provider: z.literal("cursor-agent"),
@@ -88,7 +86,12 @@ export const providerContinuationStateSchema = z.union([
 export function supportsProviderManagedContinuationProvider(
   provider: unknown,
 ): provider is ProviderManagedContinuationProvider {
-  return provider === "codex-cli" || provider === "cursor-agent" || provider === "google" || supportsOpenAiContinuation(provider);
+  return (
+    provider === "codex-cli" ||
+    provider === "cursor-agent" ||
+    provider === "google" ||
+    supportsOpenAiContinuation(provider)
+  );
 }
 
 export function isGoogleContinuationState(
@@ -118,8 +121,6 @@ export function isInvalidGoogleContinuationError(error: unknown): boolean {
     normalized.includes("does not exist")
   );
 }
-
-
 
 export function isCursorSdkContinuationState(
   state: ProviderContinuationState | null | undefined,

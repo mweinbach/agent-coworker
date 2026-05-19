@@ -21,10 +21,7 @@ export async function listCursorSdkModels(config: AgentConfig): Promise<ModelLis
   return models;
 }
 
-export function buildCursorModelSelection(
-  config: AgentConfig,
-  modelId: string,
-): ModelSelection {
+export function buildCursorModelSelection(config: AgentConfig, modelId: string): ModelSelection {
   const supported = assertSupportedModel("cursor-agent", modelId);
   const root =
     typeof config.providerOptions === "object" && config.providerOptions !== null

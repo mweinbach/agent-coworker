@@ -10,9 +10,7 @@ export function resolveCursorApiKey(config: AgentConfig, savedKey?: string): str
   const fromSaved =
     savedKey?.trim() ||
     getSavedProviderApiKeyForHome(resolveAuthHomeDir(config), CURSOR_AGENT_PROVIDER)?.trim();
-  const fromEnv =
-    process.env.CURSOR_API_KEY?.trim() ||
-    process.env.CURSOR_AGENT_API_KEY?.trim();
+  const fromEnv = process.env.CURSOR_API_KEY?.trim() || process.env.CURSOR_AGENT_API_KEY?.trim();
   const apiKey = fromSaved || fromEnv;
   if (!apiKey) {
     throw new Error(
@@ -22,7 +20,9 @@ export function resolveCursorApiKey(config: AgentConfig, savedKey?: string): str
   return apiKey;
 }
 
-export async function verifyCursorApiKey(apiKey: string): Promise<{ email?: string; keyName: string }> {
+export async function verifyCursorApiKey(
+  apiKey: string,
+): Promise<{ email?: string; keyName: string }> {
   const user = await Cursor.me({ apiKey });
   return {
     keyName: user.apiKeyName,

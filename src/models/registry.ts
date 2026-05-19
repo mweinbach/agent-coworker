@@ -11,11 +11,11 @@ import bedrockAmazonNovaLiteV10 from "../../config/models/bedrock/amazon.nova-li
 import bedrockAmazonNovaMicroV10 from "../../config/models/bedrock/amazon.nova-micro-v1-0.json";
 import bedrockAnthropicClaude35Haiku20241022V10 from "../../config/models/bedrock/anthropic.claude-3-5-haiku-20241022-v1-0.json";
 import codexCliGpt53CodexSpark from "../../config/models/codex-cli/gpt-5.3-codex-spark.json";
-import cursorAgentAuto from "../../config/models/cursor-agent/auto.json";
-import cursorAgentComposer25 from "../../config/models/cursor-agent/composer-2.5.json";
 import codexCliGpt54 from "../../config/models/codex-cli/gpt-5.4.json";
 import codexCliGpt54Mini from "../../config/models/codex-cli/gpt-5.4-mini.json";
 import codexCliGpt55 from "../../config/models/codex-cli/gpt-5.5.json";
+import cursorAgentAuto from "../../config/models/cursor-agent/auto.json";
+import cursorAgentComposer25 from "../../config/models/cursor-agent/composer-2.5.json";
 import fireworksGlm5 from "../../config/models/fireworks/accounts-fireworks-models-glm-5.json";
 import fireworksKimiK2p5 from "../../config/models/fireworks/accounts-fireworks-models-kimi-k2p5.json";
 import fireworksMinimaxM2p5 from "../../config/models/fireworks/accounts-fireworks-models-minimax-m2p5.json";

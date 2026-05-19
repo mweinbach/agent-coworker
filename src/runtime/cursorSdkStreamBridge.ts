@@ -1,7 +1,6 @@
 import type { SDKMessage } from "@cursor/sdk";
-
-import type { RuntimeRunTurnParams } from "./types";
 import { asRecord, asString } from "./piRuntimeOptions";
+import type { RuntimeRunTurnParams } from "./types";
 
 type StreamItemState = {
   kind: "text" | "reasoning" | "tool";
@@ -16,13 +15,15 @@ export type CursorSdkStreamBridge = {
   reasoningText: () => string | undefined;
 };
 
-export function createCursorSdkStreamBridge(
-  params: RuntimeRunTurnParams,
-): CursorSdkStreamBridge {
+export function createCursorSdkStreamBridge(params: RuntimeRunTurnParams): CursorSdkStreamBridge {
   const items = new Map<string, StreamItemState>();
   const itemOrder: string[] = [];
 
-  const ensureItem = (id: string, kind: StreamItemState["kind"], toolName?: string): StreamItemState => {
+  const ensureItem = (
+    id: string,
+    kind: StreamItemState["kind"],
+    toolName?: string,
+  ): StreamItemState => {
     const existing = items.get(id);
     if (existing) return existing;
     const created: StreamItemState = { kind, toolName, started: false, text: "" };
@@ -133,7 +134,9 @@ export function createCursorSdkStreamBridge(
           break;
         }
         case "status":
-          params.log?.(`[cursor-sdk] status ${message.status}${message.message ? `: ${message.message}` : ""}`);
+          params.log?.(
+            `[cursor-sdk] status ${message.status}${message.message ? `: ${message.message}` : ""}`,
+          );
           break;
         case "task":
           if (message.text) {
@@ -174,12 +177,14 @@ function stringifyUnknown(value: unknown): string {
   }
 }
 
-export function usageFromTurnEnded(update: unknown): {
-  promptTokens: number;
-  completionTokens: number;
-  totalTokens: number;
-  cachedPromptTokens?: number;
-} | undefined {
+export function usageFromTurnEnded(update: unknown):
+  | {
+      promptTokens: number;
+      completionTokens: number;
+      totalTokens: number;
+      cachedPromptTokens?: number;
+    }
+  | undefined {
   const record = asRecord(update);
   if (record?.type !== "turn-ended") return undefined;
   const usage = asRecord(record.usage);
@@ -188,7 +193,10 @@ export function usageFromTurnEnded(update: unknown): {
   const completionTokens = Number(usage.outputTokens ?? 0);
   const cachedPromptTokens = Number(usage.cacheReadTokens ?? 0) || undefined;
   const totalTokens =
-    promptTokens + completionTokens + (cachedPromptTokens ?? 0) + Number(usage.cacheWriteTokens ?? 0);
+    promptTokens +
+    completionTokens +
+    (cachedPromptTokens ?? 0) +
+    Number(usage.cacheWriteTokens ?? 0);
   if (promptTokens === 0 && completionTokens === 0 && totalTokens === 0) return undefined;
   return {
     promptTokens,

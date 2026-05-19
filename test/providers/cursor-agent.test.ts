@@ -2,7 +2,14 @@ import { describe, expect, test } from "bun:test";
 import path from "node:path";
 
 import { defaultModelForProvider, getModel, loadConfig } from "../../src/config";
-import { DEFAULT_PROVIDER_OPTIONS, makeConfig, makeTmpDirs, repoRoot, withEnv, writeJson } from "./helpers";
+import {
+  DEFAULT_PROVIDER_OPTIONS,
+  makeConfig,
+  makeTmpDirs,
+  repoRoot,
+  withEnv,
+  writeJson,
+} from "./helpers";
 
 const DEFAULT_CURSOR_MODEL = "composer-2.5";
 
@@ -93,7 +100,10 @@ describe("Cursor SDK runtime", () => {
       createAgent: (async () => ({
         agentId: "agent-test-123",
         model: { id: DEFAULT_CURSOR_MODEL },
-        send: async (message: unknown, options?: { onDelta?: (args: { update: unknown }) => void | Promise<void> }) => {
+        send: async (
+          message: unknown,
+          options?: { onDelta?: (args: { update: unknown }) => void | Promise<void> },
+        ) => {
           sentMessages.push(message);
           await options?.onDelta?.({
             update: {
@@ -110,7 +120,11 @@ describe("Cursor SDK runtime", () => {
             onDidChangeStatus: () => () => {},
             cancel: async () => {},
             conversation: async () => [],
-            wait: async () => ({ id: "run-test-123", status: "finished", result: "cursor-agent-live-ok" }),
+            wait: async () => ({
+              id: "run-test-123",
+              status: "finished",
+              result: "cursor-agent-live-ok",
+            }),
             stream: async function* () {
               yield {
                 type: "assistant",
@@ -150,6 +164,8 @@ describe("Cursor SDK runtime", () => {
       agentId: "agent-test-123",
     });
     expect(rawEvents).toHaveLength(1);
-    expect(streamParts.some((part) => (part as { type?: string }).type === "text-delta")).toBe(true);
+    expect(streamParts.some((part) => (part as { type?: string }).type === "text-delta")).toBe(
+      true,
+    );
   });
 });

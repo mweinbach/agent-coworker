@@ -128,8 +128,8 @@ export function createTools(ctx: ToolContext): Record<string, any> {
   const askTool = createAskTool(ctx);
   const includeLegacyWebSearch =
     !usesGoogleNativeWebTools(ctx) &&
-    ((ctx.config.provider !== "codex-cli" || usesLegacyCodexWebSearch(ctx)) &&
-      !usesCursorNativeTools(ctx));
+    (ctx.config.provider !== "codex-cli" || usesLegacyCodexWebSearch(ctx)) &&
+    !usesCursorNativeTools(ctx);
   const baseTools = {
     bash: createBashTool(ctx),
     read: createReadTool(ctx),

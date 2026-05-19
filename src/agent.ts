@@ -18,11 +18,7 @@ import type { SessionCostTracker, SessionUsageSnapshot } from "./session/costTra
 import type { AgentRole } from "./shared/agents";
 import type { ProviderContinuationState } from "./shared/providerContinuation";
 import type { AgentControl } from "./tools";
-import {
-  createTools,
-  filterToolsForCodexDynamicBoundary,
-  usesCursorAgentProvider,
-} from "./tools";
+import { createTools, filterToolsForCodexDynamicBoundary, usesCursorAgentProvider } from "./tools";
 import { buildTurnSystemPrompt } from "./turnSystemPrompt";
 import type { AgentConfig, HarnessContextState, ModelMessage, TodoItem } from "./types";
 

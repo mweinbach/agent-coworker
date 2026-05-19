@@ -228,7 +228,13 @@ function upsertFeedItem(
   item: ProjectedItem,
   ts: string,
 ): SessionFeedItem[] {
-  const index = feed.findIndex((entry) => entry.id === item.id);
+  const index = feed.findIndex(
+    (entry) =>
+      entry.id === item.id ||
+      (item.type === "userMessage" &&
+        item.clientMessageId &&
+        entry.id === item.clientMessageId),
+  );
   const existing = index >= 0 ? feed[index] : undefined;
   const next = toFeedItem(item, ts, existing);
   if (index < 0) {

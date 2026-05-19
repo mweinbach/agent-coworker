@@ -411,6 +411,12 @@ export function createConversationProjection(opts: CreateConversationProjectionO
     activeAssistantByTurn.delete(turnId);
   };
 
+  // Strip all whitespace to enable comparison between history that
+  // was concatenated without separators (e.g. "Hello worldMore text")
+  // and the final text that includes them (e.g. "Hello world\n\nMore text").
+  // Both reduce to "HelloworldMoretext" allowing a match.
+  const stripWhitespace = (text: string) => text.replace(/\s/g, "");
+
   const assistantRemainderForTurn = (turnId: string, text: string) => {
     const history = assistantHistoryByTurn.get(turnId) ?? "";
     if (!history) return text;
@@ -427,8 +433,49 @@ export function createConversationProjection(opts: CreateConversationProjectionO
       return "";
     }
 
+    // Normalized prefix match — the final assistant_message may include
+    // content beyond what was streamed.
+    if (normalizedHistory && normalizedText) {
+      if (normalizedText.startsWith(normalizedHistory)) {
+        const remainderNorm = normalizedText.slice(normalizedHistory.length).trimStart();
+        if (!remainderNorm) return "";
+        // There is genuinely new content after the prefix — locate it in
+        // the original text so we preserve the author's formatting.
+        const idx = text.indexOf(remainderNorm);
+        return idx >= 0 ? text.slice(idx) : remainderNorm;
+      }
+      // History may contain more text than the final message (e.g. trailing
+      // whitespace accumulated from streaming deltas).
+      if (normalizedHistory.startsWith(normalizedText)) {
+        return "";
+      }
+    }
+
+    // Whitespace-stripped comparison — catches the common case where
+    // streaming segments were concatenated into history without paragraph
+    // separators (e.g. "Hello worldMore text") while the final
+    // assistant_message includes them (e.g. "Hello world\n\nMore text").
+    const strippedHistory = stripWhitespace(history);
+    const strippedText = stripWhitespace(text);
+    if (strippedHistory && strippedText) {
+      if (strippedText === strippedHistory) {
+        return "";
+      }
+      if (strippedText.startsWith(strippedHistory)) {
+        const remainderStripped = strippedText.slice(strippedHistory.length);
+        if (!remainderStripped) return "";
+        const idx = text.indexOf(remainderStripped);
+        return idx >= 0 ? text.slice(idx) : remainderStripped;
+      }
+      if (strippedHistory.startsWith(strippedText)) {
+        return "";
+      }
+    }
+
+
     return text;
   };
+
 
   const reasoningStreamKey = (turnId: string, part: Record<string, unknown> | undefined) =>
     `${turnId}:${readPartString(part, "id") ?? "default"}`;

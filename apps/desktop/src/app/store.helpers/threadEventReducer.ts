@@ -1182,13 +1182,18 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       return false;
     }
 
-    const snapshotFeedIds = new Set(snapshotFeed.map((item) => item.id));
+    const hasSnapshotItemWithIdOrCmid = (cmid: string) => {
+      return snapshotFeed.some(
+        (entry) => entry.id === cmid || entry.id.endsWith(`:${cmid}`),
+      );
+    };
+
     return currentFeed.some(
       (item) =>
         item.kind === "message" &&
         item.role === "user" &&
         optimisticIds.has(item.id) &&
-        !snapshotFeedIds.has(item.id),
+        !hasSnapshotItemWithIdOrCmid(item.id),
     );
   }
 

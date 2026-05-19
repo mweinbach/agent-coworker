@@ -52,6 +52,11 @@ function dedupeReplayReasoningItems(
   return out;
 }
 
+function stripWhitespace(text: string): string {
+  return text.replace(/\s/g, "");
+}
+
+
 function dedupeReplayAssistantItems(
   items: Array<Record<string, unknown>>,
 ): Array<Record<string, unknown>> {
@@ -74,12 +79,41 @@ function dedupeReplayAssistantItems(
       continue;
     }
 
+    // Normalized containment — catches duplicates where the normalized
+    // forms are exact prefixes of each other.
+    if (aggregate) {
+      if (aggregate.startsWith(normalized) || normalized.startsWith(aggregate)) {
+        assistantHistory = `${assistantHistory}${item.text}`;
+        continue;
+      }
+    }
+
+    // Whitespace-stripped comparison — catches duplicates where streaming
+    // segments were concatenated into history without paragraph separators
+    // (e.g. "Hello worldMore text") and a later item has the full formatted
+    // text (e.g. "Hello world\n\nMore text"), or vice versa.
+    const strippedAggregate = stripWhitespace(assistantHistory);
+    const strippedNormalized = stripWhitespace(item.text);
+    if (strippedAggregate && strippedNormalized) {
+      if (
+        strippedAggregate === strippedNormalized ||
+        strippedAggregate.startsWith(strippedNormalized) ||
+        strippedNormalized.startsWith(strippedAggregate)
+      ) {
+
+        assistantHistory = `${assistantHistory}${item.text}`;
+        continue;
+      }
+    }
+
     assistantHistory = `${assistantHistory}${item.text}`;
     out.push(item);
   }
 
   return out;
 }
+
+
 
 export function createThreadTurnProjector() {
   const turns = new Map<string, ProjectedTurnState>();

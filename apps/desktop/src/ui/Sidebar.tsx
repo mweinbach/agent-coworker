@@ -645,6 +645,7 @@ export const Sidebar = memo(function Sidebar() {
   const [expandedThreadLists, setExpandedThreadLists] = useState<Record<string, boolean>>({});
   const [projectsOpen, setProjectsOpen] = useState(true);
   const [chatsOpen, setChatsOpen] = useState(true);
+  const [showAllChats, setShowAllChats] = useState(false);
   const editInputRef = useRef<HTMLInputElement>(null);
 
   const projectWorkspaces = useMemo(
@@ -1037,8 +1038,13 @@ export const Sidebar = memo(function Sidebar() {
           <div className="px-3 py-2 text-[12px] text-muted-foreground/60 italic">No chats yet</div>
         ) : (
           <div className="flex flex-col gap-1">
-            <div className="grid gap-1">
-              {oneOffChatThreads.map((thread) => (
+            <div
+              className={cn(
+                "grid gap-1 min-h-0",
+                showAllChats && "sidebar-chats-scroll-container pr-1",
+              )}
+            >
+              {(showAllChats ? oneOffChatThreads : oneOffChatThreads.slice(0, 5)).map((thread) => (
                 <SidebarOneOffChatItem
                   key={thread.id}
                   editInputRef={editInputRef}
@@ -1056,6 +1062,16 @@ export const Sidebar = memo(function Sidebar() {
                 />
               ))}
             </div>
+            {oneOffChatThreads.length > 5 ? (
+              <Button
+                className="sidebar-lift px-2.5 py-1 text-left text-[12px] font-medium text-muted-foreground transition-colors duration-200 hover:text-foreground"
+                onClick={() => setShowAllChats((prev) => !prev)}
+                type="button"
+                variant="ghost"
+              >
+                {showAllChats ? "Show less" : `Show ${oneOffChatThreads.length - 5} more`}
+              </Button>
+            ) : null}
           </div>
         )
       ) : null}

@@ -620,6 +620,12 @@ body.app-animating-sidebars .app-topbar__content-fill {
   }
 }
 
+.sidebar-chats-scroll-container {
+  max-height: 396px; /* Capped to exactly 10 items (10 * 36px + 9 * 4px gap) */
+  overflow-y: auto;
+  min-height: 0;
+}
+
 :root {
   --sidebar: hsl(0 0% 98%);
   --sidebar-foreground: hsl(240 5.3% 26.1%);

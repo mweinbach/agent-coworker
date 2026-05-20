@@ -388,4 +388,78 @@ describe("getProviderStatuses", () => {
       codexAppServerAuthInternal.resetAuthOverridesForTests();
     }
   });
+
+  test("antigravity: reports missing/not connected when no keys are available", async () => {
+    const home = await makeTmpHome();
+    const paths = getAiCoworkerPaths({ homedir: home });
+    const statuses = await getProviderStatuses({ paths, env: {} });
+    const status = statuses.find((s) => s.provider === "antigravity");
+    expect(status).toBeDefined();
+    expect(status?.authorized).toBe(false);
+    expect(status?.mode).toBe("missing");
+  });
+
+  test("antigravity: reports authorized when explicit antigravity API key is saved", async () => {
+    const home = await makeTmpHome();
+    const paths = getAiCoworkerPaths({ homedir: home });
+    await writeConnectionStore(paths, {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      services: {
+        antigravity: {
+          service: "antigravity",
+          mode: "api_key",
+          apiKey: "anti-secret-key-123",
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    const statuses = await getProviderStatuses({ paths, env: {} });
+    const status = statuses.find((s) => s.provider === "antigravity");
+    expect(status).toBeDefined();
+    expect(status?.authorized).toBe(true);
+    expect(status?.mode).toBe("api_key");
+    expect(status?.savedApiKeyMasks?.api_key).toBe("anti...-123");
+    expect(status?.message).toBe("API key saved.");
+  });
+
+  test("antigravity: falls back to google API key if available", async () => {
+    const home = await makeTmpHome();
+    const paths = getAiCoworkerPaths({ homedir: home });
+    await writeConnectionStore(paths, {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      services: {
+        google: {
+          service: "google",
+          mode: "api_key",
+          apiKey: "goog-secret-key-456",
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    const statuses = await getProviderStatuses({ paths, env: {} });
+    const status = statuses.find((s) => s.provider === "antigravity");
+    expect(status).toBeDefined();
+    expect(status?.authorized).toBe(true);
+    expect(status?.mode).toBe("api_key");
+    expect(status?.savedApiKeyMasks?.api_key).toBe("goog...-456");
+    expect(status?.message).toBe("Using saved Google API key.");
+  });
+
+  test("antigravity: falls back to GEMINI_API_KEY environment variable if available", async () => {
+    const home = await makeTmpHome();
+    const paths = getAiCoworkerPaths({ homedir: home });
+    const env = { GEMINI_API_KEY: "gemini-env-key-789" };
+
+    const statuses = await getProviderStatuses({ paths, env });
+    const status = statuses.find((s) => s.provider === "antigravity");
+    expect(status).toBeDefined();
+    expect(status?.authorized).toBe(true);
+    expect(status?.mode).toBe("api_key");
+    expect(status?.savedApiKeyMasks?.api_key).toBe("gemi...-789");
+    expect(status?.message).toBe("Using GEMINI_API_KEY environment variable.");
+  });
 });

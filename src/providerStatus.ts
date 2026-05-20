@@ -515,6 +515,26 @@ export async function getProviderStatuses(
       );
       continue;
     }
+    if (provider === "antigravity") {
+      const base = statusFromConnectionStore({ provider, store, checkedAt });
+      const googleEntry = store.services.google;
+      const googleKey = googleEntry?.mode === "api_key" ? googleEntry.apiKey?.trim() : "";
+      const envKey = (opts.env ?? process.env).GEMINI_API_KEY?.trim();
+      const fallbackKey = googleKey || envKey;
+
+      if (!base.authorized && fallbackKey) {
+        base.authorized = true;
+        base.mode = "api_key";
+        base.message = googleKey
+          ? "Using saved Google API key."
+          : "Using GEMINI_API_KEY environment variable.";
+        base.savedApiKeyMasks = {
+          api_key: maskApiKey(fallbackKey),
+        };
+      }
+      out.push(base);
+      continue;
+    }
     out.push(statusFromConnectionStore({ provider, store, checkedAt }));
   }
 

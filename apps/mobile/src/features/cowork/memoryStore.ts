@@ -2,6 +2,7 @@ import { create } from "zustand";
 
 import type { MemoryEntry } from "../../../../../src/shared/jsonrpcControlSchemas";
 import { callParsedControlMethod } from "./controlRpc";
+import { saveToOfflineCache } from "./offlineCache";
 import { getActiveCoworkJsonRpcClient } from "./runtimeClient";
 import { useWorkspaceStore } from "./workspaceStore";
 
@@ -41,6 +42,7 @@ export const useMemoryStore = create<MemoryStoreState>((set, _get) => ({
         entries: result.event.memories,
         loading: false,
       });
+      void saveToOfflineCache("memories", result.event.memories);
     } catch (error) {
       set({ loading: false, error: error instanceof Error ? error.message : String(error) });
     }

@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { applyProjectedItemStarted, applyProjectedItemCompleted } from "../../src/shared/projectedItems";
-import type { SessionFeedItem } from "../../src/shared/sessionSnapshot";
 import type { ProjectedItem } from "../../src/shared/projectedItems";
+import {
+  applyProjectedItemCompleted,
+  applyProjectedItemStarted,
+} from "../../src/shared/projectedItems";
+import type { SessionFeedItem } from "../../src/shared/sessionSnapshot";
 
 describe("upsertFeedItem / applyProjectedItemStarted", () => {
   test("updates an existing user message by matching clientMessageId and changes its ID", () => {

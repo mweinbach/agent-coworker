@@ -101,6 +101,8 @@ export function setupJsdom(options: SetupJsdomOptions = {}): JsdomHarness {
     "getComputedStyle",
     "setTimeout",
     "clearTimeout",
+    "localStorage",
+    "sessionStorage",
     "IS_REACT_ACT_ENVIRONMENT",
   ].map((key) => ({
     key,
@@ -110,6 +112,23 @@ export function setupJsdom(options: SetupJsdomOptions = {}): JsdomHarness {
   setGlobalProperty("window", dom.window);
   setGlobalProperty("document", dom.window.document);
   setGlobalProperty("navigator", dom.window.navigator);
+  setGlobalProperty("localStorage", dom.window.localStorage);
+  setGlobalProperty("sessionStorage", dom.window.sessionStorage);
+  if (typeof dom.window.HTMLElement.prototype.attachEvent !== "function") {
+    Object.defineProperty(dom.window.HTMLElement.prototype, "attachEvent", {
+      configurable: true,
+      writable: true,
+      value: () => {},
+    });
+  }
+  if (typeof dom.window.HTMLElement.prototype.detachEvent !== "function") {
+    Object.defineProperty(dom.window.HTMLElement.prototype, "detachEvent", {
+      configurable: true,
+      writable: true,
+      value: () => {},
+    });
+  }
+
   setGlobalProperty("HTMLElement", dom.window.HTMLElement);
   setGlobalProperty("Element", dom.window.Element);
   setGlobalProperty("HTMLButtonElement", dom.window.HTMLButtonElement);

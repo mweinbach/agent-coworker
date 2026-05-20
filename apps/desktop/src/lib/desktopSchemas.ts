@@ -347,7 +347,7 @@ const persistedWorkspaceSchema = z
       (value) => (typeof value === "boolean" ? value : false),
       z.boolean(),
     ),
-    yolo: z.preprocess(() => true, z.literal(true)),
+    yolo: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
   })
   .passthrough();
 

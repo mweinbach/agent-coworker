@@ -869,6 +869,7 @@ export class TurnExecutionManager {
         maxSteps,
         yolo: this.context.state.yolo,
         enableMcp: this.context.state.config.enableMcp,
+        sessionId: this.context.id,
         spawnDepth:
           typeof this.context.state.sessionInfo.depth === "number"
             ? this.context.state.sessionInfo.depth

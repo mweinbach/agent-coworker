@@ -106,7 +106,7 @@ export function QuickChatShell({ init, ready, startupError }: QuickChatShellProp
             onClick={() => void windowClose()}
             style={{ WebkitAppRegion: "no-drag" } as CSSProperties}
           >
-            <XIcon className="h-4 w-4" />
+            <XIcon />
           </Button>
           <div className="min-w-0 flex-1 px-2">
             <div className="truncate text-[0.95rem] font-semibold tracking-tight text-foreground">
@@ -126,7 +126,7 @@ export function QuickChatShell({ init, ready, startupError }: QuickChatShellProp
               onClick={() => void newThread()}
               style={{ WebkitAppRegion: "no-drag" } as CSSProperties}
             >
-              <SquarePenIcon className="h-4 w-4" />
+              <SquarePenIcon />
             </Button>
             <Button
               type="button"
@@ -139,7 +139,7 @@ export function QuickChatShell({ init, ready, startupError }: QuickChatShellProp
               }}
               style={{ WebkitAppRegion: "no-drag" } as CSSProperties}
             >
-              <ArrowUpRightIcon className="h-4 w-4" />
+              <ArrowUpRightIcon />
             </Button>
           </div>
         </div>

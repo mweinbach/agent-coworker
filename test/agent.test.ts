@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { RunTurnParams } from "../src/agent";
-import { createRunTurn } from "../src/agent";
+import { __internal as agentInternal, createRunTurn } from "../src/agent";
 import { __internal as observabilityRuntimeInternal } from "../src/observability/runtime";
 import { SessionCostTracker } from "../src/session/costTracker";
 import { buildTurnSystemPrompt } from "../src/turnSystemPrompt";
@@ -105,6 +105,7 @@ describe("runTurn", () => {
 
   beforeEach(async () => {
     await observabilityRuntimeInternal.resetForTests();
+    agentInternal.setStreamDrainTimeoutMs(500);
 
     mockStreamText.mockClear();
     mockStepCountIs.mockClear();
@@ -142,6 +143,7 @@ describe("runTurn", () => {
   });
 
   afterEach(() => {
+    agentInternal.resetStreamDrainTimeoutMs();
     mock.restore();
   });
 
@@ -958,7 +960,7 @@ describe("runTurn", () => {
           },
         }),
       ),
-      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 2000)),
+      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 3000)),
     ]);
 
     expect(result).not.toBe("timeout");

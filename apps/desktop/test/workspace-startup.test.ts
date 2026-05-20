@@ -293,7 +293,7 @@ describe("workspace startup flow", () => {
 
     expect(stopCalls).toEqual([workspaceId]);
     expect(startCalls).toHaveLength(2);
-    expect(startCalls.map((call) => call.yolo)).toEqual([true, true]);
+    expect(startCalls.map((call) => call.yolo)).toEqual([false, false]);
 
     startDeferreds[0]?.resolve({ url: "ws://stale" });
     await firstStart;

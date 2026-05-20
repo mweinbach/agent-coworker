@@ -278,7 +278,7 @@ async function sanitizeWorkspaces(value: unknown): Promise<WorkspaceRecord[]> {
       defaultEnableMcp: typeof item.defaultEnableMcp === "boolean" ? item.defaultEnableMcp : true,
       defaultBackupsEnabled:
         typeof item.defaultBackupsEnabled === "boolean" ? item.defaultBackupsEnabled : false,
-      yolo: true,
+      yolo: typeof item.yolo === "boolean" ? item.yolo : false,
     });
     seenWorkspaceIds.add(id);
   }

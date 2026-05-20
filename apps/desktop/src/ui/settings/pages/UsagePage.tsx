@@ -251,7 +251,7 @@ export function UsagePage(props: UsagePageProps = {}) {
           className={buttonVariants({ variant: "outline", size: "sm", className: "gap-2" })}
           onClick={() => handleEstimateNoticeOpenChange?.(true)}
         >
-          <AlertTriangleIcon className="h-4 w-4" data-icon />
+          <AlertTriangleIcon data-icon="inline-start" />
           How estimates work
         </button>
       ),
@@ -416,7 +416,7 @@ export function UsagePage(props: UsagePageProps = {}) {
             className="gap-2"
             onClick={() => handleEstimateNoticeOpenChange?.(true)}
           >
-            <AlertTriangleIcon className="h-4 w-4" />
+            <AlertTriangleIcon data-icon="inline-start" />
             How estimates work
           </Button>
         </div>

@@ -97,7 +97,9 @@ export function mimeForPreviewKind(kind: FilePreviewKind, ext: string): string {
 
 export function isCanvasSupportedFile(filePath: string): boolean {
   const kind = getFilePreviewKind(filePath);
-  return kind === "markdown" || kind === "text" || kind === "csv" || kind === "xlsx" || kind === "pptx";
+  return (
+    kind === "markdown" || kind === "text" || kind === "csv" || kind === "xlsx" || kind === "pptx"
+  );
 }
 
 export function isSlideModule(filePath: string): boolean {

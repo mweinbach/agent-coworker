@@ -540,6 +540,7 @@ export async function runCliRepl(
     threadId = null;
     config = null;
     sessionConfig = null;
+    disconnectNotified = false;
 
     const epoch = ++socketEpoch;
 
@@ -658,7 +659,7 @@ export async function runCliRepl(
         }
 
         // Unknown server request — respond with an error to avoid blocking.
-        socket?.respond(msg.id, {
+        nextSocket.respond(msg.id, {
           error: { code: -32601, message: `Unhandled server request: ${msg.method}` },
         });
       },
@@ -903,6 +904,10 @@ export async function runCliRepl(
           reject(err);
         }
       });
+    });
+
+    promise.catch((err) => {
+      console.error(`Unhandled REPL error: ${String(err)}`);
     });
 
     return promise;

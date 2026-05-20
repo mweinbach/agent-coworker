@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   loginCodexAppServerChatGpt,
+  logoutCodexAppServer,
   readCodexAppServerAccount,
   readCodexAppServerRateLimits,
 } from "../../src/providers/codexAppServerAuth";
@@ -170,5 +171,51 @@ describe("codex app-server auth", () => {
     expect(runtimeClient.isClosed()).toBe(true);
     expect(closeCount).toBe(2);
     expect(clients).toHaveLength(2);
+  });
+
+  test("logoutCodexAppServer deletes auth.json and closes pooled clients", async () => {
+    const codexHome = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-auth-logout-"));
+    const authFile = path.join(codexHome, "auth.json");
+    await fs.writeFile(authFile, "{}", "utf8");
+
+    let logoutCalled = false;
+    clientInternal.setClientFactoryForTests(async () => {
+      return {
+        command: { command: "node", args: [], source: "managed" },
+        isClosed: () => false,
+        request: async (method) => {
+          if (method === "initialize") return {};
+          if (method === "account/logout") {
+            logoutCalled = true;
+            return {};
+          }
+          return {};
+        },
+        notify: () => {},
+        interruptTurn: async () => {},
+        onNotification: () => () => {},
+        onServerRequest: () => () => {},
+        onJsonRpcMessage: () => () => {},
+        close: async () => {},
+      };
+    });
+
+    const result = await logoutCodexAppServer({ codexHome });
+    expect(result.revoked).toBe(true);
+    expect(logoutCalled).toBe(true);
+    await expect(fs.readFile(authFile, "utf8")).rejects.toThrow();
+  });
+
+  test("logoutCodexAppServer deletes auth.json even if app-server connection throws", async () => {
+    const codexHome = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-auth-logout-fail-"));
+    const authFile = path.join(codexHome, "auth.json");
+    await fs.writeFile(authFile, "{}", "utf8");
+
+    clientInternal.setClientFactoryForTests(async () => {
+      throw new Error("Connection refused");
+    });
+
+    await expect(logoutCodexAppServer({ codexHome })).rejects.toThrow("Connection refused");
+    await expect(fs.readFile(authFile, "utf8")).rejects.toThrow();
   });
 });

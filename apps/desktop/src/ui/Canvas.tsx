@@ -31,10 +31,9 @@ import { readFile, writeFile } from "../lib/desktopCommands";
 import { getFilePreviewKind, isSlideModule } from "../lib/filePreviewKind";
 import { cn } from "../lib/utils";
 import { getDesktopWindowMode } from "../lib/windowMode";
-import { SpreadsheetPreview } from "./SpreadsheetPreview";
 import { PptxPreview } from "./PptxPreview";
 import { SlidePreview } from "./SlidePreview";
-
+import { SpreadsheetPreview } from "./SpreadsheetPreview";
 
 const noDragRegionStyle = { WebkitAppRegion: "no-drag" } as CSSProperties;
 
@@ -375,7 +374,6 @@ export function Canvas({ path }: { path: string }) {
     }
   }, [activeTab]);
 
-
   const fileName = basenamePath(path);
   const isAgentBusy = threadRuntime?.busy === true;
 
@@ -508,7 +506,6 @@ export function Canvas({ path }: { path: string }) {
       </div>
     );
   }
-
 
   useEffect(() => {
     if (!floatingCoords) {
@@ -1053,7 +1050,6 @@ ${textToSend}`;
               </TabsContent>
             </>
           ) : (
-
             <div className="h-full flex flex-col pb-2.5 pt-1.5 gap-2 bg-background">
               <div
                 className={cn(

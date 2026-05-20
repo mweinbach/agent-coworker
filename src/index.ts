@@ -49,7 +49,12 @@ async function main() {
     import("./providers/providerOptions"),
   ]);
 
-  await runCliRepl({ dir: args.dir, providerOptions: DEFAULT_PROVIDER_OPTIONS, yolo: args.yolo });
+  await runCliRepl({
+    dir: args.dir,
+    port: args.port,
+    providerOptions: DEFAULT_PROVIDER_OPTIONS,
+    yolo: args.yolo,
+  });
 }
 
 main().catch((err) => {

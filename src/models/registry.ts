@@ -19,10 +19,10 @@ import fireworksGlm5 from "../../config/models/fireworks/accounts-fireworks-mode
 import fireworksKimiK2p5 from "../../config/models/fireworks/accounts-fireworks-models-kimi-k2p5.json";
 import fireworksMinimaxM2p5 from "../../config/models/fireworks/accounts-fireworks-models-minimax-m2p5.json";
 import fireworksKimiK2p5Turbo from "../../config/models/fireworks/accounts-fireworks-routers-kimi-k2p5-turbo.json";
-import googleGemini35Flash from "../../config/models/google/gemini-3.5-flash.json";
 import googleGemini31FlashLitePreview from "../../config/models/google/gemini-3.1-flash-lite-preview.json";
 import googleGemini31ProPreview from "../../config/models/google/gemini-3.1-pro-preview.json";
 import googleGemini31ProPreviewCustomtools from "../../config/models/google/gemini-3.1-pro-preview-customtools.json";
+import googleGemini35Flash from "../../config/models/google/gemini-3.5-flash.json";
 import googleGemini3FlashPreview from "../../config/models/google/gemini-3-flash-preview.json";
 import nvidiaNemotron3Super120bA12b from "../../config/models/nvidia/nvidia-nemotron-3-super-120b-a12b.json";
 import openaiGpt52 from "../../config/models/openai/gpt-5.2.json";

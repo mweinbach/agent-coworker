@@ -35,5 +35,4 @@ describe("filePreviewKind", () => {
     expect(isCanvasSupportedFile("/x/s.xlsx")).toBe(true);
     expect(isCanvasSupportedFile("/x/z.pptx")).toBe(true);
   });
-
 });

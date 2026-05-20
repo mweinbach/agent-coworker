@@ -689,6 +689,102 @@ export async function loadMCPTools(
   return { tools, errors, close };
 }
 
+interface CachedWorkspaceMcp {
+  serversConfigJson: string;
+  tools: Record<string, unknown>;
+  errors: string[];
+  close: () => Promise<void>;
+  sessionIds: Set<string>;
+}
+
+const workspaceMcpCache = new Map<string, CachedWorkspaceMcp>();
+
+function serializeServerConfigs(servers: MCPServerConfig[]): string {
+  try {
+    const cloned = JSON.parse(
+      JSON.stringify(servers, (key, value) => {
+        if (typeof value === "function") return undefined;
+        return value;
+      })
+    );
+    return JSON.stringify(cloned);
+  } catch {
+    return "";
+  }
+}
+
+export async function getOrLoadMCPToolsCached(
+  config: AgentConfig,
+  sessionId: string,
+  opts: {
+    log?: (line: string) => void;
+    loadMCPServers?: typeof loadMCPServers;
+    loadMCPTools?: typeof loadMCPTools;
+  } = {}
+): Promise<{ tools: Record<string, unknown>; errors: string[] }> {
+  const loadMCPServersFn = opts.loadMCPServers ?? loadMCPServers;
+  const loadMCPToolsFn = opts.loadMCPTools ?? loadMCPTools;
+
+  const workspaceKey = path.resolve(config.projectCoworkDir);
+  const servers = await loadMCPServersFn(config);
+  const serversConfigJson = serializeServerConfigs(servers);
+
+  const cached = workspaceMcpCache.get(workspaceKey);
+
+  if (cached) {
+    if (cached.serversConfigJson === serversConfigJson) {
+      cached.sessionIds.add(sessionId);
+      return { tools: cached.tools, errors: cached.errors };
+    }
+
+    opts.log?.(`[MCP] Server configuration changed for workspace ${workspaceKey}. Reloading...`);
+    try {
+      await cached.close();
+    } catch {
+      // ignore
+    }
+    workspaceMcpCache.delete(workspaceKey);
+  }
+
+  let loaded: { tools: Record<string, unknown>; errors: string[]; close: () => Promise<void> } = {
+    tools: {},
+    errors: [],
+    close: async () => {},
+  };
+
+  if (servers.length > 0) {
+    loaded = await loadMCPToolsFn(servers, { log: opts.log });
+  }
+
+  const newCacheEntry: CachedWorkspaceMcp = {
+    serversConfigJson,
+    tools: loaded.tools,
+    errors: loaded.errors,
+    close: loaded.close,
+    sessionIds: new Set([sessionId]),
+  };
+
+  workspaceMcpCache.set(workspaceKey, newCacheEntry);
+  return { tools: loaded.tools, errors: loaded.errors };
+}
+
+export async function closeMcpServersForSession(sessionId: string): Promise<void> {
+  for (const [workspaceKey, cached] of workspaceMcpCache.entries()) {
+    if (cached.sessionIds.has(sessionId)) {
+      cached.sessionIds.delete(sessionId);
+      if (cached.sessionIds.size === 0) {
+        try {
+          await cached.close();
+        } catch {
+          // ignore
+        }
+        workspaceMcpCache.delete(workspaceKey);
+      }
+    }
+  }
+}
+
 export const __internal = {
   normalizeMcpJsonSchema,
+  workspaceMcpCache,
 };

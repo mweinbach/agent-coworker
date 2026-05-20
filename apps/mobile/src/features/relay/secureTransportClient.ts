@@ -6,9 +6,14 @@ import type {
   SecureTransportClientEvents,
 } from "./relayTypes";
 
-const TRUSTED_DESKTOPS_KEY = "cowork.h3.trustedDesktops.v1";
+const TRUSTED_DESKTOPS_KEY = "cowork.h3.trustedDesktops.v2";
 const ACTIVE_SESSION_KEY = "cowork.h3.activeSession.v1";
 const MOBILE_DEVICE_ID_KEY = "cowork.h3.mobileDeviceId.v1";
+const SESSION_TOKEN_KEY_PREFIX = "cowork_session_token_";
+
+function sessionTokenKey(macDeviceId: string): string {
+  return `${SESSION_TOKEN_KEY_PREFIX}${macDeviceId}`;
+}
 
 type SecureStoreModule = {
   getItemAsync(key: string): Promise<string | null>;
@@ -118,13 +123,13 @@ function parseTrustedDesktopRecord(raw: unknown): TrustedDesktopRecord | null {
     publicKey: readString(record, "publicKey"),
     fingerprint: readString(record, "fingerprint"),
     lastConnectedAt: readNullableString(record, "lastConnectedAt"),
+    // sessionToken is stored separately per-device; initialize as empty
     sessionToken: readString(record, "sessionToken"),
     endpointUrl: readString(record, "endpointUrl"),
     certSha256: readString(record, "certSha256"),
     spkiSha256: readString(record, "spkiSha256"),
   };
   return trusted.macDeviceId &&
-    trusted.sessionToken &&
     trusted.endpointUrl &&
     trusted.certSha256 &&
     trusted.spkiSha256
@@ -304,6 +309,9 @@ export class SecureTransportClient {
       this.eventAbortController?.abort();
       this.eventAbortController = null;
     }
+    // Delete the isolated session token for the forgotten device
+    const SecureStore = await loadSecureStore();
+    await SecureStore.deleteItemAsync(sessionTokenKey(macDeviceId));
     await this.persistTrustedState();
     return this.emitState("idle");
   }
@@ -398,7 +406,17 @@ export class SecureTransportClient {
       SecureStore.getItemAsync(TRUSTED_DESKTOPS_KEY),
       SecureStore.getItemAsync(ACTIVE_SESSION_KEY),
     ]);
-    this.trustedDesktops = parseTrustedDesktopRecords(trustedRaw);
+    const records = parseTrustedDesktopRecords(trustedRaw);
+    // Merge each session token back from its isolated per-device key
+    const tokenResults = await Promise.all(
+      records.map((entry) => SecureStore.getItemAsync(sessionTokenKey(entry.macDeviceId))),
+    );
+    this.trustedDesktops = records
+      .map((entry, i) => ({
+        ...entry,
+        sessionToken: tokenResults[i] ?? entry.sessionToken,
+      }))
+      .filter((entry) => Boolean(entry.sessionToken));
     const active = parseActiveSession(activeRaw);
     const trusted = active
       ? this.trustedDesktops.find((entry) => entry.macDeviceId === active.macDeviceId)
@@ -417,8 +435,19 @@ export class SecureTransportClient {
 
   private async persistTrustedState(): Promise<void> {
     const SecureStore = await loadSecureStore();
+    // Strip sessionToken from the main record list — tokens are stored per-device
+    const recordsWithoutTokens = this.trustedDesktops.map(
+      ({ sessionToken: _sessionToken, ...rest }) => rest,
+    );
+    // Persist each session token under its own isolated key
+    const tokenWrites = this.trustedDesktops
+      .filter((entry) => entry.sessionToken)
+      .map((entry) =>
+        SecureStore.setItemAsync(sessionTokenKey(entry.macDeviceId), entry.sessionToken),
+      );
     await Promise.all([
-      SecureStore.setItemAsync(TRUSTED_DESKTOPS_KEY, JSON.stringify(this.trustedDesktops)),
+      SecureStore.setItemAsync(TRUSTED_DESKTOPS_KEY, JSON.stringify(recordsWithoutTokens)),
+      ...tokenWrites,
       this.activeSession
         ? SecureStore.setItemAsync(ACTIVE_SESSION_KEY, JSON.stringify(this.activeSession))
         : SecureStore.deleteItemAsync(ACTIVE_SESSION_KEY),

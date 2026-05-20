@@ -1279,16 +1279,43 @@ describe("workspace settings sync", () => {
     );
   });
 
-  test("updateWorkspaceDefaults keeps yolo enabled even when a patch tries to disable it", async () => {
+  test("updateWorkspaceDefaults updates yolo configuration dynamically", async () => {
     jsonRpcRequests.length = 0;
+    jsonRpcResponseOverrides.set("cowork/session/defaults/apply", async (params: any) => ({
+      event: {
+        type: "session_config",
+        sessionId: "jsonrpc-control",
+        config: {
+          yolo: params?.config?.yolo ?? false,
+          observabilityEnabled: false,
+          backupsEnabled: true,
+          defaultBackupsEnabled: true,
+          preferredChildModel: "gpt-5.2",
+          childModelRoutingMode: "same-provider",
+          preferredChildModelRef: "openai:gpt-5.2",
+          allowedChildModelRefs: [],
+          maxSteps: 100,
+          toolOutputOverflowChars: 25000,
+        },
+      },
+    }));
 
-    await useAppStore.getState().updateWorkspaceDefaults(workspaceId, { yolo: false });
+    await useAppStore.getState().updateWorkspaceDefaults(workspaceId, { yolo: true });
 
-    const workspace = useAppStore.getState().workspaces.find((entry) => entry.id === workspaceId);
+    let workspace = useAppStore.getState().workspaces.find((entry) => entry.id === workspaceId);
     expect(workspace?.yolo).toBe(true);
     expect(latestRequest("cowork/session/defaults/apply")?.params).toMatchObject({
       cwd: "/tmp/workspace",
       config: { yolo: true },
+    });
+
+    await useAppStore.getState().updateWorkspaceDefaults(workspaceId, { yolo: false });
+
+    workspace = useAppStore.getState().workspaces.find((entry) => entry.id === workspaceId);
+    expect(workspace?.yolo).toBe(false);
+    expect(latestRequest("cowork/session/defaults/apply")?.params).toMatchObject({
+      cwd: "/tmp/workspace",
+      config: { yolo: false },
     });
   });
 

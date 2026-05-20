@@ -241,7 +241,9 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.copyPath, async (_event, args: CopyPathInput) => {
     const input = parseWithSchema(copyPathInputSchema, args, "copyPath options");
-    clipboard.writeText(input.path);
+    await workspaceRoots.ensureApprovedWorkspaceRoots();
+    const safePath = resolveAllowedPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
+    clipboard.writeText(safePath);
   });
 
   handleDesktopInvoke(

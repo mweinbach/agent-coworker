@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import { getModel as realGetModel } from "./config";
-import { loadMCPServers, loadMCPTools } from "./mcp";
+import { loadMCPServers, loadMCPTools, getOrLoadMCPToolsCached } from "./mcp";
 import { buildRuntimeTelemetrySettings } from "./observability/runtime";
 import { buildGooglePrepareStep } from "./providers/googleReplay";
 import { createRuntime } from "./runtime";
@@ -22,7 +22,8 @@ import { createTools, filterToolsForCodexDynamicBoundary } from "./tools";
 import { buildTurnSystemPrompt } from "./turnSystemPrompt";
 import type { AgentConfig, HarnessContextState, ModelMessage, TodoItem } from "./types";
 
-const MAX_STREAM_SETTLE_TICKS = 64;
+/** Maximum time (ms) to wait for the legacy stream to drain after response promises settle. */
+let STREAM_DRAIN_TIMEOUT_MS = 30_000;
 const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
 const messageRecordSchema = z
   .object({
@@ -88,6 +89,7 @@ export interface RunTurnParams {
   maxSteps?: number;
   enableMcp?: boolean;
   abortSignal?: AbortSignal;
+  sessionId?: string;
   onModelStreamPart?: (part: unknown) => void | Promise<void>;
   onModelRawEvent?: (event: RuntimeModelRawEvent) => void | Promise<void>;
   onModelError?: (error: unknown) => void | Promise<void>;
@@ -343,11 +345,20 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
     const enableMcp = params.enableMcp ?? config.enableMcp ?? false;
     let closeMcp: undefined | (() => Promise<void>);
     if (enableMcp) {
-      const servers = await deps.loadMCPServers(config);
-      if (servers.length > 0) {
-        const loaded = await deps.loadMCPTools(servers, { log });
+      if (params.sessionId) {
+        const loaded = await getOrLoadMCPToolsCached(config, params.sessionId, {
+          log,
+          loadMCPServers: deps.loadMCPServers,
+          loadMCPTools: deps.loadMCPTools,
+        });
         mcpTools = loaded.tools;
-        closeMcp = loaded.close;
+      } else {
+        const servers = await deps.loadMCPServers(config);
+        if (servers.length > 0) {
+          const loaded = await deps.loadMCPTools(servers, { log });
+          mcpTools = loaded.tools;
+          closeMcp = loaded.close;
+        }
       }
     }
 
@@ -417,8 +428,6 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
           };
 
           const streamResult = await legacyStreamText(streamTextInput);
-          let streamConsumptionSettled = false;
-          let streamPartCount = 0;
           const streamConsumption = (async () => {
             if (!params.onModelStreamPart) return;
             const parsedStream = streamResultWithFullStreamSchema.safeParse(streamResult);
@@ -430,11 +439,8 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
               const next = await streamIterator.next();
               if (next.done) break;
               await params.onModelStreamPart(next.value);
-              streamPartCount += 1;
             }
-          })().finally(() => {
-            streamConsumptionSettled = true;
-          });
+          })();
 
           const [text, reasoningText, response] = await Promise.all([
             Promise.resolve(streamResult.text),
@@ -443,37 +449,33 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
           ]);
 
           if (params.onModelStreamPart) {
-            let previousCount = streamPartCount;
-            let stableTicks = 0;
-            let ticks = 0;
-            while (
-              !streamConsumptionSettled &&
-              stableTicks < 2 &&
-              ticks < MAX_STREAM_SETTLE_TICKS
-            ) {
-              await Promise.resolve();
-              ticks += 1;
-              if (streamPartCount === previousCount) {
-                stableTicks += 1;
-              } else {
-                previousCount = streamPartCount;
-                stableTicks = 0;
-              }
-            }
-            if (streamConsumptionSettled) {
-              try {
-                await streamConsumption;
-              } catch (error) {
-                log(`[warn] Model stream ended with error: ${String(error)}`);
-              }
-            } else {
-              log("[warn] Model stream did not drain after response completion; continuing turn.");
+            // Wait for the stream consumption to fully drain rather than
+            // guessing completion via micro-tick counting (which can fire
+            // prematurely on a loaded event loop and silently drop output).
+            const drainTimeout = new Promise<"timeout">((resolve) =>
+              setTimeout(() => resolve("timeout"), STREAM_DRAIN_TIMEOUT_MS),
+            );
+
+            const drainResult = await Promise.race([
+              streamConsumption
+                .then(() => "drained" as const)
+                .catch((error) => ({ error }) as { error: unknown }),
+              drainTimeout,
+            ]);
+
+            if (drainResult === "timeout") {
+              log(
+                `[warn] Model stream did not drain within ${STREAM_DRAIN_TIMEOUT_MS}ms after response completion; continuing turn.`,
+              );
               void streamConsumption.catch((error) => {
                 log(
                   `[warn] Model stream ended with error after response completion: ${String(error)}`,
                 );
               });
+            } else if (typeof drainResult === "object" && "error" in drainResult) {
+              log(`[warn] Model stream ended with error: ${String(drainResult.error)}`);
             }
+            // else: drained successfully, nothing to log
           }
 
           const parsedResponseMessages = responseMessagesSchema.safeParse(
@@ -564,3 +566,13 @@ export async function runTurnWithDeps(
 }> {
   return await createRunTurn(overrides)(params);
 }
+
+/** @internal Test-only hooks — not part of the public API. */
+export const __internal = {
+  setStreamDrainTimeoutMs(ms: number) {
+    STREAM_DRAIN_TIMEOUT_MS = ms;
+  },
+  resetStreamDrainTimeoutMs() {
+    STREAM_DRAIN_TIMEOUT_MS = 30_000;
+  },
+};

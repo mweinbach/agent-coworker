@@ -568,10 +568,23 @@ describe("loadConfig", () => {
       cwd,
       homedir: home,
       builtInDir: repoRoot(),
+      env: { AGENT_OUTPUT_DIR: path.join(cwd, "env-output") },
+    });
+
+    expect(cfg.outputDirectory).toBe(path.join(cwd, "env-output"));
+  });
+
+  test("AGENT_OUTPUT_DIR env var outside workspace falls back to cwd", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
       env: { AGENT_OUTPUT_DIR: "/absolute/env-output" },
     });
 
-    expect(cfg.outputDirectory).toBe("/absolute/env-output");
+    expect(cfg.outputDirectory).toBe(cwd);
   });
 
   test("AGENT_UPLOADS_DIR env var overrides all uploads directory config", async () => {
@@ -581,10 +594,23 @@ describe("loadConfig", () => {
       cwd,
       homedir: home,
       builtInDir: repoRoot(),
+      env: { AGENT_UPLOADS_DIR: path.join(cwd, "env-uploads") },
+    });
+
+    expect(cfg.uploadsDirectory).toBe(path.join(cwd, "env-uploads"));
+  });
+
+  test("AGENT_UPLOADS_DIR env var outside workspace falls back to cwd", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
       env: { AGENT_UPLOADS_DIR: "/tmp/env-uploads" },
     });
 
-    expect(cfg.uploadsDirectory).toBe("/tmp/env-uploads");
+    expect(cfg.uploadsDirectory).toBe(cwd);
   });
 
   test("AGENT_USER_NAME env var overrides all userName config", async () => {
@@ -1134,7 +1160,24 @@ describe("directory resolution", () => {
     expect(cfg.outputDirectory).toBe(path.join(cwd, "my-output"));
   });
 
-  test("absolute outputDirectory used as-is", async () => {
+  test("absolute outputDirectory inside workspace used as-is", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    await writeJson(path.join(cwd, ".cowork", "config.json"), {
+      outputDirectory: path.join(cwd, "deep", "output"),
+    });
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {},
+    });
+
+    expect(cfg.outputDirectory).toBe(path.join(cwd, "deep", "output"));
+  });
+
+  test("absolute outputDirectory outside workspace falls back to cwd", async () => {
     const { cwd, home } = await makeTmpDirs();
 
     await writeJson(path.join(cwd, ".cowork", "config.json"), {
@@ -1148,7 +1191,24 @@ describe("directory resolution", () => {
       env: {},
     });
 
-    expect(cfg.outputDirectory).toBe("/absolute/output/path");
+    expect(cfg.outputDirectory).toBe(cwd);
+  });
+
+  test("relative outputDirectory with traversal falls back to cwd", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    await writeJson(path.join(cwd, ".cowork", "config.json"), {
+      outputDirectory: "../../../etc",
+    });
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {},
+    });
+
+    expect(cfg.outputDirectory).toBe(cwd);
   });
 
   test("relative uploadsDirectory resolved against cwd", async () => {
@@ -1168,7 +1228,7 @@ describe("directory resolution", () => {
     expect(cfg.uploadsDirectory).toBe(path.join(cwd, "my-uploads"));
   });
 
-  test("absolute uploadsDirectory used as-is", async () => {
+  test("absolute uploadsDirectory outside workspace falls back to cwd", async () => {
     const { cwd, home } = await makeTmpDirs();
 
     const cfg = await loadConfig({
@@ -1178,7 +1238,24 @@ describe("directory resolution", () => {
       env: { AGENT_UPLOADS_DIR: "/abs/uploads" },
     });
 
-    expect(cfg.uploadsDirectory).toBe("/abs/uploads");
+    expect(cfg.uploadsDirectory).toBe(cwd);
+  });
+
+  test("relative uploadsDirectory with traversal falls back to cwd", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    await writeJson(path.join(cwd, ".cowork", "config.json"), {
+      uploadsDirectory: "../../sensitive",
+    });
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {},
+    });
+
+    expect(cfg.uploadsDirectory).toBe(cwd);
   });
 
   test("default outputDirectory is undefined when not configured", async () => {

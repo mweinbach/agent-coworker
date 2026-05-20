@@ -268,7 +268,7 @@ function buildFallbackWorkspace(cwd: string): DesktopWorkspaceRecord {
     workspaceKind: "project",
     defaultEnableMcp: true,
     defaultBackupsEnabled: false,
-    yolo: true,
+    yolo: false,
   };
 }
 
@@ -305,7 +305,7 @@ async function normalizeState(raw: unknown): Promise<DesktopPersistedState> {
       wsProtocol: "jsonrpc",
       defaultEnableMcp: asBoolean(item.defaultEnableMcp, true),
       defaultBackupsEnabled: asBoolean(item.defaultBackupsEnabled, false),
-      yolo: true,
+      yolo: asBoolean(item.yolo, false),
     });
     seenWorkspaceIds.add(id);
   }

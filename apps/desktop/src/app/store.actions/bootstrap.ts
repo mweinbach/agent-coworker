@@ -217,7 +217,7 @@ const persistedWorkspaceSchema = z
       (value) => (typeof value === "boolean" ? value : false),
       z.boolean(),
     ),
-    yolo: z.preprocess(() => true, z.literal(true)),
+    yolo: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
   })
   .passthrough()
   .transform((workspace): WorkspaceRecord => {
@@ -264,7 +264,7 @@ const persistedWorkspaceSchema = z
         : undefined,
       defaultEnableMcp: workspace.defaultEnableMcp,
       defaultBackupsEnabled: workspace.defaultBackupsEnabled,
-      yolo: true,
+      yolo: workspace.yolo,
     };
   });
 

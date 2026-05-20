@@ -311,7 +311,7 @@ export function createBashTool(ctx: ToolContext) {
         return res;
       }
 
-      return await new Promise((resolve) => {
+      return await new Promise((resolve, reject) => {
         void (runShellCommandOverrideForTests ?? runShellCommand)({
           command,
           cwd: ctx.config.workingDirectory,
@@ -331,7 +331,7 @@ export function createBashTool(ctx: ToolContext) {
           };
           ctx.log(`tool< bash ${JSON.stringify(redactedRes)}`);
           resolve(res);
-        });
+        }).catch(reject);
       });
     },
   });

@@ -1,6 +1,11 @@
 import { create } from "zustand";
 
-import type { ProjectedItem, SessionFeedItem, SessionSnapshotLike } from "./protocolTypes";
+import type {
+  CoworkThread,
+  ProjectedItem,
+  SessionFeedItem,
+  SessionSnapshotLike,
+} from "./protocolTypes";
 import {
   applyAgentDelta,
   applyProjectedCompletion,
@@ -65,8 +70,11 @@ type ThreadStoreState = {
   selectThread(threadId: string): void;
   setComposerDraft(threadId: string, text: string): void;
   submitComposer(threadId: string): void;
+  appendOptimisticUserMessage(threadId: string, text: string, clientMessageId: string): void;
   interruptThread(threadId: string): void;
   clearAll(): void;
+  syncRemoteThreads(remoteThreads: CoworkThread[]): void;
+  clearPendingRequestsOnDisconnect(): void;
 };
 
 function ensureThreadSnapshot(
@@ -142,14 +150,28 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
   selectedThreadId: null,
   pendingRequests: {},
   hydrate(snapshot) {
-    set((state) => ({
-      snapshots: {
-        ...state.snapshots,
-        [snapshot.sessionId]: snapshot,
-      },
-      threads: updateThreadList(state, snapshot.sessionId, snapshot),
-      selectedThreadId: state.selectedThreadId ?? snapshot.sessionId,
-    }));
+    set((state) => {
+      const existingSnapshot = state.snapshots[snapshot.sessionId];
+      const mergedSnapshot = {
+        ...snapshot,
+        feed:
+          snapshot.feed.length === 0 && existingSnapshot ? existingSnapshot.feed : snapshot.feed,
+        todos:
+          snapshot.todos.length === 0 && existingSnapshot ? existingSnapshot.todos : snapshot.todos,
+        agents:
+          snapshot.agents.length === 0 && existingSnapshot
+            ? existingSnapshot.agents
+            : snapshot.agents,
+      };
+      return {
+        snapshots: {
+          ...state.snapshots,
+          [snapshot.sessionId]: mergedSnapshot,
+        },
+        threads: updateThreadList(state, snapshot.sessionId, mergedSnapshot),
+        selectedThreadId: state.selectedThreadId ?? snapshot.sessionId,
+      };
+    });
   },
   appendStarted(threadId, item, ts) {
     set((state) => {
@@ -250,7 +272,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
     return get().snapshots[threadId]?.feed ?? [];
   },
   seedThread() {
-    const threadId = `draft-${Date.now()}`;
+    const threadId = `draft-${(globalThis as { crypto: { randomUUID: () => string } }).crypto.randomUUID()}`;
     const snapshot = ensureThreadSnapshot(threadId);
     const nextSnapshot: SessionSnapshotLike = {
       ...snapshot,
@@ -339,18 +361,11 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
       ts: new Date().toISOString(),
       text: draft,
     };
-    const assistantItem: SessionFeedItem = {
-      id: `${threadId}:assistant:${Date.now()}`,
-      kind: "message",
-      role: "assistant",
-      ts: new Date().toISOString(),
-      text: "Scaffold response: mobile JSON-RPC transport will send this draft once the secure channel is wired.",
-    };
     set((current) => {
       const snapshot = ensureThreadSnapshot(threadId, current.snapshots[threadId]);
       const nextSnapshot = {
         ...snapshot,
-        feed: [...snapshot.feed, userItem, assistantItem],
+        feed: [...snapshot.feed, userItem],
       };
       return {
         snapshots: {
@@ -358,6 +373,29 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
           [threadId]: nextSnapshot,
         },
         threads: updateThreadList(current, threadId, nextSnapshot, ""),
+      };
+    });
+  },
+  appendOptimisticUserMessage(threadId, text, clientMessageId) {
+    const userItem: SessionFeedItem = {
+      id: clientMessageId,
+      kind: "message",
+      role: "user",
+      ts: new Date().toISOString(),
+      text,
+    };
+    set((current) => {
+      const snapshot = ensureThreadSnapshot(threadId, current.snapshots[threadId]);
+      const nextSnapshot = {
+        ...snapshot,
+        feed: [...snapshot.feed, userItem],
+      };
+      return {
+        snapshots: {
+          ...current.snapshots,
+          [threadId]: nextSnapshot,
+        },
+        threads: updateThreadList(current, threadId, nextSnapshot),
       };
     });
   },
@@ -386,11 +424,148 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
     });
   },
   clearAll() {
-    set({
-      snapshots: {},
-      threads: [],
-      selectedThreadId: null,
-      pendingRequests: {},
+    set((state) => {
+      const nextThreads = state.threads.filter((t) => t.id.startsWith("draft-"));
+      const nextSnapshots: Record<string, SessionSnapshotLike> = {};
+      const nextPendingRequests: Record<string, PendingServerRequest | null> = {};
+
+      for (const t of nextThreads) {
+        if (state.snapshots[t.id]) {
+          nextSnapshots[t.id] = state.snapshots[t.id];
+        }
+        if (state.pendingRequests[t.id]) {
+          nextPendingRequests[t.id] = state.pendingRequests[t.id];
+        }
+      }
+
+      const nextSelectedThreadId =
+        state.selectedThreadId && nextThreads.some((t) => t.id === state.selectedThreadId)
+          ? state.selectedThreadId
+          : (nextThreads[0]?.id ?? null);
+
+      return {
+        snapshots: nextSnapshots,
+        threads: nextThreads,
+        selectedThreadId: nextSelectedThreadId,
+        pendingRequests: nextPendingRequests,
+      };
+    });
+  },
+  syncRemoteThreads(remoteThreads) {
+    set((state) => {
+      const nextSnapshots: Record<string, SessionSnapshotLike> = {};
+      const nextPendingRequests: Record<string, PendingServerRequest | null> = {};
+      const nextThreads: MobileThreadSummary[] = [];
+
+      // 1. Preserve local draft threads
+      const localDraftThreads = state.threads.filter((t) => t.id.startsWith("draft-"));
+      for (const t of localDraftThreads) {
+        nextThreads.push(t);
+        if (state.snapshots[t.id]) {
+          nextSnapshots[t.id] = state.snapshots[t.id];
+        }
+        if (state.pendingRequests[t.id]) {
+          nextPendingRequests[t.id] = state.pendingRequests[t.id];
+        }
+      }
+
+      // 2. Process remote threads returned by the server
+      for (const rt of remoteThreads) {
+        const existingSnapshot = state.snapshots[rt.id];
+        const existingThread = state.threads.find((t) => t.id === rt.id);
+
+        const now = new Date().toISOString();
+        const baseSnapshot = existingSnapshot ?? {
+          sessionId: rt.id,
+          title: rt.title,
+          titleSource: "manual",
+          provider: "opencode",
+          model: "remote-session",
+          sessionKind: "primary",
+          createdAt: now,
+          updatedAt: now,
+          messageCount: 0,
+          lastEventSeq: rt.lastEventSeq,
+          feed: [],
+          agents: [],
+          todos: [],
+          hasPendingAsk: false,
+          hasPendingApproval: false,
+        };
+
+        const snapshot: SessionSnapshotLike = {
+          ...baseSnapshot,
+          title: rt.title,
+          lastEventSeq: rt.lastEventSeq,
+        };
+
+        nextSnapshots[rt.id] = snapshot;
+
+        if (state.pendingRequests[rt.id]) {
+          nextPendingRequests[rt.id] = state.pendingRequests[rt.id];
+        }
+
+        const composerDraft = existingThread?.composerDraft ?? "";
+        const pendingServerRequest =
+          state.pendingRequests[rt.id] ?? existingThread?.pendingServerRequest ?? null;
+
+        const previewSource = snapshot.feed.at(-1);
+        const threadSummary: MobileThreadSummary = {
+          id: rt.id,
+          title: snapshot.title,
+          preview:
+            previewSource && "text" in previewSource
+              ? previewSource.text
+              : previewSource && "line" in previewSource
+                ? previewSource.line
+                : rt.preview || "No activity yet.",
+          updatedAtLabel: `${snapshot.feed.length} updates`,
+          feed: snapshot.feed,
+          composerDraft,
+          pendingPrompt:
+            snapshot.hasPendingAsk || snapshot.hasPendingApproval || pendingServerRequest !== null,
+          pendingServerRequest,
+        };
+
+        nextThreads.push(threadSummary);
+      }
+
+      const allNextIds = new Set(nextThreads.map((t) => t.id));
+      const nextSelectedThreadId =
+        state.selectedThreadId && allNextIds.has(state.selectedThreadId)
+          ? state.selectedThreadId
+          : (nextThreads[0]?.id ?? null);
+
+      return {
+        snapshots: nextSnapshots,
+        threads: nextThreads,
+        selectedThreadId: nextSelectedThreadId,
+        pendingRequests: nextPendingRequests,
+      };
+    });
+  },
+  clearPendingRequestsOnDisconnect() {
+    set((state) => {
+      const nextSnapshots = { ...state.snapshots };
+      for (const id of Object.keys(nextSnapshots)) {
+        const snap = nextSnapshots[id];
+        if (snap) {
+          nextSnapshots[id] = {
+            ...snap,
+            hasPendingAsk: false,
+            hasPendingApproval: false,
+          };
+        }
+      }
+      return {
+        pendingRequests: {},
+        snapshots: nextSnapshots,
+        threads: state.threads.map((thread) => ({
+          ...thread,
+          pendingPrompt: false,
+          pendingServerRequest: null,
+        })),
+      };
     });
   },
 }));

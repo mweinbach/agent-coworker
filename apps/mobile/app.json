@@ -28,14 +28,7 @@
       },
       "permissions": ["android.permission.CAMERA"]
     },
-    "plugins": [
-      "expo-router",
-      "expo-dev-client",
-      "expo-camera",
-      "expo-secure-store",
-      "expo-font",
-      "expo-image"
-    ],
+    "plugins": ["expo-router", "expo-dev-client", "expo-camera", "expo-secure-store", "expo-font"],
     "experiments": {
       "typedRoutes": true
     }

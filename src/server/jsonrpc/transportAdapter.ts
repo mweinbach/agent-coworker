@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import type { SessionEvent } from "../protocol";
 import type { PersistedThreadJournalEvent } from "../sessionDb";
 import type { SessionBinding, StartServerSocket } from "../startServer/types";
@@ -11,6 +13,22 @@ import {
   type JsonRpcLiteNotification,
   type JsonRpcLiteRequest,
 } from "./protocol";
+
+/** Schema for approval response payloads (command execution approval). */
+const approvalResponseResultSchema = z
+  .object({
+    approved: z.boolean().optional(),
+    decision: z.enum(["accept", "acceptForSession", "reject", "decline"]).optional(),
+  })
+  .refine((v) => v.approved !== undefined || v.decision !== undefined, {
+    message: "Approval response must include 'approved' or 'decision'",
+  });
+
+/** Schema for ask response payloads (user-prompted answers). */
+const askResponseResultSchema = z.union([
+  z.object({ answer: z.string() }),
+  z.object({ content: z.array(z.unknown()) }),
+]);
 
 export type JsonRpcThreadSubscriptionOptions = {
   initialActiveTurnId?: string | null;
@@ -257,19 +275,37 @@ export function createJsonRpcTransportAdapter({
     emitServerRequestResolved(ws, pending.threadId, pending.requestId);
 
     if (pending.type === "approval") {
-      const result = message.result as Record<string, unknown> | undefined;
-      const decision = typeof result?.decision === "string" ? result.decision : undefined;
-      const approved =
-        result?.approved === true || decision === "accept" || decision === "acceptForSession";
-      runtime.lifecycle.handleApprovalResponse(pending.requestId, approved);
+      const parsed = approvalResponseResultSchema.safeParse(message.result);
+      if (!parsed.success) {
+        ws.data.rpc?.pendingServerRequests.delete(message.id);
+        sendJsonRpc(
+          ws,
+          buildJsonRpcErrorResponse(message.id, {
+            code: JSONRPC_ERROR_CODES.invalidParams,
+            message: `Invalid approval response: ${parsed.error.issues.map((i) => i.message).join("; ")}`,
+          }),
+        );
+        return;
+      }
+      const { approved, decision } = parsed.data;
+      const isApproved =
+        approved === true || decision === "accept" || decision === "acceptForSession";
+      runtime.lifecycle.handleApprovalResponse(pending.requestId, isApproved);
     } else {
-      const result = message.result as Record<string, unknown> | undefined;
-      const answer =
-        typeof result?.answer === "string"
-          ? result.answer
-          : Array.isArray(result?.content)
-            ? extractTextInput(result.content)
-            : "";
+      const parsed = askResponseResultSchema.safeParse(message.result);
+      if (!parsed.success) {
+        ws.data.rpc?.pendingServerRequests.delete(message.id);
+        sendJsonRpc(
+          ws,
+          buildJsonRpcErrorResponse(message.id, {
+            code: JSONRPC_ERROR_CODES.invalidParams,
+            message: `Invalid ask response: ${parsed.error.issues.map((i) => i.message).join("; ")}`,
+          }),
+        );
+        return;
+      }
+      const result = parsed.data;
+      const answer = "answer" in result ? result.answer : extractTextInput(result.content);
       runtime.lifecycle.handleAskResponse(pending.requestId, answer);
     }
 

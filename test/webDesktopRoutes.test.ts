@@ -131,8 +131,8 @@ describe("web desktop routes", () => {
       }),
     );
     expect(desktopState.workspaces.map((entry: { yolo?: boolean }) => entry.yolo)).toEqual([
-      true,
-      true,
+      false,
+      false,
     ]);
 
     const listResponse = await handleWebDesktopRoute(
@@ -164,7 +164,7 @@ describe("web desktop routes", () => {
     expect(state.workspaces).toHaveLength(1);
     expect(state.workspaces[0]?.path).toBe(realWorkspace);
     expect(state.workspaces[0]?.name).toBe(path.basename(realWorkspace));
-    expect(state.workspaces[0]?.yolo).toBe(true);
+    expect(state.workspaces[0]?.yolo).toBe(false);
     expect(state.desktopFeatureFlagOverrides).toEqual({});
 
     await service.stopAll();

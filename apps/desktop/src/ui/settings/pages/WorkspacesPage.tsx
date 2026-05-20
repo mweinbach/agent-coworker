@@ -90,10 +90,6 @@ import { cn } from "../../../lib/utils";
 import type { ProviderName } from "../../../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../../../lib/wsProtocol";
 
-function toBoolean(checked: boolean | "indeterminate"): boolean {
-  return checked === true;
-}
-
 function ToggleChip({
   pressed,
   onPressedChange,
@@ -1653,12 +1649,11 @@ export function WorkspacesPage() {
                       settings.
                     </div>
                   </div>
-                  <Checkbox
+                  <Switch
                     checked={perWorkspaceSettings}
                     aria-label="Configure settings by workspace"
                     onCheckedChange={async (checked) => {
-                      const next = toBoolean(checked);
-                      if (!next && workspaces.length > 1) {
+                      if (!checked && workspaces.length > 1) {
                         const confirmed = await confirmAction({
                           title: "Share settings across workspaces",
                           message:
@@ -1672,7 +1667,7 @@ export function WorkspacesPage() {
                         });
                         if (!confirmed) return;
                       }
-                      setPerWorkspaceSettings(next);
+                      setPerWorkspaceSettings(checked);
                     }}
                   />
                 </div>

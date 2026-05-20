@@ -3,6 +3,7 @@ import path from "node:path";
 import type { runTurn } from "../../agent";
 import type { ConnectProviderResult, connectProvider as connectModelProvider } from "../../connect";
 import type { MCPRegistryServer } from "../../mcp/configRegistry";
+import { closeMcpServersForSession } from "../../mcp";
 import { type MemoryScope, MemoryStore } from "../../memoryStore";
 import { getKnownResolvedModelMetadata, isDynamicModelProvider } from "../../models/metadata";
 import { defaultSupportedModel } from "../../models/registry";
@@ -1456,6 +1457,7 @@ export class AgentSession {
         path.join(resolveAuthHomeDir(this.state.config), ".cowork", "auth", "codex-cli"),
       );
     }
+    await closeMcpServersForSession(this.id);
     this.queuePersistSessionSnapshot("session.closed");
     await this.persistenceManager.waitForIdle();
   }
@@ -1482,6 +1484,18 @@ export class AgentSession {
     this.state.abortController?.abort();
     this.interactionManager.rejectAllPending(`Session disposed (${reason})`);
     this.costTrackerUnsubscribe?.();
+
+    if (this.mcpManager) {
+      this.mcpManager.close();
+    }
+    if (this.state.config.provider === "codex-cli") {
+      void closePooledCodexAppServerClient(
+        this.state.config.workingDirectory,
+        path.join(resolveAuthHomeDir(this.state.config), ".cowork", "auth", "codex-cli"),
+      ).catch(() => {});
+    }
+    void closeMcpServersForSession(this.id);
+
     void this.waitForPersistenceIdle().finally(() => {
       this.deps.harnessContextStore.clear(this.id);
       // Null managers to help GC

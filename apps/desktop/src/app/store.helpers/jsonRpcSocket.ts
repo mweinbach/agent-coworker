@@ -545,7 +545,6 @@ export async function previewJsonRpcWorkspacePresentation(
 }
 
 export async function unsubscribeJsonRpcThread(
-
   get: StoreGet,
   set: StoreSet | undefined,
   workspaceId: string,

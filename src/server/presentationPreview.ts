@@ -1,7 +1,7 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-import os from "node:os";
 import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { runCommand } from "./sessionBackup/command";
 import { resolveWorkspaceFilePath } from "./spreadsheetPreview";
 
@@ -13,7 +13,6 @@ function isSlideModule(filePath: string): boolean {
   }
   return false;
 }
-
 
 export type PresentationPreviewRequest = {
   cwd: string;
@@ -187,8 +186,8 @@ export async function previewPresentationFile(
         const pngFiles = files
           .filter((f) => /^slide[-_]?\d+\.png$/i.test(f))
           .sort((a, b) => {
-            const numA = parseInt(a.match(/\d+/)?. [0] || "0", 10);
-            const numB = parseInt(b.match(/\d+/)?. [0] || "0", 10);
+            const numA = parseInt(a.match(/\d+/)?.[0] || "0", 10);
+            const numB = parseInt(b.match(/\d+/)?.[0] || "0", 10);
             return numA - numB;
           });
 
@@ -243,8 +242,8 @@ export async function previewPresentationFile(
 
     // Sort slide modules numerically
     slideModules.sort((a, b) => {
-      const numA = parseInt(path.basename(a).match(/\d+/)?. [0] || "0", 10);
-      const numB = parseInt(path.basename(b).match(/\d+/)?. [0] || "0", 10);
+      const numA = parseInt(path.basename(a).match(/\d+/)?.[0] || "0", 10);
+      const numB = parseInt(path.basename(b).match(/\d+/)?.[0] || "0", 10);
       return numA - numB;
     });
 
@@ -252,7 +251,10 @@ export async function previewPresentationFile(
     for (let i = 0; i < slideModules.length; i++) {
       const modulePath = slideModules[i];
       if (!modulePath) continue;
-      const tempPngPath = path.join(os.tmpdir(), `cowork-slide-pptx-${i}-${crypto.randomUUID()}.png`);
+      const tempPngPath = path.join(
+        os.tmpdir(),
+        `cowork-slide-pptx-${i}-${crypto.randomUUID()}.png`,
+      );
 
       try {
         const runResult = await runCommand(
@@ -280,7 +282,8 @@ export async function previewPresentationFile(
             pngBase64,
           });
         }
-      } catch {} finally {
+      } catch {
+      } finally {
         await fs.unlink(tempPngPath).catch(() => {});
       }
     }

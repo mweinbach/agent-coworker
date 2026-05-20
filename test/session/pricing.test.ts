@@ -73,7 +73,28 @@ describe("pricing", () => {
       expect(glm!.inputPerMillion).toBe(0.95);
       expect(glm!.outputPerMillion).toBe(3.15);
 
-      expect(resolveModelPricing("baseten", "nvidia/Nemotron-120B-A12B")).toBeNull();
+      const nemotron = resolveModelPricing("baseten", "nvidia/Nemotron-120B-A12B");
+      expect(nemotron).not.toBeNull();
+      expect(nemotron!.inputPerMillion).toBe(0.35);
+      expect(nemotron!.outputPerMillion).toBe(0.4);
+    });
+
+    it("resolves exact match for gemini-3.5-flash pricing", () => {
+      const pricing = resolveModelPricing("google", "gemini-3.5-flash");
+      expect(pricing).not.toBeNull();
+      expect(pricing!.inputPerMillion).toBe(0.5);
+      expect(pricing!.outputPerMillion).toBe(3);
+      expect(pricing!.cachedInputPerMillion).toBe(0.05);
+    });
+
+    it("resolves exact match for fireworks router pricing", () => {
+      const pricing = resolveModelPricing(
+        "fireworks",
+        "accounts/fireworks/routers/kimi-k2p5-turbo",
+      );
+      expect(pricing).not.toBeNull();
+      expect(pricing!.inputPerMillion).toBe(0.6);
+      expect(pricing!.outputPerMillion).toBe(3);
     });
 
     it("resolves exact match for together models", () => {

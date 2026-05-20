@@ -233,4 +233,3 @@ describe("workspace JSON-RPC route", () => {
     expect(harness.errors[0]?.error.code).toBe(JSONRPC_ERROR_CODES.invalidParams);
   });
 });
-

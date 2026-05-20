@@ -71,6 +71,17 @@ const defaultDialog = {
   },
 };
 
+const defaultClipboard = {
+  writeText: () => {},
+  readText: () => "",
+};
+
+const defaultShell = {
+  openPath: async () => "",
+  showItemInFolder: () => {},
+  trashItem: async () => {},
+};
+
 const defaultNativeTheme = {
   themeSource: "system",
   shouldUseDarkColors: false,
@@ -146,6 +157,12 @@ const electronMock = {
   },
   get nativeTheme() {
     return mergeMock(defaultNativeTheme, "nativeTheme");
+  },
+  get clipboard() {
+    return mergeMock(defaultClipboard, "clipboard");
+  },
+  get shell() {
+    return mergeMock(defaultShell, "shell");
   },
 };
 

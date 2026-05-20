@@ -37,13 +37,13 @@ export function MenuBarUtilityShell({ init, ready, startupError }: MenuBarUtilit
           <Button
             type="button"
             variant="ghost"
-            size="icon-sm"
-            className="h-6 w-6 min-h-6 min-w-6 shrink-0 rounded-full border border-border/50 bg-background/80 p-0 text-muted-foreground hover:bg-background hover:text-foreground"
+            size="icon-xs"
+            className="rounded-full border border-border/50 bg-background/80 text-muted-foreground hover:bg-background hover:text-foreground"
             aria-label="Close menu window"
             onClick={() => void windowClose()}
             style={{ WebkitAppRegion: "no-drag" } as CSSProperties}
           >
-            <XIcon className="h-3 w-3" />
+            <XIcon />
           </Button>
         </div>
 
@@ -74,7 +74,7 @@ export function MenuBarUtilityShell({ init, ready, startupError }: MenuBarUtilit
                     void showQuickChatWindow({ newThread: true }).then(() => windowClose())
                   }
                 >
-                  <MessageSquarePlusIcon className="h-3.5 w-3.5 shrink-0 opacity-90" />
+                  <MessageSquarePlusIcon data-icon="inline-start" className="opacity-90" />
                   <span className="line-clamp-2 w-full text-balance text-center">New chat</span>
                 </Button>
                 <Button
@@ -87,7 +87,7 @@ export function MenuBarUtilityShell({ init, ready, startupError }: MenuBarUtilit
                   )}
                   onClick={() => void showMainWindow().then(() => windowClose())}
                 >
-                  <ArrowUpRightIcon className="h-3.5 w-3.5 shrink-0 opacity-90" />
+                  <ArrowUpRightIcon data-icon="inline-start" className="opacity-90" />
                   <span className="line-clamp-2 w-full text-balance text-center">Open Cowork</span>
                 </Button>
               </div>
@@ -140,7 +140,7 @@ export function MenuBarUtilityShell({ init, ready, startupError }: MenuBarUtilit
                                 )
                               }
                             >
-                              <ArrowUpRightIcon className="h-4 w-4" />
+                              <ArrowUpRightIcon />
                             </Button>
                           </div>
                         );

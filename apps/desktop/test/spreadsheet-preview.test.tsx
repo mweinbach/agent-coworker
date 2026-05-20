@@ -78,6 +78,7 @@ describe("SpreadsheetPreview", () => {
       const sendMessageMock = mock(async () => true);
       resetAppStore(sendMessageMock);
 
+      let root: ReturnType<typeof createRoot> | null = null;
       try {
         const path = "/Users/mweinbach/Projects/preview-workspace/model.xlsx";
         const requestMock = mock(async (method: string, params?: Record<string, unknown>) => {
@@ -140,7 +141,7 @@ describe("SpreadsheetPreview", () => {
 
         const container = harness.dom.window.document.getElementById("root");
         if (!container) throw new Error("missing root");
-        const root = createRoot(container);
+        root = createRoot(container);
 
         await act(async () => {
           root.render(createElement(SpreadsheetPreview, { path }));
@@ -215,11 +216,15 @@ describe("SpreadsheetPreview", () => {
           await flushUi();
         });
         expect(requestMock.mock.calls.at(-1)?.[1]).toMatchObject({ sheetName: "Data" });
-
-        await act(async () => {
-          root.unmount();
-        });
       } finally {
+        if (root) {
+          try {
+            await act(async () => {
+              root!.unmount();
+            });
+          } catch {}
+        }
+        useAppStore.setState({ sendMessage: originalSendMessage } as Partial<AppStoreState>);
         harness.restore();
       }
     },
@@ -229,6 +234,7 @@ describe("SpreadsheetPreview", () => {
     const harness = setupJsdom({ includeAnimationFrame: true });
     resetAppStore();
 
+    let root: ReturnType<typeof createRoot> | null = null;
     try {
       const path = "/Users/mweinbach/Projects/preview-workspace/model.xlsx";
       const requestMock = mock(async () => {
@@ -269,7 +275,7 @@ describe("SpreadsheetPreview", () => {
 
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
-      const root = createRoot(container);
+      root = createRoot(container);
 
       await act(async () => {
         root.render(createElement(SpreadsheetPreview, { path, compact: true }));
@@ -290,11 +296,15 @@ describe("SpreadsheetPreview", () => {
       const tableWrapper = doc.querySelector(".overflow-auto.rounded-md.border");
       expect(tableWrapper?.className).toContain("flex-1");
       expect(tableWrapper?.className).not.toContain("max-h-[58vh]");
-
-      await act(async () => {
-        root.unmount();
-      });
     } finally {
+      if (root) {
+        try {
+          await act(async () => {
+            root!.unmount();
+          });
+        } catch {}
+      }
+      useAppStore.setState({ sendMessage: originalSendMessage } as Partial<AppStoreState>);
       harness.restore();
     }
   });

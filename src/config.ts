@@ -38,6 +38,7 @@ import {
   resolveRuntimeName as resolveRuntimeNameFromValue,
 } from "./types";
 import { resolveAuthHomeDir } from "./utils/authHome";
+import { isPathInside } from "./utils/paths";
 
 export { defaultModelForProvider } from "./providers";
 
@@ -335,8 +336,14 @@ function asNonEmptyString(v: unknown): string | undefined {
 function resolveDir(maybeRelative: unknown, baseDir: string): string {
   const parsed = stringSchema.safeParse(maybeRelative);
   if (!parsed.success || !parsed.data) return baseDir;
-  if (path.isAbsolute(parsed.data)) return parsed.data;
-  return path.join(baseDir, parsed.data);
+  const resolved = path.isAbsolute(parsed.data) ? parsed.data : path.resolve(baseDir, parsed.data);
+  if (!isPathInside(baseDir, resolved)) {
+    console.warn(
+      `[config] Ignoring directory "${parsed.data}" — resolved path escapes workspace root; using default.`,
+    );
+    return baseDir;
+  }
+  return resolved;
 }
 
 function normalizeNonNegativeInt(v: unknown): number | undefined {

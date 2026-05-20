@@ -1183,9 +1183,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     }
 
     const hasSnapshotItemWithIdOrCmid = (cmid: string) => {
-      return snapshotFeed.some(
-        (entry) => entry.id === cmid || entry.id.endsWith(`:${cmid}`),
-      );
+      return snapshotFeed.some((entry) => entry.id === cmid || entry.id.endsWith(`:${cmid}`));
     };
 
     return currentFeed.some(

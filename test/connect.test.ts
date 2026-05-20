@@ -319,7 +319,7 @@ describe("connectProvider", () => {
     ).rejects.toThrow();
   });
 
-  test("codex-cli disconnect clears Cowork connection state without touching app-server auth", async () => {
+  test("codex-cli disconnect clears Cowork connection state and deletes sensitive local auth token (auth.json)", async () => {
     const home = await makeTmpHome();
     const paths = getAiCoworkerPaths({ homedir: home });
     await connectProvider({
@@ -327,6 +327,10 @@ describe("connectProvider", () => {
       paths,
       openUrl: async (url) => url === mockedAuthorizeUrl,
     });
+
+    const codexHome = path.join(home, ".cowork", "auth", "codex-cli");
+    await fs.mkdir(codexHome, { recursive: true });
+    await fs.writeFile(path.join(codexHome, "auth.json"), "{}", "utf-8");
 
     const result = await disconnectProvider({ provider: "codex-cli", paths });
 

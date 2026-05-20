@@ -62,7 +62,7 @@ describe("presentation preview renderer", () => {
       const scriptDir = path.join(dir, "skills/presentations/scripts");
       await fs.mkdir(scriptDir, { recursive: true });
       const scriptPath = path.join(scriptDir, "render_artifact_slide.mjs");
-      
+
       const mockScriptCode = `
         import fs from 'node:fs';
         const outIdx = process.argv.indexOf('--output');
@@ -105,7 +105,7 @@ describe("presentation preview renderer", () => {
       const scriptDir = path.join(dir, "skills/presentations/scripts");
       await fs.mkdir(scriptDir, { recursive: true });
       const scriptPath = path.join(scriptDir, "render_artifact_slide.mjs");
-      
+
       const mockScriptCode = `
         import fs from 'node:fs';
         const outIdx = process.argv.indexOf('--output');
@@ -140,14 +140,18 @@ describe("presentation preview renderer", () => {
       const previewDir = path.join(dir, "preview");
       await fs.mkdir(previewDir, { recursive: true });
       await fs.writeFile(path.join(dir, "deck.pptx"), "fake-pptx-bytes", "utf8");
-      
+
       const pngPath = path.join(previewDir, "slide-1.png");
       await fs.writeFile(pngPath, "cached-slide-data", "utf8");
 
       // Mock script (not used in this test because it loads directly from cache)
       const scriptDir = path.join(dir, "skills/presentations/scripts");
       await fs.mkdir(scriptDir, { recursive: true });
-      await fs.writeFile(path.join(scriptDir, "render_artifact_slide.mjs"), "process.exit(1);", "utf8");
+      await fs.writeFile(
+        path.join(scriptDir, "render_artifact_slide.mjs"),
+        "process.exit(1);",
+        "utf8",
+      );
 
       const result = await previewPresentationFile({
         cwd: dir,
@@ -165,7 +169,6 @@ describe("presentation preview renderer", () => {
       }
     });
   });
-
 
   test("rejects paths outside the workspace root", async () => {
     await withTempDir(async (dir) => {

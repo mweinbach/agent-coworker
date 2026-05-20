@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 
 import { loginCodexAppServerChatGpt, logoutCodexAppServer } from "./providers/codexAppServerAuth";
@@ -253,11 +254,18 @@ export async function disconnectProvider(opts: {
     store.updatedAt = now;
     await writeConnectionStore(paths, store);
     let logoutMessage = "";
+    const codexHome = codexHomeFromPaths(paths);
     try {
-      const logoutResult = await logoutCodexAppServer({ codexHome: codexHomeFromPaths(paths) });
+      const logoutResult = await logoutCodexAppServer({ codexHome });
       logoutMessage = logoutResult.message;
     } catch {
       // Best-effort logout; do not fail disconnect if app-server is unreachable.
+    } finally {
+      try {
+        await fs.rm(path.join(codexHome, "auth.json"), { force: true });
+      } catch {
+        // ignore
+      }
     }
     return {
       ok: true,

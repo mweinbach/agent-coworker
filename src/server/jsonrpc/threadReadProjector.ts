@@ -56,7 +56,6 @@ function stripWhitespace(text: string): string {
   return text.replace(/\s/g, "");
 }
 
-
 function dedupeReplayAssistantItems(
   items: Array<Record<string, unknown>>,
 ): Array<Record<string, unknown>> {
@@ -100,7 +99,6 @@ function dedupeReplayAssistantItems(
         strippedAggregate.startsWith(strippedNormalized) ||
         strippedNormalized.startsWith(strippedAggregate)
       ) {
-
         assistantHistory = `${assistantHistory}${item.text}`;
         continue;
       }
@@ -112,8 +110,6 @@ function dedupeReplayAssistantItems(
 
   return out;
 }
-
-
 
 export function createThreadTurnProjector() {
   const turns = new Map<string, ProjectedTurnState>();

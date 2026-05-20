@@ -311,6 +311,10 @@ export async function forceFlushObservabilityRuntime(): Promise<void> {
   }
 }
 
+export async function shutdownObservabilityRuntime(): Promise<void> {
+  await shutdownRuntime();
+}
+
 export interface TelemetryContext {
   functionId: string;
   metadata?: Record<string, string | number | boolean | null | undefined>;

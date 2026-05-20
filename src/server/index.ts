@@ -18,8 +18,13 @@ function printUsage() {
 
 async function resolveAndValidateDir(dirArg: string): Promise<string> {
   const resolved = path.resolve(dirArg);
-  const st = await fs.stat(resolved);
-  if (!st.isDirectory()) throw new Error(`--dir is not a directory: ${resolved}`);
+  let st: { isDirectory: () => boolean } | null = null;
+  try {
+    st = await fs.stat(resolved);
+  } catch {
+    st = null;
+  }
+  if (!st?.isDirectory()) throw new Error(`--dir is not a directory: ${resolved}`);
   return resolved;
 }
 

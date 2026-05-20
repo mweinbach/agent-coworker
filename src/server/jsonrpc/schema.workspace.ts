@@ -177,4 +177,3 @@ export const jsonRpcWorkspaceResultSchemas = {
   "cowork/workspace/spreadsheet/preview": spreadsheetPreviewResultSchema,
   "cowork/workspace/presentation/preview": presentationPreviewResultSchema,
 } as const;
-

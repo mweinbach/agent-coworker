@@ -544,30 +544,51 @@ export async function logoutCodexAppServer(
   message: string;
 }> {
   const codexHome = opts.codexHome ?? clientInternal.resolveCodexHome();
-  const logout = await withClient(
-    async (client) => {
-      let revoked = false;
-      let message = "Codex app-server does not expose a logout method.";
-      for (const method of ["account/logout", "auth/revoke"]) {
-        try {
-          await client.request(method, {}, CODEX_AUTH_RPC_TIMEOUT_MS);
-          revoked = true;
-          message = `Codex app-server auth revoked via ${method}.`;
-          break;
-        } catch (error) {
-          if (!isUnknownMethodError(error, method)) {
-            message = `Codex app-server ${method} failed: ${error instanceof Error ? error.message : String(error)}`;
+  const authFile = path.join(codexHome, "auth.json");
+  let logout: { revoked: boolean; message: string } | undefined;
+  let logoutError: unknown;
+  try {
+    logout = await withClient(
+      async (client) => {
+        let revoked = false;
+        let message = "Codex app-server does not expose a logout method.";
+        for (const method of ["account/logout", "auth/revoke"]) {
+          try {
+            await client.request(method, {}, CODEX_AUTH_RPC_TIMEOUT_MS);
+            revoked = true;
+            message = `Codex app-server auth revoked via ${method}.`;
             break;
+          } catch (error) {
+            if (!isUnknownMethodError(error, method)) {
+              message = `Codex app-server ${method} failed: ${error instanceof Error ? error.message : String(error)}`;
+              break;
+            }
           }
         }
-      }
-      return { revoked, message };
-    },
-    opts.log,
-    codexHome,
-  );
+        return { revoked, message };
+      },
+      opts.log,
+      codexHome,
+    );
+  } catch (error) {
+    logoutError = error;
+  }
+
+  try {
+    await fs.rm(authFile, { force: true });
+  } catch (err) {
+    opts.log?.(
+      `[auth] failed to delete ${authFile}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
   await closePooledCodexAppServerClientsForHome(codexHome);
-  return logout;
+
+  if (logoutError !== undefined) {
+    throw logoutError;
+  }
+
+  return logout ?? { revoked: false, message: "Codex app-server logout did not run." };
 }
 
 export const __internal = {

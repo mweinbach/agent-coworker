@@ -151,6 +151,7 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
         return new Response("OK", { status: 200, headers: corsHeaders });
       },
       websocket: {
+        maxPayloadLength: 4 * 1024 * 1024, // 4 MB — cap inbound frames to prevent memory exhaustion
         open(ws) {
           runtime.openConnection(ws);
         },

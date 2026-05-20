@@ -215,7 +215,7 @@ describe("file preview modal", () => {
       expect(doc.body.textContent).toContain("Docx title");
       expect(footer?.textContent).toContain("Creative Strategies");
       expect(headerImage).not.toBeNull();
-      expect(docxShell?.className).toContain("bg-white");
+      expect(docxShell?.className).toContain("bg-card");
       expect(loadDocxPreviewLayoutMock).toHaveBeenCalledTimes(1);
 
       await act(async () => {

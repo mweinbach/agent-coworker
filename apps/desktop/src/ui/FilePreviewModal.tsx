@@ -35,9 +35,8 @@ import {
 } from "../lib/filePreviewKind";
 import { cn } from "../lib/utils";
 import { CodeFilePreview } from "./CodeFilePreview";
-import { SpreadsheetPreview } from "./SpreadsheetPreview";
 import { PptxPreview } from "./PptxPreview";
-
+import { SpreadsheetPreview } from "./SpreadsheetPreview";
 
 function decodeUtf8(bytes: Uint8Array): string {
   return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
@@ -63,7 +62,26 @@ async function sanitizePreviewHtml(rawHtml: string): Promise<string> {
   return DOMPurify.sanitize(rawHtml, {
     USE_PROFILES: { html: true },
     FORBID_TAGS: ["style", "script", "iframe", "object", "embed", "form", "input"],
-    FORBID_ATTR: ["style", "onerror", "onload", "onclick"],
+    ALLOWED_ATTR: [
+      "href",
+      "src",
+      "alt",
+      "title",
+      "class",
+      "id",
+      "width",
+      "height",
+      "target",
+      "rel",
+      "type",
+      "name",
+      "value",
+      "placeholder",
+      "colspan",
+      "rowspan",
+      "scope",
+      "data-*",
+    ],
   });
 }
 
@@ -413,7 +431,7 @@ export function FilePreviewModal() {
           className={cn(
             "min-h-0 flex-1",
             kind === "pdf" ? "overflow-hidden p-0" : "overflow-y-auto px-5 py-4",
-            kind === "docx" && docxHtml && "bg-white px-6 py-6",
+            kind === "docx" && docxHtml && "bg-background px-6 py-6",
           )}
         >
           {loading ? (
@@ -454,7 +472,7 @@ export function FilePreviewModal() {
           ) : kind === "docx" && docxHtml ? (
             <div
               className={cn(
-                "docx-preview mx-auto min-h-[11in] w-[8.5in] max-w-full rounded-sm border border-border/60 bg-white px-[1in] py-[1in] text-black shadow-sm",
+                "docx-preview mx-auto min-h-[11in] w-[8.5in] max-w-full rounded-sm border border-border/60 bg-card px-[1in] py-[1in] text-foreground shadow-sm",
                 "[&_.docx-title]:mb-3 [&_.docx-title]:text-[22pt] [&_.docx-title]:font-bold [&_.docx-title]:leading-[1.2] [&_.docx-title]:tracking-[-0.01em] [&_.docx-title]:text-[var(--docx-title)]",
                 "[&_.docx-subtitle]:mb-3 [&_.docx-subtitle]:text-[11pt] [&_.docx-subtitle]:italic [&_.docx-subtitle]:leading-[1.35] [&_.docx-subtitle]:text-[var(--docx-accent)]",
                 "[&_.docx-byline]:mb-2 [&_.docx-byline]:text-[10pt] [&_.docx-byline]:font-semibold [&_.docx-byline]:leading-[1.3] [&_.docx-byline]:text-[var(--docx-title)]",
@@ -506,12 +524,10 @@ export function FilePreviewModal() {
             <PptxPreview key={path} path={path} />
           ) : showUnknownAsText ? (
             <CodeFilePreview content={textContent} filePath={path ?? ""} />
-
           ) : showFallback || showUnknownFallback ? (
             <div className="space-y-4 py-8 text-center">
               <p className="text-sm text-muted-foreground">
                 {kind === "unsupported"
-
                   ? "No in-app preview for this format."
                   : "Could not detect a text preview for this file."}
               </p>

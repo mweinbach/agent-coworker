@@ -80,6 +80,10 @@ const BASE_PRICING_TABLE: Record<string, ModelPricing> = {
     inputPerMillion: 0.95,
     outputPerMillion: 3.15,
   },
+  "baseten:nvidia/Nemotron-120B-A12B": {
+    inputPerMillion: 0.35,
+    outputPerMillion: 0.4,
+  },
   // ── Together AI ──────────────────────────────────────────────────────
   "together:moonshotai/Kimi-K2.5": {
     inputPerMillion: 0.5,
@@ -104,6 +108,10 @@ const BASE_PRICING_TABLE: Record<string, ModelPricing> = {
   "fireworks:accounts/fireworks/models/minimax-m2p5": {
     inputPerMillion: 0.3,
     outputPerMillion: 1.2,
+  },
+  "fireworks:accounts/fireworks/routers/kimi-k2p5-turbo": {
+    inputPerMillion: 0.6,
+    outputPerMillion: 3,
   },
   // OpenCode Go is intentionally excluded from local pricing estimates.
   "opencode-zen:glm-5": {
@@ -212,6 +220,11 @@ const BASE_PRICING_TABLE: Record<string, ModelPricing> = {
     inputPerMillion: 0.25,
     outputPerMillion: 1.5,
     cachedInputPerMillion: 0.025,
+  },
+  "google:gemini-3.5-flash": {
+    inputPerMillion: 0.5,
+    outputPerMillion: 3,
+    cachedInputPerMillion: 0.05,
   },
 };
 

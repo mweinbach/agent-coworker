@@ -1,6 +1,8 @@
 import path from "node:path";
 
+import { type AttributeValue, type Span, SpanStatusCode, trace } from "@opentelemetry/api";
 import { getSupportedModel, listSupportedModels } from "../models/registry";
+import type { TelemetrySettings } from "../observability/runtime";
 import {
   type CodexAppServerClient,
   type CodexAppServerJsonRpcNotification,
@@ -13,7 +15,13 @@ import { isCodexAppServerContinuationState } from "../shared/providerContinuatio
 import { isCodexDynamicCoworkToolName } from "../tools/codexBoundary";
 import type { ModelMessage, TodoItem } from "../types";
 import { resolveAuthHomeDir } from "../utils/authHome";
-import { asRecord, asString, isZodSchema, toPiJsonSchema } from "./piRuntimeOptions";
+import {
+  asNonEmptyString,
+  asRecord,
+  asString,
+  isZodSchema,
+  toPiJsonSchema,
+} from "./piRuntimeOptions";
 import type {
   LlmRuntime,
   RuntimeRunTurnParams,
@@ -21,6 +29,97 @@ import type {
   RuntimeToolDefinition,
   RuntimeUsage,
 } from "./types";
+
+export function parseTelemetrySettings(raw: unknown): TelemetrySettings | undefined {
+  const parsed = asRecord(raw);
+  if (!parsed || parsed.isEnabled !== true) return undefined;
+
+  const metadataInput = asRecord(parsed.metadata);
+  const metadata: Record<string, AttributeValue> = {};
+  if (metadataInput) {
+    for (const [key, value] of Object.entries(metadataInput)) {
+      if (typeof value === "string" || typeof value === "boolean") {
+        metadata[key] = value;
+        continue;
+      }
+      if (typeof value === "number" && Number.isFinite(value)) {
+        metadata[key] = value;
+      }
+    }
+  }
+
+  return {
+    isEnabled: true,
+    recordInputs: parsed.recordInputs === true,
+    recordOutputs: parsed.recordOutputs === true,
+    functionId: asNonEmptyString(parsed.functionId),
+    ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
+  };
+}
+
+export function startModelCallSpan(
+  telemetry: TelemetrySettings | undefined,
+  params: RuntimeRunTurnParams,
+  effectiveModel: string,
+  stepNumber: number,
+  input: unknown,
+  runtimeLabel = "codex-app-server",
+  defaultFunctionId = "agent.runtime.codex.model_call",
+): Span | null {
+  if (!telemetry?.isEnabled) return null;
+
+  const attributes: Record<string, AttributeValue> = {
+    "llm.runtime": runtimeLabel,
+    "llm.provider": params.config.provider,
+    "llm.model": effectiveModel,
+    "llm.step_number": stepNumber,
+    ...(telemetry.metadata ?? {}),
+  };
+
+  if (telemetry.recordInputs) {
+    attributes["llm.input.system"] = params.system;
+    attributes["llm.input.messages"] = JSON.stringify(input);
+  }
+
+  return trace
+    .getTracer("agent-coworker.runtime")
+    .startSpan(telemetry.functionId ?? defaultFunctionId, { attributes });
+}
+
+export function markModelCallSpanSuccess(
+  span: Span | null,
+  telemetry: TelemetrySettings | undefined,
+  text: string,
+  usage: RuntimeUsage | undefined,
+): void {
+  if (!span) return;
+
+  if (telemetry?.recordOutputs) {
+    span.setAttribute("llm.output.response", text);
+  }
+
+  if (usage) {
+    if (usage.promptTokens !== undefined)
+      span.setAttribute("llm.usage.input_tokens", usage.promptTokens);
+    if (usage.completionTokens !== undefined)
+      span.setAttribute("llm.usage.output_tokens", usage.completionTokens);
+    if (usage.totalTokens !== undefined)
+      span.setAttribute("llm.usage.total_tokens", usage.totalTokens);
+  }
+
+  span.setStatus({ code: SpanStatusCode.OK });
+  span.end();
+}
+
+export function markModelCallSpanError(span: Span | null, error: unknown): void {
+  if (!span) return;
+  const message = error instanceof Error ? error.message : String(error);
+  span.setStatus({ code: SpanStatusCode.ERROR, message });
+  if (error instanceof Error) {
+    span.recordException(error);
+  }
+  span.end();
+}
 
 const CODEX_APP_SERVER_PROVIDER = "codex-cli" as const;
 const CODEX_STARTUP_RPC_TIMEOUT_MS = 60_000;
@@ -1083,110 +1182,121 @@ export function createCodexAppServerRuntime(): LlmRuntime {
         if (input.length === 0)
           throw new Error("codex app-server runtime requires a user message.");
         params.abortSignal?.throwIfAborted();
-        const completion = waitForTurnCompletion(
-          client,
-          () => threadId,
-          () => startedTurnId,
-          (nextUsage) => {
-            usage = nextUsage;
-          },
-          {
-            abortSignal: params.abortSignal,
-            interrupt: async () => {
-              if (!threadId) return;
-              try {
-                await client.interruptTurn({
-                  threadId,
-                  ...(startedTurnId ? { turnId: startedTurnId } : {}),
-                });
-              } catch (error) {
-                params.log?.(
-                  `[codex-app-server] interrupt failed, forcing hard close: ${String(error)}`,
-                );
-                await client.close().catch(() => {});
-              }
+
+        const telemetry = parseTelemetrySettings(params.telemetry);
+        const span = startModelCallSpan(telemetry, params, effectiveModel, 1, input);
+
+        try {
+          const completion = waitForTurnCompletion(
+            client,
+            () => threadId,
+            () => startedTurnId,
+            (nextUsage) => {
+              usage = nextUsage;
             },
-          },
-        );
-        const turnResult = await requestWithAbort<unknown>(
-          client,
-          "turn/start",
-          {
-            threadId,
-            input,
-            cwd: params.config.workingDirectory,
-            model: effectiveModel,
-            approvalPolicy,
-            sandboxPolicy,
-            effort: normalizeEffort(
-              providerOptionString(params.providerOptions, "reasoningEffort"),
-            ),
-            summary: normalizeSummary(
-              providerOptionString(params.providerOptions, "reasoningSummary"),
-            ),
-            clientMessageId: params.clientMessageId,
-          },
-          CODEX_STARTUP_RPC_TIMEOUT_MS,
-          params.abortSignal,
-        );
-
-        const startedTurn = asRecord(asRecord(turnResult)?.turn);
-        startedTurnId = asString(startedTurn?.id);
-        if (params.registerSteerHandler && startedTurnId) {
-          unregisterSteerHandler = params.registerSteerHandler(async (steer) => {
-            if (!threadId || !startedTurnId) {
-              throw new Error("Codex app-server turn is not ready for steering.");
-            }
-            if (steer.expectedTurnId !== startedTurnId) {
-              throw new Error("Codex app-server active turn mismatch.");
-            }
-            const steerInput = buildCodexTurnInput(
-              [{ role: "user", content: steer.content ?? steer.text }],
-              { resumedThread: true },
-            );
-            await client.request(
-              "turn/steer",
-              {
-                threadId,
-                expectedTurnId: startedTurnId,
-                input:
-                  steerInput.length > 0
-                    ? steerInput
-                    : [{ type: "text", text: steer.text, text_elements: [] }],
+            {
+              abortSignal: params.abortSignal,
+              interrupt: async () => {
+                if (!threadId) return;
+                try {
+                  await client.interruptTurn({
+                    threadId,
+                    ...(startedTurnId ? { turnId: startedTurnId } : {}),
+                  });
+                } catch (error) {
+                  params.log?.(
+                    `[codex-app-server] interrupt failed, forcing hard close: ${String(error)}`,
+                  );
+                  await client.close().catch(() => {});
+                }
               },
-              CODEX_STARTUP_RPC_TIMEOUT_MS,
-            );
+            },
+          );
+          const turnResult = await requestWithAbort<unknown>(
+            client,
+            "turn/start",
+            {
+              threadId,
+              input,
+              cwd: params.config.workingDirectory,
+              model: effectiveModel,
+              approvalPolicy,
+              sandboxPolicy,
+              effort: normalizeEffort(
+                providerOptionString(params.providerOptions, "reasoningEffort"),
+              ),
+              summary: normalizeSummary(
+                providerOptionString(params.providerOptions, "reasoningSummary"),
+              ),
+              clientMessageId: params.clientMessageId,
+            },
+            CODEX_STARTUP_RPC_TIMEOUT_MS,
+            params.abortSignal,
+          );
+
+          const startedTurn = asRecord(asRecord(turnResult)?.turn);
+          startedTurnId = asString(startedTurn?.id);
+          if (params.registerSteerHandler && startedTurnId) {
+            unregisterSteerHandler = params.registerSteerHandler(async (steer) => {
+              if (!threadId || !startedTurnId) {
+                throw new Error("Codex app-server turn is not ready for steering.");
+              }
+              if (steer.expectedTurnId !== startedTurnId) {
+                throw new Error("Codex app-server active turn mismatch.");
+              }
+              const steerInput = buildCodexTurnInput(
+                [{ role: "user", content: steer.content ?? steer.text }],
+                { resumedThread: true },
+              );
+              await client.request(
+                "turn/steer",
+                {
+                  threadId,
+                  expectedTurnId: startedTurnId,
+                  input:
+                    steerInput.length > 0
+                      ? steerInput
+                      : [{ type: "text", text: steer.text, text_elements: [] }],
+                },
+                CODEX_STARTUP_RPC_TIMEOUT_MS,
+              );
+            });
+          }
+          const finalTurn = await completion;
+
+          const text = assistantTextFromTurn(finalTurn) || assistantTextCapture.text();
+          const reasoningText = reasoningTextFromTurn(finalTurn);
+          await params.onModelStreamPart?.({
+            type: "finish-step",
+            stepNumber: 1,
+            response: { stopReason: "stop" },
+            usage,
+            finishReason: "stop",
           });
+          await params.onModelStreamPart?.({
+            type: "finish",
+            finishReason: "stop",
+            totalUsage: usage,
+          });
+
+          markModelCallSpanSuccess(span, telemetry, text, usage);
+
+          return {
+            text,
+            ...(reasoningText ? { reasoningText } : {}),
+            responseMessages: text ? [{ role: "assistant", content: text }] : [],
+            ...(usage ? { usage } : {}),
+            providerState: {
+              provider: CODEX_APP_SERVER_PROVIDER,
+              model: effectiveModel,
+              threadId,
+              updatedAt: new Date().toISOString(),
+            },
+          };
+        } catch (error) {
+          markModelCallSpanError(span, error);
+          throw error;
         }
-        const finalTurn = await completion;
-
-        const text = assistantTextFromTurn(finalTurn) || assistantTextCapture.text();
-        const reasoningText = reasoningTextFromTurn(finalTurn);
-        await params.onModelStreamPart?.({
-          type: "finish-step",
-          stepNumber: 1,
-          response: { stopReason: "stop" },
-          usage,
-          finishReason: "stop",
-        });
-        await params.onModelStreamPart?.({
-          type: "finish",
-          finishReason: "stop",
-          totalUsage: usage,
-        });
-
-        return {
-          text,
-          ...(reasoningText ? { reasoningText } : {}),
-          responseMessages: text ? [{ role: "assistant", content: text }] : [],
-          ...(usage ? { usage } : {}),
-          providerState: {
-            provider: CODEX_APP_SERVER_PROVIDER,
-            model: effectiveModel,
-            threadId,
-            updatedAt: new Date().toISOString(),
-          },
-        };
       } catch (error) {
         const contextualError = withCodexAppServerDiagnostics(error, client.command);
         if (params.abortSignal?.aborted) {
@@ -1260,7 +1370,7 @@ async function waitForTurnCompletion(
       const payloadThreadId = codexPayloadThreadId(params);
       if (payloadThreadId && expectedThreadId && payloadThreadId !== expectedThreadId) return;
       if (notification.method === "thread/tokenUsage/updated") {
-        const payloadTurnId = codexPayloadThreadId(params);
+        const payloadTurnId = codexPayloadTurnId(params);
         if (expectedTurnId && payloadTurnId && payloadTurnId !== expectedTurnId) return;
         onUsage(parseUsage(params?.tokenUsage));
         return;

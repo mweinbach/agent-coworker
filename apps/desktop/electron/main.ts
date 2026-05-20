@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { app, BrowserWindow, Menu, Notification, shell } from "electron";
+import type * as Electron from "electron";
 
 import type { PersistedState } from "../src/app/types";
 import {
@@ -10,6 +11,7 @@ import {
   type DesktopMenuCommand,
   type ShowCanvasWindowInput,
   type ShowQuickChatWindowInput,
+  type SystemAppearance,
   type UpdaterState,
 } from "../src/lib/desktopApi";
 import { registerDesktopIpc } from "./ipc";
@@ -38,6 +40,9 @@ import {
   getPlatformBrowserWindowOptions,
   shouldUseMacosNativeGlass,
 } from "./services/windowEnhancements";
+
+const require = createRequire(import.meta.url);
+const { app, BrowserWindow, Menu, Notification, shell } = require("electron") as typeof Electron;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -71,7 +76,7 @@ const updater = new DesktopUpdaterService({
   },
 });
 let unregisterAppearanceListener = () => {};
-let mainWindow: BrowserWindow | null = null;
+let mainWindow: Electron.BrowserWindow | null = null;
 let quickChatController: QuickChatController | null = null;
 const menuCommandDispatcher = createMenuCommandDispatcher();
 const WINDOW_SHOW_FALLBACK_TIMEOUT_MS = 2_000;
@@ -200,7 +205,7 @@ function isTrustedRendererNavigation(rawUrl: string): boolean {
   }
 }
 
-function applyWindowSecurity(win: BrowserWindow): void {
+function applyWindowSecurity(win: Electron.BrowserWindow): void {
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (isExternalUrl(url)) {
       void shell.openExternal(url);
@@ -208,7 +213,7 @@ function applyWindowSecurity(win: BrowserWindow): void {
     return { action: "deny" };
   });
 
-  win.webContents.on("will-navigate", (event, navigationUrl) => {
+  win.webContents.on("will-navigate", (event: Electron.Event, navigationUrl: string) => {
     if (isTrustedRendererNavigation(navigationUrl)) {
       return;
     }
@@ -219,13 +224,19 @@ function applyWindowSecurity(win: BrowserWindow): void {
     }
   });
 
-  win.webContents.on("will-attach-webview", (event) => {
+  win.webContents.on("will-attach-webview", (event: Electron.Event) => {
     event.preventDefault();
   });
 
-  win.webContents.session.setPermissionRequestHandler((_webContents, _permission, callback) => {
-    callback(false);
-  });
+  win.webContents.session.setPermissionRequestHandler(
+    (
+      _webContents: Electron.WebContents,
+      _permission: string,
+      callback: (permissionGranted: boolean) => void,
+    ) => {
+      callback(false);
+    },
+  );
 }
 
 function resolveDesktopSmokeConfig(): { workspacePath: string; outputPath: string } | null {
@@ -305,7 +316,7 @@ async function maybeRunPackagedSmoke(): Promise<boolean> {
 }
 
 async function loadRendererWindow(
-  win: BrowserWindow,
+  win: Electron.BrowserWindow,
   windowMode: "main" | "quick-chat" | "utility" | "canvas",
   query: Record<string, string> = {},
 ): Promise<void> {
@@ -334,7 +345,7 @@ async function loadRendererWindow(
   );
 }
 
-async function createMainWindow(): Promise<BrowserWindow> {
+async function createMainWindow(): Promise<Electron.BrowserWindow> {
   const useMacosNativeGlass = shouldUseMacosNativeGlass(process.platform, process.env, {
     prefersReducedTransparency: getSystemAppearanceSnapshot().prefersReducedTransparency,
   });
@@ -379,28 +390,31 @@ async function createMainWindow(): Promise<BrowserWindow> {
     showWindow();
   });
 
-  win.webContents.on("context-menu", (_event, params) => {
-    const hasSelection = params.selectionText.trim().length > 0;
-    const isEditable = params.isEditable;
+  win.webContents.on(
+    "context-menu",
+    (_event: Electron.Event, params: Electron.ContextMenuParams) => {
+      const hasSelection = params.selectionText.trim().length > 0;
+      const isEditable = params.isEditable;
 
-    const menuItems: Electron.MenuItemConstructorOptions[] = [];
+      const menuItems: Electron.MenuItemConstructorOptions[] = [];
 
-    if (isEditable) {
-      menuItems.push(
-        { role: "cut", enabled: hasSelection },
-        { role: "copy", enabled: hasSelection },
-        { role: "paste" },
-        { type: "separator" },
-        { role: "selectAll" },
-      );
-    } else if (hasSelection) {
-      menuItems.push({ role: "copy" }, { type: "separator" }, { role: "selectAll" });
-    } else {
-      menuItems.push({ role: "selectAll" });
-    }
+      if (isEditable) {
+        menuItems.push(
+          { role: "cut", enabled: hasSelection },
+          { role: "copy", enabled: hasSelection },
+          { role: "paste" },
+          { type: "separator" },
+          { role: "selectAll" },
+        );
+      } else if (hasSelection) {
+        menuItems.push({ role: "copy" }, { type: "separator" }, { role: "selectAll" });
+      } else {
+        menuItems.push({ role: "selectAll" });
+      }
 
-    Menu.buildFromTemplate(menuItems).popup();
-  });
+      Menu.buildFromTemplate(menuItems).popup();
+    },
+  );
 
   win.on("closed", () => {
     clearTimeout(readyToShowTimeout);
@@ -417,7 +431,9 @@ async function createMainWindow(): Promise<BrowserWindow> {
   return win;
 }
 
-async function createQuickChatWindow(opts?: ShowQuickChatWindowInput): Promise<BrowserWindow> {
+async function createQuickChatWindow(
+  opts?: ShowQuickChatWindowInput,
+): Promise<Electron.BrowserWindow> {
   const useMacosNativeGlass = shouldUseMacosNativeGlass(process.platform, process.env, {
     prefersReducedTransparency: getSystemAppearanceSnapshot().prefersReducedTransparency,
   });
@@ -477,7 +493,7 @@ async function createQuickChatWindow(opts?: ShowQuickChatWindowInput): Promise<B
 }
 
 async function retargetQuickChatWindow(
-  win: BrowserWindow,
+  win: Electron.BrowserWindow,
   opts?: ShowQuickChatWindowInput,
 ): Promise<void> {
   await loadRendererWindow(win, "quick-chat", quickChatWindowQuery(opts));
@@ -490,7 +506,7 @@ function quickChatWindowQuery(opts?: ShowQuickChatWindowInput): Record<string, s
   };
 }
 
-async function createCanvasWindow(opts: ShowCanvasWindowInput): Promise<BrowserWindow> {
+async function createCanvasWindow(opts: ShowCanvasWindowInput): Promise<Electron.BrowserWindow> {
   const useMacosNativeGlass = shouldUseMacosNativeGlass(process.platform, process.env, {
     prefersReducedTransparency: getSystemAppearanceSnapshot().prefersReducedTransparency,
   });
@@ -530,7 +546,7 @@ async function createCanvasWindow(opts: ShowCanvasWindowInput): Promise<BrowserW
   return win;
 }
 
-async function createUtilityWindow(): Promise<BrowserWindow> {
+async function createUtilityWindow(): Promise<Electron.BrowserWindow> {
   const useMacosNativeGlass = shouldUseMacosNativeGlass(process.platform, process.env, {
     prefersReducedTransparency: getSystemAppearanceSnapshot().prefersReducedTransparency,
   });
@@ -591,7 +607,7 @@ async function createUtilityWindow(): Promise<BrowserWindow> {
   return win;
 }
 
-async function ensureMainWindow(): Promise<BrowserWindow> {
+async function ensureMainWindow(): Promise<Electron.BrowserWindow> {
   if (mainWindow && !mainWindow.isDestroyed()) {
     revealAndActivateWindow(app, mainWindow);
     return mainWindow;
@@ -636,35 +652,38 @@ if (!gotSingleInstanceLock) {
       updater,
       showMainWindow: () => quickChatController?.showMainWindow(),
       consumePendingMenuCommands: () => menuCommandDispatcher.drainPending(),
-      showQuickChatWindow: (opts) => quickChatController?.showQuickChatWindow(opts),
-      showCanvasWindow: (opts) => {
+      showQuickChatWindow: (opts?: ShowQuickChatWindowInput) =>
+        quickChatController?.showQuickChatWindow(opts),
+      showCanvasWindow: (opts: ShowCanvasWindowInput) => {
         void createCanvasWindow(opts);
       },
       shouldKeepPopupWindowsAlive: () =>
         quickChatController?.shouldKeepPopupWindowsAlive() === true,
-      applyPersistedState: (state) => {
+      applyPersistedState: (state: PersistedState) => {
         quickChatController?.applyPersistedState(state);
       },
     });
-    unregisterAppearanceListener = registerSystemAppearanceListener((appearance) => {
-      for (const win of BrowserWindow.getAllWindows()) {
-        if (win.isDestroyed()) {
-          continue;
+    unregisterAppearanceListener = registerSystemAppearanceListener(
+      (appearance: SystemAppearance) => {
+        for (const win of BrowserWindow.getAllWindows()) {
+          if (win.isDestroyed()) {
+            continue;
+          }
+          applySystemAppearanceToWindow(win, appearance);
         }
-        applySystemAppearanceToWindow(win, appearance);
-      }
-      emitDesktopEvent(DESKTOP_EVENT_CHANNELS.systemAppearanceChanged, appearance);
-    });
+        emitDesktopEvent(DESKTOP_EVENT_CHANNELS.systemAppearanceChanged, appearance);
+      },
+    );
 
     installDesktopApplicationMenu({
       includeDevTools: !app.isPackaged,
-      openExternal: (url) => {
+      openExternal: (url: string) => {
         void shell.openExternal(url);
       },
       openQuickChat: () => {
         void quickChatController?.showQuickChatWindow();
       },
-      sendCommand: (command) => {
+      sendCommand: (command: DesktopMenuCommand) => {
         void sendMenuCommand(command);
       },
     });

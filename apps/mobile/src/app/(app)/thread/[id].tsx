@@ -1,5 +1,5 @@
 import { Stack, useLocalSearchParams } from "expo-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { FlatList, KeyboardAvoidingView, Pressable, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -14,6 +14,7 @@ import { getActiveCoworkJsonRpcClient } from "@/features/cowork/runtimeClient";
 import type { MobileThreadFeedEntry, PendingServerRequest } from "@/features/cowork/threadStore";
 import { useThreadStore } from "@/features/cowork/threadStore";
 import { useWorkspaceStore } from "@/features/cowork/workspaceStore";
+import { usePairingStore } from "@/features/pairing/pairingStore";
 import { useAppTheme } from "@/theme/use-app-theme";
 
 type ThreadDetailListItem =
@@ -49,6 +50,31 @@ export default function ThreadDetailScreen() {
       : typeof controlSnapshot?.sessionConfig?.featureFlags?.workspace?.a2ui === "boolean"
         ? controlSnapshot.sessionConfig.featureFlags.workspace.a2ui
         : false) === true;
+
+  const connectionState = usePairingStore((state) => state.connectionState);
+  const isConnected =
+    connectionState.status === "connected" && connectionState.transportMode === "native";
+
+  useEffect(() => {
+    let active = true;
+    async function loadThreadFeed() {
+      if (!threadId || isDraftThread || !isConnected || !runtimeClient) {
+        return;
+      }
+      try {
+        const reread = await runtimeClient.readThread(threadId);
+        if (active && reread.coworkSnapshot) {
+          useThreadStore.getState().hydrate(reread.coworkSnapshot);
+        }
+      } catch (error) {
+        console.error("Failed to load thread feed:", error);
+      }
+    }
+    void loadThreadFeed();
+    return () => {
+      active = false;
+    };
+  }, [threadId, isConnected, runtimeClient, isDraftThread]);
 
   if (!thread) {
     return (
@@ -212,8 +238,16 @@ export default function ThreadDetailScreen() {
             onSubmit={async () => {
               if (runtimeClient && !isDraftThread && activeThread.composerDraft.trim()) {
                 const draft = activeThread.composerDraft;
-                await runtimeClient.startTurn(activeThread.id, draft);
+                const clientMessageId = (globalThis as any).crypto.randomUUID() as string;
+                useThreadStore
+                  .getState()
+                  .appendOptimisticUserMessage(activeThread.id, draft, clientMessageId);
                 setComposerDraft(activeThread.id, "");
+                try {
+                  await runtimeClient.startTurn(activeThread.id, draft, clientMessageId);
+                } catch (error) {
+                  console.error("Failed to start turn:", error);
+                }
                 return;
               }
               submitComposer(activeThread.id);

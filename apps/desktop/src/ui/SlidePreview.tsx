@@ -1,4 +1,4 @@
-import { Loader2Icon, RefreshCwIcon, AlertTriangleIcon } from "lucide-react";
+import { AlertTriangleIcon, Loader2Icon, RefreshCwIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAppStore } from "../app/store";
 import { previewJsonRpcWorkspacePresentation } from "../app/store.helpers/jsonRpcSocket";
@@ -59,15 +59,15 @@ export function SlidePreview({ path, refreshTrigger }: SlidePreviewProps) {
     loadSlide();
   }, [loadSlide]);
 
-
-
   return (
     <div className="flex flex-col h-full bg-background text-foreground font-sans p-6 overflow-hidden">
       {/* Header toolbar */}
       <div className="flex items-center justify-between border-b border-border pb-4 mb-6">
         <div>
           <h2 className="text-lg font-semibold tracking-tight text-foreground">Slide Canvas</h2>
-          <p className="text-xs text-muted-foreground">Live preview of presentation slide component</p>
+          <p className="text-xs text-muted-foreground">
+            Live preview of presentation slide component
+          </p>
         </div>
         <Button
           variant="outline"
@@ -86,7 +86,9 @@ export function SlidePreview({ path, refreshTrigger }: SlidePreviewProps) {
         {loading ? (
           <div className="flex flex-col items-center justify-center gap-3">
             <Loader2Icon className="h-8 w-8 text-primary animate-spin" />
-            <p className="text-sm text-muted-foreground font-medium">Compiling slide component...</p>
+            <p className="text-sm text-muted-foreground font-medium">
+              Compiling slide component...
+            </p>
           </div>
         ) : error ? (
           <div className="flex flex-col items-center justify-center text-center p-6 max-w-md bg-muted/35 border border-border rounded-xl">
@@ -110,5 +112,4 @@ export function SlidePreview({ path, refreshTrigger }: SlidePreviewProps) {
       </div>
     </div>
   );
-
 }

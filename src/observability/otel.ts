@@ -18,6 +18,7 @@ export interface ObservabilityEvent {
   status?: "ok" | "error";
   durationMs?: number;
   attributes?: Record<string, string | number | boolean>;
+  forceFlush?: boolean;
 }
 
 export interface EmitObservabilityResult {
@@ -164,11 +165,13 @@ export async function emitObservabilityEvent(
     span.end(endTime);
     emitted = true;
 
-    try {
-      await runtime.forceFlush();
-      runtime.noteSuccess(config, "runtime_flush_ok");
-    } catch (flushErr) {
-      runtime.noteFailure("runtime_flush_failed", formatErrorMessage(flushErr));
+    if (event.forceFlush) {
+      try {
+        await runtime.forceFlush();
+        runtime.noteSuccess(config, "runtime_flush_ok");
+      } catch (flushErr) {
+        runtime.noteFailure("runtime_flush_failed", formatErrorMessage(flushErr));
+      }
     }
   } catch (err) {
     runtime.noteFailure("span_emit_failed", formatErrorMessage(err));

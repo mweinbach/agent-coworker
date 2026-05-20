@@ -1,5 +1,6 @@
 const path = require("node:path");
 const { getDefaultConfig } = require("expo/metro-config");
+const { withNativewind } = require("nativewind/metro");
 
 const projectRoot = __dirname;
 const workspaceRoot = path.resolve(projectRoot, "../..");
@@ -12,4 +13,9 @@ config.resolver.nodeModulesPaths = [
   path.resolve(workspaceRoot, "node_modules"),
 ];
 
-module.exports = config;
+module.exports = withNativewind(config, {
+  // inline variables break PlatformColor in CSS variables
+  inlineVariables: false,
+  // We add className support manually
+  globalClassNamePolyfill: false,
+});

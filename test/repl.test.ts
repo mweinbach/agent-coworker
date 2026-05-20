@@ -304,6 +304,18 @@ describe("REPL command parsing", () => {
     expect(result.arg).toBe("/path/with spaces/dir");
   });
 
+  test("/cwd preserves multiple consecutive spaces in argument", () => {
+    const result = parseReplInput("/cwd /path/with  multiple   spaces/dir");
+    expect(result.type).toBe("cwd");
+    expect(result.arg).toBe("/path/with  multiple   spaces/dir");
+  });
+
+  test("/connect preserves multiple consecutive spaces in credentials", () => {
+    const result = parseReplInput("/connect openai sk-test  with   spaces ");
+    expect(result.type).toBe("connect");
+    expect(result.arg).toBe("openai sk-test  with   spaces");
+  });
+
   test("/verbosity is parsed correctly", () => {
     const result = parseReplInput("/verbosity medium");
     expect(result.type).toBe("verbosity");
@@ -864,5 +876,123 @@ describe("normalizeApprovalAnswer", () => {
 
   test("whitespace-padded 'y' returns true", () => {
     expect(normalizeApprovalAnswer("  y  ")).toBe(true);
+  });
+});
+
+import readline from "node:readline";
+import { Readable, Writable } from "node:stream";
+import { promptForApiKey, promptForProviderFields } from "../src/cli/repl/authPrompts";
+
+describe("REPL auth prompts", () => {
+  class MockWritable extends Writable {
+    chunks: string[] = [];
+    _write(chunk: any, encoding: string, callback: () => void) {
+      this.chunks.push(chunk.toString());
+      callback();
+    }
+  }
+
+  class MockReadable extends Readable {
+    _read() {}
+  }
+
+  test("promptForApiKey masks/hides key typing", async () => {
+    const input = new MockReadable();
+    const output = new MockWritable();
+    const rl = readline.createInterface({ input, output, terminal: true });
+
+    const promptPromise = promptForApiKey(rl, "openai");
+
+    // Wait a tick for prompt to be written
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    // Reset chunks to ignore prompt print
+    output.chunks = [];
+
+    // Simulate typing a secret key
+    input.push("s");
+    input.push("e");
+    input.push("c");
+    input.push("r");
+    input.push("e");
+    input.push("t");
+    input.push("\n");
+
+    const answer = await promptPromise;
+
+    expect(answer).toBe("secret");
+    // Verify that the secret characters were not printed to the output
+    const typedOutput = output.chunks.join("");
+    expect(typedOutput).not.toContain("s");
+    expect(typedOutput).not.toContain("secret");
+    rl.close();
+  });
+
+  test("promptForProviderFields masks password field but not text field", async () => {
+    const input = new MockReadable();
+    const output = new MockWritable();
+    const rl = readline.createInterface({ input, output, terminal: true });
+
+    const method = {
+      id: "aws_keys",
+      type: "api" as const,
+      label: "AWS keys",
+      fields: [
+        { id: "accessKeyId", label: "Access Key ID", kind: "text" as const, required: true },
+        {
+          id: "secretAccessKey",
+          label: "Secret Access Key",
+          kind: "password" as const,
+          required: true,
+        },
+      ],
+    };
+
+    const promptPromise = promptForProviderFields(rl, "bedrock", method);
+
+    // Wait a tick
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    // Answer for accessKeyId (text field - should not be masked)
+    output.chunks = [];
+    input.push("A");
+    input.push("K");
+    input.push("I");
+    input.push("A");
+    input.push("\n");
+
+    // Wait a tick for the second prompt
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    // Verify first field typed characters were printed
+    let typedOutput = output.chunks.join("");
+    expect(typedOutput).toContain("A");
+    expect(typedOutput).toContain("K");
+
+    // Answer for secretAccessKey (password field - should be masked)
+    output.chunks = [];
+    input.push("m");
+    input.push("y");
+    input.push("s");
+    input.push("e");
+    input.push("c");
+    input.push("r");
+    input.push("e");
+    input.push("t");
+    input.push("\n");
+
+    const answer = await promptPromise;
+
+    expect(answer).toEqual({
+      accessKeyId: "AKIA",
+      secretAccessKey: "mysecret",
+    });
+
+    // Verify second field typed characters were NOT printed
+    typedOutput = output.chunks.join("");
+    expect(typedOutput).not.toContain("m");
+    expect(typedOutput).not.toContain("mysecret");
+
+    rl.close();
   });
 });

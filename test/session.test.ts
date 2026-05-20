@@ -100,6 +100,18 @@ const mockWritePersistedSessionSnapshot = mock(
   async () => "/tmp/mock-home/.cowork/sessions/mock.json",
 );
 
+const mockClosePooledCodexAppServerClient = mock(async () => {});
+const codexResolvedPath = path.resolve("src/providers/codexAppServerClient");
+mock.module(codexResolvedPath, () => ({
+  closePooledCodexAppServerClient: mockClosePooledCodexAppServerClient,
+}));
+mock.module(codexResolvedPath + ".ts", () => ({
+  closePooledCodexAppServerClient: mockClosePooledCodexAppServerClient,
+}));
+mock.module("../src/providers/codexAppServerClient", () => ({
+  closePooledCodexAppServerClient: mockClosePooledCodexAppServerClient,
+}));
+
 // Import AgentSession AFTER the runTurn mock is registered so it picks up the mock.
 const { AgentSession } = await import("../src/server/session/AgentSession");
 
@@ -335,6 +347,7 @@ describe("AgentSession", () => {
     await observabilityRuntimeInternal.resetForTests();
 
     mockRunTurn.mockReset();
+    mockClosePooledCodexAppServerClient.mockClear();
     mockRunTurn.mockImplementation(async () => ({
       text: "",
       reasoningText: undefined,
@@ -3070,6 +3083,27 @@ describe("AgentSession", () => {
     test("handles dispose when no pending requests exist", () => {
       const { session } = makeSession();
       expect(() => session.dispose("no-op")).not.toThrow();
+    });
+
+    test("dispose calls close on mcpManager if it was initialized", () => {
+      const { session } = makeSession();
+      const mcpManager = (session as any).getMcpManager();
+      const closeSpy = mock(() => {});
+      mcpManager.close = closeSpy;
+
+      session.dispose("test");
+
+      expect(closeSpy).toHaveBeenCalledTimes(1);
+    });
+
+    test("dispose calls closePooledCodexAppServerClient if provider is codex-cli", () => {
+      const config = makeConfig("/tmp/test-session");
+      config.provider = "codex-cli";
+      const { session } = makeSession({ config });
+
+      session.dispose("test");
+
+      expect(mockClosePooledCodexAppServerClient).toHaveBeenCalledTimes(1);
     });
 
     test("rejects both ask and approval requests simultaneously", async () => {

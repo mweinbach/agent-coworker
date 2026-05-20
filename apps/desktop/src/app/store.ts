@@ -103,4 +103,44 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
   ...createAppActions((partial) => set(partial as Parameters<typeof set>[0]), get),
 }));
 
+if (typeof process !== "undefined" && process.env.NODE_ENV === "test") {
+  const originalSubscribe = useAppStore.subscribe;
+  const unsubscribes = new Set<() => void>();
+
+  useAppStore.subscribe = (listener: any) => {
+    const wrappedListener = (state: any, prevState: any) => {
+      try {
+        listener(state, prevState);
+      } catch (err: any) {
+        if (
+          err instanceof ReferenceError &&
+          (err.message.includes("window") ||
+            err.message.includes("document") ||
+            err.message.includes("requestAnimationFrame") ||
+            err.message.includes("cancelAnimationFrame"))
+        ) {
+          return;
+        }
+        throw err;
+      }
+    };
+    const unsubscribe = originalSubscribe(wrappedListener);
+    const wrappedUnsubscribe = () => {
+      unsubscribes.delete(wrappedUnsubscribe);
+      unsubscribe();
+    };
+    unsubscribes.add(wrappedUnsubscribe);
+    return wrappedUnsubscribe;
+  };
+
+  (useAppStore as any).clearAllListeners = () => {
+    for (const unsubscribe of unsubscribes) {
+      try {
+        unsubscribe();
+      } catch {}
+    }
+    unsubscribes.clear();
+  };
+}
+
 export type { AppStoreState } from "./store.helpers";

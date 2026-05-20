@@ -414,6 +414,12 @@ export async function createAgentServerRuntime(
       } catch {
         // ignore
       }
+      try {
+        const { shutdownObservabilityRuntime } = await import("../../observability/runtime");
+        await shutdownObservabilityRuntime();
+      } catch {
+        // ignore
+      }
     },
   };
 }

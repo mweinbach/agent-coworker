@@ -364,7 +364,7 @@ export function projectResponsesStreamEvent(
   }
 
   if (event.type === "error") {
-    throw new Error(`Error Code ${event.code}: ${event.message}` || "Unknown error");
+    throw new Error(event.message || (event.code ? `Error Code ${event.code}` : "Unknown error"));
   }
 
   if (event.type === "response.failed") {

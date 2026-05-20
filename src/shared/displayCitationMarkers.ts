@@ -82,13 +82,21 @@ function maybeParseJson(value: string): unknown {
   }
 }
 
+function escapeMarkdownUrl(value: string): string {
+  return value
+    .replaceAll("[", "%5B")
+    .replaceAll("]", "%5D")
+    .replaceAll("(", "%28")
+    .replaceAll(")", "%29");
+}
+
 function toMarkdownCitationLabel(
   id: string,
   citationUrlsByIndex?: ReadonlyMap<number, string>,
 ): string | null {
   const numericId = Number.parseInt(id, 10);
   const url = Number.isFinite(numericId) ? citationUrlsByIndex?.get(numericId) : undefined;
-  return url ? `[${id}](${url})` : null;
+  return url ? `[${id}](${escapeMarkdownUrl(url)})` : null;
 }
 
 function toHtmlCitationLabel(
@@ -97,7 +105,7 @@ function toHtmlCitationLabel(
 ): string | null {
   const numericId = Number.parseInt(id, 10);
   const url = Number.isFinite(numericId) ? citationUrlsByIndex?.get(numericId) : undefined;
-  return url ? `<a href="${url}">${id}</a>` : null;
+  return url ? `<a href="${escapeHtml(url)}">${escapeHtml(id)}</a>` : null;
 }
 
 function toHtmlCitationCluster(

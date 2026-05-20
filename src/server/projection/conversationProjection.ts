@@ -472,10 +472,8 @@ export function createConversationProjection(opts: CreateConversationProjectionO
       }
     }
 
-
     return text;
   };
-
 
   const reasoningStreamKey = (turnId: string, part: Record<string, unknown> | undefined) =>
     `${turnId}:${readPartString(part, "id") ?? "default"}`;

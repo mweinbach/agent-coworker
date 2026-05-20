@@ -126,6 +126,48 @@ describe("desktop persistence state validation", () => {
     expect(loaded.threads[0]?.id).toBe("thread_valid");
   });
 
+  test("saveState preserves yolo configuration", async () => {
+    const persistence = new PersistenceService();
+    const workspaceYoloTrue = path.join(userDataDir, "workspace-yolo-true");
+    const workspaceYoloFalse = path.join(userDataDir, "workspace-yolo-false");
+    await fs.mkdir(workspaceYoloTrue, { recursive: true });
+    await fs.mkdir(workspaceYoloFalse, { recursive: true });
+
+    await persistence.saveState({
+      version: 2,
+      workspaces: [
+        {
+          id: "ws_yolo_true",
+          name: "Yolo True Workspace",
+          path: workspaceYoloTrue,
+          createdAt: TS,
+          lastOpenedAt: TS,
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: false,
+          yolo: true,
+        },
+        {
+          id: "ws_yolo_false",
+          name: "Yolo False Workspace",
+          path: workspaceYoloFalse,
+          createdAt: TS,
+          lastOpenedAt: TS,
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: false,
+          yolo: false,
+        },
+      ],
+      threads: [],
+    });
+
+    const loaded = await persistence.loadState();
+    expect(loaded.workspaces).toHaveLength(2);
+    const wsTrue = loaded.workspaces.find((w) => w.id === "ws_yolo_true");
+    const wsFalse = loaded.workspaces.find((w) => w.id === "ws_yolo_false");
+    expect(wsTrue?.yolo).toBe(true);
+    expect(wsFalse?.yolo).toBe(false);
+  });
+
   test("recreates missing one-off chat folders but still drops missing projects", async () => {
     const persistence = new PersistenceService();
     const missingProject = path.join(userDataDir, "workspace-missing-project");

@@ -405,4 +405,3 @@ describe("desktop server manager bun crash detection", () => {
     expect(childPending.exitCode).toBe(0);
   });
 });
-

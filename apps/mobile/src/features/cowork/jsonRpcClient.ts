@@ -273,10 +273,11 @@ export class CoworkJsonRpcClient {
     return coworkThreadReadResultSchema.parse(result);
   }
 
-  async startTurn(threadId: string, text: string): Promise<void> {
+  async startTurn(threadId: string, text: string, clientMessageId?: string): Promise<void> {
     await this.request("turn/start", {
       threadId,
       input: [{ type: "text", text }],
+      ...(clientMessageId ? { clientMessageId } : {}),
     });
   }
 
@@ -309,7 +310,8 @@ export class CoworkJsonRpcClient {
     let message: JsonRpcRequestMessage | JsonRpcNotificationMessage | JsonRpcResponseMessage;
     try {
       message = parseJsonMessage(raw);
-    } catch {
+    } catch (err) {
+      console.warn("[jsonRpcClient] Failed to parse message:", err);
       return;
     }
     if ("id" in message && "method" in message) {
@@ -318,7 +320,8 @@ export class CoworkJsonRpcClient {
         if (serverRequest && this.onServerRequest) {
           this.onServerRequest(serverRequest);
         }
-      } catch {
+      } catch (err) {
+        console.warn("[jsonRpcClient] Failed to normalize server request:", err);
         return;
       }
       return;
@@ -343,7 +346,8 @@ export class CoworkJsonRpcClient {
         if (notification) {
           this.onNotification?.(notification);
         }
-      } catch {
+      } catch (err) {
+        console.warn("[jsonRpcClient] Failed to normalize notification:", err);
         return;
       }
     }

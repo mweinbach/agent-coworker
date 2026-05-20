@@ -1,11 +1,11 @@
 import {
-  Loader2Icon,
   AlertTriangleIcon,
-  RefreshCwIcon,
-  LayoutGridIcon,
-  ColumnsIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
+  ColumnsIcon,
+  LayoutGridIcon,
+  Loader2Icon,
+  RefreshCwIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAppStore } from "../app/store";
@@ -76,7 +76,6 @@ export function PptxPreview({ path }: PptxPreviewProps) {
     loadPresentation();
   }, [loadPresentation]);
 
-
   const activeSlide = slides[activeIndex];
 
   const handlePrev = useCallback(() => {
@@ -92,7 +91,9 @@ export function PptxPreview({ path }: PptxPreviewProps) {
       {/* Header Toolbar */}
       <div className="flex items-center justify-between border-b border-border pb-4 mb-6">
         <div>
-          <h2 className="text-lg font-semibold tracking-tight text-foreground">Presentation Preview</h2>
+          <h2 className="text-lg font-semibold tracking-tight text-foreground">
+            Presentation Preview
+          </h2>
           <p className="text-xs text-muted-foreground truncate max-w-md">
             {path.replace(/\\/g, "/").split("/").pop()}
           </p>
@@ -138,7 +139,9 @@ export function PptxPreview({ path }: PptxPreviewProps) {
         {loading ? (
           <div className="flex-1 flex flex-col items-center justify-center gap-3">
             <Loader2Icon className="h-8 w-8 text-primary animate-spin" />
-            <p className="text-sm text-muted-foreground font-medium">Generating presentation slides...</p>
+            <p className="text-sm text-muted-foreground font-medium">
+              Generating presentation slides...
+            </p>
           </div>
         ) : error ? (
           <div className="flex-1 flex items-center justify-center">
@@ -192,7 +195,6 @@ export function PptxPreview({ path }: PptxPreviewProps) {
                 </button>
               ))}
             </div>
-
 
             {/* Main Full-Size Slide Viewer */}
             <div className="flex-1 flex flex-col min-h-0 relative bg-muted/20 border border-border/40 rounded-2xl p-6">
@@ -270,4 +272,3 @@ export function PptxPreview({ path }: PptxPreviewProps) {
     </div>
   );
 }
-

@@ -19,11 +19,12 @@ function resetAppStore(overrides: Record<string, unknown> = {}) {
 describe("MessageBarResizer", () => {
   test.serial("renders successfully and handles keyboard events correctly", async () => {
     const harness = setupJsdom({ includeAnimationFrame: true });
+    let root: ReturnType<typeof createRoot> | null = null;
 
     try {
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
-      const root = createRoot(container);
+      root = createRoot(container);
 
       resetAppStore();
 
@@ -76,22 +77,26 @@ describe("MessageBarResizer", () => {
         );
       });
       expect(useAppStore.getState().messageBarHeight).toBe(80);
-
-      await act(async () => {
-        root.unmount();
-      });
     } finally {
+      if (root) {
+        try {
+          await act(async () => {
+            root!.unmount();
+          });
+        } catch {}
+      }
       harness.restore();
     }
   });
 
   test.serial("handles dragging with pointer events correctly", async () => {
     const harness = setupJsdom({ includeAnimationFrame: true });
+    let root: ReturnType<typeof createRoot> | null = null;
 
     try {
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
-      const root = createRoot(container);
+      root = createRoot(container);
 
       resetAppStore();
 
@@ -139,11 +144,14 @@ describe("MessageBarResizer", () => {
       expect(harness.dom.window.document.body.classList.contains("app-resizing-message-bar")).toBe(
         false,
       );
-
-      await act(async () => {
-        root.unmount();
-      });
     } finally {
+      if (root) {
+        try {
+          await act(async () => {
+            root!.unmount();
+          });
+        } catch {}
+      }
       harness.restore();
     }
   });

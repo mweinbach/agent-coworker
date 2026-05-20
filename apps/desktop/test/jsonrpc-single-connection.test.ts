@@ -630,6 +630,49 @@ describe("desktop JSON-RPC single connection path", () => {
     });
   });
 
+  test("surfaces first-message thread start failures in the chat feed", async () => {
+    jsonRpcRequestFailures.set("thread/start", "thread/start failed");
+
+    const created = await useAppStore.getState().newThread({
+      workspaceId: "ws-jsonrpc",
+      titleHint: "what happened at IO",
+      firstMessage: "what happened at IO",
+    });
+    await flushAsyncWork();
+
+    expect(created).toBe(true);
+    expect(jsonRpcRequests.map((entry) => entry.method)).toContain("thread/start");
+    expect(jsonRpcRequests.map((entry) => entry.method)).not.toContain("turn/start");
+
+    const state = useAppStore.getState();
+    const selectedThreadId = state.selectedThreadId;
+    expect(selectedThreadId).toEqual(expect.any(String));
+    const thread = state.threads.find((entry) => entry.id === selectedThreadId);
+    expect(thread).toMatchObject({
+      title: "what happened at IO",
+      status: "disconnected",
+      sessionId: null,
+    });
+    expect(state.threadRuntimeById[selectedThreadId!]?.feed).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "message",
+          role: "user",
+          text: "what happened at IO",
+        }),
+        expect.objectContaining({
+          kind: "error",
+          message: "Not connected. Reconnect to continue.",
+        }),
+      ]),
+    );
+    expect(state.notifications.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Unable to start chat",
+      detail: "thread/start failed",
+    });
+  });
+
   test("surfaces turn/start rejection as an error without changing optimistic send semantics", async () => {
     seedActiveThreadState();
     jsonRpcRequestFailures.set("turn/start", "turn/start failed");

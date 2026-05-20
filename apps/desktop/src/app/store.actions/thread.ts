@@ -941,7 +941,15 @@ export function createThreadActions(
       if (hasFirstMessage || hasResolvedAttachments) {
         queuePendingThreadMessage(threadId, firstMessage, resolvedAttachments);
       }
-      ensureThreadSocket(get, set, threadId, url, firstMessage, hasFirstMessage);
+      ensureThreadSocket(
+        get,
+        set,
+        threadId,
+        url,
+        firstMessage,
+        hasFirstMessage,
+        resolvedAttachments,
+      );
       return true;
     },
 
@@ -1025,7 +1033,15 @@ export function createThreadActions(
       if (hasFirstMessage || hasQueuedAttachments) {
         queuePendingThreadMessage(threadId, firstMessage ?? "", opts?.attachments);
       }
-      ensureThreadSocket(get, set, threadId, url, firstMessage, Boolean(firstMessage?.trim()));
+      ensureThreadSocket(
+        get,
+        set,
+        threadId,
+        url,
+        firstMessage,
+        Boolean(firstMessage?.trim()),
+        opts?.attachments,
+      );
       return true;
     },
 

@@ -520,10 +520,40 @@ async function findFirstRuntimeSkillSource(
   return null;
 }
 
-async function shouldOverwriteGlobalSkill(destination: string, force: boolean): Promise<boolean> {
+function expectedBootstrapInstallationId(name: CodexRuntimeSkillName): string {
+  return `bootstrap-codex-primary-runtime-${name}`;
+}
+
+function expectedBootstrapOriginSubdir(spec: SkillSourceSpec): string {
+  return `plugins/openai-primary-runtime/plugins/${spec.pluginName}/skills/${spec.sourceSkillName}`;
+}
+
+function isCurrentRuntimeSkillManifest(
+  manifest: Awaited<ReturnType<typeof readSkillInstallManifest>>,
+  spec: SkillSourceSpec,
+): boolean {
+  return (
+    manifest?.origin?.kind === "bootstrap" &&
+    manifest.installationId === expectedBootstrapInstallationId(spec.name) &&
+    manifest.origin.url === CODEX_CURATED_PLUGINS_EXPORT_URL &&
+    manifest.origin.subdir === expectedBootstrapOriginSubdir(spec)
+  );
+}
+
+async function shouldOverwriteGlobalSkill(
+  destination: string,
+  spec: SkillSourceSpec,
+  force: boolean,
+): Promise<boolean> {
   if (force) return true;
   if (!(await pathExists(destination))) return true;
   const manifest = await readSkillInstallManifest(destination);
+  if (
+    isCurrentRuntimeSkillManifest(manifest, spec) &&
+    (await pathExists(path.join(destination, "SKILL.md")))
+  ) {
+    return false;
+  }
   return manifest?.origin?.kind === "bootstrap";
 }
 
@@ -587,7 +617,7 @@ async function installSkill(opts: {
   }
 
   const overwrite = opts.global
-    ? await shouldOverwriteGlobalSkill(destination, opts.force)
+    ? await shouldOverwriteGlobalSkill(destination, opts.spec, opts.force)
     : opts.force || !(await pathExists(destination));
   if (!overwrite) {
     return { name: opts.spec.name, status: "already_installed", source: opts.source, destination };
@@ -603,7 +633,7 @@ async function installSkill(opts: {
       origin: {
         kind: "bootstrap",
         url: CODEX_CURATED_PLUGINS_EXPORT_URL,
-        subdir: `plugins/openai-primary-runtime/plugins/${opts.spec.pluginName}/skills/${opts.spec.sourceSkillName}`,
+        subdir: expectedBootstrapOriginSubdir(opts.spec),
       },
     });
   }

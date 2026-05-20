@@ -261,6 +261,51 @@ describe("Codex primary runtime bootstrap", () => {
     }
   });
 
+  test("does not reinstall current managed runtime skills on later startup", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-runtime-repeat-"));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-runtime-workspace-"));
+    const builtInRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-runtime-built-in-"));
+    const bundledRuntimeDir = path.join(builtInRoot, "codex-primary-runtime");
+    await writeFakeBundledRuntime(bundledRuntimeDir);
+    const fetchImpl = mock(async () => new Response("unexpected", { status: 500 })) as typeof fetch;
+    const globalSkillsDir = path.join(home, ".cowork", "skills");
+    const builtInSkillsDir = path.join(builtInRoot, "skills");
+
+    try {
+      await ensureCodexPrimaryRuntimeReady({
+        homedir: home,
+        workspaceDir: workspace,
+        builtInSkillsDir,
+        globalSkillsDir,
+        fetchImpl,
+        allowNetwork: false,
+      });
+      const documentsManifestPath = path.join(globalSkillsDir, "documents", ".cowork-skill.json");
+      const firstDocumentsManifest = await fs.readFile(documentsManifestPath, "utf-8");
+      const secondLogs: string[] = [];
+
+      const second = await ensureCodexPrimaryRuntimeReady({
+        homedir: home,
+        workspaceDir: workspace,
+        builtInSkillsDir,
+        globalSkillsDir,
+        fetchImpl,
+        allowNetwork: false,
+        log: (line) => secondLogs.push(line),
+      });
+
+      expect(second?.skills.every((skill) => skill.status === "already_installed")).toBe(true);
+      expect(secondLogs.filter((line) => line.startsWith("Installing Codex "))).toEqual([]);
+      await expect(fs.readFile(documentsManifestPath, "utf-8")).resolves.toBe(
+        firstDocumentsManifest,
+      );
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(builtInRoot, { recursive: true, force: true });
+    }
+  });
+
   test("overwrites managed bootstrap skills but preserves manual global skills", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-runtime-global-"));
     const globalSkillsDir = path.join(home, ".cowork", "skills");

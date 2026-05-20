@@ -84,6 +84,24 @@ describe("desktop server manager startup parsing", () => {
     expect(payload.port).toBe(1234);
   });
 
+  test("waitForServerListening preserves browser access tokens from startup JSON", async () => {
+    const child = createFakeChild();
+    const waitPromise = __internal.waitForServerListening(child as any);
+
+    child.stdout.write(
+      `${JSON.stringify({
+        type: "server_listening",
+        url: "ws://127.0.0.1:1234/ws",
+        port: 1234,
+        cwd: "/tmp/workspace",
+        browserAccessToken: "browser-token",
+      })}\n`,
+    );
+
+    const payload = await waitPromise;
+    expect(payload.browserAccessToken).toBe("browser-token");
+  });
+
   test("waitForServerListening ignores mobile H3 payloads without host hints", async () => {
     const child = createFakeChild();
     const waitPromise = __internal.waitForServerListening(child as any);
@@ -186,8 +204,38 @@ describe("desktop server manager startup mode", () => {
   test("buildServerEnv mirrors process env without desktop-only skill bootstrap flags", () => {
     const env = __internal.buildServerEnv();
     expect(env).not.toBe(process.env);
+    expect(env.COWORK_BROWSER_ACCESS_TOKEN).toEqual(expect.any(String));
+    expect(env.COWORK_BROWSER_ACCESS_TOKEN?.length).toBeGreaterThan(20);
     expect(env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP).toBe(
       process.env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP ?? "1",
+    );
+  });
+
+  test("buildServerEnv preserves explicit browser access tokens", () => {
+    const previous = process.env.COWORK_BROWSER_ACCESS_TOKEN;
+    try {
+      process.env.COWORK_BROWSER_ACCESS_TOKEN = "explicit-browser-token";
+      expect(__internal.buildServerEnv().COWORK_BROWSER_ACCESS_TOKEN).toBe(
+        "explicit-browser-token",
+      );
+    } finally {
+      if (previous === undefined) delete process.env.COWORK_BROWSER_ACCESS_TOKEN;
+      else process.env.COWORK_BROWSER_ACCESS_TOKEN = previous;
+    }
+  });
+
+  test("appendBrowserAccessToken returns a browser-authorized websocket URL", () => {
+    expect(
+      __internal.appendBrowserAccessToken("ws://127.0.0.1:7337/ws", "token value"),
+    ).toBe("ws://127.0.0.1:7337/ws?coworkBrowserToken=token+value");
+    expect(
+      __internal.appendBrowserAccessToken(
+        "ws://127.0.0.1:7337/ws?existing=1",
+        "token",
+      ),
+    ).toBe("ws://127.0.0.1:7337/ws?existing=1&coworkBrowserToken=token");
+    expect(__internal.appendBrowserAccessToken("ws://127.0.0.1:7337/ws", null)).toBe(
+      "ws://127.0.0.1:7337/ws",
     );
   });
 
@@ -249,6 +297,25 @@ describe("desktop server manager startup mode", () => {
     expect(__internal.getSourceStartupAttemptCount(true, "win32")).toBe(2);
     expect(__internal.getSourceStartupAttemptCount(true, "darwin")).toBe(1);
     expect(__internal.getSourceStartupAttemptCount(false, "win32")).toBe(1);
+  });
+
+  test("server startup timeout leaves room for first-run bundled bootstrap", () => {
+    expect(__internal.getServerStartupTimeoutMs({})).toBe(45_000);
+    expect(
+      __internal.getServerStartupTimeoutMs({
+        COWORK_DESKTOP_SERVER_STARTUP_TIMEOUT_MS: "1",
+      }),
+    ).toBe(5_000);
+    expect(
+      __internal.getServerStartupTimeoutMs({
+        COWORK_DESKTOP_SERVER_STARTUP_TIMEOUT_MS: "12000",
+      }),
+    ).toBe(12_000);
+    expect(
+      __internal.getServerStartupTimeoutMs({
+        COWORK_DESKTOP_SERVER_STARTUP_TIMEOUT_MS: "600000",
+      }),
+    ).toBe(300_000);
   });
 
   test("only injects Bun transpiler cache env for Windows source attempts", () => {

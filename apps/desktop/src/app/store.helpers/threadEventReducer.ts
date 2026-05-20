@@ -564,6 +564,57 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     });
   }
 
+  function surfaceJsonRpcThreadStartFailure(
+    set: StoreSet,
+    threadId: string,
+    attemptedText?: string,
+    attemptedAttachments?: FileAttachmentInput[],
+    error?: unknown,
+  ) {
+    const displayText = buildUserInputDisplayText(
+      attemptedText?.trim() ?? "",
+      attemptedAttachments,
+    );
+
+    if (displayText) {
+      const attemptedItem: FeedItem = {
+        id: deps.makeId(),
+        kind: "message",
+        role: "user",
+        ts: deps.nowIso(),
+        text: displayText,
+      };
+      set((s) => {
+        const rt = s.threadRuntimeById[threadId];
+        if (!rt) return {};
+        const alreadyVisible = rt.feed.some(
+          (item) => item.kind === "message" && item.role === "user" && item.text === displayText,
+        );
+        if (alreadyVisible) return {};
+        return {
+          threadRuntimeById: {
+            ...s.threadRuntimeById,
+            [threadId]: {
+              ...rt,
+              feed: [...rt.feed, attemptedItem].slice(-MAX_FEED_ITEMS),
+            },
+          },
+        };
+      });
+    }
+
+    surfaceJsonRpcTurnSendFailure(set, threadId);
+    set((s) => ({
+      notifications: deps.pushNotification(s.notifications, {
+        id: deps.makeId(),
+        ts: deps.nowIso(),
+        kind: "error",
+        title: "Unable to start chat",
+        detail: error instanceof Error ? error.message : String(error ?? "Connection failed."),
+      }),
+    }));
+  }
+
   function updateFeedItem(
     set: StoreSet,
     threadId: string,
@@ -2004,6 +2055,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     url: string,
     pendingFirstMessage?: string,
     pendingFirstMessageQueued = false,
+    pendingFirstMessageAttachments?: FileAttachmentInput[],
   ) {
     const workspaceId = workspaceIdForThread(get, threadId);
     if (!workspaceId) {
@@ -2093,7 +2145,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
         if (snapshot) {
           applyJsonRpcThreadSnapshot(get, set, activeThreadId, snapshot);
         }
-      } catch {
+      } catch (error) {
         if (isWorkspaceDisposed(workspaceId)) {
           return;
         }
@@ -2120,6 +2172,13 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
             ),
           };
         });
+        surfaceJsonRpcThreadStartFailure(
+          set,
+          activeThreadId,
+          pendingFirstMessage,
+          pendingFirstMessageAttachments,
+          error,
+        );
       }
     })().finally(() => {
       for (const connectKey of connectKeys) {

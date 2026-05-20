@@ -1,4 +1,5 @@
 import { type ChildProcessByStdio, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
@@ -16,7 +17,9 @@ import {
 import { findPackagedSidecarLaunchCommand, resolvePackagedCodexAppServerFilename } from "./sidecar";
 import { assertSafeId, assertWorkspaceDirectory } from "./validation";
 
-const SERVER_STARTUP_TIMEOUT_MS = 15_000;
+const DEFAULT_SERVER_STARTUP_TIMEOUT_MS = 45_000;
+const MIN_SERVER_STARTUP_TIMEOUT_MS = 5_000;
+const MAX_SERVER_STARTUP_TIMEOUT_MS = 300_000;
 const STDERR_TAIL_LIMIT = 16_384;
 const SERVER_LOG_FILE_NAME = "server.log";
 const DEBUG_SERVER_STDERR = process.env.COWORK_DESKTOP_DEBUG_SERVER_STDERR === "1";
@@ -40,6 +43,7 @@ type ServerListening = {
   url: string;
   port: number;
   cwd: string;
+  browserAccessToken?: string | null;
   mobileH3?: {
     url: string;
     port: number;
@@ -73,6 +77,7 @@ const serverListeningSchema = z
     url: z.string().min(1),
     port: z.number(),
     cwd: z.string().min(1),
+    browserAccessToken: z.string().min(1).nullable().optional(),
     mobileH3: z
       .object({
         url: z.string().min(1),
@@ -233,7 +238,23 @@ async function gracefulKill(child: ServerChildProcess): Promise<void> {
   await waitForExit(child, 1_000);
 }
 
-function waitForServerListening(child: ServerChildProcess): Promise<ServerListening> {
+function getServerStartupTimeoutMs(
+  env: Record<string, string | undefined> = process.env,
+): number {
+  const parsed = Number(env.COWORK_DESKTOP_SERVER_STARTUP_TIMEOUT_MS);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_SERVER_STARTUP_TIMEOUT_MS;
+  }
+  return Math.min(
+    MAX_SERVER_STARTUP_TIMEOUT_MS,
+    Math.max(MIN_SERVER_STARTUP_TIMEOUT_MS, Math.floor(parsed)),
+  );
+}
+
+function waitForServerListening(
+  child: ServerChildProcess,
+  timeoutMs = getServerStartupTimeoutMs(),
+): Promise<ServerListening> {
   return new Promise((resolve, reject) => {
     const rl = readline.createInterface({ input: child.stdout });
     const recentLines: string[] = [];
@@ -276,12 +297,10 @@ function waitForServerListening(child: ServerChildProcess): Promise<ServerListen
       cleanup();
       reject(
         new Error(
-          withRecentOutput(
-            `Server startup timed out after ${SERVER_STARTUP_TIMEOUT_MS / 1000} seconds`,
-          ),
+          withRecentOutput(`Server startup timed out after ${timeoutMs / 1000} seconds`),
         ),
       );
-    }, SERVER_STARTUP_TIMEOUT_MS);
+    }, timeoutMs);
 
     const cleanup = () => {
       clearTimeout(timeout);
@@ -348,6 +367,9 @@ function buildServerEnv(featureFlags?: { openAiNativeConnectors?: boolean }): No
   const bundledCodexPrimaryRuntime = findBundledCodexPrimaryRuntimeDir();
   return {
     ...process.env,
+    COWORK_BROWSER_ACCESS_TOKEN:
+      process.env.COWORK_BROWSER_ACCESS_TOKEN?.trim() ||
+      `${randomUUID()}${randomUUID().replaceAll("-", "")}`,
     COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: process.env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP ?? "1",
     ...(bundledCodexAppServer
       ? { COWORK_CODEX_APP_SERVER_COMMAND: bundledCodexAppServer, COWORK_CODEX_APP_SERVER_ARGS: "" }
@@ -359,6 +381,18 @@ function buildServerEnv(featureFlags?: { openAiNativeConnectors?: boolean }): No
       ? { COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS: "1" }
       : {}),
   };
+}
+
+function appendBrowserAccessToken(websocketUrl: string, token?: string | null): string {
+  const trimmed = token?.trim();
+  if (!trimmed) return websocketUrl;
+  try {
+    const url = new URL(websocketUrl);
+    url.searchParams.set("coworkBrowserToken", trimmed);
+    return url.toString();
+  } catch {
+    return websocketUrl;
+  }
 }
 
 function isLikelyBunSegfault(stderrOutput: string): boolean {
@@ -553,8 +587,8 @@ export class ServerManager {
 
       try {
         const listening = await waitForServerListening(child);
-        const url = listening.url;
-        logServerManagerEvent(`workspace=${workspaceId} listening url=${url}`);
+        const url = appendBrowserAccessToken(listening.url, listening.browserAccessToken);
+        logServerManagerEvent(`workspace=${workspaceId} listening url=${listening.url}`);
         const pendingHandle = this.pendingStarts.get(workspaceId);
         if (pendingHandle?.child === child) {
           this.pendingStarts.delete(workspaceId);
@@ -719,6 +753,8 @@ export const __internal = {
   findSidecarLaunchCommand,
   getServerTerminationSignal,
   getServerLogPath,
+  getServerStartupTimeoutMs,
+  appendBrowserAccessToken,
   getSourceStartupAttemptCount,
   isLikelyBunSegfault,
   logServerManagerEvent,

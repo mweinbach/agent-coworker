@@ -46,6 +46,7 @@ export type ThreadModelStreamFeedOps = {
   makeId: () => string;
   nowIso: () => string;
   pushFeedItem: (item: FeedItem) => void;
+  insertFeedItemBefore?: (beforeItemId: string, item: FeedItem) => void;
   updateFeedItem: (itemId: string, update: (item: FeedItem) => FeedItem) => void;
   onToolTerminal?: () => void;
 };
@@ -761,7 +762,22 @@ function applyModelStreamUpdate(
     } else if (nextText) {
       const id = ops.makeId();
       stream.reasoningItemIdByStream.set(key, id);
-      push({ id, kind: "reasoning", mode: update.mode, ts: ops.nowIso(), text: nextText });
+      const item: FeedItem = {
+        id,
+        kind: "reasoning",
+        mode: update.mode,
+        ts: ops.nowIso(),
+        text: nextText,
+      };
+      const beforeAssistantId =
+        update.turnId === stream.lastAssistantTurnId
+          ? reasoningInsertBeforeAssistantAfterStreamReplay(stream)
+          : null;
+      if (beforeAssistantId && ops.insertFeedItemBefore) {
+        ops.insertFeedItemBefore(beforeAssistantId, item);
+      } else {
+        push(item);
+      }
     }
     return;
   }
@@ -970,6 +986,14 @@ function appendModelStreamUpdateToFeed(
     makeId: () => crypto.randomUUID(),
     nowIso: () => ts,
     pushFeedItem: (item) => out.push(item),
+    insertFeedItemBefore: (beforeItemId, item) => {
+      const idx = out.findIndex((entry) => entry.id === beforeItemId);
+      if (idx < 0) {
+        out.push(item);
+        return;
+      }
+      out.splice(idx, 0, item);
+    },
     updateFeedItem: (itemId, updateItem) => {
       const idx = out.findIndex((item) => item.id === itemId);
       if (idx < 0) return;

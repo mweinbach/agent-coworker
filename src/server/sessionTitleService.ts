@@ -1,6 +1,7 @@
 import type { AgentConfig } from "../types";
 
 const TITLE_MODELS_BY_PROVIDER: Partial<Record<AgentConfig["provider"], readonly string[]>> = {
+  antigravity: ["gemini-3.1-flash-lite"],
   anthropic: ["claude-haiku-4-5"],
   baseten: ["moonshotai/Kimi-K2.5"],
   "codex-cli": ["gpt-5.4-mini", "gpt-5.3-codex-spark"],
@@ -186,16 +187,20 @@ export function createSessionTitleGenerator(overrides: Partial<SessionTitleDeps>
     }
 
     const deps = await getDeps();
-    const candidates = modelCandidatesForProvider(
-      opts.config.provider,
-      opts.config.model,
-      deps.defaultModelForProvider,
-    );
+    const isAntigravity = opts.config.provider === "antigravity";
+    const candidates = isAntigravity
+      ? ["gemini-3.1-flash-lite-preview"]
+      : modelCandidatesForProvider(
+          opts.config.provider,
+          opts.config.model,
+          deps.defaultModelForProvider,
+        );
 
     for (const modelId of candidates) {
       try {
         const runtimeConfig: AgentConfig = {
           ...opts.config,
+          provider: isAntigravity ? "google" : opts.config.provider,
           model: modelId,
         };
         const runtime = deps.createRuntime(runtimeConfig);

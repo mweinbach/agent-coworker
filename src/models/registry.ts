@@ -6,6 +6,7 @@ import anthropicClaudeOpus47 from "../../config/models/anthropic/claude-opus-4-7
 import anthropicClaudeSonnet45 from "../../config/models/anthropic/claude-sonnet-4-5.json";
 import anthropicClaudeSonnet46 from "../../config/models/anthropic/claude-sonnet-4-6.json";
 import antigravityGemini31Pro from "../../config/models/antigravity/gemini-3.1-pro.json";
+import antigravityGemini31FlashLite from "../../config/models/antigravity/gemini-3.1-flash-lite.json";
 import antigravityGemini35Flash from "../../config/models/antigravity/gemini-3.5-flash.json";
 import basetenMoonshotAiKimiK25 from "../../config/models/baseten/moonshotai-kimi-k2.5.json";
 import basetenNvidiaNemotron120bA12b from "../../config/models/baseten/nvidia-nemotron-120b-a12b.json";
@@ -106,6 +107,7 @@ const RAW_MODEL_REGISTRY_ENTRIES = [
   googleGemini3FlashPreview,
   antigravityGemini35Flash,
   antigravityGemini31Pro,
+  antigravityGemini31FlashLite,
   googleGemini31FlashLitePreview,
   googleGemini31ProPreview,
   googleGemini31ProPreviewCustomtools,

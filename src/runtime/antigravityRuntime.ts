@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import {
   Agent,
@@ -16,6 +18,20 @@ import type { LlmRuntime, RuntimeRunTurnParams, RuntimeRunTurnResult } from "./t
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   return value as Record<string, unknown>;
+}
+
+function isText(chunk: unknown): chunk is Text {
+  return (
+    chunk instanceof Text ||
+    (typeof chunk === "object" && chunk !== null && chunk.constructor?.name === "Text")
+  );
+}
+
+function isThought(chunk: unknown): chunk is Thought {
+  return (
+    chunk instanceof Thought ||
+    (typeof chunk === "object" && chunk !== null && chunk.constructor?.name === "Thought")
+  );
 }
 
 function asString(value: unknown): string | undefined {
@@ -82,8 +98,22 @@ function extractToolExecutionErrorMessage(result: unknown): string | undefined {
 }
 
 export function isHiddenPath(p: string): boolean {
-  const segments = p.split(/[/\\]/);
+  // Mirrors localharness's URI hidden check: any segment starting with "."
+  // (other than "." / "..") makes the harness reject the workspace as hidden.
+  const segments = p.split(/[/\\]/).filter((seg) => seg.length > 0);
   return segments.some((seg) => seg !== "." && seg !== ".." && seg.startsWith("."));
+}
+
+export function resolveHarnessWorkspaceDir(workingDirectory: string): string {
+  if (!isHiddenPath(workingDirectory)) return workingDirectory;
+  // localharness refuses workspace URIs with any hidden segment. Cowork chat
+  // dirs live under ~/.cowork/chats/, so fall back to a stable non-hidden
+  // tmpdir. File ops route through the runtime's own sdkTools, not the
+  // harness's built-ins, so the workspace value is only used to satisfy the
+  // harness's URI check.
+  const fallback = path.join(os.tmpdir(), "cowork-antigravity-workspace");
+  fs.mkdirSync(fallback, { recursive: true });
+  return fallback;
 }
 
 export function createAntigravityRuntime(): LlmRuntime {
@@ -278,7 +308,7 @@ export function createAntigravityRuntime(): LlmRuntime {
           enableSubagents: false,
         }),
         policies: [], // Handled by coworker itself
-        workspaces: [params.config.workingDirectory].filter((w) => !isHiddenPath(w)),
+        workspaces: [resolveHarnessWorkspaceDir(params.config.workingDirectory)],
         saveDir,
         appDataDir: params.config.userCoworkDir,
       });
@@ -297,6 +327,25 @@ export function createAntigravityRuntime(): LlmRuntime {
 
       await agent.start();
 
+      const log = params.log;
+      if (log) {
+        const childProcess = (agent as unknown as { _strategy?: { connection?: { process?: { stderr?: NodeJS.ReadableStream } } } })._strategy?.connection?.process;
+        const stderr = childProcess?.stderr;
+        if (stderr && typeof stderr.on === "function") {
+          let buf = "";
+          stderr.on("data", (chunk: unknown) => {
+            buf += typeof chunk === "string" ? chunk : Buffer.from(chunk as Uint8Array).toString("utf8");
+            let nl = buf.indexOf("\n");
+            while (nl >= 0) {
+              const line = buf.slice(0, nl).trim();
+              if (line) log(`[antigravity-harness] ${line}`);
+              buf = buf.slice(nl + 1);
+              nl = buf.indexOf("\n");
+            }
+          });
+        }
+      }
+
       try {
         if (params.abortSignal?.aborted) {
           throw new Error("Model turn aborted.");
@@ -312,21 +361,28 @@ export function createAntigravityRuntime(): LlmRuntime {
             ? lastMessage.content
             : sanitizedTextFromContent(lastMessage.content);
 
+        params.log?.(`[antigravity] sending prompt (${prompt.length} chars)`);
         const chatResponse = await agent.chat(prompt);
+        params.log?.(`[antigravity] chat() returned, awaiting chunks`);
 
         const TEXT_ID = "s0";
         const REASONING_ID = "r0";
         let textOpen = false;
         let reasoningOpen = false;
+        let chunkCount = 0;
 
         await emitPart({ type: "start" });
 
         for await (const chunk of chatResponse.getChunks()) {
+          chunkCount++;
+          params.log?.(
+            `[antigravity] chunk #${chunkCount} ctor=${(chunk as { constructor?: { name?: string } })?.constructor?.name} text=${JSON.stringify((chunk as { text?: string })?.text?.slice(0, 60) ?? null)}`,
+          );
           if (params.abortSignal?.aborted) {
             throw new Error("Model turn aborted.");
           }
 
-          if (chunk instanceof Text) {
+          if (isText(chunk)) {
             if (reasoningOpen) {
               await emitPart({ type: "reasoning-end", id: REASONING_ID });
               reasoningOpen = false;
@@ -341,7 +397,7 @@ export function createAntigravityRuntime(): LlmRuntime {
               id: TEXT_ID,
               text: chunk.text,
             });
-          } else if (chunk instanceof Thought) {
+          } else if (isThought(chunk)) {
             if (textOpen) {
               await emitPart({ type: "text-end", id: TEXT_ID });
               textOpen = false;

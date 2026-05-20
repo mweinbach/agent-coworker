@@ -1199,6 +1199,9 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       pushFeedItem: (item) => {
         pushFeedItem(set, threadId, item);
       },
+      insertFeedItemBefore: (beforeItemId, item) => {
+        insertFeedItemBefore(set, threadId, beforeItemId, item);
+      },
       updateFeedItem: (itemId, updateItem) => {
         updateFeedItem(set, threadId, itemId, updateItem);
       },

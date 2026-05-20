@@ -395,15 +395,20 @@ describe("antigravity runtime", () => {
     expect(emittedParts.some((p) => p.type === "tool-result")).toBe(true);
   });
 
-  test("isHiddenPath correctly identifies paths with hidden segments", () => {
+  test("isHiddenPath mirrors localharness URI hidden check (any '.' segment)", () => {
     const { isHiddenPath } = require("../src/runtime/antigravityRuntime");
     expect(isHiddenPath("/Users/mweinbach/Projects/my-project")).toBe(false);
     expect(isHiddenPath("/Users/mweinbach/.cowork/chats/1234")).toBe(true);
     expect(isHiddenPath(".cowork/chats")).toBe(true);
     expect(isHiddenPath("path/to/.hidden/dir")).toBe(true);
+    expect(isHiddenPath("/path/.env")).toBe(true);
+    expect(isHiddenPath(".git")).toBe(true);
   });
 
-  test("antigravity runtime filters out hidden workspace paths", async () => {
+  test("antigravity runtime falls back to a non-hidden tmpdir workspace when the working dir is hidden", async () => {
+    const { resolveHarnessWorkspaceDir } = require("../src/runtime/antigravityRuntime");
+    const expectedFallback = path.join(os.tmpdir(), "cowork-antigravity-workspace");
+
     const runtime = createAntigravityRuntime();
     const hiddenHomeDir = "/Users/mweinbach/.cowork/chats/20260520T182819Z-test";
     const config = makeConfig(hiddenHomeDir);
@@ -425,7 +430,32 @@ describe("antigravity runtime", () => {
 
     const capturedAgent = (Agent as any).getLastInstance();
     expect(capturedAgent).toBeDefined();
-    // Verify that the workspace array passed to the config was filtered to be empty
-    expect(capturedAgent.config.workspaces).toEqual([]);
+    expect(capturedAgent.config.workspaces).toEqual([expectedFallback]);
+    expect(resolveHarnessWorkspaceDir(hiddenHomeDir)).toBe(expectedFallback);
+  });
+
+  test("antigravity runtime passes through a non-hidden working dir as the workspace", async () => {
+    const runtime = createAntigravityRuntime();
+    const visibleHomeDir = await fs.mkdtemp(path.join(os.tmpdir(), "antigravity-ws-"));
+    const config = makeConfig(visibleHomeDir);
+    config.workingDirectory = visibleHomeDir;
+
+    (Agent as any).__setChatMockImpl(async () => {
+      return {
+        getChunks: async function* () {
+          yield new Text(0, "Mocked response");
+        },
+        usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 },
+      };
+    });
+
+    const params = makeParams(config);
+    process.env.GEMINI_API_KEY = "test-key";
+
+    await runtime.runTurn(params);
+
+    const capturedAgent = (Agent as any).getLastInstance();
+    expect(capturedAgent).toBeDefined();
+    expect(capturedAgent.config.workspaces).toEqual([visibleHomeDir]);
   });
 });

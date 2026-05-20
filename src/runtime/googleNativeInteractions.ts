@@ -153,11 +153,13 @@ function resolveGoogleApiKey(explicitKey?: string): string {
   if (direct) return direct;
 
   const envKey =
-    process.env.GOOGLE_GENERATIVE_AI_API_KEY?.trim() || process.env.GOOGLE_API_KEY?.trim();
+    process.env.GOOGLE_GENERATIVE_AI_API_KEY?.trim() ||
+    process.env.GOOGLE_API_KEY?.trim() ||
+    process.env.GEMINI_API_KEY?.trim();
   if (envKey) return envKey;
 
   throw new Error(
-    "No API key for Google provider. Set GOOGLE_GENERATIVE_AI_API_KEY or GOOGLE_API_KEY.",
+    "No API key for Google provider. Set GOOGLE_GENERATIVE_AI_API_KEY, GOOGLE_API_KEY, or GEMINI_API_KEY.",
   );
 }
 

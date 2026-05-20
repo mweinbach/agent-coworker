@@ -18,6 +18,56 @@ describe("desktop transcript feed mapping", () => {
     expect(reasoningInsertBeforeAssistantAfterStreamReplay(runtime)).toBe("assistant-item-1");
   });
 
+  test("inserts late-arriving streamed reasoning before the active assistant message in the same turn", () => {
+    const transcript: TranscriptEvent[] = [
+      {
+        ts: "2024-01-01T00:00:00.000Z",
+        threadId: "thread-1",
+        direction: "client",
+        payload: { type: "user_message", text: "summarize the result" },
+      },
+      {
+        ts: "2024-01-01T00:00:01.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_chunk",
+          sessionId: "thread-session",
+          turnId: "turn-late-reasoning",
+          index: 0,
+          provider: "google",
+          model: "gemini-3.5-flash",
+          partType: "text_delta",
+          part: { id: "s0", text: "Here is the answer." },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:02.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_chunk",
+          sessionId: "thread-session",
+          turnId: "turn-late-reasoning",
+          index: 1,
+          provider: "google",
+          model: "gemini-3.5-flash",
+          partType: "reasoning_delta",
+          part: { id: "r0", mode: "reasoning", text: "I weighed the options first." },
+        },
+      },
+    ];
+
+    const feed = mapTranscriptToFeed(transcript);
+    expect(feed.map((item) => item.kind)).toEqual(["message", "reasoning", "message"]);
+
+    const reasoning = feed.find((item) => item.kind === "reasoning");
+    expect(reasoning?.kind).toBe("reasoning");
+    if (reasoning?.kind === "reasoning") {
+      expect(reasoning.text).toBe("I weighed the options first.");
+    }
+  });
+
   test("dedupes streamed reasoning against legacy reasoning finals while preserving trace order", () => {
     const transcript: TranscriptEvent[] = [
       {

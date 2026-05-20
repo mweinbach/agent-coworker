@@ -3072,14 +3072,17 @@ describe("google native interactions request building", () => {
   test("resolveGoogleApiKey throws when no key is available", () => {
     const origEnv1 = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
     const origEnv2 = process.env.GOOGLE_API_KEY;
+    const origEnv3 = process.env.GEMINI_API_KEY;
     delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
     delete process.env.GOOGLE_API_KEY;
+    delete process.env.GEMINI_API_KEY;
 
     try {
       expect(() => googleNativeInternal.resolveGoogleApiKey()).toThrow("No API key");
     } finally {
       if (origEnv1) process.env.GOOGLE_GENERATIVE_AI_API_KEY = origEnv1;
       if (origEnv2) process.env.GOOGLE_API_KEY = origEnv2;
+      if (origEnv3) process.env.GEMINI_API_KEY = origEnv3;
     }
   });
 

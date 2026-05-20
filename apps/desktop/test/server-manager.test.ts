@@ -357,4 +357,52 @@ describe("desktop server manager bun crash detection", () => {
     expect(cleaned).toBe(true);
     expect(child.exitCode).toBe(0);
   });
+
+  test("stopAll concurrently kills and cleans up all active and pending servers", async () => {
+    const manager = new ServerManager();
+    const child1 = createFakeChild();
+    const child2 = createFakeChild();
+    const childPending = createFakeChild();
+
+    let cleaned1 = false;
+    let cleaned2 = false;
+    let cleanedPending = false;
+
+    (manager as any).servers.set("ws-1", {
+      child: child1,
+      url: "ws://localhost:1234",
+      mobileH3: null,
+      cleanup: () => {
+        cleaned1 = true;
+      },
+    });
+
+    (manager as any).servers.set("ws-2", {
+      child: child2,
+      url: "ws://localhost:5678",
+      mobileH3: null,
+      cleanup: () => {
+        cleaned2 = true;
+      },
+    });
+
+    (manager as any).pendingStarts.set("ws-pending", {
+      child: childPending,
+      cleanup: () => {
+        cleanedPending = true;
+      },
+    });
+
+    await manager.stopAll();
+
+    expect((manager as any).servers.size).toBe(0);
+    expect((manager as any).pendingStarts.size).toBe(0);
+    expect(cleaned1).toBe(true);
+    expect(cleaned2).toBe(true);
+    expect(cleanedPending).toBe(true);
+    expect(child1.exitCode).toBe(0);
+    expect(child2.exitCode).toBe(0);
+    expect(childPending.exitCode).toBe(0);
+  });
 });
+

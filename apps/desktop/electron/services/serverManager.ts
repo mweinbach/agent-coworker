@@ -697,15 +697,18 @@ export class ServerManager {
     const pendingEntries = [...this.pendingStarts.entries()];
     this.pendingStarts.clear();
 
-    for (const [, handle] of entries) {
-      await gracefulKill(handle.child);
-      handle.cleanup();
-    }
+    const killPromises = [
+      ...entries.map(async ([, handle]) => {
+        await gracefulKill(handle.child);
+        handle.cleanup();
+      }),
+      ...pendingEntries.map(async ([, handle]) => {
+        await gracefulKill(handle.child);
+        handle.cleanup();
+      }),
+    ];
 
-    for (const [, handle] of pendingEntries) {
-      await gracefulKill(handle.child);
-      handle.cleanup();
-    }
+    await Promise.all(killPromises);
   }
 }
 

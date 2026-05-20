@@ -81,6 +81,11 @@ function extractToolExecutionErrorMessage(result: unknown): string | undefined {
   return undefined;
 }
 
+export function isHiddenPath(p: string): boolean {
+  const segments = p.split(/[/\\]/);
+  return segments.some((seg) => seg !== "." && seg !== ".." && seg.startsWith("."));
+}
+
 export function createAntigravityRuntime(): LlmRuntime {
   return {
     name: "antigravity",
@@ -273,7 +278,7 @@ export function createAntigravityRuntime(): LlmRuntime {
           enableSubagents: false,
         }),
         policies: [], // Handled by coworker itself
-        workspaces: [params.config.workingDirectory],
+        workspaces: [params.config.workingDirectory].filter((w) => !isHiddenPath(w)),
         saveDir,
         appDataDir: params.config.userCoworkDir,
       });
@@ -309,9 +314,12 @@ export function createAntigravityRuntime(): LlmRuntime {
 
         const chatResponse = await agent.chat(prompt);
 
-        const streamId = "s0";
+        const TEXT_ID = "s0";
+        const REASONING_ID = "r0";
+        let textOpen = false;
+        let reasoningOpen = false;
+
         await emitPart({ type: "start" });
-        await emitPart({ type: "text-start", id: streamId });
 
         for await (const chunk of chatResponse.getChunks()) {
           if (params.abortSignal?.aborted) {
@@ -319,24 +327,46 @@ export function createAntigravityRuntime(): LlmRuntime {
           }
 
           if (chunk instanceof Text) {
+            if (reasoningOpen) {
+              await emitPart({ type: "reasoning-end", id: REASONING_ID });
+              reasoningOpen = false;
+            }
+            if (!textOpen) {
+              await emitPart({ type: "text-start", id: TEXT_ID });
+              textOpen = true;
+            }
             finalContent += chunk.text;
             await emitPart({
               type: "text-delta",
-              id: streamId,
+              id: TEXT_ID,
               text: chunk.text,
             });
           } else if (chunk instanceof Thought) {
+            if (textOpen) {
+              await emitPart({ type: "text-end", id: TEXT_ID });
+              textOpen = false;
+            }
+            if (!reasoningOpen) {
+              await emitPart({ type: "reasoning-start", id: REASONING_ID });
+              reasoningOpen = true;
+            }
             finalThoughts += chunk.text;
             await emitPart({
               type: "reasoning-delta",
-              id: streamId,
-              mode: "thinking",
+              id: REASONING_ID,
               text: chunk.text,
             });
           }
         }
 
-        await emitPart({ type: "text-end", id: streamId });
+        if (reasoningOpen) {
+          await emitPart({ type: "reasoning-end", id: REASONING_ID });
+          reasoningOpen = false;
+        }
+        if (textOpen) {
+          await emitPart({ type: "text-end", id: TEXT_ID });
+          textOpen = false;
+        }
 
         const finalContentParts: any[] = [];
         if (finalThoughts.trim()) {

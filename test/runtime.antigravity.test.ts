@@ -186,7 +186,7 @@ describe("antigravity runtime", () => {
     });
   });
 
-  test("thinking content is extracted as reasoningText", async () => {
+  test("thinking content emits bracketed reasoning events and extracts reasoningText", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "antigravity-test-"));
     const runtime = createAntigravityRuntime();
 
@@ -227,6 +227,98 @@ describe("antigravity runtime", () => {
           { type: "text", text: "Here is the response." },
         ],
       },
+    ]);
+
+    const typeSequence = emittedParts.map((p) => p.type);
+    const reasoningStartIdx = typeSequence.indexOf("reasoning-start");
+    const reasoningDeltaIdx = typeSequence.indexOf("reasoning-delta");
+    const reasoningEndIdx = typeSequence.indexOf("reasoning-end");
+    const textStartIdx = typeSequence.indexOf("text-start");
+    const textDeltaIdx = typeSequence.indexOf("text-delta");
+    const textEndIdx = typeSequence.indexOf("text-end");
+
+    expect(reasoningStartIdx).toBeGreaterThanOrEqual(0);
+    expect(reasoningDeltaIdx).toBeGreaterThan(reasoningStartIdx);
+    expect(reasoningEndIdx).toBeGreaterThan(reasoningDeltaIdx);
+    expect(textStartIdx).toBeGreaterThan(reasoningEndIdx);
+    expect(textDeltaIdx).toBeGreaterThan(textStartIdx);
+    expect(textEndIdx).toBeGreaterThan(textDeltaIdx);
+
+    const reasoningStart = emittedParts[reasoningStartIdx];
+    const reasoningDelta = emittedParts[reasoningDeltaIdx];
+    const reasoningEnd = emittedParts[reasoningEndIdx];
+    const textStart = emittedParts[textStartIdx];
+    expect(reasoningStart.id).toBe(reasoningDelta.id);
+    expect(reasoningEnd.id).toBe(reasoningDelta.id);
+    expect(reasoningDelta.id).not.toBe(textStart.id);
+    expect(reasoningDelta.text).toBe("Thinking...");
+  });
+
+  test("interleaved thoughts and text produce paired reasoning brackets", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "antigravity-test-"));
+    const runtime = createAntigravityRuntime();
+
+    (Agent as any).__setChatMockImpl(async (_prompt: string) => {
+      const chunks = [
+        new Thought(0, "planning..."),
+        new Text(0, "first answer."),
+        new Thought(1, "second thought."),
+        new Text(1, "second answer."),
+      ];
+      return {
+        getChunks: async function* () {
+          for (const chunk of chunks) {
+            yield chunk;
+          }
+        },
+        usageMetadata: {
+          promptTokenCount: 5,
+          candidatesTokenCount: 10,
+          totalTokenCount: 15,
+        },
+      };
+    });
+
+    const emittedParts: any[] = [];
+    const params = makeParams(makeConfig(homeDir), {
+      onModelStreamPart: (part) => {
+        emittedParts.push(part);
+      },
+    });
+
+    process.env.GEMINI_API_KEY = "test-key";
+
+    const result = await runtime.runTurn(params);
+    expect(result.text).toBe("first answer.second answer.");
+    expect(result.reasoningText).toBe("planning...second thought.");
+
+    const typeSequence = emittedParts.map((p) => p.type);
+
+    // We expect two complete reasoning brackets and two text brackets,
+    // alternating: r-s r-d r-e t-s t-d t-e r-s r-d r-e t-s t-d t-e.
+    const reasoningStarts = typeSequence.filter((t) => t === "reasoning-start").length;
+    const reasoningEnds = typeSequence.filter((t) => t === "reasoning-end").length;
+    const textStarts = typeSequence.filter((t) => t === "text-start").length;
+    const textEnds = typeSequence.filter((t) => t === "text-end").length;
+    expect(reasoningStarts).toBe(2);
+    expect(reasoningEnds).toBe(2);
+    expect(textStarts).toBe(2);
+    expect(textEnds).toBe(2);
+
+    // Reasoning brackets must not enclose text-deltas: the previous reasoning
+    // must end before any text-start for that run.
+    const phaseOrder = typeSequence.filter((t) =>
+      ["reasoning-start", "reasoning-end", "text-start", "text-end"].includes(t as string),
+    );
+    expect(phaseOrder).toEqual([
+      "reasoning-start",
+      "reasoning-end",
+      "text-start",
+      "text-end",
+      "reasoning-start",
+      "reasoning-end",
+      "text-start",
+      "text-end",
     ]);
   });
 
@@ -301,5 +393,39 @@ describe("antigravity runtime", () => {
     expect(emittedParts.some((p) => p.type === "tool-input-end")).toBe(true);
     expect(emittedParts.some((p) => p.type === "tool-call")).toBe(true);
     expect(emittedParts.some((p) => p.type === "tool-result")).toBe(true);
+  });
+
+  test("isHiddenPath correctly identifies paths with hidden segments", () => {
+    const { isHiddenPath } = require("../src/runtime/antigravityRuntime");
+    expect(isHiddenPath("/Users/mweinbach/Projects/my-project")).toBe(false);
+    expect(isHiddenPath("/Users/mweinbach/.cowork/chats/1234")).toBe(true);
+    expect(isHiddenPath(".cowork/chats")).toBe(true);
+    expect(isHiddenPath("path/to/.hidden/dir")).toBe(true);
+  });
+
+  test("antigravity runtime filters out hidden workspace paths", async () => {
+    const runtime = createAntigravityRuntime();
+    const hiddenHomeDir = "/Users/mweinbach/.cowork/chats/20260520T182819Z-test";
+    const config = makeConfig(hiddenHomeDir);
+    config.workingDirectory = hiddenHomeDir;
+
+    (Agent as any).__setChatMockImpl(async () => {
+      return {
+        getChunks: async function* () {
+          yield new Text(0, "Mocked response");
+        },
+        usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 },
+      };
+    });
+
+    const params = makeParams(config);
+    process.env.GEMINI_API_KEY = "test-key";
+
+    await runtime.runTurn(params);
+
+    const capturedAgent = (Agent as any).getLastInstance();
+    expect(capturedAgent).toBeDefined();
+    // Verify that the workspace array passed to the config was filtered to be empty
+    expect(capturedAgent.config.workspaces).toEqual([]);
   });
 });

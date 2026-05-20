@@ -7,6 +7,7 @@ import type { SessionKind } from "../../shared/agents";
 import type { AgentConfig } from "../../types";
 import { defaultRuntimeNameForProvider } from "../../types";
 import { resolveAuthHomeDir } from "../../utils/authHome";
+import { sameWorkspacePath } from "../../utils/workspacePath";
 import type { AgentControl } from "../agents/AgentControl";
 import { createSessionEventCapture } from "../jsonrpc/sessionEventCapture";
 import type { SessionEvent } from "../protocol";
@@ -342,7 +343,23 @@ export class SessionRegistry {
       cancelAgentSessionsImpl: (parentSessionId) =>
         this.getAgentControl().cancelAll(parentSessionId),
       deleteSessionImpl: async (opts) => {
-        void opts.requesterSessionId;
+        const requesterWorkingDirectory =
+          this.sessionBindings.get(opts.requesterSessionId)?.runtime?.read.workingDirectory ??
+          this.options.sessionDb.getSessionRecord(opts.requesterSessionId)?.workingDirectory ??
+          null;
+        const targetRecord = this.options.sessionDb.getSessionRecord(opts.targetSessionId);
+        const targetWorkingDirectory =
+          this.sessionBindings.get(opts.targetSessionId)?.runtime?.read.workingDirectory ??
+          targetRecord?.workingDirectory ??
+          null;
+        if (
+          requesterWorkingDirectory &&
+          targetWorkingDirectory &&
+          !sameWorkspacePath(requesterWorkingDirectory, targetWorkingDirectory)
+        ) {
+          throw new Error("Target session is outside the active workspace");
+        }
+
         const liveChildIds = [...this.sessionBindings.values()]
           .map((childBinding) => childBinding.runtime)
           .filter(

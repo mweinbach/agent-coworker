@@ -574,6 +574,80 @@ describe("JSON-RPC extracted route review fixes", () => {
     expect(response.result).toBeUndefined();
   });
 
+  test("session usage budget forwards null thresholds so hard caps can be cleared", async () => {
+    let receivedStopAtUsd: number | null | undefined = undefined;
+    let harness!: RouteHarness;
+    const threadSession = {
+      id: "thread-1",
+      setSessionUsageBudget: async (_warnAtUsd?: number | null, stopAtUsd?: number | null) => {
+        receivedStopAtUsd = stopAtUsd;
+        harness.emitted.push({
+          type: "session_usage",
+          sessionId: "thread-1",
+          usage: {
+            sessionId: "thread-1",
+            totalTurns: 0,
+            totalPromptTokens: 0,
+            totalCompletionTokens: 0,
+            totalTokens: 0,
+            estimatedTotalCostUsd: null,
+            costTrackingAvailable: false,
+            byModel: [],
+            turns: [],
+            budgetStatus: {
+              configured: false,
+              warnAtUsd: null,
+              stopAtUsd: null,
+              warningTriggered: false,
+              stopTriggered: false,
+              currentCostUsd: null,
+            },
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+        });
+      },
+    };
+    harness = createRouteHarness({}, [], { threadSession });
+
+    const handlers = createSessionRouteHandlers(harness.context);
+    const response = await harness.invoke(handlers, "cowork/session/usageBudget/set", {
+      threadId: "thread-1",
+      stopAtUsd: null,
+    });
+
+    expect(response.error).toBeUndefined();
+    expect(receivedStopAtUsd).toBeNull();
+    expect((response.result as { event: { type: string } }).event.type).toBe("session_usage");
+  });
+
+  test("session defaults apply forwards emitted errors as JSON-RPC errors", async () => {
+    let harness!: RouteHarness;
+    const threadSession = {
+      id: "thread-1",
+      getSessionConfigEvent: () => ({
+        type: "session_config",
+        sessionId: "thread-1",
+        config: {},
+      }),
+      applySessionDefaults: async () => {
+        harness.emitted.push(sessionError("Defaults could not be applied."));
+      },
+    };
+    harness = createRouteHarness({}, [], { threadSession });
+
+    const handlers = createSessionRouteHandlers(harness.context);
+    const response = await harness.invoke(handlers, "cowork/session/defaults/apply", {
+      threadId: "thread-1",
+      config: {
+        backupsEnabled: true,
+      },
+    });
+
+    expect(response.error?.message).toContain("Defaults could not be applied");
+    expect(response.result).toBeUndefined();
+  });
+
   test("session delete forwards emitted session errors", async () => {
     let harness!: RouteHarness;
     harness = createRouteHarness({

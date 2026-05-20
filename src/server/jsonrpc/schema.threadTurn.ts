@@ -159,6 +159,11 @@ export const jsonRpcThreadTurnNotificationSchemas = {
       thread: jsonRpcThreadSchema,
     })
     .strict(),
+  "thread/closed": z
+    .object({
+      threadId: nonEmptyTrimmedStringSchema,
+    })
+    .strict(),
   "turn/started": z
     .object({
       threadId: nonEmptyTrimmedStringSchema,

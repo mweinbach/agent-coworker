@@ -131,8 +131,7 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
       const outcome = await captureBindingOutcome(
         context,
         binding,
-        () =>
-          runtime.settings.setSessionUsageBudget(warnAtUsd ?? undefined, stopAtUsd ?? undefined),
+        () => runtime.settings.setSessionUsageBudget(warnAtUsd, stopAtUsd),
         (event): event is Extract<SessionEvent, { type: "session_usage" }> =>
           event.type === "session_usage",
       );
@@ -345,8 +344,12 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
       if (result === null) {
         return;
       }
+      if (result.outcome && context.utils.isSessionError(result.outcome)) {
+        sendSessionMutationError(context, ws, message.id, result.outcome);
+        return;
+      }
       context.jsonrpc.sendResult(ws, message.id, {
-        event: result.outcome?.type === "error" ? result.outcome : result.fallback,
+        event: result.fallback,
       });
     },
 

@@ -1312,6 +1312,45 @@ describe("server JSON-RPC control methods", () => {
     }
   });
 
+  test("session delete rejects targets from another workspace", async () => {
+    const tmpDir = await makeTmpProject();
+    const otherTmpDir = await makeTmpProject();
+    const primary = await startAgentServer(serverOpts(tmpDir));
+    const secondary = await startAgentServer(
+      serverOpts(otherTmpDir, {
+        homedir: tmpDir,
+      }),
+    );
+
+    try {
+      const rpc = await connectJsonRpc(primary.url);
+      const otherRpc = await connectJsonRpc(secondary.url);
+      const other = await otherRpc.request("thread/start", { cwd: otherTmpDir });
+      const otherThreadId = other.result.thread.id;
+      await otherRpc.request("cowork/session/title/set", {
+        threadId: otherThreadId,
+        title: "Other workspace",
+      });
+
+      const response = await rpc.request("cowork/session/delete", {
+        cwd: tmpDir,
+        targetSessionId: otherThreadId,
+      });
+
+      expect(response.error.message).toContain("outside the active workspace");
+      expect(response.result).toBeUndefined();
+      const otherRead = await otherRpc.request("thread/read", {
+        threadId: otherThreadId,
+      });
+      expect(otherRead.result.thread.id).toBe(otherThreadId);
+      rpc.close();
+      otherRpc.close();
+    } finally {
+      await stopTestServer(secondary.server);
+      await stopTestServer(primary.server);
+    }
+  });
+
   test("session agent inspect returns the detailed inspect payload", async () => {
     const originalInspect = AgentControl.prototype.inspect;
     (AgentControl.prototype as any).inspect = async function inspectMock() {

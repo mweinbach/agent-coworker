@@ -7,6 +7,21 @@ import { createTrayMaskBitmap } from "../electron/services/trayImage";
 import { createElectronMock, setElectronMockOverrides } from "./helpers/mockElectron";
 
 const createdTrays: FakeTray[] = [];
+const globalShortcutState = {
+  registeredAccelerators: [] as string[],
+  unregisteredAccelerators: [] as string[],
+  callbacks: new Map<string, () => void>(),
+  registerResult: true,
+  registerError: null as Error | null,
+};
+
+function resetGlobalShortcutState() {
+  globalShortcutState.registeredAccelerators.length = 0;
+  globalShortcutState.unregisteredAccelerators.length = 0;
+  globalShortcutState.callbacks.clear();
+  globalShortcutState.registerResult = true;
+  globalShortcutState.registerError = null;
+}
 
 class FakeTray extends EventEmitter {
   tooltip: string | null = null;
@@ -47,8 +62,18 @@ const electronMockOverrides = {
     quit: () => {},
   },
   globalShortcut: {
-    register: () => true,
-    unregister: () => {},
+    register: (accelerator: string, callback: () => void) => {
+      globalShortcutState.registeredAccelerators.push(accelerator);
+      globalShortcutState.callbacks.set(accelerator, callback);
+      if (globalShortcutState.registerError) {
+        throw globalShortcutState.registerError;
+      }
+      return globalShortcutState.registerResult;
+    },
+    unregister: (accelerator: string) => {
+      globalShortcutState.unregisteredAccelerators.push(accelerator);
+      globalShortcutState.callbacks.delete(accelerator);
+    },
   },
   Menu: {
     buildFromTemplate(template: unknown) {
@@ -166,8 +191,26 @@ class FakeWindow extends EventEmitter {
   }
 }
 
+type ControllerOptions = ConstructorParameters<typeof QuickChatController>[0];
+
+function createController(overrides: Partial<ControllerOptions> = {}) {
+  return new QuickChatController({
+    appName: "Cowork",
+    platform: "darwin",
+    trayIconPath: "/tmp/icon.png",
+    getMainWindow: () => null,
+    createMainWindow: async () => new FakeWindow() as never,
+    createQuickChatWindow: async () => new FakeWindow() as never,
+    retargetQuickChatWindow: async () => {},
+    createUtilityWindow: async () => new FakeWindow() as never,
+    ...overrides,
+  });
+}
+
 describe("resolveTrayIconPath", () => {
   beforeEach(() => {
+    createdTrays.length = 0;
+    resetGlobalShortcutState();
     setElectronMockOverrides(electronMockOverrides);
   });
 
@@ -321,7 +364,6 @@ describe("resolveTrayIconPath", () => {
   });
 
   test("removes the tray when the quick chat icon setting is disabled", () => {
-    createdTrays.length = 0;
     const controller = new QuickChatController({
       appName: "Cowork",
       platform: "darwin",
@@ -352,6 +394,157 @@ describe("resolveTrayIconPath", () => {
 
     expect(createdTrays[0]?.destroyed).toBe(true);
     expect(controller.hasTray()).toBe(false);
+  });
+
+  test("registers and unregisters the quick chat shortcut from persisted settings", () => {
+    const controller = createController();
+
+    controller.initialize();
+    expect(globalShortcutState.registeredAccelerators).toEqual([]);
+
+    controller.applyPersistedState({
+      version: 2,
+      workspaces: [],
+      threads: [],
+      desktopSettings: {
+        quickChat: {
+          iconEnabled: true,
+          shortcutEnabled: true,
+          shortcutAccelerator: "Alt+Space",
+        },
+      },
+    });
+
+    expect(globalShortcutState.registeredAccelerators).toEqual(["Alt+Space"]);
+    expect(globalShortcutState.unregisteredAccelerators).toEqual([]);
+
+    controller.applyPersistedState({
+      version: 2,
+      workspaces: [],
+      threads: [],
+      desktopSettings: {
+        quickChat: {
+          iconEnabled: true,
+          shortcutEnabled: false,
+          shortcutAccelerator: "Alt+Space",
+        },
+      },
+    });
+
+    expect(globalShortcutState.registeredAccelerators).toEqual(["Alt+Space"]);
+    expect(globalShortcutState.unregisteredAccelerators).toEqual(["Alt+Space"]);
+  });
+
+  test("unregisters the quick chat shortcut when the menu bar feature is disabled", () => {
+    const controller = createController();
+
+    controller.applyPersistedState({
+      version: 2,
+      workspaces: [],
+      threads: [],
+      desktopSettings: {
+        quickChat: {
+          iconEnabled: true,
+          shortcutEnabled: true,
+          shortcutAccelerator: "CommandOrControl+Shift+Space",
+        },
+      },
+    });
+
+    controller.applyPersistedState({
+      version: 2,
+      workspaces: [],
+      threads: [],
+      desktopFeatureFlagOverrides: {
+        menuBar: false,
+      },
+      desktopSettings: {
+        quickChat: {
+          iconEnabled: true,
+          shortcutEnabled: true,
+          shortcutAccelerator: "CommandOrControl+Shift+Space",
+        },
+      },
+    });
+
+    expect(globalShortcutState.registeredAccelerators).toEqual([
+      "CommandOrControl+Shift+Space",
+    ]);
+    expect(globalShortcutState.unregisteredAccelerators).toEqual([
+      "CommandOrControl+Shift+Space",
+    ]);
+  });
+
+  test("retries quick chat shortcut registration after Electron rejects an accelerator", () => {
+    const controller = createController();
+    globalShortcutState.registerResult = false;
+
+    controller.applyPersistedState({
+      version: 2,
+      workspaces: [],
+      threads: [],
+      desktopSettings: {
+        quickChat: {
+          iconEnabled: true,
+          shortcutEnabled: true,
+          shortcutAccelerator: "Alt+Space",
+        },
+      },
+    });
+
+    globalShortcutState.registerResult = true;
+    controller.applyPersistedState({
+      version: 2,
+      workspaces: [],
+      threads: [],
+      desktopSettings: {
+        quickChat: {
+          iconEnabled: true,
+          shortcutEnabled: true,
+          shortcutAccelerator: "Alt+Space",
+        },
+      },
+    });
+
+    expect(globalShortcutState.registeredAccelerators).toEqual(["Alt+Space", "Alt+Space"]);
+    expect(globalShortcutState.unregisteredAccelerators).toEqual([]);
+  });
+
+  test("replaces the registered shortcut when the accelerator changes", () => {
+    const controller = createController();
+
+    controller.applyPersistedState({
+      version: 2,
+      workspaces: [],
+      threads: [],
+      desktopSettings: {
+        quickChat: {
+          iconEnabled: true,
+          shortcutEnabled: true,
+          shortcutAccelerator: "CommandOrControl+Shift+Space",
+        },
+      },
+    });
+    controller.applyPersistedState({
+      version: 2,
+      workspaces: [],
+      threads: [],
+      desktopSettings: {
+        quickChat: {
+          iconEnabled: true,
+          shortcutEnabled: true,
+          shortcutAccelerator: "CommandOrControl+Shift+K",
+        },
+      },
+    });
+
+    expect(globalShortcutState.registeredAccelerators).toEqual([
+      "CommandOrControl+Shift+Space",
+      "CommandOrControl+Shift+K",
+    ]);
+    expect(globalShortcutState.unregisteredAccelerators).toEqual([
+      "CommandOrControl+Shift+Space",
+    ]);
   });
 
   test("reports tray availability while the tray surface is active", () => {
@@ -406,7 +599,6 @@ describe("resolveTrayIconPath", () => {
   });
 
   test("keeps quick chat windows alive on trayless platforms during state sync", async () => {
-    createdTrays.length = 0;
     const quickChatWindow = new FakeWindow();
     const controller = new QuickChatController({
       appName: "Cowork",
@@ -431,6 +623,43 @@ describe("resolveTrayIconPath", () => {
     expect(quickChatWindow.destroyed).toBe(false);
     expect(createdTrays).toHaveLength(0);
     expect(controller.hasTray()).toBe(false);
+  });
+
+  test("positions anchored macOS popup windows below the tray icon", async () => {
+    const utilityWindow = new FakeWindow();
+    const controller = createController({
+      platform: "darwin",
+      createUtilityWindow: async () => utilityWindow as never,
+    });
+
+    await controller.showUtilityWindow({ x: 600, y: 20, width: 40, height: 22 });
+
+    expect(utilityWindow.bounds).toEqual({ x: 410, y: 52, width: 420, height: 520 });
+  });
+
+  test("positions anchored Windows popup windows above and right-aligned to the tray icon", async () => {
+    const utilityWindow = new FakeWindow();
+    const controller = createController({
+      platform: "win32",
+      trayIconPath: "/tmp/icon.ico",
+      createUtilityWindow: async () => utilityWindow as never,
+    });
+
+    await controller.showUtilityWindow({ x: 600, y: 700, width: 40, height: 22 });
+
+    expect(utilityWindow.bounds).toEqual({ x: 220, y: 170, width: 420, height: 520 });
+  });
+
+  test("centers unanchored quick chat windows in the active work area", async () => {
+    const quickChatWindow = new FakeWindow();
+    const controller = createController({
+      platform: "linux",
+      createQuickChatWindow: async () => quickChatWindow as never,
+    });
+
+    await controller.showQuickChatWindow();
+
+    expect(quickChatWindow.bounds).toEqual({ x: 510, y: 190, width: 420, height: 520 });
   });
 
   test("closes quick chat when opening the main window without popup keep-alive", async () => {

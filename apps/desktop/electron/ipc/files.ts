@@ -275,20 +275,9 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
     const safePath = resolveAllowedPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
     try {
       await shell.trashItem(safePath);
-      return;
     } catch (trashError) {
-      try {
-        // Fallback for environments where OS trash integration is unavailable for directories.
-        await fs.rm(safePath, { recursive: true, force: false, maxRetries: 2, retryDelay: 50 });
-        return;
-      } catch (deleteError) {
-        const trashDetail = trashError instanceof Error ? trashError.message : String(trashError);
-        const deleteDetail =
-          deleteError instanceof Error ? deleteError.message : String(deleteError);
-        throw new Error(
-          `Unable to move to Trash (${trashDetail}) and permanent delete failed (${deleteDetail})`,
-        );
-      }
+      const trashDetail = trashError instanceof Error ? trashError.message : String(trashError);
+      throw new Error(`Unable to move to Trash: ${trashDetail}`);
     }
   });
 }

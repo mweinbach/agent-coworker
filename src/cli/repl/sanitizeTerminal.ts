@@ -20,10 +20,12 @@
 
 // Matches OSC terminated by BEL (\x07) or ST (\x1b\\).
 // Using [\s\S] instead of . to match across newlines.
-const OSC_RE = /\x1b\][\s\S]*?(?:\x07|\x1b\\)/g;
+// biome-ignore lint/complexity/useRegexLiterals: string form avoids control-character regex diagnostics.
+const OSC_RE = new RegExp("\\x1b\\][\\s\\S]*?(?:\\x07|\\x1b\\\\)", "g");
 
 // Matches DCS, APC, PM, and SOS — all terminated by ST (\x1b\\).
-const DCS_APC_PM_SOS_RE = /\x1b[P_^X][\s\S]*?\x1b\\/g;
+// biome-ignore lint/complexity/useRegexLiterals: string form avoids control-character regex diagnostics.
+const DCS_APC_PM_SOS_RE = new RegExp("\\x1b[P_^X][\\s\\S]*?\\x1b\\\\", "g");
 
 /**
  * Sanitize server-supplied text before writing it to the terminal.

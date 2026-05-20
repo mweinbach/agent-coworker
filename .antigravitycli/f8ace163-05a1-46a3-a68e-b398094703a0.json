@@ -1,1 +1,14 @@
-/Users/mweinbach/.gemini/config/projects/f8ace163-05a1-46a3-a68e-b398094703a0.json
+{
+  "id": "f8ace163-05a1-46a3-a68e-b398094703a0",
+  "name": "agent-coworker",
+  "projectResources": {
+    "resources": [
+      {
+        "gitFolder": {
+          "folderUri": "file:///Users/mweinbach/Projects/agent-coworker",
+          "allowWrite": true
+        }
+      }
+    ]
+  }
+}

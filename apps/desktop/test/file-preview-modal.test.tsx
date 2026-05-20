@@ -167,8 +167,11 @@ describe("file preview modal", () => {
 
       const doc = harness.dom.window.document;
       const markdownShell = doc.querySelector("[data-file-preview-markdown-shell='true']");
+      const description = doc.querySelector("[data-slot='dialog-description']");
 
       expect(markdownShell?.className).toContain("max-w-[78ch]");
+      expect(description?.className).toContain("sr-only");
+      expect(description?.textContent).toBe("Markdown preview for preview_latency_review.md");
       expect(doc.body.textContent).toContain("Open");
       expect(doc.body.textContent).not.toContain(path);
       expect(doc.body.textContent).not.toContain("Copy path");

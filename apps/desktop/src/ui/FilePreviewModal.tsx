@@ -16,6 +16,7 @@ import { Button } from "../components/ui/button";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -392,6 +393,9 @@ export function FilePreviewModal() {
                   {kindLabel}
                 </Badge>
               </div>
+              <DialogDescription className="sr-only">
+                {kindLabel} preview for {titleName}
+              </DialogDescription>
             </div>
             <div className="flex shrink-0 items-center gap-2">
               <Button

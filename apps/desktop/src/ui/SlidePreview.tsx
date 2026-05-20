@@ -1,12 +1,12 @@
 import { AlertTriangleIcon, Loader2Icon, RefreshCwIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAppStore } from "../app/store";
 import { previewJsonRpcWorkspacePresentation } from "../app/store.helpers/jsonRpcSocket";
 import { Button } from "../components/ui/button";
 
 type SlidePreviewProps = {
   path: string;
-  refreshTrigger?: any;
+  refreshTrigger?: unknown;
 };
 
 export function SlidePreview({ path, refreshTrigger }: SlidePreviewProps) {
@@ -22,9 +22,9 @@ export function SlidePreview({ path, refreshTrigger }: SlidePreviewProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const previousRefreshTrigger = useRef(refreshTrigger);
 
   const loadSlide = useCallback(async () => {
-    const _forceReload = refreshKey;
     if (!selectedWorkspaceId || !hasActiveWorkspace) {
       setError("No active workspace found.");
       setLoading(false);
@@ -33,6 +33,9 @@ export function SlidePreview({ path, refreshTrigger }: SlidePreviewProps) {
 
     setLoading(true);
     setError(null);
+    if (refreshKey > 0) {
+      setSlide(null);
+    }
     try {
       const response = await previewJsonRpcWorkspacePresentation(
         useAppStore.getState,
@@ -53,7 +56,13 @@ export function SlidePreview({ path, refreshTrigger }: SlidePreviewProps) {
     } finally {
       setLoading(false);
     }
-  }, [hasActiveWorkspace, path, selectedWorkspaceId, refreshKey, refreshTrigger]);
+  }, [hasActiveWorkspace, path, refreshKey, selectedWorkspaceId]);
+
+  useEffect(() => {
+    if (Object.is(previousRefreshTrigger.current, refreshTrigger)) return;
+    previousRefreshTrigger.current = refreshTrigger;
+    setRefreshKey((k) => k + 1);
+  }, [refreshTrigger]);
 
   useEffect(() => {
     loadSlide();

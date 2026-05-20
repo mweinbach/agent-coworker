@@ -104,14 +104,20 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
 }));
 
 if (typeof process !== "undefined" && process.env.NODE_ENV === "test") {
-  const originalSubscribe = useAppStore.subscribe;
+  type AppStoreSubscribe = typeof useAppStore.subscribe;
+  type AppStoreListener = Parameters<AppStoreSubscribe>[0];
+  type TestableAppStore = typeof useAppStore & {
+    clearAllListeners?: () => void;
+  };
+
+  const originalSubscribe: AppStoreSubscribe = useAppStore.subscribe;
   const unsubscribes = new Set<() => void>();
 
-  useAppStore.subscribe = (listener: any) => {
-    const wrappedListener = (state: any, prevState: any) => {
+  useAppStore.subscribe = ((listener: AppStoreListener) => {
+    const wrappedListener: AppStoreListener = (state, prevState) => {
       try {
         listener(state, prevState);
-      } catch (err: any) {
+      } catch (err) {
         if (
           err instanceof ReferenceError &&
           (err.message.includes("window") ||
@@ -131,13 +137,15 @@ if (typeof process !== "undefined" && process.env.NODE_ENV === "test") {
     };
     unsubscribes.add(wrappedUnsubscribe);
     return wrappedUnsubscribe;
-  };
+  }) as AppStoreSubscribe;
 
-  (useAppStore as any).clearAllListeners = () => {
+  (useAppStore as TestableAppStore).clearAllListeners = () => {
     for (const unsubscribe of unsubscribes) {
       try {
         unsubscribe();
-      } catch {}
+      } catch {
+        // Listener teardown is best effort in isolated jsdom tests.
+      }
     }
     unsubscribes.clear();
   };

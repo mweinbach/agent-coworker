@@ -1,9 +1,7 @@
 import { afterAll, describe, expect, mock, test } from "bun:test";
 import path from "node:path";
-import { createElement } from "react";
-import "./helpers/mock-react-native";
-import { setupJsdom } from "../apps/desktop/test/jsdomHarness";
 import { act, createElement } from "react";
+import { setupJsdom } from "../apps/desktop/test/jsdomHarness";
 import { createRoot } from "react-dom/client";
 
 if (typeof globalThis.requestAnimationFrame === "undefined") {
@@ -173,8 +171,6 @@ const ThreadDetailScreen = (await import("../apps/mobile/src/app/(app)/thread/[i
 
 describe("mobile ThreadDetailScreen", () => {
   afterAll(() => {
-    mock.restore();
-
     mock.module("@/features/pairing/pairingStore", () => ({
       usePairingStore: realUsePairingStore,
     }));

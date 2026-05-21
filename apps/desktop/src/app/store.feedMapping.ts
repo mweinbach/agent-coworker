@@ -794,8 +794,13 @@ function applyModelStreamUpdate(
     stream.toolInputByKey.delete(fullKey);
     if (itemId) {
       ops.updateFeedItem(itemId, (item) =>
-        item.kind === "tool"
-          ? { ...item, name: update.name, state: "input-streaming", args: update.args ?? item.args }
+        item.kind === "tool" && !isTerminalToolState(item.state)
+          ? {
+              ...item,
+              name: update.name,
+              state: "input-streaming",
+              args: update.args ?? item.args,
+            }
           : item,
       );
       return;
@@ -835,6 +840,7 @@ function applyModelStreamUpdate(
     }
     ops.updateFeedItem(itemId, (item) => {
       if (item.kind !== "tool") return item;
+      if (isTerminalToolState(item.state)) return item;
       return {
         ...item,
         state: item.state === "approval-requested" ? item.state : "input-streaming",
@@ -850,7 +856,7 @@ function applyModelStreamUpdate(
 
     if (itemId) {
       ops.updateFeedItem(itemId, (item) =>
-        item.kind === "tool"
+        item.kind === "tool" && !isTerminalToolState(item.state)
           ? {
               ...item,
               name: update.name,
@@ -881,7 +887,7 @@ function applyModelStreamUpdate(
     const { fullKey, itemId } = resolveToolItem(stream, update.turnId, update.key, update.name);
     if (itemId) {
       ops.updateFeedItem(itemId, (item) =>
-        item.kind === "tool"
+        item.kind === "tool" && !isTerminalToolState(item.state)
           ? {
               ...item,
               name: update.name,
@@ -925,16 +931,25 @@ function applyModelStreamUpdate(
         : update.kind === "tool_error"
           ? "output-error"
           : "output-denied";
+    const completedAt = ops.nowIso();
 
     if (itemId) {
       ops.updateFeedItem(itemId, (item) =>
-        item.kind === "tool" ? { ...item, name: update.name, state, result } : item,
+        item.kind === "tool"
+          ? {
+              ...item,
+              name: update.name,
+              state,
+              result,
+              completedAt: item.completedAt ?? completedAt,
+            }
+          : item,
       );
     } else {
       const id = ops.makeId();
       stream.toolItemIdByKey.set(fullKey, id);
       rememberLatestToolKey(stream, update.turnId, update.name, fullKey);
-      push({ id, kind: "tool", ts: ops.nowIso(), name: update.name, state, result });
+      push({ id, kind: "tool", ts: completedAt, name: update.name, state, result, completedAt });
     }
 
     ops.onToolTerminal?.();

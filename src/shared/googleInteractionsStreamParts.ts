@@ -111,6 +111,10 @@ function isNativeGoogleToolResultContentType(contentType: string): boolean {
   return contentType === "google_search_result" || contentType === "url_context_result";
 }
 
+function isGoogleTextContentType(contentType: string): boolean {
+  return contentType === "text" || contentType === "model_output";
+}
+
 function extractStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.map((entry) => asNonEmptyString(entry)).filter((entry): entry is string => !!entry);
@@ -230,7 +234,7 @@ export function processGoogleInteractionsStreamEvent(
 
     const contentType = asNonEmptyString(content.type);
     if (!contentType) return;
-    if (contentType === "text") {
+    if (isGoogleTextContentType(contentType)) {
       contentBlocks.set(index, {
         type: "text",
         text: asNonEmptyString(content.text) ?? "",
@@ -458,7 +462,7 @@ export function mapGoogleInteractionsEventToStreamParts(
     const content = asRecord(event.content ?? event.step);
     const contentType = asNonEmptyString(content?.type);
 
-    if (contentType === "text") {
+    if (contentType && isGoogleTextContentType(contentType)) {
       const parts: Array<Record<string, unknown>> = [
         { type: "text-start", id: streamIdForIndex(index) },
       ];

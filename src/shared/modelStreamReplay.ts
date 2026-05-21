@@ -30,6 +30,7 @@ export type ModelStreamReplayRuntime = {
     {
       contentBlocks: Map<number, GoogleInteractionsContentBlock>;
       providerToolCallsById: Map<string, GoogleInteractionsProviderToolCallState>;
+      currentInteractionId: string | null;
     }
   >;
 };
@@ -73,6 +74,7 @@ function getOrCreateGoogleState(
 ): {
   contentBlocks: Map<number, GoogleInteractionsContentBlock>;
   providerToolCallsById: Map<string, GoogleInteractionsProviderToolCallState>;
+  currentInteractionId: string | null;
 } {
   const existing = runtime.googleStateByTurn.get(turnId);
   if (existing) return existing;
@@ -80,9 +82,40 @@ function getOrCreateGoogleState(
   const state = {
     contentBlocks: new Map<number, GoogleInteractionsContentBlock>(),
     providerToolCallsById: new Map<string, GoogleInteractionsProviderToolCallState>(),
+    currentInteractionId: null,
   };
   runtime.googleStateByTurn.set(turnId, state);
   return state;
+}
+
+function interactionIdFromGoogleEvent(event: Record<string, unknown>): string | null {
+  const directId = event.interaction_id;
+  if (typeof directId === "string" && directId.trim()) return directId;
+  const interaction = event.interaction;
+  if (typeof interaction !== "object" || interaction === null || Array.isArray(interaction)) {
+    return null;
+  }
+  const interactionId = (interaction as Record<string, unknown>).id;
+  return typeof interactionId === "string" && interactionId.trim() ? interactionId : null;
+}
+
+function resetGoogleStepStateForNewInteraction(
+  state: {
+    contentBlocks: Map<number, GoogleInteractionsContentBlock>;
+    providerToolCallsById: Map<string, GoogleInteractionsProviderToolCallState>;
+    currentInteractionId: string | null;
+  },
+  rawEvent: Record<string, unknown>,
+): void {
+  const eventType = typeof rawEvent.event_type === "string" ? rawEvent.event_type : null;
+  if (eventType !== "interaction.created" && eventType !== "interaction.status_update") {
+    return;
+  }
+  const interactionId = interactionIdFromGoogleEvent(rawEvent);
+  if (!interactionId || state.currentInteractionId === interactionId) return;
+  state.currentInteractionId = interactionId;
+  state.contentBlocks.clear();
+  state.providerToolCallsById.clear();
 }
 
 function mapRawPartsToUpdates(
@@ -134,6 +167,7 @@ export function replayModelStreamRawEvent(
 
     try {
       const state = getOrCreateGoogleState(runtime, evt.turnId);
+      resetGoogleStepStateForNewInteraction(state, rawEvent);
       processGoogleInteractionsStreamEvent(
         rawEvent,
         state.contentBlocks,

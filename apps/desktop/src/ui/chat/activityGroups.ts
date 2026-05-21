@@ -60,6 +60,22 @@ function isTerminalToolState(state: ToolFeedState): boolean {
   return state === "output-available" || state === "output-error" || state === "output-denied";
 }
 
+function effectiveToolState(item: Extract<FeedItem, { kind: "tool" }>): ToolFeedState {
+  if (isTerminalToolState(item.state) || item.result === undefined) return item.state;
+  if (isRecord(item.result)) {
+    if (item.result.denied === true) return "output-denied";
+    if ("error" in item.result) return "output-error";
+  }
+  return "output-available";
+}
+
+function normalizeToolActivityItem(
+  item: Extract<FeedItem, { kind: "tool" }>,
+): Extract<FeedItem, { kind: "tool" }> {
+  const state = effectiveToolState(item);
+  return state === item.state ? item : { ...item, state };
+}
+
 function toolValueSignature(value: unknown): string | null {
   if (value === undefined) return null;
   if (typeof value === "string") return value;
@@ -231,23 +247,25 @@ function buildActivityTraceEntries(items: ActivityFeedItem[]): ActivityTraceEntr
       continue;
     }
 
-    if (previous?.kind === "tool" && shouldMergeToolTraceItems(previous.item, item)) {
+    const toolItem = normalizeToolActivityItem(item);
+
+    if (previous?.kind === "tool" && shouldMergeToolTraceItems(previous.item, toolItem)) {
       entries[entries.length - 1] = {
         kind: "tool",
         item: {
           ...previous.item,
-          ts: item.ts,
-          state: item.state,
-          args: item.args ?? previous.item.args,
-          result: item.result ?? previous.item.result,
-          approval: item.approval ?? previous.item.approval,
-          sourceIds: [...previous.item.sourceIds, item.id],
+          ts: toolItem.ts,
+          state: toolItem.state,
+          args: toolItem.args ?? previous.item.args,
+          result: toolItem.result ?? previous.item.result,
+          approval: toolItem.approval ?? previous.item.approval,
+          sourceIds: [...previous.item.sourceIds, toolItem.id],
         },
       };
       continue;
     }
 
-    entries.push({ kind: "tool", item: { ...item, sourceIds: [item.id] } });
+    entries.push({ kind: "tool", item: { ...toolItem, sourceIds: [toolItem.id] } });
   }
 
   if (entries.length === 0 && firstBlankReasoning) {
@@ -258,7 +276,7 @@ function buildActivityTraceEntries(items: ActivityFeedItem[]): ActivityTraceEntr
 }
 
 function deriveStatus(toolItems: ToolTraceItem[]): ActivityGroupStatus {
-  const states = new Set<ToolFeedState>(toolItems.map((item) => item.state));
+  const states = new Set<ToolFeedState>(toolItems.map((item) => effectiveToolState(item)));
   if (states.has("approval-requested")) return "approval";
   if (states.has("output-error") || states.has("output-denied")) return "issue";
   if (states.has("input-streaming") || states.has("input-available")) return "running";
@@ -290,7 +308,14 @@ export function formatActivityElapsedMs(durationMs: number): string {
 }
 
 function activityElapsedLabel(items: ActivityFeedItem[]): string | null {
-  const timestamps = items.map((item) => activityTimestampMs(item.ts)).filter((ms) => ms !== null);
+  const timestamps: number[] = [];
+  for (const item of items) {
+    const startedAt = activityTimestampMs(item.ts);
+    if (startedAt !== null) timestamps.push(startedAt);
+    const completedAt =
+      item.kind === "tool" && item.completedAt ? activityTimestampMs(item.completedAt) : null;
+    if (completedAt !== null) timestamps.push(completedAt);
+  }
   if (timestamps.length < 2) return null;
   const startedAt = Math.min(...timestamps);
   const endedAt = Math.max(...timestamps);

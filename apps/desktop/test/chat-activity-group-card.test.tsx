@@ -212,6 +212,26 @@ describe("desktop activity group card", () => {
     expect(html).not.toContain("Checking the current leadership context.");
   });
 
+  test("renders a single completed tool duration from completedAt", () => {
+    const html = renderToStaticMarkup(
+      createElement(ActivityGroupCard, {
+        items: [
+          {
+            id: "t1",
+            kind: "tool",
+            ts: "2024-01-01T00:00:00.000Z",
+            completedAt: "2024-01-01T00:00:12.000Z",
+            name: "bash",
+            state: "output-available",
+            result: { exitCode: 0 },
+          },
+        ],
+      }),
+    );
+
+    expect(html).toContain("Worked for 12s");
+  });
+
   test("renders live terminal-looking activity as a compact working-for row", () => {
     const html = renderToStaticMarkup(
       createElement(ActivityGroupCard, {

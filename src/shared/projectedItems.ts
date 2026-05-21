@@ -135,7 +135,22 @@ function existingTsOr(ts: string, existing?: SessionFeedItem): string {
   return existing?.ts ?? ts;
 }
 
-function toFeedItem(item: ProjectedItem, ts: string, existing?: SessionFeedItem): SessionFeedItem {
+function isTerminalToolState(state: ProjectedToolState): boolean {
+  return state === "output-available" || state === "output-error" || state === "output-denied";
+}
+
+function existingToolItem(
+  existing?: SessionFeedItem,
+): Extract<SessionFeedItem, { kind: "tool" }> | null {
+  return existing?.kind === "tool" ? existing : null;
+}
+
+function toFeedItem(
+  item: ProjectedItem,
+  ts: string,
+  existing?: SessionFeedItem,
+  opts: { completed?: boolean } = {},
+): SessionFeedItem {
   switch (item.type) {
     case "userMessage":
       return {
@@ -162,17 +177,41 @@ function toFeedItem(item: ProjectedItem, ts: string, existing?: SessionFeedItem)
         ts: existingTsOr(ts, existing),
         text: item.text,
       };
-    case "toolCall":
+    case "toolCall": {
+      const existingTool = existingToolItem(existing);
+      const existingTerminal = existingTool ? isTerminalToolState(existingTool.state) : false;
+      const incomingTerminal = isTerminalToolState(item.state);
+      const nextState =
+        existingTerminal && !incomingTerminal && existingTool ? existingTool.state : item.state;
+      const nextName =
+        existingTerminal && !incomingTerminal && existingTool ? existingTool.name : item.toolName;
+      const completedAt = isTerminalToolState(nextState)
+        ? (existingTool?.completedAt ?? (opts.completed ? ts : undefined))
+        : existingTool?.completedAt;
+      const args =
+        existingTerminal && !incomingTerminal
+          ? existingTool?.args
+          : item.args !== undefined
+            ? item.args
+            : undefined;
+      const result =
+        existingTerminal && item.result === undefined ? existingTool?.result : item.result;
+      const approval =
+        existingTerminal && !incomingTerminal
+          ? existingTool?.approval
+          : (item.approval ?? undefined);
       return {
         id: item.id,
         kind: "tool",
         ts: existingTsOr(ts, existing),
-        name: item.toolName,
-        state: item.state,
-        ...(item.args !== undefined ? { args: item.args } : {}),
-        ...(item.result !== undefined ? { result: item.result } : {}),
-        ...(item.approval ? { approval: item.approval } : {}),
+        name: nextName,
+        state: nextState,
+        ...(args !== undefined ? { args } : {}),
+        ...(result !== undefined ? { result } : {}),
+        ...(approval ? { approval } : {}),
+        ...(completedAt !== undefined ? { completedAt } : {}),
       };
+    }
     case "system":
       return {
         id: item.id,
@@ -227,6 +266,7 @@ function upsertFeedItem(
   feed: SessionFeedItem[],
   item: ProjectedItem,
   ts: string,
+  opts: { completed?: boolean } = {},
 ): SessionFeedItem[] {
   const index = feed.findIndex(
     (entry) =>
@@ -234,7 +274,7 @@ function upsertFeedItem(
       (item.type === "userMessage" && item.clientMessageId && entry.id === item.clientMessageId),
   );
   const existing = index >= 0 ? feed[index] : undefined;
-  const next = toFeedItem(item, ts, existing);
+  const next = toFeedItem(item, ts, existing, opts);
   if (index < 0) {
     return [...feed, next];
   }
@@ -259,7 +299,7 @@ export function applyProjectedItemCompleted(
   if (item.type === "reasoning" && item.text.trim().length === 0) {
     return feed.filter((entry) => entry.id !== item.id);
   }
-  return upsertFeedItem(feed, item, ts);
+  return upsertFeedItem(feed, item, ts, { completed: true });
 }
 
 export function applyProjectedAgentMessageDelta(

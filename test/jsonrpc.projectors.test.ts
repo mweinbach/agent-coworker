@@ -278,8 +278,7 @@ describe("JSON-RPC projectors", () => {
       .filter(
         (message) =>
           message.method === "item/started" &&
-          (message.params?.item?.type === "reasoning" ||
-            message.params?.item?.type === "toolCall"),
+          (message.params?.item?.type === "reasoning" || message.params?.item?.type === "toolCall"),
       )
       .map((message) => message.params?.item?.type);
     expect(visibleOrder).toEqual(["reasoning", "toolCall", "reasoning"]);
@@ -959,6 +958,76 @@ describe("JSON-RPC projectors", () => {
       state: "output-error",
       args: { path: "audio.mp3", limit: 100 },
       result: { error: "Gemini generated response exceeded the provider size limit." },
+    });
+  });
+
+  test("projectors keep completed tools terminal when stale input chunks arrive later", () => {
+    const outbound: Array<{ method: string; params?: any }> = [];
+    const emissions: Array<{ eventType: string; payload: any }> = [];
+    const live = createJsonRpcNotificationProjector({
+      threadId: sessionId,
+      send: (message) => outbound.push(message as { method: string; params?: any }),
+    });
+    const journal = createThreadJournalNotificationProjector({
+      threadId: sessionId,
+      emit: (event) => emissions.push({ eventType: event.eventType, payload: event.payload }),
+    });
+
+    for (const projector of [live, journal] as const) {
+      projector.handle({
+        type: "session_busy",
+        sessionId,
+        busy: true,
+        turnId,
+        cause: "user_message",
+      });
+      projector.handle(
+        streamChunk("tool_input_start", { id: "todo-final", toolName: "todoWrite" }),
+      );
+      projector.handle(
+        streamChunk("tool_call", {
+          toolCallId: "todo-final",
+          toolName: "todoWrite",
+          input: { todos: [{ content: "Verify", status: "completed" }] },
+        }),
+      );
+      projector.handle(
+        streamChunk("tool_result", {
+          toolCallId: "todo-final",
+          toolName: "todoWrite",
+          output: "Todo list updated",
+        }),
+      );
+      projector.handle(streamChunk("tool_input_end", { id: "todo-final", toolName: "tool" }));
+      projector.handle(
+        streamChunk("tool_call", {
+          toolCallId: "todo-final",
+          toolName: "tool",
+          input: { id: "todo-final", toolName: "todoWrite" },
+        }),
+      );
+    }
+
+    const liveToolStates = outbound
+      .filter((message) => message.method === "item/completed")
+      .map((message) => message.params?.item)
+      .filter((item) => item?.type === "toolCall" && item.id === `toolCall:${turnId}:todo-final`)
+      .map((item) => ({ name: item.toolName, state: item.state, result: item.result }));
+    expect(liveToolStates.at(-1)).toEqual({
+      name: "todoWrite",
+      state: "output-available",
+      result: "Todo list updated",
+    });
+
+    const journalToolStates = emissions
+      .filter((event) => event.eventType === "item/completed")
+      .map((event) => event.payload?.item)
+      .filter((item) => item?.type === "toolCall" && item.id === `toolCall:${turnId}:todo-final`)
+      .map((item) => ({ name: item.toolName, state: item.state, result: item.result }));
+    expect(journalToolStates.at(-1)).toEqual({
+      name: "todoWrite",
+      state: "output-available",
+      result: "Todo list updated",
     });
   });
 

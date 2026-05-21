@@ -189,6 +189,41 @@ describe("desktop chat activity groups", () => {
     expect(summary.elapsedLabel).toBe("2m 56s");
   });
 
+  test("summary uses a single tool's completedAt for elapsed time", () => {
+    const summary = summarizeActivityGroup([
+      {
+        id: "t1",
+        kind: "tool",
+        ts: "2024-01-01T00:00:00.000Z",
+        completedAt: "2024-01-01T00:00:10.000Z",
+        name: "bash",
+        state: "output-available",
+        result: { exitCode: 0 },
+      },
+    ]);
+
+    expect(summary.status).toBe("done");
+    expect(summary.elapsedLabel).toBe("10s");
+  });
+
+  test("summary treats stale input-state tools with results as completed", () => {
+    const summary = summarizeActivityGroup([
+      {
+        id: "t1",
+        kind: "tool",
+        ts: "2024-01-01T00:00:00.000Z",
+        name: "todoWrite",
+        state: "input-available",
+        result: "Todo list updated",
+      },
+    ]);
+
+    expect(summary.status).toBe("done");
+    const entry = summary.entries[0];
+    expect(entry?.kind).toBe("tool");
+    expect(entry?.kind === "tool" ? entry.item.state : null).toBe("output-available");
+  });
+
   test("summary preview strips a standalone markdown reasoning heading", () => {
     const summary = summarizeActivityGroup([
       {

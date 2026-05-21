@@ -100,6 +100,40 @@ describe("googleInteractionsStreamParts", () => {
     ]);
   });
 
+  test("treats SDK v2 model_output blocks as assistant text", () => {
+    const contentBlocks = new Map();
+    const providerToolCallsById = new Map();
+
+    const startEvent = {
+      event_type: "step.start",
+      index: 1,
+      step: { type: "model_output" },
+    };
+    processGoogleInteractionsStreamEvent(startEvent, contentBlocks, providerToolCallsById);
+    expect(
+      mapGoogleInteractionsEventToStreamParts(startEvent, contentBlocks, providerToolCallsById),
+    ).toEqual([{ type: "text-start", id: "s1" }]);
+
+    const deltaEvent = {
+      event_type: "step.delta",
+      index: 1,
+      delta: { type: "text", text: "Final answer." },
+    };
+    processGoogleInteractionsStreamEvent(deltaEvent, contentBlocks, providerToolCallsById);
+
+    expect(contentBlocks.get(1)).toEqual({ type: "text", text: "Final answer." });
+    expect(
+      mapGoogleInteractionsEventToStreamParts(deltaEvent, contentBlocks, providerToolCallsById),
+    ).toEqual([{ type: "text-delta", id: "s1", text: "Final answer." }]);
+    expect(
+      mapGoogleInteractionsEventToStreamParts(
+        { event_type: "step.stop", index: 1 },
+        contentBlocks,
+        providerToolCallsById,
+      ),
+    ).toEqual([{ type: "text-end", id: "s1" }]);
+  });
+
   test("emits thought summaries included on SDK content.start blocks", () => {
     const contentBlocks = new Map();
     const providerToolCallsById = new Map();

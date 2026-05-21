@@ -873,6 +873,9 @@ export function createConversationProjection(opts: CreateConversationProjectionO
     if (update.kind === "tool_input_delta") {
       const fullKey = `${update.turnId}:${update.key}`;
       const existingState = toolByKey.get(fullKey);
+      if (existingState && isTerminalToolState(existingState.state)) {
+        return;
+      }
       const nextInput = `${toolInputByKey.get(fullKey) ?? existingState?.inputText ?? ""}${update.delta}`;
       toolInputByKey.set(fullKey, nextInput);
       if (existingState) {
@@ -884,6 +887,9 @@ export function createConversationProjection(opts: CreateConversationProjectionO
 
     if (update.kind === "tool_input_end") {
       const { fullKey, state } = resolveToolState(update.turnId, update.key, update.name);
+      if (isTerminalToolState(state.state)) {
+        return;
+      }
       const nextInput = toolInputByKey.get(fullKey) ?? state.inputText;
       state.inputText = nextInput;
       if (nextInput) {
@@ -898,9 +904,10 @@ export function createConversationProjection(opts: CreateConversationProjectionO
 
     if (update.kind === "tool_call") {
       const currentState = toolByKey.get(`${update.turnId}:${update.key}`);
-      const { state } = resolveToolState(update.turnId, update.key, update.name, {
-        startNewOccurrence: Boolean(currentState && isTerminalToolState(currentState.state)),
-      });
+      if (currentState && isTerminalToolState(currentState.state)) {
+        return;
+      }
+      const { state } = resolveToolState(update.turnId, update.key, update.name);
       if (update.args !== undefined) {
         state.args = update.args;
       }

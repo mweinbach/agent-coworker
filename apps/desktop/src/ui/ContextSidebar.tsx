@@ -19,6 +19,8 @@ import { cn } from "../lib/utils";
 import { buildMarkdownPreviewText } from "./chat/markdownPreview";
 import { WorkspaceFileExplorer } from "./file-explorer/WorkspaceFileExplorer";
 
+const taskStatusIconClassName = "mt-0.5 size-3.5 shrink-0";
+
 function agentStatusIcon(agent: ThreadAgentSummary) {
   if (agent.lifecycleState === "closed") {
     return <MinusCircleIcon className="mt-0.5 h-3.5 w-3.5 text-muted-foreground" />;
@@ -112,11 +114,11 @@ export const ContextSidebar = memo(function ContextSidebar() {
                   className="flex items-start gap-2 text-[11px]"
                 >
                   {todo.status === "completed" ? (
-                    <CheckCircle2Icon className="mt-0.5 h-3.25 w-3.25 text-success" />
+                    <CheckCircle2Icon className={cn(taskStatusIconClassName, "text-success")} />
                   ) : todo.status === "in_progress" ? (
-                    <CircleDashedIcon className="mt-0.5 h-3.25 w-3.25 text-primary" />
+                    <CircleDashedIcon className={cn(taskStatusIconClassName, "text-primary")} />
                   ) : (
-                    <CircleIcon className="mt-0.5 h-3.25 w-3.25 text-muted-foreground" />
+                    <CircleIcon className={cn(taskStatusIconClassName, "text-muted-foreground")} />
                   )}
                   <span
                     className={cn(

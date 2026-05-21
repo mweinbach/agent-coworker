@@ -1,17 +1,7 @@
-import path from "node:path";
-
-import { z } from "zod";
-import { resolveExperimentalA2uiConfig } from "../../../experimental/a2ui/flags";
-import { formatUserInputDisplayText } from "../../../shared/attachments";
 import { supportsProviderManagedContinuationProvider } from "../../../shared/providerContinuation";
 import type { AgentExecutionState } from "../../../shared/agents";
 import type { FileAttachment, OrderedInputPart } from "../../jsonrpc/routes/shared";
-import {
-  MODEL_STREAM_NORMALIZER_VERSION,
-  normalizeModelStreamPart,
-  reasoningModeForProvider,
-} from "../../modelStream";
-import { getAgentRoleShellPolicy } from "../../agents/roles";
+import { reasoningModeForProvider } from "../../modelStream";
 import type { HistoryManager } from "../HistoryManager";
 import type { InteractionManager } from "../InteractionManager";
 import type { SessionBackupController } from "../SessionBackupController";
@@ -23,6 +13,7 @@ import {
   getPartialTurnResponseMessages,
   resolvePartialTurnProgressSource,
 } from "./partialTurnError";
+import { createRunTurnInvocation } from "./runTurnInvocation";
 import type { SteerCoordinator } from "./steerCoordinator";
 import {
   detectMalformedToolCallFailure,
@@ -35,30 +26,11 @@ import {
   type ClassifiedTurnError,
   type UserMessageAttachmentHelpers,
 } from "./userMessageAttachments";
-
-const errorWithCodeSchema = z.object({ code: z.unknown() }).passthrough();
-
-function makeId(): string {
-  return crypto.randomUUID();
-}
-
-function resolveUserInputDisplayText(
-  text: string,
-  attachments?: readonly Pick<FileAttachment, "filename">[],
-): string {
-  return formatUserInputDisplayText(
-    text,
-    attachments
-      ?.map((attachment) => path.basename(attachment.filename))
-      .filter((fileName) => fileName && fileName !== "." && fileName !== ".."),
-  );
-}
-
-function isStartStepPart(part: unknown): boolean {
-  return (
-    typeof part === "object" && part !== null && (part as { type?: unknown }).type === "start-step"
-  );
-}
+import {
+  isAbortLikeError,
+  makeTurnId,
+  resolveUserInputDisplayText,
+} from "./userMessageTurnHelpers";
 
 export type UserMessageTurnRunnerDeps = {
   context: SessionContext;
@@ -78,9 +50,7 @@ export type UserMessageTurnRunnerDeps = {
     ) => {
       ok: boolean;
       surfaceId?: string;
-      change?: "created" | "updated" | "deleted" | "noop";
       error?: string;
-      warning?: string;
     };
   };
 };
@@ -118,18 +88,6 @@ export function createUserMessageTurnRunner(deps: UserMessageTurnRunnerDeps): Us
   const settledExecutionState = (): AgentExecutionState => {
     if (context.state.persistenceStatus === "closed") return "closed";
     return context.state.currentTurnOutcome === "error" ? "errored" : "completed";
-  };
-
-  const isAbortLikeError = (err: unknown): boolean => {
-    if (context.state.abortController?.signal.aborted) return true;
-    if (err instanceof DOMException && err.name === "AbortError") return true;
-
-    const parsedCode = errorWithCodeSchema.safeParse(err);
-    const code = parsedCode.success ? parsedCode.data.code : undefined;
-    if (code === "ABORT_ERR") return true;
-
-    const msg = context.formatError(err).toLowerCase();
-    return msg.includes("abort") || msg.includes("cancel");
   };
 
   const log = (line: string) => {
@@ -195,19 +153,21 @@ export function createUserMessageTurnRunner(deps: UserMessageTurnRunnerDeps): Us
     context.state.abortController = new AbortController();
     context.state.acceptingSteers = true;
     const turnStartedAt = Date.now();
-    const turnId = makeId();
+    const turnId = makeTurnId();
     context.state.currentTurnId = turnId;
     context.state.currentTurnOutcome = "completed";
     updateSessionExecutionState("running");
     const cause: "user_message" | "command" = visibleText.startsWith("/")
       ? "command"
       : "user_message";
-    let lastStreamError: unknown = null;
     let lastMessagePreview: string | undefined;
-    let startedStepCount = 0;
-    let streamPartIndex = 0;
-    let rawStreamEventIndex = 0;
     const includeRawChunks = context.state.config.includeRawChunks ?? true;
+    const tracker = {
+      startedStepCount: 0,
+      streamPartIndex: 0,
+      rawStreamEventIndex: 0,
+      lastStreamError: null as unknown,
+    };
     const usageAggregator = createTurnUsageAggregator({
       turnId,
       sessionId: context.id,
@@ -217,246 +177,21 @@ export function createUserMessageTurnRunner(deps: UserMessageTurnRunnerDeps): Us
       emit: (event) => context.emit(event),
     });
     const { mergeUsageFromError, mergeTurnUsage, persistAggregatedUsage } = usageAggregator;
-    const invokeRunTurn = async (
-      maxSteps: number,
-      providerStateOverride = context.state.providerState,
-    ) => {
-      const harnessContext = context.deps.harnessContextStore.get(context.id);
-      return await context.deps.runTurnImpl({
-        config: context.state.config,
-        system: context.state.system,
-        messages: context.state.messages,
-        allMessages: context.state.allMessages,
-        providerState: providerStateOverride,
-        harnessContext,
-        prepareStep: async ({ messages }) => steerCoordinator.drainPendingSteers(messages),
-        registerSteerHandler: (handler) => {
-          context.state.activeSteerHandler = handler;
-          return () => {
-            if (context.state.activeSteerHandler === handler) {
-              context.state.activeSteerHandler = null;
-            }
-          };
-        },
-        agentControl:
-          context.state.sessionInfo.sessionKind === "agent" ||
-          !context.deps.createAgentSessionImpl
-            ? undefined
-            : {
-                spawn: async ({
-                  message,
-                  role,
-                  model,
-                  reasoningEffort,
-                  nickname,
-                  taskType,
-                  targetPaths,
-                  contextMode,
-                  briefing,
-                  includeParentTodos,
-                  includeHarnessContext,
-                  forkContext,
-                }) => {
-                  const createAgentSession = context.deps.createAgentSessionImpl;
-                  if (!createAgentSession) {
-                    throw new Error("Child-agent spawning is unavailable.");
-                  }
-                  return await createAgentSession({
-                    parentSessionId: context.id,
-                    parentConfig: context.state.config,
-                    message,
-                    ...(role ? { role } : {}),
-                    ...(nickname ? { nickname } : {}),
-                    ...(taskType ? { taskType } : {}),
-                    ...(targetPaths !== undefined ? { targetPaths } : {}),
-                    ...(model ? { model } : {}),
-                    ...(reasoningEffort ? { reasoningEffort } : {}),
-                    ...(contextMode !== undefined ? { contextMode } : {}),
-                    ...(briefing !== undefined ? { briefing } : {}),
-                    ...(includeParentTodos !== undefined ? { includeParentTodos } : {}),
-                    ...(includeHarnessContext !== undefined ? { includeHarnessContext } : {}),
-                    ...(forkContext !== undefined ? { forkContext } : {}),
-                    parentDepth:
-                      typeof context.state.sessionInfo.depth === "number"
-                        ? context.state.sessionInfo.depth
-                        : 0,
-                  });
-                },
-                list: async () =>
-                  await (context.deps.listAgentSessionsImpl?.(context.id) ?? Promise.resolve([])),
-                sendInput: async ({ agentId, message, interrupt }) => {
-                  if (!context.deps.sendAgentInputImpl) {
-                    throw new Error("Child-agent input is unavailable.");
-                  }
-                  await context.deps.sendAgentInputImpl({
-                    parentSessionId: context.id,
-                    agentId,
-                    message,
-                    ...(interrupt !== undefined ? { interrupt } : {}),
-                  });
-                },
-                wait: async ({ agentIds, timeoutMs, mode }) => {
-                  if (!context.deps.waitForAgentImpl) {
-                    throw new Error("Child-agent waiting is unavailable.");
-                  }
-                  return await context.deps.waitForAgentImpl({
-                    parentSessionId: context.id,
-                    agentIds,
-                    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-                    ...(mode !== undefined ? { mode } : {}),
-                  });
-                },
-                inspect: async ({ agentId }) => {
-                  if (!context.deps.inspectAgentImpl) {
-                    throw new Error("Child-agent inspection is unavailable.");
-                  }
-                  return await context.deps.inspectAgentImpl({
-                    parentSessionId: context.id,
-                    agentId,
-                  });
-                },
-                resume: async ({ agentId }) => {
-                  if (!context.deps.resumeAgentImpl) {
-                    throw new Error("Child-agent resume is unavailable.");
-                  }
-                  return await context.deps.resumeAgentImpl({
-                    parentSessionId: context.id,
-                    agentId,
-                  });
-                },
-                close: async ({ agentId }) => {
-                  if (!context.deps.closeAgentImpl) {
-                    throw new Error("Child-agent closing is unavailable.");
-                  }
-                  return await context.deps.closeAgentImpl({
-                    parentSessionId: context.id,
-                    agentId,
-                  });
-                },
-              },
-        log: (line) => log(line),
-        askUser: (q, opts) => askUser(q, opts),
-        approveCommand: (cmd) => approveCommand(cmd),
-        updateTodos: (todos) => updateTodos(todos),
-        discoveredSkills: context.state.discoveredSkills,
-        maxSteps,
-        yolo: context.state.yolo,
-        enableMcp: context.state.config.enableMcp,
-        sessionId: context.id,
-        spawnDepth:
-          typeof context.state.sessionInfo.depth === "number"
-            ? context.state.sessionInfo.depth
-            : 0,
-        agentRole: context.state.sessionInfo.role,
-        shellPolicy: getAgentRoleShellPolicy(context.state.sessionInfo.role),
-        telemetryContext: {
-          functionId: "session.turn",
-          metadata: {
-            sessionId: context.id,
-            turnId,
-          },
-        },
-        abortSignal: context.state.abortController?.signal,
-        includeRawChunks,
-        costTracker: context.state.costTracker ?? undefined,
-        toolEnv: context.deps.toolEnv,
-        ...(resolveExperimentalA2uiConfig(context.state.config) && getA2uiSurfaceManager
-          ? {
-              applyA2uiEnvelope: (
-                envelope: unknown,
-                meta?: { reason?: string; toolCallId?: string },
-              ) => {
-                const manager = getA2uiSurfaceManager?.();
-                return (
-                  manager?.applyUnknown(envelope, meta) ?? {
-                    ok: false,
-                    error: "A2UI surface manager is unavailable",
-                  }
-                );
-              },
-            }
-          : {}),
-        onSessionUsageBudgetUpdated: (snapshot) => {
-          context.emit({
-            type: "session_usage",
-            sessionId: context.id,
-            usage: context.state.costTracker?.getCompactSnapshot() ?? snapshot,
-          });
-          context.queuePersistSessionSnapshot("session.usage_budget_updated");
-        },
-        onModelError: async (error) => {
-          lastStreamError = error;
-          context.emitTelemetry("agent.stream.error", "error", {
-            sessionId: context.id,
-            provider: context.state.config.provider,
-            model: context.state.config.model,
-            error: context.formatError(error),
-          });
-        },
-        onModelAbort: async () => {
-          context.emitTelemetry("agent.stream.aborted", "ok", {
-            sessionId: context.id,
-            provider: context.state.config.provider,
-            model: context.state.config.model,
-          });
-        },
-        onModelRawEvent: async (rawEvent) => {
-          const index = rawStreamEventIndex++;
-          const eventPayload = {
-            type: "model_stream_raw" as const,
-            sessionId: context.id,
-            turnId,
-            index,
-            provider: context.state.config.provider,
-            model: context.state.config.model,
-            format: rawEvent.format,
-            normalizerVersion: MODEL_STREAM_NORMALIZER_VERSION,
-            event: rawEvent.event,
-          };
-          context.emit(eventPayload);
-          await context.deps.sessionDb?.persistModelStreamChunk({
-            sessionId: context.id,
-            turnId,
-            chunkIndex: index,
-            ts: new Date().toISOString(),
-            provider: context.state.config.provider,
-            model: context.state.config.model,
-            rawFormat: rawEvent.format,
-            normalizerVersion: MODEL_STREAM_NORMALIZER_VERSION,
-            rawEvent: rawEvent.event,
-          });
-        },
-        onModelStreamPart: async (rawPart) => {
-          if (isStartStepPart(rawPart)) {
-            startedStepCount += 1;
-            context.state.acceptingSteers = startedStepCount < context.state.maxSteps;
-          }
-
-          const partIndex = streamPartIndex++;
-          const normalized = normalizeModelStreamPart(rawPart, {
-            provider: context.state.config.provider,
-            includeRawPart: includeRawChunks,
-            fallbackIdSeed: turnId,
-            rawPartMode: process.env.COWORK_MODEL_STREAM_RAW_MODE === "full" ? "full" : "sanitized",
-          });
-          if (normalized.partType === "error") {
-            lastStreamError = normalized.part.error;
-          }
-          context.emit({
-            type: "model_stream_chunk",
-            sessionId: context.id,
-            turnId,
-            index: partIndex,
-            provider: context.state.config.provider,
-            model: context.state.config.model,
-            normalizerVersion: normalized.normalizerVersion,
-            partType: normalized.partType,
-            part: normalized.part,
-            ...(normalized.rawPart !== undefined ? { rawPart: normalized.rawPart } : {}),
-          });
-        },
-      });
-    };
+    const invokeRunTurn = createRunTurnInvocation({
+      context,
+      turnId,
+      steerCoordinator,
+      getA2uiSurfaceManager,
+      log,
+      askUser,
+      approveCommand,
+      updateTodos,
+      tracker,
+      includeRawChunks,
+      setAcceptingSteers: (accepting) => {
+        context.state.acceptingSteers = accepting;
+      },
+    });
     try {
       context.emit({
         type: "user_message",
@@ -483,7 +218,7 @@ export function createUserMessageTurnRunner(deps: UserMessageTurnRunnerDeps): Us
       context.queuePersistSessionSnapshot("session.user_message");
       let continueSameTurn = true;
       while (continueSameTurn) {
-        const remainingSteps = context.state.maxSteps - startedStepCount;
+        const remainingSteps = context.state.maxSteps - tracker.startedStepCount;
         if (remainingSteps <= 0) {
           context.state.acceptingSteers = false;
           steerCoordinator.rejectPendingSteers(
@@ -492,7 +227,7 @@ export function createUserMessageTurnRunner(deps: UserMessageTurnRunnerDeps): Us
           break;
         }
 
-        const startedStepsBeforePass = startedStepCount;
+        const startedStepsBeforePass = tracker.startedStepCount;
         let res: Awaited<ReturnType<typeof invokeRunTurn>>;
         try {
           res = await invokeRunTurn(remainingSteps);
@@ -520,9 +255,9 @@ export function createUserMessageTurnRunner(deps: UserMessageTurnRunnerDeps): Us
           }
         }
 
-        if (startedStepCount === startedStepsBeforePass) {
-          startedStepCount += 1;
-          context.state.acceptingSteers = startedStepCount < context.state.maxSteps;
+        if (tracker.startedStepCount === startedStepsBeforePass) {
+          tracker.startedStepCount += 1;
+          context.state.acceptingSteers = tracker.startedStepCount < context.state.maxSteps;
         }
 
         if (supportsProviderManagedContinuationProvider(context.state.config.provider)) {
@@ -560,7 +295,7 @@ export function createUserMessageTurnRunner(deps: UserMessageTurnRunnerDeps): Us
 
         mergeTurnUsage(res.usage);
 
-        if (startedStepCount >= context.state.maxSteps) {
+        if (tracker.startedStepCount >= context.state.maxSteps) {
           context.state.acceptingSteers = false;
           steerCoordinator.rejectPendingSteers(
             "Active turn reached its max step budget and can no longer accept steering.",
@@ -581,7 +316,7 @@ export function createUserMessageTurnRunner(deps: UserMessageTurnRunnerDeps): Us
         continueSameTurn =
           lateSteersCommitted && !context.state.abortController?.signal.aborted;
         context.state.acceptingSteers =
-          continueSameTurn && startedStepCount < context.state.maxSteps;
+          continueSameTurn && tracker.startedStepCount < context.state.maxSteps;
       }
 
       persistAggregatedUsage();
@@ -597,10 +332,9 @@ export function createUserMessageTurnRunner(deps: UserMessageTurnRunnerDeps): Us
         Date.now() - turnStartedAt,
       );
     } catch (err) {
-      // If the model pipeline reported no output but we saw a stream error chunk, surface the stream error instead.
       const actualErr =
-        lastStreamError && context.formatError(err).includes("No output generated")
-          ? lastStreamError
+        tracker.lastStreamError && context.formatError(err).includes("No output generated")
+          ? tracker.lastStreamError
           : err;
 
       const partialTurnSource = resolvePartialTurnProgressSource(actualErr, err);
@@ -622,7 +356,7 @@ export function createUserMessageTurnRunner(deps: UserMessageTurnRunnerDeps): Us
       }
 
       const msg = context.formatError(actualErr);
-      if (!isAbortLikeError(actualErr)) {
+      if (!isAbortLikeError(context, actualErr)) {
         context.state.currentTurnOutcome = "error";
         const classified = classifyTurnError(actualErr);
         context.emitError(classified.code, classified.source, msg);

@@ -7,6 +7,7 @@ import { basetenProvider } from "./baseten";
 import { bedrockProvider } from "./bedrock";
 import { PROVIDER_MODEL_CATALOG } from "./catalog";
 import { codexCliProvider } from "./codex-cli";
+import { firepassProvider } from "./firepass";
 import { fireworksProvider } from "./fireworks";
 import { googleProvider } from "./google";
 import { lmstudioProvider } from "./lmstudio";
@@ -62,6 +63,7 @@ const PROVIDER_RUNTIMES: Record<ProviderName, ProviderRuntimeDefinition> = {
   baseten: basetenProvider,
   together: togetherProvider,
   fireworks: fireworksProvider,
+  firepass: firepassProvider,
   nvidia: nvidiaProvider,
   lmstudio: lmstudioProvider,
   "opencode-go": opencodeGoProvider,
@@ -78,6 +80,7 @@ export const PROVIDERS: Record<ProviderName, ProviderDefinition> = {
   baseten: { ...PROVIDER_RUNTIMES.baseten, ...PROVIDER_MODEL_CATALOG.baseten },
   together: { ...PROVIDER_RUNTIMES.together, ...PROVIDER_MODEL_CATALOG.together },
   fireworks: { ...PROVIDER_RUNTIMES.fireworks, ...PROVIDER_MODEL_CATALOG.fireworks },
+  firepass: { ...PROVIDER_RUNTIMES.firepass, ...PROVIDER_MODEL_CATALOG.firepass },
   nvidia: { ...PROVIDER_RUNTIMES.nvidia, ...PROVIDER_MODEL_CATALOG.nvidia },
   lmstudio: { ...PROVIDER_RUNTIMES.lmstudio, ...PROVIDER_MODEL_CATALOG.lmstudio },
   "opencode-go": { ...PROVIDER_RUNTIMES["opencode-go"], ...PROVIDER_MODEL_CATALOG["opencode-go"] },

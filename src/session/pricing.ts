@@ -135,6 +135,12 @@ const BASE_PRICING_TABLE: Record<string, ModelPricing> = {
     outputPerMillion: 3,
     cachedInputPerMillion: 0.1,
   },
+  // Kimi K2.6 Turbo serverless pricing (https://fireworks.ai/models/fireworks/kimi-k2p6).
+  "firepass:accounts/fireworks/routers/kimi-k2p6-turbo": {
+    inputPerMillion: 0.95,
+    outputPerMillion: 4,
+    cachedInputPerMillion: 0.16,
+  },
   // OpenCode Go is intentionally excluded from local pricing estimates.
   "opencode-zen:glm-5": {
     inputPerMillion: 1,
@@ -350,6 +356,7 @@ function isPricingOverrideKey(value: string): value is `${ProviderName}:${string
     provider === "baseten" ||
     provider === "together" ||
     provider === "fireworks" ||
+    provider === "firepass" ||
     provider === "opencode-zen" ||
     provider === "codex-cli"
   );

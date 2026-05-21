@@ -266,6 +266,32 @@ describe("providers/connectionCatalog", () => {
     });
   });
 
+  test("lists Fire Pass in the provider catalog with the expected model set", async () => {
+    const payload = await getProviderCatalog({
+      readCodexAppServerAccountImpl: noCodexAccount,
+      readStore: async () => ({
+        version: 1,
+        updatedAt: "2026-02-17T00:00:00.000Z",
+        services: {},
+      }),
+    });
+
+    expect(payload.default.firepass).toBe("accounts/fireworks/routers/kimi-k2p6-turbo");
+    expect(payload.all).toContainEqual({
+      id: "firepass",
+      name: "Fire Pass",
+      models: [
+        {
+          id: "accounts/fireworks/routers/kimi-k2p6-turbo",
+          displayName: "Kimi K2.6 Turbo",
+          knowledgeCutoff: "Unknown",
+          supportsImageInput: true,
+        },
+      ],
+      defaultModel: "accounts/fireworks/routers/kimi-k2p6-turbo",
+    });
+  });
+
   test("lists NVIDIA in the provider catalog with the expected model set", async () => {
     const payload = await getProviderCatalog({
       readCodexAppServerAccountImpl: noCodexAccount,

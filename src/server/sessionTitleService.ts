@@ -14,6 +14,7 @@ const TITLE_MODELS_BY_PROVIDER: Partial<Record<AgentConfig["provider"], readonly
   openai: ["gpt-5-mini"],
   together: ["moonshotai/Kimi-K2.5"],
   fireworks: ["accounts/fireworks/models/glm-5"],
+  firepass: ["accounts/fireworks/routers/kimi-k2p6-turbo"],
   "opencode-go": ["glm-5"],
   "opencode-zen": ["glm-5"],
 };

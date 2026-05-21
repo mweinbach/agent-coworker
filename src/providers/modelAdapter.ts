@@ -142,6 +142,25 @@ export function createFireworksModelAdapter(
   );
 }
 
+export function createFirepassModelAdapter(
+  modelId: string,
+  savedKey?: string,
+): ProviderModelAdapter {
+  return createModelAdapter(
+    modelId,
+    "firepass.completions",
+    async () => {
+      const key = firstNonEmpty(savedKey, envKey("FIREPASS_API_KEY"));
+      const headers: HeaderMap = {};
+      if (key) {
+        headers.authorization = `Bearer ${key}`;
+      }
+      return headers;
+    },
+    "https://api.fireworks.ai/inference/v1",
+  );
+}
+
 export function createNvidiaModelAdapter(modelId: string, savedKey?: string): ProviderModelAdapter {
   return createModelAdapter(modelId, "nvidia.completions", async () => {
     const key = firstNonEmpty(savedKey, envKey("NVIDIA_API_KEY"));

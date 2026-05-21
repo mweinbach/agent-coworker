@@ -8,6 +8,7 @@ export const PROVIDER_NAMES = [
   "baseten",
   "together",
   "fireworks",
+  "firepass",
   "nvidia",
   "lmstudio",
   "opencode-go",

@@ -70,6 +70,11 @@ const freeExperimental = {
   bestFor: "free-tier experimentation, rough first passes, and non-critical exploratory work",
 } as const;
 
+const kimi26Turbo = {
+  bestFor:
+    "fast agentic coding and multimodal tasks with Kimi K2.6 Turbo via Fire Pass subscription",
+} as const;
+
 const CHILD_AGENT_MODEL_INFO_BY_KEY: Readonly<Record<string, ChildAgentModelInfo>> = {
   [key("openai", "gpt-5.5")]: frontierCoding,
   [key("openai", "gpt-5.4")]: frontierCoding,
@@ -109,6 +114,7 @@ const CHILD_AGENT_MODEL_INFO_BY_KEY: Readonly<Record<string, ChildAgentModelInfo
   [key("together", "moonshotai/Kimi-K2.5")]: kimi25,
   [key("fireworks", "accounts/fireworks/models/kimi-k2p5")]: kimi25,
   [key("fireworks", "accounts/fireworks/routers/kimi-k2p5-turbo")]: kimi25,
+  [key("firepass", "accounts/fireworks/routers/kimi-k2p6-turbo")]: kimi26Turbo,
   [key("opencode-go", "kimi-k2.5")]: kimi25,
   [key("opencode-zen", "kimi-k2.5")]: kimi25,
 

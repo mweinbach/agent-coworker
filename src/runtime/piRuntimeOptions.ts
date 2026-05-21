@@ -292,6 +292,10 @@ const FIREWORKS_UNSUPPORTED_SCHEMA_KEYS = new Set([
 const FIREWORKS_TOOL_SCHEMA_MAX_BYTES = 4096;
 const FIREWORKS_TOTAL_TOOL_SCHEMA_MAX_BYTES = 12288;
 
+function usesFireworksToolSchemaRules(provider?: ProviderName): boolean {
+  return provider === "fireworks" || provider === "firepass";
+}
+
 type ToolSchemaBudgetState = {
   totalBytes: number;
 };
@@ -412,7 +416,7 @@ function sanitizeProviderToolJsonSchema(
   schema: ToolJsonSchema | undefined,
   provider?: ProviderName,
 ): ToolJsonSchema | undefined {
-  if (provider !== "fireworks" || schema === undefined || typeof schema === "boolean") {
+  if (!usesFireworksToolSchemaRules(provider) || schema === undefined || typeof schema === "boolean") {
     return schema;
   }
 
@@ -556,7 +560,7 @@ export function applyProviderToolSchemaBudget(
   schema: Record<string, unknown>,
   state?: ToolSchemaBudgetState,
 ): Record<string, unknown> {
-  if (provider !== "fireworks") return schema;
+  if (!usesFireworksToolSchemaRules(provider)) return schema;
 
   const totalBytes = state?.totalBytes ?? 0;
   const candidates = [schema, shapePreservingShallowObjectSchema(schema), relaxedToolJsonSchema()];

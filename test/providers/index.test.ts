@@ -73,6 +73,24 @@ describe("src/providers/index.ts", () => {
       expect(headers.authorization).toBe("Bearer fw-key");
     });
 
+    test("creates Fire Pass model with saved key", async () => {
+      const config = makeConfig({
+        provider: "firepass",
+        model: "accounts/fireworks/routers/kimi-k2p6-turbo",
+        preferredChildModel: "accounts/fireworks/routers/kimi-k2p6-turbo",
+      });
+      const model = getModelForProvider(
+        config,
+        "accounts/fireworks/routers/kimi-k2p6-turbo",
+        "firepass-key",
+      ) as any;
+      const headers = await model.config.headers();
+      expect(model.modelId).toBe("accounts/fireworks/routers/kimi-k2p6-turbo");
+      expect(model.provider).toBe("firepass.completions");
+      expect(model.config.baseUrl).toBe("https://api.fireworks.ai/inference/v1");
+      expect(headers.authorization).toBe("Bearer firepass-key");
+    });
+
     test("creates NVIDIA model with saved key", async () => {
       const config = makeConfig({
         provider: "nvidia",
@@ -177,6 +195,7 @@ describe("src/providers/index.ts", () => {
       expect(defaultModelForProvider("baseten")).toBe(PROVIDERS.baseten.defaultModel);
       expect(defaultModelForProvider("together")).toBe(PROVIDERS.together.defaultModel);
       expect(defaultModelForProvider("fireworks")).toBe(PROVIDERS.fireworks.defaultModel);
+      expect(defaultModelForProvider("firepass")).toBe(PROVIDERS.firepass.defaultModel);
       expect(defaultModelForProvider("nvidia")).toBe(PROVIDERS.nvidia.defaultModel);
       expect(defaultModelForProvider("opencode-go")).toBe(PROVIDERS["opencode-go"].defaultModel);
       expect(defaultModelForProvider("opencode-zen")).toBe(PROVIDERS["opencode-zen"].defaultModel);
@@ -207,6 +226,10 @@ describe("src/providers/index.ts", () => {
 
     test("returns key candidates for fireworks", () => {
       expect(getProviderKeyCandidates("fireworks")).toBe(PROVIDERS.fireworks.keyCandidates);
+    });
+
+    test("returns key candidates for firepass", () => {
+      expect(getProviderKeyCandidates("firepass")).toBe(PROVIDERS.firepass.keyCandidates);
     });
 
     test("returns key candidates for nvidia", () => {

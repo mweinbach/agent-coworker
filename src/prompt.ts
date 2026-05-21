@@ -352,6 +352,7 @@ const PROVIDER_DISPLAY_NAMES: Record<ProviderName, string> = {
   baseten: "Baseten",
   together: "Together AI",
   fireworks: "Fireworks AI",
+  firepass: "Fire Pass",
   nvidia: "NVIDIA",
   lmstudio: "LM Studio",
   "opencode-go": "OpenCode Go",

@@ -22,6 +22,7 @@ import fireworksGlm5 from "../../config/models/fireworks/accounts-fireworks-mode
 import fireworksKimiK2p5 from "../../config/models/fireworks/accounts-fireworks-models-kimi-k2p5.json";
 import fireworksMinimaxM2p5 from "../../config/models/fireworks/accounts-fireworks-models-minimax-m2p5.json";
 import fireworksKimiK2p5Turbo from "../../config/models/fireworks/accounts-fireworks-routers-kimi-k2p5-turbo.json";
+import firepassKimiK2p6Turbo from "../../config/models/firepass/accounts-fireworks-routers-kimi-k2p6-turbo.json";
 import googleGemini31FlashLitePreview from "../../config/models/google/gemini-3.1-flash-lite-preview.json";
 import googleGemini31ProPreview from "../../config/models/google/gemini-3.1-pro-preview.json";
 import googleGemini31ProPreviewCustomtools from "../../config/models/google/gemini-3.1-pro-preview-customtools.json";
@@ -56,6 +57,7 @@ export const STATIC_MODEL_PROVIDER_NAMES = [
   "baseten",
   "together",
   "fireworks",
+  "firepass",
   "nvidia",
   "opencode-go",
   "opencode-zen",
@@ -103,6 +105,7 @@ const RAW_MODEL_REGISTRY_ENTRIES = [
   fireworksKimiK2p5,
   fireworksKimiK2p5Turbo,
   fireworksMinimaxM2p5,
+  firepassKimiK2p6Turbo,
   googleGemini35Flash,
   googleGemini3FlashPreview,
   antigravityGemini35Flash,
@@ -143,6 +146,7 @@ function buildRegistry(entries: SupportedModel[]) {
     baseten: [],
     together: [],
     fireworks: [],
+    firepass: [],
     nvidia: [],
     "opencode-go": [],
     "opencode-zen": [],

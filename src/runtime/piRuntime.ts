@@ -5,6 +5,7 @@ import { getResolvedModelMetadataSync } from "../models/metadata";
 import type { TelemetrySettings } from "../observability/runtime";
 import { getBasetenModelSpec, resolveBasetenApiKey } from "../providers/basetenShared";
 import { bedrockClientConfig, resolveBedrockAuthConfig } from "../providers/bedrockShared";
+import { getFirepassModelSpec, resolveFirepassApiKey } from "../providers/firepassShared";
 import { getFireworksModelSpec, resolveFireworksApiKey } from "../providers/fireworksShared";
 import { prepareLmStudioModelMetadataForInference } from "../providers/lmstudio/catalog";
 import { lmStudioOpenAiBaseUrl } from "../providers/lmstudio/client";
@@ -388,6 +389,29 @@ function getFireworksPiModel(modelId: string): PiModel | null {
   };
 }
 
+function getFirepassPiModel(modelId: string): PiModel | null {
+  const modelSpec = getFirepassModelSpec(modelId);
+  if (!modelSpec) return null;
+
+  return {
+    id: modelSpec.id,
+    name: modelSpec.name,
+    api: "openai-completions",
+    provider: "firepass",
+    baseUrl: modelSpec.baseUrl,
+    reasoning: modelSpec.reasoning,
+    input: [...modelSpec.input],
+    cost: {
+      input: modelSpec.pricing.input,
+      output: modelSpec.pricing.output,
+      cacheRead: modelSpec.pricing.cacheRead ?? 0,
+      cacheWrite: modelSpec.pricing.cacheWrite ?? 0,
+    },
+    contextWindow: modelSpec.contextWindow,
+    maxTokens: modelSpec.maxTokens,
+  };
+}
+
 function getNvidiaPiModel(modelId: string): PiModel | null {
   const modelSpec = getNvidiaModelSpec(modelId);
   if (!modelSpec) return null;
@@ -619,6 +643,18 @@ export async function resolvePiModel(
       model: applySupportedModelMetadata(model, provider, modelId),
       apiKey: resolveFireworksApiKey({
         savedKey: getSavedProviderApiKey(params.config, "fireworks"),
+      }),
+    };
+  }
+
+  if (provider === "firepass") {
+    const model = getFirepassPiModel(modelId);
+    if (!model)
+      throw new Error(`No PI model metadata available for provider firepass (model: ${modelId}).`);
+    return {
+      model: applySupportedModelMetadata(model, provider, modelId),
+      apiKey: resolveFirepassApiKey({
+        savedKey: getSavedProviderApiKey(params.config, "firepass"),
       }),
     };
   }

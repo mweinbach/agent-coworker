@@ -36,6 +36,10 @@ const STATIC_PROVIDER_MODEL_CATALOG = {
     defaultModel: defaultModelIdForProvider("fireworks"),
     availableModels: listSupportedModelIds("fireworks"),
   },
+  firepass: {
+    defaultModel: defaultModelIdForProvider("firepass"),
+    availableModels: listSupportedModelIds("firepass"),
+  },
   nvidia: {
     defaultModel: defaultModelIdForProvider("nvidia"),
     availableModels: listSupportedModelIds("nvidia"),
@@ -92,6 +96,7 @@ export const PROVIDER_MODEL_CHOICES: Record<ProviderName, readonly string[]> = {
   baseten: PROVIDER_MODEL_CATALOG.baseten.availableModels,
   together: PROVIDER_MODEL_CATALOG.together.availableModels,
   fireworks: PROVIDER_MODEL_CATALOG.fireworks.availableModels,
+  firepass: PROVIDER_MODEL_CATALOG.firepass.availableModels,
   nvidia: PROVIDER_MODEL_CATALOG.nvidia.availableModels,
   lmstudio: PROVIDER_MODEL_CATALOG.lmstudio.availableModels,
   "opencode-go": PROVIDER_MODEL_CATALOG["opencode-go"].availableModels,

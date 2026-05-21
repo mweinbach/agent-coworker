@@ -53,6 +53,7 @@ Live AI turns require at least one configured provider. Starting the server, lau
 | Bedrock | AWS default credentials, profile, or explicit keys (`AWS_REGION`, `AWS_PROFILE`, etc.) |
 | Together | `TOGETHER_API_KEY` |
 | Fireworks | `FIREWORKS_API_KEY` |
+| Fire Pass | `FIREPASS_API_KEY` |
 | NVIDIA | `NVIDIA_API_KEY` |
 | Baseten | `BASETEN_API_KEY` |
 | LM Studio | `LM_STUDIO_API_KEY` (optional); configure base URL via `LM_STUDIO_BASE_URL` or config |

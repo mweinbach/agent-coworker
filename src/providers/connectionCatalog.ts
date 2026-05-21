@@ -68,6 +68,7 @@ const PROVIDER_LABELS: Record<ProviderName, string> = {
   baseten: "Baseten",
   together: "Together AI",
   fireworks: "Fireworks AI",
+  firepass: "Fire Pass",
   nvidia: "NVIDIA",
   lmstudio: "LM Studio",
   "opencode-go": getOpenCodeDisplayName("opencode-go"),

@@ -14,6 +14,7 @@ describe("Cross-provider model creation", () => {
     { name: "baseten", providerPrefix: "baseten.completions" },
     { name: "together", providerPrefix: "together.completions" },
     { name: "fireworks", providerPrefix: "fireworks.completions" },
+    { name: "firepass", providerPrefix: "firepass.completions" },
     { name: "nvidia", providerPrefix: "nvidia.completions" },
     { name: "openai", providerPrefix: "openai.responses" },
     { name: "google", providerPrefix: "google.generative-ai" },
@@ -99,6 +100,10 @@ describe("Session reasoning kind mapping", () => {
 
   test("fireworks provider maps to 'reasoning' kind", () => {
     expect(reasoningModeForProvider("fireworks")).toBe("reasoning");
+  });
+
+  test("firepass provider maps to 'reasoning' kind", () => {
+    expect(reasoningModeForProvider("firepass")).toBe("reasoning");
   });
 
   test("nvidia provider maps to 'reasoning' kind", () => {

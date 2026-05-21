@@ -585,6 +585,52 @@ describe("codex app-server runtime", () => {
     });
   });
 
+  test.serial("prepares managed soffice env and instructions for app-server turns", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-soffice-"));
+    const home = path.join(dir, "home");
+    const capturePath = path.join(dir, "requests.jsonl");
+    await fs.mkdir(home, { recursive: true });
+    const previousHome = process.env.HOME;
+    process.env.HOME = home;
+    process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
+
+    let receivedOpts:
+      | Parameters<
+          NonNullable<Parameters<typeof codexAppServerClientInternal.setClientFactoryForTests>[0]>
+        >[0]
+      | null = null;
+    codexAppServerClientInternal.setClientFactoryForTests(async (opts) => {
+      receivedOpts = opts;
+      return createMockClient();
+    });
+
+    try {
+      const runtime = createRuntime(makeConfig(dir));
+      await runtime.runTurn({
+        config: makeConfig(dir),
+        system: "You are Codex.",
+        messages: [{ role: "user", content: "Say hi" }],
+        tools: {},
+        maxSteps: 1,
+      });
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+    }
+
+    const shimDir = path.join(home, ".cache", "cowork", "libreoffice", "bin");
+    const shimPath = path.join(shimDir, "soffice");
+    expect(receivedOpts?.env?.COWORK_SOFFICE).toBe(shimPath);
+    expect(receivedOpts?.env?.COWORK_MANAGED_SOFFICE_SHIM_DIR).toBe(shimDir);
+    expect(receivedOpts?.env?.PATH?.split(path.delimiter)[0]).toBe(shimDir);
+
+    const requests = await readCapturedRequests(capturePath);
+    const startParams = requests.find((entry) => entry.method === "thread/start")?.params;
+    expect(startParams?.baseInstructions).toContain("Managed LibreOffice Runtime");
+    expect(startParams?.baseInstructions).toContain(shimPath);
+    expect(startParams?.baseInstructions).toContain(`PATH=${shimDir}:$PATH`);
+  });
+
   test.serial("initializes app-server with the Cowork package version", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-init-"));
     const script = await writeMockAppServer(dir);

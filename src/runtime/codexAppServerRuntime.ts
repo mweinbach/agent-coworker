@@ -1,6 +1,8 @@
 import path from "node:path";
 
 import { type AttributeValue, type Span, SpanStatusCode, trace } from "@opentelemetry/api";
+
+import { ensureManagedSofficeRuntimeReady } from "../managedSofficeRuntime";
 import { getSupportedModel, listSupportedModels } from "../models/registry";
 import type { TelemetrySettings } from "../observability/runtime";
 import {
@@ -130,6 +132,7 @@ type CodexAppServerModelListEntry = {
 };
 type StartedCodexAppServer = {
   client: CodexAppServerClient;
+  env: Record<string, string | undefined>;
   waitForRawEvents: () => Promise<void>;
   dispose: () => void;
 };
@@ -380,7 +383,34 @@ function codexThreadConfig(params: RuntimeRunTurnParams): Record<string, unknown
   return Object.keys(config).length > 0 ? config : undefined;
 }
 
-function codexBaseInstructions(system: string): string {
+function envValue(env: Record<string, string | undefined> | undefined, key: string): string {
+  if (!env) return "";
+  const actualKey = Object.keys(env).find(
+    (candidate) => candidate.toLowerCase() === key.toLowerCase(),
+  );
+  return actualKey ? (env[actualKey] ?? "") : "";
+}
+
+function codexManagedSofficeInstructions(
+  env: Record<string, string | undefined> | undefined,
+): string | null {
+  const shimPath = envValue(env, "COWORK_SOFFICE") || envValue(env, "COWORK_MANAGED_SOFFICE_SHIM");
+  if (!shimPath) return null;
+  const shimDir = envValue(env, "COWORK_MANAGED_SOFFICE_SHIM_DIR") || path.dirname(shimPath);
+  return [
+    "## Managed LibreOffice Runtime",
+    "",
+    `Cowork-managed LibreOffice is available through the \`soffice\` shim at \`${shimPath}\`.`,
+    `When rendering documents, spreadsheets, or presentations, keep \`${shimDir}\` ahead of system paths, for example by prefixing shell commands with \`PATH=${shimDir}:$PATH\`.`,
+    "Do not conclude LibreOffice is unavailable from a broken Homebrew wrapper or a missing `/Applications/LibreOffice.app`; use the Cowork-managed shim.",
+  ].join("\n");
+}
+
+function codexBaseInstructions(
+  system: string,
+  env?: Record<string, string | undefined>,
+): string {
+  const managedSofficeInstructions = codexManagedSofficeInstructions(env);
   return [
     [
       "## Codex App-Server Tool Boundary",
@@ -391,6 +421,7 @@ function codexBaseInstructions(system: string): string {
       "Use Cowork dynamic tools for subagents, memory, skills, todos, usage, and A2UI.",
       "Cowork MCP tools are exposed with `cowork_mcp__{serverName}__{toolName}` names and routed back to the original `mcp__{serverName}__{toolName}` harness tools.",
     ].join("\n"),
+    ...(managedSofficeInstructions ? [managedSofficeInstructions] : []),
     system,
   ].join("\n\n");
 }
@@ -653,10 +684,24 @@ async function startCodexAppServer(
       }),
     );
   };
+  const appServerEnv = { ...(params.toolEnv ?? process.env) };
+  if (
+    !envValue(appServerEnv, "COWORK_SOFFICE") &&
+    !envValue(appServerEnv, "COWORK_MANAGED_SOFFICE_SHIM")
+  ) {
+    const managedSofficeRuntimeSetup = await ensureManagedSofficeRuntimeReady({
+      homedir: resolveAuthHomeDir(params.config),
+      env: appServerEnv,
+      log: (line) => params.log?.(`[managed-soffice] ${line}`),
+    });
+    if (managedSofficeRuntimeSetup?.status === "available") {
+      Object.assign(appServerEnv, managedSofficeRuntimeSetup.runtimeEnv);
+    }
+  }
   const client = await getPooledCodexAppServerClient({
     cwd: params.config.workingDirectory,
     codexHome: path.join(resolveAuthHomeDir(params.config), ".cowork", "auth", "codex-cli"),
-    env: params.toolEnv,
+    env: appServerEnv,
     log: params.log,
     invalidJsonLogPrefix: "[codex-app-server] ignored invalid JSONL",
   });
@@ -669,6 +714,7 @@ async function startCodexAppServer(
   });
   return {
     client,
+    env: appServerEnv,
     dispose: () => {
       disposeNotification();
       disposeJsonRpcMessage();
@@ -1118,7 +1164,12 @@ export function createCodexAppServerRuntime(): LlmRuntime {
         threadId: () => threadId,
         turnId: () => startedTurnId,
       };
-      const { client, waitForRawEvents, dispose } = await startCodexAppServer(params, activeTarget);
+      const {
+        client,
+        env: appServerEnv,
+        waitForRawEvents,
+        dispose,
+      } = await startCodexAppServer(params, activeTarget);
       let usage: RuntimeUsage | undefined;
       let unregisterSteerHandler: (() => void) | undefined;
       const assistantTextCapture = createAssistantTextCapture(client, activeTarget);
@@ -1152,7 +1203,7 @@ export function createCodexAppServerRuntime(): LlmRuntime {
               approvalPolicy,
               sandbox: sandboxMode,
               ...(threadConfig ? { config: threadConfig } : {}),
-              baseInstructions: codexBaseInstructions(params.system),
+              baseInstructions: codexBaseInstructions(params.system, appServerEnv),
               experimentalRawEvents: params.includeRawChunks ?? true,
               ...(dynamicTools.length > 0 ? { dynamicTools } : {}),
             },

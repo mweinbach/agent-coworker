@@ -263,6 +263,75 @@ describe("desktop chat activity groups", () => {
     expect(summary.statusLabel).toBe("Needs review");
   });
 
+  test("summary hides recovered internal command failures from the user-facing trace", () => {
+    const summary = summarizeActivityGroup([
+      {
+        id: "r1",
+        kind: "reasoning",
+        mode: "summary",
+        ts: "2024-01-01T00:00:01.000Z",
+        text: "Fixing the generated script before rerunning it.",
+      },
+      {
+        id: "t-failed",
+        kind: "tool",
+        ts: "2024-01-01T00:00:02.000Z",
+        name: "commandExecution",
+        state: "output-error",
+        args: { command: "python3 build_report.py" },
+        result: { error: "TypeError: bad argument" },
+      },
+      {
+        id: "t-edit",
+        kind: "tool",
+        ts: "2024-01-01T00:00:03.000Z",
+        name: "fileChange",
+        state: "output-available",
+        result: { paths: ["build_report.py"] },
+      },
+      {
+        id: "t-success",
+        kind: "tool",
+        ts: "2024-01-01T00:00:04.000Z",
+        name: "commandExecution",
+        state: "output-available",
+        args: { command: "python3 build_report.py" },
+        result: { exitCode: 0 },
+      },
+    ]);
+
+    expect(summary.status).toBe("done");
+    expect(summary.statusLabel).toBe("Done");
+    expect(summary.entries).toHaveLength(3);
+    expect(summary.entries.map((entry) => entry.item.id)).toEqual(["r1", "t-edit", "t-success"]);
+    expect(summary.entries.some((entry) => entry.kind === "tool" && entry.item.state === "output-error")).toBe(
+      false,
+    );
+    expect(summary.toolCount).toBe(2);
+  });
+
+  test("summary keeps unrecovered internal command failures visible", () => {
+    const summary = summarizeActivityGroup([
+      {
+        id: "t-failed",
+        kind: "tool",
+        ts: "2024-01-01T00:00:02.000Z",
+        name: "commandExecution",
+        state: "output-error",
+        args: { command: "python3 build_report.py" },
+        result: { error: "TypeError: bad argument" },
+      },
+    ]);
+
+    expect(summary.status).toBe("issue");
+    expect(summary.statusLabel).toBe("Issue");
+    expect(summary.entries).toHaveLength(1);
+    expect(summary.entries[0]?.kind).toBe("tool");
+    expect(summary.entries[0]?.kind === "tool" ? summary.entries[0].item.state : null).toBe(
+      "output-error",
+    );
+  });
+
   test("summary collapses adjacent tool lifecycle updates into one trace row", () => {
     const summary = summarizeActivityGroup([
       {

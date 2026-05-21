@@ -76,6 +76,15 @@ function normalizeToolActivityItem(
   return state === item.state ? item : { ...item, state };
 }
 
+function normalizedToolName(name: string): string {
+  return name.toLowerCase().replace(/[\s_-]+/g, "");
+}
+
+function isInternalSelfRepairTool(name: string): boolean {
+  const normalized = normalizedToolName(name);
+  return normalized === "commandexecution" || normalized === "filechange";
+}
+
 function toolValueSignature(value: unknown): string | null {
   if (value === undefined) return null;
   if (typeof value === "string") return value;
@@ -268,11 +277,27 @@ function buildActivityTraceEntries(items: ActivityFeedItem[]): ActivityTraceEntr
     entries.push({ kind: "tool", item: { ...toolItem, sourceIds: [toolItem.id] } });
   }
 
-  if (entries.length === 0 && firstBlankReasoning) {
-    entries.push({ kind: "reasoning", item: firstBlankReasoning });
+  const visibleEntries = filterRecoveredInternalToolErrors(entries);
+
+  if (visibleEntries.length === 0 && firstBlankReasoning) {
+    return [{ kind: "reasoning", item: firstBlankReasoning }];
   }
 
-  return entries;
+  return visibleEntries;
+}
+
+function filterRecoveredInternalToolErrors(entries: ActivityTraceEntry[]): ActivityTraceEntry[] {
+  return entries.filter((entry, index) => {
+    if (entry.kind !== "tool") return true;
+    if (effectiveToolState(entry.item) !== "output-error") return true;
+    if (!isInternalSelfRepairTool(entry.item.name)) return true;
+
+    return !entries.slice(index + 1).some((next) => {
+      if (next.kind !== "tool") return false;
+      const state = effectiveToolState(next.item);
+      return isTerminalToolState(state) && state === "output-available";
+    });
+  });
 }
 
 function deriveStatus(toolItems: ToolTraceItem[]): ActivityGroupStatus {

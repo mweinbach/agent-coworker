@@ -152,10 +152,28 @@ mockLocalModule(
   () => ({ PendingRequestCard: () => null }),
 );
 mockLocalModule(
-  "@/components/thread/thread-feed-item",
-  "apps/mobile/src/components/thread/thread-feed-item",
-  () => ({ ThreadFeedItem: () => null }),
+  "@/components/thread/a2ui-surface-card",
+  "apps/mobile/src/components/thread/a2ui-surface-card",
+  () => ({ A2uiSurfaceCard: () => null }),
 );
+mockLocalModule(
+  "@/components/thread/markdown-text",
+  "apps/mobile/src/components/thread/markdown-text",
+  () => ({ MarkdownText: () => null }),
+);
+mockLocalModule(
+  "@/components/thread/tool-call-card",
+  "apps/mobile/src/components/thread/tool-call-card",
+  () => ({ ToolCallCard: () => null }),
+);
+mockLocalModule(
+  "@/components/thread/reasoning-card",
+  "apps/mobile/src/components/thread/reasoning-card",
+  () => ({ ReasoningCard: () => null }),
+);
+mockLocalModule("@/components/thread/todo-card", "apps/mobile/src/components/thread/todo-card", () => ({
+  TodoCard: () => null,
+}));
 mockLocalModule("@/components/ui/screen", "apps/mobile/src/components/ui/screen", () => ({
   Screen: () => null,
 }));

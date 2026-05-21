@@ -38,6 +38,10 @@ function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   };
 }
 
+function expectedManagedSofficeShimPath(shimDir: string): string {
+  return path.join(shimDir, process.platform === "win32" ? "soffice.cmd" : "soffice");
+}
+
 async function makeTempWorkspaceConfig(
   overrides: Partial<AgentConfig> = {},
 ): Promise<{ workspaceRoot: string; config: AgentConfig }> {
@@ -286,6 +290,20 @@ describe("runTurn", () => {
         }),
     },
     {
+      label: "OpenAI Responses",
+      config: (workspaceRoot: string, homeDir: string) =>
+        makeConfig({
+          provider: "openai",
+          runtime: "openai-responses",
+          model: "gpt-5.4",
+          preferredChildModel: "gpt-5.4",
+          workingDirectory: workspaceRoot,
+          projectCoworkDir: path.join(workspaceRoot, ".cowork"),
+          userCoworkDir: path.join(homeDir, ".cowork"),
+          skillsDirs: [path.join(homeDir, ".cowork", "skills")],
+        }),
+    },
+    {
       label: "PI",
       config: (workspaceRoot: string, homeDir: string) =>
         makeConfig({
@@ -333,7 +351,7 @@ describe("runTurn", () => {
       );
 
       const shimDir = path.join(homeDir, ".cache", "cowork", "libreoffice", "bin");
-      const shimPath = path.join(shimDir, "soffice");
+      const shimPath = expectedManagedSofficeShimPath(shimDir);
       const toolCtx = createToolsForTurn.mock.calls[0][0] as any;
       expect(toolCtx.toolEnv.COWORK_SOFFICE).toBe(shimPath);
       expect(toolCtx.toolEnv.COWORK_MANAGED_SOFFICE_SHIM_DIR).toBe(shimDir);
@@ -386,7 +404,7 @@ describe("runTurn", () => {
       await runTurnForRuntime(makeParams({ config }));
 
       const shimDir = path.join(homeDir, ".cache", "cowork", "libreoffice", "bin");
-      const shimPath = path.join(shimDir, "soffice");
+      const shimPath = expectedManagedSofficeShimPath(shimDir);
       const toolCtx = createToolsForTurn.mock.calls[0][0] as any;
       expect(toolCtx.toolEnv.COWORK_SOFFICE).toBe(shimPath);
       expect(toolCtx.toolEnv.COWORK_MANAGED_SOFFICE_SHIM_DIR).toBe(shimDir);

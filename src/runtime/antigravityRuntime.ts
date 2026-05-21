@@ -10,6 +10,7 @@ import {
   tool,
 } from "unofficial-antigravity-sdk";
 import { getSavedProviderApiKey } from "../config";
+import { assertAntigravitySupportedPlatform } from "../providers/antigravitySupport";
 import type { ModelMessage } from "../types";
 import { toPiJsonSchema } from "./piRuntimeOptions";
 import { maybeSpillToolOutputToWorkspace } from "./toolOutputOverflow";
@@ -193,7 +194,9 @@ async function withProcessEnv<T>(
   }
 }
 
-export function createAntigravityRuntime(): LlmRuntime {
+export function createAntigravityRuntime(opts: { platform?: NodeJS.Platform } = {}): LlmRuntime {
+  assertAntigravitySupportedPlatform(opts.platform);
+
   return {
     name: "antigravity",
     runTurn: async (params: RuntimeRunTurnParams): Promise<RuntimeRunTurnResult> => {

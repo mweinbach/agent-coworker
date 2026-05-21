@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { clearJsonRpcSocketOverride, setJsonRpcSocketOverride } from "./helpers/jsonRpcSocketMock";
 
@@ -42,13 +42,28 @@ const { useAppStore } = await import("../src/app/store");
 const { defaultWorkspaceRuntime, disposeAllJsonRpcState } = await import(
   "../src/app/store.helpers"
 );
+const defaultCheckLibreOfficeRuntime = useAppStore.getState().checkLibreOfficeRuntime;
 
 describe("runtime diagnostics actions", () => {
+  beforeEach(() => {
+    clearJsonRpcSocketOverride();
+    disposeAllJsonRpcState();
+    jsonRpcRequests.length = 0;
+    useAppStore.setState({
+      checkLibreOfficeRuntime: defaultCheckLibreOfficeRuntime,
+      workspaces: [],
+      selectedWorkspaceId: null,
+      workspaceRuntimeById: {},
+      notifications: [],
+    });
+  });
+
   afterEach(() => {
     clearJsonRpcSocketOverride();
     disposeAllJsonRpcState();
     jsonRpcRequests.length = 0;
     useAppStore.setState({
+      checkLibreOfficeRuntime: defaultCheckLibreOfficeRuntime,
       workspaces: [],
       selectedWorkspaceId: null,
       workspaceRuntimeById: {},

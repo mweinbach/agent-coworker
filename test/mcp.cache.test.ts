@@ -1,8 +1,11 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import path from "node:path";
 import { __internal, closeMcpServersForSession, getOrLoadMCPToolsCached } from "../src/mcp";
 import type { AgentConfig, MCPServerConfig } from "../src/types";
 
 describe("MCP Caching and Lifecycle", () => {
+  const workspaceA = path.resolve("/path/to/workspace-a");
+
   beforeEach(() => {
     __internal.workspaceMcpCache.clear();
   });
@@ -42,7 +45,7 @@ describe("MCP Caching and Lifecycle", () => {
     expect(loadMCPTools).toHaveBeenCalledTimes(1);
     expect(result1.tools).toHaveProperty("mcp__test-server__tool");
 
-    const cacheEntry = __internal.workspaceMcpCache.get("/path/to/workspace-a");
+    const cacheEntry = __internal.workspaceMcpCache.get(workspaceA);
     expect(cacheEntry).toBeDefined();
     expect(cacheEntry?.sessionIds.has("session-1")).toBe(true);
 
@@ -93,7 +96,7 @@ describe("MCP Caching and Lifecycle", () => {
     await closeMcpServersForSession("session-1");
     expect(mockClose).not.toHaveBeenCalled();
 
-    const cacheEntry = __internal.workspaceMcpCache.get("/path/to/workspace-a");
+    const cacheEntry = __internal.workspaceMcpCache.get(workspaceA);
     expect(cacheEntry).toBeDefined();
     expect(cacheEntry?.sessionIds.has("session-1")).toBe(false);
     expect(cacheEntry?.sessionIds.has("session-2")).toBe(true);
@@ -102,7 +105,7 @@ describe("MCP Caching and Lifecycle", () => {
     await closeMcpServersForSession("session-2");
     expect(mockClose).toHaveBeenCalledTimes(1);
 
-    expect(__internal.workspaceMcpCache.has("/path/to/workspace-a")).toBe(false);
+    expect(__internal.workspaceMcpCache.has(workspaceA)).toBe(false);
   });
 
   test("should reload servers and close old connections if config changes", async () => {

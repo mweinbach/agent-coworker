@@ -10,6 +10,10 @@ import {
   readConnectionStore,
 } from "./connect";
 import {
+  ANTIGRAVITY_UNSUPPORTED_PLATFORM_MESSAGE,
+  isAntigravitySupportedPlatform,
+} from "./providers/antigravitySupport";
+import {
   maskBedrockFieldValues,
   readBedrockCatalogSnapshot,
   refreshBedrockDiscoveryCache,
@@ -476,6 +480,7 @@ export async function getProviderStatuses(
     providerOptions?: unknown;
     env?: NodeJS.ProcessEnv;
     refreshBedrockDiscovery?: boolean;
+    platform?: NodeJS.Platform;
   } = {},
 ): Promise<ProviderStatus[]> {
   const paths = opts.paths ?? getAiCoworkerPaths({ homedir: opts.homedir ?? resolveAuthHomeDir() });
@@ -516,6 +521,19 @@ export async function getProviderStatuses(
       continue;
     }
     if (provider === "antigravity") {
+      if (!isAntigravitySupportedPlatform(opts.platform)) {
+        out.push({
+          provider,
+          authorized: false,
+          verified: false,
+          mode: "error",
+          account: null,
+          message: ANTIGRAVITY_UNSUPPORTED_PLATFORM_MESSAGE,
+          checkedAt,
+        });
+        continue;
+      }
+
       const base = statusFromConnectionStore({ provider, store, checkedAt });
       const googleEntry = store.services.google;
       const googleKey = googleEntry?.mode === "api_key" ? googleEntry.apiKey?.trim() : "";

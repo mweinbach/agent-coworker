@@ -1,6 +1,8 @@
 import { describe, expect, mock, test } from "bun:test";
 import { createElement } from "react";
 
+mock.restore();
+
 mock.module("@/theme/use-app-theme", () => ({
   useAppTheme: () => ({
     border: "#111",

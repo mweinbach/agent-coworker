@@ -392,7 +392,7 @@ describe("getProviderStatuses", () => {
   test("antigravity: reports missing/not connected when no keys are available", async () => {
     const home = await makeTmpHome();
     const paths = getAiCoworkerPaths({ homedir: home });
-    const statuses = await getProviderStatuses({ paths, env: {} });
+    const statuses = await getProviderStatuses({ paths, env: {}, platform: "linux" });
     const status = statuses.find((s) => s.provider === "antigravity");
     expect(status).toBeDefined();
     expect(status?.authorized).toBe(false);
@@ -415,7 +415,7 @@ describe("getProviderStatuses", () => {
       },
     });
 
-    const statuses = await getProviderStatuses({ paths, env: {} });
+    const statuses = await getProviderStatuses({ paths, env: {}, platform: "linux" });
     const status = statuses.find((s) => s.provider === "antigravity");
     expect(status).toBeDefined();
     expect(status?.authorized).toBe(true);
@@ -440,7 +440,7 @@ describe("getProviderStatuses", () => {
       },
     });
 
-    const statuses = await getProviderStatuses({ paths, env: {} });
+    const statuses = await getProviderStatuses({ paths, env: {}, platform: "linux" });
     const status = statuses.find((s) => s.provider === "antigravity");
     expect(status).toBeDefined();
     expect(status?.authorized).toBe(true);
@@ -454,12 +454,28 @@ describe("getProviderStatuses", () => {
     const paths = getAiCoworkerPaths({ homedir: home });
     const env = { GEMINI_API_KEY: "gemini-env-key-789" };
 
-    const statuses = await getProviderStatuses({ paths, env });
+    const statuses = await getProviderStatuses({ paths, env, platform: "linux" });
     const status = statuses.find((s) => s.provider === "antigravity");
     expect(status).toBeDefined();
     expect(status?.authorized).toBe(true);
     expect(status?.mode).toBe("api_key");
     expect(status?.savedApiKeyMasks?.api_key).toBe("gemi...-789");
     expect(status?.message).toBe("Using GEMINI_API_KEY environment variable.");
+  });
+
+  test("antigravity: reports unsupported on Windows even when a key is available", async () => {
+    const home = await makeTmpHome();
+    const paths = getAiCoworkerPaths({ homedir: home });
+    const env = { GEMINI_API_KEY: "gemini-env-key-789" };
+
+    const statuses = await getProviderStatuses({ paths, env, platform: "win32" });
+    const status = statuses.find((s) => s.provider === "antigravity");
+    expect(status).toBeDefined();
+    expect(status?.authorized).toBe(false);
+    expect(status?.verified).toBe(false);
+    expect(status?.mode).toBe("error");
+    expect(status?.message).toBe(
+      "Antigravity runtime is only supported on macOS and Linux for now.",
+    );
   });
 });

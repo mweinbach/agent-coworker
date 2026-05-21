@@ -656,6 +656,34 @@ describe("bash tool", () => {
     expect(result.stdout.trim()).toBe("LibreOffice 26.2.3.2");
   });
 
+  test("pins managed soffice shim inside Windows PowerShell commands", async () => {
+    const seen: Array<{ file: string; args: string[] }> = [];
+    const result = await bashInternal.runShellCommandWithExec({
+      command: "soffice --version",
+      cwd: "C:/tmp",
+      platform: "win32",
+      env: {
+        Path: "C:\\Windows\\System32",
+        COWORK_MANAGED_SOFFICE_SHIM_DIR: "C:\\Users\\test\\.cache\\cowork\\libreoffice\\bin",
+        COWORK_SOFFICE: "C:\\Users\\test\\.cache\\cowork\\libreoffice\\bin\\soffice.cmd",
+      },
+      execRunner: async (file: string, args: string[]) => {
+        seen.push({ file, args });
+        return { stdout: "LibreOffice 26.2.3.2\n", stderr: "", exitCode: 0 };
+      },
+    });
+
+    const commandArg = seen[0]?.args.at(-1);
+    expect(commandArg).toContain(
+      "$env:PATH = 'C:\\Users\\test\\.cache\\cowork\\libreoffice\\bin' + ';' + $env:PATH",
+    );
+    expect(commandArg).toContain(
+      "$env:COWORK_SOFFICE = 'C:\\Users\\test\\.cache\\cowork\\libreoffice\\bin\\soffice.cmd'",
+    );
+    expect(commandArg?.endsWith("soffice --version")).toBe(true);
+    expect(result.stdout.trim()).toBe("LibreOffice 26.2.3.2");
+  });
+
   test("executes simple command and returns stdout", async () => {
     const dir = await tmpDir();
     const t: any = createBashTool(makeCtx(dir));

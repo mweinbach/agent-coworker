@@ -21,7 +21,7 @@ function toMetroChangeEvent(changeEvent) {
       continue;
     }
 
-    const relativePath = path.relative(projectRoot, event.filePath);
+    const relativePath = path.relative(projectRoot, event.filePath).split(path.sep).join("/");
     if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
       continue;
     }

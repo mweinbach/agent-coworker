@@ -34,6 +34,36 @@ describe("providers/connectionCatalog", () => {
     }
   });
 
+  test("marks Antigravity unreachable on Windows", async () => {
+    const payload = await getProviderCatalog({
+      platform: "win32",
+      readCodexAppServerAccountImpl: noCodexAccount,
+      readStore: async () => ({
+        version: 1,
+        updatedAt: "2026-02-17T00:00:00.000Z",
+        services: {
+          antigravity: {
+            service: "antigravity",
+            mode: "api_key",
+            apiKey: "anti-secret-key-123",
+            updatedAt: "2026-02-17T00:00:00.000Z",
+          },
+        },
+      }),
+    });
+
+    const entry = payload.all.find((candidate) => candidate.id === "antigravity");
+    expect(entry).toEqual({
+      id: "antigravity",
+      name: "Antigravity",
+      models: [],
+      defaultModel: "",
+      state: "unreachable",
+      message: "Antigravity runtime is only supported on macOS and Linux for now.",
+    });
+    expect(payload.connected).not.toContain("antigravity");
+  });
+
   test("lists OpenCode providers in the provider catalog with the expected model sets", async () => {
     const payload = await getProviderCatalog({
       readCodexAppServerAccountImpl: noCodexAccount,

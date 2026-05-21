@@ -22,6 +22,10 @@ const previousDelayCompletion = process.env.CODEX_APP_SERVER_DELAY_COMPLETION;
 const testNodeCommand = process.env.COWORK_TEST_NODE_COMMAND ?? "node";
 const mockInterrupts: Array<{ threadId: string; turnId?: string }> = [];
 
+function expectedManagedSofficeShimPath(shimDir: string): string {
+  return path.join(shimDir, process.platform === "win32" ? "soffice.cmd" : "soffice");
+}
+
 function makeConfig(dir: string): AgentConfig {
   return {
     provider: "codex-cli",
@@ -666,16 +670,25 @@ describe("codex app-server runtime", () => {
     }
 
     const shimDir = path.join(home, ".cache", "cowork", "libreoffice", "bin");
-    const shimPath = path.join(shimDir, "soffice");
+    const shimPath = expectedManagedSofficeShimPath(shimDir);
     expect(receivedOpts?.env?.COWORK_SOFFICE).toBe(shimPath);
     expect(receivedOpts?.env?.COWORK_MANAGED_SOFFICE_SHIM_DIR).toBe(shimDir);
-    expect(receivedOpts?.env?.PATH?.split(path.delimiter)[0]).toBe(shimDir);
+    const pathEnvKey = Object.keys(receivedOpts?.env ?? {}).find(
+      (key) => key.toLowerCase() === "path",
+    );
+    expect(pathEnvKey ? receivedOpts?.env?.[pathEnvKey]?.split(path.delimiter)[0] : undefined).toBe(
+      shimDir,
+    );
 
     const requests = await readCapturedRequests(capturePath);
     const startParams = requests.find((entry) => entry.method === "thread/start")?.params;
     expect(startParams?.baseInstructions).toContain("Managed LibreOffice Runtime");
     expect(startParams?.baseInstructions).toContain(shimPath);
-    expect(startParams?.baseInstructions).toContain(`PATH=${shimDir}:$PATH`);
+    if (process.platform === "win32") {
+      expect(startParams?.baseInstructions).toContain(`$env:PATH = '${shimDir};' + $env:PATH`);
+    } else {
+      expect(startParams?.baseInstructions).toContain(`PATH=${shimDir}:$PATH`);
+    }
   });
 
   test.serial("initializes app-server with the Cowork package version", async () => {

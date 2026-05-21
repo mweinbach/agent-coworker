@@ -1,8 +1,12 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import path from "node:path";
 
 const mobileRoot = path.resolve(import.meta.dir, "../apps/mobile");
+
+mock.module("nativewind/metro", () => ({
+  withNativewind: (config: unknown) => config,
+}));
 
 describe("mobile Metro config", () => {
   test("normalizes NativeWind CSS watcher events for Metro change listeners", () => {

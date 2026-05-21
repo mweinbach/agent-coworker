@@ -174,10 +174,12 @@ describe("server JSON-RPC websocket mode", () => {
 
   test("allows browser preflight but protects cowork HTTP routes with the browser token", async () => {
     const tmpDir = await makeTmpProject();
+    const desktopUserDataDir = path.join(tmpDir, ".cowork", "web-desktop-test-data");
     const { server, browserAccessToken } = await startAgentServer(
       serverOpts(tmpDir, {
         env: {
           COWORK_WEB_DESKTOP_SERVICE: "1",
+          COWORK_DESKTOP_USER_DATA_DIR: desktopUserDataDir,
         },
       }),
     );

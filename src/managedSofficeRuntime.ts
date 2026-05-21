@@ -256,10 +256,21 @@ function linuxSofficePath(root) {
   return "";
 }
 
+function windowsSofficePath(root) {
+  const direct = path.join(root, "program", "soffice.exe");
+  if (fileExists(direct)) return direct;
+  if (!dirExists(root)) return "";
+  return findFirstFile(root, (candidate) =>
+    path.basename(candidate).toLowerCase() === "soffice.exe" &&
+      path.basename(path.dirname(candidate)).toLowerCase() === "program",
+  );
+}
+
 function managedSofficePath(version = DEFAULT_LIBREOFFICE_VERSION) {
   const root = installRoot(version);
   if (process.platform === "darwin") return macSofficePath(root);
   if (process.platform === "linux") return linuxSofficePath(root);
+  if (process.platform === "win32") return windowsSofficePath(root);
   return "";
 }
 
@@ -267,6 +278,16 @@ function candidateSystemSofficePaths() {
   const candidates = [];
   if (process.platform === "darwin") {
     candidates.push("/Applications/LibreOffice.app/Contents/MacOS/soffice");
+  } else if (process.platform === "win32") {
+    for (const programFilesDir of [
+      process.env.ProgramFiles,
+      process.env["ProgramFiles(x86)"],
+      process.env.ProgramW6432,
+    ]) {
+      if (programFilesDir) {
+        candidates.push(path.join(programFilesDir, "LibreOffice", "program", "soffice.exe"));
+      }
+    }
   }
   const pathEntries = (process.env.PATH || "")
     .split(path.delimiter)
@@ -298,6 +319,12 @@ function defaultDownloadUrl(version = DEFAULT_LIBREOFFICE_VERSION) {
   }
   if (key === "linux-arm64") {
     return \`https://download.documentfoundation.org/libreoffice/stable/\${version}/deb/aarch64/LibreOffice_\${version}_Linux_aarch64_deb.tar.gz\`;
+  }
+  if (key === "win32-x64") {
+    return \`https://download.documentfoundation.org/libreoffice/stable/\${version}/win/x86_64/LibreOffice_\${version}_Win_x86-64.msi\`;
+  }
+  if (key === "win32-arm64") {
+    return \`https://download.documentfoundation.org/libreoffice/stable/\${version}/win/aarch64/LibreOffice_\${version}_Win_aarch64.msi\`;
   }
   return "";
 }
@@ -402,6 +429,16 @@ async function installLinuxRuntime(archivePath, stagedRoot, tempDir) {
   }
 }
 
+async function installWindowsRuntime(archivePath, stagedRoot) {
+  run("msiexec.exe", ["/a", archivePath, "/qn", "TARGETDIR=" + stagedRoot], {
+    timeout: 600000,
+  });
+  const soffice = windowsSofficePath(stagedRoot);
+  if (!isHealthySoffice(soffice)) {
+    throw new Error("Managed LibreOffice MSI was extracted but soffice.exe did not pass --version.");
+  }
+}
+
 async function installManagedRuntime(version = DEFAULT_LIBREOFFICE_VERSION) {
   const url = process.env.COWORK_LIBREOFFICE_DOWNLOAD_URL || defaultDownloadUrl(version);
   if (!url) {
@@ -424,6 +461,8 @@ async function installManagedRuntime(version = DEFAULT_LIBREOFFICE_VERSION) {
       await installMacRuntime(archivePath, stagedRoot);
     } else if (process.platform === "linux") {
       await installLinuxRuntime(archivePath, stagedRoot, tempDir);
+    } else if (process.platform === "win32") {
+      await installWindowsRuntime(archivePath, stagedRoot);
     } else {
       throw new Error("Managed LibreOffice download is not supported on " + platformArchKey() + ".");
     }
@@ -605,11 +644,15 @@ export function renderManagedSofficeRuntimeInstructions(
   if (!shimPath) return null;
   const shimDir =
     managedSofficeEnvValue(env, "COWORK_MANAGED_SOFFICE_SHIM_DIR") || path.dirname(shimPath);
+  const pathExample =
+    process.platform === "win32"
+      ? `$env:PATH = '${shimDir};' + $env:PATH`
+      : `PATH=${shimDir}:$PATH`;
   return [
     "## Managed LibreOffice Runtime",
     "",
     `Cowork-managed LibreOffice is available through the \`soffice\` shim at \`${shimPath}\`.`,
-    `When rendering documents, spreadsheets, or presentations, keep \`${shimDir}\` ahead of system paths, for example by prefixing shell commands with \`PATH=${shimDir}:$PATH\`.`,
+    `When rendering documents, spreadsheets, or presentations, keep \`${shimDir}\` ahead of system paths, for example by prefixing shell commands with \`${pathExample}\`.`,
     "Do not conclude LibreOffice is unavailable from a broken Homebrew wrapper or a missing `/Applications/LibreOffice.app`; use the Cowork-managed shim.",
   ].join("\n");
 }

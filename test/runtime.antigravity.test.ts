@@ -129,7 +129,7 @@ function makeParams(
 describe("antigravity runtime", () => {
   test("basic text response flows through runtime", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "antigravity-test-"));
-    const runtime = createAntigravityRuntime();
+    const runtime = createAntigravityRuntime({ platform: "linux" });
 
     (Agent as any).__setChatMockImpl(async (prompt: string) => {
       const chunks = [new Text(0, "Hello! "), new Text(0, "How can I help you?")];
@@ -203,7 +203,7 @@ describe("antigravity runtime", () => {
 
   test("thinking content emits bracketed reasoning events and extracts reasoningText", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "antigravity-test-"));
-    const runtime = createAntigravityRuntime();
+    const runtime = createAntigravityRuntime({ platform: "linux" });
 
     (Agent as any).__setChatMockImpl(async (prompt: string) => {
       const chunks = [new Thought(0, "Thinking..."), new Text(0, "Here is the response.")];
@@ -271,7 +271,7 @@ describe("antigravity runtime", () => {
 
   test("interleaved thoughts and text produce paired reasoning brackets", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "antigravity-test-"));
-    const runtime = createAntigravityRuntime();
+    const runtime = createAntigravityRuntime({ platform: "linux" });
 
     (Agent as any).__setChatMockImpl(async (_prompt: string) => {
       const chunks = [
@@ -339,7 +339,7 @@ describe("antigravity runtime", () => {
 
   test("tool calls trigger tool execution and multi-step loop", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "antigravity-test-"));
-    const runtime = createAntigravityRuntime();
+    const runtime = createAntigravityRuntime({ platform: "linux" });
 
     let toolExecuted = false;
     let toolInputReceived: any = null;
@@ -424,7 +424,7 @@ describe("antigravity runtime", () => {
     const { resolveHarnessWorkspaceDir } = require("../src/runtime/antigravityRuntime");
     const expectedFallback = path.join(os.tmpdir(), "cowork-antigravity-workspace");
 
-    const runtime = createAntigravityRuntime();
+    const runtime = createAntigravityRuntime({ platform: "linux" });
     const hiddenHomeDir = "/Users/mweinbach/.cowork/chats/20260520T182819Z-test";
     const config = makeConfig(hiddenHomeDir);
     config.workingDirectory = hiddenHomeDir;
@@ -450,7 +450,7 @@ describe("antigravity runtime", () => {
   });
 
   test("antigravity runtime passes through a non-hidden working dir as the workspace", async () => {
-    const runtime = createAntigravityRuntime();
+    const runtime = createAntigravityRuntime({ platform: "linux" });
     const visibleHomeDir = await fs.mkdtemp(path.join(os.tmpdir(), "antigravity-ws-"));
     const config = makeConfig(visibleHomeDir);
     config.workingDirectory = visibleHomeDir;
@@ -475,7 +475,7 @@ describe("antigravity runtime", () => {
   });
 
   test("antigravity local harness startup sees the prepared tool env", async () => {
-    const runtime = createAntigravityRuntime();
+    const runtime = createAntigravityRuntime({ platform: "linux" });
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "antigravity-env-"));
     const previousSoffice = process.env.COWORK_SOFFICE;
     let capturedSoffice: string | undefined;

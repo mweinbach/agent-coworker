@@ -7,7 +7,12 @@ import {
   __internal,
   checkManagedSofficeRuntime,
   ensureManagedSofficeRuntimeReady,
+  renderManagedSofficeRuntimeInstructions,
 } from "../src/managedSofficeRuntime";
+
+function expectedShimName(): string {
+  return process.platform === "win32" ? "soffice.cmd" : "soffice";
+}
 
 describe("managed soffice runtime", () => {
   test("creates a PATH-first soffice shim without touching skill files", async () => {
@@ -23,7 +28,7 @@ describe("managed soffice runtime", () => {
 
       expect(result?.status).toBe("available");
       expect(result?.shimPath).toBe(
-        path.join(home, ".cache", "cowork", "libreoffice", "bin", "soffice"),
+        path.join(home, ".cache", "cowork", "libreoffice", "bin", expectedShimName()),
       );
       expect(result?.helperPath).toBe(
         path.join(home, ".cache", "cowork", "libreoffice", "libexec", "managed-soffice.mjs"),
@@ -40,6 +45,10 @@ describe("managed soffice runtime", () => {
       expect(shim).toContain("managed-soffice.mjs");
       expect(helper).toContain("download.documentfoundation.org/libreoffice/stable");
       expect(helper).toContain("COWORK_DISABLE_MANAGED_SOFFICE_DOWNLOAD");
+      expect(helper).toContain("LibreOffice_${version}_Win_x86-64.msi");
+      expect(helper).toContain("LibreOffice_${version}_Win_aarch64.msi");
+      expect(helper).toContain('run("msiexec.exe", ["/a", archivePath, "/qn", "TARGETDIR=" + stagedRoot]');
+      expect(helper).toContain('path.join(root, "program", "soffice.exe")');
     } finally {
       await fs.rm(home, { recursive: true, force: true });
     }
@@ -60,7 +69,7 @@ describe("managed soffice runtime", () => {
         reason: "COWORK_DISABLE_MANAGED_SOFFICE is enabled.",
       });
       await expect(
-        fs.stat(path.join(home, ".cache", "cowork", "libreoffice", "bin", "soffice")),
+        fs.stat(path.join(home, ".cache", "cowork", "libreoffice", "bin", expectedShimName())),
       ).rejects.toThrow();
     } finally {
       await fs.rm(home, { recursive: true, force: true });
@@ -68,8 +77,6 @@ describe("managed soffice runtime", () => {
   });
 
   test("shim fails cleanly when download is disabled and no soffice is available", async () => {
-    if (process.platform === "win32") return;
-
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-soffice-shim-"));
 
     try {
@@ -145,7 +152,7 @@ exit 0
 
       expect(status.status).toBe("available");
       expect(status.shimPath).toContain(
-        path.join(".cache", "cowork", "libreoffice", "bin", "soffice"),
+        path.join(".cache", "cowork", "libreoffice", "bin", expectedShimName()),
       );
       expect(status.smoke?.ok).toBe(true);
       expect(status.smoke?.sizeBytes).toBeGreaterThan(0);
@@ -156,5 +163,28 @@ exit 0
 
   test("parses LibreOffice version output", () => {
     expect(__internal.parseSofficeVersion("LibreOffice 26.2.3.2 fake")).toBe("26.2.3.2");
+  });
+
+  test("renders platform-aware PATH instructions", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-soffice-instructions-"));
+
+    try {
+      const setup = await ensureManagedSofficeRuntimeReady({
+        homedir: home,
+        env: { PATH: "/usr/bin" },
+      });
+      const instructions = renderManagedSofficeRuntimeInstructions(setup?.runtimeEnv);
+
+      expect(instructions).toContain("Managed LibreOffice Runtime");
+      if (process.platform === "win32") {
+        expect(instructions).toContain("$env:PATH = '");
+        expect(instructions).toContain(";' + $env:PATH");
+      } else {
+        expect(instructions).toContain("PATH=");
+        expect(instructions).toContain(":$PATH");
+      }
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
   });
 });

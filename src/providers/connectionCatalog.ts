@@ -8,6 +8,10 @@ import {
 } from "../models/registry";
 import { PROVIDER_NAMES, type ProviderName } from "../types";
 import { resolveAuthHomeDir } from "../utils/authHome";
+import {
+  ANTIGRAVITY_UNSUPPORTED_PLATFORM_MESSAGE,
+  isAntigravitySupportedPlatform,
+} from "./antigravitySupport";
 import { readBedrockCatalogSnapshot } from "./bedrockShared";
 import { listCodexAppServerModels, readCodexAppServerAccount } from "./codexAppServerAuth";
 import {
@@ -83,6 +87,20 @@ function staticCatalogEntry(provider: Exclude<ProviderName, "lmstudio">): Provid
       supportsImageInput: model.supportsImageInput,
     })),
     defaultModel: defaultSupportedModel(provider).id,
+  };
+}
+
+function antigravityCatalogEntry(
+  platform: NodeJS.Platform = process.platform,
+): ProviderCatalogEntry {
+  if (isAntigravitySupportedPlatform(platform)) return staticCatalogEntry("antigravity");
+  return {
+    id: "antigravity",
+    name: PROVIDER_LABELS.antigravity,
+    models: [],
+    defaultModel: "",
+    state: "unreachable",
+    message: ANTIGRAVITY_UNSUPPORTED_PLATFORM_MESSAGE,
   };
 }
 
@@ -253,6 +271,7 @@ export async function listProviderCatalogEntries(
     env?: NodeJS.ProcessEnv;
     lmstudioFetchImpl?: typeof fetch;
     listCodexAppServerModelsImpl?: typeof listCodexAppServerModels;
+    platform?: NodeJS.Platform;
   } = {},
 ): Promise<ProviderCatalogEntry[]> {
   const bedrock = await bedrockCatalogEntry({
@@ -267,6 +286,7 @@ export async function listProviderCatalogEntries(
     if (provider === "bedrock") return bedrock.entry;
     if (provider === "lmstudio") return lmstudio.entry;
     if (provider === "codex-cli") return codex;
+    if (provider === "antigravity") return antigravityCatalogEntry(opts.platform);
     return staticCatalogEntry(provider);
   });
 }
@@ -281,6 +301,7 @@ export async function getProviderCatalog(
     providerOptions?: unknown;
     env?: NodeJS.ProcessEnv;
     lmstudioFetchImpl?: typeof fetch;
+    platform?: NodeJS.Platform;
   } = {},
 ): Promise<ProviderCatalogPayload> {
   const paths = opts.paths ?? getAiCoworkerPaths({ homedir: opts.homedir ?? resolveAuthHomeDir() });
@@ -316,6 +337,7 @@ export async function getProviderCatalog(
     if (provider === "bedrock") return bedrock.entry;
     if (provider === "lmstudio") return lmstudio.entry;
     if (provider === "codex-cli") return codex;
+    if (provider === "antigravity") return antigravityCatalogEntry(opts.platform);
     return staticCatalogEntry(provider);
   });
   const defaults: Record<string, string> = {};
@@ -328,6 +350,9 @@ export async function getProviderCatalog(
       return bedrock.connected;
     }
     const entry = store.services[provider];
+    if (provider === "antigravity" && !isAntigravitySupportedPlatform(opts.platform)) {
+      return false;
+    }
     if (entry?.mode === "api_key" || entry?.mode === "oauth") return true;
     return provider === "codex-cli" && hasCodexAccount;
   });

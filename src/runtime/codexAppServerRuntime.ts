@@ -393,10 +393,7 @@ function codexThreadConfig(params: RuntimeRunTurnParams): Record<string, unknown
   return Object.keys(config).length > 0 ? config : undefined;
 }
 
-function codexBaseInstructions(
-  system: string,
-  env?: Record<string, string | undefined>,
-): string {
+function codexBaseInstructions(system: string, env?: Record<string, string | undefined>): string {
   const managedSofficeInstructions = system.includes("## Managed LibreOffice Runtime")
     ? null
     : renderManagedSofficeRuntimeInstructions(env);

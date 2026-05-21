@@ -90,6 +90,7 @@
     "react-dom": "^19.2.6",
     "reflect-metadata": "^0.2.2",
     "remark-parse": "^11.0.0",
+    "tsfm-sdk": "^0.3.1",
     "turndown": "^7.2.4",
     "unified": "^11.0.5",
     "unofficial-antigravity-sdk": "^1.0.2",

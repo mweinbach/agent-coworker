@@ -12,7 +12,7 @@ import {
   parseArgs,
   requireArg,
   saveBlobToFile,
-} from "./artifact_tool_utils.mjs";
+} from "../scripts/artifact_tool_utils.mjs";
 
 const SLIDE_SIZE = { width: 1280, height: 720 };
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));

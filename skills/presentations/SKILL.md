@@ -651,7 +651,7 @@ testing profile routing, visual grammar, proof-object quality, and QA gates.
 Command:
 
 ```bash
-node "$SKILL_DIR/scripts/run_prompt_battle.mjs" \
+node "$SKILL_DIR/dev/run_prompt_battle.mjs" \
   --prompts "$WORKSPACE/batch-prompts/slides_prompts_first25.json" \
   --workspace "$WORKSPACE/batch-runs/full-25" \
   --limit 25 \

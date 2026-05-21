@@ -38,6 +38,7 @@
     "skills/**/*",
     "!skills/**/__pycache__",
     "!skills/**/*.pyc",
+    "!skills/**/dev/**",
     "README.md"
   ],
   "scripts": {

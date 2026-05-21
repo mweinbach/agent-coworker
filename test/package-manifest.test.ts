@@ -86,6 +86,8 @@ describe("package manifest", () => {
     expect(paths).toContain("skills/documents/SKILL.md");
     expect(paths).toContain("skills/presentations/SKILL.md");
     expect(paths).toContain("skills/spreadsheets/SKILL.md");
+    expect(paths).not.toContain("skills/presentations/dev/run_prompt_battle.mjs");
+    expect(paths.some((path) => path.includes("/skills/") && path.includes("/dev/"))).toBeFalse();
     expect(paths.some((path) => path.includes("/__pycache__/"))).toBeFalse();
     expect(paths.some((path) => path.endsWith(".pyc"))).toBeFalse();
     expect(paths).toContain("scripts/build_cowork_server_binary.ts");

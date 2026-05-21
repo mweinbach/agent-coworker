@@ -43,12 +43,30 @@ function createAppleModule(opts: {
   available?: boolean;
   reason?: number;
   respond?: (prompt: string, opts?: unknown) => Promise<string>;
+  respondWithJsonSchema?: (
+    prompt: string,
+    jsonSchema: Record<string, unknown>,
+    opts?: unknown,
+  ) => Promise<{ value: (propertyName: string) => unknown }>;
 }) {
   const respond = mock(
     opts.respond ??
       (async () => {
         return "Apple Title";
       }),
+  );
+  const respondWithJsonSchema = mock(
+    opts.respondWithJsonSchema ??
+      (async () => ({
+        value: (propertyName: string) =>
+          propertyName === "titles" ? ['  "Title: Apple   Foundation Title."  '] : undefined,
+      })),
+  );
+  const random = mock(
+    (samplingOpts?: { top?: number; probabilityThreshold?: number; seed?: number }) => ({
+      type: "random",
+      ...samplingOpts,
+    }),
   );
   const modelDispose = mock(() => {});
   const sessionDispose = mock(() => {});
@@ -65,24 +83,26 @@ function createAppleModule(opts: {
       },
       LanguageModelSession: class {
         respond = respond;
+        respondWithJsonSchema = respondWithJsonSchema;
         dispose = sessionDispose;
       },
       SamplingMode: {
+        random,
         greedy: () => ({ type: "greedy" }),
       },
     },
     modelDispose,
     modelIsAvailable,
+    random,
     respond,
+    respondWithJsonSchema,
     sessionDispose,
   };
 }
 
 describe("sessionTitleService", () => {
   test("uses Apple Foundation Models titles when available", async () => {
-    const apple = createAppleModule({
-      respond: async () => '  "Apple   Foundation Title"  ',
-    });
+    const apple = createAppleModule({});
     const loadAppleFoundationModelsModule = mock(async () => apple.module);
     const createRuntime = mock((_config: AgentConfig) => {
       throw new Error("provider runtime should not be used");
@@ -109,7 +129,41 @@ describe("sessionTitleService", () => {
       model: __internal.APPLE_FOUNDATION_TITLE_MODEL,
     });
     expect(loadAppleFoundationModelsModule).toHaveBeenCalledTimes(1);
-    expect(apple.respond).toHaveBeenCalledTimes(1);
+    const samplingOpts = apple.random.mock.calls[0]?.[0];
+    expect(samplingOpts).toMatchObject({
+      probabilityThreshold: __internal.APPLE_TITLE_RANDOM_TOP_P,
+    });
+    expect(typeof samplingOpts?.seed).toBe("number");
+    expect(apple.respond).not.toHaveBeenCalled();
+    expect(apple.respondWithJsonSchema).toHaveBeenCalledTimes(1);
+    expect(apple.respondWithJsonSchema.mock.calls[0]?.[1]).toMatchObject({
+      type: "object",
+      properties: {
+        titles: {
+          type: "array",
+          minItems: 4,
+          maxItems: 4,
+        },
+      },
+      required: ["titles"],
+      additionalProperties: false,
+    });
+    const respondOpts = apple.respondWithJsonSchema.mock.calls[0]?.[2] as {
+      options?: {
+        sampling?: { seed?: unknown };
+        maximumResponseTokens?: number;
+        temperature?: number;
+      };
+    };
+    expect(respondOpts.options).toMatchObject({
+      sampling: {
+        type: "random",
+        probabilityThreshold: __internal.APPLE_TITLE_RANDOM_TOP_P,
+      },
+      maximumResponseTokens: 80,
+      temperature: __internal.APPLE_TITLE_TEMPERATURE,
+    });
+    expect(typeof respondOpts.options?.sampling?.seed).toBe("number");
     expect(apple.sessionDispose).toHaveBeenCalledTimes(1);
     expect(apple.modelDispose).toHaveBeenCalledTimes(1);
     expect(createRuntime).not.toHaveBeenCalled();
@@ -118,7 +172,7 @@ describe("sessionTitleService", () => {
 
   test("falls back to heuristic without provider calls when Apple generation fails", async () => {
     const apple = createAppleModule({
-      respond: async () => {
+      respondWithJsonSchema: async () => {
         throw new Error("generation failed");
       },
     });

@@ -623,53 +623,53 @@ function codexSandboxPolicy(params: RuntimeRunTurnParams): CodexSandboxPolicy {
 function parseUsage(value: unknown): RuntimeUsage | undefined {
   const record = asRecord(value);
   const total = asRecord(record?.total);
-  const last = asRecord(record?.last) ?? total;
+  const usage = total ?? asRecord(record?.last);
   const inputDetails =
-    asRecord(last?.inputTokensDetails) ??
-    asRecord(last?.input_tokens_details) ??
-    asRecord(last?.inputDetails) ??
-    asRecord(last?.input_details);
+    asRecord(usage?.inputTokensDetails) ??
+    asRecord(usage?.input_tokens_details) ??
+    asRecord(usage?.inputDetails) ??
+    asRecord(usage?.input_details);
   const outputDetails =
-    asRecord(last?.outputTokensDetails) ??
-    asRecord(last?.output_tokens_details) ??
-    asRecord(last?.outputDetails) ??
-    asRecord(last?.output_details);
-  const promptTokens = asNumber(last?.inputTokens) ?? asNumber(last?.input_tokens) ?? 0;
+    asRecord(usage?.outputTokensDetails) ??
+    asRecord(usage?.output_tokens_details) ??
+    asRecord(usage?.outputDetails) ??
+    asRecord(usage?.output_details);
+  const promptTokens = asNumber(usage?.inputTokens) ?? asNumber(usage?.input_tokens) ?? 0;
   const cachedPromptTokens =
-    asNumber(last?.cachedInputTokens) ??
-    asNumber(last?.cached_input_tokens) ??
-    asNumber(last?.cacheReadInputTokens) ??
-    asNumber(last?.cache_read_input_tokens) ??
-    asNumber(last?.inputCachedTokens) ??
-    asNumber(last?.input_cached_tokens) ??
+    asNumber(usage?.cachedInputTokens) ??
+    asNumber(usage?.cached_input_tokens) ??
+    asNumber(usage?.cacheReadInputTokens) ??
+    asNumber(usage?.cache_read_input_tokens) ??
+    asNumber(usage?.inputCachedTokens) ??
+    asNumber(usage?.input_cached_tokens) ??
     asNumber(inputDetails?.cachedTokens) ??
     asNumber(inputDetails?.cached_tokens) ??
     asNumber(inputDetails?.cacheReadTokens) ??
     asNumber(inputDetails?.cache_read_tokens) ??
     undefined;
   const cacheWritePromptTokens =
-    asNumber(last?.cacheWriteInputTokens) ??
-    asNumber(last?.cache_write_input_tokens) ??
-    asNumber(last?.cacheCreationInputTokens) ??
-    asNumber(last?.cache_creation_input_tokens) ??
-    asNumber(last?.inputCacheWriteTokens) ??
-    asNumber(last?.input_cache_write_tokens) ??
+    asNumber(usage?.cacheWriteInputTokens) ??
+    asNumber(usage?.cache_write_input_tokens) ??
+    asNumber(usage?.cacheCreationInputTokens) ??
+    asNumber(usage?.cache_creation_input_tokens) ??
+    asNumber(usage?.inputCacheWriteTokens) ??
+    asNumber(usage?.input_cache_write_tokens) ??
     asNumber(inputDetails?.cacheWriteTokens) ??
     asNumber(inputDetails?.cache_write_tokens) ??
     asNumber(inputDetails?.cacheCreationTokens) ??
     asNumber(inputDetails?.cache_creation_tokens) ??
     undefined;
   const explicitCompletionTokens =
-    asNumber(last?.outputTokens) ?? asNumber(last?.output_tokens) ?? undefined;
+    asNumber(usage?.outputTokens) ?? asNumber(usage?.output_tokens) ?? undefined;
   const reasoningOutputTokens =
-    asNumber(last?.reasoningOutputTokens) ??
-    asNumber(last?.reasoning_output_tokens) ??
+    asNumber(usage?.reasoningOutputTokens) ??
+    asNumber(usage?.reasoning_output_tokens) ??
     asNumber(outputDetails?.reasoningTokens) ??
     asNumber(outputDetails?.reasoning_tokens) ??
     undefined;
   const totalTokens =
-    asNumber(last?.totalTokens) ??
-    asNumber(last?.total_tokens) ??
+    asNumber(usage?.totalTokens) ??
+    asNumber(usage?.total_tokens) ??
     promptTokens + (explicitCompletionTokens ?? reasoningOutputTokens ?? 0);
   const completionTokens =
     explicitCompletionTokens ??

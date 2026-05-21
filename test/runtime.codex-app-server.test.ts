@@ -374,6 +374,31 @@ function createMockClient(): CodexAppServerClient {
           },
         });
       }
+      if (process.env.COWORK_CODEX_APP_SERVER_ARGS?.includes("cumulative-token-usage")) {
+        sendNotification({
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId,
+            turnId,
+            tokenUsage: {
+              total: {
+                totalTokens: 3476387,
+                inputTokens: 3455915,
+                cachedInputTokens: 2987776,
+                outputTokens: 20472,
+                reasoningOutputTokens: 5929,
+              },
+              last: {
+                totalTokens: 182780,
+                inputTokens: 182693,
+                cachedInputTokens: 173952,
+                outputTokens: 87,
+                reasoningOutputTokens: 0,
+              },
+            },
+          },
+        });
+      }
       if (process.env.COWORK_CODEX_APP_SERVER_ARGS?.includes("cross-thread-title-leak")) {
         sendNotification({
           method: "item/agentMessage/delta",
@@ -504,7 +529,8 @@ function createMockClient(): CodexAppServerClient {
             {
               emitUsage: !(
                 process.env.COWORK_CODEX_APP_SERVER_ARGS?.includes("early-token-usage-wrong") ||
-                process.env.COWORK_CODEX_APP_SERVER_ARGS?.includes("early-token-usage-matching")
+                process.env.COWORK_CODEX_APP_SERVER_ARGS?.includes("early-token-usage-matching") ||
+                process.env.COWORK_CODEX_APP_SERVER_ARGS?.includes("cumulative-token-usage")
               ),
             },
           );
@@ -1585,6 +1611,28 @@ rl.on("line", (line) => {
       cachedPromptTokens: 1,
       cacheWritePromptTokens: 2,
       reasoningOutputTokens: 5,
+    });
+  });
+
+  test.serial("uses cumulative Codex token usage instead of the last request", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-cumulative-usage-"));
+    process.env.COWORK_CODEX_APP_SERVER_ARGS = "cumulative-token-usage";
+    const runtime = createRuntime(makeConfig(dir));
+
+    const result = await runtime.runTurn({
+      config: makeConfig(dir),
+      system: "You are Codex.",
+      messages: [{ role: "user", content: "Say hi" }],
+      tools: {},
+      maxSteps: 1,
+    });
+
+    expect(result.usage).toEqual({
+      promptTokens: 3455915,
+      completionTokens: 20472,
+      totalTokens: 3476387,
+      cachedPromptTokens: 2987776,
+      reasoningOutputTokens: 5929,
     });
   });
 

@@ -232,6 +232,71 @@ describe("JSON-RPC projectors", () => {
     expect(reasoningCompletedIndex).toBeLessThan(assistantDeltaIndex);
   });
 
+  test("notification projector splits same-id reasoning when a tool lands between deltas", () => {
+    const outbound: Array<{ method: string; params?: any }> = [];
+    const projector = createJsonRpcNotificationProjector({
+      threadId: sessionId,
+      send: (message) => outbound.push(message as { method: string; params?: any }),
+    });
+
+    projector.handle({
+      type: "session_busy",
+      sessionId,
+      busy: true,
+      turnId,
+      cause: "user_message",
+    });
+    projector.handle(
+      streamChunk("reasoning_delta", { id: "r0", mode: "reasoning", text: "First step." }),
+    );
+    projector.handle(
+      streamChunk("tool_call", {
+        toolCallId: "call-1",
+        toolName: "webSearch",
+        input: { query: "first" },
+      }),
+    );
+    projector.handle(
+      streamChunk("tool_result", {
+        toolCallId: "call-1",
+        toolName: "webSearch",
+        output: { result: "first" },
+      }),
+    );
+    projector.handle(
+      streamChunk("reasoning_delta", { id: "r0", mode: "reasoning", text: "Second step." }),
+    );
+    projector.handle({
+      type: "session_busy",
+      sessionId,
+      busy: false,
+      turnId,
+      outcome: "success",
+    });
+
+    const visibleOrder = outbound
+      .filter(
+        (message) =>
+          message.method === "item/started" &&
+          (message.params?.item?.type === "reasoning" ||
+            message.params?.item?.type === "toolCall"),
+      )
+      .map((message) => message.params?.item?.type);
+    expect(visibleOrder).toEqual(["reasoning", "toolCall", "reasoning"]);
+
+    const reasoningCompleted = outbound
+      .filter((message) => message.method === "item/completed")
+      .filter((message) => message.params?.item?.type === "reasoning");
+    expect(reasoningCompleted.map((message) => message.params?.item?.id)).toEqual([
+      `reasoning:${turnId}:r0`,
+      `reasoning:${turnId}:r0:2`,
+    ]);
+    expect(reasoningCompleted.map((message) => message.params?.item?.text)).toEqual([
+      "First step.",
+      "Second step.",
+    ]);
+  });
+
   test("notification projector closes blank reasoning placeholders when a turn completes", () => {
     const outbound: Array<{ method: string; params?: any }> = [];
     const projector = createJsonRpcNotificationProjector({

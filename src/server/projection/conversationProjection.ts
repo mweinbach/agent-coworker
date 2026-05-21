@@ -582,6 +582,17 @@ export function createConversationProjection(opts: CreateConversationProjectionO
     }
   };
 
+  const shouldCompleteReasoningBeforeStreamUpdate = (update: ModelStreamUpdate): boolean => {
+    if (
+      update.kind === "reasoning_start" ||
+      update.kind === "reasoning_delta" ||
+      update.kind === "reasoning_end"
+    ) {
+      return false;
+    }
+    return !(update.kind === "assistant_delta" && update.phase === "commentary");
+  };
+
   const clearToolStateForTurn = (turnId: string) => {
     for (const key of toolByKey.keys()) {
       if (key.startsWith(`${turnId}:`)) {
@@ -796,6 +807,10 @@ export function createConversationProjection(opts: CreateConversationProjectionO
   };
 
   const handleModelStreamUpdate = (update: ModelStreamUpdate) => {
+    if (shouldCompleteReasoningBeforeStreamUpdate(update)) {
+      completeReasoningStateForTurn(update.turnId);
+    }
+
     if (update.kind === "assistant_delta") {
       if (update.phase === "commentary") return;
       const currentText = update.text;
@@ -1030,6 +1045,7 @@ export function createConversationProjection(opts: CreateConversationProjectionO
         case "assistant_message":
           if (!activeTurnId) return;
           {
+            completeReasoningStateForTurn(activeTurnId);
             const remainder = assistantRemainderForTurn(activeTurnId, event.text);
             const activeAssistant = activeAssistantByTurn.get(activeTurnId);
             if (activeAssistant) {
@@ -1046,6 +1062,7 @@ export function createConversationProjection(opts: CreateConversationProjectionO
         case "reasoning":
           if (!activeTurnId) return;
           completeAssistantStateBeforeStep(activeTurnId);
+          completeReasoningStateForTurn(activeTurnId);
           emitReasoningItem(
             activeTurnId,
             event.kind,
@@ -1054,6 +1071,7 @@ export function createConversationProjection(opts: CreateConversationProjectionO
           );
           return;
         case "ask":
+          if (activeTurnId) completeReasoningStateForTurn(activeTurnId);
           emitSystemItem(formatAskSystemLine(event));
           opts.sink.emitServerRequest?.({
             id: event.requestId,
@@ -1069,6 +1087,7 @@ export function createConversationProjection(opts: CreateConversationProjectionO
           });
           return;
         case "approval":
+          if (activeTurnId) completeReasoningStateForTurn(activeTurnId);
           emitSystemItem(formatApprovalSystemLine(event));
           opts.sink.emitServerRequest?.({
             id: event.requestId,
@@ -1087,21 +1106,28 @@ export function createConversationProjection(opts: CreateConversationProjectionO
         case "observability_status":
         case "session_backup_state":
         case "harness_context":
+          if (activeTurnId) completeReasoningStateForTurn(activeTurnId);
           emitSystemItem(developerDiagnosticSystemLineFromSessionEvent(event));
           return;
         case "log":
+          if (activeTurnId && !shouldSuppressRawDebugLogLine(event.line)) {
+            completeReasoningStateForTurn(activeTurnId);
+          }
           emitLogItem(event.line);
           return;
         case "todos":
+          if (activeTurnId) completeReasoningStateForTurn(activeTurnId);
           emitTodosItem(event.todos);
           return;
         case "error":
           if (activeTurnId) {
+            completeReasoningStateForTurn(activeTurnId);
             failActiveToolStreamsForTurn(activeTurnId, event.message);
           }
           emitErrorItem(event);
           return;
         case "a2ui_surface":
+          if (activeTurnId) completeReasoningStateForTurn(activeTurnId);
           emitA2uiSurfaceItem(event);
           return;
         default:

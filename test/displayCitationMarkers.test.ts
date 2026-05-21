@@ -627,6 +627,56 @@ describe("display citation markers", () => {
     expect(out).not.toContain("injured.<cite");
   });
 
+  test("cleans degenerate native Sources punctuation before citation chips", () => {
+    const text = "The report is ready.\n\nSources:,,,,,,,,,,.";
+    const firstComma = text.indexOf(",");
+
+    const out = normalizeDisplayCitationMarkers(text, {
+      citationMode: "html",
+      annotations: [
+        {
+          type: "url_citation",
+          start_index: firstComma,
+          end_index: firstComma + 1,
+          title: "blog.google",
+          url: "https://blog.google/products/gemini/report",
+        },
+        {
+          type: "url_citation",
+          start_index: firstComma,
+          end_index: firstComma + 2,
+          title: "ycombinator.com",
+          url: "https://news.ycombinator.com/item?id=1",
+        },
+      ],
+    });
+
+    expect(out).toContain("Sources: <cite");
+    expect(out).toContain(">blog.google +1</cite>");
+    expect(out).not.toContain("Sources:,");
+    expect(out).not.toContain("Sources:.");
+  });
+
+  test("uses long native source titles in compact chips instead of falling back to host only", () => {
+    const text = "Gemini update";
+
+    const out = normalizeDisplayCitationMarkers(text, {
+      citationMode: "html",
+      annotations: [
+        {
+          type: "url_citation",
+          start_index: 0,
+          end_index: text.length,
+          title: "Gemini 3.5 Flash | Gemini API | Google AI for Developers",
+          url: "https://blog.google/products/gemini/gemini-35-flash",
+        },
+      ],
+    });
+
+    expect(out).toContain(">Gemini 3.5 Flash | Gemini API…</cite>");
+    expect(out).not.toContain(">blog.google</cite>");
+  });
+
   test("tracks native URL context sources for assistant messages", () => {
     const feed = [
       { id: "user-1", kind: "message", role: "user" as const },

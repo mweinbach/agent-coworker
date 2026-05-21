@@ -451,8 +451,9 @@ describe("desktop message local file links", () => {
       );
       expect(popup?.getAttribute("class")).toContain("fixed");
       expect(popup?.getAttribute("class")).toContain("z-[70]");
-      expect(popup?.getAttribute("class")).toContain("w-[min(16rem,calc(100vw-2rem))]");
+      expect(popup?.getAttribute("class")).toContain("w-[min(23rem,calc(100vw-2rem))]");
       expect(popup?.textContent).toContain("Safety Memo");
+      expect(popup?.textContent).toContain("https://example.com/killed");
 
       const nextButton = harness.dom.window.document.querySelector(
         'button[aria-label="Next source"]',

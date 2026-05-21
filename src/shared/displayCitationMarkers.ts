@@ -842,17 +842,7 @@ function buildCitationSourcesByIndex(options: CitationDisplayOptions): Map<numbe
 }
 
 function displayCitationSourceLabel(source: CitationSource): string {
-  const title = source.title?.trim();
-  if (title && title.length > 0 && title.length <= 28) {
-    return title;
-  }
-
-  try {
-    const hostname = new URL(source.url).hostname.replace(/^www\./, "");
-    return hostname || source.url;
-  } catch {
-    return source.url;
-  }
+  return describeCitationSource(source).titleLabel;
 }
 
 function truncateLabel(value: string, maxLength: number): string {
@@ -1086,6 +1076,14 @@ function renderSourcesFooter(options: CitationDisplayOptions): string {
   return renderedIds.length > 0 ? `Sources: ${renderedIds.join(", ")}` : "";
 }
 
+function normalizeDegenerateSourcesPunctuationBeforeCitation(text: string): string {
+  return text.replace(
+    /(^|\n)([ \t]*Sources:\s*)[,\s.;:，、]+(?=(?:<cite\b|\[\d+\](?:\(|\b)|\[[^\]]+\]\())/gi,
+    (_match, lineStart: string, label: string) =>
+      `${lineStart}${/\s$/.test(label) ? label : `${label} `}`,
+  );
+}
+
 function insertNativeCitationMarkers(text: string, options: CitationDisplayOptions): string {
   const annotations = extractLinkCitationAnnotations(options.annotations);
   if (annotations.length === 0) {
@@ -1146,7 +1144,7 @@ function insertNativeCitationMarkers(text: string, options: CitationDisplayOptio
     cursor = endIndex;
   }
   out += text.slice(cursor);
-  return out;
+  return normalizeDegenerateSourcesPunctuationBeforeCitation(out);
 }
 
 export function extractCitationSourcesFromWebSearchResult(result: unknown): CitationSource[] {

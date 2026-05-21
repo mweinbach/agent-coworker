@@ -1,7 +1,7 @@
 {
-  "id": "gemini-3.1-pro",
+  "id": "gemini-3.1-pro-preview",
   "provider": "antigravity",
-  "displayName": "Gemini 3.1 Pro",
+  "displayName": "Gemini 3.1 Pro Preview",
   "knowledgeCutoff": "January 2025",
   "supportsImageInput": true,
   "promptTemplate": "system-models/gemini-3.1-pro-preview.md",

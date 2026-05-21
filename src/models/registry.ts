@@ -5,7 +5,7 @@ import anthropicClaudeOpus46 from "../../config/models/anthropic/claude-opus-4-6
 import anthropicClaudeOpus47 from "../../config/models/anthropic/claude-opus-4-7.json";
 import anthropicClaudeSonnet45 from "../../config/models/anthropic/claude-sonnet-4-5.json";
 import anthropicClaudeSonnet46 from "../../config/models/anthropic/claude-sonnet-4-6.json";
-import antigravityGemini31Pro from "../../config/models/antigravity/gemini-3.1-pro.json";
+import antigravityGemini31Pro from "../../config/models/antigravity/gemini-3.1-pro-preview.json";
 import antigravityGemini31FlashLite from "../../config/models/antigravity/gemini-3.1-flash-lite.json";
 import antigravityGemini35Flash from "../../config/models/antigravity/gemini-3.5-flash.json";
 import basetenMoonshotAiKimiK25 from "../../config/models/baseten/moonshotai-kimi-k2.5.json";
@@ -199,6 +199,7 @@ const LEGACY_MODEL_ALIASES: Record<string, string> = {
   "codex-cli:gpt-5.1-codex-mini": "codex-cli:gpt-5.4",
   "codex-cli:gpt-5.2-codex": "codex-cli:gpt-5.4",
   "google:gemini-3-pro-preview": "google:gemini-3.1-pro-preview-customtools",
+  "antigravity:gemini-3.1-pro": "antigravity:gemini-3.1-pro-preview",
 };
 
 type LikelyModelProvider = "openai" | "anthropic";

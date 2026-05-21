@@ -24,7 +24,7 @@ export function createRuntimeDiagnosticsActions(
 
     await ensureServerRunning(get, set, workspaceId);
     const socket = ensureControlSocket(get, set, workspaceId);
-    if (!socket || !get().workspaceRuntimeById[workspaceId]?.controlSessionId) return null;
+    if (!socket) return null;
     return workspaceId;
   };
 

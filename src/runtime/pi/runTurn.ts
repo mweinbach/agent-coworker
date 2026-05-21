@@ -19,8 +19,8 @@ import {
   preparePiModelForStream,
   resolvePiModel,
   stripPlaceholderCostFromAssistantRecord,
-  withPatchedNvidiaFetch,
 } from "./modelResolution";
+import { withPatchedNvidiaFetch } from "./nvidiaFetchPatch";
 import {
   buildInitialStepMessages,
   buildStepState,

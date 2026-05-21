@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import path from "node:path";
 import type { RuntimeRunTurnParams } from "../../../src/runtime/types";
 import type { AgentConfig, ModelMessage } from "../../../src/types";
@@ -50,3 +51,10 @@ export function googleSseResponse(events: Array<Record<string, unknown>>): Respo
     headers: { "content-type": "text/event-stream" },
   });
 }
+
+export const liveGoogleApiKey =
+  process.env.GOOGLE_INTERACTIONS_LIVE === "1"
+    ? (process.env.GOOGLE_GENERATIVE_AI_API_KEY ?? process.env.GOOGLE_API_KEY)
+    : undefined;
+
+export const liveGoogleTest = liveGoogleApiKey ? test : test.skip;

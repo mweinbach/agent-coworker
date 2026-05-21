@@ -10,62 +10,12 @@ import {
 } from "../../src/runtime/googleNativeInteractions";
 import { __internal as citationMetadataInternal } from "../../src/server/citationMetadata";
 import type { RuntimeRunTurnParams } from "../../src/runtime/types";
-import type { AgentConfig, ModelMessage } from "../../src/types";
-
-function makeConfig(homeDir: string, overrides: Partial<AgentConfig> = {}): AgentConfig {
-  return {
-    provider: "google",
-    model: "gemini-3-flash-preview",
-    preferredChildModel: "gemini-3-flash-preview",
-    workingDirectory: homeDir,
-    outputDirectory: path.join(homeDir, "output"),
-    uploadsDirectory: path.join(homeDir, "uploads"),
-    userName: "",
-    knowledgeCutoff: "unknown",
-    projectCoworkDir: path.join(homeDir, ".agent-project"),
-    userCoworkDir: path.join(homeDir, ".cowork"),
-    builtInDir: homeDir,
-    builtInConfigDir: path.join(homeDir, "config"),
-    skillsDirs: [],
-    memoryDirs: [],
-    configDirs: [],
-    providerOptions: {
-      google: {
-        thinkingConfig: {
-          includeThoughts: true,
-        },
-      },
-    },
-    ...overrides,
-  };
-}
-
-function makeParams(
-  config: AgentConfig,
-  overrides: Partial<RuntimeRunTurnParams> = {},
-): RuntimeRunTurnParams {
-  return {
-    config,
-    system: "You are helpful.",
-    messages: [{ role: "user", content: "hello" }] as ModelMessage[],
-    tools: {},
-    maxSteps: 1,
-    ...overrides,
-  };
-}
-
-function googleSseResponse(events: Array<Record<string, unknown>>): Response {
-  return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
-    status: 200,
-    headers: { "content-type": "text/event-stream" },
-  });
-}
-
-const liveGoogleApiKey =
-  process.env.GOOGLE_INTERACTIONS_LIVE === "1"
-    ? (process.env.GOOGLE_GENERATIVE_AI_API_KEY ?? process.env.GOOGLE_API_KEY)
-    : undefined;
-const liveGoogleTest = liveGoogleApiKey ? test : test.skip;
+import {
+  googleSseResponse,
+  liveGoogleTest,
+  makeConfig,
+  makeParams,
+} from "./google-native/fixtures";
 
 describe("google native interactions request building", () => {
   test("SDK Interactions contract stays aligned with request and stream shapes", () => {

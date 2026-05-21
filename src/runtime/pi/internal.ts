@@ -10,7 +10,12 @@ import {
   asRecord,
   toPiJsonSchema,
 } from "../piRuntimeOptions";
-import { normalizeNvidiaChatCompletionsBody, resolvePiModel } from "./modelResolution";
+import {
+  preparePiModelForStream,
+  resolvePiModel,
+  stripPlaceholderCostFromAssistantRecord,
+} from "./modelResolution";
+import { normalizeNvidiaChatCompletionsBody } from "./nvidiaFetchPatch";
 import {
   buildInitialStepMessages,
   buildStepState,

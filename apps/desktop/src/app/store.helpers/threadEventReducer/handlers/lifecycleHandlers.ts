@@ -1,91 +1,34 @@
-import type { SessionEvent } from "../../../lib/wsProtocol";
-import {
-  mapModelStreamChunk,
-  replayModelStreamRawEvent,
-  shouldIgnoreNormalizedChunkForRawBackedTurn,
-} from "../../modelStream";
+import type { SessionEvent } from "../../../../lib/wsProtocol";
 import {
   developerDiagnosticSystemLineFromSessionEvent,
-  hasMatchingStreamedReasoningText,
-  reasoningInsertBeforeAssistantAfterStreamReplay,
-  shouldSkipAssistantMessageAfterStreamReplay,
-  shouldSuppressRawDebugLogLine,
-  unhandledEventSystemLine,
   upsertAgentSummary,
-} from "../../store.feedMapping";
+} from "../../../store.feedMapping";
 import {
-  clearPendingThreadSteer,
   clearPendingThreadSteers,
-  getModelStreamRuntime,
-  hasPendingThreadSteer,
   markPendingThreadSteerAccepted,
   prependPendingThreadMessage,
   RUNTIME,
   shiftPendingThreadAttachments,
-} from "../runtimeState";
-import type { StoreGet, StoreSet } from "../../store.helpers";
-import {
-  type ApprovalPrompt,
-  type AskPrompt,
-  type FeedItem,
-} from "../../types";
-import { sortAgentSummaries } from "../threadEventReducerContext";
-import type { ThreadEventReducerContext } from "./context";
-import type { FeedProjectionModule } from "./feedProjection";
-import type { MessagingModule } from "./messaging";
-import type { WorkspaceStateHelpers } from "./workspaceState";
+} from "../../runtimeState";
+import { type ApprovalPrompt, type AskPrompt } from "../../../types";
+import { sortAgentSummaries } from "../../threadEventReducerContext";
+import type { HandlerDispatch, HandlerModuleContext } from "./shared";
 
-export function createHandlersModule(
-  ctx: ThreadEventReducerContext,
-  workspace: Pick<
-    WorkspaceStateHelpers,
-    "hasPendingWorkspaceDefaultApply" | "resetLiveModelStreamRuntime"
-  >,
-  feed: FeedProjectionModule,
-  messaging: Pick<
-    MessagingModule,
-    | "sendUserMessageToThread"
-    | "flushOneQueuedThreadMessage"
-    | "flushOneQueuedThreadMessageIfReady"
-  >,
-) {
-  const { deps } = ctx;
+export function handleLifecycleThreadEvent(
+  module: HandlerModuleContext,
+  dispatch: HandlerDispatch,
+  evt: SessionEvent,
+): boolean {
   const {
+    ctx,
     pushFeedItem,
-    insertFeedItemBefore,
-    applyModelStreamUpdateToThreadFeed,
-  } = feed;
-  const {
     sendUserMessageToThread,
-    flushOneQueuedThreadMessage,
     flushOneQueuedThreadMessageIfReady,
-  } = messaging;
-  const { hasPendingWorkspaceDefaultApply, resetLiveModelStreamRuntime } = workspace;
-  function handleThreadEvent(
-    get: StoreGet,
-    set: StoreSet,
-    threadId: string,
-    evt: SessionEvent,
-    pendingFirstMessage?: string,
-    pendingFirstMessageQueued = false,
-  ) {
-    if (evt.type !== "server_hello") {
-      const activeSessionId = get().threadRuntimeById[threadId]?.sessionId;
-      if (!activeSessionId || evt.sessionId !== activeSessionId) {
-        return;
-      }
-    }
-
-    ctx.deps.appendThreadTranscript(threadId, "server", evt);
-    set((s) => ({
-      threads: s.threads.map((thread) =>
-        thread.id === threadId
-          ? { ...thread, lastEventSeq: Math.max(0, Math.floor((thread.lastEventSeq ?? 0) + 1)) }
-          : thread,
-      ),
-    }));
-    void ctx.deps.persist(get);
-    const stream = getModelStreamRuntime(threadId);
+    hasPendingWorkspaceDefaultApply,
+    resetLiveModelStreamRuntime,
+  } = module;
+  const { get, set, threadId, pendingFirstMessage, pendingFirstMessageQueued = false } = dispatch;
+  const { deps } = ctx;
 
     if (evt.type === "server_hello") {
       resetLiveModelStreamRuntime(threadId);
@@ -179,7 +122,7 @@ export function createHandlersModule(
       if (!resumedBusy && !acceptedPendingFirstMessage) {
         flushOneQueuedThreadMessageIfReady(get, set, threadId);
       }
-      return;
+  return true;
     }
 
     if (evt.type === "observability_status") {
@@ -189,7 +132,7 @@ export function createHandlersModule(
         ts: ctx.deps.nowIso(),
         line: developerDiagnosticSystemLineFromSessionEvent(evt),
       });
-      return;
+  return true;
     }
 
     if (evt.type === "session_settings") {
@@ -212,7 +155,7 @@ export function createHandlersModule(
         );
         flushOneQueuedThreadMessageIfReady(get, set, threadId);
       }
-      return;
+  return true;
     }
 
     if (evt.type === "session_busy") {
@@ -248,7 +191,7 @@ export function createHandlersModule(
         clearPendingThreadSteers(threadId);
         flushOneQueuedThreadMessageIfReady(get, set, threadId);
       }
-      return;
+  return true;
     }
 
     if (evt.type === "steer_accepted") {
@@ -282,7 +225,7 @@ export function createHandlersModule(
       ) {
         set({ composerText: "" });
       }
-      return;
+  return true;
     }
 
     if (evt.type === "config_updated") {
@@ -304,7 +247,7 @@ export function createHandlersModule(
           pendingApply.draftModelSelection,
         );
       }
-      return;
+  return true;
     }
 
     if (evt.type === "session_config") {
@@ -327,7 +270,7 @@ export function createHandlersModule(
         );
         flushOneQueuedThreadMessageIfReady(get, set, threadId);
       }
-      return;
+  return true;
     }
 
     if (evt.type === "session_info") {
@@ -404,7 +347,7 @@ export function createHandlersModule(
       if (titleChanged) {
         void ctx.deps.persist(get);
       }
-      return;
+  return true;
     }
 
     if (evt.type === "session_backup_state" || evt.type === "harness_context") {
@@ -414,7 +357,7 @@ export function createHandlersModule(
         ts: ctx.deps.nowIso(),
         line: developerDiagnosticSystemLineFromSessionEvent(evt),
       });
-      return;
+  return true;
     }
 
     if (evt.type === "agent_list") {
@@ -431,7 +374,7 @@ export function createHandlersModule(
           },
         };
       });
-      return;
+  return true;
     }
 
     if (evt.type === "agent_spawned" || evt.type === "agent_status") {
@@ -448,7 +391,7 @@ export function createHandlersModule(
           },
         };
       });
-      return;
+  return true;
     }
 
     if (evt.type === "agent_wait_result") {
@@ -469,7 +412,7 @@ export function createHandlersModule(
           },
         };
       });
-      return;
+  return true;
     }
 
     if (evt.type === "ask") {
@@ -479,7 +422,7 @@ export function createHandlersModule(
         options: evt.options,
       };
       set(() => ({ promptModal: { kind: "ask", threadId, prompt } }));
-      return;
+  return true;
     }
 
     if (evt.type === "approval") {
@@ -490,276 +433,8 @@ export function createHandlersModule(
         reasonCode: evt.reasonCode,
       };
       set(() => ({ promptModal: { kind: "approval", threadId, prompt } }));
-      return;
+  return true;
     }
 
-    if (evt.type === "model_stream_chunk") {
-      if (shouldIgnoreNormalizedChunkForRawBackedTurn(stream.replay, evt)) {
-        return;
-      }
-      const mapped = mapModelStreamChunk(evt);
-      if (mapped) applyModelStreamUpdateToThreadFeed(get, set, threadId, stream, mapped);
-      return;
-    }
-
-    if (evt.type === "model_stream_raw") {
-      const updates = replayModelStreamRawEvent(stream.replay, evt);
-      for (const update of updates) {
-        applyModelStreamUpdateToThreadFeed(get, set, threadId, stream, update);
-      }
-      return;
-    }
-
-    if (evt.type === "user_message") {
-      resetLiveModelStreamRuntime(threadId);
-      const cmid = typeof evt.clientMessageId === "string" ? evt.clientMessageId : null;
-      if (cmid && hasPendingThreadSteer(threadId, cmid)) {
-        clearPendingThreadSteer(threadId, cmid);
-        set((s) => {
-          const rt = s.threadRuntimeById[threadId];
-          if (!rt || rt.pendingSteer?.clientMessageId !== cmid) return {};
-          return {
-            threadRuntimeById: {
-              ...s.threadRuntimeById,
-              [threadId]: {
-                ...rt,
-                pendingSteer: null,
-              },
-            },
-          };
-        });
-      }
-      set((s) => {
-        const rt = s.threadRuntimeById[threadId];
-        if (!rt?.pendingTurnStart) return {};
-        if (cmid && rt.pendingTurnStart.clientMessageId !== cmid) return {};
-        return {
-          threadRuntimeById: {
-            ...s.threadRuntimeById,
-            [threadId]: {
-              ...rt,
-              pendingTurnStart: null,
-            },
-          },
-        };
-      });
-      if (cmid) {
-        const seen = RUNTIME.optimisticUserMessageIds.get(threadId);
-        if (seen?.has(cmid)) return;
-      }
-
-      pushFeedItem(set, threadId, {
-        id: cmid || ctx.deps.makeId(),
-        kind: "message",
-        role: "user",
-        ts: ctx.deps.nowIso(),
-        text: evt.text,
-      });
-
-      set((s) => ({
-        threads: s.threads.map((t) =>
-          t.id === threadId
-            ? {
-                ...t,
-                lastMessageAt: ctx.deps.nowIso(),
-              }
-            : t,
-        ),
-      }));
-      void ctx.deps.persist(get);
-      return;
-    }
-
-    if (evt.type === "assistant_message") {
-      set((s) => {
-        const rt = s.threadRuntimeById[threadId];
-        if (!rt?.pendingTurnStart) return {};
-        return {
-          threadRuntimeById: {
-            ...s.threadRuntimeById,
-            [threadId]: {
-              ...rt,
-              pendingTurnStart: null,
-            },
-          },
-        };
-      });
-      const existingFeed = get().threadRuntimeById[threadId]?.feed ?? [];
-      if (shouldSkipAssistantMessageAfterStreamReplay(stream, evt.text, existingFeed)) return;
-
-      pushFeedItem(set, threadId, {
-        id: ctx.deps.makeId(),
-        kind: "message",
-        role: "assistant",
-        ts: ctx.deps.nowIso(),
-        text: evt.text,
-      });
-
-      set((s) => ({
-        threads: s.threads.map((t) =>
-          t.id === threadId ? { ...t, lastMessageAt: ctx.deps.nowIso() } : t,
-        ),
-      }));
-      void ctx.deps.persist(get);
-      return;
-    }
-
-    if (evt.type === "turn_usage") {
-      set((s) => {
-        const rt = s.threadRuntimeById[threadId];
-        if (!rt) return {};
-        return {
-          threadRuntimeById: {
-            ...s.threadRuntimeById,
-            [threadId]: {
-              ...rt,
-              lastTurnUsage: {
-                turnId: evt.turnId,
-                usage: evt.usage,
-              },
-            },
-          },
-        };
-      });
-      return;
-    }
-
-    if (evt.type === "session_usage") {
-      set((s) => {
-        const rt = s.threadRuntimeById[threadId];
-        if (!rt) return {};
-        return {
-          threadRuntimeById: {
-            ...s.threadRuntimeById,
-            [threadId]: {
-              ...rt,
-              sessionUsage: evt.usage,
-            },
-          },
-        };
-      });
-      return;
-    }
-
-    if (evt.type === "budget_warning" || evt.type === "budget_exceeded") {
-      set((s) => ({
-        notifications: ctx.deps.pushNotification(s.notifications, {
-          id: ctx.deps.makeId(),
-          ts: ctx.deps.nowIso(),
-          kind: evt.type === "budget_exceeded" ? "error" : "info",
-          title:
-            evt.type === "budget_exceeded" ? "Session hard cap exceeded" : "Session budget warning",
-          detail: evt.message,
-        }),
-      }));
-      return;
-    }
-
-    if (evt.type === "reasoning") {
-      set((s) => {
-        const rt = s.threadRuntimeById[threadId];
-        if (!rt?.pendingTurnStart) return {};
-        return {
-          threadRuntimeById: {
-            ...s.threadRuntimeById,
-            [threadId]: {
-              ...rt,
-              pendingTurnStart: null,
-            },
-          },
-        };
-      });
-      if (hasMatchingStreamedReasoningText(stream, evt.text)) {
-        return;
-      }
-
-      const item: FeedItem = {
-        id: ctx.deps.makeId(),
-        kind: "reasoning",
-        mode: evt.kind,
-        ts: ctx.deps.nowIso(),
-        text: evt.text,
-      };
-      const beforeAssistantId = reasoningInsertBeforeAssistantAfterStreamReplay(stream);
-      if (beforeAssistantId) {
-        insertFeedItemBefore(set, threadId, beforeAssistantId, item);
-        return;
-      }
-
-      pushFeedItem(set, threadId, item);
-      return;
-    }
-
-    if (evt.type === "todos") {
-      set((s) => ({
-        latestTodosByThreadId: { ...s.latestTodosByThreadId, [threadId]: evt.todos },
-      }));
-      pushFeedItem(set, threadId, {
-        id: ctx.deps.makeId(),
-        kind: "todos",
-        ts: ctx.deps.nowIso(),
-        todos: evt.todos,
-      });
-      return;
-    }
-
-    if (evt.type === "log") {
-      if (shouldSuppressRawDebugLogLine(evt.line)) {
-        return;
-      }
-      pushFeedItem(set, threadId, {
-        id: ctx.deps.makeId(),
-        kind: "log",
-        ts: ctx.deps.nowIso(),
-        line: evt.line,
-      });
-      return;
-    }
-
-    if (evt.type === "error") {
-      pushFeedItem(set, threadId, {
-        id: ctx.deps.makeId(),
-        kind: "error",
-        ts: ctx.deps.nowIso(),
-        message: evt.message,
-        code: evt.code,
-        source: evt.source,
-      });
-      set((s) => ({
-        notifications: ctx.deps.pushNotification(s.notifications, {
-          id: ctx.deps.makeId(),
-          ts: ctx.deps.nowIso(),
-          kind: "error",
-          title: "Agent error",
-          detail: `${evt.source}/${evt.code}: ${evt.message}`,
-        }),
-      }));
-      if (evt.code === "validation_failed") {
-        set((s) => {
-          const rt = s.threadRuntimeById[threadId];
-          if (!rt?.pendingSteer) return {};
-          return {
-            threadRuntimeById: {
-              ...s.threadRuntimeById,
-              [threadId]: {
-                ...rt,
-                pendingSteer: null,
-              },
-            },
-          };
-        });
-        clearPendingThreadSteers(threadId);
-      }
-      return;
-    }
-
-    pushFeedItem(set, threadId, {
-      id: ctx.deps.makeId(),
-      kind: "system",
-      ts: ctx.deps.nowIso(),
-      line: unhandledEventSystemLine(evt.type),
-    });
-  }
-
-  return { handleThreadEvent };
+  return false;
 }

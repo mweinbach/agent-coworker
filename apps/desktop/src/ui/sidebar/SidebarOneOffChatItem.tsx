@@ -1,0 +1,124 @@
+import { ArchiveIcon } from "lucide-react";
+import { type MouseEvent, memo, type RefObject } from "react";
+import { useAppStore } from "../../app/store";
+import type { ThreadRecord, ThreadRuntime } from "../../app/types";
+import { Button } from "../../components/ui/button";
+import { Input } from "../../components/ui/input";
+import { cn } from "../../lib/utils";
+import { formatSidebarRelativeAge } from "../sidebarHelpers";
+
+export type SidebarOneOffChatItemProps = {
+  editInputRef: RefObject<HTMLInputElement | null>;
+  editingThreadId: string | null;
+  editingTitle: string;
+  onCancelRename: () => void;
+  onCommitRename: (threadId: string, title: string) => void;
+  onEditingTitleChange: (title: string) => void;
+  onStartEditing: (threadId: string, currentTitle: string) => void;
+  onThreadContextMenu: (event: MouseEvent<HTMLElement>, threadId: string, title: string) => void;
+  selectedThreadId: string | null;
+  selectThread: (threadId: string) => void;
+  thread: ThreadRecord;
+  threadRuntimeById: Record<string, ThreadRuntime | undefined>;
+};
+
+export const SidebarOneOffChatItem = memo(function SidebarOneOffChatItem({
+  editInputRef,
+  editingThreadId,
+  editingTitle,
+  onCancelRename,
+  onCommitRename,
+  onEditingTitleChange,
+  onStartEditing,
+  onThreadContextMenu,
+  selectedThreadId,
+  selectThread,
+  thread,
+  threadRuntimeById,
+}: SidebarOneOffChatItemProps) {
+  const archiveThread = useAppStore((s) => s.archiveThread);
+  const runtime = threadRuntimeById[thread.id];
+  const busy = runtime?.busy === true;
+  const isActive = thread.id === selectedThreadId;
+  const isEditing = editingThreadId === thread.id;
+  const displayTitle = thread.title || "New chat";
+  const ageLabel = formatSidebarRelativeAge(thread.lastMessageAt);
+
+  if (isEditing) {
+    return (
+      <div className="sidebar-thread-item flex w-full items-center gap-2.5 rounded-lg border border-border/40 bg-foreground/[0.04] px-2.5 py-1.5 text-left text-foreground">
+        <Input
+          ref={editInputRef}
+          className="min-w-0 w-full h-7 rounded-md border-border/70 text-[13px] shadow-none [&_[data-slot=input]]:h-7 [&_[data-slot=input]]:px-2 [&_[data-slot=input]]:text-[13px]"
+          value={editingTitle}
+          onBlur={() => onCommitRename(thread.id, editingTitle)}
+          onChange={(event) => onEditingTitleChange(event.target.value)}
+          onClick={(event) => event.stopPropagation()}
+          onDoubleClick={(event) => event.stopPropagation()}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              onCommitRename(thread.id, editingTitle);
+            } else if (event.key === "Escape") {
+              event.preventDefault();
+              onCancelRename();
+            }
+          }}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="relative group min-w-0">
+      <Button
+        className={cn(
+          "sidebar-thread-item sidebar-lift flex min-w-0 w-full items-center gap-2.5 rounded-lg border border-transparent px-2.5 py-1.5 text-left",
+          isActive
+            ? "border-border/45 bg-foreground/[0.05] text-foreground"
+            : "text-foreground/82 hover:border-border/35 hover:bg-foreground/[0.035] hover:text-foreground",
+        )}
+        onClick={() => selectThread(thread.id)}
+        onContextMenu={(event) => onThreadContextMenu(event, thread.id, displayTitle)}
+        onDoubleClick={() => onStartEditing(thread.id, displayTitle)}
+        title={displayTitle}
+        type="button"
+        variant="ghost"
+      >
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[13px] font-medium tracking-[-0.018em]">
+            {displayTitle}
+          </span>
+        </span>
+
+        <span className="relative flex shrink-0 items-center gap-2 pl-2 min-w-8 justify-end">
+          {busy ? (
+            <span
+              className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse"
+              aria-hidden="true"
+            />
+          ) : ageLabel ? (
+            <span className="text-[11px] font-medium text-muted-foreground transition-opacity duration-150 group-hover:opacity-0 group-hover:pointer-events-none">
+              {ageLabel}
+            </span>
+          ) : null}
+        </span>
+      </Button>
+      {!busy ? (
+        <button
+          type="button"
+          className="absolute right-2.5 top-1/2 z-10 h-5 w-5 -translate-y-1/2 flex items-center justify-center rounded-md opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto text-muted-foreground/60 hover:text-foreground/85 hover:bg-foreground/[0.06] transition-all duration-200 ease-out transform scale-75 group-hover:scale-100"
+          title="Archive chat"
+          aria-label="Archive chat"
+          onClick={(event) => {
+            event.stopPropagation();
+            event.preventDefault();
+            void archiveThread(thread.id);
+          }}
+        >
+          <ArchiveIcon className="h-3.5 w-3.5" />
+        </button>
+      ) : null}
+    </div>
+  );
+});

@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
 
-import { asRecord, asString } from "../runtime/piRuntimeOptions";
+import { asRecord, asString } from "../shared/recordParsing";
 import { resolveAuthHomeDir } from "../utils/authHome";
 import { VERSION } from "../version";
 import {

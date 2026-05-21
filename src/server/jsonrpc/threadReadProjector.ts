@@ -1,4 +1,5 @@
 import type { PersistedThreadJournalEvent } from "../sessionDb";
+import { stripWhitespaceForTranscriptDedupe } from "../../shared/projectionPolicy";
 import {
   normalizeReasoningText,
   normalizeTranscriptReplayText,
@@ -54,10 +55,6 @@ function dedupeReplayReasoningItems(
   return out;
 }
 
-function stripWhitespace(text: string): string {
-  return text.replace(/\s/g, "");
-}
-
 function dedupeReplayAssistantItems(
   items: Array<Record<string, unknown>>,
 ): Array<Record<string, unknown>> {
@@ -93,8 +90,8 @@ function dedupeReplayAssistantItems(
     // segments were concatenated into history without paragraph separators
     // (e.g. "Hello worldMore text") and a later item has the full formatted
     // text (e.g. "Hello world\n\nMore text"), or vice versa.
-    const strippedAggregate = stripWhitespace(assistantHistory);
-    const strippedNormalized = stripWhitespace(item.text);
+    const strippedAggregate = stripWhitespaceForTranscriptDedupe(assistantHistory);
+    const strippedNormalized = stripWhitespaceForTranscriptDedupe(item.text);
     if (strippedAggregate && strippedNormalized) {
       if (
         strippedAggregate === strippedNormalized ||

@@ -16,6 +16,13 @@ export type RuntimeUsage = {
   estimatedCostUsd?: number;
 };
 
+/** Error from a partial turn that may still include progress and token usage. */
+export type PartialTurnError = Error & {
+  usage?: RuntimeUsage;
+  responseMessages?: ModelMessage[];
+  providerState?: ProviderContinuationState;
+};
+
 export type RuntimeToolDefinition = {
   description?: string;
   inputSchema?: unknown;

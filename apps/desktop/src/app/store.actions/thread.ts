@@ -1,4 +1,3 @@
-import { defaultModelForProvider } from "@cowork/providers/catalog";
 import {
   appendAttachmentSkippedNotes,
   createComposerAttachmentFile,
@@ -41,6 +40,7 @@ import {
   syncDesktopStateCache,
   truncateTitle,
 } from "../store.helpers";
+import { createOneOffWorkspaceRecord } from "../store.helpers/oneOffWorkspaceRecord";
 import { hydrateTranscriptSnapshot } from "../transcriptHydration";
 import {
   createDefaultA2uiDock,
@@ -534,55 +534,6 @@ export function createThreadActions(
   const projectWorkspaces = () =>
     get().workspaces.filter((workspace) => !isOneOffChatWorkspace(workspace));
 
-  const currentProjectDefaultsSource = (): WorkspaceRecord | null => {
-    const state = get();
-    const selected = state.selectedWorkspaceId
-      ? (state.workspaces.find((workspace) => workspace.id === state.selectedWorkspaceId) ?? null)
-      : null;
-    if (selected && !isOneOffChatWorkspace(selected)) {
-      return selected;
-    }
-    return projectWorkspaces()[0] ?? null;
-  };
-
-  const createOneOffWorkspaceRecord = async (titleHint?: string): Promise<WorkspaceRecord> => {
-    const created = await desktopCommands.createOneOffChatWorkspace({ titleHint });
-    const source = currentProjectDefaultsSource();
-    const defaultProvider = source?.defaultProvider ?? "google";
-    const defaultModel =
-      source?.defaultModel?.trim() ||
-      get().providerDefaultModelByProvider[defaultProvider] ||
-      defaultModelForProvider(defaultProvider) ||
-      "";
-    const defaultPreferredChildModel = source?.defaultPreferredChildModel?.trim() || defaultModel;
-    const defaultChildModelRoutingMode = source?.defaultChildModelRoutingMode ?? "same-provider";
-    const defaultPreferredChildModelRef =
-      source?.defaultPreferredChildModelRef?.trim() ||
-      `${defaultProvider}:${defaultPreferredChildModel || defaultModel}`;
-    const createdAt = nowIso();
-
-    return {
-      id: makeId(),
-      name: created.name,
-      path: created.path,
-      workspaceKind: "oneOffChat",
-      createdAt,
-      lastOpenedAt: createdAt,
-      wsProtocol: "jsonrpc",
-      defaultProvider,
-      defaultModel,
-      defaultPreferredChildModel,
-      defaultChildModelRoutingMode,
-      defaultPreferredChildModelRef,
-      defaultAllowedChildModelRefs: source?.defaultAllowedChildModelRefs ?? [],
-      defaultToolOutputOverflowChars: source?.defaultToolOutputOverflowChars,
-      providerOptions: source?.providerOptions,
-      defaultEnableMcp: true,
-      defaultBackupsEnabled: false,
-      yolo: true,
-    };
-  };
-
   const cleanupRemovedWorkspaceRuntime = async (workspaceId: string): Promise<void> => {
     bumpWorkspaceStartGeneration(workspaceId);
     bumpWorkspaceJsonRpcSocketGeneration(workspaceId);
@@ -781,6 +732,7 @@ export function createThreadActions(
       if (scope === "oneOff") {
         try {
           const oneOffWorkspace = await createOneOffWorkspaceRecord(
+            get,
             opts?.titleHint ?? opts?.firstMessage,
           );
           workspaceId = oneOffWorkspace.id;

@@ -3,7 +3,7 @@ import { z } from "zod";
 import { getModel as realGetModel } from "./config";
 import {
   ensureManagedSofficeRuntimeReady,
-  managedSofficeEnvValue,
+  prepareManagedSofficeToolEnv,
   renderManagedSofficeRuntimeInstructions,
 } from "./managedSofficeRuntime";
 import { getOrLoadMCPToolsCached, loadMCPServers, loadMCPTools } from "./mcp";
@@ -259,23 +259,11 @@ function providerOwnsExecutableTools(config: AgentConfig): boolean {
 async function prepareTurnToolEnv(
   params: Pick<RunTurnParams, "config" | "toolEnv" | "log">,
 ): Promise<Record<string, string | undefined> | undefined> {
-  const env = params.toolEnv ?? { ...process.env };
-  if (
-    managedSofficeEnvValue(env, "COWORK_SOFFICE") ||
-    managedSofficeEnvValue(env, "COWORK_MANAGED_SOFFICE_SHIM")
-  ) {
-    return env;
-  }
-
-  const setup = await ensureManagedSofficeRuntimeReady({
+  return await prepareManagedSofficeToolEnv({
     homedir: resolveAuthHomeDir(params.config),
-    env,
+    env: params.toolEnv ?? { ...process.env },
     log: (line) => params.log?.(`[managed-soffice] ${line}`),
   });
-  if (setup?.status === "available") {
-    Object.assign(env, setup.runtimeEnv);
-  }
-  return env;
 }
 
 function appendManagedSofficeInstructions(

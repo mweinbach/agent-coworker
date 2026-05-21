@@ -15,7 +15,6 @@ import type {
   SpreadsheetPreviewViewport,
 } from "../../../../src/shared/spreadsheetPreview";
 import { useAppStore } from "../app/store";
-import { previewJsonRpcWorkspaceSpreadsheet } from "../app/store.helpers/jsonRpcSocket";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -113,6 +112,7 @@ export function SpreadsheetPreview({ path, compact = false }: SpreadsheetPreview
   const workspaces = useAppStore((s) => s.workspaces);
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
   const sendMessage = useAppStore((s) => s.sendMessage);
+  const loadSpreadsheetPreview = useAppStore((s) => s.loadSpreadsheetPreview);
   const hasActiveWorkspace = useMemo(
     () => workspaces.some((workspace) => workspace.id === selectedWorkspaceId),
     [selectedWorkspaceId, workspaces],
@@ -150,19 +150,13 @@ export function SpreadsheetPreview({ path, compact = false }: SpreadsheetPreview
     setError(null);
     void (async () => {
       try {
-        const response = await previewJsonRpcWorkspaceSpreadsheet(
-          useAppStore.getState,
-          useAppStore.setState,
-          selectedWorkspaceId,
-          path,
-          {
-            ...(sheetName ? { sheetName } : {}),
-            viewport: {
-              startRow: viewportStartRow,
-              startCol: viewportStartCol,
-            },
+        const response = await loadSpreadsheetPreview(path, {
+          ...(sheetName ? { sheetName } : {}),
+          viewport: {
+            startRow: viewportStartRow,
+            startCol: viewportStartCol,
           },
-        );
+        });
         if (!active) return;
         setResult(response);
       } catch (err) {
@@ -183,6 +177,7 @@ export function SpreadsheetPreview({ path, compact = false }: SpreadsheetPreview
     sheetName,
     viewportStartCol,
     viewportStartRow,
+    loadSpreadsheetPreview,
   ]);
 
   const preview = result?.ok ? result.preview : null;

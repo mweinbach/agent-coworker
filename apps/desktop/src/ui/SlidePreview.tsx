@@ -1,7 +1,6 @@
 import { AlertTriangleIcon, Loader2Icon, RefreshCwIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAppStore } from "../app/store";
-import { previewJsonRpcWorkspacePresentation } from "../app/store.helpers/jsonRpcSocket";
 import { Button } from "../components/ui/button";
 
 type SlidePreviewProps = {
@@ -12,6 +11,7 @@ type SlidePreviewProps = {
 export function SlidePreview({ path, refreshTrigger }: SlidePreviewProps) {
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const workspaces = useAppStore((s) => s.workspaces);
+  const loadPresentationPreview = useAppStore((s) => s.loadPresentationPreview);
 
   const hasActiveWorkspace = useMemo(
     () => workspaces.some((w) => w.id === selectedWorkspaceId),
@@ -37,12 +37,7 @@ export function SlidePreview({ path, refreshTrigger }: SlidePreviewProps) {
       setSlide(null);
     }
     try {
-      const response = await previewJsonRpcWorkspacePresentation(
-        useAppStore.getState,
-        useAppStore.setState,
-        selectedWorkspaceId,
-        path,
-      );
+      const response = await loadPresentationPreview(path);
 
       if (response?.ok && response.slides && response.slides.length > 0) {
         setSlide(response.slides[0]);
@@ -56,7 +51,7 @@ export function SlidePreview({ path, refreshTrigger }: SlidePreviewProps) {
     } finally {
       setLoading(false);
     }
-  }, [hasActiveWorkspace, path, refreshKey, selectedWorkspaceId]);
+  }, [hasActiveWorkspace, path, refreshKey, loadPresentationPreview]);
 
   useEffect(() => {
     if (Object.is(previousRefreshTrigger.current, refreshTrigger)) return;

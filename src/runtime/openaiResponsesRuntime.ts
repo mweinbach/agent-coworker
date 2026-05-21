@@ -138,7 +138,7 @@ export function createOpenAiResponsesRuntime(
           const span = startModelCallSpan(
             telemetry,
             params,
-            resolved,
+            resolved.model.id,
             step + 1,
             stepState.streamOptions,
             stepState.piMessages,

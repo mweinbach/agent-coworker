@@ -12,7 +12,31 @@ import {
   shouldIgnoreNormalizedChunkForRawBackedTurn,
 } from "../../shared/modelStreamReplay";
 import type { ProjectedItem, ProjectedToolState } from "../../shared/projectedItems";
+import {
+  isTerminalProjectedToolState,
+  stripWhitespaceForTranscriptDedupe,
+} from "../../shared/projectionPolicy";
 import type { SessionEvent } from "../protocol";
+import {
+  developerDiagnosticSystemLineFromSessionEvent,
+  formatApprovalSystemLine,
+  formatAskSystemLine,
+  shouldSuppressRawDebugLogLine,
+} from "./conversationProjectionDiagnostics";
+import {
+  incompleteToolStreamError,
+  shouldReuseLatestToolItemByName,
+  toolArgsFromApproval,
+  toolNameFromApproval,
+  toolSyntheticApprovalKey,
+  toolTurnNameKey,
+} from "./conversationProjectionToolKeys";
+import type {
+  BufferedAssistantState,
+  BufferedReasoningState,
+  BufferedToolState,
+  CreateConversationProjectionOptions,
+} from "./conversationProjectionTypes";
 import {
   hasVisibleAssistantText,
   makeItemId,
@@ -25,263 +49,11 @@ import {
   reasoningModeFromPart,
 } from "./shared";
 
-type BufferedReasoningState = {
-  itemId: string;
-  mode: ProjectedReasoningMode;
-  text: string;
-  started: boolean;
-};
-
-type BufferedAssistantState = {
-  itemId: string;
-  text: string;
-  started: boolean;
-};
-
-type BufferedToolState = {
-  itemId: string;
-  name: string;
-  args?: unknown;
-  inputText: string;
-  started: boolean;
-  state: ProjectedToolState;
-  result?: unknown;
-  approval?: {
-    approvalId: string;
-    reason?: unknown;
-    toolCall?: unknown;
-  };
-};
-
-export type ProjectionServerRequest =
-  | {
-      id: string;
-      type: "ask";
-      method: "item/tool/requestUserInput";
-      params: {
-        turnId: string | null;
-        requestId: string;
-        itemId: string;
-        question: string;
-        options?: string[];
-      };
-    }
-  | {
-      id: string;
-      type: "approval";
-      method: "item/commandExecution/requestApproval";
-      params: {
-        turnId: string | null;
-        requestId: string;
-        itemId: string;
-        command: string;
-        dangerous: boolean;
-        reason: string;
-      };
-    };
-
-export type ConversationProjectionSink = {
-  emitTurnStarted: (turnId: string) => void;
-  emitTurnCompleted: (turnId: string, status: "completed" | "interrupted" | "failed") => void;
-  emitItemStarted: (turnId: string | null, item: ProjectedItem) => void;
-  emitReasoningDelta: (
-    turnId: string,
-    itemId: string,
-    mode: ProjectedReasoningMode,
-    delta: string,
-  ) => void;
-  emitAgentMessageDelta: (turnId: string, itemId: string, delta: string) => void;
-  emitItemCompleted: (turnId: string | null, item: ProjectedItem) => void;
-  emitServerRequest?: (request: ProjectionServerRequest) => void;
-};
-
-export type CreateConversationProjectionOptions = {
-  initialActiveTurnId?: string | null;
-  initialAgentText?: string | null;
-  sink: ConversationProjectionSink;
-};
-
-function toolTurnNameKey(turnId: string, name: string): string {
-  return `${turnId}:${name}`;
-}
-
-function toolSyntheticApprovalKey(turnId: string, approvalId: string): string {
-  return `${turnId}:approval:${approvalId}`;
-}
-
-function toolNameFromApproval(toolCall: unknown): string {
-  if (toolCall && typeof toolCall === "object" && !Array.isArray(toolCall)) {
-    const record = toolCall as Record<string, unknown>;
-    const name =
-      typeof record.name === "string"
-        ? record.name
-        : typeof record.toolName === "string"
-          ? record.toolName
-          : typeof record.functionName === "string"
-            ? record.functionName
-            : null;
-    if (name?.trim()) return name.trim();
-  }
-  return "tool";
-}
-
-function toolArgsFromApproval(toolCall: unknown): unknown {
-  if (toolCall && typeof toolCall === "object" && !Array.isArray(toolCall)) {
-    const record = toolCall as Record<string, unknown>;
-    if (record.arguments !== undefined) return record.arguments;
-    if (record.input !== undefined) return record.input;
-  }
-  return toolCall;
-}
-
-function shouldReuseLatestToolItemByName(name: string): boolean {
-  return name !== "nativeWebSearch" && name !== "nativeUrlContext";
-}
-
-function isTerminalToolState(state: ProjectedToolState): boolean {
-  return state === "output-available" || state === "output-error" || state === "output-denied";
-}
-
-function incompleteToolStreamError(error?: unknown): Record<string, unknown> {
-  return {
-    error: error ?? "Turn failed before the tool call completed.",
-  };
-}
-
-function previewValue(value: unknown, maxChars = 160): string {
-  if (value === undefined) return "";
-  if (typeof value === "string") {
-    return value.length > maxChars ? `${value.slice(0, maxChars - 1)}...` : value;
-  }
-  try {
-    const raw = JSON.stringify(value);
-    if (!raw) return "";
-    return raw.length > maxChars ? `${raw.slice(0, maxChars - 1)}...` : raw;
-  } catch {
-    const fallback = String(value);
-    return fallback.length > maxChars ? `${fallback.slice(0, maxChars - 1)}...` : fallback;
-  }
-}
-
-function yesNo(value: boolean): string {
-  return value ? "yes" : "no";
-}
-
-function humanizeUnderscoreLabel(value: string): string {
-  return value.replace(/_/g, " ");
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function normalizeQuestionPreview(question: string, maxChars = 220): string {
-  let normalized = question.trim().replace(/\s+/g, " ");
-  normalized = normalized.replace(/^question:\s*/i, "").trim();
-  if (!normalized) return "";
-  if (normalized.length <= maxChars) return normalized;
-  return `${normalized.slice(0, maxChars - 1)}...`;
-}
-
-function formatAskSystemLine(evt: Extract<SessionEvent, { type: "ask" }>): string {
-  const preview = normalizeQuestionPreview(evt.question);
-  return preview ? `question: ${preview}` : "question:";
-}
-
-function formatApprovalSystemLine(evt: Extract<SessionEvent, { type: "approval" }>): string {
-  const command = evt.command.trim();
-  return command ? `approval requested: ${command}` : "approval requested";
-}
-
-function formatObservabilityDiagnosticLine(evt: {
-  enabled: boolean;
-  health: { status?: unknown; reason?: unknown; message?: unknown };
-  config?: unknown;
-}): string {
-  const configured =
-    isRecord(evt.config) && typeof evt.config.configured === "boolean"
-      ? evt.config.configured
-      : false;
-  const healthStatus = typeof evt.health.status === "string" ? evt.health.status : "unknown";
-  const healthReason = typeof evt.health.reason === "string" ? evt.health.reason : "unknown";
-  const healthMessage = previewValue(evt.health.message);
-  const healthDetail = healthMessage ? `${healthReason}: ${healthMessage}` : healthReason;
-  return `Observability: enabled=${yesNo(evt.enabled)}, configured=${yesNo(configured)}, health=${healthStatus} (${healthDetail})`;
-}
-
-function formatSessionBackupDiagnosticLine(evt: { reason?: unknown; backup?: unknown }): string {
-  const reason =
-    typeof evt.reason === "string" && evt.reason.trim().length > 0
-      ? humanizeUnderscoreLabel(evt.reason)
-      : "update";
-  const status =
-    isRecord(evt.backup) && typeof evt.backup.status === "string" ? evt.backup.status : "unknown";
-  const checkpointCount =
-    isRecord(evt.backup) && Array.isArray(evt.backup.checkpoints)
-      ? evt.backup.checkpoints.length
-      : null;
-  return checkpointCount === null
-    ? `Session backup (${reason}): status=${status}`
-    : `Session backup (${reason}): status=${status}, checkpoints=${checkpointCount}`;
-}
-
-function formatHarnessContextDiagnosticLine(evt: { context?: unknown }): string {
-  if (evt.context === null || evt.context === undefined) {
-    return "Harness context cleared";
-  }
-  if (!isRecord(evt.context)) {
-    return "Harness context updated";
-  }
-
-  const details: string[] = [];
-  if (typeof evt.context.taskId === "string" && evt.context.taskId.trim().length > 0) {
-    details.push(`taskId=${evt.context.taskId}`);
-  }
-  if (typeof evt.context.runId === "string" && evt.context.runId.trim().length > 0) {
-    details.push(`runId=${evt.context.runId}`);
-  }
-  if (typeof evt.context.objective === "string" && evt.context.objective.trim().length > 0) {
-    details.push(`objective=${previewValue(evt.context.objective, 80)}`);
-  }
-  if (Array.isArray(evt.context.acceptanceCriteria)) {
-    details.push(`acceptanceCriteria=${evt.context.acceptanceCriteria.length}`);
-  }
-  if (Array.isArray(evt.context.constraints)) {
-    details.push(`constraints=${evt.context.constraints.length}`);
-  }
-  return details.length > 0
-    ? `Harness context updated: ${details.join(", ")}`
-    : "Harness context updated";
-}
-
-function developerDiagnosticSystemLineFromSessionEvent(
-  evt: Extract<
-    SessionEvent,
-    { type: "observability_status" | "session_backup_state" | "harness_context" }
-  >,
-): string {
-  switch (evt.type) {
-    case "observability_status":
-      return formatObservabilityDiagnosticLine(evt);
-    case "session_backup_state":
-      return formatSessionBackupDiagnosticLine(evt);
-    case "harness_context":
-      return formatHarnessContextDiagnosticLine(evt);
-  }
-}
-
-function shouldSuppressRawDebugLogLine(line: string): boolean {
-  const trimmed = line.trim();
-  if (!trimmed) return false;
-
-  if (/^raw stream part:/i.test(trimmed)) return true;
-  if (/response\.function_call_arguments\./i.test(trimmed)) return true;
-  if (/response\.reasoning(?:_|\.|[a-z])/i.test(trimmed)) return true;
-  if (/"type"\s*:\s*"response\./i.test(trimmed)) return true;
-  if (/\bobfuscation\b/i.test(trimmed)) return true;
-
-  return false;
-}
+export type {
+  ConversationProjectionSink,
+  CreateConversationProjectionOptions,
+  ProjectionServerRequest,
+} from "./conversationProjectionTypes";
 
 export function createConversationProjection(opts: CreateConversationProjectionOptions) {
   let activeTurnId: string | null = opts.initialActiveTurnId ?? null;
@@ -411,12 +183,6 @@ export function createConversationProjection(opts: CreateConversationProjectionO
     activeAssistantByTurn.delete(turnId);
   };
 
-  // Strip all whitespace to enable comparison between history that
-  // was concatenated without separators (e.g. "Hello worldMore text")
-  // and the final text that includes them (e.g. "Hello world\n\nMore text").
-  // Both reduce to "HelloworldMoretext" allowing a match.
-  const stripWhitespace = (text: string) => text.replace(/\s/g, "");
-
   const assistantRemainderForTurn = (turnId: string, text: string) => {
     const history = assistantHistoryByTurn.get(turnId) ?? "";
     if (!history) return text;
@@ -455,8 +221,8 @@ export function createConversationProjection(opts: CreateConversationProjectionO
     // streaming segments were concatenated into history without paragraph
     // separators (e.g. "Hello worldMore text") while the final
     // assistant_message includes them (e.g. "Hello world\n\nMore text").
-    const strippedHistory = stripWhitespace(history);
-    const strippedText = stripWhitespace(text);
+    const strippedHistory = stripWhitespaceForTranscriptDedupe(history);
+    const strippedText = stripWhitespaceForTranscriptDedupe(text);
     if (strippedHistory && strippedText) {
       if (strippedText === strippedHistory) {
         return "";
@@ -683,7 +449,7 @@ export function createConversationProjection(opts: CreateConversationProjectionO
       const latestKey = latestToolKeyByTurnAndName.get(toolTurnNameKey(turnId, name));
       if (latestKey) {
         const latestState = toolByKey.get(latestKey);
-        if (latestState && !isTerminalToolState(latestState.state)) {
+        if (latestState && !isTerminalProjectedToolState(latestState.state)) {
           toolByKey.delete(latestKey);
           toolByKey.set(fullKey, latestState);
           const latestInput = toolInputByKey.get(latestKey);
@@ -733,7 +499,7 @@ export function createConversationProjection(opts: CreateConversationProjectionO
   const failActiveToolStreamsForTurn = (turnId: string, error?: unknown) => {
     for (const [fullKey, state] of [...toolByKey.entries()]) {
       if (!fullKey.startsWith(`${turnId}:`)) continue;
-      if (isTerminalToolState(state.state)) continue;
+      if (isTerminalProjectedToolState(state.state)) continue;
       state.state = "output-error";
       state.result = incompleteToolStreamError(error);
       publishToolCompleted(turnId, state);
@@ -873,7 +639,7 @@ export function createConversationProjection(opts: CreateConversationProjectionO
     if (update.kind === "tool_input_delta") {
       const fullKey = `${update.turnId}:${update.key}`;
       const existingState = toolByKey.get(fullKey);
-      if (existingState && isTerminalToolState(existingState.state)) {
+      if (existingState && isTerminalProjectedToolState(existingState.state)) {
         return;
       }
       const nextInput = `${toolInputByKey.get(fullKey) ?? existingState?.inputText ?? ""}${update.delta}`;
@@ -887,7 +653,7 @@ export function createConversationProjection(opts: CreateConversationProjectionO
 
     if (update.kind === "tool_input_end") {
       const { fullKey, state } = resolveToolState(update.turnId, update.key, update.name);
-      if (isTerminalToolState(state.state)) {
+      if (isTerminalProjectedToolState(state.state)) {
         return;
       }
       const nextInput = toolInputByKey.get(fullKey) ?? state.inputText;
@@ -904,7 +670,7 @@ export function createConversationProjection(opts: CreateConversationProjectionO
 
     if (update.kind === "tool_call") {
       const currentState = toolByKey.get(`${update.turnId}:${update.key}`);
-      if (currentState && isTerminalToolState(currentState.state)) {
+      if (currentState && isTerminalProjectedToolState(currentState.state)) {
         return;
       }
       const { state } = resolveToolState(update.turnId, update.key, update.name);
@@ -947,7 +713,7 @@ export function createConversationProjection(opts: CreateConversationProjectionO
       const syntheticKey = toolSyntheticApprovalKey(update.turnId, update.approvalId);
       const currentState = toolByKey.get(`${update.turnId}:${syntheticKey}`);
       const { state } = resolveToolState(update.turnId, syntheticKey, name, {
-        startNewOccurrence: Boolean(currentState && isTerminalToolState(currentState.state)),
+        startNewOccurrence: Boolean(currentState && isTerminalProjectedToolState(currentState.state)),
       });
       state.state = "approval-requested";
       state.approval = {

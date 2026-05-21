@@ -657,6 +657,29 @@ export function renderManagedSofficeRuntimeInstructions(
   ].join("\n");
 }
 
+export async function prepareManagedSofficeToolEnv(opts: {
+  homedir?: string;
+  env?: Record<string, string | undefined>;
+  log?: (line: string) => void;
+}): Promise<Record<string, string | undefined>> {
+  const env = { ...(opts.env ?? process.env) };
+  if (
+    managedSofficeEnvValue(env, "COWORK_SOFFICE") ||
+    managedSofficeEnvValue(env, "COWORK_MANAGED_SOFFICE_SHIM")
+  ) {
+    return env;
+  }
+  const setup = await ensureManagedSofficeRuntimeReady({
+    homedir: opts.homedir,
+    env,
+    log: opts.log,
+  });
+  if (setup?.status === "available") {
+    Object.assign(env, setup.runtimeEnv);
+  }
+  return env;
+}
+
 export async function checkManagedSofficeRuntime(
   opts: EnsureManagedSofficeRuntimeOptions & { smoke?: boolean } = {},
 ): Promise<ManagedSofficeRuntimeDiagnostic> {

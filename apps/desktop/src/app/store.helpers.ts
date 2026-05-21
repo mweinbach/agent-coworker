@@ -3,6 +3,11 @@ import type {
   DesktopFeatureFlagOverrides,
   DesktopFeatureFlags,
 } from "../../../../src/shared/featureFlags";
+import type { PresentationPreviewResult } from "../../../../src/server/presentationPreview";
+import type {
+  SpreadsheetPreviewResult,
+  SpreadsheetPreviewViewportRequest,
+} from "../../../../src/shared/spreadsheetPreview";
 import { createDefaultUpdaterState, type UpdaterState } from "../lib/desktopApi";
 import { startWorkspaceServer } from "../lib/desktopCommands";
 import type { NewChatLandingTarget } from "../lib/newChatLanding";
@@ -499,6 +504,14 @@ export type AppStoreState = {
   closeFilePreview: () => void;
   setCanvasActiveTab: (tab: "preview" | "edit") => void;
   setCanvasShowFormattingBar: (show: boolean) => void;
+  loadSpreadsheetPreview: (
+    path: string,
+    opts?: {
+      sheetName?: string;
+      viewport?: SpreadsheetPreviewViewportRequest;
+    },
+  ) => Promise<SpreadsheetPreviewResult>;
+  loadPresentationPreview: (path: string) => Promise<PresentationPreviewResult>;
 
   setA2uiDockExpanded: (threadId: string, expanded: boolean) => void;
   focusA2uiSurface: (threadId: string, surfaceId: string | null) => void;

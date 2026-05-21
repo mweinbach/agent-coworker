@@ -9,10 +9,7 @@ import {
   MoreVerticalIcon,
   PenIcon,
   SparklesIcon,
-  TableIcon,
-  XIcon,
 } from "lucide-react";
-import type { CSSProperties } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useAppStore } from "../app/store";
@@ -28,226 +25,19 @@ import { ScrollArea } from "../components/ui/scroll-area";
 import { Tabs, TabsContent } from "../components/ui/tabs";
 import { Textarea } from "../components/ui/textarea";
 import { readFile, writeFile } from "../lib/desktopCommands";
+import { cleanMarkdown, markdownToHtml, nodeToMarkdown } from "../lib/canvasMarkdown";
 import { getFilePreviewKind, isSlideModule } from "../lib/filePreviewKind";
 import { cn } from "../lib/utils";
 import { getDesktopWindowMode } from "../lib/windowMode";
+import { CanvasElectronTitlebar } from "./canvas/CanvasElectronTitlebar";
+import { CanvasFilePreviewLayout } from "./canvas/CanvasFilePreviewLayout";
 import { PptxPreview } from "./PptxPreview";
 import { SlidePreview } from "./SlidePreview";
 import { SpreadsheetPreview } from "./SpreadsheetPreview";
 
-const noDragRegionStyle = { WebkitAppRegion: "no-drag" } as CSSProperties;
-
 function basenamePath(p: string): string {
   const parts = p.replace(/\\/g, "/").split("/").filter(Boolean);
   return parts[parts.length - 1] ?? p;
-}
-
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
-}
-
-function parseInlineMarkdown(text: string): string {
-  let html = escapeHtml(text);
-  html = html.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
-  html = html.replace(/__(.*?)__/g, "<strong>$1</strong>");
-  html = html.replace(/\*(.*?)\*/g, "<em>$1</em>");
-  html = html.replace(/_(.*?)_/g, "<em>$1</em>");
-  html = html.replace(/`(.*?)`/g, "<code>$1</code>");
-  html = html.replace(
-    /\[(.*?)\]\((.*?)\)/g,
-    '<a href="$2" target="_blank" class="underline text-primary">$1</a>',
-  );
-  return html;
-}
-
-function markdownToHtml(md: string): string {
-  if (!md) return "<p><br></p>";
-  const lines = md.split(/\r?\n/);
-  let html = "";
-  let inCodeBlock = false;
-  let codeContent: string[] = [];
-  let inList = false;
-  let listTag = "";
-  let currentParagraph: string[] = [];
-
-  const flushParagraph = () => {
-    if (currentParagraph.length > 0) {
-      html += `<p>${currentParagraph.map((l) => parseInlineMarkdown(l)).join("<br>")}</p>`;
-      currentParagraph = [];
-    }
-  };
-
-  const flushList = () => {
-    if (inList) {
-      html += `</${listTag}>`;
-      inList = false;
-    }
-  };
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const trimmed = line.trim();
-
-    if (inCodeBlock) {
-      if (trimmed.startsWith("```")) {
-        html += `<pre><code>${escapeHtml(codeContent.join("\n"))}</code></pre>`;
-        inCodeBlock = false;
-      } else {
-        codeContent.push(line);
-      }
-      continue;
-    }
-
-    if (trimmed.startsWith("```")) {
-      flushParagraph();
-      flushList();
-      inCodeBlock = true;
-      codeContent = [];
-      continue;
-    }
-
-    if (trimmed === "---" || trimmed === "***" || trimmed === "___") {
-      flushParagraph();
-      flushList();
-      html += `<hr>`;
-      continue;
-    }
-
-    const headingMatch = line.match(/^(#{1,6})\s+(.*)$/);
-    if (headingMatch) {
-      flushParagraph();
-      flushList();
-      const level = headingMatch[1].length;
-      html += `<h${level}>${parseInlineMarkdown(headingMatch[2])}</h${level}>`;
-      continue;
-    }
-
-    const listMatch = line.match(/^(\s*)(?:-\s*|\*\s*|\d+\.\s+)(.*)$/);
-    if (listMatch) {
-      flushParagraph();
-      const isOrdered = line.trim().match(/^\d+\./);
-      const tag = isOrdered ? "ol" : "ul";
-      if (!inList) {
-        inList = true;
-        listTag = tag;
-        html += `<${tag}>`;
-      } else if (listTag !== tag) {
-        html += `</${listTag}><${tag}>`;
-        listTag = tag;
-      }
-      html += `<li>${parseInlineMarkdown(listMatch[2])}</li>`;
-      continue;
-    }
-
-    if (trimmed.startsWith(">")) {
-      flushParagraph();
-      flushList();
-      const content = line.replace(/^\s*>\s*/, "");
-      html += `<blockquote>${parseInlineMarkdown(content)}</blockquote>`;
-      continue;
-    }
-
-    if (trimmed === "") {
-      flushParagraph();
-      flushList();
-      continue;
-    }
-
-    flushList();
-    currentParagraph.push(line);
-  }
-
-  flushParagraph();
-  flushList();
-
-  return html || "<p><br></p>";
-}
-
-function nodeToMarkdown(node: Node): string {
-  let result = "";
-  for (let i = 0; i < node.childNodes.length; i++) {
-    const child = node.childNodes[i];
-    if (child.nodeType === Node.TEXT_NODE) {
-      result += child.textContent;
-    } else if (child.nodeType === Node.ELEMENT_NODE) {
-      const el = child as HTMLElement;
-      const tagName = el.tagName.toLowerCase();
-
-      switch (tagName) {
-        case "p":
-          result += `${nodeToMarkdown(el)}\n\n`;
-          break;
-        case "strong":
-        case "b":
-          result += `**${nodeToMarkdown(el)}**`;
-          break;
-        case "em":
-        case "i":
-          result += `*${nodeToMarkdown(el)}*`;
-          break;
-        case "h1":
-          result += `# ${nodeToMarkdown(el)}\n\n`;
-          break;
-        case "h2":
-          result += `## ${nodeToMarkdown(el)}\n\n`;
-          break;
-        case "h3":
-          result += `### ${nodeToMarkdown(el)}\n\n`;
-          break;
-        case "h4":
-          result += `#### ${nodeToMarkdown(el)}\n\n`;
-          break;
-        case "h5":
-          result += `##### ${nodeToMarkdown(el)}\n\n`;
-          break;
-        case "h6":
-          result += `###### ${nodeToMarkdown(el)}\n\n`;
-          break;
-        case "ul":
-          result += `${nodeToMarkdown(el)}\n`;
-          break;
-        case "ol":
-          result += `${nodeToMarkdown(el)}\n`;
-          break;
-        case "li":
-          result += `- ${nodeToMarkdown(el)}\n`;
-          break;
-        case "pre":
-          result += `\`\`\`\n${el.innerText}\n\`\`\`\n\n`;
-          break;
-        case "code":
-          result += `\`${nodeToMarkdown(el)}\``;
-          break;
-        case "blockquote":
-          result += `> ${nodeToMarkdown(el)}\n\n`;
-          break;
-        case "hr":
-          result += `---\n\n`;
-          break;
-        case "a":
-          result += `[${nodeToMarkdown(el)}](${el.getAttribute("href") ?? ""})`;
-          break;
-        case "br":
-          result += "\n";
-          break;
-        case "div":
-          result += `${nodeToMarkdown(el)}\n`;
-          break;
-        default:
-          result += nodeToMarkdown(el);
-      }
-    }
-  }
-  return result;
-}
-
-function cleanMarkdown(md: string): string {
-  return md.replace(/\n{3,}/g, "\n\n").trim();
 }
 
 export function Canvas({ path }: { path: string }) {
@@ -379,131 +169,29 @@ export function Canvas({ path }: { path: string }) {
 
   if (isSpreadsheet) {
     return (
-      <div
-        className={cn(
-          "flex h-full w-full min-w-0 flex-col",
-          isCanvasMode ? "bg-background" : "bg-[var(--surface-sidebar-pane)]",
-          isCanvasMode && "app-canvas-mode-window",
-        )}
+      <CanvasFilePreviewLayout
+        isCanvasMode={isCanvasMode}
+        isAgentBusy={isAgentBusy}
+        fileName={fileName}
+        previewKind={previewKind}
+        onClose={closeFilePreview}
       >
-        <div className="flex min-h-0 flex-1 flex-col gap-0">
-          {isCanvasMode ? (
-            <div
-              className="flex shrink-0 items-center justify-between border-b border-border/40 px-2.5 gap-2 select-none bg-transparent"
-              style={
-                {
-                  height: "var(--platform-titlebar-height, 38px)",
-                  paddingLeft: "calc(var(--platform-left-native-reserve, 0px) + 12px)",
-                  paddingRight: "calc(var(--platform-right-native-reserve, 0px) + 12px)",
-                  WebkitAppRegion: "drag",
-                } as React.CSSProperties
-              }
-            >
-              <div className="flex min-w-0 items-center gap-1.5 flex-1">
-                <TableIcon className="size-3.5 text-muted-foreground shrink-0" />
-                <div className="flex min-w-0 items-center gap-1">
-                  <span
-                    className="truncate text-xs font-semibold tracking-wide text-foreground"
-                    title={fileName}
-                  >
-                    {fileName}
-                  </span>
-                  <span className="text-[10px] text-muted-foreground shrink-0 uppercase">
-                    ({previewKind})
-                  </span>
-                </div>
-                {isAgentBusy ? (
-                  <Loader2Icon className="size-2.5 animate-spin text-primary shrink-0" />
-                ) : null}
-              </div>
-
-              <div
-                className="flex items-center gap-1 shrink-0 flex-1 justify-end"
-                style={noDragRegionStyle}
-              >
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  onClick={closeFilePreview}
-                  title="Close Window"
-                  className="size-6 text-muted-foreground hover:text-foreground hover:bg-muted/50 rounded-md"
-                >
-                  <XIcon className="size-3.5" />
-                </Button>
-              </div>
-            </div>
-          ) : null}
-          <div className={cn("flex-1 min-h-0 p-3", isCanvasMode && "p-5")}>
-            <SpreadsheetPreview path={path} compact />
-          </div>
-        </div>
-      </div>
+        <SpreadsheetPreview path={path} compact />
+      </CanvasFilePreviewLayout>
     );
   }
 
   if (isPptx) {
     return (
-      <div
-        className={cn(
-          "flex h-full w-full min-w-0 flex-col",
-          isCanvasMode ? "bg-background" : "bg-[var(--surface-sidebar-pane)]",
-          isCanvasMode && "app-canvas-mode-window",
-        )}
+      <CanvasFilePreviewLayout
+        isCanvasMode={isCanvasMode}
+        isAgentBusy={isAgentBusy}
+        fileName={fileName}
+        previewKind={previewKind}
+        onClose={closeFilePreview}
       >
-        <div className="flex min-h-0 flex-1 flex-col gap-0">
-          {isCanvasMode ? (
-            <div
-              className="flex shrink-0 items-center justify-between border-b border-border/40 px-2.5 gap-2 select-none bg-transparent"
-              style={
-                {
-                  height: "var(--platform-titlebar-height, 38px)",
-                  paddingLeft: "calc(var(--platform-left-native-reserve, 0px) + 12px)",
-                  paddingRight: "calc(var(--platform-right-native-reserve, 0px) + 12px)",
-                  WebkitAppRegion: "drag",
-                } as React.CSSProperties
-              }
-            >
-              <div className="flex min-w-0 items-center gap-1.5 flex-1">
-                <TableIcon className="size-3.5 text-muted-foreground shrink-0" />
-                <div className="flex min-w-0 items-center gap-1">
-                  <span
-                    className="truncate text-xs font-semibold tracking-wide text-foreground"
-                    title={fileName}
-                  >
-                    {fileName}
-                  </span>
-                  <span className="text-[10px] text-muted-foreground shrink-0 uppercase">
-                    ({previewKind})
-                  </span>
-                </div>
-                {isAgentBusy ? (
-                  <Loader2Icon className="size-2.5 animate-spin text-primary shrink-0" />
-                ) : null}
-              </div>
-
-              <div
-                className="flex items-center gap-1 shrink-0 flex-1 justify-end"
-                style={noDragRegionStyle}
-              >
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  onClick={closeFilePreview}
-                  title="Close Window"
-                  className="size-6 text-muted-foreground hover:text-foreground hover:bg-muted/50 rounded-md"
-                >
-                  <XIcon className="size-3.5" />
-                </Button>
-              </div>
-            </div>
-          ) : null}
-          <div className={cn("flex-1 min-h-0 p-3", isCanvasMode && "p-5")}>
-            <PptxPreview path={path} />
-          </div>
-        </div>
-      </div>
+        <PptxPreview path={path} />
+      </CanvasFilePreviewLayout>
     );
   }
 
@@ -802,37 +490,23 @@ ${textToSend}`;
         className="flex min-h-0 flex-1 flex-col gap-0"
       >
         {isCanvasMode ? (
-          <div
-            className="flex shrink-0 items-center justify-between border-b border-border/40 px-2.5 gap-2 select-none bg-transparent"
-            style={
-              {
-                height: "var(--platform-titlebar-height, 38px)",
-                paddingLeft: "calc(var(--platform-left-native-reserve, 0px) + 12px)",
-                paddingRight: "calc(var(--platform-right-native-reserve, 0px) + 12px)",
-                WebkitAppRegion: "drag",
-              } as React.CSSProperties
+          <CanvasElectronTitlebar
+            isAgentBusy={isAgentBusy}
+            leading={
+              <>
+                <FileTextIcon className="size-3.5 text-muted-foreground shrink-0" />
+                <div className="flex min-w-0 items-center gap-1">
+                  <span className="text-xs font-semibold text-muted-foreground/80 shrink-0 select-none">
+                    {projectTitle}
+                  </span>
+                  <span className="text-[10px] text-muted-foreground/40 select-none">/</span>
+                  <span className="truncate text-xs font-bold text-foreground" title={fileName}>
+                    {fileName}
+                  </span>
+                </div>
+              </>
             }
-          >
-            <div className="flex min-w-0 items-center gap-1.5 flex-1">
-              <FileTextIcon className="size-3.5 text-muted-foreground shrink-0" />
-              <div className="flex min-w-0 items-center gap-1">
-                <span className="text-xs font-semibold text-muted-foreground/80 shrink-0 select-none">
-                  {projectTitle}
-                </span>
-                <span className="text-[10px] text-muted-foreground/40 select-none">/</span>
-                <span className="truncate text-xs font-bold text-foreground" title={fileName}>
-                  {fileName}
-                </span>
-              </div>
-              {isAgentBusy ? (
-                <Loader2Icon className="size-2.5 animate-spin text-primary shrink-0" />
-              ) : null}
-            </div>
-
-            <div
-              className="flex items-center gap-1 shrink-0 flex-1 justify-end"
-              style={noDragRegionStyle}
-            >
+            trailing={
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button
@@ -881,8 +555,8 @@ ${textToSend}`;
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
-            </div>
-          </div>
+            }
+          />
         ) : null}
 
         {showFormattingBar && isMarkdown && activeTab === "preview" && (

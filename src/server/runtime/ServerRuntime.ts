@@ -5,7 +5,7 @@ import { ensureCodexPrimaryRuntimeReady } from "../../codexPrimaryRuntime";
 import { loadConfig } from "../../config";
 import {
   checkManagedSofficeRuntime,
-  ensureManagedSofficeRuntimeReady,
+  prepareManagedSofficeToolEnv,
 } from "../../managedSofficeRuntime";
 import type { connectProvider as connectModelProvider, getAiCoworkerPaths } from "../../connect";
 import { getAiCoworkerPaths as getAiCoworkerPathsDefault } from "../../connect";
@@ -156,16 +156,16 @@ export async function createAgentServerRuntime(
   if (codexRuntimeSetup) {
     Object.assign(env, codexRuntimeSetup.runtimeEnv);
   }
-  const managedSofficeRuntimeSetup = await ensureManagedSofficeRuntimeReady({
-    homedir: opts.homedir,
+  Object.assign(
     env,
-    log: (line) => {
-      console.warn(`[managed-soffice] ${line}`);
-    },
-  });
-  if (managedSofficeRuntimeSetup?.status === "available") {
-    Object.assign(env, managedSofficeRuntimeSetup.runtimeEnv);
-  }
+    await prepareManagedSofficeToolEnv({
+      homedir: opts.homedir,
+      env,
+      log: (line) => {
+        console.warn(`[managed-soffice] ${line}`);
+      },
+    }),
+  );
 
   await fs.mkdir(config.projectCoworkDir, { recursive: true });
 

@@ -3,6 +3,14 @@ import { type AttributeValue, type Span, SpanStatusCode, trace } from "@opentele
 import { getSavedProviderApiKey } from "../config";
 import { getResolvedModelMetadataSync } from "../models/metadata";
 import type { TelemetrySettings } from "../observability/runtime";
+import {
+  markModelCallSpanError,
+  markModelCallSpanSuccessFromAssistantRecord,
+  markModelCallSpanSuccessFromAssistantRecord as markModelCallSpanSuccess,
+  parseTelemetrySettings,
+  startPiModelCallSpan,
+  startPiModelCallSpan as startModelCallSpan,
+} from "../observability/modelCallSpan";
 import { getBasetenModelSpec, resolveBasetenApiKey } from "../providers/basetenShared";
 import { bedrockClientConfig, resolveBedrockAuthConfig } from "../providers/bedrockShared";
 import {
@@ -694,97 +702,12 @@ export async function resolvePiModel(
   throw new Error(`Unsupported provider for PI runtime: ${String(exhaustive)}`);
 }
 
-export function parseTelemetrySettings(raw: unknown): TelemetrySettings | undefined {
-  const parsed = asRecord(raw);
-  if (!parsed || parsed.isEnabled !== true) return undefined;
-
-  const metadataInput = asRecord(parsed.metadata);
-  const metadata: Record<string, AttributeValue> = {};
-  if (metadataInput) {
-    for (const [key, value] of Object.entries(metadataInput)) {
-      if (typeof value === "string" || typeof value === "boolean") {
-        metadata[key] = value;
-        continue;
-      }
-      if (typeof value === "number" && Number.isFinite(value)) {
-        metadata[key] = value;
-      }
-    }
-  }
-
-  return {
-    isEnabled: true,
-    recordInputs: parsed.recordInputs === true,
-    recordOutputs: parsed.recordOutputs === true,
-    functionId: asNonEmptyString(parsed.functionId),
-    ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
-  };
-}
-
-export function startModelCallSpan(
-  telemetry: TelemetrySettings | undefined,
-  params: RuntimeRunTurnParams,
-  resolved: ResolvedPiRuntimeModel,
-  stepNumber: number,
-  stepOptions: Record<string, unknown>,
-  piMessages: unknown,
-  runtimeLabel = "pi",
-  defaultFunctionId = "agent.runtime.pi.model_call",
-): Span | null {
-  if (!telemetry?.isEnabled) return null;
-
-  const attributes: Record<string, AttributeValue> = {
-    "llm.runtime": runtimeLabel,
-    "llm.provider": params.config.provider,
-    "llm.model": resolved.model.id,
-    "llm.step_number": stepNumber,
-    ...(telemetry.metadata ?? {}),
-  };
-
-  if (telemetry.recordInputs) {
-    attributes["llm.input.system"] = params.system;
-    attributes["llm.input.messages"] = safeJsonStringify(piMessages);
-    attributes["llm.input.options"] = safeJsonStringify(redactTelemetrySecrets(stepOptions));
-  }
-
-  return trace
-    .getTracer("agent-coworker.runtime")
-    .startSpan(telemetry.functionId ?? defaultFunctionId, { attributes });
-}
-
-export function markModelCallSpanSuccess(
-  span: Span | null,
-  telemetry: TelemetrySettings | undefined,
-  assistantRecord: Record<string, unknown>,
-): void {
-  if (!span) return;
-
-  if (telemetry?.recordOutputs) {
-    span.setAttribute("llm.output.stop_reason", asString(assistantRecord.stopReason) ?? "unknown");
-    span.setAttribute("llm.output.response", safeJsonStringify(assistantRecord));
-  }
-
-  const usage = asRecord(assistantRecord.usage);
-  const input = asFiniteNumber(usage?.input);
-  const output = asFiniteNumber(usage?.output);
-  const total = asFiniteNumber(usage?.totalTokens);
-  if (input !== undefined) span.setAttribute("llm.usage.input_tokens", input);
-  if (output !== undefined) span.setAttribute("llm.usage.output_tokens", output);
-  if (total !== undefined) span.setAttribute("llm.usage.total_tokens", total);
-
-  span.setStatus({ code: SpanStatusCode.OK });
-  span.end();
-}
-
-export function markModelCallSpanError(span: Span | null, error: unknown): void {
-  if (!span) return;
-  const message = error instanceof Error ? error.message : String(error);
-  span.setStatus({ code: SpanStatusCode.ERROR, message });
-  if (error instanceof Error) {
-    span.recordException(error);
-  }
-  span.end();
-}
+export {
+  markModelCallSpanError,
+  markModelCallSpanSuccess,
+  parseTelemetrySettings,
+  startModelCallSpan,
+};
 
 export function toolMapToPiTools(
   tools: RuntimeRunTurnParams["tools"],
@@ -1140,10 +1063,10 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
           stepMessages = stepState.modelMessages;
           stepProviderOptions = stepState.providerOptions;
 
-          const span = startModelCallSpan(
+          const span = startPiModelCallSpan(
             telemetry,
             params,
-            resolved,
+            resolved.model.id,
             step + 1,
             stepState.streamOptions,
             stepState.piMessages,
@@ -1182,7 +1105,7 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
             } else {
               await runModelStep();
             }
-            markModelCallSpanSuccess(span, telemetry, assistantRecord);
+            markModelCallSpanSuccessFromAssistantRecord(span, telemetry, assistantRecord);
           } catch (error) {
             markModelCallSpanError(span, error);
             throw error;

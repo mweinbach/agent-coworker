@@ -9,7 +9,6 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAppStore } from "../app/store";
-import { previewJsonRpcWorkspacePresentation } from "../app/store.helpers/jsonRpcSocket";
 import { Button } from "../components/ui/button";
 
 type PptxPreviewProps = {
@@ -26,6 +25,7 @@ type PresentationSlide = {
 export function PptxPreview({ path }: PptxPreviewProps) {
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const workspaces = useAppStore((s) => s.workspaces);
+  const loadPresentationPreview = useAppStore((s) => s.loadPresentationPreview);
 
   const hasActiveWorkspace = useMemo(
     () => workspaces.some((w) => w.id === selectedWorkspaceId),
@@ -50,12 +50,7 @@ export function PptxPreview({ path }: PptxPreviewProps) {
     setLoading(true);
     setError(null);
     try {
-      const response = await previewJsonRpcWorkspacePresentation(
-        useAppStore.getState,
-        useAppStore.setState,
-        selectedWorkspaceId,
-        path,
-      );
+      const response = await loadPresentationPreview(path);
 
       if (response?.ok && response.slides) {
         setSlides(response.slides);
@@ -70,7 +65,7 @@ export function PptxPreview({ path }: PptxPreviewProps) {
     } finally {
       setLoading(false);
     }
-  }, [hasActiveWorkspace, path, selectedWorkspaceId, refreshKey]);
+  }, [hasActiveWorkspace, path, refreshKey, loadPresentationPreview]);
 
   useEffect(() => {
     loadPresentation();

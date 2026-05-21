@@ -294,10 +294,7 @@ function clearStepLocalToolRuntime(runtime: ThreadModelStreamRuntime) {
   runtime.toolInputByKey.clear();
 }
 
-function isTerminalToolState(state: Extract<FeedItem, { kind: "tool" }>["state"]): boolean {
-  return state === "output-available" || state === "output-error" || state === "output-denied";
-}
-
+import { isTerminalToolState } from "./toolFeedState";
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

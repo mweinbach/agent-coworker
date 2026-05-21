@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { asRecord, asString } from "../runtime/piRuntimeOptions";
+import { asRecord, asString } from "../shared/recordParsing";
 import { openExternalUrl, type UrlOpener } from "../utils/browser";
 import {
   type CodexAppServerClient,

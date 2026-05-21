@@ -135,9 +135,10 @@ function existingTsOr(ts: string, existing?: SessionFeedItem): string {
   return existing?.ts ?? ts;
 }
 
-function isTerminalToolState(state: ProjectedToolState): boolean {
-  return state === "output-available" || state === "output-error" || state === "output-denied";
-}
+import {
+  isTerminalProjectedToolState,
+  stripWhitespaceForTranscriptDedupe,
+} from "../shared/projectionPolicy";
 
 function existingToolItem(
   existing?: SessionFeedItem,
@@ -179,13 +180,13 @@ function toFeedItem(
       };
     case "toolCall": {
       const existingTool = existingToolItem(existing);
-      const existingTerminal = existingTool ? isTerminalToolState(existingTool.state) : false;
-      const incomingTerminal = isTerminalToolState(item.state);
+      const existingTerminal = existingTool ? isTerminalProjectedToolState(existingTool.state) : false;
+      const incomingTerminal = isTerminalProjectedToolState(item.state);
       const nextState =
         existingTerminal && !incomingTerminal && existingTool ? existingTool.state : item.state;
       const nextName =
         existingTerminal && !incomingTerminal && existingTool ? existingTool.name : item.toolName;
-      const completedAt = isTerminalToolState(nextState)
+      const completedAt = isTerminalProjectedToolState(nextState)
         ? (existingTool?.completedAt ?? (opts.completed ? ts : undefined))
         : existingTool?.completedAt;
       const args =

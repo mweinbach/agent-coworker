@@ -56,10 +56,7 @@ function getRecordValue(record: Record<string, unknown>, keys: string[]): unknow
   return undefined;
 }
 
-function isTerminalToolState(state: ToolFeedState): boolean {
-  return state === "output-available" || state === "output-error" || state === "output-denied";
-}
-
+import { isTerminalToolState } from "../../app/toolFeedState";
 function effectiveToolState(item: Extract<FeedItem, { kind: "tool" }>): ToolFeedState {
   if (isTerminalToolState(item.state) || item.result === undefined) return item.state;
   if (isRecord(item.result)) {

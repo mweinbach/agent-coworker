@@ -4,6 +4,13 @@ import path from "node:path";
 
 const mobileRoot = path.resolve(import.meta.dir, "../apps/mobile");
 
+mock.module("expo/metro-config", () => ({
+  getDefaultConfig: () => ({
+    resolver: {},
+    server: {},
+  }),
+}));
+
 mock.module("nativewind/metro", () => ({
   withNativewind: (config: unknown) => config,
 }));

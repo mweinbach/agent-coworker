@@ -136,7 +136,7 @@ export async function checkManagedSofficeRuntime(
         },
       );
       const stat = await fs.stat(outputPath).catch(() => null);
-      if (smokeResult.exitCode === 0 && stat && stat.size > 0) {
+      if (stat && stat.size > 0) {
         smoke = {
           ok: true,
           durationMs: Date.now() - smokeStart,

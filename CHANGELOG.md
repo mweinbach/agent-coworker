@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.0.1 - 2026-05-22
+
+### Fixed
+
+- **Packaged workspace server startup** — Restores packaged desktop startup by
+  loading the managed LibreOffice helper from real app resources, skipping
+  read-only bundled skill mutation in packaged builds, and making release
+  resource builds tolerate stale runtime-cache symlinks.
+
 ## 1.1.0 - 2026-05-22
 
 ### Added
@@ -514,4 +523,3 @@ subset, and roadmap follow-ups.
 - Fixed Codex auth persistence so desktop restarts no longer make recoverable Cowork-owned auth look lost after refresh failures or cross-process token races.
 - Fixed Cowork auth recovery so valid Codex credentials persisted in the Cowork auth store are preserved instead of leaving users unexpectedly signed out.
 - Fixed the desktop Backup settings page freeze-on-open loop by stabilizing its initial refresh path.
-

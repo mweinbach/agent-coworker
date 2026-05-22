@@ -87,7 +87,8 @@ function expandHomeDir(input: string): string {
   if (!input.startsWith("~")) {
     return input;
   }
-  return path.join(os.homedir(), input.slice(1));
+  const remainder = input.slice(1).replace(/^[\/\\]+/, "");
+  return path.join(os.homedir(), remainder);
 }
 
 function normalizeLocalPluginSourceRoot(absolutePath: string, isFile: boolean): string {

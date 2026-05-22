@@ -26,6 +26,7 @@ import { runDesktopSmokePromptLoadCheck } from "./services/desktopSmoke";
 import { installDesktopApplicationMenu } from "./services/menu";
 import { createMenuCommandDispatcher } from "./services/menuCommandDispatcher";
 import { MobileRelayBridge } from "./services/mobileRelayBridge";
+import { isPathEqualOrInside } from "./services/pathBoundary";
 import { PersistenceService } from "./services/persistence";
 import { QuickChatController } from "./services/quickChatController";
 import { resolveElectronRemoteDebugConfig } from "./services/remoteDebug";
@@ -180,8 +181,7 @@ function isTrustedRendererNavigation(rawUrl: string): boolean {
         return false;
       }
       const resolvedPath = path.resolve(fileURLToPath(parsed));
-      const relative = path.relative(PACKAGED_RENDERER_DIR, resolvedPath);
-      return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+      return isPathEqualOrInside(PACKAGED_RENDERER_DIR, resolvedPath);
     } catch {
       return false;
     }

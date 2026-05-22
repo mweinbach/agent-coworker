@@ -151,7 +151,19 @@ export async function runCliRepl(
   const timersImpl = opts.__internal?.timers;
   const createReadlineInterface =
     opts.__internal?.createReadlineInterface ??
-    (() => readline.createInterface({ input: process.stdin, output: process.stdout }));
+    (() => {
+      const isTty = process.stdin.isTTY && process.stdout.isTTY;
+      if (!isTty) {
+        console.error("Error: CLI REPL requires an interactive terminal (TTY)");
+        process.exit(1);
+      }
+      return readline.createInterface({
+        input: process.stdin,
+        output: process.stdout,
+        terminal: true,
+        ...(process.platform === "win32" && { encoding: "utf8" }),
+      });
+    });
 
   const startServerForDir = async (cwd: string) => {
     return await startAgentServerImpl({
@@ -718,7 +730,9 @@ export async function runCliRepl(
         process.exit(1);
       });
   };
-  process.on("SIGHUP", onHup);
+  if (process.platform !== "win32") {
+    process.on("SIGHUP", onHup);
+  }
 
   await connectToServer(serverUrl, rl, initialResumeThreadId ?? undefined);
 
@@ -921,6 +935,8 @@ export async function runCliRepl(
   });
 
   process.off("exit", stopServerSync);
-  process.off("SIGHUP", onHup);
+  if (process.platform !== "win32") {
+    process.off("SIGHUP", onHup);
+  }
   await stopServer();
 }

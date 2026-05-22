@@ -2,6 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { isPathEqualOrInside } from "./pathBoundary";
 import { resolveDesktopRendererUrl } from "./rendererUrl";
 import { assertPathWithinRoots } from "./validation";
 
@@ -30,8 +31,7 @@ export function isTrustedDesktopSenderUrl(senderUrl: string, opts: TrustedSender
         return false;
       }
       const resolvedPath = path.resolve(fileURLToPath(parsed));
-      const relative = path.relative(opts.packagedRendererDir, resolvedPath);
-      return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+      return isPathEqualOrInside(opts.packagedRendererDir, resolvedPath);
     } catch {
       return false;
     }

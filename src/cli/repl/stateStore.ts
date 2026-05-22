@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
 
 import { getAiCoworkerPaths } from "../../connect";
+import { resolveAuthHomeDir } from "../../utils/authHome";
 
 type CliState = {
   version: 1;
@@ -28,8 +28,7 @@ const cliStateSchema = z
   .strict();
 
 function getCliStateFilePath(): string {
-  const home = process.env.HOME?.trim() || os.homedir();
-  const paths = getAiCoworkerPaths({ homedir: home });
+  const paths = getAiCoworkerPaths({ homedir: resolveAuthHomeDir() });
   return path.join(paths.rootDir, "state", "cli-state.json");
 }
 

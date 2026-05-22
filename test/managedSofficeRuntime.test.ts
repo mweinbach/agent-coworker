@@ -50,7 +50,10 @@ describe("managed soffice runtime", () => {
       expect(helper).toContain(
         'run("msiexec.exe", ["/a", archivePath, "/qn", "TARGETDIR=" + stagedRoot]',
       );
-      expect(helper).toContain('path.join(root, "program", "soffice.exe")');
+      expect(helper).toContain('path.join(root, "program", "soffice.com")');
+      expect(helper).toContain(
+        'path.join(programFilesDir, "LibreOffice", "program", "soffice.com")',
+      );
     } finally {
       await fs.rm(home, { recursive: true, force: true });
     }

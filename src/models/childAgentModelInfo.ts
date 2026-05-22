@@ -107,13 +107,13 @@ const CHILD_AGENT_MODEL_INFO_BY_KEY: Readonly<Record<string, ChildAgentModelInfo
   [key("nvidia", "nvidia/nemotron-3-super-120b-a12b")]: openReasoner,
 
   [key("together", "zai-org/GLM-5")]: glm5,
-  [key("fireworks", "accounts/fireworks/models/glm-5")]: glm5,
+  [key("fireworks", "accounts/fireworks/models/deepseek-v4-pro")]: deepReasoning,
+  [key("fireworks", "accounts/fireworks/models/glm-5p1")]: glm5,
   [key("opencode-go", "glm-5")]: glm5,
   [key("opencode-zen", "glm-5")]: glm5,
 
   [key("together", "moonshotai/Kimi-K2.5")]: kimi25,
-  [key("fireworks", "accounts/fireworks/models/kimi-k2p5")]: kimi25,
-  [key("fireworks", "accounts/fireworks/routers/kimi-k2p5-turbo")]: kimi25,
+  [key("fireworks", "accounts/fireworks/models/kimi-k2p6")]: kimi25,
   [key("firepass", "accounts/fireworks/routers/kimi-k2p6-turbo")]: kimi26Turbo,
   [key("opencode-go", "kimi-k2.5")]: kimi25,
   [key("opencode-zen", "kimi-k2.5")]: kimi25,
@@ -121,7 +121,8 @@ const CHILD_AGENT_MODEL_INFO_BY_KEY: Readonly<Record<string, ChildAgentModelInfo
   [key("together", "Qwen/Qwen3.5-397B-A17B")]: qwenAdvanced,
 
   [key("opencode-zen", "minimax-m2.5")]: minimax25,
-  [key("fireworks", "accounts/fireworks/models/minimax-m2p5")]: minimax25,
+  [key("fireworks", "accounts/fireworks/models/minimax-m2p7")]: minimax25,
+  [key("fireworks", "accounts/fireworks/models/qwen3p6-plus")]: qwenAdvanced,
   [key("opencode-zen", "minimax-m2.5-free")]: freeExperimental,
   [key("opencode-zen", "mimo-v2-flash-free")]: mimoFlash,
   [key("opencode-zen", "nemotron-3-super-free")]: freeExperimental,

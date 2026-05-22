@@ -98,4 +98,36 @@ describe("openai responses projector", () => {
     expect(output.usage.cost.cacheRead).toBeCloseTo(0.000001, 12);
     expect(output.usage.cost.total).toBeCloseTo(0.000191, 12);
   });
+
+  test("response.failed preserves provider error details", () => {
+    const output: Record<string, any> = {};
+    const projector = createResponsesStreamProjector(output);
+
+    expect(() =>
+      projectResponsesStreamEvent(
+        projector,
+        {
+          type: "response.failed",
+          response: {
+            status: "failed",
+            error: {
+              code: "rate_limit_exceeded",
+              type: "tokens",
+              message: "Rate limit exceeded for this model.",
+            },
+          },
+        },
+        { push: () => {} },
+      ),
+    ).toThrow("Rate limit exceeded for this model.");
+
+    expect(output.stopReason).toBe("error");
+    expect(output.errorMessage).toContain("rate_limit_exceeded");
+    expect(output.errorCode).toBe("rate_limit_exceeded");
+    expect(output.error).toEqual({
+      code: "rate_limit_exceeded",
+      type: "tokens",
+      message: "Rate limit exceeded for this model.",
+    });
+  });
 });

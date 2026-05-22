@@ -15,9 +15,18 @@ import type { JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
 export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRpcRequestHandlerMap {
   return {
     "cowork/session/title/set": async (ws, message) => {
-      const params = toJsonRpcParams(message.params);
-      const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
-      const title = typeof params.title === "string" ? params.title : "";
+      const parsed = jsonRpcSessionRequestSchemas["cowork/session/title/set"].safeParse(
+        message.params,
+      );
+      if (!parsed.success) {
+        const detail = parsed.error.issues[0]?.message;
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: detail ? `${message.method}: ${detail}` : `${message.method}: invalid params`,
+        });
+        return;
+      }
+      const { threadId, title } = parsed.data;
       const binding = context.threads.getLive(threadId);
       const runtime = binding?.runtime;
       if (!runtime || !title.trim()) {
@@ -37,21 +46,36 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
     },
 
     "cowork/session/state/read": async (ws, message) => {
-      const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.resolveWorkspacePath(params, message.method);
+      const parsed = jsonRpcSessionRequestSchemas["cowork/session/state/read"].safeParse(
+        message.params,
+      );
+      if (!parsed.success) {
+        const detail = parsed.error.issues[0]?.message;
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: detail ? `${message.method}: ${detail}` : `${message.method}: invalid params`,
+        });
+        return;
+      }
+      const cwd = context.utils.resolveWorkspacePath(parsed.data, message.method);
       context.jsonrpc.sendResult(ws, message.id, {
         events: await context.workspaceControl.readState(cwd),
       });
     },
 
     "cowork/session/model/set": async (ws, message) => {
-      const params = toJsonRpcParams(message.params);
-      const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
-      const model = typeof params.model === "string" ? params.model : "";
-      const provider =
-        typeof params.provider === "string"
-          ? (params.provider as AgentConfig["provider"])
-          : undefined;
+      const parsed = jsonRpcSessionRequestSchemas["cowork/session/model/set"].safeParse(
+        message.params,
+      );
+      if (!parsed.success) {
+        const detail = parsed.error.issues[0]?.message;
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: detail ? `${message.method}: ${detail}` : `${message.method}: invalid params`,
+        });
+        return;
+      }
+      const { threadId, model, provider } = parsed.data;
       const binding = context.threads.getLive(threadId);
       const runtime = binding?.runtime;
       if (!runtime || !model.trim()) {
@@ -64,7 +88,8 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
       const outcome = await captureBindingMutationOutcome(
         context,
         binding,
-        async () => await runtime.settings.setModel(model, provider),
+        async () =>
+          await runtime.settings.setModel(model, provider as AgentConfig["provider"] | undefined),
         (event): event is Extract<SessionEvent, { type: "config_updated" }> =>
           event.type === "config_updated",
       );
@@ -82,8 +107,18 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
     },
 
     "cowork/session/usageBudget/set": async (ws, message) => {
-      const params = toJsonRpcParams(message.params);
-      const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
+      const parsed = jsonRpcSessionRequestSchemas["cowork/session/usageBudget/set"].safeParse(
+        message.params,
+      );
+      if (!parsed.success) {
+        const detail = parsed.error.issues[0]?.message;
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: detail ? `${message.method}: ${detail}` : `${message.method}: invalid params`,
+        });
+        return;
+      }
+      const { threadId, warnAtUsd, stopAtUsd } = parsed.data;
       const binding = context.threads.getLive(threadId);
       const runtime = binding?.runtime;
       if (!runtime) {
@@ -93,14 +128,6 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
         });
         return;
       }
-      const warnAtUsd =
-        typeof params.warnAtUsd === "number" || params.warnAtUsd === null
-          ? (params.warnAtUsd as number | null)
-          : undefined;
-      const stopAtUsd =
-        typeof params.stopAtUsd === "number" || params.stopAtUsd === null
-          ? (params.stopAtUsd as number | null)
-          : undefined;
       const outcome = await captureBindingOutcome(
         context,
         binding,
@@ -116,12 +143,21 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
     },
 
     "cowork/session/config/set": async (ws, message) => {
-      const params = toJsonRpcParams(message.params);
-      const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
-      const configPatch = params.config as Record<string, unknown> | undefined;
+      const parsed = jsonRpcSessionRequestSchemas["cowork/session/config/set"].safeParse(
+        message.params,
+      );
+      if (!parsed.success) {
+        const detail = parsed.error.issues[0]?.message;
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: detail ? `${message.method}: ${detail}` : `${message.method}: invalid params`,
+        });
+        return;
+      }
+      const { threadId, config: configPatch } = parsed.data;
       const binding = context.threads.getLive(threadId);
       const runtime = binding?.runtime;
-      if (!runtime || !configPatch || typeof configPatch !== "object") {
+      if (!runtime) {
         context.jsonrpc.sendError(ws, message.id, {
           code: JSONRPC_ERROR_CODES.invalidParams,
           message: `${message.method} requires threadId and config`,
@@ -145,8 +181,18 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
     },
 
     "cowork/session/harnessContext/get": async (ws, message) => {
-      const params = toJsonRpcParams(message.params);
-      const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
+      const parsed = jsonRpcSessionRequestSchemas["cowork/session/harnessContext/get"].safeParse(
+        message.params,
+      );
+      if (!parsed.success) {
+        const detail = parsed.error.issues[0]?.message;
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: detail ? `${message.method}: ${detail}` : `${message.method}: invalid params`,
+        });
+        return;
+      }
+      const { threadId } = parsed.data;
       const binding = context.threads.getLive(threadId);
       const runtime = binding?.runtime;
       if (!runtime) {
@@ -200,16 +246,26 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
     },
 
     "cowork/session/defaults/apply": async (ws, message) => {
-      const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.resolveWorkspacePath(params, message.method);
-      const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
-      const provider =
-        typeof params.provider === "string"
-          ? (params.provider as AgentConfig["provider"])
-          : undefined;
-      const model = typeof params.model === "string" ? params.model : undefined;
-      const enableMcp = typeof params.enableMcp === "boolean" ? params.enableMcp : undefined;
-      const configPatch = params.config as any;
+      const parsed = jsonRpcSessionRequestSchemas["cowork/session/defaults/apply"].safeParse(
+        message.params,
+      );
+      if (!parsed.success) {
+        const detail = parsed.error.issues[0]?.message;
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: detail ? `${message.method}: ${detail}` : `${message.method}: invalid params`,
+        });
+        return;
+      }
+      const {
+        cwd: cwdParam,
+        threadId,
+        provider,
+        model,
+        enableMcp,
+        config: configPatch,
+      } = parsed.data;
+      const cwd = context.utils.resolveWorkspacePath({ cwd: cwdParam }, message.method);
 
       const result = threadId
         ? await (async () => {
@@ -288,8 +344,12 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
       if (result === null) {
         return;
       }
+      if (result.outcome && context.utils.isSessionError(result.outcome)) {
+        sendSessionMutationError(context, ws, message.id, result.outcome);
+        return;
+      }
       context.jsonrpc.sendResult(ws, message.id, {
-        event: result.outcome?.type === "error" ? result.outcome : result.fallback,
+        event: result.fallback,
       });
     },
 
@@ -323,10 +383,19 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
     },
 
     "cowork/session/delete": async (ws, message) => {
-      const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.resolveWorkspacePath(params, message.method);
-      const targetSessionId =
-        typeof params.targetSessionId === "string" ? params.targetSessionId.trim() : "";
+      const parsed = jsonRpcSessionRequestSchemas["cowork/session/delete"].safeParse(
+        message.params,
+      );
+      if (!parsed.success) {
+        const detail = parsed.error.issues[0]?.message;
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: detail ? `${message.method}: ${detail}` : `${message.method}: invalid params`,
+        });
+        return;
+      }
+      const { cwd: cwdParam, targetSessionId } = parsed.data;
+      const cwd = context.utils.resolveWorkspacePath({ cwd: cwdParam }, message.method);
       const outcome = await captureWorkspaceControlOutcome(
         context,
         cwd,

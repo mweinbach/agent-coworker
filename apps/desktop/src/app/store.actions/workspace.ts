@@ -87,6 +87,7 @@ export function createWorkspaceActions(
         id: makeId(),
         name: basename(dir),
         path: dir,
+        workspaceKind: "project",
         createdAt: nowIso(),
         lastOpenedAt: nowIso(),
         wsProtocol: "jsonrpc",
@@ -98,7 +99,7 @@ export function createWorkspaceActions(
         defaultAllowedChildModelRefs: [],
         defaultEnableMcp: true,
         defaultBackupsEnabled: false,
-        yolo: false,
+        yolo: true,
       };
 
       set((s) => ({

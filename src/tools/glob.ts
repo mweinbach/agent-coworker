@@ -70,18 +70,34 @@ export function createGlobTool(ctx: ToolContext) {
       ctx.log(`tool> glob ${JSON.stringify(normalizedInput)}`);
       const effectiveMaxResults = normalizedInput.maxResults;
 
-      assertSafeGlobPattern(normalizedInput.pattern);
+      let normalizedPattern = normalizedInput.pattern.replace(/\\/g, "/");
+      let effectiveCwd = normalizedInput.cwd;
+
+      const isAbsolutePattern =
+        path.isAbsolute(normalizedPattern) || /^[A-Za-z]:\//.test(normalizedPattern);
+      if (isAbsolutePattern) {
+        const firstGlobIndex = normalizedPattern.search(/[*?[{]/);
+        const staticPrefix =
+          firstGlobIndex === -1 ? normalizedPattern : normalizedPattern.slice(0, firstGlobIndex);
+        const lastSlash = staticPrefix.lastIndexOf("/");
+        if (lastSlash !== -1) {
+          effectiveCwd = staticPrefix.slice(0, lastSlash) || "/";
+          normalizedPattern = normalizedPattern.slice(lastSlash + 1);
+        }
+      }
+
+      assertSafeGlobPattern(normalizedPattern);
 
       const searchCwd = await assertReadPathAllowed(
         resolveMaybeRelative(
-          normalizedInput.cwd || ctx.config.workingDirectory,
+          effectiveCwd || ctx.config.workingDirectory,
           ctx.config.workingDirectory,
         ),
         ctx.config,
         "glob",
       );
       const files: Array<{ path: string; mtimeMs: number }> = [];
-      const stream = fg.stream(normalizedInput.pattern, {
+      const stream = fg.stream(normalizedPattern, {
         cwd: searchCwd,
         dot: false,
         objectMode: true,

@@ -1,4 +1,5 @@
 import { type ChildProcessByStdio, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
@@ -13,10 +14,17 @@ import {
   getServerTerminationSignal,
   getSourceStartupAttemptCount,
 } from "./serverPlatform";
-import { findPackagedSidecarLaunchCommand } from "./sidecar";
+import {
+  FOUNDATION_MODELS_SDK_DIR_NAME,
+  findPackagedSidecarLaunchCommand,
+  hasPackagedFoundationModelsSdk,
+  resolvePackagedCodexAppServerFilename,
+} from "./sidecar";
 import { assertSafeId, assertWorkspaceDirectory } from "./validation";
 
-const SERVER_STARTUP_TIMEOUT_MS = 15_000;
+const DEFAULT_SERVER_STARTUP_TIMEOUT_MS = 45_000;
+const MIN_SERVER_STARTUP_TIMEOUT_MS = 5_000;
+const MAX_SERVER_STARTUP_TIMEOUT_MS = 300_000;
 const STDERR_TAIL_LIMIT = 16_384;
 const SERVER_LOG_FILE_NAME = "server.log";
 const DEBUG_SERVER_STDERR = process.env.COWORK_DESKTOP_DEBUG_SERVER_STDERR === "1";
@@ -40,6 +48,7 @@ type ServerListening = {
   url: string;
   port: number;
   cwd: string;
+  browserAccessToken?: string | null;
   mobileH3?: {
     url: string;
     port: number;
@@ -73,6 +82,7 @@ const serverListeningSchema = z
     url: z.string().min(1),
     port: z.number(),
     cwd: z.string().min(1),
+    browserAccessToken: z.string().min(1).nullable().optional(),
     mobileH3: z
       .object({
         url: z.string().min(1),
@@ -141,6 +151,58 @@ function findSidecarLaunchCommand() {
   });
 }
 
+function findBundledCodexAppServerPath(): string | null {
+  const fromEnv = process.env.COWORK_DESKTOP_CODEX_APP_SERVER_PATH;
+  if (fromEnv && fs.existsSync(fromEnv)) {
+    return fromEnv;
+  }
+
+  const expectedFilename = resolvePackagedCodexAppServerFilename();
+  for (const dir of getSidecarSearchDirs()) {
+    const candidate = path.join(dir, expectedFilename);
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function findBundledCodexPrimaryRuntimeDir(): string | null {
+  const fromEnv = process.env.COWORK_BUNDLED_CODEX_PRIMARY_RUNTIME_DIR;
+  if (fromEnv && fs.existsSync(fromEnv)) {
+    return fromEnv;
+  }
+
+  if (!app.isPackaged) {
+    try {
+      const devRepoRoot = resolveRepoRoot();
+      const candidate = path.join(devRepoRoot, "dist", "codex-primary-runtime");
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  const builtInDist = resolvePackagedBuiltinDistDir();
+  if (!builtInDist) {
+    return null;
+  }
+  const candidate = path.join(builtInDist, "codex-primary-runtime");
+  return fs.existsSync(candidate) ? candidate : null;
+}
+
+function findBundledFoundationModelsSdkDir(): string | null {
+  for (const dir of getSidecarSearchDirs()) {
+    const candidate = path.join(dir, FOUNDATION_MODELS_SDK_DIR_NAME);
+    if (hasPackagedFoundationModelsSdk(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
 function waitForExit(child: ServerChildProcess, timeoutMs: number): Promise<boolean> {
   if (child.exitCode !== null || child.signalCode !== null) {
     return Promise.resolve(true);
@@ -191,7 +253,21 @@ async function gracefulKill(child: ServerChildProcess): Promise<void> {
   await waitForExit(child, 1_000);
 }
 
-function waitForServerListening(child: ServerChildProcess): Promise<ServerListening> {
+function getServerStartupTimeoutMs(env: Record<string, string | undefined> = process.env): number {
+  const parsed = Number(env.COWORK_DESKTOP_SERVER_STARTUP_TIMEOUT_MS);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_SERVER_STARTUP_TIMEOUT_MS;
+  }
+  return Math.min(
+    MAX_SERVER_STARTUP_TIMEOUT_MS,
+    Math.max(MIN_SERVER_STARTUP_TIMEOUT_MS, Math.floor(parsed)),
+  );
+}
+
+function waitForServerListening(
+  child: ServerChildProcess,
+  timeoutMs = getServerStartupTimeoutMs(),
+): Promise<ServerListening> {
   return new Promise((resolve, reject) => {
     const rl = readline.createInterface({ input: child.stdout });
     const recentLines: string[] = [];
@@ -233,13 +309,9 @@ function waitForServerListening(child: ServerChildProcess): Promise<ServerListen
     const timeout = setTimeout(() => {
       cleanup();
       reject(
-        new Error(
-          withRecentOutput(
-            `Server startup timed out after ${SERVER_STARTUP_TIMEOUT_MS / 1000} seconds`,
-          ),
-        ),
+        new Error(withRecentOutput(`Server startup timed out after ${timeoutMs / 1000} seconds`)),
       );
-    }, SERVER_STARTUP_TIMEOUT_MS);
+    }, timeoutMs);
 
     const cleanup = () => {
       clearTimeout(timeout);
@@ -299,14 +371,47 @@ function resolveSourceStartup(
   return { repoRoot, sourceEntry };
 }
 
-function buildServerEnv(featureFlags?: { openAiNativeConnectors?: boolean }): NodeJS.ProcessEnv {
+function buildServerEnv(
+  featureFlags?: { openAiNativeConnectors?: boolean },
+  opts: { includeBundledFoundationModelsSdk?: boolean } = {},
+): NodeJS.ProcessEnv {
+  const bundledCodexAppServer = process.env.COWORK_CODEX_APP_SERVER_COMMAND
+    ? null
+    : findBundledCodexAppServerPath();
+  const bundledCodexPrimaryRuntime = findBundledCodexPrimaryRuntimeDir();
+  const bundledFoundationModelsSdk =
+    opts.includeBundledFoundationModelsSdk && !process.env.COWORK_TSFMSDK_DIR
+      ? findBundledFoundationModelsSdkDir()
+      : null;
   return {
     ...process.env,
+    COWORK_BROWSER_ACCESS_TOKEN:
+      process.env.COWORK_BROWSER_ACCESS_TOKEN?.trim() ||
+      `${randomUUID()}${randomUUID().replaceAll("-", "")}`,
     COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: process.env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP ?? "1",
+    ...(bundledCodexAppServer
+      ? { COWORK_CODEX_APP_SERVER_COMMAND: bundledCodexAppServer, COWORK_CODEX_APP_SERVER_ARGS: "" }
+      : {}),
+    ...(bundledCodexPrimaryRuntime
+      ? { COWORK_BUNDLED_CODEX_PRIMARY_RUNTIME_DIR: bundledCodexPrimaryRuntime }
+      : {}),
+    ...(bundledFoundationModelsSdk ? { COWORK_TSFMSDK_DIR: bundledFoundationModelsSdk } : {}),
     ...(featureFlags?.openAiNativeConnectors
       ? { COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS: "1" }
       : {}),
   };
+}
+
+function appendBrowserAccessToken(websocketUrl: string, token?: string | null): string {
+  const trimmed = token?.trim();
+  if (!trimmed) return websocketUrl;
+  try {
+    const url = new URL(websocketUrl);
+    url.searchParams.set("coworkBrowserToken", trimmed);
+    return url.toString();
+  } catch {
+    return websocketUrl;
+  }
 }
 
 function isLikelyBunSegfault(stderrOutput: string): boolean {
@@ -436,7 +541,9 @@ export class ServerManager {
     let previousError: unknown = null;
 
     for (let attempt = 1; attempt <= attemptCount; attempt += 1) {
-      const serverEnv = buildServerEnv(opts.featureFlags);
+      const serverEnv = buildServerEnv(opts.featureFlags, {
+        includeBundledFoundationModelsSdk: !useSource,
+      });
       const sourceEnvForAttempt = useSource ? buildSourceEnvForAttempt(serverEnv, attempt) : null;
       const cleanup = sourceEnvForAttempt?.cleanup ?? (() => {});
 
@@ -501,8 +608,8 @@ export class ServerManager {
 
       try {
         const listening = await waitForServerListening(child);
-        const url = listening.url;
-        logServerManagerEvent(`workspace=${workspaceId} listening url=${url}`);
+        const url = appendBrowserAccessToken(listening.url, listening.browserAccessToken);
+        logServerManagerEvent(`workspace=${workspaceId} listening url=${listening.url}`);
         const pendingHandle = this.pendingStarts.get(workspaceId);
         if (pendingHandle?.child === child) {
           this.pendingStarts.delete(workspaceId);
@@ -645,24 +752,31 @@ export class ServerManager {
     const pendingEntries = [...this.pendingStarts.entries()];
     this.pendingStarts.clear();
 
-    for (const [, handle] of entries) {
-      await gracefulKill(handle.child);
-      handle.cleanup();
-    }
+    const killPromises = [
+      ...entries.map(async ([, handle]) => {
+        await gracefulKill(handle.child);
+        handle.cleanup();
+      }),
+      ...pendingEntries.map(async ([, handle]) => {
+        await gracefulKill(handle.child);
+        handle.cleanup();
+      }),
+    ];
 
-    for (const [, handle] of pendingEntries) {
-      await gracefulKill(handle.child);
-      handle.cleanup();
-    }
+    await Promise.all(killPromises);
   }
 }
 
 export const __internal = {
   buildServerEnv,
   buildSourceEnvForAttempt,
+  findBundledCodexAppServerPath,
+  findBundledFoundationModelsSdkDir,
   findSidecarLaunchCommand,
   getServerTerminationSignal,
   getServerLogPath,
+  getServerStartupTimeoutMs,
+  appendBrowserAccessToken,
   getSourceStartupAttemptCount,
   isLikelyBunSegfault,
   logServerManagerEvent,

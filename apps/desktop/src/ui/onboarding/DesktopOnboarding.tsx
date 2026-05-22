@@ -685,6 +685,8 @@ function DefaultsStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
       void updateWorkspaceDefaults(workspaceId, {
         defaultProvider: newProvider,
         defaultModel: newModel,
+        defaultPreferredChildModel: newModel,
+        defaultPreferredChildModelRef: `${newProvider}:${newModel}`,
       });
     }
   }, [
@@ -725,6 +727,8 @@ function DefaultsStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
               void updateWorkspaceDefaults(workspace.id, {
                 defaultProvider: value,
                 defaultModel: newModel,
+                defaultPreferredChildModel: newModel,
+                defaultPreferredChildModelRef: `${value}:${newModel}`,
               });
             }}
           >
@@ -746,7 +750,11 @@ function DefaultsStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
           <Select
             value={model || (modelOptions[0] ?? "")}
             onValueChange={(value) => {
-              void updateWorkspaceDefaults(workspace.id, { defaultModel: value });
+              void updateWorkspaceDefaults(workspace.id, {
+                defaultModel: value,
+                defaultPreferredChildModel: value,
+                defaultPreferredChildModelRef: `${effectiveProvider}:${value}`,
+              });
             }}
           >
             <SelectTrigger aria-label="Default model">

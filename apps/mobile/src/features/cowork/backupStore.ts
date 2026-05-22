@@ -5,6 +5,7 @@ import type {
   WorkspaceBackupEntry,
 } from "../../../../../src/shared/jsonrpcControlSchemas";
 import { callParsedControlMethod } from "./controlRpc";
+import { saveToOfflineCache } from "./offlineCache";
 import { getActiveCoworkJsonRpcClient } from "./runtimeClient";
 import { useWorkspaceStore } from "./workspaceStore";
 
@@ -53,6 +54,8 @@ export const useBackupStore = create<BackupStoreState>((set, get) => ({
         workspacePath: result.event.workspacePath,
         loading: false,
       });
+      void saveToOfflineCache("backups", result.event.backups);
+      void saveToOfflineCache("workspacePath", result.event.workspacePath);
     } catch (error) {
       set({ loading: false, error: error instanceof Error ? error.message : String(error) });
     }

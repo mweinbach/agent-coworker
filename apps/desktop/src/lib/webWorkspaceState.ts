@@ -76,6 +76,7 @@ function createEmptyState(): PersistedState {
         shortcutEnabled: false,
         shortcutAccelerator: DEFAULT_QUICK_CHAT_SHORTCUT_ACCELERATOR,
       },
+      archivedChatsAutoDeleteDays: 0,
     },
     onboarding: {
       status: "completed",
@@ -92,7 +93,12 @@ export function loadPersistedState(): PersistedState {
     const parsed = JSON.parse(raw);
     return {
       version: parsed.version ?? 2,
-      workspaces: parsed.workspaces ?? [],
+      workspaces: Array.isArray(parsed.workspaces)
+        ? parsed.workspaces.map((workspace: Record<string, unknown>) => ({
+            ...workspace,
+            workspaceKind: workspace.workspaceKind === "oneOffChat" ? "oneOffChat" : "project",
+          }))
+        : [],
       threads: parsed.threads ?? [],
       developerMode: parsed.developerMode ?? false,
       showHiddenFiles: parsed.showHiddenFiles ?? false,
@@ -104,6 +110,10 @@ export function loadPersistedState(): PersistedState {
             parsed.desktopSettings?.quickChat?.shortcutAccelerator,
           ),
         },
+        archivedChatsAutoDeleteDays:
+          typeof parsed.desktopSettings?.archivedChatsAutoDeleteDays === "number"
+            ? parsed.desktopSettings.archivedChatsAutoDeleteDays
+            : 0,
       },
       desktopFeatureFlagOverrides: parsed.desktopFeatureFlagOverrides ?? {},
       perWorkspaceSettings: parsed.perWorkspaceSettings,
@@ -159,12 +169,13 @@ export function seedWorkspaceFromUrl(serverUrl: string, workspacePath: string): 
       id,
       name: workspaceName,
       path: workspacePath,
+      workspaceKind: "project",
       createdAt: now,
       lastOpenedAt: now,
       wsProtocol: "jsonrpc",
       defaultEnableMcp: true,
       defaultBackupsEnabled: false,
-      yolo: false,
+      yolo: true,
     });
   }
   savePersistedState(state);

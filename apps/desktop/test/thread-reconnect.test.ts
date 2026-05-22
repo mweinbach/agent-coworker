@@ -536,6 +536,63 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
     expect(jsonRpcRequests.map((entry) => entry.method)).toContain("thread/resume");
   });
 
+  test("reconnectThread does not duplicate user message when snapshot has formatted userMessage ID", async () => {
+    const { threadId } = seedStore(
+      {},
+      {
+        feed: [
+          {
+            id: "client-msg-123",
+            kind: "message",
+            role: "user",
+            ts: "2024-01-01T00:00:01.000Z",
+            text: "Hello from client",
+          },
+        ],
+      },
+    );
+
+    const activeThreadId = canonicalThreadId("session-1", threadId);
+    let optimisticSet = RUNTIME.optimisticUserMessageIds.get(activeThreadId);
+    if (!optimisticSet) {
+      optimisticSet = new Set();
+      RUNTIME.optimisticUserMessageIds.set(activeThreadId, optimisticSet);
+    }
+    optimisticSet.add("client-msg-123");
+
+    jsonRpcHandlers.set("thread/read", async () => ({
+      coworkSnapshot: {
+        ...threadSnapshot("session-1"),
+        feed: [
+          {
+            id: "userMessage:turn-xyz:client-msg-123",
+            kind: "message",
+            role: "user",
+            ts: "2024-01-01T00:00:01.000Z",
+            text: "Hello from client",
+          },
+          {
+            id: "assistant-1",
+            kind: "message",
+            role: "assistant",
+            ts: "2024-01-01T00:00:02.000Z",
+            text: "Hello from harness snapshot",
+          },
+        ],
+      },
+    }));
+
+    await useAppStore.getState().reconnectThread(threadId);
+    await flushAsyncWork();
+
+    const runtime = useAppStore.getState().threadRuntimeById[activeThreadId];
+    expect(runtime?.feed).toHaveLength(2);
+    expect(runtime?.feed.map((f) => f.id)).toEqual([
+      "userMessage:turn-xyz:client-msg-123",
+      "assistant-1",
+    ]);
+  });
+
   test("closing and reopening the shared JsonRpcSocket disconnects and auto-resumes tracked threads", async () => {
     const { threadId } = seedStore();
 

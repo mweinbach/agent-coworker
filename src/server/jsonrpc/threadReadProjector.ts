@@ -1,4 +1,5 @@
 import type { PersistedThreadJournalEvent } from "../sessionDb";
+import { stripWhitespaceForTranscriptDedupe } from "../../shared/projectionPolicy";
 import {
   normalizeReasoningText,
   normalizeTranscriptReplayText,
@@ -18,6 +19,8 @@ type ProjectedTurnState = {
   itemOrder: string[];
   currentProjectedIdByRawId: Map<string, string>;
   seenOccurrencesByRawId: Map<string, number>;
+  reasoningClosedByBoundaryRawIds: Set<string>;
+  reasoningRestartedByBoundaryRawIds: Set<string>;
 };
 
 function dedupeReplayReasoningItems(
@@ -74,6 +77,32 @@ function dedupeReplayAssistantItems(
       continue;
     }
 
+    // Normalized containment — catches duplicates where the normalized
+    // forms are exact prefixes of each other.
+    if (aggregate) {
+      if (aggregate.startsWith(normalized) || normalized.startsWith(aggregate)) {
+        assistantHistory = `${assistantHistory}${item.text}`;
+        continue;
+      }
+    }
+
+    // Whitespace-stripped comparison — catches duplicates where streaming
+    // segments were concatenated into history without paragraph separators
+    // (e.g. "Hello worldMore text") and a later item has the full formatted
+    // text (e.g. "Hello world\n\nMore text"), or vice versa.
+    const strippedAggregate = stripWhitespaceForTranscriptDedupe(assistantHistory);
+    const strippedNormalized = stripWhitespaceForTranscriptDedupe(item.text);
+    if (strippedAggregate && strippedNormalized) {
+      if (
+        strippedAggregate === strippedNormalized ||
+        strippedAggregate.startsWith(strippedNormalized) ||
+        strippedNormalized.startsWith(strippedAggregate)
+      ) {
+        assistantHistory = `${assistantHistory}${item.text}`;
+        continue;
+      }
+    }
+
     assistantHistory = `${assistantHistory}${item.text}`;
     out.push(item);
   }
@@ -95,6 +124,8 @@ export function createThreadTurnProjector() {
       itemOrder: [],
       currentProjectedIdByRawId: new Map(),
       seenOccurrencesByRawId: new Map(),
+      reasoningClosedByBoundaryRawIds: new Set(),
+      reasoningRestartedByBoundaryRawIds: new Set(),
     };
     turns.set(turnId, turn);
     order.push(turnId);
@@ -106,6 +137,7 @@ export function createThreadTurnProjector() {
     turn.seenOccurrencesByRawId.set(rawId, nextOccurrence);
     const projectedId = occurrenceItemId(rawId, nextOccurrence);
     turn.currentProjectedIdByRawId.set(rawId, projectedId);
+    turn.reasoningClosedByBoundaryRawIds.delete(rawId);
     if (!turn.items.has(projectedId)) {
       turn.itemOrder.push(projectedId);
     }
@@ -114,6 +146,26 @@ export function createThreadTurnProjector() {
 
   const currentProjectedItemId = (turn: ProjectedTurnState, rawId: string): string => {
     return turn.currentProjectedIdByRawId.get(rawId) ?? rawId;
+  };
+
+  const closeReasoningForItemBoundary = (turn: ProjectedTurnState) => {
+    for (const [rawId, projectedId] of turn.currentProjectedIdByRawId.entries()) {
+      const item = turn.items.get(projectedId);
+      if (item?.type === "reasoning") {
+        turn.reasoningClosedByBoundaryRawIds.add(rawId);
+      }
+    }
+  };
+
+  const currentOrRestartedReasoningItemId = (
+    turn: ProjectedTurnState,
+    rawId: string,
+  ): string => {
+    if (turn.reasoningClosedByBoundaryRawIds.has(rawId)) {
+      turn.reasoningRestartedByBoundaryRawIds.add(rawId);
+      return projectStartedItemId(turn, rawId);
+    }
+    return currentProjectedItemId(turn, rawId);
   };
 
   const handle = (event: PersistedThreadJournalEvent) => {
@@ -132,6 +184,27 @@ export function createThreadTurnProjector() {
         if (!turnId || !item || typeof item.id !== "string") return;
         const turn = ensureTurn(turnId);
         const rawId = item.id;
+        if (item.type !== "reasoning") {
+          closeReasoningForItemBoundary(turn);
+        }
+        if (
+          event.eventType === "item/completed" &&
+          item.type === "reasoning" &&
+          turn.reasoningRestartedByBoundaryRawIds.has(rawId)
+        ) {
+          const projectedId = currentProjectedItemId(turn, rawId);
+          const existing = turn.items.get(projectedId);
+          const existingText = typeof existing?.text === "string" ? existing.text.trim() : "";
+          const completedText = typeof item.text === "string" ? item.text.trim() : "";
+          if (
+            existingText &&
+            completedText &&
+            completedText !== existingText &&
+            completedText.includes(existingText)
+          ) {
+            break;
+          }
+        }
         const projectedId =
           event.eventType === "item/started"
             ? projectStartedItemId(turn, rawId)
@@ -148,6 +221,7 @@ export function createThreadTurnProjector() {
         const delta = typeof payload.delta === "string" ? payload.delta : "";
         if (!turnId || !rawItemId) return;
         const turn = ensureTurn(turnId);
+        closeReasoningForItemBoundary(turn);
         const itemId = currentProjectedItemId(turn, rawItemId);
         const existing = turn.items.get(itemId) ?? { id: itemId, type: "agentMessage", text: "" };
         const currentText = typeof existing.text === "string" ? existing.text : "";
@@ -167,7 +241,7 @@ export function createThreadTurnProjector() {
         const mode = payload.mode === "summary" ? "summary" : "reasoning";
         if (!turnId || !rawItemId) return;
         const turn = ensureTurn(turnId);
-        const itemId = currentProjectedItemId(turn, rawItemId);
+        const itemId = currentOrRestartedReasoningItemId(turn, rawItemId);
         const existing = turn.items.get(itemId) ?? {
           id: itemId,
           type: "reasoning",

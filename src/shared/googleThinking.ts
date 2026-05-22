@@ -12,7 +12,11 @@ export type GoogleReasoningEffort = (typeof GOOGLE_REASONING_EFFORT_VALUES)[numb
 const GOOGLE_FLASH_THINKING_LEVELS = ["minimal", "low", "medium", "high"] as const;
 const GOOGLE_PRO_THINKING_LEVELS = ["low", "medium", "high"] as const;
 
-const GOOGLE_FLASH_MODEL_IDS = new Set(["gemini-3-flash-preview", "gemini-3.1-flash-lite-preview"]);
+const GOOGLE_FLASH_MODEL_IDS = new Set([
+  "gemini-3-flash-preview",
+  "gemini-3.1-flash-lite-preview",
+  "gemini-3.5-flash",
+]);
 
 const GOOGLE_PRO_MODEL_IDS = new Set([
   "gemini-3.1-pro-preview",

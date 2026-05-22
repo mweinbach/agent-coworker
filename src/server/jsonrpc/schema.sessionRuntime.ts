@@ -74,6 +74,8 @@ const providerOptionsGoogleSchema = z
       })
       .strict()
       .optional(),
+    responseFormat: z.unknown().optional(),
+    responseMimeType: z.string().trim().min(1).optional(),
   })
   .strict();
 

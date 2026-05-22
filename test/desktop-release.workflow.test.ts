@@ -5,6 +5,17 @@ const workflowPath = new URL("../.github/workflows/desktop-release.yml", import.
 const workflow = readFileSync(workflowPath, "utf8");
 
 describe("desktop release workflow", () => {
+  test("runs validation for tag-triggered releases before packaging", () => {
+    const validateJob = workflow.match(/validate:[\s\S]*?\n {2}package:/)?.[0] ?? "";
+    const packageJob = workflow.match(/package:[\s\S]*?\n {2}smoke-windows-arm64:/)?.[0] ?? "";
+
+    expect(validateJob).toContain("name: Validate");
+    expect(validateJob).not.toContain("if: github.event_name == 'workflow_dispatch'");
+    expect(packageJob).toContain("needs: validate");
+    expect(packageJob).toContain("if: ${{ needs.validate.result == 'success' }}");
+    expect(packageJob).not.toContain("needs.validate.result == 'skipped'");
+  });
+
   test("separates macOS and Windows signing credentials", () => {
     expect(workflow).toMatch(
       /- name: Build macOS desktop artifacts[\s\S]*?CSC_LINK: \$\{\{ secrets\.CSC_LINK \}\}[\s\S]*?CSC_KEY_PASSWORD: \$\{\{ secrets\.CSC_KEY_PASSWORD \}\}/,

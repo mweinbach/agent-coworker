@@ -55,6 +55,14 @@ describe("Anthropic provider (claude-opus-4-6)", () => {
     expect(model.provider).toBe("anthropic.messages");
   });
 
+  test("getModel with claude-opus-4-7 model ID", () => {
+    const cfg = makeConfig({ provider: "anthropic", model: "claude-opus-4-7" });
+    const model = getModel(cfg);
+
+    expect(model.modelId).toBe("claude-opus-4-7");
+    expect(model.provider).toBe("anthropic.messages");
+  });
+
   test("getModel exposes stable adapter shape", async () => {
     const cfg = makeConfig({ provider: "anthropic", model: "claude-opus-4-6" });
     const viaGetModel = getModel(cfg) as any;

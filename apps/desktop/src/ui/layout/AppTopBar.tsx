@@ -1,9 +1,27 @@
-import { ArrowUpRightIcon, ChevronDownIcon, LoaderCircleIcon, PanelRightIcon } from "lucide-react";
+import {
+  ArrowUpRightIcon,
+  BoldIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  ExternalLinkIcon,
+  EyeIcon,
+  LoaderCircleIcon,
+  MoreVerticalIcon,
+  PanelRightIcon,
+  PenIcon,
+  XIcon,
+} from "lucide-react";
 import { type CSSProperties, useEffect, useId, useMemo, useRef, useState } from "react";
 import { formatCost, formatTokenCount } from "../../../../../src/session/pricing";
 import type { SessionUsageSnapshot, TurnUsageSnapshot } from "../../app/types";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "../../components/ui/dropdown-menu";
 import {
   Select,
   SelectContent,
@@ -33,9 +51,18 @@ interface AppTopBarProps {
   showContextToggle?: boolean;
   managementMode?: "thread" | "plugins";
   suppressThreadDetails?: boolean;
+  hideThreadShell?: boolean;
   managementWorkspaceId?: string | null;
   managementWorkspaces?: Array<{ id: string; name: string }>;
   onSelectManagementWorkspace?: (workspaceId: string | null) => void;
+  canvasMode?: boolean;
+  canvasIsMarkdown?: boolean;
+  canvasActiveTab?: "preview" | "edit";
+  onSetCanvasActiveTab?: (tab: "preview" | "edit") => void;
+  canvasShowFormattingBar?: boolean;
+  onToggleCanvasFormattingBar?: () => void;
+  onPopOutCanvas?: () => void;
+  onCloseCanvas?: () => void;
 }
 
 // Keep the collapsed Windows corner rail aligned with the long-standing title offset
@@ -62,9 +89,18 @@ export function AppTopBar({
   showContextToggle = true,
   managementMode = "thread",
   suppressThreadDetails = false,
+  hideThreadShell = false,
   managementWorkspaceId = null,
   managementWorkspaces = [],
   onSelectManagementWorkspace,
+  canvasMode = false,
+  canvasIsMarkdown = false,
+  canvasActiveTab = "preview",
+  onSetCanvasActiveTab,
+  canvasShowFormattingBar = true,
+  onToggleCanvasFormattingBar,
+  onPopOutCanvas,
+  onCloseCanvas,
 }: AppTopBarProps) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const detailsRef = useRef<HTMLDivElement | null>(null);
@@ -129,16 +165,24 @@ export function AppTopBar({
       ? 0
       : sidebarWidth;
   const showQuickChatPopOut = managementMode === "thread" && onPopOutQuickChat !== undefined;
-  const defaultRightInset = busy
-    ? 8.75 * 16
-    : showContextToggle || showQuickChatPopOut
-      ? 4.75 * 16
-      : 12;
-  const win32RightInset = busy
-    ? 8.75 * 16
-    : showContextToggle || showQuickChatPopOut
-      ? 2.75 * 16
-      : 12;
+  const defaultRightInset = canvasMode
+    ? busy
+      ? 12.5 * 16
+      : 8.5 * 16
+    : busy
+      ? 8.75 * 16
+      : showContextToggle || showQuickChatPopOut
+        ? 4.75 * 16
+        : 12;
+  const win32RightInset = canvasMode
+    ? busy
+      ? 10.5 * 16
+      : 6.5 * 16
+    : busy
+      ? 8.75 * 16
+      : showContextToggle || showQuickChatPopOut
+        ? 2.75 * 16
+        : 12;
   const titleRightInset = isWin32
     ? WIN32_CAPTION_BUTTON_RESERVE + WIN32_RIGHT_TOOLBAR_GAP + win32RightInset
     : defaultRightInset;
@@ -217,7 +261,7 @@ export function AppTopBar({
         className="app-topbar__thread-shell absolute inset-y-0 flex min-w-0 items-center"
         style={{ left: titleOffset, right: titleRightInset }}
       >
-        {managementMode === "plugins" ? (
+        {hideThreadShell ? null : managementMode === "plugins" ? (
           <div
             className={cn(
               "app-topbar__thread-anchor relative flex min-w-0 items-center",
@@ -279,7 +323,9 @@ export function AppTopBar({
             style={collapsedThreadAnchorStyle}
           >
             {suppressThreadDetails ? (
-              <span className="app-topbar__thread-title truncate text-sm font-medium">{title}</span>
+              <span className="app-topbar__thread-title truncate text-[15px] font-semibold">
+                {title}
+              </span>
             ) : (
               <button
                 type="button"
@@ -291,21 +337,25 @@ export function AppTopBar({
                 data-open={detailsOpen ? "true" : "false"}
                 onClick={() => setDetailsOpen((open) => !open)}
               >
-                <span className="app-topbar__thread-title truncate">{title}</span>
+                <span className="app-topbar__thread-title truncate text-[15px] font-semibold">
+                  {title}
+                </span>
                 {subtitle ? (
                   <>
                     <span
-                      className="app-topbar__thread-separator text-muted-foreground/52"
+                      className="app-topbar__thread-separator text-muted-foreground/40"
                       aria-hidden="true"
                     >
                       |
                     </span>
-                    <span className="app-topbar__thread-subtitle truncate">{subtitle}</span>
+                    <span className="app-topbar__thread-subtitle truncate text-sm text-muted-foreground/80">
+                      {subtitle}
+                    </span>
                   </>
                 ) : null}
                 <ChevronDownIcon
                   className={cn(
-                    "app-topbar__thread-chevron h-3.5 w-3.5 shrink-0 text-muted-foreground/68 transition-transform duration-150 ease-out",
+                    "app-topbar__thread-chevron h-4 w-4 shrink-0 text-muted-foreground/60 transition-transform duration-150 ease-out",
                     detailsOpen && "rotate-180",
                   )}
                 />
@@ -395,7 +445,92 @@ export function AppTopBar({
         )}
       </div>
 
-      {showQuickChatPopOut || showContextToggle || busy ? (
+      {canvasMode ? (
+        <div className="app-topbar__toolbar-layer app-topbar__toolbar--right app-topbar__controls absolute inset-y-0 right-3 flex items-center gap-1">
+          {busy ? (
+            <Badge
+              variant="secondary"
+              className="gap-1.5 rounded-md border-border/55 bg-muted/20 px-2 py-0 text-[11px] text-muted-foreground shadow-none"
+            >
+              <LoaderCircleIcon className="h-3 w-3 animate-spin" />
+              Busy
+            </Badge>
+          ) : null}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                title="View options"
+                aria-label="Canvas view options"
+                className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
+              >
+                <MoreVerticalIcon className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-44 outline-none">
+              {canvasIsMarkdown && onSetCanvasActiveTab ? (
+                <>
+                  <DropdownMenuItem
+                    onClick={() => onSetCanvasActiveTab("preview")}
+                    className={cn(
+                      canvasActiveTab === "preview" && "font-semibold text-primary bg-primary/5",
+                    )}
+                  >
+                    <EyeIcon className="mr-2 size-3.5" />
+                    <span>Document</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() => onSetCanvasActiveTab("edit")}
+                    className={cn(
+                      canvasActiveTab === "edit" && "font-semibold text-primary bg-primary/5",
+                    )}
+                  >
+                    <PenIcon className="mr-2 size-3.5" />
+                    <span>Source</span>
+                  </DropdownMenuItem>
+                </>
+              ) : null}
+              {onToggleCanvasFormattingBar ? (
+                <DropdownMenuItem
+                  onClick={onToggleCanvasFormattingBar}
+                  className="flex items-center justify-between cursor-pointer"
+                >
+                  <span className="flex items-center">
+                    <BoldIcon className="mr-2 size-3.5" />
+                    Show Styling Bar
+                  </span>
+                  {canvasShowFormattingBar && <CheckIcon className="size-3.5 text-primary" />}
+                </DropdownMenuItem>
+              ) : null}
+            </DropdownMenuContent>
+          </DropdownMenu>
+          {onPopOutCanvas ? (
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              onClick={onPopOutCanvas}
+              title="Open in window"
+              aria-label="Open canvas in window"
+              className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
+            >
+              <ExternalLinkIcon className="h-4 w-4" />
+            </Button>
+          ) : null}
+          {onCloseCanvas ? (
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              onClick={onCloseCanvas}
+              title="Close canvas"
+              aria-label="Close canvas"
+              className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
+            >
+              <XIcon className="h-4 w-4" />
+            </Button>
+          ) : null}
+        </div>
+      ) : showQuickChatPopOut || showContextToggle || busy ? (
         <div className="app-topbar__toolbar-layer app-topbar__toolbar--right app-topbar__controls absolute inset-y-0 right-3 flex items-center gap-1.5">
           {busy ? (
             <Badge

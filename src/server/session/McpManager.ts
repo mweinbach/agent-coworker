@@ -20,6 +20,10 @@ export class McpManager {
     });
   }
 
+  close() {
+    this.authFlow.close();
+  }
+
   async setEnableMcp(enableMcp: boolean) {
     await this.registryFlow.setEnableMcp(enableMcp);
   }

@@ -237,6 +237,15 @@ describe("desktop context sidebar", () => {
         expect(agentsPanel?.className).toContain("app-context-sidebar__panel");
         expect(tasksPanel?.className).toContain("flex-none");
         expect(agentsPanel?.className).toContain("flex-none");
+        const taskIcons = tasksSection?.querySelectorAll("svg") ?? [];
+        expect(taskIcons.length).toBeGreaterThan(0);
+        for (const icon of taskIcons) {
+          const className = icon.getAttribute("class") ?? "";
+          expect(className).toContain("size-3.5");
+          expect(className).toContain("shrink-0");
+          expect(className).not.toContain("h-3.25");
+          expect(className).not.toContain("w-3.25");
+        }
         expect(filesPanel?.className).toContain("app-context-sidebar__panel");
         expect(filesPanel?.className).toContain("flex-1");
         expect(filesPanel?.className).toContain("overflow-hidden");

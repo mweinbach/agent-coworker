@@ -309,7 +309,7 @@ describe("Saved API key precedence (~/.cowork/auth)", () => {
       const model = getModel(cfg) as any;
       const headers = await model.config.headers();
       expect(headers.authorization).toBeUndefined();
-      expect(model.provider).toBe("codex-cli.responses");
+      expect(model.provider).toBe("codex-app-server");
     });
   });
 

@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { PropsWithChildren } from "react";
 import { useEffect } from "react";
 
@@ -13,6 +14,14 @@ import {
 import { usePairingStore } from "../features/pairing/pairingStore";
 import { isWorkspaceConnectionReady } from "../features/relay/connectionState";
 import { defaultSecureTransportClient } from "../features/relay/secureTransportClient";
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 1000 * 60 * 5, // 5 minutes stale time
+    },
+  },
+});
 
 function createThreadSnapshot(thread: {
   id: string;
@@ -140,10 +149,7 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
     const hydrateRemoteThreads = async () => {
       const list = await client.requestThreadList();
       const threadStore = useThreadStore.getState();
-      threadStore.clearAll();
-      for (const thread of list.threads) {
-        threadStore.hydrate(createThreadSnapshot(thread));
-      }
+      threadStore.syncRemoteThreads(list.threads);
     };
 
     const hydrateWorkspaceContext = async () => {
@@ -157,7 +163,7 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
     const sessionBootstrap = createSessionBootstrapController({
       client,
       clearThreads: () => {
-        useThreadStore.getState().clearAll();
+        useThreadStore.getState().clearPendingRequestsOnDisconnect();
       },
       clearWorkspaceBoundStores,
       hydrateRemoteThreads,
@@ -202,5 +208,5 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
     };
   }, [attachPairingListeners, bootstrapPairing, resetPairingListeners, seedThread]);
 
-  return children;
+  return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
 }

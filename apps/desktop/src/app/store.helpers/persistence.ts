@@ -78,6 +78,7 @@ function buildCachedDesktopUiState(state: AppStoreState): CachedDesktopUiState {
     sidebarWidth: state.sidebarWidth,
     contextSidebarCollapsed: state.contextSidebarCollapsed,
     contextSidebarWidth: state.contextSidebarWidth,
+    canvasSidebarWidth: state.canvasSidebarWidth,
     messageBarHeight: state.messageBarHeight,
   };
 }

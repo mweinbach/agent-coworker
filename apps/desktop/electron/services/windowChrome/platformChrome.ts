@@ -95,7 +95,7 @@ const MACOS_CHROME: PlatformChromeContract = {
  *
  * - titleBarOverlay with transparent color
  * - Native caption buttons on right
- * - Mica material for background
+ * - Tabbed material for background (Win11 app frame with stronger top hierarchy)
  * - Sidebar owns titleband when expanded; collapsed rail owns controls
  * - CSS blur enabled (no native vibrancy to stack against)
  */
@@ -107,7 +107,7 @@ const WINDOWS_CHROME: PlatformChromeContract = {
   rightNativeReserve: 136, // Caption button reserve
   captionButtonReserve: 136,
   trafficLightPosition: undefined,
-  windowMaterial: "mica",
+  windowMaterial: "tabbed",
   sidebarTitlebandMode: "native",
   topbarControlPlacement: "left-rail",
   usesNativeGlass: false,

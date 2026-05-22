@@ -11,6 +11,8 @@ type BasetenModelSpec = {
   pricing?: {
     input: number;
     output: number;
+    cacheRead?: number;
+    cacheWrite?: number;
   };
 };
 
@@ -28,6 +30,7 @@ const BASETEN_MODEL_SPECS: Record<BasetenModelId, BasetenModelSpec> = {
     pricing: {
       input: 0.6,
       output: 3,
+      cacheRead: 0.12,
     },
   },
   "zai-org/GLM-5": {
@@ -41,6 +44,7 @@ const BASETEN_MODEL_SPECS: Record<BasetenModelId, BasetenModelSpec> = {
     pricing: {
       input: 0.95,
       output: 3.15,
+      cacheRead: 0.2,
     },
   },
   "nvidia/Nemotron-120B-A12B": {
@@ -51,6 +55,11 @@ const BASETEN_MODEL_SPECS: Record<BasetenModelId, BasetenModelSpec> = {
     input: ["text"],
     contextWindow: 262_144,
     maxTokens: 65_536,
+    pricing: {
+      input: 0.3,
+      output: 0.75,
+      cacheRead: 0.06,
+    },
   },
 };
 

@@ -347,6 +347,7 @@ describe("plugins catalog page", () => {
       expect(textarea?.getAttribute("placeholder")).toContain(
         "https://github.com/example/codex-plugin-repo",
       );
+      expect(textarea?.getAttribute("aria-label")).toBe("Plugin source");
       expect((textarea as HTMLTextAreaElement | null)?.value ?? "").toBe("");
 
       await act(async () => {

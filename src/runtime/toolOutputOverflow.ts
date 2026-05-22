@@ -44,9 +44,21 @@ function joinToolResultText(parts: PiToolResultContentPart[]): string {
     .join("\n");
 }
 
+function hasNonTextMultimodalToolOutput(
+  parts: ReturnType<typeof toolResultContentFromOutput>,
+): boolean {
+  return parts.some(
+    (part) =>
+      part.type === "image" ||
+      part.type === "audio" ||
+      part.type === "video" ||
+      part.type === "document",
+  );
+}
+
 function serializeToolOutputForSpill(output: unknown): string | null {
   const content = toolResultContentFromOutput(output);
-  if (content.some((part) => part.type === "image")) return null;
+  if (hasNonTextMultimodalToolOutput(content)) return null;
 
   if (typeof output === "string") return output;
   if (typeof output === "number" || typeof output === "boolean" || typeof output === "bigint") {
@@ -152,7 +164,9 @@ export async function maybeSpillToolOutputToWorkspace(opts: {
   const filePath = path.join(scratchDir, fileName);
 
   try {
+    await assertScratchpadDirectorySafe(scratchDir);
     await fs.mkdir(scratchDir, { recursive: true, mode: PRIVATE_SCRATCHPAD_DIR_MODE });
+    await assertScratchpadDirectorySafe(scratchDir);
     await fs.chmod(scratchDir, PRIVATE_SCRATCHPAD_DIR_MODE).catch(() => {});
     await fs.writeFile(filePath, spillText, {
       encoding: "utf-8",
@@ -190,4 +204,26 @@ export async function maybeSpillToolOutputToWorkspace(opts: {
       preview,
     },
   };
+}
+
+async function assertScratchpadDirectorySafe(scratchDir: string): Promise<void> {
+  try {
+    const stat = await fs.lstat(scratchDir);
+    if (stat.isSymbolicLink()) {
+      throw new Error(`${MODEL_SCRATCHPAD_DIRNAME} must not be a symbolic link`);
+    }
+    if (!stat.isDirectory()) {
+      throw new Error(`${MODEL_SCRATCHPAD_DIRNAME} exists but is not a directory`);
+    }
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as { code?: unknown }).code === "ENOENT"
+    ) {
+      return;
+    }
+    throw error;
+  }
 }

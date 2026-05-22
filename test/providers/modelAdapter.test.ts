@@ -1,44 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import fs from "node:fs/promises";
-import path from "node:path";
 
 import {
   createAnthropicModelAdapter,
   createBasetenModelAdapter,
-  createCodexCliModelAdapter,
+  createCodexAppServerModelAdapter,
   createGoogleModelAdapter,
   createNvidiaModelAdapter,
   createOpenAiModelAdapter,
   createTogetherModelAdapter,
 } from "../../src/providers/modelAdapter";
-import { makeConfig, makeTmpDirs, withEnv, writeJson } from "./helpers";
-
-async function writeCodexAuth(
-  home: string,
-  overrides: Partial<{
-    accessToken: string;
-    accountId: string;
-    isFedrampAccount: boolean;
-    expiresAtMs: number;
-  }> = {},
-) {
-  const authFile = path.join(home, ".cowork", "auth", "codex-cli", "auth.json");
-  await writeJson(authFile, {
-    version: 1,
-    auth_mode: "chatgpt",
-    issuer: "https://auth.openai.com",
-    client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
-    tokens: {
-      access_token: overrides.accessToken ?? "codex-token",
-      refresh_token: "refresh-token",
-      expires_at: overrides.expiresAtMs ?? Date.now() + 3_600_000,
-    },
-    account: {
-      account_id: overrides.accountId ?? "acct-123",
-      ...(overrides.isFedrampAccount ? { chatgpt_account_is_fedramp: true } : {}),
-    },
-  });
-}
+import { makeConfig, withEnv } from "./helpers";
 
 describe("provider model adapters", () => {
   test("OpenAI adapter prefers saved key over env", async () => {
@@ -143,34 +114,11 @@ describe("provider model adapters", () => {
     });
   });
 
-  test("Codex adapter honors saved key before disk material", async () => {
+  test("Codex app-server adapter ignores Cowork-managed auth headers", async () => {
     const config = makeConfig({ provider: "codex-cli" });
-    const adapter = createCodexCliModelAdapter(config, "gpt-5.2", "sk-abc");
+    const adapter = createCodexAppServerModelAdapter(config, "gpt-5.2", "sk-abc");
     const headers = await adapter.config.headers();
-    expect(headers.authorization).toBe("Bearer sk-abc");
-  });
-
-  test("Codex adapter falls back to Cowork auth and propagates ChatGPT account headers", async () => {
-    const { home, tmp } = await makeTmpDirs();
-    try {
-      await withEnv("HOME", home, async () => {
-        await writeCodexAuth(home, { isFedrampAccount: true });
-        const workspaceDir = path.join(tmp, "workspace");
-        await fs.mkdir(workspaceDir, { recursive: true });
-        const config = makeConfig({
-          provider: "codex-cli",
-          userCoworkDir: path.join(home, ".cowork"),
-        });
-
-        const adapter = createCodexCliModelAdapter(config, "gpt-5.2");
-        const headers = await adapter.config.headers();
-
-        expect(headers.authorization).toBe("Bearer codex-token");
-        expect(headers["ChatGPT-Account-ID"]).toBe("acct-123");
-        expect(headers["X-OpenAI-Fedramp"]).toBe("true");
-      });
-    } finally {
-      await fs.rm(tmp, { recursive: true, force: true });
-    }
+    expect(adapter.provider).toBe("codex-app-server");
+    expect(headers).toEqual({});
   });
 });

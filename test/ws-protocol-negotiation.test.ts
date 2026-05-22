@@ -73,4 +73,17 @@ describe("WebSocket protocol negotiation", () => {
       error: expect.stringContaining("Unsupported WebSocket subprotocol: cowork.example.v1"),
     });
   });
+
+  test("rejects retired query parameter protocol negotiation", () => {
+    expect(
+      resolveWsProtocol({
+        offeredSubprotocols: [],
+        requestedProtocol: "jsonrpc",
+      }),
+    ).toEqual({
+      ok: false,
+      error:
+        "The ?protocol= WebSocket query parameter is no longer supported. Use the cowork.jsonrpc.v1 subprotocol or omit protocol negotiation.",
+    });
+  });
 });

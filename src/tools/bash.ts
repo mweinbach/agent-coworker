@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import path from "node:path";
 import { z } from "zod";
 
 import { getShellCommandPolicyViolation } from "../server/agents/commandPolicy";
@@ -30,16 +31,49 @@ type ExecResult = { stdout: string; stderr: string; exitCode: number; errorCode?
 type ExecRunner = (
   file: string,
   args: string[],
-  opts: { cwd: string; maxBuffer: number; signal?: AbortSignal; timeoutMs?: number },
+  opts: {
+    cwd: string;
+    maxBuffer: number;
+    signal?: AbortSignal;
+    timeoutMs?: number;
+    env?: Record<string, string | undefined>;
+  },
 ) => Promise<ExecResult>;
 
 const abortByNameSchema = z.object({ name: z.literal("AbortError") }).passthrough();
 const errorCodeSchema = z.object({ code: z.union([z.string(), z.number()]) }).passthrough();
 
+function posixShellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function powerShellSingleQuote(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+function dedupePathDirs(pathDirs: string[], platform: NodeJS.Platform): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const dir of pathDirs) {
+    if (!dir) continue;
+    const key = platform === "win32" ? dir.toLowerCase() : dir;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(dir);
+  }
+  return out;
+}
+
 function execFileAsync(
   file: string,
   args: string[],
-  opts: { cwd: string; maxBuffer: number; signal?: AbortSignal; timeoutMs?: number },
+  opts: {
+    cwd: string;
+    maxBuffer: number;
+    signal?: AbortSignal;
+    timeoutMs?: number;
+    env?: Record<string, string | undefined>;
+  },
 ): Promise<ExecResult> {
   return new Promise((resolve) => {
     let timedOut = false;
@@ -50,6 +84,7 @@ function execFileAsync(
         cwd: opts.cwd,
         maxBuffer: opts.maxBuffer,
         windowsHide: true,
+        ...(opts.env ? { env: opts.env } : {}),
         ...(opts.timeoutMs ? { timeout: opts.timeoutMs, killSignal: "SIGTERM" } : {}),
         ...(opts.signal ? { signal: opts.signal } : {}),
       },
@@ -108,6 +143,7 @@ async function runShellCommand(opts: {
   cwd: string;
   abortSignal?: AbortSignal;
   timeoutMs?: number;
+  env?: Record<string, string | undefined>;
 }): Promise<ExecResult> {
   return await runShellCommandWithExec({
     ...opts,
@@ -122,6 +158,7 @@ let runShellCommandOverrideForTests:
       cwd: string;
       abortSignal?: AbortSignal;
       timeoutMs?: number;
+      env?: Record<string, string | undefined>;
     }) => Promise<ExecResult>)
   | null = null;
 
@@ -144,12 +181,21 @@ function buildShellExecutionPlan(
     ];
   }
 
-  return [
+  const userShell = process.env.SHELL?.trim();
+  const plan: Array<{ file: string; args: string[] }> = [];
+
+  if (userShell) {
+    plan.push({ file: userShell, args: ["-lc", command] });
+  }
+
+  plan.push(
     { file: "/bin/bash", args: ["-lc", command] },
     { file: "/bin/sh", args: ["-lc", command] },
     { file: "bash", args: ["-lc", command] },
     { file: "sh", args: ["-lc", command] },
-  ];
+  );
+
+  return plan;
 }
 
 async function runShellCommandWithExec(opts: {
@@ -157,11 +203,70 @@ async function runShellCommandWithExec(opts: {
   cwd: string;
   abortSignal?: AbortSignal;
   timeoutMs?: number;
+  env?: Record<string, string | undefined>;
   platform: NodeJS.Platform;
   execRunner: ExecRunner;
 }): Promise<ExecResult> {
   const maxBuffer = 1024 * 1024 * 10;
-  const plan = buildShellExecutionPlan(opts.platform, opts.command);
+
+  let command = opts.command;
+  const env = opts.env || process.env;
+  const runtimePython = env.COWORK_CODEX_RUNTIME_PYTHON;
+  const runtimeNode = env.COWORK_CODEX_RUNTIME_NODE;
+  const managedSofficeShim = env.COWORK_SOFFICE || env.COWORK_MANAGED_SOFFICE_SHIM;
+  const managedSofficeShimDir =
+    env.COWORK_MANAGED_SOFFICE_SHIM_DIR ||
+    (managedSofficeShim ? path.dirname(managedSofficeShim) : undefined);
+
+  const pathDirs: string[] = [];
+  if (managedSofficeShimDir) {
+    pathDirs.push(managedSofficeShimDir);
+  }
+  if (runtimeNode) {
+    pathDirs.push(path.dirname(runtimeNode));
+  }
+  if (runtimePython) {
+    const pythonDir = path.dirname(runtimePython);
+    pathDirs.push(pythonDir);
+    if (opts.platform === "win32") {
+      pathDirs.push(path.join(pythonDir, "Scripts"));
+    }
+  }
+
+  const uniquePathDirs = dedupePathDirs(pathDirs, opts.platform);
+  const envExports: Record<string, string> = {};
+  if (managedSofficeShim) {
+    envExports.COWORK_SOFFICE = managedSofficeShim;
+  }
+  if (managedSofficeShimDir) {
+    envExports.COWORK_MANAGED_SOFFICE_SHIM_DIR = managedSofficeShimDir;
+  }
+
+  if (uniquePathDirs.length > 0 || Object.keys(envExports).length > 0) {
+    if (opts.platform === "win32") {
+      const statements: string[] = [];
+      if (uniquePathDirs.length > 0) {
+        statements.push(
+          `$env:PATH = ${powerShellSingleQuote(uniquePathDirs.join(";"))} + ';' + $env:PATH`,
+        );
+      }
+      for (const [key, value] of Object.entries(envExports)) {
+        statements.push(`$env:${key} = ${powerShellSingleQuote(value)}`);
+      }
+      command = `${statements.join("; ")}; ${command}`;
+    } else {
+      const statements: string[] = [];
+      if (uniquePathDirs.length > 0) {
+        statements.push(`export PATH=${posixShellQuote(uniquePathDirs.join(":"))}:$PATH`);
+      }
+      for (const [key, value] of Object.entries(envExports)) {
+        statements.push(`export ${key}=${posixShellQuote(value)}`);
+      }
+      command = `${statements.join(" && ")} && ${command}`;
+    }
+  }
+
+  const plan = buildShellExecutionPlan(opts.platform, command);
 
   for (const candidate of plan) {
     const result = await opts.execRunner(candidate.file, candidate.args, {
@@ -169,6 +274,7 @@ async function runShellCommandWithExec(opts: {
       maxBuffer,
       signal: opts.abortSignal,
       timeoutMs: opts.timeoutMs,
+      env: opts.env,
     });
     if (result.errorCode !== "ENOENT") return result;
   }
@@ -254,26 +360,29 @@ export function createBashTool(ctx: ToolContext) {
         return res;
       }
 
-      return await new Promise((resolve) => {
+      return await new Promise((resolve, reject) => {
         void (runShellCommandOverrideForTests ?? runShellCommand)({
           command,
           cwd: ctx.config.workingDirectory,
           abortSignal: ctx.abortSignal,
           timeoutMs,
-        }).then(({ stdout, stderr, exitCode }) => {
-          const res = {
-            stdout: String(stdout ?? ""),
-            stderr: String(stderr ?? ""),
-            exitCode,
-          };
-          const redactedRes = {
-            stdout: redactSecrets(res.stdout),
-            stderr: redactSecrets(res.stderr),
-            exitCode: res.exitCode,
-          };
-          ctx.log(`tool< bash ${JSON.stringify(redactedRes)}`);
-          resolve(res);
-        });
+          env: ctx.toolEnv,
+        })
+          .then(({ stdout, stderr, exitCode }) => {
+            const res = {
+              stdout: String(stdout ?? ""),
+              stderr: String(stderr ?? ""),
+              exitCode,
+            };
+            const redactedRes = {
+              stdout: redactSecrets(res.stdout),
+              stderr: redactSecrets(res.stderr),
+              exitCode: res.exitCode,
+            };
+            ctx.log(`tool< bash ${JSON.stringify(redactedRes)}`);
+            resolve(res);
+          })
+          .catch(reject);
       });
     },
   });
@@ -289,6 +398,7 @@ export const __internal = {
       cwd: string;
       abortSignal?: AbortSignal;
       timeoutMs?: number;
+      env?: Record<string, string | undefined>;
     }) => Promise<ExecResult>,
   ) {
     runShellCommandOverrideForTests = runner;

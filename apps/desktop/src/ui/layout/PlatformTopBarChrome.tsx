@@ -3,14 +3,15 @@ import { PanelLeftIcon, SquarePenIcon } from "lucide-react";
 import { Button } from "../../components/ui/button";
 import type { DesktopPlatformInfo } from "../../lib/desktopPlatform";
 import { SidebarCollapseControl } from "./SidebarCollapseControl";
-import { useWindowDragHandle } from "./useWindowDragHandle";
 
 /**
  * Platform-specific top bar chrome (left side controls + native titlebar reserves).
  *
  * Renders different control placements per platform:
  * - macOS: SidebarCollapseControl in traffic-light area
- * - Windows: Left rail with New Chat + expand when collapsed (sidebar owns controls when expanded)
+ * - Windows: Left rail owns the collapse/expand button in both states, with
+ *   New Chat added beside it only when collapsed so the collapse icon stays
+ *   mounted through sidebar width animations
  * - Linux/other: Inline sidebar toggle (+ New Chat when collapsed)
  *
  * The shared top bar content (title, usage, right toolbar) is rendered by AppTopBar.
@@ -44,15 +45,14 @@ export function PlatformTopBarChrome({
   }
 
   if (placement === "left-rail") {
-    // Windows: left rail only shows when sidebar is collapsed.
-    // When expanded, the sidebar titleband owns the New Chat + collapse controls.
-    if (!sidebarCollapsed) {
-      return null;
-    }
+    // Windows: keep the sidebar toggle in the topbar rail for both expanded
+    // and collapsed states so the icon does not unmount/remount during the
+    // sidebar width animation. New Chat appears next to it only when collapsed.
     return (
-      <Win32CollapsedLeftRail
+      <Win32LeftRail
         onNewChat={onNewChat}
         onToggleSidebar={onToggleSidebar}
+        sidebarCollapsed={sidebarCollapsed}
         sidebarLabel={sidebarLabel}
       />
     );
@@ -87,31 +87,20 @@ export function PlatformTopBarChrome({
   );
 }
 
-function Win32CollapsedLeftRail({
+function Win32LeftRail({
   onNewChat,
   onToggleSidebar,
+  sidebarCollapsed,
   sidebarLabel,
 }: {
   onNewChat: () => void;
   onToggleSidebar: () => void;
+  sidebarCollapsed: boolean;
   sidebarLabel: string;
 }) {
-  const dragHandle = useWindowDragHandle<HTMLButtonElement>(true);
   return (
     <div className="app-topbar__win32-left-rail absolute inset-y-0 left-0">
-      <div className="app-topbar__win32-left-drag-zone" aria-hidden="true" />
       <div className="app-topbar__sidebar-strip app-topbar__win32-left-strip app-topbar__toolbar-layer app-topbar__controls absolute inset-0 flex min-w-0 items-center gap-1 px-1.5">
-        <Button
-          size="icon-sm"
-          variant="ghost"
-          onClick={onNewChat}
-          title="New Chat"
-          aria-label="New Chat"
-          className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
-          {...dragHandle}
-        >
-          <SquarePenIcon className="h-4 w-4" />
-        </Button>
         <Button
           size="icon-sm"
           variant="ghost"
@@ -119,10 +108,21 @@ function Win32CollapsedLeftRail({
           title={sidebarLabel}
           aria-label={sidebarLabel}
           className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
-          {...dragHandle}
         >
           <PanelLeftIcon className="h-4 w-4" />
         </Button>
+        {sidebarCollapsed ? (
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            onClick={onNewChat}
+            title="New Chat"
+            aria-label="New Chat"
+            className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
+          >
+            <SquarePenIcon className="h-4 w-4" />
+          </Button>
+        ) : null}
       </div>
     </div>
   );

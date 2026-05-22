@@ -1,6 +1,8 @@
 {
   "platforms": ["apple", "android"],
   "apple": {
+    "podspecPath": "CoworkPinnedHttps.podspec",
+    "swiftModuleName": "CoworkPinnedHttps",
     "modules": ["CoworkPinnedHttpsModule"]
   },
   "android": {

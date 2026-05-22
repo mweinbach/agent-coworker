@@ -214,7 +214,7 @@ function createHttpJsonRpcConnection(runtime: AgentServerRuntime): H3JsonRpcConn
   const connection: H3Connection = {
     data: {
       connectionId: crypto.randomUUID(),
-      protocolMode: "jsonrpc",
+      protocolMode: "h3",
       selectedSubprotocol: "cowork.jsonrpc.v1",
     },
     send(message: string) {

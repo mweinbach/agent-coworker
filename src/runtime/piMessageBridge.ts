@@ -49,7 +49,15 @@ function safeJsonStringify(value: unknown): string {
 
 type PiToolResultTextContent = { type: "text"; text: string };
 type PiToolResultImageContent = { type: "image"; data: string; mimeType: string };
-export type PiToolResultContentPart = PiToolResultTextContent | PiToolResultImageContent;
+type PiToolResultAudioContent = { type: "audio"; data: string; mimeType: string };
+type PiToolResultVideoContent = { type: "video"; data: string; mimeType: string };
+type PiToolResultDocumentContent = { type: "document"; data: string; mimeType: string };
+export type PiToolResultContentPart =
+  | PiToolResultTextContent
+  | PiToolResultImageContent
+  | PiToolResultAudioContent
+  | PiToolResultVideoContent
+  | PiToolResultDocumentContent;
 
 function contentTextParts(content: unknown): string[] {
   if (typeof content === "string") return content.trim() ? [content] : [];
@@ -158,6 +166,13 @@ function normalizeToolResultContentPart(part: unknown): PiToolResultContentPart 
     const mimeType = asNonEmptyString(record.mimeType);
     if (!data || !mimeType) return null;
     return { type: "image", data, mimeType };
+  }
+
+  if (record.type === "audio" || record.type === "video" || record.type === "document") {
+    const data = asNonEmptyString(record.data);
+    const mimeType = asNonEmptyString(record.mimeType);
+    if (!data || !mimeType) return null;
+    return { type: record.type, data, mimeType };
   }
 
   return null;
@@ -343,7 +358,7 @@ export function modelMessagesToPiMessages(
       out.push({
         role: "assistant",
         content: content as any,
-        api: provider === "codex-cli" ? "openai-codex-responses" : `${provider}-responses`,
+        api: `${provider}-responses`,
         provider: provider,
         model: "unknown",
         usage: {
@@ -485,11 +500,19 @@ export function normalizePiUsage(usage: unknown): RuntimeUsage | undefined {
 
   const cachedPromptTokens =
     asFiniteNumber(record.cachedPromptTokens) ?? asFiniteNumber(record.cacheRead) ?? 0;
+  const cacheWritePromptTokens =
+    asFiniteNumber(record.cacheWritePromptTokens) ?? asFiniteNumber(record.cacheWrite) ?? 0;
   const costRecord = asRecord(record.cost);
   const promptTokens =
-    asFiniteNumber(record.promptTokens) ?? (asFiniteNumber(record.input) ?? 0) + cachedPromptTokens;
+    asFiniteNumber(record.promptTokens) ??
+    (asFiniteNumber(record.input) ?? 0) + cachedPromptTokens + cacheWritePromptTokens;
   const completionTokens =
     asFiniteNumber(record.completionTokens) ?? asFiniteNumber(record.output) ?? 0;
+  const reasoningOutputTokens =
+    asFiniteNumber(record.reasoningOutputTokens) ??
+    asFiniteNumber(record.reasoning_output_tokens) ??
+    asFiniteNumber(record.reasoningTokens) ??
+    asFiniteNumber(record.reasoning_tokens);
   const totalTokens = asFiniteNumber(record.totalTokens) ?? promptTokens + completionTokens;
   const estimatedCostUsd =
     asFiniteNumber(record.estimatedCostUsd) ?? asFiniteNumber(costRecord?.total);
@@ -499,6 +522,8 @@ export function normalizePiUsage(usage: unknown): RuntimeUsage | undefined {
     completionTokens === 0 &&
     totalTokens === 0 &&
     cachedPromptTokens === 0 &&
+    cacheWritePromptTokens === 0 &&
+    (reasoningOutputTokens ?? 0) === 0 &&
     estimatedCostUsd === undefined
   ) {
     return undefined;
@@ -509,6 +534,8 @@ export function normalizePiUsage(usage: unknown): RuntimeUsage | undefined {
     completionTokens,
     totalTokens,
     ...(cachedPromptTokens > 0 ? { cachedPromptTokens } : {}),
+    ...(cacheWritePromptTokens > 0 ? { cacheWritePromptTokens } : {}),
+    ...(reasoningOutputTokens !== undefined ? { reasoningOutputTokens } : {}),
     ...(estimatedCostUsd !== undefined ? { estimatedCostUsd } : {}),
   };
 }
@@ -522,6 +549,10 @@ export function mergePiUsage(
   if (!into) return normalized;
 
   const cachedPromptTokens = (into.cachedPromptTokens ?? 0) + (normalized.cachedPromptTokens ?? 0);
+  const cacheWritePromptTokens =
+    (into.cacheWritePromptTokens ?? 0) + (normalized.cacheWritePromptTokens ?? 0);
+  const reasoningOutputTokens =
+    (into.reasoningOutputTokens ?? 0) + (normalized.reasoningOutputTokens ?? 0);
   const estimatedCostUsd =
     into.estimatedCostUsd !== undefined || normalized.estimatedCostUsd !== undefined
       ? (into.estimatedCostUsd ?? 0) + (normalized.estimatedCostUsd ?? 0)
@@ -532,6 +563,8 @@ export function mergePiUsage(
     completionTokens: into.completionTokens + normalized.completionTokens,
     totalTokens: into.totalTokens + normalized.totalTokens,
     ...(cachedPromptTokens > 0 ? { cachedPromptTokens } : {}),
+    ...(cacheWritePromptTokens > 0 ? { cacheWritePromptTokens } : {}),
+    ...(reasoningOutputTokens > 0 ? { reasoningOutputTokens } : {}),
     ...(estimatedCostUsd !== undefined ? { estimatedCostUsd } : {}),
   };
 }

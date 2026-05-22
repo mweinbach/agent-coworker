@@ -12,6 +12,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 
 import { useAppStore } from "../../app/store";
 import type { ExplorerEntry } from "../../app/types";
+import { isOneOffChatWorkspace } from "../../app/types";
 import { Button } from "../../components/ui/button";
 import {
   confirmAction,
@@ -328,9 +329,9 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
   workspaceId,
   className,
 }: WorkspaceFileExplorerProps) {
-  const workspacePath = useAppStore(
-    (s) => s.workspaces.find((w) => w.id === workspaceId)?.path ?? null,
-  );
+  const workspace = useAppStore((s) => s.workspaces.find((w) => w.id === workspaceId) ?? null);
+  const workspacePath = workspace?.path ?? null;
+  const isOneOffChat = isOneOffChatWorkspace(workspace);
   const explorer = useAppStore((s) => s.workspaceExplorerById[workspaceId]);
   const refreshSignal = useAppStore((s) => s.workspaceExplorerRefreshById[workspaceId] ?? 0);
   const showHiddenFiles = useAppStore((s) => s.showHiddenFiles);
@@ -865,21 +866,37 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
     <div className={cn("flex h-full flex-col overflow-hidden", className)}>
       <div className="flex items-center justify-between px-2.5 pb-1 pt-2">
         <div className="flex items-center gap-2 min-w-0">
-          <div className="text-[10px] font-semibold tracking-[0.16em] text-muted-foreground/80 shrink-0 uppercase">
-            Files
-          </div>
-          <div className="text-muted-foreground/35 text-[11px] shrink-0 font-light">/</div>
-          <Button
-            type="button"
-            variant="link"
-            size="sm"
-            className="h-auto min-w-0 justify-start p-0 text-[11.5px] font-semibold text-foreground/88 no-underline hover:text-foreground hover:underline"
-            data-file-explorer-control="true"
-            onClick={() => void openFile(workspaceId, rootPath, false).catch(() => {})}
-            title="Open in native explorer"
-          >
-            {rootLabel}
-          </Button>
+          {isOneOffChat ? (
+            <Button
+              type="button"
+              variant="link"
+              size="sm"
+              className="h-auto min-w-0 justify-start p-0 text-[10px] font-semibold tracking-[0.16em] uppercase text-muted-foreground/80 no-underline hover:text-foreground hover:underline"
+              data-file-explorer-control="true"
+              onClick={() => void openFile(workspaceId, rootPath, false).catch(() => {})}
+              title="Open in native explorer"
+            >
+              Files
+            </Button>
+          ) : (
+            <>
+              <div className="text-[10px] font-semibold tracking-[0.16em] text-muted-foreground/80 shrink-0 uppercase">
+                Files
+              </div>
+              <div className="text-muted-foreground/35 text-[11px] shrink-0 font-light">/</div>
+              <Button
+                type="button"
+                variant="link"
+                size="sm"
+                className="h-auto min-w-0 justify-start p-0 text-[11.5px] font-semibold text-foreground/88 no-underline hover:text-foreground hover:underline"
+                data-file-explorer-control="true"
+                onClick={() => void openFile(workspaceId, rootPath, false).catch(() => {})}
+                title="Open in native explorer"
+              >
+                {rootLabel}
+              </Button>
+            </>
+          )}
         </div>
       </div>
 

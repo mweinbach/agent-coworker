@@ -1,3 +1,7 @@
+import {
+  getCodexAppServerInstallStatus,
+  updateManagedCodexAppServer,
+} from "../../../providers/codexAppServerResolver";
 import type { AgentConfig } from "../../../types";
 import type { SessionEvent } from "../../protocol";
 import { JSONRPC_ERROR_CODES } from "../protocol";
@@ -60,6 +64,27 @@ export function createProviderRouteHandlers(
         return;
       }
       context.jsonrpc.sendResult(ws, message.id, { event: outcome });
+    },
+
+    "cowork/provider/codexAppServer/status": async (ws, message) => {
+      const params = toJsonRpcParams(message.params);
+      const status = await getCodexAppServerInstallStatus({
+        checkLatest: params.checkLatest === true,
+      });
+      context.jsonrpc.sendResult(ws, message.id, { status });
+    },
+
+    "cowork/provider/codexAppServer/update": async (ws, message) => {
+      const params = toJsonRpcParams(message.params);
+      const version =
+        typeof params.version === "string" && params.version.trim()
+          ? params.version.trim()
+          : undefined;
+      const status = await updateManagedCodexAppServer({
+        ...(version ? { version } : {}),
+        force: params.force === true,
+      });
+      context.jsonrpc.sendResult(ws, message.id, { status });
     },
 
     "cowork/provider/auth/authorize": async (ws, message) => {

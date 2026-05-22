@@ -186,7 +186,7 @@ describe("desktop app top bar", () => {
     }
   });
 
-  test("hides topbar sidebar strip on win32 when the sidebar is expanded", async () => {
+  test("keeps the win32 topbar sidebar strip mounted when the sidebar is expanded", async () => {
     const harness = setupJsdom();
 
     try {
@@ -215,8 +215,11 @@ describe("desktop app top bar", () => {
       });
 
       expect(container.querySelector(".app-sidebar-collapse-control")).toBeNull();
-      expect(container.querySelector(".app-topbar__sidebar-strip")).toBeNull();
+      expect(container.querySelector(".app-topbar__win32-left-rail")).not.toBeNull();
+      expect(container.querySelector(".app-topbar__sidebar-strip")).not.toBeNull();
       expect(container.querySelector(".app-topbar__inline-sidebar-toggle")).toBeNull();
+      expect(container.querySelector('button[aria-label="New Chat"]')).toBeNull();
+      expect(container.querySelector('button[aria-label="Hide sidebar"]')).not.toBeNull();
 
       await act(async () => {
         root.unmount();
@@ -226,7 +229,7 @@ describe("desktop app top bar", () => {
     }
   });
 
-  test("shows new chat + expand strip on win32 when sidebar is collapsed", async () => {
+  test("shows expand + new chat strip on win32 when sidebar is collapsed", async () => {
     const harness = setupJsdom();
 
     try {
@@ -264,8 +267,8 @@ describe("desktop app top bar", () => {
       expect(strip).not.toBeNull();
       expect(strip?.className).toContain("app-topbar__toolbar-layer");
       expect(buttons).toHaveLength(2);
-      expect(buttons[0]?.getAttribute("aria-label")).toBe("New Chat");
-      expect(buttons[1]?.getAttribute("aria-label")).toBe("Show sidebar");
+      expect(buttons[0]?.getAttribute("aria-label")).toBe("Show sidebar");
+      expect(buttons[1]?.getAttribute("aria-label")).toBe("New Chat");
       expect(titleShell?.getAttribute("style")).toContain("left: 84px");
 
       await act(async () => {

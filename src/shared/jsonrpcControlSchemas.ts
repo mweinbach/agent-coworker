@@ -91,6 +91,8 @@ const providerOptionsGoogleSchema = z
       })
       .strict()
       .optional(),
+    responseFormat: z.unknown().optional(),
+    responseMimeType: z.string().trim().min(1).optional(),
   })
   .strict();
 
@@ -300,6 +302,62 @@ export const providerStatusEventSchema = z
     providers: z.array(providerStatusEntrySchema),
   })
   .passthrough();
+
+export const codexAppServerSourceSchema = z.enum(["override", "system", "managed", "missing"]);
+
+export const codexAppServerInstallStatusSchema = z
+  .object({
+    available: z.boolean(),
+    source: codexAppServerSourceSchema,
+    command: z.string().optional(),
+    args: z.array(z.string()).optional(),
+    version: z.string().optional(),
+    latestVersion: z.string().optional(),
+    updateAvailable: z.boolean().optional(),
+    managedPath: z.string().optional(),
+    message: z.string(),
+  })
+  .passthrough();
+
+export const codexAppServerInstallStatusEnvelopeSchema = z
+  .object({
+    status: codexAppServerInstallStatusSchema,
+  })
+  .strict();
+
+export const libreOfficeRuntimeCheckRequestSchema = cwdRequestSchema
+  .extend({
+    smoke: z.boolean().optional(),
+  })
+  .passthrough();
+
+export const libreOfficeRuntimeDiagnosticSchema = z
+  .object({
+    status: z.enum(["available", "unavailable", "disabled"]),
+    checkedAt: z.string(),
+    message: z.string(),
+    version: z.string().optional(),
+    shimPath: z.string().optional(),
+    resolvedPath: z.string().optional(),
+    rootDir: z.string().optional(),
+    smoke: z
+      .object({
+        ok: z.boolean(),
+        durationMs: z.number().nonnegative(),
+        outputPath: z.string().optional(),
+        sizeBytes: z.number().nonnegative().optional(),
+        error: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
+export const libreOfficeRuntimeDiagnosticEnvelopeSchema = z
+  .object({
+    status: libreOfficeRuntimeDiagnosticSchema,
+  })
+  .strict();
 
 export const providerAuthChallengeSchema = z
   .object({
@@ -999,6 +1057,21 @@ export const providerStatusRefreshRequestSchema = z
   })
   .strict();
 
+export const providerCodexAppServerStatusRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+    checkLatest: z.boolean().optional(),
+  })
+  .strict();
+
+export const providerCodexAppServerUpdateRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+    version: z.string().optional(),
+    force: z.boolean().optional(),
+  })
+  .strict();
+
 export const providerAuthAuthorizeRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
@@ -1322,6 +1395,9 @@ export const jsonRpcControlRequestSchemas = {
   "cowork/provider/catalog/read": providerCatalogReadRequestSchema,
   "cowork/provider/authMethods/read": providerAuthMethodsReadRequestSchema,
   "cowork/provider/status/refresh": providerStatusRefreshRequestSchema,
+  "cowork/provider/codexAppServer/status": providerCodexAppServerStatusRequestSchema,
+  "cowork/provider/codexAppServer/update": providerCodexAppServerUpdateRequestSchema,
+  "cowork/runtime/libreoffice/check": libreOfficeRuntimeCheckRequestSchema,
   "cowork/provider/auth/authorize": providerAuthAuthorizeRequestSchema,
   "cowork/provider/auth/logout": providerAuthLogoutRequestSchema,
   "cowork/provider/auth/callback": providerAuthCallbackRequestSchema,
@@ -1382,6 +1458,9 @@ export const jsonRpcControlResultSchemas = {
   "cowork/provider/catalog/read": sessionEventEnvelope(providerCatalogEventSchema),
   "cowork/provider/authMethods/read": sessionEventEnvelope(providerAuthMethodsEventSchema),
   "cowork/provider/status/refresh": sessionEventEnvelope(providerStatusEventSchema),
+  "cowork/provider/codexAppServer/status": codexAppServerInstallStatusEnvelopeSchema,
+  "cowork/provider/codexAppServer/update": codexAppServerInstallStatusEnvelopeSchema,
+  "cowork/runtime/libreoffice/check": libreOfficeRuntimeDiagnosticEnvelopeSchema,
   "cowork/provider/auth/authorize": sessionEventEnvelope(
     z.union([providerAuthChallengeEventSchema, providerAuthResultEventSchema]),
   ),
@@ -1456,6 +1535,8 @@ export type JsonRpcControlResult<M extends JsonRpcControlResultMethod> = z.outpu
 
 export type ProviderCatalogEntry = z.infer<typeof providerCatalogEntrySchema>;
 export type ProviderAuthMethod = z.infer<typeof providerAuthMethodSchema>;
+export type CodexAppServerInstallStatus = z.infer<typeof codexAppServerInstallStatusSchema>;
+export type LibreOfficeRuntimeDiagnostic = z.infer<typeof libreOfficeRuntimeDiagnosticSchema>;
 export type ProviderStatusEntry = z.infer<typeof providerStatusEntrySchema>;
 export type McpServerEntry = z.infer<typeof mcpServersEventSchema.shape.servers.element>;
 export type McpServerValidation = z.infer<typeof mcpValidationEventSchema>;

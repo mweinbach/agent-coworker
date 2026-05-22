@@ -2,6 +2,7 @@ import { cjk } from "@streamdown/cjk";
 import { code } from "@streamdown/code";
 import { math } from "@streamdown/math";
 import { mermaid } from "@streamdown/mermaid";
+import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
 import type { ComponentProps, HTMLAttributes, ReactNode } from "react";
 import { Children, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -49,7 +50,7 @@ export function MessageContent({ className, ...props }: MessageContentProps) {
   return (
     <div
       className={cn(
-        "select-text min-w-0 text-sm leading-6",
+        "select-text min-w-0 text-sm leading-6 break-words",
         "group-[.is-user]:rounded-2xl group-[.is-user]:border group-[.is-user]:border-primary/22 group-[.is-user]:bg-primary/12 group-[.is-user]:px-3 group-[.is-user]:py-2 group-[.is-user]:text-foreground group-[.is-user]:leading-relaxed",
         "group-[.is-assistant]:text-foreground",
         className,
@@ -298,30 +299,6 @@ function computeCitationPopupPosition(
   return { left: preferredLeft, top };
 }
 
-function CitationArrow({ direction }: { direction: "left" | "right" }) {
-  return (
-    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="text-foreground">
-      {direction === "left" ? (
-        <path
-          d="M7.5 2.5L4 6l3.5 3.5"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      ) : (
-        <path
-          d="M4.5 2.5L8 6l-3.5 3.5"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      )}
-    </svg>
-  );
-}
-
 function DesktopCitationChip({
   children,
   className,
@@ -375,6 +352,10 @@ function DesktopCitationChip({
     return text.length > 0 ? text : "Source";
   }, [children]);
   const currentSource = sources[Math.min(activeIndex, Math.max(0, sources.length - 1))] ?? null;
+  const currentSourceDisplay = useMemo(
+    () => (currentSource ? describeCitationSource(currentSource) : null),
+    [currentSource],
+  );
 
   useEffect(() => {
     if (typeof window === "undefined" || typeof window.Image !== "function") {
@@ -555,13 +536,13 @@ function DesktopCitationChip({
       >
         {label}
       </Button>
-      {open && currentSource && typeof document !== "undefined"
+      {open && currentSource && currentSourceDisplay && typeof document !== "undefined"
         ? createPortal(
             <div
               ref={cardRef}
               role="dialog"
               aria-label="Citation sources"
-              className="app-surface-card app-shadow-surface-elevated fixed z-[70] w-[min(16rem,calc(100vw-2rem))] overflow-hidden rounded-lg border border-border/32 text-card-foreground"
+              className="app-surface-card app-shadow-surface-elevated fixed z-[70] w-[min(23rem,calc(100vw-2rem))] overflow-hidden rounded-lg border border-border/32 text-card-foreground"
               style={
                 popupPosition
                   ? { left: popupPosition.left, top: popupPosition.top }
@@ -582,7 +563,7 @@ function DesktopCitationChip({
                     setActiveIndex((index) => (index - 1 + sources.length) % sources.length)
                   }
                 >
-                  <CitationArrow direction="left" />
+                  <ChevronLeftIcon data-icon="inline-start" />
                 </Button>
                 <Button
                   type="button"
@@ -593,7 +574,7 @@ function DesktopCitationChip({
                   disabled={sources.length <= 1}
                   onClick={() => setActiveIndex((index) => (index + 1) % sources.length)}
                 >
-                  <CitationArrow direction="right" />
+                  <ChevronRightIcon data-icon="inline-start" />
                 </Button>
                 <div className="ml-auto pr-0.5 text-[11px] font-medium tabular-nums text-muted-foreground">
                   {activeIndex + 1}/{sources.length}
@@ -616,14 +597,20 @@ function DesktopCitationChip({
                   }
                 }}
               >
-                <div className="flex items-center gap-2 px-2 py-1.5">
-                  <CitationFavicon source={currentSource} className="size-4 shrink-0 text-[9px]" />
+                <div className="flex items-start gap-2.5 px-3 py-2.5">
+                  <CitationFavicon
+                    source={currentSource}
+                    className="mt-0.5 size-5 shrink-0 text-[10px]"
+                  />
                   <div ref={citationTitleContainerRef} className="min-w-0 flex-1 overflow-hidden">
                     <p
                       ref={citationTitleTextRef}
-                      className="inline-block whitespace-nowrap text-[0.9rem] font-semibold leading-snug tracking-tight text-foreground will-change-transform"
+                      className="block overflow-hidden text-[0.92rem] font-semibold leading-snug text-foreground [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]"
                     >
-                      {citationSourceTitle(currentSource)}
+                      {currentSourceDisplay.titleLabel}
+                    </p>
+                    <p className="mt-1 truncate text-[0.72rem] font-medium leading-snug text-muted-foreground">
+                      {currentSourceDisplay.displayUrl ?? currentSourceDisplay.hostLabel}
                     </p>
                   </div>
                 </div>
@@ -912,8 +899,35 @@ export function rewriteBareDesktopFilePathsInTree(node: HastNode): void {
   node.children = nextChildren;
 }
 
-export function rewriteDesktopFileLinksInTree(node: HastNode): void {
+const URL_SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
+const RELATIVE_FILENAME_RE = /^[\w.\-+ ()%,&'!@$=~^]+\.[A-Za-z0-9]{1,12}$/;
+
+/** Resolve a markdown href that looks like a bare filename (no scheme, no slashes) against the active workspace path. */
+export function resolveRelativeFileHref(rawHref: string, basePath: string | null): string | null {
+  if (!basePath) return null;
+  if (!rawHref || URL_SCHEME_RE.test(rawHref)) return null;
+  if (rawHref.startsWith("/") || rawHref.startsWith("\\") || rawHref.startsWith("#")) {
+    return null;
+  }
+  // Strip a query/fragment so `Foo.docx?x=1` still resolves.
+  const cleaned = rawHref.replace(/[?#].*$/, "");
+  if (!RELATIVE_FILENAME_RE.test(cleaned)) {
+    return null;
+  }
+  const normalizedBase = basePath.replace(/\\/g, "/").replace(/\/+$/, "");
+  if (!normalizedBase) return null;
+  return desktopPathToFileUrl(`${normalizedBase}/${cleaned}`);
+}
+
+export function rewriteDesktopFileLinksInTree(
+  node: HastNode,
+  basePath: string | null = null,
+): void {
   if (typeof node.url === "string") {
+    const rebased = resolveRelativeFileHref(node.url, basePath);
+    if (rebased) {
+      node.url = rebased;
+    }
     const desktopPath = fileUrlToDesktopPath(node.url);
     if (desktopPath) {
       normalizeDesktopFileLinkLabel(node, desktopPath, node.url);
@@ -936,16 +950,21 @@ export function rewriteDesktopFileLinksInTree(node: HastNode): void {
     typeof node.properties?.href === "string"
   ) {
     const href = node.properties.href;
-    const desktopPath = fileUrlToDesktopPath(href);
+    const rebased = resolveRelativeFileHref(href, basePath);
+    if (rebased) {
+      node.properties.href = rebased;
+    }
+    const currentHref = node.properties.href as string;
+    const desktopPath = fileUrlToDesktopPath(currentHref);
     if (desktopPath) {
-      normalizeDesktopFileLinkLabel(node, desktopPath, href);
+      normalizeDesktopFileLinkLabel(node, desktopPath, currentHref);
     }
 
-    const rewrittenHref = encodeDesktopLocalFileHref(href);
+    const rewrittenHref = encodeDesktopLocalFileHref(currentHref);
     if (rewrittenHref) {
       node.properties.href = rewrittenHref;
     } else {
-      const rewrittenExternalHref = encodeDesktopExternalHref(href);
+      const rewrittenExternalHref = encodeDesktopExternalHref(currentHref);
       if (rewrittenExternalHref) {
         node.properties.href = rewrittenExternalHref;
       }
@@ -957,14 +976,15 @@ export function rewriteDesktopFileLinksInTree(node: HastNode): void {
   }
 
   for (const child of node.children) {
-    rewriteDesktopFileLinksInTree(child);
+    rewriteDesktopFileLinksInTree(child, basePath);
   }
 }
 
-export function remarkRewriteDesktopFileLinks() {
+export function remarkRewriteDesktopFileLinks(opts?: { basePath?: string | null }) {
+  const basePath = opts?.basePath ?? null;
   return (tree: HastNode) => {
     rewriteBareDesktopFilePathsInTree(tree);
-    rewriteDesktopFileLinksInTree(tree);
+    rewriteDesktopFileLinksInTree(tree, basePath);
   };
 }
 
@@ -1076,6 +1096,8 @@ export type MessageResponseProps = StreamdownProps & {
   citationSources?: readonly CitationSource[];
   citationAnnotations?: unknown;
   fallbackToSourcesFooter?: boolean;
+  /** Absolute workspace path used to resolve bare filename hrefs in markdown links. */
+  desktopBasePath?: string | null;
 };
 
 function normalizeMessageResponseChildren(
@@ -1124,9 +1146,13 @@ export const MessageResponse = memo(function MessageResponse({
   citationAnnotations,
   normalizeDisplayCitations = false,
   fallbackToSourcesFooter = true,
+  desktopBasePath = null,
   ...props
 }: MessageResponseProps) {
   const { children, components, plugins, rehypePlugins, remarkPlugins, ...restProps } = props;
+  const desktopFileLinksPlugin = useMemo<
+    [typeof remarkRewriteDesktopFileLinks, { basePath: string | null }]
+  >(() => [remarkRewriteDesktopFileLinks, { basePath: desktopBasePath }], [desktopBasePath]);
 
   return (
     <Streamdown
@@ -1154,8 +1180,8 @@ export const MessageResponse = memo(function MessageResponse({
       }}
       remarkPlugins={
         remarkPlugins
-          ? [...remarkPlugins, remarkRewriteDesktopFileLinks]
-          : [defaultRemarkPlugins.gfm, remarkRewriteDesktopFileLinks]
+          ? [...remarkPlugins, desktopFileLinksPlugin]
+          : [defaultRemarkPlugins.gfm, desktopFileLinksPlugin]
       }
       rehypePlugins={rehypePlugins ?? defaultDesktopRehypePlugins}
     />

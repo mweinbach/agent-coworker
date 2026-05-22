@@ -321,6 +321,7 @@ describe("CLI REPL restart failure recovery", () => {
         expect(FakeWebSocket.instances[0]).toBeDefined();
 
         await rlRef!.emitLine("/restart");
+        await new Promise<void>((resolve) => setImmediate(resolve));
         diagnostics.log("after /restart", {
           logs,
           harness: getHarnessSnapshot(),
@@ -330,6 +331,7 @@ describe("CLI REPL restart failure recovery", () => {
 
         const before = logs.length;
         await rlRef!.emitLine("hello");
+        await new Promise<void>((resolve) => setImmediate(resolve));
 
         diagnostics.log("after hello", {
           before,

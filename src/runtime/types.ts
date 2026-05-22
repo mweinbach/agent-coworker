@@ -1,8 +1,8 @@
 import type { ProviderContinuationState } from "../shared/providerContinuation";
-import type { AgentConfig, ModelMessage } from "../types";
+import type { AgentConfig, ModelMessage, TodoItem } from "../types";
 
 export type RuntimeModelRawEvent = {
-  format: "openai-responses-v1" | "google-interactions-v1";
+  format: "openai-responses-v1" | "google-interactions-v1" | "codex-app-server-v2";
   event: Record<string, unknown>;
 };
 
@@ -11,7 +11,16 @@ export type RuntimeUsage = {
   completionTokens: number;
   totalTokens: number;
   cachedPromptTokens?: number;
+  cacheWritePromptTokens?: number;
+  reasoningOutputTokens?: number;
   estimatedCostUsd?: number;
+};
+
+/** Error from a partial turn that may still include progress and token usage. */
+export type PartialTurnError = Error & {
+  usage?: RuntimeUsage;
+  responseMessages?: ModelMessage[];
+  providerState?: ProviderContinuationState;
 };
 
 export type RuntimeToolDefinition = {
@@ -34,6 +43,16 @@ export type RuntimePrepareStep = (step: {
   messages: ModelMessage[];
 }) => Promise<RuntimeStepOverride | undefined>;
 
+export type RuntimeSteerInput = {
+  text: string;
+  expectedTurnId: string;
+  content?: ModelMessage["content"];
+};
+
+export type RuntimeSteerHandler = (input: RuntimeSteerInput) => Promise<void>;
+
+export type RuntimeRegisterSteerHandler = (handler: RuntimeSteerHandler) => () => void;
+
 export interface RuntimeRunTurnParams {
   config: AgentConfig;
   system: string;
@@ -41,12 +60,20 @@ export interface RuntimeRunTurnParams {
   allMessages?: ModelMessage[];
   tools: RuntimeToolMap;
   maxSteps: number;
+  yolo?: boolean;
+  shellPolicy?: "full" | "no_project_write";
   providerOptions?: Record<string, any>;
   providerState?: ProviderContinuationState | null;
+  toolEnv?: Record<string, string | undefined>;
   abortSignal?: AbortSignal;
   includeRawChunks?: boolean;
+  clientMessageId?: string;
   telemetry?: unknown;
   prepareStep?: RuntimePrepareStep;
+  registerSteerHandler?: RuntimeRegisterSteerHandler;
+  askUser?: (question: string, options?: string[]) => Promise<string>;
+  approveCommand?: (command: string) => Promise<boolean>;
+  updateTodos?: (todos: TodoItem[]) => void;
   onModelStreamPart?: (part: unknown) => void | Promise<void>;
   onModelRawEvent?: (event: RuntimeModelRawEvent) => void | Promise<void>;
   onModelError?: (error: unknown) => void | Promise<void>;

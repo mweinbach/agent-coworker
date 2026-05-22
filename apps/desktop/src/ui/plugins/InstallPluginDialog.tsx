@@ -233,6 +233,7 @@ export function InstallPluginDialog({
               className="min-h-24 w-full"
               placeholder="https://github.com/example/codex-plugin-repo"
               value={sourceInput}
+              aria-label="Plugin source"
               onChange={(event) => {
                 setSourceInput(event.target.value);
                 setLastPreviewSourceInput(null);

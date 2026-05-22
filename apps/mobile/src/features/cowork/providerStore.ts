@@ -6,6 +6,7 @@ import type {
   ProviderStatusEntry,
 } from "../../../../../src/shared/jsonrpcControlSchemas";
 import { callParsedControlMethod } from "./controlRpc";
+import { saveToOfflineCache } from "./offlineCache";
 import { getActiveCoworkJsonRpcClient } from "./runtimeClient";
 import { useWorkspaceStore } from "./workspaceStore";
 
@@ -62,6 +63,7 @@ export const useProviderStore = create<ProviderStoreState>((set, get) => ({
     try {
       const result = await callParsedControlMethod(client, "cowork/provider/catalog/read", { cwd });
       set({ catalog: result.event.all, loading: false });
+      void saveToOfflineCache("providerCatalog", result.event.all);
     } catch (error) {
       set({ loading: false, error: error instanceof Error ? error.message : String(error) });
     }
@@ -74,6 +76,7 @@ export const useProviderStore = create<ProviderStoreState>((set, get) => ({
         cwd,
       });
       set({ authMethodsByProvider: result.event.methods });
+      void saveToOfflineCache("providerAuthMethods", result.event.methods);
     } catch (error) {
       set({ error: error instanceof Error ? error.message : String(error) });
     }
@@ -85,7 +88,9 @@ export const useProviderStore = create<ProviderStoreState>((set, get) => ({
       const result = await callParsedControlMethod(client, "cowork/provider/status/refresh", {
         cwd,
       });
-      set({ statusByProvider: toStatusByProvider(result.event.providers) });
+      const statusByProvider = toStatusByProvider(result.event.providers);
+      set({ statusByProvider });
+      void saveToOfflineCache("providerStatus", statusByProvider);
     } catch (error) {
       set({ error: error instanceof Error ? error.message : String(error) });
     }

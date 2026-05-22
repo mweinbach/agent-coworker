@@ -17,11 +17,13 @@ const DISPLAY_NAMES: Partial<Record<ProviderName, string>> = {
   baseten: "Baseten",
   together: "Together AI",
   fireworks: "Fireworks AI",
+  firepass: "Fire Pass",
   nvidia: "NVIDIA",
   lmstudio: "LM Studio",
   "opencode-go": "OpenCode Go",
   "opencode-zen": "OpenCode Zen",
   "codex-cli": "ChatGPT Subscription",
+  antigravity: "Antigravity",
 };
 
 export function displayProviderName(provider: ProviderName): string {

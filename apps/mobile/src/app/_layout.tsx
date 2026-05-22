@@ -4,6 +4,8 @@ import { Stack } from "expo-router";
 import { useColorScheme, View } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
+import "../global.css";
+
 import { MobileAppProvider } from "@/providers/MobileAppProvider";
 import { useAppTheme } from "@/theme/use-app-theme";
 

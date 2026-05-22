@@ -236,17 +236,19 @@ describe("pi message bridge", () => {
       normalizePiUsage({
         input: 80,
         output: 20,
-        totalTokens: 130,
+        totalTokens: 140,
         cacheRead: 30,
+        cacheWrite: 10,
         cost: {
           total: 0.00123,
         },
       }),
     ).toEqual({
-      promptTokens: 110,
+      promptTokens: 120,
       completionTokens: 20,
-      totalTokens: 130,
+      totalTokens: 140,
       cachedPromptTokens: 30,
+      cacheWritePromptTokens: 10,
       estimatedCostUsd: 0.00123,
     });
   });
@@ -256,23 +258,27 @@ describe("pi message bridge", () => {
       normalizePiUsage({
         input: 80,
         output: 20,
-        totalTokens: 130,
+        totalTokens: 140,
         cacheRead: 30,
+        cacheWrite: 10,
       }),
     ).toEqual({
-      promptTokens: 110,
+      promptTokens: 120,
       completionTokens: 20,
-      totalTokens: 130,
+      totalTokens: 140,
       cachedPromptTokens: 30,
+      cacheWritePromptTokens: 10,
     });
   });
 
-  test("merges cached prompt tokens and estimated cost when present", () => {
+  test("merges cached prompt, cache write, and estimated cost when present", () => {
     const usage1 = mergePiUsage(undefined, {
       input: 80,
       output: 20,
-      totalTokens: 130,
+      totalTokens: 140,
       cacheRead: 30,
+      cacheWrite: 10,
+      reasoningOutputTokens: 4,
       estimatedCostUsd: 0.001,
     });
     const usage2 = mergePiUsage(usage1, {
@@ -280,14 +286,18 @@ describe("pi message bridge", () => {
       completionTokens: 10,
       totalTokens: 60,
       cachedPromptTokens: 5,
+      cacheWritePromptTokens: 3,
+      reasoningTokens: 2,
       estimatedCostUsd: 0.002,
     });
 
     expect(usage2).toEqual({
-      promptTokens: 160,
+      promptTokens: 170,
       completionTokens: 30,
-      totalTokens: 190,
+      totalTokens: 200,
       cachedPromptTokens: 35,
+      cacheWritePromptTokens: 13,
+      reasoningOutputTokens: 6,
       estimatedCostUsd: 0.003,
     });
   });

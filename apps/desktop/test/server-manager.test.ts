@@ -84,6 +84,24 @@ describe("desktop server manager startup parsing", () => {
     expect(payload.port).toBe(1234);
   });
 
+  test("waitForServerListening preserves browser access tokens from startup JSON", async () => {
+    const child = createFakeChild();
+    const waitPromise = __internal.waitForServerListening(child as any);
+
+    child.stdout.write(
+      `${JSON.stringify({
+        type: "server_listening",
+        url: "ws://127.0.0.1:1234/ws",
+        port: 1234,
+        cwd: "/tmp/workspace",
+        browserAccessToken: "browser-token",
+      })}\n`,
+    );
+
+    const payload = await waitPromise;
+    expect(payload.browserAccessToken).toBe("browser-token");
+  });
+
   test("waitForServerListening ignores mobile H3 payloads without host hints", async () => {
     const child = createFakeChild();
     const waitPromise = __internal.waitForServerListening(child as any);
@@ -186,9 +204,128 @@ describe("desktop server manager startup mode", () => {
   test("buildServerEnv mirrors process env without desktop-only skill bootstrap flags", () => {
     const env = __internal.buildServerEnv();
     expect(env).not.toBe(process.env);
+    expect(env.COWORK_BROWSER_ACCESS_TOKEN).toEqual(expect.any(String));
+    expect(env.COWORK_BROWSER_ACCESS_TOKEN?.length).toBeGreaterThan(20);
     expect(env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP).toBe(
       process.env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP ?? "1",
     );
+  });
+
+  test("buildServerEnv preserves explicit browser access tokens", () => {
+    const previous = process.env.COWORK_BROWSER_ACCESS_TOKEN;
+    try {
+      process.env.COWORK_BROWSER_ACCESS_TOKEN = "explicit-browser-token";
+      expect(__internal.buildServerEnv().COWORK_BROWSER_ACCESS_TOKEN).toBe(
+        "explicit-browser-token",
+      );
+    } finally {
+      if (previous === undefined) delete process.env.COWORK_BROWSER_ACCESS_TOKEN;
+      else process.env.COWORK_BROWSER_ACCESS_TOKEN = previous;
+    }
+  });
+
+  test("appendBrowserAccessToken returns a browser-authorized websocket URL", () => {
+    expect(__internal.appendBrowserAccessToken("ws://127.0.0.1:7337/ws", "token value")).toBe(
+      "ws://127.0.0.1:7337/ws?coworkBrowserToken=token+value",
+    );
+    expect(__internal.appendBrowserAccessToken("ws://127.0.0.1:7337/ws?existing=1", "token")).toBe(
+      "ws://127.0.0.1:7337/ws?existing=1&coworkBrowserToken=token",
+    );
+    expect(__internal.appendBrowserAccessToken("ws://127.0.0.1:7337/ws", null)).toBe(
+      "ws://127.0.0.1:7337/ws",
+    );
+  });
+
+  test("buildServerEnv points packaged server at the bundled Codex app-server when present", async () => {
+    const previousOverride = process.env.COWORK_CODEX_APP_SERVER_COMMAND;
+    const previousDesktopOverride = process.env.COWORK_DESKTOP_CODEX_APP_SERVER_PATH;
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-bundle-"));
+    const bundled = path.join(dir, "codex-app-server-aarch64-apple-darwin");
+
+    try {
+      delete process.env.COWORK_CODEX_APP_SERVER_COMMAND;
+      process.env.COWORK_DESKTOP_CODEX_APP_SERVER_PATH = bundled;
+      await fs.writeFile(bundled, "");
+
+      const env = __internal.buildServerEnv();
+      expect(env.COWORK_CODEX_APP_SERVER_COMMAND).toBe(bundled);
+      expect(env.COWORK_CODEX_APP_SERVER_ARGS).toBe("");
+    } finally {
+      if (previousOverride === undefined) delete process.env.COWORK_CODEX_APP_SERVER_COMMAND;
+      else process.env.COWORK_CODEX_APP_SERVER_COMMAND = previousOverride;
+      if (previousDesktopOverride === undefined) {
+        delete process.env.COWORK_DESKTOP_CODEX_APP_SERVER_PATH;
+      } else {
+        process.env.COWORK_DESKTOP_CODEX_APP_SERVER_PATH = previousDesktopOverride;
+      }
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("buildServerEnv points packaged server at bundled Foundation Models SDK when present", async () => {
+    const previousSdkDir = process.env.COWORK_TSFMSDK_DIR;
+    const previousSidecarPath = process.env.COWORK_DESKTOP_SIDECAR_PATH;
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-tsfm-sdk-bundle-"));
+    const sidecar = path.join(dir, "cowork-server-aarch64-apple-darwin");
+    const sdkDir = path.join(dir, "tsfm-sdk");
+
+    try {
+      delete process.env.COWORK_TSFMSDK_DIR;
+      process.env.COWORK_DESKTOP_SIDECAR_PATH = sidecar;
+      await fs.writeFile(sidecar, "");
+      await fs.mkdir(path.join(sdkDir, "dist"), { recursive: true });
+      await fs.mkdir(path.join(sdkDir, "native"), { recursive: true });
+      await fs.mkdir(path.join(sdkDir, "node_modules", "koffi", "build", "koffi", "darwin_arm64"), {
+        recursive: true,
+      });
+      await fs.writeFile(path.join(sdkDir, "dist", "index.js"), "");
+      await fs.writeFile(path.join(sdkDir, "native", "libFoundationModels.dylib"), "");
+      await fs.writeFile(
+        path.join(sdkDir, "node_modules", "koffi", "build", "koffi", "darwin_arm64", "koffi.node"),
+        "",
+      );
+
+      expect(__internal.buildServerEnv().COWORK_TSFMSDK_DIR).toBeUndefined();
+
+      const env = __internal.buildServerEnv(undefined, {
+        includeBundledFoundationModelsSdk: true,
+      });
+      expect(env.COWORK_TSFMSDK_DIR).toBe(sdkDir);
+    } finally {
+      if (previousSdkDir === undefined) delete process.env.COWORK_TSFMSDK_DIR;
+      else process.env.COWORK_TSFMSDK_DIR = previousSdkDir;
+      if (previousSidecarPath === undefined) {
+        delete process.env.COWORK_DESKTOP_SIDECAR_PATH;
+      } else {
+        process.env.COWORK_DESKTOP_SIDECAR_PATH = previousSidecarPath;
+      }
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("buildServerEnv enables OpenAI native connectors only from the desktop feature flag", () => {
+    const previous = process.env.COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS;
+    delete process.env.COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS;
+
+    try {
+      expect(__internal.buildServerEnv().COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS).toBe(
+        undefined,
+      );
+      expect(
+        __internal.buildServerEnv({ openAiNativeConnectors: false })
+          .COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS,
+      ).toBe(undefined);
+      expect(
+        __internal.buildServerEnv({ openAiNativeConnectors: true })
+          .COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS,
+      ).toBe("1");
+    } finally {
+      if (typeof previous === "string") {
+        process.env.COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS = previous;
+      } else {
+        delete process.env.COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS;
+      }
+    }
   });
 
   test("only retries source startup automatically on Windows", () => {
@@ -198,6 +335,25 @@ describe("desktop server manager startup mode", () => {
     expect(__internal.getSourceStartupAttemptCount(true, "win32")).toBe(2);
     expect(__internal.getSourceStartupAttemptCount(true, "darwin")).toBe(1);
     expect(__internal.getSourceStartupAttemptCount(false, "win32")).toBe(1);
+  });
+
+  test("server startup timeout leaves room for first-run bundled bootstrap", () => {
+    expect(__internal.getServerStartupTimeoutMs({})).toBe(45_000);
+    expect(
+      __internal.getServerStartupTimeoutMs({
+        COWORK_DESKTOP_SERVER_STARTUP_TIMEOUT_MS: "1",
+      }),
+    ).toBe(5_000);
+    expect(
+      __internal.getServerStartupTimeoutMs({
+        COWORK_DESKTOP_SERVER_STARTUP_TIMEOUT_MS: "12000",
+      }),
+    ).toBe(12_000);
+    expect(
+      __internal.getServerStartupTimeoutMs({
+        COWORK_DESKTOP_SERVER_STARTUP_TIMEOUT_MS: "600000",
+      }),
+    ).toBe(300_000);
   });
 
   test("only injects Bun transpiler cache env for Windows source attempts", () => {
@@ -305,5 +461,52 @@ describe("desktop server manager bun crash detection", () => {
     expect((manager as any).pendingStarts.has("ws-pending")).toBe(false);
     expect(cleaned).toBe(true);
     expect(child.exitCode).toBe(0);
+  });
+
+  test("stopAll concurrently kills and cleans up all active and pending servers", async () => {
+    const manager = new ServerManager();
+    const child1 = createFakeChild();
+    const child2 = createFakeChild();
+    const childPending = createFakeChild();
+
+    let cleaned1 = false;
+    let cleaned2 = false;
+    let cleanedPending = false;
+
+    (manager as any).servers.set("ws-1", {
+      child: child1,
+      url: "ws://localhost:1234",
+      mobileH3: null,
+      cleanup: () => {
+        cleaned1 = true;
+      },
+    });
+
+    (manager as any).servers.set("ws-2", {
+      child: child2,
+      url: "ws://localhost:5678",
+      mobileH3: null,
+      cleanup: () => {
+        cleaned2 = true;
+      },
+    });
+
+    (manager as any).pendingStarts.set("ws-pending", {
+      child: childPending,
+      cleanup: () => {
+        cleanedPending = true;
+      },
+    });
+
+    await manager.stopAll();
+
+    expect((manager as any).servers.size).toBe(0);
+    expect((manager as any).pendingStarts.size).toBe(0);
+    expect(cleaned1).toBe(true);
+    expect(cleaned2).toBe(true);
+    expect(cleanedPending).toBe(true);
+    expect(child1.exitCode).toBe(0);
+    expect(child2.exitCode).toBe(0);
+    expect(childPending.exitCode).toBe(0);
   });
 });

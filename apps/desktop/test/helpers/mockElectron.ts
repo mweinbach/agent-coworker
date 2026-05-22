@@ -71,6 +71,29 @@ const defaultDialog = {
   },
 };
 
+const defaultClipboard = {
+  writeText: () => {},
+  readText: () => "",
+};
+
+const defaultShell = {
+  openPath: async () => "",
+  showItemInFolder: () => {},
+  trashItem: async () => {},
+};
+
+const defaultNativeTheme = {
+  themeSource: "system",
+  shouldUseDarkColors: false,
+  shouldUseDarkColorsForSystemIntegratedUI: false,
+  shouldUseHighContrastColors: false,
+  shouldUseInvertedColorScheme: false,
+  prefersReducedTransparency: false,
+  inForcedColorsMode: false,
+  on() {},
+  off() {},
+};
+
 class DefaultTray {
   setToolTip() {}
 
@@ -131,6 +154,15 @@ const electronMock = {
   },
   get dialog() {
     return mergeMock(defaultDialog, "dialog");
+  },
+  get nativeTheme() {
+    return mergeMock(defaultNativeTheme, "nativeTheme");
+  },
+  get clipboard() {
+    return mergeMock(defaultClipboard, "clipboard");
+  },
+  get shell() {
+    return mergeMock(defaultShell, "shell");
   },
 };
 

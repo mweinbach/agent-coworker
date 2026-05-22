@@ -164,38 +164,84 @@ function normalizeInteractionStatus(
   }
 }
 
+type InteractionEventWithInteraction = {
+  event_type:
+    | "interaction.start"
+    | "interaction.created"
+    | "interaction.complete"
+    | "interaction.completed";
+  interaction: Interactions.Interaction;
+  event_id?: string;
+};
+
+type InteractionStatusEvent = {
+  event_type: "interaction.status_update";
+  interaction_id?: string;
+  status?: Interactions.Interaction["status"];
+  event_id?: string;
+};
+
+type ResearchContentStartEvent = {
+  event_type: "content.start" | "step.start";
+  index: number;
+  content?: unknown;
+  step?: unknown;
+  event_id?: string;
+};
+
+type ResearchContentDeltaEvent = {
+  event_type: "content.delta" | "step.delta";
+  index: number;
+  delta?: unknown;
+  event_id?: string;
+};
+
+type ResearchErrorEvent = {
+  event_type: "error";
+  error?: { message?: string; code?: string };
+  event_id?: string;
+};
+
+function eventTypeOf(event: ResearchInteractionStreamEvent): string | undefined {
+  return typeof event.event_type === "string" ? event.event_type : undefined;
+}
+
 function isInteractionStartEvent(
   event: ResearchInteractionStreamEvent,
-): event is Interactions.InteractionStartEvent {
-  return event.event_type === "interaction.start";
+): event is InteractionEventWithInteraction {
+  const eventType = eventTypeOf(event);
+  return eventType === "interaction.start" || eventType === "interaction.created";
 }
 
 function isInteractionStatusUpdateEvent(
   event: ResearchInteractionStreamEvent,
-): event is Interactions.InteractionStatusUpdate {
-  return event.event_type === "interaction.status_update";
+): event is InteractionStatusEvent {
+  return eventTypeOf(event) === "interaction.status_update";
 }
 
 function isInteractionCompleteEvent(
   event: ResearchInteractionStreamEvent,
-): event is Interactions.InteractionCompleteEvent {
-  return event.event_type === "interaction.complete";
+): event is InteractionEventWithInteraction {
+  const eventType = eventTypeOf(event);
+  return eventType === "interaction.complete" || eventType === "interaction.completed";
 }
 
 function isContentStartEvent(
   event: ResearchInteractionStreamEvent,
-): event is Interactions.ContentStart {
-  return event.event_type === "content.start";
+): event is ResearchContentStartEvent {
+  const eventType = eventTypeOf(event);
+  return eventType === "content.start" || eventType === "step.start";
 }
 
 function isContentDeltaEvent(
   event: ResearchInteractionStreamEvent,
-): event is Interactions.ContentDelta {
-  return event.event_type === "content.delta";
+): event is ResearchContentDeltaEvent {
+  const eventType = eventTypeOf(event);
+  return eventType === "content.delta" || eventType === "step.delta";
 }
 
-function isErrorEvent(event: ResearchInteractionStreamEvent): event is Interactions.ErrorEvent {
-  return event.event_type === "error";
+function isErrorEvent(event: ResearchInteractionStreamEvent): event is ResearchErrorEvent {
+  return eventTypeOf(event) === "error";
 }
 
 export class ResearchService {
@@ -679,6 +725,9 @@ export class ResearchService {
           ? { previousInteractionId: opts.previousInteractionId }
           : {}),
         tools,
+        agentId: state.record.settings.agentId,
+        thinkingSummaries: state.record.settings.thinkingSummaries,
+        visualization: state.record.settings.visualization,
         collaborativePlanning: opts.collaborativePlanning,
       });
       await this.consumeInteractionStream(state, stream);
@@ -765,6 +814,7 @@ export class ResearchService {
         return;
       }
       this.updateRecord(state, {
+        interactionId: event.interaction_id ?? state.record.interactionId,
         status: normalizeInteractionStatus(event.status),
         updatedAt: new Date().toISOString(),
       });
@@ -807,6 +857,10 @@ export class ResearchService {
           planPending: true,
         });
       }
+      const cleanupAfterTerminalEvent = this.shouldCleanupTerminalState(state.record);
+      if (cleanupAfterTerminalEvent) {
+        await this.clearTerminalFileSearchStore(state);
+      }
       await this.flushPersistNow(state);
       this.broadcast(state, "research/updated", { research: state.record }, eventId);
       if (state.record.status === "completed") {
@@ -831,7 +885,7 @@ export class ResearchService {
           eventId,
         );
       }
-      if (this.shouldCleanupTerminalState(state.record)) {
+      if (cleanupAfterTerminalEvent) {
         await this.cleanupTerminalState(state);
       }
       return;
@@ -844,15 +898,28 @@ export class ResearchService {
 
   private async handleContentStart(
     state: ResearchRuntimeState,
-    event: Interactions.ContentStart,
+    event: ResearchContentStartEvent,
     eventId: string | null,
   ): Promise<void> {
-    const content = asRecord(event.content);
+    const content = asRecord(event.content ?? event.step);
     if (!content) {
       return;
     }
     const contentType = asNonEmptyString(content.type);
     if (!contentType) {
+      return;
+    }
+
+    if (contentType === "model_output") {
+      for (const part of asRecordArray(content.content)) {
+        if (part.type === "text") {
+          const text = asTextChunk(part.text);
+          if (text) {
+            this.appendTextDelta(state, text, eventId);
+          }
+          await this.upsertSources(state, part.annotations, eventId);
+        }
+      }
       return;
     }
 
@@ -882,14 +949,14 @@ export class ResearchService {
       return;
     }
 
-    if (contentType === "text_annotation") {
+    if (contentType === "text_annotation" || contentType === "text_annotation_delta") {
       await this.upsertSources(state, content.annotations, eventId);
     }
   }
 
   private async handleContentDelta(
     state: ResearchRuntimeState,
-    event: Interactions.ContentDelta,
+    event: ResearchContentDeltaEvent,
     eventId: string | null,
   ): Promise<void> {
     const delta = asRecord(event.delta);
@@ -918,7 +985,7 @@ export class ResearchService {
       return;
     }
 
-    if (deltaType === "text_annotation") {
+    if (deltaType === "text_annotation" || deltaType === "text_annotation_delta") {
       await this.upsertSources(state, delta.annotations, eventId);
       return;
     }
@@ -1262,22 +1329,7 @@ export class ResearchService {
     if (this.states.get(state.record.id) !== state) {
       return;
     }
-    const fileSearchStoreName = state.record.inputs.fileSearchStoreName;
-    if (fileSearchStoreName) {
-      try {
-        await this.fileStore.deleteResearchStore(this.resolveGoogleApiKey(), fileSearchStoreName);
-      } catch {
-        // Remote store deletion is best effort; local terminal cleanup must still complete.
-      }
-    }
-    if (fileSearchStoreName) {
-      state.record = {
-        ...state.record,
-        inputs: {
-          ...state.record.inputs,
-          fileSearchStoreName: undefined,
-        },
-      };
+    if (await this.clearTerminalFileSearchStore(state)) {
       try {
         await this.sessionDb.upsertResearch(state.record);
       } catch {
@@ -1293,6 +1345,26 @@ export class ResearchService {
     if (this.states.get(state.record.id) === state) {
       this.states.delete(state.record.id);
     }
+  }
+
+  private async clearTerminalFileSearchStore(state: ResearchRuntimeState): Promise<boolean> {
+    const fileSearchStoreName = state.record.inputs.fileSearchStoreName;
+    if (!fileSearchStoreName) {
+      return false;
+    }
+    try {
+      await this.fileStore.deleteResearchStore(this.resolveGoogleApiKey(), fileSearchStoreName);
+    } catch {
+      // Remote store deletion is best effort; local terminal cleanup must still complete.
+    }
+    state.record = {
+      ...state.record,
+      inputs: {
+        ...state.record.inputs,
+        fileSearchStoreName: undefined,
+      },
+    };
+    return true;
   }
 
   private schedulePersist(state: ResearchRuntimeState): void {

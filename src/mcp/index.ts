@@ -119,6 +119,23 @@ function normalizeToolMeta(input: unknown): Record<string, unknown> | undefined 
   return input as Record<string, unknown>;
 }
 
+function normalizeMcpSchemaArray(value: unknown): unknown[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((entry) => normalizeMcpJsonSchema(entry)).filter((entry) => entry !== undefined);
+}
+
+function collapseMcpTupleSchemas(entries: unknown[]): unknown | undefined {
+  if (entries.length === 0) return undefined;
+  if (entries.length === 1) return entries[0];
+
+  const first = JSON.stringify(entries[0]);
+  if (entries.every((entry) => JSON.stringify(entry) === first)) {
+    return entries[0];
+  }
+
+  return { anyOf: entries };
+}
+
 function normalizeMcpJsonSchema(value: unknown, root = false): unknown {
   if (typeof value === "boolean") return value;
   if (Array.isArray(value)) return value.map((entry) => normalizeMcpJsonSchema(entry));
@@ -126,7 +143,11 @@ function normalizeMcpJsonSchema(value: unknown, root = false): unknown {
 
   const input = value as Record<string, unknown>;
   const output: Record<string, unknown> = {};
+  const tupleItems = Array.isArray(input.items) ? normalizeMcpSchemaArray(input.items) : [];
+  const prefixItems = normalizeMcpSchemaArray(input.prefixItems);
+  const normalizedItems = collapseMcpTupleSchemas(tupleItems.length > 0 ? tupleItems : prefixItems);
   for (const [key, entry] of Object.entries(input)) {
+    if (key === "$schema" || key === "additionalItems" || key === "prefixItems") continue;
     if (
       key === "properties" &&
       typeof entry === "object" &&
@@ -142,6 +163,12 @@ function normalizeMcpJsonSchema(value: unknown, root = false): unknown {
       continue;
     }
     if (key === "items") {
+      if (Array.isArray(entry)) {
+        if (normalizedItems !== undefined) {
+          output.items = normalizedItems;
+        }
+        continue;
+      }
       output.items = normalizeMcpJsonSchema(entry);
       continue;
     }
@@ -152,6 +179,26 @@ function normalizeMcpJsonSchema(value: unknown, root = false): unknown {
       continue;
     }
     output[key] = normalizeMcpJsonSchema(entry);
+  }
+
+  if (output.items === undefined && prefixItems.length > 0 && normalizedItems !== undefined) {
+    output.items = normalizedItems;
+  }
+  if (
+    tupleItems.length > 0 &&
+    input.additionalItems === false &&
+    typeof output.maxItems !== "number" &&
+    typeof input.maxItems !== "number"
+  ) {
+    output.maxItems = tupleItems.length;
+  }
+  if (
+    prefixItems.length > 0 &&
+    input.items === undefined &&
+    typeof output.maxItems !== "number" &&
+    typeof input.maxItems !== "number"
+  ) {
+    output.maxItems = prefixItems.length;
   }
 
   const hasTypeLike =
@@ -206,11 +253,10 @@ async function createRuntimeMcpClient(opts: {
 
   return {
     tools: async () => {
-      const listed = (await client.request({ method: "tools/list" }, z.any())) as {
-        tools?: Array<Record<string, unknown>>;
-      };
+      const listed = await client.listTools();
       const discovered: Record<string, unknown> = {};
       for (const entry of listed.tools ?? []) {
+        const rawEntry = entry as typeof entry & Record<string, unknown>;
         const name = typeof entry.name === "string" ? entry.name : "";
         if (!name) continue;
         const description =
@@ -227,8 +273,12 @@ async function createRuntimeMcpClient(opts: {
           ),
           ...(entry.annotations ? { annotations: entry.annotations } : {}),
           ...(entry._meta ? { _meta: entry._meta } : {}),
-          ...(entry.connector_id ? { connectorId: entry.connector_id } : {}),
-          ...(entry.connector_name ? { connectorName: entry.connector_name } : {}),
+          ...(typeof rawEntry.connector_id === "string"
+            ? { connectorId: rawEntry.connector_id }
+            : {}),
+          ...(typeof rawEntry.connector_name === "string"
+            ? { connectorName: rawEntry.connector_name }
+            : {}),
           execute: async (input: unknown) => {
             const meta = normalizeToolMeta(entry._meta);
             const params: CallToolRequest["params"] = {
@@ -638,3 +688,103 @@ export async function loadMCPTools(
 
   return { tools, errors, close };
 }
+
+interface CachedWorkspaceMcp {
+  serversConfigJson: string;
+  tools: Record<string, unknown>;
+  errors: string[];
+  close: () => Promise<void>;
+  sessionIds: Set<string>;
+}
+
+const workspaceMcpCache = new Map<string, CachedWorkspaceMcp>();
+
+function serializeServerConfigs(servers: MCPServerConfig[]): string {
+  try {
+    const cloned = JSON.parse(
+      JSON.stringify(servers, (key, value) => {
+        if (typeof value === "function") return undefined;
+        return value;
+      }),
+    );
+    return JSON.stringify(cloned);
+  } catch {
+    return "";
+  }
+}
+
+export async function getOrLoadMCPToolsCached(
+  config: AgentConfig,
+  sessionId: string,
+  opts: {
+    log?: (line: string) => void;
+    loadMCPServers?: typeof loadMCPServers;
+    loadMCPTools?: typeof loadMCPTools;
+  } = {},
+): Promise<{ tools: Record<string, unknown>; errors: string[] }> {
+  const loadMCPServersFn = opts.loadMCPServers ?? loadMCPServers;
+  const loadMCPToolsFn = opts.loadMCPTools ?? loadMCPTools;
+
+  const workspaceKey = path.resolve(config.projectCoworkDir);
+  const servers = await loadMCPServersFn(config);
+  const serversConfigJson = serializeServerConfigs(servers);
+
+  const cached = workspaceMcpCache.get(workspaceKey);
+
+  if (cached) {
+    if (cached.serversConfigJson === serversConfigJson) {
+      cached.sessionIds.add(sessionId);
+      return { tools: cached.tools, errors: cached.errors };
+    }
+
+    opts.log?.(`[MCP] Server configuration changed for workspace ${workspaceKey}. Reloading...`);
+    try {
+      await cached.close();
+    } catch {
+      // ignore
+    }
+    workspaceMcpCache.delete(workspaceKey);
+  }
+
+  let loaded: { tools: Record<string, unknown>; errors: string[]; close: () => Promise<void> } = {
+    tools: {},
+    errors: [],
+    close: async () => {},
+  };
+
+  if (servers.length > 0) {
+    loaded = await loadMCPToolsFn(servers, { log: opts.log });
+  }
+
+  const newCacheEntry: CachedWorkspaceMcp = {
+    serversConfigJson,
+    tools: loaded.tools,
+    errors: loaded.errors,
+    close: loaded.close,
+    sessionIds: new Set([sessionId]),
+  };
+
+  workspaceMcpCache.set(workspaceKey, newCacheEntry);
+  return { tools: loaded.tools, errors: loaded.errors };
+}
+
+export async function closeMcpServersForSession(sessionId: string): Promise<void> {
+  for (const [workspaceKey, cached] of workspaceMcpCache.entries()) {
+    if (cached.sessionIds.has(sessionId)) {
+      cached.sessionIds.delete(sessionId);
+      if (cached.sessionIds.size === 0) {
+        try {
+          await cached.close();
+        } catch {
+          // ignore
+        }
+        workspaceMcpCache.delete(workspaceKey);
+      }
+    }
+  }
+}
+
+export const __internal = {
+  normalizeMcpJsonSchema,
+  workspaceMcpCache,
+};

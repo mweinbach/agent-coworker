@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import path from "node:path";
+
 import type { SessionEvent } from "../../protocol";
 import type { SessionRuntime } from "../../session/SessionRuntime";
 import type { PersistedSessionRecord } from "../../sessionDb";
@@ -12,16 +15,57 @@ export function requireWorkspacePath(
   method: string,
   defaultWorkingDirectory?: string | null,
 ): string {
-  const cwd = typeof params.cwd === "string" ? params.cwd.trim() : "";
-  if (cwd) {
-    return cwd;
-  }
   const fallback =
     typeof defaultWorkingDirectory === "string" ? defaultWorkingDirectory.trim() : "";
   if (!fallback) {
     throw new Error(`${method} requires cwd`);
   }
-  return fallback;
+  const fallbackRoot = resolveExistingDirectory(fallback, `${method} server cwd`);
+  const cwd = typeof params.cwd === "string" ? params.cwd.trim() : "";
+  if (!cwd) {
+    return fallbackRoot;
+  }
+
+  const resolved = resolveExistingDirectory(cwd, `${method} cwd`);
+  if (!isThreadWorkspaceMethod(method)) {
+    return resolved;
+  }
+
+  const oneOffChatsRoot = path.join(fallbackRoot, ".cowork", "chats");
+  if (resolved === fallbackRoot || isPathWithin(resolved, oneOffChatsRoot)) {
+    return resolved;
+  }
+  throw new Error(`${method} cwd must match the server workspace or a one-off chat workspace`);
+}
+
+function isThreadWorkspaceMethod(method: string): boolean {
+  return method === "thread/start" || method === "thread/list";
+}
+
+function resolveExistingDirectory(input: string, label: string): string {
+  const resolved = path.resolve(input);
+  const stat = fs.statSync(resolved);
+  if (!stat.isDirectory()) {
+    throw new Error(`${label} is not a directory`);
+  }
+  return fs.realpathSync(resolved);
+}
+
+function normalizeBoundaryPath(input: string): string {
+  try {
+    return fs.realpathSync(input);
+  } catch {
+    return path.resolve(input);
+  }
+}
+
+function isPathWithin(target: string, root: string): boolean {
+  const normalizedTarget = normalizeBoundaryPath(target);
+  const normalizedRoot = normalizeBoundaryPath(root);
+  return (
+    normalizedTarget === normalizedRoot ||
+    normalizedTarget.startsWith(`${normalizedRoot}${path.sep}`)
+  );
 }
 
 export function extractJsonRpcTextInput(input: unknown): string {

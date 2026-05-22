@@ -12,6 +12,9 @@ describe("getPlatformChrome", () => {
     expect(chrome.platform).toBe("macos");
     expect(chrome.titlebarHeight).toBe(38);
     expect(chrome.dragStripHeight).toBe(10);
+    expect(chrome.leftNativeReserve).toBe(86);
+    expect(chrome.rightNativeReserve).toBe(0);
+    expect(chrome.captionButtonReserve).toBe(0);
     expect(chrome.trafficLightPosition).toEqual({ x: 14, y: 14 });
     expect(chrome.windowMaterial).toBeUndefined();
     expect(chrome.sidebarTitlebandMode).toBe("topbar");
@@ -25,11 +28,13 @@ describe("getPlatformChrome", () => {
     expect(chrome.platform).toBe("windows");
     expect(chrome.titlebarHeight).toBe(48);
     expect(chrome.dragStripHeight).toBe(10);
+    expect(chrome.leftNativeReserve).toBe(0);
+    expect(chrome.rightNativeReserve).toBe(136);
+    expect(chrome.captionButtonReserve).toBe(136);
     expect(chrome.trafficLightPosition).toBeUndefined();
-    expect(chrome.windowMaterial).toBe("mica");
+    expect(chrome.windowMaterial).toBe("tabbed");
     expect(chrome.sidebarTitlebandMode).toBe("native");
     expect(chrome.topbarControlPlacement).toBe("left-rail");
-    expect(chrome.captionButtonReserve).toBe(136);
     expect(chrome.usesNativeGlass).toBe(false);
     expect(chrome.disableCssBlur).toBe(false);
   });
@@ -39,6 +44,9 @@ describe("getPlatformChrome", () => {
     expect(chrome.platform).toBe("linux");
     expect(chrome.titlebarHeight).toBe(48);
     expect(chrome.dragStripHeight).toBe(10);
+    expect(chrome.leftNativeReserve).toBe(0);
+    expect(chrome.rightNativeReserve).toBe(192);
+    expect(chrome.captionButtonReserve).toBe(0);
     expect(chrome.trafficLightPosition).toBeUndefined();
     expect(chrome.windowMaterial).toBeUndefined();
     expect(chrome.sidebarTitlebandMode).toBe("topbar");
@@ -51,7 +59,52 @@ describe("getPlatformChrome", () => {
     const chrome = getPlatformChrome("freebsd");
     expect(chrome.platform).toBe("other");
     expect(chrome.titlebarHeight).toBe(48);
+    expect(chrome.leftNativeReserve).toBe(0);
+    expect(chrome.rightNativeReserve).toBe(0);
+    expect(chrome.captionButtonReserve).toBe(0);
     expect(chrome.usesNativeGlass).toBe(false);
+  });
+
+  test("reserves native control regions for each desktop platform", () => {
+    const expectations: Array<{
+      platform: NodeJS.Platform;
+      leftNativeReserve: number;
+      rightNativeReserve: number;
+      captionButtonReserve: number;
+    }> = [
+      {
+        platform: "darwin",
+        leftNativeReserve: 86,
+        rightNativeReserve: 0,
+        captionButtonReserve: 0,
+      },
+      {
+        platform: "win32",
+        leftNativeReserve: 0,
+        rightNativeReserve: 136,
+        captionButtonReserve: 136,
+      },
+      {
+        platform: "linux",
+        leftNativeReserve: 0,
+        rightNativeReserve: 192,
+        captionButtonReserve: 0,
+      },
+      {
+        platform: "freebsd",
+        leftNativeReserve: 0,
+        rightNativeReserve: 0,
+        captionButtonReserve: 0,
+      },
+    ];
+
+    for (const expectation of expectations) {
+      expect(getPlatformChrome(expectation.platform)).toMatchObject({
+        leftNativeReserve: expectation.leftNativeReserve,
+        rightNativeReserve: expectation.rightNativeReserve,
+        captionButtonReserve: expectation.captionButtonReserve,
+      });
+    }
   });
 });
 

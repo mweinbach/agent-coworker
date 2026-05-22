@@ -63,7 +63,7 @@ export function OpenAiNativeConnectorsPage() {
             <div>
               <CardTitle className="text-base">ChatGPT apps for Codex</CardTitle>
               <CardDescription>
-                Enable ChatGPT connectors as native Codex MCP tools for this workspace.
+                Enable ChatGPT apps from the Codex app-server for this workspace.
               </CardDescription>
             </div>
             {workspace ? (
@@ -81,10 +81,6 @@ export function OpenAiNativeConnectorsPage() {
           </div>
         </CardHeader>
         <CardContent className="space-y-3 text-sm text-muted-foreground">
-          <p>
-            Connectors use your existing Codex login and are exposed as tools from the reserved{" "}
-            <code className="rounded bg-muted px-1 py-0.5 text-xs">codex_apps</code> MCP server.
-          </p>
           <div className="flex flex-wrap gap-2">
             <Badge variant={authenticated ? "default" : "secondary"}>
               {authenticated ? "Codex authenticated" : "Codex sign-in required"}

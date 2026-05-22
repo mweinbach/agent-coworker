@@ -82,6 +82,80 @@ function mapStopReason(status: unknown): string {
   }
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function firstString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    const text = asString(value);
+    if (text) return text;
+  }
+  return undefined;
+}
+
+export class OpenAiResponseFailedError extends Error {
+  readonly code?: string;
+  readonly status?: string;
+  readonly failureType?: string;
+  readonly param?: string;
+  readonly response?: unknown;
+
+  constructor(message: string, details: OpenAiResponseFailureDetails) {
+    super(message);
+    this.name = "OpenAiResponseFailedError";
+    this.code = details.code;
+    this.status = details.status;
+    this.failureType = details.failureType;
+    this.param = details.param;
+    this.response = details.response;
+  }
+}
+
+type OpenAiResponseFailureDetails = {
+  code?: string;
+  status?: string;
+  failureType?: string;
+  param?: string;
+  response?: unknown;
+};
+
+export function buildOpenAiResponseFailedError(
+  event: Record<string, any>,
+): OpenAiResponseFailedError {
+  const response = asRecord(event.response);
+  const eventError = asRecord(event.error);
+  const responseError = asRecord(response?.error);
+  const error = responseError ?? eventError;
+  const message =
+    firstString(error?.message, event.message, response?.error) ?? "OpenAI response failed.";
+  const code = firstString(error?.code, event.code);
+  const status = firstString(response?.status);
+  const failureType = firstString(error?.type);
+  const param = firstString(error?.param);
+  const detailSuffix = [
+    code ? `code: ${code}` : "",
+    status ? `status: ${status}` : "",
+    failureType ? `type: ${failureType}` : "",
+    param ? `param: ${param}` : "",
+  ]
+    .filter(Boolean)
+    .join(", ");
+
+  return new OpenAiResponseFailedError(detailSuffix ? `${message} (${detailSuffix})` : message, {
+    ...(code ? { code } : {}),
+    ...(status ? { status } : {}),
+    ...(failureType ? { failureType } : {}),
+    ...(param ? { param } : {}),
+    response: response ?? event.response,
+  });
+}
+
 export function createResponsesStreamProjector(
   output: Record<string, any>,
   model?: PiModel,
@@ -345,6 +419,9 @@ export function projectResponsesStreamEvent(
         cacheRead: cachedTokens,
         cacheWrite: 0,
         totalTokens: response.usage.total_tokens || 0,
+        ...(response.usage.output_tokens_details?.reasoning_tokens !== undefined
+          ? { reasoningOutputTokens: response.usage.output_tokens_details.reasoning_tokens }
+          : {}),
       };
       const projectedCost = projector.model
         ? calculateCost(projector.model, output.usage)
@@ -364,10 +441,19 @@ export function projectResponsesStreamEvent(
   }
 
   if (event.type === "error") {
-    throw new Error(`Error Code ${event.code}: ${event.message}` || "Unknown error");
+    const error = buildOpenAiResponseFailedError(event);
+    output.stopReason = "error";
+    output.errorMessage = error.message;
+    output.errorCode = error.code;
+    throw error;
   }
 
   if (event.type === "response.failed") {
-    throw new Error("Unknown error");
+    const error = buildOpenAiResponseFailedError(event);
+    output.stopReason = "error";
+    output.errorMessage = error.message;
+    output.errorCode = error.code;
+    output.error = asRecord(asRecord(event.response)?.error) ?? event.error;
+    throw error;
   }
 }

@@ -6,6 +6,7 @@ import {
 } from "../src/server/citationMetadata";
 import { JSONRPC_ERROR_CODES } from "../src/server/jsonrpc/protocol";
 import { createJsonRpcRequestRouter, type JsonRpcRouteContext } from "../src/server/jsonrpc/routes";
+import { jsonRpcNotificationSchemas } from "../src/server/jsonrpc/schema";
 
 function createRuntime(session: any) {
   return {
@@ -105,9 +106,8 @@ function createRouterHarness() {
       },
     },
     utils: {
-      resolveWorkspacePath: () => {
-        throw new Error("not used");
-      },
+      resolveWorkspacePath: (params: Record<string, unknown>) =>
+        typeof params.cwd === "string" && params.cwd.trim() ? params.cwd.trim() : "C:/default",
       extractTextInput: () => "",
       buildThreadFromSession: () => thread,
       buildThreadFromRecord: () => thread,
@@ -377,6 +377,38 @@ function createThreadReadHarness(snapshotOverride?: any) {
 }
 
 describe("JSON-RPC request router", () => {
+  test("thread routes reject invalid params before touching route side effects", async () => {
+    const harness = createRouterHarness();
+    const scenarios = [
+      { method: "thread/start", params: { cwd: "" } },
+      { method: "thread/resume", params: { threadId: "thread-1", afterSeq: -1 } },
+      { method: "thread/list", params: { cwd: "" } },
+      { method: "thread/read", params: { threadId: "" } },
+      { method: "thread/unsubscribe", params: {} },
+    ];
+
+    for (const [index, scenario] of scenarios.entries()) {
+      await harness.router({} as any, {
+        id: index + 1,
+        method: scenario.method,
+        params: scenario.params,
+      });
+    }
+
+    expect(harness.created).toEqual([]);
+    expect(harness.subscribed).toEqual([]);
+    expect(harness.enqueued).toEqual([]);
+    expect(
+      harness.sent.map((message) => (message as { error?: { code: number } }).error?.code),
+    ).toEqual(scenarios.map(() => JSONRPC_ERROR_CODES.invalidParams));
+  });
+
+  test("thread/closed notification is part of the JSON-RPC schema bundle", () => {
+    expect(jsonRpcNotificationSchemas["thread/closed"].parse({ threadId: "thread-1" })).toEqual({
+      threadId: "thread-1",
+    });
+  });
+
   test("thread/start sends the existing result and started notification envelopes", async () => {
     const harness = createRouterHarness();
 

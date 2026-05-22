@@ -14,6 +14,15 @@ export type StartWorkspaceServerInput = {
   featureFlags?: DesktopFeatureFlagOverrides;
 };
 
+export type CreateOneOffChatWorkspaceInput = {
+  titleHint?: string;
+};
+
+export type CreateOneOffChatWorkspaceOutput = {
+  name: string;
+  path: string;
+};
+
 export type StopWorkspaceServerInput = {
   workspaceId: string;
 };
@@ -87,6 +96,10 @@ export type WindowDragPointInput = {
   screenY: number;
 };
 
+export type ShowCanvasWindowInput = {
+  path: string;
+};
+
 export type ShowQuickChatWindowInput = {
   threadId?: string;
   newThread?: boolean;
@@ -127,6 +140,11 @@ export type ReadFileInput = {
 };
 
 export type ReadFileOutput = {
+  content: string;
+};
+
+export type WriteFileInput = {
+  path: string;
   content: string;
 };
 
@@ -290,6 +308,9 @@ export interface DesktopApi {
   readonly features: DesktopFeatureFlags;
   readonly isPackaged?: boolean;
   resolveDesktopFeatureFlags(overrides?: DesktopFeatureFlagOverrides): DesktopFeatureFlags;
+  createOneOffChatWorkspace(
+    opts?: CreateOneOffChatWorkspaceInput,
+  ): Promise<CreateOneOffChatWorkspaceOutput>;
   startWorkspaceServer(opts: StartWorkspaceServerInput): Promise<{ url: string }>;
   stopWorkspaceServer(opts: StopWorkspaceServerInput): Promise<void>;
   startMobileRelay(opts: MobileRelayStartInput): Promise<MobileRelayBridgeState>;
@@ -315,8 +336,11 @@ export interface DesktopApi {
   getPlatform(): Promise<string>;
   showMainWindow(): Promise<void>;
   showQuickChatWindow(opts?: ShowQuickChatWindowInput): Promise<void>;
+  showCanvasWindow(opts: ShowCanvasWindowInput): Promise<void>;
+
   listDirectory(opts: ListDirectoryInput): Promise<ExplorerEntry[]>;
   readFile(opts: ReadFileInput): Promise<ReadFileOutput>;
+  writeFile(opts: WriteFileInput): Promise<void>;
   readFileForPreview(opts: ReadFileForPreviewInput): Promise<ReadFileForPreviewOutput>;
   getPreferredFileApp(opts: PreferredFileAppInput): Promise<string | null>;
   previewOSFile(opts: PreviewOSFileInput): Promise<void>;
@@ -343,6 +367,7 @@ export interface DesktopApi {
 }
 
 export const DESKTOP_IPC_CHANNELS = {
+  createOneOffChatWorkspace: "desktop:createOneOffChatWorkspace",
   startWorkspaceServer: "desktop:startWorkspaceServer",
   stopWorkspaceServer: "desktop:stopWorkspaceServer",
   mobileRelayStart: "desktop:mobileRelayStart",
@@ -369,8 +394,11 @@ export const DESKTOP_IPC_CHANNELS = {
   showMainWindow: "desktop:showMainWindow",
   consumePendingMenuCommands: "desktop:consumePendingMenuCommands",
   showQuickChatWindow: "desktop:showQuickChatWindow",
+  showCanvasWindow: "desktop:showCanvasWindow",
+
   listDirectory: "desktop:listDirectory",
   readFile: "desktop:readFile",
+  writeFile: "desktop:writeFile",
   readFileForPreview: "desktop:readFileForPreview",
   getPreferredFileApp: "desktop:getPreferredFileApp",
   previewOSFile: "desktop:previewOSFile",

@@ -1,9 +1,11 @@
 import * as electron from "electron";
 import { BrowserWindow } from "electron";
 import { z } from "zod";
+import { createOneOffChatWorkspace } from "../../../../src/utils/oneOffChats";
 import { hydrateTranscriptSnapshot } from "../../src/app/transcriptHydration";
 import type { PersistedState } from "../../src/app/types";
 import {
+  type CreateOneOffChatWorkspaceInput,
   DESKTOP_IPC_CHANNELS,
   type DeleteTranscriptInput,
   type ReadTranscriptInput,
@@ -12,6 +14,7 @@ import {
   type TranscriptBatchInput,
 } from "../../src/lib/desktopApi";
 import {
+  createOneOffChatWorkspaceInputSchema,
   deleteTranscriptInputSchema,
   persistedStateInputSchema,
   readTranscriptInputSchema,
@@ -159,6 +162,22 @@ export function registerWorkspaceIpc(context: DesktopIpcModuleContext): void {
   const { deps, handleDesktopInvoke, parseWithSchema, workspaceRoots } = context;
   const removedThreadIds = new Set<string>();
   const popupThreadIds = new Set<string>();
+
+  handleDesktopInvoke(
+    DESKTOP_IPC_CHANNELS.createOneOffChatWorkspace,
+    async (_event, args: CreateOneOffChatWorkspaceInput | undefined) => {
+      const input = parseWithSchema(
+        createOneOffChatWorkspaceInputSchema,
+        args ?? {},
+        "createOneOffChatWorkspace options",
+      );
+      const workspace = await createOneOffChatWorkspace(input);
+      return {
+        ...workspace,
+        path: await workspaceRoots.addApprovedWorkspacePath(workspace.path),
+      };
+    },
+  );
 
   handleDesktopInvoke(
     DESKTOP_IPC_CHANNELS.startWorkspaceServer,

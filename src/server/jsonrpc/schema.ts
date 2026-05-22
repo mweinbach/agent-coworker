@@ -26,6 +26,7 @@ import {
   jsonRpcResearchRequestSchemas,
   jsonRpcResearchResultSchemas,
 } from "./schema.research";
+import { jsonRpcRuntimeRequestSchemas, jsonRpcRuntimeResultSchemas } from "./schema.runtime";
 import {
   jsonRpcSessionNotificationSchemas,
   jsonRpcSessionRequestSchemas,
@@ -52,6 +53,7 @@ export const jsonRpcRequestSchemas = {
   ...jsonRpcAgentRequestSchemas,
   ...jsonRpcConnectorsRequestSchemas,
   ...jsonRpcProviderRequestSchemas,
+  ...jsonRpcRuntimeRequestSchemas,
   ...jsonRpcResearchRequestSchemas,
   ...jsonRpcMcpRequestSchemas,
   ...jsonRpcPluginsRequestSchemas,
@@ -80,6 +82,7 @@ export const jsonRpcResultSchemas = {
   ...jsonRpcAgentResultSchemas,
   ...jsonRpcConnectorsResultSchemas,
   ...jsonRpcProviderResultSchemas,
+  ...jsonRpcRuntimeResultSchemas,
   ...jsonRpcResearchResultSchemas,
   ...jsonRpcMcpResultSchemas,
   ...jsonRpcPluginsResultSchemas,

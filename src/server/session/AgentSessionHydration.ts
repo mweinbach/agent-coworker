@@ -188,7 +188,12 @@ export function decorateSessionSnapshot(
   snapshot.lastTurnUsage = latestTurnUsage
     ? {
         turnId: latestTurnUsage.turnId,
-        usage: { ...latestTurnUsage.usage },
+        usage: {
+          ...latestTurnUsage.usage,
+          ...(latestTurnUsage.estimatedCostUsd !== null
+            ? { estimatedCostUsd: latestTurnUsage.estimatedCostUsd }
+            : {}),
+        },
       }
     : snapshot.lastTurnUsage;
   snapshot.hasPendingAsk = opts.hasPendingAsk;

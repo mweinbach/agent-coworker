@@ -205,4 +205,46 @@ describe("parseCliArgs", () => {
     expect(errors).toEqual([]);
     expect(args.dir).toBe(".");
   });
+
+  test("parses --port", () => {
+    const { args, errors } = parseCliArgs(["--port", "8080"]);
+    expect(errors).toEqual([]);
+    expect(args.port).toBe(8080);
+  });
+
+  test("parses -p", () => {
+    const { args, errors } = parseCliArgs(["-p", "9090"]);
+    expect(errors).toEqual([]);
+    expect(args.port).toBe(9090);
+  });
+
+  test("errors on missing port value", () => {
+    const { errors } = parseCliArgs(["--port"]);
+    expect(errors.length).toBe(1);
+    expect(errors[0]).toContain("Missing value");
+  });
+
+  test("errors on invalid port value (letters)", () => {
+    const { errors } = parseCliArgs(["--port", "abc"]);
+    expect(errors.length).toBe(1);
+    expect(errors[0]).toContain("Invalid port number");
+  });
+
+  test("errors on invalid port value (out of range low)", () => {
+    const { errors } = parseCliArgs(["--port", "0"]);
+    expect(errors.length).toBe(1);
+    expect(errors[0]).toContain("Invalid port number");
+  });
+
+  test("errors on invalid port value (out of range high)", () => {
+    const { errors } = parseCliArgs(["--port", "65536"]);
+    expect(errors.length).toBe(1);
+    expect(errors[0]).toContain("Invalid port number");
+  });
+
+  test("errors on invalid port value (float)", () => {
+    const { errors } = parseCliArgs(["--port", "80.5"]);
+    expect(errors.length).toBe(1);
+    expect(errors[0]).toContain("Invalid port number");
+  });
 });

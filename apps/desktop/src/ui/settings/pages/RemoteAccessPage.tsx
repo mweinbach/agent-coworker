@@ -200,7 +200,7 @@ export function RemoteAccessPage() {
           </CardHeader>
           <CardContent className="space-y-4">
             {qrValue ? (
-              <div className="flex flex-col items-center gap-4 rounded-lg border border-dashed border-border/60 bg-white p-6">
+              <div className="flex flex-col items-center gap-4 rounded-lg border border-dashed border-border/60 bg-background/50 p-6">
                 <QRCodeSVG value={qrValue} size={220} includeMargin />
                 <div className="space-y-1 text-center text-xs text-muted-foreground">
                   <div>Certificate: {state?.certSha256?.slice(0, 16) ?? "—"}…</div>

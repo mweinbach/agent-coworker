@@ -1,10 +1,15 @@
-export type DesktopWindowMode = "main" | "quick-chat" | "utility";
+export type DesktopWindowMode = "main" | "quick-chat" | "utility" | "canvas";
 
 function readWindowSearchParams(): URLSearchParams | null {
   if (typeof window === "undefined") {
     return null;
   }
-  const search = window.location?.search;
+  let search: unknown;
+  try {
+    search = window.location?.search;
+  } catch {
+    return null;
+  }
   if (typeof search !== "string") {
     return null;
   }
@@ -18,7 +23,7 @@ export function getDesktopWindowMode(): DesktopWindowMode {
   }
 
   const mode = params.get("window");
-  if (mode === "quick-chat" || mode === "utility") {
+  if (mode === "quick-chat" || mode === "utility" || mode === "canvas") {
     return mode;
   }
   return "main";

@@ -20,9 +20,12 @@ describe("main CI workflow", () => {
     expect(workflow).toContain("uses: actions/cache@v4");
     expect(workflow).toContain("node_modules");
     expect(workflow).toContain("apps/desktop/node_modules");
-    expect(workflow).not.toContain("apps/mobile/node_modules");
+    expect(workflow).toContain("apps/mobile/node_modules");
     expect(workflow).toContain("~/.bun/install/cache");
     expect(workflow).toContain("${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}");
+    expect(workflow).toContain(
+      "${{ runner.os }}-mobile-${{ hashFiles('bun.lock', 'apps/mobile/bun.lock', 'apps/mobile/package.json'",
+    );
   });
 
   test("keeps the core reliability guardrails", () => {
@@ -32,8 +35,23 @@ describe("main CI workflow", () => {
     expect(workflow).toContain("run: bun run typecheck");
     expect(workflow).toContain("- name: Unit tests");
     expect(workflow).toContain("run: bun run test:stable -- --max-concurrency 1");
-    expect(workflow).not.toContain("- name: Mobile typecheck");
     expect(workflow).not.toContain("- name: Stable per-file unit tests");
+  });
+
+  test("runs the mobile install, typecheck, export, and native build lane", () => {
+    expect(workflow).toContain("mobile:");
+    expect(workflow).toContain("name: Mobile");
+    expect(workflow).toContain("- name: Install mobile dependencies");
+    expect(workflow).toContain("run: bun install --cwd apps/mobile");
+    expect(workflow).toContain("- name: Mobile typecheck");
+    expect(workflow).toContain("run: bun run app:mobile:typecheck");
+    expect(workflow).toContain("- name: Verify iOS Expo autolinking");
+    expect(workflow).toContain("expo-modules-autolinking resolve --platform apple --json");
+    expect(workflow).toContain('"packageName":"cowork-pinned-https"');
+    expect(workflow).toContain("- name: Export mobile bundle");
+    expect(workflow).toContain("bunx expo export --platform ios --output-dir dist-export-ci");
+    expect(workflow).toContain("- name: Android native build smoke");
+    expect(workflow).toContain("./gradlew :app:assembleDebug -x lint -x test --no-daemon");
   });
 
   test("stable test runner discovers TypeScript and TSX test files", () => {

@@ -36,6 +36,10 @@ const STATIC_PROVIDER_MODEL_CATALOG = {
     defaultModel: defaultModelIdForProvider("fireworks"),
     availableModels: listSupportedModelIds("fireworks"),
   },
+  firepass: {
+    defaultModel: defaultModelIdForProvider("firepass"),
+    availableModels: listSupportedModelIds("firepass"),
+  },
   nvidia: {
     defaultModel: defaultModelIdForProvider("nvidia"),
     availableModels: listSupportedModelIds("nvidia"),
@@ -59,6 +63,10 @@ const STATIC_PROVIDER_MODEL_CATALOG = {
   openai: {
     defaultModel: defaultModelIdForProvider("openai"),
     availableModels: listSupportedModelIds("openai"),
+  },
+  antigravity: {
+    defaultModel: defaultModelIdForProvider("antigravity"),
+    availableModels: listSupportedModelIds("antigravity"),
   },
 } as const satisfies Record<Exclude<ProviderName, "lmstudio">, ProviderModelDefinition>;
 
@@ -88,6 +96,7 @@ export const PROVIDER_MODEL_CHOICES: Record<ProviderName, readonly string[]> = {
   baseten: PROVIDER_MODEL_CATALOG.baseten.availableModels,
   together: PROVIDER_MODEL_CATALOG.together.availableModels,
   fireworks: PROVIDER_MODEL_CATALOG.fireworks.availableModels,
+  firepass: PROVIDER_MODEL_CATALOG.firepass.availableModels,
   nvidia: PROVIDER_MODEL_CATALOG.nvidia.availableModels,
   lmstudio: PROVIDER_MODEL_CATALOG.lmstudio.availableModels,
   "opencode-go": PROVIDER_MODEL_CATALOG["opencode-go"].availableModels,
@@ -95,6 +104,7 @@ export const PROVIDER_MODEL_CHOICES: Record<ProviderName, readonly string[]> = {
   "codex-cli": PROVIDER_MODEL_CATALOG["codex-cli"].availableModels,
   google: PROVIDER_MODEL_CATALOG.google.availableModels,
   openai: PROVIDER_MODEL_CATALOG.openai.availableModels,
+  antigravity: PROVIDER_MODEL_CATALOG.antigravity.availableModels,
 };
 
 export function modelChoicesByProvider(): Record<ProviderName, readonly string[]> {

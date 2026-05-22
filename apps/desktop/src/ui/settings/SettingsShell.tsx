@@ -3,10 +3,11 @@ import { type ReactNode, useCallback, useState } from "react";
 
 import { includeDevelopmentSettings } from "../../app/settingsPageAvailability";
 import { useAppStore } from "../../app/store";
-import type { SettingsPageId } from "../../app/types";
+import { isOneOffChatWorkspace, type SettingsPageId } from "../../app/types";
 import { Button } from "../../components/ui/button";
 import { isPackagedDesktopApp } from "../../lib/desktopCommands";
 import { cn } from "../../lib/utils";
+import { ArchivedChatsPage } from "./pages/ArchivedChatsPage";
 import { BackupPage } from "./pages/BackupPage";
 import { DesktopPage } from "./pages/DesktopPage";
 import { DeveloperPage } from "./pages/DeveloperPage";
@@ -34,7 +35,7 @@ const SETTINGS_PAGE_META: Record<SettingsPageId, { title: string; description: s
   },
   openAiNativeConnectors: {
     title: "OpenAI Native Connectors",
-    description: "Enable ChatGPT apps as native Codex tools for this workspace.",
+    description: "Manage ChatGPT apps exposed by the Codex app-server.",
   },
   desktop: {
     title: "Desktop",
@@ -59,6 +60,10 @@ const SETTINGS_PAGE_META: Record<SettingsPageId, { title: string; description: s
   backup: {
     title: "Backups",
     description: "Recovery snapshots and restore points for chat sessions.",
+  },
+  archivedChats: {
+    title: "Archived Chats",
+    description: "Manage, restore, or delete archived chat history, and set auto-deletion.",
   },
   usage: {
     title: "Usage",
@@ -124,6 +129,7 @@ export function getSettingsGroups(
       label: "Data",
       pages: [
         { id: "backup", label: "Backups", render: () => <BackupPage /> },
+        { id: "archivedChats", label: "Archived chats", render: () => <ArchivedChatsPage /> },
         { id: "usage", label: "Usage", render: () => <UsagePage /> },
       ],
     },
@@ -162,7 +168,7 @@ function SettingsNavigation({
   }>;
 }) {
   const currentWorkspace = useAppStore((s) =>
-    s.workspaces.find((w) => w.id === s.selectedWorkspaceId),
+    s.workspaces.find((w) => w.id === s.selectedWorkspaceId && !isOneOffChatWorkspace(w)),
   );
   const perWorkspaceSettings = useAppStore((s) => s.perWorkspaceSettings);
 

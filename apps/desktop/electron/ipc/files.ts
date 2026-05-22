@@ -21,6 +21,7 @@ import {
   type RevealPathInput,
   type SaveExportedFileInput,
   type TrashPathInput,
+  type WriteFileInput,
 } from "../../src/lib/desktopApi";
 import {
   copyPathInputSchema,
@@ -35,6 +36,7 @@ import {
   revealPathInputSchema,
   saveExportedFileInputSchema,
   trashPathInputSchema,
+  writeFileInputSchema,
 } from "../../src/lib/desktopSchemas";
 import { resolveDesktopBuiltinSkillRootsForReveal } from "../services/desktopBuiltinPaths";
 import { isExplorerEntryHidden } from "../services/explorerVisibility";
@@ -125,6 +127,13 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
         await fh.close();
       }
     }
+  });
+
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.writeFile, async (_event, args: WriteFileInput) => {
+    const input = parseWithSchema(writeFileInputSchema, args, "writeFile options");
+    await workspaceRoots.ensureApprovedWorkspaceRoots();
+    const safePath = resolveAllowedPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
+    await fs.writeFile(safePath, input.content, "utf8");
   });
 
   handleDesktopInvoke(
@@ -232,7 +241,9 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.copyPath, async (_event, args: CopyPathInput) => {
     const input = parseWithSchema(copyPathInputSchema, args, "copyPath options");
-    clipboard.writeText(input.path);
+    await workspaceRoots.ensureApprovedWorkspaceRoots();
+    const safePath = resolveAllowedPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
+    clipboard.writeText(safePath);
   });
 
   handleDesktopInvoke(
@@ -264,20 +275,9 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
     const safePath = resolveAllowedPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
     try {
       await shell.trashItem(safePath);
-      return;
     } catch (trashError) {
-      try {
-        // Fallback for environments where OS trash integration is unavailable for directories.
-        await fs.rm(safePath, { recursive: true, force: false, maxRetries: 2, retryDelay: 50 });
-        return;
-      } catch (deleteError) {
-        const trashDetail = trashError instanceof Error ? trashError.message : String(trashError);
-        const deleteDetail =
-          deleteError instanceof Error ? deleteError.message : String(deleteError);
-        throw new Error(
-          `Unable to move to Trash (${trashDetail}) and permanent delete failed (${deleteDetail})`,
-        );
-      }
+      const trashDetail = trashError instanceof Error ? trashError.message : String(trashError);
+      throw new Error(`Unable to move to Trash: ${trashDetail}`);
     }
   });
 }

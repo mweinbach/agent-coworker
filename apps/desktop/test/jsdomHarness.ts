@@ -101,6 +101,8 @@ export function setupJsdom(options: SetupJsdomOptions = {}): JsdomHarness {
     "getComputedStyle",
     "setTimeout",
     "clearTimeout",
+    "localStorage",
+    "sessionStorage",
     "IS_REACT_ACT_ENVIRONMENT",
   ].map((key) => ({
     key,
@@ -110,6 +112,23 @@ export function setupJsdom(options: SetupJsdomOptions = {}): JsdomHarness {
   setGlobalProperty("window", dom.window);
   setGlobalProperty("document", dom.window.document);
   setGlobalProperty("navigator", dom.window.navigator);
+  setGlobalProperty("localStorage", dom.window.localStorage);
+  setGlobalProperty("sessionStorage", dom.window.sessionStorage);
+  if (typeof dom.window.HTMLElement.prototype.attachEvent !== "function") {
+    Object.defineProperty(dom.window.HTMLElement.prototype, "attachEvent", {
+      configurable: true,
+      writable: true,
+      value: () => {},
+    });
+  }
+  if (typeof dom.window.HTMLElement.prototype.detachEvent !== "function") {
+    Object.defineProperty(dom.window.HTMLElement.prototype, "detachEvent", {
+      configurable: true,
+      writable: true,
+      value: () => {},
+    });
+  }
+
   setGlobalProperty("HTMLElement", dom.window.HTMLElement);
   setGlobalProperty("Element", dom.window.Element);
   setGlobalProperty("HTMLButtonElement", dom.window.HTMLButtonElement);
@@ -145,6 +164,7 @@ export function setupJsdom(options: SetupJsdomOptions = {}): JsdomHarness {
 
   const nativeSetTimeout = globalThis.setTimeout.bind(globalThis);
   const nativeClearTimeout = globalThis.clearTimeout.bind(globalThis);
+  const activeTimeouts = new Set<ReturnType<typeof globalThis.setTimeout>>();
   const runWithCurrentDomGlobals = (callback: () => void) => {
     const previous = {
       window: Object.getOwnPropertyDescriptor(globalThis, "window"),
@@ -165,16 +185,22 @@ export function setupJsdom(options: SetupJsdomOptions = {}): JsdomHarness {
       restoreGlobalProperty({ key: "CustomEvent", descriptor: previous.CustomEvent });
     }
   };
-  setGlobalProperty("setTimeout", (handler: TimerHandler, timeout?: number, ...args: unknown[]) =>
-    nativeSetTimeout(() => {
+  setGlobalProperty("setTimeout", (handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+    const timeoutId = nativeSetTimeout(() => {
+      activeTimeouts.delete(timeoutId);
       if (typeof handler === "function") {
         runWithCurrentDomGlobals(() => handler(...args));
         return;
       }
       nativeSetTimeout(handler, 0);
-    }, timeout),
-  );
-  setGlobalProperty("clearTimeout", nativeClearTimeout);
+    }, timeout);
+    activeTimeouts.add(timeoutId);
+    return timeoutId;
+  });
+  setGlobalProperty("clearTimeout", (timeoutId: ReturnType<typeof globalThis.setTimeout>) => {
+    activeTimeouts.delete(timeoutId);
+    nativeClearTimeout(timeoutId);
+  });
 
   const requestAnimationFrame =
     typeof options.includeAnimationFrame === "object" &&
@@ -221,6 +247,10 @@ export function setupJsdom(options: SetupJsdomOptions = {}): JsdomHarness {
   return {
     dom,
     restore: () => {
+      for (const timeoutId of activeTimeouts) {
+        nativeClearTimeout(timeoutId);
+      }
+      activeTimeouts.clear();
       for (const entry of saved.reverse()) {
         restoreGlobalProperty(entry);
       }

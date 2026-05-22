@@ -114,6 +114,193 @@ const { useAppStore } = await import("../src/app/store");
 const { ChatView, countActiveChildAgents } = await import("../src/ui/ChatView");
 
 describe("desktop chat view stability", () => {
+  test("shows the universal new chat landing when no thread is selected", async () => {
+    useAppStore.setState({
+      ready: true,
+      startupError: null,
+      view: "chat",
+      selectedWorkspaceId: "ws-1",
+      selectedThreadId: null,
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace 1",
+          path: "/tmp/workspace-1",
+          workspaceKind: "project",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          lastOpenedAt: "2026-03-12T00:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          defaultProvider: "openai",
+          defaultModel: "gpt-5.4",
+          yolo: false,
+        },
+      ],
+      threads: [],
+      threadRuntimeById: {},
+      composerText: "",
+    });
+
+    const harness = setupChatViewJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(StrictMode, null, createElement(ChatView)));
+      });
+
+      expect(container.textContent).toContain("What should we work on?");
+      expect(container.textContent).toContain("Workspace 1");
+      expect(container.textContent).not.toContain("Let's build");
+      expect(container.textContent).not.toContain("New thread");
+      expect(container.querySelector('[data-slot="select-trigger"]')).not.toBeNull();
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test("new chat landing starts a no-project chat on submit", async () => {
+    useAppStore.setState({
+      ready: true,
+      startupError: null,
+      view: "chat",
+      selectedWorkspaceId: null,
+      selectedThreadId: null,
+      workspaces: [],
+      threads: [],
+      workspaceRuntimeById: {},
+      threadRuntimeById: {},
+      composerText: "Draft a release note",
+      providerDefaultModelByProvider: {},
+    });
+
+    const harness = setupChatViewJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(StrictMode, null, createElement(ChatView)));
+      });
+
+      const sendButton = container.querySelector(
+        'button[aria-label="Send message"]',
+      ) as HTMLButtonElement | null;
+      expect(sendButton).not.toBeNull();
+
+      await act(async () => {
+        sendButton?.click();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      const state = useAppStore.getState();
+      const chatWorkspace = state.workspaces.find(
+        (workspace) => workspace.workspaceKind === "oneOffChat",
+      );
+      expect(chatWorkspace).toBeDefined();
+      expect(state.threads[0]).toMatchObject({
+        workspaceId: chatWorkspace?.id,
+        title: "Draft a release note",
+        draft: false,
+      });
+      expect(state.selectedThreadId).toBe(state.threads[0]?.id);
+      expect(state.threadRuntimeById[state.threads[0]?.id ?? ""]?.draftComposerProvider).toBe(
+        "google",
+      );
+      expect(state.threadRuntimeById[state.threads[0]?.id ?? ""]?.draftComposerModel).toBeTruthy();
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test("new chat landing starts a project thread for the selected project", async () => {
+    useAppStore.setState({
+      ready: true,
+      startupError: null,
+      view: "chat",
+      selectedWorkspaceId: "ws-1",
+      selectedThreadId: null,
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace 1",
+          path: "/tmp/workspace-1",
+          workspaceKind: "project",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          lastOpenedAt: "2026-03-12T00:00:00.000Z",
+          defaultProvider: "openai",
+          defaultModel: "gpt-5.4",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      threads: [],
+      workspaceRuntimeById: {},
+      threadRuntimeById: {},
+      composerText: "Plan the onboarding flow",
+    });
+
+    const harness = setupChatViewJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(StrictMode, null, createElement(ChatView)));
+      });
+
+      const sendButton = container.querySelector(
+        'button[aria-label="Send message"]',
+      ) as HTMLButtonElement | null;
+      expect(sendButton).not.toBeNull();
+
+      await act(async () => {
+        sendButton?.click();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      const state = useAppStore.getState();
+      expect(state.workspaces).toHaveLength(1);
+      expect(state.threads[0]).toMatchObject({
+        workspaceId: "ws-1",
+        title: "Plan the onboarding flow",
+        draft: false,
+      });
+      expect(state.selectedThreadId).toBe(state.threads[0]?.id);
+      expect(state.threadRuntimeById[state.threads[0]?.id ?? ""]?.draftComposerProvider).toBe(
+        "openai",
+      );
+      expect(state.threadRuntimeById[state.threads[0]?.id ?? ""]?.draftComposerModel).toBe(
+        "gpt-5.4",
+      );
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
   test("does not loop when citation overflow state is empty", async () => {
     useAppStore.setState({
       ready: true,
@@ -468,6 +655,12 @@ describe("desktop chat view stability", () => {
 
       const separator = container.querySelector('[aria-label="Resize minimum message bar height"]');
       const composerShell = separator?.parentElement;
+      const reservedSpace = container.querySelector(
+        '[data-slot="message-bar-reserved-space"]',
+      ) as HTMLElement | null;
+      const overlay = container.querySelector(
+        '[data-slot="message-bar-overlay"]',
+      ) as HTMLElement | null;
 
       expect(separator).not.toBeNull();
       expect(separator?.className).toContain("-top-1");
@@ -477,6 +670,150 @@ describe("desktop chat view stability", () => {
       expect(separator?.getAttribute("aria-valuenow")).toBe("144");
       expect(separator?.getAttribute("aria-valuetext")).toBe("Minimum height 144 pixels");
       expect(composerShell?.className).not.toContain("border-t");
+      expect(reservedSpace?.style.height).toBe("168px");
+      expect(overlay?.style.minHeight).toBe("168px");
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test("keeps the scroll-to-bottom affordance above the absolute composer", async () => {
+    useAppStore.setState({
+      ready: true,
+      startupError: null,
+      view: "chat",
+      selectedWorkspaceId: "ws-1",
+      selectedThreadId: "thread-1",
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace 1",
+          path: "/tmp/workspace-1",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          lastOpenedAt: "2026-03-12T00:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      threads: [
+        {
+          id: "thread-1",
+          workspaceId: "ws-1",
+          title: "Thread 1",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          lastMessageAt: "2026-03-12T00:00:30.000Z",
+          status: "active",
+          sessionId: "session-1",
+          lastEventSeq: 1,
+        },
+      ],
+      threadRuntimeById: {
+        "thread-1": {
+          wsUrl: null,
+          connected: true,
+          sessionId: "session-1",
+          config: {
+            provider: "openai",
+            model: "gpt-5.4",
+          },
+          sessionConfig: null,
+          sessionUsage: null,
+          lastTurnUsage: null,
+          enableMcp: true,
+          busy: false,
+          busySince: null,
+          feed: [
+            {
+              id: "msg-1",
+              kind: "message",
+              role: "assistant",
+              ts: "2026-03-12T00:00:30.000Z",
+              text: "Existing reply",
+            },
+          ],
+          pendingSteer: null,
+          transcriptOnly: false,
+        },
+      },
+      composerText: "",
+      messageBarHeight: 120,
+    });
+
+    const harness = setupChatViewJsdom();
+    const originalGetBoundingClientRect =
+      harness.dom.window.HTMLElement.prototype.getBoundingClientRect;
+    harness.dom.window.HTMLElement.prototype.getBoundingClientRect = function getBoundingClientRect(
+      this: HTMLElement,
+    ) {
+      if (this.getAttribute("data-slot") === "message-bar-overlay") {
+        return {
+          bottom: 220,
+          height: 220,
+          left: 0,
+          right: 600,
+          toJSON: () => ({}),
+          top: 0,
+          width: 600,
+          x: 0,
+          y: 0,
+        } as DOMRect;
+      }
+      return originalGetBoundingClientRect.call(this);
+    };
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(StrictMode, null, createElement(ChatView)));
+      });
+
+      const feed = container.querySelector('[role="log"]') as HTMLElement | null;
+      const reservedSpace = container.querySelector(
+        '[data-slot="message-bar-reserved-space"]',
+      ) as HTMLElement | null;
+      if (!feed) throw new Error("missing feed");
+      expect(reservedSpace?.style.height).toBe("220px");
+
+      Object.defineProperty(feed, "clientHeight", {
+        configurable: true,
+        value: 400,
+      });
+      Object.defineProperty(feed, "scrollHeight", {
+        configurable: true,
+        value: 1000,
+      });
+      Object.defineProperty(feed, "scrollTop", {
+        configurable: true,
+        value: 100,
+        writable: true,
+      });
+
+      await act(async () => {
+        feed.dispatchEvent(new harness.dom.window.Event("scroll", { bubbles: true }));
+      });
+
+      const scrollButton = container.querySelector(
+        '[aria-label="Scroll to bottom"]',
+      ) as HTMLButtonElement | null;
+      expect(scrollButton).not.toBeNull();
+      expect(scrollButton?.style.bottom).toBe("234px");
+
+      await act(async () => {
+        scrollButton?.click();
+      });
+
+      expect(feed.scrollTop).toBe(1000);
+      expect(container.querySelector('[aria-label="Scroll to bottom"]')).toBeNull();
     } finally {
       if (root) {
         await act(async () => {

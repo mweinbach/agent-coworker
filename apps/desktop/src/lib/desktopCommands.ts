@@ -7,6 +7,8 @@ import { resolveFeatureFlags } from "../../../../src/shared/featureFlags";
 import type { HydratedTranscriptSnapshot, PersistedState, TranscriptEvent } from "../app/types";
 import type {
   ConfirmActionInput,
+  CreateOneOffChatWorkspaceInput,
+  CreateOneOffChatWorkspaceOutput,
   DesktopApi,
   DesktopMenuCommand,
   DesktopNotificationInput,
@@ -77,6 +79,12 @@ export async function startWorkspaceServer(opts: {
 
 export async function stopWorkspaceServer(opts: { workspaceId: string }): Promise<void> {
   await requireDesktopApi().stopWorkspaceServer(opts);
+}
+
+export async function createOneOffChatWorkspace(
+  opts?: CreateOneOffChatWorkspaceInput,
+): Promise<CreateOneOffChatWorkspaceOutput> {
+  return await requireDesktopApi().createOneOffChatWorkspace(opts);
 }
 
 export async function loadState(): Promise<PersistedState> {
@@ -163,6 +171,10 @@ export async function showMainWindow(): Promise<void> {
   await requireDesktopApi().showMainWindow();
 }
 
+export async function showCanvasWindow(opts: { path: string }): Promise<void> {
+  await requireDesktopApi().showCanvasWindow(opts);
+}
+
 export async function showQuickChatWindow(opts?: ShowQuickChatWindowInput): Promise<void> {
   await requireDesktopApi().showQuickChatWindow(opts);
 }
@@ -185,6 +197,10 @@ export async function listDirectory(opts: {
 export async function readFile(opts: { path: string }): Promise<string> {
   const result = await requireDesktopApi().readFile(opts);
   return result.content;
+}
+
+export async function writeFile(opts: { path: string; content: string }): Promise<void> {
+  await requireDesktopApi().writeFile(opts);
 }
 
 export async function readFileForPreview(opts: {

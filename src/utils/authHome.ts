@@ -15,6 +15,7 @@ function homeFromSkillsDir(skillsDir: string): string | undefined {
 export function resolveAuthHomeDir(
   config?: Pick<AgentConfig, "skillsDirs"> & Partial<Pick<AgentConfig, "userCoworkDir">>,
   fallbackHomedir?: string,
+  env: NodeJS.ProcessEnv = process.env,
 ): string {
   const userCoworkDir = config?.userCoworkDir?.trim();
   if (userCoworkDir && path.basename(path.normalize(userCoworkDir)) === ".cowork") {
@@ -26,6 +27,6 @@ export function resolveAuthHomeDir(
   }
   const fromFallback = fallbackHomedir?.trim();
   if (fromFallback) return fromFallback;
-  const fromEnv = process.env.HOME?.trim();
+  const fromEnv = env.HOME?.trim() || env.USERPROFILE?.trim();
   return fromEnv || os.homedir();
 }

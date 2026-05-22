@@ -504,7 +504,7 @@ export async function handleWebDesktopRoute(
         ? await opts.desktopService.listWorkspaces(opts.cwd)
         : [
             {
-              name: opts.cwd.split("/").pop() ?? opts.cwd.split("\\").pop() ?? opts.cwd,
+              name: path.basename(opts.cwd),
               path: opts.cwd,
             },
           ];

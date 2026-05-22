@@ -46,7 +46,7 @@ function assertSafeGlobPattern(pattern: string): void {
     ? normalizedPattern.slice(1)
     : normalizedPattern;
 
-  if (path.isAbsolute(maybeNegatedPattern) || /^[A-Za-z]:\//.test(maybeNegatedPattern)) {
+  if (path.isAbsolute(maybeNegatedPattern) || /^[A-Za-z]:[\/\\]/.test(maybeNegatedPattern)) {
     throw new Error("glob blocked: pattern must be relative to cwd");
   }
 
@@ -74,7 +74,7 @@ export function createGlobTool(ctx: ToolContext) {
       let effectiveCwd = normalizedInput.cwd;
 
       const isAbsolutePattern =
-        path.isAbsolute(normalizedPattern) || /^[A-Za-z]:\//.test(normalizedPattern);
+        path.isAbsolute(normalizedPattern) || /^[A-Za-z]:[\/\\]/.test(normalizedPattern);
       if (isAbsolutePattern) {
         const firstGlobIndex = normalizedPattern.search(/[*?[{]/);
         const staticPrefix =

@@ -75,6 +75,16 @@ const FILESYSTEM_MUTATION_COMMANDS = new Set([
   "touch",
   "truncate",
   "tar",
+  // Windows commands
+  "del",
+  "rmdir",
+  "erase",
+  // PowerShell commands
+  "Remove-Item",
+  "New-Item",
+  "Copy-Item",
+  "Move-Item",
+  "Set-Content",
 ]);
 const INLINE_INTERPRETER_COMMANDS = new Set([
   "node",

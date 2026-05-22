@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 
 import {
@@ -94,10 +93,6 @@ function normalizeModelId(modelId: string, source = "model"): string {
     throw new Error(`${source} is required.`);
   }
   return trimmed;
-}
-
-function bedrockConfigPaths(home: string): AiCoworkerPaths {
-  return getAiCoworkerPaths({ homedir: home });
 }
 
 function readConnectionStoreSync(paths: AiCoworkerPaths): ConnectionStore {
@@ -195,7 +190,7 @@ function resolveSavedBedrockAuthFromStore(
 
 function resolveAmbientBedrockAuth(
   env: NodeJS.ProcessEnv = process.env,
-  home: string = env.HOME?.trim() || os.homedir(),
+  home: string = resolveAuthHomeDir(undefined, undefined, env),
 ): ResolvedBedrockAuthConfig | null {
   const region = asNonEmptyString(env.AWS_REGION) ?? asNonEmptyString(env.AWS_DEFAULT_REGION);
   const apiKey = asNonEmptyString(env.AWS_BEARER_TOKEN_BEDROCK);
@@ -259,8 +254,10 @@ export async function resolveBedrockAuthConfig(
   } = {},
 ): Promise<ResolvedBedrockAuthConfig | null> {
   const env = opts.env ?? process.env;
-  const home = opts.paths ? path.dirname(opts.paths.rootDir) : resolveAuthHomeDir(opts.config);
-  const paths = opts.paths ?? bedrockConfigPaths(home);
+  const home = opts.paths
+    ? path.dirname(opts.paths.rootDir)
+    : resolveAuthHomeDir(opts.config, undefined, env);
+  const paths = opts.paths ?? getAiCoworkerPaths({ homedir: home });
   const store = await readConnectionStore(paths);
   return resolveSavedBedrockAuthFromStore(store, env) ?? resolveAmbientBedrockAuth(env, home);
 }
@@ -269,8 +266,8 @@ export function resolveBedrockAuthConfigSync(
   opts: { home?: string; env?: NodeJS.ProcessEnv; config?: Pick<AgentConfig, "skillsDirs"> } = {},
 ): ResolvedBedrockAuthConfig | null {
   const env = opts.env ?? process.env;
-  const home = opts.home ?? resolveAuthHomeDir(opts.config);
-  const paths = bedrockConfigPaths(home);
+  const home = opts.home ?? resolveAuthHomeDir(opts.config, undefined, env);
+  const paths = getAiCoworkerPaths({ homedir: home });
   const store = readConnectionStoreSync(paths);
   return resolveSavedBedrockAuthFromStore(store, env) ?? resolveAmbientBedrockAuth(env, home);
 }
@@ -670,7 +667,8 @@ export async function refreshBedrockDiscoveryCache(
   updatedAt?: string;
 }> {
   const env = opts.env ?? process.env;
-  const paths = opts.paths ?? bedrockConfigPaths(resolveAuthHomeDir(opts.config));
+  const home = resolveAuthHomeDir(opts.config, undefined, env);
+  const paths = opts.paths ?? getAiCoworkerPaths({ homedir: home });
   const auth = await resolveBedrockAuthConfig({ paths, env, config: opts.config });
   const fallbackModels = fallbackBedrockModels();
   const defaultModel = defaultModelIdForProvider("bedrock");
@@ -750,7 +748,8 @@ export async function readBedrockCatalogSnapshot(
   connected: boolean;
 }> {
   const env = opts.env ?? process.env;
-  const paths = opts.paths ?? bedrockConfigPaths(resolveAuthHomeDir(opts.config));
+  const home = resolveAuthHomeDir(opts.config, undefined, env);
+  const paths = opts.paths ?? getAiCoworkerPaths({ homedir: home });
   const auth = await resolveBedrockAuthConfig({ paths, env, config: opts.config });
   const defaultModel = defaultModelIdForProvider("bedrock");
   const fallbackModels = fallbackBedrockModels();
@@ -821,8 +820,8 @@ export function getKnownBedrockResolvedModelMetadataSync(opts: {
     };
   }
 
-  const home = opts.home ?? resolveAuthHomeDir(opts.config);
-  const paths = bedrockConfigPaths(home);
+  const home = opts.home ?? resolveAuthHomeDir(opts.config, undefined, opts.env ?? process.env);
+  const paths = getAiCoworkerPaths({ homedir: home });
   const cacheFile = readBedrockDiscoveryCacheSync(paths);
   const cached = lookupCachedBedrockModel(normalized, cacheFile);
   if (cached) {
@@ -852,7 +851,7 @@ export async function resolveDefaultBedrockModelMetadata(
   opts: { home?: string; config?: Pick<AgentConfig, "skillsDirs">; env?: NodeJS.ProcessEnv } = {},
 ): Promise<ResolvedModelMetadata> {
   const snapshot = await readBedrockCatalogSnapshot({
-    paths: opts.home ? bedrockConfigPaths(opts.home) : undefined,
+    paths: opts.home ? getAiCoworkerPaths({ homedir: opts.home }) : undefined,
     env: opts.env,
     config: opts.config,
   });

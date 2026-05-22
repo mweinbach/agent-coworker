@@ -611,7 +611,11 @@ async function gracefulKill(child: ChildProcessByStdio<null, Readable, Readable>
   }
 
   try {
-    child.kill("SIGKILL");
+    if (process.platform === "win32") {
+      child.kill(); // Windows uses default termination
+    } else {
+      child.kill("SIGKILL");
+    }
   } catch {
     // ignore
   }

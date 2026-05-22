@@ -38,6 +38,18 @@ describe("main CI workflow", () => {
     expect(workflow).not.toContain("- name: Stable per-file unit tests");
   });
 
+  test("runs Windows path and desktop smoke coverage", () => {
+    expect(workflow).toContain("windows-smoke:");
+    expect(workflow).toContain("runs-on: windows-latest");
+    expect(workflow).toContain("- name: Windows path and desktop smoke tests");
+    expect(workflow).toContain("apps/desktop/test/ipc-security.test.ts");
+    expect(workflow).toContain("apps/desktop/test/file-preview-modal.test.tsx");
+    expect(workflow).toContain("test/tools/tools.bash.test.ts");
+    expect(workflow).toContain("test/session-backup.test.ts");
+    expect(workflow).toContain("test/workspace-backups.test.ts");
+    expect(workflow).toContain("test/h3.pairing-store.test.ts");
+  });
+
   test("runs the mobile install, typecheck, export, and native build lane", () => {
     expect(workflow).toContain("mobile:");
     expect(workflow).toContain("name: Mobile");

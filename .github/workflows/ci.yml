@@ -89,6 +89,49 @@ jobs:
       - name: Unit tests
         run: bun run test:stable -- --max-concurrency 1
 
+  windows-smoke:
+    name: Windows smoke
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: ".bun-version"
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            apps/desktop/node_modules
+            ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Windows path and desktop smoke tests
+        run: >
+          bun test
+          test/tools/tools.bash.test.ts
+          test/tools/tools.glob.test.ts
+          test/workspace-path.test.ts
+          test/workspace.map.test.ts
+          test/paths.test.ts
+          test/permissions.test.ts
+          test/session-backup.test.ts
+          test/workspace-backups.test.ts
+          test/h3.pairing-store.test.ts
+          apps/desktop/test/ipc-security.test.ts
+          apps/desktop/test/file-preview-modal.test.tsx
+          apps/desktop/test/message-links.test.ts
+          apps/desktop/test/sidecar.test.ts
+          apps/desktop/test/server-manager.test.ts
+
   remote-mcp-smoke:
     name: Remote MCP smoke
     if: github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork

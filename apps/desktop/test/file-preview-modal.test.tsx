@@ -58,7 +58,7 @@ const { reactivateWorkspaceJsonRpcSocketState } = await import(
   "../src/app/store.helpers/jsonRpcSocket"
 );
 const { RUNTIME } = await import("../src/app/store.helpers/runtimeState");
-const { FilePreviewModal } = await import("../src/ui/FilePreviewModal");
+const { FilePreviewModal, __internalFilePreviewModal } = await import("../src/ui/FilePreviewModal");
 
 function setupPreviewJsdom() {
   return setupJsdom({
@@ -410,5 +410,119 @@ describe("file preview modal", () => {
     } finally {
       harness.restore();
     }
+  });
+});
+
+describe("file preview Windows paths", () => {
+  function localPathFromCoworkFileUrl(rawUrl: string): string | null {
+    return new URL(rawUrl).searchParams.get("path");
+  }
+
+  test("resolves relative markdown links against Windows drive paths", () => {
+    expect(
+      __internalFilePreviewModal.resolveRelativePath(
+        "C:\\Users\\Max\\Documents\\notes\\readme.md",
+        "../assets/figure one.png",
+      ),
+    ).toBe("C:\\Users\\Max\\Documents\\assets\\figure one.png");
+  });
+
+  test("resolves parent segments without escaping a Windows drive root", () => {
+    expect(
+      __internalFilePreviewModal.resolveRelativePath("C:\\readme.md", "../../etc/config.txt"),
+    ).toBe("C:\\etc\\config.txt");
+  });
+
+  test("resolves mixed separators and dot segments", () => {
+    expect(
+      __internalFilePreviewModal.resolveRelativePath(
+        "C:/Users/Max/Documents/notes/readme.md",
+        "..\\./assets//diagram.png",
+      ),
+    ).toBe("C:/Users/Max/Documents/assets/diagram.png");
+  });
+
+  test("keeps POSIX absolute paths stable", () => {
+    expect(
+      __internalFilePreviewModal.resolveRelativePath("/home/max/docs/readme.md", "../assets/a.png"),
+    ).toBe("/home/max/assets/a.png");
+  });
+
+  test("resolves relative markdown links against UNC paths", () => {
+    expect(
+      __internalFilePreviewModal.resolveRelativePath(
+        "\\\\server\\share\\docs\\readme.md",
+        "images/diagram.png",
+      ),
+    ).toBe("\\\\server\\share\\docs\\images\\diagram.png");
+  });
+
+  test("normalizes forward-slash UNC paths to Windows UNC paths", () => {
+    expect(
+      __internalFilePreviewModal.resolveRelativePath(
+        "//server/share/docs/readme.md",
+        "images/diagram.png",
+      ),
+    ).toBe("\\\\server\\share\\docs\\images\\diagram.png");
+  });
+
+  test("extracts basenames from desktop paths", () => {
+    expect(__internalFilePreviewModal.basenamePath("C:\\Users\\Max\\notes\\readme.md")).toBe(
+      "readme.md",
+    );
+    expect(__internalFilePreviewModal.basenamePath("C:\\Users\\Max\\notes\\")).toBe("notes");
+    expect(__internalFilePreviewModal.basenamePath("\\\\server\\share\\docs\\readme.md")).toBe(
+      "readme.md",
+    );
+  });
+
+  test("rewrites Windows and UNC file URLs without dropping the host or drive", () => {
+    const tree = {
+      type: "root",
+      children: [
+        {
+          type: "link",
+          url: "file:///C:/Users/Max/Documents/readme.md",
+          children: [],
+        },
+        {
+          type: "link",
+          url: "file://server/share/docs/readme.md",
+          children: [],
+        },
+      ],
+    };
+
+    __internalFilePreviewModal.createRemarkResolveRelativeLinks(
+      "C:\\Users\\Max\\Documents\\preview.md",
+    )()(tree);
+
+    expect(localPathFromCoworkFileUrl(tree.children[0].url)).toBe(
+      "C:\\Users\\Max\\Documents\\readme.md",
+    );
+    expect(localPathFromCoworkFileUrl(tree.children[1].url)).toBe(
+      "\\\\server\\share\\docs\\readme.md",
+    );
+  });
+
+  test("rewrites relative links with URL-special path characters", () => {
+    const tree = {
+      type: "root",
+      children: [
+        {
+          type: "link",
+          url: "assets/figure & 1.png",
+          children: [],
+        },
+      ],
+    };
+
+    __internalFilePreviewModal.createRemarkResolveRelativeLinks("C:\\Users\\Max\\preview.md")()(
+      tree,
+    );
+
+    expect(localPathFromCoworkFileUrl(tree.children[0].url)).toBe(
+      "C:\\Users\\Max\\assets\\figure & 1.png",
+    );
   });
 });

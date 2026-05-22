@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { EventEmitter } from "node:events";
 
-import { DESKTOP_IPC_CHANNELS } from "../src/lib/desktopApi";
+import { getPlatformChrome } from "../electron/services/windowChrome/platformChrome";
+import { DESKTOP_IPC_CHANNELS, type PlatformChromeInfo } from "../src/lib/desktopApi";
 import { createElectronMock, setElectronMockOverrides } from "./helpers/mockElectron";
 
 type FakeWindow = {
@@ -106,6 +107,22 @@ function createFakeWindow(x = 40, y = 50): FakeWindow {
   };
 }
 
+function expectedPlatformChromeInfo(): PlatformChromeInfo {
+  const chrome = getPlatformChrome(process.platform as NodeJS.Platform);
+  return {
+    platform: chrome.platform,
+    titlebarHeight: chrome.titlebarHeight,
+    dragStripHeight: chrome.dragStripHeight,
+    leftNativeReserve: chrome.leftNativeReserve,
+    rightNativeReserve: chrome.rightNativeReserve,
+    captionButtonReserve: chrome.captionButtonReserve,
+    sidebarTitlebandMode: chrome.sidebarTitlebandMode,
+    topbarControlPlacement: chrome.topbarControlPlacement,
+    usesNativeGlass: chrome.usesNativeGlass,
+    disableCssBlur: chrome.disableCssBlur,
+  };
+}
+
 function createHandlers(options: { shouldKeepPopupWindowsAlive?: () => boolean } = {}) {
   const handlers = new Map<
     string,
@@ -195,6 +212,19 @@ describe("window IPC", () => {
     expect(consumePendingMenuCommands).toHaveBeenCalledTimes(1);
     expect(showQuickChatWindow).toHaveBeenCalledTimes(1);
     expect(showQuickChatWindow).toHaveBeenCalledWith({ threadId: "thread-21", newThread: true });
+  });
+
+  test("projects platform chrome contract through IPC", () => {
+    const { handlers } = createHandlers();
+    const sender = new FakeWebContents(25);
+    const handler = handlers.get(DESKTOP_IPC_CHANNELS.getPlatformChrome);
+
+    expect(handler).toBeDefined();
+    if (!handler) {
+      throw new Error("getPlatformChrome IPC handler was not registered");
+    }
+
+    expect(handler({ sender })).toEqual(expectedPlatformChromeInfo());
   });
 
   test("hides popup windows while popup keep-alive is active", () => {

@@ -33,6 +33,7 @@ describe("model registry invariants", () => {
       "baseten",
       "together",
       "fireworks",
+      "firepass",
       "nvidia",
       "opencode-go",
       "opencode-zen",
@@ -71,6 +72,7 @@ describe("model registry invariants", () => {
       "baseten",
       "together",
       "fireworks",
+      "firepass",
       "nvidia",
       "opencode-go",
       "opencode-zen",
@@ -193,5 +195,14 @@ describe("legacy model aliases", () => {
     expect(parsed.modelId).toBe("gemini-3.1-pro-preview-customtools");
     expect(parsed.provider).toBe("google");
     expect(parsed.ref).toBe("google:gemini-3.1-pro-preview-customtools");
+  });
+
+  test("antigravity Gemini 3.1 Pro shorthand normalizes to preview model id", () => {
+    const model = getSupportedModel("antigravity", "gemini-3.1-pro");
+    expect(model).not.toBeNull();
+    expect(model?.id).toBe("gemini-3.1-pro-preview");
+    expect(normalizeModelIdForProvider("antigravity", "gemini-3.1-pro")).toBe(
+      "gemini-3.1-pro-preview",
+    );
   });
 });

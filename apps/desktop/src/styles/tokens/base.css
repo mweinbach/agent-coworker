@@ -5,7 +5,7 @@
   --window-bg: var(--app-bg);
   --shell-bg: var(--app-bg);
   --sidebar-bg: #e1e4cd;
-  --panel-bg: #f4f5e9;
+  --panel-bg: #f8f9f2;
   --workspace-pane-bg: var(--panel-bg);
   --sidebar-surface: color-mix(in srgb, var(--sidebar-bg) 92%, white 8%);
   /* Left rail fill; defaults to titlebar strip until glass platforms override */
@@ -16,8 +16,9 @@
   --sidebar-blur: 0px;
   --sidebar-titlebar-blur: 8px;
   --titlebar-blur: 7px;
-  --border-base: rgba(62, 74, 40, 0.12);
+  --border-base: rgba(62, 74, 40, 0.18);
   --text-base: #232a18;
+  --canvas-highlight: rgba(139, 148, 114, 0.4);
   --muted-base: #556041;
   --accent-base: #6f8042;
   --danger-base: #bb3e3e;
@@ -28,7 +29,7 @@
   --warning-base: oklch(0.78 0.16 80);
   --warning-foreground-base: #232a18;
   --radius-base: 0.5rem;
-  --shadow-surface-base: 0 1px 2px rgba(0, 0, 0, 0.035);
+  --shadow-surface-base: 0 1px 3px rgba(0, 0, 0, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.4);
   --shadow-overlay-base: 0 12px 30px rgba(0, 0, 0, 0.1);
 
   color-scheme: light;
@@ -50,6 +51,7 @@
   --titlebar-blur: 7px;
   --border-base: rgba(238, 241, 220, 0.14);
   --text-base: #eef0dc;
+  --canvas-highlight: rgba(139, 148, 114, 0.6);
   --muted-base: #c7ceaf;
   --accent-base: #a8b963;
   --danger-base: #e86060;
@@ -59,7 +61,7 @@
   --success-foreground-base: #121a10;
   --warning-base: oklch(0.8 0.16 80);
   --warning-foreground-base: #1a2012;
-  --shadow-surface-base: 0 1px 2px rgba(0, 0, 0, 0.24);
+  --shadow-surface-base: 0 1px 2px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.08);
   --shadow-overlay-base: 0 12px 30px rgba(0, 0, 0, 0.35);
 
   color-scheme: dark;
@@ -80,7 +82,7 @@
     --glass-border: rgba(238, 241, 220, 0.16);
     --sidebar-titlebar-blur: 8px;
     --titlebar-blur: 7px;
-    --border-base: rgba(238, 241, 220, 0.14);
+    --border-base: rgba(238, 241, 220, 0.18);
     --text-base: #eef0dc;
     --muted-base: #c7ceaf;
     --accent-base: #a8b963;
@@ -91,7 +93,7 @@
     --success-foreground-base: #121a10;
     --warning-base: oklch(0.8 0.16 80);
     --warning-foreground-base: #1a2012;
-    --shadow-surface-base: 0 1px 2px rgba(0, 0, 0, 0.24);
+    --shadow-surface-base: 0 1px 2px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.08);
     --shadow-overlay-base: 0 12px 30px rgba(0, 0, 0, 0.35);
 
     color-scheme: dark;

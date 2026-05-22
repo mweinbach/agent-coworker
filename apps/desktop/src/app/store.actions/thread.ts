@@ -1,16 +1,28 @@
+import {
+  appendAttachmentSkippedNotes,
+  createComposerAttachmentFile,
+  resolveComposerAttachmentsForWorkspace,
+} from "../../lib/composerAttachments";
 import * as desktopCommands from "../../lib/desktopCommands";
+import { type NewChatLandingTarget, resolveDefaultNewChatTarget } from "../../lib/newChatLanding";
 import { seedDockFromFeed } from "../a2uiDockReducer";
 import {
   type AppStoreActions,
   appendThreadTranscript,
   beginThreadSelectionRequest,
   buildContextPreamble,
+  bumpWorkspaceJsonRpcSocketGeneration,
+  bumpWorkspaceStartGeneration,
   clearPendingThreadSteers,
   clearThreadSelectionRequest,
+  clearWorkspaceJsonRpcSocketGeneration,
+  clearWorkspaceStartState,
+  disposeWorkspaceJsonRpcState,
   ensureControlSocket,
   ensureServerRunning,
   ensureThreadRuntime,
   ensureThreadSocket,
+  ensureWorkspaceRuntime,
   extractUsageStateFromTranscript,
   isCurrentThreadSelectionRequest,
   makeId,
@@ -28,15 +40,18 @@ import {
   syncDesktopStateCache,
   truncateTitle,
 } from "../store.helpers";
+import { createOneOffWorkspaceRecord } from "../store.helpers/oneOffWorkspaceRecord";
 import { hydrateTranscriptSnapshot } from "../transcriptHydration";
-import type {
-  SessionSnapshot,
-  SessionSnapshotFingerprint,
-  ThreadBusyPolicy,
-  ThreadRecord,
-  TranscriptEvent,
+import {
+  createDefaultA2uiDock,
+  isOneOffChatWorkspace,
+  type SessionSnapshot,
+  type SessionSnapshotFingerprint,
+  type ThreadBusyPolicy,
+  type ThreadRecord,
+  type TranscriptEvent,
+  type WorkspaceRecord,
 } from "../types";
-import { createDefaultA2uiDock } from "../types";
 
 type HydrateThreadSelectionOptions = {
   preserveView?: boolean;
@@ -437,9 +452,13 @@ export function createThreadActions(
 ): Pick<
   AppStoreActions,
   | "removeThread"
+  | "archiveThread"
+  | "restoreThread"
   | "deleteThreadHistory"
   | "renameThread"
   | "newThread"
+  | "openNewChatLanding"
+  | "setNewChatLandingTarget"
   | "selectThread"
   | "reconnectThread"
   | "sendMessage"
@@ -512,7 +531,51 @@ export function createThreadActions(
     return transcripts.flat().sort((left, right) => left.ts.localeCompare(right.ts));
   };
 
+  const projectWorkspaces = () =>
+    get().workspaces.filter((workspace) => !isOneOffChatWorkspace(workspace));
+
+  const cleanupRemovedWorkspaceRuntime = async (workspaceId: string): Promise<void> => {
+    bumpWorkspaceStartGeneration(workspaceId);
+    bumpWorkspaceJsonRpcSocketGeneration(workspaceId);
+    const jsonRpcSocket = RUNTIME.jsonRpcSockets.get(workspaceId);
+    try {
+      jsonRpcSocket?.close();
+    } catch {
+      // ignore
+    }
+    RUNTIME.jsonRpcSockets.delete(workspaceId);
+    clearWorkspaceJsonRpcSocketGeneration(workspaceId);
+
+    try {
+      await desktopCommands.stopWorkspaceServer({ workspaceId });
+    } catch {
+      // ignore
+    } finally {
+      disposeWorkspaceJsonRpcState(get, workspaceId);
+      clearWorkspaceStartState(workspaceId);
+    }
+  };
+
   return {
+    archiveThread: async (threadId: string) => {
+      set((s) => ({
+        threads: s.threads.map((t) =>
+          t.id === threadId ? { ...t, archived: true, archivedAt: nowIso() } : t,
+        ),
+        selectedThreadId: s.selectedThreadId === threadId ? null : s.selectedThreadId,
+      }));
+      await persistNow(get);
+    },
+
+    restoreThread: async (threadId: string) => {
+      set((s) => ({
+        threads: s.threads.map((t) =>
+          t.id === threadId ? { ...t, archived: false, archivedAt: undefined } : t,
+        ),
+      }));
+      await persistNow(get);
+    },
+
     removeThread: async (threadId: string) => {
       const thread = get().threads.find((t) => t.id === threadId);
       const runtimeSessionId = get().threadRuntimeById[threadId]?.sessionId ?? null;
@@ -534,21 +597,56 @@ export function createThreadActions(
         RUNTIME.sessionSnapshots.delete(sessionId);
       }
 
+      const threadWorkspace = thread
+        ? (get().workspaces.find((workspace) => workspace.id === thread.workspaceId) ?? null)
+        : null;
+      const removeOneOffWorkspace =
+        Boolean(thread && isOneOffChatWorkspace(threadWorkspace)) &&
+        !get().threads.some(
+          (candidate) => candidate.id !== threadId && candidate.workspaceId === thread?.workspaceId,
+        );
+      const workspaceIdToRemove = removeOneOffWorkspace && thread ? thread.workspaceId : null;
+
       set((s) => {
         const remainingThreads = s.threads.filter((t) => t.id !== threadId);
         const selectedThreadId = s.selectedThreadId === threadId ? null : s.selectedThreadId;
         const nextPromptModal = s.promptModal?.threadId === threadId ? null : s.promptModal;
+        const remainingWorkspaces = workspaceIdToRemove
+          ? s.workspaces.filter((workspace) => workspace.id !== workspaceIdToRemove)
+          : s.workspaces;
+        const fallbackWorkspaceId =
+          remainingWorkspaces.find((workspace) => !isOneOffChatWorkspace(workspace))?.id ??
+          remainingWorkspaces[0]?.id ??
+          null;
 
         const nextThreadRuntimeById = { ...s.threadRuntimeById };
         delete nextThreadRuntimeById[threadId];
 
         return {
+          workspaces: remainingWorkspaces,
           threads: remainingThreads,
           selectedThreadId,
           promptModal: nextPromptModal,
           threadRuntimeById: nextThreadRuntimeById,
+          selectedWorkspaceId:
+            s.selectedWorkspaceId === workspaceIdToRemove
+              ? fallbackWorkspaceId
+              : s.selectedWorkspaceId,
+          pluginManagementWorkspaceId:
+            s.pluginManagementWorkspaceId === workspaceIdToRemove
+              ? null
+              : s.pluginManagementWorkspaceId,
+          pluginManagementMode:
+            s.pluginManagementWorkspaceId === workspaceIdToRemove &&
+            s.pluginManagementMode === "workspace"
+              ? "auto"
+              : s.pluginManagementMode,
         };
       });
+
+      if (workspaceIdToRemove) {
+        await cleanupRemovedWorkspaceRuntime(workspaceIdToRemove);
+      }
 
       if (thread) {
         for (const transcriptId of transcriptIdsForThread(thread)) {
@@ -568,43 +666,33 @@ export function createThreadActions(
       if (!thread) return;
       const targetSessionId = get().threadRuntimeById[threadId]?.sessionId ?? thread.sessionId;
 
+      let deleteOk = false;
+      if (targetSessionId) {
+        await ensureServerRunning(get, set, thread.workspaceId);
+        ensureControlSocket(get, set, thread.workspaceId);
+        deleteOk = await requestJsonRpcControlEvent(
+          get,
+          set,
+          thread.workspaceId,
+          "cowork/session/delete",
+          {
+            cwd: get().workspaces.find((workspace) => workspace.id === thread.workspaceId)?.path,
+            targetSessionId,
+          },
+        );
+      }
+
       await get().removeThread(threadId);
 
       if (!targetSessionId) return;
-
-      await ensureServerRunning(get, set, thread.workspaceId);
-      ensureControlSocket(get, set, thread.workspaceId);
-      const ok = await requestJsonRpcControlEvent(
-        get,
-        set,
-        thread.workspaceId,
-        "cowork/session/delete",
-        {
-          cwd: get().workspaces.find((workspace) => workspace.id === thread.workspaceId)?.path,
-          targetSessionId,
-        },
-      );
-
-      if (ok) {
-        set((s) => ({
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "info",
-            title: "Session history deleted",
-            detail: targetSessionId,
-          }),
-        }));
-        return;
-      }
 
       set((s) => ({
         notifications: pushNotification(s.notifications, {
           id: makeId(),
           ts: nowIso(),
-          kind: "error",
-          title: "Delete session history failed",
-          detail: "Control session is unavailable.",
+          kind: deleteOk ? "info" : "error",
+          title: deleteOk ? "Session history deleted" : "Delete session history failed",
+          detail: deleteOk ? targetSessionId : "Control session is unavailable.",
         }),
       }));
     },
@@ -628,48 +716,96 @@ export function createThreadActions(
     },
 
     newThread: async (opts) => {
-      let workspaceId =
-        opts?.workspaceId ?? get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
-      if (!workspaceId) {
-        if (get().desktopFeatureFlags.workspaceLifecycle === false) {
+      const explicitWorkspace = opts?.workspaceId
+        ? (get().workspaces.find((workspace) => workspace.id === opts.workspaceId) ?? null)
+        : null;
+      const scope =
+        opts?.scope ??
+        (explicitWorkspace && !isOneOffChatWorkspace(explicitWorkspace) ? "project" : "oneOff");
+      const hasQueuedAttachments =
+        (opts?.attachments && opts.attachments.length > 0) ||
+        (opts?.attachmentFiles && opts.attachmentFiles.length > 0);
+      const createSessionImmediately =
+        opts?.mode === "session" || Boolean(opts?.firstMessage?.trim()) || hasQueuedAttachments;
+
+      let workspaceId: string | null = null;
+      if (scope === "oneOff") {
+        try {
+          const oneOffWorkspace = await createOneOffWorkspaceRecord(
+            get,
+            opts?.titleHint ?? opts?.firstMessage,
+          );
+          workspaceId = oneOffWorkspace.id;
+          set((s) => ({
+            workspaces: [oneOffWorkspace, ...s.workspaces],
+            selectedWorkspaceId: oneOffWorkspace.id,
+          }));
+          ensureWorkspaceRuntime(get, set, oneOffWorkspace.id);
+        } catch (error) {
           set((s) => ({
             notifications: pushNotification(s.notifications, {
               id: makeId(),
               ts: nowIso(),
-              kind: "info",
-              title: "Workspace management is disabled",
-              detail:
-                "Enable Workspace lifecycle actions in Settings -> Feature Flags to add a workspace.",
+              kind: "error",
+              title: "Unable to create chat",
+              detail: error instanceof Error ? error.message : String(error),
             }),
           }));
           return false;
         }
-        await get().addWorkspace();
-        workspaceId = get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
-        if (!workspaceId) return false;
-      }
+      } else {
+        workspaceId =
+          opts?.workspaceId ??
+          (get().selectedWorkspaceId &&
+          !isOneOffChatWorkspace(
+            get().workspaces.find((workspace) => workspace.id === get().selectedWorkspaceId),
+          )
+            ? get().selectedWorkspaceId
+            : null) ??
+          projectWorkspaces()[0]?.id ??
+          null;
 
-      if (get().selectedWorkspaceId !== workspaceId) {
-        set({ selectedWorkspaceId: workspaceId });
-      }
+        if (!workspaceId) {
+          if (get().desktopFeatureFlags.workspaceLifecycle === false) {
+            set((s) => ({
+              notifications: pushNotification(s.notifications, {
+                id: makeId(),
+                ts: nowIso(),
+                kind: "info",
+                title: "Workspace management is disabled",
+                detail:
+                  "Enable Workspace lifecycle actions in Settings -> Feature Flags to add a project workspace.",
+              }),
+            }));
+            return false;
+          }
+          await get().addWorkspace();
+          workspaceId = projectWorkspaces()[0]?.id ?? null;
+          if (!workspaceId) return false;
+        }
 
-      const hasQueuedAttachments = opts?.attachments && opts.attachments.length > 0;
-      const createSessionImmediately =
-        opts?.mode === "session" || Boolean(opts?.firstMessage?.trim()) || hasQueuedAttachments;
-      if (!createSessionImmediately) {
-        const existingDraft = get().threads.find(
-          (thread) => thread.workspaceId === workspaceId && thread.draft === true,
-        );
-        if (existingDraft) {
-          set({
-            selectedThreadId: existingDraft.id,
-            view: "chat",
-          });
-          ensureThreadRuntime(get, set, existingDraft.id);
-          await persistNow(get);
-          return true;
+        if (get().selectedWorkspaceId !== workspaceId) {
+          set({ selectedWorkspaceId: workspaceId });
+        }
+
+        if (!createSessionImmediately) {
+          const existingDraft = get().threads.find(
+            (thread) => thread.workspaceId === workspaceId && thread.draft === true,
+          );
+          if (existingDraft) {
+            set({
+              selectedThreadId: existingDraft.id,
+              view: "chat",
+              newChatLandingTarget: null,
+            });
+            ensureThreadRuntime(get, set, existingDraft.id);
+            await persistNow(get);
+            return true;
+          }
         }
       }
+
+      if (!workspaceId) return false;
 
       let url: string | null = null;
       if (createSessionImmediately) {
@@ -715,12 +851,18 @@ export function createThreadActions(
         selectedThreadId: threadId,
         view: "chat",
         composerText: "",
+        newChatLandingTarget: null,
       }));
       ensureThreadRuntime(get, set, threadId);
       set((s) => ({
         threadRuntimeById: {
           ...s.threadRuntimeById,
-          [threadId]: { ...s.threadRuntimeById[threadId], transcriptOnly: false },
+          [threadId]: {
+            ...s.threadRuntimeById[threadId],
+            transcriptOnly: false,
+            draftComposerProvider: opts?.provider ?? null,
+            draftComposerModel: opts?.model?.trim() || null,
+          },
         },
       }));
       await persistNow(get);
@@ -733,15 +875,59 @@ export function createThreadActions(
         return false;
       }
 
-      const hasFirstMessage = Boolean(opts?.firstMessage?.trim());
-      if (hasFirstMessage || hasQueuedAttachments) {
-        queuePendingThreadMessage(threadId, opts?.firstMessage ?? "", opts?.attachments);
+      let firstMessage = opts?.firstMessage ?? "";
+      let resolvedAttachments = opts?.attachments;
+      if (opts?.attachmentFiles && opts.attachmentFiles.length > 0) {
+        const resolved = await resolveComposerAttachmentsForWorkspace(
+          get,
+          set,
+          workspaceId,
+          opts.attachmentFiles.map(createComposerAttachmentFile),
+        );
+        resolvedAttachments = resolved.attachments.length > 0 ? resolved.attachments : undefined;
+        firstMessage = appendAttachmentSkippedNotes(firstMessage, resolved.skippedNotes);
       }
-      ensureThreadSocket(get, set, threadId, url, opts?.firstMessage, hasFirstMessage);
+
+      const hasFirstMessage = Boolean(firstMessage.trim());
+      const hasResolvedAttachments = Boolean(resolvedAttachments && resolvedAttachments.length > 0);
+      if (hasFirstMessage || hasResolvedAttachments) {
+        queuePendingThreadMessage(threadId, firstMessage, resolvedAttachments);
+      }
+      ensureThreadSocket(
+        get,
+        set,
+        threadId,
+        url,
+        firstMessage,
+        hasFirstMessage,
+        resolvedAttachments,
+      );
       return true;
     },
 
+    openNewChatLanding: async (opts?: { defaultTargetKind?: "project" | "oneOff" }) => {
+      const state = get();
+      const landingTarget: NewChatLandingTarget =
+        opts?.defaultTargetKind === "oneOff"
+          ? { kind: "oneOff" }
+          : resolveDefaultNewChatTarget(state.workspaces, state.selectedWorkspaceId);
+      set({
+        selectedThreadId: null,
+        view: "chat",
+        composerText: "",
+        newChatLandingTarget: landingTarget,
+      });
+      syncDesktopStateCache(get);
+      await persistNow(get);
+    },
+
+    setNewChatLandingTarget: (target) => {
+      set({ newChatLandingTarget: target });
+      syncDesktopStateCache(get);
+    },
+
     selectThread: async (threadId: string) => {
+      set({ newChatLandingTarget: null });
       await hydrateThreadSelection(get, set, threadId, {
         reconnectAfterHydration: true,
         skipWorkspaceSelectOnReconnect: true,
@@ -799,7 +985,15 @@ export function createThreadActions(
       if (hasFirstMessage || hasQueuedAttachments) {
         queuePendingThreadMessage(threadId, firstMessage ?? "", opts?.attachments);
       }
-      ensureThreadSocket(get, set, threadId, url, firstMessage, Boolean(firstMessage?.trim()));
+      ensureThreadSocket(
+        get,
+        set,
+        threadId,
+        url,
+        firstMessage,
+        Boolean(firstMessage?.trim()),
+        opts?.attachments,
+      );
       return true;
     },
 
@@ -822,8 +1016,10 @@ export function createThreadActions(
       if (rt?.transcriptOnly) {
         const preamble = get().injectContext ? buildContextPreamble(rt?.feed ?? []) : "";
         const firstMessage = preamble ? `${preamble}${trimmed}` : trimmed;
+        const workspace = get().workspaces.find((candidate) => candidate.id === thread.workspaceId);
         const started = await get().newThread({
           workspaceId: thread.workspaceId,
+          scope: isOneOffChatWorkspace(workspace) ? "oneOff" : "project",
           titleHint: thread.title,
           firstMessage,
           attachments,

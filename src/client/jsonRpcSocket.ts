@@ -276,8 +276,12 @@ export class JsonRpcSocket {
         return false;
       }
       if (opts?.retryable === true && this.autoReconnect && !this.intentionalClose) {
-        this.enqueueNotification({ kind: "notification", method, params });
-        return true;
+        try {
+          this.enqueueNotification({ kind: "notification", method, params });
+          return true;
+        } catch {
+          return false;
+        }
       }
       return false;
     }

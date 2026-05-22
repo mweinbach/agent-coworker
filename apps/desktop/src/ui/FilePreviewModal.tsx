@@ -16,6 +16,7 @@ import { Button } from "../components/ui/button";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -30,13 +31,13 @@ import {
   type FilePreviewKind,
   getExtensionLower,
   getFilePreviewKind,
+  isCanvasSupportedFile,
   mimeForPreviewKind,
 } from "../lib/filePreviewKind";
 import { cn } from "../lib/utils";
 import { CodeFilePreview } from "./CodeFilePreview";
-
-const XLSX_MAX_ROWS = 200;
-const XLSX_MAX_COLS = 40;
+import { PptxPreview } from "./PptxPreview";
+import { SpreadsheetPreview } from "./SpreadsheetPreview";
 
 function decodeUtf8(bytes: Uint8Array): string {
   return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
@@ -62,7 +63,26 @@ async function sanitizePreviewHtml(rawHtml: string): Promise<string> {
   return DOMPurify.sanitize(rawHtml, {
     USE_PROFILES: { html: true },
     FORBID_TAGS: ["style", "script", "iframe", "object", "embed", "form", "input"],
-    FORBID_ATTR: ["style", "onerror", "onload", "onclick"],
+    ALLOWED_ATTR: [
+      "href",
+      "src",
+      "alt",
+      "title",
+      "class",
+      "id",
+      "width",
+      "height",
+      "target",
+      "rel",
+      "type",
+      "name",
+      "value",
+      "placeholder",
+      "colspan",
+      "rowspan",
+      "scope",
+      "data-*",
+    ],
   });
 }
 
@@ -150,6 +170,7 @@ function visitLinks(node: HastNode, fn: (n: HastNode) => void): void {
 export function FilePreviewModal() {
   const filePreview = useAppStore((s) => s.filePreview);
   const closeFilePreview = useAppStore((s) => s.closeFilePreview);
+  const canvasEnabled = useAppStore((s) => s.desktopFeatureFlags?.canvas === true);
 
   const path = filePreview?.path ?? null;
   const kind = path ? getFilePreviewKind(path) : "unknown";
@@ -161,7 +182,6 @@ export function FilePreviewModal() {
   const [docxHtml, setDocxHtml] = useState<string | null>(null);
   const [docxLayout, setDocxLayout] = useState<DocxPreviewLayout | null>(null);
   const [preferredFileApp, setPreferredFileApp] = useState<string | null>(null);
-  const [xlsxHtml, setXlsxHtml] = useState<string | null>(null);
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
 
   const revokeBlob = useCallback(() => {
@@ -180,7 +200,6 @@ export function FilePreviewModal() {
       setDocxHtml(null);
       setDocxLayout(null);
       setPreferredFileApp(null);
-      setXlsxHtml(null);
       revokeBlob();
       return;
     }
@@ -193,20 +212,29 @@ export function FilePreviewModal() {
     setDocxHtml(null);
     setDocxLayout(null);
     setPreferredFileApp(null);
-    setXlsxHtml(null);
     revokeBlob();
 
     void (async () => {
       try {
+        const previewKind = getFilePreviewKind(path);
+        const preferredAppPromise = getPreferredFileApp({ path }).catch(() => null);
+
+        if (previewKind === "csv" || previewKind === "xlsx") {
+          const preferredApp = await preferredAppPromise;
+          if (controller.signal.aborted) return;
+          setPreferredFileApp(preferredApp);
+          setLoading(false);
+          return;
+        }
+
         const [result, preferredApp] = await Promise.all([
           readFileForPreview({ path }),
-          getPreferredFileApp({ path }).catch(() => null),
+          preferredAppPromise,
         ]);
         if (controller.signal.aborted) return;
         setTruncated(result.truncated);
         setPreferredFileApp(preferredApp);
         const bytes = result.bytes;
-        const previewKind = getFilePreviewKind(path);
 
         if (previewKind === "pdf" || previewKind === "image") {
           const mime = mimeForPreviewKind(previewKind, getExtensionLower(path));
@@ -250,43 +278,6 @@ export function FilePreviewModal() {
           return;
         }
 
-        if (previewKind === "xlsx") {
-          const XLSX = await import("xlsx");
-          if (controller.signal.aborted) return;
-          const wb = XLSX.read(bytes, { type: "array" });
-          const firstName = wb.SheetNames[0];
-          if (!firstName) {
-            setXlsxHtml('<p class="text-muted-foreground">Empty workbook.</p>');
-          } else {
-            const sheet = wb.Sheets[firstName];
-            if (!sheet) {
-              setXlsxHtml('<p class="text-muted-foreground">Could not read sheet.</p>');
-            } else {
-              const range = XLSX.utils.decode_range(sheet["!ref"] ?? "A1");
-              const cappedRange = {
-                s: range.s,
-                e: {
-                  r: Math.min(range.e.r, range.s.r + XLSX_MAX_ROWS - 1),
-                  c: Math.min(range.e.c, range.s.c + XLSX_MAX_COLS - 1),
-                },
-              };
-              const cappedRef = XLSX.utils.encode_range(cappedRange);
-              const cappedSheet = { ...sheet, "!ref": cappedRef };
-              const html = XLSX.utils.sheet_to_html(cappedSheet, { id: "preview-sheet" });
-              const note =
-                range.e.r - range.s.r + 1 > XLSX_MAX_ROWS ||
-                range.e.c - range.s.c + 1 > XLSX_MAX_COLS
-                  ? `<p class="text-xs text-muted-foreground mb-2">Showing up to ${XLSX_MAX_ROWS} rows and ${XLSX_MAX_COLS} columns.</p>`
-                  : "";
-              const sanitized = await sanitizePreviewHtml(note + html);
-              if (controller.signal.aborted) return;
-              setXlsxHtml(sanitized);
-            }
-          }
-          setLoading(false);
-          return;
-        }
-
         if (previewKind === "unsupported") {
           setLoading(false);
           return;
@@ -323,10 +314,13 @@ export function FilePreviewModal() {
       pdf: "PDF",
       image: "Image",
       docx: "Word",
+      csv: "CSV",
       xlsx: "Excel",
+      pptx: "Presentation",
       unsupported: "Unsupported",
       unknown: "File",
     };
+
     return labels[kind];
   }, [kind]);
 
@@ -347,16 +341,11 @@ export function FilePreviewModal() {
     ];
   }, [path]);
 
-  const isOpen = path !== null;
+  const isCanvasFile = path && isCanvasSupportedFile(path) && canvasEnabled;
+  const isOpen = path !== null && !isCanvasFile;
 
   const showFallback =
-    !loading &&
-    !error &&
-    kind === "unsupported" &&
-    !textContent &&
-    !docxHtml &&
-    !xlsxHtml &&
-    !blobUrl;
+    !loading && !error && kind === "unsupported" && !textContent && !docxHtml && !blobUrl;
 
   const showUnknownAsText =
     !loading && !error && kind === "unknown" && textContent !== null && !blobUrl;
@@ -381,22 +370,42 @@ export function FilePreviewModal() {
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
       <DialogContent
+        showCloseButton={false}
         className={cn(
-          "app-surface-opaque flex flex-col gap-0 overflow-hidden p-0",
-          kind === "pdf" ? "h-[96vh] max-w-6xl" : "max-h-[90vh] max-w-5xl",
+          "app-surface-opaque flex flex-col gap-0 overflow-hidden p-0 border border-border/45 rounded-xl shadow-2xl",
+          kind === "pdf" ? "h-[96vh] w-[96vw] max-w-8xl" : "max-h-[92vh] w-[95vw] max-w-7xl",
         )}
       >
         <DialogHeader className="shrink-0 space-y-3 border-b border-border/60 px-5 py-4">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="flex min-w-0 flex-wrap items-center gap-2">
-                <DialogTitle className="truncate text-lg">{titleName}</DialogTitle>
-                <Badge variant="secondary">{kindLabel}</Badge>
+          <div className="flex items-center justify-between gap-4 min-w-0">
+            <div className="min-w-0 flex-1">
+              <div className="flex min-w-0 items-center gap-2">
+                <DialogTitle
+                  className="truncate text-base font-medium text-foreground"
+                  title={titleName}
+                >
+                  {titleName}
+                </DialogTitle>
+                <Badge
+                  variant="secondary"
+                  className="shrink-0 font-normal bg-muted/30 text-muted-foreground/90 border-transparent shadow-none"
+                >
+                  {kindLabel}
+                </Badge>
               </div>
+              <DialogDescription className="sr-only">
+                {kindLabel} preview for {titleName}
+              </DialogDescription>
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              <Button type="button" variant="outline" size="sm" onClick={openExternal}>
-                <ExternalLinkIcon className="mr-1 size-3.5" />
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={openExternal}
+                className="font-medium bg-muted/30 hover:bg-muted/45 text-foreground border-none transition-all duration-150 active:scale-98 shadow-sm"
+              >
+                <ExternalLinkIcon className="mr-1.5 size-3.5" />
                 {openButtonLabel}
               </Button>
             </div>
@@ -407,7 +416,13 @@ export function FilePreviewModal() {
                 Preview truncated — only the first portion of this file is shown. Open the file in
                 its default app for the full contents.
               </span>
-              <Button type="button" size="sm" variant="outline" onClick={openExternal}>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                onClick={openExternal}
+                className="font-medium bg-muted/30 hover:bg-muted/45 text-foreground border-none transition-all duration-150 active:scale-98 shadow-sm"
+              >
                 <ExternalLinkIcon className="mr-1 size-3.5" />
                 Open full file
               </Button>
@@ -420,7 +435,7 @@ export function FilePreviewModal() {
           className={cn(
             "min-h-0 flex-1",
             kind === "pdf" ? "overflow-hidden p-0" : "overflow-y-auto px-5 py-4",
-            kind === "docx" && docxHtml && "bg-white px-6 py-6",
+            kind === "docx" && docxHtml && "bg-background px-6 py-6",
           )}
         >
           {loading ? (
@@ -461,7 +476,7 @@ export function FilePreviewModal() {
           ) : kind === "docx" && docxHtml ? (
             <div
               className={cn(
-                "docx-preview mx-auto min-h-[11in] w-[8.5in] max-w-full rounded-sm border border-border/60 bg-white px-[1in] py-[1in] text-black shadow-sm",
+                "docx-preview mx-auto min-h-[11in] w-[8.5in] max-w-full rounded-sm border border-border/60 bg-card px-[1in] py-[1in] text-foreground shadow-sm",
                 "[&_.docx-title]:mb-3 [&_.docx-title]:text-[22pt] [&_.docx-title]:font-bold [&_.docx-title]:leading-[1.2] [&_.docx-title]:tracking-[-0.01em] [&_.docx-title]:text-[var(--docx-title)]",
                 "[&_.docx-subtitle]:mb-3 [&_.docx-subtitle]:text-[11pt] [&_.docx-subtitle]:italic [&_.docx-subtitle]:leading-[1.35] [&_.docx-subtitle]:text-[var(--docx-accent)]",
                 "[&_.docx-byline]:mb-2 [&_.docx-byline]:text-[10pt] [&_.docx-byline]:font-semibold [&_.docx-byline]:leading-[1.3] [&_.docx-byline]:text-[var(--docx-title)]",
@@ -507,11 +522,10 @@ export function FilePreviewModal() {
                 </div>
               ) : null}
             </div>
-          ) : kind === "xlsx" && xlsxHtml ? (
-            <div
-              className="preview-xlsx overflow-x-auto text-sm [&_table]:w-full [&_table]:border-collapse [&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-border [&_th]:px-2 [&_th]:py-1"
-              dangerouslySetInnerHTML={{ __html: xlsxHtml }}
-            />
+          ) : (kind === "csv" || kind === "xlsx") && path ? (
+            <SpreadsheetPreview key={path} path={path} />
+          ) : kind === "pptx" && path ? (
+            <PptxPreview key={path} path={path} />
           ) : showUnknownAsText ? (
             <CodeFilePreview content={textContent} filePath={path ?? ""} />
           ) : showFallback || showUnknownFallback ? (

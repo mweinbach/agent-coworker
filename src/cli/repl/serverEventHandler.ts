@@ -3,6 +3,7 @@ import type { SessionEvent } from "../../server/protocol";
 import { type AgentConfig, type ApprovalRiskCode, isProviderName } from "../../types";
 import type { ProviderAuthMethod } from "../parser";
 import type { CliStreamState } from "../streamState";
+import { sanitizeTerminalOutput } from "./sanitizeTerminal";
 import { asString, previewStructured } from "./streamFormatting";
 
 export type PublicConfig = Pick<AgentConfig, "provider" | "model" | "workingDirectory"> & {
@@ -249,7 +250,7 @@ export function createNotificationHandler(ctx: ReplSessionEventContext) {
         if (ctx.streamState.openAssistantTurn(turnId)) {
           process.stdout.write("\n");
         }
-        process.stdout.write(text);
+        process.stdout.write(sanitizeTerminalOutput(text));
         break;
       }
 
@@ -260,7 +261,7 @@ export function createNotificationHandler(ctx: ReplSessionEventContext) {
         const mode = params.mode === "summary" ? "summary" : "reasoning";
         ctx.state.lastStreamedReasoningTurnId = turnId;
         ctx.streamState.markReasoningTurn(turnId);
-        console.log(`\n[${mode}+] ${text}`);
+        console.log(`\n[${mode}+] ${sanitizeTerminalOutput(text)}`);
         break;
       }
 
@@ -285,10 +286,16 @@ export function createNotificationHandler(ctx: ReplSessionEventContext) {
           if (item.error) {
             const errPreview = previewStructured(item.error);
             console.log(
-              errPreview ? `\n[tool:error] ${name} ${errPreview}` : `\n[tool:error] ${name}`,
+              errPreview
+                ? `\n[tool:error] ${name} ${sanitizeTerminalOutput(errPreview)}`
+                : `\n[tool:error] ${name}`,
             );
           } else {
-            console.log(preview ? `\n[tool:done] ${name} ${preview}` : `\n[tool:done] ${name}`);
+            console.log(
+              preview
+                ? `\n[tool:done] ${name} ${sanitizeTerminalOutput(preview)}`
+                : `\n[tool:done] ${name}`,
+            );
           }
           break;
         }
@@ -309,7 +316,7 @@ export function createNotificationHandler(ctx: ReplSessionEventContext) {
               break;
             }
           }
-          console.log(`\n${out}\n`);
+          console.log(`\n${sanitizeTerminalOutput(out)}\n`);
           break;
         }
 
@@ -323,7 +330,7 @@ export function createNotificationHandler(ctx: ReplSessionEventContext) {
             break;
           }
           const kind = asString(item.kind) ?? "reasoning";
-          console.log(`\n[${kind}] ${text}\n`);
+          console.log(`\n[${kind}] ${sanitizeTerminalOutput(text)}\n`);
           break;
         }
 

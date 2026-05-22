@@ -821,6 +821,7 @@ export function createControlSocketHelpers(
                 defaultAllowedChildModelRefs: evt.config.allowedChildModelRefs,
                 defaultToolOutputOverflowChars: evt.config.defaultToolOutputOverflowChars,
                 providerOptions,
+                yolo: typeof evt.config.yolo === "boolean" ? evt.config.yolo : workspace.yolo,
                 ...(typeof evt.config.userName === "string"
                   ? { userName: evt.config.userName }
                   : {}),
@@ -944,7 +945,6 @@ export function createControlSocketHelpers(
             openAiNativeConnectorsAuthenticated: evt.authenticated,
             openAiNativeConnectorsMessage: evt.message ?? null,
             openAiNativeConnectorsEnabledIds: evt.enabledConnectorIds,
-            openAiNativeConnectorsServerName: evt.codexAppsMcpServerName,
             openAiNativeConnectorsLoading: false,
             openAiNativeConnectorsError: null,
           },
@@ -1497,6 +1497,19 @@ export function createControlSocketHelpers(
     }
   }
 
+  async function requestJsonRpcControl(
+    get: StoreGet,
+    set: StoreSet,
+    workspaceId: string,
+    method: string,
+    params: Record<string, unknown>,
+  ): Promise<unknown> {
+    if (isWorkspaceDisposed(workspaceId)) {
+      throw new Error("Workspace control session was disposed.");
+    }
+    return await requestJsonRpc(get, set, workspaceId, method, params);
+  }
+
   function disposeWorkspaceControlState(workspaceId: string) {
     const currentGet = getControlStoreGet(workspaceId);
     const currentSet = getControlStoreSet(workspaceId);
@@ -1541,6 +1554,7 @@ export function createControlSocketHelpers(
     waitForControlSession,
     requestWorkspaceSessions,
     requestSessionSnapshot,
+    requestJsonRpcControl,
     requestJsonRpcControlEvent,
     __internal: {
       getWorkspaceStateSnapshot: (workspaceId: string) => ({

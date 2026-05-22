@@ -1,13 +1,19 @@
 import { z } from "zod";
 
 import { getModel as realGetModel } from "./config";
-import { loadMCPServers, loadMCPTools } from "./mcp";
+import {
+  ensureManagedSofficeRuntimeReady,
+  prepareManagedSofficeToolEnv,
+  renderManagedSofficeRuntimeInstructions,
+} from "./managedSofficeRuntime";
+import { getOrLoadMCPToolsCached, loadMCPServers, loadMCPTools } from "./mcp";
 import { buildRuntimeTelemetrySettings } from "./observability/runtime";
 import { buildGooglePrepareStep } from "./providers/googleReplay";
 import { createRuntime } from "./runtime";
 import type {
   RuntimeModelRawEvent,
   RuntimePrepareStep,
+  RuntimeRegisterSteerHandler,
   RuntimeStepOverride,
 } from "./runtime/types";
 import type { AgentShellPolicy } from "./server/agents/commandPolicy";
@@ -17,11 +23,13 @@ import type { SessionCostTracker, SessionUsageSnapshot } from "./session/costTra
 import type { AgentRole } from "./shared/agents";
 import type { ProviderContinuationState } from "./shared/providerContinuation";
 import type { AgentControl } from "./tools";
-import { createTools } from "./tools";
+import { createTools, filterToolsForCodexDynamicBoundary } from "./tools";
 import { buildTurnSystemPrompt } from "./turnSystemPrompt";
 import type { AgentConfig, HarnessContextState, ModelMessage, TodoItem } from "./types";
+import { resolveAuthHomeDir } from "./utils/authHome";
 
-const MAX_STREAM_SETTLE_TICKS = 64;
+/** Maximum time (ms) to wait for the legacy stream to drain after response promises settle. */
+let STREAM_DRAIN_TIMEOUT_MS = 30_000;
 const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
 const messageRecordSchema = z
   .object({
@@ -44,6 +52,8 @@ const usageSchema = z.object({
   completionTokens: z.number(),
   totalTokens: z.number(),
   cachedPromptTokens: z.number().optional(),
+  cacheWritePromptTokens: z.number().optional(),
+  reasoningOutputTokens: z.number().optional(),
   estimatedCostUsd: z.number().optional(),
 });
 const responseMessagesSchema = z.array(z.unknown());
@@ -68,6 +78,7 @@ export interface RunTurnParams {
   harnessContext?: HarnessContextState | null;
   agentControl?: AgentControl;
   prepareStep?: RuntimePrepareStep;
+  registerSteerHandler?: RuntimeRegisterSteerHandler;
 
   log: (line: string) => void;
   askUser: (question: string, options?: string[]) => Promise<string>;
@@ -81,10 +92,12 @@ export interface RunTurnParams {
   spawnDepth?: number;
   agentRole?: AgentRole;
   shellPolicy?: AgentShellPolicy;
+  yolo?: boolean;
 
   maxSteps?: number;
   enableMcp?: boolean;
   abortSignal?: AbortSignal;
+  sessionId?: string;
   onModelStreamPart?: (part: unknown) => void | Promise<void>;
   onModelRawEvent?: (event: RuntimeModelRawEvent) => void | Promise<void>;
   onModelError?: (error: unknown) => void | Promise<void>;
@@ -97,6 +110,9 @@ export interface RunTurnParams {
 
   /** Session cost tracker instance, if available. */
   costTracker?: SessionCostTracker;
+
+  /** Environment variables inherited by child processes launched from tools. */
+  toolEnv?: Record<string, string | undefined>;
 
   /** Persist/emit session usage when a tool mutates budget thresholds mid-turn. */
   onSessionUsageBudgetUpdated?: (snapshot: SessionUsageSnapshot) => void;
@@ -236,6 +252,29 @@ function extractTurnUserPrompt(messages: ModelMessage[]): string | undefined {
   return undefined;
 }
 
+function providerOwnsExecutableTools(config: AgentConfig): boolean {
+  return config.provider === "codex-cli";
+}
+
+async function prepareTurnToolEnv(
+  params: Pick<RunTurnParams, "config" | "toolEnv" | "log">,
+): Promise<Record<string, string | undefined> | undefined> {
+  return await prepareManagedSofficeToolEnv({
+    homedir: resolveAuthHomeDir(params.config),
+    env: params.toolEnv ?? { ...process.env },
+    log: (line) => params.log?.(`[managed-soffice] ${line}`),
+  });
+}
+
+function appendManagedSofficeInstructions(
+  system: string,
+  env: Record<string, string | undefined> | undefined,
+): string {
+  if (system.includes("## Managed LibreOffice Runtime")) return system;
+  const instructions = renderManagedSofficeRuntimeInstructions(env);
+  return instructions ? `${system}\n\n${instructions}` : system;
+}
+
 type RunTurnDeps = {
   createRuntime: typeof createRuntime;
   createTools: typeof createTools;
@@ -286,6 +325,8 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       completionTokens: number;
       totalTokens: number;
       cachedPromptTokens?: number;
+      cacheWritePromptTokens?: number;
+      reasoningOutputTokens?: number;
       estimatedCostUsd?: number;
     };
     providerState?: ProviderContinuationState;
@@ -302,6 +343,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       abortSignal,
     } = params;
     let latestTurnMessages = messages;
+    const turnToolEnv = await prepareTurnToolEnv(params);
 
     const toolCtx = {
       config,
@@ -319,20 +361,34 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       shellPolicy: params.shellPolicy ?? getAgentRoleShellPolicy(params.agentRole),
       agentControl: params.agentControl,
       costTracker: params.costTracker,
+      toolEnv: turnToolEnv,
       onSessionUsageBudgetUpdated: params.onSessionUsageBudgetUpdated,
       applyA2uiEnvelope: params.applyA2uiEnvelope,
     };
-    const builtInTools = deps.createTools(toolCtx);
+    const useProviderNativeTools = providerOwnsExecutableTools(config);
+    const rawBuiltInTools = deps.createTools(toolCtx);
+    const builtInTools = useProviderNativeTools
+      ? filterToolsForCodexDynamicBoundary(rawBuiltInTools)
+      : rawBuiltInTools;
 
     let mcpTools: Record<string, any> = {};
     const enableMcp = params.enableMcp ?? config.enableMcp ?? false;
     let closeMcp: undefined | (() => Promise<void>);
     if (enableMcp) {
-      const servers = await deps.loadMCPServers(config);
-      if (servers.length > 0) {
-        const loaded = await deps.loadMCPTools(servers, { log });
+      if (params.sessionId) {
+        const loaded = await getOrLoadMCPToolsCached(config, params.sessionId, {
+          log,
+          loadMCPServers: deps.loadMCPServers,
+          loadMCPTools: deps.loadMCPTools,
+        });
         mcpTools = loaded.tools;
-        closeMcp = loaded.close;
+      } else {
+        const servers = await deps.loadMCPServers(config);
+        if (servers.length > 0) {
+          const loaded = await deps.loadMCPTools(servers, { log });
+          mcpTools = loaded.tools;
+          closeMcp = loaded.close;
+        }
       }
     }
 
@@ -343,7 +399,10 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
     const mcpToolNames = Object.keys(tools)
       .filter((name) => name.startsWith("mcp__"))
       .sort();
-    const turnSystem = buildTurnSystemPrompt(system, config, mcpToolNames, params.harnessContext);
+    const turnSystem = appendManagedSofficeInstructions(
+      buildTurnSystemPrompt(system, config, mcpToolNames, params.harnessContext),
+      turnToolEnv,
+    );
     const turnProviderOptions = config.providerOptions;
     const googlePrepareStep =
       config.provider === "google" && Object.keys(tools).length > 0
@@ -366,6 +425,8 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
         completionTokens: number;
         totalTokens: number;
         cachedPromptTokens?: number;
+        cacheWritePromptTokens?: number;
+        reasoningOutputTokens?: number;
         estimatedCostUsd?: number;
       };
     }> => {
@@ -402,8 +463,6 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
           };
 
           const streamResult = await legacyStreamText(streamTextInput);
-          let streamConsumptionSettled = false;
-          let streamPartCount = 0;
           const streamConsumption = (async () => {
             if (!params.onModelStreamPart) return;
             const parsedStream = streamResultWithFullStreamSchema.safeParse(streamResult);
@@ -415,11 +474,8 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
               const next = await streamIterator.next();
               if (next.done) break;
               await params.onModelStreamPart(next.value);
-              streamPartCount += 1;
             }
-          })().finally(() => {
-            streamConsumptionSettled = true;
-          });
+          })();
 
           const [text, reasoningText, response] = await Promise.all([
             Promise.resolve(streamResult.text),
@@ -428,37 +484,33 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
           ]);
 
           if (params.onModelStreamPart) {
-            let previousCount = streamPartCount;
-            let stableTicks = 0;
-            let ticks = 0;
-            while (
-              !streamConsumptionSettled &&
-              stableTicks < 2 &&
-              ticks < MAX_STREAM_SETTLE_TICKS
-            ) {
-              await Promise.resolve();
-              ticks += 1;
-              if (streamPartCount === previousCount) {
-                stableTicks += 1;
-              } else {
-                previousCount = streamPartCount;
-                stableTicks = 0;
-              }
-            }
-            if (streamConsumptionSettled) {
-              try {
-                await streamConsumption;
-              } catch (error) {
-                log(`[warn] Model stream ended with error: ${String(error)}`);
-              }
-            } else {
-              log("[warn] Model stream did not drain after response completion; continuing turn.");
+            // Wait for the stream consumption to fully drain rather than
+            // guessing completion via micro-tick counting (which can fire
+            // prematurely on a loaded event loop and silently drop output).
+            const drainTimeout = new Promise<"timeout">((resolve) =>
+              setTimeout(() => resolve("timeout"), STREAM_DRAIN_TIMEOUT_MS),
+            );
+
+            const drainResult = await Promise.race([
+              streamConsumption
+                .then(() => "drained" as const)
+                .catch((error) => ({ error }) as { error: unknown }),
+              drainTimeout,
+            ]);
+
+            if (drainResult === "timeout") {
+              log(
+                `[warn] Model stream did not drain within ${STREAM_DRAIN_TIMEOUT_MS}ms after response completion; continuing turn.`,
+              );
               void streamConsumption.catch((error) => {
                 log(
                   `[warn] Model stream ended with error after response completion: ${String(error)}`,
                 );
               });
+            } else if (typeof drainResult === "object" && "error" in drainResult) {
+              log(`[warn] Model stream ended with error: ${String(drainResult.error)}`);
             }
+            // else: drained successfully, nothing to log
           }
 
           const parsedResponseMessages = responseMessagesSchema.safeParse(
@@ -481,6 +533,12 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
                   ...(typeof parsedUsage.data.cachedPromptTokens === "number"
                     ? { cachedPromptTokens: parsedUsage.data.cachedPromptTokens }
                     : {}),
+                  ...(typeof parsedUsage.data.cacheWritePromptTokens === "number"
+                    ? { cacheWritePromptTokens: parsedUsage.data.cacheWritePromptTokens }
+                    : {}),
+                  ...(typeof parsedUsage.data.reasoningOutputTokens === "number"
+                    ? { reasoningOutputTokens: parsedUsage.data.reasoningOutputTokens }
+                    : {}),
                   ...(typeof parsedUsage.data.estimatedCostUsd === "number"
                     ? { estimatedCostUsd: parsedUsage.data.estimatedCostUsd }
                     : {}),
@@ -497,12 +555,21 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
           allMessages: params.allMessages,
           tools,
           maxSteps: params.maxSteps ?? 100,
+          yolo: params.yolo,
+          shellPolicy: params.shellPolicy ?? getAgentRoleShellPolicy(params.agentRole),
           providerOptions: turnProviderOptions,
           providerState: params.providerState,
+          toolEnv: turnToolEnv,
           abortSignal,
           includeRawChunks: params.includeRawChunks ?? true,
           telemetry,
           ...(prepareStep ? { prepareStep } : {}),
+          ...(params.registerSteerHandler
+            ? { registerSteerHandler: params.registerSteerHandler }
+            : {}),
+          askUser,
+          approveCommand,
+          updateTodos,
           onModelStreamPart: params.onModelStreamPart,
           onModelRawEvent: params.onModelRawEvent,
           onModelError: params.onModelError,
@@ -535,9 +602,21 @@ export async function runTurnWithDeps(
     completionTokens: number;
     totalTokens: number;
     cachedPromptTokens?: number;
+    cacheWritePromptTokens?: number;
+    reasoningOutputTokens?: number;
     estimatedCostUsd?: number;
   };
   providerState?: ProviderContinuationState;
 }> {
   return await createRunTurn(overrides)(params);
 }
+
+/** @internal Test-only hooks — not part of the public API. */
+export const __internal = {
+  setStreamDrainTimeoutMs(ms: number) {
+    STREAM_DRAIN_TIMEOUT_MS = ms;
+  },
+  resetStreamDrainTimeoutMs() {
+    STREAM_DRAIN_TIMEOUT_MS = 30_000;
+  },
+};

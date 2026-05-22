@@ -333,6 +333,9 @@ export function extractTriggers(name: string, frontMatter?: Record<string, unkno
     spreadsheet: ["spreadsheet", "excel", ".xlsx", "csv", "data table", "chart"],
     slides: ["presentation", "slides", "powerpoint", ".pptx", "deck", "pitch"],
     doc: ["document", "word", ".docx", "report", "letter", "memo"],
+    spreadsheets: ["spreadsheet", "excel", ".xlsx", "csv", "data table", "chart"],
+    presentations: ["presentation", "slides", "powerpoint", ".pptx", "deck", "pitch"],
+    documents: ["document", "word", ".docx", "report", "letter", "memo"],
   };
 
   return defaults[name] || [name];

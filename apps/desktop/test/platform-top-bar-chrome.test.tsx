@@ -66,7 +66,7 @@ describe("PlatformTopBarChrome", () => {
     }
   });
 
-  test("renders nothing on Windows when sidebar is expanded", async () => {
+  test("renders Windows left rail with collapse control when sidebar is expanded", async () => {
     const harness = setupJsdom();
     try {
       const container = harness.dom.window.document.getElementById("root");
@@ -91,8 +91,10 @@ describe("PlatformTopBarChrome", () => {
       });
 
       expect(container.querySelector(".app-sidebar-collapse-control")).toBeNull();
-      expect(container.querySelector(".app-topbar__win32-left-rail")).toBeNull();
+      expect(container.querySelector(".app-topbar__win32-left-rail")).not.toBeNull();
       expect(container.querySelector(".app-topbar__inline-sidebar-toggle")).toBeNull();
+      expect(container.querySelector('button[aria-label="New Chat"]')).toBeNull();
+      expect(container.querySelector('button[aria-label="Hide sidebar"]')).not.toBeNull();
 
       await act(async () => {
         root.unmount();
@@ -102,7 +104,7 @@ describe("PlatformTopBarChrome", () => {
     }
   });
 
-  test("renders Windows left rail with new chat and expand when collapsed", async () => {
+  test("renders Windows left rail with expand and new chat when collapsed", async () => {
     const harness = setupJsdom();
     const onNewChat = mock(() => {});
     const onToggleSidebar = mock(() => {});
@@ -129,11 +131,11 @@ describe("PlatformTopBarChrome", () => {
       });
 
       const leftRail = container.querySelector(".app-topbar__win32-left-rail");
+      const buttons = Array.from(leftRail?.querySelectorAll("button") ?? []);
       expect(leftRail).not.toBeNull();
-      const newChatButton = container.querySelector('button[aria-label="New Chat"]');
-      const showSidebarButton = container.querySelector('button[aria-label="Show sidebar"]');
-      expect(newChatButton).not.toBeNull();
-      expect(showSidebarButton).not.toBeNull();
+      expect(buttons).toHaveLength(2);
+      expect(buttons[0]?.getAttribute("aria-label")).toBe("Show sidebar");
+      expect(buttons[1]?.getAttribute("aria-label")).toBe("New Chat");
 
       await act(async () => {
         root.unmount();

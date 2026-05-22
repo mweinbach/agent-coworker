@@ -11,6 +11,8 @@ const showSaveDialogMock = mock(async () => ({
   filePath: undefined as string | undefined,
 }));
 const getDownloadsPathMock = mock(() => path.join(os.tmpdir(), "cowork-downloads"));
+const clipboardWriteTextMock = mock((_text: string) => {});
+const trashItemMock = mock(async (_targetPath: string) => {});
 
 let filesModuleImportNonce = 0;
 
@@ -24,7 +26,9 @@ async function loadRegisterFilesIpc() {
         },
       },
       clipboard: {
-        writeText() {},
+        writeText(text: string) {
+          clipboardWriteTextMock(text);
+        },
       },
       dialog: {
         showSaveDialog(...args: unknown[]) {
@@ -34,7 +38,9 @@ async function loadRegisterFilesIpc() {
       shell: {
         openPath: async () => "",
         showItemInFolder() {},
-        trashItem: async () => {},
+        trashItem(targetPath: string) {
+          return trashItemMock(targetPath);
+        },
       },
       BrowserWindow: {
         fromWebContents() {
@@ -279,6 +285,164 @@ describe("files IPC", () => {
         },
       ),
     ).rejects.toThrow("outside allowed workspace roots");
+
+    await fs.rm(tempWorkspace, { recursive: true, force: true });
+    await fs.rm(outsideDir, { recursive: true, force: true });
+  });
+
+  test("copyPath writes path to clipboard if it is within approved roots", async () => {
+    const registerFilesIpc = await loadRegisterFilesIpc();
+    const tempWorkspaceRaw = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-copy-path-ws-"));
+    const tempWorkspace = await fs.realpath(tempWorkspaceRaw);
+    const filePath = path.join(tempWorkspace, "some-file.txt");
+
+    const handlers = new Map<
+      string,
+      (event: unknown, args?: unknown) => Promise<unknown> | unknown
+    >();
+    registerFilesIpc({
+      deps: {} as never,
+      workspaceRoots: {
+        async ensureApprovedWorkspaceRoots() {},
+        async refreshApprovedWorkspaceRootsFromState() {},
+        async assertApprovedWorkspacePath(workspacePath: string) {
+          return workspacePath;
+        },
+        async addApprovedWorkspacePath(workspacePath: string) {
+          return workspacePath;
+        },
+        setApprovedWorkspaceRoots() {},
+        getApprovedWorkspaceRoots() {
+          return [tempWorkspace];
+        },
+      },
+      handleDesktopInvoke(channel, handler) {
+        handlers.set(channel, handler as never);
+      },
+      parseWithSchema(_schema, value) {
+        return value as never;
+      },
+    });
+
+    const handler = handlers.get(DESKTOP_IPC_CHANNELS.copyPath);
+    expect(handler).toBeDefined();
+
+    clipboardWriteTextMock.mockClear();
+
+    await handler?.(
+      { sender: {} },
+      {
+        path: filePath,
+      },
+    );
+
+    expect(clipboardWriteTextMock).toHaveBeenCalledWith(filePath);
+    await fs.rm(tempWorkspace, { recursive: true, force: true });
+  });
+
+  test("trashPath does not permanently delete when moving to Trash fails", async () => {
+    const registerFilesIpc = await loadRegisterFilesIpc();
+    const tempWorkspaceRaw = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-trash-path-ws-"));
+    const tempWorkspace = await fs.realpath(tempWorkspaceRaw);
+    const filePath = path.join(tempWorkspace, "keep-me.txt");
+    await fs.writeFile(filePath, "still here", "utf-8");
+
+    const handlers = new Map<
+      string,
+      (event: unknown, args?: unknown) => Promise<unknown> | unknown
+    >();
+    registerFilesIpc({
+      deps: {} as never,
+      workspaceRoots: {
+        async ensureApprovedWorkspaceRoots() {},
+        async refreshApprovedWorkspaceRootsFromState() {},
+        async assertApprovedWorkspacePath(workspacePath: string) {
+          return workspacePath;
+        },
+        async addApprovedWorkspacePath(workspacePath: string) {
+          return workspacePath;
+        },
+        setApprovedWorkspaceRoots() {},
+        getApprovedWorkspaceRoots() {
+          return [tempWorkspace];
+        },
+      },
+      handleDesktopInvoke(channel, handler) {
+        handlers.set(channel, handler as never);
+      },
+      parseWithSchema(_schema, value) {
+        return value as never;
+      },
+    });
+
+    const handler = handlers.get(DESKTOP_IPC_CHANNELS.trashPath);
+    expect(handler).toBeDefined();
+
+    trashItemMock.mockImplementationOnce(async () => {
+      throw new Error("Trash unavailable");
+    });
+
+    await expect(handler?.({ sender: {} }, { path: filePath })).rejects.toThrow(
+      "Unable to move to Trash: Trash unavailable",
+    );
+
+    expect(trashItemMock).toHaveBeenCalledWith(filePath);
+    expect(await fs.readFile(filePath, "utf-8")).toBe("still here");
+
+    await fs.rm(tempWorkspace, { recursive: true, force: true });
+  });
+
+  test("copyPath rejects paths outside approved roots", async () => {
+    const registerFilesIpc = await loadRegisterFilesIpc();
+    const tempWorkspaceRaw = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-copy-path-ws-"));
+    const tempWorkspace = await fs.realpath(tempWorkspaceRaw);
+    const outsideDirRaw = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-copy-path-outside-"));
+    const outsideDir = await fs.realpath(outsideDirRaw);
+    const filePath = path.join(outsideDir, "some-file.txt");
+
+    const handlers = new Map<
+      string,
+      (event: unknown, args?: unknown) => Promise<unknown> | unknown
+    >();
+    registerFilesIpc({
+      deps: {} as never,
+      workspaceRoots: {
+        async ensureApprovedWorkspaceRoots() {},
+        async refreshApprovedWorkspaceRootsFromState() {},
+        async assertApprovedWorkspacePath(workspacePath: string) {
+          return workspacePath;
+        },
+        async addApprovedWorkspacePath(workspacePath: string) {
+          return workspacePath;
+        },
+        setApprovedWorkspaceRoots() {},
+        getApprovedWorkspaceRoots() {
+          return [tempWorkspace];
+        },
+      },
+      handleDesktopInvoke(channel, handler) {
+        handlers.set(channel, handler as never);
+      },
+      parseWithSchema(_schema, value) {
+        return value as never;
+      },
+    });
+
+    const handler = handlers.get(DESKTOP_IPC_CHANNELS.copyPath);
+    expect(handler).toBeDefined();
+
+    clipboardWriteTextMock.mockClear();
+
+    await expect(
+      handler?.(
+        { sender: {} },
+        {
+          path: filePath,
+        },
+      ),
+    ).rejects.toThrow("outside allowed workspace roots");
+
+    expect(clipboardWriteTextMock).not.toHaveBeenCalled();
 
     await fs.rm(tempWorkspace, { recursive: true, force: true });
     await fs.rm(outsideDir, { recursive: true, force: true });

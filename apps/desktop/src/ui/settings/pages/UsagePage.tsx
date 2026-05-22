@@ -26,6 +26,9 @@ type AggregateModelEntry = {
   sessions: number;
   totalPromptTokens: number;
   totalCompletionTokens: number;
+  totalCachedPromptTokens: number;
+  totalCacheWritePromptTokens: number;
+  totalReasoningOutputTokens: number;
   totalTokens: number;
   estimatedCostUsd: number | null;
 };
@@ -34,6 +37,9 @@ type ProviderGroup = {
   provider: string;
   models: AggregateModelEntry[];
   totalTokens: number;
+  totalCachedPromptTokens: number;
+  totalCacheWritePromptTokens: number;
+  totalReasoningOutputTokens: number;
   totalTurns: number;
   estimatedCostUsd: number | null;
 };
@@ -44,6 +50,9 @@ export type AggregateUsage = {
   totalTokens: number;
   totalPromptTokens: number;
   totalCompletionTokens: number;
+  totalCachedPromptTokens: number;
+  totalCacheWritePromptTokens: number;
+  totalReasoningOutputTokens: number;
   totalTurns: number;
   totalSessions: number;
   providers: ProviderGroup[];
@@ -60,6 +69,9 @@ export function aggregateUsageFromRuntimes(
   let totalTokens = 0;
   let totalPromptTokens = 0;
   let totalCompletionTokens = 0;
+  let totalCachedPromptTokens = 0;
+  let totalCacheWritePromptTokens = 0;
+  let totalReasoningOutputTokens = 0;
   let totalTurns = 0;
   let totalSessions = 0;
 
@@ -72,6 +84,9 @@ export function aggregateUsageFromRuntimes(
     totalTokens += usage.totalTokens;
     totalPromptTokens += usage.totalPromptTokens;
     totalCompletionTokens += usage.totalCompletionTokens;
+    totalCachedPromptTokens += usage.totalCachedPromptTokens ?? 0;
+    totalCacheWritePromptTokens += usage.totalCacheWritePromptTokens ?? 0;
+    totalReasoningOutputTokens += usage.totalReasoningOutputTokens ?? 0;
 
     if (usage.costTrackingAvailable) costTrackingAvailable = true;
     if (typeof usage.estimatedTotalCostUsd === "number") {
@@ -86,6 +101,9 @@ export function aggregateUsageFromRuntimes(
         existing.sessions += 1;
         existing.totalPromptTokens += entry.totalPromptTokens;
         existing.totalCompletionTokens += entry.totalCompletionTokens;
+        existing.totalCachedPromptTokens += entry.totalCachedPromptTokens ?? 0;
+        existing.totalCacheWritePromptTokens += entry.totalCacheWritePromptTokens ?? 0;
+        existing.totalReasoningOutputTokens += entry.totalReasoningOutputTokens ?? 0;
         existing.totalTokens += entry.totalTokens;
         if (typeof entry.estimatedCostUsd === "number") {
           existing.estimatedCostUsd = (existing.estimatedCostUsd ?? 0) + entry.estimatedCostUsd;
@@ -98,6 +116,9 @@ export function aggregateUsageFromRuntimes(
           sessions: 1,
           totalPromptTokens: entry.totalPromptTokens,
           totalCompletionTokens: entry.totalCompletionTokens,
+          totalCachedPromptTokens: entry.totalCachedPromptTokens ?? 0,
+          totalCacheWritePromptTokens: entry.totalCacheWritePromptTokens ?? 0,
+          totalReasoningOutputTokens: entry.totalReasoningOutputTokens ?? 0,
           totalTokens: entry.totalTokens,
           estimatedCostUsd: entry.estimatedCostUsd,
         });
@@ -118,9 +139,15 @@ export function aggregateUsageFromRuntimes(
     models.sort((a, b) => (b.estimatedCostUsd ?? 0) - (a.estimatedCostUsd ?? 0));
     let providerCost: number | null = null;
     let providerTokens = 0;
+    let providerCachedPromptTokens = 0;
+    let providerCacheWritePromptTokens = 0;
+    let providerReasoningOutputTokens = 0;
     let providerTurns = 0;
     for (const m of models) {
       providerTokens += m.totalTokens;
+      providerCachedPromptTokens += m.totalCachedPromptTokens;
+      providerCacheWritePromptTokens += m.totalCacheWritePromptTokens;
+      providerReasoningOutputTokens += m.totalReasoningOutputTokens;
       providerTurns += m.turns;
       if (typeof m.estimatedCostUsd === "number") {
         providerCost = (providerCost ?? 0) + m.estimatedCostUsd;
@@ -130,6 +157,9 @@ export function aggregateUsageFromRuntimes(
       provider,
       models,
       totalTokens: providerTokens,
+      totalCachedPromptTokens: providerCachedPromptTokens,
+      totalCacheWritePromptTokens: providerCacheWritePromptTokens,
+      totalReasoningOutputTokens: providerReasoningOutputTokens,
       totalTurns: providerTurns,
       estimatedCostUsd: providerCost,
     });
@@ -142,6 +172,9 @@ export function aggregateUsageFromRuntimes(
     totalTokens,
     totalPromptTokens,
     totalCompletionTokens,
+    totalCachedPromptTokens,
+    totalCacheWritePromptTokens,
+    totalReasoningOutputTokens,
     totalTurns,
     totalSessions,
     providers,
@@ -251,7 +284,7 @@ export function UsagePage(props: UsagePageProps = {}) {
           className={buttonVariants({ variant: "outline", size: "sm", className: "gap-2" })}
           onClick={() => handleEstimateNoticeOpenChange?.(true)}
         >
-          <AlertTriangleIcon className="h-4 w-4" data-icon />
+          <AlertTriangleIcon data-icon="inline-start" />
           How estimates work
         </button>
       ),
@@ -285,7 +318,7 @@ export function UsagePage(props: UsagePageProps = {}) {
           value={hasUsage ? formatTokenCount(aggregate.totalTokens) : "0"}
           detail={
             hasUsage
-              ? `${formatTokenCount(aggregate.totalPromptTokens)} in · ${formatTokenCount(aggregate.totalCompletionTokens)} out`
+              ? `${formatTokenCount(aggregate.totalPromptTokens)} in · ${formatTokenCount(aggregate.totalCompletionTokens)} out${aggregate.totalCachedPromptTokens > 0 ? ` · ${formatTokenCount(aggregate.totalCachedPromptTokens)} cache read` : ""}${aggregate.totalCacheWritePromptTokens > 0 ? ` · ${formatTokenCount(aggregate.totalCacheWritePromptTokens)} cache write` : ""}${aggregate.totalReasoningOutputTokens > 0 ? ` · ${formatTokenCount(aggregate.totalReasoningOutputTokens)} reasoning` : ""}`
               : "No usage recorded yet"
           }
         />
@@ -339,6 +372,17 @@ export function UsagePage(props: UsagePageProps = {}) {
                     </div>
                     <div className="flex items-center gap-4 text-xs text-muted-foreground">
                       <span>{formatTokenCount(group.totalTokens)} tokens</span>
+                      {group.totalCachedPromptTokens > 0 ? (
+                        <span>{formatTokenCount(group.totalCachedPromptTokens)} cache read</span>
+                      ) : null}
+                      {group.totalCacheWritePromptTokens > 0 ? (
+                        <span>
+                          {formatTokenCount(group.totalCacheWritePromptTokens)} cache write
+                        </span>
+                      ) : null}
+                      {group.totalReasoningOutputTokens > 0 ? (
+                        <span>{formatTokenCount(group.totalReasoningOutputTokens)} reasoning</span>
+                      ) : null}
                       <span>
                         {group.totalTurns} turn{group.totalTurns === 1 ? "" : "s"}
                       </span>
@@ -372,7 +416,7 @@ export function UsagePage(props: UsagePageProps = {}) {
                               <span className="text-xs text-muted-foreground">No pricing</span>
                             )}
                           </div>
-                          <div className="grid gap-2 grid-cols-3 text-xs">
+                          <div className="grid gap-2 grid-cols-2 lg:grid-cols-6 text-xs">
                             <div>
                               <span className="text-muted-foreground">Prompt: </span>
                               <span className="text-foreground font-medium">
@@ -383,6 +427,24 @@ export function UsagePage(props: UsagePageProps = {}) {
                               <span className="text-muted-foreground">Completion: </span>
                               <span className="text-foreground font-medium">
                                 {formatTokenCount(model.totalCompletionTokens)}
+                              </span>
+                            </div>
+                            <div>
+                              <span className="text-muted-foreground">Cache read: </span>
+                              <span className="text-foreground font-medium">
+                                {formatTokenCount(model.totalCachedPromptTokens)}
+                              </span>
+                            </div>
+                            <div>
+                              <span className="text-muted-foreground">Cache write: </span>
+                              <span className="text-foreground font-medium">
+                                {formatTokenCount(model.totalCacheWritePromptTokens)}
+                              </span>
+                            </div>
+                            <div>
+                              <span className="text-muted-foreground">Reasoning: </span>
+                              <span className="text-foreground font-medium">
+                                {formatTokenCount(model.totalReasoningOutputTokens)}
                               </span>
                             </div>
                             <div>
@@ -416,7 +478,7 @@ export function UsagePage(props: UsagePageProps = {}) {
             className="gap-2"
             onClick={() => handleEstimateNoticeOpenChange?.(true)}
           >
-            <AlertTriangleIcon className="h-4 w-4" />
+            <AlertTriangleIcon data-icon="inline-start" />
             How estimates work
           </Button>
         </div>

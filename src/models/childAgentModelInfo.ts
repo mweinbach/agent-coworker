@@ -70,6 +70,11 @@ const freeExperimental = {
   bestFor: "free-tier experimentation, rough first passes, and non-critical exploratory work",
 } as const;
 
+const kimi26Turbo = {
+  bestFor:
+    "fast agentic coding and multimodal tasks with Kimi K2.6 Turbo via Fire Pass subscription",
+} as const;
+
 const CHILD_AGENT_MODEL_INFO_BY_KEY: Readonly<Record<string, ChildAgentModelInfo>> = {
   [key("openai", "gpt-5.5")]: frontierCoding,
   [key("openai", "gpt-5.4")]: frontierCoding,
@@ -81,8 +86,10 @@ const CHILD_AGENT_MODEL_INFO_BY_KEY: Readonly<Record<string, ChildAgentModelInfo
   [key("codex-cli", "gpt-5.5")]: frontierCoding,
   [key("codex-cli", "gpt-5.4")]: frontierCoding,
   [key("codex-cli", "gpt-5.4-mini")]: frontierCoding,
+  [key("codex-cli", "gpt-5.3-codex-spark")]: fastGeneral,
 
   [key("anthropic", "claude-opus-4-6")]: claudeFrontier,
+  [key("anthropic", "claude-opus-4-7")]: claudeFrontier,
   [key("anthropic", "claude-sonnet-4-6")]: claudeBalanced,
   [key("anthropic", "claude-sonnet-4-5")]: claudeBalanced,
   [key("anthropic", "claude-haiku-4-5")]: claudeFast,
@@ -95,6 +102,7 @@ const CHILD_AGENT_MODEL_INFO_BY_KEY: Readonly<Record<string, ChildAgentModelInfo
   [key("google", "gemini-3.1-pro-preview-customtools")]: geminiPro,
   [key("google", "gemini-3-flash-preview")]: geminiFlash,
   [key("google", "gemini-3.1-flash-lite-preview")]: geminiFlash,
+  [key("google", "gemini-3.5-flash")]: geminiFlash,
 
   [key("nvidia", "nvidia/nemotron-3-super-120b-a12b")]: openReasoner,
 
@@ -106,6 +114,7 @@ const CHILD_AGENT_MODEL_INFO_BY_KEY: Readonly<Record<string, ChildAgentModelInfo
   [key("together", "moonshotai/Kimi-K2.5")]: kimi25,
   [key("fireworks", "accounts/fireworks/models/kimi-k2p5")]: kimi25,
   [key("fireworks", "accounts/fireworks/routers/kimi-k2p5-turbo")]: kimi25,
+  [key("firepass", "accounts/fireworks/routers/kimi-k2p6-turbo")]: kimi26Turbo,
   [key("opencode-go", "kimi-k2.5")]: kimi25,
   [key("opencode-zen", "kimi-k2.5")]: kimi25,
 

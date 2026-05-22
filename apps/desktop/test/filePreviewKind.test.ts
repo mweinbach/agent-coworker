@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
-import { getExtensionLower, getFilePreviewKind } from "../src/lib/filePreviewKind";
+import {
+  getExtensionLower,
+  getFilePreviewKind,
+  isCanvasSupportedFile,
+} from "../src/lib/filePreviewKind";
 
 describe("filePreviewKind", () => {
   test("getExtensionLower handles posix paths", () => {
@@ -18,8 +22,17 @@ describe("filePreviewKind", () => {
     expect(getFilePreviewKind("/x/p.png")).toBe("image");
     expect(getFilePreviewKind("/x/w.docx")).toBe("docx");
     expect(getFilePreviewKind("/x/w.doc")).toBe("unsupported");
+    expect(getFilePreviewKind("/x/data.csv")).toBe("csv");
     expect(getFilePreviewKind("/x/s.xlsx")).toBe("xlsx");
-    expect(getFilePreviewKind("/x/z.pptx")).toBe("unsupported");
+    expect(getFilePreviewKind("/x/z.pptx")).toBe("pptx");
+    expect(getFilePreviewKind("/x/p.ppt")).toBe("pptx");
     expect(getFilePreviewKind("/x/unknown.bin")).toBe("unknown");
+  });
+
+  test("spreadsheet and presentation files are preview-supported canvas files", () => {
+    expect(isCanvasSupportedFile("/x/readme.md")).toBe(true);
+    expect(isCanvasSupportedFile("/x/data.csv")).toBe(true);
+    expect(isCanvasSupportedFile("/x/s.xlsx")).toBe(true);
+    expect(isCanvasSupportedFile("/x/z.pptx")).toBe(true);
   });
 });

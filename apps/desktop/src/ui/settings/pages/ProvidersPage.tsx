@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronRightIcon, DownloadIcon, RefreshCcwIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
@@ -70,11 +70,15 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
   const setProviderConfig = useAppStore((s) => s.setProviderConfig);
   const copyProviderApiKey = useAppStore((s) => s.copyProviderApiKey);
   const authorizeProviderAuth = useAppStore((s) => s.authorizeProviderAuth);
-  const logoutProviderAuth = useAppStore((s) => s.logoutProviderAuth);
   const callbackProviderAuth = useAppStore((s) => s.callbackProviderAuth);
   const refreshProviderStatus = useAppStore((s) => s.refreshProviderStatus);
+  const checkCodexAppServerStatus = useAppStore((s) => s.checkCodexAppServerStatus);
+  const updateCodexAppServer = useAppStore((s) => s.updateCodexAppServer);
   const providerStatusByNameFromStore = useAppStore((s) => s.providerStatusByName);
   const providerStatusRefreshingFromStore = useAppStore((s) => s.providerStatusRefreshing);
+  const codexAppServerStatusFromStore = useAppStore((s) => s.codexAppServerStatus);
+  const codexAppServerCheckingFromStore = useAppStore((s) => s.codexAppServerChecking);
+  const codexAppServerUpdatingFromStore = useAppStore((s) => s.codexAppServerUpdating);
   const providerCatalogFromStore = useAppStore((s) => s.providerCatalog);
   const providerAuthMethodsByProviderFromStore = useAppStore(
     (s) => s.providerAuthMethodsByProvider,
@@ -87,6 +91,11 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
   const providerStatusByName = serverState?.providerStatusByName ?? providerStatusByNameFromStore;
   const providerStatusRefreshing =
     serverState?.providerStatusRefreshing ?? providerStatusRefreshingFromStore;
+  const codexAppServerStatus = serverState?.codexAppServerStatus ?? codexAppServerStatusFromStore;
+  const codexAppServerChecking =
+    serverState?.codexAppServerChecking ?? codexAppServerCheckingFromStore;
+  const codexAppServerUpdating =
+    serverState?.codexAppServerUpdating ?? codexAppServerUpdatingFromStore;
   const providerCatalog = serverState?.providerCatalog ?? providerCatalogFromStore;
   const providerAuthMethodsByProvider =
     serverState?.providerAuthMethodsByProvider ?? providerAuthMethodsByProviderFromStore;
@@ -126,7 +135,9 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
     const filtered = source.filter((provider) => !UI_DISABLED_PROVIDERS.has(provider));
 
     const isModelProvider = (provider: ProviderName) =>
-      provider === "lmstudio" || (provider in modelChoices && modelChoices[provider]?.length > 0);
+      provider === "lmstudio" ||
+      provider === "codex-cli" ||
+      (provider in modelChoices && modelChoices[provider]?.length > 0);
 
     const sortProviders = (providers: ProviderName[]) =>
       [...providers].sort((a, b) => {
@@ -177,6 +188,11 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
     if (!canConnectProvider) return;
     void refreshProviderStatus();
   }, [canConnectProvider, refreshProviderStatus]);
+
+  useEffect(() => {
+    if (!canConnectProvider) return;
+    void checkCodexAppServerStatus({ checkLatest: false });
+  }, [canConnectProvider, checkCodexAppServerStatus]);
 
   const settingsChrome = useOptionalSettingsChrome();
   useEffect(() => {
@@ -284,11 +300,6 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
       providerLastAuthResult?.methodId === opts.method.id
         ? providerLastAuthResult
         : null;
-    const showLogout =
-      opts.provider === "codex-cli" &&
-      opts.method.id === "oauth_cli" &&
-      opts.status?.mode === "oauth" &&
-      Boolean(opts.status?.authorized);
     const siblingProvider =
       opts.method.type === "api" && opts.method.id === "api_key" && !isStructuredMethod
         ? siblingOpenCodeProvider(opts.provider)
@@ -494,19 +505,6 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
             >
               Sign in
             </Button>
-            {showLogout ? (
-              <Button
-                variant="outline"
-                type="button"
-                disabled={!canConnectProvider}
-                title={!canConnectProvider ? "Add a workspace first." : undefined}
-                onClick={() => {
-                  void logoutProviderAuth(opts.provider);
-                }}
-              >
-                Log out
-              </Button>
-            ) : null}
             {opts.method.oauthMode === "code" ? (
               <>
                 <Input
@@ -575,14 +573,25 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
     const catalogEntry = providerCatalog.find(
       (entry): entry is ProviderCatalogEntry => entry.id === provider,
     );
-    const methods = visibleAuthMethods(provider, authMethodsForProvider(provider));
     const connected = Boolean(status?.authorized || status?.verified);
+    const methods =
+      provider === "codex-cli" && connected
+        ? []
+        : visibleAuthMethods(provider, authMethodsForProvider(provider));
     const providerDisplayName =
       catalogNameByProvider.get(provider) ?? displayProviderName(provider);
     const models = (modelChoices[provider] ?? []).slice(0, 8);
     const visibleRateLimits = Array.isArray(status?.usage?.rateLimits)
       ? status.usage.rateLimits.filter(isVisibleUsageRateLimit)
       : [];
+    const codexSourceLabel =
+      codexAppServerStatus?.source === "system"
+        ? "System"
+        : codexAppServerStatus?.source === "managed"
+          ? "Cowork managed"
+          : codexAppServerStatus?.source === "override"
+            ? "Override"
+            : "Not installed";
 
     if (provider === "lmstudio") {
       const lmStudioEnabled = providerUiState.lmstudio.enabled;
@@ -598,11 +607,11 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
       });
 
       return (
-        <Card
+        <div
           key={provider}
           className={cn(
-            "provider-settings-card border-border/80 bg-card/85",
-            isExpanded && "border-primary/35",
+            "provider-settings-card transition-colors duration-150",
+            isExpanded && "bg-panel/40",
           )}
         >
           <Collapsible
@@ -613,7 +622,7 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
               <Button
                 type="button"
                 variant="ghost"
-                className="h-auto w-full justify-between gap-3 rounded-none px-4 py-3 text-left hover:bg-transparent"
+                className="h-auto w-full justify-between gap-3 rounded-none px-3 py-2.5 text-left hover:bg-transparent"
               >
                 <div className="min-w-0">
                   <div className="truncate text-sm font-semibold text-foreground">
@@ -624,7 +633,17 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-2 [&>[data-icon]]:size-4 [&>[data-icon]]:shrink-0">
-                  <Badge variant={lmStudioEnabled && connected ? "default" : "secondary"}>
+                  <Badge
+                    variant={lmStudioEnabled && connected ? "default" : "secondary"}
+                    className={cn(
+                      lmStudioEnabled && connected
+                        ? "bg-success/10 text-success border-success/20 hover:bg-success/10 gap-1.5 px-2.5 py-0.5 font-medium shadow-none"
+                        : "bg-muted/15 text-muted-foreground border-transparent shadow-none",
+                    )}
+                  >
+                    {lmStudioEnabled && connected && (
+                      <span className="h-1.5 w-1.5 rounded-full bg-success animate-pulse" />
+                    )}
                     {lmStudioCard.badgeLabel}
                   </Badge>
                   {isExpanded ? (
@@ -639,7 +658,7 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
             <CollapsibleContent>
               <CardContent
                 id={`provider-panel-${provider}`}
-                className="space-y-4 border-t border-border/70 px-4 py-3.5"
+                className="space-y-4 border-t border-border/70 px-3 py-3"
               >
                 <div className="text-sm text-muted-foreground">
                   LM Studio runs on a local server. Connect it once to make its models available in
@@ -692,42 +711,35 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
                   </div>
 
                   {lmStudioModels.length > 0 ? (
-                    <div className="space-y-2">
-                      <div className="grid gap-2">
-                        {lmStudioModels.map((model) => {
-                          const checked = !hiddenModels.has(model.id);
-                          const checkboxId = `lmstudio-model-${model.id}`;
-                          return (
-                            <div
-                              key={model.id}
-                              className="flex items-start gap-3 rounded-sm border border-border/60 px-3 py-2 text-sm"
-                            >
-                              <Checkbox
-                                id={checkboxId}
-                                checked={checked}
-                                onCheckedChange={(nextChecked) => {
-                                  void setLmStudioModelVisible(model.id, nextChecked === true);
-                                }}
-                                aria-label={`Show LM Studio model ${model.id} in chat`}
-                              />
-                              <label htmlFor={checkboxId} className="min-w-0">
-                                <div className="truncate font-medium text-foreground">
-                                  {typeof model.displayName === "string" && model.displayName.trim()
-                                    ? model.displayName
-                                    : model.id}
-                                </div>
-                                <div className="truncate text-xs text-muted-foreground">
-                                  {model.id}
-                                </div>
-                              </label>
-                            </div>
-                          );
-                        })}
-                      </div>
-                      <div className="text-xs text-muted-foreground">
-                        Hidden models stay available in LM Studio but are removed from the main chat
-                        selector. Newly discovered models are shown automatically.
-                      </div>
+                    <div className="space-y-1">
+                      {lmStudioModels.map((model) => {
+                        const isHidden = hiddenModels.has(model.id);
+                        const checked = !isHidden;
+                        const checkboxId = `lmstudio-model-${model.id}`;
+                        return (
+                          <div
+                            key={model.id}
+                            className="flex items-center justify-between gap-3 rounded-lg border border-border/40 px-2 py-1.5 hover:bg-muted/15"
+                          >
+                            <label htmlFor={checkboxId} className="min-w-0 flex-1 cursor-pointer">
+                              <div className="truncate text-xs font-medium text-foreground">
+                                {model.displayName || model.id}
+                              </div>
+                              <div className="truncate text-[10px] text-muted-foreground">
+                                {model.id}
+                              </div>
+                            </label>
+                            <Checkbox
+                              id={checkboxId}
+                              checked={checked}
+                              onCheckedChange={(checked) => {
+                                void setLmStudioModelVisible(model.id, Boolean(checked));
+                              }}
+                              aria-label={`Show LM Studio model ${model.id} in chat`}
+                            />
+                          </div>
+                        );
+                      })}
                     </div>
                   ) : (
                     <div className="rounded-sm border border-dashed border-border/60 px-3 py-2 text-sm text-muted-foreground">
@@ -738,16 +750,16 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
               </CardContent>
             </CollapsibleContent>
           </Collapsible>
-        </Card>
+        </div>
       );
     }
 
     return (
-      <Card
+      <div
         key={provider}
         className={cn(
-          "provider-settings-card border-border/80 bg-card/85",
-          isExpanded && "border-primary/35",
+          "provider-settings-card transition-colors duration-150",
+          isExpanded && "bg-panel/40",
         )}
       >
         <Collapsible
@@ -773,7 +785,19 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
                 </div>
               </div>
               <div className="flex shrink-0 items-center gap-2 [&>[data-icon]]:size-4 [&>[data-icon]]:shrink-0">
-                <Badge variant={connected ? "default" : "secondary"}>{label}</Badge>
+                <Badge
+                  variant={connected ? "default" : "secondary"}
+                  className={cn(
+                    connected
+                      ? "bg-success/10 text-success border-success/20 hover:bg-success/10 gap-1.5 px-2.5 py-0.5 font-medium shadow-none"
+                      : "bg-muted/15 text-muted-foreground border-transparent shadow-none",
+                  )}
+                >
+                  {connected && (
+                    <span className="h-1.5 w-1.5 rounded-full bg-success animate-pulse" />
+                  )}
+                  {label}
+                </Badge>
                 {isExpanded ? (
                   <ChevronDownIcon data-icon="inline-end" className="text-muted-foreground" />
                 ) : (
@@ -786,7 +810,7 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
           <CollapsibleContent>
             <CardContent
               id={`provider-panel-${provider}`}
-              className="space-y-3.5 border-t border-border/70 px-4 py-3.5"
+              className="space-y-3.5 border-t border-border/70 px-3 py-3"
             >
               {methods.map((method) =>
                 renderAuthMethod({
@@ -925,6 +949,64 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
                 </div>
               ) : null}
 
+              {provider === "codex-cli" ? (
+                <div className="space-y-2 border-t border-border/70 pt-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                      App server
+                    </div>
+                    <Badge variant="secondary">{codexSourceLabel}</Badge>
+                  </div>
+                  <div className="grid gap-x-3 gap-y-1 text-sm sm:grid-cols-[5.75rem_minmax(0,1fr)]">
+                    {codexAppServerStatus?.version ? (
+                      <>
+                        <div className="text-xs uppercase tracking-wide text-muted-foreground">
+                          Version
+                        </div>
+                        <div className="text-sm text-foreground/95">
+                          {codexAppServerStatus.version}
+                        </div>
+                      </>
+                    ) : null}
+                    {codexAppServerStatus?.latestVersion ? (
+                      <>
+                        <div className="text-xs uppercase tracking-wide text-muted-foreground">
+                          Latest
+                        </div>
+                        <div className="text-sm text-foreground/95">
+                          {codexAppServerStatus.latestVersion}
+                        </div>
+                      </>
+                    ) : null}
+                    <div className="text-xs uppercase tracking-wide text-muted-foreground">
+                      Status
+                    </div>
+                    <div className="text-sm text-foreground/95">
+                      {codexAppServerStatus?.message ?? "Checking Codex app-server."}
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      variant="outline"
+                      type="button"
+                      disabled={codexAppServerChecking || codexAppServerUpdating}
+                      onClick={() => void checkCodexAppServerStatus({ checkLatest: true })}
+                    >
+                      <RefreshCcwIcon data-icon="inline-start" />
+                      {codexAppServerChecking ? "Checking..." : "Check"}
+                    </Button>
+                    <Button
+                      type="button"
+                      disabled={codexAppServerUpdating || codexAppServerChecking}
+                      onClick={() => void updateCodexAppServer()}
+                    >
+                      <DownloadIcon data-icon="inline-start" />
+                      {codexAppServerUpdating ? "Updating..." : "Update"}
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
+
               {models.length > 0 ? (
                 <div className="space-y-2 border-t border-border/70 pt-4">
                   <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -942,7 +1024,7 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
             </CardContent>
           </CollapsibleContent>
         </Collapsible>
-      </Card>
+      </div>
     );
   };
 
@@ -966,11 +1048,11 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
     const expanded = expandedSectionId === opts.sectionId;
 
     return (
-      <Card
+      <div
         key={opts.key}
         className={cn(
-          "provider-settings-card border-border/80 bg-card/85",
-          expanded && "border-primary/35",
+          "provider-settings-card transition-colors duration-150",
+          expanded && "bg-panel/40",
         )}
       >
         <Collapsible
@@ -990,7 +1072,17 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
                 </div>
               </div>
               <div className="flex shrink-0 items-center gap-2 [&>[data-icon]]:size-4 [&>[data-icon]]:shrink-0">
-                <Badge variant={connected ? "default" : "secondary"}>
+                <Badge
+                  variant={connected ? "default" : "secondary"}
+                  className={cn(
+                    connected
+                      ? "bg-success/10 text-success border-success/20 hover:bg-success/10 gap-1.5 px-2.5 py-0.5 font-medium shadow-none"
+                      : "bg-muted/15 text-muted-foreground border-transparent shadow-none",
+                  )}
+                >
+                  {connected && (
+                    <span className="h-1.5 w-1.5 rounded-full bg-success animate-pulse" />
+                  )}
                   {connected ? "Connected" : "Not connected"}
                 </Badge>
                 {expanded ? (
@@ -1005,7 +1097,7 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
           <CollapsibleContent>
             <CardContent
               id={opts.panelId}
-              className="space-y-4 border-t border-border/70 px-5 py-4"
+              className="space-y-4 border-t border-border/70 px-3 py-3"
             >
               <div className="text-sm text-muted-foreground">{opts.description}</div>
               {renderAuthMethod({
@@ -1017,7 +1109,7 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
             </CardContent>
           </CollapsibleContent>
         </Collapsible>
-      </Card>
+      </div>
     );
   };
 
@@ -1117,7 +1209,7 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
 
       <div
         className={cn(
-          "space-y-3 animate-in fade-in slide-in-from-bottom-2 duration-300",
+          "divide-y divide-border/30 overflow-hidden rounded-xl border border-border/75 bg-card/85 app-shadow-surface animate-in fade-in slide-in-from-bottom-2 duration-300",
           activeTab !== "models" && "hidden",
         )}
       >
@@ -1125,7 +1217,7 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
       </div>
       <div
         className={cn(
-          "space-y-3 animate-in fade-in slide-in-from-bottom-2 duration-300",
+          "divide-y divide-border/30 overflow-hidden rounded-xl border border-border/75 bg-card/85 app-shadow-surface animate-in fade-in slide-in-from-bottom-2 duration-300",
           activeTab !== "tools" && "hidden",
         )}
       >

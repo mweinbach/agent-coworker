@@ -1,5 +1,7 @@
 #!/usr/bin/env bun
 
+import "reflect-metadata";
+
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -16,8 +18,13 @@ function printUsage() {
 
 async function resolveAndValidateDir(dirArg: string): Promise<string> {
   const resolved = path.resolve(dirArg);
-  const st = await fs.stat(resolved);
-  if (!st.isDirectory()) throw new Error(`--dir is not a directory: ${resolved}`);
+  let st: { isDirectory: () => boolean } | null = null;
+  try {
+    st = await fs.stat(resolved);
+  } catch {
+    st = null;
+  }
+  if (!st?.isDirectory()) throw new Error(`--dir is not a directory: ${resolved}`);
   return resolved;
 }
 
@@ -140,7 +147,7 @@ async function main() {
     import("./startServer"),
   ]);
 
-  const { server, mobileServer, config, url } = await startAgentServer({
+  const { server, mobileServer, config, url, browserAccessToken } = await startAgentServer({
     cwd,
     hostname: host,
     port,
@@ -193,6 +200,7 @@ async function main() {
         hostHints,
         port: server.port,
         cwd: config.workingDirectory,
+        browserAccessToken: browserAccessToken ?? null,
         mobileH3: mobileServer
           ? {
               url: mobileServer.url,

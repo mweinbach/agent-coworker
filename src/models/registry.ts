@@ -2,14 +2,19 @@ import { z } from "zod";
 
 import anthropicClaudeHaiku45 from "../../config/models/anthropic/claude-haiku-4-5.json";
 import anthropicClaudeOpus46 from "../../config/models/anthropic/claude-opus-4-6.json";
+import anthropicClaudeOpus47 from "../../config/models/anthropic/claude-opus-4-7.json";
 import anthropicClaudeSonnet45 from "../../config/models/anthropic/claude-sonnet-4-5.json";
 import anthropicClaudeSonnet46 from "../../config/models/anthropic/claude-sonnet-4-6.json";
+import antigravityGemini31Pro from "../../config/models/antigravity/gemini-3.1-pro-preview.json";
+import antigravityGemini31FlashLite from "../../config/models/antigravity/gemini-3.1-flash-lite.json";
+import antigravityGemini35Flash from "../../config/models/antigravity/gemini-3.5-flash.json";
 import basetenMoonshotAiKimiK25 from "../../config/models/baseten/moonshotai-kimi-k2.5.json";
 import basetenNvidiaNemotron120bA12b from "../../config/models/baseten/nvidia-nemotron-120b-a12b.json";
 import basetenZaiOrgGlm5 from "../../config/models/baseten/zai-org-glm-5.json";
 import bedrockAmazonNovaLiteV10 from "../../config/models/bedrock/amazon.nova-lite-v1-0.json";
 import bedrockAmazonNovaMicroV10 from "../../config/models/bedrock/amazon.nova-micro-v1-0.json";
 import bedrockAnthropicClaude35Haiku20241022V10 from "../../config/models/bedrock/anthropic.claude-3-5-haiku-20241022-v1-0.json";
+import codexCliGpt53CodexSpark from "../../config/models/codex-cli/gpt-5.3-codex-spark.json";
 import codexCliGpt54 from "../../config/models/codex-cli/gpt-5.4.json";
 import codexCliGpt54Mini from "../../config/models/codex-cli/gpt-5.4-mini.json";
 import codexCliGpt55 from "../../config/models/codex-cli/gpt-5.5.json";
@@ -17,9 +22,11 @@ import fireworksGlm5 from "../../config/models/fireworks/accounts-fireworks-mode
 import fireworksKimiK2p5 from "../../config/models/fireworks/accounts-fireworks-models-kimi-k2p5.json";
 import fireworksMinimaxM2p5 from "../../config/models/fireworks/accounts-fireworks-models-minimax-m2p5.json";
 import fireworksKimiK2p5Turbo from "../../config/models/fireworks/accounts-fireworks-routers-kimi-k2p5-turbo.json";
+import firepassKimiK2p6Turbo from "../../config/models/firepass/accounts-fireworks-routers-kimi-k2p6-turbo.json";
 import googleGemini31FlashLitePreview from "../../config/models/google/gemini-3.1-flash-lite-preview.json";
 import googleGemini31ProPreview from "../../config/models/google/gemini-3.1-pro-preview.json";
 import googleGemini31ProPreviewCustomtools from "../../config/models/google/gemini-3.1-pro-preview-customtools.json";
+import googleGemini35Flash from "../../config/models/google/gemini-3.5-flash.json";
 import googleGemini3FlashPreview from "../../config/models/google/gemini-3-flash-preview.json";
 import nvidiaNemotron3Super120bA12b from "../../config/models/nvidia/nvidia-nemotron-3-super-120b-a12b.json";
 import openaiGpt52 from "../../config/models/openai/gpt-5.2.json";
@@ -50,10 +57,12 @@ export const STATIC_MODEL_PROVIDER_NAMES = [
   "baseten",
   "together",
   "fireworks",
+  "firepass",
   "nvidia",
   "opencode-go",
   "opencode-zen",
   "codex-cli",
+  "antigravity",
 ] as const satisfies readonly ProviderName[];
 
 export type StaticModelProviderName = (typeof STATIC_MODEL_PROVIDER_NAMES)[number];
@@ -79,6 +88,7 @@ export type SupportedModel = z.infer<typeof supportedModelSchema>;
 const RAW_MODEL_REGISTRY_ENTRIES = [
   anthropicClaudeHaiku45,
   anthropicClaudeOpus46,
+  anthropicClaudeOpus47,
   anthropicClaudeSonnet45,
   anthropicClaudeSonnet46,
   bedrockAmazonNovaLiteV10,
@@ -90,11 +100,17 @@ const RAW_MODEL_REGISTRY_ENTRIES = [
   codexCliGpt55,
   codexCliGpt54,
   codexCliGpt54Mini,
+  codexCliGpt53CodexSpark,
   fireworksGlm5,
   fireworksKimiK2p5,
   fireworksKimiK2p5Turbo,
   fireworksMinimaxM2p5,
+  firepassKimiK2p6Turbo,
+  googleGemini35Flash,
   googleGemini3FlashPreview,
+  antigravityGemini35Flash,
+  antigravityGemini31Pro,
+  antigravityGemini31FlashLite,
   googleGemini31FlashLitePreview,
   googleGemini31ProPreview,
   googleGemini31ProPreviewCustomtools,
@@ -130,10 +146,12 @@ function buildRegistry(entries: SupportedModel[]) {
     baseten: [],
     together: [],
     fireworks: [],
+    firepass: [],
     nvidia: [],
     "opencode-go": [],
     "opencode-zen": [],
     "codex-cli": [],
+    antigravity: [],
   };
   const byKey = new Map<string, SupportedModel>();
   const defaults = new Map<StaticModelProviderName, SupportedModel>();
@@ -185,6 +203,7 @@ const LEGACY_MODEL_ALIASES: Record<string, string> = {
   "codex-cli:gpt-5.1-codex-mini": "codex-cli:gpt-5.4",
   "codex-cli:gpt-5.2-codex": "codex-cli:gpt-5.4",
   "google:gemini-3-pro-preview": "google:gemini-3.1-pro-preview-customtools",
+  "antigravity:gemini-3.1-pro": "antigravity:gemini-3.1-pro-preview",
 };
 
 type LikelyModelProvider = "openai" | "anthropic";

@@ -8,7 +8,7 @@
  */
 :root[data-platform="win32"] .app-topbar {
   position: relative;
-  z-index: 4;
+  z-index: 6;
   -webkit-app-region: no-drag;
 }
 
@@ -19,12 +19,18 @@
 
 /*
  * The content-fill is the main drag surface for the title band to the right
- * of the sidebar. Visible controls stay above it with no-drag so the empty
- * band keeps native window dragging.
+ * of the sidebar. It uses the same surface as the sidebar pane so the whole
+ * title band (sidebar half + right-of-sidebar half) reads as one tinted
+ * material strip over Tabbed. CSS blur is disabled here because there's
+ * nothing inside the renderer above this layer to blur (the Tabbed material
+ * lives below the web contents).
  */
 :root[data-platform="win32"] .app-topbar__content-fill {
   pointer-events: auto;
   -webkit-app-region: drag;
+  background: var(--surface-sidebar-pane);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 /* Right toolbar sits just left of the native caption buttons. */
@@ -34,25 +40,23 @@
 }
 
 /*
- * The collapsed left rail gets its own drag layer so the empty space around
- * the buttons can drag the window while the buttons remain clickable.
+ * The Windows left rail owns the sidebar toggle in both expanded and collapsed
+ * states so the icon remains mounted in one place during sidebar animations.
+ * Empty space around the buttons can drag the window while the buttons remain
+ * clickable.
  */
 :root[data-platform="win32"] .app-topbar__win32-left-rail {
   width: var(--win32-collapsed-left-rail-width);
   z-index: 3;
-}
-
-:root[data-platform="win32"] .app-topbar__win32-left-drag-zone {
-  position: absolute;
-  inset: 0;
-  pointer-events: auto;
   -webkit-app-region: drag;
 }
 
 :root[data-platform="win32"] .app-topbar__win32-left-strip {
-  pointer-events: none;
+  pointer-events: auto;
   align-items: center;
   height: 100%;
+  z-index: 1;
+  -webkit-app-region: drag;
 }
 
 :root[data-platform="win32"] .app-topbar__win32-left-strip > * {
@@ -71,12 +75,17 @@
 
 /*
  * Pull the chat body up behind the topbar so the sidebar extends to the
- * window top. The sidebar pane stacks above the topbar fills and its
- * no-drag ensures buttons are clickable. Main content pads down to clear
- * the topbar.
+ * window top. We also paint the sidebar/topbar tint on the chat body itself
+ * — that way the topbar+sidebar+chat-body share a single unified material
+ * strip, and the card's tucked-in top-left corner reveals the same tint
+ * (instead of bare Tabbed) where its curve meets the sidebar/topbar L.
  */
 :root[data-platform="win32"] .app-chat-body {
   margin-top: calc(-1 * var(--platform-titlebar-height));
+}
+
+:root[data-platform="win32"]:not([data-reduced-transparency="true"]) .app-chat-body {
+  background: var(--surface-sidebar-pane);
 }
 
 :root[data-platform="win32"] .app-chat-body > .app-left-sidebar-pane {
@@ -85,8 +94,42 @@
   -webkit-app-region: no-drag;
 }
 
+/*
+ * Hide the 1px sidebar/main divider on Windows so the unified material
+ * strip (sidebar + topbar) reads as a single surface instead of being
+ * split by a hairline at the card's left edge.
+ */
+:root[data-platform="win32"]:not([data-reduced-transparency="true"]) .app-left-sidebar-pane {
+  border-right-color: transparent;
+}
+
+/*
+ * Main pane is flush against the sidebar (left), the topbar (top), and the
+ * window edges (right + bottom). Only the TOP-LEFT corner is rounded — that
+ * is the corner where the card tucks under the sidebar+topbar L. The cut-off
+ * area at that corner reveals the chat-body's tinted background so the
+ * sidebar/topbar material flows continuously around the card's curve.
+ */
 :root[data-platform="win32"] .app-chat-body > .app-main-content {
-  padding-top: var(--platform-titlebar-height);
+  margin: var(--platform-titlebar-height) 0 0 0;
+  padding-top: 0;
+  border-top-left-radius: var(--main-card-radius);
+  border-top-right-radius: 0;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  background: var(--surface-main-card);
+  box-shadow: var(--main-card-shadow);
+  overflow: hidden;
+}
+
+/*
+ * Right rail (context sidebar) lives inside the main card. Its own background
+ * would create a vertical seam where the card surface meets the rail, so we
+ * let the card surface flow underneath. The inner .app-context-sidebar__panel
+ * cards keep their own tint and borders.
+ */
+:root[data-platform="win32"]:not([data-reduced-transparency="true"]) .app-right-sidebar-pane {
+  background: transparent;
 }
 
 :root[data-platform="win32"] .app-sidebar {
@@ -140,9 +183,32 @@
   margin-top: 0;
 }
 
+/*
+ * Settings shell tints the same as chat-body so the cut-off area at the
+ * settings-main top-left corner reveals the unified topbar/nav material
+ * (not bare Tabbed). The drag-zone is transparent and only handles drag,
+ * so the tint shows through the y=0..titlebar band as well.
+ */
+:root[data-platform="win32"]:not([data-reduced-transparency="true"]) .settings-shell {
+  background: var(--surface-sidebar-pane);
+}
+
+/*
+ * Settings main pane mirrors the chat-shell card: flush against the
+ * settings nav on the left, the title band on top, and the window edges
+ * on the right + bottom. Only the top-left is rounded.
+ */
 :root[data-platform="win32"] .settings-shell__main {
   position: relative;
   z-index: 81;
+  margin: var(--platform-titlebar-height) 0 0 0;
+  border-top-left-radius: var(--main-card-radius);
+  border-top-right-radius: 0;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  background: var(--surface-main-card);
+  box-shadow: var(--main-card-shadow);
+  overflow: hidden;
 }
 
 :root[data-platform="win32"] .settings-shell__header-actions {
@@ -157,4 +223,34 @@
   height: var(--platform-titlebar-height);
   z-index: 80;
   -webkit-app-region: drag;
+}
+
+/*
+ * Acrylic-like translucency for transient surfaces (popovers, menus, dialogs,
+ * tooltips) on Windows. CSS backdrop-filter only blurs the renderer content
+ * behind these layers — it cannot blur the desktop or other windows — but
+ * since these portals always sit above the app's own content, this gives the
+ * Fluent "glass over content" feel without relying on a second native
+ * material. Disabled when the user requests reduced transparency.
+ */
+:root[data-platform="win32"]:not([data-reduced-transparency="true"])
+  :is(
+    [data-slot="alert-dialog-content"],
+    [data-slot="context-menu-content"],
+    [data-slot="context-menu-sub-content"],
+    [data-slot="dialog-content"],
+    [data-slot="drawer-content"],
+    [data-slot="dropdown-menu-content"],
+    [data-slot="dropdown-menu-sub-content"],
+    [data-slot="hover-card-content"],
+    [data-slot="menubar-content"],
+    [data-slot="menubar-sub-content"],
+    [data-slot="popover-content"],
+    [data-slot="select-content"],
+    [data-slot="sheet-content"],
+    [data-slot="tooltip-content"],
+    .app-topbar__thread-popover
+  ) {
+  backdrop-filter: blur(20px) saturate(1.4);
+  -webkit-backdrop-filter: blur(20px) saturate(1.4);
 }

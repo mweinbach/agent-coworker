@@ -151,3 +151,63 @@ jobs:
 
       - name: Build cowork-server binary
         run: bun run build:server-binary
+
+  mobile:
+    name: Mobile
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      EXPO_NO_TELEMETRY: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: ".bun-version"
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Cache mobile dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            apps/mobile/node_modules
+            apps/mobile/.expo
+            ~/.bun/install/cache
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-mobile-${{ hashFiles('bun.lock', 'apps/mobile/bun.lock', 'apps/mobile/package.json', 'apps/mobile/android/**/*.gradle', 'apps/mobile/android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-mobile-
+            ${{ runner.os }}-bun-
+
+      - name: Install root dependencies
+        run: bun install
+
+      - name: Install mobile dependencies
+        run: bun install --cwd apps/mobile
+
+      - name: Mobile typecheck
+        run: bun run app:mobile:typecheck
+
+      - name: Verify iOS Expo autolinking
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd apps/mobile
+          bunx expo-modules-autolinking resolve --platform apple --json > "$RUNNER_TEMP/mobile-autolinking-ios.json"
+          grep -q '"packageName":"cowork-pinned-https"' "$RUNNER_TEMP/mobile-autolinking-ios.json"
+          grep -q '"CoworkPinnedHttpsModule"' "$RUNNER_TEMP/mobile-autolinking-ios.json"
+
+      - name: Export mobile bundle
+        run: cd apps/mobile && bunx expo export --platform ios --output-dir dist-export-ci
+
+      - name: Android native build smoke
+        run: cd apps/mobile/android && ./gradlew :app:assembleDebug -x lint -x test --no-daemon

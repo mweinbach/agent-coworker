@@ -19,15 +19,17 @@ export function createServerStdoutMonitor(
   stdout: ReadableStream<Uint8Array>,
   onNonJsonLine: (line: string) => void = () => {},
 ): {
-  ready: Promise<string>;
+  ready: Promise<{ url: string; browserAccessToken: string | null }>;
   drained: Promise<void>;
 } {
-  let resolveReady!: (url: string) => void;
+  let resolveReady!: (value: { url: string; browserAccessToken: string | null }) => void;
   let rejectReady!: (error: Error) => void;
-  const ready = new Promise<string>((resolve, reject) => {
-    resolveReady = resolve;
-    rejectReady = reject;
-  });
+  const ready = new Promise<{ url: string; browserAccessToken: string | null }>(
+    (resolve, reject) => {
+      resolveReady = resolve;
+      rejectReady = reject;
+    },
+  );
 
   const decoder = new TextDecoder();
   const reader = stdout.getReader();
@@ -44,7 +46,13 @@ export function createServerStdoutMonitor(
       const parsed = JSON.parse(trimmed);
       if (!readySeen && parsed?.type === "server_listening" && typeof parsed.url === "string") {
         readySeen = true;
-        resolveReady(parsed.url);
+        resolveReady({
+          url: parsed.url,
+          browserAccessToken:
+            typeof parsed.browserAccessToken === "string" && parsed.browserAccessToken.trim()
+              ? parsed.browserAccessToken.trim()
+              : null,
+        });
       }
     } catch {
       onNonJsonLine(line);
@@ -121,16 +129,20 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       process.stdout.write(`${line}\n`);
     },
   );
-  const timeoutPromise = new Promise<string>((_, reject) =>
-    setTimeout(
-      () => reject(new Error(`Server did not report ready within ${STARTUP_TIMEOUT_MS}ms`)),
-      STARTUP_TIMEOUT_MS,
-    ),
+  const timeoutPromise = new Promise<{ url: string; browserAccessToken: string | null }>(
+    (_, reject) =>
+      setTimeout(
+        () => reject(new Error(`Server did not report ready within ${STARTUP_TIMEOUT_MS}ms`)),
+        STARTUP_TIMEOUT_MS,
+      ),
   );
 
   let serverUrl: string;
+  let browserAccessToken: string | null = null;
   try {
-    serverUrl = await Promise.race([serverReady, timeoutPromise]);
+    const ready = await Promise.race([serverReady, timeoutPromise]);
+    serverUrl = ready.url;
+    browserAccessToken = ready.browserAccessToken;
   } catch (err) {
     console.error((err as Error).message);
     try {
@@ -158,6 +170,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       FORCE_COLOR: "1",
       // Lets the Vite config proxy /ws and /cowork to the server it actually started.
       COWORK_SERVER_URL: serverUrl,
+      ...(browserAccessToken ? { COWORK_BROWSER_ACCESS_TOKEN: browserAccessToken } : {}),
     },
   });
 

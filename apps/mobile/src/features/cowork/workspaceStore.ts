@@ -7,6 +7,7 @@ import {
   type WorkspaceControlSnapshot,
 } from "./controlRpc";
 import type { CoworkJsonRpcClient } from "./jsonRpcClient";
+import { saveToOfflineCache } from "./offlineCache";
 import type { WorkspaceListResult, WorkspaceSummary, WorkspaceSwitchResult } from "./protocolTypes";
 import { workspaceListResultSchema, workspaceSwitchResultSchema } from "./protocolTypes";
 import { getActiveCoworkJsonRpcClient } from "./runtimeClient";
@@ -63,6 +64,11 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => ({
         activeWorkspaceCwd: active?.path ?? null,
         loading: false,
       });
+      // Save to offline cache
+      void saveToOfflineCache("workspaces", parsed.workspaces);
+      void saveToOfflineCache("activeWorkspaceId", parsed.activeWorkspaceId);
+      void saveToOfflineCache("activeWorkspaceName", active?.name ?? null);
+      void saveToOfflineCache("activeWorkspaceCwd", active?.path ?? null);
     } catch (error) {
       set({
         loading: false,
@@ -92,6 +98,11 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => ({
         loading: false,
         controlSnapshot: null,
       });
+      // Save to offline cache
+      void saveToOfflineCache("activeWorkspaceId", parsed.workspaceId);
+      void saveToOfflineCache("activeWorkspaceName", parsed.name);
+      void saveToOfflineCache("activeWorkspaceCwd", parsed.path);
+      void saveToOfflineCache("controlSnapshot", null);
       return parsed;
     } catch (error) {
       const nextError = error instanceof Error ? error : new Error(String(error));
@@ -111,9 +122,11 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => ({
       const result = await callParsedControlMethod(client, "cowork/session/state/read", {
         cwd: activeWorkspaceCwd,
       });
+      const snapshot = parseWorkspaceControlSnapshot(result);
       set({
-        controlSnapshot: parseWorkspaceControlSnapshot(result),
+        controlSnapshot: snapshot,
       });
+      void saveToOfflineCache("controlSnapshot", snapshot);
     } catch {
       // Non-critical — session state is supplemental
     }

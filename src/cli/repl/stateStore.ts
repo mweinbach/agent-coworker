@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
 
@@ -27,8 +28,8 @@ const cliStateSchema = z
   .strict();
 
 function getCliStateFilePath(): string {
-  const home = process.env.HOME?.trim();
-  const paths = home ? getAiCoworkerPaths({ homedir: home }) : getAiCoworkerPaths();
+  const home = process.env.HOME?.trim() || os.homedir();
+  const paths = getAiCoworkerPaths({ homedir: home });
   return path.join(paths.rootDir, "state", "cli-state.json");
 }
 

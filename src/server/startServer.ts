@@ -7,19 +7,38 @@ import { resolveWsProtocol, splitWebSocketSubprotocolHeader } from "./wsProtocol
 
 export type { StartAgentServerOptions } from "./runtime/ServerRuntime";
 
-function pickLoopbackOrigin(req: Request): string | null {
-  const origin = req.headers.get("origin");
+function isLoopbackHostname(hostname: string): boolean {
+  return (
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "[::1]" ||
+    hostname === "::1"
+  );
+}
+
+function pickLoopbackOrigin(origin: string | null): string | null {
   if (!origin) return null;
   try {
     const u = new URL(origin);
-    const host = u.hostname;
-    if (host === "localhost" || host === "127.0.0.1" || host === "[::1]" || host === "::1") {
+    if (isLoopbackHostname(u.hostname)) {
       return origin;
     }
   } catch {
     // fall through
   }
   return null;
+}
+
+function hasUntrustedBrowserOrigin(req: Request): boolean {
+  const origin = req.headers.get("origin");
+  return Boolean(origin && !pickLoopbackOrigin(origin));
+}
+
+function readBrowserAccessToken(url: URL, req: Request): string | null {
+  const headerToken = req.headers.get("x-cowork-browser-token")?.trim();
+  if (headerToken) return headerToken;
+  const queryToken = url.searchParams.get("coworkBrowserToken")?.trim();
+  return queryToken || null;
 }
 
 function parseBearerToken(header: string | null): string | null {
@@ -38,14 +57,21 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
     : never;
   system: string;
   url: string;
+  browserAccessToken?: string;
 }> {
   const hostname = opts.hostname ?? "127.0.0.1";
   const runtime = await createAgentServerRuntime(opts);
   const requestedPort = opts.port ?? 7337;
   const webDesktopService =
     runtime.env.COWORK_WEB_DESKTOP_SERVICE === "1"
-      ? new WebDesktopService({ homedir: opts.homedir })
+      ? new WebDesktopService({
+          homedir: opts.homedir,
+          userDataDir: runtime.env.COWORK_DESKTOP_USER_DATA_DIR,
+        })
       : null;
+  const browserAccessToken =
+    runtime.env.COWORK_BROWSER_ACCESS_TOKEN?.trim() ||
+    (webDesktopService ? crypto.randomUUID() + crypto.randomUUID().replaceAll("-", "") : "");
   let mobileServer: Awaited<ReturnType<typeof startH3MobileServer>> | undefined;
 
   const createServer = (port: number): ReturnType<typeof Bun.serve> =>
@@ -54,22 +80,48 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
       port,
       async fetch(req, srv) {
         const url = new URL(req.url);
-        const allowedOrigin = pickLoopbackOrigin(req);
+        const allowedOrigin = pickLoopbackOrigin(req.headers.get("origin"));
         const corsHeaders: Record<string, string> = allowedOrigin
           ? {
               "Access-Control-Allow-Origin": allowedOrigin,
               Vary: "Origin",
             }
           : {};
+        const browserOrigin = req.headers.get("origin");
+        if (hasUntrustedBrowserOrigin(req)) {
+          return new Response("Forbidden origin", { status: 403, headers: corsHeaders });
+        }
         if (req.method === "OPTIONS") {
           return new Response(null, {
             status: 204,
             headers: {
               ...corsHeaders,
               "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
-              "Access-Control-Allow-Headers": "Content-Type, Sec-WebSocket-Protocol",
+              "Access-Control-Allow-Headers":
+                "Content-Type, Sec-WebSocket-Protocol, X-Cowork-Browser-Token",
               "Access-Control-Max-Age": "86400",
             },
+          });
+        }
+        if (
+          browserOrigin &&
+          !browserAccessToken &&
+          (url.pathname === "/ws" || url.pathname.startsWith("/cowork"))
+        ) {
+          return new Response("Browser access is not enabled for this server", {
+            status: 403,
+            headers: corsHeaders,
+          });
+        }
+        if (
+          browserOrigin &&
+          browserAccessToken &&
+          (url.pathname === "/ws" || url.pathname.startsWith("/cowork")) &&
+          readBrowserAccessToken(url, req) !== browserAccessToken
+        ) {
+          return new Response("Unauthorized browser access", {
+            status: 401,
+            headers: corsHeaders,
           });
         }
         if (url.pathname === "/ws") {
@@ -136,6 +188,7 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
         return new Response("OK", { status: 200, headers: corsHeaders });
       },
       websocket: {
+        maxPayloadLength: 4 * 1024 * 1024, // 4 MB — cap inbound frames to prevent memory exhaustion
         open(ws) {
           runtime.openConnection(ws);
         },
@@ -231,5 +284,6 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
     config: runtime.config,
     system: runtime.system,
     url,
+    ...(browserAccessToken ? { browserAccessToken } : {}),
   };
 }

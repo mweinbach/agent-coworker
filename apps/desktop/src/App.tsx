@@ -1,8 +1,11 @@
+import type { CSSProperties } from "react";
 import { memo, useEffect, useMemo, useRef } from "react";
 
 import { resolvePluginCatalogWorkspaceSelection } from "./app/pluginManagement";
+import { hasGoogleApiKeyForResearch } from "./app/researchAvailability";
 import { useAppStore } from "./app/store";
 import { disposeAllJsonRpcState } from "./app/store.helpers";
+import { isOneOffChatWorkspace } from "./app/types";
 import type { DesktopMenuCommand, SystemAppearance } from "./lib/desktopApi";
 import {
   getPlatformChrome,
@@ -12,12 +15,16 @@ import {
   onSystemAppearanceChanged,
   onUpdateStateChanged,
   setWindowAppearance,
+  showCanvasWindow,
   showNotification,
   showQuickChatWindow,
 } from "./lib/desktopCommands";
+import { getFilePreviewKind, isCanvasSupportedFile } from "./lib/filePreviewKind";
+import { applyPlatformChromeToDocument } from "./lib/platformChromeDom";
 import { canPopOutQuickChatThread } from "./lib/quickChatPopout";
 import { getDesktopWindowMode } from "./lib/windowMode";
 import { ASK_SKIP_TOKEN } from "./lib/wsProtocol";
+import { Canvas } from "./ui/Canvas";
 import { ContextSidebar } from "./ui/ContextSidebar";
 import { FilePreviewModal } from "./ui/FilePreviewModal";
 import { AppTopBar } from "./ui/layout/AppTopBar";
@@ -49,15 +56,22 @@ const LeftSidebarPane = memo(function LeftSidebarPane({ collapsed }: { collapsed
 
 const RightSidebarPane = memo(function RightSidebarPane({ collapsed }: { collapsed: boolean }) {
   const contextSidebarWidth = useAppStore((s) => s.contextSidebarWidth);
+  const canvasSidebarWidth = useAppStore((s) => s.canvasSidebarWidth);
+  const filePreview = useAppStore((s) => s.filePreview);
+  const canvasEnabled = useAppStore((s) => s.desktopFeatureFlags?.canvas === true);
+
+  const isCanvasSupported = filePreview?.path && isCanvasSupportedFile(filePreview.path);
+  const showCanvas = canvasEnabled && isCanvasSupported;
+  const activeWidth = showCanvas ? canvasSidebarWidth : contextSidebarWidth;
 
   return (
     <div
       className="app-right-sidebar-pane relative shrink-0 overflow-hidden"
-      style={{ width: collapsed ? 0 : contextSidebarWidth }}
+      style={{ width: collapsed ? 0 : activeWidth }}
     >
       {!collapsed ? <ContextSidebarResizer /> : null}
-      <div className="absolute top-0 bottom-0 left-0 flex" style={{ width: contextSidebarWidth }}>
-        <ContextSidebar />
+      <div className="absolute top-0 bottom-0 left-0 flex" style={{ width: activeWidth }}>
+        {showCanvas && filePreview?.path ? <Canvas path={filePreview.path} /> : <ContextSidebar />}
       </div>
     </div>
   );
@@ -96,6 +110,9 @@ const ChatShell = memo(function ChatShell({
   startupError: string | null;
 }) {
   const view = useAppStore((s) => s.view);
+  const googleResearchAvailable = useAppStore((s) =>
+    hasGoogleApiKeyForResearch(s.providerStatusByName.google),
+  );
   const workspaces = useAppStore((s) => s.workspaces);
   const threads = useAppStore((s) => s.threads);
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
@@ -108,10 +125,17 @@ const ChatShell = memo(function ChatShell({
   const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed);
   const sidebarWidth = useAppStore((s) => s.sidebarWidth);
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
-  const newThread = useAppStore((s) => s.newThread);
+  const openNewChatLanding = useAppStore((s) => s.openNewChatLanding);
   const clearThreadUsageHardCap = useAppStore((s) => s.clearThreadUsageHardCap);
   const contextSidebarCollapsed = useAppStore((s) => s.contextSidebarCollapsed);
   const toggleContextSidebar = useAppStore((s) => s.toggleContextSidebar);
+  const filePreview = useAppStore((s) => s.filePreview);
+  const canvasEnabled = useAppStore((s) => s.desktopFeatureFlags?.canvas === true);
+  const closeFilePreview = useAppStore((s) => s.closeFilePreview);
+  const canvasActiveTab = useAppStore((s) => s.canvasActiveTab);
+  const setCanvasActiveTab = useAppStore((s) => s.setCanvasActiveTab);
+  const canvasShowFormattingBar = useAppStore((s) => s.canvasShowFormattingBar);
+  const setCanvasShowFormattingBar = useAppStore((s) => s.setCanvasShowFormattingBar);
   const hasAnimatedSidebarsRef = useRef(false);
   const previousSidebarStateRef = useRef({
     sidebarCollapsed,
@@ -128,42 +152,50 @@ const ChatShell = memo(function ChatShell({
     }
     return workspaces.find((workspace) => workspace.id === activeThread.workspaceId) ?? null;
   }, [activeThread, workspaces]);
+  const projectWorkspaces = useMemo(
+    () => workspaces.filter((workspace) => !isOneOffChatWorkspace(workspace)),
+    [workspaces],
+  );
   const pluginSelection = useMemo(
     () =>
       resolvePluginCatalogWorkspaceSelection({
-        workspaces,
+        workspaces: projectWorkspaces,
         selectedWorkspaceId,
         pluginManagementWorkspaceId,
         pluginManagementMode,
       }),
-    [pluginManagementMode, pluginManagementWorkspaceId, selectedWorkspaceId, workspaces],
+    [pluginManagementMode, pluginManagementWorkspaceId, projectWorkspaces, selectedWorkspaceId],
   );
   const pluginManagementWorkspace = useMemo(
     () =>
-      workspaces.find((workspace) => workspace.id === pluginSelection.displayWorkspaceId) ?? null,
-    [pluginSelection.displayWorkspaceId, workspaces],
+      projectWorkspaces.find((workspace) => workspace.id === pluginSelection.displayWorkspaceId) ??
+      null,
+    [pluginSelection.displayWorkspaceId, projectWorkspaces],
   );
   const runtime = selectedThreadId ? threadRuntimeById[selectedThreadId] : null;
   const busy = runtime?.busy === true;
-  const showContextSidebar = view === "chat" && activeThread !== null;
+  const effectiveView = view === "research" && !googleResearchAvailable ? "chat" : view;
+  const showContextSidebar = effectiveView === "chat" && activeThread !== null;
   const catalogWorkspaceId = pluginSelection.catalogWorkspaceId;
   const pluginViewMode = catalogWorkspaceId
     ? (workspaceRuntimeById[catalogWorkspaceId]?.pluginViewMode ?? "plugins")
     : "plugins";
   const topBarTitle =
-    view === "skills"
+    effectiveView === "skills"
       ? pluginViewMode === "skills"
         ? "Skills"
         : "Plugins"
-      : view === "research"
+      : effectiveView === "research"
         ? "Research"
         : activeThread?.title?.trim() || "New thread";
   const topBarSubtitle: string | null =
-    view === "skills"
+    effectiveView === "skills"
       ? (pluginManagementWorkspace?.name ?? "Global")
-      : view === "research"
+      : effectiveView === "research"
         ? null
-        : (activeWorkspace?.name ?? "Cowork");
+        : isOneOffChatWorkspace(activeWorkspace)
+          ? null
+          : (activeWorkspace?.name ?? "Cowork");
   const canClearHardCap =
     runtime?.sessionUsage?.budgetStatus.stopTriggered === true &&
     runtime?.transcriptOnly !== true &&
@@ -172,6 +204,14 @@ const ChatShell = memo(function ChatShell({
     activeThread?.status === "active";
   const quickChatPopOutThreadId =
     activeThread && canPopOutQuickChatThread(activeThread) ? activeThread.id : null;
+  const canvasPath = filePreview?.path ?? null;
+  const showCanvasInTopBar =
+    effectiveView === "chat" &&
+    canvasEnabled &&
+    canvasPath !== null &&
+    isCanvasSupportedFile(canvasPath) &&
+    !contextSidebarCollapsed;
+  const canvasIsMarkdown = canvasPath !== null && getFilePreviewKind(canvasPath) === "markdown";
   useEffect(() => {
     const sidebarStateChanged =
       previousSidebarStateRef.current.sidebarCollapsed !== sidebarCollapsed ||
@@ -202,9 +242,9 @@ const ChatShell = memo(function ChatShell({
     <div className="app-shell app-shell--chat flex h-full min-h-0 flex-col text-foreground">
       <div className="app-window-drag-strip" aria-hidden="true" />
       <AppTopBar
-        busy={view === "chat" ? busy : false}
+        busy={effectiveView === "chat" ? busy : false}
         onToggleSidebar={toggleSidebar}
-        onNewChat={() => void newThread({ workspaceId: selectedWorkspaceId ?? undefined })}
+        onNewChat={() => void openNewChatLanding()}
         sidebarCollapsed={sidebarCollapsed}
         sidebarWidth={sidebarWidth}
         contextSidebarCollapsed={contextSidebarCollapsed}
@@ -216,25 +256,41 @@ const ChatShell = memo(function ChatShell({
         }
         title={topBarTitle}
         subtitle={topBarSubtitle}
-        managementMode={view === "skills" ? "plugins" : "thread"}
-        suppressThreadDetails={view === "research"}
+        managementMode={effectiveView === "skills" ? "plugins" : "thread"}
+        suppressThreadDetails={effectiveView === "research"}
+        hideThreadShell={effectiveView === "chat" && activeThread === null}
         managementWorkspaceId={pluginSelection.displayWorkspaceId}
-        managementWorkspaces={workspaces.map((workspace) => ({
+        managementWorkspaces={projectWorkspaces.map((workspace) => ({
           id: workspace.id,
           name: workspace.name,
         }))}
         onSelectManagementWorkspace={
-          view === "skills"
+          effectiveView === "skills"
             ? (workspaceId: string | null) => void setPluginManagementWorkspace(workspaceId)
             : undefined
         }
-        sessionUsage={view === "chat" ? (runtime?.sessionUsage ?? null) : null}
-        lastTurnUsage={view === "chat" ? (runtime?.lastTurnUsage ?? null) : null}
+        sessionUsage={effectiveView === "chat" ? (runtime?.sessionUsage ?? null) : null}
+        lastTurnUsage={effectiveView === "chat" ? (runtime?.lastTurnUsage ?? null) : null}
         canClearHardCap={canClearHardCap}
         onClearHardCap={
           selectedThreadId ? () => clearThreadUsageHardCap(selectedThreadId) : undefined
         }
-        showContextToggle={showContextSidebar}
+        showContextToggle={showContextSidebar && !showCanvasInTopBar}
+        canvasMode={showCanvasInTopBar}
+        canvasIsMarkdown={canvasIsMarkdown}
+        canvasActiveTab={canvasActiveTab}
+        onSetCanvasActiveTab={setCanvasActiveTab}
+        canvasShowFormattingBar={canvasShowFormattingBar}
+        onToggleCanvasFormattingBar={() => setCanvasShowFormattingBar(!canvasShowFormattingBar)}
+        onPopOutCanvas={
+          showCanvasInTopBar && canvasPath
+            ? () => {
+                void showCanvasWindow({ path: canvasPath }).catch(() => {});
+                closeFilePreview();
+              }
+            : undefined
+        }
+        onCloseCanvas={showCanvasInTopBar ? closeFilePreview : undefined}
       />
       <div className="app-chat-body flex min-h-0 min-w-0 flex-1 flex-row">
         <LeftSidebarPane collapsed={sidebarCollapsed} />
@@ -245,7 +301,13 @@ const ChatShell = memo(function ChatShell({
                 init={init}
                 ready={ready}
                 startupError={startupError}
-                view={view === "skills" ? "skills" : view === "research" ? "research" : "chat"}
+                view={
+                  effectiveView === "skills"
+                    ? "skills"
+                    : effectiveView === "research"
+                      ? "research"
+                      : "chat"
+                }
               />
             </div>
             {showContextSidebar ? <RightSidebarPane collapsed={contextSidebarCollapsed} /> : null}
@@ -343,7 +405,7 @@ export default function App() {
     function handleMenuCommand(command: DesktopMenuCommand): void {
       const state = useAppStore.getState();
       if (command === "newThread") {
-        void state.newThread();
+        void state.openNewChatLanding();
         return;
       }
       if (command === "toggleSidebar") {
@@ -419,19 +481,7 @@ export default function App() {
   useEffect(() => {
     void getPlatformChrome()
       .then((chrome) => {
-        const root = document.documentElement;
-        root.style.setProperty("--platform-titlebar-height", `${chrome.titlebarHeight}px`);
-        root.style.setProperty("--platform-drag-strip-height", `${chrome.dragStripHeight}px`);
-        root.style.setProperty("--platform-left-native-reserve", `${chrome.leftNativeReserve}px`);
-        root.style.setProperty("--platform-right-native-reserve", `${chrome.rightNativeReserve}px`);
-        root.style.setProperty(
-          "--platform-caption-button-reserve",
-          `${chrome.captionButtonReserve}px`,
-        );
-        root.dataset.sidebarTitlebandMode = chrome.sidebarTitlebandMode;
-        root.dataset.topbarControlPlacement = chrome.topbarControlPlacement;
-        root.dataset.usesNativeGlass = chrome.usesNativeGlass ? "true" : "false";
-        root.dataset.disableCssBlur = chrome.disableCssBlur ? "true" : "false";
+        applyPlatformChromeToDocument(document, chrome);
       })
       .catch(() => {
         // Fallback to defaults if platform chrome cannot be loaded.
@@ -462,6 +512,20 @@ export default function App() {
         <QuickChatShell init={init} ready={ready} startupError={startupError} />
       ) : windowMode === "utility" ? (
         <MenuBarUtilityShell init={init} ready={ready} startupError={startupError} />
+      ) : windowMode === "canvas" ? (
+        <div
+          className="flex h-full w-full bg-[var(--surface-sidebar-pane)] relative flex-col"
+          style={
+            {
+              backdropFilter: "blur(var(--sidebar-blur, 0px))",
+              WebkitBackdropFilter: "blur(var(--sidebar-blur, 0px))",
+            } as CSSProperties
+          }
+        >
+          <div className="flex-1 min-h-0 min-w-0">
+            <Canvas path={new URLSearchParams(window.location.search).get("path") || ""} />
+          </div>
+        </div>
       ) : view === "settings" ? (
         <div className="app-shell app-shell--settings flex h-full min-h-0 flex-col text-foreground">
           <div className="app-window-drag-strip" aria-hidden="true" />

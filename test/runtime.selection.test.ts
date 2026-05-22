@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import path from "node:path";
-
 import { createRuntime, resolveRuntimeName } from "../src/runtime";
+import { createAntigravityRuntime } from "../src/runtime/antigravityRuntime";
 import type { AgentConfig } from "../src/types";
 
 const PI_PROVIDER_CASES = [
@@ -49,25 +49,25 @@ describe("runtime selection", () => {
     expect(createRuntime(config).name).toBe("openai-responses");
   });
 
-  test("defaults codex-cli provider to the OpenAI Responses runtime", () => {
+  test("defaults codex-cli provider to the Codex app-server runtime", () => {
     const config = makeConfig({
       provider: "codex-cli",
       model: "gpt-5.4",
       preferredChildModel: "gpt-5.4",
     });
-    expect(resolveRuntimeName(config)).toBe("openai-responses");
-    expect(createRuntime(config).name).toBe("openai-responses");
+    expect(resolveRuntimeName(config)).toBe("codex-app-server");
+    expect(createRuntime(config).name).toBe("codex-app-server");
   });
 
-  test("treats legacy pi runtime config as the OpenAI Responses runtime for codex-cli", () => {
+  test("treats legacy pi runtime config as the Codex app-server runtime for codex-cli", () => {
     const config = makeConfig({
       provider: "codex-cli",
       model: "gpt-5.4",
       preferredChildModel: "gpt-5.4",
       runtime: "pi",
     });
-    expect(resolveRuntimeName(config)).toBe("openai-responses");
-    expect(createRuntime(config).name).toBe("openai-responses");
+    expect(resolveRuntimeName(config)).toBe("codex-app-server");
+    expect(createRuntime(config).name).toBe("codex-app-server");
   });
 
   for (const { provider, model } of PI_PROVIDER_CASES) {
@@ -115,5 +115,16 @@ describe("runtime selection", () => {
 
     expect(resolveRuntimeName(config)).toBe("pi");
     expect(createRuntime(config).name).toBe("pi");
+  });
+
+  test("allows the Antigravity runtime on macOS and Linux", () => {
+    expect(createAntigravityRuntime({ platform: "darwin" }).name).toBe("antigravity");
+    expect(createAntigravityRuntime({ platform: "linux" }).name).toBe("antigravity");
+  });
+
+  test("rejects the Antigravity runtime on Windows", () => {
+    expect(() => createAntigravityRuntime({ platform: "win32" })).toThrow(
+      "Antigravity runtime is only supported on macOS and Linux for now.",
+    );
   });
 });

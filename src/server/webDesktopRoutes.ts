@@ -523,6 +523,12 @@ export async function handleWebDesktopRoute(
         return jsonResponse(await opts.desktopService.saveState(body));
       }
 
+      if (url.pathname === "/cowork/desktop/one-off-chat/workspace" && req.method === "POST") {
+        const body = await readJsonBody(req);
+        const titleHint = typeof body.titleHint === "string" ? body.titleHint : undefined;
+        return jsonResponse(await opts.desktopService.createOneOffChatWorkspace({ titleHint }));
+      }
+
       if (url.pathname === "/cowork/desktop/workspace/start" && req.method === "POST") {
         const body = await readJsonBody(req);
         const workspaceId = readRequiredStringField(body, "workspaceId");

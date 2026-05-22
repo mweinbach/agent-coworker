@@ -3,6 +3,7 @@ import type {
   ResearchRecord,
   ResearchSettings,
 } from "../../../../src/server/research/types";
+import { DEFAULT_RESEARCH_AGENT_ID } from "../../../../src/server/research/types";
 import type { DesktopFeatureFlagOverrides } from "../../../../src/shared/featureFlags";
 import type { SessionFeedItem } from "../../../../src/shared/sessionSnapshot";
 import { normalizeQuickChatShortcutAccelerator } from "../lib/quickChatShortcut";
@@ -59,10 +60,19 @@ export type WorkspaceExplorerState = {
   requestId: number;
 };
 
+export type WorkspaceKind = "project" | "oneOffChat";
+
+export function isOneOffChatWorkspace(
+  workspace?: Pick<WorkspaceRecord, "workspaceKind"> | null,
+): boolean {
+  return workspace?.workspaceKind === "oneOffChat";
+}
+
 export type WorkspaceRecord = {
   id: string;
   name: string;
   path: string;
+  workspaceKind?: WorkspaceKind;
   createdAt: string;
   lastOpenedAt: string;
   wsProtocol?: "jsonrpc";
@@ -104,6 +114,8 @@ export type ThreadRecord = {
   lastEventSeq: number;
   legacyTranscriptId?: string | null;
   draft?: boolean;
+  archived?: boolean;
+  archivedAt?: string;
 };
 
 export type ThreadPendingSteer = {
@@ -153,7 +165,39 @@ export type PersistedDesktopSettings = {
     shortcutEnabled?: boolean;
     shortcutAccelerator?: string;
   };
+  archivedChatsAutoDeleteDays?: number;
+  sidebarSectionOrder?: SidebarSectionKey[];
 };
+
+export const SIDEBAR_SECTION_KEYS = ["projects", "chats"] as const;
+
+export type SidebarSectionKey = (typeof SIDEBAR_SECTION_KEYS)[number];
+
+export function normalizeSidebarSectionOrder(
+  value?: readonly unknown[] | null,
+): SidebarSectionKey[] {
+  const seen = new Set<SidebarSectionKey>();
+  const ordered: SidebarSectionKey[] = [];
+
+  for (const entry of value ?? []) {
+    if (entry !== "projects" && entry !== "chats") {
+      continue;
+    }
+    if (seen.has(entry)) {
+      continue;
+    }
+    seen.add(entry);
+    ordered.push(entry);
+  }
+
+  for (const key of SIDEBAR_SECTION_KEYS) {
+    if (!seen.has(key)) {
+      ordered.push(key);
+    }
+  }
+
+  return ordered;
+}
 
 export type DesktopSettings = {
   quickChat: {
@@ -161,6 +205,8 @@ export type DesktopSettings = {
     shortcutEnabled: boolean;
     shortcutAccelerator: string;
   };
+  archivedChatsAutoDeleteDays: number;
+  sidebarSectionOrder: SidebarSectionKey[];
 };
 
 export function normalizeDesktopSettings(value?: PersistedDesktopSettings | null): DesktopSettings {
@@ -172,6 +218,11 @@ export function normalizeDesktopSettings(value?: PersistedDesktopSettings | null
         value?.quickChat?.shortcutAccelerator,
       ),
     },
+    archivedChatsAutoDeleteDays:
+      typeof value?.archivedChatsAutoDeleteDays === "number"
+        ? value.archivedChatsAutoDeleteDays
+        : 0,
+    sidebarSectionOrder: normalizeSidebarSectionOrder(value?.sidebarSectionOrder),
   };
 }
 
@@ -190,7 +241,8 @@ export type SettingsPageId =
   | "featureFlags"
   | "updates"
   | "developer"
-  | "remoteAccess";
+  | "remoteAccess"
+  | "archivedChats";
 
 export type CachedDesktopUiState = {
   selectedWorkspaceId?: string | null;
@@ -204,6 +256,7 @@ export type CachedDesktopUiState = {
   sidebarWidth?: number;
   contextSidebarCollapsed?: boolean;
   contextSidebarWidth?: number;
+  canvasSidebarWidth?: number;
   messageBarHeight?: number;
 };
 
@@ -220,6 +273,9 @@ export type ResearchDetail = ResearchRecord;
 
 export const DEFAULT_RESEARCH_SETTINGS: ResearchSettingsState = {
   planApproval: false,
+  agentId: DEFAULT_RESEARCH_AGENT_ID,
+  thinkingSummaries: "auto",
+  visualization: "auto",
 };
 
 export type ResearchExportRequest = {
@@ -395,7 +451,6 @@ export type WorkspaceRuntime = {
   openAiNativeConnectorsAuthenticated: boolean;
   openAiNativeConnectorsMessage: string | null;
   openAiNativeConnectorsEnabledIds: string[];
-  openAiNativeConnectorsServerName: OpenAiNativeConnectorsEvent["codexAppsMcpServerName"] | null;
   pluginsCatalog: PluginCatalogSnapshot | null;
   selectedPluginId: string | null;
   selectedPluginScope: PluginCatalogEntry["scope"] | null;

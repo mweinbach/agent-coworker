@@ -108,14 +108,15 @@ const DEFAULT_PROVIDER_AUTH_METHODS: Record<ProviderName, ProviderAuthMethod[]> 
   baseten: [{ id: "api_key", type: "api", label: "API key" }],
   together: [{ id: "api_key", type: "api", label: "API key" }],
   fireworks: [{ id: "api_key", type: "api", label: "API key" }],
+  firepass: [{ id: "api_key", type: "api", label: "Fire Pass API key" }],
   nvidia: [{ id: "api_key", type: "api", label: "API key" }],
   lmstudio: [{ id: "api_key", type: "api", label: "API token (optional)" }],
   "opencode-go": [{ id: "api_key", type: "api", label: "API key" }],
   "opencode-zen": [{ id: "api_key", type: "api", label: "API key" }],
   "codex-cli": [
     { id: "oauth_cli", type: "oauth", label: "Sign in with ChatGPT (browser)", oauthMode: "auto" },
-    { id: "api_key", type: "api", label: "API key" },
   ],
+  antigravity: [{ id: "api_key", type: "api", label: "API key" }],
 };
 
 function cloneProviderAuthMethod(method: ProviderAuthMethod): ProviderAuthMethod {

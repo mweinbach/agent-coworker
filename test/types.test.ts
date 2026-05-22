@@ -5,8 +5,8 @@ import { isProviderName, PROVIDER_NAMES, resolveProviderName } from "../src/type
 // PROVIDER_NAMES
 // ---------------------------------------------------------------------------
 describe("PROVIDER_NAMES", () => {
-  test("contains exactly 12 providers", () => {
-    expect(PROVIDER_NAMES).toHaveLength(12);
+  test("contains exactly 14 providers", () => {
+    expect(PROVIDER_NAMES).toHaveLength(14);
   });
 
   test("contains expected provider names", () => {
@@ -17,11 +17,13 @@ describe("PROVIDER_NAMES", () => {
     expect(PROVIDER_NAMES).toContain("baseten");
     expect(PROVIDER_NAMES).toContain("together");
     expect(PROVIDER_NAMES).toContain("fireworks");
+    expect(PROVIDER_NAMES).toContain("firepass");
     expect(PROVIDER_NAMES).toContain("nvidia");
     expect(PROVIDER_NAMES).toContain("lmstudio");
     expect(PROVIDER_NAMES).toContain("opencode-go");
     expect(PROVIDER_NAMES).toContain("opencode-zen");
     expect(PROVIDER_NAMES).toContain("codex-cli");
+    expect(PROVIDER_NAMES).toContain("antigravity");
   });
 });
 
@@ -39,6 +41,7 @@ describe("resolveProviderName", () => {
     expect(resolveProviderName("opencode-go")).toBe("opencode-go");
     expect(resolveProviderName("opencode-zen")).toBe("opencode-zen");
     expect(resolveProviderName("codex-cli")).toBe("codex-cli");
+    expect(resolveProviderName("antigravity")).toBe("antigravity");
   });
 
   test("returns null for unknown provider names", () => {
@@ -81,6 +84,10 @@ describe("isProviderName", () => {
       expect(isProviderName("fireworks")).toBe(true);
     });
 
+    test("firepass", () => {
+      expect(isProviderName("firepass")).toBe(true);
+    });
+
     test("nvidia", () => {
       expect(isProviderName("nvidia")).toBe(true);
     });
@@ -99,6 +106,10 @@ describe("isProviderName", () => {
 
     test("opencode-zen", () => {
       expect(isProviderName("opencode-zen")).toBe(true);
+    });
+
+    test("antigravity", () => {
+      expect(isProviderName("antigravity")).toBe(true);
     });
   });
 

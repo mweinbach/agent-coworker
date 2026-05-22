@@ -177,6 +177,12 @@ function expectWebFetchDownloadGuidance(prompt: string) {
   expect(normalized).toContain("markdown");
 }
 
+function expectChunkedLongOutputGuidance(prompt: string) {
+  expect(prompt).toContain('mode="append"');
+  expect(prompt).toContain("For very long transcripts");
+  expect(prompt).toContain("Keep the chat response concise");
+}
+
 function expectSharedAgentReportContract(prompt: string) {
   expect(prompt).toContain("Completion contract:");
   expect(prompt).toContain("exactly one `<agent_report>...</agent_report>` footer");
@@ -214,6 +220,7 @@ const IMAGE_GUIDANCE_PROMPT_CONFIGS = [
   { provider: "anthropic", model: "claude-haiku-4-5", preferredChildModel: "claude-haiku-4-5" },
   { provider: "anthropic", model: "claude-sonnet-4-6", preferredChildModel: "claude-sonnet-4-6" },
   { provider: "anthropic", model: "claude-opus-4-6", preferredChildModel: "claude-opus-4-6" },
+  { provider: "anthropic", model: "claude-opus-4-7", preferredChildModel: "claude-opus-4-7" },
   {
     provider: "google",
     model: "gemini-3-flash-preview",
@@ -227,6 +234,18 @@ const IMAGE_GUIDANCE_PROMPT_CONFIGS = [
 ] as const;
 
 const WEBFETCH_DOWNLOAD_GUIDANCE_PROMPT_CONFIGS = [...IMAGE_GUIDANCE_PROMPT_CONFIGS] as const;
+const GEMINI_PROMPT_CONFIGS = [
+  {
+    provider: "google",
+    model: "gemini-3.1-pro-preview",
+    preferredChildModel: "gemini-3.1-pro-preview",
+  },
+  {
+    provider: "google",
+    model: "gemini-3-flash-preview",
+    preferredChildModel: "gemini-3-flash-preview",
+  },
+] as const;
 
 // ---------------------------------------------------------------------------
 // loadSystemPrompt
@@ -373,6 +392,25 @@ describe("loadSystemPrompt", () => {
     );
     expect(prompt).toContain("Reuse a child when follow-up work has high context overlap.");
     expect(prompt).toContain("Keep at most one write-capable child per file area at a time");
+  });
+
+  test("codex-cli prompt uses app-server native web search even with legacy local preference", async () => {
+    const prompt = await loadSystemPrompt(
+      makeConfig({
+        provider: "codex-cli",
+        model: "gpt-5.4",
+        preferredChildModel: "gpt-5.4",
+        providerOptions: {
+          "codex-cli": {
+            webSearchBackend: "parallel",
+          },
+        },
+      }),
+    );
+
+    expect(prompt).toContain("Codex app-server owns web search and page fetching");
+    expect(prompt).toContain("Do not call local Cowork webSearch or webFetch tools");
+    expect(prompt).not.toContain("configured to use the local Parallel-backed webSearch tool");
   });
 
   test("does not list Baseten child models in the spawnAgent summary", async () => {
@@ -710,6 +748,37 @@ describe("loadSystemPrompt", () => {
     }
   });
 
+  test("default and Gemini prompts tell models to chunk very long generated artifacts into files", async () => {
+    const configs = [
+      { provider: "opencode-go" as const, model: "kimi-k2.5", preferredChildModel: "kimi-k2.5" },
+      ...GEMINI_PROMPT_CONFIGS,
+    ];
+
+    for (const overrides of configs) {
+      const prompt = await loadSystemPrompt(
+        makeConfig({
+          ...overrides,
+          skillsDirs: ["/nonexistent/skills"],
+        }),
+      );
+      expectChunkedLongOutputGuidance(prompt);
+    }
+  });
+
+  test("Gemini prompts avoid rereading media that is already attached", async () => {
+    for (const overrides of GEMINI_PROMPT_CONFIGS) {
+      const prompt = await loadSystemPrompt(
+        makeConfig({
+          ...overrides,
+          skillsDirs: ["/nonexistent/skills"],
+        }),
+      );
+      expect(prompt.toLowerCase()).toContain("do not call read on");
+      expect(prompt.toLowerCase()).toContain("already attached in the current message");
+      expect(prompt.toLowerCase()).toContain("use the attached content directly");
+    }
+  });
+
   test("uses model-specific system template for gemini-3.1-pro-preview when present", async () => {
     const { builtIn } = await makeTmpDirs();
 
@@ -918,7 +987,7 @@ describe("loadSystemPrompt", () => {
     expect(prompt).not.toContain("## Available Skills");
   });
 
-  test("includes built-in slides in the prompt and discovered skills when earlier skill dirs are empty", async () => {
+  test("includes built-in presentations in the prompt and discovered skills when earlier skill dirs are empty", async () => {
     const { tmp } = await makeTmpDirs();
     const projectSkills = path.join(tmp, "project-skills");
     const globalSkills = path.join(tmp, "global-skills");
@@ -927,10 +996,10 @@ describe("loadSystemPrompt", () => {
     await fs.mkdir(projectSkills, { recursive: true });
     await fs.mkdir(globalSkills, { recursive: true });
     await fs.mkdir(userSkills, { recursive: true });
-    await fs.mkdir(path.join(builtInSkills, "slides"), { recursive: true });
+    await fs.mkdir(path.join(builtInSkills, "presentations"), { recursive: true });
     await fs.writeFile(
-      path.join(builtInSkills, "slides", "SKILL.md"),
-      skillDoc("slides", "Built-in slides skill.", "# Slides\n"),
+      path.join(builtInSkills, "presentations", "SKILL.md"),
+      skillDoc("presentations", "Built-in presentations skill.", "# Presentations\n"),
       "utf-8",
     );
 
@@ -940,9 +1009,9 @@ describe("loadSystemPrompt", () => {
 
     const { prompt, discoveredSkills } = await loadSystemPromptWithSkills(config);
     expect(prompt).toContain("## Available Skills");
-    expect(prompt).toContain("**slides**");
+    expect(prompt).toContain("**presentations**");
     expect(prompt).toContain("source: built-in");
-    expect(discoveredSkills.map((skill) => skill.name)).toContain("slides");
+    expect(discoveredSkills.map((skill) => skill.name)).toContain("presentations");
   });
 
   test("skips skills section when skills dirs do not exist", async () => {

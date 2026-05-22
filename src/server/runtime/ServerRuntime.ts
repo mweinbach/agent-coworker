@@ -1,6 +1,12 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import type { runTurn as runTurnFn } from "../../agent";
+import { ensureCodexPrimaryRuntimeReady } from "../../codexPrimaryRuntime";
 import { loadConfig } from "../../config";
+import {
+  checkManagedSofficeRuntime,
+  prepareManagedSofficeToolEnv,
+} from "../../managedSofficeRuntime";
 import type { connectProvider as connectModelProvider, getAiCoworkerPaths } from "../../connect";
 import { getAiCoworkerPaths as getAiCoworkerPathsDefault } from "../../connect";
 import { isA2uiExperimentEnabled } from "../../experimental/a2ui/flags";
@@ -136,6 +142,30 @@ export async function createAgentServerRuntime(
     config.providerOptions,
   );
   if (mergedProviderOptions) config.providerOptions = mergedProviderOptions;
+
+  const codexRuntimeSetup = await ensureCodexPrimaryRuntimeReady({
+    homedir: opts.homedir,
+    workspaceDir: config.workingDirectory,
+    builtInSkillsDir: path.join(config.builtInDir, "skills"),
+    globalSkillsDir: getAiCoworkerPathsDefault({ homedir: opts.homedir }).skillsDir,
+    env,
+    log: (line) => {
+      console.warn(`[codex-primary-runtime] ${line}`);
+    },
+  });
+  if (codexRuntimeSetup) {
+    Object.assign(env, codexRuntimeSetup.runtimeEnv);
+  }
+  Object.assign(
+    env,
+    await prepareManagedSofficeToolEnv({
+      homedir: opts.homedir,
+      env,
+      log: (line) => {
+        console.warn(`[managed-soffice] ${line}`);
+      },
+    }),
+  );
 
   await fs.mkdir(config.projectCoworkDir, { recursive: true });
 
@@ -305,6 +335,14 @@ export async function createAgentServerRuntime(
       captureMutationOutcome: registry.sessionEventCapture.captureMutationOutcome,
       captureMutationEvents: registry.sessionEventCapture.captureMutationEvents,
     },
+    runtime: {
+      checkLibreOffice: async (checkOpts) =>
+        await checkManagedSofficeRuntime({
+          homedir: opts.homedir,
+          env,
+          smoke: checkOpts.smoke === true,
+        }),
+    },
     jsonrpc: {
       send: (ws, payload) => sendQueue.send(ws, payload),
       sendResult: (ws, id, result) => sendQueue.send(ws, buildJsonRpcResultResponse(id, result)),
@@ -359,8 +397,8 @@ export async function createAgentServerRuntime(
     },
     openHttpConnection: (connection) => {
       jsonRpcTransport.openConnection(connection);
-      connection.data.selectedSubprotocol = "cowork.jsonrpc.v1";
-      connection.data.protocolMode = "jsonrpc";
+      connection.data.selectedSubprotocol ??= "cowork.jsonrpc.v1";
+      connection.data.protocolMode ??= "h3";
     },
     handleDecodedMessage: (ws, message) => {
       jsonRpcTransport.handleMessage(ws, message, routeJsonRpcRequest);
@@ -395,6 +433,12 @@ export async function createAgentServerRuntime(
       await registry.disposeAll("server stopping");
       try {
         sessionDb.close();
+      } catch {
+        // ignore
+      }
+      try {
+        const { shutdownObservabilityRuntime } = await import("../../observability/runtime");
+        await shutdownObservabilityRuntime();
       } catch {
         // ignore
       }

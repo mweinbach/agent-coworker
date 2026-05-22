@@ -58,6 +58,22 @@ function asRecordArray(value: unknown): Array<Record<string, unknown>> {
     .filter((entry): entry is Record<string, unknown> => entry !== null);
 }
 
+function appendJsonObjectDelta(target: Record<string, unknown>, delta: string): void {
+  const previous = typeof target.__jsonDelta === "string" ? target.__jsonDelta : "";
+  const next = `${previous}${delta}`;
+  target.__jsonDelta = next;
+  try {
+    const parsed = JSON.parse(next) as unknown;
+    const parsedRecord = asRecord(parsed);
+    if (parsedRecord) {
+      delete target.__jsonDelta;
+      Object.assign(target, parsedRecord);
+    }
+  } catch {
+    // Keep buffering until a later arguments_delta completes the JSON object.
+  }
+}
+
 function mergeAnnotationArrays(
   current: Array<Record<string, unknown>> | undefined,
   incoming: unknown,
@@ -93,6 +109,10 @@ function isNativeGoogleToolCallContentType(contentType: string): boolean {
 
 function isNativeGoogleToolResultContentType(contentType: string): boolean {
   return contentType === "google_search_result" || contentType === "url_context_result";
+}
+
+function isGoogleTextContentType(contentType: string): boolean {
+  return contentType === "text" || contentType === "model_output";
 }
 
 function extractStringArray(value: unknown): string[] {
@@ -207,14 +227,14 @@ export function processGoogleInteractionsStreamEvent(
 ): void {
   const eventType = event.event_type as string;
 
-  if (eventType === "content.start") {
+  if (eventType === "content.start" || eventType === "step.start") {
     const index = event.index as number;
-    const content = asRecord(event.content);
+    const content = asRecord(event.content ?? event.step);
     if (!content) return;
 
     const contentType = asNonEmptyString(content.type);
     if (!contentType) return;
-    if (contentType === "text") {
+    if (isGoogleTextContentType(contentType)) {
       contentBlocks.set(index, {
         type: "text",
         text: asNonEmptyString(content.text) ?? "",
@@ -238,6 +258,11 @@ export function processGoogleInteractionsStreamEvent(
       const signature = asNonEmptyString(content.signature);
       if (signature) {
         block.thinkingSignature = signature;
+      }
+      const summary = Array.isArray(content.summary) ? content.summary : [];
+      for (const entry of summary) {
+        const text = asNonEmptyString(asRecord(entry)?.text);
+        if (text) block.thinking += text;
       }
     } else if (isNativeGoogleToolCallContentType(contentType)) {
       const name = nativeToolNameFromContentType(contentType);
@@ -274,7 +299,7 @@ export function processGoogleInteractionsStreamEvent(
     return;
   }
 
-  if (eventType !== "content.delta") return;
+  if (eventType !== "content.delta" && eventType !== "step.delta") return;
 
   const index = event.index as number;
   const delta = asRecord(event.delta);
@@ -295,6 +320,22 @@ export function processGoogleInteractionsStreamEvent(
         ? { annotations: mergeAnnotationArrays(undefined, delta.annotations) }
         : {}),
     });
+  } else if (deltaType === "text_annotation" || deltaType === "text_annotation_delta") {
+    const annotations = mergeAnnotationArrays(
+      existing?.type === "text" ? existing.annotations : undefined,
+      delta.annotations,
+    );
+    if (existing?.type === "text") {
+      existing.annotations = annotations;
+    } else if (annotations && annotations.length > 0) {
+      contentBlocks.set(index, { type: "text", text: "", annotations });
+    }
+  } else if (deltaType === "arguments_delta") {
+    const deltaText = typeof delta.arguments === "string" ? delta.arguments : undefined;
+    if (!deltaText) return;
+    if (existing?.type === "toolCall" || existing?.type === "providerToolCall") {
+      appendJsonObjectDelta(existing.arguments, deltaText);
+    }
   } else if (deltaType === "function_call") {
     if (existing?.type === "toolCall") {
       const deltaName = asNonEmptyString(delta.name);
@@ -407,18 +448,21 @@ export function mapGoogleInteractionsEventToStreamParts(
   if (
     eventType !== "content.start" &&
     eventType !== "content.delta" &&
-    eventType !== "content.stop"
+    eventType !== "content.stop" &&
+    eventType !== "step.start" &&
+    eventType !== "step.delta" &&
+    eventType !== "step.stop"
   ) {
     return [];
   }
 
   const index = typeof event.index === "number" ? event.index : 0;
 
-  if (eventType === "content.start") {
-    const content = asRecord(event.content);
+  if (eventType === "content.start" || eventType === "step.start") {
+    const content = asRecord(event.content ?? event.step);
     const contentType = asNonEmptyString(content?.type);
 
-    if (contentType === "text") {
+    if (contentType && isGoogleTextContentType(contentType)) {
       const parts: Array<Record<string, unknown>> = [
         { type: "text-start", id: streamIdForIndex(index) },
       ];
@@ -430,7 +474,15 @@ export function mapGoogleInteractionsEventToStreamParts(
     }
 
     if (contentType === "thought") {
-      return [{ type: "reasoning-start", id: streamIdForIndex(index) }];
+      const parts: Array<Record<string, unknown>> = [
+        { type: "reasoning-start", id: streamIdForIndex(index) },
+      ];
+      const summary = Array.isArray(content?.summary) ? content.summary : [];
+      for (const entry of summary) {
+        const text = asNonEmptyString(asRecord(entry)?.text);
+        if (text) parts.push({ type: "reasoning-delta", id: streamIdForIndex(index), text });
+      }
+      return parts;
     }
 
     if (contentType === "function_call") {
@@ -473,7 +525,7 @@ export function mapGoogleInteractionsEventToStreamParts(
     return [];
   }
 
-  if (eventType === "content.delta") {
+  if (eventType === "content.delta" || eventType === "step.delta") {
     const delta = asRecord(event.delta);
     const deltaType = asNonEmptyString(delta?.type);
 
@@ -493,6 +545,15 @@ export function mapGoogleInteractionsEventToStreamParts(
         ];
       }
       return [];
+    }
+
+    if (deltaType === "arguments_delta") {
+      const block = contentBlocks.get(index);
+      const deltaText = typeof delta?.arguments === "string" ? delta.arguments : undefined;
+      if (!deltaText || (block?.type !== "toolCall" && block?.type !== "providerToolCall")) {
+        return [];
+      }
+      return [{ type: "tool-input-delta", id: block.id, delta: deltaText }];
     }
 
     if (deltaType === "function_call") {

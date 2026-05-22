@@ -4,6 +4,7 @@ import {
   type ResearchRecord,
 } from "../../../../../src/server/research/types";
 import { saveExportedFile } from "../../lib/desktopCommands";
+import { hasGoogleApiKeyForResearch } from "../researchAvailability";
 import type { AppStoreActions, StoreGet, StoreSet } from "../store.helpers";
 import {
   ensureControlSocket,
@@ -208,6 +209,17 @@ export function createResearchActions(
         detail,
       }),
     }));
+  };
+
+  const hasGoogleResearchAccess = () =>
+    hasGoogleApiKeyForResearch(get().providerStatusByName.google);
+
+  const notifyMissingGoogleApiKey = () => {
+    notify(
+      "info",
+      "Google API key required",
+      "Add a Google API key in Settings -> Providers to use Deep Research.",
+    );
   };
 
   const bindResearchWorkspace = (workspaceId: string) => {
@@ -663,6 +675,11 @@ export function createResearchActions(
     },
 
     openResearch: async () => {
+      if (!hasGoogleResearchAccess()) {
+        notifyMissingGoogleApiKey();
+        set({ researchListLoading: false, researchListError: null });
+        return;
+      }
       set({
         view: "research",
         lastNonSettingsView: "research",
@@ -688,6 +705,10 @@ export function createResearchActions(
     },
 
     refreshResearchList: async () => {
+      if (!hasGoogleResearchAccess()) {
+        set({ researchListLoading: false, researchListError: null });
+        return;
+      }
       set({ researchListLoading: true, researchListError: null });
       try {
         const workspaceId = await ensureResearchTransportWorkspace();
@@ -743,6 +764,10 @@ export function createResearchActions(
     },
 
     startResearch: async ({ input, title, files, settings }) => {
+      if (!hasGoogleResearchAccess()) {
+        notifyMissingGoogleApiKey();
+        return null;
+      }
       let workspaceId: string | null = null;
       let attachedFileIds: string[] = [];
       let startRequested = false;
@@ -850,6 +875,10 @@ export function createResearchActions(
     },
 
     sendResearchFollowUp: async ({ parentResearchId, input, title, files, settings }) => {
+      if (!hasGoogleResearchAccess()) {
+        notifyMissingGoogleApiKey();
+        return null;
+      }
       let workspaceId: string | null = null;
       let attachedFileIds: string[] = [];
       let followUpRequested = false;

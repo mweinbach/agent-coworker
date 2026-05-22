@@ -5,6 +5,7 @@ export const FEATURE_FLAG_IDS = [
   "workspaceLifecycle",
   "a2ui",
   "openAiNativeConnectors",
+  "canvas",
 ] as const;
 
 export type FeatureFlagId = (typeof FEATURE_FLAG_IDS)[number];
@@ -68,6 +69,13 @@ export const FEATURE_FLAG_DEFINITIONS: Record<FeatureFlagId, FeatureFlagDefiniti
     defaultEnabled: false,
     restartRequired: true,
   },
+  canvas: {
+    id: "canvas",
+    label: "Canvas",
+    description:
+      "Work alongside the agent on documents in the right sidebar. Allows real-time edits, commenting, and collaborative writing.",
+    defaultEnabled: false,
+  },
 };
 
 function parseBooleanFlag(value: string | undefined): boolean | null {
@@ -105,6 +113,7 @@ export function resolveFeatureFlags(options: ResolveFeatureFlagsOptions): Featur
     workspaceLifecycle: FEATURE_FLAG_DEFINITIONS.workspaceLifecycle.defaultEnabled,
     a2ui: FEATURE_FLAG_DEFINITIONS.a2ui.defaultEnabled,
     openAiNativeConnectors: FEATURE_FLAG_DEFINITIONS.openAiNativeConnectors.defaultEnabled,
+    canvas: FEATURE_FLAG_DEFINITIONS.canvas.defaultEnabled,
   };
 
   for (const flagId of FEATURE_FLAG_IDS) {

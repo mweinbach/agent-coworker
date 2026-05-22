@@ -132,7 +132,7 @@ export function authorizeProviderAuth(opts: {
       challenge: {
         method: method.oauthMode ?? "auto",
         instructions:
-          "Continue to browser-based ChatGPT sign-in. Cowork will open the official Codex OAuth flow and save the returned token locally.",
+          "Continue to browser-based ChatGPT sign-in. Codex app-server owns the official login and local credential storage.",
       },
     };
   }

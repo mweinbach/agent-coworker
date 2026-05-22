@@ -1008,6 +1008,20 @@ function resolveAnthropicAlias(
   resolvedModel: string;
   resolvedFrom: "alias" | "passthrough" | "fallback";
 } {
+  if (requestedModel === "claude-4-7-opus") {
+    const candidates = availableIds.filter((id) => id.startsWith("claude-opus-4-7-"));
+    if (candidates.length > 0) {
+      const resolvedModel = candidates.slice().sort().at(-1);
+      if (!resolvedModel)
+        return { requestedModel, resolvedModel: requestedModel, resolvedFrom: "fallback" };
+      return { requestedModel, resolvedModel, resolvedFrom: "alias" };
+    }
+    if (availableIds.includes("claude-opus-4-7")) {
+      return { requestedModel, resolvedModel: "claude-opus-4-7", resolvedFrom: "alias" };
+    }
+    return { requestedModel, resolvedModel: "claude-opus-4-7", resolvedFrom: "fallback" };
+  }
+
   if (requestedModel === "claude-4-6-opus") {
     // Pick newest dated opus-4-6 model id when the alias form is used.
     const candidates = availableIds.filter((id) => id.startsWith("claude-opus-4-6-"));

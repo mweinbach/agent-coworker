@@ -5,6 +5,9 @@ export const SIDECAR_BASE_NAME = "cowork-server";
 export const SIDECAR_MANIFEST_NAME = "cowork-server-manifest.json";
 export const SIDECAR_BUN_EXECUTABLE_NAME = "bun.exe";
 export const SIDECAR_BUN_ENTRYPOINT_PATH = "server/index.js";
+export const CODEX_APP_SERVER_BASE_NAME = "codex-app-server";
+export const FOUNDATION_MODELS_SDK_DIR_NAME = "tsfm-sdk";
+export const FOUNDATION_MODELS_KOFFI_TRIPLET = "darwin_arm64";
 
 export type ExecutableSidecarLaunchSpec = {
   kind: "executable";
@@ -79,6 +82,42 @@ export function resolvePackagedSidecarFilename(
 ): string {
   const ext = platform === "win32" ? ".exe" : "";
   return `${SIDECAR_BASE_NAME}-${resolveDesktopTargetTriple(platform, arch)}${ext}`;
+}
+
+export function resolvePackagedCodexAppServerFilename(
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch,
+): string {
+  const ext = platform === "win32" ? ".exe" : "";
+  return `${CODEX_APP_SERVER_BASE_NAME}-${resolveDesktopTargetTriple(platform, arch)}${ext}`;
+}
+
+export function shouldBundleFoundationModelsSdk(
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch,
+): boolean {
+  return platform === "darwin" && arch === "arm64";
+}
+
+export function hasPackagedFoundationModelsSdk(
+  candidateDir: string,
+  existsSync: typeof fs.existsSync = fs.existsSync,
+): boolean {
+  return (
+    existsSync(path.join(candidateDir, "dist", "index.js")) &&
+    existsSync(path.join(candidateDir, "native", "libFoundationModels.dylib")) &&
+    existsSync(
+      path.join(
+        candidateDir,
+        "node_modules",
+        "koffi",
+        "build",
+        "koffi",
+        FOUNDATION_MODELS_KOFFI_TRIPLET,
+        "koffi.node",
+      ),
+    )
+  );
 }
 
 export function buildSidecarManifest(

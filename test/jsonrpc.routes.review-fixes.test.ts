@@ -5,6 +5,7 @@ import { createAgentRouteHandlers } from "../src/server/jsonrpc/routes/agents";
 import { createMcpRouteHandlers } from "../src/server/jsonrpc/routes/mcp";
 import { createMemoryRouteHandlers } from "../src/server/jsonrpc/routes/memory";
 import { createProviderRouteHandlers } from "../src/server/jsonrpc/routes/provider";
+import { createRuntimeRouteHandlers } from "../src/server/jsonrpc/routes/runtime";
 import { createSessionRouteHandlers } from "../src/server/jsonrpc/routes/session";
 import { createSkillsRouteHandlers } from "../src/server/jsonrpc/routes/skills";
 import type {
@@ -204,6 +205,10 @@ function createRouteHarness(
         await action();
         return emitted.find((event) => predicate(event)) ?? null;
       },
+    },
+    runtime: {
+      checkLibreOffice: async (checkOpts: { smoke?: boolean }) =>
+        await session.checkLibreOfficeRuntime?.(checkOpts),
     },
     jsonrpc: {
       send: () => {},
@@ -574,6 +579,80 @@ describe("JSON-RPC extracted route review fixes", () => {
     expect(response.result).toBeUndefined();
   });
 
+  test("session usage budget forwards null thresholds so hard caps can be cleared", async () => {
+    let receivedStopAtUsd: number | null | undefined;
+    let harness!: RouteHarness;
+    const threadSession = {
+      id: "thread-1",
+      setSessionUsageBudget: async (_warnAtUsd?: number | null, stopAtUsd?: number | null) => {
+        receivedStopAtUsd = stopAtUsd;
+        harness.emitted.push({
+          type: "session_usage",
+          sessionId: "thread-1",
+          usage: {
+            sessionId: "thread-1",
+            totalTurns: 0,
+            totalPromptTokens: 0,
+            totalCompletionTokens: 0,
+            totalTokens: 0,
+            estimatedTotalCostUsd: null,
+            costTrackingAvailable: false,
+            byModel: [],
+            turns: [],
+            budgetStatus: {
+              configured: false,
+              warnAtUsd: null,
+              stopAtUsd: null,
+              warningTriggered: false,
+              stopTriggered: false,
+              currentCostUsd: null,
+            },
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+        });
+      },
+    };
+    harness = createRouteHarness({}, [], { threadSession });
+
+    const handlers = createSessionRouteHandlers(harness.context);
+    const response = await harness.invoke(handlers, "cowork/session/usageBudget/set", {
+      threadId: "thread-1",
+      stopAtUsd: null,
+    });
+
+    expect(response.error).toBeUndefined();
+    expect(receivedStopAtUsd).toBeNull();
+    expect((response.result as { event: { type: string } }).event.type).toBe("session_usage");
+  });
+
+  test("session defaults apply forwards emitted errors as JSON-RPC errors", async () => {
+    let harness!: RouteHarness;
+    const threadSession = {
+      id: "thread-1",
+      getSessionConfigEvent: () => ({
+        type: "session_config",
+        sessionId: "thread-1",
+        config: {},
+      }),
+      applySessionDefaults: async () => {
+        harness.emitted.push(sessionError("Defaults could not be applied."));
+      },
+    };
+    harness = createRouteHarness({}, [], { threadSession });
+
+    const handlers = createSessionRouteHandlers(harness.context);
+    const response = await harness.invoke(handlers, "cowork/session/defaults/apply", {
+      threadId: "thread-1",
+      config: {
+        backupsEnabled: true,
+      },
+    });
+
+    expect(response.error?.message).toContain("Defaults could not be applied");
+    expect(response.result).toBeUndefined();
+  });
+
   test("session delete forwards emitted session errors", async () => {
     let harness!: RouteHarness;
     harness = createRouteHarness({
@@ -625,6 +704,36 @@ describe("JSON-RPC extracted route review fixes", () => {
     expect((response.result as any).event).toMatchObject({
       type: "mcp_server_validation",
       name: "beta",
+    });
+  });
+
+  test("runtime LibreOffice check returns diagnostic status", async () => {
+    const harness = createRouteHarness({
+      checkLibreOfficeRuntime: async (checkOpts: { smoke?: boolean }) => ({
+        status: "available",
+        checkedAt: "2026-05-21T00:00:00.000Z",
+        message: checkOpts.smoke ? "Smoke passed." : "Version passed.",
+        version: "26.2.3.2",
+        shimPath: "/tmp/soffice",
+        resolvedPath: "/tmp/LibreOffice.app/Contents/MacOS/soffice",
+        smoke: {
+          ok: true,
+          durationMs: 125,
+          outputPath: "/tmp/check.pdf",
+          sizeBytes: 2048,
+        },
+      }),
+    });
+    const handlers = createRuntimeRouteHandlers(harness.context);
+    const response = await harness.invoke(handlers, "cowork/runtime/libreoffice/check", {
+      cwd: "C:/workspace",
+      smoke: true,
+    });
+
+    expect((response.result as any).status).toMatchObject({
+      status: "available",
+      version: "26.2.3.2",
+      smoke: { ok: true, sizeBytes: 2048 },
     });
   });
 

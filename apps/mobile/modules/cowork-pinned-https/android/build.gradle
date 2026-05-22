@@ -1,0 +1,15 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'co.weinbach.cowork.mobile.pinnedhttps'
+version = '0.1.0'
+
+android {
+  namespace "co.weinbach.cowork.mobile.pinnedhttps"
+  defaultConfig {
+    versionCode 1
+    versionName "0.1.0"
+  }
+}

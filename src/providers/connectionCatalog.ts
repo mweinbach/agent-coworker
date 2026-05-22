@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import { type AiCoworkerPaths, getAiCoworkerPaths, readConnectionStore } from "../connect";
 import {
   defaultSupportedModel,
@@ -6,8 +8,12 @@ import {
 } from "../models/registry";
 import { PROVIDER_NAMES, type ProviderName } from "../types";
 import { resolveAuthHomeDir } from "../utils/authHome";
+import {
+  ANTIGRAVITY_UNSUPPORTED_PLATFORM_MESSAGE,
+  isAntigravitySupportedPlatform,
+} from "./antigravitySupport";
 import { readBedrockCatalogSnapshot } from "./bedrockShared";
-import { readCodexAuthMaterial } from "./codex-auth";
+import { listCodexAppServerModels, readCodexAppServerAccount } from "./codexAppServerAuth";
 import {
   listLmStudioLlms,
   lmStudioCatalogStateMessage,
@@ -50,6 +56,10 @@ export type ProviderCatalogPayload = {
   connected: string[];
 };
 
+function codexHomeFromPaths(paths: AiCoworkerPaths): string {
+  return path.join(paths.authDir, "codex-cli");
+}
+
 const PROVIDER_LABELS: Record<ProviderName, string> = {
   google: "Google",
   openai: "OpenAI",
@@ -58,11 +68,13 @@ const PROVIDER_LABELS: Record<ProviderName, string> = {
   baseten: "Baseten",
   together: "Together AI",
   fireworks: "Fireworks AI",
+  firepass: "Fire Pass",
   nvidia: "NVIDIA",
   lmstudio: "LM Studio",
   "opencode-go": getOpenCodeDisplayName("opencode-go"),
   "opencode-zen": getOpenCodeDisplayName("opencode-zen"),
-  "codex-cli": "Codex CLI",
+  "codex-cli": "Codex",
+  antigravity: "Antigravity",
 };
 
 function staticCatalogEntry(provider: Exclude<ProviderName, "lmstudio">): ProviderCatalogEntry {
@@ -76,6 +88,82 @@ function staticCatalogEntry(provider: Exclude<ProviderName, "lmstudio">): Provid
       supportsImageInput: model.supportsImageInput,
     })),
     defaultModel: defaultSupportedModel(provider).id,
+  };
+}
+
+function antigravityCatalogEntry(
+  platform: NodeJS.Platform = process.platform,
+): ProviderCatalogEntry {
+  if (isAntigravitySupportedPlatform(platform)) return staticCatalogEntry("antigravity");
+  return {
+    id: "antigravity",
+    name: PROVIDER_LABELS.antigravity,
+    models: [],
+    defaultModel: "",
+    state: "unreachable",
+    message: ANTIGRAVITY_UNSUPPORTED_PLATFORM_MESSAGE,
+  };
+}
+
+async function codexCatalogEntry(opts: {
+  listCodexAppServerModelsImpl?: typeof listCodexAppServerModels;
+  codexHome?: string;
+}): Promise<ProviderCatalogEntry> {
+  const listModels = opts.listCodexAppServerModelsImpl ?? listCodexAppServerModels;
+  let appServerModels: Awaited<ReturnType<typeof listCodexAppServerModels>> = [];
+  try {
+    appServerModels = await listModels({ codexHome: opts.codexHome });
+  } catch (error) {
+    return {
+      id: "codex-cli",
+      name: PROVIDER_LABELS["codex-cli"],
+      models: [],
+      defaultModel: "",
+      state: "unreachable",
+      message: error instanceof Error ? error.message : "Unable to read Codex app-server models.",
+    };
+  }
+
+  const supportedById = new Map(listSupportedModels("codex-cli").map((model) => [model.id, model]));
+  const modelsById = new Map<string, ProviderCatalogModelEntry>();
+  for (const model of appServerModels) {
+    const supported = supportedById.get(model.model) ?? supportedById.get(model.id);
+    if (!supported || modelsById.has(supported.id)) continue;
+    modelsById.set(supported.id, {
+      id: supported.id,
+      displayName: model.displayName || supported.displayName,
+      knowledgeCutoff: supported.knowledgeCutoff,
+      supportsImageInput: supported.supportsImageInput,
+    });
+  }
+  const models = [...modelsById.values()];
+  if (models.length === 0) {
+    return {
+      id: "codex-cli",
+      name: PROVIDER_LABELS["codex-cli"],
+      models: [],
+      defaultModel: "",
+      state: "empty",
+      message: "Codex app-server did not report any locally supported models.",
+    };
+  }
+
+  const defaultFromAppServer = appServerModels.find((model) => model.isDefault);
+  const defaultModel =
+    (defaultFromAppServer
+      ? (supportedById.get(defaultFromAppServer.model) ??
+        supportedById.get(defaultFromAppServer.id))
+      : null
+    )?.id ??
+    models[0]?.id ??
+    "";
+
+  return {
+    id: "codex-cli",
+    name: PROVIDER_LABELS["codex-cli"],
+    models,
+    defaultModel,
+    state: "ready",
   };
 }
 
@@ -183,6 +271,8 @@ export async function listProviderCatalogEntries(
     providerOptions?: unknown;
     env?: NodeJS.ProcessEnv;
     lmstudioFetchImpl?: typeof fetch;
+    listCodexAppServerModelsImpl?: typeof listCodexAppServerModels;
+    platform?: NodeJS.Platform;
   } = {},
 ): Promise<ProviderCatalogEntry[]> {
   const bedrock = await bedrockCatalogEntry({
@@ -190,9 +280,14 @@ export async function listProviderCatalogEntries(
     env: opts.env,
   });
   const lmstudio = await lmStudioCatalogEntry(opts);
+  const codex = opts.listCodexAppServerModelsImpl
+    ? await codexCatalogEntry({ listCodexAppServerModelsImpl: opts.listCodexAppServerModelsImpl })
+    : staticCatalogEntry("codex-cli");
   return PROVIDER_NAMES.map((provider) => {
     if (provider === "bedrock") return bedrock.entry;
     if (provider === "lmstudio") return lmstudio.entry;
+    if (provider === "codex-cli") return codex;
+    if (provider === "antigravity") return antigravityCatalogEntry(opts.platform);
     return staticCatalogEntry(provider);
   });
 }
@@ -202,35 +297,52 @@ export async function getProviderCatalog(
     homedir?: string;
     paths?: AiCoworkerPaths;
     readStore?: typeof readConnectionStore;
-    readCodexAuthMaterialImpl?: typeof readCodexAuthMaterial;
+    readCodexAppServerAccountImpl?: typeof readCodexAppServerAccount;
+    listCodexAppServerModelsImpl?: typeof listCodexAppServerModels;
     providerOptions?: unknown;
     env?: NodeJS.ProcessEnv;
     lmstudioFetchImpl?: typeof fetch;
+    platform?: NodeJS.Platform;
   } = {},
 ): Promise<ProviderCatalogPayload> {
   const paths = opts.paths ?? getAiCoworkerPaths({ homedir: opts.homedir ?? resolveAuthHomeDir() });
   const readStore = opts.readStore ?? readConnectionStore;
-  const readCodexAuthMaterialImpl = opts.readCodexAuthMaterialImpl ?? readCodexAuthMaterial;
+  const readCodexAppServerAccountImpl =
+    opts.readCodexAppServerAccountImpl ?? readCodexAppServerAccount;
   const store = await readStore(paths);
+  const codexHome = codexHomeFromPaths(paths);
   const bedrock = await bedrockCatalogEntry({
     paths,
     providerOptions: opts.providerOptions,
     env: opts.env,
   });
+  const hasCodexAccount = Boolean(
+    await readCodexAppServerAccountImpl({ refreshToken: false, codexHome }).then(
+      (result) => result.account,
+      () => null,
+    ),
+  );
   const lmstudio = await lmStudioCatalogEntry({
     store,
     providerOptions: opts.providerOptions,
     env: opts.env,
     lmstudioFetchImpl: opts.lmstudioFetchImpl,
   });
+  const codex = hasCodexAccount
+    ? await codexCatalogEntry({
+        listCodexAppServerModelsImpl: opts.listCodexAppServerModelsImpl,
+        codexHome,
+      })
+    : staticCatalogEntry("codex-cli");
   const all = PROVIDER_NAMES.map((provider) => {
     if (provider === "bedrock") return bedrock.entry;
     if (provider === "lmstudio") return lmstudio.entry;
+    if (provider === "codex-cli") return codex;
+    if (provider === "antigravity") return antigravityCatalogEntry(opts.platform);
     return staticCatalogEntry(provider);
   });
   const defaults: Record<string, string> = {};
   for (const entry of all) defaults[entry.id] = entry.defaultModel;
-  const hasCodexOauth = Boolean((await readCodexAuthMaterialImpl(paths))?.accessToken);
   const connected = PROVIDER_NAMES.filter((provider) => {
     if (provider === "lmstudio") {
       return lmstudio.connected;
@@ -239,8 +351,11 @@ export async function getProviderCatalog(
       return bedrock.connected;
     }
     const entry = store.services[provider];
+    if (provider === "antigravity" && !isAntigravitySupportedPlatform(opts.platform)) {
+      return false;
+    }
     if (entry?.mode === "api_key" || entry?.mode === "oauth") return true;
-    return provider === "codex-cli" && hasCodexOauth;
+    return provider === "codex-cli" && hasCodexAccount;
   });
   return { all, default: defaults, connected };
 }

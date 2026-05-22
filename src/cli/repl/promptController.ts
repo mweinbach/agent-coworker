@@ -1,5 +1,6 @@
 import type readline from "node:readline";
 
+import { sanitizeTerminalOutput } from "./sanitizeTerminal";
 import type { ApprovalPrompt, AskPrompt, ReplPromptMode } from "./serverEventHandler";
 
 export type ReplPromptStateAdapter = {
@@ -16,9 +17,9 @@ export function activateNextPrompt(state: ReplPromptStateAdapter, rl: readline.I
     state.activeAsk = null;
     state.promptMode = "approval";
     if (state.activeApproval) {
-      console.log(`\nApproval requested: ${state.activeApproval.command}`);
+      console.log(`\nApproval requested: ${sanitizeTerminalOutput(state.activeApproval.command)}`);
       console.log(state.activeApproval.dangerous ? "Dangerous command." : "Standard command.");
-      console.log(`Risk: ${state.activeApproval.reasonCode}`);
+      console.log(`Risk: ${sanitizeTerminalOutput(state.activeApproval.reasonCode)}`);
     }
     rl.setPrompt("approve (y/n)> ");
     rl.prompt();
@@ -30,10 +31,10 @@ export function activateNextPrompt(state: ReplPromptStateAdapter, rl: readline.I
     state.activeApproval = null;
     state.promptMode = "ask";
     if (state.activeAsk) {
-      console.log(`\n${state.activeAsk.question}`);
+      console.log(`\n${sanitizeTerminalOutput(state.activeAsk.question)}`);
       if (state.activeAsk.options && state.activeAsk.options.length > 0) {
         for (let i = 0; i < state.activeAsk.options.length; i++) {
-          console.log(`  ${i + 1}. ${state.activeAsk.options[i]}`);
+          console.log(`  ${i + 1}. ${sanitizeTerminalOutput(state.activeAsk.options[i])}`);
         }
       }
     }

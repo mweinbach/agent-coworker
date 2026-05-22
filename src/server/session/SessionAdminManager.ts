@@ -91,17 +91,8 @@ export class SessionAdminManager {
   getMessages(offset = 0, limit = 100) {
     const safeOffset = Math.max(0, Math.floor(offset));
     const safeLimit = Math.max(1, Math.floor(limit));
-    let total = this.context.state.allMessages.length;
-    let slice = this.context.state.allMessages.slice(safeOffset, safeOffset + safeLimit);
-    if (this.context.deps.sessionDb) {
-      const persisted = this.context.deps.sessionDb.getMessages(
-        this.context.id,
-        safeOffset,
-        safeLimit,
-      );
-      total = persisted.total;
-      slice = persisted.messages;
-    }
+    const total = this.context.state.allMessages.length;
+    const slice = this.context.state.allMessages.slice(safeOffset, safeOffset + safeLimit);
     this.context.emit({
       type: "messages",
       sessionId: this.context.id,
@@ -490,6 +481,40 @@ export class SessionAdminManager {
       this.context.emitError("validation_failed", "session", "Cannot delete the active session");
       return;
     }
+    const targetLiveWorkingDirectory =
+      this.context.deps.getLiveSessionWorkingDirectoryImpl?.(targetSessionId) ?? null;
+    if (
+      targetLiveWorkingDirectory &&
+      !sameWorkspacePath(targetLiveWorkingDirectory, this.context.state.config.workingDirectory)
+    ) {
+      this.context.emitError(
+        "permission_denied",
+        "session",
+        "Target session is outside the active workspace",
+      );
+      return;
+    }
+
+    if (!targetLiveWorkingDirectory && this.context.deps.sessionDb) {
+      const record = this.context.deps.sessionDb.getSessionRecord(targetSessionId);
+      if (!record) {
+        this.context.emitError(
+          "validation_failed",
+          "session",
+          `Unknown target session: ${targetSessionId}`,
+        );
+        return;
+      }
+      if (!sameWorkspacePath(record.workingDirectory, this.context.state.config.workingDirectory)) {
+        this.context.emitError(
+          "permission_denied",
+          "session",
+          "Target session is outside the active workspace",
+        );
+        return;
+      }
+    }
+
     try {
       if (this.context.deps.deleteSessionImpl) {
         await this.context.deps.deleteSessionImpl({

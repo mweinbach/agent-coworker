@@ -488,7 +488,7 @@ describe("shared provider display utilities", () => {
   test("fallbackAuthMethods returns oauth for codex-cli", async () => {
     const { fallbackAuthMethods } = await import("../src/lib/providerDisplayNames");
     const methods = fallbackAuthMethods("codex-cli");
-    expect(methods.length).toBeGreaterThan(1);
+    expect(methods).toHaveLength(1);
     expect(methods[0]!.type).toBe("oauth");
   });
 

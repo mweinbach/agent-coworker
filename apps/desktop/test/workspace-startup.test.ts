@@ -254,6 +254,7 @@ describe("workspace startup flow", () => {
     expect(savedStates).toHaveLength(1);
     expect(startCalls).toHaveLength(1);
     expect(startCalls[0]?.workspacePath).toBe("/tmp/new-workspace");
+    expect(startCalls[0]?.yolo).toBe(true);
 
     startDeferreds[0]?.resolve({ url: "ws://new-workspace" });
     await addPromise;
@@ -292,6 +293,7 @@ describe("workspace startup flow", () => {
 
     expect(stopCalls).toEqual([workspaceId]);
     expect(startCalls).toHaveLength(2);
+    expect(startCalls.map((call) => call.yolo)).toEqual([false, false]);
 
     startDeferreds[0]?.resolve({ url: "ws://stale" });
     await firstStart;

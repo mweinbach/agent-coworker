@@ -32,9 +32,7 @@ export class EventStream<TEvent, TResult> {
 
   end(result?: TResult) {
     this.done = true;
-    if (result !== undefined) {
-      this.resolveFinalResult(result);
-    }
+    this.resolveFinalResult(result as TResult);
     while (this.waiting.length > 0) {
       const waiter = this.waiting.shift();
       waiter?.({ value: undefined, done: true });

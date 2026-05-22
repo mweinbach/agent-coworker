@@ -2,11 +2,11 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { getAiCoworkerPaths } from "../src/connect";
 import {
   DEFAULT_MCP_SERVERS_DOCUMENT,
   loadMCPServers,
   loadMCPTools,
+  __internal as mcpInternal,
   parseMCPServersDocument,
   readMCPServersSnapshot,
   readProjectMCPServersDocument,
@@ -15,8 +15,6 @@ import {
   writeWorkspaceMCPServersDocument,
 } from "../src/mcp";
 import { setMCPServerEnabled } from "../src/mcp/configRegistry";
-import { writeCodexAuthMaterial } from "../src/providers/codex-auth";
-import { setOpenAiNativeConnectorEnabled } from "../src/server/connectors/openaiNativeConnectors";
 import { CODEX_APPS_MCP_SERVER_NAME } from "../src/shared/openaiNativeConnectors";
 import type { AgentConfig, MCPServerConfig } from "../src/types";
 
@@ -294,7 +292,7 @@ describe("mcp layered snapshot", () => {
 });
 
 describe("codex apps MCP bridge", () => {
-  test("loadMCPServers injects the reserved codex_apps server when a connector is enabled", async () => {
+  test("loadMCPServers does not inject a direct codex_apps server", async () => {
     const tmpWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-codex-apps-workspace-"));
     const tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-codex-apps-home-"));
     const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-codex-apps-builtin-"));
@@ -304,27 +302,11 @@ describe("codex apps MCP bridge", () => {
       config.userCoworkDir = path.join(tmpHome, ".cowork");
       config.skillsDirs = [path.join(tmpHome, ".cowork", "skills")];
       config.experimentalFeatures = { openAiNativeConnectors: true };
-      await writeCodexAuthMaterial(getAiCoworkerPaths({ homedir: tmpHome }), {
-        issuer: "https://auth.example.invalid",
-        clientId: "client-id",
-        accessToken: "access-token",
-        refreshToken: "refresh-token",
-        accountId: "acct-1",
-        expiresAtMs: Date.now() + 10 * 60_000,
-      });
-      await setOpenAiNativeConnectorEnabled(config, "connector_gmail", true);
 
       const servers = await loadMCPServers(config);
       const codexApps = servers.find((server) => server.name === CODEX_APPS_MCP_SERVER_NAME);
 
-      expect(codexApps?.transport.type).toBe("http");
-      if (codexApps?.transport.type === "http") {
-        expect(codexApps.transport.url).toBe("https://chatgpt.com/backend-api/wham/apps");
-        expect(codexApps.transport.headers).toMatchObject({
-          authorization: "Bearer access-token",
-          "ChatGPT-Account-ID": "acct-1",
-        });
-      }
+      expect(codexApps).toBeUndefined();
     } finally {
       await fs.rm(tmpWorkspace, { recursive: true, force: true });
       await fs.rm(tmpHome, { recursive: true, force: true });
@@ -337,7 +319,7 @@ describe("codex apps MCP bridge", () => {
       [
         {
           name: CODEX_APPS_MCP_SERVER_NAME,
-          transport: { type: "http", url: "https://chatgpt.com/backend-api/wham/apps" },
+          transport: { type: "http", url: "https://apps.example.invalid/mcp" },
           enabledConnectorIds: ["connector_gmail"],
         } as MCPServerConfig & { enabledConnectorIds: string[] },
       ],
@@ -595,5 +577,91 @@ describe("loadMCPTools", () => {
     const result = await loadMCPTools(servers, { createClient: mockCreateMCPClient as any });
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]).toContain("flaky");
+  });
+});
+
+describe("mcp json schema normalization", () => {
+  test("normalizes tuple array items into provider-safe item schemas", () => {
+    const normalized = mcpInternal.normalizeMcpJsonSchema(
+      {
+        type: "object",
+        properties: {
+          position: {
+            type: "array",
+            items: [{ type: "number" }, { type: "number" }],
+            additionalItems: false,
+          },
+        },
+        required: ["position"],
+      },
+      true,
+    ) as {
+      properties: Record<
+        string,
+        {
+          items?: unknown;
+          maxItems?: unknown;
+          additionalItems?: unknown;
+        }
+      >;
+    };
+
+    const position = normalized.properties.position;
+    expect(Array.isArray(position?.items)).toBe(false);
+    expect(position?.items).toEqual({ type: "number" });
+    expect(position?.maxItems).toBe(2);
+    expect(position?.additionalItems).toBeUndefined();
+  });
+
+  test("normalizes nested prefixItems and adds missing object types", () => {
+    const normalized = mcpInternal.normalizeMcpJsonSchema(
+      {
+        properties: {
+          command: {
+            properties: {
+              name: { enum: ["start", "stop"] },
+            },
+          },
+          choices: {
+            anyOf: [
+              {
+                type: "array",
+                prefixItems: [{ const: "workspace" }, { const: "user" }],
+              },
+            ],
+          },
+        },
+      },
+      true,
+    ) as {
+      type?: unknown;
+      properties: {
+        command?: {
+          type?: unknown;
+          properties?: Record<string, unknown>;
+        };
+        choices?: {
+          anyOf?: Array<{
+            items?: unknown;
+            maxItems?: unknown;
+            prefixItems?: unknown;
+          }>;
+        };
+      };
+    };
+
+    expect(normalized.type).toBe("object");
+    expect(normalized.properties.command?.type).toBe("object");
+    expect(normalized.properties.command?.properties?.name).toEqual({
+      enum: ["start", "stop"],
+    });
+
+    const choicesArray = normalized.properties.choices?.anyOf?.[0];
+    expect(Array.isArray(choicesArray?.items)).toBe(false);
+    expect(choicesArray?.items).toEqual({
+      anyOf: [{ const: "workspace" }, { const: "user" }],
+    });
+    expect(choicesArray?.maxItems).toBe(2);
+    expect(choicesArray?.prefixItems).toBeUndefined();
   });
 });

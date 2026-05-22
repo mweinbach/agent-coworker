@@ -1,12 +1,15 @@
 import { GoogleGenAI, type Interactions, type Operation } from "@google/genai";
+import { DEFAULT_RESEARCH_AGENT_ID } from "./types";
 
 type CreateResearchInteractionStreamOptions = {
   apiKey: string;
   input: string;
   previousInteractionId?: string;
   tools?: Interactions.Tool[];
+  agentId?: Interactions.CreateAgentInteractionParamsStreaming["agent"];
   thinkingSummaries?: "auto" | "none";
   collaborativePlanning?: boolean;
+  visualization?: "off" | "auto";
   signal?: AbortSignal;
 };
 
@@ -94,7 +97,21 @@ async function waitForOperation<T>(
   return current;
 }
 
-export type ResearchInteractionStreamEvent = Interactions.InteractionSSEEvent;
+type LegacyResearchInteractionStreamEvent = {
+  event_type: string;
+  event_id?: string;
+  interaction?: Interactions.Interaction;
+  status?: Interactions.Interaction["status"];
+  index?: number;
+  content?: unknown;
+  step?: unknown;
+  delta?: unknown;
+  error?: { message?: string; code?: string };
+};
+
+export type ResearchInteractionStreamEvent =
+  | Interactions.InteractionSSEEvent
+  | LegacyResearchInteractionStreamEvent;
 
 export async function createResearchInteractionStream(
   opts: CreateResearchInteractionStreamOptions,
@@ -102,7 +119,7 @@ export async function createResearchInteractionStream(
   const client = getGoogleClient(opts.apiKey);
   const result = await client.interactions.create(
     {
-      agent: "deep-research-pro-preview-12-2025",
+      agent: opts.agentId ?? DEFAULT_RESEARCH_AGENT_ID,
       input: opts.input,
       background: true,
       stream: true,
@@ -114,10 +131,11 @@ export async function createResearchInteractionStream(
       agent_config: {
         type: "deep-research",
         thinking_summaries: opts.thinkingSummaries ?? "auto",
+        visualization: opts.visualization ?? "auto",
         ...(opts.collaborativePlanning ? { collaborative_planning: true } : {}),
       },
     },
-    opts.signal ? ({ signal: opts.signal } as any) : undefined,
+    opts.signal ? { signal: opts.signal } : undefined,
   );
 
   return asAsyncIterable<ResearchInteractionStreamEvent>(result);
@@ -133,7 +151,7 @@ export async function resumeResearchInteractionStream(
       stream: true,
       ...(opts.lastEventId ? { last_event_id: opts.lastEventId } : {}),
     },
-    opts.signal ? ({ signal: opts.signal } as any) : undefined,
+    opts.signal ? { signal: opts.signal } : undefined,
   );
 
   return asAsyncIterable<ResearchInteractionStreamEvent>(result);

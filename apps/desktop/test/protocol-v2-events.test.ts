@@ -603,6 +603,68 @@ describe("desktop JSON-RPC event mapping", () => {
     });
   });
 
+  test("shared JSON-RPC turn completion clears blank reasoning placeholders", async () => {
+    const socket = await reconnectThreadAndGetSocket();
+
+    socket.notify("turn/started", {
+      threadId: sessionId,
+      turn: { id: "turn-1", status: "inProgress", items: [] },
+    });
+    socket.notify("item/started", {
+      threadId: sessionId,
+      turnId: "turn-1",
+      item: {
+        id: "reasoning-1",
+        type: "reasoning",
+        mode: "summary",
+        text: "",
+      },
+    });
+    socket.notify("item/agentMessage/delta", {
+      threadId: sessionId,
+      turnId: "turn-1",
+      itemId: "assistant-1",
+      delta: "Final answer",
+    });
+    socket.notify("item/completed", {
+      threadId: sessionId,
+      turnId: "turn-1",
+      item: { id: "assistant-1", type: "agentMessage", text: "Final answer" },
+    });
+    socket.notify("item/completed", {
+      threadId: sessionId,
+      turnId: "turn-1",
+      item: {
+        id: "reasoning-1",
+        type: "reasoning",
+        mode: "summary",
+        text: "",
+      },
+    });
+    socket.notify("turn/completed", {
+      threadId: sessionId,
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await flushAsyncWork();
+    await flushAsyncWork();
+
+    const runtime = useAppStore.getState().threadRuntimeById[threadId];
+    expect(runtime?.busy).toBe(false);
+    expect(runtime?.activeTurnId).toBeNull();
+    const visibleKinds =
+      runtime?.feed
+        .filter((item) => item.kind === "reasoning" || item.kind === "message")
+        .map((item) => item.kind) ?? [];
+    expect(visibleKinds).toEqual(["message"]);
+    expect(runtime?.feed).toContainEqual(
+      expect.objectContaining({
+        kind: "message",
+        role: "assistant",
+        text: "Final answer",
+      }),
+    );
+  });
+
   test("shared JSON-RPC toolCall items render Gemini native web search cards", async () => {
     const socket = await reconnectThreadAndGetSocket();
 

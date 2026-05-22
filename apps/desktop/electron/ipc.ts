@@ -1,4 +1,6 @@
-import { ipcMain } from "electron";
+import { createRequire } from "node:module";
+
+import type * as Electron from "electron";
 
 import { DESKTOP_IPC_CHANNELS } from "../src/lib/desktopApi";
 import { registerFilesIpc } from "./ipc/files";
@@ -10,6 +12,9 @@ import type { DesktopIpcDeps } from "./ipc/types";
 import { registerWindowIpc } from "./ipc/window";
 import { registerWorkspaceIpc } from "./ipc/workspace";
 import { WorkspaceRootsController } from "./ipc/workspaceRoots";
+
+const require = createRequire(import.meta.url);
+const { ipcMain } = require("electron") as typeof Electron;
 
 export function registerDesktopIpc(deps: DesktopIpcDeps): () => void {
   const workspaceRoots = new WorkspaceRootsController(deps.persistence);

@@ -1,21 +1,20 @@
 import type { AgentConfig } from "../../types";
 
-export const TITLE_MODELS_BY_PROVIDER: Partial<
-  Record<AgentConfig["provider"], readonly string[]>
-> = {
-  antigravity: ["gemini-3.1-flash-lite"],
-  anthropic: ["claude-haiku-4-5"],
-  baseten: ["moonshotai/Kimi-K2.5"],
-  "codex-cli": ["gpt-5.4-mini", "gpt-5.3-codex-spark"],
-  google: ["gemini-3-flash-preview"],
-  nvidia: ["nvidia/nemotron-3-super-120b-a12b"],
-  openai: ["gpt-5-mini"],
-  together: ["moonshotai/Kimi-K2.5"],
-  fireworks: ["accounts/fireworks/models/glm-5"],
-  firepass: ["accounts/fireworks/routers/kimi-k2p6-turbo"],
-  "opencode-go": ["glm-5"],
-  "opencode-zen": ["glm-5"],
-};
+export const TITLE_MODELS_BY_PROVIDER: Partial<Record<AgentConfig["provider"], readonly string[]>> =
+  {
+    antigravity: ["gemini-3.1-flash-lite"],
+    anthropic: ["claude-haiku-4-5"],
+    baseten: ["moonshotai/Kimi-K2.5"],
+    "codex-cli": ["gpt-5.4-mini", "gpt-5.3-codex-spark"],
+    google: ["gemini-3-flash-preview"],
+    nvidia: ["nvidia/nemotron-3-super-120b-a12b"],
+    openai: ["gpt-5-mini"],
+    together: ["moonshotai/Kimi-K2.5"],
+    fireworks: ["accounts/fireworks/models/glm-5"],
+    firepass: ["accounts/fireworks/routers/kimi-k2p6-turbo"],
+    "opencode-go": ["glm-5"],
+    "opencode-zen": ["glm-5"],
+  };
 
 export const TITLE_MAX_TOKENS = 150;
 export const TITLE_MAX_CHARS = 50;

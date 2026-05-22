@@ -1,8 +1,8 @@
 import path from "node:path";
 import { z } from "zod";
 import { formatUserInputDisplayText } from "../../../shared/attachments";
-import type { SessionContext } from "../SessionContext";
 import type { FileAttachment } from "../../jsonrpc/routes/shared";
+import type { SessionContext } from "../SessionContext";
 
 const errorWithCodeSchema = z.object({ code: z.unknown() }).passthrough();
 

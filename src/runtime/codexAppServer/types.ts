@@ -117,7 +117,10 @@ export function formatCommandForDiagnostics(command: CodexAppServerCommand): str
   ].join(", ");
 }
 
-export function withCodexAppServerDiagnostics(error: unknown, command: CodexAppServerCommand): Error {
+export function withCodexAppServerDiagnostics(
+  error: unknown,
+  command: CodexAppServerCommand,
+): Error {
   const message = error instanceof Error ? error.message : String(error);
   const diagnostic = `Codex app-server ${formatCommandForDiagnostics(command)}`;
   if (message.includes(diagnostic)) return error instanceof Error ? error : new Error(message);

@@ -1,8 +1,8 @@
+import { getAttachmentByteLengthValidationMessage } from "../../../shared/attachments";
 import {
   googleMultimodalPartTypeForMime,
   type MultimodalContentPartType,
 } from "../../../shared/multimodalMime";
-import { getAttachmentByteLengthValidationMessage } from "../../../shared/attachments";
 import type { FileAttachment, OrderedInputPart } from "../../jsonrpc/routes/shared";
 
 export const LARGE_MULTIMODAL_OUTPUT_GUIDANCE =

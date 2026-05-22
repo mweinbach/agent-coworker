@@ -314,7 +314,9 @@ export async function resolvePiModel(
   if (isFireworksInferenceProvider(provider)) {
     const model = getFireworksInferencePiModel(provider, modelId);
     if (!model)
-      throw new Error(`No PI model metadata available for provider ${provider} (model: ${modelId}).`);
+      throw new Error(
+        `No PI model metadata available for provider ${provider} (model: ${modelId}).`,
+      );
     return {
       model: applySupportedModelMetadata(model, provider, modelId),
       apiKey: resolveFireworksInferenceApiKey(provider, {

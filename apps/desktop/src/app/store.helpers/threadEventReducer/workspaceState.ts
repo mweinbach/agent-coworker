@@ -1,5 +1,5 @@
-import { resetModelStreamRuntime, RUNTIME } from "../runtimeState";
 import type { StoreGet } from "../../store.helpers";
+import { RUNTIME, resetModelStreamRuntime } from "../runtimeState";
 import type { ThreadEventReducerContext } from "./context";
 
 export function createWorkspaceStateHelpers(ctx: ThreadEventReducerContext) {

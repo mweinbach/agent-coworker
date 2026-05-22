@@ -1,7 +1,7 @@
 import type { SessionEvent } from "../../../../lib/wsProtocol";
 import { unhandledEventSystemLine } from "../../../store.feedMapping";
-import { getModelStreamRuntime } from "../../runtimeState";
 import type { StoreGet, StoreSet } from "../../../store.helpers";
+import { getModelStreamRuntime } from "../../runtimeState";
 import type { ThreadEventReducerContext } from "../context";
 import type { FeedProjectionModule } from "../feedProjection";
 import type { MessagingModule } from "../messaging";
@@ -19,9 +19,7 @@ export function createHandlersModule(
   feed: FeedProjectionModule,
   messaging: Pick<
     MessagingModule,
-    | "sendUserMessageToThread"
-    | "flushOneQueuedThreadMessage"
-    | "flushOneQueuedThreadMessageIfReady"
+    "sendUserMessageToThread" | "flushOneQueuedThreadMessage" | "flushOneQueuedThreadMessageIfReady"
   >,
 ) {
   const moduleContext: HandlerModuleContext = {

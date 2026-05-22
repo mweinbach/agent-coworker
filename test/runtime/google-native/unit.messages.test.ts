@@ -8,17 +8,11 @@ import {
   __internal as googleNativeInternal,
   runGoogleNativeInteractionStep,
 } from "../../../src/runtime/googleNativeInteractions";
-import { __internal as citationMetadataInternal } from "../../../src/server/citationMetadata";
 import type { RuntimeRunTurnParams } from "../../../src/runtime/types";
-import {
-  googleSseResponse,
-  liveGoogleTest,
-  makeConfig,
-  makeParams,
-} from "./fixtures";
+import { __internal as citationMetadataInternal } from "../../../src/server/citationMetadata";
+import { googleSseResponse, liveGoogleTest, makeConfig, makeParams } from "./fixtures";
 
 describe("google native interactions request building", () => {
-
   test("convertMessagesToInteractionsInput preserves roleful conversation turns", () => {
     const input = googleNativeInternal.convertMessagesToInteractionsInput([
       { role: "user", content: "Hello world" },
@@ -376,5 +370,4 @@ describe("google native interactions request building", () => {
       },
     ]);
   });
-
 });

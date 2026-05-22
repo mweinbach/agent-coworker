@@ -8,8 +8,8 @@ import {
   __internal as googleNativeInternal,
   runGoogleNativeInteractionStep,
 } from "../../../src/runtime/googleNativeInteractions";
-import { __internal as citationMetadataInternal } from "../../../src/server/citationMetadata";
 import type { RuntimeRunTurnParams } from "../../../src/runtime/types";
+import { __internal as citationMetadataInternal } from "../../../src/server/citationMetadata";
 import type { ModelMessage } from "../../../src/types";
 import {
   googleSseResponse,
@@ -20,7 +20,6 @@ import {
 } from "./fixtures";
 
 describe("google native interactions request building", () => {
-
   test("SDK Interactions contract stays aligned with request and stream shapes", () => {
     const userStep = {
       type: "user_input",
@@ -356,5 +355,4 @@ describe("google native interactions request building", () => {
     expect(seenStreamOptions[0]?.thinkingLevel).toBeUndefined();
     expect(seenStreamOptions[0]?.thinkingSummaries).toBe("auto");
   });
-
 });

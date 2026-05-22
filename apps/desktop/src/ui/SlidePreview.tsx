@@ -51,7 +51,7 @@ export function SlidePreview({ path, refreshTrigger }: SlidePreviewProps) {
     } finally {
       setLoading(false);
     }
-  }, [hasActiveWorkspace, path, refreshKey, loadPresentationPreview]);
+  }, [hasActiveWorkspace, path, refreshKey, loadPresentationPreview, selectedWorkspaceId]);
 
   useEffect(() => {
     if (Object.is(previousRefreshTrigger.current, refreshTrigger)) return;

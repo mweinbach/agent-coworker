@@ -47,7 +47,9 @@ describe("managed soffice runtime", () => {
       expect(helper).toContain("COWORK_DISABLE_MANAGED_SOFFICE_DOWNLOAD");
       expect(helper).toContain("LibreOffice_${version}_Win_x86-64.msi");
       expect(helper).toContain("LibreOffice_${version}_Win_aarch64.msi");
-      expect(helper).toContain('run("msiexec.exe", ["/a", archivePath, "/qn", "TARGETDIR=" + stagedRoot]');
+      expect(helper).toContain(
+        'run("msiexec.exe", ["/a", archivePath, "/qn", "TARGETDIR=" + stagedRoot]',
+      );
       expect(helper).toContain('path.join(root, "program", "soffice.exe")');
     } finally {
       await fs.rm(home, { recursive: true, force: true });

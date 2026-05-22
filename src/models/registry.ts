@@ -5,8 +5,8 @@ import anthropicClaudeOpus46 from "../../config/models/anthropic/claude-opus-4-6
 import anthropicClaudeOpus47 from "../../config/models/anthropic/claude-opus-4-7.json";
 import anthropicClaudeSonnet45 from "../../config/models/anthropic/claude-sonnet-4-5.json";
 import anthropicClaudeSonnet46 from "../../config/models/anthropic/claude-sonnet-4-6.json";
-import antigravityGemini31Pro from "../../config/models/antigravity/gemini-3.1-pro-preview.json";
 import antigravityGemini31FlashLite from "../../config/models/antigravity/gemini-3.1-flash-lite.json";
+import antigravityGemini31Pro from "../../config/models/antigravity/gemini-3.1-pro-preview.json";
 import antigravityGemini35Flash from "../../config/models/antigravity/gemini-3.5-flash.json";
 import basetenMoonshotAiKimiK25 from "../../config/models/baseten/moonshotai-kimi-k2.5.json";
 import basetenNvidiaNemotron120bA12b from "../../config/models/baseten/nvidia-nemotron-120b-a12b.json";
@@ -18,11 +18,11 @@ import codexCliGpt53CodexSpark from "../../config/models/codex-cli/gpt-5.3-codex
 import codexCliGpt54 from "../../config/models/codex-cli/gpt-5.4.json";
 import codexCliGpt54Mini from "../../config/models/codex-cli/gpt-5.4-mini.json";
 import codexCliGpt55 from "../../config/models/codex-cli/gpt-5.5.json";
+import firepassKimiK2p6Turbo from "../../config/models/firepass/accounts-fireworks-routers-kimi-k2p6-turbo.json";
 import fireworksGlm5 from "../../config/models/fireworks/accounts-fireworks-models-glm-5.json";
 import fireworksKimiK2p5 from "../../config/models/fireworks/accounts-fireworks-models-kimi-k2p5.json";
 import fireworksMinimaxM2p5 from "../../config/models/fireworks/accounts-fireworks-models-minimax-m2p5.json";
 import fireworksKimiK2p5Turbo from "../../config/models/fireworks/accounts-fireworks-routers-kimi-k2p5-turbo.json";
-import firepassKimiK2p6Turbo from "../../config/models/firepass/accounts-fireworks-routers-kimi-k2p6-turbo.json";
 import googleGemini31FlashLitePreview from "../../config/models/google/gemini-3.1-flash-lite-preview.json";
 import googleGemini31ProPreview from "../../config/models/google/gemini-3.1-pro-preview.json";
 import googleGemini31ProPreviewCustomtools from "../../config/models/google/gemini-3.1-pro-preview-customtools.json";

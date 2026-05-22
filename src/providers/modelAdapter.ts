@@ -1,8 +1,8 @@
 import type { AgentConfig } from "../types";
 import {
   FIREWORKS_INFERENCE_BASE_URL,
-  getFireworksInferenceAuthConfig,
   type FireworksInferenceProvider,
+  getFireworksInferenceAuthConfig,
   resolveFireworksInferenceApiKey,
 } from "./fireworksShared";
 import {

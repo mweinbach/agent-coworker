@@ -1,15 +1,15 @@
 import { renderManagedSofficeRuntimeInstructions } from "../../managedSofficeRuntime";
 import { getSupportedModel, listSupportedModels } from "../../models/registry";
 import type { CodexAppServerClient } from "../../providers/codexAppServerClient";
-import { isCodexDynamicCoworkToolName } from "../../tools/codexBoundary";
 import { asArray, asFiniteNumber, asRecord, asString } from "../../shared/recordParsing";
-import type { RuntimeRunTurnParams, RuntimeUsage } from "../types";
+import { isCodexDynamicCoworkToolName } from "../../tools/codexBoundary";
 import { isZodSchema, toPiJsonSchema } from "../piRuntimeOptions";
+import type { RuntimeRunTurnParams, RuntimeUsage } from "../types";
 import {
   CODEX_APP_SERVER_PROVIDER,
   CODEX_STARTUP_RPC_TIMEOUT_MS,
-  type CodexAppServerModelListEntry,
   type CodexApprovalPolicy,
+  type CodexAppServerModelListEntry,
   type CodexDynamicToolSpec,
   type CodexSandboxMode,
   type CodexSandboxPolicy,
@@ -101,7 +101,9 @@ function codexWebSearchToolConfig(
   return Object.keys(toolConfig).length > 0 ? toolConfig : undefined;
 }
 
-export function codexThreadConfig(params: RuntimeRunTurnParams): Record<string, unknown> | undefined {
+export function codexThreadConfig(
+  params: RuntimeRunTurnParams,
+): Record<string, unknown> | undefined {
   const codexOptions = codexProviderOptions(params.providerOptions);
   if (!codexOptions) return undefined;
 
@@ -137,7 +139,9 @@ export function codexBaseInstructions(
   ].join("\n\n");
 }
 
-export function codexDynamicToolSpecs(tools: RuntimeRunTurnParams["tools"]): CodexDynamicToolSpec[] {
+export function codexDynamicToolSpecs(
+  tools: RuntimeRunTurnParams["tools"],
+): CodexDynamicToolSpec[] {
   return Object.entries(tools)
     .filter(([name]) => isCodexDynamicCoworkToolName(name))
     .map(([name, tool]): CodexDynamicToolSpec | null => {
@@ -267,7 +271,8 @@ export function parseUsage(value: unknown): RuntimeUsage | undefined {
     asRecord(usage?.output_tokens_details) ??
     asRecord(usage?.outputDetails) ??
     asRecord(usage?.output_details);
-  const promptTokens = asFiniteNumber(usage?.inputTokens) ?? asFiniteNumber(usage?.input_tokens) ?? 0;
+  const promptTokens =
+    asFiniteNumber(usage?.inputTokens) ?? asFiniteNumber(usage?.input_tokens) ?? 0;
   const cachedPromptTokens =
     asFiniteNumber(usage?.cachedInputTokens) ??
     asFiniteNumber(usage?.cached_input_tokens) ??

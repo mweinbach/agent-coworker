@@ -12,10 +12,7 @@ import { mapPiEventToRawParts } from "../piStreamParts";
 import { maybeSpillToolOutputToWorkspace } from "../toolOutputOverflow";
 import type { RuntimeRunTurnParams, RuntimeToolDefinition } from "../types";
 import { isAbortLikeError } from "./stepState";
-import {
-  INVALID_TOOL_CALL_FORMAT_REMINDER,
-  VALID_TOOL_NAME_PATTERN,
-} from "./types";
+import { INVALID_TOOL_CALL_FORMAT_REMINDER, VALID_TOOL_NAME_PATTERN } from "./types";
 
 function safeJsonStringify(value: unknown): string {
   try {

@@ -1,16 +1,21 @@
 import type { ConnectProviderResult, connectProvider as connectModelProvider } from "../../connect";
-import type { ServerErrorCode, ServerErrorSource } from "../../types";
 import type { MCPRegistryServer } from "../../mcp/configRegistry";
-import type { ExperimentalA2uiManager, SessionContext, SessionDependencies, SessionRuntimeState } from "./SessionContext";
-import { HistoryManager } from "./HistoryManager";
-import { InteractionManager } from "./InteractionManager";
+import type { ServerErrorCode, ServerErrorSource } from "../../types";
+import type { HistoryManager } from "./HistoryManager";
+import type { InteractionManager } from "./InteractionManager";
 import { McpManager } from "./McpManager";
 import { ProviderAuthManager } from "./ProviderAuthManager";
 import { ProviderCatalogManager } from "./ProviderCatalogManager";
 import { SessionAdminManager } from "./SessionAdminManager";
-import { SessionBackupController } from "./SessionBackupController";
-import { SessionMetadataManager } from "./SessionMetadataManager";
-import { SessionSnapshotProjector } from "./SessionSnapshotProjector";
+import type { SessionBackupController } from "./SessionBackupController";
+import type {
+  ExperimentalA2uiManager,
+  SessionContext,
+  SessionDependencies,
+  SessionRuntimeState,
+} from "./SessionContext";
+import type { SessionMetadataManager } from "./SessionMetadataManager";
+import type { SessionSnapshotProjector } from "./SessionSnapshotProjector";
 import { SkillManager } from "./SkillManager";
 import { TurnExecutionManager } from "./TurnExecutionManager";
 
@@ -24,11 +29,7 @@ export type AgentSessionManagerHost = {
   readonly metadataManager: SessionMetadataManager;
   readonly backupController: SessionBackupController;
   readonly sessionSnapshotProjector: SessionSnapshotProjector;
-  sendUserMessage(
-    text: string,
-    clientMessageId?: string,
-    displayText?: string,
-  ): Promise<void>;
+  sendUserMessage(text: string, clientMessageId?: string, displayText?: string): Promise<void>;
   flushPendingExternalSkillRefresh(): Promise<void>;
   getGlobalAuthPaths(): ReturnType<SessionContext["getCoworkPaths"]>;
   runProviderConnect(
@@ -178,11 +179,13 @@ export class AgentSessionManagerRegistry {
         updateSessionInfo: (patch) => this.host.metadataManager.updateSessionInfo(patch),
         queuePersistSessionSnapshot: (reason) => this.host.queuePersistSessionSnapshot(reason),
         emitConfigUpdated: () => this.host.metadataManager.emitConfigUpdated(),
-        emitProviderCatalog: async () => await this.getProviderCatalogManager().emitProviderCatalog(),
+        emitProviderCatalog: async () =>
+          await this.getProviderCatalogManager().emitProviderCatalog(),
         refreshProviderStatus: async (opts) =>
           await this.getProviderCatalogManager().refreshProviderStatus(opts),
         getGlobalAuthPaths: () => this.host.getGlobalAuthPaths(),
-        runProviderConnect: async (providerOpts) => await this.host.runProviderConnect(providerOpts),
+        runProviderConnect: async (providerOpts) =>
+          await this.host.runProviderConnect(providerOpts),
       });
     }
     return this.providerAuthManager;

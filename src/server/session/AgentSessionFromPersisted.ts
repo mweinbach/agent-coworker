@@ -1,17 +1,18 @@
-import type { connectProvider as connectModelProvider } from "../../connect";
 import type { runTurn } from "../../agent";
-import type { getProviderCatalog } from "../../providers/connectionCatalog";
-import type { getProviderStatuses } from "../../providerStatus";
+import type { connectProvider as connectModelProvider } from "../../connect";
 import { getKnownResolvedModelMetadata, isDynamicModelProvider } from "../../models/metadata";
 import { defaultSupportedModel } from "../../models/registry";
-import type { generateSessionTitle } from "../sessionTitleService";
-import type { SessionEvent } from "../protocol";
+import type { getProviderStatuses } from "../../providerStatus";
+import type { getProviderCatalog } from "../../providers/connectionCatalog";
+import type { HarnessContextStore } from "../../sessionContext/HarnessContextStore";
 import type { SessionSnapshot } from "../../shared/sessionSnapshot";
-import { HarnessContextStore } from "../../sessionContext/HarnessContextStore";
+import type { getAiCoworkerPaths } from "../../store/connections";
 import type { AgentConfig } from "../../types";
-import { getAiCoworkerPaths } from "../../store/connections";
+import type { SessionEvent } from "../protocol";
 import type { PersistedSessionRecord, SessionDb } from "../sessionDb";
 import type { writePersistedSessionSnapshot } from "../sessionStore";
+import type { generateSessionTitle } from "../sessionTitleService";
+import { AgentSession } from "./AgentSession";
 import type {
   HydratedSessionState,
   PersistedModelSelection,
@@ -20,7 +21,6 @@ import type {
   SessionDependencies,
   SessionInfoState,
 } from "./SessionContext";
-import { AgentSession } from "./AgentSession";
 
 export type AgentSessionFromPersistedOptions = {
   persisted: PersistedSessionRecord;
@@ -65,10 +65,7 @@ export function createAgentSessionFromPersisted(
   opts: AgentSessionFromPersistedOptions,
 ): AgentSession {
   const { persisted } = opts;
-  const resolvedPersistedModel = getKnownResolvedModelMetadata(
-    persisted.provider,
-    persisted.model,
-  );
+  const resolvedPersistedModel = getKnownResolvedModelMetadata(persisted.provider, persisted.model);
   const resumedModel = resolvedPersistedModel ?? defaultSupportedModel(persisted.provider);
   const migratedUnsupportedModel =
     resolvedPersistedModel === null && !isDynamicModelProvider(persisted.provider);

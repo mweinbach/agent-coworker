@@ -4,7 +4,7 @@ import type { runTurn } from "../../agent";
 import type { ConnectProviderResult, connectProvider as connectModelProvider } from "../../connect";
 import { closeMcpServersForSession } from "../../mcp";
 import type { MCPRegistryServer } from "../../mcp/configRegistry";
-import { MemoryStore, type MemoryScope } from "../../memoryStore";
+import { type MemoryScope, MemoryStore } from "../../memoryStore";
 import type { loadSystemPromptWithSkills } from "../../prompt";
 import type { getProviderStatuses } from "../../providerStatus";
 import { closePooledCodexAppServerClient } from "../../providers/codexAppServerClient";
@@ -50,44 +50,9 @@ import {
   unsubscribeAgentSessionCostTracker,
 } from "./AgentSessionCostTracking";
 import {
-  createAgentSessionFromPersisted,
   type AgentSessionFromPersistedOptions,
+  createAgentSessionFromPersisted,
 } from "./AgentSessionFromPersisted";
-import {
-  AgentSessionManagerRegistry,
-  type AgentSessionManagerHost,
-} from "./AgentSessionManagerRegistry";
-import {
-  ensureAgentSessionSystemPromptReady,
-  refreshAgentSessionSystemPromptWithSkills,
-  type AgentSessionSystemPromptState,
-} from "./AgentSessionSystemPrompt";
-import { HistoryManager } from "./HistoryManager";
-import { InteractionManager, type PendingPromptReplayEvent } from "./InteractionManager";
-import { McpManager } from "./McpManager";
-import { PersistenceManager } from "./PersistenceManager";
-import { ProviderAuthManager } from "./ProviderAuthManager";
-import { ProviderCatalogManager } from "./ProviderCatalogManager";
-import { SessionAdminManager } from "./SessionAdminManager";
-import { SessionBackupController } from "./SessionBackupController";
-import type {
-  ExperimentalA2uiManager,
-  HydratedSessionState,
-  PersistedModelSelection,
-  PersistedProjectConfigPatch,
-  SeededSessionContext,
-  SessionBackupFactory,
-  SessionContext,
-  SessionDependencies,
-  SessionInfoState,
-  SessionRuntimeState,
-} from "./SessionContext";
-import { SessionMetadataManager } from "./SessionMetadataManager";
-import { SessionRuntimeSupport } from "./SessionRuntimeSupport";
-import { SessionSnapshotBuilder } from "./SessionSnapshotBuilder";
-import { SessionSnapshotProjector } from "./SessionSnapshotProjector";
-import { SkillManager } from "./SkillManager";
-import { TurnExecutionManager } from "./TurnExecutionManager";
 import {
   buildInitialSessionSnapshot,
   contentText,
@@ -105,6 +70,41 @@ import {
   lazyLoadSystemPromptWithSkills,
   lazyRunTurn,
 } from "./AgentSessionLazyImports";
+import {
+  type AgentSessionManagerHost,
+  AgentSessionManagerRegistry,
+} from "./AgentSessionManagerRegistry";
+import {
+  type AgentSessionSystemPromptState,
+  ensureAgentSessionSystemPromptReady,
+  refreshAgentSessionSystemPromptWithSkills,
+} from "./AgentSessionSystemPrompt";
+import { HistoryManager } from "./HistoryManager";
+import { InteractionManager, type PendingPromptReplayEvent } from "./InteractionManager";
+import type { McpManager } from "./McpManager";
+import { PersistenceManager } from "./PersistenceManager";
+import type { ProviderAuthManager } from "./ProviderAuthManager";
+import type { ProviderCatalogManager } from "./ProviderCatalogManager";
+import type { SessionAdminManager } from "./SessionAdminManager";
+import { SessionBackupController } from "./SessionBackupController";
+import type {
+  ExperimentalA2uiManager,
+  HydratedSessionState,
+  PersistedModelSelection,
+  PersistedProjectConfigPatch,
+  SeededSessionContext,
+  SessionBackupFactory,
+  SessionContext,
+  SessionDependencies,
+  SessionInfoState,
+  SessionRuntimeState,
+} from "./SessionContext";
+import { SessionMetadataManager } from "./SessionMetadataManager";
+import { SessionRuntimeSupport } from "./SessionRuntimeSupport";
+import { SessionSnapshotBuilder } from "./SessionSnapshotBuilder";
+import { SessionSnapshotProjector } from "./SessionSnapshotProjector";
+import type { SkillManager } from "./SkillManager";
+import type { TurnExecutionManager } from "./TurnExecutionManager";
 
 function makeId(): string {
   return crypto.randomUUID();

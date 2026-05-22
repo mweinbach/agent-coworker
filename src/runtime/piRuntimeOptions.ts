@@ -408,7 +408,11 @@ function sanitizeProviderToolJsonSchema(
   schema: ToolJsonSchema | undefined,
   provider?: ProviderName,
 ): ToolJsonSchema | undefined {
-  if (!usesFireworksToolSchemaRules(provider) || schema === undefined || typeof schema === "boolean") {
+  if (
+    !usesFireworksToolSchemaRules(provider) ||
+    schema === undefined ||
+    typeof schema === "boolean"
+  ) {
     return schema;
   }
 

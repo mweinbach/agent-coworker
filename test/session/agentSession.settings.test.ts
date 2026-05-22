@@ -1,18 +1,23 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import type { TodoItem } from "./agentSession.harness";
 import {
-  REAL_AGENT,
   AgentSession,
   ASK_SKIP_TOKEN,
-  SessionCostTracker,
   createExperimentalA2uiSurfaceManager,
   createRuntime,
   defaultSupportedModel,
+  flushAsyncWork,
   fs,
   getSupportedModel,
+  isRecord,
   MAX_ATTACHMENT_BASE64_SIZE,
   MAX_ATTACHMENT_INLINE_BYTE_SIZE,
   MAX_TURN_ATTACHMENT_COUNT,
   MAX_TURN_ATTACHMENT_TOTAL_BASE64_SIZE,
+  makeConfig,
+  makeEmit,
+  makeSession,
+  makeSessionBackupFactory,
   mockClosePooledCodexAppServerClient,
   mockConnectModelProvider,
   mockGenerateSessionTitle,
@@ -21,17 +26,12 @@ import {
   mockWritePersistedSessionSnapshot,
   os,
   path,
+  REAL_AGENT,
   resetAgentSessionMocks,
-  makeSession,
-  makeConfig,
-  makeEmit,
-  makeSessionBackupFactory,
-  flushAsyncWork,
+  SessionCostTracker,
   waitForCondition,
   withEnv,
-  isRecord,
 } from "./agentSession.harness";
-import type { TodoItem } from "./agentSession.harness";
 
 describe("AgentSession", () => {
   beforeEach(async () => {
@@ -43,7 +43,7 @@ describe("AgentSession", () => {
     mock.restore();
   });
 
-describe("enableMcp settings", () => {
+  describe("enableMcp settings", () => {
     test("getEnableMcp reflects config.enableMcp", () => {
       const dir = "/tmp/test-session";
       const cfg = { ...makeConfig(dir), enableMcp: false };
@@ -131,7 +131,6 @@ describe("enableMcp settings", () => {
       await first;
     });
   });
-
 
   describe("memory settings", () => {
     test("sendUserMessage skips prompt reload when cached metadata has zero discovered skills", async () => {
@@ -393,7 +392,6 @@ describe("enableMcp settings", () => {
       }
     });
   });
-
 
   describe("session config", () => {
     test("getSessionConfigEvent exposes initial runtime session config", () => {

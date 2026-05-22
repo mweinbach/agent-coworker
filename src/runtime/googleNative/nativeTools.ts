@@ -1,8 +1,8 @@
 import type { Interactions } from "@google/genai";
 import { enrichCitationAnnotations } from "../../server/citationMetadata";
 import { asNonEmptyString, asRecord } from "../../shared/recordParsing";
-import type { GoogleInteractionsToolChoice, NativeGoogleToolName } from "./types";
 import type { AssistantContentBlock } from "./stream/types";
+import type { GoogleInteractionsToolChoice, NativeGoogleToolName } from "./types";
 
 function safeJsonStringify(value: unknown): string {
   try {
@@ -292,20 +292,20 @@ function ensureThinkingBlock(
 }
 
 export {
-  asRecordArray,
-  mergeAnnotationArrays,
-  nativeToolNameFromContentType,
-  nativeToolNameFromWireName,
-  nativeGoogleToolCallContentType,
-  nativeGoogleToolResultContentType,
-  isNativeGoogleToolCallContentType,
-  isNativeGoogleToolResultContentType,
-  isGoogleCodeExecutionContentType,
-  googleStreamEventContentType,
   appendJsonObjectDelta,
-  normalizeGoogleToolChoice,
+  asRecordArray,
   buildNativeGoogleToolResultOutput,
   enrichTextBlockAnnotations,
-  queueTextBlockAnnotationEnrichment,
   ensureThinkingBlock,
+  googleStreamEventContentType,
+  isGoogleCodeExecutionContentType,
+  isNativeGoogleToolCallContentType,
+  isNativeGoogleToolResultContentType,
+  mergeAnnotationArrays,
+  nativeGoogleToolCallContentType,
+  nativeGoogleToolResultContentType,
+  nativeToolNameFromContentType,
+  nativeToolNameFromWireName,
+  normalizeGoogleToolChoice,
+  queueTextBlockAnnotationEnrichment,
 };

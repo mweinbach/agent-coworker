@@ -5,6 +5,7 @@ import {
   parseTelemetrySettings,
   startPiModelCallSpan,
 } from "../../observability/modelCallSpan";
+import type { ModelMessage } from "../../types";
 import {
   extractPiAssistantText,
   extractPiReasoningText,
@@ -13,7 +14,6 @@ import {
   piTurnMessagesToModelMessages,
 } from "../piMessageBridge";
 import { asRecord, asString, extractToolCallsFromAssistant } from "../piRuntimeOptions";
-import type { ModelMessage } from "../../types";
 import type { LlmRuntime, RuntimeRunTurnParams, RuntimeRunTurnResult } from "../types";
 import {
   preparePiModelForStream,

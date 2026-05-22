@@ -65,7 +65,7 @@ export function PptxPreview({ path }: PptxPreviewProps) {
     } finally {
       setLoading(false);
     }
-  }, [hasActiveWorkspace, path, refreshKey, loadPresentationPreview]);
+  }, [hasActiveWorkspace, path, refreshKey, loadPresentationPreview, selectedWorkspaceId]);
 
   useEffect(() => {
     loadPresentation();

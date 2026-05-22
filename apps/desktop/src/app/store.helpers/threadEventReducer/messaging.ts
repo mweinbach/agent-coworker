@@ -1,4 +1,6 @@
 import { buildAttachmentSignature, buildUserInputDisplayText } from "../../attachmentInputs";
+import type { StoreGet, StoreSet } from "../../store.helpers";
+import type { FeedItem, ThreadBusyPolicy } from "../../types";
 import {
   ensureWorkspaceJsonRpcSocket,
   type FileAttachmentInput,
@@ -15,13 +17,11 @@ import {
   prependPendingThreadMessage,
   prependPendingThreadMessageWithAttachments,
   queuePendingThreadMessage,
-  rememberPendingThreadSteer,
   RUNTIME,
+  rememberPendingThreadSteer,
   shiftPendingThreadAttachments,
   shiftPendingThreadMessage,
 } from "../runtimeState";
-import type { StoreGet, StoreSet } from "../../store.helpers";
-import type { FeedItem, ThreadBusyPolicy } from "../../types";
 import { MAX_FEED_ITEMS, type ThreadOutboundMessage } from "../threadEventReducerContext";
 import type { ThreadEventReducerContext } from "./context";
 import type { FeedProjectionModule } from "./feedProjection";

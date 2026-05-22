@@ -41,6 +41,14 @@ function fakeReleaseFetch(version = "0.129.0"): typeof fetch {
   }) as typeof fetch;
 }
 
+async function createFakeCodexBin(prefix: string): Promise<string> {
+  const binDir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  const codexPath = path.join(binDir, "codex");
+  await fs.writeFile(codexPath, "#!/bin/sh\n", "utf8");
+  await fs.chmod(codexPath, 0o755);
+  return binDir;
+}
+
 describe("codex app-server resolver", () => {
   test("uses explicit command overrides without adding implicit app-server args", async () => {
     process.env.COWORK_CODEX_APP_SERVER_COMMAND = "/tmp/custom-codex-app-server";
@@ -159,6 +167,7 @@ describe("codex app-server resolver", () => {
 
     const resolved = await resolveCodexAppServerCommand({
       homeDir,
+      pathEnv: await createFakeCodexBin("cowork-codex-system-managed-bin-"),
       platform: "win32",
       arch: "x64",
       spawnForResult: async () => ({ ok: true, stdout: "codex-cli 0.128.0\n", stderr: "" }),
@@ -169,10 +178,12 @@ describe("codex app-server resolver", () => {
 
   test("reports update availability for older system codex", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-status-"));
+    const binDir = await createFakeCodexBin("cowork-codex-status-bin-");
     const status = await getCodexAppServerInstallStatus(
       { checkLatest: true },
       {
         homeDir,
+        pathEnv: binDir,
         fetchImpl: fakeReleaseFetch("0.129.0"),
         spawnForResult: async () => ({ ok: true, stdout: "codex-cli 0.128.0\n", stderr: "" }),
       },

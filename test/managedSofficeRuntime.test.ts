@@ -125,6 +125,97 @@ describe("managed soffice runtime", () => {
     }
   });
 
+  test("shim replaces caller profiles and injects quiet headless defaults for conversions", async () => {
+    if (process.platform === "win32") return;
+
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-soffice-headless-"));
+    const fakeBin = path.join(home, "fake-bin");
+    const fakeSoffice = path.join(fakeBin, "soffice");
+    const capturedArgsPath = path.join(home, "captured-args.txt");
+    const capturedProfilePath = path.join(home, "captured-profile.xcu");
+    await fs.mkdir(fakeBin, { recursive: true });
+    await fs.writeFile(
+      fakeSoffice,
+      `#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo "LibreOffice 26.2.3.2 fake"
+  exit 0
+fi
+profile_url=""
+: > "$COWORK_CAPTURE_ARGS"
+for arg in "$@"; do
+  printf "%s\\n" "$arg" >> "$COWORK_CAPTURE_ARGS"
+  case "$arg" in
+    -env:UserInstallation=*) profile_url="\${arg#-env:UserInstallation=}" ;;
+  esac
+done
+profile_path="\${profile_url#file://}"
+if [ -n "$profile_path" ] && [ -f "$profile_path/user/registrymodifications.xcu" ]; then
+  cp "$profile_path/user/registrymodifications.xcu" "$COWORK_CAPTURE_PROFILE"
+fi
+exit 0
+`,
+      { encoding: "utf-8", mode: 0o755 },
+    );
+    await fs.chmod(fakeSoffice, 0o755);
+
+    try {
+      const setup = await ensureManagedSofficeRuntimeReady({
+        homedir: home,
+        env: { PATH: fakeBin },
+        nodePath: process.execPath,
+      });
+      expect(setup?.shimPath).toBeTruthy();
+
+      const proc = Bun.spawnSync({
+        cmd: [
+          setup?.shimPath ?? "",
+          "-env:UserInstallation=file:///caller-profile",
+          "--convert-to",
+          "pdf",
+          "--outdir",
+          home,
+          path.join(home, "input.html"),
+        ],
+        env: {
+          ...process.env,
+          ...(setup?.runtimeEnv ?? {}),
+          COWORK_CAPTURE_ARGS: capturedArgsPath,
+          COWORK_CAPTURE_PROFILE: capturedProfilePath,
+          COWORK_DISABLE_MANAGED_SOFFICE_DOWNLOAD: "1",
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+
+      expect(proc.exitCode).toBe(0);
+      const capturedArgs = (await fs.readFile(capturedArgsPath, "utf-8"))
+        .trim()
+        .split(/\r?\n/)
+        .filter(Boolean);
+      const userInstallationArgs = capturedArgs.filter((arg) =>
+        arg.startsWith("-env:UserInstallation="),
+      );
+      expect(userInstallationArgs).toHaveLength(1);
+      expect(userInstallationArgs[0]).toStartWith("-env:UserInstallation=file://");
+      expect(userInstallationArgs[0]).not.toBe("-env:UserInstallation=file:///caller-profile");
+      expect(capturedArgs).toContain("--headless");
+      expect(capturedArgs).toContain("--invisible");
+      expect(capturedArgs).toContain("--nologo");
+      expect(capturedArgs).toContain("--nodefault");
+      expect(capturedArgs).toContain("--nofirststartwizard");
+      expect(capturedArgs).toContain("--nolockcheck");
+      expect(capturedArgs).toContain("--norestore");
+      expect(capturedArgs).toContain("--convert-to");
+      expect(capturedArgs).toContain("pdf");
+      const profileRegistry = await fs.readFile(capturedProfilePath, "utf-8");
+      expect(profileRegistry).toContain('oor:name="LoadPrinter"');
+      expect(profileRegistry).toContain("<value>false</value>");
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
   test("diagnostic verifies availability when conversion produces a PDF through the shim", async () => {
     if (process.platform === "win32") return;
 
@@ -173,6 +264,42 @@ exit 7
       );
       expect(status.smoke?.ok).toBe(true);
       expect(status.smoke?.sizeBytes).toBeGreaterThan(0);
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test("diagnostic reports unavailable when smoke conversion does not produce a PDF", async () => {
+    if (process.platform === "win32") return;
+
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-soffice-smoke-failure-"));
+    const fakeBin = path.join(home, "fake-bin");
+    const fakeSoffice = path.join(fakeBin, "soffice");
+    await fs.mkdir(fakeBin, { recursive: true });
+    await fs.writeFile(
+      fakeSoffice,
+      `#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo "LibreOffice 26.2.3.2 fake"
+  exit 0
+fi
+exit 0
+`,
+      { encoding: "utf-8", mode: 0o755 },
+    );
+    await fs.chmod(fakeSoffice, 0o755);
+
+    try {
+      const status = await checkManagedSofficeRuntime({
+        homedir: home,
+        env: { PATH: fakeBin },
+        nodePath: process.execPath,
+        smoke: true,
+      });
+
+      expect(status.status).toBe("unavailable");
+      expect(status.smoke?.ok).toBe(false);
+      expect(status.smoke?.error).toContain("LibreOffice PDF conversion did not produce");
     } finally {
       await fs.rm(home, { recursive: true, force: true });
     }

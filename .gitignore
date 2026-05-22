@@ -50,3 +50,7 @@ __pycache__/
 apps/desktop/release/
 apps/desktop/out/
 apps/desktop/out-web/
+
+# Additional caches
+cowork-bun-transpiler-cache/
+.antigravitycli/

@@ -25,8 +25,8 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function executableName(name) {
-  return process.platform === "win32" ? name + ".exe" : name;
+function commandLineSofficeName() {
+  return process.platform === "win32" ? "soffice.com" : "soffice";
 }
 
 function fileExists(filePath) {
@@ -108,15 +108,17 @@ function linuxSofficePath(root) {
 }
 
 function windowsSofficePath(root) {
-  const direct = path.join(root, "program", "soffice.exe");
+  const direct = path.join(root, "program", "soffice.com");
   if (fileExists(direct)) return direct;
   if (!dirExists(root)) return "";
-  return findFirstFile(
+  const consoleLauncher = findFirstFile(
     root,
     (candidate) =>
-      path.basename(candidate).toLowerCase() === "soffice.exe" &&
+      path.basename(candidate).toLowerCase() === "soffice.com" &&
       path.basename(path.dirname(candidate)).toLowerCase() === "program",
   );
+  if (consoleLauncher) return consoleLauncher;
+  return "";
 }
 
 function managedSofficePath(version = DEFAULT_LIBREOFFICE_VERSION) {
@@ -138,7 +140,7 @@ function candidateSystemSofficePaths() {
       process.env.ProgramW6432,
     ]) {
       if (programFilesDir) {
-        candidates.push(path.join(programFilesDir, "LibreOffice", "program", "soffice.exe"));
+        candidates.push(path.join(programFilesDir, "LibreOffice", "program", "soffice.com"));
       }
     }
   }
@@ -146,7 +148,7 @@ function candidateSystemSofficePaths() {
     .split(path.delimiter)
     .filter((entry) => entry && path.resolve(entry) !== path.resolve(shimDir));
   for (const entry of pathEntries) {
-    candidates.push(path.join(entry, executableName("soffice")));
+    candidates.push(path.join(entry, commandLineSofficeName()));
   }
   return [...new Set(candidates)];
 }
@@ -293,7 +295,7 @@ async function installWindowsRuntime(archivePath, stagedRoot) {
   const soffice = windowsSofficePath(stagedRoot);
   if (!isHealthySoffice(soffice)) {
     throw new Error(
-      "Managed LibreOffice MSI was extracted but soffice.exe did not pass --version.",
+      "Managed LibreOffice MSI was extracted but soffice.com did not pass --version.",
     );
   }
 }

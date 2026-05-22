@@ -26,7 +26,7 @@ Cowork takes the opposite approach:
 - Persistent session history in `~/.cowork/sessions.db`, with resume support across restarts.
 - Opt-in workspace backup APIs for manual recovery snapshots when git-native checkpointing is not available.
 - Layered skills and MCP configuration for project, user, global, and built-in capabilities.
-- Provider catalog, auth, and status flows for Google, OpenAI, Anthropic, Bedrock, Together, Fireworks, NVIDIA, LM Studio, Baseten, and `codex-cli`.
+- Provider catalog, auth, and status flows for Google, OpenAI, Anthropic, Bedrock, Together, Fireworks, Fire Pass, NVIDIA, LM Studio, Baseten, and `codex-cli`.
 - Product runtime is kept in `src/`; developer harnesses live under `packages/harness`.
 
 ## Quickstart
@@ -53,6 +53,7 @@ Live AI turns require at least one configured provider. Starting the server, lau
 | Bedrock | AWS default credentials, profile, or explicit keys (`AWS_REGION`, `AWS_PROFILE`, etc.) |
 | Together | `TOGETHER_API_KEY` |
 | Fireworks | `FIREWORKS_API_KEY` |
+| Fire Pass | `FIREPASS_API_KEY` |
 | NVIDIA | `NVIDIA_API_KEY` |
 | Baseten | `BASETEN_API_KEY` |
 | LM Studio | `LM_STUDIO_API_KEY` (optional); configure base URL via `LM_STUDIO_BASE_URL` or config |

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import {
   __internal as citationMetadataInternal,
@@ -7,6 +7,7 @@ import {
   enrichSessionSnapshotCitationsFromCache,
 } from "../src/server/citationMetadata";
 import type { SessionSnapshot } from "../src/shared/sessionSnapshot";
+import { __internal as webSafetyInternal } from "../src/utils/webSafety";
 
 const googleRedirectUrl = "https://vertexaisearch.cloud.google.com/grounding-api-redirect/example";
 const resolvedArticleUrl =
@@ -43,7 +44,17 @@ function makeHtmlResponse(finalUrl: string, html: string): Response {
   return response;
 }
 
+beforeEach(() => {
+  webSafetyInternal.setDnsLookup(async (hostname) => {
+    if (hostname === "127.0.0.1" || hostname === "localhost" || hostname.endsWith(".internal")) {
+      return [{ address: "127.0.0.1", family: 4 }];
+    }
+    return [{ address: "93.184.216.34", family: 4 }]; // example.com public IP (non-blocked)
+  });
+});
+
 afterEach(() => {
+  webSafetyInternal.resetDnsLookup();
   citationMetadataInternal.__testResetCitationCacheLimits();
   restoreFetchStub();
   citationMetadataInternal.clearCitationResolutionCache();

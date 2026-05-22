@@ -37,8 +37,37 @@ export async function promptForProviderMethod(
   }
 }
 
+async function askSecretLine(rl: readline.Interface, prompt: string): Promise<string> {
+  const rlAny = rl as unknown as { _writeToOutput: (str: string) => void };
+  const originalWrite = rlAny._writeToOutput;
+  let isMuted = false;
+
+  rlAny._writeToOutput = (stringToWrite: string) => {
+    if (isMuted) {
+      if (stringToWrite === "\r\n" || stringToWrite === "\n" || stringToWrite === "\r") {
+        originalWrite.call(rl, stringToWrite);
+      }
+    } else {
+      originalWrite.call(rl, stringToWrite);
+    }
+  };
+
+  try {
+    const promise = new Promise<string>((resolve) => {
+      rl.question(prompt, (answer) => {
+        resolve(answer);
+      });
+    });
+    isMuted = true;
+    const answer = await promise;
+    return answer;
+  } finally {
+    rlAny._writeToOutput = originalWrite;
+  }
+}
+
 export async function promptForApiKey(rl: readline.Interface, provider: string): Promise<string> {
-  return (await askLine(rl, `${provider} API key: `)).trim();
+  return (await askSecretLine(rl, `${provider} API key: `)).trim();
 }
 
 export async function promptForProviderFields(
@@ -53,8 +82,11 @@ export async function promptForProviderFields(
   for (const field of fields) {
     const suffix = field.required ? " (required)" : "";
     const placeholder = field.placeholder ? ` [${field.placeholder}]` : "";
+    const isSecret = field.kind === "password" || field.secret === true;
     const answer = (
-      await askLine(rl, `${provider} ${field.label}${suffix}${placeholder}: `)
+      isSecret
+        ? await askSecretLine(rl, `${provider} ${field.label}${suffix}${placeholder}: `)
+        : await askLine(rl, `${provider} ${field.label}${suffix}${placeholder}: `)
     ).trim();
     if (!answer && field.required) {
       console.log(`${field.label} is required.`);

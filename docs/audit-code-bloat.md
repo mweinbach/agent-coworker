@@ -143,23 +143,11 @@ Tracks pending ask/approval via `Map<string, Deferred<T>>`. This pattern works b
 
 ---
 
-#### 6. `codex-auth.ts` — 455 lines of JWT parsing for one provider
-**File:** `src/providers/codex-auth.ts` (455 lines)
-**Problem:** Hand-rolls JWT decoding (base64url → JSON), claim extraction from 6 possible nesting locations, token refresh, and legacy file migration. The JWT decoding:
+#### 6. Codex app-server auth migration — resolved
+**Old code:** deleted custom Codex auth module
+**Resolution:** Cowork no longer hand-rolls Codex token parsing, refresh, or local credential persistence. Codex login, account state, and app access now come from `codex app-server`.
 
-```typescript
-function base64UrlDecodeToString(value: string): string | null {
-  const pad = "=".repeat((4 - (value.length % 4)) % 4);
-  const base64 = (value + pad).replace(/-/g, "+").replace(/_/g, "/");
-  return Buffer.from(base64, "base64").toString("utf-8");
-}
-```
-
-**Alternative:** Use `jose` npm package (25M+ weekly downloads) for JWT decode. It handles all edge cases. Or since you only need the payload, even `atob(token.split('.')[1])` works for non-verified decode.
-
-The claim extraction searches 6 different nesting paths per field (email, accountId, planType) across both `id_token` and `access_token`. This is handling OpenAI's auth quirks, but the fallback chains are excessive.
-
-**Impact:** 455 → ~150 lines with `jose` + simplified claim extraction.
+**Impact:** Removed the custom Codex auth implementation instead of replacing it with another local JWT helper.
 
 ---
 
@@ -239,13 +227,11 @@ await handlers[msg.type]?.(session, msg);
 
 ---
 
-#### 12. `providerStatus.ts` — Duplicate JWT decoding
-**File:** `src/providerStatus.ts` (383 lines)
-**Problem:** Duplicates JWT base64url decoding that also exists in `codex-auth.ts`. Also implements a full OIDC userinfo verification flow (well-known endpoint discovery → userinfo fetch) just to check if a token is valid.
+#### 12. `providerStatus.ts` — provider-specific status branching
+**File:** `src/providerStatus.ts`
+**Problem:** Status discovery still contains provider-specific branches and masks, though Codex-specific JWT/OIDC verification has been removed.
 
-**Alternative:** Consolidate JWT helpers. Replace OIDC userinfo check with simple token expiry check (you're a CLI, not a security gateway).
-
-**Impact:** 383 → ~150 lines.
+**Alternative:** Keep moving status checks behind provider-owned status adapters so the central status function only assembles results.
 
 ---
 
@@ -288,7 +274,7 @@ await handlers[msg.type]?.(session, msg);
 | Serial promise queues | **p-queue** | 5M+ | ~30 lines |
 | `which()` in ripgrep.ts | **which** or `Bun.which()` | 30M+ | ~25 lines |
 | IPv4/IPv6 parsing | **ipaddr.js** | 25M+ | ~100 lines |
-| JWT decode in codex-auth + providerStatus | **jose** | 25M+ | ~80 lines |
+| Provider-owned auth/status adapters | **provider modules** | N/A | centralizes provider quirks |
 | deepMerge in config.ts | **deepmerge** | 60M+ | ~10 lines |
 | atomicFile.ts | **write-file-atomic** | 20M+ | ~100 lines |
 | `exa-js` raw fetch | **exa-js** (already installed!) | - | cleaner code |
@@ -311,7 +297,7 @@ await handlers[msg.type]?.(session, msg);
 3. **Use `exa-js` or remove it** from `package.json`
    - It's installed but unused
 
-4. **Consolidate duplicate JWT helpers** between `codex-auth.ts` and `providerStatus.ts`
+4. **Move provider-specific status logic behind provider-owned adapters**
 
 ### Phase 2 — Simplify persistence
 
@@ -334,13 +320,12 @@ await handlers[msg.type]?.(session, msg);
    - Drop loopback PKCE server
    - Saves ~700 lines
 
-9. **Use `jose` for JWT** in `codex-auth.ts`
-   - Drop hand-rolled base64url decode + claim extraction
-   - Saves ~200 lines
+9. **Continue simplifying Codex status through app-server account snapshots**
+   - Keep Cowork out of Codex credential storage
+   - Avoid local JWT parsing and token refresh logic
 
-10. **Simplify `providerStatus.ts`** — drop OIDC userinfo verification
-    - Simple expiry check is sufficient for CLI
-    - Saves ~150 lines
+10. **Simplify `providerStatus.ts`** — extract provider adapters
+    - Keep central status assembly provider-agnostic
 
 ### Phase 4 — Structural improvements
 
@@ -356,7 +341,7 @@ await handlers[msg.type]?.(session, msg);
 |---|---|---|---|---|
 | Protocol + Validation | protocol.ts, configRegistry.ts | 1,339 | ~350 | ~990 |
 | Persistence | sessionDb.ts, sessionBackup.ts | 1,501 | ~350 | ~1,150 |
-| Auth + OAuth | connect.ts, codex-auth.ts, providerStatus.ts | 1,768 | ~500 | ~1,268 |
+| Auth + OAuth | connect.ts, providerStatus.ts | reduced | adapterized status/connect | ongoing |
 | Session Core | session.ts, startServer.ts | 3,038 | ~2,500 | ~538 |
 | Utilities | ripgrep.ts, webSafety.ts, atomicFile.ts | 617 | ~450 | ~167 |
 | Stream + REPL | modelStream.ts, repl.ts | 1,597 | ~1,100 | ~497 |

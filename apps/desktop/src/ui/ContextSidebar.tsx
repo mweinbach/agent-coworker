@@ -4,7 +4,10 @@ import {
   CheckCircle2Icon,
   CircleDashedIcon,
   CircleIcon,
+  ClipboardListIcon,
+  FolderOpenIcon,
   MinusCircleIcon,
+  SparklesIcon,
 } from "lucide-react";
 import { memo } from "react";
 
@@ -15,6 +18,8 @@ import { ScrollShadow } from "../components/ui/scroll-shadow";
 import { cn } from "../lib/utils";
 import { buildMarkdownPreviewText } from "./chat/markdownPreview";
 import { WorkspaceFileExplorer } from "./file-explorer/WorkspaceFileExplorer";
+
+const taskStatusIconClassName = "mt-0.5 size-3.5 shrink-0";
 
 function agentStatusIcon(agent: ThreadAgentSummary) {
   if (agent.lifecycleState === "closed") {
@@ -72,10 +77,11 @@ export const ContextSidebar = memo(function ContextSidebar() {
             className={cn(
               compactSectionBodyClassName,
               compactMutedCopyClassName,
-              "pt-2.5 opacity-75",
+              "flex flex-col items-center gap-2 pt-4 text-center opacity-75",
             )}
           >
-            Tasks, subagents, and files show here once the thread has activity.
+            <SparklesIcon className="size-5 text-muted-foreground/50" />
+            <span>Tasks, subagents, and files show here once the thread has activity.</span>
           </div>
         </section>
       </aside>
@@ -89,8 +95,15 @@ export const ContextSidebar = memo(function ContextSidebar() {
           <span className={sectionLabelClassName}>Tasks</span>
         </div>
         {!todos || todos.length === 0 ? (
-          <div className={cn(compactSectionBodyClassName, compactMutedCopyClassName)}>
-            No active tasks
+          <div
+            className={cn(
+              compactSectionBodyClassName,
+              compactMutedCopyClassName,
+              "flex flex-col items-center gap-1.5 py-3 text-center",
+            )}
+          >
+            <ClipboardListIcon className="size-4 text-muted-foreground/40" />
+            <span>No active tasks</span>
           </div>
         ) : (
           <ScrollShadow className={compactSectionScrollerClassName} data-sidebar-section="tasks">
@@ -101,11 +114,11 @@ export const ContextSidebar = memo(function ContextSidebar() {
                   className="flex items-start gap-2 text-[11px]"
                 >
                   {todo.status === "completed" ? (
-                    <CheckCircle2Icon className="mt-0.5 h-3.25 w-3.25 text-success" />
+                    <CheckCircle2Icon className={cn(taskStatusIconClassName, "text-success")} />
                   ) : todo.status === "in_progress" ? (
-                    <CircleDashedIcon className="mt-0.5 h-3.25 w-3.25 text-primary" />
+                    <CircleDashedIcon className={cn(taskStatusIconClassName, "text-primary")} />
                   ) : (
-                    <CircleIcon className="mt-0.5 h-3.25 w-3.25 text-muted-foreground" />
+                    <CircleIcon className={cn(taskStatusIconClassName, "text-muted-foreground")} />
                   )}
                   <span
                     className={cn(
@@ -127,8 +140,15 @@ export const ContextSidebar = memo(function ContextSidebar() {
           <span className={sectionLabelClassName}>Subagents</span>
         </div>
         {!selectedThreadId ? (
-          <div className={cn(compactSectionBodyClassName, compactMutedCopyClassName)}>
-            Select a thread to inspect subagents
+          <div
+            className={cn(
+              compactSectionBodyClassName,
+              compactMutedCopyClassName,
+              "flex flex-col items-center gap-1.5 py-3 text-center",
+            )}
+          >
+            <BotIcon className="size-4 text-muted-foreground/40" />
+            <span>Select a thread to inspect subagents</span>
           </div>
         ) : threadRuntime?.sessionKind === "agent" ? (
           <div className={compactSectionBodyClassName}>
@@ -146,8 +166,15 @@ export const ContextSidebar = memo(function ContextSidebar() {
             </div>
           </div>
         ) : agents.length === 0 ? (
-          <div className={cn(compactSectionBodyClassName, compactMutedCopyClassName)}>
-            No subagents
+          <div
+            className={cn(
+              compactSectionBodyClassName,
+              compactMutedCopyClassName,
+              "flex flex-col items-center gap-1.5 py-3 text-center",
+            )}
+          >
+            <BotIcon className="size-4 text-muted-foreground/40" />
+            <span>No subagents</span>
           </div>
         ) : (
           <ScrollShadow
@@ -197,8 +224,15 @@ export const ContextSidebar = memo(function ContextSidebar() {
             <div className={compactSectionHeaderClassName}>
               <span className={sectionLabelClassName}>Files</span>
             </div>
-            <div className={cn(compactSectionBodyClassName, compactMutedCopyClassName)}>
-              No workspace selected
+            <div
+              className={cn(
+                compactSectionBodyClassName,
+                compactMutedCopyClassName,
+                "flex flex-col items-center gap-1.5 py-3 text-center",
+              )}
+            >
+              <FolderOpenIcon className="size-4 text-muted-foreground/40" />
+              <span>No workspace selected</span>
             </div>
           </>
         )}

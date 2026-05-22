@@ -53,11 +53,13 @@ const webDevPort = resolveWebDevPort(process.env.COWORK_WEB_DEV_PORT);
 const httpServerTarget = resolveHttpServerTarget(process.env.COWORK_SERVER_URL);
 const wsServerTarget = resolveWsServerTarget(process.env.COWORK_SERVER_URL);
 const injectedServerUrl = process.env.COWORK_SERVER_URL?.trim() || "";
+const injectedBrowserAccessToken = process.env.COWORK_BROWSER_ACCESS_TOKEN?.trim() || "";
 
 export default defineConfig({
   root: appRoot,
   define: {
     "globalThis.__COWORK_SERVER_URL__": JSON.stringify(injectedServerUrl),
+    "globalThis.__COWORK_BROWSER_ACCESS_TOKEN__": JSON.stringify(injectedBrowserAccessToken),
   },
   plugins: [
     react(),

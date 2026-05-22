@@ -20,10 +20,8 @@ import {
 } from "./server/agents/roles";
 import type { AgentRole } from "./shared/agents";
 import {
-  getCodexWebSearchBackendFromProviderOptions,
   getGoogleNativeWebSearchFromProviderOptions,
   getLocalWebSearchProviderFromProviderOptions,
-  isCodexWebSearchMode,
 } from "./shared/openaiCompatibleOptions";
 import { discoverSkillsForConfig } from "./skills";
 import type { AgentConfig, ProviderName } from "./types";
@@ -312,35 +310,12 @@ function isA2uiEnabled(config: Pick<AgentConfig, "enableA2ui" | "featureFlags">)
   return resolveExperimentalA2uiConfig(config);
 }
 
-function configuredCodexWebSearchMode(
-  config: AgentConfig,
-): "disabled" | "cached" | "live" | undefined {
-  const providerOptions = config.providerOptions;
-  if (!providerOptions || typeof providerOptions !== "object" || Array.isArray(providerOptions))
-    return undefined;
-  const codexOptions = providerOptions["codex-cli"];
-  if (!codexOptions || typeof codexOptions !== "object" || Array.isArray(codexOptions))
-    return undefined;
-  return isCodexWebSearchMode(codexOptions.webSearchMode) ? codexOptions.webSearchMode : undefined;
-}
-
 function renderCodexNativeWebSearchPrompt(prompt: string, config: AgentConfig): string {
   if (config.provider !== "codex-cli") {
     return prompt;
   }
 
-  const backend = getCodexWebSearchBackendFromProviderOptions(config.providerOptions);
-  if (backend !== "native") {
-    const providerName = backend === "parallel" ? "Parallel" : "Exa";
-    return `${prompt}\n\n## Codex Web Search Backend\n\nThis Codex CLI session is configured to use the local ${providerName}-backed webSearch tool instead of provider-native web search.\n\n- Use the local webSearch tool for current web lookup.\n- Use local webFetch when you need the full contents of a specific page or need to download a direct file.\n- Do not assume provider-native citations or provider-native web-search actions are available in this session.`;
-  }
-
-  const mode = configuredCodexWebSearchMode(config) ?? "live";
-  if (mode === "disabled") {
-    return `${prompt}\n\n## Codex Web Search Disabled\n\nThis Codex CLI session is configured for the native web-search backend, but web search is currently disabled.\n\n- Do not call local webSearch for ordinary lookup.\n- Do not expect provider-native web search to be available until the workspace setting changes.\n- Only use local webFetch when the task explicitly requires downloading or saving a direct file into the local workspace.`;
-  }
-
-  return `${prompt}\n\n## Codex Native Web Search\n\nThis Codex CLI session is configured to use provider-native web search for anything beyond your knowledge cutoff.\n\n- Use provider-native web search for general web lookup, opening specific pages, and finding within a page.\n- Prefer provider-native citations and sources when they are available. Do not add a manual "Sources:" section just to compensate for native citations.\n- Do not use local webFetch for ordinary HTML page reading in native-web-search sessions.\n- Only use local webFetch when the task explicitly requires downloading or saving a direct file into the local workspace and provider-native web search cannot satisfy that requirement.`;
+  return `${prompt}\n\n## Codex Web Search Backend\n\nCodex app-server owns web search and page fetching for this Codex CLI session.\n\n- Use Codex-native web search/fetch capabilities for current web lookup and page reading.\n- Do not call local Cowork webSearch or webFetch tools; they are reserved for non-Codex providers.`;
 }
 
 function renderGoogleNativeToolsPrompt(prompt: string, config: AgentConfig): string {
@@ -377,11 +352,13 @@ const PROVIDER_DISPLAY_NAMES: Record<ProviderName, string> = {
   baseten: "Baseten",
   together: "Together AI",
   fireworks: "Fireworks AI",
+  firepass: "Fire Pass",
   nvidia: "NVIDIA",
   lmstudio: "LM Studio",
   "opencode-go": "OpenCode Go",
   "opencode-zen": "OpenCode Zen",
   "codex-cli": "Codex CLI",
+  antigravity: "Antigravity",
 };
 
 const SPAWN_AGENT_MARKDOWN_SECTION_PLACEHOLDER = "{{spawnAgentMarkdownSection}}";
@@ -614,12 +591,12 @@ function buildSkillPolicySection(
   return [
     "## Skill Loading Policy (Strict)",
     "",
-    "- Before creating any domain deliverable (spreadsheet, document, slides, PDF), call the `skill` tool first.",
+    "- Before creating any domain deliverable (spreadsheet, document, presentation, PDF), call the `skill` tool first.",
     "- If the user prompt explicitly says to use the `skill` tool, that call is mandatory and must happen before related artifact creation.",
     "- Do not write build scripts or output artifacts for those domains before loading the corresponding skill.",
     "- If the task spans multiple deliverable domains, load each required skill before creating files.",
     "- Never claim a skill was loaded unless the `skill` tool call actually occurred in this run.",
-    "- If the `slides` skill is available and the task is presentation authoring, use that path instead of defaulting to ad hoc `python-pptx` generation. `python-pptx` is an inspection or last-resort fallback, not the default deck-authoring path.",
+    "- If the `presentations` skill is available and the task is presentation authoring, use that path instead of defaulting to ad hoc `python-pptx` generation. `python-pptx` is an inspection or last-resort fallback, not the default deck-authoring path.",
     "- Do not count search result pages, article URLs, provider-native search metadata, or HTML previews as images. Only claim images were added after direct image assets were downloaded or local image files were read.",
     "- Placeholder, stock stand-ins, or unrelated fallback images are degraded output and must be disclosed explicitly instead of being presented as if they satisfy the original image request.",
     "- For one-off deliverables, keep the user's workspace focused on the requested artifacts and source files instead of scaffolding a disposable package-managed project.",
@@ -720,13 +697,13 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
     defaultImplementationRole: defaultSubagentRoles.implementationRoleId,
     defaultVerificationRole: defaultSubagentRoles.verificationRoleId,
     knowledgeCutoff: supportedModel.knowledgeCutoff,
-    skillNames: skillNames || '"pdf", "doc", "slides", "spreadsheet"',
+    skillNames: skillNames || '"pdf", "documents", "presentations", "spreadsheets"',
     skillExamples:
       skillExamples ||
       [
-        '- Creating a presentation → load the "slides" skill before starting',
-        '- Creating a spreadsheet → load the "spreadsheet" skill before starting',
-        '- Creating a Word document → load the "doc" skill before starting',
+        '- Creating a presentation → load the "presentations" skill before starting',
+        '- Creating a spreadsheet → load the "spreadsheets" skill before starting',
+        '- Creating a Word document → load the "documents" skill before starting',
         '- Creating a PDF → load the "pdf" skill before starting',
       ].join("\n"),
   };

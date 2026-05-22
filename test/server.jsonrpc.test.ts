@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import fs from "node:fs/promises";
+import net from "node:net";
+import path from "node:path";
 import { WebSocket as NodeWebSocket } from "ws";
 
 import { startAgentServer } from "../src/server/startServer";
@@ -93,7 +96,129 @@ async function expectNoMessage(ws: WebSocket, durationMs = 150): Promise<void> {
   });
 }
 
+async function requestRawWebSocketUpgrade(url: string, origin: string): Promise<string> {
+  const parsed = new URL(url);
+  return await new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    const socket = net.connect(Number(parsed.port), parsed.hostname, () => {
+      socket.write(
+        [
+          `GET ${parsed.pathname}${parsed.search} HTTP/1.1`,
+          `Host: ${parsed.host}`,
+          "Upgrade: websocket",
+          "Connection: Upgrade",
+          "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+          "Sec-WebSocket-Version: 13",
+          "Sec-WebSocket-Protocol: cowork.jsonrpc.v1",
+          `Origin: ${origin}`,
+          "",
+          "",
+        ].join("\r\n"),
+      );
+    });
+    socket.on("data", (chunk) => {
+      chunks.push(chunk);
+      const raw = Buffer.concat(chunks).toString("utf8");
+      if (raw.includes("\r\n\r\n")) {
+        socket.destroy();
+        resolve(raw);
+      }
+    });
+    socket.on("error", reject);
+    socket.setTimeout(5_000, () => {
+      socket.destroy();
+      reject(new Error("Timed out waiting for upgrade response"));
+    });
+  });
+}
+
 describe("server JSON-RPC websocket mode", () => {
+  test("rejects websocket upgrades from non-loopback browser origins", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+
+    try {
+      const response = await requestRawWebSocketUpgrade(url, "https://evil.example");
+      expect(response).toStartWith("HTTP/1.1 403");
+      expect(response).toContain("Forbidden origin");
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
+  test("requires the browser access token for loopback-origin websocket upgrades", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url, browserAccessToken } = await startAgentServer(
+      serverOpts(tmpDir, {
+        env: {
+          COWORK_WEB_DESKTOP_SERVICE: "1",
+        },
+      }),
+    );
+
+    try {
+      expect(typeof browserAccessToken).toBe("string");
+      const unauthorized = await requestRawWebSocketUpgrade(url, "http://localhost:5173");
+      expect(unauthorized).toStartWith("HTTP/1.1 401");
+      expect(unauthorized).toContain("Unauthorized browser access");
+
+      const authorized = await requestRawWebSocketUpgrade(
+        `${url}?coworkBrowserToken=${encodeURIComponent(browserAccessToken ?? "")}`,
+        "http://localhost:5173",
+      );
+      expect(authorized).toStartWith("HTTP/1.1 101");
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
+  test("allows browser preflight but protects cowork HTTP routes with the browser token", async () => {
+    const tmpDir = await makeTmpProject();
+    const desktopUserDataDir = path.join(tmpDir, ".cowork", "web-desktop-test-data");
+    const { server, browserAccessToken } = await startAgentServer(
+      serverOpts(tmpDir, {
+        env: {
+          COWORK_WEB_DESKTOP_SERVICE: "1",
+          COWORK_DESKTOP_USER_DATA_DIR: desktopUserDataDir,
+        },
+      }),
+    );
+    const httpBase = `http://127.0.0.1:${server.port}`;
+
+    try {
+      expect(typeof browserAccessToken).toBe("string");
+      const preflight = await fetch(`${httpBase}/cowork/workspaces`, {
+        method: "OPTIONS",
+        headers: {
+          Origin: "http://localhost:5173",
+          "Access-Control-Request-Headers": "X-Cowork-Browser-Token",
+        },
+      });
+      expect(preflight.status).toBe(204);
+      expect(preflight.headers.get("access-control-allow-headers")).toContain(
+        "X-Cowork-Browser-Token",
+      );
+
+      const unauthorized = await fetch(`${httpBase}/cowork/workspaces`, {
+        headers: { Origin: "http://localhost:5173" },
+      });
+      expect(unauthorized.status).toBe(401);
+
+      const authorized = await fetch(`${httpBase}/cowork/workspaces`, {
+        headers: {
+          Origin: "http://localhost:5173",
+          "X-Cowork-Browser-Token": browserAccessToken ?? "",
+        },
+      });
+      expect(authorized.status).toBe(200);
+      await expect(authorized.json()).resolves.toEqual({
+        workspaces: [{ name: path.basename(tmpDir), path: await fs.realpath(tmpDir) }],
+      });
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
   test("jsonrpc is the default websocket protocol", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
@@ -182,7 +307,7 @@ describe("server JSON-RPC websocket mode", () => {
     } finally {
       await stopTestServer(server);
     }
-  });
+  }, 15_000);
 
   test("subprotocol JSON-RPC mode initializes without sending an implicit hello", async () => {
     const tmpDir = await makeTmpProject();
@@ -332,5 +457,55 @@ describe("server JSON-RPC websocket mode", () => {
     } finally {
       await stopTestServer(server);
     }
-  });
+  }, 15_000);
+
+  test("thread/list isolates one-off chat cwd histories", async () => {
+    const tmpDir = await makeTmpProject();
+    const chatA = path.join(tmpDir, ".cowork", "chats", "20260516-chat-a");
+    const chatB = path.join(tmpDir, ".cowork", "chats", "20260516-chat-b");
+    await fs.mkdir(chatA, { recursive: true });
+    await fs.mkdir(chatB, { recursive: true });
+    const realChatA = await fs.realpath(chatA);
+    const realChatB = await fs.realpath(chatB);
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+
+    try {
+      const ws = new WebSocket(url, "cowork.jsonrpc.v1");
+      await waitForOpen(ws);
+      ws.send(
+        JSON.stringify({
+          id: 1,
+          method: "initialize",
+          params: { clientInfo: { name: "test-client" } },
+        }),
+      );
+      await waitForSingleMessage(ws);
+      ws.send(JSON.stringify({ method: "initialized" }));
+      await expectNoMessage(ws);
+
+      ws.send(JSON.stringify({ id: 2, method: "thread/start", params: { cwd: chatA } }));
+      const startedA = await waitForSingleMessage(ws);
+      await waitForSingleMessage(ws);
+      ws.send(JSON.stringify({ id: 3, method: "thread/start", params: { cwd: chatB } }));
+      const startedB = await waitForSingleMessage(ws);
+      await waitForSingleMessage(ws);
+
+      ws.send(JSON.stringify({ id: 4, method: "thread/list", params: { cwd: chatA } }));
+      const listedA = await waitForSingleMessage(ws);
+      ws.send(JSON.stringify({ id: 5, method: "thread/list", params: { cwd: chatB } }));
+      const listedB = await waitForSingleMessage(ws);
+
+      expect(listedA.result.threads.map((thread: { id: string }) => thread.id)).toEqual([
+        startedA.result.thread.id,
+      ]);
+      expect(listedB.result.threads.map((thread: { id: string }) => thread.id)).toEqual([
+        startedB.result.thread.id,
+      ]);
+      expect(startedA.result.thread.cwd).toBe(realChatA);
+      expect(startedB.result.thread.cwd).toBe(realChatB);
+      ws.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  }, 15_000);
 });

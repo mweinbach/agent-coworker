@@ -8,6 +8,10 @@ describe("files IPC hidden entry detection", () => {
     expect(isExplorerEntryHidden("~$budget.xlsx")).toBe(true);
   });
 
+  test("treats dependency folders as hidden", () => {
+    expect(isExplorerEntryHidden("node_modules")).toBe(true);
+  });
+
   test("keeps normal workspace files visible", () => {
     expect(isExplorerEntryHidden("preview_latency_review.docx")).toBe(false);
     expect(isExplorerEntryHidden("notes.md")).toBe(false);

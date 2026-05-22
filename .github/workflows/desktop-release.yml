@@ -17,7 +17,6 @@ concurrency:
 jobs:
   validate:
     name: Validate
-    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -56,7 +55,7 @@ jobs:
   package:
     name: Package (${{ matrix.label }})
     needs: validate
-    if: always() && (needs.validate.result == 'success' || needs.validate.result == 'skipped')
+    if: ${{ needs.validate.result == 'success' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     env:

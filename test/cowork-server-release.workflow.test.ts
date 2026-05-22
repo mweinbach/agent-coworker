@@ -5,6 +5,17 @@ const workflowPath = new URL("../.github/workflows/cowork-server-release.yml", i
 const workflow = readFileSync(workflowPath, "utf8");
 
 describe("cowork-server release workflow", () => {
+  test("runs validation for tag-triggered releases before builds", () => {
+    const validateJob = workflow.match(/validate:[\s\S]*?\n {2}build:/)?.[0] ?? "";
+    const buildJob = workflow.match(/build:[\s\S]*?\n {2}smoke-windows-arm64:/)?.[0] ?? "";
+
+    expect(validateJob).toContain("name: Validate");
+    expect(validateJob).not.toContain("if: github.event_name == 'workflow_dispatch'");
+    expect(buildJob).toContain("needs: validate");
+    expect(buildJob).toContain("if: ${{ needs.validate.result == 'success' }}");
+    expect(buildJob).not.toContain("needs.validate.result == 'skipped'");
+  });
+
   test("keeps repo validation gates in front of release builds", () => {
     expect(workflow).toContain("- name: Unit tests");
     expect(workflow).toContain("- name: Typecheck");

@@ -1,4 +1,4 @@
-import type { KeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
+import type { KeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useAppStore } from "../../app/store";
@@ -13,8 +13,9 @@ export function MessageBarResizer() {
   const startYRef = useRef(0);
   const startHeightRef = useRef(0);
 
-  const handleMouseDown = useCallback(
-    (event: ReactMouseEvent) => {
+  const handlePointerDown = useCallback(
+    (event: ReactPointerEvent) => {
+      if (event.button !== undefined && event.button !== 0) return;
       event.preventDefault();
       startYRef.current = event.clientY;
       startHeightRef.current = messageBarHeight;
@@ -24,20 +25,20 @@ export function MessageBarResizer() {
   );
 
   const handleKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLDivElement>) => {
+    (event: KeyboardEvent<HTMLHRElement>) => {
       const step = event.shiftKey ? 32 : 16;
       if (event.key === "ArrowUp") {
         event.preventDefault();
-        setMessageBarHeight(messageBarHeight + step); // Move up makes it taller
+        setMessageBarHeight(messageBarHeight + step);
       } else if (event.key === "ArrowDown") {
         event.preventDefault();
-        setMessageBarHeight(messageBarHeight - step); // Move down makes it shorter
+        setMessageBarHeight(messageBarHeight - step);
       } else if (event.key === "Home") {
         event.preventDefault();
-        setMessageBarHeight(500); // Max height
+        setMessageBarHeight(500);
       } else if (event.key === "End") {
         event.preventDefault();
-        setMessageBarHeight(80); // Min height
+        setMessageBarHeight(80);
       }
     },
     [setMessageBarHeight, messageBarHeight],
@@ -46,29 +47,60 @@ export function MessageBarResizer() {
   useEffect(() => {
     if (!dragging) return;
 
-    const handleMouseMove = (event: MouseEvent) => {
-      // The cursor moving up (negative delta y) should increase height
-      const delta = startYRef.current - event.clientY;
-      setMessageBarHeight(startHeightRef.current + delta);
+    document.body.classList.add("app-resizing-message-bar");
+
+    let frameId: number | null = null;
+    let pendingHeight: number | null = null;
+
+    const flushPendingHeight = () => {
+      frameId = null;
+      if (pendingHeight === null) {
+        return;
+      }
+      setMessageBarHeight(pendingHeight);
+      pendingHeight = null;
     };
 
-    const handleMouseUp = () => {
+    const handlePointerMove = (event: PointerEvent) => {
+      const delta = startYRef.current - event.clientY;
+      pendingHeight = startHeightRef.current + delta;
+      if (frameId === null) {
+        frameId = window.requestAnimationFrame(flushPendingHeight);
+      }
+    };
+
+    const handlePointerUp = () => {
+      if (frameId !== null) {
+        window.cancelAnimationFrame(frameId);
+        frameId = null;
+      }
+      if (pendingHeight !== null) {
+        setMessageBarHeight(pendingHeight);
+        pendingHeight = null;
+      }
+      document.body.classList.remove("app-resizing-message-bar");
       setDragging(false);
     };
 
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mouseup", handleMouseUp);
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    window.addEventListener("pointercancel", handlePointerUp);
 
     return () => {
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
+      if (frameId !== null) {
+        window.cancelAnimationFrame(frameId);
+      }
+      document.body.classList.remove("app-resizing-message-bar");
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("pointercancel", handlePointerUp);
     };
   }, [dragging, setMessageBarHeight]);
 
   return (
     <hr
       className={cn(
-        "absolute -top-1 left-0 right-0 z-20 m-0 h-3 cursor-row-resize border-0 bg-transparent p-0 outline-none transition-colors focus-visible:bg-primary/15",
+        "app-native-no-drag absolute -top-1 left-0 right-0 z-20 m-0 h-3 cursor-row-resize touch-none border-0 bg-transparent p-0 outline-none transition-colors focus-visible:bg-primary/15",
         dragging && "bg-primary/20",
       )}
       aria-orientation="horizontal"
@@ -78,7 +110,7 @@ export function MessageBarResizer() {
       aria-valuenow={messageBarHeight}
       aria-valuetext={minimumHeightValueText}
       tabIndex={0}
-      onMouseDown={handleMouseDown}
+      onPointerDown={handlePointerDown}
       onKeyDown={handleKeyDown}
     />
   );

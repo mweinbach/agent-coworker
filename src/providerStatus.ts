@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import { z } from "zod";
 
 import {
@@ -8,18 +10,19 @@ import {
   readConnectionStore,
 } from "./connect";
 import {
+  ANTIGRAVITY_UNSUPPORTED_PLATFORM_MESSAGE,
+  isAntigravitySupportedPlatform,
+} from "./providers/antigravitySupport";
+import {
   maskBedrockFieldValues,
   readBedrockCatalogSnapshot,
   refreshBedrockDiscoveryCache,
 } from "./providers/bedrockShared";
 import {
-  CODEX_BACKEND_BASE_URL,
-  decodeJwtPayload,
-  extractIsFedrampAccountFromClaims,
-  isTokenExpiring,
-  readCodexAuthMaterial,
-  refreshCodexAuthMaterial,
-} from "./providers/codex-auth";
+  type CodexAppServerRateLimits,
+  readCodexAppServerAccount,
+  readCodexAppServerRateLimits,
+} from "./providers/codexAppServerAuth";
 import { listLmStudioLlms } from "./providers/lmstudio/catalog";
 import {
   isLmStudioError,
@@ -89,8 +92,6 @@ export type ProviderStatus = {
   tokenRecoverable?: boolean;
 };
 
-const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
-const finiteNumberSchema = z.number().finite();
 const providerStatusModeSchema = z.enum([
   "api_key",
   "oauth",
@@ -102,11 +103,6 @@ const providerStatusModeSchema = z.enum([
 function normalizeProviderStatusMode(mode: unknown): ProviderStatusMode {
   const parsed = providerStatusModeSchema.safeParse(mode);
   return parsed.success ? parsed.data : "missing";
-}
-
-function asNonEmptyString(value: unknown): string | undefined {
-  const parsed = nonEmptyTrimmedStringSchema.safeParse(value);
-  return parsed.success ? parsed.data : undefined;
 }
 
 function buildSavedApiKeyMasks(opts: {
@@ -286,224 +282,50 @@ async function getBedrockStatus(opts: {
   };
 }
 
-const codexRateLimitWindowSchema = z
-  .object({
-    used_percent: finiteNumberSchema,
-    limit_window_seconds: finiteNumberSchema,
-    reset_after_seconds: finiteNumberSchema.optional(),
-    reset_at: finiteNumberSchema.optional(),
-  })
-  .passthrough();
-
-const codexRateLimitDetailsSchema = z
-  .object({
-    allowed: z.boolean().optional(),
-    limit_reached: z.boolean().optional(),
-    primary_window: codexRateLimitWindowSchema.nullish(),
-    secondary_window: codexRateLimitWindowSchema.nullish(),
-  })
-  .passthrough();
-
-const codexCreditsSchema = z
-  .object({
-    has_credits: z.boolean(),
-    unlimited: z.boolean(),
-    balance: z.union([z.string(), finiteNumberSchema]).optional(),
-  })
-  .passthrough();
-
-const codexAdditionalRateLimitSchema = z
-  .object({
-    limit_name: nonEmptyTrimmedStringSchema.optional(),
-    metered_feature: nonEmptyTrimmedStringSchema.optional(),
-    rate_limit: codexRateLimitDetailsSchema.nullish(),
-  })
-  .passthrough();
-
-const codexUsageStatusSchema = z
-  .object({
-    account_id: nonEmptyTrimmedStringSchema.optional(),
-    email: nonEmptyTrimmedStringSchema.optional(),
-    plan_type: z.string().trim().min(1).optional(),
-    rate_limit: codexRateLimitDetailsSchema.nullish(),
-    code_review_rate_limit: codexRateLimitDetailsSchema.nullish(),
-    additional_rate_limits: z.array(codexAdditionalRateLimitSchema).nullish(),
-    credits: codexCreditsSchema.nullish(),
-  })
-  .passthrough();
-
-function codexUsageEndpoint(): string {
-  return CODEX_BACKEND_BASE_URL.replace(/\/codex$/, "/wham/usage");
-}
-
 function epochSecondsToIso(value: number | undefined): string | undefined {
   if (!Number.isFinite(value ?? NaN)) return undefined;
   return new Date((value as number) * 1000).toISOString();
 }
 
 function mapCodexRateLimitWindow(
-  window: z.infer<typeof codexRateLimitWindowSchema> | null | undefined,
+  window: NonNullable<CodexAppServerRateLimits["primary"]> | null | undefined,
 ): ProviderRateLimitWindow | null | undefined {
   if (!window) return null;
   return {
-    usedPercent: window.used_percent,
-    windowSeconds: window.limit_window_seconds,
-    ...(Number.isFinite(window.reset_after_seconds)
-      ? { resetAfterSeconds: window.reset_after_seconds }
-      : {}),
-    ...(Number.isFinite(window.reset_at) ? { resetAt: epochSecondsToIso(window.reset_at) } : {}),
+    usedPercent: window.usedPercent,
+    windowSeconds: window.windowDurationMins * 60,
+    ...(Number.isFinite(window.resetsAt) ? { resetAt: epochSecondsToIso(window.resetsAt) } : {}),
   };
 }
 
-function mapCodexCredits(
-  credits: z.infer<typeof codexCreditsSchema> | null | undefined,
-): ProviderCredits | null | undefined {
+function mapCodexCredits(credits: CodexAppServerRateLimits["credits"]): ProviderCredits | null {
   if (!credits) return null;
   return {
-    hasCredits: credits.has_credits,
+    hasCredits: credits.hasCredits,
     unlimited: credits.unlimited,
     ...(credits.balance !== undefined ? { balance: String(credits.balance) } : {}),
   };
 }
 
-function mapCodexRateLimitSnapshot(opts: {
-  limitId?: string;
-  limitName?: string;
-  details?: z.infer<typeof codexRateLimitDetailsSchema> | null;
-  credits?: z.infer<typeof codexCreditsSchema> | null;
-}): ProviderRateLimitSnapshot {
-  return {
-    ...(opts.limitId ? { limitId: opts.limitId } : {}),
-    ...(opts.limitName ? { limitName: opts.limitName } : {}),
-    ...(opts.details?.allowed !== undefined ? { allowed: opts.details.allowed } : {}),
-    ...(opts.details?.limit_reached !== undefined
-      ? { limitReached: opts.details.limit_reached }
-      : {}),
-    ...(opts.details !== undefined
-      ? { primaryWindow: mapCodexRateLimitWindow(opts.details?.primary_window) }
-      : {}),
-    ...(opts.details !== undefined
-      ? { secondaryWindow: mapCodexRateLimitWindow(opts.details?.secondary_window) }
-      : {}),
-    ...(opts.credits !== undefined ? { credits: mapCodexCredits(opts.credits) } : {}),
-  };
+function codexHomeFromPaths(paths: AiCoworkerPaths): string {
+  return path.join(paths.authDir, "codex-cli");
 }
 
-function mapCodexUsageStatus(payload: z.infer<typeof codexUsageStatusSchema>): ProviderUsageStatus {
-  const rateLimits: ProviderRateLimitSnapshot[] = [
-    mapCodexRateLimitSnapshot({
-      limitId: "codex",
-      details: payload.rate_limit ?? undefined,
-      credits: payload.credits ?? undefined,
-    }),
-  ];
-
-  if (payload.code_review_rate_limit) {
-    rateLimits.push(
-      mapCodexRateLimitSnapshot({
-        limitId: "code_review",
-        limitName: "Code Review",
-        details: payload.code_review_rate_limit,
-      }),
-    );
-  }
-
-  for (const additional of payload.additional_rate_limits ?? []) {
-    rateLimits.push(
-      mapCodexRateLimitSnapshot({
-        limitId: additional.metered_feature,
-        limitName: additional.limit_name,
-        details: additional.rate_limit ?? undefined,
-      }),
-    );
-  }
-
-  return {
-    ...(payload.account_id ? { accountId: payload.account_id } : {}),
-    ...(payload.email ? { email: payload.email } : {}),
-    ...(payload.plan_type ? { planType: payload.plan_type } : {}),
-    rateLimits,
-  };
-}
-
-async function codexBackendVerification(opts: {
-  idToken?: string;
-  accessToken: string;
-  accountId?: string;
-  isFedrampAccount?: boolean;
-  fetchImpl: typeof fetch;
-}): Promise<{
-  email?: string;
-  name?: string;
-  message: string;
-  ok: boolean;
-  usage?: ProviderUsageStatus;
-}> {
-  const idPayload = opts.idToken ? decodeJwtPayload(opts.idToken) : null;
-  const accessPayload = decodeJwtPayload(opts.accessToken);
-  const email = asNonEmptyString(idPayload?.email) ?? asNonEmptyString(accessPayload?.email);
-  const accountId =
-    asNonEmptyString(opts.accountId) ??
-    asNonEmptyString(idPayload?.chatgpt_account_id) ??
-    asNonEmptyString(accessPayload?.chatgpt_account_id) ??
-    asNonEmptyString(
-      (idPayload?.["https://api.openai.com/auth"] as Record<string, unknown> | undefined)
-        ?.chatgpt_account_id,
-    ) ??
-    asNonEmptyString(
-      (accessPayload?.["https://api.openai.com/auth"] as Record<string, unknown> | undefined)
-        ?.chatgpt_account_id,
-    );
-  const isFedrampAccount =
-    opts.isFedrampAccount ||
-    (idPayload ? extractIsFedrampAccountFromClaims(idPayload) : false) ||
-    (accessPayload ? extractIsFedrampAccountFromClaims(accessPayload) : false);
-  if (!accountId) {
-    return {
-      email,
-      ok: false,
-      message: "Codex token missing ChatGPT account id; cannot verify backend access.",
-    };
-  }
-
-  try {
-    const usageRes = await opts.fetchImpl(codexUsageEndpoint(), {
-      method: "GET",
-      headers: {
-        authorization: `Bearer ${opts.accessToken}`,
-        "chatgpt-account-id": accountId,
-        ...(isFedrampAccount ? { "x-openai-fedramp": "true" } : {}),
-      },
-    });
-    if (!usageRes.ok) {
-      return { email, ok: false, message: `Codex usage endpoint failed (${usageRes.status}).` };
-    }
-
-    const usageJson = await usageRes.json();
-    const parsedUsage = codexUsageStatusSchema.safeParse(usageJson);
-    if (!parsedUsage.success) {
-      return { email, ok: false, message: "Codex usage endpoint returned an invalid payload." };
-    }
-    const planType = asNonEmptyString(parsedUsage.data.plan_type);
-    const planSuffix = planType ? ` (${planType})` : "";
-    const usage = mapCodexUsageStatus(parsedUsage.data);
-    const usageEmail = usage?.email ?? email;
-    return {
-      email: usageEmail,
-      ok: true,
-      message: `Verified via Codex usage endpoint${planSuffix}.`,
-      usage,
-    };
-  } catch (err) {
-    return { email, ok: false, message: `Codex usage endpoint error: ${String(err)}` };
-  }
+function isCodexAppServerAuthExpiredError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes("token_expired") ||
+    message.includes("Provided authentication token is expired") ||
+    message.includes("could not be refreshed") ||
+    message.includes("Please sign in again") ||
+    message.includes("401 Unauthorized")
+  );
 }
 
 async function getCodexCliStatus(opts: {
   paths: AiCoworkerPaths;
   store: ConnectionStore;
   checkedAt: string;
-  fetchImpl: typeof fetch;
 }): Promise<ProviderStatus> {
   const base = statusFromConnectionStore({
     provider: "codex-cli",
@@ -524,105 +346,80 @@ async function getCodexCliStatus(opts: {
     };
   }
 
-  let material = await readCodexAuthMaterial(opts.paths);
-  if (!material?.accessToken) {
+  try {
+    const codexHome = codexHomeFromPaths(opts.paths);
+    const accountResult = await readCodexAppServerAccount({ refreshToken: true, codexHome });
+    if (!accountResult.account) {
+      return {
+        ...base,
+        provider: "codex-cli",
+        authorized: false,
+        verified: false,
+        mode: base.mode === "oauth_pending" ? "oauth_pending" : "missing",
+        account: null,
+        message: accountResult.requiresOpenaiAuth
+          ? "Not logged in to Codex. Use /connect codex-cli."
+          : "Codex app-server does not require OpenAI auth for the active config.",
+      };
+    }
+
+    let rateLimits: CodexAppServerRateLimits | null = null;
+    try {
+      rateLimits = await readCodexAppServerRateLimits({ codexHome });
+    } catch (error) {
+      if (isCodexAppServerAuthExpiredError(error)) {
+        return {
+          ...base,
+          provider: "codex-cli",
+          authorized: false,
+          verified: false,
+          mode: "missing",
+          account: null,
+          message: "Codex app-server auth expired. Sign in again to refresh ChatGPT access.",
+        };
+      }
+    }
+    const usage: ProviderUsageStatus | undefined = rateLimits
+      ? {
+          ...(accountResult.account.email ? { email: accountResult.account.email } : {}),
+          ...(accountResult.account.planType ? { planType: accountResult.account.planType } : {}),
+          rateLimits: [
+            {
+              limitId: "codex",
+              primaryWindow: mapCodexRateLimitWindow(rateLimits.primary),
+              secondaryWindow: mapCodexRateLimitWindow(rateLimits.secondary),
+              credits: mapCodexCredits(rateLimits.credits),
+            },
+          ],
+        }
+      : undefined;
+
+    return {
+      provider: "codex-cli",
+      authorized: true,
+      verified: true,
+      mode: accountResult.account.type === "apiKey" ? "api_key" : "oauth",
+      account: accountResult.account.email ? { email: accountResult.account.email } : null,
+      message:
+        accountResult.account.type === "apiKey"
+          ? "Verified via codex app-server API key account."
+          : `Verified via codex app-server ChatGPT account${
+              accountResult.account.planType ? ` (${accountResult.account.planType})` : ""
+            }.`,
+      checkedAt: opts.checkedAt,
+      ...(usage ? { usage } : {}),
+    };
+  } catch (error) {
     return {
       ...base,
       provider: "codex-cli",
       authorized: false,
       verified: false,
-      mode: base.mode === "oauth_pending" ? "oauth_pending" : "missing",
+      mode: "error",
       account: null,
-      message: "Not logged in to Codex. Run /connect codex-cli.",
+      message: `Codex app-server status failed: ${String(error)}`,
     };
   }
-
-  let refreshMessage = "";
-  if (isTokenExpiring(material)) {
-    const maxAttempts = 3;
-    const delays = [500, 1000, 2000];
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        console.warn(`[codex-auth] Token expiring, refresh attempt ${attempt}/${maxAttempts}...`);
-        material = await refreshCodexAuthMaterial({
-          paths: opts.paths,
-          material,
-          fetchImpl: opts.fetchImpl,
-        });
-        refreshMessage = " Token refreshed.";
-        console.warn("[codex-auth] Token refresh succeeded.");
-        break;
-      } catch (err) {
-        const errMsg = String(err);
-        console.warn(`[codex-auth] Token refresh attempt ${attempt} failed: ${errMsg}`);
-        refreshMessage = ` Token refresh failed: ${errMsg}`;
-        // Don't retry on permanent errors
-        if (
-          errMsg.includes("missing refresh token") ||
-          errMsg.includes("(400)") ||
-          errMsg.includes("(401)")
-        ) {
-          break;
-        }
-        if (attempt < maxAttempts) {
-          await new Promise((r) => setTimeout(r, delays[attempt - 1]));
-        }
-      }
-    }
-  }
-
-  if (isTokenExpiring(material, 0)) {
-    const recoverable = Boolean(material.refreshToken);
-    console.warn(
-      `[codex-auth] Token still expired after refresh attempts. recoverable=${recoverable}`,
-    );
-    return {
-      provider: "codex-cli",
-      authorized: false,
-      verified: false,
-      mode: "oauth",
-      account: material.email ? { email: material.email } : null,
-      message: `Codex token expired.${refreshMessage || " Reconnect codex-cli."}`.trim(),
-      checkedAt: opts.checkedAt,
-      tokenRecoverable: recoverable,
-    };
-  }
-
-  const ui = await codexBackendVerification({
-    idToken: material.idToken,
-    accessToken: material.accessToken,
-    accountId: material.accountId,
-    isFedrampAccount: material.isFedrampAccount,
-    fetchImpl: opts.fetchImpl,
-  });
-  const account: ProviderAccount | null =
-    ui.email || ui.name || material.email
-      ? { email: ui.email ?? material.email, name: ui.name }
-      : null;
-
-  if (ui.ok) {
-    return {
-      provider: "codex-cli",
-      authorized: true,
-      verified: true,
-      mode: "oauth",
-      account,
-      message: `${ui.message}${refreshMessage}`.trim(),
-      checkedAt: opts.checkedAt,
-      ...(ui.usage ? { usage: ui.usage } : {}),
-    };
-  }
-
-  return {
-    provider: "codex-cli",
-    authorized: true,
-    verified: false,
-    mode: "oauth",
-    account,
-    message: `Codex credentials present, but verification failed. ${ui.message}${refreshMessage}`,
-    checkedAt: opts.checkedAt,
-    ...(ui.usage ? { usage: ui.usage } : {}),
-  };
 }
 
 async function getLmStudioStatus(opts: {
@@ -683,6 +480,7 @@ export async function getProviderStatuses(
     providerOptions?: unknown;
     env?: NodeJS.ProcessEnv;
     refreshBedrockDiscovery?: boolean;
+    platform?: NodeJS.Platform;
   } = {},
 ): Promise<ProviderStatus[]> {
   const paths = opts.paths ?? getAiCoworkerPaths({ homedir: opts.homedir ?? resolveAuthHomeDir() });
@@ -695,7 +493,7 @@ export async function getProviderStatuses(
   const out: ProviderStatus[] = [];
   for (const provider of PROVIDER_NAMES) {
     if (provider === "codex-cli") {
-      out.push(await getCodexCliStatus({ paths, store, checkedAt, fetchImpl }));
+      out.push(await getCodexCliStatus({ paths, store, checkedAt }));
       continue;
     }
     if (provider === "bedrock") {
@@ -720,6 +518,39 @@ export async function getProviderStatuses(
           fetchImpl,
         }),
       );
+      continue;
+    }
+    if (provider === "antigravity") {
+      if (!isAntigravitySupportedPlatform(opts.platform)) {
+        out.push({
+          provider,
+          authorized: false,
+          verified: false,
+          mode: "error",
+          account: null,
+          message: ANTIGRAVITY_UNSUPPORTED_PLATFORM_MESSAGE,
+          checkedAt,
+        });
+        continue;
+      }
+
+      const base = statusFromConnectionStore({ provider, store, checkedAt });
+      const googleEntry = store.services.google;
+      const googleKey = googleEntry?.mode === "api_key" ? googleEntry.apiKey?.trim() : "";
+      const envKey = (opts.env ?? process.env).GEMINI_API_KEY?.trim();
+      const fallbackKey = googleKey || envKey;
+
+      if (!base.authorized && fallbackKey) {
+        base.authorized = true;
+        base.mode = "api_key";
+        base.message = googleKey
+          ? "Using saved Google API key."
+          : "Using GEMINI_API_KEY environment variable.";
+        base.savedApiKeyMasks = {
+          api_key: maskApiKey(fallbackKey),
+        };
+      }
+      out.push(base);
       continue;
     }
     out.push(statusFromConnectionStore({ provider, store, checkedAt }));

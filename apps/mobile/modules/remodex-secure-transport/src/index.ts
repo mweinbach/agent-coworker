@@ -1078,7 +1078,10 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
   }
 
   private resetSecureChannel(opts: { clearQueue: boolean; resetCounters?: boolean }): void {
-    this.sharedKey = null;
+    if (this.sharedKey) {
+      this.sharedKey.fill(0);
+      this.sharedKey = null;
+    }
     this.secureChannelReady = false;
     this.secureFinalizePromise = null;
     if (opts.resetCounters ?? true) {

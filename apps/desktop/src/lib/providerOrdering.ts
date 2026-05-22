@@ -9,6 +9,7 @@ export const SETTINGS_PROVIDER_ORDER: readonly ProviderName[] = [
   "bedrock",
   "opencode-zen",
   "fireworks",
+  "firepass",
   "nvidia",
   "together",
   "baseten",

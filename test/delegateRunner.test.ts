@@ -108,6 +108,54 @@ describe("DelegateRunner", () => {
     );
   });
 
+  test("codex app-server delegates keep Cowork dynamic tools while filtering native execution tools", async () => {
+    const runTurn = mock(async () => ({
+      text: "ok",
+      reasoningText: undefined as string | undefined,
+      responseMessages: [],
+    }));
+    const createRuntime = mock(() => ({ runTurn }));
+    const createTools = mock(() => ({
+      bash: { type: "builtin" },
+      read: { type: "builtin" },
+      skill: { type: "dynamic" },
+      todoWrite: { type: "dynamic" },
+    }));
+    const runner = new DelegateRunner({
+      loadAgentPrompt: async () => "delegate system prompt",
+      buildRuntimeTelemetrySettings: async () => null,
+      buildGooglePrepareStep: () => undefined,
+      createRuntime,
+      createTools,
+    });
+
+    await runner.run({
+      config: makeConfig(),
+      role: "worker",
+      message: "Run on codex app-server",
+      askUser: async () => "",
+      approveCommand: async () => true,
+      log: () => {},
+      connectedProviders: ["codex-cli"] as readonly ProviderName[],
+    });
+
+    expect(createRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "codex-cli",
+        model: "gpt-5.4",
+      }),
+    );
+    expect(createTools).toHaveBeenCalled();
+    expect(runTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tools: {
+          skill: { type: "dynamic" },
+          todoWrite: { type: "dynamic" },
+        },
+      }),
+    );
+  });
+
   test("injects harness context into delegated child system prompts", async () => {
     const config = makeConfig();
     const runTurn = mock(async () => ({

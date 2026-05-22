@@ -43,6 +43,8 @@ describe("H3 mobile HTTP JSON-RPC connection", () => {
       },
     };
     const connection = __internal.createHttpJsonRpcConnection(runtime as never);
+    expect(connection.data.protocolMode).toBe("h3");
+    expect(connection.data.selectedSubprotocol).toBe("cowork.jsonrpc.v1");
 
     await expect(
       connection.dispatch({ id: 1, method: "initialize", params: {} }),

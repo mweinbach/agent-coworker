@@ -233,7 +233,12 @@ describe("emitObservabilityEvent (Langfuse runtime tracer)", () => {
 
     const res = await emitObservabilityEvent(
       cfg,
-      { name: "agent.turn.completed", at: "2026-02-19T08:00:00.000Z", status: "ok" },
+      {
+        name: "agent.turn.completed",
+        at: "2026-02-19T08:00:00.000Z",
+        status: "ok",
+        forceFlush: true,
+      },
       {
         tracer: tracer as any,
         runtime: {
@@ -255,5 +260,64 @@ describe("emitObservabilityEvent (Langfuse runtime tracer)", () => {
     expect(res.health.status).toBe("degraded");
     expect(res.health.reason).toBe("runtime_flush_failed");
     expect(res.healthChanged).toBe(true);
+  });
+
+  test("does not call forceFlush by default", async () => {
+    const cfg = makeConfig();
+    const { tracer } = makeTracer();
+    const ready = makeHealth("ready", "runtime_ready");
+    let flushCalled = false;
+
+    const res = await emitObservabilityEvent(
+      cfg,
+      { name: "agent.turn.completed", at: "2026-02-19T08:00:00.000Z", status: "ok" },
+      {
+        tracer: tracer as any,
+        runtime: {
+          ensure: async () => ({ ready: true, health: ready, healthChanged: false }),
+          getHealth: () => ready,
+          noteFailure: () => ({ changed: false, health: ready }),
+          noteSuccess: () => ({ changed: false, health: ready }),
+          forceFlush: async () => {
+            flushCalled = true;
+          },
+        },
+      },
+    );
+
+    expect(res.emitted).toBe(true);
+    expect(flushCalled).toBe(false);
+  });
+
+  test("calls forceFlush when forceFlush option is true", async () => {
+    const cfg = makeConfig();
+    const { tracer } = makeTracer();
+    const ready = makeHealth("ready", "runtime_ready");
+    let flushCalled = false;
+
+    const res = await emitObservabilityEvent(
+      cfg,
+      {
+        name: "agent.turn.completed",
+        at: "2026-02-19T08:00:00.000Z",
+        status: "ok",
+        forceFlush: true,
+      },
+      {
+        tracer: tracer as any,
+        runtime: {
+          ensure: async () => ({ ready: true, health: ready, healthChanged: false }),
+          getHealth: () => ready,
+          noteFailure: () => ({ changed: false, health: ready }),
+          noteSuccess: () => ({ changed: false, health: ready }),
+          forceFlush: async () => {
+            flushCalled = true;
+          },
+        },
+      },
+    );
+
+    expect(res.emitted).toBe(true);
+    expect(flushCalled).toBe(true);
   });
 });

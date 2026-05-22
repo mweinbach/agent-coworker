@@ -1,0 +1,14 @@
+{
+  "id": "gpt-5.3-codex-spark",
+  "provider": "codex-cli",
+  "displayName": "GPT-5.3-Codex-Spark",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": false,
+  "promptTemplate": "system-models/gpt-5.4.json",
+  "providerOptionsDefaults": {
+    "reasoningEffort": "high",
+    "reasoningSummary": "detailed",
+    "textVerbosity": "medium"
+  },
+  "isDefault": false
+}

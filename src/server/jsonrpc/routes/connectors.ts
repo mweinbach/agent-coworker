@@ -1,9 +1,6 @@
 import { loadConfig } from "../../../config";
 import { resolveOpenAiNativeConnectorsConfig } from "../../../experimental/openaiNativeConnectors/flags";
-import {
-  CODEX_APPS_MCP_SERVER_NAME,
-  OPENAI_NATIVE_CONNECTORS_EVENT_TYPE,
-} from "../../../shared/openaiNativeConnectors";
+import { OPENAI_NATIVE_CONNECTORS_EVENT_TYPE } from "../../../shared/openaiNativeConnectors";
 import {
   listOpenAiNativeConnectors,
   setOpenAiNativeConnectorEnabled,
@@ -19,17 +16,19 @@ export function createConnectorsRouteHandlers(
   async function emitConnectorList(
     cwd: string,
     sessionId: string,
-    opts: { connectorId?: string; enabled?: boolean } = {},
+    opts: { connectorId?: string; enabled?: boolean; forceRefetch?: boolean } = {},
   ) {
     const config = await loadConfig({ cwd });
     if (!resolveOpenAiNativeConnectorsConfig(config)) {
-      const snapshot = await listOpenAiNativeConnectors({ config });
+      const snapshot = await listOpenAiNativeConnectors({
+        config,
+        forceRefetch: opts.forceRefetch,
+      });
       return {
         type: OPENAI_NATIVE_CONNECTORS_EVENT_TYPE,
         sessionId,
         connectors: snapshot.connectors,
         enabledConnectorIds: snapshot.enabledConnectorIds,
-        codexAppsMcpServerName: CODEX_APPS_MCP_SERVER_NAME,
         authenticated: snapshot.authenticated,
         ...(snapshot.message ? { message: snapshot.message } : {}),
       };
@@ -37,13 +36,12 @@ export function createConnectorsRouteHandlers(
     if (opts.connectorId) {
       await setOpenAiNativeConnectorEnabled(config, opts.connectorId, opts.enabled === true);
     }
-    const snapshot = await listOpenAiNativeConnectors({ config });
+    const snapshot = await listOpenAiNativeConnectors({ config, forceRefetch: opts.forceRefetch });
     return {
       type: OPENAI_NATIVE_CONNECTORS_EVENT_TYPE,
       sessionId,
       connectors: snapshot.connectors,
       enabledConnectorIds: snapshot.enabledConnectorIds,
-      codexAppsMcpServerName: CODEX_APPS_MCP_SERVER_NAME,
       authenticated: snapshot.authenticated,
       ...(snapshot.message ? { message: snapshot.message } : {}),
     };
@@ -56,7 +54,8 @@ export function createConnectorsRouteHandlers(
       try {
         const event = await context.workspaceControl.withSession(
           cwd,
-          async (_binding, runtime) => await emitConnectorList(cwd, runtime.read.id),
+          async (_binding, runtime) =>
+            await emitConnectorList(cwd, runtime.read.id, { forceRefetch: true }),
         );
         context.jsonrpc.sendResult(ws, message.id, { event });
       } catch (error) {

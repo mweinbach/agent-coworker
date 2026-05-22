@@ -10,6 +10,7 @@ import type {
 } from "../../../../../src/shared/jsonrpcControlSchemas";
 import { callParsedControlMethod } from "./controlRpc";
 import type { CoworkJsonRpcClient } from "./jsonRpcClient";
+import { saveToOfflineCache } from "./offlineCache";
 import { getActiveCoworkJsonRpcClient } from "./runtimeClient";
 import { useWorkspaceStore } from "./workspaceStore";
 
@@ -92,6 +93,13 @@ export const useSkillsStore = create<SkillsStoreState>((set, get) => ({
         ...applyCatalogEvent(catalogResult.event),
         loading: false,
       });
+      void saveToOfflineCache("skills", skillsResult.event.skills);
+      void saveToOfflineCache("skillsCatalog", catalogResult.event.catalog);
+      void saveToOfflineCache("skillsInstallations", catalogResult.event.catalog.installations);
+      void saveToOfflineCache(
+        "skillsEffectiveInstallations",
+        catalogResult.event.catalog.effectiveSkills,
+      );
     } catch (error) {
       set({ loading: false, error: error instanceof Error ? error.message : String(error) });
     }

@@ -975,6 +975,41 @@ describe("plugin catalog and install operations", () => {
     }
   });
 
+  test("direct plugin discovery deduplicates workspace and user plugin directories with the same canonical path", async () => {
+    const workspace = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-discovery-aliased-workspace-"),
+    );
+    const aliasParent = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-discovery-aliased-home-"));
+
+    try {
+      const workspacePluginsDir = path.join(workspace, ".agents", "plugins");
+      const userAliasRoot = path.join(aliasParent, "workspace-alias");
+      await writePlugin(path.join(workspacePluginsDir, "figma-toolkit"), "Aliased Figma Toolkit");
+      const linked = await createSymlinkOrSkip(
+        workspace,
+        userAliasRoot,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+      if (!linked) return;
+
+      const discovery = await discoverPlugins({
+        workspacePluginsDir,
+        userPluginsDir: path.join(userAliasRoot, ".agents", "plugins"),
+      });
+
+      expect(discovery.plugins).toHaveLength(1);
+      expect(discovery.plugins[0]).toMatchObject({
+        rootDir: path.join(workspacePluginsDir, "figma-toolkit"),
+        realRootDir: await fs.realpath(path.join(workspacePluginsDir, "figma-toolkit")),
+        scope: "workspace",
+        discoveryKind: "direct",
+      });
+    } finally {
+      await fs.rm(aliasParent, { recursive: true, force: true });
+      await fs.rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test("direct plugin discovery deduplicates same-scope symlinks to the same checkout", async () => {
     const workspace = await fs.mkdtemp(
       path.join(os.tmpdir(), "plugins-discovery-duplicate-symlink-workspace-"),

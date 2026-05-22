@@ -1,0 +1,38 @@
+{
+  "default_icon_library": "Lucide",
+  "asset_source_hierarchy": [
+    "official_brand_or_source_asset",
+    "native_editable_shape",
+    "lucide_or_selected_icon_library",
+    "editable_label_or_card",
+    "approved_clean_official_source_crop",
+    "imagegen_crop_last_resort"
+  ],
+  "items": [
+    {
+      "id": "",
+      "slides": [],
+      "role": "generic_icon",
+      "source_type": "lucide_or_selected_icon_library",
+      "library": "Lucide",
+      "icon_name": "",
+      "asset_path": "",
+      "color": "",
+      "size_px": 128,
+      "stroke_width": 1.8,
+      "approval_status": "approved",
+      "notes": ""
+    }
+  ],
+  "last_resort_imagegen_crops": [
+    {
+      "id": "",
+      "slides": [],
+      "asset_path": "",
+      "reason_no_better_source_exists": "",
+      "approved_by_main_agent": false,
+      "not_logo_brand_mark_generic_icon_chart_label_or_ui_symbol": true,
+      "notes": ""
+    }
+  ]
+}

@@ -6,6 +6,7 @@ import {
   normalizeDesktopFeatureFlagOverrides,
 } from "../../../../../src/shared/featureFlags";
 import {
+  deleteTranscript,
   getDesktopFeatureFlags,
   getUpdateState,
   isPackagedDesktopApp,
@@ -14,6 +15,7 @@ import {
   checkForUpdates as runUpdateCheck,
   stopMobileRelay,
 } from "../../lib/desktopCommands";
+import { isCanvasSupportedFile } from "../../lib/filePreviewKind";
 import { normalizeQuickChatShortcutAccelerator } from "../../lib/quickChatShortcut";
 import type { ChildModelRoutingMode } from "../../lib/wsProtocol";
 import { type ProviderName, safeParseSessionEvent } from "../../lib/wsProtocol";
@@ -55,6 +57,7 @@ import {
   type CachedDesktopUiState,
   type CachedSessionSnapshot,
   normalizeDesktopSettings,
+  normalizeSidebarSectionOrder,
   normalizeWorkspaceUserProfile,
   type PersistedOnboardingState,
   type PersistedProviderState,
@@ -131,7 +134,8 @@ function normalizeKnownSettingsPageId(value: unknown): SettingsPageId {
     value === "memory" ||
     value === "featureFlags" ||
     value === "updates" ||
-    value === "developer"
+    value === "developer" ||
+    value === "archivedChats"
     ? value
     : "providers";
 }
@@ -151,6 +155,7 @@ const normalizedSettingsPageSchema = z.preprocess(
     "featureFlags",
     "updates",
     "developer",
+    "archivedChats",
   ]),
 );
 const normalizedNullableSelectionSchema = z.preprocess(
@@ -171,6 +176,12 @@ const persistedWorkspaceSchema = z
     id: z.string(),
     name: z.string(),
     path: z.string(),
+    workspaceKind: z
+      .preprocess(
+        (value) => (value === "oneOffChat" ? "oneOffChat" : "project"),
+        z.enum(["project", "oneOffChat"]),
+      )
+      .optional(),
     createdAt: z.string(),
     lastOpenedAt: z.string(),
     wsProtocol: z.preprocess(() => "jsonrpc", z.literal("jsonrpc")),
@@ -235,6 +246,7 @@ const persistedWorkspaceSchema = z
       id: workspace.id,
       name: workspace.name,
       path: workspace.path,
+      workspaceKind: workspace.workspaceKind ?? "project",
       createdAt: workspace.createdAt,
       lastOpenedAt: workspace.lastOpenedAt,
       wsProtocol: "jsonrpc",
@@ -272,6 +284,10 @@ const persistedThreadSchema = z
     draft: z
       .preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean())
       .optional(),
+    archived: z
+      .preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean())
+      .optional(),
+    archivedAt: z.string().optional(),
   })
   .passthrough()
   .transform((thread): ThreadRecord => {
@@ -289,6 +305,8 @@ const persistedThreadSchema = z
       lastEventSeq: thread.lastEventSeq,
       legacyTranscriptId: thread.legacyTranscriptId ?? (thread.id !== id ? thread.id : null),
       draft: thread.draft ?? false,
+      archived: thread.archived ?? false,
+      archivedAt: thread.archivedAt,
     };
   });
 
@@ -309,6 +327,7 @@ const persistedUiSchema = z
       .preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean())
       .optional(),
     contextSidebarWidth: normalizedUiWidthSchema(200, 600, 300).optional(),
+    canvasSidebarWidth: normalizedUiWidthSchema(200, 900, 500).optional(),
     messageBarHeight: normalizedUiWidthSchema(80, 500, 96).optional(),
   })
   .passthrough()
@@ -325,6 +344,7 @@ const persistedUiSchema = z
       sidebarWidth: ui.sidebarWidth ?? 248,
       contextSidebarCollapsed: ui.contextSidebarCollapsed ?? false,
       contextSidebarWidth: ui.contextSidebarWidth ?? 300,
+      canvasSidebarWidth: ui.canvasSidebarWidth ?? 500,
       messageBarHeight: ui.messageBarHeight ?? 96,
     }),
   );
@@ -347,6 +367,15 @@ const persistedStateSchema = z
     ),
     desktopSettings: z
       .object({
+        archivedChatsAutoDeleteDays: z
+          .preprocess(
+            (value) =>
+              typeof value === "number" && Number.isFinite(value)
+                ? Math.max(0, Math.floor(value))
+                : 0,
+            z.number().int().nonnegative(),
+          )
+          .optional(),
         quickChat: z
           .object({
             iconEnabled: z
@@ -365,6 +394,12 @@ const persistedStateSchema = z
               )
               .optional(),
           })
+          .optional(),
+        sidebarSectionOrder: z
+          .preprocess(
+            (value) => normalizeSidebarSectionOrder(Array.isArray(value) ? value : undefined),
+            z.array(z.enum(["projects", "chats"])),
+          )
           .optional(),
       })
       .optional(),
@@ -521,6 +556,7 @@ function buildResolvedDesktopUiState(
     sidebarWidth: normalizedUi.sidebarWidth ?? 248,
     contextSidebarCollapsed: normalizedUi.contextSidebarCollapsed ?? false,
     contextSidebarWidth: normalizedUi.contextSidebarWidth ?? 300,
+    canvasSidebarWidth: normalizedUi.canvasSidebarWidth ?? 500,
     messageBarHeight: normalizedUi.messageBarHeight ?? 96,
   };
 }
@@ -669,6 +705,7 @@ export function buildCachedDesktopStateSeed(value: unknown): Partial<AppStoreDat
       sidebarWidth: ui.sidebarWidth,
       contextSidebarCollapsed: ui.contextSidebarCollapsed,
       contextSidebarWidth: ui.contextSidebarWidth,
+      canvasSidebarWidth: ui.canvasSidebarWidth,
       messageBarHeight: ui.messageBarHeight,
     };
   } catch {
@@ -689,8 +726,10 @@ export function createBootstrapActions(
   | "setShowHiddenFiles"
   | "setPerWorkspaceSettings"
   | "setQuickChatIconEnabled"
+  | "setArchivedChatsAutoDeleteDays"
   | "setQuickChatShortcutEnabled"
   | "setQuickChatShortcutAccelerator"
+  | "setSidebarSectionOrder"
   | "setDesktopFeatureFlagOverride"
   | "setUpdateState"
   | "checkForUpdates"
@@ -729,6 +768,7 @@ export function createBootstrapActions(
             sidebarWidth: get().sidebarWidth,
             contextSidebarCollapsed: get().contextSidebarCollapsed,
             contextSidebarWidth: get().contextSidebarWidth,
+            canvasSidebarWidth: get().canvasSidebarWidth,
             messageBarHeight: get().messageBarHeight,
           },
         );
@@ -750,9 +790,41 @@ export function createBootstrapActions(
 
         const autoOpen = shouldAutoOpenOnboarding(onboardingOpts);
 
+        const resolvedDesktopSettings = normalizeDesktopSettings(state.desktopSettings);
+        const autoDeleteDays = resolvedDesktopSettings.archivedChatsAutoDeleteDays;
+        let finalThreads = state.threads;
+
+        if (autoDeleteDays && autoDeleteDays > 0) {
+          const nowMs = Date.now();
+          const thresholdMs = autoDeleteDays * 24 * 60 * 60 * 1000;
+          const remainingThreads: typeof state.threads = [];
+          for (const thread of state.threads) {
+            if (thread.archived && thread.archivedAt) {
+              const archivedTime = Date.parse(thread.archivedAt);
+              if (Number.isFinite(archivedTime) && nowMs - archivedTime > thresholdMs) {
+                const transcriptIds = [
+                  thread.legacyTranscriptId ?? null,
+                  thread.sessionId ?? null,
+                  thread.id,
+                ].filter((v): v is string => typeof v === "string" && v.trim().length > 0);
+                for (const transcriptId of new Set(transcriptIds)) {
+                  try {
+                    await deleteTranscript({ threadId: transcriptId });
+                  } catch {
+                    // ignore
+                  }
+                }
+                continue;
+              }
+            }
+            remainingThreads.push(thread);
+          }
+          finalThreads = remainingThreads;
+        }
+
         set({
           workspaces: state.workspaces,
-          threads: state.threads,
+          threads: finalThreads,
           selectedWorkspaceId: ui.selectedWorkspaceId,
           selectedThreadId: ui.selectedThreadId,
           pluginManagementWorkspaceId: ui.pluginManagementWorkspaceId,
@@ -781,6 +853,7 @@ export function createBootstrapActions(
           sidebarWidth: ui.sidebarWidth,
           contextSidebarCollapsed: ui.contextSidebarCollapsed,
           contextSidebarWidth: ui.contextSidebarWidth,
+          canvasSidebarWidth: ui.canvasSidebarWidth,
           messageBarHeight: ui.messageBarHeight,
         });
 
@@ -992,6 +1065,16 @@ export function createBootstrapActions(
       void persistNow(get);
     },
 
+    setArchivedChatsAutoDeleteDays: (days) => {
+      set((state) => ({
+        desktopSettings: {
+          ...state.desktopSettings,
+          archivedChatsAutoDeleteDays: days,
+        },
+      }));
+      void persistNow(get);
+    },
+
     setQuickChatShortcutEnabled: (enabled) => {
       set((state) => ({
         desktopSettings: {
@@ -1013,6 +1096,16 @@ export function createBootstrapActions(
             ...state.desktopSettings.quickChat,
             shortcutAccelerator: normalizeQuickChatShortcutAccelerator(accelerator),
           },
+        },
+      }));
+      void persistNow(get);
+    },
+
+    setSidebarSectionOrder: (orderedSections) => {
+      set((state) => ({
+        desktopSettings: {
+          ...state.desktopSettings,
+          sidebarSectionOrder: normalizeSidebarSectionOrder(orderedSections),
         },
       }));
       void persistNow(get);
@@ -1164,7 +1257,17 @@ export function createBootstrapActions(
     },
 
     setContextSidebarWidth: (width: number) => {
-      set({ contextSidebarWidth: Math.max(200, Math.min(600, width)) });
+      const state = get();
+      const canvasEnabled = state.desktopFeatureFlags.canvas === true;
+      const isCanvasSupported =
+        state.filePreview?.path && isCanvasSupportedFile(state.filePreview.path);
+      const isCanvasOpen = canvasEnabled && isCanvasSupported;
+
+      if (isCanvasOpen) {
+        set({ canvasSidebarWidth: Math.max(200, Math.min(900, width)) });
+      } else {
+        set({ contextSidebarWidth: Math.max(200, Math.min(600, width)) });
+      }
       syncDesktopStateCache(get);
     },
 

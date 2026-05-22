@@ -4,7 +4,7 @@ import { buildGooglePrepareStep } from "../../providers/googleReplay";
 import { createRuntime } from "../../runtime";
 import type { AgentReasoningEffort, AgentRole } from "../../shared/agents";
 import type { ToolContext } from "../../tools";
-import { createTools } from "../../tools";
+import { createTools, filterToolsForCodexDynamicBoundary } from "../../tools";
 import { buildTurnSystemPrompt } from "../../turnSystemPrompt";
 import type {
   AgentConfig,
@@ -38,6 +38,10 @@ const defaultDelegateRunnerDeps: DelegateRunnerDeps = {
   createRuntime,
   createTools,
 };
+
+function providerOwnsExecutableTools(config: AgentConfig): boolean {
+  return config.provider === "codex-cli";
+}
 
 export class DelegateRunner {
   constructor(private readonly deps: DelegateRunnerDeps = defaultDelegateRunnerDeps) {}
@@ -90,7 +94,10 @@ export class DelegateRunner {
       agentRole: opts.role,
       shellPolicy: getAgentRoleShellPolicy(opts.role),
     };
-    const tools = filterToolsForRole(this.deps.createTools(delegateContext), roleDefinition);
+    const rawTools = filterToolsForRole(this.deps.createTools(delegateContext), roleDefinition);
+    const tools = providerOwnsExecutableTools(routed.config)
+      ? filterToolsForCodexDynamicBoundary(rawTools)
+      : rawTools;
     const googlePrepareStep =
       routed.config.provider === "google" && Object.keys(tools).length > 0
         ? this.deps.buildGooglePrepareStep(routed.config.providerOptions, delegateContext.log)

@@ -18,8 +18,18 @@ export const researchStatusSchema = z.enum(RESEARCH_STATUS_VALUES);
 export const researchExportFormatSchema = z.enum(RESEARCH_EXPORT_FORMAT_VALUES);
 export const researchSourceTypeSchema = z.enum(RESEARCH_SOURCE_TYPE_VALUES);
 
+export const RESEARCH_AGENT_ID_VALUES = [
+  "deep-research-pro-preview-12-2025",
+  "deep-research-preview-04-2026",
+  "deep-research-max-preview-04-2026",
+] as const;
+export const DEFAULT_RESEARCH_AGENT_ID = "deep-research-max-preview-04-2026" as const;
+
 export const researchSettingsSchema = z.object({
   planApproval: z.boolean().default(false),
+  agentId: z.enum(RESEARCH_AGENT_ID_VALUES).default(DEFAULT_RESEARCH_AGENT_ID),
+  thinkingSummaries: z.enum(["auto", "none"]).default("auto"),
+  visualization: z.enum(["off", "auto"]).default("auto"),
 });
 
 export const researchSourceSchema = z

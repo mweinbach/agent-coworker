@@ -1,4 +1,11 @@
-import { ArrowUpIcon, FileTextIcon, LoaderCircleIcon, SquareIcon, XIcon } from "lucide-react";
+import {
+  ArrowUpIcon,
+  FileAudioIcon,
+  FileTextIcon,
+  LoaderCircleIcon,
+  SquareIcon,
+  XIcon,
+} from "lucide-react";
 import type { ComponentProps, DragEvent } from "react";
 import { forwardRef, useCallback, useState } from "react";
 import { cn } from "../../lib/utils";
@@ -102,6 +109,30 @@ function attachmentPreviewSrc(item: PromptInputAttachmentPreviewItem): string | 
   return item.previewUrl ?? null;
 }
 
+function attachmentExtension(filename: string): string | null {
+  const parts = filename.trim().split(".");
+  if (parts.length < 2) return null;
+  const extension = parts.at(-1)?.trim();
+  return extension ? extension.toUpperCase() : null;
+}
+
+function attachmentTypeLabel(item: PromptInputAttachmentPreviewItem): string {
+  if (item.mimeType.startsWith("audio/")) {
+    return attachmentExtension(item.filename) ?? "AUDIO";
+  }
+  if (item.mimeType === "application/octet-stream") {
+    return attachmentExtension(item.filename) ?? "FILE";
+  }
+  return item.mimeType.split("/", 1)[0]?.toUpperCase() || "File";
+}
+
+function attachmentPreviewIcon(item: PromptInputAttachmentPreviewItem) {
+  if (item.mimeType.startsWith("audio/")) {
+    return <FileAudioIcon className="size-3.5 text-muted-foreground" aria-hidden />;
+  }
+  return <FileTextIcon className="size-3.5 text-muted-foreground" aria-hidden />;
+}
+
 export type PromptInputAttachmentPreviewsProps = {
   attachments: readonly PromptInputAttachmentPreviewItem[];
   onRemove: (index: number) => void;
@@ -120,31 +151,36 @@ export function PromptInputAttachmentPreviews({
       aria-label="Attached files"
       className={cn("flex w-full min-w-0 flex-col gap-2 px-0.5 pb-1", className)}
     >
-      <div className="flex max-w-full flex-wrap gap-2">
+      <div className="flex max-w-full flex-wrap gap-1.5">
         {attachments.map((item, index) => {
           const src = attachmentPreviewSrc(item);
           return (
             <div
               key={`${item.filename}:${item.mimeType}:${item.previewUrl ?? ""}`}
-              className="group relative inline-flex min-w-0 max-w-full items-center gap-2 rounded-full border border-border/50 bg-muted/35 py-1 pl-1 pr-9 text-sm shadow-[inset_0_1px_0_var(--border-glass)]"
+              className="group inline-flex min-w-0 max-w-full items-center gap-2 rounded-full border border-border/55 bg-background/70 py-1 pl-1.5 pr-1 text-sm shadow-[inset_0_1px_0_var(--border-glass)]"
             >
-              <div className="flex size-7 shrink-0 items-center justify-center overflow-hidden rounded-full bg-background/80 ring-1 ring-border/45">
+              <div className="flex size-6 shrink-0 items-center justify-center overflow-hidden rounded-full bg-muted/45 ring-1 ring-border/40">
                 {src ? (
                   <img src={src} alt="" className="size-full object-cover" draggable={false} />
                 ) : (
-                  <FileTextIcon className="size-3.5 text-muted-foreground" aria-hidden />
+                  attachmentPreviewIcon(item)
                 )}
               </div>
-              <p
-                className="truncate pr-1 text-[13px] font-medium leading-none text-foreground/88"
-                title={item.filename}
-              >
-                {item.filename}
-              </p>
+              <div className="flex min-w-0 items-center gap-1.5">
+                <p
+                  className="max-w-[18rem] truncate text-[13px] font-medium leading-5 text-foreground/88"
+                  title={item.filename}
+                >
+                  {item.filename}
+                </p>
+                <span className="shrink-0 rounded-full bg-muted/70 px-1.5 py-0.5 text-[10px] font-semibold leading-none tracking-wide text-muted-foreground/80 ring-1 ring-border/35">
+                  {attachmentTypeLabel(item)}
+                </span>
+              </div>
               <button
                 type="button"
                 onClick={() => onRemove(index)}
-                className="absolute right-1 top-1/2 flex size-6 -translate-y-1/2 items-center justify-center rounded-full bg-background/88 text-muted-foreground ring-1 ring-border/45 transition-colors hover:text-foreground"
+                className="ml-0.5 flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground/75 transition-colors hover:bg-muted/55 hover:text-foreground"
                 aria-label={`Remove ${item.filename}`}
               >
                 <XIcon className="size-3" />
@@ -230,7 +266,7 @@ export const PromptInputTextarea = forwardRef<HTMLTextAreaElement, ComponentProp
         ref={ref}
         rows={rows}
         className={cn(
-          "min-h-[3.25rem] w-full flex-1 resize-none border-0 bg-transparent px-1 py-1.5 text-[15px] leading-6 text-foreground shadow-none outline-none ring-0 placeholder:text-muted-foreground/90 focus:border-0 focus:shadow-none focus:outline-none focus:ring-0 focus-visible:border-0 focus-visible:shadow-none focus-visible:outline-none focus-visible:ring-0",
+          "field-sizing-content min-h-[4.5rem] w-full flex-1 resize-none border-0 bg-transparent px-1 py-1.5 text-[15px] leading-6 text-foreground shadow-none outline-none ring-0 placeholder:text-muted-foreground/90 focus:border-0 focus:shadow-none focus:outline-none focus:ring-0 focus-visible:border-0 focus-visible:shadow-none focus-visible:outline-none focus-visible:ring-0",
           className,
         )}
         {...props}

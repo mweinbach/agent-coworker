@@ -24,7 +24,7 @@ describe(`Codex provider (${DEFAULT_CODEX_MODEL})`, () => {
 
     expect(model).toBeDefined();
     expect(model.modelId).toBe(DEFAULT_CODEX_MODEL);
-    expect(model.provider).toBe("codex-cli.responses");
+    expect(model.provider).toBe("codex-app-server");
     expect(model.specificationVersion).toBe("v3");
   });
 
@@ -53,9 +53,9 @@ describe(`Codex provider (${DEFAULT_CODEX_MODEL})`, () => {
       const headers = await viaGetModel.config.headers();
 
       expect(viaGetModel.modelId).toBe(DEFAULT_CODEX_MODEL);
-      expect(viaGetModel.provider).toBe("codex-cli.responses");
+      expect(viaGetModel.provider).toBe("codex-app-server");
       expect(viaGetModel.specificationVersion).toBe("v3");
-      expect(headers).toEqual({ authorization: "Bearer test_codex_key" });
+      expect(headers).toEqual({});
     });
   });
 
@@ -81,7 +81,10 @@ describe(`Codex provider (${DEFAULT_CODEX_MODEL})`, () => {
     expect(cfg.model).toBe(DEFAULT_CODEX_MODEL);
   });
 
-  test("getModel supports gpt-5.4-mini", async () => {
+  test.each([
+    "gpt-5.4-mini",
+    "gpt-5.3-codex-spark",
+  ] as const)("getModel supports %s", async (modelId) => {
     const { home } = await makeTmpDirs();
     await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
       version: 1,
@@ -99,13 +102,13 @@ describe(`Codex provider (${DEFAULT_CODEX_MODEL})`, () => {
     await withEnv("HOME", home, async () => {
       const cfg = makeConfig({
         provider: "codex-cli",
-        model: "gpt-5.4-mini",
+        model: modelId,
         userCoworkDir: path.join(home, ".cowork"),
       });
       const model = getModel(cfg);
 
-      expect(model.modelId).toBe("gpt-5.4-mini");
-      expect(model.provider).toBe("codex-cli.responses");
+      expect(model.modelId).toBe(modelId);
+      expect(model.provider).toBe("codex-app-server");
       expect(model.specificationVersion).toBe("v3");
     });
   });

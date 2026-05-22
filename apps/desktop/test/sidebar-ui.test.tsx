@@ -141,6 +141,7 @@ function makeWorkspace(overrides: Record<string, unknown> = {}) {
     id: "ws-1",
     name: "Agent Coworker",
     path: "/tmp/agent-coworker",
+    workspaceKind: "project",
     createdAt: "2026-03-24T00:00:00.000Z",
     lastOpenedAt: "2026-03-24T00:00:00.000Z",
     defaultProvider: "openai",
@@ -203,7 +204,70 @@ describe("desktop sidebar", () => {
     useAppStore.setState(defaultStoreState);
   });
 
-  test.serial("expands the selected workspace and caps the visible thread list", async () => {
+  test.serial(
+    "expands the selected workspace and caps the compact visible thread list",
+    async () => {
+      const harness = setupSidebarJsdom();
+      let root: ReturnType<typeof createRoot> | null = null;
+
+      try {
+        const container = harness.dom.window.document.getElementById("root");
+        if (!container) throw new Error("missing root");
+        root = createRoot(container);
+
+        await act(async () => {
+          resetAppStore({
+            workspaces: [makeWorkspace()],
+            threads: makeThreads(12),
+            selectedWorkspaceId: "ws-1",
+            selectedThreadId: "thread-12",
+          });
+          root.render(createElement(Sidebar));
+        });
+
+        const visibleThreadRows = Array.from(container.querySelectorAll(".sidebar-thread-item"));
+        const visibleThreadTitles = visibleThreadRows.map((row) => {
+          const title = row.querySelector(".block.truncate");
+          return title?.textContent?.trim() ?? "";
+        });
+
+        expect(container.textContent).toContain("Agent Coworker");
+        expect(visibleThreadRows).toHaveLength(5);
+        expect(visibleThreadTitles.includes("Thread 12")).toBe(true);
+        expect(visibleThreadTitles.includes("Thread 8")).toBe(true);
+        expect(visibleThreadTitles.includes("Thread 7")).toBe(false);
+        expect(visibleThreadTitles.includes("Thread 1")).toBe(false);
+        expect(container.textContent).toContain("Show 7 more");
+
+        const collapseButton = container.querySelector('[aria-label="Collapse Agent Coworker"]');
+        if (!(collapseButton instanceof harness.dom.window.HTMLButtonElement)) {
+          throw new Error("missing collapse button");
+        }
+
+        await act(async () => {
+          collapseButton.dispatchEvent(
+            new harness.dom.window.MouseEvent("click", { bubbles: true }),
+          );
+        });
+
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 300));
+        });
+
+        expect(container.textContent).not.toContain("Thread 12");
+        expect(container.querySelector('[aria-label="Expand Agent Coworker"]')).not.toBeNull();
+      } finally {
+        if (root) {
+          await act(async () => {
+            root?.unmount();
+          });
+        }
+        harness.restore();
+      }
+    },
+  );
+
+  test.serial("keeps long chat titles clipped inside the sidebar", async () => {
     const harness = setupSidebarJsdom();
     let root: ReturnType<typeof createRoot> | null = null;
 
@@ -215,46 +279,235 @@ describe("desktop sidebar", () => {
       await act(async () => {
         resetAppStore({
           workspaces: [makeWorkspace()],
-          threads: makeThreads(12),
+          threads: [
+            {
+              ...makeThreads(1)[0],
+              title:
+                "This is a very long chat title that should never make the left sidebar horizontally scroll",
+            },
+          ],
           selectedWorkspaceId: "ws-1",
-          selectedThreadId: "thread-12",
+          selectedThreadId: "thread-1",
         });
         root.render(createElement(Sidebar));
       });
 
-      const visibleThreadRows = Array.from(container.querySelectorAll(".sidebar-thread-item"));
-      const visibleThreadTitles = visibleThreadRows.map((row) => {
-        const title = row.querySelector(".block.truncate");
-        return title?.textContent?.trim() ?? "";
-      });
+      const sidebar = container.querySelector(".app-sidebar");
+      const scroller = container.querySelector("section");
+      const threadRow = container.querySelector(".sidebar-thread-item");
+      const threadRowWrapper = threadRow?.parentElement;
+      const title = threadRow?.querySelector(".block.truncate");
 
-      expect(container.textContent).toContain("Agent Coworker");
-      expect(visibleThreadRows).toHaveLength(10);
-      expect(visibleThreadTitles.includes("Thread 12")).toBe(true);
-      expect(visibleThreadTitles.includes("Thread 3")).toBe(true);
-      expect(visibleThreadTitles.includes("Thread 2")).toBe(false);
-      expect(visibleThreadTitles.includes("Thread 1")).toBe(false);
-      expect(container.textContent).toContain("Show 2 more");
-
-      const collapseButton = container.querySelector('[aria-label="Collapse Agent Coworker"]');
-      if (!(collapseButton instanceof harness.dom.window.HTMLButtonElement)) {
-        throw new Error("missing collapse button");
-      }
-
-      await act(async () => {
-        collapseButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
-      });
-
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 300));
-      });
-
-      expect(container.textContent).not.toContain("Thread 12");
-      expect(container.querySelector('[aria-label="Expand Agent Coworker"]')).not.toBeNull();
+      expect(sidebar?.className).toContain("overflow-hidden");
+      expect(sidebar?.className).toContain("min-w-0");
+      expect(scroller?.className).toContain("overflow-x-hidden");
+      expect(scroller?.className).toContain("min-w-0");
+      expect(threadRowWrapper?.className).toContain("min-w-0");
+      expect(title?.className).toContain("truncate");
     } finally {
       if (root) {
         await act(async () => {
-          root?.unmount();
+          root.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test.serial("groups one-off chats separately from project workspaces", async () => {
+    const harness = setupSidebarJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        resetAppStore({
+          workspaces: [
+            makeWorkspace(),
+            makeWorkspace({
+              id: "chat-ws-1",
+              name: "Hidden one-off workspace",
+              path: "/tmp/cowork-chat-1",
+              workspaceKind: "oneOffChat",
+            }),
+          ],
+          threads: [
+            ...makeThreads(1),
+            {
+              id: "chat-thread-1",
+              workspaceId: "chat-ws-1",
+              title: "Loose idea",
+              titleSource: "manual" as const,
+              createdAt: "2026-03-24T00:00:00.000Z",
+              lastMessageAt: "2026-03-24T12:00:00.000Z",
+              status: "active" as const,
+              sessionId: "chat-session-1",
+              messageCount: 1,
+              lastEventSeq: 1,
+              draft: false,
+            },
+          ],
+          selectedWorkspaceId: "chat-ws-1",
+          selectedThreadId: "chat-thread-1",
+        });
+        root.render(createElement(Sidebar));
+      });
+
+      expect(container.textContent).toContain("Chats");
+      expect(container.textContent).toContain("Loose idea");
+      expect(container.textContent).toContain("Projects");
+      expect(container.textContent).toContain("Agent Coworker");
+      expect(container.textContent).not.toContain("Hidden one-off workspace");
+      expect(
+        Array.from(container.querySelectorAll("[data-sidebar-section]")).map((section) =>
+          section.getAttribute("data-sidebar-section"),
+        ),
+      ).toEqual(["projects", "chats"]);
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test.serial("honors the persisted Chats-above-Projects sidebar section order", async () => {
+    const harness = setupSidebarJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        resetAppStore({
+          desktopSettings: {
+            ...defaultStoreState.desktopSettings,
+            sidebarSectionOrder: ["chats", "projects"],
+          },
+          workspaces: [
+            makeWorkspace(),
+            makeWorkspace({
+              id: "chat-ws-1",
+              name: "Hidden one-off workspace",
+              path: "/tmp/cowork-chat-1",
+              workspaceKind: "oneOffChat",
+            }),
+          ],
+          threads: [
+            {
+              id: "chat-thread-1",
+              workspaceId: "chat-ws-1",
+              title: "Loose idea",
+              titleSource: "manual" as const,
+              createdAt: "2026-03-24T00:00:00.000Z",
+              lastMessageAt: "2026-03-24T12:00:00.000Z",
+              status: "active" as const,
+              sessionId: "chat-session-1",
+              messageCount: 1,
+              lastEventSeq: 1,
+              draft: false,
+            },
+          ],
+          selectedWorkspaceId: "chat-ws-1",
+          selectedThreadId: "chat-thread-1",
+        });
+        root.render(createElement(Sidebar));
+      });
+
+      expect(
+        Array.from(container.querySelectorAll("[data-sidebar-section]")).map((section) =>
+          section.getAttribute("data-sidebar-section"),
+        ),
+      ).toEqual(["chats", "projects"]);
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test.serial("New Chat opens the universal landing from the sidebar", async () => {
+    const harness = setupSidebarJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        resetAppStore({
+          workspaces: [makeWorkspace()],
+          selectedWorkspaceId: "ws-1",
+        });
+        root.render(createElement(Sidebar));
+      });
+
+      const newChatButton = Array.from(container.querySelectorAll("button")).find(
+        (button) => button.textContent?.trim() === "New Chat",
+      );
+      if (!(newChatButton instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing New Chat button");
+      }
+
+      await act(async () => {
+        newChatButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+        await Promise.resolve();
+      });
+
+      const state = useAppStore.getState();
+      expect(state.workspaces).toHaveLength(1);
+      expect(state.workspaces[0]?.workspaceKind).toBe("project");
+      expect(state.selectedWorkspaceId).toBe("ws-1");
+      expect(state.selectedThreadId).toBeNull();
+      expect(state.newChatLandingTarget).toEqual({ kind: "project", workspaceId: "ws-1" });
+      expect(state.threads).toEqual([]);
+      expect(state.view).toBe("chat");
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test.serial("one-off new chat landing does not emphasize a project row", async () => {
+    const harness = setupSidebarJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        resetAppStore({
+          workspaces: [makeWorkspace()],
+          selectedWorkspaceId: "ws-1",
+          selectedThreadId: null,
+          newChatLandingTarget: { kind: "oneOff" },
+        });
+        root.render(createElement(Sidebar));
+      });
+
+      const workspaceCard = container.querySelector(".sidebar-workspace-card");
+      expect(workspaceCard?.className ?? "").not.toContain("bg-foreground/[0.05]");
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
         });
       }
       harness.restore();
@@ -349,9 +602,8 @@ describe("desktop sidebar", () => {
       const titlebandButtons = Array.from(
         container.querySelectorAll(".app-sidebar__titleband-row > button"),
       );
-      expect(titlebandButtons).toHaveLength(2);
+      expect(titlebandButtons).toHaveLength(1);
       expect(titlebandButtons[0]?.textContent).toContain("New Chat");
-      expect(titlebandButtons[1]?.getAttribute("aria-label")).toBe("Hide sidebar");
 
       const skillsButton = Array.from(container.querySelectorAll("button")).find((button) =>
         button.textContent?.includes("Plugins"),
@@ -364,6 +616,57 @@ describe("desktop sidebar", () => {
       expect(newChatButton.querySelector("svg")?.className.baseVal ?? "").toContain(
         "lucide-square-pen",
       );
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test.serial("shows Research navigation only when a Google API key is saved", async () => {
+    const harness = setupSidebarJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        resetAppStore({
+          workspaces: [makeWorkspace()],
+          threads: makeThreads(1),
+          selectedWorkspaceId: "ws-1",
+        });
+        root.render(createElement(Sidebar));
+      });
+
+      expect(container.textContent).not.toContain("Research");
+
+      await act(async () => {
+        resetAppStore({
+          workspaces: [makeWorkspace()],
+          threads: makeThreads(1),
+          selectedWorkspaceId: "ws-1",
+          providerStatusByName: {
+            google: {
+              provider: "google",
+              authorized: true,
+              verified: false,
+              mode: "api_key",
+              account: null,
+              message: "API key saved.",
+              checkedAt: "2026-05-15T00:00:00.000Z",
+              savedApiKeyMasks: { api_key: "goog...1234" },
+            },
+          },
+        });
+      });
+
+      expect(container.textContent).toContain("Research");
     } finally {
       if (root) {
         await act(async () => {
@@ -583,7 +886,7 @@ describe("desktop sidebar", () => {
         expect(workspaceCards).toHaveLength(1);
         expect(container.textContent).toContain("Agent Coworker");
         expect(container.textContent).not.toContain("Research Lab");
-        expect(container.querySelector('[aria-label="Add workspace"]')).not.toBeNull();
+        expect(container.querySelector('[aria-label="Project section options"]')).not.toBeNull();
       } finally {
         if (root) {
           await act(async () => {

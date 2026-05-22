@@ -1,7 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import { createElement } from "react";
 
-import "./helpers/mock-react-native";
+mock.restore();
 
 mock.module("@/theme/use-app-theme", () => ({
   useAppTheme: () => ({

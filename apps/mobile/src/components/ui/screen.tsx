@@ -1,26 +1,22 @@
 import type { PropsWithChildren } from "react";
-import { ScrollView, View, type ViewStyle } from "react-native";
+import type { StyleProp, ViewStyle } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-
-import { useAppTheme } from "@/theme/use-app-theme";
+import { ScrollView, View } from "@/tw";
 
 type ScreenProps = PropsWithChildren<{
   scroll?: boolean;
-  contentStyle?: ViewStyle;
+  className?: string;
+  contentStyle?: StyleProp<ViewStyle>;
 }>;
 
-export function Screen({ children, scroll = false, contentStyle }: ScreenProps) {
+export function Screen({ children, scroll = false, className, contentStyle }: ScreenProps) {
   const insets = useSafeAreaInsets();
-  const theme = useAppTheme();
 
   const inner = (
     <View
+      className={scroll ? "gap-xl px-xl pt-[10px]" : "flex-1 gap-xl px-xl pt-[10px]"}
       style={[
         {
-          flex: scroll ? undefined : 1,
-          gap: 18,
-          paddingHorizontal: 18,
-          paddingTop: 10,
           paddingBottom: Math.max(insets.bottom + 24, 32),
         },
         contentStyle,
@@ -31,14 +27,14 @@ export function Screen({ children, scroll = false, contentStyle }: ScreenProps) 
   );
 
   if (!scroll) {
-    return <View style={{ flex: 1, backgroundColor: theme.background }}>{inner}</View>;
+    return <View className={`flex-1 bg-surface-window ${className || ""}`}>{inner}</View>;
   }
 
   return (
     <ScrollView
-      style={{ flex: 1, backgroundColor: theme.background }}
+      className={`flex-1 bg-surface-window ${className || ""}`}
       contentInsetAdjustmentBehavior="automatic"
-      contentContainerStyle={{ flexGrow: 1 }}
+      contentContainerClassName="flex-grow"
       keyboardShouldPersistTaps="handled"
       showsVerticalScrollIndicator={false}
     >

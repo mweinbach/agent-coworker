@@ -48,7 +48,7 @@ describe("providers/authRegistry", () => {
     if (!result.ok) return;
     expect(result.challenge.method).toBe("auto");
     expect(result.challenge.url).toBeUndefined();
-    expect(result.challenge.instructions).toContain("save the returned token locally");
+    expect(result.challenge.instructions).toContain("Codex app-server owns");
   });
 
   test("authorizeProviderAuth fails for api key method", () => {
@@ -374,7 +374,7 @@ describe("providers/authRegistry", () => {
       ok: true as const,
       provider: opts.provider,
       storageFile: "/tmp/connections.json",
-      message: "Codex OAuth credentials cleared.",
+      message: "Codex connection cleared. Codex app-server auth was preserved.",
     }));
 
     const result = await logoutProviderAuth({

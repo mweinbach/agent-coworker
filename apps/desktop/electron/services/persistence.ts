@@ -1,8 +1,14 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { app } from "electron";
 import { z } from "zod";
 import { normalizeDesktopFeatureFlagOverrides } from "../../../../src/shared/featureFlags";
+import {
+  ensureOneOffChatWorkspacePath,
+  isPathInsideOneOffChatsRoot,
+  normalizeWorkspaceKind,
+} from "../../../../src/utils/oneOffChats";
 import { normalizeWorkspaceProviderOptions } from "../../src/app/openaiCompatibleProviderOptions";
 import { normalizePersistedProviderState } from "../../src/app/persistedProviderState";
 import {
@@ -15,6 +21,7 @@ import type {
   PersistedState,
   ThreadRecord,
   TranscriptEvent,
+  WorkspaceKind,
   WorkspaceRecord,
   WorkspaceUserProfile,
 } from "../../src/app/types";
@@ -130,6 +137,8 @@ function sanitizeDesktopSettings(value: unknown): PersistedDesktopSettings {
       shortcutEnabled: normalized.quickChat.shortcutEnabled,
       shortcutAccelerator: normalized.quickChat.shortcutAccelerator,
     },
+    archivedChatsAutoDeleteDays: normalized.archivedChatsAutoDeleteDays,
+    sidebarSectionOrder: normalized.sidebarSectionOrder,
   };
 }
 
@@ -189,13 +198,27 @@ const transcriptEventSchema = z
   })
   .passthrough();
 
-async function resolveWorkspacePath(value: unknown): Promise<string | null> {
+async function resolveWorkspacePath(
+  value: unknown,
+  workspaceKind: WorkspaceKind = "project",
+): Promise<string | null> {
   const candidate = asNonEmptyString(value);
   if (!candidate) {
     return null;
   }
 
   const resolved = path.resolve(candidate);
+  if (workspaceKind === "oneOffChat") {
+    if (!isPathInsideOneOffChatsRoot(resolved, os.homedir())) {
+      return null;
+    }
+    try {
+      return await ensureOneOffChatWorkspacePath(resolved, { homedir: os.homedir() });
+    } catch {
+      return null;
+    }
+  }
+
   try {
     const stat = await fs.stat(resolved);
     if (!stat.isDirectory()) {
@@ -223,7 +246,8 @@ async function sanitizeWorkspaces(value: unknown): Promise<WorkspaceRecord[]> {
     const name = asNonEmptyString(item.name);
     const createdAt = asTimestamp(item.createdAt);
     const lastOpenedAt = asTimestamp(item.lastOpenedAt);
-    const workspacePath = await resolveWorkspacePath(item.path);
+    const workspaceKind = normalizeWorkspaceKind(item.workspaceKind);
+    const workspacePath = await resolveWorkspacePath(item.path, workspaceKind);
     if (!id || !name || !createdAt || !lastOpenedAt || !workspacePath || seenWorkspaceIds.has(id)) {
       continue;
     }
@@ -232,6 +256,7 @@ async function sanitizeWorkspaces(value: unknown): Promise<WorkspaceRecord[]> {
       id,
       name,
       path: workspacePath,
+      workspaceKind,
       createdAt,
       lastOpenedAt,
       wsProtocol: "jsonrpc",
@@ -297,6 +322,8 @@ function sanitizeThreads(value: unknown, workspaceIds: Set<string>): ThreadRecor
       messageCount: asNonNegativeInteger(item.messageCount, 0),
       lastEventSeq: asNonNegativeInteger(item.lastEventSeq, 0),
       legacyTranscriptId: asNonEmptyString(item.legacyTranscriptId) ?? null,
+      archived: typeof item.archived === "boolean" ? item.archived : false,
+      archivedAt: typeof item.archivedAt === "string" ? item.archivedAt : undefined,
     });
     seenThreadIds.add(id);
   }

@@ -83,15 +83,15 @@ samp {
 }
 
 :where(
-    button,
-    [role="button"],
-    [role="treeitem"],
-    a,
-    input,
-    textarea,
-    select,
-    [role="separator"]
-  ):focus-visible {
+  button,
+  [role="button"],
+  [role="treeitem"],
+  a,
+  input,
+  textarea,
+  select,
+  [role="separator"]
+):focus-visible {
   outline: none;
   box-shadow: var(--focus-ring-shadow);
 }
@@ -103,6 +103,11 @@ samp {
 }
 
 [data-slot="prompt-input"] textarea:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+[data-slot="command-input"]:focus-visible {
   outline: none;
   box-shadow: none;
 }
@@ -406,6 +411,47 @@ samp {
   }
 }
 
+.activity-thinking-shimmer {
+  position: relative;
+  display: inline-block;
+  overflow: hidden;
+  color: var(--text-muted);
+  background-image: linear-gradient(
+    100deg,
+    var(--text-muted) 0%,
+    var(--text-muted) 28%,
+    var(--accent) 46%,
+    var(--text-emphasis) 50%,
+    var(--accent) 54%,
+    var(--text-muted) 72%,
+    var(--text-muted) 100%
+  );
+  background-position: 160% 50%;
+  background-size: 320% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: activityThinkingShimmer 1.25s ease-in-out infinite;
+}
+
+@keyframes activityThinkingShimmer {
+  from {
+    background-position: 160% 50%;
+  }
+
+  to {
+    background-position: -160% 50%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .activity-thinking-shimmer {
+    background: none;
+    -webkit-text-fill-color: currentColor;
+    animation: none;
+  }
+}
+
 .sidebar-rail-enter {
   animation: sidebarRailIn 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
@@ -512,6 +558,11 @@ body.app-resizing-sidebars {
   user-select: none;
 }
 
+body.app-resizing-message-bar {
+  cursor: row-resize;
+  user-select: none;
+}
+
 body.app-resizing-sidebars .app-left-sidebar-pane,
 body.app-resizing-sidebars .app-right-sidebar-pane {
   transition: none;
@@ -567,6 +618,12 @@ body.app-animating-sidebars .app-topbar__content-fill {
   .sidebar-thread-region {
     transition: none;
   }
+}
+
+.sidebar-chats-scroll-container {
+  max-height: 396px; /* Capped to exactly 10 items (10 * 36px + 9 * 4px gap) */
+  overflow-y: auto;
+  min-height: 0;
 }
 
 :root {

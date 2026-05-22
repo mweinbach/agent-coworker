@@ -34,8 +34,14 @@ export function parseReplInput(input: string): ParsedCommand {
   if (!line) return { type: "message", arg: "" };
   if (!line.startsWith("/")) return { type: "message", arg: line };
 
-  const [cmd = "", ...rest] = line.slice(1).split(/\s+/);
-  const arg = rest.join(" ").trim();
+  const commandAndArg = line.slice(1);
+  const firstSpaceIndex = commandAndArg.search(/\s/);
+  let cmd = commandAndArg;
+  let arg = "";
+  if (firstSpaceIndex !== -1) {
+    cmd = commandAndArg.slice(0, firstSpaceIndex);
+    arg = commandAndArg.slice(firstSpaceIndex).trim();
+  }
   switch (cmd) {
     case "help":
     case "exit":

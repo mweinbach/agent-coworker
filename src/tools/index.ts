@@ -31,6 +31,12 @@ import { createWebFetchTool } from "./webFetch";
 import { createWebSearchTool } from "./webSearch";
 import { createWriteTool } from "./write";
 
+export {
+  CODEX_NATIVE_EXECUTION_TOOL_NAMES,
+  filterToolsForCodexDynamicBoundary,
+  isCodexDynamicCoworkToolName,
+} from "./codexBoundary";
+
 function usesLegacyCodexWebSearch(ctx: ToolContext): boolean {
   if (ctx.config.provider !== "codex-cli") return false;
   return getCodexWebSearchBackendFromProviderOptions(ctx.config.providerOptions) !== "native";
@@ -63,11 +69,12 @@ export function listSessionToolNames(
   config: Pick<AgentConfig, "provider" | "providerOptions" | "enableMemory">,
   opts: ListSessionToolNameOptions = {},
 ): string[] {
+  const providerIsCodex = config.provider === "codex-cli";
   const includeLegacyWebSearch =
     !usesGoogleNativeWebToolsConfig(config) &&
-    (config.provider !== "codex-cli" || usesLegacyCodexWebSearchConfig(config));
+    (!providerIsCodex || usesLegacyCodexWebSearchConfig(config));
 
-  const names = [
+  const localToolNames = [
     "bash",
     "read",
     "write",
@@ -76,10 +83,13 @@ export function listSessionToolNames(
     "grep",
     ...(includeLegacyWebSearch ? ["webSearch"] : []),
     "webFetch",
+    "notebookEdit",
+  ];
+
+  const coworkToolNames = [
     "ask",
     "AskUserQuestion",
     "todoWrite",
-    "notebookEdit",
     "skill",
     ...((config.enableMemory ?? true) ? ["memory"] : []),
     "usage",
@@ -95,6 +105,7 @@ export function listSessionToolNames(
         ]
       : []),
   ];
+  const names = providerIsCodex ? coworkToolNames : [...localToolNames, ...coworkToolNames];
 
   return [...names].sort((left, right) => left.localeCompare(right));
 }

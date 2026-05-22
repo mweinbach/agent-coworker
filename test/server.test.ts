@@ -11,6 +11,10 @@ import type { AgentSession } from "../src/server/session/AgentSession";
 import { SessionDb } from "../src/server/sessionDb";
 import { refreshSessionsForSkillMutation } from "../src/server/skillMutationRefresh";
 import { type StartAgentServerOptions, startAgentServer } from "../src/server/startServer";
+import {
+  loadH3PairingStoreState,
+  rememberH3TrustedDevice,
+} from "../src/server/transport/h3/pairing";
 import { stopTestServer } from "./helpers/wsHarness";
 
 function repoRoot(): string {
@@ -183,7 +187,7 @@ describe("Server Startup", () => {
       expect(config.skillsDirs[0]).toBe(path.join(tmpDir, ".cowork", "skills"));
       expect(config.skillsDirs[2]).toBe(path.join(config.builtInDir, "skills"));
       expect(system).toContain("## Available Skills");
-      expect(system).toContain("**slides**");
+      expect(system).toContain("**presentations**");
     } finally {
       await stopTestServer(server);
     }
@@ -330,6 +334,22 @@ describe("HTTP Handler", () => {
     }
   });
 
+  test("/ws rejects retired query parameter protocol negotiation", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server } = await startAgentServer(serverOpts(tmpDir));
+    try {
+      const httpUrl = `http://127.0.0.1:${server.port}/ws?protocol=jsonrpc`;
+      const res = await fetch(httpUrl);
+      expect(res.status).toBe(400);
+      const text = await res.text();
+      expect(text).toBe(
+        "The ?protocol= WebSocket query parameter is no longer supported. Use the cowork.jsonrpc.v1 subprotocol or omit protocol negotiation.",
+      );
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
   test("loopback CORS preflight advertises DELETE for transcript routes", async () => {
     const tmpDir = await makeTmpProject();
     const { server } = await startAgentServer(serverOpts(tmpDir));
@@ -345,6 +365,29 @@ describe("HTTP Handler", () => {
       expect(res.status).toBe(204);
       expect(res.headers.get("access-control-allow-origin")).toBe("http://127.0.0.1:5173");
       expect(res.headers.get("access-control-allow-methods")).toContain("DELETE");
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
+  test("rejects local HTTP route requests from non-loopback browser origins", async () => {
+    const tmpDir = await makeTmpProject();
+    const targetPath = path.join(tmpDir, "csrf-target.txt");
+    await fs.writeFile(targetPath, "keep me", "utf-8");
+    const { server } = await startAgentServer(serverOpts(tmpDir));
+    try {
+      const httpUrl = `http://127.0.0.1:${server.port}/cowork/fs/trash`;
+      const res = await fetch(httpUrl, {
+        method: "POST",
+        headers: {
+          Origin: "https://evil.example",
+          "Content-Type": "text/plain;charset=UTF-8",
+        },
+        body: JSON.stringify({ path: targetPath }),
+      });
+      expect(res.status).toBe(403);
+      expect(await res.text()).toBe("Forbidden origin");
+      expect(await fs.readFile(targetPath, "utf-8")).toBe("keep me");
     } finally {
       await stopTestServer(server);
     }
@@ -377,6 +420,53 @@ describe("HTTP Handler", () => {
       } else {
         process.env.COWORK_WEB_DESKTOP_SERVICE = previous;
       }
+      await stopTestServer(server);
+    }
+  });
+
+  test("mobile H3 trusted-device DELETE requires admin token and revokes encoded device id", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, mobileServer } = await startAgentServer(
+      serverOpts(tmpDir, {
+        mobileH3: {
+          hostname: "127.0.0.1",
+          port: 0,
+        },
+      }),
+    );
+    try {
+      if (!mobileServer) {
+        throw new Error("Expected mobile H3 server to start for admin route test");
+      }
+      const deviceId = "phone 1/alpha";
+      await rememberH3TrustedDevice(tmpDir, {
+        deviceId,
+        identityPub: "phone-identity",
+        displayName: "Phone",
+        sessionToken: "session-token",
+      });
+      const httpUrl = `http://127.0.0.1:${server.port}/mobile-h3/trusted/${encodeURIComponent(deviceId)}`;
+
+      const unauthorized = await fetch(httpUrl, { method: "DELETE" });
+      expect(unauthorized.status).toBe(401);
+      await expect(unauthorized.json()).resolves.toEqual({ error: "Unauthorized." });
+      await expect(loadH3PairingStoreState(tmpDir)).resolves.toMatchObject({
+        trustedDevices: [expect.objectContaining({ deviceId })],
+      });
+
+      const authorized = await fetch(httpUrl, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${mobileServer.adminToken}`,
+        },
+      });
+      expect(authorized.status).toBe(200);
+      await expect(authorized.json()).resolves.toEqual({ ok: true, removed: true });
+      await expect(loadH3PairingStoreState(tmpDir)).resolves.toEqual({
+        version: 1,
+        trustedDevices: [],
+      });
+    } finally {
       await stopTestServer(server);
     }
   });

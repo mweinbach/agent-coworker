@@ -1,5 +1,6 @@
 import {
   formatAttachmentDisplayText,
+  formatUserInputDisplayText,
   getAttachmentCountValidationMessage,
   getAttachmentUploadByteLengthValidationMessage,
 } from "../../../../src/shared/attachments";
@@ -38,6 +39,16 @@ export function buildAttachmentDisplayText(
     return "";
   }
   return formatAttachmentDisplayText(attachments.map((attachment) => attachment.filename));
+}
+
+export function buildUserInputDisplayText(
+  text: string,
+  attachments?: readonly Pick<FileAttachmentInput, "filename">[],
+): string {
+  return formatUserInputDisplayText(
+    text,
+    attachments?.map((attachment) => attachment.filename),
+  );
 }
 
 export function getAttachmentPickerValidationMessage(

@@ -1,4 +1,4 @@
-import { Badge, Icon, Label, NativeTabs } from "expo-router/unstable-native-tabs";
+import { NativeTabs } from "expo-router/unstable-native-tabs";
 
 import { useThreadStore } from "@/features/cowork/threadStore";
 import { useAppTheme } from "@/theme/use-app-theme";
@@ -35,41 +35,45 @@ export default function AppTabsLayout() {
       shadowColor={theme.border}
     >
       <NativeTabs.Trigger name="workspace">
-        <Icon
+        <NativeTabs.Trigger.Icon
           sf={{
             default: "square.grid.2x2",
             selected: "square.grid.2x2.fill",
           }}
         />
-        <Label>Workspace</Label>
+        <NativeTabs.Trigger.Label>Workspace</NativeTabs.Trigger.Label>
       </NativeTabs.Trigger>
       <NativeTabs.Trigger name="threads">
-        <Icon
+        <NativeTabs.Trigger.Icon
           sf={{
             default: "bubble.left.and.bubble.right",
             selected: "bubble.left.and.bubble.right.fill",
           }}
         />
-        <Label>Threads</Label>
-        {pendingCount > 0 ? <Badge>{pendingCount > 9 ? "9+" : String(pendingCount)}</Badge> : null}
+        <NativeTabs.Trigger.Label>Threads</NativeTabs.Trigger.Label>
+        {pendingCount > 0 ? (
+          <NativeTabs.Trigger.Badge>
+            {pendingCount > 9 ? "9+" : String(pendingCount)}
+          </NativeTabs.Trigger.Badge>
+        ) : null}
       </NativeTabs.Trigger>
       <NativeTabs.Trigger name="skills">
-        <Icon
+        <NativeTabs.Trigger.Icon
           sf={{
             default: "sparkles",
             selected: "sparkles",
           }}
         />
-        <Label>Skills</Label>
+        <NativeTabs.Trigger.Label>Skills</NativeTabs.Trigger.Label>
       </NativeTabs.Trigger>
       <NativeTabs.Trigger name="settings">
-        <Icon
+        <NativeTabs.Trigger.Icon
           sf={{
             default: "slider.horizontal.3",
             selected: "slider.horizontal.3",
           }}
         />
-        <Label>Settings</Label>
+        <NativeTabs.Trigger.Label>Settings</NativeTabs.Trigger.Label>
       </NativeTabs.Trigger>
     </NativeTabs>
   );

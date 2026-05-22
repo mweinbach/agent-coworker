@@ -3,10 +3,22 @@ import type {
   DesktopFeatureFlagOverrides,
   DesktopFeatureFlags,
 } from "../../../../src/shared/featureFlags";
+import type { PresentationPreviewResult } from "../../../../src/server/presentationPreview";
+import type {
+  SpreadsheetPreviewResult,
+  SpreadsheetPreviewViewportRequest,
+} from "../../../../src/shared/spreadsheetPreview";
 import { createDefaultUpdaterState, type UpdaterState } from "../lib/desktopApi";
 import { startWorkspaceServer } from "../lib/desktopCommands";
+import type { NewChatLandingTarget } from "../lib/newChatLanding";
 import { fallbackAuthMethods } from "../lib/providerDisplayNames";
-import type { MCPServerConfig, ProviderName, SessionEvent, TodoItem } from "../lib/wsProtocol";
+import type {
+  CodexAppServerInstallStatus,
+  MCPServerConfig,
+  ProviderName,
+  SessionEvent,
+  TodoItem,
+} from "../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../lib/wsProtocol";
 import {
   buildContextPreamble,
@@ -66,6 +78,7 @@ import type {
   ResearchDetail,
   ResearchSettingsState,
   SettingsPageId,
+  SidebarSectionKey,
   ThreadBusyPolicy,
   ThreadRecord,
   ThreadRuntime,
@@ -174,11 +187,16 @@ export type AppStoreState = {
 
   promptModal: PromptModalState;
   filePreview: { path: string } | null;
+  canvasActiveTab: "preview" | "edit";
+  canvasShowFormattingBar: boolean;
   notifications: Notification[];
 
   providerStatusByName: Partial<Record<ProviderName, ProviderStatus>>;
   providerStatusLastUpdatedAt: string | null;
   providerStatusRefreshing: boolean;
+  codexAppServerStatus: CodexAppServerInstallStatus | null;
+  codexAppServerChecking: boolean;
+  codexAppServerUpdating: boolean;
   providerCatalog: ProviderCatalogEntry[];
   providerDefaultModelByProvider: Record<string, string>;
   providerConnected: ProviderName[];
@@ -188,6 +206,7 @@ export type AppStoreState = {
   providerUiState: PersistedProviderUiState;
 
   composerText: string;
+  newChatLandingTarget: NewChatLandingTarget | null;
   injectContext: boolean;
   developerMode: boolean;
   showHiddenFiles: boolean;
@@ -215,6 +234,7 @@ export type AppStoreState = {
   sidebarWidth: number;
   contextSidebarCollapsed: boolean;
   contextSidebarWidth: number;
+  canvasSidebarWidth: number;
   messageBarHeight: number;
 
   init: () => Promise<void>;
@@ -231,12 +251,20 @@ export type AppStoreState = {
 
   newThread: (opts?: {
     workspaceId?: string;
+    scope?: "oneOff" | "project";
     titleHint?: string;
     firstMessage?: string;
     mode?: "draft" | "session";
     attachments?: import("./store.helpers/jsonRpcSocket").FileAttachmentInput[];
+    attachmentFiles?: File[];
+    provider?: ProviderName;
+    model?: string;
   }) => Promise<boolean>;
+  openNewChatLanding: (opts?: { defaultTargetKind?: "project" | "oneOff" }) => Promise<void>;
+  setNewChatLandingTarget: (target: NewChatLandingTarget) => void;
   removeThread: (threadId: string) => Promise<void>;
+  archiveThread: (threadId: string) => Promise<void>;
+  restoreThread: (threadId: string) => Promise<void>;
   deleteThreadHistory: (threadId: string) => Promise<void>;
   selectThread: (threadId: string) => Promise<void>;
   reconnectThread: (
@@ -271,8 +299,10 @@ export type AppStoreState = {
   setShowHiddenFiles: (v: boolean) => void;
   setPerWorkspaceSettings: (enabled: boolean) => void;
   setQuickChatIconEnabled: (enabled: boolean) => void;
+  setArchivedChatsAutoDeleteDays: (days: number) => void;
   setQuickChatShortcutEnabled: (enabled: boolean) => void;
   setQuickChatShortcutAccelerator: (accelerator: string) => void;
+  setSidebarSectionOrder: (orderedSections: SidebarSectionKey[]) => void;
   setDesktopFeatureFlagOverride: (flagId: DesktopFeatureFlagId, enabled: boolean) => Promise<void>;
   setUpdateState: (state: UpdaterState) => void;
   checkForUpdates: () => Promise<void>;
@@ -430,6 +460,11 @@ export type AppStoreState = {
   requestProviderCatalog: () => Promise<void>;
   requestProviderAuthMethods: () => Promise<void>;
   refreshProviderStatus: (opts?: { refreshBedrockDiscovery?: boolean }) => Promise<void>;
+  checkCodexAppServerStatus: (opts?: { checkLatest?: boolean }) => Promise<void>;
+  updateCodexAppServer: () => Promise<void>;
+  checkLibreOfficeRuntime: (opts?: {
+    smoke?: boolean;
+  }) => Promise<import("../lib/wsProtocol").LibreOfficeRuntimeDiagnostic | null>;
   setLmStudioEnabled: (enabled: boolean) => Promise<void>;
   setLmStudioModelVisible: (modelId: string, visible: boolean) => Promise<void>;
 
@@ -467,6 +502,16 @@ export type AppStoreState = {
 
   openFilePreview: (opts: { path: string }) => void;
   closeFilePreview: () => void;
+  setCanvasActiveTab: (tab: "preview" | "edit") => void;
+  setCanvasShowFormattingBar: (show: boolean) => void;
+  loadSpreadsheetPreview: (
+    path: string,
+    opts?: {
+      sheetName?: string;
+      viewport?: SpreadsheetPreviewViewportRequest;
+    },
+  ) => Promise<SpreadsheetPreviewResult>;
+  loadPresentationPreview: (path: string) => Promise<PresentationPreviewResult>;
 
   setA2uiDockExpanded: (threadId: string, expanded: boolean) => void;
   focusA2uiSurface: (threadId: string, surfaceId: string | null) => void;
@@ -504,6 +549,7 @@ const {
   waitForControlSession,
   requestWorkspaceSessions,
   requestSessionSnapshot,
+  requestJsonRpcControl,
   requestJsonRpcControlEvent,
   __internal: __controlSocketInternal,
 } = createControlSocketHelpers({
@@ -689,6 +735,7 @@ export {
   RUNTIME,
   reactivateWorkspaceJsonRpcState,
   rememberPendingThreadSteer,
+  requestJsonRpcControl,
   requestJsonRpcControlEvent,
   requestSessionSnapshot,
   requestWorkspaceSessions,

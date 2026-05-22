@@ -3,8 +3,17 @@ import { z } from "zod";
 
 export const OAUTH_SUCCESS_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>Auth complete</title></head><body><h1>Authorization complete</h1><p>You can close this tab.</p></body></html>`;
 
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
 export const OAUTH_FAILURE_HTML = (message: string) =>
-  `<!doctype html><html><head><meta charset="utf-8"><title>Auth failed</title></head><body><h1>Authorization failed</h1><p>${message}</p></body></html>`;
+  `<!doctype html><html><head><meta charset="utf-8"><title>Auth failed</title></head><body><h1>Authorization failed</h1><p>${escapeHtml(message)}</p></body></html>`;
 
 // Codex browser login expects localhost in the redirect URI; keep the listener
 // host aligned with the advertised callback URL.

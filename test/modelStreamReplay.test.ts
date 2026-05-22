@@ -489,6 +489,124 @@ describe("modelStreamReplay", () => {
     ).toBe(true);
   });
 
+  test("does not replay a completed Google tool when the next interaction reuses a step index", () => {
+    const runtime = createModelStreamReplayRuntime();
+    const turnId = "turn-google-index-reuse";
+    const base = {
+      type: "model_stream_raw" as const,
+      sessionId: "session-6",
+      turnId,
+      provider: "google" as const,
+      model: "gemini-3.5-flash",
+      format: "google-interactions-v1" as const,
+      normalizerVersion: 1,
+    };
+
+    expect(
+      replayModelStreamRawEvent(runtime, {
+        ...base,
+        index: 0,
+        event: {
+          event_type: "interaction.status_update",
+          interaction_id: "interaction-tools",
+          status: "in_progress",
+        },
+      }),
+    ).toEqual([]);
+
+    expect(
+      replayModelStreamRawEvent(runtime, {
+        ...base,
+        index: 1,
+        event: {
+          event_type: "step.start",
+          index: 1,
+          step: {
+            type: "function_call",
+            id: "todo-final",
+            name: "todoWrite",
+            arguments: { todos: [{ content: "Verify", status: "completed" }] },
+          },
+        },
+      }),
+    ).toEqual([
+      {
+        kind: "tool_input_start",
+        turnId,
+        key: "todo-final",
+        name: "todoWrite",
+        args: { id: "todo-final", toolName: "todoWrite" },
+      },
+      {
+        kind: "tool_input_delta",
+        turnId,
+        key: "todo-final",
+        delta: '{"todos":[{"content":"Verify","status":"completed"}]}',
+      },
+    ]);
+
+    expect(
+      replayModelStreamRawEvent(runtime, {
+        ...base,
+        index: 2,
+        event: { event_type: "step.stop", index: 1 },
+      }),
+    ).toEqual([
+      { kind: "tool_input_end", turnId, key: "todo-final", name: "tool" },
+      {
+        kind: "tool_call",
+        turnId,
+        key: "todo-final",
+        name: "todoWrite",
+        args: { todos: [{ content: "Verify", status: "completed" }] },
+      },
+    ]);
+
+    expect(
+      replayModelStreamRawEvent(runtime, {
+        ...base,
+        index: 3,
+        event: {
+          event_type: "interaction.status_update",
+          interaction_id: "interaction-final",
+          status: "in_progress",
+        },
+      }),
+    ).toEqual([]);
+
+    expect(
+      replayModelStreamRawEvent(runtime, {
+        ...base,
+        index: 4,
+        event: {
+          event_type: "step.start",
+          index: 1,
+          step: { type: "model_output" },
+        },
+      }),
+    ).toEqual([{ kind: "assistant_text_start", turnId, streamId: "s1" }]);
+
+    expect(
+      replayModelStreamRawEvent(runtime, {
+        ...base,
+        index: 5,
+        event: {
+          event_type: "step.delta",
+          index: 1,
+          delta: { type: "text", text: "Done." },
+        },
+      }),
+    ).toEqual([{ kind: "assistant_delta", turnId, streamId: "s1", text: "Done." }]);
+
+    expect(
+      replayModelStreamRawEvent(runtime, {
+        ...base,
+        index: 6,
+        event: { event_type: "step.stop", index: 1 },
+      }),
+    ).toEqual([{ kind: "assistant_text_end", turnId, streamId: "s1" }]);
+  });
+
   test("treats repeated google interaction.start events as step boundaries within the same turn", () => {
     const runtime = createModelStreamReplayRuntime();
     const turnId = "turn-google-loop";

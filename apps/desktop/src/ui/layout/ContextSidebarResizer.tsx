@@ -2,25 +2,33 @@ import type { KeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useAppStore } from "../../app/store";
+import { isCanvasSupportedFile } from "../../lib/filePreviewKind";
 import { cn } from "../../lib/utils";
 
 export function ContextSidebarResizer() {
   const contextSidebarWidth = useAppStore((s) => s.contextSidebarWidth);
+  const canvasSidebarWidth = useAppStore((s) => s.canvasSidebarWidth);
+  const filePreview = useAppStore((s) => s.filePreview);
+  const canvasEnabled = useAppStore((s) => s.desktopFeatureFlags?.canvas === true);
   const setContextSidebarWidth = useAppStore((s) => s.setContextSidebarWidth);
   const [dragging, setDragging] = useState(false);
 
   const startXRef = useRef(0);
   const startWidthRef = useRef(0);
 
+  const isCanvasSupported = filePreview?.path && isCanvasSupportedFile(filePreview.path);
+  const showCanvas = canvasEnabled && isCanvasSupported;
+  const activeWidth = showCanvas ? canvasSidebarWidth : contextSidebarWidth;
+
   const handlePointerDown = useCallback(
     (event: ReactPointerEvent) => {
       if (event.button !== undefined && event.button !== 0) return;
       event.preventDefault();
       startXRef.current = event.clientX;
-      startWidthRef.current = contextSidebarWidth;
+      startWidthRef.current = activeWidth;
       setDragging(true);
     },
-    [contextSidebarWidth],
+    [activeWidth],
   );
 
   const handleKeyDown = useCallback(
@@ -28,19 +36,19 @@ export function ContextSidebarResizer() {
       const step = event.shiftKey ? 32 : 16;
       if (event.key === "ArrowLeft") {
         event.preventDefault();
-        setContextSidebarWidth(contextSidebarWidth + step); // Moving left makes right sidebar wider
+        setContextSidebarWidth(activeWidth + step); // Moving left makes right sidebar wider
       } else if (event.key === "ArrowRight") {
         event.preventDefault();
-        setContextSidebarWidth(contextSidebarWidth - step); // Moving right makes right sidebar narrower
+        setContextSidebarWidth(activeWidth - step); // Moving right makes right sidebar narrower
       } else if (event.key === "Home") {
         event.preventDefault();
         setContextSidebarWidth(200);
       } else if (event.key === "End") {
         event.preventDefault();
-        setContextSidebarWidth(600);
+        setContextSidebarWidth(showCanvas ? 900 : 600);
       }
     },
-    [setContextSidebarWidth, contextSidebarWidth],
+    [setContextSidebarWidth, activeWidth, showCanvas],
   );
 
   useEffect(() => {
@@ -106,8 +114,8 @@ export function ContextSidebarResizer() {
       aria-orientation="vertical"
       aria-label="Resize context sidebar"
       aria-valuemin={200}
-      aria-valuemax={600}
-      aria-valuenow={contextSidebarWidth}
+      aria-valuemax={showCanvas ? 900 : 600}
+      aria-valuenow={activeWidth}
       tabIndex={0}
       onPointerDown={handlePointerDown}
       onKeyDown={handleKeyDown}

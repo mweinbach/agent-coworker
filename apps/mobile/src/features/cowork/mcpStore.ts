@@ -6,6 +6,7 @@ import type {
   McpServerEntry,
 } from "../../../../../src/shared/jsonrpcControlSchemas";
 import { callParsedControlMethod } from "./controlRpc";
+import { saveToOfflineCache } from "./offlineCache";
 import { getActiveCoworkJsonRpcClient } from "./runtimeClient";
 import { useWorkspaceStore } from "./workspaceStore";
 
@@ -84,6 +85,9 @@ export const useMcpStore = create<McpStoreState>((set, get) => ({
     try {
       const result = await callParsedControlMethod(client, "cowork/mcp/servers/read", { cwd });
       set({ ...applyServersEvent(result.event), loading: false });
+      void saveToOfflineCache("mcpServers", result.event.servers);
+      void saveToOfflineCache("mcpFiles", result.event.files);
+      void saveToOfflineCache("mcpWarnings", result.event.warnings ?? []);
     } catch (error) {
       set({ loading: false, error: error instanceof Error ? error.message : String(error) });
     }

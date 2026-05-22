@@ -38,6 +38,31 @@ afterEach(async () => {
 });
 
 describe("web desktop routes", () => {
+  test("desktop service route creates one-off chat workspaces", async () => {
+    const workspace = await makeTempDir("cowork-web-desktop-one-off-route-");
+    const service = {
+      getWorkspaceRoots: async () => [workspace],
+      createOneOffChatWorkspace: async (opts?: { titleHint?: string }) => ({
+        name: opts?.titleHint ?? "New chat",
+        path: path.join(workspace, "created-chat"),
+      }),
+    };
+
+    const response = await handleWebDesktopRoute(
+      new Request("http://localhost/cowork/desktop/one-off-chat/workspace", {
+        method: "POST",
+        body: JSON.stringify({ titleHint: "Scratch pad" }),
+      }),
+      { cwd: workspace, desktopService: service as any },
+    );
+
+    expect(response).not.toBeNull();
+    expect(await readJson(response!)).toEqual({
+      name: "Scratch pad",
+      path: path.join(workspace, "created-chat"),
+    });
+  });
+
   test("desktop service exposes persisted workspaces and allows fs access across them", async () => {
     const userDataDir = await makeTempDir("cowork-web-desktop-userdata-");
     const workspaceA = await makeTempDir("cowork-web-desktop-ws-a-");
@@ -97,13 +122,18 @@ describe("web desktop routes", () => {
       { cwd: workspaceA, desktopService: service },
     );
     expect(stateResponse).not.toBeNull();
-    expect(await readJson(stateResponse!)).toEqual(
+    const desktopState = await readJson(stateResponse!);
+    expect(desktopState).toEqual(
       expect.objectContaining({
         desktopFeatureFlagOverrides: {
           remoteAccess: false,
         },
       }),
     );
+    expect(desktopState.workspaces.map((entry: { yolo?: boolean }) => entry.yolo)).toEqual([
+      false,
+      false,
+    ]);
 
     const listResponse = await handleWebDesktopRoute(
       new Request(`http://localhost/cowork/fs/list?path=${encodeURIComponent(realWorkspaceB)}`),
@@ -134,6 +164,7 @@ describe("web desktop routes", () => {
     expect(state.workspaces).toHaveLength(1);
     expect(state.workspaces[0]?.path).toBe(realWorkspace);
     expect(state.workspaces[0]?.name).toBe(path.basename(realWorkspace));
+    expect(state.workspaces[0]?.yolo).toBe(false);
     expect(state.desktopFeatureFlagOverrides).toEqual({});
 
     await service.stopAll();
@@ -194,6 +225,40 @@ describe("web desktop routes", () => {
       { workspacePath: await fs.realpath(workspaceB), yolo: true },
     ]);
     expect(kills).toEqual(["child-1"]);
+  });
+
+  test("web desktop service never forwards yolo workspace launches", async () => {
+    const userDataDir = await makeTempDir("cowork-web-desktop-yolo-userdata-");
+    const workspace = await makeTempDir("cowork-web-desktop-yolo-workspace-");
+    const starts: Array<{ workspacePath: string; yolo: boolean }> = [];
+    const manager = {
+      startWorkspaceServer: async (opts: {
+        workspaceId: string;
+        workspacePath: string;
+        yolo: boolean;
+      }) => {
+        starts.push({ workspacePath: opts.workspacePath, yolo: opts.yolo });
+        return { url: "ws://mock" };
+      },
+      stopWorkspaceServer: async () => {},
+      stopAll: async () => {},
+    };
+    const service = new WebDesktopService({
+      userDataDir,
+      serverManager: manager as unknown as InstanceType<
+        typeof __internal.SourceWorkspaceServerManager
+      >,
+    });
+
+    await expect(
+      service.startWorkspaceServer({
+        workspaceId: "ws1",
+        workspacePath: workspace,
+        yolo: true,
+      }),
+    ).resolves.toEqual({ url: "ws://mock" });
+
+    expect(starts).toEqual([{ workspacePath: workspace, yolo: false }]);
   });
 
   test("serves active-content files as attachments while keeping plain text inline", async () => {

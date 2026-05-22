@@ -24,7 +24,6 @@ import type {
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { Card, CardContent } from "../../../components/ui/card";
-import { Checkbox } from "../../../components/ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -32,6 +31,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../../../components/ui/select";
+import { Switch } from "../../../components/ui/switch";
 import { confirmAction, revealPath } from "../../../lib/desktopCommands";
 import { cn } from "../../../lib/utils";
 import { useOptionalSettingsChrome } from "../SettingsChromeContext";
@@ -67,10 +67,6 @@ function formatBytes(value: number | null | undefined): string {
     unit = units[index];
   }
   return `${size.toFixed(size >= 10 ? 0 : 1)} ${unit}`;
-}
-
-function toBoolean(checked: boolean | "indeterminate"): boolean {
-  return checked === true;
 }
 
 function backupTitle(entry: WorkspaceBackupEntry): string {
@@ -815,12 +811,12 @@ export function BackupPage(props: BackupPageProps = {}) {
     <div className="flex h-full min-h-0 flex-col gap-0" data-backup-page="true">
       <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 px-5 py-2.5 max-[960px]:px-4">
         <label className="flex max-w-full items-center gap-2 rounded-md border border-border/70 bg-background px-2.5 py-1.5 text-xs sm:text-sm">
-          <Checkbox
+          <Switch
             checked={selectedBackupsEnabled ?? false}
             disabled={!canToggleSelectedEntry}
             onCheckedChange={(checked) => {
               if (!selectedEntry) return;
-              void setSessionBackupsEnabled?.(selectedEntry.targetSessionId, toBoolean(checked));
+              void setSessionBackupsEnabled?.(selectedEntry.targetSessionId, checked);
             }}
           />
           <span className={canToggleSelectedEntry ? "text-foreground" : "text-muted-foreground"}>

@@ -29,10 +29,7 @@ export type DefaultSkillSpec = {
 };
 
 export const DEFAULT_GLOBAL_SKILLS: readonly DefaultSkillSpec[] = [
-  { name: "spreadsheet", githubPath: "skills/.curated/spreadsheet" },
-  { name: "slides", githubPath: "skills/.curated/slides" },
   { name: "pdf", githubPath: "skills/.curated/pdf" },
-  { name: "doc", githubPath: "skills/.curated/doc" },
 ] as const;
 
 export type EnsureDefaultGlobalSkillsInstalledResult = {

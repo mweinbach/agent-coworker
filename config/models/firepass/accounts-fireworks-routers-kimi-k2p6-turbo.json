@@ -1,0 +1,10 @@
+{
+  "id": "accounts/fireworks/routers/kimi-k2p6-turbo",
+  "provider": "firepass",
+  "displayName": "Kimi K2.6 Turbo",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": true
+}

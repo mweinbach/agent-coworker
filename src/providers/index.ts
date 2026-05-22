@@ -2,11 +2,12 @@ import { normalizeModelIdForProvider } from "../models/metadata";
 import type { AgentConfig, ProviderName } from "../types";
 
 import { anthropicProvider } from "./anthropic";
+import { antigravityProvider } from "./antigravity";
 import { basetenProvider } from "./baseten";
 import { bedrockProvider } from "./bedrock";
 import { PROVIDER_MODEL_CATALOG } from "./catalog";
 import { codexCliProvider } from "./codex-cli";
-import { fireworksProvider } from "./fireworks";
+import { firepassProvider, fireworksProvider } from "./fireworksInferenceProvider";
 import { googleProvider } from "./google";
 import { lmstudioProvider } from "./lmstudio";
 import { nvidiaProvider } from "./nvidia";
@@ -61,6 +62,7 @@ const PROVIDER_RUNTIMES: Record<ProviderName, ProviderRuntimeDefinition> = {
   baseten: basetenProvider,
   together: togetherProvider,
   fireworks: fireworksProvider,
+  firepass: firepassProvider,
   nvidia: nvidiaProvider,
   lmstudio: lmstudioProvider,
   "opencode-go": opencodeGoProvider,
@@ -68,6 +70,7 @@ const PROVIDER_RUNTIMES: Record<ProviderName, ProviderRuntimeDefinition> = {
   "codex-cli": codexCliProvider,
   google: googleProvider,
   openai: openaiProvider,
+  antigravity: antigravityProvider,
 };
 
 export const PROVIDERS: Record<ProviderName, ProviderDefinition> = {
@@ -76,6 +79,7 @@ export const PROVIDERS: Record<ProviderName, ProviderDefinition> = {
   baseten: { ...PROVIDER_RUNTIMES.baseten, ...PROVIDER_MODEL_CATALOG.baseten },
   together: { ...PROVIDER_RUNTIMES.together, ...PROVIDER_MODEL_CATALOG.together },
   fireworks: { ...PROVIDER_RUNTIMES.fireworks, ...PROVIDER_MODEL_CATALOG.fireworks },
+  firepass: { ...PROVIDER_RUNTIMES.firepass, ...PROVIDER_MODEL_CATALOG.firepass },
   nvidia: { ...PROVIDER_RUNTIMES.nvidia, ...PROVIDER_MODEL_CATALOG.nvidia },
   lmstudio: { ...PROVIDER_RUNTIMES.lmstudio, ...PROVIDER_MODEL_CATALOG.lmstudio },
   "opencode-go": { ...PROVIDER_RUNTIMES["opencode-go"], ...PROVIDER_MODEL_CATALOG["opencode-go"] },
@@ -86,6 +90,7 @@ export const PROVIDERS: Record<ProviderName, ProviderDefinition> = {
   "codex-cli": { ...PROVIDER_RUNTIMES["codex-cli"], ...PROVIDER_MODEL_CATALOG["codex-cli"] },
   google: { ...PROVIDER_RUNTIMES.google, ...PROVIDER_MODEL_CATALOG.google },
   openai: { ...PROVIDER_RUNTIMES.openai, ...PROVIDER_MODEL_CATALOG.openai },
+  antigravity: { ...PROVIDER_RUNTIMES.antigravity, ...PROVIDER_MODEL_CATALOG.antigravity },
 };
 
 export function getModelForProvider(config: AgentConfig, modelId: string, savedKey?: string) {

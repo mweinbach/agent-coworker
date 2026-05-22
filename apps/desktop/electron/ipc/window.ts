@@ -8,6 +8,7 @@ import {
   type WindowDragPointInput,
 } from "../../src/lib/desktopApi";
 import {
+  showCanvasWindowInputSchema,
   showContextMenuInputSchema,
   showQuickChatWindowInputSchema,
   windowDragPointInputSchema,
@@ -180,6 +181,15 @@ export function registerWindowIpc(context: DesktopIpcModuleContext): void {
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.consumePendingMenuCommands, () => {
     return deps.consumePendingMenuCommands();
+  });
+
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.showCanvasWindow, async (_event, args) => {
+    const input = parseWithSchema(
+      showCanvasWindowInputSchema,
+      args ?? {},
+      "showCanvasWindow options",
+    );
+    await deps.showCanvasWindow(input);
   });
 
   handleDesktopInvoke(

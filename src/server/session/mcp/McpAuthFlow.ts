@@ -64,6 +64,13 @@ export class McpAuthFlow {
     },
   ) {}
 
+  close() {
+    for (const controller of this.autoCallbackControllers.values()) {
+      controller.abort();
+    }
+    this.autoCallbackControllers.clear();
+  }
+
   async authorize(nameRaw: string) {
     if (!this.context.guardBusy()) return;
 

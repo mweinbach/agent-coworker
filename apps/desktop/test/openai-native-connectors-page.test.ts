@@ -84,7 +84,6 @@ describe("OpenAI native connectors settings page", () => {
     const runtime = defaultWorkspaceRuntime();
     runtime.openAiNativeConnectorsAuthenticated = true;
     runtime.openAiNativeConnectorsEnabledIds = ["connector_gmail"];
-    runtime.openAiNativeConnectorsServerName = "codex_apps";
     runtime.openAiNativeConnectors = [
       {
         id: "connector_gmail",

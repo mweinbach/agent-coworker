@@ -4,6 +4,8 @@ import { clearJsonRpcSocketOverride, setJsonRpcSocketOverride } from "./helpers/
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
 
 const startCalls: Array<{ workspaceId: string; workspacePath: string; yolo: boolean }> = [];
+const oneOffWorkspaceCalls: Array<{ titleHint?: string }> = [];
+let oneOffWorkspaceCounter = 0;
 const savedStates: any[] = [];
 const jsonRpcRequests: Array<{ method: string; params?: unknown }> = [];
 const jsonRpcRequestHandlers = new Map<string, (params?: unknown) => unknown | Promise<unknown>>();
@@ -331,6 +333,14 @@ mock.module("../src/lib/desktopCommands", () =>
       return { url: "ws://jsonrpc-workspace" };
     },
     stopWorkspaceServer: async () => {},
+    createOneOffChatWorkspace: async (opts?: { titleHint?: string }) => {
+      oneOffWorkspaceCalls.push(opts ?? {});
+      oneOffWorkspaceCounter += 1;
+      return {
+        name: "New chat",
+        path: `/tmp/cowork-one-off-${oneOffWorkspaceCounter}`,
+      };
+    },
     showContextMenu: async () => null,
     windowMinimize: async () => {},
     windowMaximize: async () => {},
@@ -425,6 +435,8 @@ describe("desktop JSON-RPC single connection path", () => {
   beforeEach(() => {
     setJsonRpcSocketOverride(MockJsonRpcSocket);
     startCalls.length = 0;
+    oneOffWorkspaceCalls.length = 0;
+    oneOffWorkspaceCounter = 0;
     savedStates.length = 0;
     jsonRpcRequests.length = 0;
     jsonRpcRequestHandlers.clear();
@@ -484,6 +496,96 @@ describe("desktop JSON-RPC single connection path", () => {
     clearJsonRpcSocketOverride();
   });
 
+  test("global newThread creates a one-off chat workspace and draft thread", async () => {
+    await useAppStore.getState().newThread();
+    await flushAsyncWork();
+
+    const state = useAppStore.getState();
+    expect(oneOffWorkspaceCalls).toHaveLength(1);
+    expect(state.workspaces[0]).toMatchObject({
+      path: "/tmp/cowork-one-off-1",
+      workspaceKind: "oneOffChat",
+      defaultProvider: "google",
+      defaultEnableMcp: true,
+      defaultBackupsEnabled: false,
+    });
+    expect(state.threads[0]).toMatchObject({
+      workspaceId: state.workspaces[0]?.id,
+      title: "New thread",
+      draft: true,
+    });
+    expect(state.selectedWorkspaceId).toBe(state.workspaces[0]?.id);
+    expect(state.selectedThreadId).toBe(state.threads[0]?.id);
+    expect(startCalls).toHaveLength(0);
+  });
+
+  test("project-scoped newThread reuses the selected project draft", async () => {
+    await useAppStore.getState().newThread({ workspaceId: "ws-jsonrpc", scope: "project" });
+    const firstDraftId = useAppStore.getState().selectedThreadId;
+    await useAppStore.getState().newThread({ workspaceId: "ws-jsonrpc", scope: "project" });
+
+    const state = useAppStore.getState();
+    expect(oneOffWorkspaceCalls).toHaveLength(0);
+    expect(state.threads).toHaveLength(1);
+    expect(state.selectedThreadId).toBe(firstDraftId);
+    expect(state.threads[0]).toMatchObject({
+      workspaceId: "ws-jsonrpc",
+      draft: true,
+    });
+  });
+
+  test("selected one-off New Chat creates a separate one-off draft and preserves the old draft model", async () => {
+    await useAppStore.getState().newThread();
+    const firstState = useAppStore.getState();
+    const firstThreadId = firstState.selectedThreadId;
+    if (!firstThreadId) throw new Error("missing first thread");
+
+    useAppStore.getState().setThreadModel(firstThreadId, "openai", "gpt-5.4");
+    await useAppStore.getState().newThread();
+    await flushAsyncWork();
+
+    const state = useAppStore.getState();
+    expect(oneOffWorkspaceCalls).toHaveLength(2);
+    expect(
+      state.workspaces.filter((workspace) => workspace.workspaceKind === "oneOffChat"),
+    ).toHaveLength(2);
+    expect(state.threads).toHaveLength(2);
+    expect(state.selectedThreadId).not.toBe(firstThreadId);
+    expect(state.threadRuntimeById[firstThreadId]?.draftComposerProvider).toBe("openai");
+    expect(state.threadRuntimeById[firstThreadId]?.draftComposerModel).toBe("gpt-5.4");
+  });
+
+  test("removing a one-off chat removes its hidden workspace without deleting project workspaces", async () => {
+    await useAppStore.getState().newThread();
+    const oneOffState = useAppStore.getState();
+    const oneOffThreadId = oneOffState.selectedThreadId;
+    const oneOffWorkspaceId = oneOffState.selectedWorkspaceId;
+    if (!oneOffThreadId || !oneOffWorkspaceId) throw new Error("missing one-off thread");
+
+    await useAppStore.getState().removeThread(oneOffThreadId);
+
+    const state = useAppStore.getState();
+    expect(state.workspaces.some((workspace) => workspace.id === oneOffWorkspaceId)).toBe(false);
+    expect(state.workspaces.some((workspace) => workspace.id === "ws-jsonrpc")).toBe(true);
+    expect(state.threads.some((thread) => thread.id === oneOffThreadId)).toBe(false);
+    expect(state.selectedWorkspaceId).toBe("ws-jsonrpc");
+  });
+
+  test("archiving a one-off chat hides the thread while retaining its hidden workspace", async () => {
+    await useAppStore.getState().newThread();
+    const oneOffState = useAppStore.getState();
+    const oneOffThreadId = oneOffState.selectedThreadId;
+    const oneOffWorkspaceId = oneOffState.selectedWorkspaceId;
+    if (!oneOffThreadId || !oneOffWorkspaceId) throw new Error("missing one-off thread");
+
+    await useAppStore.getState().archiveThread(oneOffThreadId);
+
+    const state = useAppStore.getState();
+    expect(state.workspaces.some((workspace) => workspace.id === oneOffWorkspaceId)).toBe(true);
+    expect(state.threads.find((thread) => thread.id === oneOffThreadId)?.archived).toBe(true);
+    expect(state.selectedThreadId).toBeNull();
+  });
+
   test("uses one workspace JsonRpcSocket for thread start and turn start", async () => {
     await useAppStore.getState().selectWorkspace("ws-jsonrpc");
     await useAppStore.getState().newThread({
@@ -525,6 +627,49 @@ describe("desktop JSON-RPC single connection path", () => {
       threadId: "jsonrpc-thread-1",
       input: [{ type: "text", text: "hello over jsonrpc" }],
       clientMessageId: expect.any(String),
+    });
+  });
+
+  test("surfaces first-message thread start failures in the chat feed", async () => {
+    jsonRpcRequestFailures.set("thread/start", "thread/start failed");
+
+    const created = await useAppStore.getState().newThread({
+      workspaceId: "ws-jsonrpc",
+      titleHint: "what happened at IO",
+      firstMessage: "what happened at IO",
+    });
+    await flushAsyncWork();
+
+    expect(created).toBe(true);
+    expect(jsonRpcRequests.map((entry) => entry.method)).toContain("thread/start");
+    expect(jsonRpcRequests.map((entry) => entry.method)).not.toContain("turn/start");
+
+    const state = useAppStore.getState();
+    const selectedThreadId = state.selectedThreadId;
+    expect(selectedThreadId).toEqual(expect.any(String));
+    const thread = state.threads.find((entry) => entry.id === selectedThreadId);
+    expect(thread).toMatchObject({
+      title: "what happened at IO",
+      status: "disconnected",
+      sessionId: null,
+    });
+    expect(state.threadRuntimeById[selectedThreadId!]?.feed).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "message",
+          role: "user",
+          text: "what happened at IO",
+        }),
+        expect.objectContaining({
+          kind: "error",
+          message: "Not connected. Reconnect to continue.",
+        }),
+      ]),
+    );
+    expect(state.notifications.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Unable to start chat",
+      detail: "thread/start failed",
     });
   });
 
@@ -601,6 +746,35 @@ describe("desktop JSON-RPC single connection path", () => {
     expect(jsonRpcRequests.find((entry) => entry.method === "turn/start")?.params).toMatchObject({
       threadId: "jsonrpc-thread-1",
       input: [{ type: "file", ...attachment }],
+      clientMessageId: expect.any(String),
+    });
+  });
+
+  test("shows attached MP3s in text turns without adding placeholder text to JSON-RPC input", async () => {
+    seedActiveThreadState();
+    const attachment = {
+      filename: "io-recap.mp3",
+      contentBase64: "YXVkaW8=",
+      mimeType: "audio/mpeg",
+    };
+
+    await useAppStore
+      .getState()
+      .sendMessage("what do you think of IO this year", "reject", [attachment]);
+    await flushAsyncWork();
+
+    const runtime = useAppStore.getState().threadRuntimeById["jsonrpc-thread-1"];
+    expect(runtime?.feed.at(-1)).toMatchObject({
+      kind: "message",
+      role: "user",
+      text: "what do you think of IO this year\n\nAttached: [io-recap.mp3]",
+    });
+    expect(jsonRpcRequests.find((entry) => entry.method === "turn/start")?.params).toMatchObject({
+      threadId: "jsonrpc-thread-1",
+      input: [
+        { type: "text", text: "what do you think of IO this year" },
+        { type: "file", ...attachment },
+      ],
       clientMessageId: expect.any(String),
     });
   });

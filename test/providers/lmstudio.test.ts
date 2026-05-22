@@ -125,7 +125,10 @@ describe("lmstudio provider", () => {
             updatedAt: new Date().toISOString(),
           },
         }),
-      readCodexAuthMaterialImpl: async () => null,
+      readCodexAppServerAccountImpl: async () => ({
+        account: null,
+        requiresOpenaiAuth: true,
+      }),
       lmstudioFetchImpl: fetchImpl as unknown as typeof fetch,
     });
 
@@ -140,7 +143,10 @@ describe("lmstudio provider", () => {
   test("getProviderCatalog surfaces unreachable LM Studio instances without crashing", async () => {
     const catalog = await getProviderCatalog({
       readStore: async () => makeStore(),
-      readCodexAuthMaterialImpl: async () => null,
+      readCodexAppServerAccountImpl: async () => ({
+        account: null,
+        requiresOpenaiAuth: true,
+      }),
       lmstudioFetchImpl: mock(async () => {
         throw new Error("connect ECONNREFUSED");
       }) as unknown as typeof fetch,

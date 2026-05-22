@@ -1,3 +1,4 @@
+import type { CodexAppServerInstallStatus } from "../../lib/wsProtocol";
 import {
   type AppStoreActions,
   ensureControlSocket,
@@ -8,6 +9,7 @@ import {
   providerAuthMethodsFor,
   pushNotification,
   RUNTIME,
+  requestJsonRpcControl,
   requestJsonRpcControlEvent,
   type StoreGet,
   type StoreSet,
@@ -114,6 +116,8 @@ export function createProviderActions(
   | "requestProviderCatalog"
   | "requestProviderAuthMethods"
   | "refreshProviderStatus"
+  | "checkCodexAppServerStatus"
+  | "updateCodexAppServer"
   | "setLmStudioEnabled"
   | "setLmStudioModelVisible"
 > {
@@ -551,6 +555,86 @@ export function createProviderActions(
 
       const path = get().workspaces.find((workspace) => workspace.id === workspaceId)?.path;
       await refreshProviderStatusForWorkspace(get, set, workspaceId, path, opts);
+    },
+
+    checkCodexAppServerStatus: async (opts) => {
+      const workspaceId = await ensureProviderControlReady();
+      if (!workspaceId) return;
+      const path = get().workspaces.find((workspace) => workspace.id === workspaceId)?.path;
+      set({ codexAppServerChecking: true });
+      try {
+        const result = (await requestJsonRpcControl(
+          get,
+          set,
+          workspaceId,
+          "cowork/provider/codexAppServer/status",
+          {
+            cwd: path,
+            ...(opts?.checkLatest ? { checkLatest: true } : {}),
+          },
+        )) as { status?: unknown };
+        const status = result.status;
+        if (status && typeof status === "object") {
+          set({ codexAppServerStatus: status as CodexAppServerInstallStatus });
+        }
+      } catch (error) {
+        set((s) => ({
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Codex app-server",
+            detail: error instanceof Error ? error.message : "Unable to read Codex app-server.",
+          }),
+        }));
+      } finally {
+        set({ codexAppServerChecking: false });
+      }
+    },
+
+    updateCodexAppServer: async () => {
+      const workspaceId = await ensureProviderControlReady();
+      if (!workspaceId) return;
+      const path = get().workspaces.find((workspace) => workspace.id === workspaceId)?.path;
+      set({ codexAppServerUpdating: true });
+      try {
+        const result = (await requestJsonRpcControl(
+          get,
+          set,
+          workspaceId,
+          "cowork/provider/codexAppServer/update",
+          { cwd: path },
+        )) as { status?: unknown };
+        const status = result.status;
+        if (status && typeof status === "object") {
+          set((s) => ({
+            codexAppServerStatus: status as CodexAppServerInstallStatus,
+            notifications: pushNotification(s.notifications, {
+              id: makeId(),
+              ts: nowIso(),
+              kind: "info",
+              title: "Codex app-server updated",
+              detail:
+                typeof (status as { message?: unknown }).message === "string"
+                  ? (status as { message: string }).message
+                  : "Installed the latest Cowork-managed Codex app-server.",
+            }),
+          }));
+        }
+        await get().refreshProviderStatus();
+      } catch (error) {
+        set((s) => ({
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Codex app-server update failed",
+            detail: error instanceof Error ? error.message : "Unable to update Codex app-server.",
+          }),
+        }));
+      } finally {
+        set({ codexAppServerUpdating: false });
+      }
     },
 
     setLmStudioEnabled: async (enabled) => {

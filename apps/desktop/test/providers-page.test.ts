@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -24,6 +24,7 @@ const MOCK_UPDATE_STATE = {
   release: null,
   progress: null,
   error: null,
+  relativeUpdateUrl: null,
 };
 
 mock.module("../src/lib/desktopCommands", () =>
@@ -193,7 +194,7 @@ describe("desktop providers page", () => {
     expect(html).toMatch(/class="[^"]*text-foreground[^"]*"[^>]*>.*Tool Providers<\/button>/);
   });
 
-  test("shows provider auth result while API key setup is still in editing mode", () => {
+  test("shows provider auth result while API key setup is still in editing mode", async () => {
     useAppStore.setState({
       ...useAppStore.getState(),
       providerLastAuthResult: {
@@ -236,11 +237,12 @@ describe("desktop providers page", () => {
     const requestProviderAuthMethods = mock(async () => {});
     const refreshProviderStatus = mock(async () => {});
     const harness = setupJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
 
     try {
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
-      const root = createRoot(container);
+      root = createRoot(container);
 
       await act(async () => {
         useAppStore.setState({
@@ -257,11 +259,14 @@ describe("desktop providers page", () => {
       expect(refreshProviderStatus).toHaveBeenCalledTimes(1);
       expect(requestProviderCatalog).not.toHaveBeenCalled();
       expect(requestProviderAuthMethods).not.toHaveBeenCalled();
-
-      await act(async () => {
-        root.unmount();
-      });
     } finally {
+      if (root) {
+        try {
+          await act(async () => {
+            root.unmount();
+          });
+        } catch {}
+      }
       harness.restore();
     }
   });
@@ -501,7 +506,7 @@ describe("desktop providers page", () => {
     expect(html).not.toContain("https://auth.openai.com/oauth/authorize");
   });
 
-  test("codex oauth card shows logout when connected", () => {
+  test("codex app-server card hides auth actions when connected", () => {
     useAppStore.setState({
       workspaces: [
         {
@@ -557,6 +562,15 @@ describe("desktop providers page", () => {
       } as any,
       providerLastAuthChallenge: null,
       providerLastAuthResult: null,
+      codexAppServerStatus: {
+        available: true,
+        source: "managed",
+        version: "0.128.0",
+        latestVersion: "0.129.0",
+        updateAvailable: true,
+        managedPath: "/Users/max/.cowork/codex-app-server/current/darwin-arm64/codex-app-server",
+        message: "Using Cowork-managed Codex app-server.",
+      },
     });
 
     const html = renderToStaticMarkup(
@@ -565,7 +579,9 @@ describe("desktop providers page", () => {
       }),
     );
 
-    expect(html).toContain("Log out");
+    expect(html).toContain("OAuth connected.");
+    expect(html).not.toContain("Sign in with ChatGPT (browser)");
+    expect(html).not.toContain("Log out");
   });
 
   test("codex provider card renders usage status and rate limits", () => {
@@ -684,6 +700,11 @@ describe("desktop providers page", () => {
     expect(html).toContain("0% remaining");
     expect(html).toContain("Using credits");
     expect(html).toContain("42.13 remaining");
+    expect(html).toContain("App server");
+    expect(html).toContain("Cowork managed");
+    expect(html).toContain("0.128.0");
+    expect(html).toContain("0.129.0");
+    expect(html).toContain("Using Cowork-managed Codex app-server.");
     expect(html).not.toContain("Allowed");
     expect(html).not.toContain("Limit reached");
     expect(html).not.toContain("Rate limited");
@@ -896,11 +917,12 @@ describe("desktop providers page", () => {
     const setLmStudioEnabled = mock(async () => {});
     const setLmStudioModelVisible = mock(async () => {});
     const refreshProviderStatus = mock(async () => {});
+    let root: ReturnType<typeof createRoot> | null = null;
 
     try {
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
-      const root = createRoot(container);
+      root = createRoot(container);
 
       await act(async () => {
         useAppStore.setState({
@@ -980,11 +1002,14 @@ describe("desktop providers page", () => {
         modelCheckbox.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
       });
       expect(setLmStudioModelVisible).toHaveBeenCalledWith("qwen/qwen3-30b-a3b", false);
-
-      await act(async () => {
-        root.unmount();
-      });
     } finally {
+      if (root) {
+        try {
+          await act(async () => {
+            root.unmount();
+          });
+        } catch {}
+      }
       harness.restore();
     }
   });

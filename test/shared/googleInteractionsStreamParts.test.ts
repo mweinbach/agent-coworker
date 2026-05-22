@@ -45,6 +45,169 @@ describe("googleInteractionsStreamParts", () => {
     });
   });
 
+  test("preserves SDK text_annotation deltas on final text-end parts", () => {
+    const contentBlocks = new Map();
+    const providerToolCallsById = new Map();
+
+    processGoogleInteractionsStreamEvent(
+      {
+        event_type: "content.start",
+        index: 0,
+        content: { type: "text" },
+      },
+      contentBlocks,
+      providerToolCallsById,
+    );
+    processGoogleInteractionsStreamEvent(
+      {
+        event_type: "content.delta",
+        index: 0,
+        delta: { type: "text", text: "Cited answer" },
+      },
+      contentBlocks,
+      providerToolCallsById,
+    );
+    processGoogleInteractionsStreamEvent(
+      {
+        event_type: "content.delta",
+        index: 0,
+        delta: {
+          type: "text_annotation",
+          annotations: [{ type: "url_citation", url: "https://example.com" }],
+        },
+      },
+      contentBlocks,
+      providerToolCallsById,
+    );
+
+    expect(contentBlocks.get(0)).toEqual({
+      type: "text",
+      text: "Cited answer",
+      annotations: [{ type: "url_citation", url: "https://example.com" }],
+    });
+    expect(
+      mapGoogleInteractionsEventToStreamParts(
+        { event_type: "content.stop", index: 0 },
+        contentBlocks,
+        providerToolCallsById,
+      ),
+    ).toEqual([
+      {
+        type: "text-end",
+        id: "s0",
+        annotations: [{ type: "url_citation", url: "https://example.com" }],
+      },
+    ]);
+  });
+
+  test("treats SDK v2 model_output blocks as assistant text", () => {
+    const contentBlocks = new Map();
+    const providerToolCallsById = new Map();
+
+    const startEvent = {
+      event_type: "step.start",
+      index: 1,
+      step: { type: "model_output" },
+    };
+    processGoogleInteractionsStreamEvent(startEvent, contentBlocks, providerToolCallsById);
+    expect(
+      mapGoogleInteractionsEventToStreamParts(startEvent, contentBlocks, providerToolCallsById),
+    ).toEqual([{ type: "text-start", id: "s1" }]);
+
+    const deltaEvent = {
+      event_type: "step.delta",
+      index: 1,
+      delta: { type: "text", text: "Final answer." },
+    };
+    processGoogleInteractionsStreamEvent(deltaEvent, contentBlocks, providerToolCallsById);
+
+    expect(contentBlocks.get(1)).toEqual({ type: "text", text: "Final answer." });
+    expect(
+      mapGoogleInteractionsEventToStreamParts(deltaEvent, contentBlocks, providerToolCallsById),
+    ).toEqual([{ type: "text-delta", id: "s1", text: "Final answer." }]);
+    expect(
+      mapGoogleInteractionsEventToStreamParts(
+        { event_type: "step.stop", index: 1 },
+        contentBlocks,
+        providerToolCallsById,
+      ),
+    ).toEqual([{ type: "text-end", id: "s1" }]);
+  });
+
+  test("emits thought summaries included on SDK content.start blocks", () => {
+    const contentBlocks = new Map();
+    const providerToolCallsById = new Map();
+    const startEvent = {
+      event_type: "content.start",
+      index: 0,
+      content: {
+        type: "thought",
+        signature: "sig_start",
+        summary: [{ type: "text", text: "Initial reasoning." }],
+      },
+    };
+
+    processGoogleInteractionsStreamEvent(startEvent, contentBlocks, providerToolCallsById);
+
+    expect(contentBlocks.get(0)).toEqual({
+      type: "thinking",
+      thinking: "Initial reasoning.",
+      thinkingSignature: "sig_start",
+    });
+    expect(
+      mapGoogleInteractionsEventToStreamParts(startEvent, contentBlocks, providerToolCallsById),
+    ).toEqual([
+      { type: "reasoning-start", id: "s0" },
+      { type: "reasoning-delta", id: "s0", text: "Initial reasoning." },
+    ]);
+  });
+
+  test("maps SDK v2 step events and arguments deltas", () => {
+    const contentBlocks = new Map();
+    const providerToolCallsById = new Map();
+
+    const startEvent = {
+      event_type: "step.start",
+      index: 0,
+      step: {
+        type: "function_call",
+        id: "call_v2",
+        name: "bash",
+        arguments: {},
+      },
+    };
+    processGoogleInteractionsStreamEvent(startEvent, contentBlocks, providerToolCallsById);
+    expect(
+      mapGoogleInteractionsEventToStreamParts(startEvent, contentBlocks, providerToolCallsById),
+    ).toEqual([{ type: "tool-input-start", id: "call_v2", toolName: "bash" }]);
+
+    const deltaEvent = {
+      event_type: "step.delta",
+      index: 0,
+      delta: { type: "arguments_delta", arguments: '{"command":"pwd"}' },
+    };
+    processGoogleInteractionsStreamEvent(deltaEvent, contentBlocks, providerToolCallsById);
+    expect(contentBlocks.get(0)).toEqual({
+      type: "toolCall",
+      id: "call_v2",
+      name: "bash",
+      arguments: { command: "pwd" },
+    });
+    expect(
+      mapGoogleInteractionsEventToStreamParts(deltaEvent, contentBlocks, providerToolCallsById),
+    ).toEqual([{ type: "tool-input-delta", id: "call_v2", delta: '{"command":"pwd"}' }]);
+    expect(
+      mapGoogleInteractionsEventToStreamParts(
+        { event_type: "step.stop", index: 0 },
+        contentBlocks,
+        providerToolCallsById,
+      ),
+    ).toEqual([
+      { type: "tool-input-end", id: "call_v2" },
+      { type: "tool-call", toolCallId: "call_v2", toolName: "bash", input: { command: "pwd" } },
+    ]);
+  });
+
   test("keeps the first emitted function_call id stable during replay projection", () => {
     const contentBlocks = new Map();
     const providerToolCallsById = new Map();
@@ -193,6 +356,63 @@ describe("googleInteractionsStreamParts", () => {
         providerExecuted: true,
       },
     ]);
+  });
+
+  test("replay ignores native code execution blocks", () => {
+    const contentBlocks = new Map();
+    const providerToolCallsById = new Map();
+
+    const startEvent = {
+      event_type: "content.start",
+      index: 0,
+      content: {
+        type: "code_execution_call",
+      },
+    };
+    processGoogleInteractionsStreamEvent(startEvent, contentBlocks, providerToolCallsById);
+
+    expect(contentBlocks.get(0)).toBeUndefined();
+    expect(
+      mapGoogleInteractionsEventToStreamParts(startEvent, contentBlocks, providerToolCallsById),
+    ).toEqual([]);
+
+    const deltaEvent = {
+      event_type: "content.delta",
+      index: 0,
+      delta: {
+        type: "code_execution_call",
+        id: "code_real",
+        arguments: { code: "print(6 * 7)", language: "python" },
+      },
+    };
+    processGoogleInteractionsStreamEvent(deltaEvent, contentBlocks, providerToolCallsById);
+
+    expect(contentBlocks.get(0)).toBeUndefined();
+    expect(
+      mapGoogleInteractionsEventToStreamParts(deltaEvent, contentBlocks, providerToolCallsById),
+    ).toEqual([]);
+
+    processGoogleInteractionsStreamEvent(
+      {
+        event_type: "content.start",
+        index: 1,
+        content: {
+          type: "code_execution_result",
+          call_id: "code_real",
+          result: "42\n",
+        },
+      },
+      contentBlocks,
+      providerToolCallsById,
+    );
+
+    expect(
+      mapGoogleInteractionsEventToStreamParts(
+        { event_type: "content.stop", index: 1 },
+        contentBlocks,
+        providerToolCallsById,
+      ),
+    ).toEqual([]);
   });
 
   test("preserves singleton native URL context result objects", () => {

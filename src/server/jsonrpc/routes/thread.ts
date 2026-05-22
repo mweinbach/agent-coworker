@@ -4,28 +4,48 @@ import {
   primeSessionSnapshotCitationCache,
 } from "../../citationMetadata";
 import type { PersistedSessionRecord } from "../../sessionDb";
-import { JSONRPC_ERROR_CODES } from "../protocol";
+import { JSONRPC_ERROR_CODES, type JsonRpcLiteRequest } from "../protocol";
 import { jsonRpcThreadTurnRequestSchemas } from "../schema.threadTurn";
 import { createThreadTurnProjector } from "../threadReadProjector";
 
-import { toJsonRpcParams } from "./shared";
 import type { JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
 
 const THREAD_READ_JOURNAL_BATCH_SIZE = 250;
 
+function sendInvalidParams(
+  context: JsonRpcRouteContext,
+  ws: Parameters<JsonRpcRouteContext["jsonrpc"]["sendError"]>[0],
+  message: JsonRpcLiteRequest,
+  detail?: string,
+) {
+  context.jsonrpc.sendError(ws, message.id, {
+    code: JSONRPC_ERROR_CODES.invalidParams,
+    message: detail ? `${message.method}: ${detail}` : `${message.method}: invalid params`,
+  });
+}
+
 export function createThreadRouteHandlers(context: JsonRpcRouteContext): JsonRpcRequestHandlerMap {
   return {
     "thread/start": async (ws, message) => {
-      const params = toJsonRpcParams(message.params);
-      const provider =
-        typeof params.provider === "string"
-          ? (params.provider as AgentConfig["provider"])
-          : undefined;
-      const model = typeof params.model === "string" ? params.model : undefined;
-      const cwd =
-        typeof params.cwd === "string" && params.cwd.trim()
-          ? params.cwd.trim()
-          : context.getConfig().workingDirectory;
+      const parsed = jsonRpcThreadTurnRequestSchemas["thread/start"].safeParse(
+        message.params ?? {},
+      );
+      if (!parsed.success) {
+        sendInvalidParams(context, ws, message, parsed.error.issues[0]?.message);
+        return;
+      }
+      const provider = parsed.data.provider as AgentConfig["provider"] | undefined;
+      const model = parsed.data.model;
+      let cwd: string;
+      try {
+        cwd = context.utils.resolveWorkspacePath(parsed.data, message.method);
+      } catch (error) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: error instanceof Error ? error.message : `${message.method} requires cwd`,
+        });
+        return;
+      }
       const runtime = context.threads.create({ cwd, provider, model });
       context.threads.subscribe(ws, runtime.id);
       const thread = context.utils.buildThreadFromSession(runtime);
@@ -47,19 +67,12 @@ export function createThreadRouteHandlers(context: JsonRpcRouteContext): JsonRpc
     },
 
     "thread/resume": async (ws, message) => {
-      const params = toJsonRpcParams(message.params);
-      const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
-      const afterSeq =
-        typeof params.afterSeq === "number" && Number.isFinite(params.afterSeq)
-          ? Math.max(0, Math.floor(params.afterSeq))
-          : 0;
-      if (!threadId) {
-        context.jsonrpc.sendError(ws, message.id, {
-          code: JSONRPC_ERROR_CODES.invalidParams,
-          message: "thread/resume requires threadId",
-        });
+      const parsed = jsonRpcThreadTurnRequestSchemas["thread/resume"].safeParse(message.params);
+      if (!parsed.success) {
+        sendInvalidParams(context, ws, message, parsed.error.issues[0]?.message);
         return;
       }
+      const { threadId, afterSeq = 0 } = parsed.data;
       const binding = context.threads.load(threadId);
       if (!binding?.runtime) {
         context.jsonrpc.sendError(ws, message.id, {
@@ -92,8 +105,12 @@ export function createThreadRouteHandlers(context: JsonRpcRouteContext): JsonRpc
     },
 
     "thread/list": (ws, message) => {
-      const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.resolveWorkspacePath(params, message.method);
+      const parsed = jsonRpcThreadTurnRequestSchemas["thread/list"].safeParse(message.params ?? {});
+      if (!parsed.success) {
+        sendInvalidParams(context, ws, message, parsed.error.issues[0]?.message);
+        return;
+      }
+      const cwd = context.utils.resolveWorkspacePath(parsed.data, message.method);
       const threads = new Map<
         string,
         ReturnType<JsonRpcRouteContext["utils"]["buildThreadFromRecord"]>
@@ -123,15 +140,12 @@ export function createThreadRouteHandlers(context: JsonRpcRouteContext): JsonRpc
     },
 
     "thread/read": async (ws, message) => {
-      const params = toJsonRpcParams(message.params);
-      const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
-      if (!threadId) {
-        context.jsonrpc.sendError(ws, message.id, {
-          code: JSONRPC_ERROR_CODES.invalidParams,
-          message: "thread/read requires threadId",
-        });
+      const parsed = jsonRpcThreadTurnRequestSchemas["thread/read"].safeParse(message.params);
+      if (!parsed.success) {
+        sendInvalidParams(context, ws, message, parsed.error.issues[0]?.message);
         return;
       }
+      const { threadId, includeTurns = false } = parsed.data;
       const snapshot = context.threads.readSnapshot(threadId);
       if (!snapshot) {
         context.jsonrpc.sendError(ws, message.id, {
@@ -157,7 +171,7 @@ export function createThreadRouteHandlers(context: JsonRpcRouteContext): JsonRpc
       const enrichedSnapshot = enrichSessionSnapshotCitationsFromCache(snapshot);
       let journalTailSeq = 0;
       let turns: ReturnType<ReturnType<typeof createThreadTurnProjector>["build"]> | undefined;
-      if (params.includeTurns === true) {
+      if (includeTurns) {
         const projector = createThreadTurnProjector();
         let afterSeq = 0;
         while (true) {
@@ -185,7 +199,7 @@ export function createThreadRouteHandlers(context: JsonRpcRouteContext): JsonRpc
           ...(turns ? { turns } : {}),
         },
         coworkSnapshot: enrichedSnapshot,
-        ...(params.includeTurns === true ? { journalTailSeq } : {}),
+        ...(includeTurns ? { journalTailSeq } : {}),
       });
       queueMicrotask(() => {
         primeSessionSnapshotCitationCache(enrichedSnapshot);
@@ -263,15 +277,14 @@ export function createThreadRouteHandlers(context: JsonRpcRouteContext): JsonRpc
     },
 
     "thread/unsubscribe": (ws, message) => {
-      const params = toJsonRpcParams(message.params);
-      const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
-      if (!threadId) {
-        context.jsonrpc.sendError(ws, message.id, {
-          code: JSONRPC_ERROR_CODES.invalidParams,
-          message: "thread/unsubscribe requires threadId",
-        });
+      const parsed = jsonRpcThreadTurnRequestSchemas["thread/unsubscribe"].safeParse(
+        message.params,
+      );
+      if (!parsed.success) {
+        sendInvalidParams(context, ws, message, parsed.error.issues[0]?.message);
         return;
       }
+      const { threadId } = parsed.data;
       const status = context.threads.unsubscribe(ws, threadId);
       context.jsonrpc.sendResult(ws, message.id, { status });
       if (status === "unsubscribed") {

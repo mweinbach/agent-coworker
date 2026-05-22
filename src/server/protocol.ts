@@ -58,7 +58,7 @@ export type MCPServerAuthMode =
 
 // Version of the internal session event payload schema documented for JSON-RPC
 // control envelopes and persisted session artifacts.
-export const WEBSOCKET_PROTOCOL_VERSION = "7.31";
+export const WEBSOCKET_PROTOCOL_VERSION = "7.33";
 
 export type SessionConfigPatch = {
   yolo?: boolean;

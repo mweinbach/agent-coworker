@@ -268,7 +268,6 @@ export function defaultWorkspaceRuntime(): WorkspaceRuntime {
     openAiNativeConnectorsAuthenticated: false,
     openAiNativeConnectorsMessage: null,
     openAiNativeConnectorsEnabledIds: [],
-    openAiNativeConnectorsServerName: null,
     pluginsCatalog: null,
     selectedPluginId: null,
     selectedPluginScope: null,

@@ -515,7 +515,8 @@ async function fetchWithSafeRedirects(
       {
         redirect: "manual",
         headers: {
-          "User-Agent": "agent-coworker/0.1",
+          "User-Agent":
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
           Host: hostHeader,
         },
       },
@@ -737,6 +738,9 @@ export function createWebFetchTool(ctx: ToolContext) {
       );
 
       if (contentKind.kind === "download") {
+        if (ctx.shellPolicy === "no_project_write") {
+          throw new Error("webFetch downloads are disabled for read-only roles");
+        }
         const downloadDir = resolveMaybeRelative("Downloads", ctx.config.workingDirectory);
         const targetPath = path.join(downloadDir, contentKind.fileName);
         const allowedTargetPath = await assertWritePathAllowed(targetPath, ctx.config, "write");

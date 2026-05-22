@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
+import { CheckCircle2Icon, RefreshCwIcon, TriangleAlertIcon } from "lucide-react";
 
 import { useAppStore } from "../../../app/store";
+import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import {
   Card,
@@ -18,7 +20,11 @@ import {
   SelectValue,
 } from "../../../components/ui/select";
 import { Switch } from "../../../components/ui/switch";
-import { DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS } from "../../../lib/wsProtocol";
+import {
+  DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS,
+  type LibreOfficeRuntimeDiagnostic,
+} from "../../../lib/wsProtocol";
+import { Spinner } from "../../../components/ui/spinner";
 
 function parseOverflowThresholdDraft(value: string): number | null {
   const trimmed = value.trim();
@@ -26,6 +32,23 @@ function parseOverflowThresholdDraft(value: string): number | null {
   if (!/^\d+$/.test(trimmed)) return null;
   const parsed = Number.parseInt(trimmed, 10);
   return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
+function libreOfficeBadge(status: LibreOfficeRuntimeDiagnostic | null): {
+  label: string;
+  variant: "default" | "secondary" | "destructive" | "outline";
+} {
+  if (!status) return { label: "Not checked", variant: "secondary" };
+  if (status.status === "available") return { label: "Available", variant: "default" };
+  if (status.status === "disabled") return { label: "Disabled", variant: "outline" };
+  return { label: "Unavailable", variant: "destructive" };
+}
+
+function smokeSummary(status: LibreOfficeRuntimeDiagnostic | null): string {
+  if (!status?.smoke) return "Not run";
+  if (!status.smoke.ok) return status.smoke.error ?? "Failed";
+  const size = status.smoke.sizeBytes ? `${status.smoke.sizeBytes.toLocaleString()} bytes` : "PDF";
+  return `${size} in ${status.smoke.durationMs.toLocaleString()}ms`;
 }
 
 export function DeveloperPage() {
@@ -42,6 +65,11 @@ export function DeveloperPage() {
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const selectWorkspace = useAppStore((s) => s.selectWorkspace);
   const updateWorkspaceDefaults = useAppStore((s) => s.updateWorkspaceDefaults);
+  const checkLibreOfficeRuntime = useAppStore((s) => s.checkLibreOfficeRuntime);
+  const [libreOfficeStatus, setLibreOfficeStatus] = useState<LibreOfficeRuntimeDiagnostic | null>(
+    null,
+  );
+  const [libreOfficeChecking, setLibreOfficeChecking] = useState(false);
 
   const workspace = useMemo(
     () => workspaces.find((entry) => entry.id === selectedWorkspaceId) ?? workspaces[0] ?? null,
@@ -93,6 +121,18 @@ export function DeveloperPage() {
     overflowEnabled &&
     parsedOverflowThreshold !== null &&
     parsedOverflowThreshold !== persistedOverflowThreshold;
+  const libreOfficeState = libreOfficeBadge(libreOfficeStatus);
+  const libreOfficeHealthy = libreOfficeStatus?.status === "available";
+
+  const runLibreOfficeCheck = async () => {
+    setLibreOfficeChecking(true);
+    try {
+      const status = await checkLibreOfficeRuntime({ smoke: true });
+      if (status) setLibreOfficeStatus(status);
+    } finally {
+      setLibreOfficeChecking(false);
+    }
+  };
 
   return (
     <div className="space-y-5">
@@ -136,6 +176,63 @@ export function DeveloperPage() {
               aria-label="Enable developer mode"
               onCheckedChange={setDeveloperMode}
             />
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="border-border/80 bg-card/85">
+        <CardHeader>
+          <div className="flex items-start justify-between gap-3 max-[720px]:flex-col">
+            <div>
+              <CardTitle>LibreOffice Runtime</CardTitle>
+              <CardDescription>Managed document conversion health.</CardDescription>
+            </div>
+            <Badge variant={libreOfficeState.variant}>
+              {libreOfficeHealthy ? (
+                <CheckCircle2Icon aria-hidden="true" />
+              ) : libreOfficeStatus ? (
+                <TriangleAlertIcon aria-hidden="true" />
+              ) : null}
+              {libreOfficeState.label}
+            </Badge>
+          </div>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          <div className="grid gap-3 text-xs text-muted-foreground md:grid-cols-2">
+            <div>
+              <div className="text-sm font-medium text-foreground">Shim</div>
+              <div className="break-all">{libreOfficeStatus?.shimPath ?? "Not checked"}</div>
+            </div>
+            <div>
+              <div className="text-sm font-medium text-foreground">Resolved executable</div>
+              <div className="break-all">{libreOfficeStatus?.resolvedPath ?? "Not checked"}</div>
+            </div>
+            <div>
+              <div className="text-sm font-medium text-foreground">Version</div>
+              <div>{libreOfficeStatus?.version ?? "Not checked"}</div>
+            </div>
+            <div>
+              <div className="text-sm font-medium text-foreground">PDF smoke test</div>
+              <div className="break-words">{smokeSummary(libreOfficeStatus)}</div>
+            </div>
+          </div>
+          {libreOfficeStatus ? (
+            <div className="text-xs text-muted-foreground">{libreOfficeStatus.message}</div>
+          ) : null}
+          <div>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={libreOfficeChecking || !workspace}
+              onClick={() => void runLibreOfficeCheck()}
+            >
+              {libreOfficeChecking ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <RefreshCwIcon data-icon="inline-start" />
+              )}
+              Check runtime
+            </Button>
           </div>
         </CardContent>
       </Card>

@@ -174,6 +174,8 @@ If you are not using TypeScript, connect with any WebSocket client. The protocol
 { "method": "initialized" }
 ```
 
+Mobile H3 HTTP JSON-RPC clients receive the same initialize shape with `transport.type` and `transport.protocolMode` set to `"h3"`.
+
 **4. Send JSON-RPC requests and receive notifications.** Start or resume a thread, then use `turn/start` and render `turn/*` + `item/*` notifications.
 
 See [websocket-protocol.md](websocket-protocol.md) for the full contract — every message type, every field, every validation rule.

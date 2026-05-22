@@ -134,6 +134,77 @@ describe("session managers", () => {
     expect(emitted.some((evt) => evt.type === "session_info")).toBe(true);
   });
 
+  test("SessionAdminManager getMessages prefers live state over stale database rows", () => {
+    const context = makeBaseContext();
+    const emitted: any[] = [];
+    context.emit = (evt) => emitted.push(evt);
+    context.state.allMessages = [{ role: "user", content: "live" }] as any;
+    context.deps.sessionDb = {
+      getMessages: () => ({
+        total: 1,
+        messages: [{ role: "user", content: "stale" }],
+      }),
+    } as any;
+    const manager = new SessionAdminManager(context);
+
+    manager.getMessages();
+
+    expect(emitted).toContainEqual({
+      type: "messages",
+      sessionId: "session-1",
+      messages: [{ role: "user", content: "live" }],
+      total: 1,
+      offset: 0,
+      limit: 100,
+    });
+  });
+
+  test("SessionAdminManager deleteSession blocks live targets outside the active workspace", async () => {
+    const context = makeBaseContext();
+    const errors: any[] = [];
+    let deleteCalled = false;
+    context.emitError = (code, source, message) => errors.push({ code, source, message });
+    context.deps.getLiveSessionWorkingDirectoryImpl = () => "/tmp/other-project";
+    context.deps.deleteSessionImpl = async () => {
+      deleteCalled = true;
+    };
+    const manager = new SessionAdminManager(context);
+
+    await manager.deleteSession("other-session");
+
+    expect(deleteCalled).toBe(false);
+    expect(errors).toContainEqual({
+      code: "permission_denied",
+      source: "session",
+      message: "Target session is outside the active workspace",
+    });
+  });
+
+  test("SessionAdminManager deleteSession blocks persisted targets outside the active workspace", async () => {
+    const context = makeBaseContext();
+    const errors: any[] = [];
+    let deleteCalled = false;
+    context.emitError = (code, source, message) => errors.push({ code, source, message });
+    context.deps.sessionDb = {
+      getSessionRecord: () => ({
+        workingDirectory: "/tmp/other-project",
+      }),
+    } as any;
+    context.deps.deleteSessionImpl = async () => {
+      deleteCalled = true;
+    };
+    const manager = new SessionAdminManager(context);
+
+    await manager.deleteSession("other-session");
+
+    expect(deleteCalled).toBe(false);
+    expect(errors).toContainEqual({
+      code: "permission_denied",
+      source: "session",
+      message: "Target session is outside the active workspace",
+    });
+  });
+
   test("McpManager validate emits error event when lookup throws and clears connecting", async () => {
     const context = makeBaseContext();
     const emitted: any[] = [];

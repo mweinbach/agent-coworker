@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import type { DesktopPlatformInfo } from "../src/lib/desktopPlatform";
 import { getSettingsDragZoneStyle, getSettingsGroups } from "../src/ui/settings/SettingsShell";
 
@@ -69,5 +71,22 @@ describe("settings shell", () => {
         }),
       ),
     ).toEqual({ left: 280 });
+  });
+
+  test("places the macOS settings back button below the traffic light strip", () => {
+    const darwinCss = readFileSync(
+      resolve(import.meta.dir, "../src/styles/platform/darwin.css"),
+      "utf8",
+    );
+
+    expect(darwinCss).toMatch(
+      /:root\[data-platform="darwin"\]\s+\.settings-shell__nav\s*\{[^}]*z-index:\s*81;/s,
+    );
+    expect(darwinCss).toMatch(
+      /\.settings-shell__nav-titleband\s*\{[^}]*min-height:\s*calc\(var\(--platform-titlebar-height\)\s*\+\s*2\.75rem\);[^}]*padding-top:\s*var\(--platform-titlebar-height\);/s,
+    );
+    expect(darwinCss).toMatch(
+      /\.settings-shell__nav-titleband-row\s*\{[^}]*padding-left:\s*0\.75rem;/s,
+    );
   });
 });

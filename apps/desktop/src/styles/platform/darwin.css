@@ -32,15 +32,18 @@
 }
 
 :root[data-platform="darwin"] .settings-shell__nav {
+  position: relative;
+  z-index: 81;
   padding-top: 0;
 }
 
 :root[data-platform="darwin"] .settings-shell__nav-titleband {
   position: relative;
   display: flex;
-  align-items: center;
-  min-height: 2.75rem;
-  padding-top: 4px;
+  align-items: flex-end;
+  min-height: calc(var(--platform-titlebar-height) + 2.75rem);
+  padding-top: var(--platform-titlebar-height);
+  padding-bottom: 0.5rem;
 }
 
 :root[data-platform="darwin"] .settings-shell__nav-titleband-drag-zone {
@@ -54,6 +57,8 @@
   position: relative;
   z-index: 1;
   width: 100%;
+  padding-left: 0.75rem;
+  padding-right: 0.75rem;
   pointer-events: none;
 }
 

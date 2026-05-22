@@ -4,6 +4,12 @@
  * Reads `data-platform` from the document root (set in App.tsx from
  * SystemAppearance) and normalizes to a stable DesktopPlatform enum.
  *
+ * Platform naming convention:
+ * - `data-platform` / Node / Electron use raw OS ids: `darwin`, `win32`, `linux`
+ * - Renderer TypeScript uses normalized ids: `macos`, `windows`, `linux`, `other`
+ * - CSS selectors target raw values (`:root[data-platform="win32"]`)
+ * - Components should use `useDesktopPlatform()` / `DesktopPlatformInfo.platform`
+ *
  * This replaces scattered `process.platform === "darwin"` checks throughout
  * the renderer. Components should prefer these normalized values over
  * raw platform strings.
@@ -21,6 +27,9 @@ export type DesktopPlatformInfo = {
   topbarControlPlacement: TopbarControlPlacement;
   usesNativeGlass: boolean;
   disableCssBlur: boolean;
+  captionButtonReserve: number;
+  collapsedLeftRailWidth: number;
+  topbarToolbarGap: number;
 };
 
 /**
@@ -39,6 +48,29 @@ export function normalizePlatform(raw: string | undefined): DesktopPlatform {
   }
 }
 
+function readPlatformMetric(datasetValue: string | undefined, fallback: number): number {
+  if (datasetValue === undefined || datasetValue === "") {
+    return fallback;
+  }
+  const parsed = Number.parseFloat(datasetValue);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function defaultCaptionButtonReserve(platform: DesktopPlatform): number {
+  return platform === "windows" ? 136 : 0;
+}
+
+function defaultCollapsedLeftRailWidth(platform: DesktopPlatform): number {
+  return platform === "windows" ? 84 : 0;
+}
+
+function defaultTopbarToolbarGap(platform: DesktopPlatform): number {
+  if (platform === "macos" || platform === "other") {
+    return 0;
+  }
+  return 6;
+}
+
 /**
  * Read the current platform info from document root attributes.
  *
@@ -54,6 +86,9 @@ export function getDesktopPlatformInfo(): DesktopPlatformInfo {
       topbarControlPlacement: "inline",
       usesNativeGlass: false,
       disableCssBlur: false,
+      captionButtonReserve: 0,
+      collapsedLeftRailWidth: 0,
+      topbarToolbarGap: 0,
     };
   }
 
@@ -70,6 +105,18 @@ export function getDesktopPlatformInfo(): DesktopPlatformInfo {
     defaultTopbarControlPlacement(platform);
   const usesNativeGlass = root.dataset.usesNativeGlass === "true" || platform === "macos";
   const disableCssBlur = root.dataset.disableCssBlur === "true" || platform === "macos";
+  const captionButtonReserve = readPlatformMetric(
+    root.dataset.captionButtonReserve,
+    defaultCaptionButtonReserve(platform),
+  );
+  const collapsedLeftRailWidth = readPlatformMetric(
+    root.dataset.collapsedLeftRailWidth,
+    defaultCollapsedLeftRailWidth(platform),
+  );
+  const topbarToolbarGap = readPlatformMetric(
+    root.dataset.topbarToolbarGap,
+    defaultTopbarToolbarGap(platform),
+  );
 
   return {
     platform,
@@ -78,6 +125,9 @@ export function getDesktopPlatformInfo(): DesktopPlatformInfo {
     topbarControlPlacement,
     usesNativeGlass,
     disableCssBlur,
+    captionButtonReserve,
+    collapsedLeftRailWidth,
+    topbarToolbarGap,
   };
 }
 
@@ -104,4 +154,11 @@ export function isWindows(info: DesktopPlatformInfo): boolean {
 
 export function isLinux(info: DesktopPlatformInfo): boolean {
   return info.platform === "linux";
+}
+
+export function resolveCollapsedLeftRailWidth(info: DesktopPlatformInfo): number {
+  if (info.collapsedLeftRailWidth > 0) {
+    return info.collapsedLeftRailWidth;
+  }
+  return info.platform === "windows" ? 84 : 0;
 }

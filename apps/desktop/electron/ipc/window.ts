@@ -168,6 +168,8 @@ export function registerWindowIpc(context: DesktopIpcModuleContext): void {
       leftNativeReserve: chrome.leftNativeReserve,
       rightNativeReserve: chrome.rightNativeReserve,
       captionButtonReserve: chrome.captionButtonReserve,
+      collapsedLeftRailWidth: chrome.collapsedLeftRailWidth,
+      topbarToolbarGap: chrome.topbarToolbarGap,
       sidebarTitlebandMode: chrome.sidebarTitlebandMode,
       topbarControlPlacement: chrome.topbarControlPlacement,
       usesNativeGlass: chrome.usesNativeGlass,

@@ -270,6 +270,10 @@ describe("desktop app top bar", () => {
       expect(buttons[0]?.getAttribute("aria-label")).toBe("Show sidebar");
       expect(buttons[1]?.getAttribute("aria-label")).toBe("New Chat");
       expect(titleShell?.getAttribute("style")).toContain("left: 84px");
+      const contentFill = container.querySelector(
+        ".app-topbar__content-fill",
+      ) as HTMLElement | null;
+      expect(contentFill?.getAttribute("style")).toContain("left: 84px");
 
       await act(async () => {
         root.unmount();

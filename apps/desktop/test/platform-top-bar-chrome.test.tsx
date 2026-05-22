@@ -47,6 +47,7 @@ describe("PlatformTopBarChrome", () => {
               topbarControlPlacement: "sidebar",
             }),
             sidebarCollapsed: false,
+            sidebarWidth: 280,
             onToggleSidebar: () => {},
             onNewChat: () => {},
             sidebarLabel: "Hide sidebar",
@@ -83,6 +84,7 @@ describe("PlatformTopBarChrome", () => {
               topbarControlPlacement: "left-rail",
             }),
             sidebarCollapsed: false,
+            sidebarWidth: 280,
             onToggleSidebar: () => {},
             onNewChat: () => {},
             sidebarLabel: "Hide sidebar",
@@ -95,6 +97,11 @@ describe("PlatformTopBarChrome", () => {
       expect(container.querySelector(".app-topbar__inline-sidebar-toggle")).toBeNull();
       expect(container.querySelector('button[aria-label="New Chat"]')).toBeNull();
       expect(container.querySelector('button[aria-label="Hide sidebar"]')).not.toBeNull();
+
+      const leftRail = container.querySelector(
+        ".app-topbar__win32-left-rail",
+      ) as HTMLElement | null;
+      expect(leftRail?.style.width).toBe("280px");
 
       await act(async () => {
         root.unmount();
@@ -123,6 +130,7 @@ describe("PlatformTopBarChrome", () => {
               topbarControlPlacement: "left-rail",
             }),
             sidebarCollapsed: true,
+            sidebarWidth: 280,
             onToggleSidebar,
             onNewChat,
             sidebarLabel: "Show sidebar",
@@ -136,6 +144,7 @@ describe("PlatformTopBarChrome", () => {
       expect(buttons).toHaveLength(2);
       expect(buttons[0]?.getAttribute("aria-label")).toBe("Show sidebar");
       expect(buttons[1]?.getAttribute("aria-label")).toBe("New Chat");
+      expect((leftRail as HTMLElement).style.width).toBe("84px");
 
       await act(async () => {
         root.unmount();
@@ -161,6 +170,7 @@ describe("PlatformTopBarChrome", () => {
               topbarControlPlacement: "inline",
             }),
             sidebarCollapsed: false,
+            sidebarWidth: 280,
             onToggleSidebar: () => {},
             onNewChat: () => {},
             sidebarLabel: "Hide sidebar",

@@ -22,7 +22,7 @@
  * Use this for surfaces that MUST be visually opaque on every platform —
  * e.g. modal/dialog content, popover bodies. Backed by `--panel-bg` (a fully
  * solid colour) rather than `--surface-window`, which is intentionally
- * translucent on Windows so the system mica/acrylic material can show through.
+ * translucent on Windows so the system Tabbed material can show through.
  * Do NOT swap this back to `--surface-window` without testing on Windows.
  */
 .app-surface-opaque {

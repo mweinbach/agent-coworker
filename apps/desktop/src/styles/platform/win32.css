@@ -1,14 +1,26 @@
 /* Windows title bar overlay + caption button reserve */
 
+:root[data-platform="win32"] {
+  --platform-caption-button-reserve: 136px;
+  --platform-collapsed-left-rail-width: 84px;
+  --platform-topbar-toolbar-gap: 6px;
+}
+
 /*
  * Disable the blanket drag on the topbar. The content-fill provides a drag
  * surface for the area right of the sidebar, and the top-edge drag-strip
  * covers the full width. This lets the sidebar pane (which extends behind
  * the topbar via negative margin) receive clicks on its buttons.
  */
+/*
+ * Keep the topbar above the shell-level drag strip (z-index 60). Without this,
+ * the strip sits on top of the entire topbar stacking context and swallows
+ * clicks on the left-rail collapse control (same pattern as macOS traffic-light
+ * controls at z-index 70 in darwin.css).
+ */
 :root[data-platform="win32"] .app-topbar {
   position: relative;
-  z-index: 6;
+  z-index: 70;
   -webkit-app-region: no-drag;
 }
 
@@ -35,7 +47,6 @@
 
 /* Right toolbar sits just left of the native caption buttons. */
 :root[data-platform="win32"] .app-topbar__toolbar--right {
-  right: calc(var(--platform-caption-button-reserve) + var(--win32-toolbar-gap));
   z-index: 3;
 }
 
@@ -46,9 +57,10 @@
  * clickable.
  */
 :root[data-platform="win32"] .app-topbar__win32-left-rail {
-  width: var(--win32-collapsed-left-rail-width);
-  z-index: 3;
-  -webkit-app-region: drag;
+  width: var(--platform-collapsed-left-rail-width);
+  z-index: 2;
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
 }
 
 :root[data-platform="win32"] .app-topbar__win32-left-strip {
@@ -56,7 +68,7 @@
   align-items: center;
   height: 100%;
   z-index: 1;
-  -webkit-app-region: drag;
+  -webkit-app-region: no-drag;
 }
 
 :root[data-platform="win32"] .app-topbar__win32-left-strip > * {
@@ -70,6 +82,7 @@
   left: 0;
   right: 0;
   z-index: 60;
+  pointer-events: none;
   -webkit-app-region: drag;
 }
 
@@ -95,12 +108,17 @@
 }
 
 /*
- * Hide the 1px sidebar/main divider on Windows so the unified material
- * strip (sidebar + topbar) reads as a single surface instead of being
- * split by a hairline at the card's left edge.
+ * Hide the sidebar/main divider on Windows so the unified material strip
+ * (sidebar + topbar + chat-body) reads as one surface instead of a hairline
+ * at the card's top-left L. Drop CSS blur here too — adjacent panes paint the
+ * same tint without blur, and mixed blur/no-blur compositing leaves a vertical
+ * seam that extends up into the titleband above the rounded card corner.
  */
 :root[data-platform="win32"]:not([data-reduced-transparency="true"]) .app-left-sidebar-pane {
+  border-right-width: 0;
   border-right-color: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 /*
@@ -151,7 +169,7 @@
 :root[data-platform="win32"] .app-sidebar__titleband-drag-zone {
   position: absolute;
   inset: 0;
-  pointer-events: auto;
+  pointer-events: none;
   -webkit-app-region: drag;
 }
 
@@ -166,28 +184,90 @@
   -webkit-app-region: no-drag;
 }
 
-/* Sidebar collapse button: hidden by default, shown on Windows where it lives in the rail. */
-:root[data-platform="win32"] .app-sidebar__collapse-toggle {
-  display: inline-flex;
+/* Tighter than macOS: no traffic lights in the top-left; no-drag keeps controls clickable in the title band. */
+:root[data-platform="win32"]:not([data-reduced-transparency="true"]) .app-shell--settings {
+  background: var(--surface-sidebar-pane);
 }
 
-/* Tighter than macOS: no traffic lights in the top-left; no-drag keeps controls clickable in the title band. */
+:root[data-platform="win32"] .app-shell--settings .app-window-drag-strip {
+  display: none;
+}
+
+:root[data-platform="win32"] .app-shell--settings > .min-h-0 {
+  position: relative;
+  z-index: 70;
+}
+
+:root[data-platform="win32"] .settings-shell__titleband-fill {
+  height: var(--platform-titlebar-height);
+  z-index: 78;
+  pointer-events: none;
+  background: var(--surface-sidebar-pane);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
 :root[data-platform="win32"] .settings-shell__nav {
   position: relative;
   z-index: 81;
-  padding-top: 0.75rem;
+  padding-top: 0;
+  pointer-events: auto;
+  border-right-width: 0;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  -webkit-app-region: no-drag;
+}
+
+:root[data-platform="win32"] .settings-shell__nav-header {
+  border-bottom-width: 0;
+}
+
+:root[data-platform="win32"] .settings-shell__nav-titleband {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: var(--platform-titlebar-height);
+  padding-top: 4px;
+}
+
+:root[data-platform="win32"] .settings-shell__nav-titleband-drag-zone {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  -webkit-app-region: drag;
+}
+
+:root[data-platform="win32"] .settings-shell__nav-titleband-row {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  pointer-events: none;
+}
+
+:root[data-platform="win32"] .settings-shell__nav-titleband-row > *,
+:root[data-platform="win32"] .settings-shell__nav-button {
+  pointer-events: auto;
   -webkit-app-region: no-drag;
 }
 
 :root[data-platform="win32"] .settings-shell__back-button {
   margin-top: 0;
+  border-width: 0;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+:root[data-platform="win32"] .settings-shell__back-button:hover {
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+  color: var(--text-primary);
 }
 
 /*
  * Settings shell tints the same as chat-body so the cut-off area at the
- * settings-main top-left corner reveals the unified topbar/nav material
- * (not bare Tabbed). The drag-zone is transparent and only handles drag,
- * so the tint shows through the y=0..titlebar band as well.
+ * settings-main top-left corner reveals the unified nav/titleband material
+ * (not bare Tabbed). The titleband fill covers only the main column (nav
+ * column uses this shell tint directly) so the sage strip is one layer deep.
  */
 :root[data-platform="win32"]:not([data-reduced-transparency="true"]) .settings-shell {
   background: var(--surface-sidebar-pane);
@@ -200,19 +280,22 @@
  */
 :root[data-platform="win32"] .settings-shell__main {
   position: relative;
-  z-index: 81;
+  z-index: 1;
+  align-self: start;
+  height: calc(100% - var(--platform-titlebar-height));
   margin: var(--platform-titlebar-height) 0 0 0;
   border-top-left-radius: var(--main-card-radius);
   border-top-right-radius: 0;
   border-bottom-left-radius: 0;
   border-bottom-right-radius: 0;
   background: var(--surface-main-card);
+  /* Replace the default inset nav divider; card shadow is none on win32. */
   box-shadow: var(--main-card-shadow);
   overflow: hidden;
 }
 
 :root[data-platform="win32"] .settings-shell__header-actions {
-  padding-right: 8.5rem;
+  padding-right: calc(var(--platform-caption-button-reserve) + var(--platform-topbar-toolbar-gap));
 }
 
 :root[data-platform="win32"] .settings-shell__drag-zone {
@@ -222,7 +305,23 @@
   right: 0;
   height: var(--platform-titlebar-height);
   z-index: 80;
+  pointer-events: auto;
   -webkit-app-region: drag;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+:root[data-platform="win32"] .settings-shell__page-header {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+@media (max-width: 860px) {
+  :root[data-platform="win32"] .settings-shell__drag-zone,
+  :root[data-platform="win32"] .settings-shell__titleband-fill {
+    left: 0 !important;
+  }
 }
 
 /*
@@ -253,4 +352,22 @@
   ) {
   backdrop-filter: blur(20px) saturate(1.4);
   -webkit-backdrop-filter: blur(20px) saturate(1.4);
+}
+
+/*
+ * Frameless quick-chat and utility popups on Windows: use the same card surface
+ * language as the main shell instead of heavy renderer blur over an opaque host.
+ */
+:root[data-platform="win32"]:not([data-reduced-transparency="true"])
+  :is([data-window-mode="quick-chat"], [data-window-mode="utility"])
+  .desktop-popup-shell {
+  background: var(--surface-main-card, var(--surface-window));
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+:root[data-platform="win32"] :is([data-window-mode="quick-chat"], [data-window-mode="utility"])
+  .desktop-popup-shell__header {
+  min-height: var(--platform-titlebar-height);
+  align-items: center;
 }

@@ -7,6 +7,7 @@ import {
   __internal,
   checkManagedSofficeRuntime,
   ensureManagedSofficeRuntimeReady,
+  prepareManagedSofficeToolEnv,
   renderManagedSofficeRuntimeInstructions,
 } from "../src/managedSofficeRuntime";
 
@@ -34,6 +35,7 @@ describe("managed soffice runtime", () => {
         path.join(home, ".cache", "cowork", "libreoffice", "libexec", "managed-soffice.mjs"),
       );
       expect(result?.runtimeEnv.COWORK_SOFFICE).toBe(result?.shimPath);
+      expect(result?.runtimeEnv.SAL_DISABLE_SYNCHRONOUS_PRINTER_DETECTION).toBe("1");
       expect(result?.runtimeEnv.COWORK_MANAGED_SOFFICE_ROOT).toBe(
         path.join(home, ".cache", "cowork", "libreoffice"),
       );
@@ -50,10 +52,20 @@ describe("managed soffice runtime", () => {
       expect(helper).toContain(
         'run("msiexec.exe", ["/a", archivePath, "/qn", "TARGETDIR=" + stagedRoot]',
       );
+      expect(helper).toContain("windowsHide: true");
       expect(helper).toContain('path.join(root, "program", "soffice.com")');
       expect(helper).toContain(
         'path.join(programFilesDir, "LibreOffice", "program", "soffice.com")',
       );
+      expect(helper).toContain("pathToFileURL(profileDir).href");
+      expect(helper).toContain("createNormalizedHeadlessArgs");
+      expect(helper).toContain("argsWithoutProfiles");
+      expect(helper).toContain("replaced caller LibreOffice profile");
+      expect(helper).toContain("SAL_DISABLE_SYNCHRONOUS_PRINTER_DETECTION");
+      expect(helper).toContain('oor:path="/org.openoffice.Office.Common/Save/Document"');
+      expect(helper).toContain('oor:name="LoadPrinter"');
+      expect(helper).toContain('"--nodefault"');
+      expect(helper).toContain('"--nolockcheck"');
     } finally {
       await fs.rm(home, { recursive: true, force: true });
     }
@@ -113,7 +125,7 @@ describe("managed soffice runtime", () => {
     }
   });
 
-  test("diagnostic verifies availability and a real conversion through the shim", async () => {
+  test("diagnostic verifies availability when conversion produces a PDF through the shim", async () => {
     if (process.platform === "win32") return;
 
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-soffice-diagnostic-"));
@@ -141,7 +153,7 @@ done
 base="\${last##*/}"
 base="\${base%.html}"
 printf "%s\\n" "%PDF-1.4 fake" > "$outdir/$base.pdf"
-exit 0
+exit 7
 `,
       { encoding: "utf-8", mode: 0o755 },
     );
@@ -181,6 +193,7 @@ exit 0
       const instructions = renderManagedSofficeRuntimeInstructions(setup?.runtimeEnv);
 
       expect(instructions).toContain("Managed LibreOffice Runtime");
+      expect(instructions).toContain("SAL_DISABLE_SYNCHRONOUS_PRINTER_DETECTION=1");
       if (process.platform === "win32") {
         expect(instructions).toContain("$env:PATH = '");
         expect(instructions).toContain(";' + $env:PATH");
@@ -191,5 +204,17 @@ exit 0
     } finally {
       await fs.rm(home, { recursive: true, force: true });
     }
+  });
+
+  test("adds printer detection guard even when soffice env is already prepared", async () => {
+    const env = await prepareManagedSofficeToolEnv({
+      env: {
+        COWORK_SOFFICE: "/already/prepared/soffice",
+        PATH: "/usr/bin",
+      },
+    });
+
+    expect(env.COWORK_SOFFICE).toBe("/already/prepared/soffice");
+    expect(env.SAL_DISABLE_SYNCHRONOUS_PRINTER_DETECTION).toBe("1");
   });
 });

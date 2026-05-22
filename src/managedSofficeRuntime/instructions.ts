@@ -2,6 +2,8 @@ import path from "node:path";
 
 import { ensureManagedSofficeRuntimeReady } from "./ensureReady";
 
+const DISABLE_PRINTER_DETECTION_ENV = "SAL_DISABLE_SYNCHRONOUS_PRINTER_DETECTION";
+
 export function managedSofficeEnvValue(
   env: Record<string, string | undefined> | undefined,
   key: string,
@@ -31,6 +33,7 @@ export function renderManagedSofficeRuntimeInstructions(
     "",
     `Cowork-managed LibreOffice is available through the \`soffice\` shim at \`${shimPath}\`.`,
     `When rendering documents, spreadsheets, or presentations, keep \`${shimDir}\` ahead of system paths, for example by prefixing shell commands with \`${pathExample}\`.`,
+    `Keep \`${DISABLE_PRINTER_DETECTION_ENV}=1\` in the environment so headless conversions do not block on OS printer discovery.`,
     "Do not conclude LibreOffice is unavailable from a broken Homebrew wrapper or a missing `/Applications/LibreOffice.app`; use the Cowork-managed shim.",
   ].join("\n");
 }
@@ -41,6 +44,7 @@ export async function prepareManagedSofficeToolEnv(opts: {
   log?: (line: string) => void;
 }): Promise<Record<string, string | undefined>> {
   const env = { ...(opts.env ?? process.env) };
+  env[DISABLE_PRINTER_DETECTION_ENV] ||= "1";
   if (
     managedSofficeEnvValue(env, "COWORK_SOFFICE") ||
     managedSofficeEnvValue(env, "COWORK_MANAGED_SOFFICE_SHIM")

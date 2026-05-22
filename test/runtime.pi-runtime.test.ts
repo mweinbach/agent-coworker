@@ -826,8 +826,8 @@ describe("pi runtime regressions", () => {
     });
     const config = makeConfig(homeDir, {
       provider: "fireworks",
-      model: "accounts/fireworks/models/glm-5",
-      preferredChildModel: "accounts/fireworks/models/glm-5",
+      model: "accounts/fireworks/models/glm-5p1",
+      preferredChildModel: "accounts/fireworks/models/glm-5p1",
     });
 
     await runtime.runTurn(
@@ -931,8 +931,8 @@ describe("pi runtime regressions", () => {
     });
     const config = makeConfig(homeDir, {
       provider: "fireworks",
-      model: "accounts/fireworks/models/glm-5",
-      preferredChildModel: "accounts/fireworks/models/glm-5",
+      model: "accounts/fireworks/models/glm-5p1",
+      preferredChildModel: "accounts/fireworks/models/glm-5p1",
     });
 
     await runtime.runTurn(

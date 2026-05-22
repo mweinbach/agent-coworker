@@ -19,10 +19,11 @@ import codexCliGpt54 from "../../config/models/codex-cli/gpt-5.4.json";
 import codexCliGpt54Mini from "../../config/models/codex-cli/gpt-5.4-mini.json";
 import codexCliGpt55 from "../../config/models/codex-cli/gpt-5.5.json";
 import firepassKimiK2p6Turbo from "../../config/models/firepass/accounts-fireworks-routers-kimi-k2p6-turbo.json";
-import fireworksGlm5 from "../../config/models/fireworks/accounts-fireworks-models-glm-5.json";
-import fireworksKimiK2p5 from "../../config/models/fireworks/accounts-fireworks-models-kimi-k2p5.json";
-import fireworksMinimaxM2p5 from "../../config/models/fireworks/accounts-fireworks-models-minimax-m2p5.json";
-import fireworksKimiK2p5Turbo from "../../config/models/fireworks/accounts-fireworks-routers-kimi-k2p5-turbo.json";
+import fireworksDeepseekV4Pro from "../../config/models/fireworks/accounts-fireworks-models-deepseek-v4-pro.json";
+import fireworksGlm5p1 from "../../config/models/fireworks/accounts-fireworks-models-glm-5p1.json";
+import fireworksKimiK2p6 from "../../config/models/fireworks/accounts-fireworks-models-kimi-k2p6.json";
+import fireworksMinimaxM2p7 from "../../config/models/fireworks/accounts-fireworks-models-minimax-m2p7.json";
+import fireworksQwen3p6Plus from "../../config/models/fireworks/accounts-fireworks-models-qwen3p6-plus.json";
 import googleGemini31FlashLitePreview from "../../config/models/google/gemini-3.1-flash-lite-preview.json";
 import googleGemini31ProPreview from "../../config/models/google/gemini-3.1-pro-preview.json";
 import googleGemini31ProPreviewCustomtools from "../../config/models/google/gemini-3.1-pro-preview-customtools.json";
@@ -101,10 +102,11 @@ const RAW_MODEL_REGISTRY_ENTRIES = [
   codexCliGpt54,
   codexCliGpt54Mini,
   codexCliGpt53CodexSpark,
-  fireworksGlm5,
-  fireworksKimiK2p5,
-  fireworksKimiK2p5Turbo,
-  fireworksMinimaxM2p5,
+  fireworksDeepseekV4Pro,
+  fireworksGlm5p1,
+  fireworksKimiK2p6,
+  fireworksMinimaxM2p7,
+  fireworksQwen3p6Plus,
   firepassKimiK2p6Turbo,
   googleGemini35Flash,
   googleGemini3FlashPreview,

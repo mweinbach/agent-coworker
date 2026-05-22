@@ -49,7 +49,7 @@ import {
 
 export const Sidebar = memo(function Sidebar() {
   const platformInfo = useDesktopPlatform();
-  const isWin32 = platformInfo.sidebarTitlebandMode === "native";
+  const usesNativeTitleband = platformInfo.sidebarTitlebandMode === "native";
   const view = useAppStore((s) => s.view);
   const workspaces = useAppStore((s) => s.workspaces);
   const threads = useAppStore((s) => s.threads);
@@ -622,7 +622,7 @@ export const Sidebar = memo(function Sidebar() {
       <div className="app-sidebar__titleband">
         <div className="app-sidebar__titleband-drag-zone" aria-hidden="true" />
         <div className="app-sidebar__titleband-row flex w-full items-center gap-1">
-          {!isWin32 ? (
+          {!usesNativeTitleband ? (
             <Button
               variant="ghost"
               size="sm"
@@ -638,7 +638,7 @@ export const Sidebar = memo(function Sidebar() {
           ) : null}
         </div>
       </div>
-      {isWin32 ? (
+      {usesNativeTitleband ? (
         <Button
           variant="ghost"
           size="sm"

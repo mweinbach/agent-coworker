@@ -31,6 +31,9 @@ export function useDesktopPlatform(): DesktopPlatformInfo {
         "data-topbar-control-placement",
         "data-uses-native-glass",
         "data-disable-css-blur",
+        "data-caption-button-reserve",
+        "data-collapsed-left-rail-width",
+        "data-topbar-toolbar-gap",
       ],
     });
 

@@ -6,10 +6,13 @@ function windowsTitleBarOverlay(
   useDarkColors: boolean,
 ): Parameters<BrowserWindow["setTitleBarOverlay"]>[0] {
   const chrome = getPlatformChrome("win32");
+  // Electron requires an integer; keep overlay height identical to the renderer
+  // title band (--platform-titlebar-height) so native caption buttons stay
+  // vertically centered and do not extend past the custom top bar.
   return {
     color: "#00000000",
     symbolColor: getTitlebarSymbolColor(useDarkColors),
-    height: chrome.titlebarHeight,
+    height: Math.round(chrome.titlebarHeight),
   };
 }
 

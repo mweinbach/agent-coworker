@@ -686,6 +686,8 @@ export function createWebAdapter(): DesktopApi {
         leftNativeReserve: 0,
         rightNativeReserve: 0,
         captionButtonReserve: 0,
+        collapsedLeftRailWidth: 0,
+        topbarToolbarGap: 0,
         sidebarTitlebandMode: "topbar" as const,
         topbarControlPlacement: "inline" as const,
         usesNativeGlass: false,

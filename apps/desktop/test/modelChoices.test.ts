@@ -16,9 +16,9 @@ import type { ProviderName } from "../src/lib/wsProtocol";
 describe("encodeProviderModelSelection / decodeProviderModelSelection", () => {
   test("round-trips model ids that contain colons (e.g. Fireworks serverless paths)", () => {
     const provider = "fireworks" as ProviderName;
-    const modelId = "accounts/fireworks/models/glm-5";
+    const modelId = "accounts/fireworks/models/glm-5p1";
     const encoded = encodeProviderModelSelection(provider, modelId);
-    expect(encoded).toBe("fireworks:accounts/fireworks/models/glm-5");
+    expect(encoded).toBe("fireworks:accounts/fireworks/models/glm-5p1");
     const decoded = decodeProviderModelSelection(encoded);
     expect(decoded).toEqual({ provider, modelId });
   });
@@ -36,17 +36,17 @@ describe("modelDisplayNamesFromCatalog", () => {
         name: "Fireworks AI",
         models: [
           {
-            id: "accounts/fireworks/models/glm-5",
-            displayName: "GLM-5",
-            knowledgeCutoff: "Unknown",
+            id: "accounts/fireworks/models/glm-5p1",
+            displayName: "GLM 5.1",
+            knowledgeCutoff: "Mid 2025",
             supportsImageInput: false,
           },
         ],
-        defaultModel: "accounts/fireworks/models/glm-5",
+        defaultModel: "accounts/fireworks/models/glm-5p1",
       },
     ]);
-    expect(resolveModelDisplayLabel("fireworks", "accounts/fireworks/models/glm-5", map)).toBe(
-      "GLM-5",
+    expect(resolveModelDisplayLabel("fireworks", "accounts/fireworks/models/glm-5p1", map)).toBe(
+      "GLM 5.1",
     );
   });
 });

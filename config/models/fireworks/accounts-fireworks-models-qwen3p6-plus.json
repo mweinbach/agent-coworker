@@ -1,8 +1,8 @@
 {
-  "id": "accounts/fireworks/models/kimi-k2p5",
+  "id": "accounts/fireworks/models/qwen3p6-plus",
   "provider": "fireworks",
-  "displayName": "Kimi K2.5",
-  "knowledgeCutoff": "Unknown",
+  "displayName": "Qwen3.6 Plus",
+  "knowledgeCutoff": "Mid 2025",
   "supportsImageInput": true,
   "promptTemplate": "system.md",
   "providerOptionsDefaults": {},

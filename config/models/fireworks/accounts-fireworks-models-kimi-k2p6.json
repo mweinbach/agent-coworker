@@ -1,0 +1,10 @@
+{
+  "id": "accounts/fireworks/models/kimi-k2p6",
+  "provider": "fireworks",
+  "displayName": "Kimi K2.6",
+  "knowledgeCutoff": "April 2025",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": true
+}

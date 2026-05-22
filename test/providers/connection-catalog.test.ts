@@ -232,37 +232,43 @@ describe("providers/connectionCatalog", () => {
       }),
     });
 
-    expect(payload.default.fireworks).toBe("accounts/fireworks/models/glm-5");
+    expect(payload.default.fireworks).toBe("accounts/fireworks/models/kimi-k2p6");
     expect(payload.all).toContainEqual({
       id: "fireworks",
       name: "Fireworks AI",
       models: [
         {
-          id: "accounts/fireworks/models/glm-5",
-          displayName: "GLM 5",
-          knowledgeCutoff: "Unknown",
+          id: "accounts/fireworks/models/deepseek-v4-pro",
+          displayName: "DeepSeek-V4-Pro",
+          knowledgeCutoff: "May 2025",
           supportsImageInput: false,
         },
         {
-          id: "accounts/fireworks/models/kimi-k2p5",
-          displayName: "Kimi K2.5",
-          knowledgeCutoff: "Unknown",
+          id: "accounts/fireworks/models/glm-5p1",
+          displayName: "GLM 5.1",
+          knowledgeCutoff: "Mid 2025",
+          supportsImageInput: false,
+        },
+        {
+          id: "accounts/fireworks/models/kimi-k2p6",
+          displayName: "Kimi K2.6",
+          knowledgeCutoff: "April 2025",
           supportsImageInput: true,
         },
         {
-          id: "accounts/fireworks/models/minimax-m2p5",
-          displayName: "MiniMax M2.5",
-          knowledgeCutoff: "Unknown",
+          id: "accounts/fireworks/models/minimax-m2p7",
+          displayName: "MiniMax M2.7",
+          knowledgeCutoff: "March 2025",
           supportsImageInput: false,
         },
         {
-          id: "accounts/fireworks/routers/kimi-k2p5-turbo",
-          displayName: "Kimi K2.5 Turbo",
-          knowledgeCutoff: "Unknown",
+          id: "accounts/fireworks/models/qwen3p6-plus",
+          displayName: "Qwen3.6 Plus",
+          knowledgeCutoff: "Mid 2025",
           supportsImageInput: true,
         },
       ],
-      defaultModel: "accounts/fireworks/models/glm-5",
+      defaultModel: "accounts/fireworks/models/kimi-k2p6",
     });
   });
 

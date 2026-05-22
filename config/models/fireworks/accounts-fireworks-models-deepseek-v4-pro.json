@@ -1,8 +1,8 @@
 {
-  "id": "accounts/fireworks/models/minimax-m2p5",
+  "id": "accounts/fireworks/models/deepseek-v4-pro",
   "provider": "fireworks",
-  "displayName": "MiniMax M2.5",
-  "knowledgeCutoff": "Unknown",
+  "displayName": "DeepSeek-V4-Pro",
+  "knowledgeCutoff": "May 2025",
   "supportsImageInput": false,
   "promptTemplate": "system.md",
   "providerOptionsDefaults": {},

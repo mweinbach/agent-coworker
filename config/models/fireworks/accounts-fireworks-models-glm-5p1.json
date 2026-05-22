@@ -1,10 +1,10 @@
 {
-  "id": "accounts/fireworks/models/glm-5",
+  "id": "accounts/fireworks/models/glm-5p1",
   "provider": "fireworks",
-  "displayName": "GLM 5",
-  "knowledgeCutoff": "Unknown",
+  "displayName": "GLM 5.1",
+  "knowledgeCutoff": "Mid 2025",
   "supportsImageInput": false,
   "promptTemplate": "system.md",
   "providerOptionsDefaults": {},
-  "isDefault": true
+  "isDefault": false
 }

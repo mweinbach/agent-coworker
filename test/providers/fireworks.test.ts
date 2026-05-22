@@ -5,19 +5,19 @@ import { defaultModelForProvider, getModel, loadConfig } from "../../src/config"
 import { makeConfig, makeTmpDirs, repoRoot, writeJson } from "./helpers";
 
 describe("Fireworks AI provider", () => {
-  test("defaultModelForProvider returns GLM-5", () => {
-    expect(defaultModelForProvider("fireworks")).toBe("accounts/fireworks/models/glm-5");
+  test("defaultModelForProvider returns Kimi K2.6", () => {
+    expect(defaultModelForProvider("fireworks")).toBe("accounts/fireworks/models/kimi-k2p6");
   });
 
-  test("getModel creates Fireworks model with default GLM-5", () => {
+  test("getModel creates Fireworks model with default Kimi K2.6", () => {
     const cfg = makeConfig({
       provider: "fireworks",
-      model: "accounts/fireworks/models/glm-5",
-      preferredChildModel: "accounts/fireworks/models/glm-5",
+      model: "accounts/fireworks/models/kimi-k2p6",
+      preferredChildModel: "accounts/fireworks/models/kimi-k2p6",
     });
     const model = getModel(cfg);
 
-    expect(model.modelId).toBe("accounts/fireworks/models/glm-5");
+    expect(model.modelId).toBe("accounts/fireworks/models/kimi-k2p6");
     expect(model.provider).toBe("fireworks.completions");
     expect(model.specificationVersion).toBe("v3");
   });
@@ -33,7 +33,7 @@ describe("Fireworks AI provider", () => {
     });
 
     expect(cfg.provider).toBe("fireworks");
-    expect(cfg.model).toBe("accounts/fireworks/models/glm-5");
+    expect(cfg.model).toBe("accounts/fireworks/models/kimi-k2p6");
     expect(cfg.runtime).toBe("pi");
   });
 
@@ -42,8 +42,8 @@ describe("Fireworks AI provider", () => {
 
     await writeJson(path.join(cwd, ".cowork", "config.json"), {
       provider: "fireworks",
-      model: "accounts/fireworks/models/kimi-k2p5",
-      preferredChildModel: "accounts/fireworks/models/kimi-k2p5",
+      model: "accounts/fireworks/models/glm-5p1",
+      preferredChildModel: "accounts/fireworks/models/glm-5p1",
     });
 
     const cfg = await loadConfig({
@@ -54,7 +54,7 @@ describe("Fireworks AI provider", () => {
     });
 
     expect(cfg.provider).toBe("fireworks");
-    expect(cfg.model).toBe("accounts/fireworks/models/kimi-k2p5");
+    expect(cfg.model).toBe("accounts/fireworks/models/glm-5p1");
     expect(cfg.runtime).toBe("pi");
   });
 });

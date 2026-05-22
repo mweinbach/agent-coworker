@@ -10,7 +10,7 @@ export const TITLE_MODELS_BY_PROVIDER: Partial<Record<AgentConfig["provider"], r
     nvidia: ["nvidia/nemotron-3-super-120b-a12b"],
     openai: ["gpt-5-mini"],
     together: ["moonshotai/Kimi-K2.5"],
-    fireworks: ["accounts/fireworks/models/glm-5"],
+    fireworks: ["accounts/fireworks/models/kimi-k2p6"],
     firepass: ["accounts/fireworks/routers/kimi-k2p6-turbo"],
     "opencode-go": ["glm-5"],
     "opencode-zen": ["glm-5"],

@@ -62,12 +62,12 @@ describe("src/providers/index.ts", () => {
     test("creates Fireworks AI model with saved key", async () => {
       const config = makeConfig({
         provider: "fireworks",
-        model: "accounts/fireworks/models/glm-5",
-        preferredChildModel: "accounts/fireworks/models/glm-5",
+        model: "accounts/fireworks/models/glm-5p1",
+        preferredChildModel: "accounts/fireworks/models/glm-5p1",
       });
-      const model = getModelForProvider(config, "accounts/fireworks/models/glm-5", "fw-key") as any;
+      const model = getModelForProvider(config, "accounts/fireworks/models/glm-5p1", "fw-key") as any;
       const headers = await model.config.headers();
-      expect(model.modelId).toBe("accounts/fireworks/models/glm-5");
+      expect(model.modelId).toBe("accounts/fireworks/models/glm-5p1");
       expect(model.provider).toBe("fireworks.completions");
       expect(model.config.baseUrl).toBe("https://api.fireworks.ai/inference/v1");
       expect(headers.authorization).toBe("Bearer fw-key");

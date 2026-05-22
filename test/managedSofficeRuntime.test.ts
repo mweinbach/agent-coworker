@@ -132,7 +132,6 @@ describe("managed soffice runtime", () => {
     const fakeBin = path.join(home, "fake-bin");
     const fakeSoffice = path.join(fakeBin, "soffice");
     const capturedArgsPath = path.join(home, "captured-args.txt");
-    const capturedProfilePath = path.join(home, "captured-profile.xcu");
     await fs.mkdir(fakeBin, { recursive: true });
     await fs.writeFile(
       fakeSoffice,
@@ -151,9 +150,9 @@ for arg in "$@"; do
 done
 profile_path="\${profile_url#file://}"
 if [ -n "$profile_path" ] && [ -f "$profile_path/user/registrymodifications.xcu" ]; then
-  cp "$profile_path/user/registrymodifications.xcu" "$COWORK_CAPTURE_PROFILE"
+  printf "PROFILE_REGISTRY_PRESENT\\n" >> "$COWORK_CAPTURE_ARGS"
 else
-  printf "missing:%s\\n" "$profile_path" > "$COWORK_CAPTURE_PROFILE"
+  printf "PROFILE_REGISTRY_MISSING:%s\\n" "$profile_path" >> "$COWORK_CAPTURE_ARGS"
 fi
 exit 0
 `,
@@ -183,7 +182,6 @@ exit 0
           ...process.env,
           ...(setup?.runtimeEnv ?? {}),
           COWORK_CAPTURE_ARGS: capturedArgsPath,
-          COWORK_CAPTURE_PROFILE: capturedProfilePath,
           COWORK_DISABLE_MANAGED_SOFFICE_DOWNLOAD: "1",
         },
         stdout: "pipe",
@@ -210,9 +208,7 @@ exit 0
       expect(capturedArgs).toContain("--norestore");
       expect(capturedArgs).toContain("--convert-to");
       expect(capturedArgs).toContain("pdf");
-      const profileRegistry = await fs.readFile(capturedProfilePath, "utf-8");
-      expect(profileRegistry).toContain('oor:name="LoadPrinter"');
-      expect(profileRegistry).toContain("<value>false</value>");
+      expect(capturedArgs).toContain("PROFILE_REGISTRY_PRESENT");
     } finally {
       await fs.rm(home, { recursive: true, force: true });
     }

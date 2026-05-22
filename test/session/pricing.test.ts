@@ -96,14 +96,18 @@ describe("pricing", () => {
       expect(pricing!.cachedInputPerMillion).toBe(0.15);
     });
 
-    it("resolves exact match for fireworks router pricing", () => {
-      const pricing = resolveModelPricing(
-        "fireworks",
-        "accounts/fireworks/routers/kimi-k2p5-turbo",
-      );
-      expect(pricing).not.toBeNull();
-      expect(pricing!.inputPerMillion).toBe(0.6);
-      expect(pricing!.outputPerMillion).toBe(3);
+    it("resolves exact match for fireworks model pricing", () => {
+      const glm = resolveModelPricing("fireworks", "accounts/fireworks/models/glm-5p1");
+      expect(glm).not.toBeNull();
+      expect(glm!.inputPerMillion).toBe(1.4);
+      expect(glm!.outputPerMillion).toBe(4.4);
+      expect(glm!.cachedInputPerMillion).toBe(0.26);
+
+      const deepseek = resolveModelPricing("fireworks", "accounts/fireworks/models/deepseek-v4-pro");
+      expect(deepseek).not.toBeNull();
+      expect(deepseek!.inputPerMillion).toBe(1.74);
+      expect(deepseek!.outputPerMillion).toBe(3.48);
+      expect(deepseek!.cachedInputPerMillion).toBe(0.15);
     });
 
     it("resolves exact match for Fire Pass Kimi K2.6 Turbo pricing", () => {

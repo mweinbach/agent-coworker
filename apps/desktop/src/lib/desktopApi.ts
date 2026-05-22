@@ -298,6 +298,8 @@ export type PlatformChromeInfo = {
   leftNativeReserve: number;
   rightNativeReserve: number;
   captionButtonReserve: number;
+  collapsedLeftRailWidth: number;
+  topbarToolbarGap: number;
   sidebarTitlebandMode: "native" | "topbar";
   topbarControlPlacement: "left-rail" | "sidebar" | "inline";
   usesNativeGlass: boolean;

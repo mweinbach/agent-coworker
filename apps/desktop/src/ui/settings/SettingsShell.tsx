@@ -1,11 +1,15 @@
 import { ArrowLeftIcon } from "lucide-react";
-import { type ReactNode, useCallback, useState } from "react";
+import { type CSSProperties, type ReactNode, useCallback, useState } from "react";
 
 import { includeDevelopmentSettings } from "../../app/settingsPageAvailability";
 import { useAppStore } from "../../app/store";
 import { isOneOffChatWorkspace, type SettingsPageId } from "../../app/types";
 import { Button } from "../../components/ui/button";
 import { isPackagedDesktopApp } from "../../lib/desktopCommands";
+import {
+  type DesktopPlatformInfo,
+  getDesktopPlatformInfo,
+} from "../../lib/desktopPlatform";
 import { cn } from "../../lib/utils";
 import { ArchivedChatsPage } from "./pages/ArchivedChatsPage";
 import { BackupPage } from "./pages/BackupPage";
@@ -153,6 +157,16 @@ export function getSettingsGroups(
   ];
 }
 
+export function getSettingsDragZoneStyle(
+  sidebarWidth: number,
+  platformInfo: DesktopPlatformInfo,
+): CSSProperties | undefined {
+  if (platformInfo.sidebarTitlebandMode === "native") {
+    return { left: sidebarWidth };
+  }
+  return undefined;
+}
+
 function SettingsNavigation({
   activePage,
   onSelectPage,
@@ -174,24 +188,29 @@ function SettingsNavigation({
 
   return (
     <aside className="settings-shell__nav app-left-sidebar-pane flex min-h-0 min-w-0 flex-col border-r border-border/50 max-[860px]:border-r-0 max-[860px]:border-b">
-      <div className="shrink-0 border-b border-border/50 px-3 py-3">
-        <Button
-          className="settings-shell__back-button h-9 w-full justify-start rounded-md border border-border/50 bg-foreground/[0.03] px-2.5 text-[13px] font-medium"
-          variant="ghost"
-          type="button"
-          onClick={onBack}
-        >
-          <ArrowLeftIcon className="mr-2 h-4 w-4 shrink-0 opacity-70" />
-          Back
-        </Button>
-        {perWorkspaceSettings && currentWorkspace && (
+      <div className="shrink-0 settings-shell__nav-header border-b border-border/50">
+        <div className="settings-shell__nav-titleband">
+          <div className="settings-shell__nav-titleband-drag-zone" aria-hidden="true" />
+          <div className="settings-shell__nav-titleband-row px-3 flex items-center">
+            <Button
+              className="settings-shell__back-button h-9 w-full justify-start rounded-md px-2.5 text-[13px] font-medium"
+              variant="ghost"
+              type="button"
+              onClick={onBack}
+            >
+              <ArrowLeftIcon className="mr-2 h-4 w-4 shrink-0 opacity-70" />
+              Back
+            </Button>
+          </div>
+        </div>
+        {perWorkspaceSettings && currentWorkspace ? (
           <div
-            className="mt-2 truncate px-1 text-[11px] text-foreground/68"
+            className="truncate px-4 pb-3 text-[11px] text-foreground/68"
             title={currentWorkspace.name}
           >
             {currentWorkspace.name}
           </div>
-        )}
+        ) : null}
       </div>
 
       <nav
@@ -250,6 +269,8 @@ export function SettingsShell() {
   const handleChromeChange = useCallback((next: SettingsChromeState) => {
     setPageChromeState(next);
   }, []);
+  const platformInfo = getDesktopPlatformInfo();
+  const settingsDragZoneStyle = getSettingsDragZoneStyle(sidebarWidth, platformInfo);
 
   const isBackupPage = activePage.id === "backup";
 
@@ -258,7 +279,18 @@ export function SettingsShell() {
       className="settings-shell relative grid h-full min-h-0 min-w-0 bg-transparent"
       style={{ gridTemplateColumns: `${sidebarWidth}px minmax(0, 1fr)` }}
     >
-      <div className="settings-shell__drag-zone absolute inset-x-0 top-0" aria-hidden="true" />
+      {platformInfo.sidebarTitlebandMode === "native" ? (
+        <div
+          className="settings-shell__titleband-fill absolute inset-x-0 top-0"
+          style={settingsDragZoneStyle}
+          aria-hidden="true"
+        />
+      ) : null}
+      <div
+        className="settings-shell__drag-zone absolute inset-x-0 top-0"
+        style={settingsDragZoneStyle}
+        aria-hidden="true"
+      />
       <SettingsNavigation
         activePage={activePage.id}
         onSelectPage={setSettingsPage}

@@ -7,7 +7,7 @@
  *
  * Design principle: one visual language, three native shells.
  * - macOS: native traffic lights, hidden inset, vibrancy
- * - Windows: titleBarOverlay, caption buttons, Mica
+ * - Windows: titleBarOverlay, caption buttons, Tabbed material
  * - Linux: titleBarOverlay/fallback, opaque/translucency-safe
  */
 
@@ -33,6 +33,12 @@ export type PlatformChromeContract = {
 
   /** Windows-specific: caption button reserve space */
   captionButtonReserve: number;
+
+  /** Windows-specific: collapsed sidebar left-rail width in pixels */
+  collapsedLeftRailWidth: number;
+
+  /** Gap between the right toolbar and native caption buttons in pixels */
+  topbarToolbarGap: number;
 
   /** macOS-specific: traffic light position {x, y} */
   trafficLightPosition?: { x: number; y: number };
@@ -82,6 +88,8 @@ const MACOS_CHROME: PlatformChromeContract = {
   leftNativeReserve: 86, // Space for traffic lights + padding
   rightNativeReserve: 0,
   captionButtonReserve: 0,
+  collapsedLeftRailWidth: 0,
+  topbarToolbarGap: 0,
   trafficLightPosition: { x: 14, y: 14 },
   windowMaterial: undefined,
   sidebarTitlebandMode: "topbar",
@@ -106,6 +114,8 @@ const WINDOWS_CHROME: PlatformChromeContract = {
   leftNativeReserve: 0,
   rightNativeReserve: 136, // Caption button reserve
   captionButtonReserve: 136,
+  collapsedLeftRailWidth: 84,
+  topbarToolbarGap: 6,
   trafficLightPosition: undefined,
   windowMaterial: "tabbed",
   sidebarTitlebandMode: "native",
@@ -119,7 +129,7 @@ const WINDOWS_CHROME: PlatformChromeContract = {
  *
  * - titleBarOverlay where supported, opaque fallback otherwise
  * - Window controls vary by DE/WM
- * - Opaque shell by default (no Mica/vibrancy assumptions)
+ * - Opaque shell by default (no native material assumptions)
  * - Aligned with Windows overlay height for shared renderer CSS
  * - CSS blur enabled but should be tested per WM
  */
@@ -130,6 +140,8 @@ const LINUX_CHROME: PlatformChromeContract = {
   leftNativeReserve: 0,
   rightNativeReserve: 192, // Window control reserve (varies by DE)
   captionButtonReserve: 0,
+  collapsedLeftRailWidth: 0,
+  topbarToolbarGap: 6,
   trafficLightPosition: undefined,
   windowMaterial: undefined,
   sidebarTitlebandMode: "topbar",
@@ -148,6 +160,8 @@ const OTHER_CHROME: PlatformChromeContract = {
   leftNativeReserve: 0,
   rightNativeReserve: 0,
   captionButtonReserve: 0,
+  collapsedLeftRailWidth: 0,
+  topbarToolbarGap: 0,
   trafficLightPosition: undefined,
   windowMaterial: undefined,
   sidebarTitlebandMode: "topbar",

@@ -116,10 +116,6 @@ samp {
   -webkit-app-region: drag;
 }
 
-.app-topbar--frame {
-  height: 2.75rem;
-}
-
 .app-topbar__controls {
   -webkit-app-region: no-drag;
 }
@@ -344,6 +340,16 @@ samp {
   .settings-shell {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+.settings-shell__back-button {
+  border: 1px solid color-mix(in srgb, var(--border-base) 50%, transparent);
+  background: color-mix(in srgb, var(--foreground) 3%, transparent);
+  box-shadow: none;
+}
+
+.settings-shell__back-button:hover {
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
 }
 
 .settings-shell__main {

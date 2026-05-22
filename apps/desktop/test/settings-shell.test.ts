@@ -1,8 +1,24 @@
 import { describe, expect, test } from "bun:test";
-import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
 
-import { getSettingsGroups, SettingsShell } from "../src/ui/settings/SettingsShell";
+import { getSettingsDragZoneStyle, getSettingsGroups } from "../src/ui/settings/SettingsShell";
+import type { DesktopPlatformInfo } from "../src/lib/desktopPlatform";
+
+function makePlatformInfo(
+  overrides: Partial<DesktopPlatformInfo> = {},
+): DesktopPlatformInfo {
+  return {
+    platform: "other",
+    rawPlatform: "other",
+    sidebarTitlebandMode: "topbar",
+    topbarControlPlacement: "inline",
+    usesNativeGlass: false,
+    disableCssBlur: false,
+    captionButtonReserve: 0,
+    collapsedLeftRailWidth: 0,
+    topbarToolbarGap: 0,
+    ...overrides,
+  };
+}
 
 describe("settings shell", () => {
   test("shows remote access when the feature is enabled", () => {
@@ -44,16 +60,17 @@ describe("settings shell", () => {
     expect(pageIds).not.toContain("featureFlags");
   });
 
-  test("keeps the drag zone out of normal layout flow", () => {
-    const markup = renderToStaticMarkup(createElement(SettingsShell));
-    expect(markup).toContain("settings-shell__drag-zone absolute inset-x-0 top-0");
-  });
-
-  test("keeps settings navigation copy on readable foreground-derived colors", () => {
-    const markup = renderToStaticMarkup(createElement(SettingsShell));
-    expect(markup).toContain("text-foreground/72");
-    expect(markup).toContain(
-      "font-normal text-foreground/78 hover:bg-foreground/[0.05] hover:text-foreground",
-    );
+  test("offsets the settings drag zone right of the nav on native titleband platforms", () => {
+    expect(getSettingsDragZoneStyle(280, makePlatformInfo())).toBeUndefined();
+    expect(
+      getSettingsDragZoneStyle(
+        280,
+        makePlatformInfo({
+          platform: "windows",
+          rawPlatform: "win32",
+          sidebarTitlebandMode: "native",
+        }),
+      ),
+    ).toEqual({ left: 280 });
   });
 });

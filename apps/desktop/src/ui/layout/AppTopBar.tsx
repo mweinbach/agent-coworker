@@ -30,6 +30,7 @@ import {
   SelectValue,
 } from "../../components/ui/select";
 import { useDesktopPlatform } from "../../lib/useDesktopPlatform";
+import { resolveCollapsedLeftRailWidth } from "../../lib/desktopPlatform";
 import { cn } from "../../lib/utils";
 import { PlatformTopBarChrome } from "./PlatformTopBarChrome";
 
@@ -64,12 +65,6 @@ interface AppTopBarProps {
   onPopOutCanvas?: () => void;
   onCloseCanvas?: () => void;
 }
-
-// Keep the collapsed Windows corner rail aligned with the long-standing title offset
-// so the thread shell clears the left controls and existing layout tests.
-const WIN32_COLLAPSED_LEFT_RAIL_WIDTH = 84;
-const WIN32_CAPTION_BUTTON_RESERVE = 136;
-const WIN32_RIGHT_TOOLBAR_GAP = 6;
 
 export function AppTopBar({
   busy,
@@ -107,9 +102,17 @@ export function AppTopBar({
   const detailsId = useId();
   const platformInfo = useDesktopPlatform();
   const isDarwin = platformInfo.platform === "macos";
-  const isWin32 = platformInfo.platform === "windows";
-  const showWin32CollapsedStrip = isWin32 && sidebarCollapsed;
+  const usesLeftRail = platformInfo.topbarControlPlacement === "left-rail";
+  const collapsedRailWidth = resolveCollapsedLeftRailWidth(platformInfo);
+  const showCollapsedLeftRail = usesLeftRail && sidebarCollapsed;
   const sidebarLabel = sidebarCollapsed ? "Show sidebar" : "Hide sidebar";
+  const contentFillLeft = usesLeftRail
+    ? sidebarCollapsed
+      ? collapsedRailWidth
+      : sidebarWidth
+    : sidebarCollapsed
+      ? 0
+      : sidebarWidth;
   const rightSidebarLabel = contextSidebarCollapsed ? "Show context" : "Hide context";
   const hasUsage = sessionUsage !== null || lastTurnUsage !== null;
   const estimatedCostLabel = useMemo(() => {
@@ -159,8 +162,8 @@ export function AppTopBar({
     if (budget.stopAtUsd !== null) parts.push(`Cap ${formatCost(budget.stopAtUsd)}`);
     return parts.length > 0 ? `Budget ${parts.join(" • ")}` : null;
   }, [sessionUsage]);
-  const titleOffset = showWin32CollapsedStrip
-    ? WIN32_COLLAPSED_LEFT_RAIL_WIDTH
+  const titleOffset = showCollapsedLeftRail
+    ? collapsedRailWidth
     : sidebarCollapsed
       ? 0
       : sidebarWidth;
@@ -183,18 +186,21 @@ export function AppTopBar({
       : showContextToggle || showQuickChatPopOut
         ? 2.75 * 16
         : 12;
-  const titleRightInset = isWin32
-    ? WIN32_CAPTION_BUTTON_RESERVE + WIN32_RIGHT_TOOLBAR_GAP + win32RightInset
+  const titleRightInset = usesLeftRail
+    ? platformInfo.captionButtonReserve +
+      platformInfo.topbarToolbarGap +
+      win32RightInset
     : defaultRightInset;
   const collapsedThreadAnchorStyle =
     sidebarCollapsed && isDarwin ? { paddingLeft: "10rem" } : undefined;
-  const win32TopbarStyle = isWin32
+  const reservesNativeCaptionButtons = platformInfo.captionButtonReserve > 0;
+  const toolbarRightStyle = reservesNativeCaptionButtons
     ? ({
-        "--win32-collapsed-left-rail-width": `${WIN32_COLLAPSED_LEFT_RAIL_WIDTH}px`,
-        "--win32-caption-button-reserve": `${WIN32_CAPTION_BUTTON_RESERVE}px`,
-        "--win32-toolbar-gap": `${WIN32_RIGHT_TOOLBAR_GAP}px`,
+        right:
+          platformInfo.captionButtonReserve + platformInfo.topbarToolbarGap + 12,
       } as CSSProperties)
     : undefined;
+  const toolbarPositionClass = reservesNativeCaptionButtons ? undefined : "right-3";
 
   useEffect(() => {
     setDetailsOpen(false);
@@ -232,10 +238,7 @@ export function AppTopBar({
   }, [detailsOpen]);
 
   return (
-    <div
-      className="app-topbar app-topbar--frame relative flex w-full shrink-0 items-center justify-end px-3"
-      style={win32TopbarStyle}
-    >
+    <div className="app-topbar app-topbar--frame relative flex w-full shrink-0 items-center justify-end px-3">
       <div
         className="app-topbar__sidebar-fill border-r border-border/70"
         aria-hidden="true"
@@ -247,11 +250,12 @@ export function AppTopBar({
       <div
         className="app-topbar__content-fill"
         aria-hidden="true"
-        style={{ left: sidebarCollapsed ? 0 : sidebarWidth }}
+        style={{ left: contentFillLeft }}
       />
       <PlatformTopBarChrome
         platformInfo={platformInfo}
         sidebarCollapsed={sidebarCollapsed}
+        sidebarWidth={sidebarWidth}
         onToggleSidebar={onToggleSidebar}
         onNewChat={onNewChat}
         sidebarLabel={sidebarLabel}
@@ -266,9 +270,9 @@ export function AppTopBar({
             className={cn(
               "app-topbar__thread-anchor relative flex min-w-0 items-center",
               sidebarCollapsed &&
-                !showWin32CollapsedStrip &&
+                !showCollapsedLeftRail &&
                 "app-topbar__thread-anchor--collapsed",
-              showWin32CollapsedStrip && "app-topbar__thread-anchor--win32-collapsed",
+              showCollapsedLeftRail && "app-topbar__thread-anchor--win32-collapsed",
             )}
             style={collapsedThreadAnchorStyle}
           >
@@ -316,9 +320,9 @@ export function AppTopBar({
             className={cn(
               "app-topbar__thread-anchor relative flex min-w-0",
               sidebarCollapsed &&
-                !showWin32CollapsedStrip &&
+                !showCollapsedLeftRail &&
                 "app-topbar__thread-anchor--collapsed",
-              showWin32CollapsedStrip && "app-topbar__thread-anchor--win32-collapsed",
+              showCollapsedLeftRail && "app-topbar__thread-anchor--win32-collapsed",
             )}
             style={collapsedThreadAnchorStyle}
           >
@@ -446,7 +450,13 @@ export function AppTopBar({
       </div>
 
       {canvasMode ? (
-        <div className="app-topbar__toolbar-layer app-topbar__toolbar--right app-topbar__controls absolute inset-y-0 right-3 flex items-center gap-1">
+        <div
+          className={cn(
+            "app-topbar__toolbar-layer app-topbar__toolbar--right app-topbar__controls absolute inset-y-0 flex items-center gap-1",
+            toolbarPositionClass,
+          )}
+          style={toolbarRightStyle}
+        >
           {busy ? (
             <Badge
               variant="secondary"
@@ -531,7 +541,13 @@ export function AppTopBar({
           ) : null}
         </div>
       ) : showQuickChatPopOut || showContextToggle || busy ? (
-        <div className="app-topbar__toolbar-layer app-topbar__toolbar--right app-topbar__controls absolute inset-y-0 right-3 flex items-center gap-1.5">
+        <div
+          className={cn(
+            "app-topbar__toolbar-layer app-topbar__toolbar--right app-topbar__controls absolute inset-y-0 flex items-center gap-1.5",
+            toolbarPositionClass,
+          )}
+          style={toolbarRightStyle}
+        >
           {busy ? (
             <Badge
               variant="secondary"

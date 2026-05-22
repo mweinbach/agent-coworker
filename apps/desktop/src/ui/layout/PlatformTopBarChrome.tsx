@@ -1,7 +1,11 @@
 import { PanelLeftIcon, SquarePenIcon } from "lucide-react";
+import type { CSSProperties } from "react";
 
 import { Button } from "../../components/ui/button";
-import type { DesktopPlatformInfo } from "../../lib/desktopPlatform";
+import {
+  type DesktopPlatformInfo,
+  resolveCollapsedLeftRailWidth,
+} from "../../lib/desktopPlatform";
 import { SidebarCollapseControl } from "./SidebarCollapseControl";
 
 /**
@@ -19,6 +23,7 @@ import { SidebarCollapseControl } from "./SidebarCollapseControl";
 export type PlatformTopBarChromeProps = {
   platformInfo: DesktopPlatformInfo;
   sidebarCollapsed: boolean;
+  sidebarWidth: number;
   onToggleSidebar: () => void;
   onNewChat: () => void;
   sidebarLabel: string;
@@ -27,11 +32,16 @@ export type PlatformTopBarChromeProps = {
 export function PlatformTopBarChrome({
   platformInfo,
   sidebarCollapsed,
+  sidebarWidth,
   onToggleSidebar,
   onNewChat,
   sidebarLabel,
 }: PlatformTopBarChromeProps) {
   const placement = platformInfo.topbarControlPlacement;
+  const collapsedRailWidth = resolveCollapsedLeftRailWidth(platformInfo);
+  const leftRailWidth = sidebarCollapsed
+    ? collapsedRailWidth
+    : Math.max(collapsedRailWidth, sidebarWidth);
 
   if (placement === "sidebar") {
     // macOS: collapse control lives adjacent to traffic lights
@@ -54,6 +64,7 @@ export function PlatformTopBarChrome({
         onToggleSidebar={onToggleSidebar}
         sidebarCollapsed={sidebarCollapsed}
         sidebarLabel={sidebarLabel}
+        railWidth={leftRailWidth}
       />
     );
   }
@@ -92,14 +103,22 @@ function Win32LeftRail({
   onToggleSidebar,
   sidebarCollapsed,
   sidebarLabel,
+  railWidth,
 }: {
   onNewChat: () => void;
   onToggleSidebar: () => void;
   sidebarCollapsed: boolean;
   sidebarLabel: string;
+  railWidth: number;
 }) {
+  const railStyle =
+    railWidth > 0 ? ({ width: railWidth, minWidth: railWidth } as CSSProperties) : undefined;
+
   return (
-    <div className="app-topbar__win32-left-rail absolute inset-y-0 left-0">
+    <div
+      className="app-topbar__win32-left-rail absolute inset-y-0 left-0"
+      style={railStyle}
+    >
       <div className="app-topbar__sidebar-strip app-topbar__win32-left-strip app-topbar__toolbar-layer app-topbar__controls absolute inset-0 flex min-w-0 items-center gap-1 px-1.5">
         <Button
           size="icon-sm"

@@ -7,6 +7,8 @@
   --platform-left-native-reserve: 0px;
   --platform-right-native-reserve: 0px;
   --platform-caption-button-reserve: 0px;
+  --platform-collapsed-left-rail-width: 0px;
+  --platform-topbar-toolbar-gap: 0px;
 }
 
 .app-topbar--frame {

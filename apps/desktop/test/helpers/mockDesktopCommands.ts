@@ -53,6 +53,8 @@ const DEFAULT_PLATFORM_CHROME = {
   leftNativeReserve: 0,
   rightNativeReserve: 0,
   captionButtonReserve: 0,
+  collapsedLeftRailWidth: 0,
+  topbarToolbarGap: 0,
   sidebarTitlebandMode: "topbar",
   topbarControlPlacement: "inline",
   usesNativeGlass: false,

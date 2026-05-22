@@ -20,7 +20,7 @@ import {
   showQuickChatWindow,
 } from "./lib/desktopCommands";
 import { getFilePreviewKind, isCanvasSupportedFile } from "./lib/filePreviewKind";
-import { applyPlatformChromeToDocument } from "./lib/platformChromeDom";
+import { applyPlatformChromeToDocument, syncPlatformChromeCssVars } from "./lib/platformChromeDom";
 import { canPopOutQuickChatThread } from "./lib/quickChatPopout";
 import { getDesktopWindowMode } from "./lib/windowMode";
 import { ASK_SKIP_TOKEN } from "./lib/wsProtocol";
@@ -461,6 +461,7 @@ export default function App() {
       root.dataset.highContrast =
         appearance.shouldUseHighContrastColors || appearance.inForcedColorsMode ? "true" : "false";
       root.dataset.reducedTransparency = appearance.prefersReducedTransparency ? "true" : "false";
+      syncPlatformChromeCssVars(document);
       root.style.colorScheme = theme;
       root.classList.toggle("dark", theme === "dark");
       root.classList.toggle("light", theme !== "dark");

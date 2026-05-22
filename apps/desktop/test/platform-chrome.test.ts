@@ -31,6 +31,8 @@ describe("getPlatformChrome", () => {
     expect(chrome.leftNativeReserve).toBe(0);
     expect(chrome.rightNativeReserve).toBe(136);
     expect(chrome.captionButtonReserve).toBe(136);
+    expect(chrome.collapsedLeftRailWidth).toBe(84);
+    expect(chrome.topbarToolbarGap).toBe(6);
     expect(chrome.trafficLightPosition).toBeUndefined();
     expect(chrome.windowMaterial).toBe("tabbed");
     expect(chrome.sidebarTitlebandMode).toBe("native");

@@ -5,9 +5,7 @@ import { makeConfig, makeTmpDirs, withEnv } from "./helpers";
 
 describe("Fire Pass provider", () => {
   test("defaults to Kimi K2.6 Turbo", () => {
-    expect(defaultModelForProvider("firepass")).toBe(
-      "accounts/fireworks/routers/kimi-k2p6-turbo",
-    );
+    expect(defaultModelForProvider("firepass")).toBe("accounts/fireworks/routers/kimi-k2p6-turbo");
   });
 
   test("getModelForProvider creates Fire Pass model with saved key", async () => {

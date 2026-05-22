@@ -1,7 +1,7 @@
 import {
   afterEach,
-  beforeEach,
   bashInternal,
+  beforeEach,
   createAskTool,
   createBashTool,
   createEditTool,
@@ -36,14 +36,6 @@ import {
   withEnv,
   writeConnectionStore,
   z,
-} from "./tools.harness";
-
-import {
-  makeConfig,
-  makeCtx,
-  tmpDir,
-  withAuthHome,
-  withEnv,
 } from "./tools.harness";
 
 describe("webFetch tool", () => {
@@ -1158,4 +1150,3 @@ describe("webFetch tool", () => {
 // ---------------------------------------------------------------------------
 // ask tool
 // ---------------------------------------------------------------------------
-

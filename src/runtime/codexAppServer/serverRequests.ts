@@ -1,15 +1,10 @@
-import type {
-  CodexAppServerJsonRpcRequest,
-} from "../../providers/codexAppServerClient";
+import type { CodexAppServerJsonRpcRequest } from "../../providers/codexAppServerClient";
+import { asArray, asRecord, asString } from "../../shared/recordParsing";
 import { isCodexDynamicCoworkToolName } from "../../tools/codexBoundary";
 import type { TodoItem } from "../../types";
-import { asArray, asRecord, asString } from "../../shared/recordParsing";
 import { isZodSchema } from "../piRuntimeOptions";
 import type { RuntimeRunTurnParams, RuntimeToolDefinition } from "../types";
-import {
-  type CodexDynamicToolCallResponse,
-  coworkToolNameFromCodexDynamicName,
-} from "./types";
+import { type CodexDynamicToolCallResponse, coworkToolNameFromCodexDynamicName } from "./types";
 
 function validateDynamicToolInput(tool: RuntimeToolDefinition, input: unknown): unknown {
   if (!isZodSchema(tool.inputSchema)) return input;

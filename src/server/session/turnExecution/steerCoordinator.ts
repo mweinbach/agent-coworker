@@ -43,9 +43,7 @@ function resolveUserInputDisplayText(
 export type SteerCoordinatorDeps = {
   context: SessionContext;
   historyManager: HistoryManager;
-  getTurnAttachmentValidationMessage: (
-    attachments?: readonly FileAttachment[],
-  ) => string | null;
+  getTurnAttachmentValidationMessage: (attachments?: readonly FileAttachment[]) => string | null;
   validateUploadedFileAttachments: (attachments?: readonly FileAttachment[]) => Promise<void>;
   buildUserMessageContent: (
     text: string,
@@ -97,11 +95,7 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
     }
 
     if (!context.state.acceptingSteers) {
-      context.emitError(
-        "validation_failed",
-        "session",
-        "Active turn no longer accepts steering.",
-      );
+      context.emitError("validation_failed", "session", "Active turn no longer accepts steering.");
       return;
     }
 

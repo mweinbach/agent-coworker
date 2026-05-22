@@ -1,5 +1,5 @@
-import type { ProjectedItem } from "../../shared/projectedItems";
 import type { ModelStreamUpdate } from "../../shared/modelStream";
+import type { ProjectedItem } from "../../shared/projectedItems";
 import type { ConversationProjectionState } from "./conversationProjectionState";
 import type { BufferedReasoningState } from "./conversationProjectionTypes";
 import {

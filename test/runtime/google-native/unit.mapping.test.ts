@@ -8,17 +8,11 @@ import {
   __internal as googleNativeInternal,
   runGoogleNativeInteractionStep,
 } from "../../../src/runtime/googleNativeInteractions";
-import { __internal as citationMetadataInternal } from "../../../src/server/citationMetadata";
 import type { RuntimeRunTurnParams } from "../../../src/runtime/types";
-import {
-  googleSseResponse,
-  liveGoogleTest,
-  makeConfig,
-  makeParams,
-} from "./fixtures";
+import { __internal as citationMetadataInternal } from "../../../src/server/citationMetadata";
+import { googleSseResponse, liveGoogleTest, makeConfig, makeParams } from "./fixtures";
 
 describe("google native interactions request building", () => {
-
   test("mapGoogleEventToStreamParts emits normalized model stream parts", () => {
     const blocks = new Map();
 
@@ -373,5 +367,4 @@ describe("google native interactions request building", () => {
       },
     ]);
   });
-
 });

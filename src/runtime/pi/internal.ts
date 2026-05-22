@@ -4,12 +4,7 @@ import {
   parseTelemetrySettings,
   startPiModelCallSpan as startModelCallSpan,
 } from "../../observability/modelCallSpan";
-import {
-  asFiniteNumber,
-  asNonEmptyString,
-  asRecord,
-  toPiJsonSchema,
-} from "../piRuntimeOptions";
+import { asFiniteNumber, asNonEmptyString, asRecord, toPiJsonSchema } from "../piRuntimeOptions";
 import {
   preparePiModelForStream,
   resolvePiModel,

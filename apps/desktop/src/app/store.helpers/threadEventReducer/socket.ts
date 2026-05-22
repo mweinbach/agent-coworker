@@ -1,4 +1,5 @@
 import type { SessionEvent } from "../../../lib/wsProtocol";
+import type { StoreGet, StoreSet } from "../../store.helpers";
 import {
   buildSyntheticServerHelloFromJsonRpcThread,
   buildSyntheticSessionInfoFromJsonRpcThread,
@@ -10,7 +11,6 @@ import {
   startJsonRpcThread,
 } from "../jsonRpcSocket";
 import { ensureThreadRuntime } from "../runtimeState";
-import type { StoreGet, StoreSet } from "../../store.helpers";
 import type { JsonRpcThreadStart } from "../threadEventReducerContext";
 import type { ThreadEventReducerContext } from "./context";
 import type { FeedProjectionModule } from "./feedProjection";
@@ -30,9 +30,7 @@ export function createSocketModule(
   >,
   jsonRpc: Pick<
     JsonRpcWorkspaceModule,
-    | "ensureWorkspaceJsonRpcRouter"
-    | "ensureWorkspaceJsonRpcLifecycle"
-    | "migrateThreadIdentity"
+    "ensureWorkspaceJsonRpcRouter" | "ensureWorkspaceJsonRpcLifecycle" | "migrateThreadIdentity"
   >,
   feed: Pick<FeedProjectionModule, "applyJsonRpcThreadSnapshot">,
   messaging: Pick<MessagingModule, "surfaceJsonRpcThreadStartFailure">,
@@ -55,11 +53,8 @@ export function createSocketModule(
     forgetThreadForReconnect,
     workspaceIdForThread,
   } = workspace;
-  const {
-    ensureWorkspaceJsonRpcRouter,
-    ensureWorkspaceJsonRpcLifecycle,
-    migrateThreadIdentity,
-  } = jsonRpc;
+  const { ensureWorkspaceJsonRpcRouter, ensureWorkspaceJsonRpcLifecycle, migrateThreadIdentity } =
+    jsonRpc;
   const { applyJsonRpcThreadSnapshot } = feed;
   const { surfaceJsonRpcThreadStartFailure } = messaging;
   const { handleThreadEvent } = handlers;

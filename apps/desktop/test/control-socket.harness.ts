@@ -192,8 +192,6 @@ export function registerControlSocketLifecycleHooks() {
 }
 
 export {
-  MockJsonRpcSocket,
-  RUNTIME,
   clearJsonRpcSocketOverride,
   createControlSocketHelpers,
   createState,
@@ -204,8 +202,10 @@ export {
   installFakeSocket,
   jsonRpcHandlers,
   jsonRpcRequests,
+  MockJsonRpcSocket,
   makeThread,
   makeThreadListEntry,
   persistCalls,
+  RUNTIME,
   setJsonRpcSocketOverride,
 };

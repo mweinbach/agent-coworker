@@ -1,9 +1,9 @@
 import type { AgentConfig } from "../../types";
 import {
   buildTitlePrompt,
+  type SessionTitleResult,
   sanitizeTitle,
   TITLE_MODELS_BY_PROVIDER,
-  type SessionTitleResult,
 } from "./shared";
 
 type RemoteModelTitleDeps = {

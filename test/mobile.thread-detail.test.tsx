@@ -171,9 +171,13 @@ mockLocalModule(
   "apps/mobile/src/components/thread/reasoning-card",
   () => ({ ReasoningCard: () => null }),
 );
-mockLocalModule("@/components/thread/todo-card", "apps/mobile/src/components/thread/todo-card", () => ({
-  TodoCard: () => null,
-}));
+mockLocalModule(
+  "@/components/thread/todo-card",
+  "apps/mobile/src/components/thread/todo-card",
+  () => ({
+    TodoCard: () => null,
+  }),
+);
 mockLocalModule("@/components/ui/screen", "apps/mobile/src/components/ui/screen", () => ({
   Screen: () => null,
 }));

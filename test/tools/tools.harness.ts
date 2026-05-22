@@ -22,10 +22,11 @@ import { createWriteTool } from "../../src/tools/write";
 import type { AgentConfig } from "../../src/types";
 import { __internal as webSafetyInternal } from "../../src/utils/webSafety";
 
+export type { AgentConfig, ToolContext };
 export {
   afterEach,
-  beforeEach,
   bashInternal,
+  beforeEach,
   createAskTool,
   createBashTool,
   createEditTool,
@@ -56,7 +57,6 @@ export {
   writeConnectionStore,
   z,
 };
-export type { AgentConfig, ToolContext };
 
 export async function withEnv<T>(
   key: string,

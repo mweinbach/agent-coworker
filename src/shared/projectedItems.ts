@@ -180,7 +180,9 @@ function toFeedItem(
       };
     case "toolCall": {
       const existingTool = existingToolItem(existing);
-      const existingTerminal = existingTool ? isTerminalProjectedToolState(existingTool.state) : false;
+      const existingTerminal = existingTool
+        ? isTerminalProjectedToolState(existingTool.state)
+        : false;
       const incomingTerminal = isTerminalProjectedToolState(item.state);
       const nextState =
         existingTerminal && !incomingTerminal && existingTool ? existingTool.state : item.state;

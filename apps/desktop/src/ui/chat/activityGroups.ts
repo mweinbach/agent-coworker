@@ -57,6 +57,7 @@ function getRecordValue(record: Record<string, unknown>, keys: string[]): unknow
 }
 
 import { isTerminalToolState } from "../../app/toolFeedState";
+
 function effectiveToolState(item: Extract<FeedItem, { kind: "tool" }>): ToolFeedState {
   if (isTerminalToolState(item.state) || item.result === undefined) return item.state;
   if (isRecord(item.result)) {

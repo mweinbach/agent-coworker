@@ -136,7 +136,8 @@ export function registerResearchServiceHooks() {
     process.env.GOOGLE_GENERATIVE_AI_API_KEY = "test-google-key";
     researchRuntimeImpls.createResearchInteractionStream = async () => emptyStream();
     researchRuntimeImpls.resumeResearchInteractionStream = async () => emptyStream();
-    researchRuntimeImpls.createResearchFileSearchStore = async () => "file-search-stores/mock-store";
+    researchRuntimeImpls.createResearchFileSearchStore = async () =>
+      "file-search-stores/mock-store";
     researchRuntimeImpls.uploadFileToResearchFileSearchStore = async () => ({
       documentName: "documents/mock-doc",
     });
@@ -157,7 +158,6 @@ export function registerResearchServiceHooks() {
 }
 
 export {
-  ResearchService,
   cancelResearchInteractionMock,
   createResearchFileSearchStoreMock,
   createResearchInteractionStreamMock,
@@ -167,6 +167,7 @@ export {
   installFetchStub,
   makeResearchRecord,
   makeTmpCoworkHome,
+  ResearchService,
   restoreFetchStub,
   resumeResearchInteractionStreamMock,
   uploadFileToResearchFileSearchStoreMock,

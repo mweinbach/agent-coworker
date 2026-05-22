@@ -9,7 +9,16 @@ import {
   SparklesIcon,
   SquarePenIcon,
 } from "lucide-react";
-import { type MouseEvent, memo, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type MouseEvent,
+  memo,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { resolvePluginCatalogWorkspaceSelection } from "../app/pluginManagement";
 import { hasGoogleApiKeyForResearch } from "../app/researchAvailability";
 import { useAppStore } from "../app/store";
@@ -24,11 +33,6 @@ import { confirmAction, showContextMenu } from "../lib/desktopCommands";
 import { resolveNewChatLandingProjectWorkspaceId } from "../lib/newChatLanding";
 import { useDesktopPlatform } from "../lib/useDesktopPlatform";
 import { cn } from "../lib/utils";
-import {
-  getVisibleSidebarThreads,
-  shouldEmphasizeWorkspaceRow,
-  swapSidebarItemsById,
-} from "./sidebarHelpers";
 import { SidebarOneOffChatItem } from "./sidebar/SidebarOneOffChatItem";
 import { SidebarSectionFrame } from "./sidebar/SidebarSectionFrame";
 import {
@@ -37,6 +41,11 @@ import {
   type WorkspaceMoveDirection,
 } from "./sidebar/SidebarWorkspaceItem";
 import { useSidebarPersistence } from "./sidebar/useSidebarPersistence";
+import {
+  getVisibleSidebarThreads,
+  shouldEmphasizeWorkspaceRow,
+  swapSidebarItemsById,
+} from "./sidebarHelpers";
 
 export const Sidebar = memo(function Sidebar() {
   const platformInfo = useDesktopPlatform();
@@ -230,12 +239,15 @@ export const Sidebar = memo(function Sidebar() {
   );
   const sectionReorderEnabled = orderedSectionKeys.length > 1;
 
-  const toggleThreadList = useCallback((workspaceId: string) => {
-    setExpandedThreadLists((current) => ({
-      ...current,
-      [workspaceId]: !current[workspaceId],
-    }));
-  }, [setExpandedThreadLists]);
+  const toggleThreadList = useCallback(
+    (workspaceId: string) => {
+      setExpandedThreadLists((current) => ({
+        ...current,
+        [workspaceId]: !current[workspaceId],
+      }));
+    },
+    [setExpandedThreadLists],
+  );
 
   const reorderEnabled = workspaceLifecycleEnabled && visibleProjectWorkspaces.length > 1;
 

@@ -10,7 +10,10 @@ export function asPartialTurnError(error: unknown): PartialTurnError | null {
   return error instanceof Error ? (error as PartialTurnError) : null;
 }
 
-export function resolvePartialTurnProgressSource(actualErr: unknown, fallbackErr: unknown): unknown {
+export function resolvePartialTurnProgressSource(
+  actualErr: unknown,
+  fallbackErr: unknown,
+): unknown {
   if (isRecord(actualErr) && "responseMessages" in actualErr) {
     return actualErr;
   }

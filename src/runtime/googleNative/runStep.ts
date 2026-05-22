@@ -1,9 +1,9 @@
+import { buildGoogleNativeRequest } from "./buildRequest";
+import { getGoogleInteractionsClient, resolveGoogleApiKey } from "./client";
 import {
   isGoogleGeneratedResponseSizeLimitError,
   makeGoogleGeneratedResponseSizeLimitError,
 } from "./errors";
-import { getGoogleInteractionsClient, resolveGoogleApiKey } from "./client";
-import { buildGoogleNativeRequest } from "./buildRequest";
 import { asNonEmptyString, usageNumber } from "./messageToInput";
 import {
   googleStreamEventContentType,
@@ -13,10 +13,7 @@ import {
 import { mapGoogleEventToStreamParts } from "./stream/mapToStreamParts";
 import { normalizeGoogleStreamEvent } from "./stream/normalize";
 import { processStreamEvent } from "./stream/processEvent";
-import type {
-  AssistantContentBlock,
-  ProviderToolCallState,
-} from "./stream/types";
+import type { AssistantContentBlock, ProviderToolCallState } from "./stream/types";
 import type {
   GoogleNativeStepRequest,
   GoogleNativeStepResult,

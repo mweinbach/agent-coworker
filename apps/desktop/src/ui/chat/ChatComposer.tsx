@@ -16,9 +16,10 @@ import type { ComposerAttachmentFile } from "../../lib/composerAttachments";
 import { cn } from "../../lib/utils";
 import type { ProviderName } from "../../lib/wsProtocol";
 import { MessageBarResizer } from "../layout/MessageBarResizer";
-import { resolveComposerBusyPolicy, getComposerSubmitState } from "./chatLogic";
+import { type getComposerSubmitState, resolveComposerBusyPolicy } from "./chatLogic";
 
 type ComposerSubmitState = ReturnType<typeof getComposerSubmitState>;
+
 import { DraftThreadModelSelector } from "./DraftThreadModelSelector";
 import { ThreadModelIndicator } from "./ThreadModelIndicator";
 

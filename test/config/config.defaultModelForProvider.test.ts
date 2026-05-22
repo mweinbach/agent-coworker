@@ -1,3 +1,6 @@
+import { describe, expect, mock, test } from "bun:test";
+import { defaultModelForProvider, getModel } from "../../src/config";
+import { PROVIDER_MODEL_CATALOG } from "../../src/providers";
 import {
   fs,
   loadConfig,
@@ -9,9 +12,6 @@ import {
   withMockedFetch,
   writeJson,
 } from "./config.harness";
-import { describe, expect, mock, test } from "bun:test";
-import { defaultModelForProvider, getModel } from "../../src/config";
-import { PROVIDER_MODEL_CATALOG } from "../../src/providers";
 
 describe("defaultModelForProvider", () => {
   for (const providerName of Object.keys(

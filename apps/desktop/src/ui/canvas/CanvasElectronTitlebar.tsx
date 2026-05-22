@@ -34,7 +34,10 @@ export function CanvasElectronTitlebar({
       </div>
 
       {trailing ? (
-        <div className="flex items-center gap-1 shrink-0 flex-1 justify-end" style={noDragRegionStyle}>
+        <div
+          className="flex items-center gap-1 shrink-0 flex-1 justify-end"
+          style={noDragRegionStyle}
+        >
           {trailing}
         </div>
       ) : null}

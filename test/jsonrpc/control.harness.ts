@@ -91,4 +91,3 @@ export async function enableProjectBackups(cwd: string): Promise<void> {
     `${JSON.stringify({ backupsEnabled: true })}\n`,
   );
 }
-

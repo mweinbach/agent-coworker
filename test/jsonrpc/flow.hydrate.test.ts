@@ -10,14 +10,13 @@ import {
 } from "../../src/shared/attachments";
 import { makeTmpProject, serverOpts, stopTestServer } from "../helpers/wsHarness";
 import {
+  connectJsonRpc,
   JSONRPC_REPLAY_TEST_TIMEOUT_MS,
   JSONRPC_REPLAY_WAIT_TIMEOUT_MS,
-  connectJsonRpc,
 } from "./flow.harness";
 
 describe("server JSON-RPC flows", () => {
-
-test("thread/hydrate returns snapshot + turns without subscribing the client", {
+  test("thread/hydrate returns snapshot + turns without subscribing the client", {
     timeout: JSONRPC_REPLAY_TEST_TIMEOUT_MS,
   }, async () => {
     const tmpDir = await makeTmpProject();

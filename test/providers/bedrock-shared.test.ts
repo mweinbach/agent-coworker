@@ -140,6 +140,25 @@ describe("providers/bedrockShared", () => {
     });
   });
 
+  test("uses USERPROFILE for ambient Bedrock auth when HOME is absent", async () => {
+    const home = await makeTmpHome();
+    const awsDir = path.join(home, ".aws");
+    await fs.mkdir(awsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(awsDir, "credentials"),
+      "[default]\naws_access_key_id = AKIADEFAULT1234\naws_secret_access_key = secret-default-1234\n",
+      "utf-8",
+    );
+
+    const auth = await resolveBedrockAuthConfig({
+      env: { USERPROFILE: home } as NodeJS.ProcessEnv,
+    });
+    expect(auth).toEqual({
+      methodId: "aws_default",
+      source: "env",
+    });
+  });
+
   test("recognizes EC2/IMDS-backed ambient auth as aws_default", async () => {
     const home = await makeTmpHome();
     const auth = await resolveBedrockAuthConfig({

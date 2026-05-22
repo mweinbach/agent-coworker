@@ -2,6 +2,8 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 
+import { isPathEqualOrInside } from "./pathBoundary";
+
 const SAFE_ID = /^[A-Za-z0-9_-]{1,256}$/;
 
 function normalizeBoundaryPath(targetPath: string): string {
@@ -67,10 +69,7 @@ export function assertDirection(direction: string): "server" | "client" {
 export function assertWithinTranscriptsDir(root: string, filePath: string): void {
   const normalizedRoot = path.resolve(root);
   const normalizedPath = path.resolve(filePath);
-  if (
-    normalizedPath !== normalizedRoot &&
-    !normalizedPath.startsWith(`${normalizedRoot}${path.sep}`)
-  ) {
+  if (!isPathEqualOrInside(normalizedRoot, normalizedPath)) {
     throw new Error("Resolved transcript path escapes transcript root");
   }
 }
@@ -83,10 +82,7 @@ export function assertPathWithinRoots(roots: string[], targetPath: string, label
   const normalizedTarget = normalizeBoundaryPath(targetPath);
   for (const root of roots) {
     const normalizedRoot = normalizeBoundaryPath(root);
-    if (
-      normalizedTarget === normalizedRoot ||
-      normalizedTarget.startsWith(`${normalizedRoot}${path.sep}`)
-    ) {
+    if (isPathEqualOrInside(normalizedRoot, normalizedTarget)) {
       return normalizedTarget;
     }
   }

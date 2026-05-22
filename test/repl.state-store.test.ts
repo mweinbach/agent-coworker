@@ -7,6 +7,7 @@ import { getStoredSessionForCwd, setStoredSessionForCwd } from "../src/cli/repl/
 
 let testHome = "";
 let previousHome: string | undefined;
+let previousUserProfile: string | undefined;
 
 function cliStatePath(): string {
   return path.join(testHome, ".cowork", "state", "cli-state.json");
@@ -16,6 +17,7 @@ describe("cli repl state store", () => {
   beforeEach(async () => {
     testHome = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-cli-state-"));
     previousHome = process.env.HOME;
+    previousUserProfile = process.env.USERPROFILE;
     process.env.HOME = testHome;
   });
 
@@ -24,6 +26,11 @@ describe("cli repl state store", () => {
       delete process.env.HOME;
     } else {
       process.env.HOME = previousHome;
+    }
+    if (previousUserProfile === undefined) {
+      delete process.env.USERPROFILE;
+    } else {
+      process.env.USERPROFILE = previousUserProfile;
     }
 
     if (!testHome) return;
@@ -68,5 +75,15 @@ describe("cli repl state store", () => {
     const expectedCwd = path.resolve("./project");
     expect(raw.version).toBe(1);
     expect(raw.lastSessionByCwd?.[expectedCwd]).toBe("session-123");
+  });
+
+  test("uses USERPROFILE when HOME is not set", async () => {
+    delete process.env.HOME;
+    process.env.USERPROFILE = testHome;
+
+    await setStoredSessionForCwd("./windows-project", "session-win");
+
+    const raw = JSON.parse(await fs.readFile(cliStatePath(), "utf-8")) as Record<string, any>;
+    expect(raw.lastSessionByCwd?.[path.resolve("./windows-project")]).toBe("session-win");
   });
 });

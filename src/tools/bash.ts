@@ -85,7 +85,7 @@ function execFileAsync(
         maxBuffer: opts.maxBuffer,
         windowsHide: true,
         ...(opts.env ? { env: opts.env } : {}),
-        ...(opts.timeoutMs ? { timeout: opts.timeoutMs, killSignal: "SIGTERM" } : {}),
+        ...(opts.timeoutMs ? { timeout: opts.timeoutMs, killSignal: "SIGTERM" } : {}), // Node.js converts SIGTERM to Windows process termination
         ...(opts.signal ? { signal: opts.signal } : {}),
       },
       (err, stdout, stderr) => {

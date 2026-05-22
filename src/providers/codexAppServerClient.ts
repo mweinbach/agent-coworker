@@ -340,14 +340,22 @@ async function stopProcess(child: ChildProcessWithoutNullStreams): Promise<void>
   if (child.exitCode !== null || child.killed) return;
   await new Promise<void>((resolve) => {
     const timeout = setTimeout(() => {
-      child.kill("SIGKILL");
+      if (process.platform === "win32") {
+        child.kill(); // Windows uses default termination
+      } else {
+        child.kill("SIGKILL");
+      }
       resolve();
     }, 5_000);
     child.once("exit", () => {
       clearTimeout(timeout);
       resolve();
     });
-    child.kill("SIGTERM");
+    if (process.platform === "win32") {
+      child.kill(); // Windows uses default termination
+    } else {
+      child.kill("SIGTERM");
+    }
   });
 }
 

@@ -9,6 +9,7 @@ import { useAppStore } from "../app/store";
 import {
   DesktopMessageLink,
   defaultDesktopRehypePlugins,
+  fileUrlToDesktopPath,
   remarkRewriteDesktopFileLinks,
 } from "../components/ai-elements/message";
 import { Badge } from "../components/ui/badge";
@@ -91,27 +92,84 @@ function basenamePath(p: string): string {
   return parts[parts.length - 1] ?? p;
 }
 
+type ParsedDesktopPath = {
+  prefix: string;
+  segments: string[];
+  separator: "/" | "\\";
+};
+
+function parseDesktopPath(rawPath: string): ParsedDesktopPath {
+  const separator: "/" | "\\" = rawPath.includes("\\") ? "\\" : "/";
+  const normalized = rawPath.replace(/\\/g, "/");
+
+  const uncMatch = normalized.match(/^\/\/([^/]+)\/([^/]+)(?:\/(.*))?$/);
+  if (uncMatch) {
+    const [, host, share, rest = ""] = uncMatch;
+    return {
+      prefix: `\\\\${host}\\${share}`,
+      segments: rest.split("/").filter(Boolean),
+      separator: "\\",
+    };
+  }
+
+  if (/^[A-Za-z]:\//.test(normalized)) {
+    return {
+      prefix: `${normalized.slice(0, 2)}${separator}`,
+      segments: normalized.slice(3).split("/").filter(Boolean),
+      separator,
+    };
+  }
+
+  if (normalized.startsWith("/")) {
+    return {
+      prefix: "/",
+      segments: normalized.split("/").filter(Boolean),
+      separator: "/",
+    };
+  }
+
+  return {
+    prefix: "",
+    segments: normalized.split("/").filter(Boolean),
+    separator,
+  };
+}
+
+function joinDesktopPath(parsed: ParsedDesktopPath): string {
+  const body = parsed.segments.join(parsed.separator);
+  if (!parsed.prefix) return body || ".";
+  if (parsed.prefix === "/") return body ? `/${body}` : "/";
+  if (/^[A-Za-z]:[\\/]$/.test(parsed.prefix))
+    return body ? `${parsed.prefix}${body}` : parsed.prefix;
+  return body ? `${parsed.prefix}${parsed.separator}${body}` : parsed.prefix;
+}
+
 function dirnamePath(p: string): string {
-  const normalized = p.replace(/\\/g, "/");
-  const lastSlash = normalized.lastIndexOf("/");
-  if (lastSlash <= 0) return normalized.startsWith("/") ? "/" : ".";
-  return normalized.slice(0, lastSlash);
+  const parsed = parseDesktopPath(p);
+  if (parsed.segments.length > 0) {
+    parsed.segments.pop();
+  }
+  return joinDesktopPath(parsed);
 }
 
 function isAbsolutePath(p: string): boolean {
-  return /^\//.test(p) || /^[A-Za-z]:[\\/]/.test(p);
+  return /^[\\/]/.test(p) || /^[A-Za-z]:[\\/]/.test(p);
 }
 
 function resolveRelativePath(base: string, relative: string): string {
   if (isAbsolutePath(relative)) return relative;
-  const dir = dirnamePath(base);
-  const parts = dir.split("/").filter(Boolean);
-  for (const segment of relative.split("/")) {
-    if (segment === "..") parts.pop();
-    else if (segment !== ".") parts.push(segment);
+  const parsed = parseDesktopPath(dirnamePath(base));
+  for (const segment of relative.replace(/\\/g, "/").split("/")) {
+    if (!segment || segment === ".") {
+      continue;
+    }
+    if (segment === "..") {
+      if (parsed.segments.length > 0) parsed.segments.pop();
+      continue;
+    }
+    parsed.segments.push(segment);
   }
-  const joined = parts.join("/");
-  return dir.startsWith("/") ? `/${joined}` : joined;
+  return joinDesktopPath(parsed);
 }
 
 const previewStreamdownPlugins = { cjk, code, math, mermaid };
@@ -137,10 +195,7 @@ function createRemarkResolveRelativeLinks(previewFilePath: string) {
 
       if (href.startsWith("file:")) {
         try {
-          const parsed = new URL(href);
-          const pathname = decodeURIComponent(parsed.pathname);
-          if (/^\/[a-zA-Z]:/.test(pathname)) localPath = pathname.slice(1).replace(/\//g, "\\");
-          else localPath = pathname;
+          localPath = fileUrlToDesktopPath(href);
         } catch {
           /* not a valid URL, skip */
         }
@@ -150,13 +205,21 @@ function createRemarkResolveRelativeLinks(previewFilePath: string) {
       }
 
       if (localPath) {
-        const encoded = `cowork-file://open?path=${encodeURIComponent(localPath)}`;
+        const encoded = `cowork-file://open?${new URLSearchParams({ path: localPath }).toString()}`;
         if (node.url !== undefined) node.url = encoded;
         if (node.properties?.href !== undefined) node.properties.href = encoded;
       }
     });
   };
 }
+
+export const __internalFilePreviewModal = {
+  basenamePath,
+  createRemarkResolveRelativeLinks,
+  dirnamePath,
+  isAbsolutePath,
+  resolveRelativePath,
+};
 
 function visitLinks(node: HastNode, fn: (n: HastNode) => void): void {
   if (node.type === "link" || (node.type === "element" && node.tagName === "a")) {

@@ -41,6 +41,7 @@ export async function ensureManagedSofficeRuntimeReady(
     COWORK_MANAGED_SOFFICE_SHIM_DIR: shimDir,
     COWORK_MANAGED_SOFFICE_SHIM: shimPath,
     COWORK_SOFFICE: shimPath,
+    SAL_DISABLE_SYNCHRONOUS_PRINTER_DETECTION: "1",
   };
   const runtimeEnv = prependPath(env, baseRuntimeEnv, shimDir);
 

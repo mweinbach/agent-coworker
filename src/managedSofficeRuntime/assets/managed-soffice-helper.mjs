@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const HELPER_VERSION = __COWORK_HELPER_VERSION__;
 const DEFAULT_LIBREOFFICE_VERSION = "__COWORK_LIBREOFFICE_VERSION__";
@@ -20,6 +20,24 @@ function log(message) {
     console.error("[cowork-soffice] " + message);
   }
 }
+
+function libreOfficeEnv(baseEnv = process.env) {
+  return {
+    ...baseEnv,
+    SAL_DISABLE_SYNCHRONOUS_PRINTER_DETECTION:
+      baseEnv.SAL_DISABLE_SYNCHRONOUS_PRINTER_DETECTION || "1",
+  };
+}
+
+const QUIET_PROFILE_REGISTRY = `<?xml version="1.0" encoding="UTF-8"?>
+<oor:items xmlns:oor="http://openoffice.org/2001/registry" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <item oor:path="/org.openoffice.Office.Common/Save/Document">
+    <prop oor:name="LoadPrinter" oor:op="fuse">
+      <value>false</value>
+    </prop>
+  </item>
+</oor:items>
+`;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -49,9 +67,10 @@ function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     stdio: options.stdio || "pipe",
     encoding: options.encoding || "utf8",
-    env: options.env || process.env,
+    env: libreOfficeEnv(options.env || process.env),
     cwd: options.cwd || process.cwd(),
     timeout: options.timeout,
+    windowsHide: true,
   });
   if (result.error) throw result.error;
   if (result.status !== 0) {
@@ -74,7 +93,8 @@ function isHealthySoffice(candidate) {
   const result = spawnSync(candidate, ["--version"], {
     stdio: "ignore",
     timeout: 15000,
-    env: process.env,
+    env: libreOfficeEnv(process.env),
+    windowsHide: true,
   });
   return !result.error && result.status === 0;
 }
@@ -241,7 +261,11 @@ async function installMacRuntime(archivePath, stagedRoot) {
     run("ditto", [appSource, appTarget], { timeout: 240000 });
   } finally {
     if (attached) {
-      spawnSync("hdiutil", ["detach", mountPoint, "-quiet"], { stdio: "ignore", timeout: 60000 });
+      spawnSync("hdiutil", ["detach", mountPoint, "-quiet"], {
+        stdio: "ignore",
+        timeout: 60000,
+        windowsHide: true,
+      });
     }
   }
   const soffice = macSofficePath(stagedRoot);
@@ -255,6 +279,7 @@ function extractDeb(debPath, stagedRoot, tempDir) {
     stdio: "pipe",
     encoding: "utf8",
     timeout: 120000,
+    windowsHide: true,
   });
   if (!dpkg.error && dpkg.status === 0) return;
 
@@ -405,6 +430,56 @@ async function resolveRealSoffice() {
   });
 }
 
+function hasUserInstallationArg(args) {
+  return args.some((arg) => arg.startsWith("-env:UserInstallation="));
+}
+
+function seedQuietProfile(profileDir) {
+  if (!profileDir) return;
+  const userDir = path.join(profileDir, "user");
+  const registryPath = path.join(userDir, "registrymodifications.xcu");
+  if (fileExists(registryPath)) return;
+  fs.mkdirSync(userDir, { recursive: true });
+  fs.writeFileSync(registryPath, QUIET_PROFILE_REGISTRY, "utf8");
+}
+
+function hasArg(args, expected) {
+  return args.some((arg) => arg.toLowerCase() === expected.toLowerCase());
+}
+
+function shouldNormalizeHeadlessArgs(args) {
+  return hasArg(args, "--headless") || hasArg(args, "--convert-to");
+}
+
+function createNormalizedHeadlessArgs(args) {
+  if (!shouldNormalizeHeadlessArgs(args)) {
+    return { args, profileDir: "" };
+  }
+  const argsWithoutProfiles = args.filter((arg) => !arg.startsWith("-env:UserInstallation="));
+  const normalizedArgs = [];
+  const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), "cowork-soffice-profile-"));
+  seedQuietProfile(profileDir);
+  normalizedArgs.push("-env:UserInstallation=" + pathToFileURL(profileDir).href);
+  if (hasUserInstallationArg(args)) {
+    log("replaced caller LibreOffice profile for headless conversion");
+  }
+  for (const arg of [
+    "--headless",
+    "--invisible",
+    "--nologo",
+    "--nodefault",
+    "--nofirststartwizard",
+    "--nolockcheck",
+    "--norestore",
+  ]) {
+    if (!hasArg(argsWithoutProfiles, arg)) normalizedArgs.push(arg);
+  }
+  return {
+    args: [...normalizedArgs, ...argsWithoutProfiles],
+    profileDir,
+  };
+}
+
 async function main() {
   const realSoffice = await resolveRealSoffice();
   if (process.env.COWORK_MANAGED_SOFFICE_PRINT_REAL === "1") {
@@ -412,16 +487,24 @@ async function main() {
     return;
   }
   log("using " + realSoffice);
-  const result = spawnSync(realSoffice, process.argv.slice(2), {
-    stdio: "inherit",
-    env: process.env,
-  });
-  if (result.error) throw result.error;
-  if (result.signal) {
-    process.kill(process.pid, result.signal);
-    return;
+  const invocation = createNormalizedHeadlessArgs(process.argv.slice(2));
+  try {
+    const result = spawnSync(realSoffice, invocation.args, {
+      stdio: "inherit",
+      env: libreOfficeEnv(process.env),
+      windowsHide: true,
+    });
+    if (result.error) throw result.error;
+    if (result.signal) {
+      process.kill(process.pid, result.signal);
+      return;
+    }
+    process.exit(result.status ?? 1);
+  } finally {
+    if (invocation.profileDir) {
+      fs.rmSync(invocation.profileDir, { recursive: true, force: true });
+    }
   }
-  process.exit(result.status ?? 1);
 }
 
 main().catch((error) => {

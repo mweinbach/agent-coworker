@@ -47,11 +47,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
   } = workspace;
 
   function disposeWorkspaceThreadEventState(workspaceId: string, getOverride?: StoreGet) {
-    disposeWorkspaceThreadEventStateInternal(
-      workspaceId,
-      getOverride,
-      resetLiveModelStreamRuntime,
-    );
+    disposeWorkspaceThreadEventStateInternal(workspaceId, getOverride, resetLiveModelStreamRuntime);
   }
 
   function disposeAllThreadEventState() {

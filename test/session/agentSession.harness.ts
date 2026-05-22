@@ -27,24 +27,24 @@ import {
 } from "../../src/shared/attachments";
 import type { AgentConfig, TodoItem } from "../../src/types";
 
+export type { TodoItem };
 export {
-  REAL_AGENT,
   ASK_SKIP_TOKEN,
-  SessionCostTracker,
   createExperimentalA2uiSurfaceManager,
-  deriveA2uiSurfacesFromSnapshot,
   createRuntime,
   defaultSupportedModel,
-  getSupportedModel,
+  deriveA2uiSurfacesFromSnapshot,
   fs,
-  os,
-  path,
+  getSupportedModel,
   MAX_ATTACHMENT_BASE64_SIZE,
   MAX_ATTACHMENT_INLINE_BYTE_SIZE,
   MAX_TURN_ATTACHMENT_COUNT,
   MAX_TURN_ATTACHMENT_TOTAL_BASE64_SIZE,
+  os,
+  path,
+  REAL_AGENT,
+  SessionCostTracker,
 };
-export type { TodoItem };
 
 const mockRunTurn = mock(async () => ({
   text: "",
@@ -133,6 +133,7 @@ mock.module("../../src/providers/codexAppServerClient", () => ({
 }));
 
 const { AgentSession } = await import("../../src/server/session/AgentSession");
+
 export { AgentSession };
 
 export function makeConfig(dir: string): AgentConfig {
@@ -343,10 +344,7 @@ export async function flushAsyncWork(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-export async function waitForCondition(
-  predicate: () => boolean,
-  timeoutMs = 1_000,
-): Promise<void> {
+export async function waitForCondition(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (predicate()) {

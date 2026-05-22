@@ -1,8 +1,10 @@
 import type { Interactions } from "@google/genai";
-import type { GoogleInteractionsModelInfo } from "../googleInteractionsModel";
 import type { ModelMessage } from "../../types";
+import type { GoogleInteractionsModelInfo } from "../googleInteractionsModel";
 
-export type GoogleInteractionsToolChoice = Interactions.ToolChoiceType | Interactions.ToolChoiceConfig;
+export type GoogleInteractionsToolChoice =
+  | Interactions.ToolChoiceType
+  | Interactions.ToolChoiceConfig;
 
 type GoogleInteractionsStreamOptions = {
   signal?: AbortSignal;

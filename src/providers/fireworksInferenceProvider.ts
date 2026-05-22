@@ -1,6 +1,6 @@
 import type { AgentConfig } from "../types";
-import { createFireworksInferenceModelAdapter } from "./modelAdapter";
 import type { FireworksInferenceProvider } from "./fireworksShared";
+import { createFireworksInferenceModelAdapter } from "./modelAdapter";
 
 function createFireworksInferenceProvider(provider: FireworksInferenceProvider) {
   return {

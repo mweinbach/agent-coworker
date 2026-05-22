@@ -1,5 +1,5 @@
-import type { PersistedThreadJournalEvent } from "../sessionDb";
 import { stripWhitespaceForTranscriptDedupe } from "../../shared/projectionPolicy";
+import type { PersistedThreadJournalEvent } from "../sessionDb";
 import {
   normalizeReasoningText,
   normalizeTranscriptReplayText,
@@ -157,10 +157,7 @@ export function createThreadTurnProjector() {
     }
   };
 
-  const currentOrRestartedReasoningItemId = (
-    turn: ProjectedTurnState,
-    rawId: string,
-  ): string => {
+  const currentOrRestartedReasoningItemId = (turn: ProjectedTurnState, rawId: string): string => {
     if (turn.reasoningClosedByBoundaryRawIds.has(rawId)) {
       turn.reasoningRestartedByBoundaryRawIds.add(rawId);
       return projectStartedItemId(turn, rawId);

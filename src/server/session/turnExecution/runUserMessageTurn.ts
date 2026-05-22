@@ -1,5 +1,5 @@
-import { supportsProviderManagedContinuationProvider } from "../../../shared/providerContinuation";
 import type { AgentExecutionState } from "../../../shared/agents";
+import { supportsProviderManagedContinuationProvider } from "../../../shared/providerContinuation";
 import type { FileAttachment, OrderedInputPart } from "../../jsonrpc/routes/shared";
 import { reasoningModeForProvider } from "../../modelStream";
 import type { HistoryManager } from "../HistoryManager";
@@ -22,8 +22,8 @@ import {
 } from "./turnResponseParsing";
 import { createTurnUsageAggregator } from "./turnUsageAggregator";
 import {
-  getTurnAttachmentValidationMessage,
   type ClassifiedTurnError,
+  getTurnAttachmentValidationMessage,
   type UserMessageAttachmentHelpers,
 } from "./userMessageAttachments";
 import {
@@ -65,7 +65,9 @@ export type UserMessageTurnRunner = {
   ) => Promise<void>;
 };
 
-export function createUserMessageTurnRunner(deps: UserMessageTurnRunnerDeps): UserMessageTurnRunner {
+export function createUserMessageTurnRunner(
+  deps: UserMessageTurnRunnerDeps,
+): UserMessageTurnRunner {
   const {
     context,
     historyManager,
@@ -313,8 +315,7 @@ export function createUserMessageTurnRunner(deps: UserMessageTurnRunnerDeps): Us
         }
 
         const lateSteersCommitted = (await steerCoordinator.commitPendingSteers()).length > 0;
-        continueSameTurn =
-          lateSteersCommitted && !context.state.abortController?.signal.aborted;
+        continueSameTurn = lateSteersCommitted && !context.state.abortController?.signal.aborted;
         context.state.acceptingSteers =
           continueSameTurn && tracker.startedStepCount < context.state.maxSteps;
       }

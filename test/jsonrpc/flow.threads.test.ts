@@ -10,14 +10,13 @@ import {
 } from "../../src/shared/attachments";
 import { makeTmpProject, serverOpts, stopTestServer } from "../helpers/wsHarness";
 import {
+  connectJsonRpc,
   JSONRPC_REPLAY_TEST_TIMEOUT_MS,
   JSONRPC_REPLAY_WAIT_TIMEOUT_MS,
-  connectJsonRpc,
 } from "./flow.harness";
 
 describe("server JSON-RPC flows", () => {
-
-test("one connection can start, list, and read multiple threads", async () => {
+  test("one connection can start, list, and read multiple threads", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
 

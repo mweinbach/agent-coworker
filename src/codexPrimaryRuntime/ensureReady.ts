@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { getAiCoworkerPaths } from "../store/connections";
 import { defaultExtractZipArchive, downloadCuratedPluginsArchive } from "./archive";
 import { CODEX_CURATED_PLUGINS_EXPORT_URL, CODEX_RUNTIME_SKILLS } from "./constants";
 import {
@@ -12,10 +13,13 @@ import {
   resolveArtifactTool,
   resolveRuntimeExecutablePaths,
 } from "./runtimeDiscovery";
-import { installSkills, removeLegacyRuntimeSkills, skillSourceFromPluginCacheForProbe } from "./skills";
+import {
+  installSkills,
+  removeLegacyRuntimeSkills,
+  skillSourceFromPluginCacheForProbe,
+} from "./skills";
 import { runtimeStateFile, writeState } from "./state";
 import type { CodexPrimaryRuntimeSetupResult, EnsureCodexPrimaryRuntimeOptions } from "./types";
-import { getAiCoworkerPaths } from "../store/connections";
 
 function isTruthy(value: string | undefined): boolean {
   const normalized = value?.trim().toLowerCase();

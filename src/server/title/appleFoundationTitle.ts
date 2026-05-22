@@ -2,12 +2,7 @@ import { randomInt } from "node:crypto";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-import {
-  buildTitlePrompt,
-  sanitizeTitle,
-  TITLE_MAX_CHARS,
-  tokenize,
-} from "./shared";
+import { buildTitlePrompt, sanitizeTitle, TITLE_MAX_CHARS, tokenize } from "./shared";
 
 export const APPLE_FOUNDATION_TITLE_MODEL = "SystemLanguageModel";
 const APPLE_MODEL_NOT_READY_REASON = 2;

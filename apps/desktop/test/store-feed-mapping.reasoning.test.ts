@@ -9,7 +9,6 @@ import {
 import type { TranscriptEvent } from "../src/app/types";
 
 describe("desktop transcript feed mapping", () => {
-
   test("anchors late final reasoning before streamed assistant output", () => {
     const runtime = createThreadModelStreamRuntime();
     runtime.lastAssistantTurnId = "turn-live";
@@ -589,5 +588,4 @@ describe("desktop transcript feed mapping", () => {
     expect(reasoning[0]?.text).toBe("Searching for the latest GTC details.");
     expect(feed.map((item) => item.kind)).toEqual(["message", "reasoning", "message"]);
   });
-
 });

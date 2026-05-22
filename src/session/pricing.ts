@@ -20,11 +20,11 @@
  * `COWORK_MODEL_PRICING_OVERRIDES='{"provider:model":{"inputPerMillion":...,"outputPerMillion":...}}'`.
  */
 
-import type { ProviderName } from "../types";
 import {
   isFireworksInferenceProvider,
   listFireworksInferencePricingEntries,
 } from "../providers/fireworksShared";
+import type { ProviderName } from "../types";
 
 export type ModelPricing = {
   /** Cost per 1M input/prompt tokens in USD. */

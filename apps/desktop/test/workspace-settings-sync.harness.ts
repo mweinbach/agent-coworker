@@ -682,8 +682,6 @@ export function registerWorkspaceSettingsSyncLifecycleHooks() {
 }
 
 export {
-  MockJsonRpcSocket,
-  RUNTIME,
   __controlSocketInternal,
   __threadEventReducerInternal,
   clearJsonRpcSocketOverride,
@@ -699,8 +697,10 @@ export {
   jsonRpcResponseOverrides,
   jsonRpcSocketInternal,
   latestRequest,
+  MockJsonRpcSocket,
   makeSessionSnapshot,
   primeWorkspaceConnection,
+  RUNTIME,
   requestJsonRpcControlEvent,
   requestsFor,
   seedConnectedThread,

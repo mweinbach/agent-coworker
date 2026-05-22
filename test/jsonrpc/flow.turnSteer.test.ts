@@ -10,14 +10,13 @@ import {
 } from "../../src/shared/attachments";
 import { makeTmpProject, serverOpts, stopTestServer } from "../helpers/wsHarness";
 import {
+  connectJsonRpc,
   JSONRPC_REPLAY_TEST_TIMEOUT_MS,
   JSONRPC_REPLAY_WAIT_TIMEOUT_MS,
-  connectJsonRpc,
 } from "./flow.harness";
 
 describe("server JSON-RPC flows", () => {
-
-test("turn/start rejects at the request layer when the thread is already running", async () => {
+  test("turn/start rejects at the request layer when the thread is already running", async () => {
     const tmpDir = await makeTmpProject();
     const releaseTurn = Promise.withResolvers<void>();
     const { server, url } = await startAgentServer(

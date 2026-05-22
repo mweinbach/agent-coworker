@@ -289,5 +289,4 @@ describe("JSON-RPC projectors", () => {
       text: "Inspecting the reports.",
     });
   });
-
 });

@@ -1,4 +1,9 @@
-import { AlertTriangleIcon, LoaderCircleIcon, MessageSquareIcon, RotateCcwIcon } from "lucide-react";
+import {
+  AlertTriangleIcon,
+  LoaderCircleIcon,
+  MessageSquareIcon,
+  RotateCcwIcon,
+} from "lucide-react";
 import type { RefObject } from "react";
 import type { CitationSource } from "../../../../../src/shared/displayCitationMarkers";
 import {

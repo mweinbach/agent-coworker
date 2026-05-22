@@ -1,21 +1,25 @@
 import { buildGoogleNativeRequest } from "./buildRequest";
-import { getGoogleInteractionsClient, googleInteractionsClientCache, resolveGoogleApiKey } from "./client";
+import {
+  getGoogleInteractionsClient,
+  googleInteractionsClientCache,
+  resolveGoogleApiKey,
+} from "./client";
 import {
   classifyGoogleInteractionError,
   isGoogleGeneratedResponseSizeLimitError,
   isRetryableGoogleInteractionError,
 } from "./errors";
-import { convertMessagesToInteractionsInput } from "./messageToInput";
 import { googleTurnMessagesToModelMessages } from "./interactionsToModel";
+import { convertMessagesToInteractionsInput } from "./messageToInput";
 import {
   enrichTextBlockAnnotations,
   isGoogleCodeExecutionContentType,
   queueTextBlockAnnotationEnrichment,
 } from "./nativeTools";
-import { convertToolsToInteractionsTools } from "./toolsAndBuiltIns";
 import { mapGoogleEventToStreamParts } from "./stream/mapToStreamParts";
 import { normalizeGoogleStreamEvent } from "./stream/normalize";
 import { processStreamEvent } from "./stream/processEvent";
+import { convertToolsToInteractionsTools } from "./toolsAndBuiltIns";
 
 export const __internal = {
   buildGoogleNativeRequest,

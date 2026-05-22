@@ -8,9 +8,7 @@ import { makeConfig } from "./helpers";
 describe("Antigravity provider", () => {
   test("defaults to the Gemini 3.1 Pro preview API model id", () => {
     expect(defaultModelForProvider("antigravity")).toBe("gemini-3.1-pro-preview");
-    expect(PROVIDER_MODEL_CATALOG.antigravity.availableModels).toContain(
-      "gemini-3.1-pro-preview",
-    );
+    expect(PROVIDER_MODEL_CATALOG.antigravity.availableModels).toContain("gemini-3.1-pro-preview");
     expect(PROVIDER_MODEL_CATALOG.antigravity.availableModels).not.toContain("gemini-3.1-pro");
   });
 

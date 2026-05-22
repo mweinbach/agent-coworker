@@ -10,14 +10,13 @@ import {
 } from "../../src/shared/attachments";
 import { makeTmpProject, serverOpts, stopTestServer } from "../helpers/wsHarness";
 import {
+  connectJsonRpc,
   JSONRPC_REPLAY_TEST_TIMEOUT_MS,
   JSONRPC_REPLAY_WAIT_TIMEOUT_MS,
-  connectJsonRpc,
 } from "./flow.harness";
 
 describe("server JSON-RPC flows", () => {
-
-test("thread/resume does not duplicate a pending user input request when afterSeq also replays it", async () => {
+  test("thread/resume does not duplicate a pending user input request when afterSeq also replays it", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(
       serverOpts(tmpDir, {

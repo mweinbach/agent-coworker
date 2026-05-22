@@ -18,8 +18,8 @@ import {
 import type { FeedItemProjection } from "./conversationProjectionFeedItems";
 import type { ReasoningProjection } from "./conversationProjectionReasoning";
 import {
-  clearTurnProjectionState,
   type ConversationProjectionState,
+  clearTurnProjectionState,
 } from "./conversationProjectionState";
 import type { ToolProjection } from "./conversationProjectionTools";
 import { makeItemId } from "./shared";
@@ -87,7 +87,10 @@ export function createSessionEventHandler(
         state.activeTurnId = null;
         return;
       case "model_stream_raw": {
-        const updates = replayModelStreamRawEvent(state.replayRuntime, event as ModelStreamRawEvent);
+        const updates = replayModelStreamRawEvent(
+          state.replayRuntime,
+          event as ModelStreamRawEvent,
+        );
         for (const update of updates) {
           handleModelStreamUpdate(update);
         }

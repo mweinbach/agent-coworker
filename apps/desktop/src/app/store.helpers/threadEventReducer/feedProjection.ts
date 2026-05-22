@@ -18,16 +18,8 @@ import {
   type ThreadModelStreamRuntime,
 } from "../../store.feedMapping";
 import type { StoreGet, StoreSet } from "../../store.helpers";
-import {
-  clearPendingThreadSteer,
-  hasPendingThreadSteer,
-  RUNTIME,
-} from "../runtimeState";
-import {
-  createDefaultA2uiDock,
-  type FeedItem,
-  type SessionSnapshot,
-} from "../../types";
+import { createDefaultA2uiDock, type FeedItem, type SessionSnapshot } from "../../types";
+import { clearPendingThreadSteer, hasPendingThreadSteer, RUNTIME } from "../runtimeState";
 import { MAX_FEED_ITEMS } from "../threadEventReducerContext";
 import type { ThreadEventReducerContext } from "./context";
 import type { WorkspaceStateHelpers } from "./workspaceState";
@@ -438,7 +430,10 @@ export function createFeedProjectionModule(
             ? {
                 ...entry,
                 title: snapshot.title,
-                titleSource: ctx.deps.normalizeThreadTitleSource(snapshot.titleSource, snapshot.title),
+                titleSource: ctx.deps.normalizeThreadTitleSource(
+                  snapshot.titleSource,
+                  snapshot.title,
+                ),
                 lastMessageAt: nextLastMessageAt,
                 sessionId: snapshot.sessionId,
                 messageCount: nextMessageCount,

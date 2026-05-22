@@ -1,5 +1,4 @@
-import type { TurnUsage } from "../../../session/costTracker";
-import type { SessionCostTracker } from "../../../session/costTracker";
+import type { SessionCostTracker, TurnUsage } from "../../../session/costTracker";
 import type { ProviderName } from "../../../types";
 import type { SessionEvent } from "../../protocol";
 
@@ -52,7 +51,9 @@ export type TurnUsageAggregator = {
   persistAggregatedUsage: () => void;
 };
 
-export function createTurnUsageAggregator(options: TurnUsageAggregatorOptions): TurnUsageAggregator {
+export function createTurnUsageAggregator(
+  options: TurnUsageAggregatorOptions,
+): TurnUsageAggregator {
   let aggregatedUsage: TurnUsage | undefined;
   let persistedAggregatedUsage = false;
   const usageAccountedErrors = new WeakSet<object>();

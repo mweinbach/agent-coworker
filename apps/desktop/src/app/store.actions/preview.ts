@@ -1,8 +1,8 @@
+import type { PresentationPreviewResult } from "../../../../../src/server/presentationPreview";
 import type {
   SpreadsheetPreviewResult,
   SpreadsheetPreviewViewportRequest,
 } from "../../../../../src/shared/spreadsheetPreview";
-import type { PresentationPreviewResult } from "../../../../../src/server/presentationPreview";
 import type { AppStoreActions, StoreGet, StoreSet } from "../store.helpers";
 import {
   previewJsonRpcWorkspacePresentation,
@@ -33,7 +33,12 @@ export function createPreviewActions(
       if (!workspaceId) {
         throw new Error("No active workspace found.");
       }
-      return previewJsonRpcWorkspacePresentation(get, set, workspaceId, path) as Promise<PresentationPreviewResult>;
+      return previewJsonRpcWorkspacePresentation(
+        get,
+        set,
+        workspaceId,
+        path,
+      ) as Promise<PresentationPreviewResult>;
     },
   };
 }

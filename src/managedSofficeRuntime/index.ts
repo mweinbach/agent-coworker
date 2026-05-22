@@ -1,8 +1,4 @@
-export type {
-  EnsureManagedSofficeRuntimeOptions,
-  ManagedSofficeRuntimeDiagnostic,
-  ManagedSofficeRuntimeSetupResult,
-} from "./types";
+export { checkManagedSofficeRuntime } from "./diagnostics";
 
 export { ensureManagedSofficeRuntimeReady } from "./ensureReady";
 export {
@@ -10,5 +6,9 @@ export {
   prepareManagedSofficeToolEnv,
   renderManagedSofficeRuntimeInstructions,
 } from "./instructions";
-export { checkManagedSofficeRuntime } from "./diagnostics";
 export { __internal } from "./internal";
+export type {
+  EnsureManagedSofficeRuntimeOptions,
+  ManagedSofficeRuntimeDiagnostic,
+  ManagedSofficeRuntimeSetupResult,
+} from "./types";

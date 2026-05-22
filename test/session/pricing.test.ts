@@ -107,10 +107,7 @@ describe("pricing", () => {
     });
 
     it("resolves exact match for Fire Pass Kimi K2.6 Turbo pricing", () => {
-      const pricing = resolveModelPricing(
-        "firepass",
-        "accounts/fireworks/routers/kimi-k2p6-turbo",
-      );
+      const pricing = resolveModelPricing("firepass", "accounts/fireworks/routers/kimi-k2p6-turbo");
       expect(pricing).not.toBeNull();
       expect(pricing!.inputPerMillion).toBe(0.95);
       expect(pricing!.outputPerMillion).toBe(4);

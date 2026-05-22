@@ -1,8 +1,8 @@
 import { type AttributeValue, type Span, SpanStatusCode, trace } from "@opentelemetry/api";
 
 import type { TelemetrySettings } from "../observability/runtime";
-import { asFiniteNumber, asNonEmptyString, asRecord, asString } from "../shared/recordParsing";
 import type { RuntimeRunTurnParams, RuntimeUsage } from "../runtime/types";
+import { asFiniteNumber, asNonEmptyString, asRecord, asString } from "../shared/recordParsing";
 
 function safeJsonStringify(value: unknown): string {
   try {

@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { defaultModelForProvider, getModel, loadConfig } from "../../src/config";
 
-export { defaultModelForProvider, getModel, loadConfig, fs, os, path };
+export { defaultModelForProvider, fs, getModel, loadConfig, os, path };
 
 export function repoRoot(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
@@ -43,7 +43,10 @@ export async function withEnv<T>(
   }
 }
 
-export async function withMockedFetch<T>(fetchImpl: typeof fetch, run: () => Promise<T>): Promise<T> {
+export async function withMockedFetch<T>(
+  fetchImpl: typeof fetch,
+  run: () => Promise<T>,
+): Promise<T> {
   const previous = globalThis.fetch;
   globalThis.fetch = fetchImpl;
   try {

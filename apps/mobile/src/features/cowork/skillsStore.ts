@@ -7,7 +7,7 @@ import type {
   SkillInstallationEntry,
   SkillInstallPreview,
   SkillUpdateCheckResult,
-} from "../../../../../src/shared/jsonrpcControlSchemas";
+} from "@/cowork-shared/jsonrpcControlSchemas";
 import { callParsedControlMethod } from "./controlRpc";
 import type { CoworkJsonRpcClient } from "./jsonRpcClient";
 import { saveToOfflineCache } from "./offlineCache";

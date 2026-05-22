@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-
+import { decodeCoworkPairingTicket as decodeMobileCoworkPairingTicket } from "../apps/mobile/src/features/pairing/coworkTicket";
 import {
   base32Decode,
   base32Encode,
@@ -35,6 +35,7 @@ describe("cowork pairing tickets", () => {
 
     expect(encoded.startsWith("cowork-pair://")).toBe(true);
     expect(decodeCoworkPairingTicket(encoded)).toEqual(ticket);
+    expect(decodeMobileCoworkPairingTicket(encoded)).toEqual(ticket);
   });
 
   test("rejects tickets with the wrong scheme", () => {

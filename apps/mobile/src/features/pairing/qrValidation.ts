@@ -1,4 +1,4 @@
-import { decodeCoworkPairingTicket } from "../../../../../src/shared/coworkTicket";
+import { decodeCoworkPairingTicket } from "./coworkTicket";
 import type { PairingQrPayload } from "./pairingTypes";
 
 export function parsePairingQrPayload(rawValue: string): PairingQrPayload {

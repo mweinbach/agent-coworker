@@ -1,11 +1,27 @@
+import type {
+  JsonRpcControlResult,
+  McpServerEntry,
+  MemoryEntry,
+  ProviderAuthMethod,
+  ProviderCatalogEntry,
+  ProviderStatusEntry,
+  SkillCatalogSnapshot,
+  SkillEntry,
+  SkillInstallationEntry,
+  WorkspaceBackupEntry,
+} from "@/cowork-shared/jsonrpcControlSchemas";
 import { useBackupStore } from "./backupStore";
+import type { WorkspaceControlSnapshot } from "./controlRpc";
 import { useMcpStore } from "./mcpStore";
 import { useMemoryStore } from "./memoryStore";
+import type { WorkspaceSummary } from "./protocolTypes";
 import { useProviderStore } from "./providerStore";
 import { useSkillsStore } from "./skillsStore";
 import { useWorkspaceStore } from "./workspaceStore";
 
-let secureStorePromise: Promise<any> | null = null;
+type McpConfigFile = JsonRpcControlResult<"cowork/mcp/servers/read">["event"]["files"][number];
+
+let secureStorePromise: Promise<typeof import("expo-secure-store")> | null = null;
 async function getSecureStore() {
   if (!secureStorePromise) {
     secureStorePromise = import("expo-secure-store");
@@ -13,11 +29,11 @@ async function getSecureStore() {
   return await secureStorePromise;
 }
 
-export async function saveToOfflineCache(key: string, value: any): Promise<void> {
+export async function saveToOfflineCache(key: string, value: unknown): Promise<void> {
   try {
     const SecureStore = await getSecureStore();
     await SecureStore.setItemAsync(`cowork.cache.${key}`, JSON.stringify(value));
-  } catch (err) {
+  } catch {
     // Silent fail in tests / environments without SecureStore
   }
 }
@@ -27,7 +43,7 @@ export async function loadFromOfflineCache<T>(key: string): Promise<T | null> {
     const SecureStore = await getSecureStore();
     const raw = await SecureStore.getItemAsync(`cowork.cache.${key}`);
     return raw ? (JSON.parse(raw) as T) : null;
-  } catch (err) {
+  } catch {
     return null;
   }
 }
@@ -35,11 +51,11 @@ export async function loadFromOfflineCache<T>(key: string): Promise<T | null> {
 export async function loadAllOfflineWorkspaceCache(): Promise<void> {
   try {
     // 1. Workspaces & active workspace
-    const workspaces = await loadFromOfflineCache<any[]>("workspaces");
+    const workspaces = await loadFromOfflineCache<WorkspaceSummary[]>("workspaces");
     const activeWorkspaceId = await loadFromOfflineCache<string>("activeWorkspaceId");
     const activeWorkspaceName = await loadFromOfflineCache<string>("activeWorkspaceName");
     const activeWorkspaceCwd = await loadFromOfflineCache<string>("activeWorkspaceCwd");
-    const controlSnapshot = await loadFromOfflineCache<any>("controlSnapshot");
+    const controlSnapshot = await loadFromOfflineCache<WorkspaceControlSnapshot>("controlSnapshot");
 
     if (workspaces || activeWorkspaceCwd) {
       useWorkspaceStore.setState({
@@ -52,9 +68,11 @@ export async function loadAllOfflineWorkspaceCache(): Promise<void> {
     }
 
     // 2. Providers
-    const catalog = await loadFromOfflineCache<any[]>("providerCatalog");
-    const authMethods = await loadFromOfflineCache<any>("providerAuthMethods");
-    const status = await loadFromOfflineCache<any>("providerStatus");
+    const catalog = await loadFromOfflineCache<ProviderCatalogEntry[]>("providerCatalog");
+    const authMethods =
+      await loadFromOfflineCache<Record<string, ProviderAuthMethod[]>>("providerAuthMethods");
+    const status =
+      await loadFromOfflineCache<Record<string, ProviderStatusEntry>>("providerStatus");
     if (catalog || authMethods || status) {
       useProviderStore.setState({
         catalog: catalog ?? [],
@@ -64,9 +82,9 @@ export async function loadAllOfflineWorkspaceCache(): Promise<void> {
     }
 
     // 3. MCP Servers
-    const mcpServers = await loadFromOfflineCache<any[]>("mcpServers");
-    const mcpFiles = await loadFromOfflineCache<any[]>("mcpFiles");
-    const mcpWarnings = await loadFromOfflineCache<any[]>("mcpWarnings");
+    const mcpServers = await loadFromOfflineCache<McpServerEntry[]>("mcpServers");
+    const mcpFiles = await loadFromOfflineCache<McpConfigFile[]>("mcpFiles");
+    const mcpWarnings = await loadFromOfflineCache<string[]>("mcpWarnings");
     if (mcpServers) {
       useMcpStore.setState({
         servers: mcpServers,
@@ -76,10 +94,11 @@ export async function loadAllOfflineWorkspaceCache(): Promise<void> {
     }
 
     // 4. Skills
-    const skills = await loadFromOfflineCache<any[]>("skills");
-    const skillsCatalog = await loadFromOfflineCache<any>("skillsCatalog");
-    const skillsInstallations = await loadFromOfflineCache<any[]>("skillsInstallations");
-    const skillsEffectiveInstallations = await loadFromOfflineCache<any[]>(
+    const skills = await loadFromOfflineCache<SkillEntry[]>("skills");
+    const skillsCatalog = await loadFromOfflineCache<SkillCatalogSnapshot>("skillsCatalog");
+    const skillsInstallations =
+      await loadFromOfflineCache<SkillInstallationEntry[]>("skillsInstallations");
+    const skillsEffectiveInstallations = await loadFromOfflineCache<SkillInstallationEntry[]>(
       "skillsEffectiveInstallations",
     );
     if (skills) {
@@ -92,7 +111,7 @@ export async function loadAllOfflineWorkspaceCache(): Promise<void> {
     }
 
     // 5. Memory
-    const memories = await loadFromOfflineCache<any[]>("memories");
+    const memories = await loadFromOfflineCache<MemoryEntry[]>("memories");
     if (memories) {
       useMemoryStore.setState({
         entries: memories,
@@ -100,7 +119,7 @@ export async function loadAllOfflineWorkspaceCache(): Promise<void> {
     }
 
     // 6. Backups
-    const backups = await loadFromOfflineCache<any[]>("backups");
+    const backups = await loadFromOfflineCache<WorkspaceBackupEntry[]>("backups");
     const workspacePath = await loadFromOfflineCache<string>("workspacePath");
     if (backups) {
       useBackupStore.setState({
@@ -108,7 +127,7 @@ export async function loadAllOfflineWorkspaceCache(): Promise<void> {
         workspacePath: workspacePath ?? null,
       });
     }
-  } catch (err) {
+  } catch {
     // Silent fail on startup
   }
 }

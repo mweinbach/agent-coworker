@@ -21,6 +21,7 @@
         "expo-router": "~56.2.5",
         "expo-secure-store": "~56.0.4",
         "expo-splash-screen": "~56.0.9",
+        "expo-system-ui": "~56.0.5",
         "nativewind": "5.0.0-preview.2",
         "react": "19.2.3",
         "react-native": "0.85.3",
@@ -661,6 +662,8 @@
     "expo-splash-screen": ["expo-splash-screen@56.0.9", "", { "dependencies": { "@expo/config-plugins": "~56.0.7", "@expo/image-utils": "^0.10.0", "xml2js": "0.6.0" }, "peerDependencies": { "expo": "*" } }, "sha512-H53Hu9YnvXR54D9/5GuxA2Ifno2YOJE+F21vt8gprbh3+Pv8keCsoR+TihCqkDhwxrBVYdWFtGtDhSadw77MVQ=="],
 
     "expo-symbols": ["expo-symbols@56.0.5", "", { "dependencies": { "@expo-google-fonts/material-symbols": "^0.4.1", "sf-symbols-typescript": "^2.0.0" }, "peerDependencies": { "expo": "*", "expo-font": "*", "react": "*", "react-native": "*" } }, "sha512-RIukH0Xo80C7RU8qreipL2SPy2Py+Km8JFPbCmbPQpHkM3DW9Znlmg6VfhzbtUOlO5EuNSF0lAJ3l2VJi6qYrw=="],
+
+    "expo-system-ui": ["expo-system-ui@56.0.5", "", { "dependencies": { "@react-native/normalize-colors": "0.85.3", "debug": "^4.3.2" }, "peerDependencies": { "expo": "*", "react-native": "*", "react-native-web": "*" }, "optionalPeers": ["react-native-web"] }, "sha512-n1MmnUArV4cc3gVed9fGtluPme00PE9axKVx+NHbKxHFMam5l4GcOI7PxbYKFNx8o7WA1LRD7eLW33agmZrxGg=="],
 
     "expo-updates-interface": ["expo-updates-interface@56.0.2", "", { "peerDependencies": { "expo": "*" } }, "sha512-eWTwSZ9y8vrULG2oBn2TQSSIwBGSq/TxGJ3jY6tuVS2FWH/ASRIiKs3zkUZTRoC3ZuV2alz0mUClYV7nNrFx8g=="],
 

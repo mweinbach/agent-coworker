@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-import type { MemoryEntry } from "../../../../../src/shared/jsonrpcControlSchemas";
+import type { MemoryEntry } from "@/cowork-shared/jsonrpcControlSchemas";
 import { callParsedControlMethod } from "./controlRpc";
 import { saveToOfflineCache } from "./offlineCache";
 import { getActiveCoworkJsonRpcClient } from "./runtimeClient";

@@ -9,8 +9,8 @@ import {
   jsonRpcControlResultSchemas,
   type sessionConfigEventSchema,
   type sessionSettingsEventSchema,
-} from "../../../../../src/shared/jsonrpcControlSchemas";
-import { pickEditableOpenAiCompatibleProviderOptions } from "../../../../../src/shared/openaiCompatibleOptions";
+} from "@/cowork-shared/jsonrpcControlSchemas";
+import { pickEditableOpenAiCompatibleProviderOptions } from "@/cowork-shared/openaiCompatibleOptions";
 
 import type { CoworkJsonRpcClient } from "./jsonRpcClient";
 

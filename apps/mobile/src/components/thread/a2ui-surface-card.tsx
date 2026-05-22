@@ -1,17 +1,13 @@
 import { Linking, Pressable, Text, View } from "react-native";
-
-import type { SessionFeedItem } from "@/features/cowork/protocolTypes";
-import { useAppTheme } from "@/theme/use-app-theme";
-import {
-  isBasicCatalogId,
-  isSupportedBasicComponentType,
-} from "../../../../../src/experimental/a2ui/component";
+import { isBasicCatalogId, isSupportedBasicComponentType } from "@/experimental/a2ui/component";
 import {
   resolveDynamicBoolean,
   resolveDynamicString,
   stringifyDynamic,
-} from "../../../../../src/experimental/a2ui/expressions";
-import { resolveDynamicWithFunctions } from "../../../../../src/experimental/a2ui/functions";
+} from "@/experimental/a2ui/expressions";
+import { resolveDynamicWithFunctions } from "@/experimental/a2ui/functions";
+import type { SessionFeedItem } from "@/features/cowork/protocolTypes";
+import { useAppTheme } from "@/theme/use-app-theme";
 
 type UiSurfaceItem = Extract<SessionFeedItem, { kind: "ui_surface" }>;
 

@@ -4,7 +4,7 @@ import type {
   JsonRpcControlRequest,
   JsonRpcControlResult,
   McpServerEntry,
-} from "../../../../../src/shared/jsonrpcControlSchemas";
+} from "@/cowork-shared/jsonrpcControlSchemas";
 import { callParsedControlMethod } from "./controlRpc";
 import { saveToOfflineCache } from "./offlineCache";
 import { getActiveCoworkJsonRpcClient } from "./runtimeClient";

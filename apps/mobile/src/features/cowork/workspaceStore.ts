@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-import type { JsonRpcControlRequest } from "../../../../../src/shared/jsonrpcControlSchemas";
+import type { JsonRpcControlRequest } from "@/cowork-shared/jsonrpcControlSchemas";
 import {
   callParsedControlMethod,
   parseWorkspaceControlSnapshot,

@@ -78,6 +78,8 @@
     --surface-settings-main: color-mix(in srgb, var(--content-surface) 72%, var(--glass-fill) 28%);
     --surface-settings-card: color-mix(in srgb, var(--panel-bg) 94%, transparent);
     --surface-settings-card-elevated: color-mix(in srgb, var(--panel-bg) 84%, transparent);
+    --surface-settings-back-button: color-mix(in srgb, var(--foreground) 3%, transparent);
+    --surface-settings-back-button-hover: color-mix(in srgb, var(--foreground) 5%, transparent);
     --surface-selection: color-mix(in srgb, var(--accent-base) 35%, transparent);
     --surface-selection-inverse: color-mix(in srgb, var(--text-inverse) 30%, transparent);
     --surface-sidebar-drop: color-mix(in srgb, var(--accent-base) 6%, transparent);
@@ -105,6 +107,7 @@
     --border-context: color-mix(in srgb, var(--glass-border) 88%, transparent);
     --border-context-nested: color-mix(in srgb, var(--glass-border) 76%, transparent);
     --border-separator: color-mix(in srgb, var(--border-base) 82%, transparent);
+    --border-settings-back-button: color-mix(in srgb, var(--border-base) 50%, transparent);
     --border-accent-soft: color-mix(in srgb, var(--accent-base) 18%, transparent);
     --border-accent-strong: color-mix(in srgb, var(--accent-base) 28%, transparent);
 

@@ -343,13 +343,13 @@ samp {
 }
 
 .settings-shell__back-button {
-  border: 1px solid color-mix(in srgb, var(--border-base) 50%, transparent);
-  background: color-mix(in srgb, var(--foreground) 3%, transparent);
+  border: 1px solid var(--border-settings-back-button);
+  background: var(--surface-settings-back-button);
   box-shadow: none;
 }
 
 .settings-shell__back-button:hover {
-  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+  background: var(--surface-settings-back-button-hover);
 }
 
 .settings-shell__main {

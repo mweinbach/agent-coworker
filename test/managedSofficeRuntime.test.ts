@@ -16,6 +16,34 @@ function expectedShimName(): string {
 }
 
 describe("managed soffice runtime", () => {
+  test("can load packaged helper templates from an explicit resource path", async () => {
+    const helperDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-soffice-helper-"));
+    const helperPath = path.join(helperDir, "managed-soffice-helper.mjs");
+    const previous = process.env.COWORK_MANAGED_SOFFICE_HELPER_PATH;
+
+    try {
+      await fs.writeFile(
+        helperPath,
+        "helper __COWORK_HELPER_VERSION__ __COWORK_LIBREOFFICE_VERSION__",
+        "utf-8",
+      );
+      process.env.COWORK_MANAGED_SOFFICE_HELPER_PATH = helperPath;
+      __internal.resetHelperSourceCacheForTest();
+
+      expect(__internal.helperTemplatePathCandidates()[0]).toBe(helperPath);
+      expect(__internal.helperSource()).toContain(__internal.DEFAULT_LIBREOFFICE_VERSION);
+      expect(__internal.helperSource()).not.toContain("__COWORK_HELPER_VERSION__");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.COWORK_MANAGED_SOFFICE_HELPER_PATH;
+      } else {
+        process.env.COWORK_MANAGED_SOFFICE_HELPER_PATH = previous;
+      }
+      __internal.resetHelperSourceCacheForTest();
+      await fs.rm(helperDir, { recursive: true, force: true });
+    }
+  });
+
   test("creates a PATH-first soffice shim without touching skill files", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-soffice-home-"));
     const env = { PATH: "/usr/bin:/bin" };

@@ -143,10 +143,11 @@ export async function createAgentServerRuntime(
   );
   if (mergedProviderOptions) config.providerOptions = mergedProviderOptions;
 
+  const packagedDesktopBundle = env.COWORK_DESKTOP_BUNDLE === "1";
   const codexRuntimeSetup = await ensureCodexPrimaryRuntimeReady({
     homedir: opts.homedir,
     workspaceDir: config.workingDirectory,
-    builtInSkillsDir: path.join(config.builtInDir, "skills"),
+    builtInSkillsDir: packagedDesktopBundle ? undefined : path.join(config.builtInDir, "skills"),
     globalSkillsDir: getAiCoworkerPathsDefault({ homedir: opts.homedir }).skillsDir,
     env,
     log: (line) => {

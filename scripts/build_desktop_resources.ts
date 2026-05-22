@@ -50,7 +50,20 @@ async function walkForFingerprint(
   relativeTo: string,
   acc: string[],
 ): Promise<void> {
-  const stat = await fs.stat(target);
+  let stat: Awaited<ReturnType<typeof fs.lstat>>;
+  try {
+    stat = await fs.lstat(target);
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      acc.push(`${path.relative(relativeTo, target)}:missing`);
+      return;
+    }
+    throw error;
+  }
+  if (stat.isSymbolicLink()) {
+    acc.push(`${path.relative(relativeTo, target)}:symlink:${stat.size}`);
+    return;
+  }
   if (stat.isDirectory()) {
     const entries = await fs.readdir(target, { withFileTypes: true });
     const sorted = [...entries].sort((a, b) => a.name.localeCompare(b.name));
@@ -346,6 +359,10 @@ async function main() {
   const foundationModelsSdkDest = path.join(desktopBinariesDir, FOUNDATION_MODELS_SDK_DIR_NAME);
   const bundledBunPath = path.join(desktopBinariesDir, SIDECAR_BUN_EXECUTABLE_NAME);
   const bundledEntrypointPath = path.join(desktopBinariesDir, SIDECAR_BUN_ENTRYPOINT_PATH);
+  const compiledManagedSofficeHelperPath = path.join(
+    desktopBinariesDir,
+    MANAGED_SOFFICE_HELPER_RELATIVE_PATH,
+  );
   const bundledManagedSofficeHelperPath = path.join(
     path.dirname(bundledEntrypointPath),
     MANAGED_SOFFICE_HELPER_RELATIVE_PATH,
@@ -362,7 +379,8 @@ async function main() {
       ? !(await pathExists(bundledBunPath)) ||
         !(await pathExists(bundledEntrypointPath)) ||
         !(await pathExists(bundledManagedSofficeHelperPath))
-      : !(await pathExists(sidecarOutfile)));
+      : !(await pathExists(sidecarOutfile)) ||
+        !(await pathExists(compiledManagedSofficeHelperPath)));
 
   if (sidecarNeedsBuild) {
     const entry = path.join(root, "src", "server", "index.ts");
@@ -432,6 +450,11 @@ async function main() {
         cwd: root,
         env: { ...process.env, COWORK_DESKTOP_BUNDLE: "1" },
       });
+      await fs.mkdir(path.dirname(compiledManagedSofficeHelperPath), { recursive: true });
+      await fs.copyFile(
+        path.join(root, "src", "managedSofficeRuntime", MANAGED_SOFFICE_HELPER_RELATIVE_PATH),
+        compiledManagedSofficeHelperPath,
+      );
       console.log(`[resources] sidecar: rebuilt ${path.relative(root, sidecarOutfile)}`);
     }
 

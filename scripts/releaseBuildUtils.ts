@@ -98,14 +98,6 @@ export async function pathExists(target: string): Promise<boolean> {
 }
 
 export async function copyDir(src: string, dest: string): Promise<void> {
-  const anyFs = fs as typeof fs & {
-    cp?: (src: string, dest: string, options?: { recursive?: boolean }) => Promise<void>;
-  };
-  if (typeof anyFs.cp === "function") {
-    await anyFs.cp(src, dest, { recursive: true });
-    return;
-  }
-
   await fs.mkdir(dest, { recursive: true });
   const entries = await fs.readdir(src, { withFileTypes: true });
   for (const entry of entries) {

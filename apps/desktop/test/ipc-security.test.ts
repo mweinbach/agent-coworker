@@ -11,6 +11,7 @@ import {
   resolveAllowedRevealPath,
   resolveAllowedSaveExportSourcePath,
 } from "../electron/services/ipcSecurity";
+import { isPathEqualOrInside } from "../electron/services/pathBoundary";
 
 describe("desktop IPC security helpers", () => {
   test("accepts trusted dev renderer URLs and rejects untrusted URLs", () => {
@@ -109,11 +110,60 @@ describe("desktop IPC security helpers", () => {
         expect(() => resolveAllowedDirectoryPath([workspaceRoot], escapeLink)).toThrow(
           "outside allowed workspace roots",
         );
+      } else {
+        const escapeJunction = path.join(workspaceRoot, "escape-junction");
+        await fs.symlink(outsideRoot, escapeJunction, "junction");
+        expect(() => resolveAllowedDirectoryPath([workspaceRoot], escapeJunction)).toThrow(
+          "outside allowed workspace roots",
+        );
       }
     } finally {
       await fs.rm(workspaceRoot, { recursive: true, force: true });
       await fs.rm(outsideRoot, { recursive: true, force: true });
     }
+  });
+
+  test("resolveAllowedPath treats Windows drive paths case-insensitively", () => {
+    if (process.platform !== "win32") {
+      return;
+    }
+
+    expect(
+      resolveAllowedPath(["C:\\Users\\Max\\Workspace"], "c:\\users\\max\\workspace\\file.txt"),
+    ).toBe("c:\\users\\max\\workspace\\file.txt");
+    expect(() =>
+      resolveAllowedPath(
+        ["C:\\Users\\Max\\Workspace"],
+        "c:\\users\\max\\workspace-other\\file.txt",
+      ),
+    ).toThrow("outside allowed workspace roots");
+  });
+
+  test("path boundary helper handles Windows case and drive boundaries", () => {
+    if (process.platform !== "win32") {
+      return;
+    }
+
+    expect(
+      isPathEqualOrInside("C:\\Users\\Max\\Workspace", "c:\\users\\max\\workspace\\file.txt"),
+    ).toBe(true);
+    expect(
+      isPathEqualOrInside("C:\\Users\\Max\\Workspace", "c:\\users\\max\\workspace2\\file.txt"),
+    ).toBe(false);
+    expect(isPathEqualOrInside("C:\\Users\\Max\\Workspace", "D:\\data\\file.txt")).toBe(false);
+  });
+
+  test("path boundary helper handles UNC roots on Windows", () => {
+    if (process.platform !== "win32") {
+      return;
+    }
+
+    expect(
+      isPathEqualOrInside("\\\\server\\share\\workspace", "\\\\SERVER\\SHARE\\workspace\\file.txt"),
+    ).toBe(true);
+    expect(isPathEqualOrInside("C:\\Users\\Max\\Workspace", "\\\\server\\share\\file.txt")).toBe(
+      false,
+    );
   });
 
   test("resolveAllowedPath enforces boundary for new or non-existent files", async () => {

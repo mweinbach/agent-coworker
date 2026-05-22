@@ -180,7 +180,9 @@ async function main() {
   };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
-  process.on("SIGHUP", shutdown);
+  if (process.platform !== "win32") {
+    process.on("SIGHUP", shutdown);
+  }
   process.on("exit", () => {
     // Last-resort synchronous cleanup.
     try {

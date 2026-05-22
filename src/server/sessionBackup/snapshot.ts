@@ -10,6 +10,14 @@ export async function createSnapshotWithTarFallback(opts: {
   tarPath: string;
   directoryPath: string;
 }): Promise<SessionBackupMetadataSnapshot> {
+  // Windows' bundled tar can be slow and shell-dependent; directory snapshots
+  // keep checkpoint/restore reliable without an external process.
+  if (process.platform === "win32") {
+    const directoryPath = path.join(opts.sessionDir, opts.directoryPath);
+    await copyDirectory(opts.sourceDir, directoryPath);
+    return { kind: "directory", path: opts.directoryPath };
+  }
+
   const archivePath = path.join(opts.sessionDir, opts.tarPath);
   const tarStageDir = await fs.mkdtemp(path.join(opts.sessionDir, ".snapshot-stage-"));
   try {

@@ -27,4 +27,18 @@ describe("mobile native module autolinking", () => {
     expect(podspec).toContain("s.dependency 'ExpoModulesCore'");
     expect(podspec).toContain("s.source_files = 'ios/**/*.{h,m,mm,swift}'");
   });
+
+  test("exposes the local pinned HTTPS module to Expo Android autolinking", () => {
+    const moduleConfig = JSON.parse(readFileSync(pinnedHttpsModuleConfigPath, "utf8"));
+    const androidModulePath = new URL(
+      "../apps/mobile/modules/cowork-pinned-https/android/src/main/java/co/weinbach/cowork/mobile/pinnedhttps/CoworkPinnedHttpsModule.kt",
+      import.meta.url,
+    );
+
+    expect(moduleConfig.platforms).toContain("android");
+    expect(moduleConfig.android.modules).toEqual([
+      "co.weinbach.cowork.mobile.pinnedhttps.CoworkPinnedHttpsModule",
+    ]);
+    expect(existsSync(androidModulePath)).toBe(true);
+  });
 });

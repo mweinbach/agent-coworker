@@ -24,7 +24,7 @@ describe("main CI workflow", () => {
     expect(workflow).toContain("~/.bun/install/cache");
     expect(workflow).toContain("${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}");
     expect(workflow).toContain(
-      "${{ runner.os }}-mobile-${{ hashFiles('bun.lock', 'apps/mobile/bun.lock', 'apps/mobile/package.json'",
+      "${{ runner.os }}-mobile-${{ hashFiles('bun.lock', 'apps/mobile/bun.lock', 'apps/mobile/package.json') }}",
     );
   });
 
@@ -50,20 +50,23 @@ describe("main CI workflow", () => {
     expect(workflow).toContain("test/h3.pairing-store.test.ts");
   });
 
-  test("runs the mobile install, typecheck, export, and native build lane", () => {
+  test("runs the mobile install, typecheck, autolinking, and export lane", () => {
     expect(workflow).toContain("mobile:");
     expect(workflow).toContain("name: Mobile");
+    expect(workflow).toContain("timeout-minutes: 10");
     expect(workflow).toContain("- name: Install mobile dependencies");
     expect(workflow).toContain("run: bun install --cwd apps/mobile");
     expect(workflow).toContain("- name: Mobile typecheck");
     expect(workflow).toContain("run: bun run app:mobile:typecheck");
-    expect(workflow).toContain("- name: Verify iOS Expo autolinking");
+    expect(workflow).toContain("- name: Verify Expo autolinking");
     expect(workflow).toContain("expo-modules-autolinking resolve --platform apple --json");
+    expect(workflow).toContain("expo-modules-autolinking resolve --platform android --json");
     expect(workflow).toContain('"packageName":"cowork-pinned-https"');
     expect(workflow).toContain("- name: Export mobile bundle");
     expect(workflow).toContain("bunx expo export --platform ios --output-dir dist-export-ci");
-    expect(workflow).toContain("- name: Android native build smoke");
-    expect(workflow).toContain("./gradlew :app:assembleDebug -x lint -x test --no-daemon");
+    expect(workflow).not.toContain("- name: Android native build smoke");
+    expect(workflow).not.toContain("./gradlew :app:assembleDebug");
+    expect(workflow).not.toContain("actions/setup-java@v4");
   });
 
   test("stable test runner discovers TypeScript and TSX test files", () => {

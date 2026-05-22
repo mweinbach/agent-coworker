@@ -3,10 +3,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { __internal as citationMetadataInternal } from "../../src/server/citationMetadata";
-import { SessionDb } from "../../src/server/sessionDb";
 import type { ResearchRecord } from "../../src/server/research/types";
+import { SessionDb } from "../../src/server/sessionDb";
 import {
-  ResearchService,
   cancelResearchInteractionMock,
   createResearchFileSearchStoreMock,
   createResearchInteractionStreamMock,
@@ -15,6 +14,7 @@ import {
   installFetchStub,
   makeResearchRecord,
   makeTmpCoworkHome,
+  ResearchService,
   registerResearchServiceHooks,
   researchRuntimeImpls,
   restoreFetchStub,
@@ -334,5 +334,4 @@ describe("research service", () => {
       await fs.rm(paths.home, { recursive: true, force: true });
     }
   });
-
 });

@@ -81,5 +81,4 @@ describe("JSON-RPC projectors", () => {
     });
     expect(userCompleted?.payload?.item).toEqual(userStarted?.payload?.item);
   });
-
 });

@@ -304,9 +304,9 @@ describe("desktop chat activity groups", () => {
     expect(summary.statusLabel).toBe("Done");
     expect(summary.entries).toHaveLength(3);
     expect(summary.entries.map((entry) => entry.item.id)).toEqual(["r1", "t-edit", "t-success"]);
-    expect(summary.entries.some((entry) => entry.kind === "tool" && entry.item.state === "output-error")).toBe(
-      false,
-    );
+    expect(
+      summary.entries.some((entry) => entry.kind === "tool" && entry.item.state === "output-error"),
+    ).toBe(false);
     expect(summary.toolCount).toBe(2);
   });
 

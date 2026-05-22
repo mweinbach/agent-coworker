@@ -1,4 +1,4 @@
-import { SessionCostTracker } from "../../session/costTracker";
+import type { SessionCostTracker } from "../../session/costTracker";
 import type { SessionContext, SessionRuntimeState } from "./SessionContext";
 
 export type AgentSessionCostTrackingHost = {

@@ -1,19 +1,19 @@
 #!/usr/bin/env node
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
-import { pipeline } from "node:stream/promises";
 import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 
 const HELPER_VERSION = __COWORK_HELPER_VERSION__;
 const DEFAULT_LIBREOFFICE_VERSION = "__COWORK_LIBREOFFICE_VERSION__";
-const rootDir = process.env.COWORK_MANAGED_SOFFICE_ROOT ||
+const rootDir =
+  process.env.COWORK_MANAGED_SOFFICE_ROOT ||
   path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const shimDir = process.env.COWORK_MANAGED_SOFFICE_SHIM_DIR ||
-  path.join(rootDir, "bin");
+const shimDir = process.env.COWORK_MANAGED_SOFFICE_SHIM_DIR || path.join(rootDir, "bin");
 
 function log(message) {
   if (process.env.COWORK_MANAGED_SOFFICE_VERBOSE === "1") {
@@ -58,7 +58,11 @@ function run(command, args, options = {}) {
     const stderr = typeof result.stderr === "string" ? result.stderr.trim() : "";
     const stdout = typeof result.stdout === "string" ? result.stdout.trim() : "";
     throw new Error(
-      command + " " + args.join(" ") + " failed with exit " + result.status +
+      command +
+        " " +
+        args.join(" ") +
+        " failed with exit " +
+        result.status +
         (stderr || stdout ? ": " + [stderr, stdout].filter(Boolean).join("\n") : ""),
     );
   }
@@ -107,8 +111,10 @@ function windowsSofficePath(root) {
   const direct = path.join(root, "program", "soffice.exe");
   if (fileExists(direct)) return direct;
   if (!dirExists(root)) return "";
-  return findFirstFile(root, (candidate) =>
-    path.basename(candidate).toLowerCase() === "soffice.exe" &&
+  return findFirstFile(
+    root,
+    (candidate) =>
+      path.basename(candidate).toLowerCase() === "soffice.exe" &&
       path.basename(path.dirname(candidate)).toLowerCase() === "program",
   );
 }
@@ -182,7 +188,9 @@ async function downloadFile(url, destination) {
   const response = await fetch(url);
   if (!response.ok || !response.body) {
     const text = await response.text().catch(() => "");
-    throw new Error("GET " + url + " failed with status " + response.status + ": " + text.slice(0, 300));
+    throw new Error(
+      "GET " + url + " failed with status " + response.status + ": " + text.slice(0, 300),
+    );
   }
   await pipeline(Readable.fromWeb(response.body), fs.createWriteStream(destination));
 }
@@ -272,7 +280,9 @@ async function installLinuxRuntime(archivePath, stagedRoot, tempDir) {
   }
   const soffice = linuxSofficePath(stagedRoot);
   if (!isHealthySoffice(soffice)) {
-    throw new Error("Managed LibreOffice archive was extracted but soffice did not pass --version.");
+    throw new Error(
+      "Managed LibreOffice archive was extracted but soffice did not pass --version.",
+    );
   }
 }
 
@@ -282,7 +292,9 @@ async function installWindowsRuntime(archivePath, stagedRoot) {
   });
   const soffice = windowsSofficePath(stagedRoot);
   if (!isHealthySoffice(soffice)) {
-    throw new Error("Managed LibreOffice MSI was extracted but soffice.exe did not pass --version.");
+    throw new Error(
+      "Managed LibreOffice MSI was extracted but soffice.exe did not pass --version.",
+    );
   }
 }
 
@@ -290,7 +302,8 @@ async function installManagedRuntime(version = DEFAULT_LIBREOFFICE_VERSION) {
   const url = process.env.COWORK_LIBREOFFICE_DOWNLOAD_URL || defaultDownloadUrl(version);
   if (!url) {
     throw new Error(
-      "No managed LibreOffice download is configured for " + platformArchKey() +
+      "No managed LibreOffice download is configured for " +
+        platformArchKey() +
         ". Set COWORK_LIBREOFFICE_DOWNLOAD_URL or install LibreOffice manually.",
     );
   }
@@ -299,7 +312,10 @@ async function installManagedRuntime(version = DEFAULT_LIBREOFFICE_VERSION) {
   const stagedRoot = root + ".staged-" + process.pid + "-" + Date.now();
   await fsp.mkdir(rootDir, { recursive: true });
   const tempDir = await fsp.mkdtemp(path.join(rootDir, "tmp-"));
-  const archivePath = path.join(tempDir, path.basename(new URL(url).pathname) || "libreoffice-download");
+  const archivePath = path.join(
+    tempDir,
+    path.basename(new URL(url).pathname) || "libreoffice-download",
+  );
   await fsp.rm(stagedRoot, { recursive: true, force: true });
   await fsp.mkdir(stagedRoot, { recursive: true });
   try {
@@ -311,7 +327,9 @@ async function installManagedRuntime(version = DEFAULT_LIBREOFFICE_VERSION) {
     } else if (process.platform === "win32") {
       await installWindowsRuntime(archivePath, stagedRoot);
     } else {
-      throw new Error("Managed LibreOffice download is not supported on " + platformArchKey() + ".");
+      throw new Error(
+        "Managed LibreOffice download is not supported on " + platformArchKey() + ".",
+      );
     }
     await fsp.rm(root, { recursive: true, force: true });
     await fsp.mkdir(path.dirname(root), { recursive: true });
@@ -324,7 +342,10 @@ async function installManagedRuntime(version = DEFAULT_LIBREOFFICE_VERSION) {
       installedAt: new Date().toISOString(),
       url,
     };
-    await fsp.writeFile(path.join(root, "cowork-libreoffice-runtime.json"), JSON.stringify(marker, null, 2) + "\n");
+    await fsp.writeFile(
+      path.join(root, "cowork-libreoffice-runtime.json"),
+      JSON.stringify(marker, null, 2) + "\n",
+    );
   } finally {
     await fsp.rm(stagedRoot, { recursive: true, force: true }).catch(() => {});
     await fsp.rm(tempDir, { recursive: true, force: true }).catch(() => {});
@@ -342,7 +363,9 @@ async function withInstallLock(fn) {
       if (Date.now() - started > 20 * 60 * 1000) {
         throw new Error("Timed out waiting for managed LibreOffice install lock.");
       }
-      const existing = managedSofficePath(process.env.COWORK_LIBREOFFICE_VERSION || DEFAULT_LIBREOFFICE_VERSION);
+      const existing = managedSofficePath(
+        process.env.COWORK_LIBREOFFICE_VERSION || DEFAULT_LIBREOFFICE_VERSION,
+      );
       if (isHealthySoffice(existing)) return existing;
       await sleep(1000);
     }
@@ -372,7 +395,9 @@ async function resolveRealSoffice() {
     await installManagedRuntime(version);
     const installed = managedSofficePath(version);
     if (!isHealthySoffice(installed)) {
-      throw new Error("Managed LibreOffice installation completed but soffice is still unavailable.");
+      throw new Error(
+        "Managed LibreOffice installation completed but soffice is still unavailable.",
+      );
     }
     return installed;
   });

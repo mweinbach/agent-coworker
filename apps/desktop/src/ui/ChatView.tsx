@@ -7,7 +7,10 @@ import {
   buildCitationSourcesByMessageId,
   buildCitationUrlsByMessageId,
 } from "../../../../src/shared/displayCitationMarkers";
-import { buildAttachmentSignature, getAttachmentPickerValidationMessage } from "../app/attachmentInputs";
+import {
+  buildAttachmentSignature,
+  getAttachmentPickerValidationMessage,
+} from "../app/attachmentInputs";
 import { useAppStore } from "../app/store";
 import type { FileAttachmentInput } from "../app/store.helpers/jsonRpcSocket";
 import { ConversationScrollButton } from "../components/ai-elements/conversation";
@@ -20,11 +23,13 @@ import {
 } from "../lib/composerAttachments";
 import { modelDisplayNamesFromCatalog } from "../lib/modelChoices";
 import type { ProviderName } from "../lib/wsProtocol";
+import { A2uiSurfaceDock } from "./chat/a2ui/A2uiSurfaceDock";
 import { buildChatRenderItems } from "./chat/activityGroups";
 import { CancelSubagentsDialog } from "./chat/CancelSubagentsDialog";
 import { ChatComposer } from "./chat/ChatComposer";
 import { ChatFeed } from "./chat/ChatFeed";
 import { ChatViewContext } from "./chat/ChatViewContext";
+import { isChatProviderName } from "./chat/ComposerModelSelector";
 import {
   composerBusyHint,
   countActiveChildAgents,
@@ -33,16 +38,15 @@ import {
   parseA2uiActionMessage,
   resolveComposerBusyPolicy,
 } from "./chat/chatLogic";
-import { isChatProviderName } from "./chat/ComposerModelSelector";
-import { loadOverflowCitationContext } from "./chat/overflowCitationContext";
 import { NewChatLanding } from "./chat/NewChatLanding";
-import { A2uiSurfaceDock } from "./chat/a2ui/A2uiSurfaceDock";
+import { loadOverflowCitationContext } from "./chat/overflowCitationContext";
 import { normalizeFeedForToolCards } from "./chat/toolCards/legacyToolLogs";
 
 const COMPOSER_OVERLAY_EXTRA_HEIGHT_PX = 24;
 const SCROLL_BUTTON_BOTTOM_GAP_PX = 14;
 const FEED_BOTTOM_STICKY_THRESHOLD_PX = 220;
 
+export { ChatThreadHeader } from "./chat/ChatThreadHeader";
 export {
   type A2uiActionMessage,
   canClearSessionHardCap,
@@ -61,8 +65,6 @@ export {
   shouldToggleReasoningExpanded,
   summarizeA2uiActionMessage,
 } from "./chat/chatLogic";
-
-export { ChatThreadHeader } from "./chat/ChatThreadHeader";
 export { loadOverflowCitationContext } from "./chat/overflowCitationContext";
 
 export function ChatView() {

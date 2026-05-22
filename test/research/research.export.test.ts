@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { makeResearchRecord } from "./research.harness";
 import { exportResearch } from "../../src/server/research/export";
+import { makeResearchRecord } from "./research.harness";
 
 describe("research export", () => {
   test("writes markdown, pdf, and docx reports", async () => {

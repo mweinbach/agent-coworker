@@ -52,9 +52,8 @@ const loadSessionTitleServiceModule = async (): Promise<
 export const lazyConnectProvider: typeof connectModelProvider = async (...args) =>
   await (await loadConnectModule()).connectProvider(...args);
 
-export const lazyLoadSystemPromptWithSkills: typeof loadSystemPromptWithSkills = async (
-  ...args
-) => await (await loadPromptModule()).loadSystemPromptWithSkills(...args);
+export const lazyLoadSystemPromptWithSkills: typeof loadSystemPromptWithSkills = async (...args) =>
+  await (await loadPromptModule()).loadSystemPromptWithSkills(...args);
 
 export const lazyGetProviderCatalog: typeof getProviderCatalog = async (...args) =>
   await (await loadProviderCatalogModule()).getProviderCatalog(...args);

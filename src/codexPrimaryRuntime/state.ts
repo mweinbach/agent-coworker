@@ -1,11 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { CODEX_RUNTIME_STATE_FILE, CODEX_RUNTIME_STATE_VERSION } from "./constants";
 import { getAiCoworkerPaths } from "../store/connections";
-import type {
-  CodexPrimaryRuntimeSkillResult,
-  CodexPrimaryRuntimeState,
-} from "./types";
+import { CODEX_RUNTIME_STATE_FILE, CODEX_RUNTIME_STATE_VERSION } from "./constants";
+import type { CodexPrimaryRuntimeSkillResult, CodexPrimaryRuntimeState } from "./types";
 
 export async function pathExists(target: string): Promise<boolean> {
   try {

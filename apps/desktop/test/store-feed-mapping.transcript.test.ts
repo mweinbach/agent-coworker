@@ -9,7 +9,6 @@ import {
 import type { TranscriptEvent } from "../src/app/types";
 
 describe("desktop transcript feed mapping", () => {
-
   test("preserves transcript event order instead of sorting by timestamps", () => {
     const transcript: TranscriptEvent[] = [
       {
@@ -349,5 +348,4 @@ describe("desktop transcript feed mapping", () => {
       }),
     ]);
   });
-
 });

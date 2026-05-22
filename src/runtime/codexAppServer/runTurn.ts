@@ -1,11 +1,11 @@
-import type { CodexAppServerClient } from "../../providers/codexAppServerClient";
-import { isCodexAppServerContinuationState } from "../../shared/providerContinuation";
 import {
   markModelCallSpanError,
   markModelCallSpanSuccessFromTextAndUsage,
   parseTelemetrySettings,
   startCodexModelCallSpan,
 } from "../../observability/modelCallSpan";
+import type { CodexAppServerClient } from "../../providers/codexAppServerClient";
+import { isCodexAppServerContinuationState } from "../../shared/providerContinuation";
 import { asRecord, asString } from "../../shared/recordParsing";
 import type { LlmRuntime, RuntimeRunTurnResult, RuntimeUsage } from "../types";
 import { startCodexAppServer } from "./clientLifecycle";
@@ -28,10 +28,10 @@ import {
 } from "./notifications";
 import { buildCodexTurnInput } from "./turnInput";
 import {
-  CODEX_APP_SERVER_PROVIDER,
-  CODEX_STARTUP_RPC_TIMEOUT_MS,
   type ActiveCodexTurnTarget,
   attachUsageToError,
+  CODEX_APP_SERVER_PROVIDER,
+  CODEX_STARTUP_RPC_TIMEOUT_MS,
   isInvalidCodexThreadError,
   withCodexAppServerDiagnostics,
 } from "./types";
@@ -250,8 +250,7 @@ export function createCodexAppServerRuntime(): LlmRuntime {
           }
           const finalTurn = await completion;
 
-          const text =
-            assistantTextFromTurn(finalTurn) || notificationRouter.assistantText();
+          const text = assistantTextFromTurn(finalTurn) || notificationRouter.assistantText();
           const reasoningText = reasoningTextFromTurn(finalTurn);
           await params.onModelStreamPart?.({
             type: "finish-step",

@@ -15,8 +15,8 @@ import { SourcesCarousel } from "../../components/ai-elements/sources-carousel";
 import { Card, CardContent } from "../../components/ui/card";
 import { A2uiInlineCard } from "./a2ui/A2uiInlineCard";
 import { A2uiSurfaceHistoryRow } from "./a2ui/A2uiSurfaceHistoryRow";
-import { parseA2uiActionMessage, summarizeA2uiActionMessage } from "./chatLogic";
 import { useChatViewContext } from "./ChatViewContext";
+import { parseA2uiActionMessage, summarizeA2uiActionMessage } from "./chatLogic";
 import { parseCanvasEditMessage, parseUserMessageAttachments } from "./feedMessageParsing";
 import { ToolCard } from "./toolCards/ToolCard";
 

@@ -100,7 +100,10 @@ export function clearToolStateForTurn(state: ConversationProjectionState, turnId
   }
 }
 
-export function clearTurnProjectionState(state: ConversationProjectionState, turnId: string | null) {
+export function clearTurnProjectionState(
+  state: ConversationProjectionState,
+  turnId: string | null,
+) {
   if (turnId) {
     state.activeAssistantByTurn.delete(turnId);
     state.assistantOccurrenceByTurn.delete(turnId);

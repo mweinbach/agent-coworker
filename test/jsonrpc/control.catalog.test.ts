@@ -1,7 +1,7 @@
+import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { Database } from "bun:sqlite";
 import { MemoryStore } from "../../src/memoryStore";
 import { AgentControl } from "../../src/server/agents/AgentControl";
 import { AgentSession } from "../../src/server/session/AgentSession";
@@ -11,7 +11,6 @@ import { makeTmpProject, serverOpts, stopTestServer } from "../helpers/wsHarness
 import { connectJsonRpc, enableProjectBackups } from "./control.harness";
 
 describe("server JSON-RPC control methods", () => {
-
   test("memory list returns a session-event memory_list event payload", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
@@ -108,5 +107,4 @@ describe("server JSON-RPC control methods", () => {
       await stopTestServer(server);
     }
   });
-
 });

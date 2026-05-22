@@ -5,7 +5,11 @@ import path from "node:path";
 import { ensureManagedSofficeRuntimeReady } from "./ensureReady";
 import { parseResolvedSofficePath, parseSofficeVersion } from "./paths";
 import { processErrorMessage, runProcessCapture } from "./processCapture";
-import type { EnsureManagedSofficeRuntimeOptions, ManagedSofficeRuntimeDiagnostic } from "./types";
+import type {
+  EnsureManagedSofficeRuntimeOptions,
+  ManagedSofficeRuntimeDiagnostic,
+  ProcessCapture,
+} from "./types";
 
 export async function checkManagedSofficeRuntime(
   opts: EnsureManagedSofficeRuntimeOptions & { smoke?: boolean } = {},
@@ -63,7 +67,7 @@ export async function checkManagedSofficeRuntime(
     resolvedPath = resolveResult.stdout.trim().split(/\r?\n/).filter(Boolean).at(-1);
   }
 
-  let versionResult;
+  let versionResult: ProcessCapture;
   try {
     versionResult = await runProcessCapture(resolvedPath ?? setup.shimPath, ["--version"], {
       env: runtimeEnv,

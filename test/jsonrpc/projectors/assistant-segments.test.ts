@@ -202,5 +202,4 @@ describe("JSON-RPC projectors", () => {
     expect(assistantCompleted).toHaveLength(1);
     expect(String(assistantCompleted[0]?.payload?.item?.text ?? "")).toBe("Final answer.");
   });
-
 });

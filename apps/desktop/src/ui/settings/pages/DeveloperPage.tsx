@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
 import { CheckCircle2Icon, RefreshCwIcon, TriangleAlertIcon } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
 import { Badge } from "../../../components/ui/badge";
@@ -19,12 +19,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../../../components/ui/select";
+import { Spinner } from "../../../components/ui/spinner";
 import { Switch } from "../../../components/ui/switch";
 import {
   DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS,
   type LibreOfficeRuntimeDiagnostic,
 } from "../../../lib/wsProtocol";
-import { Spinner } from "../../../components/ui/spinner";
 
 function parseOverflowThresholdDraft(value: string): number | null {
   const trimmed = value.trim();

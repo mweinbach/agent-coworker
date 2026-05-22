@@ -1,7 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import {
-  MockJsonRpcSocket,
-  RUNTIME,
   clearJsonRpcSocketOverride,
   createControlSocketHelpers,
   createState,
@@ -12,9 +10,11 @@ import {
   installFakeSocket,
   jsonRpcHandlers,
   jsonRpcRequests,
+  MockJsonRpcSocket,
   makeThread,
   makeThreadListEntry,
   persistCalls,
+  RUNTIME,
   registerControlSocketLifecycleHooks,
   setJsonRpcSocketOverride,
 } from "./control-socket.harness";
@@ -210,5 +210,4 @@ describe("control socket helpers over JSON-RPC", () => {
     expect(requestCalls).toBe(1);
     expect(sessions?.map((session) => session.sessionId)).toEqual(["session-1"]);
   });
-
 });

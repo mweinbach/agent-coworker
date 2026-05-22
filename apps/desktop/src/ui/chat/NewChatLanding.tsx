@@ -39,17 +39,14 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "../../components/ui/popover";
 import {
   appendAttachmentSkippedNotes,
-  createComposerAttachmentFile,
   type ComposerAttachmentFile,
+  createComposerAttachmentFile,
   resolveComposerAttachmentsForWorkspace,
   revokeComposerAttachmentPreview,
 } from "../../lib/composerAttachments";
 import { modelDisplayNamesFromCatalog } from "../../lib/modelChoices";
 import { resolveNewChatLandingTarget } from "../../lib/newChatLanding";
-import {
-  ComposerModelSelector,
-  type ComposerModelSelection,
-} from "./ComposerModelSelector";
+import { type ComposerModelSelection, ComposerModelSelector } from "./ComposerModelSelector";
 import { resolveDefaultNewChatModel } from "./newChatLandingModel";
 
 export function NewChatLanding() {

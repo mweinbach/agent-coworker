@@ -1,14 +1,11 @@
 import { resolveExperimentalA2uiConfig } from "../../../experimental/a2ui/flags";
 import type { AgentExecutionState } from "../../../shared/agents";
+import type { TodoItem } from "../../../types";
 import { getAgentRoleShellPolicy } from "../../agents/roles";
-import {
-  MODEL_STREAM_NORMALIZER_VERSION,
-  normalizeModelStreamPart,
-} from "../../modelStream";
+import { MODEL_STREAM_NORMALIZER_VERSION, normalizeModelStreamPart } from "../../modelStream";
 import type { SessionContext } from "../SessionContext";
 import type { SteerCoordinator } from "./steerCoordinator";
 import { isStartStepPart } from "./userMessageTurnHelpers";
-import type { TodoItem } from "../../../types";
 
 export type A2uiSurfaceManagerProvider = () => {
   applyUnknown: (
@@ -57,10 +54,7 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
     setAcceptingSteers,
   } = deps;
 
-  return async (
-    maxSteps: number,
-    providerStateOverride = context.state.providerState,
-  ) => {
+  return async (maxSteps: number, providerStateOverride = context.state.providerState) => {
     const harnessContext = context.deps.harnessContextStore.get(context.id);
     return await context.deps.runTurnImpl({
       config: context.state.config,

@@ -1,19 +1,24 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import type { TodoItem } from "./agentSession.harness";
 import {
-  REAL_AGENT,
   AgentSession,
   ASK_SKIP_TOKEN,
-  SessionCostTracker,
   createExperimentalA2uiSurfaceManager,
-  deriveA2uiSurfacesFromSnapshot,
   createRuntime,
   defaultSupportedModel,
+  deriveA2uiSurfacesFromSnapshot,
+  flushAsyncWork,
   fs,
   getSupportedModel,
+  isRecord,
   MAX_ATTACHMENT_BASE64_SIZE,
   MAX_ATTACHMENT_INLINE_BYTE_SIZE,
   MAX_TURN_ATTACHMENT_COUNT,
   MAX_TURN_ATTACHMENT_TOTAL_BASE64_SIZE,
+  makeConfig,
+  makeEmit,
+  makeSession,
+  makeSessionBackupFactory,
   mockClosePooledCodexAppServerClient,
   mockConnectModelProvider,
   mockGenerateSessionTitle,
@@ -22,17 +27,12 @@ import {
   mockWritePersistedSessionSnapshot,
   os,
   path,
+  REAL_AGENT,
   resetAgentSessionMocks,
-  makeSession,
-  makeConfig,
-  makeEmit,
-  makeSessionBackupFactory,
-  flushAsyncWork,
+  SessionCostTracker,
   waitForCondition,
   withEnv,
-  isRecord,
 } from "./agentSession.harness";
-import type { TodoItem } from "./agentSession.harness";
 
 describe("AgentSession", () => {
   beforeEach(async () => {
@@ -44,7 +44,7 @@ describe("AgentSession", () => {
     mock.restore();
   });
 
-describe("Token usage passthrough", () => {
+  describe("Token usage passthrough", () => {
     test("emits turn_usage event when runTurn returns usage", async () => {
       mockRunTurn.mockImplementation(async () => ({
         text: "done",

@@ -8,17 +8,11 @@ import {
   __internal as googleNativeInternal,
   runGoogleNativeInteractionStep,
 } from "../../../src/runtime/googleNativeInteractions";
-import { __internal as citationMetadataInternal } from "../../../src/server/citationMetadata";
 import type { RuntimeRunTurnParams } from "../../../src/runtime/types";
-import {
-  googleSseResponse,
-  liveGoogleTest,
-  makeConfig,
-  makeParams,
-} from "./fixtures";
+import { __internal as citationMetadataInternal } from "../../../src/server/citationMetadata";
+import { googleSseResponse, liveGoogleTest, makeConfig, makeParams } from "./fixtures";
 
 describe("google native interactions request building", () => {
-
   test("identifies native code execution stream content as disabled", () => {
     expect(googleNativeInternal.isGoogleCodeExecutionContentType("code_execution_call")).toBe(true);
     expect(googleNativeInternal.isGoogleCodeExecutionContentType("code_execution_result")).toBe(
@@ -153,5 +147,4 @@ describe("google native interactions request building", () => {
     expect(block.thinking).toBe("Buffered reasoning.");
     expect(block.thinkingSignature).toBe("sig_buffered");
   });
-
 });

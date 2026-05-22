@@ -1,8 +1,8 @@
 import type { ModelStreamUpdate } from "../../shared/modelStream";
 import { isTerminalProjectedToolState } from "../../shared/projectionPolicy";
 import type { AssistantProjection } from "./conversationProjectionAssistant";
-import type { ConversationProjectionState } from "./conversationProjectionState";
 import type { ReasoningProjection } from "./conversationProjectionReasoning";
+import type { ConversationProjectionState } from "./conversationProjectionState";
 import type { ToolProjection } from "./conversationProjectionTools";
 import { normalizeToolArgsFromInput } from "./shared";
 

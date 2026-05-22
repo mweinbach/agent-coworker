@@ -1,11 +1,11 @@
 import type { SessionEvent } from "../../../lib/wsProtocol";
+import type { StoreGet, StoreSet } from "../../store.helpers";
 import {
   findThreadIdForJsonRpcNotification,
   registerWorkspaceJsonRpcLifecycle,
   registerWorkspaceJsonRpcRouter,
 } from "../jsonRpcSocket";
 import { RUNTIME, rekeyThreadRuntimeMaps } from "../runtimeState";
-import type { StoreGet, StoreSet } from "../../store.helpers";
 import {
   JSONRPC_THREAD_EVENT_METHODS,
   type JsonRpcMessageParams,

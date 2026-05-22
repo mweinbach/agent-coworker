@@ -4,8 +4,11 @@ import type { InteractionManager } from "./InteractionManager";
 import type { SessionBackupController } from "./SessionBackupController";
 import type { SessionContext } from "./SessionContext";
 import type { SessionMetadataManager } from "./SessionMetadataManager";
+import {
+  createUserMessageTurnRunner,
+  type UserMessageTurnRunner,
+} from "./turnExecution/runUserMessageTurn";
 import { createSteerCoordinator, type SteerCoordinator } from "./turnExecution/steerCoordinator";
-import { createUserMessageTurnRunner, type UserMessageTurnRunner } from "./turnExecution/runUserMessageTurn";
 import {
   createTurnErrorClassifier,
   createUserMessageAttachmentHelpers,

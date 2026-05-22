@@ -8,18 +8,14 @@ import {
 } from "./appleFoundationTitle";
 import { heuristicTitleFromQuery } from "./heuristicTitle";
 import { generateRemoteModelTitle } from "./remoteModelTitle";
-import {
-  collapseWhitespace,
-  DEFAULT_SESSION_TITLE,
-  type SessionTitleResult,
-} from "./shared";
+import { collapseWhitespace, DEFAULT_SESSION_TITLE, type SessionTitleResult } from "./shared";
 
+export { heuristicTitleFromQuery } from "./heuristicTitle";
 export {
   DEFAULT_SESSION_TITLE,
   type SessionTitleResult,
   type SessionTitleSource,
 } from "./shared";
-export { heuristicTitleFromQuery } from "./heuristicTitle";
 
 type SessionTitleDeps = {
   createRuntime: typeof import("../../runtime").createRuntime;
@@ -47,18 +43,19 @@ export function createSessionTitleGenerator(overrides: Partial<SessionTitleDeps>
     }
 
     if (!lazyDepsPromise) {
-      lazyDepsPromise = Promise.all([import("../../runtime"), import("../../providers/catalog")]).then(
-        ([runtime, catalog]) => ({
-          createRuntime: overrides.createRuntime ?? runtime.createRuntime,
-          defaultModelForProvider:
-            overrides.defaultModelForProvider ?? catalog.defaultModelForProvider,
-          loadAppleFoundationModelsModule:
-            overrides.loadAppleFoundationModelsModule ?? loadAppleFoundationModelsModule,
-          platform: overrides.platform ?? process.platform,
-          arch: overrides.arch ?? process.arch,
-          env: overrides.env ?? process.env,
-        }),
-      );
+      lazyDepsPromise = Promise.all([
+        import("../../runtime"),
+        import("../../providers/catalog"),
+      ]).then(([runtime, catalog]) => ({
+        createRuntime: overrides.createRuntime ?? runtime.createRuntime,
+        defaultModelForProvider:
+          overrides.defaultModelForProvider ?? catalog.defaultModelForProvider,
+        loadAppleFoundationModelsModule:
+          overrides.loadAppleFoundationModelsModule ?? loadAppleFoundationModelsModule,
+        platform: overrides.platform ?? process.platform,
+        arch: overrides.arch ?? process.arch,
+        env: overrides.env ?? process.env,
+      }));
     }
 
     return await lazyDepsPromise;

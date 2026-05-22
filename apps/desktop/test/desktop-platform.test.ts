@@ -15,7 +15,10 @@ type DesktopRootDataset = Partial<
     | "sidebarTitlebandMode"
     | "topbarControlPlacement"
     | "usesNativeGlass"
-    | "disableCssBlur",
+    | "disableCssBlur"
+    | "captionButtonReserve"
+    | "collapsedLeftRailWidth"
+    | "topbarToolbarGap",
     string
   >
 >;
@@ -88,6 +91,9 @@ describe("getDesktopPlatformInfo", () => {
         topbarControlPlacement: "inline",
         usesNativeGlass: false,
         disableCssBlur: false,
+        captionButtonReserve: 0,
+        collapsedLeftRailWidth: 0,
+        topbarToolbarGap: 0,
       });
     });
   });
@@ -105,6 +111,9 @@ describe("getDesktopPlatformInfo", () => {
         topbarControlPlacement: "sidebar",
         usesNativeGlass: true,
         disableCssBlur: true,
+        captionButtonReserve: 0,
+        collapsedLeftRailWidth: 0,
+        topbarToolbarGap: 0,
       });
 
       root.dataset.platform = "win32";
@@ -115,6 +124,9 @@ describe("getDesktopPlatformInfo", () => {
         topbarControlPlacement: "left-rail",
         usesNativeGlass: false,
         disableCssBlur: false,
+        captionButtonReserve: 136,
+        collapsedLeftRailWidth: 84,
+        topbarToolbarGap: 6,
       });
 
       root.dataset.platform = "linux";
@@ -125,6 +137,9 @@ describe("getDesktopPlatformInfo", () => {
         topbarControlPlacement: "inline",
         usesNativeGlass: false,
         disableCssBlur: false,
+        captionButtonReserve: 0,
+        collapsedLeftRailWidth: 0,
+        topbarToolbarGap: 6,
       });
     } finally {
       harness.restore();
@@ -147,6 +162,30 @@ describe("getDesktopPlatformInfo", () => {
       topbarControlPlacement: "inline",
       usesNativeGlass: true,
       disableCssBlur: true,
+      captionButtonReserve: 136,
+      collapsedLeftRailWidth: 84,
+      topbarToolbarGap: 6,
+    });
+  });
+
+  test("reads chrome metrics from IPC dataset attributes", () => {
+    expect(
+      readPlatformInfoWithDataset({
+        platform: "win32",
+        captionButtonReserve: "120",
+        collapsedLeftRailWidth: "72",
+        topbarToolbarGap: "8",
+      }),
+    ).toEqual({
+      platform: "windows",
+      rawPlatform: "win32",
+      sidebarTitlebandMode: "native",
+      topbarControlPlacement: "left-rail",
+      usesNativeGlass: false,
+      disableCssBlur: false,
+      captionButtonReserve: 120,
+      collapsedLeftRailWidth: 72,
+      topbarToolbarGap: 8,
     });
   });
 
@@ -166,6 +205,9 @@ describe("getDesktopPlatformInfo", () => {
       topbarControlPlacement: "left-rail",
       usesNativeGlass: true,
       disableCssBlur: true,
+      captionButtonReserve: 0,
+      collapsedLeftRailWidth: 0,
+      topbarToolbarGap: 6,
     });
   });
 
@@ -185,6 +227,9 @@ describe("getDesktopPlatformInfo", () => {
       topbarControlPlacement: "inline",
       usesNativeGlass: false,
       disableCssBlur: false,
+      captionButtonReserve: 0,
+      collapsedLeftRailWidth: 0,
+      topbarToolbarGap: 0,
     });
   });
 });

@@ -19,7 +19,35 @@
 }
 
 :root[data-platform="linux"] .settings-shell__nav {
-  padding-top: 3rem;
+  padding-top: 0;
+}
+
+:root[data-platform="linux"] .settings-shell__nav-titleband {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: 3rem;
+  padding-top: 4px;
+}
+
+:root[data-platform="linux"] .settings-shell__nav-titleband-drag-zone {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  -webkit-app-region: drag;
+}
+
+:root[data-platform="linux"] .settings-shell__nav-titleband-row {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  pointer-events: none;
+}
+
+:root[data-platform="linux"] .settings-shell__nav-titleband-row > *,
+:root[data-platform="linux"] .settings-shell__nav-button {
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
 }
 
 :root[data-platform="linux"] .settings-shell__back-button {
@@ -27,7 +55,7 @@
 }
 
 :root[data-platform="linux"] .settings-shell__header-actions {
-  padding-right: 8.5rem;
+  padding-right: calc(var(--platform-right-native-reserve) + var(--platform-topbar-toolbar-gap));
 }
 
 :root[data-platform="linux"] .settings-shell__main {

@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  browserAccessHeaders,
   configureWebAdapter,
   createWebAdapter,
   deriveSameOriginServerUrl,
   normalizeWebServerUrl,
+  withBrowserAccessToken,
 } from "../lib/webAdapter";
 import { getSavedServerUrl } from "../lib/webWorkspaceState";
 
@@ -30,7 +32,7 @@ function toHttpBase(wsUrl: string): string {
 // Fetch the server's declared workspace (its --dir). One HTTP hop that also verifies reachability.
 async function fetchServerWorkspaces(serverWsUrl: string): Promise<DiscoveredWorkspace[]> {
   const base = toHttpBase(serverWsUrl);
-  const res = await fetch(`${base}/cowork/workspaces`);
+  const res = await fetch(`${base}/cowork/workspaces`, { headers: browserAccessHeaders() });
   if (!res.ok) throw new Error(`Server returned ${res.status} from /cowork/workspaces`);
   const data = (await res.json()) as { workspaces?: DiscoveredWorkspace[] };
   return Array.isArray(data.workspaces) ? data.workspaces : [];
@@ -38,7 +40,7 @@ async function fetchServerWorkspaces(serverWsUrl: string): Promise<DiscoveredWor
 
 async function supportsDesktopService(serverWsUrl: string): Promise<boolean> {
   const base = toHttpBase(serverWsUrl);
-  const res = await fetch(`${base}/cowork/desktop/state`);
+  const res = await fetch(`${base}/cowork/desktop/state`, { headers: browserAccessHeaders() });
   return res.ok;
 }
 
@@ -50,7 +52,7 @@ function probeWebSocket(url: string, timeoutMs = 4000): Promise<void> {
     let settled = false;
     let ws: WebSocket;
     try {
-      ws = new WebSocket(url, "cowork.jsonrpc.v1");
+      ws = new WebSocket(withBrowserAccessToken(url), "cowork.jsonrpc.v1");
     } catch (err) {
       reject(err instanceof Error ? err : new Error(String(err)));
       return;

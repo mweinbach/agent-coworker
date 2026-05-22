@@ -11,7 +11,7 @@ import {
 } from "../../shared/openaiCompatibleOptions";
 import { listSessionToolNames } from "../../tools";
 import { isProviderName, PROVIDER_NAMES } from "../../types";
-import { normalizeProviderAuthMethods, type ProviderAuthMethod } from "../parser";
+import { normalizeProviderAuthMethods, type ProviderAuthMethod, parseReplInput } from "../parser";
 import { promptForApiKey, promptForProviderFields, promptForProviderMethod } from "./authPrompts";
 import type { PublicConfig, PublicSessionConfig } from "./serverEventHandler";
 
@@ -46,9 +46,11 @@ function currentOpenAiCompatibleProvider(ctx: ReplCommandContext): "openai" | "c
 }
 
 export async function handleSlashCommand(input: string, ctx: ReplCommandContext): Promise<boolean> {
-  if (!input.startsWith("/")) return false;
+  const parsed = parseReplInput(input);
+  if (parsed.type === "message") return false;
 
-  const [cmd, ...rest] = input.slice(1).split(/\s+/);
+  const cmd = parsed.type === "unknown" ? parsed.name : parsed.type;
+  const arg = "arg" in parsed ? parsed.arg : "";
   const threadId = () => ctx.getThreadId();
   const cwd = () => ctx.getCwd();
 
@@ -103,7 +105,7 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
   }
 
   if (cmd === "model") {
-    const id = rest.join(" ").trim();
+    const id = arg;
     if (!id) {
       console.log("usage: /model <id>");
       ctx.activateNextPrompt();
@@ -122,7 +124,7 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
   }
 
   if (cmd === "provider") {
-    const name = (rest[0] ?? "").trim();
+    const name = arg.split(/\s+/)[0]?.trim() ?? "";
     if (!isProviderName(name)) {
       console.log(`usage: /provider <${UI_PROVIDER_NAMES.join("|")}>`);
       ctx.activateNextPrompt();
@@ -162,7 +164,7 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
       return true;
     }
 
-    const value = rest[0]?.trim().toLowerCase() ?? "";
+    const value = arg.split(/\s+/)[0]?.trim().toLowerCase() ?? "";
     if (!isOpenAiTextVerbosity(value)) {
       console.log(`usage: /verbosity <${OPENAI_TEXT_VERBOSITY_VALUES.join("|")}>`);
       ctx.activateNextPrompt();
@@ -202,7 +204,7 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
       return true;
     }
 
-    const value = rest[0]?.trim().toLowerCase() ?? "";
+    const value = arg.split(/\s+/)[0]?.trim().toLowerCase() ?? "";
     if (!isOpenAiReasoningEffort(value)) {
       console.log(`usage: /reasoning-effort <${OPENAI_REASONING_EFFORT_VALUES.join("|")}>`);
       ctx.activateNextPrompt();
@@ -242,7 +244,7 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
       return true;
     }
 
-    const value = rest[0]?.trim().toLowerCase() ?? "";
+    const value = arg.split(/\s+/)[0]?.trim().toLowerCase() ?? "";
     if (!isOpenAiReasoningSummary(value)) {
       console.log(`usage: /reasoning-summary <${OPENAI_REASONING_SUMMARY_VALUES.join("|")}>`);
       ctx.activateNextPrompt();
@@ -273,7 +275,7 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
   }
 
   if (cmd === "cwd") {
-    const p = rest.join(" ").trim();
+    const p = arg;
     if (!p) {
       console.log("usage: /cwd <path>");
       ctx.activateNextPrompt();
@@ -287,8 +289,9 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
   }
 
   if (cmd === "connect") {
-    const serviceToken = (rest[0] ?? "").trim().toLowerCase();
-    const apiKeyArg = rest.slice(1).join(" ").trim();
+    const firstSpaceIdx = arg.search(/\s/);
+    const serviceToken = (firstSpaceIdx === -1 ? arg : arg.slice(0, firstSpaceIdx)).toLowerCase();
+    const apiKeyArg = firstSpaceIdx === -1 ? "" : arg.slice(firstSpaceIdx).trim();
 
     if (!serviceToken || serviceToken === "help" || serviceToken === "list") {
       ctx.showConnectStatus();
@@ -460,7 +463,7 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
   }
 
   if (cmd === "resume") {
-    const targetThreadId = rest.join(" ").trim();
+    const targetThreadId = arg;
     if (!targetThreadId) {
       console.log("usage: /resume <threadId>");
       ctx.activateNextPrompt();

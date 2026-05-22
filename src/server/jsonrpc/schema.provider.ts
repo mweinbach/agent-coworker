@@ -8,6 +8,10 @@ export const jsonRpcProviderRequestSchemas = {
   "cowork/provider/authMethods/read":
     jsonRpcControlRequestSchemas["cowork/provider/authMethods/read"],
   "cowork/provider/status/refresh": jsonRpcControlRequestSchemas["cowork/provider/status/refresh"],
+  "cowork/provider/codexAppServer/status":
+    jsonRpcControlRequestSchemas["cowork/provider/codexAppServer/status"],
+  "cowork/provider/codexAppServer/update":
+    jsonRpcControlRequestSchemas["cowork/provider/codexAppServer/update"],
   "cowork/provider/auth/authorize": jsonRpcControlRequestSchemas["cowork/provider/auth/authorize"],
   "cowork/provider/auth/logout": jsonRpcControlRequestSchemas["cowork/provider/auth/logout"],
   "cowork/provider/auth/callback": jsonRpcControlRequestSchemas["cowork/provider/auth/callback"],
@@ -22,6 +26,10 @@ export const jsonRpcProviderResultSchemas = {
   "cowork/provider/authMethods/read":
     jsonRpcControlResultSchemas["cowork/provider/authMethods/read"],
   "cowork/provider/status/refresh": jsonRpcControlResultSchemas["cowork/provider/status/refresh"],
+  "cowork/provider/codexAppServer/status":
+    jsonRpcControlResultSchemas["cowork/provider/codexAppServer/status"],
+  "cowork/provider/codexAppServer/update":
+    jsonRpcControlResultSchemas["cowork/provider/codexAppServer/update"],
   "cowork/provider/auth/authorize": jsonRpcControlResultSchemas["cowork/provider/auth/authorize"],
   "cowork/provider/auth/logout": jsonRpcControlResultSchemas["cowork/provider/auth/logout"],
   "cowork/provider/auth/callback": jsonRpcControlResultSchemas["cowork/provider/auth/callback"],

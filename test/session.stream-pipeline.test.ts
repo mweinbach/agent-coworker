@@ -3,6 +3,7 @@ import path from "node:path";
 import * as REAL_AGENT from "../src/agent";
 import { __internal as observabilityRuntimeInternal } from "../src/observability/runtime";
 import type { SessionEvent } from "../src/server/protocol";
+import type { PersistedModelStreamChunk, SessionDb } from "../src/server/sessionDb";
 import type { AgentConfig } from "../src/types";
 
 const mockRunTurn = mock(async () => ({
@@ -57,7 +58,11 @@ function makeEmit(): { emit: (evt: SessionEvent) => void; events: SessionEvent[]
   };
 }
 
-function makeSession(overrides?: { config?: AgentConfig; provider?: string }) {
+function makeSession(overrides?: {
+  config?: AgentConfig;
+  provider?: string;
+  sessionDb?: Partial<SessionDb>;
+}) {
   const dir = "/tmp/test-session";
   const config = overrides?.config ?? makeConfig(dir);
   if (overrides?.provider) (config as any).provider = overrides.provider;
@@ -69,6 +74,7 @@ function makeSession(overrides?: { config?: AgentConfig; provider?: string }) {
     emit,
     generateSessionTitleImpl: mockGenerateSessionTitle,
     writePersistedSessionSnapshotImpl: mockWritePersistedSessionSnapshot,
+    sessionDb: overrides?.sessionDb as SessionDb | undefined,
   });
   return { session, events };
 }
@@ -153,6 +159,58 @@ describe("AgentSession stream pipeline", () => {
     const chunkIndex = events.findIndex((evt) => evt.type === "model_stream_chunk");
     expect(rawIndex).toBeGreaterThanOrEqual(0);
     expect(chunkIndex).toBeGreaterThan(rawIndex);
+  });
+
+  test("codex app-server raw JSON-RPC requests persist through the SQLite raw stream path", async () => {
+    const persisted: PersistedModelStreamChunk[] = [];
+    const sessionDb = {
+      persistModelStreamChunk: mock(async (chunk: PersistedModelStreamChunk) => {
+        persisted.push(chunk);
+      }),
+    };
+    const { session, events } = makeSession({
+      provider: "codex-cli",
+      sessionDb,
+    });
+    mockRunTurn.mockImplementationOnce(async (params: any) => {
+      await params.onModelRawEvent?.({
+        format: "codex-app-server-v2",
+        event: {
+          direction: "client_request",
+          message: {
+            id: 4,
+            method: "turn/start",
+            params: {
+              threadId: "thread_1",
+              input: [{ type: "text", text: "test", text_elements: [] }],
+            },
+          },
+        },
+      });
+      return { text: "", reasoningText: undefined, responseMessages: [] };
+    });
+
+    await session.sendUserMessage("test");
+
+    const rawEvents = getRawStreamEvents(events);
+    expect(rawEvents).toHaveLength(1);
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]).toMatchObject({
+      provider: "codex-cli",
+      rawFormat: "codex-app-server-v2",
+      rawEvent: rawEvents[0].event,
+    });
+    expect(persisted[0].rawEvent).toEqual({
+      direction: "client_request",
+      message: {
+        id: 4,
+        method: "turn/start",
+        params: {
+          threadId: "thread_1",
+          input: [{ type: "text", text: "test", text_elements: [] }],
+        },
+      },
+    });
   });
 
   // =========================================================================

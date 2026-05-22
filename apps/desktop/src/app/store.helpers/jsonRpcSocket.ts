@@ -1,4 +1,9 @@
+import type {
+  SpreadsheetPreviewResult,
+  SpreadsheetPreviewViewportRequest,
+} from "../../../../../src/shared/spreadsheetPreview";
 import { JsonRpcSocket } from "../../lib/agentSocket";
+import { withBrowserAccessToken } from "../../lib/webAdapter";
 import type { StoreGet, StoreSet } from "../store.helpers";
 import type { ThreadRuntime, WorkspaceRecord } from "../types";
 import { JSONRPC_SOCKET_OVERRIDE_KEY } from "./jsonRpcSocketOverride";
@@ -227,6 +232,9 @@ export function ensureWorkspaceJsonRpcSocket(
       const controlSessionId =
         (get() as { workspaceRuntimeById?: Record<string, { controlSessionId?: string | null }> })
           .workspaceRuntimeById?.[workspaceId]?.controlSessionId ?? null;
+      if (existing.__coworkOpened === false) {
+        existing.connect();
+      }
       if (set && existing.__coworkOpened === true && !controlSessionId) {
         syncWorkspaceSocketState(workspaceId, true);
       }
@@ -239,7 +247,7 @@ export function ensureWorkspaceJsonRpcSocket(
 
   const JsonRpcSocketImpl = resolveJsonRpcSocketImpl();
   const socket = new JsonRpcSocketImpl({
-    url,
+    url: withBrowserAccessToken(url),
     clientInfo: {
       name: "cowork-desktop",
       title: "Cowork Desktop",
@@ -503,6 +511,38 @@ export async function uploadJsonRpcWorkspaceFile(
     filename: typeof event?.filename === "string" ? event.filename : filename,
     path: typeof event?.path === "string" ? event.path : "",
   };
+}
+
+export async function previewJsonRpcWorkspaceSpreadsheet(
+  get: StoreGet,
+  set: StoreSet | undefined,
+  workspaceId: string,
+  filePath: string,
+  opts: {
+    sheetName?: string;
+    viewport?: SpreadsheetPreviewViewportRequest;
+  } = {},
+): Promise<SpreadsheetPreviewResult> {
+  const workspace = getWorkspaceById(get, workspaceId);
+  return (await requestJsonRpc(get, set, workspaceId, "cowork/workspace/spreadsheet/preview", {
+    cwd: workspace?.path,
+    path: filePath,
+    ...(opts.sheetName ? { sheetName: opts.sheetName } : {}),
+    ...(opts.viewport ? { viewport: opts.viewport } : {}),
+  })) as SpreadsheetPreviewResult;
+}
+
+export async function previewJsonRpcWorkspacePresentation(
+  get: StoreGet,
+  set: StoreSet | undefined,
+  workspaceId: string,
+  filePath: string,
+): Promise<any> {
+  const workspace = getWorkspaceById(get, workspaceId);
+  return await requestJsonRpc(get, set, workspaceId, "cowork/workspace/presentation/preview", {
+    cwd: workspace?.path,
+    path: filePath,
+  });
 }
 
 export async function unsubscribeJsonRpcThread(

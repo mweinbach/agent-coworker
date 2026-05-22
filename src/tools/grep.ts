@@ -69,7 +69,11 @@ export function createGrepTool(
       let rgPath: string;
       try {
         const homedir = resolveCoworkHomedir(ctx.config.userCoworkDir);
-        rgPath = await ensureRipgrepImpl({ homedir, log: ctx.log });
+        rgPath = await ensureRipgrepImpl({
+          homedir,
+          log: ctx.log,
+          disableDownload: ctx.shellPolicy === "no_project_write",
+        });
       } catch (err) {
         const msg = `ripgrep (rg) not available: ${String(err)}`;
         ctx.log(`tool< grep ${JSON.stringify({ error: msg })}`);

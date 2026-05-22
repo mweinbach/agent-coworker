@@ -86,6 +86,53 @@ describe("desktop chat activity groups", () => {
     ]);
   });
 
+  test("keeps a pending reasoning placeholder before summary text streams", () => {
+    const feed: FeedItem[] = [
+      {
+        id: "m1",
+        kind: "message",
+        role: "user",
+        ts: "2024-01-01T00:00:00.000Z",
+        text: "start",
+      },
+      {
+        id: "r-pending",
+        kind: "reasoning",
+        mode: "summary",
+        ts: "2024-01-01T00:00:01.000Z",
+        text: "",
+      },
+    ];
+
+    expect(buildChatRenderItems(feed)).toEqual([
+      { kind: "feed-item", item: feed[0] },
+      { kind: "activity-group", id: "activity-r-pending", items: [feed[1]] },
+    ]);
+  });
+
+  test("pending reasoning placeholders do not add trace rows once real activity arrives", () => {
+    const summary = summarizeActivityGroup([
+      {
+        id: "r-pending",
+        kind: "reasoning",
+        mode: "summary",
+        ts: "2024-01-01T00:00:01.000Z",
+        text: "",
+      },
+      {
+        id: "r-summary",
+        kind: "reasoning",
+        mode: "summary",
+        ts: "2024-01-01T00:00:02.000Z",
+        text: "Checking the source list.",
+      },
+    ]);
+
+    expect(summary.entries).toHaveLength(1);
+    expect(summary.reasoningCount).toBe(1);
+    expect(summary.preview).toContain("Checking the source list.");
+  });
+
   test("summary prefers reasoning preview and counts tools", () => {
     const summary = summarizeActivityGroup([
       {
@@ -111,6 +158,70 @@ describe("desktop chat activity groups", () => {
     expect(summary.reasoningCount).toBe(1);
     expect(summary.status).toBe("done");
     expect(summary.statusLabel).toBe("Done");
+    expect(summary.elapsedLabel).toBe("1s");
+  });
+
+  test("summary elapsed time floors activity timestamps and ignores invalid values", () => {
+    const summary = summarizeActivityGroup([
+      {
+        id: "r1",
+        kind: "reasoning",
+        mode: "summary",
+        ts: "not-a-date",
+        text: "Planning.",
+      },
+      {
+        id: "t1",
+        kind: "tool",
+        ts: "2024-01-01T00:00:00.400Z",
+        name: "read",
+        state: "output-available",
+      },
+      {
+        id: "t2",
+        kind: "tool",
+        ts: "2024-01-01T00:02:56.900Z",
+        name: "grep",
+        state: "output-available",
+      },
+    ]);
+
+    expect(summary.elapsedLabel).toBe("2m 56s");
+  });
+
+  test("summary uses a single tool's completedAt for elapsed time", () => {
+    const summary = summarizeActivityGroup([
+      {
+        id: "t1",
+        kind: "tool",
+        ts: "2024-01-01T00:00:00.000Z",
+        completedAt: "2024-01-01T00:00:10.000Z",
+        name: "bash",
+        state: "output-available",
+        result: { exitCode: 0 },
+      },
+    ]);
+
+    expect(summary.status).toBe("done");
+    expect(summary.elapsedLabel).toBe("10s");
+  });
+
+  test("summary treats stale input-state tools with results as completed", () => {
+    const summary = summarizeActivityGroup([
+      {
+        id: "t1",
+        kind: "tool",
+        ts: "2024-01-01T00:00:00.000Z",
+        name: "todoWrite",
+        state: "input-available",
+        result: "Todo list updated",
+      },
+    ]);
+
+    expect(summary.status).toBe("done");
+    const entry = summary.entries[0];
+    expect(entry?.kind).toBe("tool");
+    expect(entry?.kind === "tool" ? entry.item.state : null).toBe("output-available");
   });
 
   test("summary preview strips a standalone markdown reasoning heading", () => {
@@ -150,6 +261,75 @@ describe("desktop chat activity groups", () => {
 
     expect(summary.status).toBe("approval");
     expect(summary.statusLabel).toBe("Needs review");
+  });
+
+  test("summary hides recovered internal command failures from the user-facing trace", () => {
+    const summary = summarizeActivityGroup([
+      {
+        id: "r1",
+        kind: "reasoning",
+        mode: "summary",
+        ts: "2024-01-01T00:00:01.000Z",
+        text: "Fixing the generated script before rerunning it.",
+      },
+      {
+        id: "t-failed",
+        kind: "tool",
+        ts: "2024-01-01T00:00:02.000Z",
+        name: "commandExecution",
+        state: "output-error",
+        args: { command: "python3 build_report.py" },
+        result: { error: "TypeError: bad argument" },
+      },
+      {
+        id: "t-edit",
+        kind: "tool",
+        ts: "2024-01-01T00:00:03.000Z",
+        name: "fileChange",
+        state: "output-available",
+        result: { paths: ["build_report.py"] },
+      },
+      {
+        id: "t-success",
+        kind: "tool",
+        ts: "2024-01-01T00:00:04.000Z",
+        name: "commandExecution",
+        state: "output-available",
+        args: { command: "python3 build_report.py" },
+        result: { exitCode: 0 },
+      },
+    ]);
+
+    expect(summary.status).toBe("done");
+    expect(summary.statusLabel).toBe("Done");
+    expect(summary.entries).toHaveLength(3);
+    expect(summary.entries.map((entry) => entry.item.id)).toEqual(["r1", "t-edit", "t-success"]);
+    expect(summary.entries.some((entry) => entry.kind === "tool" && entry.item.state === "output-error")).toBe(
+      false,
+    );
+    expect(summary.toolCount).toBe(2);
+  });
+
+  test("summary keeps unrecovered internal command failures visible", () => {
+    const summary = summarizeActivityGroup([
+      {
+        id: "t-failed",
+        kind: "tool",
+        ts: "2024-01-01T00:00:02.000Z",
+        name: "commandExecution",
+        state: "output-error",
+        args: { command: "python3 build_report.py" },
+        result: { error: "TypeError: bad argument" },
+      },
+    ]);
+
+    expect(summary.status).toBe("issue");
+    expect(summary.statusLabel).toBe("Issue");
+    expect(summary.entries).toHaveLength(1);
+    expect(summary.entries[0]?.kind).toBe("tool");
+    expect(summary.entries[0]?.kind === "tool" ? summary.entries[0].item.state : null).toBe(
+      "output-error",
+    );
   });
 
   test("summary collapses adjacent tool lifecycle updates into one trace row", () => {

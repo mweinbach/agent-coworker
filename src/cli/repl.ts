@@ -124,6 +124,7 @@ export const __internal = {
 export async function runCliRepl(
   opts: {
     dir?: string;
+    port?: number;
     providerOptions?: Record<string, any>;
     yolo?: boolean;
     // Internal hooks for tests to avoid global/module mocks.
@@ -131,6 +132,12 @@ export async function runCliRepl(
       startAgentServer?: typeof startAgentServer;
       WebSocket?: { new (url: string, protocols?: string | string[]): WebSocket; OPEN: number };
       createReadlineInterface?: () => readline.Interface;
+      timers?: {
+        setTimeout(callback: () => void, delayMs: number): unknown;
+        clearTimeout(handle: unknown): void;
+        setInterval(callback: () => void, delayMs: number): unknown;
+        clearInterval(handle: unknown): void;
+      };
     };
   } = {},
 ) {
@@ -141,6 +148,7 @@ export async function runCliRepl(
 
   const startAgentServerImpl = opts.__internal?.startAgentServer ?? startAgentServer;
   const WebSocketImpl = opts.__internal?.WebSocket;
+  const timersImpl = opts.__internal?.timers;
   const createReadlineInterface =
     opts.__internal?.createReadlineInterface ??
     (() => readline.createInterface({ input: process.stdin, output: process.stdout }));
@@ -149,7 +157,7 @@ export async function runCliRepl(
     return await startAgentServerImpl({
       cwd,
       hostname: "127.0.0.1",
-      port: 0,
+      port: opts.port ?? 0,
       providerOptions: opts.providerOptions,
       yolo: opts.yolo,
     });
@@ -160,7 +168,7 @@ export async function runCliRepl(
   let serverUrl = serverInfo.url;
   let serverStopping = false;
 
-  const stopServer = () => {
+  const stopServer = async () => {
     if (serverStopping) return;
     serverStopping = true;
     if (socket) {
@@ -172,7 +180,30 @@ export async function runCliRepl(
       socket = null;
     }
     try {
-      server.stop();
+      await server.stop();
+    } catch {
+      // ignore
+    }
+  };
+
+  const stopServerSync = () => {
+    if (serverStopping) return;
+    serverStopping = true;
+    if (socket) {
+      try {
+        socket.close();
+      } catch {
+        // ignore
+      }
+      socket = null;
+    }
+    try {
+      const p = server.stop();
+      if (p && typeof p.catch === "function") {
+        p.catch(() => {
+          // ignore
+        });
+      }
     } catch {
       // ignore
     }
@@ -509,16 +540,86 @@ export async function runCliRepl(
     threadId = null;
     config = null;
     sessionConfig = null;
+    disconnectNotified = false;
 
     const epoch = ++socketEpoch;
+
+    let isInitialConnect = true;
+    let resolveSessionSynced: (() => void) | null = null;
+    let rejectSessionSynced: ((err: Error) => void) | null = null;
+    const sessionSyncedPromise = new Promise<void>((resolve, reject) => {
+      resolveSessionSynced = resolve;
+      rejectSessionSynced = reject;
+    });
 
     const nextSocket = new JsonRpcSocket({
       url,
       clientInfo: { name: "cli", version: VERSION },
-      autoReconnect: false,
+      autoReconnect: true,
       WebSocketImpl: WebSocketImpl as unknown as typeof WebSocket,
+      timers: timersImpl,
       onOpen: () => {
-        // Connection established; initialization handled after readyPromise.
+        const isReconnect = !isInitialConnect;
+        isInitialConnect = false;
+
+        if (isReconnect) {
+          console.log("\nConnection lost, reconnected to server.");
+        }
+
+        void (async () => {
+          const targetThreadId =
+            resumeThreadId?.trim() || threadId || lastKnownThreadId || undefined;
+          const requestCwd = workspaceCwd;
+          try {
+            let result: Record<string, unknown>;
+            if (targetThreadId) {
+              result = (await nextSocket.request("thread/resume", {
+                threadId: targetThreadId,
+              })) as Record<string, unknown>;
+            } else {
+              result = (await nextSocket.request("thread/start", { cwd: requestCwd })) as Record<
+                string,
+                unknown
+              >;
+            }
+            const descriptor = await applyThreadDescriptor(result, requestCwd);
+            await loadWorkspaceMetadata(nextSocket, descriptor?.cwd ?? requestCwd);
+            resolveSessionSynced?.();
+            if (isReconnect) {
+              activatePrompt(rl);
+            }
+          } catch (err) {
+            // If resume fails, try starting a new thread.
+            if (targetThreadId) {
+              try {
+                const result = (await nextSocket.request("thread/start", {
+                  cwd: requestCwd,
+                })) as Record<string, unknown>;
+                const descriptor = await applyThreadDescriptor(result, requestCwd);
+                await loadWorkspaceMetadata(nextSocket, descriptor?.cwd ?? requestCwd);
+                resolveSessionSynced?.();
+                if (isReconnect) {
+                  activatePrompt(rl);
+                }
+              } catch (retryErr) {
+                const formattedErr =
+                  retryErr instanceof Error ? retryErr : new Error(String(retryErr));
+                rejectSessionSynced?.(formattedErr);
+                console.error(`Error starting thread: ${String(retryErr)}`);
+                if (isReconnect) {
+                  activatePrompt(rl);
+                }
+              }
+            } else {
+              const formattedErr = err instanceof Error ? err : new Error(String(err));
+              rejectSessionSynced?.(formattedErr);
+              console.error(`Error starting thread: ${String(err)}`);
+              if (isReconnect) {
+                activatePrompt(rl);
+              }
+            }
+          }
+        })();
       },
       onClose: (reason) => {
         if (epoch !== socketEpoch) return;
@@ -558,7 +659,7 @@ export async function runCliRepl(
         }
 
         // Unknown server request — respond with an error to avoid blocking.
-        socket?.respond(msg.id, {
+        nextSocket.respond(msg.id, {
           error: { code: -32601, message: `Unhandled server request: ${msg.method}` },
         });
       },
@@ -567,41 +668,7 @@ export async function runCliRepl(
     socket = nextSocket;
     nextSocket.connect();
     await nextSocket.readyPromise;
-
-    // Start or resume a thread.
-    const targetThreadId = resumeThreadId?.trim() || lastKnownThreadId || undefined;
-    const requestCwd = workspaceCwd;
-    try {
-      let result: Record<string, unknown>;
-      if (targetThreadId) {
-        result = (await nextSocket.request("thread/resume", {
-          threadId: targetThreadId,
-        })) as Record<string, unknown>;
-      } else {
-        result = (await nextSocket.request("thread/start", { cwd: requestCwd })) as Record<
-          string,
-          unknown
-        >;
-      }
-      const descriptor = await applyThreadDescriptor(result, requestCwd);
-      await loadWorkspaceMetadata(nextSocket, descriptor?.cwd ?? requestCwd);
-    } catch (err) {
-      // If resume fails, try starting a new thread.
-      if (targetThreadId) {
-        try {
-          const result = (await nextSocket.request("thread/start", { cwd: requestCwd })) as Record<
-            string,
-            unknown
-          >;
-          const descriptor = await applyThreadDescriptor(result, requestCwd);
-          await loadWorkspaceMetadata(nextSocket, descriptor?.cwd ?? requestCwd);
-        } catch (retryErr) {
-          console.error(`Error starting thread: ${String(retryErr)}`);
-        }
-      } else {
-        console.error(`Error starting thread: ${String(err)}`);
-      }
-    }
+    await sessionSyncedPromise;
   };
 
   const restartServer = async (cwd: string, rl: readline.Interface) => {
@@ -620,7 +687,7 @@ export async function runCliRepl(
       handleDisconnect(rl, "restarting server");
 
       try {
-        server.stop();
+        await server.stop();
       } catch {
         // ignore
       }
@@ -643,8 +710,13 @@ export async function runCliRepl(
 
   // Handle terminal close (e.g. closing the terminal window).
   const onHup = () => {
-    stopServer();
-    process.exit(0);
+    stopServer()
+      .then(() => {
+        process.exit(0);
+      })
+      .catch(() => {
+        process.exit(1);
+      });
   };
   process.on("SIGHUP", onHup);
 
@@ -656,10 +728,11 @@ export async function runCliRepl(
 
   activatePrompt(rl);
 
-  rl.on("line", async (input) => {
-    try {
-      const line = input.trim();
+  let lineBuffer: string[] = [];
+  let hasPendingMicrotask = false;
 
+  const handleLine = async (line: string) => {
+    try {
       if (promptMode === "ask") {
         if (!activeAsk || !threadId) {
           activatePrompt(rl);
@@ -792,16 +865,62 @@ export async function runCliRepl(
       console.error(`Error: ${String(err)}`);
       activatePrompt(rl);
     }
+  };
+
+  rl.on("line", (input) => {
+    lineBuffer.push(input);
+    if (hasPendingMicrotask) {
+      return;
+    }
+
+    hasPendingMicrotask = true;
+    const promise = new Promise<void>((resolve, reject) => {
+      queueMicrotask(async () => {
+        hasPendingMicrotask = false;
+        const lines = [...lineBuffer];
+        lineBuffer = [];
+
+        try {
+          if (lines.length > 1) {
+            // Parse the first line to see if it starts with a valid command
+            const firstLine = lines[0].trim();
+            const parsed = parseReplInput(firstLine);
+            const isCommand = parsed.type !== "message" && parsed.type !== "unknown";
+
+            if (isCommand) {
+              // If it starts with a valid slash command, process line-by-line sequentially
+              for (const rawLine of lines) {
+                await handleLine(rawLine);
+              }
+            } else {
+              // Otherwise, join all lines with newlines and process as a single multiline message/input
+              await handleLine(lines.join("\n"));
+            }
+          } else if (lines.length === 1) {
+            await handleLine(lines[0]);
+          }
+          resolve();
+        } catch (err) {
+          reject(err);
+        }
+      });
+    });
+
+    promise.catch((err) => {
+      console.error(`Unhandled REPL error: ${String(err)}`);
+    });
+
+    return promise;
   });
 
   // Last-resort cleanup if the process exits unexpectedly.
-  process.on("exit", stopServer);
+  process.on("exit", stopServerSync);
 
   await new Promise<void>((resolve) => {
     rl.on("close", () => resolve());
   });
 
-  process.off("exit", stopServer);
+  process.off("exit", stopServerSync);
   process.off("SIGHUP", onHup);
-  stopServer();
+  await stopServer();
 }

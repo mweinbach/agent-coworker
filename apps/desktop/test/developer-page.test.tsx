@@ -74,6 +74,7 @@ const { DeveloperPage } = await import("../src/ui/settings/pages/DeveloperPage")
 
 const defaultStoreActions = {
   updateWorkspaceDefaults: useAppStore.getState().updateWorkspaceDefaults,
+  checkLibreOfficeRuntime: useAppStore.getState().checkLibreOfficeRuntime,
 };
 
 describe("desktop developer page", () => {
@@ -127,6 +128,79 @@ describe("desktop developer page", () => {
       expect(container.textContent).toContain("Workspace 1");
       expect(container.textContent).toContain("/tmp/workspace-1");
       expect(container.innerHTML).toContain('value="12000"');
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("checks the managed LibreOffice runtime from developer settings", async () => {
+    const checkLibreOfficeRuntime = mock(async () => ({
+      status: "available" as const,
+      checkedAt: "2026-05-21T00:00:00.000Z",
+      message: "LibreOffice is available through the Cowork-managed soffice shim.",
+      version: "26.2.3.2",
+      shimPath: "/Users/test/.cache/cowork/libreoffice/bin/soffice",
+      resolvedPath:
+        "/Users/test/.cache/cowork/libreoffice/runtime/LibreOffice.app/Contents/MacOS/soffice",
+      smoke: {
+        ok: true,
+        durationMs: 120,
+        outputPath: "/tmp/check.pdf",
+        sizeBytes: 2048,
+      },
+    }));
+    const harness = setupJsdom();
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        useAppStore.setState({
+          workspaces: [
+            {
+              id: "ws-1",
+              name: "Workspace 1",
+              path: "/tmp/workspace-1",
+              createdAt: "2026-03-12T00:00:00.000Z",
+              lastOpenedAt: "2026-03-12T00:00:00.000Z",
+              defaultProvider: "openai",
+              defaultModel: "gpt-5.2",
+              defaultPreferredChildModel: "gpt-5.2",
+              defaultEnableMcp: true,
+              defaultBackupsEnabled: true,
+              yolo: false,
+            },
+          ],
+          selectedWorkspaceId: "ws-1",
+          checkLibreOfficeRuntime,
+        });
+      });
+
+      await act(async () => {
+        root.render(createElement(DeveloperPage));
+      });
+
+      expect(container.textContent).toContain("LibreOffice Runtime");
+      expect(container.textContent).toContain("Not checked");
+      const button = [...container.querySelectorAll("button")].find((entry) =>
+        entry.textContent?.includes("Check runtime"),
+      );
+      if (!button) throw new Error("missing check runtime button");
+
+      await act(async () => {
+        button.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(checkLibreOfficeRuntime).toHaveBeenCalledWith({ smoke: true });
+      expect(container.textContent).toContain("Available");
+      expect(container.textContent).toContain("26.2.3.2");
+      expect(container.textContent).toContain(".cache/cowork/libreoffice/bin/soffice");
+      expect(container.textContent).toContain("2,048 bytes in 120ms");
 
       await act(async () => {
         root.unmount();

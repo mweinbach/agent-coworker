@@ -4,7 +4,9 @@ export type FilePreviewKind =
   | "pdf"
   | "image"
   | "docx"
+  | "csv"
   | "xlsx"
+  | "pptx"
   | "unsupported"
   | "unknown";
 
@@ -71,8 +73,9 @@ export function getFilePreviewKind(filePath: string): FilePreviewKind {
   if (MARKDOWN_EXT.has(ext)) return "markdown";
   if (ext === ".docx") return "docx";
   if (ext === ".doc") return "unsupported";
+  if (ext === ".csv") return "csv";
   if (ext === ".xlsx") return "xlsx";
-  if (ext === ".pptx" || ext === ".ppt") return "unsupported";
+  if (ext === ".pptx" || ext === ".ppt") return "pptx";
   if (IMAGE_EXT.has(ext)) return "image";
   if (ext === ".svg") return "image";
   if (TEXTLIKE_EXT.has(ext)) return "text";
@@ -90,4 +93,18 @@ export function mimeForPreviewKind(kind: FilePreviewKind, ext: string): string {
     return "application/octet-stream";
   }
   return "application/octet-stream";
+}
+
+export function isCanvasSupportedFile(filePath: string): boolean {
+  const kind = getFilePreviewKind(filePath);
+  return (
+    kind === "markdown" || kind === "text" || kind === "csv" || kind === "xlsx" || kind === "pptx"
+  );
+}
+
+export function isSlideModule(filePath: string): boolean {
+  const ext = getExtensionLower(filePath);
+  if (ext !== ".mjs" && ext !== ".js") return false;
+  const base = filePath.replace(/\\/g, "/").split("/").pop() ?? "";
+  return /^slide[-_]?\d+\.mjs$/i.test(base) || filePath.toLowerCase().includes("/slides/");
 }

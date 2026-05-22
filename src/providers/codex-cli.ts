@@ -1,5 +1,5 @@
 import type { AgentConfig } from "../types";
-import { createCodexCliModelAdapter } from "./modelAdapter";
+import { createCodexAppServerModelAdapter } from "./modelAdapter";
 
 export const DEFAULT_CODEX_CLI_PROVIDER_OPTIONS = {
   reasoningEffort: "high",
@@ -8,7 +8,7 @@ export const DEFAULT_CODEX_CLI_PROVIDER_OPTIONS = {
 } as const;
 
 export const codexCliProvider = {
-  keyCandidates: ["codex-cli"] as const,
+  keyCandidates: [] as const,
   createModel: ({
     config,
     modelId,
@@ -17,5 +17,5 @@ export const codexCliProvider = {
     config: AgentConfig;
     modelId: string;
     savedKey?: string;
-  }) => createCodexCliModelAdapter(config, modelId, savedKey),
+  }) => createCodexAppServerModelAdapter(config, modelId, savedKey),
 };

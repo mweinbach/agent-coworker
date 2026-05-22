@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 import {
@@ -21,6 +22,58 @@ function shouldUseBundledBunRuntime(
 }
 
 const root = path.resolve(import.meta.dirname, "..");
+
+async function resolveCodexPrimaryRuntimeSource(): Promise<string | null> {
+  const fromEnv = process.env.COWORK_CODEX_PRIMARY_RUNTIME_DIR?.trim();
+  if (fromEnv) {
+    const resolved = path.resolve(fromEnv);
+    if (!(await pathExists(path.join(resolved, "runtime.json")))) {
+      throw new Error(
+        `COWORK_CODEX_PRIMARY_RUNTIME_DIR does not contain runtime.json: ${resolved}`,
+      );
+    }
+    return resolved;
+  }
+
+  const defaultRuntimeDir = path.join(
+    os.homedir(),
+    ".cache",
+    "codex-runtimes",
+    "codex-primary-runtime",
+  );
+  return (await pathExists(path.join(defaultRuntimeDir, "runtime.json")))
+    ? defaultRuntimeDir
+    : null;
+}
+
+async function copyBundledResourceDirs(outDir: string): Promise<string[]> {
+  const bundledDirs: string[] = [];
+  for (const dir of ["prompts", "config", "docs", "skills"] as const) {
+    const srcDir = path.join(root, dir);
+    if (!(await pathExists(srcDir))) {
+      continue;
+    }
+    const dest = path.join(outDir, dir);
+    await rmrf(dest);
+    await copyDir(srcDir, dest);
+    bundledDirs.push(dir);
+  }
+
+  if (process.env.COWORK_BUNDLE_CODEX_PRIMARY_RUNTIME === "1") {
+    const runtimeSource = await resolveCodexPrimaryRuntimeSource();
+    if (!runtimeSource) {
+      throw new Error(
+        "COWORK_BUNDLE_CODEX_PRIMARY_RUNTIME=1 but no Codex primary runtime cache was found. Set COWORK_CODEX_PRIMARY_RUNTIME_DIR or run the Codex runtime setup first.",
+      );
+    }
+    const dest = path.join(outDir, "codex-primary-runtime");
+    await rmrf(dest);
+    await copyDir(runtimeSource, dest);
+    bundledDirs.push("codex-primary-runtime");
+  }
+
+  return bundledDirs;
+}
 
 function parseOutfile(argv: string[], target: { platform: NodeJS.Platform; arch: string }): string {
   const defaultName =
@@ -105,17 +158,7 @@ async function main() {
     await fs.copyFile(executablePath, path.join(outDir, SIDECAR_BUN_EXECUTABLE_NAME));
     await fs.writeFile(resolvedOutfile, buildWindowsBundleLauncher(), "utf8");
 
-    const bundledDirs: string[] = [];
-    for (const dir of ["prompts", "config", "docs"] as const) {
-      const srcDir = path.join(root, dir);
-      if (!(await pathExists(srcDir))) {
-        continue;
-      }
-      const dest = path.join(outDir, dir);
-      await rmrf(dest);
-      await copyDir(srcDir, dest);
-      bundledDirs.push(dir);
-    }
+    const bundledDirs = await copyBundledResourceDirs(outDir);
 
     console.log(`[build] cowork-server launcher: ${path.relative(root, resolvedOutfile)}`);
     console.log(
@@ -153,17 +196,7 @@ async function main() {
     },
   );
 
-  const bundledDirs: string[] = [];
-  for (const dir of ["prompts", "config", "docs"] as const) {
-    const srcDir = path.join(root, dir);
-    if (!(await pathExists(srcDir))) {
-      continue;
-    }
-    const dest = path.join(outDir, dir);
-    await rmrf(dest);
-    await copyDir(srcDir, dest);
-    bundledDirs.push(dir);
-  }
+  const bundledDirs = await copyBundledResourceDirs(outDir);
 
   console.log(`[build] cowork-server binary: ${path.relative(root, resolvedOutfile)}`);
   console.log(

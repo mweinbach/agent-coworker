@@ -15,6 +15,7 @@ type TestState = {
     detail: string;
   }>;
   desktopFeatureFlags: { workspaceLifecycle: boolean };
+  providerStatusByName: Record<string, unknown>;
   selectedWorkspaceId: string | null;
   researchTransportWorkspaceId: string | null;
   workspaces: Array<{ id: string; path: string }>;
@@ -42,6 +43,18 @@ function createHarness(overrides: Partial<TestState> = {}) {
   const state: TestState = {
     notifications: [],
     desktopFeatureFlags: { workspaceLifecycle: true },
+    providerStatusByName: {
+      google: {
+        provider: "google",
+        authorized: true,
+        verified: false,
+        mode: "api_key",
+        account: null,
+        message: "API key saved.",
+        checkedAt: "2026-05-15T00:00:00.000Z",
+        savedApiKeyMasks: { api_key: "goog...1234" },
+      },
+    },
     selectedWorkspaceId: "ws-1",
     researchTransportWorkspaceId: null,
     workspaces: [{ id: "ws-1", path: "/tmp/ws-1" }],

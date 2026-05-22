@@ -1,7 +1,5 @@
 import type { PropsWithChildren } from "react";
-import { Pressable, Text } from "react-native";
-
-import { useAppTheme } from "@/theme/use-app-theme";
+import { Pressable, Text, useCSSVariable } from "@/tw";
 
 import { SFSymbol } from "./sf-symbol";
 
@@ -19,47 +17,29 @@ export function AppButton({
   onPress,
   disabled = false,
 }: AppButtonProps) {
-  const theme = useAppTheme();
   const isPrimary = variant === "primary";
+  const iconColor = useCSSVariable(isPrimary ? "--text-inverse" : "--text-primary");
+
+  const containerClass = isPrimary
+    ? "flex-row items-center justify-center gap-sm rounded-card px-xl py-[14px] bg-accent active:opacity-80 shadow-surface"
+    : "flex-row items-center justify-center gap-sm rounded-card border border-border-default px-xl py-[14px] bg-surface-card-elevated active:bg-surface-muted-fill";
+
+  const disabledClass = disabled ? "opacity-70 bg-surface-muted-fill" : "";
 
   return (
     <Pressable
       disabled={disabled}
       onPress={onPress}
-      style={({ pressed }) => ({
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "center",
-        gap: 8,
-        borderRadius: 16,
-        borderCurve: "continuous",
-        borderWidth: isPrimary ? 0 : 1,
-        borderColor: theme.border,
-        backgroundColor: disabled
-          ? theme.surfaceMuted
-          : isPrimary
-            ? pressed
-              ? theme.accent
-              : theme.primary
-            : pressed
-              ? theme.surfaceMuted
-              : theme.surfaceElevated,
-        paddingHorizontal: 18,
-        paddingVertical: 14,
-        opacity: disabled ? 0.7 : 1,
-        boxShadow: isPrimary && !disabled ? theme.shadow : undefined,
-      })}
+      className={`${containerClass} ${disabledClass}`}
     >
-      {icon ? (
-        <SFSymbol name={icon} size={18} color={isPrimary ? theme.primaryText : theme.text} />
-      ) : null}
+      {icon ? <SFSymbol name={icon} size={18} color={iconColor} /> : null}
       <Text
         selectable
-        style={{
-          color: isPrimary ? theme.primaryText : theme.text,
-          fontSize: 15,
-          fontWeight: "700",
-        }}
+        className={
+          isPrimary
+            ? "text-text-inverse text-[15px] font-bold"
+            : "text-text-primary text-[15px] font-bold"
+        }
       >
         {children}
       </Text>

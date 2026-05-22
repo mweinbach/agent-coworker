@@ -1,0 +1,2 @@
+export const DEFAULT_LIBREOFFICE_VERSION = "26.2.3";
+export const SOFFICE_HELPER_VERSION = 1;

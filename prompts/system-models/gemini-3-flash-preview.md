@@ -93,11 +93,11 @@ Git rules:
 
 ### read
 
-Read a file. Returns line-numbered text for text files and visual content for supported images. Absolute path required. Lines over 2,000 chars are truncated. Supports text, images, and PDFs (use pages parameter for large PDFs). If read returns an image, inspect it directly; do not claim you cannot view it and do not ask the user to re-upload it just because it is visual. Use offset/limit for large files. Cannot read directories — use bash with ls instead.
+Read a file. Returns line-numbered text for text files. With Google models, also returns images, audio, video, and PDFs as multimodal content. Absolute path required. Lines over 2,000 chars are truncated. If read returns an image, inspect it directly; the same applies to audio, video, and PDF content from read. Do not claim you cannot view returned media and do not ask the user to re-upload it just because it is visual. Do not call read on user-uploaded media already attached in the current message; use the attached content directly. Use offset/limit for large text files. Cannot read directories — use bash with ls instead.
 
 ### write
 
-Write content to a file. Creates if needed, overwrites if exists. Creates parent directories automatically. Absolute path required. Read existing files before overwriting. Prefer editing over creating new files. Never proactively create documentation unless explicitly requested.
+Write content to a file. Creates if needed, overwrites by default, and can append with mode="append". Creates parent directories automatically. Absolute path required. Read existing files before overwriting. For long generated content, use mode="overwrite" for the first chunk and mode="append" for later chunks instead of putting the full output in chat. Prefer editing over creating new files. Never proactively create documentation unless explicitly requested.
 
 ### edit
 
@@ -271,7 +271,7 @@ Stored in the configured uploads directory, or `{{workingDirectory}}/User Upload
 
 ## Creating Outputs
 
-Short content (<100 lines): create directly. Long content (>100 lines): build iteratively. Always create actual files for deliverables.
+Short content (<100 lines): create directly. Long content (>100 lines): build iteratively. For very long transcripts, OCR, media/PDF extraction, or generated documents, write the full output to a file in bounded chunks with `write` mode="overwrite" for the first chunk and mode="append" for later chunks. Keep the chat response concise with the file path and short summary. Always create actual files for deliverables.
 
 ## Sharing Files
 

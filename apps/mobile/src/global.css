@@ -1,0 +1,195 @@
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/preflight.css" layer(base);
+@import "tailwindcss/utilities.css";
+
+/* Theme Tokens */
+:root {
+  /* Palette Primitives */
+  --color-light-app-bg: #dde1ca;
+  --color-light-sidebar-bg: #e1e4cd;
+  --color-light-panel-bg: #f4f5e9;
+  --color-light-text-base: #232a18;
+  --color-light-muted-base: #556041;
+  --color-light-accent-base: #6f8042;
+  --color-light-inverse-text: #ffffff;
+  --color-light-danger-base: #bb3e3e;
+  --color-light-success-base: #1ea155;
+  --color-light-border-base: rgba(62, 74, 40, 0.12);
+  --color-light-shadow-surface-base: 0px 1px 2px rgba(0, 0, 0, 0.035);
+  --color-light-shadow-overlay-base: 0px 12px 30px rgba(0, 0, 0, 0.1);
+
+  --color-dark-app-bg: #171d13;
+  --color-dark-sidebar-bg: #202719;
+  --color-dark-panel-bg: #2a3120;
+  --color-dark-text-base: #eef0dc;
+  --color-dark-muted-base: #c7ceaf;
+  --color-dark-accent-base: #a8b963;
+  --color-dark-inverse-text: #ffffff;
+  --color-dark-danger-base: #e86060;
+  --color-dark-success-base: #3fbb74;
+  --color-dark-border-base: rgba(238, 241, 220, 0.14);
+  --color-dark-shadow-surface-base: 0px 1px 2px rgba(0, 0, 0, 0.24);
+  --color-dark-shadow-overlay-base: 0px 12px 30px rgba(0, 0, 0, 0.35);
+
+  /* Semantic Default (Light Mode) */
+  --surface-window: var(--color-light-app-bg);
+  --surface-sidebar: var(--color-light-sidebar-bg);
+  --surface-card: #f2f4e6;
+  --surface-card-elevated: #f4f5ea;
+  --surface-overlay: var(--color-light-panel-bg);
+  --surface-field: #f1f3e5;
+  --surface-secondary: #e2e6d6;
+  --surface-accent: #e2e7d5;
+  --surface-muted-fill: rgba(35, 42, 24, 0.06);
+
+  --text-primary: var(--color-light-text-base);
+  --text-secondary: rgba(35, 42, 24, 0.88);
+  --text-muted: var(--color-light-muted-base);
+  --text-subtle: rgba(85, 96, 65, 0.78);
+  --text-inverse: var(--color-light-inverse-text);
+  --text-link: var(--color-light-accent-base);
+
+  --border-default: var(--color-light-border-base);
+  --border-subtle: rgba(62, 74, 40, 0.0912);
+  --border-strong: rgba(62, 74, 40, 0.1104);
+
+  --accent: var(--color-light-accent-base);
+  --accent-soft: rgba(111, 128, 66, 0.14);
+
+  --success: var(--color-light-success-base);
+  --success-foreground: #ffffff;
+  --success-soft: rgba(30, 161, 85, 0.15);
+  --warning: #d99422;
+  --warning-foreground: #232a18;
+  --warning-soft: rgba(217, 148, 34, 0.16);
+  --danger: var(--color-light-danger-base);
+  --danger-foreground: var(--color-light-inverse-text);
+  --danger-soft: rgba(187, 62, 62, 0.12);
+
+  --shadow-surface: var(--color-light-shadow-surface-base);
+  --shadow-overlay: var(--color-light-shadow-overlay-base);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    /* Semantic Dark Mode */
+    --surface-window: var(--color-dark-app-bg);
+    --surface-sidebar: var(--color-dark-sidebar-bg);
+    --surface-card: #282f1f;
+    --surface-card-elevated: #293020;
+    --surface-overlay: var(--color-dark-panel-bg);
+    --surface-field: #282e1e;
+    --surface-secondary: #394229;
+    --surface-accent: #3b452a;
+    --surface-muted-fill: rgba(238, 240, 220, 0.06);
+
+    --text-primary: var(--color-dark-text-base);
+    --text-secondary: rgba(238, 240, 220, 0.88);
+    --text-muted: var(--color-dark-muted-base);
+    --text-subtle: rgba(199, 206, 175, 0.78);
+    --text-inverse: var(--color-dark-inverse-text);
+    --text-link: var(--color-dark-accent-base);
+
+    --border-default: var(--color-dark-border-base);
+    --border-subtle: rgba(238, 241, 220, 0.1064);
+    --border-strong: rgba(238, 241, 220, 0.1288);
+
+    --accent: var(--color-dark-accent-base);
+    --accent-soft: rgba(168, 185, 99, 0.14);
+
+    --success: var(--color-dark-success-base);
+    --success-foreground: #121a10;
+    --success-soft: rgba(63, 187, 116, 0.15);
+    --warning: #e0a131;
+    --warning-foreground: #1a2012;
+    --warning-soft: rgba(224, 161, 49, 0.16);
+    --danger: var(--color-dark-danger-base);
+    --danger-foreground: var(--color-dark-inverse-text);
+    --danger-soft: rgba(232, 96, 96, 0.16);
+
+    --shadow-surface: var(--color-dark-shadow-surface-base);
+    --shadow-overlay: var(--color-dark-shadow-overlay-base);
+  }
+}
+
+/* Platform-specific font families */
+@media android {
+  :root {
+    --font-mono: monospace;
+    --font-rounded: normal;
+    --font-serif: serif;
+    --font-sans: normal;
+  }
+}
+
+@media ios {
+  :root {
+    --font-mono: ui-monospace;
+    --font-serif: ui-serif;
+    --font-sans: system-ui;
+    --font-rounded: ui-rounded;
+  }
+}
+
+/* Register as Tailwind theme colors and custom typography properties */
+@layer theme {
+  @theme {
+    --color-surface-window: var(--surface-window);
+    --color-surface-sidebar: var(--surface-sidebar);
+    --color-surface-card: var(--surface-card);
+    --color-surface-card-elevated: var(--surface-card-elevated);
+    --color-surface-overlay: var(--surface-overlay);
+    --color-surface-field: var(--surface-field);
+    --color-surface-secondary: var(--surface-secondary);
+    --color-surface-accent: var(--surface-accent);
+    --color-surface-muted-fill: var(--surface-muted-fill);
+
+    --color-text-primary: var(--text-primary);
+    --color-text-secondary: var(--text-secondary);
+    --color-text-muted: var(--text-muted);
+    --color-text-subtle: var(--text-subtle);
+    --color-text-inverse: var(--text-inverse);
+    --color-text-link: var(--text-link);
+
+    --color-border-default: var(--border-default);
+    --color-border-subtle: var(--border-subtle);
+    --color-border-strong: var(--border-strong);
+
+    --color-accent: var(--accent);
+    --color-accent-soft: var(--accent-soft);
+
+    --color-success: var(--success);
+    --color-success-foreground: var(--success-foreground);
+    --color-success-soft: var(--success-soft);
+    --color-warning: var(--warning);
+    --color-warning-foreground: var(--warning-foreground);
+    --color-warning-soft: var(--warning-soft);
+    --color-danger: var(--danger);
+    --color-danger-foreground: var(--danger-foreground);
+    --color-danger-soft: var(--danger-soft);
+
+    --shadow-surface: var(--shadow-surface);
+    --shadow-overlay: var(--shadow-overlay);
+
+    /* Fonts mapping to the ones loaded by expo-font */
+    --font-sans: "IBMPlexSans", sans-serif;
+    --font-mono: "IBMPlexMono", monospace;
+
+    /* Spacing Scale matching tokens.ts */
+    --spacing-xs: 4px;
+    --spacing-sm: 8px;
+    --spacing-md: 12px;
+    --spacing-lg: 16px;
+    --spacing-xl: 18px;
+    --spacing-2xl: 24px;
+    --spacing-3xl: 32px;
+
+    /* Radii Scale matching tokens.ts */
+    --radius-sm: 5px;
+    --radius-md: 8px;
+    --radius-lg: 10px;
+    --radius-field: 7px;
+    --radius-card: 16px;
+    --radius-pill: 999px;
+  }
+}

@@ -1,6 +1,7 @@
 export interface CliArgs {
   command?: "migrate-agent-config";
   dir?: string;
+  port?: number;
   help: boolean;
   cli: boolean;
   yolo: boolean;
@@ -44,6 +45,22 @@ export function parseCliArgs(argv: string[]): { args: CliArgs; errors: string[] 
       } else {
         args.dir = v;
         i++;
+      }
+      continue;
+    }
+
+    if (a === "--port" || a === "-p") {
+      const v = argv[i + 1];
+      if (!v || v.startsWith("-")) {
+        errors.push(`Missing value for ${a}. Usage: ${a} <port_number>`);
+      } else {
+        i++;
+        const portNum = parseInt(v, 10);
+        if (!/^\d+$/.test(v) || Number.isNaN(portNum) || portNum < 1 || portNum > 65535) {
+          errors.push(`Invalid port number: ${v}. Port must be an integer between 1 and 65535.`);
+        } else {
+          args.port = portNum;
+        }
       }
       continue;
     }

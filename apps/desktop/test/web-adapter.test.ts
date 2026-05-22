@@ -135,6 +135,24 @@ describe("webAdapter server URL normalization", () => {
     });
   });
 
+  test("provides a browser-mode platform chrome fallback for renderer layout", async () => {
+    configureWebAdapter("ws://127.0.0.1:7337/ws", "/tmp/web-workspace");
+    const adapter = createWebAdapter();
+
+    await expect(adapter.getPlatformChrome()).resolves.toEqual({
+      platform: "web",
+      titlebarHeight: 0,
+      dragStripHeight: 0,
+      leftNativeReserve: 0,
+      rightNativeReserve: 0,
+      captionButtonReserve: 0,
+      sidebarTitlebandMode: "topbar",
+      topbarControlPlacement: "inline",
+      usesNativeGlass: false,
+      disableCssBlur: false,
+    });
+  });
+
   test("falls back to the server workspace list when the desktop service is unavailable", async () => {
     const originalFetch = globalThis.fetch;
     const responses = new Map<string, Response>([

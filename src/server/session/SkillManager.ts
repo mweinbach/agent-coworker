@@ -20,7 +20,7 @@ import {
   updateSkillInstallation,
 } from "../../skills/operations";
 import { buildSkillInstallPreview } from "../../skills/sourceResolver";
-import { createTools } from "../../tools";
+import { createTools, filterToolsForCodexDynamicBoundary } from "../../tools";
 import type {
   PluginCatalogEntry,
   PluginInstallTargetScope,
@@ -225,7 +225,12 @@ export class SkillManager {
       shellPolicy: "full",
     });
 
-    const tools = Object.entries(toolMap)
+    const effectiveToolMap =
+      this.context.state.config.provider === "codex-cli"
+        ? filterToolsForCodexDynamicBoundary(toolMap)
+        : toolMap;
+
+    const tools = Object.entries(effectiveToolMap)
       .map(([name, def]) => {
         const raw = typeof def?.description === "string" ? def.description : "";
         const description = raw.split("\n")[0] || name;

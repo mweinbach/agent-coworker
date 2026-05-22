@@ -137,7 +137,6 @@ describe("shared JSON-RPC control schemas", () => {
           },
         ],
         enabledConnectorIds: ["connector_gmail"],
-        codexAppsMcpServerName: "codex_apps",
         authenticated: true,
       },
     });

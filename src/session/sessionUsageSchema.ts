@@ -18,6 +18,11 @@ export const modelPricingSchema: z.ZodType<ModelPricing> = z
     inputPerMillion: z.number(),
     outputPerMillion: z.number(),
     cachedInputPerMillion: z.number().optional(),
+    cacheWriteInputPerMillion: z.number().optional(),
+    longContextThresholdTokens: z.number().int().nonnegative().optional(),
+    longContextInputPerMillion: z.number().optional(),
+    longContextOutputPerMillion: z.number().optional(),
+    longContextCachedInputPerMillion: z.number().optional(),
   })
   .strict();
 
@@ -27,6 +32,8 @@ export const turnUsageSchema: z.ZodType<TurnUsage> = z
     completionTokens: z.number().int().nonnegative(),
     totalTokens: z.number().int().nonnegative(),
     cachedPromptTokens: z.number().int().nonnegative().optional(),
+    cacheWritePromptTokens: z.number().int().nonnegative().optional(),
+    reasoningOutputTokens: z.number().int().nonnegative().optional(),
     estimatedCostUsd: z.number().optional(),
   })
   .strict();
@@ -52,6 +59,9 @@ export const modelUsageSummarySchema: z.ZodType<ModelUsageSummary> = z
     totalPromptTokens: z.number().int().nonnegative(),
     totalCompletionTokens: z.number().int().nonnegative(),
     totalTokens: z.number().int().nonnegative(),
+    totalCachedPromptTokens: z.number().int().nonnegative().optional(),
+    totalCacheWritePromptTokens: z.number().int().nonnegative().optional(),
+    totalReasoningOutputTokens: z.number().int().nonnegative().optional(),
     estimatedCostUsd: z.number().nullable(),
   })
   .strict();
@@ -74,6 +84,9 @@ export const sessionUsageSnapshotSchema: z.ZodType<SessionUsageSnapshot> = z
     totalPromptTokens: z.number().int().nonnegative(),
     totalCompletionTokens: z.number().int().nonnegative(),
     totalTokens: z.number().int().nonnegative(),
+    totalCachedPromptTokens: z.number().int().nonnegative().optional(),
+    totalCacheWritePromptTokens: z.number().int().nonnegative().optional(),
+    totalReasoningOutputTokens: z.number().int().nonnegative().optional(),
     estimatedTotalCostUsd: z.number().nullable(),
     costTrackingAvailable: z.boolean(),
     byModel: z.array(modelUsageSummarySchema),

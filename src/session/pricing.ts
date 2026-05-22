@@ -10,25 +10,39 @@
  *
  * Sources:
  *   - https://openai.com/api/pricing
- *   - https://ai.google.dev/pricing
- *   - https://www.anthropic.com/pricing
- *   - https://docs.baseten.co/docs/model-apis/overview
+ *   - https://ai.google.dev/gemini-api/docs/pricing
+ *   - https://platform.claude.com/docs/en/about-claude/pricing
+ *   - https://www.baseten.co/pricing/
  *   - https://docs.together.ai/docs/serverless-models
- *   - https://fireworks.ai (serverless model pricing)
+ *   - https://docs.fireworks.ai/serverless/pricing
  *
  * Override or extend entries at runtime with
  * `COWORK_MODEL_PRICING_OVERRIDES='{"provider:model":{"inputPerMillion":...,"outputPerMillion":...}}'`.
  */
 
 import type { ProviderName } from "../types";
+import {
+  isFireworksInferenceProvider,
+  listFireworksInferencePricingEntries,
+} from "../providers/fireworksShared";
 
 export type ModelPricing = {
   /** Cost per 1M input/prompt tokens in USD. */
   inputPerMillion: number;
   /** Cost per 1M output/completion tokens in USD. */
   outputPerMillion: number;
-  /** Optional: cost per 1M cached input tokens in USD. */
+  /** Optional: cost per 1M cache read / cached input tokens in USD. */
   cachedInputPerMillion?: number;
+  /** Optional: cost per 1M cache write / cache creation input tokens in USD. */
+  cacheWriteInputPerMillion?: number;
+  /** Optional: input-token threshold where long-context pricing begins. */
+  longContextThresholdTokens?: number;
+  /** Optional: cost per 1M input/prompt tokens above the long-context threshold. */
+  longContextInputPerMillion?: number;
+  /** Optional: cost per 1M output/completion tokens above the long-context threshold. */
+  longContextOutputPerMillion?: number;
+  /** Optional: cost per 1M cached input tokens above the long-context threshold. */
+  longContextCachedInputPerMillion?: number;
 };
 
 export type PricingCatalogEntry = {
@@ -39,41 +53,74 @@ export type PricingCatalogEntry = {
 
 type PricingEnv = Record<string, string | undefined>;
 
+function fireworksInferencePricingTable(): Record<string, ModelPricing> {
+  const table: Record<string, ModelPricing> = {};
+  for (const { key, pricing } of listFireworksInferencePricingEntries()) {
+    table[key] = {
+      inputPerMillion: pricing.input,
+      outputPerMillion: pricing.output,
+      ...(pricing.cacheRead !== undefined ? { cachedInputPerMillion: pricing.cacheRead } : {}),
+      ...(pricing.cacheWrite !== undefined
+        ? { cacheWriteInputPerMillion: pricing.cacheWrite }
+        : {}),
+    };
+  }
+  return table;
+}
+
 /**
  * Known model pricing. Keys are `provider:model` strings for direct lookup.
  * When an exact match isn't found we fall back to prefix matching.
  */
 const BASE_PRICING_TABLE: Record<string, ModelPricing> = {
+  ...fireworksInferencePricingTable(),
   // ── Anthropic ────────────────────────────────────────────────────────
   "anthropic:claude-opus-4-6": {
-    inputPerMillion: 15,
-    outputPerMillion: 75,
-    cachedInputPerMillion: 1.875,
+    inputPerMillion: 5,
+    outputPerMillion: 25,
+    cachedInputPerMillion: 0.5,
+    cacheWriteInputPerMillion: 6.25,
+  },
+  "anthropic:claude-opus-4-7": {
+    inputPerMillion: 5,
+    outputPerMillion: 25,
+    cachedInputPerMillion: 0.5,
+    cacheWriteInputPerMillion: 6.25,
   },
   "anthropic:claude-sonnet-4-6": {
     inputPerMillion: 3,
     outputPerMillion: 15,
-    cachedInputPerMillion: 0.375,
+    cachedInputPerMillion: 0.3,
+    cacheWriteInputPerMillion: 3.75,
   },
   "anthropic:claude-sonnet-4-5": {
     inputPerMillion: 3,
     outputPerMillion: 15,
-    cachedInputPerMillion: 0.375,
+    cachedInputPerMillion: 0.3,
+    cacheWriteInputPerMillion: 3.75,
   },
   "anthropic:claude-haiku-4-5": {
-    inputPerMillion: 0.8,
-    outputPerMillion: 4,
-    cachedInputPerMillion: 0.08,
+    inputPerMillion: 1,
+    outputPerMillion: 5,
+    cachedInputPerMillion: 0.1,
+    cacheWriteInputPerMillion: 1.25,
   },
 
   // ── Baseten ──────────────────────────────────────────────────────────
   "baseten:moonshotai/Kimi-K2.5": {
     inputPerMillion: 0.6,
     outputPerMillion: 3,
+    cachedInputPerMillion: 0.12,
   },
   "baseten:zai-org/GLM-5": {
     inputPerMillion: 0.95,
     outputPerMillion: 3.15,
+    cachedInputPerMillion: 0.2,
+  },
+  "baseten:nvidia/Nemotron-120B-A12B": {
+    inputPerMillion: 0.3,
+    outputPerMillion: 0.75,
+    cachedInputPerMillion: 0.06,
   },
   // ── Together AI ──────────────────────────────────────────────────────
   "together:moonshotai/Kimi-K2.5": {
@@ -87,18 +134,6 @@ const BASE_PRICING_TABLE: Record<string, ModelPricing> = {
   "together:zai-org/GLM-5": {
     inputPerMillion: 1,
     outputPerMillion: 3.2,
-  },
-  "fireworks:accounts/fireworks/models/glm-5": {
-    inputPerMillion: 1,
-    outputPerMillion: 3.2,
-  },
-  "fireworks:accounts/fireworks/models/kimi-k2p5": {
-    inputPerMillion: 0.6,
-    outputPerMillion: 3,
-  },
-  "fireworks:accounts/fireworks/models/minimax-m2p5": {
-    inputPerMillion: 0.3,
-    outputPerMillion: 1.2,
   },
   // OpenCode Go is intentionally excluded from local pricing estimates.
   "opencode-zen:glm-5": {
@@ -131,6 +166,7 @@ const BASE_PRICING_TABLE: Record<string, ModelPricing> = {
     inputPerMillion: 0.3,
     outputPerMillion: 1.2,
     cachedInputPerMillion: 0.06,
+    cacheWriteInputPerMillion: 0.375,
   },
 
   // ── OpenAI ───────────────────────────────────────────────────────────
@@ -138,11 +174,19 @@ const BASE_PRICING_TABLE: Record<string, ModelPricing> = {
     inputPerMillion: 5,
     outputPerMillion: 30,
     cachedInputPerMillion: 0.5,
+    longContextThresholdTokens: 272_000,
+    longContextInputPerMillion: 10,
+    longContextOutputPerMillion: 45,
+    longContextCachedInputPerMillion: 1,
   },
   "openai:gpt-5.4": {
     inputPerMillion: 2.5,
     outputPerMillion: 15,
     cachedInputPerMillion: 0.25,
+    longContextThresholdTokens: 272_000,
+    longContextInputPerMillion: 5,
+    longContextOutputPerMillion: 22.5,
+    longContextCachedInputPerMillion: 0.5,
   },
   "openai:gpt-5.4-mini": {
     inputPerMillion: 0.75,
@@ -157,7 +201,6 @@ const BASE_PRICING_TABLE: Record<string, ModelPricing> = {
   "openai:gpt-5.2-pro": {
     inputPerMillion: 21,
     outputPerMillion: 168,
-    cachedInputPerMillion: 2.1,
   },
   "openai:gpt-5-mini": {
     inputPerMillion: 0.25,
@@ -170,11 +213,19 @@ const BASE_PRICING_TABLE: Record<string, ModelPricing> = {
     inputPerMillion: 5,
     outputPerMillion: 30,
     cachedInputPerMillion: 0.5,
+    longContextThresholdTokens: 272_000,
+    longContextInputPerMillion: 10,
+    longContextOutputPerMillion: 45,
+    longContextCachedInputPerMillion: 1,
   },
   "codex-cli:gpt-5.4": {
     inputPerMillion: 2.5,
     outputPerMillion: 15,
     cachedInputPerMillion: 0.25,
+    longContextThresholdTokens: 272_000,
+    longContextInputPerMillion: 5,
+    longContextOutputPerMillion: 22.5,
+    longContextCachedInputPerMillion: 0.5,
   },
   "codex-cli:gpt-5.4-mini": {
     inputPerMillion: 0.75,
@@ -182,9 +233,14 @@ const BASE_PRICING_TABLE: Record<string, ModelPricing> = {
     cachedInputPerMillion: 0.075,
   },
   "codex-cli:gpt-5.3-codex": {
-    inputPerMillion: 2.5,
-    outputPerMillion: 10,
-    cachedInputPerMillion: 1.25,
+    inputPerMillion: 1.75,
+    outputPerMillion: 14,
+    cachedInputPerMillion: 0.175,
+  },
+  "codex-cli:gpt-5.3-codex-spark": {
+    inputPerMillion: 1.75,
+    outputPerMillion: 14,
+    cachedInputPerMillion: 0.175,
   },
 
   // ── Google ───────────────────────────────────────────────────────────
@@ -192,11 +248,19 @@ const BASE_PRICING_TABLE: Record<string, ModelPricing> = {
     inputPerMillion: 2,
     outputPerMillion: 12,
     cachedInputPerMillion: 0.2,
+    longContextThresholdTokens: 200_000,
+    longContextInputPerMillion: 4,
+    longContextOutputPerMillion: 18,
+    longContextCachedInputPerMillion: 0.4,
   },
   "google:gemini-3.1-pro-preview": {
     inputPerMillion: 2,
     outputPerMillion: 12,
     cachedInputPerMillion: 0.2,
+    longContextThresholdTokens: 200_000,
+    longContextInputPerMillion: 4,
+    longContextOutputPerMillion: 18,
+    longContextCachedInputPerMillion: 0.4,
   },
   "google:gemini-3-flash-preview": {
     inputPerMillion: 0.5,
@@ -204,6 +268,32 @@ const BASE_PRICING_TABLE: Record<string, ModelPricing> = {
     cachedInputPerMillion: 0.05,
   },
   "google:gemini-3.1-flash-lite-preview": {
+    inputPerMillion: 0.25,
+    outputPerMillion: 1.5,
+    cachedInputPerMillion: 0.025,
+  },
+  "google:gemini-3.5-flash": {
+    inputPerMillion: 1.5,
+    outputPerMillion: 9,
+    cachedInputPerMillion: 0.15,
+  },
+
+  // ── Antigravity (Gemini-hosted model IDs) ────────────────────────────
+  "antigravity:gemini-3.1-pro-preview": {
+    inputPerMillion: 2,
+    outputPerMillion: 12,
+    cachedInputPerMillion: 0.2,
+    longContextThresholdTokens: 200_000,
+    longContextInputPerMillion: 4,
+    longContextOutputPerMillion: 18,
+    longContextCachedInputPerMillion: 0.4,
+  },
+  "antigravity:gemini-3.5-flash": {
+    inputPerMillion: 1.5,
+    outputPerMillion: 9,
+    cachedInputPerMillion: 0.15,
+  },
+  "antigravity:gemini-3.1-flash-lite": {
     inputPerMillion: 0.25,
     outputPerMillion: 1.5,
     cachedInputPerMillion: 0.025,
@@ -217,6 +307,16 @@ const pricingOverrideSchema = {
     typeof value === "number" && Number.isFinite(value) && value >= 0,
   cachedInputPerMillion: (value: unknown) =>
     value === undefined || (typeof value === "number" && Number.isFinite(value) && value >= 0),
+  cacheWriteInputPerMillion: (value: unknown) =>
+    value === undefined || (typeof value === "number" && Number.isFinite(value) && value >= 0),
+  longContextThresholdTokens: (value: unknown) =>
+    value === undefined || (typeof value === "number" && Number.isInteger(value) && value >= 0),
+  longContextInputPerMillion: (value: unknown) =>
+    value === undefined || (typeof value === "number" && Number.isFinite(value) && value >= 0),
+  longContextOutputPerMillion: (value: unknown) =>
+    value === undefined || (typeof value === "number" && Number.isFinite(value) && value >= 0),
+  longContextCachedInputPerMillion: (value: unknown) =>
+    value === undefined || (typeof value === "number" && Number.isFinite(value) && value >= 0),
 };
 
 let cachedPricingOverrideRaw: string | null = null;
@@ -228,7 +328,12 @@ function isModelPricing(value: unknown): value is ModelPricing {
   return (
     pricingOverrideSchema.inputPerMillion(record.inputPerMillion) &&
     pricingOverrideSchema.outputPerMillion(record.outputPerMillion) &&
-    pricingOverrideSchema.cachedInputPerMillion(record.cachedInputPerMillion)
+    pricingOverrideSchema.cachedInputPerMillion(record.cachedInputPerMillion) &&
+    pricingOverrideSchema.cacheWriteInputPerMillion(record.cacheWriteInputPerMillion) &&
+    pricingOverrideSchema.longContextThresholdTokens(record.longContextThresholdTokens) &&
+    pricingOverrideSchema.longContextInputPerMillion(record.longContextInputPerMillion) &&
+    pricingOverrideSchema.longContextOutputPerMillion(record.longContextOutputPerMillion) &&
+    pricingOverrideSchema.longContextCachedInputPerMillion(record.longContextCachedInputPerMillion)
   );
 }
 
@@ -239,11 +344,12 @@ function isPricingOverrideKey(value: string): value is `${ProviderName}:${string
   // `opencode-go` intentionally has no local pricing or override support.
   return (
     provider === "google" ||
+    provider === "antigravity" ||
     provider === "openai" ||
     provider === "anthropic" ||
     provider === "baseten" ||
     provider === "together" ||
-    provider === "fireworks" ||
+    isFireworksInferenceProvider(provider as ProviderName) ||
     provider === "opencode-zen" ||
     provider === "codex-cli"
   );
@@ -300,6 +406,21 @@ function loadPricingOverridesFromEnv(env: PricingEnv = process.env): Record<stri
       ...(value.cachedInputPerMillion !== undefined
         ? { cachedInputPerMillion: value.cachedInputPerMillion }
         : {}),
+      ...(value.cacheWriteInputPerMillion !== undefined
+        ? { cacheWriteInputPerMillion: value.cacheWriteInputPerMillion }
+        : {}),
+      ...(value.longContextThresholdTokens !== undefined
+        ? { longContextThresholdTokens: value.longContextThresholdTokens }
+        : {}),
+      ...(value.longContextInputPerMillion !== undefined
+        ? { longContextInputPerMillion: value.longContextInputPerMillion }
+        : {}),
+      ...(value.longContextOutputPerMillion !== undefined
+        ? { longContextOutputPerMillion: value.longContextOutputPerMillion }
+        : {}),
+      ...(value.longContextCachedInputPerMillion !== undefined
+        ? { longContextCachedInputPerMillion: value.longContextCachedInputPerMillion }
+        : {}),
     };
   }
 
@@ -355,18 +476,42 @@ export function calculateTokenCost(
   completionTokens: number,
   pricing: ModelPricing,
   cachedPromptTokens = 0,
+  cacheWritePromptTokens = 0,
 ): number {
+  const useLongContextPricing =
+    pricing.longContextThresholdTokens !== undefined &&
+    promptTokens > pricing.longContextThresholdTokens;
+  const inputPerMillion =
+    useLongContextPricing && pricing.longContextInputPerMillion !== undefined
+      ? pricing.longContextInputPerMillion
+      : pricing.inputPerMillion;
+  const outputPerMillion =
+    useLongContextPricing && pricing.longContextOutputPerMillion !== undefined
+      ? pricing.longContextOutputPerMillion
+      : pricing.outputPerMillion;
+  const cachedInputPerMillion =
+    useLongContextPricing && pricing.longContextCachedInputPerMillion !== undefined
+      ? pricing.longContextCachedInputPerMillion
+      : (pricing.cachedInputPerMillion ?? inputPerMillion);
+  const cacheWriteInputPerMillion = pricing.cacheWriteInputPerMillion ?? inputPerMillion;
   const normalizedCachedPromptTokens = Math.min(
     Math.max(0, cachedPromptTokens),
     Math.max(0, promptTokens),
   );
-  const uncachedPromptTokens = Math.max(0, promptTokens - normalizedCachedPromptTokens);
-  const inputCost = (uncachedPromptTokens / 1_000_000) * pricing.inputPerMillion;
-  const cachedInputCost =
-    (normalizedCachedPromptTokens / 1_000_000) *
-    (pricing.cachedInputPerMillion ?? pricing.inputPerMillion);
-  const outputCost = (completionTokens / 1_000_000) * pricing.outputPerMillion;
-  return inputCost + cachedInputCost + outputCost;
+  const normalizedCacheWritePromptTokens = Math.min(
+    Math.max(0, cacheWritePromptTokens),
+    Math.max(0, promptTokens - normalizedCachedPromptTokens),
+  );
+  const uncachedPromptTokens = Math.max(
+    0,
+    promptTokens - normalizedCachedPromptTokens - normalizedCacheWritePromptTokens,
+  );
+  const inputCost = (uncachedPromptTokens / 1_000_000) * inputPerMillion;
+  const cachedInputCost = (normalizedCachedPromptTokens / 1_000_000) * cachedInputPerMillion;
+  const cacheWriteInputCost =
+    (normalizedCacheWritePromptTokens / 1_000_000) * cacheWriteInputPerMillion;
+  const outputCost = (completionTokens / 1_000_000) * outputPerMillion;
+  return inputCost + cachedInputCost + cacheWriteInputCost + outputCost;
 }
 
 /**

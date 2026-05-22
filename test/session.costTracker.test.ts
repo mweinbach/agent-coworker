@@ -88,13 +88,80 @@ describe("SessionCostTracker", () => {
     expect(tracker.getSnapshot().estimatedTotalCostUsd).toBeCloseTo(8.12, 6);
   });
 
-  test("prefers runtime-provided estimated cost when present", () => {
+  test("uses GPT-5.5 long-context pricing for large app-server turns", () => {
+    const tracker = new SessionCostTracker("session-1");
+
+    tracker.recordTurn({
+      turnId: "turn-1",
+      provider: "codex-cli",
+      model: "gpt-5.5",
+      usage: {
+        promptTokens: 300_000,
+        cachedPromptTokens: 100_000,
+        completionTokens: 100_000,
+        totalTokens: 400_000,
+      },
+    });
+
+    expect(tracker.getSnapshot().estimatedTotalCostUsd).toBeCloseTo(6.6, 6);
+  });
+
+  test("stores cached and reasoning token breakdowns without double-charging output", () => {
+    const tracker = new SessionCostTracker("session-1");
+
+    tracker.recordTurn({
+      turnId: "turn-1",
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      usage: {
+        promptTokens: 1_000_000,
+        cachedPromptTokens: 400_000,
+        cacheWritePromptTokens: 100_000,
+        completionTokens: 500_000,
+        reasoningOutputTokens: 125_000,
+        totalTokens: 1_500_000,
+      },
+    });
+
+    const snapshot = tracker.getSnapshot();
+
+    expect(snapshot.totalCachedPromptTokens).toBe(400_000);
+    expect(snapshot.totalCacheWritePromptTokens).toBe(100_000);
+    expect(snapshot.totalReasoningOutputTokens).toBe(125_000);
+    expect(snapshot.byModel[0]?.totalCachedPromptTokens).toBe(400_000);
+    expect(snapshot.byModel[0]?.totalCacheWritePromptTokens).toBe(100_000);
+    expect(snapshot.byModel[0]?.totalReasoningOutputTokens).toBe(125_000);
+    expect(snapshot.estimatedTotalCostUsd).toBeCloseTo(9.495, 6);
+    expect(tracker.formatSummary()).toContain("100.0k cache write");
+    expect(tracker.formatSummary()).toContain("125.0k reasoning output");
+  });
+
+  test("uses catalog pricing before runtime-provided estimated cost when available", () => {
     const tracker = new SessionCostTracker("session-1");
 
     tracker.recordTurn({
       turnId: "turn-1",
       provider: "openai",
       model: "gpt-5.2",
+      usage: {
+        promptTokens: 1000,
+        completionTokens: 100,
+        totalTokens: 1100,
+        estimatedCostUsd: 1.23,
+      },
+    });
+
+    expect(tracker.getSnapshot().estimatedTotalCostUsd).toBeCloseTo(0.00315, 6);
+    expect(tracker.getSnapshot().turns[0]?.estimatedCostUsd).toBeCloseTo(0.00315, 6);
+  });
+
+  test("uses runtime-provided estimated cost when catalog pricing is unavailable", () => {
+    const tracker = new SessionCostTracker("session-1");
+
+    tracker.recordTurn({
+      turnId: "turn-1",
+      provider: "nvidia",
+      model: "uncatalogued-model",
       usage: {
         promptTokens: 1000,
         completionTokens: 100,

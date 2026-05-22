@@ -8,7 +8,7 @@ import {
 
 describe("windowsBackgroundMaterialForPlatform", () => {
   test("is only defined on Windows", () => {
-    expect(windowsBackgroundMaterialForPlatform("win32")).toBe("mica");
+    expect(windowsBackgroundMaterialForPlatform("win32")).toBe("tabbed");
     expect(windowsBackgroundMaterialForPlatform("darwin")).toBeUndefined();
     expect(windowsBackgroundMaterialForPlatform("linux")).toBeUndefined();
   });
@@ -22,7 +22,7 @@ describe("desktopShellBackgroundColor", () => {
 });
 
 describe("resolveWindowChromePaint", () => {
-  test("keeps Linux appearance isolated from macOS glass and Windows mica", () => {
+  test("keeps Linux appearance isolated from macOS glass and Windows tabbed material", () => {
     expect(
       resolveWindowChromePaint({
         platform: "linux",
@@ -68,7 +68,7 @@ describe("resolveWindowChromePaint", () => {
     });
   });
 
-  test("applies Windows mica without forcing macOS-style transparency", () => {
+  test("applies Windows tabbed material without forcing macOS-style transparency", () => {
     expect(
       resolveWindowChromePaint({
         platform: "win32",
@@ -77,7 +77,7 @@ describe("resolveWindowChromePaint", () => {
       }),
     ).toEqual({
       backgroundColor: "#dfe2cc",
-      backgroundMaterial: "mica",
+      backgroundMaterial: "tabbed",
     });
   });
 });

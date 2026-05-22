@@ -14,6 +14,13 @@ import {
   normalizeQuickChatShortcutAccelerator,
 } from "../shared/quickChatShortcut";
 import { writeTextFileAtomic } from "../utils/atomicFile";
+import {
+  createOneOffChatWorkspace as createOneOffChatWorkspaceDirectory,
+  ensureOneOffChatWorkspacePath,
+  isPathInsideOneOffChatsRoot,
+  normalizeWorkspaceKind,
+  type WorkspaceKind,
+} from "../utils/oneOffChats";
 
 const SAFE_ID = /^[A-Za-z0-9_-]{1,256}$/;
 const PRIVATE_FILE_MODE = 0o600;
@@ -26,6 +33,7 @@ type DesktopWorkspaceRecord = {
   id: string;
   name: string;
   path: string;
+  workspaceKind?: WorkspaceKind;
   createdAt: string;
   lastOpenedAt: string;
   defaultEnableMcp: boolean;
@@ -56,9 +64,11 @@ export type DesktopPersistedState = {
   perWorkspaceSettings: boolean;
   desktopSettings: {
     quickChat: {
+      iconEnabled?: boolean;
       shortcutEnabled: boolean;
       shortcutAccelerator: string;
     };
+    archivedChatsAutoDeleteDays?: number;
   };
   desktopFeatureFlagOverrides: DesktopFeatureFlagOverrides;
   providerState?: unknown;
@@ -77,6 +87,7 @@ export type WebDesktopServiceLike = {
   loadState(opts?: { fallbackCwd?: string }): Promise<DesktopPersistedState>;
   saveState(state: unknown): Promise<DesktopPersistedState>;
   listWorkspaces(fallbackCwd: string): Promise<Array<{ name: string; path: string }>>;
+  createOneOffChatWorkspace(opts?: { titleHint?: string }): Promise<{ name: string; path: string }>;
   getWorkspaceRoots(fallbackCwd: string): Promise<string[]>;
   resolveWorkspaceDirectory(workspacePath: string): Promise<string>;
   startWorkspaceServer(opts: {
@@ -186,12 +197,25 @@ function workspaceBasename(workspacePath: string): string {
   return workspacePath.split(/[/\\]/).filter(Boolean).pop() ?? workspacePath;
 }
 
-async function resolveWorkspacePath(value: unknown): Promise<string | null> {
+async function resolveWorkspacePath(
+  value: unknown,
+  workspaceKind: WorkspaceKind = "project",
+): Promise<string | null> {
   const candidate = asNonEmptyString(value);
   if (!candidate) {
     return null;
   }
   const resolved = path.resolve(candidate);
+  if (workspaceKind === "oneOffChat") {
+    if (!isPathInsideOneOffChatsRoot(resolved)) {
+      return null;
+    }
+    try {
+      return await ensureOneOffChatWorkspacePath(resolved);
+    } catch {
+      return null;
+    }
+  }
   try {
     const stat = await fs.stat(resolved);
     if (!stat.isDirectory()) {
@@ -222,9 +246,11 @@ function defaultState(): DesktopPersistedState {
     perWorkspaceSettings: false,
     desktopSettings: {
       quickChat: {
+        iconEnabled: true,
         shortcutEnabled: false,
         shortcutAccelerator: DEFAULT_QUICK_CHAT_SHORTCUT_ACCELERATOR,
       },
+      archivedChatsAutoDeleteDays: 0,
     },
     desktopFeatureFlagOverrides: {},
   };
@@ -239,6 +265,7 @@ function buildFallbackWorkspace(cwd: string): DesktopWorkspaceRecord {
     createdAt: now,
     lastOpenedAt: now,
     wsProtocol: "jsonrpc",
+    workspaceKind: "project",
     defaultEnableMcp: true,
     defaultBackupsEnabled: false,
     yolo: false,
@@ -261,7 +288,8 @@ async function normalizeState(raw: unknown): Promise<DesktopPersistedState> {
     const name = asNonEmptyString(item.name);
     const createdAt = asTimestamp(item.createdAt);
     const lastOpenedAt = asTimestamp(item.lastOpenedAt);
-    const workspacePath = await resolveWorkspacePath(item.path);
+    const workspaceKind = normalizeWorkspaceKind(item.workspaceKind);
+    const workspacePath = await resolveWorkspacePath(item.path, workspaceKind);
     if (!id || !name || !createdAt || !lastOpenedAt || !workspacePath || seenWorkspaceIds.has(id)) {
       continue;
     }
@@ -271,12 +299,13 @@ async function normalizeState(raw: unknown): Promise<DesktopPersistedState> {
       id,
       name,
       path: workspacePath,
+      workspaceKind,
       createdAt,
       lastOpenedAt,
       wsProtocol: "jsonrpc",
       defaultEnableMcp: asBoolean(item.defaultEnableMcp, true),
       defaultBackupsEnabled: asBoolean(item.defaultBackupsEnabled, false),
-      yolo: asBoolean(item.yolo, false),
+      yolo: false,
     });
     seenWorkspaceIds.add(id);
   }
@@ -328,6 +357,10 @@ async function normalizeState(raw: unknown): Promise<DesktopPersistedState> {
     perWorkspaceSettings: asBoolean(raw.perWorkspaceSettings, false),
     desktopSettings: {
       quickChat: {
+        iconEnabled:
+          !isRecord(raw.desktopSettings) ||
+          !isRecord(raw.desktopSettings.quickChat) ||
+          raw.desktopSettings.quickChat.iconEnabled !== false,
         shortcutEnabled:
           isRecord(raw.desktopSettings) &&
           isRecord(raw.desktopSettings.quickChat) &&
@@ -340,6 +373,11 @@ async function normalizeState(raw: unknown): Promise<DesktopPersistedState> {
             : undefined,
         ),
       },
+      archivedChatsAutoDeleteDays:
+        isRecord(raw.desktopSettings) &&
+        typeof raw.desktopSettings.archivedChatsAutoDeleteDays === "number"
+          ? raw.desktopSettings.archivedChatsAutoDeleteDays
+          : 0,
     },
     desktopFeatureFlagOverrides:
       normalizeDesktopFeatureFlagOverrides(raw.desktopFeatureFlagOverrides) ?? {},
@@ -759,10 +797,18 @@ export class WebDesktopService implements WebDesktopServiceLike {
 
   async listWorkspaces(fallbackCwd: string): Promise<Array<{ name: string; path: string }>> {
     const state = await this.loadState({ fallbackCwd });
-    return state.workspaces.map((workspace) => ({
-      name: workspace.name,
-      path: workspace.path,
-    }));
+    return state.workspaces
+      .filter((workspace) => workspace.workspaceKind !== "oneOffChat")
+      .map((workspace) => ({
+        name: workspace.name,
+        path: workspace.path,
+      }));
+  }
+
+  async createOneOffChatWorkspace(
+    opts: { titleHint?: string } = {},
+  ): Promise<{ name: string; path: string }> {
+    return await createOneOffChatWorkspaceDirectory(opts);
   }
 
   async getWorkspaceRoots(fallbackCwd: string): Promise<string[]> {
@@ -780,7 +826,10 @@ export class WebDesktopService implements WebDesktopServiceLike {
     workspacePath: string;
     yolo: boolean;
   }): Promise<{ url: string }> {
-    return await this.serverManager.startWorkspaceServer(opts);
+    return await this.serverManager.startWorkspaceServer({
+      ...opts,
+      yolo: false,
+    });
   }
 
   async stopWorkspaceServer(workspaceId: string): Promise<void> {

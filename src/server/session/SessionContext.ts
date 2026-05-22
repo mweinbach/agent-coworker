@@ -8,6 +8,7 @@ import type { MCPRegistryServer } from "../../mcp/configRegistry";
 import type { loadSystemPromptWithSkills } from "../../prompt";
 import type { getProviderStatuses } from "../../providerStatus";
 import type { getProviderCatalog } from "../../providers/connectionCatalog";
+import type { RuntimeSteerHandler } from "../../runtime/types";
 import type { SessionCostTracker, SessionUsageSnapshot } from "../../session/costTracker";
 import type { HarnessContextStore } from "../../sessionContext/HarnessContextStore";
 import type {
@@ -126,6 +127,7 @@ export type SessionRuntimeState = {
   abortController: AbortController | null;
   currentTurnId: string | null;
   acceptingSteers: boolean;
+  activeSteerHandler: RuntimeSteerHandler | null;
   pendingSteers: PendingSteer[];
   pendingExternalSkillRefreshReason: string | null;
   currentTurnOutcome: "completed" | "cancelled" | "error";
@@ -184,6 +186,7 @@ export type SessionDependencies = {
   persistProjectConfigPatchImpl?: (patch: PersistedProjectConfigPatch) => Promise<void> | void;
   generateSessionTitleImpl: typeof generateSessionTitle;
   sessionDb: SessionDb | null;
+  toolEnv?: Record<string, string | undefined>;
   writePersistedSessionSnapshotImpl: typeof writePersistedSessionSnapshot;
   createAgentSessionImpl?: (
     opts: AgentSpawnContextOptions & {

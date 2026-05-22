@@ -3,12 +3,16 @@ import path from "node:path";
 
 import {
   buildSidecarManifest,
+  FOUNDATION_MODELS_KOFFI_TRIPLET,
   findPackagedSidecarLaunchCommand,
+  hasPackagedFoundationModelsSdk,
   resolveDesktopTargetTriple,
+  resolvePackagedCodexAppServerFilename,
   resolvePackagedSidecarFilename,
   SIDECAR_BUN_ENTRYPOINT_PATH,
   SIDECAR_BUN_EXECUTABLE_NAME,
   SIDECAR_MANIFEST_NAME,
+  shouldBundleFoundationModelsSdk,
 } from "../electron/services/sidecar";
 
 describe("desktop sidecar packaging helpers", () => {
@@ -16,6 +20,9 @@ describe("desktop sidecar packaging helpers", () => {
     expect(resolveDesktopTargetTriple("darwin", "arm64")).toBe("aarch64-apple-darwin");
     expect(resolvePackagedSidecarFilename("darwin", "arm64")).toBe(
       "cowork-server-aarch64-apple-darwin",
+    );
+    expect(resolvePackagedCodexAppServerFilename("darwin", "arm64")).toBe(
+      "codex-app-server-aarch64-apple-darwin",
     );
   });
 
@@ -42,6 +49,49 @@ describe("desktop sidecar packaging helpers", () => {
         entrypoint: SIDECAR_BUN_ENTRYPOINT_PATH,
       },
     });
+  });
+
+  test("bundles the Foundation Models SDK only for Apple Silicon macOS", () => {
+    expect(shouldBundleFoundationModelsSdk("darwin", "arm64")).toBe(true);
+    expect(shouldBundleFoundationModelsSdk("darwin", "x64")).toBe(false);
+    expect(shouldBundleFoundationModelsSdk("win32", "arm64")).toBe(false);
+    expect(shouldBundleFoundationModelsSdk("linux", "arm64")).toBe(false);
+  });
+
+  test("recognizes the minimal packaged Foundation Models SDK payload", () => {
+    const dir = path.join(path.sep, "bundle", "Resources", "binaries", "tsfm-sdk");
+    const probedPaths: string[] = [];
+    const required = new Set([
+      path.join(dir, "dist", "index.js"),
+      path.join(dir, "native", "libFoundationModels.dylib"),
+      path.join(
+        dir,
+        "node_modules",
+        "koffi",
+        "build",
+        "koffi",
+        FOUNDATION_MODELS_KOFFI_TRIPLET,
+        "koffi.node",
+      ),
+    ]);
+
+    expect(
+      hasPackagedFoundationModelsSdk(dir, (candidate) =>
+        candidate.includes("linux_arm64") ? false : required.has(candidate),
+      ),
+    ).toBe(true);
+    expect(
+      hasPackagedFoundationModelsSdk(dir, (candidate) => {
+        probedPaths.push(candidate);
+        return required.has(candidate);
+      }),
+    ).toBe(true);
+    expect(probedPaths.some((candidate) => candidate.includes("linux_arm64"))).toBe(false);
+    expect(
+      hasPackagedFoundationModelsSdk(dir, (candidate) =>
+        candidate.endsWith("libFoundationModels.dylib") ? false : required.has(candidate),
+      ),
+    ).toBe(false);
   });
 
   test("findPackagedSidecarLaunchCommand prefers the explicit override path", () => {

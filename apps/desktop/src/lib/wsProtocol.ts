@@ -9,6 +9,10 @@ import { persistentAgentSummarySchema } from "../../../../src/shared/agents";
 import { sessionSnapshotSchema } from "../../../../src/shared/sessionSnapshot";
 
 export type { SessionEvent } from "../../../../src/server/protocol";
+export type {
+  CodexAppServerInstallStatus,
+  LibreOfficeRuntimeDiagnostic,
+} from "../../../../src/shared/jsonrpcControlSchemas";
 export type { OpenAiNativeConnector } from "../../../../src/shared/openaiNativeConnectors";
 export type {
   ApprovalRiskCode,

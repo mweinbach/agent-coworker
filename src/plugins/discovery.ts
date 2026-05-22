@@ -62,6 +62,16 @@ async function resolveCanonicalPluginRoot(candidatePath: string): Promise<string
   }
 }
 
+async function resolveCanonicalDirectory(dirPath: string): Promise<string | null> {
+  try {
+    const stat = await fs.stat(dirPath);
+    if (!stat.isDirectory()) return null;
+    return await fs.realpath(dirPath);
+  } catch {
+    return null;
+  }
+}
+
 async function discoverMarketplacePlugins(opts: {
   pluginsDir: string;
   scope: PluginScope;
@@ -164,6 +174,10 @@ export async function discoverPlugins(opts: {
 
   for (const scopeEntry of scopes) {
     if (!scopeEntry.pluginsDir) continue;
+    const realPluginsDir = await resolveCanonicalDirectory(scopeEntry.pluginsDir);
+    if (!realPluginsDir || seenByRootPath.has(realPluginsDir)) continue;
+    seenByRootPath.add(realPluginsDir);
+
     const { plugins: marketplacePlugins, warnings: marketplaceWarnings } =
       await discoverMarketplacePlugins({
         pluginsDir: scopeEntry.pluginsDir,

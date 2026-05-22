@@ -4,9 +4,11 @@
     "slug": "cowork-mobile",
     "scheme": "cowork-mobile",
     "version": "0.1.0",
+    "autolinking": {
+      "nativeModulesDir": "./modules"
+    },
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
     "icon": "./assets/icon.png",
     "splash": {
       "resizeMode": "contain",
@@ -22,7 +24,6 @@
     },
     "android": {
       "package": "co.weinbach.cowork.mobile",
-      "edgeToEdgeEnabled": true,
       "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
@@ -30,7 +31,7 @@
       },
       "permissions": ["android.permission.CAMERA"]
     },
-    "plugins": ["expo-router", "expo-dev-client", "expo-camera", "expo-secure-store"],
+    "plugins": ["expo-router", "expo-dev-client", "expo-camera", "expo-secure-store", "expo-font"],
     "experiments": {
       "typedRoutes": true
     }

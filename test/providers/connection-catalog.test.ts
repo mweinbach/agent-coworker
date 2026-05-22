@@ -9,9 +9,15 @@ import {
 } from "../../src/providers/connectionCatalog";
 import { PROVIDER_NAMES } from "../../src/types";
 
+const noCodexAccount = async () => ({
+  account: null,
+  requiresOpenaiAuth: true,
+});
+
 describe("providers/connectionCatalog", () => {
   test("catalog entries stay aligned with provider names and default-model map", async () => {
     const payload = await getProviderCatalog({
+      readCodexAppServerAccountImpl: noCodexAccount,
       readStore: async () => ({
         version: 1,
         updatedAt: "2026-02-17T00:00:00.000Z",
@@ -28,8 +34,39 @@ describe("providers/connectionCatalog", () => {
     }
   });
 
+  test("marks Antigravity unreachable on Windows", async () => {
+    const payload = await getProviderCatalog({
+      platform: "win32",
+      readCodexAppServerAccountImpl: noCodexAccount,
+      readStore: async () => ({
+        version: 1,
+        updatedAt: "2026-02-17T00:00:00.000Z",
+        services: {
+          antigravity: {
+            service: "antigravity",
+            mode: "api_key",
+            apiKey: "anti-secret-key-123",
+            updatedAt: "2026-02-17T00:00:00.000Z",
+          },
+        },
+      }),
+    });
+
+    const entry = payload.all.find((candidate) => candidate.id === "antigravity");
+    expect(entry).toEqual({
+      id: "antigravity",
+      name: "Antigravity",
+      models: [],
+      defaultModel: "",
+      state: "unreachable",
+      message: "Antigravity runtime is only supported on macOS and Linux for now.",
+    });
+    expect(payload.connected).not.toContain("antigravity");
+  });
+
   test("lists OpenCode providers in the provider catalog with the expected model sets", async () => {
     const payload = await getProviderCatalog({
+      readCodexAppServerAccountImpl: noCodexAccount,
       readStore: async () => ({
         version: 1,
         updatedAt: "2026-02-17T00:00:00.000Z",
@@ -111,6 +148,7 @@ describe("providers/connectionCatalog", () => {
 
   test("lists Baseten in the provider catalog with the expected model set", async () => {
     const payload = await getProviderCatalog({
+      readCodexAppServerAccountImpl: noCodexAccount,
       readStore: async () => ({
         version: 1,
         updatedAt: "2026-02-17T00:00:00.000Z",
@@ -148,6 +186,7 @@ describe("providers/connectionCatalog", () => {
 
   test("lists Together AI in the provider catalog with the expected model set", async () => {
     const payload = await getProviderCatalog({
+      readCodexAppServerAccountImpl: noCodexAccount,
       readStore: async () => ({
         version: 1,
         updatedAt: "2026-02-17T00:00:00.000Z",
@@ -185,6 +224,7 @@ describe("providers/connectionCatalog", () => {
 
   test("lists Fireworks AI in the provider catalog with the expected model set", async () => {
     const payload = await getProviderCatalog({
+      readCodexAppServerAccountImpl: noCodexAccount,
       readStore: async () => ({
         version: 1,
         updatedAt: "2026-02-17T00:00:00.000Z",
@@ -226,8 +266,35 @@ describe("providers/connectionCatalog", () => {
     });
   });
 
+  test("lists Fire Pass in the provider catalog with the expected model set", async () => {
+    const payload = await getProviderCatalog({
+      readCodexAppServerAccountImpl: noCodexAccount,
+      readStore: async () => ({
+        version: 1,
+        updatedAt: "2026-02-17T00:00:00.000Z",
+        services: {},
+      }),
+    });
+
+    expect(payload.default.firepass).toBe("accounts/fireworks/routers/kimi-k2p6-turbo");
+    expect(payload.all).toContainEqual({
+      id: "firepass",
+      name: "Fire Pass",
+      models: [
+        {
+          id: "accounts/fireworks/routers/kimi-k2p6-turbo",
+          displayName: "Kimi K2.6 Turbo",
+          knowledgeCutoff: "Unknown",
+          supportsImageInput: true,
+        },
+      ],
+      defaultModel: "accounts/fireworks/routers/kimi-k2p6-turbo",
+    });
+  });
+
   test("lists NVIDIA in the provider catalog with the expected model set", async () => {
     const payload = await getProviderCatalog({
+      readCodexAppServerAccountImpl: noCodexAccount,
       readStore: async () => ({
         version: 1,
         updatedAt: "2026-02-17T00:00:00.000Z",
@@ -253,6 +320,7 @@ describe("providers/connectionCatalog", () => {
 
   test("connected providers exclude oauth_pending entries", async () => {
     const payload = await getProviderCatalog({
+      readCodexAppServerAccountImpl: noCodexAccount,
       readStore: async () => ({
         version: 1,
         updatedAt: "2026-02-17T00:00:00.000Z",
@@ -282,25 +350,9 @@ describe("providers/connectionCatalog", () => {
     expect(payload.connected).not.toContain("anthropic");
   });
 
-  test("connected providers include codex-cli when Cowork auth exists even if connections.json is empty", async () => {
+  test("connected providers include codex-cli when app-server account exists even if connections.json is empty", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "connection-catalog-cowork-"));
     const paths = getAiCoworkerPaths({ homedir: home });
-    const authPath = path.join(home, ".cowork", "auth", "codex-cli", "auth.json");
-    await fs.mkdir(path.dirname(authPath), { recursive: true });
-    await fs.writeFile(
-      authPath,
-      JSON.stringify({
-        version: 1,
-        auth_mode: "chatgpt",
-        issuer: "https://auth.openai.com",
-        client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
-        tokens: {
-          access_token: "cowork-access-token",
-          refresh_token: "cowork-refresh-token",
-        },
-      }),
-      "utf-8",
-    );
 
     const payload = await getProviderCatalog({
       paths,
@@ -309,30 +361,125 @@ describe("providers/connectionCatalog", () => {
         updatedAt: "2026-02-17T00:00:00.000Z",
         services: {},
       }),
+      readCodexAppServerAccountImpl: async () => ({
+        account: { type: "chatgpt", email: "tester@example.com" },
+        requiresOpenaiAuth: false,
+      }),
+      listCodexAppServerModelsImpl: async () => [],
     });
 
     expect(payload.connected).toContain("codex-cli");
   });
 
-  test("codex-cli only appears once in connected when both store oauth and cowork auth exist", async () => {
+  test("codex-cli catalog uses app-server available models when account exists", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "connection-catalog-codex-models-"));
+    const paths = getAiCoworkerPaths({ homedir: home });
+
+    const payload = await getProviderCatalog({
+      paths,
+      readStore: async () => ({
+        version: 1,
+        updatedAt: "2026-02-17T00:00:00.000Z",
+        services: {},
+      }),
+      readCodexAppServerAccountImpl: async () => ({
+        account: { type: "chatgpt", email: "tester@example.com" },
+        requiresOpenaiAuth: false,
+      }),
+      listCodexAppServerModelsImpl: async () => [
+        {
+          id: "gpt-5.5",
+          model: "gpt-5.5",
+          displayName: "GPT-5.5 from app-server",
+          isDefault: true,
+        },
+        {
+          id: "gpt-5.4",
+          model: "gpt-5.4",
+          displayName: "GPT-5.4 from app-server",
+          isDefault: false,
+        },
+        {
+          id: "gpt-5.4-duplicate",
+          model: "gpt-5.4",
+          displayName: "Duplicate GPT-5.4",
+          isDefault: false,
+        },
+        {
+          id: "gpt-5.4-mini",
+          model: "gpt-5.4-mini",
+          displayName: "GPT-5.4 Mini from app-server",
+          isDefault: false,
+        },
+        {
+          id: "gpt-5.3-codex-spark",
+          model: "gpt-5.3-codex-spark",
+          displayName: "GPT-5.3 Codex Spark from app-server",
+          isDefault: false,
+        },
+        {
+          id: "gpt-5.3-codex",
+          model: "gpt-5.3-codex",
+          displayName: "Unsupported alias",
+          isDefault: false,
+        },
+        {
+          id: "future-model",
+          model: "future-model",
+          displayName: "Future Model",
+          isDefault: false,
+        },
+      ],
+    });
+
+    const codex = payload.all.find((entry) => entry.id === "codex-cli");
+    expect(codex?.defaultModel).toBe("gpt-5.5");
+    expect(codex?.models.map((model) => model.id)).toEqual([
+      "gpt-5.5",
+      "gpt-5.4",
+      "gpt-5.4-mini",
+      "gpt-5.3-codex-spark",
+    ]);
+    expect(codex?.models.map((model) => model.displayName)).toEqual([
+      "GPT-5.5 from app-server",
+      "GPT-5.4 from app-server",
+      "GPT-5.4 Mini from app-server",
+      "GPT-5.3 Codex Spark from app-server",
+    ]);
+    expect(payload.connected).toContain("codex-cli");
+  });
+
+  test("codex-cli catalog does not fall back to hardcoded models for app-server failures", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "connection-catalog-codex-failure-"));
+    const paths = getAiCoworkerPaths({ homedir: home });
+
+    const payload = await getProviderCatalog({
+      paths,
+      readStore: async () => ({
+        version: 1,
+        updatedAt: "2026-02-17T00:00:00.000Z",
+        services: {},
+      }),
+      readCodexAppServerAccountImpl: async () => ({
+        account: { type: "chatgpt", email: "tester@example.com" },
+        requiresOpenaiAuth: false,
+      }),
+      listCodexAppServerModelsImpl: async () => {
+        throw new Error("model/list failed");
+      },
+    });
+
+    const codex = payload.all.find((entry) => entry.id === "codex-cli");
+    expect(codex?.models).toEqual([]);
+    expect(codex?.defaultModel).toBe("");
+    expect(codex?.state).toBe("unreachable");
+    expect(codex?.message).toBe("model/list failed");
+    expect(payload.connected).toContain("codex-cli");
+  });
+
+  test("codex-cli only appears once in connected when both store oauth and app-server account exist", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "connection-catalog-codex-dedupe-"));
     const paths = getAiCoworkerPaths({ homedir: home });
-    const authPath = path.join(home, ".cowork", "auth", "codex-cli", "auth.json");
-    await fs.mkdir(path.dirname(authPath), { recursive: true });
-    await fs.writeFile(
-      authPath,
-      JSON.stringify({
-        version: 1,
-        auth_mode: "chatgpt",
-        issuer: "https://auth.openai.com",
-        client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
-        tokens: {
-          access_token: "cowork-access-token",
-          refresh_token: "cowork-refresh-token",
-        },
-      }),
-      "utf-8",
-    );
 
     const payload = await getProviderCatalog({
       paths,
@@ -347,6 +494,11 @@ describe("providers/connectionCatalog", () => {
           },
         },
       }),
+      readCodexAppServerAccountImpl: async () => ({
+        account: { type: "chatgpt", email: "tester@example.com" },
+        requiresOpenaiAuth: false,
+      }),
+      listCodexAppServerModelsImpl: async () => [],
     });
 
     expect(payload.connected.filter((provider) => provider === "codex-cli")).toEqual(["codex-cli"]);

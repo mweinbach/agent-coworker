@@ -8,7 +8,7 @@ Cowork supports one live WebSocket protocol on `/ws`: JSON-RPC-lite. The canonic
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
-- Current protocol version: `7.31`
+- Current protocol version: `7.33`
 - WebSocket protocol mode: `jsonrpc`
 
 ## Mobile direct HTTP/3 transport
@@ -94,6 +94,7 @@ Any request before the handshake completes is rejected with a JSON-RPC error:
 - `turn/steer`
 - `turn/interrupt`
 - `cowork/workspace/bootstrap`
+- `cowork/workspace/spreadsheet/preview`
 
 `turn/start` and `turn/steer` also accept an optional `clientMessageId` string so JSON-RPC clients can correlate optimistic user UI state with the projected `user_message` notification stream.
 
@@ -172,11 +173,15 @@ Currently implemented `cowork/*` methods include:
   - `cowork/provider/catalog/read`
   - `cowork/provider/authMethods/read`
   - `cowork/provider/status/refresh`
+  - `cowork/provider/codexAppServer/status`
+  - `cowork/provider/codexAppServer/update`
   - `cowork/provider/auth/authorize`
   - `cowork/provider/auth/logout`
   - `cowork/provider/auth/callback`
   - `cowork/provider/auth/setApiKey`
   - `cowork/provider/auth/copyApiKey`
+- runtime diagnostics
+  - `cowork/runtime/libreoffice/check`
 - MCP controls
   - `cowork/mcp/servers/read`
   - `cowork/mcp/server/upsert`
@@ -245,25 +250,30 @@ The desktop JSON-RPC path now uses this namespace so one workspace connection ca
 
 `cowork/session/defaults/apply` remains the composite "apply provider/model, editable defaults, and MCP enablement" write. Supplying only `cwd` targets the workspace control session; supplying `threadId` as well applies the same composite write directly to that loaded thread session.
 
+`cowork/session/delete` is workspace-scoped. The control session may delete sessions in the active workspace, but attempts to delete a live or persisted session from another workspace fail with a JSON-RPC error.
+
 `cowork/session/file/upload` writes a file into the workspace uploads directory and returns a `file_uploaded` session event envelope. JSON-RPC clients can then reference that saved file from `turn/start` or `turn/steer` with an `uploadedFile` input part when the file is too large to send inline.
+
+`cowork/workspace/spreadsheet/preview` reads a CSV or `.xlsx` file from the active workspace and returns structured sheet, viewport, cell, merged-range, and column-width data. The request accepts `path`, optional `sheetName`, and optional `viewport` (`startRow`, `startCol`, `rowCount`, `colCount`) so clients can render workbook previews without parsing spreadsheet bytes in the UI layer. Paths are resolved under the workspace root and symlink escapes are rejected.
 
 `cowork/session/agent/inspect` is a thread-scoped, root-only read for child agents. It returns the same detailed inspection payload as the root `inspectAgent` tool: the latest child summary, the full latest assistant text, a parsed structured child report when the final assistant text includes a recognized JSON footer, and compact session/last-turn usage snapshots for the child.
 
 ### OpenAI Native Connector JSON-RPC Methods
 
-OpenAI native connectors are workspace-scoped ChatGPT apps exposed to Codex through a reserved synthetic MCP server named `codex_apps`. They are experimental and disabled by default; set `COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS=1` to expose the desktop settings page and enable backend connector discovery/injection. They also require an existing `codex-cli` OAuth login. The connector controls below return an `openai_native_connectors` event inside `{ "event": ... }`.
+OpenAI native connectors are workspace-scoped ChatGPT apps owned by `codex app-server`. They are experimental and disabled by default; set `COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS=1` to expose the desktop settings page and read the app-server-backed connector state. They also require an existing Codex app-server login. The connector controls below return an `openai_native_connectors` event inside `{ "event": ... }`.
 
 - `cowork/connectors/openai-native/list`
   - Params: `{ "cwd"?: string }`
-  - Result event: `{ "type": "openai_native_connectors", "connectors": OpenAiNativeConnector[], "enabledConnectorIds": string[], "codexAppsMcpServerName": "codex_apps", "authenticated": boolean, "message"?: string }`
+  - Result event: `{ "type": "openai_native_connectors", "connectors": OpenAiNativeConnector[], "enabledConnectorIds": string[], "authenticated": boolean, "message"?: string }`
+  - Connector entries are derived from the Codex app-server `mcpServerStatus/list` `codex_apps` tool metadata (`connector_id`, `connector_name`, and `connector_description`) plus `config/read` app enablement flags.
 - `cowork/connectors/openai-native/refresh`
   - Params: `{ "cwd"?: string }`
-  - Result: same event shape as `list`, after re-reading ChatGPT connector directory state.
+  - Result: same event shape as `list`, after re-reading Codex app-server MCP status and app config.
 - `cowork/connectors/openai-native/setEnabled`
   - Params: `{ "cwd"?: string, "connectorId": string, "enabled": boolean }`
-  - Result: same event shape as `list`, after persisting workspace connector enablement under `.cowork/openai-native-connectors.json`.
+  - Result: same event shape as `list`, after writing `apps.<connectorId>.enabled` through Codex app-server config.
 
-When one or more connectors are enabled, the runtime injects a streamable HTTP MCP server at the ChatGPT Codex apps endpoint. Connector MCP tools are namespaced as `mcp__codex_apps__...` and filtered to enabled connector IDs.
+Cowork no longer injects a direct streamable HTTP MCP server at the ChatGPT Codex apps endpoint. Connector execution, connector discovery, and app enablement are delegated to `codex app-server`.
 
 ### Research JSON-RPC methods
 
@@ -329,7 +339,7 @@ Requests:
 - `interactionId`
 - `lastEventId`
 - `inputs` (`fileSearchStoreName?`, attached files)
-- `settings` including plan-approval preference
+- `settings` including plan-approval preference, Deep Research `agentId`, `thinkingSummaries`, and `visualization`
 - `outputsMarkdown`
 - `thoughtSummaries`
 - `sources`
@@ -340,6 +350,9 @@ Requests:
 Current Google Deep Research wiring notes:
 
 - `background: true` is always used
+- `settings.agentId` selects the Deep Research agent (`deep-research-max-preview-04-2026` by default; `deep-research-preview-04-2026` and `deep-research-pro-preview-12-2025` are also accepted)
+- `settings.thinkingSummaries` controls Deep Research thought summaries (`auto` or `none`)
+- `settings.visualization` controls Deep Research visualizations (`auto` or `off`)
 - `google_search` and `url_context` remain effectively always on
 - attached files are forwarded through `file_search`
 
@@ -367,6 +380,7 @@ Sockets subscribed with `research/subscribe` can receive:
 ### Core JSON-RPC notifications currently available
 
 - `thread/started`
+- `thread/closed`
 - `turn/started`
 - `item/started`
 - `item/reasoning/delta`
@@ -400,7 +414,9 @@ Sockets subscribed with `research/subscribe` can receive:
 - `thread/read` can return a journal-projected `turns` array when `includeTurns: true`
 - `thread/hydrate` returns the same payload as `thread/read` (thread summary, turns, and snapshot) without subscribing the client to live thread events. Optional `afterSeq` skips journal events up to and including that cursor when building the `turns` array (useful for pull-based catchup); `journalTailSeq` is returned when `includeTurns: true` so callers can advance the cursor. Ideal for lightweight previews.
 - `thread/resume` accepts `afterSeq` to replay journaled notifications after a known cursor, then reattaches the live thread sink so reconnecting clients do not receive the same journaled events twice
+- `thread/unsubscribe` returns an unsubscribe status and emits `thread/closed` with `{ threadId }` after the connection is detached from a live subscription
 - `cowork/workspace/bootstrap` returns persisted and live threads for a workspace plus workspace control state; used by desktop/mobile clients on initial load
+- `cowork/workspace/spreadsheet/preview` returns bounded spreadsheet preview data for workspace CSV and `.xlsx` files; desktop uses it to keep spreadsheet parsing in the harness.
 - Cowork persists canonical thread journal events in sqlite so reconnect / restart replay is no longer limited to an in-memory socket buffer
 
 ### Projected Conversation Contract
@@ -457,6 +473,18 @@ The remainder of this document describes the JSON-RPC method and notification pa
 - [Session event payload shapes](#session-event-payload-shapes)
 
 ## Protocol v7 Notes
+
+Changes in `7.33`:
+
+- Added `cowork/runtime/libreoffice/check`, which returns `{ status }` for the Cowork-managed LibreOffice `soffice` shim and can run an optional PDF conversion smoke test with `smoke: true`.
+- Runtime subprocesses now receive the harness-prepared tool environment so managed executables such as `soffice` resolve consistently across Antigravity, Codex app-server, and local tool execution.
+
+Changes in `7.32`:
+
+- Added JSON-RPC controls for the runtime-managed Codex app-server payload:
+  - `cowork/provider/codexAppServer/status` returns `{ status }` with source, version, latest version, and update availability.
+  - `cowork/provider/codexAppServer/update` downloads/promotes the latest Cowork-managed Codex app-server under `~/.cowork/codex-app-server`.
+- Desktop/runtime Codex app-server resolution now prefers explicit overrides, then a system `codex app-server`, then a Cowork-managed install, and downloads a managed latest release only when missing.
 
 Changes in `7.31`:
 
@@ -516,11 +544,11 @@ Changes in `7.22`:
 
 Changes in `7.21`:
 
-- `set_config.config.providerOptions.codex-cli` and `session_config.config.providerOptions.codex-cli` now support `webSearchBackend: "native" | "exa"` so Codex workspaces can deliberately choose between built-in Responses web search and the local Exa tool. Native is the default when the field is omitted.
+- `set_config.config.providerOptions.codex-cli` and `session_config.config.providerOptions.codex-cli` now support `webSearchBackend: "native" | "exa" | "parallel"` for legacy configuration. In current Codex app-server hybrid mode, Codex-native web search/fetch owns Codex turns; the local Exa/Parallel `webSearch` tool is only exposed to non-Codex providers.
 
 Changes in `7.20`:
 
-- `set_config.config.providerOptions.codex-cli` and `session_config.config.providerOptions.codex-cli` now support native web-search fields: `webSearchMode`, `webSearch.contextSize`, `webSearch.allowedDomains`, and `webSearch.location`.
+- `set_config.config.providerOptions.codex-cli` and `session_config.config.providerOptions.codex-cli` now support `textVerbosity`, `webSearchMode`, and rich `webSearch` controls. Cowork forwards these to Codex app-server as thread `model_verbosity`, `web_search`, and `tools.web_search` config overrides for Codex turns.
 - `model_stream_raw` may now carry OpenAI Responses `web_search_call` items so clients can synthesize native web-search activity alongside normalized stream chunks.
 
 Changes in `7.19`:
@@ -684,6 +712,12 @@ To resume a thread, call `thread/resume` with `threadId` and optional `afterSeq`
 
 The desktop UI can create draft threads with local IDs before the first JSON-RPC `thread/start` call. Once `thread/start` returns the canonical thread id, the desktop client migrates the local record to that id while retaining `legacyTranscriptId` only for on-disk transcript lookup during desktop state migration.
 
+### One-Off Chat Workspaces
+
+The server does not expose a separate one-off chat protocol in v1. Desktop clients model a one-off chat as a normal cwd-backed workspace whose directory lives under `~/.cowork/chats/<timestamp>-<slug>-<id>`, then use the existing `thread/*`, `turn/*`, and `cowork/*` methods against that cwd. Client state should mark those hidden workspace records with `workspaceKind: "oneOffChat"` and keep regular project workspaces as `workspaceKind: "project"`; legacy records without a kind are projects.
+
+Global `New Chat` actions should create a fresh one-off chat workspace and one draft thread. Project-scoped actions, such as `New chat in project`, should reuse the chosen project workspace and then run the same JSON-RPC thread flow.
+
 ## Validation Rules
 
 All JSON-RPC messages are validated before dispatch:
@@ -706,7 +740,7 @@ Types referenced across multiple messages.
 ### ProviderName
 
 ```
-"google" | "openai" | "anthropic" | "bedrock" | "baseten" | "together" | "fireworks" | "nvidia" | "lmstudio" | "opencode-go" | "opencode-zen" | "codex-cli"
+"google" | "openai" | "anthropic" | "bedrock" | "baseten" | "together" | "fireworks" | "firepass" | "nvidia" | "lmstudio" | "opencode-go" | "opencode-zen" | "codex-cli" | "antigravity"
 ```
 
 ### PublicConfig
@@ -829,7 +863,7 @@ Returned in `server_hello` and `config_updated`:
 | `methodId` | `string?` | Optional active auth/config method identifier |
 | `savedApiKeyMasks` | `Record<string, string>?` | Optional masked key values keyed by method id. Never includes raw secrets |
 | `savedFieldMasks` | `Record<string, string>?` | Optional masked saved structured credential values keyed by field id |
-| `usage` | `{ planType?: string, accountId?: string, email?: string, rateLimits: ProviderRateLimitSnapshot[] }?` | Optional backend usage snapshot data, currently populated for Codex OAuth verification |
+| `usage` | `{ planType?: string, accountId?: string, email?: string, rateLimits: ProviderRateLimitSnapshot[] }?` | Optional backend usage snapshot data, currently populated for Codex app-server account verification |
 | `tokenRecoverable` | `boolean?` | When `authorized` is `false`, indicates the token is expired but a refresh token exists. Clients should avoid persisting a "not connected" state when this is `true`, since the next refresh attempt may succeed |
 
 ### TodoItem
@@ -1193,6 +1227,9 @@ Backups are opt-in. In git workspaces, clients and agents should prefer git-nati
   "totalTurns": 12,
   "totalPromptTokens": 5000,
   "totalCompletionTokens": 2000,
+  "totalCachedPromptTokens": 1200,
+  "totalCacheWritePromptTokens": 300,
+  "totalReasoningOutputTokens": 600,
   "totalTokens": 7000,
   "estimatedTotalCostUsd": 0.45,
   "costTrackingAvailable": true,
@@ -1208,8 +1245,11 @@ Backups are opt-in. In git workspaces, clients and agents should prefer git-nati
 |-------|------|-------------|
 | `sessionId` | `string` | Session identifier |
 | `totalTurns` | `number` | Total number of recorded turns |
-| `totalPromptTokens` | `number` | Cumulative prompt tokens |
-| `totalCompletionTokens` | `number` | Cumulative completion tokens |
+| `totalPromptTokens` | `number` | Cumulative prompt/input tokens, including cached input when reported by the provider |
+| `totalCompletionTokens` | `number` | Cumulative completion/output tokens. For reasoning models, this is the billable output bucket and can include reasoning tokens |
+| `totalCachedPromptTokens` | `number?` | Cumulative cache-read/cached prompt tokens. Cache-read tokens are a subset of `totalPromptTokens`, not additional tokens |
+| `totalCacheWritePromptTokens` | `number?` | Cumulative cache-write/cache-creation prompt tokens when the provider exposes them. Cache-write tokens are a subset of `totalPromptTokens`, not additional tokens |
+| `totalReasoningOutputTokens` | `number?` | Cumulative reasoning output tokens. Reasoning tokens are tracked as a subset/breakdown of output tokens unless a provider documents a separate billing bucket |
 | `totalTokens` | `number` | Cumulative total tokens |
 | `estimatedTotalCostUsd` | `number \| null` | Cumulative estimated cost in USD |
 | `costTrackingAvailable` | `boolean` | Whether cost tracking is active for this session |
@@ -1228,6 +1268,9 @@ Backups are opt-in. In git workspaces, clients and agents should prefer git-nati
   "turns": 4,
   "totalPromptTokens": 3200,
   "totalCompletionTokens": 900,
+  "totalCachedPromptTokens": 700,
+  "totalCacheWritePromptTokens": 150,
+  "totalReasoningOutputTokens": 250,
   "totalTokens": 4100,
   "estimatedCostUsd": 0.0235
 }
@@ -1238,8 +1281,11 @@ Backups are opt-in. In git workspaces, clients and agents should prefer git-nati
 | `provider` | `ProviderName` | Provider identifier used for the turns in this bucket |
 | `model` | `string` | Model identifier used for the turns in this bucket |
 | `turns` | `number` | Number of recorded turns for this provider/model pair |
-| `totalPromptTokens` | `number` | Prompt/input tokens accumulated for this provider/model pair |
+| `totalPromptTokens` | `number` | Prompt/input tokens accumulated for this provider/model pair, including cached input when reported |
 | `totalCompletionTokens` | `number` | Completion/output tokens accumulated for this provider/model pair |
+| `totalCachedPromptTokens` | `number?` | Cache-read/cached prompt tokens accumulated for this provider/model pair, as a subset of prompt tokens |
+| `totalCacheWritePromptTokens` | `number?` | Cache-write/cache-creation prompt tokens accumulated for this provider/model pair, as a subset of prompt tokens |
+| `totalReasoningOutputTokens` | `number?` | Reasoning output tokens accumulated for this provider/model pair, as a subset/breakdown of output tokens |
 | `totalTokens` | `number` | Total tokens accumulated for this provider/model pair |
 | `estimatedCostUsd` | `number \| null` | Estimated cumulative cost for this provider/model pair |
 
@@ -1257,13 +1303,20 @@ Backups are opt-in. In git workspaces, clients and agents should prefer git-nati
     "completionTokens": 300,
     "totalTokens": 1500,
     "cachedPromptTokens": 200,
+    "cacheWritePromptTokens": 50,
+    "reasoningOutputTokens": 80,
     "estimatedCostUsd": 0.0084
   },
   "estimatedCostUsd": 0.0084,
   "pricing": {
     "inputPerMillion": 1.25,
     "outputPerMillion": 10,
-    "cachedInputPerMillion": 0.125
+    "cachedInputPerMillion": 0.125,
+    "cacheWriteInputPerMillion": 1.25,
+    "longContextThresholdTokens": 272000,
+    "longContextInputPerMillion": 2.5,
+    "longContextOutputPerMillion": 15,
+    "longContextCachedInputPerMillion": 0.25
   }
 }
 ```
@@ -1287,16 +1340,20 @@ Backups are opt-in. In git workspaces, clients and agents should prefer git-nati
   "completionTokens": 300,
   "totalTokens": 1500,
   "cachedPromptTokens": 200,
+  "cacheWritePromptTokens": 50,
+  "reasoningOutputTokens": 80,
   "estimatedCostUsd": 0.0084
 }
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `promptTokens` | `number` | Prompt/input tokens reported for the turn |
-| `completionTokens` | `number` | Completion/output tokens reported for the turn |
+| `promptTokens` | `number` | Prompt/input tokens reported for the turn, including cached input when reported |
+| `completionTokens` | `number` | Completion/output tokens reported for the turn. For OpenAI/Codex reasoning models this includes reasoning output tokens |
 | `totalTokens` | `number` | Total tokens reported for the turn |
-| `cachedPromptTokens` | `number` | Cached prompt/input tokens when the provider exposes them |
+| `cachedPromptTokens` | `number` | Cache-read/cached prompt tokens when the provider exposes them. Must be treated as a subset of `promptTokens`, not added to `totalTokens` again |
+| `cacheWritePromptTokens` | `number` | Cache-write/cache-creation prompt tokens when the provider exposes them. Must be treated as a subset of `promptTokens`, not added to `totalTokens` again |
+| `reasoningOutputTokens` | `number` | Reasoning output tokens when the provider exposes them. Treat as a subset/breakdown of `completionTokens` unless the provider documents separate billing |
 | `estimatedCostUsd` | `number` | Runtime-provided turn estimate when available |
 
 ### ModelPricing
@@ -1305,7 +1362,12 @@ Backups are opt-in. In git workspaces, clients and agents should prefer git-nati
 {
   "inputPerMillion": 1.25,
   "outputPerMillion": 10,
-  "cachedInputPerMillion": 0.125
+  "cachedInputPerMillion": 0.125,
+  "cacheWriteInputPerMillion": 1.25,
+  "longContextThresholdTokens": 272000,
+  "longContextInputPerMillion": 2.5,
+  "longContextOutputPerMillion": 15,
+  "longContextCachedInputPerMillion": 0.25
 }
 ```
 
@@ -1313,7 +1375,12 @@ Backups are opt-in. In git workspaces, clients and agents should prefer git-nati
 |-------|------|-------------|
 | `inputPerMillion` | `number` | USD cost per 1M prompt/input tokens |
 | `outputPerMillion` | `number` | USD cost per 1M completion/output tokens |
-| `cachedInputPerMillion` | `number` | USD cost per 1M cached prompt/input tokens when discounted pricing exists |
+| `cachedInputPerMillion` | `number` | USD cost per 1M cache-read/cached prompt/input tokens when discounted pricing exists |
+| `cacheWriteInputPerMillion` | `number` | USD cost per 1M cache-write/cache-creation prompt/input tokens when discounted pricing exists |
+| `longContextThresholdTokens` | `number` | Prompt/input token count above which this pricing entry uses long-context rates |
+| `longContextInputPerMillion` | `number` | USD cost per 1M prompt/input tokens when long-context pricing applies |
+| `longContextOutputPerMillion` | `number` | USD cost per 1M completion/output tokens when long-context pricing applies |
+| `longContextCachedInputPerMillion` | `number` | USD cost per 1M cached prompt/input tokens when long-context pricing applies |
 
 ### BudgetStatus
 
@@ -1677,7 +1744,7 @@ Auth challenge payload returned after `provider_auth_authorize`.
   "methodId": "oauth_cli",
   "challenge": {
     "method": "auto",
-    "instructions": "Cowork will open the browser sign-in flow and save the returned token locally."
+    "instructions": "Codex app-server owns the browser sign-in flow and local credential storage."
   }
 }
 ```
@@ -1878,7 +1945,7 @@ Provider-native raw model stream event. Emitted before any derived `model_stream
 | `index` | `number` | Sequential raw-event index within the turn (starting at 0). Fallback: `-1` |
 | `provider` | `ProviderName \| "unknown"` | Provider that generated this event. Fallback: `"unknown"` |
 | `model` | `string` | Model that generated this event. Fallback: `"unknown"` |
-| `format` | `"openai-responses-v1" \| "google-interactions-v1"` | Raw event envelope format |
+| `format` | `"openai-responses-v1" \| "google-interactions-v1" \| "codex-app-server-v2"` | Raw event envelope format |
 | `normalizerVersion` | `number` | Version identifier for the client/server raw-event normalizer |
 | `event` | `object` | Provider-native raw event payload. If a non-object payload is received, it is normalized to `{ "value": <original> }` |
 
@@ -2071,7 +2138,7 @@ Tool metadata list response to `list_tools`.
 |-------|------|-------------|
 | `type` | `"tools"` | — |
 | `sessionId` | `string` | Session identifier |
-| `tools` | `Array<{ name: string; description: string }>` | Sorted list of tools with name and first line of description. Note: MCP tools are loaded dynamically during turns and not included |
+| `tools` | `Array<{ name: string; description: string }>` | Sorted list of effective tools with name and first line of description. For `codex-cli`, this reports the hybrid boundary: Cowork coordination tools are listed, while Cowork local shell/file/search/web tools are omitted because Codex app-server owns them natively. Note: MCP tools are loaded dynamically during turns and not included in this list |
 
 ---
 
@@ -2514,6 +2581,8 @@ Token usage data for a completed turn. Emitted after `assistant_message` when th
     "completionTokens": 567,
     "totalTokens": 1801,
     "cachedPromptTokens": 234,
+    "cacheWritePromptTokens": 56,
+    "reasoningOutputTokens": 120,
     "estimatedCostUsd": 0.0042
   }
 }
@@ -2525,9 +2594,11 @@ Token usage data for a completed turn. Emitted after `assistant_message` when th
 | `sessionId` | `string` | Session identifier |
 | `turnId` | `string` | Turn this usage belongs to |
 | `usage.promptTokens` | `number` | Total input tokens consumed, including cached prompt tokens when the provider reports them |
-| `usage.completionTokens` | `number` | Output tokens generated |
+| `usage.completionTokens` | `number` | Output tokens generated. For OpenAI/Codex reasoning models this includes reasoning output tokens |
 | `usage.totalTokens` | `number` | Total tokens |
-| `usage.cachedPromptTokens` | `number` | Cached input tokens reported for the turn, when available |
+| `usage.cachedPromptTokens` | `number` | Cache-read/cached input tokens reported for the turn, when available. This is a subset of `usage.promptTokens` |
+| `usage.cacheWritePromptTokens` | `number` | Cache-write/cache-creation input tokens reported for the turn, when available. This is a subset of `usage.promptTokens` |
+| `usage.reasoningOutputTokens` | `number` | Reasoning output tokens reported for the turn, when available. This is a subset/breakdown of `usage.completionTokens` for current OpenAI/Codex usage |
 | `usage.estimatedCostUsd` | `number` | Turn cost estimate in USD when the runtime can provide one |
 
 ---
@@ -2545,6 +2616,9 @@ Accumulated session usage and budget status. Sent in response to `get_session_us
     "totalTurns": 12,
     "totalPromptTokens": 5000,
     "totalCompletionTokens": 2000,
+    "totalCachedPromptTokens": 1200,
+    "totalCacheWritePromptTokens": 300,
+    "totalReasoningOutputTokens": 600,
     "totalTokens": 7000,
     "estimatedTotalCostUsd": 0.45,
     "costTrackingAvailable": true,
@@ -3002,15 +3076,7 @@ Current runtime config. Sent on connection and after `set_config`.
         "reasoningSummary": "detailed",
         "textVerbosity": "medium",
         "webSearchBackend": "native",
-        "webSearchMode": "live",
-        "webSearch": {
-          "contextSize": "medium",
-          "allowedDomains": ["openai.com"],
-          "location": {
-            "country": "US",
-            "timezone": "America/New_York"
-          }
-        }
+        "webSearchMode": "live"
       },
       "google": {
         "nativeWebSearch": true,
@@ -3055,17 +3121,16 @@ Current runtime config. Sent on connection and after `set_config`.
 | `config.providerOptions.openai.textVerbosity` | `"low" \| "medium" \| "high"` | Current editable OpenAI verbosity |
 | `config.providerOptions.codex-cli.reasoningEffort` | `"none" \| "low" \| "medium" \| "high" \| "xhigh"` | Current editable Codex CLI reasoning effort |
 | `config.providerOptions.codex-cli.reasoningSummary` | `"auto" \| "concise" \| "detailed"` | Current editable Codex CLI reasoning summary |
-| `config.providerOptions.codex-cli.textVerbosity` | `"low" \| "medium" \| "high"` | Current editable Codex CLI verbosity |
-| `config.providerOptions.codex-cli.webSearchBackend` | `"native" \| "exa"` | Current Codex web search backend. Omitted means the workspace is using the default `"native"` backend |
-| `config.providerOptions.codex-cli.webSearchMode` | `"disabled" \| "cached" \| "live"` | Current editable Codex native web-search mode |
-| `config.providerOptions.codex-cli.webSearch.contextSize` | `"low" \| "medium" \| "high"` | Current editable Codex native web-search context size |
-| `config.providerOptions.codex-cli.webSearch.allowedDomains` | `string[]` | Current editable Codex native web-search domain allowlist |
-| `config.providerOptions.codex-cli.webSearch.location.country` | `string` | Current editable Codex native web-search country |
-| `config.providerOptions.codex-cli.webSearch.location.region` | `string` | Current editable Codex native web-search region/state |
-| `config.providerOptions.codex-cli.webSearch.location.city` | `string` | Current editable Codex native web-search city |
-| `config.providerOptions.codex-cli.webSearch.location.timezone` | `string` | Current editable Codex native web-search timezone |
+| `config.providerOptions.codex-cli.textVerbosity` | `"low" \| "medium" \| "high"` | Current editable Codex CLI verbosity forwarded to Codex app-server as `model_verbosity` |
+| `config.providerOptions.codex-cli.webSearchBackend` | `"native" \| "exa" \| "parallel"` | Legacy Codex web search backend preference. Hybrid Codex app-server turns use Codex-native web search/fetch; local Exa/Parallel tools are reserved for non-Codex providers |
+| `config.providerOptions.codex-cli.webSearchMode` | `"disabled" \| "cached" \| "live"` | Codex native web-search mode forwarded to Codex app-server as `web_search` |
+| `config.providerOptions.codex-cli.webSearch.contextSize` | `"low" \| "medium" \| "high"` | Codex native web-search context size forwarded to Codex app-server as `tools.web_search.context_size` |
+| `config.providerOptions.codex-cli.webSearch.allowedDomains` | `string[]` | Codex native web-search allowed domains forwarded to Codex app-server as `tools.web_search.allowed_domains` |
+| `config.providerOptions.codex-cli.webSearch.location` | `{ country?, region?, city?, timezone? }` | Codex native web-search approximate location forwarded to Codex app-server as `tools.web_search.location` |
 | `config.providerOptions.google.nativeWebSearch` | `boolean` | Current Gemini built-in Search + URL Context toggle |
 | `config.providerOptions.google.thinkingConfig.thinkingLevel` | `"minimal" \| "low" \| "medium" \| "high"` | Current explicit Gemini `thinking_level` override when set. Omitted means the workspace is using Gemini's dynamic default |
+| `config.providerOptions.google.responseFormat` | `unknown` | Optional Gemini Interactions `response_format` payload for structured responses |
+| `config.providerOptions.google.responseMimeType` | `string` | Optional Gemini Interactions `response_mime_type` such as `application/json` |
 | `config.providerOptions.lmstudio.baseUrl` | `string` | Current LM Studio base URL override |
 | `config.providerOptions.lmstudio.contextLength` | `number` | Current requested LM Studio context length override |
 | `config.providerOptions.lmstudio.autoLoad` | `boolean` | Current LM Studio eager-load toggle |

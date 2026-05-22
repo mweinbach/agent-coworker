@@ -2,6 +2,7 @@ import type {
   OpenAiContinuationProvider,
   OpenAiContinuationState,
 } from "../shared/openaiContinuation";
+import { buildRequestFingerprint } from "../shared/providerContinuation";
 import type { ModelMessage } from "../types";
 import {
   type RunOpenAiNativeResponseStep,
@@ -64,20 +65,44 @@ export function createOpenAiResponsesRuntime(
         await params.onModelStreamPart(part);
       };
 
+      const turnMessages: Array<Record<string, unknown>> = [];
+      let usage = undefined as RuntimeRunTurnResult["usage"];
+      let finalProviderState = undefined as OpenAiContinuationState | undefined;
+
       try {
         const resolved = await resolveOpenAiResponsesModel(params);
         const telemetry = parseTelemetrySettings(params.telemetry);
         const piTools = toolMapToPiTools(params.tools, params.config.provider);
         const includeUnknownRawParts = params.includeRawChunks ?? true;
-        const turnMessages: Array<Record<string, unknown>> = [];
-        let usage = undefined as RuntimeRunTurnResult["usage"];
+        let stepProviderOptions: Record<string, unknown> | undefined =
+          asRecord(params.providerOptions) ?? undefined;
         let activeProviderState = matchingProviderState(params, resolved);
-        let finalProviderState = undefined as OpenAiContinuationState | undefined;
+
+        const initialStepState = buildStepState(
+          { ...params, providerOptions: stepProviderOptions } as RuntimeRunTurnParams,
+          resolved,
+          {},
+          params.allMessages ?? params.messages,
+        );
+        const initialRequestFingerprint = buildRequestFingerprint({
+          modelId: resolved.model.id,
+          system: params.system,
+          tools: piTools,
+          streamOptions: initialStepState.streamOptions,
+        });
+
+        if (
+          activeProviderState?.requestFingerprint &&
+          activeProviderState.requestFingerprint !== initialRequestFingerprint
+        ) {
+          params.log?.(
+            "openai-responses: Stored continuation request context changed; starting a fresh session instead of reusing the continuation ID.",
+          );
+          activeProviderState = null;
+        }
         let stepMessages: ModelMessage[] = activeProviderState
           ? buildInitialStepMessages(params, resolved)
           : [...(params.allMessages ?? params.messages)];
-        let stepProviderOptions: Record<string, unknown> | undefined =
-          asRecord(params.providerOptions) ?? undefined;
         const providerManagedContinuation = supportsProviderManagedContinuation(params, resolved);
 
         const maxSteps = Math.max(1, params.maxSteps);
@@ -113,7 +138,7 @@ export function createOpenAiResponsesRuntime(
           const span = startModelCallSpan(
             telemetry,
             params,
-            resolved,
+            resolved.model.id,
             step + 1,
             stepState.streamOptions,
             stepState.piMessages,
@@ -162,6 +187,9 @@ export function createOpenAiResponsesRuntime(
           turnMessages.push(assistantRecord);
           usage = mergePiUsage(usage, assistantRecord.usage);
           finalProviderState = nextProviderState(params, resolved, responseId);
+          if (finalProviderState) {
+            finalProviderState.requestFingerprint = initialRequestFingerprint;
+          }
           activeProviderState = finalProviderState ?? activeProviderState;
           const assistantModelMessages = piTurnMessagesToModelMessages([assistantRecord as any]);
           if (!providerManagedContinuation) {
@@ -222,6 +250,29 @@ export function createOpenAiResponsesRuntime(
           ...(finalProviderState ? { providerState: finalProviderState } : {}),
         };
       } catch (error) {
+        if (error && typeof error === "object") {
+          try {
+            (error as any).usage = usage;
+            const responseMessages =
+              typeof turnMessages !== "undefined" && Array.isArray(turnMessages)
+                ? piTurnMessagesToModelMessages(turnMessages as any)
+                : [];
+            Object.defineProperty(error, "responseMessages", {
+              value: responseMessages,
+              configurable: true,
+              writable: true,
+            });
+            if (typeof finalProviderState !== "undefined" && finalProviderState) {
+              Object.defineProperty(error, "providerState", {
+                value: finalProviderState,
+                configurable: true,
+                writable: true,
+              });
+            }
+          } catch {
+            // Ignore if error object is not extensible/writable
+          }
+        }
         if (isAbortLikeError(error, params.abortSignal)) {
           await params.onModelAbort?.();
         } else {

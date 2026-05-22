@@ -82,6 +82,8 @@ export type GoogleThinkingConfig = {
 export type GoogleProviderOptions = {
   nativeWebSearch?: boolean;
   thinkingConfig?: GoogleThinkingConfig;
+  responseFormat?: unknown;
+  responseMimeType?: string;
 };
 
 export type OpenAiCompatibleProviderOptionsByProvider = Partial<{
@@ -313,6 +315,13 @@ function pickGoogleProviderOptionsSection(value: unknown): GoogleProviderOptions
   const thinkingConfig = pickGoogleThinkingConfig(value.thinkingConfig);
   if (thinkingConfig) {
     next.thinkingConfig = thinkingConfig;
+  }
+  if (value.responseFormat !== undefined) {
+    next.responseFormat = value.responseFormat;
+  }
+  const responseMimeType = pickTrimmedString(value.responseMimeType);
+  if (responseMimeType) {
+    next.responseMimeType = responseMimeType;
   }
 
   return Object.keys(next).length > 0 ? next : undefined;

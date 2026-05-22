@@ -10,6 +10,7 @@ import {
   type ConfirmActionInput,
   type CopyPathInput,
   type CreateDirectoryInput,
+  type CreateOneOffChatWorkspaceInput,
   DESKTOP_EVENT_CHANNELS,
   DESKTOP_IPC_CHANNELS,
   type DeleteTranscriptInput,
@@ -30,6 +31,7 @@ import {
   type RevealPathInput,
   type SaveExportedFileInput,
   type SetWindowAppearanceInput,
+  type ShowCanvasWindowInput,
   type ShowContextMenuInput,
   type ShowQuickChatWindowInput,
   type StartWorkspaceServerInput,
@@ -39,11 +41,13 @@ import {
   type TrashPathInput,
   type UpdaterState,
   type WindowDragPointInput,
+  type WriteFileInput,
 } from "../src/lib/desktopApi";
 import {
   confirmActionInputSchema,
   copyPathInputSchema,
   createDirectoryInputSchema,
+  createOneOffChatWorkspaceInputSchema,
   deleteTranscriptInputSchema,
   desktopMenuCommandSchema,
   desktopNotificationInputSchema,
@@ -62,6 +66,7 @@ import {
   revealPathInputSchema,
   saveExportedFileInputSchema,
   setWindowAppearanceInputSchema,
+  showCanvasWindowInputSchema,
   showContextMenuInputSchema,
   showQuickChatWindowInputSchema,
   startWorkspaceServerInputSchema,
@@ -71,6 +76,7 @@ import {
   trashPathInputSchema,
   updaterStateSchema,
   windowDragPointInputSchema,
+  writeFileInputSchema,
 } from "../src/lib/desktopSchemas";
 
 function parseWithSchema<T>(schema: z.ZodType<T>, value: unknown, label: string): T {
@@ -85,6 +91,10 @@ function parseWithSchema<T>(schema: z.ZodType<T>, value: unknown, label: string)
 
 function assertStartWorkspaceServerInput(opts: StartWorkspaceServerInput): void {
   parseWithSchema(startWorkspaceServerInputSchema, opts, "startWorkspaceServer options");
+}
+
+function assertCreateOneOffChatWorkspaceInput(opts: CreateOneOffChatWorkspaceInput): void {
+  parseWithSchema(createOneOffChatWorkspaceInputSchema, opts, "createOneOffChatWorkspace options");
 }
 
 function assertStopWorkspaceServerInput(opts: StopWorkspaceServerInput): void {
@@ -117,6 +127,10 @@ function assertListDirectoryInput(opts: ListDirectoryInput): void {
 
 function assertReadFileInput(opts: ReadFileInput): void {
   parseWithSchema(readFileInputSchema, opts, "readFile options");
+}
+
+function assertWriteFileInput(opts: WriteFileInput): void {
+  parseWithSchema(writeFileInputSchema, opts, "writeFile options");
 }
 
 function assertReadFileForPreviewInput(opts: ReadFileForPreviewInput): void {
@@ -214,6 +228,11 @@ const desktopApi = Object.freeze<DesktopApi>({
   isPackaged: process.env.COWORK_IS_PACKAGED === "true",
   resolveDesktopFeatureFlags: (overrides) =>
     resolvePreloadDesktopFeatureFlags(normalizeDesktopFeatureFlagOverrides(overrides)),
+  createOneOffChatWorkspace: (opts: CreateOneOffChatWorkspaceInput = {}) => {
+    assertCreateOneOffChatWorkspaceInput(opts);
+    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.createOneOffChatWorkspace, opts);
+  },
+
   startWorkspaceServer: (opts: StartWorkspaceServerInput) => {
     assertStartWorkspaceServerInput(opts);
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.startWorkspaceServer, opts);
@@ -316,6 +335,11 @@ const desktopApi = Object.freeze<DesktopApi>({
 
   showMainWindow: () => ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.showMainWindow),
 
+  showCanvasWindow: (opts: ShowCanvasWindowInput) => {
+    parseWithSchema(showCanvasWindowInputSchema, opts, "showCanvasWindow options");
+    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.showCanvasWindow, opts);
+  },
+
   showQuickChatWindow: (opts?: ShowQuickChatWindowInput) => {
     if (opts !== undefined) {
       parseWithSchema(showQuickChatWindowInputSchema, opts, "showQuickChatWindow options");
@@ -331,6 +355,11 @@ const desktopApi = Object.freeze<DesktopApi>({
   readFile: (opts: ReadFileInput) => {
     assertReadFileInput(opts);
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.readFile, opts);
+  },
+
+  writeFile: (opts: WriteFileInput) => {
+    assertWriteFileInput(opts);
+    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.writeFile, opts);
   },
 
   readFileForPreview: (opts: ReadFileForPreviewInput) => {

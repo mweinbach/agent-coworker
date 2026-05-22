@@ -33,7 +33,6 @@ export type OpenAiNativeConnectorsEvent = {
   sessionId: string;
   connectors: OpenAiNativeConnector[];
   enabledConnectorIds: string[];
-  codexAppsMcpServerName: typeof CODEX_APPS_MCP_SERVER_NAME;
   authenticated: boolean;
   message?: string;
 };
@@ -61,7 +60,6 @@ export const openAiNativeConnectorsEventSchema = z
     sessionId: z.string().trim().min(1),
     connectors: z.array(openAiNativeConnectorSchema),
     enabledConnectorIds: z.array(z.string().trim().min(1)),
-    codexAppsMcpServerName: z.literal(CODEX_APPS_MCP_SERVER_NAME),
     authenticated: z.boolean(),
     message: z.string().optional(),
   })

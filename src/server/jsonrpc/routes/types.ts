@@ -120,6 +120,11 @@ export interface JsonRpcRouteContext {
       idleMs?: number,
     ): Promise<T[]>;
   };
+  runtime: {
+    checkLibreOffice(opts: {
+      smoke?: boolean;
+    }): Promise<import("../../../managedSofficeRuntime").ManagedSofficeRuntimeDiagnostic>;
+  };
   jsonrpc: {
     send(ws: StartServerSocket, payload: unknown): void;
     sendResult(ws: StartServerSocket, id: JsonRpcLiteId, result: unknown): void;

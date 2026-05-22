@@ -1,5 +1,6 @@
 import { getModel as getPiModel, getModels as getPiModels } from "@mariozechner/pi-ai";
 import { z } from "zod";
+import { isFireworksInferenceProvider } from "../providers/fireworksShared";
 import type { ProviderName } from "../types";
 import type { RuntimeRunTurnParams } from "./types";
 
@@ -18,31 +19,22 @@ export type PiModel = {
   compat?: Record<string, unknown>;
 };
 
-export function asRecord(value: unknown): Record<string, unknown> | null {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
-  return value as Record<string, unknown>;
-}
+import {
+  asFiniteNumber,
+  asNonEmptyString,
+  asNonEmptyStringArray,
+  asRecord,
+  asString,
+} from "../shared/recordParsing";
 
-export function asString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
-
-export function asNonEmptyString(value: unknown): string | undefined {
-  const text = asString(value)?.trim();
-  return text ? text : undefined;
-}
-
-export function asFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-export function asNonEmptyStringArray(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const next = value
-    .map((entry) => asNonEmptyString(entry))
-    .filter((entry): entry is string => !!entry);
-  return next.length > 0 ? next : undefined;
-}
+export {
+  asArray,
+  asFiniteNumber,
+  asNonEmptyString,
+  asNonEmptyStringArray,
+  asRecord,
+  asString,
+} from "../shared/recordParsing";
 
 export function pickKnownPiModel(provider: string, modelId: string): PiModel | null {
   const direct = getPiModel(provider as any, modelId as any) as unknown;
@@ -292,6 +284,10 @@ const FIREWORKS_UNSUPPORTED_SCHEMA_KEYS = new Set([
 const FIREWORKS_TOOL_SCHEMA_MAX_BYTES = 4096;
 const FIREWORKS_TOTAL_TOOL_SCHEMA_MAX_BYTES = 12288;
 
+function usesFireworksToolSchemaRules(provider?: ProviderName): boolean {
+  return provider !== undefined && isFireworksInferenceProvider(provider);
+}
+
 type ToolSchemaBudgetState = {
   totalBytes: number;
 };
@@ -412,7 +408,7 @@ function sanitizeProviderToolJsonSchema(
   schema: ToolJsonSchema | undefined,
   provider?: ProviderName,
 ): ToolJsonSchema | undefined {
-  if (provider !== "fireworks" || schema === undefined || typeof schema === "boolean") {
+  if (!usesFireworksToolSchemaRules(provider) || schema === undefined || typeof schema === "boolean") {
     return schema;
   }
 
@@ -556,7 +552,7 @@ export function applyProviderToolSchemaBudget(
   schema: Record<string, unknown>,
   state?: ToolSchemaBudgetState,
 ): Record<string, unknown> {
-  if (provider !== "fireworks") return schema;
+  if (!usesFireworksToolSchemaRules(provider)) return schema;
 
   const totalBytes = state?.totalBytes ?? 0;
   const candidates = [schema, shapePreservingShallowObjectSchema(schema), relaxedToolJsonSchema()];

@@ -71,6 +71,139 @@ describe("JSON-RPC thread read projector", () => {
     ]);
   });
 
+  test("splits same-id reasoning deltas around journaled tool boundaries", () => {
+    const turns = projectThreadTurnsFromJournal([
+      {
+        threadId: "thread-1",
+        seq: 1,
+        ts: "2026-03-22T15:39:39.127Z",
+        eventType: "turn/started",
+        turnId: "turn-1",
+        itemId: null,
+        requestId: null,
+        payload: {
+          threadId: "thread-1",
+          turn: { id: "turn-1", status: "inProgress", items: [] },
+        },
+      },
+      {
+        threadId: "thread-1",
+        seq: 2,
+        ts: "2026-03-22T15:39:41.772Z",
+        eventType: "item/started",
+        turnId: "turn-1",
+        itemId: "reasoning-1",
+        requestId: null,
+        payload: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: { id: "reasoning-1", type: "reasoning", mode: "reasoning", text: "" },
+        },
+      },
+      {
+        threadId: "thread-1",
+        seq: 3,
+        ts: "2026-03-22T15:39:41.773Z",
+        eventType: "item/reasoning/delta",
+        turnId: "turn-1",
+        itemId: "reasoning-1",
+        requestId: null,
+        payload: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "reasoning-1",
+          mode: "reasoning",
+          delta: "First step.",
+        },
+      },
+      {
+        threadId: "thread-1",
+        seq: 4,
+        ts: "2026-03-22T15:39:41.774Z",
+        eventType: "item/started",
+        turnId: "turn-1",
+        itemId: "tool-1",
+        requestId: null,
+        payload: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: { id: "tool-1", type: "toolCall", toolName: "webSearch", state: "input-available" },
+        },
+      },
+      {
+        threadId: "thread-1",
+        seq: 5,
+        ts: "2026-03-22T15:39:41.775Z",
+        eventType: "item/completed",
+        turnId: "turn-1",
+        itemId: "tool-1",
+        requestId: null,
+        payload: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "tool-1",
+            type: "toolCall",
+            toolName: "webSearch",
+            state: "output-available",
+            result: { result: "first" },
+          },
+        },
+      },
+      {
+        threadId: "thread-1",
+        seq: 6,
+        ts: "2026-03-22T15:39:41.776Z",
+        eventType: "item/reasoning/delta",
+        turnId: "turn-1",
+        itemId: "reasoning-1",
+        requestId: null,
+        payload: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "reasoning-1",
+          mode: "reasoning",
+          delta: "Second step.",
+        },
+      },
+      {
+        threadId: "thread-1",
+        seq: 7,
+        ts: "2026-03-22T15:39:41.777Z",
+        eventType: "item/completed",
+        turnId: "turn-1",
+        itemId: "reasoning-1",
+        requestId: null,
+        payload: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "reasoning-1",
+            type: "reasoning",
+            mode: "reasoning",
+            text: "First step.\n\nSecond step.",
+          },
+        },
+      },
+    ] as any);
+
+    expect(turns[0]?.items.map((item) => item.id)).toEqual([
+      "reasoning-1",
+      "tool-1",
+      "reasoning-1:2",
+    ]);
+    expect(turns[0]?.items.map((item) => item.type)).toEqual([
+      "reasoning",
+      "toolCall",
+      "reasoning",
+    ]);
+    expect(turns[0]?.items.map((item) => item.text ?? item.result?.result)).toEqual([
+      "First step.",
+      "first",
+      "Second step.",
+    ]);
+  });
+
   test("preserves projected tool items from the journal", () => {
     const turns = projectThreadTurnsFromJournal([
       {

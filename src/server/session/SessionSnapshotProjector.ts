@@ -104,7 +104,12 @@ function deriveLastTurnUsageFromSnapshot(
   if (!lastEntry) return null;
   return {
     turnId: lastEntry.turnId,
-    usage: { ...lastEntry.usage },
+    usage: {
+      ...lastEntry.usage,
+      ...(lastEntry.estimatedCostUsd !== null
+        ? { estimatedCostUsd: lastEntry.estimatedCostUsd }
+        : {}),
+    },
   };
 }
 

@@ -30,9 +30,25 @@ describe("createServerStdoutMonitor", () => {
       (line) => echoed.push(line),
     );
 
-    await expect(monitor.ready).resolves.toBe("ws://127.0.0.1:7337/ws");
+    await expect(monitor.ready).resolves.toEqual({
+      url: "ws://127.0.0.1:7337/ws",
+      browserAccessToken: null,
+    });
     await expect(monitor.drained).resolves.toBeUndefined();
     expect(echoed).toEqual(["server log after ready"]);
+  });
+
+  test("captures the browser access token from server readiness", async () => {
+    const monitor = createServerStdoutMonitor(
+      createStdoutStream([
+        '{"type":"server_listening","url":"ws://127.0.0.1:7337/ws","browserAccessToken":"test-token"}\n',
+      ]),
+    );
+
+    await expect(monitor.ready).resolves.toEqual({
+      url: "ws://127.0.0.1:7337/ws",
+      browserAccessToken: "test-token",
+    });
   });
 
   test("rejects readiness when stdout closes before the ready event", async () => {

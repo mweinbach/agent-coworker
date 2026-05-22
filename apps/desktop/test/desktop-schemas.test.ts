@@ -57,7 +57,7 @@ describe("desktop persisted-state schema defaults", () => {
     expect(parsed.workspaces[0]?.wsProtocol).toBe("jsonrpc");
   });
 
-  test("keeps explicit workspace booleans", () => {
+  test("keeps explicit workspace booleans and yolo off", () => {
     const parsed = persistedStateInputSchema.parse({
       version: 2,
       workspaces: [
@@ -77,18 +77,20 @@ describe("desktop persisted-state schema defaults", () => {
             work: "Platform engineer",
             details: "Prefers Bun",
           },
-          yolo: true,
+          yolo: false,
         },
       ],
       threads: [],
       developerMode: true,
       showHiddenFiles: true,
       desktopSettings: {
+        archivedChatsAutoDeleteDays: 14,
         quickChat: {
           iconEnabled: false,
           shortcutEnabled: true,
           shortcutAccelerator: "Alt+Space",
         },
+        sidebarSectionOrder: ["chats", "projects"],
       },
     });
 
@@ -102,12 +104,14 @@ describe("desktop persisted-state schema defaults", () => {
       work: "Platform engineer",
       details: "Prefers Bun",
     });
-    expect(parsed.workspaces[0]?.yolo).toBe(true);
+    expect(parsed.workspaces[0]?.yolo).toBe(false);
     expect(parsed.developerMode).toBe(true);
     expect(parsed.showHiddenFiles).toBe(true);
     expect(parsed.desktopSettings?.quickChat?.iconEnabled).toBe(false);
     expect(parsed.desktopSettings?.quickChat?.shortcutEnabled).toBe(true);
     expect(parsed.desktopSettings?.quickChat?.shortcutAccelerator).toBe("Alt+Space");
+    expect(parsed.desktopSettings?.archivedChatsAutoDeleteDays).toBe(14);
+    expect(parsed.desktopSettings?.sidebarSectionOrder).toEqual(["chats", "projects"]);
   });
 
   test("accepts updater state payloads", () => {

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +8,7 @@ import { createElectronMock, setElectronMockOverrides } from "./helpers/mockElec
 
 let userDataDir = "";
 let appDataDir = "";
+const oneOffTestDirs: string[] = [];
 
 const electronMockOverrides = {
   app: {
@@ -50,6 +52,8 @@ describe("desktop persistence state validation", () => {
       return;
     }
     await fs.rm(appDataDir, { recursive: true, force: true });
+    await Promise.all(oneOffTestDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
+    oneOffTestDirs.length = 0;
     userDataDir = "";
     appDataDir = "";
   });
@@ -115,10 +119,119 @@ describe("desktop persistence state validation", () => {
     const loaded = await persistence.loadState();
     expect(loaded.workspaces).toHaveLength(1);
     expect(loaded.workspaces[0]?.id).toBe("ws_valid");
+    expect(loaded.workspaces[0]?.workspaceKind).toBe("project");
     expect(loaded.workspaces[0]?.wsProtocol).toBe("jsonrpc");
     expect(loaded.workspaces[0]?.defaultBackupsEnabled).toBe(false);
     expect(loaded.threads).toHaveLength(1);
     expect(loaded.threads[0]?.id).toBe("thread_valid");
+  });
+
+  test("saveState preserves yolo configuration", async () => {
+    const persistence = new PersistenceService();
+    const workspaceYoloTrue = path.join(userDataDir, "workspace-yolo-true");
+    const workspaceYoloFalse = path.join(userDataDir, "workspace-yolo-false");
+    await fs.mkdir(workspaceYoloTrue, { recursive: true });
+    await fs.mkdir(workspaceYoloFalse, { recursive: true });
+
+    await persistence.saveState({
+      version: 2,
+      workspaces: [
+        {
+          id: "ws_yolo_true",
+          name: "Yolo True Workspace",
+          path: workspaceYoloTrue,
+          createdAt: TS,
+          lastOpenedAt: TS,
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: false,
+          yolo: true,
+        },
+        {
+          id: "ws_yolo_false",
+          name: "Yolo False Workspace",
+          path: workspaceYoloFalse,
+          createdAt: TS,
+          lastOpenedAt: TS,
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: false,
+          yolo: false,
+        },
+      ],
+      threads: [],
+    });
+
+    const loaded = await persistence.loadState();
+    expect(loaded.workspaces).toHaveLength(2);
+    const wsTrue = loaded.workspaces.find((w) => w.id === "ws_yolo_true");
+    const wsFalse = loaded.workspaces.find((w) => w.id === "ws_yolo_false");
+    expect(wsTrue?.yolo).toBe(true);
+    expect(wsFalse?.yolo).toBe(false);
+  });
+
+  test("recreates missing one-off chat folders but still drops missing projects", async () => {
+    const persistence = new PersistenceService();
+    const missingProject = path.join(userDataDir, "workspace-missing-project");
+    const oneOffChat = path.join(
+      os.homedir(),
+      ".cowork",
+      "chats",
+      `persistence-test-${crypto.randomUUID()}`,
+    );
+    oneOffTestDirs.push(oneOffChat);
+
+    await fs.rm(oneOffChat, { recursive: true, force: true });
+
+    await persistence.saveState({
+      version: 2,
+      workspaces: [
+        {
+          id: "ws_missing_project",
+          name: "Missing project",
+          path: missingProject,
+          workspaceKind: "project",
+          createdAt: TS,
+          lastOpenedAt: TS,
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: false,
+          yolo: false,
+        },
+        {
+          id: "ws_one_off",
+          name: "One-off chat",
+          path: oneOffChat,
+          workspaceKind: "oneOffChat",
+          createdAt: TS,
+          lastOpenedAt: TS,
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: false,
+          yolo: false,
+        },
+      ],
+      threads: [
+        {
+          id: "thread_one_off",
+          workspaceId: "ws_one_off",
+          title: "One-off thread",
+          createdAt: TS,
+          lastMessageAt: TS,
+          status: "active",
+          sessionId: null,
+          messageCount: 0,
+          lastEventSeq: 0,
+        },
+      ],
+    });
+
+    const loaded = await persistence.loadState();
+    expect(loaded.workspaces.map((workspace) => workspace.id)).toEqual(["ws_one_off"]);
+    expect(loaded.workspaces[0]?.workspaceKind).toBe("oneOffChat");
+    expect(loaded.threads.map((thread) => thread.id)).toEqual(["thread_one_off"]);
+
+    const stat = await fs.stat(oneOffChat);
+    expect(stat.isDirectory()).toBe(true);
+    if (process.platform !== "win32") {
+      expect(stat.mode & 0o777).toBe(0o700);
+    }
   });
 
   test("saveState preserves sanitized provider status snapshots", async () => {
@@ -234,6 +347,7 @@ describe("desktop persistence state validation", () => {
           shortcutEnabled: true,
           shortcutAccelerator: "Alt+Space",
         },
+        sidebarSectionOrder: ["chats", "projects"],
       },
     });
 
@@ -241,6 +355,7 @@ describe("desktop persistence state validation", () => {
     expect(loaded.desktopSettings?.quickChat?.iconEnabled).toBe(false);
     expect(loaded.desktopSettings?.quickChat?.shortcutEnabled).toBe(true);
     expect(loaded.desktopSettings?.quickChat?.shortcutAccelerator).toBe("Alt+Space");
+    expect(loaded.desktopSettings?.sidebarSectionOrder).toEqual(["chats", "projects"]);
   });
 
   test("loadState enables LM Studio UI by default when the saved provider status is already connected", async () => {
@@ -589,6 +704,8 @@ describe("desktop persistence state validation", () => {
           shortcutEnabled: false,
           shortcutAccelerator: "CommandOrControl+Shift+Space",
         },
+        archivedChatsAutoDeleteDays: 0,
+        sidebarSectionOrder: ["projects", "chats"],
       },
       desktopFeatureFlagOverrides: {},
       providerUiState: {

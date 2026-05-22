@@ -11,6 +11,9 @@ import { mock } from "bun:test";
 import { EventEmitter as NodeEventEmitter } from "node:events";
 import path from "node:path";
 
+// Define React Native global __DEV__ flag
+(globalThis as any).__DEV__ = true;
+
 const rnMobilePath = path.resolve("apps/mobile/node_modules/react-native");
 const rnRootPath = path.resolve("node_modules/react-native");
 const emcMobilePath = path.resolve("apps/mobile/node_modules/expo-modules-core");
@@ -41,6 +44,20 @@ const expoModulesCoreMockFactory = () => ({
     ) {
       this.emitter.emit(String(eventName), ...args);
     }
+  },
+  requireNativeModule: (name: string) => {
+    if (name === "ExpoSecureStore") {
+      return {
+        AFTER_FIRST_UNLOCK: 1,
+        AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY: 2,
+        ALWAYS: 3,
+        ALWAYS_THIS_DEVICE_ONLY: 4,
+        WHEN_PASSCODE_SET_THIS_DEVICE_ONLY: 5,
+        WHEN_UNLOCKED: 6,
+        WHEN_UNLOCKED_THIS_DEVICE_ONLY: 7,
+      };
+    }
+    return null;
   },
   requireOptionalNativeModule: () => null,
 });
@@ -90,6 +107,7 @@ const reactNativeMockFactory = () => {
     },
     Pressable: stubComponent("pressable"),
     Modal: stubComponent("modal"),
+    KeyboardAvoidingView: stubComponent("keyboardavoidingview"),
   };
 };
 
@@ -101,3 +119,20 @@ mock.module(rnRootPath, reactNativeMockFactory);
 mock.module("expo-modules-core", expoModulesCoreMockFactory);
 // Mock the workspace-local expo-modules-core (resolved from apps/mobile/modules/...)
 mock.module(emcMobilePath, expoModulesCoreMockFactory);
+
+// Mock expo-secure-store globally
+const essMobilePath = path.resolve("apps/mobile/node_modules/expo-secure-store");
+const secureStore: Record<string, string> = {};
+const mockSecureStore = {
+  setItemAsync: async (key: string, value: string) => {
+    secureStore[key] = value;
+  },
+  getItemAsync: async (key: string) => {
+    return secureStore[key] || null;
+  },
+  deleteItemAsync: async (key: string) => {
+    delete secureStore[key];
+  },
+};
+mock.module("expo-secure-store", () => mockSecureStore);
+mock.module(essMobilePath, () => mockSecureStore);

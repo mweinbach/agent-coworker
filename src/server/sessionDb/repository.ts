@@ -36,7 +36,11 @@ import {
 } from "./normalizers";
 
 const messagesJsonSchema = z.array(z.unknown());
-const modelStreamRawFormatSchema = z.enum(["openai-responses-v1", "google-interactions-v1"]);
+const modelStreamRawFormatSchema = z.enum([
+  "openai-responses-v1",
+  "google-interactions-v1",
+  "codex-app-server-v2",
+]);
 const researchSourcesJsonSchema = z.array(researchSourceSchema);
 const researchThoughtSummariesJsonSchema = z.array(researchThoughtSummarySchema);
 

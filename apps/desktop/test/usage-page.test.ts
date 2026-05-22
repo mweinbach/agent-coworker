@@ -80,6 +80,9 @@ describe("desktop usage page", () => {
           totalTurns: 3,
           totalPromptTokens: 3200,
           totalCompletionTokens: 900,
+          totalCachedPromptTokens: 600,
+          totalCacheWritePromptTokens: 70,
+          totalReasoningOutputTokens: 250,
           totalTokens: 4100,
           estimatedTotalCostUsd: 0.0235,
           costTrackingAvailable: true,
@@ -90,6 +93,9 @@ describe("desktop usage page", () => {
               turns: 2,
               totalPromptTokens: 2400,
               totalCompletionTokens: 700,
+              totalCachedPromptTokens: 500,
+              totalCacheWritePromptTokens: 40,
+              totalReasoningOutputTokens: 200,
               totalTokens: 3100,
               estimatedCostUsd: 0.0184,
             },
@@ -99,6 +105,9 @@ describe("desktop usage page", () => {
               turns: 1,
               totalPromptTokens: 800,
               totalCompletionTokens: 200,
+              totalCachedPromptTokens: 100,
+              totalCacheWritePromptTokens: 30,
+              totalReasoningOutputTokens: 50,
               totalTokens: 1000,
               estimatedCostUsd: 0.0051,
             },
@@ -122,6 +131,9 @@ describe("desktop usage page", () => {
           totalTurns: 2,
           totalPromptTokens: 1000,
           totalCompletionTokens: 500,
+          totalCachedPromptTokens: 50,
+          totalCacheWritePromptTokens: 20,
+          totalReasoningOutputTokens: 125,
           totalTokens: 1500,
           estimatedTotalCostUsd: 0.01,
           costTrackingAvailable: true,
@@ -132,6 +144,9 @@ describe("desktop usage page", () => {
               turns: 2,
               totalPromptTokens: 1000,
               totalCompletionTokens: 500,
+              totalCachedPromptTokens: 50,
+              totalCacheWritePromptTokens: 20,
+              totalReasoningOutputTokens: 125,
               totalTokens: 1500,
               estimatedCostUsd: 0.01,
             },
@@ -161,6 +176,9 @@ describe("desktop usage page", () => {
     expect(agg.totalTokens).toBe(5600);
     expect(agg.totalPromptTokens).toBe(4200);
     expect(agg.totalCompletionTokens).toBe(1400);
+    expect(agg.totalCachedPromptTokens).toBe(650);
+    expect(agg.totalCacheWritePromptTokens).toBe(90);
+    expect(agg.totalReasoningOutputTokens).toBe(375);
     expect(agg.totalCostUsd).toBeCloseTo(0.0335, 4);
     expect(agg.costTrackingAvailable).toBe(true);
     expect(agg.providers.length).toBe(2);
@@ -172,11 +190,17 @@ describe("desktop usage page", () => {
     expect(openai.models[0].turns).toBe(4);
     expect(openai.models[0].sessions).toBe(2);
     expect(openai.models[0].totalTokens).toBe(4600);
+    expect(openai.models[0].totalCachedPromptTokens).toBe(550);
+    expect(openai.models[0].totalCacheWritePromptTokens).toBe(60);
+    expect(openai.models[0].totalReasoningOutputTokens).toBe(325);
     expect(openai.models[0].estimatedCostUsd).toBeCloseTo(0.0284, 4);
 
     const google = agg.providers.find((p: any) => p.provider === "google")!;
     expect(google.models.length).toBe(1);
     expect(google.models[0].sessions).toBe(1);
+    expect(google.models[0].totalCachedPromptTokens).toBe(100);
+    expect(google.models[0].totalCacheWritePromptTokens).toBe(30);
+    expect(google.models[0].totalReasoningOutputTokens).toBe(50);
   });
 
   test("renders aggregate usage breakdown with provider groups and the estimate notice popup", () => {
@@ -189,6 +213,9 @@ describe("desktop usage page", () => {
           totalTokens: 5600,
           totalPromptTokens: 4200,
           totalCompletionTokens: 1400,
+          totalCachedPromptTokens: 650,
+          totalCacheWritePromptTokens: 90,
+          totalReasoningOutputTokens: 375,
           totalTurns: 5,
           totalSessions: 2,
           providers: [
@@ -202,11 +229,17 @@ describe("desktop usage page", () => {
                   sessions: 2,
                   totalPromptTokens: 3400,
                   totalCompletionTokens: 1200,
+                  totalCachedPromptTokens: 550,
+                  totalCacheWritePromptTokens: 60,
+                  totalReasoningOutputTokens: 325,
                   totalTokens: 4600,
                   estimatedCostUsd: 0.0284,
                 },
               ],
               totalTokens: 4600,
+              totalCachedPromptTokens: 550,
+              totalCacheWritePromptTokens: 60,
+              totalReasoningOutputTokens: 325,
               totalTurns: 4,
               estimatedCostUsd: 0.0284,
             },
@@ -220,11 +253,17 @@ describe("desktop usage page", () => {
                   sessions: 1,
                   totalPromptTokens: 800,
                   totalCompletionTokens: 200,
+                  totalCachedPromptTokens: 100,
+                  totalCacheWritePromptTokens: 30,
+                  totalReasoningOutputTokens: 50,
                   totalTokens: 1000,
                   estimatedCostUsd: 0.0051,
                 },
               ],
               totalTokens: 1000,
+              totalCachedPromptTokens: 100,
+              totalCacheWritePromptTokens: 30,
+              totalReasoningOutputTokens: 50,
               totalTurns: 1,
               estimatedCostUsd: 0.0051,
             },
@@ -242,6 +281,12 @@ describe("desktop usage page", () => {
     expect(html).toContain("$0.03");
     expect(html).toContain("How estimates work");
     expect(html).toContain("5.6k");
+    expect(html).toContain("650 cache read");
+    expect(html).toContain("90 cache write");
+    expect(html).toContain("375 reasoning");
+    expect(html).toContain("Cache read:");
+    expect(html).toContain("Cache write:");
+    expect(html).toContain("Reasoning:");
   });
 
   test("renders empty state when no usage data exists", () => {
@@ -253,6 +298,9 @@ describe("desktop usage page", () => {
           totalTokens: 0,
           totalPromptTokens: 0,
           totalCompletionTokens: 0,
+          totalCachedPromptTokens: 0,
+          totalCacheWritePromptTokens: 0,
+          totalReasoningOutputTokens: 0,
           totalTurns: 0,
           totalSessions: 0,
           providers: [],
@@ -273,6 +321,9 @@ describe("desktop usage page", () => {
           totalTokens: 2400,
           totalPromptTokens: 2000,
           totalCompletionTokens: 400,
+          totalCachedPromptTokens: 0,
+          totalCacheWritePromptTokens: 0,
+          totalReasoningOutputTokens: 0,
           totalTurns: 2,
           totalSessions: 1,
           providers: [
@@ -286,11 +337,17 @@ describe("desktop usage page", () => {
                   sessions: 1,
                   totalPromptTokens: 2000,
                   totalCompletionTokens: 400,
+                  totalCachedPromptTokens: 0,
+                  totalCacheWritePromptTokens: 0,
+                  totalReasoningOutputTokens: 0,
                   totalTokens: 2400,
                   estimatedCostUsd: null,
                 },
               ],
               totalTokens: 2400,
+              totalCachedPromptTokens: 0,
+              totalCacheWritePromptTokens: 0,
+              totalReasoningOutputTokens: 0,
               totalTurns: 2,
               estimatedCostUsd: null,
             },

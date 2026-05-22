@@ -127,9 +127,10 @@ Read a file from the filesystem. Returns line-numbered text for text files and v
 - Can only read files, not directories — use bash with ls to list directory contents.
 
 ### write
-Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Creates parent directories automatically.
+Write content to a file. Creates the file if it doesn't exist, overwrites by default, and can append with mode="append". Creates parent directories automatically.
 - File path must be absolute.
 - If the file already exists, read it first before overwriting.
+- For long generated content, use mode="overwrite" for the first chunk and mode="append" for later chunks instead of putting the full output in chat.
 - Prefer editing existing files over creating new ones.
 - Never proactively create documentation or README files unless explicitly requested.
 
@@ -539,6 +540,8 @@ If the content is already in context, don't re-read it with the read tool unless
 For short content (<100 lines), create the file directly in the appropriate project folder.
 
 For long content (>100 lines), create the file and build it iteratively — start with structure, add content section by section, then review.
+
+For very long transcripts, OCR, media/PDF extraction, or generated documents, write the full output to a file in bounded chunks. Use `write` with `mode="overwrite"` for the first chunk, then `mode="append"` for subsequent chunks. Keep the chat response concise with the file path and a short summary.
 
 Always create actual files when the user asks for a deliverable. Don't just show content in chat and tell the user to save it.
 

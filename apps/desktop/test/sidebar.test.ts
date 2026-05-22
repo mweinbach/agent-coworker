@@ -18,6 +18,15 @@ describe("desktop sidebar helpers", () => {
     });
   });
 
+  test("caps visible threads at 5 when explicit limit of 5 is provided", () => {
+    const threads = Array.from({ length: 12 }, (_, index) => ({ id: `thread-${index}` }));
+
+    expect(getVisibleSidebarThreads(threads, false, 5)).toEqual({
+      visibleThreads: threads.slice(0, 5),
+      hiddenThreadCount: 7,
+    });
+  });
+
   test("returns all threads when the overflow list is expanded", () => {
     const threads = Array.from({ length: 12 }, (_, index) => ({ id: `thread-${index}` }));
 

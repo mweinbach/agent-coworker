@@ -148,4 +148,50 @@ describe("H3 mobile server pairing", () => {
       await server.stop();
     }
   });
+
+  test("allows only one concurrent pairing request to consume a nonce", async () => {
+    const storeRoot = await createTempRoot();
+    const runtime = {
+      openHttpConnection() {},
+      handleDecodedMessage() {},
+      closeConnection() {},
+    } satisfies Partial<AgentServerRuntime>;
+    const server = await startH3MobileServer({
+      runtime: runtime as AgentServerRuntime,
+      hostname: "127.0.0.1",
+      hostHints: ["127.0.0.1"],
+      storeRootPath: storeRoot,
+      enableH3: false,
+    });
+
+    try {
+      const buildPairRequest = (deviceId: string) =>
+        fetchH3(`${server.url}/pair`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            ticket: server.ticketUrl,
+            nonce: server.nonce,
+            deviceId,
+            identityPub: `${deviceId}-identity`,
+            displayName: deviceId,
+          }),
+        });
+
+      const responses = await Promise.all([
+        buildPairRequest("phone-1"),
+        buildPairRequest("phone-2"),
+      ]);
+      const statuses = responses.map((response) => response.status).sort();
+
+      expect(statuses).toEqual([200, 401]);
+      await expect(loadH3PairingStoreState(storeRoot)).resolves.toMatchObject({
+        version: 1,
+        trustedDevices: [expect.objectContaining({ deviceId: expect.stringMatching(/^phone-/) })],
+      });
+      expect((await loadH3PairingStoreState(storeRoot)).trustedDevices).toHaveLength(1);
+    } finally {
+      await server.stop();
+    }
+  });
 });

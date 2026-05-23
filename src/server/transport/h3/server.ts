@@ -19,6 +19,7 @@ import {
   type H3TrustedDeviceRecord,
   loadH3PairingStoreState,
   rememberH3TrustedDevice,
+  verifyH3PairingNonce,
   verifyH3SessionToken,
 } from "./pairing";
 
@@ -384,9 +385,10 @@ export async function startH3MobileServer(
         return jsonResponse({ error: "Invalid pairing request." }, { status: 400 });
       }
       const session = pairingSessions.get(nonce);
-      if (!session || decoded.nonce !== nonce || session.expiresAt < Date.now()) {
+      if (!session || decoded.nonce !== nonce || !verifyH3PairingNonce(session, nonce)) {
         return jsonResponse({ error: "Pairing session expired." }, { status: 401 });
       }
+      pairingSessions.delete(nonce);
       const sessionToken = crypto.randomUUID() + crypto.randomUUID().replaceAll("-", "");
       const trustedDevice = await rememberH3TrustedDevice(options.storeRootPath, {
         deviceId,
@@ -394,7 +396,6 @@ export async function startH3MobileServer(
         displayName,
         sessionToken,
       });
-      pairingSessions.delete(nonce);
       latestTrustedDevice = trustedDevice;
       return jsonResponse({
         sessionToken,

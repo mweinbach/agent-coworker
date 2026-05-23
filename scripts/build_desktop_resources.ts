@@ -15,6 +15,7 @@ import {
   shouldUseBundledBunRuntime,
 } from "../apps/desktop/electron/services/sidecar";
 import {
+  buildBunBundle,
   copyDir,
   ensureBundledBunRuntime,
   ensureBundledCodexAppServer,
@@ -391,25 +392,21 @@ async function main() {
     if (useBundledBunRuntime) {
       const bundledEntrypointDir = path.dirname(bundledEntrypointPath);
       await fs.mkdir(bundledEntrypointDir, { recursive: true });
-      await runCommand(
-        [
-          "bun",
-          "build",
+      const previousDesktopBundleEnv = process.env.COWORK_DESKTOP_BUNDLE;
+      process.env.COWORK_DESKTOP_BUNDLE = "1";
+      try {
+        await buildBunBundle({
           entry,
-          "--outfile",
-          bundledEntrypointPath,
-          "--env",
-          "COWORK_DESKTOP_BUNDLE*",
-          "--target",
-          "bun",
-          "--minify",
-          "--sourcemap=none",
-        ],
-        {
-          cwd: root,
-          env: { ...process.env, COWORK_DESKTOP_BUNDLE: "1" },
-        },
-      );
+          env: "COWORK_DESKTOP_BUNDLE*",
+          outfile: bundledEntrypointPath,
+        });
+      } finally {
+        if (previousDesktopBundleEnv === undefined) {
+          delete process.env.COWORK_DESKTOP_BUNDLE;
+        } else {
+          process.env.COWORK_DESKTOP_BUNDLE = previousDesktopBundleEnv;
+        }
+      }
 
       const { executablePath, version } = await ensureBundledBunRuntime(root, target);
       await fs.copyFile(executablePath, bundledBunPath);

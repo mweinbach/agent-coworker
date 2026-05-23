@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 export type BuildTarget = {
@@ -132,6 +133,68 @@ export async function runCommand(
   const exitCode = await proc.exited;
   if (exitCode !== 0) {
     throw new Error(`Command failed (${exitCode}): ${command.join(" ")}`);
+  }
+}
+
+function formatBuildLogs(logs: Bun.BuildMessage[]): string {
+  return logs.map((log) => log.message).join("\n");
+}
+
+function isDotNotationEnvName(name: string): boolean {
+  return /^[$A-Z_a-z][$\w]*$/.test(name);
+}
+
+function buildEnvDefines(
+  mode: "inline" | "disable" | `${string}*`,
+  env: NodeJS.ProcessEnv = process.env,
+): Record<string, string> | undefined {
+  if (mode === "disable") {
+    return undefined;
+  }
+
+  const prefix = mode === "inline" ? "" : mode.slice(0, -1);
+  const defines: Record<string, string> = {};
+  for (const [name, value] of Object.entries(env)) {
+    if (value === undefined || !name.startsWith(prefix) || !isDotNotationEnvName(name)) {
+      continue;
+    }
+    defines[`process.env.${name}`] = JSON.stringify(value);
+  }
+
+  return Object.keys(defines).length > 0 ? defines : undefined;
+}
+
+export async function buildBunBundle(options: {
+  entry: string;
+  outfile: string;
+  env: "inline" | "disable" | `${string}*`;
+  minify?: boolean;
+}): Promise<void> {
+  const outdir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-bun-bundle-"));
+  try {
+    const result = await Bun.build({
+      define: buildEnvDefines(options.env),
+      entrypoints: [options.entry],
+      env: options.env,
+      minify: options.minify ?? true,
+      outdir,
+      sourcemap: "none",
+      target: "bun",
+    });
+    if (!result.success) {
+      const logs = formatBuildLogs(result.logs);
+      throw new Error(`Bun bundle failed${logs ? `:\n${logs}` : ""}`);
+    }
+
+    const output = result.outputs.find((artifact) => artifact.kind === "entry-point");
+    if (!output) {
+      throw new Error(`Bun bundle did not produce an entry-point output for ${options.entry}`);
+    }
+
+    await fs.mkdir(path.dirname(options.outfile), { recursive: true });
+    await fs.copyFile(output.path, options.outfile);
+  } finally {
+    await rmrf(outdir);
   }
 }
 

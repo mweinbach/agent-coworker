@@ -151,6 +151,12 @@ function managedSofficePath(version = DEFAULT_LIBREOFFICE_VERSION) {
 
 function candidateSystemSofficePaths() {
   const candidates = [];
+  const pathEntries = (process.env.PATH || "")
+    .split(path.delimiter)
+    .filter((entry) => entry && path.resolve(entry) !== path.resolve(shimDir));
+  for (const entry of pathEntries) {
+    candidates.push(path.join(entry, commandLineSofficeName()));
+  }
   if (process.platform === "darwin") {
     candidates.push("/Applications/LibreOffice.app/Contents/MacOS/soffice");
   } else if (process.platform === "win32") {
@@ -163,12 +169,6 @@ function candidateSystemSofficePaths() {
         candidates.push(path.join(programFilesDir, "LibreOffice", "program", "soffice.com"));
       }
     }
-  }
-  const pathEntries = (process.env.PATH || "")
-    .split(path.delimiter)
-    .filter((entry) => entry && path.resolve(entry) !== path.resolve(shimDir));
-  for (const entry of pathEntries) {
-    candidates.push(path.join(entry, commandLineSofficeName()));
   }
   return [...new Set(candidates)];
 }

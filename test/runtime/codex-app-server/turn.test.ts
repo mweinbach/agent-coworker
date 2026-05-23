@@ -165,7 +165,7 @@ describe("codex app-server turn lifecycle", () => {
   });
 
   test.serial(
-    "preserves fresh conversation history and attachment order in text_elements",
+    "preserves fresh conversation history and sends image attachments as app-server inputs",
     async () => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-attachments-"));
       const capturePath = path.join(dir, "requests.jsonl");
@@ -184,6 +184,12 @@ describe("codex app-server turn lifecycle", () => {
               { type: "text", text: "Look at these" },
               { type: "image", mimeType: "image/png", data: "abc", filename: "chart.png" },
               { type: "file", mimeType: "text/plain", data: "inline", filename: "note.txt" },
+              {
+                type: "file",
+                mimeType: "image/jpeg",
+                path: "/tmp/uploaded.jpg",
+                filename: "uploaded.jpg",
+              },
               { type: "file", path: "/tmp/uploaded.pdf", filename: "uploaded.pdf" },
             ],
           },
@@ -200,11 +206,15 @@ describe("codex app-server turn lifecycle", () => {
         {
           type: "text",
           text: "User: Look at these",
-          text_elements: [
-            { type: "image", mimeType: "image/png", data: "abc", filename: "chart.png" },
-            { type: "file", mimeType: "text/plain", data: "inline", filename: "note.txt" },
-            { type: "file", path: "/tmp/uploaded.pdf", filename: "uploaded.pdf" },
-          ],
+          text_elements: [],
+        },
+        {
+          type: "image",
+          url: "data:image/png;base64,abc",
+        },
+        {
+          type: "localImage",
+          path: "/tmp/uploaded.jpg",
         },
       ]);
     },

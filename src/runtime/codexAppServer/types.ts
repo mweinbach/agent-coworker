@@ -38,11 +38,23 @@ export type CodexSandboxPolicy =
     };
 
 export type CodexTextElement = Record<string, unknown>;
-export type CodexTurnInputPart = {
-  type: "text";
-  text: string;
-  text_elements: CodexTextElement[];
-};
+export type CodexImageDetail = "low" | "high" | "original";
+export type CodexTurnInputPart =
+  | {
+      type: "text";
+      text: string;
+      text_elements: CodexTextElement[];
+    }
+  | {
+      type: "image";
+      url: string;
+      detail?: CodexImageDetail;
+    }
+  | {
+      type: "localImage";
+      path: string;
+      detail?: CodexImageDetail;
+    };
 
 export type CodexDynamicToolSpec = {
   name: string;

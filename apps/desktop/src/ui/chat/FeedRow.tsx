@@ -104,7 +104,7 @@ export const FeedRow = memo(function FeedRow(props: {
                       </div>
                     ) : null}
                     {fileNames.length > 0 && (
-                      <div className="flex flex-wrap gap-2 mt-1">
+                      <div className="flex min-w-0 flex-wrap gap-2 mt-1">
                         {fileNames.map((fileName) => {
                           const isAudio = /\.(mp3|wav|ogg|m4a|aac|flac)$/i.test(fileName);
                           const isImage = /\.(png|jpe?g|gif|webp|svg)$/i.test(fileName);
@@ -120,11 +120,11 @@ export const FeedRow = memo(function FeedRow(props: {
                           return (
                             <div
                               key={fileName}
-                              className="inline-flex items-center gap-2 rounded-lg border border-border/40 bg-muted/40 px-2.5 py-1.5 text-xs shadow-sm"
+                              className="inline-flex min-w-0 max-w-full items-center gap-2 overflow-hidden rounded-lg border border-border/40 bg-muted/40 px-2.5 py-1.5 text-xs shadow-sm"
                             >
                               <IconComponent className="size-4 text-muted-foreground shrink-0" />
                               <span
-                                className="font-medium text-foreground truncate max-w-[16rem]"
+                                className="min-w-0 truncate font-medium text-foreground"
                                 title={fileName}
                               >
                                 {fileName}
@@ -192,10 +192,12 @@ export const FeedRow = memo(function FeedRow(props: {
 
   if (item.kind === "error") {
     return (
-      <Card className="max-w-3xl border-destructive/40 bg-destructive/10">
+      <Card className="w-full min-w-0 max-w-3xl overflow-hidden border-destructive/40 bg-destructive/10">
         <CardContent className="select-text p-3 text-sm">
           <div className="mb-1 font-semibold uppercase tracking-wide text-destructive">Error</div>
-          <div>{item.message}</div>
+          <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+            {item.message}
+          </div>
         </CardContent>
       </Card>
     );

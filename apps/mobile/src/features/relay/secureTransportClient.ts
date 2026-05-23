@@ -91,6 +91,10 @@ type ActiveSession = {
   spkiSha256: string;
 };
 
+type StoredActiveSession = {
+  macDeviceId: string;
+};
+
 function parseJsonObject(value: string | null): Record<string, unknown> | null {
   if (!value) return null;
   try {
@@ -148,15 +152,13 @@ function parseTrustedDesktopRecords(value: string | null): TrustedDesktopRecord[
   }
 }
 
-function parseActiveSession(value: string | null): Partial<ActiveSession> | null {
+function parseActiveSession(value: string | null): StoredActiveSession | null {
   const record = parseJsonObject(value);
   if (!record) return null;
+  const macDeviceId = readString(record, "macDeviceId");
+  if (!macDeviceId) return null;
   return {
-    macDeviceId: readString(record, "macDeviceId"),
-    endpointUrl: readString(record, "endpointUrl"),
-    sessionToken: readString(record, "sessionToken"),
-    certSha256: readString(record, "certSha256"),
-    spkiSha256: readString(record, "spkiSha256"),
+    macDeviceId,
   };
 }
 
@@ -418,16 +420,7 @@ export class SecureTransportClient {
     const trusted = active
       ? this.trustedDesktops.find((entry) => entry.macDeviceId === active.macDeviceId)
       : null;
-    this.activeSession =
-      active?.macDeviceId && active.endpointUrl && active.sessionToken && trusted
-        ? {
-            macDeviceId: active.macDeviceId,
-            endpointUrl: active.endpointUrl,
-            sessionToken: active.sessionToken,
-            certSha256: active.certSha256 ?? trusted.certSha256,
-            spkiSha256: active.spkiSha256 ?? trusted.spkiSha256,
-          }
-        : null;
+    this.activeSession = active && trusted ? activeSessionFromTrustedDesktop(trusted) : null;
   }
 
   private async persistTrustedState(): Promise<void> {
@@ -446,7 +439,10 @@ export class SecureTransportClient {
       SecureStore.setItemAsync(TRUSTED_DESKTOPS_KEY, JSON.stringify(recordsWithoutTokens)),
       ...tokenWrites,
       this.activeSession
-        ? SecureStore.setItemAsync(ACTIVE_SESSION_KEY, JSON.stringify(this.activeSession))
+        ? SecureStore.setItemAsync(
+            ACTIVE_SESSION_KEY,
+            JSON.stringify({ macDeviceId: this.activeSession.macDeviceId }),
+          )
         : SecureStore.deleteItemAsync(ACTIVE_SESSION_KEY),
     ]);
   }
@@ -541,6 +537,16 @@ function toPublicTrustedDesktop(entry: TrustedDesktopRecord): RelayTrustedDeskto
     publicKey: entry.publicKey,
     fingerprint: entry.fingerprint,
     lastConnectedAt: entry.lastConnectedAt,
+  };
+}
+
+function activeSessionFromTrustedDesktop(entry: TrustedDesktopRecord): ActiveSession {
+  return {
+    macDeviceId: entry.macDeviceId,
+    endpointUrl: entry.endpointUrl,
+    sessionToken: entry.sessionToken,
+    certSha256: entry.certSha256,
+    spkiSha256: entry.spkiSha256,
   };
 }
 

@@ -405,15 +405,11 @@ describe("mobile secure transport client", () => {
     });
     expect(JSON.parse(secureStoreValues.get("cowork.h3.activeSession.v1") ?? "null")).toEqual({
       macDeviceId: "desktop-identity",
-      endpointUrl: "https://192.168.1.10:9443",
-      sessionToken: "session-token",
-      certSha256: "a".repeat(64),
-      spkiSha256: "b".repeat(43),
     });
   });
 
   test("falls back to empty trusted state when secure store JSON is malformed", async () => {
-    secureStoreValues.set("cowork.h3.trustedDesktops.v1", "{not-json");
+    secureStoreValues.set("cowork.h3.trustedDesktops.v2", "{not-json");
     secureStoreValues.set(
       "cowork.h3.activeSession.v1",
       JSON.stringify({
@@ -436,7 +432,7 @@ describe("mobile secure transport client", () => {
 
   test("ignores unexpected secure store shapes during restore", async () => {
     secureStoreValues.set(
-      "cowork.h3.trustedDesktops.v1",
+      "cowork.h3.trustedDesktops.v2",
       JSON.stringify({ macDeviceId: "desktop-identity" }),
     );
     secureStoreValues.set("cowork.h3.activeSession.v1", JSON.stringify(["not", "an", "object"]));
@@ -449,6 +445,63 @@ describe("mobile secure transport client", () => {
       connectedMacDeviceId: null,
       relayUrl: null,
       trustedDesktops: [],
+    });
+  });
+
+  test("restores active sessions from trusted desktop records instead of stored endpoint details", async () => {
+    const streamRequests: Array<{
+      url: string;
+      headers?: Record<string, string>;
+      certSha256: string;
+      spkiSha256: string;
+    }> = [];
+    secureStoreValues.set(
+      "cowork.h3.trustedDesktops.v2",
+      JSON.stringify([
+        {
+          macDeviceId: "desktop-identity",
+          relayUrl: "https://trusted.example:9443",
+          displayName: "Cowork Desktop",
+          publicKey: "desktop-identity",
+          fingerprint: "trusted-fingerprint",
+          lastConnectedAt: "2026-05-23T00:00:00.000Z",
+          endpointUrl: "https://trusted.example:9443",
+          certSha256: "c".repeat(64),
+          spkiSha256: "d".repeat(43),
+        },
+      ]),
+    );
+    secureStoreValues.set("cowork_session_token_desktop-identity", "trusted-token");
+    secureStoreValues.set(
+      "cowork.h3.activeSession.v1",
+      JSON.stringify({
+        macDeviceId: "desktop-identity",
+        endpointUrl: "https://attacker.example:9443",
+        sessionToken: "attacker-token",
+        certSha256: "e".repeat(64),
+        spkiSha256: "f".repeat(43),
+      }),
+    );
+    __internal.setPinnedHttpsStreamForTesting(
+      mock(async (request) => {
+        streamRequests.push(request);
+        return () => {};
+      }),
+    );
+
+    const snapshot = await new SecureTransportClient().getSnapshot();
+    await waitFor(() => streamRequests.length === 1);
+
+    expect(snapshot).toMatchObject({
+      status: "connected",
+      connectedMacDeviceId: "desktop-identity",
+      relayUrl: "https://trusted.example:9443",
+    });
+    expect(streamRequests[0]).toMatchObject({
+      url: "https://trusted.example:9443/events",
+      headers: { authorization: "Bearer trusted-token" },
+      certSha256: "c".repeat(64),
+      spkiSha256: "d".repeat(43),
     });
   });
 });

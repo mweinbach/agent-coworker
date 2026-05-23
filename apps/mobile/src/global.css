@@ -7,7 +7,7 @@
   /* Palette Primitives */
   --color-light-app-bg: #dde1ca;
   --color-light-sidebar-bg: #e1e4cd;
-  --color-light-panel-bg: #f4f5e9;
+  --color-light-panel-bg: #f8f9f2;
   --color-light-text-base: #232a18;
   --color-light-muted-base: #556041;
   --color-light-accent-base: #6f8042;
@@ -15,7 +15,7 @@
   --color-light-danger-base: #bb3e3e;
   --color-light-success-base: #1ea155;
   --color-light-border-base: rgba(62, 74, 40, 0.12);
-  --color-light-shadow-surface-base: 0px 1px 2px rgba(0, 0, 0, 0.035);
+  --color-light-shadow-surface-base: 0px 1px 3px rgba(0, 0, 0, 0.05), inset 0px 1px 0px rgba(255, 255, 255, 0.4);
   --color-light-shadow-overlay-base: 0px 12px 30px rgba(0, 0, 0, 0.1);
 
   --color-dark-app-bg: #171d13;
@@ -28,7 +28,7 @@
   --color-dark-danger-base: #e86060;
   --color-dark-success-base: #3fbb74;
   --color-dark-border-base: rgba(238, 241, 220, 0.14);
-  --color-dark-shadow-surface-base: 0px 1px 2px rgba(0, 0, 0, 0.24);
+  --color-dark-shadow-surface-base: 0px 1px 2px rgba(0, 0, 0, 0.24), inset 0px 1px 0px rgba(255, 255, 255, 0.08);
   --color-dark-shadow-overlay-base: 0px 12px 30px rgba(0, 0, 0, 0.35);
 
   /* Semantic Default (Light Mode) */

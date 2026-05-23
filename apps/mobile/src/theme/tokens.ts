@@ -111,7 +111,7 @@ export const palette = {
   light: {
     appBg: "#dde1ca",
     sidebarBg: "#e1e4cd",
-    panelBg: "#f4f5e9",
+    panelBg: "#f8f9f2",
     textBase: "#232a18",
     mutedBase: "#556041",
     accentBase: "#6f8042",
@@ -123,7 +123,7 @@ export const palette = {
     warningForegroundBase: "#232a18",
     borderBase: "rgba(62, 74, 40, 0.12)",
     glassBorder: "rgba(62, 74, 40, 0.18)",
-    shadowSurfaceBase: "0 1px 2px rgba(0, 0, 0, 0.035)",
+    shadowSurfaceBase: "0 1px 3px rgba(0, 0, 0, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.4)",
     shadowOverlayBase: "0 12px 30px rgba(0, 0, 0, 0.1)",
   },
   dark: {
@@ -141,7 +141,7 @@ export const palette = {
     warningForegroundBase: "#1a2012",
     borderBase: "rgba(238, 241, 220, 0.14)",
     glassBorder: "rgba(238, 241, 220, 0.16)",
-    shadowSurfaceBase: "0 1px 2px rgba(0, 0, 0, 0.24)",
+    shadowSurfaceBase: "0 1px 2px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.08)",
     shadowOverlayBase: "0 12px 30px rgba(0, 0, 0, 0.35)",
   },
 } as const;

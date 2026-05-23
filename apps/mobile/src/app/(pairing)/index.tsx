@@ -1,6 +1,6 @@
 import { Link, Stack, useRouter } from "expo-router";
 import { useEffect } from "react";
-import { Pressable, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 import Animated, {
   FadeInDown,
   FadeInUp,
@@ -29,9 +29,10 @@ type FeatureItemProps = {
   title: string;
   description: string;
   index: number;
+  isLast?: boolean;
 };
 
-function FeatureItem({ icon, title, description, index }: FeatureItemProps) {
+function FeatureItem({ icon, title, description, index, isLast = false }: FeatureItemProps) {
   const theme = useAppTheme();
 
   return (
@@ -39,39 +40,37 @@ function FeatureItem({ icon, title, description, index }: FeatureItemProps) {
       <View
         style={{
           flexDirection: "row",
-          alignItems: "center",
-          gap: 14,
-          borderRadius: 22,
-          borderCurve: "continuous",
-          borderWidth: 1,
-          borderColor: theme.borderMuted,
-          backgroundColor: theme.surfaceMuted,
-          padding: 14,
+          alignItems: "flex-start",
+          gap: 12,
+          borderBottomWidth: isLast ? 0 : StyleSheet.hairlineWidth,
+          borderBottomColor: theme.borderMuted,
+          paddingVertical: 12,
         }}
       >
         <View
           style={{
-            width: 38,
-            height: 38,
-            borderRadius: 12,
+            width: 34,
+            height: 34,
+            borderRadius: 9,
             borderCurve: "continuous",
-            backgroundColor: theme.surfaceElevated,
+            backgroundColor: theme.surfaceMuted,
             alignItems: "center",
             justifyContent: "center",
+            marginTop: 1,
           }}
         >
-          <SFSymbol name={icon} size={19} color={theme.primary} />
+          <SFSymbol name={icon} size={18} color={theme.primary} />
         </View>
-        <View style={{ flex: 1, gap: 2 }}>
-          <Text selectable style={{ color: theme.text, fontSize: 15, fontWeight: "700" }}>
+        <View style={{ flex: 1, gap: 3 }}>
+          <Text selectable style={{ color: theme.text, fontSize: 14, fontWeight: "700" }}>
             {title}
           </Text>
           <Text
             selectable
             style={{
               color: theme.textSecondary,
-              fontSize: 13,
-              lineHeight: 18,
+              fontSize: 12,
+              lineHeight: 17,
             }}
           >
             {description}
@@ -159,12 +158,13 @@ function PrimaryButton({
         flexDirection: "row",
         alignItems: "center",
         gap: 8,
-        borderRadius: 16,
+        minHeight: 44,
+        borderRadius: 10,
         borderCurve: "continuous",
         backgroundColor: pressed ? theme.primaryMuted : theme.primary,
-        paddingHorizontal: 18,
-        paddingVertical: 14,
-        boxShadow: "0 10px 24px rgba(4, 17, 16, 0.18)",
+        paddingHorizontal: 16,
+        paddingVertical: 12,
+        boxShadow: theme.shadow,
       })}
     >
       {icon && <SFSymbol name={icon} size={18} color={theme.primaryText} />}
@@ -193,13 +193,14 @@ function SecondaryButton({
         flexDirection: "row",
         alignItems: "center",
         gap: 8,
-        borderRadius: 16,
+        minHeight: 44,
+        borderRadius: 10,
         borderCurve: "continuous",
         borderWidth: 1,
         borderColor: theme.border,
         backgroundColor: pressed ? theme.surfaceMuted : theme.surfaceElevated,
-        paddingHorizontal: 18,
-        paddingVertical: 14,
+        paddingHorizontal: 16,
+        paddingVertical: 12,
       })}
     >
       {icon && <SFSymbol name={icon} size={18} color={theme.text} />}
@@ -345,18 +346,18 @@ export default function PairingIndexRoute() {
         <Animated.View entering={FadeInDown.duration(500)} style={heroAnimatedStyle}>
           <View
             style={{
-              gap: 18,
+              gap: 16,
               overflow: "hidden",
-              borderRadius: 32,
+              borderRadius: 18,
               borderCurve: "continuous",
-              backgroundColor: theme.surfaceElevated,
+              backgroundColor: theme.surface,
               borderWidth: 1,
-              borderColor: theme.borderMuted,
-              padding: 22,
+              borderColor: theme.border,
+              padding: 18,
               boxShadow: theme.shadow,
             }}
           >
-            <View style={{ gap: 14 }}>
+            <View style={{ gap: 12 }}>
               <View
                 style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 10 }}
               >
@@ -364,20 +365,23 @@ export default function PairingIndexRoute() {
                   style={{
                     flexDirection: "row",
                     alignItems: "center",
-                    gap: 8,
+                    gap: 7,
                     borderRadius: 999,
                     borderCurve: "continuous",
-                    backgroundColor: theme.surfaceMuted,
+                    backgroundColor: theme.surfaceElevated,
                     borderWidth: 1,
                     borderColor: theme.borderMuted,
-                    paddingHorizontal: 12,
-                    paddingVertical: 7,
+                    paddingHorizontal: 10,
+                    paddingVertical: 6,
                   }}
                 >
-                  <SFSymbol
-                    name={isConnected ? "checkmark.shield.fill" : "questionmark"}
-                    size={16}
-                    color={theme.text}
+                  <View
+                    style={{
+                      width: 7,
+                      height: 7,
+                      borderRadius: 999,
+                      backgroundColor: isConnected ? theme.success : theme.textTertiary,
+                    }}
                   />
                   <Text
                     selectable
@@ -397,11 +401,11 @@ export default function PairingIndexRoute() {
                     style={{
                       borderRadius: 999,
                       borderCurve: "continuous",
-                      backgroundColor: theme.surfaceMuted,
+                      backgroundColor: theme.surfaceElevated,
                       borderWidth: 1,
                       borderColor: theme.borderMuted,
-                      paddingHorizontal: 12,
-                      paddingVertical: 7,
+                      paddingHorizontal: 10,
+                      paddingVertical: 6,
                     }}
                   >
                     <Text
@@ -419,15 +423,14 @@ export default function PairingIndexRoute() {
                 ) : null}
               </View>
 
-              <View style={{ gap: 10 }}>
+              <View style={{ gap: 8 }}>
                 <Text
                   selectable
                   style={{
                     color: theme.text,
-                    fontSize: 32,
-                    lineHeight: 36,
+                    fontSize: 27,
+                    lineHeight: 31,
                     fontWeight: "800",
-                    letterSpacing: -0.8,
                   }}
                 >
                   {hero.title}
@@ -436,8 +439,8 @@ export default function PairingIndexRoute() {
                   selectable
                   style={{
                     color: theme.textSecondary,
-                    fontSize: 15,
-                    lineHeight: 22,
+                    fontSize: 14,
+                    lineHeight: 20,
                   }}
                 >
                   {hero.body}
@@ -445,7 +448,7 @@ export default function PairingIndexRoute() {
               </View>
             </View>
 
-            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
               <Link href="/(pairing)/scan" asChild>
                 <PrimaryButton icon="qrcode">Scan QR Code</PrimaryButton>
               </Link>
@@ -467,7 +470,13 @@ export default function PairingIndexRoute() {
               ) : null}
             </View>
 
-            <View style={{ flexDirection: "column", gap: 10 }}>
+            <View
+              style={{
+                borderTopWidth: StyleSheet.hairlineWidth,
+                borderTopColor: theme.borderMuted,
+                paddingTop: 2,
+              }}
+            >
               <FeatureItem
                 index={0}
                 icon="bolt.fill"
@@ -485,6 +494,7 @@ export default function PairingIndexRoute() {
                 icon="touchid"
                 title="One-tap reconnects"
                 description="Trusted desktops come back quickly when you return."
+                isLast
               />
             </View>
           </View>

@@ -25,7 +25,7 @@ describe("mobile theme tokens", () => {
 
   test("light palette mirrors desktop primitives", () => {
     expect(palette.light.appBg).toBe("#dde1ca");
-    expect(palette.light.panelBg).toBe("#f4f5e9");
+    expect(palette.light.panelBg).toBe("#f8f9f2");
     expect(palette.light.accentBase).toBe("#6f8042");
     expect(palette.light.textBase).toBe("#232a18");
   });
@@ -47,6 +47,7 @@ describe("mobile theme tokens", () => {
     expect(semanticTokens.light.surfaceMutedFill).toBe(alpha(palette.light.textBase, 0.06));
     expect(semanticTokens.light.borderSubtle).toBe(alpha(palette.light.borderBase, 0.76));
     expect(semanticTokens.light.accent).toBe(palette.light.accentBase);
+    expect(semanticTokens.light.shadowSurface).toContain("inset 0 1px 0");
     expect(semanticTokens.dark.surfaceCard).toBe(mix(palette.dark.panelBg, palette.dark.appBg, 94));
     expect(semanticTokens.dark.accent).toBe(palette.dark.accentBase);
   });

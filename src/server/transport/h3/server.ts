@@ -209,7 +209,7 @@ async function dispatchHttpRpcPayload(
     );
   }
   if (!("method" in message) || !("id" in message)) {
-    return jsonResponse({ ok: true }, { status: 202 });
+    return new Response(null, { status: 202 });
   }
   return jsonResponse(response ?? {});
 }

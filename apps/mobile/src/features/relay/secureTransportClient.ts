@@ -391,6 +391,9 @@ export class SecureTransportClient {
       throw new Error(`Desktop request failed with HTTP ${response.status}.`);
     }
     const responseText = await response.text();
+    if (isJsonRpcTransportAck(responseText)) {
+      return;
+    }
     if (responseText.trim()) {
       for (const listener of this.plaintextListeners) {
         listener(responseText);
@@ -713,6 +716,26 @@ function computeReconnectDelayMs(attempt: number, baseDelayMs: number, maxDelayM
 
 function isFatalSessionError(message: string): boolean {
   return /\b(?:HTTP 401|HTTP 403|Unauthorized)\b/i.test(message);
+}
+
+function isJsonRpcTransportAck(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return true;
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    return (
+      parsed !== null &&
+      typeof parsed === "object" &&
+      !Array.isArray(parsed) &&
+      (parsed as Record<string, unknown>).ok === true &&
+      !("id" in parsed) &&
+      !("method" in parsed)
+    );
+  } catch {
+    return false;
+  }
 }
 
 function buildEndpointUrls(payload: PairingQrPayload): string[] {

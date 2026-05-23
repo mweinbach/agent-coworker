@@ -215,6 +215,33 @@ describe("mobile secure transport client", () => {
     expect(plaintextMessages).toEqual(["server-response"]);
   });
 
+  test("does not deliver HTTP notification ack bodies as plaintext messages", async () => {
+    const plaintextMessages: string[] = [];
+    __internal.setPinnedHttpsFetchForTesting(
+      mock(async (request: { url: string }) => {
+        if (request.url.endsWith("/pair")) {
+          return Response.json({ sessionToken: "session-token" }) as unknown as Response;
+        }
+        if (request.url.endsWith("/events")) {
+          return new Response("", { status: 200 });
+        }
+        if (request.url.endsWith("/rpc")) {
+          return Response.json({ ok: true }, { status: 202 }) as unknown as Response;
+        }
+        return new Response("", { status: 404 });
+      }) as never,
+    );
+    const client = new SecureTransportClient();
+    client.subscribe({
+      onPlaintextMessage: (text) => plaintextMessages.push(text),
+    });
+
+    await client.connectFromQrPayload(buildPayload({ hosts: ["192.168.1.10"] }));
+    await client.sendPlaintext('{"method":"initialized","params":{}}');
+
+    expect(plaintextMessages).toEqual([]);
+  });
+
   test("reuses a stable mobile device id across QR pairing attempts", async () => {
     const pairedDeviceIds: string[] = [];
     __internal.setPinnedHttpsFetchForTesting(

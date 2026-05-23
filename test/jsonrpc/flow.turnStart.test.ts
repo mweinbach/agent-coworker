@@ -341,6 +341,98 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
+  test("turn/start rejects inline uploads when the uploads root resolves outside the workspace", async () => {
+    const tmpDir = await makeTmpProject();
+    const outsideDir = await fs.mkdtemp(path.join(path.dirname(tmpDir), "turn-upload-escape-"));
+    const uploadsDir = path.join(tmpDir, "User Uploads");
+    await fs.symlink(outsideDir, uploadsDir, process.platform === "win32" ? "junction" : "dir");
+    let runTurnCalled = false;
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
+        runTurnImpl: (async () => {
+          runTurnCalled = true;
+          return {
+            text: "done",
+            responseMessages: [],
+          };
+        }) as any,
+      }),
+    );
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+      await rpc.waitFor((message) => message.method === "thread/started");
+
+      const turnResponse = await rpc.sendRequest("turn/start", {
+        threadId: started.result.thread.id,
+        input: [
+          {
+            type: "file",
+            filename: "inline.txt",
+            contentBase64: Buffer.from("blocked inline").toString("base64"),
+            mimeType: "text/plain",
+          },
+        ],
+      });
+
+      expect(turnResponse.error?.message).toBe("Uploads directory resolves outside the workspace.");
+      expect(turnResponse.result).toBeUndefined();
+      expect(runTurnCalled).toBe(false);
+      await expect(fs.readFile(path.join(outsideDir, "inline.txt"), "utf8")).rejects.toThrow();
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
+  test("turn/start rejects uploaded file paths when the uploads root resolves outside the workspace", async () => {
+    const tmpDir = await makeTmpProject();
+    const outsideDir = await fs.mkdtemp(path.join(path.dirname(tmpDir), "turn-upload-path-"));
+    const outsideFile = path.join(outsideDir, "secret.txt");
+    const uploadsDir = path.join(tmpDir, "User Uploads");
+    const escapedPath = path.join(uploadsDir, "secret.txt");
+    await fs.writeFile(outsideFile, "top secret");
+    await fs.symlink(outsideDir, uploadsDir, process.platform === "win32" ? "junction" : "dir");
+    let runTurnCalled = false;
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
+        runTurnImpl: (async () => {
+          runTurnCalled = true;
+          return {
+            text: "done",
+            responseMessages: [],
+          };
+        }) as any,
+      }),
+    );
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+      await rpc.waitFor((message) => message.method === "thread/started");
+
+      const turnResponse = await rpc.sendRequest("turn/start", {
+        threadId: started.result.thread.id,
+        input: [
+          {
+            type: "uploadedFile",
+            filename: "secret.txt",
+            path: escapedPath,
+            mimeType: "text/plain",
+          },
+        ],
+      });
+
+      expect(turnResponse.error?.message).toBe("Uploads directory resolves outside the workspace.");
+      expect(turnResponse.result).toBeUndefined();
+      expect(runTurnCalled).toBe(false);
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
   test("turn/start streams reasoning notifications before assistant output", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(

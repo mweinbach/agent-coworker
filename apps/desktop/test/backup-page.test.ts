@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import { act, createElement } from "react";
+import { act, createElement, type ReactNode, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -70,6 +70,7 @@ mock.module("../src/lib/agentSocket", () => ({
 }));
 
 const { BackupPage } = await import("../src/ui/settings/pages/BackupPage");
+const { SettingsChromeProvider } = await import("../src/ui/settings/SettingsChromeContext");
 const { useAppStore } = await import("../src/app/store");
 
 describe("desktop backup page", () => {
@@ -79,7 +80,263 @@ describe("desktop backup page", () => {
     );
 
     expect(html).toContain("data-backup-page");
-    expect(html).toContain("Select a workspace first to manage its backup history.");
+    expect(html).toContain("Select a workspace first");
+    expect(html).toContain("Choose a workspace before managing recovery snapshots");
+  });
+
+  test("shows a direct enable path when backups are off", async () => {
+    const { dom, restore } = setupJsdom();
+    const previousState = useAppStore.getState();
+    const updateCalls: Array<{ workspaceId: string; defaultBackupsEnabled?: boolean }> = [];
+    let refreshCount = 0;
+
+    useAppStore.setState({
+      selectedWorkspaceId: "ws-1",
+      perWorkspaceSettings: true,
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace 1",
+          path: "/tmp/workspace",
+          createdAt: "2026-03-10T00:00:00.000Z",
+          lastOpenedAt: "2026-03-10T00:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: false,
+          yolo: false,
+        },
+      ],
+      workspaceRuntimeById: {
+        "ws-1": {
+          serverUrl: "ws://mock",
+          starting: false,
+          error: null,
+          controlSessionId: "control-session",
+          controlConfig: null,
+          controlSessionConfig: { backupsEnabled: false, defaultBackupsEnabled: false },
+          controlEnableMcp: true,
+          mcpServers: [],
+          mcpFiles: [],
+          mcpWarnings: [],
+          mcpValidationByName: {},
+          mcpLastAuthChallenge: null,
+          mcpLastAuthResult: null,
+          skills: [],
+          selectedSkillName: null,
+          selectedSkillContent: null,
+          workspaceBackupsPath: "/tmp/workspace",
+          workspaceBackupsLoading: false,
+          workspaceBackupsError: null,
+          workspaceBackupPendingActionKeys: {},
+          workspaceBackups: [],
+        },
+      },
+      updateWorkspaceDefaults: async (workspaceId, patch) => {
+        updateCalls.push({ workspaceId, defaultBackupsEnabled: patch.defaultBackupsEnabled });
+      },
+      requestWorkspaceBackups: async () => {
+        refreshCount += 1;
+      },
+    });
+
+    const container = dom.window.document.getElementById("root");
+    if (!container) throw new Error("missing test root");
+    const root = createRoot(container);
+
+    try {
+      await act(async () => {
+        root.render(createElement(BackupPage));
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(container.textContent).toContain("Recovery snapshots are off");
+      expect(container.querySelector('[data-backup-split="true"]')).toBeNull();
+
+      const enableButton = Array.from(container.querySelectorAll("button")).find((button) =>
+        button.textContent?.includes("Enable workspace backups"),
+      );
+      expect(enableButton).toBeDefined();
+
+      await act(async () => {
+        enableButton?.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(updateCalls).toEqual([{ workspaceId: "ws-1", defaultBackupsEnabled: true }]);
+      expect(refreshCount).toBe(1);
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+      useAppStore.setState(previousState, true);
+      restore();
+    }
+  });
+
+  test("shows backups as active when the workspace default is enabled", () => {
+    const html = renderToStaticMarkup(
+      createElement(BackupPage, {
+        workspace: {
+          id: "ws-1",
+          name: "Workspace 1",
+          path: "/tmp/workspace",
+          createdAt: "2026-03-10T00:00:00.000Z",
+          lastOpenedAt: "2026-03-10T00:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+        runtime: {
+          serverUrl: "ws://mock",
+          starting: false,
+          error: null,
+          controlSessionId: "control-session",
+          controlConfig: null,
+          controlSessionConfig: { backupsEnabled: false, defaultBackupsEnabled: true },
+          controlEnableMcp: true,
+          mcpServers: [],
+          mcpFiles: [],
+          mcpWarnings: [],
+          mcpValidationByName: {},
+          mcpLastAuthChallenge: null,
+          mcpLastAuthResult: null,
+          skills: [],
+          selectedSkillName: null,
+          selectedSkillContent: null,
+          workspaceBackupsPath: "/tmp/workspace",
+          workspaceBackupsLoading: false,
+          workspaceBackupsError: null,
+          workspaceBackupPendingActionKeys: {},
+          workspaceBackups: [],
+        } as any,
+      }),
+    );
+
+    expect(html).toContain("Active");
+    expect(html).toContain("No backups yet");
+    expect(html).toContain("Check again");
+    expect(html).not.toContain("Recovery snapshots are off");
+  });
+
+  test("keeps backup header refresh state in sync while loading changes", async () => {
+    const { dom, restore } = setupJsdom();
+    const previousState = useAppStore.getState();
+
+    useAppStore.setState({
+      selectedWorkspaceId: "ws-1",
+      perWorkspaceSettings: true,
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace 1",
+          path: "/tmp/workspace",
+          createdAt: "2026-03-10T00:00:00.000Z",
+          lastOpenedAt: "2026-03-10T00:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      workspaceRuntimeById: {
+        "ws-1": {
+          serverUrl: "ws://mock",
+          starting: false,
+          error: null,
+          controlSessionId: "control-session",
+          controlConfig: null,
+          controlSessionConfig: { backupsEnabled: true, defaultBackupsEnabled: true },
+          controlEnableMcp: true,
+          mcpServers: [],
+          mcpFiles: [],
+          mcpWarnings: [],
+          mcpValidationByName: {},
+          mcpLastAuthChallenge: null,
+          mcpLastAuthResult: null,
+          skills: [],
+          selectedSkillName: null,
+          selectedSkillContent: null,
+          workspaceBackupsPath: "/tmp/workspace",
+          workspaceBackupsLoading: false,
+          workspaceBackupsError: null,
+          workspaceBackupPendingActionKeys: {},
+          workspaceBackups: [],
+        },
+      },
+      requestWorkspaceBackups: async () => {},
+    });
+
+    function BackupPageWithChrome() {
+      const [chrome, setChrome] = useState<{ headerActions?: ReactNode } | null>(null);
+      return createElement(
+        SettingsChromeProvider,
+        { onChromeChange: setChrome },
+        createElement(BackupPage),
+        createElement("div", { "data-header-chrome": "true" }, chrome?.headerActions),
+      );
+    }
+
+    const container = dom.window.document.getElementById("root");
+    if (!container) throw new Error("missing test root");
+    const root = createRoot(container);
+
+    try {
+      await act(async () => {
+        root.render(createElement(BackupPageWithChrome));
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      const findRefreshButton = () =>
+        Array.from(container.querySelectorAll("[data-header-chrome] button")).find((button) =>
+          button.textContent?.includes("Refresh"),
+        );
+
+      expect(findRefreshButton()?.disabled).toBe(false);
+
+      await act(async () => {
+        useAppStore.setState((state) => ({
+          workspaceRuntimeById: {
+            ...state.workspaceRuntimeById,
+            "ws-1": {
+              ...state.workspaceRuntimeById["ws-1"],
+              workspaceBackupsLoading: true,
+            },
+          },
+        }));
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(findRefreshButton()?.disabled).toBe(true);
+
+      await act(async () => {
+        useAppStore.setState((state) => ({
+          workspaceRuntimeById: {
+            ...state.workspaceRuntimeById,
+            "ws-1": {
+              ...state.workspaceRuntimeById["ws-1"],
+              workspaceBackupsLoading: false,
+            },
+          },
+        }));
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(findRefreshButton()?.disabled).toBe(false);
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+      useAppStore.setState(previousState, true);
+      restore();
+    }
   });
 
   test("renders workspace rail, backup list, delta pane, and failed backup copy", () => {

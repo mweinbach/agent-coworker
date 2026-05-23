@@ -12,9 +12,20 @@ import {
 import { useCssElement, useNativeVariable as useFunctionalVariable } from "react-native-css";
 import Animated from "react-native-reanimated";
 
+type CssElementComponent = Parameters<typeof useCssElement>[0];
+type CssElementProps = Parameters<typeof useCssElement>[1];
+
+function cssComponent<T>(component: T): CssElementComponent {
+  return component as unknown as CssElementComponent;
+}
+
+function cssProps<T>(props: T): CssElementProps {
+  return props as unknown as CssElementProps;
+}
+
 // CSS-enabled Link
 export const Link = (props: React.ComponentProps<typeof RouterLink> & { className?: string }) => {
-  return useCssElement(RouterLink as any, props as any, { className: "style" });
+  return useCssElement(cssComponent(RouterLink), cssProps(props), { className: "style" });
 };
 
 Link.Trigger = RouterLink.Trigger;
@@ -49,7 +60,7 @@ export const ScrollView = (
     contentContainerClassName?: string;
   },
 ) => {
-  return useCssElement(RNScrollView as any, props as any, {
+  return useCssElement(cssComponent(RNScrollView), cssProps(props), {
     className: "style",
     contentContainerClassName: "contentContainerStyle",
   });
@@ -60,7 +71,7 @@ ScrollView.displayName = "CSS(ScrollView)";
 export const Pressable = (
   props: React.ComponentProps<typeof RNPressable> & { className?: string },
 ) => {
-  return useCssElement(RNPressable as any, props as any, { className: "style" });
+  return useCssElement(cssComponent(RNPressable), cssProps(props), { className: "style" });
 };
 Pressable.displayName = "CSS(Pressable)";
 
@@ -80,7 +91,7 @@ export const AnimatedScrollView = (
     contentContainerClassName?: string;
   },
 ) => {
-  return useCssElement(Animated.ScrollView as any, props as any, {
+  return useCssElement(cssComponent(Animated.ScrollView), cssProps(props), {
     className: "style",
     contentClassName: "contentContainerStyle",
     contentContainerClassName: "contentContainerStyle",
@@ -89,11 +100,21 @@ export const AnimatedScrollView = (
 
 // TouchableHighlight with underlayColor extraction
 function XXTouchableHighlight(props: React.ComponentProps<typeof RNTouchableHighlight>) {
-  const { underlayColor, ...style } = (StyleSheet.flatten(props.style) || {}) as any;
-  return <RNTouchableHighlight underlayColor={underlayColor} {...props} style={style} />;
+  const flattenedStyle = StyleSheet.flatten(props.style) as
+    | (Record<string, unknown> &
+        Pick<React.ComponentProps<typeof RNTouchableHighlight>, "underlayColor">)
+    | undefined;
+  const { underlayColor, ...style } = flattenedStyle ?? {};
+  return (
+    <RNTouchableHighlight
+      underlayColor={underlayColor}
+      {...props}
+      style={style as React.ComponentProps<typeof RNTouchableHighlight>["style"]}
+    />
+  );
 }
 
 export const TouchableHighlight = (props: React.ComponentProps<typeof RNTouchableHighlight>) => {
-  return useCssElement(XXTouchableHighlight as any, props as any, { className: "style" });
+  return useCssElement(cssComponent(XXTouchableHighlight), cssProps(props), { className: "style" });
 };
 TouchableHighlight.displayName = "CSS(TouchableHighlight)";

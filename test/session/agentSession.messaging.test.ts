@@ -1296,6 +1296,38 @@ describe("AgentSession", () => {
       await expect(fs.readFile(path.join(uploadsDir, "photo_2.png"), "utf8")).resolves.toBe("two");
     });
 
+    test("rejects inline attachments when the uploads root resolves outside the workspace", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-attachments-"));
+      const outsideDir = await fs.mkdtemp(path.join(path.dirname(dir), "session-upload-outside-"));
+      const uploadsDir = path.join(dir, "uploads");
+      await fs.symlink(outsideDir, uploadsDir, process.platform === "win32" ? "junction" : "dir");
+      const { session, events } = makeSession({
+        config: {
+          ...makeConfig(dir),
+          uploadsDirectory: uploadsDir,
+        },
+      });
+
+      await session.sendUserMessage("", "msg-upload-root-escape", undefined, [
+        {
+          filename: "inline.txt",
+          contentBase64: Buffer.from("blocked inline").toString("base64"),
+          mimeType: "text/plain",
+        },
+      ]);
+
+      const errorEvt = events.findLast((e) => e.type === "error") as
+        | Extract<SessionEvent, { type: "error" }>
+        | undefined;
+      expect(errorEvt).toMatchObject({
+        code: "validation_failed",
+        message: "Uploads directory resolves outside the workspace.",
+      });
+      expect(events.some((e) => e.type === "user_message")).toBe(false);
+      expect(mockRunTurn).not.toHaveBeenCalled();
+      await expect(fs.readFile(path.join(outsideDir, "inline.txt"), "utf8")).rejects.toThrow();
+    });
+
     test("reuses uploaded attachment paths without rewriting the file", async () => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-attachments-"));
       const uploadsDir = path.join(dir, "uploads");
@@ -1321,6 +1353,39 @@ describe("AgentSession", () => {
         type: "text",
         text: `[System: The user uploaded a file which has been saved to ${uploadedPath}]`,
       });
+    });
+
+    test("rejects uploaded attachment paths when the uploads root resolves outside the workspace", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-attachments-"));
+      const outsideDir = await fs.mkdtemp(path.join(path.dirname(dir), "session-upload-path-"));
+      const uploadsDir = path.join(dir, "uploads");
+      const escapedPath = path.join(uploadsDir, "secret.txt");
+      await fs.writeFile(path.join(outsideDir, "secret.txt"), "top secret");
+      await fs.symlink(outsideDir, uploadsDir, process.platform === "win32" ? "junction" : "dir");
+      const { session, events } = makeSession({
+        config: {
+          ...makeConfig(dir),
+          uploadsDirectory: uploadsDir,
+        },
+      });
+
+      await session.sendUserMessage("", "msg-upload-root-escape", undefined, [
+        {
+          filename: "secret.txt",
+          path: escapedPath,
+          mimeType: "text/plain",
+        },
+      ]);
+
+      const errorEvt = events.findLast((e) => e.type === "error") as
+        | Extract<SessionEvent, { type: "error" }>
+        | undefined;
+      expect(errorEvt).toMatchObject({
+        code: "validation_failed",
+        message: "Uploads directory resolves outside the workspace.",
+      });
+      expect(events.some((e) => e.type === "user_message")).toBe(false);
+      expect(mockRunTurn).not.toHaveBeenCalled();
     });
 
     test("rejects dot-path attachment filenames before acknowledging attachment-only input", async () => {

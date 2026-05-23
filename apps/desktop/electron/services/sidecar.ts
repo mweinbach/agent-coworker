@@ -8,6 +8,7 @@ export const SIDECAR_BUN_ENTRYPOINT_PATH = "server/index.js";
 export const CODEX_APP_SERVER_BASE_NAME = "codex-app-server";
 export const FOUNDATION_MODELS_SDK_DIR_NAME = "tsfm-sdk";
 export const FOUNDATION_MODELS_KOFFI_TRIPLET = "darwin_arm64";
+export const WINDOWS_AI_ELECTRON_DIR_NAME = "windows-ai-electron";
 
 export type ExecutableSidecarLaunchSpec = {
   kind: "executable";
@@ -117,6 +118,41 @@ export function hasPackagedFoundationModelsSdk(
         "koffi.node",
       ),
     )
+  );
+}
+
+export function shouldBundleWindowsAiElectronPackage(
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch,
+): boolean {
+  return platform === "win32" && (arch === "x64" || arch === "arm64");
+}
+
+export function resolveWindowsAiElectronPrebuildTriplet(
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch,
+): string {
+  if (platform === "win32") {
+    if (arch === "x64") return "win32-x64";
+    if (arch === "arm64") return "win32-arm64";
+  }
+  throw new Error(`Unsupported Windows AI Electron platform/arch: ${platform}/${arch}`);
+}
+
+export function hasPackagedWindowsAiElectronPackage(
+  candidateDir: string,
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch,
+  existsSync: typeof fs.existsSync = fs.existsSync,
+): boolean {
+  if (!shouldBundleWindowsAiElectronPackage(platform, arch)) {
+    return false;
+  }
+
+  const triplet = resolveWindowsAiElectronPrebuildTriplet(platform, arch);
+  return (
+    existsSync(path.join(candidateDir, "index.js")) &&
+    existsSync(path.join(candidateDir, "windows-ai-electron", "prebuilds", triplet, "node.node"))
   );
 }
 

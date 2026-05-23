@@ -29,6 +29,30 @@ body {
   color: var(--text-primary);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Opt in to text selection only on copyable surfaces (chat, previews, settings values). */
+.select-text,
+[data-selectable="text"],
+[data-file-preview-content="true"],
+[data-file-preview-markdown-shell="true"],
+.docx-preview,
+.settings-shell__content,
+input:not([type="checkbox"]):not([type="radio"]),
+textarea,
+[contenteditable="true"],
+pre,
+code {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+[data-spreadsheet-preview="true"] table,
+[data-spreadsheet-preview="true"] table button {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 :root[data-window-mode="quick-chat"] body,
@@ -114,6 +138,8 @@ samp {
 
 .app-topbar {
   -webkit-app-region: drag;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .app-topbar__controls {
@@ -339,17 +365,37 @@ samp {
 @media (max-width: 860px) {
   .settings-shell {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+}
+
+@media (min-width: 861px) {
+  .settings-shell {
+    grid-template-columns: var(--settings-sidebar-width) minmax(0, 1fr);
   }
 }
 
 .settings-shell__back-button {
-  border: 1px solid var(--border-settings-back-button);
-  background: var(--surface-settings-back-button);
+  border: none;
+  background: transparent;
   box-shadow: none;
 }
 
 .settings-shell__back-button:hover {
-  background: var(--surface-settings-back-button-hover);
+  background: var(--surface-settings-nav-hover);
+}
+
+.settings-shell__nav-button {
+  min-height: 2.125rem;
+}
+
+.settings-shell__nav-button:hover {
+  background: var(--surface-settings-nav-hover);
+}
+
+.settings-shell__nav-button--active {
+  background: var(--surface-settings-nav-active);
+  box-shadow: none;
 }
 
 .settings-shell__main {
@@ -372,6 +418,24 @@ samp {
   min-height: 100%;
 }
 
+.settings-page {
+  animation: settingsPageIn 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.settings-section {
+  box-shadow: var(--shadow-settings-section);
+}
+
+.settings-row {
+  transition:
+    background-color 160ms ease,
+    color 160ms ease;
+}
+
+.settings-row:hover {
+  background: var(--surface-settings-row-hover);
+}
+
 .settings-shell__main [data-slot="card"] {
   border-color: var(--border-glass);
   background: var(--surface-settings-card);
@@ -381,6 +445,18 @@ samp {
 
 .settings-shell__main [data-slot="card"]:has([data-provider-card]) {
   background: var(--surface-settings-card-elevated);
+}
+
+@keyframes settingsPageIn {
+  from {
+    opacity: 0.72;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 @keyframes sidebarRailIn {

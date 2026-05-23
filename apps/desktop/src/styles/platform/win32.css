@@ -166,9 +166,21 @@
   padding-top: 4px;
 }
 
+/*
+ * The drag zone backs the empty space in the sidebar's title band so the
+ * window can be dragged from there. Skip the leftmost portion that is
+ * visually owned by the topbar's win32-left-rail (which hosts the sidebar
+ * toggle and "new chat" buttons on win32). Chromium computes draggable
+ * regions in DOM order and lets later "drag" regions overwrite earlier
+ * "no-drag" regions; the drag zone is rendered later in the DOM than the
+ * rail's button, so without this inset the drag region would re-cover the
+ * toggle button and Windows would treat the click as a window drag (the
+ * button would never receive the click).
+ */
 :root[data-platform="win32"] .app-sidebar__titleband-drag-zone {
   position: absolute;
   inset: 0;
+  left: var(--platform-collapsed-left-rail-width, 84px);
   pointer-events: none;
   -webkit-app-region: drag;
 }
@@ -199,6 +211,7 @@
 }
 
 :root[data-platform="win32"] .settings-shell__titleband-fill {
+  left: var(--settings-sidebar-width);
   height: var(--platform-titlebar-height);
   z-index: 78;
   pointer-events: none;
@@ -259,7 +272,7 @@
 }
 
 :root[data-platform="win32"] .settings-shell__back-button:hover {
-  background: var(--surface-settings-back-button-hover);
+  background: var(--surface-settings-nav-hover);
   color: var(--text-primary);
 }
 
@@ -301,7 +314,7 @@
 :root[data-platform="win32"] .settings-shell__drag-zone {
   position: absolute;
   top: 0;
-  left: 0;
+  left: var(--settings-sidebar-width);
   right: 0;
   height: var(--platform-titlebar-height);
   z-index: 80;
@@ -320,7 +333,7 @@
 @media (max-width: 860px) {
   :root[data-platform="win32"] .settings-shell__drag-zone,
   :root[data-platform="win32"] .settings-shell__titleband-fill {
-    left: 0 !important;
+    left: 0;
   }
 }
 

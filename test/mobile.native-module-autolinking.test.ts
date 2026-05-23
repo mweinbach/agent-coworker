@@ -12,6 +12,18 @@ const pinnedHttpsPodspecPath = new URL(
 );
 
 describe("mobile native module autolinking", () => {
+  test("pins Expo autolinking's commander fallback to a compatible CommonJS shape", () => {
+    const packageConfig = JSON.parse(readFileSync(mobilePackageJsonPath, "utf8"));
+
+    expect(packageConfig.dependencies.commander).toBe("7.2.0");
+  });
+
+  test("pins Expo CLI websocket resolution to a WebSocketServer-compatible major", () => {
+    const packageConfig = JSON.parse(readFileSync(mobilePackageJsonPath, "utf8"));
+
+    expect(packageConfig.dependencies.ws).toBe("^8.20.0");
+  });
+
   test("exposes the local pinned HTTPS module to Expo Apple autolinking", () => {
     const packageConfig = JSON.parse(readFileSync(mobilePackageJsonPath, "utf8"));
     const moduleConfig = JSON.parse(readFileSync(pinnedHttpsModuleConfigPath, "utf8"));

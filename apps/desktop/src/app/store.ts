@@ -16,7 +16,7 @@ const initialState: AppStoreDataState = {
   startupError: null,
   view: "chat",
 
-  settingsPage: "providers",
+  settingsPage: "models",
   lastNonSettingsView: "chat",
 
   workspaces: [],

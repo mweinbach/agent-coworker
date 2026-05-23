@@ -417,7 +417,7 @@ export default function App() {
         return;
       }
       if (command === "openWorkspacesSettings") {
-        state.openSettings("workspaces");
+        state.openSettings("defaults");
         return;
       }
       if (command === "openUpdates") {

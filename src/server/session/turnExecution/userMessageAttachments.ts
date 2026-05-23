@@ -14,7 +14,7 @@ import {
   type ServerErrorCode,
   type ServerErrorSource,
 } from "../../../types";
-import { isPathInside } from "../../../utils/paths";
+import { isPathInside, resolvePathInsideRootForBoundaryCheck } from "../../../utils/paths";
 import type { FileAttachment, OrderedInputPart } from "../../jsonrpc/routes/shared";
 import type { SessionContext } from "../SessionContext";
 import {
@@ -25,7 +25,6 @@ import {
   shouldInjectLargeMultimodalOutputGuidance,
 } from "./attachmentGuidancePolicy";
 
-const errorWithCodeSchema = z.object({ code: z.unknown() }).passthrough();
 const errorWithCodeAndSourceSchema = z
   .object({
     code: z.string(),
@@ -69,31 +68,6 @@ function classifyStructuredTurnError(err: unknown): ClassifiedTurnError | null {
     code,
     source: defaultSourceByErrorCode[code] ?? "session",
   };
-}
-
-async function canonicalizeExistingPrefix(targetPath: string): Promise<string> {
-  const resolved = path.resolve(targetPath);
-  const tail: string[] = [];
-  let cursor = resolved;
-
-  while (true) {
-    try {
-      const canonical = await fs.realpath(cursor);
-      return tail.length > 0 ? path.join(canonical, ...tail.reverse()) : canonical;
-    } catch (error) {
-      const parsedCode = errorWithCodeSchema.safeParse(error);
-      const code = parsedCode.success ? parsedCode.data.code : undefined;
-      if (code !== "ENOENT") {
-        throw error;
-      }
-      const parent = path.dirname(cursor);
-      if (parent === cursor) {
-        return resolved;
-      }
-      tail.push(path.basename(cursor));
-      cursor = parent;
-    }
-  }
 }
 
 function makeStructuredSessionError(
@@ -225,12 +199,27 @@ export function createUserMessageAttachmentHelpers(
     return config.uploadsDirectory ?? path.resolve(config.workingDirectory, "User Uploads");
   };
 
+  const resolveUploadsDirectory = async (): Promise<string> => {
+    try {
+      return await resolvePathInsideRootForBoundaryCheck(
+        context.state.config.workingDirectory,
+        getUploadsDirectory(),
+      );
+    } catch {
+      throw makeStructuredSessionError(
+        "validation_failed",
+        "Uploads directory resolves outside the workspace.",
+      );
+    }
+  };
+
   const resolveUploadedAttachmentPath = async (
     uploadedPath: string,
   ): Promise<{ canonicalPath: string; stat: UploadedAttachmentStat }> => {
-    const resolvedUploadsDir = path.resolve(getUploadsDirectory());
+    const rawUploadsDir = path.resolve(getUploadsDirectory());
+    const resolvedUploadsDir = await resolveUploadsDirectory();
     const diskPath = path.resolve(uploadedPath);
-    if (!isPathInside(resolvedUploadsDir, diskPath)) {
+    if (!isPathInside(rawUploadsDir, diskPath) && !isPathInside(resolvedUploadsDir, diskPath)) {
       throw makeStructuredSessionError(
         "validation_failed",
         "Uploaded file path is outside the uploads directory.",
@@ -238,12 +227,8 @@ export function createUserMessageAttachmentHelpers(
     }
 
     try {
-      const [canonicalUploadsDir, canonicalPath, stat] = await Promise.all([
-        canonicalizeExistingPrefix(resolvedUploadsDir),
-        fs.realpath(diskPath),
-        fs.stat(diskPath),
-      ]);
-      if (!isPathInside(canonicalUploadsDir, canonicalPath)) {
+      const [canonicalPath, stat] = await Promise.all([fs.realpath(diskPath), fs.stat(diskPath)]);
+      if (!isPathInside(resolvedUploadsDir, canonicalPath)) {
         throw makeStructuredSessionError(
           "validation_failed",
           "Uploaded file path is outside the uploads directory.",
@@ -277,15 +262,15 @@ export function createUserMessageAttachmentHelpers(
     }
 
     const config = context.state.config;
-    const uploadsDir = getUploadsDirectory();
-    await fs.mkdir(uploadsDir, { recursive: true });
+    let resolvedUploadsDir = await resolveUploadsDirectory();
+    await fs.mkdir(resolvedUploadsDir, { recursive: true });
+    resolvedUploadsDir = await resolveUploadsDirectory();
 
     const provider = config.provider;
     const model = config.model;
     const modelSupportsImages = supportsImageInput(provider, model);
     const isGoogleProvider = provider === "google";
 
-    const resolvedUploadsDir = path.resolve(uploadsDir);
     const usedNames = new Set<string>();
     const contentParts: Array<Record<string, unknown>> = [];
     const shouldAddLargeOutputGuidance = shouldInjectLargeMultimodalOutputGuidance(
@@ -333,7 +318,12 @@ export function createUserMessageAttachmentHelpers(
         }
 
         const filePath = path.resolve(resolvedUploadsDir, finalName);
-        if (!filePath.startsWith(resolvedUploadsDir)) return;
+        if (!isPathInside(resolvedUploadsDir, filePath)) {
+          throw makeStructuredSessionError(
+            "validation_failed",
+            `Invalid attachment filename: ${attachment.filename}`,
+          );
+        }
 
         diskPath = filePath;
         try {
@@ -436,7 +426,12 @@ export function createUserMessageAttachmentHelpers(
   const validateUploadedFileAttachments = async (
     attachments?: readonly FileAttachment[],
   ): Promise<void> => {
-    const uploadedAttachments = (attachments ?? []).filter(isUploadedFileAttachment);
+    const allAttachments = attachments ?? [];
+    if (allAttachments.some(isInlineFileAttachment)) {
+      await resolveUploadsDirectory();
+    }
+
+    const uploadedAttachments = allAttachments.filter(isUploadedFileAttachment);
     if (uploadedAttachments.length === 0) {
       return;
     }

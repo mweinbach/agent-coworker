@@ -913,7 +913,9 @@ function WorkspaceDefaultsSummary({
   );
 }
 
-export function WorkspacesPage() {
+type WorkspacesPageSurface = "all" | "defaults" | "models" | "profile";
+
+export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSurface } = {}) {
   const desktopFeatures = useAppStore((s) => s.desktopFeatureFlags);
   const workspacePickerEnabled = desktopFeatures.workspacePicker !== false;
   const workspaceLifecycleEnabled = desktopFeatures.workspaceLifecycle !== false;
@@ -1032,9 +1034,19 @@ export function WorkspacesPage() {
     return preferredChildModelRef ? [preferredChildModelRef] : [];
   }, [childModelRoutingMode, preferredChildModelRef, visibleAllowedChildModelRefs]);
 
+  const initialTab: "general" | "models" | "profile" | "advanced" =
+    surface === "models" ? "models" : surface === "profile" ? "profile" : "general";
   const [activeTab, setActiveTab] = useState<"general" | "models" | "profile" | "advanced">(
-    "general",
+    initialTab,
   );
+  const visibleTab =
+    surface === "all"
+      ? activeTab
+      : surface === "models"
+        ? "models"
+        : surface === "profile"
+          ? "profile"
+          : "general";
   const [subagentModelsOpen, setSubagentModelsOpen] = useState(false);
   const subagentModelsOpenSeedKey = useRef<string | null>(null);
 
@@ -1079,37 +1091,41 @@ export function WorkspacesPage() {
             }
           />
 
-          <div className="flex space-x-1 rounded-lg bg-muted p-1 border border-border/70 max-w-fit mb-2 relative">
-            {(["general", "models", "profile", "advanced"] as const).map((tab) => (
-              <Button
-                key={tab}
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => setActiveTab(tab)}
-                className={cn(
-                  "relative h-auto rounded-md px-3 py-1.5 text-sm font-medium shadow-none transition-colors",
-                  activeTab === tab
-                    ? "text-foreground"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                {activeTab === tab && (
-                  <motion.div
-                    layoutId="workspaces-active-tab"
-                    className="app-shadow-surface pointer-events-none absolute inset-0 -z-10 rounded-md border border-border/50 bg-background"
-                    transition={{ type: "spring", stiffness: 500, damping: 30 }}
-                  />
-                )}
-                <span className="relative z-10">{tab.charAt(0).toUpperCase() + tab.slice(1)}</span>
-              </Button>
-            ))}
-          </div>
+          {surface === "all" ? (
+            <div className="flex space-x-1 rounded-lg bg-muted p-1 border border-border/70 max-w-fit mb-2 relative">
+              {(["general", "models", "profile", "advanced"] as const).map((tab) => (
+                <Button
+                  key={tab}
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setActiveTab(tab)}
+                  className={cn(
+                    "relative h-auto rounded-md px-3 py-1.5 text-sm font-medium shadow-none transition-colors",
+                    activeTab === tab
+                      ? "text-foreground"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {activeTab === tab && (
+                    <motion.div
+                      layoutId="workspaces-active-tab"
+                      className="app-shadow-surface pointer-events-none absolute inset-0 -z-10 rounded-md border border-border/50 bg-background"
+                      transition={{ type: "spring", stiffness: 500, damping: 30 }}
+                    />
+                  )}
+                  <span className="relative z-10">
+                    {tab.charAt(0).toUpperCase() + tab.slice(1)}
+                  </span>
+                </Button>
+              ))}
+            </div>
+          ) : null}
 
           <div
             className={cn(
               "space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-300",
-              activeTab !== "general" && "hidden",
+              visibleTab !== "general" && "hidden",
             )}
           >
             {perWorkspaceSettings && (
@@ -1255,12 +1271,122 @@ export function WorkspacesPage() {
               updateWorkspaceDefaults={updateWorkspaceDefaults}
               providerStatusByName={providerStatusByName}
             />
+
+            {surface === "defaults" ? (
+              <Collapsible>
+                <Card className="border-border/80 bg-card/85">
+                  <CollapsibleTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="h-auto w-full justify-between rounded-none px-6 py-4 text-left hover:bg-muted/30"
+                    >
+                      <span>
+                        <span className="block text-sm font-semibold text-foreground">
+                          Advanced workspace actions
+                        </span>
+                        <span className="mt-1 block text-xs text-muted-foreground">
+                          Sharing, server restart, and workspace removal controls.
+                        </span>
+                      </span>
+                      <ChevronDownIcon className="size-4 text-muted-foreground" />
+                    </Button>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent>
+                    <CardContent className="space-y-4 border-t border-border/70 pt-4">
+                      <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
+                        <div>
+                          <div className="text-sm font-medium">Configure settings by workspace</div>
+                          <div className="text-xs text-muted-foreground">
+                            When enabled, each workspace has its own provider, model, and behavior
+                            settings.
+                          </div>
+                        </div>
+                        <Switch
+                          checked={perWorkspaceSettings}
+                          aria-label="Configure settings by workspace"
+                          onCheckedChange={async (checked) => {
+                            if (!checked && workspaces.length > 1) {
+                              const confirmed = await confirmAction({
+                                title: "Share settings across workspaces",
+                                message:
+                                  "All workspaces will be synced to the current workspace's settings.",
+                                detail:
+                                  "This will overwrite provider, model, and behavior settings on other workspaces.",
+                                confirmLabel: "Share settings",
+                                cancelLabel: "Cancel",
+                                kind: "warning",
+                                defaultAction: "cancel",
+                              });
+                              if (!confirmed) return;
+                            }
+                            setPerWorkspaceSettings(checked);
+                          }}
+                        />
+                      </div>
+
+                      {workspaceLifecycleEnabled ? (
+                        <div className="flex items-center justify-between gap-3 max-[960px]:items-start max-[960px]:flex-col">
+                          <div>
+                            <div className="text-sm font-medium">Restart server</div>
+                            <div className="text-xs text-muted-foreground">
+                              Restart the workspace agent server if unresponsive.
+                            </div>
+                          </div>
+                          <Button
+                            variant="outline"
+                            type="button"
+                            onClick={() => void restartWorkspaceServer(ws.id)}
+                          >
+                            Restart
+                          </Button>
+                        </div>
+                      ) : null}
+
+                      {workspaceLifecycleEnabled ? (
+                        <div className="flex items-center justify-between gap-3 rounded-md border border-destructive/20 bg-destructive/5 p-3 max-[960px]:items-start max-[960px]:flex-col">
+                          <div>
+                            <div className="text-sm font-medium text-destructive">
+                              Remove workspace
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              Remove this workspace from the app. Your files on disk are not
+                              affected.
+                            </div>
+                          </div>
+                          <Button
+                            variant="destructive"
+                            type="button"
+                            onClick={async () => {
+                              const confirmed = await confirmAction({
+                                title: "Remove workspace",
+                                message: `Remove workspace "${ws.name}"?`,
+                                detail: "Your files on disk will not be affected.",
+                                confirmLabel: "Remove",
+                                cancelLabel: "Cancel",
+                                kind: "warning",
+                                defaultAction: "cancel",
+                              });
+                              if (confirmed) {
+                                void removeWorkspace(ws.id);
+                              }
+                            }}
+                          >
+                            Remove
+                          </Button>
+                        </div>
+                      ) : null}
+                    </CardContent>
+                  </CollapsibleContent>
+                </Card>
+              </Collapsible>
+            ) : null}
           </div>
 
           <div
             className={cn(
               "space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-300",
-              activeTab !== "models" && "hidden",
+              visibleTab !== "models" && "hidden",
             )}
           >
             <Card className="border-border/80 bg-card/85">
@@ -1295,7 +1421,7 @@ export function WorkspacesPage() {
                       </div>
                     ) : (
                       <div className="text-xs text-muted-foreground">
-                        Don't see your provider? Add one in Providers settings.
+                        Don't see your provider? Open Models to add or reconnect providers.
                       </div>
                     )}
 
@@ -1627,7 +1753,7 @@ export function WorkspacesPage() {
           <div
             className={cn(
               "space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-300",
-              activeTab !== "profile" && "hidden",
+              visibleTab !== "profile" && "hidden",
             )}
           >
             <WorkspaceUserProfileCard
@@ -1639,7 +1765,7 @@ export function WorkspacesPage() {
           <div
             className={cn(
               "space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-300",
-              activeTab !== "advanced" && "hidden",
+              visibleTab !== "advanced" && "hidden",
             )}
           >
             <Card className="border-border/80 bg-card/85">

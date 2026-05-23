@@ -34,5 +34,5 @@ export type RuntimeStepState = {
 };
 
 export type PiRuntimeOverrides = {
-  piStreamImpl?: typeof import("@mariozechner/pi-ai").stream;
+  piStreamImpl?: typeof import("@earendil-works/pi-ai").stream;
 };

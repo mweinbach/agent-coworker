@@ -100,6 +100,82 @@ function createAppleModule(opts: {
   };
 }
 
+function createWindowsAiModule(opts: {
+  readyState?: number;
+  unlockStatus?: number;
+  responseStatus?: number;
+  responseText?: string;
+  generateResponse?: (prompt: string, opts?: unknown) => Promise<{ Text: string; Status: number }>;
+}) {
+  const close = mock(() => {});
+  const getReadyState = mock(() => opts.readyState ?? 0);
+  const ensureReadyAsync = mock(async () => ({ Status: 1 }));
+  const generateResponseAsync = mock(
+    opts.generateResponse ??
+      (async () => ({
+        Text: opts.responseText ?? '  "Title: Phi   Silica Title."  ',
+        Status: opts.responseStatus ?? 0,
+      })),
+  );
+  const createAsync = mock(async () => ({
+    GenerateResponseAsync: generateResponseAsync,
+    Close: close,
+  }));
+  const tryUnlockFeature = mock(
+    (_featureId: string, _token: string, _developerSignature: string) => ({
+      Status: opts.unlockStatus ?? 0,
+    }),
+  );
+
+  return {
+    module: {
+      AIFeatureReadyState: {
+        Ready: 0,
+        NotReady: 1,
+        NotSupportedOnCurrentSystem: 2,
+        DisabledByUser: 3,
+      },
+      LanguageModelResponseStatus: {
+        Complete: 0,
+        Error: 6,
+      },
+      LimitedAccessFeatureStatus: {
+        Available: 0,
+        AvailableWithoutToken: 1,
+        Unavailable: 3,
+      },
+      LanguageModelOptions: class {
+        Temperature?: number;
+        TopP?: number;
+      },
+      LanguageModel: {
+        CreateAsync: createAsync,
+        GetReadyState: getReadyState,
+        EnsureReadyAsync: ensureReadyAsync,
+      },
+      LimitedAccessFeatures: {
+        TryUnlockFeature: tryUnlockFeature,
+      },
+    },
+    close,
+    createAsync,
+    ensureReadyAsync,
+    generateResponseAsync,
+    getReadyState,
+    tryUnlockFeature,
+  };
+}
+
+function createPhiSilicaEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  return {
+    [__internal.PHI_SILICA_TITLE_ENABLED_ENV]: "1",
+    [__internal.PHI_SILICA_SYSTEM_AI_MODELS_CAPABILITY_ENV]: "1",
+    COWORK_PHI_SILICA_LAF_TOKEN: "token",
+    COWORK_PHI_SILICA_LAF_DEVELOPER_SIGNATURE: "signature",
+    ...overrides,
+  };
+}
+
 describe("sessionTitleService", () => {
   test("uses Apple Foundation Models titles when available", async () => {
     const apple = createAppleModule({});
@@ -275,6 +351,246 @@ describe("sessionTitleService", () => {
       model: "gpt-5-mini",
     });
     expect(loadAppleFoundationModelsModule).not.toHaveBeenCalled();
+    expect(createRuntime).toHaveBeenCalledTimes(1);
+  });
+
+  test("uses Phi Silica titles when Windows AI reports the installed model is ready", async () => {
+    const windowsAi = createWindowsAiModule({});
+    const loadWindowsAiElectronModule = mock(async () => windowsAi.module);
+    const createRuntime = mock((_config: AgentConfig) => {
+      throw new Error("provider runtime should not be used");
+    });
+    const defaultModelForProvider = mock((_provider: AgentConfig["provider"]) => "gpt-5.2");
+
+    const generateSessionTitle = createSessionTitleGenerator({
+      createRuntime: createRuntime as any,
+      defaultModelForProvider: defaultModelForProvider as any,
+      loadWindowsAiElectronModule: loadWindowsAiElectronModule as any,
+      platform: "win32",
+      arch: "arm64",
+      env: createPhiSilicaEnv(),
+    });
+
+    const result = await generateSessionTitle({
+      config: makeConfig("openai"),
+      query: "please build websocket title persistence",
+    });
+
+    expect(result).toEqual({
+      title: "Phi Silica Title",
+      source: "model",
+      model: __internal.PHI_SILICA_TITLE_MODEL,
+    });
+    expect(loadWindowsAiElectronModule).toHaveBeenCalledTimes(1);
+    expect(windowsAi.getReadyState).toHaveBeenCalledTimes(1);
+    expect(windowsAi.ensureReadyAsync).not.toHaveBeenCalled();
+    expect(windowsAi.tryUnlockFeature).toHaveBeenCalledWith(
+      __internal.PHI_SILICA_LAF_FEATURE_ID,
+      "token",
+      "signature",
+    );
+    expect(windowsAi.createAsync).toHaveBeenCalledTimes(1);
+    expect(windowsAi.generateResponseAsync).toHaveBeenCalledTimes(1);
+    const responseOpts = windowsAi.generateResponseAsync.mock.calls[0]?.[1] as {
+      Temperature?: number;
+      TopP?: number;
+    };
+    expect(responseOpts).toMatchObject({
+      Temperature: __internal.PHI_SILICA_TITLE_TEMPERATURE,
+      TopP: __internal.PHI_SILICA_TITLE_TOP_P,
+    });
+    expect(windowsAi.close).toHaveBeenCalledTimes(1);
+    expect(createRuntime).not.toHaveBeenCalled();
+    expect(defaultModelForProvider).not.toHaveBeenCalled();
+  });
+
+  test("falls back to provider title models when Phi Silica is not installed", async () => {
+    const windowsAi = createWindowsAiModule({ readyState: 1 });
+    const loadWindowsAiElectronModule = mock(async () => windowsAi.module);
+    const runTurn = mock(async (_args: any) => ({
+      text: "Provider Title",
+      reasoningText: undefined,
+      responseMessages: [] as any[],
+      usage: undefined,
+    }));
+    const createRuntime = mock((_config: AgentConfig) => ({ name: "pi", runTurn }));
+    const defaultModelForProvider = mock((_provider: AgentConfig["provider"]) => "gpt-5.2");
+
+    const generateSessionTitle = createSessionTitleGenerator({
+      createRuntime: createRuntime as any,
+      defaultModelForProvider: defaultModelForProvider as any,
+      loadWindowsAiElectronModule: loadWindowsAiElectronModule as any,
+      platform: "win32",
+      arch: "x64",
+      env: createPhiSilicaEnv(),
+    });
+
+    const result = await generateSessionTitle({
+      config: makeConfig("openai"),
+      query: "provider fallback path",
+    });
+
+    expect(result).toEqual({
+      title: "Provider Title",
+      source: "model",
+      model: "gpt-5-mini",
+    });
+    expect(loadWindowsAiElectronModule).toHaveBeenCalledTimes(1);
+    expect(windowsAi.getReadyState).toHaveBeenCalledTimes(1);
+    expect(windowsAi.ensureReadyAsync).not.toHaveBeenCalled();
+    expect(windowsAi.createAsync).not.toHaveBeenCalled();
+    expect(createRuntime).toHaveBeenCalledTimes(1);
+  });
+
+  test("falls back to provider title models when Windows AI reports a non-Copilot+ PC", async () => {
+    const windowsAi = createWindowsAiModule({ readyState: 2 });
+    const loadWindowsAiElectronModule = mock(async () => windowsAi.module);
+    const runTurn = mock(async (_args: any) => ({
+      text: "Provider Platform Title",
+      reasoningText: undefined,
+      responseMessages: [] as any[],
+      usage: undefined,
+    }));
+    const createRuntime = mock((_config: AgentConfig) => ({ name: "pi", runTurn }));
+    const defaultModelForProvider = mock((_provider: AgentConfig["provider"]) => "gpt-5.2");
+
+    const generateSessionTitle = createSessionTitleGenerator({
+      createRuntime: createRuntime as any,
+      defaultModelForProvider: defaultModelForProvider as any,
+      loadWindowsAiElectronModule: loadWindowsAiElectronModule as any,
+      platform: "win32",
+      arch: "arm64",
+      env: createPhiSilicaEnv(),
+    });
+
+    const result = await generateSessionTitle({
+      config: makeConfig("openai"),
+      query: "provider fallback path",
+    });
+
+    expect(result).toEqual({
+      title: "Provider Platform Title",
+      source: "model",
+      model: "gpt-5-mini",
+    });
+    expect(loadWindowsAiElectronModule).toHaveBeenCalledTimes(1);
+    expect(windowsAi.getReadyState).toHaveBeenCalledTimes(1);
+    expect(windowsAi.createAsync).not.toHaveBeenCalled();
+    expect(createRuntime).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not load Windows AI when Phi Silica generation is not enabled", async () => {
+    const loadWindowsAiElectronModule = mock(async () => {
+      throw new Error("Windows AI addon should not be imported when Phi Silica is disabled");
+    });
+    const runTurn = mock(async (_args: any) => ({
+      text: "Provider Title",
+      reasoningText: undefined,
+      responseMessages: [] as any[],
+      usage: undefined,
+    }));
+    const createRuntime = mock((_config: AgentConfig) => ({ name: "pi", runTurn }));
+    const defaultModelForProvider = mock((_provider: AgentConfig["provider"]) => "gpt-5.2");
+
+    const generateSessionTitle = createSessionTitleGenerator({
+      createRuntime: createRuntime as any,
+      defaultModelForProvider: defaultModelForProvider as any,
+      loadWindowsAiElectronModule: loadWindowsAiElectronModule as any,
+      platform: "win32",
+      arch: "x64",
+      env: {
+        COWORK_PHI_SILICA_LAF_TOKEN: "token",
+        COWORK_PHI_SILICA_LAF_DEVELOPER_SIGNATURE: "signature",
+      },
+    });
+
+    const result = await generateSessionTitle({
+      config: makeConfig("openai"),
+      query: "provider fallback path",
+    });
+
+    expect(result).toEqual({
+      title: "Provider Title",
+      source: "model",
+      model: "gpt-5-mini",
+    });
+    expect(loadWindowsAiElectronModule).not.toHaveBeenCalled();
+    expect(createRuntime).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not load Windows AI without the systemAIModels package capability", async () => {
+    const loadWindowsAiElectronModule = mock(async () => {
+      throw new Error("Windows AI addon should not be imported without package capability");
+    });
+    const runTurn = mock(async (_args: any) => ({
+      text: "Provider Title",
+      reasoningText: undefined,
+      responseMessages: [] as any[],
+      usage: undefined,
+    }));
+    const createRuntime = mock((_config: AgentConfig) => ({ name: "pi", runTurn }));
+    const defaultModelForProvider = mock((_provider: AgentConfig["provider"]) => "gpt-5.2");
+
+    const generateSessionTitle = createSessionTitleGenerator({
+      createRuntime: createRuntime as any,
+      defaultModelForProvider: defaultModelForProvider as any,
+      loadWindowsAiElectronModule: loadWindowsAiElectronModule as any,
+      platform: "win32",
+      arch: "x64",
+      env: {
+        [__internal.PHI_SILICA_TITLE_ENABLED_ENV]: "1",
+        COWORK_PHI_SILICA_LAF_TOKEN: "token",
+        COWORK_PHI_SILICA_LAF_DEVELOPER_SIGNATURE: "signature",
+      },
+    });
+
+    const result = await generateSessionTitle({
+      config: makeConfig("openai"),
+      query: "provider fallback path",
+    });
+
+    expect(result).toEqual({
+      title: "Provider Title",
+      source: "model",
+      model: "gpt-5-mini",
+    });
+    expect(loadWindowsAiElectronModule).not.toHaveBeenCalled();
+    expect(createRuntime).toHaveBeenCalledTimes(1);
+  });
+
+  test("falls back to provider title models when Phi Silica generation is locked", async () => {
+    const windowsAi = createWindowsAiModule({ unlockStatus: 3 });
+    const loadWindowsAiElectronModule = mock(async () => windowsAi.module);
+    const runTurn = mock(async (_args: any) => ({
+      text: "Provider Unlock Fallback",
+      reasoningText: undefined,
+      responseMessages: [] as any[],
+      usage: undefined,
+    }));
+    const createRuntime = mock((_config: AgentConfig) => ({ name: "pi", runTurn }));
+    const defaultModelForProvider = mock((_provider: AgentConfig["provider"]) => "gpt-5.2");
+
+    const generateSessionTitle = createSessionTitleGenerator({
+      createRuntime: createRuntime as any,
+      defaultModelForProvider: defaultModelForProvider as any,
+      loadWindowsAiElectronModule: loadWindowsAiElectronModule as any,
+      platform: "win32",
+      arch: "arm64",
+      env: createPhiSilicaEnv(),
+    });
+
+    const result = await generateSessionTitle({
+      config: makeConfig("openai"),
+      query: "provider fallback path",
+    });
+
+    expect(result).toEqual({
+      title: "Provider Unlock Fallback",
+      source: "model",
+      model: "gpt-5-mini",
+    });
+    expect(windowsAi.tryUnlockFeature).toHaveBeenCalledTimes(1);
+    expect(windowsAi.createAsync).not.toHaveBeenCalled();
     expect(createRuntime).toHaveBeenCalledTimes(1);
   });
 

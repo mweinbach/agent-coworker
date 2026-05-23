@@ -1,8 +1,8 @@
 import { z } from "zod";
 
+import { renderCodexPrimaryRuntimeInstructions } from "./codexPrimaryRuntime";
 import { getModel as realGetModel } from "./config";
 import {
-  ensureManagedSofficeRuntimeReady,
   prepareManagedSofficeToolEnv,
   renderManagedSofficeRuntimeInstructions,
 } from "./managedSofficeRuntime";
@@ -275,6 +275,20 @@ function appendManagedSofficeInstructions(
   return instructions ? `${system}\n\n${instructions}` : system;
 }
 
+function appendRuntimeInstructions(
+  system: string,
+  env: Record<string, string | undefined> | undefined,
+): string {
+  let nextSystem = system;
+  if (!nextSystem.includes("## Codex Workspace Dependencies")) {
+    const codexRuntimeInstructions = renderCodexPrimaryRuntimeInstructions(env);
+    if (codexRuntimeInstructions) {
+      nextSystem = `${nextSystem}\n\n${codexRuntimeInstructions}`;
+    }
+  }
+  return appendManagedSofficeInstructions(nextSystem, env);
+}
+
 type RunTurnDeps = {
   createRuntime: typeof createRuntime;
   createTools: typeof createTools;
@@ -399,7 +413,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
     const mcpToolNames = Object.keys(tools)
       .filter((name) => name.startsWith("mcp__"))
       .sort();
-    const turnSystem = appendManagedSofficeInstructions(
+    const turnSystem = appendRuntimeInstructions(
       buildTurnSystemPrompt(system, config, mcpToolNames, params.harnessContext),
       turnToolEnv,
     );

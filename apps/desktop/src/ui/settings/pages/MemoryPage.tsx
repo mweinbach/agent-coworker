@@ -197,7 +197,9 @@ export function MemoryPage() {
   };
 
   const scopeLabel = (scope: "workspace" | "user") =>
-    scope === "workspace" ? "Workspace" : "Global";
+    scope === "workspace" ? "This workspace" : "All workspaces";
+  const memoryTitle = (entry: MemoryListEntry) =>
+    entry.id === HOT_MEMORY_ID ? "Always include" : entry.id;
 
   return (
     <div className="space-y-5">
@@ -265,7 +267,7 @@ export function MemoryPage() {
         <div className="rounded-xl border border-border/70 bg-background/50 py-12 flex flex-col items-center justify-center gap-3">
           <BrainIcon className="w-10 h-10 text-muted-foreground/40" />
           <p className="text-sm text-muted-foreground">
-            {showMemoryLoading ? "Loading..." : "No memories yet"}
+            {showMemoryLoading ? "Loading..." : "No remembered facts yet"}
           </p>
           {!showMemoryLoading && workspace ? (
             <Button variant="outline" size="sm" onClick={openCreateDialog}>
@@ -301,7 +303,9 @@ export function MemoryPage() {
                     ) : (
                       <ChevronRightIcon className="w-4 h-4 text-muted-foreground" />
                     )}
-                    <span className="font-medium text-foreground text-sm">{entry.id}</span>
+                    <span className="font-medium text-foreground text-sm">
+                      {memoryTitle(entry)}
+                    </span>
                     <Badge
                       variant={entry.scope === "workspace" ? "default" : "secondary"}
                       className="text-[10px] uppercase h-5"
@@ -361,7 +365,9 @@ export function MemoryPage() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{editingEntry ? `Edit memory` : "Add memory"}</DialogTitle>
+            <DialogTitle>
+              {editingEntry ? `Edit remembered fact` : "Add remembered fact"}
+            </DialogTitle>
           </DialogHeader>
           <div className="space-y-4 pt-2">
             <div className="space-y-1.5">
@@ -370,7 +376,7 @@ export function MemoryPage() {
               </label>
               <Input
                 id="memory-title"
-                placeholder="Optional — leave blank for general memory"
+                placeholder="Optional. Leave blank to always include it."
                 value={draft.id}
                 disabled={!!editingEntry}
                 onChange={(event) => setDraft((prev) => ({ ...prev, id: event.target.value }))}
@@ -392,8 +398,8 @@ export function MemoryPage() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="workspace">Workspace</SelectItem>
-                  <SelectItem value="user">Global</SelectItem>
+                  <SelectItem value="workspace">This workspace</SelectItem>
+                  <SelectItem value="user">All workspaces</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -416,7 +422,7 @@ export function MemoryPage() {
                 Cancel
               </Button>
               <Button type="button" onClick={handleSave} disabled={!draft.content.trim()}>
-                {editingEntry ? "Save changes" : "Add memory"}
+                {editingEntry ? "Save changes" : "Add remembered fact"}
               </Button>
             </div>
           </div>

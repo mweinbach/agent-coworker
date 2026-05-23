@@ -51,7 +51,6 @@ export function createJsonRpcWorkspaceModule(
 ) {
   const {
     isWorkspaceDisposed,
-    rememberThreadStoreGet,
     forgetThreadForReconnect,
     rememberThreadForReconnect,
     connectedThreadIdsForWorkspace,

@@ -105,6 +105,65 @@ describe("codex app-server runtime", () => {
     }
   });
 
+  test.serial("adds Codex workspace dependency instructions for app-server turns", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-runtime-"));
+    const capturePath = path.join(dir, "requests.jsonl");
+    const nodeModulesPath = path.join(dir, "runtime", "node", "node_modules");
+    const nodePath = path.join(
+      dir,
+      "runtime",
+      "node",
+      "bin",
+      process.platform === "win32" ? "node.exe" : "node",
+    );
+    const resolverPath = path.join(dir, "runtime", "node-resolver", "register.mjs");
+    process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
+
+    const runtime = createRuntime(makeConfig(dir));
+    await runtime.runTurn({
+      config: makeConfig(dir),
+      system: "You are Codex.",
+      messages: [{ role: "user", content: "Say hi" }],
+      tools: {},
+      maxSteps: 1,
+      toolEnv: {
+        PATH: "/tmp/cowork-managed-bin",
+        COWORK_SOFFICE: path.join(dir, "soffice"),
+        COWORK_CODEX_RUNTIME_NODE: nodePath,
+        COWORK_CODEX_RUNTIME_NODE_MODULES: nodeModulesPath,
+        COWORK_CODEX_RUNTIME_NODE_RESOLVER: resolverPath,
+      },
+    });
+
+    const requests = await readCapturedRequests(capturePath);
+    const startParams = requests.find((entry) => entry.method === "thread/start")?.params;
+    expect(startParams?.baseInstructions).toContain("Codex Workspace Dependencies");
+    expect(startParams?.baseInstructions).toContain(nodePath);
+    expect(startParams?.baseInstructions).toContain("bare imports");
+    expect(startParams?.baseInstructions).toContain('import "@oai/artifact-tool"');
+    expect(startParams?.baseInstructions).not.toContain(
+      process.platform === "win32" ? "cmd /c mklink /J" : "ln -s",
+    );
+  });
+
+  test("includes Codex dependency paths in app-server pool fingerprints", () => {
+    const base = codexAppServerClientInternal.pooledEnvFingerprint({
+      PATH: "/bin",
+      COWORK_CODEX_RUNTIME_NODE: "/runtime/node/bin/node",
+      COWORK_CODEX_RUNTIME_NODE_MODULES: "/runtime/node/node_modules-a",
+      COWORK_CODEX_RUNTIME_NODE_RESOLVER: "/runtime/node-resolver/register.mjs",
+    });
+    const changed = codexAppServerClientInternal.pooledEnvFingerprint({
+      PATH: "/bin",
+      COWORK_CODEX_RUNTIME_NODE: "/runtime/node/bin/node",
+      COWORK_CODEX_RUNTIME_NODE_MODULES: "/runtime/node/node_modules-b",
+      COWORK_CODEX_RUNTIME_NODE_RESOLVER: "/runtime/node-resolver/register.mjs",
+    });
+
+    expect(base).not.toBe(changed);
+    expect(base).toContain("COWORK_CODEX_RUNTIME_NODE_MODULES");
+  });
+
   test.serial("initializes app-server with the Cowork package version", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-init-"));
     const script = await writeMockAppServer(dir);

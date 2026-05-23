@@ -1,4 +1,4 @@
-import { stream as piStream } from "@mariozechner/pi-ai";
+import { stream as piStream } from "@earendil-works/pi-ai";
 import {
   markModelCallSpanError,
   markModelCallSpanSuccessFromAssistantRecord,

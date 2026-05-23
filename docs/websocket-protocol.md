@@ -11,6 +11,12 @@ Cowork supports one live WebSocket protocol on `/ws`: JSON-RPC-lite. The canonic
 - Current protocol version: `7.33`
 - WebSocket protocol mode: `jsonrpc`
 
+Loopback listeners (`127.0.0.1`, `localhost`, or `::1`) allow local non-browser clients to
+connect without an access token. Non-loopback listeners, including `0.0.0.0`, `::`, or a LAN
+address, require the startup `browserAccessToken` for `/ws` and `/cowork/*` even when the client
+does not send an `Origin` header. Send the token to `/ws` as `?coworkBrowserToken=<token>`; send it
+to `/cowork/*` HTTP routes as `X-Cowork-Browser-Token`.
+
 ## Mobile direct HTTP/3 transport
 
 Cowork Mobile uses the same JSON-RPC schema through a direct local HTTPS/HTTP/3 listener

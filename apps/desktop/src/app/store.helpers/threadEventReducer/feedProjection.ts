@@ -30,7 +30,6 @@ export function createFeedProjectionModule(
   ctx: ThreadEventReducerContext,
   workspace: Pick<WorkspaceStateHelpers, "resetLiveModelStreamRuntime">,
 ) {
-  const { deps } = ctx;
   function pushFeedItem(set: StoreSet, threadId: string, item: FeedItem) {
     set((s) => {
       const rt = s.threadRuntimeById[threadId];

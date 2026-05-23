@@ -23,32 +23,34 @@ describe("settings shell", () => {
   test("shows remote access when the feature is enabled", () => {
     const pageIds = getSettingsGroups(true).flatMap((group) => group.pages.map((page) => page.id));
     expect(pageIds).toContain("remoteAccess");
-    expect(pageIds).toContain("featureFlags");
+    expect(pageIds).toContain("experiments");
+    expect(pageIds).toContain("models");
+    expect(pageIds).toContain("toolAccess");
     expect(pageIds).not.toContain("openAiNativeConnectors");
   });
 
-  test("shows OpenAI native connectors only when the feature is enabled", () => {
-    const pageIds = getSettingsGroups(true, { openAiNativeConnectorsAvailable: true }).flatMap(
-      (group) => group.pages.map((page) => page.id),
-    );
-    expect(pageIds).toContain("openAiNativeConnectors");
+  test("consolidates tool surfaces into Tool Access", () => {
+    const pageIds = getSettingsGroups(true).flatMap((group) => group.pages.map((page) => page.id));
+    expect(pageIds).toContain("toolAccess");
+    expect(pageIds).not.toContain("mcp");
+    expect(pageIds).not.toContain("openAiNativeConnectors");
   });
 
   test("hides development-only settings in packaged builds", () => {
     const pageIds = getSettingsGroups(false, { includeDevelopmentPages: false }).flatMap((group) =>
       group.pages.map((page) => page.id),
     );
-    expect(pageIds).not.toContain("featureFlags");
-    expect(pageIds).toContain("developer");
+    expect(pageIds).not.toContain("experiments");
+    expect(pageIds).toContain("diagnostics");
     expect(pageIds).not.toContain("remoteAccess");
-    expect(pageIds).toContain("providers");
+    expect(pageIds).toContain("models");
     expect(pageIds).not.toContain("openAiNativeConnectors");
   });
 
   test("hides remote access when the feature is disabled", () => {
     const pageIds = getSettingsGroups(false).flatMap((group) => group.pages.map((page) => page.id));
     expect(pageIds).not.toContain("remoteAccess");
-    expect(pageIds).toContain("featureFlags");
+    expect(pageIds).toContain("experiments");
   });
 
   test("getSettingsGroups omits development pages when requested", () => {
@@ -56,7 +58,7 @@ describe("settings shell", () => {
       group.pages.map((page) => page.id),
     );
     expect(pageIds).toContain("remoteAccess");
-    expect(pageIds).not.toContain("featureFlags");
+    expect(pageIds).not.toContain("experiments");
   });
 
   test("offsets the settings drag zone right of the nav on native titleband platforms", () => {
@@ -70,7 +72,7 @@ describe("settings shell", () => {
           sidebarTitlebandMode: "native",
         }),
       ),
-    ).toEqual({ left: 280 });
+    ).toEqual({ "--settings-sidebar-width": "280px" });
   });
 
   test("places the macOS settings back button below the traffic light strip", () => {

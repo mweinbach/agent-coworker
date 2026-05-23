@@ -202,7 +202,7 @@ describe("settings nav (store)", () => {
   test("openSettings optionally selects a settings page", () => {
     useAppStore.getState().openSettings("workspaces");
     expect(useAppStore.getState().view).toBe("settings");
-    expect(useAppStore.getState().settingsPage).toBe("workspaces");
+    expect(useAppStore.getState().settingsPage).toBe("defaults");
   });
 
   test("closeSettings restores the prior view", () => {
@@ -214,12 +214,12 @@ describe("settings nav (store)", () => {
 
   test("setSettingsPage updates settingsPage", () => {
     useAppStore.getState().setSettingsPage("workspaces");
-    expect(useAppStore.getState().settingsPage).toBe("workspaces");
+    expect(useAppStore.getState().settingsPage).toBe("defaults");
   });
 
   test("setSettingsPage accepts mcp page", () => {
     useAppStore.getState().setSettingsPage("mcp");
-    expect(useAppStore.getState().settingsPage).toBe("mcp");
+    expect(useAppStore.getState().settingsPage).toBe("toolAccess");
   });
 
   test("setSettingsPage accepts OpenAI native connectors page when enabled", () => {
@@ -234,7 +234,7 @@ describe("settings nav (store)", () => {
       },
     });
     useAppStore.getState().setSettingsPage("openAiNativeConnectors");
-    expect(useAppStore.getState().settingsPage).toBe("openAiNativeConnectors");
+    expect(useAppStore.getState().settingsPage).toBe("toolAccess");
   });
 
   test("setSettingsPage accepts desktop page", () => {
@@ -291,10 +291,10 @@ describe("settings nav (store)", () => {
     });
     useAppStore.getState().openSettings("remoteAccess");
     expect(useAppStore.getState().view).toBe("settings");
-    expect(useAppStore.getState().settingsPage).toBe("providers");
+    expect(useAppStore.getState().settingsPage).toBe("models");
   });
 
-  test("openSettings falls back when OpenAI native connectors are unavailable", () => {
+  test("openSettings maps legacy OpenAI native connectors to Tool Access", () => {
     useAppStore.setState({
       desktopFeatureFlags: {
         menuBar: true,
@@ -307,7 +307,7 @@ describe("settings nav (store)", () => {
     });
     useAppStore.getState().openSettings("openAiNativeConnectors");
     expect(useAppStore.getState().view).toBe("settings");
-    expect(useAppStore.getState().settingsPage).toBe("providers");
+    expect(useAppStore.getState().settingsPage).toBe("toolAccess");
   });
 
   test("openSettings falls back from feature flags in packaged builds", () => {
@@ -319,7 +319,7 @@ describe("settings nav (store)", () => {
     });
     useAppStore.getState().openSettings("featureFlags");
     expect(useAppStore.getState().view).toBe("settings");
-    expect(useAppStore.getState().settingsPage).toBe("providers");
+    expect(useAppStore.getState().settingsPage).toBe("models");
   });
 
   test("setSettingsPage falls back from feature flags in packaged builds", () => {
@@ -330,7 +330,7 @@ describe("settings nav (store)", () => {
       },
     });
     useAppStore.getState().setSettingsPage("featureFlags");
-    expect(useAppStore.getState().settingsPage).toBe("providers");
+    expect(useAppStore.getState().settingsPage).toBe("models");
   });
 
   test("disabling remote access tears down an active relay and falls back from the remote access page", async () => {
@@ -351,7 +351,7 @@ describe("settings nav (store)", () => {
 
     expect(useAppStore.getState().desktopFeatureFlags.remoteAccess).toBe(false);
     expect(useAppStore.getState().desktopFeatureFlagOverrides).toEqual({ remoteAccess: false });
-    expect(useAppStore.getState().settingsPage).toBe("providers");
+    expect(useAppStore.getState().settingsPage).toBe("models");
     expect(stopMobileRelayCalls).toBe(1);
   });
 

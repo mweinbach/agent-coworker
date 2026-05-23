@@ -7,6 +7,17 @@ import {
   loadAppleFoundationModelsModule,
 } from "./appleFoundationTitle";
 import { heuristicTitleFromQuery } from "./heuristicTitle";
+import {
+  generatePhiSilicaTitle,
+  isWindowsPhiSilicaCandidate,
+  loadWindowsAiElectronModule,
+  PHI_SILICA_LAF_FEATURE_ID,
+  PHI_SILICA_SYSTEM_AI_MODELS_CAPABILITY_ENV,
+  PHI_SILICA_TITLE_ENABLED_ENV,
+  PHI_SILICA_TITLE_MODEL,
+  PHI_SILICA_TITLE_TEMPERATURE,
+  PHI_SILICA_TITLE_TOP_P,
+} from "./phiSilicaTitle";
 import { generateRemoteModelTitle } from "./remoteModelTitle";
 import { collapseWhitespace, DEFAULT_SESSION_TITLE, type SessionTitleResult } from "./shared";
 
@@ -21,6 +32,7 @@ type SessionTitleDeps = {
   createRuntime: typeof import("../../runtime").createRuntime;
   defaultModelForProvider: typeof import("../../providers/catalog").defaultModelForProvider;
   loadAppleFoundationModelsModule: typeof loadAppleFoundationModelsModule;
+  loadWindowsAiElectronModule: typeof loadWindowsAiElectronModule;
   platform: NodeJS.Platform;
   arch: string;
   env: NodeJS.ProcessEnv;
@@ -36,6 +48,8 @@ export function createSessionTitleGenerator(overrides: Partial<SessionTitleDeps>
         defaultModelForProvider: overrides.defaultModelForProvider,
         loadAppleFoundationModelsModule:
           overrides.loadAppleFoundationModelsModule ?? loadAppleFoundationModelsModule,
+        loadWindowsAiElectronModule:
+          overrides.loadWindowsAiElectronModule ?? loadWindowsAiElectronModule,
         platform: overrides.platform ?? process.platform,
         arch: overrides.arch ?? process.arch,
         env: overrides.env ?? process.env,
@@ -52,6 +66,8 @@ export function createSessionTitleGenerator(overrides: Partial<SessionTitleDeps>
           overrides.defaultModelForProvider ?? catalog.defaultModelForProvider,
         loadAppleFoundationModelsModule:
           overrides.loadAppleFoundationModelsModule ?? loadAppleFoundationModelsModule,
+        loadWindowsAiElectronModule:
+          overrides.loadWindowsAiElectronModule ?? loadWindowsAiElectronModule,
         platform: overrides.platform ?? process.platform,
         arch: overrides.arch ?? process.arch,
         env: overrides.env ?? process.env,
@@ -91,6 +107,22 @@ export function createSessionTitleGenerator(overrides: Partial<SessionTitleDeps>
       };
     }
 
+    const phiSilicaTitle = await generatePhiSilicaTitle(query, deps);
+    if (phiSilicaTitle.status === "generated") {
+      return {
+        title: phiSilicaTitle.title,
+        source: "model",
+        model: PHI_SILICA_TITLE_MODEL,
+      };
+    }
+    if (phiSilicaTitle.status === "failed") {
+      return {
+        title: heuristicTitleFromQuery(query),
+        source: "heuristic",
+        model: null,
+      };
+    }
+
     const remoteTitle = await generateRemoteModelTitle({
       config: opts.config,
       query,
@@ -115,6 +147,15 @@ export const __internal = {
   APPLE_TITLE_RANDOM_TOP_P,
   APPLE_TITLE_TEMPERATURE,
   generateAppleFoundationTitle,
+  generatePhiSilicaTitle,
   isAppleSiliconMac,
+  isWindowsPhiSilicaCandidate,
   loadAppleFoundationModelsModule,
+  loadWindowsAiElectronModule,
+  PHI_SILICA_LAF_FEATURE_ID,
+  PHI_SILICA_SYSTEM_AI_MODELS_CAPABILITY_ENV,
+  PHI_SILICA_TITLE_ENABLED_ENV,
+  PHI_SILICA_TITLE_MODEL,
+  PHI_SILICA_TITLE_TEMPERATURE,
+  PHI_SILICA_TITLE_TOP_P,
 };

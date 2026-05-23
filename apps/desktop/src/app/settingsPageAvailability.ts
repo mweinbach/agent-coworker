@@ -1,7 +1,7 @@
 import type { DesktopFeatureFlags } from "../../../../src/shared/featureFlags";
 import type { SettingsPageId } from "./types";
 
-const DEVELOPMENT_ONLY_SETTINGS_PAGES = new Set<SettingsPageId>(["featureFlags"]);
+const DEVELOPMENT_ONLY_SETTINGS_PAGES = new Set<SettingsPageId>(["experiments", "featureFlags"]);
 
 export function isSettingsPageAvailable(
   page: SettingsPageId,

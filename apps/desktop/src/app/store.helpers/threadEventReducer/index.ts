@@ -19,16 +19,32 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     handleThreadEvent: null as ReturnType<typeof createHandlersModule>["handleThreadEvent"] | null,
     ensureThreadSocket: null as ReturnType<typeof createSocketModule>["ensureThreadSocket"] | null,
   };
+  const handleThreadEventForward: ReturnType<typeof createHandlersModule>["handleThreadEvent"] = (
+    ...args
+  ) => {
+    if (!forwardRefs.handleThreadEvent) {
+      throw new Error("Thread event handler is not initialized.");
+    }
+    return forwardRefs.handleThreadEvent(...args);
+  };
+  const ensureThreadSocketForward: ReturnType<typeof createSocketModule>["ensureThreadSocket"] = (
+    ...args
+  ) => {
+    if (!forwardRefs.ensureThreadSocket) {
+      throw new Error("Thread socket manager is not initialized.");
+    }
+    return forwardRefs.ensureThreadSocket(...args);
+  };
 
   const jsonRpc = createJsonRpcWorkspaceModule(
     ctx,
     workspace,
     feed,
     {
-      handleThreadEvent: (...args) => forwardRefs.handleThreadEvent!(...args),
+      handleThreadEvent: handleThreadEventForward,
     },
     {
-      ensureThreadSocket: (...args) => forwardRefs.ensureThreadSocket!(...args),
+      ensureThreadSocket: ensureThreadSocketForward,
     },
   );
 

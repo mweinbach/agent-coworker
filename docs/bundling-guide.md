@@ -71,11 +71,12 @@ When launched with `--json`, the server prints a single JSON line to stdout once
   "url": "ws://127.0.0.1:54321/ws",
   "host": "127.0.0.1",
   "port": 54321,
-  "cwd": "/path/to/workspace"
+  "cwd": "/path/to/workspace",
+  "browserAccessToken": null
 }
 ```
 
-Parse this to discover the WebSocket URL. See `apps/desktop/electron/services/serverManager.ts` for a production-grade implementation including startup timeout, stderr capture, graceful shutdown, and retry logic for Bun crashes.
+Parse this to discover the WebSocket URL. When binding to a non-loopback host such as `0.0.0.0`, `browserAccessToken` is non-null and must be sent to `/ws` as the `coworkBrowserToken` query parameter and to `/cowork/*` HTTP routes as the `X-Cowork-Browser-Token` header. See `apps/desktop/electron/services/serverManager.ts` for a production-grade implementation including startup timeout, stderr capture, graceful shutdown, and retry logic for Bun crashes.
 
 **Server CLI flags:**
 
@@ -159,7 +160,7 @@ await socket.request("turn/start", {
 
 If you are not using TypeScript, connect with any WebSocket client. The protocol is plain JSON over WebSocket text frames.
 
-**1. Connect** to `ws://<host>:<port>/ws`, optionally offering the `cowork.jsonrpc.v1` WebSocket subprotocol.
+**1. Connect** to `ws://<host>:<port>/ws`, optionally offering the `cowork.jsonrpc.v1` WebSocket subprotocol. For non-loopback listeners, append `?coworkBrowserToken=<browserAccessToken>` using the startup token.
 
 **2. Send `initialize`:**
 

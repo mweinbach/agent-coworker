@@ -183,4 +183,29 @@ describe("AgentSession", () => {
       expect(pub.skillsDirs).toBeUndefined();
     });
   });
+
+  describe("uploadFile", () => {
+    test("rejects upload roots that resolve outside the working directory", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-upload-root-"));
+      const outsideDir = await fs.mkdtemp(path.join(path.dirname(dir), "session-upload-outside-"));
+      const uploadsDir = path.join(dir, "uploads");
+      await fs.symlink(outsideDir, uploadsDir, process.platform === "win32" ? "junction" : "dir");
+      const { session, events } = makeSession({
+        config: {
+          ...makeConfig(dir),
+          uploadsDirectory: uploadsDir,
+        },
+      });
+
+      await session.uploadFile("upload.txt", Buffer.from("blocked upload").toString("base64"));
+
+      const errorEvt = events.find((e) => e.type === "error") as any;
+      expect(errorEvt).toMatchObject({
+        code: "validation_failed",
+        message: "Uploads directory resolves outside the workspace.",
+      });
+      expect(events.some((e) => e.type === "file_uploaded")).toBe(false);
+      await expect(fs.readFile(path.join(outsideDir, "upload.txt"), "utf8")).rejects.toThrow();
+    });
+  });
 });

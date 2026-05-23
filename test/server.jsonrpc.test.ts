@@ -24,6 +24,15 @@ function waitForOpen(ws: WebSocket): Promise<void> {
   });
 }
 
+async function expectWorkspaceListResponse(response: Response, tmpDir: string): Promise<void> {
+  const body = (await response.json()) as {
+    workspaces: Array<{ name: string; path: string }>;
+  };
+  expect(body.workspaces).toHaveLength(1);
+  expect(body.workspaces[0]?.name).toBe(path.basename(tmpDir));
+  expect(await fs.realpath(body.workspaces[0]?.path ?? "")).toBe(await fs.realpath(tmpDir));
+}
+
 function waitForNodeWsOpen(ws: NodeWebSocket): Promise<void> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(
@@ -96,8 +105,13 @@ async function expectNoMessage(ws: WebSocket, durationMs = 150): Promise<void> {
   });
 }
 
-async function requestRawWebSocketUpgrade(url: string, origin: string): Promise<string> {
+async function requestRawWebSocketUpgrade(
+  url: string,
+  options: string | { origin?: string; headers?: Record<string, string> } = {},
+): Promise<string> {
   const parsed = new URL(url);
+  const origin = typeof options === "string" ? options : options.origin;
+  const extraHeaders = typeof options === "string" ? {} : (options.headers ?? {});
   return await new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     const socket = net.connect(Number(parsed.port), parsed.hostname, () => {
@@ -110,7 +124,8 @@ async function requestRawWebSocketUpgrade(url: string, origin: string): Promise<
           "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
           "Sec-WebSocket-Version: 13",
           "Sec-WebSocket-Protocol: cowork.jsonrpc.v1",
-          `Origin: ${origin}`,
+          ...(origin ? [`Origin: ${origin}`] : []),
+          ...Object.entries(extraHeaders).map(([key, value]) => `${key}: ${value}`),
           "",
           "",
         ].join("\r\n"),
@@ -133,6 +148,43 @@ async function requestRawWebSocketUpgrade(url: string, origin: string): Promise<
 }
 
 describe("server JSON-RPC websocket mode", () => {
+  test("requires the browser access token for no-origin websocket upgrades on network-exposed listeners", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, browserAccessToken } = await startAgentServer(
+      serverOpts(tmpDir, {
+        hostname: "0.0.0.0",
+      }),
+    );
+    const connectUrl = `ws://127.0.0.1:${server.port}/ws`;
+
+    try {
+      expect(typeof browserAccessToken).toBe("string");
+      const unauthorized = await requestRawWebSocketUpgrade(connectUrl);
+      expect(unauthorized).toStartWith("HTTP/1.1 401");
+      expect(unauthorized).toContain("Unauthorized server access");
+
+      const authorized = await requestRawWebSocketUpgrade(
+        `${connectUrl}?coworkBrowserToken=${encodeURIComponent(browserAccessToken ?? "")}`,
+      );
+      expect(authorized).toStartWith("HTTP/1.1 101");
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
+  test("keeps no-origin websocket upgrades open on loopback listeners", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url, browserAccessToken } = await startAgentServer(serverOpts(tmpDir));
+
+    try {
+      expect(browserAccessToken).toBeUndefined();
+      const response = await requestRawWebSocketUpgrade(url);
+      expect(response).toStartWith("HTTP/1.1 101");
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
   test("rejects websocket upgrades from non-loopback browser origins", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
@@ -243,9 +295,34 @@ describe("server JSON-RPC websocket mode", () => {
         },
       });
       expect(authorized.status).toBe(200);
-      await expect(authorized.json()).resolves.toEqual({
-        workspaces: [{ name: path.basename(tmpDir), path: await fs.realpath(tmpDir) }],
+      await expectWorkspaceListResponse(authorized, tmpDir);
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
+  test("requires the browser access token for no-origin cowork HTTP routes on network-exposed listeners", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, browserAccessToken } = await startAgentServer(
+      serverOpts(tmpDir, {
+        hostname: "0.0.0.0",
+      }),
+    );
+    const httpBase = `http://127.0.0.1:${server.port}`;
+
+    try {
+      expect(typeof browserAccessToken).toBe("string");
+      const unauthorized = await fetch(`${httpBase}/cowork/workspaces`);
+      expect(unauthorized.status).toBe(401);
+      expect(await unauthorized.text()).toBe("Unauthorized server access");
+
+      const authorized = await fetch(`${httpBase}/cowork/workspaces`, {
+        headers: {
+          "X-Cowork-Browser-Token": browserAccessToken ?? "",
+        },
       });
+      expect(authorized.status).toBe(200);
+      await expectWorkspaceListResponse(authorized, tmpDir);
     } finally {
       await stopTestServer(server);
     }

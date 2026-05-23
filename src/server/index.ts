@@ -230,6 +230,14 @@ async function main() {
       `[cowork-server] reachable on: ${hostHints.map((ip) => `ws://${ip}:${server.port}/ws`).join(", ")}`,
     );
   }
+  if (browserAccessToken) {
+    const hasExplicitBrowserAccessToken = Boolean(process.env.COWORK_BROWSER_ACCESS_TOKEN?.trim());
+    console.log(
+      hasExplicitBrowserAccessToken
+        ? "[cowork-server] access token required for /ws and /cowork/* (using COWORK_BROWSER_ACCESS_TOKEN)"
+        : `[cowork-server] generated access token for /ws and /cowork/*: ${browserAccessToken}`,
+    );
+  }
 }
 
 if (import.meta.main) {

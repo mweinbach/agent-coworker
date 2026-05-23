@@ -62,7 +62,8 @@ describe("spreadsheet preview parser", () => {
       if (summary.B2) summary.B2.z = "$0.00";
       XLSX.utils.book_append_sheet(workbook, summary, "Summary");
       XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([["id"], [1]]), "Data");
-      XLSX.writeFile(workbook, filePath);
+      const xlsxBytes = XLSX.write(workbook, { bookType: "xlsx", type: "buffer" });
+      await fs.writeFile(filePath, xlsxBytes);
 
       const result = await previewSpreadsheetFile({
         cwd: dir,
@@ -78,6 +79,7 @@ describe("spreadsheet preview parser", () => {
       expect(result.preview.selectedSheetName).toBe("Summary");
       expect(result.preview.cells[1]?.[2]?.formula).toBe("B2*2");
       expect(result.preview.cells[1]?.[1]?.style?.numberFormat).toBe("$0.00");
+      expect(result.preview.cells[3]?.[1]?.value).toBe("");
       expect(result.preview.mergedCells).toEqual([
         { ref: "A4:B4", startRow: 3, startCol: 0, endRow: 3, endCol: 1 },
       ]);

@@ -5,6 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 
+import {
+  resolvePackagedSidecarFilename,
+  resolveWindowsAiElectronPrebuildTriplet,
+} from "../electron/services/sidecar";
 import { createElectronMock, setElectronMockOverrides } from "./helpers/mockElectron";
 
 let userDataDir = process.cwd();
@@ -294,6 +298,55 @@ describe("desktop server manager startup mode", () => {
     } finally {
       if (previousSdkDir === undefined) delete process.env.COWORK_TSFMSDK_DIR;
       else process.env.COWORK_TSFMSDK_DIR = previousSdkDir;
+      if (previousSidecarPath === undefined) {
+        delete process.env.COWORK_DESKTOP_SIDECAR_PATH;
+      } else {
+        process.env.COWORK_DESKTOP_SIDECAR_PATH = previousSidecarPath;
+      }
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("buildServerEnv points packaged server at bundled Windows AI Electron when present", async () => {
+    if (process.platform !== "win32") {
+      const env = __internal.buildServerEnv(undefined, {
+        includeBundledWindowsAiElectron: true,
+      });
+      expect(env.COWORK_WINDOWS_AI_ELECTRON_DIR).toBeUndefined();
+      return;
+    }
+
+    const previousAddonDir = process.env.COWORK_WINDOWS_AI_ELECTRON_DIR;
+    const previousSidecarPath = process.env.COWORK_DESKTOP_SIDECAR_PATH;
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-windows-ai-electron-bundle-"));
+    const sidecar = path.join(dir, resolvePackagedSidecarFilename(process.platform, process.arch));
+    const addonDir = path.join(dir, "windows-ai-electron");
+    const prebuildTriplet = resolveWindowsAiElectronPrebuildTriplet(process.platform, process.arch);
+    const nativeAddonPath = path.join(
+      addonDir,
+      "windows-ai-electron",
+      "prebuilds",
+      prebuildTriplet,
+      "node.node",
+    );
+
+    try {
+      delete process.env.COWORK_WINDOWS_AI_ELECTRON_DIR;
+      process.env.COWORK_DESKTOP_SIDECAR_PATH = sidecar;
+      await fs.writeFile(sidecar, "");
+      await fs.mkdir(path.dirname(nativeAddonPath), { recursive: true });
+      await fs.writeFile(path.join(addonDir, "index.js"), "");
+      await fs.writeFile(nativeAddonPath, "");
+
+      expect(__internal.buildServerEnv().COWORK_WINDOWS_AI_ELECTRON_DIR).toBeUndefined();
+
+      const env = __internal.buildServerEnv(undefined, {
+        includeBundledWindowsAiElectron: true,
+      });
+      expect(env.COWORK_WINDOWS_AI_ELECTRON_DIR).toBe(addonDir);
+    } finally {
+      if (previousAddonDir === undefined) delete process.env.COWORK_WINDOWS_AI_ELECTRON_DIR;
+      else process.env.COWORK_WINDOWS_AI_ELECTRON_DIR = previousAddonDir;
       if (previousSidecarPath === undefined) {
         delete process.env.COWORK_DESKTOP_SIDECAR_PATH;
       } else {

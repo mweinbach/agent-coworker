@@ -55,14 +55,22 @@ export { EXA_SECTION_ID, PARALLEL_SECTION_ID } from "./providersPageUtils";
 
 type ProvidersPageProps = {
   initialExpandedSectionId?: string | null;
+  surface?: "all" | "models" | "tools";
 };
 
-export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPageProps = {}) {
+export function ProvidersPage({
+  initialExpandedSectionId = null,
+  surface = "all",
+}: ProvidersPageProps = {}) {
   const workspacesFromStore = useAppStore((s) => s.workspaces);
   const selectedWorkspaceIdFromStore = useAppStore((s) => s.selectedWorkspaceId);
   const serverState = typeof window === "undefined" ? useAppStore.getState() : null;
   const workspaces = serverState?.workspaces ?? workspacesFromStore;
   const selectedWorkspaceId = serverState?.selectedWorkspaceId ?? selectedWorkspaceIdFromStore;
+  const selectedWorkspace = useMemo(
+    () => workspaces.find((entry) => entry.id === selectedWorkspaceId) ?? workspaces[0] ?? null,
+    [selectedWorkspaceId, workspaces],
+  );
   const hasWorkspace = workspaces.length > 0;
   const canConnectProvider = hasWorkspace || selectedWorkspaceId !== null;
 
@@ -1166,8 +1174,60 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
     ...(!isParallelConnected ? [renderParallelCard()] : []),
   ];
 
-  const [activeTab, setActiveTab] = useState<"models" | "tools">(() =>
-    initialTabForSection(initialExpandedSectionId, toolProviders),
+  const initialTab =
+    surface === "tools"
+      ? "tools"
+      : surface === "models"
+        ? "models"
+        : initialTabForSection(initialExpandedSectionId, toolProviders);
+  const [activeTab, setActiveTab] = useState<"models" | "tools">(initialTab);
+  const effectiveTab = surface === "all" ? activeTab : surface;
+
+  const modelIssueCount = modelProviders.filter((provider) => {
+    const status = providerStatusByName[provider];
+    return status ? !status.verified && !status.authorized : true;
+  }).length;
+  const connectedModelCount = modelProviders.length - modelIssueCount;
+  const toolIssueCount =
+    disconnectedToolProviders.length + (isExaConnected ? 0 : 1) + (isParallelConnected ? 0 : 1);
+  const connectedToolCount =
+    connectedToolProviders.length + (isExaConnected ? 1 : 0) + (isParallelConnected ? 1 : 0);
+
+  const providerSummary = (
+    <div className="grid gap-3 md:grid-cols-3">
+      <div className="rounded-lg border border-border/55 bg-background/55 px-3 py-2.5">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+          {effectiveTab === "models" ? "Connected models" : "Connected tools"}
+        </div>
+        <div className="mt-1 text-xl font-semibold tabular-nums text-foreground">
+          {effectiveTab === "models" ? connectedModelCount : connectedToolCount}
+        </div>
+      </div>
+      <div className="rounded-lg border border-border/55 bg-background/55 px-3 py-2.5">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+          Needs setup
+        </div>
+        <div className="mt-1 text-xl font-semibold tabular-nums text-foreground">
+          {effectiveTab === "models" ? modelIssueCount : toolIssueCount}
+        </div>
+      </div>
+      <div className="rounded-lg border border-border/55 bg-background/55 px-3 py-2.5">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+          {effectiveTab === "models" ? "Default provider" : "Search fallback"}
+        </div>
+        <div className="mt-1 truncate text-sm font-semibold text-foreground">
+          {effectiveTab === "models"
+            ? displayProviderName(
+                (selectedWorkspace?.defaultProvider as ProviderName | undefined) ?? "google",
+              )
+            : isExaConnected
+              ? "Exa"
+              : isParallelConnected
+                ? "Parallel"
+                : "Not connected"}
+        </div>
+      </div>
+    </div>
   );
 
   return (
@@ -1180,37 +1240,43 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
         </Card>
       ) : null}
 
-      <div className="app-shadow-surface relative mb-2 flex max-w-fit gap-1 rounded-xl border border-border/70 bg-foreground/[0.04] p-1.5 backdrop-blur-sm">
-        {(["models", "tools"] as const).map((tab) => (
-          <Button
-            key={tab}
-            onClick={() => {
-              setActiveTab(tab);
-              setExpandedSectionId(null);
-            }}
-            className={cn(
-              "relative z-10 h-auto rounded-lg px-3.5 py-1.5 text-sm font-medium transition-colors",
-              activeTab === tab ? "text-foreground" : "text-muted-foreground hover:text-foreground",
-            )}
-            type="button"
-            variant="ghost"
-          >
-            {activeTab === tab && (
-              <motion.div
-                layoutId="providers-active-tab"
-                className="app-shadow-surface absolute inset-0 -z-10 rounded-lg border border-border/55 bg-panel/85 backdrop-blur-sm"
-                transition={{ type: "spring", stiffness: 500, damping: 30 }}
-              />
-            )}
-            {tab === "models" ? "Model Providers" : "Tool Providers"}
-          </Button>
-        ))}
-      </div>
+      {providerSummary}
+
+      {surface === "all" ? (
+        <div className="app-shadow-surface relative mb-2 flex max-w-fit gap-1 rounded-xl border border-border/70 bg-foreground/[0.04] p-1.5 backdrop-blur-sm">
+          {(["models", "tools"] as const).map((tab) => (
+            <Button
+              key={tab}
+              onClick={() => {
+                setActiveTab(tab);
+                setExpandedSectionId(null);
+              }}
+              className={cn(
+                "relative z-10 h-auto rounded-lg px-3.5 py-1.5 text-sm font-medium transition-colors",
+                activeTab === tab
+                  ? "text-foreground"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+              type="button"
+              variant="ghost"
+            >
+              {activeTab === tab && (
+                <motion.div
+                  layoutId="providers-active-tab"
+                  className="app-shadow-surface absolute inset-0 -z-10 rounded-lg border border-border/55 bg-panel/85 backdrop-blur-sm"
+                  transition={{ type: "spring", stiffness: 500, damping: 30 }}
+                />
+              )}
+              {tab === "models" ? "Model Providers" : "Tool Providers"}
+            </Button>
+          ))}
+        </div>
+      ) : null}
 
       <div
         className={cn(
           "divide-y divide-border/30 overflow-hidden rounded-xl border border-border/75 bg-card/85 app-shadow-surface animate-in fade-in slide-in-from-bottom-2 duration-300",
-          activeTab !== "models" && "hidden",
+          effectiveTab !== "models" && "hidden",
         )}
       >
         {modelProviders.map(renderProviderCard)}
@@ -1218,7 +1284,7 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
       <div
         className={cn(
           "divide-y divide-border/30 overflow-hidden rounded-xl border border-border/75 bg-card/85 app-shadow-surface animate-in fade-in slide-in-from-bottom-2 duration-300",
-          activeTab !== "tools" && "hidden",
+          effectiveTab !== "tools" && "hidden",
         )}
       >
         {allToolElements}

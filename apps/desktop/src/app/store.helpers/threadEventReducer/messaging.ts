@@ -13,8 +13,6 @@ import {
 } from "../jsonRpcSocket";
 import {
   clearPendingThreadSteer,
-  hasPendingThreadSteer,
-  prependPendingThreadMessage,
   prependPendingThreadMessageWithAttachments,
   queuePendingThreadMessage,
   RUNTIME,
@@ -37,7 +35,6 @@ export function createMessagingModule(
   >,
   feed: Pick<FeedProjectionModule, "pushFeedItem">,
 ) {
-  const { deps } = ctx;
   const { pushFeedItem } = feed;
   const { workspaceIdForThread, forgetThreadForReconnect, hasPendingWorkspaceDefaultApply } =
     workspace;

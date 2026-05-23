@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { pathExists } from "./state";
 import type { CodexPrimaryRuntimeSetupResult } from "./types";
 
@@ -222,6 +223,88 @@ export function prependNodePath(
   const existingParts = env.NODE_PATH ? env.NODE_PATH.split(path.delimiter) : [];
   const nextParts = dedupePathEntries([nodeModulesPath, ...existingParts]);
   return { ...runtimeEnv, NODE_PATH: nextParts.join(path.delimiter) };
+}
+
+const nodeResolverRegisterSource = `import { register } from "node:module";
+
+register(new URL("./hooks.mjs", import.meta.url));
+`;
+
+const nodeResolverHooksSource = `import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+const nodeModulesPath = process.env.COWORK_CODEX_RUNTIME_NODE_MODULES;
+const runtimeParentURL = nodeModulesPath
+  ? pathToFileURL(path.join(nodeModulesPath, ".cowork-runtime-entry.mjs")).href
+  : null;
+
+function isBareSpecifier(specifier) {
+  return (
+    typeof specifier === "string" &&
+    specifier.length > 0 &&
+    !specifier.startsWith(".") &&
+    !specifier.startsWith("/") &&
+    !specifier.startsWith("#") &&
+    !specifier.includes(":")
+  );
+}
+
+export async function resolve(specifier, context, nextResolve) {
+  try {
+    return await nextResolve(specifier, context);
+  } catch (error) {
+    if (!runtimeParentURL || !isBareSpecifier(specifier)) {
+      throw error;
+    }
+
+    try {
+      return await nextResolve(specifier, {
+        ...context,
+        parentURL: runtimeParentURL,
+      });
+    } catch {
+      throw error;
+    }
+  }
+}
+`;
+
+function getEnvValue(env: Record<string, string | undefined>, key: string): string | undefined {
+  const actualKey = Object.keys(env).find(
+    (candidate) => candidate.toLowerCase() === key.toLowerCase(),
+  );
+  const value = actualKey ? env[actualKey] : undefined;
+  return value && value.trim() ? value : undefined;
+}
+
+function prependNodeOption(existing: string | undefined, option: string): string {
+  const trimmed = existing?.trim();
+  if (!trimmed) return option;
+  if (trimmed.includes(option)) return trimmed;
+  return `${option} ${trimmed}`;
+}
+
+export async function prepareNodeModuleResolverEnv(opts: {
+  env: Record<string, string | undefined>;
+  runtimeDir: string;
+  runtimeEnv: Record<string, string>;
+  nodeModulesPath?: string;
+}): Promise<Record<string, string>> {
+  if (!opts.nodeModulesPath) return opts.runtimeEnv;
+
+  const resolverDir = path.join(opts.runtimeDir, "node-resolver");
+  const registerPath = path.join(resolverDir, "register.mjs");
+  const hooksPath = path.join(resolverDir, "hooks.mjs");
+  await fs.mkdir(resolverDir, { recursive: true });
+  await fs.writeFile(registerPath, nodeResolverRegisterSource, "utf-8");
+  await fs.writeFile(hooksPath, nodeResolverHooksSource, "utf-8");
+
+  const importOption = `--import=${pathToFileURL(registerPath).href}`;
+  return {
+    ...opts.runtimeEnv,
+    COWORK_CODEX_RUNTIME_NODE_RESOLVER: registerPath,
+    NODE_OPTIONS: prependNodeOption(getEnvValue(opts.env, "NODE_OPTIONS"), importOption),
+  };
 }
 
 export async function resolveArtifactTool(opts: {

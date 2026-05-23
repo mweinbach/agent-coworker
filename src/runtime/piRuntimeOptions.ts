@@ -1,4 +1,4 @@
-import { getModel as getPiModel, getModels as getPiModels } from "@mariozechner/pi-ai";
+import { getModel as getPiModel, getModels as getPiModels } from "@earendil-works/pi-ai";
 import { z } from "zod";
 import { isFireworksInferenceProvider } from "../providers/fireworksShared";
 import type { ProviderName } from "../types";

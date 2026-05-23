@@ -72,11 +72,11 @@
     "check:write": "bunx biome check --write ."
   },
   "dependencies": {
-    "@aws-sdk/client-bedrock": "^3.1048.0",
-    "@aws-sdk/client-bedrock-runtime": "^3.1048.0",
-    "@google/genai": "^2.3.0",
+    "@aws-sdk/client-bedrock": "^3.1053.0",
+    "@aws-sdk/client-bedrock-runtime": "^3.1053.0",
+    "@earendil-works/pi-ai": "^0.75.4",
+    "@google/genai": "^2.6.0",
     "@langfuse/otel": "^5.3.0",
-    "@mariozechner/pi-ai": "^0.73.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@mozilla/readability": "^0.6.0",
     "@opentelemetry/api": "^1.9.1",
@@ -87,6 +87,7 @@
     "fast-glob": "^3.3.3",
     "jsdom": "^29.1.1",
     "partial-json": "^0.1.7",
+    "proxy-agent": "^8.0.1",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "reflect-metadata": "^0.2.2",
@@ -94,17 +95,18 @@
     "turndown": "^7.2.4",
     "unified": "^11.0.5",
     "unofficial-antigravity-sdk": "^1.0.2",
-    "xlsx": "^0.18.5",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zod": "4.4.3"
   },
   "optionalDependencies": {
+    "@microsoft/windows-ai-electron": "^0.2.0",
     "tsfm-sdk": "^0.3.1"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.15",
     "@types/jsdom": "^28.0.3",
-    "@types/node": "^25.8.0",
-    "@types/react": "^19.2.14",
+    "@types/node": "^25.9.1",
+    "@types/react": "^19.2.15",
     "@types/react-dom": "^19.2.3",
     "@types/turndown": "^5.0.6",
     "bun-types": "^1.3.14",

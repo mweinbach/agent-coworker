@@ -147,7 +147,7 @@ export function ToolHeader({
   return (
     <CollapsibleTrigger
       className={cn(
-        "group flex w-full items-center justify-between gap-3 px-2.5 py-2 text-left outline-none",
+        "group flex w-full select-none items-center justify-between gap-3 px-2.5 py-2 text-left outline-none",
         className,
       )}
       {...props}

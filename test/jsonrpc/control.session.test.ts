@@ -239,6 +239,30 @@ describe("server JSON-RPC control methods", () => {
     }
   });
 
+  test("workspace file upload rejects upload roots that resolve outside the workspace", async () => {
+    const tmpDir = await makeTmpProject();
+    const outsideDir = await fs.mkdtemp(path.join(path.dirname(tmpDir), "upload-escape-"));
+    const uploadsDir = path.join(tmpDir, "User Uploads");
+    await fs.symlink(outsideDir, uploadsDir, process.platform === "win32" ? "junction" : "dir");
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const response = await rpc.request("cowork/session/file/upload", {
+        cwd: tmpDir,
+        filename: "upload.txt",
+        contentBase64: Buffer.from("blocked upload").toString("base64"),
+      });
+
+      expect(response.error.message).toBe("Uploads directory resolves outside the workspace.");
+      expect(response.result).toBeUndefined();
+      await expect(fs.readFile(path.join(outsideDir, "upload.txt"), "utf8")).rejects.toThrow();
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
   test("session model set returns the current config when the selected model is unchanged", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));

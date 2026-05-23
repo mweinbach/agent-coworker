@@ -9,10 +9,13 @@ import {
   FOUNDATION_MODELS_SDK_DIR_NAME,
   resolvePackagedCodexAppServerFilename,
   resolvePackagedSidecarFilename,
+  resolveWindowsAiElectronPrebuildTriplet,
   SIDECAR_BUN_ENTRYPOINT_PATH,
   SIDECAR_BUN_EXECUTABLE_NAME,
   shouldBundleFoundationModelsSdk,
+  shouldBundleWindowsAiElectronPackage,
   shouldUseBundledBunRuntime,
+  WINDOWS_AI_ELECTRON_DIR_NAME,
 } from "../apps/desktop/electron/services/sidecar";
 import {
   buildBunBundle,
@@ -25,11 +28,8 @@ import {
   runCommand,
 } from "./releaseBuildUtils";
 
-const CACHE_VERSION = 4;
-const MANAGED_SOFFICE_HELPER_RELATIVE_PATH = path.join(
-  "assets",
-  "managed-soffice-helper.mjs",
-);
+const CACHE_VERSION = 5;
+const MANAGED_SOFFICE_HELPER_RELATIVE_PATH = path.join("assets", "managed-soffice-helper.mjs");
 
 type DesktopResourcesCache = {
   version: number;
@@ -43,6 +43,7 @@ type DesktopResourcesCache = {
   skillsFingerprint: string;
   codexPrimaryRuntimeFingerprint: string | null;
   foundationModelsSdkFingerprint: string | null;
+  windowsAiElectronFingerprint: string | null;
   docsFingerprint: string | null;
 };
 
@@ -119,6 +120,8 @@ async function loadCache(cachePath: string): Promise<DesktopResourcesCache | nul
         typeof parsed.codexPrimaryRuntimeFingerprint !== "string") ||
       (parsed.foundationModelsSdkFingerprint !== null &&
         typeof parsed.foundationModelsSdkFingerprint !== "string") ||
+      (parsed.windowsAiElectronFingerprint !== null &&
+        typeof parsed.windowsAiElectronFingerprint !== "string") ||
       (parsed.docsFingerprint !== null && typeof parsed.docsFingerprint !== "string")
     ) {
       return null;
@@ -222,11 +225,93 @@ async function ensureFoundationModelsSdkInputs(root: string): Promise<{
   };
 }
 
+async function ensureWindowsAiElectronInputs(
+  root: string,
+  platform: NodeJS.Platform,
+  arch: string,
+): Promise<{
+  packageRoot: string;
+  prebuildTriplet: string;
+  fingerprintTargets: string[];
+} | null> {
+  const packageRoot = path.join(root, "node_modules", "@microsoft", "windows-ai-electron");
+  const prebuildTriplet = resolveWindowsAiElectronPrebuildTriplet(platform, arch);
+  const requiredFiles = [
+    path.join(packageRoot, "package.json"),
+    path.join(packageRoot, "index.js"),
+    path.join(packageRoot, "windows-ai-electron", "prebuilds", prebuildTriplet, "node.node"),
+  ];
+
+  for (const requiredFile of requiredFiles) {
+    if (!(await pathExists(requiredFile))) {
+      console.warn(
+        `[resources] Windows AI Electron: optional package payload missing, disabling Phi Silica support (${requiredFile})`,
+      );
+      return null;
+    }
+  }
+
+  return {
+    packageRoot,
+    prebuildTriplet,
+    fingerprintTargets: requiredFiles,
+  };
+}
+
 async function copyIfExists(src: string, dest: string): Promise<void> {
   if (!(await pathExists(src))) {
     return;
   }
   await fs.copyFile(src, dest);
+}
+
+async function syncWindowsAiElectronPackage(opts: {
+  root: string;
+  dest: string;
+  previousFingerprint: string | null;
+  nextFingerprint: string | null;
+  platform: NodeJS.Platform;
+  arch: string;
+}): Promise<void> {
+  if (!shouldBundleWindowsAiElectronPackage(opts.platform, opts.arch)) {
+    await rmrf(opts.dest);
+    console.log("[resources] Windows AI Electron: disabled");
+    return;
+  }
+
+  const inputs = await ensureWindowsAiElectronInputs(opts.root, opts.platform, opts.arch);
+  if (!inputs) {
+    await rmrf(opts.dest);
+    return;
+  }
+
+  const nativeRelativePath = path.join(
+    "windows-ai-electron",
+    "prebuilds",
+    inputs.prebuildTriplet,
+    "node.node",
+  );
+  const currentLooksComplete =
+    (await pathExists(path.join(opts.dest, "index.js"))) &&
+    (await pathExists(path.join(opts.dest, nativeRelativePath)));
+  if (opts.previousFingerprint === opts.nextFingerprint && currentLooksComplete) {
+    console.log("[resources] Windows AI Electron: cached");
+    return;
+  }
+
+  await rmrf(opts.dest);
+  await fs.mkdir(path.dirname(path.join(opts.dest, nativeRelativePath)), { recursive: true });
+  await fs.copyFile(path.join(inputs.packageRoot, "index.js"), path.join(opts.dest, "index.js"));
+  await copyIfExists(
+    path.join(inputs.packageRoot, "package.json"),
+    path.join(opts.dest, "package.json"),
+  );
+  await copyIfExists(path.join(inputs.packageRoot, "LICENSE"), path.join(opts.dest, "LICENSE"));
+  await fs.copyFile(
+    path.join(inputs.packageRoot, nativeRelativePath),
+    path.join(opts.dest, nativeRelativePath),
+  );
+  console.log("[resources] Windows AI Electron: updated");
 }
 
 async function syncFoundationModelsSdk(opts: {
@@ -346,6 +431,12 @@ async function main() {
   const foundationModelsSdkFingerprint = foundationModelsSdkInputs
     ? await fingerprintInputs(foundationModelsSdkInputs.fingerprintTargets, root)
     : null;
+  const windowsAiElectronInputs = shouldBundleWindowsAiElectronPackage(platform, arch)
+    ? await ensureWindowsAiElectronInputs(root, platform, arch)
+    : null;
+  const windowsAiElectronFingerprint = windowsAiElectronInputs
+    ? await fingerprintInputs(windowsAiElectronInputs.fingerprintTargets, root)
+    : null;
   const docsFingerprint = includeDocs ? await fingerprintInputs([docsSrc], root) : null;
   const sidecarFingerprint = await fingerprintInputs(sidecarInputs, root);
 
@@ -358,6 +449,7 @@ async function main() {
   const codexAppServerOutfile = path.join(desktopBinariesDir, codexAppServerFilename);
   const sidecarManifestPath = path.join(desktopBinariesDir, "cowork-server-manifest.json");
   const foundationModelsSdkDest = path.join(desktopBinariesDir, FOUNDATION_MODELS_SDK_DIR_NAME);
+  const windowsAiElectronDest = path.join(desktopBinariesDir, WINDOWS_AI_ELECTRON_DIR_NAME);
   const bundledBunPath = path.join(desktopBinariesDir, SIDECAR_BUN_EXECUTABLE_NAME);
   const bundledEntrypointPath = path.join(desktopBinariesDir, SIDECAR_BUN_ENTRYPOINT_PATH);
   const compiledManagedSofficeHelperPath = path.join(
@@ -543,6 +635,15 @@ async function main() {
     arch,
   });
 
+  await syncWindowsAiElectronPackage({
+    root,
+    dest: windowsAiElectronDest,
+    previousFingerprint: cache?.windowsAiElectronFingerprint ?? null,
+    nextFingerprint: windowsAiElectronFingerprint,
+    platform,
+    arch,
+  });
+
   const docsDest = path.join(distDir, "docs");
   if (!includeDocs) {
     await rmrf(docsDest);
@@ -569,13 +670,21 @@ async function main() {
     skillsFingerprint,
     codexPrimaryRuntimeFingerprint,
     foundationModelsSdkFingerprint,
+    windowsAiElectronFingerprint,
     docsFingerprint,
   });
 
   console.log("[resources] skipped dist/server desktop bundle (unused at runtime)");
 }
 
-await main().catch((err) => {
-  console.error(err);
-  process.exitCode = 1;
-});
+if (import.meta.main) {
+  await main().catch((err) => {
+    console.error(err);
+    process.exitCode = 1;
+  });
+}
+
+export const __internal = {
+  ensureWindowsAiElectronInputs,
+  syncWindowsAiElectronPackage,
+};

@@ -245,6 +245,20 @@ describe("Codex primary runtime bootstrap", () => {
       expect(result?.runtimeEnv.NODE_PATH?.split(path.delimiter)[0]).toBe(
         path.join(bundledRuntimeDir, "node", "node_modules"),
       );
+      expect(result?.runtimeEnv.COWORK_CODEX_RUNTIME_NODE_RESOLVER).toBe(
+        path.join(
+          home,
+          ".cache",
+          "codex-runtimes",
+          "codex-primary-runtime",
+          "node-resolver",
+          "register.mjs",
+        ),
+      );
+      expect(result?.runtimeEnv.NODE_OPTIONS).toContain("--import=file://");
+      await expect(
+        fs.readFile(result?.runtimeEnv.COWORK_CODEX_RUNTIME_NODE_RESOLVER ?? "", "utf-8"),
+      ).resolves.toContain("register(new URL");
       expect(result?.artifactTool).toMatchObject({
         status: "available",
         source: oaiSource,

@@ -8,12 +8,14 @@ import { resolveWsProtocol, splitWebSocketSubprotocolHeader } from "./wsProtocol
 export type { StartAgentServerOptions } from "./runtime/ServerRuntime";
 
 function isLoopbackHostname(hostname: string): boolean {
-  return (
-    hostname === "localhost" ||
-    hostname === "127.0.0.1" ||
-    hostname === "[::1]" ||
-    hostname === "::1"
-  );
+  const normalized = hostname.trim().toLowerCase();
+  const bareHostname =
+    normalized.startsWith("[") && normalized.endsWith("]") ? normalized.slice(1, -1) : normalized;
+  return bareHostname === "localhost" || bareHostname === "127.0.0.1" || bareHostname === "::1";
+}
+
+function createBrowserAccessToken(): string {
+  return crypto.randomUUID() + crypto.randomUUID().replaceAll("-", "");
 }
 
 function pickLoopbackOrigin(origin: string | null): string | null {
@@ -46,6 +48,10 @@ function readBrowserAccessToken(url: URL, req: Request): string | null {
   return queryToken || null;
 }
 
+function isProtectedServerPath(pathname: string): boolean {
+  return pathname === "/ws" || pathname.startsWith("/cowork");
+}
+
 function parseBearerToken(header: string | null): string | null {
   if (!header) return null;
   const match = /^Bearer\s+(.+)$/i.exec(header.trim());
@@ -65,6 +71,7 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
   browserAccessToken?: string;
 }> {
   const hostname = opts.hostname ?? "127.0.0.1";
+  const networkExposedListener = !isLoopbackHostname(hostname);
   const runtime = await createAgentServerRuntime(opts);
   const requestedPort = opts.port ?? 7337;
   const webDesktopService =
@@ -76,7 +83,7 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
       : null;
   const browserAccessToken =
     runtime.env.COWORK_BROWSER_ACCESS_TOKEN?.trim() ||
-    (webDesktopService ? crypto.randomUUID() + crypto.randomUUID().replaceAll("-", "") : "");
+    (webDesktopService || networkExposedListener ? createBrowserAccessToken() : "");
   let mobileServer: Awaited<ReturnType<typeof startH3MobileServer>> | undefined;
 
   const createServer = (port: number): ReturnType<typeof Bun.serve> =>
@@ -108,26 +115,22 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
             },
           });
         }
-        if (
-          browserOrigin &&
-          !browserAccessToken &&
-          (url.pathname === "/ws" || url.pathname.startsWith("/cowork"))
-        ) {
-          return new Response("Browser access is not enabled for this server", {
-            status: 403,
-            headers: corsHeaders,
-          });
-        }
-        if (
-          browserOrigin &&
-          browserAccessToken &&
-          (url.pathname === "/ws" || url.pathname.startsWith("/cowork")) &&
-          readBrowserAccessToken(url, req) !== browserAccessToken
-        ) {
-          return new Response("Unauthorized browser access", {
-            status: 401,
-            headers: corsHeaders,
-          });
+        if (isProtectedServerPath(url.pathname) && (browserOrigin || networkExposedListener)) {
+          if (!browserAccessToken) {
+            return new Response("Browser access is not enabled for this server", {
+              status: 403,
+              headers: corsHeaders,
+            });
+          }
+          if (readBrowserAccessToken(url, req) !== browserAccessToken) {
+            return new Response(
+              browserOrigin ? "Unauthorized browser access" : "Unauthorized server access",
+              {
+                status: 401,
+                headers: corsHeaders,
+              },
+            );
+          }
         }
         if (url.pathname === "/ws") {
           const resumeSessionIdRaw = url.searchParams.get("resumeSessionId");

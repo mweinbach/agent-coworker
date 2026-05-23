@@ -1,4 +1,4 @@
-import type { Message as PiMessage } from "@mariozechner/pi-ai";
+import type { Message as PiMessage } from "@earendil-works/pi-ai";
 
 import type { ModelMessage } from "../types";
 import type { RuntimeUsage } from "./types";

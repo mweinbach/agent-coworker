@@ -233,7 +233,7 @@ async function ensureWindowsAiElectronInputs(
   packageRoot: string;
   prebuildTriplet: string;
   fingerprintTargets: string[];
-}> {
+} | null> {
   const packageRoot = path.join(root, "node_modules", "@microsoft", "windows-ai-electron");
   const prebuildTriplet = resolveWindowsAiElectronPrebuildTriplet(platform, arch);
   const requiredFiles = [
@@ -244,9 +244,10 @@ async function ensureWindowsAiElectronInputs(
 
   for (const requiredFile of requiredFiles) {
     if (!(await pathExists(requiredFile))) {
-      throw new Error(
-        `Phi Silica title support requires optional @microsoft/windows-ai-electron resources for Windows packaging, but this file is missing: ${requiredFile}. Run bun install on Windows first.`,
+      console.warn(
+        `[resources] Windows AI Electron: optional package payload missing, disabling Phi Silica support (${requiredFile})`,
       );
+      return null;
     }
   }
 
@@ -279,6 +280,11 @@ async function syncWindowsAiElectronPackage(opts: {
   }
 
   const inputs = await ensureWindowsAiElectronInputs(opts.root, opts.platform, opts.arch);
+  if (!inputs) {
+    await rmrf(opts.dest);
+    return;
+  }
+
   const nativeRelativePath = path.join(
     "windows-ai-electron",
     "prebuilds",
@@ -671,7 +677,14 @@ async function main() {
   console.log("[resources] skipped dist/server desktop bundle (unused at runtime)");
 }
 
-await main().catch((err) => {
-  console.error(err);
-  process.exitCode = 1;
-});
+if (import.meta.main) {
+  await main().catch((err) => {
+    console.error(err);
+    process.exitCode = 1;
+  });
+}
+
+export const __internal = {
+  ensureWindowsAiElectronInputs,
+  syncWindowsAiElectronPackage,
+};

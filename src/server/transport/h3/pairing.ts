@@ -10,6 +10,28 @@ const MOBILE_PAIRING_DIRNAME = "mobile-pairing";
 const DEVICES_FILE_NAME = "devices.json";
 const pairingStoreLocks = new Map<string, Promise<void>>();
 
+export const H3_TRUSTED_DEVICE_PERMISSION_KEYS = [
+  "turns",
+  "serverRequests",
+  "providerAuth",
+  "mcpAuth",
+  "workspaceSettings",
+  "backups",
+] as const;
+
+export type H3TrustedDevicePermissionKey = (typeof H3_TRUSTED_DEVICE_PERMISSION_KEYS)[number];
+
+export type H3TrustedDevicePermissions = Record<H3TrustedDevicePermissionKey, boolean>;
+
+export const DEFAULT_H3_TRUSTED_DEVICE_PERMISSIONS: H3TrustedDevicePermissions = {
+  turns: false,
+  serverRequests: false,
+  providerAuth: false,
+  mcpAuth: false,
+  workspaceSettings: false,
+  backups: false,
+};
+
 export type H3TrustedDeviceRecord = {
   deviceId: string;
   identityPub: string;
@@ -18,6 +40,7 @@ export type H3TrustedDeviceRecord = {
   sessionTokenHash: string;
   lastPairedAt: string;
   lastConnectedAt: string | null;
+  permissions: H3TrustedDevicePermissions;
 };
 
 export type H3PairingStoreState = {
@@ -80,6 +103,18 @@ function normalizeString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function normalizePermissions(raw: unknown): H3TrustedDevicePermissions {
+  const permissions: H3TrustedDevicePermissions = { ...DEFAULT_H3_TRUSTED_DEVICE_PERMISSIONS };
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return permissions;
+  }
+  const record = raw as Record<string, unknown>;
+  for (const key of H3_TRUSTED_DEVICE_PERMISSION_KEYS) {
+    permissions[key] = record[key] === true;
+  }
+  return permissions;
+}
+
 function normalizeDeviceRecord(raw: unknown): H3TrustedDeviceRecord | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return null;
@@ -100,6 +135,7 @@ function normalizeDeviceRecord(raw: unknown): H3TrustedDeviceRecord | null {
     displayName: normalizeString(record.displayName) || null,
     lastPairedAt: normalizeString(record.lastPairedAt) || new Date().toISOString(),
     lastConnectedAt: normalizeString(record.lastConnectedAt) || null,
+    permissions: normalizePermissions(record.permissions),
   };
 }
 
@@ -174,6 +210,8 @@ export async function rememberH3TrustedDevice(
   return await withPairingStoreLock(storeRootPath, async () => {
     const now = new Date().toISOString();
     const fingerprint = (await sha256Base64Url(device.identityPub)).slice(0, 16);
+    const state = await loadH3PairingStoreState(storeRootPath);
+    const existing = state.trustedDevices.find((entry) => entry.deviceId === device.deviceId);
     const record: H3TrustedDeviceRecord = {
       deviceId: device.deviceId,
       identityPub: device.identityPub,
@@ -182,14 +220,48 @@ export async function rememberH3TrustedDevice(
       sessionTokenHash: await sha256Base64Url(device.sessionToken),
       lastPairedAt: now,
       lastConnectedAt: now,
+      permissions: existing?.permissions ?? { ...DEFAULT_H3_TRUSTED_DEVICE_PERMISSIONS },
     };
-    const state = await loadH3PairingStoreState(storeRootPath);
     const trustedDevices = state.trustedDevices.filter(
       (entry) => entry.deviceId !== device.deviceId,
     );
     trustedDevices.unshift(record);
     await persistH3PairingStoreState({ version: 1, trustedDevices }, storeRootPath);
     return record;
+  });
+}
+
+export async function listH3TrustedDevices(
+  storeRootPath = resolveDefaultStoreRoot(),
+): Promise<H3TrustedDeviceRecord[]> {
+  const state = await loadH3PairingStoreState(storeRootPath);
+  return state.trustedDevices;
+}
+
+export async function updateH3TrustedDevicePermissions(
+  storeRootPath: string | undefined,
+  deviceId: string,
+  permissionsPatch: Partial<Record<H3TrustedDevicePermissionKey, boolean>>,
+): Promise<H3TrustedDeviceRecord | null> {
+  const normalizedDeviceId = deviceId.trim();
+  if (!normalizedDeviceId) {
+    return null;
+  }
+  return await withPairingStoreLock(storeRootPath, async () => {
+    const state = await loadH3PairingStoreState(storeRootPath);
+    const match = state.trustedDevices.find((device) => device.deviceId === normalizedDeviceId);
+    if (!match) {
+      return null;
+    }
+    const permissions: H3TrustedDevicePermissions = { ...match.permissions };
+    for (const key of H3_TRUSTED_DEVICE_PERMISSION_KEYS) {
+      if (typeof permissionsPatch[key] === "boolean") {
+        permissions[key] = permissionsPatch[key] === true;
+      }
+    }
+    match.permissions = permissions;
+    await persistH3PairingStoreState(state, storeRootPath);
+    return match;
   });
 }
 

@@ -216,6 +216,7 @@ async function main() {
               nonce: mobileServer.nonce,
               expiresAt: mobileServer.expiresAt,
               trustedDevice: mobileServer.trustedDevice,
+              trustedDevices: await mobileServer.listTrustedDevices(),
             }
           : null,
       }),

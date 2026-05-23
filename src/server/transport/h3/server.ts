@@ -12,13 +12,19 @@ import type {
 import type { AgentServerRuntime } from "../../runtime/ServerRuntime";
 import type { StartServerSocketData } from "../../startServer/types";
 import {
+  DEFAULT_H3_TRUSTED_DEVICE_PERMISSIONS,
   createH3PairingSession,
   forgetH3TrustedDevice,
   forgetH3TrustedDevices,
   type H3PairingSession,
   type H3TrustedDeviceRecord,
+  type H3TrustedDevicePermissionKey,
+  type H3TrustedDevicePermissions,
+  H3_TRUSTED_DEVICE_PERMISSION_KEYS,
+  listH3TrustedDevices,
   loadH3PairingStoreState,
   rememberH3TrustedDevice,
+  updateH3TrustedDevicePermissions,
   verifyH3PairingNonce,
   verifyH3SessionToken,
 } from "./pairing";
@@ -60,10 +66,16 @@ export type H3MobileServerState = {
   nonce: string;
   expiresAt: number;
   trustedDevice: H3MobileTrustedDeviceSummary | null;
+  trustedDevices: H3MobileTrustedDeviceSummary[];
 };
 
 type H3MobileServerHandle = H3MobileServerState & {
   server: ReturnType<typeof Bun.serve>;
+  listTrustedDevices(): Promise<H3MobileTrustedDeviceSummary[]>;
+  updateTrustedDevicePermissions(
+    deviceId: string,
+    permissions: Partial<Record<H3TrustedDevicePermissionKey, boolean>>,
+  ): Promise<H3MobileTrustedDeviceSummary | null>;
   revokeTrustedDevice(deviceId: string): Promise<boolean>;
   revokeTrustedDevices(): Promise<void>;
   stop(): Promise<void>;
@@ -73,6 +85,9 @@ type H3MobileTrustedDeviceSummary = {
   deviceId: string;
   fingerprint: string;
   displayName: string | null;
+  lastPairedAt: string;
+  lastConnectedAt: string | null;
+  permissions: H3TrustedDevicePermissions;
 };
 
 function jsonResponse(body: unknown, init?: ResponseInit): Response {
@@ -155,6 +170,7 @@ function parseJsonRpcPayload(
 async function dispatchHttpRpcPayload(
   raw: unknown,
   connection: H3JsonRpcConnection,
+  trustedDevice: H3TrustedDeviceRecord,
 ): Promise<Response> {
   let message: JsonRpcLiteRequest | JsonRpcLiteNotification | JsonRpcLiteClientResponse;
   try {
@@ -165,6 +181,17 @@ async function dispatchHttpRpcPayload(
         error: error instanceof Error ? error.message : "Invalid JSON-RPC payload.",
       },
       { status: 400 },
+    );
+  }
+
+  const requiredPermission = getRequiredH3Permission(message);
+  if (requiredPermission && trustedDevice.permissions[requiredPermission] !== true) {
+    return jsonResponse(
+      {
+        error: `Mobile device permission required: ${requiredPermission}.`,
+        permission: requiredPermission,
+      },
+      { status: 403 },
     );
   }
 
@@ -183,6 +210,65 @@ async function dispatchHttpRpcPayload(
     return jsonResponse({ ok: true }, { status: 202 });
   }
   return jsonResponse(response ?? {});
+}
+
+const ALWAYS_ALLOWED_H3_RPC_METHODS = new Set([
+  "initialize",
+  "initialized",
+  "thread/list",
+  "thread/read",
+  "thread/resume",
+  "thread/hydrate",
+  "thread/unsubscribe",
+  "workspace/list",
+  "cowork/workspace/bootstrap",
+  "cowork/workspace/spreadsheet/preview",
+  "cowork/workspace/presentation/preview",
+  "cowork/session/state/read",
+  "cowork/session/harnessContext/get",
+  "cowork/provider/catalog/read",
+  "cowork/provider/authMethods/read",
+  "cowork/provider/status/refresh",
+  "cowork/provider/codexAppServer/status",
+  "cowork/runtime/libreoffice/check",
+  "cowork/mcp/servers/read",
+  "cowork/mcp/server/validate",
+  "cowork/skills/catalog/read",
+  "cowork/skills/list",
+  "cowork/skills/read",
+  "cowork/skills/installation/read",
+  "cowork/skills/install/preview",
+  "cowork/plugins/catalog/read",
+  "cowork/plugins/read",
+  "cowork/plugins/install/preview",
+  "cowork/memory/list",
+  "cowork/connectors/openai-native/list",
+  "cowork/connectors/openai-native/refresh",
+]);
+
+function getRequiredH3Permission(
+  message: JsonRpcLiteRequest | JsonRpcLiteNotification | JsonRpcLiteClientResponse,
+): H3TrustedDevicePermissionKey | null {
+  if (!("method" in message)) {
+    return "serverRequests";
+  }
+  const method = message.method;
+  if (ALWAYS_ALLOWED_H3_RPC_METHODS.has(method)) {
+    return null;
+  }
+  if (method === "thread/start" || method.startsWith("turn/")) {
+    return "turns";
+  }
+  if (method.startsWith("cowork/provider/auth/")) {
+    return "providerAuth";
+  }
+  if (method.startsWith("cowork/mcp/server/auth/")) {
+    return "mcpAuth";
+  }
+  if (method.startsWith("cowork/backups/")) {
+    return "backups";
+  }
+  return "workspaceSettings";
 }
 
 function decodePairingTicketForRequest(rawTicket: string): CoworkPairingTicket | null {
@@ -298,7 +384,18 @@ function summarizeTrustedDevice(
     deviceId: trustedDevice.deviceId,
     fingerprint: trustedDevice.fingerprint,
     displayName: trustedDevice.displayName,
+    lastPairedAt: trustedDevice.lastPairedAt,
+    lastConnectedAt: trustedDevice.lastConnectedAt,
+    permissions: { ...trustedDevice.permissions },
   };
+}
+
+async function summarizeTrustedDevices(
+  storeRootPath: string | undefined,
+): Promise<H3MobileTrustedDeviceSummary[]> {
+  return (await listH3TrustedDevices(storeRootPath))
+    .map(summarizeTrustedDevice)
+    .filter((device): device is H3MobileTrustedDeviceSummary => device !== null);
 }
 
 async function withResponseTimeout(response: Promise<unknown>): Promise<unknown> {
@@ -403,6 +500,9 @@ export async function startH3MobileServer(
           deviceId: trustedDevice.deviceId,
           fingerprint: trustedDevice.fingerprint,
           displayName: trustedDevice.displayName,
+          lastPairedAt: trustedDevice.lastPairedAt,
+          lastConnectedAt: trustedDevice.lastConnectedAt,
+          permissions: trustedDevice.permissions,
         },
       });
     }
@@ -418,7 +518,11 @@ export async function startH3MobileServer(
 
       if (req.method === "POST" && url.pathname === "/rpc") {
         const raw = await req.json().catch(() => null);
-        return await dispatchHttpRpcPayload(raw, getConnection(trustedDevice.deviceId));
+        return await dispatchHttpRpcPayload(
+          raw,
+          getConnection(trustedDevice.deviceId),
+          trustedDevice,
+        );
       }
 
       if (req.method === "GET" && url.pathname === "/events") {
@@ -478,6 +582,27 @@ export async function startH3MobileServer(
     nonce: pairing.nonce,
     expiresAt: pairing.expiresAt,
     trustedDevice: summarizeTrustedDevice(latestTrustedDevice),
+    trustedDevices: await summarizeTrustedDevices(options.storeRootPath),
+    async listTrustedDevices() {
+      return await summarizeTrustedDevices(options.storeRootPath);
+    },
+    async updateTrustedDevicePermissions(deviceId, permissions) {
+      const allowedPatch: Partial<Record<H3TrustedDevicePermissionKey, boolean>> = {};
+      for (const key of H3_TRUSTED_DEVICE_PERMISSION_KEYS) {
+        if (typeof permissions[key] === "boolean") {
+          allowedPatch[key] = permissions[key] === true;
+        }
+      }
+      const updated = await updateH3TrustedDevicePermissions(
+        options.storeRootPath,
+        deviceId,
+        allowedPatch,
+      );
+      if (updated && latestTrustedDevice?.deviceId === updated.deviceId) {
+        latestTrustedDevice = updated;
+      }
+      return summarizeTrustedDevice(updated);
+    },
     async revokeTrustedDevice(deviceId: string) {
       const connection = httpConnections.get(deviceId);
       if (connection) {
@@ -511,8 +636,10 @@ export async function startH3MobileServer(
 
 export const __internal = {
   createHttpJsonRpcConnection,
+  DEFAULT_H3_TRUSTED_DEVICE_PERMISSIONS,
   decodePairingTicketForRequest,
   dispatchHttpRpcPayload,
   formatUrlHost,
+  getRequiredH3Permission,
   requireAdminToken,
 };

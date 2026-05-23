@@ -106,6 +106,14 @@ describe("H3 mobile server pairing", () => {
             deviceId: "phone-1",
             identityPub: "phone-identity",
             displayName: "Work Phone",
+            permissions: {
+              turns: false,
+              serverRequests: false,
+              providerAuth: false,
+              mcpAuth: false,
+              workspaceSettings: false,
+              backups: false,
+            },
           },
         ],
       });
@@ -144,6 +152,60 @@ describe("H3 mobile server pairing", () => {
         result: { reachedRuntime: true },
       });
       expect(handled).toEqual([{ id: 2, method: "thread/list" }]);
+
+      const deniedTurn = await fetchH3(`${server.url}/rpc`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${pairPayload.sessionToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 3,
+          method: "turn/start",
+          params: { threadId: "thread-1", input: "hello" },
+        }),
+      });
+      expect(deniedTurn.status).toBe(403);
+      await expect(deniedTurn.json()).resolves.toMatchObject({
+        error: "Mobile device permission required: turns.",
+        permission: "turns",
+      });
+      expect(handled).toEqual([{ id: 2, method: "thread/list" }]);
+
+      await expect(server.updateTrustedDevicePermissions("phone-1", { turns: true })).resolves
+        .toMatchObject({
+          deviceId: "phone-1",
+          permissions: { turns: true },
+        });
+
+      const allowedTurn = await fetchH3(`${server.url}/rpc`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${pairPayload.sessionToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 4,
+          method: "turn/start",
+          params: { threadId: "thread-1", input: "hello" },
+        }),
+      });
+      expect(allowedTurn.status).toBe(200);
+      await expect(allowedTurn.json()).resolves.toEqual({
+        jsonrpc: "2.0",
+        id: 4,
+        result: { reachedRuntime: true },
+      });
+      expect(handled).toEqual([
+        { id: 2, method: "thread/list" },
+        {
+          id: 4,
+          method: "turn/start",
+          params: { threadId: "thread-1", input: "hello" },
+        },
+      ]);
     } finally {
       await server.stop();
     }

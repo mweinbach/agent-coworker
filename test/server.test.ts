@@ -454,6 +454,62 @@ describe("HTTP Handler", () => {
         trustedDevices: [expect.objectContaining({ deviceId })],
       });
 
+      const listResponse = await fetch(`http://127.0.0.1:${server.port}/mobile-h3/trusted`, {
+        headers: {
+          Authorization: `Bearer ${mobileServer.adminToken}`,
+        },
+      });
+      expect(listResponse.status).toBe(200);
+      await expect(listResponse.json()).resolves.toMatchObject({
+        trustedDevices: [
+          {
+            deviceId,
+            permissions: {
+              turns: false,
+              serverRequests: false,
+              providerAuth: false,
+              mcpAuth: false,
+              workspaceSettings: false,
+              backups: false,
+            },
+          },
+        ],
+      });
+
+      const permissionsResponse = await fetch(`${httpUrl}/permissions`, {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${mobileServer.adminToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          permissions: {
+            turns: true,
+            backups: true,
+            unknownPermission: true,
+          },
+        }),
+      });
+      expect(permissionsResponse.status).toBe(200);
+      await expect(permissionsResponse.json()).resolves.toMatchObject({
+        trustedDevice: {
+          deviceId,
+          permissions: {
+            turns: true,
+            backups: true,
+            providerAuth: false,
+          },
+        },
+      });
+      await expect(loadH3PairingStoreState(tmpDir)).resolves.toMatchObject({
+        trustedDevices: [
+          expect.objectContaining({
+            deviceId,
+            permissions: expect.objectContaining({ turns: true, backups: true }),
+          }),
+        ],
+      });
+
       const authorized = await fetch(httpUrl, {
         method: "DELETE",
         headers: {

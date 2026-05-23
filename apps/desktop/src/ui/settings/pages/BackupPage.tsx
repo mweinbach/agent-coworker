@@ -11,7 +11,7 @@ import {
   SaveIcon,
   Trash2Icon,
 } from "lucide-react";
-import { useEffect, useEffectEvent, useState } from "react";
+import { type ComponentType, useEffect, useEffectEvent, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
 import { workspaceBackupActionKey } from "../../../app/store.helpers/backupActionKey";
@@ -21,9 +21,9 @@ import type {
   WorkspaceRecord,
   WorkspaceRuntime,
 } from "../../../app/types";
+import { isOneOffChatWorkspace } from "../../../app/types";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
-import { Card, CardContent } from "../../../components/ui/card";
 import {
   Select,
   SelectContent,
@@ -35,6 +35,14 @@ import { Switch } from "../../../components/ui/switch";
 import { confirmAction, revealPath } from "../../../lib/desktopCommands";
 import { cn } from "../../../lib/utils";
 import { useOptionalSettingsChrome } from "../SettingsChromeContext";
+import {
+  SettingsEmptyState,
+  SettingsPage,
+  SettingsRow,
+  SettingsSection,
+  SettingsStatusPill,
+  SettingsToolbar,
+} from "../SettingsPrimitives";
 
 type BackupPageProps = {
   workspace?: WorkspaceRecord | null;
@@ -100,7 +108,7 @@ function StatItem({
 }: {
   label: string;
   value: string;
-  icon: React.ComponentType<{ className?: string }>;
+  icon: ComponentType<{ className?: string }>;
 }) {
   return (
     <div className="flex items-center gap-3">
@@ -111,6 +119,18 @@ function StatItem({
         <div className="text-xs text-muted-foreground">{label}</div>
         <div className="text-sm font-medium text-foreground">{value}</div>
       </div>
+    </div>
+  );
+}
+
+function SummaryTile({ label, value, detail }: { label: string; value: string; detail?: string }) {
+  return (
+    <div className="rounded-lg border border-border/55 bg-background/55 px-3 py-2.5">
+      <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+        {label}
+      </div>
+      <div className="mt-1 text-lg font-semibold tabular-nums text-foreground">{value}</div>
+      {detail ? <div className="mt-0.5 text-xs text-muted-foreground">{detail}</div> : null}
     </div>
   );
 }
@@ -138,10 +158,10 @@ function BackupSidebar({
 }: BackupSidebarProps) {
   return (
     <div
-      className="flex w-72 shrink-0 flex-col border-r border-border/80 bg-muted/14 sm:w-80"
+      className="settings-section flex min-h-[320px] min-w-0 flex-col overflow-hidden rounded-lg border border-border/60 bg-card/80"
       data-backup-rail="true"
     >
-      <div className="flex items-center justify-between border-b border-border/70 bg-muted/10 px-4 py-3.5 shrink-0">
+      <div className="flex shrink-0 items-center justify-between border-b border-border/55 px-4 py-3.5">
         <span className="text-sm font-semibold text-foreground">Backup History</span>
         <Button
           variant="ghost"
@@ -156,7 +176,7 @@ function BackupSidebar({
         </Button>
       </div>
 
-      <div className="flex-1 space-y-1 overflow-y-auto bg-muted/6 p-4">
+      <div className="max-h-[560px] flex-1 space-y-1 overflow-y-auto p-3">
         {entries.length === 0 && !loading ? (
           <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
             <ArchiveIcon className="h-8 w-8 mb-3 text-muted-foreground/30" />
@@ -266,8 +286,8 @@ function BackupDetailView({
   onRevealFolder,
 }: BackupDetailViewProps) {
   return (
-    <div className="flex flex-col h-full overflow-hidden">
-      <div className="border-b border-border/70 bg-background/96 px-6 py-5">
+    <div className="settings-section flex min-h-[360px] flex-col overflow-hidden rounded-lg border border-border/60 bg-card/80">
+      <div className="border-b border-border/55 px-5 py-4">
         <div className="flex items-start gap-4">
           <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-border/45 bg-background/55 text-muted-foreground">
             <FolderOpenIcon className="h-5 w-5" />
@@ -300,7 +320,7 @@ function BackupDetailView({
         </div>
       </div>
 
-      <div className="border-b border-border/60 bg-background/64 px-6 py-4">
+      <div className="border-b border-border/45 bg-background/35 px-5 py-4">
         <div className="flex flex-wrap items-center gap-x-8 gap-y-3">
           <StatItem label="Created" value={formatTimestamp(entry.createdAt)} icon={ClockIcon} />
           <StatItem
@@ -317,7 +337,7 @@ function BackupDetailView({
         </div>
       </div>
 
-      <div className="flex-1 overflow-auto bg-background/92 p-6">
+      <div className="flex-1 overflow-auto p-5">
         <div className="space-y-3">
           <div className="text-sm font-medium text-foreground">Backup Actions</div>
           <div className="flex flex-wrap gap-3">
@@ -428,8 +448,8 @@ function CheckpointDeltaView({
   onDeleteCheckpoint,
 }: CheckpointDeltaViewProps) {
   return (
-    <div className="flex flex-col h-full overflow-hidden">
-      <div className="flex items-center justify-between border-b border-border/70 bg-background/96 px-6 py-4 shrink-0">
+    <div className="settings-section flex min-h-[360px] flex-col overflow-hidden rounded-lg border border-border/60 bg-card/80">
+      <div className="flex shrink-0 items-center justify-between border-b border-border/55 px-5 py-4">
         <div className="flex items-center gap-3">
           <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-border/45 bg-background/55 text-muted-foreground">
             <FileTextIcon className="h-4 w-4" />
@@ -507,7 +527,7 @@ function CheckpointDeltaView({
       </div>
 
       <div className="flex-1 flex flex-col overflow-hidden">
-        <div className="flex items-center justify-between border-b border-border/40 bg-background/64 px-6 py-3 text-xs shrink-0">
+        <div className="flex shrink-0 items-center justify-between border-b border-border/40 bg-background/35 px-5 py-3 text-xs">
           <span className="text-muted-foreground flex items-center gap-2">
             Compared to baseline:
             <Badge variant="secondary" className="font-mono text-[10px]">
@@ -620,6 +640,9 @@ export function BackupPage(props: BackupPageProps = {}) {
   const setWorkspaceBackupSessionEnabledFromStore = useAppStore(
     (s) => s.setWorkspaceBackupSessionEnabled,
   );
+  const updateWorkspaceDefaultsFromStore = useAppStore((s) => s.updateWorkspaceDefaults);
+  const perWorkspaceSettings = useAppStore((s) => s.perWorkspaceSettings);
+  const setSettingsPage = useAppStore((s) => s.setSettingsPage);
   // During SSR (renderToStaticMarkup), hooks like useAppStore(selector) return default state
   // because there's no React store provider. Read directly from getState() as a fallback.
   const serverState = typeof window === "undefined" ? useAppStore.getState() : null;
@@ -648,6 +671,10 @@ export function BackupPage(props: BackupPageProps = {}) {
         : null;
   const workspaceBackupsEnabled =
     props.onRefresh !== undefined || runtime?.controlSessionConfig?.backupsEnabled === true;
+  const workspaceBackupsDefaultEnabled =
+    runtime?.controlSessionConfig?.defaultBackupsEnabled ??
+    workspace?.defaultBackupsEnabled ??
+    false;
 
   const refreshBackups =
     props.onRefresh ??
@@ -690,6 +717,20 @@ export function BackupPage(props: BackupPageProps = {}) {
       : undefined);
   const revealFolder =
     props.onRevealFolder ?? (async (folderPath: string) => await revealPath({ path: folderPath }));
+  const setWorkspaceBackupsDefault = async (enabled: boolean) => {
+    if (!workspace) return;
+    const targets = perWorkspaceSettings
+      ? [workspace]
+      : workspaceList.filter((entry) => !isOneOffChatWorkspace(entry));
+    await Promise.all(
+      targets.map((entry) =>
+        updateWorkspaceDefaultsFromStore(entry.id, { defaultBackupsEnabled: enabled }),
+      ),
+    );
+    if (enabled && refreshBackups) {
+      void refreshBackups();
+    }
+  };
 
   const [selectedTargetSessionId, setSelectedTargetSessionId] = useState<string | null>(null);
   const [selectedCheckpointId, setSelectedCheckpointId] = useState<string | null>(null);
@@ -711,6 +752,9 @@ export function BackupPage(props: BackupPageProps = {}) {
 
   const entries = runtime?.workspaceBackups ?? [];
   const sortedEntries = sortByUpdated(entries);
+  const totalBytes = sortedEntries.reduce((sum, entry) => sum + (entry.totalBytes ?? 0), 0);
+  const checkpointCount = sortedEntries.reduce((sum, entry) => sum + entry.checkpoints.length, 0);
+  const failedCount = sortedEntries.filter((entry) => entry.status === "failed").length;
   const activeTargetSessionId =
     selectedTargetSessionId ?? sortedEntries[0]?.targetSessionId ?? null;
 
@@ -780,6 +824,7 @@ export function BackupPage(props: BackupPageProps = {}) {
     selectedEntry && selectedEntry.lifecycle === "active" && selectedThreadRuntime?.sessionId,
   );
   const selectedBackupsEnabled = selectedThreadRuntime?.sessionConfig?.backupsEnabled ?? null;
+  const showInspector = sortedEntries.length > 0;
 
   const settingsChrome = useOptionalSettingsChrome();
   useEffect(() => {
@@ -791,121 +836,223 @@ export function BackupPage(props: BackupPageProps = {}) {
 
   if (!workspace) {
     return (
-      <div
-        className="flex min-h-[220px] flex-col items-center justify-center px-4 py-10"
-        data-backup-page="true"
-      >
-        <Card className="w-full max-w-md border-border/80 bg-card/85">
-          <CardContent className="p-8 text-center">
-            <ArchiveIcon className="mx-auto mb-4 h-12 w-12 text-muted-foreground/30" />
-            <p className="text-muted-foreground">
-              Select a workspace first to manage its backup history.
-            </p>
-          </CardContent>
-        </Card>
-      </div>
+      <SettingsPage data-backup-page="true">
+        <SettingsEmptyState
+          icon={<ArchiveIcon />}
+          title="Select a workspace first"
+          description="Choose a workspace before managing recovery snapshots and restore points."
+        />
+      </SettingsPage>
     );
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-0" data-backup-page="true">
-      <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 px-5 py-2.5 max-[960px]:px-4">
-        <label className="flex max-w-full items-center gap-2 rounded-md border border-border/70 bg-background px-2.5 py-1.5 text-xs sm:text-sm">
-          <Switch
-            checked={selectedBackupsEnabled ?? false}
-            disabled={!canToggleSelectedEntry}
-            onCheckedChange={(checked) => {
-              if (!selectedEntry) return;
-              void setSessionBackupsEnabled?.(selectedEntry.targetSessionId, checked);
-            }}
-          />
-          <span className={canToggleSelectedEntry ? "text-foreground" : "text-muted-foreground"}>
-            Keep recovery snapshots for this session
-          </span>
-        </label>
-        {workspacePickerEnabled && workspaceList.length > 1 && props.workspace === undefined && (
-          <Select
-            value={workspace.id}
-            onValueChange={(val) => {
-              if (val !== workspace.id) void selectWorkspaceFromStore(val);
-            }}
+    <SettingsPage className="max-w-[1120px]" data-backup-page="true">
+      <SettingsToolbar>
+        <div className="min-w-0 space-y-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-semibold text-foreground">Workspace recovery</span>
+            <SettingsStatusPill tone={workspaceBackupsEnabled ? "success" : "neutral"}>
+              {workspaceBackupsEnabled ? "Active" : "Off"}
+            </SettingsStatusPill>
+            {failedCount > 0 ? (
+              <SettingsStatusPill tone="danger">{failedCount} failed</SettingsStatusPill>
+            ) : null}
+          </div>
+          <p className="max-w-[72ch] text-xs leading-relaxed text-muted-foreground">
+            Recovery snapshots are opt-in and best suited for non-git workspaces or manual restore
+            points.
+          </p>
+        </div>
+        <div className="flex max-w-full flex-wrap items-center justify-end gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void refreshBackups?.()}
+            disabled={loading || !workspaceBackupsEnabled}
           >
-            <SelectTrigger className="h-9 w-[min(200px,100%)] border-border/70 bg-background text-sm">
-              <SelectValue placeholder="Select workspace" />
-            </SelectTrigger>
-            <SelectContent>
-              {workspaceList.map((ws) => (
-                <SelectItem key={ws.id} value={ws.id}>
-                  {ws.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        )}
+            <RefreshCwIcon className={cn("mr-2 h-3.5 w-3.5", loading ? "animate-spin" : "")} />
+            Refresh
+          </Button>
+          {workspacePickerEnabled && workspaceList.length > 1 && props.workspace === undefined && (
+            <Select
+              value={workspace.id}
+              onValueChange={(val) => {
+                if (val !== workspace.id) void selectWorkspaceFromStore(val);
+              }}
+            >
+              <SelectTrigger className="h-9 w-[min(220px,100%)] border-border/70 bg-background text-sm">
+                <SelectValue placeholder="Select workspace" />
+              </SelectTrigger>
+              <SelectContent>
+                {workspaceList.map((ws) => (
+                  <SelectItem key={ws.id} value={ws.id}>
+                    {ws.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+        </div>
+      </SettingsToolbar>
+
+      <div className="grid gap-3 sm:grid-cols-3">
+        <SummaryTile
+          label="Backed-up sessions"
+          value={String(sortedEntries.length)}
+          detail={workspace.name}
+        />
+        <SummaryTile label="Checkpoints" value={String(checkpointCount)} detail="Manual + auto" />
+        <SummaryTile label="Storage used" value={formatBytes(totalBytes)} detail="Local only" />
       </div>
 
+      <SettingsSection
+        title="Snapshot controls"
+        description="Turn on future recovery snapshots for this workspace, then manage session restore points below."
+      >
+        <SettingsRow
+          title="Workspace backups"
+          description={
+            workspaceBackupsDefaultEnabled
+              ? "New sessions in this workspace will keep Cowork-managed recovery snapshots."
+              : "New sessions will not create Cowork-managed recovery snapshots unless you enable them."
+          }
+          meta={
+            perWorkspaceSettings
+              ? "This setting applies to the selected workspace."
+              : "Shared workspace settings are on, so this applies to all project workspaces."
+          }
+          control={
+            <Switch
+              checked={workspaceBackupsDefaultEnabled}
+              aria-label="Enable workspace backups"
+              onCheckedChange={(checked) => {
+                void setWorkspaceBackupsDefault(checked);
+              }}
+            />
+          }
+        />
+        <SettingsRow
+          title="Selected session snapshots"
+          description={
+            canToggleSelectedEntry
+              ? "Override recovery snapshots for the active session selected below."
+              : "Select an active backed-up session to adjust its live snapshot setting."
+          }
+          control={
+            <Switch
+              checked={selectedBackupsEnabled ?? false}
+              disabled={!canToggleSelectedEntry}
+              aria-label="Keep recovery snapshots for this session"
+              onCheckedChange={(checked) => {
+                if (!selectedEntry) return;
+                void setSessionBackupsEnabled?.(selectedEntry.targetSessionId, checked);
+              }}
+            />
+          }
+        />
+      </SettingsSection>
+
       {error ? (
-        <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-2 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
           <AlertTriangleIcon className="h-4 w-4" />
           <span>{error}</span>
         </div>
       ) : null}
 
-      {/* Main Split-Pane Layout - Full Page */}
-      <div className="flex min-h-0 flex-1 overflow-hidden bg-transparent" data-backup-split="true">
-        <BackupSidebar
-          entries={sortedEntries}
-          selectedTargetSessionId={selectedTargetSessionId}
-          selectedCheckpointId={selectedCheckpointId}
-          loading={loading}
-          backupsEnabled={workspaceBackupsEnabled}
-          onSelectEntry={(id) => {
-            setSelectedTargetSessionId(id);
-            setSelectedCheckpointId(null);
-          }}
-          onSelectCheckpoint={(entryId, cpId) => {
-            setSelectedTargetSessionId(entryId);
-            setSelectedCheckpointId(cpId);
-          }}
-          onRefresh={workspaceBackupsEnabled ? () => void refreshBackups?.() : undefined}
-        />
-
-        {/* Content Area */}
-        <div className="min-w-0 flex-1 overflow-hidden bg-background/92" data-backup-detail="true">
-          {!selectedEntry ? (
-            <div className="flex h-full flex-1 flex-col items-center justify-center space-y-4 bg-background/92 p-8 text-center text-muted-foreground">
-              <ArchiveIcon className="h-16 w-16 opacity-20" />
-              <div className="space-y-2 max-w-sm">
-                <p className="text-sm font-medium text-foreground">Select a backup to inspect</p>
-                <p className="text-xs">
-                  Enable backups to use advanced recovery snapshots. When enabled, select a session
-                  to view checkpoints or inspect changed files.
-                </p>
-              </div>
+      {!showInspector ? (
+        <div className="settings-section flex flex-col gap-4 rounded-lg border border-dashed border-border/65 bg-background/45 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex min-w-0 gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-border/55 bg-background/65 text-muted-foreground/60">
+              <ArchiveIcon className="h-5 w-5" />
             </div>
-          ) : selectedCheckpointId === null ? (
-            <BackupDetailView
-              entry={selectedEntry}
-              pendingActions={pendingActions}
-              onCreateCheckpoint={(id) => void createCheckpoint?.(id)}
-              onRestoreOriginal={(id) => void restoreOriginal?.(id)}
-              onDeleteEntry={(id) => void deleteEntry?.(id)}
-              onRevealFolder={(p) => void revealFolder(p)}
-            />
-          ) : selectedCp ? (
-            <CheckpointDeltaView
-              entry={selectedEntry}
-              checkpoint={selectedCp}
-              delta={activeDelta}
-              deltaLoading={deltaLoading}
-              deltaError={deltaError}
-              pendingActions={pendingActions}
-              onRestoreCheckpoint={(sid, cpId) => void restoreCheckpoint?.(sid, cpId)}
-              onDeleteCheckpoint={(sid, cpId) => void deleteCheckpoint?.(sid, cpId)}
-            />
-          ) : null}
+            <div className="min-w-0 space-y-1">
+              <div className="text-sm font-medium text-foreground">
+                {workspaceBackupsEnabled ? "No backups yet" : "Recovery snapshots are off"}
+              </div>
+              <p className="max-w-[68ch] text-xs leading-relaxed text-muted-foreground">
+                {workspaceBackupsEnabled
+                  ? "Backups will appear here after Cowork creates recovery snapshots for sessions in this workspace."
+                  : "Enable workspace backups to create local restore points for future sessions. Git workspaces can usually rely on git history instead."}
+              </p>
+            </div>
+          </div>
+          <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
+            {!workspaceBackupsEnabled ? (
+              <Button type="button" onClick={() => void setWorkspaceBackupsDefault(true)}>
+                Enable workspace backups
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => void refreshBackups?.()}
+                disabled={loading}
+              >
+                <RefreshCwIcon className={cn("mr-2 h-3.5 w-3.5", loading ? "animate-spin" : "")} />
+                Check again
+              </Button>
+            )}
+            <Button type="button" variant="ghost" onClick={() => setSettingsPage("defaults")}>
+              Review defaults
+            </Button>
+          </div>
         </div>
-      </div>
-    </div>
+      ) : null}
+
+      {showInspector ? (
+        <div
+          className="grid min-h-0 gap-4 lg:grid-cols-[minmax(260px,360px)_minmax(0,1fr)]"
+          data-backup-split="true"
+        >
+          <BackupSidebar
+            entries={sortedEntries}
+            selectedTargetSessionId={selectedTargetSessionId}
+            selectedCheckpointId={selectedCheckpointId}
+            loading={loading}
+            backupsEnabled={workspaceBackupsEnabled}
+            onSelectEntry={(id) => {
+              setSelectedTargetSessionId(id);
+              setSelectedCheckpointId(null);
+            }}
+            onSelectCheckpoint={(entryId, cpId) => {
+              setSelectedTargetSessionId(entryId);
+              setSelectedCheckpointId(cpId);
+            }}
+            onRefresh={workspaceBackupsEnabled ? () => void refreshBackups?.() : undefined}
+          />
+
+          <div className="min-w-0" data-backup-detail="true">
+            {!selectedEntry ? (
+              <SettingsEmptyState
+                icon={<ArchiveIcon />}
+                title="Select a backup to inspect"
+                description="Choose a session or checkpoint to inspect restore actions and changed files."
+              />
+            ) : selectedCheckpointId === null ? (
+              <BackupDetailView
+                entry={selectedEntry}
+                pendingActions={pendingActions}
+                onCreateCheckpoint={(id) => void createCheckpoint?.(id)}
+                onRestoreOriginal={(id) => void restoreOriginal?.(id)}
+                onDeleteEntry={(id) => void deleteEntry?.(id)}
+                onRevealFolder={(p) => void revealFolder(p)}
+              />
+            ) : selectedCp ? (
+              <CheckpointDeltaView
+                entry={selectedEntry}
+                checkpoint={selectedCp}
+                delta={activeDelta}
+                deltaLoading={deltaLoading}
+                deltaError={deltaError}
+                pendingActions={pendingActions}
+                onRestoreCheckpoint={(sid, cpId) => void restoreCheckpoint?.(sid, cpId)}
+                onDeleteCheckpoint={(sid, cpId) => void deleteCheckpoint?.(sid, cpId)}
+              />
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+    </SettingsPage>
   );
 }

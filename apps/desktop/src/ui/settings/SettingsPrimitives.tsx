@@ -1,12 +1,17 @@
-import type { ReactNode } from "react";
+import type { HTMLAttributes, ReactNode } from "react";
 
 import { Badge } from "../../components/ui/badge";
 import { cn } from "../../lib/utils";
 
-export function SettingsPage({ children, className }: { children: ReactNode; className?: string }) {
+export function SettingsPage({
+  children,
+  className,
+  ...props
+}: { children: ReactNode; className?: string } & HTMLAttributes<HTMLDivElement>) {
   return (
     <div
       className={cn("settings-page mx-auto flex w-full max-w-[1160px] flex-col gap-5", className)}
+      {...props}
     >
       {children}
     </div>

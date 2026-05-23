@@ -374,8 +374,8 @@ export function SettingsShell() {
           >
             <header
               className={cn(
-                "settings-shell__page-header shrink-0 px-5 py-4 backdrop-blur-sm max-[860px]:px-4",
-                isBackupPage ? "" : "sticky top-0 z-10",
+                "settings-shell__page-header shrink-0 px-5 backdrop-blur-sm max-[860px]:px-4",
+                isBackupPage ? "pb-3 pt-4" : "sticky top-0 z-10 py-4",
               )}
             >
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -395,17 +395,12 @@ export function SettingsShell() {
               </div>
             </header>
 
-            <div
-              className={cn(
-                "settings-shell__scroll min-h-0 min-w-0 flex-1",
-                isBackupPage ? "flex min-h-0 flex-col overflow-hidden" : "overflow-y-auto",
-              )}
-            >
+            <div className="settings-shell__scroll min-h-0 min-w-0 flex-1 overflow-y-auto">
               <div
                 className={cn(
                   "settings-shell__content w-full",
                   isBackupPage
-                    ? "flex min-h-0 flex-1 flex-col p-0"
+                    ? "flex min-h-0 flex-1 flex-col max-[860px]:px-4 max-[860px]:pb-4 min-[861px]:px-5 min-[861px]:pb-6"
                     : "max-[860px]:p-4 min-[861px]:px-5 min-[861px]:pb-6 min-[861px]:pt-4",
                 )}
               >

@@ -10,7 +10,6 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 
-import { HeaderGlassButton } from "@/components/ui/header-glass-button";
 import { Screen } from "@/components/ui/screen";
 import { SectionCard } from "@/components/ui/section-card";
 import { SFSymbol } from "@/components/ui/sf-symbol";
@@ -332,17 +331,7 @@ export default function PairingIndexRoute() {
 
   return (
     <>
-      <Stack.Screen
-        options={{
-          headerRight: () => (
-            <HeaderGlassButton
-              icon="ellipsis.circle"
-              accessibilityLabel="Open settings"
-              onPress={() => router.push("/(app)/(tabs)/settings")}
-            />
-          ),
-        }}
-      />
+      <Stack.Screen options={{ headerRight: () => null, unstable_headerRightItems: () => [] }} />
       <Screen scroll contentStyle={{ gap: 16 }}>
         <Animated.View entering={FadeInDown.duration(500)} style={heroAnimatedStyle}>
           <View

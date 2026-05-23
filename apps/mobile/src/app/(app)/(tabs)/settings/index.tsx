@@ -2,7 +2,6 @@ import { Stack, useRouter } from "expo-router";
 import { Text, View } from "react-native";
 
 import { AppButton } from "@/components/ui/app-button";
-import { HeaderGlassButton } from "@/components/ui/header-glass-button";
 import { HubLinkRow } from "@/components/ui/hub-link-row";
 import { Screen } from "@/components/ui/screen";
 import { SectionCard } from "@/components/ui/section-card";
@@ -27,17 +26,7 @@ export default function SettingsHubScreen() {
 
   return (
     <>
-      <Stack.Screen
-        options={{
-          headerRight: () => (
-            <HeaderGlassButton
-              icon="desktopcomputer"
-              accessibilityLabel="Open remote access"
-              onPress={() => router.push("/(pairing)")}
-            />
-          ),
-        }}
-      />
+      <Stack.Screen options={{ headerRight: () => null, unstable_headerRightItems: () => [] }} />
       <Screen scroll contentStyle={{ gap: 16 }}>
         <View
           style={{

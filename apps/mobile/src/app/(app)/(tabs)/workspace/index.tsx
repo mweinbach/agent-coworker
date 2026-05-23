@@ -1,9 +1,9 @@
 import { Link, Stack, useRouter } from "expo-router";
 import { useState } from "react";
-import { Pressable, Text, View } from "react-native";
+import { Platform, Pressable, Text, View } from "react-native";
 
 import { AppButton } from "@/components/ui/app-button";
-import { HeaderGlassButton } from "@/components/ui/header-glass-button";
+import { HeaderGlassButton, HeaderGlassMenu } from "@/components/ui/header-glass-button";
 import { HubLinkRow } from "@/components/ui/hub-link-row";
 import { Screen } from "@/components/ui/screen";
 import { SectionCard } from "@/components/ui/section-card";
@@ -70,28 +70,53 @@ export default function WorkspaceHubScreen() {
           title: "Cowork Mobile",
           headerLeft: () => undefined,
           headerRight: () => (
-            <Link href="/(app)/(tabs)/workspace">
-              <Link.Trigger>
-                <HeaderGlassButton icon="ellipsis" accessibilityLabel="Open workspace menu" />
-              </Link.Trigger>
-              <Link.Menu>
-                <Link.MenuAction
-                  title="Threads"
-                  icon="bubble.left.and.bubble.right"
-                  onPress={() => router.push("/(app)/(tabs)/threads")}
+            <>
+              {Platform.OS === "ios" ? (
+                <HeaderGlassMenu
+                  icon="ellipsis"
+                  actions={[
+                    {
+                      title: "Threads",
+                      icon: "bubble.left.and.bubble.right",
+                      onPress: () => router.push("/(app)/(tabs)/threads"),
+                    },
+                    {
+                      title: "Skills",
+                      icon: "sparkles",
+                      onPress: () => router.push("/(app)/(tabs)/skills"),
+                    },
+                    {
+                      title: "Settings",
+                      icon: "slider.horizontal.3",
+                      onPress: () => router.push("/(app)/(tabs)/settings"),
+                    },
+                  ]}
                 />
-                <Link.MenuAction
-                  title="Skills"
-                  icon="sparkles"
-                  onPress={() => router.push("/(app)/(tabs)/skills")}
-                />
-                <Link.MenuAction
-                  title="Settings"
-                  icon="slider.horizontal.3"
-                  onPress={() => router.push("/(app)/(tabs)/settings")}
-                />
-              </Link.Menu>
-            </Link>
+              ) : (
+                <Link href="/(app)/(tabs)/workspace" asChild>
+                  <Link.Trigger>
+                    <HeaderGlassButton icon="ellipsis" accessibilityLabel="Open workspace menu" />
+                  </Link.Trigger>
+                  <Link.Menu>
+                    <Link.MenuAction
+                      title="Threads"
+                      icon="bubble.left.and.bubble.right"
+                      onPress={() => router.push("/(app)/(tabs)/threads")}
+                    />
+                    <Link.MenuAction
+                      title="Skills"
+                      icon="sparkles"
+                      onPress={() => router.push("/(app)/(tabs)/skills")}
+                    />
+                    <Link.MenuAction
+                      title="Settings"
+                      icon="slider.horizontal.3"
+                      onPress={() => router.push("/(app)/(tabs)/settings")}
+                    />
+                  </Link.Menu>
+                </Link>
+              )}
+            </>
           ),
         }}
       />

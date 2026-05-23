@@ -915,8 +915,8 @@ export function BackupPage(props: BackupPageProps = {}) {
   }
 
   return (
-    <SettingsPage className="max-w-none gap-4" data-backup-page="true">
-      <div className="flex max-w-3xl flex-col gap-4">
+    <SettingsPage className="max-w-none gap-4 pt-5 sm:pt-6" data-backup-page="true">
+      <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
         <div className="space-y-3" data-backup-top="true">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm font-medium text-foreground">{workspace.name}</span>

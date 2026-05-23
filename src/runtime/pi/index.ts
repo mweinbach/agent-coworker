@@ -1,4 +1,4 @@
-import { setBedrockProviderModule } from "@mariozechner/pi-ai";
+import { setBedrockProviderModule } from "@earendil-works/pi-ai";
 import {
   markModelCallSpanError,
   markModelCallSpanSuccessFromAssistantRecord as markModelCallSpanSuccess,

@@ -10,6 +10,7 @@ import {
   collectRuntimeRoots,
   prependNodePath,
   prependToolPath,
+  prepareNodeModuleResolverEnv,
   resolveArtifactTool,
   resolveRuntimeExecutablePaths,
 } from "./runtimeDiscovery";
@@ -64,11 +65,16 @@ export async function ensureCodexPrimaryRuntimeReady(
     runtime.pythonPath ? path.dirname(runtime.pythonPath) : "",
     runtime.pythonPath ? path.join(path.dirname(runtime.pythonPath), "Scripts") : "",
   ];
-  const runtimeEnv = prependNodePath(
+  const runtimeEnv = await prepareNodeModuleResolverEnv({
     env,
-    prependToolPath(env, runtime.runtimeEnv, runtimePathDirs),
-    runtime.nodeModulesPath,
-  );
+    runtimeDir: codexRuntimeRoot(home),
+    runtimeEnv: prependNodePath(
+      env,
+      prependToolPath(env, runtime.runtimeEnv, runtimePathDirs),
+      runtime.nodeModulesPath,
+    ),
+    nodeModulesPath: runtime.nodeModulesPath,
+  });
   let archive: CodexPrimaryRuntimeSetupResult["archive"] = {
     status: "skipped",
     endpoint: CODEX_CURATED_PLUGINS_EXPORT_URL,

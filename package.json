@@ -94,7 +94,7 @@
     "turndown": "^7.2.4",
     "unified": "^11.0.5",
     "unofficial-antigravity-sdk": "^1.0.2",
-    "xlsx": "^0.18.5",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zod": "4.4.3"
   },
   "optionalDependencies": {

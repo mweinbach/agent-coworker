@@ -1,3 +1,4 @@
+import { renderCodexPrimaryRuntimeInstructions } from "../../codexPrimaryRuntime";
 import { renderManagedSofficeRuntimeInstructions } from "../../managedSofficeRuntime";
 import { getSupportedModel, listSupportedModels } from "../../models/registry";
 import type { CodexAppServerClient } from "../../providers/codexAppServerClient";
@@ -124,6 +125,9 @@ export function codexBaseInstructions(
   const managedSofficeInstructions = system.includes("## Managed LibreOffice Runtime")
     ? null
     : renderManagedSofficeRuntimeInstructions(env);
+  const codexRuntimeInstructions = system.includes("## Codex Workspace Dependencies")
+    ? null
+    : renderCodexPrimaryRuntimeInstructions(env);
   return [
     [
       "## Codex App-Server Tool Boundary",
@@ -134,6 +138,7 @@ export function codexBaseInstructions(
       "Use Cowork dynamic tools for subagents, memory, skills, todos, usage, and A2UI.",
       "Cowork MCP tools are exposed with `cowork_mcp__{serverName}__{toolName}` names and routed back to the original `mcp__{serverName}__{toolName}` harness tools.",
     ].join("\n"),
+    ...(codexRuntimeInstructions ? [codexRuntimeInstructions] : []),
     ...(managedSofficeInstructions ? [managedSofficeInstructions] : []),
     system,
   ].join("\n\n");

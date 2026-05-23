@@ -7,6 +7,7 @@ import type {
 } from "../../shared/agents";
 import { decodeBase64Strict, MAX_ATTACHMENT_UPLOAD_BASE64_SIZE } from "../../shared/attachments";
 import type { SessionSnapshot } from "../../shared/sessionSnapshot";
+import { isPathInside, resolvePathInsideRootForBoundaryCheck } from "../../utils/paths";
 import { sameWorkspacePath } from "../../utils/workspacePath";
 import type { AgentWaitMode } from "../agents/types";
 import {
@@ -702,18 +703,47 @@ export class SessionAdminManager {
       this.context.emitError("validation_failed", "session", "Invalid filename");
       return;
     }
+    if (contentBase64.length > MAX_ATTACHMENT_UPLOAD_BASE64_SIZE) {
+      this.context.emitError("validation_failed", "session", "File too large (max 100MB)");
+      return;
+    }
+    const decoded = decodeBase64Strict(contentBase64);
+    if (!decoded) {
+      this.context.emitError("validation_failed", "session", "Invalid base64 file contents");
+      return;
+    }
 
     const uploadsDir =
       this.context.state.config.uploadsDirectory ??
       path.resolve(this.context.state.config.workingDirectory, "User Uploads");
-    const resolvedUploadsDir = path.resolve(uploadsDir);
+    const resolveUploadsDir = async (): Promise<string | null> => {
+      try {
+        return await resolvePathInsideRootForBoundaryCheck(
+          this.context.state.config.workingDirectory,
+          uploadsDir,
+        );
+      } catch {
+        this.context.emitError(
+          "validation_failed",
+          "session",
+          "Uploads directory resolves outside the workspace.",
+        );
+        return null;
+      }
+    };
+    let resolvedUploadsDir = await resolveUploadsDir();
+    if (!resolvedUploadsDir) return;
     let filePath = path.resolve(resolvedUploadsDir, safeName);
-    if (!filePath.startsWith(resolvedUploadsDir + path.sep)) {
+    if (!isPathInside(resolvedUploadsDir, filePath)) {
       this.context.emitError("validation_failed", "session", "Invalid filename (path traversal)");
       return;
     }
 
     try {
+      await fs.mkdir(resolvedUploadsDir, { recursive: true });
+      resolvedUploadsDir = await resolveUploadsDir();
+      if (!resolvedUploadsDir) return;
+      filePath = path.resolve(resolvedUploadsDir, safeName);
       const ext = path.extname(safeName);
       const base = safeName.slice(0, safeName.length - ext.length);
       let counter = 1;
@@ -726,16 +756,6 @@ export class SessionAdminManager {
           break;
         }
       }
-      if (contentBase64.length > MAX_ATTACHMENT_UPLOAD_BASE64_SIZE) {
-        this.context.emitError("validation_failed", "session", "File too large (max 100MB)");
-        return;
-      }
-      const decoded = decodeBase64Strict(contentBase64);
-      if (!decoded) {
-        this.context.emitError("validation_failed", "session", "Invalid base64 file contents");
-        return;
-      }
-      await fs.mkdir(resolvedUploadsDir, { recursive: true });
       await fs.writeFile(filePath, decoded);
       this.context.emit({
         type: "file_uploaded",

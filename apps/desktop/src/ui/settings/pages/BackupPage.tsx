@@ -677,6 +677,7 @@ export function BackupPage(props: BackupPageProps = {}) {
     runtime?.controlSessionConfig?.defaultBackupsEnabled ??
     workspace?.defaultBackupsEnabled ??
     false;
+  const workspaceBackupsVisibleEnabled = workspaceBackupsEnabled || workspaceBackupsDefaultEnabled;
 
   const refreshBackups =
     props.onRefresh ??
@@ -829,9 +830,13 @@ export function BackupPage(props: BackupPageProps = {}) {
   const showInspector = sortedEntries.length > 0;
 
   const settingsChrome = useOptionalSettingsChrome();
-  const syncBackupHeaderChrome = useEffectEvent(() => {
-    if (!settingsChrome || !workspace) return;
 
+  useEffect(() => {
+    if (!settingsChrome) return;
+    if (!workspace) {
+      settingsChrome.setChrome(null);
+      return;
+    }
     settingsChrome.setChrome({
       headerActions: (
         <div className="flex flex-wrap items-center justify-end gap-2">
@@ -845,7 +850,7 @@ export function BackupPage(props: BackupPageProps = {}) {
               }
               void requestWorkspaceBackupsFromStore(workspace.id);
             }}
-            disabled={loading || !workspaceBackupsEnabled}
+            disabled={loading || !workspaceBackupsVisibleEnabled}
           >
             <RefreshCwIcon className={cn("mr-2 h-3.5 w-3.5", loading ? "animate-spin" : "")} />
             Refresh
@@ -872,19 +877,21 @@ export function BackupPage(props: BackupPageProps = {}) {
         </div>
       ),
     });
-  });
-
-  useEffect(() => {
-    if (!settingsChrome) return;
-    if (!workspace) {
-      settingsChrome.setChrome(null);
-      return;
-    }
-    syncBackupHeaderChrome();
     return () => {
       settingsChrome.setChrome(null);
     };
-  }, [settingsChrome, workspace]);
+  }, [
+    loading,
+    props.onRefresh,
+    props.workspace,
+    requestWorkspaceBackupsFromStore,
+    selectWorkspaceFromStore,
+    settingsChrome,
+    workspace,
+    workspaceBackupsVisibleEnabled,
+    workspacePickerEnabled,
+    workspaceList,
+  ]);
 
   if (!workspace) {
     return (
@@ -907,8 +914,8 @@ export function BackupPage(props: BackupPageProps = {}) {
             <span aria-hidden="true" className="text-muted-foreground/35">
               ·
             </span>
-            <SettingsStatusPill tone={workspaceBackupsEnabled ? "success" : "neutral"}>
-              {workspaceBackupsEnabled ? "Active" : "Off"}
+            <SettingsStatusPill tone={workspaceBackupsVisibleEnabled ? "success" : "neutral"}>
+              {workspaceBackupsVisibleEnabled ? "Active" : "Off"}
             </SettingsStatusPill>
             {failedCount > 0 ? (
               <SettingsStatusPill tone="danger">{failedCount} failed</SettingsStatusPill>
@@ -1005,17 +1012,17 @@ export function BackupPage(props: BackupPageProps = {}) {
               <ArchiveIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground/55" />
               <div className="min-w-0 space-y-1">
                 <div className="text-sm font-medium text-foreground">
-                  {workspaceBackupsEnabled ? "No backups yet" : "Recovery snapshots are off"}
+                  {workspaceBackupsVisibleEnabled ? "No backups yet" : "Recovery snapshots are off"}
                 </div>
                 <p className="max-w-prose text-xs leading-relaxed text-muted-foreground">
-                  {workspaceBackupsEnabled
+                  {workspaceBackupsVisibleEnabled
                     ? "Backups will appear here after Cowork creates recovery snapshots for sessions in this workspace."
                     : "Enable workspace backups to create local restore points for future sessions. Git workspaces can usually rely on git history instead."}
                 </p>
               </div>
             </div>
             <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
-              {!workspaceBackupsEnabled ? (
+              {!workspaceBackupsVisibleEnabled ? (
                 <Button
                   type="button"
                   size="sm"
@@ -1060,7 +1067,7 @@ export function BackupPage(props: BackupPageProps = {}) {
             selectedTargetSessionId={selectedTargetSessionId}
             selectedCheckpointId={selectedCheckpointId}
             loading={loading}
-            backupsEnabled={workspaceBackupsEnabled}
+            backupsEnabled={workspaceBackupsVisibleEnabled}
             onSelectEntry={(id) => {
               setSelectedTargetSessionId(id);
               setSelectedCheckpointId(null);
@@ -1069,7 +1076,7 @@ export function BackupPage(props: BackupPageProps = {}) {
               setSelectedTargetSessionId(entryId);
               setSelectedCheckpointId(cpId);
             }}
-            onRefresh={workspaceBackupsEnabled ? () => void refreshBackups?.() : undefined}
+            onRefresh={workspaceBackupsVisibleEnabled ? () => void refreshBackups?.() : undefined}
           />
 
           <div className="min-w-0" data-backup-detail="true">

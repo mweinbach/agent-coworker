@@ -148,6 +148,15 @@ describe("desktop token consumers", () => {
     );
   });
 
+  test("desktop shell disables incidental text selection by default", () => {
+    const stylesCss = readFileSync(resolve(import.meta.dir, "../src/styles.css"), "utf8");
+
+    expect(stylesCss).toMatch(/body\s*\{[^}]*user-select:\s*none/s);
+    expect(stylesCss).toMatch(/\.select-text[^}]*user-select:\s*text/s);
+    expect(stylesCss).toContain('[data-file-preview-content="true"]');
+    expect(stylesCss).toContain(".settings-shell__content");
+  });
+
   test("desktop portal slots render above the Electron chrome layer", () => {
     const stylesCss = readFileSync(resolve(import.meta.dir, "../src/styles.css"), "utf8");
     const portalLayer = stylesCss.match(/--desktop-portal-layer:\s*(\d+);/);

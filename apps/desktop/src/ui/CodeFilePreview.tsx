@@ -94,9 +94,9 @@ export function CodeFilePreview({ content, filePath }: { content: string; filePa
       <pre className="m-0 shrink-0 select-none pr-4 text-right text-sm text-muted-foreground/50 tabular-nums">
         {lineNumbersText}
       </pre>
-      <div className="min-w-0 flex-1">
+      <div className="min-w-0 flex-1 select-text">
         <Streamdown
-          className="[&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_[data-streamdown=code-block]]:my-0 [&_[data-streamdown=code-block]]:gap-0 [&_[data-streamdown=code-block]]:rounded-none [&_[data-streamdown=code-block]]:border-0 [&_[data-streamdown=code-block]]:bg-transparent [&_[data-streamdown=code-block]]:p-0 [&_[data-streamdown=code-block-header]]:hidden [&_[data-streamdown=code-block-body]]:overflow-x-auto [&_[data-streamdown=code-block-body]]:rounded-none [&_[data-streamdown=code-block-body]]:border-0 [&_[data-streamdown=code-block-body]]:bg-transparent [&_[data-streamdown=code-block-body]]:p-0 [&_[data-streamdown=code-block-body]]:text-sm [&_[data-streamdown=code-block-body]>pre>code>span]:block [&_pre]:m-0 [&_pre]:bg-transparent"
+          className="select-text [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_[data-streamdown=code-block]]:my-0 [&_[data-streamdown=code-block]]:gap-0 [&_[data-streamdown=code-block]]:rounded-none [&_[data-streamdown=code-block]]:border-0 [&_[data-streamdown=code-block]]:bg-transparent [&_[data-streamdown=code-block]]:p-0 [&_[data-streamdown=code-block-header]]:hidden [&_[data-streamdown=code-block-body]]:overflow-x-auto [&_[data-streamdown=code-block-body]]:rounded-none [&_[data-streamdown=code-block-body]]:border-0 [&_[data-streamdown=code-block-body]]:bg-transparent [&_[data-streamdown=code-block-body]]:p-0 [&_[data-streamdown=code-block-body]]:text-sm [&_[data-streamdown=code-block-body]>pre>code>span]:block [&_pre]:m-0 [&_pre]:bg-transparent"
           plugins={previewPlugins}
           remarkPlugins={mdRemarkPlugins}
           rehypePlugins={defaultDesktopRehypePlugins}

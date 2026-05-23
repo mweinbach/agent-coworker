@@ -29,6 +29,30 @@ body {
   color: var(--text-primary);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Opt in to text selection only on copyable surfaces (chat, previews, settings values). */
+.select-text,
+[data-selectable="text"],
+[data-file-preview-content="true"],
+[data-file-preview-markdown-shell="true"],
+.docx-preview,
+.settings-shell__content,
+input:not([type="checkbox"]):not([type="radio"]),
+textarea,
+[contenteditable="true"],
+pre,
+code {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+[data-spreadsheet-preview="true"] table,
+[data-spreadsheet-preview="true"] table button {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 :root[data-window-mode="quick-chat"] body,
@@ -114,6 +138,8 @@ samp {
 
 .app-topbar {
   -webkit-app-region: drag;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .app-topbar__controls {

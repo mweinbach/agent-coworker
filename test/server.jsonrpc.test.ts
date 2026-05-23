@@ -24,6 +24,15 @@ function waitForOpen(ws: WebSocket): Promise<void> {
   });
 }
 
+async function expectWorkspaceListResponse(response: Response, tmpDir: string): Promise<void> {
+  const body = (await response.json()) as {
+    workspaces: Array<{ name: string; path: string }>;
+  };
+  expect(body.workspaces).toHaveLength(1);
+  expect(body.workspaces[0]?.name).toBe(path.basename(tmpDir));
+  expect(await fs.realpath(body.workspaces[0]?.path ?? "")).toBe(await fs.realpath(tmpDir));
+}
+
 function waitForNodeWsOpen(ws: NodeWebSocket): Promise<void> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(
@@ -286,9 +295,7 @@ describe("server JSON-RPC websocket mode", () => {
         },
       });
       expect(authorized.status).toBe(200);
-      await expect(authorized.json()).resolves.toEqual({
-        workspaces: [{ name: path.basename(tmpDir), path: await fs.realpath(tmpDir) }],
-      });
+      await expectWorkspaceListResponse(authorized, tmpDir);
     } finally {
       await stopTestServer(server);
     }
@@ -315,9 +322,7 @@ describe("server JSON-RPC websocket mode", () => {
         },
       });
       expect(authorized.status).toBe(200);
-      await expect(authorized.json()).resolves.toEqual({
-        workspaces: [{ name: path.basename(tmpDir), path: await fs.realpath(tmpDir) }],
-      });
+      await expectWorkspaceListResponse(authorized, tmpDir);
     } finally {
       await stopTestServer(server);
     }

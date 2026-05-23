@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import type { ProviderStatusEntry } from "@/cowork-shared/jsonrpcControlSchemas";
 import { useBackupStore } from "./backupStore";
 import { callParsedControlMethod, parseWorkspaceControlSnapshot } from "./controlRpc";
 import { useMcpStore } from "./mcpStore";
@@ -81,7 +82,9 @@ export function useProviderCatalogQuery(cwd: string | null) {
         callParsedControlMethod(client, "cowork/provider/status/refresh", { cwd }),
       ]);
 
-      const toStatusByProvider = (statuses: any[]): Record<string, any> => {
+      const toStatusByProvider = (
+        statuses: ProviderStatusEntry[],
+      ): Partial<Record<ProviderStatusEntry["provider"], ProviderStatusEntry>> => {
         return Object.fromEntries(statuses.map((s) => [s.provider, s]));
       };
 

@@ -5,6 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 
+import {
+  resolvePackagedSidecarFilename,
+  resolveWindowsAiElectronPrebuildTriplet,
+} from "../electron/services/sidecar";
 import { createElectronMock, setElectronMockOverrides } from "./helpers/mockElectron";
 
 let userDataDir = process.cwd();
@@ -315,21 +319,27 @@ describe("desktop server manager startup mode", () => {
     const previousAddonDir = process.env.COWORK_WINDOWS_AI_ELECTRON_DIR;
     const previousSidecarPath = process.env.COWORK_DESKTOP_SIDECAR_PATH;
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-windows-ai-electron-bundle-"));
-    const sidecar = path.join(dir, "cowork-server-x86_64-pc-windows-msvc.exe");
+    const sidecar = path.join(dir, resolvePackagedSidecarFilename(process.platform, process.arch));
     const addonDir = path.join(dir, "windows-ai-electron");
+    const prebuildTriplet = resolveWindowsAiElectronPrebuildTriplet(
+      process.platform,
+      process.arch,
+    );
+    const nativeAddonPath = path.join(
+      addonDir,
+      "windows-ai-electron",
+      "prebuilds",
+      prebuildTriplet,
+      "node.node",
+    );
 
     try {
       delete process.env.COWORK_WINDOWS_AI_ELECTRON_DIR;
       process.env.COWORK_DESKTOP_SIDECAR_PATH = sidecar;
       await fs.writeFile(sidecar, "");
-      await fs.mkdir(path.join(addonDir, "windows-ai-electron", "prebuilds", "win32-x64"), {
-        recursive: true,
-      });
+      await fs.mkdir(path.dirname(nativeAddonPath), { recursive: true });
       await fs.writeFile(path.join(addonDir, "index.js"), "");
-      await fs.writeFile(
-        path.join(addonDir, "windows-ai-electron", "prebuilds", "win32-x64", "node.node"),
-        "",
-      );
+      await fs.writeFile(nativeAddonPath, "");
 
       expect(__internal.buildServerEnv().COWORK_WINDOWS_AI_ELECTRON_DIR).toBeUndefined();
 

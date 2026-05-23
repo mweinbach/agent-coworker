@@ -166,6 +166,16 @@ function createWindowsAiModule(opts: {
   };
 }
 
+function createPhiSilicaEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  return {
+    [__internal.PHI_SILICA_TITLE_ENABLED_ENV]: "1",
+    [__internal.PHI_SILICA_SYSTEM_AI_MODELS_CAPABILITY_ENV]: "1",
+    COWORK_PHI_SILICA_LAF_TOKEN: "token",
+    COWORK_PHI_SILICA_LAF_DEVELOPER_SIGNATURE: "signature",
+    ...overrides,
+  };
+}
+
 describe("sessionTitleService", () => {
   test("uses Apple Foundation Models titles when available", async () => {
     const apple = createAppleModule({});
@@ -358,11 +368,7 @@ describe("sessionTitleService", () => {
       loadWindowsAiElectronModule: loadWindowsAiElectronModule as any,
       platform: "win32",
       arch: "arm64",
-      env: {
-        [__internal.PHI_SILICA_TITLE_ENABLED_ENV]: "1",
-        COWORK_PHI_SILICA_LAF_TOKEN: "token",
-        COWORK_PHI_SILICA_LAF_DEVELOPER_SIGNATURE: "signature",
-      },
+      env: createPhiSilicaEnv(),
     });
 
     const result = await generateSessionTitle({
@@ -416,11 +422,7 @@ describe("sessionTitleService", () => {
       loadWindowsAiElectronModule: loadWindowsAiElectronModule as any,
       platform: "win32",
       arch: "x64",
-      env: {
-        [__internal.PHI_SILICA_TITLE_ENABLED_ENV]: "1",
-        COWORK_PHI_SILICA_LAF_TOKEN: "token",
-        COWORK_PHI_SILICA_LAF_DEVELOPER_SIGNATURE: "signature",
-      },
+      env: createPhiSilicaEnv(),
     });
 
     const result = await generateSessionTitle({
@@ -458,11 +460,7 @@ describe("sessionTitleService", () => {
       loadWindowsAiElectronModule: loadWindowsAiElectronModule as any,
       platform: "win32",
       arch: "arm64",
-      env: {
-        [__internal.PHI_SILICA_TITLE_ENABLED_ENV]: "1",
-        COWORK_PHI_SILICA_LAF_TOKEN: "token",
-        COWORK_PHI_SILICA_LAF_DEVELOPER_SIGNATURE: "signature",
-      },
+      env: createPhiSilicaEnv(),
     });
 
     const result = await generateSessionTitle({
@@ -481,9 +479,9 @@ describe("sessionTitleService", () => {
     expect(createRuntime).toHaveBeenCalledTimes(1);
   });
 
-  test("does not load Windows AI when Phi Silica generation is not configured", async () => {
+  test("does not load Windows AI when Phi Silica generation is not enabled", async () => {
     const loadWindowsAiElectronModule = mock(async () => {
-      throw new Error("Windows AI addon should not be imported without LAF configuration");
+      throw new Error("Windows AI addon should not be imported when Phi Silica is disabled");
     });
     const runTurn = mock(async (_args: any) => ({
       text: "Provider Title",
@@ -501,6 +499,46 @@ describe("sessionTitleService", () => {
       platform: "win32",
       arch: "x64",
       env: {
+        COWORK_PHI_SILICA_LAF_TOKEN: "token",
+        COWORK_PHI_SILICA_LAF_DEVELOPER_SIGNATURE: "signature",
+      },
+    });
+
+    const result = await generateSessionTitle({
+      config: makeConfig("openai"),
+      query: "provider fallback path",
+    });
+
+    expect(result).toEqual({
+      title: "Provider Title",
+      source: "model",
+      model: "gpt-5-mini",
+    });
+    expect(loadWindowsAiElectronModule).not.toHaveBeenCalled();
+    expect(createRuntime).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not load Windows AI without the systemAIModels package capability", async () => {
+    const loadWindowsAiElectronModule = mock(async () => {
+      throw new Error("Windows AI addon should not be imported without package capability");
+    });
+    const runTurn = mock(async (_args: any) => ({
+      text: "Provider Title",
+      reasoningText: undefined,
+      responseMessages: [] as any[],
+      usage: undefined,
+    }));
+    const createRuntime = mock((_config: AgentConfig) => ({ name: "pi", runTurn }));
+    const defaultModelForProvider = mock((_provider: AgentConfig["provider"]) => "gpt-5.2");
+
+    const generateSessionTitle = createSessionTitleGenerator({
+      createRuntime: createRuntime as any,
+      defaultModelForProvider: defaultModelForProvider as any,
+      loadWindowsAiElectronModule: loadWindowsAiElectronModule as any,
+      platform: "win32",
+      arch: "x64",
+      env: {
+        [__internal.PHI_SILICA_TITLE_ENABLED_ENV]: "1",
         COWORK_PHI_SILICA_LAF_TOKEN: "token",
         COWORK_PHI_SILICA_LAF_DEVELOPER_SIGNATURE: "signature",
       },
@@ -538,11 +576,7 @@ describe("sessionTitleService", () => {
       loadWindowsAiElectronModule: loadWindowsAiElectronModule as any,
       platform: "win32",
       arch: "arm64",
-      env: {
-        [__internal.PHI_SILICA_TITLE_ENABLED_ENV]: "1",
-        COWORK_PHI_SILICA_LAF_TOKEN: "token",
-        COWORK_PHI_SILICA_LAF_DEVELOPER_SIGNATURE: "signature",
-      },
+      env: createPhiSilicaEnv(),
     });
 
     const result = await generateSessionTitle({

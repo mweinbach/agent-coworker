@@ -8,6 +8,8 @@ export const PHI_SILICA_LAF_FEATURE_ID = "com.microsoft.windows.ai.languagemodel
 export const PHI_SILICA_TITLE_TEMPERATURE = 0.35;
 export const PHI_SILICA_TITLE_TOP_P = 0.9;
 export const PHI_SILICA_TITLE_ENABLED_ENV = "COWORK_PHI_SILICA_TITLE_ENABLED";
+export const PHI_SILICA_SYSTEM_AI_MODELS_CAPABILITY_ENV =
+  "COWORK_WINDOWS_AI_SYSTEM_AI_MODELS_CAPABILITY";
 
 const WINDOWS_AI_READY_STATE_READY = 0;
 const WINDOWS_AI_RESPONSE_STATUS_COMPLETE = 0;
@@ -149,6 +151,9 @@ function isPhiSilicaGenerationConfigured(env: NodeJS.ProcessEnv): boolean {
   if (env[PHI_SILICA_TITLE_ENABLED_ENV] !== "1") {
     return false;
   }
+  if (env[PHI_SILICA_SYSTEM_AI_MODELS_CAPABILITY_ENV] !== "1") {
+    return false;
+  }
 
   const { token, developerSignature } = resolveLafCredentials(env);
   return (
@@ -195,7 +200,7 @@ export async function generatePhiSilicaTitle(
     return { status: "unavailable" };
   }
   // The native Windows AI API can terminate the host when called without the
-  // packaged app identity/capability that Phi Silica requires.
+  // packaged app identity and systemAIModels capability that Phi Silica requires.
   if (!isPhiSilicaGenerationConfigured(deps.env)) {
     return { status: "unavailable" };
   }

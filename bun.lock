@@ -41,6 +41,7 @@
         "typescript": "^6.0.3",
       },
       "optionalDependencies": {
+        "@microsoft/windows-ai-electron": "^0.2.0",
         "tsfm-sdk": "^0.3.1",
       },
     },
@@ -403,6 +404,8 @@
     "@malept/flatpak-bundler": ["@malept/flatpak-bundler@0.4.0", "", { "dependencies": { "debug": "^4.1.1", "fs-extra": "^9.0.0", "lodash": "^4.17.15", "tmp-promise": "^3.0.2" } }, "sha512-9QOtNffcOF/c1seMCDnjckb3R9WHcG34tky+FHpNKKCW0wc/scYLwMtO+ptyGUfMW0/b/n4qRiALlaFHc9Oj7Q=="],
 
     "@mermaid-js/parser": ["@mermaid-js/parser@1.1.0", "", { "dependencies": { "langium": "^4.0.0" } }, "sha512-gxK9ZX2+Fex5zu8LhRQoMeMPEHbc73UKZ0FQ54YrQtUxE1VVhMwzeNtKRPAu5aXks4FasbMe4xB4bWrmq6Jlxw=="],
+
+    "@microsoft/windows-ai-electron": ["@microsoft/windows-ai-electron@0.2.0", "", { "os": "win32" }, "sha512-Q+Mgs4OxZ8FOsUnnQiA/cxGmcsW0mndXAwI0+jFGFiDAW7GxX40F2zm3CK6HxfEeT/EixwiZzYTZJTeowgRLOQ=="],
 
     "@mistralai/mistralai": ["@mistralai/mistralai@2.2.1", "", { "dependencies": { "ws": "^8.18.0", "zod": "^3.25.0 || ^4.0.0", "zod-to-json-schema": "^3.25.0" } }, "sha512-uKU8CZmL2RzYKmplsU01hii4p3pe4HqJefpWNRWXm1Tcm0Sm4xXfwSLIy4k7ZCPlbETCGcp69E7hZs+WOJ5itQ=="],
 

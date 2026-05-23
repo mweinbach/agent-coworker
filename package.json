@@ -98,6 +98,7 @@
     "zod": "4.4.3"
   },
   "optionalDependencies": {
+    "@microsoft/windows-ai-electron": "^0.2.0",
     "tsfm-sdk": "^0.3.1"
   },
   "devDependencies": {

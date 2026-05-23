@@ -6,13 +6,16 @@ import {
   FOUNDATION_MODELS_KOFFI_TRIPLET,
   findPackagedSidecarLaunchCommand,
   hasPackagedFoundationModelsSdk,
+  hasPackagedWindowsAiElectronPackage,
   resolveDesktopTargetTriple,
   resolvePackagedCodexAppServerFilename,
   resolvePackagedSidecarFilename,
+  resolveWindowsAiElectronPrebuildTriplet,
   SIDECAR_BUN_ENTRYPOINT_PATH,
   SIDECAR_BUN_EXECUTABLE_NAME,
   SIDECAR_MANIFEST_NAME,
   shouldBundleFoundationModelsSdk,
+  shouldBundleWindowsAiElectronPackage,
 } from "../electron/services/sidecar";
 
 describe("desktop sidecar packaging helpers", () => {
@@ -90,6 +93,43 @@ describe("desktop sidecar packaging helpers", () => {
     expect(
       hasPackagedFoundationModelsSdk(dir, (candidate) =>
         candidate.endsWith("libFoundationModels.dylib") ? false : required.has(candidate),
+      ),
+    ).toBe(false);
+  });
+
+  test("bundles the Windows AI Electron package only for supported Windows targets", () => {
+    expect(shouldBundleWindowsAiElectronPackage("win32", "x64")).toBe(true);
+    expect(shouldBundleWindowsAiElectronPackage("win32", "arm64")).toBe(true);
+    expect(shouldBundleWindowsAiElectronPackage("win32", "ia32")).toBe(false);
+    expect(shouldBundleWindowsAiElectronPackage("darwin", "arm64")).toBe(false);
+    expect(resolveWindowsAiElectronPrebuildTriplet("win32", "x64")).toBe("win32-x64");
+    expect(resolveWindowsAiElectronPrebuildTriplet("win32", "arm64")).toBe("win32-arm64");
+  });
+
+  test("recognizes the minimal packaged Windows AI Electron payload for the target arch", () => {
+    const dir = path.join(path.sep, "bundle", "Resources", "binaries", "windows-ai-electron");
+    const x64Required = new Set([
+      path.join(dir, "index.js"),
+      path.join(dir, "windows-ai-electron", "prebuilds", "win32-x64", "node.node"),
+    ]);
+    const arm64Required = new Set([
+      path.join(dir, "index.js"),
+      path.join(dir, "windows-ai-electron", "prebuilds", "win32-arm64", "node.node"),
+    ]);
+
+    expect(
+      hasPackagedWindowsAiElectronPackage(dir, "win32", "x64", (candidate) =>
+        x64Required.has(candidate),
+      ),
+    ).toBe(true);
+    expect(
+      hasPackagedWindowsAiElectronPackage(dir, "win32", "arm64", (candidate) =>
+        arm64Required.has(candidate),
+      ),
+    ).toBe(true);
+    expect(
+      hasPackagedWindowsAiElectronPackage(dir, "win32", "x64", (candidate) =>
+        arm64Required.has(candidate),
       ),
     ).toBe(false);
   });

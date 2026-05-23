@@ -303,6 +303,52 @@ describe("desktop server manager startup mode", () => {
     }
   });
 
+  test("buildServerEnv points packaged server at bundled Windows AI Electron when present", async () => {
+    if (process.platform !== "win32") {
+      const env = __internal.buildServerEnv(undefined, {
+        includeBundledWindowsAiElectron: true,
+      });
+      expect(env.COWORK_WINDOWS_AI_ELECTRON_DIR).toBeUndefined();
+      return;
+    }
+
+    const previousAddonDir = process.env.COWORK_WINDOWS_AI_ELECTRON_DIR;
+    const previousSidecarPath = process.env.COWORK_DESKTOP_SIDECAR_PATH;
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-windows-ai-electron-bundle-"));
+    const sidecar = path.join(dir, "cowork-server-x86_64-pc-windows-msvc.exe");
+    const addonDir = path.join(dir, "windows-ai-electron");
+
+    try {
+      delete process.env.COWORK_WINDOWS_AI_ELECTRON_DIR;
+      process.env.COWORK_DESKTOP_SIDECAR_PATH = sidecar;
+      await fs.writeFile(sidecar, "");
+      await fs.mkdir(path.join(addonDir, "windows-ai-electron", "prebuilds", "win32-x64"), {
+        recursive: true,
+      });
+      await fs.writeFile(path.join(addonDir, "index.js"), "");
+      await fs.writeFile(
+        path.join(addonDir, "windows-ai-electron", "prebuilds", "win32-x64", "node.node"),
+        "",
+      );
+
+      expect(__internal.buildServerEnv().COWORK_WINDOWS_AI_ELECTRON_DIR).toBeUndefined();
+
+      const env = __internal.buildServerEnv(undefined, {
+        includeBundledWindowsAiElectron: true,
+      });
+      expect(env.COWORK_WINDOWS_AI_ELECTRON_DIR).toBe(addonDir);
+    } finally {
+      if (previousAddonDir === undefined) delete process.env.COWORK_WINDOWS_AI_ELECTRON_DIR;
+      else process.env.COWORK_WINDOWS_AI_ELECTRON_DIR = previousAddonDir;
+      if (previousSidecarPath === undefined) {
+        delete process.env.COWORK_DESKTOP_SIDECAR_PATH;
+      } else {
+        process.env.COWORK_DESKTOP_SIDECAR_PATH = previousSidecarPath;
+      }
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("buildServerEnv enables OpenAI native connectors only from the desktop feature flag", () => {
     const previous = process.env.COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS;
     delete process.env.COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS;

@@ -18,7 +18,9 @@ import {
   FOUNDATION_MODELS_SDK_DIR_NAME,
   findPackagedSidecarLaunchCommand,
   hasPackagedFoundationModelsSdk,
+  hasPackagedWindowsAiElectronPackage,
   resolvePackagedCodexAppServerFilename,
+  WINDOWS_AI_ELECTRON_DIR_NAME,
 } from "./sidecar";
 import { assertSafeId, assertWorkspaceDirectory } from "./validation";
 
@@ -203,6 +205,16 @@ function findBundledFoundationModelsSdkDir(): string | null {
   return null;
 }
 
+function findBundledWindowsAiElectronDir(): string | null {
+  for (const dir of getSidecarSearchDirs()) {
+    const candidate = path.join(dir, WINDOWS_AI_ELECTRON_DIR_NAME);
+    if (hasPackagedWindowsAiElectronPackage(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
 function waitForExit(child: ServerChildProcess, timeoutMs: number): Promise<boolean> {
   if (child.exitCode !== null || child.signalCode !== null) {
     return Promise.resolve(true);
@@ -373,7 +385,10 @@ function resolveSourceStartup(
 
 function buildServerEnv(
   featureFlags?: { openAiNativeConnectors?: boolean },
-  opts: { includeBundledFoundationModelsSdk?: boolean } = {},
+  opts: {
+    includeBundledFoundationModelsSdk?: boolean;
+    includeBundledWindowsAiElectron?: boolean;
+  } = {},
 ): NodeJS.ProcessEnv {
   const bundledCodexAppServer = process.env.COWORK_CODEX_APP_SERVER_COMMAND
     ? null
@@ -382,6 +397,10 @@ function buildServerEnv(
   const bundledFoundationModelsSdk =
     opts.includeBundledFoundationModelsSdk && !process.env.COWORK_TSFMSDK_DIR
       ? findBundledFoundationModelsSdkDir()
+      : null;
+  const bundledWindowsAiElectron =
+    opts.includeBundledWindowsAiElectron && !process.env.COWORK_WINDOWS_AI_ELECTRON_DIR
+      ? findBundledWindowsAiElectronDir()
       : null;
   return {
     ...process.env,
@@ -396,6 +415,9 @@ function buildServerEnv(
       ? { COWORK_BUNDLED_CODEX_PRIMARY_RUNTIME_DIR: bundledCodexPrimaryRuntime }
       : {}),
     ...(bundledFoundationModelsSdk ? { COWORK_TSFMSDK_DIR: bundledFoundationModelsSdk } : {}),
+    ...(bundledWindowsAiElectron
+      ? { COWORK_WINDOWS_AI_ELECTRON_DIR: bundledWindowsAiElectron }
+      : {}),
     ...(featureFlags?.openAiNativeConnectors
       ? { COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS: "1" }
       : {}),
@@ -543,6 +565,7 @@ export class ServerManager {
     for (let attempt = 1; attempt <= attemptCount; attempt += 1) {
       const serverEnv = buildServerEnv(opts.featureFlags, {
         includeBundledFoundationModelsSdk: !useSource,
+        includeBundledWindowsAiElectron: !useSource,
       });
       const sourceEnvForAttempt = useSource ? buildSourceEnvForAttempt(serverEnv, attempt) : null;
       const cleanup = sourceEnvForAttempt?.cleanup ?? (() => {});
@@ -772,6 +795,7 @@ export const __internal = {
   buildSourceEnvForAttempt,
   findBundledCodexAppServerPath,
   findBundledFoundationModelsSdkDir,
+  findBundledWindowsAiElectronDir,
   findSidecarLaunchCommand,
   getServerTerminationSignal,
   getServerLogPath,

@@ -41,6 +41,16 @@ async function waitFor(predicate: () => boolean): Promise<void> {
   throw new Error("Timed out waiting for condition.");
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("mobile secure transport client", () => {
   const originalFetch = globalThis.fetch;
 
@@ -432,6 +442,104 @@ describe("mobile secure transport client", () => {
       connectedMacDeviceId: null,
       relayUrl: null,
       lastError: expect.stringContaining("HTTP 401"),
+    });
+  });
+
+  test("does not restore a fatal session while active session deletion is pending", async () => {
+    const secureErrors: string[] = [];
+    const releaseActiveDelete = createDeferred<void>();
+    __internal.setSecureStoreForTesting({
+      getItemAsync: secureStore.getItemAsync,
+      setItemAsync: secureStore.setItemAsync,
+      deleteItemAsync: mock(async (key: string) => {
+        if (key === "cowork.h3.activeSession.v1") {
+          await releaseActiveDelete.promise;
+        }
+        secureStoreValues.delete(key);
+      }),
+    });
+    const client = new SecureTransportClient({
+      reconnectBaseDelayMs: 1,
+      reconnectMaxDelayMs: 1,
+    });
+    client.subscribe({
+      onSecureError: (message) => secureErrors.push(message),
+    });
+    __internal.setPinnedHttpsFetchForTesting(
+      mock(async (request: { url: string }) => {
+        if (request.url.endsWith("/pair")) {
+          return Response.json({ sessionToken: "session-token" }) as unknown as Response;
+        }
+        if (request.url.endsWith("/events")) {
+          return new Response("", { status: 401 });
+        }
+        return new Response("", { status: 404 });
+      }) as never,
+    );
+
+    await client.connectFromQrPayload(buildPayload({ hosts: ["192.168.1.10"] }));
+    await waitFor(() => secureErrors.length === 1);
+
+    expect(secureStoreValues.has("cowork.h3.activeSession.v1")).toBe(true);
+    expect(await client.getSnapshot()).toMatchObject({
+      status: "error",
+      connectedMacDeviceId: null,
+      relayUrl: null,
+      lastError: expect.stringContaining("HTTP 401"),
+    });
+
+    releaseActiveDelete.resolve();
+    await waitFor(() => !secureStoreValues.has("cowork.h3.activeSession.v1"));
+  });
+
+  test("forgetting an inactive trusted desktop preserves the active connection", async () => {
+    const streamUrls: string[] = [];
+    __internal.setPinnedHttpsFetchForTesting(
+      mock(async (request: { url: string; body?: string }) => {
+        if (request.url.endsWith("/pair")) {
+          const body = JSON.parse(request.body ?? "{}") as { nonce?: string };
+          return Response.json({ sessionToken: `session-${body.nonce ?? "unknown"}` }) as never;
+        }
+        return new Response("", { status: 404 }) as never;
+      }) as never,
+    );
+    __internal.setPinnedHttpsStreamForTesting(
+      mock(async (request) => {
+        streamUrls.push(request.url);
+        return () => {};
+      }),
+    );
+
+    const client = new SecureTransportClient();
+    await client.connectFromQrPayload(
+      buildPayload({
+        hosts: ["192.168.1.10"],
+        identityPub: "desktop-one",
+        nonce: "pairing-nonce-1",
+      }),
+    );
+    await client.connectFromQrPayload(
+      buildPayload({
+        hosts: ["192.168.1.10"],
+        identityPub: "desktop-two",
+        nonce: "pairing-nonce-2",
+      }),
+    );
+
+    const snapshot = await client.forgetTrustedDesktop("desktop-one");
+
+    expect(snapshot).toMatchObject({
+      status: "connected",
+      connectedMacDeviceId: "desktop-two",
+      relayUrl: "https://192.168.1.10:9443",
+      trustedDesktops: [expect.objectContaining({ macDeviceId: "desktop-two" })],
+    });
+    expect(streamUrls).toEqual([
+      "https://192.168.1.10:9443/events",
+      "https://192.168.1.10:9443/events",
+    ]);
+    expect(JSON.parse(secureStoreValues.get("cowork.h3.activeSession.v1") ?? "null")).toEqual({
+      macDeviceId: "desktop-two",
     });
   });
 

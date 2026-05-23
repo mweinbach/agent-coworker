@@ -195,6 +195,7 @@ export class SecureTransportClient {
   private eventAbortController: AbortController | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempt = 0;
+  private activeSessionRestoreBlocked = false;
   private readonly reconnectBaseDelayMs: number;
   private readonly reconnectMaxDelayMs: number;
 
@@ -231,6 +232,7 @@ export class SecureTransportClient {
     this.eventAbortController?.abort();
     this.eventAbortController = null;
     this.activeSession = null;
+    this.activeSessionRestoreBlocked = true;
     this.reconnectAttempt = 0;
     this.lastError = null;
     this.connectionStatus = "pairing";
@@ -287,6 +289,7 @@ export class SecureTransportClient {
         spkiSha256: trusted.spkiSha256,
         mobileDeviceId: trusted.mobileDeviceId,
       };
+      this.activeSessionRestoreBlocked = false;
       await this.persistTrustedState();
       this.openEventStream();
       this.reconnectAttempt = 0;
@@ -297,6 +300,7 @@ export class SecureTransportClient {
       this.clearReconnectTimer();
       this.lastError = message;
       await this.persistTrustedState();
+      this.activeSessionRestoreBlocked = false;
       this.emitSecureError(message);
       this.setConnectionStatus("error");
       throw error;
@@ -321,6 +325,7 @@ export class SecureTransportClient {
       spkiSha256: trusted.spkiSha256,
       mobileDeviceId: trusted.mobileDeviceId,
     };
+    this.activeSessionRestoreBlocked = false;
     await this.persistTrustedState();
     this.openEventStream();
     this.reconnectAttempt = 0;
@@ -333,19 +338,23 @@ export class SecureTransportClient {
     this.eventAbortController?.abort();
     this.eventAbortController = null;
     this.activeSession = null;
+    this.activeSessionRestoreBlocked = true;
     this.reconnectAttempt = 0;
     this.lastError = null;
     await this.persistTrustedState();
+    this.activeSessionRestoreBlocked = false;
     return this.setConnectionStatus("idle");
   }
 
   async forgetTrustedDesktop(macDeviceId: string): Promise<SecureTransportSnapshot> {
     await this.loadTrustedState();
+    const wasActiveSession = this.activeSession?.macDeviceId === macDeviceId;
     this.trustedDesktops = this.trustedDesktops.filter(
       (entry) => entry.macDeviceId !== macDeviceId,
     );
-    if (this.activeSession?.macDeviceId === macDeviceId) {
+    if (wasActiveSession) {
       this.activeSession = null;
+      this.activeSessionRestoreBlocked = true;
       this.clearReconnectTimer();
       this.eventAbortController?.abort();
       this.eventAbortController = null;
@@ -354,7 +363,11 @@ export class SecureTransportClient {
     const SecureStore = await loadSecureStore();
     await SecureStore.deleteItemAsync(sessionTokenKey(macDeviceId));
     await this.persistTrustedState();
-    return this.setConnectionStatus("idle");
+    if (wasActiveSession) {
+      this.activeSessionRestoreBlocked = false;
+      return this.setConnectionStatus("idle");
+    }
+    return this.emitState();
   }
 
   async sendPlaintext(text: string): Promise<void> {
@@ -468,6 +481,20 @@ export class SecureTransportClient {
     const trusted = active
       ? this.trustedDesktops.find((entry) => entry.macDeviceId === active.macDeviceId)
       : null;
+    if (!active) {
+      this.activeSessionRestoreBlocked = false;
+    }
+    if (this.activeSessionRestoreBlocked) {
+      this.activeSession = null;
+      if (
+        this.connectionStatus === "connected" ||
+        this.connectionStatus === "connecting" ||
+        this.connectionStatus === "reconnecting"
+      ) {
+        this.connectionStatus = "idle";
+      }
+      return;
+    }
     this.activeSession = active && trusted ? activeSessionFromTrustedDesktop(trusted) : null;
     if (this.activeSession) {
       if (this.connectionStatus === "idle" || this.connectionStatus === "error") {
@@ -577,7 +604,10 @@ export class SecureTransportClient {
     if (isFatalSessionError(reason)) {
       this.clearReconnectTimer();
       this.activeSession = null;
-      void this.persistTrustedState();
+      this.activeSessionRestoreBlocked = true;
+      void this.persistTrustedState().catch((error) => {
+        this.lastError = error instanceof Error ? error.message : String(error);
+      });
       this.setConnectionStatus("error");
       return;
     }

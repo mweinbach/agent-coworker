@@ -128,9 +128,11 @@ export function ChatComposer(props: {
             <PromptInputStatusRow>{composerHint}</PromptInputStatusRow>
             <PromptInputBody>
               {attachmentPickerError ? (
-                <div className="flex items-center gap-1.5 px-1 pb-1 text-xs text-destructive">
+                <div className="flex min-w-0 items-start gap-1.5 px-1 pb-1 text-xs text-destructive">
                   <AlertTriangleIcon className="size-3.5 shrink-0" />
-                  <span>{attachmentPickerError}</span>
+                  <span className="min-w-0 break-words [overflow-wrap:anywhere]">
+                    {attachmentPickerError}
+                  </span>
                 </div>
               ) : null}
               <PromptInputTextarea

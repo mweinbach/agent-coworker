@@ -5,6 +5,7 @@ import path from "node:path";
 import { z } from "zod";
 
 import { createRuntime } from "../../../src/runtime";
+import { buildCodexTurnInput } from "../../../src/runtime/codexAppServer/turnInput";
 import { mockInterrupts, writeMockAppServer } from "../../fixtures/codexAppServerMock";
 import {
   installCodexAppServerTestHooks,
@@ -165,7 +166,7 @@ describe("codex app-server turn lifecycle", () => {
   });
 
   test.serial(
-    "preserves fresh conversation history and attachment order in text_elements",
+    "preserves fresh conversation history and sends image attachments as app-server inputs",
     async () => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-attachments-"));
       const capturePath = path.join(dir, "requests.jsonl");
@@ -182,8 +183,21 @@ describe("codex app-server turn lifecycle", () => {
             role: "user",
             content: [
               { type: "text", text: "Look at these" },
-              { type: "image", mimeType: "image/png", data: "abc", filename: "chart.png" },
+              {
+                type: "image",
+                mimeType: "image/png",
+                data: "abc",
+                detail: "low",
+                filename: "chart.png",
+              },
               { type: "file", mimeType: "text/plain", data: "inline", filename: "note.txt" },
+              {
+                type: "file",
+                mimeType: "image/jpeg",
+                path: "/tmp/uploaded.jpg",
+                detail: "high",
+                filename: "uploaded.jpg",
+              },
               { type: "file", path: "/tmp/uploaded.pdf", filename: "uploaded.pdf" },
             ],
           },
@@ -200,15 +214,72 @@ describe("codex app-server turn lifecycle", () => {
         {
           type: "text",
           text: "User: Look at these",
-          text_elements: [
-            { type: "image", mimeType: "image/png", data: "abc", filename: "chart.png" },
-            { type: "file", mimeType: "text/plain", data: "inline", filename: "note.txt" },
-            { type: "file", path: "/tmp/uploaded.pdf", filename: "uploaded.pdf" },
-          ],
+          text_elements: [],
+        },
+        {
+          type: "image",
+          detail: "low",
+          url: "data:image/png;base64,abc",
+        },
+        {
+          type: "localImage",
+          detail: "high",
+          path: "/tmp/uploaded.jpg",
         },
       ]);
     },
   );
+
+  test("omits non-image files and preserves attachment-only text element context", () => {
+    expect(
+      buildCodexTurnInput(
+        [
+          {
+            role: "user",
+            content: [
+              { type: "file", mimeType: "text/plain", data: "inline", filename: "note.txt" },
+              { type: "file", path: "/tmp/uploaded.pdf", filename: "uploaded.pdf" },
+              { byteRange: { start: 4, end: 12 }, placeholder: "[selection]" },
+            ],
+          },
+        ],
+        { resumedThread: false },
+      ),
+    ).toEqual([
+      {
+        type: "text",
+        text: "User: [attachment]",
+        text_elements: [{ byteRange: { start: 4, end: 12 }, placeholder: "[selection]" }],
+      },
+    ]);
+  });
+
+  test("sends image-only resumed user messages without replaying prior context", () => {
+    expect(
+      buildCodexTurnInput(
+        [
+          { role: "user", content: "Earlier question" },
+          { role: "assistant", content: "Earlier answer" },
+          {
+            role: "user",
+            content: [
+              {
+                type: "image",
+                mimeType: "image/png",
+                data: "abc",
+                detail: "original",
+                filename: "chart.png",
+              },
+            ],
+          },
+        ],
+        { resumedThread: true },
+      ),
+    ).toEqual([
+      { type: "text", text: "[attachment]", text_elements: [] },
+      { type: "image", detail: "original", url: "data:image/png;base64,abc" },
+    ]);
+  });
 
   test.serial("aborts active app-server turns through interruptTurn", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-abort-"));

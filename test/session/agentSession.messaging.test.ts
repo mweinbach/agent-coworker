@@ -1470,6 +1470,42 @@ describe("AgentSession", () => {
       });
     });
 
+    test("preserves Codex image attachment input through the session path", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-codex-attachments-"));
+      const uploadsDir = path.join(dir, "uploads");
+      const uploadedPath = path.join(uploadsDir, "codex-photo.png");
+      await fs.mkdir(uploadsDir, { recursive: true });
+      await fs.writeFile(uploadedPath, "codex-image-bytes");
+      const { session } = makeSession({
+        config: {
+          ...makeConfig(dir),
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          preferredChildModel: "gpt-5.4",
+        },
+      });
+
+      await session.sendUserMessage("describe this", "msg-codex-uploaded-image", undefined, [
+        {
+          filename: "codex-photo.png",
+          path: uploadedPath,
+          mimeType: "image/png",
+        },
+      ]);
+
+      const call = mockRunTurn.mock.calls.at(-1)?.[0] as any;
+      expect(call.config.provider).toBe("codex-cli");
+      expect(call.messages.at(-1)?.content).toContainEqual({
+        type: "text",
+        text: "describe this",
+      });
+      expect(call.messages.at(-1)?.content).toContainEqual({
+        type: "image",
+        data: Buffer.from("codex-image-bytes").toString("base64"),
+        mimeType: "image/png",
+      });
+    });
+
     test("preserves correct multimodal part types for uploaded Google attachments", async () => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-attachments-"));
       const uploadsDir = path.join(dir, "uploads");

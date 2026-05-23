@@ -157,7 +157,7 @@ export function PromptInputAttachmentPreviews({
           return (
             <div
               key={`${item.filename}:${item.mimeType}:${item.previewUrl ?? ""}`}
-              className="group inline-flex min-w-0 max-w-full items-center gap-2 rounded-full border border-border/55 bg-background/70 py-1 pl-1.5 pr-1 text-sm shadow-[inset_0_1px_0_var(--border-glass)]"
+              className="group inline-flex min-w-0 max-w-full items-center gap-2 overflow-hidden rounded-full border border-border/55 bg-background/70 py-1 pl-1.5 pr-1 text-sm shadow-[inset_0_1px_0_var(--border-glass)]"
             >
               <div className="flex size-6 shrink-0 items-center justify-center overflow-hidden rounded-full bg-muted/45 ring-1 ring-border/40">
                 {src ? (
@@ -166,9 +166,9 @@ export function PromptInputAttachmentPreviews({
                   attachmentPreviewIcon(item)
                 )}
               </div>
-              <div className="flex min-w-0 items-center gap-1.5">
+              <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
                 <p
-                  className="max-w-[18rem] truncate text-[13px] font-medium leading-5 text-foreground/88"
+                  className="min-w-0 flex-1 truncate text-[13px] font-medium leading-5 text-foreground/88"
                   title={item.filename}
                 >
                   {item.filename}

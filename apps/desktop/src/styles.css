@@ -376,13 +376,13 @@ samp {
 }
 
 .settings-shell__back-button {
-  border: 1px solid var(--border-settings-back-button);
-  background: var(--surface-settings-back-button);
+  border: none;
+  background: transparent;
   box-shadow: none;
 }
 
 .settings-shell__back-button:hover {
-  background: var(--surface-settings-back-button-hover);
+  background: var(--surface-settings-nav-hover);
 }
 
 .settings-shell__nav-button {

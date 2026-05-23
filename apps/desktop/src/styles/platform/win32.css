@@ -259,7 +259,7 @@
 }
 
 :root[data-platform="win32"] .settings-shell__back-button:hover {
-  background: var(--surface-settings-back-button-hover);
+  background: var(--surface-settings-nav-hover);
   color: var(--text-primary);
 }
 

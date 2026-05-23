@@ -251,15 +251,14 @@ function SettingsNavigation({
         <div className="settings-shell__nav-titleband">
           <div className="settings-shell__nav-titleband-drag-zone" aria-hidden="true" />
           <div className="settings-shell__nav-titleband-row px-3 flex items-center">
-            <Button
-              className="settings-shell__back-button h-9 w-full justify-start rounded-md px-2.5 text-[13px] font-medium"
-              variant="ghost"
+            <button
+              className="settings-shell__back-button flex h-9 w-full items-center justify-start gap-2 rounded-md px-2.5 text-left text-[13px] font-medium text-foreground/72 transition-all duration-150 hover:bg-foreground/[0.045] hover:text-foreground"
               type="button"
               onClick={onBack}
             >
-              <ArrowLeftIcon className="mr-2 h-4 w-4 shrink-0 opacity-70" />
+              <ArrowLeftIcon className="h-4 w-4 shrink-0" />
               Back
-            </Button>
+            </button>
           </div>
         </div>
         {perWorkspaceSettings && currentWorkspace ? (

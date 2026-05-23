@@ -4,7 +4,6 @@ import { FlatList, KeyboardAvoidingView, Pressable, Text, View } from "react-nat
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ComposerBar } from "@/components/ComposerBar";
-import { FileExplorerDrawer } from "@/components/FileExplorerDrawer";
 import { PendingRequestCard } from "@/components/thread/pending-request-card";
 import { ThreadFeedItem } from "@/components/thread/thread-feed-item";
 import { Screen } from "@/components/ui/screen";
@@ -39,7 +38,6 @@ export default function ThreadDetailScreen() {
   const interruptThread = useThreadStore((state) => state.interruptThread);
   const clearPendingRequest = useThreadStore((state) => state.clearPendingRequest);
   const [askDraft, setAskDraft] = useState("");
-  const [drawerVisible, setDrawerVisible] = useState(false);
   const runtimeClient = getActiveCoworkJsonRpcClient();
   const controlSnapshot = useWorkspaceStore((state) => state.controlSnapshot);
 
@@ -119,9 +117,6 @@ export default function ThreadDetailScreen() {
           title: activeThread.title,
           headerRight: () => (
             <View style={{ flexDirection: "row", gap: 16 }}>
-              <Pressable onPress={() => setDrawerVisible(true)}>
-                <SFSymbol name="folder" size={24} color={theme.text} />
-              </Pressable>
               <Pressable
                 onPress={() => {
                   /* open overflow */
@@ -262,12 +257,6 @@ export default function ThreadDetailScreen() {
           />
         </View>
       </KeyboardAvoidingView>
-
-      <FileExplorerDrawer
-        visible={drawerVisible}
-        onClose={() => setDrawerVisible(false)}
-        workspaceName="Cowork"
-      />
     </>
   );
 }

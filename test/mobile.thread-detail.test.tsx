@@ -142,11 +142,6 @@ mockLocalModule("@/components/ComposerBar", "apps/mobile/src/components/Composer
   ComposerBar: () => null,
 }));
 mockLocalModule(
-  "@/components/FileExplorerDrawer",
-  "apps/mobile/src/components/FileExplorerDrawer",
-  () => ({ FileExplorerDrawer: () => null }),
-);
-mockLocalModule(
   "@/components/thread/pending-request-card",
   "apps/mobile/src/components/thread/pending-request-card",
   () => ({ PendingRequestCard: () => null }),

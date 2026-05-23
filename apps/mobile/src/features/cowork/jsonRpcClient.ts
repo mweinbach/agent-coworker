@@ -59,6 +59,31 @@ type JsonRpcRequestMessage = z.infer<typeof jsonRpcRequestSchema>;
 type JsonRpcNotificationMessage = z.infer<typeof jsonRpcNotificationSchema>;
 type JsonRpcResponseMessage = z.infer<typeof jsonRpcResponseSchema>;
 
+export type CoworkTurnInputPart =
+  | { type: "text"; text: string }
+  | { type: "file"; filename: string; contentBase64: string; mimeType: string }
+  | { type: "uploadedFile"; filename: string; path: string; mimeType: string };
+
+export type CoworkUploadedFile = {
+  type: "file_uploaded";
+  filename: string;
+  path: string;
+  sessionId?: string;
+};
+
+const coworkUploadedFileResultSchema = z
+  .object({
+    event: z
+      .object({
+        type: z.literal("file_uploaded"),
+        filename: z.string().trim().min(1),
+        path: z.string().trim().min(1),
+        sessionId: z.string().trim().min(1).optional(),
+      })
+      .passthrough(),
+  })
+  .strict();
+
 export type JsonRpcServerRequest =
   | {
       method: "item/tool/requestUserInput";
@@ -273,12 +298,25 @@ export class CoworkJsonRpcClient {
     return coworkThreadReadResultSchema.parse(result);
   }
 
-  async startTurn(threadId: string, text: string, clientMessageId?: string): Promise<void> {
+  async startTurn(
+    threadId: string,
+    input: string | CoworkTurnInputPart[],
+    clientMessageId?: string,
+  ): Promise<void> {
     await this.request("turn/start", {
       threadId,
-      input: [{ type: "text", text }],
+      input: typeof input === "string" ? [{ type: "text", text: input }] : input,
       ...(clientMessageId ? { clientMessageId } : {}),
     });
+  }
+
+  async uploadFile(params: {
+    cwd?: string;
+    filename: string;
+    contentBase64: string;
+  }): Promise<CoworkUploadedFile> {
+    const result = await this.request("cowork/session/file/upload", params);
+    return coworkUploadedFileResultSchema.parse(result).event;
   }
 
   async interruptTurn(threadId: string): Promise<void> {

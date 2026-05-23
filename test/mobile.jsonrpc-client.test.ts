@@ -171,6 +171,103 @@ describe("mobile cowork jsonrpc client", () => {
     });
   });
 
+  test("uploads files through the session control route", async () => {
+    const sent: string[] = [];
+    const client = new CoworkJsonRpcClient({
+      clientInfo: {
+        name: "cowork-mobile",
+        version: "0.1.0",
+      },
+      send(text) {
+        sent.push(text);
+      },
+    });
+
+    const uploadPromise = client.uploadFile({
+      cwd: "/workspace",
+      filename: "notes.txt",
+      contentBase64: Buffer.from("hello").toString("base64"),
+    });
+    const payload = JSON.parse(sent[0]!);
+    expect(payload).toMatchObject({
+      method: "cowork/session/file/upload",
+      params: {
+        cwd: "/workspace",
+        filename: "notes.txt",
+        contentBase64: "aGVsbG8=",
+      },
+    });
+
+    await client.handleIncoming(
+      JSON.stringify({
+        id: payload.id,
+        result: {
+          event: {
+            type: "file_uploaded",
+            sessionId: "session-1",
+            filename: "notes.txt",
+            path: "/workspace/User Uploads/notes.txt",
+          },
+        },
+      }),
+    );
+
+    await expect(uploadPromise).resolves.toEqual({
+      type: "file_uploaded",
+      sessionId: "session-1",
+      filename: "notes.txt",
+      path: "/workspace/User Uploads/notes.txt",
+    });
+  });
+
+  test("starts turns with uploaded file input parts", async () => {
+    const sent: string[] = [];
+    const client = new CoworkJsonRpcClient({
+      clientInfo: {
+        name: "cowork-mobile",
+        version: "0.1.0",
+      },
+      send(text) {
+        sent.push(text);
+      },
+    });
+
+    const startPromise = client.startTurn(
+      "thread-1",
+      [
+        { type: "text", text: "summarize this" },
+        {
+          type: "uploadedFile",
+          filename: "notes.txt",
+          path: "/workspace/User Uploads/notes.txt",
+          mimeType: "text/plain",
+        },
+      ],
+      "client-msg-1",
+    );
+    const payload = JSON.parse(sent[0]!);
+    expect(payload).toEqual({
+      id: expect.any(Number),
+      method: "turn/start",
+      params: {
+        threadId: "thread-1",
+        clientMessageId: "client-msg-1",
+        input: [
+          { type: "text", text: "summarize this" },
+          {
+            type: "uploadedFile",
+            filename: "notes.txt",
+            path: "/workspace/User Uploads/notes.txt",
+            mimeType: "text/plain",
+          },
+        ],
+      },
+    });
+
+    await client.handleIncoming(JSON.stringify({ id: payload.id, result: { turn: {} } }));
+    await expect(startPromise).resolves.toBeUndefined();
+  });
+
   test("accepts uiSurface notifications with A2UI metadata fields", async () => {
     const sent: string[] = [];
     const notifications: Array<{ method: string; params?: unknown }> = [];

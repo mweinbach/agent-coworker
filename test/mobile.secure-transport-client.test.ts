@@ -88,6 +88,11 @@ describe("mobile secure transport client", () => {
       certSha256: "a".repeat(64),
       spkiSha256: "b".repeat(43),
     });
+    expect(JSON.parse((fetchMock.mock.calls[1]?.[0] as { body?: string }).body ?? "{}"))
+      .toMatchObject({
+        ticket: "cowork-pair://ticket",
+        nonce: "pairing-nonce",
+      });
     expect(fetchMock.mock.calls[2]?.[0]).toMatchObject({
       certSha256: "a".repeat(64),
       spkiSha256: "b".repeat(43),

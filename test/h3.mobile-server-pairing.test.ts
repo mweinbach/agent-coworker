@@ -9,6 +9,10 @@ import type {
   JsonRpcLiteRequest,
 } from "../src/server/jsonrpc/protocol";
 import type { AgentServerRuntime } from "../src/server/runtime/ServerRuntime";
+import {
+  type CoworkPairingTicket,
+  encodeCoworkPairingTicket,
+} from "../src/shared/coworkTicket";
 import { loadH3PairingStoreState } from "../src/server/transport/h3/pairing";
 import { startH3MobileServer } from "../src/server/transport/h3/server";
 
@@ -37,11 +41,49 @@ function fetchH3(url: string, init: RequestInit = {}): Promise<Response> {
   } as H3FetchInit);
 }
 
+function createNoopRuntime(): AgentServerRuntime {
+  return {
+    openHttpConnection() {},
+    handleDecodedMessage() {},
+    closeConnection() {},
+  } as AgentServerRuntime;
+}
+
 afterEach(async () => {
   await Promise.all(tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
 describe("H3 mobile server pairing", () => {
+  const ticketBindingCases: Array<{
+    name: string;
+    mutate(ticket: CoworkPairingTicket): CoworkPairingTicket;
+  }> = [
+    {
+      name: "certificate fingerprint",
+      mutate: (ticket) => ({ ...ticket, certSha256: "b".repeat(64) }),
+    },
+    {
+      name: "SPKI fingerprint",
+      mutate: (ticket) => ({ ...ticket, spkiSha256: "c".repeat(43) }),
+    },
+    {
+      name: "desktop identity",
+      mutate: (ticket) => ({ ...ticket, identityPub: "other-desktop-identity" }),
+    },
+    {
+      name: "advertised hosts",
+      mutate: (ticket) => ({ ...ticket, hosts: ["192.168.1.200"] }),
+    },
+    {
+      name: "advertised port",
+      mutate: (ticket) => ({ ...ticket, port: ticket.port === 65535 ? 1 : ticket.port + 1 }),
+    },
+    {
+      name: "ticket expiry",
+      mutate: (ticket) => ({ ...ticket, expiresAt: ticket.expiresAt - 1 }),
+    },
+  ];
+
   test("consumes pairing nonces once and gates HTTP RPC behind the paired session token", async () => {
     const storeRoot = await createTempRoot();
     const handled: Array<JsonRpcLiteRequest | JsonRpcLiteNotification | JsonRpcLiteClientResponse> =
@@ -210,6 +252,58 @@ describe("H3 mobile server pairing", () => {
       await server.stop();
     }
   });
+
+  for (const bindingCase of ticketBindingCases) {
+    test(`rejects pairing tickets with mismatched ${bindingCase.name}`, async () => {
+      const storeRoot = await createTempRoot();
+      const server = await startH3MobileServer({
+        runtime: createNoopRuntime(),
+        hostname: "127.0.0.1",
+        hostHints: ["127.0.0.1"],
+        storeRootPath: storeRoot,
+        enableH3: false,
+      });
+
+      try {
+        const tamperedTicket = encodeCoworkPairingTicket(bindingCase.mutate(server.ticket));
+        const tamperedResponse = await fetchH3(`${server.url}/pair`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            ticket: tamperedTicket,
+            nonce: server.nonce,
+            deviceId: "phone-1",
+            identityPub: "phone-identity",
+            displayName: "Work Phone",
+          }),
+        });
+
+        expect(tamperedResponse.status).toBe(400);
+        await expect(tamperedResponse.json()).resolves.toEqual({
+          error: "Invalid pairing request.",
+        });
+        await expect(loadH3PairingStoreState(storeRoot)).resolves.toEqual({
+          version: 1,
+          trustedDevices: [],
+        });
+
+        const validResponse = await fetchH3(`${server.url}/pair`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            ticket: server.ticketUrl,
+            nonce: server.nonce,
+            deviceId: "phone-1",
+            identityPub: "phone-identity",
+            displayName: "Work Phone",
+          }),
+        });
+        expect(validResponse.status).toBe(200);
+      } finally {
+        await server.stop();
+      }
+    });
+  }
 
   test("allows only one concurrent pairing request to consume a nonce", async () => {
     const storeRoot = await createTempRoot();

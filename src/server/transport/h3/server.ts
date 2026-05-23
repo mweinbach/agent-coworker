@@ -1,5 +1,6 @@
 import {
   type CoworkPairingTicket,
+  coworkPairingTicketSchema,
   decodeCoworkPairingTicket,
   encodeCoworkPairingTicket,
 } from "../../../shared/coworkTicket";
@@ -279,6 +280,27 @@ function decodePairingTicketForRequest(rawTicket: string): CoworkPairingTicket |
   }
 }
 
+function pairingTicketMatchesExpected(
+  actual: CoworkPairingTicket,
+  expectedRaw: CoworkPairingTicket,
+): boolean {
+  const expected = coworkPairingTicketSchema.parse(expectedRaw);
+  if (
+    actual.v !== expected.v ||
+    actual.scheme !== expected.scheme ||
+    actual.port !== expected.port ||
+    actual.certSha256 !== expected.certSha256 ||
+    actual.spkiSha256 !== expected.spkiSha256 ||
+    actual.identityPub !== expected.identityPub ||
+    actual.nonce !== expected.nonce ||
+    actual.expiresAt !== expected.expiresAt ||
+    actual.hosts.length !== expected.hosts.length
+  ) {
+    return false;
+  }
+  return actual.hosts.every((host, index) => host === expected.hosts[index]);
+}
+
 function getJsonRpcIdKey(message: JsonRpcLiteRequest | JsonRpcLiteClientResponse): string {
   return `${typeof message.id}:${String(message.id)}`;
 }
@@ -484,6 +506,11 @@ export async function startH3MobileServer(
       const session = pairingSessions.get(nonce);
       if (!session || decoded.nonce !== nonce || !verifyH3PairingNonce(session, nonce)) {
         return jsonResponse({ error: "Pairing session expired." }, { status: 401 });
+      }
+      const port = server?.port;
+      if (port === undefined) return textResponse("Not ready", { status: 503 });
+      if (!pairingTicketMatchesExpected(decoded, createTicket(port))) {
+        return jsonResponse({ error: "Invalid pairing request." }, { status: 400 });
       }
       pairingSessions.delete(nonce);
       const sessionToken = crypto.randomUUID() + crypto.randomUUID().replaceAll("-", "");

@@ -140,13 +140,13 @@ describe("desktop memory page", () => {
       });
 
       expect(container.textContent).toContain("Loading...");
-      expect(container.textContent).not.toContain("No memories yet");
+      expect(container.textContent).not.toContain("No remembered facts yet");
 
       await act(async () => {
         await new Promise((resolve) => setTimeout(resolve, MEMORY_LOADING_STALL_MS + 100));
       });
 
-      expect(container.textContent).toContain("No memories yet");
+      expect(container.textContent).toContain("No remembered facts yet");
       expect(container.textContent).not.toContain("Loading...");
       expect(container.textContent).toContain("Refresh");
 

@@ -1,4 +1,19 @@
-import { ArrowLeftIcon } from "lucide-react";
+import {
+  ActivityIcon,
+  ArchiveRestoreIcon,
+  ArrowLeftIcon,
+  BarChart3Icon,
+  BotIcon,
+  FlaskConicalIcon,
+  HistoryIcon,
+  MonitorIcon,
+  RefreshCcwIcon,
+  SlidersHorizontalIcon,
+  UserRoundCogIcon,
+  WifiIcon,
+  WrenchIcon,
+  type LucideIcon,
+} from "lucide-react";
 import { type CSSProperties, type ReactNode, useCallback, useState } from "react";
 
 import { includeDevelopmentSettings } from "../../app/settingsPageAvailability";
@@ -8,51 +23,49 @@ import { Button } from "../../components/ui/button";
 import { isPackagedDesktopApp } from "../../lib/desktopCommands";
 import { type DesktopPlatformInfo, getDesktopPlatformInfo } from "../../lib/desktopPlatform";
 import { cn } from "../../lib/utils";
-import { ArchivedChatsPage } from "./pages/ArchivedChatsPage";
 import { BackupPage } from "./pages/BackupPage";
 import { DesktopPage } from "./pages/DesktopPage";
 import { DeveloperPage } from "./pages/DeveloperPage";
 import { FeatureFlagsPage } from "./pages/FeatureFlagsPage";
-import { McpServersPage } from "./pages/McpServersPage";
-import { MemoryPage } from "./pages/MemoryPage";
-import { OpenAiNativeConnectorsPage } from "./pages/OpenAiNativeConnectorsPage";
-import { ProvidersPage } from "./pages/ProvidersPage";
 import { RemoteAccessPage } from "./pages/RemoteAccessPage";
+import {
+  ChatsSettingsPage,
+  DefaultsSettingsPage,
+  ModelsSettingsPage,
+  ProfileMemorySettingsPage,
+  ToolAccessSettingsPage,
+} from "./pages/SettingsIntentPages";
 import { UpdatesPage } from "./pages/UpdatesPage";
 import { UsagePage } from "./pages/UsagePage";
-import { WorkspacesPage } from "./pages/WorkspacesPage";
 import { SettingsChromeProvider, type SettingsChromeState } from "./SettingsChromeContext";
 
 type SettingsPageDefinition = {
   id: SettingsPageId;
   label: string;
+  icon: LucideIcon;
   render: () => ReactNode;
 };
 
 const SETTINGS_PAGE_META: Record<SettingsPageId, { title: string; description: string }> = {
-  providers: {
-    title: "Providers",
-    description: "Connect models and see whether each provider is ready to use.",
+  models: {
+    title: "Models",
+    description: "Provider health, model defaults, and subagent routing.",
   },
-  openAiNativeConnectors: {
-    title: "OpenAI Native Connectors",
-    description: "Manage ChatGPT apps exposed by the Codex app-server.",
+  toolAccess: {
+    title: "Tool Access",
+    description: "External services, MCP servers, and local search tools Cowork can use.",
   },
   desktop: {
     title: "Desktop",
     description: "Menu bar, tray, and quick chat controls for the desktop app.",
   },
-  mcp: {
-    title: "MCP servers",
-    description: "Add tools and services the agent can call from this workspace.",
-  },
-  workspaces: {
-    title: "Workspace",
+  defaults: {
+    title: "Defaults",
     description: "Defaults for models, tools, and behavior in this project.",
   },
-  memory: {
-    title: "Memory",
-    description: "What Cowork remembers about you and this workspace.",
+  profileMemory: {
+    title: "Profile & Memory",
+    description: "How Cowork should understand you and what it should remember.",
   },
   remoteAccess: {
     title: "Remote access",
@@ -62,64 +75,102 @@ const SETTINGS_PAGE_META: Record<SettingsPageId, { title: string; description: s
     title: "Backups",
     description: "Recovery snapshots and restore points for chat sessions.",
   },
-  archivedChats: {
-    title: "Archived Chats",
-    description: "Manage, restore, or delete archived chat history, and set auto-deletion.",
+  chats: {
+    title: "Chats",
+    description: "Archived chat history, restore actions, and retention.",
   },
   usage: {
     title: "Usage",
     description: "Token usage and estimated cost across sessions.",
   },
-  developer: {
-    title: "Developer",
-    description: "Debug visibility and advanced workspace options.",
-  },
-  featureFlags: {
-    title: "Feature flags",
+  experiments: {
+    title: "Experiments",
     description: "Enable or disable experimental capabilities.",
+  },
+  diagnostics: {
+    title: "Diagnostics",
+    description: "Debug visibility, runtime checks, and advanced output handling.",
   },
   updates: {
     title: "Updates",
     description: "App version and restart-based updates.",
   },
+  providers: {
+    title: "Models",
+    description: "Provider health, model defaults, and subagent routing.",
+  },
+  openAiNativeConnectors: {
+    title: "Tool Access",
+    description: "External services, MCP servers, and local search tools Cowork can use.",
+  },
+  mcp: {
+    title: "Tool Access",
+    description: "External services, MCP servers, and local search tools Cowork can use.",
+  },
+  workspaces: {
+    title: "Defaults",
+    description: "Defaults for models, tools, and behavior in this project.",
+  },
+  memory: {
+    title: "Profile & Memory",
+    description: "How Cowork should understand you and what it should remember.",
+  },
+  featureFlags: {
+    title: "Experiments",
+    description: "Enable or disable experimental capabilities.",
+  },
+  developer: {
+    title: "Diagnostics",
+    description: "Debug visibility, runtime checks, and advanced output handling.",
+  },
+  archivedChats: {
+    title: "Chats",
+    description: "Archived chat history, restore actions, and retention.",
+  },
 };
 
 export function getSettingsGroups(
   remoteAccessAvailable: boolean,
-  opts: { includeDevelopmentPages?: boolean; openAiNativeConnectorsAvailable?: boolean } = {},
+  opts: { includeDevelopmentPages?: boolean } = {},
 ): Array<{
   label: string;
   pages: SettingsPageDefinition[];
 }> {
   const includeDevelopmentPages = opts.includeDevelopmentPages ?? true;
-  const openAiNativeConnectorsAvailable = opts.openAiNativeConnectorsAvailable === true;
   return [
     {
       label: "Models & tools",
       pages: [
-        { id: "providers", label: "Providers", render: () => <ProvidersPage /> },
-        ...(openAiNativeConnectorsAvailable
-          ? [
-              {
-                id: "openAiNativeConnectors",
-                label: "OpenAI connectors",
-                render: () => <OpenAiNativeConnectorsPage />,
-              } satisfies SettingsPageDefinition,
-            ]
-          : []),
-        { id: "mcp", label: "MCP servers", render: () => <McpServersPage /> },
+        { id: "models", label: "Models", icon: BotIcon, render: () => <ModelsSettingsPage /> },
+        {
+          id: "toolAccess",
+          label: "Tool Access",
+          icon: WrenchIcon,
+          render: () => <ToolAccessSettingsPage />,
+        },
       ],
     },
     {
       label: "Workspace",
       pages: [
-        { id: "workspaces", label: "General", render: () => <WorkspacesPage /> },
-        { id: "memory", label: "Memory", render: () => <MemoryPage /> },
+        {
+          id: "defaults",
+          label: "Defaults",
+          icon: SlidersHorizontalIcon,
+          render: () => <DefaultsSettingsPage />,
+        },
+        {
+          id: "profileMemory",
+          label: "Profile & Memory",
+          icon: UserRoundCogIcon,
+          render: () => <ProfileMemorySettingsPage />,
+        },
         ...(remoteAccessAvailable
           ? [
               {
                 id: "remoteAccess",
                 label: "Remote access",
+                icon: WifiIcon,
                 render: () => <RemoteAccessPage />,
               } satisfies SettingsPageDefinition,
             ]
@@ -127,28 +178,39 @@ export function getSettingsGroups(
       ],
     },
     {
-      label: "Data",
+      label: "History & Data",
       pages: [
-        { id: "backup", label: "Backups", render: () => <BackupPage /> },
-        { id: "archivedChats", label: "Archived chats", render: () => <ArchivedChatsPage /> },
-        { id: "usage", label: "Usage", render: () => <UsagePage /> },
+        { id: "backup", label: "Backups", icon: ArchiveRestoreIcon, render: () => <BackupPage /> },
+        { id: "chats", label: "Chats", icon: HistoryIcon, render: () => <ChatsSettingsPage /> },
+        { id: "usage", label: "Usage", icon: BarChart3Icon, render: () => <UsagePage /> },
+      ],
+    },
+    {
+      label: "App",
+      pages: [
+        { id: "desktop", label: "Desktop", icon: MonitorIcon, render: () => <DesktopPage /> },
+        { id: "updates", label: "Updates", icon: RefreshCcwIcon, render: () => <UpdatesPage /> },
       ],
     },
     {
       label: "Advanced",
       pages: [
-        { id: "desktop", label: "Desktop", render: () => <DesktopPage /> },
         ...(includeDevelopmentPages
           ? [
               {
-                id: "featureFlags",
-                label: "Feature flags",
+                id: "experiments",
+                label: "Experiments",
+                icon: FlaskConicalIcon,
                 render: () => <FeatureFlagsPage />,
               } satisfies SettingsPageDefinition,
             ]
           : []),
-        { id: "developer", label: "Developer", render: () => <DeveloperPage /> },
-        { id: "updates", label: "Updates", render: () => <UpdatesPage /> },
+        {
+          id: "diagnostics",
+          label: "Diagnostics",
+          icon: ActivityIcon,
+          render: () => <DeveloperPage />,
+        },
       ],
     },
   ];
@@ -217,25 +279,34 @@ function SettingsNavigation({
         <div className="flex flex-col gap-3 max-[860px]:flex-row max-[860px]:flex-wrap max-[860px]:gap-x-4 max-[860px]:gap-y-3">
           {settingsGroups.map((group) => (
             <div key={group.label} className="flex min-w-0 flex-col">
-              <div className="mb-0.5 px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-foreground/72">
+              <div className="mb-1 px-2 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/58">
                 {group.label}
               </div>
               <div className="flex flex-col gap-0.5">
-                {group.pages.map((page) => (
-                  <button
-                    key={page.id}
-                    className={cn(
-                      "settings-shell__nav-button flex w-full items-center rounded-lg px-3 py-2 text-left text-[13px] transition-colors",
-                      activePage === page.id
-                        ? "bg-foreground/[0.08] font-medium text-foreground ring-1 ring-border/40"
-                        : "font-normal text-foreground/78 hover:bg-foreground/[0.05] hover:text-foreground",
-                    )}
-                    type="button"
-                    onClick={() => onSelectPage(page.id)}
-                  >
-                    {page.label}
-                  </button>
-                ))}
+                {group.pages.map((page) => {
+                  const Icon = page.icon;
+                  return (
+                    <button
+                      key={page.id}
+                      className={cn(
+                        "settings-shell__nav-button flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] transition-all duration-150",
+                        activePage === page.id
+                          ? "settings-shell__nav-button--active font-semibold text-foreground"
+                          : "font-medium text-foreground/72 hover:bg-foreground/[0.045] hover:text-foreground",
+                      )}
+                      type="button"
+                      onClick={() => onSelectPage(page.id)}
+                    >
+                      <Icon
+                        className={cn(
+                          "size-4 shrink-0",
+                          activePage === page.id ? "text-foreground" : "text-muted-foreground",
+                        )}
+                      />
+                      <span className="min-w-0 truncate">{page.label}</span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
           ))}
@@ -248,7 +319,6 @@ function SettingsNavigation({
 export function SettingsShell() {
   const desktopFeatureFlags = useAppStore((s) => s.desktopFeatureFlags);
   const remoteAccessAvailable = desktopFeatureFlags.remoteAccess === true;
-  const openAiNativeConnectorsAvailable = desktopFeatureFlags.openAiNativeConnectors === true;
   const packaged = useAppStore((s) => s.updateState.packaged);
   const settingsPage = useAppStore((s) => s.settingsPage);
   const setSettingsPage = useAppStore((s) => s.setSettingsPage);
@@ -256,7 +326,6 @@ export function SettingsShell() {
   const sidebarWidth = useAppStore((s) => s.sidebarWidth);
   const settingsGroups = getSettingsGroups(remoteAccessAvailable, {
     includeDevelopmentPages: includeDevelopmentSettings(packaged || isPackagedDesktopApp()),
-    openAiNativeConnectorsAvailable,
   });
   const settingsPages = settingsGroups.flatMap((group) => group.pages);
   const activePage = settingsPages.find((page) => page.id === settingsPage) ?? settingsPages[0];
@@ -274,7 +343,7 @@ export function SettingsShell() {
   return (
     <div
       className="settings-shell relative grid h-full min-h-0 min-w-0 bg-transparent"
-      style={{ gridTemplateColumns: `${sidebarWidth}px minmax(0, 1fr)` }}
+      style={{ "--settings-sidebar-width": `${sidebarWidth}px` } as CSSProperties}
     >
       {platformInfo.sidebarTitlebandMode === "native" ? (
         <div

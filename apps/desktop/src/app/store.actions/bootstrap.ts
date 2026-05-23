@@ -117,46 +117,52 @@ function normalizeSettingsPageId(
   const normalized = normalizeKnownSettingsPageId(value);
 
   if (!isSettingsPageAvailable(normalized, { desktopFeatures, packaged })) {
-    return "providers";
+    return "models";
   }
 
   return normalized;
 }
 
 function normalizeKnownSettingsPageId(value: unknown): SettingsPageId {
-  return value === "providers" ||
-    value === "openAiNativeConnectors" ||
+  if (value === "providers") return "models";
+  if (value === "mcp" || value === "openAiNativeConnectors") return "toolAccess";
+  if (value === "workspaces") return "defaults";
+  if (value === "memory") return "profileMemory";
+  if (value === "archivedChats") return "chats";
+  if (value === "featureFlags") return "experiments";
+  if (value === "developer") return "diagnostics";
+
+  return value === "models" ||
+    value === "toolAccess" ||
+    value === "defaults" ||
+    value === "profileMemory" ||
+    value === "chats" ||
+    value === "experiments" ||
+    value === "diagnostics" ||
     value === "desktop" ||
     value === "usage" ||
-    value === "workspaces" ||
     value === "remoteAccess" ||
     value === "backup" ||
-    value === "mcp" ||
-    value === "memory" ||
-    value === "featureFlags" ||
-    value === "updates" ||
-    value === "developer" ||
-    value === "archivedChats"
+    value === "updates"
     ? value
-    : "providers";
+    : "models";
 }
 
 const normalizedSettingsPageSchema = z.preprocess(
   (value) => normalizeKnownSettingsPageId(value),
   z.enum([
-    "providers",
-    "openAiNativeConnectors",
+    "models",
+    "toolAccess",
+    "defaults",
+    "profileMemory",
+    "chats",
+    "experiments",
+    "diagnostics",
     "desktop",
     "usage",
-    "workspaces",
     "remoteAccess",
     "backup",
-    "mcp",
-    "memory",
-    "featureFlags",
     "updates",
-    "developer",
-    "archivedChats",
   ]),
 );
 const normalizedNullableSelectionSchema = z.preprocess(
@@ -339,7 +345,7 @@ const persistedUiSchema = z
       pluginManagementWorkspaceId: ui.pluginManagementWorkspaceId ?? null,
       pluginManagementMode: ui.pluginManagementMode ?? "auto",
       view: ui.view ?? "chat",
-      settingsPage: ui.settingsPage ?? "providers",
+      settingsPage: ui.settingsPage ?? "models",
       lastNonSettingsView: ui.lastNonSettingsView ?? "chat",
       sidebarCollapsed: ui.sidebarCollapsed ?? false,
       sidebarWidth: ui.sidebarWidth ?? 248,

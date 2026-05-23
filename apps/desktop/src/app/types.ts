@@ -230,6 +230,13 @@ export type OnboardingStep = "welcome" | "workspace" | "provider" | "defaults" |
 export type ViewId = "chat" | "skills" | "research" | "settings";
 export type PluginViewMode = "plugins" | "skills";
 export type SettingsPageId =
+  | "models"
+  | "toolAccess"
+  | "defaults"
+  | "profileMemory"
+  | "chats"
+  | "experiments"
+  | "diagnostics"
   | "providers"
   | "openAiNativeConnectors"
   | "desktop"

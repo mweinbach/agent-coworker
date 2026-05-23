@@ -455,7 +455,7 @@ describe("desktop bootstrap cache", () => {
     });
 
     expect(seed?.view).toBe("settings");
-    expect(seed?.settingsPage).toBe("providers");
+    expect(seed?.settingsPage).toBe("models");
   });
 
   test("buildCachedDesktopStateSeed preserves remote access page when persisted overrides enable it", () => {
@@ -493,7 +493,7 @@ describe("desktop bootstrap cache", () => {
     });
 
     expect(seed?.view).toBe("settings");
-    expect(seed?.settingsPage).toBe("providers");
+    expect(seed?.settingsPage).toBe("models");
     expect(seed?.desktopFeatureFlags.remoteAccess).toBe(false);
   });
 

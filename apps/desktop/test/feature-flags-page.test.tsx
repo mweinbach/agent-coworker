@@ -54,7 +54,7 @@ describe("feature flags settings page", () => {
         root.render(createElement(FeatureFlagsPage));
       });
 
-      expect(container.textContent).toContain("Feature flags");
+      expect(container.textContent).toContain("Experimental capabilities");
       expect(container.textContent).toContain("Menu bar / tray");
       expect(container.textContent).toContain("Remote access");
       expect(container.textContent).toContain("Generative UI (A2UI)");

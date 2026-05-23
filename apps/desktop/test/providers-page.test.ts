@@ -381,7 +381,7 @@ describe("desktop providers page", () => {
       "Together AI",
       "OpenAI",
     ];
-    const providerIndexes = expectedVisibleOrder.map((name) => html.indexOf(name));
+    const providerIndexes = expectedVisibleOrder.map((name) => html.lastIndexOf(name));
     expect(providerIndexes.every((index) => index >= 0)).toBe(true);
     for (let index = 1; index < providerIndexes.length; index += 1) {
       expect(providerIndexes[index - 1]).toBeLessThan(providerIndexes[index]);

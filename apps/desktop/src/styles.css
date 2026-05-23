@@ -365,6 +365,13 @@ samp {
 @media (max-width: 860px) {
   .settings-shell {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+}
+
+@media (min-width: 861px) {
+  .settings-shell {
+    grid-template-columns: var(--settings-sidebar-width) minmax(0, 1fr);
   }
 }
 
@@ -376,6 +383,19 @@ samp {
 
 .settings-shell__back-button:hover {
   background: var(--surface-settings-back-button-hover);
+}
+
+.settings-shell__nav-button {
+  min-height: 2.125rem;
+}
+
+.settings-shell__nav-button:hover {
+  background: var(--surface-settings-nav-hover);
+}
+
+.settings-shell__nav-button--active {
+  background: var(--surface-settings-nav-active);
+  box-shadow: none;
 }
 
 .settings-shell__main {
@@ -398,6 +418,24 @@ samp {
   min-height: 100%;
 }
 
+.settings-page {
+  animation: settingsPageIn 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.settings-section {
+  box-shadow: var(--shadow-settings-section);
+}
+
+.settings-row {
+  transition:
+    background-color 160ms ease,
+    color 160ms ease;
+}
+
+.settings-row:hover {
+  background: var(--surface-settings-row-hover);
+}
+
 .settings-shell__main [data-slot="card"] {
   border-color: var(--border-glass);
   background: var(--surface-settings-card);
@@ -407,6 +445,18 @@ samp {
 
 .settings-shell__main [data-slot="card"]:has([data-provider-card]) {
   background: var(--surface-settings-card-elevated);
+}
+
+@keyframes settingsPageIn {
+  from {
+    opacity: 0.72;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 @keyframes sidebarRailIn {

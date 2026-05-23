@@ -24,10 +24,15 @@ started by the desktop sidecar. Pairing details are in
 [`docs/quic-pairing.md`](./quic-pairing.md).
 
 - `POST /pair` accepts a scanned `cowork-pair://` ticket, nonce, and mobile identity,
-  then returns a bearer session token.
+  validates the full advertised endpoint material, then returns a bearer session token.
 - `POST /rpc` accepts one JSON-RPC-lite request/notification/response per body and returns
   the JSON-RPC response payload.
 - `GET /events` streams JSON-RPC-lite notifications and server requests as Server-Sent Events.
+
+`/rpc` and `/events` require both `Authorization: Bearer <sessionToken>` and the paired
+`x-cowork-mobile-device-id` header. The H3 listener keeps one trusted-device record per mobile
+device id, and desktop-side per-device permissions gate mutating JSON-RPC methods such as turns,
+provider auth, MCP auth, backups, workspace settings, and server-request responses.
 
 The JSON-RPC handshake (`initialize`, then `initialized`) is still required before calling
 `thread/*`, `turn/*`, or `cowork/*`.

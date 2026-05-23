@@ -37,7 +37,10 @@ export type CodexSandboxPolicy =
       excludeSlashTmp: boolean;
     };
 
-export type CodexTextElement = Record<string, unknown>;
+export type CodexTextElement = {
+  byteRange: { start: number; end: number };
+  placeholder: string | null;
+};
 export type CodexImageDetail = "low" | "high" | "original";
 export type CodexTurnInputPart =
   | {

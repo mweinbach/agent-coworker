@@ -120,7 +120,7 @@ function codexInputPartsForMessage(
   const parts: CodexTurnInputPart[] = [];
   const textForPart =
     text ||
-    (imageParts.length > 0
+    (imageParts.length > 0 || textElements.length > 0
       ? opts.includeRole
         ? `${roleLabel(message.role)}: [attachment]`
         : "[attachment]"

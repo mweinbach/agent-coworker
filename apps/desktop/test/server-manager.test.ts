@@ -321,10 +321,7 @@ describe("desktop server manager startup mode", () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-windows-ai-electron-bundle-"));
     const sidecar = path.join(dir, resolvePackagedSidecarFilename(process.platform, process.arch));
     const addonDir = path.join(dir, "windows-ai-electron");
-    const prebuildTriplet = resolveWindowsAiElectronPrebuildTriplet(
-      process.platform,
-      process.arch,
-    );
+    const prebuildTriplet = resolveWindowsAiElectronPrebuildTriplet(process.platform, process.arch);
     const nativeAddonPath = path.join(
       addonDir,
       "windows-ai-electron",

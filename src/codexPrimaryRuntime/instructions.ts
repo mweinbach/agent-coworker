@@ -31,15 +31,17 @@ export function renderCodexPrimaryRuntimeInstructions(
       ? "Cowork-managed Codex workspace dependencies are already wired into Node module resolution for this turn."
       : `Cowork-managed Codex workspace dependencies are available through \`COWORK_CODEX_RUNTIME_NODE_MODULES\`.`,
     ...(nodePath ? [`Use bundled Node at \`${nodePath}\` for artifact builders.`] : []),
-    ...(pythonPath ? [`Use bundled Python at \`${pythonPath}\` when a skill requires Python.`] : []),
+    ...(pythonPath
+      ? [`Use bundled Python at \`${pythonPath}\` when a skill requires Python.`]
+      : []),
     resolverPath
-      ? "For spreadsheet, document, and presentation artifact work, run builders from a writable scratch work directory; bare imports such as `import \"@oai/artifact-tool\"` should resolve directly."
+      ? 'For spreadsheet, document, and presentation artifact work, run builders from a writable scratch work directory; bare imports such as `import "@oai/artifact-tool"` should resolve directly.'
       : "For spreadsheet, document, and presentation artifact work, run builders from a scratch work directory and link that directory's `node_modules` to the managed dependency directory before importing packages.",
     ...(resolverPath ? [] : [`Example link setup from the scratch directory: \`${linkExample}\`.`]),
     ...(nodePath ? [`Example builder run: \`${nodeExample}\`.`] : []),
     resolverPath
       ? "Do not link, install, copy, or search for `@oai/artifact-tool`; if the direct import fails, report a setup blocker with the Codex dependency env keys."
-      : "`NODE_PATH` alone is not enough for ESM imports such as `import \"@oai/artifact-tool\"`; create the local `node_modules` link first.",
+      : '`NODE_PATH` alone is not enough for ESM imports such as `import "@oai/artifact-tool"`; create the local `node_modules` link first.',
     ...(resolverPath
       ? []
       : [

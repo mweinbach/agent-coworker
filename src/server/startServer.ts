@@ -10,12 +10,8 @@ export type { StartAgentServerOptions } from "./runtime/ServerRuntime";
 function isLoopbackHostname(hostname: string): boolean {
   const normalized = hostname.trim().toLowerCase();
   const bareHostname =
-    normalized.startsWith("[") && normalized.endsWith("]")
-      ? normalized.slice(1, -1)
-      : normalized;
-  return (
-    bareHostname === "localhost" || bareHostname === "127.0.0.1" || bareHostname === "::1"
-  );
+    normalized.startsWith("[") && normalized.endsWith("]") ? normalized.slice(1, -1) : normalized;
+  return bareHostname === "localhost" || bareHostname === "127.0.0.1" || bareHostname === "::1";
 }
 
 function createBrowserAccessToken(): string {

@@ -72,7 +72,7 @@ describe("settings shell", () => {
           sidebarTitlebandMode: "native",
         }),
       ),
-    ).toEqual({ left: 280 });
+    ).toEqual({ "--settings-sidebar-width": "280px" });
   });
 
   test("places the macOS settings back button below the traffic light strip", () => {

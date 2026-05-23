@@ -28,7 +28,6 @@ export function handleLifecycleThreadEvent(
     resetLiveModelStreamRuntime,
   } = module;
   const { get, set, threadId, pendingFirstMessage, pendingFirstMessageQueued = false } = dispatch;
-  const { deps } = ctx;
 
   if (evt.type === "server_hello") {
     resetLiveModelStreamRuntime(threadId);

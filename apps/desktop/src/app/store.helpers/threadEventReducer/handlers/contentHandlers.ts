@@ -34,7 +34,6 @@ export function handleContentThreadEvent(
     resetLiveModelStreamRuntime,
   } = module;
   const { get, set, threadId } = dispatch;
-  const { deps } = ctx;
 
   if (evt.type === "model_stream_chunk") {
     if (shouldIgnoreNormalizedChunkForRawBackedTurn(stream.replay, evt)) {

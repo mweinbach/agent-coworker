@@ -3,7 +3,6 @@ import { z } from "zod";
 import { renderCodexPrimaryRuntimeInstructions } from "./codexPrimaryRuntime";
 import { getModel as realGetModel } from "./config";
 import {
-  ensureManagedSofficeRuntimeReady,
   prepareManagedSofficeToolEnv,
   renderManagedSofficeRuntimeInstructions,
 } from "./managedSofficeRuntime";

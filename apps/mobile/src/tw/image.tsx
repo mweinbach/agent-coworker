@@ -5,6 +5,16 @@ import { useCssElement } from "react-native-css";
 import Animated from "react-native-reanimated";
 
 const AnimatedExpoImage = Animated.createAnimatedComponent(RNImage);
+type CssElementComponent = Parameters<typeof useCssElement>[0];
+type CssElementProps = Parameters<typeof useCssElement>[1];
+
+function cssComponent<T>(component: T): CssElementComponent {
+  return component as unknown as CssElementComponent;
+}
+
+function cssProps<T>(props: T): CssElementProps {
+  return props as unknown as CssElementProps;
+}
 
 export type ImageProps = React.ComponentProps<typeof CSSImage>;
 
@@ -25,7 +35,7 @@ function CSSImage(props: React.ComponentProps<typeof AnimatedExpoImage>) {
 }
 
 export const Image = (props: React.ComponentProps<typeof CSSImage> & { className?: string }) => {
-  return useCssElement(CSSImage as any, props as any, { className: "style" });
+  return useCssElement(cssComponent(CSSImage), cssProps(props), { className: "style" });
 };
 
 Image.displayName = "CSS(Image)";

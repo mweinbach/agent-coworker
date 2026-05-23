@@ -140,11 +140,11 @@ export function SettingsField({
   className?: string;
 }) {
   return (
-    <label className={cn("grid gap-1.5 text-sm", className)}>
+    <div className={cn("grid gap-1.5 text-sm", className)}>
       <span className="font-medium text-foreground">{label}</span>
       {children}
       {hint ? <span className="text-xs leading-relaxed text-muted-foreground">{hint}</span> : null}
-    </label>
+    </div>
   );
 }
 

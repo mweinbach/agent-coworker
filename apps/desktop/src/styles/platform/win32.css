@@ -211,6 +211,7 @@
 }
 
 :root[data-platform="win32"] .settings-shell__titleband-fill {
+  left: var(--settings-sidebar-width);
   height: var(--platform-titlebar-height);
   z-index: 78;
   pointer-events: none;
@@ -313,7 +314,7 @@
 :root[data-platform="win32"] .settings-shell__drag-zone {
   position: absolute;
   top: 0;
-  left: 0;
+  left: var(--settings-sidebar-width);
   right: 0;
   height: var(--platform-titlebar-height);
   z-index: 80;
@@ -332,7 +333,7 @@
 @media (max-width: 860px) {
   :root[data-platform="win32"] .settings-shell__drag-zone,
   :root[data-platform="win32"] .settings-shell__titleband-fill {
-    left: 0 !important;
+    left: 0;
   }
 }
 

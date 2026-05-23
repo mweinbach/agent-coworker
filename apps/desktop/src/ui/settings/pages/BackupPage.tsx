@@ -121,15 +121,7 @@ function StatItem({
   );
 }
 
-function InlineMetric({
-  label,
-  value,
-  detail,
-}: {
-  label: string;
-  value: string;
-  detail?: string;
-}) {
+function InlineMetric({ label, value, detail }: { label: string; value: string; detail?: string }) {
   return (
     <div className="min-w-0">
       <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground/80">
@@ -892,15 +884,7 @@ export function BackupPage(props: BackupPageProps = {}) {
     return () => {
       settingsChrome.setChrome(null);
     };
-  }, [
-    settingsChrome,
-    workspace?.id,
-    loading,
-    workspaceBackupsEnabled,
-    workspacePickerEnabled,
-    workspaceList.length,
-    props.workspace,
-  ]);
+  }, [settingsChrome, workspace]);
 
   if (!workspace) {
     return (
@@ -944,114 +928,126 @@ export function BackupPage(props: BackupPageProps = {}) {
               value={String(checkpointCount)}
               detail="Manual + auto"
             />
-            <InlineMetric label="Storage used" value={formatBytes(totalBytes)} detail="Local only" />
+            <InlineMetric
+              label="Storage used"
+              value={formatBytes(totalBytes)}
+              detail="Local only"
+            />
           </div>
         </div>
 
         <section className="space-y-3 border-t border-border/45 pt-4" data-backup-controls="true">
           <header>
-            <h2 className="text-sm font-semibold leading-tight text-foreground">Snapshot controls</h2>
+            <h2 className="text-sm font-semibold leading-tight text-foreground">
+              Snapshot controls
+            </h2>
           </header>
           <div className="divide-y divide-border/45">
-          <SettingsRow
-            className="px-0 py-3"
-            title="Workspace backups"
-            description={
-              workspaceBackupsDefaultEnabled
-                ? "New sessions in this workspace will keep Cowork-managed recovery snapshots."
-                : "New sessions will not create Cowork-managed recovery snapshots unless you enable them."
-            }
-            meta={
-              perWorkspaceSettings
-                ? "This setting applies to the selected workspace."
-                : "Shared workspace settings are on, so this applies to all project workspaces."
-            }
-            control={
-              <Switch
-                checked={workspaceBackupsDefaultEnabled}
-                aria-label="Enable workspace backups"
-                onCheckedChange={(checked) => {
-                  void setWorkspaceBackupsDefault(checked);
-                }}
-              />
-            }
-          />
-          <SettingsRow
-            className="px-0 py-3"
-            title="Selected session snapshots"
-            description={
-              canToggleSelectedEntry
-                ? "Override recovery snapshots for the active session selected below."
-                : "Select an active backed-up session to adjust its live snapshot setting."
-            }
-            control={
-              <Switch
-                checked={selectedBackupsEnabled ?? false}
-                disabled={!canToggleSelectedEntry}
-                aria-label="Keep recovery snapshots for this session"
-                onCheckedChange={(checked) => {
-                  if (!selectedEntry) return;
-                  void setSessionBackupsEnabled?.(selectedEntry.targetSessionId, checked);
-                }}
-              />
-            }
-          />
-        </div>
-      </section>
-
-      {error ? (
-        <div className="flex items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-          <AlertTriangleIcon className="h-4 w-4" />
-          <span>{error}</span>
-        </div>
-      ) : null}
-
-      {!showInspector ? (
-        <div
-          className="flex flex-col gap-3 border-t border-border/45 pt-4 sm:flex-row sm:items-center sm:justify-between"
-          data-backup-empty="true"
-        >
-          <div className="flex min-w-0 items-start gap-2.5">
-            <ArchiveIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground/55" />
-            <div className="min-w-0 space-y-1">
-              <div className="text-sm font-medium text-foreground">
-                {workspaceBackupsEnabled ? "No backups yet" : "Recovery snapshots are off"}
-              </div>
-              <p className="max-w-prose text-xs leading-relaxed text-muted-foreground">
-                {workspaceBackupsEnabled
-                  ? "Backups will appear here after Cowork creates recovery snapshots for sessions in this workspace."
-                  : "Enable workspace backups to create local restore points for future sessions. Git workspaces can usually rely on git history instead."}
-              </p>
-            </div>
+            <SettingsRow
+              className="px-0 py-3"
+              title="Workspace backups"
+              description={
+                workspaceBackupsDefaultEnabled
+                  ? "New sessions in this workspace will keep Cowork-managed recovery snapshots."
+                  : "New sessions will not create Cowork-managed recovery snapshots unless you enable them."
+              }
+              meta={
+                perWorkspaceSettings
+                  ? "This setting applies to the selected workspace."
+                  : "Shared workspace settings are on, so this applies to all project workspaces."
+              }
+              control={
+                <Switch
+                  checked={workspaceBackupsDefaultEnabled}
+                  aria-label="Enable workspace backups"
+                  onCheckedChange={(checked) => {
+                    void setWorkspaceBackupsDefault(checked);
+                  }}
+                />
+              }
+            />
+            <SettingsRow
+              className="px-0 py-3"
+              title="Selected session snapshots"
+              description={
+                canToggleSelectedEntry
+                  ? "Override recovery snapshots for the active session selected below."
+                  : "Select an active backed-up session to adjust its live snapshot setting."
+              }
+              control={
+                <Switch
+                  checked={selectedBackupsEnabled ?? false}
+                  disabled={!canToggleSelectedEntry}
+                  aria-label="Keep recovery snapshots for this session"
+                  onCheckedChange={(checked) => {
+                    if (!selectedEntry) return;
+                    void setSessionBackupsEnabled?.(selectedEntry.targetSessionId, checked);
+                  }}
+                />
+              }
+            />
           </div>
-          <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
-            {!workspaceBackupsEnabled ? (
-              <Button type="button" size="sm" onClick={() => void setWorkspaceBackupsDefault(true)}>
-                Enable workspace backups
-              </Button>
-            ) : (
+        </section>
+
+        {error ? (
+          <div className="flex items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+            <AlertTriangleIcon className="h-4 w-4" />
+            <span>{error}</span>
+          </div>
+        ) : null}
+
+        {!showInspector ? (
+          <div
+            className="flex flex-col gap-3 border-t border-border/45 pt-4 sm:flex-row sm:items-center sm:justify-between"
+            data-backup-empty="true"
+          >
+            <div className="flex min-w-0 items-start gap-2.5">
+              <ArchiveIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground/55" />
+              <div className="min-w-0 space-y-1">
+                <div className="text-sm font-medium text-foreground">
+                  {workspaceBackupsEnabled ? "No backups yet" : "Recovery snapshots are off"}
+                </div>
+                <p className="max-w-prose text-xs leading-relaxed text-muted-foreground">
+                  {workspaceBackupsEnabled
+                    ? "Backups will appear here after Cowork creates recovery snapshots for sessions in this workspace."
+                    : "Enable workspace backups to create local restore points for future sessions. Git workspaces can usually rely on git history instead."}
+                </p>
+              </div>
+            </div>
+            <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
+              {!workspaceBackupsEnabled ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => void setWorkspaceBackupsDefault(true)}
+                >
+                  Enable workspace backups
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void refreshBackups?.()}
+                  disabled={loading}
+                >
+                  <RefreshCwIcon
+                    className={cn("mr-2 h-3.5 w-3.5", loading ? "animate-spin" : "")}
+                  />
+                  Check again
+                </Button>
+              )}
               <Button
                 type="button"
                 size="sm"
-                variant="outline"
-                onClick={() => void refreshBackups?.()}
-                disabled={loading}
+                variant="ghost"
+                onClick={() => setSettingsPage("defaults")}
               >
-                <RefreshCwIcon className={cn("mr-2 h-3.5 w-3.5", loading ? "animate-spin" : "")} />
-                Check again
+                Review defaults
               </Button>
-            )}
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              onClick={() => setSettingsPage("defaults")}
-            >
-              Review defaults
-            </Button>
+            </div>
           </div>
-        </div>
-      ) : null}
+        ) : null}
       </div>
 
       {showInspector ? (

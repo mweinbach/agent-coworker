@@ -227,10 +227,7 @@ export function createUserMessageAttachmentHelpers(
     }
 
     try {
-      const [canonicalPath, stat] = await Promise.all([
-        fs.realpath(diskPath),
-        fs.stat(diskPath),
-      ]);
+      const [canonicalPath, stat] = await Promise.all([fs.realpath(diskPath), fs.stat(diskPath)]);
       if (!isPathInside(resolvedUploadsDir, canonicalPath)) {
         throw makeStructuredSessionError(
           "validation_failed",

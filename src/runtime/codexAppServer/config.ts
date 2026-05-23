@@ -4,7 +4,7 @@ import { getSupportedModel, listSupportedModels } from "../../models/registry";
 import type { CodexAppServerClient } from "../../providers/codexAppServerClient";
 import { asArray, asFiniteNumber, asRecord, asString } from "../../shared/recordParsing";
 import { isCodexDynamicCoworkToolName } from "../../tools/codexBoundary";
-import { isZodSchema, toPiJsonSchema } from "../piRuntimeOptions";
+import { toPiJsonSchema } from "../piRuntimeOptions";
 import type { RuntimeRunTurnParams, RuntimeUsage } from "../types";
 import {
   CODEX_APP_SERVER_PROVIDER,

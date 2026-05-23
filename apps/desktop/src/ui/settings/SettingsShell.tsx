@@ -6,20 +6,19 @@ import {
   BotIcon,
   FlaskConicalIcon,
   HistoryIcon,
+  type LucideIcon,
   MonitorIcon,
   RefreshCcwIcon,
   SlidersHorizontalIcon,
   UserRoundCogIcon,
   WifiIcon,
   WrenchIcon,
-  type LucideIcon,
 } from "lucide-react";
 import { type CSSProperties, type ReactNode, useCallback, useState } from "react";
 
 import { includeDevelopmentSettings } from "../../app/settingsPageAvailability";
 import { useAppStore } from "../../app/store";
 import { isOneOffChatWorkspace, type SettingsPageId } from "../../app/types";
-import { Button } from "../../components/ui/button";
 import { isPackagedDesktopApp } from "../../lib/desktopCommands";
 import { type DesktopPlatformInfo, getDesktopPlatformInfo } from "../../lib/desktopPlatform";
 import { cn } from "../../lib/utils";
@@ -221,7 +220,7 @@ export function getSettingsDragZoneStyle(
   platformInfo: DesktopPlatformInfo,
 ): CSSProperties | undefined {
   if (platformInfo.sidebarTitlebandMode === "native") {
-    return { left: sidebarWidth };
+    return { "--settings-sidebar-width": `${sidebarWidth}px` } as CSSProperties;
   }
   return undefined;
 }

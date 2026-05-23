@@ -5,11 +5,7 @@ import {
   startPiModelCallSpan as startModelCallSpan,
 } from "../../observability/modelCallSpan";
 import { asFiniteNumber, asNonEmptyString, asRecord, toPiJsonSchema } from "../piRuntimeOptions";
-import {
-  preparePiModelForStream,
-  resolvePiModel,
-  stripPlaceholderCostFromAssistantRecord,
-} from "./modelResolution";
+import { resolvePiModel } from "./modelResolution";
 import { normalizeNvidiaChatCompletionsBody } from "./nvidiaFetchPatch";
 import {
   buildInitialStepMessages,

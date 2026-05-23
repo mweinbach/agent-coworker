@@ -27,10 +27,7 @@ import { resolve } from "node:path";
  */
 
 function readWin32Css(): string {
-  return readFileSync(
-    resolve(import.meta.dir, "../src/styles/platform/win32.css"),
-    "utf8",
-  );
+  return readFileSync(resolve(import.meta.dir, "../src/styles/platform/win32.css"), "utf8");
 }
 
 describe("win32 sidebar titleband drag zone", () => {
@@ -47,9 +44,7 @@ describe("win32 sidebar titleband drag zone", () => {
     expect(body).toMatch(/-webkit-app-region:\s*drag\s*;/);
     expect(body).toMatch(/pointer-events:\s*none\s*;/);
 
-    expect(body).toMatch(
-      /left:\s*var\(--platform-collapsed-left-rail-width(?:\s*,[^)]*)?\)\s*;/,
-    );
+    expect(body).toMatch(/left:\s*var\(--platform-collapsed-left-rail-width(?:\s*,[^)]*)?\)\s*;/);
   });
 
   test("declares the collapsed left rail width so the drag zone offset resolves", () => {

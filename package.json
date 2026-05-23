@@ -87,6 +87,7 @@
     "fast-glob": "^3.3.3",
     "jsdom": "^29.1.1",
     "partial-json": "^0.1.7",
+    "proxy-agent": "^8.0.1",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "reflect-metadata": "^0.2.2",

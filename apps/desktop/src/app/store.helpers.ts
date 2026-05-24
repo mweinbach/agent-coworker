@@ -300,6 +300,7 @@ export type AppStoreState = {
   setPerWorkspaceSettings: (enabled: boolean) => void;
   setQuickChatIconEnabled: (enabled: boolean) => void;
   setArchivedChatsAutoDeleteDays: (days: number) => void;
+  setLiquidGlassComposerEnabled: (enabled: boolean) => void;
   setQuickChatShortcutEnabled: (enabled: boolean) => void;
   setQuickChatShortcutAccelerator: (accelerator: string) => void;
   setSidebarSectionOrder: (orderedSections: SidebarSectionKey[]) => void;

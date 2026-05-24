@@ -1,6 +1,7 @@
 import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
+import { useLiquidDomRuntimeState } from "../../../components/liquid-dom";
 import { Button } from "../../../components/ui/button";
 import {
   Card,
@@ -24,15 +25,21 @@ export function DesktopPage() {
   const quickChatShortcutAccelerator = useAppStore(
     (s) => s.desktopSettings.quickChat.shortcutAccelerator,
   );
+  const liquidGlassComposerEnabled = useAppStore(
+    (s) => s.desktopSettings.liquidGlass?.composerEnabled === true,
+  );
   const menuBarAvailable = useAppStore((s) => s.desktopFeatureFlags.menuBar);
   const packaged = useAppStore((s) => s.updateState.packaged);
   const setQuickChatIconEnabled = useAppStore((s) => s.setQuickChatIconEnabled);
+  const setLiquidGlassComposerEnabled = useAppStore((s) => s.setLiquidGlassComposerEnabled);
   const setQuickChatShortcutEnabled = useAppStore((s) => s.setQuickChatShortcutEnabled);
   const setQuickChatShortcutAccelerator = useAppStore((s) => s.setQuickChatShortcutAccelerator);
+  const liquidDomRuntimeState = useLiquidDomRuntimeState();
   const shortcutCaptureButtonRef = useRef<HTMLButtonElement | null>(null);
   const [recordingShortcut, setRecordingShortcut] = useState(false);
   const [shortcutError, setShortcutError] = useState<string | null>(null);
   const productionBuild = packaged || isPackagedDesktopApp();
+  const liquidGlassSupported = liquidDomRuntimeState === "available";
 
   useEffect(() => {
     if (!recordingShortcut) {
@@ -208,6 +215,37 @@ export function DesktopPage() {
             <Button type="button" onClick={() => void showQuickChatWindow()}>
               Open quick chat
             </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="border-border/80 bg-card/85">
+        <CardHeader>
+          <CardTitle>Appearance</CardTitle>
+          <CardDescription>Desktop-only renderer options for the main chat surface.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-start justify-between gap-4 rounded-xl border border-border/70 bg-muted/15 p-4 max-[960px]:flex-col">
+            <div>
+              <div className="text-sm font-medium text-foreground">Liquid glass composer</div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                Use Liquid-DOM's WebGPU renderer for the chat input surface.
+              </div>
+              {!liquidGlassSupported ? (
+                <div className="mt-1 text-xs text-warning">
+                  Liquid-DOM glass is unavailable because this renderer does not expose WebGPU.
+                </div>
+              ) : null}
+            </div>
+            <Switch
+              checked={liquidGlassComposerEnabled}
+              disabled={!liquidGlassSupported && !liquidGlassComposerEnabled}
+              aria-label="Liquid glass composer"
+              onCheckedChange={(checked) => {
+                if (checked && !liquidGlassSupported) return;
+                setLiquidGlassComposerEnabled(checked);
+              }}
+            />
           </div>
         </CardContent>
       </Card>

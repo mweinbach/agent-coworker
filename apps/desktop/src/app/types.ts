@@ -165,6 +165,9 @@ export type PersistedDesktopSettings = {
     shortcutEnabled?: boolean;
     shortcutAccelerator?: string;
   };
+  liquidGlass?: {
+    composerEnabled?: boolean;
+  };
   archivedChatsAutoDeleteDays?: number;
   sidebarSectionOrder?: SidebarSectionKey[];
 };
@@ -205,6 +208,9 @@ export type DesktopSettings = {
     shortcutEnabled: boolean;
     shortcutAccelerator: string;
   };
+  liquidGlass: {
+    composerEnabled: boolean;
+  };
   archivedChatsAutoDeleteDays: number;
   sidebarSectionOrder: SidebarSectionKey[];
 };
@@ -217,6 +223,9 @@ export function normalizeDesktopSettings(value?: PersistedDesktopSettings | null
       shortcutAccelerator: normalizeQuickChatShortcutAccelerator(
         value?.quickChat?.shortcutAccelerator,
       ),
+    },
+    liquidGlass: {
+      composerEnabled: value?.liquidGlass?.composerEnabled === true,
     },
     archivedChatsAutoDeleteDays:
       typeof value?.archivedChatsAutoDeleteDays === "number"

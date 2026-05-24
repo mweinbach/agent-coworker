@@ -90,6 +90,9 @@ describe("desktop persisted-state schema defaults", () => {
           shortcutEnabled: true,
           shortcutAccelerator: "Alt+Space",
         },
+        liquidGlass: {
+          composerEnabled: true,
+        },
         sidebarSectionOrder: ["chats", "projects"],
       },
     });
@@ -110,6 +113,7 @@ describe("desktop persisted-state schema defaults", () => {
     expect(parsed.desktopSettings?.quickChat?.iconEnabled).toBe(false);
     expect(parsed.desktopSettings?.quickChat?.shortcutEnabled).toBe(true);
     expect(parsed.desktopSettings?.quickChat?.shortcutAccelerator).toBe("Alt+Space");
+    expect(parsed.desktopSettings?.liquidGlass?.composerEnabled).toBe(true);
     expect(parsed.desktopSettings?.archivedChatsAutoDeleteDays).toBe(14);
     expect(parsed.desktopSettings?.sidebarSectionOrder).toEqual(["chats", "projects"]);
   });

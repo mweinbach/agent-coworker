@@ -183,6 +183,9 @@ describe("settings nav (store)", () => {
           shortcutEnabled: false,
           shortcutAccelerator: "CommandOrControl+Shift+Space",
         },
+        liquidGlass: {
+          composerEnabled: false,
+        },
         archivedChatsAutoDeleteDays: 0,
         sidebarSectionOrder: ["projects", "chats"],
       },
@@ -462,6 +465,9 @@ describe("settings nav (store)", () => {
           shortcutEnabled: false,
           shortcutAccelerator: "CommandOrControl+Shift+Space",
         },
+        liquidGlass: {
+          composerEnabled: false,
+        },
       },
     });
 
@@ -478,6 +484,9 @@ describe("settings nav (store)", () => {
           iconEnabled: true,
           shortcutEnabled: false,
           shortcutAccelerator: "CommandOrControl+Shift+Space",
+        },
+        liquidGlass: {
+          composerEnabled: false,
         },
       },
     });
@@ -496,6 +505,9 @@ describe("settings nav (store)", () => {
           shortcutEnabled: true,
           shortcutAccelerator: "CommandOrControl+Shift+Space",
         },
+        liquidGlass: {
+          composerEnabled: false,
+        },
       },
     });
 
@@ -509,6 +521,12 @@ describe("settings nav (store)", () => {
     useAppStore.getState().setArchivedChatsAutoDeleteDays(30);
     expect(useAppStore.getState().desktopSettings.archivedChatsAutoDeleteDays).toBe(30);
     expect(savedStates.at(-1)?.desktopSettings?.archivedChatsAutoDeleteDays).toBe(30);
+  });
+
+  test("setLiquidGlassComposerEnabled updates persisted settings", () => {
+    useAppStore.getState().setLiquidGlassComposerEnabled(true);
+    expect(useAppStore.getState().desktopSettings.liquidGlass.composerEnabled).toBe(true);
+    expect(savedStates.at(-1)?.desktopSettings?.liquidGlass?.composerEnabled).toBe(true);
   });
 
   test("setSidebarSectionOrder normalizes and persists sidebar section order", () => {

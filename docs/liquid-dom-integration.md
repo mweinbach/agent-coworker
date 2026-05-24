@@ -25,8 +25,10 @@ process before any `BrowserWindow` is created:
 - `--enable-unsafe-webgpu`
 - `--enable-features=CanvasDrawElement`
 
-The web build and jsdom tests should degrade to normal React/Tailwind fallback
-markup because arbitrary browsers may not expose the required GPU path.
+The web build and jsdom tests should degrade to normal React/Tailwind markup
+because arbitrary browsers may not expose the required GPU path. Product UI
+must gate Liquid-DOM surfaces on both the relevant desktop setting and runtime
+support before mounting `LiquidCanvas`.
 
 ## Current Primitive
 
@@ -36,9 +38,10 @@ Desktop Liquid-DOM primitives live under:
 apps/desktop/src/components/liquid-dom/
 ```
 
-`LiquidGlassCard` is the first reusable component. It preflights `navigator.gpu`,
-mounts `LiquidCanvas` only when WebGPU is available, and otherwise renders a
-token-backed fallback with the same children.
+`LiquidGlassCard` and `LiquidGlassBackdrop` are the first reusable components.
+They preflight `navigator.gpu`, mount `LiquidCanvas` only when WebGPU is
+available, and otherwise render token-backed fallback markup or nothing,
+depending on whether the component owns visible content.
 
 ```tsx
 import { LiquidGlassCard } from "@/components/liquid-dom";
@@ -53,9 +56,8 @@ export function ExamplePanel() {
 }
 ```
 
-The component is already used in the desktop Developer settings page as a live
-renderer status panel, which proves the import path and fallback behavior in
-real app UI.
+The chat composer can use `LiquidGlassBackdrop`, but only when the desktop
+Appearance setting is enabled and `navigator.gpu` is available in the renderer.
 
 ## How To Add More Components
 
@@ -65,7 +67,8 @@ real app UI.
    `contentClassName`, semantic sizing props, and normal `children`.
 4. Use semantic Tailwind tokens for fallback markup so disabled WebGPU still
    looks native in Cowork.
-5. Preflight `navigator.gpu` before mounting `LiquidCanvas`.
+5. Gate product usage on the relevant user setting and preflight
+   `navigator.gpu` before mounting `LiquidCanvas`.
 6. Use `frameloop="demand"` for mostly-static app UI.
 7. Add focused jsdom tests for fallback/rendered structure, then verify the live
    Electron app with CDP for actual WebGPU pixels.

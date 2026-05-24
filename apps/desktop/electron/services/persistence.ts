@@ -137,6 +137,9 @@ function sanitizeDesktopSettings(value: unknown): PersistedDesktopSettings {
       shortcutEnabled: normalized.quickChat.shortcutEnabled,
       shortcutAccelerator: normalized.quickChat.shortcutAccelerator,
     },
+    liquidGlass: {
+      composerEnabled: normalized.liquidGlass.composerEnabled,
+    },
     archivedChatsAutoDeleteDays: normalized.archivedChatsAutoDeleteDays,
     sidebarSectionOrder: normalized.sidebarSectionOrder,
   };

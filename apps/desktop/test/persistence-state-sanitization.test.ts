@@ -347,6 +347,9 @@ describe("desktop persistence state validation", () => {
           shortcutEnabled: true,
           shortcutAccelerator: "Alt+Space",
         },
+        liquidGlass: {
+          composerEnabled: true,
+        },
         sidebarSectionOrder: ["chats", "projects"],
       },
     });
@@ -355,6 +358,7 @@ describe("desktop persistence state validation", () => {
     expect(loaded.desktopSettings?.quickChat?.iconEnabled).toBe(false);
     expect(loaded.desktopSettings?.quickChat?.shortcutEnabled).toBe(true);
     expect(loaded.desktopSettings?.quickChat?.shortcutAccelerator).toBe("Alt+Space");
+    expect(loaded.desktopSettings?.liquidGlass?.composerEnabled).toBe(true);
     expect(loaded.desktopSettings?.sidebarSectionOrder).toEqual(["chats", "projects"]);
   });
 
@@ -703,6 +707,9 @@ describe("desktop persistence state validation", () => {
           iconEnabled: true,
           shortcutEnabled: false,
           shortcutAccelerator: "CommandOrControl+Shift+Space",
+        },
+        liquidGlass: {
+          composerEnabled: false,
         },
         archivedChatsAutoDeleteDays: 0,
         sidebarSectionOrder: ["projects", "chats"],

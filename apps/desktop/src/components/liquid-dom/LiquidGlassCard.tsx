@@ -38,6 +38,53 @@ type LiquidGlassCardProps = {
   fallbackClassName?: string;
 };
 
+type LiquidGlassBackdropProps = {
+  className?: string;
+};
+
+export function LiquidGlassBackdrop({ className }: LiquidGlassBackdropProps) {
+  const runtimeState = useLiquidDomRuntimeState();
+  const [renderError, setRenderError] = useState(false);
+
+  if (runtimeState !== "available" || renderError) {
+    return null;
+  }
+
+  return (
+    <div
+      data-liquid-dom-backdrop="true"
+      className={cn("pointer-events-none absolute inset-0", className)}
+    >
+      <LiquidCanvas
+        className="absolute inset-0"
+        canvasClassName="h-full w-full"
+        frameloop="demand"
+        maxDpr={2}
+        onError={() => setRenderError(true)}
+      >
+        <GlassContainer
+          blur={22}
+          bezelWidth={30}
+          thickness={88}
+          spacing={16}
+          tint={{ r: 1, g: 1, b: 1, a: 0.38 }}
+          shadowColor={{ r: 0, g: 0, b: 0, a: 0.18 }}
+          shadowOffsetY={18}
+          shadowBlur={42}
+          specularOpacity={0.7}
+          displacementBlur={18}
+        >
+          <Padding insets={1}>
+            <Frame maxWidth={Number.POSITIVE_INFINITY} maxHeight={Number.POSITIVE_INFINITY}>
+              <Glass cornerRadius={20} cornerSmoothing={0.72} />
+            </Frame>
+          </Padding>
+        </GlassContainer>
+      </LiquidCanvas>
+    </div>
+  );
+}
+
 function LiquidGlassFallback({
   children,
   className,

@@ -16,6 +16,7 @@ const { DesktopPage } = await import("../src/ui/settings/pages/DesktopPage");
 
 const defaultStoreActions = {
   setQuickChatIconEnabled: useAppStore.getState().setQuickChatIconEnabled,
+  setLiquidGlassComposerEnabled: useAppStore.getState().setLiquidGlassComposerEnabled,
   setQuickChatShortcutEnabled: useAppStore.getState().setQuickChatShortcutEnabled,
   setQuickChatShortcutAccelerator: useAppStore.getState().setQuickChatShortcutAccelerator,
 };
@@ -51,6 +52,9 @@ describe("desktop settings page", () => {
               iconEnabled: true,
               shortcutEnabled: false,
               shortcutAccelerator: "CommandOrControl+Shift+Space",
+            },
+            liquidGlass: {
+              composerEnabled: false,
             },
           },
           setQuickChatIconEnabled,
@@ -103,6 +107,9 @@ describe("desktop settings page", () => {
               shortcutEnabled: false,
               shortcutAccelerator: "CommandOrControl+Shift+Space",
             },
+            liquidGlass: {
+              composerEnabled: false,
+            },
           },
           setQuickChatShortcutEnabled,
         });
@@ -123,6 +130,69 @@ describe("desktop settings page", () => {
       });
 
       expect(setQuickChatShortcutEnabled).toHaveBeenCalledWith(true);
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("liquid glass composer switch is gated by WebGPU support", async () => {
+    const setLiquidGlassComposerEnabled = mock(() => {});
+    const harness = setupJsdom();
+    try {
+      Object.defineProperty(globalThis.navigator, "gpu", {
+        configurable: true,
+        value: {},
+      });
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        useAppStore.setState({
+          desktopFeatureFlags: {
+            menuBar: true,
+            remoteAccess: false,
+            workspacePicker: true,
+            workspaceLifecycle: true,
+            a2ui: false,
+            openAiNativeConnectors: false,
+            canvas: false,
+          },
+          desktopSettings: {
+            quickChat: {
+              iconEnabled: true,
+              shortcutEnabled: false,
+              shortcutAccelerator: "CommandOrControl+Shift+Space",
+            },
+            liquidGlass: {
+              composerEnabled: false,
+            },
+            archivedChatsAutoDeleteDays: 0,
+            sidebarSectionOrder: ["projects", "chats"],
+          },
+          setLiquidGlassComposerEnabled,
+        });
+      });
+
+      await act(async () => {
+        root.render(createElement(DesktopPage));
+      });
+
+      expect(container.textContent).toContain("Liquid glass composer");
+      const liquidGlassSwitch = container.querySelector('[aria-label="Liquid glass composer"]');
+      if (!(liquidGlassSwitch instanceof harness.dom.window.HTMLElement)) {
+        throw new Error("missing liquid glass switch");
+      }
+
+      await act(async () => {
+        liquidGlassSwitch.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(setLiquidGlassComposerEnabled).toHaveBeenCalledWith(true);
 
       await act(async () => {
         root.unmount();

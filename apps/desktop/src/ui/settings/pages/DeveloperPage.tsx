@@ -1,8 +1,7 @@
-import { CheckCircle2Icon, RefreshCwIcon, SparklesIcon, TriangleAlertIcon } from "lucide-react";
+import { CheckCircle2Icon, RefreshCwIcon, TriangleAlertIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
-import { LiquidGlassCard, useLiquidDomRuntimeState } from "../../../components/liquid-dom";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import {
@@ -50,44 +49,6 @@ function smokeSummary(status: LibreOfficeRuntimeDiagnostic | null): string {
   if (!status.smoke.ok) return status.smoke.error ?? "Failed";
   const size = status.smoke.sizeBytes ? `${status.smoke.sizeBytes.toLocaleString()} bytes` : "PDF";
   return `${size} in ${status.smoke.durationMs.toLocaleString()}ms`;
-}
-
-function LiquidDomRendererCard() {
-  const runtimeState = useLiquidDomRuntimeState();
-  const runtimeLabel =
-    runtimeState === "available" ? "WebGPU" : runtimeState === "checking" ? "Checking" : "Fallback";
-  return (
-    <LiquidGlassCard className="min-h-40" contentClassName="flex h-full flex-col justify-between gap-5">
-      <div className="flex items-start justify-between gap-4">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 text-sm font-semibold">
-            <SparklesIcon className="size-4 text-primary" />
-            Liquid-DOM Renderer
-          </div>
-          <div className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-            WebGPU-backed glass primitives are available to desktop React components.
-          </div>
-        </div>
-        <Badge variant={runtimeState === "available" ? "default" : "secondary"}>
-          {runtimeLabel}
-        </Badge>
-      </div>
-      <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-3">
-        <div className="rounded-md border border-border/45 bg-background/25 px-3 py-2">
-          <div className="font-medium text-foreground">Canvas</div>
-          <div>LiquidCanvas</div>
-        </div>
-        <div className="rounded-md border border-border/45 bg-background/25 px-3 py-2">
-          <div className="font-medium text-foreground">Shell</div>
-          <div>GlassContainer</div>
-        </div>
-        <div className="rounded-md border border-border/45 bg-background/25 px-3 py-2">
-          <div className="font-medium text-foreground">Content</div>
-          <div>Html + React</div>
-        </div>
-      </div>
-    </LiquidGlassCard>
-  );
 }
 
 export function DeveloperPage() {
@@ -175,8 +136,6 @@ export function DeveloperPage() {
 
   return (
     <div className="space-y-5">
-      <LiquidDomRendererCard />
-
       <Card className="border-border/80 bg-card/85">
         <CardHeader>
           <CardTitle>File Explorer</CardTitle>

@@ -119,9 +119,6 @@ describe("desktop developer page", () => {
         root.render(createElement(DeveloperPage));
       });
 
-      expect(container.textContent).toContain("Liquid-DOM Renderer");
-      expect(container.textContent).toContain("Fallback");
-      expect(container.querySelector('[data-liquid-dom-fallback="true"]')).toBeTruthy();
       expect(container.textContent).toContain("Large Tool Output Handling");
       expect(container.textContent).toContain("Save oversized tool output to scratch files");
       expect(container.textContent).toContain("Spill after this many characters");

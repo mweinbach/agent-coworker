@@ -451,6 +451,13 @@ const persistedDesktopSettingsSchema = z
           .optional(),
       })
       .optional(),
+    liquidGlass: z
+      .object({
+        composerEnabled: z
+          .preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean())
+          .optional(),
+      })
+      .optional(),
     sidebarSectionOrder: z
       .preprocess(
         (value) => normalizePersistedSidebarSectionOrder(value),

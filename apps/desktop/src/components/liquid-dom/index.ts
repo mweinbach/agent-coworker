@@ -1,4 +1,5 @@
 export {
+  LiquidGlassBackdrop,
   LiquidGlassCard,
   useLiquidDomRuntimeState,
   type LiquidDomRuntimeState,

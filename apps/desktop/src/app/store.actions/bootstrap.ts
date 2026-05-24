@@ -402,6 +402,13 @@ const persistedStateSchema = z
               .optional(),
           })
           .optional(),
+        liquidGlass: z
+          .object({
+            composerEnabled: z
+              .preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean())
+              .optional(),
+          })
+          .optional(),
         sidebarSectionOrder: z
           .preprocess(
             (value) => normalizeSidebarSectionOrder(Array.isArray(value) ? value : undefined),
@@ -722,6 +729,7 @@ export function createBootstrapActions(
   | "setPerWorkspaceSettings"
   | "setQuickChatIconEnabled"
   | "setArchivedChatsAutoDeleteDays"
+  | "setLiquidGlassComposerEnabled"
   | "setQuickChatShortcutEnabled"
   | "setQuickChatShortcutAccelerator"
   | "setSidebarSectionOrder"
@@ -1065,6 +1073,19 @@ export function createBootstrapActions(
         desktopSettings: {
           ...state.desktopSettings,
           archivedChatsAutoDeleteDays: days,
+        },
+      }));
+      void persistNow(get);
+    },
+
+    setLiquidGlassComposerEnabled: (enabled) => {
+      set((state) => ({
+        desktopSettings: {
+          ...state.desktopSettings,
+          liquidGlass: {
+            ...(state.desktopSettings.liquidGlass ?? {}),
+            composerEnabled: enabled,
+          },
         },
       }));
       void persistNow(get);

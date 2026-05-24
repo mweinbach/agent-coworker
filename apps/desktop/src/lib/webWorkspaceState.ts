@@ -76,6 +76,9 @@ function createEmptyState(): PersistedState {
         shortcutEnabled: false,
         shortcutAccelerator: DEFAULT_QUICK_CHAT_SHORTCUT_ACCELERATOR,
       },
+      liquidGlass: {
+        composerEnabled: false,
+      },
       archivedChatsAutoDeleteDays: 0,
     },
     onboarding: {
@@ -109,6 +112,9 @@ export function loadPersistedState(): PersistedState {
           shortcutAccelerator: normalizeQuickChatShortcutAccelerator(
             parsed.desktopSettings?.quickChat?.shortcutAccelerator,
           ),
+        },
+        liquidGlass: {
+          composerEnabled: parsed.desktopSettings?.liquidGlass?.composerEnabled === true,
         },
         archivedChatsAutoDeleteDays:
           typeof parsed.desktopSettings?.archivedChatsAutoDeleteDays === "number"

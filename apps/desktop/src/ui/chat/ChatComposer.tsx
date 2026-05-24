@@ -1,5 +1,6 @@
 import { AlertTriangleIcon, LoaderCircleIcon, PlusIcon } from "lucide-react";
 import type { ChangeEvent, FormEvent, KeyboardEvent as ReactKeyboardEvent, RefObject } from "react";
+import { useAppStore } from "../../app/store";
 import {
   PromptInputAttachmentPreviews,
   PromptInputBody,
@@ -11,6 +12,7 @@ import {
   PromptInputTextarea,
   PromptInputTools,
 } from "../../components/ai-elements/prompt-input";
+import { useLiquidDomRuntimeState } from "../../components/liquid-dom";
 import { Progress } from "../../components/ui/progress";
 import type { ComposerAttachmentFile } from "../../lib/composerAttachments";
 import { cn } from "../../lib/utils";
@@ -83,6 +85,12 @@ export function ChatComposer(props: {
     preparingAttachments,
     onStop,
   } = props;
+  const liquidGlassComposerEnabled = useAppStore(
+    (s) => s.desktopSettings.liquidGlass?.composerEnabled === true,
+  );
+  const liquidDomRuntimeState = useLiquidDomRuntimeState();
+  const useLiquidGlassComposer =
+    liquidGlassComposerEnabled && liquidDomRuntimeState === "available";
 
   return (
     <div
@@ -95,6 +103,7 @@ export function ChatComposer(props: {
         <MessageBarResizer />
         <PromptInputRoot
           className="w-full max-w-full rounded-[20px] border border-border/50 bg-background/90 app-shadow-overlay backdrop-blur-md"
+          surface={useLiquidGlassComposer ? "liquid-glass" : "default"}
           style={{ height: messageBarHeight }}
           fileDrop={
             inputDisabled || transcriptOnly

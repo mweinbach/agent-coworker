@@ -9,6 +9,7 @@ import {
 import type { ComponentProps, DragEvent } from "react";
 import { forwardRef, useCallback, useState } from "react";
 import { cn } from "../../lib/utils";
+import { LiquidGlassBackdrop } from "../liquid-dom";
 import { Button } from "../ui/button";
 
 export type PromptInputStatus = "ready" | "pending" | "submitted" | "streaming" | "error";
@@ -19,6 +20,8 @@ export type PromptInputFileDropOptions = {
   disabled?: boolean;
 };
 
+export type PromptInputSurface = "default" | "liquid-glass";
+
 export type PromptInputAttachmentPreviewItem = {
   filename: string;
   mimeType: string;
@@ -27,11 +30,19 @@ export type PromptInputAttachmentPreviewItem = {
 
 type PromptInputRootProps = ComponentProps<"fieldset"> & {
   fileDrop?: PromptInputFileDropOptions;
+  surface?: PromptInputSurface;
 };
 
-export function PromptInputRoot({ className, fileDrop, children, ...props }: PromptInputRootProps) {
+export function PromptInputRoot({
+  className,
+  fileDrop,
+  surface = "default",
+  children,
+  ...props
+}: PromptInputRootProps) {
   const [dragActive, setDragActive] = useState(false);
   const dropEnabled = Boolean(fileDrop) && !fileDrop?.disabled;
+  const liquidGlassActive = surface === "liquid-glass";
 
   const onDragEnter = useCallback(
     (event: DragEvent<HTMLFieldSetElement>) => {
@@ -87,6 +98,8 @@ export function PromptInputRoot({ className, fileDrop, children, ...props }: Pro
       {...props}
       aria-label="Prompt input"
       data-slot="prompt-input"
+      data-prompt-input-surface={surface}
+      data-liquid-dom-surface={liquidGlassActive ? "enabled" : undefined}
       data-file-drag-active={dragActive ? "" : undefined}
       onDragEnter={onDragEnter}
       onDragLeave={onDragLeave}
@@ -94,12 +107,22 @@ export function PromptInputRoot({ className, fileDrop, children, ...props }: Pro
       onDrop={onDrop}
       className={cn(
         "app-shadow-surface relative mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col rounded-[28px] border border-border/45 bg-panel p-0 transition-shadow focus-within:shadow-[var(--shadow-overlay)]",
-        dropEnabled && dragActive && "ring-2 ring-primary/30 ring-offset-2 ring-offset-background",
         className,
+        liquidGlassActive &&
+          "border-border/35 bg-background/35 shadow-[var(--shadow-overlay)] backdrop-blur-xl",
+        dropEnabled && dragActive && "ring-2 ring-primary/30 ring-offset-2 ring-offset-background",
       )}
     >
+      {liquidGlassActive ? <LiquidGlassBackdrop /> : null}
       {/* Fieldsets use an internal formatting box; a real flex wrapper pins the footer to the bottom. */}
-      <div className="flex min-h-0 w-full flex-1 flex-col px-3 py-2.5">{children}</div>
+      <div
+        className={cn(
+          "relative z-10 flex min-h-0 w-full flex-1 flex-col px-3 py-2.5",
+          liquidGlassActive && "bg-background/10",
+        )}
+      >
+        {children}
+      </div>
     </fieldset>
   );
 }

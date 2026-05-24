@@ -61,6 +61,8 @@ export function PairingScanFallback() {
         {!granted ? (
           <View style={{ padding: 12 }}>
             <AppButton
+              fullWidth
+              variant="glass"
               icon="camera.fill"
               onPress={() => {
                 void requestPermission();
@@ -151,6 +153,8 @@ export function PairingScanFallback() {
               }}
             />
             <AppButton
+              fullWidth
+              variant="glass"
               disabled={!manualPayload.trim() || pairingInFlight}
               icon="qrcode.viewfinder"
               onPress={() => {

@@ -8,6 +8,7 @@ import {
   GroupedSection,
   GroupedValueRow,
 } from "@/components/pairing/grouped-list";
+import { PairingWelcomeCard } from "@/components/pairing/pairing-welcome-card";
 import { describeHero, describeRelay } from "@/features/pairing/pairingCopy";
 import { usePairingStore } from "@/features/pairing/pairingStore";
 import {
@@ -34,46 +35,61 @@ export function PairingHomeFallback() {
   );
   const showDetails =
     isConnected || Boolean(connectionState.lastError) || Boolean(connectionState.sessionId);
+  const showWelcome = connectionState.status === "idle" && !isConnected;
 
   return (
     <GroupedScreen>
-        <GroupedSection footer={hero.body}>
-          <View style={{ paddingHorizontal: 16, paddingVertical: 18, gap: 6 }}>
-            <Text selectable style={{ color: theme.text, fontSize: 22, fontWeight: "700" }}>
-              {hero.title}
-            </Text>
-            {!isConnected && connectionState.status !== "idle" ? (
-              <Text selectable style={{ color: theme.textSecondary, fontSize: 15 }}>
-                Status: {statusLabel}
-              </Text>
-            ) : null}
-          </View>
-        </GroupedSection>
+        {showWelcome ? (
+          <GroupedSection footer="Your Mac and iPhone must be on the same network for the first pairing.">
+            <PairingWelcomeCard title={hero.title} body={hero.body} />
+          </GroupedSection>
+        ) : (
+          <>
+            <GroupedSection footer={hero.body}>
+              <View style={{ paddingHorizontal: 16, paddingVertical: 18, gap: 6 }}>
+                <Text selectable style={{ color: theme.text, fontSize: 22, fontWeight: "700" }}>
+                  {hero.title}
+                </Text>
+                {!isConnected && connectionState.status !== "idle" ? (
+                  <Text selectable style={{ color: theme.textSecondary, fontSize: 15 }}>
+                    Status: {statusLabel}
+                  </Text>
+                ) : null}
+              </View>
+            </GroupedSection>
 
-        <GroupedSection footer="Your Mac and iPhone must be on the same network for the first pairing.">
-          <View style={{ padding: 12, gap: 10 }}>
-            <AppButton icon="qrcode.viewfinder" onPress={() => router.push("/(pairing)/scan")}>
-              Scan QR Code
-            </AppButton>
-            {isConnected ? (
-              <AppButton
-                variant="secondary"
-                icon="bubble.left.and.bubble.right.fill"
-                onPress={() => router.replace("/(app)/(tabs)/threads")}
-              >
-                Open Threads
-              </AppButton>
-            ) : primaryTrustedDesktop ? (
-              <AppButton
-                variant="secondary"
-                icon="arrow.clockwise"
-                onPress={() => void reconnectTrusted(primaryTrustedDesktop.macDeviceId)}
-              >
-                Reconnect to {primaryTrustedDesktop.displayName}
-              </AppButton>
-            ) : null}
-          </View>
-        </GroupedSection>
+            <GroupedSection footer="Your Mac and iPhone must be on the same network for the first pairing.">
+              <View style={{ padding: 12, gap: 10 }}>
+                <AppButton
+                  fullWidth
+                  icon="qrcode.viewfinder"
+                  onPress={() => router.push("/(pairing)/scan")}
+                >
+                  Scan QR Code
+                </AppButton>
+                {isConnected ? (
+                  <AppButton
+                    fullWidth
+                    variant="secondary"
+                    icon="bubble.left.and.bubble.right.fill"
+                    onPress={() => router.replace("/(app)/(tabs)/threads")}
+                  >
+                    Open Threads
+                  </AppButton>
+                ) : primaryTrustedDesktop ? (
+                  <AppButton
+                    fullWidth
+                    variant="secondary"
+                    icon="arrow.clockwise"
+                    onPress={() => void reconnectTrusted(primaryTrustedDesktop.macDeviceId)}
+                  >
+                    Reconnect to {primaryTrustedDesktop.displayName}
+                  </AppButton>
+                ) : null}
+              </View>
+            </GroupedSection>
+          </>
+        )}
 
         {trustedDesktops.length > 0 ? (
           <GroupedSection title="Saved Macs">

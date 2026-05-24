@@ -10,11 +10,8 @@ import {
   Text,
 } from "@expo/ui/swift-ui";
 import {
-  buttonStyle,
-  controlSize,
   font,
   foregroundStyle,
-  frame,
   listStyle,
   padding,
   tint,
@@ -29,7 +26,7 @@ import { createPairingScanHandler } from "@/features/pairing/scanHandler";
 import { alpha } from "@/theme/tokens";
 import { useAppTheme } from "@/theme/use-app-theme";
 
-import { SectionFooter } from "./pairing-ios-ui";
+import { SectionFooter, PairingActionButton } from "./pairing-ios-ui";
 
 function CameraScanner({
   pairingInFlight,
@@ -165,18 +162,13 @@ export function PairingScanIos() {
                 description="Allow camera access to scan the QR code shown on your Mac."
                 modifiers={[padding({ vertical: 8 })]}
               />
-              <Button
-                label="Allow Camera Access"
+              <PairingActionButton
+                title="Allow Camera Access"
                 systemImage="camera.fill"
+                primaryColor={theme.primary}
                 onPress={() => {
                   void requestPermission();
                 }}
-                modifiers={[
-                  buttonStyle("borderedProminent"),
-                  controlSize("large"),
-                  tint(theme.primary),
-                  frame({ maxWidth: Number.POSITIVE_INFINITY }),
-                ]}
               />
             </Section>
           ) : (
@@ -233,18 +225,14 @@ export function PairingScanIos() {
                   />
                 </View>
               </RNHostView>
-              <Button
-                label="Pair Pasted Payload"
+              <PairingActionButton
+                title="Pair Pasted Payload"
                 systemImage="qrcode.viewfinder"
+                primaryColor={theme.primary}
+                disabled={!manualPayload.trim() || pairingInFlight}
                 onPress={() => {
                   void pairManualPayload();
                 }}
-                modifiers={[
-                  buttonStyle("borderedProminent"),
-                  controlSize("large"),
-                  tint(theme.primary),
-                  frame({ maxWidth: Number.POSITIVE_INFINITY }),
-                ]}
               />
               {scannedPayload ? (
                 <Text

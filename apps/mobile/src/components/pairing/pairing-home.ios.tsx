@@ -1,6 +1,5 @@
 import {
   Button,
-  ContentUnavailableView,
   Host,
   LabeledContent,
   List,
@@ -14,11 +13,9 @@ import {
   foregroundStyle,
   frame,
   listStyle,
-  padding,
   tint,
 } from "@expo/ui/swift-ui/modifiers";
 import { useRouter } from "expo-router";
-import type { SFSymbol } from "sf-symbols-typescript";
 
 import { describeHero, describeRelay } from "@/features/pairing/pairingCopy";
 import { usePairingStore } from "@/features/pairing/pairingStore";
@@ -29,22 +26,8 @@ import {
 } from "@/features/relay/connectionState";
 import { useAppTheme } from "@/theme/use-app-theme";
 
-import { SectionFooter } from "./pairing-ios-ui";
-
-function heroSymbol(status: ReturnType<typeof describeHero>["title"]): SFSymbol {
-  switch (status) {
-    case "Connected":
-      return "checkmark.circle.fill";
-    case "Pairing":
-    case "Connecting":
-    case "Reconnecting":
-      return "arrow.triangle.2.circlepath";
-    case "Connection issue":
-      return "exclamationmark.triangle.fill";
-    default:
-      return "macbook.and.iphone";
-  }
-}
+import { SectionFooter, PairingActionButton } from "./pairing-ios-ui";
+import { PairingWelcomeCard } from "./pairing-welcome-card";
 
 export function PairingHomeIos() {
   const router = useRouter();
@@ -70,16 +53,11 @@ export function PairingHomeIos() {
   const showWelcome = connectionState.status === "idle" && !isConnected;
 
   const scanButton = (
-    <Button
-      label="Scan QR Code"
+    <PairingActionButton
+      title="Scan QR Code"
       systemImage="qrcode.viewfinder"
+      primaryColor={theme.primary}
       onPress={() => router.push("/(pairing)/scan")}
-      modifiers={[
-        buttonStyle("borderedProminent"),
-        controlSize("large"),
-        tint(theme.primary),
-        frame({ maxWidth: Number.POSITIVE_INFINITY }),
-      ]}
     />
   );
 
@@ -98,13 +76,7 @@ export function PairingHomeIos() {
               </SectionFooter>
             }
           >
-            <ContentUnavailableView
-              title={hero.title}
-              systemImage={heroSymbol(hero.title)}
-              description={hero.body}
-              modifiers={[padding({ vertical: 8 })]}
-            />
-            {scanButton}
+            <PairingWelcomeCard title={hero.title} body={hero.body} />
           </Section>
         ) : (
           <Section footer={<SectionFooter>{hero.body}</SectionFooter>}>

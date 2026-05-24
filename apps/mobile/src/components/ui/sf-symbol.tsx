@@ -39,6 +39,7 @@ const ICON_MAP = {
   "iphone.and.arrow.forward": { family: "community", name: "cellphone-link" },
   "key.fill": { family: "community", name: "key-variant" },
   "lock.shield.fill": { family: "community", name: "shield-lock" },
+  "macbook.and.iphone": { family: "community", name: "devices" },
   network: { family: "community", name: "lan" },
   "person.crop.circle.badge.checkmark": { family: "community", name: "account-check" },
   "puzzlepiece.extension": { family: "community", name: "puzzle" },

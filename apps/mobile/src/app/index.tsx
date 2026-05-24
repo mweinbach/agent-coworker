@@ -4,5 +4,7 @@ import { isWorkspaceConnectionReady } from "@/features/relay/connectionState";
 
 export default function IndexScreen() {
   const isConnected = usePairingStore((state) => isWorkspaceConnectionReady(state.connectionState));
-  return <Redirect href={isConnected ? "/(app)/(tabs)/threads" : "/(pairing)"} />;
+  const hasTrustedDesktop = usePairingStore((state) => state.trustedMacs.length > 0);
+  const shouldEnterApp = isConnected || hasTrustedDesktop;
+  return <Redirect href={shouldEnterApp ? "/(app)/(tabs)/threads" : "/(pairing)"} />;
 }

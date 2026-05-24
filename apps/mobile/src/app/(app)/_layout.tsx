@@ -38,6 +38,7 @@ export default function AppLayout() {
       />
 
       {/* Settings Modal or Pushed Group */}
+      <Stack.Screen name="settings/index" options={{ title: "Settings" }} />
       <Stack.Screen
         name="settings/providers"
         options={{ title: "Providers", headerLargeTitle: false }}

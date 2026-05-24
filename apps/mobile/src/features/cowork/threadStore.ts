@@ -18,6 +18,8 @@ export type MobileThreadSummary = {
   title: string;
   preview: string;
   updatedAtLabel: string;
+  cwd: string | null;
+  projectName: string | null;
   feed: SessionFeedItem[];
   composerDraft: string;
   pendingPrompt: boolean;
@@ -102,11 +104,18 @@ function ensureThreadSnapshot(
   );
 }
 
+function deriveProjectName(cwd: string | null): string | null {
+  if (!cwd) return null;
+  const parts = cwd.split("/").filter(Boolean);
+  return parts.length > 0 ? (parts[parts.length - 1] ?? cwd) : cwd;
+}
+
 function buildThreadSummary(
   threadId: string,
   snapshot: SessionSnapshotLike,
   composerDraft = "",
   pendingServerRequest: PendingServerRequest | null = null,
+  cwd: string | null = null,
 ): MobileThreadSummary {
   const previewSource = snapshot.feed.at(-1);
   return {
@@ -119,6 +128,8 @@ function buildThreadSummary(
           ? previewSource.line
           : "No activity yet.",
     updatedAtLabel: `${snapshot.feed.length} updates`,
+    cwd,
+    projectName: deriveProjectName(cwd),
     feed: snapshot.feed,
     composerDraft,
     pendingPrompt:
@@ -139,6 +150,7 @@ function updateThreadList(
     snapshot,
     composerDraft ?? existing?.composerDraft ?? "",
     state.pendingRequests[threadId] ?? existing?.pendingServerRequest ?? null,
+    existing?.cwd ?? null,
   );
   const remaining = state.threads.filter((thread) => thread.id !== threadId);
   return [next, ...remaining];
@@ -520,6 +532,8 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
                 ? previewSource.line
                 : rt.preview || "No activity yet.",
           updatedAtLabel: `${snapshot.feed.length} updates`,
+          cwd: rt.cwd ?? null,
+          projectName: deriveProjectName(rt.cwd ?? null),
           feed: snapshot.feed,
           composerDraft,
           pendingPrompt:

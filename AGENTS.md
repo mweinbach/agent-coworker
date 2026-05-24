@@ -8,6 +8,8 @@ All logic for the application should be done in the harness itself, consider the
 
 When you run into an issue, create tests to target the error. Then work on that error until the test passes. Make sure we have tests for all error cases to prevent regressions.
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/mweinbach/agent-coworker)
+
 ## Project Structure & Module Organization
 
 - `src/`: application code

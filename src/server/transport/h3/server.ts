@@ -229,6 +229,7 @@ const ALWAYS_ALLOWED_H3_RPC_METHODS = new Set([
   "thread/hydrate",
   "thread/unsubscribe",
   "workspace/list",
+  "workspace/switch",
   "cowork/workspace/bootstrap",
   "cowork/workspace/spreadsheet/preview",
   "cowork/workspace/presentation/preview",

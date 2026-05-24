@@ -1,0 +1,93 @@
+import { describe, expect, test } from "bun:test";
+
+import type { SessionFeedItem } from "../apps/mobile/src/features/cowork/protocolTypes";
+import {
+  buildChatRenderItems,
+  parseReasoningSections,
+  summarizeActivityGroup,
+} from "../apps/mobile/src/features/cowork/activityGroups";
+
+describe("mobile chat activity groups", () => {
+  test("groups consecutive reasoning and tool items into one activity block", () => {
+    const feed: SessionFeedItem[] = [
+      {
+        id: "m1",
+        kind: "message",
+        role: "user",
+        ts: "2024-01-01T00:00:00.000Z",
+        text: "review it",
+      },
+      {
+        id: "r1",
+        kind: "reasoning",
+        mode: "summary",
+        ts: "2024-01-01T00:00:01.000Z",
+        text: "Reviewing the model plan.",
+      },
+      {
+        id: "t1",
+        kind: "tool",
+        ts: "2024-01-01T00:00:02.000Z",
+        name: "read",
+        state: "output-available",
+        args: { path: "a.ts" },
+      },
+      {
+        id: "m2",
+        kind: "message",
+        role: "assistant",
+        ts: "2024-01-01T00:00:04.000Z",
+        text: "Here is the review.",
+      },
+    ];
+
+    expect(buildChatRenderItems(feed)).toEqual([
+      { kind: "feed-item", item: feed[0] },
+      { kind: "activity-group", id: "activity-r1", items: [feed[1], feed[2]] },
+      { kind: "feed-item", item: feed[3] },
+    ]);
+  });
+
+  test("summarizeActivityGroup exposes worked-for elapsed label", () => {
+    const items = [
+      {
+        id: "r1",
+        kind: "reasoning" as const,
+        mode: "summary" as const,
+        ts: "2024-01-01T00:00:00.000Z",
+        text: "**Searching for Apple Intelligence features**\nLooking up docs.",
+      },
+      {
+        id: "t1",
+        kind: "tool" as const,
+        ts: "2024-01-01T00:00:02.000Z",
+        completedAt: "2024-01-01T00:00:05.000Z",
+        name: "webSearch",
+        state: "output-available" as const,
+        args: { query: "Apple Intelligence features" },
+      },
+    ];
+
+    const summary = summarizeActivityGroup(items);
+    expect(summary.elapsedLabel).toBe("5s");
+    expect(summary.entries).toHaveLength(2);
+    expect(summary.status).toBe("done");
+  });
+
+  test("parseReasoningSections splits bold headings into collapsible sections", () => {
+    expect(
+      parseReasoningSections(
+        "**Searching for Apple Intelligence features**\nThe user wants specifics.\n**Verifying results**\nCross-checking docs.",
+      ),
+    ).toEqual([
+      {
+        title: "Searching for Apple Intelligence features",
+        body: "The user wants specifics.",
+      },
+      {
+        title: "Verifying results",
+        body: "Cross-checking docs.",
+      },
+    ]);
+  });
+});

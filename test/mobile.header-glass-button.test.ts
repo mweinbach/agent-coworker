@@ -12,12 +12,12 @@ const workspaceSource = readFileSync(
 );
 
 const settingsSource = readFileSync(
-  new URL("../apps/mobile/src/app/(app)/(tabs)/settings/index.tsx", import.meta.url),
+  new URL("../apps/mobile/src/app/(app)/settings/index.tsx", import.meta.url),
   "utf8",
 );
 
 const pairingSource = readFileSync(
-  new URL("../apps/mobile/src/app/(pairing)/index.tsx", import.meta.url),
+  new URL("../apps/mobile/src/app/(pairing)/_layout.tsx", import.meta.url),
   "utf8",
 );
 

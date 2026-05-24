@@ -457,6 +457,8 @@ function buildServerEnv(
       : null;
   return {
     ...process.env,
+    COWORK_WEB_DESKTOP_SERVICE: "1",
+    COWORK_DESKTOP_USER_DATA_DIR: app.getPath("userData"),
     COWORK_BROWSER_ACCESS_TOKEN:
       process.env.COWORK_BROWSER_ACCESS_TOKEN?.trim() ||
       `${randomUUID()}${randomUUID().replaceAll("-", "")}`,

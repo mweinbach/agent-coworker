@@ -3,16 +3,23 @@ import type { PropsWithChildren } from "react";
 import { useEffect } from "react";
 
 import { CoworkJsonRpcClient } from "../features/cowork/jsonRpcClient";
-import type { CoworkThread, SessionSnapshotLike } from "../features/cowork/protocolTypes";
+import type { SessionSnapshotLike } from "../features/cowork/protocolTypes";
 import { setActiveCoworkJsonRpcClient } from "../features/cowork/runtimeClient";
+import {
+  buildWorkspaceLookup,
+  loadBoundedRemoteThreads,
+} from "../features/cowork/remoteThreadBootstrap";
 import { createSessionBootstrapController } from "../features/cowork/sessionBootstrap";
 import { useThreadStore } from "../features/cowork/threadStore";
 import {
   clearWorkspaceBoundStores,
   hydrateWorkspaceBoundStores,
 } from "../features/cowork/workspaceBootstrap";
+import { loadAllOfflineWorkspaceCache } from "../features/cowork/offlineCache";
+import { loadThreadOfflineCache } from "../features/cowork/threadOfflineCache";
 import { useWorkspaceStore } from "../features/cowork/workspaceStore";
 import { usePairingStore } from "../features/pairing/pairingStore";
+import { useDisplayPreferencesStore } from "../features/preferences/displayPreferencesStore";
 import { isWorkspaceConnectionReady } from "../features/relay/connectionState";
 import { defaultSecureTransportClient } from "../features/relay/secureTransportClient";
 
@@ -57,9 +64,24 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
 
   useEffect(() => {
     void bootstrapPairing().catch(() => {});
+    void useDisplayPreferencesStore.getState().hydrate();
     attachPairingListeners();
-    seedThread();
+    void (async () => {
+      await loadAllOfflineWorkspaceCache();
+      const cachedThreads = await loadThreadOfflineCache();
+      if (cachedThreads) {
+        useThreadStore.getState().hydrateOfflineCache(cachedThreads);
+      }
+      if (useThreadStore.getState().threads.length === 0) {
+        seedThread();
+      }
+    })().catch(() => {
+      if (useThreadStore.getState().threads.length === 0) {
+        seedThread();
+      }
+    });
 
+    let scheduleRemoteHydration = async () => {};
     const client = new CoworkJsonRpcClient({
       clientInfo: {
         name: "cowork-mobile",
@@ -74,7 +96,14 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
           case "thread/started":
             threadStore.hydrate(createThreadSnapshot(notification.params.thread));
             break;
+          case "workspace/listChanged":
+            void scheduleRemoteHydration();
+            break;
           case "turn/started":
+            threadStore.markTurnStarted(
+              notification.params.threadId,
+              new Date().toISOString(),
+            );
             for (const item of notification.params.turn.items) {
               threadStore.appendStarted(
                 notification.params.threadId,
@@ -115,6 +144,7 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
             );
             break;
           case "turn/completed":
+            threadStore.markTurnCompleted(notification.params.threadId);
             break;
           case "serverRequest/resolved":
             threadStore.clearPendingRequest(notification.params.threadId);
@@ -149,34 +179,45 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
 
     const hydrateRemoteThreads = async () => {
       const workspaceStore = useWorkspaceStore.getState();
-      if (workspaceStore.workspaces.length === 0) {
-        try {
-          await workspaceStore.fetchWorkspaces();
-        } catch {
-          // Best-effort — fall through to the default single-workspace fetch below.
-        }
+      try {
+        await workspaceStore.fetchWorkspaces();
+      } catch {
+        // Best-effort — fall through to a single-workspace thread fetch below.
       }
-      const cwds = Array.from(
-        new Set(
-          useWorkspaceStore
-            .getState()
-            .workspaces.map((w) => w.path)
-            .filter((p): p is string => Boolean(p)),
-        ),
-      );
-      const calls =
-        cwds.length > 0
-          ? cwds.map((cwd) => client.requestThreadList(cwd))
-          : [client.requestThreadList()];
-      const results = await Promise.allSettled(calls);
-      const merged = new Map<string, CoworkThread>();
-      for (const result of results) {
-        if (result.status !== "fulfilled") continue;
-        for (const thread of result.value.threads) {
-          merged.set(thread.id, thread);
-        }
+
+      const workspaces = useWorkspaceStore.getState().workspaces;
+      const workspaceByPath = buildWorkspaceLookup(workspaces);
+      let remoteThreads: Awaited<ReturnType<typeof loadBoundedRemoteThreads>> = [];
+
+      if (workspaces.length > 0) {
+        remoteThreads = await loadBoundedRemoteThreads(client, workspaces);
+      } else {
+        const fallback = await client.requestThreadList();
+        remoteThreads = fallback.threads;
       }
-      useThreadStore.getState().syncRemoteThreads(Array.from(merged.values()));
+
+      useThreadStore.getState().syncRemoteThreads(remoteThreads, workspaceByPath);
+    };
+
+    let remoteHydrationInFlight: Promise<void> | null = null;
+    let remoteHydrationQueued = false;
+    scheduleRemoteHydration = () => {
+      if (remoteHydrationInFlight) {
+        remoteHydrationQueued = true;
+        return remoteHydrationInFlight;
+      }
+      remoteHydrationInFlight = hydrateRemoteThreads()
+        .catch(() => {
+          // Remote invalidations are best-effort; the next notification or reconnect will retry.
+        })
+        .finally(() => {
+          remoteHydrationInFlight = null;
+          if (remoteHydrationQueued) {
+            remoteHydrationQueued = false;
+            void scheduleRemoteHydration();
+          }
+        });
+      return remoteHydrationInFlight;
     };
 
     const hydrateWorkspaceContext = async () => {

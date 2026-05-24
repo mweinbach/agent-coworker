@@ -72,15 +72,20 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
 }> {
   const hostname = opts.hostname ?? "127.0.0.1";
   const networkExposedListener = !isLoopbackHostname(hostname);
-  const runtime = await createAgentServerRuntime(opts);
-  const requestedPort = opts.port ?? 7337;
+  const env = opts.env ?? { ...process.env, AGENT_WORKING_DIR: opts.cwd };
   const webDesktopService =
-    runtime.env.COWORK_WEB_DESKTOP_SERVICE === "1"
+    env.COWORK_WEB_DESKTOP_SERVICE === "1"
       ? new WebDesktopService({
           homedir: opts.homedir,
-          userDataDir: runtime.env.COWORK_DESKTOP_USER_DATA_DIR,
+          userDataDir: env.COWORK_DESKTOP_USER_DATA_DIR,
         })
       : null;
+  const runtime = await createAgentServerRuntime({
+    ...opts,
+    env,
+    desktopService: webDesktopService,
+  });
+  const requestedPort = opts.port ?? 7337;
   const browserAccessToken =
     runtime.env.COWORK_BROWSER_ACCESS_TOKEN?.trim() ||
     (webDesktopService || networkExposedListener ? createBrowserAccessToken() : "");

@@ -5,6 +5,7 @@ import type {
   ProjectedItem,
   SessionFeedItem,
   SessionSnapshotLike,
+  WorkspaceSummary,
 } from "./protocolTypes";
 import {
   applyAgentDelta,
@@ -12,6 +13,7 @@ import {
   applyProjectedStart,
   applyReasoningDelta,
 } from "./snapshotReducer";
+import { saveThreadOfflineCache, type ThreadOfflineCache } from "./threadOfflineCache";
 
 export type MobileThreadSummary = {
   id: string;
@@ -19,7 +21,9 @@ export type MobileThreadSummary = {
   preview: string;
   updatedAt: string | null;
   cwd: string | null;
-  projectName: string | null;
+  workspaceId: string | null;
+  workspaceName: string | null;
+  workspaceKind: WorkspaceSummary["workspaceKind"] | null;
   feed: SessionFeedItem[];
   composerDraft: string;
   pendingPrompt: boolean;
@@ -52,6 +56,9 @@ type ThreadStoreState = {
   threads: MobileThreadSummary[];
   selectedThreadId: string | null;
   pendingRequests: Record<string, PendingServerRequest | null>;
+  activeTurnStartedAt: Record<string, string | null>;
+  expandedWorkspaceIds: Record<string, true>;
+  hydrateOfflineCache(cache: ThreadOfflineCache): void;
   hydrate(snapshot: SessionSnapshotLike): void;
   appendStarted(threadId: string, item: ProjectedItem, ts: string): void;
   appendCompleted(threadId: string, item: ProjectedItem, ts: string): void;
@@ -75,9 +82,35 @@ type ThreadStoreState = {
   appendOptimisticUserMessage(threadId: string, text: string, clientMessageId: string): void;
   interruptThread(threadId: string): void;
   clearAll(): void;
-  syncRemoteThreads(remoteThreads: CoworkThread[]): void;
+  syncRemoteThreads(
+    remoteThreads: CoworkThread[],
+    workspaceByPath?: Map<string, WorkspaceSummary>,
+  ): void;
   clearPendingRequestsOnDisconnect(): void;
+  markTurnStarted(threadId: string, startedAt: string): void;
+  markTurnCompleted(threadId: string): void;
+  getActiveTurnStartedAt(threadId: string): string | null;
+  expandWorkspace(workspaceId: string): void;
+  toggleWorkspaceExpanded(workspaceId: string): void;
 };
+
+let threadCachePersistQueued = false;
+
+function scheduleThreadCachePersist(getState: () => ThreadStoreState): void {
+  if (threadCachePersistQueued) {
+    return;
+  }
+  threadCachePersistQueued = true;
+  queueMicrotask(() => {
+    threadCachePersistQueued = false;
+    const state = getState();
+    void saveThreadOfflineCache({
+      threads: state.threads,
+      snapshots: state.snapshots,
+      expandedWorkspaceIds: state.expandedWorkspaceIds,
+    });
+  });
+}
 
 function ensureThreadSnapshot(
   threadId: string,
@@ -104,10 +137,30 @@ function ensureThreadSnapshot(
   );
 }
 
-function deriveProjectName(cwd: string | null): string | null {
-  if (!cwd) return null;
-  const parts = cwd.split("/").filter(Boolean);
-  return parts.length > 0 ? (parts[parts.length - 1] ?? cwd) : cwd;
+function resolveThreadWorkspace(
+  cwd: string | null,
+  workspaceByPath?: Map<string, WorkspaceSummary>,
+): Pick<MobileThreadSummary, "workspaceId" | "workspaceName" | "workspaceKind"> {
+  if (!cwd || !workspaceByPath) {
+    return {
+      workspaceId: null,
+      workspaceName: null,
+      workspaceKind: null,
+    };
+  }
+  const workspace = workspaceByPath.get(cwd);
+  if (!workspace) {
+    return {
+      workspaceId: null,
+      workspaceName: null,
+      workspaceKind: null,
+    };
+  }
+  return {
+    workspaceId: workspace.id,
+    workspaceName: workspace.name,
+    workspaceKind: workspace.workspaceKind ?? "project",
+  };
 }
 
 function buildThreadSummary(
@@ -116,20 +169,24 @@ function buildThreadSummary(
   composerDraft = "",
   pendingServerRequest: PendingServerRequest | null = null,
   cwd: string | null = null,
+  workspaceByPath?: Map<string, WorkspaceSummary>,
+  fallbackPreview?: string,
 ): MobileThreadSummary {
   const previewSource = snapshot.feed.at(-1);
+  const workspace = resolveThreadWorkspace(cwd, workspaceByPath);
+  const preview =
+    previewSource && "text" in previewSource && typeof previewSource.text === "string"
+      ? previewSource.text
+      : previewSource && "line" in previewSource && typeof previewSource.line === "string"
+        ? previewSource.line
+        : fallbackPreview || "No activity yet.";
   return {
     id: threadId,
     title: snapshot.title,
-    preview:
-      previewSource && "text" in previewSource
-        ? previewSource.text
-        : previewSource && "line" in previewSource
-          ? previewSource.line
-          : "No activity yet.",
+    preview,
     updatedAt: snapshot.updatedAt || null,
     cwd,
-    projectName: deriveProjectName(cwd),
+    ...workspace,
     feed: snapshot.feed,
     composerDraft,
     pendingPrompt:
@@ -143,6 +200,7 @@ function updateThreadList(
   threadId: string,
   snapshot: SessionSnapshotLike,
   composerDraft?: string,
+  workspaceByPath?: Map<string, WorkspaceSummary>,
 ): MobileThreadSummary[] {
   const existing = state.threads.find((thread) => thread.id === threadId);
   const next = buildThreadSummary(
@@ -151,9 +209,19 @@ function updateThreadList(
     composerDraft ?? existing?.composerDraft ?? "",
     state.pendingRequests[threadId] ?? existing?.pendingServerRequest ?? null,
     existing?.cwd ?? null,
+    workspaceByPath,
   );
+  const merged: MobileThreadSummary = existing
+    ? {
+        ...next,
+        cwd: next.cwd ?? existing.cwd,
+        workspaceId: next.workspaceId ?? existing.workspaceId,
+        workspaceName: next.workspaceName ?? existing.workspaceName,
+        workspaceKind: next.workspaceKind ?? existing.workspaceKind,
+      }
+    : next;
   const remaining = state.threads.filter((thread) => thread.id !== threadId);
-  return [next, ...remaining];
+  return [merged, ...remaining];
 }
 
 export const useThreadStore = create<ThreadStoreState>((set, get) => ({
@@ -161,6 +229,45 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
   threads: [],
   selectedThreadId: null,
   pendingRequests: {},
+  activeTurnStartedAt: {},
+  expandedWorkspaceIds: {},
+  hydrateOfflineCache(cache) {
+    set((state) => {
+      const existingDraftThreads = state.threads.filter((thread) => thread.id.startsWith("draft-"));
+      const existingDraftSnapshots = Object.fromEntries(
+        Object.entries(state.snapshots).filter(([threadId]) => threadId.startsWith("draft-")),
+      );
+      const cachedThreads = cache.threads.map((thread) => ({
+        ...thread,
+        composerDraft: "",
+        pendingPrompt: false,
+        pendingServerRequest: null,
+      }));
+      const cachedIds = new Set(cachedThreads.map((thread) => thread.id));
+      const cachedSnapshots = Object.fromEntries(
+        Object.entries(cache.snapshots).filter(([threadId]) => cachedIds.has(threadId)),
+      );
+      return {
+        snapshots: {
+          ...existingDraftSnapshots,
+          ...cachedSnapshots,
+        },
+        threads: [...existingDraftThreads, ...cachedThreads],
+        selectedThreadId:
+          state.selectedThreadId && [...existingDraftThreads, ...cachedThreads].some(
+            (thread) => thread.id === state.selectedThreadId,
+          )
+            ? state.selectedThreadId
+            : (cachedThreads[0]?.id ?? existingDraftThreads[0]?.id ?? null),
+        pendingRequests: {},
+        activeTurnStartedAt: {},
+        expandedWorkspaceIds: {
+          ...state.expandedWorkspaceIds,
+          ...cache.expandedWorkspaceIds,
+        },
+      };
+    });
+  },
   hydrate(snapshot) {
     set((state) => {
       const existingSnapshot = state.snapshots[snapshot.sessionId];
@@ -184,6 +291,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
         selectedThreadId: state.selectedThreadId ?? snapshot.sessionId,
       };
     });
+    scheduleThreadCachePersist(get);
   },
   appendStarted(threadId, item, ts) {
     set((state) => {
@@ -207,6 +315,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
         threads: updateThreadList(state, threadId, nextSnapshot),
       };
     });
+    scheduleThreadCachePersist(get);
   },
   appendCompleted(threadId, item, ts) {
     set((state) => {
@@ -230,6 +339,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
         threads: updateThreadList(state, threadId, nextSnapshot),
       };
     });
+    scheduleThreadCachePersist(get);
   },
   appendAgentDelta(threadId, itemId, delta, ts) {
     set((state) => {
@@ -254,6 +364,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
         threads: updateThreadList(state, threadId, nextSnapshot),
       };
     });
+    scheduleThreadCachePersist(get);
   },
   appendReasoningDelta(threadId, itemId, mode, delta, ts) {
     set((state) => {
@@ -279,6 +390,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
         threads: updateThreadList(state, threadId, nextSnapshot),
       };
     });
+    scheduleThreadCachePersist(get);
   },
   currentFeed(threadId) {
     return get().snapshots[threadId]?.feed ?? [];
@@ -410,6 +522,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
         threads: updateThreadList(current, threadId, nextSnapshot),
       };
     });
+    scheduleThreadCachePersist(get);
   },
   interruptThread(threadId) {
     set((state) => {
@@ -432,6 +545,10 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
           [threadId]: nextSnapshot,
         },
         threads: updateThreadList(state, threadId, nextSnapshot),
+        activeTurnStartedAt: {
+          ...state.activeTurnStartedAt,
+          [threadId]: null,
+        },
       };
     });
   },
@@ -462,9 +579,11 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
         pendingRequests: nextPendingRequests,
       };
     });
+    scheduleThreadCachePersist(get);
   },
-  syncRemoteThreads(remoteThreads) {
+  syncRemoteThreads(remoteThreads, workspaceByPath) {
     set((state) => {
+      const remoteIds = new Set<string>();
       const nextSnapshots: Record<string, SessionSnapshotLike> = {};
       const nextPendingRequests: Record<string, PendingServerRequest | null> = {};
       const nextThreads: MobileThreadSummary[] = [];
@@ -483,6 +602,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
 
       // 2. Process remote threads returned by the server
       for (const rt of remoteThreads) {
+        remoteIds.add(rt.id);
         const existingSnapshot = state.snapshots[rt.id];
         const existingThread = state.threads.find((t) => t.id === rt.id);
 
@@ -508,6 +628,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
         const snapshot: SessionSnapshotLike = {
           ...baseSnapshot,
           title: rt.title,
+          updatedAt: rt.updatedAt || baseSnapshot.updatedAt,
           lastEventSeq: rt.lastEventSeq,
         };
 
@@ -521,27 +642,33 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
         const pendingServerRequest =
           state.pendingRequests[rt.id] ?? existingThread?.pendingServerRequest ?? null;
 
-        const previewSource = snapshot.feed.at(-1);
-        const threadSummary: MobileThreadSummary = {
-          id: rt.id,
-          title: snapshot.title,
-          preview:
-            previewSource && "text" in previewSource
-              ? previewSource.text
-              : previewSource && "line" in previewSource
-                ? previewSource.line
-                : rt.preview || "No activity yet.",
-          updatedAt: rt.updatedAt || snapshot.updatedAt || null,
-          cwd: rt.cwd ?? null,
-          projectName: deriveProjectName(rt.cwd ?? null),
-          feed: snapshot.feed,
-          composerDraft,
-          pendingPrompt:
-            snapshot.hasPendingAsk || snapshot.hasPendingApproval || pendingServerRequest !== null,
-          pendingServerRequest,
-        };
+        nextThreads.push(
+          buildThreadSummary(
+            rt.id,
+            snapshot,
+            composerDraft,
+            pendingServerRequest,
+            rt.cwd ?? null,
+            workspaceByPath,
+            rt.preview,
+          ),
+        );
+      }
 
-        nextThreads.push(threadSummary);
+      // 3. Keep locally hydrated threads that fall outside the bounded remote fetch.
+      for (const existingThread of state.threads) {
+        if (existingThread.id.startsWith("draft-")) continue;
+        if (remoteIds.has(existingThread.id)) continue;
+        if (nextThreads.some((thread) => thread.id === existingThread.id)) continue;
+
+        const existingSnapshot = state.snapshots[existingThread.id];
+        if (!existingSnapshot) continue;
+
+        nextSnapshots[existingThread.id] = existingSnapshot;
+        if (state.pendingRequests[existingThread.id]) {
+          nextPendingRequests[existingThread.id] = state.pendingRequests[existingThread.id];
+        }
+        nextThreads.push(existingThread);
       }
 
       const allNextIds = new Set(nextThreads.map((t) => t.id));
@@ -555,8 +682,10 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
         threads: nextThreads,
         selectedThreadId: nextSelectedThreadId,
         pendingRequests: nextPendingRequests,
+        expandedWorkspaceIds: state.expandedWorkspaceIds,
       };
     });
+    scheduleThreadCachePersist(get);
   },
   clearPendingRequestsOnDisconnect() {
     set((state) => {
@@ -573,6 +702,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
       }
       return {
         pendingRequests: {},
+        activeTurnStartedAt: {},
         snapshots: nextSnapshots,
         threads: state.threads.map((thread) => ({
           ...thread,
@@ -581,5 +711,46 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
         })),
       };
     });
+    scheduleThreadCachePersist(get);
+  },
+  markTurnStarted(threadId, startedAt) {
+    set((state) => ({
+      activeTurnStartedAt: {
+        ...state.activeTurnStartedAt,
+        [threadId]: startedAt,
+      },
+    }));
+  },
+  markTurnCompleted(threadId) {
+    set((state) => ({
+      activeTurnStartedAt: {
+        ...state.activeTurnStartedAt,
+        [threadId]: null,
+      },
+    }));
+  },
+  getActiveTurnStartedAt(threadId) {
+    return get().activeTurnStartedAt[threadId] ?? null;
+  },
+  expandWorkspace(workspaceId) {
+    set((state) => ({
+      expandedWorkspaceIds: {
+        ...state.expandedWorkspaceIds,
+        [workspaceId]: true,
+      },
+    }));
+    scheduleThreadCachePersist(get);
+  },
+  toggleWorkspaceExpanded(workspaceId) {
+    set((state) => {
+      const next = { ...state.expandedWorkspaceIds };
+      if (next[workspaceId]) {
+        delete next[workspaceId];
+      } else {
+        next[workspaceId] = true;
+      }
+      return { expandedWorkspaceIds: next };
+    });
+    scheduleThreadCachePersist(get);
   },
 }));

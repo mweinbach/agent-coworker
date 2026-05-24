@@ -474,6 +474,7 @@ describe("mobile relay bridge", () => {
       workspacePath: "/workspace",
       yolo: false,
       mobileH3: true,
+      rotateMobileH3Tls: true,
     });
     expect(snapshot).toMatchObject({
       status: "pairing",

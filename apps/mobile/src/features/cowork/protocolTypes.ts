@@ -26,7 +26,7 @@ const projectedItemSchema = z.discriminatedUnion("type", [
       ),
       clientMessageId: nonEmptyStringSchema.optional(),
     })
-    .strict(),
+    .passthrough(),
   z
     .object({
       id: nonEmptyStringSchema,
@@ -34,7 +34,7 @@ const projectedItemSchema = z.discriminatedUnion("type", [
       text: z.string(),
       annotations: z.array(z.record(z.string(), z.unknown())).optional(),
     })
-    .strict(),
+    .passthrough(),
   z
     .object({
       id: nonEmptyStringSchema,
@@ -42,7 +42,7 @@ const projectedItemSchema = z.discriminatedUnion("type", [
       mode: z.enum(["reasoning", "summary"]),
       text: z.string(),
     })
-    .strict(),
+    .passthrough(),
   z
     .object({
       id: nonEmptyStringSchema,
@@ -60,21 +60,21 @@ const projectedItemSchema = z.discriminatedUnion("type", [
         .strict()
         .optional(),
     })
-    .strict(),
+    .passthrough(),
   z
     .object({
       id: nonEmptyStringSchema,
       type: z.literal("system"),
       line: z.string(),
     })
-    .strict(),
+    .passthrough(),
   z
     .object({
       id: nonEmptyStringSchema,
       type: z.literal("log"),
       line: z.string(),
     })
-    .strict(),
+    .passthrough(),
   z
     .object({
       id: nonEmptyStringSchema,
@@ -89,7 +89,7 @@ const projectedItemSchema = z.discriminatedUnion("type", [
           .strict(),
       ),
     })
-    .strict(),
+    .passthrough(),
   z
     .object({
       id: nonEmptyStringSchema,
@@ -98,7 +98,7 @@ const projectedItemSchema = z.discriminatedUnion("type", [
       code: z.string(),
       source: z.string(),
     })
-    .strict(),
+    .passthrough(),
   z
     .object({
       id: nonEmptyStringSchema,
@@ -117,7 +117,7 @@ const projectedItemSchema = z.discriminatedUnion("type", [
       reason: z.string().optional(),
       toolCallId: z.string().optional(),
     })
-    .strict(),
+    .passthrough(),
 ]);
 
 const sessionFeedItemSchema = z.discriminatedUnion("kind", [
@@ -130,7 +130,7 @@ const sessionFeedItemSchema = z.discriminatedUnion("kind", [
       text: z.string(),
       annotations: z.array(z.record(z.string(), z.unknown())).optional(),
     })
-    .strict(),
+    .passthrough(),
   z
     .object({
       id: nonEmptyStringSchema,
@@ -139,7 +139,7 @@ const sessionFeedItemSchema = z.discriminatedUnion("kind", [
       ts: z.string(),
       text: z.string(),
     })
-    .strict(),
+    .passthrough(),
   z
     .object({
       id: nonEmptyStringSchema,
@@ -158,7 +158,7 @@ const sessionFeedItemSchema = z.discriminatedUnion("kind", [
         .strict()
         .optional(),
     })
-    .strict(),
+    .passthrough(),
   z
     .object({
       id: nonEmptyStringSchema,
@@ -174,7 +174,7 @@ const sessionFeedItemSchema = z.discriminatedUnion("kind", [
           .strict(),
       ),
     })
-    .strict(),
+    .passthrough(),
   z
     .object({
       id: nonEmptyStringSchema,
@@ -182,7 +182,7 @@ const sessionFeedItemSchema = z.discriminatedUnion("kind", [
       ts: z.string(),
       line: z.string(),
     })
-    .strict(),
+    .passthrough(),
   z
     .object({
       id: nonEmptyStringSchema,
@@ -213,7 +213,7 @@ const sessionFeedItemSchema = z.discriminatedUnion("kind", [
         "permissions",
       ]),
     })
-    .strict(),
+    .passthrough(),
   z
     .object({
       id: nonEmptyStringSchema,
@@ -221,7 +221,7 @@ const sessionFeedItemSchema = z.discriminatedUnion("kind", [
       ts: z.string(),
       line: z.string(),
     })
-    .strict(),
+    .passthrough(),
   z
     .object({
       id: nonEmptyStringSchema,
@@ -241,7 +241,7 @@ const sessionFeedItemSchema = z.discriminatedUnion("kind", [
       reason: z.string().optional(),
       toolCallId: z.string().optional(),
     })
-    .strict(),
+    .passthrough(),
 ]);
 
 const sessionSnapshotSchema = z
@@ -287,7 +287,7 @@ const sessionSnapshotSchema = z
     hasPendingAsk: z.boolean(),
     hasPendingApproval: z.boolean(),
   })
-  .strict();
+  .passthrough();
 
 export const coworkThreadSchema = z
   .object({
@@ -332,6 +332,12 @@ export const coworkThreadReadResultSchema = z
 export const coworkThreadListResultSchema = z
   .object({
     threads: z.array(coworkThreadSchema),
+  })
+  .strict();
+
+export const coworkThreadResumeResultSchema = z
+  .object({
+    thread: coworkThreadSchema,
   })
   .strict();
 
@@ -389,6 +395,7 @@ export const workspaceSummarySchema = z.object({
   id: nonEmptyStringSchema,
   name: z.string(),
   path: z.string(),
+  workspaceKind: z.enum(["project", "oneOffChat"]).optional(),
   createdAt: z.string().optional(),
   lastOpenedAt: z.string().optional(),
   defaultProvider: z.string().optional(),
@@ -526,6 +533,7 @@ export const backupListResultSchema = z.object({
 export type CoworkThread = z.infer<typeof coworkThreadSchema>;
 export type CoworkThreadListResult = z.infer<typeof coworkThreadListResultSchema>;
 export type CoworkThreadReadResult = z.infer<typeof coworkThreadReadResultSchema>;
+export type CoworkThreadResumeResult = z.infer<typeof coworkThreadResumeResultSchema>;
 export type CoworkTurnStartedNotification = z.infer<typeof coworkTurnStartedNotificationSchema>;
 export type CoworkItemNotification = z.infer<typeof coworkItemNotificationSchema>;
 export type CoworkItemDeltaNotification = z.infer<typeof coworkItemDeltaNotificationSchema>;

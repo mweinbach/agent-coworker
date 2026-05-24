@@ -1,15 +1,25 @@
 import { beforeEach, describe, expect, test } from "bun:test";
+import { clearAllOfflineWorkspaceCache } from "../apps/mobile/src/features/cowork/offlineCache";
 import type { SessionSnapshotLike } from "../apps/mobile/src/features/cowork/protocolTypes";
+import { loadThreadOfflineCache } from "../apps/mobile/src/features/cowork/threadOfflineCache";
 import { useThreadStore } from "../apps/mobile/src/features/cowork/threadStore";
 
+async function flushMicrotasks() {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 describe("mobile thread store offline draft preservation", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await clearAllOfflineWorkspaceCache();
     // Manually force reset state since clearAll now preserves drafts
     useThreadStore.setState({
       snapshots: {},
       threads: [],
       selectedThreadId: null,
       pendingRequests: {},
+      activeTurnStartedAt: {},
+      expandedWorkspaceIds: {},
     });
   });
 
@@ -177,6 +187,165 @@ describe("mobile thread store offline draft preservation", () => {
     const finalSnapshot = useThreadStore.getState().snapshots["remote-1"];
     expect(finalSnapshot.feed.length).toBe(1);
     expect(finalSnapshot.feed[0].id).toBe("msg-1");
+  });
+
+  test("hydrate writes remote snapshots to the offline thread cache", async () => {
+    useThreadStore.getState().hydrate({
+      sessionId: "remote-cache",
+      title: "Cached Remote",
+      titleSource: "manual",
+      provider: "opencode",
+      model: "remote-session",
+      sessionKind: "primary",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      messageCount: 1,
+      lastEventSeq: 1,
+      feed: [
+        {
+          id: "msg-1",
+          kind: "message",
+          role: "assistant",
+          ts: "2026-01-01T00:00:00.000Z",
+          text: "Cached for later",
+        },
+      ],
+      agents: [],
+      todos: [],
+      hasPendingAsk: false,
+      hasPendingApproval: false,
+    });
+    await flushMicrotasks();
+
+    const cached = await loadThreadOfflineCache();
+    expect(cached?.threads.map((thread) => thread.id)).toEqual(["remote-cache"]);
+    expect(cached?.snapshots["remote-cache"]?.feed[0]?.id).toBe("msg-1");
+  });
+
+  test("syncRemoteThreads preserves locally hydrated threads missing from bounded remote fetch", () => {
+    const store = useThreadStore.getState();
+
+    const hydratedSnapshot: SessionSnapshotLike = {
+      sessionId: "remote-viewed",
+      title: "Viewed Thread",
+      titleSource: "manual",
+      provider: "opencode",
+      model: "remote-session",
+      sessionKind: "primary",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      messageCount: 1,
+      lastEventSeq: 3,
+      feed: [
+        {
+          id: "msg-1",
+          kind: "message",
+          role: "user",
+          ts: new Date().toISOString(),
+          text: "Still here",
+        },
+      ],
+      agents: [],
+      todos: [],
+      hasPendingAsk: false,
+      hasPendingApproval: false,
+    };
+    store.hydrate(hydratedSnapshot);
+
+    useThreadStore.setState((state) => ({
+      threads: state.threads.map((thread) =>
+        thread.id === "remote-viewed"
+          ? {
+              ...thread,
+              cwd: "/workspace/project-a",
+              workspaceId: "ws-a",
+              workspaceName: "Project A",
+              workspaceKind: "project",
+            }
+          : thread,
+      ),
+    }));
+
+    useThreadStore.getState().syncRemoteThreads([
+      {
+        id: "remote-other",
+        title: "Other Thread",
+        preview: "Different thread",
+        modelProvider: "opencode",
+        model: "remote-session",
+        cwd: "/workspace/project-a",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        messageCount: 0,
+        lastEventSeq: 1,
+        status: { type: "idle" },
+      },
+    ]);
+
+    const threads = useThreadStore.getState().threads;
+    expect(threads.some((thread) => thread.id === "remote-viewed")).toBe(true);
+    expect(threads.some((thread) => thread.id === "remote-other")).toBe(true);
+
+    const viewed = threads.find((thread) => thread.id === "remote-viewed")!;
+    expect(viewed.workspaceId).toBe("ws-a");
+    expect(viewed.feed.length).toBe(1);
+  });
+
+  test("hydrate preserves workspace association when workspace lookup is unavailable", () => {
+    const store = useThreadStore.getState();
+
+    const snapshot: SessionSnapshotLike = {
+      sessionId: "remote-1",
+      title: "Remote Thread",
+      titleSource: "manual",
+      provider: "opencode",
+      model: "remote-session",
+      sessionKind: "primary",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      messageCount: 0,
+      lastEventSeq: 1,
+      feed: [],
+      agents: [],
+      todos: [],
+      hasPendingAsk: false,
+      hasPendingApproval: false,
+    };
+    store.hydrate(snapshot);
+
+    useThreadStore.setState((state) => ({
+      threads: state.threads.map((thread) =>
+        thread.id === "remote-1"
+          ? {
+              ...thread,
+              cwd: "/workspace/project-a",
+              workspaceId: "ws-a",
+              workspaceName: "Project A",
+              workspaceKind: "project",
+            }
+          : thread,
+      ),
+    }));
+
+    store.hydrate({
+      ...snapshot,
+      title: "Updated title",
+      feed: [
+        {
+          id: "msg-1",
+          kind: "message",
+          role: "user",
+          ts: new Date().toISOString(),
+          text: "Hello",
+        },
+      ],
+    });
+
+    const thread = useThreadStore.getState().threads.find((entry) => entry.id === "remote-1")!;
+    expect(thread.title).toBe("Updated title");
+    expect(thread.workspaceId).toBe("ws-a");
+    expect(thread.workspaceName).toBe("Project A");
+    expect(thread.workspaceKind).toBe("project");
   });
 
   test("clearPendingRequestsOnDisconnect clears pending status", () => {

@@ -1,5 +1,15 @@
-import { Pressable, Text, TextInput, View } from "react-native";
+import { Button, Host } from "@expo/ui/swift-ui";
+import {
+  buttonStyle,
+  controlSize,
+  disabled as disabledModifier,
+  tint,
+} from "@expo/ui/swift-ui/modifiers";
+import { GlassView, isLiquidGlassAvailable } from "expo-glass-effect";
+import { Platform, Pressable, Text, TextInput, View } from "react-native";
 
+import { SFSymbol } from "@/components/ui/sf-symbol";
+import { palette } from "@/theme/tokens";
 import { useAppTheme } from "@/theme/use-app-theme";
 
 type ComposerBarProps = {
@@ -11,6 +21,78 @@ type ComposerBarProps = {
   disabled?: boolean;
 };
 
+function glassFallbackColors(isDark: boolean) {
+  const colors = isDark ? palette.dark : palette.light;
+  return {
+    fill: isDark ? "rgba(238, 240, 220, 0.1)" : "rgba(248, 249, 242, 0.58)",
+    border: colors.glassBorder,
+    shadow: isDark
+      ? "0 12px 26px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.12)"
+      : "0 12px 26px rgba(35, 42, 24, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.78)",
+  };
+}
+
+function ComposerSendButton({
+  canSend,
+  submitLabel,
+  onSubmit,
+}: {
+  canSend: boolean;
+  submitLabel: string;
+  onSubmit: () => void;
+}) {
+  const theme = useAppTheme();
+  const useLiquidGlass = Platform.OS === "ios" && isLiquidGlassAvailable();
+  const submitIfReady = () => {
+    if (!canSend) {
+      return;
+    }
+    onSubmit();
+  };
+
+  if (useLiquidGlass) {
+    return (
+      <Host matchContents style={{ width: 34, height: 34, marginBottom: 2 }}>
+        <Button
+          onPress={submitIfReady}
+          systemImage="arrow.up"
+          modifiers={[
+            buttonStyle(canSend ? "glassProminent" : "glass"),
+            controlSize("regular"),
+            tint(theme.primary),
+            disabledModifier(!canSend),
+          ]}
+        />
+      </Host>
+    );
+  }
+
+  return (
+    <Pressable
+      onPress={submitIfReady}
+      disabled={!canSend}
+      accessibilityRole="button"
+      accessibilityLabel={submitLabel}
+      style={{
+        width: 34,
+        height: 34,
+        borderRadius: 17,
+        borderCurve: "continuous",
+        alignItems: "center",
+        justifyContent: "center",
+        backgroundColor: canSend ? theme.primary : theme.surfaceMuted,
+        marginBottom: 2,
+      }}
+    >
+      <SFSymbol
+        name="arrow.up"
+        size={16}
+        color={canSend ? theme.primaryText : theme.textTertiary}
+      />
+    </Pressable>
+  );
+}
+
 export function ComposerBar({
   value,
   onChangeText,
@@ -20,69 +102,81 @@ export function ComposerBar({
   disabled = false,
 }: ComposerBarProps) {
   const theme = useAppTheme();
+  const canSend = !disabled && value.trim().length > 0;
+  const shouldUseGlass = Platform.OS === "ios" && isLiquidGlassAvailable();
+  const glassColors = glassFallbackColors(theme.isDark);
 
   return (
-    <View
-      style={{
-        borderRadius: 24,
-        borderCurve: "continuous",
-        borderWidth: 1,
-        borderColor: theme.border,
-        backgroundColor: theme.surface,
-        padding: 14,
-        gap: 12,
-        boxShadow: theme.shadow,
-      }}
-    >
+    <View style={{ gap: 8 }}>
       {helperText ? (
         <Text
           selectable
           style={{
             color: theme.textTertiary,
             fontSize: 12,
-            lineHeight: 18,
+            lineHeight: 16,
+            textAlign: "center",
           }}
         >
           {helperText}
         </Text>
       ) : null}
-      <TextInput
-        value={value}
-        onChangeText={onChangeText}
-        placeholder="Send a steer, a follow-up, or a new prompt…"
-        placeholderTextColor={theme.textTertiary}
-        multiline
-        editable={!disabled}
+      <View
         style={{
-          color: theme.text,
-          fontSize: 15,
-          lineHeight: 22,
-          minHeight: 72,
-          textAlignVertical: "top",
-        }}
-      />
-      <Pressable
-        onPress={onSubmit}
-        disabled={disabled}
-        accessibilityRole="button"
-        style={{
-          alignSelf: "flex-end",
-          borderRadius: 999,
+          position: "relative",
+          overflow: "hidden",
+          flexDirection: "row",
+          alignItems: "flex-end",
+          gap: 10,
+          borderRadius: 22,
           borderCurve: "continuous",
-          backgroundColor: disabled ? theme.surfaceMuted : theme.primary,
-          paddingHorizontal: 18,
-          paddingVertical: 10,
+          borderWidth: 1,
+          borderColor: glassColors.border,
+          backgroundColor: shouldUseGlass ? "transparent" : glassColors.fill,
+          paddingLeft: 16,
+          paddingRight: 8,
+          paddingVertical: 8,
+          boxShadow: glassColors.shadow,
         }}
       >
-        <Text
+        {shouldUseGlass ? (
+          <GlassView
+            pointerEvents="none"
+            isInteractive
+            glassEffectStyle="regular"
+            tintColor={theme.surface}
+            style={{
+              position: "absolute",
+              top: 0,
+              right: 0,
+              bottom: 0,
+              left: 0,
+              borderRadius: 22,
+              borderCurve: "continuous",
+            }}
+          />
+        ) : null}
+        <TextInput
+          value={value}
+          onChangeText={onChangeText}
+          editable={!disabled}
+          placeholder="Message…"
+          placeholderTextColor={theme.textTertiary}
+          multiline
           style={{
-            color: disabled ? theme.textTertiary : theme.primaryText,
-            fontWeight: "700",
+            flex: 1,
+            color: theme.text,
+            fontSize: 16,
+            lineHeight: 22,
+            minHeight: 36,
+            maxHeight: 120,
+            paddingTop: 6,
+            paddingBottom: 6,
+            textAlignVertical: "top",
           }}
-        >
-          {submitLabel}
-        </Text>
-      </Pressable>
+        />
+        <ComposerSendButton canSend={canSend} submitLabel={submitLabel} onSubmit={onSubmit} />
+      </View>
     </View>
   );
 }

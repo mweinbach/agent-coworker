@@ -208,6 +208,8 @@ describe("desktop server manager startup mode", () => {
   test("buildServerEnv mirrors process env without desktop-only skill bootstrap flags", () => {
     const env = __internal.buildServerEnv();
     expect(env).not.toBe(process.env);
+    expect(env.COWORK_WEB_DESKTOP_SERVICE).toBe("1");
+    expect(env.COWORK_DESKTOP_USER_DATA_DIR).toBe(userDataDir);
     expect(env.COWORK_BROWSER_ACCESS_TOKEN).toEqual(expect.any(String));
     expect(env.COWORK_BROWSER_ACCESS_TOKEN?.length).toBeGreaterThan(20);
     expect(env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP).toBe(

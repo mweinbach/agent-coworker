@@ -6,6 +6,7 @@ import type {
   CoworkReasoningDeltaNotification,
   CoworkThreadListResult,
   CoworkThreadReadResult,
+  CoworkThreadResumeResult,
   CoworkTurnCompletedNotification,
   CoworkTurnStartedNotification,
 } from "./protocolTypes";
@@ -15,6 +16,7 @@ import {
   coworkReasoningDeltaNotificationSchema,
   coworkThreadListResultSchema,
   coworkThreadReadResultSchema,
+  coworkThreadResumeResultSchema,
   coworkTurnCompletedNotificationSchema,
   coworkTurnStartedNotificationSchema,
 } from "./protocolTypes";
@@ -113,6 +115,7 @@ export type JsonRpcServerRequest =
 
 export type JsonRpcNotification =
   | { method: "thread/started"; params: { thread: CoworkThreadListResult["threads"][number] } }
+  | { method: "workspace/listChanged"; params: { revision: number } }
   | { method: "turn/started"; params: CoworkTurnStartedNotification }
   | { method: "item/started"; params: CoworkItemNotification }
   | { method: "item/completed"; params: CoworkItemNotification }
@@ -161,6 +164,16 @@ function normalizeNotification(message: JsonRpcNotificationMessage): JsonRpcNoti
         params: z
           .object({
             thread: coworkThreadListResultSchema.shape.threads.element,
+          })
+          .strict()
+          .parse(message.params),
+      };
+    case "workspace/listChanged":
+      return {
+        method: "workspace/listChanged",
+        params: z
+          .object({
+            revision: z.number().int().nonnegative(),
           })
           .strict()
           .parse(message.params),
@@ -310,14 +323,30 @@ export class CoworkJsonRpcClient {
     return await initializePromise;
   }
 
-  async requestThreadList(cwd?: string): Promise<CoworkThreadListResult> {
-    const result = await this.request("thread/list", cwd ? { cwd } : {});
+  async requestThreadList(cwd?: string, limit?: number): Promise<CoworkThreadListResult> {
+    const params: Record<string, unknown> = {};
+    if (cwd) {
+      params.cwd = cwd;
+    }
+    if (limit !== undefined) {
+      params.limit = limit;
+    }
+    const result = await this.request("thread/list", params);
     return coworkThreadListResultSchema.parse(result);
   }
 
   async readThread(threadId: string): Promise<CoworkThreadReadResult> {
+    const initializing = this.ensureInitialized();
+    if (initializing) await initializing;
     const result = await this.request("thread/read", { threadId });
     return coworkThreadReadResultSchema.parse(result);
+  }
+
+  async resumeThread(threadId: string): Promise<CoworkThreadResumeResult> {
+    const initializing = this.ensureInitialized();
+    if (initializing) await initializing;
+    const result = await this.request("thread/resume", { threadId });
+    return coworkThreadResumeResultSchema.parse(result);
   }
 
   async startTurn(
@@ -422,7 +451,14 @@ export class CoworkJsonRpcClient {
     );
   }
 
-  private async request(method: string, params?: unknown): Promise<unknown> {
+  private ensureInitialized(): Promise<void> | null {
+    if (!this.initialized) {
+      return this.initialize();
+    }
+    return null;
+  }
+
+  private async request(method: string, params?: unknown, retryNotInitialized = true): Promise<unknown> {
     const id = ++this.nextId;
     const promise = new Promise<unknown>((resolve, reject) => {
       const timeoutHandle = setTimeout(() => {
@@ -442,7 +478,22 @@ export class CoworkJsonRpcClient {
     } catch (error) {
       this.rejectPending(id, error);
     }
-    return await promise;
+    try {
+      return await promise;
+    } catch (error) {
+      if (
+        method !== "initialize" &&
+        retryNotInitialized &&
+        error instanceof Error &&
+        error.message === "Not initialized"
+      ) {
+        this.initialized = false;
+        this.initializePromise = null;
+        await this.initialize();
+        return await this.request(method, params, false);
+      }
+      throw error;
+    }
   }
 
   private rejectPending(id: JsonRpcId, error: unknown): void {

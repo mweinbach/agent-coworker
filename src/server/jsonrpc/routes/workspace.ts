@@ -2,12 +2,57 @@ import { previewPresentationFile } from "../../presentationPreview";
 import { previewSpreadsheetFile } from "../../spreadsheetPreview";
 import { JSONRPC_ERROR_CODES } from "../protocol";
 import { jsonRpcWorkspaceRequestSchemas } from "../schema.workspace";
+import { listWorkspaceSummaries, switchWorkspaceSummary } from "../workspaceCatalog";
 import type { JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
 
 export function createWorkspaceRouteHandlers(
   context: JsonRpcRouteContext,
 ): JsonRpcRequestHandlerMap {
   return {
+    "workspace/list": async (ws, message) => {
+      const parsed = jsonRpcWorkspaceRequestSchemas["workspace/list"].safeParse(
+        message.params ?? {},
+      );
+      if (!parsed.success) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: "Invalid params",
+        });
+        return;
+      }
+
+      const result = await listWorkspaceSummaries({
+        workingDirectory: context.getConfig().workingDirectory,
+        desktopService: context.desktopService,
+      });
+      context.jsonrpc.sendResult(ws, message.id, result);
+    },
+
+    "workspace/switch": async (ws, message) => {
+      const parsed = jsonRpcWorkspaceRequestSchemas["workspace/switch"].safeParse(message.params);
+      if (!parsed.success) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: "Invalid params",
+        });
+        return;
+      }
+
+      try {
+        const result = await switchWorkspaceSummary({
+          workspaceId: parsed.data.workspaceId,
+          workingDirectory: context.getConfig().workingDirectory,
+          desktopService: context.desktopService,
+        });
+        context.jsonrpc.sendResult(ws, message.id, result);
+      } catch (error) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    },
+
     "cowork/workspace/bootstrap": async (ws, message) => {
       const parsed = jsonRpcWorkspaceRequestSchemas["cowork/workspace/bootstrap"].safeParse(
         message.params,

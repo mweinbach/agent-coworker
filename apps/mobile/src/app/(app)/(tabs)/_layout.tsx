@@ -27,7 +27,7 @@ export default function AppTabsLayout() {
         contentStyle: { backgroundColor: theme.background },
       }}
     >
-      <Stack.Screen name="threads/index" options={{ title: "Threads" }} />
+      <Stack.Screen name="threads/index" options={{ title: "Cowork" }} />
       <Stack.Screen name="workspace/index" options={{ title: "Workspace" }} />
       <Stack.Screen name="skills/index" options={{ title: "Skills" }} />
     </Stack>

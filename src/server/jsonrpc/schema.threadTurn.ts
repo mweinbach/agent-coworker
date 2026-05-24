@@ -111,6 +111,7 @@ export const jsonRpcThreadTurnRequestSchemas = {
   "thread/list": z
     .object({
       cwd: nonEmptyTrimmedStringSchema.optional(),
+      limit: z.number().int().positive().optional(),
     })
     .strict(),
   "thread/read": z

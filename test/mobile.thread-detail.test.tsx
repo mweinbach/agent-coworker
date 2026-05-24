@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, mock, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import path from "node:path";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
@@ -68,7 +68,7 @@ mockLocalModule("@/theme/use-app-theme", "apps/mobile/src/theme/use-app-theme", 
 }));
 
 // Mock pairingStore
-const mockConnectionState = {
+let mockConnectionState = {
   status: "connected",
   transportMode: "native",
 };
@@ -94,6 +94,7 @@ const threadStoreMock = () => ({
       const state = {
         getThread: () => mockThread,
         getPendingRequest: () => null,
+        getActiveTurnStartedAt: () => null,
         setComposerDraft: () => {},
         submitComposer: () => {},
         interruptThread: () => {},
@@ -124,6 +125,9 @@ mockLocalModule(
 );
 
 // Mock runtimeClient with readThread mock
+const mockResumeThread = mock(async (threadId: string) => ({
+  thread: { id: threadId },
+}));
 const mockReadThread = mock(async (threadId: string) => ({
   coworkSnapshot: { sessionId: "test-thread-123", feed: [{ id: "msg-1" }] },
 }));
@@ -132,15 +136,27 @@ mockLocalModule(
   "apps/mobile/src/features/cowork/runtimeClient",
   () => ({
     getActiveCoworkJsonRpcClient: () => ({
+      resumeThread: mockResumeThread,
       readThread: mockReadThread,
     }),
   }),
 );
 
 // Mock components
+let latestComposerProps: any = null;
 mockLocalModule("@/components/ComposerBar", "apps/mobile/src/components/ComposerBar", () => ({
-  ComposerBar: () => null,
+  ComposerBar: (props: any) => {
+    latestComposerProps = props;
+    return null;
+  },
 }));
+mockLocalModule(
+  "@/components/thread/thread-render-item",
+  "apps/mobile/src/components/thread/thread-render-item",
+  () => ({
+    ThreadRenderItem: () => null,
+  }),
+);
 mockLocalModule(
   "@/components/thread/pending-request-card",
   "apps/mobile/src/components/thread/pending-request-card",
@@ -176,6 +192,13 @@ mockLocalModule(
 mockLocalModule("@/components/ui/screen", "apps/mobile/src/components/ui/screen", () => ({
   Screen: () => null,
 }));
+mockLocalModule(
+  "@/components/ui/header-glass-button",
+  "apps/mobile/src/components/ui/header-glass-button",
+  () => ({
+    HeaderGlassButton: () => null,
+  }),
+);
 mockLocalModule("@/components/ui/sf-symbol", "apps/mobile/src/components/ui/sf-symbol", () => ({
   SFSymbol: () => null,
 }));
@@ -187,6 +210,19 @@ mockLocalModule("@/components/ui/status-pill", "apps/mobile/src/components/ui/st
 const ThreadDetailScreen = (await import("../apps/mobile/src/app/(app)/thread/[id]")).default;
 
 describe("mobile ThreadDetailScreen", () => {
+  beforeEach(() => {
+    mockConnectionState = {
+      status: "connected",
+      transportMode: "native",
+    };
+    mockThread.feed = [];
+    mockThread.composerDraft = "";
+    latestComposerProps = null;
+    mockResumeThread.mockClear();
+    mockReadThread.mockClear();
+    mockHydrate.mockClear();
+  });
+
   afterAll(() => {
     mock.module("@/features/pairing/pairingStore", () => ({
       usePairingStore: realUsePairingStore,
@@ -227,7 +263,7 @@ describe("mobile ThreadDetailScreen", () => {
     }));
   });
 
-  test("triggers readThread and hydrates the store on navigation when connected", async () => {
+  test("resumes, reads, and hydrates the store on navigation when connected", async () => {
     const harness = setupJsdom();
     let root: ReturnType<typeof createRoot> | null = null;
     try {
@@ -242,12 +278,60 @@ describe("mobile ThreadDetailScreen", () => {
       // Allow async function inside useEffect to run
       await new Promise((resolve) => setTimeout(resolve, 0));
 
+      expect(mockResumeThread).toHaveBeenCalledWith("test-thread-123");
       expect(mockReadThread).toHaveBeenCalledWith("test-thread-123");
       expect(mockHydrate).toHaveBeenCalled();
       expect(mockHydrate.mock.calls[0]?.[0]).toEqual({
         sessionId: "test-thread-123",
         feed: [{ id: "msg-1" }],
       });
+      expect(latestComposerProps?.disabled).toBe(true);
+    } finally {
+      if (root) {
+        try {
+          await act(async () => {
+            root!.unmount();
+          });
+        } catch {}
+      }
+      harness.restore();
+    }
+  });
+
+  test("uses cached thread data as read-only while disconnected", async () => {
+    mockConnectionState = {
+      status: "error",
+      transportMode: "native",
+    };
+    mockThread.feed = [
+      {
+        id: "cached-msg-1",
+        kind: "message",
+        role: "assistant",
+        ts: "2026-01-01T00:00:00.000Z",
+        text: "Cached answer",
+      },
+    ];
+    mockThread.composerDraft = "should not send";
+    const harness = setupJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root container");
+      root = createRoot(container);
+
+      await act(async () => {
+        root!.render(createElement(ThreadDetailScreen));
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(mockResumeThread).not.toHaveBeenCalled();
+      expect(mockReadThread).not.toHaveBeenCalled();
+      expect(mockHydrate).not.toHaveBeenCalled();
+      expect(latestComposerProps?.disabled).toBe(true);
+      expect(latestComposerProps?.helperText).toContain("Showing cached messages");
+      await latestComposerProps?.onSubmit();
+      expect(mockResumeThread).not.toHaveBeenCalled();
     } finally {
       if (root) {
         try {

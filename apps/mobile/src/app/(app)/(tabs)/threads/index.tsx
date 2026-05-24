@@ -1,5 +1,5 @@
 import { Link, Stack, useRouter } from "expo-router";
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import {
   LayoutAnimation,
   Platform,
@@ -134,7 +134,9 @@ function ChatRow({
 
 function Chevron({ expanded }: { expanded: boolean }) {
   const rotation = useSharedValue(expanded ? 90 : 0);
-  rotation.value = withTiming(expanded ? 90 : 0, { duration: 180 });
+  useEffect(() => {
+    rotation.value = withTiming(expanded ? 90 : 0, { duration: 180 });
+  }, [expanded, rotation]);
   const style = useAnimatedStyle(() => ({
     transform: [{ rotate: `${rotation.value}deg` }],
   }));
@@ -284,9 +286,11 @@ export default function ThreadsScreen() {
   const theme = useAppTheme();
   const router = useRouter();
   const threads = useThreadStore((state) => state.threads);
-  const activeWorkspaceName = useWorkspaceStore((state) => state.activeWorkspaceName);
+  const workspaces = useWorkspaceStore((state) => state.workspaces);
+  const expandedWorkspaceIds = useThreadStore((state) => state.expandedWorkspaceIds);
+  const expandWorkspace = useThreadStore((state) => state.expandWorkspace);
+  const toggleWorkspaceExpanded = useThreadStore((state) => state.toggleWorkspaceExpanded);
   const [searchQuery, setSearchQuery] = useState("");
-  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
   const [showAllProjects, setShowAllProjects] = useState<Set<string>>(new Set());
 
   const filteredThreads = useMemo(() => {
@@ -300,46 +304,51 @@ export default function ThreadsScreen() {
   }, [threads, searchQuery]);
 
   const { chats, projects } = useMemo(() => {
-    const chatList: MobileThreadSummary[] = [];
-    const projectMap = new Map<string, MobileThreadSummary[]>();
+    const chatList = filteredThreads.filter((thread) => thread.workspaceKind === "oneOffChat");
+    const projectWorkspaces = workspaces.filter(
+      (workspace) => workspace.workspaceKind !== "oneOffChat",
+    );
+    const threadsByWorkspaceId = new Map<string, MobileThreadSummary[]>();
     for (const thread of filteredThreads) {
-      if (thread.projectName) {
-        const bucket = projectMap.get(thread.projectName);
-        if (bucket) {
-          bucket.push(thread);
-        } else {
-          projectMap.set(thread.projectName, [thread]);
-        }
+      if (thread.workspaceKind === "oneOffChat" || !thread.workspaceId) {
+        continue;
+      }
+      const bucket = threadsByWorkspaceId.get(thread.workspaceId);
+      if (bucket) {
+        bucket.push(thread);
       } else {
-        chatList.push(thread);
+        threadsByWorkspaceId.set(thread.workspaceId, [thread]);
       }
     }
+
     const byUpdated = (a: MobileThreadSummary, b: MobileThreadSummary) => {
       const at = a.updatedAt ? Date.parse(a.updatedAt) : 0;
       const bt = b.updatedAt ? Date.parse(b.updatedAt) : 0;
       return bt - at;
     };
     chatList.sort(byUpdated);
-    for (const items of projectMap.values()) items.sort(byUpdated);
+
+    const projectGroups = projectWorkspaces
+      .map((workspace) => ({
+        workspace,
+        items: [...(threadsByWorkspaceId.get(workspace.id) ?? [])].sort(byUpdated),
+      }))
+      .sort((left, right) => left.workspace.name.localeCompare(right.workspace.name));
+
     return {
       chats: chatList,
-      projects: Array.from(projectMap.entries()).sort(([a], [b]) => a.localeCompare(b)),
+      projects: projectGroups,
     };
-  }, [filteredThreads]);
+  }, [filteredThreads, workspaces]);
 
-  function toggleProject(name: string) {
+  function toggleProject(workspaceId: string) {
     LayoutAnimation.configureNext({
       duration: 180,
       create: { type: "easeInEaseOut", property: "opacity" },
       update: { type: "easeInEaseOut" },
       delete: { type: "easeInEaseOut", property: "opacity" },
     });
-    setExpandedProjects((prev) => {
-      const next = new Set(prev);
-      if (next.has(name)) next.delete(name);
-      else next.add(name);
-      return next;
-    });
+    toggleWorkspaceExpanded(workspaceId);
   }
 
   function toggleShowAll(name: string) {
@@ -361,9 +370,9 @@ export default function ThreadsScreen() {
     <Fragment>
       <Stack.Screen
         options={{
-          title: activeWorkspaceName ?? "Threads",
+          title: "Cowork",
           headerSearchBarOptions: {
-            placeholder: "Search threads",
+            placeholder: "Search",
             hideWhenScrolling: false,
             onChangeText: (event) => setSearchQuery(event.nativeEvent.text),
             onCancelButtonPress: () => setSearchQuery(""),
@@ -434,9 +443,9 @@ export default function ThreadsScreen() {
         {projects.length > 0 ? (
           <View style={{ paddingBottom: 24 }}>
             <SectionHeader>Projects</SectionHeader>
-            {projects.map(([name, items]) => {
-              const expanded = expandedProjects.has(name);
-              const showAll = showAllProjects.has(name);
+            {projects.map(({ workspace, items }) => {
+              const expanded = expandedWorkspaceIds[workspace.id] === true;
+              const showAll = showAllProjects.has(workspace.id);
               const visible = expanded
                 ? showAll
                   ? items
@@ -444,12 +453,12 @@ export default function ThreadsScreen() {
                 : [];
               const hidden = items.length - visible.length;
               return (
-                <Fragment key={name}>
+                <Fragment key={workspace.id}>
                   <ProjectHeader
-                    name={name}
+                    name={workspace.name}
                     count={items.length}
                     expanded={expanded}
-                    onToggle={() => toggleProject(name)}
+                    onToggle={() => toggleProject(workspace.id)}
                   />
                   {expanded ? (
                     <View>
@@ -457,11 +466,14 @@ export default function ThreadsScreen() {
                         <ProjectChildRow
                           key={thread.id}
                           thread={thread}
-                          onPress={() => router.push(`/(app)/thread/${thread.id}` as const)}
+                          onPress={() => {
+                            expandWorkspace(workspace.id);
+                            router.push(`/(app)/thread/${thread.id}` as const);
+                          }}
                         />
                       ))}
                       {hidden > 0 ? (
-                        <ShowMoreRow count={hidden} onPress={() => toggleShowAll(name)} />
+                        <ShowMoreRow count={hidden} onPress={() => toggleShowAll(workspace.id)} />
                       ) : null}
                     </View>
                   ) : null}

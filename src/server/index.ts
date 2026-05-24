@@ -112,24 +112,69 @@ function parseArgs(argv: string[]): {
   return { dir, host, port, yolo, json, mobileH3, mobileH3Host, mobileH3Port };
 }
 
+function pushUnique(target: string[], seen: Set<string>, address: string): void {
+  if (seen.has(address)) {
+    return;
+  }
+  seen.add(address);
+  target.push(address);
+}
+
+function isIpv4LinkLocal(address: string): boolean {
+  return address.startsWith("169.254.");
+}
+
+function isIpv6LinkLocal(address: string): boolean {
+  return address.toLowerCase().startsWith("fe80:");
+}
+
+function isPrivateIpv4(address: string): boolean {
+  const parts = address.split(".").map((part) => Number(part));
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part))) {
+    return false;
+  }
+  const [a, b] = parts;
+  return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+}
+
 export function resolveListeningHintsFromInterfaces(
   host: string,
   interfaces: ReturnType<typeof os.networkInterfaces>,
 ): string[] {
   if (host !== "0.0.0.0" && host !== "::") return [host];
 
-  const hints = new Set<string>();
+  const seen = new Set<string>();
+  const privateIpv4: string[] = [];
+  const publicIpv4: string[] = [];
+  const nonLinkLocalIpv6: string[] = [];
+  const linkLocalIpv4: string[] = [];
   for (const addresses of Object.values(interfaces)) {
     for (const address of addresses ?? []) {
       if (address.internal) continue;
       if (address.family !== "IPv4" && address.family !== "IPv6") continue;
-      hints.add(address.address);
+      if (address.family === "IPv4") {
+        if (isIpv4LinkLocal(address.address)) {
+          pushUnique(linkLocalIpv4, seen, address.address);
+        } else if (isPrivateIpv4(address.address)) {
+          pushUnique(privateIpv4, seen, address.address);
+        } else {
+          pushUnique(publicIpv4, seen, address.address);
+        }
+        continue;
+      }
+
+      // IPv6 link-local addresses require an interface scope and are not useful
+      // in a QR code consumed by another device.
+      if (!isIpv6LinkLocal(address.address)) {
+        pushUnique(nonLinkLocalIpv6, seen, address.address);
+      }
     }
   }
 
-  hints.add(host === "::" ? "::1" : "127.0.0.1");
+  const hints = [...privateIpv4, ...publicIpv4, ...nonLinkLocalIpv6, ...linkLocalIpv4];
+  pushUnique(hints, seen, host === "::" ? "::1" : "127.0.0.1");
 
-  return hints.size > 0 ? [...hints] : [host === "::" ? "::1" : "127.0.0.1"];
+  return hints;
 }
 
 export function resolveListeningHints(host: string): string[] {

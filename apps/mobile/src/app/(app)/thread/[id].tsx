@@ -1,16 +1,19 @@
 import { Stack, useLocalSearchParams } from "expo-router";
-import { useEffect, useState } from "react";
-import { FlatList, KeyboardAvoidingView, Pressable, Text, View } from "react-native";
+import { useEffect, useMemo, useState } from "react";
+import { FlatList, KeyboardAvoidingView, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ComposerBar } from "@/components/ComposerBar";
 import { PendingRequestCard } from "@/components/thread/pending-request-card";
-import { ThreadFeedItem } from "@/components/thread/thread-feed-item";
+import { ThreadRenderItem } from "@/components/thread/thread-render-item";
 import { Screen } from "@/components/ui/screen";
-import { SFSymbol } from "@/components/ui/sf-symbol";
+import { HeaderGlassButton } from "@/components/ui/header-glass-button";
 import { StatusPill } from "@/components/ui/status-pill";
+import { buildChatRenderItems, type ChatRenderItem } from "@/features/cowork/activityGroups";
+import { filterFeedForDisplay } from "@/features/cowork/feedDisplay";
 import { getActiveCoworkJsonRpcClient } from "@/features/cowork/runtimeClient";
-import type { MobileThreadFeedEntry, PendingServerRequest } from "@/features/cowork/threadStore";
+import { useDisplayPreferencesStore } from "@/features/preferences/displayPreferencesStore";
+import type { PendingServerRequest } from "@/features/cowork/threadStore";
 import { useThreadStore } from "@/features/cowork/threadStore";
 import { useWorkspaceStore } from "@/features/cowork/workspaceStore";
 import { usePairingStore } from "@/features/pairing/pairingStore";
@@ -22,9 +25,13 @@ type ThreadDetailListItem =
       data: PendingServerRequest;
     }
   | {
-      type: "feed";
-      data: MobileThreadFeedEntry;
+      type: "render";
+      data: ChatRenderItem;
     };
+
+function renderItemKey(item: ChatRenderItem): string {
+  return item.kind === "activity-group" ? item.id : item.item.id;
+}
 
 export default function ThreadDetailScreen() {
   const params = useLocalSearchParams<{ id?: string }>();
@@ -33,6 +40,8 @@ export default function ThreadDetailScreen() {
   const insets = useSafeAreaInsets();
   const thread = useThreadStore((state) => state.getThread(threadId));
   const pendingRequest = useThreadStore((state) => state.getPendingRequest(threadId));
+  const showDebugMessages = useDisplayPreferencesStore((state) => state.showDebugMessages);
+  const activeTurnStartedAt = useThreadStore((state) => state.getActiveTurnStartedAt(threadId));
   const setComposerDraft = useThreadStore((state) => state.setComposerDraft);
   const submitComposer = useThreadStore((state) => state.submitComposer);
   const interruptThread = useThreadStore((state) => state.interruptThread);
@@ -52,6 +61,7 @@ export default function ThreadDetailScreen() {
   const connectionState = usePairingStore((state) => state.connectionState);
   const isConnected =
     connectionState.status === "connected" && connectionState.transportMode === "native";
+  const isOfflineReadOnly = !isConnected && !isDraftThread;
 
   useEffect(() => {
     let active = true;
@@ -60,6 +70,7 @@ export default function ThreadDetailScreen() {
         return;
       }
       try {
+        await runtimeClient.resumeThread(threadId);
         const reread = await runtimeClient.readThread(threadId);
         if (active && reread.coworkSnapshot) {
           useThreadStore.getState().hydrate(reread.coworkSnapshot);
@@ -89,6 +100,22 @@ export default function ThreadDetailScreen() {
 
   const activeThread = thread;
 
+  const renderItems = useMemo(
+    () => buildChatRenderItems(filterFeedForDisplay(activeThread.feed, showDebugMessages)),
+    [activeThread.feed, showDebugMessages],
+  );
+
+  const liveActivityGroupId = useMemo(() => {
+    if (!activeTurnStartedAt) return null;
+    for (let index = renderItems.length - 1; index >= 0; index -= 1) {
+      const entry = renderItems[index];
+      if (entry?.kind === "activity-group") {
+        return entry.id;
+      }
+    }
+    return null;
+  }, [activeTurnStartedAt, renderItems]);
+
   async function interruptCurrentThread() {
     if (runtimeClient && !isDraftThread) {
       await runtimeClient.interruptTurn(activeThread.id);
@@ -110,64 +137,77 @@ export default function ThreadDetailScreen() {
     clearPendingRequest(activeThread.id);
   }
 
+  const activePendingRequest = isConnected ? pendingRequest : null;
+  const showSessionBadge = isDraftThread || activePendingRequest !== null || isOfflineReadOnly;
+
   return (
     <>
       <Stack.Screen
         options={{
           title: activeThread.title,
           headerRight: () => (
-            <View style={{ flexDirection: "row", gap: 16 }}>
-              <Pressable
-                onPress={() => {
-                  /* open overflow */
-                }}
-              >
-                <SFSymbol name="ellipsis" size={24} color={theme.text} />
-              </Pressable>
-              {pendingRequest ? (
-                <Pressable
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+              {activePendingRequest ? (
+                <HeaderGlassButton
+                  icon="xmark.circle.fill"
+                  accessibilityLabel="Stop turn"
                   onPress={() => {
                     void interruptCurrentThread();
                   }}
-                >
-                  <Text style={{ color: theme.danger, fontWeight: "700" }}>Stop</Text>
-                </Pressable>
-              ) : null}
+                />
+              ) : (
+                <HeaderGlassButton
+                  icon="ellipsis"
+                  accessibilityLabel="Thread options"
+                  onPress={() => {
+                    /* open overflow */
+                  }}
+                />
+              )}
             </View>
           ),
         }}
       />
       <KeyboardAvoidingView
-        style={{ flex: 1, backgroundColor: theme.background }}
+        style={{ flex: 1, backgroundColor: theme.background, position: "relative" }}
         behavior={process.env.EXPO_OS === "ios" ? "padding" : undefined}
       >
         <FlatList
           style={{ flex: 1, backgroundColor: theme.background }}
           contentInsetAdjustmentBehavior="automatic"
           contentContainerStyle={{
-            gap: 16,
-            paddingHorizontal: 20,
-            paddingTop: 12,
-            paddingBottom: 28,
+            gap: 20,
+            paddingHorizontal: 22,
+            paddingTop: 8,
+            paddingBottom: Math.max(insets.bottom + 96, 112),
           }}
           keyboardShouldPersistTaps="handled"
-          inverted
           data={
             [
-              ...(pendingRequest ? [{ type: "pending", data: pendingRequest }] : []),
-              ...[...activeThread.feed].reverse().map((item) => ({ type: "feed", data: item })),
+              ...renderItems.map((item) => ({ type: "render", data: item })),
+              ...(activePendingRequest ? [{ type: "pending", data: activePendingRequest }] : []),
             ] as ThreadDetailListItem[]
           }
-          keyExtractor={(item) => (item.type === "pending" ? "pending" : item.data.id)}
-          ListFooterComponent={() => (
-            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
-              <StatusPill
-                label={isDraftThread ? "local draft" : "remote session"}
-                tone={isDraftThread ? "primary" : "success"}
-              />
-              {pendingRequest ? <StatusPill label="needs response" tone="warning" /> : null}
-            </View>
-          )}
+          keyExtractor={(item) =>
+            item.type === "pending" ? "pending" : renderItemKey(item.data)
+          }
+          ListHeaderComponent={
+            showSessionBadge
+              ? () => (
+                  <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, paddingBottom: 4 }}>
+                    {isDraftThread ? (
+                      <StatusPill label="local draft" tone="primary" />
+                    ) : null}
+                    {isOfflineReadOnly ? (
+                      <StatusPill label="offline · read only" tone="warning" />
+                    ) : null}
+                    {activePendingRequest ? (
+                      <StatusPill label="needs response" tone="warning" />
+                    ) : null}
+                  </View>
+                )
+              : undefined
+          }
           ListEmptyComponent={() => (
             <View
               style={{
@@ -213,24 +253,40 @@ export default function ThreadDetailScreen() {
                 />
               );
             }
-            return <ThreadFeedItem item={item.data} a2uiEnabled={a2uiEnabled} />;
+            return (
+              <ThreadRenderItem
+                renderItem={item.data}
+                a2uiEnabled={a2uiEnabled}
+                showDebugMessages={showDebugMessages}
+                live={item.data.kind === "activity-group" && item.data.id === liveActivityGroupId}
+                liveStartedAt={activeTurnStartedAt}
+              />
+            );
           }}
         />
 
         <View
+          pointerEvents="box-none"
           style={{
-            borderTopWidth: 1,
-            borderTopColor: theme.borderMuted,
-            backgroundColor: theme.background,
+            position: "absolute",
+            left: 0,
+            right: 0,
+            bottom: 0,
+            alignSelf: "stretch",
+            width: "100%",
             paddingHorizontal: 16,
-            paddingTop: 12,
-            paddingBottom: Math.max(insets.bottom, 12),
+            paddingTop: 8,
+            paddingBottom: Math.max(insets.bottom, 8),
+            backgroundColor: "transparent",
           }}
         >
           <ComposerBar
             value={activeThread.composerDraft}
             onChangeText={(text) => setComposerDraft(activeThread.id, text)}
             onSubmit={async () => {
+              if (!isConnected) {
+                return;
+              }
               if (runtimeClient && !isDraftThread && activeThread.composerDraft.trim()) {
                 const draft = activeThread.composerDraft;
                 const clientMessageId = (globalThis as any).crypto.randomUUID() as string;
@@ -248,12 +304,14 @@ export default function ThreadDetailScreen() {
               submitComposer(activeThread.id);
             }}
             helperText={
-              isDraftThread
-                ? "This draft stays local until you pair with a desktop."
-                : "Send follow-ups directly into the live desktop thread."
+              isOfflineReadOnly
+                ? "Showing cached messages. Connect to your desktop to send."
+                : isDraftThread
+                  ? "This draft stays local until you pair with a desktop."
+                  : null
             }
             submitLabel={isDraftThread ? "Save draft" : "Send"}
-            disabled={!activeThread.composerDraft.trim()}
+            disabled={!isConnected || !activeThread.composerDraft.trim()}
           />
         </View>
       </KeyboardAvoidingView>

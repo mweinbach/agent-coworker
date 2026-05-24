@@ -302,6 +302,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
       const listening = await this.serverManager.restartWorkspaceServer({
         ...options,
         mobileH3: true,
+        rotateMobileH3Tls: true,
       });
       this.state = stateFromMobileH3(options, listening.mobileH3);
     } catch (error) {

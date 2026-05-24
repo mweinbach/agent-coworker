@@ -246,6 +246,12 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
     clipboard.writeText(safePath);
   });
 
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.copyText, async (_event, text: string) => {
+    if (typeof text === "string") {
+      clipboard.writeText(text);
+    }
+  });
+
   handleDesktopInvoke(
     DESKTOP_IPC_CHANNELS.createDirectory,
     async (_event, args: CreateDirectoryInput) => {

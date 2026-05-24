@@ -204,16 +204,14 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
         void client.handleIncoming(text);
       },
       onStateChanged(state) {
+        if (state.status === "error") {
+          sessionBootstrap.resetClientSession();
+          return;
+        }
         if (!isWorkspaceConnectionReady(state)) {
           return;
         }
         void sessionBootstrap.ensureConnectedSession();
-      },
-      onSocketClosed() {
-        sessionBootstrap.resetClientSession();
-      },
-      onSecureError() {
-        sessionBootstrap.resetClientSession();
       },
     });
 

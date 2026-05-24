@@ -199,6 +199,10 @@ export type CopyPathInput = {
   path: string;
 };
 
+export type CopyTextInput = {
+  text: string;
+};
+
 export type CreateDirectoryInput = {
   parentPath: string;
   name: string;
@@ -393,6 +397,7 @@ export interface DesktopApi {
   openExternalUrl(opts: OpenExternalUrlInput): Promise<void>;
   revealPath(opts: RevealPathInput): Promise<void>;
   copyPath(opts: CopyPathInput): Promise<void>;
+  copyText(text: string): Promise<void>;
   createDirectory(opts: CreateDirectoryInput): Promise<void>;
   renamePath(opts: RenamePathInput): Promise<void>;
   trashPath(opts: TrashPathInput): Promise<void>;
@@ -453,6 +458,7 @@ export const DESKTOP_IPC_CHANNELS = {
   openExternalUrl: "desktop:openExternalUrl",
   revealPath: "desktop:revealPath",
   copyPath: "desktop:copyPath",
+  copyText: "desktop:copyText",
   createDirectory: "desktop:createDirectory",
   renamePath: "desktop:renamePath",
   trashPath: "desktop:trashPath",

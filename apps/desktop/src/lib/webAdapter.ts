@@ -637,6 +637,9 @@ export function createWebAdapter(): DesktopApi {
     async copyPath(opts): Promise<void> {
       await navigator.clipboard.writeText(opts.path);
     },
+    async copyText(text): Promise<void> {
+      await navigator.clipboard.writeText(text);
+    },
     async createDirectory(opts): Promise<void> {
       await postWebJson<void>("/cowork/fs/create-directory", opts);
     },

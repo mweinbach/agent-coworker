@@ -1,5 +1,6 @@
 import type { PropsWithChildren, ReactNode } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View, type StyleProp, type ViewStyle } from "react-native";
+import Swipeable from "react-native-gesture-handler/Swipeable";
 
 import { useAppTheme } from "@/theme/use-app-theme";
 
@@ -92,11 +93,19 @@ type GroupedRowProps = {
   label: string;
   detail?: string;
   onPress?: () => void;
+  onDelete?: () => void;
   destructive?: boolean;
   isLast?: boolean;
 };
 
-export function GroupedRow({ label, detail, onPress, destructive = false, isLast = false }: GroupedRowProps) {
+export function GroupedRow({
+  label,
+  detail,
+  onPress,
+  onDelete,
+  destructive = false,
+  isLast = false,
+}: GroupedRowProps) {
   const theme = useAppTheme();
   const content = (
       <View
@@ -107,6 +116,7 @@ export function GroupedRow({ label, detail, onPress, destructive = false, isLast
           paddingVertical: detail ? 10 : 12,
           borderBottomWidth: isLast ? 0 : StyleSheet.hairlineWidth,
           borderBottomColor: theme.borderMuted,
+          backgroundColor: theme.surface,
         }}
       >
         <Text
@@ -135,19 +145,45 @@ export function GroupedRow({ label, detail, onPress, destructive = false, isLast
       </View>
   );
 
-  if (!onPress) {
-    return content;
+  const rowBody =
+    onPress ? (
+      <Pressable
+        onPress={onPress}
+        style={({ pressed }) => ({
+          backgroundColor: pressed ? theme.surfaceMuted : theme.surface,
+        })}
+      >
+        {content}
+      </Pressable>
+    ) : (
+      content
+    );
+
+  if (!onDelete) {
+    return rowBody;
   }
 
   return (
-    <Pressable
-      onPress={onPress}
-      style={({ pressed }) => ({
-        backgroundColor: pressed ? theme.surfaceMuted : theme.surface,
-      })}
+    <Swipeable
+      overshootRight={false}
+      renderRightActions={() => (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Delete ${label}`}
+          onPress={onDelete}
+          style={{
+            width: 88,
+            alignItems: "center",
+            justifyContent: "center",
+            backgroundColor: theme.danger,
+          }}
+        >
+          <Text style={{ color: theme.primaryText, fontSize: 15, fontWeight: "600" }}>Delete</Text>
+        </Pressable>
+      )}
     >
-      {content}
-    </Pressable>
+      {rowBody}
+    </Swipeable>
   );
 }
 

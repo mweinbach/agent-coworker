@@ -14,6 +14,9 @@ const MOBILE_DEVICE_ID_HEADER = "x-cowork-mobile-device-id";
 const SIMULATOR_ENDPOINT_FALLBACK_HOSTS = ["127.0.0.1", "localhost", "10.0.2.2"];
 const DEFAULT_RECONNECT_BASE_DELAY_MS = 500;
 const DEFAULT_RECONNECT_MAX_DELAY_MS = 30_000;
+const DEFAULT_MAX_RECONNECT_ATTEMPTS = 12;
+const DESKTOP_IDENTITY_CHANGED_ERROR =
+  "Cowork Desktop restarted or rotated its certificate. Scan the QR code again to reconnect.";
 
 function sessionTokenKey(macDeviceId: string): string {
   return `${SESSION_TOKEN_KEY_PREFIX}${macDeviceId}`;
@@ -77,6 +80,7 @@ type PinnedHttpsStream = (
 type SecureTransportClientOptions = {
   reconnectBaseDelayMs?: number;
   reconnectMaxDelayMs?: number;
+  maxReconnectAttempts?: number;
 };
 
 let secureStorePromise: Promise<SecureStoreModule> | null = null;
@@ -199,6 +203,7 @@ export class SecureTransportClient {
   private activeSessionRestoreBlocked = false;
   private readonly reconnectBaseDelayMs: number;
   private readonly reconnectMaxDelayMs: number;
+  private readonly maxReconnectAttempts: number;
 
   constructor(options: SecureTransportClientOptions = {}) {
     this.reconnectBaseDelayMs = Math.max(
@@ -208,6 +213,10 @@ export class SecureTransportClient {
     this.reconnectMaxDelayMs = Math.max(
       this.reconnectBaseDelayMs,
       options.reconnectMaxDelayMs ?? DEFAULT_RECONNECT_MAX_DELAY_MS,
+    );
+    this.maxReconnectAttempts = Math.max(
+      1,
+      options.maxReconnectAttempts ?? DEFAULT_MAX_RECONNECT_ATTEMPTS,
     );
   }
 
@@ -616,6 +625,18 @@ export class SecureTransportClient {
       return;
     }
 
+    if (this.reconnectAttempt >= this.maxReconnectAttempts && isRepinRequiredError(reason)) {
+      this.clearReconnectTimer();
+      this.activeSession = null;
+      this.activeSessionRestoreBlocked = true;
+      this.lastError = DESKTOP_IDENTITY_CHANGED_ERROR;
+      void this.persistTrustedState().catch((error) => {
+        this.lastError = error instanceof Error ? error.message : String(error);
+      });
+      this.setConnectionStatus("error");
+      return;
+    }
+
     void this.persistTrustedState();
     this.setConnectionStatus("reconnecting");
     this.scheduleReconnect();
@@ -716,6 +737,17 @@ function computeReconnectDelayMs(attempt: number, baseDelayMs: number, maxDelayM
 
 function isFatalSessionError(message: string): boolean {
   return /\b(?:HTTP 401|HTTP 403|Unauthorized)\b/i.test(message);
+}
+
+function isRepinRequiredError(message: string): boolean {
+  return (
+    /\b(?:Pinned HTTPS certificate mismatch|certificate mismatch|SSL|TLS|handshake)\b/i.test(
+      message,
+    ) ||
+    /\b(?:ECONNREFUSED|connection refused|network request failed|timed out|could not connect|Failed to connect)\b/i.test(
+      message,
+    )
+  );
 }
 
 function isJsonRpcTransportAck(text: string): boolean {

@@ -1,4 +1,6 @@
 import {
+  CheckIcon,
+  CopyIcon,
   KeyRoundIcon,
   QrCodeIcon,
   RefreshCwIcon,
@@ -26,6 +28,7 @@ import type {
   MobileRelayTrustedPhoneDevice,
 } from "../../../lib/desktopApi";
 import {
+  copyText,
   forgetMobileRelayTrustedPhone,
   getMobileRelayState,
   onMobileRelayStateChanged,
@@ -100,6 +103,7 @@ export function RemoteAccessPage() {
   const [state, setState] = useState<Awaited<ReturnType<typeof getMobileRelayState>> | null>(null);
   const [loading, setLoading] = useState(true);
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [copiedPairingKey, setCopiedPairingKey] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -166,6 +170,17 @@ export function RemoteAccessPage() {
     } finally {
       setBusyAction(null);
     }
+  }
+
+  async function copyPairingKey() {
+    if (!qrValue) {
+      return;
+    }
+    await copyText(qrValue);
+    setCopiedPairingKey(true);
+    window.setTimeout(() => {
+      setCopiedPairingKey(false);
+    }, 2000);
   }
 
   return (
@@ -263,7 +278,8 @@ export function RemoteAccessPage() {
           <CardHeader>
             <CardTitle>Pairing QR</CardTitle>
             <CardDescription>
-              Scan this QR from Cowork Mobile to connect directly over HTTP/3. No relay is used.
+              Scan this QR from Cowork Mobile to connect directly over HTTP/3, or copy the pairing
+              key below to paste on your phone. No relay is used.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -287,20 +303,39 @@ export function RemoteAccessPage() {
               </div>
             )}
 
-            <div className="flex flex-wrap gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() =>
-                  runAction("rotate", async () => {
-                    await rotateMobileRelaySession();
-                  })
-                }
-                disabled={!state?.pairingPayload || busyAction !== null}
-              >
-                <RefreshCwIcon data-icon />
-                Rotate QR / certificate
-              </Button>
+            <div className="space-y-2">
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    void copyPairingKey();
+                  }}
+                  disabled={!qrValue || busyAction !== null}
+                >
+                  <CopyIcon data-icon />
+                  Copy pairing key
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() =>
+                    runAction("rotate", async () => {
+                      await rotateMobileRelaySession();
+                    })
+                  }
+                  disabled={!state?.pairingPayload || busyAction !== null}
+                >
+                  <RefreshCwIcon data-icon />
+                  Rotate QR / certificate
+                </Button>
+              </div>
+              {copiedPairingKey ? (
+                <p className="flex items-center gap-1.5 text-xs text-primary">
+                  <CheckIcon className="size-3.5 shrink-0" aria-hidden="true" />
+                  Pairing key copied to clipboard.
+                </p>
+              ) : null}
             </div>
           </CardContent>
         </Card>

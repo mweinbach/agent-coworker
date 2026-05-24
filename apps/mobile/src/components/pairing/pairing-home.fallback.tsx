@@ -24,6 +24,7 @@ export function PairingHomeFallback() {
   const trustedDesktops = usePairingStore((state) => state.trustedMacs);
   const connectionState = usePairingStore((state) => state.connectionState);
   const reconnectTrusted = usePairingStore((state) => state.reconnectTrusted);
+  const forgetTrustedMac = usePairingStore((state) => state.forgetTrustedMac);
   const primaryTrustedDesktop = trustedDesktops[0] ?? null;
   const isConnected = isWorkspaceConnectionReady(connectionState);
   const statusLabel = describeTransportStatus(connectionState);
@@ -99,6 +100,7 @@ export function PairingHomeFallback() {
                 label={desktop.displayName}
                 detail={desktop.fingerprint}
                 onPress={() => void reconnectTrusted(desktop.macDeviceId)}
+                onDelete={() => void forgetTrustedMac(desktop.macDeviceId)}
                 isLast={index === trustedDesktops.length - 1}
               />
             ))}

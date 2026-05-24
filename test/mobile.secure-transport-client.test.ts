@@ -467,6 +467,40 @@ describe("mobile secure transport client", () => {
     });
   });
 
+  test("stops reconnecting and asks for a fresh QR after repeated certificate failures", async () => {
+    const states: string[] = [];
+    const client = new SecureTransportClient({
+      reconnectBaseDelayMs: 1,
+      reconnectMaxDelayMs: 1,
+      maxReconnectAttempts: 2,
+    });
+    client.subscribe({
+      onStateChanged: (snapshot) => states.push(snapshot.status),
+    });
+    __internal.setPinnedHttpsFetchForTesting(
+      mock(
+        async () => Response.json({ sessionToken: "session-token" }) as unknown as Response,
+      ) as never,
+    );
+    __internal.setPinnedHttpsStreamForTesting(
+      mock(async (_request, handlers) => {
+        handlers.onError("Pinned HTTPS certificate mismatch.");
+        return () => {};
+      }),
+    );
+
+    await client.connectFromQrPayload(buildPayload({ hosts: ["192.168.1.10"] }));
+    await waitFor(() => states.includes("error"));
+
+    expect(await client.getSnapshot()).toMatchObject({
+      status: "error",
+      connectedMacDeviceId: null,
+      relayUrl: null,
+      lastError: expect.stringContaining("Scan the QR code again"),
+    });
+    expect(secureStoreValues.has("cowork.h3.activeSession.v1")).toBe(false);
+  });
+
   test("clears the active session instead of reconnecting after authorization failures", async () => {
     const secureErrors: string[] = [];
     const states: string[] = [];

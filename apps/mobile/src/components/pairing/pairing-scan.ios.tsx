@@ -10,8 +10,6 @@ import {
   Text,
 } from "@expo/ui/swift-ui";
 import {
-  font,
-  foregroundStyle,
   listStyle,
   padding,
   tint,
@@ -197,55 +195,45 @@ export function PairingScanIos() {
             </Section>
           ) : null}
 
-          {__DEV__ ? (
-            <Section
-              title="Developer"
-              footer={
-                <SectionFooter>
-                  Paste a pairing payload when the simulator camera is unavailable.
-                </SectionFooter>
-              }
-            >
-              <RNHostView matchContents>
-                <View style={{ minHeight: 44, justifyContent: "center" }}>
-                  <TextInput
-                    value={manualPayload}
-                    onChangeText={setManualPayload}
-                    placeholder="cowork-pair://…"
-                    placeholderTextColor={theme.textTertiary}
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                    style={{
-                      color: theme.text,
-                      paddingVertical: 0,
-                      fontSize: 14,
-                      lineHeight: 20,
-                      fontFamily: theme.fontFamilyMono,
-                    }}
-                  />
-                </View>
-              </RNHostView>
-              <PairingActionButton
-                title="Pair Pasted Payload"
-                systemImage="qrcode.viewfinder"
-                primaryColor={theme.primary}
-                disabled={!manualPayload.trim() || pairingInFlight}
-                onPress={() => {
-                  void pairManualPayload();
-                }}
-              />
-              {scannedPayload ? (
-                <Text
-                  modifiers={[
-                    font({ size: 12, design: "monospaced" }),
-                    foregroundStyle(theme.textSecondary),
-                  ]}
-                >
-                  {scannedPayload}
-                </Text>
-              ) : null}
-            </Section>
-          ) : null}
+          <Section
+            title="Pairing key"
+            footer={
+              <SectionFooter>
+                Copy the pairing key from Cowork Desktop under Remote Access, then paste it here if
+                you cannot scan the QR code.
+              </SectionFooter>
+            }
+          >
+            <RNHostView matchContents>
+              <View style={{ minHeight: 88, justifyContent: "center", paddingHorizontal: 16 }}>
+                <TextInput
+                  value={manualPayload}
+                  onChangeText={setManualPayload}
+                  placeholder="cowork-pair://…"
+                  placeholderTextColor={theme.textTertiary}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  multiline
+                  style={{
+                    color: theme.text,
+                    paddingVertical: 0,
+                    fontSize: 13,
+                    lineHeight: 18,
+                    fontFamily: theme.fontFamilyMono,
+                  }}
+                />
+              </View>
+            </RNHostView>
+            <PairingActionButton
+              title="Connect with pasted key"
+              systemImage="doc.on.clipboard"
+              primaryColor={theme.primary}
+              disabled={!manualPayload.trim() || pairingInFlight}
+              onPress={() => {
+                void pairManualPayload();
+              }}
+            />
+          </Section>
         </List>
       </Host>
     </>

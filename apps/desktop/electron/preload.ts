@@ -9,6 +9,7 @@ import type { PersistedState } from "../src/app/types";
 import {
   type ConfirmActionInput,
   type CopyPathInput,
+  type CopyTextInput,
   type CreateDirectoryInput,
   type CreateOneOffChatWorkspaceInput,
   DESKTOP_EVENT_CHANNELS,
@@ -167,6 +168,12 @@ function assertRevealPathInput(opts: RevealPathInput): void {
 
 function assertCopyPathInput(opts: CopyPathInput): void {
   parseWithSchema(copyPathInputSchema, opts, "copyPath options");
+}
+
+function assertCopyTextInput(text: unknown): void {
+  if (typeof text !== "string") {
+    throw new Error("copyText expects a string");
+  }
 }
 
 function assertCreateDirectoryInput(opts: CreateDirectoryInput): void {
@@ -444,6 +451,10 @@ const desktopApi = Object.freeze<DesktopApi>({
   copyPath: (opts: CopyPathInput) => {
     assertCopyPathInput(opts);
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.copyPath, opts);
+  },
+  copyText: (text: string) => {
+    assertCopyTextInput(text);
+    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.copyText, text);
   },
 
   createDirectory: (opts: CreateDirectoryInput) => {

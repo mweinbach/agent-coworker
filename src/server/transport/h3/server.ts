@@ -4,7 +4,6 @@ import {
   decodeCoworkPairingTicket,
   encodeCoworkPairingTicket,
 } from "../../../shared/coworkTicket";
-import { createEphemeralQuicCertificate } from "../../../shared/quicCert";
 import type {
   JsonRpcLiteClientResponse,
   JsonRpcLiteNotification,
@@ -29,6 +28,11 @@ import {
   verifyH3PairingNonce,
   verifyH3SessionToken,
 } from "./pairing";
+import {
+  loadOrCreatePersistedQuicCertificate,
+  persistH3ListenerPort,
+  resolvePersistedH3Port,
+} from "./persistedListener";
 
 type H3Connection = {
   data: StartServerSocketData;
@@ -44,6 +48,7 @@ type H3JsonRpcConnection = H3Connection & {
 };
 
 const HTTP_RPC_RESPONSE_TIMEOUT_MS = 30_000;
+const SSE_KEEPALIVE_INTERVAL_MS = 15_000;
 const MOBILE_DEVICE_ID_HEADER = "x-cowork-mobile-device-id";
 
 type StartH3MobileServerOptions = {
@@ -53,6 +58,7 @@ type StartH3MobileServerOptions = {
   hostHints?: string[];
   storeRootPath?: string;
   enableH3?: boolean;
+  rotateTls?: boolean;
 };
 
 export type H3MobileServerState = {
@@ -314,13 +320,49 @@ function tryParseJsonRpcSendPayload(message: string): unknown {
   }
 }
 
-function createHttpJsonRpcConnection(runtime: AgentServerRuntime): H3JsonRpcConnection {
+function createHttpJsonRpcConnection(
+  runtime: AgentServerRuntime,
+  options?: { keepaliveIntervalMs?: number },
+): H3JsonRpcConnection {
   const encoder = new TextEncoder();
+  const keepaliveIntervalMs = options?.keepaliveIntervalMs ?? SSE_KEEPALIVE_INTERVAL_MS;
   const pendingResponses = new Map<
     string,
     { resolve(payload: unknown): void; reject(error: Error): void }
   >();
   const eventSinks = new Set<ReadableStreamDefaultController<Uint8Array>>();
+  let keepaliveTimer: ReturnType<typeof setInterval> | null = null;
+
+  const stopKeepalive = () => {
+    if (!keepaliveTimer) {
+      return;
+    }
+    clearInterval(keepaliveTimer);
+    keepaliveTimer = null;
+  };
+
+  const sendKeepalive = () => {
+    for (const sink of eventSinks) {
+      try {
+        sink.enqueue(encoder.encode(": keepalive\n\n"));
+      } catch {
+        eventSinks.delete(sink);
+      }
+    }
+  };
+
+  const syncKeepalive = () => {
+    if (eventSinks.size === 0) {
+      stopKeepalive();
+      return;
+    }
+    if (keepaliveTimer) {
+      return;
+    }
+    keepaliveTimer = setInterval(sendKeepalive, keepaliveIntervalMs);
+    (keepaliveTimer as { unref?: () => void }).unref?.();
+  };
+
   const connection: H3Connection = {
     data: {
       connectionId: crypto.randomUUID(),
@@ -353,8 +395,10 @@ function createHttpJsonRpcConnection(runtime: AgentServerRuntime): H3JsonRpcConn
     addEventSink(controller: ReadableStreamDefaultController<Uint8Array>) {
       eventSinks.add(controller);
       controller.enqueue(encoder.encode(": cowork events\n\n"));
+      syncKeepalive();
       return () => {
         eventSinks.delete(controller);
+        syncKeepalive();
       };
     },
     async dispatch(
@@ -380,6 +424,7 @@ function createHttpJsonRpcConnection(runtime: AgentServerRuntime): H3JsonRpcConn
       }
     },
     close() {
+      stopKeepalive();
       for (const pending of pendingResponses.values()) {
         pending.reject(new Error("H3 JSON-RPC connection closed."));
       }
@@ -441,7 +486,10 @@ export async function startH3MobileServer(
   options: StartH3MobileServerOptions,
 ): Promise<H3MobileServerHandle> {
   const hostname = options.hostname ?? "0.0.0.0";
-  const certificate = await createEphemeralQuicCertificate();
+  const certificate = await loadOrCreatePersistedQuicCertificate(options.storeRootPath, {
+    forceRotate: options.rotateTls === true,
+  });
+  const preferredPort = await resolvePersistedH3Port(options.storeRootPath, options.port);
   const pairing = createH3PairingSession();
   const hostHints = options.hostHints?.length ? options.hostHints : ["127.0.0.1"];
   const pairingSessions = new Map<string, H3PairingSession>([[pairing.nonce, pairing]]);
@@ -580,22 +628,38 @@ export async function startH3MobileServer(
     return textResponse("Not found", { status: 404 });
   };
 
-  server = Bun.serve<StartServerSocketData>({
+  const serveOptions = {
     hostname,
-    port: options.port ?? 0,
     tls: {
       cert: certificate.certPem,
       key: certificate.keyPem,
     },
     ...(options.enableH3 === false ? {} : { h3: true }),
     fetch,
-  });
+  };
+
+  try {
+    server = Bun.serve<StartServerSocketData>({
+      ...serveOptions,
+      port: preferredPort,
+    });
+  } catch (error) {
+    if (preferredPort > 0 && options.runtime.isAddrInUse(error)) {
+      server = Bun.serve<StartServerSocketData>({
+        ...serveOptions,
+        port: 0,
+      });
+    } else {
+      throw error;
+    }
+  }
 
   const port = server.port;
   if (port === undefined) {
     await server.stop(true);
     throw new Error("H3 mobile server did not bind to a port.");
   }
+  await persistH3ListenerPort(options.storeRootPath, port);
   const ticket = createTicket(port);
   return {
     server,
@@ -665,6 +729,7 @@ export async function startH3MobileServer(
 
 export const __internal = {
   createHttpJsonRpcConnection,
+  SSE_KEEPALIVE_INTERVAL_MS,
   DEFAULT_H3_TRUSTED_DEVICE_PERMISSIONS,
   decodePairingTicketForRequest,
   dispatchHttpRpcPayload,

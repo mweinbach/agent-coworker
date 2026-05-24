@@ -5,6 +5,7 @@ import {
   List,
   ProgressView,
   Section,
+  SwipeActions,
   Text,
 } from "@expo/ui/swift-ui";
 import {
@@ -35,6 +36,7 @@ export function PairingHomeIos() {
   const trustedDesktops = usePairingStore((state) => state.trustedMacs);
   const connectionState = usePairingStore((state) => state.connectionState);
   const reconnectTrusted = usePairingStore((state) => state.reconnectTrusted);
+  const forgetTrustedMac = usePairingStore((state) => state.forgetTrustedMac);
   const primaryTrustedDesktop = trustedDesktops[0] ?? null;
   const isConnected = isWorkspaceConnectionReady(connectionState);
   const statusLabel = describeTransportStatus(connectionState);
@@ -114,13 +116,22 @@ export function PairingHomeIos() {
         {trustedDesktops.length > 0 ? (
           <Section title="Saved Macs">
             {trustedDesktops.map((desktop) => (
-              <Button
-                key={desktop.macDeviceId}
-                label={desktop.displayName}
-                systemImage="desktopcomputer"
-                onPress={() => void reconnectTrusted(desktop.macDeviceId)}
-                modifiers={[buttonStyle("plain"), tint(theme.primary)]}
-              />
+              <SwipeActions key={desktop.macDeviceId}>
+                <Button
+                  label={desktop.displayName}
+                  systemImage="desktopcomputer"
+                  onPress={() => void reconnectTrusted(desktop.macDeviceId)}
+                  modifiers={[buttonStyle("plain"), tint(theme.primary)]}
+                />
+                <SwipeActions.Actions edge="trailing" allowsFullSwipe={false}>
+                  <Button
+                    role="destructive"
+                    label="Delete"
+                    systemImage="trash"
+                    onPress={() => void forgetTrustedMac(desktop.macDeviceId)}
+                  />
+                </SwipeActions.Actions>
+              </SwipeActions>
             ))}
           </Section>
         ) : null}

@@ -84,6 +84,7 @@ type StartWorkspaceServerOptions = {
   yolo: boolean;
   featureFlags?: { openAiNativeConnectors?: boolean };
   mobileH3?: boolean;
+  rotateMobileH3Tls?: boolean;
 };
 
 const trustedDevicePermissionSchema = z.preprocess(
@@ -439,6 +440,7 @@ function buildServerEnv(
   opts: {
     includeBundledFoundationModelsSdk?: boolean;
     includeBundledWindowsAiElectron?: boolean;
+    rotateMobileH3Tls?: boolean;
   } = {},
 ): NodeJS.ProcessEnv {
   const bundledCodexAppServer = process.env.COWORK_CODEX_APP_SERVER_COMMAND
@@ -472,6 +474,7 @@ function buildServerEnv(
     ...(featureFlags?.openAiNativeConnectors
       ? { COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS: "1" }
       : {}),
+    ...(opts.rotateMobileH3Tls ? { COWORK_H3_ROTATE_TLS: "1" } : {}),
   };
 }
 
@@ -617,6 +620,7 @@ export class ServerManager {
       const serverEnv = buildServerEnv(opts.featureFlags, {
         includeBundledFoundationModelsSdk: !useSource,
         includeBundledWindowsAiElectron: !useSource,
+        rotateMobileH3Tls: opts.rotateMobileH3Tls === true,
       });
       const sourceEnvForAttempt = useSource ? buildSourceEnvForAttempt(serverEnv, attempt) : null;
       const cleanup = sourceEnvForAttempt?.cleanup ?? (() => {});

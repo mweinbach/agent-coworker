@@ -105,6 +105,37 @@ describe("H3 mobile HTTP JSON-RPC connection", () => {
     connection.close();
   });
 
+  test("emits periodic SSE keepalive comments while event sinks are open", async () => {
+    const runtime = {
+      openHttpConnection() {},
+      handleDecodedMessage() {},
+      closeConnection() {},
+    };
+    const connection = __internal.createHttpJsonRpcConnection(runtime as never, {
+      keepaliveIntervalMs: 20,
+    });
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        connection.addEventSink(controller);
+      },
+    });
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+
+    const first = await reader.read();
+    expect(first.done).toBe(false);
+    expect(decoder.decode(first.value)).toContain(": cowork events");
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 30));
+
+    const keepalive = await reader.read();
+    expect(keepalive.done).toBe(false);
+    expect(decoder.decode(keepalive.value)).toContain(": keepalive");
+
+    connection.close();
+    await expect(reader.read()).resolves.toEqual({ done: true, value: undefined });
+  });
+
   test("closes active event streams when the HTTP JSON-RPC connection closes", async () => {
     const runtime = {
       openHttpConnection() {},

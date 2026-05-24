@@ -133,6 +133,7 @@ export function createDesktopCommandsMock(
     openExternalUrl: async () => {},
     revealPath: async () => {},
     copyPath: async () => {},
+    copyText: async () => {},
     createDirectory: async () => {},
     renamePath: async () => {},
     trashPath: async () => {},

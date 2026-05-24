@@ -292,6 +292,7 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
             hostHints: opts.mobileH3?.hostHints,
             storeRootPath: opts.homedir,
             enableH3: runtime.env.COWORK_H3_MOBILE_DISABLE_H3 !== "1",
+            rotateTls: runtime.env.COWORK_H3_ROTATE_TLS === "1",
           })
         : undefined;
   } catch (error) {

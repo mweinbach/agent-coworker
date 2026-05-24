@@ -164,6 +164,7 @@ mock.module("../src/lib/desktopCommands", () =>
         pairingPayload: null,
       }),
     updateMobileRelayTrustedPhonePermissions: async () => buildMobileRelayState(),
+    copyText: async () => {},
     onMobileRelayStateChanged: () => () => {},
   }),
 );
@@ -201,6 +202,8 @@ describe("desktop remote access page", () => {
     expect(html).toContain("Workspace bridge");
     expect(html).toContain("Relay service:");
     expect(html).toContain("Pairing QR");
+    expect(html).toContain("Copy pairing key");
+    expect(html).not.toContain("Pairing key copied to clipboard.");
     expect(html).toContain("Trusted devices");
     expect(html).not.toContain("Remodex-backed");
     expect(html).not.toContain("Remodex service:");

@@ -241,6 +241,10 @@ export async function copyPath(opts: { path: string }): Promise<void> {
   await requireDesktopApi().copyPath(opts);
 }
 
+export async function copyText(text: string): Promise<void> {
+  await requireDesktopApi().copyText(text);
+}
+
 export async function createDirectory(opts: { parentPath: string; name: string }): Promise<void> {
   await requireDesktopApi().createDirectory(opts);
 }

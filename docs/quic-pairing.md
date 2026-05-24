@@ -42,7 +42,8 @@ All routes are served from the direct endpoint advertised in the ticket.
   must include `Authorization: Bearer <sessionToken>` and
   `x-cowork-mobile-device-id: <deviceId>`.
 - `GET /events` is an SSE stream of JSON-RPC-lite notifications and server requests. It requires
-  the same bearer token and mobile device id header.
+  the same bearer token and mobile device id header. The server emits SSE comment keepalive frames
+  every 15 seconds so idle streams are not dropped by NATs or mobile network stacks.
 - `GET /health` returns endpoint status for diagnostics.
 
 ## JSON-RPC contract
@@ -95,7 +96,12 @@ No third-party data relay is involved. Phase 1 assumes both devices can reach ea
 
 The mobile client keeps the active session on transient stream loss, emits a reconnecting state,
 and reopens `/events` with bounded exponential backoff. Fatal authorization errors clear the active
-session instead of retrying, so revoked or mismatched devices do not loop forever.
+session instead of retrying, so revoked or mismatched devices do not loop forever. If the desktop
+certificate or listener address changes, scan the QR again to refresh pins.
+
+The desktop persists its mobile H3 TLS certificate and listener port under
+`~/.cowork/mobile-pairing/` so trusted phones can reconnect after a desktop restart without
+re-pairing. Manual QR rotation intentionally invalidates the old pins.
 
 For simulator development, the mobile client tries the advertised `hosts` first, then local host
 aliases (`127.0.0.1`, `localhost`, and Android emulator `10.0.2.2`) using the same ticket and pins.

@@ -122,62 +122,48 @@ export function PairingScanFallback() {
         </GroupedSection>
       ) : null}
 
-      {__DEV__ ? (
-        <GroupedSection
-          title="Debug"
-          footer="Paste a pairing payload when the simulator camera is unavailable."
-        >
-          <View style={{ padding: 12, gap: 10 }}>
-            <TextInput
-              value={manualPayload}
-              onChangeText={setManualPayload}
-              placeholder="Paste cowork-pair:// payload"
-              placeholderTextColor={theme.textTertiary}
-              autoCapitalize="none"
-              autoCorrect={false}
-              multiline
-              style={{
-                minHeight: 88,
-                borderRadius: 10,
-                borderCurve: "continuous",
-                borderWidth: 1,
-                borderColor: theme.border,
-                backgroundColor: theme.surfaceMuted,
-                color: theme.text,
-                paddingHorizontal: 12,
-                paddingVertical: 10,
-                fontSize: 12,
-                lineHeight: 18,
-                fontVariant: ["tabular-nums"],
-                fontFamily: theme.fontFamilyMono,
-              }}
-            />
-            <AppButton
-              fullWidth
-              variant="glass"
-              disabled={!manualPayload.trim() || pairingInFlight}
-              icon="qrcode.viewfinder"
-              onPress={() => {
-                void pairManualPayload();
-              }}
-            >
-              Pair pasted payload
-            </AppButton>
-            <Text
-              selectable
-              style={{
-                color: scannedPayload ? theme.text : theme.textTertiary,
-                fontSize: 12,
-                lineHeight: 18,
-                fontVariant: ["tabular-nums"],
-                fontFamily: theme.fontFamilyMono,
-              }}
-            >
-              {scannedPayload ?? "No QR scanned yet."}
-            </Text>
-          </View>
-        </GroupedSection>
-      ) : null}
+      <GroupedSection
+        title="Pairing key"
+        footer="Copy the pairing key from Cowork Desktop under Remote Access, then paste it here if you cannot scan the QR code."
+      >
+        <View style={{ padding: 12, gap: 10 }}>
+          <TextInput
+            value={manualPayload}
+            onChangeText={setManualPayload}
+            placeholder="cowork-pair://…"
+            placeholderTextColor={theme.textTertiary}
+            autoCapitalize="none"
+            autoCorrect={false}
+            multiline
+            style={{
+              minHeight: 88,
+              borderRadius: 10,
+              borderCurve: "continuous",
+              borderWidth: 1,
+              borderColor: theme.border,
+              backgroundColor: theme.surfaceMuted,
+              color: theme.text,
+              paddingHorizontal: 12,
+              paddingVertical: 10,
+              fontSize: 12,
+              lineHeight: 18,
+              fontVariant: ["tabular-nums"],
+              fontFamily: theme.fontFamilyMono,
+            }}
+          />
+          <AppButton
+            fullWidth
+            variant="glass"
+            disabled={!manualPayload.trim() || pairingInFlight}
+            icon="doc.on.clipboard"
+            onPress={() => {
+              void pairManualPayload();
+            }}
+          >
+            Connect with pasted key
+          </AppButton>
+        </View>
+      </GroupedSection>
     </GroupedScreen>
   );
 }

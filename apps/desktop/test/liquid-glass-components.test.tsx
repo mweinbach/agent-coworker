@@ -11,6 +11,10 @@ const {
   LiquidGlassCardContent,
   LiquidGlassCardHeader,
   LiquidGlassCardTitle,
+  LiquidGlassDialog,
+  LiquidGlassDialogContent,
+  LiquidGlassDialogDescription,
+  LiquidGlassDialogTitle,
   LiquidGlassField,
   LiquidGlassFieldDescription,
   LiquidGlassFieldLabel,
@@ -107,6 +111,47 @@ describe("liquid glass components", () => {
       expect(container.textContent).toContain("Liquid Glass component system");
       expect(container.textContent).toContain("Fallback renderer active");
       expect(container.textContent).toContain("Dialog");
+
+      await act(async () => {
+        root?.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("dialog content renders on the desktop portal layer", async () => {
+    const harness = setupJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root?.render(
+          createElement(
+            LiquidGlassDialog,
+            { open: true },
+            createElement(
+              LiquidGlassDialogContent,
+              null,
+              createElement(LiquidGlassDialogTitle, null, "Dialog title"),
+              createElement(LiquidGlassDialogDescription, null, "Dialog description"),
+            ),
+          ),
+        );
+      });
+
+      const dialogContent = harness.dom.window.document.querySelector(
+        '[data-slot="liquid-glass-dialog-content"]',
+      );
+      const dialogOverlay = harness.dom.window.document.querySelector(
+        '[data-slot="liquid-glass-dialog-overlay"]',
+      );
+
+      expect(dialogContent?.className).toContain("z-[var(--desktop-portal-layer)]");
+      expect(dialogOverlay?.className).toContain("z-[var(--desktop-portal-layer)]");
 
       await act(async () => {
         root?.unmount();

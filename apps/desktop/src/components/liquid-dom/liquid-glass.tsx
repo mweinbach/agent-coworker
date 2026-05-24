@@ -707,7 +707,7 @@ function LiquidGlassDialogOverlay({
     <DialogPrimitive.Overlay
       data-slot="liquid-glass-dialog-overlay"
       className={cn(
-        "fixed inset-0 bg-[var(--liquid-glass-dialog-overlay)] backdrop-blur-[2px] data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0",
+        "fixed inset-0 z-[var(--desktop-portal-layer)] bg-[var(--liquid-glass-dialog-overlay)] backdrop-blur-[2px] data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0",
         className,
       )}
       {...props}
@@ -718,6 +718,7 @@ function LiquidGlassDialogOverlay({
 function LiquidGlassDialogContent({
   className,
   children,
+  onEscapeKeyDown,
   showCloseButton = true,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
@@ -729,9 +730,13 @@ function LiquidGlassDialogContent({
       <DialogPrimitive.Content
         data-slot="liquid-glass-dialog-content"
         className={cn(
-          "fixed left-[50%] top-[50%] w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] outline-none duration-200 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:max-w-lg",
+          "fixed left-[50%] top-[50%] z-[var(--desktop-portal-layer)] w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] outline-none duration-200 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:max-w-lg",
           className,
         )}
+        onEscapeKeyDown={(event) => {
+          onEscapeKeyDown?.(event);
+          event.stopPropagation();
+        }}
         {...props}
       >
         <LiquidGlassSurface tone="prominent" shape="sheet" contentClassName="grid gap-4 p-6">

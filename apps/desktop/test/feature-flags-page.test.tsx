@@ -18,6 +18,14 @@ const defaultStoreActions = {
   setDesktopFeatureFlagOverride: useAppStore.getState().setDesktopFeatureFlagOverride,
 };
 
+function createDeferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 describe("feature flags settings page", () => {
   beforeEach(() => {
     useAppStore.setState(defaultStoreActions);
@@ -149,6 +157,66 @@ describe("feature flags settings page", () => {
       });
 
       expect(setDesktopFeatureFlagOverride).toHaveBeenCalledWith("a2ui", true);
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("blocks duplicate feature flag toggles while a write is pending", async () => {
+    const pending = createDeferred();
+    const setDesktopFeatureFlagOverride = mock(async () => {
+      await pending.promise;
+    });
+    const harness = setupJsdom();
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        useAppStore.setState({
+          desktopFeatureFlags: {
+            menuBar: true,
+            remoteAccess: true,
+            workspacePicker: true,
+            workspaceLifecycle: true,
+            a2ui: false,
+          },
+          setDesktopFeatureFlagOverride,
+        });
+      });
+
+      await act(async () => {
+        root.render(createElement(FeatureFlagsPage));
+      });
+
+      const menuBarSwitch = container.querySelector('[aria-label="Menu bar / tray"]');
+      const a2uiSwitch = container.querySelector('[aria-label="Generative UI (A2UI)"]');
+      if (
+        !(menuBarSwitch instanceof harness.dom.window.HTMLElement) ||
+        !(a2uiSwitch instanceof harness.dom.window.HTMLElement)
+      ) {
+        throw new Error("missing feature switches");
+      }
+
+      await act(async () => {
+        menuBarSwitch.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+        a2uiSwitch.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(menuBarSwitch.hasAttribute("disabled")).toBe(true);
+      expect(a2uiSwitch.hasAttribute("disabled")).toBe(true);
+      expect(setDesktopFeatureFlagOverride).toHaveBeenCalledTimes(1);
+      expect(setDesktopFeatureFlagOverride).toHaveBeenCalledWith("menuBar", false);
+
+      pending.resolve();
+      await act(async () => {
+        await pending.promise;
+      });
 
       await act(async () => {
         root.unmount();

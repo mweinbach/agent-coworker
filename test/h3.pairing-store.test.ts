@@ -7,6 +7,7 @@ import {
   forgetH3TrustedDevice,
   loadH3PairingStoreState,
   rememberH3TrustedDevice,
+  updateH3TrustedDevicePermissions,
   verifyH3SessionToken,
 } from "../src/server/transport/h3/pairing";
 
@@ -50,6 +51,64 @@ describe("H3 pairing store", () => {
     await expect(loadH3PairingStoreState(storeRoot)).resolves.toEqual({
       version: 1,
       trustedDevices: [],
+    });
+  });
+
+  test("preserves trusted device permissions when the same device re-pairs", async () => {
+    const storeRoot = await createTempRoot();
+
+    await rememberH3TrustedDevice(storeRoot, {
+      deviceId: "phone-1",
+      identityPub: "phone-identity",
+      displayName: "Phone",
+      sessionToken: "old-session-token",
+    });
+    await expect(
+      updateH3TrustedDevicePermissions(storeRoot, "phone-1", {
+        turns: true,
+        providerAuth: true,
+        mcpAuth: true,
+      }),
+    ).resolves.toMatchObject({
+      deviceId: "phone-1",
+      permissions: {
+        turns: true,
+        providerAuth: true,
+        mcpAuth: true,
+      },
+    });
+
+    await rememberH3TrustedDevice(storeRoot, {
+      deviceId: "phone-1",
+      identityPub: "phone-identity",
+      displayName: "Phone",
+      sessionToken: "new-session-token",
+    });
+
+    await expect(loadH3PairingStoreState(storeRoot)).resolves.toMatchObject({
+      version: 1,
+      trustedDevices: [
+        {
+          deviceId: "phone-1",
+          permissions: {
+            turns: true,
+            serverRequests: false,
+            providerAuth: true,
+            mcpAuth: true,
+            workspaceSettings: false,
+            backups: false,
+          },
+        },
+      ],
+    });
+    await expect(
+      verifyH3SessionToken(storeRoot, "new-session-token", "phone-1"),
+    ).resolves.toMatchObject({
+      deviceId: "phone-1",
+      permissions: {
+        providerAuth: true,
+        mcpAuth: true,
+      },
     });
   });
 });

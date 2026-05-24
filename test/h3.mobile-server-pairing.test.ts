@@ -279,6 +279,127 @@ describe("H3 mobile server pairing", () => {
     }
   });
 
+  test("keeps desktop identity, trusted device permissions, and session auth across H3 restarts", async () => {
+    const storeRoot = await createTempRoot();
+    const handled: Array<JsonRpcLiteRequest | JsonRpcLiteNotification | JsonRpcLiteClientResponse> =
+      [];
+    const runtime = {
+      openHttpConnection() {},
+      handleDecodedMessage(connection: H3TestConnection, message) {
+        handled.push(message);
+        if ("method" in message && "id" in message) {
+          connection.send(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: message.id,
+              result: { reachedRuntime: true },
+            }),
+          );
+        }
+      },
+      closeConnection() {},
+    } satisfies Partial<AgentServerRuntime>;
+
+    const server = await startH3MobileServer({
+      runtime: runtime as AgentServerRuntime,
+      hostname: "127.0.0.1",
+      hostHints: ["127.0.0.1"],
+      storeRootPath: storeRoot,
+      enableH3: false,
+    });
+
+    let sessionToken = "";
+    try {
+      const pairResponse = await fetchH3(`${server.url}/pair`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ticket: server.ticketUrl,
+          nonce: server.nonce,
+          deviceId: "phone-1",
+          identityPub: "phone-identity",
+          displayName: "Work Phone",
+        }),
+      });
+      expect(pairResponse.status).toBe(200);
+      const pairPayload = (await pairResponse.json()) as { sessionToken?: string };
+      sessionToken = pairPayload.sessionToken ?? "";
+      expect(sessionToken).not.toBe("");
+
+      await expect(
+        server.updateTrustedDevicePermissions("phone-1", {
+          turns: true,
+          providerAuth: true,
+          mcpAuth: true,
+        }),
+      ).resolves.toMatchObject({
+        deviceId: "phone-1",
+        permissions: {
+          turns: true,
+          providerAuth: true,
+          mcpAuth: true,
+        },
+      });
+    } finally {
+      await server.stop();
+    }
+
+    const restarted = await startH3MobileServer({
+      runtime: runtime as AgentServerRuntime,
+      hostname: "127.0.0.1",
+      hostHints: ["127.0.0.1"],
+      storeRootPath: storeRoot,
+      enableH3: false,
+    });
+
+    try {
+      expect(restarted.identityPub).toBe(server.identityPub);
+      expect(restarted.certSha256).toBe(server.certSha256);
+      expect(restarted.spkiSha256).toBe(server.spkiSha256);
+      expect(restarted.port).toBe(server.port);
+      expect(restarted.trustedDevices).toEqual([
+        expect.objectContaining({
+          deviceId: "phone-1",
+          fingerprint: expect.any(String),
+          permissions: expect.objectContaining({
+            turns: true,
+            providerAuth: true,
+            mcpAuth: true,
+          }),
+        }),
+      ]);
+
+      const authenticatedTurn = await fetchH3(`${restarted.url}/rpc`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${sessionToken}`,
+          "x-cowork-mobile-device-id": "phone-1",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 5,
+          method: "turn/start",
+          params: { threadId: "thread-1", input: "hello after restart" },
+        }),
+      });
+
+      expect(authenticatedTurn.status).toBe(200);
+      await expect(authenticatedTurn.json()).resolves.toEqual({
+        jsonrpc: "2.0",
+        id: 5,
+        result: { reachedRuntime: true },
+      });
+      expect(handled.at(-1)).toEqual({
+        id: 5,
+        method: "turn/start",
+        params: { threadId: "thread-1", input: "hello after restart" },
+      });
+    } finally {
+      await restarted.stop();
+    }
+  });
+
   for (const bindingCase of ticketBindingCases) {
     test(`rejects pairing tickets with mismatched ${bindingCase.name}`, async () => {
       const storeRoot = await createTempRoot();

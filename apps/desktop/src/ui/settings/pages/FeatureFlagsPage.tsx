@@ -1,3 +1,4 @@
+import { useRef, useState } from "react";
 import {
   FEATURE_FLAG_DEFINITIONS,
   FEATURE_FLAG_IDS,
@@ -11,9 +12,21 @@ export function FeatureFlagsPage() {
   const updateState = useAppStore((s) => s.updateState);
   const desktopFeatureFlags = useAppStore((s) => s.desktopFeatureFlags);
   const setDesktopFeatureFlagOverride = useAppStore((s) => s.setDesktopFeatureFlagOverride);
+  const [pendingFlagId, setPendingFlagId] = useState<FeatureFlagId | null>(null);
+  const pendingFlagRef = useRef<FeatureFlagId | null>(null);
 
-  const toggleDesktopFlag = (flagId: FeatureFlagId, enabled: boolean) => {
-    void setDesktopFeatureFlagOverride(flagId, enabled);
+  const toggleDesktopFlag = async (flagId: FeatureFlagId, enabled: boolean) => {
+    if (pendingFlagRef.current) {
+      return;
+    }
+    pendingFlagRef.current = flagId;
+    setPendingFlagId(flagId);
+    try {
+      await setDesktopFeatureFlagOverride(flagId, enabled);
+    } finally {
+      pendingFlagRef.current = null;
+      setPendingFlagId(null);
+    }
   };
 
   return (
@@ -42,9 +55,11 @@ export function FeatureFlagsPage() {
               control={
                 <Switch
                   checked={enabled}
-                  disabled={forcedOffInPackaged}
+                  disabled={forcedOffInPackaged || pendingFlagId !== null}
                   aria-label={definition.label}
-                  onCheckedChange={(checked) => toggleDesktopFlag(flagId, checked)}
+                  onCheckedChange={(checked) => {
+                    void toggleDesktopFlag(flagId, checked);
+                  }}
                 />
               }
             ></SettingsRow>

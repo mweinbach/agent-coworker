@@ -1,5 +1,7 @@
 # agent-coworker
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/mweinbach/agent-coworker)
+
 A local-first coding agent backend with CLI and desktop clients.
 
 `agent-coworker` is built around one architectural decision: the product runtime lives behind a WebSocket server, not inside a single UI or developer harness. The server owns sessions, tool execution, provider auth, MCP, persistence, safety checks, and streaming. The CLI REPL, Electron app, and any custom client are thin clients on top of the same protocol.

@@ -899,6 +899,97 @@ describe("mobile cowork jsonrpc client", () => {
     expect(JSON.parse(sent[3]!).method).toBe("initialized");
   });
 
+  test("recovers when a local reset reinitializes an already-initialized server session", async () => {
+    const sent: string[] = [];
+    const client = new CoworkJsonRpcClient({
+      clientInfo: {
+        name: "cowork-mobile",
+        version: "0.1.0",
+      },
+      send(text) {
+        sent.push(text);
+      },
+    });
+
+    const firstHandshake = client.initialize();
+    const firstInitializePayload = JSON.parse(sent[0]!);
+    await client.handleIncoming(
+      JSON.stringify({
+        id: firstInitializePayload.id,
+        result: {
+          protocolVersion: "0.1",
+          serverInfo: {
+            name: "cowork-server",
+            subprotocol: "cowork.jsonrpc.v1",
+          },
+          capabilities: {
+            experimentalApi: false,
+          },
+          transport: {
+            type: "websocket",
+            protocolMode: "jsonrpc",
+          },
+        },
+      }),
+    );
+    await firstHandshake;
+
+    client.resetTransportSession("Transient transport state reset.");
+
+    const resumePromise = client.resumeThread("thread-1");
+    const secondInitializePayload = JSON.parse(sent[2]!);
+    expect(secondInitializePayload.method).toBe("initialize");
+    await client.handleIncoming(
+      JSON.stringify({
+        id: secondInitializePayload.id,
+        error: {
+          code: -32003,
+          message: "Already initialized",
+        },
+      }),
+    );
+
+    await waitForCondition(() => sent.length >= 4);
+    const initializedPayload = JSON.parse(sent[3]!);
+    expect(initializedPayload.method).toBe("initialized");
+
+    await waitForCondition(() => sent.length >= 5);
+    const resumePayload = JSON.parse(sent[4]!);
+    expect(resumePayload).toMatchObject({
+      method: "thread/resume",
+      params: {
+        threadId: "thread-1",
+      },
+    });
+
+    await client.handleIncoming(
+      JSON.stringify({
+        id: resumePayload.id,
+        result: {
+          thread: {
+            id: "thread-1",
+            title: "Remote thread",
+            preview: "",
+            modelProvider: "opencode",
+            model: "gpt-5",
+            cwd: "/workspace",
+            createdAt: new Date(0).toISOString(),
+            updatedAt: new Date(0).toISOString(),
+            messageCount: 1,
+            lastEventSeq: 1,
+            status: { type: "loaded" },
+          },
+        },
+      }),
+    );
+
+    await expect(resumePromise).resolves.toMatchObject({
+      thread: {
+        id: "thread-1",
+      },
+    });
+  });
+
   test("shares concurrent initialize calls across one handshake", async () => {
     const sent: string[] = [];
     const client = new CoworkJsonRpcClient({

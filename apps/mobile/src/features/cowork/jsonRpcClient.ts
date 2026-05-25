@@ -22,6 +22,8 @@ import {
 } from "./protocolTypes";
 
 const jsonRpcIdSchema = z.union([z.string(), z.number().finite()]);
+const JSONRPC_NOT_INITIALIZED_ERROR_CODE = -32002;
+const JSONRPC_ALREADY_INITIALIZED_ERROR_CODE = -32003;
 
 const jsonRpcRequestSchema = z
   .object({
@@ -60,6 +62,27 @@ export type JsonRpcId = z.infer<typeof jsonRpcIdSchema>;
 type JsonRpcRequestMessage = z.infer<typeof jsonRpcRequestSchema>;
 type JsonRpcNotificationMessage = z.infer<typeof jsonRpcNotificationSchema>;
 type JsonRpcResponseMessage = z.infer<typeof jsonRpcResponseSchema>;
+type JsonRpcResponseErrorPayload = NonNullable<JsonRpcResponseMessage["error"]>;
+
+class JsonRpcResponseError extends Error {
+  readonly code: number;
+  readonly data?: unknown;
+
+  constructor(error: JsonRpcResponseErrorPayload) {
+    super(error.message);
+    this.name = "JsonRpcResponseError";
+    this.code = error.code;
+    this.data = error.data;
+  }
+}
+
+function isJsonRpcResponseError(error: unknown, code: number, message: string): boolean {
+  return error instanceof JsonRpcResponseError && error.code === code && error.message === message;
+}
+
+function hasJsonRpcErrorMessage(error: unknown, message: string): boolean {
+  return error instanceof Error && error.message === message;
+}
 
 export type CoworkTurnInputPart =
   | { type: "text"; text: string }
@@ -300,12 +323,25 @@ export class CoworkJsonRpcClient {
     }
     const generation = this.transportGeneration;
     const initializePromise = (async () => {
-      await this.request("initialize", {
-        clientInfo: this.clientInfo,
-        capabilities: {
-          experimentalApi: false,
-        },
-      });
+      try {
+        await this.request("initialize", {
+          clientInfo: this.clientInfo,
+          capabilities: {
+            experimentalApi: false,
+          },
+        });
+      } catch (error) {
+        if (
+          !isJsonRpcResponseError(
+            error,
+            JSONRPC_ALREADY_INITIALIZED_ERROR_CODE,
+            "Already initialized",
+          ) &&
+          !hasJsonRpcErrorMessage(error, "Already initialized")
+        ) {
+          throw error;
+        }
+      }
       if (generation !== this.transportGeneration) {
         throw new Error("Transport session reset while initializing.");
       }
@@ -423,7 +459,7 @@ export class CoworkJsonRpcClient {
       this.pending.delete(message.id);
       clearTimeout(pending.timeoutHandle);
       if (message.error) {
-        pending.reject(new Error(message.error.message));
+        pending.reject(new JsonRpcResponseError(message.error));
         return;
       }
       pending.resolve(message.result);
@@ -484,8 +520,8 @@ export class CoworkJsonRpcClient {
       if (
         method !== "initialize" &&
         retryNotInitialized &&
-        error instanceof Error &&
-        error.message === "Not initialized"
+        (isJsonRpcResponseError(error, JSONRPC_NOT_INITIALIZED_ERROR_CODE, "Not initialized") ||
+          hasJsonRpcErrorMessage(error, "Not initialized"))
       ) {
         this.initialized = false;
         this.initializePromise = null;

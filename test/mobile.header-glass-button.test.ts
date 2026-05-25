@@ -1,11 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, test } from "bun:test";
 
-const headerSource = readFileSync(
-  new URL("../apps/mobile/src/components/ui/header-glass-button.tsx", import.meta.url),
-  "utf8",
-);
-
 const workspaceSource = readFileSync(
   new URL("../apps/mobile/src/app/(app)/(tabs)/workspace/index.tsx", import.meta.url),
   "utf8",
@@ -21,34 +16,12 @@ const pairingSource = readFileSync(
   "utf8",
 );
 
-describe("mobile header glass button", () => {
-  test("uses Expo SwiftUI glass controls for iOS header actions", () => {
-    expect(headerSource).toContain('from "@expo/ui/swift-ui"');
-    expect(headerSource).toContain("glassEffect({");
-    expect(headerSource).toContain('variant: "regular"');
-    expect(headerSource).toContain('shape: "circle"');
-    expect(headerSource).toContain("<Host");
-    expect(headerSource).toContain("<ExpoImage");
-    expect(headerSource).toContain("<ExpoMenu");
-  });
-
-  test("keeps the fallback Pressable as the only non-iOS interactive glass control", () => {
-    expect(headerSource).not.toContain("<GlassView isInteractive");
-    expect(headerSource).toContain('pointerEvents="none"');
-    expect(headerSource).toContain('glassEffectStyle="clear"');
-
-    const pressableIndex = headerSource.indexOf("<Pressable");
-    const glassIndex = headerSource.indexOf("<GlassView");
-
-    expect(pressableIndex).toBeGreaterThanOrEqual(0);
-    expect(glassIndex).toBeGreaterThan(pressableIndex);
-  });
-
-  test("uses Expo UI menu on iOS and keeps the router menu asChild fallback", () => {
-    expect(workspaceSource).toContain('Platform.OS === "ios"');
-    expect(workspaceSource).toContain("<HeaderGlassMenu");
-    expect(workspaceSource).toContain("<Link.Trigger>");
-    expect(workspaceSource).toContain('href="/(app)/(tabs)/workspace" asChild');
+describe("mobile native header toolbar", () => {
+  test("uses Expo Router native toolbar menu for workspace header actions", () => {
+    expect(workspaceSource).toContain("<Stack.Toolbar");
+    expect(workspaceSource).toContain("<Stack.Toolbar.Menu");
+    expect(workspaceSource).toContain("<Stack.Toolbar.MenuAction");
+    expect(workspaceSource).toContain('accessibilityLabel="Open workspace menu"');
   });
 
   test("does not use the green native-stack prominent header item chrome", () => {

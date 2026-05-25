@@ -1,26 +1,27 @@
 import {
   Button,
+  DisclosureGroup,
   Host,
   HStack,
+  Image,
   List,
-  Section,
   Spacer,
   Text,
   VStack,
 } from "@expo/ui/swift-ui";
 import {
   buttonStyle,
-  controlSize,
+  environment,
   font,
   foregroundStyle,
-  frame,
-  labelStyle,
+  listRowInsets,
   listRowSeparator,
   listStyle,
+  tag,
   tint,
 } from "@expo/ui/swift-ui/modifiers";
 import { Stack, useRouter } from "expo-router";
-import { Fragment } from "react";
+import { Fragment, useCallback } from "react";
 
 import {
   formatThreadRelativeAge,
@@ -38,55 +39,22 @@ const SETTINGS_ACTIONS = [
   { title: "Remote access", icon: "iphone.and.arrow.forward", href: "/(pairing)" },
 ] as const;
 
-function SectionHeaderControls({
-  title,
-  open,
-  onToggle,
-  onReorder,
-  mutedColor,
-}: {
-  title: string;
-  open: boolean;
-  onToggle: () => void;
-  onReorder: () => void;
-  mutedColor: string;
-}) {
-  return (
-    <HStack spacing={8}>
-      <Button
-        label={title}
-        systemImage={open ? "chevron.down" : "chevron.right"}
-        onPress={onToggle}
-        modifiers={[buttonStyle("plain"), tint(mutedColor), controlSize("small")]}
-      />
-      <Spacer />
-      <Button
-        label="Reorder"
-        systemImage="arrow.up.arrow.down"
-        onPress={onReorder}
-        modifiers={[buttonStyle("plain"), tint(mutedColor), controlSize("small")]}
-      />
-    </HStack>
-  );
-}
-
 function ChatThreadRow({
   thread,
   onPress,
+  iconColor,
 }: {
   thread: MobileThreadSummary;
   onPress: () => void;
+  iconColor: string;
 }) {
   const preview =
     thread.preview && thread.preview !== "No activity yet." ? thread.preview : null;
+
   return (
     <Button onPress={onPress} modifiers={[buttonStyle("plain")]}>
       <HStack alignment="center" spacing={12}>
-        <Button
-          label=""
-          systemImage="bubble.left.fill"
-          modifiers={[buttonStyle("plain"), controlSize("small")]}
-        />
+        <Image systemName="bubble.left.fill" size={18} color={iconColor} />
         <VStack alignment="leading" spacing={2}>
           <Text modifiers={[font({ size: 17, weight: "regular" })]}>{thread.title}</Text>
           {preview ? (
@@ -102,162 +70,249 @@ function ChatThreadRow({
   );
 }
 
-function ProjectGroupSection({
+function ProjectHeaderRow({
   group,
-  loading,
-  onToggleProject,
-  onOpenThread,
-  onLoadMore,
+  onToggle,
+  iconColor,
 }: {
   group: ThreadHomeProjectGroup;
-  loading: boolean;
-  onToggleProject: () => void;
-  onOpenThread: (threadId: string) => void;
-  onLoadMore: () => void;
+  onToggle: () => void;
+  iconColor: string;
 }) {
   const countLabel = String(group.serverTotal ?? group.items.length);
+
   return (
-    <Section>
-      <Button
-        label={group.workspace.name}
-        systemImage={group.expanded ? "folder.fill" : "folder"}
-        onPress={onToggleProject}
-        modifiers={[buttonStyle("plain"), labelStyle("titleAndIcon")]}
-      />
-      <Text modifiers={[foregroundStyle("secondary")]}>{countLabel}</Text>
-      {group.expanded
-        ? group.visibleItems.map((thread) => (
-            <Button
-              key={thread.id}
-              label={thread.title}
-              onPress={() => onOpenThread(thread.id)}
-              modifiers={[buttonStyle("plain")]}
-            />
-          ))
-        : null}
-      {group.expanded && (group.hiddenLoadedCount > 0 || group.canLoadMoreFromServer) ? (
-        <Button
-          label={
-            loading
-              ? "Loading..."
-              : group.hiddenLoadedCount > 0
-                ? group.showAllThreads
-                  ? "Show less"
-                  : `Show ${group.hiddenLoadedCount} more`
-                : "Load more"
-          }
-          onPress={onLoadMore}
-          modifiers={[buttonStyle("plain"), tint("#6f8042")]}
+    <Button onPress={onToggle} modifiers={[buttonStyle("plain")]}>
+      <HStack alignment="center" spacing={12}>
+        <Image
+          systemName={group.expanded ? "folder.fill" : "folder"}
+          size={18}
+          color={iconColor}
         />
-      ) : null}
-    </Section>
+        <Text modifiers={[font({ size: 17, weight: "regular" })]}>{group.workspace.name}</Text>
+        <Spacer />
+        <Text modifiers={[font({ size: 15 }), foregroundStyle("secondary")]}>{countLabel}</Text>
+      </HStack>
+    </Button>
   );
 }
 
-function renderIosSection(
-  section: HomeSectionKey,
-  props: ReturnType<typeof useThreadHome> & { router: ReturnType<typeof useRouter> },
-  mutedColor: string,
-) {
-  const {
-    viewModel,
-    homeLoadPending,
-    toggleSection,
-    toggleSectionOrder,
-    loadMoreChats,
-    loadMoreProject,
-    toggleWorkspaceExpanded,
-    expandWorkspace,
-    toggleShowAllChats,
-    toggleProjectThreadListExpanded,
-    router,
-  } = props;
+function ProjectThreadRow({
+  thread,
+  onPress,
+}: {
+  thread: MobileThreadSummary;
+  onPress: () => void;
+}) {
+  return (
+    <Button
+      onPress={onPress}
+      modifiers={[buttonStyle("plain"), listRowInsets({ leading: 36 })]}
+    >
+      <HStack alignment="center" spacing={12}>
+        <Text modifiers={[font({ size: 16, weight: "regular" })]}>{thread.title}</Text>
+        <Spacer />
+        <Text modifiers={[font({ size: 13 }), foregroundStyle("secondary")]}>
+          {formatThreadRelativeAge(thread.updatedAt)}
+        </Text>
+      </HStack>
+    </Button>
+  );
+}
 
-  if (section === "chats") {
-    return (
-      <Section key="chats">
-        <SectionHeaderControls
-          title="Chats"
-          open={viewModel.sectionsOpen.chats}
-          onToggle={() => toggleSection("chats")}
-          onReorder={toggleSectionOrder}
-          mutedColor={mutedColor}
-        />
-        {viewModel.sectionsOpen.chats ? (
-          viewModel.chats.length === 0 ? (
-            <Text modifiers={[foregroundStyle("secondary")]}>No chats yet</Text>
-          ) : (
-            <>
-              {viewModel.visibleChats.map((thread) => (
-                <ChatThreadRow
-                  key={thread.id}
-                  thread={thread}
-                  onPress={() => router.push(`/(app)/thread/${thread.id}` as const)}
-                />
-              ))}
-              {viewModel.hiddenChatCount > 0 || viewModel.canLoadMoreChatsFromServer ? (
-                <Button
-                  label={
-                    homeLoadPending.chats
-                      ? "Loading..."
-                      : viewModel.hiddenChatCount > 0
-                        ? viewModel.showAllChats
-                          ? "Show less"
-                          : `Show ${viewModel.hiddenChatCount} more`
-                        : "Load more chats"
-                  }
-                  onPress={() => {
-                    if (viewModel.hiddenChatCount > 0 && viewModel.showAllChats) {
-                      toggleShowAllChats();
-                      return;
-                    }
-                    void loadMoreChats();
-                  }}
-                  modifiers={[buttonStyle("plain"), tint("#6f8042")]}
-                />
-              ) : null}
-            </>
-          )
-        ) : null}
-      </Section>
-    );
+function LoadMoreButton({
+  label,
+  onPress,
+  accentColor,
+}: {
+  label: string;
+  onPress: () => void;
+  accentColor: string;
+}) {
+  return (
+    <Button
+      label={label}
+      onPress={onPress}
+      modifiers={[buttonStyle("plain"), tint(accentColor), listRowInsets({ leading: 16 })]}
+    />
+  );
+}
+
+function ChatsSectionContent({
+  threadHome,
+  router,
+  accentColor,
+  iconColor,
+}: {
+  threadHome: ReturnType<typeof useThreadHome>;
+  router: ReturnType<typeof useRouter>;
+  accentColor: string;
+  iconColor: string;
+}) {
+  const { viewModel, homeLoadPending, loadMoreChats, toggleShowAllChats } = threadHome;
+
+  if (viewModel.chats.length === 0) {
+    return <Text modifiers={[foregroundStyle("secondary")]}>No chats yet</Text>;
   }
 
   return (
-    <Section key="projects">
-      <SectionHeaderControls
-        title="Projects"
-        open={viewModel.sectionsOpen.projects}
-        onToggle={() => toggleSection("projects")}
-        onReorder={toggleSectionOrder}
-        mutedColor={mutedColor}
-      />
-      {viewModel.sectionsOpen.projects ? (
-        viewModel.projects.length === 0 ? (
-          <Text modifiers={[foregroundStyle("secondary")]}>No projects yet</Text>
-        ) : (
-          viewModel.projects.map((group) => (
-            <ProjectGroupSection
-              key={group.workspace.id}
-              group={group}
-              loading={homeLoadPending.projects[group.workspace.id] === true}
-              onToggleProject={() => toggleWorkspaceExpanded(group.workspace.id)}
-              onOpenThread={(threadId) => {
-                expandWorkspace(group.workspace.id);
-                router.push(`/(app)/thread/${threadId}` as const);
-              }}
-              onLoadMore={() => {
-                if (group.hiddenLoadedCount > 0 && group.showAllThreads) {
-                  toggleProjectThreadListExpanded(group.workspace.id);
-                  return;
-                }
-                void loadMoreProject(group.workspace.id);
-              }}
-            />
-          ))
-        )
+    <>
+      {viewModel.visibleChats.map((thread) => (
+        <ChatThreadRow
+          key={thread.id}
+          thread={thread}
+          iconColor={iconColor}
+          onPress={() => router.push(`/(app)/thread/${thread.id}` as const)}
+        />
+      ))}
+      {viewModel.hiddenChatCount > 0 || viewModel.canLoadMoreChatsFromServer ? (
+        <LoadMoreButton
+          label={
+            homeLoadPending.chats
+              ? "Loading..."
+              : viewModel.hiddenChatCount > 0
+                ? viewModel.showAllChats
+                  ? "Show less"
+                  : `Show ${viewModel.hiddenChatCount} more`
+                : "Load more chats"
+          }
+          accentColor={accentColor}
+          onPress={() => {
+            if (viewModel.hiddenChatCount > 0 && viewModel.showAllChats) {
+              toggleShowAllChats();
+              return;
+            }
+            void loadMoreChats();
+          }}
+        />
       ) : null}
-    </Section>
+    </>
+  );
+}
+
+function ProjectsSectionContent({
+  threadHome,
+  router,
+  accentColor,
+  iconColor,
+}: {
+  threadHome: ReturnType<typeof useThreadHome>;
+  router: ReturnType<typeof useRouter>;
+  accentColor: string;
+  iconColor: string;
+}) {
+  const {
+    viewModel,
+    homeLoadPending,
+    toggleWorkspaceExpanded,
+    expandWorkspace,
+    loadMoreProject,
+    toggleProjectThreadListExpanded,
+  } = threadHome;
+
+  if (viewModel.projects.length === 0) {
+    return <Text modifiers={[foregroundStyle("secondary")]}>No projects yet</Text>;
+  }
+
+  return (
+    <>
+      {viewModel.projects.flatMap((group) => {
+        const loading = homeLoadPending.projects[group.workspace.id] === true;
+        const rows = [
+          <ProjectHeaderRow
+            key={`${group.workspace.id}-header`}
+            group={group}
+            iconColor={iconColor}
+            onToggle={() => toggleWorkspaceExpanded(group.workspace.id)}
+          />,
+        ];
+
+        if (group.expanded) {
+          rows.push(
+            ...group.visibleItems.map((thread) => (
+              <ProjectThreadRow
+                key={thread.id}
+                thread={thread}
+                onPress={() => {
+                  expandWorkspace(group.workspace.id);
+                  router.push(`/(app)/thread/${thread.id}` as const);
+                }}
+              />
+            )),
+          );
+
+          if (group.hiddenLoadedCount > 0 || group.canLoadMoreFromServer) {
+            rows.push(
+              <LoadMoreButton
+                key={`${group.workspace.id}-load-more`}
+                label={
+                  loading
+                    ? "Loading..."
+                    : group.hiddenLoadedCount > 0
+                      ? group.showAllThreads
+                        ? "Show less"
+                        : `Show ${group.hiddenLoadedCount} more`
+                      : "Load more"
+                }
+                accentColor={accentColor}
+                onPress={() => {
+                  if (group.hiddenLoadedCount > 0 && group.showAllThreads) {
+                    toggleProjectThreadListExpanded(group.workspace.id);
+                    return;
+                  }
+                  void loadMoreProject(group.workspace.id);
+                }}
+              />,
+            );
+          }
+        }
+
+        return rows;
+      })}
+    </>
+  );
+}
+
+function HomeSectionBlock({
+  section,
+  threadHome,
+  router,
+  accentColor,
+  iconColor,
+}: {
+  section: HomeSectionKey;
+  threadHome: ReturnType<typeof useThreadHome>;
+  router: ReturnType<typeof useRouter>;
+  accentColor: string;
+  iconColor: string;
+}) {
+  const { viewModel, setSectionOpen } = threadHome;
+  const title = section === "chats" ? "Chats" : "Projects";
+  const isOpen = viewModel.sectionsOpen[section];
+
+  return (
+    <DisclosureGroup
+      label={title}
+      isExpanded={isOpen}
+      onIsExpandedChange={(open) => setSectionOpen(section, open)}
+      modifiers={[tag(section)]}
+    >
+      {section === "chats" ? (
+        <ChatsSectionContent
+          threadHome={threadHome}
+          router={router}
+          accentColor={accentColor}
+          iconColor={iconColor}
+        />
+      ) : (
+        <ProjectsSectionContent
+          threadHome={threadHome}
+          router={router}
+          accentColor={accentColor}
+          iconColor={iconColor}
+        />
+      )}
+    </DisclosureGroup>
   );
 }
 
@@ -265,7 +320,14 @@ export function ThreadHomeScreen() {
   const theme = useAppTheme();
   const router = useRouter();
   const threadHome = useThreadHome();
-  const { viewModel, setSearchQuery } = threadHome;
+  const { viewModel, setSearchQuery, reorderSections } = threadHome;
+
+  const handleSectionMove = useCallback(
+    (sourceIndices: number[], destination: number) => {
+      reorderSections(sourceIndices[0] ?? 0, destination);
+    },
+    [reorderSections],
+  );
 
   return (
     <Fragment>
@@ -303,20 +365,28 @@ export function ThreadHomeScreen() {
             listStyle("insetGrouped"),
             tint(theme.primary),
             listRowSeparator("automatic"),
+            environment("editMode", "active"),
           ]}
         >
           {viewModel.isEmpty ? (
-            <Section>
-              <Text modifiers={[foregroundStyle("secondary")]}>
-                {viewModel.searchQuery
-                  ? "No thread matches the current search."
-                  : "Threads will appear here when you start a conversation."}
-              </Text>
-            </Section>
+            <Text modifiers={[foregroundStyle("secondary"), listRowInsets({ leading: 16 })]}>
+              {viewModel.searchQuery
+                ? "No thread matches the current search."
+                : "Threads will appear here when you start a conversation."}
+            </Text>
           ) : (
-            viewModel.sectionOrder.map((section) =>
-              renderIosSection(section, { ...threadHome, router }, theme.textSecondary),
-            )
+            <List.ForEach onMove={handleSectionMove}>
+              {viewModel.sectionOrder.map((section) => (
+                <HomeSectionBlock
+                  key={section}
+                  section={section}
+                  threadHome={threadHome}
+                  router={router}
+                  accentColor={theme.primary}
+                  iconColor={theme.textSecondary}
+                />
+              ))}
+            </List.ForEach>
           )}
         </List>
       </Host>

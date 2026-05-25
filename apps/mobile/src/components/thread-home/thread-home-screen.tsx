@@ -41,57 +41,38 @@ function SectionToggle({
   title,
   open,
   onToggle,
-  onReorder,
 }: {
   title: string;
   open: boolean;
   onToggle: () => void;
-  onReorder: () => void;
 }) {
   const theme = useAppTheme();
   return (
-    <View
-      style={{
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "space-between",
-        paddingHorizontal: 4,
+    <Pressable
+      onPress={() => {
+        animateListChange();
+        onToggle();
       }}
+      style={{ flexDirection: "row", alignItems: "center", gap: 6, flex: 1 }}
     >
-      <Pressable
-        onPress={() => {
-          animateListChange();
-          onToggle();
+      <SFSymbol
+        name="chevron.right"
+        size={12}
+        color={theme.textTertiary}
+        style={{ transform: [{ rotate: open ? "90deg" : "0deg" }] }}
+      />
+      <Text
+        style={{
+          color: theme.textSecondary,
+          fontSize: 13,
+          fontWeight: "400",
+          textTransform: "uppercase",
+          letterSpacing: 0.2,
         }}
-        style={{ flexDirection: "row", alignItems: "center", gap: 6, flex: 1 }}
       >
-        <SFSymbol
-          name="chevron.right"
-          size={12}
-          color={theme.textTertiary}
-          style={{ transform: [{ rotate: open ? "90deg" : "0deg" }] }}
-        />
-        <Text
-          style={{
-            color: theme.textSecondary,
-            fontSize: 13,
-            fontWeight: "400",
-            textTransform: "uppercase",
-            letterSpacing: 0.2,
-          }}
-        >
-          {title}
-        </Text>
-      </Pressable>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={`Move ${title} section`}
-        onPress={onReorder}
-        hitSlop={8}
-      >
-        <SFSymbol name="arrow.up.arrow.down" size={14} color={theme.textTertiary} />
-      </Pressable>
-    </View>
+        {title}
+      </Text>
+    </Pressable>
   );
 }
 
@@ -352,7 +333,7 @@ function renderSection(
   section: HomeSectionKey,
   props: ReturnType<typeof useThreadHome> & { router: ReturnType<typeof useRouter> },
 ) {
-  const { viewModel, homeLoadPending, toggleSection, toggleSectionOrder, loadMoreChats, loadMoreProject, toggleWorkspaceExpanded, expandWorkspace, toggleShowAllChats, router } =
+  const { viewModel, homeLoadPending, toggleSection, loadMoreChats, loadMoreProject, toggleWorkspaceExpanded, expandWorkspace, toggleShowAllChats, router } =
     props;
 
   if (section === "chats") {
@@ -365,7 +346,6 @@ function renderSection(
             title="Chats"
             open={viewModel.sectionsOpen.chats}
             onToggle={() => toggleSection("chats")}
-            onReorder={toggleSectionOrder}
           />
         }
       >
@@ -423,7 +403,6 @@ function renderSection(
           title="Projects"
           open={viewModel.sectionsOpen.projects}
           onToggle={() => toggleSection("projects")}
-          onReorder={toggleSectionOrder}
         />
       }
     >

@@ -110,6 +110,7 @@ type ThreadStoreState = {
   expandWorkspace(workspaceId: string): void;
   toggleWorkspaceExpanded(workspaceId: string): void;
   toggleSectionOpen(section: HomeSectionKey): void;
+  setSectionOpen(section: HomeSectionKey, open: boolean): void;
   setSectionOrder(order: HomeSectionKey[]): void;
   toggleSectionOrder(): void;
   toggleShowAllChats(): void;
@@ -818,6 +819,15 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
       sectionsOpen: {
         ...state.sectionsOpen,
         [section]: !state.sectionsOpen[section],
+      },
+    }));
+    scheduleThreadCachePersist(get);
+  },
+  setSectionOpen(section, open) {
+    set((state) => ({
+      sectionsOpen: {
+        ...state.sectionsOpen,
+        [section]: open,
       },
     }));
     scheduleThreadCachePersist(get);

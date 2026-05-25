@@ -236,3 +236,19 @@ export function toggleHomeSectionOrder(current: HomeSectionKey[]): HomeSectionKe
   const normalized = normalizeHomeSectionOrder(current);
   return normalized[0] === "chats" ? ["projects", "chats"] : ["chats", "projects"];
 }
+
+export function reorderHomeSections(
+  current: HomeSectionKey[],
+  sourceIndex: number,
+  destination: number,
+): HomeSectionKey[] {
+  const normalized = normalizeHomeSectionOrder(current);
+  const next = [...normalized];
+  const [removed] = next.splice(sourceIndex, 1);
+  if (!removed) {
+    return normalized;
+  }
+  const adjustedDestination = sourceIndex < destination ? destination - 1 : destination;
+  next.splice(adjustedDestination, 0, removed);
+  return normalizeHomeSectionOrder(next);
+}

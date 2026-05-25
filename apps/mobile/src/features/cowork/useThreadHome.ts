@@ -12,6 +12,7 @@ import {
   buildThreadHomeViewModel,
   defaultThreadHomeUiState,
   type HomeSectionKey,
+  reorderHomeSections,
 } from "./threadHomeModel";
 import { useThreadStore } from "./threadStore";
 import { useWorkspaceStore } from "./workspaceStore";
@@ -32,7 +33,8 @@ export function useThreadHome() {
   const homeLoadPending = useThreadStore((state) => state.homeLoadPending);
   const syncRemoteThreads = useThreadStore((state) => state.syncRemoteThreads);
   const toggleSectionOpen = useThreadStore((state) => state.toggleSectionOpen);
-  const toggleSectionOrder = useThreadStore((state) => state.toggleSectionOrder);
+  const setSectionOpen = useThreadStore((state) => state.setSectionOpen);
+  const setSectionOrder = useThreadStore((state) => state.setSectionOrder);
   const toggleShowAllChats = useThreadStore((state) => state.toggleShowAllChats);
   const toggleWorkspaceExpanded = useThreadStore((state) => state.toggleWorkspaceExpanded);
   const toggleProjectThreadListExpanded = useThreadStore(
@@ -194,13 +196,21 @@ export function useThreadHome() {
     [toggleSectionOpen],
   );
 
+  const reorderSections = useCallback(
+    (sourceIndex: number, destination: number) => {
+      setSectionOrder(reorderHomeSections(sectionOrder, sourceIndex, destination));
+    },
+    [sectionOrder, setSectionOrder],
+  );
+
   return {
     viewModel,
     searchQuery,
     setSearchQuery,
     homeLoadPending,
     toggleSection,
-    toggleSectionOrder,
+    setSectionOpen,
+    reorderSections,
     toggleWorkspaceExpanded,
     expandWorkspace,
     loadMoreChats,

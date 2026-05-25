@@ -9,7 +9,7 @@
         "@expo/vector-icons": "^15.1.1",
         "@tanstack/react-query": "^5.100.13",
         "clsx": "^2.1.1",
-        "commander": "^7.2.0",
+        "commander": "7.2.0",
         "expo": "~56.0.4",
         "expo-camera": "~56.0.7",
         "expo-constants": "~56.0.15",

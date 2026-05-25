@@ -1,4 +1,4 @@
-import { Link, Stack, useRouter } from "expo-router";
+import { Stack, useRouter } from "expo-router";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import {
   LayoutAnimation,
@@ -15,7 +15,7 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 
-import { HeaderGlassButton, HeaderGlassMenu } from "@/components/ui/header-glass-button";
+
 import { Screen } from "@/components/ui/screen";
 import { SFSymbol } from "@/components/ui/sf-symbol";
 import { useThreadStore, type MobileThreadSummary } from "@/features/cowork/threadStore";
@@ -377,38 +377,21 @@ export default function ThreadsScreen() {
             onChangeText: (event) => setSearchQuery(event.nativeEvent.text),
             onCancelButtonPress: () => setSearchQuery(""),
           },
-          headerLeft: () => (
-            <>
-              {Platform.OS === "ios" ? (
-                <HeaderGlassMenu
-                  icon="ellipsis"
-                  actions={SETTINGS_ACTIONS.map((action) => ({
-                    title: action.title,
-                    icon: action.icon,
-                    onPress: () => router.push(action.href),
-                  }))}
-                />
-              ) : (
-                <Link href="/(app)/(tabs)/threads" asChild>
-                  <Link.Trigger>
-                    <HeaderGlassButton icon="ellipsis" accessibilityLabel="Open menu" />
-                  </Link.Trigger>
-                  <Link.Menu>
-                    {SETTINGS_ACTIONS.map((action) => (
-                      <Link.MenuAction
-                        key={action.title}
-                        title={action.title}
-                        icon={action.icon}
-                        onPress={() => router.push(action.href)}
-                      />
-                    ))}
-                  </Link.Menu>
-                </Link>
-              )}
-            </>
-          ),
         }}
       />
+      <Stack.Toolbar placement="left">
+        <Stack.Toolbar.Menu icon="ellipsis" accessibilityLabel="Open menu">
+          {SETTINGS_ACTIONS.map((action) => (
+            <Stack.Toolbar.MenuAction
+              key={action.title}
+              icon={action.icon}
+              onPress={() => router.push(action.href)}
+            >
+              {action.title}
+            </Stack.Toolbar.MenuAction>
+          ))}
+        </Stack.Toolbar.Menu>
+      </Stack.Toolbar>
       <Screen scroll contentStyle={{ paddingHorizontal: 0, paddingTop: 0, gap: 0 }}>
         {chats.length === 0 && projects.length === 0 ? (
           <Text

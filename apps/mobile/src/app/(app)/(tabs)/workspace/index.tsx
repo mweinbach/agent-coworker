@@ -1,9 +1,8 @@
-import { Link, Stack, useRouter } from "expo-router";
+import { Stack, useRouter } from "expo-router";
 import { useState } from "react";
-import { Platform, Pressable, Text, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
 
 import { AppButton } from "@/components/ui/app-button";
-import { HeaderGlassButton, HeaderGlassMenu } from "@/components/ui/header-glass-button";
 import { HubLinkRow } from "@/components/ui/hub-link-row";
 import { Screen } from "@/components/ui/screen";
 import { SectionCard } from "@/components/ui/section-card";
@@ -69,57 +68,30 @@ export default function WorkspaceHubScreen() {
         options={{
           title: "Cowork Mobile",
           headerLeft: () => undefined,
-          headerRight: () => (
-            <>
-              {Platform.OS === "ios" ? (
-                <HeaderGlassMenu
-                  icon="ellipsis"
-                  actions={[
-                    {
-                      title: "Threads",
-                      icon: "bubble.left.and.bubble.right",
-                      onPress: () => router.push("/(app)/(tabs)/threads"),
-                    },
-                    {
-                      title: "Skills",
-                      icon: "sparkles",
-                      onPress: () => router.push("/(app)/(tabs)/skills"),
-                    },
-                    {
-                      title: "Settings",
-                      icon: "slider.horizontal.3",
-                      onPress: () => router.push("/(app)/settings"),
-                    },
-                  ]}
-                />
-              ) : (
-                <Link href="/(app)/(tabs)/workspace" asChild>
-                  <Link.Trigger>
-                    <HeaderGlassButton icon="ellipsis" accessibilityLabel="Open workspace menu" />
-                  </Link.Trigger>
-                  <Link.Menu>
-                    <Link.MenuAction
-                      title="Threads"
-                      icon="bubble.left.and.bubble.right"
-                      onPress={() => router.push("/(app)/(tabs)/threads")}
-                    />
-                    <Link.MenuAction
-                      title="Skills"
-                      icon="sparkles"
-                      onPress={() => router.push("/(app)/(tabs)/skills")}
-                    />
-                    <Link.MenuAction
-                      title="Settings"
-                      icon="slider.horizontal.3"
-                      onPress={() => router.push("/(app)/settings")}
-                    />
-                  </Link.Menu>
-                </Link>
-              )}
-            </>
-          ),
         }}
       />
+      <Stack.Toolbar placement="right">
+        <Stack.Toolbar.Menu icon="ellipsis" accessibilityLabel="Open workspace menu">
+          <Stack.Toolbar.MenuAction
+            icon="bubble.left.and.bubble.right"
+            onPress={() => router.push("/(app)/(tabs)/threads")}
+          >
+            Threads
+          </Stack.Toolbar.MenuAction>
+          <Stack.Toolbar.MenuAction
+            icon="sparkles"
+            onPress={() => router.push("/(app)/(tabs)/skills")}
+          >
+            Skills
+          </Stack.Toolbar.MenuAction>
+          <Stack.Toolbar.MenuAction
+            icon="slider.horizontal.3"
+            onPress={() => router.push("/(app)/settings")}
+          >
+            Settings
+          </Stack.Toolbar.MenuAction>
+        </Stack.Toolbar.Menu>
+      </Stack.Toolbar>
       <Screen scroll contentStyle={{ gap: 16 }}>
         <View
           style={{

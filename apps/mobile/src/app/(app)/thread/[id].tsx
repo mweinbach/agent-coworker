@@ -7,7 +7,6 @@ import { ComposerBar } from "@/components/ComposerBar";
 import { PendingRequestCard } from "@/components/thread/pending-request-card";
 import { ThreadRenderItem } from "@/components/thread/thread-render-item";
 import { Screen } from "@/components/ui/screen";
-import { HeaderGlassButton } from "@/components/ui/header-glass-button";
 import { StatusPill } from "@/components/ui/status-pill";
 import { buildChatRenderItems, type ChatRenderItem } from "@/features/cowork/activityGroups";
 import { filterFeedForDisplay } from "@/features/cowork/feedDisplay";
@@ -145,29 +144,27 @@ export default function ThreadDetailScreen() {
       <Stack.Screen
         options={{
           title: activeThread.title,
-          headerRight: () => (
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-              {activePendingRequest ? (
-                <HeaderGlassButton
-                  icon="xmark.circle.fill"
-                  accessibilityLabel="Stop turn"
-                  onPress={() => {
-                    void interruptCurrentThread();
-                  }}
-                />
-              ) : (
-                <HeaderGlassButton
-                  icon="ellipsis"
-                  accessibilityLabel="Thread options"
-                  onPress={() => {
-                    /* open overflow */
-                  }}
-                />
-              )}
-            </View>
-          ),
         }}
       />
+      <Stack.Toolbar placement="right">
+        {activePendingRequest ? (
+          <Stack.Toolbar.Button
+            icon="xmark.circle.fill"
+            accessibilityLabel="Stop turn"
+            onPress={() => {
+              void interruptCurrentThread();
+            }}
+          />
+        ) : (
+          <Stack.Toolbar.Button
+            icon="ellipsis"
+            accessibilityLabel="Thread options"
+            onPress={() => {
+              /* open overflow */
+            }}
+          />
+        )}
+      </Stack.Toolbar>
       <KeyboardAvoidingView
         style={{ flex: 1, backgroundColor: theme.background, position: "relative" }}
         behavior={process.env.EXPO_OS === "ios" ? "padding" : undefined}

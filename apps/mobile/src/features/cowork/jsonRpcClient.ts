@@ -376,6 +376,8 @@ export class CoworkJsonRpcClient {
     limit?: number,
     offset?: number,
   ): Promise<CoworkThreadListResult> {
+    const initializing = this.ensureInitialized();
+    if (initializing) await initializing;
     const params: Record<string, unknown> = {};
     if (cwd) {
       params.cwd = cwd;
@@ -522,6 +524,10 @@ export class CoworkJsonRpcClient {
       }, this.requestTimeoutMs);
       this.pending.set(id, { resolve, reject, timeoutHandle });
     });
+    // `sendTransport` can be slow or stall while the timeout rejects this promise.
+    // Attach a handler immediately so React Native does not surface the expected
+    // bootstrap retry as an uncaught promise before this method reaches `await promise`.
+    promise.catch(() => {});
     try {
       await this.sendTransport(
         JSON.stringify({

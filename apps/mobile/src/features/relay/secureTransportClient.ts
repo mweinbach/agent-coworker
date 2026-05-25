@@ -15,7 +15,8 @@ const SIMULATOR_ENDPOINT_FALLBACK_HOSTS = ["127.0.0.1", "localhost", "10.0.2.2"]
 const DEFAULT_RECONNECT_BASE_DELAY_MS = 500;
 const DEFAULT_RECONNECT_MAX_DELAY_MS = 30_000;
 const DEFAULT_MAX_RECONNECT_ATTEMPTS = 12;
-const DESKTOP_IDENTITY_CHANGED_ERROR =
+const DEFAULT_MAX_CONSECUTIVE_REQUEST_FAILURES = 2;
+export const DESKTOP_IDENTITY_CHANGED_ERROR =
   "Cowork Desktop restarted or rotated its certificate. Scan the QR code again to reconnect.";
 
 function sessionTokenKey(macDeviceId: string): string {
@@ -81,6 +82,7 @@ type SecureTransportClientOptions = {
   reconnectBaseDelayMs?: number;
   reconnectMaxDelayMs?: number;
   maxReconnectAttempts?: number;
+  maxConsecutiveRequestFailures?: number;
 };
 
 let secureStorePromise: Promise<SecureStoreModule> | null = null;
@@ -200,10 +202,12 @@ export class SecureTransportClient {
   private eventAbortController: AbortController | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempt = 0;
+  private consecutiveRequestFailures = 0;
   private activeSessionRestoreBlocked = false;
   private readonly reconnectBaseDelayMs: number;
   private readonly reconnectMaxDelayMs: number;
   private readonly maxReconnectAttempts: number;
+  private readonly maxConsecutiveRequestFailures: number;
 
   constructor(options: SecureTransportClientOptions = {}) {
     this.reconnectBaseDelayMs = Math.max(
@@ -217,6 +221,10 @@ export class SecureTransportClient {
     this.maxReconnectAttempts = Math.max(
       1,
       options.maxReconnectAttempts ?? DEFAULT_MAX_RECONNECT_ATTEMPTS,
+    );
+    this.maxConsecutiveRequestFailures = Math.max(
+      1,
+      options.maxConsecutiveRequestFailures ?? DEFAULT_MAX_CONSECUTIVE_REQUEST_FAILURES,
     );
   }
 
@@ -303,6 +311,7 @@ export class SecureTransportClient {
       await this.persistTrustedState();
       this.openEventStream();
       this.reconnectAttempt = 0;
+      this.consecutiveRequestFailures = 0;
       return this.setConnectionStatus("connected");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -339,6 +348,7 @@ export class SecureTransportClient {
     await this.persistTrustedState();
     this.openEventStream();
     this.reconnectAttempt = 0;
+    this.consecutiveRequestFailures = 0;
     return this.setConnectionStatus("connected");
   }
 
@@ -350,6 +360,7 @@ export class SecureTransportClient {
     this.activeSession = null;
     this.activeSessionRestoreBlocked = true;
     this.reconnectAttempt = 0;
+    this.consecutiveRequestFailures = 0;
     this.lastError = null;
     await this.persistTrustedState();
     this.activeSessionRestoreBlocked = false;
@@ -384,21 +395,28 @@ export class SecureTransportClient {
     if (!this.activeSession) {
       throw new Error("No active desktop connection.");
     }
-    const response = await fetchPinnedHttps({
-      url: `${this.activeSession.endpointUrl}/rpc`,
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${this.activeSession.sessionToken}`,
-        [MOBILE_DEVICE_ID_HEADER]: this.activeSession.mobileDeviceId,
-        "content-type": "application/json",
-      },
-      body: text,
-      certSha256: this.activeSession.certSha256,
-      spkiSha256: this.activeSession.spkiSha256,
-    });
+    let response: PinnedHttpsResponse;
+    try {
+      response = await fetchPinnedHttps({
+        url: `${this.activeSession.endpointUrl}/rpc`,
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${this.activeSession.sessionToken}`,
+          [MOBILE_DEVICE_ID_HEADER]: this.activeSession.mobileDeviceId,
+          "content-type": "application/json",
+        },
+        body: text,
+        certSha256: this.activeSession.certSha256,
+        spkiSha256: this.activeSession.spkiSha256,
+      });
+    } catch (error) {
+      this.handleRequestFailure(error);
+      throw error;
+    }
     if (!response.ok) {
       throw new Error(`Desktop request failed with HTTP ${response.status}.`);
     }
+    this.consecutiveRequestFailures = 0;
     const responseText = await response.text();
     if (isJsonRpcTransportAck(responseText)) {
       return;
@@ -408,6 +426,32 @@ export class SecureTransportClient {
         listener(responseText);
       }
     }
+  }
+
+  private handleRequestFailure(error: unknown): void {
+    if (!this.activeSession) {
+      return;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    if (!isRepinRequiredError(message)) {
+      return;
+    }
+    this.consecutiveRequestFailures += 1;
+    if (this.consecutiveRequestFailures < this.maxConsecutiveRequestFailures) {
+      return;
+    }
+    this.consecutiveRequestFailures = 0;
+    this.clearReconnectTimer();
+    this.eventAbortController?.abort();
+    this.eventAbortController = null;
+    this.activeSession = null;
+    this.activeSessionRestoreBlocked = true;
+    this.lastError = DESKTOP_IDENTITY_CHANGED_ERROR;
+    this.emitSecureError(DESKTOP_IDENTITY_CHANGED_ERROR);
+    void this.persistTrustedState().catch((cause) => {
+      this.lastError = cause instanceof Error ? cause.message : String(cause);
+    });
+    this.setConnectionStatus("error");
   }
 
   subscribe(events: SecureTransportClientEvents): () => void {

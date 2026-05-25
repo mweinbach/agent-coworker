@@ -1,14 +1,25 @@
-import type { PropsWithChildren, ReactNode } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, View, type StyleProp, type ViewStyle } from "react-native";
+import type { PropsWithChildren, ReactElement } from "react";
+import type { ReactNode } from "react";
+import {
+  Pressable,
+  type RefreshControlProps,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+  type StyleProp,
+  type ViewStyle,
+} from "react-native";
 import Swipeable from "react-native-gesture-handler/Swipeable";
 
 import { useAppTheme } from "@/theme/use-app-theme";
 
 type GroupedScreenProps = PropsWithChildren<{
   contentStyle?: StyleProp<ViewStyle>;
+  refreshControl?: ReactElement<RefreshControlProps>;
 }>;
 
-export function GroupedScreen({ children, contentStyle }: GroupedScreenProps) {
+export function GroupedScreen({ children, contentStyle, refreshControl }: GroupedScreenProps) {
   const theme = useAppTheme();
 
   return (
@@ -18,6 +29,7 @@ export function GroupedScreen({ children, contentStyle }: GroupedScreenProps) {
       contentInsetAdjustmentBehavior="automatic"
       keyboardShouldPersistTaps="handled"
       showsVerticalScrollIndicator={false}
+      refreshControl={refreshControl}
     >
       {children}
     </ScrollView>

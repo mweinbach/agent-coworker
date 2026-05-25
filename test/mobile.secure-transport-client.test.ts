@@ -779,6 +779,114 @@ describe("mobile secure transport client", () => {
     });
   });
 
+  test("clears the active session after consecutive sendPlaintext repin-required failures", async () => {
+    const stateChanges: Array<{ status: string; lastError: string | null }> = [];
+    let pairing = true;
+    __internal.setPinnedHttpsFetchForTesting(
+      mock(async (request: { url: string }) => {
+        if (pairing && request.url.endsWith("/pair")) {
+          return Response.json({ sessionToken: "session-token" }) as unknown as Response;
+        }
+        if (request.url.endsWith("/events")) {
+          return await new Promise<Response>(() => {});
+        }
+        if (request.url.endsWith("/rpc")) {
+          throw new Error("Network request failed: Could not connect to the server");
+        }
+        return new Response("", { status: 404 });
+      }) as never,
+    );
+
+    const client = new SecureTransportClient({ maxConsecutiveRequestFailures: 2 });
+    client.subscribe({
+      onStateChanged: (snapshot) =>
+        stateChanges.push({ status: snapshot.status, lastError: snapshot.lastError }),
+    });
+
+    await client.connectFromQrPayload(buildPayload({ hosts: ["192.168.1.10"] }));
+    pairing = false;
+
+    await expect(client.sendPlaintext("{}")).rejects.toThrow(/Could not connect/);
+    expect((await client.getSnapshot()).status).toBe("connected");
+
+    await expect(client.sendPlaintext("{}")).rejects.toThrow(/Could not connect/);
+
+    const snapshot = await client.getSnapshot();
+    expect(snapshot).toMatchObject({
+      status: "error",
+      connectedMacDeviceId: null,
+      lastError: expect.stringContaining("Scan the QR code again"),
+    });
+    expect(
+      stateChanges.some(
+        (change) =>
+          change.status === "error" && change.lastError?.includes("Scan the QR code again"),
+      ),
+    ).toBe(true);
+  });
+
+  test("does not clear the active session on transient non-repin sendPlaintext failures", async () => {
+    let pairing = true;
+    __internal.setPinnedHttpsFetchForTesting(
+      mock(async (request: { url: string }) => {
+        if (pairing && request.url.endsWith("/pair")) {
+          return Response.json({ sessionToken: "session-token" }) as unknown as Response;
+        }
+        if (request.url.endsWith("/events")) {
+          return await new Promise<Response>(() => {});
+        }
+        if (request.url.endsWith("/rpc")) {
+          return new Response("error", { status: 500 });
+        }
+        return new Response("", { status: 404 });
+      }) as never,
+    );
+
+    const client = new SecureTransportClient({ maxConsecutiveRequestFailures: 2 });
+    await client.connectFromQrPayload(buildPayload({ hosts: ["192.168.1.10"] }));
+    pairing = false;
+
+    await expect(client.sendPlaintext("{}")).rejects.toThrow(/HTTP 500/);
+    await expect(client.sendPlaintext("{}")).rejects.toThrow(/HTTP 500/);
+    await expect(client.sendPlaintext("{}")).rejects.toThrow(/HTTP 500/);
+
+    expect((await client.getSnapshot()).status).toBe("connected");
+  });
+
+  test("resets the sendPlaintext failure counter on a successful round-trip", async () => {
+    let pairing = true;
+    let rpcShouldFail = true;
+    __internal.setPinnedHttpsFetchForTesting(
+      mock(async (request: { url: string }) => {
+        if (pairing && request.url.endsWith("/pair")) {
+          return Response.json({ sessionToken: "session-token" }) as unknown as Response;
+        }
+        if (request.url.endsWith("/events")) {
+          return await new Promise<Response>(() => {});
+        }
+        if (request.url.endsWith("/rpc")) {
+          if (rpcShouldFail) {
+            throw new Error("Network request failed: Could not connect to the server");
+          }
+          return new Response("", { status: 200 });
+        }
+        return new Response("", { status: 404 });
+      }) as never,
+    );
+
+    const client = new SecureTransportClient({ maxConsecutiveRequestFailures: 2 });
+    await client.connectFromQrPayload(buildPayload({ hosts: ["192.168.1.10"] }));
+    pairing = false;
+
+    await expect(client.sendPlaintext("{}")).rejects.toThrow(/Could not connect/);
+    rpcShouldFail = false;
+    await client.sendPlaintext("{}");
+    rpcShouldFail = true;
+    await expect(client.sendPlaintext("{}")).rejects.toThrow(/Could not connect/);
+
+    expect((await client.getSnapshot()).status).toBe("connected");
+  });
+
   test("restores active sessions from trusted desktop records instead of stored endpoint details", async () => {
     const streamRequests: Array<{
       url: string;

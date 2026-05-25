@@ -1,14 +1,65 @@
 import { describe, expect, test } from "bun:test";
 
+import type { CoworkJsonRpcClient } from "../apps/mobile/src/features/cowork/jsonRpcClient";
+import type { CoworkThread, WorkspaceSummary } from "../apps/mobile/src/features/cowork/protocolTypes";
 import {
   buildRemoteThreadLoadPlan,
   buildWorkspaceLookup,
   loadBoundedRemoteThreads,
+  loadMoreOneOffChatWorkspaces,
+  loadRemoteThreadsFromPlan,
   ONE_OFF_CHAT_WORKSPACE_LIMIT,
   PROJECT_THREAD_LIMIT,
 } from "../apps/mobile/src/features/cowork/remoteThreadBootstrap";
-import type { WorkspaceSummary } from "../apps/mobile/src/features/cowork/protocolTypes";
 import { useThreadStore } from "../apps/mobile/src/features/cowork/threadStore";
+
+function makeThread(id: string, cwd: string): CoworkThread {
+  const now = new Date().toISOString();
+  return {
+    id,
+    title: id,
+    preview: "",
+    modelProvider: "opencode",
+    model: "remote",
+    cwd,
+    createdAt: now,
+    updatedAt: now,
+    messageCount: 0,
+    lastEventSeq: 0,
+    status: { type: "idle" },
+  };
+}
+
+function makeWorkspace(
+  id: string,
+  path: string,
+  kind: WorkspaceSummary["workspaceKind"] = "oneOffChat",
+): WorkspaceSummary {
+  return {
+    id,
+    name: id,
+    path,
+    workspaceKind: kind,
+  };
+}
+
+function createStubClient(
+  responses: Record<string, () => Promise<{ threads: CoworkThread[]; total: number }>>,
+) {
+  const calls: Array<{ cwd: string; ts: number }> = [];
+  const client = {
+    async requestThreadList(cwd?: string) {
+      const path = cwd ?? "";
+      calls.push({ cwd: path, ts: Date.now() });
+      const responder = responses[path];
+      if (!responder) {
+        throw new Error(`unexpected requestThreadList for ${path}`);
+      }
+      return await responder();
+    },
+  } as unknown as Pick<CoworkJsonRpcClient, "requestThreadList">;
+  return { client, calls };
+}
 
 describe("mobile remote thread bootstrap", () => {
   test("buildRemoteThreadLoadPlan requests projects first with limits, then one-off chats", () => {
@@ -117,6 +168,93 @@ describe("mobile remote thread bootstrap", () => {
     ]);
     expect(loaded.threads.map((thread) => thread.id)).toEqual(["thread:/tmp/project-b"]);
     expect(loaded.totalsByWorkspaceId).toEqual({ "project-b": 1 });
+  });
+
+  test("loadRemoteThreadsFromPlan runs requests in parallel rather than sequentially", async () => {
+    const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+    const { client } = createStubClient({
+      "/a": async () => {
+        await delay(50);
+        return { threads: [makeThread("t-a", "/a")], total: 1 };
+      },
+      "/b": async () => {
+        await delay(50);
+        return { threads: [makeThread("t-b", "/b")], total: 1 };
+      },
+      "/c": async () => {
+        await delay(50);
+        return { threads: [makeThread("t-c", "/c")], total: 1 };
+      },
+    });
+
+    const start = Date.now();
+    const result = await loadRemoteThreadsFromPlan(client, [
+      { cwd: "/a", workspaceId: "a" },
+      { cwd: "/b", workspaceId: "b" },
+      { cwd: "/c", workspaceId: "c" },
+    ]);
+    const elapsed = Date.now() - start;
+
+    expect(result.threads.map((t) => t.id).sort()).toEqual(["t-a", "t-b", "t-c"]);
+    expect(elapsed).toBeLessThan(150);
+  });
+
+  test("loadRemoteThreadsFromPlan returns partial results when some entries fail", async () => {
+    const { client } = createStubClient({
+      "/ok": async () => ({ threads: [makeThread("t-ok", "/ok")], total: 1 }),
+      "/bad": async () => {
+        throw new Error("offline");
+      },
+    });
+
+    const result = await loadRemoteThreadsFromPlan(client, [
+      { cwd: "/ok", workspaceId: "ok" },
+      { cwd: "/bad", workspaceId: "bad" },
+    ]);
+
+    expect(result.threads.map((t) => t.id)).toEqual(["t-ok"]);
+    expect(result.totalsByWorkspaceId).toEqual({ ok: 1 });
+  });
+
+  test("loadRemoteThreadsFromPlan throws when every non-empty plan entry fails", async () => {
+    const { client } = createStubClient({
+      "/bad-1": async () => {
+        throw new Error("timeout");
+      },
+      "/bad-2": async () => {
+        throw new Error("timeout");
+      },
+    });
+
+    await expect(
+      loadRemoteThreadsFromPlan(client, [
+        { cwd: "/bad-1", workspaceId: "1" },
+        { cwd: "/bad-2", workspaceId: "2" },
+      ]),
+    ).rejects.toThrow();
+  });
+
+  test("loadRemoteThreadsFromPlan returns empty results without throwing for empty plans", async () => {
+    const { client } = createStubClient({});
+    const result = await loadRemoteThreadsFromPlan(client, []);
+    expect(result.threads).toEqual([]);
+    expect(result.totalsByWorkspaceId).toEqual({});
+  });
+
+  test("loadMoreOneOffChatWorkspaces propagates load errors instead of resolving with empty threads", async () => {
+    const { client } = createStubClient({
+      "/chat-1": async () => {
+        throw new Error("JSON-RPC request timed out: thread/list");
+      },
+      "/chat-2": async () => {
+        throw new Error("JSON-RPC request timed out: thread/list");
+      },
+    });
+    const workspaces = [
+      makeWorkspace("chat-1", "/chat-1"),
+      makeWorkspace("chat-2", "/chat-2"),
+    ];
+    await expect(loadMoreOneOffChatWorkspaces(client, workspaces, 0, 5)).rejects.toThrow();
   });
 });
 

@@ -189,6 +189,34 @@ export function useThreadHome() {
     workspaces,
   ]);
 
+  const refreshHome = useCallback(async () => {
+    const client = getActiveCoworkJsonRpcClient();
+    if (!client) {
+      throw new Error("Couldn't reach Cowork. Check that your desktop is online.");
+    }
+    const workspaceStore = useWorkspaceStore.getState();
+    await workspaceStore.fetchWorkspaces();
+    const wsError = useWorkspaceStore.getState().error;
+    if (wsError) {
+      throw new Error(wsError);
+    }
+    const freshWorkspaces = useWorkspaceStore.getState().workspaces;
+    if (freshWorkspaces.length === 0) {
+      return;
+    }
+    const loaded = await loadBoundedRemoteThreads(client, freshWorkspaces, {
+      oneOffChatWorkspaceLimit: oneOffChatWorkspaceLoadLimit,
+      projectThreadLimitsByWorkspaceId: projectThreadFetchLimits,
+    });
+    syncRemoteThreads(loaded.threads, buildWorkspaceLookup(freshWorkspaces));
+    setProjectThreadTotals(loaded.totalsByWorkspaceId);
+  }, [
+    oneOffChatWorkspaceLoadLimit,
+    projectThreadFetchLimits,
+    setProjectThreadTotals,
+    syncRemoteThreads,
+  ]);
+
   const toggleSection = useCallback(
     (section: HomeSectionKey) => {
       toggleSectionOpen(section);
@@ -216,6 +244,7 @@ export function useThreadHome() {
     loadMoreChats,
     loadMoreProject,
     refreshRemoteThreads,
+    refreshHome,
     toggleShowAllChats,
     toggleProjectThreadListExpanded,
   };

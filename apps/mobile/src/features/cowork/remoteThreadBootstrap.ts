@@ -73,22 +73,42 @@ export async function loadRemoteThreadsFromPlan(
   threads: CoworkThread[];
   totalsByWorkspaceId: Record<string, number>;
 }> {
+  if (plan.length === 0) {
+    return { threads: [], totalsByWorkspaceId: {} };
+  }
+
+  const settled = await Promise.allSettled(
+    plan.map(async (entry) => ({
+      entry,
+      result: await client.requestThreadList(entry.cwd, entry.limit, entry.offset),
+    })),
+  );
+
   const merged = new Map<string, CoworkThread>();
   const totalsByWorkspaceId: Record<string, number> = {};
+  let successCount = 0;
+  let lastError: unknown = null;
 
-  for (const entry of plan) {
-    let result: Awaited<ReturnType<ThreadListClient["requestThreadList"]>>;
-    try {
-      result = await client.requestThreadList(entry.cwd, entry.limit, entry.offset);
-    } catch {
+  for (const outcome of settled) {
+    if (outcome.status === "rejected") {
+      lastError = outcome.reason;
       continue;
     }
+    successCount += 1;
+    const { entry, result } = outcome.value;
     if (entry.workspaceId) {
       totalsByWorkspaceId[entry.workspaceId] = result.total;
     }
     for (const thread of result.threads) {
       merged.set(thread.id, thread);
     }
+  }
+
+  if (successCount === 0) {
+    const cause = lastError instanceof Error ? lastError : new Error(String(lastError));
+    throw new Error(`Failed to load any remote threads from plan: ${cause.message}`, {
+      cause,
+    });
   }
 
   return {

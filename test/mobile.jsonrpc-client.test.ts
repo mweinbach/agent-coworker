@@ -288,6 +288,83 @@ describe("mobile cowork jsonrpc client", () => {
     });
   });
 
+  test("requestThreadList initializes before sending thread/list", async () => {
+    const sent: string[] = [];
+    const client = new CoworkJsonRpcClient({
+      clientInfo: {
+        name: "cowork-mobile",
+        version: "0.1.0",
+      },
+      send(text) {
+        sent.push(text);
+      },
+    });
+
+    const listPromise = client.requestThreadList("/workspace", 5);
+    const initializePayload = JSON.parse(sent[0]!);
+    expect(initializePayload.method).toBe("initialize");
+    expect(sent).toHaveLength(1);
+
+    await client.handleIncoming(
+      JSON.stringify({
+        id: initializePayload.id,
+        result: {
+          protocolVersion: "0.1",
+          serverInfo: {
+            name: "cowork-server",
+            subprotocol: "cowork.jsonrpc.v1",
+          },
+          capabilities: {
+            experimentalApi: false,
+          },
+          transport: {
+            type: "websocket",
+            protocolMode: "jsonrpc",
+          },
+        },
+      }),
+    );
+
+    await waitForCondition(() => sent.length >= 3);
+    const initializedPayload = JSON.parse(sent[1]!);
+    const listPayload = JSON.parse(sent[2]!);
+    expect(initializedPayload.method).toBe("initialized");
+    expect(listPayload).toMatchObject({
+      method: "thread/list",
+      params: {
+        cwd: "/workspace",
+        limit: 5,
+      },
+    });
+
+    await client.handleIncoming(
+      JSON.stringify({
+        id: listPayload.id,
+        result: {
+          threads: [],
+          total: 0,
+        },
+      }),
+    );
+
+    await expect(listPromise).resolves.toEqual({ threads: [], total: 0 });
+  });
+
+  test("requestThreadList fails fast when initialize throws", async () => {
+    const client = new CoworkJsonRpcClient({
+      clientInfo: {
+        name: "cowork-mobile",
+        version: "0.1.0",
+      },
+      send() {
+        throw new Error("transport offline");
+      },
+      requestTimeoutMs: 60_000,
+    });
+
+    await expect(client.requestThreadList("/workspace")).rejects.toThrow("transport offline");
+  });
+
   test("resumeThread initializes before sending thread/resume", async () => {
     const sent: string[] = [];
     const client = new CoworkJsonRpcClient({
@@ -1185,6 +1262,38 @@ describe("mobile cowork jsonrpc client", () => {
 
     await expect(client.initialize()).rejects.toThrow("offline");
     expect((client as any).pending.size).toBe(0);
+  });
+
+  test("handles request timeout before a slow send completes", async () => {
+    const slowSend = createDeferred<void>();
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandled);
+
+    try {
+      const client = new CoworkJsonRpcClient({
+        clientInfo: {
+          name: "cowork-mobile",
+          version: "0.1.0",
+        },
+        send() {
+          return slowSend.promise;
+        },
+        requestTimeoutMs: 1,
+      });
+
+      const initialize = client.initialize();
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      slowSend.resolve();
+      await expect(initialize).rejects.toThrow("JSON-RPC request timed out: initialize");
+      await flushMicrotasks();
+      expect(unhandled).toEqual([]);
+      expect((client as any).pending.size).toBe(0);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
   });
 
   test("ignores malformed incoming payloads", async () => {

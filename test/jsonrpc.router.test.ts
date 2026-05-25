@@ -976,6 +976,7 @@ describe("JSON-RPC request router", () => {
         id: 100,
         result: {
           threads: [expect.objectContaining({ id: "thread-new" })],
+          total: 2,
         },
       },
     ]);
@@ -1047,6 +1048,7 @@ describe("JSON-RPC request router", () => {
         id: 101,
         result: {
           threads: [expect.objectContaining({ id: "thread-project-b", cwd: "/tmp/project-b" })],
+          total: 1,
         },
       },
     ]);

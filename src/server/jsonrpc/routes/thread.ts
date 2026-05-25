@@ -167,10 +167,17 @@ export function createThreadRouteHandlers(context: JsonRpcRouteContext): JsonRpc
       for (const runtime of context.threads.listLiveRoot({ cwd })) {
         threads.set(runtime.id, context.utils.buildThreadFromSession(runtime));
       }
+      const sorted = [...threads.values()].sort((left, right) =>
+        right.updatedAt.localeCompare(left.updatedAt),
+      );
+      const total = sorted.length;
+      const offset = parsed.data.offset ?? 0;
+      const limit = parsed.data.limit;
+      const paginated =
+        limit !== undefined ? sorted.slice(offset, offset + limit) : sorted.slice(offset);
       context.jsonrpc.sendResult(ws, message.id, {
-        threads: [...threads.values()]
-          .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
-          .slice(0, parsed.data.limit ?? undefined),
+        threads: paginated,
+        total,
       });
     },
 

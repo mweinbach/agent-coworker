@@ -112,6 +112,7 @@ export const jsonRpcThreadTurnRequestSchemas = {
     .object({
       cwd: nonEmptyTrimmedStringSchema.optional(),
       limit: z.number().int().positive().optional(),
+      offset: z.number().int().nonnegative().optional(),
     })
     .strict(),
   "thread/read": z
@@ -265,6 +266,7 @@ export const jsonRpcThreadTurnResultSchemas = {
   "thread/list": z
     .object({
       threads: z.array(jsonRpcThreadSchema),
+      total: z.number().int().nonnegative(),
     })
     .strict(),
   "thread/read": z

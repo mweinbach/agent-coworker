@@ -44,10 +44,10 @@ describe("mobile remote thread bootstrap", () => {
     ];
 
     expect(buildRemoteThreadLoadPlan(workspaces)).toEqual([
-      { cwd: "/tmp/project-a", limit: PROJECT_THREAD_LIMIT },
-      { cwd: "/tmp/project-b", limit: PROJECT_THREAD_LIMIT },
-      { cwd: "/tmp/chats/chat-1" },
-      { cwd: "/tmp/chats/chat-2" },
+      { cwd: "/tmp/project-a", workspaceId: "project-a", limit: PROJECT_THREAD_LIMIT },
+      { cwd: "/tmp/project-b", workspaceId: "project-b", limit: PROJECT_THREAD_LIMIT },
+      { cwd: "/tmp/chats/chat-1", workspaceId: "chat-1" },
+      { cwd: "/tmp/chats/chat-2", workspaceId: "chat-2" },
     ]);
   });
 
@@ -89,11 +89,12 @@ describe("mobile remote thread bootstrap", () => {
               status: { type: "loaded" as const },
             },
           ],
+          total: 1,
         };
       },
     };
 
-    const threads = await loadBoundedRemoteThreads(client, [
+    const loaded = await loadBoundedRemoteThreads(client, [
       {
         id: "project-a",
         name: "Project A",
@@ -114,7 +115,8 @@ describe("mobile remote thread bootstrap", () => {
       { cwd: "/tmp/project-a", limit: PROJECT_THREAD_LIMIT },
       { cwd: "/tmp/project-b", limit: PROJECT_THREAD_LIMIT },
     ]);
-    expect(threads.map((thread) => thread.id)).toEqual(["thread:/tmp/project-b"]);
+    expect(loaded.threads.map((thread) => thread.id)).toEqual(["thread:/tmp/project-b"]);
+    expect(loaded.totalsByWorkspaceId).toEqual({ "project-b": 1 });
   });
 });
 

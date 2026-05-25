@@ -1,10 +1,27 @@
 import type { CoworkJsonRpcClient } from "./jsonRpcClient";
 import type { CoworkThread, WorkspaceSummary } from "./protocolTypes";
+import {
+  ONE_OFF_CHAT_WORKSPACE_PAGE_SIZE,
+  PROJECT_THREAD_PAGE_SIZE,
+} from "./threadHomeModel";
 
-export const PROJECT_THREAD_LIMIT = 5;
-export const ONE_OFF_CHAT_WORKSPACE_LIMIT = 10;
+export const PROJECT_THREAD_LIMIT = PROJECT_THREAD_PAGE_SIZE;
+export const ONE_OFF_CHAT_WORKSPACE_LIMIT = ONE_OFF_CHAT_WORKSPACE_PAGE_SIZE;
 
 type ThreadListClient = Pick<CoworkJsonRpcClient, "requestThreadList">;
+
+export type RemoteThreadLoadEntry = {
+  cwd: string;
+  limit?: number;
+  offset?: number;
+  workspaceId?: string;
+};
+
+export type RemoteThreadLoadPlanOptions = {
+  projectThreadLimit?: number;
+  oneOffChatWorkspaceLimit?: number;
+  projectThreadLimitsByWorkspaceId?: Record<string, number>;
+};
 
 function sortWorkspacesByLastOpened(workspaces: WorkspaceSummary[]): WorkspaceSummary[] {
   return [...workspaces].sort((left, right) =>
@@ -20,46 +37,121 @@ export function buildWorkspaceLookup(workspaces: WorkspaceSummary[]): Map<string
   return lookup;
 }
 
-export async function loadBoundedRemoteThreads(
-  client: ThreadListClient,
+export function buildRemoteThreadLoadPlan(
   workspaces: WorkspaceSummary[],
-): Promise<CoworkThread[]> {
-  const merged = new Map<string, CoworkThread>();
+  options: RemoteThreadLoadPlanOptions = {},
+): RemoteThreadLoadEntry[] {
+  const projectThreadLimit = options.projectThreadLimit ?? PROJECT_THREAD_LIMIT;
+  const oneOffChatWorkspaceLimit =
+    options.oneOffChatWorkspaceLimit ?? ONE_OFF_CHAT_WORKSPACE_LIMIT;
+  const perProjectLimits = options.projectThreadLimitsByWorkspaceId ?? {};
 
-  for (const entry of buildRemoteThreadLoadPlan(workspaces)) {
+  const projectWorkspaces = sortWorkspacesByLastOpened(
+    workspaces.filter((workspace) => workspace.workspaceKind !== "oneOffChat"),
+  );
+  const oneOffWorkspaces = sortWorkspacesByLastOpened(
+    workspaces.filter((workspace) => workspace.workspaceKind === "oneOffChat"),
+  ).slice(0, oneOffChatWorkspaceLimit);
+
+  return [
+    ...projectWorkspaces.map((workspace) => ({
+      cwd: workspace.path,
+      workspaceId: workspace.id,
+      limit: perProjectLimits[workspace.id] ?? projectThreadLimit,
+    })),
+    ...oneOffWorkspaces.map((workspace) => ({
+      cwd: workspace.path,
+      workspaceId: workspace.id,
+    })),
+  ];
+}
+
+export async function loadRemoteThreadsFromPlan(
+  client: ThreadListClient,
+  plan: RemoteThreadLoadEntry[],
+): Promise<{
+  threads: CoworkThread[];
+  totalsByWorkspaceId: Record<string, number>;
+}> {
+  const merged = new Map<string, CoworkThread>();
+  const totalsByWorkspaceId: Record<string, number> = {};
+
+  for (const entry of plan) {
     let result: Awaited<ReturnType<ThreadListClient["requestThreadList"]>>;
     try {
-      result = await client.requestThreadList(entry.cwd, entry.limit);
+      result = await client.requestThreadList(entry.cwd, entry.limit, entry.offset);
     } catch {
-      // Keep hydrating the remaining workspaces; a stale catalog entry should not blank the list.
       continue;
+    }
+    if (entry.workspaceId) {
+      totalsByWorkspaceId[entry.workspaceId] = result.total;
     }
     for (const thread of result.threads) {
       merged.set(thread.id, thread);
     }
   }
 
-  return Array.from(merged.values());
+  return {
+    threads: Array.from(merged.values()),
+    totalsByWorkspaceId,
+  };
 }
 
-export function buildRemoteThreadLoadPlan(workspaces: WorkspaceSummary[]): Array<{
-  cwd: string;
-  limit?: number;
+export async function loadBoundedRemoteThreads(
+  client: ThreadListClient,
+  workspaces: WorkspaceSummary[],
+  options: RemoteThreadLoadPlanOptions = {},
+): Promise<{
+  threads: CoworkThread[];
+  totalsByWorkspaceId: Record<string, number>;
 }> {
-  const projectWorkspaces = sortWorkspacesByLastOpened(
-    workspaces.filter((workspace) => workspace.workspaceKind !== "oneOffChat"),
-  );
+  return loadRemoteThreadsFromPlan(client, buildRemoteThreadLoadPlan(workspaces, options));
+}
+
+export async function loadMoreProjectThreads(
+  client: ThreadListClient,
+  workspace: WorkspaceSummary,
+  currentLimit: number,
+  pageSize = PROJECT_THREAD_PAGE_SIZE,
+): Promise<{
+  threads: CoworkThread[];
+  total: number;
+  nextLimit: number;
+}> {
+  const nextLimit = currentLimit + pageSize;
+  const result = await client.requestThreadList(workspace.path, nextLimit, 0);
+  return {
+    threads: result.threads,
+    total: result.total,
+    nextLimit,
+  };
+}
+
+export async function loadMoreOneOffChatWorkspaces(
+  client: ThreadListClient,
+  workspaces: WorkspaceSummary[],
+  currentLimit: number,
+  pageSize = ONE_OFF_CHAT_WORKSPACE_LIMIT,
+): Promise<{
+  threads: CoworkThread[];
+  totalsByWorkspaceId: Record<string, number>;
+  nextLimit: number;
+}> {
+  const nextLimit = currentLimit + pageSize;
   const oneOffWorkspaces = sortWorkspacesByLastOpened(
     workspaces.filter((workspace) => workspace.workspaceKind === "oneOffChat"),
-  ).slice(0, ONE_OFF_CHAT_WORKSPACE_LIMIT);
+  );
+  const previouslyLoaded = oneOffWorkspaces.slice(0, currentLimit);
+  const newlyLoaded = oneOffWorkspaces.slice(currentLimit, nextLimit);
+  const plan: RemoteThreadLoadEntry[] = newlyLoaded.map((workspace) => ({
+    cwd: workspace.path,
+    workspaceId: workspace.id,
+  }));
 
-  return [
-    ...projectWorkspaces.map((workspace) => ({
-      cwd: workspace.path,
-      limit: PROJECT_THREAD_LIMIT,
-    })),
-    ...oneOffWorkspaces.map((workspace) => ({
-      cwd: workspace.path,
-    })),
-  ];
+  const loaded = await loadRemoteThreadsFromPlan(client, plan);
+  return {
+    threads: loaded.threads,
+    totalsByWorkspaceId: loaded.totalsByWorkspaceId,
+    nextLimit: Math.min(nextLimit, oneOffWorkspaces.length),
+  };
 }

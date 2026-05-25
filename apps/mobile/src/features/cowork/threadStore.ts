@@ -13,6 +13,12 @@ import {
   applyProjectedStart,
   applyReasoningDelta,
 } from "./snapshotReducer";
+import {
+  defaultThreadHomeUiState,
+  normalizeHomeSectionOrder,
+  type HomeSectionKey,
+  type ThreadHomeSectionsOpen,
+} from "./threadHomeModel";
 import { saveThreadOfflineCache, type ThreadOfflineCache } from "./threadOfflineCache";
 
 export type MobileThreadSummary = {
@@ -58,6 +64,17 @@ type ThreadStoreState = {
   pendingRequests: Record<string, PendingServerRequest | null>;
   activeTurnStartedAt: Record<string, string | null>;
   expandedWorkspaceIds: Record<string, true>;
+  sectionOrder: HomeSectionKey[];
+  sectionsOpen: ThreadHomeSectionsOpen;
+  showAllChats: boolean;
+  expandedProjectThreadLists: Record<string, true>;
+  projectThreadFetchLimits: Record<string, number>;
+  projectThreadTotals: Record<string, number>;
+  oneOffChatWorkspaceLoadLimit: number;
+  homeLoadPending: {
+    chats: boolean;
+    projects: Record<string, boolean>;
+  };
   hydrateOfflineCache(cache: ThreadOfflineCache): void;
   hydrate(snapshot: SessionSnapshotLike): void;
   appendStarted(threadId: string, item: ProjectedItem, ts: string): void;
@@ -92,6 +109,19 @@ type ThreadStoreState = {
   getActiveTurnStartedAt(threadId: string): string | null;
   expandWorkspace(workspaceId: string): void;
   toggleWorkspaceExpanded(workspaceId: string): void;
+  toggleSectionOpen(section: HomeSectionKey): void;
+  setSectionOrder(order: HomeSectionKey[]): void;
+  toggleSectionOrder(): void;
+  toggleShowAllChats(): void;
+  toggleProjectThreadListExpanded(workspaceId: string): void;
+  setProjectThreadTotals(totals: Record<string, number>): void;
+  setProjectThreadFetchLimit(workspaceId: string, limit: number): void;
+  setOneOffChatWorkspaceLoadLimit(limit: number): void;
+  setHomeLoadPending(pending: {
+    chats?: boolean;
+    projectWorkspaceId?: string;
+    projectPending?: boolean;
+  }): void;
 };
 
 let threadCachePersistQueued = false;
@@ -108,6 +138,13 @@ function scheduleThreadCachePersist(getState: () => ThreadStoreState): void {
       threads: state.threads,
       snapshots: state.snapshots,
       expandedWorkspaceIds: state.expandedWorkspaceIds,
+      sectionOrder: state.sectionOrder,
+      sectionsOpen: state.sectionsOpen,
+      showAllChats: state.showAllChats,
+      expandedProjectThreadLists: state.expandedProjectThreadLists,
+      projectThreadFetchLimits: state.projectThreadFetchLimits,
+      projectThreadTotals: state.projectThreadTotals,
+      oneOffChatWorkspaceLoadLimit: state.oneOffChatWorkspaceLoadLimit,
     });
   });
 }
@@ -231,6 +268,14 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
   pendingRequests: {},
   activeTurnStartedAt: {},
   expandedWorkspaceIds: {},
+  sectionOrder: defaultThreadHomeUiState().sectionOrder,
+  sectionsOpen: defaultThreadHomeUiState().sectionsOpen,
+  showAllChats: false,
+  expandedProjectThreadLists: {},
+  projectThreadFetchLimits: {},
+  projectThreadTotals: {},
+  oneOffChatWorkspaceLoadLimit: defaultThreadHomeUiState().oneOffChatWorkspaceLoadLimit,
+  homeLoadPending: { chats: false, projects: {} },
   hydrateOfflineCache(cache) {
     set((state) => {
       const existingDraftThreads = state.threads.filter((thread) => thread.id.startsWith("draft-"));
@@ -265,6 +310,13 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
           ...state.expandedWorkspaceIds,
           ...cache.expandedWorkspaceIds,
         },
+        sectionOrder: normalizeHomeSectionOrder(cache.sectionOrder),
+        sectionsOpen: cache.sectionsOpen,
+        showAllChats: cache.showAllChats,
+        expandedProjectThreadLists: cache.expandedProjectThreadLists,
+        projectThreadFetchLimits: cache.projectThreadFetchLimits,
+        projectThreadTotals: cache.projectThreadTotals,
+        oneOffChatWorkspaceLoadLimit: cache.oneOffChatWorkspaceLoadLimit,
       };
     });
   },
@@ -683,6 +735,14 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
         selectedThreadId: nextSelectedThreadId,
         pendingRequests: nextPendingRequests,
         expandedWorkspaceIds: state.expandedWorkspaceIds,
+        sectionOrder: state.sectionOrder,
+        sectionsOpen: state.sectionsOpen,
+        showAllChats: state.showAllChats,
+        expandedProjectThreadLists: state.expandedProjectThreadLists,
+        projectThreadFetchLimits: state.projectThreadFetchLimits,
+        projectThreadTotals: state.projectThreadTotals,
+        oneOffChatWorkspaceLoadLimit: state.oneOffChatWorkspaceLoadLimit,
+        homeLoadPending: state.homeLoadPending,
       };
     });
     scheduleThreadCachePersist(get);
@@ -752,5 +812,83 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
       return { expandedWorkspaceIds: next };
     });
     scheduleThreadCachePersist(get);
+  },
+  toggleSectionOpen(section) {
+    set((state) => ({
+      sectionsOpen: {
+        ...state.sectionsOpen,
+        [section]: !state.sectionsOpen[section],
+      },
+    }));
+    scheduleThreadCachePersist(get);
+  },
+  setSectionOrder(order) {
+    set({ sectionOrder: normalizeHomeSectionOrder(order) });
+    scheduleThreadCachePersist(get);
+  },
+  toggleSectionOrder() {
+    set((state) => ({
+      sectionOrder:
+        normalizeHomeSectionOrder(state.sectionOrder)[0] === "chats"
+          ? (["projects", "chats"] as HomeSectionKey[])
+          : (["chats", "projects"] as HomeSectionKey[]),
+    }));
+    scheduleThreadCachePersist(get);
+  },
+  toggleShowAllChats() {
+    set((state) => ({ showAllChats: !state.showAllChats }));
+    scheduleThreadCachePersist(get);
+  },
+  toggleProjectThreadListExpanded(workspaceId) {
+    set((state) => {
+      const next = { ...state.expandedProjectThreadLists };
+      if (next[workspaceId]) {
+        delete next[workspaceId];
+      } else {
+        next[workspaceId] = true;
+      }
+      return { expandedProjectThreadLists: next };
+    });
+    scheduleThreadCachePersist(get);
+  },
+  setProjectThreadTotals(totals) {
+    set((state) => ({
+      projectThreadTotals: {
+        ...state.projectThreadTotals,
+        ...totals,
+      },
+    }));
+    scheduleThreadCachePersist(get);
+  },
+  setProjectThreadFetchLimit(workspaceId, limit) {
+    set((state) => ({
+      projectThreadFetchLimits: {
+        ...state.projectThreadFetchLimits,
+        [workspaceId]: limit,
+      },
+    }));
+    scheduleThreadCachePersist(get);
+  },
+  setOneOffChatWorkspaceLoadLimit(limit) {
+    set({ oneOffChatWorkspaceLoadLimit: limit });
+    scheduleThreadCachePersist(get);
+  },
+  setHomeLoadPending(pending) {
+    set((state) => {
+      const nextProjects = { ...state.homeLoadPending.projects };
+      if (pending.projectWorkspaceId !== undefined && pending.projectPending !== undefined) {
+        if (pending.projectPending) {
+          nextProjects[pending.projectWorkspaceId] = true;
+        } else {
+          delete nextProjects[pending.projectWorkspaceId];
+        }
+      }
+      return {
+        homeLoadPending: {
+          chats: pending.chats ?? state.homeLoadPending.chats,
+          projects: nextProjects,
+        },
+      };
+    });
   },
 }));

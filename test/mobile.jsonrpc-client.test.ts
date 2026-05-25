@@ -82,10 +82,11 @@ describe("mobile cowork jsonrpc client", () => {
         id: listPayload.id,
         result: {
           threads: [],
+          total: 0,
         },
       }),
     );
-    await expect(listPromise).resolves.toEqual({ threads: [] });
+    await expect(listPromise).resolves.toEqual({ threads: [], total: 0 });
 
     await flushMicrotasks();
 
@@ -180,10 +181,11 @@ describe("mobile cowork jsonrpc client", () => {
         id: listPayload.id,
         result: {
           threads: [],
+          total: 0,
         },
       }),
     );
-    await expect(listPromise).resolves.toEqual({ threads: [] });
+    await expect(listPromise).resolves.toEqual({ threads: [], total: 0 });
 
     await client.handleIncoming(
       JSON.stringify({

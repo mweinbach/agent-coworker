@@ -371,13 +371,20 @@ export class CoworkJsonRpcClient {
     return await initializePromise;
   }
 
-  async requestThreadList(cwd?: string, limit?: number): Promise<CoworkThreadListResult> {
+  async requestThreadList(
+    cwd?: string,
+    limit?: number,
+    offset?: number,
+  ): Promise<CoworkThreadListResult> {
     const params: Record<string, unknown> = {};
     if (cwd) {
       params.cwd = cwd;
     }
     if (limit !== undefined) {
       params.limit = limit;
+    }
+    if (offset !== undefined) {
+      params.offset = offset;
     }
     const result = await this.request("thread/list", params);
     return coworkThreadListResultSchema.parse(result);

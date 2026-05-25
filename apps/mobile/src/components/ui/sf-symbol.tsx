@@ -14,6 +14,7 @@ const ICON_MAP = {
   "arrow.up": { family: "material", name: "arrow-upward" },
   "bolt.fill": { family: "material", name: "bolt" },
   "brain.head.profile": { family: "community", name: "brain" },
+  "bubble.left.fill": { family: "community", name: "message-text" },
   "bubble.left.and.bubble.right.fill": { family: "material", name: "forum" },
   "bubble.left.and.exclamationmark.bubble.right.fill": {
     family: "community",
@@ -42,6 +43,8 @@ const ICON_MAP = {
   "exclamationmark.triangle.fill": { family: "material", name: "warning-amber" },
   "externaldrive.badge.timemachine": { family: "community", name: "backup-restore" },
   folder: { family: "material", name: "folder" },
+  "folder.fill": { family: "material", name: "folder" },
+  "arrow.up.arrow.down": { family: "material", name: "swap-vert" },
   "gearshape.2": { family: "material", name: "settings" },
   "iphone.and.arrow.forward": { family: "community", name: "cellphone-link" },
   "key.fill": { family: "community", name: "key-variant" },

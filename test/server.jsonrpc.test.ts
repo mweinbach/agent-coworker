@@ -410,6 +410,7 @@ describe("server JSON-RPC websocket mode", () => {
         id: 3,
         result: {
           threads: [],
+          total: 0,
         },
       });
       ws.close();

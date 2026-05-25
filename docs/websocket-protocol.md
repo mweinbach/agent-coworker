@@ -259,7 +259,12 @@ The desktop JSON-RPC path now uses this namespace so one workspace connection ca
 
 `thread/list` and workspace-scoped `cowork/*` control methods now default omitted `cwd` to the sidecar/server working directory. Mobile and other remote clients no longer need to know a host filesystem path just to list threads or read workspace control state.
 
-`thread/list` accepts an optional positive integer `limit`. When provided, the server filters and deduplicates thread summaries, sorts them by `updatedAt` descending, then returns at most `limit` entries. Omit `limit` to preserve the previous unbounded behavior.
+`thread/list` accepts optional pagination params on a workspace's thread summaries:
+
+- `limit`: positive integer maximum number of entries to return after sorting
+- `offset`: zero-based index into the sorted list (defaults to `0`)
+
+When either param is provided, the server filters and deduplicates thread summaries, sorts them by `updatedAt` descending, slices with `[offset, offset + limit)`, and returns `{ threads, total }` where `total` is the full sorted count before slicing. Omit both `limit` and `offset` to preserve the previous unbounded behavior (still returns `total`).
 
 `workspace/list` returns the desktop workspace catalog when the sidecar is started with `COWORK_WEB_DESKTOP_SERVICE=1` (desktop/mobile relay). Each workspace summary includes `id`, `name`, `path`, `workspaceKind` (`project` or `oneOffChat`), timestamps, and default settings. The result also includes `activeWorkspaceId` for the workspace matching the sidecar working directory, or the most recently opened workspace when no exact match exists. Outside desktop mode, the server returns a single `project` workspace for the current working directory.
 

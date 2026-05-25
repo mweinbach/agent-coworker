@@ -40,6 +40,14 @@ describe("mobile offline cache", () => {
       pendingRequests: {},
       activeTurnStartedAt: {},
       expandedWorkspaceIds: {},
+      sectionOrder: ["chats", "projects"],
+      sectionsOpen: { chats: true, projects: true },
+      showAllChats: false,
+      expandedProjectThreadLists: {},
+      projectThreadFetchLimits: {},
+      projectThreadTotals: {},
+      oneOffChatWorkspaceLoadLimit: 10,
+      homeLoadPending: { chats: false, projects: {} },
     });
   });
 
@@ -107,6 +115,13 @@ describe("mobile offline cache", () => {
         },
       },
       expandedWorkspaceIds: {},
+      sectionOrder: ["chats", "projects"],
+      sectionsOpen: { chats: true, projects: true },
+      showAllChats: false,
+      expandedProjectThreadLists: {},
+      projectThreadFetchLimits: {},
+      projectThreadTotals: {},
+      oneOffChatWorkspaceLoadLimit: 10,
     });
     await clearAllOfflineWorkspaceCache();
     const loaded = await loadFromOfflineCache("workspaces");

@@ -332,6 +332,7 @@ export const coworkThreadReadResultSchema = z
 export const coworkThreadListResultSchema = z
   .object({
     threads: z.array(coworkThreadSchema),
+    total: z.number().int().nonnegative(),
   })
   .strict();
 

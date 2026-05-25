@@ -3,12 +3,12 @@ import type { PropsWithChildren } from "react";
 import { useEffect } from "react";
 
 import { CoworkJsonRpcClient } from "../features/cowork/jsonRpcClient";
-import type { SessionSnapshotLike } from "../features/cowork/protocolTypes";
-import { setActiveCoworkJsonRpcClient } from "../features/cowork/runtimeClient";
+import type { CoworkThread, SessionSnapshotLike } from "../features/cowork/protocolTypes";
 import {
   buildWorkspaceLookup,
   loadBoundedRemoteThreads,
 } from "../features/cowork/remoteThreadBootstrap";
+import { setActiveCoworkJsonRpcClient } from "../features/cowork/runtimeClient";
 import { createSessionBootstrapController } from "../features/cowork/sessionBootstrap";
 import { useThreadStore } from "../features/cowork/threadStore";
 import {
@@ -187,10 +187,17 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
 
       const workspaces = useWorkspaceStore.getState().workspaces;
       const workspaceByPath = buildWorkspaceLookup(workspaces);
-      let remoteThreads: Awaited<ReturnType<typeof loadBoundedRemoteThreads>> = [];
+      let remoteThreads: CoworkThread[] = [];
 
       if (workspaces.length > 0) {
-        remoteThreads = await loadBoundedRemoteThreads(client, workspaces);
+        const loaded = await loadBoundedRemoteThreads(client, workspaces, {
+          oneOffChatWorkspaceLimit:
+            useThreadStore.getState().oneOffChatWorkspaceLoadLimit,
+          projectThreadLimitsByWorkspaceId:
+            useThreadStore.getState().projectThreadFetchLimits,
+        });
+        remoteThreads = loaded.threads;
+        useThreadStore.getState().setProjectThreadTotals(loaded.totalsByWorkspaceId);
       } else {
         const fallback = await client.requestThreadList();
         remoteThreads = fallback.threads;

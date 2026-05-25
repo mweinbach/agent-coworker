@@ -6,9 +6,11 @@ import {
 } from "@expo/ui/swift-ui";
 import {
   background,
+  buttonStyle,
   foregroundStyle,
   frame,
   glassEffect,
+  labelStyle,
   shadow,
   shapes,
 } from "@expo/ui/swift-ui/modifiers";
@@ -152,14 +154,13 @@ export function HeaderGlassMenu({ icon, actions }: HeaderGlassMenuProps) {
       style={{ width: 44, height: 44 }}
     >
       <ExpoMenu
-        label={
-          <ExpoImage
-            systemName={asNativeSymbol(icon)}
-            size={17}
-            color={theme.text}
-            modifiers={headerControlModifiers(theme.text)}
-          />
-        }
+        label="Menu"
+        systemImage={asNativeSymbol(icon)}
+        modifiers={[
+          labelStyle("iconOnly"),
+          buttonStyle("plain"),
+          ...headerControlModifiers(theme.text),
+        ]}
       >
         {actions.map((action) => (
           <ExpoButton

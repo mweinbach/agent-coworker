@@ -7,152 +7,20 @@ import {
   parseInlineMarkdown,
 } from "@/features/cowork/inlineMarkdown";
 import { SourcesCarousel } from "@/components/thread/sources-carousel";
+import {
+  parseRichBlocks,
+  type RichBlock,
+} from "@/components/thread/markdownParser";
 import { useAppTheme } from "@/theme/use-app-theme";
+
+export { parseRichBlocks } from "@/components/thread/markdownParser";
+export type { RichBlock } from "@/components/thread/markdownParser";
 
 type MarkdownTextProps = {
   text: string;
   color?: string;
   variant?: "default" | "reasoning";
 };
-
-type CodeBlockData = { type: "code"; language: string; content: string };
-
-type RichBlock =
-  | { type: "paragraph"; content: string }
-  | { type: "heading"; level: number; content: string }
-  | { type: "bullet-list"; items: string[] }
-  | { type: "numbered-list"; items: string[] }
-  | { type: "sources"; items: Array<{ label: string; href: string }> }
-  | CodeBlockData;
-
-function parseCodeBlocks(text: string): Array<{ type: "text"; content: string } | CodeBlockData> {
-  const blocks: Array<{ type: "text"; content: string } | CodeBlockData> = [];
-  const codeBlockRegex = /```(\w*)\n([\s\S]*?)```/g;
-  let lastIndex = 0;
-  let match = codeBlockRegex.exec(text);
-  while (match !== null) {
-    if (match.index > lastIndex) {
-      blocks.push({ type: "text", content: text.slice(lastIndex, match.index) });
-    }
-    blocks.push({ type: "code", language: match[1] || "", content: match[2] });
-    lastIndex = match.index + match[0].length;
-    match = codeBlockRegex.exec(text);
-  }
-
-  if (lastIndex < text.length) {
-    blocks.push({ type: "text", content: text.slice(lastIndex) });
-  }
-
-  return blocks;
-}
-
-function extractLinkFromLine(line: string): { label: string; href: string } | null {
-  const markdownMatch = line.match(/^\s*[-*•]?\s*\[([^\]]+)\]\(([^)]+)\)\s*$/);
-  if (markdownMatch) {
-    const href = normalizeInlineLinkHref(markdownMatch[2]);
-    if (href) {
-      return { label: markdownMatch[1], href };
-    }
-  }
-
-  const urlMatch = line.match(/^\s*[-*•]?\s*((?:https?:\/\/|www\.)[^\s]+)\s*$/i);
-  if (urlMatch) {
-    const href = normalizeInlineLinkHref(urlMatch[1]);
-    if (href) {
-      return { label: urlMatch[1], href };
-    }
-  }
-
-  return null;
-}
-
-function parseTextSections(text: string): RichBlock[] {
-  const sections = text.split(/\n{2,}/);
-  const blocks: RichBlock[] = [];
-
-  for (const section of sections) {
-    const trimmed = section.trim();
-    if (!trimmed) continue;
-
-    const lines = trimmed.split("\n").map((line) => line.trimEnd());
-    const nonEmptyLines = lines.filter((line) => line.trim().length > 0);
-    if (nonEmptyLines.length === 0) continue;
-
-    const firstLine = nonEmptyLines[0]?.trim() ?? "";
-    const sourcesStartIndex = nonEmptyLines.findIndex((line) => /^sources:?$/i.test(line.trim()));
-    if (sourcesStartIndex >= 0) {
-      if (sourcesStartIndex > 0) {
-        blocks.push({ type: "paragraph", content: nonEmptyLines.slice(0, sourcesStartIndex).join("\n") });
-      }
-      const sourceItems = nonEmptyLines
-        .slice(sourcesStartIndex + 1)
-        .map((line) => extractLinkFromLine(line))
-        .filter((item): item is { label: string; href: string } => item !== null);
-      if (sourceItems.length > 0) {
-        blocks.push({ type: "sources", items: sourceItems });
-        continue;
-      }
-    }
-
-    if (/^sources:?$/i.test(firstLine)) {
-      const sourceItems = nonEmptyLines
-        .slice(1)
-        .map((line) => extractLinkFromLine(line))
-        .filter((item): item is { label: string; href: string } => item !== null);
-      if (sourceItems.length > 0) {
-        blocks.push({ type: "sources", items: sourceItems });
-        continue;
-      }
-    }
-
-    const headingMatch = firstLine.match(/^(#{1,6})\s+(.+)$/);
-    if (headingMatch && nonEmptyLines.length === 1) {
-      blocks.push({
-        type: "heading",
-        level: headingMatch[1].length,
-        content: headingMatch[2],
-      });
-      continue;
-    }
-
-    const isBulletList = nonEmptyLines.every((line) => /^[-*•]\s+/.test(line.trim()));
-    if (isBulletList) {
-      blocks.push({
-        type: "bullet-list",
-        items: nonEmptyLines.map((line) => line.trim().replace(/^[-*•]\s+/, "")),
-      });
-      continue;
-    }
-
-    const isNumberedList = nonEmptyLines.every((line) => /^\d+\.\s+/.test(line.trim()));
-    if (isNumberedList) {
-      blocks.push({
-        type: "numbered-list",
-        items: nonEmptyLines.map((line) => line.trim().replace(/^\d+\.\s+/, "")),
-      });
-      continue;
-    }
-
-    blocks.push({ type: "paragraph", content: trimmed });
-  }
-
-  return blocks;
-}
-
-function parseRichBlocks(text: string): RichBlock[] {
-  const codeAwareBlocks = parseCodeBlocks(text);
-  const richBlocks: RichBlock[] = [];
-
-  for (const block of codeAwareBlocks) {
-    if (block.type === "code") {
-      richBlocks.push(block);
-      continue;
-    }
-    richBlocks.push(...parseTextSections(block.content));
-  }
-
-  return richBlocks;
-}
 
 function InlineText({
   text,
@@ -369,6 +237,19 @@ function HeadingBlock({
   );
 }
 
+function HorizontalRuleBlock() {
+  const theme = useAppTheme();
+  return (
+    <View
+      style={{
+        height: 1,
+        marginVertical: 4,
+        backgroundColor: theme.borderMuted,
+      }}
+    />
+  );
+}
+
 function RichBlockView({
   block,
   color,
@@ -389,6 +270,8 @@ function RichBlockView({
       return <ListBlock items={block.items} ordered color={color} variant={variant} />;
     case "sources":
       return <SourcesCarousel items={block.items} />;
+    case "horizontal-rule":
+      return <HorizontalRuleBlock />;
     case "paragraph":
       return <InlineText text={block.content} color={color} variant={variant} />;
   }
@@ -405,19 +288,14 @@ export function MarkdownText({ text, color, variant = "default" }: MarkdownTextP
 
   return (
     <View style={{ gap: 14 }}>
-      {blocks.map((block) => {
-        const blockKey =
-          block.type === "code"
-            ? `code:${block.language}:${block.content.slice(0, 32)}`
-            : block.type === "sources"
-              ? `sources:${block.items.map((item) => item.href).join("|")}`
-              : block.type === "bullet-list" || block.type === "numbered-list"
-                ? `${block.type}:${block.items.join("|").slice(0, 48)}`
-                : `${block.type}:${"content" in block ? block.content.slice(0, 48) : ""}`;
-        return (
-          <RichBlockView key={blockKey} block={block} color={textColor} variant={variant} />
-        );
-      })}
+      {blocks.map((block, index) => (
+        <RichBlockView
+          key={`${index}:${block.type}`}
+          block={block}
+          color={textColor}
+          variant={variant}
+        />
+      ))}
     </View>
   );
 }

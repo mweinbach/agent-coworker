@@ -70,18 +70,31 @@ class JsonRpcResponseError extends Error {
 
   constructor(error: JsonRpcResponseErrorPayload) {
     super(error.message);
+    Object.setPrototypeOf(this, JsonRpcResponseError.prototype);
     this.name = "JsonRpcResponseError";
     this.code = error.code;
     this.data = error.data;
   }
 }
 
-function isJsonRpcResponseError(error: unknown, code: number, message: string): boolean {
-  return error instanceof JsonRpcResponseError && error.code === code && error.message === message;
+function readErrorCode(error: unknown): number | undefined {
+  if (error && typeof error === "object" && "code" in error) {
+    const code = (error as { code: unknown }).code;
+    return typeof code === "number" ? code : undefined;
+  }
+  return undefined;
 }
 
-function hasJsonRpcErrorMessage(error: unknown, message: string): boolean {
-  return error instanceof Error && error.message === message;
+function readErrorMessage(error: unknown): string | undefined {
+  if (error && typeof error === "object" && "message" in error) {
+    const message = (error as { message: unknown }).message;
+    return typeof message === "string" ? message : undefined;
+  }
+  return undefined;
+}
+
+function matchesJsonRpcError(error: unknown, code: number, message: string): boolean {
+  return readErrorCode(error) === code || readErrorMessage(error) === message;
 }
 
 export type CoworkTurnInputPart =
@@ -332,12 +345,11 @@ export class CoworkJsonRpcClient {
         });
       } catch (error) {
         if (
-          !isJsonRpcResponseError(
+          !matchesJsonRpcError(
             error,
             JSONRPC_ALREADY_INITIALIZED_ERROR_CODE,
             "Already initialized",
-          ) &&
-          !hasJsonRpcErrorMessage(error, "Already initialized")
+          )
         ) {
           throw error;
         }
@@ -520,8 +532,7 @@ export class CoworkJsonRpcClient {
       if (
         method !== "initialize" &&
         retryNotInitialized &&
-        (isJsonRpcResponseError(error, JSONRPC_NOT_INITIALIZED_ERROR_CODE, "Not initialized") ||
-          hasJsonRpcErrorMessage(error, "Not initialized"))
+        matchesJsonRpcError(error, JSONRPC_NOT_INITIALIZED_ERROR_CODE, "Not initialized")
       ) {
         this.initialized = false;
         this.initializePromise = null;

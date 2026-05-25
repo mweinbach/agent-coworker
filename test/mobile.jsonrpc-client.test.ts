@@ -990,6 +990,65 @@ describe("mobile cowork jsonrpc client", () => {
     });
   });
 
+  test("treats Already initialized response as success even when error code only is supplied", async () => {
+    const sent: string[] = [];
+    const client = new CoworkJsonRpcClient({
+      clientInfo: {
+        name: "cowork-mobile",
+        version: "0.1.0",
+      },
+      send(text) {
+        sent.push(text);
+      },
+    });
+
+    const resumePromise = client.resumeThread("thread-1");
+    const initializePayload = JSON.parse(sent[0]!);
+    expect(initializePayload.method).toBe("initialize");
+    await client.handleIncoming(
+      JSON.stringify({
+        id: initializePayload.id,
+        error: {
+          code: -32003,
+          message: "Server reports prior initialization.",
+        },
+      }),
+    );
+
+    await waitForCondition(() => sent.length >= 3);
+    expect(JSON.parse(sent[1]!).method).toBe("initialized");
+    const resumePayload = JSON.parse(sent[2]!);
+    expect(resumePayload).toMatchObject({
+      method: "thread/resume",
+      params: { threadId: "thread-1" },
+    });
+
+    await client.handleIncoming(
+      JSON.stringify({
+        id: resumePayload.id,
+        result: {
+          thread: {
+            id: "thread-1",
+            title: "Remote thread",
+            preview: "",
+            modelProvider: "opencode",
+            model: "gpt-5",
+            cwd: "/workspace",
+            createdAt: new Date(0).toISOString(),
+            updatedAt: new Date(0).toISOString(),
+            messageCount: 1,
+            lastEventSeq: 1,
+            status: { type: "loaded" },
+          },
+        },
+      }),
+    );
+
+    await expect(resumePromise).resolves.toMatchObject({
+      thread: { id: "thread-1" },
+    });
+  });
+
   test("shares concurrent initialize calls across one handshake", async () => {
     const sent: string[] = [];
     const client = new CoworkJsonRpcClient({

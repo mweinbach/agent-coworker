@@ -240,6 +240,11 @@ Durable rules distilled from prior corrections. Apply before editing, not after.
 - **Three-tier inherit semantics**: never overload `undefined` for both "no-op" and "inherit"; add a dedicated clear/inherit path end-to-end so reset-to-default deletes persisted overrides instead of pinning the current built-in.
 - **Tool output overflow**: spill-to-workspace truncation is the default; the `read` tool is exempted so large file contents stay inline when explicitly requested.
 
+### Mobile UI Patterns
+
+- For iOS list reordering, do not force permanent SwiftUI edit mode just to expose move handles; it shows delete controls and reads like a broken settings screen. Use a scoped reorder mode or explicit drag gesture that preserves the intended visual hierarchy.
+- Avoid card-on-card mobile layouts for grouped lists; use one grouped container with separators and inline disclosure content unless nested content truly needs a separate surface.
+
 ### Desktop UI Patterns
 
 - Use the Playwright/CDP workflow (`COWORK_ELECTRON_REMOTE_DEBUG=1`) before declaring a UI change done.

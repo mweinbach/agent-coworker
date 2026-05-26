@@ -414,6 +414,11 @@ samp {
   box-shadow: 0 1px 0 var(--border-subtle);
 }
 
+.settings-shell__header-actions,
+.settings-shell__header-actions * {
+  -webkit-app-region: no-drag;
+}
+
 .settings-shell__content {
   min-height: 100%;
 }

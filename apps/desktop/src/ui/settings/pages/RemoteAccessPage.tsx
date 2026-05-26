@@ -9,7 +9,7 @@ import {
   WifiIcon,
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
 import { Badge } from "../../../components/ui/badge";
@@ -23,6 +23,7 @@ import {
 } from "../../../components/ui/card";
 import { Separator } from "../../../components/ui/separator";
 import { Switch } from "../../../components/ui/switch";
+import { useOptionalSettingsChrome } from "../SettingsChromeContext";
 import type {
   MobileRelayTrustedDevicePermissionKey,
   MobileRelayTrustedPhoneDevice,
@@ -105,6 +106,20 @@ export function RemoteAccessPage() {
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [copiedPairingKey, setCopiedPairingKey] = useState(false);
 
+  const settingsChrome = useOptionalSettingsChrome();
+
+  const runAction = useCallback(
+    async (action: string, runner: () => Promise<unknown>) => {
+      setBusyAction(action);
+      try {
+        await runner();
+      } finally {
+        setBusyAction(null);
+      }
+    },
+    [],
+  );
+
   useEffect(() => {
     let mounted = true;
     void getMobileRelayState()
@@ -160,17 +175,53 @@ export function RemoteAccessPage() {
     };
   }, [state?.relayServiceStatus, state?.workspaceId]);
 
+  useEffect(() => {
+    if (!settingsChrome) return;
+    settingsChrome.setChrome({
+      headerActions: (
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Button
+            type="button"
+            size="sm"
+            onClick={() =>
+              selectedWorkspace &&
+              runAction("start", async () => {
+                await startMobileRelay({
+                  workspaceId: selectedWorkspace.id,
+                  workspacePath: selectedWorkspace.path,
+                  yolo: selectedWorkspace.yolo,
+                  featureFlags: desktopFeatureFlags,
+                });
+              })
+            }
+            disabled={!selectedWorkspace || busyAction !== null}
+          >
+            <WifiIcon data-icon />
+            {state?.status === "idle" ? "Enable remote access" : "Restart bridge"}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() =>
+              runAction("stop", async () => {
+                await stopMobileRelay();
+              })
+            }
+            disabled={!state || state.status === "idle" || busyAction !== null}
+          >
+            Stop
+          </Button>
+        </div>
+      ),
+    });
+    return () => {
+      settingsChrome.setChrome(null);
+    };
+  }, [settingsChrome, selectedWorkspace, state, busyAction, desktopFeatureFlags, runAction]);
+
   const qrValue = useMemo(() => state?.ticketUrl ?? null, [state?.ticketUrl]);
   const trustedDevices = state?.trustedPhoneDevices ?? [];
-
-  async function runAction(action: string, runner: () => Promise<unknown>) {
-    setBusyAction(action);
-    try {
-      await runner();
-    } finally {
-      setBusyAction(null);
-    }
-  }
 
   async function copyPairingKey() {
     if (!qrValue) {
@@ -193,46 +244,12 @@ export function RemoteAccessPage() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
-            <div className="space-y-1">
-              <div className="text-sm font-medium text-foreground">
-                {selectedWorkspace?.name ?? "No workspace selected"}
-              </div>
-              <div className="text-xs text-muted-foreground">
-                {selectedWorkspace?.path ?? "Select a workspace before enabling remote access."}
-              </div>
+          <div className="space-y-1">
+            <div className="text-sm font-medium text-foreground">
+              {selectedWorkspace?.name ?? "No workspace selected"}
             </div>
-            <div className="flex flex-wrap gap-2">
-              <Button
-                type="button"
-                onClick={() =>
-                  selectedWorkspace &&
-                  runAction("start", async () => {
-                    await startMobileRelay({
-                      workspaceId: selectedWorkspace.id,
-                      workspacePath: selectedWorkspace.path,
-                      yolo: selectedWorkspace.yolo,
-                      featureFlags: desktopFeatureFlags,
-                    });
-                  })
-                }
-                disabled={!selectedWorkspace || busyAction !== null}
-              >
-                <WifiIcon data-icon />
-                {state?.status === "idle" ? "Enable remote access" : "Restart bridge"}
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() =>
-                  runAction("stop", async () => {
-                    await stopMobileRelay();
-                  })
-                }
-                disabled={!state || state.status === "idle" || busyAction !== null}
-              >
-                Stop
-              </Button>
+            <div className="text-xs text-muted-foreground">
+              {selectedWorkspace?.path ?? "Select a workspace before enabling remote access."}
             </div>
           </div>
 

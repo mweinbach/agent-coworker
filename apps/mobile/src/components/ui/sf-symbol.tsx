@@ -46,6 +46,7 @@ const ICON_MAP = {
   "folder.fill": { family: "material", name: "folder" },
   "arrow.up.arrow.down": { family: "material", name: "swap-vert" },
   "gearshape.2": { family: "material", name: "settings" },
+  "line.3.horizontal": { family: "material", name: "drag-handle" },
   "iphone.and.arrow.forward": { family: "community", name: "cellphone-link" },
   "key.fill": { family: "community", name: "key-variant" },
   "lock.shield.fill": { family: "community", name: "shield-lock" },

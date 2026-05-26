@@ -97,4 +97,12 @@ describe("settings shell", () => {
       /\.settings-shell__page-titleband\s*\{[^}]*box-shadow:\s*0 1px 0 var\(--border-subtle\);/s,
     );
   });
+
+  test("carves settings header actions out of the native drag region", () => {
+    const stylesCss = readFileSync(resolve(import.meta.dir, "../src/styles.css"), "utf8");
+
+    expect(stylesCss).toMatch(
+      /\.settings-shell__header-actions,\s*\.settings-shell__header-actions \*\s*\{[^}]*-webkit-app-region:\s*no-drag\s*;/s,
+    );
+  });
 });

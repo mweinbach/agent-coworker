@@ -8,6 +8,7 @@ import {
   defaultGlobalSkillsStateFile,
   ensureDefaultGlobalSkillsInstalled,
 } from "../src/skills/defaultGlobalSkills";
+import type { AgentConfig } from "../src/types";
 
 function jsonResponse(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), {
@@ -38,152 +39,196 @@ function createGitHubFetchStub(
       return jsonResponse(tree[key]);
     }
 
-    if (url in files) {
-      return textResponse(files[url]!);
+    const file = files[url];
+    if (file !== undefined) {
+      return textResponse(file);
     }
 
     return textResponse("not found", 404);
   }) as typeof fetch;
 }
 
-describe("default global skills bootstrap", () => {
-  test("installs curated skills into ~/.cowork/skills and records a one-time state file", async () => {
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-skills-home-"));
-    const skills: readonly DefaultSkillSpec[] = [
-      { name: "alpha", githubPath: "skills/.curated/alpha" },
-      { name: "beta", githubPath: "skills/.curated/beta" },
-    ];
+function makeConfig(workspaceRoot: string, userHome: string): AgentConfig {
+  return {
+    provider: "google",
+    model: "gemini-3-flash-preview",
+    preferredChildModel: "gemini-3-flash-preview",
+    workingDirectory: workspaceRoot,
+    outputDirectory: path.join(workspaceRoot, "output"),
+    uploadsDirectory: path.join(workspaceRoot, "uploads"),
+    userName: "tester",
+    knowledgeCutoff: "unknown",
+    projectCoworkDir: path.join(workspaceRoot, ".cowork"),
+    userCoworkDir: path.join(userHome, ".cowork"),
+    workspaceAgentsDir: path.join(workspaceRoot, ".agents"),
+    userAgentsDir: path.join(userHome, ".agents"),
+    workspacePluginsDir: path.join(workspaceRoot, ".agents", "plugins"),
+    userPluginsDir: path.join(userHome, ".agents", "plugins"),
+    builtInDir: workspaceRoot,
+    builtInConfigDir: path.join(workspaceRoot, "config"),
+    skillsDirs: [
+      path.join(workspaceRoot, ".cowork", "skills"),
+      path.join(userHome, ".cowork", "skills"),
+    ],
+    memoryDirs: [],
+    configDirs: [],
+    enableMcp: true,
+  };
+}
 
-    const fetchImpl = createGitHubFetchStub(
+function createMarketplaceFixture(pluginIds: string[]) {
+  const marketplace = {
+    name: "test-marketplace",
+    interface: { displayName: "Test Marketplace" },
+    plugins: pluginIds.map((id) => ({
+      name: id,
+      source: { source: "local", path: `./plugins/${id}` },
+      policy: { installation: "AVAILABLE", authentication: "ON_INSTALL" },
+      category: "Productivity",
+    })),
+  };
+  const tree: Record<string, unknown> = {
+    ".agents/plugins/marketplace.json": {
+      type: "file",
+      name: "marketplace.json",
+      path: ".agents/plugins/marketplace.json",
+      url: "https://api.github.com/repos/mweinbach/cowork-skills-plugins/contents/.agents/plugins/marketplace.json?ref=main",
+      download_url: "https://download.test/marketplace.json",
+    },
+  };
+  const files: Record<string, string> = {
+    "https://download.test/marketplace.json": JSON.stringify(marketplace),
+  };
+  for (const id of pluginIds) {
+    tree[`plugins/${id}`] = [
       {
-        "skills/.curated/alpha": [
-          {
-            type: "file",
-            name: "SKILL.md",
-            path: "skills/.curated/alpha/SKILL.md",
-            url: "https://api.github.com/repos/test/repo/contents/skills/.curated/alpha/SKILL.md?ref=main",
-            download_url: "https://download.test/alpha/SKILL.md",
-          },
-        ],
-        "skills/.curated/beta": [
-          {
-            type: "file",
-            name: "SKILL.md",
-            path: "skills/.curated/beta/SKILL.md",
-            url: "https://api.github.com/repos/test/repo/contents/skills/.curated/beta/SKILL.md?ref=main",
-            download_url: "https://download.test/beta/SKILL.md",
-          },
-          {
-            type: "dir",
-            name: "assets",
-            path: "skills/.curated/beta/assets",
-            url: "https://api.github.com/repos/test/repo/contents/skills/.curated/beta/assets?ref=main",
-            download_url: null,
-          },
-        ],
-        "skills/.curated/beta/assets": [
-          {
-            type: "file",
-            name: "example.txt",
-            path: "skills/.curated/beta/assets/example.txt",
-            url: "https://api.github.com/repos/test/repo/contents/skills/.curated/beta/assets/example.txt?ref=main",
-            download_url: "https://download.test/beta/assets/example.txt",
-          },
-        ],
+        type: "dir",
+        name: ".codex-plugin",
+        path: `plugins/${id}/.codex-plugin`,
+        url: `https://api.github.com/repos/mweinbach/cowork-skills-plugins/contents/plugins/${id}/.codex-plugin?ref=main`,
+        download_url: null,
       },
       {
-        "https://download.test/alpha/SKILL.md":
-          "---\nname: alpha\ndescription: Alpha skill\n---\nAlpha body\n",
-        "https://download.test/beta/SKILL.md":
-          "---\nname: beta\ndescription: Beta skill\n---\nBeta body\n",
-        "https://download.test/beta/assets/example.txt": "beta asset\n",
+        type: "dir",
+        name: "skills",
+        path: `plugins/${id}/skills`,
+        url: `https://api.github.com/repos/mweinbach/cowork-skills-plugins/contents/plugins/${id}/skills?ref=main`,
+        download_url: null,
       },
-    );
+    ];
+    tree[`plugins/${id}/.codex-plugin`] = [
+      {
+        type: "file",
+        name: "plugin.json",
+        path: `plugins/${id}/.codex-plugin/plugin.json`,
+        url: `https://api.github.com/repos/mweinbach/cowork-skills-plugins/contents/plugins/${id}/.codex-plugin/plugin.json?ref=main`,
+        download_url: `https://download.test/${id}/plugin.json`,
+      },
+    ];
+    tree[`plugins/${id}/skills`] = [
+      {
+        type: "dir",
+        name: id,
+        path: `plugins/${id}/skills/${id}`,
+        url: `https://api.github.com/repos/mweinbach/cowork-skills-plugins/contents/plugins/${id}/skills/${id}?ref=main`,
+        download_url: null,
+      },
+    ];
+    tree[`plugins/${id}/skills/${id}`] = [
+      {
+        type: "file",
+        name: "SKILL.md",
+        path: `plugins/${id}/skills/${id}/SKILL.md`,
+        url: `https://api.github.com/repos/mweinbach/cowork-skills-plugins/contents/plugins/${id}/skills/${id}/SKILL.md?ref=main`,
+        download_url: `https://download.test/${id}/SKILL.md`,
+      },
+    ];
+    files[`https://download.test/${id}/plugin.json`] = JSON.stringify({
+      name: id,
+      version: "1.0.0",
+      description: `${id} plugin`,
+      skills: "./skills",
+    });
+    files[`https://download.test/${id}/SKILL.md`] =
+      `---\nname: ${id}\ndescription: ${id} skill\n---\n${id} body\n`;
+  }
+  return { tree, files };
+}
+
+describe("default global skills bootstrap", () => {
+  test("installs curated marketplace plugins into the user plugin library and records a one-time state file", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-skills-home-"));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-skills-workspace-"));
+    const skills: readonly DefaultSkillSpec[] = [{ id: "alpha" }, { id: "beta" }];
+    const { tree, files } = createMarketplaceFixture(["alpha", "beta"]);
+    const fetchImpl = createGitHubFetchStub(tree, files);
+    const config = makeConfig(workspace, home);
 
     try {
       const result = await ensureDefaultGlobalSkillsInstalled({
         homedir: home,
-        repo: "test/repo",
-        ref: "main",
-        skills,
+        config,
+        plugins: skills,
         fetchImpl,
       });
 
       expect(result.status).toBe("installed");
       expect(result.installed).toEqual(["alpha", "beta"]);
       expect(
-        await fs.readFile(path.join(home, ".cowork", "skills", "alpha", "SKILL.md"), "utf-8"),
-      ).toContain("Alpha body");
-      expect(
         await fs.readFile(
-          path.join(home, ".cowork", "skills", "beta", "assets", "example.txt"),
+          path.join(home, ".agents", "plugins", "alpha", ".codex-plugin", "plugin.json"),
           "utf-8",
         ),
-      ).toBe("beta asset\n");
+      ).toContain('"name":"alpha"');
 
       const stateFile = defaultGlobalSkillsStateFile(home);
       const state = JSON.parse(await fs.readFile(stateFile, "utf-8")) as {
-        repo: string;
-        ref: string;
-        skills: string[];
+        marketplace: string;
+        plugins: string[];
       };
-      expect(state.repo).toBe("test/repo");
-      expect(state.ref).toBe("main");
-      expect(state.skills).toEqual(["alpha", "beta"]);
+      expect(state.marketplace).toBe("mweinbach/cowork-skills-plugins");
+      expect(state.plugins).toEqual(["alpha", "beta"]);
     } finally {
       await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(workspace, { recursive: true, force: true });
     }
   });
 
   test("does not reinstall on later runs once the bootstrap state file exists", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-skills-once-"));
-    const skills: readonly DefaultSkillSpec[] = [
-      { name: "alpha", githubPath: "skills/.curated/alpha" },
-    ];
-
-    const fetchImpl = createGitHubFetchStub(
-      {
-        "skills/.curated/alpha": [
-          {
-            type: "file",
-            name: "SKILL.md",
-            path: "skills/.curated/alpha/SKILL.md",
-            url: "https://api.github.com/repos/test/repo/contents/skills/.curated/alpha/SKILL.md?ref=main",
-            download_url: "https://download.test/alpha/SKILL.md",
-          },
-        ],
-      },
-      {
-        "https://download.test/alpha/SKILL.md":
-          "---\nname: alpha\ndescription: Alpha skill\n---\nAlpha body\n",
-      },
-    );
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-skills-workspace-"));
+    const skills: readonly DefaultSkillSpec[] = [{ id: "alpha" }];
+    const { tree, files } = createMarketplaceFixture(["alpha"]);
+    const fetchImpl = createGitHubFetchStub(tree, files);
+    const config = makeConfig(workspace, home);
 
     try {
       await ensureDefaultGlobalSkillsInstalled({
         homedir: home,
-        repo: "test/repo",
-        ref: "main",
-        skills,
+        config,
+        plugins: skills,
         fetchImpl,
       });
 
-      await fs.rm(path.join(home, ".cowork", "skills", "alpha"), { recursive: true, force: true });
+      await fs.rm(path.join(home, ".agents", "plugins", "alpha"), {
+        recursive: true,
+        force: true,
+      });
 
       const second = await ensureDefaultGlobalSkillsInstalled({
         homedir: home,
-        repo: "test/repo",
-        ref: "main",
-        skills,
+        config,
+        plugins: skills,
         fetchImpl: (async () => {
           throw new Error("should not fetch after one-time bootstrap");
         }) as typeof fetch,
       });
 
       expect(second.status).toBe("already_installed");
-      await expect(fs.access(path.join(home, ".cowork", "skills", "alpha"))).rejects.toBeDefined();
+      await expect(fs.access(path.join(home, ".agents", "plugins", "alpha"))).rejects.toBeDefined();
     } finally {
       await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(workspace, { recursive: true, force: true });
     }
   });
 });

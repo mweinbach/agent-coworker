@@ -171,12 +171,14 @@ async function refreshCatalog(config: AgentConfig): Promise<SkillCatalogSnapshot
         descriptor,
       })),
       ...pluginCatalog.plugins.flatMap((plugin) =>
-        plugin.skills.map((skill) => ({
-          kind: "plugin" as const,
-          plugin,
-          skill,
-          enabled: skill.enabled,
-        })),
+        plugin.installed === false
+          ? []
+          : plugin.skills.map((skill) => ({
+              kind: "plugin" as const,
+              plugin,
+              skill,
+              enabled: skill.enabled,
+            })),
       ),
     ],
     { includeDisabled: true },

@@ -1,9 +1,15 @@
-import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
 
+import {
+  buildDescriptorFromGitHubSource,
+  expandHomeDir,
+  type FetchLike,
+  materializeGitHubDirectorySource,
+  resolveGitHubOrLocalSource,
+  trimSlashes,
+} from "../extensions/source";
 import type {
   SkillCatalogSnapshot,
   SkillInstallationDiagnostic,
@@ -11,14 +17,13 @@ import type {
   SkillInstallPreviewCandidate,
   SkillMutationTargetScope,
   SkillSourceDescriptor,
+  SkillSourceInputKind,
 } from "../types";
-import {
-  downloadGitHubDirectory,
-  type FetchLike,
-  type ParsedGitHubSource,
-  parseGitHubShorthand,
-  parseGitHubUrl,
-} from "./github";
+import { parseGitHubUrl } from "./github";
+
+type GitHubSkillSourceDescriptor = Omit<SkillSourceDescriptor, "kind"> & {
+  kind: Exclude<SkillSourceInputKind, "skills.sh">;
+};
 
 type MaterializedSkillCandidate = {
   rootDir: string;
@@ -53,10 +58,6 @@ const precedenceByScope = new Map([
   ["user", 2],
   ["built-in", 3],
 ]);
-
-function trimSlashes(value: string): string {
-  return value.replace(/^\/+|\/+$/g, "");
-}
 
 function buildDiagnostic(
   code: string,
@@ -106,14 +107,6 @@ function parseSkillMetadata(
   } catch {
     return null;
   }
-}
-
-function expandHomeDir(input: string): string {
-  if (!input.startsWith("~")) {
-    return input;
-  }
-  const remainder = input.slice(1).replace(/^[/\\]+/, "");
-  return path.join(os.homedir(), remainder);
 }
 
 async function discoverSkillRoots(rootDir: string): Promise<string[]> {
@@ -190,89 +183,6 @@ function parseSkillsDotSh(raw: string): SkillSourceDescriptor | null {
   };
 }
 
-function buildDescriptorFromGitHubSource(
-  raw: string,
-  parsed: ParsedGitHubSource,
-): SkillSourceDescriptor {
-  const kindBySource: Record<ParsedGitHubSource["kind"], SkillSourceDescriptor["kind"]> = {
-    repo: "github_repo",
-    tree: "github_tree",
-    blob: "github_blob",
-    raw: "github_raw",
-  };
-
-  return {
-    kind: kindBySource[parsed.kind],
-    raw,
-    displaySource: parsed.url,
-    url: parsed.url,
-    repo: parsed.repo,
-    ...(parsed.ref ? { ref: parsed.ref } : {}),
-    ...(parsed.subdir ? { subdir: parsed.subdir } : {}),
-    ...(parsed.refPath ? { refPath: parsed.refPath } : {}),
-  };
-}
-
-type GitHubMaterializationAttempt = {
-  ref: string;
-  githubPath: string;
-  descriptor: SkillSourceDescriptor;
-};
-
-function buildResolvedGitHubDescriptor(
-  descriptor: SkillSourceDescriptor,
-  ref: string | undefined,
-  githubPath: string,
-): SkillSourceDescriptor {
-  return {
-    kind: descriptor.kind,
-    raw: descriptor.raw,
-    displaySource: descriptor.displaySource,
-    ...(descriptor.url ? { url: descriptor.url } : {}),
-    ...(descriptor.repo ? { repo: descriptor.repo } : {}),
-    ...(ref ? { ref } : {}),
-    ...(githubPath ? { subdir: githubPath } : {}),
-    ...(descriptor.localPath ? { localPath: descriptor.localPath } : {}),
-    ...(descriptor.requestedSkillName ? { requestedSkillName: descriptor.requestedSkillName } : {}),
-  };
-}
-
-function buildGitHubMaterializationAttempts(
-  descriptor: SkillSourceDescriptor,
-): GitHubMaterializationAttempt[] {
-  const refPathSegments = descriptor.refPath?.split("/").filter(Boolean) ?? [];
-  if (
-    refPathSegments.length === 0 ||
-    (descriptor.kind !== "github_tree" &&
-      descriptor.kind !== "github_blob" &&
-      descriptor.kind !== "github_raw")
-  ) {
-    return [];
-  }
-
-  const minimumTrailingSegments = descriptor.kind === "github_tree" ? 0 : 1;
-  const attempts: GitHubMaterializationAttempt[] = [];
-  for (let splitAt = refPathSegments.length - minimumTrailingSegments; splitAt >= 1; splitAt -= 1) {
-    const ref = refPathSegments.slice(0, splitAt).join("/");
-    const trailingPath = refPathSegments.slice(splitAt).join("/");
-    const githubPath =
-      descriptor.kind === "github_tree"
-        ? trailingPath
-        : trailingPath
-          ? path.posix.dirname(trailingPath)
-          : "";
-    const normalizedPath = githubPath === "." ? "" : githubPath;
-
-    attempts.push({
-      ref,
-      githubPath: normalizedPath,
-      descriptor: buildResolvedGitHubDescriptor(descriptor, ref, normalizedPath),
-    });
-  }
-
-  return attempts;
-}
-
 export function resolveSkillSource(input: string, cwd = process.cwd()): SkillSourceDescriptor {
   const trimmed = input.trim();
   if (!trimmed) {
@@ -286,139 +196,46 @@ export function resolveSkillSource(input: string, cwd = process.cwd()): SkillSou
 
   const githubUrl = parseGitHubUrl(trimmed);
   if (githubUrl) {
-    return buildDescriptorFromGitHubSource(trimmed, githubUrl);
+    return buildDescriptorFromGitHubSource<GitHubSkillSourceDescriptor>(
+      trimmed,
+      githubUrl,
+    ) as SkillSourceDescriptor;
   }
 
-  const githubShorthand = parseGitHubShorthand(trimmed);
-  if (githubShorthand) {
-    const candidateLocalPath = path.isAbsolute(trimmed)
-      ? path.resolve(expandHomeDir(trimmed))
-      : path.resolve(cwd, expandHomeDir(trimmed));
-    if (existsSync(candidateLocalPath)) {
-      return {
-        kind: "local_path",
-        raw: trimmed,
-        displaySource: candidateLocalPath,
-        localPath: candidateLocalPath,
-      };
-    }
-    return {
-      kind: "github_shorthand",
-      raw: trimmed,
-      displaySource: githubShorthand.url,
-      url: githubShorthand.url,
-      repo: githubShorthand.repo,
-    };
-  }
-
-  const localPath = path.isAbsolute(trimmed) ? trimmed : path.resolve(cwd, expandHomeDir(trimmed));
-  return {
-    kind: "local_path",
-    raw: trimmed,
-    displaySource: localPath,
-    localPath,
-  };
+  return resolveGitHubOrLocalSource<GitHubSkillSourceDescriptor>(
+    trimmed,
+    cwd,
+  ) as SkillSourceDescriptor;
 }
 
 async function materializeGitHubSource(
   descriptor: SkillSourceDescriptor,
   fetchImpl: FetchLike,
 ): Promise<MaterializedSkillSource> {
-  if (!descriptor.repo) {
-    throw new Error("GitHub source is missing repo information");
-  }
-
-  const preferredAttempt = descriptor.ref
-    ? [
-        {
-          ref: descriptor.ref,
-          githubPath: descriptor.subdir ?? "",
-          descriptor: buildResolvedGitHubDescriptor(
-            descriptor,
-            descriptor.ref,
-            descriptor.subdir ?? "",
-          ),
-        },
-      ]
-    : [];
-  const attempts = buildGitHubMaterializationAttempts(descriptor);
-  const fallbackRefs = descriptor.ref ? [descriptor.ref] : ["main", "master"];
-  const fallbackAttempts = fallbackRefs.map((ref) => {
-    const githubPath = descriptor.subdir ?? "";
-    return {
-      ref,
-      githubPath,
-      descriptor: buildResolvedGitHubDescriptor(descriptor, ref, githubPath),
-    };
+  const githubDescriptor = descriptor as GitHubSkillSourceDescriptor;
+  const materialized = await materializeGitHubDirectorySource<
+    GitHubSkillSourceDescriptor,
+    MaterializedSkillCandidate
+  >({
+    descriptor: githubDescriptor,
+    fetchImpl,
+    tmpPrefix: "cowork-skill-source-",
+    normalizeTreePath: (directoryPath) => directoryPath,
+    normalizeFileDirectoryPath: (filePath) => path.posix.dirname(filePath),
+    extra: (source) =>
+      source.requestedSkillName ? { requestedSkillName: source.requestedSkillName } : {},
+    loadCandidates: async (stageRoot, source) =>
+      await loadMaterializedSkillCandidates(stageRoot, source),
   });
-  const materializationAttempts = (
-    attempts.length > 0
-      ? [...preferredAttempt, ...attempts]
-      : [...preferredAttempt, ...fallbackAttempts]
-  ).filter(
-    (attempt, index, allAttempts) =>
-      allAttempts.findIndex(
-        (candidate) => candidate.ref === attempt.ref && candidate.githubPath === attempt.githubPath,
-      ) === index,
-  );
-  const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-skill-source-"));
-  let resolvedDescriptor: SkillSourceDescriptor | null = null;
-  let stageRoot: string | null = null;
-  let lastError: unknown = null;
-
-  try {
-    for (const attempt of materializationAttempts) {
-      const repoRoot = path.join(tmpRoot, descriptor.repo.split("/").at(-1) ?? "repo");
-      try {
-        if (attempt.githubPath) {
-          const destination = path.join(repoRoot, path.basename(attempt.githubPath));
-          await downloadGitHubDirectory({
-            fetchImpl,
-            repo: descriptor.repo,
-            ref: attempt.ref,
-            githubPath: attempt.githubPath,
-            destDir: destination,
-          });
-          stageRoot = destination;
-        } else {
-          await downloadGitHubDirectory({
-            fetchImpl,
-            repo: descriptor.repo,
-            ref: attempt.ref,
-            githubPath: "",
-            destDir: repoRoot,
-          });
-          stageRoot = repoRoot;
-        }
-        resolvedDescriptor = attempt.descriptor;
-        break;
-      } catch (error) {
-        lastError = error;
-      }
-    }
-
-    if (!stageRoot || !resolvedDescriptor) {
-      throw lastError instanceof Error
-        ? lastError
-        : new Error(String(lastError ?? "Unable to fetch GitHub source"));
-    }
-
-    const candidates = await loadMaterializedSkillCandidates(stageRoot, resolvedDescriptor);
-    const filteredCandidates = descriptor.requestedSkillName
-      ? candidates.filter((candidate) => candidate.name === descriptor.requestedSkillName)
-      : candidates;
-
-    return {
-      descriptor: resolvedDescriptor,
-      candidates: filteredCandidates,
-      cleanup: async () => {
-        await fs.rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
-      },
-    };
-  } catch (error) {
-    await fs.rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
-    throw error;
-  }
+  const filteredCandidates = descriptor.requestedSkillName
+    ? materialized.candidates.filter(
+        (candidate) => candidate.name === descriptor.requestedSkillName,
+      )
+    : materialized.candidates;
+  return {
+    ...materialized,
+    candidates: filteredCandidates,
+  };
 }
 
 async function loadMaterializedSkillCandidates(

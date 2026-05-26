@@ -44,8 +44,18 @@ export function PluginsCatalogPage({
     return items.sort((left, right) => left.displayName.localeCompare(right.displayName));
   }, [catalog, searchQuery, managementScope]);
 
-  const enabledPlugins = useMemo(() => plugins.filter((plugin) => plugin.enabled), [plugins]);
-  const disabledPlugins = useMemo(() => plugins.filter((plugin) => !plugin.enabled), [plugins]);
+  const availablePlugins = useMemo(
+    () => plugins.filter((plugin) => plugin.installed === false),
+    [plugins],
+  );
+  const enabledPlugins = useMemo(
+    () => plugins.filter((plugin) => plugin.installed !== false && plugin.enabled),
+    [plugins],
+  );
+  const disabledPlugins = useMemo(
+    () => plugins.filter((plugin) => plugin.installed !== false && !plugin.enabled),
+    [plugins],
+  );
 
   const emptyLabel =
     managementScope === "global"
@@ -84,6 +94,16 @@ export function PluginsCatalogPage({
               <h2 className="mb-4 text-lg font-semibold text-muted-foreground">Disabled</h2>
               <PluginCardGrid
                 plugins={disabledPlugins}
+                onSelect={(pluginId, scope) => void selectPlugin(pluginId, scope)}
+              />
+            </section>
+          ) : null}
+
+          {availablePlugins.length > 0 ? (
+            <section>
+              <h2 className="mb-4 text-lg font-semibold text-muted-foreground">Available</h2>
+              <PluginCardGrid
+                plugins={availablePlugins}
                 onSelect={(pluginId, scope) => void selectPlugin(pluginId, scope)}
               />
             </section>

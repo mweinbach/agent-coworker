@@ -81,12 +81,14 @@ export async function discoverSkillsForConfig(
     [
       ...standaloneSources(config.skillsDirs),
       ...orderedPlugins.flatMap((plugin) =>
-        plugin.skills.map((skill) => ({
-          kind: "plugin" as const,
-          plugin,
-          skill,
-          enabled: skill.enabled,
-        })),
+        plugin.installed === false
+          ? []
+          : plugin.skills.map((skill) => ({
+              kind: "plugin" as const,
+              plugin,
+              skill,
+              enabled: skill.enabled,
+            })),
       ),
     ],
     {

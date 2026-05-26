@@ -126,19 +126,21 @@ export async function createAgentServerRuntime(
       : 128,
   );
 
-  await ensureDefaultGlobalSkillsReady({
-    homedir: opts.homedir,
-    env,
-    log: (line) => {
-      console.warn(`[default-skills] ${line}`);
-    },
-  });
-
   const builtInDir =
     typeof env.COWORK_BUILTIN_DIR === "string" && env.COWORK_BUILTIN_DIR.trim()
       ? env.COWORK_BUILTIN_DIR
       : undefined;
   let config = await loadConfig({ cwd: opts.cwd, env, homedir: opts.homedir, builtInDir });
+
+  await ensureDefaultGlobalSkillsReady({
+    homedir: opts.homedir,
+    env,
+    config,
+    log: (line) => {
+      console.warn(`[default-skills] ${line}`);
+    },
+  });
+
   const mergedProviderOptions = mergeRuntimeProviderOptions(
     opts.providerOptions,
     config.providerOptions,

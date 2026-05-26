@@ -2,12 +2,17 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import {
+  BUILT_IN_MARKETPLACE_REPO,
+  DEFAULT_MARKETPLACE_PLUGIN_IDS,
+  type FetchLike,
+} from "../extensions/source";
+import { buildPluginCatalogSnapshot, installPluginsFromSource } from "../plugins";
+import { readPluginOverrides } from "../plugins/overrides";
+import { fetchRemotePluginMarketplace } from "../plugins/remoteMarketplace";
 import { ensureAiCoworkerHome, getAiCoworkerPaths } from "../store/connections";
-import { downloadGitHubDirectory, type FetchLike } from "./github";
-import { writeSkillInstallManifest } from "./manifest";
+import type { AgentConfig } from "../types";
 
-const DEFAULT_SKILLS_REPO = "openai/skills";
-const DEFAULT_SKILLS_REF = "main";
 const DEFAULT_SKILLS_STATE_FILE = "default-global-skills.json";
 const INSTALL_STATE_VERSION = 1;
 const bootstrapPromises = new Map<
@@ -17,37 +22,27 @@ const bootstrapPromises = new Map<
 
 type DefaultGlobalSkillsState = {
   version: number;
-  repo: string;
-  ref: string;
+  marketplace: string;
   installedAt: string;
-  skills: string[];
+  plugins: string[];
 };
 
 export type DefaultSkillSpec = {
-  name: string;
-  githubPath: string;
+  id: string;
 };
 
 export const DEFAULT_GLOBAL_SKILLS: readonly DefaultSkillSpec[] = [
-  { name: "pdf", githubPath: "skills/.curated/pdf" },
+  ...DEFAULT_MARKETPLACE_PLUGIN_IDS.map((id) => ({ id })),
 ] as const;
 
 export type EnsureDefaultGlobalSkillsInstalledResult = {
   status: "installed" | "already_installed";
-  skillsDir: string;
+  pluginsDir: string;
   stateFile: string;
   installed: string[];
   skippedExisting: string[];
+  skippedRemoved: string[];
 };
-
-async function exists(p: string): Promise<boolean> {
-  try {
-    await fs.access(p);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 async function readState(stateFile: string): Promise<DefaultGlobalSkillsState | null> {
   try {
@@ -55,19 +50,17 @@ async function readState(stateFile: string): Promise<DefaultGlobalSkillsState | 
     const parsed = JSON.parse(raw) as Partial<DefaultGlobalSkillsState>;
     if (
       parsed.version !== INSTALL_STATE_VERSION ||
-      typeof parsed.repo !== "string" ||
-      typeof parsed.ref !== "string" ||
+      typeof parsed.marketplace !== "string" ||
       typeof parsed.installedAt !== "string" ||
-      !Array.isArray(parsed.skills)
+      !Array.isArray(parsed.plugins)
     ) {
       return null;
     }
     return {
       version: parsed.version,
-      repo: parsed.repo,
-      ref: parsed.ref,
+      marketplace: parsed.marketplace,
       installedAt: parsed.installedAt,
-      skills: parsed.skills.filter((value): value is string => typeof value === "string"),
+      plugins: parsed.plugins.filter((value): value is string => typeof value === "string"),
     };
   } catch {
     return null;
@@ -94,18 +87,15 @@ export function shouldBootstrapDefaultGlobalSkills(
   return !isTruthy(env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP);
 }
 
-export async function ensureDefaultGlobalSkillsReady(
-  opts: {
-    homedir?: string;
-    env?: Record<string, string | undefined>;
-    fetchImpl?: FetchLike;
-    repo?: string;
-    ref?: string;
-    skills?: readonly DefaultSkillSpec[];
-    force?: boolean;
-    log?: (line: string) => void;
-  } = {},
-): Promise<EnsureDefaultGlobalSkillsInstalledResult | null> {
+export async function ensureDefaultGlobalSkillsReady(opts: {
+  homedir?: string;
+  env?: Record<string, string | undefined>;
+  fetchImpl?: FetchLike;
+  config: AgentConfig;
+  plugins?: readonly DefaultSkillSpec[];
+  force?: boolean;
+  log?: (line: string) => void;
+}): Promise<EnsureDefaultGlobalSkillsInstalledResult | null> {
   const env = opts.env ?? process.env;
   if (!shouldBootstrapDefaultGlobalSkills(env)) {
     return null;
@@ -133,94 +123,97 @@ export async function ensureDefaultGlobalSkillsReady(
   return await promise;
 }
 
-export async function ensureDefaultGlobalSkillsInstalled(
-  opts: {
-    homedir?: string;
-    fetchImpl?: FetchLike;
-    repo?: string;
-    ref?: string;
-    skills?: readonly DefaultSkillSpec[];
-    force?: boolean;
-    log?: (line: string) => void;
-  } = {},
-): Promise<EnsureDefaultGlobalSkillsInstalledResult> {
-  const repo = opts.repo ?? DEFAULT_SKILLS_REPO;
-  const ref = opts.ref ?? DEFAULT_SKILLS_REF;
-  const skills = [...(opts.skills ?? DEFAULT_GLOBAL_SKILLS)];
+export async function ensureDefaultGlobalSkillsInstalled(opts: {
+  homedir?: string;
+  fetchImpl?: FetchLike;
+  config: AgentConfig;
+  plugins?: readonly DefaultSkillSpec[];
+  force?: boolean;
+  log?: (line: string) => void;
+}): Promise<EnsureDefaultGlobalSkillsInstalledResult> {
+  const pluginSpecs = [...(opts.plugins ?? DEFAULT_GLOBAL_SKILLS)];
   const fetchImpl = opts.fetchImpl ?? fetch;
   const paths = getAiCoworkerPaths(opts.homedir ? { homedir: opts.homedir } : {});
   const stateFile = defaultStateFileForHomedir(opts.homedir);
 
   await ensureAiCoworkerHome(paths);
 
+  const marketplaceName = BUILT_IN_MARKETPLACE_REPO;
+
   if (!opts.force) {
     const state = await readState(stateFile);
-    if (state && state.repo === repo && state.ref === ref) {
+    if (state && state.marketplace === marketplaceName) {
       return {
         status: "already_installed",
-        skillsDir: paths.skillsDir,
+        pluginsDir: opts.config.userPluginsDir ?? "",
         stateFile,
         installed: [],
-        skippedExisting: [...state.skills],
+        skippedExisting: [...state.plugins],
+        skippedRemoved: [],
       };
     }
   }
 
+  const marketplace = await fetchRemotePluginMarketplace({ fetchImpl });
+
   const installed: string[] = [];
   const skippedExisting: string[] = [];
-  const tmpRoot = await fs.mkdtemp(path.join(paths.rootDir, ".default-skills-"));
+  const skippedRemoved: string[] = [];
 
-  try {
-    opts.log?.(`Ensuring default global skills in ${paths.skillsDir}`);
+  opts.log?.(`Ensuring default marketplace plugins in ${opts.config.userPluginsDir ?? "(none)"}`);
 
-    for (const skill of skills) {
-      const finalDir = path.join(paths.skillsDir, skill.name);
-      if (!opts.force && (await exists(finalDir))) {
-        skippedExisting.push(skill.name);
-        continue;
-      }
-
-      await fs.rm(finalDir, { recursive: true, force: true });
-      const tmpDir = path.join(tmpRoot, skill.name);
-      await downloadGitHubDirectory({
-        fetchImpl,
-        repo,
-        ref,
-        githubPath: skill.githubPath,
-        destDir: tmpDir,
-      });
-      await fs.rename(tmpDir, finalDir);
-      await writeSkillInstallManifest({
-        skillRoot: finalDir,
-        installationId: `bootstrap-${skill.name}`,
-        origin: {
-          kind: "bootstrap",
-          url: `https://github.com/${repo}/tree/${ref}/${skill.githubPath}`,
-          repo,
-          ref,
-          subdir: skill.githubPath,
-        },
-      });
-      installed.push(skill.name);
+  const overrides = await readPluginOverrides(opts.config);
+  let catalog = await buildPluginCatalogSnapshot(opts.config, {
+    fetchImpl,
+    includeRemoteMarketplace: true,
+  });
+  for (const pluginSpec of pluginSpecs) {
+    const pluginId = pluginSpec.id;
+    if (!opts.force && overrides.user.plugins?.[pluginId] === false) {
+      skippedRemoved.push(pluginId);
+      continue;
+    }
+    if (
+      !opts.force &&
+      catalog.plugins.some((plugin) => plugin.id === pluginId && plugin.installed !== false)
+    ) {
+      skippedExisting.push(pluginId);
+      continue;
     }
 
-    const state: DefaultGlobalSkillsState = {
-      version: INSTALL_STATE_VERSION,
-      repo,
-      ref,
-      installedAt: new Date().toISOString(),
-      skills: skills.map((skill) => skill.name),
-    };
-    await fs.writeFile(stateFile, `${JSON.stringify(state, null, 2)}\n`, "utf-8");
+    const marketplaceEntry = marketplace.plugins.find((entry) => entry.name === pluginId);
+    if (!marketplaceEntry?.sourceInput) {
+      skippedExisting.push(pluginId);
+      continue;
+    }
 
-    return {
-      status: installed.length > 0 ? "installed" : "already_installed",
-      skillsDir: paths.skillsDir,
-      stateFile,
-      installed,
-      skippedExisting,
-    };
-  } finally {
-    await fs.rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+    await installPluginsFromSource({
+      config: opts.config,
+      input: marketplaceEntry.sourceInput,
+      targetScope: "user",
+      fetchImpl,
+    });
+    installed.push(pluginId);
+    catalog = await buildPluginCatalogSnapshot(opts.config, {
+      fetchImpl,
+      includeRemoteMarketplace: true,
+    });
   }
+
+  const state: DefaultGlobalSkillsState = {
+    version: INSTALL_STATE_VERSION,
+    marketplace: marketplaceName,
+    installedAt: new Date().toISOString(),
+    plugins: pluginSpecs.map((plugin) => plugin.id),
+  };
+  await fs.writeFile(stateFile, `${JSON.stringify(state, null, 2)}\n`, "utf-8");
+
+  return {
+    status: installed.length > 0 ? "installed" : "already_installed",
+    pluginsDir: opts.config.userPluginsDir ?? "",
+    stateFile,
+    installed,
+    skippedExisting,
+    skippedRemoved,
+  };
 }

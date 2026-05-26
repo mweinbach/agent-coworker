@@ -15,6 +15,7 @@ export function PluginCardGrid({
       {plugins.map((plugin) => {
         const icon = plugin.interface?.logo || plugin.interface?.composerIcon || "🧩";
         const subtitle = plugin.interface?.shortDescription || plugin.description;
+        const installed = plugin.installed !== false;
         return (
           <button
             key={`${plugin.scope}:${plugin.id}`}
@@ -43,7 +44,11 @@ export function PluginCardGrid({
                     </div>
                   </div>
                 </div>
-                {plugin.enabled ? (
+                {!installed ? (
+                  <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                    Available
+                  </Badge>
+                ) : plugin.enabled ? (
                   <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
                     Enabled
                   </Badge>

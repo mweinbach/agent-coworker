@@ -5,6 +5,7 @@ import { renameMCPServerCredentials } from "../mcp/authStore";
 import type {
   AgentConfig,
   MCPServerConfig,
+  PluginCatalogEntry,
   PluginCatalogSnapshot,
   PluginInstallPreview,
   PluginInstallTargetScope,
@@ -13,6 +14,7 @@ import { workspacePathOverlaps } from "../utils/workspacePath";
 import { buildPluginCatalogSnapshot } from "./catalog";
 import { readPluginManifest } from "./manifest";
 import { readPluginMcpServers } from "./mcp";
+import { setPluginEnabled } from "./overrides";
 import {
   buildPluginInstallPreview,
   type MaterializedPluginCandidate,
@@ -49,7 +51,7 @@ function conflictingTargetRoots(
 ): string[] {
   const roots = new Set<string>();
   for (const plugin of catalog.plugins) {
-    if (plugin.scope === paths.scope && plugin.id === pluginId) {
+    if (plugin.scope === paths.scope && plugin.id === pluginId && plugin.installed !== false) {
       roots.add(plugin.rootDir);
     }
   }
@@ -291,12 +293,14 @@ export async function previewPluginInstall(opts: {
   config: AgentConfig;
   input: string;
   targetScope: PluginInstallTargetScope;
+  fetchImpl?: import("../extensions/source").FetchLike;
 }): Promise<PluginInstallPreview> {
   return await buildPluginInstallPreview({
     input: opts.input,
     targetScope: opts.targetScope,
-    catalog: await refreshCatalog(opts.config),
+    catalog: await buildPluginCatalogSnapshot(opts.config, { fetchImpl: opts.fetchImpl }),
     cwd: opts.config.workingDirectory,
+    fetchImpl: opts.fetchImpl,
   });
 }
 
@@ -304,23 +308,28 @@ export async function installPluginsFromSource(opts: {
   config: AgentConfig;
   input: string;
   targetScope: PluginInstallTargetScope;
+  fetchImpl?: import("../extensions/source").FetchLike;
 }): Promise<{
   preview: PluginInstallPreview;
   pluginIds: string[];
   catalog: PluginCatalogSnapshot;
 }> {
-  const currentCatalog = await refreshCatalog(opts.config);
+  const currentCatalog = await buildPluginCatalogSnapshot(opts.config, {
+    fetchImpl: opts.fetchImpl,
+  });
   const preview = await buildPluginInstallPreview({
     input: opts.input,
     targetScope: opts.targetScope,
     catalog: currentCatalog,
     cwd: opts.config.workingDirectory,
+    fetchImpl: opts.fetchImpl,
   });
 
   const writableScope = requireWritablePluginScope(opts.config, opts.targetScope);
   const materialized = await materializePluginSource({
     input: opts.input,
     cwd: opts.config.workingDirectory,
+    fetchImpl: opts.fetchImpl,
   });
 
   try {
@@ -370,6 +379,23 @@ export async function installPluginsFromSource(opts: {
   } finally {
     await materialized.cleanup();
   }
+}
+
+export async function deletePluginInstallation(opts: {
+  config: AgentConfig;
+  plugin: PluginCatalogEntry;
+}): Promise<PluginCatalogSnapshot> {
+  if (opts.plugin.installed === false) {
+    throw new Error(`Plugin "${opts.plugin.id}" is not installed.`);
+  }
+  await fs.rm(opts.plugin.rootDir, { recursive: true, force: true });
+  await setPluginEnabled({
+    config: opts.config,
+    pluginId: opts.plugin.id,
+    scope: opts.plugin.scope,
+    enabled: false,
+  });
+  return await refreshCatalog(opts.config);
 }
 
 export type { MaterializedPluginSource };

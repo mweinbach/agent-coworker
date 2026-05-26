@@ -25,8 +25,10 @@ function pluginDiscoveryLabel(kind: "marketplace" | "direct"): string {
 export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
   const runtime = useAppStore((s) => s.workspaceRuntimeById[workspaceId]);
   const selectPlugin = useAppStore((s) => s.selectPlugin);
+  const installPlugins = useAppStore((s) => s.installPlugins);
   const enablePlugin = useAppStore((s) => s.enablePlugin);
   const disablePlugin = useAppStore((s) => s.disablePlugin);
+  const deletePlugin = useAppStore((s) => s.deletePlugin);
 
   const plugin = runtime?.selectedPlugin ?? null;
   const pluginId = runtime?.selectedPluginId ?? null;
@@ -41,12 +43,17 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
     return plugin.marketplace.displayName ?? plugin.marketplace.name;
   }, [plugin]);
   const pluginError = runtime?.pluginsError ?? runtime?.skillMutationError ?? null;
+  const installed = plugin?.installed !== false;
   const enablePending = plugin
     ? actionPending(runtime, "plugin:enable", `${plugin.scope}:${plugin.id}`)
     : false;
   const disablePending = plugin
     ? actionPending(runtime, "plugin:disable", `${plugin.scope}:${plugin.id}`)
     : false;
+  const deletePending = plugin
+    ? actionPending(runtime, "plugin:delete", `${plugin.scope}:${plugin.id}`)
+    : false;
+  const installPending = plugin ? actionPending(runtime, `plugin:install:${plugin.scope}`) : false;
 
   const handleOpenChange = (open: boolean) => {
     if (!open) {
@@ -87,18 +94,20 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
                             <span>{marketLabel}</span>
                           </>
                         ) : null}
-                        <Button
-                          type="button"
-                          variant="link"
-                          className="h-auto p-0 text-muted-foreground hover:text-foreground"
-                          onClick={() => {
-                            void revealPath({ path: plugin.rootDir });
-                          }}
-                        >
-                          <span className="flex items-center gap-1">
-                            Open folder <ExternalLinkIcon className="h-3 w-3" />
-                          </span>
-                        </Button>
+                        {installed ? (
+                          <Button
+                            type="button"
+                            variant="link"
+                            className="h-auto p-0 text-muted-foreground hover:text-foreground"
+                            onClick={() => {
+                              void revealPath({ path: plugin.rootDir });
+                            }}
+                          >
+                            <span className="flex items-center gap-1">
+                              Open folder <ExternalLinkIcon className="h-3 w-3" />
+                            </span>
+                          </Button>
+                        ) : null}
                       </div>
                     </div>
                   </div>
@@ -116,8 +125,8 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
                 </div>
               ) : null}
               <div className="flex flex-wrap gap-2">
-                <Badge variant={plugin.enabled ? "default" : "secondary"}>
-                  {plugin.enabled ? "Enabled" : "Disabled"}
+                <Badge variant={installed && plugin.enabled ? "default" : "secondary"}>
+                  {installed ? (plugin.enabled ? "Enabled" : "Disabled") : "Available"}
                 </Badge>
                 <Badge variant="secondary">{pluginScopeLabel(plugin.scope)}</Badge>
                 <Badge variant="outline">{pluginDiscoveryLabel(plugin.discoveryKind)}</Badge>
@@ -216,7 +225,15 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
 
             <div className="flex items-center justify-between border-t border-border/50 bg-muted/10 p-4">
               <div className="flex items-center gap-2">
-                {plugin.enabled ? (
+                {!installed && plugin.installSource ? (
+                  <Button
+                    size="sm"
+                    disabled={installPending}
+                    onClick={() => void installPlugins(plugin.installSource ?? "", plugin.scope)}
+                  >
+                    {installPending ? "Installing..." : "Install Plugin"}
+                  </Button>
+                ) : plugin.enabled ? (
                   <Button
                     variant="outline"
                     size="sm"
@@ -235,6 +252,26 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
                     {enablePending ? "Enabling..." : "Enable Plugin"}
                   </Button>
                 )}
+                {installed && plugin.installSource ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={installPending}
+                    onClick={() => void installPlugins(plugin.installSource ?? "", plugin.scope)}
+                  >
+                    {installPending ? "Updating..." : "Update Plugin"}
+                  </Button>
+                ) : null}
+                {installed ? (
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    disabled={deletePending}
+                    onClick={() => void deletePlugin(plugin.id, plugin.scope)}
+                  >
+                    {deletePending ? "Deleting..." : "Delete Plugin"}
+                  </Button>
+                ) : null}
               </div>
               <Button size="sm" onClick={() => handleOpenChange(false)}>
                 Close

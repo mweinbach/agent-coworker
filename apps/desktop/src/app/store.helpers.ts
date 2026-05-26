@@ -319,6 +319,7 @@ export type AppStoreState = {
   installPlugins: (sourceInput: string, targetScope: "workspace" | "user") => Promise<void>;
   enablePlugin: (pluginId: string, scope?: "workspace" | "user") => Promise<void>;
   disablePlugin: (pluginId: string, scope?: "workspace" | "user") => Promise<void>;
+  deletePlugin: (pluginId: string, scope?: "workspace" | "user") => Promise<void>;
   setPluginViewMode: (mode: "plugins" | "skills") => void;
   selectSkill: (skillName: string) => Promise<void>;
   selectSkillInstallation: (installationId: string | null) => Promise<void>;

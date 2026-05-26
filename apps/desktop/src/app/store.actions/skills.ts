@@ -74,6 +74,7 @@ export function createSkillActions(
   | "setPluginViewMode"
   | "enablePlugin"
   | "disablePlugin"
+  | "deletePlugin"
   | "selectSkill"
   | "selectSkillInstallation"
   | "previewSkillInstall"
@@ -546,6 +547,70 @@ export function createSkillActions(
             ...s.workspaceRuntimeById,
             [workspaceId]: {
               ...s.workspaceRuntimeById[workspaceId],
+              skillMutationPendingKeys: (() => {
+                const pendingKeys = {
+                  ...s.workspaceRuntimeById[workspaceId].skillMutationPendingKeys,
+                };
+                delete pendingKeys[key];
+                return pendingKeys;
+              })(),
+            },
+          },
+        }));
+        if (pluginScope === "user") {
+          await refreshSharedWorkspaceState(workspaceId);
+        }
+      }
+    },
+
+    deletePlugin: async (pluginId: string, scope?: PluginSelection["scope"]) => {
+      const workspaceId = managementWorkspaceId();
+      if (!workspaceId) return;
+      const cwd = workspacePath(workspaceId);
+      const pluginScope = resolvePluginScopeForMutation(workspaceId, pluginId, scope);
+      const selection = scope ? { id: pluginId, scope } : undefined;
+      const key = pluginPendingKey("delete", selection);
+      set((s) => ({
+        workspaceRuntimeById: {
+          ...s.workspaceRuntimeById,
+          [workspaceId]: {
+            ...s.workspaceRuntimeById[workspaceId],
+            skillMutationPendingKeys: {
+              ...s.workspaceRuntimeById[workspaceId].skillMutationPendingKeys,
+              [key]: true,
+            },
+          },
+        },
+      }));
+      const rpcError: { message?: string } = {};
+      const ok = await requestJsonRpcControlEvent(
+        get,
+        set,
+        workspaceId,
+        "cowork/plugins/delete",
+        {
+          cwd,
+          pluginId,
+          ...(scope ? { scope } : {}),
+        },
+        rpcError,
+      );
+      if (!ok) {
+        const detail = rpcError.message?.trim() || "Unable to delete plugin.";
+        clearFailedMutationSend(set, workspaceId, key, detail, {
+          pluginsLoading: false,
+          pluginsError: detail,
+          skillMutationError: detail,
+        });
+      } else {
+        set((s) => ({
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...s.workspaceRuntimeById[workspaceId],
+              selectedPlugin: null,
+              selectedPluginId: null,
+              selectedPluginScope: null,
               skillMutationPendingKeys: (() => {
                 const pendingKeys = {
                   ...s.workspaceRuntimeById[workspaceId].skillMutationPendingKeys,

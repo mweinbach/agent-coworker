@@ -250,6 +250,7 @@ const ALWAYS_ALLOWED_H3_RPC_METHODS = new Set([
   "cowork/plugins/catalog/read",
   "cowork/plugins/read",
   "cowork/plugins/install/preview",
+  "cowork/plugins/delete",
   "cowork/memory/list",
   "cowork/connectors/openai-native/list",
   "cowork/connectors/openai-native/refresh",

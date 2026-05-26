@@ -19,6 +19,7 @@ export {
   type ParsedMarketplaceDocument,
   type ParsedMarketplacePluginEntry,
   parsePluginMarketplace,
+  parseRemotePluginMarketplace,
 } from "./marketplace";
 export {
   parsePluginMcpDocument,
@@ -28,6 +29,7 @@ export {
   validatePluginMcpPath,
 } from "./mcp";
 export {
+  deletePluginInstallation,
   installPluginsFromSource,
   resolvePluginSourceDescriptorForInstallInput,
 } from "./operations";
@@ -41,6 +43,7 @@ export {
   setPluginMcpServerEnabled,
   setPluginSkillEnabled,
 } from "./overrides";
+export { fetchRemotePluginMarketplace } from "./remoteMarketplace";
 export {
   buildPluginSkillSources,
   type PluginSkillCatalogSource,

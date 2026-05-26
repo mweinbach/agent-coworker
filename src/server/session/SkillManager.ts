@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import {
   buildPluginCatalogSnapshot,
   buildPluginInstallPreview,
+  deletePluginInstallation,
   installPluginsFromSource,
   resolvePluginCatalogEntry,
 } from "../../plugins";
@@ -79,7 +80,9 @@ export class SkillManager {
   }
 
   private async emitPluginsCatalog(clearedMutationPendingKeys: string[] = []) {
-    const catalog = await buildPluginCatalogSnapshot(this.context.state.config);
+    const catalog = await buildPluginCatalogSnapshot(this.context.state.config, {
+      includeRemoteMarketplace: true,
+    });
     this.context.emit({
       type: "plugins_catalog",
       sessionId: this.context.id,
@@ -121,7 +124,9 @@ export class SkillManager {
   }
 
   private async emitPluginDetail(pluginId: string, scope?: PluginCatalogEntry["scope"]) {
-    const catalog = await buildPluginCatalogSnapshot(this.context.state.config);
+    const catalog = await buildPluginCatalogSnapshot(this.context.state.config, {
+      includeRemoteMarketplace: true,
+    });
     const plugin = this.resolvePluginSelection(catalog, pluginId, scope);
     if (plugin === null) {
       return;
@@ -596,6 +601,37 @@ export class SkillManager {
           "internal_error",
           "session",
           `Failed to disable plugin: ${String(err)}`,
+        );
+      }
+    });
+  }
+
+  async deletePlugin(pluginIdRaw: string, scope?: PluginCatalogEntry["scope"]) {
+    const pluginId = pluginIdRaw.trim();
+    if (!pluginId) {
+      this.context.emitError("validation_failed", "session", "Plugin ID is required");
+      return;
+    }
+    await this.withSkillMutationLock(async () => {
+      try {
+        const catalog = await buildPluginCatalogSnapshot(this.context.state.config);
+        const plugin = this.resolvePluginSelection(catalog, pluginId, scope);
+        if (!plugin) {
+          return;
+        }
+        await deletePluginInstallation({
+          config: this.context.state.config,
+          plugin,
+        });
+        await this.afterSuccessfulMutation({
+          clearedMutationPendingKeys: [this.pluginMutationPendingKey("delete", plugin)],
+          refreshAllWorkspaces: this.isSharedPluginMutationScope(plugin.scope),
+        });
+      } catch (err) {
+        this.context.emitError(
+          "internal_error",
+          "session",
+          `Failed to delete plugin: ${String(err)}`,
         );
       }
     });

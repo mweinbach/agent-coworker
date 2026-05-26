@@ -332,7 +332,7 @@ describe("Codex primary runtime bootstrap", () => {
     await writeSkillInstallManifest({
       skillRoot: managedSpreadsheet,
       installationId: "bootstrap-spreadsheet",
-      origin: { kind: "bootstrap", url: "https://github.com/openai/skills" },
+      origin: { kind: "bootstrap", url: "https://github.com/mweinbach/cowork-skills-plugins" },
     });
     await fs.mkdir(manualDoc, { recursive: true });
     await fs.writeFile(path.join(manualDoc, "SKILL.md"), "manual doc\n", "utf-8");

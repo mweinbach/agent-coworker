@@ -343,6 +343,8 @@ export interface PluginCatalogEntry {
     installationPolicy?: string;
     authenticationPolicy?: string;
   };
+  installed?: boolean;
+  installSource?: string;
   skills: PluginSkillSummary[];
   mcpServers: string[];
   apps: PluginAppSummary[];

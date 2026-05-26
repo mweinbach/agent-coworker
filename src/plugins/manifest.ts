@@ -618,6 +618,8 @@ export function buildPluginCatalogEntry(opts: {
   apps: ParsedPluginApp[];
   warnings?: string[];
   marketplace?: PluginCatalogEntry["marketplace"];
+  installed?: boolean;
+  installSource?: string;
 }): PluginCatalogEntry {
   return {
     id: opts.pluginId,
@@ -642,6 +644,8 @@ export function buildPluginCatalogEntry(opts: {
       : {}),
     ...(opts.pluginManifest.interface ? { interface: opts.pluginManifest.interface } : {}),
     ...(opts.marketplace ? { marketplace: opts.marketplace } : {}),
+    ...(opts.installed !== undefined ? { installed: opts.installed } : {}),
+    ...(opts.installSource ? { installSource: opts.installSource } : {}),
     skills: opts.skills.map((skill) => ({
       name: `${opts.pluginManifest.name}:${skill.rawName}`,
       rawName: skill.rawName,

@@ -4,16 +4,15 @@ import type { SessionFeedItem } from "@/features/cowork/protocolTypes";
 import { useAppTheme } from "@/theme/use-app-theme";
 import { A2uiSurfaceCard } from "./a2ui-surface-card";
 import { MarkdownText } from "./markdown-text";
-import { ReasoningCard } from "./reasoning-card";
 import { TodoCard } from "./todo-card";
-import { ToolCallCard } from "./tool-call-card";
 
 type ThreadFeedItemProps = {
   item: SessionFeedItem;
   a2uiEnabled: boolean;
+  showDebugMessages: boolean;
 };
 
-export function ThreadFeedItem({ item, a2uiEnabled }: ThreadFeedItemProps) {
+export function ThreadFeedItem({ item, a2uiEnabled, showDebugMessages }: ThreadFeedItemProps) {
   const theme = useAppTheme();
 
   if (item.kind === "message") {
@@ -21,63 +20,40 @@ export function ThreadFeedItem({ item, a2uiEnabled }: ThreadFeedItemProps) {
     return (
       <View
         style={{
-          alignSelf: isAssistant ? "flex-start" : "flex-end",
-          maxWidth: "90%",
-          gap: 8,
-          borderRadius: 24,
-          borderCurve: "continuous",
-          borderWidth: 1,
-          borderColor: isAssistant ? theme.border : theme.primary,
-          backgroundColor: isAssistant ? theme.surface : theme.primary,
-          paddingHorizontal: 16,
-          paddingVertical: 14,
-          boxShadow: theme.shadow,
+          alignSelf: isAssistant ? "stretch" : "flex-end",
+          maxWidth: isAssistant ? "100%" : "88%",
         }}
       >
-        <Text
-          selectable
+        <View
           style={{
-            color: isAssistant ? theme.textSecondary : theme.primaryText,
-            fontSize: 11,
-            fontWeight: "700",
-            letterSpacing: 0.6,
-            textTransform: "uppercase",
+            borderRadius: isAssistant ? 0 : 20,
+            borderCurve: "continuous",
+            backgroundColor: isAssistant ? "transparent" : theme.primary,
+            paddingHorizontal: isAssistant ? 0 : 16,
+            paddingVertical: isAssistant ? 0 : 11,
           }}
         >
-          {isAssistant ? "Assistant" : "You"}
-        </Text>
-        {isAssistant ? (
-          <MarkdownText text={item.text} color={theme.text} />
-        ) : (
-          <Text
-            selectable
-            style={{
-              color: theme.primaryText,
-              fontSize: 15,
-              lineHeight: 22,
-            }}
-          >
-            {item.text}
-          </Text>
-        )}
+          {isAssistant ? (
+            <MarkdownText text={item.text} color={theme.text} />
+          ) : (
+            <Text
+              selectable
+              style={{
+                color: theme.primaryText,
+                fontSize: 16,
+                lineHeight: 24,
+              }}
+            >
+              {item.text}
+            </Text>
+          )}
+        </View>
       </View>
     );
   }
 
-  if (item.kind === "reasoning") {
-    return <ReasoningCard mode={item.mode} text={item.text} />;
-  }
-
-  if (item.kind === "tool") {
-    return (
-      <ToolCallCard
-        name={item.name}
-        state={item.state}
-        args={item.args}
-        result={item.result}
-        approval={item.approval}
-      />
-    );
+  if (item.kind === "reasoning" || item.kind === "tool") {
+    return null;
   }
 
   if (item.kind === "todos") {
@@ -91,20 +67,23 @@ export function ThreadFeedItem({ item, a2uiEnabled }: ThreadFeedItemProps) {
     return <A2uiSurfaceCard item={item} />;
   }
 
-  // log, error, system — simple chrome rendering
+  if ((item.kind === "system" || item.kind === "log") && !showDebugMessages) {
+    return null;
+  }
+
   const chrome = describeChrome(item, theme);
 
   return (
     <View
       style={{
-        gap: 8,
-        borderRadius: 22,
+        gap: 6,
+        borderRadius: 14,
         borderCurve: "continuous",
         borderWidth: 1,
         borderColor: chrome.borderColor,
         backgroundColor: chrome.backgroundColor,
-        paddingHorizontal: 16,
-        paddingVertical: 14,
+        paddingHorizontal: 14,
+        paddingVertical: 12,
       }}
     >
       <Text
@@ -112,8 +91,8 @@ export function ThreadFeedItem({ item, a2uiEnabled }: ThreadFeedItemProps) {
         style={{
           color: chrome.toneColor,
           fontSize: 11,
-          fontWeight: "700",
-          letterSpacing: 0.6,
+          fontWeight: "600",
+          letterSpacing: 0.4,
           textTransform: "uppercase",
         }}
       >
@@ -122,9 +101,10 @@ export function ThreadFeedItem({ item, a2uiEnabled }: ThreadFeedItemProps) {
       <Text
         selectable
         style={{
-          color: theme.text,
-          fontSize: 14,
-          lineHeight: 21,
+          color: theme.textSecondary,
+          fontSize: 13,
+          lineHeight: 19,
+          fontFamily: item.kind === "system" ? theme.fontFamilyMono : theme.fontFamilySans,
         }}
       >
         {chrome.body}

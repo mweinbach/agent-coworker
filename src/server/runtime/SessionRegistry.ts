@@ -74,7 +74,23 @@ export type SessionRegistryOptions = {
     sourceSessionId: string;
     allWorkspaces?: boolean;
   }) => Promise<void>;
+  onThreadListChanged?: () => void;
 };
+
+function shouldInvalidateThreadList(evt: SessionEvent): boolean {
+  switch (evt.type) {
+    case "session_info":
+    case "session_busy":
+    case "user_message":
+    case "assistant_message":
+    case "ask":
+    case "approval":
+    case "error":
+      return true;
+    default:
+      return false;
+  }
+}
 
 export class SessionRegistry {
   readonly sessionBindings = new Map<string, SessionBinding>();
@@ -285,6 +301,9 @@ export class SessionRegistry {
     emit: (evt: SessionEvent) => void;
   } {
     const emit = (evt: SessionEvent) => {
+      if (sessionKind === "root" && shouldInvalidateThreadList(evt)) {
+        this.options.onThreadListChanged?.();
+      }
       for (const sink of binding.sinks.values()) {
         try {
           sink(evt);

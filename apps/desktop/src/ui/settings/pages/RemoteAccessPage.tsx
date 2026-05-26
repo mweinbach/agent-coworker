@@ -1,8 +1,18 @@
-import { QrCodeIcon, RefreshCwIcon, SmartphoneIcon, Trash2Icon, WifiIcon } from "lucide-react";
+import {
+  CheckIcon,
+  CopyIcon,
+  KeyRoundIcon,
+  QrCodeIcon,
+  RefreshCwIcon,
+  SmartphoneIcon,
+  Trash2Icon,
+  WifiIcon,
+} from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
+import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import {
   Card,
@@ -11,14 +21,36 @@ import {
   CardHeader,
   CardTitle,
 } from "../../../components/ui/card";
+import { Separator } from "../../../components/ui/separator";
+import { Switch } from "../../../components/ui/switch";
+import type {
+  MobileRelayTrustedDevicePermissionKey,
+  MobileRelayTrustedPhoneDevice,
+} from "../../../lib/desktopApi";
 import {
+  copyText,
   forgetMobileRelayTrustedPhone,
   getMobileRelayState,
   onMobileRelayStateChanged,
+  refreshMobileRelayTrustedPhones,
   rotateMobileRelaySession,
   startMobileRelay,
   stopMobileRelay,
+  updateMobileRelayTrustedPhonePermissions,
 } from "../../../lib/desktopCommands";
+import { useOptionalSettingsChrome } from "../SettingsChromeContext";
+
+const TRUSTED_DEVICE_PERMISSION_CONTROLS: Array<{
+  key: MobileRelayTrustedDevicePermissionKey;
+  label: string;
+}> = [
+  { key: "turns", label: "Turns" },
+  { key: "serverRequests", label: "Approvals" },
+  { key: "providerAuth", label: "Provider auth" },
+  { key: "mcpAuth", label: "MCP auth" },
+  { key: "workspaceSettings", label: "Workspace settings" },
+  { key: "backups", label: "Backups" },
+];
 
 export function describeRelayServiceStatus(
   status: Awaited<ReturnType<typeof getMobileRelayState>>["relayServiceStatus"],
@@ -52,6 +84,17 @@ export function describeRelaySource(
   }
 }
 
+function describeTrustedDevice(device: MobileRelayTrustedPhoneDevice): string {
+  return device.displayName?.trim() || device.deviceId;
+}
+
+function formatDeviceTimestamp(value: string | null): string {
+  if (!value) return "—";
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return value;
+  return new Date(timestamp).toLocaleString();
+}
+
 export function RemoteAccessPage() {
   const selectedWorkspace = useAppStore(
     (state) =>
@@ -61,6 +104,18 @@ export function RemoteAccessPage() {
   const [state, setState] = useState<Awaited<ReturnType<typeof getMobileRelayState>> | null>(null);
   const [loading, setLoading] = useState(true);
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [copiedPairingKey, setCopiedPairingKey] = useState(false);
+
+  const settingsChrome = useOptionalSettingsChrome();
+
+  const runAction = useCallback(async (action: string, runner: () => Promise<unknown>) => {
+    setBusyAction(action);
+    try {
+      await runner();
+    } finally {
+      setBusyAction(null);
+    }
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -89,15 +144,91 @@ export function RemoteAccessPage() {
     };
   }, []);
 
-  const qrValue = useMemo(() => state?.ticketUrl ?? null, [state?.ticketUrl]);
-
-  async function runAction(action: string, runner: () => Promise<unknown>) {
-    setBusyAction(action);
-    try {
-      await runner();
-    } finally {
-      setBusyAction(null);
+  useEffect(() => {
+    if (state?.relayServiceStatus !== "running" || !state.workspaceId) {
+      return;
     }
+
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const snapshot = await refreshMobileRelayTrustedPhones();
+        if (!cancelled) {
+          setState(snapshot);
+        }
+      } catch {
+        // The state-change subscription and user actions remain authoritative if a poll races reload.
+      }
+    };
+
+    void refresh();
+    const intervalId = window.setInterval(() => {
+      void refresh();
+    }, 2_500);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [state?.relayServiceStatus, state?.workspaceId]);
+
+  useEffect(() => {
+    if (!settingsChrome) return;
+    settingsChrome.setChrome({
+      headerActions: (
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Button
+            type="button"
+            size="sm"
+            onClick={() =>
+              selectedWorkspace &&
+              runAction("start", async () => {
+                await startMobileRelay({
+                  workspaceId: selectedWorkspace.id,
+                  workspacePath: selectedWorkspace.path,
+                  yolo: selectedWorkspace.yolo,
+                  featureFlags: desktopFeatureFlags,
+                });
+              })
+            }
+            disabled={!selectedWorkspace || busyAction !== null}
+          >
+            <WifiIcon data-icon />
+            {state?.status === "idle" ? "Enable remote access" : "Restart bridge"}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() =>
+              runAction("stop", async () => {
+                await stopMobileRelay();
+              })
+            }
+            disabled={!state || state.status === "idle" || busyAction !== null}
+          >
+            Stop
+          </Button>
+        </div>
+      ),
+    });
+    return () => {
+      settingsChrome.setChrome(null);
+    };
+  }, [settingsChrome, selectedWorkspace, state, busyAction, desktopFeatureFlags, runAction]);
+
+  const qrValue = useMemo(() => state?.ticketUrl ?? null, [state?.ticketUrl]);
+  const trustedDevices = state?.trustedPhoneDevices ?? [];
+
+  async function copyPairingKey() {
+    if (!qrValue) {
+      return;
+    }
+    await copyText(qrValue);
+    setCopiedPairingKey(true);
+    window.setTimeout(() => {
+      setCopiedPairingKey(false);
+    }, 2000);
   }
 
   return (
@@ -110,46 +241,12 @@ export function RemoteAccessPage() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
-            <div className="space-y-1">
-              <div className="text-sm font-medium text-foreground">
-                {selectedWorkspace?.name ?? "No workspace selected"}
-              </div>
-              <div className="text-xs text-muted-foreground">
-                {selectedWorkspace?.path ?? "Select a workspace before enabling remote access."}
-              </div>
+          <div className="space-y-1">
+            <div className="text-sm font-medium text-foreground">
+              {selectedWorkspace?.name ?? "No workspace selected"}
             </div>
-            <div className="flex flex-wrap gap-2">
-              <Button
-                type="button"
-                onClick={() =>
-                  selectedWorkspace &&
-                  runAction("start", async () => {
-                    await startMobileRelay({
-                      workspaceId: selectedWorkspace.id,
-                      workspacePath: selectedWorkspace.path,
-                      yolo: selectedWorkspace.yolo,
-                      featureFlags: desktopFeatureFlags,
-                    });
-                  })
-                }
-                disabled={!selectedWorkspace || busyAction !== null}
-              >
-                <WifiIcon data-icon />
-                {state?.status === "idle" ? "Enable remote access" : "Restart bridge"}
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() =>
-                  runAction("stop", async () => {
-                    await stopMobileRelay();
-                  })
-                }
-                disabled={!state || state.status === "idle" || busyAction !== null}
-              >
-                Stop
-              </Button>
+            <div className="text-xs text-muted-foreground">
+              {selectedWorkspace?.path ?? "Select a workspace before enabling remote access."}
             </div>
           </div>
 
@@ -195,7 +292,8 @@ export function RemoteAccessPage() {
           <CardHeader>
             <CardTitle>Pairing QR</CardTitle>
             <CardDescription>
-              Scan this QR from Cowork Mobile to connect directly over HTTP/3. No relay is used.
+              Scan this QR from Cowork Mobile to connect directly over HTTP/3, or copy the pairing
+              key below to paste on your phone. No relay is used.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -219,55 +317,147 @@ export function RemoteAccessPage() {
               </div>
             )}
 
-            <div className="flex flex-wrap gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() =>
-                  runAction("rotate", async () => {
-                    await rotateMobileRelaySession();
-                  })
-                }
-                disabled={!state?.pairingPayload || busyAction !== null}
-              >
-                <RefreshCwIcon data-icon />
-                Rotate QR / certificate
-              </Button>
+            <div className="space-y-2">
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    void copyPairingKey();
+                  }}
+                  disabled={!qrValue || busyAction !== null}
+                >
+                  <CopyIcon data-icon />
+                  Copy pairing key
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() =>
+                    runAction("rotate", async () => {
+                      await rotateMobileRelaySession();
+                    })
+                  }
+                  disabled={!state?.pairingPayload || busyAction !== null}
+                >
+                  <RefreshCwIcon data-icon />
+                  Rotate QR / certificate
+                </Button>
+              </div>
+              {copiedPairingKey ? (
+                <p className="flex items-center gap-1.5 text-xs text-primary">
+                  <CheckIcon className="size-3.5 shrink-0" aria-hidden="true" />
+                  Pairing key copied to clipboard.
+                </p>
+              ) : null}
             </div>
           </CardContent>
         </Card>
 
         <Card className="border-border/80 bg-card/85">
           <CardHeader>
-            <CardTitle>Trusted phone</CardTitle>
+            <CardTitle>Trusted devices</CardTitle>
             <CardDescription>
               Cowork Desktop keeps direct pairing trust state in `~/.cowork/mobile-pairing`, outside
               the renderer.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            {state?.trustedPhoneDeviceId ? (
-              <div className="space-y-3 rounded-lg border border-border/60 bg-background/40 p-4">
-                <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-                  <SmartphoneIcon className="size-4" />
-                  Paired device
-                </div>
-                <div className="space-y-1 text-xs text-muted-foreground">
-                  <div>Device ID: {state.trustedPhoneDeviceId}</div>
-                  <div>Fingerprint: {state.trustedPhoneFingerprint ?? "—"}</div>
-                </div>
+            {trustedDevices.length > 0 ? (
+              <div className="space-y-3">
+                {trustedDevices.map((device, index) => (
+                  <div
+                    key={device.deviceId}
+                    className="space-y-3 rounded-lg border border-border/60 bg-background/40 p-3"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 space-y-1">
+                        <div className="flex flex-wrap items-center gap-2 text-sm font-medium text-foreground">
+                          <SmartphoneIcon className="size-4 shrink-0" />
+                          <span className="truncate">{describeTrustedDevice(device)}</span>
+                          {index === 0 ? (
+                            <Badge variant="outline" className="rounded-sm">
+                              Current
+                            </Badge>
+                          ) : null}
+                        </div>
+                        <div className="space-y-0.5 text-xs text-muted-foreground">
+                          <div className="break-all">Device ID: {device.deviceId}</div>
+                          <div className="break-all">Fingerprint: {device.fingerprint}</div>
+                          <div>Last paired: {formatDeviceTimestamp(device.lastPairedAt)}</div>
+                          <div>Last seen: {formatDeviceTimestamp(device.lastConnectedAt)}</div>
+                        </div>
+                      </div>
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="ghost"
+                        aria-label={`Forget ${describeTrustedDevice(device)}`}
+                        onClick={() =>
+                          runAction(`forget:${device.deviceId}`, async () => {
+                            await forgetMobileRelayTrustedPhone({ deviceId: device.deviceId });
+                          })
+                        }
+                        disabled={busyAction !== null}
+                      >
+                        <Trash2Icon data-icon />
+                      </Button>
+                    </div>
+
+                    <Separator />
+
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                        <KeyRoundIcon className="size-3.5" />
+                        Permissions
+                      </div>
+                      <div className="grid gap-2">
+                        {TRUSTED_DEVICE_PERMISSION_CONTROLS.map((permission) => {
+                          const permissionLabelId = `mobile-permission-${device.deviceId}-${permission.key}`;
+                          return (
+                            <div
+                              key={permission.key}
+                              className="flex items-center justify-between gap-3 text-xs"
+                            >
+                              <span id={permissionLabelId} className="text-muted-foreground">
+                                {permission.label}
+                              </span>
+                              <Switch
+                                size="sm"
+                                checked={device.permissions[permission.key]}
+                                disabled={busyAction !== null}
+                                aria-labelledby={permissionLabelId}
+                                onCheckedChange={(checked) =>
+                                  runAction(
+                                    `permission:${device.deviceId}:${permission.key}`,
+                                    async () => {
+                                      await updateMobileRelayTrustedPhonePermissions({
+                                        deviceId: device.deviceId,
+                                        permissions: { [permission.key]: checked === true },
+                                      });
+                                    },
+                                  )
+                                }
+                              />
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                ))}
                 <Button
                   type="button"
-                  variant="destructive"
+                  variant="outline"
                   onClick={() =>
-                    runAction("forget", async () => {
+                    runAction("forget-all", async () => {
                       await forgetMobileRelayTrustedPhone();
                     })
                   }
                   disabled={busyAction !== null}
                 >
                   <Trash2Icon data-icon />
-                  Forget paired device
+                  Forget all devices
                 </Button>
               </div>
             ) : (

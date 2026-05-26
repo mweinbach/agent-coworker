@@ -12,7 +12,8 @@
       "supportsTablet": true,
       "bundleIdentifier": "co.weinbach.cowork.mobile",
       "infoPlist": {
-        "NSCameraUsageDescription": "Cowork Mobile uses the camera to scan remote access pairing QR codes."
+        "NSCameraUsageDescription": "Cowork Mobile uses the camera to scan remote access pairing QR codes.",
+        "NSLocalNetworkUsageDescription": "Cowork Mobile uses the local network to connect to your paired desktop after scanning its QR code."
       }
     },
     "android": {
@@ -31,6 +32,7 @@
       "expo-secure-store",
       "expo-font",
       "expo-image",
+      "./plugins/with-minimal-native-permissions",
       [
         "expo-splash-screen",
         {

@@ -60,7 +60,7 @@
     <key>NSFaceIDUsageDescription</key>
     <string>Allow $(PRODUCT_NAME) to access your Face ID biometric data.</string>
     <key>NSLocalNetworkUsageDescription</key>
-    <string>Expo Dev Launcher uses the local network to discover and connect to development servers running on your computer.</string>
+    <string>Cowork Mobile uses the local network to connect to your paired desktop after scanning its QR code.</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>Allow $(PRODUCT_NAME) to access your microphone</string>
     <key>NSUserActivityTypes</key>

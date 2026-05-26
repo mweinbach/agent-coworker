@@ -5,6 +5,7 @@ import { Screen } from "@/components/ui/screen";
 import { SectionCard } from "@/components/ui/section-card";
 import { StatusPill } from "@/components/ui/status-pill";
 import { useSkillsStore } from "@/features/cowork/skillsStore";
+import { useWorkspaceStore } from "@/features/cowork/workspaceStore";
 import { usePairingStore } from "@/features/pairing/pairingStore";
 import { isWorkspaceConnectionReady } from "@/features/relay/connectionState";
 import { useAppTheme } from "@/theme/use-app-theme";
@@ -31,14 +32,16 @@ export default function SkillsScreen() {
   const checkInstallationUpdate = useSkillsStore((s) => s.checkInstallationUpdate);
   const mutationPending = useSkillsStore((s) => s.mutationPending);
   const isConnected = usePairingStore((s) => isWorkspaceConnectionReady(s.connectionState));
+  const activeWorkspaceCwd = useWorkspaceStore((s) => s.activeWorkspaceCwd);
+  const workspaceLoading = useWorkspaceStore((s) => s.loading);
   const [sourceInput, setSourceInput] = useState("");
   const [targetScope, setTargetScope] = useState<"project" | "global">("project");
 
   useEffect(() => {
-    if (isConnected) {
+    if (isConnected && activeWorkspaceCwd) {
       void fetchSkills();
     }
-  }, [isConnected, fetchSkills]);
+  }, [isConnected, activeWorkspaceCwd, fetchSkills]);
 
   if (!isConnected) {
     return (
@@ -47,6 +50,28 @@ export default function SkillsScreen() {
           <Text selectable style={{ color: theme.textSecondary, fontSize: 14, lineHeight: 21 }}>
             Skills catalog will load here once connected to a workspace.
           </Text>
+        </SectionCard>
+      </Screen>
+    );
+  }
+
+  if (!activeWorkspaceCwd) {
+    return (
+      <Screen scroll>
+        <SectionCard
+          title="Skills"
+          description={
+            workspaceLoading
+              ? "Loading the active workspace from the desktop."
+              : "No active workspace is available from the desktop yet."
+          }
+        >
+          <View style={{ gap: 12 }}>
+            {workspaceLoading ? <ActivityIndicator color={theme.primary} /> : null}
+            <Text selectable style={{ color: theme.textSecondary, fontSize: 14, lineHeight: 21 }}>
+              Skills will load once the desktop sends the active workspace context.
+            </Text>
+          </View>
         </SectionCard>
       </Screen>
     );

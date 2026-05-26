@@ -241,6 +241,10 @@ export async function copyPath(opts: { path: string }): Promise<void> {
   await requireDesktopApi().copyPath(opts);
 }
 
+export async function copyText(text: string): Promise<void> {
+  await requireDesktopApi().copyText(text);
+}
+
 export async function createDirectory(opts: { parentPath: string; name: string }): Promise<void> {
   await requireDesktopApi().createDirectory(opts);
 }
@@ -306,16 +310,28 @@ export async function getMobileRelayState(): Promise<
   return await requireDesktopApi().getMobileRelayState();
 }
 
+export async function refreshMobileRelayTrustedPhones(): Promise<
+  import("./desktopApi").MobileRelayBridgeState
+> {
+  return await requireDesktopApi().refreshMobileRelayTrustedPhones();
+}
+
 export async function rotateMobileRelaySession(): Promise<
   import("./desktopApi").MobileRelayBridgeState
 > {
   return await requireDesktopApi().rotateMobileRelaySession();
 }
 
-export async function forgetMobileRelayTrustedPhone(): Promise<
-  import("./desktopApi").MobileRelayBridgeState
-> {
-  return await requireDesktopApi().forgetMobileRelayTrustedPhone();
+export async function forgetMobileRelayTrustedPhone(
+  opts?: import("./desktopApi").MobileRelayForgetTrustedPhoneInput,
+): Promise<import("./desktopApi").MobileRelayBridgeState> {
+  return await requireDesktopApi().forgetMobileRelayTrustedPhone(opts);
+}
+
+export async function updateMobileRelayTrustedPhonePermissions(
+  opts: import("./desktopApi").MobileRelayUpdateTrustedPhonePermissionsInput,
+): Promise<import("./desktopApi").MobileRelayBridgeState> {
+  return await requireDesktopApi().updateMobileRelayTrustedPhonePermissions(opts);
 }
 
 export function onSystemAppearanceChanged(

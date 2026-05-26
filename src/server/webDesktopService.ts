@@ -86,6 +86,7 @@ export type DesktopTranscriptEvent = {
 export type WebDesktopServiceLike = {
   loadState(opts?: { fallbackCwd?: string }): Promise<DesktopPersistedState>;
   saveState(state: unknown): Promise<DesktopPersistedState>;
+  watchStateChanges?(listener: () => void): () => void;
   listWorkspaces(fallbackCwd: string): Promise<Array<{ name: string; path: string }>>;
   createOneOffChatWorkspace(opts?: { titleHint?: string }): Promise<{ name: string; path: string }>;
   getWorkspaceRoots(fallbackCwd: string): Promise<string[]>;
@@ -288,7 +289,11 @@ async function normalizeState(raw: unknown): Promise<DesktopPersistedState> {
     const name = asNonEmptyString(item.name);
     const createdAt = asTimestamp(item.createdAt);
     const lastOpenedAt = asTimestamp(item.lastOpenedAt);
-    const workspaceKind = normalizeWorkspaceKind(item.workspaceKind);
+    const rawWorkspacePath = asNonEmptyString(item.path);
+    const workspaceKind: WorkspaceKind =
+      rawWorkspacePath && isPathInsideOneOffChatsRoot(rawWorkspacePath)
+        ? "oneOffChat"
+        : normalizeWorkspaceKind(item.workspaceKind);
     const workspacePath = await resolveWorkspacePath(item.path, workspaceKind);
     if (!id || !name || !createdAt || !lastOpenedAt || !workspacePath || seenWorkspaceIds.has(id)) {
       continue;
@@ -797,6 +802,31 @@ export class WebDesktopService implements WebDesktopServiceLike {
       mode: PRIVATE_FILE_MODE,
     });
     return normalized;
+  }
+
+  watchStateChanges(listener: () => void): () => void {
+    fsSync.mkdirSync(this.userDataDir, { recursive: true, mode: PRIVATE_DIR_MODE });
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    const emit = () => {
+      if (debounceTimer) {
+        clearTimeout(debounceTimer);
+      }
+      debounceTimer = setTimeout(() => {
+        debounceTimer = null;
+        listener();
+      }, 100);
+      (debounceTimer as { unref?: () => void }).unref?.();
+    };
+    const watcher = fsSync.watch(this.userDataDir, () => {
+      emit();
+    });
+    return () => {
+      if (debounceTimer) {
+        clearTimeout(debounceTimer);
+        debounceTimer = null;
+      }
+      watcher.close();
+    };
   }
 
   async listWorkspaces(fallbackCwd: string): Promise<Array<{ name: string; path: string }>> {

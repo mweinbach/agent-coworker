@@ -49,12 +49,12 @@ export function createWorkspaceActions(
       ? (state.threads.find((thread) => thread.id === currentThreadId) ?? null)
       : null;
 
-    if (currentThread?.workspaceId === workspaceId) {
+    if (currentThread?.workspaceId === workspaceId && !currentThread.archived) {
       return currentThread.id;
     }
 
     const workspaceThreads = state.threads
-      .filter((thread) => thread.workspaceId === workspaceId)
+      .filter((thread) => thread.workspaceId === workspaceId && !thread.archived)
       .sort((left, right) => right.lastMessageAt.localeCompare(left.lastMessageAt));
 
     return workspaceThreads[0]?.id ?? null;

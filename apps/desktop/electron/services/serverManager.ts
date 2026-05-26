@@ -9,6 +9,10 @@ import { app } from "electron";
 import { z } from "zod";
 
 import { resolvePackagedBuiltinDistDir } from "./desktopBuiltinPaths";
+import type {
+  MobileRelayTrustedDevicePermissionKey,
+  MobileRelayTrustedPhoneDevice,
+} from "./mobileRelayTypes";
 import {
   buildSourceEnvForAttempt,
   getServerTerminationSignal,
@@ -66,7 +70,11 @@ type ServerListening = {
       deviceId: string;
       fingerprint: string;
       displayName: string | null;
+      lastPairedAt: string | null;
+      lastConnectedAt: string | null;
+      permissions: Record<MobileRelayTrustedDevicePermissionKey, boolean>;
     } | null;
+    trustedDevices: MobileRelayTrustedPhoneDevice[];
   } | null;
 };
 
@@ -76,7 +84,33 @@ type StartWorkspaceServerOptions = {
   yolo: boolean;
   featureFlags?: { openAiNativeConnectors?: boolean };
   mobileH3?: boolean;
+  rotateMobileH3Tls?: boolean;
 };
+
+const trustedDevicePermissionSchema = z.preprocess(
+  (value) => (value && typeof value === "object" && !Array.isArray(value) ? value : {}),
+  z.object({
+    turns: z.boolean().optional().default(false),
+    serverRequests: z.boolean().optional().default(false),
+    providerAuth: z.boolean().optional().default(false),
+    mcpAuth: z.boolean().optional().default(false),
+    workspaceSettings: z.boolean().optional().default(false),
+    backups: z.boolean().optional().default(false),
+  }),
+);
+
+const trustedDeviceSchema = z.object({
+  deviceId: z.string().min(1),
+  fingerprint: z.string().min(1),
+  displayName: z.string().nullable(),
+  lastPairedAt: z.string().nullable().optional().default(null),
+  lastConnectedAt: z.string().nullable().optional().default(null),
+  permissions: trustedDevicePermissionSchema,
+});
+
+const trustedDevicesResponseSchema = z.object({
+  trustedDevices: z.array(trustedDeviceSchema).optional().default([]),
+});
 
 const serverListeningSchema = z
   .object({
@@ -98,14 +132,32 @@ const serverListeningSchema = z
         nonce: z.string().min(1),
         expiresAt: z.number(),
         trustedDevice: z
-          .object({
-            deviceId: z.string().min(1),
-            fingerprint: z.string().min(1),
-            displayName: z.string().nullable(),
-          })
+          .union([
+            trustedDeviceSchema,
+            z
+              .object({
+                deviceId: z.string().min(1),
+                fingerprint: z.string().min(1),
+                displayName: z.string().nullable(),
+              })
+              .transform((device) => ({
+                ...device,
+                lastPairedAt: null,
+                lastConnectedAt: null,
+                permissions: {
+                  turns: false,
+                  serverRequests: false,
+                  providerAuth: false,
+                  mcpAuth: false,
+                  workspaceSettings: false,
+                  backups: false,
+                },
+              })),
+          ])
           .nullable()
           .optional()
           .default(null),
+        trustedDevices: z.array(trustedDeviceSchema).optional().default([]),
       })
       .nullable()
       .optional(),
@@ -388,6 +440,7 @@ function buildServerEnv(
   opts: {
     includeBundledFoundationModelsSdk?: boolean;
     includeBundledWindowsAiElectron?: boolean;
+    rotateMobileH3Tls?: boolean;
   } = {},
 ): NodeJS.ProcessEnv {
   const bundledCodexAppServer = process.env.COWORK_CODEX_APP_SERVER_COMMAND
@@ -404,6 +457,8 @@ function buildServerEnv(
       : null;
   return {
     ...process.env,
+    COWORK_WEB_DESKTOP_SERVICE: "1",
+    COWORK_DESKTOP_USER_DATA_DIR: app.getPath("userData"),
     COWORK_BROWSER_ACCESS_TOKEN:
       process.env.COWORK_BROWSER_ACCESS_TOKEN?.trim() ||
       `${randomUUID()}${randomUUID().replaceAll("-", "")}`,
@@ -421,6 +476,7 @@ function buildServerEnv(
     ...(featureFlags?.openAiNativeConnectors
       ? { COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS: "1" }
       : {}),
+    ...(opts.rotateMobileH3Tls ? { COWORK_H3_ROTATE_TLS: "1" } : {}),
   };
 }
 
@@ -566,6 +622,7 @@ export class ServerManager {
       const serverEnv = buildServerEnv(opts.featureFlags, {
         includeBundledFoundationModelsSdk: !useSource,
         includeBundledWindowsAiElectron: !useSource,
+        rotateMobileH3Tls: opts.rotateMobileH3Tls === true,
       });
       const sourceEnvForAttempt = useSource ? buildSourceEnvForAttempt(serverEnv, attempt) : null;
       const cleanup = sourceEnvForAttempt?.cleanup ?? (() => {});
@@ -732,6 +789,29 @@ export class ServerManager {
     return await this.startWorkspaceServer(opts);
   }
 
+  async listMobileH3TrustedDevices(workspaceId: string): Promise<MobileRelayTrustedPhoneDevice[]> {
+    assertSafeId(workspaceId, "workspaceId");
+    const handle = this.servers.get(workspaceId);
+    if (!handle?.mobileH3) {
+      throw new Error("Mobile H3 endpoint is not running.");
+    }
+    const response = await fetch(`${toHttpServerUrl(handle.url)}/mobile-h3/trusted`, {
+      headers: {
+        authorization: `Bearer ${handle.mobileH3.adminToken}`,
+      },
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to list mobile trust records: HTTP ${response.status}.`);
+    }
+    const payload = trustedDevicesResponseSchema.parse(await response.json());
+    handle.mobileH3 = {
+      ...handle.mobileH3,
+      trustedDevice: payload.trustedDevices[0] ?? null,
+      trustedDevices: payload.trustedDevices,
+    };
+    return payload.trustedDevices;
+  }
+
   async revokeMobileH3TrustedDevice(workspaceId: string, deviceId: string): Promise<void> {
     assertSafeId(workspaceId, "workspaceId");
     const handle = this.servers.get(workspaceId);
@@ -750,6 +830,57 @@ export class ServerManager {
     if (!response.ok) {
       throw new Error(`Failed to revoke mobile trust record: HTTP ${response.status}.`);
     }
+    handle.mobileH3 = {
+      ...handle.mobileH3,
+      trustedDevice:
+        handle.mobileH3.trustedDevice?.deviceId === deviceId ? null : handle.mobileH3.trustedDevice,
+      trustedDevices: handle.mobileH3.trustedDevices.filter(
+        (device) => device.deviceId !== deviceId,
+      ),
+    };
+  }
+
+  async updateMobileH3TrustedDevicePermissions(
+    workspaceId: string,
+    deviceId: string,
+    permissions: Partial<Record<MobileRelayTrustedDevicePermissionKey, boolean>>,
+  ): Promise<MobileRelayTrustedPhoneDevice> {
+    assertSafeId(workspaceId, "workspaceId");
+    const handle = this.servers.get(workspaceId);
+    if (!handle?.mobileH3) {
+      throw new Error("Mobile H3 endpoint is not running.");
+    }
+    const response = await fetch(
+      `${toHttpServerUrl(handle.url)}/mobile-h3/trusted/${encodeURIComponent(deviceId)}/permissions`,
+      {
+        method: "PATCH",
+        headers: {
+          authorization: `Bearer ${handle.mobileH3.adminToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ permissions }),
+      },
+    );
+    if (!response.ok) {
+      throw new Error(`Failed to update mobile trust permissions: HTTP ${response.status}.`);
+    }
+    const payload = (await response.json()) as { trustedDevice?: MobileRelayTrustedPhoneDevice };
+    if (!payload.trustedDevice) {
+      throw new Error("Mobile H3 endpoint returned an invalid trust record.");
+    }
+    const trustedDevices = handle.mobileH3.trustedDevices.filter(
+      (device) => device.deviceId !== payload.trustedDevice?.deviceId,
+    );
+    trustedDevices.unshift(payload.trustedDevice);
+    handle.mobileH3 = {
+      ...handle.mobileH3,
+      trustedDevice:
+        handle.mobileH3.trustedDevice?.deviceId === payload.trustedDevice.deviceId
+          ? payload.trustedDevice
+          : handle.mobileH3.trustedDevice,
+      trustedDevices,
+    };
+    return payload.trustedDevice;
   }
 
   async revokeMobileH3TrustedDevices(workspaceId: string): Promise<void> {
@@ -767,6 +898,11 @@ export class ServerManager {
     if (!response.ok) {
       throw new Error(`Failed to revoke mobile trust records: HTTP ${response.status}.`);
     }
+    handle.mobileH3 = {
+      ...handle.mobileH3,
+      trustedDevice: null,
+      trustedDevices: [],
+    };
   }
 
   async stopAll(): Promise<void> {

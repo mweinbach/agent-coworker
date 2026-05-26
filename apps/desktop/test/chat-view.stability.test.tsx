@@ -775,6 +775,7 @@ describe("desktop chat view stability", () => {
 
       await act(async () => {
         root.render(createElement(StrictMode, null, createElement(ChatView)));
+        await new Promise((resolve) => setTimeout(resolve, 10));
       });
 
       const feed = container.querySelector('[role="log"]') as HTMLElement | null;
@@ -814,6 +815,117 @@ describe("desktop chat view stability", () => {
 
       expect(feed.scrollTop).toBe(1000);
       expect(container.querySelector('[aria-label="Scroll to bottom"]')).toBeNull();
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test("does not repin a completed thread after a user scrolls upward", async () => {
+    useAppStore.setState({
+      ready: true,
+      startupError: null,
+      view: "chat",
+      selectedWorkspaceId: "ws-1",
+      selectedThreadId: "thread-1",
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace 1",
+          path: "/tmp/workspace-1",
+          workspaceKind: "project",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          lastOpenedAt: "2026-03-12T00:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          defaultProvider: "openai",
+          defaultModel: "gpt-5.4",
+          yolo: false,
+        },
+      ],
+      threads: [
+        {
+          id: "thread-1",
+          workspaceId: "ws-1",
+          title: "Completed thread",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          updatedAt: "2026-03-12T00:01:00.000Z",
+        },
+      ],
+      threadRuntimeById: {
+        "thread-1": {
+          status: "connected",
+          sessionKind: "chat",
+          title: "Completed thread",
+          config: { provider: "openai", model: "gpt-5.4" },
+          sessionConfig: null,
+          busy: false,
+          busySince: null,
+          feed: [
+            {
+              id: "msg-1",
+              kind: "message",
+              role: "assistant",
+              ts: "2026-03-12T00:00:30.000Z",
+              text: "Completed reply",
+            },
+          ],
+          pendingSteer: null,
+          transcriptOnly: false,
+        },
+      },
+      composerText: "",
+      messageBarHeight: 120,
+    });
+
+    const harness = setupChatViewJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(StrictMode, null, createElement(ChatView)));
+      });
+
+      const feed = container.querySelector('[role="log"]') as HTMLElement | null;
+      if (!feed) throw new Error("missing feed");
+
+      Object.defineProperty(feed, "clientHeight", {
+        configurable: true,
+        value: 400,
+      });
+      Object.defineProperty(feed, "scrollHeight", {
+        configurable: true,
+        value: 1000,
+      });
+      Object.defineProperty(feed, "scrollTop", {
+        configurable: true,
+        value: 1000,
+        writable: true,
+      });
+
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      });
+      feed.scrollTop = 500;
+
+      await act(async () => {
+        feed.dispatchEvent(new harness.dom.window.Event("scroll", { bubbles: true }));
+      });
+
+      await act(async () => {
+        useAppStore.setState({ composerText: "draft after reading" });
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      });
+
+      expect(feed.scrollTop).toBe(500);
     } finally {
       if (root) {
         await act(async () => {

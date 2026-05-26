@@ -138,6 +138,50 @@ describe("control socket helpers over JSON-RPC", () => {
     ]);
   });
 
+  test("workspace/listChanged refreshes thread summaries", async () => {
+    const workspaceId = "ws-list-changed";
+    const { state, get, set } = createState(workspaceId, {
+      threads: [makeThread("session-stale", workspaceId)],
+      selectedThreadId: "session-stale",
+    });
+
+    jsonRpcHandlers.set("thread/list", async () => ({
+      threads: [
+        {
+          ...makeThreadListEntry("session-stale"),
+          title: "Updated from remote turn",
+          updatedAt: "2026-03-20T00:10:00.000Z",
+          messageCount: 3,
+          lastEventSeq: 12,
+        },
+      ],
+    }));
+
+    const helpers = createControlSocketHelpers(deps);
+    helpers.ensureControlSocket(get as any, set as any, workspaceId);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await flushAsyncWork();
+    jsonRpcRequests.length = 0;
+
+    MockJsonRpcSocket.instances[0]?.opts.onNotification?.({
+      method: "workspace/listChanged",
+      params: { revision: 1 },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await flushAsyncWork();
+
+    expect(jsonRpcRequests.filter((entry) => entry.method === "thread/list")).toHaveLength(1);
+    expect(state.threads).toEqual([
+      expect.objectContaining({
+        id: "session-stale",
+        title: "Updated from remote turn",
+        lastMessageAt: "2026-03-20T00:10:00.000Z",
+        messageCount: 3,
+        lastEventSeq: 12,
+      }),
+    ]);
+  });
+
   test("requestSessionSnapshot reads coworkSnapshot from thread/read", async () => {
     const workspaceId = "ws-snapshot";
     const { get, set } = createState(workspaceId);

@@ -28,6 +28,24 @@ function createMockWorkspaceChild() {
   });
 }
 
+function waitForCondition(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  return new Promise((resolve, reject) => {
+    const tick = () => {
+      if (predicate()) {
+        resolve();
+        return;
+      }
+      if (Date.now() >= deadline) {
+        reject(new Error("Timed out waiting for condition"));
+        return;
+      }
+      setTimeout(tick, 10);
+    };
+    tick();
+  });
+}
+
 afterEach(async () => {
   await Promise.all(
     [...cleanupPaths].map(async (target) => {
@@ -168,6 +186,27 @@ describe("web desktop routes", () => {
     expect(state.desktopFeatureFlagOverrides).toEqual({});
 
     await service.stopAll();
+  });
+
+  test("desktop service notifies watchers when persisted state changes", async () => {
+    const userDataDir = await makeTempDir("cowork-web-desktop-watch-userdata-");
+    const service = new WebDesktopService({ userDataDir });
+    let changeCount = 0;
+    const dispose = service.watchStateChanges(() => {
+      changeCount += 1;
+    });
+
+    try {
+      await service.saveState({
+        version: 2,
+        workspaces: [],
+        threads: [],
+      });
+      await waitForCondition(() => changeCount > 0);
+    } finally {
+      dispose();
+      await service.stopAll();
+    }
   });
 
   test("restarts the workspace server when launch params change for the same workspace id", async () => {

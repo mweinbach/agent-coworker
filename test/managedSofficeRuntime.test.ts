@@ -78,7 +78,7 @@ describe("managed soffice runtime", () => {
       expect(helper).toContain("LibreOffice_${version}_Win_x86-64.msi");
       expect(helper).toContain("LibreOffice_${version}_Win_aarch64.msi");
       expect(helper).toContain(
-        'run("msiexec.exe", ["/a", archivePath, "/qn", "TARGETDIR=" + stagedRoot]',
+        'run("msiexec.exe", ["/a", archivePath, "/qn", `TARGETDIR=${stagedRoot}`]',
       );
       expect(helper).toContain("windowsHide: true");
       expect(helper).toContain('path.join(root, "program", "soffice.com")');

@@ -3,11 +3,15 @@ import { resolveDesktopFeatureFlags } from "../../../../src/shared/featureFlags"
 import {
   DESKTOP_EVENT_CHANNELS,
   DESKTOP_IPC_CHANNELS,
+  type MobileRelayForgetTrustedPhoneInput,
   type MobileRelayStartInput,
+  type MobileRelayUpdateTrustedPhonePermissionsInput,
 } from "../../src/lib/desktopApi";
 import {
   mobileRelayBridgeStateSchema,
+  mobileRelayForgetTrustedPhoneInputSchema,
   mobileRelayStartInputSchema,
+  mobileRelayUpdateTrustedPhonePermissionsInputSchema,
 } from "../../src/lib/desktopSchemas";
 import type { DesktopIpcModuleContext } from "./types";
 
@@ -40,6 +44,7 @@ export function registerMobileRelayIpc(context: DesktopIpcModuleContext): void {
       pairingPayload: null,
       trustedPhoneDeviceId: null,
       trustedPhoneFingerprint: null,
+      trustedPhoneDevices: [],
       directUrl: null,
       ticketUrl: null,
       certSha256: null,
@@ -105,13 +110,51 @@ export function registerMobileRelayIpc(context: DesktopIpcModuleContext): void {
     return mobileRelayBridgeStateSchema.parse(deps.mobileRelayBridge.getSnapshot());
   });
 
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.mobileRelayRefreshTrustedPhones, async () => {
+    if (!(await isRemoteAccessEnabled())) {
+      await deps.mobileRelayBridge.stop().catch(() => {
+        // best effort while toggling feature flags at runtime
+      });
+      return disabledState();
+    }
+    return mobileRelayBridgeStateSchema.parse(await deps.mobileRelayBridge.refreshTrustedPhones());
+  });
+
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.mobileRelayRotateSession, async () => {
     await assertRemoteAccessEnabled();
     return mobileRelayBridgeStateSchema.parse(await deps.mobileRelayBridge.rotateSession());
   });
 
-  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.mobileRelayForgetTrustedPhone, async () => {
-    await assertRemoteAccessEnabled();
-    return mobileRelayBridgeStateSchema.parse(await deps.mobileRelayBridge.forgetTrustedPhone());
-  });
+  handleDesktopInvoke(
+    DESKTOP_IPC_CHANNELS.mobileRelayForgetTrustedPhone,
+    async (_event, args?: MobileRelayForgetTrustedPhoneInput) => {
+      await assertRemoteAccessEnabled();
+      const input = parseWithSchema(
+        mobileRelayForgetTrustedPhoneInputSchema,
+        args,
+        "mobileRelay.forgetTrustedPhone options",
+      );
+      return mobileRelayBridgeStateSchema.parse(
+        await deps.mobileRelayBridge.forgetTrustedPhone(input.deviceId),
+      );
+    },
+  );
+
+  handleDesktopInvoke(
+    DESKTOP_IPC_CHANNELS.mobileRelayUpdateTrustedPhonePermissions,
+    async (_event, args: MobileRelayUpdateTrustedPhonePermissionsInput) => {
+      await assertRemoteAccessEnabled();
+      const input = parseWithSchema(
+        mobileRelayUpdateTrustedPhonePermissionsInputSchema,
+        args,
+        "mobileRelay.updateTrustedPhonePermissions options",
+      );
+      return mobileRelayBridgeStateSchema.parse(
+        await deps.mobileRelayBridge.updateTrustedPhonePermissions(
+          input.deviceId,
+          input.permissions,
+        ),
+      );
+    },
+  );
 }

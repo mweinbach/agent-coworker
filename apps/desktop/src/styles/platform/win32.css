@@ -318,7 +318,7 @@
   right: 0;
   height: var(--platform-titlebar-height);
   z-index: 80;
-  pointer-events: auto;
+  pointer-events: none;
   -webkit-app-region: drag;
   background: transparent;
   backdrop-filter: none;

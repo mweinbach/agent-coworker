@@ -416,6 +416,7 @@ const IDLE_MOBILE_RELAY: MobileRelayBridgeState = {
   hostHints: [],
   trustedPhoneDeviceId: null,
   trustedPhoneFingerprint: null,
+  trustedPhoneDevices: [],
   lastError: null,
 };
 
@@ -636,6 +637,9 @@ export function createWebAdapter(): DesktopApi {
     async copyPath(opts): Promise<void> {
       await navigator.clipboard.writeText(opts.path);
     },
+    async copyText(text): Promise<void> {
+      await navigator.clipboard.writeText(text);
+    },
     async createDirectory(opts): Promise<void> {
       await postWebJson<void>("/cowork/fs/create-directory", opts);
     },
@@ -750,10 +754,16 @@ export function createWebAdapter(): DesktopApi {
     async getMobileRelayState(): Promise<MobileRelayBridgeState> {
       return { ...IDLE_MOBILE_RELAY };
     },
+    async refreshMobileRelayTrustedPhones(): Promise<MobileRelayBridgeState> {
+      return { ...IDLE_MOBILE_RELAY };
+    },
     async rotateMobileRelaySession(): Promise<MobileRelayBridgeState> {
       return { ...IDLE_MOBILE_RELAY };
     },
     async forgetMobileRelayTrustedPhone(): Promise<MobileRelayBridgeState> {
+      return { ...IDLE_MOBILE_RELAY };
+    },
+    async updateMobileRelayTrustedPhonePermissions(): Promise<MobileRelayBridgeState> {
       return { ...IDLE_MOBILE_RELAY };
     },
 

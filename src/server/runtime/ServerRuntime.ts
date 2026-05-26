@@ -41,6 +41,7 @@ import { type PersistedSessionRecord, SessionDb } from "../sessionDb";
 import { readSkillCatalogMtimeSnapshot } from "../skillCatalogMtime";
 import { refreshSessionsForSkillMutation } from "../skillMutationRefresh";
 import type { StartServerSocket } from "../startServer/types";
+import type { WebDesktopServiceLike } from "../webDesktopService";
 import { isErrorWithCode, isPlainObject, mergeRuntimeProviderOptions } from "./ConfigPatchStore";
 import { SessionRegistry } from "./SessionRegistry";
 import { SkillMutationBus } from "./SkillMutationBus";
@@ -81,6 +82,7 @@ export interface StartAgentServerOptions {
   providerOptions?: Record<string, unknown>;
   yolo?: boolean;
   homedir?: string;
+  desktopService?: WebDesktopServiceLike | null;
   connectProviderImpl?: typeof connectModelProvider;
   getAiCoworkerPathsImpl?: typeof getAiCoworkerPaths;
   runTurnImpl?: typeof runTurnFn;
@@ -197,6 +199,22 @@ export async function createAgentServerRuntime(
   });
   const aiCoworkerPaths = getAiCoworkerPathsImpl({ homedir: opts.homedir });
   const sendQueue = new SocketSendQueue();
+  const jsonRpcConnections = new Set<StartServerSocket>();
+  let workspaceListRevision = 0;
+  const broadcastJsonRpcNotification = (method: string, params: unknown) => {
+    for (const connection of jsonRpcConnections) {
+      if (!connection.data.rpc || !sendQueue.shouldSendNotification(connection, method)) {
+        continue;
+      }
+      sendQueue.send(connection, { method, params });
+    }
+  };
+  const broadcastWorkspaceListChanged = () => {
+    workspaceListRevision += 1;
+    broadcastJsonRpcNotification("workspace/listChanged", {
+      revision: workspaceListRevision,
+    });
+  };
   const research = new ResearchService({
     rootDir: aiCoworkerPaths.rootDir,
     workspacePath: config.workingDirectory,
@@ -225,6 +243,7 @@ export async function createAgentServerRuntime(
     },
     readSkillCatalogMtimeSnapshot,
     initialSkillCatalogMtimeSnapshot,
+    onThreadListChanged: broadcastWorkspaceListChanged,
     refreshSkillsAcrossWorkspaceSessions: async ({
       workingDirectory,
       sourceSessionId,
@@ -298,6 +317,10 @@ export async function createAgentServerRuntime(
     sendJsonRpc: (ws, payload) => sendQueue.send(ws, payload),
     extractTextInput: extractJsonRpcTextInput,
   });
+  const disposeDesktopStateWatcher =
+    opts.desktopService?.watchStateChanges?.(() => {
+      broadcastWorkspaceListChanged();
+    }) ?? null;
 
   const jsonRpcRouteContext: JsonRpcRouteContext = {
     getConfig: () => config,
@@ -324,6 +347,7 @@ export async function createAgentServerRuntime(
       withSession: async (cwd, runner) => await workspaceControl.withSession(cwd, runner),
       readState: async (cwd) => await workspaceControl.readState(cwd),
     },
+    desktopService: opts.desktopService ?? null,
     journal: {
       enqueue: async (event) => await threadJournal.enqueue(event),
       waitForIdle: async (threadId) => await threadJournal.waitForIdle(threadId),
@@ -351,7 +375,7 @@ export async function createAgentServerRuntime(
     },
     utils: {
       resolveWorkspacePath: (params, method) =>
-        requireWorkspacePath(params, method, config.workingDirectory),
+        requireWorkspacePath(params, method, config.workingDirectory, opts.homedir),
       extractTextInput: extractJsonRpcTextInput,
       extractInput: extractJsonRpcInput,
       buildThreadFromSession: buildJsonRpcThreadFromSession,
@@ -374,7 +398,7 @@ export async function createAgentServerRuntime(
       try {
         workspaceControl.registerSubscriber(
           ws,
-          requireWorkspacePath(params, message.method, config.workingDirectory),
+          requireWorkspacePath(params, message.method, config.workingDirectory, opts.homedir),
         );
       } catch {
         // Ignore non-workspace-control requests that do not resolve a cwd.
@@ -394,9 +418,11 @@ export async function createAgentServerRuntime(
     jsonRpcMaxPendingRequests,
     sendJsonRpc: (ws, payload) => sendQueue.send(ws, payload),
     openConnection: (ws) => {
+      jsonRpcConnections.add(ws);
       jsonRpcTransport.openConnection(ws);
     },
     openHttpConnection: (connection) => {
+      jsonRpcConnections.add(connection);
       jsonRpcTransport.openConnection(connection);
       connection.data.selectedSubprotocol ??= "cowork.jsonrpc.v1";
       connection.data.protocolMode ??= "h3";
@@ -413,6 +439,7 @@ export async function createAgentServerRuntime(
       jsonRpcTransport.handleMessage(ws, decoded.message, routeJsonRpcRequest);
     },
     closeConnection: (ws) => {
+      jsonRpcConnections.delete(ws);
       workspaceControl.removeSubscriber(ws);
       research.unsubscribeAll(ws);
       jsonRpcTransport.closeConnection(ws);
@@ -429,6 +456,7 @@ export async function createAgentServerRuntime(
     stop: async () => {
       if (stopped) return;
       stopped = true;
+      disposeDesktopStateWatcher?.();
       skillMutationBus.stop();
       workspaceControl.clearSubscribers();
       await registry.disposeAll("server stopping");

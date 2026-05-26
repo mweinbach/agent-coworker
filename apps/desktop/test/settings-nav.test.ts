@@ -29,6 +29,7 @@ let agentSocketConnectCalls = 0;
 let remoteAccessEnabled = true;
 let stopMobileRelayCalls = 0;
 let packagedApp = false;
+let saveStateDelay: Promise<void> | null = null;
 
 mock.module("../src/lib/desktopCommands", () =>
   createDesktopCommandsMock({
@@ -41,6 +42,9 @@ mock.module("../src/lib/desktopCommands", () =>
     readTranscript: async () => [],
     saveState: async (state: any) => {
       savedStates.push(structuredClone(state));
+      if (saveStateDelay) {
+        await saveStateDelay;
+      }
     },
     startWorkspaceServer: async () => {
       startWorkspaceServerCalls += 1;
@@ -108,6 +112,7 @@ mock.module("../src/lib/desktopCommands", () =>
         pairingPayload: null,
         trustedPhoneDeviceId: null,
         trustedPhoneFingerprint: null,
+        trustedPhoneDevices: [],
         directUrl: null,
         ticketUrl: null,
         certSha256: null,
@@ -152,6 +157,7 @@ describe("settings nav (store)", () => {
     remoteAccessEnabled = true;
     stopMobileRelayCalls = 0;
     packagedApp = false;
+    saveStateDelay = null;
     useAppStore.setState({
       view: "chat",
       lastNonSettingsView: "chat",
@@ -353,6 +359,43 @@ describe("settings nav (store)", () => {
     expect(useAppStore.getState().desktopFeatureFlagOverrides).toEqual({ remoteAccess: false });
     expect(useAppStore.getState().settingsPage).toBe("models");
     expect(stopMobileRelayCalls).toBe(1);
+  });
+
+  test("enabling remote access waits for the override to persist", async () => {
+    let releaseSave!: () => void;
+    saveStateDelay = new Promise<void>((resolve) => {
+      releaseSave = resolve;
+    });
+    let resolved = false;
+    useAppStore.setState({
+      desktopFeatureFlags: {
+        menuBar: true,
+        remoteAccess: false,
+        workspacePicker: true,
+        workspaceLifecycle: true,
+        a2ui: false,
+        openAiNativeConnectors: false,
+      },
+      desktopFeatureFlagOverrides: {},
+    });
+
+    const update = useAppStore
+      .getState()
+      .setDesktopFeatureFlagOverride("remoteAccess", true)
+      .then(() => {
+        resolved = true;
+      });
+
+    await Promise.resolve();
+
+    expect(useAppStore.getState().desktopFeatureFlags.remoteAccess).toBe(true);
+    expect(savedStates.at(-1)?.desktopFeatureFlagOverrides).toEqual({ remoteAccess: true });
+    expect(resolved).toBe(false);
+
+    releaseSave();
+    await update;
+
+    expect(resolved).toBe(true);
   });
 
   test("setDesktopFeatureFlagOverride preserves supported flags in packaged builds", async () => {

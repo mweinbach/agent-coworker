@@ -554,6 +554,27 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
     expect(jsonRpcRequests.map((entry) => entry.method)).toContain("thread/resume");
   });
 
+  test("selectThread reasserts resume for an already connected selected thread", async () => {
+    const { threadId } = seedStore(
+      {
+        status: "active",
+      },
+      {
+        connected: true,
+        feed: threadSnapshot("session-1").feed,
+      },
+    );
+    useAppStore.setState({ selectedThreadId: threadId });
+
+    await useAppStore.getState().selectThread(threadId);
+    await flushAsyncWork();
+
+    const methods = jsonRpcRequests.map((entry) => entry.method);
+    expect(methods).toContain("thread/resume");
+    expect(methods).not.toContain("thread/read");
+    expect(useAppStore.getState().threadRuntimeById[threadId]?.connected).toBe(true);
+  });
+
   test("selectThread still hydrates when requestAnimationFrame is throttled", async () => {
     installWindowMock({
       requestAnimationFrame: mock(() => 1),

@@ -1130,7 +1130,7 @@ export function createBootstrapActions(
           state.updateState.packaged || isPackagedDesktopApp(),
         ),
       }));
-      void persistNow(get);
+      await persistNow(get);
       if (flagId === "a2ui") {
         const state = get();
         const activeControlWorkspaces = state.workspaces.filter((workspace) =>

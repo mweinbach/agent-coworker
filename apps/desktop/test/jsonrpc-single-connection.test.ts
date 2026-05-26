@@ -586,6 +586,40 @@ describe("desktop JSON-RPC single connection path", () => {
     expect(state.selectedThreadId).toBeNull();
   });
 
+  test("session refresh preserves archived state for server-backed threads", async () => {
+    seedActiveThreadState();
+    jsonRpcRequestHandlers.set("thread/list", async () => ({
+      threads: [
+        {
+          id: "jsonrpc-thread-1",
+          title: "New session",
+          modelProvider: "google",
+          model: "gemini-3.1-pro-preview",
+          cwd: "/tmp/jsonrpc-workspace",
+          createdAt: "2026-03-21T00:00:00.000Z",
+          updatedAt: "2026-03-21T00:00:00.000Z",
+          messageCount: 1,
+          lastEventSeq: 1,
+        },
+      ],
+    }));
+
+    await useAppStore.getState().archiveThread("jsonrpc-thread-1");
+    const archivedAt = useAppStore
+      .getState()
+      .threads.find((thread) => thread.id === "jsonrpc-thread-1")?.archivedAt;
+
+    await useAppStore.getState().selectWorkspace("ws-jsonrpc");
+    await flushAsyncWork();
+
+    const refreshedThread = useAppStore
+      .getState()
+      .threads.find((thread) => thread.id === "jsonrpc-thread-1");
+    expect(refreshedThread?.archived).toBe(true);
+    expect(refreshedThread?.archivedAt).toBe(archivedAt);
+    expect(useAppStore.getState().selectedThreadId).toBeNull();
+  });
+
   test("uses one workspace JsonRpcSocket for thread start and turn start", async () => {
     await useAppStore.getState().selectWorkspace("ws-jsonrpc");
     await useAppStore.getState().newThread({

@@ -112,6 +112,8 @@ export function createControlSocketHelpers(
         messageCount: session.messageCount,
         lastEventSeq: session.lastEventSeq,
         draft: false,
+        archived: existing?.archived ?? false,
+        archivedAt: existing?.archivedAt,
         legacyTranscriptId,
       } satisfies ThreadRecord;
     });
@@ -188,12 +190,13 @@ export function createControlSocketHelpers(
     if (!selectedThreadId) {
       return null;
     }
-    if (nextThreads.some((thread) => thread.id === selectedThreadId)) {
+    if (nextThreads.some((thread) => thread.id === selectedThreadId && !thread.archived)) {
       return selectedThreadId;
     }
 
     const migratedThreadId =
-      nextThreads.find((thread) => thread.legacyTranscriptId === selectedThreadId)?.id ?? null;
+      nextThreads.find((thread) => thread.legacyTranscriptId === selectedThreadId && !thread.archived)
+        ?.id ?? null;
     if (migratedThreadId) {
       return migratedThreadId;
     }
@@ -202,7 +205,10 @@ export function createControlSocketHelpers(
       allThreads.find((thread) => thread.id === selectedThreadId)?.workspaceId ??
       selectedWorkspaceId ??
       workspaceId;
-    return nextThreads.find((thread) => thread.workspaceId === fallbackWorkspaceId)?.id ?? null;
+    return (
+      nextThreads.find((thread) => thread.workspaceId === fallbackWorkspaceId && !thread.archived)
+        ?.id ?? null
+    );
   }
 
   function omitSkillMutationPendingKeys(

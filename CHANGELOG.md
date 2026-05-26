@@ -4,6 +4,60 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.1.3 - 2026-05-26
+
+### Added
+
+- **Continued development of experimental mobile app** — Expanded the Expo mobile
+  app from pairing/setup work into a more complete companion experience,
+  including native thread home screens, collapsible workspace/thread sections,
+  load-more behavior, iOS-styled grouped rows, provider defaults, settings
+  routes, workspace tabs, and app loading improvements.
+- **Mobile remote workspace support** — Mobile can now bootstrap remote
+  workspaces through the JSON-RPC control surface, hydrate thread lists, cache
+  thread data for offline reads, and reconnect more reliably when the transport
+  or app lifecycle changes.
+- **Mobile pairing and remote access flow** — Desktop and mobile now expose a
+  more complete remote-access pairing path with refreshed pairing state, QR/manual
+  pairing screens, simulator pairing fallback hints, device-bound tickets,
+  atomically consumed pairing nonces, and desktop-managed mobile device
+  permissions.
+- **Mobile thread reading polish** — Mobile thread screens now render richer feed
+  items, activity groups, source carousels, inline markdown, horizontal rules,
+  and improved tool/source formatting so remote sessions are easier to follow on
+  a phone.
+
+### Changed
+
+- **Mobile onboarding and visual system** — Pairing and unconnected states were
+  redesigned with native iOS-style grouped lists, glass action buttons, Expo
+  glass header controls, theme/token fixes, and updated native iOS/Android
+  project assets and permissions.
+- **Remote access settings** — Desktop remote-access controls now persist the
+  enabled state, surface current pairing/server status more consistently, and
+  keep the desktop UI responsible only for exposing the harness/server controls.
+- **Project setup documentation** — README setup instructions now use the actual
+  repository clone URL, and mobile remote-access/pairing docs were updated to
+  match the hardened pairing model.
+- **Desktop settings layout** — macOS settings headers and back-button rows now
+  align more consistently with the platform chrome and tokenized colors.
+
+### Fixed
+
+- **Chat feed scrolling** — The desktop chat view no longer forces the feed back
+  to the bottom while a user is intentionally scrolling upward through history.
+- **Archived thread preservation** — Workspace refreshes now preserve archived
+  thread records instead of dropping them from the desktop thread list state.
+- **Mobile transport resilience** — Mobile JSON-RPC and secure transport handling
+  now survive Hermes error-object differences, reconnects, stale active-session
+  restores, and pairing bootstrap races more reliably.
+- **Mobile header and button behavior** — Fixed nested button markup in the
+  mobile header glass menu and stabilized mobile header controls across thread,
+  settings, workspace, and pairing screens.
+- **Mobile app runtime compatibility** — Aligned Expo/React runtime versions,
+  hardened LogBox setup, pruned generated native permissions, and fixed startup
+  paths that could leave the mobile app stuck loading.
+
 ## 1.1.1 - 2026-05-22
 
 ### Fixed

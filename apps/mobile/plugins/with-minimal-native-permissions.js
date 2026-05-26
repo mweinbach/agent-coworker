@@ -1,5 +1,3 @@
-const { withAndroidManifest, withInfoPlist } = require("expo/config-plugins");
-
 const ANDROID_ALLOWED_PERMISSIONS = new Set([
   "android.permission.CAMERA",
   "android.permission.INTERNET",
@@ -57,6 +55,8 @@ function pruneIosPermissionStrings(infoPlist) {
 }
 
 function withMinimalNativePermissions(config) {
+  const { withAndroidManifest, withInfoPlist } = require("expo/config-plugins");
+
   // Keep this as the source of truth for generated native permissions. Do not hand-edit
   // apps/mobile/ios or apps/mobile/android when tightening release permission surface.
   config = withAndroidManifest(config, (configWithManifest) => {

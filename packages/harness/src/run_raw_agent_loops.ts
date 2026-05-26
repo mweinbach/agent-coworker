@@ -27,7 +27,7 @@ import {
   type PersistentAgentSummary,
   resolveAgentSpawnContextOptions,
 } from "../../../src/shared/agents";
-import { ensureDefaultGlobalSkillsReady } from "../../../src/skills/defaultGlobalSkills";
+import { ensureFirstRunPluginsInstalled } from "../../../src/plugins/firstRunInstalls";
 import type { ToolContext } from "../../../src/tools";
 import { createAskTool } from "../../../src/tools/ask";
 import { createBashTool } from "../../../src/tools/bash";
@@ -2150,14 +2150,14 @@ async function main() {
       COWORK_DISABLE_BUILTIN_SKILLS: process.env.COWORK_DISABLE_BUILTIN_SKILLS ?? "1",
     };
 
-    await ensureDefaultGlobalSkillsReady({
+    const config = await loadConfig({ cwd: repoDir, env });
+    await ensureFirstRunPluginsInstalled({
+      config,
       env,
       log: (line) => {
-        console.warn(`[default-skills] ${line}`);
+        console.warn(`[first-run-plugins] ${line}`);
       },
     });
-
-    const config = await loadConfig({ cwd: repoDir, env });
     config.providerOptions = mergeProviderOptions(
       DEFAULT_PROVIDER_OPTIONS as JsonRecord,
       run.providerOptionsOverride,

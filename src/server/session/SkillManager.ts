@@ -5,6 +5,7 @@ import {
   installPluginsFromSource,
   resolvePluginCatalogEntry,
 } from "../../plugins";
+import { recordPluginUninstallTombstone } from "../../plugins/firstRunInstalls";
 import { setPluginEnabled } from "../../plugins/overrides";
 import { discoverSkillsForConfig, stripSkillFrontMatter } from "../../skills";
 import { getEffectiveInstallationByName } from "../../skills/catalog";
@@ -596,6 +597,44 @@ export class SkillManager {
           "internal_error",
           "session",
           `Failed to disable plugin: ${String(err)}`,
+        );
+      }
+    });
+  }
+
+  async uninstallPlugin(pluginIdRaw: string, scope?: PluginCatalogEntry["scope"]) {
+    const pluginId = pluginIdRaw.trim();
+    if (!pluginId) {
+      this.context.emitError("validation_failed", "session", "Plugin ID is required");
+      return;
+    }
+    await this.withSkillMutationLock(async () => {
+      try {
+        const catalog = await buildPluginCatalogSnapshot(this.context.state.config);
+        const plugin = this.resolvePluginSelection(catalog, pluginId, scope);
+        if (!plugin || plugin.installState === "available") {
+          return;
+        }
+        if (plugin.rootDir) {
+          await fs.rm(plugin.rootDir, { recursive: true, force: true });
+        }
+        if (plugin.marketplace?.name) {
+          // Marketplace id is derived from the marketplace document `name` field.
+          // For the built-in cowork-personal marketplace this matches the id.
+          await recordPluginUninstallTombstone({
+            marketplaceId: plugin.marketplace.name,
+            pluginName: plugin.name,
+          });
+        }
+        await this.afterSuccessfulMutation({
+          clearedMutationPendingKeys: [this.pluginMutationPendingKey("uninstall", plugin)],
+          refreshAllWorkspaces: this.isSharedPluginMutationScope(plugin.scope),
+        });
+      } catch (err) {
+        this.context.emitError(
+          "internal_error",
+          "session",
+          `Failed to uninstall plugin: ${String(err)}`,
         );
       }
     });

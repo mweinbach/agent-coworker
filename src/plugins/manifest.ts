@@ -360,8 +360,32 @@ async function assertPathInsidePluginRoot(
   }
 }
 
+const PLUGIN_MANIFEST_DIR_PREFERRED = ".cowork-plugin";
+const PLUGIN_MANIFEST_DIR_LEGACY = ".codex-plugin";
+
 export function manifestPathForPluginRoot(pluginRoot: string): string {
-  return path.join(pluginRoot, ".codex-plugin", "plugin.json");
+  return path.join(pluginRoot, PLUGIN_MANIFEST_DIR_PREFERRED, "plugin.json");
+}
+
+export function legacyManifestPathForPluginRoot(pluginRoot: string): string {
+  return path.join(pluginRoot, PLUGIN_MANIFEST_DIR_LEGACY, "plugin.json");
+}
+
+export async function resolveExistingManifestPath(pluginRoot: string): Promise<string | null> {
+  const preferred = manifestPathForPluginRoot(pluginRoot);
+  try {
+    await fs.access(preferred);
+    return preferred;
+  } catch {
+    // fall through
+  }
+  const legacy = legacyManifestPathForPluginRoot(pluginRoot);
+  try {
+    await fs.access(legacy);
+    return legacy;
+  } catch {
+    return null;
+  }
 }
 
 async function resolvePluginSkillsPaths(
@@ -414,7 +438,8 @@ async function resolvePluginSkillsPaths(
 }
 
 export async function readPluginManifest(pluginRoot: string): Promise<PluginManifest> {
-  const manifestPath = manifestPathForPluginRoot(pluginRoot);
+  const manifestPath =
+    (await resolveExistingManifestPath(pluginRoot)) ?? manifestPathForPluginRoot(pluginRoot);
   const raw = await fs.readFile(manifestPath, "utf-8");
   const parsed = pluginManifestSchema.parse(JSON.parse(raw));
   const skillsPaths = await resolvePluginSkillsPaths(pluginRoot, parsed.skills, manifestPath);

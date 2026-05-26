@@ -144,10 +144,15 @@ export function createWorkspaceRouteHandlers(
 
       try {
         const cwd = context.utils.resolveWorkspacePath(parsed.data, message.method);
+        const cfg = context.getConfig();
+        const pluginDirs = [cfg.workspacePluginsDir, cfg.userPluginsDir].filter(
+          (value): value is string => typeof value === "string" && value.length > 0,
+        );
         const result = await previewPresentationFile({
           cwd,
           filePath: parsed.data.path,
-          builtInDir: context.getConfig().builtInDir,
+          builtInDir: cfg.builtInDir,
+          pluginDirs,
         });
         context.jsonrpc.sendResult(ws, message.id, result);
       } catch (error) {

@@ -485,7 +485,7 @@ describe("server JSON-RPC websocket mode", () => {
         env: {
           AGENT_WORKING_DIR: tmpDir,
           AGENT_PROVIDER: "google",
-          COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1",
+          COWORK_SKIP_FIRST_RUN_INSTALLS: "1",
           COWORK_WS_JSONRPC_MAX_PENDING_REQUESTS: "0",
         },
       }),

@@ -6,6 +6,7 @@ export {
 export { discoverPlugins } from "./discovery";
 export {
   buildPluginCatalogEntry,
+  legacyManifestPathForPluginRoot,
   manifestPathForPluginRoot,
   type ParsedPluginApp,
   type ParsedPluginSkill,
@@ -13,6 +14,7 @@ export {
   readPluginAppSummaries,
   readPluginManifest,
   readPluginSkillSummaries,
+  resolveExistingManifestPath,
   validatePluginBundledSkills,
 } from "./manifest";
 export {

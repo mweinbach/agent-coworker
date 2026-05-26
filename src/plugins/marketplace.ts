@@ -80,6 +80,7 @@ function formatZodError(error: z.ZodError): string {
 export function parsePluginMarketplace(
   rawJson: string,
   marketplacePath: string,
+  rootDirOverride?: string,
 ): ParsedMarketplaceDocument {
   let parsed: unknown;
   try {
@@ -93,7 +94,9 @@ export function parsePluginMarketplace(
     throw new Error(`marketplace.json: ${formatZodError(validated.error)}`);
   }
 
-  const marketplaceRootDir = path.dirname(path.resolve(marketplacePath));
+  const marketplaceRootDir = rootDirOverride
+    ? path.resolve(rootDirOverride)
+    : path.dirname(path.resolve(marketplacePath));
   const canonicalMarketplaceRootDir = canonicalizePathForBoundaryCheckSync(marketplaceRootDir);
   const plugins = validated.data.plugins.map((plugin) => {
     const sourcePathRaw = plugin.source.path;

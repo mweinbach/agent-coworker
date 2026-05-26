@@ -47,7 +47,51 @@ describe("presentation preview renderer", () => {
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.error.kind).toBe("compile_error");
-        expect(result.error.message).toContain("Slide rendering script not found");
+        expect(result.error.message).toContain("Presentation renderer script not found");
+      }
+    });
+  });
+
+  test("resolves renderer script from an installed marketplace plugin", async () => {
+    await withTempDir(async (dir) => {
+      const filePath = path.join(dir, "slide-1.mjs");
+      await fs.writeFile(filePath, "export default {}", "utf8");
+
+      const pluginDir = path.join(dir, "plugins");
+      const pluginScriptDir = path.join(
+        pluginDir,
+        "presentations",
+        "skills",
+        "presentations",
+        "scripts",
+      );
+      await fs.mkdir(pluginScriptDir, { recursive: true });
+      await fs.writeFile(
+        path.join(pluginScriptDir, "render_artifact_slide.mjs"),
+        `
+          import fs from 'node:fs';
+          const outIdx = process.argv.indexOf('--output');
+          if (outIdx !== -1 && process.argv[outIdx + 1]) {
+            fs.writeFileSync(process.argv[outIdx + 1], 'plugin-rendered');
+          }
+          process.exit(0);
+        `,
+        "utf8",
+      );
+
+      const result = await previewPresentationFile({
+        cwd: dir,
+        filePath: "slide-1.mjs",
+        builtInDir: path.join(dir, "empty-builtin"),
+        pluginDirs: [pluginDir],
+      });
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.slides).toHaveLength(1);
+        expect(result.slides[0].pngBase64).toBe(
+          "data:image/png;base64,cGx1Z2luLXJlbmRlcmVk",
+        );
       }
     });
   });

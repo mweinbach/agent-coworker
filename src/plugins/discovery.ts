@@ -3,7 +3,7 @@ import path from "node:path";
 import { z } from "zod";
 
 import type { PluginDiscoveryKind, PluginScope } from "../types";
-import { manifestPathForPluginRoot } from "./manifest";
+import { resolveExistingManifestPath } from "./manifest";
 import { type ParsedMarketplaceDocument, parsePluginMarketplace } from "./marketplace";
 
 const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
@@ -54,8 +54,8 @@ async function resolveCanonicalPluginRoot(candidatePath: string): Promise<string
   try {
     const stat = await fs.stat(candidatePath);
     if (!stat.isDirectory()) return null;
-    const manifestPath = manifestPathForPluginRoot(candidatePath);
-    if (!(await pathExists(manifestPath))) return null;
+    const manifestPath = await resolveExistingManifestPath(candidatePath);
+    if (!manifestPath) return null;
     return await fs.realpath(candidatePath);
   } catch {
     return null;
@@ -100,7 +100,7 @@ async function discoverMarketplacePlugins(opts: {
     const realRootDir = await resolveCanonicalPluginRoot(pluginEntry.sourcePath);
     if (!realRootDir) {
       warnings.push(
-        `[plugins] Ignoring marketplace entry "${pluginEntry.name}" from ${marketplacePath}: missing .codex-plugin/plugin.json under ${pluginEntry.sourcePath}`,
+        `[plugins] Ignoring marketplace entry "${pluginEntry.name}" from ${marketplacePath}: missing .cowork-plugin/plugin.json (or legacy .codex-plugin/plugin.json) under ${pluginEntry.sourcePath}`,
       );
       continue;
     }

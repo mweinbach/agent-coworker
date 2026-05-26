@@ -462,7 +462,10 @@ function buildServerEnv(
     COWORK_BROWSER_ACCESS_TOKEN:
       process.env.COWORK_BROWSER_ACCESS_TOKEN?.trim() ||
       `${randomUUID()}${randomUUID().replaceAll("-", "")}`,
-    COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: process.env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP ?? "1",
+    COWORK_SKIP_FIRST_RUN_INSTALLS:
+      process.env.COWORK_SKIP_FIRST_RUN_INSTALLS ??
+      process.env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP ??
+      "1",
     ...(bundledCodexAppServer
       ? { COWORK_CODEX_APP_SERVER_COMMAND: bundledCodexAppServer, COWORK_CODEX_APP_SERVER_ARGS: "" }
       : {}),

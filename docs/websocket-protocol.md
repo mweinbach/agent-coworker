@@ -231,6 +231,7 @@ Currently implemented `cowork/*` methods include:
   - `cowork/plugins/install`
   - `cowork/plugins/enable`
   - `cowork/plugins/disable`
+  - `cowork/plugins/uninstall`
 - memory controls
   - `cowork/memory/list`
   - `cowork/memory/upsert`
@@ -254,7 +255,9 @@ The desktop JSON-RPC path now uses this namespace so one workspace connection ca
 - MCP management
 - memories
 
-`cowork/plugins/read`, `cowork/plugins/enable`, and `cowork/plugins/disable` accept an optional `scope` field (`workspace` or `user`) so callers can address a specific installed copy when the same plugin id exists in both scopes.
+`cowork/plugins/read`, `cowork/plugins/enable`, `cowork/plugins/disable`, and `cowork/plugins/uninstall` accept an optional `scope` field (`workspace` or `user`) so callers can address a specific installed copy when the same plugin id exists in both scopes. `cowork/plugins/uninstall` deletes the plugin directory on disk and (for marketplace plugins) records a tombstone in `~/.cowork/config/first-run-installs.json` so subsequent server starts will not auto-reinstall it.
+
+The plugin catalog includes built-in remote marketplaces (currently `cowork-personal`, hosted at `https://github.com/mweinbach/cowork-skills-plugins`). Entries from a remote marketplace appear with `installState: "available"` and a `remoteSource` pointer until the user installs them; locally installed plugins surface with `installState: "installed"`. On first startup the server auto-installs the `documents`, `presentations`, and `spreadsheets` plugins from `cowork-personal` unless their key is present in the tombstone list. Set `COWORK_SKIP_FIRST_RUN_INSTALLS=1` to skip the auto-install, or `COWORK_DISABLE_REMOTE_MARKETPLACES=1` to skip remote marketplace fetches entirely (the latter is the default during the test suite).
 - opt-in workspace backups
 
 `thread/list` and workspace-scoped `cowork/*` control methods now default omitted `cwd` to the sidecar/server working directory. Mobile and other remote clients no longer need to know a host filesystem path just to list threads or read workspace control state.

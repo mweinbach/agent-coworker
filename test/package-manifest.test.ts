@@ -83,10 +83,12 @@ describe("package manifest", () => {
     expect(paths).not.toContain("prompts/system-models/.research/google-guide.md");
     expect(paths).not.toContain("prompts/system-models/.research/openai-guide.md");
     expect(paths).toContain("prompts/system.md");
-    expect(paths).toContain("skills/documents/SKILL.md");
-    expect(paths).toContain("skills/presentations/SKILL.md");
-    expect(paths).toContain("skills/spreadsheets/SKILL.md");
-    expect(paths).not.toContain("skills/presentations/dev/run_prompt_battle.mjs");
+    // Artifact skills (documents/presentations/spreadsheets/pdf) ship via the
+    // cowork-personal marketplace plugins, not in the build.
+    expect(paths.some((path) => path.startsWith("skills/documents/"))).toBeFalse();
+    expect(paths.some((path) => path.startsWith("skills/presentations/"))).toBeFalse();
+    expect(paths.some((path) => path.startsWith("skills/spreadsheets/"))).toBeFalse();
+    expect(paths.some((path) => path.startsWith("skills/pdf/"))).toBeFalse();
     expect(paths.some((path) => path.includes("/skills/") && path.includes("/dev/"))).toBeFalse();
     expect(paths.some((path) => path.includes("/__pycache__/"))).toBeFalse();
     expect(paths.some((path) => path.endsWith(".pyc"))).toBeFalse();

@@ -316,6 +316,15 @@ export interface PluginSkillSummary {
   interface?: SkillInterfaceMeta;
 }
 
+export type PluginInstallState = "installed" | "available";
+
+export interface PluginRemoteSource {
+  marketplaceId: string;
+  repo: string;
+  ref: string;
+  subdir: string;
+}
+
 export interface PluginCatalogEntry {
   id: string;
   name: string;
@@ -343,6 +352,8 @@ export interface PluginCatalogEntry {
     installationPolicy?: string;
     authenticationPolicy?: string;
   };
+  installState?: PluginInstallState;
+  remoteSource?: PluginRemoteSource;
   skills: PluginSkillSummary[];
   mcpServers: string[];
   apps: PluginAppSummary[];

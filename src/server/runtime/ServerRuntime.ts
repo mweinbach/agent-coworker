@@ -15,7 +15,7 @@ import type {
   loadAgentPrompt as loadAgentPromptFn,
   loadSystemPromptWithSkills as loadSystemPromptWithSkillsFn,
 } from "../../prompt";
-import { ensureDefaultGlobalSkillsReady } from "../../skills/defaultGlobalSkills";
+import { ensureFirstRunPluginsInstalled } from "../../plugins/firstRunInstalls";
 import type { AgentConfig } from "../../types";
 import { decodeJsonRpcMessage } from "../jsonrpc/decodeJsonRpcMessage";
 import {
@@ -126,19 +126,20 @@ export async function createAgentServerRuntime(
       : 128,
   );
 
-  await ensureDefaultGlobalSkillsReady({
-    homedir: opts.homedir,
-    env,
-    log: (line) => {
-      console.warn(`[default-skills] ${line}`);
-    },
-  });
-
   const builtInDir =
     typeof env.COWORK_BUILTIN_DIR === "string" && env.COWORK_BUILTIN_DIR.trim()
       ? env.COWORK_BUILTIN_DIR
       : undefined;
   let config = await loadConfig({ cwd: opts.cwd, env, homedir: opts.homedir, builtInDir });
+
+  await ensureFirstRunPluginsInstalled({
+    config,
+    homedir: opts.homedir,
+    env,
+    log: (line) => {
+      console.warn(`[first-run-plugins] ${line}`);
+    },
+  });
   const mergedProviderOptions = mergeRuntimeProviderOptions(
     opts.providerOptions,
     config.providerOptions,

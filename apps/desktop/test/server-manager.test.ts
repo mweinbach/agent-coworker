@@ -212,8 +212,8 @@ describe("desktop server manager startup mode", () => {
     expect(env.COWORK_DESKTOP_USER_DATA_DIR).toBe(userDataDir);
     expect(env.COWORK_BROWSER_ACCESS_TOKEN).toEqual(expect.any(String));
     expect(env.COWORK_BROWSER_ACCESS_TOKEN?.length).toBeGreaterThan(20);
-    expect(env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP).toBe(
-      process.env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP ?? "1",
+    expect(env.COWORK_SKIP_FIRST_RUN_INSTALLS).toBe(
+      process.env.COWORK_SKIP_FIRST_RUN_INSTALLS ?? "1",
     );
   });
 

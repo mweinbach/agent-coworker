@@ -230,7 +230,7 @@ export function InstallSkillDialog({
           <div className="grid gap-4 py-4">
             <Textarea
               className="min-h-24 w-full"
-              placeholder="https://skills.sh/openai/skills/imagegen"
+              placeholder="https://github.com/mweinbach/cowork-skills-plugins/tree/main/plugins/presentations"
               value={sourceInput}
               aria-label="Skill source"
               onChange={(event) => {

@@ -52,7 +52,7 @@ function serverOpts(
     AGENT_WORKING_DIR: tmpDir,
     AGENT_PROVIDER: "google",
     AGENT_OBSERVABILITY_ENABLED: "false",
-    COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1",
+    COWORK_SKIP_FIRST_RUN_INSTALLS: "1",
   };
 
   return {
@@ -205,7 +205,7 @@ describe("Server Startup", () => {
         env: {
           AGENT_WORKING_DIR: tmpDir,
           AGENT_PROVIDER: "anthropic",
-          COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1",
+          COWORK_SKIP_FIRST_RUN_INSTALLS: "1",
         },
       }),
     );
@@ -224,7 +224,9 @@ describe("Server Startup", () => {
       expect(config.skillsDirs[0]).toBe(path.join(tmpDir, ".cowork", "skills"));
       expect(config.skillsDirs[2]).toBe(path.join(config.builtInDir, "skills"));
       expect(system).toContain("## Available Skills");
-      expect(system).toContain("**presentations**");
+      // Artifact skills (presentations/documents/spreadsheets) now ship via the
+      // cowork-personal marketplace plugins, not the built-in skills tier.
+      expect(system).toContain("**git-workflow**");
     } finally {
       await stopTestServer(server);
     }
@@ -237,7 +239,7 @@ describe("Server Startup", () => {
         env: {
           AGENT_WORKING_DIR: tmpDir,
           AGENT_PROVIDER: "google",
-          COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1",
+          COWORK_SKIP_FIRST_RUN_INSTALLS: "1",
           COWORK_DISABLE_BUILTIN_SKILLS: "1",
         },
       }),
@@ -440,7 +442,7 @@ describe("HTTP Handler", () => {
           AGENT_WORKING_DIR: tmpDir,
           AGENT_PROVIDER: "google",
           AGENT_OBSERVABILITY_ENABLED: "false",
-          COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1",
+          COWORK_SKIP_FIRST_RUN_INSTALLS: "1",
           COWORK_WEB_DESKTOP_SERVICE: "1",
         },
       }),

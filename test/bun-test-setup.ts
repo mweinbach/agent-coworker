@@ -4,6 +4,12 @@ import path from "node:path";
 
 import "./helpers/mock-react-native";
 
+// Tests must not hit the network to fetch built-in remote marketplaces.
+// Individual tests that need to exercise that path opt in by overriding this.
+if (!process.env.COWORK_DISABLE_REMOTE_MARKETPLACES) {
+  process.env.COWORK_DISABLE_REMOTE_MARKETPLACES = "1";
+}
+
 const desktopRequire = createRequire(path.resolve("apps/desktop/package.json"));
 
 function namespaceForMock<T extends Record<string, unknown>>(mod: T): T & { default: T } {

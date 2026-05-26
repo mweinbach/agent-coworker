@@ -18,6 +18,7 @@ export type PresentationPreviewRequest = {
   cwd: string;
   filePath: string;
   builtInDir: string;
+  pluginDirs?: string[];
   env?: Record<string, string | undefined>;
 };
 
@@ -40,6 +41,52 @@ export type PresentationPreviewResult =
         message: string;
       };
     };
+
+const PRESENTATION_RENDER_SCRIPT_RELATIVE_PATHS = [
+  // Path inside an installed plugin (matches plugins/presentations/skills/presentations/scripts/...)
+  ["skills", "presentations", "scripts", "render_artifact_slide.mjs"],
+  // Path inside a flatter plugin layout that puts scripts directly under skills/
+  ["skills", "scripts", "render_artifact_slide.mjs"],
+];
+
+async function fileExists(target: string): Promise<boolean> {
+  try {
+    const stat = await fs.stat(target);
+    return stat.isFile();
+  } catch {
+    return false;
+  }
+}
+
+async function resolvePresentationRenderScript(
+  request: PresentationPreviewRequest,
+): Promise<string | null> {
+  const pluginDirs = request.pluginDirs ?? [];
+  const candidates: string[] = [];
+  for (const pluginDir of pluginDirs) {
+    const pluginRoot = path.join(pluginDir, "presentations");
+    for (const relSegments of PRESENTATION_RENDER_SCRIPT_RELATIVE_PATHS) {
+      candidates.push(path.join(pluginRoot, ...relSegments));
+    }
+  }
+  if (request.builtInDir) {
+    candidates.push(
+      path.join(
+        request.builtInDir,
+        "skills",
+        "presentations",
+        "scripts",
+        "render_artifact_slide.mjs",
+      ),
+    );
+  }
+  for (const candidate of candidates) {
+    if (await fileExists(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
 
 async function resolveNodeBinary(): Promise<string> {
   if (process.env.COWORK_CODEX_RUNTIME_NODE) {
@@ -91,23 +138,14 @@ export async function previewPresentationFile(
   }
 
   const nodeBin = await resolveNodeBinary();
-  const scriptPath = path.join(
-    request.builtInDir,
-    "skills",
-    "presentations",
-    "scripts",
-    "render_artifact_slide.mjs",
-  );
-
-  // Check if render script exists
-  try {
-    await fs.stat(scriptPath);
-  } catch {
+  const scriptPath = await resolvePresentationRenderScript(request);
+  if (!scriptPath) {
     return {
       ok: false,
       error: {
         kind: "compile_error",
-        message: `Slide rendering script not found at expected path: ${scriptPath}`,
+        message:
+          "Presentation renderer script not found. Install the 'presentations' plugin from the Cowork Personal marketplace to enable slide previews.",
       },
     };
   }

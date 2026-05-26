@@ -1,4 +1,10 @@
-import type { AgentConfig, PluginCatalogEntry, PluginCatalogSnapshot, PluginScope } from "../types";
+import type {
+  AgentConfig,
+  PluginCatalogEntry,
+  PluginCatalogSnapshot,
+  PluginScope,
+} from "../types";
+import { BUILT_IN_MARKETPLACES, type RemoteMarketplaceConfig } from "./builtInMarketplaces";
 import { type DiscoveredPluginCandidate, discoverPlugins } from "./discovery";
 import {
   buildPluginCatalogEntry,
@@ -8,6 +14,10 @@ import {
 } from "./manifest";
 import { readPluginMcpServers } from "./mcp";
 import { isPluginEnabled, isPluginSkillEnabled, readPluginOverrides } from "./overrides";
+import {
+  fetchRemoteMarketplaces,
+  type RemoteMarketplaceSnapshot,
+} from "./remoteMarketplace";
 
 function resolvePluginScope(config: AgentConfig, pluginRoot: string): PluginScope {
   if (config.workspacePluginsDir && pluginRoot.startsWith(config.workspacePluginsDir)) {
@@ -54,6 +64,92 @@ export function comparePluginCatalogEntries(
     return scopeDelta;
   }
   return `${left.displayName}:${left.id}`.localeCompare(`${right.displayName}:${right.id}`);
+}
+
+function shouldFetchRemoteMarketplaces(
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  const flag = env.COWORK_DISABLE_REMOTE_MARKETPLACES?.trim().toLowerCase();
+  if (!flag) return true;
+  return !(flag === "1" || flag === "true" || flag === "yes" || flag === "on");
+}
+
+let remoteMarketplaceCache: {
+  snapshots: RemoteMarketplaceSnapshot[];
+  fetchedAt: number;
+} | null = null;
+const REMOTE_MARKETPLACE_CACHE_TTL_MS = 5 * 60 * 1000;
+
+export function clearRemoteMarketplaceCache(): void {
+  remoteMarketplaceCache = null;
+}
+
+async function loadRemoteMarketplaces(
+  configs: readonly RemoteMarketplaceConfig[],
+): Promise<{ snapshots: RemoteMarketplaceSnapshot[]; warnings: string[] }> {
+  if (configs.length === 0) {
+    return { snapshots: [], warnings: [] };
+  }
+  if (
+    remoteMarketplaceCache &&
+    Date.now() - remoteMarketplaceCache.fetchedAt < REMOTE_MARKETPLACE_CACHE_TTL_MS
+  ) {
+    return { snapshots: remoteMarketplaceCache.snapshots, warnings: [] };
+  }
+  const { snapshots, errors } = await fetchRemoteMarketplaces(configs);
+  remoteMarketplaceCache = { snapshots, fetchedAt: Date.now() };
+  return {
+    snapshots,
+    warnings: errors.map(
+      (failure) =>
+        `[plugins] Remote marketplace ${failure.config.id} unavailable: ${failure.error}`,
+    ),
+  };
+}
+
+function buildAvailableRemoteEntry(opts: {
+  config: RemoteMarketplaceConfig;
+  document: RemoteMarketplaceSnapshot["document"];
+  pluginEntry: RemoteMarketplaceSnapshot["document"]["plugins"][number];
+}): PluginCatalogEntry {
+  const { config, document, pluginEntry } = opts;
+  const displayName = pluginEntry.displayName ?? pluginEntry.name;
+  const subdir = pluginEntry.sourcePath
+    .split(/[\\/]+/)
+    .filter(Boolean)
+    .filter((segment) => segment !== "__remote__" && segment !== config.id && segment !== "root")
+    .join("/");
+
+  return {
+    id: pluginEntry.name,
+    name: pluginEntry.name,
+    displayName,
+    description: pluginEntry.displayName ?? pluginEntry.name,
+    scope: "user",
+    discoveryKind: "marketplace",
+    enabled: false,
+    rootDir: "",
+    manifestPath: "",
+    skillsPath: "",
+    marketplace: {
+      name: document.name,
+      ...(document.displayName ? { displayName: document.displayName } : {}),
+      ...(pluginEntry.category ? { category: pluginEntry.category } : {}),
+      installationPolicy: pluginEntry.installationPolicy,
+      authenticationPolicy: pluginEntry.authenticationPolicy,
+    },
+    installState: "available",
+    remoteSource: {
+      marketplaceId: config.id,
+      repo: config.repo,
+      ref: config.ref,
+      subdir,
+    },
+    skills: [],
+    mcpServers: [],
+    apps: [],
+    warnings: [],
+  };
 }
 
 export async function buildPluginCatalogSnapshot(
@@ -138,9 +234,35 @@ export async function buildPluginCatalogSnapshot(
             pluginEnabled && isPluginSkillEnabled(manifest.name, scope, skill.rawName, overrides),
         };
       });
+      entry.installState = "installed";
       plugins.push(entry);
     } catch (error) {
       warnings.push(`[plugins] Failed to catalog plugin at ${candidate.rootDir}: ${String(error)}`);
+    }
+  }
+
+  if (shouldFetchRemoteMarketplaces()) {
+    const { snapshots, warnings: remoteWarnings } = await loadRemoteMarketplaces(
+      BUILT_IN_MARKETPLACES,
+    );
+    warnings.push(...remoteWarnings);
+    const installedKeys = new Set(
+      plugins.map((entry) => `${entry.marketplace?.name ?? ""}:${entry.name}`),
+    );
+    for (const snapshot of snapshots) {
+      for (const pluginEntry of snapshot.document.plugins) {
+        const key = `${snapshot.document.name}:${pluginEntry.name}`;
+        if (installedKeys.has(key)) {
+          continue;
+        }
+        plugins.push(
+          buildAvailableRemoteEntry({
+            config: snapshot.config,
+            document: snapshot.document,
+            pluginEntry,
+          }),
+        );
+      }
     }
   }
 

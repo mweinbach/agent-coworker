@@ -723,7 +723,10 @@ async function launchWorkspaceServer(opts: {
     stdio: ["ignore", "pipe", "pipe"],
     env: {
       ...process.env,
-      COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: process.env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP ?? "1",
+      COWORK_SKIP_FIRST_RUN_INSTALLS:
+        process.env.COWORK_SKIP_FIRST_RUN_INSTALLS ??
+        process.env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP ??
+        "1",
     },
   });
 

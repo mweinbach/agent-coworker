@@ -151,5 +151,25 @@ export function createPluginsRouteHandlers(context: JsonRpcRouteContext): JsonRp
       }
       context.jsonrpc.sendResult(ws, message.id, { events });
     },
+
+    "cowork/plugins/uninstall": async (ws, message) => {
+      const params = toJsonRpcParams(message.params);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
+      const pluginId = typeof params.pluginId === "string" ? params.pluginId.trim() : "";
+      const scope =
+        params.scope === "workspace" || params.scope === "user" ? params.scope : undefined;
+      const events = await captureWorkspaceControlMutationEvents(
+        context,
+        cwd,
+        async (runtime) => await runtime.plugins.uninstall(pluginId, scope),
+        isPluginMutationResponseEvent,
+      );
+      const error = events.find(context.utils.isSessionError);
+      if (error) {
+        sendSessionMutationError(context, ws, message.id, error);
+        return;
+      }
+      context.jsonrpc.sendResult(ws, message.id, { events });
+    },
   };
 }

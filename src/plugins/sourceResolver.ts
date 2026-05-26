@@ -41,8 +41,14 @@ function trimSlashes(value: string): string {
   return value.replace(/^\/+|\/+$/g, "");
 }
 
+const PLUGIN_MANIFEST_DIR_NAMES = [".cowork-plugin", ".codex-plugin"] as const;
+
+function isPluginManifestDirName(name: string): boolean {
+  return (PLUGIN_MANIFEST_DIR_NAMES as readonly string[]).includes(name);
+}
+
 function isPluginManifestGitHubInput(input: string): boolean {
-  return /(?:^|\/)\.codex-plugin\/plugin\.json(?:$|[?#])/.test(input);
+  return /(?:^|\/)\.(?:cowork|codex)-plugin\/plugin\.json(?:$|[?#])/.test(input);
 }
 
 function normalizePluginGitHubDirectoryPath(filePath: string): string {
@@ -53,7 +59,7 @@ function normalizePluginGitHubDirectoryPath(filePath: string): string {
 
   const fileName = path.posix.basename(normalizedFilePath);
   const parentDir = path.posix.dirname(normalizedFilePath);
-  if (fileName === "plugin.json" && path.posix.basename(parentDir) === ".codex-plugin") {
+  if (fileName === "plugin.json" && isPluginManifestDirName(path.posix.basename(parentDir))) {
     const bundleRoot = path.posix.dirname(parentDir);
     return bundleRoot === "." ? "" : bundleRoot;
   }
@@ -67,7 +73,7 @@ function normalizePluginGitHubTreePath(directoryPath: string): string {
     return "";
   }
 
-  if (path.posix.basename(normalizedDirectoryPath) !== ".codex-plugin") {
+  if (!isPluginManifestDirName(path.posix.basename(normalizedDirectoryPath))) {
     return normalizedDirectoryPath;
   }
 
@@ -96,7 +102,7 @@ function normalizeLocalPluginSourceRoot(absolutePath: string, isFile: boolean): 
   const baseName = path.basename(candidateRoot);
   const fileName = isFile ? path.basename(absolutePath) : "";
 
-  if (baseName === ".codex-plugin") {
+  if (isPluginManifestDirName(baseName)) {
     if (!isFile || fileName === "plugin.json") {
       return path.dirname(candidateRoot);
     }
@@ -128,14 +134,17 @@ async function discoverPluginRoots(rootDir: string): Promise<string[]> {
       return;
     }
 
-    const manifestPath = path.join(dir, ".codex-plugin", "plugin.json");
-    try {
-      const stat = await fs.stat(manifestPath);
-      if (stat.isFile()) {
-        found.add(dir);
+    for (const manifestDirName of PLUGIN_MANIFEST_DIR_NAMES) {
+      const manifestPath = path.join(dir, manifestDirName, "plugin.json");
+      try {
+        const stat = await fs.stat(manifestPath);
+        if (stat.isFile()) {
+          found.add(dir);
+          break;
+        }
+      } catch {
+        // continue searching descendants
       }
-    } catch {
-      // continue searching descendants
     }
 
     for (const dirent of dirents) {
@@ -209,7 +218,7 @@ async function loadMaterializedPluginCandidates(
           buildDiagnostic(
             "invalid_plugin_manifest",
             "error",
-            `Invalid or unreadable .codex-plugin/plugin.json: ${String(error)}`,
+            `Invalid or unreadable plugin manifest: ${String(error)}`,
           ),
         ],
         relativeRootPath: path.relative(stageRoot, rootDir) || path.basename(rootDir),
@@ -227,7 +236,7 @@ async function loadMaterializedPluginCandidates(
         buildDiagnostic(
           "no_plugin_found",
           "error",
-          "No Codex plugin roots containing .codex-plugin/plugin.json were found",
+          "No plugin roots containing .cowork-plugin/plugin.json (or legacy .codex-plugin/plugin.json) were found",
         ),
       ],
       relativeRootPath: ".",

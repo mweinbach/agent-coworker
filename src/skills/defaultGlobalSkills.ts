@@ -189,7 +189,10 @@ export async function ensureDefaultGlobalSkillsInstalled(opts: {
       recordedPluginIds.add(pluginId);
       continue;
     }
-    if (!opts.force && catalog.plugins.some((plugin) => plugin.id === pluginId)) {
+    if (
+      !opts.force &&
+      catalog.plugins.some((plugin) => plugin.id === pluginId && plugin.scope === "user")
+    ) {
       skippedExisting.push(pluginId);
       recordedPluginIds.add(pluginId);
       continue;

@@ -16,16 +16,22 @@ type Info = {
   topbarControlPlacement: "sidebar" | "left-rail" | "inline";
   usesNativeGlass: boolean;
   disableCssBlur: boolean;
+  captionButtonReserve: number;
+  collapsedLeftRailWidth: number;
+  topbarToolbarGap: number;
 };
 
 function makeInfo(overrides: Partial<Info>): Info {
   return {
     platform: "linux",
     rawPlatform: "linux",
-    sidebarTitlebandMode: "topbar",
-    topbarControlPlacement: "inline",
+    sidebarTitlebandMode: "native",
+    topbarControlPlacement: "left-rail",
     usesNativeGlass: false,
     disableCssBlur: false,
+    captionButtonReserve: 136,
+    collapsedLeftRailWidth: 84,
+    topbarToolbarGap: 6,
     ...overrides,
   };
 }
@@ -154,7 +160,7 @@ describe("PlatformTopBarChrome", () => {
     }
   });
 
-  test("renders inline toggle on Linux", async () => {
+  test("renders Linux with the Windows-style left rail", async () => {
     const harness = setupJsdom();
     try {
       const container = harness.dom.window.document.getElementById("root");
@@ -167,7 +173,6 @@ describe("PlatformTopBarChrome", () => {
             platformInfo: makeInfo({
               platform: "linux",
               rawPlatform: "linux",
-              topbarControlPlacement: "inline",
             }),
             sidebarCollapsed: false,
             sidebarWidth: 280,
@@ -178,11 +183,10 @@ describe("PlatformTopBarChrome", () => {
         );
       });
 
-      expect(container.querySelector(".app-topbar__inline-sidebar-toggle")).not.toBeNull();
       expect(container.querySelector(".app-sidebar-collapse-control")).toBeNull();
-      expect(container.querySelector(".app-topbar__win32-left-rail")).toBeNull();
+      expect(container.querySelector(".app-topbar__win32-left-rail")).not.toBeNull();
+      expect(container.querySelector(".app-topbar__inline-sidebar-toggle")).toBeNull();
 
-      // With sidebar expanded, no New Chat button (only sidebar toggle)
       expect(container.querySelector('button[aria-label="New Chat"]')).toBeNull();
       expect(container.querySelector('button[aria-label="Hide sidebar"]')).not.toBeNull();
 
@@ -194,7 +198,7 @@ describe("PlatformTopBarChrome", () => {
     }
   });
 
-  test("Linux inline toggle adds New Chat when sidebar is collapsed", async () => {
+  test("Linux left rail adds New Chat when sidebar is collapsed", async () => {
     const harness = setupJsdom();
     try {
       const container = harness.dom.window.document.getElementById("root");
@@ -207,9 +211,9 @@ describe("PlatformTopBarChrome", () => {
             platformInfo: makeInfo({
               platform: "linux",
               rawPlatform: "linux",
-              topbarControlPlacement: "inline",
             }),
             sidebarCollapsed: true,
+            sidebarWidth: 280,
             onToggleSidebar: () => {},
             onNewChat: () => {},
             sidebarLabel: "Show sidebar",
@@ -217,6 +221,9 @@ describe("PlatformTopBarChrome", () => {
         );
       });
 
+      const leftRail = container.querySelector(".app-topbar__win32-left-rail") as HTMLElement;
+      expect(leftRail).not.toBeNull();
+      expect(leftRail.style.width).toBe("84px");
       expect(container.querySelector('button[aria-label="New Chat"]')).not.toBeNull();
 
       await act(async () => {

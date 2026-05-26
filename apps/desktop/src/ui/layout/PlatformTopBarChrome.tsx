@@ -10,10 +10,10 @@ import { SidebarCollapseControl } from "./SidebarCollapseControl";
  *
  * Renders different control placements per platform:
  * - macOS: SidebarCollapseControl in traffic-light area
- * - Windows: Left rail owns the collapse/expand button in both states, with
+ * - Windows/Linux: Left rail owns the collapse/expand button in both states, with
  *   New Chat added beside it only when collapsed so the collapse icon stays
  *   mounted through sidebar width animations
- * - Linux/other: Inline sidebar toggle (+ New Chat when collapsed)
+ * - Other: Inline sidebar toggle (+ New Chat when collapsed)
  *
  * The shared top bar content (title, usage, right toolbar) is rendered by AppTopBar.
  */
@@ -52,7 +52,7 @@ export function PlatformTopBarChrome({
   }
 
   if (placement === "left-rail") {
-    // Windows: keep the sidebar toggle in the topbar rail for both expanded
+    // Windows/Linux: keep the sidebar toggle in the topbar rail for both expanded
     // and collapsed states so the icon does not unmount/remount during the
     // sidebar width animation. New Chat appears next to it only when collapsed.
     return (

@@ -52,14 +52,14 @@ const DEFAULT_PLATFORM_CHROME = {
   titlebarHeight: 0,
   dragStripHeight: 8,
   leftNativeReserve: 0,
-  rightNativeReserve: 0,
-  captionButtonReserve: 0,
-  collapsedLeftRailWidth: 0,
-  topbarToolbarGap: 0,
-  sidebarTitlebandMode: "topbar",
-  topbarControlPlacement: "inline",
+  rightNativeReserve: 136,
+  captionButtonReserve: 136,
+  collapsedLeftRailWidth: 84,
+  topbarToolbarGap: 6,
+  sidebarTitlebandMode: "native",
+  topbarControlPlacement: "left-rail",
   usesNativeGlass: false,
-  disableCssBlur: true,
+  disableCssBlur: false,
 } satisfies Awaited<ReturnType<typeof import("../../src/lib/desktopCommands").getPlatformChrome>>;
 
 export function createDesktopCommandsMock(

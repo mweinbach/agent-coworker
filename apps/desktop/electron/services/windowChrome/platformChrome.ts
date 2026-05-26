@@ -129,23 +129,22 @@ const WINDOWS_CHROME: PlatformChromeContract = {
  *
  * - titleBarOverlay where supported, opaque fallback otherwise
  * - Window controls vary by DE/WM
- * - Opaque shell by default (no native material assumptions)
- * - Aligned with Windows overlay height for shared renderer CSS
- * - CSS blur enabled but should be tested per WM
+ * - Matches the Windows renderer shell: left rail controls and sidebar-owned title band
+ * - Uses the Windows caption-button reserve so renderer controls sit next to native buttons
  */
 const LINUX_CHROME: PlatformChromeContract = {
   platform: "linux",
   titlebarHeight: 48, // Match Windows for shared CSS
   dragStripHeight: 10, // 0.625rem
   leftNativeReserve: 0,
-  rightNativeReserve: 192, // Window control reserve (varies by DE)
-  captionButtonReserve: 0,
-  collapsedLeftRailWidth: 0,
+  rightNativeReserve: 136,
+  captionButtonReserve: 136,
+  collapsedLeftRailWidth: 84,
   topbarToolbarGap: 6,
   trafficLightPosition: undefined,
   windowMaterial: undefined,
-  sidebarTitlebandMode: "topbar",
-  topbarControlPlacement: "inline",
+  sidebarTitlebandMode: "native",
+  topbarControlPlacement: "left-rail",
   usesNativeGlass: false,
   disableCssBlur: false,
 };

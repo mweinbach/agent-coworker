@@ -283,6 +283,51 @@ describe("desktop app top bar", () => {
     }
   });
 
+  test("aligns Linux right toolbar controls next to native window buttons", async () => {
+    const harness = setupJsdom();
+
+    try {
+      harness.dom.window.document.documentElement.dataset.platform = "linux";
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          createElement(AppTopBar, {
+            busy: false,
+            onToggleSidebar: () => {},
+            onNewChat: () => {},
+            sidebarCollapsed: false,
+            sidebarWidth: 280,
+            contextSidebarCollapsed: false,
+            onToggleContextSidebar: () => {},
+            onPopOutQuickChat: () => {},
+            title: "Refine desktop app UI",
+            subtitle: "agent-coworker",
+            sessionUsage: null,
+            lastTurnUsage: null,
+            managementMode: "thread",
+          }),
+        );
+      });
+
+      const rightToolbar = container.querySelector(".app-topbar__toolbar--right") as HTMLElement;
+      const titleShell = container.querySelector(".app-topbar__thread-shell");
+
+      expect(container.querySelector(".app-topbar__win32-left-rail")).not.toBeNull();
+      expect(rightToolbar).not.toBeNull();
+      expect(rightToolbar.style.right).toBe("154px");
+      expect(titleShell?.getAttribute("style")).toContain("right: 186px");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
   test("can hide the context sidebar control when a view has no right rail", async () => {
     const harness = setupJsdom();
 

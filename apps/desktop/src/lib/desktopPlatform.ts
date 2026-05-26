@@ -57,11 +57,13 @@ function readPlatformMetric(datasetValue: string | undefined, fallback: number):
 }
 
 function defaultCaptionButtonReserve(platform: DesktopPlatform): number {
-  return platform === "windows" ? 136 : 0;
+  if (platform === "windows") return 136;
+  if (platform === "linux") return 136;
+  return 0;
 }
 
 function defaultCollapsedLeftRailWidth(platform: DesktopPlatform): number {
-  return platform === "windows" ? 84 : 0;
+  return platform === "windows" || platform === "linux" ? 84 : 0;
 }
 
 function defaultTopbarToolbarGap(platform: DesktopPlatform): number {
@@ -132,12 +134,12 @@ export function getDesktopPlatformInfo(): DesktopPlatformInfo {
 }
 
 function defaultSidebarTitlebandMode(platform: DesktopPlatform): SidebarTitlebandMode {
-  return platform === "windows" ? "native" : "topbar";
+  return platform === "windows" || platform === "linux" ? "native" : "topbar";
 }
 
 function defaultTopbarControlPlacement(platform: DesktopPlatform): TopbarControlPlacement {
   if (platform === "macos") return "sidebar";
-  if (platform === "windows") return "left-rail";
+  if (platform === "windows" || platform === "linux") return "left-rail";
   return "inline";
 }
 
@@ -160,5 +162,5 @@ export function resolveCollapsedLeftRailWidth(info: DesktopPlatformInfo): number
   if (info.collapsedLeftRailWidth > 0) {
     return info.collapsedLeftRailWidth;
   }
-  return info.platform === "windows" ? 84 : 0;
+  return info.platform === "windows" || info.platform === "linux" ? 84 : 0;
 }

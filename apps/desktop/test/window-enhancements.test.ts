@@ -57,7 +57,7 @@ describe("getPlatformBrowserWindowOptions", () => {
     expect(getPlatformBrowserWindowOptions("linux")).toEqual({
       titleBarStyle: "hidden",
       titleBarOverlay: {
-        color: "#00000000",
+        color: "#dfe2cc",
         symbolColor: "#556041",
         height: 48,
       },
@@ -68,7 +68,7 @@ describe("getPlatformBrowserWindowOptions", () => {
     expect(getPlatformBrowserWindowOptions("linux", { useDarkColors: true })).toEqual({
       titleBarStyle: "hidden",
       titleBarOverlay: {
-        color: "#00000000",
+        color: "#171d13",
         symbolColor: "#eef0dc",
         height: 48,
       },
@@ -126,7 +126,7 @@ describe("syncWindowChromeAppearance", () => {
     });
     expect(win.setTitleBarOverlayCalls).toEqual([
       {
-        color: "#00000000",
+        color: "#171d13",
         symbolColor: "#eef0dc",
         height: 48,
       },

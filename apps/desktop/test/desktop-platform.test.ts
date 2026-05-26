@@ -133,12 +133,12 @@ describe("getDesktopPlatformInfo", () => {
       expect(getDesktopPlatformInfo()).toEqual({
         platform: "linux",
         rawPlatform: "linux",
-        sidebarTitlebandMode: "topbar",
-        topbarControlPlacement: "inline",
+        sidebarTitlebandMode: "native",
+        topbarControlPlacement: "left-rail",
         usesNativeGlass: false,
         disableCssBlur: false,
-        captionButtonReserve: 0,
-        collapsedLeftRailWidth: 0,
+        captionButtonReserve: 136,
+        collapsedLeftRailWidth: 84,
         topbarToolbarGap: 6,
       });
     } finally {
@@ -205,8 +205,8 @@ describe("getDesktopPlatformInfo", () => {
       topbarControlPlacement: "left-rail",
       usesNativeGlass: true,
       disableCssBlur: true,
-      captionButtonReserve: 0,
-      collapsedLeftRailWidth: 0,
+      captionButtonReserve: 136,
+      collapsedLeftRailWidth: 84,
       topbarToolbarGap: 6,
     });
   });

@@ -1,4 +1,5 @@
 import type { BrowserWindow } from "electron";
+import { desktopShellBackgroundColor } from "../windowAppearancePaint";
 import { getPlatformChrome, getTitlebarSymbolColor } from "./platformChrome";
 import type { WindowChromeModule } from "./types";
 
@@ -7,7 +8,7 @@ function linuxTitleBarOverlay(
 ): Parameters<BrowserWindow["setTitleBarOverlay"]>[0] {
   const chrome = getPlatformChrome("linux");
   return {
-    color: "#00000000",
+    color: desktopShellBackgroundColor(useDarkColors),
     symbolColor: getTitlebarSymbolColor(useDarkColors),
     height: chrome.titlebarHeight,
   };

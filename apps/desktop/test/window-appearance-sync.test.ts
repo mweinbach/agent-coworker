@@ -37,7 +37,7 @@ describe("syncWindowAppearance", () => {
     expect(win.backgroundMaterialCalls).toEqual([]);
     expect(win.titleBarOverlayCalls).toEqual([
       {
-        color: "#00000000",
+        color: "#dfe2cc",
         symbolColor: "#556041",
         height: 48,
       },

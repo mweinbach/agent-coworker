@@ -1,12 +1,51 @@
-/* Linux custom title bar (Electron titleBarOverlay) — aligned with Windows overlay spacing */
+/* Linux titleBarOverlay shell — mirrors Windows layout and native button reserve */
 
-:root[data-platform="linux"] .app-topbar__inline-sidebar-toggle {
-  left: auto;
-  right: 8.75rem;
+:root[data-platform="linux"] {
+  --platform-caption-button-reserve: 136px;
+  --platform-collapsed-left-rail-width: 84px;
+  --platform-topbar-toolbar-gap: 6px;
 }
 
 :root[data-platform="linux"] .app-topbar {
-  padding-right: 12rem; /* Window control buttons in overlay */
+  position: relative;
+  z-index: 70;
+  -webkit-app-region: no-drag;
+}
+
+:root[data-platform="linux"] .app-topbar__sidebar-fill {
+  display: none;
+}
+
+:root[data-platform="linux"] .app-topbar__content-fill {
+  pointer-events: auto;
+  -webkit-app-region: drag;
+  background: var(--surface-sidebar-pane);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+:root[data-platform="linux"] .app-topbar__toolbar--right {
+  z-index: 3;
+}
+
+:root[data-platform="linux"] .app-topbar__win32-left-rail {
+  width: var(--platform-collapsed-left-rail-width);
+  z-index: 2;
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+}
+
+:root[data-platform="linux"] .app-topbar__win32-left-strip {
+  pointer-events: auto;
+  align-items: center;
+  height: 100%;
+  z-index: 1;
+  -webkit-app-region: no-drag;
+}
+
+:root[data-platform="linux"] .app-topbar__win32-left-strip > * {
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
 }
 
 :root[data-platform="linux"] .app-window-drag-strip {
@@ -15,18 +54,122 @@
   left: 0;
   right: 0;
   z-index: 60;
+  pointer-events: none;
   -webkit-app-region: drag;
 }
 
-:root[data-platform="linux"] .settings-shell__nav {
+:root[data-platform="linux"] .app-chat-body {
+  margin-top: calc(-1 * var(--platform-titlebar-height));
+}
+
+:root[data-platform="linux"]:not([data-reduced-transparency="true"]) .app-chat-body {
+  background: var(--surface-sidebar-pane);
+}
+
+:root[data-platform="linux"] .app-chat-body > .app-left-sidebar-pane {
+  position: relative;
+  z-index: 5;
+  -webkit-app-region: no-drag;
+}
+
+:root[data-platform="linux"]:not([data-reduced-transparency="true"]) .app-left-sidebar-pane {
+  border-right-width: 0;
+  border-right-color: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+:root[data-platform="linux"] .app-chat-body > .app-main-content {
+  margin: var(--platform-titlebar-height) 0 0 0;
   padding-top: 0;
+  border-top-left-radius: var(--main-card-radius);
+  border-top-right-radius: 0;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  background: var(--surface-main-card);
+  box-shadow: var(--main-card-shadow);
+  overflow: hidden;
+}
+
+:root[data-platform="linux"]:not([data-reduced-transparency="true"]) .app-right-sidebar-pane {
+  background: transparent;
+}
+
+:root[data-platform="linux"] .app-sidebar {
+  padding-top: 0;
+}
+
+:root[data-platform="linux"] .app-sidebar__titleband {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: var(--platform-titlebar-height);
+  padding-top: 4px;
+}
+
+:root[data-platform="linux"] .app-sidebar__titleband-drag-zone {
+  position: absolute;
+  inset: 0;
+  left: var(--platform-collapsed-left-rail-width, 84px);
+  pointer-events: none;
+  -webkit-app-region: drag;
+}
+
+:root[data-platform="linux"] .app-sidebar__titleband-row {
+  position: relative;
+  z-index: 1;
+  pointer-events: none;
+}
+
+:root[data-platform="linux"] .app-sidebar__titleband-row > * {
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+}
+
+:root[data-platform="linux"]:not([data-reduced-transparency="true"]) .app-shell--settings {
+  background: var(--surface-sidebar-pane);
+}
+
+:root[data-platform="linux"] .app-shell--settings .app-window-drag-strip {
+  display: none;
+}
+
+:root[data-platform="linux"] .app-shell--settings > .min-h-0 {
+  position: relative;
+  z-index: 70;
+}
+
+:root[data-platform="linux"] .settings-shell__titleband-fill {
+  left: var(--settings-sidebar-width);
+  height: var(--platform-titlebar-height);
+  z-index: 78;
+  pointer-events: none;
+  background: var(--surface-sidebar-pane);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+:root[data-platform="linux"] .settings-shell__nav {
+  position: relative;
+  z-index: 81;
+  padding-top: 0;
+  pointer-events: auto;
+  border-right-width: 0;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  -webkit-app-region: no-drag;
+}
+
+:root[data-platform="linux"] .settings-shell__nav-header {
+  border-bottom-width: 0;
 }
 
 :root[data-platform="linux"] .settings-shell__nav-titleband {
   position: relative;
   display: flex;
   align-items: center;
-  min-height: 3rem;
+  min-height: var(--platform-titlebar-height);
   padding-top: 4px;
 }
 
@@ -52,23 +195,98 @@
 
 :root[data-platform="linux"] .settings-shell__back-button {
   margin-top: 0;
+  border-width: 0;
+  background: transparent;
+  color: var(--text-muted);
 }
 
-:root[data-platform="linux"] .settings-shell__header-actions {
-  padding-right: calc(var(--platform-right-native-reserve) + var(--platform-topbar-toolbar-gap));
+:root[data-platform="linux"] .settings-shell__back-button:hover {
+  background: var(--surface-settings-nav-hover);
+  color: var(--text-primary);
+}
+
+:root[data-platform="linux"]:not([data-reduced-transparency="true"]) .settings-shell {
+  background: var(--surface-sidebar-pane);
 }
 
 :root[data-platform="linux"] .settings-shell__main {
   position: relative;
-  z-index: 81;
+  z-index: 1;
+  align-self: start;
+  height: calc(100% - var(--platform-titlebar-height));
+  margin: var(--platform-titlebar-height) 0 0 0;
+  border-top-left-radius: var(--main-card-radius);
+  border-top-right-radius: 0;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  background: var(--surface-main-card);
+  box-shadow: var(--main-card-shadow);
+  overflow: hidden;
+}
+
+:root[data-platform="linux"] .settings-shell__header-actions {
+  padding-right: calc(var(--platform-caption-button-reserve) + var(--platform-topbar-toolbar-gap));
 }
 
 :root[data-platform="linux"] .settings-shell__drag-zone {
   position: absolute;
   top: 0;
-  left: 0;
+  left: var(--settings-sidebar-width);
   right: 0;
-  height: 3rem;
+  height: var(--platform-titlebar-height);
   z-index: 80;
+  pointer-events: none;
   -webkit-app-region: drag;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+:root[data-platform="linux"] .settings-shell__page-header {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+@media (max-width: 860px) {
+  :root[data-platform="linux"] .settings-shell__drag-zone,
+  :root[data-platform="linux"] .settings-shell__titleband-fill {
+    left: 0;
+  }
+}
+
+:root[data-platform="linux"]:not([data-reduced-transparency="true"])
+  :is(
+    [data-slot="alert-dialog-content"],
+    [data-slot="context-menu-content"],
+    [data-slot="context-menu-sub-content"],
+    [data-slot="dialog-content"],
+    [data-slot="drawer-content"],
+    [data-slot="dropdown-menu-content"],
+    [data-slot="dropdown-menu-sub-content"],
+    [data-slot="hover-card-content"],
+    [data-slot="menubar-content"],
+    [data-slot="menubar-sub-content"],
+    [data-slot="popover-content"],
+    [data-slot="select-content"],
+    [data-slot="sheet-content"],
+    [data-slot="tooltip-content"],
+    .app-topbar__thread-popover
+  ) {
+  backdrop-filter: blur(20px) saturate(1.4);
+  -webkit-backdrop-filter: blur(20px) saturate(1.4);
+}
+
+:root[data-platform="linux"]:not([data-reduced-transparency="true"])
+  :is([data-window-mode="quick-chat"], [data-window-mode="utility"])
+  .desktop-popup-shell {
+  background: var(--surface-main-card, var(--surface-window));
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+:root[data-platform="linux"]
+  :is([data-window-mode="quick-chat"], [data-window-mode="utility"])
+  .desktop-popup-shell__header {
+  min-height: var(--platform-titlebar-height);
+  align-items: center;
 }

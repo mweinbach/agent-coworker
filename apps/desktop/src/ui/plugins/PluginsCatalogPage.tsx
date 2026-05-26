@@ -28,7 +28,7 @@ export function PluginsCatalogPage({
   const showLoadingState = pluginsLoading && catalog === null;
 
   const plugins = useMemo(() => {
-    let items = [...(catalog?.plugins ?? [])];
+    let items = [...(catalog?.plugins ?? []), ...(catalog?.availablePlugins ?? [])];
     if (managementScope === "global") {
       items = items.filter((plugin) => plugin.scope === "user");
     }

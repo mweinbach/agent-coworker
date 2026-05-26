@@ -8,6 +8,7 @@ import type { PluginCatalogSnapshot } from "../src/types";
 
 const emptyCatalog: PluginCatalogSnapshot = {
   plugins: [],
+  availablePlugins: [],
   warnings: [],
 };
 

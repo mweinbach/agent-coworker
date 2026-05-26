@@ -267,7 +267,7 @@ describe("skill store actions", () => {
             event: {
               type: "plugins_catalog",
               sessionId: "jsonrpc-control",
-              catalog: { plugins: [], warnings: [] },
+              catalog: { plugins: [], availablePlugins: [], warnings: [] },
             },
           };
         }

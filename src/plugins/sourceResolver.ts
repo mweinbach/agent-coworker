@@ -15,7 +15,6 @@ import type {
   PluginSourceDescriptor,
   SkillInstallationDiagnostic,
 } from "../types";
-import { isInstalledPluginCatalogEntry } from "../types";
 import {
   isPluginManifestDirName,
   pluginManifestPathsForPluginRoot,
@@ -290,8 +289,7 @@ function wouldCandidateBePrimary(
   catalog: PluginCatalogSnapshot,
 ): boolean {
   const activePlugins = catalog.plugins.filter(
-    (plugin) =>
-      isInstalledPluginCatalogEntry(plugin) && plugin.id === candidatePluginId && plugin.enabled,
+    (plugin) => plugin.id === candidatePluginId && plugin.enabled,
   );
   if (activePlugins.length === 0) {
     return true;
@@ -307,9 +305,7 @@ function buildPreviewCandidate(
   targetScope: PluginInstallTargetScope,
   catalog: PluginCatalogSnapshot,
 ): PluginInstallPreviewCandidate {
-  const sameIdPlugins = catalog.plugins.filter(
-    (plugin) => isInstalledPluginCatalogEntry(plugin) && plugin.id === candidate.pluginId,
-  );
+  const sameIdPlugins = catalog.plugins.filter((plugin) => plugin.id === candidate.pluginId);
   const targetScopeConflict = sameIdPlugins.find((plugin) => plugin.scope === targetScope);
 
   return {

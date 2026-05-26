@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
-
+import { parseGitHubUrl } from "../extensions/github";
 import {
   buildDescriptorFromGitHubSource,
   expandHomeDir,
@@ -19,7 +19,6 @@ import type {
   SkillSourceDescriptor,
   SkillSourceInputKind,
 } from "../types";
-import { parseGitHubUrl } from "./github";
 
 type GitHubSkillSourceDescriptor = Omit<SkillSourceDescriptor, "kind"> & {
   kind: Exclude<SkillSourceInputKind, "skills.sh">;

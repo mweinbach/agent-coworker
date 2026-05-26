@@ -8,18 +8,15 @@ import { readPluginOverrides } from "../plugins/overrides";
 import {
   BUILT_IN_MARKETPLACE_REPO,
   buildMarketplaceInstallMetadataByPluginId,
+  canonicalDefaultMarketplacePluginIdForTombstone,
   DEFAULT_MARKETPLACE_PLUGIN_IDS,
   fetchRemotePluginMarketplace,
 } from "../plugins/remoteMarketplace";
 import { ensureAiCoworkerHome, getAiCoworkerPaths } from "../store/connections";
 import type { AgentConfig } from "../types";
-import { isInstalledPluginCatalogEntry } from "../types";
 
 const DEFAULT_SKILLS_STATE_FILE = "default-global-skills.json";
 const INSTALL_STATE_VERSION = 1;
-const DEFAULT_PLUGIN_LEGACY_TOMBSTONES: Record<string, readonly string[]> = {
-  "workspace-tools": ["documents", "presentations", "spreadsheets"],
-};
 const bootstrapPromises = new Map<
   string,
   Promise<EnsureDefaultGlobalSkillsInstalledResult | null>
@@ -44,8 +41,8 @@ export function isDefaultPluginRemoved(
   pluginId: string,
   overrides: Awaited<ReturnType<typeof readPluginOverrides>>,
 ): boolean {
-  const idsToCheck = [pluginId, ...(DEFAULT_PLUGIN_LEGACY_TOMBSTONES[pluginId] ?? [])];
-  return idsToCheck.some((id) => overrides.user.plugins?.[id] === false);
+  const defaultPluginId = canonicalDefaultMarketplacePluginIdForTombstone(pluginId) ?? pluginId;
+  return overrides.user.removedDefaultPlugins?.[defaultPluginId] === true;
 }
 
 export type EnsureDefaultGlobalSkillsInstalledResult = {
@@ -192,12 +189,7 @@ export async function ensureDefaultGlobalSkillsInstalled(opts: {
       recordedPluginIds.add(pluginId);
       continue;
     }
-    if (
-      !opts.force &&
-      catalog.plugins.some(
-        (plugin) => isInstalledPluginCatalogEntry(plugin) && plugin.id === pluginId,
-      )
-    ) {
+    if (!opts.force && catalog.plugins.some((plugin) => plugin.id === pluginId)) {
       skippedExisting.push(pluginId);
       recordedPluginIds.add(pluginId);
       continue;

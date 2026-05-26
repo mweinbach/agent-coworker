@@ -797,7 +797,8 @@ const pluginCatalogEntrySchema = z.discriminatedUnion("installed", [
 
 export const pluginCatalogSnapshotSchema = z
   .object({
-    plugins: z.array(pluginCatalogEntrySchema),
+    plugins: z.array(installedPluginCatalogEntrySchema),
+    availablePlugins: z.array(marketplacePluginCatalogEntrySchema).default([]),
     warnings: z.array(z.string()),
   })
   .strict();

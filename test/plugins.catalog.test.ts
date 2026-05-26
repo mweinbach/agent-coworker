@@ -286,8 +286,9 @@ describe("plugin catalog and install operations", () => {
       });
 
       expect(catalog.warnings).toEqual([]);
-      expect(catalog.plugins).toHaveLength(1);
-      const plugin = catalog.plugins[0];
+      expect(catalog.plugins).toHaveLength(0);
+      expect(catalog.availablePlugins).toHaveLength(1);
+      const plugin = catalog.availablePlugins[0];
       expect(plugin).toMatchObject({
         id: "figma-toolkit",
         displayName: "figma-toolkit",
@@ -334,6 +335,7 @@ describe("plugin catalog and install operations", () => {
 
       expect(catalog.warnings).toEqual([]);
       expect(catalog.plugins).toHaveLength(1);
+      expect(catalog.availablePlugins).toHaveLength(0);
       expect(catalog.plugins[0]).toMatchObject({
         id: "figma-toolkit",
         installed: true,
@@ -534,12 +536,13 @@ describe("plugin catalog and install operations", () => {
         fetchImpl: createRemoteMarketplaceFetch({ includeMissingPlugin: true }),
       });
 
-      expect(catalog.plugins.map((plugin) => plugin.id)).toEqual([
+      expect(catalog.plugins).toEqual([]);
+      expect(catalog.availablePlugins.map((plugin) => plugin.id)).toEqual([
         "figma-toolkit",
         "missing-toolkit",
       ]);
       expect(catalog.warnings).toEqual([]);
-      expect(catalog.plugins[0]).not.toHaveProperty("rootDir");
+      expect(catalog.availablePlugins[0]).not.toHaveProperty("rootDir");
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
       await fs.rm(home, { recursive: true, force: true });
@@ -547,7 +550,7 @@ describe("plugin catalog and install operations", () => {
     }
   });
 
-  test("deletePluginInstallation removes the plugin and leaves a sticky user tombstone", async () => {
+  test("deletePluginInstallation removes custom plugins without default uninstall tombstones", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-delete-workspace-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-delete-home-"));
     const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-delete-builtin-"));
@@ -575,8 +578,12 @@ describe("plugin catalog and install operations", () => {
       await expect(fs.access(path.join(userPluginsDir, "figma-toolkit"))).rejects.toBeDefined();
       const overrides = JSON.parse(
         await fs.readFile(path.join(home, ".cowork", "config", "plugins.json"), "utf-8"),
-      ) as { plugins?: Record<string, boolean> };
-      expect(overrides.plugins?.["figma-toolkit"]).toBe(false);
+      ) as {
+        plugins?: Record<string, boolean>;
+        removedDefaultPlugins?: Record<string, boolean>;
+      };
+      expect(overrides.plugins?.["figma-toolkit"]).toBeUndefined();
+      expect(overrides.removedDefaultPlugins?.["figma-toolkit"]).toBeUndefined();
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
       await fs.rm(home, { recursive: true, force: true });
@@ -1832,6 +1839,7 @@ describe("plugin catalog and install operations", () => {
         pluginEntry("workspace", "/tmp/workspace/.agents/plugins/figma-toolkit"),
         pluginEntry("user", "/tmp/home/.agents/plugins/figma-toolkit"),
       ],
+      availablePlugins: [],
       warnings: [],
     };
 

@@ -84,7 +84,7 @@ describe("plugin store actions", () => {
       event: {
         type: "plugins_catalog",
         sessionId: "jsonrpc-control",
-        catalog: { plugins: [], warnings: [] },
+        catalog: { plugins: [], availablePlugins: [], warnings: [] },
       },
     });
     await refreshPromise;
@@ -102,6 +102,7 @@ describe("plugin store actions", () => {
       controlSessionId: "jsonrpc-control",
       pluginsCatalog: {
         plugins: [],
+        availablePlugins: [],
         warnings: [],
       },
     };
@@ -418,7 +419,7 @@ describe("plugin store actions", () => {
             {
               type: "plugins_catalog",
               sessionId: "jsonrpc-control",
-              catalog: { plugins: [], warnings: [] },
+              catalog: { plugins: [], availablePlugins: [], warnings: [] },
               clearedMutationPendingKeys: ["plugin:install:user"],
             },
           ],
@@ -436,7 +437,7 @@ describe("plugin store actions", () => {
             event: {
               type: "plugins_catalog",
               sessionId: "jsonrpc-control",
-              catalog: { plugins: [], warnings: [] },
+              catalog: { plugins: [], availablePlugins: [], warnings: [] },
             },
           };
         }
@@ -507,7 +508,7 @@ describe("plugin store actions", () => {
           event: {
             type: "plugins_catalog",
             sessionId: "jsonrpc-control",
-            catalog: { plugins: [], warnings: [] },
+            catalog: { plugins: [], availablePlugins: [], warnings: [] },
           },
         };
       },
@@ -601,6 +602,7 @@ describe("plugin store actions", () => {
             warnings: [],
           },
         ],
+        availablePlugins: [],
         warnings: [],
       },
     };
@@ -616,7 +618,7 @@ describe("plugin store actions", () => {
           event: {
             type: "plugins_catalog",
             sessionId: "jsonrpc-control",
-            catalog: { plugins: [], warnings: [] },
+            catalog: { plugins: [], availablePlugins: [], warnings: [] },
             clearedMutationPendingKeys: ["plugin:enable:workspace:plugin-1"],
           },
         };

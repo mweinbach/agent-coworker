@@ -1066,8 +1066,9 @@ export function createControlSocketHelpers(
         const workspaceRuntime = s.workspaceRuntimeById[workspaceId];
         const selectedPluginId = workspaceRuntime.selectedPluginId;
         const selectedPluginScope = workspaceRuntime.selectedPluginScope;
+        const catalogPlugins = [...evt.catalog.plugins, ...(evt.catalog.availablePlugins ?? [])];
         const selectedPlugin = selectedPluginId
-          ? (evt.catalog.plugins.find(
+          ? (catalogPlugins.find(
               (plugin) =>
                 plugin.id === selectedPluginId &&
                 (selectedPluginScope === null || plugin.scope === selectedPluginScope),

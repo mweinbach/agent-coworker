@@ -37,11 +37,13 @@ export {
   resolvePluginSourceDescriptorForInstallInput,
 } from "./operations";
 export {
+  clearPluginEnabledOverride,
   isPluginEnabled,
   isPluginMcpServerEnabled,
   isPluginSkillEnabled,
   type PluginOverrideSnapshot,
   readPluginOverrides,
+  setDefaultPluginRemoved,
   setPluginEnabled,
   setPluginMcpServerEnabled,
   setPluginSkillEnabled,

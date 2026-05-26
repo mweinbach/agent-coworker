@@ -2,10 +2,8 @@ import fs from "node:fs/promises";
 import {
   buildPluginCatalogSnapshot,
   buildPluginInstallPreview,
-  buildRemoteMarketplacePluginDetail,
   deletePluginInstallation,
   installPluginsFromSource,
-  resolvePluginCatalogEntry,
 } from "../../plugins";
 import { setPluginEnabled } from "../../plugins/overrides";
 import { discoverSkillsForConfig, stripSkillFrontMatter } from "../../skills";
@@ -24,24 +22,22 @@ import {
 import { buildSkillInstallPreview } from "../../skills/sourceResolver";
 import { createTools, filterToolsForCodexDynamicBoundary } from "../../tools";
 import type {
+  InstalledPluginCatalogEntry,
   PluginCatalogEntry,
   PluginInstallTargetScope,
   SkillInstallationEntry,
   SkillMutationTargetScope,
 } from "../../types";
-import { isInstalledPluginCatalogEntry } from "../../types";
 import {
   expandCommandTemplate,
   listCommands as listServerCommands,
   resolveCommand,
 } from "../commands";
+import { PluginCatalogService } from "./PluginCatalogService";
 import type { SessionContext } from "./SessionContext";
 
 export class SkillManager {
-  private remotePluginsCatalogRefresh: Promise<void> | null = null;
-  private remotePluginsCatalogRefreshEpoch: number | null = null;
-  private remotePluginsCatalogRefreshQueued = false;
-  private pluginsCatalogEpoch = 0;
+  private readonly pluginCatalogService: PluginCatalogService;
 
   constructor(
     private readonly context: SessionContext,
@@ -53,7 +49,9 @@ export class SkillManager {
         attachments?: import("../jsonrpc/routes/shared").FileAttachment[],
       ) => Promise<void>;
     },
-  ) {}
+  ) {
+    this.pluginCatalogService = new PluginCatalogService(context);
+  }
 
   private skillMutationPendingKey(action: string, id?: string): string {
     return id ? `${action}:${id}` : action;
@@ -90,53 +88,15 @@ export class SkillManager {
     clearedMutationPendingKeys: string[] = [],
     opts: { includeRemoteMarketplace?: boolean; onlyIfEpoch?: number } = {},
   ) {
-    const catalog = await buildPluginCatalogSnapshot(this.context.state.config, {
-      includeRemoteMarketplace: opts.includeRemoteMarketplace ?? false,
-    });
-    if (opts.onlyIfEpoch !== undefined && opts.onlyIfEpoch !== this.pluginsCatalogEpoch) {
-      return;
-    }
-    this.context.emit({
-      type: "plugins_catalog",
-      sessionId: this.context.id,
-      catalog,
-      ...(clearedMutationPendingKeys.length > 0 ? { clearedMutationPendingKeys } : {}),
-    });
+    await this.pluginCatalogService.emitCatalog(clearedMutationPendingKeys, opts);
   }
 
   private invalidateRemotePluginsCatalogRefreshes() {
-    this.pluginsCatalogEpoch += 1;
+    this.pluginCatalogService.invalidateRemoteCatalogRefreshes();
   }
 
   private queueRemotePluginsCatalogRefresh() {
-    if (this.remotePluginsCatalogRefresh) {
-      if (this.remotePluginsCatalogRefreshEpoch !== this.pluginsCatalogEpoch) {
-        this.remotePluginsCatalogRefreshQueued = true;
-      }
-      return;
-    }
-    const epoch = this.pluginsCatalogEpoch;
-    this.remotePluginsCatalogRefreshEpoch = epoch;
-    const refresh = this.emitPluginsCatalog([], {
-      includeRemoteMarketplace: true,
-      onlyIfEpoch: epoch,
-    })
-      .catch((err) => {
-        this.context.emitError(
-          "internal_error",
-          "session",
-          `Failed to refresh remote plugin catalog: ${String(err)}`,
-        );
-      })
-      .finally(() => {
-        this.remotePluginsCatalogRefresh = null;
-        this.remotePluginsCatalogRefreshEpoch = null;
-        if (this.remotePluginsCatalogRefreshQueued) {
-          this.remotePluginsCatalogRefreshQueued = false;
-          this.queueRemotePluginsCatalogRefresh();
-        }
-      });
-    this.remotePluginsCatalogRefresh = refresh;
+    this.pluginCatalogService.queueRemoteCatalogRefresh();
   }
 
   private async emitPluginInstallPreview(
@@ -162,41 +122,12 @@ export class SkillManager {
     catalog: import("../../types").PluginCatalogSnapshot,
     pluginId: string,
     scope?: PluginCatalogEntry["scope"],
-  ): PluginCatalogEntry | null {
-    const resolved = resolvePluginCatalogEntry({ catalog, pluginId, scope });
-    if (resolved.error) {
-      this.context.emitError("validation_failed", "session", resolved.error);
-      return null;
-    }
-    return resolved.plugin;
+  ): InstalledPluginCatalogEntry | null {
+    return this.pluginCatalogService.resolveInstalledPluginSelection(catalog, pluginId, scope);
   }
 
   private async emitPluginDetail(pluginId: string, scope?: PluginCatalogEntry["scope"]) {
-    const localCatalog = await buildPluginCatalogSnapshot(this.context.state.config);
-    const localMatches = localCatalog.plugins.filter(
-      (entry) => entry.id === pluginId && (scope === undefined || entry.scope === scope),
-    );
-    let plugin: PluginCatalogEntry | null = null;
-    if (localMatches.length === 1) {
-      plugin = localMatches[0] ?? null;
-    } else if (localMatches.length > 1) {
-      this.resolvePluginSelection(localCatalog, pluginId, scope);
-      return;
-    } else if (scope === "workspace") {
-      this.resolvePluginSelection(localCatalog, pluginId, scope);
-      return;
-    } else {
-      plugin = await buildRemoteMarketplacePluginDetail({ pluginId });
-      if (plugin === null) {
-        this.resolvePluginSelection(localCatalog, pluginId, scope);
-        return;
-      }
-    }
-    this.context.emit({
-      type: "plugin_detail",
-      sessionId: this.context.id,
-      plugin,
-    });
+    await this.pluginCatalogService.emitPluginDetail(pluginId, scope);
   }
 
   private async readInstallationContent(
@@ -616,14 +547,6 @@ export class SkillManager {
         if (!plugin) {
           return;
         }
-        if (!isInstalledPluginCatalogEntry(plugin)) {
-          this.context.emitError(
-            "validation_failed",
-            "session",
-            `Plugin "${plugin.id}" must be installed before it can be enabled.`,
-          );
-          return;
-        }
         await setPluginEnabled({
           config: this.context.state.config,
           pluginId: plugin.id,
@@ -657,14 +580,6 @@ export class SkillManager {
         if (!plugin) {
           return;
         }
-        if (!isInstalledPluginCatalogEntry(plugin)) {
-          this.context.emitError(
-            "validation_failed",
-            "session",
-            `Plugin "${plugin.id}" must be installed before it can be disabled.`,
-          );
-          return;
-        }
         await setPluginEnabled({
           config: this.context.state.config,
           pluginId: plugin.id,
@@ -696,14 +611,6 @@ export class SkillManager {
         const catalog = await buildPluginCatalogSnapshot(this.context.state.config);
         const plugin = this.resolvePluginSelection(catalog, pluginId, scope);
         if (!plugin) {
-          return;
-        }
-        if (!isInstalledPluginCatalogEntry(plugin)) {
-          this.context.emitError(
-            "validation_failed",
-            "session",
-            `Plugin "${plugin.id}" is not installed.`,
-          );
           return;
         }
         await deletePluginInstallation({

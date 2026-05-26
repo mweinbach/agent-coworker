@@ -8,6 +8,26 @@ export const BUILT_IN_MARKETPLACE_REF = "main";
 export const BUILT_IN_MARKETPLACE_PATH = ".agents/plugins/marketplace.json";
 export const BUILT_IN_MARKETPLACE_URL = `https://github.com/${BUILT_IN_MARKETPLACE_REPO}/tree/${BUILT_IN_MARKETPLACE_REF}`;
 export const DEFAULT_MARKETPLACE_PLUGIN_IDS = ["workspace-tools"] as const;
+export const DEFAULT_MARKETPLACE_PLUGIN_LEGACY_TOMBSTONES: Record<string, readonly string[]> = {
+  "workspace-tools": ["documents", "presentations", "spreadsheets"],
+};
+
+export function canonicalDefaultMarketplacePluginIdForTombstone(
+  pluginId: string,
+): (typeof DEFAULT_MARKETPLACE_PLUGIN_IDS)[number] | null {
+  const normalizedId = pluginId.trim();
+  for (const defaultPluginId of DEFAULT_MARKETPLACE_PLUGIN_IDS) {
+    if (normalizedId === defaultPluginId) {
+      return defaultPluginId;
+    }
+    if (
+      (DEFAULT_MARKETPLACE_PLUGIN_LEGACY_TOMBSTONES[defaultPluginId] ?? []).includes(normalizedId)
+    ) {
+      return defaultPluginId;
+    }
+  }
+  return null;
+}
 
 export type PluginMarketplaceInstallMetadata = NonNullable<PluginInstallMetadata["marketplace"]>;
 

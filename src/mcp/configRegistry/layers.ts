@@ -11,7 +11,6 @@ import {
   readPluginOverrides,
 } from "../../plugins";
 import type { AgentConfig, MCPServerConfig } from "../../types";
-import { isInstalledPluginCatalogEntry } from "../../types";
 import { canonicalizePathForBoundaryCheckSync, isPathInside } from "../../utils/paths";
 import { resolveMcpConfigPaths } from "../configPaths";
 import { parseMCPServersDocument } from "./parser";
@@ -178,7 +177,6 @@ async function readPluginLayers(
   const warnings = [...catalog.warnings];
 
   for (const plugin of [...catalog.plugins].sort(comparePluginCatalogEntries)) {
-    if (!isInstalledPluginCatalogEntry(plugin)) continue;
     if (!plugin.mcpPath) continue;
     if (!plugin.enabled) continue;
     const filePath = path.resolve(plugin.mcpPath);

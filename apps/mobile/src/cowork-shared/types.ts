@@ -374,7 +374,8 @@ export function isInstalledPluginCatalogEntry(
 }
 
 export interface PluginCatalogSnapshot {
-  plugins: PluginCatalogEntry[];
+  plugins: InstalledPluginCatalogEntry[];
+  availablePlugins: MarketplacePluginCatalogEntry[];
   warnings: string[];
 }
 

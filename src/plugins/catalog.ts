@@ -135,7 +135,8 @@ export async function buildPluginCatalogSnapshot(
 ): Promise<PluginCatalogSnapshot> {
   const discovery = await discoverPlugins(config);
   const overrides = await readPluginOverrides(config);
-  const plugins: PluginCatalogEntry[] = [];
+  const plugins: InstalledPluginCatalogEntry[] = [];
+  const availablePlugins: MarketplacePluginCatalogEntry[] = [];
   const warnings = [...discovery.warnings];
 
   for (const candidate of discovery.plugins) {
@@ -229,7 +230,7 @@ export async function buildPluginCatalogSnapshot(
           plugin: marketplaceEntry,
         });
         if (entry) {
-          plugins.push(entry);
+          availablePlugins.push(entry);
         }
       }
     } catch (error) {
@@ -238,8 +239,9 @@ export async function buildPluginCatalogSnapshot(
   }
 
   plugins.sort(comparePluginCatalogEntries);
+  availablePlugins.sort(comparePluginCatalogEntries);
 
-  return { plugins, warnings };
+  return { plugins, availablePlugins, warnings };
 }
 
 export async function buildRemoteMarketplacePluginDetail(opts: {
@@ -299,7 +301,7 @@ export function resolvePluginCatalogEntry(opts: {
   catalog: PluginCatalogSnapshot;
   pluginId: string;
   scope?: PluginScope;
-}): { plugin: PluginCatalogEntry | null; error?: string } {
+}): { plugin: InstalledPluginCatalogEntry | null; error?: string } {
   const matches = opts.catalog.plugins.filter(
     (plugin) =>
       plugin.id === opts.pluginId && (opts.scope === undefined || plugin.scope === opts.scope),

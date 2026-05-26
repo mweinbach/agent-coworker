@@ -245,6 +245,7 @@ describe("plugins catalog page", () => {
           pluginsCatalog: {
             warnings: [],
             plugins: [],
+            availablePlugins: [],
           },
         },
       },
@@ -599,6 +600,7 @@ describe("plugins catalog page", () => {
                 warnings: [],
               },
             ],
+            availablePlugins: [],
           },
         },
       },
@@ -688,6 +690,7 @@ describe("plugins catalog page", () => {
                 warnings: [],
               },
             ],
+            availablePlugins: [],
           },
         },
       },

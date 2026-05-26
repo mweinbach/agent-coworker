@@ -11,7 +11,6 @@ import type {
   PluginInstallPreview,
   PluginInstallTargetScope,
 } from "../types";
-import { isInstalledPluginCatalogEntry } from "../types";
 import { workspacePathOverlaps } from "../utils/workspacePath";
 import { buildPluginCatalogSnapshot } from "./catalog";
 import {
@@ -20,9 +19,10 @@ import {
   writePluginInstallMetadata,
 } from "./manifest";
 import { readPluginMcpServers } from "./mcp";
-import { setPluginEnabled } from "./overrides";
+import { clearPluginEnabledOverride, setDefaultPluginRemoved } from "./overrides";
 import {
   BUILT_IN_MARKETPLACE_REPO,
+  canonicalDefaultMarketplacePluginIdForTombstone,
   fetchMarketplaceInstallMetadataBySourceInput,
   type PluginMarketplaceInstallMetadata,
 } from "./remoteMarketplace";
@@ -62,11 +62,7 @@ function conflictingTargetRoots(
 ): string[] {
   const roots = new Set<string>();
   for (const plugin of catalog.plugins) {
-    if (
-      isInstalledPluginCatalogEntry(plugin) &&
-      plugin.scope === paths.scope &&
-      plugin.id === pluginId
-    ) {
+    if (plugin.scope === paths.scope && plugin.id === pluginId) {
       roots.add(plugin.rootDir);
     }
   }
@@ -413,6 +409,12 @@ export async function installPluginsFromSource(opts: {
               previousServers,
               nextServers: await readBundledPluginMcpServers(destinationRoot),
             });
+            await setDefaultPluginRemoved({
+              config: opts.config,
+              pluginId: candidate.pluginId,
+              scope: opts.targetScope,
+              removed: false,
+            });
           },
         });
       } finally {
@@ -436,12 +438,20 @@ export async function deletePluginInstallation(opts: {
   plugin: InstalledPluginCatalogEntry;
 }): Promise<PluginCatalogSnapshot> {
   await fs.rm(opts.plugin.rootDir, { recursive: true, force: true });
-  await setPluginEnabled({
+  await clearPluginEnabledOverride({
     config: opts.config,
     pluginId: opts.plugin.id,
     scope: opts.plugin.scope,
-    enabled: false,
   });
+  const removedDefaultPluginId = canonicalDefaultMarketplacePluginIdForTombstone(opts.plugin.id);
+  if (opts.plugin.scope === "user" && removedDefaultPluginId) {
+    await setDefaultPluginRemoved({
+      config: opts.config,
+      pluginId: removedDefaultPluginId,
+      scope: "user",
+      removed: true,
+    });
+  }
   return await refreshCatalog(opts.config);
 }
 

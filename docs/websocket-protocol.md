@@ -255,7 +255,7 @@ The desktop JSON-RPC path now uses this namespace so one workspace connection ca
 - MCP management
 - memories
 
-`cowork/plugins/read`, `cowork/plugins/enable`, `cowork/plugins/disable`, and `cowork/plugins/delete` accept an optional `scope` field (`workspace` or `user`) so callers can address a specific installed copy when the same plugin id exists in both scopes. Plugin catalog entries are discriminated by `installed`: installed entries use `installed: true` and include local filesystem fields such as `rootDir`, `manifestPath`, `skillsPath`, `skills`, `mcpServers`, and `apps`; built-in remote marketplace entries use `installed: false`, include `installSource`, and do not expose local paths until installed.
+`cowork/plugins/read`, `cowork/plugins/enable`, `cowork/plugins/disable`, and `cowork/plugins/delete` accept an optional `scope` field (`workspace` or `user`) so callers can address a specific installed copy when the same plugin id exists in both scopes. Plugin catalog snapshots keep installed plugins in `plugins`; built-in remote marketplace offers live in `availablePlugins`, use `installed: false`, include `installSource`, and do not expose local paths until installed.
 - opt-in workspace backups
 
 `thread/list` and workspace-scoped `cowork/*` control methods now default omitted `cwd` to the sidecar/server working directory. Mobile and other remote clients no longer need to know a host filesystem path just to list threads or read workspace control state.

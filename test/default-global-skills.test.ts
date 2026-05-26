@@ -389,12 +389,22 @@ describe("default global skills bootstrap", () => {
     const config = makeConfig(workspace, home);
 
     try {
-      await setPluginEnabled({
-        config,
-        pluginId: "documents",
-        scope: "user",
-        enabled: false,
-      });
+      await fs.mkdir(path.join(home, ".cowork", "config"), { recursive: true });
+      await fs.writeFile(
+        path.join(home, ".cowork", "config", "plugins.json"),
+        `${JSON.stringify(
+          {
+            version: 1,
+            updatedAt: "2026-01-01T00:00:00.000Z",
+            plugins: {
+              documents: false,
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
 
       const result = await ensureDefaultGlobalSkillsInstalled({
         homedir: home,
@@ -415,11 +425,52 @@ describe("default global skills bootstrap", () => {
         includeRemoteMarketplace: true,
         fetchImpl,
       });
-      expect(marketplaceCatalog.plugins).toHaveLength(1);
-      expect(marketplaceCatalog.plugins[0]).toMatchObject({
+      expect(marketplaceCatalog.plugins).toHaveLength(0);
+      expect(marketplaceCatalog.availablePlugins).toHaveLength(1);
+      expect(marketplaceCatalog.availablePlugins[0]).toMatchObject({
         id: "workspace-tools",
         installed: false,
       });
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("disabled default plugins are not treated as uninstall tombstones", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-disabled-"));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-skills-workspace-"));
+    const skills: readonly DefaultSkillSpec[] = [{ id: "workspace-tools" }];
+    const { tree, files } = createMarketplaceFixture(["workspace-tools"], {
+      "workspace-tools": ["documents", "presentations", "spreadsheets"],
+    });
+    const config = makeConfig(workspace, home);
+
+    try {
+      await setPluginEnabled({
+        config,
+        pluginId: "workspace-tools",
+        scope: "user",
+        enabled: false,
+      });
+
+      const result = await ensureDefaultGlobalSkillsInstalled({
+        homedir: home,
+        config,
+        plugins: skills,
+        fetchImpl: createGitHubFetchStub(tree, files),
+      });
+
+      expect(result.installed).toEqual(["workspace-tools"]);
+      expect(result.skippedRemoved).toEqual([]);
+      const overrides = JSON.parse(
+        await fs.readFile(path.join(home, ".cowork", "config", "plugins.json"), "utf-8"),
+      ) as {
+        plugins?: Record<string, boolean>;
+        removedDefaultPlugins?: Record<string, boolean>;
+      };
+      expect(overrides.plugins?.["workspace-tools"]).toBe(false);
+      expect(overrides.removedDefaultPlugins?.["workspace-tools"]).toBeUndefined();
     } finally {
       await fs.rm(home, { recursive: true, force: true });
       await fs.rm(workspace, { recursive: true, force: true });
@@ -472,19 +523,28 @@ describe("default global skills bootstrap", () => {
       await expect(
         fs.access(path.join(home, ".cowork", "plugins", "workspace-tools")),
       ).rejects.toBeDefined();
+      const overrides = JSON.parse(
+        await fs.readFile(path.join(home, ".cowork", "config", "plugins.json"), "utf-8"),
+      ) as {
+        plugins?: Record<string, boolean>;
+        removedDefaultPlugins?: Record<string, boolean>;
+      };
+      expect(overrides.plugins?.["workspace-tools"]).toBeUndefined();
+      expect(overrides.removedDefaultPlugins?.["workspace-tools"]).toBe(true);
 
       const marketplaceCatalog = await buildPluginCatalogSnapshot(config, {
         includeRemoteMarketplace: true,
         fetchImpl,
       });
-      expect(marketplaceCatalog.plugins).toHaveLength(1);
-      expect(marketplaceCatalog.plugins[0]).toMatchObject({
+      expect(marketplaceCatalog.plugins).toHaveLength(0);
+      expect(marketplaceCatalog.availablePlugins).toHaveLength(1);
+      expect(marketplaceCatalog.availablePlugins[0]).toMatchObject({
         id: "workspace-tools",
         installed: false,
         installSource:
           "https://github.com/mweinbach/cowork-skills-plugins/tree/main/plugins/workspace-tools",
       });
-      expect(marketplaceCatalog.plugins[0]).not.toHaveProperty("rootDir");
+      expect(marketplaceCatalog.availablePlugins[0]).not.toHaveProperty("rootDir");
     } finally {
       await fs.rm(home, { recursive: true, force: true });
       await fs.rm(workspace, { recursive: true, force: true });

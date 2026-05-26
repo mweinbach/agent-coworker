@@ -13,7 +13,7 @@ import {
   type ParsedGitHubSource,
   parseGitHubShorthand,
   parseGitHubUrl,
-} from "../skills/github";
+} from "./github";
 
 export type { FetchLike };
 

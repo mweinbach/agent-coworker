@@ -62,12 +62,11 @@ export function createPluginActions(
     scope?: PluginSelection["scope"] | null,
   ): PluginCatalogEntry | null => {
     const catalog = get().workspaceRuntimeById[workspaceId]?.pluginsCatalog;
-    const matches =
-      catalog?.plugins.filter(
-        (plugin) =>
-          plugin.id === pluginId &&
-          (scope === undefined || scope === null || plugin.scope === scope),
-      ) ?? [];
+    const plugins = [...(catalog?.plugins ?? []), ...(catalog?.availablePlugins ?? [])];
+    const matches = plugins.filter(
+      (plugin) =>
+        plugin.id === pluginId && (scope === undefined || scope === null || plugin.scope === scope),
+    );
     if (matches.length !== 1) {
       return null;
     }

@@ -123,6 +123,16 @@ describe("codex app-server turn lifecycle", () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-resume-"));
     const capturePath = path.join(dir, "requests.jsonl");
     process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
+    const latestContent = [
+      { type: "text", text: "Newest question" },
+      {
+        type: "file",
+        mimeType: "image/png",
+        path: "/tmp/resumed-upload.png",
+        detail: "original",
+        filename: "resumed-upload.png",
+      },
+    ];
 
     const runtime = createRuntime(makeConfig(dir));
     await runtime.runTurn({
@@ -131,9 +141,9 @@ describe("codex app-server turn lifecycle", () => {
       allMessages: [
         { role: "user", content: "Earlier question" },
         { role: "assistant", content: "Earlier answer" },
-        { role: "user", content: "Newest question" },
+        { role: "user", content: latestContent },
       ],
-      messages: [{ role: "user", content: "Newest question" }],
+      messages: [{ role: "user", content: latestContent }],
       tools: {
         spawnAgent: {
           description: "Spawn a Cowork subagent.",
@@ -181,6 +191,7 @@ describe("codex app-server turn lifecycle", () => {
     ).not.toContain("bash");
     expect(requests.find((entry) => entry.method === "turn/start")?.params.input).toEqual([
       { type: "text", text: "Newest question", text_elements: [] },
+      { type: "localImage", path: "/tmp/resumed-upload.png", detail: "original" },
     ]);
   });
 
@@ -340,6 +351,47 @@ describe("codex app-server turn lifecycle", () => {
     ).toEqual([
       { type: "text", text: "[attachment]", text_elements: [] },
       { type: "image", detail: "original", url: "data:image/png;base64,abc" },
+    ]);
+  });
+
+  test("normalizes provider-style image aliases into app-server input parts", () => {
+    expect(
+      buildCodexTurnInput(
+        [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_image",
+                image_url: "https://example.test/chart.png",
+                detail: "low",
+              },
+              {
+                type: "inputImage",
+                imageUrl: "https://example.test/photo.jpg",
+                detail: "high",
+              },
+              {
+                type: "local_image",
+                path: "/tmp/local-screenshot.png",
+                detail: "original",
+              },
+              {
+                type: "file",
+                mime_type: "image/webp",
+                data: "webp-data",
+              },
+            ],
+          },
+        ],
+        { resumedThread: false },
+      ),
+    ).toEqual([
+      { type: "text", text: "User: [attachment]", text_elements: [] },
+      { type: "image", url: "https://example.test/chart.png", detail: "low" },
+      { type: "image", url: "https://example.test/photo.jpg", detail: "high" },
+      { type: "localImage", path: "/tmp/local-screenshot.png", detail: "original" },
+      { type: "image", url: "data:image/webp;base64,webp-data" },
     ]);
   });
 

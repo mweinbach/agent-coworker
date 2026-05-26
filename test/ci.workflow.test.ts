@@ -2,30 +2,32 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
 const workflowPath = new URL("../.github/workflows/ci.yml", import.meta.url);
+const setupBunActionPath = new URL("../.github/actions/setup-bun/action.yml", import.meta.url);
 const stableTestRunnerPath = new URL(
   "../packages/harness/src/run_tests_stable.ts",
   import.meta.url,
 );
 const workflow = readFileSync(workflowPath, "utf8");
+const setupBunAction = readFileSync(setupBunActionPath, "utf8");
 const stableTestRunner = readFileSync(stableTestRunnerPath, "utf8");
 
 describe("main CI workflow", () => {
   test("pins Bun version via .bun-version file", () => {
-    expect(workflow).toContain("- name: Setup Bun");
-    expect(workflow).toContain("uses: oven-sh/setup-bun@v2");
-    expect(workflow).toContain('bun-version-file: ".bun-version"');
+    expect(workflow).toContain("uses: ./.github/actions/setup-bun");
+    expect(setupBunAction).toContain("- name: Setup Bun");
+    expect(setupBunAction).toContain("uses: oven-sh/setup-bun@v2");
+    expect(setupBunAction).toContain('bun-version-file: ".bun-version"');
   });
 
   test("caches dependencies", () => {
-    expect(workflow).toContain("uses: actions/cache@v4");
-    expect(workflow).toContain("node_modules");
-    expect(workflow).toContain("apps/desktop/node_modules");
-    expect(workflow).toContain("apps/mobile/node_modules");
-    expect(workflow).toContain("~/.bun/install/cache");
-    expect(workflow).toContain("${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}");
-    expect(workflow).toContain(
-      "${{ runner.os }}-mobile-${{ hashFiles('bun.lock', 'apps/mobile/bun.lock', 'apps/mobile/package.json') }}",
-    );
+    expect(workflow).toContain("cache-scope: mobile");
+    expect(setupBunAction).toContain("uses: actions/cache@v4");
+    expect(setupBunAction).toContain("~/.bun/install/cache");
+    expect(setupBunAction).toContain("~/.cache/electron");
+    expect(setupBunAction).toContain("~/.cache/electron-builder");
+    expect(setupBunAction).toContain("bun install --frozen-lockfile");
+    expect(setupBunAction).not.toContain("node_modules");
+    expect(workflow).toContain("run: bun install --cwd apps/mobile --frozen-lockfile");
   });
 
   test("keeps the core reliability guardrails", () => {

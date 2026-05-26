@@ -30,7 +30,7 @@ if (Platform.OS === "android") {
 }
 
 const SETTINGS_ACTIONS = [
-  { title: "Settings", icon: "slider.horizontal.3", href: "/(app)/settings" },
+  { title: "Settings", icon: "slider.horizontal.3", href: "/settings" },
   { title: "Workspace", icon: "square.grid.2x2", href: "/(app)/(tabs)/workspace" },
   { title: "Skills", icon: "sparkles", href: "/(app)/(tabs)/skills" },
   { title: "Remote access", icon: "iphone.and.arrow.forward", href: "/(pairing)" },

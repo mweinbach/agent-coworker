@@ -86,7 +86,7 @@ export default function WorkspaceHubScreen() {
           </Stack.Toolbar.MenuAction>
           <Stack.Toolbar.MenuAction
             icon="slider.horizontal.3"
-            onPress={() => router.push("/(app)/settings")}
+            onPress={() => router.push("/settings")}
           >
             Settings
           </Stack.Toolbar.MenuAction>
@@ -177,7 +177,7 @@ export default function WorkspaceHubScreen() {
               <AppButton
                 variant="secondary"
                 icon="gearshape.2"
-                onPress={() => router.push("/(app)/settings")}
+                onPress={() => router.push("/settings")}
               >
                 Open settings
               </AppButton>

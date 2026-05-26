@@ -146,7 +146,9 @@ function textResponse(payload: string, status = 200): Response {
   });
 }
 
-function createRemoteMarketplaceFetch(opts: { remoteManifestName?: string } = {}): typeof fetch {
+function createRemoteMarketplaceFetch(
+  opts: { includeMissingPlugin?: boolean; remoteManifestName?: string } = {},
+): typeof fetch {
   const tree: Record<string, unknown> = {
     ".agents/plugins/marketplace.json": {
       type: "file",
@@ -203,6 +205,16 @@ function createRemoteMarketplaceFetch(opts: { remoteManifestName?: string } = {}
     name: "cowork-test",
     interface: { displayName: "Cowork Test" },
     plugins: [
+      ...(opts.includeMissingPlugin
+        ? [
+            {
+              name: "missing-toolkit",
+              source: { source: "local", path: "./plugins/missing-toolkit" },
+              policy: { installation: "AVAILABLE", authentication: "ON_INSTALL" },
+              category: "Design",
+            },
+          ]
+        : []),
       {
         name: "figma-toolkit",
         source: { source: "local", path: "./plugins/figma-toolkit" },
@@ -452,6 +464,31 @@ describe("plugin catalog and install operations", () => {
       expect(catalog.plugins).toEqual([]);
       expect(catalog.warnings).toContain(
         '[plugins] Remote marketplace entry "figma-toolkit" did not contain a valid plugin bundle with a matching plugin name.',
+      );
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  test("remote marketplace entries continue after one plugin source fails", async () => {
+    const workspace = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-market-partial-workspace-"),
+    );
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-market-partial-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-market-partial-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      const catalog = await buildPluginCatalogSnapshot(config, {
+        includeRemoteMarketplace: true,
+        fetchImpl: createRemoteMarketplaceFetch({ includeMissingPlugin: true }),
+      });
+
+      expect(catalog.plugins.map((plugin) => plugin.id)).toEqual(["figma-toolkit"]);
+      expect(catalog.warnings).toContainEqual(
+        expect.stringContaining('remote marketplace entry "missing-toolkit"'),
       );
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });

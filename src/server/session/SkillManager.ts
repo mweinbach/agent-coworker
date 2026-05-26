@@ -37,6 +37,7 @@ import type { SessionContext } from "./SessionContext";
 
 export class SkillManager {
   private remotePluginsCatalogRefresh: Promise<void> | null = null;
+  private pluginsCatalogEpoch = 0;
 
   constructor(
     private readonly context: SessionContext,
@@ -83,11 +84,14 @@ export class SkillManager {
 
   private async emitPluginsCatalog(
     clearedMutationPendingKeys: string[] = [],
-    opts: { includeRemoteMarketplace?: boolean } = {},
+    opts: { includeRemoteMarketplace?: boolean; onlyIfEpoch?: number } = {},
   ) {
     const catalog = await buildPluginCatalogSnapshot(this.context.state.config, {
       includeRemoteMarketplace: opts.includeRemoteMarketplace ?? false,
     });
+    if (opts.onlyIfEpoch !== undefined && opts.onlyIfEpoch !== this.pluginsCatalogEpoch) {
+      return;
+    }
     this.context.emit({
       type: "plugins_catalog",
       sessionId: this.context.id,
@@ -96,11 +100,19 @@ export class SkillManager {
     });
   }
 
+  private invalidateRemotePluginsCatalogRefreshes() {
+    this.pluginsCatalogEpoch += 1;
+  }
+
   private queueRemotePluginsCatalogRefresh() {
     if (this.remotePluginsCatalogRefresh) {
       return;
     }
-    const refresh = this.emitPluginsCatalog([], { includeRemoteMarketplace: true })
+    const epoch = this.pluginsCatalogEpoch;
+    const refresh = this.emitPluginsCatalog([], {
+      includeRemoteMarketplace: true,
+      onlyIfEpoch: epoch,
+    })
       .catch((err) => {
         this.context.emitError(
           "internal_error",
@@ -221,6 +233,7 @@ export class SkillManager {
     clearedMutationPendingKeys?: string[];
     refreshAllWorkspaces?: boolean;
   } = {}) {
+    this.invalidateRemotePluginsCatalogRefreshes();
     await this.context.refreshSkillsAcrossWorkspaceSessions({
       allWorkspaces: refreshAllWorkspaces,
     });

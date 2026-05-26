@@ -244,11 +244,12 @@ export async function buildPluginCatalogSnapshot(
           continue;
         }
 
-        const materialized = await materializePluginSource({
-          input: marketplaceEntry.sourceInput,
-          fetchImpl: opts.fetchImpl,
-        });
+        let materialized: Awaited<ReturnType<typeof materializePluginSource>> | null = null;
         try {
+          materialized = await materializePluginSource({
+            input: marketplaceEntry.sourceInput,
+            fetchImpl: opts.fetchImpl,
+          });
           const candidate = materialized.candidates.find(
             (entry) => entry.pluginId === marketplaceEntry.name && entry.diagnostics.length === 0,
           );
@@ -272,8 +273,12 @@ export async function buildPluginCatalogSnapshot(
               applySkillOverrides: false,
             }),
           );
+        } catch (error) {
+          warnings.push(
+            `[plugins] Failed to load remote marketplace entry "${marketplaceEntry.name}": ${String(error)}`,
+          );
         } finally {
-          await materialized.cleanup();
+          await materialized?.cleanup();
         }
       }
     } catch (error) {

@@ -1,5 +1,4 @@
 import type { ConnectProviderResult, connectProvider as connectModelProvider } from "../../connect";
-import type { MCPRegistryServer } from "../../mcp/configRegistry";
 import type { ServerErrorCode, ServerErrorSource } from "../../types";
 import type { HistoryManager } from "./HistoryManager";
 import type { InteractionManager } from "./InteractionManager";

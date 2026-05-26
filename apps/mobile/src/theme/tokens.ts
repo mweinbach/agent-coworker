@@ -111,10 +111,11 @@ export const palette = {
   light: {
     appBg: "#dde1ca",
     sidebarBg: "#e1e4cd",
-    panelBg: "#f4f5e9",
+    panelBg: "#f8f9f2",
     textBase: "#232a18",
     mutedBase: "#556041",
     accentBase: "#6f8042",
+    accentForegroundBase: "#ffffff",
     inverseText: "#ffffff",
     dangerBase: "#bb3e3e",
     successBase: "#1ea155",
@@ -123,7 +124,7 @@ export const palette = {
     warningForegroundBase: "#232a18",
     borderBase: "rgba(62, 74, 40, 0.12)",
     glassBorder: "rgba(62, 74, 40, 0.18)",
-    shadowSurfaceBase: "0 1px 2px rgba(0, 0, 0, 0.035)",
+    shadowSurfaceBase: "0 1px 3px rgba(0, 0, 0, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.4)",
     shadowOverlayBase: "0 12px 30px rgba(0, 0, 0, 0.1)",
   },
   dark: {
@@ -133,6 +134,7 @@ export const palette = {
     textBase: "#eef0dc",
     mutedBase: "#c7ceaf",
     accentBase: "#a8b963",
+    accentForegroundBase: "#121a10",
     inverseText: "#ffffff",
     dangerBase: "#e86060",
     successBase: "#3fbb74",
@@ -141,7 +143,7 @@ export const palette = {
     warningForegroundBase: "#1a2012",
     borderBase: "rgba(238, 241, 220, 0.14)",
     glassBorder: "rgba(238, 241, 220, 0.16)",
-    shadowSurfaceBase: "0 1px 2px rgba(0, 0, 0, 0.24)",
+    shadowSurfaceBase: "0 1px 2px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.08)",
     shadowOverlayBase: "0 12px 30px rgba(0, 0, 0, 0.35)",
   },
 } as const;
@@ -181,6 +183,7 @@ export type SemanticTokens = {
   borderStrong: string;
 
   accent: string;
+  accentForeground: string;
   accentSoft: string;
 
   success: string;
@@ -223,6 +226,7 @@ function buildSemanticTokens(p: PalettePrimitives, isDark: boolean): SemanticTok
     borderStrong: alpha(p.borderBase, 0.92),
 
     accent: p.accentBase,
+    accentForeground: p.accentForegroundBase,
     accentSoft: alpha(p.accentBase, 0.14),
 
     success: p.successBase,

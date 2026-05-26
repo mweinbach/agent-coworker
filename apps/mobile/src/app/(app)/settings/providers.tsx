@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, Text, TextInput, View } from "react-native";
 
 import { Screen } from "@/components/ui/screen";
 import { SectionCard } from "@/components/ui/section-card";
 import { StatusPill } from "@/components/ui/status-pill";
 import { useProviderStore } from "@/features/cowork/providerStore";
+import { useWorkspaceStore } from "@/features/cowork/workspaceStore";
 import { usePairingStore } from "@/features/pairing/pairingStore";
 import { isWorkspaceConnectionReady } from "@/features/relay/connectionState";
 import { useAppTheme } from "@/theme/use-app-theme";
@@ -28,6 +29,62 @@ function providerLabel(mode?: string, authorized?: boolean) {
   return "needs setup";
 }
 
+function ChoicePill({
+  label,
+  selected,
+  onPress,
+}: {
+  label: string;
+  selected: boolean;
+  onPress: () => void;
+}) {
+  const theme = useAppTheme();
+  return (
+    <Pressable
+      onPress={(event) => {
+        event.stopPropagation();
+        onPress();
+      }}
+      style={({ pressed }) => ({
+        borderRadius: 999,
+        borderWidth: 1,
+        borderColor: selected ? theme.primary : pressed ? theme.primary : theme.border,
+        backgroundColor: selected ? theme.primary : pressed ? theme.surfaceMuted : "transparent",
+        paddingHorizontal: 12,
+        paddingVertical: 7,
+      })}
+    >
+      <Text
+        selectable
+        style={{
+          color: selected ? theme.primaryText : theme.text,
+          fontSize: 13,
+          fontWeight: "700",
+        }}
+      >
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
+
+function SectionLabel({ children }: { children: string }) {
+  const theme = useAppTheme();
+  return (
+    <Text
+      selectable
+      style={{
+        color: theme.textTertiary,
+        fontSize: 11,
+        fontWeight: "700",
+        textTransform: "uppercase",
+      }}
+    >
+      {children}
+    </Text>
+  );
+}
+
 export default function ProvidersScreen() {
   const theme = useAppTheme();
   const catalog = useProviderStore((s) => s.catalog);
@@ -36,12 +93,15 @@ export default function ProvidersScreen() {
   const loading = useProviderStore((s) => s.loading);
   const error = useProviderStore((s) => s.error);
   const refresh = useProviderStore((s) => s.refresh);
+  const selectDefaultModel = useProviderStore((s) => s.selectDefaultModel);
   const setApiKey = useProviderStore((s) => s.setApiKey);
   const authorize = useProviderStore((s) => s.authorize);
   const callback = useProviderStore((s) => s.callback);
   const logout = useProviderStore((s) => s.logout);
   const lastAuthChallenge = useProviderStore((s) => s.lastAuthChallenge);
   const lastAuthResult = useProviderStore((s) => s.lastAuthResult);
+  const activeWorkspaceName = useWorkspaceStore((s) => s.activeWorkspaceName);
+  const controlSnapshot = useWorkspaceStore((s) => s.controlSnapshot);
   const isConnected = usePairingStore((s) => isWorkspaceConnectionReady(s.connectionState));
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
   const [apiKeyDrafts, setApiKeyDrafts] = useState<Record<string, string>>({});
@@ -52,6 +112,13 @@ export default function ProvidersScreen() {
       void refresh();
     }
   }, [isConnected, refresh]);
+
+  const selectedProvider = controlSnapshot?.config?.provider ?? catalog[0]?.id ?? null;
+  const selectedModel = controlSnapshot?.config?.model ?? null;
+  const selectedProviderEntry = useMemo(
+    () => catalog.find((provider) => provider.id === selectedProvider) ?? null,
+    [catalog, selectedProvider],
+  );
 
   if (!isConnected) {
     return (
@@ -75,6 +142,50 @@ export default function ProvidersScreen() {
 
       {error ? <SectionCard title="Error" description={error} /> : null}
 
+      {catalog.length > 0 ? (
+        <SectionCard
+          title="Default model"
+          description={activeWorkspaceName ?? "Live workspace"}
+          action={selectedModel ? <StatusPill label={selectedModel} tone="primary" /> : undefined}
+        >
+          <View style={{ gap: 12 }}>
+            <View style={{ gap: 8 }}>
+              <SectionLabel>Provider</SectionLabel>
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                {catalog.map((provider) => (
+                  <ChoicePill
+                    key={provider.id}
+                    label={provider.name}
+                    selected={provider.id === selectedProvider}
+                    onPress={() => {
+                      void selectDefaultModel(provider.id, provider.defaultModel);
+                    }}
+                  />
+                ))}
+              </View>
+            </View>
+
+            {selectedProviderEntry ? (
+              <View style={{ gap: 8 }}>
+                <SectionLabel>Model</SectionLabel>
+                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                  {selectedProviderEntry.models.map((model) => (
+                    <ChoicePill
+                      key={model.id}
+                      label={model.displayName}
+                      selected={model.id === selectedModel}
+                      onPress={() => {
+                        void selectDefaultModel(selectedProviderEntry.id, model.id);
+                      }}
+                    />
+                  ))}
+                </View>
+              </View>
+            ) : null}
+          </View>
+        </SectionCard>
+      ) : null}
+
       {catalog.map((provider) => {
         const isExpanded = expandedProvider === provider.id;
         const authMethods = authMethodsByProvider[provider.id] ?? [];
@@ -97,20 +208,22 @@ export default function ProvidersScreen() {
               {isExpanded ? (
                 <View style={{ gap: 12, marginTop: 4 }}>
                   {provider.models.length > 0 ? (
-                    <View style={{ gap: 4 }}>
-                      <Text
-                        style={{
-                          color: theme.textTertiary,
-                          fontSize: 11,
-                          fontWeight: "600",
-                          textTransform: "uppercase",
-                        }}
-                      >
-                        Models
-                      </Text>
-                      <Text selectable style={{ color: theme.textSecondary, fontSize: 13 }}>
-                        {provider.models.map((model) => model.displayName).join(", ")}
-                      </Text>
+                    <View style={{ gap: 8 }}>
+                      <SectionLabel>Models</SectionLabel>
+                      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                        {provider.models.map((model) => (
+                          <ChoicePill
+                            key={model.id}
+                            label={model.displayName}
+                            selected={
+                              provider.id === selectedProvider && model.id === selectedModel
+                            }
+                            onPress={() => {
+                              void selectDefaultModel(provider.id, model.id);
+                            }}
+                          />
+                        ))}
+                      </View>
                     </View>
                   ) : null}
 

@@ -335,6 +335,7 @@ export function SettingsShell() {
   }, []);
   const platformInfo = getDesktopPlatformInfo();
   const settingsDragZoneStyle = getSettingsDragZoneStyle(sidebarWidth, platformInfo);
+  const isMacos = platformInfo.platform === "macos";
 
   const isBackupPage = activePage.id === "backup";
 
@@ -372,25 +373,59 @@ export function SettingsShell() {
           >
             <header
               className={cn(
-                "settings-shell__page-header shrink-0 px-5 backdrop-blur-sm max-[860px]:px-4",
-                isBackupPage ? "pb-3 pt-4" : "sticky top-0 z-10 py-4",
+                "settings-shell__page-header shrink-0 backdrop-blur-sm",
+                isMacos
+                  ? isBackupPage
+                    ? ""
+                    : "sticky top-0 z-10"
+                  : cn(
+                      "px-5 max-[860px]:px-4",
+                      isBackupPage ? "pb-3 pt-4" : "sticky top-0 z-10 py-4",
+                    ),
               )}
             >
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                <div className="min-w-0 space-y-1">
-                  <h1 className="text-xl font-semibold tracking-tight text-foreground">
-                    {meta.title}
-                  </h1>
-                  <p className="max-w-xl text-sm leading-relaxed text-muted-foreground">
-                    {meta.description}
-                  </p>
-                </div>
-                {pageChrome.headerActions ? (
-                  <div className="settings-shell__header-actions flex shrink-0 flex-wrap items-center justify-end gap-2 sm:pt-0.5">
-                    {pageChrome.headerActions}
+              {isMacos ? (
+                <>
+                  <div className="settings-shell__page-titleband">
+                    <div className="settings-shell__page-titleband-row flex flex-col gap-3 px-5 max-[860px]:px-4 sm:flex-row sm:items-end sm:justify-between">
+                      <h1 className="min-w-0 text-xl font-semibold tracking-tight text-foreground">
+                        {meta.title}
+                      </h1>
+                      {pageChrome.headerActions ? (
+                        <div className="settings-shell__header-actions flex shrink-0 flex-wrap items-center justify-end gap-2">
+                          {pageChrome.headerActions}
+                        </div>
+                      ) : null}
+                    </div>
                   </div>
-                ) : null}
-              </div>
+                  <div
+                    className={cn(
+                      "settings-shell__page-intro px-5 max-[860px]:px-4",
+                      isBackupPage ? "pb-3 pt-3" : "pb-4 pt-3",
+                    )}
+                  >
+                    <p className="max-w-xl text-sm leading-relaxed text-muted-foreground">
+                      {meta.description}
+                    </p>
+                  </div>
+                </>
+              ) : (
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0 space-y-1">
+                    <h1 className="text-xl font-semibold tracking-tight text-foreground">
+                      {meta.title}
+                    </h1>
+                    <p className="max-w-xl text-sm leading-relaxed text-muted-foreground">
+                      {meta.description}
+                    </p>
+                  </div>
+                  {pageChrome.headerActions ? (
+                    <div className="settings-shell__header-actions flex shrink-0 flex-wrap items-center justify-end gap-2 sm:pt-0.5">
+                      {pageChrome.headerActions}
+                    </div>
+                  ) : null}
+                </div>
+              )}
             </header>
 
             <div className="settings-shell__scroll min-h-0 min-w-0 flex-1 overflow-y-auto">

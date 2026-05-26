@@ -72,15 +72,20 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
 }> {
   const hostname = opts.hostname ?? "127.0.0.1";
   const networkExposedListener = !isLoopbackHostname(hostname);
-  const runtime = await createAgentServerRuntime(opts);
-  const requestedPort = opts.port ?? 7337;
+  const env = opts.env ?? { ...process.env, AGENT_WORKING_DIR: opts.cwd };
   const webDesktopService =
-    runtime.env.COWORK_WEB_DESKTOP_SERVICE === "1"
+    env.COWORK_WEB_DESKTOP_SERVICE === "1"
       ? new WebDesktopService({
           homedir: opts.homedir,
-          userDataDir: runtime.env.COWORK_DESKTOP_USER_DATA_DIR,
+          userDataDir: env.COWORK_DESKTOP_USER_DATA_DIR,
         })
       : null;
+  const runtime = await createAgentServerRuntime({
+    ...opts,
+    env,
+    desktopService: webDesktopService,
+  });
+  const requestedPort = opts.port ?? 7337;
   const browserAccessToken =
     runtime.env.COWORK_BROWSER_ACCESS_TOKEN?.trim() ||
     (webDesktopService || networkExposedListener ? createBrowserAccessToken() : "");
@@ -108,9 +113,9 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
             status: 204,
             headers: {
               ...corsHeaders,
-              "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+              "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
               "Access-Control-Allow-Headers":
-                "Content-Type, Sec-WebSocket-Protocol, X-Cowork-Browser-Token",
+                "Authorization, Content-Type, Sec-WebSocket-Protocol, X-Cowork-Browser-Token",
               "Access-Control-Max-Age": "86400",
             },
           });
@@ -161,6 +166,51 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
           });
           if (upgraded) return;
           return new Response("WebSocket upgrade failed", { status: 400, headers: corsHeaders });
+        }
+        if (req.method === "GET" && url.pathname === "/mobile-h3/trusted") {
+          if (!mobileServer) {
+            return Response.json({ error: "Mobile H3 endpoint is not running." }, { status: 404 });
+          }
+          if (parseBearerToken(req.headers.get("authorization")) !== mobileServer.adminToken) {
+            return Response.json({ error: "Unauthorized." }, { status: 401 });
+          }
+          return Response.json({ trustedDevices: await mobileServer.listTrustedDevices() });
+        }
+        if (
+          req.method === "PATCH" &&
+          url.pathname.startsWith("/mobile-h3/trusted/") &&
+          url.pathname.endsWith("/permissions")
+        ) {
+          if (!mobileServer) {
+            return Response.json({ error: "Mobile H3 endpoint is not running." }, { status: 404 });
+          }
+          if (parseBearerToken(req.headers.get("authorization")) !== mobileServer.adminToken) {
+            return Response.json({ error: "Unauthorized." }, { status: 401 });
+          }
+          const encodedDeviceId = url.pathname.slice(
+            "/mobile-h3/trusted/".length,
+            -"/permissions".length,
+          );
+          const deviceId = decodeURIComponent(encodedDeviceId);
+          const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
+          const rawPermissions =
+            body?.permissions &&
+            typeof body.permissions === "object" &&
+            !Array.isArray(body.permissions)
+              ? (body.permissions as Record<string, unknown>)
+              : {};
+          const updated = await mobileServer.updateTrustedDevicePermissions(
+            deviceId,
+            Object.fromEntries(
+              Object.entries(rawPermissions)
+                .filter(([, value]) => typeof value === "boolean")
+                .map(([key, value]) => [key, value === true]),
+            ),
+          );
+          if (!updated) {
+            return Response.json({ error: "Trusted device not found." }, { status: 404 });
+          }
+          return Response.json({ trustedDevice: updated });
         }
         if (req.method === "DELETE" && url.pathname.startsWith("/mobile-h3/trusted/")) {
           if (!mobileServer) {
@@ -247,6 +297,7 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
             hostHints: opts.mobileH3?.hostHints,
             storeRootPath: opts.homedir,
             enableH3: runtime.env.COWORK_H3_MOBILE_DISABLE_H3 !== "1",
+            rotateTls: runtime.env.COWORK_H3_ROTATE_TLS === "1",
           })
         : undefined;
   } catch (error) {

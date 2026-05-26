@@ -1,20 +1,24 @@
 import { Stack } from "expo-router";
+import { Platform } from "react-native";
 
 import { useAppTheme } from "@/theme/use-app-theme";
 
 export default function PairingLayout() {
   const theme = useAppTheme();
+  const useNativeChrome = Platform.OS === "ios";
 
   return (
     <Stack
       screenOptions={{
         headerLargeTitle: true,
-        headerTransparent: true,
+        headerTransparent: useNativeChrome,
         headerShadowVisible: false,
         headerLargeTitleShadowVisible: false,
-        headerBlurEffect: "none",
+        headerStyle: {
+          backgroundColor: useNativeChrome ? "transparent" : theme.background,
+        },
         headerLargeStyle: {
-          backgroundColor: "transparent",
+          backgroundColor: useNativeChrome ? "transparent" : theme.background,
         },
         headerTintColor: theme.text,
         headerLargeTitleStyle: {
@@ -23,22 +27,28 @@ export default function PairingLayout() {
         },
         headerTitleStyle: {
           color: theme.text,
+          fontWeight: "600",
         },
         headerBackButtonDisplayMode: "minimal",
+        contentStyle: {
+          flex: 1,
+          backgroundColor: useNativeChrome ? "transparent" : theme.background,
+        },
       }}
     >
       <Stack.Screen
         name="index"
         options={{
           title: "Remote Access",
+          headerRight: () => null,
+          unstable_headerRightItems: () => [],
         }}
       />
       <Stack.Screen
         name="scan"
         options={{
-          title: "Scan Desktop",
+          title: "Scan Code",
           headerLargeTitle: false,
-          headerBackButtonDisplayMode: "minimal",
           presentation: "modal",
         }}
       />

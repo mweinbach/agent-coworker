@@ -7,10 +7,12 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import "../global.css";
 
 import { MobileAppProvider } from "@/providers/MobileAppProvider";
-import { useAppTheme } from "@/theme/use-app-theme";
+import { SyncCssColorScheme } from "@/theme/sync-css-color-scheme";
+import { resolveColorScheme, useAppTheme } from "@/theme/use-app-theme";
 
 export default function RootLayout() {
   const colorScheme = useColorScheme();
+  const resolvedScheme = resolveColorScheme(colorScheme);
   const theme = useAppTheme();
   const [fontsLoaded] = useFonts({
     IBMPlexSans: require("../../assets/fonts/IBMPlexSans-Variable.ttf"),
@@ -27,11 +29,12 @@ export default function RootLayout() {
 
   return (
     <SafeAreaProvider>
+      <SyncCssColorScheme />
       <ThemeProvider
         value={{
-          ...(colorScheme === "light" ? DefaultTheme : DarkTheme),
+          ...(resolvedScheme === "light" ? DefaultTheme : DarkTheme),
           colors: {
-            ...(colorScheme === "light" ? DefaultTheme : DarkTheme).colors,
+            ...(resolvedScheme === "light" ? DefaultTheme : DarkTheme).colors,
             background: theme.background,
             card: theme.surface,
             border: theme.border,

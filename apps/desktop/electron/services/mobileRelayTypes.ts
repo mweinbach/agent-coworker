@@ -22,6 +22,32 @@ export type MobileRelayPairingPayload = {
   expiresAt: number;
 };
 
+export const MOBILE_RELAY_TRUSTED_DEVICE_PERMISSION_KEYS = [
+  "turns",
+  "serverRequests",
+  "providerAuth",
+  "mcpAuth",
+  "workspaceSettings",
+  "backups",
+] as const;
+
+export type MobileRelayTrustedDevicePermissionKey =
+  (typeof MOBILE_RELAY_TRUSTED_DEVICE_PERMISSION_KEYS)[number];
+
+export type MobileRelayTrustedDevicePermissions = Record<
+  MobileRelayTrustedDevicePermissionKey,
+  boolean
+>;
+
+export type MobileRelayTrustedPhoneDevice = {
+  deviceId: string;
+  fingerprint: string;
+  displayName: string | null;
+  lastPairedAt: string | null;
+  lastConnectedAt: string | null;
+  permissions: MobileRelayTrustedDevicePermissions;
+};
+
 export type MobileRelayBridgeState = {
   status: MobileRelayStatus;
   workspaceId: string | null;
@@ -36,6 +62,7 @@ export type MobileRelayBridgeState = {
   pairingPayload: MobileRelayPairingPayload | null;
   trustedPhoneDeviceId: string | null;
   trustedPhoneFingerprint: string | null;
+  trustedPhoneDevices: MobileRelayTrustedPhoneDevice[];
   directUrl: string | null;
   ticketUrl: string | null;
   certSha256: string | null;

@@ -45,6 +45,7 @@ import { normalizeFeedForToolCards } from "./chat/toolCards/legacyToolLogs";
 const COMPOSER_OVERLAY_EXTRA_HEIGHT_PX = 24;
 const SCROLL_BUTTON_BOTTOM_GAP_PX = 14;
 const FEED_BOTTOM_STICKY_THRESHOLD_PX = 220;
+const FEED_AUTO_SCROLL_THRESHOLD_PX = 24;
 
 export { ChatThreadHeader } from "./chat/ChatThreadHeader";
 export {
@@ -134,17 +135,20 @@ export function ChatView() {
   const messageBarOverlayRef = useRef<HTMLDivElement | null>(null);
   const lastCountRef = useRef<number>(0);
   const autoScrolledThreadIdRef = useRef<string | null>(null);
+  const userScrolledAwayRef = useRef(false);
   const pendingAttachmentsRef = useRef<ComposerAttachmentFile[]>([]);
   const scrollButtonBottomOffset = composerOverlayHeight + SCROLL_BUTTON_BOTTOM_GAP_PX;
 
-  const updateScrollButtonVisibility = useCallback(() => {
+  const updateScrollState = useCallback(() => {
     const el = feedRef.current;
     if (!el) {
       setShowScrollButton(false);
+      userScrolledAwayRef.current = false;
       return;
     }
 
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    userScrolledAwayRef.current = distanceFromBottom > FEED_AUTO_SCROLL_THRESHOLD_PX;
     const nextVisible = distanceFromBottom > FEED_BOTTOM_STICKY_THRESHOLD_PX;
     setShowScrollButton((current) => (current === nextVisible ? current : nextVisible));
   }, []);
@@ -153,6 +157,7 @@ export function ChatView() {
     const el = feedRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
+    userScrolledAwayRef.current = false;
     setShowScrollButton(false);
   }, []);
 
@@ -250,7 +255,10 @@ export function ChatView() {
   }, []);
 
   const feed = rt?.feed ?? [];
-  const normalizedFeed = normalizeFeedForToolCards(feed, developerMode);
+  const normalizedFeed = useMemo(
+    () => normalizeFeedForToolCards(feed, developerMode),
+    [developerMode, feed],
+  );
   const a2uiEnabled = useMemo(() => {
     if (typeof rt?.sessionConfig?.enableA2ui === "boolean") {
       return rt.sessionConfig.enableA2ui;
@@ -412,6 +420,7 @@ export function ChatView() {
     if (isThreadChange) {
       autoScrolledThreadIdRef.current = selectedThreadId;
       lastCountRef.current = visibleFeed.length;
+      userScrolledAwayRef.current = false;
       window.requestAnimationFrame(() => {
         const nextEl = feedRef.current;
         if (nextEl) {
@@ -437,10 +446,10 @@ export function ChatView() {
     }
 
     const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    if (distFromBottom < FEED_BOTTOM_STICKY_THRESHOLD_PX) {
+    if (!userScrolledAwayRef.current && distFromBottom <= FEED_AUTO_SCROLL_THRESHOLD_PX) {
       window.requestAnimationFrame(() => {
         const nextEl = feedRef.current;
-        if (nextEl) {
+        if (nextEl && !userScrolledAwayRef.current) {
           nextEl.scrollTop = nextEl.scrollHeight;
         }
       });
@@ -451,8 +460,8 @@ export function ChatView() {
   }, [selectedThreadId, visibleFeed]);
 
   useEffect(() => {
-    updateScrollButtonVisibility();
-  }, [composerOverlayHeight, updateScrollButtonVisibility]);
+    updateScrollState();
+  }, [composerOverlayHeight, updateScrollState]);
 
   useEffect(() => {
     let cancelled = false;
@@ -653,7 +662,7 @@ export function ChatView() {
       <div className="relative flex h-full min-h-0 flex-col bg-panel">
         <ChatFeed
           feedRef={feedRef}
-          onScroll={updateScrollButtonVisibility}
+          onScroll={updateScrollState}
           transcriptOnly={transcriptOnly}
           disconnected={disconnected}
           onReconnect={() => void reconnectThread(selectedThreadId)}

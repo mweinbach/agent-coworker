@@ -37,9 +37,16 @@ export const controlEventNotificationSchema = z.union([
   mcpServersEventSchema,
 ]);
 
+export const workspaceListChangedNotificationSchema = z
+  .object({
+    revision: z.number().int().nonnegative(),
+  })
+  .strict();
+
 export const jsonRpcMiscNotificationSchemas = {
   "cowork/log": logEventSchema,
   "cowork/todos": todosEventSchema,
   "cowork/control/event": controlEventNotificationSchema,
+  "workspace/listChanged": workspaceListChangedNotificationSchema,
   error: errorEventSchema,
 } as const;

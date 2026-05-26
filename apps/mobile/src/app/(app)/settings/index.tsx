@@ -1,14 +1,14 @@
 import { Stack, useRouter } from "expo-router";
-import { Text, View } from "react-native";
+import { Switch, Text, View } from "react-native";
 
 import { AppButton } from "@/components/ui/app-button";
-import { HeaderGlassButton } from "@/components/ui/header-glass-button";
 import { HubLinkRow } from "@/components/ui/hub-link-row";
 import { Screen } from "@/components/ui/screen";
 import { SectionCard } from "@/components/ui/section-card";
 import { StatusPill } from "@/components/ui/status-pill";
 import { useWorkspaceStore } from "@/features/cowork/workspaceStore";
 import { usePairingStore } from "@/features/pairing/pairingStore";
+import { useDisplayPreferencesStore } from "@/features/preferences/displayPreferencesStore";
 import {
   describeTransportStatus,
   isWorkspaceConnectionReady,
@@ -24,16 +24,12 @@ export default function SettingsHubScreen() {
   const controlSnapshot = useWorkspaceStore((state) => state.controlSnapshot);
   const connectionState = usePairingStore((state) => state.connectionState);
   const isConnected = isWorkspaceConnectionReady(connectionState);
+  const showDebugMessages = useDisplayPreferencesStore((state) => state.showDebugMessages);
+  const setShowDebugMessages = useDisplayPreferencesStore((state) => state.setShowDebugMessages);
 
   return (
     <>
-      <Stack.Screen
-        options={{
-          headerRight: () => (
-            <HeaderGlassButton icon="desktopcomputer" onPress={() => router.push("/(pairing)")} />
-          ),
-        }}
-      />
+      <Stack.Screen options={{ headerRight: () => null, unstable_headerRightItems: () => [] }} />
       <Screen scroll contentStyle={{ gap: 16 }}>
         <View
           style={{
@@ -166,6 +162,31 @@ export default function SettingsHubScreen() {
             href="/(app)/(tabs)/skills"
             icon="sparkles"
           />
+        </SectionCard>
+
+        <SectionCard title="Display" description="Tune how conversations render on this device.">
+          <View
+            style={{
+              flexDirection: "row",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: 16,
+            }}
+          >
+            <View style={{ flex: 1, gap: 3 }}>
+              <Text style={{ color: theme.text, fontSize: 15, fontWeight: "700" }}>
+                Show debug messages
+              </Text>
+              <Text style={{ color: theme.textSecondary, fontSize: 13, lineHeight: 19 }}>
+                Include system and log lines such as observability health checks in thread feeds.
+              </Text>
+            </View>
+            <Switch
+              value={showDebugMessages}
+              onValueChange={setShowDebugMessages}
+              trackColor={{ true: theme.primary }}
+            />
+          </View>
         </SectionCard>
 
         <SectionCard

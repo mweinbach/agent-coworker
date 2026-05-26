@@ -11,6 +11,7 @@ import type {
 import type { AgentServerRuntime } from "../src/server/runtime/ServerRuntime";
 import { loadH3PairingStoreState } from "../src/server/transport/h3/pairing";
 import { startH3MobileServer } from "../src/server/transport/h3/server";
+import { type CoworkPairingTicket, encodeCoworkPairingTicket } from "../src/shared/coworkTicket";
 
 const tempRoots: string[] = [];
 
@@ -37,11 +38,49 @@ function fetchH3(url: string, init: RequestInit = {}): Promise<Response> {
   } as H3FetchInit);
 }
 
+function createNoopRuntime(): AgentServerRuntime {
+  return {
+    openHttpConnection() {},
+    handleDecodedMessage() {},
+    closeConnection() {},
+  } as AgentServerRuntime;
+}
+
 afterEach(async () => {
   await Promise.all(tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
 describe("H3 mobile server pairing", () => {
+  const ticketBindingCases: Array<{
+    name: string;
+    mutate(ticket: CoworkPairingTicket): CoworkPairingTicket;
+  }> = [
+    {
+      name: "certificate fingerprint",
+      mutate: (ticket) => ({ ...ticket, certSha256: "b".repeat(64) }),
+    },
+    {
+      name: "SPKI fingerprint",
+      mutate: (ticket) => ({ ...ticket, spkiSha256: "c".repeat(43) }),
+    },
+    {
+      name: "desktop identity",
+      mutate: (ticket) => ({ ...ticket, identityPub: "other-desktop-identity" }),
+    },
+    {
+      name: "advertised hosts",
+      mutate: (ticket) => ({ ...ticket, hosts: ["192.168.1.200"] }),
+    },
+    {
+      name: "advertised port",
+      mutate: (ticket) => ({ ...ticket, port: ticket.port === 65535 ? 1 : ticket.port + 1 }),
+    },
+    {
+      name: "ticket expiry",
+      mutate: (ticket) => ({ ...ticket, expiresAt: ticket.expiresAt - 1 }),
+    },
+  ];
+
   test("consumes pairing nonces once and gates HTTP RPC behind the paired session token", async () => {
     const storeRoot = await createTempRoot();
     const handled: Array<JsonRpcLiteRequest | JsonRpcLiteNotification | JsonRpcLiteClientResponse> =
@@ -106,6 +145,14 @@ describe("H3 mobile server pairing", () => {
             deviceId: "phone-1",
             identityPub: "phone-identity",
             displayName: "Work Phone",
+            permissions: {
+              turns: false,
+              serverRequests: false,
+              providerAuth: false,
+              mcpAuth: false,
+              workspaceSettings: false,
+              backups: false,
+            },
           },
         ],
       });
@@ -129,10 +176,36 @@ describe("H3 mobile server pairing", () => {
       await expect(unauthenticatedRpc.json()).resolves.toEqual({ error: "Unauthorized." });
       expect(handled).toEqual([]);
 
+      const missingDeviceHeaderRpc = await fetchH3(`${server.url}/rpc`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${pairPayload.sessionToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "thread/list" }),
+      });
+      expect(missingDeviceHeaderRpc.status).toBe(401);
+      await expect(missingDeviceHeaderRpc.json()).resolves.toEqual({ error: "Unauthorized." });
+      expect(handled).toEqual([]);
+
+      const mismatchedDeviceHeaderRpc = await fetchH3(`${server.url}/rpc`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${pairPayload.sessionToken}`,
+          "content-type": "application/json",
+          "x-cowork-mobile-device-id": "phone-2",
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "thread/list" }),
+      });
+      expect(mismatchedDeviceHeaderRpc.status).toBe(401);
+      await expect(mismatchedDeviceHeaderRpc.json()).resolves.toEqual({ error: "Unauthorized." });
+      expect(handled).toEqual([]);
+
       const authenticatedRpc = await fetchH3(`${server.url}/rpc`, {
         method: "POST",
         headers: {
           authorization: `Bearer ${pairPayload.sessionToken}`,
+          "x-cowork-mobile-device-id": "phone-1",
           "content-type": "application/json",
         },
         body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "thread/list" }),
@@ -144,6 +217,282 @@ describe("H3 mobile server pairing", () => {
         result: { reachedRuntime: true },
       });
       expect(handled).toEqual([{ id: 2, method: "thread/list" }]);
+
+      const deniedTurn = await fetchH3(`${server.url}/rpc`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${pairPayload.sessionToken}`,
+          "x-cowork-mobile-device-id": "phone-1",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 3,
+          method: "turn/start",
+          params: { threadId: "thread-1", input: "hello" },
+        }),
+      });
+      expect(deniedTurn.status).toBe(403);
+      await expect(deniedTurn.json()).resolves.toMatchObject({
+        error: "Mobile device permission required: turns.",
+        permission: "turns",
+      });
+      expect(handled).toEqual([{ id: 2, method: "thread/list" }]);
+
+      await expect(
+        server.updateTrustedDevicePermissions("phone-1", { turns: true }),
+      ).resolves.toMatchObject({
+        deviceId: "phone-1",
+        permissions: { turns: true },
+      });
+
+      const allowedTurn = await fetchH3(`${server.url}/rpc`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${pairPayload.sessionToken}`,
+          "x-cowork-mobile-device-id": "phone-1",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 4,
+          method: "turn/start",
+          params: { threadId: "thread-1", input: "hello" },
+        }),
+      });
+      expect(allowedTurn.status).toBe(200);
+      await expect(allowedTurn.json()).resolves.toEqual({
+        jsonrpc: "2.0",
+        id: 4,
+        result: { reachedRuntime: true },
+      });
+      expect(handled).toEqual([
+        { id: 2, method: "thread/list" },
+        {
+          id: 4,
+          method: "turn/start",
+          params: { threadId: "thread-1", input: "hello" },
+        },
+      ]);
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test("keeps desktop identity, trusted device permissions, and session auth across H3 restarts", async () => {
+    const storeRoot = await createTempRoot();
+    const handled: Array<JsonRpcLiteRequest | JsonRpcLiteNotification | JsonRpcLiteClientResponse> =
+      [];
+    const runtime = {
+      openHttpConnection() {},
+      handleDecodedMessage(connection: H3TestConnection, message) {
+        handled.push(message);
+        if ("method" in message && "id" in message) {
+          connection.send(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: message.id,
+              result: { reachedRuntime: true },
+            }),
+          );
+        }
+      },
+      closeConnection() {},
+    } satisfies Partial<AgentServerRuntime>;
+
+    const server = await startH3MobileServer({
+      runtime: runtime as AgentServerRuntime,
+      hostname: "127.0.0.1",
+      hostHints: ["127.0.0.1"],
+      storeRootPath: storeRoot,
+      enableH3: false,
+    });
+
+    let sessionToken = "";
+    try {
+      const pairResponse = await fetchH3(`${server.url}/pair`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ticket: server.ticketUrl,
+          nonce: server.nonce,
+          deviceId: "phone-1",
+          identityPub: "phone-identity",
+          displayName: "Work Phone",
+        }),
+      });
+      expect(pairResponse.status).toBe(200);
+      const pairPayload = (await pairResponse.json()) as { sessionToken?: string };
+      sessionToken = pairPayload.sessionToken ?? "";
+      expect(sessionToken).not.toBe("");
+
+      await expect(
+        server.updateTrustedDevicePermissions("phone-1", {
+          turns: true,
+          providerAuth: true,
+          mcpAuth: true,
+        }),
+      ).resolves.toMatchObject({
+        deviceId: "phone-1",
+        permissions: {
+          turns: true,
+          providerAuth: true,
+          mcpAuth: true,
+        },
+      });
+    } finally {
+      await server.stop();
+    }
+
+    const restarted = await startH3MobileServer({
+      runtime: runtime as AgentServerRuntime,
+      hostname: "127.0.0.1",
+      hostHints: ["127.0.0.1"],
+      storeRootPath: storeRoot,
+      enableH3: false,
+    });
+
+    try {
+      expect(restarted.identityPub).toBe(server.identityPub);
+      expect(restarted.certSha256).toBe(server.certSha256);
+      expect(restarted.spkiSha256).toBe(server.spkiSha256);
+      expect(restarted.port).toBe(server.port);
+      expect(restarted.trustedDevices).toEqual([
+        expect.objectContaining({
+          deviceId: "phone-1",
+          fingerprint: expect.any(String),
+          permissions: expect.objectContaining({
+            turns: true,
+            providerAuth: true,
+            mcpAuth: true,
+          }),
+        }),
+      ]);
+
+      const authenticatedTurn = await fetchH3(`${restarted.url}/rpc`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${sessionToken}`,
+          "x-cowork-mobile-device-id": "phone-1",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 5,
+          method: "turn/start",
+          params: { threadId: "thread-1", input: "hello after restart" },
+        }),
+      });
+
+      expect(authenticatedTurn.status).toBe(200);
+      await expect(authenticatedTurn.json()).resolves.toEqual({
+        jsonrpc: "2.0",
+        id: 5,
+        result: { reachedRuntime: true },
+      });
+      expect(handled.at(-1)).toEqual({
+        id: 5,
+        method: "turn/start",
+        params: { threadId: "thread-1", input: "hello after restart" },
+      });
+    } finally {
+      await restarted.stop();
+    }
+  });
+
+  for (const bindingCase of ticketBindingCases) {
+    test(`rejects pairing tickets with mismatched ${bindingCase.name}`, async () => {
+      const storeRoot = await createTempRoot();
+      const server = await startH3MobileServer({
+        runtime: createNoopRuntime(),
+        hostname: "127.0.0.1",
+        hostHints: ["127.0.0.1"],
+        storeRootPath: storeRoot,
+        enableH3: false,
+      });
+
+      try {
+        const tamperedTicket = encodeCoworkPairingTicket(bindingCase.mutate(server.ticket));
+        const tamperedResponse = await fetchH3(`${server.url}/pair`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            ticket: tamperedTicket,
+            nonce: server.nonce,
+            deviceId: "phone-1",
+            identityPub: "phone-identity",
+            displayName: "Work Phone",
+          }),
+        });
+
+        expect(tamperedResponse.status).toBe(400);
+        await expect(tamperedResponse.json()).resolves.toEqual({
+          error: "Invalid pairing request.",
+        });
+        await expect(loadH3PairingStoreState(storeRoot)).resolves.toEqual({
+          version: 1,
+          trustedDevices: [],
+        });
+
+        const validResponse = await fetchH3(`${server.url}/pair`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            ticket: server.ticketUrl,
+            nonce: server.nonce,
+            deviceId: "phone-1",
+            identityPub: "phone-identity",
+            displayName: "Work Phone",
+          }),
+        });
+        expect(validResponse.status).toBe(200);
+      } finally {
+        await server.stop();
+      }
+    });
+  }
+
+  test("allows only one concurrent pairing request to consume a nonce", async () => {
+    const storeRoot = await createTempRoot();
+    const runtime = {
+      openHttpConnection() {},
+      handleDecodedMessage() {},
+      closeConnection() {},
+    } satisfies Partial<AgentServerRuntime>;
+    const server = await startH3MobileServer({
+      runtime: runtime as AgentServerRuntime,
+      hostname: "127.0.0.1",
+      hostHints: ["127.0.0.1"],
+      storeRootPath: storeRoot,
+      enableH3: false,
+    });
+
+    try {
+      const buildPairRequest = (deviceId: string) =>
+        fetchH3(`${server.url}/pair`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            ticket: server.ticketUrl,
+            nonce: server.nonce,
+            deviceId,
+            identityPub: `${deviceId}-identity`,
+            displayName: deviceId,
+          }),
+        });
+
+      const responses = await Promise.all([
+        buildPairRequest("phone-1"),
+        buildPairRequest("phone-2"),
+      ]);
+      const statuses = responses.map((response) => response.status).sort();
+
+      expect(statuses).toEqual([200, 401]);
+      await expect(loadH3PairingStoreState(storeRoot)).resolves.toMatchObject({
+        version: 1,
+        trustedDevices: [expect.objectContaining({ deviceId: expect.stringMatching(/^phone-/) })],
+      });
+      expect((await loadH3PairingStoreState(storeRoot)).trustedDevices).toHaveLength(1);
     } finally {
       await server.stop();
     }

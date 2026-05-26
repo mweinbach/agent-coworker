@@ -59,6 +59,7 @@ describe("mobile ThreadFeedItem", () => {
         root: { id: "root", type: "Column" },
       },
       a2uiEnabled: true,
+      showDebugMessages: false,
     });
 
     expect(rendered.type).toBeDefined();
@@ -84,5 +85,61 @@ describe("mobile ThreadFeedItem", () => {
     });
 
     expect(rendered).toBeNull();
+  });
+
+  test("hides reasoning and tool rows because activity groups render them", () => {
+    expect(
+      ThreadFeedItem({
+        item: {
+          id: "r1",
+          kind: "reasoning",
+          mode: "summary",
+          ts: "2026-04-19T00:00:00.000Z",
+          text: "Thinking",
+        },
+        a2uiEnabled: true,
+        showDebugMessages: false,
+      }),
+    ).toBeNull();
+
+    expect(
+      ThreadFeedItem({
+        item: {
+          id: "t1",
+          kind: "tool",
+          ts: "2026-04-19T00:00:01.000Z",
+          name: "bash",
+          state: "output-available",
+        },
+        a2uiEnabled: true,
+        showDebugMessages: false,
+      }),
+    ).toBeNull();
+  });
+
+  test("hides system debug lines unless showDebugMessages is enabled", () => {
+    const hidden = ThreadFeedItem({
+      item: {
+        id: "s1",
+        kind: "system",
+        ts: "2026-04-19T00:00:00.000Z",
+        line: "Observability: enabled=yes",
+      },
+      a2uiEnabled: true,
+      showDebugMessages: false,
+    });
+    expect(hidden).toBeNull();
+
+    const visible = ThreadFeedItem({
+      item: {
+        id: "s1",
+        kind: "system",
+        ts: "2026-04-19T00:00:00.000Z",
+        line: "Observability: enabled=yes",
+      },
+      a2uiEnabled: true,
+      showDebugMessages: true,
+    });
+    expect(visible).not.toBeNull();
   });
 });

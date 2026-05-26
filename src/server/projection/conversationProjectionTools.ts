@@ -10,7 +10,7 @@ import {
   toolTurnNameKey,
 } from "./conversationProjectionToolKeys";
 import type { BufferedToolState } from "./conversationProjectionTypes";
-import { makeItemId, normalizeToolArgsFromInput, occurrenceItemId } from "./shared";
+import { makeItemId, occurrenceItemId } from "./shared";
 
 export function createToolProjection(state: ConversationProjectionState) {
   const rememberLatestToolKey = (turnId: string, name: string, fullKey: string) => {

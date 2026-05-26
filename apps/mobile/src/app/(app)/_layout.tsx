@@ -1,19 +1,21 @@
 import { Stack } from "expo-router/stack";
+import { Platform } from "react-native";
 
 import { useAppTheme } from "@/theme/use-app-theme";
 
 export default function AppLayout() {
   const theme = useAppTheme();
+  const headerTransparent = Platform.OS !== "web";
 
   return (
     <Stack
       screenOptions={{
-        headerTransparent: true,
+        headerTransparent,
         headerShadowVisible: false,
         headerLargeTitle: true,
         headerLargeTitleShadowVisible: false,
         headerBlurEffect: "none",
-        headerLargeStyle: { backgroundColor: "transparent" },
+        headerLargeStyle: { backgroundColor: headerTransparent ? "transparent" : theme.background },
         headerTitleStyle: { color: theme.text, fontWeight: "700" },
         headerLargeTitleStyle: { color: theme.text, fontWeight: "800" },
         headerTintColor: theme.text,
@@ -36,6 +38,7 @@ export default function AppLayout() {
       />
 
       {/* Settings Modal or Pushed Group */}
+      <Stack.Screen name="settings/index" options={{ title: "Settings" }} />
       <Stack.Screen
         name="settings/providers"
         options={{ title: "Providers", headerLargeTitle: false }}

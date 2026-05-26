@@ -28,6 +28,7 @@ type ProviderStoreState = {
   fetchAuthMethods(): Promise<void>;
   fetchStatus(): Promise<void>;
   refresh(): Promise<void>;
+  selectDefaultModel(provider: ProviderCatalogEntry["id"], model: string): Promise<void>;
   setApiKey(provider: string, methodId: string, apiKey: string): Promise<void>;
   copyApiKey(provider: string, sourceProvider: string): Promise<void>;
   authorize(provider: string, methodId: string): Promise<void>;
@@ -100,6 +101,27 @@ export const useProviderStore = create<ProviderStoreState>((set, get) => ({
     set({ loading: true, error: null });
     try {
       await Promise.all([get().fetchCatalog(), get().fetchAuthMethods(), get().fetchStatus()]);
+      set({ loading: false });
+    } catch (error) {
+      set({ loading: false, error: error instanceof Error ? error.message : String(error) });
+    }
+  },
+
+  async selectDefaultModel(provider: ProviderCatalogEntry["id"], model: string) {
+    const nextModel = model.trim();
+    if (!nextModel) {
+      set({ error: "Model is required." });
+      return;
+    }
+    const { client, cwd } = getClientAndCwd();
+    set({ loading: true, error: null });
+    try {
+      await callParsedControlMethod(client, "cowork/session/defaults/apply", {
+        cwd,
+        provider,
+        model: nextModel,
+      });
+      await useWorkspaceStore.getState().fetchControlState();
       set({ loading: false });
     } catch (error) {
       set({ loading: false, error: error instanceof Error ? error.message : String(error) });

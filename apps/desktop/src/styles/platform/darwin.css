@@ -72,6 +72,23 @@
   margin-top: 0;
 }
 
+:root[data-platform="darwin"] .settings-shell__page-header {
+  box-shadow: none;
+}
+
+:root[data-platform="darwin"] .settings-shell__page-titleband {
+  display: flex;
+  align-items: flex-end;
+  min-height: calc(var(--platform-titlebar-height) + 2.75rem);
+  padding-top: var(--platform-titlebar-height);
+  padding-bottom: 0.5rem;
+  box-shadow: 0 1px 0 var(--border-subtle);
+}
+
+:root[data-platform="darwin"] .settings-shell__page-titleband-row {
+  width: 100%;
+}
+
 :root[data-platform="darwin"] .settings-shell__main {
   position: relative;
   z-index: 81;
@@ -80,9 +97,15 @@
 :root[data-platform="darwin"] .settings-shell__drag-zone {
   position: absolute;
   top: 0;
-  left: 0;
+  left: var(--settings-sidebar-width);
   right: 0;
-  height: 2.75rem;
+  height: calc(var(--platform-titlebar-height) + 2.75rem);
   z-index: 80;
   -webkit-app-region: drag;
+}
+
+@media (max-width: 860px) {
+  :root[data-platform="darwin"] .settings-shell__drag-zone {
+    left: 0;
+  }
 }

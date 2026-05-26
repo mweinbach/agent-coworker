@@ -274,6 +274,7 @@ export type AppStoreState = {
       selectionRequestId?: number;
       skipWorkspaceSelect?: boolean;
       attachments?: import("./store.helpers/jsonRpcSocket").FileAttachmentInput[];
+      refreshSnapshot?: boolean;
     },
   ) => Promise<boolean>;
   renameThread: (threadId: string, newTitle: string) => void;

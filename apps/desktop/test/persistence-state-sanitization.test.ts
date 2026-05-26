@@ -234,6 +234,41 @@ describe("desktop persistence state validation", () => {
     }
   });
 
+  test("infers one-off chat kind from chat workspace paths", async () => {
+    const persistence = new PersistenceService();
+    const oneOffChat = path.join(
+      os.homedir(),
+      ".cowork",
+      "chats",
+      `persistence-kind-test-${crypto.randomUUID()}`,
+    );
+    oneOffTestDirs.push(oneOffChat);
+    await fs.rm(oneOffChat, { recursive: true, force: true });
+
+    await persistence.saveState({
+      version: 2,
+      workspaces: [
+        {
+          id: "ws_chat_legacy_kind",
+          name: "Chat folder",
+          path: oneOffChat,
+          workspaceKind: "project",
+          createdAt: TS,
+          lastOpenedAt: TS,
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: false,
+          yolo: false,
+        },
+      ],
+      threads: [],
+    });
+
+    const loaded = await persistence.loadState();
+    expect(loaded.workspaces).toHaveLength(1);
+    expect(loaded.workspaces[0]?.workspaceKind).toBe("oneOffChat");
+    expect(loaded.workspaces[0]?.path).toBe(await fs.realpath(oneOffChat));
+  });
+
   test("saveState preserves sanitized provider status snapshots", async () => {
     const persistence = new PersistenceService();
     const validWorkspace = path.join(userDataDir, "workspace-provider");

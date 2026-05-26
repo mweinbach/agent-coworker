@@ -68,6 +68,79 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
+  test("turn/start mirrors live stream notifications to every subscribed connection", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
+        runTurnImpl: (async () => ({
+          text: "mirrored reply",
+          responseMessages: [],
+        })) as any,
+      }),
+    );
+
+    try {
+      const creator = await connectJsonRpc(url);
+      const started = await creator.sendRequest("thread/start", { cwd: tmpDir });
+      await creator.waitFor((message) => message.method === "thread/started");
+      const threadId = started.result.thread.id;
+      creator.close();
+
+      const observer = await connectJsonRpc(url);
+      const sender = await connectJsonRpc(url);
+      const listObserver = await connectJsonRpc(url);
+
+      const resumeResponse = await observer.sendRequest("thread/resume", { threadId });
+      expect(resumeResponse.result.thread.id).toBe(threadId);
+      await observer.waitFor(
+        (message) => message.method === "thread/started" && message.params.thread.id === threadId,
+      );
+
+      const turnResponse = await sender.sendRequest("turn/start", {
+        threadId,
+        clientMessageId: "msg-mirror-1",
+        input: [{ type: "text", text: "hello from another client" }],
+      });
+      expect(turnResponse.result.turn.threadId).toBe(threadId);
+
+      const [observerTurnStarted, senderTurnStarted] = await Promise.all([
+        observer.waitFor((message) => message.method === "turn/started"),
+        sender.waitFor((message) => message.method === "turn/started"),
+      ]);
+      expect(observerTurnStarted.params.threadId).toBe(threadId);
+      expect(senderTurnStarted.params.threadId).toBe(threadId);
+
+      const [observerDelta, senderDelta] = await Promise.all([
+        observer.waitFor((message) => message.method === "item/agentMessage/delta"),
+        sender.waitFor((message) => message.method === "item/agentMessage/delta"),
+      ]);
+      expect(observerDelta.params.threadId).toBe(threadId);
+      expect(senderDelta.params.threadId).toBe(threadId);
+      expect(observerDelta.params.delta).toBe("mirrored reply");
+      expect(senderDelta.params.delta).toBe("mirrored reply");
+      const listInvalidation = await listObserver.waitFor(
+        (message) => message.method === "workspace/listChanged",
+      );
+      expect(listInvalidation.params.revision).toBeGreaterThan(0);
+      await expect(
+        listObserver.waitFor((message) => message.method === "item/agentMessage/delta", 250),
+      ).rejects.toThrow(/Timed out waiting for JSON-RPC message/);
+
+      const [observerCompleted, senderCompleted] = await Promise.all([
+        observer.waitFor((message) => message.method === "turn/completed"),
+        sender.waitFor((message) => message.method === "turn/completed"),
+      ]);
+      expect(observerCompleted.params.turn.status).toBe("completed");
+      expect(senderCompleted.params.turn.status).toBe("completed");
+
+      observer.close();
+      sender.close();
+      listObserver.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
   test("turn/start still loads a real system prompt when preloadSystemPrompt is disabled", async () => {
     const tmpDir = await makeTmpProject();
     let capturedSystem = "";

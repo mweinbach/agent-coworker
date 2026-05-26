@@ -1,6 +1,8 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
+import { getOneOffChatsRoot } from "../../../utils/oneOffChats";
 import type { SessionEvent } from "../../protocol";
 import type { SessionRuntime } from "../../session/SessionRuntime";
 import type { PersistedSessionRecord } from "../../sessionDb";
@@ -14,6 +16,7 @@ export function requireWorkspacePath(
   params: Record<string, unknown>,
   method: string,
   defaultWorkingDirectory?: string | null,
+  homedir?: string | null,
 ): string {
   const fallback =
     typeof defaultWorkingDirectory === "string" ? defaultWorkingDirectory.trim() : "";
@@ -31,7 +34,7 @@ export function requireWorkspacePath(
     return resolved;
   }
 
-  const oneOffChatsRoot = path.join(fallbackRoot, ".cowork", "chats");
+  const oneOffChatsRoot = getOneOffChatsRoot(homedir ?? os.homedir());
   if (resolved === fallbackRoot || isPathWithin(resolved, oneOffChatsRoot)) {
     return resolved;
   }

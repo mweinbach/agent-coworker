@@ -1,11 +1,6 @@
 import type { ProjectedItem } from "../../shared/projectedItems";
 import type { SessionEvent } from "../protocol";
-import {
-  developerDiagnosticSystemLineFromSessionEvent,
-  formatApprovalSystemLine,
-  formatAskSystemLine,
-  shouldSuppressRawDebugLogLine,
-} from "./conversationProjectionDiagnostics";
+import { shouldSuppressRawDebugLogLine } from "./conversationProjectionDiagnostics";
 import type { ConversationProjectionState } from "./conversationProjectionState";
 import type { ProjectionServerRequest } from "./conversationProjectionTypes";
 import { makeItemId } from "./shared";

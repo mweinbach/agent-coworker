@@ -34,6 +34,41 @@ export type MobileRelayStartInput = {
   featureFlags?: DesktopFeatureFlagOverrides;
 };
 
+export const MOBILE_RELAY_TRUSTED_DEVICE_PERMISSION_KEYS = [
+  "turns",
+  "serverRequests",
+  "providerAuth",
+  "mcpAuth",
+  "workspaceSettings",
+  "backups",
+] as const;
+
+export type MobileRelayTrustedDevicePermissionKey =
+  (typeof MOBILE_RELAY_TRUSTED_DEVICE_PERMISSION_KEYS)[number];
+
+export type MobileRelayTrustedDevicePermissions = Record<
+  MobileRelayTrustedDevicePermissionKey,
+  boolean
+>;
+
+export type MobileRelayTrustedPhoneDevice = {
+  deviceId: string;
+  fingerprint: string;
+  displayName: string | null;
+  lastPairedAt: string | null;
+  lastConnectedAt: string | null;
+  permissions: MobileRelayTrustedDevicePermissions;
+};
+
+export type MobileRelayForgetTrustedPhoneInput = {
+  deviceId?: string;
+};
+
+export type MobileRelayUpdateTrustedPhonePermissionsInput = {
+  deviceId: string;
+  permissions: Partial<Record<MobileRelayTrustedDevicePermissionKey, boolean>>;
+};
+
 export type MobileRelayBridgeState = {
   status: "idle" | "starting" | "pairing" | "connected" | "reconnecting" | "error";
   workspaceId: string | null;
@@ -58,6 +93,7 @@ export type MobileRelayBridgeState = {
   } | null;
   trustedPhoneDeviceId: string | null;
   trustedPhoneFingerprint: string | null;
+  trustedPhoneDevices: MobileRelayTrustedPhoneDevice[];
   directUrl: string | null;
   ticketUrl: string | null;
   certSha256: string | null;
@@ -161,6 +197,10 @@ export type ReadFileForPreviewOutput = {
 
 export type CopyPathInput = {
   path: string;
+};
+
+export type CopyTextInput = {
+  text: string;
 };
 
 export type CreateDirectoryInput = {
@@ -318,8 +358,14 @@ export interface DesktopApi {
   startMobileRelay(opts: MobileRelayStartInput): Promise<MobileRelayBridgeState>;
   stopMobileRelay(): Promise<MobileRelayBridgeState>;
   getMobileRelayState(): Promise<MobileRelayBridgeState>;
+  refreshMobileRelayTrustedPhones(): Promise<MobileRelayBridgeState>;
   rotateMobileRelaySession(): Promise<MobileRelayBridgeState>;
-  forgetMobileRelayTrustedPhone(): Promise<MobileRelayBridgeState>;
+  forgetMobileRelayTrustedPhone(
+    opts?: MobileRelayForgetTrustedPhoneInput,
+  ): Promise<MobileRelayBridgeState>;
+  updateMobileRelayTrustedPhonePermissions(
+    opts: MobileRelayUpdateTrustedPhonePermissionsInput,
+  ): Promise<MobileRelayBridgeState>;
   loadState(): Promise<PersistedState>;
   saveState(state: PersistedState): Promise<void>;
   readTranscript(opts: ReadTranscriptInput): Promise<TranscriptEvent[]>;
@@ -351,6 +397,7 @@ export interface DesktopApi {
   openExternalUrl(opts: OpenExternalUrlInput): Promise<void>;
   revealPath(opts: RevealPathInput): Promise<void>;
   copyPath(opts: CopyPathInput): Promise<void>;
+  copyText(text: string): Promise<void>;
   createDirectory(opts: CreateDirectoryInput): Promise<void>;
   renamePath(opts: RenamePathInput): Promise<void>;
   trashPath(opts: TrashPathInput): Promise<void>;
@@ -375,8 +422,10 @@ export const DESKTOP_IPC_CHANNELS = {
   mobileRelayStart: "desktop:mobileRelayStart",
   mobileRelayStop: "desktop:mobileRelayStop",
   mobileRelayGetState: "desktop:mobileRelayGetState",
+  mobileRelayRefreshTrustedPhones: "desktop:mobileRelayRefreshTrustedPhones",
   mobileRelayRotateSession: "desktop:mobileRelayRotateSession",
   mobileRelayForgetTrustedPhone: "desktop:mobileRelayForgetTrustedPhone",
+  mobileRelayUpdateTrustedPhonePermissions: "desktop:mobileRelayUpdateTrustedPhonePermissions",
   loadState: "desktop:loadState",
   saveState: "desktop:saveState",
   readTranscript: "desktop:readTranscript",
@@ -409,6 +458,7 @@ export const DESKTOP_IPC_CHANNELS = {
   openExternalUrl: "desktop:openExternalUrl",
   revealPath: "desktop:revealPath",
   copyPath: "desktop:copyPath",
+  copyText: "desktop:copyText",
   createDirectory: "desktop:createDirectory",
   renamePath: "desktop:renamePath",
   trashPath: "desktop:trashPath",

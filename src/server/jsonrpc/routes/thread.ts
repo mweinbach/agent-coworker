@@ -7,10 +7,36 @@ import type { PersistedSessionRecord } from "../../sessionDb";
 import { JSONRPC_ERROR_CODES, type JsonRpcLiteRequest } from "../protocol";
 import { jsonRpcThreadTurnRequestSchemas } from "../schema.threadTurn";
 import { createThreadTurnProjector } from "../threadReadProjector";
+import { listWorkspaceSummaries } from "../workspaceCatalog";
 
 import type { JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
 
 const THREAD_READ_JOURNAL_BATCH_SIZE = 250;
+
+async function resolveThreadListWorkspacePath(
+  context: JsonRpcRouteContext,
+  params: Record<string, unknown>,
+  method: string,
+): Promise<string> {
+  try {
+    return context.utils.resolveWorkspacePath(params, method);
+  } catch (error) {
+    const requestedCwd = typeof params.cwd === "string" ? params.cwd.trim() : "";
+    if (method !== "thread/list" || !requestedCwd || !context.desktopService) {
+      throw error;
+    }
+
+    const { workspaces } = await listWorkspaceSummaries({
+      workingDirectory: context.getConfig().workingDirectory,
+      desktopService: context.desktopService,
+    });
+    const workspace = workspaces.find((entry) => entry.path === requestedCwd);
+    if (!workspace) {
+      throw error;
+    }
+    return workspace.path;
+  }
+}
 
 function sendInvalidParams(
   context: JsonRpcRouteContext,
@@ -104,13 +130,22 @@ export function createThreadRouteHandlers(context: JsonRpcRouteContext): JsonRpc
       context.jsonrpc.send(ws, { method: "thread/started", params: { thread } });
     },
 
-    "thread/list": (ws, message) => {
+    "thread/list": async (ws, message) => {
       const parsed = jsonRpcThreadTurnRequestSchemas["thread/list"].safeParse(message.params ?? {});
       if (!parsed.success) {
         sendInvalidParams(context, ws, message, parsed.error.issues[0]?.message);
         return;
       }
-      const cwd = context.utils.resolveWorkspacePath(parsed.data, message.method);
+      let cwd: string;
+      try {
+        cwd = await resolveThreadListWorkspacePath(context, parsed.data, message.method);
+      } catch (error) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: error instanceof Error ? error.message : `${message.method} requires cwd`,
+        });
+        return;
+      }
       const threads = new Map<
         string,
         ReturnType<JsonRpcRouteContext["utils"]["buildThreadFromRecord"]>
@@ -132,10 +167,17 @@ export function createThreadRouteHandlers(context: JsonRpcRouteContext): JsonRpc
       for (const runtime of context.threads.listLiveRoot({ cwd })) {
         threads.set(runtime.id, context.utils.buildThreadFromSession(runtime));
       }
+      const sorted = [...threads.values()].sort((left, right) =>
+        right.updatedAt.localeCompare(left.updatedAt),
+      );
+      const total = sorted.length;
+      const offset = parsed.data.offset ?? 0;
+      const limit = parsed.data.limit;
+      const paginated =
+        limit !== undefined ? sorted.slice(offset, offset + limit) : sorted.slice(offset);
       context.jsonrpc.sendResult(ws, message.id, {
-        threads: [...threads.values()].sort((left, right) =>
-          right.updatedAt.localeCompare(left.updatedAt),
-        ),
+        threads: paginated,
+        total,
       });
     },
 

@@ -154,6 +154,7 @@ export async function clearAllOfflineWorkspaceCache(): Promise<void> {
       "memories",
       "backups",
       "workspacePath",
+      "threadSnapshots",
     ];
     await Promise.all(
       keys.map(async (key) => {

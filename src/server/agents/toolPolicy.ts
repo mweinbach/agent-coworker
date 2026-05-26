@@ -6,7 +6,7 @@ export function filterToolsForRole(
 ): Record<string, any> {
   const allowed = new Set(role.allowTools);
   return Object.fromEntries(
-    Object.entries(tools).filter(([name, tool]) => {
+    Object.entries(tools).filter(([name, _tool]) => {
       if (allowed.has(name)) return true;
       if (!name.startsWith("mcp__")) return false;
       return !role.readOnly;

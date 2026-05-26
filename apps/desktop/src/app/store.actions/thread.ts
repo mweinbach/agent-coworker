@@ -246,15 +246,30 @@ export async function hydrateThreadSelection(
   }
 
   const rt = get().threadRuntimeById[threadId];
-  if (
-    get().selectedThreadId === threadId &&
-    (RUNTIME.threadSelectionRequests.has(threadId) || rt?.connected)
-  ) {
+  if (get().selectedThreadId === threadId && RUNTIME.threadSelectionRequests.has(threadId)) {
     set((state) => ({
       selectedWorkspaceId: thread.workspaceId,
       view: options.preserveView ? state.view : "chat",
     }));
     syncDesktopStateCache(get);
+    return;
+  }
+  if (get().selectedThreadId === threadId && rt?.connected) {
+    set((state) => ({
+      selectedWorkspaceId: thread.workspaceId,
+      view: options.preserveView ? state.view : "chat",
+    }));
+    syncDesktopStateCache(get);
+    if (options.reconnectAfterHydration) {
+      void get()
+        .reconnectThread(threadId, undefined, {
+          skipWorkspaceSelect: options.skipWorkspaceSelectOnReconnect,
+          refreshSnapshot: false,
+        })
+        .catch(() => {
+          // The next socket reconnect or thread selection will re-assert the live subscription.
+        });
+    }
     return;
   }
 
@@ -923,6 +938,7 @@ export function createThreadActions(
         selectionRequestId?: number;
         skipWorkspaceSelect?: boolean;
         attachments?: import("../store.helpers/jsonRpcSocket").FileAttachmentInput[];
+        refreshSnapshot?: boolean;
       },
     ) => {
       const isReconnectCurrent = () =>
@@ -975,6 +991,7 @@ export function createThreadActions(
         firstMessage,
         Boolean(firstMessage?.trim()),
         opts?.attachments,
+        opts?.refreshSnapshot !== undefined ? { refreshSnapshot: opts.refreshSnapshot } : undefined,
       );
       return true;
     },

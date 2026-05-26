@@ -1,77 +1,98 @@
 import { useState } from "react";
-import { Pressable, Text, View } from "react-native";
-
+import { Linking, Pressable, Text, View } from "react-native";
+import { parseRichBlocks, type RichBlock } from "@/components/thread/markdownParser";
+import { SourcesCarousel } from "@/components/thread/sources-carousel";
+import {
+  formatLinkDisplayLabel,
+  normalizeInlineLinkHref,
+  parseInlineMarkdown,
+} from "@/features/cowork/inlineMarkdown";
 import { useAppTheme } from "@/theme/use-app-theme";
+
+export type { RichBlock } from "@/components/thread/markdownParser";
+export { parseRichBlocks } from "@/components/thread/markdownParser";
 
 type MarkdownTextProps = {
   text: string;
   color?: string;
+  variant?: "default" | "reasoning";
 };
 
-type Block =
-  | { type: "text"; content: string }
-  | { type: "code"; language: string; content: string };
-
-function parseBlocks(text: string): Block[] {
-  const blocks: Block[] = [];
-  const codeBlockRegex = /```(\w*)\n([\s\S]*?)```/g;
-  let lastIndex = 0;
-  let match = codeBlockRegex.exec(text);
-  while (match !== null) {
-    if (match.index > lastIndex) {
-      blocks.push({ type: "text", content: text.slice(lastIndex, match.index) });
-    }
-    blocks.push({ type: "code", language: match[1] || "", content: match[2] });
-    lastIndex = match.index + match[0].length;
-    match = codeBlockRegex.exec(text);
-  }
-
-  if (lastIndex < text.length) {
-    blocks.push({ type: "text", content: text.slice(lastIndex) });
-  }
-
-  return blocks;
-}
-
-function InlineText({ text, color }: { text: string; color: string }) {
+function InlineText({
+  text,
+  color,
+  variant = "default",
+}: {
+  text: string;
+  color: string;
+  variant?: "default" | "reasoning";
+}) {
   const theme = useAppTheme();
+  const fontSize = variant === "reasoning" ? 13 : 16;
+  const lineHeight = variant === "reasoning" ? 20 : 26;
+  const runs = parseInlineMarkdown(text);
 
-  // Split by inline code backticks
-  const parts = text.split(/(`[^`]+`)/g);
+  async function openLink(href: string) {
+    const normalized = normalizeInlineLinkHref(href);
+    if (!normalized) return;
+    try {
+      const supported = await Linking.canOpenURL(normalized);
+      if (supported) {
+        await Linking.openURL(normalized);
+      }
+    } catch {
+      // Best-effort only — ignore unsupported or blocked URLs.
+    }
+  }
 
   return (
-    <Text selectable style={{ color, fontSize: 15, lineHeight: 22 }}>
-      {parts.map((part) => {
-        const partKey = `part:${part}`;
-        if (part.startsWith("`") && part.endsWith("`")) {
+    <Text selectable style={{ color, fontSize, lineHeight, letterSpacing: -0.2 }}>
+      {runs.map((run, index) => {
+        const runKey = `${run.type}:${index}:${"content" in run ? run.content : run.label}`;
+        if (run.type === "code") {
           return (
             <Text
-              key={partKey}
+              key={runKey}
               style={{
                 fontFamily: theme.fontFamilyMono,
-                fontSize: 13,
+                fontSize: fontSize - 1,
                 backgroundColor: theme.surfaceMuted,
                 color: theme.accent,
               }}
             >
-              {part.slice(1, -1)}
+              {run.content}
             </Text>
           );
         }
-
-        // Bold
-        const boldParts = part.split(/(\*\*[^*]+\*\*)/g);
-        return boldParts.map((bp) => {
-          const boldKey = `${partKey}:${bp}`;
-          if (bp.startsWith("**") && bp.endsWith("**")) {
-            return (
-              <Text key={boldKey} style={{ fontWeight: "700" }}>
-                {bp.slice(2, -2)}
-              </Text>
-            );
-          }
-          return <Text key={boldKey}>{bp}</Text>;
-        });
+        if (run.type === "bold") {
+          return (
+            <Text key={runKey} style={{ fontWeight: "700" }}>
+              {run.content}
+            </Text>
+          );
+        }
+        if (run.type === "italic") {
+          return (
+            <Text key={runKey} style={{ fontStyle: "italic" }}>
+              {run.content}
+            </Text>
+          );
+        }
+        if (run.type === "link") {
+          return (
+            <Text
+              key={runKey}
+              onPress={() => void openLink(run.href)}
+              style={{
+                color: theme.primary,
+                fontWeight: "600",
+              }}
+            >
+              {formatLinkDisplayLabel(run.label, run.href)}
+            </Text>
+          );
+        }
+        return <Text key={runKey}>{run.content}</Text>;
       })}
     </Text>
   );
@@ -147,27 +168,133 @@ function CodeBlock({ language, content }: { language: string; content: string })
   );
 }
 
-export function MarkdownText({ text, color }: MarkdownTextProps) {
+function ListBlock({
+  items,
+  ordered,
+  color,
+  variant,
+}: {
+  items: string[];
+  ordered: boolean;
+  color: string;
+  variant: "default" | "reasoning";
+}) {
   const theme = useAppTheme();
-  const blocks = parseBlocks(text);
-  const textColor = color ?? theme.text;
-
-  if (blocks.length === 1 && blocks[0].type === "text") {
-    return <InlineText text={blocks[0].content} color={textColor} />;
-  }
 
   return (
     <View style={{ gap: 8 }}>
-      {blocks.map((block) => {
-        const blockKey =
-          block.type === "code"
-            ? `code:${block.language}:${block.content}`
-            : `text:${block.content}`;
-        if (block.type === "code") {
-          return <CodeBlock key={blockKey} language={block.language} content={block.content} />;
-        }
-        return <InlineText key={blockKey} text={block.content} color={textColor} />;
-      })}
+      {items.map((item, index) => (
+        <View
+          key={`${ordered ? "ol" : "ul"}:${index}:${item.slice(0, 24)}`}
+          style={{ flexDirection: "row", gap: 10 }}
+        >
+          <Text
+            selectable
+            style={{
+              color: theme.primary,
+              fontSize: variant === "reasoning" ? 13 : 16,
+              lineHeight: variant === "reasoning" ? 20 : 26,
+              fontWeight: "600",
+              minWidth: ordered ? 22 : 14,
+            }}
+          >
+            {ordered ? `${index + 1}.` : "•"}
+          </Text>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <InlineText text={item} color={color} variant={variant} />
+          </View>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function HeadingBlock({
+  level,
+  content,
+  color,
+}: {
+  level: number;
+  content: string;
+  color: string;
+}) {
+  const fontSize = level <= 2 ? 20 : level === 3 ? 17 : 15;
+
+  return (
+    <Text
+      selectable
+      style={{
+        color,
+        fontSize,
+        lineHeight: fontSize + 6,
+        fontWeight: "700",
+        letterSpacing: -0.3,
+      }}
+    >
+      {content}
+    </Text>
+  );
+}
+
+function HorizontalRuleBlock() {
+  const theme = useAppTheme();
+  return (
+    <View
+      style={{
+        height: 1,
+        marginVertical: 4,
+        backgroundColor: theme.borderMuted,
+      }}
+    />
+  );
+}
+
+function RichBlockView({
+  block,
+  color,
+  variant,
+}: {
+  block: RichBlock;
+  color: string;
+  variant: "default" | "reasoning";
+}) {
+  switch (block.type) {
+    case "code":
+      return <CodeBlock language={block.language} content={block.content} />;
+    case "heading":
+      return <HeadingBlock level={block.level} content={block.content} color={color} />;
+    case "bullet-list":
+      return <ListBlock items={block.items} ordered={false} color={color} variant={variant} />;
+    case "numbered-list":
+      return <ListBlock items={block.items} ordered color={color} variant={variant} />;
+    case "sources":
+      return <SourcesCarousel items={block.items} />;
+    case "horizontal-rule":
+      return <HorizontalRuleBlock />;
+    case "paragraph":
+      return <InlineText text={block.content} color={color} variant={variant} />;
+  }
+}
+
+export function MarkdownText({ text, color, variant = "default" }: MarkdownTextProps) {
+  const theme = useAppTheme();
+  const blocks = parseRichBlocks(text);
+  const textColor = color ?? theme.text;
+
+  if (blocks.length === 1 && blocks[0].type === "paragraph") {
+    return <InlineText text={blocks[0].content} color={textColor} variant={variant} />;
+  }
+
+  return (
+    <View style={{ gap: 14 }}>
+      {blocks.map((block, index) => (
+        <RichBlockView
+          key={`${index}:${block.type}`}
+          block={block}
+          color={textColor}
+          variant={variant}
+        />
+      ))}
     </View>
   );
 }

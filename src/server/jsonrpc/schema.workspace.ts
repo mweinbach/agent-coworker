@@ -6,6 +6,23 @@ import {
 import { nonEmptyTrimmedStringSchema } from "./schema.shared";
 import { jsonRpcThreadSchema } from "./schema.threadTurn";
 
+const jsonRpcWorkspaceKindSchema = z.enum(["project", "oneOffChat"]);
+
+export const jsonRpcWorkspaceSummarySchema = z
+  .object({
+    id: nonEmptyTrimmedStringSchema,
+    name: z.string(),
+    path: nonEmptyTrimmedStringSchema,
+    workspaceKind: jsonRpcWorkspaceKindSchema,
+    createdAt: z.string().optional(),
+    lastOpenedAt: z.string().optional(),
+    defaultProvider: z.string().optional(),
+    defaultModel: z.string().optional(),
+    defaultEnableMcp: z.boolean().optional(),
+    yolo: z.boolean().optional(),
+  })
+  .strict();
+
 const spreadsheetViewportRequestSchema = z
   .object({
     startRow: z.number().int().nonnegative().optional(),
@@ -146,6 +163,12 @@ export const presentationPreviewResultSchema = z.discriminatedUnion("ok", [
 ]);
 
 export const jsonRpcWorkspaceRequestSchemas = {
+  "workspace/list": z.object({}).strict(),
+  "workspace/switch": z
+    .object({
+      workspaceId: nonEmptyTrimmedStringSchema,
+    })
+    .strict(),
   "cowork/workspace/bootstrap": z
     .object({
       cwd: nonEmptyTrimmedStringSchema.optional(),
@@ -168,6 +191,19 @@ export const jsonRpcWorkspaceRequestSchemas = {
 } as const;
 
 export const jsonRpcWorkspaceResultSchemas = {
+  "workspace/list": z
+    .object({
+      workspaces: z.array(jsonRpcWorkspaceSummarySchema),
+      activeWorkspaceId: nonEmptyTrimmedStringSchema.nullable(),
+    })
+    .strict(),
+  "workspace/switch": z
+    .object({
+      workspaceId: nonEmptyTrimmedStringSchema,
+      name: z.string(),
+      path: nonEmptyTrimmedStringSchema,
+    })
+    .strict(),
   "cowork/workspace/bootstrap": z
     .object({
       threads: z.array(jsonRpcThreadSchema),

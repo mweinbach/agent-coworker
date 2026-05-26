@@ -63,6 +63,7 @@ export function createControlSocketHelpers(
   const workspaceSessionWaiters = new Set<symbol>();
   const sessionSnapshotWaiters = new Set<symbol>();
   const disposedWorkspaces = new Set<string>();
+  const pendingWorkspaceSessionRefreshes = new Set<string>();
 
   function isWorkspaceDisposed(workspaceId: string): boolean {
     return disposedWorkspaces.has(workspaceId);
@@ -111,6 +112,8 @@ export function createControlSocketHelpers(
         messageCount: session.messageCount,
         lastEventSeq: session.lastEventSeq,
         draft: false,
+        archived: existing?.archived ?? false,
+        archivedAt: existing?.archivedAt,
         legacyTranscriptId,
       } satisfies ThreadRecord;
     });
@@ -187,12 +190,14 @@ export function createControlSocketHelpers(
     if (!selectedThreadId) {
       return null;
     }
-    if (nextThreads.some((thread) => thread.id === selectedThreadId)) {
+    if (nextThreads.some((thread) => thread.id === selectedThreadId && !thread.archived)) {
       return selectedThreadId;
     }
 
     const migratedThreadId =
-      nextThreads.find((thread) => thread.legacyTranscriptId === selectedThreadId)?.id ?? null;
+      nextThreads.find(
+        (thread) => thread.legacyTranscriptId === selectedThreadId && !thread.archived,
+      )?.id ?? null;
     if (migratedThreadId) {
       return migratedThreadId;
     }
@@ -201,7 +206,10 @@ export function createControlSocketHelpers(
       allThreads.find((thread) => thread.id === selectedThreadId)?.workspaceId ??
       selectedWorkspaceId ??
       workspaceId;
-    return nextThreads.find((thread) => thread.workspaceId === fallbackWorkspaceId)?.id ?? null;
+    return (
+      nextThreads.find((thread) => thread.workspaceId === fallbackWorkspaceId && !thread.archived)
+        ?.id ?? null
+    );
   }
 
   function omitSkillMutationPendingKeys(
@@ -399,6 +407,22 @@ export function createControlSocketHelpers(
     return [...workspaceIds];
   }
 
+  function scheduleWorkspaceSessionsRefresh(workspaceId: string) {
+    if (isWorkspaceDisposed(workspaceId) || pendingWorkspaceSessionRefreshes.has(workspaceId)) {
+      return;
+    }
+    pendingWorkspaceSessionRefreshes.add(workspaceId);
+    queueMicrotask(() => {
+      pendingWorkspaceSessionRefreshes.delete(workspaceId);
+      const currentGet = getControlStoreGet(workspaceId);
+      const currentSet = getControlStoreSet(workspaceId);
+      if (!currentGet || !currentSet || isWorkspaceDisposed(workspaceId)) {
+        return;
+      }
+      void requestWorkspaceSessions(currentGet, currentSet, workspaceId);
+    });
+  }
+
   function ensureJsonRpcControlLifecycle(get: StoreGet, set: StoreSet, workspaceId: string) {
     if (isWorkspaceDisposed(workspaceId)) {
       return;
@@ -430,7 +454,14 @@ export function createControlSocketHelpers(
     });
     jsonRpcLifecycleCleanupByWorkspace.set(workspaceId, cleanup);
     const routerCleanup = registerWorkspaceJsonRpcRouter(workspaceId, (message) => {
-      if (message.kind !== "notification" || message.method !== "cowork/control/event") {
+      if (message.kind !== "notification") {
+        return;
+      }
+      if (message.method === "workspace/listChanged") {
+        scheduleWorkspaceSessionsRefresh(workspaceId);
+        return;
+      }
+      if (message.method !== "cowork/control/event") {
         return;
       }
       const currentGet = getControlStoreGet(workspaceId);
@@ -1536,6 +1567,7 @@ export function createControlSocketHelpers(
     jsonRpcRouterCleanupByWorkspace.delete(workspaceId);
     jsonRpcBootstrapPromises.delete(workspaceId);
     jsonRpcBootstrapQueuedByWorkspace.delete(workspaceId);
+    pendingWorkspaceSessionRefreshes.delete(workspaceId);
     controlStoreGettersByWorkspace.delete(workspaceId);
     controlStoreSettersByWorkspace.delete(workspaceId);
   }
@@ -1581,6 +1613,7 @@ export function createControlSocketHelpers(
           jsonRpcRouterCleanupByWorkspace.delete(workspaceId);
           jsonRpcBootstrapPromises.delete(workspaceId);
           jsonRpcBootstrapQueuedByWorkspace.delete(workspaceId);
+          pendingWorkspaceSessionRefreshes.delete(workspaceId);
           controlStoreGettersByWorkspace.delete(workspaceId);
           controlStoreSettersByWorkspace.delete(workspaceId);
           return;
@@ -1595,6 +1628,7 @@ export function createControlSocketHelpers(
         jsonRpcRouterCleanupByWorkspace.clear();
         jsonRpcBootstrapPromises.clear();
         jsonRpcBootstrapQueuedByWorkspace.clear();
+        pendingWorkspaceSessionRefreshes.clear();
         controlStoreGettersByWorkspace.clear();
         controlStoreSettersByWorkspace.clear();
         controlSessionWaiters.clear();

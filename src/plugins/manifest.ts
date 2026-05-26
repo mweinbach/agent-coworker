@@ -81,6 +81,17 @@ export interface PluginManifest {
   rootDir: string;
 }
 
+export interface PluginInstallMetadata {
+  marketplace?: {
+    name: string;
+    displayName?: string;
+    category?: string;
+    installationPolicy?: string;
+    authenticationPolicy?: string;
+    sourceInput?: string;
+  };
+}
+
 export type ParsedPluginSkill = {
   rawName: string;
   description: string;
@@ -370,6 +381,14 @@ export function pluginManifestPathsForPluginRoot(pluginRoot: string): string[] {
   return PLUGIN_MANIFEST_DIR_NAMES.map((dirName) => path.join(pluginRoot, dirName, "plugin.json"));
 }
 
+function pluginInstallMetadataPathForManifestPath(manifestPath: string): string {
+  return path.join(path.dirname(manifestPath), "install.json");
+}
+
+export function pluginInstallMetadataPathsForPluginRoot(pluginRoot: string): string[] {
+  return PLUGIN_MANIFEST_DIR_NAMES.map((dirName) => path.join(pluginRoot, dirName, "install.json"));
+}
+
 export function manifestPathForPluginRoot(pluginRoot: string): string {
   return pluginManifestPathsForPluginRoot(pluginRoot)[0] ?? path.join(pluginRoot, "plugin.json");
 }
@@ -386,6 +405,74 @@ async function findPluginManifestPath(pluginRoot: string): Promise<string> {
     }
   }
   return manifestPathForPluginRoot(pluginRoot);
+}
+
+const pluginInstallMetadataSchema = z
+  .object({
+    marketplace: z
+      .object({
+        name: nonEmptyStringSchema,
+        displayName: nonEmptyStringSchema.optional(),
+        category: nonEmptyStringSchema.optional(),
+        installationPolicy: nonEmptyStringSchema.optional(),
+        authenticationPolicy: nonEmptyStringSchema.optional(),
+        sourceInput: nonEmptyStringSchema.optional(),
+      })
+      .optional(),
+  })
+  .passthrough();
+
+export async function readPluginInstallMetadata(
+  pluginRoot: string,
+): Promise<PluginInstallMetadata | null> {
+  for (const metadataPath of pluginInstallMetadataPathsForPluginRoot(pluginRoot)) {
+    try {
+      const raw = await fs.readFile(metadataPath, "utf-8");
+      const parsed = pluginInstallMetadataSchema.parse(JSON.parse(raw));
+      return {
+        ...(parsed.marketplace
+          ? {
+              marketplace: {
+                name: parsed.marketplace.name,
+                ...(parsed.marketplace.displayName
+                  ? { displayName: parsed.marketplace.displayName }
+                  : {}),
+                ...(parsed.marketplace.category ? { category: parsed.marketplace.category } : {}),
+                ...(parsed.marketplace.installationPolicy
+                  ? { installationPolicy: parsed.marketplace.installationPolicy }
+                  : {}),
+                ...(parsed.marketplace.authenticationPolicy
+                  ? { authenticationPolicy: parsed.marketplace.authenticationPolicy }
+                  : {}),
+                ...(parsed.marketplace.sourceInput
+                  ? { sourceInput: parsed.marketplace.sourceInput }
+                  : {}),
+              },
+            }
+          : {}),
+      };
+    } catch {
+      // Missing or malformed install metadata should not make the plugin unreadable.
+    }
+  }
+  return null;
+}
+
+export async function writePluginInstallMetadata(
+  pluginRoot: string,
+  metadata: PluginInstallMetadata,
+): Promise<void> {
+  const manifestPath = await findPluginManifestPath(pluginRoot);
+  const metadataPath = pluginInstallMetadataPathForManifestPath(manifestPath);
+  await fs.writeFile(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, "utf-8");
+}
+
+export async function clearPluginInstallMetadata(pluginRoot: string): Promise<void> {
+  await Promise.all(
+    pluginInstallMetadataPathsForPluginRoot(pluginRoot).map(async (metadataPath) => {
+      await fs.rm(metadataPath, { force: true }).catch(() => {});
+    }),
+  );
 }
 
 async function resolvePluginSkillsPaths(

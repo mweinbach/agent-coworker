@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { BUILT_IN_MARKETPLACE_REPO, type FetchLike } from "../extensions/source";
 import { renameMCPServerCredentials } from "../mcp/authStore";
 import type {
   AgentConfig,
@@ -12,9 +13,15 @@ import type {
 } from "../types";
 import { workspacePathOverlaps } from "../utils/workspacePath";
 import { buildPluginCatalogSnapshot } from "./catalog";
-import { readPluginManifest } from "./manifest";
+import {
+  clearPluginInstallMetadata,
+  type PluginInstallMetadata,
+  readPluginManifest,
+  writePluginInstallMetadata,
+} from "./manifest";
 import { readPluginMcpServers } from "./mcp";
 import { setPluginEnabled } from "./overrides";
+import { fetchRemotePluginMarketplace } from "./remoteMarketplace";
 import {
   buildPluginInstallPreview,
   type MaterializedPluginCandidate,
@@ -289,11 +296,52 @@ async function migrateBundledPluginMcpCredentials(opts: {
   }
 }
 
+type PluginMarketplaceInstallMetadata = NonNullable<PluginInstallMetadata["marketplace"]>;
+
+function normalizeInstallSourceInput(input: string): string {
+  return input.trim().replace(/\/+$/g, "");
+}
+
+async function resolveRemoteMarketplaceMetadataByPluginId(opts: {
+  input: string;
+  materialized: MaterializedPluginSource;
+  fetchImpl?: FetchLike;
+}): Promise<Map<string, PluginMarketplaceInstallMetadata>> {
+  if (opts.materialized.descriptor.repo !== BUILT_IN_MARKETPLACE_REPO) {
+    return new Map();
+  }
+
+  try {
+    const marketplace = await fetchRemotePluginMarketplace({ fetchImpl: opts.fetchImpl });
+    const normalizedInput = normalizeInstallSourceInput(opts.input);
+    const metadataByPluginId = new Map<string, PluginMarketplaceInstallMetadata>();
+    for (const entry of marketplace.plugins) {
+      if (!entry.sourceInput) {
+        continue;
+      }
+      if (normalizeInstallSourceInput(entry.sourceInput) !== normalizedInput) {
+        continue;
+      }
+      metadataByPluginId.set(entry.name, {
+        name: marketplace.name,
+        ...(marketplace.displayName ? { displayName: marketplace.displayName } : {}),
+        category: entry.category,
+        installationPolicy: entry.installationPolicy,
+        authenticationPolicy: entry.authenticationPolicy,
+        sourceInput: entry.sourceInput,
+      });
+    }
+    return metadataByPluginId;
+  } catch {
+    return new Map();
+  }
+}
+
 export async function previewPluginInstall(opts: {
   config: AgentConfig;
   input: string;
   targetScope: PluginInstallTargetScope;
-  fetchImpl?: import("../extensions/source").FetchLike;
+  fetchImpl?: FetchLike;
 }): Promise<PluginInstallPreview> {
   return await buildPluginInstallPreview({
     input: opts.input,
@@ -308,7 +356,7 @@ export async function installPluginsFromSource(opts: {
   config: AgentConfig;
   input: string;
   targetScope: PluginInstallTargetScope;
-  fetchImpl?: import("../extensions/source").FetchLike;
+  fetchImpl?: FetchLike;
 }): Promise<{
   preview: PluginInstallPreview;
   pluginIds: string[];
@@ -329,6 +377,11 @@ export async function installPluginsFromSource(opts: {
   const materialized = await materializePluginSource({
     input: opts.input,
     cwd: opts.config.workingDirectory,
+    fetchImpl: opts.fetchImpl,
+  });
+  const marketplaceMetadataByPluginId = await resolveRemoteMarketplaceMetadataByPluginId({
+    input: opts.input,
+    materialized,
     fetchImpl: opts.fetchImpl,
   });
 
@@ -357,6 +410,14 @@ export async function installPluginsFromSource(opts: {
           destinationRoot,
           conflictingRoots: targetRoots,
           onInstalled: async () => {
+            const marketplaceMetadata = marketplaceMetadataByPluginId.get(candidate.pluginId);
+            if (marketplaceMetadata) {
+              await writePluginInstallMetadata(destinationRoot, {
+                marketplace: marketplaceMetadata,
+              });
+            } else {
+              await clearPluginInstallMetadata(destinationRoot);
+            }
             await migrateBundledPluginMcpCredentials({
               config: opts.config,
               targetScope: opts.targetScope,

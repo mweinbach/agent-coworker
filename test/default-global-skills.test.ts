@@ -231,4 +231,47 @@ describe("default global skills bootstrap", () => {
       await fs.rm(workspace, { recursive: true, force: true });
     }
   });
+
+  test("does not record unavailable default marketplace plugins as complete", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-skills-missing-"));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-skills-workspace-"));
+    const skills: readonly DefaultSkillSpec[] = [{ id: "alpha" }, { id: "beta" }];
+    const initialFixture = createMarketplaceFixture(["alpha"]);
+    const config = makeConfig(workspace, home);
+
+    try {
+      const first = await ensureDefaultGlobalSkillsInstalled({
+        homedir: home,
+        config,
+        plugins: skills,
+        fetchImpl: createGitHubFetchStub(initialFixture.tree, initialFixture.files),
+      });
+
+      expect(first.installed).toEqual(["alpha"]);
+      const stateFile = defaultGlobalSkillsStateFile(home);
+      await expect(fs.access(path.join(home, ".agents", "plugins", "beta"))).rejects.toBeDefined();
+      expect(
+        (JSON.parse(await fs.readFile(stateFile, "utf-8")) as { plugins: string[] }).plugins,
+      ).toEqual(["alpha"]);
+
+      const retryFixture = createMarketplaceFixture(["alpha", "beta"]);
+      const second = await ensureDefaultGlobalSkillsInstalled({
+        homedir: home,
+        config,
+        plugins: skills,
+        fetchImpl: createGitHubFetchStub(retryFixture.tree, retryFixture.files),
+      });
+
+      expect(second.installed).toEqual(["beta"]);
+      await fs.access(
+        path.join(home, ".agents", "plugins", "beta", ".cowork-plugin", "plugin.json"),
+      );
+      expect(
+        (JSON.parse(await fs.readFile(stateFile, "utf-8")) as { plugins: string[] }).plugins,
+      ).toEqual(["alpha", "beta"]);
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(workspace, { recursive: true, force: true });
+    }
+  });
 });

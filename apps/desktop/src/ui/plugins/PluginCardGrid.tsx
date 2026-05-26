@@ -1,3 +1,5 @@
+import { PackageIcon } from "lucide-react";
+
 import { Badge } from "../../components/ui/badge";
 import { Card } from "../../components/ui/card";
 import type { PluginCatalogEntry } from "../../lib/wsProtocol";
@@ -13,7 +15,7 @@ export function PluginCardGrid({
   return (
     <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
       {plugins.map((plugin) => {
-        const icon = plugin.interface?.logo || plugin.interface?.composerIcon || "🧩";
+        const icon = plugin.interface?.logo || plugin.interface?.composerIcon;
         const subtitle = plugin.interface?.shortDescription || plugin.description;
         const installed = plugin.installed !== false;
         return (
@@ -27,7 +29,7 @@ export function PluginCardGrid({
               <div className="mb-2.5 flex items-start justify-between gap-3">
                 <div className="flex items-center gap-3">
                   <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border/50 bg-muted/35 text-lg">
-                    <SkillIcon icon={icon} />
+                    {icon ? <SkillIcon icon={icon} /> : <PackageIcon className="h-4 w-4" />}
                   </div>
                   <div className="min-w-0">
                     <div className="truncate font-semibold text-sm text-foreground">
@@ -37,7 +39,7 @@ export function PluginCardGrid({
                       <span>
                         {plugin.scope === "workspace" ? "Workspace plugin" : "User plugin"}
                       </span>
-                      <span>·</span>
+                      <span>/</span>
                       <span>
                         {plugin.discoveryKind === "marketplace" ? "Marketplace" : "Direct"}
                       </span>

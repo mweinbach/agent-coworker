@@ -142,7 +142,12 @@ export async function ensureDefaultGlobalSkillsInstalled(opts: {
 
   if (!opts.force) {
     const state = await readState(stateFile);
-    if (state && state.marketplace === marketplaceName) {
+    const requestedPluginIds = pluginSpecs.map((plugin) => plugin.id);
+    if (
+      state &&
+      state.marketplace === marketplaceName &&
+      requestedPluginIds.every((pluginId) => state.plugins.includes(pluginId))
+    ) {
       return {
         status: "already_installed",
         pluginsDir: opts.config.userPluginsDir ?? "",
@@ -159,6 +164,7 @@ export async function ensureDefaultGlobalSkillsInstalled(opts: {
   const installed: string[] = [];
   const skippedExisting: string[] = [];
   const skippedRemoved: string[] = [];
+  const recordedPluginIds = new Set<string>();
 
   opts.log?.(`Ensuring default marketplace plugins in ${opts.config.userPluginsDir ?? "(none)"}`);
 
@@ -171,6 +177,7 @@ export async function ensureDefaultGlobalSkillsInstalled(opts: {
     const pluginId = pluginSpec.id;
     if (!opts.force && overrides.user.plugins?.[pluginId] === false) {
       skippedRemoved.push(pluginId);
+      recordedPluginIds.add(pluginId);
       continue;
     }
     if (
@@ -178,12 +185,13 @@ export async function ensureDefaultGlobalSkillsInstalled(opts: {
       catalog.plugins.some((plugin) => plugin.id === pluginId && plugin.installed !== false)
     ) {
       skippedExisting.push(pluginId);
+      recordedPluginIds.add(pluginId);
       continue;
     }
 
     const marketplaceEntry = marketplace.plugins.find((entry) => entry.name === pluginId);
     if (!marketplaceEntry?.sourceInput) {
-      skippedExisting.push(pluginId);
+      opts.log?.(`Default marketplace plugin "${pluginId}" is not currently available.`);
       continue;
     }
 
@@ -194,6 +202,7 @@ export async function ensureDefaultGlobalSkillsInstalled(opts: {
       fetchImpl,
     });
     installed.push(pluginId);
+    recordedPluginIds.add(pluginId);
     catalog = await buildPluginCatalogSnapshot(opts.config, {
       fetchImpl,
       includeRemoteMarketplace: true,
@@ -204,7 +213,9 @@ export async function ensureDefaultGlobalSkillsInstalled(opts: {
     version: INSTALL_STATE_VERSION,
     marketplace: marketplaceName,
     installedAt: new Date().toISOString(),
-    plugins: pluginSpecs.map((plugin) => plugin.id),
+    plugins: pluginSpecs
+      .map((plugin) => plugin.id)
+      .filter((pluginId) => recordedPluginIds.has(pluginId)),
   };
   await fs.writeFile(stateFile, `${JSON.stringify(state, null, 2)}\n`, "utf-8");
 

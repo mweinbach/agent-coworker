@@ -89,11 +89,11 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
                       <DialogTitle className="text-xl">{plugin.displayName}</DialogTitle>
                       <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
                         <span>{pluginScopeLabel(plugin.scope)}</span>
-                        <span>·</span>
+                        <span>/</span>
                         <span>{pluginDiscoveryLabel(plugin.discoveryKind)}</span>
                         {marketLabel ? (
                           <>
-                            <span>·</span>
+                            <span>/</span>
                             <span>{marketLabel}</span>
                           </>
                         ) : null}
@@ -206,7 +206,7 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
                         <div className="text-sm font-medium">{app.displayName}</div>
                         <div className="text-xs text-muted-foreground">
                           {app.description ?? app.id}
-                          {app.authType ? ` · auth: ${app.authType}` : ""}
+                          {app.authType ? ` / auth: ${app.authType}` : ""}
                         </div>
                       </div>
                     ))}

@@ -388,6 +388,53 @@ describe("plugin catalog and install operations", () => {
     }
   });
 
+  test("installing a remote marketplace plugin preserves update provenance", async () => {
+    const workspace = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-market-install-provenance-workspace-"),
+    );
+    const home = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-market-install-provenance-home-"),
+    );
+    const builtInConfigDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-market-install-provenance-"),
+    );
+    const config = makeConfig(workspace, home, builtInConfigDir);
+    const fetchImpl = createRemoteMarketplaceFetch();
+    const sourceInput =
+      "https://github.com/mweinbach/cowork-skills-plugins/tree/main/plugins/figma-toolkit";
+
+    try {
+      await installPluginsFromSource({
+        config,
+        input: sourceInput,
+        targetScope: "user",
+        fetchImpl,
+      });
+
+      const catalog = await buildPluginCatalogSnapshot(config, {
+        includeRemoteMarketplace: true,
+        fetchImpl,
+      });
+
+      expect(catalog.warnings).toEqual([]);
+      expect(catalog.plugins).toHaveLength(1);
+      expect(catalog.plugins[0]).toMatchObject({
+        id: "figma-toolkit",
+        discoveryKind: "marketplace",
+        installed: true,
+        installSource: sourceInput,
+        marketplace: {
+          name: "cowork-test",
+          category: "Design",
+        },
+      });
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
   test("remote marketplace entries skip valid bundles with mismatched plugin ids", async () => {
     const workspace = await fs.mkdtemp(
       path.join(os.tmpdir(), "plugins-market-mismatch-workspace-"),

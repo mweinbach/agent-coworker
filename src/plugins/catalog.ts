@@ -5,6 +5,7 @@ import {
   buildPluginCatalogEntry,
   type PluginManifest,
   readPluginAppSummaries,
+  readPluginInstallMetadata,
   readPluginManifest,
   readPluginSkillSummaries,
 } from "./manifest";
@@ -113,7 +114,7 @@ export function comparePluginCatalogEntries(
 }
 
 function isPluginFromMarketplace(plugin: PluginCatalogEntry, marketplaceName: string): boolean {
-  return plugin.discoveryKind === "marketplace" && plugin.marketplace?.name === marketplaceName;
+  return plugin.marketplace?.name === marketplaceName;
 }
 
 export async function buildPluginCatalogSnapshot(
@@ -131,6 +132,26 @@ export async function buildPluginCatalogSnapshot(
   for (const candidate of discovery.plugins) {
     try {
       const manifest = await readPluginManifest(candidate.rootDir);
+      const installMetadata = await readPluginInstallMetadata(candidate.rootDir);
+      const metadataMarketplace = installMetadata?.marketplace;
+      const candidateMarketplace =
+        candidate.marketplace ??
+        (metadataMarketplace
+          ? {
+              name: metadataMarketplace.name,
+              ...(metadataMarketplace.displayName
+                ? { displayName: metadataMarketplace.displayName }
+                : {}),
+              ...(metadataMarketplace.category ? { category: metadataMarketplace.category } : {}),
+              ...(metadataMarketplace.installationPolicy
+                ? { installationPolicy: metadataMarketplace.installationPolicy }
+                : {}),
+              ...(metadataMarketplace.authenticationPolicy
+                ? { authenticationPolicy: metadataMarketplace.authenticationPolicy }
+                : {}),
+            }
+          : undefined);
+      const discoveryKind = candidateMarketplace ? "marketplace" : candidate.discoveryKind;
       const scope = candidate.scope ?? resolvePluginScope(config, candidate.rootDir);
       const pluginEnabled = isPluginEnabled(
         {
@@ -139,7 +160,7 @@ export async function buildPluginCatalogSnapshot(
           displayName: manifest.interface?.displayName ?? manifest.name,
           description: manifest.description,
           scope,
-          discoveryKind: candidate.discoveryKind,
+          discoveryKind,
           enabled: true,
           rootDir: manifest.rootDir,
           manifestPath: manifest.manifestPath,
@@ -156,26 +177,29 @@ export async function buildPluginCatalogSnapshot(
       const entry = await buildPluginCatalogEntryFromManifest({
         manifest,
         scope,
-        discoveryKind: candidate.discoveryKind,
+        discoveryKind,
         enabled: pluginEnabled,
         overrides,
         candidateWarnings: _entryWarnings(candidate),
         installed: true,
-        ...(candidate.marketplace
+        ...(metadataMarketplace?.sourceInput
+          ? { installSource: metadataMarketplace.sourceInput }
+          : {}),
+        ...(candidateMarketplace
           ? {
               marketplace: {
-                name: candidate.marketplace.name,
-                ...(candidate.marketplace.displayName
-                  ? { displayName: candidate.marketplace.displayName }
+                name: candidateMarketplace.name,
+                ...(candidateMarketplace.displayName
+                  ? { displayName: candidateMarketplace.displayName }
                   : {}),
-                ...(candidate.marketplace.category
-                  ? { category: candidate.marketplace.category }
+                ...(candidateMarketplace.category
+                  ? { category: candidateMarketplace.category }
                   : {}),
-                ...(candidate.marketplace.installationPolicy
-                  ? { installationPolicy: candidate.marketplace.installationPolicy }
+                ...(candidateMarketplace.installationPolicy
+                  ? { installationPolicy: candidateMarketplace.installationPolicy }
                   : {}),
-                ...(candidate.marketplace.authenticationPolicy
-                  ? { authenticationPolicy: candidate.marketplace.authenticationPolicy }
+                ...(candidateMarketplace.authenticationPolicy
+                  ? { authenticationPolicy: candidateMarketplace.authenticationPolicy }
                   : {}),
               },
             }

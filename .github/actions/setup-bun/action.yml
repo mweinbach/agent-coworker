@@ -1,0 +1,80 @@
+name: Setup Bun dependencies
+description: Install Bun, restore dependency caches, and install repo dependencies.
+
+inputs:
+  cache-scope:
+    description: Extra cache scope for jobs with different dependency roots.
+    required: false
+    default: root
+  cache-dependency-path:
+    description: Newline-separated files or globs that should invalidate the Bun package cache.
+    required: false
+    default: |
+      .bun-version
+      bun.lock
+      package.json
+      apps/desktop/package.json
+      packages/*/package.json
+  install-command:
+    description: Command used to install dependencies. Leave empty to skip installation.
+    required: false
+    default: bun install --frozen-lockfile
+
+runs:
+  using: composite
+  steps:
+    - name: Compute dependency cache hash
+      id: cache-hash
+      shell: bash
+      env:
+        CACHE_DEPENDENCY_PATH: ${{ inputs.cache-dependency-path }}
+      run: |
+        set -euo pipefail
+
+        digest="$(
+          while IFS= read -r path; do
+            if [ -z "$path" ]; then
+              continue
+            fi
+
+            matched=false
+            while IFS= read -r match; do
+              if [ -f "$match" ]; then
+                matched=true
+                git hash-object "$match"
+              fi
+            done < <(compgen -G "$path" || true)
+
+            if [ "$matched" = false ] && [ -f "$path" ]; then
+              git hash-object "$path"
+            fi
+          done <<< "$CACHE_DEPENDENCY_PATH" | git hash-object --stdin
+        )"
+
+        echo "value=$digest" >> "$GITHUB_OUTPUT"
+
+    - name: Setup Bun
+      uses: oven-sh/setup-bun@v2
+      with:
+        bun-version-file: ".bun-version"
+
+    - name: Restore Bun and Electron caches
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.bun/install/cache
+          ~/.cache/electron
+          ~/.cache/electron-builder
+          ~/Library/Caches/electron
+          ~/Library/Caches/electron-builder
+          ~\AppData\Local\electron\Cache
+          ~\AppData\Local\electron-builder\Cache
+        key: ${{ runner.os }}-${{ runner.arch }}-bun-${{ inputs.cache-scope }}-${{ steps.cache-hash.outputs.value }}
+        restore-keys: |
+          ${{ runner.os }}-${{ runner.arch }}-bun-${{ inputs.cache-scope }}-
+          ${{ runner.os }}-${{ runner.arch }}-bun-root-
+
+    - name: Install dependencies
+      if: ${{ inputs.install-command != '' }}
+      shell: bash
+      run: ${{ inputs.install-command }}

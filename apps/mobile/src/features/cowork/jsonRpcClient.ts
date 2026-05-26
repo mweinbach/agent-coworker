@@ -6,6 +6,7 @@ import type {
   CoworkReasoningDeltaNotification,
   CoworkThreadListResult,
   CoworkThreadReadResult,
+  CoworkThreadResumeResult,
   CoworkTurnCompletedNotification,
   CoworkTurnStartedNotification,
 } from "./protocolTypes";
@@ -15,11 +16,14 @@ import {
   coworkReasoningDeltaNotificationSchema,
   coworkThreadListResultSchema,
   coworkThreadReadResultSchema,
+  coworkThreadResumeResultSchema,
   coworkTurnCompletedNotificationSchema,
   coworkTurnStartedNotificationSchema,
 } from "./protocolTypes";
 
 const jsonRpcIdSchema = z.union([z.string(), z.number().finite()]);
+const JSONRPC_NOT_INITIALIZED_ERROR_CODE = -32002;
+const JSONRPC_ALREADY_INITIALIZED_ERROR_CODE = -32003;
 
 const jsonRpcRequestSchema = z
   .object({
@@ -58,6 +62,65 @@ export type JsonRpcId = z.infer<typeof jsonRpcIdSchema>;
 type JsonRpcRequestMessage = z.infer<typeof jsonRpcRequestSchema>;
 type JsonRpcNotificationMessage = z.infer<typeof jsonRpcNotificationSchema>;
 type JsonRpcResponseMessage = z.infer<typeof jsonRpcResponseSchema>;
+type JsonRpcResponseErrorPayload = NonNullable<JsonRpcResponseMessage["error"]>;
+
+class JsonRpcResponseError extends Error {
+  readonly code: number;
+  readonly data?: unknown;
+
+  constructor(error: JsonRpcResponseErrorPayload) {
+    super(error.message);
+    Object.setPrototypeOf(this, JsonRpcResponseError.prototype);
+    this.name = "JsonRpcResponseError";
+    this.code = error.code;
+    this.data = error.data;
+  }
+}
+
+function readErrorCode(error: unknown): number | undefined {
+  if (error && typeof error === "object" && "code" in error) {
+    const code = (error as { code: unknown }).code;
+    return typeof code === "number" ? code : undefined;
+  }
+  return undefined;
+}
+
+function readErrorMessage(error: unknown): string | undefined {
+  if (error && typeof error === "object" && "message" in error) {
+    const message = (error as { message: unknown }).message;
+    return typeof message === "string" ? message : undefined;
+  }
+  return undefined;
+}
+
+function matchesJsonRpcError(error: unknown, code: number, message: string): boolean {
+  return readErrorCode(error) === code || readErrorMessage(error) === message;
+}
+
+export type CoworkTurnInputPart =
+  | { type: "text"; text: string }
+  | { type: "file"; filename: string; contentBase64: string; mimeType: string }
+  | { type: "uploadedFile"; filename: string; path: string; mimeType: string };
+
+export type CoworkUploadedFile = {
+  type: "file_uploaded";
+  filename: string;
+  path: string;
+  sessionId?: string;
+};
+
+const coworkUploadedFileResultSchema = z
+  .object({
+    event: z
+      .object({
+        type: z.literal("file_uploaded"),
+        filename: z.string().trim().min(1),
+        path: z.string().trim().min(1),
+        sessionId: z.string().trim().min(1).optional(),
+      })
+      .passthrough(),
+  })
+  .strict();
 
 export type JsonRpcServerRequest =
   | {
@@ -88,6 +151,7 @@ export type JsonRpcServerRequest =
 
 export type JsonRpcNotification =
   | { method: "thread/started"; params: { thread: CoworkThreadListResult["threads"][number] } }
+  | { method: "workspace/listChanged"; params: { revision: number } }
   | { method: "turn/started"; params: CoworkTurnStartedNotification }
   | { method: "item/started"; params: CoworkItemNotification }
   | { method: "item/completed"; params: CoworkItemNotification }
@@ -136,6 +200,16 @@ function normalizeNotification(message: JsonRpcNotificationMessage): JsonRpcNoti
         params: z
           .object({
             thread: coworkThreadListResultSchema.shape.threads.element,
+          })
+          .strict()
+          .parse(message.params),
+      };
+    case "workspace/listChanged":
+      return {
+        method: "workspace/listChanged",
+        params: z
+          .object({
+            revision: z.number().int().nonnegative(),
           })
           .strict()
           .parse(message.params),
@@ -235,6 +309,8 @@ export class CoworkJsonRpcClient {
   private initialized = false;
   private readonly pending = new Map<JsonRpcId, PendingRequest>();
   private readonly clientInfo: JsonRpcClientOptions["clientInfo"];
+  private initializePromise: Promise<void> | null = null;
+  private transportGeneration = 0;
 
   constructor(options: JsonRpcClientOptions) {
     this.requestTimeoutMs = Math.max(1, options.requestTimeoutMs ?? 15_000);
@@ -245,7 +321,9 @@ export class CoworkJsonRpcClient {
   }
 
   resetTransportSession(reason = "Transport disconnected."): void {
+    this.transportGeneration += 1;
     this.initialized = false;
+    this.initializePromise = null;
     this.rejectAllPending(reason);
   }
 
@@ -253,32 +331,96 @@ export class CoworkJsonRpcClient {
     if (this.initialized) {
       return;
     }
-    await this.request("initialize", {
-      clientInfo: this.clientInfo,
-      capabilities: {
-        experimentalApi: false,
-      },
+    if (this.initializePromise) {
+      return await this.initializePromise;
+    }
+    const generation = this.transportGeneration;
+    const initializePromise = (async () => {
+      try {
+        await this.request("initialize", {
+          clientInfo: this.clientInfo,
+          capabilities: {
+            experimentalApi: false,
+          },
+        });
+      } catch (error) {
+        if (
+          !matchesJsonRpcError(error, JSONRPC_ALREADY_INITIALIZED_ERROR_CODE, "Already initialized")
+        ) {
+          throw error;
+        }
+      }
+      if (generation !== this.transportGeneration) {
+        throw new Error("Transport session reset while initializing.");
+      }
+      await this.notify("initialized", {});
+      if (generation !== this.transportGeneration) {
+        throw new Error("Transport session reset while initializing.");
+      }
+      this.initialized = true;
+    })().finally(() => {
+      if (this.initializePromise === initializePromise) {
+        this.initializePromise = null;
+      }
     });
-    await this.notify("initialized", {});
-    this.initialized = true;
+    this.initializePromise = initializePromise;
+    return await initializePromise;
   }
 
-  async requestThreadList(): Promise<CoworkThreadListResult> {
-    const result = await this.request("thread/list", {});
+  async requestThreadList(
+    cwd?: string,
+    limit?: number,
+    offset?: number,
+  ): Promise<CoworkThreadListResult> {
+    const initializing = this.ensureInitialized();
+    if (initializing) await initializing;
+    const params: Record<string, unknown> = {};
+    if (cwd) {
+      params.cwd = cwd;
+    }
+    if (limit !== undefined) {
+      params.limit = limit;
+    }
+    if (offset !== undefined) {
+      params.offset = offset;
+    }
+    const result = await this.request("thread/list", params);
     return coworkThreadListResultSchema.parse(result);
   }
 
   async readThread(threadId: string): Promise<CoworkThreadReadResult> {
+    const initializing = this.ensureInitialized();
+    if (initializing) await initializing;
     const result = await this.request("thread/read", { threadId });
     return coworkThreadReadResultSchema.parse(result);
   }
 
-  async startTurn(threadId: string, text: string, clientMessageId?: string): Promise<void> {
+  async resumeThread(threadId: string): Promise<CoworkThreadResumeResult> {
+    const initializing = this.ensureInitialized();
+    if (initializing) await initializing;
+    const result = await this.request("thread/resume", { threadId });
+    return coworkThreadResumeResultSchema.parse(result);
+  }
+
+  async startTurn(
+    threadId: string,
+    input: string | CoworkTurnInputPart[],
+    clientMessageId?: string,
+  ): Promise<void> {
     await this.request("turn/start", {
       threadId,
-      input: [{ type: "text", text }],
+      input: typeof input === "string" ? [{ type: "text", text: input }] : input,
       ...(clientMessageId ? { clientMessageId } : {}),
     });
+  }
+
+  async uploadFile(params: {
+    cwd?: string;
+    filename: string;
+    contentBase64: string;
+  }): Promise<CoworkUploadedFile> {
+    const result = await this.request("cowork/session/file/upload", params);
+    return coworkUploadedFileResultSchema.parse(result).event;
   }
 
   async interruptTurn(threadId: string): Promise<void> {
@@ -334,7 +476,7 @@ export class CoworkJsonRpcClient {
       this.pending.delete(message.id);
       clearTimeout(pending.timeoutHandle);
       if (message.error) {
-        pending.reject(new Error(message.error.message));
+        pending.reject(new JsonRpcResponseError(message.error));
         return;
       }
       pending.resolve(message.result);
@@ -362,7 +504,18 @@ export class CoworkJsonRpcClient {
     );
   }
 
-  private async request(method: string, params?: unknown): Promise<unknown> {
+  private ensureInitialized(): Promise<void> | null {
+    if (!this.initialized) {
+      return this.initialize();
+    }
+    return null;
+  }
+
+  private async request(
+    method: string,
+    params?: unknown,
+    retryNotInitialized = true,
+  ): Promise<unknown> {
     const id = ++this.nextId;
     const promise = new Promise<unknown>((resolve, reject) => {
       const timeoutHandle = setTimeout(() => {
@@ -371,6 +524,10 @@ export class CoworkJsonRpcClient {
       }, this.requestTimeoutMs);
       this.pending.set(id, { resolve, reject, timeoutHandle });
     });
+    // `sendTransport` can be slow or stall while the timeout rejects this promise.
+    // Attach a handler immediately so React Native does not surface the expected
+    // bootstrap retry as an uncaught promise before this method reaches `await promise`.
+    promise.catch(() => {});
     try {
       await this.sendTransport(
         JSON.stringify({
@@ -382,7 +539,21 @@ export class CoworkJsonRpcClient {
     } catch (error) {
       this.rejectPending(id, error);
     }
-    return await promise;
+    try {
+      return await promise;
+    } catch (error) {
+      if (
+        method !== "initialize" &&
+        retryNotInitialized &&
+        matchesJsonRpcError(error, JSONRPC_NOT_INITIALIZED_ERROR_CODE, "Not initialized")
+      ) {
+        this.initialized = false;
+        this.initializePromise = null;
+        await this.initialize();
+        return await this.request(method, params, false);
+      }
+      throw error;
+    }
   }
 
   private rejectPending(id: JsonRpcId, error: unknown): void {

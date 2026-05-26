@@ -81,9 +81,14 @@ export const useSkillsStore = create<SkillsStoreState>((set, get) => ({
   mutationPending: {},
 
   async fetchSkills() {
-    const { client, cwd } = getClientAndCwd();
     set({ loading: true, error: null });
     try {
+      const client = getActiveCoworkJsonRpcClient();
+      const cwd = useWorkspaceStore.getState().activeWorkspaceCwd;
+      if (!client || !cwd) {
+        set({ loading: false, error: null });
+        return;
+      }
       const [skillsResult, catalogResult] = await Promise.all([
         callParsedControlMethod(client, "cowork/skills/list", { cwd }),
         callParsedControlMethod(client, "cowork/skills/catalog/read", { cwd }),

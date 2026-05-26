@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { getAiCoworkerPaths } from "../src/connect";
 import { DEFAULT_PROVIDER_OPTIONS } from "../src/providers";
+import { resolveListeningHintsFromInterfaces } from "../src/server/index";
 import { ASK_SKIP_TOKEN } from "../src/server/protocol";
 import type { AgentSession } from "../src/server/session/AgentSession";
 import { SessionDb } from "../src/server/sessionDb";
@@ -103,6 +104,42 @@ async function waitForAbort(signal: AbortSignal, onAbort?: () => void): Promise<
 // ---------------------------------------------------------------------------
 
 describe("Server Startup", () => {
+  test("mobile H3 host hints prefer stable LAN addresses over link-local interfaces", () => {
+    const hints = resolveListeningHintsFromInterfaces("0.0.0.0", {
+      en5: [
+        {
+          address: "fe80::1847:4ad5:9c84:fc93",
+          family: "IPv6",
+          internal: false,
+          netmask: "ffff:ffff:ffff:ffff::",
+          mac: "36:45:a2:7f:6d:4c",
+          cidr: "fe80::1847:4ad5:9c84:fc93/64",
+          scopeid: 20,
+        },
+        {
+          address: "169.254.96.244",
+          family: "IPv4",
+          internal: false,
+          netmask: "255.255.0.0",
+          mac: "36:45:a2:7f:6d:4c",
+          cidr: "169.254.96.244/16",
+        },
+      ],
+      en0: [
+        {
+          address: "192.168.6.69",
+          family: "IPv4",
+          internal: false,
+          netmask: "255.255.252.0",
+          mac: "1c:1d:d3:df:eb:0f",
+          cidr: "192.168.6.69/22",
+        },
+      ],
+    });
+
+    expect(hints).toEqual(["192.168.6.69", "169.254.96.244", "127.0.0.1"]);
+  });
+
   test("startAgentServer returns server, config, system, and url", async () => {
     const tmpDir = await makeTmpProject();
     const { server, config, system, url } = await startAgentServer(serverOpts(tmpDir));
@@ -454,6 +491,62 @@ describe("HTTP Handler", () => {
         trustedDevices: [expect.objectContaining({ deviceId })],
       });
 
+      const listResponse = await fetch(`http://127.0.0.1:${server.port}/mobile-h3/trusted`, {
+        headers: {
+          Authorization: `Bearer ${mobileServer.adminToken}`,
+        },
+      });
+      expect(listResponse.status).toBe(200);
+      await expect(listResponse.json()).resolves.toMatchObject({
+        trustedDevices: [
+          {
+            deviceId,
+            permissions: {
+              turns: false,
+              serverRequests: false,
+              providerAuth: false,
+              mcpAuth: false,
+              workspaceSettings: false,
+              backups: false,
+            },
+          },
+        ],
+      });
+
+      const permissionsResponse = await fetch(`${httpUrl}/permissions`, {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${mobileServer.adminToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          permissions: {
+            turns: true,
+            backups: true,
+            unknownPermission: true,
+          },
+        }),
+      });
+      expect(permissionsResponse.status).toBe(200);
+      await expect(permissionsResponse.json()).resolves.toMatchObject({
+        trustedDevice: {
+          deviceId,
+          permissions: {
+            turns: true,
+            backups: true,
+            providerAuth: false,
+          },
+        },
+      });
+      await expect(loadH3PairingStoreState(tmpDir)).resolves.toMatchObject({
+        trustedDevices: [
+          expect.objectContaining({
+            deviceId,
+            permissions: expect.objectContaining({ turns: true, backups: true }),
+          }),
+        ],
+      });
+
       const authorized = await fetch(httpUrl, {
         method: "DELETE",
         headers: {
@@ -471,7 +564,7 @@ describe("HTTP Handler", () => {
     }
   });
 
-  test("stops the WebSocket server when mobile H3 startup fails", async () => {
+  test("falls back to an alternate H3 port when the requested mobile port is occupied", async () => {
     const tmpDir = await makeTmpProject();
     const mainPort = await reservePort();
     const occupiedMobileServer = Bun.serve({
@@ -481,24 +574,19 @@ describe("HTTP Handler", () => {
     });
 
     try {
-      await expect(
-        startAgentServer(
-          serverOpts(tmpDir, {
-            port: mainPort,
-            mobileH3: {
-              hostname: "0.0.0.0",
-              port: occupiedMobileServer.port,
-            },
-          }),
-        ),
-      ).rejects.toThrow();
+      const started = await startAgentServer(
+        serverOpts(tmpDir, {
+          port: mainPort,
+          mobileH3: {
+            hostname: "0.0.0.0",
+            port: occupiedMobileServer.port,
+          },
+        }),
+      );
 
-      const reboundServer = Bun.serve({
-        hostname: "127.0.0.1",
-        port: mainPort,
-        fetch: () => new Response("OK"),
-      });
-      await Promise.resolve(reboundServer.stop(true));
+      expect(started.mobileServer?.port).toBeDefined();
+      expect(started.mobileServer?.port).not.toBe(occupiedMobileServer.port);
+      await stopTestServer(started.server);
     } finally {
       await Promise.resolve(occupiedMobileServer.stop(true));
     }

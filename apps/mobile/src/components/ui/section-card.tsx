@@ -1,5 +1,7 @@
 import type { PropsWithChildren, ReactNode } from "react";
-import { Text, View } from "@/tw";
+import { Text, View } from "react-native";
+
+import { useAppTheme } from "@/theme/use-app-theme";
 
 type SectionCardProps = PropsWithChildren<{
   title: string;
@@ -8,25 +10,58 @@ type SectionCardProps = PropsWithChildren<{
   className?: string;
 }>;
 
-export function SectionCard({ title, description, action, children, className }: SectionCardProps) {
+export function SectionCard({ title, description, action, children }: SectionCardProps) {
+  const theme = useAppTheme();
+
   return (
     <View
-      className={`gap-[14px] rounded-[24px] border border-border-subtle bg-surface-card p-[18px] shadow-surface ${className || ""}`}
+      style={{
+        gap: 14,
+        borderRadius: 24,
+        borderCurve: "continuous",
+        borderWidth: 1,
+        borderColor: theme.borderMuted,
+        backgroundColor: theme.surface,
+        padding: 18,
+        boxShadow: theme.shadow,
+      }}
     >
-      <View className="flex-row items-start justify-between gap-md">
-        <View className="flex-1 gap-[6px]">
-          <Text selectable className="text-text-primary text-[17px] font-bold tracking-[-0.2px]">
+      <View
+        style={{
+          flexDirection: "row",
+          alignItems: "flex-start",
+          justifyContent: "space-between",
+          gap: 12,
+        }}
+      >
+        <View style={{ flex: 1, gap: 6 }}>
+          <Text
+            selectable
+            style={{
+              color: theme.text,
+              fontSize: 17,
+              fontWeight: "700",
+              letterSpacing: -0.2,
+            }}
+          >
             {title}
           </Text>
           {description ? (
-            <Text selectable className="text-text-secondary text-md leading-[20px]">
+            <Text
+              selectable
+              style={{
+                color: theme.textSecondary,
+                fontSize: 14,
+                lineHeight: 20,
+              }}
+            >
               {description}
             </Text>
           ) : null}
         </View>
         {action ? <View>{action}</View> : null}
       </View>
-      <View className="gap-md">{children}</View>
+      <View style={{ gap: 12 }}>{children}</View>
     </View>
   );
 }

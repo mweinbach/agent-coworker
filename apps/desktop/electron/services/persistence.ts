@@ -246,7 +246,11 @@ async function sanitizeWorkspaces(value: unknown): Promise<WorkspaceRecord[]> {
     const name = asNonEmptyString(item.name);
     const createdAt = asTimestamp(item.createdAt);
     const lastOpenedAt = asTimestamp(item.lastOpenedAt);
-    const workspaceKind = normalizeWorkspaceKind(item.workspaceKind);
+    const rawWorkspacePath = asNonEmptyString(item.path);
+    const workspaceKind: WorkspaceKind =
+      rawWorkspacePath && isPathInsideOneOffChatsRoot(rawWorkspacePath)
+        ? "oneOffChat"
+        : normalizeWorkspaceKind(item.workspaceKind);
     const workspacePath = await resolveWorkspacePath(item.path, workspaceKind);
     if (!id || !name || !createdAt || !lastOpenedAt || !workspacePath || seenWorkspaceIds.has(id)) {
       continue;

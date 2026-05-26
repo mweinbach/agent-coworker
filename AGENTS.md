@@ -8,6 +8,8 @@ All logic for the application should be done in the harness itself, consider the
 
 When you run into an issue, create tests to target the error. Then work on that error until the test passes. Make sure we have tests for all error cases to prevent regressions.
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/mweinbach/agent-coworker)
+
 ## Project Structure & Module Organization
 
 - `src/`: application code
@@ -237,6 +239,11 @@ Durable rules distilled from prior corrections. Apply before editing, not after.
 - **Bun-compiled sidecars**: never read `package.json` via runtime `__dirname` paths — compiled binaries run from `/$bunfs`. Use bundled imports or build-time injection.
 - **Three-tier inherit semantics**: never overload `undefined` for both "no-op" and "inherit"; add a dedicated clear/inherit path end-to-end so reset-to-default deletes persisted overrides instead of pinning the current built-in.
 - **Tool output overflow**: spill-to-workspace truncation is the default; the `read` tool is exempted so large file contents stay inline when explicitly requested.
+
+### Mobile UI Patterns
+
+- For iOS list reordering, do not force permanent SwiftUI edit mode just to expose move handles; it shows delete controls and reads like a broken settings screen. Use a scoped reorder mode or explicit drag gesture that preserves the intended visual hierarchy.
+- Avoid card-on-card mobile layouts for grouped lists; use one grouped container with separators and inline disclosure content unless nested content truly needs a separate surface.
 
 ### Desktop UI Patterns
 

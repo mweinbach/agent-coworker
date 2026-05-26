@@ -21,7 +21,9 @@ import type {
   DesktopMenuCommand,
   DesktopNotificationInput,
   ListDirectoryInput,
+  MobileRelayForgetTrustedPhoneInput,
   MobileRelayStartInput,
+  MobileRelayUpdateTrustedPhonePermissionsInput,
   OpenExternalUrlInput,
   OpenPathInput,
   PreferredFileAppInput,
@@ -90,6 +92,14 @@ const textVerbositySchema = z.enum(OPENAI_TEXT_VERBOSITY_VALUES);
 const webSearchBackendSchema = z.enum(CODEX_WEB_SEARCH_BACKEND_VALUES);
 const webSearchModeSchema = z.enum(CODEX_WEB_SEARCH_MODE_VALUES);
 const webSearchContextSizeSchema = z.enum(CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES);
+const mobileRelayTrustedDevicePermissionKeys = [
+  "turns",
+  "serverRequests",
+  "providerAuth",
+  "mcpAuth",
+  "workspaceSettings",
+  "backups",
+] as const;
 
 const contextMenuItemSchema: z.ZodType<ContextMenuItem> = z.object({
   id: safeIdSchema,
@@ -587,6 +597,55 @@ export const mobileRelayStartInputSchema: z.ZodType<MobileRelayStartInput> = z.o
   featureFlags: desktopFeatureFlagOverridesSchema.optional(),
 });
 
+const mobileRelayTrustedDevicePermissionsSchema = z.preprocess(
+  (value) => (value && typeof value === "object" && !Array.isArray(value) ? value : {}),
+  z.object({
+    turns: z.boolean().optional().default(false),
+    serverRequests: z.boolean().optional().default(false),
+    providerAuth: z.boolean().optional().default(false),
+    mcpAuth: z.boolean().optional().default(false),
+    workspaceSettings: z.boolean().optional().default(false),
+    backups: z.boolean().optional().default(false),
+  }),
+);
+
+const mobileRelayTrustedPhoneDeviceSchema = z.object({
+  deviceId: nonEmptyStringSchema,
+  fingerprint: nonEmptyStringSchema,
+  displayName: z.string().nullable(),
+  lastPairedAt: z.string().nullable().optional().default(null),
+  lastConnectedAt: z.string().nullable().optional().default(null),
+  permissions: mobileRelayTrustedDevicePermissionsSchema,
+});
+
+export const mobileRelayForgetTrustedPhoneInputSchema: z.ZodType<MobileRelayForgetTrustedPhoneInput> =
+  z
+    .object({
+      deviceId: optionalNonEmptyStringSchema,
+    })
+    .optional()
+    .default({});
+
+const mobileRelayTrustedDevicePermissionsPatchSchema = z
+  .object(
+    Object.fromEntries(
+      mobileRelayTrustedDevicePermissionKeys.map((key) => [key, z.boolean().optional()]),
+    ) as Record<
+      (typeof mobileRelayTrustedDevicePermissionKeys)[number],
+      z.ZodOptional<z.ZodBoolean>
+    >,
+  )
+  .strict()
+  .refine((value) => Object.values(value).some((entry) => typeof entry === "boolean"), {
+    message: "must include at least one permission",
+  });
+
+export const mobileRelayUpdateTrustedPhonePermissionsInputSchema: z.ZodType<MobileRelayUpdateTrustedPhonePermissionsInput> =
+  z.object({
+    deviceId: nonEmptyStringSchema,
+    permissions: mobileRelayTrustedDevicePermissionsPatchSchema,
+  });
+
 export const mobileRelayBridgeStateSchema = z.object({
   status: z.enum(["idle", "starting", "pairing", "connected", "reconnecting", "error"]),
   workspaceId: z.string().nullable(),
@@ -601,6 +660,7 @@ export const mobileRelayBridgeStateSchema = z.object({
   pairingPayload: mobileRelayPairingPayloadSchema.nullable(),
   trustedPhoneDeviceId: z.string().nullable(),
   trustedPhoneFingerprint: z.string().nullable(),
+  trustedPhoneDevices: z.array(mobileRelayTrustedPhoneDeviceSchema).optional().default([]),
   directUrl: z.string().nullable(),
   ticketUrl: z.string().nullable(),
   certSha256: z.string().nullable(),

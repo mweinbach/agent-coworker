@@ -87,4 +87,29 @@ describe("mobile pairing scan handler", () => {
     expect(onPairingError).toHaveBeenLastCalledWith("offline");
     expect(onSuccess).not.toHaveBeenCalled();
   });
+
+  test("reports invalid QR payloads without starting a pairing attempt", async () => {
+    const connectWithQr = mock(async () => {});
+    const setScannedPayload = mock(() => {});
+    const onSuccess = mock(() => {});
+    const onInvalidPayload = mock(() => {});
+    const onPairingError = mock(() => {});
+
+    const handler = createPairingScanHandler({
+      validatePairingPayload: () => ({ success: false, error: "not a Cowork QR" }),
+      connectWithQr,
+      setScannedPayload,
+      onSuccess,
+      onInvalidPayload,
+      onPairingError,
+    });
+
+    await handler.handleScan({ data: "nope" });
+
+    expect(connectWithQr).not.toHaveBeenCalled();
+    expect(setScannedPayload).not.toHaveBeenCalled();
+    expect(onInvalidPayload).toHaveBeenCalledWith("not a Cowork QR");
+    expect(onPairingError).not.toHaveBeenCalled();
+    expect(onSuccess).not.toHaveBeenCalled();
+  });
 });

@@ -24,10 +24,15 @@ started by the desktop sidecar. Pairing details are in
 [`docs/quic-pairing.md`](./quic-pairing.md).
 
 - `POST /pair` accepts a scanned `cowork-pair://` ticket, nonce, and mobile identity,
-  then returns a bearer session token.
+  validates the full advertised endpoint material, then returns a bearer session token.
 - `POST /rpc` accepts one JSON-RPC-lite request/notification/response per body and returns
   the JSON-RPC response payload.
 - `GET /events` streams JSON-RPC-lite notifications and server requests as Server-Sent Events.
+
+`/rpc` and `/events` require both `Authorization: Bearer <sessionToken>` and the paired
+`x-cowork-mobile-device-id` header. The H3 listener keeps one trusted-device record per mobile
+device id, and desktop-side per-device permissions gate mutating JSON-RPC methods such as turns,
+provider auth, MCP auth, backups, workspace settings, and server-request responses.
 
 The JSON-RPC handshake (`initialize`, then `initialized`) is still required before calling
 `thread/*`, `turn/*`, or `cowork/*`.
@@ -96,6 +101,8 @@ Any request before the handshake completes is rejected with a JSON-RPC error:
 - `thread/read`
 - `thread/unsubscribe`
 - `thread/hydrate`
+- `workspace/list`
+- `workspace/switch`
 - `turn/start`
 - `turn/steer`
 - `turn/interrupt`
@@ -251,6 +258,21 @@ The desktop JSON-RPC path now uses this namespace so one workspace connection ca
 - opt-in workspace backups
 
 `thread/list` and workspace-scoped `cowork/*` control methods now default omitted `cwd` to the sidecar/server working directory. Mobile and other remote clients no longer need to know a host filesystem path just to list threads or read workspace control state.
+
+`thread/list` accepts optional pagination params on a workspace's thread summaries:
+
+- `limit`: positive integer maximum number of entries to return after sorting
+- `offset`: zero-based index into the sorted list (defaults to `0`)
+
+When either param is provided, the server filters and deduplicates thread summaries, sorts them by `updatedAt` descending, slices with `[offset, offset + limit)`, and returns `{ threads, total }` where `total` is the full sorted count before slicing. Omit both `limit` and `offset` to preserve the previous unbounded behavior (still returns `total`).
+
+`workspace/list` returns the desktop workspace catalog when the sidecar is started with `COWORK_WEB_DESKTOP_SERVICE=1` (desktop/mobile relay). Each workspace summary includes `id`, `name`, `path`, `workspaceKind` (`project` or `oneOffChat`), timestamps, and default settings. The result also includes `activeWorkspaceId` for the workspace matching the sidecar working directory, or the most recently opened workspace when no exact match exists. Outside desktop mode, the server returns a single `project` workspace for the current working directory.
+
+`workspace/switch` validates a workspace id from the catalog and returns `{ workspaceId, name, path }`. Mobile/desktop clients use this as the control-plane handoff before reconnecting transport state to the selected workspace server.
+
+`workspace/listChanged` is a server notification emitted when the desktop-persisted workspace/thread state changes or when live session metadata changes enough to affect thread summaries, such as a mobile-initiated turn updating title, preview, timestamp, status, or counters. Clients should treat it as an invalidation signal, then refetch `workspace/list` and their bounded `thread/list` summaries to stay in sync with actions from any connected surface.
+
+One-off chat thread workspaces must live under the global `~/.cowork/chats` directory. Project-local `.cowork/chats` paths are not accepted for `thread/list` or `thread/start`.
 
 `cowork/session/state/read` returns the current workspace control session state as a bundle of `config_updated`, `session_settings`, and `session_config` session events so JSON-RPC clients can hydrate provider/model defaults before diffing local settings.
 

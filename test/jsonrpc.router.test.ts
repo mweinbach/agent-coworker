@@ -27,7 +27,29 @@ function createRuntime(session: any) {
   };
 }
 
-function createRouterHarness() {
+function createRouterHarness(
+  opts: {
+    workingDirectory?: string;
+    desktopService?: JsonRpcRouteContext["desktopService"];
+    resolveWorkspacePath?: JsonRpcRouteContext["utils"]["resolveWorkspacePath"];
+    persistedRecords?: Array<{
+      sessionId: string;
+      title: string;
+      lastMessagePreview: string;
+      provider: "google";
+      model: string;
+      workingDirectory: string;
+      createdAt: string;
+      updatedAt: string;
+      messageCount: number;
+      lastEventSeq: number;
+      titleSource: string;
+      hasPendingAsk: boolean;
+      hasPendingApproval: boolean;
+      executionState: string | null;
+    }>;
+  } = {},
+) {
   const sent: unknown[] = [];
   const enqueued: unknown[] = [];
   const subscribed: string[] = [];
@@ -49,9 +71,10 @@ function createRouterHarness() {
   };
   const session = { id: thread.id } as any;
   const runtime = createRuntime(session) as any;
+  const workingDirectory = opts.workingDirectory ?? "C:/default";
 
   const context: JsonRpcRouteContext = {
-    getConfig: () => ({ workingDirectory: "C:/default" }) as any,
+    getConfig: () => ({ workingDirectory }) as any,
     threads: {
       create: ({ cwd, provider, model }) => {
         created.push({ cwd, provider, model });
@@ -60,7 +83,11 @@ function createRouterHarness() {
       load: () => null,
       getLive: () => undefined,
       getPersisted: () => null,
-      listPersisted: () => [],
+      listPersisted: () =>
+        (opts.persistedRecords ?? []).map((record) => ({
+          ...record,
+          sessionKind: "primary",
+        })) as any,
       listLiveRoot: () => [],
       subscribe: (_ws, threadId) => {
         subscribed.push(threadId);
@@ -78,6 +105,7 @@ function createRouterHarness() {
       }) as any,
       readState: (async () => []) as any,
     },
+    desktopService: opts.desktopService ?? null,
     journal: {
       enqueue: async (event) => {
         enqueued.push(event);
@@ -106,11 +134,21 @@ function createRouterHarness() {
       },
     },
     utils: {
-      resolveWorkspacePath: (params: Record<string, unknown>) =>
-        typeof params.cwd === "string" && params.cwd.trim() ? params.cwd.trim() : "C:/default",
+      resolveWorkspacePath:
+        opts.resolveWorkspacePath ??
+        ((params: Record<string, unknown>) =>
+          typeof params.cwd === "string" && params.cwd.trim()
+            ? params.cwd.trim()
+            : workingDirectory),
       extractTextInput: () => "",
       buildThreadFromSession: () => thread,
-      buildThreadFromRecord: () => thread,
+      buildThreadFromRecord: (record) => ({
+        ...thread,
+        id: record.sessionId,
+        updatedAt: record.updatedAt,
+        createdAt: record.createdAt,
+        cwd: record.workingDirectory,
+      }),
       shouldIncludeThreadSummary: () => true,
       buildControlSessionStateEvents: () => [],
       isSessionError: (event): event is Extract<any, { type: "error" }> => event.type === "error",
@@ -833,5 +871,190 @@ describe("JSON-RPC request router", () => {
         Object.defineProperty(globalThis, "fetch", originalFetchDescriptor);
       }
     }
+  });
+
+  test("workspace/list returns desktop workspace summaries with workspaceKind", async () => {
+    const harness = createRouterHarness({
+      workingDirectory: "/tmp/project-a",
+      desktopService: {
+        loadState: async () => ({
+          version: 2,
+          workspaces: [
+            {
+              id: "project-1",
+              name: "Project A",
+              path: "/tmp/project-a",
+              workspaceKind: "project",
+              createdAt: "2026-01-01T00:00:00.000Z",
+              lastOpenedAt: "2026-01-02T00:00:00.000Z",
+              defaultEnableMcp: true,
+              defaultBackupsEnabled: false,
+              yolo: false,
+            },
+          ],
+          threads: [],
+          developerMode: false,
+          showHiddenFiles: false,
+          perWorkspaceSettings: false,
+          desktopSettings: {
+            quickChat: {
+              shortcutEnabled: false,
+              shortcutAccelerator: "CommandOrControl+Shift+C",
+            },
+          },
+          desktopFeatureFlagOverrides: {},
+        }),
+      },
+    });
+
+    await harness.router({} as any, {
+      id: 99,
+      method: "workspace/list",
+      params: {},
+    });
+
+    expect(harness.sent).toEqual([
+      {
+        id: 99,
+        result: {
+          activeWorkspaceId: "project-1",
+          workspaces: [
+            expect.objectContaining({
+              id: "project-1",
+              workspaceKind: "project",
+            }),
+          ],
+        },
+      },
+    ]);
+  });
+
+  test("thread/list applies limit after sorting by updatedAt", async () => {
+    const harness = createRouterHarness({
+      persistedRecords: [
+        {
+          sessionId: "thread-old",
+          title: "Old",
+          lastMessagePreview: "",
+          provider: "google",
+          model: "gemini",
+          workingDirectory: "/tmp/project",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+          messageCount: 1,
+          lastEventSeq: 1,
+          titleSource: "default",
+          hasPendingAsk: false,
+          hasPendingApproval: false,
+          executionState: null,
+        },
+        {
+          sessionId: "thread-new",
+          title: "New",
+          lastMessagePreview: "",
+          provider: "google",
+          model: "gemini",
+          workingDirectory: "/tmp/project",
+          createdAt: "2026-01-02T00:00:00.000Z",
+          updatedAt: "2026-01-02T00:00:00.000Z",
+          messageCount: 1,
+          lastEventSeq: 1,
+          titleSource: "default",
+          hasPendingAsk: false,
+          hasPendingApproval: false,
+          executionState: null,
+        },
+      ],
+    });
+
+    await harness.router({} as any, {
+      id: 100,
+      method: "thread/list",
+      params: { cwd: "/tmp/project", limit: 1 },
+    });
+
+    expect(harness.sent).toEqual([
+      {
+        id: 100,
+        result: {
+          threads: [expect.objectContaining({ id: "thread-new" })],
+          total: 2,
+        },
+      },
+    ]);
+  });
+
+  test("thread/list accepts project cwd paths from the desktop workspace catalog", async () => {
+    const harness = createRouterHarness({
+      workingDirectory: "/tmp/project-a",
+      resolveWorkspacePath: (() => {
+        throw new Error(
+          "thread/list cwd must match the server workspace or a one-off chat workspace",
+        );
+      }) as any,
+      desktopService: {
+        loadState: async () => ({
+          version: 2,
+          workspaces: [
+            {
+              id: "project-b",
+              name: "Project B",
+              path: "/tmp/project-b",
+              workspaceKind: "project",
+              createdAt: "2026-01-01T00:00:00.000Z",
+              lastOpenedAt: "2026-01-02T00:00:00.000Z",
+              defaultEnableMcp: true,
+              defaultBackupsEnabled: false,
+              yolo: false,
+            },
+          ],
+          threads: [],
+          developerMode: false,
+          showHiddenFiles: false,
+          perWorkspaceSettings: false,
+          desktopSettings: {
+            quickChat: {
+              shortcutEnabled: false,
+              shortcutAccelerator: "CommandOrControl+Shift+C",
+            },
+          },
+          desktopFeatureFlagOverrides: {},
+        }),
+      },
+      persistedRecords: [
+        {
+          sessionId: "thread-project-b",
+          title: "Project B Thread",
+          lastMessagePreview: "",
+          provider: "google",
+          model: "gemini",
+          workingDirectory: "/tmp/project-b",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-02T00:00:00.000Z",
+          messageCount: 1,
+          lastEventSeq: 1,
+          titleSource: "default",
+          hasPendingAsk: false,
+          hasPendingApproval: false,
+          executionState: null,
+        },
+      ],
+    });
+
+    await harness.router({} as any, {
+      id: 101,
+      method: "thread/list",
+      params: { cwd: "/tmp/project-b", limit: 5 },
+    });
+
+    expect(harness.sent).toEqual([
+      {
+        id: 101,
+        result: {
+          threads: [expect.objectContaining({ id: "thread-project-b", cwd: "/tmp/project-b" })],
+          total: 1,
+        },
+      },
+    ]);
   });
 });

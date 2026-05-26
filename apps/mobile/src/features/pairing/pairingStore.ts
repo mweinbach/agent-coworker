@@ -58,23 +58,6 @@ export const usePairingStore = create<PairingStoreState>((set, get) => ({
           trustedMacs: connectionState.trustedDesktops,
         });
       },
-      onSecureError: (message) => {
-        set((state) => ({
-          connectionState: {
-            ...state.connectionState,
-            status: "error",
-            lastError: message,
-          },
-        }));
-      },
-      onSocketClosed: () => {
-        set((state) => ({
-          connectionState: {
-            ...state.connectionState,
-            status: "idle",
-          },
-        }));
-      },
     });
 
     set({

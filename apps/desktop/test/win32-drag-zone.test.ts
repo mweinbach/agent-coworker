@@ -64,4 +64,18 @@ describe("win32 sidebar titleband drag zone", () => {
       /:root\[data-platform="win32"\]\s+\.app-topbar__win32-left-strip\s*>\s*\*\s*\{[^}]*-webkit-app-region:\s*no-drag\s*;/s,
     );
   });
+
+  test("keeps the settings-shell drag zone transparent to pointer events so header actions stay clickable", () => {
+    const css = readWin32Css();
+
+    const dragZoneRule = css.match(
+      /:root\[data-platform="win32"\]\s+\.settings-shell__drag-zone\s*\{([^}]*)\}/s,
+    );
+
+    expect(dragZoneRule).not.toBeNull();
+    const body = dragZoneRule?.[1] ?? "";
+
+    expect(body).toMatch(/-webkit-app-region:\s*drag\s*;/);
+    expect(body).toMatch(/pointer-events:\s*none\s*;/);
+  });
 });

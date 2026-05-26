@@ -90,5 +90,19 @@ describe("settings shell", () => {
     expect(darwinCss).toMatch(
       /\.settings-shell__nav-titleband-row\s*\{[^}]*padding-left:\s*0\.75rem;/s,
     );
+    expect(darwinCss).toMatch(
+      /\.settings-shell__page-titleband\s*\{[^}]*min-height:\s*calc\(var\(--platform-titlebar-height\)\s*\+\s*2\.75rem\);[^}]*padding-top:\s*var\(--platform-titlebar-height\);/s,
+    );
+    expect(darwinCss).toMatch(
+      /\.settings-shell__page-titleband\s*\{[^}]*box-shadow:\s*0 1px 0 var\(--border-subtle\);/s,
+    );
+  });
+
+  test("carves settings header actions out of the native drag region", () => {
+    const stylesCss = readFileSync(resolve(import.meta.dir, "../src/styles.css"), "utf8");
+
+    expect(stylesCss).toMatch(
+      /\.settings-shell__header-actions,\s*\.settings-shell__header-actions \*\s*\{[^}]*-webkit-app-region:\s*no-drag\s*;/s,
+    );
   });
 });

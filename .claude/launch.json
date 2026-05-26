@@ -1,0 +1,14 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "expo-ios-preview",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "(cd apps/mobile && bunx expo run:ios) & bunx serve-sim"
+      ],
+      "port": 3200
+    }
+  ]
+}

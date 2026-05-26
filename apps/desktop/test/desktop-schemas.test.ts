@@ -3,7 +3,9 @@ import { describe, expect, test } from "bun:test";
 import {
   desktopMenuCommandSchema,
   mobileRelayBridgeStateSchema,
+  mobileRelayForgetTrustedPhoneInputSchema,
   mobileRelayStartInputSchema,
+  mobileRelayUpdateTrustedPhonePermissionsInputSchema,
   openExternalUrlInputSchema,
   persistedStateInputSchema,
   showQuickChatWindowInputSchema,
@@ -195,6 +197,23 @@ describe("desktop persisted-state schema defaults", () => {
       },
       trustedPhoneDeviceId: null,
       trustedPhoneFingerprint: null,
+      trustedPhoneDevices: [
+        {
+          deviceId: "phone-1",
+          fingerprint: "fingerprint",
+          displayName: "Phone",
+          lastPairedAt: "2026-05-23T12:00:00.000Z",
+          lastConnectedAt: null,
+          permissions: {
+            turns: true,
+            serverRequests: false,
+            providerAuth: false,
+            mcpAuth: false,
+            workspaceSettings: false,
+            backups: false,
+          },
+        },
+      ],
       directUrl: "https://127.0.0.1:34443",
       ticketUrl: "cowork-pair://ticket",
       certSha256: "a".repeat(64),
@@ -205,6 +224,22 @@ describe("desktop persisted-state schema defaults", () => {
 
     expect(parsed.status).toBe("pairing");
     expect(parsed.pairingPayload?.identityPub).toBe("mac-identity");
+    expect(parsed.trustedPhoneDevices[0]?.permissions.turns).toBe(true);
+  });
+
+  test("accepts mobile relay trusted-device commands", () => {
+    expect(mobileRelayForgetTrustedPhoneInputSchema.parse({ deviceId: "phone-1" })).toEqual({
+      deviceId: "phone-1",
+    });
+    expect(
+      mobileRelayUpdateTrustedPhonePermissionsInputSchema.parse({
+        deviceId: "phone-1",
+        permissions: { turns: true },
+      }),
+    ).toEqual({
+      deviceId: "phone-1",
+      permissions: { turns: true },
+    });
   });
 
   test("rejects legacy mobile relay bridge pairing payloads", () => {

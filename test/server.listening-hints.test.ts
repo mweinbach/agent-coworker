@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { resolveListeningHintsFromInterfaces } from "../src/server/index";
 
 describe("server listening hints", () => {
-  test("includes non-internal IPv6 addresses for wildcard mobile H3 hosts", () => {
+  test("includes non-internal addresses and loopback for wildcard mobile H3 hosts", () => {
     expect(
       resolveListeningHintsFromInterfaces("0.0.0.0", {
         en0: [
@@ -37,6 +37,6 @@ describe("server listening hints", () => {
           },
         ],
       }),
-    ).toEqual(["192.168.1.10", "2001:db8::10"]);
+    ).toEqual(["192.168.1.10", "2001:db8::10", "127.0.0.1"]);
   });
 });

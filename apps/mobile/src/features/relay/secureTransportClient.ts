@@ -10,6 +10,14 @@ const TRUSTED_DESKTOPS_KEY = "cowork.h3.trustedDesktops.v2";
 const ACTIVE_SESSION_KEY = "cowork.h3.activeSession.v1";
 const MOBILE_DEVICE_ID_KEY = "cowork.h3.mobileDeviceId.v1";
 const SESSION_TOKEN_KEY_PREFIX = "cowork_session_token_";
+const MOBILE_DEVICE_ID_HEADER = "x-cowork-mobile-device-id";
+const SIMULATOR_ENDPOINT_FALLBACK_HOSTS = ["127.0.0.1", "localhost", "10.0.2.2"];
+const DEFAULT_RECONNECT_BASE_DELAY_MS = 500;
+const DEFAULT_RECONNECT_MAX_DELAY_MS = 30_000;
+const DEFAULT_MAX_RECONNECT_ATTEMPTS = 12;
+const DEFAULT_MAX_CONSECUTIVE_REQUEST_FAILURES = 2;
+export const DESKTOP_IDENTITY_CHANGED_ERROR =
+  "Cowork Desktop restarted or rotated its certificate. Scan the QR code again to reconnect.";
 
 function sessionTokenKey(macDeviceId: string): string {
   return `${SESSION_TOKEN_KEY_PREFIX}${macDeviceId}`;
@@ -70,6 +78,13 @@ type PinnedHttpsStream = (
   },
 ) => Promise<() => void>;
 
+type SecureTransportClientOptions = {
+  reconnectBaseDelayMs?: number;
+  reconnectMaxDelayMs?: number;
+  maxReconnectAttempts?: number;
+  maxConsecutiveRequestFailures?: number;
+};
+
 let secureStorePromise: Promise<SecureStoreModule> | null = null;
 let secureStoreOverride: SecureStoreModule | null = null;
 let pinnedHttpsModulePromise: Promise<PinnedHttpsModule | null> | null = null;
@@ -81,6 +96,7 @@ type TrustedDesktopRecord = RelayTrustedDesktop & {
   endpointUrl: string;
   certSha256: string;
   spkiSha256: string;
+  mobileDeviceId: string;
 };
 
 type ActiveSession = {
@@ -89,6 +105,11 @@ type ActiveSession = {
   sessionToken: string;
   certSha256: string;
   spkiSha256: string;
+  mobileDeviceId: string;
+};
+
+type StoredActiveSession = {
+  macDeviceId: string;
 };
 
 function parseJsonObject(value: string | null): Record<string, unknown> | null {
@@ -128,6 +149,7 @@ function parseTrustedDesktopRecord(raw: unknown): TrustedDesktopRecord | null {
     endpointUrl: readString(record, "endpointUrl"),
     certSha256: readString(record, "certSha256"),
     spkiSha256: readString(record, "spkiSha256"),
+    mobileDeviceId: readString(record, "mobileDeviceId"),
   };
   return trusted.macDeviceId && trusted.endpointUrl && trusted.certSha256 && trusted.spkiSha256
     ? trusted
@@ -148,15 +170,13 @@ function parseTrustedDesktopRecords(value: string | null): TrustedDesktopRecord[
   }
 }
 
-function parseActiveSession(value: string | null): Partial<ActiveSession> | null {
+function parseActiveSession(value: string | null): StoredActiveSession | null {
   const record = parseJsonObject(value);
   if (!record) return null;
+  const macDeviceId = readString(record, "macDeviceId");
+  if (!macDeviceId) return null;
   return {
-    macDeviceId: readString(record, "macDeviceId"),
-    endpointUrl: readString(record, "endpointUrl"),
-    sessionToken: readString(record, "sessionToken"),
-    certSha256: readString(record, "certSha256"),
-    spkiSha256: readString(record, "spkiSha256"),
+    macDeviceId,
   };
 }
 
@@ -173,12 +193,40 @@ export type SecureTransportSnapshot = {
 export class SecureTransportClient {
   private trustedDesktops: TrustedDesktopRecord[] = [];
   private activeSession: ActiveSession | null = null;
+  private connectionStatus: RelayConnectionStatus = "idle";
   private lastError: string | null = null;
   private plaintextListeners = new Set<(text: string) => void>();
   private stateListeners = new Set<(snapshot: SecureTransportSnapshot) => void>();
   private secureErrorListeners = new Set<(message: string) => void>();
   private socketClosedListeners = new Set<(reason: string | null) => void>();
   private eventAbortController: AbortController | null = null;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectAttempt = 0;
+  private consecutiveRequestFailures = 0;
+  private activeSessionRestoreBlocked = false;
+  private readonly reconnectBaseDelayMs: number;
+  private readonly reconnectMaxDelayMs: number;
+  private readonly maxReconnectAttempts: number;
+  private readonly maxConsecutiveRequestFailures: number;
+
+  constructor(options: SecureTransportClientOptions = {}) {
+    this.reconnectBaseDelayMs = Math.max(
+      1,
+      options.reconnectBaseDelayMs ?? DEFAULT_RECONNECT_BASE_DELAY_MS,
+    );
+    this.reconnectMaxDelayMs = Math.max(
+      this.reconnectBaseDelayMs,
+      options.reconnectMaxDelayMs ?? DEFAULT_RECONNECT_MAX_DELAY_MS,
+    );
+    this.maxReconnectAttempts = Math.max(
+      1,
+      options.maxReconnectAttempts ?? DEFAULT_MAX_RECONNECT_ATTEMPTS,
+    );
+    this.maxConsecutiveRequestFailures = Math.max(
+      1,
+      options.maxConsecutiveRequestFailures ?? DEFAULT_MAX_CONSECUTIVE_REQUEST_FAILURES,
+    );
+  }
 
   async listTrustedDesktops(): Promise<RelayTrustedDesktop[]> {
     await this.loadTrustedState();
@@ -187,7 +235,7 @@ export class SecureTransportClient {
 
   async getSnapshot(): Promise<SecureTransportSnapshot> {
     await this.loadTrustedState();
-    if (this.activeSession && !this.eventAbortController) {
+    if (this.activeSession && !this.eventAbortController && !this.reconnectTimer) {
       this.openEventStream();
     }
     return this.snapshot();
@@ -198,10 +246,14 @@ export class SecureTransportClient {
       throw new Error("Unsupported pairing payload.");
     }
     await this.loadTrustedState();
+    this.clearReconnectTimer();
     this.eventAbortController?.abort();
     this.eventAbortController = null;
     this.activeSession = null;
+    this.activeSessionRestoreBlocked = true;
+    this.reconnectAttempt = 0;
     this.lastError = null;
+    this.connectionStatus = "pairing";
     this.emitState("pairing");
 
     try {
@@ -241,6 +293,7 @@ export class SecureTransportClient {
         endpointUrl,
         certSha256: payload.certSha256,
         spkiSha256: payload.spkiSha256,
+        mobileDeviceId: deviceId,
       };
       this.trustedDesktops = [
         trusted,
@@ -252,17 +305,23 @@ export class SecureTransportClient {
         sessionToken: body.sessionToken,
         certSha256: trusted.certSha256,
         spkiSha256: trusted.spkiSha256,
+        mobileDeviceId: trusted.mobileDeviceId,
       };
+      this.activeSessionRestoreBlocked = false;
       await this.persistTrustedState();
       this.openEventStream();
-      return this.emitState("connected");
+      this.reconnectAttempt = 0;
+      this.consecutiveRequestFailures = 0;
+      return this.setConnectionStatus("connected");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.activeSession = null;
+      this.clearReconnectTimer();
       this.lastError = message;
       await this.persistTrustedState();
+      this.activeSessionRestoreBlocked = false;
       this.emitSecureError(message);
-      this.emitState("error");
+      this.setConnectionStatus("error");
       throw error;
     }
   }
@@ -273,6 +332,9 @@ export class SecureTransportClient {
     if (!trusted) {
       throw new Error("Trusted desktop not found.");
     }
+    this.clearReconnectTimer();
+    this.eventAbortController?.abort();
+    this.eventAbortController = null;
     this.lastError = null;
     this.activeSession = {
       macDeviceId: trusted.macDeviceId,
@@ -280,29 +342,41 @@ export class SecureTransportClient {
       sessionToken: trusted.sessionToken,
       certSha256: trusted.certSha256,
       spkiSha256: trusted.spkiSha256,
+      mobileDeviceId: trusted.mobileDeviceId,
     };
+    this.activeSessionRestoreBlocked = false;
     await this.persistTrustedState();
     this.openEventStream();
-    return this.emitState("connected");
+    this.reconnectAttempt = 0;
+    this.consecutiveRequestFailures = 0;
+    return this.setConnectionStatus("connected");
   }
 
   async disconnect(): Promise<SecureTransportSnapshot> {
     await this.loadTrustedState();
+    this.clearReconnectTimer();
     this.eventAbortController?.abort();
     this.eventAbortController = null;
     this.activeSession = null;
+    this.activeSessionRestoreBlocked = true;
+    this.reconnectAttempt = 0;
+    this.consecutiveRequestFailures = 0;
     this.lastError = null;
     await this.persistTrustedState();
-    return this.emitState("idle");
+    this.activeSessionRestoreBlocked = false;
+    return this.setConnectionStatus("idle");
   }
 
   async forgetTrustedDesktop(macDeviceId: string): Promise<SecureTransportSnapshot> {
     await this.loadTrustedState();
+    const wasActiveSession = this.activeSession?.macDeviceId === macDeviceId;
     this.trustedDesktops = this.trustedDesktops.filter(
       (entry) => entry.macDeviceId !== macDeviceId,
     );
-    if (this.activeSession?.macDeviceId === macDeviceId) {
+    if (wasActiveSession) {
       this.activeSession = null;
+      this.activeSessionRestoreBlocked = true;
+      this.clearReconnectTimer();
       this.eventAbortController?.abort();
       this.eventAbortController = null;
     }
@@ -310,33 +384,74 @@ export class SecureTransportClient {
     const SecureStore = await loadSecureStore();
     await SecureStore.deleteItemAsync(sessionTokenKey(macDeviceId));
     await this.persistTrustedState();
-    return this.emitState("idle");
+    if (wasActiveSession) {
+      this.activeSessionRestoreBlocked = false;
+      return this.setConnectionStatus("idle");
+    }
+    return this.emitState();
   }
 
   async sendPlaintext(text: string): Promise<void> {
     if (!this.activeSession) {
       throw new Error("No active desktop connection.");
     }
-    const response = await fetchPinnedHttps({
-      url: `${this.activeSession.endpointUrl}/rpc`,
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${this.activeSession.sessionToken}`,
-        "content-type": "application/json",
-      },
-      body: text,
-      certSha256: this.activeSession.certSha256,
-      spkiSha256: this.activeSession.spkiSha256,
-    });
+    let response: PinnedHttpsResponse;
+    try {
+      response = await fetchPinnedHttps({
+        url: `${this.activeSession.endpointUrl}/rpc`,
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${this.activeSession.sessionToken}`,
+          [MOBILE_DEVICE_ID_HEADER]: this.activeSession.mobileDeviceId,
+          "content-type": "application/json",
+        },
+        body: text,
+        certSha256: this.activeSession.certSha256,
+        spkiSha256: this.activeSession.spkiSha256,
+      });
+    } catch (error) {
+      this.handleRequestFailure(error);
+      throw error;
+    }
     if (!response.ok) {
       throw new Error(`Desktop request failed with HTTP ${response.status}.`);
     }
+    this.consecutiveRequestFailures = 0;
     const responseText = await response.text();
+    if (isJsonRpcTransportAck(responseText)) {
+      return;
+    }
     if (responseText.trim()) {
       for (const listener of this.plaintextListeners) {
         listener(responseText);
       }
     }
+  }
+
+  private handleRequestFailure(error: unknown): void {
+    if (!this.activeSession) {
+      return;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    if (!isRepinRequiredError(message)) {
+      return;
+    }
+    this.consecutiveRequestFailures += 1;
+    if (this.consecutiveRequestFailures < this.maxConsecutiveRequestFailures) {
+      return;
+    }
+    this.consecutiveRequestFailures = 0;
+    this.clearReconnectTimer();
+    this.eventAbortController?.abort();
+    this.eventAbortController = null;
+    this.activeSession = null;
+    this.activeSessionRestoreBlocked = true;
+    this.lastError = DESKTOP_IDENTITY_CHANGED_ERROR;
+    this.emitSecureError(DESKTOP_IDENTITY_CHANGED_ERROR);
+    void this.persistTrustedState().catch((cause) => {
+      this.lastError = cause instanceof Error ? cause.message : String(cause);
+    });
+    this.setConnectionStatus("error");
   }
 
   subscribe(events: SecureTransportClientEvents): () => void {
@@ -363,9 +478,7 @@ export class SecureTransportClient {
     };
   }
 
-  private snapshot(
-    status: RelayConnectionStatus = this.activeSession ? "connected" : "idle",
-  ): SecureTransportSnapshot {
+  private snapshot(status: RelayConnectionStatus = this.connectionStatus): SecureTransportSnapshot {
     return {
       status,
       transportMode: "native",
@@ -375,6 +488,11 @@ export class SecureTransportClient {
       trustedDesktops: this.trustedDesktops.map(toPublicTrustedDesktop),
       lastError: this.lastError,
     };
+  }
+
+  private setConnectionStatus(status: RelayConnectionStatus): SecureTransportSnapshot {
+    this.connectionStatus = status;
+    return this.emitState(status);
   }
 
   private emitState(status?: RelayConnectionStatus): SecureTransportSnapshot {
@@ -404,6 +522,7 @@ export class SecureTransportClient {
       SecureStore.getItemAsync(ACTIVE_SESSION_KEY),
     ]);
     const records = parseTrustedDesktopRecords(trustedRaw);
+    const storedMobileDeviceId = await SecureStore.getItemAsync(MOBILE_DEVICE_ID_KEY);
     // Merge each session token back from its isolated per-device key
     const tokenResults = await Promise.all(
       records.map((entry) => SecureStore.getItemAsync(sessionTokenKey(entry.macDeviceId))),
@@ -412,22 +531,41 @@ export class SecureTransportClient {
       .map((entry, i) => ({
         ...entry,
         sessionToken: tokenResults[i] ?? entry.sessionToken,
+        mobileDeviceId: entry.mobileDeviceId || storedMobileDeviceId || "",
       }))
-      .filter((entry) => Boolean(entry.sessionToken));
+      .filter((entry) => Boolean(entry.sessionToken && entry.mobileDeviceId));
     const active = parseActiveSession(activeRaw);
     const trusted = active
       ? this.trustedDesktops.find((entry) => entry.macDeviceId === active.macDeviceId)
       : null;
-    this.activeSession =
-      active?.macDeviceId && active.endpointUrl && active.sessionToken && trusted
-        ? {
-            macDeviceId: active.macDeviceId,
-            endpointUrl: active.endpointUrl,
-            sessionToken: active.sessionToken,
-            certSha256: active.certSha256 ?? trusted.certSha256,
-            spkiSha256: active.spkiSha256 ?? trusted.spkiSha256,
-          }
-        : null;
+    if (!active) {
+      this.activeSessionRestoreBlocked = false;
+    }
+    if (this.activeSessionRestoreBlocked) {
+      this.activeSession = null;
+      if (
+        this.connectionStatus === "connected" ||
+        this.connectionStatus === "connecting" ||
+        this.connectionStatus === "reconnecting"
+      ) {
+        this.connectionStatus = "idle";
+      }
+      return;
+    }
+    this.activeSession = active && trusted ? activeSessionFromTrustedDesktop(trusted) : null;
+    if (this.activeSession) {
+      if (this.connectionStatus === "idle" || this.connectionStatus === "error") {
+        this.connectionStatus = "connected";
+      }
+      return;
+    }
+    if (
+      this.connectionStatus === "connected" ||
+      this.connectionStatus === "connecting" ||
+      this.connectionStatus === "reconnecting"
+    ) {
+      this.connectionStatus = "idle";
+    }
   }
 
   private async persistTrustedState(): Promise<void> {
@@ -446,54 +584,135 @@ export class SecureTransportClient {
       SecureStore.setItemAsync(TRUSTED_DESKTOPS_KEY, JSON.stringify(recordsWithoutTokens)),
       ...tokenWrites,
       this.activeSession
-        ? SecureStore.setItemAsync(ACTIVE_SESSION_KEY, JSON.stringify(this.activeSession))
+        ? SecureStore.setItemAsync(
+            ACTIVE_SESSION_KEY,
+            JSON.stringify({ macDeviceId: this.activeSession.macDeviceId }),
+          )
         : SecureStore.deleteItemAsync(ACTIVE_SESSION_KEY),
     ]);
   }
 
   private openEventStream(): void {
     if (!this.activeSession) return;
+    this.clearReconnectTimer();
     this.eventAbortController?.abort();
     const controller = new AbortController();
+    const session = this.activeSession;
     this.eventAbortController = controller;
     void readSseStream(
-      `${this.activeSession.endpointUrl}/events`,
-      this.activeSession.sessionToken,
+      `${session.endpointUrl}/events`,
+      session.sessionToken,
+      session.mobileDeviceId,
       {
-        certSha256: this.activeSession.certSha256,
-        spkiSha256: this.activeSession.spkiSha256,
+        certSha256: session.certSha256,
+        spkiSha256: session.spkiSha256,
       },
       {
         signal: controller.signal,
+        onOpen: () => {
+          if (this.eventAbortController !== controller) {
+            return;
+          }
+          this.reconnectAttempt = 0;
+          this.lastError = null;
+          if (this.connectionStatus !== "connected") {
+            this.setConnectionStatus("connected");
+          }
+        },
         onMessage: (text) => {
           for (const listener of this.plaintextListeners) {
             listener(text);
           }
         },
         onError: (message) => {
-          if (this.eventAbortController !== controller) {
-            return;
-          }
-          this.eventAbortController = null;
-          this.activeSession = null;
-          this.lastError = message;
-          this.emitSecureError(message);
-          void this.persistTrustedState();
-          this.emitState("error");
+          this.handleEventStreamLoss(controller, message, { emitSecureError: true });
         },
         onClose: (reason) => {
-          if (this.eventAbortController !== controller) {
-            return;
-          }
-          this.eventAbortController = null;
-          this.activeSession = null;
-          this.lastError = reason;
-          this.emitSocketClosed(reason);
-          void this.persistTrustedState();
-          this.emitState("idle");
+          this.handleEventStreamLoss(controller, reason ?? "Event stream closed.", {
+            emitSocketClosed: true,
+          });
         },
       },
     );
+  }
+
+  private handleEventStreamLoss(
+    controller: AbortController,
+    reason: string,
+    options: { emitSecureError?: boolean; emitSocketClosed?: boolean },
+  ): void {
+    if (this.eventAbortController !== controller) {
+      return;
+    }
+    this.eventAbortController = null;
+    if (options.emitSocketClosed) {
+      this.emitSocketClosed(reason);
+    }
+    if (options.emitSecureError) {
+      this.emitSecureError(reason);
+    }
+    this.lastError = reason;
+
+    if (!this.activeSession) {
+      this.setConnectionStatus("idle");
+      return;
+    }
+
+    if (isFatalSessionError(reason)) {
+      this.clearReconnectTimer();
+      this.activeSession = null;
+      this.activeSessionRestoreBlocked = true;
+      void this.persistTrustedState().catch((error) => {
+        this.lastError = error instanceof Error ? error.message : String(error);
+      });
+      this.setConnectionStatus("error");
+      return;
+    }
+
+    if (this.reconnectAttempt >= this.maxReconnectAttempts && isRepinRequiredError(reason)) {
+      this.clearReconnectTimer();
+      this.activeSession = null;
+      this.activeSessionRestoreBlocked = true;
+      this.lastError = DESKTOP_IDENTITY_CHANGED_ERROR;
+      void this.persistTrustedState().catch((error) => {
+        this.lastError = error instanceof Error ? error.message : String(error);
+      });
+      this.setConnectionStatus("error");
+      return;
+    }
+
+    void this.persistTrustedState();
+    this.setConnectionStatus("reconnecting");
+    this.scheduleReconnect();
+  }
+
+  private scheduleReconnect(): void {
+    if (!this.activeSession || this.reconnectTimer) {
+      return;
+    }
+    const attempt = this.reconnectAttempt + 1;
+    const delayMs = computeReconnectDelayMs(
+      attempt,
+      this.reconnectBaseDelayMs,
+      this.reconnectMaxDelayMs,
+    );
+    this.reconnectAttempt = attempt;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      if (!this.activeSession) {
+        return;
+      }
+      this.openEventStream();
+    }, delayMs);
+    (this.reconnectTimer as { unref?: () => void }).unref?.();
+  }
+
+  private clearReconnectTimer(): void {
+    if (!this.reconnectTimer) {
+      return;
+    }
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
   }
 }
 
@@ -544,11 +763,91 @@ function toPublicTrustedDesktop(entry: TrustedDesktopRecord): RelayTrustedDeskto
   };
 }
 
+function activeSessionFromTrustedDesktop(entry: TrustedDesktopRecord): ActiveSession {
+  return {
+    macDeviceId: entry.macDeviceId,
+    endpointUrl: entry.endpointUrl,
+    sessionToken: entry.sessionToken,
+    certSha256: entry.certSha256,
+    spkiSha256: entry.spkiSha256,
+    mobileDeviceId: entry.mobileDeviceId,
+  };
+}
+
+function computeReconnectDelayMs(attempt: number, baseDelayMs: number, maxDelayMs: number): number {
+  const normalizedAttempt = Math.max(1, Math.floor(attempt));
+  return Math.min(maxDelayMs, baseDelayMs * 2 ** (normalizedAttempt - 1));
+}
+
+function isFatalSessionError(message: string): boolean {
+  return /\b(?:HTTP 401|HTTP 403|Unauthorized)\b/i.test(message);
+}
+
+function isRepinRequiredError(message: string): boolean {
+  return (
+    /\b(?:Pinned HTTPS certificate mismatch|certificate mismatch|SSL|TLS|handshake)\b/i.test(
+      message,
+    ) ||
+    /\b(?:ECONNREFUSED|connection refused|network request failed|timed out|could not connect|Failed to connect)\b/i.test(
+      message,
+    )
+  );
+}
+
+function isJsonRpcTransportAck(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return true;
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    return (
+      parsed !== null &&
+      typeof parsed === "object" &&
+      !Array.isArray(parsed) &&
+      (parsed as Record<string, unknown>).ok === true &&
+      !("id" in parsed) &&
+      !("method" in parsed)
+    );
+  } catch {
+    return false;
+  }
+}
+
 function buildEndpointUrls(payload: PairingQrPayload): string[] {
   if (payload.hosts.length === 0) {
     throw new Error("Pairing ticket does not include a host.");
   }
-  return payload.hosts.map((host) => `https://${formatUrlHost(host)}:${payload.port}`);
+  return expandPairingHosts(payload.hosts).map(
+    (host) => `https://${formatUrlHost(host)}:${payload.port}`,
+  );
+}
+
+function expandPairingHosts(hosts: string[]): string[] {
+  const seen = new Set<string>();
+  const expandedHosts: string[] = [];
+
+  for (const host of [...hosts, ...SIMULATOR_ENDPOINT_FALLBACK_HOSTS]) {
+    const trimmed = host.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const normalized = normalizeEndpointHost(trimmed);
+    if (seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    expandedHosts.push(trimmed);
+  }
+
+  return expandedHosts;
+}
+
+function normalizeEndpointHost(host: string): string {
+  const trimmed = host.trim();
+  const unwrapped =
+    trimmed.startsWith("[") && trimmed.endsWith("]") ? trimmed.slice(1, -1) : trimmed;
+  return unwrapped.toLowerCase();
 }
 
 function formatUrlHost(host: string): string {
@@ -692,12 +991,14 @@ function randomBase64Url(byteLength: number): string {
 async function readSseStream(
   url: string,
   sessionToken: string,
+  mobileDeviceId: string,
   pins: {
     certSha256: string;
     spkiSha256: string;
   },
   opts: {
     signal: AbortSignal;
+    onOpen(): void;
     onMessage(text: string): void;
     onError(message: string): void;
     onClose(reason: string | null): void;
@@ -705,27 +1006,33 @@ async function readSseStream(
 ): Promise<void> {
   try {
     const parser = createSseParser(opts.onMessage);
+    let streamEnded = false;
     const streamCleanup = await openPinnedHttpsStream(
       {
         url,
         method: "GET",
-        headers: { authorization: `Bearer ${sessionToken}` },
+        headers: {
+          authorization: `Bearer ${sessionToken}`,
+          [MOBILE_DEVICE_ID_HEADER]: mobileDeviceId,
+        },
         certSha256: pins.certSha256,
         spkiSha256: pins.spkiSha256,
       },
       {
         onChunk: (chunk) => {
-          if (!opts.signal.aborted) {
+          if (!opts.signal.aborted && !streamEnded) {
             parser.push(chunk);
           }
         },
         onClose: (reason) => {
+          streamEnded = true;
           if (!opts.signal.aborted) {
             parser.flush();
             opts.onClose(reason);
           }
         },
         onError: (message) => {
+          streamEnded = true;
           if (!opts.signal.aborted) {
             opts.onError(message);
           }
@@ -737,6 +1044,7 @@ async function readSseStream(
         streamCleanup();
         return;
       }
+      opts.onOpen();
       opts.signal.addEventListener("abort", streamCleanup, { once: true });
       return;
     }
@@ -744,7 +1052,10 @@ async function readSseStream(
     const response = await fetchPinnedHttps({
       url,
       method: "GET",
-      headers: { authorization: `Bearer ${sessionToken}` },
+      headers: {
+        authorization: `Bearer ${sessionToken}`,
+        [MOBILE_DEVICE_ID_HEADER]: mobileDeviceId,
+      },
       certSha256: pins.certSha256,
       spkiSha256: pins.spkiSha256,
     });
@@ -754,6 +1065,7 @@ async function readSseStream(
     if (!response.ok) {
       throw new Error(`Event stream failed with HTTP ${response.status}.`);
     }
+    opts.onOpen();
     const body = await response.text();
     if (opts.signal.aborted) {
       return;

@@ -298,6 +298,58 @@ describe("mobile control stores", () => {
     ]);
   });
 
+  test("provider store applies provider and model defaults through the workspace control session", async () => {
+    const { client, calls } = createFakeClient((method) => {
+      if (method === "cowork/session/defaults/apply") {
+        return {
+          event: {
+            type: "session_config",
+            sessionId: "control-session",
+            config: {},
+          },
+        };
+      }
+      if (method === "cowork/session/state/read") {
+        return {
+          events: [
+            {
+              type: "config_updated",
+              sessionId: "control-session",
+              config: {
+                provider: "openai",
+                model: "gpt-5.4",
+                workingDirectory: workspaceCwd,
+              },
+            },
+          ],
+        };
+      }
+      throw new Error(`Unexpected method: ${method}`);
+    });
+    setActiveCoworkJsonRpcClient(client);
+
+    await useProviderStore.getState().selectDefaultModel("openai", "gpt-5.4");
+
+    expect(calls).toEqual([
+      {
+        method: "cowork/session/defaults/apply",
+        params: {
+          cwd: workspaceCwd,
+          provider: "openai",
+          model: "gpt-5.4",
+        },
+      },
+      {
+        method: "cowork/session/state/read",
+        params: {
+          cwd: workspaceCwd,
+        },
+      },
+    ]);
+    expect(useWorkspaceStore.getState().controlSnapshot?.config?.provider).toBe("openai");
+    expect(useWorkspaceStore.getState().controlSnapshot?.config?.model).toBe("gpt-5.4");
+  });
+
   test("backup store uses workspace backup endpoints for read and mutations", async () => {
     const { client, calls } = createFakeClient((method) => {
       if (

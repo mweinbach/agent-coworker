@@ -66,6 +66,7 @@ export function createSocketModule(
     pendingFirstMessage?: string,
     pendingFirstMessageQueued = false,
     pendingFirstMessageAttachments?: FileAttachmentInput[],
+    opts?: { refreshSnapshot?: boolean },
   ) {
     const workspaceId = workspaceIdForThread(get, threadId);
     if (!workspaceId) {
@@ -148,12 +149,14 @@ export function createSocketModule(
           ...buildSyntheticSessionInfoFromJsonRpcThread(thread),
           sessionId: thread.id,
         } as SessionEvent);
-        const snapshot = await requestJsonRpcThreadRead(get, set, workspaceId, thread.id);
-        if (isWorkspaceDisposed(workspaceId)) {
-          return;
-        }
-        if (snapshot) {
-          applyJsonRpcThreadSnapshot(get, set, activeThreadId, snapshot);
+        if (opts?.refreshSnapshot !== false) {
+          const snapshot = await requestJsonRpcThreadRead(get, set, workspaceId, thread.id);
+          if (isWorkspaceDisposed(workspaceId)) {
+            return;
+          }
+          if (snapshot) {
+            applyJsonRpcThreadSnapshot(get, set, activeThreadId, snapshot);
+          }
         }
       } catch (error) {
         if (isWorkspaceDisposed(workspaceId)) {

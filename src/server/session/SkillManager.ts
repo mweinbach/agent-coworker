@@ -36,6 +36,8 @@ import {
 import type { SessionContext } from "./SessionContext";
 
 export class SkillManager {
+  private remotePluginsCatalogRefresh: Promise<void> | null = null;
+
   constructor(
     private readonly context: SessionContext,
     private readonly handlers: {
@@ -79,9 +81,12 @@ export class SkillManager {
     });
   }
 
-  private async emitPluginsCatalog(clearedMutationPendingKeys: string[] = []) {
+  private async emitPluginsCatalog(
+    clearedMutationPendingKeys: string[] = [],
+    opts: { includeRemoteMarketplace?: boolean } = {},
+  ) {
     const catalog = await buildPluginCatalogSnapshot(this.context.state.config, {
-      includeRemoteMarketplace: true,
+      includeRemoteMarketplace: opts.includeRemoteMarketplace ?? false,
     });
     this.context.emit({
       type: "plugins_catalog",
@@ -89,6 +94,24 @@ export class SkillManager {
       catalog,
       ...(clearedMutationPendingKeys.length > 0 ? { clearedMutationPendingKeys } : {}),
     });
+  }
+
+  private queueRemotePluginsCatalogRefresh() {
+    if (this.remotePluginsCatalogRefresh) {
+      return;
+    }
+    const refresh = this.emitPluginsCatalog([], { includeRemoteMarketplace: true })
+      .catch((err) => {
+        this.context.emitError(
+          "internal_error",
+          "session",
+          `Failed to refresh remote plugin catalog: ${String(err)}`,
+        );
+      })
+      .finally(() => {
+        this.remotePluginsCatalogRefresh = null;
+      });
+    this.remotePluginsCatalogRefresh = refresh;
   }
 
   private async emitPluginInstallPreview(
@@ -124,12 +147,27 @@ export class SkillManager {
   }
 
   private async emitPluginDetail(pluginId: string, scope?: PluginCatalogEntry["scope"]) {
-    const catalog = await buildPluginCatalogSnapshot(this.context.state.config, {
-      includeRemoteMarketplace: true,
-    });
-    const plugin = this.resolvePluginSelection(catalog, pluginId, scope);
-    if (plugin === null) {
+    const localCatalog = await buildPluginCatalogSnapshot(this.context.state.config);
+    const localMatches = localCatalog.plugins.filter(
+      (entry) => entry.id === pluginId && (scope === undefined || entry.scope === scope),
+    );
+    let plugin: PluginCatalogEntry | null = null;
+    if (localMatches.length === 1) {
+      plugin = localMatches[0] ?? null;
+    } else if (localMatches.length > 1) {
+      this.resolvePluginSelection(localCatalog, pluginId, scope);
       return;
+    } else if (scope === "workspace") {
+      this.resolvePluginSelection(localCatalog, pluginId, scope);
+      return;
+    } else {
+      const remoteCatalog = await buildPluginCatalogSnapshot(this.context.state.config, {
+        includeRemoteMarketplace: true,
+      });
+      plugin = this.resolvePluginSelection(remoteCatalog, pluginId, scope);
+      if (plugin === null) {
+        return;
+      }
     }
     this.context.emit({
       type: "plugin_detail",
@@ -470,6 +508,7 @@ export class SkillManager {
   async getPluginsCatalog() {
     try {
       await this.emitPluginsCatalog();
+      this.queueRemotePluginsCatalogRefresh();
     } catch (err) {
       this.context.emitError(
         "internal_error",

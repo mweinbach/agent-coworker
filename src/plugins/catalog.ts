@@ -112,6 +112,13 @@ export function comparePluginCatalogEntries(
   return `${left.displayName}:${left.id}`.localeCompare(`${right.displayName}:${right.id}`);
 }
 
+function isPluginFromMarketplace(
+  plugin: PluginCatalogEntry,
+  marketplaceName: string,
+): boolean {
+  return plugin.discoveryKind === "marketplace" && plugin.marketplace?.name === marketplaceName;
+}
+
 export async function buildPluginCatalogSnapshot(
   config: AgentConfig,
   opts: {
@@ -188,7 +195,10 @@ export async function buildPluginCatalogSnapshot(
     try {
       const marketplace = await fetchRemotePluginMarketplace({ fetchImpl: opts.fetchImpl });
       for (const marketplaceEntry of marketplace.plugins) {
-        const installedEntries = plugins.filter((plugin) => plugin.id === marketplaceEntry.name);
+        const sameIdEntries = plugins.filter((plugin) => plugin.id === marketplaceEntry.name);
+        const installedEntries = sameIdEntries.filter((plugin) =>
+          isPluginFromMarketplace(plugin, marketplace.name),
+        );
         const marketplaceMetadata = {
           name: marketplace.name,
           ...(marketplace.displayName ? { displayName: marketplace.displayName } : {}),
@@ -206,6 +216,9 @@ export async function buildPluginCatalogSnapshot(
           }
           continue;
         }
+        if (sameIdEntries.length > 0) {
+          continue;
+        }
         if (!marketplaceEntry.sourceInput) {
           continue;
         }
@@ -215,13 +228,12 @@ export async function buildPluginCatalogSnapshot(
           fetchImpl: opts.fetchImpl,
         });
         try {
-          const candidate =
-            materialized.candidates.find(
-              (entry) => entry.pluginId === marketplaceEntry.name && entry.diagnostics.length === 0,
-            ) ?? materialized.candidates.find((entry) => entry.diagnostics.length === 0);
+          const candidate = materialized.candidates.find(
+            (entry) => entry.pluginId === marketplaceEntry.name && entry.diagnostics.length === 0,
+          );
           if (!candidate) {
             warnings.push(
-              `[plugins] Remote marketplace entry "${marketplaceEntry.name}" did not contain a valid plugin bundle.`,
+              `[plugins] Remote marketplace entry "${marketplaceEntry.name}" did not contain a valid plugin bundle with a matching plugin name.`,
             );
             continue;
           }

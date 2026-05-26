@@ -146,7 +146,11 @@ function textResponse(payload: string, status = 200): Response {
   });
 }
 
-function createRemoteMarketplaceFetch(): typeof fetch {
+function createRemoteMarketplaceFetch(
+  opts: {
+    remoteManifestName?: string;
+  } = {},
+): typeof fetch {
   const tree: Record<string, unknown> = {
     ".agents/plugins/marketplace.json": {
       type: "file",
@@ -214,7 +218,7 @@ function createRemoteMarketplaceFetch(): typeof fetch {
   const files: Record<string, string> = {
     "https://download.test/marketplace.json": JSON.stringify(marketplace),
     "https://download.test/figma-toolkit/plugin.json": JSON.stringify({
-      name: "figma-toolkit",
+      name: opts.remoteManifestName ?? "figma-toolkit",
       version: "1.0.0",
       description: "Remote Figma helpers",
       interface: { displayName: "Remote Figma Toolkit" },
@@ -295,7 +299,7 @@ describe("plugin catalog and install operations", () => {
     }
   });
 
-  test("remote marketplace metadata annotates installed plugins without duplicating them", async () => {
+  test("remote marketplace metadata does not annotate unrelated installed plugins sharing an id", async () => {
     const workspace = await fs.mkdtemp(
       path.join(os.tmpdir(), "plugins-market-installed-workspace-"),
     );
@@ -318,6 +322,64 @@ describe("plugin catalog and install operations", () => {
       expect(catalog.plugins[0]).toMatchObject({
         id: "figma-toolkit",
         installed: true,
+      });
+      expect(catalog.plugins[0]?.installSource).toBeUndefined();
+      expect(catalog.plugins[0]?.marketplace).toBeUndefined();
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  test("remote marketplace metadata annotates marketplace-installed plugins without duplicating them", async () => {
+    const workspace = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-market-provenance-workspace-"),
+    );
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-market-provenance-home-"));
+    const builtInConfigDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-market-provenance-"),
+    );
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      if (!config.userPluginsDir) {
+        throw new Error("Expected user plugin directory");
+      }
+      const marketplacePluginRoot = path.join(config.userPluginsDir, "market", "figma-toolkit");
+      await writePlugin(marketplacePluginRoot, "Marketplace Figma Toolkit");
+      await fs.mkdir(config.userPluginsDir, { recursive: true });
+      await fs.writeFile(
+        path.join(config.userPluginsDir, "marketplace.json"),
+        `${JSON.stringify(
+          {
+            name: "cowork-test",
+            plugins: [
+              {
+                name: "figma-toolkit",
+                source: { source: "local", path: "./market/figma-toolkit" },
+                policy: { installation: "AVAILABLE", authentication: "ON_INSTALL" },
+                category: "Design",
+              },
+            ],
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+
+      const catalog = await buildPluginCatalogSnapshot(config, {
+        includeRemoteMarketplace: true,
+        fetchImpl: createRemoteMarketplaceFetch(),
+      });
+
+      expect(catalog.warnings).toEqual([]);
+      expect(catalog.plugins).toHaveLength(1);
+      expect(catalog.plugins[0]).toMatchObject({
+        id: "figma-toolkit",
+        discoveryKind: "marketplace",
+        installed: true,
         installSource:
           "https://github.com/mweinbach/cowork-skills-plugins/tree/main/plugins/figma-toolkit",
         marketplace: {
@@ -325,6 +387,29 @@ describe("plugin catalog and install operations", () => {
           category: "Design",
         },
       });
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  test("remote marketplace entries skip valid bundles with mismatched plugin ids", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-market-mismatch-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-market-mismatch-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-market-mismatch-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      const catalog = await buildPluginCatalogSnapshot(config, {
+        includeRemoteMarketplace: true,
+        fetchImpl: createRemoteMarketplaceFetch({ remoteManifestName: "impostor-toolkit" }),
+      });
+
+      expect(catalog.plugins).toEqual([]);
+      expect(catalog.warnings).toContain(
+        '[plugins] Remote marketplace entry "figma-toolkit" did not contain a valid plugin bundle with a matching plugin name.',
+      );
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
       await fs.rm(home, { recursive: true, force: true });

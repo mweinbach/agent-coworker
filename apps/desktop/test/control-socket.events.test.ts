@@ -90,7 +90,7 @@ describe("control socket helpers over JSON-RPC", () => {
           pluginsLoading: true,
           selectedPluginId: "plugin-1",
           selectedPluginScope: "workspace",
-          skillMutationPendingKeys: {
+          pluginMutationPendingKeys: {
             "plugin:enable:workspace:plugin-1": true,
             other: true,
           },
@@ -144,9 +144,10 @@ describe("control socket helpers over JSON-RPC", () => {
     expect(state.workspaceRuntimeById[workspaceId].pluginsCatalog?.plugins).toHaveLength(1);
     expect(state.workspaceRuntimeById[workspaceId].selectedPlugin?.id).toBe("plugin-1");
     expect(state.workspaceRuntimeById[workspaceId].selectedPluginScope).toBe("workspace");
-    expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({
+    expect(state.workspaceRuntimeById[workspaceId].pluginMutationPendingKeys).toEqual({
       other: true,
     });
+    expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({});
   });
 
   test("requestJsonRpcControlEvent applies plugin detail events", async () => {
@@ -272,7 +273,7 @@ describe("control socket helpers over JSON-RPC", () => {
           ...defaultWorkspaceRuntime(),
           serverUrl: "ws://mock",
           pluginsLoading: true,
-          skillMutationPendingKeys: {
+          pluginMutationPendingKeys: {
             "plugin:preview": true,
           },
         },
@@ -312,7 +313,7 @@ describe("control socket helpers over JSON-RPC", () => {
 
     expect(ok).toBe(true);
     expect(state.workspaceRuntimeById[workspaceId].pluginsLoading).toBe(false);
-    expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({});
+    expect(state.workspaceRuntimeById[workspaceId].pluginMutationPendingKeys).toEqual({});
   });
 
   test("requestJsonRpcControlEvent applies plugin install event arrays without clobbering a newer preview", async () => {
@@ -369,7 +370,8 @@ describe("control socket helpers over JSON-RPC", () => {
           serverUrl: "ws://mock",
           pluginsLoading: true,
           selectedPluginPreview: existingPreview,
-          skillMutationPendingKeys: {
+          skillMutationError: "stale skill mutation error",
+          pluginMutationPendingKeys: {
             "plugin:preview": true,
             "plugin:install:workspace": true,
           },
@@ -532,6 +534,12 @@ describe("control socket helpers over JSON-RPC", () => {
         id: "plugin-1",
       }),
     ]);
+    expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBe(
+      "stale skill mutation error",
+    );
+    expect(state.workspaceRuntimeById[workspaceId].pluginMutationPendingKeys).toEqual({
+      "plugin:preview": true,
+    });
     expect(state.workspaceRuntimeById[workspaceId].mcpServers).toEqual([
       expect.objectContaining({
         name: "figma",
@@ -594,5 +602,62 @@ describe("control socket helpers over JSON-RPC", () => {
       "install failed on disk",
     );
     expect(state.notifications).toHaveLength(1);
+  });
+
+  test("requestJsonRpcControlEvent applies plugin mutation errors to the plugin channel", async () => {
+    const workspaceId = "ws-plugin-error";
+    const { state, get, set } = createState(workspaceId, {
+      workspaceRuntimeById: {
+        [workspaceId]: {
+          ...defaultWorkspaceRuntime(),
+          serverUrl: "ws://mock",
+          pluginsLoading: true,
+          pluginMutationPendingKeys: { "plugin:install:user": true },
+        },
+      },
+    });
+    installFakeSocket(workspaceId, async () => ({
+      event: {
+        type: "error",
+        sessionId: "jsonrpc-control",
+        source: "session",
+        code: "internal_error",
+        message: "plugin install failed on disk",
+      },
+    }));
+
+    const rejected = Promise.withResolvers<void>();
+    RUNTIME.pluginInstallWaiters.set(workspaceId, {
+      pendingKey: "plugin:install:user",
+      resolve: rejected.resolve,
+      reject: rejected.reject,
+    });
+
+    const helpers = createControlSocketHelpers(deps);
+    await expect(
+      Promise.all([
+        helpers.requestJsonRpcControlEvent(
+          get as any,
+          set as any,
+          workspaceId,
+          "cowork/plugins/install",
+          {
+            cwd: "/tmp/workspace",
+            sourceInput: "foo",
+            targetScope: "user",
+          },
+        ),
+        rejected.promise,
+      ]),
+    ).rejects.toThrow("plugin install failed on disk");
+
+    expect(RUNTIME.pluginInstallWaiters.has(workspaceId)).toBe(false);
+    expect(state.workspaceRuntimeById[workspaceId].pluginsLoading).toBe(false);
+    expect(state.workspaceRuntimeById[workspaceId].pluginMutationPendingKeys).toEqual({});
+    expect(state.workspaceRuntimeById[workspaceId].pluginMutationError).toBe(
+      "plugin install failed on disk",
+    );
+    expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBeNull();
+    expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBeNull();
   });
 });

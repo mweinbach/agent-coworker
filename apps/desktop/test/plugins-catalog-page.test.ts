@@ -375,8 +375,7 @@ describe("plugins catalog page", () => {
       workspaceRuntimeById: {
         [workspaceId]: {
           ...defaultWorkspaceRuntime(),
-          pluginsError: "Plugin is shadowed by a global install.",
-          skillMutationError: "Plugin is shadowed by a global install.",
+          pluginMutationError: "Plugin is shadowed by a global install.",
         },
       },
     } as any);

@@ -573,7 +573,6 @@ describe("default global skills bootstrap", () => {
       }
 
       await deletePluginInstallation({ config, plugin: installedPlugin });
-      await fs.rm(defaultGlobalSkillsStateFile(home), { force: true });
 
       let fetchCalls = 0;
       const second = await ensureDefaultGlobalSkillsInstalled({
@@ -589,6 +588,13 @@ describe("default global skills bootstrap", () => {
       expect(second.installed).toEqual([]);
       expect(second.skippedRemoved).toEqual(["workspace-tools"]);
       expect(fetchCalls).toBe(0);
+      expect(
+        (
+          JSON.parse(await fs.readFile(defaultGlobalSkillsStateFile(home), "utf-8")) as {
+            plugins: string[];
+          }
+        ).plugins,
+      ).toEqual([]);
       await expect(
         fs.access(path.join(home, ".cowork", "plugins", "workspace-tools")),
       ).rejects.toBeDefined();

@@ -115,10 +115,10 @@ export function InstallPluginDialog({
   const installPlugins = useAppStore((state) => state.installPlugins);
 
   const pluginPreview = runtime?.selectedPluginPreview ?? null;
-  const pluginInstallInFlight = Object.keys(runtime?.skillMutationPendingKeys ?? {}).some((key) =>
+  const pluginInstallInFlight = Object.keys(runtime?.pluginMutationPendingKeys ?? {}).some((key) =>
     key.startsWith("plugin:install:"),
   );
-  const pluginPreviewPending = runtime?.skillMutationPendingKeys["plugin:preview"] === true;
+  const pluginPreviewPending = runtime?.pluginMutationPendingKeys["plugin:preview"] === true;
   const normalizedSourceInput = sourceInput.trim();
   const showPreview = isPluginPreviewVisibleForInput({
     normalizedSourceInput,
@@ -132,20 +132,11 @@ export function InstallPluginDialog({
     normalizedSourceInput.length > 0 &&
     normalizedSourceInput === lastPreviewSourceInput;
   const showMutationError =
-    Boolean(runtime?.skillMutationError) &&
+    Boolean(runtime?.pluginMutationError) &&
     lastMutationSourceInput !== null &&
     normalizedSourceInput.length > 0 &&
     normalizedSourceInput === lastMutationSourceInput;
-  const showPluginsError =
-    Boolean(runtime?.pluginsError) &&
-    lastMutationSourceInput !== null &&
-    normalizedSourceInput.length > 0 &&
-    normalizedSourceInput === lastMutationSourceInput;
-  const dialogError = showMutationError
-    ? (runtime?.skillMutationError ?? null)
-    : showPluginsError
-      ? (runtime?.pluginsError ?? null)
-      : null;
+  const dialogError = showMutationError ? (runtime?.pluginMutationError ?? null) : null;
   const disableInstallForScope = (targetScope: PluginPreviewScope) =>
     shouldDisablePluginInstallForScope({
       normalizedSourceInput,

@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { runTurn as runTurnFn } from "../../agent";
-import { ensureCodexPrimaryRuntimeReady } from "../../codexPrimaryRuntime";
+import {
+  ensureCodexPrimaryRuntimeReady,
+  shouldBootstrapCodexPrimaryRuntime,
+  WORKSPACE_TOOLS_PLUGIN_ID,
+} from "../../codexPrimaryRuntime";
 import { loadConfig } from "../../config";
 import type { connectProvider as connectModelProvider, getAiCoworkerPaths } from "../../connect";
 import { getAiCoworkerPaths as getAiCoworkerPathsDefault } from "../../connect";
@@ -17,6 +21,7 @@ import type {
   loadSystemPromptWithSkills as loadSystemPromptWithSkillsFn,
 } from "../../prompt";
 import {
+  DEFAULT_GLOBAL_SKILLS,
   ensureDefaultGlobalSkillsReady,
   isDefaultPluginRemoved,
 } from "../../skills/defaultGlobalSkills";
@@ -135,15 +140,22 @@ export async function createAgentServerRuntime(
       ? env.COWORK_BUILTIN_DIR
       : undefined;
   let config = await loadConfig({ cwd: opts.cwd, env, homedir: opts.homedir, builtInDir });
+  const codexPrimaryRuntimeEnabled = shouldBootstrapCodexPrimaryRuntime(env);
+  const defaultGlobalPlugins = codexPrimaryRuntimeEnabled
+    ? DEFAULT_GLOBAL_SKILLS.filter((plugin) => plugin.id !== WORKSPACE_TOOLS_PLUGIN_ID)
+    : DEFAULT_GLOBAL_SKILLS;
 
-  await ensureDefaultGlobalSkillsReady({
-    homedir: opts.homedir,
-    env,
-    config,
-    log: (line) => {
-      console.warn(`[default-skills] ${line}`);
-    },
-  });
+  if (defaultGlobalPlugins.length > 0) {
+    await ensureDefaultGlobalSkillsReady({
+      homedir: opts.homedir,
+      env,
+      config,
+      plugins: defaultGlobalPlugins,
+      log: (line) => {
+        console.warn(`[default-skills] ${line}`);
+      },
+    });
+  }
 
   const mergedProviderOptions = mergeRuntimeProviderOptions(
     opts.providerOptions,

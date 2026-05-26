@@ -16,27 +16,37 @@ const { createSkillActions } = skillActionsModule;
 
 const failedSkillMutationActions = [
   {
+    name: "deleteSkill",
+    expectedError: "Unable to delete skill.",
+    invoke: (actions: ReturnType<typeof createSkillActions>) => actions.deleteSkill("skill-1"),
+  },
+  {
     name: "disableSkillInstallation",
+    expectedError: "Unable to disable skill installation.",
     invoke: (actions: ReturnType<typeof createSkillActions>) =>
       actions.disableSkillInstallation("inst-1"),
   },
   {
     name: "enableSkillInstallation",
+    expectedError: "Unable to enable skill installation.",
     invoke: (actions: ReturnType<typeof createSkillActions>) =>
       actions.enableSkillInstallation("inst-1"),
   },
   {
     name: "deleteSkillInstallation",
+    expectedError: "Unable to delete skill installation.",
     invoke: (actions: ReturnType<typeof createSkillActions>) =>
       actions.deleteSkillInstallation("inst-1"),
   },
   {
     name: "copySkillInstallation",
+    expectedError: "Unable to copy skill installation.",
     invoke: (actions: ReturnType<typeof createSkillActions>) =>
       actions.copySkillInstallation("inst-1", "project"),
   },
   {
     name: "updateSkillInstallation",
+    expectedError: "Unable to update skill installation.",
     invoke: (actions: ReturnType<typeof createSkillActions>) =>
       actions.updateSkillInstallation("inst-1"),
   },
@@ -122,7 +132,10 @@ describe("skill store actions", () => {
     expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({
       other: true,
     });
-    expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBeNull();
+    expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBe(
+      "Unable to preview skill install.",
+    );
+    expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBeNull();
     expect(state.notifications).toHaveLength(1);
   });
 
@@ -138,7 +151,10 @@ describe("skill store actions", () => {
     expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({
       other: true,
     });
-    expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBeNull();
+    expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBe(
+      "Unable to install skills.",
+    );
+    expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBeNull();
     expect(state.notifications).toHaveLength(1);
   });
 
@@ -382,7 +398,7 @@ describe("skill store actions", () => {
     expect(state.workspaceRuntimeById[workspaceId].selectedSkillContent).toBe("# Example skill");
   });
 
-  for (const { name, invoke } of failedSkillMutationActions) {
+  for (const { name, expectedError, invoke } of failedSkillMutationActions) {
     test(`${name} removes only its pending key when sendControl fails`, async () => {
       const state = createState();
       state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys = { other: true };
@@ -393,6 +409,8 @@ describe("skill store actions", () => {
       expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({
         other: true,
       });
+      expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBe(expectedError);
+      expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBeNull();
       expect(state.notifications).toHaveLength(1);
     });
   }

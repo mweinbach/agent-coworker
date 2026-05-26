@@ -91,6 +91,11 @@ export interface PluginInstallMetadata {
     authenticationPolicy?: string;
     sourceInput?: string;
   };
+  bootstrap?: {
+    name: string;
+    source?: string;
+    pluginId?: string;
+  };
 }
 
 export type ParsedPluginSkill = {
@@ -420,6 +425,13 @@ const pluginInstallMetadataSchema = z
         sourceInput: nonEmptyStringSchema.optional(),
       })
       .optional(),
+    bootstrap: z
+      .object({
+        name: nonEmptyStringSchema,
+        source: nonEmptyStringSchema.optional(),
+        pluginId: nonEmptyStringSchema.optional(),
+      })
+      .optional(),
   })
   .passthrough();
 
@@ -448,6 +460,15 @@ export async function readPluginInstallMetadata(
                 ...(parsed.marketplace.sourceInput
                   ? { sourceInput: parsed.marketplace.sourceInput }
                   : {}),
+              },
+            }
+          : {}),
+        ...(parsed.bootstrap
+          ? {
+              bootstrap: {
+                name: parsed.bootstrap.name,
+                ...(parsed.bootstrap.source ? { source: parsed.bootstrap.source } : {}),
+                ...(parsed.bootstrap.pluginId ? { pluginId: parsed.bootstrap.pluginId } : {}),
               },
             }
           : {}),

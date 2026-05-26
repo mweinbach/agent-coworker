@@ -7,7 +7,7 @@ import type {
   PluginCatalogSnapshot,
   PluginScope,
 } from "../types";
-import { type DiscoveredPluginCandidate, discoverPlugins } from "./discovery";
+import { discoverPlugins } from "./discovery";
 import {
   buildPluginCatalogEntry,
   type PluginManifest,
@@ -50,13 +50,6 @@ async function readPluginMcpSummary(
   }
 }
 
-function _entryWarnings(
-  _candidate: DiscoveredPluginCandidate,
-  extraWarnings: string[] = [],
-): string[] {
-  return [...extraWarnings].filter((warning) => warning.trim().length > 0);
-}
-
 async function buildPluginCatalogEntryFromManifest(opts: {
   manifest: PluginManifest;
   scope: PluginScope;
@@ -66,7 +59,6 @@ async function buildPluginCatalogEntryFromManifest(opts: {
   installSource?: string;
   applySkillOverrides?: boolean;
   overrides: Awaited<ReturnType<typeof readPluginOverrides>>;
-  candidateWarnings?: string[];
 }): Promise<InstalledPluginCatalogEntry> {
   const { skills, warnings: skillWarnings } = await readPluginSkillSummaries(opts.manifest);
   const normalizedSkills = skills.map((skill) => ({
@@ -86,11 +78,7 @@ async function buildPluginCatalogEntryFromManifest(opts: {
     })),
     mcpServers: mcpSummary.serverNames,
     apps: await readPluginAppSummaries(opts.manifest.appPath),
-    warnings: [
-      ...(opts.candidateWarnings ?? []),
-      ...skillWarnings,
-      ...(mcpSummary.warning ? [mcpSummary.warning] : []),
-    ],
+    warnings: [...skillWarnings, ...(mcpSummary.warning ? [mcpSummary.warning] : [])],
     ...(opts.marketplace ? { marketplace: opts.marketplace } : {}),
     ...(opts.installSource ? { installSource: opts.installSource } : {}),
   });
@@ -177,7 +165,6 @@ export async function buildPluginCatalogSnapshot(
         discoveryKind,
         enabled: pluginEnabled,
         overrides,
-        candidateWarnings: _entryWarnings(candidate),
         ...(metadataMarketplace?.sourceInput
           ? { installSource: metadataMarketplace.sourceInput }
           : {}),

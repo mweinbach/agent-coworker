@@ -212,7 +212,7 @@ export function createControlSocketHelpers(
     );
   }
 
-  function omitSkillMutationPendingKeys(
+  function omitMutationPendingKeys(
     pendingKeys: Record<string, true>,
     clearedPendingKeys?: readonly string[],
   ): Record<string, true> {
@@ -350,6 +350,8 @@ export function createControlSocketHelpers(
                 skillsMutationBlockedReason: null,
                 skillMutationPendingKeys: {},
                 skillMutationError: null,
+                pluginMutationPendingKeys: {},
+                pluginMutationError: null,
                 workspaceBackupsLoading: false,
                 workspaceBackupsError: workspaceRuntime.workspaceBackupsError,
                 workspaceBackupPendingActionKeys: {},
@@ -1006,19 +1008,16 @@ export function createControlSocketHelpers(
 
     if (evt.type === "skills_catalog") {
       const installWaiter = RUNTIME.skillInstallWaiters.get(workspaceId);
-      const pluginInstallWaiter = RUNTIME.pluginInstallWaiters.get(workspaceId);
       const workspaceRuntimeBefore = get().workspaceRuntimeById[workspaceId];
       const clearedMutationPendingKeys = evt.clearedMutationPendingKeys ?? [];
+      const clearedSkillMutation = clearedMutationPendingKeys.some(
+        (key) => workspaceRuntimeBefore?.skillMutationPendingKeys[key] === true,
+      );
       const shouldResolveInstall =
         installWaiter != null &&
         workspaceRuntimeBefore != null &&
         clearedMutationPendingKeys.includes(installWaiter.pendingKey) &&
         workspaceRuntimeBefore.skillMutationPendingKeys[installWaiter.pendingKey] === true;
-      const shouldResolvePluginInstall =
-        pluginInstallWaiter != null &&
-        workspaceRuntimeBefore != null &&
-        clearedMutationPendingKeys.includes(pluginInstallWaiter.pendingKey) &&
-        workspaceRuntimeBefore.skillMutationPendingKeys[pluginInstallWaiter.pendingKey] === true;
 
       set((s) => {
         const workspaceRuntime = s.workspaceRuntimeById[workspaceId];
@@ -1038,11 +1037,11 @@ export function createControlSocketHelpers(
               skillCatalogError: null,
               skillsMutationBlocked: evt.mutationBlocked,
               skillsMutationBlockedReason: evt.mutationBlockedReason ?? null,
-              skillMutationPendingKeys: omitSkillMutationPendingKeys(
+              skillMutationPendingKeys: omitMutationPendingKeys(
                 workspaceRuntime.skillMutationPendingKeys,
                 clearedMutationPendingKeys,
               ),
-              skillMutationError: null,
+              ...(clearedSkillMutation ? { skillMutationError: null } : {}),
               selectedSkillInstallationId: selectedInstallation ? selectedInstallationId : null,
               selectedSkillInstallation: selectedInstallation,
             },
@@ -1054,14 +1053,15 @@ export function createControlSocketHelpers(
         RUNTIME.skillInstallWaiters.delete(workspaceId);
         installWaiter.resolve();
       }
-      if (shouldResolvePluginInstall && pluginInstallWaiter) {
-        RUNTIME.pluginInstallWaiters.delete(workspaceId);
-        pluginInstallWaiter.resolve();
-      }
       return;
     }
 
     if (evt.type === "plugins_catalog") {
+      const workspaceRuntimeBefore = get().workspaceRuntimeById[workspaceId];
+      const clearedMutationPendingKeys = evt.clearedMutationPendingKeys ?? [];
+      const clearedPluginMutation = clearedMutationPendingKeys.some(
+        (key) => workspaceRuntimeBefore?.pluginMutationPendingKeys[key] === true,
+      );
       set((s) => {
         const workspaceRuntime = s.workspaceRuntimeById[workspaceId];
         const selectedPluginId = workspaceRuntime.selectedPluginId;
@@ -1082,10 +1082,11 @@ export function createControlSocketHelpers(
               pluginsCatalog: evt.catalog,
               pluginsLoading: false,
               pluginsError: null,
-              skillMutationPendingKeys: omitSkillMutationPendingKeys(
-                workspaceRuntime.skillMutationPendingKeys,
-                evt.clearedMutationPendingKeys ?? [],
+              pluginMutationPendingKeys: omitMutationPendingKeys(
+                workspaceRuntime.pluginMutationPendingKeys,
+                clearedMutationPendingKeys,
               ),
+              ...(clearedPluginMutation ? { pluginMutationError: null } : {}),
               selectedPluginId: selectedPlugin ? selectedPluginId : null,
               selectedPluginScope: selectedPlugin?.scope ?? null,
               selectedPlugin,
@@ -1096,11 +1097,11 @@ export function createControlSocketHelpers(
 
       const pluginInstallWaiter = RUNTIME.pluginInstallWaiters.get(workspaceId);
       const workspaceRuntimeAfter = get().workspaceRuntimeById[workspaceId];
-      const clearedMutationPendingKeys = evt.clearedMutationPendingKeys ?? [];
       if (
         pluginInstallWaiter &&
         workspaceRuntimeAfter &&
-        clearedMutationPendingKeys.includes(pluginInstallWaiter.pendingKey)
+        clearedMutationPendingKeys.includes(pluginInstallWaiter.pendingKey) &&
+        workspaceRuntimeAfter.pluginMutationPendingKeys[pluginInstallWaiter.pendingKey] !== true
       ) {
         RUNTIME.pluginInstallWaiters.delete(workspaceId);
         pluginInstallWaiter.resolve();
@@ -1128,11 +1129,11 @@ export function createControlSocketHelpers(
     if (evt.type === "plugin_install_preview") {
       set((s) => {
         const rt = s.workspaceRuntimeById[workspaceId];
-        const previewPending = rt.skillMutationPendingKeys["plugin:preview"] === true;
+        const previewPending = rt.pluginMutationPendingKeys["plugin:preview"] === true;
         const fromUserPreviewRequest = evt.fromUserPreviewRequest === true;
         const nextPreview =
           fromUserPreviewRequest || !previewPending ? evt.preview : rt.selectedPluginPreview;
-        const pendingKeys = { ...rt.skillMutationPendingKeys };
+        const pendingKeys = { ...rt.pluginMutationPendingKeys };
         if (fromUserPreviewRequest) {
           delete pendingKeys["plugin:preview"];
         }
@@ -1142,7 +1143,8 @@ export function createControlSocketHelpers(
             [workspaceId]: {
               ...rt,
               selectedPluginPreview: nextPreview,
-              skillMutationPendingKeys: pendingKeys,
+              pluginMutationPendingKeys: pendingKeys,
+              pluginMutationError: null,
               pluginsLoading: false,
               pluginsError: null,
             },
@@ -1383,18 +1385,17 @@ export function createControlSocketHelpers(
       const shouldRejectPluginInstall =
         pluginInstallWaiter != null &&
         workspaceRuntimeBefore != null &&
-        workspaceRuntimeBefore.skillMutationPendingKeys[pluginInstallWaiter.pendingKey] === true;
+        workspaceRuntimeBefore.pluginMutationPendingKeys[pluginInstallWaiter.pendingKey] === true;
 
       set((s) => {
         const workspaceRuntime = s.workspaceRuntimeById[workspaceId];
         const hasPendingMemories = workspaceRuntime.memoriesLoading;
         const pendingSkillMutationKeys = Object.keys(workspaceRuntime.skillMutationPendingKeys);
-        const hasPendingPluginMutation = pendingSkillMutationKeys.some((key) =>
-          key.startsWith("plugin:"),
-        );
+        const hasPendingPluginMutation =
+          Object.keys(workspaceRuntime.pluginMutationPendingKeys).length > 0;
+        const hasPendingSkillMutation = pendingSkillMutationKeys.length > 0;
         const hasPendingSkillState =
-          workspaceRuntime.skillCatalogLoading ||
-          pendingSkillMutationKeys.some((key) => !key.startsWith("plugin:"));
+          workspaceRuntime.skillCatalogLoading || hasPendingSkillMutation;
         const hasPendingAnyMutation = hasPendingSkillState || hasPendingPluginMutation;
         const hasPendingBackupState =
           workspaceRuntime.workspaceBackupsLoading ||
@@ -1415,8 +1416,18 @@ export function createControlSocketHelpers(
               memoriesLoading: hasPendingMemories ? false : workspaceRuntime.memoriesLoading,
               ...(hasPendingAnyMutation
                 ? {
-                    skillMutationPendingKeys: {},
-                    skillMutationError: evt.message,
+                    ...(hasPendingSkillState
+                      ? {
+                          skillMutationPendingKeys: {},
+                          ...(hasPendingSkillMutation ? { skillMutationError: evt.message } : {}),
+                        }
+                      : {}),
+                    ...(hasPendingPluginMutation
+                      ? {
+                          pluginMutationPendingKeys: {},
+                          pluginMutationError: evt.message,
+                        }
+                      : {}),
                   }
                 : {}),
               ...(hasPendingSkillState
@@ -1425,12 +1436,16 @@ export function createControlSocketHelpers(
                     skillCatalogError: evt.message,
                   }
                 : {}),
-              ...(workspaceRuntime.pluginsLoading || hasPendingPluginMutation
+              ...(workspaceRuntime.pluginsLoading && !hasPendingPluginMutation
                 ? {
                     pluginsLoading: false,
                     pluginsError: evt.message,
                   }
-                : {}),
+                : hasPendingPluginMutation
+                  ? {
+                      pluginsLoading: false,
+                    }
+                  : {}),
               ...(hasPendingBackupState
                 ? {
                     workspaceBackupsLoading: false,

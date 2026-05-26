@@ -13,7 +13,6 @@ export interface DiscoveredPluginCandidate {
   realRootDir: string;
   scope: PluginScope;
   discoveryKind: PluginDiscoveryKind;
-  warnings: string[];
   marketplace?: {
     name: string;
     displayName?: string;
@@ -115,7 +114,6 @@ async function discoverMarketplacePlugins(opts: {
       realRootDir,
       scope: opts.scope,
       discoveryKind: "marketplace",
-      warnings: [],
       marketplace: {
         name: marketplace.name,
         ...(marketplace.displayName ? { displayName: marketplace.displayName } : {}),
@@ -158,7 +156,6 @@ async function discoverDirectPlugins(opts: {
       realRootDir,
       scope: opts.scope,
       discoveryKind: "direct",
-      warnings: [],
     });
   }
   return plugins;

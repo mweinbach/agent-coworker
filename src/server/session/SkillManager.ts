@@ -22,7 +22,6 @@ import {
 import { buildSkillInstallPreview } from "../../skills/sourceResolver";
 import { createTools, filterToolsForCodexDynamicBoundary } from "../../tools";
 import type {
-  InstalledPluginCatalogEntry,
   PluginCatalogEntry,
   PluginInstallTargetScope,
   SkillInstallationEntry,
@@ -84,21 +83,6 @@ export class SkillManager {
     });
   }
 
-  private async emitPluginsCatalog(
-    clearedMutationPendingKeys: string[] = [],
-    opts: { includeRemoteMarketplace?: boolean; onlyIfEpoch?: number } = {},
-  ) {
-    await this.pluginCatalogService.emitCatalog(clearedMutationPendingKeys, opts);
-  }
-
-  private invalidateRemotePluginsCatalogRefreshes() {
-    this.pluginCatalogService.invalidateRemoteCatalogRefreshes();
-  }
-
-  private queueRemotePluginsCatalogRefresh() {
-    this.pluginCatalogService.queueRemoteCatalogRefresh();
-  }
-
   private async emitPluginInstallPreview(
     preview: import("../../types").PluginInstallPreview,
     fromUserPreviewRequest: boolean,
@@ -116,18 +100,6 @@ export class SkillManager {
     plugin: Pick<PluginCatalogEntry, "id" | "scope">,
   ): string {
     return this.skillMutationPendingKey(`plugin:${action}`, `${plugin.scope}:${plugin.id}`);
-  }
-
-  private resolvePluginSelection(
-    catalog: import("../../types").PluginCatalogSnapshot,
-    pluginId: string,
-    scope?: PluginCatalogEntry["scope"],
-  ): InstalledPluginCatalogEntry | null {
-    return this.pluginCatalogService.resolveInstalledPluginSelection(catalog, pluginId, scope);
-  }
-
-  private async emitPluginDetail(pluginId: string, scope?: PluginCatalogEntry["scope"]) {
-    await this.pluginCatalogService.emitPluginDetail(pluginId, scope);
   }
 
   private async readInstallationContent(
@@ -175,14 +147,14 @@ export class SkillManager {
     clearedMutationPendingKeys?: string[];
     refreshAllWorkspaces?: boolean;
   } = {}) {
-    this.invalidateRemotePluginsCatalogRefreshes();
+    this.pluginCatalogService.invalidateRemoteCatalogRefreshes();
     await this.context.refreshSkillsAcrossWorkspaceSessions({
       allWorkspaces: refreshAllWorkspaces,
     });
     await this.emitLegacySkillsList();
     await this.listCommands();
     await this.emitSkillsCatalog(clearedMutationPendingKeys);
-    await this.emitPluginsCatalog(clearedMutationPendingKeys);
+    await this.pluginCatalogService.emitCatalog(clearedMutationPendingKeys);
     await this.context.emitMcpServers?.();
     if (selectedInstallationId) {
       await this.emitInstallationDetail(selectedInstallationId);
@@ -462,8 +434,8 @@ export class SkillManager {
 
   async getPluginsCatalog() {
     try {
-      await this.emitPluginsCatalog();
-      this.queueRemotePluginsCatalogRefresh();
+      await this.pluginCatalogService.emitCatalog();
+      this.pluginCatalogService.queueRemoteCatalogRefresh();
     } catch (err) {
       this.context.emitError(
         "internal_error",
@@ -480,7 +452,7 @@ export class SkillManager {
       return;
     }
     try {
-      await this.emitPluginDetail(pluginId, scope);
+      await this.pluginCatalogService.emitPluginDetail(pluginId, scope);
     } catch (err) {
       this.context.emitError(
         "internal_error",
@@ -523,7 +495,7 @@ export class SkillManager {
           ],
           refreshAllWorkspaces: this.isSharedPluginMutationScope(targetScope),
         });
-        await this.emitPluginDetail(result.pluginIds[0] ?? "", targetScope);
+        await this.pluginCatalogService.emitPluginDetail(result.pluginIds[0] ?? "", targetScope);
       } catch (err) {
         this.context.emitError(
           "internal_error",
@@ -543,7 +515,11 @@ export class SkillManager {
     await this.withSkillMutationLock(async () => {
       try {
         const catalog = await buildPluginCatalogSnapshot(this.context.state.config);
-        const plugin = this.resolvePluginSelection(catalog, pluginId, scope);
+        const plugin = this.pluginCatalogService.resolveInstalledPluginSelection(
+          catalog,
+          pluginId,
+          scope,
+        );
         if (!plugin) {
           return;
         }
@@ -576,7 +552,11 @@ export class SkillManager {
     await this.withSkillMutationLock(async () => {
       try {
         const catalog = await buildPluginCatalogSnapshot(this.context.state.config);
-        const plugin = this.resolvePluginSelection(catalog, pluginId, scope);
+        const plugin = this.pluginCatalogService.resolveInstalledPluginSelection(
+          catalog,
+          pluginId,
+          scope,
+        );
         if (!plugin) {
           return;
         }
@@ -609,7 +589,11 @@ export class SkillManager {
     await this.withSkillMutationLock(async () => {
       try {
         const catalog = await buildPluginCatalogSnapshot(this.context.state.config);
-        const plugin = this.resolvePluginSelection(catalog, pluginId, scope);
+        const plugin = this.pluginCatalogService.resolveInstalledPluginSelection(
+          catalog,
+          pluginId,
+          scope,
+        );
         if (!plugin) {
           return;
         }

@@ -217,7 +217,7 @@ describe("plugin detail dialog", () => {
     }
   });
 
-  test("shows plugin mutation errors even when they arrive via skillMutationError", async () => {
+  test("shows plugin mutation errors from the plugin channel", async () => {
     const previousState = useAppStore.getState();
 
     useAppStore.setState({
@@ -228,7 +228,8 @@ describe("plugin detail dialog", () => {
           ...defaultWorkspaceRuntime(),
           selectedPluginId: "plugin-1",
           selectedPluginScope: "workspace",
-          skillMutationError: "Plugin is shadowed by a global install.",
+          skillMutationError: "Skill install failed.",
+          pluginMutationError: "Plugin is shadowed by a global install.",
           selectedPlugin: {
             id: "plugin-1",
             name: "figma-toolkit",
@@ -266,6 +267,9 @@ describe("plugin detail dialog", () => {
 
       expect(harness.dom.window.document.body.textContent ?? "").toContain(
         "Plugin is shadowed by a global install.",
+      );
+      expect(harness.dom.window.document.body.textContent ?? "").not.toContain(
+        "Skill install failed.",
       );
     } finally {
       if (root) {

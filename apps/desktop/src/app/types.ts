@@ -480,6 +480,8 @@ export type WorkspaceRuntime = {
   skillsMutationBlockedReason: string | null;
   skillMutationPendingKeys: Record<string, true>;
   skillMutationError: string | null;
+  pluginMutationPendingKeys: Record<string, true>;
+  pluginMutationError: string | null;
   memories: MemoryListEntry[];
   memoriesLoading: boolean;
   workspaceBackupsPath: string | null;

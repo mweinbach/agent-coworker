@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { __internal, ensureCodexPrimaryRuntimeReady } from "../src/codexPrimaryRuntime";
+import { readPluginInstallMetadata } from "../src/plugins/manifest";
 import { __internal as pluginOperationsInternal } from "../src/plugins/operations";
 import { writeSkillInstallManifest } from "../src/skills/manifest";
 
@@ -188,6 +189,14 @@ describe("Codex primary runtime bootstrap", () => {
           "utf-8",
         ),
       ).toContain("bootstrap-codex-primary-runtime-spreadsheets");
+      await expect(
+        readPluginInstallMetadata(path.join(globalPluginsDir, "workspace-tools")),
+      ).resolves.toMatchObject({
+        bootstrap: {
+          name: "codex-primary-runtime",
+          pluginId: "workspace-tools",
+        },
+      });
       await expect(fs.access(path.join(globalSkillsDir, "spreadsheets"))).rejects.toThrow();
       expect(fetchImpl).toHaveBeenCalledTimes(2);
     } finally {

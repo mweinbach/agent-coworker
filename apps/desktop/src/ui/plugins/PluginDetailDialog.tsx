@@ -13,7 +13,7 @@ import {
 } from "../../components/ui/dialog";
 import { revealPath } from "../../lib/desktopCommands";
 import { isInstalledPluginCatalogEntry } from "../../lib/wsProtocol";
-import { actionPending } from "../skills/utils";
+import { pluginActionPending } from "../skills/utils";
 
 function pluginScopeLabel(scope: "workspace" | "user"): string {
   return scope === "workspace" ? "Workspace" : "User";
@@ -44,17 +44,21 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
     if (!plugin?.marketplace) return null;
     return plugin.marketplace.displayName ?? plugin.marketplace.name;
   }, [plugin]);
-  const pluginError = runtime?.pluginsError ?? runtime?.skillMutationError ?? null;
+  const pluginError = plugin
+    ? (runtime?.pluginMutationError ?? null)
+    : (runtime?.pluginsError ?? null);
   const enablePending = plugin
-    ? actionPending(runtime, "plugin:enable", `${plugin.scope}:${plugin.id}`)
+    ? pluginActionPending(runtime, "plugin:enable", `${plugin.scope}:${plugin.id}`)
     : false;
   const disablePending = plugin
-    ? actionPending(runtime, "plugin:disable", `${plugin.scope}:${plugin.id}`)
+    ? pluginActionPending(runtime, "plugin:disable", `${plugin.scope}:${plugin.id}`)
     : false;
   const deletePending = plugin
-    ? actionPending(runtime, "plugin:delete", `${plugin.scope}:${plugin.id}`)
+    ? pluginActionPending(runtime, "plugin:delete", `${plugin.scope}:${plugin.id}`)
     : false;
-  const installPending = plugin ? actionPending(runtime, `plugin:install:${plugin.scope}`) : false;
+  const installPending = plugin
+    ? pluginActionPending(runtime, `plugin:install:${plugin.scope}`)
+    : false;
 
   const handleOpenChange = (open: boolean) => {
     if (!open) {

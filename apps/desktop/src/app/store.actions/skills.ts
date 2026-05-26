@@ -16,13 +16,11 @@ import {
 import {
   clearFailedMutationSend,
   managementWorkspaceIdFor,
+  mutationPendingKey,
   refreshSharedWorkspaceState as refreshSharedWorkspaceStateFor,
+  setMutationPending,
   workspacePathFor,
 } from "./skillPluginHelpers";
-
-function skillPendingKey(action: string, id?: string): string {
-  return id ? `${action}:${id}` : action;
-}
 
 export function createSkillActions(
   set: StoreSet,
@@ -240,20 +238,8 @@ export function createSkillActions(
       const workspaceId = managementWorkspaceId();
       if (!workspaceId) return;
       const cwd = workspacePath(workspaceId);
-      const key = skillPendingKey("preview");
-      set((s) => ({
-        workspaceRuntimeById: {
-          ...s.workspaceRuntimeById,
-          [workspaceId]: {
-            ...s.workspaceRuntimeById[workspaceId],
-            skillMutationError: null,
-            skillMutationPendingKeys: {
-              ...s.workspaceRuntimeById[workspaceId].skillMutationPendingKeys,
-              [key]: true,
-            },
-          },
-        },
-      }));
+      const key = mutationPendingKey("preview");
+      setMutationPending(set, workspaceId, "skill", key);
       const ok = await requestJsonRpcControlEvent(
         get,
         set,
@@ -262,28 +248,8 @@ export function createSkillActions(
         { cwd, sourceInput, targetScope },
       );
       if (!ok) {
-        set((s) => ({
-          workspaceRuntimeById: {
-            ...s.workspaceRuntimeById,
-            [workspaceId]: {
-              ...s.workspaceRuntimeById[workspaceId],
-              skillMutationPendingKeys: (() => {
-                const pendingKeys = {
-                  ...s.workspaceRuntimeById[workspaceId].skillMutationPendingKeys,
-                };
-                delete pendingKeys[key];
-                return pendingKeys;
-              })(),
-            },
-          },
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "error",
-            title: "Not connected",
-            detail: "Unable to preview skill install.",
-          }),
-        }));
+        const detail = "Unable to preview skill install.";
+        clearFailedMutationSend(set, workspaceId, key, detail, { skillMutationError: detail });
       }
     },
 
@@ -293,20 +259,8 @@ export function createSkillActions(
         throw new Error("No workspace selected");
       }
       const cwd = workspacePath(workspaceId);
-      const key = skillPendingKey(`install:${targetScope}`);
-      set((s) => ({
-        workspaceRuntimeById: {
-          ...s.workspaceRuntimeById,
-          [workspaceId]: {
-            ...s.workspaceRuntimeById[workspaceId],
-            skillMutationError: null,
-            skillMutationPendingKeys: {
-              ...s.workspaceRuntimeById[workspaceId].skillMutationPendingKeys,
-              [key]: true,
-            },
-          },
-        },
-      }));
+      const key = mutationPendingKey(`install:${targetScope}`);
+      setMutationPending(set, workspaceId, "skill", key);
       const existing = RUNTIME.skillInstallWaiters.get(workspaceId);
       const installPromise = Promise.withResolvers<void>();
       RUNTIME.skillInstallWaiters.set(workspaceId, {
@@ -321,13 +275,14 @@ export function createSkillActions(
         targetScope,
       });
       if (!ok) {
+        const detail = "Unable to install skills.";
         if (existing) {
           RUNTIME.skillInstallWaiters.set(workspaceId, existing);
         } else {
           RUNTIME.skillInstallWaiters.delete(workspaceId);
         }
-        clearFailedMutationSend(set, workspaceId, key, "Unable to install skills.");
-        installPromise.reject(new Error("Unable to install skills."));
+        clearFailedMutationSend(set, workspaceId, key, detail, { skillMutationError: detail });
+        installPromise.reject(new Error(detail));
       } else if (existing) {
         existing.reject(new Error("Another skill install was started"));
       }
@@ -348,15 +303,16 @@ export function createSkillActions(
         skillName,
       });
       if (!ok) {
-        set((s) => ({
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "error",
-            title: "Not connected",
-            detail: "Unable to disable skill.",
-          }),
-        }));
+        const detail = "Unable to disable skill.";
+        clearFailedMutationSend(
+          set,
+          workspaceId,
+          mutationPendingKey("disable", skillName),
+          detail,
+          {
+            skillMutationError: detail,
+          },
+        );
       }
     },
 
@@ -369,15 +325,10 @@ export function createSkillActions(
         skillName,
       });
       if (!ok) {
-        set((s) => ({
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "error",
-            title: "Not connected",
-            detail: "Unable to enable skill.",
-          }),
-        }));
+        const detail = "Unable to enable skill.";
+        clearFailedMutationSend(set, workspaceId, mutationPendingKey("enable", skillName), detail, {
+          skillMutationError: detail,
+        });
       }
     },
 
@@ -390,15 +341,10 @@ export function createSkillActions(
         skillName,
       });
       if (!ok) {
-        set((s) => ({
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "error",
-            title: "Not connected",
-            detail: "Unable to delete skill.",
-          }),
-        }));
+        const detail = "Unable to delete skill.";
+        clearFailedMutationSend(set, workspaceId, mutationPendingKey("delete", skillName), detail, {
+          skillMutationError: detail,
+        });
       }
     },
 
@@ -407,19 +353,8 @@ export function createSkillActions(
       if (!workspaceId) return;
       const cwd = workspacePath(workspaceId);
       const installationScope = resolveInstallationScopeForMutation(workspaceId, installationId);
-      const key = skillPendingKey("disable", installationId);
-      set((s) => ({
-        workspaceRuntimeById: {
-          ...s.workspaceRuntimeById,
-          [workspaceId]: {
-            ...s.workspaceRuntimeById[workspaceId],
-            skillMutationPendingKeys: {
-              ...s.workspaceRuntimeById[workspaceId].skillMutationPendingKeys,
-              [key]: true,
-            },
-          },
-        },
-      }));
+      const key = mutationPendingKey("disable", installationId);
+      setMutationPending(set, workspaceId, "skill", key);
       const ok = await requestJsonRpcControlEvent(
         get,
         set,
@@ -439,19 +374,8 @@ export function createSkillActions(
       if (!workspaceId) return;
       const cwd = workspacePath(workspaceId);
       const installationScope = resolveInstallationScopeForMutation(workspaceId, installationId);
-      const key = skillPendingKey("enable", installationId);
-      set((s) => ({
-        workspaceRuntimeById: {
-          ...s.workspaceRuntimeById,
-          [workspaceId]: {
-            ...s.workspaceRuntimeById[workspaceId],
-            skillMutationPendingKeys: {
-              ...s.workspaceRuntimeById[workspaceId].skillMutationPendingKeys,
-              [key]: true,
-            },
-          },
-        },
-      }));
+      const key = mutationPendingKey("enable", installationId);
+      setMutationPending(set, workspaceId, "skill", key);
       const ok = await requestJsonRpcControlEvent(
         get,
         set,
@@ -471,19 +395,8 @@ export function createSkillActions(
       if (!workspaceId) return;
       const cwd = workspacePath(workspaceId);
       const installationScope = resolveInstallationScopeForMutation(workspaceId, installationId);
-      const key = skillPendingKey("delete", installationId);
-      set((s) => ({
-        workspaceRuntimeById: {
-          ...s.workspaceRuntimeById,
-          [workspaceId]: {
-            ...s.workspaceRuntimeById[workspaceId],
-            skillMutationPendingKeys: {
-              ...s.workspaceRuntimeById[workspaceId].skillMutationPendingKeys,
-              [key]: true,
-            },
-          },
-        },
-      }));
+      const key = mutationPendingKey("delete", installationId);
+      setMutationPending(set, workspaceId, "skill", key);
       const ok = await requestJsonRpcControlEvent(
         get,
         set,
@@ -502,19 +415,8 @@ export function createSkillActions(
       const workspaceId = managementWorkspaceId();
       if (!workspaceId) return;
       const cwd = workspacePath(workspaceId);
-      const key = skillPendingKey(`copy:${targetScope}`, installationId);
-      set((s) => ({
-        workspaceRuntimeById: {
-          ...s.workspaceRuntimeById,
-          [workspaceId]: {
-            ...s.workspaceRuntimeById[workspaceId],
-            skillMutationPendingKeys: {
-              ...s.workspaceRuntimeById[workspaceId].skillMutationPendingKeys,
-              [key]: true,
-            },
-          },
-        },
-      }));
+      const key = mutationPendingKey(`copy:${targetScope}`, installationId);
+      setMutationPending(set, workspaceId, "skill", key);
       const ok = await requestJsonRpcControlEvent(
         get,
         set,
@@ -548,19 +450,8 @@ export function createSkillActions(
       if (!workspaceId) return;
       const cwd = workspacePath(workspaceId);
       const installationScope = resolveInstallationScopeForMutation(workspaceId, installationId);
-      const key = skillPendingKey("update", installationId);
-      set((s) => ({
-        workspaceRuntimeById: {
-          ...s.workspaceRuntimeById,
-          [workspaceId]: {
-            ...s.workspaceRuntimeById[workspaceId],
-            skillMutationPendingKeys: {
-              ...s.workspaceRuntimeById[workspaceId].skillMutationPendingKeys,
-              [key]: true,
-            },
-          },
-        },
-      }));
+      const key = mutationPendingKey("update", installationId);
+      setMutationPending(set, workspaceId, "skill", key);
       const ok = await requestJsonRpcControlEvent(
         get,
         set,

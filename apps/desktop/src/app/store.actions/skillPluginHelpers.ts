@@ -15,6 +15,73 @@ import {
 } from "../store.helpers";
 import type { WorkspaceRuntime } from "../types";
 
+export type MutationDomain = "skill" | "plugin";
+
+function mutationPendingField(
+  domain: MutationDomain,
+): keyof Pick<WorkspaceRuntime, "skillMutationPendingKeys" | "pluginMutationPendingKeys"> {
+  return domain === "plugin" ? "pluginMutationPendingKeys" : "skillMutationPendingKeys";
+}
+
+function mutationErrorField(
+  domain: MutationDomain,
+): keyof Pick<WorkspaceRuntime, "skillMutationError" | "pluginMutationError"> {
+  return domain === "plugin" ? "pluginMutationError" : "skillMutationError";
+}
+
+export function mutationPendingKey(action: string, id?: string): string {
+  return id ? `${action}:${id}` : action;
+}
+
+export function setMutationPending(
+  set: StoreSet,
+  workspaceId: string,
+  domain: MutationDomain,
+  key: string,
+  overrides?: Partial<WorkspaceRuntime>,
+): void {
+  const pendingField = mutationPendingField(domain);
+  const errorField = mutationErrorField(domain);
+  set((s) => ({
+    workspaceRuntimeById: {
+      ...s.workspaceRuntimeById,
+      [workspaceId]: {
+        ...s.workspaceRuntimeById[workspaceId],
+        [errorField]: null,
+        [pendingField]: {
+          ...s.workspaceRuntimeById[workspaceId][pendingField],
+          [key]: true,
+        },
+        ...(overrides ?? {}),
+      },
+    },
+  }));
+}
+
+export function clearMutationPending(
+  set: StoreSet,
+  workspaceId: string,
+  domain: MutationDomain,
+  key: string,
+  overrides?: Partial<WorkspaceRuntime>,
+): void {
+  const pendingField = mutationPendingField(domain);
+  set((s) => {
+    const pendingKeys = { ...s.workspaceRuntimeById[workspaceId][pendingField] };
+    delete pendingKeys[key];
+    return {
+      workspaceRuntimeById: {
+        ...s.workspaceRuntimeById,
+        [workspaceId]: {
+          ...s.workspaceRuntimeById[workspaceId],
+          [pendingField]: pendingKeys,
+          ...(overrides ?? {}),
+        },
+      },
+    };
+  });
+}
+
 export const workspacePathFor = (get: StoreGet, workspaceId: string): string | undefined =>
   ((get() as { workspaces?: Array<{ id: string; path: string }> }).workspaces ?? []).find(
     (workspace) => workspace.id === workspaceId,
@@ -36,14 +103,18 @@ export function clearFailedMutationSend(
   key: string,
   detail: string,
   overrides?: Partial<WorkspaceRuntime>,
+  domain: MutationDomain = "skill",
 ): void {
+  const pendingField = mutationPendingField(domain);
+  const errorField = mutationErrorField(domain);
   set((s) => ({
     workspaceRuntimeById: {
       ...s.workspaceRuntimeById,
       [workspaceId]: {
         ...s.workspaceRuntimeById[workspaceId],
-        skillMutationPendingKeys: (() => {
-          const pendingKeys = { ...s.workspaceRuntimeById[workspaceId].skillMutationPendingKeys };
+        [errorField]: detail,
+        [pendingField]: (() => {
+          const pendingKeys = { ...s.workspaceRuntimeById[workspaceId][pendingField] };
           delete pendingKeys[key];
           return pendingKeys;
         })(),

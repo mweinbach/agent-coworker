@@ -272,7 +272,7 @@ describe("plugin store actions", () => {
     expect(
       state.workspaceRuntimeById[managementWorkspaceId].selectedPluginPreview?.targetScope,
     ).toBe("workspace");
-    expect(state.workspaceRuntimeById[managementWorkspaceId].skillMutationPendingKeys).toEqual({});
+    expect(state.workspaceRuntimeById[managementWorkspaceId].pluginMutationPendingKeys).toEqual({});
   });
 
   test("installPlugins registers its waiter on the management workspace", async () => {
@@ -365,12 +365,11 @@ describe("plugin store actions", () => {
       createPluginActions(set, get).installPlugins("owner/repo", "user"),
     ).rejects.toThrow("Ambiguous plugin source; choose workspace or global explicitly.");
 
-    expect(state.workspaceRuntimeById[managementWorkspaceId].skillMutationError).toBe(
+    expect(state.workspaceRuntimeById[managementWorkspaceId].pluginMutationError).toBe(
       "Ambiguous plugin source; choose workspace or global explicitly.",
     );
-    expect(state.workspaceRuntimeById[managementWorkspaceId].pluginsError).toBe(
-      "Ambiguous plugin source; choose workspace or global explicitly.",
-    );
+    expect(state.workspaceRuntimeById[managementWorkspaceId].skillMutationError).toBeNull();
+    expect(state.workspaceRuntimeById[managementWorkspaceId].pluginsError).toBeNull();
     expect(state.notifications.at(-1)?.detail).toBe(
       "Ambiguous plugin source; choose workspace or global explicitly.",
     );
@@ -383,6 +382,7 @@ describe("plugin store actions", () => {
         ...defaultWorkspaceRuntime(),
         serverUrl: "ws://source",
         controlSessionId: "jsonrpc-control",
+        skillMutationError: "stale skill mutation error",
       },
       [secondaryWorkspaceId]: {
         ...defaultWorkspaceRuntime(),
@@ -485,6 +485,10 @@ describe("plugin store actions", () => {
       "cowork/skills/catalog/read",
       "cowork/skills/list",
     ]);
+    expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBe(
+      "stale skill mutation error",
+    );
+    expect(state.workspaceRuntimeById[workspaceId].pluginMutationPendingKeys).toEqual({});
   });
 
   test("refreshPluginsCatalog falls back to the selected workspace when the management workspace no longer exists", async () => {
@@ -558,21 +562,19 @@ describe("plugin store actions", () => {
     } as unknown as JsonRpcSocket);
 
     await createPluginActions(set, get).enablePlugin("plugin-1", "workspace");
-    expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBe(
+    expect(state.workspaceRuntimeById[workspaceId].pluginMutationError).toBe(
       "Plugin is shadowed by a global install.",
     );
-    expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBe(
-      "Plugin is shadowed by a global install.",
-    );
+    expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBeNull();
+    expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBeNull();
     expect(state.notifications.at(-1)?.detail).toBe("Plugin is shadowed by a global install.");
 
     await createPluginActions(set, get).disablePlugin("plugin-1", "workspace");
-    expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBe(
+    expect(state.workspaceRuntimeById[workspaceId].pluginMutationError).toBe(
       "Plugin is already disabled.",
     );
-    expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBe(
-      "Plugin is already disabled.",
-    );
+    expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBeNull();
+    expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBeNull();
     expect(state.notifications.at(-1)?.detail).toBe("Plugin is already disabled.");
   });
 
@@ -646,19 +648,20 @@ describe("plugin store actions", () => {
       const state = createState();
       state.workspaceRuntimeById[workspaceId] = {
         ...defaultWorkspaceRuntime(),
-        skillMutationPendingKeys: { other: true },
+        pluginMutationPendingKeys: { other: true },
       };
       state.workspaces = [{ id: workspaceId, path: "/tmp/workspace" }];
       const { get, set } = createStoreHarness(state);
 
       await invoke(createPluginActions(set, get));
 
-      expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({
+      expect(state.workspaceRuntimeById[workspaceId].pluginMutationPendingKeys).toEqual({
         other: true,
       });
-      expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys[pendingKey]).toBe(
+      expect(state.workspaceRuntimeById[workspaceId].pluginMutationPendingKeys[pendingKey]).toBe(
         undefined,
       );
+      expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({});
       expect(state.notifications).toHaveLength(1);
     });
   }

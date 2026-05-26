@@ -4,6 +4,9 @@ import {
   ensureControlSocket,
   ensureServerRunning,
   ensureWorkspaceRuntime,
+  makeId,
+  nowIso,
+  pushNotification,
   RUNTIME,
   requestJsonRpcControlEvent,
   type StoreGet,
@@ -12,9 +15,12 @@ import {
 } from "../store.helpers";
 import {
   clearFailedMutationSend,
+  clearMutationPending,
   managementWorkspaceIdFor,
+  mutationPendingKey,
   refreshSharedWorkspaceState,
   resolvePluginManagementWorkspace,
+  setMutationPending,
   workspacePathFor,
 } from "./skillPluginHelpers";
 
@@ -22,7 +28,10 @@ type PluginSelection = Pick<PluginCatalogEntry, "id" | "scope">;
 type PluginMutationAction = "enable" | "disable" | "delete";
 
 function pluginPendingKey(action: string, selection?: PluginSelection): string {
-  return selection ? `plugin:${action}:${selection.scope}:${selection.id}` : `plugin:${action}`;
+  return mutationPendingKey(
+    `plugin:${action}`,
+    selection ? `${selection.scope}:${selection.id}` : undefined,
+  );
 }
 
 export function createPluginActions(
@@ -78,28 +87,19 @@ export function createPluginActions(
     key: string,
     opts: { clearSelection?: boolean } = {},
   ) => {
-    set((s) => ({
-      workspaceRuntimeById: {
-        ...s.workspaceRuntimeById,
-        [workspaceId]: {
-          ...s.workspaceRuntimeById[workspaceId],
-          ...(opts.clearSelection
-            ? {
-                selectedPlugin: null,
-                selectedPluginId: null,
-                selectedPluginScope: null,
-              }
-            : {}),
-          skillMutationPendingKeys: (() => {
-            const pendingKeys = {
-              ...s.workspaceRuntimeById[workspaceId].skillMutationPendingKeys,
-            };
-            delete pendingKeys[key];
-            return pendingKeys;
-          })(),
-        },
-      },
-    }));
+    clearMutationPending(
+      set,
+      workspaceId,
+      "plugin",
+      key,
+      opts.clearSelection
+        ? {
+            selectedPlugin: null,
+            selectedPluginId: null,
+            selectedPluginScope: null,
+          }
+        : undefined,
+    );
   };
 
   const runPluginMutation = async (
@@ -113,18 +113,7 @@ export function createPluginActions(
     const pluginScope = resolvePluginScopeForMutation(workspaceId, pluginId, scope);
     const selection = pluginScope ? { id: pluginId, scope: pluginScope } : undefined;
     const key = pluginPendingKey(action, selection);
-    set((s) => ({
-      workspaceRuntimeById: {
-        ...s.workspaceRuntimeById,
-        [workspaceId]: {
-          ...s.workspaceRuntimeById[workspaceId],
-          skillMutationPendingKeys: {
-            ...s.workspaceRuntimeById[workspaceId].skillMutationPendingKeys,
-            [key]: true,
-          },
-        },
-      },
-    }));
+    setMutationPending(set, workspaceId, "plugin", key, { pluginsError: null });
     const rpcError: { message?: string } = {};
     const ok = await requestJsonRpcControlEvent(
       get,
@@ -140,11 +129,16 @@ export function createPluginActions(
     );
     if (!ok) {
       const detail = rpcError.message?.trim() || `Unable to ${action} plugin.`;
-      clearFailedMutationSend(set, workspaceId, key, detail, {
-        pluginsLoading: false,
-        pluginsError: detail,
-        skillMutationError: detail,
-      });
+      clearFailedMutationSend(
+        set,
+        workspaceId,
+        key,
+        detail,
+        {
+          pluginMutationError: detail,
+        },
+        "plugin",
+      );
       return;
     }
 
@@ -177,16 +171,23 @@ export function createPluginActions(
         { cwd },
       );
       if (!ok) {
-        clearFailedMutationSend(
-          set,
-          workspaceId,
-          "plugin:refresh",
-          "Unable to refresh plugins catalog.",
-          {
-            pluginsLoading: false,
-            pluginsError: "Unable to refresh plugins catalog.",
+        set((s) => ({
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...s.workspaceRuntimeById[workspaceId],
+              pluginsLoading: false,
+              pluginsError: "Unable to refresh plugins catalog.",
+            },
           },
-        );
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Not connected",
+            detail: "Unable to refresh plugins catalog.",
+          }),
+        }));
       }
     },
 
@@ -262,21 +263,10 @@ export function createPluginActions(
       if (!workspaceId) return;
       const cwd = workspacePathFor(get, workspaceId);
       const key = pluginPendingKey("preview");
-      set((s) => ({
-        workspaceRuntimeById: {
-          ...s.workspaceRuntimeById,
-          [workspaceId]: {
-            ...s.workspaceRuntimeById[workspaceId],
-            pluginsLoading: true,
-            pluginsError: null,
-            skillMutationError: null,
-            skillMutationPendingKeys: {
-              ...s.workspaceRuntimeById[workspaceId].skillMutationPendingKeys,
-              [key]: true,
-            },
-          },
-        },
-      }));
+      setMutationPending(set, workspaceId, "plugin", key, {
+        pluginsLoading: true,
+        pluginsError: null,
+      });
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);
       const rpcError: { message?: string } = {};
@@ -294,11 +284,17 @@ export function createPluginActions(
       );
       if (!ok) {
         const detail = rpcError.message?.trim() || "Unable to preview plugin install.";
-        clearFailedMutationSend(set, workspaceId, key, detail, {
-          pluginsLoading: false,
-          pluginsError: detail,
-          skillMutationError: detail,
-        });
+        clearFailedMutationSend(
+          set,
+          workspaceId,
+          key,
+          detail,
+          {
+            pluginsLoading: false,
+            pluginMutationError: detail,
+          },
+          "plugin",
+        );
       }
     },
 
@@ -309,21 +305,10 @@ export function createPluginActions(
       }
       const cwd = workspacePathFor(get, workspaceId);
       const key = pluginPendingKey(`install:${targetScope}`);
-      set((s) => ({
-        workspaceRuntimeById: {
-          ...s.workspaceRuntimeById,
-          [workspaceId]: {
-            ...s.workspaceRuntimeById[workspaceId],
-            pluginsLoading: true,
-            pluginsError: null,
-            skillMutationError: null,
-            skillMutationPendingKeys: {
-              ...s.workspaceRuntimeById[workspaceId].skillMutationPendingKeys,
-              [key]: true,
-            },
-          },
-        },
-      }));
+      setMutationPending(set, workspaceId, "plugin", key, {
+        pluginsLoading: true,
+        pluginsError: null,
+      });
       const existing = RUNTIME.pluginInstallWaiters.get(workspaceId);
       const installPromise = Promise.withResolvers<void>();
       RUNTIME.pluginInstallWaiters.set(workspaceId, {
@@ -352,11 +337,17 @@ export function createPluginActions(
         } else {
           RUNTIME.pluginInstallWaiters.delete(workspaceId);
         }
-        clearFailedMutationSend(set, workspaceId, key, detail, {
-          pluginsLoading: false,
-          pluginsError: detail,
-          skillMutationError: detail,
-        });
+        clearFailedMutationSend(
+          set,
+          workspaceId,
+          key,
+          detail,
+          {
+            pluginsLoading: false,
+            pluginMutationError: detail,
+          },
+          "plugin",
+        );
         installPromise.reject(new Error(detail));
       } else if (existing) {
         existing.reject(new Error("Another install was started"));

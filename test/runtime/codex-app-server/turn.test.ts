@@ -6,6 +6,7 @@ import { z } from "zod";
 
 import { createRuntime } from "../../../src/runtime";
 import { buildCodexTurnInput } from "../../../src/runtime/codexAppServer/turnInput";
+import type { ModelMessage } from "../../../src/types";
 import { mockInterrupts, writeMockAppServer } from "../../fixtures/codexAppServerMock";
 import {
   installCodexAppServerTestHooks,
@@ -15,6 +16,12 @@ import {
 } from "./helpers";
 
 installCodexAppServerTestHooks();
+
+type TestSteerHandler = (input: {
+  text: string;
+  expectedTurnId: string;
+  content?: ModelMessage["content"];
+}) => Promise<void>;
 
 describe("codex app-server turn lifecycle", () => {
   test.serial("registers an active steer handler that sends turn/steer to app-server", async () => {
@@ -26,9 +33,7 @@ describe("codex app-server turn lifecycle", () => {
     process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
     process.env.CODEX_APP_SERVER_DELAY_COMPLETION = "1";
 
-    let steerHandler:
-      | ((input: { text: string; expectedTurnId: string }) => Promise<void>)
-      | undefined;
+    let steerHandler: TestSteerHandler | undefined;
     const runtime = createRuntime(makeConfig(dir));
     const result = await runtime.runTurn({
       config: makeConfig(dir),
@@ -54,6 +59,63 @@ describe("codex app-server turn lifecycle", () => {
       expectedTurnId: "turn_1",
       input: [{ type: "text", text: "also mention steering", text_elements: [] }],
     });
+    expect(steerHandler).toBeUndefined();
+  });
+
+  test.serial("sends image steer content as Codex app-server image inputs", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-image-steer-"));
+    const capturePath = path.join(dir, "requests.jsonl");
+    process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
+    process.env.CODEX_APP_SERVER_DELAY_COMPLETION = "1";
+
+    let steerHandler: TestSteerHandler | undefined;
+    const runtime = createRuntime(makeConfig(dir));
+    const result = await runtime.runTurn({
+      config: makeConfig(dir),
+      system: "You are Codex.",
+      allMessages: [
+        { role: "user", content: "Earlier question" },
+        { role: "assistant", content: "Earlier answer" },
+        { role: "user", content: "Start with text" },
+      ],
+      messages: [{ role: "user", content: "Start with text" }],
+      tools: {},
+      maxSteps: 1,
+      registerSteerHandler: (handler) => {
+        steerHandler = handler;
+        queueMicrotask(() => {
+          void handler({
+            text: "inspect this steer image",
+            expectedTurnId: "turn_1",
+            content: [
+              { type: "text", text: "inspect this steer image" },
+              {
+                type: "image",
+                mimeType: "image/png",
+                data: "abc",
+                detail: "high",
+                filename: "steer.png",
+              },
+            ],
+          });
+        });
+        return () => {
+          if (steerHandler === handler) steerHandler = undefined;
+        };
+      },
+    });
+
+    expect(result.text).toBe("hello from app-server");
+    const requests = await readCapturedRequests(capturePath);
+    const steerParams = requests.find((entry) => entry.method === "turn/steer")?.params;
+    expect(steerParams).toMatchObject({
+      threadId: "thread_1",
+      expectedTurnId: "turn_1",
+    });
+    expect(steerParams?.input).toEqual([
+      { type: "text", text: "inspect this steer image", text_elements: [] },
+      { type: "image", detail: "high", url: "data:image/png;base64,abc" },
+    ]);
     expect(steerHandler).toBeUndefined();
   });
 

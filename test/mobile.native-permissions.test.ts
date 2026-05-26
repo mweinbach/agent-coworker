@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 const require = createRequire(import.meta.url);
 const mobileAppJsonPath = new URL("../apps/mobile/app.json", import.meta.url);
@@ -8,6 +10,23 @@ const minimalPermissionsPlugin = require("../apps/mobile/plugins/with-minimal-na
 const { __internal } = minimalPermissionsPlugin;
 
 describe("mobile native permissions", () => {
+  test("can load internal helpers without mobile Expo dependencies installed", () => {
+    const pluginSource = readFileSync(
+      new URL("../apps/mobile/plugins/with-minimal-native-permissions.js", import.meta.url),
+      "utf8",
+    );
+    const isolatedDir = mkdtempSync(path.join(tmpdir(), "cowork-mobile-permissions-plugin-"));
+    const isolatedPluginPath = path.join(isolatedDir, "with-minimal-native-permissions.js");
+    writeFileSync(isolatedPluginPath, pluginSource);
+
+    const isolatedRequire = createRequire(path.join(isolatedDir, "package.json"));
+    const isolatedPlugin = isolatedRequire(isolatedPluginPath);
+
+    expect(
+      isolatedPlugin.__internal.ANDROID_ALLOWED_PERMISSIONS.has("android.permission.CAMERA"),
+    ).toBe(true);
+  });
+
   test("keeps Expo source permissions constrained to pairing needs", () => {
     const config = JSON.parse(readFileSync(mobileAppJsonPath, "utf8"));
 

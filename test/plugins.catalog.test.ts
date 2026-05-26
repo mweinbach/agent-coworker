@@ -473,9 +473,7 @@ describe("plugin catalog and install operations", () => {
   });
 
   test("remote marketplace entries continue after one plugin source fails", async () => {
-    const workspace = await fs.mkdtemp(
-      path.join(os.tmpdir(), "plugins-market-partial-workspace-"),
-    );
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-market-partial-workspace-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-market-partial-home-"));
     const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-market-partial-"));
     const config = makeConfig(workspace, home, builtInConfigDir);

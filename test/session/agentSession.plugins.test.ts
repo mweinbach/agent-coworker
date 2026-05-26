@@ -241,9 +241,7 @@ describe("AgentSession", () => {
         await waitForCondition(
           () => events.filter((event) => event.type === "plugins_catalog").length >= 2,
         );
-        const mutationCatalog = events
-          .filter((event) => event.type === "plugins_catalog")
-          .at(-1);
+        const mutationCatalog = events.filter((event) => event.type === "plugins_catalog").at(-1);
         expect(mutationCatalog?.catalog.plugins[0]?.enabled).toBe(false);
 
         releaseMarketplaceContent(

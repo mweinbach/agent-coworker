@@ -9,7 +9,10 @@ import type {
   JsonRpcLiteRequest,
 } from "../src/server/jsonrpc/protocol";
 import type { AgentServerRuntime } from "../src/server/runtime/ServerRuntime";
-import { loadH3PairingStoreState } from "../src/server/transport/h3/pairing";
+import {
+  type H3TrustedDevicePermissionKey,
+  loadH3PairingStoreState,
+} from "../src/server/transport/h3/pairing";
 import { startH3MobileServer } from "../src/server/transport/h3/server";
 import { type CoworkPairingTicket, encodeCoworkPairingTicket } from "../src/shared/coworkTicket";
 
@@ -78,6 +81,109 @@ describe("H3 mobile server pairing", () => {
     {
       name: "ticket expiry",
       mutate: (ticket) => ({ ...ticket, expiresAt: ticket.expiresAt - 1 }),
+    },
+  ];
+
+  const permissionRouteCases: Array<{
+    name: string;
+    permission: H3TrustedDevicePermissionKey;
+    payload: Record<string, unknown>;
+    allowedStatus: number;
+    expectedHandledMessage: Record<string, unknown>;
+  }> = [
+    {
+      name: "turn requests",
+      permission: "turns",
+      payload: {
+        jsonrpc: "2.0",
+        id: "turn-request",
+        method: "thread/start",
+        params: { workspaceId: "workspace-1", input: "hello" },
+      },
+      allowedStatus: 200,
+      expectedHandledMessage: {
+        id: "turn-request",
+        method: "thread/start",
+        params: { workspaceId: "workspace-1", input: "hello" },
+      },
+    },
+    {
+      name: "provider auth requests",
+      permission: "providerAuth",
+      payload: {
+        jsonrpc: "2.0",
+        id: "provider-auth-request",
+        method: "cowork/provider/auth/start",
+        params: { provider: "openai" },
+      },
+      allowedStatus: 200,
+      expectedHandledMessage: {
+        id: "provider-auth-request",
+        method: "cowork/provider/auth/start",
+        params: { provider: "openai" },
+      },
+    },
+    {
+      name: "MCP auth requests",
+      permission: "mcpAuth",
+      payload: {
+        jsonrpc: "2.0",
+        id: "mcp-auth-request",
+        method: "cowork/mcp/server/auth/start",
+        params: { serverName: "github" },
+      },
+      allowedStatus: 200,
+      expectedHandledMessage: {
+        id: "mcp-auth-request",
+        method: "cowork/mcp/server/auth/start",
+        params: { serverName: "github" },
+      },
+    },
+    {
+      name: "backup requests",
+      permission: "backups",
+      payload: {
+        jsonrpc: "2.0",
+        id: "backup-request",
+        method: "cowork/backups/create",
+        params: { workspaceId: "workspace-1" },
+      },
+      allowedStatus: 200,
+      expectedHandledMessage: {
+        id: "backup-request",
+        method: "cowork/backups/create",
+        params: { workspaceId: "workspace-1" },
+      },
+    },
+    {
+      name: "workspace settings fallback requests",
+      permission: "workspaceSettings",
+      payload: {
+        jsonrpc: "2.0",
+        id: "workspace-settings-request",
+        method: "cowork/session/defaults/apply",
+        params: { defaults: { model: "model-1" } },
+      },
+      allowedStatus: 200,
+      expectedHandledMessage: {
+        id: "workspace-settings-request",
+        method: "cowork/session/defaults/apply",
+        params: { defaults: { model: "model-1" } },
+      },
+    },
+    {
+      name: "server response forwarding",
+      permission: "serverRequests",
+      payload: {
+        jsonrpc: "2.0",
+        id: "server-response",
+        result: { accepted: true },
+      },
+      allowedStatus: 202,
+      expectedHandledMessage: {
+        id: "server-response",
+        result: { accepted: true },
+      },
     },
   ];
 
@@ -274,6 +380,98 @@ describe("H3 mobile server pairing", () => {
           params: { threadId: "thread-1", input: "hello" },
         },
       ]);
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test("gates representative HTTP RPC methods behind matching mobile permissions", async () => {
+    const storeRoot = await createTempRoot();
+    const handled: Array<JsonRpcLiteRequest | JsonRpcLiteNotification | JsonRpcLiteClientResponse> =
+      [];
+    const runtime = {
+      openHttpConnection() {},
+      handleDecodedMessage(connection: H3TestConnection, message) {
+        handled.push(message);
+        if ("method" in message && "id" in message) {
+          connection.send(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: message.id,
+              result: { reachedRuntime: true, method: message.method },
+            }),
+          );
+        }
+      },
+      closeConnection() {},
+    } satisfies Partial<AgentServerRuntime>;
+    const server = await startH3MobileServer({
+      runtime: runtime as AgentServerRuntime,
+      hostname: "127.0.0.1",
+      hostHints: ["127.0.0.1"],
+      storeRootPath: storeRoot,
+      enableH3: false,
+    });
+
+    try {
+      const pairResponse = await fetchH3(`${server.url}/pair`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ticket: server.ticketUrl,
+          nonce: server.nonce,
+          deviceId: "phone-1",
+          identityPub: "phone-identity",
+          displayName: "Work Phone",
+        }),
+      });
+      expect(pairResponse.status).toBe(200);
+      const pairPayload = (await pairResponse.json()) as { sessionToken: string };
+      const authHeaders = {
+        authorization: `Bearer ${pairPayload.sessionToken}`,
+        "content-type": "application/json",
+        "x-cowork-mobile-device-id": "phone-1",
+      };
+
+      for (const routeCase of permissionRouteCases) {
+        const beforeDeniedCount = handled.length;
+        const denied = await fetchH3(`${server.url}/rpc`, {
+          method: "POST",
+          headers: authHeaders,
+          body: JSON.stringify(routeCase.payload),
+        });
+        expect(denied.status).toBe(403);
+        await expect(denied.json()).resolves.toEqual({
+          error: `Mobile device permission required: ${routeCase.permission}.`,
+          permission: routeCase.permission,
+        });
+        expect(handled).toHaveLength(beforeDeniedCount);
+
+        await expect(
+          server.updateTrustedDevicePermissions("phone-1", { [routeCase.permission]: true }),
+        ).resolves.toMatchObject({
+          deviceId: "phone-1",
+          permissions: { [routeCase.permission]: true },
+        });
+
+        const allowed = await fetchH3(`${server.url}/rpc`, {
+          method: "POST",
+          headers: authHeaders,
+          body: JSON.stringify(routeCase.payload),
+        });
+        expect(allowed.status).toBe(routeCase.allowedStatus);
+        if (routeCase.allowedStatus === 200 && "method" in routeCase.expectedHandledMessage) {
+          await expect(allowed.json()).resolves.toEqual({
+            jsonrpc: "2.0",
+            id: routeCase.expectedHandledMessage.id,
+            result: {
+              reachedRuntime: true,
+              method: routeCase.expectedHandledMessage.method,
+            },
+          });
+        }
+        expect(handled.at(-1)).toMatchObject(routeCase.expectedHandledMessage);
+      }
     } finally {
       await server.stop();
     }

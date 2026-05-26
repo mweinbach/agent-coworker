@@ -38,7 +38,7 @@ Cowork takes the opposite approach:
 Prerequisite: [Bun](https://bun.sh)
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/mweinbach/agent-coworker
 cd agent-coworker
 bun install
 ```

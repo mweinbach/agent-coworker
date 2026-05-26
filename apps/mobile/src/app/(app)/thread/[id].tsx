@@ -84,6 +84,22 @@ export default function ThreadDetailScreen() {
     };
   }, [threadId, isConnected, runtimeClient, isDraftThread]);
 
+  const renderItems = useMemo(
+    () => buildChatRenderItems(filterFeedForDisplay(thread?.feed ?? [], showDebugMessages)),
+    [thread?.feed, showDebugMessages],
+  );
+
+  const liveActivityGroupId = useMemo(() => {
+    if (!activeTurnStartedAt) return null;
+    for (let index = renderItems.length - 1; index >= 0; index -= 1) {
+      const entry = renderItems[index];
+      if (entry?.kind === "activity-group") {
+        return entry.id;
+      }
+    }
+    return null;
+  }, [activeTurnStartedAt, renderItems]);
+
   if (!thread) {
     return (
       <Screen scroll contentStyle={{ justifyContent: "center" }}>
@@ -98,22 +114,6 @@ export default function ThreadDetailScreen() {
   }
 
   const activeThread = thread;
-
-  const renderItems = useMemo(
-    () => buildChatRenderItems(filterFeedForDisplay(activeThread.feed, showDebugMessages)),
-    [activeThread.feed, showDebugMessages],
-  );
-
-  const liveActivityGroupId = useMemo(() => {
-    if (!activeTurnStartedAt) return null;
-    for (let index = renderItems.length - 1; index >= 0; index -= 1) {
-      const entry = renderItems[index];
-      if (entry?.kind === "activity-group") {
-        return entry.id;
-      }
-    }
-    return null;
-  }, [activeTurnStartedAt, renderItems]);
 
   async function interruptCurrentThread() {
     if (runtimeClient && !isDraftThread) {

@@ -13,33 +13,37 @@ function asNonEmptyString(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function toolCallFromPartialLite(event: any): {
+function toolCallFromPartialLite(event: unknown): {
   toolCallId: string;
   toolName: string;
   input?: unknown;
 } {
-  const partial = asRecord(event?.partial);
-  const contentIndex = typeof event?.contentIndex === "number" ? event.contentIndex : -1;
+  const eventRecord = asRecord(event);
+  const partial = asRecord(eventRecord?.partial);
+  const contentIndex = typeof eventRecord?.contentIndex === "number" ? eventRecord.contentIndex : -1;
   const partialContent = Array.isArray(partial?.content) ? partial.content : [];
   const part = contentIndex >= 0 ? asRecord(partialContent[contentIndex]) : null;
   const fallbackId = contentIndex >= 0 ? `tool_call_${contentIndex}` : `tool_${Date.now()}`;
   const toolCallId =
-    asNonEmptyString(part?.id) ?? asNonEmptyString(event?.toolCall?.id) ?? fallbackId;
+    asNonEmptyString(part?.id) ??
+    asNonEmptyString(asRecord(eventRecord?.toolCall)?.id) ??
+    fallbackId;
   const toolName = asNonEmptyString(part?.name) ?? "tool";
   const input = part?.arguments ?? {};
   return { toolCallId, toolName, input };
 }
 
 export function mapPiEventToRawParts(
-  event: any,
+  event: unknown,
   provider: ProviderName,
   includeUnknown: boolean,
 ): unknown[] {
+  const eventRecord = asRecord(event);
   const mode = reasoningModeForProvider(provider);
-  const contentIndex = typeof event?.contentIndex === "number" ? event.contentIndex : 0;
+  const contentIndex = typeof eventRecord?.contentIndex === "number" ? eventRecord.contentIndex : 0;
   const streamId = `s${contentIndex}`;
 
-  switch (event?.type) {
+  switch (eventRecord?.type) {
     case "start":
       return [{ type: "start" }];
     case "text_start":
@@ -47,7 +51,7 @@ export function mapPiEventToRawParts(
         {
           type: "text-start",
           id: streamId,
-          ...(typeof event.phase === "string" ? { phase: event.phase } : {}),
+          ...(typeof eventRecord.phase === "string" ? { phase: eventRecord.phase } : {}),
         },
       ];
     case "text_delta":
@@ -55,8 +59,8 @@ export function mapPiEventToRawParts(
         {
           type: "text-delta",
           id: streamId,
-          text: String(event.delta ?? ""),
-          ...(typeof event.phase === "string" ? { phase: event.phase } : {}),
+          text: String(eventRecord.delta ?? ""),
+          ...(typeof eventRecord.phase === "string" ? { phase: eventRecord.phase } : {}),
         },
       ];
     case "text_end":
@@ -64,14 +68,14 @@ export function mapPiEventToRawParts(
         {
           type: "text-end",
           id: streamId,
-          ...(Array.isArray(event.annotations) ? { annotations: event.annotations } : {}),
-          ...(typeof event.phase === "string" ? { phase: event.phase } : {}),
+          ...(Array.isArray(eventRecord.annotations) ? { annotations: eventRecord.annotations } : {}),
+          ...(typeof eventRecord.phase === "string" ? { phase: eventRecord.phase } : {}),
         },
       ];
     case "thinking_start":
       return [{ type: "reasoning-start", id: streamId, mode }];
     case "thinking_delta":
-      return [{ type: "reasoning-delta", id: streamId, mode, text: String(event.delta ?? "") }];
+      return [{ type: "reasoning-delta", id: streamId, mode, text: String(eventRecord.delta ?? "") }];
     case "thinking_end":
       return [{ type: "reasoning-end", id: streamId, mode }];
     case "toolcall_start": {
@@ -90,7 +94,7 @@ export function mapPiEventToRawParts(
         {
           type: "tool-input-delta",
           id: toolCall.toolCallId,
-          delta: String(event.delta ?? ""),
+          delta: String(eventRecord.delta ?? ""),
         },
       ];
     }
@@ -110,11 +114,11 @@ export function mapPiEventToRawParts(
       ];
     }
     case "done": {
-      const totalUsage = normalizePiUsage(event.message?.usage);
+      const totalUsage = normalizePiUsage(asRecord(eventRecord.message)?.usage);
       return [
         {
           type: "finish",
-          finishReason: event.reason,
+          finishReason: eventRecord.reason,
           totalUsage,
         },
       ];
@@ -123,7 +127,10 @@ export function mapPiEventToRawParts(
       return [
         {
           type: "error",
-          error: event.error?.errorMessage ?? event.error ?? "PI stream error",
+          error:
+            asNonEmptyString(asRecord(eventRecord.error)?.errorMessage) ??
+            eventRecord.error ??
+            "PI stream error",
         },
       ];
     default:
@@ -131,7 +138,7 @@ export function mapPiEventToRawParts(
       return [
         {
           type: "unknown",
-          sdkType: String(event?.type ?? "unknown"),
+          sdkType: String(eventRecord?.type ?? "unknown"),
           raw: event,
         },
       ];

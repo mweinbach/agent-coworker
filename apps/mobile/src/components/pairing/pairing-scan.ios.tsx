@@ -1,6 +1,5 @@
 import { type BarcodeScanningResult, CameraView, useCameraPermissions } from "expo-camera";
 import {
-  Button,
   ContentUnavailableView,
   Host,
   List,

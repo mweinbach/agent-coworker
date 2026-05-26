@@ -274,7 +274,7 @@ function getEnvValue(env: Record<string, string | undefined>, key: string): stri
     (candidate) => candidate.toLowerCase() === key.toLowerCase(),
   );
   const value = actualKey ? env[actualKey] : undefined;
-  return value && value.trim() ? value : undefined;
+  return value?.trim() ? value : undefined;
 }
 
 function prependNodeOption(existing: string | undefined, option: string): string {

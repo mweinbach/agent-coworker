@@ -137,7 +137,6 @@ function existingTsOr(ts: string, existing?: SessionFeedItem): string {
 
 import {
   isTerminalProjectedToolState,
-  stripWhitespaceForTranscriptDedupe,
 } from "../shared/projectionPolicy";
 
 function existingToolItem(

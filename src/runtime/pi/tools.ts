@@ -71,7 +71,7 @@ export function extractToolExecutionErrorMessage(result: unknown): string | unde
 }
 
 export async function emitPiEventAsRawPart(
-  event: any,
+  event: unknown,
   provider: ProviderName,
   includeUnknown: boolean,
   emit: (part: unknown) => Promise<void>,

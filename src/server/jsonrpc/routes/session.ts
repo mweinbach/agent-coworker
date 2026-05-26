@@ -9,7 +9,6 @@ import {
   captureWorkspaceControlOutcome,
   sendSessionMutationError,
 } from "./outcomes";
-import { toJsonRpcParams } from "./shared";
 import type { JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
 
 export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRpcRequestHandlerMap {

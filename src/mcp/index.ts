@@ -702,7 +702,7 @@ const workspaceMcpCache = new Map<string, CachedWorkspaceMcp>();
 function serializeServerConfigs(servers: MCPServerConfig[]): string {
   try {
     const cloned = JSON.parse(
-      JSON.stringify(servers, (key, value) => {
+      JSON.stringify(servers, (_key, value) => {
         if (typeof value === "function") return undefined;
         return value;
       }),

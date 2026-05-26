@@ -10,7 +10,6 @@ import {
 } from "@expo/ui/swift-ui";
 import {
   buttonStyle,
-  controlSize,
   foregroundStyle,
   frame,
   listStyle,
@@ -125,7 +124,6 @@ export function PairingHomeIos() {
                 />
                 <SwipeActions.Actions edge="trailing" allowsFullSwipe={false}>
                   <Button
-                    role="destructive"
                     label="Delete"
                     systemImage="trash"
                     onPress={() => void forgetTrustedMac(desktop.macDeviceId)}

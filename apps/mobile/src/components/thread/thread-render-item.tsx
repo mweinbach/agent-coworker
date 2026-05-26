@@ -1,5 +1,4 @@
 import type { ChatRenderItem } from "@/features/cowork/activityGroups";
-import type { SessionFeedItem } from "@/features/cowork/protocolTypes";
 import { ActivityGroupCard } from "./activity-group-card";
 import { ThreadFeedItem } from "./thread-feed-item";
 

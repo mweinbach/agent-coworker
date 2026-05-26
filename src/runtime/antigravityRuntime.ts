@@ -16,6 +16,11 @@ import { toPiJsonSchema } from "./piRuntimeOptions";
 import { maybeSpillToolOutputToWorkspace } from "./toolOutputOverflow";
 import type { LlmRuntime, RuntimeRunTurnParams, RuntimeRunTurnResult, RuntimeUsage } from "./types";
 
+type AntigravityTool = ReturnType<typeof tool>;
+type AntigravityAssistantContentPart =
+  | { type: "thinking"; thinking: string }
+  | { type: "text"; text: string };
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   return value as Record<string, unknown>;
@@ -225,7 +230,7 @@ export function createAntigravityRuntime(opts: { platform?: NodeJS.Platform } = 
       }
 
       // Convert tool definitions to SDK custom tools
-      const sdkTools: any[] = [];
+      const sdkTools: AntigravityTool[] = [];
       if (params.tools) {
         for (const [name, toolDef] of Object.entries(params.tools)) {
           const schema = toPiJsonSchema(toolDef.inputSchema, "google");
@@ -233,8 +238,8 @@ export function createAntigravityRuntime(opts: { platform?: NodeJS.Platform } = 
             tool(
               name,
               toolDef.description || "",
-              schema as Record<string, any>,
-              async (args: any) => {
+              schema as Record<string, unknown>,
+              async (args: Record<string, unknown>) => {
                 if (params.abortSignal?.aborted) {
                   throw new Error("Model turn aborted.");
                 }
@@ -511,7 +516,7 @@ export function createAntigravityRuntime(opts: { platform?: NodeJS.Platform } = 
           textOpen = false;
         }
 
-        const finalContentParts: any[] = [];
+        const finalContentParts: AntigravityAssistantContentPart[] = [];
         if (finalThoughts.trim()) {
           finalContentParts.push({
             type: "thinking",

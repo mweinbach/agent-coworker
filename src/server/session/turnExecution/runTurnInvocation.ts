@@ -1,5 +1,4 @@
 import { resolveExperimentalA2uiConfig } from "../../../experimental/a2ui/flags";
-import type { AgentExecutionState } from "../../../shared/agents";
 import type { TodoItem } from "../../../types";
 import { getAgentRoleShellPolicy } from "../../agents/roles";
 import { MODEL_STREAM_NORMALIZER_VERSION, normalizeModelStreamPart } from "../../modelStream";

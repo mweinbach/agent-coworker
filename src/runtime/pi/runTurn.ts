@@ -1,4 +1,11 @@
-import { stream as piStream } from "@earendil-works/pi-ai";
+import {
+  stream as piStream,
+  type Api as PiApi,
+  type Context as PiContext,
+  type Message as PiMessage,
+  type Model as PiSdkModel,
+  type ProviderStreamOptions as PiProviderStreamOptions,
+} from "@earendil-works/pi-ai";
 import {
   markModelCallSpanError,
   markModelCallSpanSuccessFromAssistantRecord,
@@ -36,6 +43,10 @@ import {
 } from "./tools";
 import type { PiRuntimeOverrides, RuntimeStepOverrides } from "./types";
 
+function asPiMessage(message: Record<string, unknown>): PiMessage {
+  return message as unknown as PiMessage;
+}
+
 export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime {
   const piStreamImpl = overrides.piStreamImpl ?? piStream;
   return {
@@ -46,9 +57,8 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
         await params.onModelStreamPart(part);
       };
 
-      const turnMessages: Array<Record<string, unknown>> = [];
+      const turnMessages: PiMessage[] = [];
       let usage = undefined as RuntimeRunTurnResult["usage"];
-      const finalProviderState = undefined as any;
 
       try {
         const resolved = await resolvePiModel(params);
@@ -101,16 +111,16 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
           try {
             const runModelStep = async () => {
               const stream = piStreamImpl(
-                preparePiModelForStream(resolved.model) as any,
+                preparePiModelForStream(resolved.model) as unknown as PiSdkModel<PiApi>,
                 {
                   systemPrompt: params.system,
-                  messages: stepState.piMessages as any,
-                  tools: piTools as any,
+                  messages: stepState.piMessages as unknown as PiMessage[],
+                  tools: piTools as unknown as PiContext["tools"],
                 },
-                stepState.streamOptions as any,
+                stepState.streamOptions as PiProviderStreamOptions,
               );
 
-              for await (const event of stream as any) {
+              for await (const event of stream) {
                 await emitPiEventAsRawPart(
                   event,
                   params.config.provider,
@@ -119,7 +129,7 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
                 );
               }
 
-              const assistant = await (stream as any).result();
+              const assistant = await stream.result();
               assistantRecord = stripPlaceholderCostFromAssistantRecord(
                 asRecord(assistant) ?? {},
                 resolved.model,
@@ -137,12 +147,9 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
             throw error;
           }
 
-          turnMessages.push(assistantRecord);
+          turnMessages.push(asPiMessage(assistantRecord));
           usage = mergePiUsage(usage, assistantRecord.usage);
-          stepMessages = [
-            ...stepMessages,
-            ...piTurnMessagesToModelMessages([assistantRecord as any]),
-          ];
+          stepMessages = [...stepMessages, ...piTurnMessagesToModelMessages([asPiMessage(assistantRecord)])];
 
           await emitPart({
             type: "finish-step",
@@ -171,8 +178,8 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
               throw new Error("Model turn aborted.");
             }
             const toolResult = await executeToolCall(toolCall, params, emitPart);
-            turnMessages.push(toolResult);
-            toolResultMessages.push(...piTurnMessagesToModelMessages([toolResult as any]));
+            turnMessages.push(asPiMessage(toolResult));
+            toolResultMessages.push(...piTurnMessagesToModelMessages([asPiMessage(toolResult)]));
             needsInvalidToolCallReminder ||= shouldAddInvalidToolCallFormatReminder(
               toolCall,
               toolResult,
@@ -188,31 +195,24 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
         }
 
         return {
-          text: extractPiAssistantText(turnMessages as any),
-          reasoningText: extractPiReasoningText(turnMessages as any),
-          responseMessages: piTurnMessagesToModelMessages(turnMessages as any),
+          text: extractPiAssistantText(turnMessages),
+          reasoningText: extractPiReasoningText(turnMessages),
+          responseMessages: piTurnMessagesToModelMessages(turnMessages),
           usage,
         };
       } catch (error) {
         if (error && typeof error === "object") {
           try {
-            (error as any).usage = usage;
+            (error as { usage?: RuntimeRunTurnResult["usage"] }).usage = usage;
             const responseMessages =
               typeof turnMessages !== "undefined" && Array.isArray(turnMessages)
-                ? piTurnMessagesToModelMessages(turnMessages as any)
+                ? piTurnMessagesToModelMessages(turnMessages)
                 : [];
             Object.defineProperty(error, "responseMessages", {
               value: responseMessages,
               configurable: true,
               writable: true,
             });
-            if (typeof finalProviderState !== "undefined" && finalProviderState) {
-              Object.defineProperty(error, "providerState", {
-                value: finalProviderState,
-                configurable: true,
-                writable: true,
-              });
-            }
           } catch {
             // Ignore if error object is not extensible/writable
           }

@@ -17,7 +17,7 @@ const shimDir = process.env.COWORK_MANAGED_SOFFICE_SHIM_DIR || path.join(rootDir
 
 function log(message) {
   if (process.env.COWORK_MANAGED_SOFFICE_VERBOSE === "1") {
-    console.error("[cowork-soffice] " + message);
+    console.error(`[cowork-soffice] ${message}`);
   }
 }
 
@@ -82,7 +82,7 @@ function run(command, args, options = {}) {
         args.join(" ") +
         " failed with exit " +
         result.status +
-        (stderr || stdout ? ": " + [stderr, stdout].filter(Boolean).join("\n") : ""),
+        (stderr || stdout ? `: ${[stderr, stdout].filter(Boolean).join("\n")}` : ""),
     );
   }
   return result;
@@ -104,7 +104,7 @@ function platformArchKey() {
   if (process.platform === "darwin" && process.arch === "x64") return "darwin-x64";
   if (process.platform === "linux" && process.arch === "x64") return "linux-x64";
   if (process.platform === "linux" && process.arch === "arm64") return "linux-arm64";
-  return process.platform + "-" + process.arch;
+  return `${process.platform}-${process.arch}`;
 }
 
 function installRoot(version = DEFAULT_LIBREOFFICE_VERSION) {
@@ -206,12 +206,12 @@ function defaultDownloadUrl(version = DEFAULT_LIBREOFFICE_VERSION) {
 
 async function downloadFile(url, destination) {
   await fsp.mkdir(path.dirname(destination), { recursive: true });
-  log("downloading " + url);
+  log(`downloading ${url}`);
   const response = await fetch(url);
   if (!response.ok || !response.body) {
     const text = await response.text().catch(() => "");
     throw new Error(
-      "GET " + url + " failed with status " + response.status + ": " + text.slice(0, 300),
+      `GET ${url} failed with status ${response.status}: ${text.slice(0, 300)}`,
     );
   }
   await pipeline(Readable.fromWeb(response.body), fs.createWriteStream(destination));
@@ -289,7 +289,7 @@ function extractDeb(debPath, stagedRoot, tempDir) {
     /^data\.tar\./.test(path.basename(candidate)),
   );
   if (!dataArchive) {
-    throw new Error("Could not find data.tar archive inside " + debPath);
+    throw new Error(`Could not find data.tar archive inside ${debPath}`);
   }
   run("tar", ["-xf", dataArchive, "-C", stagedRoot], { timeout: 120000 });
 }
@@ -314,7 +314,7 @@ async function installLinuxRuntime(archivePath, stagedRoot, tempDir) {
 }
 
 async function installWindowsRuntime(archivePath, stagedRoot) {
-  run("msiexec.exe", ["/a", archivePath, "/qn", "TARGETDIR=" + stagedRoot], {
+  run("msiexec.exe", ["/a", archivePath, "/qn", `TARGETDIR=${stagedRoot}`], {
     timeout: 600000,
   });
   const soffice = windowsSofficePath(stagedRoot);
@@ -336,7 +336,7 @@ async function installManagedRuntime(version = DEFAULT_LIBREOFFICE_VERSION) {
   }
 
   const root = installRoot(version);
-  const stagedRoot = root + ".staged-" + process.pid + "-" + Date.now();
+  const stagedRoot = `${root}.staged-${process.pid}-${Date.now()}`;
   await fsp.mkdir(rootDir, { recursive: true });
   const tempDir = await fsp.mkdtemp(path.join(rootDir, "tmp-"));
   const archivePath = path.join(
@@ -355,7 +355,7 @@ async function installManagedRuntime(version = DEFAULT_LIBREOFFICE_VERSION) {
       await installWindowsRuntime(archivePath, stagedRoot);
     } else {
       throw new Error(
-        "Managed LibreOffice download is not supported on " + platformArchKey() + ".",
+        `Managed LibreOffice download is not supported on ${platformArchKey()}.`,
       );
     }
     await fsp.rm(root, { recursive: true, force: true });
@@ -371,7 +371,7 @@ async function installManagedRuntime(version = DEFAULT_LIBREOFFICE_VERSION) {
     };
     await fsp.writeFile(
       path.join(root, "cowork-libreoffice-runtime.json"),
-      JSON.stringify(marker, null, 2) + "\n",
+      `${JSON.stringify(marker, null, 2)}\n`,
     );
   } finally {
     await fsp.rm(stagedRoot, { recursive: true, force: true }).catch(() => {});
@@ -386,7 +386,7 @@ async function withInstallLock(fn) {
     try {
       await fsp.mkdir(lockDir, { recursive: false });
       break;
-    } catch (error) {
+    } catch (_error) {
       if (Date.now() - started > 20 * 60 * 1000) {
         throw new Error("Timed out waiting for managed LibreOffice install lock.");
       }
@@ -459,7 +459,7 @@ function createNormalizedHeadlessArgs(args) {
   const normalizedArgs = [];
   const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), "cowork-soffice-profile-"));
   seedQuietProfile(profileDir);
-  normalizedArgs.push("-env:UserInstallation=" + pathToFileURL(profileDir).href);
+  normalizedArgs.push(`-env:UserInstallation=${pathToFileURL(profileDir).href}`);
   if (hasUserInstallationArg(args)) {
     log("replaced caller LibreOffice profile for headless conversion");
   }
@@ -486,7 +486,7 @@ async function main() {
     console.log(realSoffice);
     return;
   }
-  log("using " + realSoffice);
+  log(`using ${realSoffice}`);
   const invocation = createNormalizedHeadlessArgs(process.argv.slice(2));
   try {
     const result = spawnSync(realSoffice, invocation.args, {
@@ -509,6 +509,6 @@ async function main() {
 
 main().catch((error) => {
   const message = error instanceof Error ? error.message : String(error);
-  console.error("[cowork-soffice] " + message);
+  console.error(`[cowork-soffice] ${message}`);
   process.exit(127);
 });

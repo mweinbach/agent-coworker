@@ -1,3 +1,4 @@
+import type { Message as PiMessage } from "@earendil-works/pi-ai";
 import type { ModelMessage } from "../../types";
 import { piTurnMessagesToModelMessages } from "../piMessageBridge";
 import {
@@ -200,7 +201,7 @@ export function googleTurnMessagesToModelMessages(messages: unknown[]): ModelMes
       out.push(assistantMessage);
       continue;
     }
-    out.push(...piTurnMessagesToModelMessages([message as any]));
+    out.push(...piTurnMessagesToModelMessages([message as unknown as PiMessage]));
   }
   return out;
 }

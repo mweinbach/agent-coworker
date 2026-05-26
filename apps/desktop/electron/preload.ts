@@ -9,7 +9,6 @@ import type { PersistedState } from "../src/app/types";
 import {
   type ConfirmActionInput,
   type CopyPathInput,
-  type CopyTextInput,
   type CreateDirectoryInput,
   type CreateOneOffChatWorkspaceInput,
   DESKTOP_EVENT_CHANNELS,

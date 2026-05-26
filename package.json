@@ -74,7 +74,7 @@
   "dependencies": {
     "@aws-sdk/client-bedrock": "^3.1053.0",
     "@aws-sdk/client-bedrock-runtime": "^3.1053.0",
-    "@earendil-works/pi-ai": "^0.75.4",
+    "@earendil-works/pi-ai": "^0.75.5",
     "@google/genai": "^2.6.0",
     "@langfuse/otel": "^5.3.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
@@ -83,7 +83,7 @@
     "@opentelemetry/sdk-node": "^0.218.0",
     "@peculiar/x509": "^2.0.0",
     "@react-pdf/renderer": "^4.5.1",
-    "docx": "^9.6.1",
+    "docx": "^9.7.0",
     "fast-glob": "^3.3.3",
     "jsdom": "^29.1.1",
     "partial-json": "^0.1.7",

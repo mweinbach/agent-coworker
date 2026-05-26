@@ -3,10 +3,10 @@ import path from "node:path";
 import { z } from "zod";
 
 import type {
+  InstalledPluginCatalogEntry,
   PluginAppSummary,
   PluginCatalogEntry,
   PluginDiscoveryKind,
-  InstalledPluginCatalogEntry,
   PluginInterfaceMeta,
   PluginScope,
   SkillInterfaceMeta,

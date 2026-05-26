@@ -36,7 +36,6 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
   const pluginScope = runtime?.selectedPluginScope ?? null;
 
   const installedPlugin = plugin && isInstalledPluginCatalogEntry(plugin) ? plugin : null;
-  const installed = installedPlugin !== null;
   const skillCount = installedPlugin?.skills.length ?? 0;
   const mcpCount = installedPlugin?.mcpServers.length ?? 0;
   const appCount = installedPlugin?.apps.length ?? 0;
@@ -131,7 +130,11 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
               ) : null}
               <div className="flex flex-wrap gap-2">
                 <Badge variant={installedPlugin?.enabled ? "default" : "secondary"}>
-                  {installedPlugin ? (installedPlugin.enabled ? "Enabled" : "Disabled") : "Available"}
+                  {installedPlugin
+                    ? installedPlugin.enabled
+                      ? "Enabled"
+                      : "Disabled"
+                    : "Available"}
                 </Badge>
                 <Badge variant="secondary">{pluginScopeLabel(plugin.scope)}</Badge>
                 <Badge variant="outline">{pluginDiscoveryLabel(plugin.discoveryKind)}</Badge>
@@ -261,13 +264,16 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
                     {enablePending ? "Enabling..." : "Enable Plugin"}
                   </Button>
                 )}
-                {installedPlugin && installedPlugin.installSource ? (
+                {installedPlugin?.installSource ? (
                   <Button
                     variant="outline"
                     size="sm"
                     disabled={installPending}
                     onClick={() =>
-                      void installPlugins(installedPlugin.installSource ?? "", installedPlugin.scope)
+                      void installPlugins(
+                        installedPlugin.installSource ?? "",
+                        installedPlugin.scope,
+                      )
                     }
                   >
                     {installPending ? "Updating..." : "Update Plugin"}

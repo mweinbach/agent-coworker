@@ -2,7 +2,7 @@ import { PackageIcon } from "lucide-react";
 
 import { Badge } from "../../components/ui/badge";
 import { Card } from "../../components/ui/card";
-import { type PluginCatalogEntry, isInstalledPluginCatalogEntry } from "../../lib/wsProtocol";
+import { isInstalledPluginCatalogEntry, type PluginCatalogEntry } from "../../lib/wsProtocol";
 import { SkillIcon } from "../skills/utils";
 
 export function PluginCardGrid({

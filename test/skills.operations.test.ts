@@ -304,6 +304,55 @@ describe("copySkillInstallationToScope", () => {
 });
 
 describe("installSkillsFromSource", () => {
+  test("reuses the materialized source during installs", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "skills-install-reuse-source-"));
+    const originalFetch = globalThis.fetch;
+    let skillDownloads = 0;
+    globalThis.fetch = mock(async (input) => {
+      const url = typeof input === "string" ? input : input.url;
+      if (url === "https://api.github.com/repos/owner/repo/contents/my-skill?ref=main") {
+        return new Response(
+          JSON.stringify([
+            {
+              type: "file",
+              name: "SKILL.md",
+              path: "my-skill/SKILL.md",
+              url: "https://api.github.com/repos/owner/repo/contents/my-skill/SKILL.md?ref=main",
+              download_url: "https://raw.githubusercontent.com/owner/repo/main/my-skill/SKILL.md",
+            },
+          ]),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      if (url === "https://raw.githubusercontent.com/owner/repo/main/my-skill/SKILL.md") {
+        skillDownloads += 1;
+        return new Response(skillDoc("my-skill", "Remote skill"), { status: 200 });
+      }
+      return new Response(`Unexpected URL: ${url}`, { status: 404 });
+    }) as typeof fetch;
+
+    try {
+      const config = makeConfig(root);
+      const result = await installSkillsFromSource({
+        config,
+        input: "https://github.com/owner/repo/tree/main/my-skill",
+        targetScope: "project",
+      });
+
+      expect(skillDownloads).toBe(1);
+      expect(result.preview.candidates.map((candidate) => candidate.name)).toEqual(["my-skill"]);
+      expect(
+        await fs.readFile(path.join(config.skillsDirs[0]!, "my-skill", "SKILL.md"), "utf-8"),
+      ).toContain('description: "Remote skill"');
+    } finally {
+      globalThis.fetch = originalFetch;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("rejects a source with two valid skills that share the same name", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "skills-install-dup-"));
     try {

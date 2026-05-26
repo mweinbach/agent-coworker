@@ -17,8 +17,8 @@ import {
 import {
   installSkills,
   installWorkspaceToolsPlugin,
-  removeManagedRuntimeSkills,
   removeLegacyRuntimeSkills,
+  removeManagedRuntimeSkills,
   skillSourceFromPluginCacheForProbe,
 } from "./skills";
 import { runtimeStateFile, writeState } from "./state";

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-
+import type { JsonRpcSocket } from "../src/lib/agentSocket";
 import {
   createState,
   createStoreHarness,

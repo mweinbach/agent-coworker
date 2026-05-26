@@ -454,6 +454,46 @@ describe("plugin catalog and install operations", () => {
     }
   });
 
+  test("installPluginsFromSource reuses the materialized source for preview and install", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-install-reuse-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-install-reuse-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-install-reuse-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+    const remoteFetch = createRemoteMarketplaceFetch();
+    let manifestDownloads = 0;
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      if (String(input) === "https://download.test/figma-toolkit/plugin.json") {
+        manifestDownloads += 1;
+      }
+      return await remoteFetch(input);
+    }) as typeof fetch;
+
+    try {
+      const sourceInput =
+        "https://github.com/mweinbach/cowork-skills-plugins/tree/main/plugins/figma-toolkit";
+      const result = await installPluginsFromSource({
+        config,
+        input: sourceInput,
+        targetScope: "user",
+        fetchImpl,
+        marketplaceMetadataByPluginId: new Map(),
+      });
+
+      expect(manifestDownloads).toBe(1);
+      expect(result.preview.candidates.map((candidate) => candidate.pluginId)).toEqual([
+        "figma-toolkit",
+      ]);
+      const manifest = await readPluginManifest(
+        path.join(home, ".agents", "plugins", "figma-toolkit"),
+      );
+      expect(manifest.description).toBe("Remote Figma helpers");
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
   test("remote marketplace detail warns when materialized bundle has a mismatched plugin id", async () => {
     const workspace = await fs.mkdtemp(
       path.join(os.tmpdir(), "plugins-market-mismatch-workspace-"),

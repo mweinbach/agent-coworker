@@ -101,7 +101,8 @@ describe("plugin detail dialog", () => {
             installed: true,
             enabled: false,
             rootDir: "/tmp/workspace/.agents/plugins/workspace-tools",
-            manifestPath: "/tmp/workspace/.agents/plugins/workspace-tools/.codex-plugin/plugin.json",
+            manifestPath:
+              "/tmp/workspace/.agents/plugins/workspace-tools/.codex-plugin/plugin.json",
             skillsPath: "/tmp/workspace/.agents/plugins/workspace-tools/skills",
             mcpPath: "/tmp/workspace/.agents/plugins/workspace-tools/.mcp.json",
             appPath: "/tmp/workspace/.agents/plugins/workspace-tools/.app.json",

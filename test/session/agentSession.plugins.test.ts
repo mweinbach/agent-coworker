@@ -267,5 +267,84 @@ describe("AgentSession", () => {
         await fs.rm(root, { recursive: true, force: true });
       }
     });
+
+    test("plugin catalog reads queue a fresh remote refresh after an in-flight stale refresh", async () => {
+      const root = await makeTmpDir();
+      const home = path.join(root, "home");
+      const sourceRoot = path.join(home, ".agents", "plugins", "figma-toolkit");
+      const originalFetch = globalThis.fetch;
+      const fetchCalls: string[] = [];
+      let releaseFirstMarketplaceContent!: (response: Response) => void;
+      const firstMarketplaceContent = new Promise<Response>((resolve) => {
+        releaseFirstMarketplaceContent = resolve;
+      });
+      const fetchImpl = mock(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        fetchCalls.push(url);
+        if (fetchCalls.length === 1) {
+          return await firstMarketplaceContent;
+        }
+        if (url.includes(".agents/plugins/marketplace.json")) {
+          return new Response(
+            JSON.stringify({
+              type: "file",
+              name: "marketplace.json",
+              path: ".agents/plugins/marketplace.json",
+              url: "https://api.github.com/repos/mweinbach/cowork-skills-plugins/contents/.agents/plugins/marketplace.json?ref=main",
+              download_url: "https://download.test/marketplace.json",
+            }),
+            { headers: { "content-type": "application/json" } },
+          );
+        }
+        if (url === "https://download.test/marketplace.json") {
+          return new Response(JSON.stringify({ name: "cowork-test", plugins: [] }), {
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return new Response(`Unexpected URL: ${url}`, { status: 404 });
+      });
+      globalThis.fetch = fetchImpl as typeof fetch;
+
+      try {
+        await createPluginSource(sourceRoot);
+        const cfg: AgentConfig = {
+          ...makeConfig(root),
+          workspaceAgentsDir: path.join(root, ".agents"),
+          userAgentsDir: path.join(home, ".agents"),
+          workspacePluginsDir: path.join(root, ".agents", "plugins"),
+          userPluginsDir: path.join(home, ".agents", "plugins"),
+        };
+        const { session, events } = makeSession({ config: cfg });
+
+        await session.getPluginsCatalog();
+        await waitForCondition(() => fetchCalls.length === 1);
+        await session.disablePlugin("figma-toolkit", "user");
+        await session.getPluginsCatalog();
+
+        releaseFirstMarketplaceContent(
+          new Response(
+            JSON.stringify({
+              type: "file",
+              name: "marketplace.json",
+              path: ".agents/plugins/marketplace.json",
+              url: "https://api.github.com/repos/mweinbach/cowork-skills-plugins/contents/.agents/plugins/marketplace.json?ref=main",
+              download_url: "https://download.test/marketplace.json",
+            }),
+            { headers: { "content-type": "application/json" } },
+          ),
+        );
+
+        await waitForCondition(() => fetchCalls.length === 4);
+        await waitForCondition(
+          () => events.filter((event) => event.type === "plugins_catalog").length >= 4,
+        );
+        const pluginCatalogs = events.filter((event) => event.type === "plugins_catalog");
+        expect(pluginCatalogs).toHaveLength(4);
+        expect(pluginCatalogs.at(-1)?.catalog.plugins[0]?.enabled).toBe(false);
+      } finally {
+        globalThis.fetch = originalFetch;
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
   });
 });

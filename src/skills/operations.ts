@@ -246,20 +246,20 @@ export async function installSkillsFromSource(opts: {
   catalog: SkillCatalogSnapshot;
 }> {
   const currentCatalog = await refreshCatalog(opts.config);
-  const preview = await buildSkillInstallPreview({
-    input: opts.input,
-    targetScope: opts.targetScope,
-    catalog: currentCatalog,
-    cwd: opts.config.workingDirectory,
-  });
-
-  const writableScope = requireWritableScope(opts.config, opts.targetScope);
   const materialized = await materializeSkillSource({
     input: opts.input,
     cwd: opts.config.workingDirectory,
   });
 
   try {
+    const preview = await buildSkillInstallPreview({
+      input: opts.input,
+      targetScope: opts.targetScope,
+      catalog: currentCatalog,
+      cwd: opts.config.workingDirectory,
+      materialized,
+    });
+    const writableScope = requireWritableScope(opts.config, opts.targetScope);
     const validCandidates = materialized.candidates.filter(
       (candidate) => candidate.diagnostics.length === 0,
     );

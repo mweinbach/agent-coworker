@@ -352,29 +352,29 @@ export async function installPluginsFromSource(opts: {
   const currentCatalog = await buildPluginCatalogSnapshot(opts.config, {
     fetchImpl: opts.fetchImpl,
   });
-  const preview = await buildPluginInstallPreview({
-    input: opts.input,
-    targetScope: opts.targetScope,
-    catalog: currentCatalog,
-    cwd: opts.config.workingDirectory,
-    fetchImpl: opts.fetchImpl,
-  });
-
-  const writableScope = requireWritablePluginScope(opts.config, opts.targetScope);
   const materialized = await materializePluginSource({
     input: opts.input,
     cwd: opts.config.workingDirectory,
     fetchImpl: opts.fetchImpl,
   });
-  const marketplaceMetadataByPluginId =
-    opts.marketplaceMetadataByPluginId ??
-    (await resolveRemoteMarketplaceMetadataByPluginId({
-      input: opts.input,
-      materialized,
-      fetchImpl: opts.fetchImpl,
-    }));
 
   try {
+    const preview = await buildPluginInstallPreview({
+      input: opts.input,
+      targetScope: opts.targetScope,
+      catalog: currentCatalog,
+      cwd: opts.config.workingDirectory,
+      fetchImpl: opts.fetchImpl,
+      materialized,
+    });
+    const writableScope = requireWritablePluginScope(opts.config, opts.targetScope);
+    const marketplaceMetadataByPluginId =
+      opts.marketplaceMetadataByPluginId ??
+      (await resolveRemoteMarketplaceMetadataByPluginId({
+        input: opts.input,
+        materialized,
+        fetchImpl: opts.fetchImpl,
+      }));
     const validCandidates = materialized.candidates.filter(
       (candidate) => candidate.diagnostics.length === 0,
     );

@@ -2,10 +2,10 @@ import path from "node:path";
 import { buildPluginCatalogSnapshot, comparePluginCatalogEntries } from "../plugins";
 import {
   type AgentConfig,
+  isInstalledPluginCatalogEntry,
   type SkillEntry,
   type SkillScope,
   type SkillScopeDescriptor,
-  isInstalledPluginCatalogEntry,
 } from "../types";
 import {
   type SkillCatalogSource,

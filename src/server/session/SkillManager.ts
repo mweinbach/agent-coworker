@@ -39,6 +39,8 @@ import type { SessionContext } from "./SessionContext";
 
 export class SkillManager {
   private remotePluginsCatalogRefresh: Promise<void> | null = null;
+  private remotePluginsCatalogRefreshEpoch: number | null = null;
+  private remotePluginsCatalogRefreshQueued = false;
   private pluginsCatalogEpoch = 0;
 
   constructor(
@@ -108,9 +110,13 @@ export class SkillManager {
 
   private queueRemotePluginsCatalogRefresh() {
     if (this.remotePluginsCatalogRefresh) {
+      if (this.remotePluginsCatalogRefreshEpoch !== this.pluginsCatalogEpoch) {
+        this.remotePluginsCatalogRefreshQueued = true;
+      }
       return;
     }
     const epoch = this.pluginsCatalogEpoch;
+    this.remotePluginsCatalogRefreshEpoch = epoch;
     const refresh = this.emitPluginsCatalog([], {
       includeRemoteMarketplace: true,
       onlyIfEpoch: epoch,
@@ -124,6 +130,11 @@ export class SkillManager {
       })
       .finally(() => {
         this.remotePluginsCatalogRefresh = null;
+        this.remotePluginsCatalogRefreshEpoch = null;
+        if (this.remotePluginsCatalogRefreshQueued) {
+          this.remotePluginsCatalogRefreshQueued = false;
+          this.queueRemotePluginsCatalogRefresh();
+        }
       });
     this.remotePluginsCatalogRefresh = refresh;
   }

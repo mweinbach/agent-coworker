@@ -89,45 +89,56 @@ describe("plugin detail dialog", () => {
         ...previousState.workspaceRuntimeById,
         "ws-1": {
           ...defaultWorkspaceRuntime(),
-          selectedPluginId: "plugin-1",
+          selectedPluginId: "workspace-tools",
           selectedPluginScope: "workspace",
           selectedPlugin: {
-            id: "plugin-1",
-            name: "figma-toolkit",
-            displayName: "Figma Toolkit",
-            description: "Bring Figma bundles into Cowork.",
+            id: "workspace-tools",
+            name: "workspace-tools",
+            displayName: "Workspace Tools",
+            description: "Create and edit workspace artifacts.",
             scope: "workspace",
             discoveryKind: "marketplace",
+            installed: true,
             enabled: false,
-            rootDir: "/tmp/workspace/.agents/plugins/figma-toolkit",
-            manifestPath: "/tmp/workspace/.agents/plugins/figma-toolkit/.codex-plugin/plugin.json",
-            skillsPath: "/tmp/workspace/.agents/plugins/figma-toolkit/skills",
-            mcpPath: "/tmp/workspace/.agents/plugins/figma-toolkit/.mcp.json",
-            appPath: "/tmp/workspace/.agents/plugins/figma-toolkit/.app.json",
+            rootDir: "/tmp/workspace/.agents/plugins/workspace-tools",
+            manifestPath: "/tmp/workspace/.agents/plugins/workspace-tools/.codex-plugin/plugin.json",
+            skillsPath: "/tmp/workspace/.agents/plugins/workspace-tools/skills",
+            mcpPath: "/tmp/workspace/.agents/plugins/workspace-tools/.mcp.json",
+            appPath: "/tmp/workspace/.agents/plugins/workspace-tools/.app.json",
             version: "1.2.3",
             authorName: "Cowork",
-            homepage: "https://example.com/figma-toolkit",
+            homepage: "https://example.com/workspace-tools",
             repository: "https://example.com/repo",
             license: "MIT",
-            keywords: ["figma"],
+            keywords: ["documents", "presentations", "spreadsheets"],
             interface: {
-              displayName: "Figma Toolkit",
-              shortDescription: "Import Figma data.",
+              displayName: "Workspace Tools",
+              shortDescription: "Create workspace artifacts.",
               longDescription: "Plugin long description.",
             },
             marketplace: {
               name: "cowork-marketplace",
               displayName: "Cowork Marketplace",
-              category: "Design",
+              category: "Productivity",
             },
             skills: [
               {
-                name: "figma-toolkit:import-frame",
-                description: "Import a frame",
+                name: "workspace-tools:documents",
+                description: "Create documents",
+                enabled: true,
+              },
+              {
+                name: "workspace-tools:presentations",
+                description: "Create presentations",
+                enabled: true,
+              },
+              {
+                name: "workspace-tools:spreadsheets",
+                description: "Create spreadsheets",
                 enabled: true,
               },
             ],
-            mcpServers: ["figma-mcp"],
+            mcpServers: ["workspace-tools-mcp"],
             apps: [
               {
                 id: "figma-app",
@@ -170,7 +181,7 @@ describe("plugin detail dialog", () => {
       });
 
       expect(revealPathMock).toHaveBeenCalledWith({
-        path: "/tmp/workspace/.agents/plugins/figma-toolkit",
+        path: "/tmp/workspace/.agents/plugins/workspace-tools",
       });
 
       const enableButton = Array.from(harness.dom.window.document.querySelectorAll("button")).find(
@@ -185,10 +196,13 @@ describe("plugin detail dialog", () => {
       });
 
       expect(enablePluginMock).toHaveBeenCalledTimes(1);
-      expect(enablePluginMock).toHaveBeenCalledWith("plugin-1", "workspace");
+      expect(enablePluginMock).toHaveBeenCalledWith("workspace-tools", "workspace");
       expect(disablePluginMock).not.toHaveBeenCalled();
       const pageText = harness.dom.window.document.body.textContent ?? "";
       expect(pageText).toContain("Bundled Skills");
+      expect(pageText).toContain("workspace-tools:documents");
+      expect(pageText).toContain("workspace-tools:presentations");
+      expect(pageText).toContain("workspace-tools:spreadsheets");
       expect(pageText).toContain("Bundled MCP Servers");
       expect(pageText).toContain("Bundled Apps");
     } finally {
@@ -221,6 +235,7 @@ describe("plugin detail dialog", () => {
             description: "Bring Figma bundles into Cowork.",
             scope: "workspace",
             discoveryKind: "marketplace",
+            installed: true,
             enabled: true,
             rootDir: "/tmp/workspace/.agents/plugins/figma-toolkit",
             manifestPath: "/tmp/workspace/.agents/plugins/figma-toolkit/.codex-plugin/plugin.json",

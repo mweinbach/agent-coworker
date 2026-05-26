@@ -21,12 +21,7 @@ export const BUILT_IN_MARKETPLACE_REPO = "mweinbach/cowork-skills-plugins";
 export const BUILT_IN_MARKETPLACE_REF = "main";
 export const BUILT_IN_MARKETPLACE_PATH = ".agents/plugins/marketplace.json";
 export const BUILT_IN_MARKETPLACE_URL = `https://github.com/${BUILT_IN_MARKETPLACE_REPO}/tree/${BUILT_IN_MARKETPLACE_REF}`;
-export const DEFAULT_MARKETPLACE_PLUGIN_IDS = [
-  "pdf",
-  "documents",
-  "spreadsheets",
-  "presentations",
-] as const;
+export const DEFAULT_MARKETPLACE_PLUGIN_IDS = ["workspace-tools"] as const;
 
 export type ExtensionSourceInputKind =
   | "github_repo"

@@ -305,7 +305,7 @@ export interface PluginAppSummary {
   authType?: string;
 }
 
-export interface PluginSkillSummary {
+export interface InstalledPluginSkillSummary {
   name: string;
   rawName: string;
   description: string;
@@ -316,13 +316,28 @@ export interface PluginSkillSummary {
   interface?: SkillInterfaceMeta;
 }
 
-export interface PluginCatalogEntry {
+export interface PluginMarketplaceMetadata {
+  name: string;
+  displayName?: string;
+  category?: string;
+  installationPolicy?: string;
+  authenticationPolicy?: string;
+}
+
+interface PluginCatalogEntryBase {
   id: string;
   name: string;
   displayName: string;
   description: string;
   scope: PluginScope;
   discoveryKind: PluginDiscoveryKind;
+  interface?: PluginInterfaceMeta;
+  marketplace?: PluginMarketplaceMetadata;
+  warnings: string[];
+}
+
+export interface InstalledPluginCatalogEntry extends PluginCatalogEntryBase {
+  installed: true;
   enabled: boolean;
   rootDir: string;
   manifestPath: string;
@@ -335,20 +350,27 @@ export interface PluginCatalogEntry {
   repository?: string;
   license?: string;
   keywords?: string[];
-  interface?: PluginInterfaceMeta;
-  marketplace?: {
-    name: string;
-    displayName?: string;
-    category?: string;
-    installationPolicy?: string;
-    authenticationPolicy?: string;
-  };
-  installed?: boolean;
   installSource?: string;
-  skills: PluginSkillSummary[];
+  skills: InstalledPluginSkillSummary[];
   mcpServers: string[];
   apps: PluginAppSummary[];
-  warnings: string[];
+}
+
+export interface MarketplacePluginCatalogEntry extends PluginCatalogEntryBase {
+  installed: false;
+  discoveryKind: "marketplace";
+  scope: "user";
+  enabled: false;
+  marketplace: PluginMarketplaceMetadata;
+  installSource: string;
+}
+
+export type PluginCatalogEntry = InstalledPluginCatalogEntry | MarketplacePluginCatalogEntry;
+
+export function isInstalledPluginCatalogEntry(
+  plugin: PluginCatalogEntry,
+): plugin is InstalledPluginCatalogEntry {
+  return plugin.installed === true;
 }
 
 export interface PluginCatalogSnapshot {

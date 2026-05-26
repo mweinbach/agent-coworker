@@ -1,5 +1,6 @@
 export {
   buildPluginCatalogSnapshot,
+  buildRemoteMarketplacePluginDetail,
   comparePluginCatalogEntries,
   resolvePluginCatalogEntry,
 } from "./catalog";

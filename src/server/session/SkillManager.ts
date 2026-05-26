@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import {
   buildPluginCatalogSnapshot,
   buildPluginInstallPreview,
+  buildRemoteMarketplacePluginDetail,
   deletePluginInstallation,
   installPluginsFromSource,
   resolvePluginCatalogEntry,
@@ -28,6 +29,7 @@ import type {
   SkillInstallationEntry,
   SkillMutationTargetScope,
 } from "../../types";
+import { isInstalledPluginCatalogEntry } from "../../types";
 import {
   expandCommandTemplate,
   listCommands as listServerCommands,
@@ -173,11 +175,9 @@ export class SkillManager {
       this.resolvePluginSelection(localCatalog, pluginId, scope);
       return;
     } else {
-      const remoteCatalog = await buildPluginCatalogSnapshot(this.context.state.config, {
-        includeRemoteMarketplace: true,
-      });
-      plugin = this.resolvePluginSelection(remoteCatalog, pluginId, scope);
+      plugin = await buildRemoteMarketplacePluginDetail({ pluginId });
       if (plugin === null) {
+        this.resolvePluginSelection(localCatalog, pluginId, scope);
         return;
       }
     }
@@ -605,6 +605,14 @@ export class SkillManager {
         if (!plugin) {
           return;
         }
+        if (!isInstalledPluginCatalogEntry(plugin)) {
+          this.context.emitError(
+            "validation_failed",
+            "session",
+            `Plugin "${plugin.id}" must be installed before it can be enabled.`,
+          );
+          return;
+        }
         await setPluginEnabled({
           config: this.context.state.config,
           pluginId: plugin.id,
@@ -638,6 +646,14 @@ export class SkillManager {
         if (!plugin) {
           return;
         }
+        if (!isInstalledPluginCatalogEntry(plugin)) {
+          this.context.emitError(
+            "validation_failed",
+            "session",
+            `Plugin "${plugin.id}" must be installed before it can be disabled.`,
+          );
+          return;
+        }
         await setPluginEnabled({
           config: this.context.state.config,
           pluginId: plugin.id,
@@ -669,6 +685,14 @@ export class SkillManager {
         const catalog = await buildPluginCatalogSnapshot(this.context.state.config);
         const plugin = this.resolvePluginSelection(catalog, pluginId, scope);
         if (!plugin) {
+          return;
+        }
+        if (!isInstalledPluginCatalogEntry(plugin)) {
+          this.context.emitError(
+            "validation_failed",
+            "session",
+            `Plugin "${plugin.id}" is not installed.`,
+          );
           return;
         }
         await deletePluginInstallation({

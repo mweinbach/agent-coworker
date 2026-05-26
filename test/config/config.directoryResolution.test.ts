@@ -217,6 +217,20 @@ describe("directory resolution", () => {
     expect(cfg.configDirs[2]).toBe(path.join(repoRoot(), "config"));
   });
 
+  test("plugin directories use canonical cowork roots", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {},
+    });
+
+    expect(cfg.workspacePluginsDir).toBe(path.join(cwd, ".cowork", "plugins"));
+    expect(cfg.userPluginsDir).toBe(path.join(home, ".cowork", "plugins"));
+  });
+
   test("projectCoworkDir and userCoworkDir set correctly", async () => {
     const { cwd, home } = await makeTmpDirs();
 

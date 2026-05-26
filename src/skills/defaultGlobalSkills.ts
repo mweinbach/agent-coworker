@@ -12,9 +12,13 @@ import { readPluginOverrides } from "../plugins/overrides";
 import { fetchRemotePluginMarketplace } from "../plugins/remoteMarketplace";
 import { ensureAiCoworkerHome, getAiCoworkerPaths } from "../store/connections";
 import type { AgentConfig } from "../types";
+import { isInstalledPluginCatalogEntry } from "../types";
 
 const DEFAULT_SKILLS_STATE_FILE = "default-global-skills.json";
 const INSTALL_STATE_VERSION = 1;
+const DEFAULT_PLUGIN_LEGACY_TOMBSTONES: Record<string, readonly string[]> = {
+  "workspace-tools": ["documents", "presentations", "spreadsheets"],
+};
 const bootstrapPromises = new Map<
   string,
   Promise<EnsureDefaultGlobalSkillsInstalledResult | null>
@@ -34,6 +38,14 @@ export type DefaultSkillSpec = {
 export const DEFAULT_GLOBAL_SKILLS: readonly DefaultSkillSpec[] = [
   ...DEFAULT_MARKETPLACE_PLUGIN_IDS.map((id) => ({ id })),
 ] as const;
+
+export function isDefaultPluginRemoved(
+  pluginId: string,
+  overrides: Awaited<ReturnType<typeof readPluginOverrides>>,
+): boolean {
+  const idsToCheck = [pluginId, ...(DEFAULT_PLUGIN_LEGACY_TOMBSTONES[pluginId] ?? [])];
+  return idsToCheck.some((id) => overrides.user.plugins?.[id] === false);
+}
 
 export type EnsureDefaultGlobalSkillsInstalledResult = {
   status: "installed" | "already_installed";
@@ -84,7 +96,10 @@ function isTruthy(value: string | undefined): boolean {
 export function shouldBootstrapDefaultGlobalSkills(
   env: Record<string, string | undefined> = process.env,
 ): boolean {
-  return !isTruthy(env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP);
+  return (
+    isTruthy(env.COWORK_BOOTSTRAP_DEFAULT_SKILLS) &&
+    !isTruthy(env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP)
+  );
 }
 
 export async function ensureDefaultGlobalSkillsReady(opts: {
@@ -160,6 +175,21 @@ export async function ensureDefaultGlobalSkillsInstalled(opts: {
   }
 
   const marketplace = await fetchRemotePluginMarketplace({ fetchImpl });
+  const marketplaceMetadataByPluginId = new Map(
+    marketplace.plugins
+      .filter((entry) => entry.sourceInput)
+      .map((entry) => [
+        entry.name,
+        {
+          name: marketplace.name,
+          ...(marketplace.displayName ? { displayName: marketplace.displayName } : {}),
+          category: entry.category,
+          installationPolicy: entry.installationPolicy,
+          authenticationPolicy: entry.authenticationPolicy,
+          sourceInput: entry.sourceInput,
+        },
+      ]),
+  );
 
   const installed: string[] = [];
   const skippedExisting: string[] = [];
@@ -169,20 +199,19 @@ export async function ensureDefaultGlobalSkillsInstalled(opts: {
   opts.log?.(`Ensuring default marketplace plugins in ${opts.config.userPluginsDir ?? "(none)"}`);
 
   const overrides = await readPluginOverrides(opts.config);
-  let catalog = await buildPluginCatalogSnapshot(opts.config, {
-    fetchImpl,
-    includeRemoteMarketplace: true,
-  });
+  let catalog = await buildPluginCatalogSnapshot(opts.config, { fetchImpl });
   for (const pluginSpec of pluginSpecs) {
     const pluginId = pluginSpec.id;
-    if (!opts.force && overrides.user.plugins?.[pluginId] === false) {
+    if (!opts.force && isDefaultPluginRemoved(pluginId, overrides)) {
       skippedRemoved.push(pluginId);
       recordedPluginIds.add(pluginId);
       continue;
     }
     if (
       !opts.force &&
-      catalog.plugins.some((plugin) => plugin.id === pluginId && plugin.installed !== false)
+      catalog.plugins.some(
+        (plugin) => isInstalledPluginCatalogEntry(plugin) && plugin.id === pluginId,
+      )
     ) {
       skippedExisting.push(pluginId);
       recordedPluginIds.add(pluginId);
@@ -200,13 +229,11 @@ export async function ensureDefaultGlobalSkillsInstalled(opts: {
       input: marketplaceEntry.sourceInput,
       targetScope: "user",
       fetchImpl,
+      marketplaceMetadataByPluginId,
     });
     installed.push(pluginId);
     recordedPluginIds.add(pluginId);
-    catalog = await buildPluginCatalogSnapshot(opts.config, {
-      fetchImpl,
-      includeRemoteMarketplace: true,
-    });
+    catalog = await buildPluginCatalogSnapshot(opts.config, { fetchImpl });
   }
 
   const state: DefaultGlobalSkillsState = {

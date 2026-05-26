@@ -2,7 +2,15 @@ import { beforeEach, describe, expect, test } from "bun:test";
 
 import { defaultWorkspaceRuntime } from "../src/app/store.helpers/runtimeState";
 
-const { createSkillActions } = await import("../src/app/store.actions/skills");
+const skillActionsModule = await import("../src/app/store.actions/skills");
+const pluginActionsModule = await import("../src/app/store.actions/plugins");
+const createSkillActions = (
+  set: Parameters<typeof skillActionsModule.createSkillActions>[0],
+  get: Parameters<typeof skillActionsModule.createSkillActions>[1],
+) => ({
+  ...skillActionsModule.createSkillActions(set, get),
+  ...pluginActionsModule.createPluginActions(set, get),
+});
 const { reactivateWorkspaceJsonRpcState } = await import("../src/app/store.helpers");
 const { RUNTIME } = await import("../src/app/store.helpers/runtimeState");
 

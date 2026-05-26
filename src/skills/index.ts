@@ -1,6 +1,12 @@
 import path from "node:path";
 import { buildPluginCatalogSnapshot, comparePluginCatalogEntries } from "../plugins";
-import type { AgentConfig, SkillEntry, SkillScope, SkillScopeDescriptor } from "../types";
+import {
+  type AgentConfig,
+  type SkillEntry,
+  type SkillScope,
+  type SkillScopeDescriptor,
+  isInstalledPluginCatalogEntry,
+} from "../types";
 import {
   type SkillCatalogSource,
   scanSkillCatalog,
@@ -81,7 +87,7 @@ export async function discoverSkillsForConfig(
     [
       ...standaloneSources(config.skillsDirs),
       ...orderedPlugins.flatMap((plugin) =>
-        plugin.installed === false
+        !isInstalledPluginCatalogEntry(plugin)
           ? []
           : plugin.skills.map((skill) => ({
               kind: "plugin" as const,

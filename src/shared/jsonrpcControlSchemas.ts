@@ -732,7 +732,17 @@ const pluginAppSummarySchema = z
   })
   .passthrough();
 
-const pluginCatalogEntrySchema = z
+const pluginMarketplaceMetadataSchema = z
+  .object({
+    name: nonEmptyTrimmedStringSchema,
+    displayName: z.string().optional(),
+    category: z.string().optional(),
+    installationPolicy: z.string().optional(),
+    authenticationPolicy: z.string().optional(),
+  })
+  .passthrough();
+
+const installedPluginCatalogEntrySchema = z
   .object({
     id: nonEmptyTrimmedStringSchema,
     name: nonEmptyTrimmedStringSchema,
@@ -740,6 +750,7 @@ const pluginCatalogEntrySchema = z
     description: z.string(),
     scope: pluginScopeSchema,
     discoveryKind: pluginDiscoveryKindSchema,
+    installed: z.literal(true),
     enabled: z.boolean(),
     rootDir: z.string(),
     manifestPath: z.string(),
@@ -753,16 +764,7 @@ const pluginCatalogEntrySchema = z
     license: z.string().optional(),
     keywords: z.array(z.string()).optional(),
     interface: pluginInterfaceSchema.optional(),
-    marketplace: z
-      .object({
-        name: nonEmptyTrimmedStringSchema,
-        displayName: z.string().optional(),
-        category: z.string().optional(),
-        installationPolicy: z.string().optional(),
-        authenticationPolicy: z.string().optional(),
-      })
-      .optional(),
-    installed: z.boolean().optional(),
+    marketplace: pluginMarketplaceMetadataSchema.optional(),
     installSource: z.string().optional(),
     skills: z.array(pluginSkillSummarySchema),
     mcpServers: z.array(z.string()),
@@ -770,6 +772,28 @@ const pluginCatalogEntrySchema = z
     warnings: z.array(z.string()),
   })
   .passthrough();
+
+const marketplacePluginCatalogEntrySchema = z
+  .object({
+    id: nonEmptyTrimmedStringSchema,
+    name: nonEmptyTrimmedStringSchema,
+    displayName: nonEmptyTrimmedStringSchema,
+    description: z.string(),
+    scope: z.literal("user"),
+    discoveryKind: z.literal("marketplace"),
+    installed: z.literal(false),
+    enabled: z.literal(false),
+    interface: pluginInterfaceSchema.optional(),
+    marketplace: pluginMarketplaceMetadataSchema,
+    installSource: z.string(),
+    warnings: z.array(z.string()),
+  })
+  .passthrough();
+
+const pluginCatalogEntrySchema = z.discriminatedUnion("installed", [
+  installedPluginCatalogEntrySchema,
+  marketplacePluginCatalogEntrySchema,
+]);
 
 export const pluginCatalogSnapshotSchema = z
   .object({

@@ -16,6 +16,8 @@ import {
 } from "./runtimeDiscovery";
 import {
   installSkills,
+  installWorkspaceToolsPlugin,
+  removeManagedRuntimeSkills,
   removeLegacyRuntimeSkills,
   skillSourceFromPluginCacheForProbe,
 } from "./skills";
@@ -126,6 +128,10 @@ export async function ensureCodexPrimaryRuntimeReady(
       global: true,
       log: opts.log,
     });
+    await removeManagedRuntimeSkills({
+      destinationRoot: opts.globalSkillsDir,
+      log: opts.log,
+    });
     const builtInSkillResults = await installSkills({
       home,
       runtimeRoots,
@@ -135,16 +141,16 @@ export async function ensureCodexPrimaryRuntimeReady(
       curatedRepoRoot,
       log: opts.log,
     });
-    const globalSkillResults = await installSkills({
+    const workspaceToolsSkillResults = await installWorkspaceToolsPlugin({
       home,
       runtimeRoots,
-      destinationRoot: opts.globalSkillsDir,
-      global: true,
       force,
+      pluginsDir: opts.globalPluginsDir,
+      skip: opts.skipGlobalWorkspaceToolsPlugin === true,
       curatedRepoRoot,
       log: opts.log,
     });
-    const skills = [...builtInSkillResults, ...globalSkillResults];
+    const skills = [...builtInSkillResults, ...workspaceToolsSkillResults];
     await writeState({ stateFile, artifactSource: artifactTool.source, skills });
 
     return {

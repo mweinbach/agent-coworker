@@ -11,11 +11,15 @@ import {
   prepareManagedSofficeToolEnv,
 } from "../../managedSofficeRuntime";
 import type { emitObservabilityEvent as emitObservabilityEventFn } from "../../observability/otel";
+import { readPluginOverrides } from "../../plugins/overrides";
 import type {
   loadAgentPrompt as loadAgentPromptFn,
   loadSystemPromptWithSkills as loadSystemPromptWithSkillsFn,
 } from "../../prompt";
-import { ensureDefaultGlobalSkillsReady } from "../../skills/defaultGlobalSkills";
+import {
+  ensureDefaultGlobalSkillsReady,
+  isDefaultPluginRemoved,
+} from "../../skills/defaultGlobalSkills";
 import type { AgentConfig } from "../../types";
 import { decodeJsonRpcMessage } from "../jsonrpc/decodeJsonRpcMessage";
 import {
@@ -148,11 +152,15 @@ export async function createAgentServerRuntime(
   if (mergedProviderOptions) config.providerOptions = mergedProviderOptions;
 
   const packagedDesktopBundle = env.COWORK_DESKTOP_BUNDLE === "1";
+  const defaultAiCoworkerPaths = getAiCoworkerPathsDefault({ homedir: opts.homedir });
+  const pluginOverrides = await readPluginOverrides(config);
   const codexRuntimeSetup = await ensureCodexPrimaryRuntimeReady({
     homedir: opts.homedir,
     workspaceDir: config.workingDirectory,
     builtInSkillsDir: packagedDesktopBundle ? undefined : path.join(config.builtInDir, "skills"),
-    globalSkillsDir: getAiCoworkerPathsDefault({ homedir: opts.homedir }).skillsDir,
+    globalSkillsDir: defaultAiCoworkerPaths.skillsDir,
+    globalPluginsDir: path.join(defaultAiCoworkerPaths.rootDir, "plugins"),
+    skipGlobalWorkspaceToolsPlugin: isDefaultPluginRemoved("workspace-tools", pluginOverrides),
     env,
     log: (line) => {
       console.warn(`[codex-primary-runtime] ${line}`);

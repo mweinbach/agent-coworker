@@ -3,6 +3,7 @@ import { useMemo } from "react";
 import { useAppStore } from "../../app/store";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
+import { isInstalledPluginCatalogEntry } from "../../lib/wsProtocol";
 import { InstallPluginDialog } from "./InstallPluginDialog";
 import { PluginCardGrid } from "./PluginCardGrid";
 import { PluginDetailDialog } from "./PluginDetailDialog";
@@ -49,11 +50,11 @@ export function PluginsCatalogPage({
     [plugins],
   );
   const enabledPlugins = useMemo(
-    () => plugins.filter((plugin) => plugin.installed !== false && plugin.enabled),
+    () => plugins.filter((plugin) => isInstalledPluginCatalogEntry(plugin) && plugin.enabled),
     [plugins],
   );
   const disabledPlugins = useMemo(
-    () => plugins.filter((plugin) => plugin.installed !== false && !plugin.enabled),
+    () => plugins.filter((plugin) => isInstalledPluginCatalogEntry(plugin) && !plugin.enabled),
     [plugins],
   );
 

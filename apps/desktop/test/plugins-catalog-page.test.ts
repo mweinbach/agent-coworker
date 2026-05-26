@@ -548,25 +548,36 @@ describe("plugins catalog page", () => {
             warnings: [],
             plugins: [
               {
-                id: "plugin-1",
-                name: "figma-toolkit",
-                displayName: "Figma Toolkit",
-                description: "Figma helpers",
+                id: "workspace-tools",
+                name: "workspace-tools",
+                displayName: "Workspace Tools",
+                description: "Workspace artifact helpers",
                 scope: "workspace",
                 discoveryKind: "marketplace",
+                installed: true,
                 enabled: true,
-                rootDir: "/tmp/plugin-workspace/.agents/plugins/figma-toolkit",
+                rootDir: "/tmp/plugin-workspace/.agents/plugins/workspace-tools",
                 manifestPath:
-                  "/tmp/plugin-workspace/.agents/plugins/figma-toolkit/.codex-plugin/plugin.json",
-                skillsPath: "/tmp/plugin-workspace/.agents/plugins/figma-toolkit/skills",
+                  "/tmp/plugin-workspace/.agents/plugins/workspace-tools/.codex-plugin/plugin.json",
+                skillsPath: "/tmp/plugin-workspace/.agents/plugins/workspace-tools/skills",
                 skills: [
                   {
-                    name: "figma-toolkit:import-frame",
-                    description: "Import frame",
+                    name: "workspace-tools:documents",
+                    description: "Create documents",
+                    enabled: true,
+                  },
+                  {
+                    name: "workspace-tools:presentations",
+                    description: "Create presentations",
+                    enabled: true,
+                  },
+                  {
+                    name: "workspace-tools:spreadsheets",
+                    description: "Create spreadsheets",
                     enabled: true,
                   },
                 ],
-                mcpServers: ["figma"],
+                mcpServers: [],
                 apps: [{ id: "figma-app", displayName: "Figma App", description: "Metadata only" }],
                 warnings: [],
               },
@@ -577,6 +588,7 @@ describe("plugins catalog page", () => {
                 description: "Slack helpers",
                 scope: "user",
                 discoveryKind: "direct",
+                installed: true,
                 enabled: false,
                 rootDir: "/tmp/home/.agents/plugins/slack-toolkit",
                 manifestPath: "/tmp/home/.agents/plugins/slack-toolkit/.codex-plugin/plugin.json",
@@ -610,9 +622,9 @@ describe("plugins catalog page", () => {
 
       expect(container.textContent).toContain("Enabled");
       expect(container.textContent).toContain("Disabled");
-      expect(container.textContent).toContain("Figma Toolkit");
+      expect(container.textContent).toContain("Workspace Tools");
       expect(container.textContent).toContain("Slack Toolkit");
-      expect(container.textContent).toContain("1 skill");
+      expect(container.textContent).toContain("3 skills");
       expect(container.textContent).not.toContain("1 apps");
 
       await act(async () => {
@@ -647,6 +659,7 @@ describe("plugins catalog page", () => {
                 description: "Workspace helpers",
                 scope: "workspace",
                 discoveryKind: "direct",
+                installed: true,
                 enabled: true,
                 rootDir: "/tmp/plugin-workspace/.agents/plugins/figma-toolkit",
                 manifestPath:
@@ -664,6 +677,7 @@ describe("plugins catalog page", () => {
                 description: "Global helpers",
                 scope: "user",
                 discoveryKind: "direct",
+                installed: true,
                 enabled: false,
                 rootDir: "/tmp/home/.agents/plugins/figma-toolkit",
                 manifestPath: "/tmp/home/.agents/plugins/figma-toolkit/.codex-plugin/plugin.json",

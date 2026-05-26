@@ -5,7 +5,11 @@ import path from "node:path";
 
 import { readMCPAuthFiles, setMCPServerApiKeyCredential } from "../src/mcp/authStore";
 import { loadMCPConfigRegistry } from "../src/mcp/configRegistry/layers";
-import { buildPluginCatalogSnapshot, resolvePluginCatalogEntry } from "../src/plugins/catalog";
+import {
+  buildPluginCatalogSnapshot,
+  buildRemoteMarketplacePluginDetail,
+  resolvePluginCatalogEntry,
+} from "../src/plugins/catalog";
 import { discoverPlugins } from "../src/plugins/discovery";
 import { readPluginManifest } from "../src/plugins/manifest";
 import {
@@ -256,6 +260,7 @@ function pluginEntry(scope: "workspace" | "user", rootDir: string): PluginCatalo
     description: "Figma helpers",
     scope,
     discoveryKind: "direct",
+    installed: true,
     enabled: true,
     rootDir,
     manifestPath: path.join(rootDir, ".codex-plugin", "plugin.json"),
@@ -282,9 +287,10 @@ describe("plugin catalog and install operations", () => {
 
       expect(catalog.warnings).toEqual([]);
       expect(catalog.plugins).toHaveLength(1);
-      expect(catalog.plugins[0]).toMatchObject({
+      const plugin = catalog.plugins[0];
+      expect(plugin).toMatchObject({
         id: "figma-toolkit",
-        displayName: "Remote Figma Toolkit",
+        displayName: "figma-toolkit",
         scope: "user",
         discoveryKind: "marketplace",
         enabled: false,
@@ -297,9 +303,10 @@ describe("plugin catalog and install operations", () => {
           category: "Design",
         },
       });
-      expect(catalog.plugins[0]?.skills.map((skill) => skill.name)).toEqual([
-        "figma-toolkit:import-frame",
-      ]);
+      expect(plugin).not.toHaveProperty("rootDir");
+      expect(plugin).not.toHaveProperty("manifestPath");
+      expect(plugin).not.toHaveProperty("skillsPath");
+      expect(plugin).not.toHaveProperty("skills");
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
       await fs.rm(home, { recursive: true, force: true });
@@ -447,7 +454,7 @@ describe("plugin catalog and install operations", () => {
     }
   });
 
-  test("remote marketplace entries skip valid bundles with mismatched plugin ids", async () => {
+  test("remote marketplace detail warns when materialized bundle has a mismatched plugin id", async () => {
     const workspace = await fs.mkdtemp(
       path.join(os.tmpdir(), "plugins-market-mismatch-workspace-"),
     );
@@ -456,14 +463,17 @@ describe("plugin catalog and install operations", () => {
     const config = makeConfig(workspace, home, builtInConfigDir);
 
     try {
-      const catalog = await buildPluginCatalogSnapshot(config, {
-        includeRemoteMarketplace: true,
+      const detail = await buildRemoteMarketplacePluginDetail({
+        pluginId: "figma-toolkit",
         fetchImpl: createRemoteMarketplaceFetch({ remoteManifestName: "impostor-toolkit" }),
       });
 
-      expect(catalog.plugins).toEqual([]);
-      expect(catalog.warnings).toContain(
-        '[plugins] Remote marketplace entry "figma-toolkit" did not contain a valid plugin bundle with a matching plugin name.',
+      expect(detail).toMatchObject({
+        id: "figma-toolkit",
+        installed: false,
+      });
+      expect(detail?.warnings).toContain(
+        'Remote marketplace entry "figma-toolkit" did not contain a valid plugin bundle with a matching plugin name.',
       );
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
@@ -472,7 +482,7 @@ describe("plugin catalog and install operations", () => {
     }
   });
 
-  test("remote marketplace entries continue after one plugin source fails", async () => {
+  test("remote marketplace catalog keeps entries lightweight even when a source is unavailable", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-market-partial-workspace-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-market-partial-home-"));
     const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-market-partial-"));
@@ -484,10 +494,12 @@ describe("plugin catalog and install operations", () => {
         fetchImpl: createRemoteMarketplaceFetch({ includeMissingPlugin: true }),
       });
 
-      expect(catalog.plugins.map((plugin) => plugin.id)).toEqual(["figma-toolkit"]);
-      expect(catalog.warnings).toContainEqual(
-        expect.stringContaining('remote marketplace entry "missing-toolkit"'),
-      );
+      expect(catalog.plugins.map((plugin) => plugin.id)).toEqual([
+        "figma-toolkit",
+        "missing-toolkit",
+      ]);
+      expect(catalog.warnings).toEqual([]);
+      expect(catalog.plugins[0]).not.toHaveProperty("rootDir");
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
       await fs.rm(home, { recursive: true, force: true });

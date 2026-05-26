@@ -1,5 +1,12 @@
 import type { FetchLike } from "../extensions/source";
-import type { AgentConfig, PluginCatalogEntry, PluginCatalogSnapshot, PluginScope } from "../types";
+import type {
+  AgentConfig,
+  InstalledPluginCatalogEntry,
+  MarketplacePluginCatalogEntry,
+  PluginCatalogEntry,
+  PluginCatalogSnapshot,
+  PluginScope,
+} from "../types";
 import { type DiscoveredPluginCandidate, discoverPlugins } from "./discovery";
 import {
   buildPluginCatalogEntry,
@@ -52,12 +59,11 @@ async function buildPluginCatalogEntryFromManifest(opts: {
   discoveryKind: PluginCatalogEntry["discoveryKind"];
   enabled: boolean;
   marketplace?: PluginCatalogEntry["marketplace"];
-  installed?: boolean;
   installSource?: string;
   applySkillOverrides?: boolean;
   overrides: Awaited<ReturnType<typeof readPluginOverrides>>;
   candidateWarnings?: string[];
-}): Promise<PluginCatalogEntry> {
+}): Promise<InstalledPluginCatalogEntry> {
   const { skills, warnings: skillWarnings } = await readPluginSkillSummaries(opts.manifest);
   const normalizedSkills = skills.map((skill) => ({
     ...skill,
@@ -82,7 +88,6 @@ async function buildPluginCatalogEntryFromManifest(opts: {
       ...(mcpSummary.warning ? [mcpSummary.warning] : []),
     ],
     ...(opts.marketplace ? { marketplace: opts.marketplace } : {}),
-    ...(opts.installed !== undefined ? { installed: opts.installed } : {}),
     ...(opts.installSource ? { installSource: opts.installSource } : {}),
   });
   entry.skills = entry.skills.map((skill) => {
@@ -115,6 +120,39 @@ export function comparePluginCatalogEntries(
 
 function isPluginFromMarketplace(plugin: PluginCatalogEntry, marketplaceName: string): boolean {
   return plugin.marketplace?.name === marketplaceName;
+}
+
+function buildRemoteMarketplaceCatalogEntry(opts: {
+  marketplace: Awaited<ReturnType<typeof fetchRemotePluginMarketplace>>;
+  plugin: Awaited<ReturnType<typeof fetchRemotePluginMarketplace>>["plugins"][number];
+}): MarketplacePluginCatalogEntry | null {
+  if (!opts.plugin.sourceInput) {
+    return null;
+  }
+  const displayName = opts.plugin.displayName ?? opts.plugin.name;
+  return {
+    id: opts.plugin.name,
+    name: opts.plugin.name,
+    displayName,
+    description: `Available from ${opts.marketplace.displayName ?? opts.marketplace.name}.`,
+    scope: "user",
+    discoveryKind: "marketplace",
+    installed: false,
+    enabled: false,
+    interface: {
+      displayName,
+      shortDescription: opts.plugin.category,
+    },
+    marketplace: {
+      name: opts.marketplace.name,
+      ...(opts.marketplace.displayName ? { displayName: opts.marketplace.displayName } : {}),
+      category: opts.plugin.category,
+      installationPolicy: opts.plugin.installationPolicy,
+      authenticationPolicy: opts.plugin.authenticationPolicy,
+    },
+    installSource: opts.plugin.sourceInput,
+    warnings: [],
+  };
 }
 
 export async function buildPluginCatalogSnapshot(
@@ -161,6 +199,7 @@ export async function buildPluginCatalogSnapshot(
           description: manifest.description,
           scope,
           discoveryKind,
+          installed: true,
           enabled: true,
           rootDir: manifest.rootDir,
           manifestPath: manifest.manifestPath,
@@ -181,7 +220,6 @@ export async function buildPluginCatalogSnapshot(
         enabled: pluginEnabled,
         overrides,
         candidateWarnings: _entryWarnings(candidate),
-        installed: true,
         ...(metadataMarketplace?.sourceInput
           ? { installSource: metadataMarketplace.sourceInput }
           : {}),
@@ -230,7 +268,6 @@ export async function buildPluginCatalogSnapshot(
         if (installedEntries.length > 0) {
           for (const plugin of installedEntries) {
             plugin.marketplace = plugin.marketplace ?? marketplaceMetadata;
-            plugin.installed = true;
             if (marketplaceEntry.sourceInput) {
               plugin.installSource = marketplaceEntry.sourceInput;
             }
@@ -244,41 +281,12 @@ export async function buildPluginCatalogSnapshot(
           continue;
         }
 
-        let materialized: Awaited<ReturnType<typeof materializePluginSource>> | null = null;
-        try {
-          materialized = await materializePluginSource({
-            input: marketplaceEntry.sourceInput,
-            fetchImpl: opts.fetchImpl,
-          });
-          const candidate = materialized.candidates.find(
-            (entry) => entry.pluginId === marketplaceEntry.name && entry.diagnostics.length === 0,
-          );
-          if (!candidate) {
-            warnings.push(
-              `[plugins] Remote marketplace entry "${marketplaceEntry.name}" did not contain a valid plugin bundle with a matching plugin name.`,
-            );
-            continue;
-          }
-          const manifest = await readPluginManifest(candidate.rootDir);
-          plugins.push(
-            await buildPluginCatalogEntryFromManifest({
-              manifest,
-              scope: "user",
-              discoveryKind: "marketplace",
-              enabled: false,
-              overrides,
-              marketplace: marketplaceMetadata,
-              installed: false,
-              installSource: marketplaceEntry.sourceInput,
-              applySkillOverrides: false,
-            }),
-          );
-        } catch (error) {
-          warnings.push(
-            `[plugins] Failed to load remote marketplace entry "${marketplaceEntry.name}": ${String(error)}`,
-          );
-        } finally {
-          await materialized?.cleanup();
+        const entry = buildRemoteMarketplaceCatalogEntry({
+          marketplace,
+          plugin: marketplaceEntry,
+        });
+        if (entry) {
+          plugins.push(entry);
         }
       }
     } catch (error) {
@@ -289,6 +297,59 @@ export async function buildPluginCatalogSnapshot(
   plugins.sort(comparePluginCatalogEntries);
 
   return { plugins, warnings };
+}
+
+export async function buildRemoteMarketplacePluginDetail(opts: {
+  pluginId: string;
+  fetchImpl?: FetchLike;
+}): Promise<MarketplacePluginCatalogEntry | null> {
+  const marketplace = await fetchRemotePluginMarketplace({ fetchImpl: opts.fetchImpl });
+  const marketplaceEntry = marketplace.plugins.find((entry) => entry.name === opts.pluginId);
+  if (!marketplaceEntry) {
+    return null;
+  }
+  const baseEntry = buildRemoteMarketplaceCatalogEntry({
+    marketplace,
+    plugin: marketplaceEntry,
+  });
+  if (!baseEntry) {
+    return null;
+  }
+
+  let materialized: Awaited<ReturnType<typeof materializePluginSource>> | null = null;
+  try {
+    materialized = await materializePluginSource({
+      input: baseEntry.installSource,
+      fetchImpl: opts.fetchImpl,
+    });
+    const candidate = materialized.candidates.find((entry) => entry.pluginId === opts.pluginId);
+    if (!candidate || candidate.diagnostics.length > 0) {
+      return {
+        ...baseEntry,
+        warnings: [
+          ...baseEntry.warnings,
+          `Remote marketplace entry "${opts.pluginId}" did not contain a valid plugin bundle with a matching plugin name.`,
+        ],
+      };
+    }
+    const manifest = await readPluginManifest(candidate.rootDir);
+    return {
+      ...baseEntry,
+      displayName: manifest.interface?.displayName ?? baseEntry.displayName,
+      description: manifest.description,
+      ...(manifest.interface ? { interface: manifest.interface } : {}),
+    };
+  } catch (error) {
+    return {
+      ...baseEntry,
+      warnings: [
+        ...baseEntry.warnings,
+        `[plugins] Failed to load remote marketplace entry "${opts.pluginId}": ${String(error)}`,
+      ],
+    };
+  } finally {
+    await materialized?.cleanup();
+  }
 }
 
 export function resolvePluginCatalogEntry(opts: {

@@ -14,6 +14,8 @@ import type {
   SkillSourceSpec,
 } from "./types";
 
+export const WORKSPACE_TOOLS_PLUGIN_ID = "workspace-tools";
+
 async function sortedChildDirs(parent: string): Promise<string[]> {
   const entries = await fs.readdir(parent, { withFileTypes: true }).catch(() => []);
   return entries
@@ -26,6 +28,66 @@ async function copyDirectory(source: string, destination: string): Promise<void>
   await fs.rm(destination, { recursive: true, force: true });
   await fs.mkdir(path.dirname(destination), { recursive: true });
   await fs.cp(source, destination, { recursive: true, force: true, verbatimSymlinks: false });
+}
+
+async function writeWorkspaceToolsPluginManifest(pluginRoot: string): Promise<void> {
+  const manifestDir = path.join(pluginRoot, ".cowork-plugin");
+  await fs.mkdir(manifestDir, { recursive: true });
+  await fs.writeFile(
+    path.join(manifestDir, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: WORKSPACE_TOOLS_PLUGIN_ID,
+        version: "0.1.0",
+        description: "Create, edit, analyze, and verify documents, presentations, and spreadsheets.",
+        author: { name: "Cowork" },
+        license: "UNLICENSED",
+        keywords: [
+          "workspace-tools",
+          "documents",
+          "docx",
+          "presentations",
+          "pptx",
+          "spreadsheets",
+          "xlsx",
+          "csv",
+        ],
+        skills: "./skills/",
+        interface: {
+          displayName: "Workspace Tools",
+          shortDescription: "Create and edit documents, presentations, and spreadsheets",
+          longDescription:
+            "A bundled productivity plugin with document, presentation, and spreadsheet skills for creating, editing, analyzing, and visually verifying workspace artifacts.",
+          developerName: "Cowork",
+          category: "Productivity",
+          capabilities: ["Read", "Write", "Analyze"],
+          defaultPrompt: [
+            "Create or update a document, presentation, or spreadsheet artifact.",
+          ],
+          brandColor: "#2563EB",
+          screenshots: [],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf-8",
+  );
+  await fs.writeFile(
+    path.join(manifestDir, "install.json"),
+    `${JSON.stringify(
+      {
+        bootstrap: {
+          name: "codex-primary-runtime",
+          source: CODEX_CURATED_PLUGINS_EXPORT_URL,
+          pluginId: WORKSPACE_TOOLS_PLUGIN_ID,
+        },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf-8",
+  );
 }
 
 async function normalizeInstalledSkillName(skillRoot: string, name: string): Promise<void> {
@@ -154,6 +216,14 @@ function isManagedLegacyRuntimeSkillManifest(
   );
 }
 
+function isManagedCurrentRuntimeSkillManifest(
+  manifest: Awaited<ReturnType<typeof readSkillInstallManifest>>,
+  skillName: CodexRuntimeSkillName,
+): boolean {
+  const spec = CODEX_RUNTIME_SKILLS.find((entry) => entry.name === skillName);
+  return spec ? isCurrentRuntimeSkillManifest(manifest, spec) : false;
+}
+
 export async function removeLegacyRuntimeSkills(opts: {
   destinationRoot?: string;
   global: boolean;
@@ -171,6 +241,23 @@ export async function removeLegacyRuntimeSkills(opts: {
     }
 
     opts.log?.(`Removing legacy Codex ${skillName} skill from ${destination}`);
+    await fs.rm(destination, { recursive: true, force: true });
+  }
+}
+
+export async function removeManagedRuntimeSkills(opts: {
+  destinationRoot?: string;
+  log?: (line: string) => void;
+}): Promise<void> {
+  if (!opts.destinationRoot) return;
+
+  for (const spec of CODEX_RUNTIME_SKILLS) {
+    const destination = path.join(opts.destinationRoot, spec.name);
+    if (!(await pathExists(destination))) continue;
+    const manifest = await readSkillInstallManifest(destination);
+    if (!isManagedCurrentRuntimeSkillManifest(manifest, spec.name)) continue;
+
+    opts.log?.(`Removing managed Codex ${spec.name} skill from ${destination}`);
     await fs.rm(destination, { recursive: true, force: true });
   }
 }
@@ -248,6 +335,107 @@ export async function installSkills(opts: {
       }),
     );
   }
+  return results;
+}
+
+function workspaceToolsDestination(pluginRoot: string, spec: SkillSourceSpec): string {
+  return path.join(pluginRoot, "skills", spec.name);
+}
+
+async function shouldOverwriteWorkspaceToolsSkill(
+  destination: string,
+  spec: SkillSourceSpec,
+  force: boolean,
+): Promise<boolean> {
+  if (force) return true;
+  if (!(await pathExists(destination))) return true;
+  const manifest = await readSkillInstallManifest(destination);
+  if (
+    isCurrentRuntimeSkillManifest(manifest, spec) &&
+    (await pathExists(path.join(destination, "SKILL.md")))
+  ) {
+    return false;
+  }
+  return manifest?.origin?.kind === "bootstrap";
+}
+
+export async function installWorkspaceToolsPlugin(opts: {
+  home: string;
+  runtimeRoots: readonly string[];
+  pluginsDir?: string;
+  force: boolean;
+  skip: boolean;
+  curatedRepoRoot?: string;
+  log?: (line: string) => void;
+}): Promise<CodexPrimaryRuntimeSkillResult[]> {
+  const pluginRoot = opts.pluginsDir
+    ? path.join(opts.pluginsDir, WORKSPACE_TOOLS_PLUGIN_ID)
+    : undefined;
+  if (!pluginRoot) return [];
+
+  if (opts.skip) {
+    return CODEX_RUNTIME_SKILLS.map((spec) => ({
+      name: spec.name,
+      status: "skipped",
+      destination: workspaceToolsDestination(pluginRoot, spec),
+      reason: "Workspace Tools plugin was removed by the user.",
+    }));
+  }
+
+  const results: CodexPrimaryRuntimeSkillResult[] = [];
+  let wroteAnySkill = false;
+  for (const spec of CODEX_RUNTIME_SKILLS) {
+    const destination = workspaceToolsDestination(pluginRoot, spec);
+    const source =
+      (opts.curatedRepoRoot &&
+      (await pathExists(
+        path.join(skillSourceFromCuratedRepo(opts.curatedRepoRoot, spec), "SKILL.md"),
+      ))
+        ? skillSourceFromCuratedRepo(opts.curatedRepoRoot, spec)
+        : null) ??
+      (await findFirstRuntimeSkillSource(opts.runtimeRoots, spec)) ??
+      (await skillSourceFromPluginCache(opts.home, spec));
+
+    if (!source) {
+      results.push({
+        name: spec.name,
+        status: "missing",
+        destination,
+        reason: "No source found.",
+      });
+      continue;
+    }
+    if (!(await pathExists(path.join(source, "SKILL.md")))) {
+      results.push({ name: spec.name, status: "missing", source, destination });
+      continue;
+    }
+
+    const overwrite = await shouldOverwriteWorkspaceToolsSkill(destination, spec, opts.force);
+    if (!overwrite) {
+      results.push({ name: spec.name, status: "already_installed", source, destination });
+      continue;
+    }
+
+    opts.log?.(`Installing Codex ${spec.name} skill into ${destination}`);
+    await copyDirectory(source, destination);
+    await normalizeInstalledSkillName(destination, spec.name);
+    await writeSkillInstallManifest({
+      skillRoot: destination,
+      installationId: expectedBootstrapInstallationId(spec.name),
+      origin: {
+        kind: "bootstrap",
+        url: CODEX_CURATED_PLUGINS_EXPORT_URL,
+        subdir: expectedBootstrapOriginSubdir(spec),
+      },
+    });
+    wroteAnySkill = true;
+    results.push({ name: spec.name, status: "installed", source, destination });
+  }
+
+  if (wroteAnySkill || results.some((result) => result.status === "already_installed")) {
+    await writeWorkspaceToolsPluginManifest(pluginRoot);
+  }
+
   return results;
 }
 

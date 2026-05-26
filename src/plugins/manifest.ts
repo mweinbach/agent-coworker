@@ -6,6 +6,7 @@ import type {
   PluginAppSummary,
   PluginCatalogEntry,
   PluginDiscoveryKind,
+  InstalledPluginCatalogEntry,
   PluginInterfaceMeta,
   PluginScope,
   SkillInterfaceMeta,
@@ -729,9 +730,8 @@ export function buildPluginCatalogEntry(opts: {
   apps: ParsedPluginApp[];
   warnings?: string[];
   marketplace?: PluginCatalogEntry["marketplace"];
-  installed?: boolean;
   installSource?: string;
-}): PluginCatalogEntry {
+}): InstalledPluginCatalogEntry {
   return {
     id: opts.pluginId,
     name: opts.pluginManifest.name,
@@ -739,6 +739,7 @@ export function buildPluginCatalogEntry(opts: {
     description: opts.pluginManifest.description,
     scope: opts.scope,
     discoveryKind: opts.discoveryKind,
+    installed: true,
     enabled: opts.enabled,
     rootDir: opts.pluginManifest.rootDir,
     manifestPath: opts.pluginManifest.manifestPath,
@@ -755,7 +756,6 @@ export function buildPluginCatalogEntry(opts: {
       : {}),
     ...(opts.pluginManifest.interface ? { interface: opts.pluginManifest.interface } : {}),
     ...(opts.marketplace ? { marketplace: opts.marketplace } : {}),
-    ...(opts.installed !== undefined ? { installed: opts.installed } : {}),
     ...(opts.installSource ? { installSource: opts.installSource } : {}),
     skills: opts.skills.map((skill) => ({
       name: `${opts.pluginManifest.name}:${skill.rawName}`,

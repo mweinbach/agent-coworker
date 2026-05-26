@@ -2,7 +2,7 @@ import { PackageIcon } from "lucide-react";
 
 import { Badge } from "../../components/ui/badge";
 import { Card } from "../../components/ui/card";
-import type { PluginCatalogEntry } from "../../lib/wsProtocol";
+import { type PluginCatalogEntry, isInstalledPluginCatalogEntry } from "../../lib/wsProtocol";
 import { SkillIcon } from "../skills/utils";
 
 export function PluginCardGrid({
@@ -17,7 +17,7 @@ export function PluginCardGrid({
       {plugins.map((plugin) => {
         const icon = plugin.interface?.logo || plugin.interface?.composerIcon;
         const subtitle = plugin.interface?.shortDescription || plugin.description;
-        const installed = plugin.installed !== false;
+        const installed = isInstalledPluginCatalogEntry(plugin);
         return (
           <button
             key={`${plugin.scope}:${plugin.id}`}
@@ -69,12 +69,16 @@ export function PluginCardGrid({
                     {plugin.marketplace.category}
                   </Badge>
                 ) : null}
-                <Badge variant="outline" className="text-[10px] px-1.5 py-0">
-                  {plugin.skills.length} skills
-                </Badge>
-                <Badge variant="outline" className="text-[10px] px-1.5 py-0">
-                  {plugin.mcpServers.length} MCP
-                </Badge>
+                {installed ? (
+                  <>
+                    <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                      {plugin.skills.length} skills
+                    </Badge>
+                    <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                      {plugin.mcpServers.length} MCP
+                    </Badge>
+                  </>
+                ) : null}
               </div>
             </Card>
           </button>

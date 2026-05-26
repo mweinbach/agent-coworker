@@ -129,6 +129,7 @@ describe("Codex primary runtime bootstrap", () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-runtime-workspace-"));
     const builtInSkillsDir = path.join(workspace, "built-in-skills");
     const globalSkillsDir = path.join(home, ".cowork", "skills");
+    const globalPluginsDir = path.join(home, ".cowork", "plugins");
     const oaiSource = await writeFakeOaiNamespace(home);
 
     const fetchImpl = mock(async (input: RequestInfo | URL) => {
@@ -148,6 +149,7 @@ describe("Codex primary runtime bootstrap", () => {
         workspaceDir: workspace,
         builtInSkillsDir,
         globalSkillsDir,
+        globalPluginsDir,
         fetchImpl,
         force: true,
         extractZipArchive: async (_archivePath, destinationDir) => {
@@ -168,14 +170,24 @@ describe("Codex primary runtime bootstrap", () => {
         await fs.readFile(path.join(builtInSkillsDir, "presentations", "SKILL.md"), "utf-8"),
       ).toContain("name: presentations");
       expect(
-        await fs.readFile(path.join(globalSkillsDir, "spreadsheets", "SKILL.md"), "utf-8"),
+        await fs.readFile(
+          path.join(globalPluginsDir, "workspace-tools", "skills", "spreadsheets", "SKILL.md"),
+          "utf-8",
+        ),
       ).toContain("spreadsheets body");
       expect(
         await fs.readFile(
-          path.join(globalSkillsDir, "spreadsheets", ".cowork-skill.json"),
+          path.join(
+            globalPluginsDir,
+            "workspace-tools",
+            "skills",
+            "spreadsheets",
+            ".cowork-skill.json",
+          ),
           "utf-8",
         ),
       ).toContain("bootstrap-codex-primary-runtime-spreadsheets");
+      await expect(fs.access(path.join(globalSkillsDir, "spreadsheets"))).rejects.toThrow();
       expect(fetchImpl).toHaveBeenCalledTimes(2);
     } finally {
       await fs.rm(home, { recursive: true, force: true });
@@ -193,6 +205,7 @@ describe("Codex primary runtime bootstrap", () => {
         homedir: home,
         workspaceDir: workspace,
         globalSkillsDir: path.join(home, ".cowork", "skills"),
+        globalPluginsDir: path.join(home, ".cowork", "plugins"),
         fetchImpl,
         allowNetwork: false,
       });
@@ -223,6 +236,7 @@ describe("Codex primary runtime bootstrap", () => {
         workspaceDir: workspace,
         builtInSkillsDir: path.join(builtInRoot, "skills"),
         globalSkillsDir: path.join(home, ".cowork", "skills"),
+        globalPluginsDir: path.join(home, ".cowork", "plugins"),
         fetchImpl,
         allowNetwork: false,
       });
@@ -283,6 +297,7 @@ describe("Codex primary runtime bootstrap", () => {
     await writeFakeBundledRuntime(bundledRuntimeDir);
     const fetchImpl = mock(async () => new Response("unexpected", { status: 500 })) as typeof fetch;
     const globalSkillsDir = path.join(home, ".cowork", "skills");
+    const globalPluginsDir = path.join(home, ".cowork", "plugins");
     const builtInSkillsDir = path.join(builtInRoot, "skills");
 
     try {
@@ -291,10 +306,17 @@ describe("Codex primary runtime bootstrap", () => {
         workspaceDir: workspace,
         builtInSkillsDir,
         globalSkillsDir,
+        globalPluginsDir,
         fetchImpl,
         allowNetwork: false,
       });
-      const documentsManifestPath = path.join(globalSkillsDir, "documents", ".cowork-skill.json");
+      const documentsManifestPath = path.join(
+        globalPluginsDir,
+        "workspace-tools",
+        "skills",
+        "documents",
+        ".cowork-skill.json",
+      );
       const firstDocumentsManifest = await fs.readFile(documentsManifestPath, "utf-8");
       const secondLogs: string[] = [];
 
@@ -303,6 +325,7 @@ describe("Codex primary runtime bootstrap", () => {
         workspaceDir: workspace,
         builtInSkillsDir,
         globalSkillsDir,
+        globalPluginsDir,
         fetchImpl,
         allowNetwork: false,
         log: (line) => secondLogs.push(line),
@@ -320,9 +343,40 @@ describe("Codex primary runtime bootstrap", () => {
     }
   });
 
+  test("skips Workspace Tools plugin bootstrap when the user removed it", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-runtime-skip-plugin-"));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-runtime-workspace-"));
+    const builtInRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-runtime-built-in-"));
+    const bundledRuntimeDir = path.join(builtInRoot, "codex-primary-runtime");
+    await writeFakeBundledRuntime(bundledRuntimeDir);
+    const globalPluginsDir = path.join(home, ".cowork", "plugins");
+
+    try {
+      const result = await ensureCodexPrimaryRuntimeReady({
+        homedir: home,
+        workspaceDir: workspace,
+        globalPluginsDir,
+        skipGlobalWorkspaceToolsPlugin: true,
+        allowNetwork: false,
+      });
+
+      expect(result?.skills.filter((skill) => skill.status === "skipped").map((skill) => skill.name)).toEqual([
+        "documents",
+        "presentations",
+        "spreadsheets",
+      ]);
+      await expect(fs.access(path.join(globalPluginsDir, "workspace-tools"))).rejects.toThrow();
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(builtInRoot, { recursive: true, force: true });
+    }
+  });
+
   test("overwrites managed bootstrap skills but preserves manual global skills", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-runtime-global-"));
     const globalSkillsDir = path.join(home, ".cowork", "skills");
+    const globalPluginsDir = path.join(home, ".cowork", "plugins");
     const managedSpreadsheet = path.join(globalSkillsDir, "spreadsheet");
     const managedSpreadsheets = path.join(globalSkillsDir, "spreadsheets");
     const manualDoc = path.join(globalSkillsDir, "doc");
@@ -333,6 +387,21 @@ describe("Codex primary runtime bootstrap", () => {
       skillRoot: managedSpreadsheet,
       installationId: "bootstrap-spreadsheet",
       origin: { kind: "bootstrap", url: "https://github.com/mweinbach/cowork-skills-plugins" },
+    });
+    await fs.mkdir(managedSpreadsheets, { recursive: true });
+    await fs.writeFile(
+      path.join(managedSpreadsheets, "SKILL.md"),
+      "---\nname: spreadsheets\ndescription: old spreadsheets\n---\nold spreadsheets\n",
+      "utf-8",
+    );
+    await writeSkillInstallManifest({
+      skillRoot: managedSpreadsheets,
+      installationId: "bootstrap-codex-primary-runtime-spreadsheets",
+      origin: {
+        kind: "bootstrap",
+        url: __internal.CODEX_CURATED_PLUGINS_EXPORT_URL,
+        subdir: "plugins/openai-primary-runtime/plugins/spreadsheets/skills/spreadsheets",
+      },
     });
     await fs.mkdir(manualDoc, { recursive: true });
     await fs.writeFile(path.join(manualDoc, "SKILL.md"), "manual doc\n", "utf-8");
@@ -352,6 +421,7 @@ describe("Codex primary runtime bootstrap", () => {
       await ensureCodexPrimaryRuntimeReady({
         homedir: home,
         globalSkillsDir,
+        globalPluginsDir,
         fetchImpl,
         extractZipArchive: async (_archivePath, destinationDir) => {
           await writeFakeCuratedArchive(destinationDir);
@@ -359,9 +429,13 @@ describe("Codex primary runtime bootstrap", () => {
       });
 
       await expect(fs.access(managedSpreadsheet)).rejects.toThrow();
-      expect(await fs.readFile(path.join(managedSpreadsheets, "SKILL.md"), "utf-8")).toContain(
-        "spreadsheets body",
-      );
+      await expect(fs.access(managedSpreadsheets)).rejects.toThrow();
+      expect(
+        await fs.readFile(
+          path.join(globalPluginsDir, "workspace-tools", "skills", "spreadsheets", "SKILL.md"),
+          "utf-8",
+        ),
+      ).toContain("spreadsheets body");
       expect(await fs.readFile(path.join(manualDoc, "SKILL.md"), "utf-8")).toBe("manual doc\n");
     } finally {
       await fs.rm(home, { recursive: true, force: true });

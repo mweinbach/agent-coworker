@@ -5,12 +5,13 @@ import { BUILT_IN_MARKETPLACE_REPO, type FetchLike } from "../extensions/source"
 import { renameMCPServerCredentials } from "../mcp/authStore";
 import type {
   AgentConfig,
+  InstalledPluginCatalogEntry,
   MCPServerConfig,
-  PluginCatalogEntry,
   PluginCatalogSnapshot,
   PluginInstallPreview,
   PluginInstallTargetScope,
 } from "../types";
+import { isInstalledPluginCatalogEntry } from "../types";
 import { workspacePathOverlaps } from "../utils/workspacePath";
 import { buildPluginCatalogSnapshot } from "./catalog";
 import {
@@ -58,7 +59,11 @@ function conflictingTargetRoots(
 ): string[] {
   const roots = new Set<string>();
   for (const plugin of catalog.plugins) {
-    if (plugin.scope === paths.scope && plugin.id === pluginId && plugin.installed !== false) {
+    if (
+      isInstalledPluginCatalogEntry(plugin) &&
+      plugin.scope === paths.scope &&
+      plugin.id === pluginId
+    ) {
       roots.add(plugin.rootDir);
     }
   }
@@ -296,7 +301,7 @@ async function migrateBundledPluginMcpCredentials(opts: {
   }
 }
 
-type PluginMarketplaceInstallMetadata = NonNullable<PluginInstallMetadata["marketplace"]>;
+export type PluginMarketplaceInstallMetadata = NonNullable<PluginInstallMetadata["marketplace"]>;
 
 function normalizeInstallSourceInput(input: string): string {
   return input.trim().replace(/\/+$/g, "");
@@ -357,6 +362,7 @@ export async function installPluginsFromSource(opts: {
   input: string;
   targetScope: PluginInstallTargetScope;
   fetchImpl?: FetchLike;
+  marketplaceMetadataByPluginId?: ReadonlyMap<string, PluginMarketplaceInstallMetadata>;
 }): Promise<{
   preview: PluginInstallPreview;
   pluginIds: string[];
@@ -379,11 +385,13 @@ export async function installPluginsFromSource(opts: {
     cwd: opts.config.workingDirectory,
     fetchImpl: opts.fetchImpl,
   });
-  const marketplaceMetadataByPluginId = await resolveRemoteMarketplaceMetadataByPluginId({
-    input: opts.input,
-    materialized,
-    fetchImpl: opts.fetchImpl,
-  });
+  const marketplaceMetadataByPluginId =
+    opts.marketplaceMetadataByPluginId ??
+    (await resolveRemoteMarketplaceMetadataByPluginId({
+      input: opts.input,
+      materialized,
+      fetchImpl: opts.fetchImpl,
+    }));
 
   try {
     const validCandidates = materialized.candidates.filter(
@@ -444,11 +452,8 @@ export async function installPluginsFromSource(opts: {
 
 export async function deletePluginInstallation(opts: {
   config: AgentConfig;
-  plugin: PluginCatalogEntry;
+  plugin: InstalledPluginCatalogEntry;
 }): Promise<PluginCatalogSnapshot> {
-  if (opts.plugin.installed === false) {
-    throw new Error(`Plugin "${opts.plugin.id}" is not installed.`);
-  }
   await fs.rm(opts.plugin.rootDir, { recursive: true, force: true });
   await setPluginEnabled({
     config: opts.config,

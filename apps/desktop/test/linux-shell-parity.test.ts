@@ -48,11 +48,17 @@ describe("linux desktop shell parity", () => {
     expect(linuxTokenRule).not.toBeNull();
     const body = linuxTokenRule?.[1] ?? "";
 
-    expect(body).toMatch(/--sidebar-pane-surface:\s*color-mix\(in srgb, var\(--sidebar-bg\) 20%, transparent\);/);
+    expect(body).toMatch(
+      /--sidebar-pane-surface:\s*color-mix\(in srgb, var\(--sidebar-bg\) 20%, transparent\);/,
+    );
     expect(body).toMatch(/--sidebar-blur:\s*0px\s*;/);
     expect(body).toMatch(/--sidebar-titlebar-blur:\s*0px\s*;/);
-    expect(body).toMatch(/--surface-main-card:\s*color-mix\(in srgb, var\(--panel-bg\) 94%, transparent\);/);
+    expect(body).toMatch(
+      /--surface-main-card:\s*color-mix\(in srgb, var\(--panel-bg\) 94%, transparent\);/,
+    );
     expect(body).toMatch(/--main-card-radius:\s*10px\s*;/);
-    expect(body).toMatch(/--surface-overlay:\s*color-mix\(in srgb, var\(--panel-bg\) 72%, transparent\);/);
+    expect(body).toMatch(
+      /--surface-overlay:\s*color-mix\(in srgb, var\(--panel-bg\) 72%, transparent\);/,
+    );
   });
 });

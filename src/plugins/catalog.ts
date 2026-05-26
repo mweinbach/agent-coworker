@@ -112,10 +112,7 @@ export function comparePluginCatalogEntries(
   return `${left.displayName}:${left.id}`.localeCompare(`${right.displayName}:${right.id}`);
 }
 
-function isPluginFromMarketplace(
-  plugin: PluginCatalogEntry,
-  marketplaceName: string,
-): boolean {
+function isPluginFromMarketplace(plugin: PluginCatalogEntry, marketplaceName: string): boolean {
   return plugin.discoveryKind === "marketplace" && plugin.marketplace?.name === marketplaceName;
 }
 

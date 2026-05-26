@@ -146,11 +146,7 @@ function textResponse(payload: string, status = 200): Response {
   });
 }
 
-function createRemoteMarketplaceFetch(
-  opts: {
-    remoteManifestName?: string;
-  } = {},
-): typeof fetch {
+function createRemoteMarketplaceFetch(opts: { remoteManifestName?: string } = {}): typeof fetch {
   const tree: Record<string, unknown> = {
     ".agents/plugins/marketplace.json": {
       type: "file",
@@ -337,9 +333,7 @@ describe("plugin catalog and install operations", () => {
       path.join(os.tmpdir(), "plugins-market-provenance-workspace-"),
     );
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-market-provenance-home-"));
-    const builtInConfigDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "plugins-market-provenance-"),
-    );
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-market-provenance-"));
     const config = makeConfig(workspace, home, builtInConfigDir);
 
     try {
@@ -395,7 +389,9 @@ describe("plugin catalog and install operations", () => {
   });
 
   test("remote marketplace entries skip valid bundles with mismatched plugin ids", async () => {
-    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-market-mismatch-workspace-"));
+    const workspace = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-market-mismatch-workspace-"),
+    );
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-market-mismatch-home-"));
     const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-market-mismatch-"));
     const config = makeConfig(workspace, home, builtInConfigDir);

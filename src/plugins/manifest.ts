@@ -360,8 +360,32 @@ async function assertPathInsidePluginRoot(
   }
 }
 
+export const PLUGIN_MANIFEST_DIR_NAMES = [".cowork-plugin", ".codex-plugin"] as const;
+
+export function isPluginManifestDirName(value: string): boolean {
+  return PLUGIN_MANIFEST_DIR_NAMES.includes(value as (typeof PLUGIN_MANIFEST_DIR_NAMES)[number]);
+}
+
+export function pluginManifestPathsForPluginRoot(pluginRoot: string): string[] {
+  return PLUGIN_MANIFEST_DIR_NAMES.map((dirName) => path.join(pluginRoot, dirName, "plugin.json"));
+}
+
 export function manifestPathForPluginRoot(pluginRoot: string): string {
-  return path.join(pluginRoot, ".codex-plugin", "plugin.json");
+  return pluginManifestPathsForPluginRoot(pluginRoot)[0] ?? path.join(pluginRoot, "plugin.json");
+}
+
+async function findPluginManifestPath(pluginRoot: string): Promise<string> {
+  for (const candidatePath of pluginManifestPathsForPluginRoot(pluginRoot)) {
+    try {
+      const stat = await fs.stat(candidatePath);
+      if (stat.isFile()) {
+        return candidatePath;
+      }
+    } catch {
+      // Try the next supported manifest directory.
+    }
+  }
+  return manifestPathForPluginRoot(pluginRoot);
 }
 
 async function resolvePluginSkillsPaths(
@@ -414,7 +438,7 @@ async function resolvePluginSkillsPaths(
 }
 
 export async function readPluginManifest(pluginRoot: string): Promise<PluginManifest> {
-  const manifestPath = manifestPathForPluginRoot(pluginRoot);
+  const manifestPath = await findPluginManifestPath(pluginRoot);
   const raw = await fs.readFile(manifestPath, "utf-8");
   const parsed = pluginManifestSchema.parse(JSON.parse(raw));
   const skillsPaths = await resolvePluginSkillsPaths(pluginRoot, parsed.skills, manifestPath);

@@ -103,9 +103,9 @@ function createMarketplaceFixture(pluginIds: string[]) {
     tree[`plugins/${id}`] = [
       {
         type: "dir",
-        name: ".codex-plugin",
-        path: `plugins/${id}/.codex-plugin`,
-        url: `https://api.github.com/repos/mweinbach/cowork-skills-plugins/contents/plugins/${id}/.codex-plugin?ref=main`,
+        name: ".cowork-plugin",
+        path: `plugins/${id}/.cowork-plugin`,
+        url: `https://api.github.com/repos/mweinbach/cowork-skills-plugins/contents/plugins/${id}/.cowork-plugin?ref=main`,
         download_url: null,
       },
       {
@@ -116,12 +116,12 @@ function createMarketplaceFixture(pluginIds: string[]) {
         download_url: null,
       },
     ];
-    tree[`plugins/${id}/.codex-plugin`] = [
+    tree[`plugins/${id}/.cowork-plugin`] = [
       {
         type: "file",
         name: "plugin.json",
-        path: `plugins/${id}/.codex-plugin/plugin.json`,
-        url: `https://api.github.com/repos/mweinbach/cowork-skills-plugins/contents/plugins/${id}/.codex-plugin/plugin.json?ref=main`,
+        path: `plugins/${id}/.cowork-plugin/plugin.json`,
+        url: `https://api.github.com/repos/mweinbach/cowork-skills-plugins/contents/plugins/${id}/.cowork-plugin/plugin.json?ref=main`,
         download_url: `https://download.test/${id}/plugin.json`,
       },
     ];
@@ -176,7 +176,7 @@ describe("default global skills bootstrap", () => {
       expect(result.installed).toEqual(["alpha", "beta"]);
       expect(
         await fs.readFile(
-          path.join(home, ".agents", "plugins", "alpha", ".codex-plugin", "plugin.json"),
+          path.join(home, ".agents", "plugins", "alpha", ".cowork-plugin", "plugin.json"),
           "utf-8",
         ),
       ).toContain('"name":"alpha"');

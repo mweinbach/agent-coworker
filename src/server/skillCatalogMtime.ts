@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { manifestPathForPluginRoot } from "../plugins";
+import { pluginManifestPathsForPluginRoot } from "../plugins";
 import { getSkillScopeDescriptors } from "../skills/catalog";
 import { manifestPathForSkillRoot } from "../skills/manifest";
 import type { AgentConfig } from "../types";
@@ -42,7 +42,9 @@ async function addPluginPaths(paths: Set<string>, pluginsDir: string): Promise<v
   paths.add(path.join(pluginsDir, "marketplace.json"));
   for (const pluginRoot of await listChildPaths(pluginsDir)) {
     paths.add(pluginRoot);
-    paths.add(manifestPathForPluginRoot(pluginRoot));
+    for (const manifestPath of pluginManifestPathsForPluginRoot(pluginRoot)) {
+      paths.add(manifestPath);
+    }
     paths.add(path.join(pluginRoot, ".mcp.json"));
     paths.add(path.join(pluginRoot, ".app.json"));
 

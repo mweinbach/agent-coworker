@@ -59,8 +59,8 @@ export function PluginsCatalogPage({
 
   const emptyLabel =
     managementScope === "global"
-      ? "No Codex-style plugins were discovered in your global library."
-      : "No Codex-style plugins were discovered for this workspace.";
+      ? "No Cowork plugins were discovered in your global library."
+      : "No Cowork plugins were discovered for this workspace.";
 
   return (
     <div className="app-skills-view h-full min-h-0 overflow-y-auto px-6 py-4">

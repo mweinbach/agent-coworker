@@ -158,9 +158,9 @@ function createRemoteMarketplaceFetch(): typeof fetch {
     "plugins/figma-toolkit": [
       {
         type: "dir",
-        name: ".codex-plugin",
-        path: "plugins/figma-toolkit/.codex-plugin",
-        url: "https://api.github.com/repos/mweinbach/cowork-skills-plugins/contents/plugins/figma-toolkit/.codex-plugin?ref=main",
+        name: ".cowork-plugin",
+        path: "plugins/figma-toolkit/.cowork-plugin",
+        url: "https://api.github.com/repos/mweinbach/cowork-skills-plugins/contents/plugins/figma-toolkit/.cowork-plugin?ref=main",
         download_url: null,
       },
       {
@@ -171,12 +171,12 @@ function createRemoteMarketplaceFetch(): typeof fetch {
         download_url: null,
       },
     ],
-    "plugins/figma-toolkit/.codex-plugin": [
+    "plugins/figma-toolkit/.cowork-plugin": [
       {
         type: "file",
         name: "plugin.json",
-        path: "plugins/figma-toolkit/.codex-plugin/plugin.json",
-        url: "https://api.github.com/repos/mweinbach/cowork-skills-plugins/contents/plugins/figma-toolkit/.codex-plugin/plugin.json?ref=main",
+        path: "plugins/figma-toolkit/.cowork-plugin/plugin.json",
+        url: "https://api.github.com/repos/mweinbach/cowork-skills-plugins/contents/plugins/figma-toolkit/.cowork-plugin/plugin.json?ref=main",
         download_url: "https://download.test/figma-toolkit/plugin.json",
       },
     ],

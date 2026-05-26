@@ -10,6 +10,7 @@ export {
   type ParsedPluginApp,
   type ParsedPluginSkill,
   type PluginManifest,
+  pluginManifestPathsForPluginRoot,
   readPluginAppSummaries,
   readPluginManifest,
   readPluginSkillSummaries,

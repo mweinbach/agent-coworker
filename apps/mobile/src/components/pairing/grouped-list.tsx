@@ -1,13 +1,12 @@
-import type { PropsWithChildren, ReactElement } from "react";
-import type { ReactNode } from "react";
+import type { PropsWithChildren, ReactElement, ReactNode } from "react";
 import {
   Pressable,
   type RefreshControlProps,
   ScrollView,
+  type StyleProp,
   StyleSheet,
   Text,
   View,
-  type StyleProp,
   type ViewStyle,
 } from "react-native";
 import Swipeable from "react-native-gesture-handler/Swipeable";
@@ -120,56 +119,55 @@ export function GroupedRow({
 }: GroupedRowProps) {
   const theme = useAppTheme();
   const content = (
-      <View
+    <View
+      style={{
+        minHeight: 44,
+        justifyContent: "center",
+        paddingHorizontal: 16,
+        paddingVertical: detail ? 10 : 12,
+        borderBottomWidth: isLast ? 0 : StyleSheet.hairlineWidth,
+        borderBottomColor: theme.borderMuted,
+        backgroundColor: theme.surface,
+      }}
+    >
+      <Text
+        selectable
         style={{
-          minHeight: 44,
-          justifyContent: "center",
-          paddingHorizontal: 16,
-          paddingVertical: detail ? 10 : 12,
-          borderBottomWidth: isLast ? 0 : StyleSheet.hairlineWidth,
-          borderBottomColor: theme.borderMuted,
-          backgroundColor: theme.surface,
+          color: destructive ? theme.danger : theme.primary,
+          fontSize: 17,
+          fontWeight: "400",
         }}
       >
+        {label}
+      </Text>
+      {detail ? (
         <Text
           selectable
           style={{
-            color: destructive ? theme.danger : theme.primary,
-            fontSize: 17,
-            fontWeight: "400",
+            color: theme.textSecondary,
+            fontSize: 13,
+            marginTop: 2,
+            fontVariant: ["tabular-nums"],
           }}
         >
-          {label}
+          {detail}
         </Text>
-        {detail ? (
-          <Text
-            selectable
-            style={{
-              color: theme.textSecondary,
-              fontSize: 13,
-              marginTop: 2,
-              fontVariant: ["tabular-nums"],
-            }}
-          >
-            {detail}
-          </Text>
-        ) : null}
-      </View>
+      ) : null}
+    </View>
   );
 
-  const rowBody =
-    onPress ? (
-      <Pressable
-        onPress={onPress}
-        style={({ pressed }) => ({
-          backgroundColor: pressed ? theme.surfaceMuted : theme.surface,
-        })}
-      >
-        {content}
-      </Pressable>
-    ) : (
-      content
-    );
+  const rowBody = onPress ? (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => ({
+        backgroundColor: pressed ? theme.surfaceMuted : theme.surface,
+      })}
+    >
+      {content}
+    </Pressable>
+  ) : (
+    content
+  );
 
   if (!onDelete) {
     return rowBody;

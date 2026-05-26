@@ -1,20 +1,16 @@
 import { useState } from "react";
 import { Linking, Pressable, Text, View } from "react-native";
-
+import { parseRichBlocks, type RichBlock } from "@/components/thread/markdownParser";
+import { SourcesCarousel } from "@/components/thread/sources-carousel";
 import {
   formatLinkDisplayLabel,
   normalizeInlineLinkHref,
   parseInlineMarkdown,
 } from "@/features/cowork/inlineMarkdown";
-import { SourcesCarousel } from "@/components/thread/sources-carousel";
-import {
-  parseRichBlocks,
-  type RichBlock,
-} from "@/components/thread/markdownParser";
 import { useAppTheme } from "@/theme/use-app-theme";
 
-export { parseRichBlocks } from "@/components/thread/markdownParser";
 export type { RichBlock } from "@/components/thread/markdownParser";
+export { parseRichBlocks } from "@/components/thread/markdownParser";
 
 type MarkdownTextProps = {
   text: string;
@@ -188,7 +184,10 @@ function ListBlock({
   return (
     <View style={{ gap: 8 }}>
       {items.map((item, index) => (
-        <View key={`${ordered ? "ol" : "ul"}:${index}:${item.slice(0, 24)}`} style={{ flexDirection: "row", gap: 10 }}>
+        <View
+          key={`${ordered ? "ol" : "ul"}:${index}:${item.slice(0, 24)}`}
+          style={{ flexDirection: "row", gap: 10 }}
+        >
           <Text
             selectable
             style={{

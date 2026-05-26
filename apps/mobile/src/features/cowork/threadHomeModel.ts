@@ -1,5 +1,5 @@
-import type { MobileThreadSummary } from "./threadStore";
 import type { WorkspaceSummary } from "./protocolTypes";
+import type { MobileThreadSummary } from "./threadStore";
 
 export const HOME_SECTION_KEYS = ["chats", "projects"] as const;
 export type HomeSectionKey = (typeof HOME_SECTION_KEYS)[number];

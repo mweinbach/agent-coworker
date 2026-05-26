@@ -32,9 +32,12 @@ function mockLocalModule(alias: string, relativePath: string, factory: () => any
 }
 
 // Mock expo-router
-const toolbarMock = Object.assign(({ children }: { children?: any }) => createElement("div", null, children), {
-  Button: () => null,
-});
+const toolbarMock = Object.assign(
+  ({ children }: { children?: any }) => createElement("div", null, children),
+  {
+    Button: () => null,
+  },
+);
 const expoRouterMock = () => ({
   useLocalSearchParams: () => ({ id: "test-thread-123" }),
   Stack: {

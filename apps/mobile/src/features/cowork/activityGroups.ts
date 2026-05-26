@@ -1,5 +1,5 @@
-import type { SessionFeedItem } from "./protocolTypes";
 import { buildMarkdownPreviewText } from "./markdownPreview";
+import type { SessionFeedItem } from "./protocolTypes";
 import { formatToolCard } from "./toolCardFormatting";
 import { isTerminalToolState, type ToolFeedState } from "./toolFeedState";
 
@@ -30,7 +30,9 @@ function normalizedReasoningText(text: string): string {
   return text.trim();
 }
 
-function hasRenderableReasoningText(item: Extract<SessionFeedItem, { kind: "reasoning" }>): boolean {
+function hasRenderableReasoningText(
+  item: Extract<SessionFeedItem, { kind: "reasoning" }>,
+): boolean {
   return normalizedReasoningText(item.text).length > 0;
 }
 

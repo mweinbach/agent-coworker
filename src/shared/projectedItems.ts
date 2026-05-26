@@ -135,9 +135,7 @@ function existingTsOr(ts: string, existing?: SessionFeedItem): string {
   return existing?.ts ?? ts;
 }
 
-import {
-  isTerminalProjectedToolState,
-} from "../shared/projectionPolicy";
+import { isTerminalProjectedToolState } from "../shared/projectionPolicy";
 
 function existingToolItem(
   existing?: SessionFeedItem,

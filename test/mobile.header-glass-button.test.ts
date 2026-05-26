@@ -1,5 +1,5 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 
 const workspaceSource = readFileSync(
   new URL("../apps/mobile/src/app/(app)/(tabs)/workspace/index.tsx", import.meta.url),

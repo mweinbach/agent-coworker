@@ -3,6 +3,7 @@ import type { PropsWithChildren } from "react";
 import { useEffect } from "react";
 
 import { CoworkJsonRpcClient } from "../features/cowork/jsonRpcClient";
+import { loadAllOfflineWorkspaceCache } from "../features/cowork/offlineCache";
 import type { CoworkThread, SessionSnapshotLike } from "../features/cowork/protocolTypes";
 import {
   buildWorkspaceLookup,
@@ -10,13 +11,12 @@ import {
 } from "../features/cowork/remoteThreadBootstrap";
 import { setActiveCoworkJsonRpcClient } from "../features/cowork/runtimeClient";
 import { createSessionBootstrapController } from "../features/cowork/sessionBootstrap";
+import { loadThreadOfflineCache } from "../features/cowork/threadOfflineCache";
 import { useThreadStore } from "../features/cowork/threadStore";
 import {
   clearWorkspaceBoundStores,
   hydrateWorkspaceBoundStores,
 } from "../features/cowork/workspaceBootstrap";
-import { loadAllOfflineWorkspaceCache } from "../features/cowork/offlineCache";
-import { loadThreadOfflineCache } from "../features/cowork/threadOfflineCache";
 import { useWorkspaceStore } from "../features/cowork/workspaceStore";
 import { usePairingStore } from "../features/pairing/pairingStore";
 import { useDisplayPreferencesStore } from "../features/preferences/displayPreferencesStore";
@@ -100,10 +100,7 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
             void scheduleRemoteHydration();
             break;
           case "turn/started":
-            threadStore.markTurnStarted(
-              notification.params.threadId,
-              new Date().toISOString(),
-            );
+            threadStore.markTurnStarted(notification.params.threadId, new Date().toISOString());
             for (const item of notification.params.turn.items) {
               threadStore.appendStarted(
                 notification.params.threadId,
@@ -191,10 +188,8 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
 
       if (workspaces.length > 0) {
         const loaded = await loadBoundedRemoteThreads(client, workspaces, {
-          oneOffChatWorkspaceLimit:
-            useThreadStore.getState().oneOffChatWorkspaceLoadLimit,
-          projectThreadLimitsByWorkspaceId:
-            useThreadStore.getState().projectThreadFetchLimits,
+          oneOffChatWorkspaceLimit: useThreadStore.getState().oneOffChatWorkspaceLoadLimit,
+          projectThreadLimitsByWorkspaceId: useThreadStore.getState().projectThreadFetchLimits,
         });
         remoteThreads = loaded.threads;
         useThreadStore.getState().setProjectThreadTotals(loaded.totalsByWorkspaceId);

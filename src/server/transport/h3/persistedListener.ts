@@ -110,7 +110,9 @@ export async function loadOrCreatePersistedQuicCertificate(
   return certificate;
 }
 
-async function readListenerConfig(storeRootPath: string | undefined): Promise<H3ListenerConfig | null> {
+async function readListenerConfig(
+  storeRootPath: string | undefined,
+): Promise<H3ListenerConfig | null> {
   try {
     const raw = await fs.readFile(resolveListenerConfigPath(storeRootPath), "utf8");
     const parsed = JSON.parse(raw) as Partial<H3ListenerConfig>;
@@ -147,7 +149,11 @@ export async function persistH3ListenerPort(
   const dir = resolveH3PairingStoreDir(storeRootPath);
   await fs.mkdir(dir, { recursive: true });
   const payload: H3ListenerConfig = { version: 1, port };
-  await fs.writeFile(resolveListenerConfigPath(storeRootPath), JSON.stringify(payload, null, 2), "utf8");
+  await fs.writeFile(
+    resolveListenerConfigPath(storeRootPath),
+    JSON.stringify(payload, null, 2),
+    "utf8",
+  );
 }
 
 export const __internal = {

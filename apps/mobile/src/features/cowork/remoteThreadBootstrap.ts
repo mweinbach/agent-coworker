@@ -1,9 +1,6 @@
 import type { CoworkJsonRpcClient } from "./jsonRpcClient";
 import type { CoworkThread, WorkspaceSummary } from "./protocolTypes";
-import {
-  ONE_OFF_CHAT_WORKSPACE_PAGE_SIZE,
-  PROJECT_THREAD_PAGE_SIZE,
-} from "./threadHomeModel";
+import { ONE_OFF_CHAT_WORKSPACE_PAGE_SIZE, PROJECT_THREAD_PAGE_SIZE } from "./threadHomeModel";
 
 export const PROJECT_THREAD_LIMIT = PROJECT_THREAD_PAGE_SIZE;
 export const ONE_OFF_CHAT_WORKSPACE_LIMIT = ONE_OFF_CHAT_WORKSPACE_PAGE_SIZE;
@@ -29,7 +26,9 @@ function sortWorkspacesByLastOpened(workspaces: WorkspaceSummary[]): WorkspaceSu
   );
 }
 
-export function buildWorkspaceLookup(workspaces: WorkspaceSummary[]): Map<string, WorkspaceSummary> {
+export function buildWorkspaceLookup(
+  workspaces: WorkspaceSummary[],
+): Map<string, WorkspaceSummary> {
   const lookup = new Map<string, WorkspaceSummary>();
   for (const workspace of workspaces) {
     lookup.set(workspace.path, workspace);
@@ -42,8 +41,7 @@ export function buildRemoteThreadLoadPlan(
   options: RemoteThreadLoadPlanOptions = {},
 ): RemoteThreadLoadEntry[] {
   const projectThreadLimit = options.projectThreadLimit ?? PROJECT_THREAD_LIMIT;
-  const oneOffChatWorkspaceLimit =
-    options.oneOffChatWorkspaceLimit ?? ONE_OFF_CHAT_WORKSPACE_LIMIT;
+  const oneOffChatWorkspaceLimit = options.oneOffChatWorkspaceLimit ?? ONE_OFF_CHAT_WORKSPACE_LIMIT;
   const perProjectLimits = options.projectThreadLimitsByWorkspaceId ?? {};
 
   const projectWorkspaces = sortWorkspacesByLastOpened(

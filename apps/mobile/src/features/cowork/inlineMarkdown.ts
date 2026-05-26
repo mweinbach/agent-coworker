@@ -42,8 +42,7 @@ export function normalizeInlineLinkHref(href: string): string | null {
 /** Shorten raw URLs to a readable hostname for display. */
 export function formatLinkDisplayLabel(label: string, href: string): string {
   const trimmedLabel = label.trim();
-  const looksLikeRawUrl =
-    /^https?:\/\//i.test(trimmedLabel) || /^www\./i.test(trimmedLabel);
+  const looksLikeRawUrl = /^https?:\/\//i.test(trimmedLabel) || /^www\./i.test(trimmedLabel);
   if (trimmedLabel && !looksLikeRawUrl) {
     return trimmedLabel;
   }

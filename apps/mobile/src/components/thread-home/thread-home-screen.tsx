@@ -59,10 +59,7 @@ function describeLoadError(error: unknown): string {
 async function runWithTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_resolve, reject) => {
-    timeoutId = setTimeout(
-      () => reject(new Error("Request timed out")),
-      ms,
-    );
+    timeoutId = setTimeout(() => reject(new Error("Request timed out")), ms);
   });
   try {
     return await Promise.race([promise, timeout]);
@@ -314,8 +311,7 @@ function ProjectRow({
                 paddingLeft: 45,
                 paddingRight: 16,
                 paddingVertical: 12,
-                borderBottomWidth:
-                  hasLoadMore || !isLast ? StyleSheet.hairlineWidth : 0,
+                borderBottomWidth: hasLoadMore || !isLast ? StyleSheet.hairlineWidth : 0,
                 borderBottomColor: theme.borderMuted,
               }}
             >
@@ -323,8 +319,7 @@ function ProjectRow({
             </View>
           ) : null}
           {group.visibleItems.map((thread, index) => {
-            const threadIsLast =
-              index === group.visibleItems.length - 1 && !hasLoadMore && isLast;
+            const threadIsLast = index === group.visibleItems.length - 1 && !hasLoadMore && isLast;
             return (
               <Pressable
                 key={thread.id}
@@ -552,10 +547,7 @@ function renderSection(section: HomeSectionKey, props: RenderSectionProps) {
                   }
                   setProjectError(group.workspace.id, null);
                   try {
-                    await runWithTimeout(
-                      loadMoreProject(group.workspace.id),
-                      LOAD_TIMEOUT_MS,
-                    );
+                    await runWithTimeout(loadMoreProject(group.workspace.id), LOAD_TIMEOUT_MS);
                   } catch (error) {
                     setProjectError(group.workspace.id, describeLoadError(error));
                   }
@@ -569,13 +561,7 @@ function renderSection(section: HomeSectionKey, props: RenderSectionProps) {
   );
 }
 
-function DisconnectedBanner({
-  message,
-  onPress,
-}: {
-  message: string;
-  onPress: () => void;
-}) {
+function DisconnectedBanner({ message, onPress }: { message: string; onPress: () => void }) {
   const theme = useAppTheme();
   return (
     <Pressable
@@ -647,8 +633,7 @@ export function ThreadHomeScreen() {
 
   const projectsFirst = viewModel.sectionOrder[0] === "projects";
   const showDisconnectedBanner = connectionStatus === "error" && hasTrustedDesktop;
-  const disconnectedMessage =
-    connectionLastError ?? "Tap to open Remote access and reconnect.";
+  const disconnectedMessage = connectionLastError ?? "Tap to open Remote access and reconnect.";
 
   const handleRefresh = useCallback(async () => {
     setIsRefreshing(true);

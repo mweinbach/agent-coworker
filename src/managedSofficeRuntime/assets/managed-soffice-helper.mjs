@@ -210,9 +210,7 @@ async function downloadFile(url, destination) {
   const response = await fetch(url);
   if (!response.ok || !response.body) {
     const text = await response.text().catch(() => "");
-    throw new Error(
-      `GET ${url} failed with status ${response.status}: ${text.slice(0, 300)}`,
-    );
+    throw new Error(`GET ${url} failed with status ${response.status}: ${text.slice(0, 300)}`);
   }
   await pipeline(Readable.fromWeb(response.body), fs.createWriteStream(destination));
 }
@@ -354,9 +352,7 @@ async function installManagedRuntime(version = DEFAULT_LIBREOFFICE_VERSION) {
     } else if (process.platform === "win32") {
       await installWindowsRuntime(archivePath, stagedRoot);
     } else {
-      throw new Error(
-        `Managed LibreOffice download is not supported on ${platformArchKey()}.`,
-      );
+      throw new Error(`Managed LibreOffice download is not supported on ${platformArchKey()}.`);
     }
     await fsp.rm(root, { recursive: true, force: true });
     await fsp.mkdir(path.dirname(root), { recursive: true });

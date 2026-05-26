@@ -1,10 +1,4 @@
-import {
-  Group,
-  Host,
-  HStack,
-  Image as ExpoImage,
-  RNHostView,
-} from "@expo/ui/swift-ui";
+import { Image as ExpoImage, Group, Host, HStack, RNHostView } from "@expo/ui/swift-ui";
 import {
   background,
   foregroundStyle,

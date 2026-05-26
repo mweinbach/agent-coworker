@@ -1,4 +1,3 @@
-import { type BarcodeScanningResult, CameraView, useCameraPermissions } from "expo-camera";
 import {
   ContentUnavailableView,
   Host,
@@ -8,11 +7,8 @@ import {
   Section,
   Text,
 } from "@expo/ui/swift-ui";
-import {
-  listStyle,
-  padding,
-  tint,
-} from "@expo/ui/swift-ui/modifiers";
+import { listStyle, padding, tint } from "@expo/ui/swift-ui/modifiers";
+import { type BarcodeScanningResult, CameraView, useCameraPermissions } from "expo-camera";
 import { Stack, useRouter } from "expo-router";
 import { useRef, useState } from "react";
 import { Alert, Pressable, Text as RNText, TextInput, View } from "react-native";
@@ -23,7 +19,7 @@ import { createPairingScanHandler } from "@/features/pairing/scanHandler";
 import { alpha } from "@/theme/tokens";
 import { useAppTheme } from "@/theme/use-app-theme";
 
-import { SectionFooter, PairingActionButton } from "./pairing-ios-ui";
+import { PairingActionButton, SectionFooter } from "./pairing-ios-ui";
 
 function CameraScanner({
   pairingInFlight,

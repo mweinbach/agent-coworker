@@ -1,5 +1,5 @@
 import type { PropsWithChildren } from "react";
-import { ScrollView, View, type StyleProp, type ViewStyle } from "react-native";
+import { ScrollView, type StyleProp, View, type ViewStyle } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useAppTheme } from "@/theme/use-app-theme";
@@ -31,11 +31,7 @@ export function Screen({ children, scroll = false, contentStyle }: ScreenProps) 
   );
 
   if (!scroll) {
-    return (
-      <View style={{ flex: 1, backgroundColor: theme.background }}>
-        {inner}
-      </View>
-    );
+    return <View style={{ flex: 1, backgroundColor: theme.background }}>{inner}</View>;
   }
 
   return (

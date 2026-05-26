@@ -26,7 +26,14 @@ export function SectionCard({ title, description, action, children }: SectionCar
         boxShadow: theme.shadow,
       }}
     >
-      <View style={{ flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+      <View
+        style={{
+          flexDirection: "row",
+          alignItems: "flex-start",
+          justifyContent: "space-between",
+          gap: 12,
+        }}
+      >
         <View style={{ flex: 1, gap: 6 }}>
           <Text
             selectable

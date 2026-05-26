@@ -1,11 +1,10 @@
 import { describe, expect, test } from "bun:test";
-
-import type { SessionFeedItem } from "../apps/mobile/src/features/cowork/protocolTypes";
 import {
   buildChatRenderItems,
   parseReasoningSections,
   summarizeActivityGroup,
 } from "../apps/mobile/src/features/cowork/activityGroups";
+import type { SessionFeedItem } from "../apps/mobile/src/features/cowork/protocolTypes";
 
 describe("mobile chat activity groups", () => {
   test("groups consecutive reasoning and tool items into one activity block", () => {

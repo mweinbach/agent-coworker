@@ -1,5 +1,4 @@
 import type { AgentConfig } from "../../../types";
-import { listWorkspaceSummaries } from "../workspaceCatalog";
 import {
   enrichSessionSnapshotCitationsFromCache,
   primeSessionSnapshotCitationCache,
@@ -8,6 +7,7 @@ import type { PersistedSessionRecord } from "../../sessionDb";
 import { JSONRPC_ERROR_CODES, type JsonRpcLiteRequest } from "../protocol";
 import { jsonRpcThreadTurnRequestSchemas } from "../schema.threadTurn";
 import { createThreadTurnProjector } from "../threadReadProjector";
+import { listWorkspaceSummaries } from "../workspaceCatalog";
 
 import type { JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
 

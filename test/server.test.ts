@@ -6,11 +6,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { getAiCoworkerPaths } from "../src/connect";
 import { DEFAULT_PROVIDER_OPTIONS } from "../src/providers";
+import { resolveListeningHintsFromInterfaces } from "../src/server/index";
 import { ASK_SKIP_TOKEN } from "../src/server/protocol";
 import type { AgentSession } from "../src/server/session/AgentSession";
 import { SessionDb } from "../src/server/sessionDb";
 import { refreshSessionsForSkillMutation } from "../src/server/skillMutationRefresh";
-import { resolveListeningHintsFromInterfaces } from "../src/server/index";
 import { type StartAgentServerOptions, startAgentServer } from "../src/server/startServer";
 import {
   loadH3PairingStoreState,

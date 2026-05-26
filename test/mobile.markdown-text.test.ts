@@ -52,9 +52,7 @@ describe("mobile markdown parser", () => {
 
   test("preserves inline em-dash text like `text---more` as a paragraph", () => {
     const blocks = parseRichBlocks("Some text---more text here");
-    expect(blocks).toEqual([
-      { type: "paragraph", content: "Some text---more text here" },
-    ]);
+    expect(blocks).toEqual([{ type: "paragraph", content: "Some text---more text here" }]);
   });
 
   test("keeps code blocks intact and does not coerce `---` inside code into a rule", () => {

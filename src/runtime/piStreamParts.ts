@@ -20,7 +20,8 @@ function toolCallFromPartialLite(event: unknown): {
 } {
   const eventRecord = asRecord(event);
   const partial = asRecord(eventRecord?.partial);
-  const contentIndex = typeof eventRecord?.contentIndex === "number" ? eventRecord.contentIndex : -1;
+  const contentIndex =
+    typeof eventRecord?.contentIndex === "number" ? eventRecord.contentIndex : -1;
   const partialContent = Array.isArray(partial?.content) ? partial.content : [];
   const part = contentIndex >= 0 ? asRecord(partialContent[contentIndex]) : null;
   const fallbackId = contentIndex >= 0 ? `tool_call_${contentIndex}` : `tool_${Date.now()}`;
@@ -68,14 +69,18 @@ export function mapPiEventToRawParts(
         {
           type: "text-end",
           id: streamId,
-          ...(Array.isArray(eventRecord.annotations) ? { annotations: eventRecord.annotations } : {}),
+          ...(Array.isArray(eventRecord.annotations)
+            ? { annotations: eventRecord.annotations }
+            : {}),
           ...(typeof eventRecord.phase === "string" ? { phase: eventRecord.phase } : {}),
         },
       ];
     case "thinking_start":
       return [{ type: "reasoning-start", id: streamId, mode }];
     case "thinking_delta":
-      return [{ type: "reasoning-delta", id: streamId, mode, text: String(eventRecord.delta ?? "") }];
+      return [
+        { type: "reasoning-delta", id: streamId, mode, text: String(eventRecord.delta ?? "") },
+      ];
     case "thinking_end":
       return [{ type: "reasoning-end", id: streamId, mode }];
     case "toolcall_start": {

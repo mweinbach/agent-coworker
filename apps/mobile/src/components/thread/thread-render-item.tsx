@@ -18,9 +18,7 @@ export function ThreadRenderItem({
   liveStartedAt,
 }: ThreadRenderItemProps) {
   if (renderItem.kind === "activity-group") {
-    return (
-      <ActivityGroupCard items={renderItem.items} live={live} liveStartedAt={liveStartedAt} />
-    );
+    return <ActivityGroupCard items={renderItem.items} live={live} liveStartedAt={liveStartedAt} />;
   }
 
   return (

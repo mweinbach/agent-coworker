@@ -1,11 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import path from "node:path";
-
-import { getOneOffChatsRoot } from "../src/utils/oneOffChats";
 import { requireWorkspacePath } from "../src/server/jsonrpc/routes/shared";
 import { listWorkspaceSummaries } from "../src/server/jsonrpc/workspaceCatalog";
 import type { WebDesktopServiceLike } from "../src/server/webDesktopService";
+import { getOneOffChatsRoot } from "../src/utils/oneOffChats";
 
 describe("workspace catalog and path rules", () => {
   test("requireWorkspacePath accepts one-off chat directories under ~/.cowork/chats", async () => {

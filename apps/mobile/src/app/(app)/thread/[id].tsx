@@ -11,11 +11,11 @@ import { StatusPill } from "@/components/ui/status-pill";
 import { buildChatRenderItems, type ChatRenderItem } from "@/features/cowork/activityGroups";
 import { filterFeedForDisplay } from "@/features/cowork/feedDisplay";
 import { getActiveCoworkJsonRpcClient } from "@/features/cowork/runtimeClient";
-import { useDisplayPreferencesStore } from "@/features/preferences/displayPreferencesStore";
 import type { PendingServerRequest } from "@/features/cowork/threadStore";
 import { useThreadStore } from "@/features/cowork/threadStore";
 import { useWorkspaceStore } from "@/features/cowork/workspaceStore";
 import { usePairingStore } from "@/features/pairing/pairingStore";
+import { useDisplayPreferencesStore } from "@/features/preferences/displayPreferencesStore";
 import { useAppTheme } from "@/theme/use-app-theme";
 
 type ThreadDetailListItem =
@@ -185,16 +185,14 @@ export default function ThreadDetailScreen() {
               ...(activePendingRequest ? [{ type: "pending", data: activePendingRequest }] : []),
             ] as ThreadDetailListItem[]
           }
-          keyExtractor={(item) =>
-            item.type === "pending" ? "pending" : renderItemKey(item.data)
-          }
+          keyExtractor={(item) => (item.type === "pending" ? "pending" : renderItemKey(item.data))}
           ListHeaderComponent={
             showSessionBadge
               ? () => (
-                  <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, paddingBottom: 4 }}>
-                    {isDraftThread ? (
-                      <StatusPill label="local draft" tone="primary" />
-                    ) : null}
+                  <View
+                    style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, paddingBottom: 4 }}
+                  >
+                    {isDraftThread ? <StatusPill label="local draft" tone="primary" /> : null}
                     {isOfflineReadOnly ? (
                       <StatusPill label="offline · read only" tone="warning" />
                     ) : null}

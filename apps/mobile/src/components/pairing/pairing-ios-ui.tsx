@@ -46,11 +46,7 @@ export function PairingActionButton({
         ...(disabled ? [disabledModifier(true)] : []),
       ]}
     >
-      <Label
-        title={title}
-        systemImage={systemImage}
-        modifiers={[labelStyle("titleAndIcon")]}
-      />
+      <Label title={title} systemImage={systemImage} modifiers={[labelStyle("titleAndIcon")]} />
     </Button>
   );
 }

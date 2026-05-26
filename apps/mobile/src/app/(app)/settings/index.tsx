@@ -6,9 +6,9 @@ import { HubLinkRow } from "@/components/ui/hub-link-row";
 import { Screen } from "@/components/ui/screen";
 import { SectionCard } from "@/components/ui/section-card";
 import { StatusPill } from "@/components/ui/status-pill";
-import { useDisplayPreferencesStore } from "@/features/preferences/displayPreferencesStore";
 import { useWorkspaceStore } from "@/features/cowork/workspaceStore";
 import { usePairingStore } from "@/features/pairing/pairingStore";
+import { useDisplayPreferencesStore } from "@/features/preferences/displayPreferencesStore";
 import {
   describeTransportStatus,
   isWorkspaceConnectionReady,
@@ -164,10 +164,7 @@ export default function SettingsHubScreen() {
           />
         </SectionCard>
 
-        <SectionCard
-          title="Display"
-          description="Tune how conversations render on this device."
-        >
+        <SectionCard title="Display" description="Tune how conversations render on this device.">
           <View
             style={{
               flexDirection: "row",

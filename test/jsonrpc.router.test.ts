@@ -137,7 +137,9 @@ function createRouterHarness(
       resolveWorkspacePath:
         opts.resolveWorkspacePath ??
         ((params: Record<string, unknown>) =>
-          typeof params.cwd === "string" && params.cwd.trim() ? params.cwd.trim() : workingDirectory),
+          typeof params.cwd === "string" && params.cwd.trim()
+            ? params.cwd.trim()
+            : workingDirectory),
       extractTextInput: () => "",
       buildThreadFromSession: () => thread,
       buildThreadFromRecord: (record) => ({
@@ -986,7 +988,9 @@ describe("JSON-RPC request router", () => {
     const harness = createRouterHarness({
       workingDirectory: "/tmp/project-a",
       resolveWorkspacePath: (() => {
-        throw new Error("thread/list cwd must match the server workspace or a one-off chat workspace");
+        throw new Error(
+          "thread/list cwd must match the server workspace or a one-off chat workspace",
+        );
       }) as any,
       desktopService: {
         loadState: async () => ({

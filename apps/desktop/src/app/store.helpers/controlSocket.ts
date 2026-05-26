@@ -195,8 +195,9 @@ export function createControlSocketHelpers(
     }
 
     const migratedThreadId =
-      nextThreads.find((thread) => thread.legacyTranscriptId === selectedThreadId && !thread.archived)
-        ?.id ?? null;
+      nextThreads.find(
+        (thread) => thread.legacyTranscriptId === selectedThreadId && !thread.archived,
+      )?.id ?? null;
     if (migratedThreadId) {
       return migratedThreadId;
     }

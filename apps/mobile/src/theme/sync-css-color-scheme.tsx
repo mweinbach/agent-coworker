@@ -1,5 +1,5 @@
-import { colorScheme as cssColorScheme } from "react-native-css";
 import { useColorScheme } from "react-native";
+import { colorScheme as cssColorScheme } from "react-native-css";
 
 import { resolveColorScheme } from "./resolve-color-scheme";
 

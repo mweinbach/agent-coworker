@@ -10,9 +10,9 @@ import {
 describe("mobile source display", () => {
   test("derives domain labels from urls", () => {
     expect(displayDomain("https://www.apple.com/apple-intelligence/")).toBe("apple.com");
-    expect(displaySourceSubtitle({ label: "", href: "https://support.apple.com/en-us/121115" })).toBe(
-      "support.apple.com",
-    );
+    expect(
+      displaySourceSubtitle({ label: "", href: "https://support.apple.com/en-us/121115" }),
+    ).toBe("support.apple.com");
   });
 
   test("uses custom labels when provided", () => {

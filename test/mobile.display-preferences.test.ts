@@ -3,6 +3,7 @@ import { describe, expect, mock, test } from "bun:test";
 mock.restore();
 
 const { filterFeedForDisplay } = await import("../apps/mobile/src/features/cowork/feedDisplay");
+
 import type { SessionFeedItem } from "../apps/mobile/src/features/cowork/protocolTypes";
 
 describe("mobile display preferences", () => {

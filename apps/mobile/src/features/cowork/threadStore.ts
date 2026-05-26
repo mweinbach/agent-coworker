@@ -15,8 +15,8 @@ import {
 } from "./snapshotReducer";
 import {
   defaultThreadHomeUiState,
-  normalizeHomeSectionOrder,
   type HomeSectionKey,
+  normalizeHomeSectionOrder,
   type ThreadHomeSectionsOpen,
 } from "./threadHomeModel";
 import { saveThreadOfflineCache, type ThreadOfflineCache } from "./threadOfflineCache";
@@ -300,7 +300,8 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
         },
         threads: [...existingDraftThreads, ...cachedThreads],
         selectedThreadId:
-          state.selectedThreadId && [...existingDraftThreads, ...cachedThreads].some(
+          state.selectedThreadId &&
+          [...existingDraftThreads, ...cachedThreads].some(
             (thread) => thread.id === state.selectedThreadId,
           )
             ? state.selectedThreadId

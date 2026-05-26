@@ -7,7 +7,9 @@ import {
 
 describe("mobile inline markdown links", () => {
   test("parses markdown links", () => {
-    const runs = parseInlineMarkdown("See [Apple docs](https://www.apple.com/apple-intelligence/).");
+    const runs = parseInlineMarkdown(
+      "See [Apple docs](https://www.apple.com/apple-intelligence/).",
+    );
     expect(runs).toEqual([
       { type: "text", content: "See " },
       {

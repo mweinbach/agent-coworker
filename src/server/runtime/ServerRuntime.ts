@@ -41,13 +41,13 @@ import { type PersistedSessionRecord, SessionDb } from "../sessionDb";
 import { readSkillCatalogMtimeSnapshot } from "../skillCatalogMtime";
 import { refreshSessionsForSkillMutation } from "../skillMutationRefresh";
 import type { StartServerSocket } from "../startServer/types";
+import type { WebDesktopServiceLike } from "../webDesktopService";
 import { isErrorWithCode, isPlainObject, mergeRuntimeProviderOptions } from "./ConfigPatchStore";
 import { SessionRegistry } from "./SessionRegistry";
 import { SkillMutationBus } from "./SkillMutationBus";
 import { SocketSendQueue } from "./SocketSendQueue";
 import { ThreadJournal } from "./ThreadJournal";
 import { WorkspaceControl } from "./WorkspaceControl";
-import type { WebDesktopServiceLike } from "../webDesktopService";
 
 let observabilityOtelModulePromise: Promise<typeof import("../../observability/otel")> | null =
   null;

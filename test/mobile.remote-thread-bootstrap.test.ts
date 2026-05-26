@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
 import type { CoworkJsonRpcClient } from "../apps/mobile/src/features/cowork/jsonRpcClient";
-import type { CoworkThread, WorkspaceSummary } from "../apps/mobile/src/features/cowork/protocolTypes";
+import type {
+  CoworkThread,
+  WorkspaceSummary,
+} from "../apps/mobile/src/features/cowork/protocolTypes";
 import {
   buildRemoteThreadLoadPlan,
   buildWorkspaceLookup,
@@ -250,10 +253,7 @@ describe("mobile remote thread bootstrap", () => {
         throw new Error("JSON-RPC request timed out: thread/list");
       },
     });
-    const workspaces = [
-      makeWorkspace("chat-1", "/chat-1"),
-      makeWorkspace("chat-2", "/chat-2"),
-    ];
+    const workspaces = [makeWorkspace("chat-1", "/chat-1"), makeWorkspace("chat-2", "/chat-2")];
     await expect(loadMoreOneOffChatWorkspaces(client, workspaces, 0, 5)).rejects.toThrow();
   });
 });

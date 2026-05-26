@@ -8,13 +8,7 @@ import {
   SwipeActions,
   Text,
 } from "@expo/ui/swift-ui";
-import {
-  buttonStyle,
-  foregroundStyle,
-  frame,
-  listStyle,
-  tint,
-} from "@expo/ui/swift-ui/modifiers";
+import { buttonStyle, foregroundStyle, frame, listStyle, tint } from "@expo/ui/swift-ui/modifiers";
 import { useRouter } from "expo-router";
 
 import { describeHero, describeRelay } from "@/features/pairing/pairingCopy";
@@ -26,7 +20,7 @@ import {
 } from "@/features/relay/connectionState";
 import { useAppTheme } from "@/theme/use-app-theme";
 
-import { SectionFooter, PairingActionButton } from "./pairing-ios-ui";
+import { PairingActionButton, SectionFooter } from "./pairing-ios-ui";
 import { PairingWelcomeCard } from "./pairing-welcome-card";
 
 export function PairingHomeIos() {

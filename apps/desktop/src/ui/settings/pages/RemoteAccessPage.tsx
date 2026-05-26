@@ -23,7 +23,6 @@ import {
 } from "../../../components/ui/card";
 import { Separator } from "../../../components/ui/separator";
 import { Switch } from "../../../components/ui/switch";
-import { useOptionalSettingsChrome } from "../SettingsChromeContext";
 import type {
   MobileRelayTrustedDevicePermissionKey,
   MobileRelayTrustedPhoneDevice,
@@ -39,6 +38,7 @@ import {
   stopMobileRelay,
   updateMobileRelayTrustedPhonePermissions,
 } from "../../../lib/desktopCommands";
+import { useOptionalSettingsChrome } from "../SettingsChromeContext";
 
 const TRUSTED_DEVICE_PERMISSION_CONTROLS: Array<{
   key: MobileRelayTrustedDevicePermissionKey;
@@ -108,17 +108,14 @@ export function RemoteAccessPage() {
 
   const settingsChrome = useOptionalSettingsChrome();
 
-  const runAction = useCallback(
-    async (action: string, runner: () => Promise<unknown>) => {
-      setBusyAction(action);
-      try {
-        await runner();
-      } finally {
-        setBusyAction(null);
-      }
-    },
-    [],
-  );
+  const runAction = useCallback(async (action: string, runner: () => Promise<unknown>) => {
+    setBusyAction(action);
+    try {
+      await runner();
+    } finally {
+      setBusyAction(null);
+    }
+  }, []);
 
   useEffect(() => {
     let mounted = true;

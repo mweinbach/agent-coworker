@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-
+import type { WorkspaceSummary } from "../apps/mobile/src/features/cowork/protocolTypes";
 import {
   buildThreadHomeViewModel,
   defaultThreadHomeUiState,
@@ -9,7 +9,6 @@ import {
   toggleHomeSectionOrder,
 } from "../apps/mobile/src/features/cowork/threadHomeModel";
 import type { MobileThreadSummary } from "../apps/mobile/src/features/cowork/threadStore";
-import type { WorkspaceSummary } from "../apps/mobile/src/features/cowork/protocolTypes";
 
 function makeThread(partial: Partial<MobileThreadSummary> & Pick<MobileThreadSummary, "id">) {
   return {

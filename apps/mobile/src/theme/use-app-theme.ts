@@ -1,7 +1,6 @@
 import { useColorScheme } from "react-native";
-
-import { palette, radius, semanticTokens, spacing, typography } from "./tokens";
 import { resolveColorScheme } from "./resolve-color-scheme";
+import { palette, radius, semanticTokens, spacing, typography } from "./tokens";
 
 export type AppTheme = {
   isDark: boolean;
@@ -70,6 +69,4 @@ export function useAppTheme(): AppTheme {
   return scheme === "dark" ? darkTheme : lightTheme;
 }
 
-export { resolveColorScheme };
-
-export { palette, radius, semanticTokens, spacing, typography };
+export { palette, radius, resolveColorScheme, semanticTokens, spacing, typography };

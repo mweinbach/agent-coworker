@@ -1,14 +1,13 @@
 import { Image } from "expo-image";
 import { useState } from "react";
 import { Linking, Pressable, ScrollView, Text, View } from "react-native";
-
+import { normalizeInlineLinkHref } from "@/features/cowork/inlineMarkdown";
 import {
   displaySourceSubtitle,
   displaySourceTitle,
   faviconUrl,
   type SourceLinkItem,
 } from "@/features/cowork/sourceDisplay";
-import { normalizeInlineLinkHref } from "@/features/cowork/inlineMarkdown";
 import { useAppTheme } from "@/theme/use-app-theme";
 
 const CARD_WIDTH = 176;

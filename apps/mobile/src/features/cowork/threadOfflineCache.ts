@@ -1,13 +1,13 @@
 import { loadFromOfflineCache, saveToOfflineCache } from "./offlineCache";
 import type { SessionSnapshotLike } from "./protocolTypes";
-import type { MobileThreadSummary } from "./threadStore";
 import {
   defaultThreadHomeUiState,
+  type HomeSectionKey,
   normalizeHomeSectionOrder,
   ONE_OFF_CHAT_WORKSPACE_PAGE_SIZE,
-  type HomeSectionKey,
   type ThreadHomeSectionsOpen,
 } from "./threadHomeModel";
+import type { MobileThreadSummary } from "./threadStore";
 
 export const THREAD_OFFLINE_CACHE_KEY = "threadSnapshots";
 const THREAD_OFFLINE_CACHE_VERSION = 2;

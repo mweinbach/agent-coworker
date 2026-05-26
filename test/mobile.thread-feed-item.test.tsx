@@ -98,7 +98,7 @@ describe("mobile ThreadFeedItem", () => {
           text: "Thinking",
         },
         a2uiEnabled: true,
-      showDebugMessages: false,
+        showDebugMessages: false,
       }),
     ).toBeNull();
 
@@ -112,7 +112,7 @@ describe("mobile ThreadFeedItem", () => {
           state: "output-available",
         },
         a2uiEnabled: true,
-      showDebugMessages: false,
+        showDebugMessages: false,
       }),
     ).toBeNull();
   });

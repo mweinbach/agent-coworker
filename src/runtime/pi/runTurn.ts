@@ -1,10 +1,10 @@
 import {
-  stream as piStream,
   type Api as PiApi,
   type Context as PiContext,
   type Message as PiMessage,
-  type Model as PiSdkModel,
   type ProviderStreamOptions as PiProviderStreamOptions,
+  type Model as PiSdkModel,
+  stream as piStream,
 } from "@earendil-works/pi-ai";
 import {
   markModelCallSpanError,
@@ -149,7 +149,10 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
 
           turnMessages.push(asPiMessage(assistantRecord));
           usage = mergePiUsage(usage, assistantRecord.usage);
-          stepMessages = [...stepMessages, ...piTurnMessagesToModelMessages([asPiMessage(assistantRecord)])];
+          stepMessages = [
+            ...stepMessages,
+            ...piTurnMessagesToModelMessages([asPiMessage(assistantRecord)]),
+          ];
 
           await emitPart({
             type: "finish-step",

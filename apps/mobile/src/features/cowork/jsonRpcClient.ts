@@ -345,11 +345,7 @@ export class CoworkJsonRpcClient {
         });
       } catch (error) {
         if (
-          !matchesJsonRpcError(
-            error,
-            JSONRPC_ALREADY_INITIALIZED_ERROR_CODE,
-            "Already initialized",
-          )
+          !matchesJsonRpcError(error, JSONRPC_ALREADY_INITIALIZED_ERROR_CODE, "Already initialized")
         ) {
           throw error;
         }
@@ -515,7 +511,11 @@ export class CoworkJsonRpcClient {
     return null;
   }
 
-  private async request(method: string, params?: unknown, retryNotInitialized = true): Promise<unknown> {
+  private async request(
+    method: string,
+    params?: unknown,
+    retryNotInitialized = true,
+  ): Promise<unknown> {
     const id = ++this.nextId;
     const promise = new Promise<unknown>((resolve, reject) => {
       const timeoutHandle = setTimeout(() => {

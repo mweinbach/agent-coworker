@@ -33,9 +33,7 @@ function extractLinkFromLine(line: string): { label: string; href: string } | nu
   return null;
 }
 
-function parseCodeBlocks(
-  text: string,
-): Array<{ type: "text"; content: string } | CodeBlockData> {
+function parseCodeBlocks(text: string): Array<{ type: "text"; content: string } | CodeBlockData> {
   const blocks: Array<{ type: "text"; content: string } | CodeBlockData> = [];
   const codeBlockRegex = /```(\w*)\n([\s\S]*?)```/g;
   let lastIndex = 0;

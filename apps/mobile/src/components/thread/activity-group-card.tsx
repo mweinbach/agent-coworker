@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 
 import type { ActivityFeedItem, ActivityGroupSummary } from "@/features/cowork/activityGroups";
@@ -12,8 +12,8 @@ import {
 import { formatToolCard } from "@/features/cowork/toolCardFormatting";
 import type { ToolFeedState } from "@/features/cowork/toolFeedState";
 import { useAppTheme } from "@/theme/use-app-theme";
-import { MarkdownText } from "./markdown-text";
 import { SFSymbol } from "../ui/sf-symbol";
+import { MarkdownText } from "./markdown-text";
 
 type ActivityGroupCardProps = {
   items: ActivityFeedItem[];
@@ -226,7 +226,11 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
         );
 
         return (
-          <TimelineNode key={entry.item.id} iconName={toolIconName(formatting.title)} isLast={isLast}>
+          <TimelineNode
+            key={entry.item.id}
+            iconName={toolIconName(formatting.title)}
+            isLast={isLast}
+          >
             <View style={{ gap: 2, paddingTop: 1 }}>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
                 <Text

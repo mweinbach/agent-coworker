@@ -33,6 +33,7 @@ export {
 export {
   deletePluginInstallation,
   installPluginsFromSource,
+  replacePluginInstallRoot,
   resolvePluginSourceDescriptorForInstallInput,
 } from "./operations";
 export {

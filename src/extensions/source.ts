@@ -17,12 +17,6 @@ import {
 
 export type { FetchLike };
 
-export const BUILT_IN_MARKETPLACE_REPO = "mweinbach/cowork-skills-plugins";
-export const BUILT_IN_MARKETPLACE_REF = "main";
-export const BUILT_IN_MARKETPLACE_PATH = ".agents/plugins/marketplace.json";
-export const BUILT_IN_MARKETPLACE_URL = `https://github.com/${BUILT_IN_MARKETPLACE_REPO}/tree/${BUILT_IN_MARKETPLACE_REF}`;
-export const DEFAULT_MARKETPLACE_PLUGIN_IDS = ["workspace-tools"] as const;
-
 export type ExtensionSourceInputKind =
   | "github_repo"
   | "github_tree"
@@ -43,13 +37,18 @@ export interface ExtensionSourceDescriptor {
   localPath?: string;
 }
 
+export interface GitHubMaterializableSourceDescriptor
+  extends Omit<ExtensionSourceDescriptor, "kind"> {
+  kind: ExtensionSourceInputKind | "skills.sh";
+}
+
 export type MaterializedExtensionSource<TDescriptor, TCandidate> = {
   descriptor: TDescriptor;
   candidates: TCandidate[];
   cleanup: () => Promise<void>;
 };
 
-type GitHubMaterializationAttempt<TDescriptor> = {
+type GitHubMaterializationAttempt<TDescriptor extends GitHubMaterializableSourceDescriptor> = {
   ref: string;
   githubPath: string;
   descriptor: TDescriptor;
@@ -137,7 +136,9 @@ export function resolveGitHubOrLocalSource<TDescriptor extends ExtensionSourceDe
   } as TDescriptor;
 }
 
-export function buildResolvedGitHubDescriptor<TDescriptor extends ExtensionSourceDescriptor>(
+export function buildResolvedGitHubDescriptor<
+  TDescriptor extends GitHubMaterializableSourceDescriptor,
+>(
   descriptor: TDescriptor,
   ref: string | undefined,
   githubPath: string,
@@ -156,7 +157,9 @@ export function buildResolvedGitHubDescriptor<TDescriptor extends ExtensionSourc
   } as TDescriptor;
 }
 
-export function buildGitHubMaterializationAttempts<TDescriptor extends ExtensionSourceDescriptor>(
+export function buildGitHubMaterializationAttempts<
+  TDescriptor extends GitHubMaterializableSourceDescriptor,
+>(
   descriptor: TDescriptor,
   opts: {
     normalizeTreePath: (directoryPath: string) => string;
@@ -202,7 +205,9 @@ export function buildGitHubMaterializationAttempts<TDescriptor extends Extension
   return attempts;
 }
 
-export function dedupeGitHubMaterializationAttempts<TDescriptor>(
+export function dedupeGitHubMaterializationAttempts<
+  TDescriptor extends GitHubMaterializableSourceDescriptor,
+>(
   attempts: Array<GitHubMaterializationAttempt<TDescriptor>>,
 ): Array<GitHubMaterializationAttempt<TDescriptor>> {
   return attempts.filter(
@@ -241,7 +246,9 @@ async function doesGitHubRefExist(
   );
 }
 
-export async function resolveAmbiguousGitHubMaterializationAttempts<TDescriptor>(
+export async function resolveAmbiguousGitHubMaterializationAttempts<
+  TDescriptor extends GitHubMaterializableSourceDescriptor,
+>(
   repo: string,
   attempts: Array<GitHubMaterializationAttempt<TDescriptor>>,
   fetchImpl: FetchLike,
@@ -305,7 +312,7 @@ export async function resolveGitHubFallbackRefs(opts: {
 }
 
 export async function materializeGitHubDirectorySource<
-  TDescriptor extends ExtensionSourceDescriptor,
+  TDescriptor extends GitHubMaterializableSourceDescriptor,
   TCandidate,
 >(opts: {
   descriptor: TDescriptor;

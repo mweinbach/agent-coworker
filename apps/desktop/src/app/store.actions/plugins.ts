@@ -4,8 +4,8 @@ import {
   ensureControlSocket,
   ensureServerRunning,
   ensureWorkspaceRuntime,
-  requestJsonRpcControlEvent,
   RUNTIME,
+  requestJsonRpcControlEvent,
   type StoreGet,
   type StoreSet,
   syncDesktopStateCache,
@@ -19,6 +19,7 @@ import {
 } from "./skillPluginHelpers";
 
 type PluginSelection = Pick<PluginCatalogEntry, "id" | "scope">;
+type PluginMutationAction = "enable" | "disable" | "delete";
 
 function pluginPendingKey(action: string, selection?: PluginSelection): string {
   return selection ? `plugin:${action}:${selection.scope}:${selection.id}` : `plugin:${action}`;
@@ -73,6 +74,87 @@ export function createPluginActions(
     return matches[0] ?? null;
   };
 
+  const clearPluginMutationPending = (
+    workspaceId: string,
+    key: string,
+    opts: { clearSelection?: boolean } = {},
+  ) => {
+    set((s) => ({
+      workspaceRuntimeById: {
+        ...s.workspaceRuntimeById,
+        [workspaceId]: {
+          ...s.workspaceRuntimeById[workspaceId],
+          ...(opts.clearSelection
+            ? {
+                selectedPlugin: null,
+                selectedPluginId: null,
+                selectedPluginScope: null,
+              }
+            : {}),
+          skillMutationPendingKeys: (() => {
+            const pendingKeys = {
+              ...s.workspaceRuntimeById[workspaceId].skillMutationPendingKeys,
+            };
+            delete pendingKeys[key];
+            return pendingKeys;
+          })(),
+        },
+      },
+    }));
+  };
+
+  const runPluginMutation = async (
+    action: PluginMutationAction,
+    pluginId: string,
+    scope?: PluginSelection["scope"],
+  ) => {
+    const workspaceId = managementWorkspaceIdFor(get);
+    if (!workspaceId) return;
+    const cwd = workspacePathFor(get, workspaceId);
+    const pluginScope = resolvePluginScopeForMutation(workspaceId, pluginId, scope);
+    const selection = pluginScope ? { id: pluginId, scope: pluginScope } : undefined;
+    const key = pluginPendingKey(action, selection);
+    set((s) => ({
+      workspaceRuntimeById: {
+        ...s.workspaceRuntimeById,
+        [workspaceId]: {
+          ...s.workspaceRuntimeById[workspaceId],
+          skillMutationPendingKeys: {
+            ...s.workspaceRuntimeById[workspaceId].skillMutationPendingKeys,
+            [key]: true,
+          },
+        },
+      },
+    }));
+    const rpcError: { message?: string } = {};
+    const ok = await requestJsonRpcControlEvent(
+      get,
+      set,
+      workspaceId,
+      `cowork/plugins/${action}`,
+      {
+        cwd,
+        pluginId,
+        ...(pluginScope ? { scope: pluginScope } : {}),
+      },
+      rpcError,
+    );
+    if (!ok) {
+      const detail = rpcError.message?.trim() || `Unable to ${action} plugin.`;
+      clearFailedMutationSend(set, workspaceId, key, detail, {
+        pluginsLoading: false,
+        pluginsError: detail,
+        skillMutationError: detail,
+      });
+      return;
+    }
+
+    clearPluginMutationPending(workspaceId, key, { clearSelection: action === "delete" });
+    if (pluginScope === "user") {
+      await refreshSharedWorkspaceState(get, set, workspaceId);
+    }
+  };
+
   return {
     refreshPluginsCatalog: async () => {
       const workspaceId = managementWorkspaceIdFor(get);
@@ -96,10 +178,16 @@ export function createPluginActions(
         { cwd },
       );
       if (!ok) {
-        clearFailedMutationSend(set, workspaceId, "plugin:refresh", "Unable to refresh plugins catalog.", {
-          pluginsLoading: false,
-          pluginsError: "Unable to refresh plugins catalog.",
-        });
+        clearFailedMutationSend(
+          set,
+          workspaceId,
+          "plugin:refresh",
+          "Unable to refresh plugins catalog.",
+          {
+            pluginsLoading: false,
+            pluginsError: "Unable to refresh plugins catalog.",
+          },
+        );
       }
     },
 
@@ -297,189 +385,15 @@ export function createPluginActions(
     },
 
     enablePlugin: async (pluginId: string, scope?: PluginSelection["scope"]) => {
-      const workspaceId = managementWorkspaceIdFor(get);
-      if (!workspaceId) return;
-      const cwd = workspacePathFor(get, workspaceId);
-      const pluginScope = resolvePluginScopeForMutation(workspaceId, pluginId, scope);
-      const selection = scope ? { id: pluginId, scope } : undefined;
-      const key = pluginPendingKey("enable", selection);
-      set((s) => ({
-        workspaceRuntimeById: {
-          ...s.workspaceRuntimeById,
-          [workspaceId]: {
-            ...s.workspaceRuntimeById[workspaceId],
-            skillMutationPendingKeys: {
-              ...s.workspaceRuntimeById[workspaceId].skillMutationPendingKeys,
-              [key]: true,
-            },
-          },
-        },
-      }));
-      const rpcError: { message?: string } = {};
-      const ok = await requestJsonRpcControlEvent(
-        get,
-        set,
-        workspaceId,
-        "cowork/plugins/enable",
-        {
-          cwd,
-          pluginId,
-          ...(scope ? { scope } : {}),
-        },
-        rpcError,
-      );
-      if (!ok) {
-        const detail = rpcError.message?.trim() || "Unable to enable plugin.";
-        clearFailedMutationSend(set, workspaceId, key, detail, {
-          pluginsLoading: false,
-          pluginsError: detail,
-          skillMutationError: detail,
-        });
-      } else {
-        set((s) => ({
-          workspaceRuntimeById: {
-            ...s.workspaceRuntimeById,
-            [workspaceId]: {
-              ...s.workspaceRuntimeById[workspaceId],
-              skillMutationPendingKeys: (() => {
-                const pendingKeys = {
-                  ...s.workspaceRuntimeById[workspaceId].skillMutationPendingKeys,
-                };
-                delete pendingKeys[key];
-                return pendingKeys;
-              })(),
-            },
-          },
-        }));
-        if (pluginScope === "user") {
-          await refreshSharedWorkspaceState(get, set, workspaceId);
-        }
-      }
+      await runPluginMutation("enable", pluginId, scope);
     },
 
     disablePlugin: async (pluginId: string, scope?: PluginSelection["scope"]) => {
-      const workspaceId = managementWorkspaceIdFor(get);
-      if (!workspaceId) return;
-      const cwd = workspacePathFor(get, workspaceId);
-      const pluginScope = resolvePluginScopeForMutation(workspaceId, pluginId, scope);
-      const selection = scope ? { id: pluginId, scope } : undefined;
-      const key = pluginPendingKey("disable", selection);
-      set((s) => ({
-        workspaceRuntimeById: {
-          ...s.workspaceRuntimeById,
-          [workspaceId]: {
-            ...s.workspaceRuntimeById[workspaceId],
-            skillMutationPendingKeys: {
-              ...s.workspaceRuntimeById[workspaceId].skillMutationPendingKeys,
-              [key]: true,
-            },
-          },
-        },
-      }));
-      const rpcError: { message?: string } = {};
-      const ok = await requestJsonRpcControlEvent(
-        get,
-        set,
-        workspaceId,
-        "cowork/plugins/disable",
-        {
-          cwd,
-          pluginId,
-          ...(scope ? { scope } : {}),
-        },
-        rpcError,
-      );
-      if (!ok) {
-        const detail = rpcError.message?.trim() || "Unable to disable plugin.";
-        clearFailedMutationSend(set, workspaceId, key, detail, {
-          pluginsLoading: false,
-          pluginsError: detail,
-          skillMutationError: detail,
-        });
-      } else {
-        set((s) => ({
-          workspaceRuntimeById: {
-            ...s.workspaceRuntimeById,
-            [workspaceId]: {
-              ...s.workspaceRuntimeById[workspaceId],
-              skillMutationPendingKeys: (() => {
-                const pendingKeys = {
-                  ...s.workspaceRuntimeById[workspaceId].skillMutationPendingKeys,
-                };
-                delete pendingKeys[key];
-                return pendingKeys;
-              })(),
-            },
-          },
-        }));
-        if (pluginScope === "user") {
-          await refreshSharedWorkspaceState(get, set, workspaceId);
-        }
-      }
+      await runPluginMutation("disable", pluginId, scope);
     },
 
     deletePlugin: async (pluginId: string, scope?: PluginSelection["scope"]) => {
-      const workspaceId = managementWorkspaceIdFor(get);
-      if (!workspaceId) return;
-      const cwd = workspacePathFor(get, workspaceId);
-      const pluginScope = resolvePluginScopeForMutation(workspaceId, pluginId, scope);
-      const selection = scope ? { id: pluginId, scope } : undefined;
-      const key = pluginPendingKey("delete", selection);
-      set((s) => ({
-        workspaceRuntimeById: {
-          ...s.workspaceRuntimeById,
-          [workspaceId]: {
-            ...s.workspaceRuntimeById[workspaceId],
-            skillMutationPendingKeys: {
-              ...s.workspaceRuntimeById[workspaceId].skillMutationPendingKeys,
-              [key]: true,
-            },
-          },
-        },
-      }));
-      const rpcError: { message?: string } = {};
-      const ok = await requestJsonRpcControlEvent(
-        get,
-        set,
-        workspaceId,
-        "cowork/plugins/delete",
-        {
-          cwd,
-          pluginId,
-          ...(scope ? { scope } : {}),
-        },
-        rpcError,
-      );
-      if (!ok) {
-        const detail = rpcError.message?.trim() || "Unable to delete plugin.";
-        clearFailedMutationSend(set, workspaceId, key, detail, {
-          pluginsLoading: false,
-          pluginsError: detail,
-          skillMutationError: detail,
-        });
-      } else {
-        set((s) => ({
-          workspaceRuntimeById: {
-            ...s.workspaceRuntimeById,
-            [workspaceId]: {
-              ...s.workspaceRuntimeById[workspaceId],
-              selectedPlugin: null,
-              selectedPluginId: null,
-              selectedPluginScope: null,
-              skillMutationPendingKeys: (() => {
-                const pendingKeys = {
-                  ...s.workspaceRuntimeById[workspaceId].skillMutationPendingKeys,
-                };
-                delete pendingKeys[key];
-                return pendingKeys;
-              })(),
-            },
-          },
-        }));
-        if (pluginScope === "user") {
-          await refreshSharedWorkspaceState(get, set, workspaceId);
-        }
-      }
+      await runPluginMutation("delete", pluginId, scope);
     },
   };
 }

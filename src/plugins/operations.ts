@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { BUILT_IN_MARKETPLACE_REPO, type FetchLike } from "../extensions/source";
+import type { FetchLike } from "../extensions/source";
 import { renameMCPServerCredentials } from "../mcp/authStore";
 import type {
   AgentConfig,
@@ -16,13 +16,16 @@ import { workspacePathOverlaps } from "../utils/workspacePath";
 import { buildPluginCatalogSnapshot } from "./catalog";
 import {
   clearPluginInstallMetadata,
-  type PluginInstallMetadata,
   readPluginManifest,
   writePluginInstallMetadata,
 } from "./manifest";
 import { readPluginMcpServers } from "./mcp";
 import { setPluginEnabled } from "./overrides";
-import { fetchRemotePluginMarketplace } from "./remoteMarketplace";
+import {
+  BUILT_IN_MARKETPLACE_REPO,
+  fetchMarketplaceInstallMetadataBySourceInput,
+  type PluginMarketplaceInstallMetadata,
+} from "./remoteMarketplace";
 import {
   buildPluginInstallPreview,
   type MaterializedPluginCandidate,
@@ -153,11 +156,11 @@ async function stagePluginInstallCopy(
   };
 }
 
-async function replaceInstalledPlugin(opts: {
+export async function replacePluginInstallRoot(opts: {
   sourceRoot: string;
   destinationRoot: string;
   conflictingRoots: string[];
-  onInstalled: () => Promise<void>;
+  onInstalled?: () => Promise<void>;
 }): Promise<void> {
   const stagedInstall = await stagePluginInstallCopy(opts.sourceRoot, opts.destinationRoot);
   let backupRoot: string | null = null;
@@ -172,7 +175,7 @@ async function replaceInstalledPlugin(opts: {
     await fs.rename(stagedInstall.stagedRoot, opts.destinationRoot);
     destinationActivated = true;
 
-    await opts.onInstalled();
+    await opts.onInstalled?.();
     await removeConflictingTargets(
       opts.conflictingRoots.filter((targetRoot) => targetRoot !== opts.destinationRoot),
     );
@@ -301,12 +304,6 @@ async function migrateBundledPluginMcpCredentials(opts: {
   }
 }
 
-export type PluginMarketplaceInstallMetadata = NonNullable<PluginInstallMetadata["marketplace"]>;
-
-function normalizeInstallSourceInput(input: string): string {
-  return input.trim().replace(/\/+$/g, "");
-}
-
 async function resolveRemoteMarketplaceMetadataByPluginId(opts: {
   input: string;
   materialized: MaterializedPluginSource;
@@ -317,26 +314,10 @@ async function resolveRemoteMarketplaceMetadataByPluginId(opts: {
   }
 
   try {
-    const marketplace = await fetchRemotePluginMarketplace({ fetchImpl: opts.fetchImpl });
-    const normalizedInput = normalizeInstallSourceInput(opts.input);
-    const metadataByPluginId = new Map<string, PluginMarketplaceInstallMetadata>();
-    for (const entry of marketplace.plugins) {
-      if (!entry.sourceInput) {
-        continue;
-      }
-      if (normalizeInstallSourceInput(entry.sourceInput) !== normalizedInput) {
-        continue;
-      }
-      metadataByPluginId.set(entry.name, {
-        name: marketplace.name,
-        ...(marketplace.displayName ? { displayName: marketplace.displayName } : {}),
-        category: entry.category,
-        installationPolicy: entry.installationPolicy,
-        authenticationPolicy: entry.authenticationPolicy,
-        sourceInput: entry.sourceInput,
-      });
-    }
-    return metadataByPluginId;
+    return await fetchMarketplaceInstallMetadataBySourceInput({
+      input: opts.input,
+      fetchImpl: opts.fetchImpl,
+    });
   } catch {
     return new Map();
   }
@@ -413,7 +394,7 @@ export async function installPluginsFromSource(opts: {
         : [];
       const stagedSource = await stageCopySourceIfNeeded(candidate.rootDir, targetRoots);
       try {
-        await replaceInstalledPlugin({
+        await replacePluginInstallRoot({
           sourceRoot: stagedSource.sourceRoot,
           destinationRoot,
           conflictingRoots: targetRoots,

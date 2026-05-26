@@ -18,7 +18,11 @@ import {
 } from "./manifest";
 import { readPluginMcpServers } from "./mcp";
 import { isPluginEnabled, isPluginSkillEnabled, readPluginOverrides } from "./overrides";
-import { fetchRemotePluginMarketplace } from "./remoteMarketplace";
+import {
+  buildMarketplaceCatalogMetadata,
+  buildRemoteMarketplaceCatalogEntry,
+  fetchRemotePluginMarketplace,
+} from "./remoteMarketplace";
 import { materializePluginSource } from "./sourceResolver";
 
 function resolvePluginScope(config: AgentConfig, pluginRoot: string): PluginScope {
@@ -122,39 +126,6 @@ function isPluginFromMarketplace(plugin: PluginCatalogEntry, marketplaceName: st
   return plugin.marketplace?.name === marketplaceName;
 }
 
-function buildRemoteMarketplaceCatalogEntry(opts: {
-  marketplace: Awaited<ReturnType<typeof fetchRemotePluginMarketplace>>;
-  plugin: Awaited<ReturnType<typeof fetchRemotePluginMarketplace>>["plugins"][number];
-}): MarketplacePluginCatalogEntry | null {
-  if (!opts.plugin.sourceInput) {
-    return null;
-  }
-  const displayName = opts.plugin.displayName ?? opts.plugin.name;
-  return {
-    id: opts.plugin.name,
-    name: opts.plugin.name,
-    displayName,
-    description: `Available from ${opts.marketplace.displayName ?? opts.marketplace.name}.`,
-    scope: "user",
-    discoveryKind: "marketplace",
-    installed: false,
-    enabled: false,
-    interface: {
-      displayName,
-      shortDescription: opts.plugin.category,
-    },
-    marketplace: {
-      name: opts.marketplace.name,
-      ...(opts.marketplace.displayName ? { displayName: opts.marketplace.displayName } : {}),
-      category: opts.plugin.category,
-      installationPolicy: opts.plugin.installationPolicy,
-      authenticationPolicy: opts.plugin.authenticationPolicy,
-    },
-    installSource: opts.plugin.sourceInput,
-    warnings: [],
-  };
-}
-
 export async function buildPluginCatalogSnapshot(
   config: AgentConfig,
   opts: {
@@ -174,21 +145,7 @@ export async function buildPluginCatalogSnapshot(
       const metadataMarketplace = installMetadata?.marketplace;
       const candidateMarketplace =
         candidate.marketplace ??
-        (metadataMarketplace
-          ? {
-              name: metadataMarketplace.name,
-              ...(metadataMarketplace.displayName
-                ? { displayName: metadataMarketplace.displayName }
-                : {}),
-              ...(metadataMarketplace.category ? { category: metadataMarketplace.category } : {}),
-              ...(metadataMarketplace.installationPolicy
-                ? { installationPolicy: metadataMarketplace.installationPolicy }
-                : {}),
-              ...(metadataMarketplace.authenticationPolicy
-                ? { authenticationPolicy: metadataMarketplace.authenticationPolicy }
-                : {}),
-            }
-          : undefined);
+        (metadataMarketplace ? buildMarketplaceCatalogMetadata(metadataMarketplace) : undefined);
       const discoveryKind = candidateMarketplace ? "marketplace" : candidate.discoveryKind;
       const scope = candidate.scope ?? resolvePluginScope(config, candidate.rootDir);
       const pluginEnabled = isPluginEnabled(
@@ -225,21 +182,7 @@ export async function buildPluginCatalogSnapshot(
           : {}),
         ...(candidateMarketplace
           ? {
-              marketplace: {
-                name: candidateMarketplace.name,
-                ...(candidateMarketplace.displayName
-                  ? { displayName: candidateMarketplace.displayName }
-                  : {}),
-                ...(candidateMarketplace.category
-                  ? { category: candidateMarketplace.category }
-                  : {}),
-                ...(candidateMarketplace.installationPolicy
-                  ? { installationPolicy: candidateMarketplace.installationPolicy }
-                  : {}),
-                ...(candidateMarketplace.authenticationPolicy
-                  ? { authenticationPolicy: candidateMarketplace.authenticationPolicy }
-                  : {}),
-              },
+              marketplace: buildMarketplaceCatalogMetadata(candidateMarketplace),
             }
           : {}),
       });
@@ -258,13 +201,13 @@ export async function buildPluginCatalogSnapshot(
         const installedEntries = sameIdEntries.filter((plugin) =>
           isPluginFromMarketplace(plugin, marketplace.name),
         );
-        const marketplaceMetadata = {
+        const marketplaceMetadata = buildMarketplaceCatalogMetadata({
           name: marketplace.name,
           ...(marketplace.displayName ? { displayName: marketplace.displayName } : {}),
           category: marketplaceEntry.category,
           installationPolicy: marketplaceEntry.installationPolicy,
           authenticationPolicy: marketplaceEntry.authenticationPolicy,
-        };
+        });
         if (installedEntries.length > 0) {
           for (const plugin of installedEntries) {
             plugin.marketplace = plugin.marketplace ?? marketplaceMetadata;

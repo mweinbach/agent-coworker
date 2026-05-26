@@ -25,6 +25,10 @@ type GitHubSkillSourceDescriptor = Omit<SkillSourceDescriptor, "kind"> & {
   kind: Exclude<SkillSourceInputKind, "skills.sh">;
 };
 
+type MaterializableGitHubSkillSourceDescriptor = Omit<SkillSourceDescriptor, "kind"> & {
+  kind: Exclude<SkillSourceInputKind, "local_path">;
+};
+
 type MaterializedSkillCandidate = {
   rootDir: string;
   name: string;
@@ -196,28 +200,21 @@ export function resolveSkillSource(input: string, cwd = process.cwd()): SkillSou
 
   const githubUrl = parseGitHubUrl(trimmed);
   if (githubUrl) {
-    return buildDescriptorFromGitHubSource<GitHubSkillSourceDescriptor>(
-      trimmed,
-      githubUrl,
-    ) as SkillSourceDescriptor;
+    return buildDescriptorFromGitHubSource<GitHubSkillSourceDescriptor>(trimmed, githubUrl);
   }
 
-  return resolveGitHubOrLocalSource<GitHubSkillSourceDescriptor>(
-    trimmed,
-    cwd,
-  ) as SkillSourceDescriptor;
+  return resolveGitHubOrLocalSource<GitHubSkillSourceDescriptor>(trimmed, cwd);
 }
 
 async function materializeGitHubSource(
-  descriptor: SkillSourceDescriptor,
+  descriptor: MaterializableGitHubSkillSourceDescriptor,
   fetchImpl: FetchLike,
 ): Promise<MaterializedSkillSource> {
-  const githubDescriptor = descriptor as GitHubSkillSourceDescriptor;
   const materialized = await materializeGitHubDirectorySource<
-    GitHubSkillSourceDescriptor,
+    MaterializableGitHubSkillSourceDescriptor,
     MaterializedSkillCandidate
   >({
-    descriptor: githubDescriptor,
+    descriptor,
     fetchImpl,
     tmpPrefix: "cowork-skill-source-",
     normalizeTreePath: (directoryPath) => directoryPath,
@@ -236,6 +233,12 @@ async function materializeGitHubSource(
     ...materialized,
     candidates: filteredCandidates,
   };
+}
+
+function isMaterializableGitHubSkillSourceDescriptor(
+  descriptor: SkillSourceDescriptor,
+): descriptor is MaterializableGitHubSkillSourceDescriptor {
+  return descriptor.kind !== "local_path";
 }
 
 async function loadMaterializedSkillCandidates(
@@ -311,6 +314,9 @@ export async function materializeSkillSource(opts: {
   const descriptor = resolveSkillSource(opts.input, opts.cwd);
   if (descriptor.kind === "local_path") {
     return await materializeLocalPath(descriptor.localPath ?? descriptor.displaySource);
+  }
+  if (!isMaterializableGitHubSkillSourceDescriptor(descriptor)) {
+    throw new Error(`Unsupported skill source kind: ${descriptor.kind}`);
   }
   return await materializeGitHubSource(descriptor, opts.fetchImpl ?? fetch);
 }

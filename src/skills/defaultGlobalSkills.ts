@@ -2,14 +2,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import {
-  BUILT_IN_MARKETPLACE_REPO,
-  DEFAULT_MARKETPLACE_PLUGIN_IDS,
-  type FetchLike,
-} from "../extensions/source";
+import type { FetchLike } from "../extensions/source";
 import { buildPluginCatalogSnapshot, installPluginsFromSource } from "../plugins";
 import { readPluginOverrides } from "../plugins/overrides";
-import { fetchRemotePluginMarketplace } from "../plugins/remoteMarketplace";
+import {
+  BUILT_IN_MARKETPLACE_REPO,
+  buildMarketplaceInstallMetadataByPluginId,
+  DEFAULT_MARKETPLACE_PLUGIN_IDS,
+  fetchRemotePluginMarketplace,
+} from "../plugins/remoteMarketplace";
 import { ensureAiCoworkerHome, getAiCoworkerPaths } from "../store/connections";
 import type { AgentConfig } from "../types";
 import { isInstalledPluginCatalogEntry } from "../types";
@@ -174,32 +175,16 @@ export async function ensureDefaultGlobalSkillsInstalled(opts: {
     }
   }
 
-  const marketplace = await fetchRemotePluginMarketplace({ fetchImpl });
-  const marketplaceMetadataByPluginId = new Map(
-    marketplace.plugins
-      .filter((entry) => entry.sourceInput)
-      .map((entry) => [
-        entry.name,
-        {
-          name: marketplace.name,
-          ...(marketplace.displayName ? { displayName: marketplace.displayName } : {}),
-          category: entry.category,
-          installationPolicy: entry.installationPolicy,
-          authenticationPolicy: entry.authenticationPolicy,
-          sourceInput: entry.sourceInput,
-        },
-      ]),
-  );
-
   const installed: string[] = [];
   const skippedExisting: string[] = [];
   const skippedRemoved: string[] = [];
   const recordedPluginIds = new Set<string>();
+  const pluginIdsNeedingInstall: string[] = [];
 
   opts.log?.(`Ensuring default marketplace plugins in ${opts.config.userPluginsDir ?? "(none)"}`);
 
   const overrides = await readPluginOverrides(opts.config);
-  let catalog = await buildPluginCatalogSnapshot(opts.config, { fetchImpl });
+  const catalog = await buildPluginCatalogSnapshot(opts.config, { fetchImpl });
   for (const pluginSpec of pluginSpecs) {
     const pluginId = pluginSpec.id;
     if (!opts.force && isDefaultPluginRemoved(pluginId, overrides)) {
@@ -217,7 +202,38 @@ export async function ensureDefaultGlobalSkillsInstalled(opts: {
       recordedPluginIds.add(pluginId);
       continue;
     }
+    pluginIdsNeedingInstall.push(pluginId);
+  }
 
+  if (pluginIdsNeedingInstall.length === 0) {
+    const state: DefaultGlobalSkillsState = {
+      version: INSTALL_STATE_VERSION,
+      marketplace: marketplaceName,
+      installedAt: new Date().toISOString(),
+      plugins: pluginSpecs
+        .map((plugin) => plugin.id)
+        .filter((pluginId) => recordedPluginIds.has(pluginId)),
+    };
+    await fs.writeFile(stateFile, `${JSON.stringify(state, null, 2)}\n`, "utf-8");
+
+    return {
+      status: "already_installed",
+      pluginsDir: opts.config.userPluginsDir ?? "",
+      stateFile,
+      installed,
+      skippedExisting,
+      skippedRemoved,
+    };
+  }
+
+  const marketplace = await fetchRemotePluginMarketplace({ fetchImpl });
+  const requestedPluginIds = new Set(pluginIdsNeedingInstall);
+  const marketplaceMetadataByPluginId = buildMarketplaceInstallMetadataByPluginId(
+    marketplace,
+    requestedPluginIds,
+  );
+
+  for (const pluginId of pluginIdsNeedingInstall) {
     const marketplaceEntry = marketplace.plugins.find((entry) => entry.name === pluginId);
     if (!marketplaceEntry?.sourceInput) {
       opts.log?.(`Default marketplace plugin "${pluginId}" is not currently available.`);
@@ -233,7 +249,6 @@ export async function ensureDefaultGlobalSkillsInstalled(opts: {
     });
     installed.push(pluginId);
     recordedPluginIds.add(pluginId);
-    catalog = await buildPluginCatalogSnapshot(opts.config, { fetchImpl });
   }
 
   const state: DefaultGlobalSkillsState = {

@@ -2,16 +2,15 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
+import { buildPluginCatalogSnapshot } from "../src/plugins/catalog";
+import { deletePluginInstallation } from "../src/plugins/operations";
+import { setPluginEnabled } from "../src/plugins/overrides";
 import {
   type DefaultSkillSpec,
   defaultGlobalSkillsStateFile,
   ensureDefaultGlobalSkillsInstalled,
   shouldBootstrapDefaultGlobalSkills,
 } from "../src/skills/defaultGlobalSkills";
-import { buildPluginCatalogSnapshot } from "../src/plugins/catalog";
-import { deletePluginInstallation } from "../src/plugins/operations";
-import { setPluginEnabled } from "../src/plugins/overrides";
 import type { AgentConfig } from "../src/types";
 import { isInstalledPluginCatalogEntry } from "../src/types";
 
@@ -83,9 +82,7 @@ function makeConfig(workspaceRoot: string, userHome: string): AgentConfig {
 
 function createMarketplaceFixture(
   pluginIds: string[],
-  skillsByPlugin: Record<string, string[]> = Object.fromEntries(
-    pluginIds.map((id) => [id, [id]]),
-  ),
+  skillsByPlugin: Record<string, string[]> = Object.fromEntries(pluginIds.map((id) => [id, [id]])),
 ) {
   const marketplace = {
     name: "test-marketplace",
@@ -169,9 +166,7 @@ function createMarketplaceFixture(
 describe("default global skills bootstrap", () => {
   test("default marketplace plugin bootstrap is opt-in", () => {
     expect(shouldBootstrapDefaultGlobalSkills({})).toBe(false);
-    expect(shouldBootstrapDefaultGlobalSkills({ COWORK_BOOTSTRAP_DEFAULT_SKILLS: "1" })).toBe(
-      true,
-    );
+    expect(shouldBootstrapDefaultGlobalSkills({ COWORK_BOOTSTRAP_DEFAULT_SKILLS: "1" })).toBe(true);
     expect(
       shouldBootstrapDefaultGlobalSkills({
         COWORK_BOOTSTRAP_DEFAULT_SKILLS: "1",
@@ -220,7 +215,9 @@ describe("default global skills bootstrap", () => {
       expect(
         fetchCalls.filter((url) => url.includes(".agents/plugins/marketplace.json")),
       ).toHaveLength(1);
-      expect(fetchCalls.filter((url) => url === "https://download.test/marketplace.json")).toHaveLength(1);
+      expect(
+        fetchCalls.filter((url) => url === "https://download.test/marketplace.json"),
+      ).toHaveLength(1);
     } finally {
       await fs.rm(home, { recursive: true, force: true });
       await fs.rm(workspace, { recursive: true, force: true });
@@ -343,6 +340,44 @@ describe("default global skills bootstrap", () => {
     }
   });
 
+  test("skips locally installed defaults without fetching when the state file is stale", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-local-skip-"));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-skills-workspace-"));
+    const skills: readonly DefaultSkillSpec[] = [{ id: "workspace-tools" }];
+    const { tree, files } = createMarketplaceFixture(["workspace-tools"], {
+      "workspace-tools": ["documents", "presentations", "spreadsheets"],
+    });
+    const config = makeConfig(workspace, home);
+
+    try {
+      await ensureDefaultGlobalSkillsInstalled({
+        homedir: home,
+        config,
+        plugins: skills,
+        fetchImpl: createGitHubFetchStub(tree, files),
+      });
+      await fs.rm(defaultGlobalSkillsStateFile(home), { force: true });
+
+      let fetchCalls = 0;
+      const second = await ensureDefaultGlobalSkillsInstalled({
+        homedir: home,
+        config,
+        plugins: skills,
+        fetchImpl: (async () => {
+          fetchCalls += 1;
+          throw new Error("default bootstrap should not fetch for local skips");
+        }) as typeof fetch,
+      });
+
+      expect(second.installed).toEqual([]);
+      expect(second.skippedExisting).toEqual(["workspace-tools"]);
+      expect(fetchCalls).toBe(0);
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test("legacy default plugin tombstones suppress Workspace Tools bootstrap", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-legacy-tombstone-"));
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-skills-workspace-"));
@@ -365,7 +400,9 @@ describe("default global skills bootstrap", () => {
         homedir: home,
         config,
         plugins: skills,
-        fetchImpl,
+        fetchImpl: (async () => {
+          throw new Error("default bootstrap should not fetch for tombstones");
+        }) as typeof fetch,
       });
 
       expect(result.installed).toEqual([]);
@@ -418,15 +455,20 @@ describe("default global skills bootstrap", () => {
       await deletePluginInstallation({ config, plugin: installedPlugin });
       await fs.rm(defaultGlobalSkillsStateFile(home), { force: true });
 
+      let fetchCalls = 0;
       const second = await ensureDefaultGlobalSkillsInstalled({
         homedir: home,
         config,
         plugins: skills,
-        fetchImpl,
+        fetchImpl: (async () => {
+          fetchCalls += 1;
+          throw new Error("default bootstrap should not fetch for deleted defaults");
+        }) as typeof fetch,
       });
 
       expect(second.installed).toEqual([]);
       expect(second.skippedRemoved).toEqual(["workspace-tools"]);
+      expect(fetchCalls).toBe(0);
       await expect(
         fs.access(path.join(home, ".cowork", "plugins", "workspace-tools")),
       ).rejects.toBeDefined();

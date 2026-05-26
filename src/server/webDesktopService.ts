@@ -739,6 +739,9 @@ async function launchWorkspaceServer(opts: {
 export class WebDesktopService implements WebDesktopServiceLike {
   private readonly userDataDir: string;
   private readonly serverManager: SourceWorkspaceServerManager;
+  private readonly stateChangeListeners = new Set<() => void>();
+  private stateWatcher: fsSync.FSWatcher | null = null;
+  private stateWatcherDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     opts: {
@@ -801,32 +804,58 @@ export class WebDesktopService implements WebDesktopServiceLike {
     await writeTextFileAtomic(this.stateFilePath, JSON.stringify(normalized, null, 2), {
       mode: PRIVATE_FILE_MODE,
     });
+    this.notifyStateChangeListeners();
     return normalized;
   }
 
   watchStateChanges(listener: () => void): () => void {
-    fsSync.mkdirSync(this.userDataDir, { recursive: true, mode: PRIVATE_DIR_MODE });
-    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-    const emit = () => {
-      if (debounceTimer) {
-        clearTimeout(debounceTimer);
-      }
-      debounceTimer = setTimeout(() => {
-        debounceTimer = null;
-        listener();
-      }, 100);
-      (debounceTimer as { unref?: () => void }).unref?.();
-    };
-    const watcher = fsSync.watch(this.userDataDir, () => {
-      emit();
-    });
+    this.stateChangeListeners.add(listener);
+    this.ensureStateWatcher();
     return () => {
-      if (debounceTimer) {
-        clearTimeout(debounceTimer);
-        debounceTimer = null;
+      this.stateChangeListeners.delete(listener);
+      if (this.stateChangeListeners.size === 0) {
+        this.closeStateWatcher();
       }
-      watcher.close();
     };
+  }
+
+  private notifyStateChangeListeners(): void {
+    for (const listener of this.stateChangeListeners) {
+      listener();
+    }
+  }
+
+  private ensureStateWatcher(): void {
+    if (this.stateWatcher) {
+      return;
+    }
+
+    fsSync.mkdirSync(this.userDataDir, { recursive: true, mode: PRIVATE_DIR_MODE });
+    this.stateWatcher = fsSync.watch(this.userDataDir, (eventType, filename) => {
+      if (filename && filename !== "state.json") {
+        return;
+      }
+      if (eventType !== "change" && eventType !== "rename") {
+        return;
+      }
+      if (this.stateWatcherDebounceTimer) {
+        clearTimeout(this.stateWatcherDebounceTimer);
+      }
+      this.stateWatcherDebounceTimer = setTimeout(() => {
+        this.stateWatcherDebounceTimer = null;
+        this.notifyStateChangeListeners();
+      }, 25);
+      (this.stateWatcherDebounceTimer as { unref?: () => void }).unref?.();
+    });
+  }
+
+  private closeStateWatcher(): void {
+    if (this.stateWatcherDebounceTimer) {
+      clearTimeout(this.stateWatcherDebounceTimer);
+      this.stateWatcherDebounceTimer = null;
+    }
+    this.stateWatcher?.close();
+    this.stateWatcher = null;
   }
 
   async listWorkspaces(fallbackCwd: string): Promise<Array<{ name: string; path: string }>> {
@@ -954,6 +983,8 @@ export class WebDesktopService implements WebDesktopServiceLike {
   }
 
   async stopAll(): Promise<void> {
+    this.closeStateWatcher();
+    this.stateChangeListeners.clear();
     await this.serverManager.stopAll();
   }
 }

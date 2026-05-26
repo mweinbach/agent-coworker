@@ -28,24 +28,6 @@ function createMockWorkspaceChild() {
   });
 }
 
-function waitForCondition(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  return new Promise((resolve, reject) => {
-    const tick = () => {
-      if (predicate()) {
-        resolve();
-        return;
-      }
-      if (Date.now() >= deadline) {
-        reject(new Error("Timed out waiting for condition"));
-        return;
-      }
-      setTimeout(tick, 10);
-    };
-    tick();
-  });
-}
-
 afterEach(async () => {
   await Promise.all(
     [...cleanupPaths].map(async (target) => {
@@ -202,7 +184,7 @@ describe("web desktop routes", () => {
         workspaces: [],
         threads: [],
       });
-      await waitForCondition(() => changeCount > 0);
+      expect(changeCount).toBe(1);
     } finally {
       dispose();
       await service.stopAll();

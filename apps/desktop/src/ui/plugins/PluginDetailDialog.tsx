@@ -70,8 +70,11 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
     <Dialog open={pluginId !== null} onOpenChange={handleOpenChange}>
       <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto flex flex-col gap-0 p-0">
         {isLoading ? (
-          <div className="flex items-center justify-center p-12 text-muted-foreground">
-            Loading...
+          <div className="flex items-center justify-center p-12 text-center">
+            <DialogHeader>
+              <DialogTitle>Loading plugin</DialogTitle>
+              <DialogDescription>Fetching plugin details.</DialogDescription>
+            </DialogHeader>
           </div>
         ) : plugin ? (
           <>
@@ -280,10 +283,12 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
           </>
         ) : (
           <div className="flex flex-col items-center justify-center gap-2 p-12 text-center">
-            <div className="text-base font-medium">Plugin unavailable</div>
-            <div className="text-sm text-muted-foreground">
-              {pluginError ?? "The selected plugin could not be loaded."}
-            </div>
+            <DialogHeader>
+              <DialogTitle>Plugin unavailable</DialogTitle>
+              <DialogDescription>
+                {pluginError ?? "The selected plugin could not be loaded."}
+              </DialogDescription>
+            </DialogHeader>
           </div>
         )}
       </DialogContent>

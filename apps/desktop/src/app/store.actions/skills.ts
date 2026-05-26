@@ -117,6 +117,23 @@ export function createSkillActions(
     }
     return matches[0]?.scope ?? null;
   };
+  const resolveCachedPluginSelection = (
+    workspaceId: string,
+    pluginId: string,
+    scope?: PluginSelection["scope"] | null,
+  ): PluginCatalogEntry | null => {
+    const catalog = get().workspaceRuntimeById[workspaceId]?.pluginsCatalog;
+    const matches =
+      catalog?.plugins.filter(
+        (plugin) =>
+          plugin.id === pluginId &&
+          (scope === undefined || scope === null || plugin.scope === scope),
+      ) ?? [];
+    if (matches.length !== 1) {
+      return null;
+    }
+    return matches[0] ?? null;
+  };
   const resolveInstallationScopeForMutation = (
     workspaceId: string,
     installationId: string,
@@ -264,14 +281,15 @@ export function createSkillActions(
         return;
       }
       const cwd = workspacePath(workspaceId);
+      const cachedPlugin = resolveCachedPluginSelection(workspaceId, pluginId, scope);
       set((s) => ({
         workspaceRuntimeById: {
           ...s.workspaceRuntimeById,
           [workspaceId]: {
             ...s.workspaceRuntimeById[workspaceId],
             selectedPluginId: pluginId,
-            selectedPluginScope: scope ?? null,
-            selectedPlugin: null,
+            selectedPluginScope: scope ?? cachedPlugin?.scope ?? null,
+            selectedPlugin: cachedPlugin,
             pluginsLoading: true,
             pluginsError: null,
           },
@@ -289,7 +307,7 @@ export function createSkillActions(
             [workspaceId]: {
               ...s.workspaceRuntimeById[workspaceId],
               pluginsLoading: false,
-              pluginsError: "Unable to load plugin details.",
+              pluginsError: cachedPlugin ? null : "Unable to load plugin details.",
             },
           },
         }));

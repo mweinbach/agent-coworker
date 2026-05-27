@@ -173,6 +173,9 @@ describe("AgentSession", () => {
 
         expect(result).toBe("resolved");
         expect(events.filter((event) => event.type === "plugins_catalog")).toHaveLength(1);
+        expect(events.find((event) => event.type === "plugins_catalog")).toMatchObject({
+          availablePluginsPartial: true,
+        });
         await waitForCondition(() => fetchCalls.length === 1);
         expect(fetchCalls).toHaveLength(1);
 
@@ -191,6 +194,8 @@ describe("AgentSession", () => {
         await waitForCondition(
           () => events.filter((event) => event.type === "plugins_catalog").length >= 2,
         );
+        const remoteCatalog = events.filter((event) => event.type === "plugins_catalog").at(-1);
+        expect(remoteCatalog).not.toHaveProperty("availablePluginsPartial");
         expect(fetchCalls).toEqual([
           "https://api.github.com/repos/mweinbach/cowork-skills-plugins/contents/.agents/plugins/marketplace.json?ref=main",
           "https://download.test/marketplace.json",
@@ -243,6 +248,7 @@ describe("AgentSession", () => {
         );
         const mutationCatalog = events.filter((event) => event.type === "plugins_catalog").at(-1);
         expect(mutationCatalog?.catalog.plugins[0]?.enabled).toBe(false);
+        expect(mutationCatalog).toMatchObject({ availablePluginsPartial: true });
 
         releaseMarketplaceContent(
           new Response(
@@ -256,12 +262,15 @@ describe("AgentSession", () => {
             { headers: { "content-type": "application/json" } },
           ),
         );
-        await waitForCondition(() => fetchCalls.length === 2);
-        await flushAsyncWork();
+        await waitForCondition(() => fetchCalls.length === 3);
+        await waitForCondition(
+          () => events.filter((event) => event.type === "plugins_catalog").length >= 3,
+        );
 
         const pluginCatalogs = events.filter((event) => event.type === "plugins_catalog");
-        expect(pluginCatalogs).toHaveLength(2);
+        expect(pluginCatalogs).toHaveLength(3);
         expect(pluginCatalogs.at(-1)?.catalog.plugins[0]?.enabled).toBe(false);
+        expect(pluginCatalogs.at(-1)).not.toHaveProperty("availablePluginsPartial");
       } finally {
         globalThis.fetch = originalFetch;
         await fs.rm(root, { recursive: true, force: true });

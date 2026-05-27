@@ -230,9 +230,11 @@ export function createControlSocketHelpers(
   function mergeStableAvailablePlugins(
     previousCatalog: PluginCatalogSnapshot | null,
     nextCatalog: PluginCatalogSnapshot,
+    availablePluginsPartial: boolean,
   ): PluginCatalogSnapshot {
     const nextAvailablePlugins = nextCatalog.availablePlugins ?? [];
     if (
+      !availablePluginsPartial ||
       nextAvailablePlugins.length > 0 ||
       !previousCatalog ||
       previousCatalog.availablePlugins.length === 0
@@ -1124,6 +1126,7 @@ export function createControlSocketHelpers(
         const pluginsCatalog = mergeStableAvailablePlugins(
           workspaceRuntime.pluginsCatalog,
           evt.catalog,
+          evt.availablePluginsPartial === true,
         );
         const catalogPlugins = [...pluginsCatalog.plugins, ...pluginsCatalog.availablePlugins];
         const selectedPlugin = selectedPluginId

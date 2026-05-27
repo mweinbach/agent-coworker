@@ -194,6 +194,7 @@ describe("control socket helpers over JSON-RPC", () => {
         event: {
           type: "plugins_catalog",
           sessionId: "jsonrpc-control",
+          availablePluginsPartial: true,
           catalog: {
             warnings: [],
             plugins: [],
@@ -269,6 +270,7 @@ describe("control socket helpers over JSON-RPC", () => {
         event: {
           type: "plugins_catalog",
           sessionId: "jsonrpc-control",
+          availablePluginsPartial: true,
           clearedMutationPendingKeys: ["plugin:enable:user:installed-marketplace"],
           catalog: {
             warnings: [],
@@ -314,6 +316,68 @@ describe("control socket helpers over JSON-RPC", () => {
     expect(state.workspaceRuntimeById[workspaceId].selectedPlugin?.id).toBe("figma-marketplace");
     expect(state.workspaceRuntimeById[workspaceId].selectedPluginScope).toBe("user");
     expect(state.workspaceRuntimeById[workspaceId].pluginMutationPendingKeys).toEqual({});
+  });
+
+  test("requestJsonRpcControlEvent lets authoritative empty marketplace snapshots clear stale available plugins", async () => {
+    const workspaceId = "ws-plugins-available-authoritative-empty";
+    const staleAvailablePlugin = {
+      id: "delisted-marketplace",
+      name: "delisted-marketplace",
+      displayName: "Delisted Marketplace",
+      description: "No longer listed",
+      scope: "user" as const,
+      discoveryKind: "marketplace" as const,
+      installed: false as const,
+      enabled: false as const,
+      marketplace: { name: "delisted-marketplace" },
+      installSource: "builtin://delisted-marketplace",
+      warnings: [],
+    };
+    const { state, get, set } = createState(workspaceId, {
+      workspaceRuntimeById: {
+        [workspaceId]: {
+          ...defaultWorkspaceRuntime(),
+          serverUrl: "ws://mock",
+          pluginsCatalog: {
+            warnings: [],
+            plugins: [],
+            availablePlugins: [staleAvailablePlugin],
+          },
+          selectedPluginId: "delisted-marketplace",
+          selectedPluginScope: "user",
+          selectedPlugin: staleAvailablePlugin,
+        },
+      },
+    });
+    installFakeSocket(workspaceId, async (method) => {
+      expect(method).toBe("cowork/plugins/catalog/read");
+      return {
+        event: {
+          type: "plugins_catalog",
+          sessionId: "jsonrpc-control",
+          catalog: {
+            warnings: [],
+            plugins: [],
+            availablePlugins: [],
+          },
+        },
+      };
+    });
+
+    const helpers = createControlSocketHelpers(deps);
+    const ok = await helpers.requestJsonRpcControlEvent(
+      get as any,
+      set as any,
+      workspaceId,
+      "cowork/plugins/catalog/read",
+      { cwd: "/tmp/workspace" },
+    );
+
+    expect(ok).toBe(true);
+    expect(state.workspaceRuntimeById[workspaceId].pluginsCatalog?.availablePlugins).toEqual([]);
+    expect(state.workspaceRuntimeById[workspaceId].selectedPlugin).toBeNull();
+    expect(state.workspaceRuntimeById[workspaceId].selectedPluginId).toBeNull();
+    expect(state.workspaceRuntimeById[workspaceId].selectedPluginScope).toBeNull();
   });
 
   test("requestJsonRpcControlEvent applies plugin detail events", async () => {

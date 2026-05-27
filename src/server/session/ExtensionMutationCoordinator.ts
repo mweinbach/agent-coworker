@@ -60,6 +60,7 @@ export class ExtensionMutationCoordinator {
     await this.emitters.listCommands();
     await this.emitters.emitSkillsCatalog(clearedMutationPendingKeys);
     await this.pluginCatalogService.emitCatalog(clearedMutationPendingKeys);
+    this.pluginCatalogService.queueRemoteCatalogRefresh();
     await this.context.emitMcpServers?.();
   }
 }

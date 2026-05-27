@@ -2266,6 +2266,34 @@ Full skills catalog snapshot for the desktop skills manager.
 
 ---
 
+### plugins_catalog
+
+Full plugin catalog snapshot for the desktop plugin manager.
+
+```json
+{
+  "type": "plugins_catalog",
+  "sessionId": "...",
+  "catalog": {
+    "plugins": [],
+    "availablePlugins": [],
+    "warnings": []
+  },
+  "availablePluginsPartial": true,
+  "clearedMutationPendingKeys": ["plugin:install:user"]
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `"plugins_catalog"` | — |
+| `sessionId` | `string` | Session identifier |
+| `catalog` | `PluginCatalogSnapshot` | Plugin catalog snapshot |
+| `availablePluginsPartial` | `boolean?` | True when `availablePlugins` only reflects a local snapshot and clients should keep stable cached marketplace-only rows until an authoritative remote refresh arrives |
+| `clearedMutationPendingKeys` | `string[]?` | Optional pending plugin mutation keys completed by this refresh; omit on plain catalog reads |
+
+---
+
 ### skill_installation
 
 Detailed metadata and content payload for one installation copy.

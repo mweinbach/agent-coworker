@@ -374,6 +374,8 @@ export type SessionEvent =
       type: "plugins_catalog";
       sessionId: string;
       catalog: PluginCatalogSnapshot;
+      /** True when `availablePlugins` only reflects the local installed catalog and should not clear cached marketplace rows. */
+      availablePluginsPartial?: boolean;
       clearedMutationPendingKeys?: string[];
     }
   | {

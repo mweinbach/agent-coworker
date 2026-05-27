@@ -37,6 +37,7 @@ export class PluginCatalogService {
       type: "plugins_catalog",
       sessionId: this.context.id,
       catalog,
+      ...(!opts.includeRemoteMarketplace ? { availablePluginsPartial: true } : {}),
       ...(clearedMutationPendingKeys.length > 0 ? { clearedMutationPendingKeys } : {}),
     });
   }

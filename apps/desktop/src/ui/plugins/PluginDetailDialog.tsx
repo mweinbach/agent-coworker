@@ -66,6 +66,14 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
     }
   };
 
+  const handleInstallPlugin = async (sourceInput: string, targetScope: "workspace" | "user") => {
+    try {
+      await installPlugins(sourceInput, targetScope);
+    } catch {
+      // Control-session and mutation errors are surfaced via runtime state.
+    }
+  };
+
   if (!pluginId) return null;
 
   const isLoading = pluginId !== null && plugin === null && pluginError === null && pluginsLoading;
@@ -244,7 +252,9 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
                   <Button
                     size="sm"
                     disabled={installPending}
-                    onClick={() => void installPlugins(plugin.installSource ?? "", plugin.scope)}
+                    onClick={() =>
+                      void handleInstallPlugin(plugin.installSource ?? "", plugin.scope)
+                    }
                   >
                     {installPending ? "Installing..." : "Install Plugin"}
                   </Button>
@@ -273,7 +283,7 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
                     size="sm"
                     disabled={installPending}
                     onClick={() =>
-                      void installPlugins(
+                      void handleInstallPlugin(
                         installedPlugin.installSource ?? "",
                         installedPlugin.scope,
                       )

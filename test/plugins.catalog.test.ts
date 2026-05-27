@@ -127,6 +127,36 @@ async function writePlugin(
   );
 }
 
+async function writeNamedPlugin(
+  rootDir: string,
+  pluginId: string,
+  displayName: string,
+  description = "Plugin helpers",
+) {
+  await fs.mkdir(path.join(rootDir, ".codex-plugin"), { recursive: true });
+  await fs.mkdir(path.join(rootDir, "skills", "import-frame"), { recursive: true });
+  await fs.writeFile(
+    path.join(rootDir, ".codex-plugin", "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: pluginId,
+        description,
+        interface: { displayName },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf-8",
+  );
+  await fs.writeFile(
+    path.join(rootDir, "skills", "import-frame", "SKILL.md"),
+    ["---", "name: import-frame", "description: Import a frame", "---", "", "# Import frame"].join(
+      "\n",
+    ),
+    "utf-8",
+  );
+}
+
 async function writeBundledSkill(skillsDir: string, name: string, description: string) {
   await fs.mkdir(path.join(skillsDir, name), { recursive: true });
   await fs.writeFile(
@@ -496,27 +526,65 @@ describe("plugin catalog and install operations", () => {
     }
   });
 
-  test("remote marketplace detail warns when materialized bundle has a mismatched plugin id", async () => {
-    const workspace = await fs.mkdtemp(
-      path.join(os.tmpdir(), "plugins-market-mismatch-workspace-"),
-    );
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-market-mismatch-home-"));
-    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-market-mismatch-"));
+  test("installPluginsFromSource rejects sources with multiple valid plugin bundles", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-install-multi-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-install-multi-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-install-multi-"));
     const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      const sourceRoot = path.join(workspace, "plugin-source");
+      await writeNamedPlugin(path.join(sourceRoot, "alpha"), "alpha", "Alpha Plugin");
+      await writeNamedPlugin(path.join(sourceRoot, "beta"), "beta", "Beta Plugin");
+
+      await expect(
+        installPluginsFromSource({
+          config,
+          input: sourceRoot,
+          targetScope: "workspace",
+        }),
+      ).rejects.toThrow("more than one valid plugin bundle");
+
+      await expect(
+        fs.access(path.join(config.workspacePluginsDir ?? "", "alpha")),
+      ).rejects.toThrow();
+      await expect(
+        fs.access(path.join(config.workspacePluginsDir ?? "", "beta")),
+      ).rejects.toThrow();
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  test("remote marketplace detail does not materialize the plugin bundle", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-market-detail-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-market-detail-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-market-detail-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+    let manifestDownloads = 0;
+    const remoteFetch = createRemoteMarketplaceFetch({ remoteManifestName: "impostor-toolkit" });
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      if (String(input) === "https://download.test/figma-toolkit/plugin.json") {
+        manifestDownloads += 1;
+      }
+      return await remoteFetch(input);
+    }) as typeof fetch;
 
     try {
       const detail = await buildRemoteMarketplacePluginDetail({
         pluginId: "figma-toolkit",
-        fetchImpl: createRemoteMarketplaceFetch({ remoteManifestName: "impostor-toolkit" }),
+        fetchImpl,
       });
 
       expect(detail).toMatchObject({
         id: "figma-toolkit",
         installed: false,
+        description: "Available from Cowork Test.",
       });
-      expect(detail?.warnings).toContain(
-        'Remote marketplace entry "figma-toolkit" did not contain a valid plugin bundle with a matching plugin name.',
-      );
+      expect(detail?.warnings).toEqual([]);
+      expect(manifestDownloads).toBe(0);
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
       await fs.rm(home, { recursive: true, force: true });

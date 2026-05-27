@@ -100,6 +100,25 @@ export function shouldBootstrapDefaultGlobalSkills(
   );
 }
 
+function bootstrapPromiseKey(opts: {
+  homedir?: string;
+  config: Pick<AgentConfig, "userPluginsDir" | "userCoworkDir">;
+  plugins?: readonly DefaultSkillSpec[];
+  force?: boolean;
+}): string {
+  const home = path.resolve(opts.homedir ?? os.homedir());
+  const userPluginsDir = opts.config.userPluginsDir ? path.resolve(opts.config.userPluginsDir) : "";
+  const userCoworkDir = path.resolve(opts.config.userCoworkDir);
+  const pluginIds = [...(opts.plugins ?? DEFAULT_GLOBAL_SKILLS)].map((plugin) => plugin.id);
+  return JSON.stringify({
+    home,
+    userCoworkDir,
+    userPluginsDir,
+    pluginIds,
+    force: opts.force === true,
+  });
+}
+
 export async function ensureDefaultGlobalSkillsReady(opts: {
   homedir?: string;
   env?: Record<string, string | undefined>;
@@ -114,8 +133,8 @@ export async function ensureDefaultGlobalSkillsReady(opts: {
     return null;
   }
 
-  const home = path.resolve(opts.homedir ?? os.homedir());
-  const existing = bootstrapPromises.get(home);
+  const promiseKey = bootstrapPromiseKey(opts);
+  const existing = bootstrapPromises.get(promiseKey);
   if (existing) {
     return await existing;
   }
@@ -127,12 +146,13 @@ export async function ensureDefaultGlobalSkillsReady(opts: {
       opts.log?.(
         `Default skill bootstrap failed: ${error instanceof Error ? error.message : String(error)}`,
       );
-      bootstrapPromises.delete(home);
       return null;
+    } finally {
+      bootstrapPromises.delete(promiseKey);
     }
   })();
 
-  bootstrapPromises.set(home, promise);
+  bootstrapPromises.set(promiseKey, promise);
   return await promise;
 }
 
@@ -265,3 +285,9 @@ export async function ensureDefaultGlobalSkillsInstalled(opts: {
     skippedRemoved,
   };
 }
+
+export const __internal = {
+  resetForTests() {
+    bootstrapPromises.clear();
+  },
+};

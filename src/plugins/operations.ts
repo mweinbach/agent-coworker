@@ -198,6 +198,12 @@ async function refreshCatalog(config: AgentConfig): Promise<PluginCatalogSnapsho
 }
 
 function validateInstallCandidates(validCandidates: MaterializedPluginCandidate[]): void {
+  if (validCandidates.length > 1) {
+    throw new Error(
+      "The install source contains more than one valid plugin bundle. Install one plugin at a time so failures cannot leave a partially applied plugin set.",
+    );
+  }
+
   const seenIds = new Set<string>();
   for (const candidate of validCandidates) {
     if (seenIds.has(candidate.pluginId)) {

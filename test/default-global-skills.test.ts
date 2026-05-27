@@ -7,8 +7,10 @@ import { deletePluginInstallation } from "../src/plugins/operations";
 import { setPluginEnabled } from "../src/plugins/overrides";
 import {
   type DefaultSkillSpec,
+  __internal as defaultGlobalSkillsInternal,
   defaultGlobalSkillsStateFile,
   ensureDefaultGlobalSkillsInstalled,
+  ensureDefaultGlobalSkillsReady,
   shouldBootstrapDefaultGlobalSkills,
 } from "../src/skills/defaultGlobalSkills";
 import type { AgentConfig } from "../src/types";
@@ -287,6 +289,69 @@ describe("default global skills bootstrap", () => {
         fs.access(path.join(home, ".cowork", "plugins", "workspace-tools")),
       ).rejects.toBeDefined();
     } finally {
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("ready bootstrap cache is scoped by concurrent requested default plugin ids", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-ready-cache-"));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-skills-workspace-"));
+    const { tree, files } = createMarketplaceFixture(["alpha", "beta"]);
+    const baseFetch = createGitHubFetchStub(tree, files);
+    let releaseAlphaFetch: (() => void) | undefined;
+    let markAlphaFetchBlocked: (() => void) | undefined;
+    const alphaFetchGate = new Promise<void>((resolve) => {
+      releaseAlphaFetch = resolve;
+    });
+    const alphaFetchBlocked = new Promise<void>((resolve) => {
+      markAlphaFetchBlocked = resolve;
+    });
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      if (String(input) === "https://download.test/alpha/plugin.json") {
+        markAlphaFetchBlocked?.();
+        await alphaFetchGate;
+      }
+      return await baseFetch(input);
+    }) as typeof fetch;
+    const config = makeConfig(workspace, home);
+    const env = { COWORK_BOOTSTRAP_DEFAULT_SKILLS: "1" };
+
+    try {
+      const firstPromise = ensureDefaultGlobalSkillsReady({
+        homedir: home,
+        config,
+        plugins: [{ id: "alpha" }],
+        fetchImpl,
+        env,
+      });
+      await alphaFetchBlocked;
+
+      const secondPromise = ensureDefaultGlobalSkillsReady({
+        homedir: home,
+        config,
+        plugins: [{ id: "beta" }],
+        fetchImpl,
+        env,
+      });
+      const second = await Promise.race([
+        secondPromise,
+        new Promise<"timed_out">((resolve) => setTimeout(() => resolve("timed_out"), 100)),
+      ]);
+
+      expect(second).not.toBe("timed_out");
+      if (second === "timed_out") {
+        throw new Error("beta bootstrap unexpectedly waited on alpha bootstrap");
+      }
+      expect(second?.installed).toEqual(["beta"]);
+      releaseAlphaFetch?.();
+      const first = await firstPromise;
+      expect(first?.installed).toEqual(["alpha"]);
+      await fs.access(path.join(home, ".cowork", "plugins", "alpha"));
+      await fs.access(path.join(home, ".cowork", "plugins", "beta"));
+    } finally {
+      releaseAlphaFetch?.();
+      defaultGlobalSkillsInternal.resetForTests();
       await fs.rm(home, { recursive: true, force: true });
       await fs.rm(workspace, { recursive: true, force: true });
     }

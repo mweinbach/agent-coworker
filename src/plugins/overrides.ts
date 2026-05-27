@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { getAiCoworkerPaths } from "../connect";
 import type { AgentConfig, PluginCatalogEntry, PluginScope } from "../types";
+import { writeTextFileAtomic } from "../utils/atomicFile";
 import { resolveCoworkHomedir } from "../utils/coworkHome";
 import { nowIso } from "../utils/typeGuards";
 import { canonicalDefaultMarketplacePluginIdForTombstone } from "./remoteMarketplace";
@@ -141,14 +142,8 @@ async function readDocument(filePath: string): Promise<PluginOverrideDocument> {
 }
 
 async function writeDocument(filePath: string, doc: PluginOverrideDocument): Promise<void> {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
   const payload = `${JSON.stringify(doc, null, 2)}\n`;
-  await fs.writeFile(filePath, payload, { encoding: "utf-8", mode: 0o600 });
-  try {
-    await fs.chmod(filePath, 0o600);
-  } catch {
-    // best effort
-  }
+  await writeTextFileAtomic(filePath, payload, { mode: 0o600 });
 }
 
 function pluginOverrideKey(pluginId: string): string {

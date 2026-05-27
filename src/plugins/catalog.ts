@@ -23,7 +23,6 @@ import {
   buildRemoteMarketplaceCatalogEntry,
   fetchRemotePluginMarketplace,
 } from "./remoteMarketplace";
-import { materializePluginSource } from "./sourceResolver";
 
 function resolvePluginScope(config: AgentConfig, pluginRoot: string): PluginScope {
   if (config.workspacePluginsDir && pluginRoot.startsWith(config.workspacePluginsDir)) {
@@ -247,41 +246,7 @@ export async function buildRemoteMarketplacePluginDetail(opts: {
   if (!baseEntry) {
     return null;
   }
-
-  let materialized: Awaited<ReturnType<typeof materializePluginSource>> | null = null;
-  try {
-    materialized = await materializePluginSource({
-      input: baseEntry.installSource,
-      fetchImpl: opts.fetchImpl,
-    });
-    const candidate = materialized.candidates.find((entry) => entry.pluginId === opts.pluginId);
-    if (!candidate || candidate.diagnostics.length > 0) {
-      return {
-        ...baseEntry,
-        warnings: [
-          ...baseEntry.warnings,
-          `Remote marketplace entry "${opts.pluginId}" did not contain a valid plugin bundle with a matching plugin name.`,
-        ],
-      };
-    }
-    const manifest = await readPluginManifest(candidate.rootDir);
-    return {
-      ...baseEntry,
-      displayName: manifest.interface?.displayName ?? baseEntry.displayName,
-      description: manifest.description,
-      ...(manifest.interface ? { interface: manifest.interface } : {}),
-    };
-  } catch (error) {
-    return {
-      ...baseEntry,
-      warnings: [
-        ...baseEntry.warnings,
-        `[plugins] Failed to load remote marketplace entry "${opts.pluginId}": ${String(error)}`,
-      ],
-    };
-  } finally {
-    await materialized?.cleanup();
-  }
+  return baseEntry;
 }
 
 export function resolvePluginCatalogEntry(opts: {

@@ -1,7 +1,7 @@
 import type { PluginCatalogSnapshot, ProviderName, SessionEvent } from "../../lib/wsProtocol";
 import { normalizeWorkspaceProviderOptions } from "../openaiCompatibleProviderOptions";
 import type { StoreGet, StoreSet } from "../store.helpers";
-import type { Notification, SessionSnapshot, ThreadRecord } from "../types";
+import type { Notification, SessionSnapshot, ThreadRecord, WorkspaceRuntime } from "../types";
 import { normalizeWorkspaceUserProfile } from "../types";
 import {
   ensureWorkspaceJsonRpcSocket,
@@ -257,15 +257,14 @@ export function createControlSocketHelpers(
   function resolveClearedPluginInstallWaiter(
     workspaceId: string,
     clearedMutationPendingKeys: readonly string[],
-    get: StoreGet,
+    workspaceRuntimeBefore: WorkspaceRuntime | undefined,
   ) {
     const pluginInstallWaiter = RUNTIME.pluginInstallWaiters.get(workspaceId);
-    const workspaceRuntime = get().workspaceRuntimeById[workspaceId];
     if (
       pluginInstallWaiter &&
-      workspaceRuntime &&
+      workspaceRuntimeBefore &&
       clearedMutationPendingKeys.includes(pluginInstallWaiter.pendingKey) &&
-      workspaceRuntime.pluginMutationPendingKeys[pluginInstallWaiter.pendingKey] !== true
+      workspaceRuntimeBefore.pluginMutationPendingKeys[pluginInstallWaiter.pendingKey] === true
     ) {
       RUNTIME.pluginInstallWaiters.delete(workspaceId);
       pluginInstallWaiter.resolve();
@@ -1109,7 +1108,11 @@ export function createControlSocketHelpers(
         RUNTIME.skillInstallWaiters.delete(workspaceId);
         installWaiter.resolve();
       }
-      resolveClearedPluginInstallWaiter(workspaceId, clearedMutationPendingKeys, get);
+      resolveClearedPluginInstallWaiter(
+        workspaceId,
+        clearedMutationPendingKeys,
+        workspaceRuntimeBefore,
+      );
       return;
     }
 
@@ -1157,7 +1160,11 @@ export function createControlSocketHelpers(
         };
       });
 
-      resolveClearedPluginInstallWaiter(workspaceId, clearedMutationPendingKeys, get);
+      resolveClearedPluginInstallWaiter(
+        workspaceId,
+        clearedMutationPendingKeys,
+        workspaceRuntimeBefore,
+      );
       return;
     }
 

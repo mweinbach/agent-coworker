@@ -843,6 +843,63 @@ describe("control socket helpers over JSON-RPC", () => {
     expect(state.workspaceRuntimeById[workspaceId].pluginMutationError).toBeNull();
   });
 
+  test("requestJsonRpcControlEvent keeps plugin install waiters when the cleared key was not pending", async () => {
+    const workspaceId = "ws-plugin-install-stray-clear";
+    const { get, set } = createState(workspaceId, {
+      workspaceRuntimeById: {
+        [workspaceId]: {
+          ...defaultWorkspaceRuntime(),
+          serverUrl: "ws://mock",
+          pluginMutationPendingKeys: {},
+        },
+      },
+    });
+
+    let waiterResolved = false;
+    const installWaiter = Promise.withResolvers<void>();
+    installWaiter.promise.then(() => {
+      waiterResolved = true;
+    });
+    RUNTIME.pluginInstallWaiters.set(workspaceId, {
+      pendingKey: "plugin:install:workspace",
+      resolve: installWaiter.resolve,
+      reject: installWaiter.reject,
+    });
+
+    installFakeSocket(workspaceId, async (method) => {
+      expect(method).toBe("cowork/plugins/install");
+      return {
+        event: {
+          type: "skills_catalog",
+          sessionId: "jsonrpc-control",
+          mutationBlocked: false,
+          clearedMutationPendingKeys: ["plugin:install:workspace"],
+          catalog: {
+            installations: [],
+            bundled: [],
+            warnings: [],
+          },
+        },
+      };
+    });
+
+    const helpers = createControlSocketHelpers(deps);
+    const ok = await helpers.requestJsonRpcControlEvent(
+      get as any,
+      set as any,
+      workspaceId,
+      "cowork/plugins/install",
+      { cwd: "/tmp/workspace", sourceInput: "owner/repo", targetScope: "workspace" },
+    );
+
+    await flushAsyncWork();
+
+    expect(ok).toBe(true);
+    expect(waiterResolved).toBe(false);
+    expect(RUNTIME.pluginInstallWaiters.has(workspaceId)).toBe(true);
+    RUNTIME.pluginInstallWaiters.delete(workspaceId);
+  });
+
   test("requestJsonRpcControlEvent applies error events and rejects pending install waiters", async () => {
     const workspaceId = "ws-error";
     const { state, get, set } = createState(workspaceId, {

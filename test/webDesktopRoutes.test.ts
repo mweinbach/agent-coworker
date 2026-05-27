@@ -19,6 +19,17 @@ async function readJson(response: Response): Promise<unknown> {
   return JSON.parse(await response.text());
 }
 
+async function waitForCondition(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (predicate()) {
+      return;
+    }
+    await Bun.sleep(10);
+  }
+  throw new Error("Timed out waiting for condition");
+}
+
 function createMockWorkspaceChild() {
   return Object.assign(new EventEmitter(), {
     stdout: new PassThrough(),
@@ -187,6 +198,72 @@ describe("web desktop routes", () => {
       expect(changeCount).toBe(1);
     } finally {
       dispose();
+      await service.stopAll();
+    }
+  });
+
+  test("desktop service shares and tears down debounced state file watchers", async () => {
+    const userDataDir = await makeTempDir("cowork-web-desktop-shared-watch-userdata-");
+    const service = new WebDesktopService({ userDataDir });
+    const serviceInternals = service as unknown as { stateWatcher: unknown | null };
+    let firstListenerCount = 0;
+    let secondListenerCount = 0;
+
+    const disposeFirst = service.watchStateChanges(() => {
+      firstListenerCount += 1;
+    });
+    const firstWatcher = serviceInternals.stateWatcher;
+    const disposeSecond = service.watchStateChanges(() => {
+      secondListenerCount += 1;
+    });
+
+    try {
+      expect(firstWatcher).not.toBeNull();
+      expect(serviceInternals.stateWatcher).toBe(firstWatcher);
+
+      await fs.writeFile(path.join(userDataDir, "other.txt"), "ignore me", "utf8");
+      await Bun.sleep(75);
+      expect(firstListenerCount).toBe(0);
+      expect(secondListenerCount).toBe(0);
+
+      await fs.writeFile(
+        path.join(userDataDir, "state.json"),
+        JSON.stringify({ version: 2, workspaces: [], threads: [] }),
+        "utf8",
+      );
+      await waitForCondition(() => firstListenerCount === 1 && secondListenerCount === 1);
+
+      await fs.writeFile(
+        path.join(userDataDir, "state.json"),
+        JSON.stringify({ version: 2, workspaces: [], threads: [], developerMode: true }),
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(userDataDir, "state.json"),
+        JSON.stringify({ version: 2, workspaces: [], threads: [], showHiddenFiles: true }),
+        "utf8",
+      );
+      await waitForCondition(() => firstListenerCount === 2 && secondListenerCount === 2);
+      await Bun.sleep(75);
+      expect(firstListenerCount).toBe(2);
+      expect(secondListenerCount).toBe(2);
+
+      disposeFirst();
+      expect(serviceInternals.stateWatcher).toBe(firstWatcher);
+      disposeSecond();
+      expect(serviceInternals.stateWatcher).toBeNull();
+
+      await fs.writeFile(
+        path.join(userDataDir, "state.json"),
+        JSON.stringify({ version: 2, workspaces: [], threads: [], perWorkspaceSettings: true }),
+        "utf8",
+      );
+      await Bun.sleep(75);
+      expect(firstListenerCount).toBe(2);
+      expect(secondListenerCount).toBe(2);
+    } finally {
+      disposeFirst();
+      disposeSecond();
       await service.stopAll();
     }
   });

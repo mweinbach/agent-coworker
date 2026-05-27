@@ -291,7 +291,6 @@ export function createPluginActions(
       const cwd = workspacePathFor(get, workspaceId);
       const key = pluginPendingKey(`install:${targetScope}`);
       setMutationPending(set, workspaceId, "plugin", key, {
-        pluginsLoading: true,
         pluginsError: null,
       });
       const existing = RUNTIME.pluginInstallWaiters.get(workspaceId);

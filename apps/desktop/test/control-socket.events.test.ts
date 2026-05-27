@@ -1010,6 +1010,8 @@ describe("control socket helpers over JSON-RPC", () => {
       "plugin install failed on disk",
     );
     expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBeNull();
-    expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBeNull();
+    expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBe(
+      "plugin install failed on disk",
+    );
   });
 });

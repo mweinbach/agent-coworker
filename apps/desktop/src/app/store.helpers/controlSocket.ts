@@ -1495,7 +1495,7 @@ export function createControlSocketHelpers(
                     skillCatalogError: evt.message,
                   }
                 : {}),
-              ...(workspaceRuntime.pluginsLoading && !hasPendingPluginMutation
+              ...(workspaceRuntime.pluginsLoading
                 ? {
                     pluginsLoading: false,
                     pluginsError: evt.message,

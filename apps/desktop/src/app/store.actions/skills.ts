@@ -298,21 +298,17 @@ export function createSkillActions(
       const workspaceId = managementWorkspaceId();
       if (!workspaceId) return;
       const cwd = workspacePath(workspaceId);
+      const key = mutationPendingKey("disable", skillName);
+      setMutationPending(set, workspaceId, "skill", key);
       const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/disable", {
         cwd,
         skillName,
       });
       if (!ok) {
         const detail = "Unable to disable skill.";
-        clearFailedMutationSend(
-          set,
-          workspaceId,
-          mutationPendingKey("disable", skillName),
-          detail,
-          {
-            skillMutationError: detail,
-          },
-        );
+        clearFailedMutationSend(set, workspaceId, key, detail, {
+          skillMutationError: detail,
+        });
       }
     },
 
@@ -320,13 +316,15 @@ export function createSkillActions(
       const workspaceId = managementWorkspaceId();
       if (!workspaceId) return;
       const cwd = workspacePath(workspaceId);
+      const key = mutationPendingKey("enable", skillName);
+      setMutationPending(set, workspaceId, "skill", key);
       const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/enable", {
         cwd,
         skillName,
       });
       if (!ok) {
         const detail = "Unable to enable skill.";
-        clearFailedMutationSend(set, workspaceId, mutationPendingKey("enable", skillName), detail, {
+        clearFailedMutationSend(set, workspaceId, key, detail, {
           skillMutationError: detail,
         });
       }
@@ -336,13 +334,15 @@ export function createSkillActions(
       const workspaceId = managementWorkspaceId();
       if (!workspaceId) return;
       const cwd = workspacePath(workspaceId);
+      const key = mutationPendingKey("delete", skillName);
+      setMutationPending(set, workspaceId, "skill", key);
       const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/delete", {
         cwd,
         skillName,
       });
       if (!ok) {
         const detail = "Unable to delete skill.";
-        clearFailedMutationSend(set, workspaceId, mutationPendingKey("delete", skillName), detail, {
+        clearFailedMutationSend(set, workspaceId, key, detail, {
           skillMutationError: detail,
         });
       }

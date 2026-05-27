@@ -21,6 +21,16 @@ const failedSkillMutationActions = [
     invoke: (actions: ReturnType<typeof createSkillActions>) => actions.deleteSkill("skill-1"),
   },
   {
+    name: "disableSkill",
+    expectedError: "Unable to disable skill.",
+    invoke: (actions: ReturnType<typeof createSkillActions>) => actions.disableSkill("skill-1"),
+  },
+  {
+    name: "enableSkill",
+    expectedError: "Unable to enable skill.",
+    invoke: (actions: ReturnType<typeof createSkillActions>) => actions.enableSkill("skill-1"),
+  },
+  {
     name: "disableSkillInstallation",
     expectedError: null,
     invoke: (actions: ReturnType<typeof createSkillActions>) =>
@@ -49,6 +59,27 @@ const failedSkillMutationActions = [
     expectedError: null,
     invoke: (actions: ReturnType<typeof createSkillActions>) =>
       actions.updateSkillInstallation("inst-1"),
+  },
+] as const;
+
+const rootSkillMutationActions = [
+  {
+    name: "deleteSkill",
+    method: "cowork/skills/delete",
+    pendingKey: "delete:skill-1",
+    invoke: (actions: ReturnType<typeof createSkillActions>) => actions.deleteSkill("skill-1"),
+  },
+  {
+    name: "disableSkill",
+    method: "cowork/skills/disable",
+    pendingKey: "disable:skill-1",
+    invoke: (actions: ReturnType<typeof createSkillActions>) => actions.disableSkill("skill-1"),
+  },
+  {
+    name: "enableSkill",
+    method: "cowork/skills/enable",
+    pendingKey: "enable:skill-1",
+    invoke: (actions: ReturnType<typeof createSkillActions>) => actions.enableSkill("skill-1"),
   },
 ] as const;
 
@@ -412,6 +443,34 @@ describe("skill store actions", () => {
       expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBe(expectedError);
       expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBeNull();
       expect(state.notifications).toHaveLength(1);
+    });
+  }
+
+  for (const { name, method, pendingKey, invoke } of rootSkillMutationActions) {
+    test(`${name} registers its pending key before sending`, async () => {
+      const state = createState();
+      state.workspaceRuntimeById[workspaceId].serverUrl = "ws://mock";
+      state.workspaceRuntimeById[workspaceId].controlSessionId = "jsonrpc-control";
+      state.workspaces = [{ id: workspaceId, path: "/tmp/workspace" }];
+      const { get, set } = createStoreHarness(state);
+      let pendingAtRequest = false;
+
+      RUNTIME.jsonRpcSockets.set(workspaceId, {
+        readyPromise: Promise.resolve(),
+        request: async (receivedMethod: string) => {
+          expect(receivedMethod).toBe(method);
+          pendingAtRequest =
+            state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys[pendingKey] === true;
+          throw new Error("request failed");
+        },
+        respond: () => true,
+        close: () => {},
+      } as unknown as JsonRpcSocket);
+
+      await invoke(createSkillActions(set, get));
+
+      expect(pendingAtRequest).toBe(true);
+      expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({});
     });
   }
 });

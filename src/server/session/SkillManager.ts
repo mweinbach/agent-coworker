@@ -486,7 +486,7 @@ export class SkillManager {
           ],
           refreshAllWorkspaces: this.isSharedPluginMutationScope(targetScope),
         });
-        await this.pluginCatalogService.emitPluginDetail(result.pluginIds[0] ?? "", targetScope);
+        await this.pluginCatalogService.emitPluginDetail(result.pluginId, targetScope);
       } catch (err) {
         this.context.emitError(
           "internal_error",

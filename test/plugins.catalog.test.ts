@@ -770,7 +770,7 @@ describe("plugin catalog and install operations", () => {
         input: sourceRoot,
         targetScope: "workspace",
       });
-      expect(result.pluginIds).toEqual(["skill-only"]);
+      expect(result.pluginId).toBe("skill-only");
 
       const mcpRegistry = await loadMCPConfigRegistry(config);
       expect(mcpRegistry.servers).toEqual([]);
@@ -801,7 +801,7 @@ describe("plugin catalog and install operations", () => {
         targetScope: "workspace",
       });
 
-      expect(result.pluginIds).toEqual(["figma-toolkit"]);
+      expect(result.pluginId).toBe("figma-toolkit");
       const installedPluginPath = path.join(
         workspace,
         ".agents",

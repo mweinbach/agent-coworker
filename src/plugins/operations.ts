@@ -30,10 +30,10 @@ import {
 } from "./remoteMarketplace";
 import {
   buildPluginInstallPreview,
-  type MaterializedPluginCandidate,
   type MaterializedPluginSource,
   materializePluginSource,
   resolvePluginSource,
+  selectSingleValidPluginCandidate,
 } from "./sourceResolver";
 
 type WritablePluginScopePaths = {
@@ -199,24 +199,6 @@ async function refreshCatalog(config: AgentConfig): Promise<PluginCatalogSnapsho
   return await buildPluginCatalogSnapshot(config);
 }
 
-function validateInstallCandidates(validCandidates: MaterializedPluginCandidate[]): void {
-  if (validCandidates.length > 1) {
-    throw new Error(
-      "The install source contains more than one valid plugin bundle. Install one plugin at a time so failures cannot leave a partially applied plugin set.",
-    );
-  }
-
-  const seenIds = new Set<string>();
-  for (const candidate of validCandidates) {
-    if (seenIds.has(candidate.pluginId)) {
-      throw new Error(
-        `The install source contains more than one valid plugin named "${candidate.pluginId}". Split the source or remove duplicates so each plugin id is unique.`,
-      );
-    }
-    seenIds.add(candidate.pluginId);
-  }
-}
-
 async function readBundledPluginMcpServers(pluginRoot: string): Promise<MCPServerConfig[]> {
   try {
     const manifest = await readPluginManifest(pluginRoot);
@@ -350,7 +332,7 @@ export async function installPluginsFromSource(opts: {
   marketplaceMetadataByPluginId?: ReadonlyMap<string, PluginMarketplaceInstallMetadata>;
 }): Promise<{
   preview: PluginInstallPreview;
-  pluginIds: string[];
+  pluginId: string;
   catalog: PluginCatalogSnapshot;
 }> {
   const currentCatalog = await buildPluginCatalogSnapshot(opts.config, {
@@ -379,61 +361,49 @@ export async function installPluginsFromSource(opts: {
         materialized,
         fetchImpl: opts.fetchImpl,
       }));
-    const validCandidates = materialized.candidates.filter(
-      (candidate) => candidate.diagnostics.length === 0,
-    );
-    if (validCandidates.length === 0) {
-      throw new Error("No valid plugin bundles were found in the provided source");
-    }
-
-    validateInstallCandidates(validCandidates);
-
-    const installedPluginIds: string[] = [];
-    for (const candidate of validCandidates) {
-      const destinationRoot = path.join(writableScope.pluginsDir, candidate.pluginId);
-      const targetRoots = conflictingTargetRoots(currentCatalog, writableScope, candidate.pluginId);
-      const existingInstallRoot = await findExistingInstallRoot(destinationRoot, targetRoots);
-      const previousServers = existingInstallRoot
-        ? await readBundledPluginMcpServers(existingInstallRoot)
-        : [];
-      const stagedSource = await stageCopySourceIfNeeded(candidate.rootDir, targetRoots);
-      try {
-        await replacePluginInstallRoot({
-          sourceRoot: stagedSource.sourceRoot,
-          destinationRoot,
-          conflictingRoots: targetRoots,
-          onInstalled: async () => {
-            const marketplaceMetadata = marketplaceMetadataByPluginId.get(candidate.pluginId);
-            if (marketplaceMetadata) {
-              await writePluginInstallMetadata(destinationRoot, {
-                marketplace: marketplaceMetadata,
-              });
-            } else {
-              await clearPluginInstallMetadata(destinationRoot);
-            }
-            await migrateBundledPluginMcpCredentials({
-              config: opts.config,
-              targetScope: opts.targetScope,
-              previousServers,
-              nextServers: await readBundledPluginMcpServers(destinationRoot),
+    const candidate = selectSingleValidPluginCandidate(materialized.candidates);
+    const destinationRoot = path.join(writableScope.pluginsDir, candidate.pluginId);
+    const targetRoots = conflictingTargetRoots(currentCatalog, writableScope, candidate.pluginId);
+    const existingInstallRoot = await findExistingInstallRoot(destinationRoot, targetRoots);
+    const previousServers = existingInstallRoot
+      ? await readBundledPluginMcpServers(existingInstallRoot)
+      : [];
+    const stagedSource = await stageCopySourceIfNeeded(candidate.rootDir, targetRoots);
+    try {
+      await replacePluginInstallRoot({
+        sourceRoot: stagedSource.sourceRoot,
+        destinationRoot,
+        conflictingRoots: targetRoots,
+        onInstalled: async () => {
+          const marketplaceMetadata = marketplaceMetadataByPluginId.get(candidate.pluginId);
+          if (marketplaceMetadata) {
+            await writePluginInstallMetadata(destinationRoot, {
+              marketplace: marketplaceMetadata,
             });
-            await setDefaultPluginRemoved({
-              config: opts.config,
-              pluginId: candidate.pluginId,
-              scope: opts.targetScope,
-              removed: false,
-            });
-          },
-        });
-      } finally {
-        await stagedSource.cleanup();
-      }
-      installedPluginIds.push(candidate.pluginId);
+          } else {
+            await clearPluginInstallMetadata(destinationRoot);
+          }
+          await migrateBundledPluginMcpCredentials({
+            config: opts.config,
+            targetScope: opts.targetScope,
+            previousServers,
+            nextServers: await readBundledPluginMcpServers(destinationRoot),
+          });
+          await setDefaultPluginRemoved({
+            config: opts.config,
+            pluginId: candidate.pluginId,
+            scope: opts.targetScope,
+            removed: false,
+          });
+        },
+      });
+    } finally {
+      await stagedSource.cleanup();
     }
 
     return {
       preview,
-      pluginIds: installedPluginIds,
+      pluginId: candidate.pluginId,
       catalog: await refreshCatalog(opts.config),
     };
   } finally {

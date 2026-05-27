@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { buildPluginInstallPreview } from "../src/plugins/sourceResolver";
+import {
+  buildPluginInstallPreview,
+  MULTIPLE_VALID_PLUGIN_BUNDLES_MESSAGE,
+} from "../src/plugins/sourceResolver";
 import type { PluginCatalogSnapshot } from "../src/types";
 
 const emptyCatalog: PluginCatalogSnapshot = {
@@ -413,7 +416,7 @@ describe("plugin local source materialization", () => {
         cwd: workspace,
       });
 
-      expect(preview.warnings).toEqual([]);
+      expect(preview.warnings).toEqual([MULTIPLE_VALID_PLUGIN_BUNDLES_MESSAGE]);
       expect(preview.candidates.map((candidate) => candidate.pluginId)).toEqual([
         "outer-plugin",
         "inner-plugin",

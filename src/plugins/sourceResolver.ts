@@ -38,6 +38,30 @@ export type MaterializedPluginSource = {
   cleanup: () => Promise<void>;
 };
 
+export const NO_VALID_PLUGIN_BUNDLES_MESSAGE =
+  "No valid plugin bundles were found in the provided source";
+export const MULTIPLE_VALID_PLUGIN_BUNDLES_MESSAGE =
+  "The install source contains more than one valid plugin bundle. Install one plugin at a time so failures cannot leave a partially applied plugin set.";
+
+export function validPluginCandidates(
+  candidates: readonly MaterializedPluginCandidate[],
+): MaterializedPluginCandidate[] {
+  return candidates.filter((candidate) => candidate.diagnostics.length === 0);
+}
+
+export function selectSingleValidPluginCandidate(
+  candidates: readonly MaterializedPluginCandidate[],
+): MaterializedPluginCandidate {
+  const validCandidates = validPluginCandidates(candidates);
+  if (validCandidates.length === 0) {
+    throw new Error(NO_VALID_PLUGIN_BUNDLES_MESSAGE);
+  }
+  if (validCandidates.length > 1) {
+    throw new Error(MULTIPLE_VALID_PLUGIN_BUNDLES_MESSAGE);
+  }
+  return validCandidates[0];
+}
+
 function isPluginManifestGitHubInput(input: string): boolean {
   return /(?:^|\/)\.(?:cowork|codex)-plugin\/plugin\.json(?:$|[?#])/.test(input);
 }
@@ -346,9 +370,12 @@ export async function buildPluginInstallPreview(opts: {
     const candidates = materialized.candidates.map((candidate) =>
       buildPreviewCandidate(candidate, opts.targetScope, opts.catalog),
     );
+    const validCandidates = candidates.filter((candidate) => candidate.diagnostics.length === 0);
     const warnings: string[] = [];
-    if (candidates.every((candidate) => candidate.diagnostics.length > 0)) {
-      warnings.push("No valid plugin bundles were found in the provided source.");
+    if (validCandidates.length === 0) {
+      warnings.push(`${NO_VALID_PLUGIN_BUNDLES_MESSAGE}.`);
+    } else if (validCandidates.length > 1) {
+      warnings.push(MULTIPLE_VALID_PLUGIN_BUNDLES_MESSAGE);
     }
 
     return {

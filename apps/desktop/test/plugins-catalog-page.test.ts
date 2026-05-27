@@ -534,6 +534,29 @@ describe("plugins catalog page", () => {
         pluginInstallInFlight: false,
       }),
     ).toBe(false);
+
+    const multiPluginPreview = {
+      ...validPreview,
+      candidates: [
+        validPreview.candidates[0],
+        {
+          ...validPreview.candidates[0],
+          pluginId: "second-plugin",
+          displayName: "Second Plugin",
+        },
+      ],
+    };
+
+    expect(
+      shouldDisablePluginInstallForScope({
+        normalizedSourceInput: "owner/repo",
+        lastPreviewSourceInput: "owner/repo",
+        lastPreviewTargetScope: "workspace",
+        pluginPreview: multiPluginPreview,
+        targetScope: "workspace",
+        pluginInstallInFlight: false,
+      }),
+    ).toBe(true);
   });
 
   test("renders enabled and disabled plugin sections with counts", async () => {

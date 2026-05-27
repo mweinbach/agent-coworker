@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { jsonRpcControlResultSchemas as mobileJsonRpcControlResultSchemas } from "../apps/mobile/src/cowork-shared/jsonrpcControlSchemas";
 import {
   jsonRpcAgentNotificationSchemas,
   jsonRpcAgentRequestSchemas,
@@ -8,7 +9,6 @@ import {
   jsonRpcControlRequestSchemas,
   jsonRpcControlResultSchemas,
 } from "../src/shared/jsonrpcControlSchemas";
-import { jsonRpcControlResultSchemas as mobileJsonRpcControlResultSchemas } from "../apps/mobile/src/cowork-shared/jsonrpcControlSchemas";
 
 describe("shared JSON-RPC control schemas", () => {
   test("parses provider auth and status envelopes", () => {

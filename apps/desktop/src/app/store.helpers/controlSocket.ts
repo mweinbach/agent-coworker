@@ -406,6 +406,9 @@ export function createControlSocketHelpers(
     for (const workspaceId of RUNTIME.skillInstallWaiters.keys()) {
       workspaceIds.add(workspaceId);
     }
+    for (const workspaceId of RUNTIME.pluginInstallWaiters.keys()) {
+      workspaceIds.add(workspaceId);
+    }
     return [...workspaceIds];
   }
 

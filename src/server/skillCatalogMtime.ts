@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { pluginManifestPathsForPluginRoot } from "../plugins";
+import { pluginManifestPathsForPluginRoot, readPluginManifest } from "../plugins";
 import { getSkillScopeDescriptors } from "../skills/catalog";
 import { manifestPathForSkillRoot } from "../skills/manifest";
 import type { AgentConfig } from "../types";
@@ -48,11 +48,22 @@ async function addPluginPaths(paths: Set<string>, pluginsDir: string): Promise<v
     paths.add(path.join(pluginRoot, ".mcp.json"));
     paths.add(path.join(pluginRoot, ".app.json"));
 
-    const defaultSkillsDir = path.join(pluginRoot, "skills");
-    paths.add(defaultSkillsDir);
-    for (const skillRoot of await listChildPaths(defaultSkillsDir)) {
-      paths.add(skillRoot);
-      paths.add(path.join(skillRoot, "SKILL.md"));
+    const skillsDirs = new Set([path.join(pluginRoot, "skills")]);
+    try {
+      const manifest = await readPluginManifest(pluginRoot);
+      for (const skillsPath of manifest.skillsPaths) {
+        skillsDirs.add(skillsPath);
+      }
+    } catch {
+      // Invalid or incomplete plugins still keep the default-path watch entries above.
+    }
+
+    for (const skillsDir of skillsDirs) {
+      paths.add(skillsDir);
+      for (const skillRoot of await listChildPaths(skillsDir)) {
+        paths.add(skillRoot);
+        paths.add(path.join(skillRoot, "SKILL.md"));
+      }
     }
   }
 }

@@ -15,6 +15,7 @@ import { workspacePathOverlaps } from "../utils/workspacePath";
 import { buildPluginCatalogSnapshot } from "./catalog";
 import {
   clearPluginInstallMetadata,
+  readPluginInstallMetadata,
   readPluginManifest,
   writePluginInstallMetadata,
 } from "./manifest";
@@ -24,6 +25,7 @@ import {
   BUILT_IN_MARKETPLACE_REPO,
   canonicalDefaultMarketplacePluginIdForTombstone,
   fetchMarketplaceInstallMetadataBySourceInput,
+  isBuiltInMarketplaceSourceInput,
   type PluginMarketplaceInstallMetadata,
 } from "./remoteMarketplace";
 import {
@@ -439,18 +441,44 @@ export async function installPluginsFromSource(opts: {
   }
 }
 
+async function defaultPluginTombstoneIdForDeletedPlugin(
+  plugin: InstalledPluginCatalogEntry,
+): Promise<string | null> {
+  const defaultPluginId = canonicalDefaultMarketplacePluginIdForTombstone(plugin.id);
+  if (!defaultPluginId || plugin.scope !== "user") return null;
+
+  const installMetadata = await readPluginInstallMetadata(plugin.rootDir);
+  const bootstrapPluginId = installMetadata?.bootstrap?.pluginId ?? plugin.id;
+  if (
+    installMetadata?.bootstrap &&
+    canonicalDefaultMarketplacePluginIdForTombstone(bootstrapPluginId) === defaultPluginId
+  ) {
+    return defaultPluginId;
+  }
+
+  const marketplaceSourceInput = installMetadata?.marketplace?.sourceInput ?? plugin.installSource;
+  if (
+    plugin.discoveryKind === "marketplace" &&
+    isBuiltInMarketplaceSourceInput(marketplaceSourceInput)
+  ) {
+    return defaultPluginId;
+  }
+
+  return null;
+}
+
 export async function deletePluginInstallation(opts: {
   config: AgentConfig;
   plugin: InstalledPluginCatalogEntry;
 }): Promise<PluginCatalogSnapshot> {
+  const removedDefaultPluginId = await defaultPluginTombstoneIdForDeletedPlugin(opts.plugin);
   await fs.rm(opts.plugin.rootDir, { recursive: true, force: true });
   await clearPluginEnabledOverride({
     config: opts.config,
     pluginId: opts.plugin.id,
     scope: opts.plugin.scope,
   });
-  const removedDefaultPluginId = canonicalDefaultMarketplacePluginIdForTombstone(opts.plugin.id);
-  if (opts.plugin.scope === "user" && removedDefaultPluginId) {
+  if (removedDefaultPluginId) {
     await setDefaultPluginRemoved({
       config: opts.config,
       pluginId: removedDefaultPluginId,

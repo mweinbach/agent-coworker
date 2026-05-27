@@ -29,6 +29,14 @@ export function canonicalDefaultMarketplacePluginIdForTombstone(
   return null;
 }
 
+export function isBuiltInMarketplaceSourceInput(input: string | undefined): boolean {
+  if (!input) return false;
+  const normalized = normalizeInstallSourceInput(input);
+  return (
+    normalized === BUILT_IN_MARKETPLACE_URL || normalized.startsWith(`${BUILT_IN_MARKETPLACE_URL}/`)
+  );
+}
+
 export type PluginMarketplaceInstallMetadata = NonNullable<PluginInstallMetadata["marketplace"]>;
 
 export type RemotePluginMarketplaceOptions = {

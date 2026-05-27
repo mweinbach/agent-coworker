@@ -86,6 +86,7 @@ async function writePlugin(
   displayName: string,
   description = "Plugin helpers",
   mcpServerName = "figma",
+  pluginId = "figma-toolkit",
 ) {
   await fs.mkdir(path.join(rootDir, ".codex-plugin"), { recursive: true });
   await fs.mkdir(path.join(rootDir, "skills", "import-frame"), { recursive: true });
@@ -93,7 +94,7 @@ async function writePlugin(
     path.join(rootDir, ".codex-plugin", "plugin.json"),
     `${JSON.stringify(
       {
-        name: "figma-toolkit",
+        name: pluginId,
         description,
         interface: { displayName },
       },
@@ -652,6 +653,64 @@ describe("plugin catalog and install operations", () => {
       };
       expect(overrides.plugins?.["figma-toolkit"]).toBeUndefined();
       expect(overrides.removedDefaultPlugins?.["figma-toolkit"]).toBeUndefined();
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  test("deletePluginInstallation does not tombstone direct plugins with legacy default ids", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-delete-legacy-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-delete-legacy-home-"));
+    const builtInConfigDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-delete-legacy-builtin-"),
+    );
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      if (!config.userPluginsDir) {
+        throw new Error("Expected user plugin directory");
+      }
+      await Promise.all([
+        writePlugin(
+          path.join(config.userPluginsDir, "documents"),
+          "User Documents",
+          "Custom documents plugin",
+          "documents-server",
+          "documents",
+        ),
+        writePlugin(
+          path.join(config.userPluginsDir, "workspace-tools"),
+          "User Workspace Tools",
+          "Custom workspace tools plugin",
+          "workspace-tools-server",
+          "workspace-tools",
+        ),
+      ]);
+      const initial = await buildPluginCatalogSnapshot(config);
+      const documentsPlugin = initial.plugins.find((plugin) => plugin.id === "documents");
+      const workspaceToolsPlugin = initial.plugins.find(
+        (plugin) => plugin.id === "workspace-tools",
+      );
+      if (!documentsPlugin || !workspaceToolsPlugin) {
+        throw new Error("Expected installed plugins");
+      }
+      expect(documentsPlugin.discoveryKind).toBe("direct");
+      expect(workspaceToolsPlugin.discoveryKind).toBe("direct");
+
+      await deletePluginInstallation({ config, plugin: documentsPlugin });
+      await deletePluginInstallation({ config, plugin: workspaceToolsPlugin });
+
+      const overrides = JSON.parse(
+        await fs.readFile(path.join(home, ".cowork", "config", "plugins.json"), "utf-8"),
+      ) as {
+        plugins?: Record<string, boolean>;
+        removedDefaultPlugins?: Record<string, boolean>;
+      };
+      expect(overrides.plugins?.documents).toBeUndefined();
+      expect(overrides.removedDefaultPlugins?.documents).toBeUndefined();
+      expect(overrides.removedDefaultPlugins?.["workspace-tools"]).toBeUndefined();
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
       await fs.rm(home, { recursive: true, force: true });

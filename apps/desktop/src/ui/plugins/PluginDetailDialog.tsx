@@ -257,7 +257,7 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
                   >
                     {disablePending ? "Disabling..." : "Disable Plugin"}
                   </Button>
-                ) : (
+                ) : installedPlugin ? (
                   <Button
                     variant="outline"
                     size="sm"
@@ -266,7 +266,7 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
                   >
                     {enablePending ? "Enabling..." : "Enable Plugin"}
                   </Button>
-                )}
+                ) : null}
                 {installedPlugin?.installSource ? (
                   <Button
                     variant="outline"

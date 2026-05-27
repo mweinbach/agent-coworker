@@ -282,6 +282,67 @@ describe("plugin detail dialog", () => {
     }
   });
 
+  test("does not show enable or disable actions for non-installable marketplace details", async () => {
+    const previousState = useAppStore.getState();
+
+    useAppStore.setState({
+      ...previousState,
+      workspaceRuntimeById: {
+        ...previousState.workspaceRuntimeById,
+        "ws-1": {
+          ...defaultWorkspaceRuntime(),
+          selectedPluginId: "catalog-only",
+          selectedPluginScope: "user",
+          selectedPlugin: {
+            id: "catalog-only",
+            name: "catalog-only",
+            displayName: "Catalog Only",
+            description: "Metadata is visible, but there is no installable source.",
+            scope: "user",
+            discoveryKind: "marketplace",
+            installed: false,
+            enabled: false,
+            marketplace: {
+              name: "catalog-only",
+              displayName: "Catalog Only",
+              category: "Productivity",
+            },
+            warnings: [],
+          },
+        },
+      },
+    } as any);
+
+    const harness = setupJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(PluginDetailDialog, { workspaceId: "ws-1" }));
+      });
+
+      const pageText = harness.dom.window.document.body.textContent ?? "";
+      expect(pageText).toContain("Catalog Only");
+      expect(pageText).not.toContain("Install Plugin");
+      expect(pageText).not.toContain("Enable Plugin");
+      expect(pageText).not.toContain("Disable Plugin");
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      useAppStore.setState(previousState);
+      harness.restore();
+    }
+  });
+
   test("shows loading state for scope-less plugin detail selections", async () => {
     const previousState = useAppStore.getState();
 

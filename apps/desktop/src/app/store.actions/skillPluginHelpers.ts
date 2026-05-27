@@ -106,13 +106,11 @@ export function clearFailedMutationSend(
   domain: MutationDomain = "skill",
 ): void {
   const pendingField = mutationPendingField(domain);
-  const errorField = mutationErrorField(domain);
   set((s) => ({
     workspaceRuntimeById: {
       ...s.workspaceRuntimeById,
       [workspaceId]: {
         ...s.workspaceRuntimeById[workspaceId],
-        [errorField]: detail,
         [pendingField]: (() => {
           const pendingKeys = { ...s.workspaceRuntimeById[workspaceId][pendingField] };
           delete pendingKeys[key];

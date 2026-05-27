@@ -578,6 +578,62 @@ describe("plugin store actions", () => {
     expect(state.notifications.at(-1)?.detail).toBe("Plugin is already disabled.");
   });
 
+  test("deletePlugin keeps the selected plugin visible when the server returns an error", async () => {
+    const state = createState();
+    const selectedPlugin = {
+      id: "plugin-1",
+      name: "plugin-1",
+      displayName: "Plugin One",
+      description: "Plugin",
+      scope: "workspace" as const,
+      discoveryKind: "direct" as const,
+      installed: true as const,
+      enabled: true,
+      rootDir: "/tmp/workspace/.cowork/plugins/plugin-1",
+      manifestPath: "/tmp/workspace/.cowork/plugins/plugin-1/.cowork-plugin/plugin.json",
+      skillsPath: "/tmp/workspace/.cowork/plugins/plugin-1/skills",
+      skills: [],
+      mcpServers: [],
+      apps: [],
+      warnings: [],
+    };
+    state.workspaceRuntimeById[workspaceId] = {
+      ...defaultWorkspaceRuntime(),
+      serverUrl: "ws://mock",
+      controlSessionId: "jsonrpc-control",
+      selectedPluginId: "plugin-1",
+      selectedPluginScope: "workspace",
+      selectedPlugin,
+    };
+    state.workspaces = [{ id: workspaceId, path: "/tmp/workspace" }];
+    const { get, set } = createStoreHarness(state);
+
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      readyPromise: Promise.resolve(),
+      request: async () => ({
+        event: {
+          type: "error",
+          sessionId: "jsonrpc-control",
+          message: "Plugin cannot be deleted while it is enabled.",
+          code: "validation_failed",
+          source: "session",
+        },
+      }),
+      respond: () => true,
+      close: () => {},
+    } as unknown as JsonRpcSocket);
+
+    await createPluginActions(set, get).deletePlugin("plugin-1", "workspace");
+
+    expect(state.workspaceRuntimeById[workspaceId].selectedPluginId).toBe("plugin-1");
+    expect(state.workspaceRuntimeById[workspaceId].selectedPluginScope).toBe("workspace");
+    expect(state.workspaceRuntimeById[workspaceId].selectedPlugin).toEqual(selectedPlugin);
+    expect(state.workspaceRuntimeById[workspaceId].pluginMutationError).toBe(
+      "Plugin cannot be deleted while it is enabled.",
+    );
+    expect(state.workspaceRuntimeById[workspaceId].pluginMutationPendingKeys).toEqual({});
+  });
+
   test("plugin mutations resolve ambiguous scopes before sending requests", async () => {
     const state = createState();
     state.workspaceRuntimeById[workspaceId] = {

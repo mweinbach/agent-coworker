@@ -82,24 +82,8 @@ export function createPluginActions(
     return matches[0] ?? null;
   };
 
-  const clearPluginMutationPending = (
-    workspaceId: string,
-    key: string,
-    opts: { clearSelection?: boolean } = {},
-  ) => {
-    clearMutationPending(
-      set,
-      workspaceId,
-      "plugin",
-      key,
-      opts.clearSelection
-        ? {
-            selectedPlugin: null,
-            selectedPluginId: null,
-            selectedPluginScope: null,
-          }
-        : undefined,
-    );
+  const clearPluginMutationPending = (workspaceId: string, key: string) => {
+    clearMutationPending(set, workspaceId, "plugin", key);
   };
 
   const runPluginMutation = async (
@@ -142,7 +126,7 @@ export function createPluginActions(
       return;
     }
 
-    clearPluginMutationPending(workspaceId, key, { clearSelection: action === "delete" });
+    clearPluginMutationPending(workspaceId, key);
     if (pluginScope === "user") {
       await refreshSharedWorkspaceState(get, set, workspaceId);
     }

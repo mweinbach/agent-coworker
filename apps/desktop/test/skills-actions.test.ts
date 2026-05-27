@@ -22,31 +22,31 @@ const failedSkillMutationActions = [
   },
   {
     name: "disableSkillInstallation",
-    expectedError: "Unable to disable skill installation.",
+    expectedError: null,
     invoke: (actions: ReturnType<typeof createSkillActions>) =>
       actions.disableSkillInstallation("inst-1"),
   },
   {
     name: "enableSkillInstallation",
-    expectedError: "Unable to enable skill installation.",
+    expectedError: null,
     invoke: (actions: ReturnType<typeof createSkillActions>) =>
       actions.enableSkillInstallation("inst-1"),
   },
   {
     name: "deleteSkillInstallation",
-    expectedError: "Unable to delete skill installation.",
+    expectedError: null,
     invoke: (actions: ReturnType<typeof createSkillActions>) =>
       actions.deleteSkillInstallation("inst-1"),
   },
   {
     name: "copySkillInstallation",
-    expectedError: "Unable to copy skill installation.",
+    expectedError: null,
     invoke: (actions: ReturnType<typeof createSkillActions>) =>
       actions.copySkillInstallation("inst-1", "project"),
   },
   {
     name: "updateSkillInstallation",
-    expectedError: "Unable to update skill installation.",
+    expectedError: null,
     invoke: (actions: ReturnType<typeof createSkillActions>) =>
       actions.updateSkillInstallation("inst-1"),
   },

@@ -24,7 +24,19 @@ type WorkspaceToolsSkillPlan = {
   source?: string;
   destination: string;
   status: CodexPrimaryRuntimeSkillResult["status"];
+  action: "copy" | "preserve" | "omit";
   reason?: string;
+};
+
+type WorkspaceToolsCopyPlan = WorkspaceToolsSkillPlan & { action: "copy"; source: string };
+
+const LEGACY_RUNTIME_SKILL_TARGETS: Record<
+  (typeof LEGACY_CODEX_RUNTIME_SKILLS)[number],
+  CodexRuntimeSkillName
+> = {
+  doc: "documents",
+  slides: "presentations",
+  spreadsheet: "spreadsheets",
 };
 
 async function sortedChildDirs(parent: string): Promise<string[]> {
@@ -237,11 +249,15 @@ function isManagedCurrentRuntimeSkillManifest(
 export async function removeLegacyRuntimeSkills(opts: {
   destinationRoot?: string;
   global: boolean;
+  runtimeSkillNames?: ReadonlySet<CodexRuntimeSkillName>;
   log?: (line: string) => void;
 }): Promise<void> {
   if (!opts.destinationRoot) return;
 
   for (const skillName of LEGACY_CODEX_RUNTIME_SKILLS) {
+    const targetSkillName = LEGACY_RUNTIME_SKILL_TARGETS[skillName];
+    if (opts.runtimeSkillNames && !opts.runtimeSkillNames.has(targetSkillName)) continue;
+
     const destination = path.join(opts.destinationRoot, skillName);
     if (!(await pathExists(destination))) continue;
 
@@ -257,11 +273,14 @@ export async function removeLegacyRuntimeSkills(opts: {
 
 export async function removeManagedRuntimeSkills(opts: {
   destinationRoot?: string;
+  runtimeSkillNames?: ReadonlySet<CodexRuntimeSkillName>;
   log?: (line: string) => void;
 }): Promise<void> {
   if (!opts.destinationRoot) return;
 
   for (const spec of CODEX_RUNTIME_SKILLS) {
+    if (opts.runtimeSkillNames && !opts.runtimeSkillNames.has(spec.name)) continue;
+
     const destination = path.join(opts.destinationRoot, spec.name);
     if (!(await pathExists(destination))) continue;
     const manifest = await readSkillInstallManifest(destination);
@@ -378,6 +397,24 @@ async function shouldOverwriteWorkspaceToolsSkill(
   return manifest?.origin?.kind === "bootstrap";
 }
 
+async function resolveWorkspaceToolsSkillSource(opts: {
+  home: string;
+  runtimeRoots: readonly string[];
+  curatedRepoRoot?: string;
+  spec: SkillSourceSpec;
+}): Promise<string | null> {
+  return (
+    (opts.curatedRepoRoot &&
+    (await pathExists(
+      path.join(skillSourceFromCuratedRepo(opts.curatedRepoRoot, opts.spec), "SKILL.md"),
+    ))
+      ? skillSourceFromCuratedRepo(opts.curatedRepoRoot, opts.spec)
+      : null) ??
+    (await findFirstRuntimeSkillSource(opts.runtimeRoots, opts.spec)) ??
+    (await skillSourceFromPluginCache(opts.home, opts.spec))
+  );
+}
+
 function workspaceToolsResultFromPlan(
   plan: WorkspaceToolsSkillPlan,
 ): CodexPrimaryRuntimeSkillResult {
@@ -392,7 +429,7 @@ function workspaceToolsResultFromPlan(
 
 async function writeWorkspaceToolsSkillIntoPluginSource(opts: {
   pluginRoot: string;
-  plan: WorkspaceToolsSkillPlan & { source: string };
+  plan: WorkspaceToolsCopyPlan;
   log?: (line: string) => void;
 }): Promise<void> {
   const destination = workspaceToolsDestination(opts.pluginRoot, opts.plan.spec);
@@ -412,12 +449,18 @@ async function writeWorkspaceToolsSkillIntoPluginSource(opts: {
 
 async function buildWorkspaceToolsPluginSource(opts: {
   stageRoot: string;
-  plans: Array<WorkspaceToolsSkillPlan & { source: string }>;
+  existingPluginRoot: string;
+  plans: WorkspaceToolsSkillPlan[];
   log?: (line: string) => void;
 }): Promise<string> {
   const pluginRoot = path.join(opts.stageRoot, WORKSPACE_TOOLS_PLUGIN_ID);
+  if (await pathExists(opts.existingPluginRoot)) {
+    await copyDirectory(opts.existingPluginRoot, pluginRoot);
+  }
   await writeWorkspaceToolsPluginManifest(pluginRoot);
-  for (const plan of opts.plans) {
+  for (const plan of opts.plans.filter(
+    (plan): plan is WorkspaceToolsCopyPlan => plan.action === "copy" && !!plan.source,
+  )) {
     await writeWorkspaceToolsSkillIntoPluginSource({
       pluginRoot,
       plan,
@@ -453,53 +496,60 @@ export async function installWorkspaceToolsPlugin(opts: {
   const plans: WorkspaceToolsSkillPlan[] = [];
   for (const spec of CODEX_RUNTIME_SKILLS) {
     const destination = workspaceToolsDestination(pluginRoot, spec);
-    const source =
-      (opts.curatedRepoRoot &&
-      (await pathExists(
-        path.join(skillSourceFromCuratedRepo(opts.curatedRepoRoot, spec), "SKILL.md"),
-      ))
-        ? skillSourceFromCuratedRepo(opts.curatedRepoRoot, spec)
-        : null) ??
-      (await findFirstRuntimeSkillSource(opts.runtimeRoots, spec)) ??
-      (await skillSourceFromPluginCache(opts.home, spec));
+    const overwrite = await shouldOverwriteWorkspaceToolsSkill(destination, spec, opts.force);
+    if (!overwrite) {
+      plans.push({
+        spec,
+        status: "already_installed",
+        destination,
+        action: "preserve",
+      });
+      continue;
+    }
+
+    const source = await resolveWorkspaceToolsSkillSource({
+      home: opts.home,
+      runtimeRoots: opts.runtimeRoots,
+      curatedRepoRoot: opts.curatedRepoRoot,
+      spec,
+    });
 
     if (!source) {
       plans.push({
         spec,
         status: "missing",
         destination,
+        action: "omit",
         reason: "No source found.",
       });
       continue;
     }
     if (!(await pathExists(path.join(source, "SKILL.md")))) {
-      plans.push({ spec, status: "missing", source, destination });
+      plans.push({ spec, status: "missing", source, destination, action: "omit" });
       continue;
     }
 
-    const overwrite = await shouldOverwriteWorkspaceToolsSkill(destination, spec, opts.force);
     plans.push({
       spec,
-      status: overwrite ? "installed" : "already_installed",
+      status: "installed",
       source,
       destination,
+      action: "copy",
     });
   }
 
-  const installablePlans = plans.filter(
-    (plan): plan is WorkspaceToolsSkillPlan & { source: string } =>
-      !!plan.source && (plan.status === "installed" || plan.status === "already_installed"),
-  );
   const shouldReplacePlugin =
-    plans.some((plan) => plan.status === "installed") ||
-    (installablePlans.length > 0 && !(await workspaceToolsPluginManifestExists(pluginRoot)));
+    plans.some((plan) => plan.action === "copy") ||
+    (plans.some((plan) => plan.action === "preserve") &&
+      !(await workspaceToolsPluginManifestExists(pluginRoot)));
 
   if (shouldReplacePlugin) {
     const stageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-workspace-tools-plugin-"));
     try {
       const sourcePluginRoot = await buildWorkspaceToolsPluginSource({
         stageRoot,
-        plans: installablePlans,
+        existingPluginRoot: pluginRoot,
+        plans,
         log: opts.log,
       });
       opts.log?.(`Installing Workspace Tools plugin into ${pluginRoot}`);

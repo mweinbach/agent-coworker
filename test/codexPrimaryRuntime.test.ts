@@ -279,6 +279,233 @@ describe("Codex primary runtime bootstrap", () => {
     }
   });
 
+  test("keeps managed global runtime skills when Workspace Tools replacement fails", async () => {
+    const home = await fs.mkdtemp(
+      path.join(os.tmpdir(), "cowork-codex-runtime-global-atomic-home-"),
+    );
+    const workspace = await fs.mkdtemp(
+      path.join(os.tmpdir(), "cowork-codex-runtime-global-atomic-workspace-"),
+    );
+    const builtInRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "cowork-codex-runtime-global-atomic-builtin-"),
+    );
+    const bundledRuntimeDir = path.join(builtInRoot, "codex-primary-runtime");
+    await writeFakeBundledRuntime(bundledRuntimeDir);
+    const globalSkillsDir = path.join(home, ".cowork", "skills");
+    const globalPluginsDir = path.join(home, ".cowork", "plugins");
+    const managedSpreadsheets = path.join(globalSkillsDir, "spreadsheets");
+    const fetchImpl = mock(async () => new Response("unexpected", { status: 500 })) as typeof fetch;
+
+    try {
+      await fs.mkdir(managedSpreadsheets, { recursive: true });
+      await fs.writeFile(
+        path.join(managedSpreadsheets, "SKILL.md"),
+        "---\nname: spreadsheets\ndescription: old spreadsheets\n---\nold global spreadsheets\n",
+        "utf-8",
+      );
+      await writeSkillInstallManifest({
+        skillRoot: managedSpreadsheets,
+        installationId: "bootstrap-codex-primary-runtime-spreadsheets",
+        origin: {
+          kind: "bootstrap",
+          url: __internal.CODEX_CURATED_PLUGINS_EXPORT_URL,
+          subdir: "plugins/openai-primary-runtime/plugins/spreadsheets/skills/spreadsheets",
+        },
+      });
+      pluginOperationsInternal.setCopyPluginRootImplForTests(async () => {
+        throw new Error("simulated workspace tools copy failure");
+      });
+
+      await expect(
+        ensureCodexPrimaryRuntimeReady({
+          homedir: home,
+          workspaceDir: workspace,
+          builtInSkillsDir: path.join(builtInRoot, "skills"),
+          globalSkillsDir,
+          globalPluginsDir,
+          bundledRuntimeDir,
+          fetchImpl,
+          allowNetwork: false,
+          force: true,
+        }),
+      ).rejects.toThrow("simulated workspace tools copy failure");
+
+      expect(await fs.readFile(path.join(managedSpreadsheets, "SKILL.md"), "utf-8")).toContain(
+        "old global spreadsheets",
+      );
+    } finally {
+      pluginOperationsInternal.resetForTests();
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(builtInRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps global fallback skills when their Workspace Tools skill is missing", async () => {
+    const home = await fs.mkdtemp(
+      path.join(os.tmpdir(), "cowork-codex-runtime-partial-global-home-"),
+    );
+    const workspace = await fs.mkdtemp(
+      path.join(os.tmpdir(), "cowork-codex-runtime-partial-global-workspace-"),
+    );
+    const builtInRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "cowork-codex-runtime-partial-global-builtin-"),
+    );
+    const bundledRuntimeDir = path.join(builtInRoot, "codex-primary-runtime");
+    await writeFakeBundledRuntime(bundledRuntimeDir);
+    await fs.rm(
+      path.join(
+        bundledRuntimeDir,
+        "plugins",
+        "openai-primary-runtime",
+        "plugins",
+        "spreadsheets",
+        "skills",
+        "spreadsheets",
+      ),
+      { recursive: true, force: true },
+    );
+    const globalSkillsDir = path.join(home, ".cowork", "skills");
+    const globalPluginsDir = path.join(home, ".cowork", "plugins");
+    const managedSpreadsheets = path.join(globalSkillsDir, "spreadsheets");
+    const fetchImpl = mock(async () => new Response("unexpected", { status: 500 })) as typeof fetch;
+
+    try {
+      await fs.mkdir(managedSpreadsheets, { recursive: true });
+      await fs.writeFile(
+        path.join(managedSpreadsheets, "SKILL.md"),
+        "---\nname: spreadsheets\ndescription: fallback spreadsheets\n---\nglobal fallback\n",
+        "utf-8",
+      );
+      await writeSkillInstallManifest({
+        skillRoot: managedSpreadsheets,
+        installationId: "bootstrap-codex-primary-runtime-spreadsheets",
+        origin: {
+          kind: "bootstrap",
+          url: __internal.CODEX_CURATED_PLUGINS_EXPORT_URL,
+          subdir: "plugins/openai-primary-runtime/plugins/spreadsheets/skills/spreadsheets",
+        },
+      });
+
+      const result = await ensureCodexPrimaryRuntimeReady({
+        homedir: home,
+        workspaceDir: workspace,
+        builtInSkillsDir: path.join(builtInRoot, "skills"),
+        globalSkillsDir,
+        globalPluginsDir,
+        bundledRuntimeDir,
+        fetchImpl,
+        allowNetwork: false,
+      });
+
+      expect(
+        result?.skills
+          .filter((skill) => skill.destination.includes("workspace-tools"))
+          .map((skill) => [skill.name, skill.status]),
+      ).toEqual([
+        ["documents", "installed"],
+        ["presentations", "installed"],
+        ["spreadsheets", "missing"],
+      ]);
+      expect(await fs.readFile(path.join(managedSpreadsheets, "SKILL.md"), "utf-8")).toContain(
+        "global fallback",
+      );
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(builtInRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("preserves existing Workspace Tools skills during partial replacement", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-runtime-overlay-home-"));
+    const workspace = await fs.mkdtemp(
+      path.join(os.tmpdir(), "cowork-codex-runtime-overlay-workspace-"),
+    );
+    const builtInRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "cowork-codex-runtime-overlay-builtin-"),
+    );
+    const bundledRuntimeDir = path.join(builtInRoot, "codex-primary-runtime");
+    await writeFakeBundledRuntime(bundledRuntimeDir);
+    const globalPluginsDir = path.join(home, ".cowork", "plugins");
+    const existingPluginRoot = path.join(globalPluginsDir, "workspace-tools");
+    const manualDocuments = path.join(existingPluginRoot, "skills", "documents");
+    const currentSpreadsheets = path.join(existingPluginRoot, "skills", "spreadsheets");
+    const fetchImpl = mock(async () => new Response("unexpected", { status: 500 })) as typeof fetch;
+
+    try {
+      await fs.mkdir(path.join(existingPluginRoot, ".cowork-plugin"), { recursive: true });
+      await fs.writeFile(
+        path.join(existingPluginRoot, ".cowork-plugin", "plugin.json"),
+        JSON.stringify({
+          name: "workspace-tools",
+          version: "0.0.1",
+          description: "Existing Workspace Tools plugin",
+          skills: "./skills/",
+        }),
+        "utf-8",
+      );
+      await fs.mkdir(manualDocuments, { recursive: true });
+      await fs.writeFile(
+        path.join(manualDocuments, "SKILL.md"),
+        "---\nname: documents\ndescription: Manual documents skill\n---\nmanual documents body\n",
+        "utf-8",
+      );
+      await fs.mkdir(currentSpreadsheets, { recursive: true });
+      await fs.writeFile(
+        path.join(currentSpreadsheets, "SKILL.md"),
+        "---\nname: spreadsheets\ndescription: Current spreadsheets skill\n---\ncurrent spreadsheets body\n",
+        "utf-8",
+      );
+      await writeSkillInstallManifest({
+        skillRoot: currentSpreadsheets,
+        installationId: "bootstrap-codex-primary-runtime-spreadsheets",
+        origin: {
+          kind: "bootstrap",
+          url: __internal.CODEX_CURATED_PLUGINS_EXPORT_URL,
+          subdir: "plugins/openai-primary-runtime/plugins/spreadsheets/skills/spreadsheets",
+        },
+      });
+
+      const result = await ensureCodexPrimaryRuntimeReady({
+        homedir: home,
+        workspaceDir: workspace,
+        builtInSkillsDir: path.join(builtInRoot, "skills"),
+        globalSkillsDir: path.join(home, ".cowork", "skills"),
+        globalPluginsDir,
+        bundledRuntimeDir,
+        fetchImpl,
+        allowNetwork: false,
+      });
+
+      expect(
+        result?.skills
+          .filter((skill) => skill.destination.includes("workspace-tools"))
+          .map((skill) => [skill.name, skill.status]),
+      ).toEqual([
+        ["documents", "already_installed"],
+        ["presentations", "installed"],
+        ["spreadsheets", "already_installed"],
+      ]);
+      expect(await fs.readFile(path.join(manualDocuments, "SKILL.md"), "utf-8")).toContain(
+        "manual documents body",
+      );
+      expect(await fs.readFile(path.join(currentSpreadsheets, "SKILL.md"), "utf-8")).toContain(
+        "current spreadsheets body",
+      );
+      expect(
+        await fs.readFile(
+          path.join(existingPluginRoot, "skills", "presentations", "SKILL.md"),
+          "utf-8",
+        ),
+      ).toContain("presentations body");
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(builtInRoot, { recursive: true, force: true });
+    }
+  });
+
   test("skips curated archive download when network bootstrap is disabled", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-runtime-offline-"));
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-runtime-workspace-"));

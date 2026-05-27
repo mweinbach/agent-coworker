@@ -22,11 +22,27 @@ import {
   skillSourceFromPluginCacheForProbe,
 } from "./skills";
 import { runtimeStateFile, writeState } from "./state";
-import type { CodexPrimaryRuntimeSetupResult, EnsureCodexPrimaryRuntimeOptions } from "./types";
+import type {
+  CodexPrimaryRuntimeSetupResult,
+  CodexRuntimeSkillName,
+  EnsureCodexPrimaryRuntimeOptions,
+} from "./types";
 
 function isTruthy(value: string | undefined): boolean {
   const normalized = value?.trim().toLowerCase();
   return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
+function availableWorkspaceToolsSkillNames(
+  skills: CodexPrimaryRuntimeSetupResult["skills"],
+): ReadonlySet<CodexRuntimeSkillName> {
+  const names = new Set<CodexRuntimeSkillName>();
+  for (const skill of skills) {
+    if (skill.status === "installed" || skill.status === "already_installed") {
+      names.add(skill.name);
+    }
+  }
+  return names;
 }
 
 export function shouldBootstrapCodexPrimaryRuntime(
@@ -123,15 +139,6 @@ export async function ensureCodexPrimaryRuntimeReady(
       global: false,
       log: opts.log,
     });
-    await removeLegacyRuntimeSkills({
-      destinationRoot: opts.globalSkillsDir,
-      global: true,
-      log: opts.log,
-    });
-    await removeManagedRuntimeSkills({
-      destinationRoot: opts.globalSkillsDir,
-      log: opts.log,
-    });
     const builtInSkillResults = await installSkills({
       home,
       runtimeRoots,
@@ -150,6 +157,22 @@ export async function ensureCodexPrimaryRuntimeReady(
       curatedRepoRoot,
       log: opts.log,
     });
+    const availableWorkspaceToolsSkills = availableWorkspaceToolsSkillNames(
+      workspaceToolsSkillResults,
+    );
+    if (availableWorkspaceToolsSkills.size > 0) {
+      await removeLegacyRuntimeSkills({
+        destinationRoot: opts.globalSkillsDir,
+        global: true,
+        runtimeSkillNames: availableWorkspaceToolsSkills,
+        log: opts.log,
+      });
+      await removeManagedRuntimeSkills({
+        destinationRoot: opts.globalSkillsDir,
+        runtimeSkillNames: availableWorkspaceToolsSkills,
+        log: opts.log,
+      });
+    }
     const skills = [...builtInSkillResults, ...workspaceToolsSkillResults];
     await writeState({ stateFile, artifactSource: artifactTool.source, skills });
 

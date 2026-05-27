@@ -281,4 +281,50 @@ describe("plugin detail dialog", () => {
       harness.restore();
     }
   });
+
+  test("shows loading state for scope-less plugin detail selections", async () => {
+    const previousState = useAppStore.getState();
+
+    useAppStore.setState({
+      ...previousState,
+      workspaceRuntimeById: {
+        ...previousState.workspaceRuntimeById,
+        "ws-1": {
+          ...defaultWorkspaceRuntime(),
+          selectedPluginId: "marketplace-tools",
+          selectedPluginScope: null,
+          selectedPlugin: null,
+          pluginsLoading: true,
+          pluginsError: null,
+        },
+      },
+    } as any);
+
+    const harness = setupJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(PluginDetailDialog, { workspaceId: "ws-1" }));
+      });
+
+      const pageText = harness.dom.window.document.body.textContent ?? "";
+      expect(pageText).toContain("Loading plugin");
+      expect(pageText).not.toContain("Plugin unavailable");
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      useAppStore.setState(previousState);
+      harness.restore();
+    }
+  });
 });

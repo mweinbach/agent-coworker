@@ -1,4 +1,4 @@
-import type { ProviderName, SessionEvent } from "../../lib/wsProtocol";
+import type { PluginCatalogSnapshot, ProviderName, SessionEvent } from "../../lib/wsProtocol";
 import { normalizeWorkspaceProviderOptions } from "../openaiCompatibleProviderOptions";
 import type { StoreGet, StoreSet } from "../store.helpers";
 import type { Notification, SessionSnapshot, ThreadRecord } from "../types";
@@ -225,6 +225,49 @@ export function createControlSocketHelpers(
       delete nextPendingKeys[key];
     }
     return nextPendingKeys;
+  }
+
+  function mergeStableAvailablePlugins(
+    previousCatalog: PluginCatalogSnapshot | null,
+    nextCatalog: PluginCatalogSnapshot,
+  ): PluginCatalogSnapshot {
+    const nextAvailablePlugins = nextCatalog.availablePlugins ?? [];
+    if (
+      nextAvailablePlugins.length > 0 ||
+      !previousCatalog ||
+      previousCatalog.availablePlugins.length === 0
+    ) {
+      return {
+        ...nextCatalog,
+        availablePlugins: nextAvailablePlugins,
+      };
+    }
+
+    const installedPluginIds = new Set(nextCatalog.plugins.map((plugin) => plugin.id));
+    return {
+      ...nextCatalog,
+      availablePlugins: previousCatalog.availablePlugins.filter(
+        (plugin) => !installedPluginIds.has(plugin.id),
+      ),
+    };
+  }
+
+  function resolveClearedPluginInstallWaiter(
+    workspaceId: string,
+    clearedMutationPendingKeys: readonly string[],
+    get: StoreGet,
+  ) {
+    const pluginInstallWaiter = RUNTIME.pluginInstallWaiters.get(workspaceId);
+    const workspaceRuntime = get().workspaceRuntimeById[workspaceId];
+    if (
+      pluginInstallWaiter &&
+      workspaceRuntime &&
+      clearedMutationPendingKeys.includes(pluginInstallWaiter.pendingKey) &&
+      workspaceRuntime.pluginMutationPendingKeys[pluginInstallWaiter.pendingKey] !== true
+    ) {
+      RUNTIME.pluginInstallWaiters.delete(workspaceId);
+      pluginInstallWaiter.resolve();
+    }
   }
 
   function waitForReady(
@@ -1016,6 +1059,9 @@ export function createControlSocketHelpers(
       const clearedSkillMutation = clearedMutationPendingKeys.some(
         (key) => workspaceRuntimeBefore?.skillMutationPendingKeys[key] === true,
       );
+      const clearedPluginMutation = clearedMutationPendingKeys.some(
+        (key) => workspaceRuntimeBefore?.pluginMutationPendingKeys[key] === true,
+      );
       const shouldResolveInstall =
         installWaiter != null &&
         workspaceRuntimeBefore != null &&
@@ -1044,7 +1090,12 @@ export function createControlSocketHelpers(
                 workspaceRuntime.skillMutationPendingKeys,
                 clearedMutationPendingKeys,
               ),
+              pluginMutationPendingKeys: omitMutationPendingKeys(
+                workspaceRuntime.pluginMutationPendingKeys,
+                clearedMutationPendingKeys,
+              ),
               ...(clearedSkillMutation ? { skillMutationError: null } : {}),
+              ...(clearedPluginMutation ? { pluginMutationError: null } : {}),
               selectedSkillInstallationId: selectedInstallation ? selectedInstallationId : null,
               selectedSkillInstallation: selectedInstallation,
             },
@@ -1056,6 +1107,7 @@ export function createControlSocketHelpers(
         RUNTIME.skillInstallWaiters.delete(workspaceId);
         installWaiter.resolve();
       }
+      resolveClearedPluginInstallWaiter(workspaceId, clearedMutationPendingKeys, get);
       return;
     }
 
@@ -1069,7 +1121,11 @@ export function createControlSocketHelpers(
         const workspaceRuntime = s.workspaceRuntimeById[workspaceId];
         const selectedPluginId = workspaceRuntime.selectedPluginId;
         const selectedPluginScope = workspaceRuntime.selectedPluginScope;
-        const catalogPlugins = [...evt.catalog.plugins, ...(evt.catalog.availablePlugins ?? [])];
+        const pluginsCatalog = mergeStableAvailablePlugins(
+          workspaceRuntime.pluginsCatalog,
+          evt.catalog,
+        );
+        const catalogPlugins = [...pluginsCatalog.plugins, ...pluginsCatalog.availablePlugins];
         const selectedPlugin = selectedPluginId
           ? (catalogPlugins.find(
               (plugin) =>
@@ -1082,7 +1138,7 @@ export function createControlSocketHelpers(
             ...s.workspaceRuntimeById,
             [workspaceId]: {
               ...workspaceRuntime,
-              pluginsCatalog: evt.catalog,
+              pluginsCatalog,
               pluginsLoading: false,
               pluginsError: null,
               pluginMutationPendingKeys: omitMutationPendingKeys(
@@ -1098,17 +1154,7 @@ export function createControlSocketHelpers(
         };
       });
 
-      const pluginInstallWaiter = RUNTIME.pluginInstallWaiters.get(workspaceId);
-      const workspaceRuntimeAfter = get().workspaceRuntimeById[workspaceId];
-      if (
-        pluginInstallWaiter &&
-        workspaceRuntimeAfter &&
-        clearedMutationPendingKeys.includes(pluginInstallWaiter.pendingKey) &&
-        workspaceRuntimeAfter.pluginMutationPendingKeys[pluginInstallWaiter.pendingKey] !== true
-      ) {
-        RUNTIME.pluginInstallWaiters.delete(workspaceId);
-        pluginInstallWaiter.resolve();
-      }
+      resolveClearedPluginInstallWaiter(workspaceId, clearedMutationPendingKeys, get);
       return;
     }
 

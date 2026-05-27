@@ -13,7 +13,7 @@ import {
 } from "../../components/ui/dialog";
 import { revealPath } from "../../lib/desktopCommands";
 import { isInstalledPluginCatalogEntry } from "../../lib/wsProtocol";
-import { pluginActionPending } from "../skills/utils";
+import { actionPending } from "../skills/utils";
 
 function pluginScopeLabel(scope: "workspace" | "user"): string {
   return scope === "workspace" ? "Workspace" : "User";
@@ -33,7 +33,7 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
 
   const plugin = runtime?.selectedPlugin ?? null;
   const pluginId = runtime?.selectedPluginId ?? null;
-  const pluginScope = runtime?.selectedPluginScope ?? null;
+  const pluginsLoading = runtime?.pluginsLoading ?? false;
 
   const installedPlugin = plugin && isInstalledPluginCatalogEntry(plugin) ? plugin : null;
   const skillCount = installedPlugin?.skills.length ?? 0;
@@ -48,16 +48,16 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
     ? (runtime?.pluginMutationError ?? null)
     : (runtime?.pluginsError ?? null);
   const enablePending = plugin
-    ? pluginActionPending(runtime, "plugin:enable", `${plugin.scope}:${plugin.id}`)
+    ? actionPending(runtime, "plugin:enable", `${plugin.scope}:${plugin.id}`, "plugin")
     : false;
   const disablePending = plugin
-    ? pluginActionPending(runtime, "plugin:disable", `${plugin.scope}:${plugin.id}`)
+    ? actionPending(runtime, "plugin:disable", `${plugin.scope}:${plugin.id}`, "plugin")
     : false;
   const deletePending = plugin
-    ? pluginActionPending(runtime, "plugin:delete", `${plugin.scope}:${plugin.id}`)
+    ? actionPending(runtime, "plugin:delete", `${plugin.scope}:${plugin.id}`, "plugin")
     : false;
   const installPending = plugin
-    ? pluginActionPending(runtime, `plugin:install:${plugin.scope}`)
+    ? actionPending(runtime, `plugin:install:${plugin.scope}`, undefined, "plugin")
     : false;
 
   const handleOpenChange = (open: boolean) => {
@@ -68,8 +68,7 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
 
   if (!pluginId) return null;
 
-  const isLoading =
-    pluginId !== null && pluginScope !== null && plugin === null && pluginError === null;
+  const isLoading = pluginId !== null && plugin === null && pluginError === null && pluginsLoading;
 
   return (
     <Dialog open={pluginId !== null} onOpenChange={handleOpenChange}>

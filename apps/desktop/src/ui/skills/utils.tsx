@@ -69,16 +69,6 @@ export function actionPending(
   return pendingKeys[key] === true;
 }
 
-export function pluginActionPending(
-  rt: ReturnType<typeof useAppStore.getState>["workspaceRuntimeById"][string] | undefined,
-  prefix: string,
-  id?: string,
-): boolean {
-  if (!rt) return false;
-  const key = id ? `${prefix}:${id}` : prefix;
-  return rt.pluginMutationPendingKeys[key] === true;
-}
-
 export function SkillIcon({ icon, className }: { icon: string; className?: string }) {
   if (icon.startsWith("data:") || icon.startsWith("http")) {
     return (

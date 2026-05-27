@@ -114,6 +114,7 @@ describe("control socket helpers over JSON-RPC", () => {
                 description: "Figma helpers",
                 scope: "workspace",
                 discoveryKind: "marketplace",
+                installed: true,
                 enabled: true,
                 rootDir: "/tmp/workspace/.agents/plugins/figma-toolkit",
                 manifestPath:
@@ -125,6 +126,7 @@ describe("control socket helpers over JSON-RPC", () => {
                 warnings: [],
               },
             ],
+            availablePlugins: [],
           },
         },
       };
@@ -148,6 +150,170 @@ describe("control socket helpers over JSON-RPC", () => {
       other: true,
     });
     expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({});
+  });
+
+  test("requestJsonRpcControlEvent keeps marketplace entries during partial plugin catalog refreshes", async () => {
+    const workspaceId = "ws-partial-plugins";
+    const marketplacePlugin = {
+      id: "plugin-marketplace",
+      name: "marketplace-tools",
+      displayName: "Marketplace Tools",
+      description: "Remote plugin helpers",
+      scope: "user",
+      discoveryKind: "marketplace",
+      installed: false,
+      enabled: false,
+      marketplace: {
+        name: "cowork-marketplace",
+        displayName: "Cowork Marketplace",
+        category: "Productivity",
+      },
+      installSource: "github:mweinbach/marketplace-tools",
+      warnings: [],
+    };
+    const { state, get, set } = createState(workspaceId, {
+      workspaceRuntimeById: {
+        [workspaceId]: {
+          ...defaultWorkspaceRuntime(),
+          serverUrl: "ws://mock",
+          pluginsLoading: true,
+          selectedPluginId: "plugin-marketplace",
+          selectedPluginScope: "user",
+          selectedPlugin: marketplacePlugin,
+          pluginsCatalog: {
+            warnings: [],
+            plugins: [],
+            availablePlugins: [marketplacePlugin],
+          },
+        },
+      },
+    });
+    installFakeSocket(workspaceId, async (method) => {
+      expect(method).toBe("cowork/plugins/catalog/read");
+      return {
+        event: {
+          type: "plugins_catalog",
+          sessionId: "jsonrpc-control",
+          catalog: {
+            warnings: [],
+            plugins: [],
+            availablePlugins: [],
+          },
+        },
+      };
+    });
+
+    const helpers = createControlSocketHelpers(deps);
+    const ok = await helpers.requestJsonRpcControlEvent(
+      get as any,
+      set as any,
+      workspaceId,
+      "cowork/plugins/catalog/read",
+      { cwd: "/tmp/workspace" },
+    );
+
+    expect(ok).toBe(true);
+    expect(state.workspaceRuntimeById[workspaceId].pluginsCatalog?.availablePlugins).toEqual([
+      marketplacePlugin,
+    ]);
+    expect(state.workspaceRuntimeById[workspaceId].selectedPlugin).toEqual(marketplacePlugin);
+    expect(state.workspaceRuntimeById[workspaceId].selectedPluginId).toBe("plugin-marketplace");
+    expect(state.workspaceRuntimeById[workspaceId].selectedPluginScope).toBe("user");
+  });
+
+  test("requestJsonRpcControlEvent preserves available plugins across local mutation catalog snapshots", async () => {
+    const workspaceId = "ws-plugins-available";
+    const availablePlugin = {
+      id: "figma-marketplace",
+      name: "figma-marketplace",
+      displayName: "Figma Marketplace",
+      description: "Install Figma helpers",
+      scope: "user" as const,
+      discoveryKind: "marketplace" as const,
+      installed: false as const,
+      enabled: false as const,
+      marketplace: { name: "figma-marketplace" },
+      installSource: "builtin://figma-marketplace",
+      warnings: [],
+    };
+    const { state, get, set } = createState(workspaceId, {
+      workspaceRuntimeById: {
+        [workspaceId]: {
+          ...defaultWorkspaceRuntime(),
+          serverUrl: "ws://mock",
+          pluginsCatalog: {
+            warnings: [],
+            plugins: [],
+            availablePlugins: [
+              availablePlugin,
+              {
+                ...availablePlugin,
+                id: "installed-marketplace",
+                name: "installed-marketplace",
+                displayName: "Installed Marketplace",
+              },
+            ],
+          },
+          selectedPluginId: "figma-marketplace",
+          selectedPluginScope: "user",
+          selectedPlugin: availablePlugin,
+          pluginMutationPendingKeys: {
+            "plugin:enable:user:installed-marketplace": true,
+          },
+        },
+      },
+    });
+    installFakeSocket(workspaceId, async (method) => {
+      expect(method).toBe("cowork/plugins/catalog/read");
+      return {
+        event: {
+          type: "plugins_catalog",
+          sessionId: "jsonrpc-control",
+          clearedMutationPendingKeys: ["plugin:enable:user:installed-marketplace"],
+          catalog: {
+            warnings: [],
+            plugins: [
+              {
+                id: "installed-marketplace",
+                name: "installed-marketplace",
+                displayName: "Installed Marketplace",
+                description: "Installed helpers",
+                scope: "user",
+                discoveryKind: "marketplace",
+                installed: true,
+                enabled: true,
+                rootDir: "/tmp/home/.agents/plugins/installed-marketplace",
+                manifestPath:
+                  "/tmp/home/.agents/plugins/installed-marketplace/.codex-plugin/plugin.json",
+                skillsPath: "/tmp/home/.agents/plugins/installed-marketplace/skills",
+                skills: [],
+                mcpServers: [],
+                apps: [],
+                warnings: [],
+              },
+            ],
+            availablePlugins: [],
+          },
+        },
+      };
+    });
+
+    const helpers = createControlSocketHelpers(deps);
+    const ok = await helpers.requestJsonRpcControlEvent(
+      get as any,
+      set as any,
+      workspaceId,
+      "cowork/plugins/catalog/read",
+      { cwd: "/tmp/workspace" },
+    );
+
+    expect(ok).toBe(true);
+    expect(state.workspaceRuntimeById[workspaceId].pluginsCatalog?.availablePlugins).toEqual([
+      expect.objectContaining({ id: "figma-marketplace" }),
+    ]);
+    expect(state.workspaceRuntimeById[workspaceId].selectedPlugin?.id).toBe("figma-marketplace");
+    expect(state.workspaceRuntimeById[workspaceId].selectedPluginScope).toBe("user");
+    expect(state.workspaceRuntimeById[workspaceId].pluginMutationPendingKeys).toEqual({});
   });
 
   test("requestJsonRpcControlEvent applies plugin detail events", async () => {
@@ -243,6 +409,7 @@ describe("control socket helpers over JSON-RPC", () => {
               description: "Figma helpers",
               scope: "user",
               discoveryKind: "direct",
+              installed: true,
               enabled: true,
               rootDir: "/tmp/home/.agents/plugins/figma-toolkit",
               manifestPath: "/tmp/home/.agents/plugins/figma-toolkit/.codex-plugin/plugin.json",
@@ -253,6 +420,7 @@ describe("control socket helpers over JSON-RPC", () => {
               warnings: [],
             },
           ],
+          availablePlugins: [],
         },
       },
     });
@@ -455,6 +623,7 @@ describe("control socket helpers over JSON-RPC", () => {
                   description: "Plugin helpers",
                   scope: "workspace",
                   discoveryKind: "direct",
+                  installed: true,
                   enabled: true,
                   rootDir: "/tmp/workspace/.agents/plugins/plugin-1",
                   manifestPath: "/tmp/workspace/.agents/plugins/plugin-1/.codex-plugin/plugin.json",
@@ -465,6 +634,7 @@ describe("control socket helpers over JSON-RPC", () => {
                   warnings: [],
                 },
               ],
+              availablePlugins: [],
             },
           },
           {
@@ -546,6 +716,67 @@ describe("control socket helpers over JSON-RPC", () => {
         pluginId: "plugin-1",
       }),
     ]);
+  });
+
+  test("requestJsonRpcControlEvent resolves plugin install waiters from skill catalog events", async () => {
+    const workspaceId = "ws-plugin-install-skills-only";
+    const { state, get, set } = createState(workspaceId, {
+      workspaceRuntimeById: {
+        [workspaceId]: {
+          ...defaultWorkspaceRuntime(),
+          serverUrl: "ws://mock",
+          pluginsLoading: true,
+          pluginMutationPendingKeys: {
+            "plugin:install:workspace": true,
+          },
+        },
+      },
+    });
+
+    let waiterResolved = false;
+    const installWaiter = Promise.withResolvers<void>();
+    installWaiter.promise.then(() => {
+      waiterResolved = true;
+    });
+    RUNTIME.pluginInstallWaiters.set(workspaceId, {
+      pendingKey: "plugin:install:workspace",
+      resolve: installWaiter.resolve,
+      reject: installWaiter.reject,
+    });
+
+    installFakeSocket(workspaceId, async (method) => {
+      expect(method).toBe("cowork/plugins/install");
+      return {
+        event: {
+          type: "skills_catalog",
+          sessionId: "jsonrpc-control",
+          mutationBlocked: false,
+          clearedMutationPendingKeys: ["plugin:install:workspace"],
+          catalog: {
+            installations: [],
+            bundled: [],
+            warnings: [],
+          },
+        },
+      };
+    });
+
+    const helpers = createControlSocketHelpers(deps);
+    const ok = await helpers.requestJsonRpcControlEvent(
+      get as any,
+      set as any,
+      workspaceId,
+      "cowork/plugins/install",
+      { cwd: "/tmp/workspace", sourceInput: "owner/repo", targetScope: "workspace" },
+    );
+
+    await flushAsyncWork();
+
+    expect(ok).toBe(true);
+    expect(waiterResolved).toBe(true);
+    expect(RUNTIME.pluginInstallWaiters.has(workspaceId)).toBe(false);
+    expect(state.workspaceRuntimeById[workspaceId].pluginMutationPendingKeys).toEqual({});
+    expect(state.workspaceRuntimeById[workspaceId].pluginMutationError).toBeNull();
   });
 
   test("requestJsonRpcControlEvent applies error events and rejects pending install waiters", async () => {

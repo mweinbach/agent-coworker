@@ -210,13 +210,14 @@ export function createPluginActions(
       }
       const cwd = workspacePathFor(get, workspaceId);
       const cachedPlugin = resolveCachedPluginSelection(workspaceId, pluginId, scope);
+      const resolvedScope = scope ?? cachedPlugin?.scope ?? null;
       set((s) => ({
         workspaceRuntimeById: {
           ...s.workspaceRuntimeById,
           [workspaceId]: {
             ...s.workspaceRuntimeById[workspaceId],
             selectedPluginId: pluginId,
-            selectedPluginScope: scope ?? cachedPlugin?.scope ?? null,
+            selectedPluginScope: resolvedScope,
             selectedPlugin: cachedPlugin,
             pluginsLoading: true,
             pluginsError: null,
@@ -226,7 +227,7 @@ export function createPluginActions(
       const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/plugins/read", {
         cwd,
         pluginId,
-        ...(scope ? { scope } : {}),
+        ...(resolvedScope ? { scope: resolvedScope } : {}),
       });
       if (!ok) {
         set((s) => ({

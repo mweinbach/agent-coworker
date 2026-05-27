@@ -960,6 +960,7 @@ export const pluginsCatalogEventSchema = z
     type: z.literal("plugins_catalog"),
     sessionId: nonEmptyTrimmedStringSchema.optional(),
     catalog: pluginCatalogSnapshotSchema,
+    availablePluginsPartial: z.boolean().optional(),
     clearedMutationPendingKeys: z.array(z.string()).optional(),
   })
   .passthrough();

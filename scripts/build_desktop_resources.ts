@@ -498,6 +498,7 @@ async function main() {
         await buildBunBundle({
           entry,
           env: "COWORK_DESKTOP_BUNDLE*",
+          minify: false,
           outfile: bundledEntrypointPath,
         });
       } finally {

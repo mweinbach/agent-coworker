@@ -50,7 +50,7 @@ async function createFakeCodexBin(prefix: string): Promise<string> {
 }
 
 describe("codex app-server resolver", () => {
-  test("uses explicit command overrides without adding implicit app-server args", async () => {
+  test.serial("uses explicit command overrides without adding implicit app-server args", async () => {
     process.env.COWORK_CODEX_APP_SERVER_COMMAND = "/tmp/custom-codex-app-server";
     process.env.COWORK_CODEX_APP_SERVER_ARGS = "";
 
@@ -65,31 +65,33 @@ describe("codex app-server resolver", () => {
     });
   });
 
-  test("uses system codex when it is available and no managed install exists", async () => {
+  test.serial("downloads a managed app-server before using system codex", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-system-"));
     const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-system-bin-"));
     const codexPath = path.join(binDir, "codex");
     await fs.writeFile(codexPath, "#!/bin/sh\n", "utf8");
     await fs.chmod(codexPath, 0o755);
+    const probedCommands: string[] = [];
 
     const command = await resolveCodexAppServerCommand({
       homeDir,
       pathEnv: binDir,
+      platform: "win32",
+      arch: "x64",
+      fetchImpl: fakeReleaseFetch("0.129.0"),
       spawnForResult: async (cmd, args) => {
-        expect([cmd, ...args]).toEqual([codexPath, "--version"]);
-        return { ok: true, stdout: "codex-cli 0.128.0\n", stderr: "" };
+        probedCommands.push([cmd, ...args].join(" "));
+        return { ok: true, stdout: "Usage: codex app-server\n", stderr: "" };
       },
     });
 
-    expect(command).toEqual({
-      command: codexPath,
-      args: ["app-server"],
-      source: "system",
-      version: "0.128.0",
-    });
+    expect(command.source).toBe("managed");
+    expect(command.version).toBe("0.129.0");
+    expect(await fs.readFile(command.command, "utf8")).toBe("managed app-server");
+    expect(probedCommands).toEqual([]);
   });
 
-  test("skips repo-local node_modules codex binaries when resolving system codex", async () => {
+  test.serial("skips repo-local node_modules codex binaries when resolving system codex", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-shadow-home-"));
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-shadow-root-"));
     const localBinDir = path.join(rootDir, "node_modules", ".bin");
@@ -102,20 +104,26 @@ describe("codex app-server resolver", () => {
     await fs.writeFile(systemCodexPath, "#!/bin/sh\n", "utf8");
     await fs.chmod(staleCodexPath, 0o755);
     await fs.chmod(systemCodexPath, 0o755);
-    const probedCommands: string[] = [];
+    const probedCalls: string[] = [];
 
     const command = await resolveCodexAppServerCommand({
       homeDir,
       pathEnv: [localBinDir, systemBinDir].join(path.delimiter),
-      spawnForResult: async (cmd) => {
-        probedCommands.push(cmd);
+      fetchImpl: async () => {
+        throw new Error("managed install unavailable");
+      },
+      spawnForResult: async (cmd, args) => {
+        probedCalls.push([cmd, ...args].join(" "));
         if (cmd === staleCodexPath) return { ok: true, stdout: "codex-cli 0.87.0\n", stderr: "" };
         if (cmd === systemCodexPath) return { ok: true, stdout: "codex-cli 0.128.0\n", stderr: "" };
         return { ok: false, stdout: "", stderr: "" };
       },
     });
 
-    expect(probedCommands).toEqual([systemCodexPath]);
+    expect(probedCalls).toEqual([
+      `${systemCodexPath} --version`,
+      `${systemCodexPath} app-server --help`,
+    ]);
     expect(command).toEqual({
       command: systemCodexPath,
       args: ["app-server"],
@@ -124,7 +132,7 @@ describe("codex app-server resolver", () => {
     });
   });
 
-  test("downloads and promotes a managed app-server when codex is missing", async () => {
+  test.serial("downloads and promotes a managed app-server when codex is missing", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-managed-"));
     const status = await updateManagedCodexAppServer(
       {},
@@ -152,7 +160,43 @@ describe("codex app-server resolver", () => {
     expect(managed.version).toBe("0.129.0");
   });
 
-  test("prefers system codex over an existing managed app-server", async () => {
+  test.serial("skips system codex binaries that do not support app-server", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-stale-system-"));
+    await updateManagedCodexAppServer(
+      {},
+      {
+        homeDir,
+        platform: "win32",
+        arch: "x64",
+        fetchImpl: fakeReleaseFetch("0.129.0"),
+        spawnForResult: async () => ({ ok: false, stdout: "", stderr: "" }),
+      },
+    );
+    const binDir = await createFakeCodexBin("cowork-codex-stale-system-bin-");
+
+    const command = await resolveCodexAppServerCommand({
+      homeDir,
+      pathEnv: binDir,
+      platform: "win32",
+      arch: "x64",
+      spawnForResult: async (_cmd, args) => {
+        if (args[0] === "--version") {
+          return { ok: true, stdout: "codex-cli 0.87.0\n", stderr: "" };
+        }
+        expect(args).toEqual(["app-server", "--help"]);
+        return {
+          ok: false,
+          stdout: "",
+          stderr: "error: unrecognized subcommand 'app-server'\n",
+        };
+      },
+    });
+
+    expect(command.source).toBe("managed");
+    expect(command.version).toBe("0.129.0");
+  });
+
+  test.serial("prefers an existing managed app-server over system codex", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-system-managed-"));
     await updateManagedCodexAppServer(
       {},
@@ -170,13 +214,15 @@ describe("codex app-server resolver", () => {
       pathEnv: await createFakeCodexBin("cowork-codex-system-managed-bin-"),
       platform: "win32",
       arch: "x64",
-      spawnForResult: async () => ({ ok: true, stdout: "codex-cli 0.128.0\n", stderr: "" }),
+      spawnForResult: async () => {
+        throw new Error("system codex should not be probed when managed install exists");
+      },
     });
-    expect(resolved.source).toBe("system");
-    expect(resolved.version).toBe("0.128.0");
+    expect(resolved.source).toBe("managed");
+    expect(resolved.version).toBe("0.129.0");
   });
 
-  test("reports update availability for older system codex", async () => {
+  test.serial("reports update availability for older system codex", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-status-"));
     const binDir = await createFakeCodexBin("cowork-codex-status-bin-");
     const status = await getCodexAppServerInstallStatus(
@@ -198,19 +244,19 @@ describe("codex app-server resolver", () => {
     });
   });
 
-  test("parses Codex CLI version strings", () => {
+  test.serial("parses Codex CLI version strings", () => {
     expect(__internal.parseCodexVersion("codex-cli 0.128.0")).toBe("0.128.0");
     expect(__internal.parseCodexVersion("0.129.1")).toBe("0.129.1");
   });
 
-  test("compares versions correctly including pre-releases", () => {
+  test.serial("compares versions correctly including pre-releases", () => {
     expect(__internal.compareVersions("1.0.0", "1.0.0-beta")).toBe(1);
     expect(__internal.compareVersions("1.0.0-beta", "1.0.0")).toBe(-1);
     expect(__internal.compareVersions("1.0.0-alpha", "1.0.0-beta")).toBe(-1);
     expect(__internal.compareVersions("2.0.0", "1.0.0")).toBe(1);
   });
 
-  test("handles overridden quoted arguments containing spaces", async () => {
+  test.serial("handles overridden quoted arguments containing spaces", async () => {
     process.env.COWORK_CODEX_APP_SERVER_COMMAND = "/tmp/custom-codex-app-server";
     process.env.COWORK_CODEX_APP_SERVER_ARGS = `--config "/path/with spaces/config.json" --option value`;
 
@@ -225,7 +271,7 @@ describe("codex app-server resolver", () => {
     });
   });
 
-  test("handles overridden JSON array arguments", async () => {
+  test.serial("handles overridden JSON array arguments", async () => {
     process.env.COWORK_CODEX_APP_SERVER_COMMAND = "/tmp/custom-codex-app-server";
     process.env.COWORK_CODEX_APP_SERVER_ARGS = `["--config", "/path/with spaces/config.json"]`;
 

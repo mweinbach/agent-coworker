@@ -8,7 +8,6 @@ import {
   hasPackagedFoundationModelsSdk,
   hasPackagedWindowsAiElectronPackage,
   resolveDesktopTargetTriple,
-  resolvePackagedCodexAppServerFilename,
   resolvePackagedSidecarFilename,
   resolveWindowsAiElectronPrebuildTriplet,
   SIDECAR_BUN_ENTRYPOINT_PATH,
@@ -23,9 +22,6 @@ describe("desktop sidecar packaging helpers", () => {
     expect(resolveDesktopTargetTriple("darwin", "arm64")).toBe("aarch64-apple-darwin");
     expect(resolvePackagedSidecarFilename("darwin", "arm64")).toBe(
       "cowork-server-aarch64-apple-darwin",
-    );
-    expect(resolvePackagedCodexAppServerFilename("darwin", "arm64")).toBe(
-      "codex-app-server-aarch64-apple-darwin",
     );
   });
 

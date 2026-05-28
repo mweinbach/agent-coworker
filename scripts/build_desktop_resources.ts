@@ -7,7 +7,6 @@ import {
   buildSidecarManifest,
   FOUNDATION_MODELS_KOFFI_TRIPLET,
   FOUNDATION_MODELS_SDK_DIR_NAME,
-  resolvePackagedCodexAppServerFilename,
   resolvePackagedSidecarFilename,
   resolveWindowsAiElectronPrebuildTriplet,
   SIDECAR_BUN_ENTRYPOINT_PATH,
@@ -21,7 +20,6 @@ import {
   buildBunBundle,
   copyDir,
   ensureBundledBunRuntime,
-  ensureBundledCodexAppServer,
   pathExists,
   resolveBundledBunRuntimeVersion,
   resolveBuildTarget,
@@ -29,7 +27,7 @@ import {
   runCommand,
 } from "./releaseBuildUtils";
 
-const CACHE_VERSION = 6;
+const CACHE_VERSION = 7;
 const MANAGED_SOFFICE_HELPER_RELATIVE_PATH = path.join("assets", "managed-soffice-helper.mjs");
 
 type DesktopResourcesCache = {
@@ -38,7 +36,6 @@ type DesktopResourcesCache = {
   arch: string;
   includeDocs: boolean;
   sidecarFingerprint: string;
-  codexAppServerVersion: string | null;
   promptsFingerprint: string;
   configFingerprint: string;
   skillsFingerprint: string;
@@ -114,7 +111,6 @@ async function loadCache(cachePath: string): Promise<DesktopResourcesCache | nul
       parsed.arch.length === 0 ||
       typeof parsed.includeDocs !== "boolean" ||
       typeof parsed.sidecarFingerprint !== "string" ||
-      (parsed.codexAppServerVersion !== null && typeof parsed.codexAppServerVersion !== "string") ||
       typeof parsed.promptsFingerprint !== "string" ||
       typeof parsed.configFingerprint !== "string" ||
       typeof parsed.skillsFingerprint !== "string" ||
@@ -140,11 +136,20 @@ async function writeCache(cachePath: string, cache: DesktopResourcesCache): Prom
   await fs.writeFile(cachePath, `${JSON.stringify(cache, null, 2)}\n`, "utf8");
 }
 
-function normalizeCodexAppServerVersionOverride(version: string | undefined): string | null {
-  if (!version) {
-    return null;
+async function removeLegacyCodexAppServerBinaries(desktopBinariesDir: string): Promise<void> {
+  let entries: string[];
+  try {
+    entries = await fs.readdir(desktopBinariesDir);
+  } catch {
+    return;
   }
-  return version.startsWith("rust-v") ? version.slice("rust-v".length) : version;
+  await Promise.all(
+    entries
+      .filter((entry) => entry.startsWith("codex-app-server"))
+      .map(async (entry) => {
+        await fs.rm(path.join(desktopBinariesDir, entry), { force: true });
+      }),
+  );
 }
 
 async function resolveCodexPrimaryRuntimeSource(): Promise<string | null> {
@@ -390,9 +395,6 @@ async function main() {
   const distDir = path.join(root, "dist");
   const includeDocs = process.env.COWORK_BUNDLE_DESKTOP_DOCS === "1";
   const shouldBundleCodexPrimaryRuntime = process.env.COWORK_BUNDLE_CODEX_PRIMARY_RUNTIME === "1";
-  const codexAppServerVersionOverride =
-    process.env.COWORK_CODEX_APP_SERVER_VERSION?.trim() || undefined;
-  const shouldBundleCodexAppServer = process.env.COWORK_BUNDLE_CODEX_APP_SERVER === "1";
   const cachePath = path.join(distDir, `.desktop-resources-cache-${platform}-${arch}.json`);
 
   await fs.mkdir(distDir, { recursive: true });
@@ -449,8 +451,6 @@ async function main() {
     desktopBinariesDir,
     resolvePackagedSidecarFilename(platform, arch),
   );
-  const codexAppServerFilename = resolvePackagedCodexAppServerFilename(platform, arch);
-  const codexAppServerOutfile = path.join(desktopBinariesDir, codexAppServerFilename);
   const sidecarManifestPath = path.join(desktopBinariesDir, "cowork-server-manifest.json");
   const foundationModelsSdkDest = path.join(desktopBinariesDir, FOUNDATION_MODELS_SDK_DIR_NAME);
   const windowsAiElectronDest = path.join(desktopBinariesDir, WINDOWS_AI_ELECTRON_DIR_NAME);
@@ -475,7 +475,6 @@ async function main() {
     cache?.sidecarFingerprint !== sidecarFingerprint ||
     cache?.bundledBunRuntimeVersion !== bundledBunRuntimeVersion ||
     !(await pathExists(sidecarManifestPath)) ||
-    (shouldBundleCodexAppServer && !(await pathExists(codexAppServerOutfile))) ||
     (useBundledBunRuntime
       ? !(await pathExists(bundledBunPath)) ||
         !(await pathExists(bundledEntrypointPath)) ||
@@ -561,36 +560,8 @@ async function main() {
     console.log("[resources] sidecar: cached");
   }
 
-  let codexAppServerVersion: string | null = cache?.codexAppServerVersion ?? null;
-  if (shouldBundleCodexAppServer) {
-    const pinnedVersion = normalizeCodexAppServerVersionOverride(codexAppServerVersionOverride);
-    const cachedVersionMatches =
-      cache?.platform === platform &&
-      cache?.arch === arch &&
-      cache?.codexAppServerVersion &&
-      (pinnedVersion === null || cache.codexAppServerVersion === pinnedVersion);
-    if (cachedVersionMatches && (await pathExists(codexAppServerOutfile))) {
-      codexAppServerVersion = cache.codexAppServerVersion;
-      console.log(`[resources] codex app-server: cached v${codexAppServerVersion}`);
-    } else {
-      const codexBundle = await ensureBundledCodexAppServer(root, target, {
-        version: codexAppServerVersionOverride,
-        outputName: codexAppServerFilename,
-      });
-      codexAppServerVersion = codexBundle.version;
-      await fs.copyFile(codexBundle.executablePath, codexAppServerOutfile);
-      if (platform !== "win32") {
-        await fs.chmod(codexAppServerOutfile, 0o755);
-      }
-      console.log(
-        `[resources] codex app-server: bundled ${codexBundle.assetName} v${codexBundle.version}`,
-      );
-    }
-  } else {
-    await fs.rm(codexAppServerOutfile, { force: true });
-    codexAppServerVersion = null;
-    console.log("[resources] codex app-server: disabled");
-  }
+  await removeLegacyCodexAppServerBinaries(desktopBinariesDir);
+  console.log("[resources] codex app-server: runtime-managed");
 
   const promptsDest = path.join(distDir, "prompts");
   const configDest = path.join(distDir, "config");
@@ -673,7 +644,6 @@ async function main() {
     arch,
     includeDocs,
     sidecarFingerprint,
-    codexAppServerVersion,
     promptsFingerprint,
     configFingerprint,
     skillsFingerprint,

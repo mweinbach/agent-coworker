@@ -9,16 +9,6 @@ export type BuildTarget = {
 
 const WINDOWS_ARM64_BUNDLED_BUN_RUNTIME_VERSION = "1.3.13";
 
-type GitHubReleaseAsset = {
-  name?: unknown;
-  browser_download_url?: unknown;
-};
-
-type GitHubReleaseResponse = {
-  tag_name?: unknown;
-  assets?: unknown;
-};
-
 function parseFlagValue(argv: string[], ...flagNames: string[]): string | null {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -238,10 +228,6 @@ async function extractZipArchive(archivePath: string, destDir: string): Promise<
   await runCommand(["unzip", "-oq", archivePath, "-d", destDir], { cwd: path.dirname(destDir) });
 }
 
-async function extractTarGzArchive(archivePath: string, destDir: string): Promise<void> {
-  await runCommand(["tar", "-xzf", archivePath, "-C", destDir], { cwd: path.dirname(destDir) });
-}
-
 async function findFileRecursive(dir: string, wantedBasename: string): Promise<string | null> {
   const entries = await fs.readdir(dir, { withFileTypes: true });
   for (const entry of entries) {
@@ -297,80 +283,6 @@ export function resolveBundledBunRuntimeVersion(
     return WINDOWS_ARM64_BUNDLED_BUN_RUNTIME_VERSION;
   }
   return Bun.version;
-}
-
-function codexReleaseTag(version: string): string {
-  const normalized = version.trim();
-  if (!normalized) {
-    throw new Error("Codex app-server version cannot be empty");
-  }
-  return normalized.startsWith("rust-v") ? normalized : `rust-v${normalized}`;
-}
-
-function normalizeCodexReleaseVersion(tagName: string): string {
-  return tagName.startsWith("rust-v") ? tagName.slice("rust-v".length) : tagName;
-}
-
-function resolveCodexAppServerAssetName(target: BuildTarget): string {
-  if (target.platform === "darwin" && target.arch === "x64") {
-    return "codex-app-server-x86_64-apple-darwin.tar.gz";
-  }
-  if (target.platform === "darwin" && target.arch === "arm64") {
-    return "codex-app-server-aarch64-apple-darwin.tar.gz";
-  }
-  if (target.platform === "linux" && target.arch === "x64") {
-    return "codex-app-server-x86_64-unknown-linux-musl.tar.gz";
-  }
-  if (target.platform === "linux" && target.arch === "arm64") {
-    return "codex-app-server-aarch64-unknown-linux-musl.tar.gz";
-  }
-  if (target.platform === "win32" && target.arch === "x64") {
-    return "codex-app-server-x86_64-pc-windows-msvc.exe";
-  }
-  if (target.platform === "win32" && target.arch === "arm64") {
-    return "codex-app-server-aarch64-pc-windows-msvc.exe";
-  }
-  throw new Error(`Unsupported Codex app-server bundle target: ${target.platform}/${target.arch}`);
-}
-
-async function fetchCodexRelease(opts: { version?: string }): Promise<{
-  tagName: string;
-  version: string;
-  assets: GitHubReleaseAsset[];
-}> {
-  const url = opts.version
-    ? `https://api.github.com/repos/openai/codex/releases/tags/${codexReleaseTag(opts.version)}`
-    : "https://api.github.com/repos/openai/codex/releases/latest";
-  const response = await fetch(url, {
-    headers: {
-      Accept: "application/vnd.github+json",
-      "User-Agent": "agent-coworker-desktop-build",
-    },
-  });
-  if (!response.ok) {
-    throw new Error(
-      `Failed to read Codex release metadata from ${url}: ${response.status} ${response.statusText}`,
-    );
-  }
-
-  const release = (await response.json()) as GitHubReleaseResponse;
-  const tagName = typeof release.tag_name === "string" ? release.tag_name : "";
-  if (!tagName) {
-    throw new Error(`Codex release metadata from ${url} did not include a tag_name`);
-  }
-  const assets = Array.isArray(release.assets)
-    ? release.assets.filter((asset): asset is GitHubReleaseAsset => Boolean(asset))
-    : [];
-  return { tagName, version: normalizeCodexReleaseVersion(tagName), assets };
-}
-
-function findReleaseAsset(assets: GitHubReleaseAsset[], assetName: string): string {
-  const asset = assets.find((candidate) => candidate.name === assetName);
-  const downloadUrl = asset?.browser_download_url;
-  if (typeof downloadUrl !== "string" || !downloadUrl) {
-    throw new Error(`Codex release did not include required asset ${assetName}`);
-  }
-  return downloadUrl;
 }
 
 async function downloadFile(url: string, dest: string): Promise<void> {
@@ -433,52 +345,4 @@ export async function ensureBundledBunRuntime(
   await fs.rm(archivePath, { force: true });
 
   return { executablePath: bundledExecutablePath, version };
-}
-
-export async function ensureBundledCodexAppServer(
-  root: string,
-  target: BuildTarget,
-  opts: { version?: string; outputName: string },
-): Promise<{ executablePath: string; version: string; assetName: string }> {
-  const release = await fetchCodexRelease({ version: opts.version });
-  const assetName = resolveCodexAppServerAssetName(target);
-  const cacheDir = path.join(
-    root,
-    "dist",
-    ".codex-app-server-cache",
-    `codex-v${release.version}`,
-    `${target.platform}-${target.arch}`,
-  );
-  const bundledExecutablePath = path.join(cacheDir, opts.outputName);
-
-  if (await pathExists(bundledExecutablePath)) {
-    return { executablePath: bundledExecutablePath, version: release.version, assetName };
-  }
-
-  const downloadUrl = findReleaseAsset(release.assets, assetName);
-  const assetPath = path.join(cacheDir, assetName);
-  const extractDir = path.join(cacheDir, "extract");
-
-  await rmrf(cacheDir);
-  await fs.mkdir(cacheDir, { recursive: true });
-  await downloadFile(downloadUrl, assetPath);
-
-  if (assetName.endsWith(".tar.gz")) {
-    await fs.mkdir(extractDir, { recursive: true });
-    await extractTarGzArchive(assetPath, extractDir);
-    const extractedExecutablePath =
-      (await findFileRecursive(extractDir, "codex-app-server")) ??
-      (await findFileRecursive(extractDir, assetName.slice(0, -".tar.gz".length)));
-    if (!extractedExecutablePath) {
-      throw new Error(`Unable to find codex-app-server in ${assetName}`);
-    }
-    await fs.copyFile(extractedExecutablePath, bundledExecutablePath);
-    await fs.chmod(bundledExecutablePath, 0o755);
-    await rmrf(extractDir);
-    await fs.rm(assetPath, { force: true });
-  } else {
-    await fs.rename(assetPath, bundledExecutablePath);
-  }
-
-  return { executablePath: bundledExecutablePath, version: release.version, assetName };
 }

@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { nonEmptyTrimmedStringSchema } from "./schema.shared";
 
-export const jsonRpcInitializeParamsSchema = z
+const jsonRpcInitializeParamsSchema = z
   .object({
     clientInfo: z
       .object({
@@ -21,7 +21,7 @@ export const jsonRpcInitializeParamsSchema = z
   })
   .strict();
 
-export const jsonRpcInitializedParamsSchema = z.object({}).strict();
+const jsonRpcInitializedParamsSchema = z.object({}).strict();
 
 export const jsonRpcCoreRequestSchemas = {
   initialize: jsonRpcInitializeParamsSchema,

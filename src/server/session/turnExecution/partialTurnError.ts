@@ -1,13 +1,8 @@
-import type { PartialTurnError } from "../../../runtime/types";
 import type { ProviderContinuationState } from "../../../shared/providerContinuation";
 import type { ModelMessage } from "../../../types";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
-}
-
-export function asPartialTurnError(error: unknown): PartialTurnError | null {
-  return error instanceof Error ? (error as PartialTurnError) : null;
 }
 
 export function resolvePartialTurnProgressSource(

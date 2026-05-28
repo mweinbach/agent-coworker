@@ -71,7 +71,7 @@ export type CodexDynamicToolCallResponse = {
   contentItems: Array<{ type: "inputText"; text: string }>;
 };
 
-export const CODEX_DYNAMIC_MCP_TOOL_PREFIX = "cowork_mcp__";
+const CODEX_DYNAMIC_MCP_TOOL_PREFIX = "cowork_mcp__";
 
 export function attachUsageToError(error: unknown, usage: RuntimeUsage | undefined): Error {
   const err = error instanceof Error ? error : new Error(String(error));
@@ -123,7 +123,7 @@ export function targetsActiveCodexTurn(
   return true;
 }
 
-export function formatCommandForDiagnostics(command: CodexAppServerCommand): string {
+function formatCommandForDiagnostics(command: CodexAppServerCommand): string {
   return [
     `source=${command.source}`,
     `command=${command.command}`,

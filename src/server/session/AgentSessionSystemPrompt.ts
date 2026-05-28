@@ -52,7 +52,7 @@ export async function ensureAgentSessionSystemPromptReady(
   return await loadPromise;
 }
 
-export async function recordAgentSessionSkillCatalogMtimeSnapshot(
+async function recordAgentSessionSkillCatalogMtimeSnapshot(
   promptState: AgentSessionSystemPromptState,
 ): Promise<void> {
   const readSnapshot = promptState.deps.readSkillCatalogMtimeSnapshotImpl;
@@ -66,7 +66,7 @@ export async function recordAgentSessionSkillCatalogMtimeSnapshot(
   }
 }
 
-export async function refreshAgentSessionSystemPromptIfSkillCatalogChanged(
+async function refreshAgentSessionSystemPromptIfSkillCatalogChanged(
   promptState: AgentSessionSystemPromptState,
 ): Promise<void> {
   const readSnapshot = promptState.deps.readSkillCatalogMtimeSnapshotImpl;

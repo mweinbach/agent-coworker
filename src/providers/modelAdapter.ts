@@ -150,20 +150,6 @@ export function createFireworksInferenceModelAdapter(
   );
 }
 
-export function createFireworksModelAdapter(
-  modelId: string,
-  savedKey?: string,
-): ProviderModelAdapter {
-  return createFireworksInferenceModelAdapter("fireworks", modelId, savedKey);
-}
-
-export function createFirepassModelAdapter(
-  modelId: string,
-  savedKey?: string,
-): ProviderModelAdapter {
-  return createFireworksInferenceModelAdapter("firepass", modelId, savedKey);
-}
-
 export function createNvidiaModelAdapter(modelId: string, savedKey?: string): ProviderModelAdapter {
   return createModelAdapter(modelId, "nvidia.completions", async () => {
     const key = firstNonEmpty(savedKey, envKey("NVIDIA_API_KEY"));

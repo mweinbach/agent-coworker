@@ -168,7 +168,7 @@ export function providerOptionStringForCodex(
   return providerOptionString(providerOptions, key);
 }
 
-export async function listAppServerModels(
+async function listAppServerModels(
   client: CodexAppServerClient,
 ): Promise<CodexAppServerModelListEntry[]> {
   const models: CodexAppServerModelListEntry[] = [];

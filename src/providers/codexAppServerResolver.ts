@@ -5,7 +5,7 @@ import path from "node:path";
 
 import { resolveAuthHomeDir } from "../utils/authHome";
 
-export type CodexAppServerSource = "override" | "system" | "managed";
+type CodexAppServerSource = "override" | "system" | "managed";
 
 export type CodexAppServerCommand = {
   command: string;

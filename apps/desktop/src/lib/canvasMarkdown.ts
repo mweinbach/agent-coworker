@@ -1,4 +1,4 @@
-export function escapeHtml(text: string): string {
+function escapeHtml(text: string): string {
   return text
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -7,7 +7,7 @@ export function escapeHtml(text: string): string {
     .replace(/'/g, "&apos;");
 }
 
-export function parseInlineMarkdown(text: string): string {
+function parseInlineMarkdown(text: string): string {
   let html = escapeHtml(text);
   html = html.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
   html = html.replace(/__(.*?)__/g, "<strong>$1</strong>");

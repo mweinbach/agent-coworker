@@ -583,22 +583,6 @@ export async function updateSkillInstallation(opts: {
   }
 }
 
-export async function getInstallationForMutation(opts: {
-  config: AgentConfig;
-  installationId: string;
-}): Promise<SkillInstallationEntry> {
-  const catalog = await refreshCatalog(opts.config);
-  const installation = getInstallationById(catalog, opts.installationId);
-  if (!installation) {
-    throw new Error(`Skill installation "${opts.installationId}" was not found`);
-  }
-  return installation;
-}
-
-export function resolveRecordedInstallSource(installation: SkillInstallationEntry): string | null {
-  return installSourceFromOrigin(installation);
-}
-
 export async function getSkillCatalog(config: AgentConfig): Promise<SkillCatalogSnapshot> {
   return await refreshCatalog(config);
 }

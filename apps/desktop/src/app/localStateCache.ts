@@ -33,14 +33,3 @@ export function saveDesktopStateCache(state: DesktopStateCache): void {
     // Best effort only; do not block the desktop UI on local storage writes.
   }
 }
-
-export function clearDesktopStateCache(): void {
-  if (typeof window === "undefined") {
-    return;
-  }
-  try {
-    window.localStorage.removeItem(getDesktopStateCacheKey());
-  } catch {
-    // Ignore local storage cleanup failures.
-  }
-}

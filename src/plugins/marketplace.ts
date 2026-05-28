@@ -54,7 +54,7 @@ const marketplaceDocumentSchema = z
   })
   .strict();
 
-export interface ParsedMarketplacePluginEntry {
+interface ParsedMarketplacePluginEntry {
   name: string;
   sourcePath: string;
   sourceInput?: string;

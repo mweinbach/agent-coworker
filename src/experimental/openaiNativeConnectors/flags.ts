@@ -1,7 +1,6 @@
 import type { AgentConfig } from "../../types";
 
-export const OPENAI_NATIVE_CONNECTORS_EXPERIMENT_ENV =
-  "COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS";
+const OPENAI_NATIVE_CONNECTORS_EXPERIMENT_ENV = "COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS";
 
 export function isOpenAiNativeConnectorsExperimentEnabled(
   env: Record<string, string | undefined> = process.env,

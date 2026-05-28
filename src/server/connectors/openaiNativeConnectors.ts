@@ -13,18 +13,12 @@ import type {
 import type { AgentConfig, MCPServerConfig } from "../../types";
 import { resolveAuthHomeDir } from "../../utils/authHome";
 
-const CONNECTORS_CONFIG_FILE_NAME = "openai-native-connectors.json";
-
 export type OpenAiNativeConnectorsSnapshot = {
   connectors: OpenAiNativeConnector[];
   enabledConnectorIds: string[];
   authenticated: boolean;
   message?: string;
 };
-
-export function openAiNativeConnectorsConfigPath(config: Pick<AgentConfig, "projectCoworkDir">) {
-  return path.join(config.projectCoworkDir, CONNECTORS_CONFIG_FILE_NAME);
-}
 
 function emptyConnectorsConfig(): OpenAiNativeConnectorsConfig {
   return {
@@ -36,13 +30,6 @@ function emptyConnectorsConfig(): OpenAiNativeConnectorsConfig {
 
 function codexHomeFromConfig(config: AgentConfig): string {
   return path.join(resolveAuthHomeDir(config), ".cowork", "auth", "codex-cli");
-}
-
-export async function readOpenAiNativeConnectorsConfig(
-  config: Pick<AgentConfig, "projectCoworkDir">,
-): Promise<OpenAiNativeConnectorsConfig> {
-  void config;
-  return emptyConnectorsConfig();
 }
 
 export async function setOpenAiNativeConnectorEnabled(
@@ -59,13 +46,6 @@ export async function setOpenAiNativeConnectorEnabled(
   });
   void config;
   return emptyConnectorsConfig();
-}
-
-export function enabledConnectorIdsFromConfig(document: OpenAiNativeConnectorsConfig): string[] {
-  return Object.entries(document.connectors)
-    .filter(([, entry]) => entry.enabled)
-    .map(([id]) => id)
-    .sort((left, right) => left.localeCompare(right));
 }
 
 export async function listOpenAiNativeConnectors(opts: {

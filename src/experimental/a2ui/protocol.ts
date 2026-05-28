@@ -20,7 +20,7 @@ import { z } from "zod";
 export const A2UI_PROTOCOL_VERSION = "v0.9" as const;
 
 /** Maximum serialized size (in bytes) we accept for a single envelope. */
-export const A2UI_MAX_ENVELOPE_BYTES = 128 * 1024;
+const A2UI_MAX_ENVELOPE_BYTES = 128 * 1024;
 
 const surfaceIdSchema = z
   .string()
@@ -44,7 +44,7 @@ const jsonValueSchema: z.ZodType<unknown> = z.unknown();
  * desktop renderer validates and rejects anything outside our basic-catalog
  * subset.
  */
-export const a2uiComponentSchema: z.ZodType<A2uiComponent> = z.lazy(() =>
+const a2uiComponentSchema: z.ZodType<A2uiComponent> = z.lazy(() =>
   z
     .object({
       id: z.string().trim().min(1).max(200),
@@ -124,7 +124,7 @@ const deleteSurfaceSchema = z
 /**
  * A2UI v0.9 envelope. Exactly one of the four operations is set.
  */
-export const a2uiEnvelopeSchema = z
+const a2uiEnvelopeSchema = z
   .object({
     version: z.literal(A2UI_PROTOCOL_VERSION),
     createSurface: createSurfaceSchema.optional(),
@@ -143,10 +143,6 @@ export const a2uiEnvelopeSchema = z
     return operations.length === 1;
   }, "envelope must carry exactly one of createSurface | updateComponents | updateDataModel | deleteSurface");
 
-export type A2uiCreateSurface = z.infer<typeof createSurfaceSchema>;
-export type A2uiUpdateComponents = z.infer<typeof updateComponentsSchema>;
-export type A2uiUpdateDataModel = z.infer<typeof updateDataModelSchema>;
-export type A2uiDeleteSurface = z.infer<typeof deleteSurfaceSchema>;
 export type A2uiEnvelope = z.infer<typeof a2uiEnvelopeSchema>;
 
 export type A2uiEnvelopeKind =

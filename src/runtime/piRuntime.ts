@@ -13,8 +13,6 @@ export {
   messagesAfterLastAssistant,
   nextProviderState,
   parseTelemetrySettings,
-  type ResolvedPiRuntimeModel,
-  resolvePiModel,
   shouldAddInvalidToolCallFormatReminder,
   splitStepOverrides,
   startModelCallSpan,

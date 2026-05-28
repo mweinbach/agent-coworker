@@ -2,7 +2,7 @@ import type { SessionCostTracker, TurnUsage } from "../../../session/costTracker
 import type { ProviderName } from "../../../types";
 import type { SessionEvent } from "../../protocol";
 
-export function mergeTurnUsage(
+function mergeTurnUsage(
   total: TurnUsage | undefined,
   next: TurnUsage | undefined,
 ): TurnUsage | undefined {

@@ -5,7 +5,7 @@ import { RUNTIME } from "./runtimeState";
 type SkillsCatalogEvent = Extract<SessionEvent, { type: "skills_catalog" }>;
 type PluginsCatalogEvent = Extract<SessionEvent, { type: "plugins_catalog" }>;
 
-export function omitMutationPendingKeys(
+function omitMutationPendingKeys(
   pendingKeys: Record<string, true>,
   clearedPendingKeys?: readonly string[],
 ): Record<string, true> {
@@ -20,7 +20,7 @@ export function omitMutationPendingKeys(
   return nextPendingKeys;
 }
 
-export function mergeStableAvailablePlugins(
+function mergeStableAvailablePlugins(
   previousCatalog: PluginCatalogSnapshot | null,
   nextCatalog: PluginCatalogSnapshot,
   availablePluginsPartial: boolean,
@@ -47,7 +47,7 @@ export function mergeStableAvailablePlugins(
   };
 }
 
-export function clearedSkillMutationKeys(
+function clearedSkillMutationKeys(
   workspaceRuntimeBefore: WorkspaceRuntime | undefined,
   clearedMutationPendingKeys: readonly string[],
 ): boolean {
@@ -56,7 +56,7 @@ export function clearedSkillMutationKeys(
   );
 }
 
-export function clearedPluginMutationKeys(
+function clearedPluginMutationKeys(
   workspaceRuntimeBefore: WorkspaceRuntime | undefined,
   clearedMutationPendingKeys: readonly string[],
 ): boolean {

@@ -230,6 +230,3 @@ export function ToolCodeBlock({ label, value, tone = "default" }: ToolCodeBlockP
     </div>
   );
 }
-
-export const ToolRunningIcon = CircleIcon;
-export { stateLabel as toolStateLabel };

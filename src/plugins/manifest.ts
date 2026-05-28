@@ -377,7 +377,7 @@ async function assertPathInsidePluginRoot(
   }
 }
 
-export const PLUGIN_MANIFEST_DIR_NAMES = [".cowork-plugin", ".codex-plugin"] as const;
+const PLUGIN_MANIFEST_DIR_NAMES = [".cowork-plugin", ".codex-plugin"] as const;
 
 export function isPluginManifestDirName(value: string): boolean {
   return PLUGIN_MANIFEST_DIR_NAMES.includes(value as (typeof PLUGIN_MANIFEST_DIR_NAMES)[number]);
@@ -391,11 +391,11 @@ function pluginInstallMetadataPathForManifestPath(manifestPath: string): string 
   return path.join(path.dirname(manifestPath), "install.json");
 }
 
-export function pluginInstallMetadataPathsForPluginRoot(pluginRoot: string): string[] {
+function pluginInstallMetadataPathsForPluginRoot(pluginRoot: string): string[] {
   return PLUGIN_MANIFEST_DIR_NAMES.map((dirName) => path.join(pluginRoot, dirName, "install.json"));
 }
 
-export function manifestPathForPluginRoot(pluginRoot: string): string {
+function manifestPathForPluginRoot(pluginRoot: string): string {
   return pluginManifestPathsForPluginRoot(pluginRoot)[0] ?? path.join(pluginRoot, "plugin.json");
 }
 

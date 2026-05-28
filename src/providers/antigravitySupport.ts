@@ -1,4 +1,4 @@
-export const ANTIGRAVITY_SUPPORTED_PLATFORMS: readonly NodeJS.Platform[] = ["darwin", "linux"];
+const ANTIGRAVITY_SUPPORTED_PLATFORMS: readonly NodeJS.Platform[] = ["darwin", "linux"];
 
 export const ANTIGRAVITY_UNSUPPORTED_PLATFORM_MESSAGE =
   "Antigravity runtime is only supported on macOS and Linux for now.";

@@ -8,7 +8,7 @@ import { writeTextFileAtomic } from "./utils/atomicFile";
 
 type MigrationScope = "workspace" | "user";
 
-export type AgentConfigMigrationScopeResult = {
+type AgentConfigMigrationScopeResult = {
   scope: MigrationScope;
   sourceDir: string;
   targetDir: string;

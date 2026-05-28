@@ -1,4 +1,4 @@
-export const CODEX_NATIVE_EXECUTION_TOOL_NAMES = new Set([
+const CODEX_NATIVE_EXECUTION_TOOL_NAMES = new Set([
   "bash",
   "read",
   "write",

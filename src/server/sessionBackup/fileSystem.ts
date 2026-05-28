@@ -37,7 +37,7 @@ export async function emptyDirectory(dir: string): Promise<void> {
   }
 }
 
-export async function ensureDirectory(dir: string): Promise<void> {
+async function ensureDirectory(dir: string): Promise<void> {
   await fs.mkdir(dir, { recursive: true });
 }
 

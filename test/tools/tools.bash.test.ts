@@ -180,6 +180,11 @@ describe("bash tool", () => {
     const approveFn = mock(async () => true);
     const ctx = makeCtx(dir);
     ctx.approveCommand = approveFn;
+    bashInternal.setRunShellCommandForTests(async () => ({
+      stdout: "test\n",
+      stderr: "",
+      exitCode: 0,
+    }));
 
     const t: any = createBashTool(ctx);
     await t.execute({ command: "echo test" });

@@ -2,8 +2,3 @@ export { ensureCodexPrimaryRuntimeReady, shouldBootstrapCodexPrimaryRuntime } fr
 export { renderCodexPrimaryRuntimeInstructions } from "./instructions";
 export { __internal } from "./internal";
 export { WORKSPACE_TOOLS_PLUGIN_ID } from "./skills";
-export type {
-  CodexPrimaryRuntimeSetupResult,
-  CodexPrimaryRuntimeSkillResult,
-  EnsureCodexPrimaryRuntimeOptions,
-} from "./types";

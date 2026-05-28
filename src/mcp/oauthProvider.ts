@@ -39,7 +39,7 @@ const authServerMetadataSchema = z
   })
   .passthrough();
 
-export interface MCPOAuthChallenge {
+interface MCPOAuthChallenge {
   method: "auto" | "code";
   instructions: string;
   url?: string;

@@ -75,7 +75,7 @@ function approvalPromptForRequest(request: CodexAppServerJsonRpcRequest): string
     .join("\n");
 }
 
-export function normalizeTodoItem(value: unknown): TodoItem | null {
+function normalizeTodoItem(value: unknown): TodoItem | null {
   const record = asRecord(value);
   if (!record) return null;
   const content =

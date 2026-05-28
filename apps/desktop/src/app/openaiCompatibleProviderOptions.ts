@@ -1,18 +1,13 @@
 import {
-  GOOGLE_DYNAMIC_REASONING_EFFORT,
   type GoogleReasoningEffort,
-  type GoogleThinkingLevel,
   googleReasoningEffortFromThinkingLevel,
   listGoogleReasoningEffortValuesForModel,
   normalizeGoogleThinkingLevelForModel,
 } from "../../../../src/shared/googleThinking";
 import {
   CODEX_WEB_SEARCH_BACKEND_VALUES,
-  CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES,
   CODEX_WEB_SEARCH_MODE_VALUES,
   type CodexWebSearchBackend,
-  type CodexWebSearchContextSize,
-  type CodexWebSearchLocation,
   type CodexWebSearchMode,
   getCodexWebSearchBackendFromProviderOptions,
   getGoogleNativeWebSearchFromProviderOptions,
@@ -21,7 +16,6 @@ import {
   LOCAL_WEB_SEARCH_PROVIDER_VALUES,
   type LocalWebSearchProvider,
   mergeEditableOpenAiCompatibleProviderOptions,
-  OPENAI_COMPATIBLE_PROVIDER_NAMES,
   OPENAI_REASONING_EFFORT_VALUES,
   OPENAI_REASONING_SUMMARY_VALUES,
   OPENAI_TEXT_VERBOSITY_VALUES,
@@ -41,12 +35,10 @@ export const REASONING_SUMMARY_VALUES = OPENAI_REASONING_SUMMARY_VALUES;
 export const TEXT_VERBOSITY_VALUES = OPENAI_TEXT_VERBOSITY_VALUES;
 export const WEB_SEARCH_BACKEND_VALUES = CODEX_WEB_SEARCH_BACKEND_VALUES;
 export const WEB_SEARCH_MODE_VALUES = CODEX_WEB_SEARCH_MODE_VALUES;
-export const WEB_SEARCH_CONTEXT_SIZE_VALUES = CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES;
 export const LOCAL_WEB_SEARCH_PROVIDERS = LOCAL_WEB_SEARCH_PROVIDER_VALUES;
-export const GOOGLE_DYNAMIC_REASONING_VALUE = GOOGLE_DYNAMIC_REASONING_EFFORT;
-export const DEFAULT_CODEX_WEB_SEARCH_BACKEND: CodexWebSearchBackend = "native";
-export const DEFAULT_CODEX_WEB_SEARCH_MODE: CodexWebSearchMode = "live";
-export const DEFAULT_LOCAL_WEB_SEARCH_PROVIDER: LocalWebSearchProvider = "exa";
+const DEFAULT_CODEX_WEB_SEARCH_BACKEND: CodexWebSearchBackend = "native";
+const DEFAULT_CODEX_WEB_SEARCH_MODE: CodexWebSearchMode = "live";
+const DEFAULT_LOCAL_WEB_SEARCH_PROVIDER: LocalWebSearchProvider = "exa";
 
 export type OpenAICompatibleProviderName = SharedOpenAiCompatibleProviderName;
 export type ReasoningEffortValue = OpenAiReasoningEffort;
@@ -55,17 +47,14 @@ export type TextVerbosityValue = OpenAiTextVerbosity;
 export type WebSearchBackendValue = CodexWebSearchBackend;
 export type LocalWebSearchProviderValue = LocalWebSearchProvider;
 export type WebSearchModeValue = CodexWebSearchMode;
-export type WebSearchContextSizeValue = CodexWebSearchContextSize;
-export type WebSearchLocationValue = CodexWebSearchLocation;
 export type GoogleReasoningEffortValue = GoogleReasoningEffort;
-export type GoogleThinkingLevelValue = GoogleThinkingLevel;
 
-export type OpenAICompatibleProviderOptions = SharedOpenAiCompatibleProviderOptions;
+type OpenAICompatibleProviderOptions = SharedOpenAiCompatibleProviderOptions;
 export type CodexCliProviderOptions = SharedCodexCliProviderOptions;
 export type GoogleProviderOptions = SharedGoogleProviderOptions;
 export type WorkspaceProviderOptions = OpenAiCompatibleProviderOptionsByProvider;
 
-export const DEFAULT_WORKSPACE_PROVIDER_OPTIONS: {
+const DEFAULT_WORKSPACE_PROVIDER_OPTIONS: {
   openai: Required<OpenAICompatibleProviderOptions>;
   "codex-cli": Required<OpenAICompatibleProviderOptions>;
 } = {
@@ -80,16 +69,6 @@ export const DEFAULT_WORKSPACE_PROVIDER_OPTIONS: {
     textVerbosity: "medium",
   },
 };
-
-function cloneLocation(location?: CodexWebSearchLocation): CodexWebSearchLocation | undefined {
-  if (!location) return undefined;
-  return {
-    ...(location.country ? { country: location.country } : {}),
-    ...(location.region ? { region: location.region } : {}),
-    ...(location.city ? { city: location.city } : {}),
-    ...(location.timezone ? { timezone: location.timezone } : {}),
-  };
-}
 
 export function normalizeWorkspaceProviderOptions(
   value: unknown,
@@ -155,31 +134,6 @@ export function getWorkspaceLocalWebSearchProvider(
   return getLocalWebSearchProviderFromProviderOptions(options, fallback);
 }
 
-export function getWorkspaceWebSearchContextSize(
-  options: WorkspaceProviderOptions | undefined,
-  fallback: WebSearchContextSizeValue = "medium",
-): WebSearchContextSizeValue {
-  return options?.["codex-cli"]?.webSearch?.contextSize ?? fallback;
-}
-
-export function getWorkspaceWebSearchAllowedDomains(
-  options: WorkspaceProviderOptions | undefined,
-): string[] {
-  return [...(options?.["codex-cli"]?.webSearch?.allowedDomains ?? [])];
-}
-
-export function getWorkspaceWebSearchLocation(
-  options: WorkspaceProviderOptions | undefined,
-): CodexWebSearchLocation {
-  return cloneLocation(options?.["codex-cli"]?.webSearch?.location) ?? {};
-}
-
-export function hasWorkspaceWebSearchLocation(
-  options: WorkspaceProviderOptions | undefined,
-): boolean {
-  return Object.keys(getWorkspaceWebSearchLocation(options)).length > 0;
-}
-
 export function getWorkspaceGoogleNativeWebSearchEnabled(
   options: WorkspaceProviderOptions | undefined,
   fallback = false,
@@ -202,8 +156,4 @@ export function getGoogleReasoningEffortValuesForModel(
   modelId: string,
 ): readonly GoogleReasoningEffortValue[] {
   return listGoogleReasoningEffortValuesForModel(modelId);
-}
-
-export function listWorkspaceProviderOptionProviders(): readonly OpenAICompatibleProviderName[] {
-  return OPENAI_COMPATIBLE_PROVIDER_NAMES;
 }

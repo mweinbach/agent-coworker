@@ -182,7 +182,7 @@ function formatRoleCapabilities(role: AgentRoleDefinition): string[] {
   return capabilities;
 }
 
-export function buildSpawnAgentRolePromptLine(role: AgentRoleDefinition): string {
+function buildSpawnAgentRolePromptLine(role: AgentRoleDefinition): string {
   return `- **${role.id}**: ${formatRoleCapabilities(role).join(" ")}`;
 }
 

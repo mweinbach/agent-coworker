@@ -13,7 +13,7 @@ import type { ModelPricing } from "./pricing";
 const providerNameSchema = z.enum(PROVIDER_NAMES);
 const isoTimestampSchema = z.string().datetime({ offset: true });
 
-export const modelPricingSchema: z.ZodType<ModelPricing> = z
+const modelPricingSchema: z.ZodType<ModelPricing> = z
   .object({
     inputPerMillion: z.number(),
     outputPerMillion: z.number(),
@@ -38,7 +38,7 @@ export const turnUsageSchema: z.ZodType<TurnUsage> = z
   })
   .strict();
 
-export const turnCostEntrySchema: z.ZodType<TurnCostEntry> = z
+const turnCostEntrySchema: z.ZodType<TurnCostEntry> = z
   .object({
     turnId: z.string().trim().min(1),
     turnIndex: z.number().int().nonnegative(),
@@ -51,7 +51,7 @@ export const turnCostEntrySchema: z.ZodType<TurnCostEntry> = z
   })
   .strict();
 
-export const modelUsageSummarySchema: z.ZodType<ModelUsageSummary> = z
+const modelUsageSummarySchema: z.ZodType<ModelUsageSummary> = z
   .object({
     provider: providerNameSchema,
     model: z.string().trim().min(1),
@@ -66,7 +66,7 @@ export const modelUsageSummarySchema: z.ZodType<ModelUsageSummary> = z
   })
   .strict();
 
-export const budgetStatusSchema: z.ZodType<BudgetStatus> = z
+const budgetStatusSchema: z.ZodType<BudgetStatus> = z
   .object({
     configured: z.boolean(),
     warnAtUsd: z.number().nullable(),

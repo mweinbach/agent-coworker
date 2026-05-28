@@ -10,7 +10,7 @@ import type { FileAttachment, OrderedInputPart } from "../../jsonrpc/routes/shar
 import type { HistoryManager } from "../HistoryManager";
 import type { SessionContext } from "../SessionContext";
 
-export const MAX_PENDING_STEER_COUNT = 32;
+const MAX_PENDING_STEER_COUNT = 32;
 
 const MAX_PENDING_STEER_ATTACHMENT_TOTAL_BASE64_SIZE = MAX_TURN_ATTACHMENT_TOTAL_BASE64_SIZE;
 

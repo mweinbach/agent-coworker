@@ -25,14 +25,14 @@ const cwdRequestSchema = z
   })
   .passthrough();
 
-export const sessionEventEnvelope = <T extends z.ZodTypeAny>(eventSchema: T) =>
+const sessionEventEnvelope = <T extends z.ZodTypeAny>(eventSchema: T) =>
   z
     .object({
       event: eventSchema,
     })
     .strict();
 
-export const sessionEventsEnvelope = <T extends z.ZodTypeAny>(eventSchema: T) =>
+const sessionEventsEnvelope = <T extends z.ZodTypeAny>(eventSchema: T) =>
   z
     .object({
       events: z.array(eventSchema),
@@ -105,7 +105,7 @@ const providerOptionsLmStudioSchema = z
   })
   .strict();
 
-export const editableProviderOptionsSchema = z
+const editableProviderOptionsSchema = z
   .object({
     openai: providerOptionsOpenAiSchema.optional(),
     "codex-cli": providerOptionsCodexSchema.optional(),
@@ -114,7 +114,7 @@ export const editableProviderOptionsSchema = z
   })
   .strict();
 
-export const configUpdatedEventSchema = z
+const configUpdatedEventSchema = z
   .object({
     type: z.literal("config_updated"),
     sessionId: nonEmptyTrimmedStringSchema,
@@ -129,7 +129,7 @@ export const configUpdatedEventSchema = z
   })
   .passthrough();
 
-export const sessionSettingsEventSchema = z
+const sessionSettingsEventSchema = z
   .object({
     type: z.literal("session_settings"),
     sessionId: nonEmptyTrimmedStringSchema,
@@ -139,7 +139,7 @@ export const sessionSettingsEventSchema = z
   })
   .passthrough();
 
-export const sessionConfigEventSchema = z
+const sessionConfigEventSchema = z
   .object({
     type: z.literal("session_config"),
     sessionId: nonEmptyTrimmedStringSchema,
@@ -172,7 +172,7 @@ export const sessionConfigEventSchema = z
   })
   .passthrough();
 
-export const providerCatalogModelEntrySchema = z
+const providerCatalogModelEntrySchema = z
   .object({
     id: nonEmptyTrimmedStringSchema,
     displayName: z.string(),
@@ -181,7 +181,7 @@ export const providerCatalogModelEntrySchema = z
   })
   .strict();
 
-export const providerCatalogEntrySchema = z
+const providerCatalogEntrySchema = z
   .object({
     id: providerNameSchema,
     name: z.string(),
@@ -192,7 +192,7 @@ export const providerCatalogEntrySchema = z
   })
   .passthrough();
 
-export const providerCatalogEventSchema = z
+const providerCatalogEventSchema = z
   .object({
     type: z.literal("provider_catalog"),
     sessionId: nonEmptyTrimmedStringSchema.optional(),
@@ -202,7 +202,7 @@ export const providerCatalogEventSchema = z
   })
   .passthrough();
 
-export const providerAuthMethodSchema = z
+const providerAuthMethodSchema = z
   .object({
     id: nonEmptyTrimmedStringSchema,
     type: z.enum(["api", "oauth"]),
@@ -225,7 +225,7 @@ export const providerAuthMethodSchema = z
   })
   .passthrough();
 
-export const providerAuthMethodsEventSchema = z
+const providerAuthMethodsEventSchema = z
   .object({
     type: z.literal("provider_auth_methods"),
     sessionId: nonEmptyTrimmedStringSchema.optional(),
@@ -233,14 +233,14 @@ export const providerAuthMethodsEventSchema = z
   })
   .passthrough();
 
-export const providerAccountSchema = z
+const providerAccountSchema = z
   .object({
     email: z.string().optional(),
     name: z.string().optional(),
   })
   .passthrough();
 
-export const providerRateLimitWindowSchema = z
+const providerRateLimitWindowSchema = z
   .object({
     usedPercent: z.number().finite(),
     windowSeconds: z.number().finite(),
@@ -249,7 +249,7 @@ export const providerRateLimitWindowSchema = z
   })
   .passthrough();
 
-export const providerCreditsSchema = z
+const providerCreditsSchema = z
   .object({
     hasCredits: z.boolean(),
     unlimited: z.boolean(),
@@ -257,7 +257,7 @@ export const providerCreditsSchema = z
   })
   .passthrough();
 
-export const providerRateLimitSnapshotSchema = z
+const providerRateLimitSnapshotSchema = z
   .object({
     limitId: z.string().optional(),
     limitName: z.string().optional(),
@@ -269,7 +269,7 @@ export const providerRateLimitSnapshotSchema = z
   })
   .passthrough();
 
-export const providerUsageStatusSchema = z
+const providerUsageStatusSchema = z
   .object({
     accountId: z.string().optional(),
     email: z.string().optional(),
@@ -278,7 +278,7 @@ export const providerUsageStatusSchema = z
   })
   .passthrough();
 
-export const providerStatusEntrySchema = z
+const providerStatusEntrySchema = z
   .object({
     provider: providerNameSchema,
     authorized: z.boolean(),
@@ -295,7 +295,7 @@ export const providerStatusEntrySchema = z
   })
   .passthrough();
 
-export const providerStatusEventSchema = z
+const providerStatusEventSchema = z
   .object({
     type: z.literal("provider_status"),
     sessionId: nonEmptyTrimmedStringSchema.optional(),
@@ -303,9 +303,9 @@ export const providerStatusEventSchema = z
   })
   .passthrough();
 
-export const codexAppServerSourceSchema = z.enum(["override", "system", "managed", "missing"]);
+const codexAppServerSourceSchema = z.enum(["override", "system", "managed", "missing"]);
 
-export const codexAppServerInstallStatusSchema = z
+const codexAppServerInstallStatusSchema = z
   .object({
     available: z.boolean(),
     source: codexAppServerSourceSchema,
@@ -319,19 +319,19 @@ export const codexAppServerInstallStatusSchema = z
   })
   .passthrough();
 
-export const codexAppServerInstallStatusEnvelopeSchema = z
+const codexAppServerInstallStatusEnvelopeSchema = z
   .object({
     status: codexAppServerInstallStatusSchema,
   })
   .strict();
 
-export const libreOfficeRuntimeCheckRequestSchema = cwdRequestSchema
+const libreOfficeRuntimeCheckRequestSchema = cwdRequestSchema
   .extend({
     smoke: z.boolean().optional(),
   })
   .passthrough();
 
-export const libreOfficeRuntimeDiagnosticSchema = z
+const libreOfficeRuntimeDiagnosticSchema = z
   .object({
     status: z.enum(["available", "unavailable", "disabled"]),
     checkedAt: z.string(),
@@ -353,13 +353,13 @@ export const libreOfficeRuntimeDiagnosticSchema = z
   })
   .strict();
 
-export const libreOfficeRuntimeDiagnosticEnvelopeSchema = z
+const libreOfficeRuntimeDiagnosticEnvelopeSchema = z
   .object({
     status: libreOfficeRuntimeDiagnosticSchema,
   })
   .strict();
 
-export const providerAuthChallengeSchema = z
+const providerAuthChallengeSchema = z
   .object({
     method: z.enum(["auto", "code"]),
     instructions: z.string(),
@@ -368,7 +368,7 @@ export const providerAuthChallengeSchema = z
   })
   .passthrough();
 
-export const providerAuthChallengeEventSchema = z
+const providerAuthChallengeEventSchema = z
   .object({
     type: z.literal("provider_auth_challenge"),
     sessionId: nonEmptyTrimmedStringSchema.optional(),
@@ -378,7 +378,7 @@ export const providerAuthChallengeEventSchema = z
   })
   .passthrough();
 
-export const providerAuthResultEventSchema = z
+const providerAuthResultEventSchema = z
   .object({
     type: z.literal("provider_auth_result"),
     sessionId: nonEmptyTrimmedStringSchema.optional(),
@@ -390,7 +390,7 @@ export const providerAuthResultEventSchema = z
   })
   .passthrough();
 
-export const mcpServerTransportSchema = z.union([
+const mcpServerTransportSchema = z.union([
   z
     .object({
       type: z.literal("stdio"),
@@ -409,7 +409,7 @@ export const mcpServerTransportSchema = z.union([
     .strict(),
 ]);
 
-export const mcpServerAuthConfigSchema = z.union([
+const mcpServerAuthConfigSchema = z.union([
   z
     .object({
       type: z.literal("none"),
@@ -433,7 +433,7 @@ export const mcpServerAuthConfigSchema = z.union([
     .strict(),
 ]);
 
-export const mcpServerConfigSchema = z
+const mcpServerConfigSchema = z
   .object({
     name: nonEmptyTrimmedStringSchema,
     transport: mcpServerTransportSchema,
@@ -444,9 +444,9 @@ export const mcpServerConfigSchema = z
   })
   .passthrough();
 
-export const mcpSessionEventSourceSchema = z.enum(["workspace", "user", "system", "plugin"]);
+const mcpSessionEventSourceSchema = z.enum(["workspace", "user", "system", "plugin"]);
 
-export const mcpServerAuthModeSchema = z.enum([
+const mcpServerAuthModeSchema = z.enum([
   "none",
   "missing",
   "api_key",
@@ -495,7 +495,7 @@ export const mcpServersEventSchema = z
   })
   .passthrough();
 
-export const mcpValidationEventSchema = z
+const mcpValidationEventSchema = z
   .object({
     type: z.literal("mcp_server_validation"),
     sessionId: nonEmptyTrimmedStringSchema.optional(),
@@ -518,7 +518,7 @@ export const mcpValidationEventSchema = z
   })
   .passthrough();
 
-export const mcpAuthChallengeEventSchema = z
+const mcpAuthChallengeEventSchema = z
   .object({
     type: z.literal("mcp_server_auth_challenge"),
     sessionId: nonEmptyTrimmedStringSchema.optional(),
@@ -534,7 +534,7 @@ export const mcpAuthChallengeEventSchema = z
   })
   .passthrough();
 
-export const mcpAuthResultEventSchema = z
+const mcpAuthResultEventSchema = z
   .object({
     type: z.literal("mcp_server_auth_result"),
     sessionId: nonEmptyTrimmedStringSchema.optional(),
@@ -545,7 +545,7 @@ export const mcpAuthResultEventSchema = z
   })
   .passthrough();
 
-export const memoryEntrySchema = z
+const memoryEntrySchema = z
   .object({
     id: nonEmptyTrimmedStringSchema,
     scope: workspaceMemoryScopeSchema,
@@ -555,7 +555,7 @@ export const memoryEntrySchema = z
   })
   .passthrough();
 
-export const memoryListEventSchema = z
+const memoryListEventSchema = z
   .object({
     type: z.literal("memory_list"),
     sessionId: nonEmptyTrimmedStringSchema.optional(),
@@ -619,7 +619,7 @@ const skillPluginOwnerSchema = z
   })
   .strict();
 
-export const skillEntrySchema = z
+const skillEntrySchema = z
   .object({
     name: nonEmptyTrimmedStringSchema,
     path: z.string(),
@@ -672,7 +672,7 @@ const skillScopeDescriptorSchema = z
   })
   .strict();
 
-export const skillInstallationEntrySchema = z
+const skillInstallationEntrySchema = z
   .object({
     installationId: nonEmptyTrimmedStringSchema,
     name: nonEmptyTrimmedStringSchema,
@@ -702,7 +702,7 @@ export const skillInstallationEntrySchema = z
   })
   .passthrough();
 
-export const skillCatalogSnapshotSchema = z
+const skillCatalogSnapshotSchema = z
   .object({
     scopes: z.array(skillScopeDescriptorSchema),
     effectiveSkills: z.array(skillInstallationEntrySchema),
@@ -795,7 +795,7 @@ const pluginCatalogEntrySchema = z.discriminatedUnion("installed", [
   marketplacePluginCatalogEntrySchema,
 ]);
 
-export const pluginCatalogSnapshotSchema = z
+const pluginCatalogSnapshotSchema = z
   .object({
     plugins: z.array(installedPluginCatalogEntrySchema),
     availablePlugins: z.array(marketplacePluginCatalogEntrySchema).default([]),
@@ -882,7 +882,7 @@ const skillInstallPreviewCandidateSchema = z
   })
   .strict();
 
-export const skillInstallPreviewSchema = z
+const skillInstallPreviewSchema = z
   .object({
     source: skillSourceDescriptorSchema,
     targetScope: targetScopeSchema,
@@ -891,7 +891,7 @@ export const skillInstallPreviewSchema = z
   })
   .strict();
 
-export const skillUpdateCheckResultSchema = z
+const skillUpdateCheckResultSchema = z
   .object({
     installationId: nonEmptyTrimmedStringSchema,
     canUpdate: z.boolean(),
@@ -919,7 +919,7 @@ export const skillsCatalogEventSchema = z
   })
   .passthrough();
 
-export const skillContentEventSchema = z
+const skillContentEventSchema = z
   .object({
     type: z.literal("skill_content"),
     sessionId: nonEmptyTrimmedStringSchema.optional(),
@@ -928,7 +928,7 @@ export const skillContentEventSchema = z
   })
   .passthrough();
 
-export const skillInstallationEventSchema = z
+const skillInstallationEventSchema = z
   .object({
     type: z.literal("skill_installation"),
     sessionId: nonEmptyTrimmedStringSchema.optional(),
@@ -937,7 +937,7 @@ export const skillInstallationEventSchema = z
   })
   .passthrough();
 
-export const skillInstallPreviewEventSchema = z
+const skillInstallPreviewEventSchema = z
   .object({
     type: z.literal("skill_install_preview"),
     sessionId: nonEmptyTrimmedStringSchema.optional(),
@@ -946,7 +946,7 @@ export const skillInstallPreviewEventSchema = z
   })
   .passthrough();
 
-export const skillInstallUpdateCheckEventSchema = z
+const skillInstallUpdateCheckEventSchema = z
   .object({
     type: z.literal("skill_installation_update_check"),
     sessionId: nonEmptyTrimmedStringSchema.optional(),
@@ -964,7 +964,7 @@ export const pluginsCatalogEventSchema = z
   })
   .passthrough();
 
-export const pluginInstallPreviewEventSchema = z
+const pluginInstallPreviewEventSchema = z
   .object({
     type: z.literal("plugin_install_preview"),
     sessionId: nonEmptyTrimmedStringSchema.optional(),
@@ -973,7 +973,7 @@ export const pluginInstallPreviewEventSchema = z
   })
   .passthrough();
 
-export const pluginDetailEventSchema = z
+const pluginDetailEventSchema = z
   .object({
     type: z.literal("plugin_detail"),
     sessionId: nonEmptyTrimmedStringSchema.optional(),
@@ -994,7 +994,7 @@ const pluginInstallResultEventSchema = z.union([
   pluginDetailEventSchema,
 ]);
 
-export const sessionBackupPublicCheckpointSchema = z
+const sessionBackupPublicCheckpointSchema = z
   .object({
     id: nonEmptyTrimmedStringSchema,
     index: z.number().int().positive(),
@@ -1005,7 +1005,7 @@ export const sessionBackupPublicCheckpointSchema = z
   })
   .strict();
 
-export const workspaceBackupEntrySchema = z
+const workspaceBackupEntrySchema = z
   .object({
     targetSessionId: nonEmptyTrimmedStringSchema,
     title: z.string().nullable().optional(),
@@ -1027,7 +1027,7 @@ export const workspaceBackupEntrySchema = z
   })
   .passthrough();
 
-export const workspaceBackupsEventSchema = z
+const workspaceBackupsEventSchema = z
   .object({
     type: z.literal("workspace_backups"),
     sessionId: nonEmptyTrimmedStringSchema.optional(),
@@ -1036,7 +1036,7 @@ export const workspaceBackupsEventSchema = z
   })
   .passthrough();
 
-export const workspaceBackupDeltaFileSchema = z
+const workspaceBackupDeltaFileSchema = z
   .object({
     path: z.string(),
     change: z.enum(["added", "modified", "deleted"]),
@@ -1044,7 +1044,7 @@ export const workspaceBackupDeltaFileSchema = z
   })
   .strict();
 
-export const workspaceBackupDeltaEventSchema = z
+const workspaceBackupDeltaEventSchema = z
   .object({
     type: z.literal("workspace_backup_delta"),
     sessionId: nonEmptyTrimmedStringSchema.optional(),
@@ -1064,34 +1064,34 @@ export const workspaceBackupDeltaEventSchema = z
   })
   .passthrough();
 
-export const providerCatalogReadRequestSchema = z
+const providerCatalogReadRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     refresh: z.boolean().optional(),
   })
   .strict();
 
-export const providerAuthMethodsReadRequestSchema = z
+const providerAuthMethodsReadRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
   })
   .strict();
 
-export const providerStatusRefreshRequestSchema = z
+const providerStatusRefreshRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     refreshBedrockDiscovery: z.boolean().optional(),
   })
   .strict();
 
-export const providerCodexAppServerStatusRequestSchema = z
+const providerCodexAppServerStatusRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     checkLatest: z.boolean().optional(),
   })
   .strict();
 
-export const providerCodexAppServerUpdateRequestSchema = z
+const providerCodexAppServerUpdateRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     version: z.string().optional(),
@@ -1099,7 +1099,7 @@ export const providerCodexAppServerUpdateRequestSchema = z
   })
   .strict();
 
-export const providerAuthAuthorizeRequestSchema = z
+const providerAuthAuthorizeRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     provider: providerNameSchema,
@@ -1107,14 +1107,14 @@ export const providerAuthAuthorizeRequestSchema = z
   })
   .strict();
 
-export const providerAuthLogoutRequestSchema = z
+const providerAuthLogoutRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     provider: providerNameSchema,
   })
   .strict();
 
-export const providerAuthCallbackRequestSchema = z
+const providerAuthCallbackRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     provider: providerNameSchema,
@@ -1123,7 +1123,7 @@ export const providerAuthCallbackRequestSchema = z
   })
   .strict();
 
-export const providerAuthSetApiKeyRequestSchema = z
+const providerAuthSetApiKeyRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     provider: providerNameSchema,
@@ -1132,7 +1132,7 @@ export const providerAuthSetApiKeyRequestSchema = z
   })
   .strict();
 
-export const providerAuthSetConfigRequestSchema = z
+const providerAuthSetConfigRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     provider: providerNameSchema,
@@ -1141,7 +1141,7 @@ export const providerAuthSetConfigRequestSchema = z
   })
   .strict();
 
-export const providerAuthCopyApiKeyRequestSchema = z
+const providerAuthCopyApiKeyRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     provider: providerNameSchema,
@@ -1149,13 +1149,13 @@ export const providerAuthCopyApiKeyRequestSchema = z
   })
   .strict();
 
-export const mcpServersReadRequestSchema = z
+const mcpServersReadRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
   })
   .strict();
 
-export const mcpServerUpsertRequestSchema = z
+const mcpServerUpsertRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     server: mcpServerConfigSchema,
@@ -1163,14 +1163,14 @@ export const mcpServerUpsertRequestSchema = z
   })
   .strict();
 
-export const mcpServerDeleteRequestSchema = z
+const mcpServerDeleteRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     name: nonEmptyTrimmedStringSchema,
   })
   .strict();
 
-export const mcpServerSetEnabledRequestSchema = z
+const mcpServerSetEnabledRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     name: nonEmptyTrimmedStringSchema,
@@ -1181,21 +1181,21 @@ export const mcpServerSetEnabledRequestSchema = z
   })
   .strict();
 
-export const mcpServerValidateRequestSchema = z
+const mcpServerValidateRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     name: nonEmptyTrimmedStringSchema,
   })
   .strict();
 
-export const mcpServerAuthAuthorizeRequestSchema = z
+const mcpServerAuthAuthorizeRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     name: nonEmptyTrimmedStringSchema,
   })
   .strict();
 
-export const mcpServerAuthCallbackRequestSchema = z
+const mcpServerAuthCallbackRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     name: nonEmptyTrimmedStringSchema,
@@ -1203,7 +1203,7 @@ export const mcpServerAuthCallbackRequestSchema = z
   })
   .strict();
 
-export const mcpServerAuthSetApiKeyRequestSchema = z
+const mcpServerAuthSetApiKeyRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     name: nonEmptyTrimmedStringSchema,
@@ -1211,40 +1211,40 @@ export const mcpServerAuthSetApiKeyRequestSchema = z
   })
   .strict();
 
-export const skillsCatalogReadRequestSchema = z
+const skillsCatalogReadRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
   })
   .strict();
 
-export const skillsListRequestSchema = z
+const skillsListRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
   })
   .strict();
 
-export const skillsReadRequestSchema = z
-  .object({
-    cwd: optionalNonEmptyTrimmedStringSchema,
-    skillName: nonEmptyTrimmedStringSchema,
-  })
-  .strict();
-
-export const skillsMutationRequestSchema = z
+const skillsReadRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     skillName: nonEmptyTrimmedStringSchema,
   })
   .strict();
 
-export const skillInstallationReadRequestSchema = z
+const skillsMutationRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+    skillName: nonEmptyTrimmedStringSchema,
+  })
+  .strict();
+
+const skillInstallationReadRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     installationId: nonEmptyTrimmedStringSchema,
   })
   .strict();
 
-export const skillsInstallPreviewRequestSchema = z
+const skillsInstallPreviewRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     sourceInput: z.string(),
@@ -1252,7 +1252,7 @@ export const skillsInstallPreviewRequestSchema = z
   })
   .strict();
 
-export const skillsInstallRequestSchema = z
+const skillsInstallRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     sourceInput: z.string(),
@@ -1260,20 +1260,20 @@ export const skillsInstallRequestSchema = z
   })
   .strict();
 
-export const skillInstallationMutationRequestSchema = z
+const skillInstallationMutationRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     installationId: nonEmptyTrimmedStringSchema,
   })
   .strict();
 
-export const pluginCatalogReadRequestSchema = z
+const pluginCatalogReadRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
   })
   .strict();
 
-export const pluginReadRequestSchema = z
+const pluginReadRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     pluginId: nonEmptyTrimmedStringSchema,
@@ -1281,7 +1281,7 @@ export const pluginReadRequestSchema = z
   })
   .strict();
 
-export const pluginMutationRequestSchema = z
+const pluginMutationRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     pluginId: nonEmptyTrimmedStringSchema,
@@ -1289,7 +1289,7 @@ export const pluginMutationRequestSchema = z
   })
   .strict();
 
-export const pluginsInstallPreviewRequestSchema = z
+const pluginsInstallPreviewRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     sourceInput: z.string(),
@@ -1297,7 +1297,7 @@ export const pluginsInstallPreviewRequestSchema = z
   })
   .strict();
 
-export const pluginsInstallRequestSchema = z
+const pluginsInstallRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     sourceInput: z.string(),
@@ -1305,7 +1305,7 @@ export const pluginsInstallRequestSchema = z
   })
   .strict();
 
-export const skillInstallationCopyRequestSchema = z
+const skillInstallationCopyRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     installationId: nonEmptyTrimmedStringSchema,
@@ -1313,14 +1313,14 @@ export const skillInstallationCopyRequestSchema = z
   })
   .strict();
 
-export const memoryListRequestSchema = z
+const memoryListRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     scope: workspaceMemoryScopeSchema.optional(),
   })
   .strict();
 
-export const memoryUpsertRequestSchema = z
+const memoryUpsertRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     scope: workspaceMemoryScopeSchema,
@@ -1329,7 +1329,7 @@ export const memoryUpsertRequestSchema = z
   })
   .strict();
 
-export const memoryDeleteRequestSchema = z
+const memoryDeleteRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     scope: workspaceMemoryScopeSchema,
@@ -1337,13 +1337,13 @@ export const memoryDeleteRequestSchema = z
   })
   .strict();
 
-export const workspaceBackupsReadRequestSchema = z
+const workspaceBackupsReadRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
   })
   .strict();
 
-export const workspaceBackupsDeltaReadRequestSchema = z
+const workspaceBackupsDeltaReadRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     targetSessionId: nonEmptyTrimmedStringSchema,
@@ -1351,14 +1351,14 @@ export const workspaceBackupsDeltaReadRequestSchema = z
   })
   .strict();
 
-export const workspaceBackupsCheckpointRequestSchema = z
+const workspaceBackupsCheckpointRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     targetSessionId: nonEmptyTrimmedStringSchema,
   })
   .strict();
 
-export const workspaceBackupsRestoreRequestSchema = z
+const workspaceBackupsRestoreRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     targetSessionId: nonEmptyTrimmedStringSchema,
@@ -1366,7 +1366,7 @@ export const workspaceBackupsRestoreRequestSchema = z
   })
   .strict();
 
-export const workspaceBackupsDeleteCheckpointRequestSchema = z
+const workspaceBackupsDeleteCheckpointRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     targetSessionId: nonEmptyTrimmedStringSchema,
@@ -1374,20 +1374,20 @@ export const workspaceBackupsDeleteCheckpointRequestSchema = z
   })
   .strict();
 
-export const workspaceBackupsDeleteEntryRequestSchema = z
+const workspaceBackupsDeleteEntryRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     targetSessionId: nonEmptyTrimmedStringSchema,
   })
   .strict();
 
-export const sessionStateReadRequestSchema = z
+const sessionStateReadRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
   })
   .strict();
 
-export const sessionDefaultsApplyRequestSchema = z
+const sessionDefaultsApplyRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     threadId: optionalNonEmptyTrimmedStringSchema,
@@ -1553,30 +1553,5 @@ export const jsonRpcControlResultSchemas = {
   "cowork/session/defaults/apply": sessionEventEnvelope(sessionConfigEventSchema),
 } as const;
 
-export type JsonRpcControlRequestMethod = keyof typeof jsonRpcControlRequestSchemas;
-export type JsonRpcControlResultMethod = keyof typeof jsonRpcControlResultSchemas;
-export type JsonRpcControlRequest<M extends JsonRpcControlRequestMethod> = z.input<
-  (typeof jsonRpcControlRequestSchemas)[M]
->;
-export type JsonRpcControlResult<M extends JsonRpcControlResultMethod> = z.output<
-  (typeof jsonRpcControlResultSchemas)[M]
->;
-
-export type ProviderCatalogEntry = z.infer<typeof providerCatalogEntrySchema>;
-export type ProviderAuthMethod = z.infer<typeof providerAuthMethodSchema>;
 export type CodexAppServerInstallStatus = z.infer<typeof codexAppServerInstallStatusSchema>;
 export type LibreOfficeRuntimeDiagnostic = z.infer<typeof libreOfficeRuntimeDiagnosticSchema>;
-export type ProviderStatusEntry = z.infer<typeof providerStatusEntrySchema>;
-export type McpServerEntry = z.infer<typeof mcpServersEventSchema.shape.servers.element>;
-export type McpServerValidation = z.infer<typeof mcpValidationEventSchema>;
-export type SkillEntry = z.infer<typeof skillEntrySchema>;
-export type SkillInstallationEntry = z.infer<typeof skillInstallationEntrySchema>;
-export type SkillCatalogSnapshot = z.infer<typeof skillCatalogSnapshotSchema>;
-export type SkillInstallPreview = z.infer<typeof skillInstallPreviewSchema>;
-export type SkillUpdateCheckResult = z.infer<typeof skillUpdateCheckResultSchema>;
-export type PluginCatalogSnapshot = z.infer<typeof pluginCatalogSnapshotSchema>;
-export type MemoryEntry = z.infer<typeof memoryEntrySchema>;
-export type WorkspaceBackupEntry = z.infer<typeof workspaceBackupEntrySchema>;
-export type WorkspaceControlStateEvents = z.infer<
-  (typeof jsonRpcControlResultSchemas)["cowork/session/state/read"]
->;

@@ -1,18 +1,12 @@
 import { z } from "zod";
 
 import {
-  OPENAI_CONTINUATION_PROVIDER_NAMES,
   type OpenAiContinuationProvider,
   type OpenAiContinuationState,
   openAiContinuationStateSchema,
   supportsOpenAiContinuation,
 } from "./openaiContinuation";
 
-export const PROVIDER_MANAGED_CONTINUATION_PROVIDER_NAMES = [
-  ...OPENAI_CONTINUATION_PROVIDER_NAMES,
-  "codex-cli",
-  "google",
-] as const;
 export type ProviderManagedContinuationProvider =
   | OpenAiContinuationProvider
   | "codex-cli"
@@ -38,7 +32,7 @@ export type ProviderContinuationState =
   | GoogleContinuationState
   | CodexAppServerContinuationState;
 
-export const googleContinuationStateSchema = z
+const googleContinuationStateSchema = z
   .object({
     provider: z.literal("google"),
     model: z.string().trim().min(1),
@@ -48,7 +42,7 @@ export const googleContinuationStateSchema = z
   })
   .strict();
 
-export const codexAppServerContinuationStateSchema = z
+const codexAppServerContinuationStateSchema = z
   .object({
     provider: z.literal("codex-cli"),
     model: z.string().trim().min(1),
@@ -103,7 +97,7 @@ export function isCodexAppServerContinuationState(
   return state?.provider === "codex-cli" && "threadId" in state;
 }
 
-export function stableFingerprintStringify(value: unknown): string {
+function stableFingerprintStringify(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableFingerprintStringify).join(",")}]`;
   if (value && typeof value === "object") {
     const record = value as Record<string, unknown>;

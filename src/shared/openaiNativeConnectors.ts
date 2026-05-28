@@ -18,7 +18,7 @@ export type OpenAiNativeConnector = {
   labels?: string[] | Record<string, string>;
 };
 
-export type OpenAiNativeConnectorConfigEntry = {
+type OpenAiNativeConnectorConfigEntry = {
   enabled: boolean;
 };
 
@@ -37,7 +37,7 @@ export type OpenAiNativeConnectorsEvent = {
   message?: string;
 };
 
-export const openAiNativeConnectorSchema = z
+const openAiNativeConnectorSchema = z
   .object({
     id: z.string().trim().min(1),
     name: z.string().trim().min(1),

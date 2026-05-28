@@ -77,7 +77,7 @@ async function canonicalizePathFromExistingAncestor(targetPath: string): Promise
   }
 }
 
-export async function canonicalizePathForBoundaryCheck(targetPath: string): Promise<string> {
+async function canonicalizePathForBoundaryCheck(targetPath: string): Promise<string> {
   try {
     return await fsPromises.realpath(targetPath);
   } catch (error) {

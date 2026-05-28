@@ -8,7 +8,7 @@ import { jsonRpcThreadSchema } from "./schema.threadTurn";
 
 const jsonRpcWorkspaceKindSchema = z.enum(["project", "oneOffChat"]);
 
-export const jsonRpcWorkspaceSummarySchema = z
+const jsonRpcWorkspaceSummarySchema = z
   .object({
     id: nonEmptyTrimmedStringSchema,
     name: z.string(),
@@ -142,7 +142,7 @@ const presentationSlideSchema = z
   })
   .strict();
 
-export const presentationPreviewResultSchema = z.discriminatedUnion("ok", [
+const presentationPreviewResultSchema = z.discriminatedUnion("ok", [
   z
     .object({
       ok: z.literal(true),

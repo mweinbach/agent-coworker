@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const OPENAI_CONTINUATION_PROVIDER_NAMES = ["openai"] as const;
+const OPENAI_CONTINUATION_PROVIDER_NAMES = ["openai"] as const;
 export type OpenAiContinuationProvider = (typeof OPENAI_CONTINUATION_PROVIDER_NAMES)[number];
 
 export type OpenAiContinuationState = {

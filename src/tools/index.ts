@@ -31,11 +31,7 @@ import { createWebFetchTool } from "./webFetch";
 import { createWebSearchTool } from "./webSearch";
 import { createWriteTool } from "./write";
 
-export {
-  CODEX_NATIVE_EXECUTION_TOOL_NAMES,
-  filterToolsForCodexDynamicBoundary,
-  isCodexDynamicCoworkToolName,
-} from "./codexBoundary";
+export { filterToolsForCodexDynamicBoundary } from "./codexBoundary";
 
 function usesLegacyCodexWebSearch(ctx: ToolContext): boolean {
   if (ctx.config.provider !== "codex-cli") return false;
@@ -160,4 +156,4 @@ export function createTools(ctx: ToolContext): Record<string, any> {
   };
 }
 
-export type { AgentControl, AgentWaitResult, ToolContext } from "./context";
+export type { AgentControl, ToolContext } from "./context";

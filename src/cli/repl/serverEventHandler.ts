@@ -120,7 +120,7 @@ function providerNamesFromCatalog(all: unknown): string[] {
   });
 }
 
-export function applyCliSessionEvent(
+function applyCliSessionEvent(
   state: ReplSessionEventState,
   event: SessionEvent,
   opts: { logConfigUpdate?: boolean } = {},

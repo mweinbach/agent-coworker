@@ -30,20 +30,17 @@ import {
   type MCPRegistryServer,
   parseMCPServersDocument,
   readWorkspaceMCPServersDocument,
-  resolveMcpConfigPaths,
   writeWorkspaceMCPServersDocument,
 } from "./configRegistry";
 
 export {
   DEFAULT_MCP_SERVERS_DOCUMENT,
-  loadMCPConfigRegistry,
   parseMCPServersDocument,
   readWorkspaceMCPServersDocument,
-  resolveMcpConfigPaths,
   writeWorkspaceMCPServersDocument,
 };
 
-export type MCPServerEffectiveState = MCPRegistryServer & {
+type MCPServerEffectiveState = MCPRegistryServer & {
   authMode: MCPAuthMode;
   authScope: MCPAuthScope;
   authMessage: string;

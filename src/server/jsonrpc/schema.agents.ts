@@ -17,7 +17,7 @@ import {
   sessionEventEnvelope,
 } from "./schema.shared";
 
-export const agentListEventSchema = z
+const agentListEventSchema = z
   .object({
     type: z.literal("agent_list"),
     sessionId: nonEmptyTrimmedStringSchema,
@@ -25,7 +25,7 @@ export const agentListEventSchema = z
   })
   .strict();
 
-export const agentSpawnedEventSchema = z
+const agentSpawnedEventSchema = z
   .object({
     type: z.literal("agent_spawned"),
     sessionId: nonEmptyTrimmedStringSchema,
@@ -33,7 +33,7 @@ export const agentSpawnedEventSchema = z
   })
   .strict();
 
-export const agentStatusEventSchema = z
+const agentStatusEventSchema = z
   .object({
     type: z.literal("agent_status"),
     sessionId: nonEmptyTrimmedStringSchema,
@@ -41,9 +41,9 @@ export const agentStatusEventSchema = z
   })
   .strict();
 
-export const agentWaitModeSchema = z.enum(AGENT_WAIT_MODE_VALUES);
+const agentWaitModeSchema = z.enum(AGENT_WAIT_MODE_VALUES);
 
-export const agentWaitResultEventSchema = z
+const agentWaitResultEventSchema = z
   .object({
     type: z.literal("agent_wait_result"),
     sessionId: nonEmptyTrimmedStringSchema,

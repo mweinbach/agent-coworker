@@ -17,7 +17,7 @@ import {
 
 export type { FetchLike };
 
-export type ExtensionSourceInputKind =
+type ExtensionSourceInputKind =
   | "github_repo"
   | "github_tree"
   | "github_blob"
@@ -136,9 +136,7 @@ export function resolveGitHubOrLocalSource<TDescriptor extends ExtensionSourceDe
   } as TDescriptor;
 }
 
-export function buildResolvedGitHubDescriptor<
-  TDescriptor extends GitHubMaterializableSourceDescriptor,
->(
+function buildResolvedGitHubDescriptor<TDescriptor extends GitHubMaterializableSourceDescriptor>(
   descriptor: TDescriptor,
   ref: string | undefined,
   githubPath: string,
@@ -157,7 +155,7 @@ export function buildResolvedGitHubDescriptor<
   } as TDescriptor;
 }
 
-export function buildGitHubMaterializationAttempts<
+function buildGitHubMaterializationAttempts<
   TDescriptor extends GitHubMaterializableSourceDescriptor,
 >(
   descriptor: TDescriptor,
@@ -205,7 +203,7 @@ export function buildGitHubMaterializationAttempts<
   return attempts;
 }
 
-export function dedupeGitHubMaterializationAttempts<
+function dedupeGitHubMaterializationAttempts<
   TDescriptor extends GitHubMaterializableSourceDescriptor,
 >(
   attempts: Array<GitHubMaterializationAttempt<TDescriptor>>,
@@ -246,7 +244,7 @@ async function doesGitHubRefExist(
   );
 }
 
-export async function resolveAmbiguousGitHubMaterializationAttempts<
+async function resolveAmbiguousGitHubMaterializationAttempts<
   TDescriptor extends GitHubMaterializableSourceDescriptor,
 >(
   repo: string,
@@ -290,7 +288,7 @@ async function fetchGitHubDefaultBranch(
     : null;
 }
 
-export async function resolveGitHubFallbackRefs(opts: {
+async function resolveGitHubFallbackRefs(opts: {
   repo?: string;
   fetchImpl: FetchLike;
   includeRemoteDefaultBranch?: boolean;

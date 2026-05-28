@@ -1,8 +1,6 @@
 import { supportsOpenAiContinuation } from "../../../shared/openaiContinuation";
 import { isInvalidGoogleContinuationError as isInvalidGoogleContinuationHandleError } from "../../../shared/providerContinuation";
 
-export { isInvalidGoogleContinuationHandleError };
-
 function isInvalidOpenAiContinuationError(error: unknown): boolean {
   const text = error instanceof Error ? error.message : String(error);
   const normalized = text.toLowerCase();
@@ -21,11 +19,11 @@ function isInvalidOpenAiContinuationError(error: unknown): boolean {
   );
 }
 
-export function isInvalidGoogleContinuationError(error: unknown): boolean {
+function isInvalidGoogleContinuationError(error: unknown): boolean {
   return isInvalidGoogleContinuationHandleError(error);
 }
 
-export function isInvalidCodexAppServerContinuationError(error: unknown): boolean {
+function isInvalidCodexAppServerContinuationError(error: unknown): boolean {
   const text = error instanceof Error ? error.message : String(error);
   const normalized = text.toLowerCase();
   const mentionsThreadId =

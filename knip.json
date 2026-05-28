@@ -1,0 +1,43 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "ignoreWorkspaces": ["apps/mobile"],
+  "rules": {
+    "dependencies": "off",
+    "optionalPeerDependencies": "off",
+    "unlisted": "off",
+    "unresolved": "off",
+    "binaries": "off",
+    "duplicates": "off"
+  },
+  "workspaces": {
+    ".": {
+      "entry": [
+        "src/index.ts",
+        "src/server/index.ts",
+        "src/cli/repl.ts",
+        "scripts/*.ts",
+        "test/**/*.ts"
+      ],
+      "project": ["src/**/*.{ts,tsx}", "scripts/**/*.ts"]
+    },
+    "packages/harness": {
+      "entry": ["src/*.ts", "src/**/*.test.ts"],
+      "project": ["src/**/*.{ts,tsx}"]
+    },
+    "apps/desktop": {
+      "entry": [
+        "electron/main.ts",
+        "electron/preload.ts",
+        "index.html",
+        "index.web.html",
+        "src/main.tsx",
+        "src/main.web.tsx",
+        "electron.vite.config.ts",
+        "vite.config.web.ts",
+        "scripts/*.ts",
+        "test/**/*.ts"
+      ],
+      "project": ["src/**/*.{ts,tsx}", "electron/**/*.{ts,tsx}"]
+    }
+  }
+}

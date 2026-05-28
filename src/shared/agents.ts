@@ -7,22 +7,22 @@ import {
   type OpenAiReasoningEffort,
 } from "./openaiCompatibleOptions";
 
-export const SESSION_KIND_VALUES = ["root", "agent"] as const;
+const SESSION_KIND_VALUES = ["root", "agent"] as const;
 export type SessionKind = (typeof SESSION_KIND_VALUES)[number];
 
 export const AGENT_ROLE_VALUES = ["default", "explorer", "research", "worker", "reviewer"] as const;
 export type AgentRole = (typeof AGENT_ROLE_VALUES)[number];
 
-export const AGENT_MODE_VALUES = ["collaborative", "delegate"] as const;
+const AGENT_MODE_VALUES = ["collaborative", "delegate"] as const;
 export type AgentMode = (typeof AGENT_MODE_VALUES)[number];
 
-export const AGENT_CONTEXT_MODE_VALUES = ["none", "brief", "full"] as const;
+const AGENT_CONTEXT_MODE_VALUES = ["none", "brief", "full"] as const;
 export type AgentContextMode = (typeof AGENT_CONTEXT_MODE_VALUES)[number];
 
-export const AGENT_LIFECYCLE_STATE_VALUES = ["active", "closed"] as const;
-export type AgentLifecycleState = (typeof AGENT_LIFECYCLE_STATE_VALUES)[number];
+const AGENT_LIFECYCLE_STATE_VALUES = ["active", "closed"] as const;
+type AgentLifecycleState = (typeof AGENT_LIFECYCLE_STATE_VALUES)[number];
 
-export const AGENT_EXECUTION_STATE_VALUES = [
+const AGENT_EXECUTION_STATE_VALUES = [
   "pending_init",
   "running",
   "completed",
@@ -31,7 +31,7 @@ export const AGENT_EXECUTION_STATE_VALUES = [
 ] as const;
 export type AgentExecutionState = (typeof AGENT_EXECUTION_STATE_VALUES)[number];
 
-export const AGENT_TASK_TYPE_VALUES = ["research", "plan", "implement", "verify"] as const;
+const AGENT_TASK_TYPE_VALUES = ["research", "plan", "implement", "verify"] as const;
 export type AgentTaskType = (typeof AGENT_TASK_TYPE_VALUES)[number];
 
 export type AgentReasoningEffort = OpenAiReasoningEffort;
@@ -40,7 +40,7 @@ export const sessionKindSchema = z.enum(SESSION_KIND_VALUES);
 export const agentRoleSchema = z.enum(AGENT_ROLE_VALUES);
 export const agentModeSchema = z.enum(AGENT_MODE_VALUES);
 export const agentContextModeSchema = z.enum(AGENT_CONTEXT_MODE_VALUES);
-export const agentLifecycleStateSchema = z.enum(AGENT_LIFECYCLE_STATE_VALUES);
+const agentLifecycleStateSchema = z.enum(AGENT_LIFECYCLE_STATE_VALUES);
 export const agentExecutionStateSchema = z.enum(AGENT_EXECUTION_STATE_VALUES);
 export const agentTaskTypeSchema = z.enum(AGENT_TASK_TYPE_VALUES);
 export const agentReasoningEffortSchema = z.enum(OPENAI_REASONING_EFFORT_VALUES);

@@ -68,7 +68,7 @@ export function parseChildModelRef(
   };
 }
 
-export function normalizeAllowedChildModelRefs(
+function normalizeAllowedChildModelRefs(
   refs: readonly string[] | undefined,
   defaultProvider: ProviderName,
   source = "allowed child model",
@@ -84,7 +84,7 @@ export function normalizeAllowedChildModelRefs(
   return normalized;
 }
 
-export function legacyPreferredChildModelForProvider(
+function legacyPreferredChildModelForProvider(
   provider: ProviderName,
   currentModel: string,
   preferredChildModelRef?: string,

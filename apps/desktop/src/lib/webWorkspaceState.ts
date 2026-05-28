@@ -181,15 +181,3 @@ export function seedWorkspaceFromUrl(serverUrl: string, workspacePath: string): 
   savePersistedState(state);
   return state;
 }
-
-export function deriveServerUrlFromWorkspace(
-  state: PersistedState,
-  workspaceId: string,
-): string | null {
-  if (state.workspaces.some((w) => w.id === workspaceId)) {
-    return getSavedServerUrl();
-  }
-  return null;
-}
-
-export { createEmptyState };

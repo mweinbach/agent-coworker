@@ -4,8 +4,8 @@ import { buildMarkdownPreviewText } from "./markdownPreview";
 import { formatToolCard } from "./toolCards/toolCardFormatting";
 
 export type ActivityFeedItem = Extract<FeedItem, { kind: "reasoning" | "tool" }>;
-export type ToolTraceItem = Extract<FeedItem, { kind: "tool" }> & { sourceIds: string[] };
-export type ActivityTraceEntry =
+type ToolTraceItem = Extract<FeedItem, { kind: "tool" }> & { sourceIds: string[] };
+type ActivityTraceEntry =
   | { kind: "reasoning"; item: Extract<FeedItem, { kind: "reasoning" }> }
   | { kind: "tool"; item: ToolTraceItem };
 
@@ -13,7 +13,7 @@ export type ChatRenderItem =
   | { kind: "feed-item"; item: FeedItem }
   | { kind: "activity-group"; id: string; items: ActivityFeedItem[] };
 
-export type ActivityGroupStatus = "approval" | "issue" | "running" | "done";
+type ActivityGroupStatus = "approval" | "issue" | "running" | "done";
 
 export type ActivityGroupSummary = {
   elapsedLabel: string | null;

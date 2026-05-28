@@ -64,7 +64,7 @@ export function createConversationProjectionState(
   return state;
 }
 
-export function clearReasoningStateForTurn(state: ConversationProjectionState, turnId: string) {
+function clearReasoningStateForTurn(state: ConversationProjectionState, turnId: string) {
   for (const key of state.reasoningByKey.keys()) {
     if (key.startsWith(`${turnId}:`)) {
       state.reasoningByKey.delete(key);
@@ -77,7 +77,7 @@ export function clearReasoningStateForTurn(state: ConversationProjectionState, t
   }
 }
 
-export function clearToolStateForTurn(state: ConversationProjectionState, turnId: string) {
+function clearToolStateForTurn(state: ConversationProjectionState, turnId: string) {
   for (const key of state.toolByKey.keys()) {
     if (key.startsWith(`${turnId}:`)) {
       state.toolByKey.delete(key);

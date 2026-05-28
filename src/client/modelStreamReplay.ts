@@ -1,7 +1,3 @@
-export type {
-  ModelStreamRawEvent,
-  ModelStreamReplayRuntime,
-} from "../shared/modelStreamReplay";
 export {
   clearModelStreamReplayRuntime,
   createModelStreamReplayRuntime,

@@ -1,3 +1,4 @@
+import type { ManagedSofficeRuntimeDiagnostic } from "../../../managedSofficeRuntime";
 import type { AgentConfig } from "../../../types";
 import type { SessionEvent } from "../../protocol";
 import type { ResearchService } from "../../research/ResearchService";
@@ -31,11 +32,11 @@ export type JsonRpcThreadSummaryFilter = {
   executionState?: string | null;
 };
 
-export type JsonRpcPendingPromptEvent =
+type JsonRpcPendingPromptEvent =
   | Extract<SessionEvent, { type: "ask" }>
   | Extract<SessionEvent, { type: "approval" }>;
 
-export type JsonRpcThreadSubscriptionOptions = {
+type JsonRpcThreadSubscriptionOptions = {
   initialActiveTurnId?: string | null;
   initialAgentText?: string | null;
   drainDisconnectedReplayBuffer?: boolean;
@@ -123,9 +124,7 @@ export interface JsonRpcRouteContext {
     ): Promise<T[]>;
   };
   runtime: {
-    checkLibreOffice(opts: {
-      smoke?: boolean;
-    }): Promise<import("../../../managedSofficeRuntime").ManagedSofficeRuntimeDiagnostic>;
+    checkLibreOffice(opts: { smoke?: boolean }): Promise<ManagedSofficeRuntimeDiagnostic>;
   };
   jsonrpc: {
     send(ws: StartServerSocket, payload: unknown): void;

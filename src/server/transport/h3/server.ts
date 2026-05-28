@@ -61,7 +61,7 @@ type StartH3MobileServerOptions = {
   rotateTls?: boolean;
 };
 
-export type H3MobileServerState = {
+type H3MobileServerState = {
   url: string;
   port: number;
   hostHints: string[];

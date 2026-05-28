@@ -1,6 +1,6 @@
 import type { ProviderName } from "../types";
 
-export type ModelMetadataSource = "static" | "dynamic";
+type ModelMetadataSource = "static" | "dynamic";
 
 export type ResolvedModelMetadata = {
   id: string;

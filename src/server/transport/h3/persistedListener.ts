@@ -22,15 +22,15 @@ type H3ListenerConfig = {
 };
 
 function resolveTlsCertPath(storeRootPath: string | undefined): string {
-  return `${resolveH3PairingStoreDir(storeRootPath)}/${TLS_CERT_FILE_NAME}`;
+  return resolveH3PairingStoreDir(storeRootPath) + "/" + TLS_CERT_FILE_NAME;
 }
 
 function resolveTlsKeyPath(storeRootPath: string | undefined): string {
-  return `${resolveH3PairingStoreDir(storeRootPath)}/${TLS_KEY_FILE_NAME}`;
+  return resolveH3PairingStoreDir(storeRootPath) + "/" + TLS_KEY_FILE_NAME;
 }
 
 function resolveListenerConfigPath(storeRootPath: string | undefined): string {
-  return `${resolveH3PairingStoreDir(storeRootPath)}/${LISTENER_CONFIG_FILE_NAME}`;
+  return resolveH3PairingStoreDir(storeRootPath) + "/" + LISTENER_CONFIG_FILE_NAME;
 }
 
 function certificateFromPem(certPem: string, keyPem: string): EphemeralQuicCertificate {

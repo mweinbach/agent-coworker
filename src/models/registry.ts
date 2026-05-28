@@ -3,6 +3,7 @@ import { z } from "zod";
 import anthropicClaudeHaiku45 from "../../config/models/anthropic/claude-haiku-4-5.json";
 import anthropicClaudeOpus46 from "../../config/models/anthropic/claude-opus-4-6.json";
 import anthropicClaudeOpus47 from "../../config/models/anthropic/claude-opus-4-7.json";
+import anthropicClaudeOpus48 from "../../config/models/anthropic/claude-opus-4-8.json";
 import anthropicClaudeSonnet45 from "../../config/models/anthropic/claude-sonnet-4-5.json";
 import anthropicClaudeSonnet46 from "../../config/models/anthropic/claude-sonnet-4-6.json";
 import antigravityGemini31FlashLite from "../../config/models/antigravity/gemini-3.1-flash-lite.json";
@@ -90,6 +91,7 @@ const RAW_MODEL_REGISTRY_ENTRIES = [
   anthropicClaudeHaiku45,
   anthropicClaudeOpus46,
   anthropicClaudeOpus47,
+  anthropicClaudeOpus48,
   anthropicClaudeSonnet45,
   anthropicClaudeSonnet46,
   bedrockAmazonNovaLiteV10,

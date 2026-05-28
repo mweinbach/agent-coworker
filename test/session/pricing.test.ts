@@ -22,6 +22,13 @@ describe("pricing", () => {
       expect(opus47!.outputPerMillion).toBe(25);
       expect(opus47!.cachedInputPerMillion).toBe(0.5);
       expect(opus47!.cacheWriteInputPerMillion).toBe(6.25);
+
+      const opus48 = resolveModelPricing("anthropic", "claude-opus-4-8");
+      expect(opus48).not.toBeNull();
+      expect(opus48!.inputPerMillion).toBe(5);
+      expect(opus48!.outputPerMillion).toBe(25);
+      expect(opus48!.cachedInputPerMillion).toBe(0.5);
+      expect(opus48!.cacheWriteInputPerMillion).toBe(6.25);
     });
 
     it("resolves exact match for openai gpt-5.2 pricing", () => {

@@ -79,6 +79,25 @@ describe("pi runtime provider option mapping", () => {
     expect(mapped.interleavedThinking).toBe(true);
   });
 
+  test("maps anthropic adaptive thinking without a legacy token budget", () => {
+    const params = makeParams(
+      makeConfig({
+        provider: "anthropic",
+        providerOptions: {
+          anthropic: {
+            thinking: { type: "adaptive" },
+            effort: "high",
+          },
+        },
+      }),
+    );
+
+    const mapped = __internal.buildPiStreamOptions(params);
+    expect(mapped.thinkingEnabled).toBe(true);
+    expect(mapped.thinkingBudgetTokens).toBeUndefined();
+    expect(mapped.effort).toBe("high");
+  });
+
   test("google provider options are not mapped in PI runtime (handled by Google Interactions runtime)", () => {
     const params = makeParams(
       makeConfig({

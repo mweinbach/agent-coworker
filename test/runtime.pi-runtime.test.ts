@@ -77,6 +77,35 @@ async function withMockedFetch<T>(fetchImpl: typeof fetch, run: () => Promise<T>
 }
 
 describe("pi runtime regressions", () => {
+  test("anthropic Claude Opus 4.8 resolves to adaptive PI model metadata", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-anthropic-opus48-"));
+    const config = makeConfig(homeDir, {
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      preferredChildModel: "claude-opus-4-8",
+    });
+
+    const resolved = await piRuntimeInternal.resolvePiModel(makeParams(config));
+
+    expect(resolved.model).toMatchObject({
+      id: "claude-opus-4-8",
+      name: "Claude Opus 4.8",
+      api: "anthropic-messages",
+      provider: "anthropic",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      compat: { forceAdaptiveThinking: true },
+      cost: {
+        input: 5,
+        output: 25,
+        cacheRead: 0.5,
+        cacheWrite: 6.25,
+      },
+    });
+  });
+
   test("calls onModelAbort exactly once when turn starts with an aborted signal", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-abort-"));
     const runtime = createPiRuntime();

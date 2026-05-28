@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.1.6 - 2026-05-28
+
+### Added
+
+- **Claude Opus 4.8 support** — Added Anthropic registry metadata, pricing, prompt overlay, and default provider options for Claude Opus 4.8. Routed adaptive thinking through PI and overrode stale bundled PI catalog metadata so Opus 4.8 exposes verified 1M context and 128K output limits.
+
+### Fixed
+
+- **Desktop Codex App-Server startup** — Stopped packaging a bundled Codex app-server with desktop resources, cleaning up legacy codex-app-server binaries during resource builds. Prefer explicit overrides, then existing/downloaded managed installs, falling back to a system codex binary only after verification. Clarified managed-first resolution order in protocol and desktop documentation.
+
 ## 1.1.5 - 2026-05-28
 
 ### Fixed

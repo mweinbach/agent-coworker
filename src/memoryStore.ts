@@ -6,6 +6,10 @@ export type MemoryScope = "workspace" | "user";
 
 const HOT_MEMORY_ID = "hot";
 
+function sql(lines: readonly string[]): string {
+  return lines.join("\n");
+}
+
 export type MemoryEntry = {
   id: string;
   scope: MemoryScope;
@@ -15,19 +19,21 @@ export type MemoryEntry = {
 };
 
 function ensureSchema(db: Database): void {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS memories (
-      id TEXT PRIMARY KEY,
-      content TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS meta (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_memories_updated_at ON memories(updated_at DESC);
-  `);
+  db.exec(
+    sql([
+      "CREATE TABLE IF NOT EXISTS memories (",
+      "  id TEXT PRIMARY KEY,",
+      "  content TEXT NOT NULL,",
+      "  created_at TEXT NOT NULL,",
+      "  updated_at TEXT NOT NULL",
+      ");",
+      "CREATE TABLE IF NOT EXISTS meta (",
+      "  key TEXT PRIMARY KEY,",
+      "  value TEXT NOT NULL",
+      ");",
+      "CREATE INDEX IF NOT EXISTS idx_memories_updated_at ON memories(updated_at DESC);",
+    ]),
+  );
 }
 
 function normalizeMemoryId(raw: string): string {
@@ -234,9 +240,11 @@ export class MemoryStore {
         .query("SELECT created_at FROM memories WHERE id = ?")
         .get(normalizedId) as { created_at: string } | null;
       db.query(
-        `INSERT INTO memories(id, content, created_at, updated_at)
-         VALUES(?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at`,
+        sql([
+          "INSERT INTO memories(id, content, created_at, updated_at)",
+          "VALUES(?, ?, ?, ?)",
+          "ON CONFLICT(id) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at",
+        ]),
       ).run(normalizedId, content, existing?.created_at ?? timestamp, timestamp);
       return {
         id: normalizedId,

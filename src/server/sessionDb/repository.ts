@@ -45,7 +45,7 @@ const researchSourcesJsonSchema = z.array(researchSourceSchema);
 const researchThoughtSummariesJsonSchema = z.array(researchThoughtSummarySchema);
 
 function sql(lines: readonly string[]): string {
-  return lines.join("\n");
+  return lines.join(String.fromCharCode(10));
 }
 
 function hasCompatiblePersistedProvider(row: Record<string, unknown>): boolean {

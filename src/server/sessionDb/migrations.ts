@@ -19,7 +19,7 @@ const RESEARCH_PLAN_COLUMNS_MIGRATION = 14;
 const RESEARCH_WORKSPACE_COLUMN_MIGRATION = 15;
 
 function sql(lines: readonly string[]): string {
-  return lines.join("\n");
+  return lines.join(String.fromCharCode(10));
 }
 
 type BootstrapSessionDbOptions = {

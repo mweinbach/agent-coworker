@@ -19,6 +19,19 @@ async function readJson(response: Response): Promise<unknown> {
   return JSON.parse(await response.text());
 }
 
+async function waitForCondition(
+  predicate: () => boolean,
+  timeoutMs = 500,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) {
+      throw new Error("Timed out waiting for condition");
+    }
+    await Bun.sleep(10);
+  }
+}
+
 function createMockWorkspaceChild() {
   return Object.assign(new EventEmitter(), {
     stdout: new PassThrough(),
@@ -184,6 +197,46 @@ describe("web desktop routes", () => {
         workspaces: [],
         threads: [],
       });
+      expect(changeCount).toBe(1);
+    } finally {
+      dispose();
+      await service.stopAll();
+    }
+  });
+
+  test("desktop service debounces external state file changes and ignores directory noise", async () => {
+    const userDataDir = await makeTempDir("cowork-web-desktop-external-watch-");
+    const statePath = path.join(userDataDir, "state.json");
+    await fs.writeFile(
+      statePath,
+      JSON.stringify({ version: 2, workspaces: [], threads: [] }),
+      "utf8",
+    );
+    const service = new WebDesktopService({ userDataDir });
+    let changeCount = 0;
+    const dispose = service.watchStateChanges(() => {
+      changeCount += 1;
+    });
+
+    try {
+      await fs.writeFile(path.join(userDataDir, "other.json"), "{}", "utf8");
+      await Bun.sleep(75);
+      expect(changeCount).toBe(0);
+
+      await fs.writeFile(
+        statePath,
+        JSON.stringify({ version: 2, workspaces: [], threads: [], developerMode: true }),
+        "utf8",
+      );
+      await waitForCondition(() => changeCount === 1);
+
+      dispose();
+      await fs.writeFile(
+        statePath,
+        JSON.stringify({ version: 2, workspaces: [], threads: [], developerMode: false }),
+        "utf8",
+      );
+      await Bun.sleep(75);
       expect(changeCount).toBe(1);
     } finally {
       dispose();

@@ -2,7 +2,7 @@ import type { JsonRpcInitializeParams } from "../jsonrpc/protocol";
 import type { AgentSession } from "../session/AgentSession";
 import type { SessionRuntime } from "../session/SessionRuntime";
 
-export type JsonRpcConnectionState = {
+type JsonRpcConnectionState = {
   initializeRequestReceived: boolean;
   initializedNotificationReceived: boolean;
   pendingRequestCount: number;
@@ -22,7 +22,7 @@ export type JsonRpcConnectionState = {
   >;
 };
 
-export type ServerTransportData = {
+type ServerTransportData = {
   session?: AgentSession;
   resumeSessionId?: string;
   protocolMode?: "jsonrpc" | "h3";
@@ -35,12 +35,7 @@ export type StartServerSocketData = ServerTransportData;
 
 export type StartServerSocket = Bun.ServerWebSocket<StartServerSocketData>;
 
-export type ServerTransportConnection = {
-  data: ServerTransportData;
-  send(payload: string): number;
-};
-
-export type SessionEventSink = (evt: import("../protocol").SessionEvent) => void;
+type SessionEventSink = (evt: import("../protocol").SessionEvent) => void;
 
 export type SessionBinding = {
   session: AgentSession | null;

@@ -488,7 +488,7 @@ function hasLegacyA2uiEnabled(value: unknown): boolean {
   return false;
 }
 
-export function hydratePersistedDesktopState(value: unknown): HydratedPersistedDesktopState {
+function hydratePersistedDesktopState(value: unknown): HydratedPersistedDesktopState {
   const parsed = persistedStateSchema.parse(value);
   if (hasLegacyA2uiEnabled(value) && !parsed.desktopFeatureFlagOverrides?.a2ui) {
     return {

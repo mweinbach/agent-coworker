@@ -22,7 +22,7 @@ export function onTodoChange(fn: TodoListener) {
   listeners.push(fn);
 }
 
-export const todoWrite = defineTool({
+const todoWrite = defineTool({
   description: `Update the progress tracker for multi-step tasks. Sends the COMPLETE todo list each call (overwrite, not append).
 
 Rules:

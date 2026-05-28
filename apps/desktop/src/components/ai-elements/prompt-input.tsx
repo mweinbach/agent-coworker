@@ -11,10 +11,10 @@ import { forwardRef, useCallback, useState } from "react";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 
-export type PromptInputStatus = "ready" | "pending" | "submitted" | "streaming" | "error";
-export type PromptInputMode = "send" | "steer-ready" | "steer-pending";
+type PromptInputStatus = "ready" | "pending" | "submitted" | "streaming" | "error";
+type PromptInputMode = "send" | "steer-ready" | "steer-pending";
 
-export type PromptInputFileDropOptions = {
+type PromptInputFileDropOptions = {
   onFiles: (files: File[]) => void | Promise<void>;
   disabled?: boolean;
 };

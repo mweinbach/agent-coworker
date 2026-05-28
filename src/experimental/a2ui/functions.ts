@@ -19,14 +19,14 @@
  * visible gaps instead of runtime errors.
  */
 
-import { type DataModel, getByPointer, resolveDynamic, splitPointer } from "./expressions";
+import { type DataModel, resolveDynamic } from "./expressions";
 
 /**
  * Set of function keys we understand. If an object contains exactly one of
  * these and no other shape markers (`path`, `$ref`, `literal`, `formatString`),
  * the evaluator dispatches to the matching helper.
  */
-export const A2UI_FUNCTION_KEYS = [
+const A2UI_FUNCTION_KEYS = [
   "if",
   "eq",
   "neq",
@@ -40,7 +40,7 @@ export const A2UI_FUNCTION_KEYS = [
   "coalesce",
 ] as const;
 
-export type A2uiFunctionKey = (typeof A2UI_FUNCTION_KEYS)[number];
+type A2uiFunctionKey = (typeof A2UI_FUNCTION_KEYS)[number];
 
 export function isA2uiFunctionCall(value: unknown): value is Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -249,9 +249,3 @@ export function resolveDynamicWithFunctions(value: unknown, model: DataModel): u
   if (isA2uiFunctionCall(value)) return evaluateA2uiFunction(value, model);
   return resolveDynamic(value, model);
 }
-
-/**
- * Re-export `getByPointer`/`splitPointer` for consumers that want to reach
- * into the data model directly without importing two modules.
- */
-export { getByPointer, splitPointer };

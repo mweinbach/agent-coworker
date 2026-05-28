@@ -2,21 +2,12 @@ import { createAssistantProjection } from "./conversationProjectionAssistant";
 import { createFeedItemProjection } from "./conversationProjectionFeedItems";
 import { createReasoningProjection } from "./conversationProjectionReasoning";
 import { createSessionEventHandler } from "./conversationProjectionSessionEvents";
-import {
-  type ConversationProjectionState,
-  createConversationProjectionState,
-} from "./conversationProjectionState";
+import { createConversationProjectionState } from "./conversationProjectionState";
 import { createStreamUpdateHandler } from "./conversationProjectionStreamUpdates";
 import { createToolProjection } from "./conversationProjectionTools";
 import type { CreateConversationProjectionOptions } from "./conversationProjectionTypes";
 
-export { assistantRemainderForTurn } from "./conversationProjectionAssistant";
-export type {
-  ConversationProjectionSink,
-  CreateConversationProjectionOptions,
-  ProjectionServerRequest,
-} from "./conversationProjectionTypes";
-export type { ConversationProjectionState };
+export type { CreateConversationProjectionOptions } from "./conversationProjectionTypes";
 
 export function createConversationProjection(opts: CreateConversationProjectionOptions) {
   const state = createConversationProjectionState(opts);

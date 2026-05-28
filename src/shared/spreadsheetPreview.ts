@@ -80,12 +80,12 @@ export type SpreadsheetPreview = {
   warnings: string[];
 };
 
-export type SpreadsheetPreviewSuccess = {
+type SpreadsheetPreviewSuccess = {
   ok: true;
   preview: SpreadsheetPreview;
 };
 
-export type SpreadsheetPreviewFailure = {
+type SpreadsheetPreviewFailure = {
   ok: false;
   error: {
     kind: "unsupported_format" | "parse_error" | "empty_workbook";

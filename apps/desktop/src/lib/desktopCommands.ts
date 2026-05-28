@@ -105,15 +105,6 @@ export async function hydrateTranscript(opts: {
   return await requireDesktopApi().hydrateTranscript(opts);
 }
 
-export async function appendTranscriptEvent(opts: {
-  ts: string;
-  threadId: string;
-  direction: "server" | "client";
-  payload: unknown;
-}): Promise<void> {
-  await requireDesktopApi().appendTranscriptEvent(opts);
-}
-
 export async function appendTranscriptBatch(
   events: {
     ts: string;
@@ -139,32 +130,8 @@ export async function showContextMenu(
   return await requireDesktopApi().showContextMenu({ items });
 }
 
-export async function windowMinimize(): Promise<void> {
-  await requireDesktopApi().windowMinimize();
-}
-
-export async function windowMaximize(): Promise<void> {
-  await requireDesktopApi().windowMaximize();
-}
-
 export async function windowClose(): Promise<void> {
   await requireDesktopApi().windowClose();
-}
-
-export async function windowDragStart(opts: { screenX: number; screenY: number }): Promise<void> {
-  await requireDesktopApi().windowDragStart(opts);
-}
-
-export async function windowDragMove(opts: { screenX: number; screenY: number }): Promise<void> {
-  await requireDesktopApi().windowDragMove(opts);
-}
-
-export async function windowDragEnd(): Promise<void> {
-  await requireDesktopApi().windowDragEnd();
-}
-
-export async function getPlatform(): Promise<string> {
-  return await requireDesktopApi().getPlatform();
 }
 
 export async function showMainWindow(): Promise<void> {
@@ -212,10 +179,6 @@ export async function readFileForPreview(opts: {
 
 export async function getPreferredFileApp(opts: { path: string }): Promise<string | null> {
   return await requireDesktopApi().getPreferredFileApp(opts);
-}
-
-export async function previewOSFile(opts: { path: string }): Promise<void> {
-  await requireDesktopApi().previewOSFile(opts);
 }
 
 export async function openPath(opts: { path: string }): Promise<void> {

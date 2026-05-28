@@ -157,7 +157,7 @@ export function developerDiagnosticSystemLineFromSessionEvent(
   }
 }
 
-export function developerDiagnosticSystemLineFromPayload(payload: unknown): string | null {
+function developerDiagnosticSystemLineFromPayload(payload: unknown): string | null {
   const parsed = transcriptDeveloperDiagnosticPayloadSchema.safeParse(payload);
   if (!parsed.success) return null;
 

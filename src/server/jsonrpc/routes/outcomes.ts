@@ -20,15 +20,6 @@ function isOutcomeEvent<T extends SessionEvent>(
     predicate(event) || context.utils.isSessionError(event);
 }
 
-export async function captureBindingEvent<T extends SessionEvent>(
-  context: JsonRpcRouteContext,
-  binding: SessionBinding,
-  action: () => Promise<void> | void,
-  predicate: (event: SessionEvent) => event is T,
-): Promise<T> {
-  return await context.events.capture(binding, async () => await action(), predicate);
-}
-
 export async function captureBindingOutcome<T extends SessionEvent>(
   context: JsonRpcRouteContext,
   binding: SessionBinding,
@@ -55,7 +46,7 @@ export async function captureBindingMutationOutcome<T extends SessionEvent>(
   );
 }
 
-export async function captureBindingMutationError(
+async function captureBindingMutationError(
   context: JsonRpcRouteContext,
   binding: SessionBinding,
   action: () => Promise<void> | void,
@@ -67,7 +58,7 @@ export async function captureBindingMutationError(
   );
 }
 
-export async function captureBindingMutationEvents<T extends SessionEvent>(
+async function captureBindingMutationEvents<T extends SessionEvent>(
   context: JsonRpcRouteContext,
   binding: SessionBinding,
   action: () => Promise<void> | void,
@@ -83,19 +74,6 @@ export async function captureBindingMutationEvents<T extends SessionEvent>(
   );
 }
 
-export async function captureWorkspaceControlEvent<T extends SessionEvent>(
-  context: JsonRpcRouteContext,
-  cwd: string,
-  action: (runtime: SessionRuntime) => Promise<void> | void,
-  predicate: (event: SessionEvent) => event is T,
-): Promise<T> {
-  return await context.workspaceControl.withSession(
-    cwd,
-    async (binding, session) =>
-      await captureBindingEvent(context, binding, async () => await action(session), predicate),
-  );
-}
-
 export async function captureWorkspaceControlOutcome<T extends SessionEvent>(
   context: JsonRpcRouteContext,
   cwd: string,
@@ -106,24 +84,6 @@ export async function captureWorkspaceControlOutcome<T extends SessionEvent>(
     cwd,
     async (binding, session) =>
       await captureBindingOutcome(context, binding, async () => await action(session), predicate),
-  );
-}
-
-export async function captureWorkspaceControlMutationOutcome<T extends SessionEvent>(
-  context: JsonRpcRouteContext,
-  cwd: string,
-  action: (runtime: SessionRuntime) => Promise<void> | void,
-  predicate: (event: SessionEvent) => event is T,
-): Promise<JsonRpcSessionOutcome<T> | null> {
-  return await context.workspaceControl.withSession(
-    cwd,
-    async (binding, session) =>
-      await captureBindingMutationOutcome(
-        context,
-        binding,
-        async () => await action(session),
-        predicate,
-      ),
   );
 }
 

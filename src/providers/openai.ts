@@ -1,32 +1,6 @@
 import type { AgentConfig } from "../types";
 import { createOpenAiModelAdapter } from "./modelAdapter";
 
-export const DEFAULT_OPENAI_PROVIDER_OPTIONS = {
-  reasoningEffort: "high",
-  reasoningSummary: "detailed",
-
-  // Other OpenAI Responses provider options you can enable/override:
-  // conversation: undefined,
-  // include: ["message.output_text.logprobs"],
-  // instructions: undefined,
-  // logprobs: true, // true | number (top-n)
-  // maxToolCalls: undefined,
-  // metadata: undefined,
-  // parallelToolCalls: true,
-  // previousResponseId: undefined,
-  // promptCacheKey: undefined,
-  // promptCacheRetention: "in_memory", // "in_memory" | "24h"
-  // safetyIdentifier: undefined,
-  // serviceTier: "auto", // "auto" | "flex" | "priority" | "default"
-  // store: true,
-  // strictJsonSchema: true,
-  textVerbosity: "medium", // "low" | "medium" | "high"
-  // truncation: "auto", // "auto" | "disabled"
-  // user: undefined,
-  // systemMessageMode: "system", // "system" | "developer" | "remove"
-  // forceReasoning: false,
-} as const;
-
 export const openaiProvider = {
   keyCandidates: ["openai"] as const,
   createModel: ({

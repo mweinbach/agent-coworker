@@ -1,6 +1,6 @@
 import type { PersistedProviderState, PersistedProviderUiState, WorkspaceRecord } from "./types";
 
-export const DEFAULT_LM_STUDIO_UI_STATE = {
+const DEFAULT_LM_STUDIO_UI_STATE = {
   enabled: false,
   hiddenModels: [],
 } as const;

@@ -1,7 +1,7 @@
 import type { SessionRuntime } from "./session/SessionRuntime";
 import type { SessionBinding } from "./startServer/types";
 
-export function collectSessionsForSkillRefresh(opts: {
+function collectSessionsForSkillRefresh(opts: {
   sessionBindings: Iterable<SessionBinding>;
   workspaceControlBindings: Iterable<SessionBinding>;
   workingDirectory: string;

@@ -32,7 +32,7 @@ type DraftMemory = {
   content: string;
 };
 
-export const HOT_MEMORY_ID = "hot";
+const HOT_MEMORY_ID = "hot";
 export const MEMORY_LOADING_STALL_MS = 1_500;
 
 export function resolveDraftMemoryId(rawId: string): string {

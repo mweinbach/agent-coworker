@@ -17,21 +17,21 @@ export type PendingThreadSteer = {
   accepted: boolean;
 };
 
-export type WorkspaceDefaultApplyMode = "auto" | "auto-resume" | "explicit";
+type WorkspaceDefaultApplyMode = "auto" | "auto-resume" | "explicit";
 
 export type DraftModelSelection = {
   provider: ProviderName;
   model: string;
 };
 
-export type PendingWorkspaceDefaultApply = {
+type PendingWorkspaceDefaultApply = {
   mode: WorkspaceDefaultApplyMode;
   draftModelSelection: DraftModelSelection | null;
   allowBeforeHydration?: boolean;
   inFlight?: boolean;
 };
 
-export type SkillInstallWaiter = {
+type SkillInstallWaiter = {
   pendingKey: string;
   resolve: () => void;
   reject: (err: Error) => void;
@@ -127,14 +127,6 @@ export function shiftPendingThreadAttachments(
     RUNTIME.pendingThreadAttachments.set(threadId, existing);
   }
   return next;
-}
-
-export function drainPendingThreadMessages(threadId: string): string[] {
-  const existing = RUNTIME.pendingThreadMessages.get(threadId);
-  if (!existing || existing.length === 0) return [];
-  RUNTIME.pendingThreadMessages.delete(threadId);
-  RUNTIME.pendingThreadAttachments.delete(threadId);
-  return existing;
 }
 
 export function shiftPendingThreadMessage(threadId: string): string | undefined {

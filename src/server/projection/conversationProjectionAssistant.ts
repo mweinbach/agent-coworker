@@ -9,7 +9,7 @@ import {
   occurrenceItemId,
 } from "./shared";
 
-export function assistantRemainderForTurn(
+function assistantRemainderForTurn(
   historyByTurn: Map<string, string>,
   turnId: string,
   text: string,

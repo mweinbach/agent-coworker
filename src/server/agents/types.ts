@@ -1,5 +1,4 @@
 import type {
-  AgentInspectResult,
   AgentMode,
   AgentReasoningEffort,
   AgentRole,
@@ -96,5 +95,3 @@ export type AgentControlDeps = {
   emitParentAgentStatus: (parentSessionId: string, agent: PersistentAgentSummary) => void;
   emitParentLog: (parentSessionId: string, line: string) => void;
 };
-
-export type AgentInspectRecord = AgentInspectResult;

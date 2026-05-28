@@ -23,7 +23,7 @@ export function shouldToggleReasoningExpanded(key: string): boolean {
   return key === "Enter" || key === " " || key === "Spacebar";
 }
 
-export function isActiveChildAgent(agent: ThreadAgentSummary): boolean {
+function isActiveChildAgent(agent: ThreadAgentSummary): boolean {
   if (agent.lifecycleState === "closed") return false;
   return (
     agent.busy || agent.executionState === "pending_init" || agent.executionState === "running"

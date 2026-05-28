@@ -37,7 +37,7 @@ const askStructuredInputSchema = z
   })
   .strict();
 
-export const askInputSchema = z
+const askInputSchema = z
   .object({
     question: askSingleInputSchema.shape.question.optional(),
     options: askSingleInputSchema.shape.options.optional(),

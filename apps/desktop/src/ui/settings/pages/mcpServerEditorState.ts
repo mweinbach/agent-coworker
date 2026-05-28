@@ -1,6 +1,6 @@
 export type EditorState = { mode: "create" } | { mode: "edit"; name: string };
 
-export function getEditingServerName(editorState: EditorState | null): string | null {
+function getEditingServerName(editorState: EditorState | null): string | null {
   return editorState?.mode === "edit" ? editorState.name : null;
 }
 

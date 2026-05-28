@@ -3,7 +3,7 @@ import { isIP } from "node:net";
 import type { SessionSnapshot } from "../shared/sessionSnapshot";
 import { resolveSafeWebUrl, type SafeWebResolution } from "../utils/webSafety";
 
-export type CitationReference = {
+type CitationReference = {
   url: string;
   title?: string;
 };
@@ -355,7 +355,7 @@ function primeCitationReference(url: string): void {
   });
 }
 
-export async function enrichCitationReferences<T extends CitationReference>(
+async function enrichCitationReferences<T extends CitationReference>(
   references: readonly T[],
 ): Promise<T[]> {
   if (references.length === 0) {
@@ -388,7 +388,7 @@ export async function enrichCitationReferences<T extends CitationReference>(
   );
 }
 
-export function enrichCitationAnnotationsFromCache(
+function enrichCitationAnnotationsFromCache(
   annotations: unknown,
 ): Array<Record<string, unknown>> | undefined {
   const entries = asRecordArray(annotations);

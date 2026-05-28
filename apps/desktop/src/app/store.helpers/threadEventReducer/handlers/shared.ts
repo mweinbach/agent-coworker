@@ -16,7 +16,7 @@ export type HandlerModuleContext = {
   resetLiveModelStreamRuntime: WorkspaceStateHelpers["resetLiveModelStreamRuntime"];
 };
 
-export type HandlerDispatchArgs = {
+type HandlerDispatchArgs = {
   get: StoreGet;
   set: StoreSet;
   threadId: string;

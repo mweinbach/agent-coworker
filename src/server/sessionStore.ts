@@ -44,7 +44,7 @@ function toJsonSafe<T>(value: T): T {
 type LegacySessionKind = SessionKind | "subagent";
 type LegacyAgentRole = AgentRole | "general" | "explore";
 
-export type PersistedSessionSnapshotV1 = {
+type PersistedSessionSnapshotV1 = {
   version: 1;
   sessionId: string;
   createdAt: string;
@@ -72,7 +72,7 @@ export type PersistedSessionSnapshotV1 = {
   };
 };
 
-export type PersistedSessionSnapshotV2 = {
+type PersistedSessionSnapshotV2 = {
   version: 2;
   sessionId: string;
   createdAt: string;
@@ -101,7 +101,7 @@ export type PersistedSessionSnapshotV2 = {
   };
 };
 
-export type PersistedSessionSnapshotV3 = {
+type PersistedSessionSnapshotV3 = {
   version: 3;
   sessionId: string;
   createdAt: string;
@@ -133,7 +133,7 @@ export type PersistedSessionSnapshotV3 = {
   };
 };
 
-export type PersistedSessionSnapshotV4 = {
+type PersistedSessionSnapshotV4 = {
   version: 4;
   sessionId: string;
   createdAt: string;
@@ -166,7 +166,7 @@ export type PersistedSessionSnapshotV4 = {
   };
 };
 
-export type PersistedSessionSnapshotV5 = {
+type PersistedSessionSnapshotV5 = {
   version: 5;
   sessionId: string;
   createdAt: string;
@@ -200,7 +200,7 @@ export type PersistedSessionSnapshotV5 = {
   };
 };
 
-export type PersistedSessionSnapshotV6 = {
+type PersistedSessionSnapshotV6 = {
   version: 6;
   sessionId: string;
   createdAt: string;
@@ -245,7 +245,7 @@ export type PersistedSessionSnapshotV6 = {
   };
 };
 
-export type PersistedSessionSnapshotV7 = {
+type PersistedSessionSnapshotV7 = {
   version: 7;
   sessionId: string;
   createdAt: string;
@@ -311,8 +311,6 @@ const harnessContextStateSchema = z
     updatedAt: isoTimestampSchema,
   })
   .strict();
-
-export { sessionUsageSnapshotSchema } from "../session/sessionUsageSchema";
 
 const persistedSessionSnapshotV1Schema = z
   .object({

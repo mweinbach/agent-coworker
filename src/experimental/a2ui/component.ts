@@ -12,7 +12,7 @@ export const A2UI_BASIC_CATALOG_ID = "https://a2ui.org/specification/v0_9/basic_
  *
  * See https://github.com/google/A2UI/blob/main/specification/v0_9/basic_catalog.json
  */
-export const SUPPORTED_BASIC_CATALOG_COMPONENT_TYPES = [
+const SUPPORTED_BASIC_CATALOG_COMPONENT_TYPES = [
   "Text",
   "Heading",
   "Paragraph",

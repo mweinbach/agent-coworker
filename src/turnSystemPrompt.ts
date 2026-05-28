@@ -8,7 +8,7 @@ import {
 
 const MCP_NAMESPACING_TOKEN = "`mcp__{serverName}__{toolName}`";
 
-export function stripStaticMcpNamespacingGuidance(system: string): string {
+function stripStaticMcpNamespacingGuidance(system: string): string {
   return system
     .split("\n")
     .filter((line) => !line.includes(MCP_NAMESPACING_TOKEN))

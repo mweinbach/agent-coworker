@@ -308,5 +308,3 @@ function safeSerializedLength(value: unknown): number {
     return Number.POSITIVE_INFINITY;
   }
 }
-
-export { envelopeSurfaceId };

@@ -101,7 +101,3 @@ export async function writeTextFileAtomic(
     }
   }
 }
-
-export const __internal = {
-  isRetryableRenameError,
-};

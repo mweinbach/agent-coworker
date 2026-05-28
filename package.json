@@ -27,7 +27,6 @@
     "!src/client/modelStreamReplay.ts",
     "!src/shared/displayCitationMarkers.ts",
     "!src/shared/askPrompt.ts",
-    "!src/runtime/openaiEventStream.ts",
     "config/**/*",
     "prompts/**/*",
     "!prompts/system-models/.research",
@@ -69,7 +68,8 @@
     "format": "bunx biome format .",
     "format:write": "bunx biome format --write .",
     "check": "bunx biome check .",
-    "check:write": "bunx biome check --write ."
+    "check:write": "bunx biome check --write .",
+    "knip": "knip --no-config-hints"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock": "^3.1053.0",
@@ -110,6 +110,7 @@
     "@types/react-dom": "^19.2.3",
     "@types/turndown": "^5.0.6",
     "bun-types": "^1.3.14",
+    "knip": "^6.14.2",
     "typescript": "^6.0.3"
   }
 }

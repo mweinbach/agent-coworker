@@ -3,8 +3,6 @@ import path from "node:path";
 import { z } from "zod";
 
 import type { MCPServerConfig } from "../types";
-import { isPathInside } from "../utils/paths";
-import { isRecord } from "../utils/typeGuards";
 
 const stringMapSchema = z.record(z.string(), z.string());
 
@@ -95,7 +93,7 @@ function formatZodError(error: z.ZodError): string {
   return `${issuePath}: ${issue.message}`;
 }
 
-export function parsePluginMcpDocument(
+function parsePluginMcpDocument(
   rawJson: string,
   filePath = ".mcp.json",
 ): { servers: MCPServerConfig[] } {
@@ -150,61 +148,10 @@ export function parsePluginMcpDocument(
   return { servers };
 }
 
-function coerceAppPathSummary(value: unknown): string[] {
-  if (typeof value === "string" && value.trim().length > 0) {
-    return [value.trim()];
-  }
-  if (Array.isArray(value)) {
-    return value
-      .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
-      .map((entry) => entry.trim());
-  }
-  if (isRecord(value)) {
-    return Object.keys(value);
-  }
-  return [];
-}
-
-export async function readPluginMcpServerNames(mcpPath: string | undefined): Promise<string[]> {
-  if (!mcpPath) return [];
-  try {
-    const raw = await fs.readFile(mcpPath, "utf-8");
-    return parsePluginMcpDocument(raw, mcpPath).servers.map((server) => server.name);
-  } catch {
-    return [];
-  }
-}
-
 export async function readPluginMcpServers(
   mcpPath: string | undefined,
 ): Promise<MCPServerConfig[]> {
   if (!mcpPath) return [];
   const raw = await fs.readFile(mcpPath, "utf-8");
   return parsePluginMcpDocument(raw, mcpPath).servers;
-}
-
-export async function readPluginAppIds(appPath: string | undefined): Promise<string[]> {
-  if (!appPath) return [];
-  try {
-    const raw = await fs.readFile(appPath, "utf-8");
-    const parsed = JSON.parse(raw);
-    if (!isRecord(parsed)) return [];
-    return coerceAppPathSummary(parsed.apps ?? parsed).sort((left, right) =>
-      left.localeCompare(right),
-    );
-  } catch {
-    return [];
-  }
-}
-
-export function validatePluginMcpPath(
-  pluginRoot: string,
-  mcpPath: string | undefined,
-): string | null {
-  if (!mcpPath) return null;
-  const resolved = path.resolve(mcpPath);
-  if (!isPathInside(pluginRoot, resolved)) {
-    return `Plugin MCP path resolves outside plugin root: ${resolved}`;
-  }
-  return null;
 }

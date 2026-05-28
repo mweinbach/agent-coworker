@@ -27,10 +27,8 @@ import {
 } from "../shared/recordParsing";
 
 export {
-  asArray,
   asFiniteNumber,
   asNonEmptyString,
-  asNonEmptyStringArray,
   asRecord,
   asString,
 } from "../shared/recordParsing";
@@ -67,18 +65,6 @@ export function providerSectionForPi(
     return asRecord(providerOptions.google) ?? asRecord(providerOptions.vertex) ?? {};
   }
   return asRecord(providerOptions[provider]) ?? {};
-}
-
-export function toGoogleThinkingLevel(
-  value: unknown,
-): "MINIMAL" | "LOW" | "MEDIUM" | "HIGH" | undefined {
-  const text = asNonEmptyString(value)?.toLowerCase();
-  if (!text) return undefined;
-  if (text === "minimal") return "MINIMAL";
-  if (text === "low") return "LOW";
-  if (text === "medium") return "MEDIUM";
-  if (text === "high") return "HIGH";
-  return undefined;
 }
 
 export function buildPiStreamOptions(
@@ -550,7 +536,7 @@ function shapePreservingShallowObjectSchema(
   };
 }
 
-export function applyProviderToolSchemaBudget(
+function applyProviderToolSchemaBudget(
   provider: ProviderName | undefined,
   schema: Record<string, unknown>,
   state?: ToolSchemaBudgetState,
@@ -573,23 +559,6 @@ export function applyProviderToolSchemaBudget(
     state.totalBytes += relaxedBytes;
   }
   return relaxed;
-}
-
-export function toolCallFromPartial(event: any): {
-  toolCallId: string;
-  toolName: string;
-  input?: unknown;
-} {
-  const partial = asRecord(event?.partial);
-  const contentIndex = typeof event?.contentIndex === "number" ? event.contentIndex : -1;
-  const partialContent = Array.isArray(partial?.content) ? partial.content : [];
-  const part = contentIndex >= 0 ? asRecord(partialContent[contentIndex]) : null;
-  const fallbackId = contentIndex >= 0 ? `tool_call_${contentIndex}` : `tool_${Date.now()}`;
-  const toolCallId =
-    asNonEmptyString(part?.id) ?? asNonEmptyString(event?.toolCall?.id) ?? fallbackId;
-  const toolName = asNonEmptyString(part?.name) ?? "tool";
-  const input = part?.arguments ?? {};
-  return { toolCallId, toolName, input };
 }
 
 export type PiToolCallLike = {

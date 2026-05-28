@@ -4,6 +4,7 @@ import path from "node:path";
 
 import {
   copyDir,
+  buildBunBundle,
   ensureBundledBunRuntime,
   pathExists,
   resolveBuildTarget,
@@ -136,23 +137,11 @@ async function main() {
     await rmrf(outDir);
     await fs.mkdir(serverEntrypointDir, { recursive: true });
 
-    await runCommand(
-      [
-        "bun",
-        "build",
-        entry,
-        "--outfile",
-        serverEntrypointPath,
-        "--target",
-        "bun",
-        "--minify",
-        "--sourcemap=none",
-      ],
-      {
-        cwd: root,
-        env: process.env,
-      },
-    );
+    await buildBunBundle({
+      entry,
+      env: "inline",
+      outfile: serverEntrypointPath,
+    });
 
     const { executablePath, version } = await ensureBundledBunRuntime(root, target);
     await fs.copyFile(executablePath, path.join(outDir, SIDECAR_BUN_EXECUTABLE_NAME));

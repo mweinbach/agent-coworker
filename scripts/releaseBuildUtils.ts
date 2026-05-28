@@ -181,6 +181,7 @@ export async function buildBunBundle(options: {
       minify: options.minify ?? true,
       outdir,
       sourcemap: "none",
+      splitting: true,
       target: "bun",
     });
     if (!result.success) {
@@ -195,6 +196,18 @@ export async function buildBunBundle(options: {
 
     await fs.mkdir(path.dirname(options.outfile), { recursive: true });
     await fs.copyFile(output.path, options.outfile);
+    await Promise.all(
+      result.outputs
+        .filter((artifact) => artifact.path !== output.path)
+        .map(async (artifact) => {
+          const dest = path.join(
+            path.dirname(options.outfile),
+            path.relative(outdir, artifact.path),
+          );
+          await fs.mkdir(path.dirname(dest), { recursive: true });
+          await fs.copyFile(artifact.path, dest);
+        }),
+    );
   } finally {
     await rmrf(outdir);
   }

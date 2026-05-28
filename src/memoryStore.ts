@@ -7,7 +7,7 @@ export type MemoryScope = "workspace" | "user";
 const HOT_MEMORY_ID = "hot";
 
 function sql(lines: readonly string[]): string {
-  return lines.join("\n");
+  return lines.join(String.fromCharCode(10));
 }
 
 export type MemoryEntry = {

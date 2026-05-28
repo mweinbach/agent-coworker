@@ -140,6 +140,7 @@ async function main() {
     await buildBunBundle({
       entry,
       env: "inline",
+      minify: false,
       outfile: serverEntrypointPath,
     });
 

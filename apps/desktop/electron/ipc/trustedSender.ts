@@ -9,7 +9,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PACKAGED_RENDERER_DIR = path.resolve(path.join(__dirname, "../renderer"));
 
-export function resolveSenderUrl(event: IpcMainInvokeEvent): string {
+function resolveSenderUrl(event: IpcMainInvokeEvent): string {
   const senderFrameUrl = event.senderFrame?.url?.trim();
   if (senderFrameUrl) {
     return senderFrameUrl;
@@ -17,6 +17,7 @@ export function resolveSenderUrl(event: IpcMainInvokeEvent): string {
   return event.sender.getURL();
 }
 
+/** @public Imported dynamically by the ipc-trusted-sender test; not statically imported. */
 export function isTrustedSender(event: IpcMainInvokeEvent): boolean {
   const senderUrl = resolveSenderUrl(event);
   return isTrustedDesktopSenderUrl(senderUrl, {

@@ -9,11 +9,11 @@ export function managedSofficeRoot(home: string): string {
   return path.join(home, ".cache", "cowork", "libreoffice");
 }
 
-export function pathKeyForEnv(env: Record<string, string | undefined>): string {
+function pathKeyForEnv(env: Record<string, string | undefined>): string {
   return Object.keys(env).find((key) => key.toLowerCase() === "path") ?? "PATH";
 }
 
-export function dedupePathEntries(paths: string[]): string[] {
+function dedupePathEntries(paths: string[]): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const candidate of paths) {

@@ -32,7 +32,7 @@ function previewSummary(
   return validCount === 1 ? "1 plugin ready" : "Multiple plugins found";
 }
 
-export function isPluginPreviewVisibleForInput(opts: {
+function isPluginPreviewVisibleForInput(opts: {
   normalizedSourceInput: string;
   lastPreviewSourceInput: string | null;
   lastPreviewTargetScope: PluginPreviewScope | null;

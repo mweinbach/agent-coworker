@@ -513,14 +513,14 @@ export const desktopNotificationInputSchema: z.ZodType<DesktopNotificationInput>
   silent: z.boolean().optional(),
 });
 
-export const updaterProgressSchema: z.ZodType<UpdaterProgress> = z.object({
+const updaterProgressSchema: z.ZodType<UpdaterProgress> = z.object({
   percent: z.number().finite(),
   transferred: z.number().finite(),
   total: z.number().finite(),
   bytesPerSecond: z.number().finite(),
 });
 
-export const updaterReleaseInfoSchema: z.ZodType<UpdaterReleaseInfo> = z.object({
+const updaterReleaseInfoSchema: z.ZodType<UpdaterReleaseInfo> = z.object({
   version: nonEmptyStringSchema,
   releaseName: optionalNonEmptyStringSchema,
   releaseDate: optionalNonEmptyStringSchema,

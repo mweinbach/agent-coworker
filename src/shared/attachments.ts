@@ -13,7 +13,7 @@ export const MAX_ATTACHMENT_UPLOAD_BASE64_SIZE = getBase64SizeFromByteLength(
 );
 const BASE64_BODY_PATTERN = /^[A-Za-z0-9+/]*$/;
 
-export function getBase64SizeFromByteLength(byteLength: number): number {
+function getBase64SizeFromByteLength(byteLength: number): number {
   return Math.ceil(Math.max(0, byteLength) / 3) * 4;
 }
 
@@ -51,7 +51,7 @@ export function getAttachmentCountValidationMessage(count?: number): string | nu
   return null;
 }
 
-export function getAttachmentValidationMessageForBase64Sizes(
+function getAttachmentValidationMessageForBase64Sizes(
   base64Sizes?: readonly number[],
 ): string | null {
   if (!base64Sizes || base64Sizes.length === 0) {

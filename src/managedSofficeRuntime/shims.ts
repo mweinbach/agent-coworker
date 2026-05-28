@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 
-export function shellQuote(value: string): string {
+function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-export function cmdQuote(value: string): string {
+function cmdQuote(value: string): string {
   return `"${value.replaceAll('"', '""')}"`;
 }
 

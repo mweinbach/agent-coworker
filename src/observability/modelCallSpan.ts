@@ -54,14 +54,14 @@ export function parseTelemetrySettings(raw: unknown): TelemetrySettings | undefi
   };
 }
 
-export type ModelCallSpanContext = {
+type ModelCallSpanContext = {
   runtimeLabel: string;
   provider: string;
   modelId: string;
   stepNumber: number;
 };
 
-export function startModelCallSpan(
+function startModelCallSpan(
   telemetry: TelemetrySettings | undefined,
   context: ModelCallSpanContext,
   input: unknown,

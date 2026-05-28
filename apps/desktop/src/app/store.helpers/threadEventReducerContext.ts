@@ -1,4 +1,3 @@
-import type { SessionEvent } from "../../lib/wsProtocol";
 import type { StoreGet } from "../store.helpers";
 import type { Notification, ThreadAgentSummary, ThreadTitleSource } from "../types";
 
@@ -87,15 +86,6 @@ export type ThreadEventReducerDeps = {
     incomingTitle: string;
     incomingSource: ThreadTitleSource;
   }) => boolean;
-};
-
-export type ThreadEventReducerRuntimeContext = {
-  deps: ThreadEventReducerDeps;
-  isWorkspaceDisposed: (workspaceId: string) => boolean;
-  reactivateWorkspaceThreadEventState: (workspaceId: string) => void;
-  rememberThreadStoreGet: (workspaceId: string, get: StoreGet) => void;
-  trackedThreadIdsForWorkspace: (workspaceId: string, getOverride?: StoreGet) => string[];
-  shouldReplayDisconnectedEvent: (evt: SessionEvent) => boolean;
 };
 
 export function sortAgentSummaries(agents: ThreadAgentSummary[]): ThreadAgentSummary[] {

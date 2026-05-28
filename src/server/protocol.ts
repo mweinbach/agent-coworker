@@ -47,14 +47,8 @@ import type { PersistedSessionSummary } from "./sessionStore";
 
 export { ASK_SKIP_TOKEN } from "../shared/ask";
 
-export type MCPServerEventSource = "workspace" | "user" | "system" | "plugin";
-export type MCPServerAuthMode =
-  | "none"
-  | "missing"
-  | "api_key"
-  | "oauth"
-  | "oauth_pending"
-  | "error";
+type MCPServerEventSource = "workspace" | "user" | "system" | "plugin";
+type MCPServerAuthMode = "none" | "missing" | "api_key" | "oauth" | "oauth_pending" | "error";
 
 // Version of the internal session event payload schema documented for JSON-RPC
 // control envelopes and persisted session artifacts.
@@ -86,7 +80,7 @@ export type SessionConfigPatch = {
   };
 };
 
-export type SessionConfigState = {
+type SessionConfigState = {
   yolo: boolean;
   observabilityEnabled: boolean;
   backupsEnabled: boolean;

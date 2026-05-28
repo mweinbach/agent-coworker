@@ -1,8 +1,8 @@
 import type { StartServerSocket } from "../startServer/types";
 
-export const DEFAULT_SEND_QUEUE_MAX = 500;
+const DEFAULT_SEND_QUEUE_MAX = 500;
 
-export function evictLeastCriticalSend(queue: string[]): void {
+function evictLeastCriticalSend(queue: string[]): void {
   for (let i = 0; i < queue.length; i++) {
     try {
       const parsed = JSON.parse(queue[i]) as {

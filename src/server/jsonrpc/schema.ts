@@ -10,12 +10,7 @@ import {
   jsonRpcConnectorsRequestSchemas,
   jsonRpcConnectorsResultSchemas,
 } from "./schema.connectors";
-import {
-  jsonRpcCoreRequestSchemas,
-  jsonRpcCoreResultSchemas,
-  jsonRpcInitializeParamsSchema,
-  jsonRpcInitializedParamsSchema,
-} from "./schema.core";
+import { jsonRpcCoreRequestSchemas, jsonRpcCoreResultSchemas } from "./schema.core";
 import { jsonRpcMemoryRequestSchemas, jsonRpcMemoryResultSchemas } from "./schema.memory";
 import { jsonRpcMiscNotificationSchemas } from "./schema.misc";
 import { jsonRpcMcpRequestSchemas, jsonRpcMcpResultSchemas } from "./schema.mcp";
@@ -43,8 +38,6 @@ import {
   jsonRpcWorkspaceRequestSchemas,
   jsonRpcWorkspaceResultSchemas,
 } from "./schema.workspace";
-
-export { jsonRpcInitializeParamsSchema, jsonRpcInitializedParamsSchema };
 
 export const jsonRpcRequestSchemas = {
   ...jsonRpcCoreRequestSchemas,
@@ -91,13 +84,6 @@ export const jsonRpcResultSchemas = {
   ...jsonRpcBackupsResultSchemas,
   ...jsonRpcWorkspaceResultSchemas,
 } as const;
-
-export const jsonRpcSchemaBundle = {
-  requests: jsonRpcRequestSchemas,
-  results: jsonRpcResultSchemas,
-  notifications: jsonRpcNotificationSchemas,
-  serverRequests: jsonRpcServerRequestSchemas,
-};
 
 export const jsonRpcSchemaBundleSchema = z.object({
   requests: z.object(jsonRpcRequestSchemas),

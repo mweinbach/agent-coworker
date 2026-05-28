@@ -1,7 +1,7 @@
 import type { ProviderName, SessionEvent } from "../../lib/wsProtocol";
 import { normalizeWorkspaceProviderOptions } from "../openaiCompatibleProviderOptions";
 import type { StoreGet, StoreSet } from "../store.helpers";
-import type { Notification, SessionSnapshot, ThreadRecord, WorkspaceRuntime } from "../types";
+import type { Notification, SessionSnapshot, ThreadRecord } from "../types";
 import { normalizeWorkspaceUserProfile } from "../types";
 import {
   applyPluginsCatalogEvent,

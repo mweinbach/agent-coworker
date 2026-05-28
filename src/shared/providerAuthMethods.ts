@@ -1,9 +1,9 @@
 import type { ProviderName } from "../types";
 
-export type ProviderAuthMethodType = "api" | "oauth";
-export type ProviderAuthFieldKind = "text" | "password";
+type ProviderAuthMethodType = "api" | "oauth";
+type ProviderAuthFieldKind = "text" | "password";
 
-export type ProviderAuthMethodField = {
+type ProviderAuthMethodField = {
   id: string;
   label: string;
   kind: ProviderAuthFieldKind;

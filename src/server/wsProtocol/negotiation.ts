@@ -1,10 +1,10 @@
-export const WS_PROTOCOL_MODE = "jsonrpc" as const;
+const WS_PROTOCOL_MODE = "jsonrpc" as const;
 
-export type WsProtocolMode = typeof WS_PROTOCOL_MODE;
+type WsProtocolMode = typeof WS_PROTOCOL_MODE;
 
-export const WS_SUBPROTOCOL = "cowork.jsonrpc.v1";
+const WS_SUBPROTOCOL = "cowork.jsonrpc.v1";
 
-export type ResolvedWsProtocol = {
+type ResolvedWsProtocol = {
   mode: WsProtocolMode;
   selectedSubprotocol: string | null;
 };

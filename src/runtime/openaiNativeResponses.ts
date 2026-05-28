@@ -33,7 +33,7 @@ type OpenAiNativeStreamOptions = {
   };
 };
 
-export type OpenAiNativeStepRequest = {
+type OpenAiNativeStepRequest = {
   provider: OpenAiCompatibleProvider;
   model: PiModel;
   apiKey?: string;
@@ -47,7 +47,7 @@ export type OpenAiNativeStepRequest = {
   onRawEvent?: (event: Record<string, unknown>) => void | Promise<void>;
 };
 
-export type OpenAiNativeStepResult = {
+type OpenAiNativeStepResult = {
   assistant: Record<string, unknown>;
   responseId?: string;
 };
@@ -201,7 +201,7 @@ function normalizeWebSearchLocation(value: unknown): Record<string, string> | un
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
-export function buildOpenAiNativeRequest(opts: OpenAiNativeStepRequest): Record<string, unknown> {
+function buildOpenAiNativeRequest(opts: OpenAiNativeStepRequest): Record<string, unknown> {
   const input = convertPiMessagesToResponsesInput(opts.model, opts.piMessages);
   const continuationOptions = buildOpenAiContinuationRequestOptions(opts.previousResponseId);
   const request: Record<string, unknown> = {

@@ -13,7 +13,7 @@
 
 import type { WindowsBackgroundMaterial } from "../../../src/lib/desktopApi";
 
-export type DesktopPlatform = "macos" | "windows" | "linux" | "other";
+type DesktopPlatform = "macos" | "windows" | "linux" | "other";
 
 export type PlatformChromeContract = {
   /** Platform identifier */
@@ -195,19 +195,6 @@ export function getCurrentPlatformChrome(): PlatformChromeContract {
 
 const TITLEBAR_SYMBOL_COLOR_LIGHT = "#556041";
 const TITLEBAR_SYMBOL_COLOR_DARK = "#eef0dc";
-
-/**
- * Get symbol colors for titlebar overlay.
- */
-export function getTitlebarSymbolColors(): {
-  light: string;
-  dark: string;
-} {
-  return {
-    light: TITLEBAR_SYMBOL_COLOR_LIGHT,
-    dark: TITLEBAR_SYMBOL_COLOR_DARK,
-  };
-}
 
 /**
  * Get the appropriate symbol color for the current theme.

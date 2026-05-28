@@ -4,7 +4,7 @@ import { memo } from "react";
 import type { SidebarSectionKey } from "../../app/types";
 import { cn } from "../../lib/utils";
 
-export const SIDEBAR_SECTION_REORDER_LAYOUT_TRANSITION = {
+const SIDEBAR_SECTION_REORDER_LAYOUT_TRANSITION = {
   layout: {
     type: "spring" as const,
     stiffness: 420,

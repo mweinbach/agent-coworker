@@ -228,7 +228,7 @@ function toolResultContentToText(content: unknown): string {
   return safeJsonStringify(content);
 }
 
-export function toolOutputFromPiToolResultContent(content: unknown): unknown {
+function toolOutputFromPiToolResultContent(content: unknown): unknown {
   const richContent = richToolResultContentFromOutput(content);
   if (richContent?.some((part) => part.type === "image")) {
     return { type: "content", content: richContent };

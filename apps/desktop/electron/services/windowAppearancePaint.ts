@@ -1,8 +1,8 @@
 import type { WindowsBackgroundMaterial } from "../../src/lib/desktopApi";
 import { getPlatformChrome } from "./windowChrome/platformChrome";
 
-export const LIGHT_SHELL_BACKGROUND = "#dfe2cc";
-export const DARK_SHELL_BACKGROUND = "#171d13";
+const LIGHT_SHELL_BACKGROUND = "#dfe2cc";
+const DARK_SHELL_BACKGROUND = "#171d13";
 
 /** Solid shell tint behind web content (no Electron imports — safe for unit tests). */
 export function desktopShellBackgroundColor(useDarkColors: boolean): string {

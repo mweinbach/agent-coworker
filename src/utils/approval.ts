@@ -7,7 +7,7 @@ import { isPathInside } from "./paths";
 
 const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
 
-export const AUTO_APPROVE_PATTERNS: RegExp[] = [
+const AUTO_APPROVE_PATTERNS: RegExp[] = [
   /^ls\b/,
   /^pwd$/,
   /^echo\b/,
@@ -18,7 +18,7 @@ export const AUTO_APPROVE_PATTERNS: RegExp[] = [
   /^bun\s+--version$/,
 ];
 
-export const ALWAYS_WARN_PATTERNS: RegExp[] = [
+const ALWAYS_WARN_PATTERNS: RegExp[] = [
   /\brm\s+-rf\b/,
   /\bgit\s+push\s+--force\b/,
   /\bgit\s+reset\s+--hard\b/,

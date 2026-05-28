@@ -107,7 +107,7 @@ function formatZodError(error: z.ZodError): string {
   return issue.message;
 }
 
-export function parseConnectionStore(raw: unknown): ConnectionStore {
+function parseConnectionStore(raw: unknown): ConnectionStore {
   const storeParsed = connectionStoreSchema.safeParse(raw);
   if (!storeParsed.success) {
     throw new ConnectionStoreParseError(

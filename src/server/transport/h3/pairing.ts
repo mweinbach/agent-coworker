@@ -89,7 +89,7 @@ export function resolveH3PairingStoreDir(storeRootPath = resolveDefaultStoreRoot
   return path.join(storeRootPath, MOBILE_PAIRING_DIRNAME);
 }
 
-export function resolveH3PairingDevicesFile(storeRootPath = resolveDefaultStoreRoot()): string {
+function resolveH3PairingDevicesFile(storeRootPath = resolveDefaultStoreRoot()): string {
   return path.join(resolveH3PairingStoreDir(storeRootPath), DEVICES_FILE_NAME);
 }
 
@@ -165,7 +165,7 @@ export async function loadH3PairingStoreState(
   }
 }
 
-export async function persistH3PairingStoreState(
+async function persistH3PairingStoreState(
   state: H3PairingStoreState,
   storeRootPath = resolveDefaultStoreRoot(),
 ): Promise<H3PairingStoreState> {

@@ -46,11 +46,11 @@ export function providerStatusLabel(status: ProviderStatus | null | undefined): 
   return "Not connected";
 }
 
-export function lmStudioStatusMessage(value: unknown): string {
+function lmStudioStatusMessage(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-export function lmStudioStatusKind(opts: {
+function lmStudioStatusKind(opts: {
   enabled: boolean;
   status?: ProviderStatus;
   catalogEntry?: ProviderCatalogEntry;
@@ -140,7 +140,7 @@ export function formatRateLimitName(entry: ProviderRateLimitEntry): string {
     .join(" ");
 }
 
-export function formatDurationSeconds(totalSeconds: unknown): string {
+function formatDurationSeconds(totalSeconds: unknown): string {
   if (typeof totalSeconds !== "number" || !Number.isFinite(totalSeconds) || totalSeconds < 0) {
     return "unknown";
   }
@@ -150,7 +150,7 @@ export function formatDurationSeconds(totalSeconds: unknown): string {
   return `${Math.round(totalSeconds / 86400)}d`;
 }
 
-export function clampPercent(value: number): number {
+function clampPercent(value: number): number {
   return Math.max(0, Math.min(100, value));
 }
 
@@ -185,14 +185,14 @@ export function formatWindowMeta(window: ProviderRateLimitWindow | null | undefi
   return `${windowSize} \u2022 ${reset}`;
 }
 
-export function formatCreditsBalance(balance: unknown): string | null {
+function formatCreditsBalance(balance: unknown): string | null {
   if (typeof balance !== "string" || !balance.trim()) return null;
   const parsed = Number(balance);
   if (!Number.isFinite(parsed)) return balance.trim();
   return new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(parsed);
 }
 
-export function hasUsableCredits(credits: ProviderCredits | null | undefined): boolean {
+function hasUsableCredits(credits: ProviderCredits | null | undefined): boolean {
   if (!credits || typeof credits !== "object") return false;
   if (credits.unlimited === true) return true;
   if (credits.hasCredits === true) return true;

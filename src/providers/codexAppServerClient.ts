@@ -18,7 +18,7 @@ type PendingRequest = {
   reject: (error: Error) => void;
 };
 
-export type CodexAppServerJsonRpcDirection =
+type CodexAppServerJsonRpcDirection =
   | "client_request"
   | "client_notification"
   | "client_response"
@@ -58,7 +58,7 @@ export type CodexAppServerClient = {
   close: () => Promise<void>;
 };
 
-export type CodexAppServerRequestHandler = (
+type CodexAppServerRequestHandler = (
   request: CodexAppServerJsonRpcRequest,
 ) => Promise<unknown> | unknown;
 
@@ -80,7 +80,7 @@ function resolveCodexHome(authHomeDir = resolveAuthHomeDir()): string {
   return path.join(authHomeDir, ".cowork", "auth", "codex-cli");
 }
 
-export function codexAppServerClientInfo(): { name: string; title: string; version: string } {
+function codexAppServerClientInfo(): { name: string; title: string; version: string } {
   return {
     name: "agent-coworker",
     title: "Agent Coworker",
@@ -88,7 +88,7 @@ export function codexAppServerClientInfo(): { name: string; title: string; versi
   };
 }
 
-export function codexAppServerInitializeParams(): {
+function codexAppServerInitializeParams(): {
   clientInfo: ReturnType<typeof codexAppServerClientInfo>;
   capabilities: { experimentalApi: boolean };
 } {
@@ -357,38 +357,6 @@ async function stopProcess(child: ChildProcessWithoutNullStreams): Promise<void>
       child.kill("SIGTERM");
     }
   });
-}
-
-export async function withCodexAppServerClient<T>(
-  fn: (client: CodexAppServerClient) => Promise<T>,
-  opts: CodexAppServerClientOptions = {},
-): Promise<T> {
-  const client = await startCodexAppServerClient(opts);
-  let originalError: unknown;
-  let result: { value: T } | undefined;
-  try {
-    await client.request("initialize", codexAppServerInitializeParams());
-    client.notify("initialized");
-    result = { value: await fn(client) };
-  } catch (error) {
-    originalError = error;
-  }
-  try {
-    await client.close();
-  } catch (closeError) {
-    if (originalError !== undefined) {
-      opts.log?.(`[codex-app-server] close failed after error: ${String(closeError)}`);
-    } else {
-      throw closeError;
-    }
-  }
-  if (originalError !== undefined) {
-    throw originalError;
-  }
-  if (!result) {
-    throw new Error("Codex app-server client closed before returning a result.");
-  }
-  return result.value;
 }
 
 const pooledClients = new Map<string, Promise<CodexAppServerClient>>();

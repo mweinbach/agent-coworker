@@ -465,8 +465,6 @@ export async function deletePluginInstallation(opts: {
   return await refreshCatalog(opts.config);
 }
 
-export type { MaterializedPluginSource };
-
 export const __internal = {
   setCopyPluginRootImplForTests(copyPluginRootImpl?: CopyPluginRootImpl) {
     pluginOperationInternals.copyPluginRootImpl = copyPluginRootImpl ?? defaultCopyPluginRoot;

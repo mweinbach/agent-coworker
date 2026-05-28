@@ -21,7 +21,7 @@ export type PresentationPreviewRequest = {
   env?: Record<string, string | undefined>;
 };
 
-export type PresentationSlide = {
+type PresentationSlide = {
   slideIndex: number;
   slideId?: string;
   title?: string;

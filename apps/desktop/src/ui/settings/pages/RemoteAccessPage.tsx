@@ -52,7 +52,7 @@ const TRUSTED_DEVICE_PERMISSION_CONTROLS: Array<{
   { key: "backups", label: "Backups" },
 ];
 
-export function describeRelayServiceStatus(
+function describeRelayServiceStatus(
   status: Awaited<ReturnType<typeof getMobileRelayState>>["relayServiceStatus"],
 ): string {
   switch (status) {

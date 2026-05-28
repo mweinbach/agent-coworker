@@ -49,7 +49,6 @@ const FEED_AUTO_SCROLL_THRESHOLD_PX = 24;
 
 export { ChatThreadHeader } from "./chat/ChatThreadHeader";
 export {
-  type A2uiActionMessage,
   canClearSessionHardCap,
   composerBusyHint,
   countActiveChildAgents,
@@ -57,7 +56,6 @@ export {
   formatSessionBudgetLine,
   formatSessionUsageHeadline,
   getComposerSubmitState,
-  isActiveChildAgent,
   parseA2uiActionMessage,
   reasoningLabelForMode,
   reasoningPreviewText,

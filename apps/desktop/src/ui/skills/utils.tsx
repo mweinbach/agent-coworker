@@ -16,7 +16,7 @@ export function skillSourceLabel(source: SkillEntry["source"]): string {
   }
 }
 
-export function stripYamlFrontMatter(raw: string): string {
+function stripYamlFrontMatter(raw: string): string {
   const re = /^\ufeff?---\s*\r?\n[\s\S]*?\r?\n---\s*(?:\r?\n|$)/;
   return raw.replace(re, "").trimStart();
 }

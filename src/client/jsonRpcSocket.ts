@@ -101,7 +101,7 @@ export type JsonRpcSocketInvalidMessage = {
   raw: unknown;
 };
 
-export type JsonRpcRequestError = Error & {
+type JsonRpcRequestError = Error & {
   jsonRpcCode?: number;
 };
 

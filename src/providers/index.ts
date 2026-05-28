@@ -17,36 +17,12 @@ import { opencodeZenProvider } from "./opencode-zen";
 import { togetherProvider } from "./together";
 
 export {
-  authorizeProviderAuth,
-  callbackProviderAuth,
-  listProviderAuthMethods,
-  type ProviderAuthChallenge,
-  type ProviderAuthMethod,
-  requiresProviderAuthCode,
-  resolveProviderAuthMethod,
-  setProviderApiKey,
-  setProviderConfig,
-} from "./authRegistry";
-export {
-  availableModelsForProvider,
   defaultModelForProvider,
-  isUserFacingProviderEnabled,
-  modelChoicesByProvider,
   PROVIDER_MODEL_CATALOG,
-  PROVIDER_MODEL_CHOICES,
-  USER_FACING_DISABLED_PROVIDERS,
-  userFacingAvailableModelsForProvider,
-  userFacingProviders,
 } from "./catalog";
-export {
-  getProviderCatalog,
-  listProviderCatalogEntries,
-  type ProviderCatalogEntry,
-  type ProviderCatalogPayload,
-} from "./connectionCatalog";
 export { DEFAULT_PROVIDER_OPTIONS } from "./providerOptions";
 
-export type ProviderRuntimeDefinition = {
+type ProviderRuntimeDefinition = {
   keyCandidates: readonly ProviderName[];
   createModel: (options: { config: AgentConfig; modelId: string; savedKey?: string }) => unknown;
 };

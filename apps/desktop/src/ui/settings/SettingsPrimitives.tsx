@@ -18,25 +18,6 @@ export function SettingsPage({
   );
 }
 
-export function SettingsToolbar({
-  children,
-  className,
-}: {
-  children: ReactNode;
-  className?: string;
-}) {
-  return (
-    <div
-      className={cn(
-        "settings-toolbar flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/55 bg-background/58 px-3 py-2.5",
-        className,
-      )}
-    >
-      {children}
-    </div>
-  );
-}
-
 export function SettingsSection({
   title,
   description,
@@ -124,26 +105,6 @@ export function SettingsRow({
       {control ? (
         <div className="flex shrink-0 items-center justify-start sm:justify-end">{control}</div>
       ) : null}
-    </div>
-  );
-}
-
-export function SettingsField({
-  label,
-  hint,
-  children,
-  className,
-}: {
-  label: ReactNode;
-  hint?: ReactNode;
-  children: ReactNode;
-  className?: string;
-}) {
-  return (
-    <div className={cn("grid gap-1.5 text-sm", className)}>
-      <span className="font-medium text-foreground">{label}</span>
-      {children}
-      {hint ? <span className="text-xs leading-relaxed text-muted-foreground">{hint}</span> : null}
     </div>
   );
 }

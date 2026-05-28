@@ -51,7 +51,7 @@ export function isErrorWithCode(err: unknown, code: string): boolean {
   return parsed.success && parsed.data.code === code;
 }
 
-export function deepMerge<T extends Record<string, unknown>>(base: T, override: T): T {
+function deepMerge<T extends Record<string, unknown>>(base: T, override: T): T {
   const out: Record<string, unknown> = { ...base };
   for (const [k, v] of Object.entries(override)) {
     if (isPlainObject(out[k]) && isPlainObject(v)) {
@@ -63,14 +63,14 @@ export function deepMerge<T extends Record<string, unknown>>(base: T, override: 
   return out as T;
 }
 
-export function readWorkspaceA2uiFlag(value: unknown): boolean | undefined {
+function readWorkspaceA2uiFlag(value: unknown): boolean | undefined {
   if (!isPlainObject(value)) {
     return undefined;
   }
   return typeof value.a2ui === "boolean" ? value.a2ui : undefined;
 }
 
-export function withWorkspaceA2uiFeatureFlags(
+function withWorkspaceA2uiFeatureFlags(
   featureFlags: AgentConfig["featureFlags"] | undefined,
   a2ui: boolean,
 ): AgentConfig["featureFlags"] {

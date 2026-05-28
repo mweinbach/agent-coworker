@@ -28,7 +28,7 @@ export function listLmStudioLlms(models: readonly LmStudioModel[]): LmStudioMode
   return models.filter((model) => model.type === "llm").sort(compareModelKeys);
 }
 
-export function pickLmStudioLoadedInstance(
+function pickLmStudioLoadedInstance(
   instances: readonly LmStudioLoadedInstance[],
 ): LmStudioLoadedInstance | null {
   if (instances.length === 0) return null;

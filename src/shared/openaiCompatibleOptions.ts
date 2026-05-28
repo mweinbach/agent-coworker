@@ -10,8 +10,6 @@ export const EDITABLE_PROVIDER_OPTIONS_PROVIDER_NAMES = [
   "google",
   "lmstudio",
 ] as const;
-export type EditableProviderOptionsProviderName =
-  (typeof EDITABLE_PROVIDER_OPTIONS_PROVIDER_NAMES)[number];
 
 // "none" and "xhigh" are client-side sentinel values used to represent "disable reasoning"
 // and "maximum effort" respectively. They are mapped to API-specific parameters before
@@ -38,16 +36,16 @@ export const CODEX_WEB_SEARCH_BACKEND_VALUES = [
 export type CodexWebSearchBackend = (typeof CODEX_WEB_SEARCH_BACKEND_VALUES)[number];
 
 export const CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES = ["low", "medium", "high"] as const;
-export type CodexWebSearchContextSize = (typeof CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES)[number];
+type CodexWebSearchContextSize = (typeof CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES)[number];
 
-export type CodexWebSearchLocation = {
+type CodexWebSearchLocation = {
   country?: string;
   region?: string;
   city?: string;
   timezone?: string;
 };
 
-export type CodexWebSearchOptions = {
+type CodexWebSearchOptions = {
   contextSize?: CodexWebSearchContextSize;
   allowedDomains?: string[];
   location?: CodexWebSearchLocation;
@@ -59,7 +57,7 @@ export type OpenAiCompatibleProviderOptions = {
   textVerbosity?: OpenAiTextVerbosity;
 };
 
-export type OpenAiProviderOptions = OpenAiCompatibleProviderOptions;
+type OpenAiProviderOptions = OpenAiCompatibleProviderOptions;
 
 export type CodexCliProviderOptions = OpenAiCompatibleProviderOptions & {
   webSearchBackend?: CodexWebSearchBackend;
@@ -68,14 +66,14 @@ export type CodexCliProviderOptions = OpenAiCompatibleProviderOptions & {
   webSearch?: CodexWebSearchOptions;
 };
 
-export type LmStudioProviderOptions = {
+type LmStudioProviderOptions = {
   baseUrl?: string;
   contextLength?: number;
   autoLoad?: boolean;
   reloadOnContextMismatch?: boolean;
 };
 
-export type GoogleThinkingConfig = {
+type GoogleThinkingConfig = {
   thinkingLevel?: GoogleThinkingLevel;
 };
 
@@ -126,27 +124,27 @@ export function isOpenAiTextVerbosity(value: unknown): value is OpenAiTextVerbos
   );
 }
 
-export function isCodexWebSearchMode(value: unknown): value is CodexWebSearchMode {
+function isCodexWebSearchMode(value: unknown): value is CodexWebSearchMode {
   return (
     typeof value === "string" && (CODEX_WEB_SEARCH_MODE_VALUES as readonly string[]).includes(value)
   );
 }
 
-export function isCodexWebSearchBackend(value: unknown): value is CodexWebSearchBackend {
+function isCodexWebSearchBackend(value: unknown): value is CodexWebSearchBackend {
   return (
     typeof value === "string" &&
     (CODEX_WEB_SEARCH_BACKEND_VALUES as readonly string[]).includes(value)
   );
 }
 
-export function isLocalWebSearchProvider(value: unknown): value is LocalWebSearchProvider {
+function isLocalWebSearchProvider(value: unknown): value is LocalWebSearchProvider {
   return (
     typeof value === "string" &&
     (LOCAL_WEB_SEARCH_PROVIDER_VALUES as readonly string[]).includes(value)
   );
 }
 
-export function isCodexWebSearchContextSize(value: unknown): value is CodexWebSearchContextSize {
+function isCodexWebSearchContextSize(value: unknown): value is CodexWebSearchContextSize {
   return (
     typeof value === "string" &&
     (CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES as readonly string[]).includes(value)

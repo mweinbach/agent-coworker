@@ -1,6 +1,6 @@
 import type { AgentConfig } from "../../types";
 
-export const A2UI_EXPERIMENT_ENV = "COWORK_EXPERIMENTAL_A2UI";
+const A2UI_EXPERIMENT_ENV = "COWORK_EXPERIMENTAL_A2UI";
 
 export function isA2uiExperimentEnabled(env: Record<string, string | undefined> = process.env) {
   return env[A2UI_EXPERIMENT_ENV] === "1";

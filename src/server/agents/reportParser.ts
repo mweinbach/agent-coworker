@@ -1,6 +1,6 @@
 import { type ChildAgentReport, childAgentReportSchema } from "../../shared/agents";
 
-export const REPORT_RE = /<agent_report>\s*([\s\S]*?)\s*<\/agent_report>/i;
+const REPORT_RE = /<agent_report>\s*([\s\S]*?)\s*<\/agent_report>/i;
 
 function tryParseChildAgentReport(candidate: string): ChildAgentReport | null {
   try {

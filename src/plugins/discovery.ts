@@ -8,7 +8,7 @@ import { type ParsedMarketplaceDocument, parsePluginMarketplace } from "./market
 
 const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
 
-export interface DiscoveredPluginCandidate {
+interface DiscoveredPluginCandidate {
   rootDir: string;
   realRootDir: string;
   scope: PluginScope;

@@ -56,7 +56,7 @@ export type ProjectionServerRequest =
       };
     };
 
-export type ConversationProjectionSink = {
+type ConversationProjectionSink = {
   emitTurnStarted: (turnId: string) => void;
   emitTurnCompleted: (turnId: string, status: "completed" | "interrupted" | "failed") => void;
   emitItemStarted: (turnId: string | null, item: ProjectedItem) => void;

@@ -104,7 +104,7 @@ export type SeededSessionContext = {
   harnessContext: HarnessContextState | null;
 };
 
-export type PendingSteer = {
+type PendingSteer = {
   text: string;
   displayText?: string;
   clientMessageId?: string;
@@ -167,7 +167,7 @@ export type ExperimentalA2uiManager = {
   reset: () => void;
 };
 
-export type ExperimentalA2uiManagerFactory = (deps: {
+type ExperimentalA2uiManagerFactory = (deps: {
   sessionId: string;
   emit: (evt: SessionEvent) => void;
   log?: (line: string) => void;

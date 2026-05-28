@@ -3,7 +3,7 @@ import type { SessionSnapshot } from "../../shared/sessionSnapshot";
 import type { A2uiComponent, A2uiSurfaceState, A2uiSurfacesById } from "./index";
 import { A2uiSurfaceManager } from "./SurfaceManager";
 
-export type ExperimentalA2uiManager = {
+type ExperimentalA2uiManager = {
   applyUnknown: A2uiSurfaceManager["applyUnknown"];
   validateAction: A2uiSurfaceManager["validateAction"];
   hydrate: (surfaces: unknown) => void;

@@ -29,7 +29,7 @@ export type SessionTitleResult = {
   model: string | null;
 };
 
-export const TITLE_SELECTION_STOP_WORDS = new Set([
+const TITLE_SELECTION_STOP_WORDS = new Set([
   "a",
   "an",
   "and",

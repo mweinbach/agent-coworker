@@ -11,7 +11,7 @@ export type GitHubContentEntry = {
   download_url: string | null;
 };
 
-export type GitHubSourceKind = "repo" | "tree" | "blob" | "raw";
+type GitHubSourceKind = "repo" | "tree" | "blob" | "raw";
 
 export type ParsedGitHubSource = {
   kind: GitHubSourceKind;
@@ -33,7 +33,7 @@ function trimSlashes(value: string): string {
   return value.replace(/^\/+|\/+$/g, "");
 }
 
-export function encodeGitHubPath(githubPath: string): string {
+function encodeGitHubPath(githubPath: string): string {
   return githubPath
     .split("/")
     .filter(Boolean)
@@ -86,7 +86,7 @@ export async function fetchGitHubContent(
   return (await response.json()) as GitHubContentEntry | GitHubContentEntry[];
 }
 
-export async function fetchGitHubDirectoryEntries(
+async function fetchGitHubDirectoryEntries(
   fetchImpl: FetchLike,
   repo: string,
   ref: string,
@@ -143,26 +143,6 @@ export async function downloadGitHubDirectory(opts: {
     const bytes = await fetchGitHubFile(fetchImpl, entry.download_url);
     await fs.writeFile(filePath, bytes);
   }
-}
-
-export async function downloadGitHubSubdirToTemp(opts: {
-  fetchImpl?: FetchLike;
-  repo: string;
-  ref: string;
-  subdir: string;
-  tmpRoot: string;
-}): Promise<string> {
-  const fetchImpl = opts.fetchImpl ?? fetch;
-  const dirName = path.basename(trimSlashes(opts.subdir)) || "skill";
-  const destDir = path.join(opts.tmpRoot, dirName);
-  await downloadGitHubDirectory({
-    fetchImpl,
-    repo: opts.repo,
-    ref: opts.ref,
-    githubPath: opts.subdir,
-    destDir,
-  });
-  return destDir;
 }
 
 export function parseGitHubShorthand(raw: string): ParsedGitHubSource | null {

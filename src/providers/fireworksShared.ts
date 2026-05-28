@@ -142,10 +142,6 @@ export function getFireworksInferenceModelSpec(
   return FIREWORKS_INFERENCE_MODELS[provider][modelId] ?? null;
 }
 
-export function getFireworksModelSpec(modelId: string): FireworksInferenceModelSpec | null {
-  return getFireworksInferenceModelSpec("fireworks", modelId);
-}
-
 export function resolveFireworksInferenceApiKey(
   provider: FireworksInferenceProvider,
   opts: { savedKey?: string; env?: NodeJS.ProcessEnv } = {},
@@ -154,12 +150,6 @@ export function resolveFireworksInferenceApiKey(
   const envKey = FIREWORKS_INFERENCE_AUTH[provider].envKey;
   const key = opts.savedKey?.trim() || env[envKey]?.trim();
   return key || undefined;
-}
-
-export function resolveFireworksApiKey(
-  opts: { savedKey?: string; env?: NodeJS.ProcessEnv } = {},
-): string | undefined {
-  return resolveFireworksInferenceApiKey("fireworks", opts);
 }
 
 export function listFireworksInferencePricingEntries(): Array<{

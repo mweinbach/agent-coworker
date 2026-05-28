@@ -15,20 +15,20 @@ import {
   sessionEventEnvelope,
 } from "./schema.shared";
 
-export const sessionInfoEventSchema = z
+const sessionInfoEventSchema = z
   .object({
     type: z.literal("session_info"),
     title: z.string(),
   })
   .passthrough();
 
-export const sessionUsageEventSchema = z
+const sessionUsageEventSchema = z
   .object({
     type: z.literal("session_usage"),
   })
   .passthrough();
 
-export const steerAcceptedEventSchema = z
+const steerAcceptedEventSchema = z
   .object({
     type: z.literal("steer_accepted"),
     turnId: nonEmptyTrimmedStringSchema,
@@ -37,41 +37,41 @@ export const steerAcceptedEventSchema = z
   })
   .passthrough();
 
-export const turnUsageEventSchema = z
+const turnUsageEventSchema = z
   .object({
     type: z.literal("turn_usage"),
     turnId: nonEmptyTrimmedStringSchema,
   })
   .passthrough();
 
-export const budgetWarningEventSchema = z
+const budgetWarningEventSchema = z
   .object({
     type: z.literal("budget_warning"),
     message: z.string(),
   })
   .passthrough();
 
-export const budgetExceededEventSchema = z
+const budgetExceededEventSchema = z
   .object({
     type: z.literal("budget_exceeded"),
     message: z.string(),
   })
   .passthrough();
 
-export const sessionBackupStateEventSchema = z
+const sessionBackupStateEventSchema = z
   .object({
     type: z.literal("session_backup_state"),
   })
   .passthrough();
 
-export const harnessContextEventSchema = z
+const harnessContextEventSchema = z
   .object({
     type: z.literal("harness_context"),
   })
   .passthrough();
 
 /** Matches `HarnessContextPayload` — validated before `normalizeHarnessContextPayload`. */
-export const harnessContextPayloadSchema = z
+const harnessContextPayloadSchema = z
   .object({
     runId: nonEmptyTrimmedStringSchema,
     taskId: optionalNonEmptyTrimmedStringSchema,
@@ -82,13 +82,13 @@ export const harnessContextPayloadSchema = z
   })
   .strict();
 
-export const sessionDeletedEventSchema = z
+const sessionDeletedEventSchema = z
   .object({
     type: z.literal("session_deleted"),
   })
   .passthrough();
 
-export const fileUploadedEventSchema = z
+const fileUploadedEventSchema = z
   .object({
     type: z.literal("file_uploaded"),
     filename: nonEmptyTrimmedStringSchema,

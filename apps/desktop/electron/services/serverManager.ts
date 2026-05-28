@@ -549,6 +549,11 @@ function summarizeLogChunk(chunk: string): string {
   return chunk.replace(/\s+/g, " ").trim().slice(0, 1000);
 }
 
+function withStderrTail(message: string, stderrTail: string): string {
+  const summary = summarizeLogChunk(stderrTail);
+  return summary ? `${message}; stderr=${summary}` : message;
+}
+
 function shouldReplaceForMobileH3Request(
   requestedMobileH3: boolean | undefined,
   existingMobileH3: ServerListening["mobileH3"],
@@ -747,15 +752,19 @@ export class ServerManager {
             `workspace=${workspaceId} bun_crash error=${toErrorMessage(error)} stderrTail=${summarizeLogChunk(stderrTail)}`,
           );
           throw new Error(
-            `Cowork server crashed inside Bun while starting: ${toErrorMessage(error)}. ` +
-              "Try upgrading Bun and retrying.",
+            withStderrTail(
+              `Cowork server crashed inside Bun while starting: ${toErrorMessage(error)}. ` +
+                "Try upgrading Bun and retrying.",
+              stderrTail,
+            ),
           );
         }
 
         logServerManagerEvent(
           `workspace=${workspaceId} start_failed error=${toErrorMessage(error)} stderrTail=${summarizeLogChunk(stderrTail)}`,
         );
-        throw error;
+        const message = withStderrTail(toErrorMessage(error), stderrTail);
+        throw error instanceof Error ? new Error(message, { cause: error }) : new Error(message);
       }
     }
 
@@ -944,5 +953,6 @@ export const __internal = {
   resolveSourceStartup,
   shouldReplaceForMobileH3Request,
   summarizeLogChunk,
+  withStderrTail,
   waitForServerListening,
 };

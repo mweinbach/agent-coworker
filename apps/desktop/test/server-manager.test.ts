@@ -171,6 +171,13 @@ describe("desktop server manager startup parsing", () => {
       expect(message).toContain("output=warming up");
     }
   });
+
+  test("withStderrTail appends compact server stderr diagnostics", () => {
+    expect(__internal.withStderrTail("startup failed", " first line\n\nsecond\tline ")).toBe(
+      "startup failed; stderr=first line second line",
+    );
+    expect(__internal.withStderrTail("startup failed", " \n ")).toBe("startup failed");
+  });
 });
 
 describe("desktop server manager startup mode", () => {

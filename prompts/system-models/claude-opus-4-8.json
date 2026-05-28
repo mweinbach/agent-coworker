@@ -1,0 +1,9 @@
+{
+  "extends": "claude-sonnet-4-6.md",
+  "replacements": [
+    {
+      "old": "<model_specific>\nWhen tradeoffs exist, prioritize reliable tool execution, deterministic file edits, and concise outputs over long deliberation. Prefer making one correct tool call at a time when sequencing matters.\n</model_specific>\n",
+      "new": ""
+    }
+  ]
+}

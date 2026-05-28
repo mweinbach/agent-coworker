@@ -40,7 +40,7 @@ describe("Provider switching via config", () => {
     });
 
     expect(cfg.provider).toBe("anthropic");
-    expect(cfg.model).toBe("claude-opus-4-6");
+    expect(cfg.model).toBe("claude-opus-4-8");
   });
 
   test("explicit model in project config falls back when the provider switch makes it unsupported", async () => {
@@ -59,8 +59,8 @@ describe("Provider switching via config", () => {
     });
 
     expect(cfg.provider).toBe("anthropic");
-    expect(cfg.model).toBe("claude-opus-4-6");
-    expect(cfg.preferredChildModel).toBe("claude-opus-4-6");
+    expect(cfg.model).toBe("claude-opus-4-8");
+    expect(cfg.preferredChildModel).toBe("claude-opus-4-8");
   });
 
   test("provider from user config can be overridden by project config", async () => {

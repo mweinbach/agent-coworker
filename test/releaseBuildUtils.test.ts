@@ -64,4 +64,35 @@ describe("release build utils", () => {
     expect(bundled).toContain('var value = "1"');
     expect(bundled).not.toContain("process.env.COWORK_DESKTOP_BUNDLE");
   });
+
+  test("buildBunBundle preserves dynamic imports as adjacent chunks", async () => {
+    const dir = await makeTempDir();
+    const entry = path.join(dir, "entry.ts");
+    const lazy = path.join(dir, "lazy.ts");
+    const outfile = path.join(dir, "resources", "binaries", "server", "index.js");
+    await fs.writeFile(
+      entry,
+      'export async function loadLazy() { return await import("./lazy"); }\n',
+      "utf8",
+    );
+    await fs.writeFile(lazy, 'export const marker = "lazy chunk marker";\n', "utf8");
+
+    await buildBunBundle({
+      entry,
+      env: "disable",
+      minify: false,
+      outfile,
+    });
+
+    const bundled = await fs.readFile(outfile, "utf8");
+    expect(bundled).not.toContain("lazy chunk marker");
+
+    const outputDirEntries = await fs.readdir(path.dirname(outfile));
+    const chunkNames = outputDirEntries.filter((name) => name.startsWith("chunk-"));
+    expect(chunkNames.length).toBeGreaterThan(0);
+    const chunks = await Promise.all(
+      chunkNames.map((name) => fs.readFile(path.join(path.dirname(outfile), name), "utf8")),
+    );
+    expect(chunks.some((chunk) => chunk.includes("lazy chunk marker"))).toBe(true);
+  });
 });

@@ -325,6 +325,22 @@ describe("web desktop routes", () => {
     expect(kills).toEqual(["child-1"]);
   });
 
+  test("defers source workspace server manager creation until a nested launch is requested", async () => {
+    const userDataDir = await makeTempDir("cowork-web-desktop-lazy-userdata-");
+    let factoryCalls = 0;
+    const service = new WebDesktopService({
+      userDataDir,
+      serverManagerFactory: () => {
+        factoryCalls += 1;
+        throw new Error("server manager should be lazy");
+      },
+    });
+
+    await expect(service.loadState()).resolves.toMatchObject({ version: 2 });
+    await expect(service.stopAll()).resolves.toBeUndefined();
+    expect(factoryCalls).toBe(0);
+  });
+
   test("web desktop service never forwards yolo workspace launches", async () => {
     const userDataDir = await makeTempDir("cowork-web-desktop-yolo-userdata-");
     const workspace = await makeTempDir("cowork-web-desktop-yolo-workspace-");

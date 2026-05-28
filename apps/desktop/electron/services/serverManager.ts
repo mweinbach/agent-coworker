@@ -23,7 +23,6 @@ import {
   findPackagedSidecarLaunchCommand,
   hasPackagedFoundationModelsSdk,
   hasPackagedWindowsAiElectronPackage,
-  resolvePackagedCodexAppServerFilename,
   WINDOWS_AI_ELECTRON_DIR_NAME,
 } from "./sidecar";
 import { assertSafeId, assertWorkspaceDirectory } from "./validation";
@@ -203,22 +202,6 @@ function findSidecarLaunchCommand() {
   return findPackagedSidecarLaunchCommand(getSidecarSearchDirs(), {
     explicitPath: process.env.COWORK_DESKTOP_SIDECAR_PATH,
   });
-}
-
-function findBundledCodexAppServerPath(): string | null {
-  const fromEnv = process.env.COWORK_DESKTOP_CODEX_APP_SERVER_PATH;
-  if (fromEnv && fs.existsSync(fromEnv)) {
-    return fromEnv;
-  }
-
-  const expectedFilename = resolvePackagedCodexAppServerFilename();
-  for (const dir of getSidecarSearchDirs()) {
-    const candidate = path.join(dir, expectedFilename);
-    if (fs.existsSync(candidate)) {
-      return candidate;
-    }
-  }
-  return null;
 }
 
 function findBundledCodexPrimaryRuntimeDir(): string | null {
@@ -443,9 +426,6 @@ function buildServerEnv(
     rotateMobileH3Tls?: boolean;
   } = {},
 ): NodeJS.ProcessEnv {
-  const bundledCodexAppServer = process.env.COWORK_CODEX_APP_SERVER_COMMAND
-    ? null
-    : findBundledCodexAppServerPath();
   const bundledCodexPrimaryRuntime = findBundledCodexPrimaryRuntimeDir();
   const bundledFoundationModelsSdk =
     opts.includeBundledFoundationModelsSdk && !process.env.COWORK_TSFMSDK_DIR
@@ -463,9 +443,6 @@ function buildServerEnv(
       process.env.COWORK_BROWSER_ACCESS_TOKEN?.trim() ||
       `${randomUUID()}${randomUUID().replaceAll("-", "")}`,
     COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: process.env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP ?? "1",
-    ...(bundledCodexAppServer
-      ? { COWORK_CODEX_APP_SERVER_COMMAND: bundledCodexAppServer, COWORK_CODEX_APP_SERVER_ARGS: "" }
-      : {}),
     ...(bundledCodexPrimaryRuntime
       ? { COWORK_BUNDLED_CODEX_PRIMARY_RUNTIME_DIR: bundledCodexPrimaryRuntime }
       : {}),
@@ -938,7 +915,6 @@ export class ServerManager {
 export const __internal = {
   buildServerEnv,
   buildSourceEnvForAttempt,
-  findBundledCodexAppServerPath,
   findBundledFoundationModelsSdkDir,
   findBundledWindowsAiElectronDir,
   findSidecarLaunchCommand,

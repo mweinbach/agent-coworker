@@ -249,23 +249,31 @@ describe("desktop server manager startup mode", () => {
     );
   });
 
-  test("buildServerEnv points packaged server at the bundled Codex app-server when present", async () => {
+  test("buildServerEnv ignores bundled Codex app-server fallbacks", async () => {
     const previousOverride = process.env.COWORK_CODEX_APP_SERVER_COMMAND;
+    const previousBundledOverride = process.env.COWORK_BUNDLED_CODEX_APP_SERVER_COMMAND;
     const previousDesktopOverride = process.env.COWORK_DESKTOP_CODEX_APP_SERVER_PATH;
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-bundle-"));
     const bundled = path.join(dir, "codex-app-server-aarch64-apple-darwin");
 
     try {
       delete process.env.COWORK_CODEX_APP_SERVER_COMMAND;
+      delete process.env.COWORK_BUNDLED_CODEX_APP_SERVER_COMMAND;
       process.env.COWORK_DESKTOP_CODEX_APP_SERVER_PATH = bundled;
       await fs.writeFile(bundled, "");
 
       const env = __internal.buildServerEnv();
-      expect(env.COWORK_CODEX_APP_SERVER_COMMAND).toBe(bundled);
-      expect(env.COWORK_CODEX_APP_SERVER_ARGS).toBe("");
+      expect(env.COWORK_CODEX_APP_SERVER_COMMAND).toBeUndefined();
+      expect(env.COWORK_CODEX_APP_SERVER_ARGS).toBeUndefined();
+      expect(env.COWORK_BUNDLED_CODEX_APP_SERVER_COMMAND).toBeUndefined();
     } finally {
       if (previousOverride === undefined) delete process.env.COWORK_CODEX_APP_SERVER_COMMAND;
       else process.env.COWORK_CODEX_APP_SERVER_COMMAND = previousOverride;
+      if (previousBundledOverride === undefined) {
+        delete process.env.COWORK_BUNDLED_CODEX_APP_SERVER_COMMAND;
+      } else {
+        process.env.COWORK_BUNDLED_CODEX_APP_SERVER_COMMAND = previousBundledOverride;
+      }
       if (previousDesktopOverride === undefined) {
         delete process.env.COWORK_DESKTOP_CODEX_APP_SERVER_PATH;
       } else {
@@ -399,7 +407,7 @@ describe("desktop server manager startup mode", () => {
     expect(__internal.getSourceStartupAttemptCount(false, "win32")).toBe(1);
   });
 
-  test("server startup timeout leaves room for first-run bundled bootstrap", () => {
+  test("server startup timeout leaves room for first-run runtime bootstrap", () => {
     expect(__internal.getServerStartupTimeoutMs({})).toBe(45_000);
     expect(
       __internal.getServerStartupTimeoutMs({

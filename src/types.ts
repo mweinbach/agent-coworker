@@ -445,13 +445,7 @@ export type SkillMutationTargetScope = "project" | "global";
 
 type SkillInstallState = "effective" | "shadowed" | "disabled" | "invalid";
 
-type SkillInstallOriginKind =
-  | "github"
-  | "skills.sh"
-  | "local"
-  | "manual"
-  | "bootstrap"
-  | "unknown";
+type SkillInstallOriginKind = "github" | "skills.sh" | "local" | "manual" | "bootstrap" | "unknown";
 
 export interface SkillInstallOrigin {
   kind: SkillInstallOriginKind;

@@ -1,10 +1,4 @@
-type MobileRelayStatus =
-  | "idle"
-  | "starting"
-  | "pairing"
-  | "connected"
-  | "reconnecting"
-  | "error";
+type MobileRelayStatus = "idle" | "starting" | "pairing" | "connected" | "reconnecting" | "error";
 
 type MobileRelaySource = "direct" | "remodex" | "managed" | "override" | "unavailable";
 

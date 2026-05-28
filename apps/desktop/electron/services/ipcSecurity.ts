@@ -87,10 +87,7 @@ export function resolveAllowedSaveExportSourcePath(
  * (see `resolveDesktopBuiltinSkillRootsForReveal`); pass a freshly resolved list
  * per invocation so env / packaged paths stay accurate.
  */
-function getRevealPathRoots(
-  workspaceRoots: string[],
-  builtinSkillRoots: string[] = [],
-): string[] {
+function getRevealPathRoots(workspaceRoots: string[], builtinSkillRoots: string[] = []): string[] {
   const home = os.homedir();
   const extra: string[] = [path.join(home, ".cowork")];
   for (const root of builtinSkillRoots) {

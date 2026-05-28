@@ -3,7 +3,7 @@ import type { AttributeValue } from "@opentelemetry/api";
 import { NodeSDK } from "@opentelemetry/sdk-node";
 import { z } from "zod";
 
-import type { AgentConfig, ObservabilityConfig, ObservabilityHealth } from "../types";
+import type { AgentConfig, ObservabilityHealth } from "../types";
 import { nowIso } from "../utils/typeGuards";
 
 export type TelemetrySettings = {

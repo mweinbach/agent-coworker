@@ -1,7 +1,4 @@
-import type {
-  ResearchRecord,
-  ResearchSettings,
-} from "../../../../src/server/research/types";
+import type { ResearchRecord, ResearchSettings } from "../../../../src/server/research/types";
 import { DEFAULT_RESEARCH_AGENT_ID } from "../../../../src/server/research/types";
 import type { DesktopFeatureFlagOverrides } from "../../../../src/shared/featureFlags";
 import type { SessionFeedItem } from "../../../../src/shared/sessionSnapshot";
@@ -381,10 +378,7 @@ export function createDefaultA2uiDock(): A2uiThreadDock {
 type SessionConfigSubset = Extract<SessionEvent, { type: "session_config" }>["config"];
 type MCPServersEvent = Extract<SessionEvent, { type: "mcp_servers" }>;
 type MCPServerValidationEvent = Extract<SessionEvent, { type: "mcp_server_validation" }>;
-type MCPServerAuthChallengeEvent = Extract<
-  SessionEvent,
-  { type: "mcp_server_auth_challenge" }
->;
+type MCPServerAuthChallengeEvent = Extract<SessionEvent, { type: "mcp_server_auth_challenge" }>;
 type MCPServerAuthResultEvent = Extract<SessionEvent, { type: "mcp_server_auth_result" }>;
 export type SessionUsageSnapshot = NonNullable<
   Extract<SessionEvent, { type: "session_usage" }>["usage"]
@@ -413,10 +407,7 @@ type ThreadAgentReasoningEffort = Extract<
   SessionEvent,
   { type: "server_hello" }
 >["effectiveReasoningEffort"];
-type ThreadAgentExecutionState = Extract<
-  SessionEvent,
-  { type: "server_hello" }
->["executionState"];
+type ThreadAgentExecutionState = Extract<SessionEvent, { type: "server_hello" }>["executionState"];
 
 export type MemoryListEntry = {
   id: string;

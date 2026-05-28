@@ -15,10 +15,7 @@ const OPENCODE_ZEN_AVAILABLE_MODELS = [
   ...OPENCODE_GO_AVAILABLE_MODELS,
   ...OPENCODE_ZEN_EXTRA_MODELS,
 ] as const;
-const OPENCODE_MODEL_IDS = [
-  ...OPENCODE_GO_AVAILABLE_MODELS,
-  ...OPENCODE_ZEN_EXTRA_MODELS,
-] as const;
+const OPENCODE_MODEL_IDS = [...OPENCODE_GO_AVAILABLE_MODELS, ...OPENCODE_ZEN_EXTRA_MODELS] as const;
 export type OpenCodeModelId = (typeof OPENCODE_MODEL_IDS)[number];
 
 export type OpenCodeModelSpec = {

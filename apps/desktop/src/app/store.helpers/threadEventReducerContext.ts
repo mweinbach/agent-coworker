@@ -1,4 +1,3 @@
-import type { SessionEvent } from "../../lib/wsProtocol";
 import type { StoreGet } from "../store.helpers";
 import type { Notification, ThreadAgentSummary, ThreadTitleSource } from "../types";
 

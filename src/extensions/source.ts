@@ -136,9 +136,7 @@ export function resolveGitHubOrLocalSource<TDescriptor extends ExtensionSourceDe
   } as TDescriptor;
 }
 
-function buildResolvedGitHubDescriptor<
-  TDescriptor extends GitHubMaterializableSourceDescriptor,
->(
+function buildResolvedGitHubDescriptor<TDescriptor extends GitHubMaterializableSourceDescriptor>(
   descriptor: TDescriptor,
   ref: string | undefined,
   githubPath: string,

@@ -356,10 +356,7 @@ function normalizeNullableNonNegativeInt(v: unknown): number | null | undefined 
   return normalizeNonNegativeInt(v);
 }
 
-function getSavedProviderApiKeyForHome(
-  home: string,
-  provider: ProviderName,
-): string | undefined {
+function getSavedProviderApiKeyForHome(home: string, provider: ProviderName): string | undefined {
   const paths = getAiCoworkerPaths({ homedir: home });
   const keyCandidates = getProviderKeyCandidates(provider);
 

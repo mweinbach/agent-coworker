@@ -2,12 +2,7 @@ import { getSavedProviderApiKey } from "../config";
 import { assertSupportedModel } from "../models/registry";
 import type { RuntimeRunTurnParams } from "./types";
 
-type GoogleInteractionsModelInputModality =
-  | "text"
-  | "image"
-  | "audio"
-  | "video"
-  | "document";
+type GoogleInteractionsModelInputModality = "text" | "image" | "audio" | "video" | "document";
 
 export type GoogleInteractionsModelInfo = {
   id: string;

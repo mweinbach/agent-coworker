@@ -19,11 +19,7 @@ import {
   getSupportedModel,
   listSupportedModels,
 } from "../models/registry";
-import {
-  type AiCoworkerPaths,
-  type ConnectionStore,
-  type StoredConnection,
-} from "../store/connections";
+import type { AiCoworkerPaths, ConnectionStore, StoredConnection } from "../store/connections";
 import type { AgentConfig } from "../types";
 import { writeTextFileAtomic } from "../utils/atomicFile";
 import { resolveAuthHomeDir } from "../utils/authHome";

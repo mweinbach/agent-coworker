@@ -251,9 +251,7 @@ export function describeModelProviderMismatch(
 
 export { MODEL_REGISTRY_ENTRIES };
 
-function isStaticRegistryProvider(
-  provider: ProviderName,
-): provider is StaticModelProviderName {
+function isStaticRegistryProvider(provider: ProviderName): provider is StaticModelProviderName {
   return (STATIC_MODEL_PROVIDER_NAMES as readonly string[]).includes(provider);
 }
 

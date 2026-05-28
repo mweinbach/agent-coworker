@@ -38,8 +38,7 @@ export type MaterializedPluginSource = {
   cleanup: () => Promise<void>;
 };
 
-const NO_VALID_PLUGIN_BUNDLES_MESSAGE =
-  "No valid plugin bundles were found in the provided source";
+const NO_VALID_PLUGIN_BUNDLES_MESSAGE = "No valid plugin bundles were found in the provided source";
 export const MULTIPLE_VALID_PLUGIN_BUNDLES_MESSAGE =
   "The install source contains more than one valid plugin bundle. Install one plugin at a time so failures cannot leave a partially applied plugin set.";
 

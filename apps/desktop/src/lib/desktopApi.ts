@@ -44,10 +44,7 @@ const MOBILE_RELAY_TRUSTED_DEVICE_PERMISSION_KEYS = [
 export type MobileRelayTrustedDevicePermissionKey =
   (typeof MOBILE_RELAY_TRUSTED_DEVICE_PERMISSION_KEYS)[number];
 
-type MobileRelayTrustedDevicePermissions = Record<
-  MobileRelayTrustedDevicePermissionKey,
-  boolean
->;
+type MobileRelayTrustedDevicePermissions = Record<MobileRelayTrustedDevicePermissionKey, boolean>;
 
 export type MobileRelayTrustedPhoneDevice = {
   deviceId: string;

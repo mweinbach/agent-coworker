@@ -48,13 +48,7 @@ import type { PersistedSessionSummary } from "./sessionStore";
 export { ASK_SKIP_TOKEN } from "../shared/ask";
 
 type MCPServerEventSource = "workspace" | "user" | "system" | "plugin";
-type MCPServerAuthMode =
-  | "none"
-  | "missing"
-  | "api_key"
-  | "oauth"
-  | "oauth_pending"
-  | "error";
+type MCPServerAuthMode = "none" | "missing" | "api_key" | "oauth" | "oauth_pending" | "error";
 
 // Version of the internal session event payload schema documented for JSON-RPC
 // control envelopes and persisted session artifacts.

@@ -125,9 +125,7 @@ type OpenAiResponseFailureDetails = {
   response?: unknown;
 };
 
-function buildOpenAiResponseFailedError(
-  event: Record<string, any>,
-): OpenAiResponseFailedError {
+function buildOpenAiResponseFailedError(event: Record<string, any>): OpenAiResponseFailedError {
   const response = asRecord(event.response);
   const eventError = asRecord(event.error);
   const responseError = asRecord(response?.error);

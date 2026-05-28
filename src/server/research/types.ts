@@ -3,13 +3,7 @@ import { z } from "zod";
 const isoTimestampSchema = z.string().datetime({ offset: true });
 const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
 
-const RESEARCH_STATUS_VALUES = [
-  "pending",
-  "running",
-  "completed",
-  "cancelled",
-  "failed",
-] as const;
+const RESEARCH_STATUS_VALUES = ["pending", "running", "completed", "cancelled", "failed"] as const;
 const RESEARCH_EXPORT_FORMAT_VALUES = ["markdown", "pdf", "docx"] as const;
 const RESEARCH_SOURCE_TYPE_VALUES = ["url", "file", "place"] as const;
 export const MAX_RESEARCH_UPLOAD_BYTES = 20 * 1024 * 1024;

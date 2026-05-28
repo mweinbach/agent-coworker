@@ -32,7 +32,7 @@ export type {
   SkillUpdateCheckResult,
   TodoItem,
 } from "../../../../src/types";
-export { PROVIDER_NAMES } from "../../../../src/types";
+export { isInstalledPluginCatalogEntry, PROVIDER_NAMES } from "../../../../src/types";
 
 export type ConfigSubset = Extract<CoreSessionEvent, { type: "server_hello" }>["config"];
 

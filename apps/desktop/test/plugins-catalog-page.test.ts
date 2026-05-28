@@ -245,6 +245,7 @@ describe("plugins catalog page", () => {
           pluginsCatalog: {
             warnings: [],
             plugins: [],
+            availablePlugins: [],
           },
         },
       },
@@ -306,7 +307,6 @@ describe("plugins catalog page", () => {
                 description: "Old preview should be cleared",
                 relativeRootPath: ".",
                 wouldBePrimary: true,
-                shadowedPluginIds: [],
                 diagnostics: [],
               },
             ],
@@ -374,8 +374,7 @@ describe("plugins catalog page", () => {
       workspaceRuntimeById: {
         [workspaceId]: {
           ...defaultWorkspaceRuntime(),
-          pluginsError: "Plugin is shadowed by a global install.",
-          skillMutationError: "Plugin is shadowed by a global install.",
+          pluginMutationError: "Plugin is shadowed by a global install.",
         },
       },
     } as any);
@@ -412,6 +411,89 @@ describe("plugins catalog page", () => {
 
       const dialogText = harness.dom.window.document.body.textContent ?? "";
       expect(dialogText.match(/Plugin is shadowed by a global install\./g)?.length ?? 0).toBe(1);
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      useAppStore.setState(previousState);
+      harness.restore();
+    }
+  });
+
+  test("new plugin dialog keeps preview failures visible for the attempted source", async () => {
+    const previousState = useAppStore.getState();
+    let root: ReturnType<typeof createRoot> | null = null;
+    const previewPluginInstall = mock(async () => {
+      useAppStore.setState((state) => ({
+        workspaceRuntimeById: {
+          ...state.workspaceRuntimeById,
+          [workspaceId]: {
+            ...state.workspaceRuntimeById[workspaceId],
+            pluginMutationError: "Unable to preview plugin install.",
+          },
+        },
+      }));
+    });
+    useAppStore.setState({
+      ...baseWorkspaceState(),
+      previewPluginInstall: previewPluginInstall as typeof previousState.previewPluginInstall,
+      workspaceRuntimeById: {
+        [workspaceId]: {
+          ...defaultWorkspaceRuntime(),
+          pluginMutationError: null,
+        },
+      },
+    } as any);
+
+    const harness = setupJsdom();
+    try {
+      (
+        harness.dom.window.HTMLElement.prototype as {
+          attachEvent?: () => void;
+          detachEvent?: () => void;
+        }
+      ).attachEvent = () => {};
+      (
+        harness.dom.window.HTMLElement.prototype as {
+          attachEvent?: () => void;
+          detachEvent?: () => void;
+        }
+      ).detachEvent = () => {};
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          createElement(InstallPluginDialog, {
+            workspaceId,
+            initialOpen: true,
+            initialSourceInput: "owner/repo",
+          }),
+        );
+        await flushUi();
+      });
+
+      const previewButton = Array.from(harness.dom.window.document.querySelectorAll("button")).find(
+        (button) => button.textContent?.includes("Preview in Workspace"),
+      );
+      expect(previewButton).toBeDefined();
+
+      await act(async () => {
+        previewButton?.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+        await flushUi();
+      });
+
+      expect(previewPluginInstall).toHaveBeenCalledWith("owner/repo", "workspace");
+      const dialogText = harness.dom.window.document.body.textContent ?? "";
+      expect(dialogText.match(/Unable to preview plugin install\./g)?.length ?? 0).toBe(1);
+      expect(dialogText).toContain("Last attempted target: workspace.");
 
       await act(async () => {
         root.unmount();
@@ -479,7 +561,6 @@ describe("plugins catalog page", () => {
           description: "Broken plugin",
           relativeRootPath: ".",
           wouldBePrimary: true,
-          shadowedPluginIds: [],
           diagnostics: [
             {
               code: "invalid_plugin_manifest",
@@ -534,6 +615,29 @@ describe("plugins catalog page", () => {
         pluginInstallInFlight: false,
       }),
     ).toBe(false);
+
+    const multiPluginPreview = {
+      ...validPreview,
+      candidates: [
+        validPreview.candidates[0],
+        {
+          ...validPreview.candidates[0],
+          pluginId: "second-plugin",
+          displayName: "Second Plugin",
+        },
+      ],
+    };
+
+    expect(
+      shouldDisablePluginInstallForScope({
+        normalizedSourceInput: "owner/repo",
+        lastPreviewSourceInput: "owner/repo",
+        lastPreviewTargetScope: "workspace",
+        pluginPreview: multiPluginPreview,
+        targetScope: "workspace",
+        pluginInstallInFlight: false,
+      }),
+    ).toBe(true);
   });
 
   test("renders enabled and disabled plugin sections with counts", async () => {
@@ -548,25 +652,36 @@ describe("plugins catalog page", () => {
             warnings: [],
             plugins: [
               {
-                id: "plugin-1",
-                name: "figma-toolkit",
-                displayName: "Figma Toolkit",
-                description: "Figma helpers",
+                id: "workspace-tools",
+                name: "workspace-tools",
+                displayName: "Workspace Tools",
+                description: "Workspace artifact helpers",
                 scope: "workspace",
                 discoveryKind: "marketplace",
+                installed: true,
                 enabled: true,
-                rootDir: "/tmp/plugin-workspace/.agents/plugins/figma-toolkit",
+                rootDir: "/tmp/plugin-workspace/.agents/plugins/workspace-tools",
                 manifestPath:
-                  "/tmp/plugin-workspace/.agents/plugins/figma-toolkit/.codex-plugin/plugin.json",
-                skillsPath: "/tmp/plugin-workspace/.agents/plugins/figma-toolkit/skills",
+                  "/tmp/plugin-workspace/.agents/plugins/workspace-tools/.codex-plugin/plugin.json",
+                skillsPath: "/tmp/plugin-workspace/.agents/plugins/workspace-tools/skills",
                 skills: [
                   {
-                    name: "figma-toolkit:import-frame",
-                    description: "Import frame",
+                    name: "workspace-tools:documents",
+                    description: "Create documents",
+                    enabled: true,
+                  },
+                  {
+                    name: "workspace-tools:presentations",
+                    description: "Create presentations",
+                    enabled: true,
+                  },
+                  {
+                    name: "workspace-tools:spreadsheets",
+                    description: "Create spreadsheets",
                     enabled: true,
                   },
                 ],
-                mcpServers: ["figma"],
+                mcpServers: [],
                 apps: [{ id: "figma-app", displayName: "Figma App", description: "Metadata only" }],
                 warnings: [],
               },
@@ -577,6 +692,7 @@ describe("plugins catalog page", () => {
                 description: "Slack helpers",
                 scope: "user",
                 discoveryKind: "direct",
+                installed: true,
                 enabled: false,
                 rootDir: "/tmp/home/.agents/plugins/slack-toolkit",
                 manifestPath: "/tmp/home/.agents/plugins/slack-toolkit/.codex-plugin/plugin.json",
@@ -587,6 +703,7 @@ describe("plugins catalog page", () => {
                 warnings: [],
               },
             ],
+            availablePlugins: [],
           },
         },
       },
@@ -610,9 +727,9 @@ describe("plugins catalog page", () => {
 
       expect(container.textContent).toContain("Enabled");
       expect(container.textContent).toContain("Disabled");
-      expect(container.textContent).toContain("Figma Toolkit");
+      expect(container.textContent).toContain("Workspace Tools");
       expect(container.textContent).toContain("Slack Toolkit");
-      expect(container.textContent).toContain("1 skill");
+      expect(container.textContent).toContain("3 skills");
       expect(container.textContent).not.toContain("1 apps");
 
       await act(async () => {
@@ -647,6 +764,7 @@ describe("plugins catalog page", () => {
                 description: "Workspace helpers",
                 scope: "workspace",
                 discoveryKind: "direct",
+                installed: true,
                 enabled: true,
                 rootDir: "/tmp/plugin-workspace/.agents/plugins/figma-toolkit",
                 manifestPath:
@@ -664,6 +782,7 @@ describe("plugins catalog page", () => {
                 description: "Global helpers",
                 scope: "user",
                 discoveryKind: "direct",
+                installed: true,
                 enabled: false,
                 rootDir: "/tmp/home/.agents/plugins/figma-toolkit",
                 manifestPath: "/tmp/home/.agents/plugins/figma-toolkit/.codex-plugin/plugin.json",
@@ -674,6 +793,7 @@ describe("plugins catalog page", () => {
                 warnings: [],
               },
             ],
+            availablePlugins: [],
           },
         },
       },

@@ -289,6 +289,8 @@ export function defaultWorkspaceRuntime(): WorkspaceRuntime {
     skillsMutationBlockedReason: null,
     skillMutationPendingKeys: {},
     skillMutationError: null,
+    pluginMutationPendingKeys: {},
+    pluginMutationError: null,
     pluginViewMode: "plugins",
     memories: [],
     memoriesLoading: false,

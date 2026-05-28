@@ -3,6 +3,7 @@ import path from "node:path";
 import { z } from "zod";
 
 import type {
+  InstalledPluginCatalogEntry,
   PluginAppSummary,
   PluginCatalogEntry,
   PluginDiscoveryKind,
@@ -79,6 +80,22 @@ export interface PluginManifest {
   appPath?: string;
   manifestPath: string;
   rootDir: string;
+}
+
+export interface PluginInstallMetadata {
+  marketplace?: {
+    name: string;
+    displayName?: string;
+    category?: string;
+    installationPolicy?: string;
+    authenticationPolicy?: string;
+    sourceInput?: string;
+  };
+  bootstrap?: {
+    name: string;
+    source?: string;
+    pluginId?: string;
+  };
 }
 
 export type ParsedPluginSkill = {
@@ -360,8 +377,124 @@ async function assertPathInsidePluginRoot(
   }
 }
 
+export const PLUGIN_MANIFEST_DIR_NAMES = [".cowork-plugin", ".codex-plugin"] as const;
+
+export function isPluginManifestDirName(value: string): boolean {
+  return PLUGIN_MANIFEST_DIR_NAMES.includes(value as (typeof PLUGIN_MANIFEST_DIR_NAMES)[number]);
+}
+
+export function pluginManifestPathsForPluginRoot(pluginRoot: string): string[] {
+  return PLUGIN_MANIFEST_DIR_NAMES.map((dirName) => path.join(pluginRoot, dirName, "plugin.json"));
+}
+
+function pluginInstallMetadataPathForManifestPath(manifestPath: string): string {
+  return path.join(path.dirname(manifestPath), "install.json");
+}
+
+export function pluginInstallMetadataPathsForPluginRoot(pluginRoot: string): string[] {
+  return PLUGIN_MANIFEST_DIR_NAMES.map((dirName) => path.join(pluginRoot, dirName, "install.json"));
+}
+
 export function manifestPathForPluginRoot(pluginRoot: string): string {
-  return path.join(pluginRoot, ".codex-plugin", "plugin.json");
+  return pluginManifestPathsForPluginRoot(pluginRoot)[0] ?? path.join(pluginRoot, "plugin.json");
+}
+
+async function findPluginManifestPath(pluginRoot: string): Promise<string> {
+  for (const candidatePath of pluginManifestPathsForPluginRoot(pluginRoot)) {
+    try {
+      const stat = await fs.stat(candidatePath);
+      if (stat.isFile()) {
+        return candidatePath;
+      }
+    } catch {
+      // Try the next supported manifest directory.
+    }
+  }
+  return manifestPathForPluginRoot(pluginRoot);
+}
+
+const pluginInstallMetadataSchema = z
+  .object({
+    marketplace: z
+      .object({
+        name: nonEmptyStringSchema,
+        displayName: nonEmptyStringSchema.optional(),
+        category: nonEmptyStringSchema.optional(),
+        installationPolicy: nonEmptyStringSchema.optional(),
+        authenticationPolicy: nonEmptyStringSchema.optional(),
+        sourceInput: nonEmptyStringSchema.optional(),
+      })
+      .optional(),
+    bootstrap: z
+      .object({
+        name: nonEmptyStringSchema,
+        source: nonEmptyStringSchema.optional(),
+        pluginId: nonEmptyStringSchema.optional(),
+      })
+      .optional(),
+  })
+  .passthrough();
+
+export async function readPluginInstallMetadata(
+  pluginRoot: string,
+): Promise<PluginInstallMetadata | null> {
+  for (const metadataPath of pluginInstallMetadataPathsForPluginRoot(pluginRoot)) {
+    try {
+      const raw = await fs.readFile(metadataPath, "utf-8");
+      const parsed = pluginInstallMetadataSchema.parse(JSON.parse(raw));
+      return {
+        ...(parsed.marketplace
+          ? {
+              marketplace: {
+                name: parsed.marketplace.name,
+                ...(parsed.marketplace.displayName
+                  ? { displayName: parsed.marketplace.displayName }
+                  : {}),
+                ...(parsed.marketplace.category ? { category: parsed.marketplace.category } : {}),
+                ...(parsed.marketplace.installationPolicy
+                  ? { installationPolicy: parsed.marketplace.installationPolicy }
+                  : {}),
+                ...(parsed.marketplace.authenticationPolicy
+                  ? { authenticationPolicy: parsed.marketplace.authenticationPolicy }
+                  : {}),
+                ...(parsed.marketplace.sourceInput
+                  ? { sourceInput: parsed.marketplace.sourceInput }
+                  : {}),
+              },
+            }
+          : {}),
+        ...(parsed.bootstrap
+          ? {
+              bootstrap: {
+                name: parsed.bootstrap.name,
+                ...(parsed.bootstrap.source ? { source: parsed.bootstrap.source } : {}),
+                ...(parsed.bootstrap.pluginId ? { pluginId: parsed.bootstrap.pluginId } : {}),
+              },
+            }
+          : {}),
+      };
+    } catch {
+      // Missing or malformed install metadata should not make the plugin unreadable.
+    }
+  }
+  return null;
+}
+
+export async function writePluginInstallMetadata(
+  pluginRoot: string,
+  metadata: PluginInstallMetadata,
+): Promise<void> {
+  const manifestPath = await findPluginManifestPath(pluginRoot);
+  const metadataPath = pluginInstallMetadataPathForManifestPath(manifestPath);
+  await fs.writeFile(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, "utf-8");
+}
+
+export async function clearPluginInstallMetadata(pluginRoot: string): Promise<void> {
+  await Promise.all(
+    pluginInstallMetadataPathsForPluginRoot(pluginRoot).map(async (metadataPath) => {
+      await fs.rm(metadataPath, { force: true }).catch(() => {});
+    }),
+  );
 }
 
 async function resolvePluginSkillsPaths(
@@ -414,7 +547,7 @@ async function resolvePluginSkillsPaths(
 }
 
 export async function readPluginManifest(pluginRoot: string): Promise<PluginManifest> {
-  const manifestPath = manifestPathForPluginRoot(pluginRoot);
+  const manifestPath = await findPluginManifestPath(pluginRoot);
   const raw = await fs.readFile(manifestPath, "utf-8");
   const parsed = pluginManifestSchema.parse(JSON.parse(raw));
   const skillsPaths = await resolvePluginSkillsPaths(pluginRoot, parsed.skills, manifestPath);
@@ -618,7 +751,8 @@ export function buildPluginCatalogEntry(opts: {
   apps: ParsedPluginApp[];
   warnings?: string[];
   marketplace?: PluginCatalogEntry["marketplace"];
-}): PluginCatalogEntry {
+  installSource?: string;
+}): InstalledPluginCatalogEntry {
   return {
     id: opts.pluginId,
     name: opts.pluginManifest.name,
@@ -626,6 +760,7 @@ export function buildPluginCatalogEntry(opts: {
     description: opts.pluginManifest.description,
     scope: opts.scope,
     discoveryKind: opts.discoveryKind,
+    installed: true,
     enabled: opts.enabled,
     rootDir: opts.pluginManifest.rootDir,
     manifestPath: opts.pluginManifest.manifestPath,
@@ -642,6 +777,7 @@ export function buildPluginCatalogEntry(opts: {
       : {}),
     ...(opts.pluginManifest.interface ? { interface: opts.pluginManifest.interface } : {}),
     ...(opts.marketplace ? { marketplace: opts.marketplace } : {}),
+    ...(opts.installSource ? { installSource: opts.installSource } : {}),
     skills: opts.skills.map((skill) => ({
       name: `${opts.pluginManifest.name}:${skill.rawName}`,
       rawName: skill.rawName,

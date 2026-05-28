@@ -1,0 +1,185 @@
+import type { PluginCatalogSnapshot, SessionEvent } from "../../lib/wsProtocol";
+import type { WorkspaceRuntime } from "../types";
+import { RUNTIME } from "./runtimeState";
+
+type SkillsCatalogEvent = Extract<SessionEvent, { type: "skills_catalog" }>;
+type PluginsCatalogEvent = Extract<SessionEvent, { type: "plugins_catalog" }>;
+
+export function omitMutationPendingKeys(
+  pendingKeys: Record<string, true>,
+  clearedPendingKeys?: readonly string[],
+): Record<string, true> {
+  if (!clearedPendingKeys || clearedPendingKeys.length === 0) {
+    return pendingKeys;
+  }
+
+  const nextPendingKeys = { ...pendingKeys };
+  for (const key of clearedPendingKeys) {
+    delete nextPendingKeys[key];
+  }
+  return nextPendingKeys;
+}
+
+export function mergeStableAvailablePlugins(
+  previousCatalog: PluginCatalogSnapshot | null,
+  nextCatalog: PluginCatalogSnapshot,
+  availablePluginsPartial: boolean,
+): PluginCatalogSnapshot {
+  const nextAvailablePlugins = nextCatalog.availablePlugins ?? [];
+  if (
+    !availablePluginsPartial ||
+    nextAvailablePlugins.length > 0 ||
+    !previousCatalog ||
+    previousCatalog.availablePlugins.length === 0
+  ) {
+    return {
+      ...nextCatalog,
+      availablePlugins: nextAvailablePlugins,
+    };
+  }
+
+  const installedPluginIds = new Set(nextCatalog.plugins.map((plugin) => plugin.id));
+  return {
+    ...nextCatalog,
+    availablePlugins: previousCatalog.availablePlugins.filter(
+      (plugin) => !installedPluginIds.has(plugin.id),
+    ),
+  };
+}
+
+export function clearedSkillMutationKeys(
+  workspaceRuntimeBefore: WorkspaceRuntime | undefined,
+  clearedMutationPendingKeys: readonly string[],
+): boolean {
+  return clearedMutationPendingKeys.some(
+    (key) => workspaceRuntimeBefore?.skillMutationPendingKeys[key] === true,
+  );
+}
+
+export function clearedPluginMutationKeys(
+  workspaceRuntimeBefore: WorkspaceRuntime | undefined,
+  clearedMutationPendingKeys: readonly string[],
+): boolean {
+  return clearedMutationPendingKeys.some(
+    (key) => workspaceRuntimeBefore?.pluginMutationPendingKeys[key] === true,
+  );
+}
+
+export function shouldResolveSkillInstallWaiter(
+  workspaceId: string,
+  clearedMutationPendingKeys: readonly string[],
+  workspaceRuntimeBefore: WorkspaceRuntime | undefined,
+): boolean {
+  const installWaiter = RUNTIME.skillInstallWaiters.get(workspaceId);
+  return (
+    installWaiter != null &&
+    workspaceRuntimeBefore != null &&
+    clearedMutationPendingKeys.includes(installWaiter.pendingKey) &&
+    workspaceRuntimeBefore.skillMutationPendingKeys[installWaiter.pendingKey] === true
+  );
+}
+
+export function resolveSkillInstallWaiter(workspaceId: string): void {
+  const installWaiter = RUNTIME.skillInstallWaiters.get(workspaceId);
+  if (!installWaiter) {
+    return;
+  }
+  RUNTIME.skillInstallWaiters.delete(workspaceId);
+  installWaiter.resolve();
+}
+
+export function resolveClearedPluginInstallWaiter(
+  workspaceId: string,
+  clearedMutationPendingKeys: readonly string[],
+  workspaceRuntimeBefore: WorkspaceRuntime | undefined,
+): void {
+  const pluginInstallWaiter = RUNTIME.pluginInstallWaiters.get(workspaceId);
+  if (
+    pluginInstallWaiter &&
+    workspaceRuntimeBefore &&
+    clearedMutationPendingKeys.includes(pluginInstallWaiter.pendingKey) &&
+    workspaceRuntimeBefore.pluginMutationPendingKeys[pluginInstallWaiter.pendingKey] === true
+  ) {
+    RUNTIME.pluginInstallWaiters.delete(workspaceId);
+    pluginInstallWaiter.resolve();
+  }
+}
+
+export function applySkillsCatalogEvent(
+  workspaceRuntime: WorkspaceRuntime,
+  workspaceRuntimeBefore: WorkspaceRuntime | undefined,
+  evt: SkillsCatalogEvent,
+): WorkspaceRuntime {
+  const clearedMutationPendingKeys = evt.clearedMutationPendingKeys ?? [];
+  const selectedInstallationId = workspaceRuntime.selectedSkillInstallationId;
+  const selectedInstallation = selectedInstallationId
+    ? (evt.catalog.installations.find(
+        (installation) => installation.installationId === selectedInstallationId,
+      ) ?? null)
+    : null;
+
+  return {
+    ...workspaceRuntime,
+    skillsCatalog: evt.catalog,
+    skillCatalogLoading: false,
+    skillCatalogError: null,
+    skillsMutationBlocked: evt.mutationBlocked,
+    skillsMutationBlockedReason: evt.mutationBlockedReason ?? null,
+    skillMutationPendingKeys: omitMutationPendingKeys(
+      workspaceRuntime.skillMutationPendingKeys,
+      clearedMutationPendingKeys,
+    ),
+    pluginMutationPendingKeys: omitMutationPendingKeys(
+      workspaceRuntime.pluginMutationPendingKeys,
+      clearedMutationPendingKeys,
+    ),
+    ...(clearedSkillMutationKeys(workspaceRuntimeBefore, clearedMutationPendingKeys)
+      ? { skillMutationError: null }
+      : {}),
+    ...(clearedPluginMutationKeys(workspaceRuntimeBefore, clearedMutationPendingKeys)
+      ? { pluginMutationError: null }
+      : {}),
+    selectedSkillInstallationId: selectedInstallation ? selectedInstallationId : null,
+    selectedSkillInstallation: selectedInstallation,
+  };
+}
+
+export function applyPluginsCatalogEvent(
+  workspaceRuntime: WorkspaceRuntime,
+  workspaceRuntimeBefore: WorkspaceRuntime | undefined,
+  evt: PluginsCatalogEvent,
+): WorkspaceRuntime {
+  const clearedMutationPendingKeys = evt.clearedMutationPendingKeys ?? [];
+  const pluginsCatalog = mergeStableAvailablePlugins(
+    workspaceRuntime.pluginsCatalog,
+    evt.catalog,
+    evt.availablePluginsPartial === true,
+  );
+  const catalogPlugins = [...pluginsCatalog.plugins, ...pluginsCatalog.availablePlugins];
+  const selectedPluginId = workspaceRuntime.selectedPluginId;
+  const selectedPluginScope = workspaceRuntime.selectedPluginScope;
+  const selectedPlugin = selectedPluginId
+    ? (catalogPlugins.find(
+        (plugin) =>
+          plugin.id === selectedPluginId &&
+          (selectedPluginScope === null || plugin.scope === selectedPluginScope),
+      ) ?? null)
+    : null;
+
+  return {
+    ...workspaceRuntime,
+    pluginsCatalog,
+    pluginsLoading: false,
+    pluginsError: null,
+    pluginMutationPendingKeys: omitMutationPendingKeys(
+      workspaceRuntime.pluginMutationPendingKeys,
+      clearedMutationPendingKeys,
+    ),
+    ...(clearedPluginMutationKeys(workspaceRuntimeBefore, clearedMutationPendingKeys)
+      ? { pluginMutationError: null }
+      : {}),
+    selectedPluginId: selectedPlugin ? selectedPluginId : null,
+    selectedPluginScope: selectedPlugin?.scope ?? null,
+    selectedPlugin,
+  };
+}

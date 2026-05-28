@@ -439,6 +439,10 @@ export class SessionPluginService {
   async disable(pluginId: string, scope?: "workspace" | "user"): Promise<void> {
     await this.session.disablePlugin(pluginId, scope);
   }
+
+  async delete(pluginId: string, scope?: "workspace" | "user"): Promise<void> {
+    await this.session.deletePlugin(pluginId, scope);
+  }
 }
 
 export class SessionAgentService {

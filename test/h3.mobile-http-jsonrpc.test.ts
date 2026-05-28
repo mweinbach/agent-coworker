@@ -4,7 +4,26 @@ import type {
   JsonRpcLiteNotification,
   JsonRpcLiteRequest,
 } from "../src/server/jsonrpc/protocol";
+import type { H3TrustedDeviceRecord } from "../src/server/transport/h3/pairing";
 import { __internal } from "../src/server/transport/h3/server";
+
+function trustedDevice(
+  permissions: Partial<H3TrustedDeviceRecord["permissions"]> = {},
+): H3TrustedDeviceRecord {
+  return {
+    deviceId: "phone-1",
+    identityPub: "phone-identity",
+    displayName: "Work Phone",
+    fingerprint: "fingerprint",
+    sessionTokenHash: "session-token-hash",
+    lastPairedAt: "2026-05-26T00:00:00.000Z",
+    lastConnectedAt: null,
+    permissions: {
+      ...__internal.DEFAULT_H3_TRUSTED_DEVICE_PERMISSIONS,
+      ...permissions,
+    },
+  };
+}
 
 describe("H3 mobile HTTP JSON-RPC connection", () => {
   test("keeps initialization state across dispatched HTTP requests", async () => {
@@ -97,11 +116,50 @@ describe("H3 mobile HTTP JSON-RPC connection", () => {
     };
     const connection = __internal.createHttpJsonRpcConnection(runtime as never);
 
-    const response = await __internal.dispatchHttpRpcPayload({ method: "initialized" }, connection);
+    const response = await __internal.dispatchHttpRpcPayload(
+      { method: "initialized" },
+      connection,
+      trustedDevice(),
+    );
 
     expect(response.status).toBe(202);
     await expect(response.text()).resolves.toBe("");
     expect(handled).toEqual([{ method: "initialized" }]);
+    connection.close();
+  });
+
+  test("requires workspace settings permission for plugin deletion", async () => {
+    const runtime = {
+      openHttpConnection() {},
+      handleDecodedMessage() {
+        throw new Error("plugin delete must be blocked before reaching the runtime");
+      },
+      closeConnection() {},
+    };
+    const connection = __internal.createHttpJsonRpcConnection(runtime as never);
+
+    const response = await __internal.dispatchHttpRpcPayload(
+      {
+        id: 1,
+        method: "cowork/plugins/delete",
+        params: { pluginId: "figma-toolkit", scope: "user" },
+      },
+      connection,
+      trustedDevice(),
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: "Mobile device permission required: workspaceSettings.",
+      permission: "workspaceSettings",
+    });
+    expect(
+      __internal.getRequiredH3Permission({
+        id: 2,
+        method: "cowork/plugins/delete",
+        params: { pluginId: "figma-toolkit" },
+      }),
+    ).toBe("workspaceSettings");
     connection.close();
   });
 
@@ -163,7 +221,11 @@ describe("H3 mobile HTTP JSON-RPC connection", () => {
       closeConnection() {},
     };
     const connection = __internal.createHttpJsonRpcConnection(runtime as never);
-    const pending = __internal.dispatchHttpRpcPayload({ id: 1, method: "thread/list" }, connection);
+    const pending = __internal.dispatchHttpRpcPayload(
+      { id: 1, method: "thread/list" },
+      connection,
+      trustedDevice(),
+    );
 
     connection.close();
 
@@ -184,7 +246,7 @@ describe("H3 mobile HTTP JSON-RPC connection", () => {
     };
     const connection = __internal.createHttpJsonRpcConnection(runtime as never);
 
-    const response = await __internal.dispatchHttpRpcPayload(null, connection);
+    const response = await __internal.dispatchHttpRpcPayload(null, connection, trustedDevice());
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({

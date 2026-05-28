@@ -13,7 +13,7 @@ import { connectJsonRpc, enableProjectBackups } from "./control.harness";
 describe("server JSON-RPC control methods", () => {
   test("plugin control methods return catalog and detail events for discovered Codex plugins", async () => {
     const tmpDir = await makeTmpProject();
-    const pluginRoot = `${tmpDir}/.agents/plugins/figma-toolkit`;
+    const pluginRoot = `${tmpDir}/.cowork/plugins/figma-toolkit`;
     await fs.mkdir(`${pluginRoot}/.codex-plugin`, { recursive: true });
     await fs.mkdir(`${pluginRoot}/skills/import-frame`, { recursive: true });
     await fs.writeFile(
@@ -133,7 +133,7 @@ describe("server JSON-RPC control methods", () => {
 
   test("plugin detail reads fail fast when the requested plugin is missing or ambiguous", async () => {
     const tmpDir = await makeTmpProject();
-    const workspacePluginRoot = `${tmpDir}/.agents/plugins/figma-toolkit`;
+    const workspacePluginRoot = `${tmpDir}/.cowork/plugins/figma-toolkit`;
     await fs.mkdir(`${workspacePluginRoot}/.codex-plugin`, { recursive: true });
     await fs.writeFile(
       `${workspacePluginRoot}/.codex-plugin/plugin.json`,
@@ -150,7 +150,7 @@ describe("server JSON-RPC control methods", () => {
       )}\n`,
     );
 
-    const homePluginRoot = `${tmpDir}/.cowork-home/.agents/plugins/figma-toolkit`;
+    const homePluginRoot = `${tmpDir}/.cowork-home/.cowork/plugins/figma-toolkit`;
     await fs.mkdir(`${homePluginRoot}/.codex-plugin`, { recursive: true });
     await fs.writeFile(
       `${homePluginRoot}/.codex-plugin/plugin.json`,
@@ -335,7 +335,7 @@ describe("server JSON-RPC control methods", () => {
         ]),
       );
 
-      const installedPluginPath = `${tmpDir}/.agents/plugins/figma-toolkit/.codex-plugin/plugin.json`;
+      const installedPluginPath = `${tmpDir}/.cowork/plugins/figma-toolkit/.codex-plugin/plugin.json`;
       await expect(fs.stat(installedPluginPath)).resolves.toBeDefined();
 
       const disableResponse = await rpc.request("cowork/plugins/disable", {
@@ -472,10 +472,10 @@ describe("server JSON-RPC control methods", () => {
 
       expect(Array.isArray(installResponse.result.events)).toBe(true);
       await expect(
-        fs.stat(`${targetWorkspace}/.agents/plugins/figma-toolkit/.codex-plugin/plugin.json`),
+        fs.stat(`${targetWorkspace}/.cowork/plugins/figma-toolkit/.codex-plugin/plugin.json`),
       ).resolves.toBeDefined();
       await expect(
-        fs.stat(`${serverRoot}/.agents/plugins/figma-toolkit/.codex-plugin/plugin.json`),
+        fs.stat(`${serverRoot}/.cowork/plugins/figma-toolkit/.codex-plugin/plugin.json`),
       ).rejects.toBeDefined();
 
       const catalogResponse = await rpc.request("cowork/plugins/catalog/read", {

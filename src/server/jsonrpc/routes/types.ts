@@ -1,3 +1,4 @@
+import type { ManagedSofficeRuntimeDiagnostic } from "../../../managedSofficeRuntime";
 import type { AgentConfig } from "../../../types";
 import type { SessionEvent } from "../../protocol";
 import type { ResearchService } from "../../research/ResearchService";
@@ -125,7 +126,7 @@ export interface JsonRpcRouteContext {
   runtime: {
     checkLibreOffice(opts: {
       smoke?: boolean;
-    }): Promise<import("../../../managedSofficeRuntime").ManagedSofficeRuntimeDiagnostic>;
+    }): Promise<ManagedSofficeRuntimeDiagnostic>;
   };
   jsonrpc: {
     send(ws: StartServerSocket, payload: unknown): void;

@@ -113,6 +113,7 @@ function deriveLastTurnUsageFromSnapshot(
   };
 }
 
+/** @public Loaded dynamically via loadSessionSnapshotProjectorModule(); not statically imported. */
 export function createLegacySessionSnapshot(record: PersistedSessionRecord): SessionSnapshot {
   const sessionUsage = record.costTracker ? structuredClone(record.costTracker) : null;
   return {

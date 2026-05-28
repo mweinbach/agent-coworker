@@ -17,6 +17,7 @@ function resolveSenderUrl(event: IpcMainInvokeEvent): string {
   return event.sender.getURL();
 }
 
+/** @public Imported dynamically by the ipc-trusted-sender test; not statically imported. */
 export function isTrustedSender(event: IpcMainInvokeEvent): boolean {
   const senderUrl = resolveSenderUrl(event);
   return isTrustedDesktopSenderUrl(senderUrl, {

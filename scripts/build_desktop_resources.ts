@@ -23,12 +23,13 @@ import {
   ensureBundledBunRuntime,
   ensureBundledCodexAppServer,
   pathExists,
+  resolveBundledBunRuntimeVersion,
   resolveBuildTarget,
   rmrf,
   runCommand,
 } from "./releaseBuildUtils";
 
-const CACHE_VERSION = 5;
+const CACHE_VERSION = 6;
 const MANAGED_SOFFICE_HELPER_RELATIVE_PATH = path.join("assets", "managed-soffice-helper.mjs");
 
 type DesktopResourcesCache = {
@@ -45,6 +46,7 @@ type DesktopResourcesCache = {
   foundationModelsSdkFingerprint: string | null;
   windowsAiElectronFingerprint: string | null;
   docsFingerprint: string | null;
+  bundledBunRuntimeVersion: string | null;
 };
 
 async function walkForFingerprint(
@@ -122,7 +124,9 @@ async function loadCache(cachePath: string): Promise<DesktopResourcesCache | nul
         typeof parsed.foundationModelsSdkFingerprint !== "string") ||
       (parsed.windowsAiElectronFingerprint !== null &&
         typeof parsed.windowsAiElectronFingerprint !== "string") ||
-      (parsed.docsFingerprint !== null && typeof parsed.docsFingerprint !== "string")
+      (parsed.docsFingerprint !== null && typeof parsed.docsFingerprint !== "string") ||
+      (parsed.bundledBunRuntimeVersion !== null &&
+        typeof parsed.bundledBunRuntimeVersion !== "string")
     ) {
       return null;
     }
@@ -461,11 +465,15 @@ async function main() {
     MANAGED_SOFFICE_HELPER_RELATIVE_PATH,
   );
   const useBundledBunRuntime = shouldUseBundledBunRuntime(platform, arch);
+  const bundledBunRuntimeVersion = useBundledBunRuntime
+    ? resolveBundledBunRuntimeVersion(target)
+    : null;
   const sidecarNeedsBuild =
     cache?.platform !== platform ||
     cache?.arch !== arch ||
     cache?.includeDocs !== includeDocs ||
     cache?.sidecarFingerprint !== sidecarFingerprint ||
+    cache?.bundledBunRuntimeVersion !== bundledBunRuntimeVersion ||
     !(await pathExists(sidecarManifestPath)) ||
     (shouldBundleCodexAppServer && !(await pathExists(codexAppServerOutfile))) ||
     (useBundledBunRuntime
@@ -672,6 +680,7 @@ async function main() {
     foundationModelsSdkFingerprint,
     windowsAiElectronFingerprint,
     docsFingerprint,
+    bundledBunRuntimeVersion,
   });
 
   console.log("[resources] skipped dist/server desktop bundle (unused at runtime)");

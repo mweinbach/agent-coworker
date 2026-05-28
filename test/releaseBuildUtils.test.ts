@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { buildBunBundle } from "../scripts/releaseBuildUtils";
+import { buildBunBundle, resolveBundledBunRuntimeVersion } from "../scripts/releaseBuildUtils";
 
 const tempDirs: string[] = [];
 
@@ -18,6 +18,21 @@ afterEach(async () => {
 });
 
 describe("release build utils", () => {
+  test("pins the Windows ARM64 bundled Bun runtime to the release-smoked version", () => {
+    expect(resolveBundledBunRuntimeVersion({ platform: "win32", arch: "arm64" }, {})).toBe(
+      "1.3.13",
+    );
+    expect(
+      resolveBundledBunRuntimeVersion(
+        { platform: "win32", arch: "arm64" },
+        { COWORK_BUNDLED_BUN_RUNTIME_VERSION: "1.3.14" },
+      ),
+    ).toBe("1.3.14");
+    expect(resolveBundledBunRuntimeVersion({ platform: "darwin", arch: "arm64" }, {})).toBe(
+      Bun.version,
+    );
+  });
+
   test("buildBunBundle writes a Bun-target bundle without spawning the CLI", async () => {
     const dir = await makeTempDir();
     const entry = path.join(dir, "entry.ts");

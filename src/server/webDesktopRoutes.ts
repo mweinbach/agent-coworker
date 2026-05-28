@@ -284,6 +284,10 @@ function renderDirectoryHtml(
   const parentLink = parentPath
     ? `<a class="parent-link" href="${buildOpenRoute(parentPath)}">Up one level</a>`
     : "";
+  const listingMarkup =
+    entries.length > 0
+      ? `<ul class="list">${rows}</ul>`
+      : '<div class="empty">This directory is empty.</div>';
 
   return `<!doctype html>
 <html lang="en">
@@ -398,7 +402,7 @@ function renderDirectoryHtml(
         <p class="path">${escapeHtml(currentPath)}</p>
         ${parentLink}
       </section>
-      ${entries.length > 0 ? `<ul class="list">${rows}</ul>` : `<div class="empty">This directory is empty.</div>`}
+      ${listingMarkup}
     </main>
   </body>
 </html>`;

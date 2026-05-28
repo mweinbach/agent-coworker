@@ -7,6 +7,8 @@ export type BuildTarget = {
   arch: string;
 };
 
+const WINDOWS_ARM64_BUNDLED_BUN_RUNTIME_VERSION = "1.3.13";
+
 type GitHubReleaseAsset = {
   name?: unknown;
   browser_download_url?: unknown;
@@ -270,6 +272,20 @@ function resolveBunRuntimeAssetName(target: BuildTarget): string {
   throw new Error(`Unsupported Bun runtime bundle target: ${target.platform}/${target.arch}`);
 }
 
+export function resolveBundledBunRuntimeVersion(
+  target: BuildTarget,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const override = env.COWORK_BUNDLED_BUN_RUNTIME_VERSION?.trim();
+  if (override) {
+    return override;
+  }
+  if (target.platform === "win32" && target.arch === "arm64") {
+    return WINDOWS_ARM64_BUNDLED_BUN_RUNTIME_VERSION;
+  }
+  return Bun.version;
+}
+
 function codexReleaseTag(version: string): string {
   const normalized = version.trim();
   if (!normalized) {
@@ -363,7 +379,7 @@ export async function ensureBundledBunRuntime(
   target: BuildTarget,
 ): Promise<{ executablePath: string; version: string }> {
   const assetName = resolveBunRuntimeAssetName(target);
-  const version = Bun.version;
+  const version = resolveBundledBunRuntimeVersion(target);
   const cacheDir = path.join(
     root,
     "dist",

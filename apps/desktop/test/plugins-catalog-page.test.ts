@@ -427,6 +427,89 @@ describe("plugins catalog page", () => {
     }
   });
 
+  test("new plugin dialog keeps preview failures visible for the attempted source", async () => {
+    const previousState = useAppStore.getState();
+    let root: ReturnType<typeof createRoot> | null = null;
+    const previewPluginInstall = mock(async () => {
+      useAppStore.setState((state) => ({
+        workspaceRuntimeById: {
+          ...state.workspaceRuntimeById,
+          [workspaceId]: {
+            ...state.workspaceRuntimeById[workspaceId],
+            pluginMutationError: "Unable to preview plugin install.",
+          },
+        },
+      }));
+    });
+    useAppStore.setState({
+      ...baseWorkspaceState(),
+      previewPluginInstall: previewPluginInstall as typeof previousState.previewPluginInstall,
+      workspaceRuntimeById: {
+        [workspaceId]: {
+          ...defaultWorkspaceRuntime(),
+          pluginMutationError: null,
+        },
+      },
+    } as any);
+
+    const harness = setupJsdom();
+    try {
+      (
+        harness.dom.window.HTMLElement.prototype as {
+          attachEvent?: () => void;
+          detachEvent?: () => void;
+        }
+      ).attachEvent = () => {};
+      (
+        harness.dom.window.HTMLElement.prototype as {
+          attachEvent?: () => void;
+          detachEvent?: () => void;
+        }
+      ).detachEvent = () => {};
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          createElement(InstallPluginDialog, {
+            workspaceId,
+            initialOpen: true,
+            initialSourceInput: "owner/repo",
+          }),
+        );
+        await flushUi();
+      });
+
+      const previewButton = Array.from(harness.dom.window.document.querySelectorAll("button")).find(
+        (button) => button.textContent?.includes("Preview in Workspace"),
+      );
+      expect(previewButton).toBeDefined();
+
+      await act(async () => {
+        previewButton?.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+        await flushUi();
+      });
+
+      expect(previewPluginInstall).toHaveBeenCalledWith("owner/repo", "workspace");
+      const dialogText = harness.dom.window.document.body.textContent ?? "";
+      expect(dialogText.match(/Unable to preview plugin install\./g)?.length ?? 0).toBe(1);
+      expect(dialogText).toContain("Last attempted target: workspace.");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      useAppStore.setState(previousState);
+      harness.restore();
+    }
+  });
+
   test("install dialog requires a fresh preview when switching install scope", () => {
     const preview = {
       source: {

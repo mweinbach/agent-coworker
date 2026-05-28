@@ -44,6 +44,10 @@ const modelStreamRawFormatSchema = z.enum([
 const researchSourcesJsonSchema = z.array(researchSourceSchema);
 const researchThoughtSummariesJsonSchema = z.array(researchThoughtSummarySchema);
 
+function sql(lines: readonly string[]): string {
+  return lines.join("\n");
+}
+
 function hasCompatiblePersistedProvider(row: Record<string, unknown>): boolean {
   const provider = row.provider;
   return typeof provider !== "string" || isProviderName(provider);
@@ -64,43 +68,47 @@ export class SessionDbRepository {
       filterWorkspace
         ? this.db
             .query(
-              `SELECT
-               session_id,
-               title,
-               title_source,
-               title_model,
-               provider,
-               model,
-               created_at,
-               updated_at,
-               message_count,
-               last_event_seq,
-               has_pending_ask,
-               has_pending_approval,
-               working_directory
-             FROM sessions
-             WHERE session_kind = 'root'
-             ORDER BY updated_at DESC`,
+              sql([
+                "SELECT",
+                "               session_id,",
+                "               title,",
+                "               title_source,",
+                "               title_model,",
+                "               provider,",
+                "               model,",
+                "               created_at,",
+                "               updated_at,",
+                "               message_count,",
+                "               last_event_seq,",
+                "               has_pending_ask,",
+                "               has_pending_approval,",
+                "               working_directory",
+                "             FROM sessions",
+                "             WHERE session_kind = 'root'",
+                "             ORDER BY updated_at DESC",
+              ]),
             )
             .all()
         : this.db
             .query(
-              `SELECT
-               session_id,
-               title,
-               title_source,
-               title_model,
-               provider,
-               model,
-               created_at,
-               updated_at,
-               message_count,
-               last_event_seq,
-               has_pending_ask,
-               has_pending_approval
-             FROM sessions
-             WHERE session_kind = 'root'
-             ORDER BY updated_at DESC`,
+              sql([
+                "SELECT",
+                "               session_id,",
+                "               title,",
+                "               title_source,",
+                "               title_model,",
+                "               provider,",
+                "               model,",
+                "               created_at,",
+                "               updated_at,",
+                "               message_count,",
+                "               last_event_seq,",
+                "               has_pending_ask,",
+                "               has_pending_approval",
+                "             FROM sessions",
+                "             WHERE session_kind = 'root'",
+                "             ORDER BY updated_at DESC",
+              ]),
             )
             .all()
     ) as Array<Record<string, unknown>>;
@@ -126,39 +134,41 @@ export class SessionDbRepository {
   listAgentSessions(parentSessionId: string): PersistentAgentSummary[] {
     const rows = this.db
       .query(
-        `SELECT
-           session_id,
-           parent_session_id,
-           COALESCE(
-             role,
-             CASE agent_type
-               WHEN 'general' THEN 'worker'
-               WHEN 'explore' THEN 'explorer'
-               ELSE agent_type
-             END
-           ) AS role,
-           agent_type,
-           title,
-           provider,
-           model,
-           mode,
-           depth,
-           nickname,
-           task_type,
-           target_paths_json,
-           requested_model,
-           effective_model,
-           requested_reasoning_effort,
-           effective_reasoning_effort,
-           created_at,
-           updated_at,
-           status,
-           execution_state,
-           last_message_preview
-         FROM sessions
-         WHERE parent_session_id = ?
-           AND session_kind IN ('agent', 'subagent')
-         ORDER BY updated_at DESC`,
+        sql([
+          "SELECT",
+          "           session_id,",
+          "           parent_session_id,",
+          "           COALESCE(",
+          "             role,",
+          "             CASE agent_type",
+          "               WHEN 'general' THEN 'worker'",
+          "               WHEN 'explore' THEN 'explorer'",
+          "               ELSE agent_type",
+          "             END",
+          "           ) AS role,",
+          "           agent_type,",
+          "           title,",
+          "           provider,",
+          "           model,",
+          "           mode,",
+          "           depth,",
+          "           nickname,",
+          "           task_type,",
+          "           target_paths_json,",
+          "           requested_model,",
+          "           effective_model,",
+          "           requested_reasoning_effort,",
+          "           effective_reasoning_effort,",
+          "           created_at,",
+          "           updated_at,",
+          "           status,",
+          "           execution_state,",
+          "           last_message_preview",
+          "         FROM sessions",
+          "         WHERE parent_session_id = ?",
+          "           AND session_kind IN ('agent', 'subagent')",
+          "         ORDER BY updated_at DESC",
+        ]),
       )
       .all(parentSessionId) as Array<Record<string, unknown>>;
 
@@ -201,58 +211,60 @@ export class SessionDbRepository {
   getSessionRecord(sessionId: string): PersistedSessionRecord | null {
     const row = this.db
       .query(
-        `SELECT
-           s.session_id,
-           s.session_kind,
-           s.parent_session_id,
-           COALESCE(
-             s.role,
-             CASE s.agent_type
-               WHEN 'general' THEN 'worker'
-               WHEN 'explore' THEN 'explorer'
-               ELSE s.agent_type
-             END
-           ) AS role,
-           s.agent_type,
-           s.mode,
-           s.depth,
-           s.nickname,
-           s.task_type,
-           s.target_paths_json,
-           s.requested_model,
-           s.effective_model,
-           s.requested_reasoning_effort,
-           s.effective_reasoning_effort,
-           s.execution_state,
-           s.last_message_preview,
-           s.title,
-           s.title_source,
-           s.title_model,
-           s.provider,
-           s.model,
-           s.working_directory,
-           s.output_directory,
-           s.uploads_directory,
-           s.enable_mcp,
-           s.backups_enabled_override,
-           s.created_at,
-           s.updated_at,
-           s.status,
-           s.has_pending_ask,
-           s.has_pending_approval,
-           s.message_count,
-           s.last_event_seq,
-           st.system_prompt,
-           st.messages_json,
-           st.provider_state_json,
-           st.provider_options_json,
-           st.todos_json,
-           st.harness_context_json,
-           st.cost_tracker_json
-         FROM sessions s
-         JOIN session_state st ON st.session_id = s.session_id
-         WHERE s.session_id = ?
-         LIMIT 1`,
+        sql([
+          "SELECT",
+          "           s.session_id,",
+          "           s.session_kind,",
+          "           s.parent_session_id,",
+          "           COALESCE(",
+          "             s.role,",
+          "             CASE s.agent_type",
+          "               WHEN 'general' THEN 'worker'",
+          "               WHEN 'explore' THEN 'explorer'",
+          "               ELSE s.agent_type",
+          "             END",
+          "           ) AS role,",
+          "           s.agent_type,",
+          "           s.mode,",
+          "           s.depth,",
+          "           s.nickname,",
+          "           s.task_type,",
+          "           s.target_paths_json,",
+          "           s.requested_model,",
+          "           s.effective_model,",
+          "           s.requested_reasoning_effort,",
+          "           s.effective_reasoning_effort,",
+          "           s.execution_state,",
+          "           s.last_message_preview,",
+          "           s.title,",
+          "           s.title_source,",
+          "           s.title_model,",
+          "           s.provider,",
+          "           s.model,",
+          "           s.working_directory,",
+          "           s.output_directory,",
+          "           s.uploads_directory,",
+          "           s.enable_mcp,",
+          "           s.backups_enabled_override,",
+          "           s.created_at,",
+          "           s.updated_at,",
+          "           s.status,",
+          "           s.has_pending_ask,",
+          "           s.has_pending_approval,",
+          "           s.message_count,",
+          "           s.last_event_seq,",
+          "           st.system_prompt,",
+          "           st.messages_json,",
+          "           st.provider_state_json,",
+          "           st.provider_options_json,",
+          "           st.todos_json,",
+          "           st.harness_context_json,",
+          "           st.cost_tracker_json",
+          "         FROM sessions s",
+          "         JOIN session_state st ON st.session_id = s.session_id",
+          "         WHERE s.session_id = ?",
+          "         LIMIT 1",
+        ]),
       )
       .get(sessionId) as Record<string, unknown> | null;
 
@@ -327,73 +339,75 @@ export class SessionDbRepository {
 
       this.db
         .query(
-          `INSERT INTO sessions (
-             session_id,
-             session_kind,
-             parent_session_id,
-             role,
-             agent_type,
-             mode,
-             depth,
-             nickname,
-             task_type,
-             target_paths_json,
-             requested_model,
-             effective_model,
-             requested_reasoning_effort,
-             effective_reasoning_effort,
-             execution_state,
-             last_message_preview,
-             title,
-             title_source,
-             title_model,
-             provider,
-             model,
-             working_directory,
-             output_directory,
-             uploads_directory,
-             enable_mcp,
-             backups_enabled_override,
-             created_at,
-             updated_at,
-             status,
-             has_pending_ask,
-             has_pending_approval,
-             message_count,
-             last_event_seq
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(session_id) DO UPDATE SET
-             session_kind = excluded.session_kind,
-             parent_session_id = excluded.parent_session_id,
-             role = excluded.role,
-             agent_type = excluded.agent_type,
-             mode = excluded.mode,
-             depth = excluded.depth,
-             nickname = excluded.nickname,
-             task_type = excluded.task_type,
-             target_paths_json = excluded.target_paths_json,
-             requested_model = excluded.requested_model,
-             effective_model = excluded.effective_model,
-             requested_reasoning_effort = excluded.requested_reasoning_effort,
-             effective_reasoning_effort = excluded.effective_reasoning_effort,
-             execution_state = excluded.execution_state,
-             last_message_preview = excluded.last_message_preview,
-             title = excluded.title,
-             title_source = excluded.title_source,
-             title_model = excluded.title_model,
-             provider = excluded.provider,
-             model = excluded.model,
-             working_directory = excluded.working_directory,
-             output_directory = excluded.output_directory,
-             uploads_directory = excluded.uploads_directory,
-             enable_mcp = excluded.enable_mcp,
-             backups_enabled_override = excluded.backups_enabled_override,
-             updated_at = excluded.updated_at,
-             status = excluded.status,
-             has_pending_ask = excluded.has_pending_ask,
-             has_pending_approval = excluded.has_pending_approval,
-             message_count = excluded.message_count,
-             last_event_seq = excluded.last_event_seq`,
+          sql([
+            "INSERT INTO sessions (",
+            "             session_id,",
+            "             session_kind,",
+            "             parent_session_id,",
+            "             role,",
+            "             agent_type,",
+            "             mode,",
+            "             depth,",
+            "             nickname,",
+            "             task_type,",
+            "             target_paths_json,",
+            "             requested_model,",
+            "             effective_model,",
+            "             requested_reasoning_effort,",
+            "             effective_reasoning_effort,",
+            "             execution_state,",
+            "             last_message_preview,",
+            "             title,",
+            "             title_source,",
+            "             title_model,",
+            "             provider,",
+            "             model,",
+            "             working_directory,",
+            "             output_directory,",
+            "             uploads_directory,",
+            "             enable_mcp,",
+            "             backups_enabled_override,",
+            "             created_at,",
+            "             updated_at,",
+            "             status,",
+            "             has_pending_ask,",
+            "             has_pending_approval,",
+            "             message_count,",
+            "             last_event_seq",
+            "           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "           ON CONFLICT(session_id) DO UPDATE SET",
+            "             session_kind = excluded.session_kind,",
+            "             parent_session_id = excluded.parent_session_id,",
+            "             role = excluded.role,",
+            "             agent_type = excluded.agent_type,",
+            "             mode = excluded.mode,",
+            "             depth = excluded.depth,",
+            "             nickname = excluded.nickname,",
+            "             task_type = excluded.task_type,",
+            "             target_paths_json = excluded.target_paths_json,",
+            "             requested_model = excluded.requested_model,",
+            "             effective_model = excluded.effective_model,",
+            "             requested_reasoning_effort = excluded.requested_reasoning_effort,",
+            "             effective_reasoning_effort = excluded.effective_reasoning_effort,",
+            "             execution_state = excluded.execution_state,",
+            "             last_message_preview = excluded.last_message_preview,",
+            "             title = excluded.title,",
+            "             title_source = excluded.title_source,",
+            "             title_model = excluded.title_model,",
+            "             provider = excluded.provider,",
+            "             model = excluded.model,",
+            "             working_directory = excluded.working_directory,",
+            "             output_directory = excluded.output_directory,",
+            "             uploads_directory = excluded.uploads_directory,",
+            "             enable_mcp = excluded.enable_mcp,",
+            "             backups_enabled_override = excluded.backups_enabled_override,",
+            "             updated_at = excluded.updated_at,",
+            "             status = excluded.status,",
+            "             has_pending_ask = excluded.has_pending_ask,",
+            "             has_pending_approval = excluded.has_pending_approval,",
+            "             message_count = excluded.message_count,",
+            "             last_event_seq = excluded.last_event_seq",
+          ]),
         )
         .run(
           input.sessionId,
@@ -433,24 +447,26 @@ export class SessionDbRepository {
 
       this.db
         .query(
-          `INSERT INTO session_state (
-             session_id,
-             system_prompt,
-             messages_json,
-             provider_state_json,
-             provider_options_json,
-             todos_json,
-             harness_context_json,
-             cost_tracker_json
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(session_id) DO UPDATE SET
-             system_prompt = excluded.system_prompt,
-             messages_json = excluded.messages_json,
-             provider_state_json = excluded.provider_state_json,
-             provider_options_json = excluded.provider_options_json,
-             todos_json = excluded.todos_json,
-             harness_context_json = excluded.harness_context_json,
-             cost_tracker_json = excluded.cost_tracker_json`,
+          sql([
+            "INSERT INTO session_state (",
+            "             session_id,",
+            "             system_prompt,",
+            "             messages_json,",
+            "             provider_state_json,",
+            "             provider_options_json,",
+            "             todos_json,",
+            "             harness_context_json,",
+            "             cost_tracker_json",
+            "           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "           ON CONFLICT(session_id) DO UPDATE SET",
+            "             system_prompt = excluded.system_prompt,",
+            "             messages_json = excluded.messages_json,",
+            "             provider_state_json = excluded.provider_state_json,",
+            "             provider_options_json = excluded.provider_options_json,",
+            "             todos_json = excluded.todos_json,",
+            "             harness_context_json = excluded.harness_context_json,",
+            "             cost_tracker_json = excluded.cost_tracker_json",
+          ]),
         )
         .run(
           input.sessionId,
@@ -465,14 +481,16 @@ export class SessionDbRepository {
 
       this.db
         .query(
-          `INSERT INTO session_events (
-             session_id,
-             seq,
-             ts,
-             direction,
-             event_type,
-             payload_json
-           ) VALUES (?, ?, ?, ?, ?, ?)`,
+          sql([
+            "INSERT INTO session_events (",
+            "             session_id,",
+            "             seq,",
+            "             ts,",
+            "             direction,",
+            "             event_type,",
+            "             payload_json",
+            "           ) VALUES (?, ?, ?, ?, ?, ?)",
+          ]),
         )
         .run(input.sessionId, nextSeq, ts, direction, input.eventType, payloadJson);
 
@@ -489,17 +507,19 @@ export class SessionDbRepository {
 
     this.db
       .query(
-        `INSERT INTO session_model_stream_chunks (
-           session_id,
-           turn_id,
-           chunk_index,
-           ts,
-           provider,
-           model,
-           raw_format,
-           normalizer_version,
-           raw_event_json
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        sql([
+          "INSERT INTO session_model_stream_chunks (",
+          "           session_id,",
+          "           turn_id,",
+          "           chunk_index,",
+          "           ts,",
+          "           provider,",
+          "           model,",
+          "           raw_format,",
+          "           normalizer_version,",
+          "           raw_event_json",
+          "         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ]),
       )
       .run(
         opts.sessionId,
@@ -517,11 +537,13 @@ export class SessionDbRepository {
   persistSessionSnapshot(sessionId: string, snapshot: SessionSnapshot): void {
     this.db
       .query(
-        `INSERT INTO session_snapshots (session_id, updated_at, snapshot_json)
-         VALUES (?, ?, ?)
-         ON CONFLICT(session_id) DO UPDATE SET
-           updated_at = excluded.updated_at,
-           snapshot_json = excluded.snapshot_json`,
+        sql([
+          "INSERT INTO session_snapshots (session_id, updated_at, snapshot_json)",
+          "         VALUES (?, ?, ?)",
+          "         ON CONFLICT(session_id) DO UPDATE SET",
+          "           updated_at = excluded.updated_at,",
+          "           snapshot_json = excluded.snapshot_json",
+        ]),
       )
       .run(sessionId, snapshot.updatedAt, toJsonString(snapshot));
   }
@@ -530,18 +552,22 @@ export class SessionDbRepository {
     const rows = turnId
       ? (this.db
           .query(
-            `SELECT session_id, turn_id, chunk_index, ts, provider, model, raw_format, normalizer_version, raw_event_json
-             FROM session_model_stream_chunks
-             WHERE session_id = ? AND turn_id = ?
-             ORDER BY chunk_index ASC`,
+            sql([
+              "SELECT session_id, turn_id, chunk_index, ts, provider, model, raw_format, normalizer_version, raw_event_json",
+              "             FROM session_model_stream_chunks",
+              "             WHERE session_id = ? AND turn_id = ?",
+              "             ORDER BY chunk_index ASC",
+            ]),
           )
           .all(sessionId, turnId) as Array<Record<string, unknown>>)
       : (this.db
           .query(
-            `SELECT session_id, turn_id, chunk_index, ts, provider, model, raw_format, normalizer_version, raw_event_json
-             FROM session_model_stream_chunks
-             WHERE session_id = ?
-             ORDER BY turn_id ASC, chunk_index ASC`,
+            sql([
+              "SELECT session_id, turn_id, chunk_index, ts, provider, model, raw_format, normalizer_version, raw_event_json",
+              "             FROM session_model_stream_chunks",
+              "             WHERE session_id = ?",
+              "             ORDER BY turn_id ASC, chunk_index ASC",
+            ]),
           )
           .all(sessionId) as Array<Record<string, unknown>>);
 
@@ -578,23 +604,27 @@ export class SessionDbRepository {
     }
     const run = this.db.transaction((inputs: Array<Omit<PersistedThreadJournalEvent, "seq">>) => {
       const selectLatestSeq = this.db.query(
-        `SELECT seq
-         FROM thread_journal_events
-         WHERE thread_id = ?
-         ORDER BY seq DESC
-         LIMIT 1`,
+        sql([
+          "SELECT seq",
+          "         FROM thread_journal_events",
+          "         WHERE thread_id = ?",
+          "         ORDER BY seq DESC",
+          "         LIMIT 1",
+        ]),
       );
       const insert = this.db.query(
-        `INSERT INTO thread_journal_events (
-           thread_id,
-           seq,
-           ts,
-           event_type,
-           turn_id,
-           item_id,
-           request_id,
-           payload_json
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        sql([
+          "INSERT INTO thread_journal_events (",
+          "           thread_id,",
+          "           seq,",
+          "           ts,",
+          "           event_type,",
+          "           turn_id,",
+          "           item_id,",
+          "           request_id,",
+          "           payload_json",
+          "         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        ]),
       );
       const nextSeqByThread = new Map<string, number>();
       const insertedSeqs: number[] = [];
@@ -635,35 +665,39 @@ export class SessionDbRepository {
     const query =
       limit === null
         ? this.db.query(
-            `SELECT
-             thread_id,
-             seq,
-             ts,
-             event_type,
-             turn_id,
-             item_id,
-             request_id,
-             payload_json
-           FROM thread_journal_events
-           WHERE thread_id = ?
-             AND seq > ?
-           ORDER BY seq ASC`,
+            sql([
+              "SELECT",
+              "             thread_id,",
+              "             seq,",
+              "             ts,",
+              "             event_type,",
+              "             turn_id,",
+              "             item_id,",
+              "             request_id,",
+              "             payload_json",
+              "           FROM thread_journal_events",
+              "           WHERE thread_id = ?",
+              "             AND seq > ?",
+              "           ORDER BY seq ASC",
+            ]),
           )
         : this.db.query(
-            `SELECT
-             thread_id,
-             seq,
-             ts,
-             event_type,
-             turn_id,
-             item_id,
-             request_id,
-             payload_json
-           FROM thread_journal_events
-           WHERE thread_id = ?
-             AND seq > ?
-           ORDER BY seq ASC
-           LIMIT ?`,
+            sql([
+              "SELECT",
+              "             thread_id,",
+              "             seq,",
+              "             ts,",
+              "             event_type,",
+              "             turn_id,",
+              "             item_id,",
+              "             request_id,",
+              "             payload_json",
+              "           FROM thread_journal_events",
+              "           WHERE thread_id = ?",
+              "             AND seq > ?",
+              "           ORDER BY seq ASC",
+              "           LIMIT ?",
+            ]),
           );
     const rows = (
       limit === null ? query.all(threadId, afterSeq) : query.all(threadId, afterSeq, limit)
@@ -689,26 +723,28 @@ export class SessionDbRepository {
     const workspacePath = opts?.workspacePath ? canonicalWorkspacePath(opts.workspacePath) : null;
     const rows = this.db
       .query(
-        `SELECT
-             id,
-             workspace_path,
-             parent_research_id,
-             title,
-             prompt,
-             status,
-             interaction_id,
-             last_event_id,
-             inputs_json,
-             settings_json,
-             outputs_markdown,
-             thought_summaries_json,
-             sources_json,
-             plan_pending,
-             created_at,
-             updated_at,
-             error
-           FROM research
-           ORDER BY updated_at DESC`,
+        sql([
+          "SELECT",
+          "             id,",
+          "             workspace_path,",
+          "             parent_research_id,",
+          "             title,",
+          "             prompt,",
+          "             status,",
+          "             interaction_id,",
+          "             last_event_id,",
+          "             inputs_json,",
+          "             settings_json,",
+          "             outputs_markdown,",
+          "             thought_summaries_json,",
+          "             sources_json,",
+          "             plan_pending,",
+          "             created_at,",
+          "             updated_at,",
+          "             error",
+          "           FROM research",
+          "           ORDER BY updated_at DESC",
+        ]),
       )
       .all() as Array<Record<string, unknown>>;
 
@@ -726,27 +762,29 @@ export class SessionDbRepository {
     const workspacePath = opts?.workspacePath ? canonicalWorkspacePath(opts.workspacePath) : null;
     const rows = this.db
       .query(
-        `SELECT
-             id,
-             workspace_path,
-             parent_research_id,
-             title,
-             prompt,
-             status,
-             interaction_id,
-             last_event_id,
-             inputs_json,
-             settings_json,
-             outputs_markdown,
-             thought_summaries_json,
-             sources_json,
-             plan_pending,
-             created_at,
-             updated_at,
-             error
-           FROM research
-           WHERE status IN ('pending', 'running')
-           ORDER BY updated_at DESC`,
+        sql([
+          "SELECT",
+          "             id,",
+          "             workspace_path,",
+          "             parent_research_id,",
+          "             title,",
+          "             prompt,",
+          "             status,",
+          "             interaction_id,",
+          "             last_event_id,",
+          "             inputs_json,",
+          "             settings_json,",
+          "             outputs_markdown,",
+          "             thought_summaries_json,",
+          "             sources_json,",
+          "             plan_pending,",
+          "             created_at,",
+          "             updated_at,",
+          "             error",
+          "           FROM research",
+          "           WHERE status IN ('pending', 'running')",
+          "           ORDER BY updated_at DESC",
+        ]),
       )
       .all() as Array<Record<string, unknown>>;
 
@@ -767,27 +805,29 @@ export class SessionDbRepository {
     const workspacePath = opts?.workspacePath ? canonicalWorkspacePath(opts.workspacePath) : null;
     const row = this.db
       .query(
-        `SELECT
-             id,
-             workspace_path,
-             parent_research_id,
-             title,
-             prompt,
-             status,
-             interaction_id,
-             last_event_id,
-             inputs_json,
-             settings_json,
-             outputs_markdown,
-             thought_summaries_json,
-             sources_json,
-             plan_pending,
-             created_at,
-             updated_at,
-             error
-           FROM research
-           WHERE id = ?
-           LIMIT 1`,
+        sql([
+          "SELECT",
+          "             id,",
+          "             workspace_path,",
+          "             parent_research_id,",
+          "             title,",
+          "             prompt,",
+          "             status,",
+          "             interaction_id,",
+          "             last_event_id,",
+          "             inputs_json,",
+          "             settings_json,",
+          "             outputs_markdown,",
+          "             thought_summaries_json,",
+          "             sources_json,",
+          "             plan_pending,",
+          "             created_at,",
+          "             updated_at,",
+          "             error",
+          "           FROM research",
+          "           WHERE id = ?",
+          "           LIMIT 1",
+        ]),
       )
       .get(researchId) as Record<string, unknown> | null;
 
@@ -811,41 +851,43 @@ export class SessionDbRepository {
     const parsed = researchRecordSchema.parse(record);
     this.db
       .query(
-        `INSERT INTO research (
-           id,
-           workspace_path,
-           parent_research_id,
-           title,
-           prompt,
-           status,
-           interaction_id,
-           last_event_id,
-           inputs_json,
-           settings_json,
-           outputs_markdown,
-           thought_summaries_json,
-           sources_json,
-           plan_pending,
-           created_at,
-           updated_at,
-           error
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET
-           workspace_path = excluded.workspace_path,
-           parent_research_id = excluded.parent_research_id,
-           title = excluded.title,
-           prompt = excluded.prompt,
-           status = excluded.status,
-           interaction_id = excluded.interaction_id,
-           last_event_id = excluded.last_event_id,
-           inputs_json = excluded.inputs_json,
-           settings_json = excluded.settings_json,
-           outputs_markdown = excluded.outputs_markdown,
-           thought_summaries_json = excluded.thought_summaries_json,
-           sources_json = excluded.sources_json,
-           plan_pending = excluded.plan_pending,
-           updated_at = excluded.updated_at,
-           error = excluded.error`,
+        sql([
+          "INSERT INTO research (",
+          "           id,",
+          "           workspace_path,",
+          "           parent_research_id,",
+          "           title,",
+          "           prompt,",
+          "           status,",
+          "           interaction_id,",
+          "           last_event_id,",
+          "           inputs_json,",
+          "           settings_json,",
+          "           outputs_markdown,",
+          "           thought_summaries_json,",
+          "           sources_json,",
+          "           plan_pending,",
+          "           created_at,",
+          "           updated_at,",
+          "           error",
+          "         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          "         ON CONFLICT(id) DO UPDATE SET",
+          "           workspace_path = excluded.workspace_path,",
+          "           parent_research_id = excluded.parent_research_id,",
+          "           title = excluded.title,",
+          "           prompt = excluded.prompt,",
+          "           status = excluded.status,",
+          "           interaction_id = excluded.interaction_id,",
+          "           last_event_id = excluded.last_event_id,",
+          "           inputs_json = excluded.inputs_json,",
+          "           settings_json = excluded.settings_json,",
+          "           outputs_markdown = excluded.outputs_markdown,",
+          "           thought_summaries_json = excluded.thought_summaries_json,",
+          "           sources_json = excluded.sources_json,",
+          "           plan_pending = excluded.plan_pending,",
+          "           updated_at = excluded.updated_at,",
+          "           error = excluded.error",
+        ]),
       )
       .run(
         parsed.id,
@@ -870,125 +912,139 @@ export class SessionDbRepository {
 
   createBaseSchema(): void {
     this.db.exec(
-      `CREATE TABLE IF NOT EXISTS sessions (
-         session_id TEXT PRIMARY KEY,
-         session_kind TEXT NOT NULL DEFAULT 'root',
-         parent_session_id TEXT NULL,
-         role TEXT NULL,
-         agent_type TEXT NULL,
-         mode TEXT NULL,
-         depth INTEGER NULL,
-         nickname TEXT NULL,
-         task_type TEXT NULL,
-         target_paths_json TEXT NULL,
-         requested_model TEXT NULL,
-         effective_model TEXT NULL,
-         requested_reasoning_effort TEXT NULL,
-         effective_reasoning_effort TEXT NULL,
-         execution_state TEXT NULL,
-         last_message_preview TEXT NULL,
-         title TEXT NOT NULL,
-         title_source TEXT NOT NULL,
-         title_model TEXT NULL,
-         provider TEXT NOT NULL,
-         model TEXT NOT NULL,
-         working_directory TEXT NOT NULL,
-         output_directory TEXT NULL,
-         uploads_directory TEXT NULL,
-         enable_mcp INTEGER NOT NULL,
-         backups_enabled_override INTEGER NULL,
-         created_at TEXT NOT NULL,
-         updated_at TEXT NOT NULL,
-         status TEXT NOT NULL,
-         has_pending_ask INTEGER NOT NULL,
-         has_pending_approval INTEGER NOT NULL,
-         message_count INTEGER NOT NULL,
-         last_event_seq INTEGER NOT NULL
-       )`,
+      sql([
+        "CREATE TABLE IF NOT EXISTS sessions (",
+        "         session_id TEXT PRIMARY KEY,",
+        "         session_kind TEXT NOT NULL DEFAULT 'root',",
+        "         parent_session_id TEXT NULL,",
+        "         role TEXT NULL,",
+        "         agent_type TEXT NULL,",
+        "         mode TEXT NULL,",
+        "         depth INTEGER NULL,",
+        "         nickname TEXT NULL,",
+        "         task_type TEXT NULL,",
+        "         target_paths_json TEXT NULL,",
+        "         requested_model TEXT NULL,",
+        "         effective_model TEXT NULL,",
+        "         requested_reasoning_effort TEXT NULL,",
+        "         effective_reasoning_effort TEXT NULL,",
+        "         execution_state TEXT NULL,",
+        "         last_message_preview TEXT NULL,",
+        "         title TEXT NOT NULL,",
+        "         title_source TEXT NOT NULL,",
+        "         title_model TEXT NULL,",
+        "         provider TEXT NOT NULL,",
+        "         model TEXT NOT NULL,",
+        "         working_directory TEXT NOT NULL,",
+        "         output_directory TEXT NULL,",
+        "         uploads_directory TEXT NULL,",
+        "         enable_mcp INTEGER NOT NULL,",
+        "         backups_enabled_override INTEGER NULL,",
+        "         created_at TEXT NOT NULL,",
+        "         updated_at TEXT NOT NULL,",
+        "         status TEXT NOT NULL,",
+        "         has_pending_ask INTEGER NOT NULL,",
+        "         has_pending_approval INTEGER NOT NULL,",
+        "         message_count INTEGER NOT NULL,",
+        "         last_event_seq INTEGER NOT NULL",
+        "       )",
+      ]),
     );
 
     this.db.exec(
-      `CREATE TABLE IF NOT EXISTS session_state (
-             session_id TEXT PRIMARY KEY REFERENCES sessions(session_id) ON DELETE CASCADE,
-             system_prompt TEXT NOT NULL,
-             messages_json TEXT NOT NULL,
-             provider_state_json TEXT NULL,
-             provider_options_json TEXT NULL,
-             todos_json TEXT NOT NULL,
-             harness_context_json TEXT NULL,
-             cost_tracker_json TEXT NULL
-           )`,
+      sql([
+        "CREATE TABLE IF NOT EXISTS session_state (",
+        "             session_id TEXT PRIMARY KEY REFERENCES sessions(session_id) ON DELETE CASCADE,",
+        "             system_prompt TEXT NOT NULL,",
+        "             messages_json TEXT NOT NULL,",
+        "             provider_state_json TEXT NULL,",
+        "             provider_options_json TEXT NULL,",
+        "             todos_json TEXT NOT NULL,",
+        "             harness_context_json TEXT NULL,",
+        "             cost_tracker_json TEXT NULL",
+        "           )",
+      ]),
     );
 
     this.db.exec(
-      `CREATE TABLE IF NOT EXISTS session_events (
-         session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
-         seq INTEGER NOT NULL,
-         ts TEXT NOT NULL,
-         direction TEXT NOT NULL,
-         event_type TEXT NOT NULL,
-         payload_json TEXT NOT NULL,
-         PRIMARY KEY(session_id, seq)
-       )`,
+      sql([
+        "CREATE TABLE IF NOT EXISTS session_events (",
+        "         session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,",
+        "         seq INTEGER NOT NULL,",
+        "         ts TEXT NOT NULL,",
+        "         direction TEXT NOT NULL,",
+        "         event_type TEXT NOT NULL,",
+        "         payload_json TEXT NOT NULL,",
+        "         PRIMARY KEY(session_id, seq)",
+        "       )",
+      ]),
     );
 
     this.db.exec(
-      `CREATE TABLE IF NOT EXISTS session_model_stream_chunks (
-         session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
-         turn_id TEXT NOT NULL,
-         chunk_index INTEGER NOT NULL,
-         ts TEXT NOT NULL,
-         provider TEXT NOT NULL,
-         model TEXT NOT NULL,
-         raw_format TEXT NOT NULL,
-         normalizer_version INTEGER NOT NULL,
-         raw_event_json TEXT NOT NULL,
-         PRIMARY KEY(session_id, turn_id, chunk_index)
-       )`,
+      sql([
+        "CREATE TABLE IF NOT EXISTS session_model_stream_chunks (",
+        "         session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,",
+        "         turn_id TEXT NOT NULL,",
+        "         chunk_index INTEGER NOT NULL,",
+        "         ts TEXT NOT NULL,",
+        "         provider TEXT NOT NULL,",
+        "         model TEXT NOT NULL,",
+        "         raw_format TEXT NOT NULL,",
+        "         normalizer_version INTEGER NOT NULL,",
+        "         raw_event_json TEXT NOT NULL,",
+        "         PRIMARY KEY(session_id, turn_id, chunk_index)",
+        "       )",
+      ]),
     );
 
     this.db.exec(
-      `CREATE TABLE IF NOT EXISTS session_snapshots (
-         session_id TEXT PRIMARY KEY REFERENCES sessions(session_id) ON DELETE CASCADE,
-         updated_at TEXT NOT NULL,
-         snapshot_json TEXT NOT NULL
-       )`,
+      sql([
+        "CREATE TABLE IF NOT EXISTS session_snapshots (",
+        "         session_id TEXT PRIMARY KEY REFERENCES sessions(session_id) ON DELETE CASCADE,",
+        "         updated_at TEXT NOT NULL,",
+        "         snapshot_json TEXT NOT NULL",
+        "       )",
+      ]),
     );
 
     this.db.exec(
-      `CREATE TABLE IF NOT EXISTS thread_journal_events (
-         thread_id TEXT NOT NULL,
-         seq INTEGER NOT NULL,
-         ts TEXT NOT NULL,
-         event_type TEXT NOT NULL,
-         turn_id TEXT NULL,
-         item_id TEXT NULL,
-         request_id TEXT NULL,
-         payload_json TEXT NOT NULL,
-         PRIMARY KEY(thread_id, seq)
-       )`,
+      sql([
+        "CREATE TABLE IF NOT EXISTS thread_journal_events (",
+        "         thread_id TEXT NOT NULL,",
+        "         seq INTEGER NOT NULL,",
+        "         ts TEXT NOT NULL,",
+        "         event_type TEXT NOT NULL,",
+        "         turn_id TEXT NULL,",
+        "         item_id TEXT NULL,",
+        "         request_id TEXT NULL,",
+        "         payload_json TEXT NOT NULL,",
+        "         PRIMARY KEY(thread_id, seq)",
+        "       )",
+      ]),
     );
 
     this.db.exec(
-      `CREATE TABLE IF NOT EXISTS research (
-         id TEXT PRIMARY KEY,
-         workspace_path TEXT NULL,
-         parent_research_id TEXT NULL REFERENCES research(id) ON DELETE SET NULL,
-         title TEXT NOT NULL,
-         prompt TEXT NOT NULL,
-         status TEXT NOT NULL,
-         interaction_id TEXT NULL,
-         last_event_id TEXT NULL,
-         inputs_json TEXT NOT NULL,
-         settings_json TEXT NOT NULL,
-         outputs_markdown TEXT NOT NULL,
-         thought_summaries_json TEXT NOT NULL,
-         sources_json TEXT NOT NULL,
-         plan_pending INTEGER NOT NULL DEFAULT 0,
-         created_at TEXT NOT NULL,
-         updated_at TEXT NOT NULL,
-         error TEXT NULL
-       )`,
+      sql([
+        "CREATE TABLE IF NOT EXISTS research (",
+        "         id TEXT PRIMARY KEY,",
+        "         workspace_path TEXT NULL,",
+        "         parent_research_id TEXT NULL REFERENCES research(id) ON DELETE SET NULL,",
+        "         title TEXT NOT NULL,",
+        "         prompt TEXT NOT NULL,",
+        "         status TEXT NOT NULL,",
+        "         interaction_id TEXT NULL,",
+        "         last_event_id TEXT NULL,",
+        "         inputs_json TEXT NOT NULL,",
+        "         settings_json TEXT NOT NULL,",
+        "         outputs_markdown TEXT NOT NULL,",
+        "         thought_summaries_json TEXT NOT NULL,",
+        "         sources_json TEXT NOT NULL,",
+        "         plan_pending INTEGER NOT NULL DEFAULT 0,",
+        "         created_at TEXT NOT NULL,",
+        "         updated_at TEXT NOT NULL,",
+        "         error TEXT NULL",
+        "       )",
+      ]),
     );
 
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_updated_at ON sessions(updated_at DESC)");
@@ -1109,25 +1165,29 @@ export class SessionDbRepository {
     );
     this.db.exec("UPDATE sessions SET session_kind = 'agent' WHERE session_kind = 'subagent'");
     this.db.exec(
-      `UPDATE sessions
-       SET role = CASE
-         WHEN role IS NOT NULL AND role != '' THEN role
-         WHEN agent_type = 'general' THEN 'worker'
-         WHEN agent_type = 'explore' THEN 'explorer'
-         ELSE agent_type
-       END
-       WHERE role IS NULL OR role = ''`,
+      sql([
+        "UPDATE sessions",
+        "       SET role = CASE",
+        "         WHEN role IS NOT NULL AND role != '' THEN role",
+        "         WHEN agent_type = 'general' THEN 'worker'",
+        "         WHEN agent_type = 'explore' THEN 'explorer'",
+        "         ELSE agent_type",
+        "       END",
+        "       WHERE role IS NULL OR role = ''",
+      ]),
     );
     this.db.exec(
       "UPDATE sessions SET effective_model = model WHERE effective_model IS NULL OR effective_model = ''",
     );
     this.db.exec(
-      `UPDATE sessions
-       SET execution_state = CASE
-         WHEN execution_state IS NOT NULL AND execution_state != '' THEN execution_state
-         WHEN status = 'closed' THEN 'closed'
-         ELSE 'completed'
-       END`,
+      sql([
+        "UPDATE sessions",
+        "       SET execution_state = CASE",
+        "         WHEN execution_state IS NOT NULL AND execution_state != '' THEN execution_state",
+        "         WHEN status = 'closed' THEN 'closed'",
+        "         ELSE 'completed'",
+        "       END",
+      ]),
     );
     this.db.exec(
       "CREATE INDEX IF NOT EXISTS idx_sessions_parent_updated ON sessions(parent_session_id, updated_at DESC)",
@@ -1150,18 +1210,20 @@ export class SessionDbRepository {
 
   addModelStreamChunksTable(): void {
     this.db.exec(
-      `CREATE TABLE IF NOT EXISTS session_model_stream_chunks (
-         session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
-         turn_id TEXT NOT NULL,
-         chunk_index INTEGER NOT NULL,
-         ts TEXT NOT NULL,
-         provider TEXT NOT NULL,
-         model TEXT NOT NULL,
-         raw_format TEXT NOT NULL,
-         normalizer_version INTEGER NOT NULL,
-         raw_event_json TEXT NOT NULL,
-         PRIMARY KEY(session_id, turn_id, chunk_index)
-       )`,
+      sql([
+        "CREATE TABLE IF NOT EXISTS session_model_stream_chunks (",
+        "         session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,",
+        "         turn_id TEXT NOT NULL,",
+        "         chunk_index INTEGER NOT NULL,",
+        "         ts TEXT NOT NULL,",
+        "         provider TEXT NOT NULL,",
+        "         model TEXT NOT NULL,",
+        "         raw_format TEXT NOT NULL,",
+        "         normalizer_version INTEGER NOT NULL,",
+        "         raw_event_json TEXT NOT NULL,",
+        "         PRIMARY KEY(session_id, turn_id, chunk_index)",
+        "       )",
+      ]),
     );
     this.db.exec(
       "CREATE INDEX IF NOT EXISTS idx_session_model_stream_chunks_session_turn ON session_model_stream_chunks(session_id, turn_id, chunk_index)",
@@ -1170,27 +1232,31 @@ export class SessionDbRepository {
 
   addSessionSnapshotsTable(): void {
     this.db.exec(
-      `CREATE TABLE IF NOT EXISTS session_snapshots (
-         session_id TEXT PRIMARY KEY REFERENCES sessions(session_id) ON DELETE CASCADE,
-         updated_at TEXT NOT NULL,
-         snapshot_json TEXT NOT NULL
-       )`,
+      sql([
+        "CREATE TABLE IF NOT EXISTS session_snapshots (",
+        "         session_id TEXT PRIMARY KEY REFERENCES sessions(session_id) ON DELETE CASCADE,",
+        "         updated_at TEXT NOT NULL,",
+        "         snapshot_json TEXT NOT NULL",
+        "       )",
+      ]),
     );
   }
 
   addThreadJournalEventsTable(): void {
     this.db.exec(
-      `CREATE TABLE IF NOT EXISTS thread_journal_events (
-         thread_id TEXT NOT NULL,
-         seq INTEGER NOT NULL,
-         ts TEXT NOT NULL,
-         event_type TEXT NOT NULL,
-         turn_id TEXT NULL,
-         item_id TEXT NULL,
-         request_id TEXT NULL,
-         payload_json TEXT NOT NULL,
-         PRIMARY KEY(thread_id, seq)
-       )`,
+      sql([
+        "CREATE TABLE IF NOT EXISTS thread_journal_events (",
+        "         thread_id TEXT NOT NULL,",
+        "         seq INTEGER NOT NULL,",
+        "         ts TEXT NOT NULL,",
+        "         event_type TEXT NOT NULL,",
+        "         turn_id TEXT NULL,",
+        "         item_id TEXT NULL,",
+        "         request_id TEXT NULL,",
+        "         payload_json TEXT NOT NULL,",
+        "         PRIMARY KEY(thread_id, seq)",
+        "       )",
+      ]),
     );
     this.db.exec(
       "CREATE INDEX IF NOT EXISTS idx_thread_journal_events_thread_seq ON thread_journal_events(thread_id, seq)",
@@ -1199,25 +1265,27 @@ export class SessionDbRepository {
 
   addResearchTable(): void {
     this.db.exec(
-      `CREATE TABLE IF NOT EXISTS research (
-         id TEXT PRIMARY KEY,
-         workspace_path TEXT NULL,
-         parent_research_id TEXT NULL REFERENCES research(id) ON DELETE SET NULL,
-         title TEXT NOT NULL,
-         prompt TEXT NOT NULL,
-         status TEXT NOT NULL,
-         interaction_id TEXT NULL,
-         last_event_id TEXT NULL,
-         inputs_json TEXT NOT NULL,
-         settings_json TEXT NOT NULL,
-         outputs_markdown TEXT NOT NULL,
-         thought_summaries_json TEXT NOT NULL,
-         sources_json TEXT NOT NULL,
-         plan_pending INTEGER NOT NULL DEFAULT 0,
-         created_at TEXT NOT NULL,
-         updated_at TEXT NOT NULL,
-         error TEXT NULL
-       )`,
+      sql([
+        "CREATE TABLE IF NOT EXISTS research (",
+        "         id TEXT PRIMARY KEY,",
+        "         workspace_path TEXT NULL,",
+        "         parent_research_id TEXT NULL REFERENCES research(id) ON DELETE SET NULL,",
+        "         title TEXT NOT NULL,",
+        "         prompt TEXT NOT NULL,",
+        "         status TEXT NOT NULL,",
+        "         interaction_id TEXT NULL,",
+        "         last_event_id TEXT NULL,",
+        "         inputs_json TEXT NOT NULL,",
+        "         settings_json TEXT NOT NULL,",
+        "         outputs_markdown TEXT NOT NULL,",
+        "         thought_summaries_json TEXT NOT NULL,",
+        "         sources_json TEXT NOT NULL,",
+        "         plan_pending INTEGER NOT NULL DEFAULT 0,",
+        "         created_at TEXT NOT NULL,",
+        "         updated_at TEXT NOT NULL,",
+        "         error TEXT NULL",
+        "       )",
+      ]),
     );
     this.db.exec(
       "CREATE INDEX IF NOT EXISTS idx_research_status_updated ON research(status, updated_at DESC)",
@@ -1332,74 +1400,76 @@ export class SessionDbRepository {
 
       this.db
         .query(
-          `INSERT INTO sessions (
-             session_id,
-             session_kind,
-             parent_session_id,
-             role,
-             agent_type,
-             mode,
-             depth,
-             nickname,
-             task_type,
-             target_paths_json,
-             requested_model,
-             effective_model,
-             requested_reasoning_effort,
-             effective_reasoning_effort,
-             execution_state,
-             last_message_preview,
-             title,
-             title_source,
-             title_model,
-             provider,
-             model,
-             working_directory,
-             output_directory,
-             uploads_directory,
-             enable_mcp,
-             backups_enabled_override,
-             created_at,
-             updated_at,
-             status,
-             has_pending_ask,
-             has_pending_approval,
-             message_count,
-             last_event_seq
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(session_id) DO UPDATE SET
-             session_kind = excluded.session_kind,
-             parent_session_id = excluded.parent_session_id,
-             role = excluded.role,
-             agent_type = excluded.agent_type,
-             mode = excluded.mode,
-             depth = excluded.depth,
-             nickname = excluded.nickname,
-             task_type = excluded.task_type,
-             target_paths_json = excluded.target_paths_json,
-             requested_model = excluded.requested_model,
-             effective_model = excluded.effective_model,
-             requested_reasoning_effort = excluded.requested_reasoning_effort,
-             effective_reasoning_effort = excluded.effective_reasoning_effort,
-             execution_state = excluded.execution_state,
-             last_message_preview = excluded.last_message_preview,
-             title = excluded.title,
-             title_source = excluded.title_source,
-             title_model = excluded.title_model,
-             provider = excluded.provider,
-             model = excluded.model,
-             working_directory = excluded.working_directory,
-             output_directory = excluded.output_directory,
-             uploads_directory = excluded.uploads_directory,
-             enable_mcp = excluded.enable_mcp,
-             backups_enabled_override = excluded.backups_enabled_override,
-             created_at = excluded.created_at,
-             updated_at = excluded.updated_at,
-             message_count = excluded.message_count,
-             last_event_seq = CASE
-               WHEN sessions.last_event_seq > excluded.last_event_seq THEN sessions.last_event_seq
-               ELSE excluded.last_event_seq
-             END`,
+          sql([
+            "INSERT INTO sessions (",
+            "             session_id,",
+            "             session_kind,",
+            "             parent_session_id,",
+            "             role,",
+            "             agent_type,",
+            "             mode,",
+            "             depth,",
+            "             nickname,",
+            "             task_type,",
+            "             target_paths_json,",
+            "             requested_model,",
+            "             effective_model,",
+            "             requested_reasoning_effort,",
+            "             effective_reasoning_effort,",
+            "             execution_state,",
+            "             last_message_preview,",
+            "             title,",
+            "             title_source,",
+            "             title_model,",
+            "             provider,",
+            "             model,",
+            "             working_directory,",
+            "             output_directory,",
+            "             uploads_directory,",
+            "             enable_mcp,",
+            "             backups_enabled_override,",
+            "             created_at,",
+            "             updated_at,",
+            "             status,",
+            "             has_pending_ask,",
+            "             has_pending_approval,",
+            "             message_count,",
+            "             last_event_seq",
+            "           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "           ON CONFLICT(session_id) DO UPDATE SET",
+            "             session_kind = excluded.session_kind,",
+            "             parent_session_id = excluded.parent_session_id,",
+            "             role = excluded.role,",
+            "             agent_type = excluded.agent_type,",
+            "             mode = excluded.mode,",
+            "             depth = excluded.depth,",
+            "             nickname = excluded.nickname,",
+            "             task_type = excluded.task_type,",
+            "             target_paths_json = excluded.target_paths_json,",
+            "             requested_model = excluded.requested_model,",
+            "             effective_model = excluded.effective_model,",
+            "             requested_reasoning_effort = excluded.requested_reasoning_effort,",
+            "             effective_reasoning_effort = excluded.effective_reasoning_effort,",
+            "             execution_state = excluded.execution_state,",
+            "             last_message_preview = excluded.last_message_preview,",
+            "             title = excluded.title,",
+            "             title_source = excluded.title_source,",
+            "             title_model = excluded.title_model,",
+            "             provider = excluded.provider,",
+            "             model = excluded.model,",
+            "             working_directory = excluded.working_directory,",
+            "             output_directory = excluded.output_directory,",
+            "             uploads_directory = excluded.uploads_directory,",
+            "             enable_mcp = excluded.enable_mcp,",
+            "             backups_enabled_override = excluded.backups_enabled_override,",
+            "             created_at = excluded.created_at,",
+            "             updated_at = excluded.updated_at,",
+            "             message_count = excluded.message_count,",
+            "             last_event_seq = CASE",
+            "               WHEN sessions.last_event_seq > excluded.last_event_seq THEN sessions.last_event_seq",
+            "               ELSE excluded.last_event_seq",
+            "             END",
+          ]),
         )
         .run(
           legacy.sessionId,
@@ -1439,24 +1509,26 @@ export class SessionDbRepository {
 
       this.db
         .query(
-          `INSERT INTO session_state (
-             session_id,
-             system_prompt,
-             messages_json,
-             provider_state_json,
-             provider_options_json,
-             todos_json,
-             harness_context_json,
-             cost_tracker_json
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(session_id) DO UPDATE SET
-             system_prompt = excluded.system_prompt,
-             messages_json = excluded.messages_json,
-             provider_state_json = excluded.provider_state_json,
-             provider_options_json = excluded.provider_options_json,
-             todos_json = excluded.todos_json,
-             harness_context_json = excluded.harness_context_json,
-             cost_tracker_json = excluded.cost_tracker_json`,
+          sql([
+            "INSERT INTO session_state (",
+            "             session_id,",
+            "             system_prompt,",
+            "             messages_json,",
+            "             provider_state_json,",
+            "             provider_options_json,",
+            "             todos_json,",
+            "             harness_context_json,",
+            "             cost_tracker_json",
+            "           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "           ON CONFLICT(session_id) DO UPDATE SET",
+            "             system_prompt = excluded.system_prompt,",
+            "             messages_json = excluded.messages_json,",
+            "             provider_state_json = excluded.provider_state_json,",
+            "             provider_options_json = excluded.provider_options_json,",
+            "             todos_json = excluded.todos_json,",
+            "             harness_context_json = excluded.harness_context_json,",
+            "             cost_tracker_json = excluded.cost_tracker_json",
+          ]),
         )
         .run(
           legacy.sessionId,
@@ -1471,14 +1543,16 @@ export class SessionDbRepository {
 
       this.db
         .query(
-          `INSERT OR IGNORE INTO session_events (
-             session_id,
-             seq,
-             ts,
-             direction,
-             event_type,
-             payload_json
-           ) VALUES (?, ?, ?, ?, ?, ?)`,
+          sql([
+            "INSERT OR IGNORE INTO session_events (",
+            "             session_id,",
+            "             seq,",
+            "             ts,",
+            "             direction,",
+            "             event_type,",
+            "             payload_json",
+            "           ) VALUES (?, ?, ?, ?, ?, ?)",
+          ]),
         )
         .run(
           legacy.sessionId,

@@ -292,13 +292,15 @@ async function resolveSystemCommand(
 ): Promise<CodexAppServerCommand | null> {
   const spawnForResult = overrides.spawnForResult ?? defaultSpawnForResult;
   for (const command of await resolveSystemCodexCandidates(overrides)) {
-    const result = await spawnForResult(command, ["--version"]);
-    if (!result.ok) continue;
+    const versionResult = await spawnForResult(command, ["--version"]);
+    if (!versionResult.ok) continue;
+    const appServerResult = await spawnForResult(command, ["app-server", "--help"]);
+    if (!appServerResult.ok) continue;
     return {
       command,
       args: [...DEFAULT_CODEX_ARGS],
       source: "system",
-      version: parseCodexVersion(`${result.stdout}\n${result.stderr}`),
+      version: parseCodexVersion(`${versionResult.stdout}\n${versionResult.stderr}`),
     };
   }
   return null;
@@ -512,11 +514,15 @@ export async function resolveCodexAppServerCommand(
 ): Promise<CodexAppServerCommand> {
   const override = await resolveOverrideCommand(overrides);
   if (override) return override;
-  const system = await resolveSystemCommand(overrides);
-  if (system) return system;
   const managed = await resolveManagedCommand(overrides);
   if (managed) return managed;
-  return await installCodexAppServer({}, overrides);
+  try {
+    return await installCodexAppServer({}, overrides);
+  } catch (error) {
+    const system = await resolveSystemCommand(overrides);
+    if (system) return system;
+    throw error;
+  }
 }
 
 export async function getCodexAppServerInstallStatus(
@@ -526,8 +532,8 @@ export async function getCodexAppServerInstallStatus(
   const latest = opts.checkLatest ? await fetchCodexRelease({}, overrides).catch(() => null) : null;
   const command =
     (await resolveOverrideCommand(overrides)) ??
-    (await resolveSystemCommand(overrides)) ??
-    (await resolveManagedCommand(overrides));
+    (await resolveManagedCommand(overrides)) ??
+    (await resolveSystemCommand(overrides));
   if (!command) {
     return {
       available: false,

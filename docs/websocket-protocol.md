@@ -513,7 +513,7 @@ Changes in `7.32`:
 - Added JSON-RPC controls for the runtime-managed Codex app-server payload:
   - `cowork/provider/codexAppServer/status` returns `{ status }` with source, version, latest version, and update availability.
   - `cowork/provider/codexAppServer/update` downloads/promotes the latest Cowork-managed Codex app-server under `~/.cowork/codex-app-server`.
-- Desktop/runtime Codex app-server resolution now prefers explicit overrides, then a system `codex app-server`, then a Cowork-managed install, and downloads a managed latest release only when missing.
+- Desktop/runtime Codex app-server resolution now prefers explicit overrides, then a system `codex app-server` that exposes the app-server subcommand, then a Cowork-managed install, and downloads a managed latest release only when missing.
 
 Changes in `7.31`:
 

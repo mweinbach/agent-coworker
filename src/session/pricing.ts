@@ -87,6 +87,12 @@ const BASE_PRICING_TABLE: Record<string, ModelPricing> = {
     cachedInputPerMillion: 0.5,
     cacheWriteInputPerMillion: 6.25,
   },
+  "anthropic:claude-opus-4-8": {
+    inputPerMillion: 5,
+    outputPerMillion: 25,
+    cachedInputPerMillion: 0.5,
+    cacheWriteInputPerMillion: 6.25,
+  },
   "anthropic:claude-sonnet-4-6": {
     inputPerMillion: 3,
     outputPerMillion: 15,

@@ -6,19 +6,19 @@ import { defaultModelForProvider, getModel, loadConfig } from "../../src/config"
 import { DEFAULT_PROVIDER_OPTIONS, makeConfig, makeTmpDirs, repoRoot, writeJson } from "./helpers";
 
 // ---------------------------------------------------------------------------
-// Anthropic provider - claude-opus-4-6
+// Anthropic provider - claude-opus-4-8
 // ---------------------------------------------------------------------------
-describe("Anthropic provider (claude-opus-4-6)", () => {
-  test("defaultModelForProvider returns claude-opus-4-6", () => {
-    expect(defaultModelForProvider("anthropic")).toBe("claude-opus-4-6");
+describe("Anthropic provider (claude-opus-4-8)", () => {
+  test("defaultModelForProvider returns claude-opus-4-8", () => {
+    expect(defaultModelForProvider("anthropic")).toBe("claude-opus-4-8");
   });
 
-  test("getModel creates anthropic model with default claude-opus-4-6", () => {
-    const cfg = makeConfig({ provider: "anthropic", model: "claude-opus-4-6" });
+  test("getModel creates anthropic model with default claude-opus-4-8", () => {
+    const cfg = makeConfig({ provider: "anthropic", model: "claude-opus-4-8" });
     const model = getModel(cfg);
 
     expect(model).toBeDefined();
-    expect(model.modelId).toBe("claude-opus-4-6");
+    expect(model.modelId).toBe("claude-opus-4-8");
     expect(model.provider).toBe("anthropic.messages");
     expect(model.specificationVersion).toBe("v3");
   });
@@ -63,45 +63,48 @@ describe("Anthropic provider (claude-opus-4-6)", () => {
     expect(model.provider).toBe("anthropic.messages");
   });
 
+  test("getModel with claude-opus-4-8 model ID", () => {
+    const cfg = makeConfig({ provider: "anthropic", model: "claude-opus-4-8" });
+    const model = getModel(cfg);
+
+    expect(model.modelId).toBe("claude-opus-4-8");
+    expect(model.provider).toBe("anthropic.messages");
+  });
+
   test("getModel exposes stable adapter shape", async () => {
-    const cfg = makeConfig({ provider: "anthropic", model: "claude-opus-4-6" });
+    const cfg = makeConfig({ provider: "anthropic", model: "claude-opus-4-8" });
     const viaGetModel = getModel(cfg) as any;
     const headers = await viaGetModel.config.headers();
 
-    expect(viaGetModel.modelId).toBe("claude-opus-4-6");
+    expect(viaGetModel.modelId).toBe("claude-opus-4-8");
     expect(viaGetModel.provider).toBe("anthropic.messages");
     expect(viaGetModel.specificationVersion).toBe("v3");
     expect(typeof headers).toBe("object");
   });
 
-  test("anthropic provider options have thinking config with budget", () => {
+  test("anthropic provider options use adaptive thinking with high effort", () => {
     const opts = DEFAULT_PROVIDER_OPTIONS.anthropic;
 
     expect(opts).toBeDefined();
     expect(opts.thinking).toBeDefined();
-    expect(opts.thinking.type).toBe("enabled");
-    expect(opts.thinking.budgetTokens).toBe(32_000);
-  });
-
-  test("anthropic thinking budget is a positive integer", () => {
-    const budget = DEFAULT_PROVIDER_OPTIONS.anthropic.thinking.budgetTokens;
-    expect(budget).toBeGreaterThan(0);
-    expect(Number.isInteger(budget)).toBe(true);
+    expect(opts.thinking.type).toBe("adaptive");
+    expect(opts.thinking.budgetTokens).toBeUndefined();
+    expect(opts.effort).toBe("high");
   });
 
   test("providerOptions flow through config to agent calls", () => {
     const cfg = makeConfig({
       provider: "anthropic",
-      model: "claude-opus-4-6",
+      model: "claude-opus-4-8",
       providerOptions: DEFAULT_PROVIDER_OPTIONS,
     });
 
     expect(cfg.providerOptions).toBeDefined();
-    expect(cfg.providerOptions!.anthropic.thinking.type).toBe("enabled");
-    expect(cfg.providerOptions!.anthropic.thinking.budgetTokens).toBe(32_000);
+    expect(cfg.providerOptions!.anthropic.thinking.type).toBe("adaptive");
+    expect(cfg.providerOptions!.anthropic.effort).toBe("high");
   });
 
-  test("loadConfig with anthropic provider returns claude-opus-4-6 model", async () => {
+  test("loadConfig with anthropic provider returns claude-opus-4-8 model", async () => {
     const { cwd, home } = await makeTmpDirs();
 
     const cfg = await loadConfig({
@@ -112,7 +115,7 @@ describe("Anthropic provider (claude-opus-4-6)", () => {
     });
 
     expect(cfg.provider).toBe("anthropic");
-    expect(cfg.model).toBe("claude-opus-4-6");
+    expect(cfg.model).toBe("claude-opus-4-8");
   });
 
   test("loadConfig with anthropic provider and supported non-default model", async () => {

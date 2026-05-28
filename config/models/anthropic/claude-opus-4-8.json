@@ -1,0 +1,16 @@
+{
+  "id": "claude-opus-4-8",
+  "provider": "anthropic",
+  "displayName": "Claude Opus 4.8",
+  "knowledgeCutoff": "January 2026",
+  "supportsImageInput": true,
+  "promptTemplate": "system-models/claude-opus-4-8.json",
+  "providerOptionsDefaults": {
+    "thinking": {
+      "type": "adaptive"
+    },
+    "effort": "high",
+    "disableParallelToolUse": true
+  },
+  "isDefault": true
+}

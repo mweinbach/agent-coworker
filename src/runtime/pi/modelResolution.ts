@@ -179,6 +179,25 @@ function getBedrockPiModel(modelId: string): PiModel {
   };
 }
 
+function getAnthropicPiModel(modelId: string): PiModel | null {
+  if (modelId === "claude-opus-4-8") {
+    const opus47 = pickKnownPiModel("anthropic", "claude-opus-4-7");
+    if (!opus47) return null;
+    return {
+      ...opus47,
+      id: "claude-opus-4-8",
+      name: "Claude Opus 4.8",
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    };
+  }
+
+  const model = pickKnownPiModel("anthropic", modelId);
+  if (model) return model;
+
+  return null;
+}
+
 function getTogetherPiModel(modelId: string): PiModel | null {
   const modelSpec = getTogetherModelSpec(modelId);
   if (!modelSpec) return null;
@@ -269,7 +288,7 @@ export async function resolvePiModel(
   }
 
   if (provider === "anthropic") {
-    const model = pickKnownPiModel("anthropic", modelId);
+    const model = getAnthropicPiModel(modelId);
     if (!model)
       throw new Error(`No PI model metadata available for provider anthropic (model: ${modelId}).`);
     return {

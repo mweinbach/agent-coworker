@@ -128,7 +128,9 @@ export function buildPiStreamOptions(
 
   if (params.config.provider === "anthropic") {
     const thinking = asRecord(providerSection.thinking);
-    if (thinking?.type === "enabled") {
+    if (thinking?.type === "adaptive") {
+      options.thinkingEnabled = true;
+    } else if (thinking?.type === "enabled") {
       options.thinkingEnabled = true;
       const budget = asFiniteNumber(thinking.budgetTokens);
       if (budget !== undefined) options.thinkingBudgetTokens = budget;

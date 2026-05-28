@@ -48,8 +48,9 @@ describe("Provider options structure", () => {
     // Google: thinkingConfig.includeThoughts is true
     expect(DEFAULT_PROVIDER_OPTIONS.google.thinkingConfig.includeThoughts).toBe(true);
 
-    // Anthropic: thinking.type is "enabled"
-    expect(DEFAULT_PROVIDER_OPTIONS.anthropic.thinking.type).toBe("enabled");
+    // Anthropic: Claude Opus 4.8 uses adaptive thinking with effort.
+    expect(DEFAULT_PROVIDER_OPTIONS.anthropic.thinking.type).toBe("adaptive");
+    expect(DEFAULT_PROVIDER_OPTIONS.anthropic.effort).toBe("high");
   });
 });
 
@@ -142,7 +143,7 @@ describe("Agent providerOptions pass-through", () => {
   test("full DEFAULT_PROVIDER_OPTIONS are forwarded to streamText", async () => {
     const config = makeConfig({
       provider: "anthropic",
-      model: "claude-opus-4-6",
+      model: "claude-opus-4-8",
       providerOptions: DEFAULT_PROVIDER_OPTIONS,
     });
 
@@ -153,6 +154,7 @@ describe("Agent providerOptions pass-through", () => {
     expect(callArg.providerOptions).toBe(DEFAULT_PROVIDER_OPTIONS);
     expect(callArg.providerOptions.openai.reasoningEffort).toBe("high");
     expect(callArg.providerOptions.google.thinkingConfig.includeThoughts).toBe(true);
-    expect(callArg.providerOptions.anthropic.thinking.type).toBe("enabled");
+    expect(callArg.providerOptions.anthropic.thinking.type).toBe("adaptive");
+    expect(callArg.providerOptions.anthropic.effort).toBe("high");
   });
 });

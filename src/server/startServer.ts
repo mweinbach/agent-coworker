@@ -1,11 +1,18 @@
 import { createAgentServerRuntime, type StartAgentServerOptions } from "./runtime/ServerRuntime";
 import type { StartServerSocketData } from "./startServer/types";
-import { startH3MobileServer } from "./transport/h3/server";
+import type { startH3MobileServer as startH3MobileServerType } from "./transport/h3/server";
 import { handleWebDesktopRoute } from "./webDesktopRoutes";
 import { WebDesktopService } from "./webDesktopService";
 import { resolveWsProtocol, splitWebSocketSubprotocolHeader } from "./wsProtocol/negotiation";
 
 export type { StartAgentServerOptions } from "./runtime/ServerRuntime";
+
+type H3MobileServer = Awaited<ReturnType<typeof startH3MobileServerType>>;
+
+async function loadH3MobileServerStarter(): Promise<typeof startH3MobileServerType> {
+  const { startH3MobileServer } = await import("./transport/h3/server");
+  return startH3MobileServer;
+}
 
 function isLoopbackHostname(hostname: string): boolean {
   const normalized = hostname.trim().toLowerCase();
@@ -60,7 +67,7 @@ function parseBearerToken(header: string | null): string | null {
 
 export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
   server: ReturnType<typeof Bun.serve>;
-  mobileServer?: Awaited<ReturnType<typeof startH3MobileServer>>;
+  mobileServer?: H3MobileServer;
   config: ReturnType<typeof createAgentServerRuntime> extends Promise<infer Runtime>
     ? Runtime extends { config: infer Config }
       ? Config
@@ -89,7 +96,7 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
   const browserAccessToken =
     runtime.env.COWORK_BROWSER_ACCESS_TOKEN?.trim() ||
     (webDesktopService || networkExposedListener ? createBrowserAccessToken() : "");
-  let mobileServer: Awaited<ReturnType<typeof startH3MobileServer>> | undefined;
+  let mobileServer: H3MobileServer | undefined;
 
   const createServer = (port: number): ReturnType<typeof Bun.serve> =>
     Bun.serve<StartServerSocketData>({
@@ -288,18 +295,18 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
 
   const server = serveWithPortFallback(requestedPort);
   try {
-    mobileServer =
-      opts.mobileH3 || runtime.env.COWORK_H3_MOBILE_PAIRING === "1"
-        ? await startH3MobileServer({
-            runtime,
-            hostname: opts.mobileH3?.hostname ?? "0.0.0.0",
-            port: opts.mobileH3?.port,
-            hostHints: opts.mobileH3?.hostHints,
-            storeRootPath: opts.homedir,
-            enableH3: runtime.env.COWORK_H3_MOBILE_DISABLE_H3 !== "1",
-            rotateTls: runtime.env.COWORK_H3_ROTATE_TLS === "1",
-          })
-        : undefined;
+    if (opts.mobileH3 || runtime.env.COWORK_H3_MOBILE_PAIRING === "1") {
+      const startH3MobileServer = await loadH3MobileServerStarter();
+      mobileServer = await startH3MobileServer({
+        runtime,
+        hostname: opts.mobileH3?.hostname ?? "0.0.0.0",
+        port: opts.mobileH3?.port,
+        hostHints: opts.mobileH3?.hostHints,
+        storeRootPath: opts.homedir,
+        enableH3: runtime.env.COWORK_H3_MOBILE_DISABLE_H3 !== "1",
+        rotateTls: runtime.env.COWORK_H3_ROTATE_TLS === "1",
+      });
+    }
   } catch (error) {
     await runtime.stop().catch(() => {
       // ignore cleanup errors during failed startup

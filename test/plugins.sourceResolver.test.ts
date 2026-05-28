@@ -3,11 +3,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { buildPluginInstallPreview } from "../src/plugins/sourceResolver";
+import {
+  buildPluginInstallPreview,
+  MULTIPLE_VALID_PLUGIN_BUNDLES_MESSAGE,
+} from "../src/plugins/sourceResolver";
 import type { PluginCatalogSnapshot } from "../src/types";
 
 const emptyCatalog: PluginCatalogSnapshot = {
   plugins: [],
+  availablePlugins: [],
   warnings: [],
 };
 
@@ -204,13 +208,15 @@ describe("plugin GitHub source materialization", () => {
   test.each([
     "https://github.com/owner/repo/blob/main/.codex-plugin/plugin.json",
     "https://raw.githubusercontent.com/owner/repo/main/.codex-plugin/plugin.json",
+    "https://github.com/owner/repo/blob/main/.cowork-plugin/plugin.json",
+    "https://raw.githubusercontent.com/owner/repo/main/.cowork-plugin/plugin.json",
   ])("steps %s back to the plugin bundle root", async (input) => {
     const repo = "owner/repo";
     const { fetchImpl, requests } = createGitHubPluginFetch({
       repo,
       defaultBranch: "main",
       files: {
-        ".codex-plugin/plugin.json": pluginManifest(),
+        ".cowork-plugin/plugin.json": pluginManifest(),
         "skills/example/SKILL.md": skillDoc("example", "Example skill."),
       },
     });
@@ -229,19 +235,22 @@ describe("plugin GitHub source materialization", () => {
     expect(requests).toContain(buildContentsUrl(repo, "main", ""));
   });
 
-  test("steps GitHub tree URLs that target .codex-plugin back to the plugin bundle root", async () => {
+  test.each([
+    ".codex-plugin",
+    ".cowork-plugin",
+  ])("steps GitHub tree URLs that target %s back to the plugin bundle root", async (manifestDir) => {
     const repo = "owner/repo";
     const { fetchImpl, requests } = createGitHubPluginFetch({
       repo,
       defaultBranch: "main",
       files: {
-        "packages/demo-plugin/.codex-plugin/plugin.json": pluginManifest("demo-plugin"),
+        [`packages/demo-plugin/${manifestDir}/plugin.json`]: pluginManifest("demo-plugin"),
         "packages/demo-plugin/skills/example/SKILL.md": skillDoc("example", "Example skill."),
       },
     });
 
     const preview = await buildPluginInstallPreview({
-      input: "https://github.com/owner/repo/tree/main/packages/demo-plugin/.codex-plugin",
+      input: `https://github.com/owner/repo/tree/main/packages/demo-plugin/${manifestDir}`,
       targetScope: "workspace",
       catalog: emptyCatalog,
       fetchImpl,
@@ -329,15 +338,18 @@ describe("plugin GitHub source materialization", () => {
 });
 
 describe("plugin local source materialization", () => {
-  test("steps local .codex-plugin/plugin.json inputs back to the plugin bundle root", async () => {
+  test.each([
+    ".codex-plugin",
+    ".cowork-plugin",
+  ])("steps local %s/plugin.json inputs back to the plugin bundle root", async (manifestDir) => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-local-manifest-source-"));
 
     try {
       const pluginRoot = path.join(workspace, "demo-plugin");
-      await fs.mkdir(path.join(pluginRoot, ".codex-plugin"), { recursive: true });
+      await fs.mkdir(path.join(pluginRoot, manifestDir), { recursive: true });
       await fs.mkdir(path.join(pluginRoot, "skills", "example"), { recursive: true });
       await fs.writeFile(
-        path.join(pluginRoot, ".codex-plugin", "plugin.json"),
+        path.join(pluginRoot, manifestDir, "plugin.json"),
         pluginManifest(),
         "utf-8",
       );
@@ -348,7 +360,7 @@ describe("plugin local source materialization", () => {
       );
 
       const preview = await buildPluginInstallPreview({
-        input: path.join(pluginRoot, ".codex-plugin", "plugin.json"),
+        input: path.join(pluginRoot, manifestDir, "plugin.json"),
         targetScope: "workspace",
         catalog: emptyCatalog,
         cwd: workspace,
@@ -404,7 +416,7 @@ describe("plugin local source materialization", () => {
         cwd: workspace,
       });
 
-      expect(preview.warnings).toEqual([]);
+      expect(preview.warnings).toEqual([MULTIPLE_VALID_PLUGIN_BUNDLES_MESSAGE]);
       expect(preview.candidates.map((candidate) => candidate.pluginId)).toEqual([
         "outer-plugin",
         "inner-plugin",

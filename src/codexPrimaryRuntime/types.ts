@@ -56,6 +56,8 @@ export type EnsureCodexPrimaryRuntimeOptions = {
   workspaceDir?: string;
   builtInSkillsDir?: string;
   globalSkillsDir?: string;
+  globalPluginsDir?: string;
+  skipGlobalWorkspaceToolsPlugin?: boolean;
   env?: Record<string, string | undefined>;
   bundledRuntimeDir?: string;
   fetchImpl?: FetchLike;

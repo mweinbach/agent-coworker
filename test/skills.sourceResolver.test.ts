@@ -69,24 +69,24 @@ function createGitHubSkillFetch(expectedApiUrl: string) {
 
 describe("resolveSkillSource", () => {
   test("parses skills.sh URLs", () => {
-    const resolved = resolveSkillSource("https://skills.sh/openai/skills/imagegen");
+    const resolved = resolveSkillSource("https://skills.sh/example/skills/imagegen");
     expect(resolved.kind).toBe("skills.sh");
-    expect(resolved.repo).toBe("openai/skills");
+    expect(resolved.repo).toBe("example/skills");
     expect(resolved.requestedSkillName).toBe("imagegen");
   });
 
   test("parses GitHub shorthand and blob URLs", async () => {
     const cwd = await makeTmpDir();
     try {
-      const shorthand = resolveSkillSource("openai/skills", cwd);
+      const shorthand = resolveSkillSource("example/skills", cwd);
       expect(shorthand.kind).toBe("github_shorthand");
-      expect(shorthand.repo).toBe("openai/skills");
+      expect(shorthand.repo).toBe("example/skills");
 
       const blob = resolveSkillSource(
-        "https://github.com/openai/skills/blob/main/skills/commit/SKILL.md",
+        "https://github.com/example/skills/blob/main/skills/commit/SKILL.md",
       );
       expect(blob.kind).toBe("github_blob");
-      expect(blob.repo).toBe("openai/skills");
+      expect(blob.repo).toBe("example/skills");
       expect(blob.ref).toBe("main");
       expect(blob.subdir).toBe("skills/commit");
     } finally {
@@ -151,11 +151,11 @@ describe("local source materialization and preview", () => {
 describe("GitHub source materialization", () => {
   test("materializes tree URLs with slash-containing refs", async () => {
     const expectedApiUrl =
-      "https://api.github.com/repos/openai/skills/contents/skills/commit?ref=feature%2Fbranch";
+      "https://api.github.com/repos/example/skills/contents/skills/commit?ref=feature%2Fbranch";
     const { fetchImpl, requests } = createGitHubSkillFetch(expectedApiUrl);
 
     const preview = await buildSkillInstallPreview({
-      input: "https://github.com/openai/skills/tree/feature/branch/skills/commit",
+      input: "https://github.com/example/skills/tree/feature/branch/skills/commit",
       targetScope: "project",
       catalog: emptyCatalog,
       fetchImpl,
@@ -170,11 +170,11 @@ describe("GitHub source materialization", () => {
 
   test("materializes blob URLs with slash-containing refs", async () => {
     const expectedApiUrl =
-      "https://api.github.com/repos/openai/skills/contents/skills/commit?ref=feature%2Fbranch";
+      "https://api.github.com/repos/example/skills/contents/skills/commit?ref=feature%2Fbranch";
     const { fetchImpl, requests } = createGitHubSkillFetch(expectedApiUrl);
 
     const preview = await buildSkillInstallPreview({
-      input: "https://github.com/openai/skills/blob/feature/branch/skills/commit/SKILL.md",
+      input: "https://github.com/example/skills/blob/feature/branch/skills/commit/SKILL.md",
       targetScope: "project",
       catalog: emptyCatalog,
       fetchImpl,

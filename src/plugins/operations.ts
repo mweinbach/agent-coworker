@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { FetchLike } from "../extensions/source";
 import { renameMCPServerCredentials } from "../mcp/authStore";
 import type {
   AgentConfig,
+  InstalledPluginCatalogEntry,
   MCPServerConfig,
   PluginCatalogSnapshot,
   PluginInstallPreview,
@@ -11,14 +13,26 @@ import type {
 } from "../types";
 import { workspacePathOverlaps } from "../utils/workspacePath";
 import { buildPluginCatalogSnapshot } from "./catalog";
-import { readPluginManifest } from "./manifest";
+import {
+  clearPluginInstallMetadata,
+  readPluginInstallMetadata,
+  readPluginManifest,
+  writePluginInstallMetadata,
+} from "./manifest";
 import { readPluginMcpServers } from "./mcp";
+import { clearPluginEnabledOverride, setDefaultPluginRemoved } from "./overrides";
+import {
+  BUILT_IN_MARKETPLACE_REPO,
+  canonicalDefaultMarketplacePluginIdForTombstone,
+  fetchMarketplaceInstallMetadataBySourceInput,
+  isBuiltInMarketplaceSourceInput,
+  type PluginMarketplaceInstallMetadata,
+} from "./remoteMarketplace";
 import {
   buildPluginInstallPreview,
-  type MaterializedPluginCandidate,
   type MaterializedPluginSource,
   materializePluginSource,
-  resolvePluginSource,
+  selectSingleValidPluginCandidate,
 } from "./sourceResolver";
 
 type WritablePluginScopePaths = {
@@ -139,11 +153,11 @@ async function stagePluginInstallCopy(
   };
 }
 
-async function replaceInstalledPlugin(opts: {
+export async function replacePluginInstallRoot(opts: {
   sourceRoot: string;
   destinationRoot: string;
   conflictingRoots: string[];
-  onInstalled: () => Promise<void>;
+  onInstalled?: () => Promise<void>;
 }): Promise<void> {
   const stagedInstall = await stagePluginInstallCopy(opts.sourceRoot, opts.destinationRoot);
   let backupRoot: string | null = null;
@@ -158,7 +172,7 @@ async function replaceInstalledPlugin(opts: {
     await fs.rename(stagedInstall.stagedRoot, opts.destinationRoot);
     destinationActivated = true;
 
-    await opts.onInstalled();
+    await opts.onInstalled?.();
     await removeConflictingTargets(
       opts.conflictingRoots.filter((targetRoot) => targetRoot !== opts.destinationRoot),
     );
@@ -182,18 +196,6 @@ async function replaceInstalledPlugin(opts: {
 
 async function refreshCatalog(config: AgentConfig): Promise<PluginCatalogSnapshot> {
   return await buildPluginCatalogSnapshot(config);
-}
-
-function validateInstallCandidates(validCandidates: MaterializedPluginCandidate[]): void {
-  const seenIds = new Set<string>();
-  for (const candidate of validCandidates) {
-    if (seenIds.has(candidate.pluginId)) {
-      throw new Error(
-        `The install source contains more than one valid plugin named "${candidate.pluginId}". Split the source or remove duplicates so each plugin id is unique.`,
-      );
-    }
-    seenIds.add(candidate.pluginId);
-  }
 }
 
 async function readBundledPluginMcpServers(pluginRoot: string): Promise<MCPServerConfig[]> {
@@ -287,16 +289,37 @@ async function migrateBundledPluginMcpCredentials(opts: {
   }
 }
 
+async function resolveRemoteMarketplaceMetadataByPluginId(opts: {
+  input: string;
+  materialized: MaterializedPluginSource;
+  fetchImpl?: FetchLike;
+}): Promise<Map<string, PluginMarketplaceInstallMetadata>> {
+  if (opts.materialized.descriptor.repo !== BUILT_IN_MARKETPLACE_REPO) {
+    return new Map();
+  }
+
+  try {
+    return await fetchMarketplaceInstallMetadataBySourceInput({
+      input: opts.input,
+      fetchImpl: opts.fetchImpl,
+    });
+  } catch {
+    return new Map();
+  }
+}
+
 export async function previewPluginInstall(opts: {
   config: AgentConfig;
   input: string;
   targetScope: PluginInstallTargetScope;
+  fetchImpl?: FetchLike;
 }): Promise<PluginInstallPreview> {
   return await buildPluginInstallPreview({
     input: opts.input,
     targetScope: opts.targetScope,
-    catalog: await refreshCatalog(opts.config),
+    catalog: await buildPluginCatalogSnapshot(opts.config, { fetchImpl: opts.fetchImpl }),
     cwd: opts.config.workingDirectory,
+    fetchImpl: opts.fetchImpl,
   });
 }
 
@@ -304,67 +327,90 @@ export async function installPluginsFromSource(opts: {
   config: AgentConfig;
   input: string;
   targetScope: PluginInstallTargetScope;
+  fetchImpl?: FetchLike;
+  marketplaceMetadataByPluginId?: ReadonlyMap<string, PluginMarketplaceInstallMetadata>;
 }): Promise<{
   preview: PluginInstallPreview;
-  pluginIds: string[];
+  pluginId: string;
   catalog: PluginCatalogSnapshot;
 }> {
-  const currentCatalog = await refreshCatalog(opts.config);
-  const preview = await buildPluginInstallPreview({
-    input: opts.input,
-    targetScope: opts.targetScope,
-    catalog: currentCatalog,
-    cwd: opts.config.workingDirectory,
+  const currentCatalog = await buildPluginCatalogSnapshot(opts.config, {
+    fetchImpl: opts.fetchImpl,
   });
-
-  const writableScope = requireWritablePluginScope(opts.config, opts.targetScope);
   const materialized = await materializePluginSource({
     input: opts.input,
     cwd: opts.config.workingDirectory,
+    fetchImpl: opts.fetchImpl,
   });
 
   try {
-    const validCandidates = materialized.candidates.filter(
-      (candidate) => candidate.diagnostics.length === 0,
-    );
-    if (validCandidates.length === 0) {
-      throw new Error("No valid plugin bundles were found in the provided source");
-    }
-
-    validateInstallCandidates(validCandidates);
-
-    const installedPluginIds: string[] = [];
-    for (const candidate of validCandidates) {
-      const destinationRoot = path.join(writableScope.pluginsDir, candidate.pluginId);
-      const targetRoots = conflictingTargetRoots(currentCatalog, writableScope, candidate.pluginId);
-      const existingInstallRoot = await findExistingInstallRoot(destinationRoot, targetRoots);
-      const previousServers = existingInstallRoot
-        ? await readBundledPluginMcpServers(existingInstallRoot)
-        : [];
-      const stagedSource = await stageCopySourceIfNeeded(candidate.rootDir, targetRoots);
-      try {
-        await replaceInstalledPlugin({
-          sourceRoot: stagedSource.sourceRoot,
-          destinationRoot,
-          conflictingRoots: targetRoots,
-          onInstalled: async () => {
-            await migrateBundledPluginMcpCredentials({
-              config: opts.config,
-              targetScope: opts.targetScope,
-              previousServers,
-              nextServers: await readBundledPluginMcpServers(destinationRoot),
+    const preview = await buildPluginInstallPreview({
+      input: opts.input,
+      targetScope: opts.targetScope,
+      catalog: currentCatalog,
+      cwd: opts.config.workingDirectory,
+      fetchImpl: opts.fetchImpl,
+      materialized,
+    });
+    const writableScope = requireWritablePluginScope(opts.config, opts.targetScope);
+    const marketplaceMetadataByPluginId =
+      opts.marketplaceMetadataByPluginId ??
+      (await resolveRemoteMarketplaceMetadataByPluginId({
+        input: opts.input,
+        materialized,
+        fetchImpl: opts.fetchImpl,
+      }));
+    const candidate = selectSingleValidPluginCandidate(materialized.candidates);
+    const destinationRoot = path.join(writableScope.pluginsDir, candidate.pluginId);
+    const targetRoots = conflictingTargetRoots(currentCatalog, writableScope, candidate.pluginId);
+    const existingInstallRoot = await findExistingInstallRoot(destinationRoot, targetRoots);
+    const previousServers = existingInstallRoot
+      ? await readBundledPluginMcpServers(existingInstallRoot)
+      : [];
+    const stagedSource = await stageCopySourceIfNeeded(candidate.rootDir, targetRoots);
+    try {
+      await replacePluginInstallRoot({
+        sourceRoot: stagedSource.sourceRoot,
+        destinationRoot,
+        conflictingRoots: targetRoots,
+        // Only the on-destination metadata write belongs inside the rollback window:
+        // it lives under destinationRoot, which the rollback removes. The auth/config
+        // side effects below run after the install commits so a post-rename failure
+        // can't strand them (e.g. an MCP credential rename orphaned against the
+        // restored old plugin).
+        onInstalled: async () => {
+          const marketplaceMetadata = marketplaceMetadataByPluginId.get(candidate.pluginId);
+          if (marketplaceMetadata) {
+            await writePluginInstallMetadata(destinationRoot, {
+              marketplace: marketplaceMetadata,
             });
-          },
-        });
-      } finally {
-        await stagedSource.cleanup();
-      }
-      installedPluginIds.push(candidate.pluginId);
+          } else {
+            await clearPluginInstallMetadata(destinationRoot);
+          }
+        },
+      });
+    } finally {
+      await stagedSource.cleanup();
     }
+
+    // The destination is now irrevocably committed (the backup was removed on
+    // success), so these persistent, non-filesystem mutations can no longer be
+    // orphaned against a rolled-back tree.
+    await migrateBundledPluginMcpCredentials({
+      config: opts.config,
+      targetScope: opts.targetScope,
+      previousServers,
+      nextServers: await readBundledPluginMcpServers(destinationRoot),
+    });
+    await setDefaultPluginRemoved({
+      config: opts.config,
+      pluginId: candidate.pluginId,
+      removed: false,
+    });
 
     return {
       preview,
-      pluginIds: installedPluginIds,
+      pluginId: candidate.pluginId,
       catalog: await refreshCatalog(opts.config),
     };
   } finally {
@@ -372,11 +418,54 @@ export async function installPluginsFromSource(opts: {
   }
 }
 
-export type { MaterializedPluginSource };
+async function defaultPluginTombstoneIdForDeletedPlugin(
+  plugin: InstalledPluginCatalogEntry,
+): Promise<string | null> {
+  const defaultPluginId = canonicalDefaultMarketplacePluginIdForTombstone(plugin.id);
+  if (!defaultPluginId || plugin.scope !== "user") return null;
 
-export function resolvePluginSourceDescriptorForInstallInput(input: string, cwd = process.cwd()) {
-  return resolvePluginSource(input, cwd);
+  const installMetadata = await readPluginInstallMetadata(plugin.rootDir);
+  const bootstrapPluginId = installMetadata?.bootstrap?.pluginId ?? plugin.id;
+  if (
+    installMetadata?.bootstrap &&
+    canonicalDefaultMarketplacePluginIdForTombstone(bootstrapPluginId) === defaultPluginId
+  ) {
+    return defaultPluginId;
+  }
+
+  const marketplaceSourceInput = installMetadata?.marketplace?.sourceInput ?? plugin.installSource;
+  if (
+    plugin.discoveryKind === "marketplace" &&
+    isBuiltInMarketplaceSourceInput(marketplaceSourceInput)
+  ) {
+    return defaultPluginId;
+  }
+
+  return null;
 }
+
+export async function deletePluginInstallation(opts: {
+  config: AgentConfig;
+  plugin: InstalledPluginCatalogEntry;
+}): Promise<PluginCatalogSnapshot> {
+  const removedDefaultPluginId = await defaultPluginTombstoneIdForDeletedPlugin(opts.plugin);
+  await fs.rm(opts.plugin.rootDir, { recursive: true, force: true });
+  await clearPluginEnabledOverride({
+    config: opts.config,
+    pluginId: opts.plugin.id,
+    scope: opts.plugin.scope,
+  });
+  if (removedDefaultPluginId) {
+    await setDefaultPluginRemoved({
+      config: opts.config,
+      pluginId: removedDefaultPluginId,
+      removed: true,
+    });
+  }
+  return await refreshCatalog(opts.config);
+}
+
+export type { MaterializedPluginSource };
 
 export const __internal = {
   setCopyPluginRootImplForTests(copyPluginRootImpl?: CopyPluginRootImpl) {

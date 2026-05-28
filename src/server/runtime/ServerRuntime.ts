@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { runTurn as runTurnFn } from "../../agent";
-import { ensureCodexPrimaryRuntimeReady } from "../../codexPrimaryRuntime";
+import {
+  ensureCodexPrimaryRuntimeReady,
+  shouldBootstrapCodexPrimaryRuntime,
+  WORKSPACE_TOOLS_PLUGIN_ID,
+} from "../../codexPrimaryRuntime";
 import { loadConfig } from "../../config";
 import type { connectProvider as connectModelProvider, getAiCoworkerPaths } from "../../connect";
 import { getAiCoworkerPaths as getAiCoworkerPathsDefault } from "../../connect";
@@ -11,11 +15,16 @@ import {
   prepareManagedSofficeToolEnv,
 } from "../../managedSofficeRuntime";
 import type { emitObservabilityEvent as emitObservabilityEventFn } from "../../observability/otel";
+import { readPluginOverrides } from "../../plugins/overrides";
 import type {
   loadAgentPrompt as loadAgentPromptFn,
   loadSystemPromptWithSkills as loadSystemPromptWithSkillsFn,
 } from "../../prompt";
-import { ensureDefaultGlobalSkillsReady } from "../../skills/defaultGlobalSkills";
+import {
+  DEFAULT_GLOBAL_SKILLS,
+  ensureDefaultGlobalSkillsReady,
+  isDefaultPluginRemoved,
+} from "../../skills/defaultGlobalSkills";
 import type { AgentConfig } from "../../types";
 import { decodeJsonRpcMessage } from "../jsonrpc/decodeJsonRpcMessage";
 import {
@@ -126,19 +135,28 @@ export async function createAgentServerRuntime(
       : 128,
   );
 
-  await ensureDefaultGlobalSkillsReady({
-    homedir: opts.homedir,
-    env,
-    log: (line) => {
-      console.warn(`[default-skills] ${line}`);
-    },
-  });
-
   const builtInDir =
     typeof env.COWORK_BUILTIN_DIR === "string" && env.COWORK_BUILTIN_DIR.trim()
       ? env.COWORK_BUILTIN_DIR
       : undefined;
   let config = await loadConfig({ cwd: opts.cwd, env, homedir: opts.homedir, builtInDir });
+  const codexPrimaryRuntimeEnabled = shouldBootstrapCodexPrimaryRuntime(env);
+  const defaultGlobalPlugins = codexPrimaryRuntimeEnabled
+    ? DEFAULT_GLOBAL_SKILLS.filter((plugin) => plugin.id !== WORKSPACE_TOOLS_PLUGIN_ID)
+    : DEFAULT_GLOBAL_SKILLS;
+
+  if (defaultGlobalPlugins.length > 0) {
+    await ensureDefaultGlobalSkillsReady({
+      homedir: opts.homedir,
+      env,
+      config,
+      plugins: defaultGlobalPlugins,
+      log: (line) => {
+        console.warn(`[default-skills] ${line}`);
+      },
+    });
+  }
+
   const mergedProviderOptions = mergeRuntimeProviderOptions(
     opts.providerOptions,
     config.providerOptions,
@@ -146,11 +164,18 @@ export async function createAgentServerRuntime(
   if (mergedProviderOptions) config.providerOptions = mergedProviderOptions;
 
   const packagedDesktopBundle = env.COWORK_DESKTOP_BUNDLE === "1";
+  const defaultAiCoworkerPaths = getAiCoworkerPathsDefault({ homedir: opts.homedir });
+  const pluginOverrides = await readPluginOverrides(config);
   const codexRuntimeSetup = await ensureCodexPrimaryRuntimeReady({
     homedir: opts.homedir,
     workspaceDir: config.workingDirectory,
     builtInSkillsDir: packagedDesktopBundle ? undefined : path.join(config.builtInDir, "skills"),
-    globalSkillsDir: getAiCoworkerPathsDefault({ homedir: opts.homedir }).skillsDir,
+    globalSkillsDir: defaultAiCoworkerPaths.skillsDir,
+    globalPluginsDir: path.join(defaultAiCoworkerPaths.rootDir, "plugins"),
+    skipGlobalWorkspaceToolsPlugin: isDefaultPluginRemoved(
+      WORKSPACE_TOOLS_PLUGIN_ID,
+      pluginOverrides,
+    ),
     env,
     log: (line) => {
       console.warn(`[codex-primary-runtime] ${line}`);

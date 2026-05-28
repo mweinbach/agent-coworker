@@ -2,6 +2,7 @@ import path from "node:path";
 
 import type {
   AgentConfig,
+  InstalledPluginCatalogEntry,
   PluginCatalogSnapshot,
   SkillPluginOwner,
   SkillScope,
@@ -21,7 +22,7 @@ function pluginSkillScope(scope: SkillPluginOwner["scope"]): SkillScope {
   return scope === "workspace" ? "project" : "user";
 }
 
-function pluginOwnerForEntry(entry: PluginCatalogSnapshot["plugins"][number]): SkillPluginOwner {
+function pluginOwnerForEntry(entry: InstalledPluginCatalogEntry): SkillPluginOwner {
   return {
     pluginId: entry.id,
     name: entry.name,

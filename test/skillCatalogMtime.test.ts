@@ -30,4 +30,35 @@ describe("readSkillCatalogMtimeSnapshot", () => {
     const after = await readSkillCatalogMtimeSnapshot(config);
     expect(after).not.toBe(before);
   });
+
+  test("changes when a plugin skill is added under a manifest-declared skills path", async () => {
+    const config = await makeConfig();
+    const workspacePluginsDir = config.workspacePluginsDir;
+    if (!workspacePluginsDir) {
+      throw new Error("Expected test config to include a workspace plugins directory");
+    }
+    const pluginRoot = path.join(workspacePluginsDir, "multi-skill-plugin");
+    await fs.mkdir(path.join(pluginRoot, ".cowork-plugin"), { recursive: true });
+    await fs.mkdir(path.join(pluginRoot, "custom-skills"), { recursive: true });
+    await fs.writeFile(
+      path.join(pluginRoot, ".cowork-plugin", "plugin.json"),
+      JSON.stringify({
+        name: "multi-skill-plugin",
+        description: "Plugin with custom skills",
+        skills: ["./custom-skills"],
+      }),
+    );
+
+    const before = await readSkillCatalogMtimeSnapshot(config);
+
+    const skillDir = path.join(pluginRoot, "custom-skills", "example-skill");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(
+      path.join(skillDir, "SKILL.md"),
+      ["---", "name: example-skill", "description: Example skill", "---", ""].join("\n"),
+    );
+
+    const after = await readSkillCatalogMtimeSnapshot(config);
+    expect(after).not.toBe(before);
+  });
 });

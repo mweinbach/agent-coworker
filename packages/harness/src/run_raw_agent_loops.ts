@@ -2150,14 +2150,15 @@ async function main() {
       COWORK_DISABLE_BUILTIN_SKILLS: process.env.COWORK_DISABLE_BUILTIN_SKILLS ?? "1",
     };
 
+    const config = await loadConfig({ cwd: repoDir, env });
     await ensureDefaultGlobalSkillsReady({
       env,
+      config,
       log: (line) => {
         console.warn(`[default-skills] ${line}`);
       },
     });
 
-    const config = await loadConfig({ cwd: repoDir, env });
     config.providerOptions = mergeProviderOptions(
       DEFAULT_PROVIDER_OPTIONS as JsonRecord,
       run.providerOptionsOverride,

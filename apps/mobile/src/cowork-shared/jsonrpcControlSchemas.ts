@@ -732,7 +732,17 @@ const pluginAppSummarySchema = z
   })
   .passthrough();
 
-const pluginCatalogEntrySchema = z
+const pluginMarketplaceMetadataSchema = z
+  .object({
+    name: nonEmptyTrimmedStringSchema,
+    displayName: z.string().optional(),
+    category: z.string().optional(),
+    installationPolicy: z.string().optional(),
+    authenticationPolicy: z.string().optional(),
+  })
+  .passthrough();
+
+const installedPluginCatalogEntrySchema = z
   .object({
     id: nonEmptyTrimmedStringSchema,
     name: nonEmptyTrimmedStringSchema,
@@ -740,6 +750,7 @@ const pluginCatalogEntrySchema = z
     description: z.string(),
     scope: pluginScopeSchema,
     discoveryKind: pluginDiscoveryKindSchema,
+    installed: z.literal(true),
     enabled: z.boolean(),
     rootDir: z.string(),
     manifestPath: z.string(),
@@ -753,15 +764,8 @@ const pluginCatalogEntrySchema = z
     license: z.string().optional(),
     keywords: z.array(z.string()).optional(),
     interface: pluginInterfaceSchema.optional(),
-    marketplace: z
-      .object({
-        name: nonEmptyTrimmedStringSchema,
-        displayName: z.string().optional(),
-        category: z.string().optional(),
-        installationPolicy: z.string().optional(),
-        authenticationPolicy: z.string().optional(),
-      })
-      .optional(),
+    marketplace: pluginMarketplaceMetadataSchema.optional(),
+    installSource: z.string().optional(),
     skills: z.array(pluginSkillSummarySchema),
     mcpServers: z.array(z.string()),
     apps: z.array(pluginAppSummarySchema),
@@ -769,9 +773,32 @@ const pluginCatalogEntrySchema = z
   })
   .passthrough();
 
+const marketplacePluginCatalogEntrySchema = z
+  .object({
+    id: nonEmptyTrimmedStringSchema,
+    name: nonEmptyTrimmedStringSchema,
+    displayName: nonEmptyTrimmedStringSchema,
+    description: z.string(),
+    scope: z.literal("user"),
+    discoveryKind: z.literal("marketplace"),
+    installed: z.literal(false),
+    enabled: z.literal(false),
+    interface: pluginInterfaceSchema.optional(),
+    marketplace: pluginMarketplaceMetadataSchema,
+    installSource: z.string(),
+    warnings: z.array(z.string()),
+  })
+  .passthrough();
+
+const pluginCatalogEntrySchema = z.discriminatedUnion("installed", [
+  installedPluginCatalogEntrySchema,
+  marketplacePluginCatalogEntrySchema,
+]);
+
 export const pluginCatalogSnapshotSchema = z
   .object({
-    plugins: z.array(pluginCatalogEntrySchema),
+    plugins: z.array(installedPluginCatalogEntrySchema),
+    availablePlugins: z.array(marketplacePluginCatalogEntrySchema).default([]),
     warnings: z.array(z.string()),
   })
   .strict();
@@ -806,7 +833,6 @@ const pluginInstallPreviewCandidateSchema = z
     conflictsWithPluginId: z.string().optional(),
     conflictsWithScope: pluginScopeSchema.optional(),
     wouldBePrimary: z.boolean(),
-    shadowedPluginIds: z.array(z.string()),
     diagnostics: z.array(skillInstallationDiagnosticSchema),
   })
   .passthrough();
@@ -933,6 +959,7 @@ export const pluginsCatalogEventSchema = z
     type: z.literal("plugins_catalog"),
     sessionId: nonEmptyTrimmedStringSchema.optional(),
     catalog: pluginCatalogSnapshotSchema,
+    availablePluginsPartial: z.boolean().optional(),
     clearedMutationPendingKeys: z.array(z.string()).optional(),
   })
   .passthrough();
@@ -1439,6 +1466,7 @@ export const jsonRpcControlRequestSchemas = {
   "cowork/plugins/read": pluginReadRequestSchema,
   "cowork/plugins/enable": pluginMutationRequestSchema,
   "cowork/plugins/disable": pluginMutationRequestSchema,
+  "cowork/plugins/delete": pluginMutationRequestSchema,
   "cowork/plugins/install/preview": pluginsInstallPreviewRequestSchema,
   "cowork/plugins/install": pluginsInstallRequestSchema,
   "cowork/memory/list": memoryListRequestSchema,
@@ -1507,6 +1535,7 @@ export const jsonRpcControlResultSchemas = {
   "cowork/plugins/read": sessionEventEnvelope(pluginDetailEventSchema),
   "cowork/plugins/enable": sessionEventsEnvelope(pluginMutationResultEventSchema),
   "cowork/plugins/disable": sessionEventsEnvelope(pluginMutationResultEventSchema),
+  "cowork/plugins/delete": sessionEventsEnvelope(pluginMutationResultEventSchema),
   "cowork/plugins/install/preview": sessionEventEnvelope(pluginInstallPreviewEventSchema),
   "cowork/plugins/install": sessionEventsEnvelope(pluginInstallResultEventSchema),
   "cowork/memory/list": sessionEventEnvelope(memoryListEventSchema),

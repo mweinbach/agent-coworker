@@ -48,7 +48,7 @@ export function buildGitHubApiUrl(repo: string, ref: string, githubPath: string)
 export function githubHeaders(): HeadersInit {
   const headers: Record<string, string> = {
     Accept: "application/vnd.github+json",
-    "User-Agent": "agent-coworker-skills",
+    "User-Agent": "agent-coworker-extensions",
   };
 
   const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;

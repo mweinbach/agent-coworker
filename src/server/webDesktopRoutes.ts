@@ -257,7 +257,7 @@ function shouldServeOpenPathAsAttachment(filePath: string, mimeType: string): bo
 }
 
 function buildOpenRoute(pathValue: string): string {
-  return `/cowork/fs/open?path=${encodeURIComponent(pathValue)}`;
+  return "/cowork/fs/open?path=" + encodeURIComponent(pathValue);
 }
 
 function renderDirectoryHtml(
@@ -269,143 +269,66 @@ function renderDirectoryHtml(
     .map((entry) => {
       const href = buildOpenRoute(entry.path);
       const kind = entry.isDirectory ? "Folder" : "File";
-      const hiddenBadge = entry.isHidden ? `<span class="badge">hidden</span>` : "";
-      return `
-      <li class="entry">
-        <a class="entry-link" href="${href}">
-          <span class="entry-title">${escapeHtml(entry.name)}</span>
-          <span class="entry-meta">${kind}${hiddenBadge}</span>
-        </a>
-      </li>
-    `;
+      const hiddenBadge = entry.isHidden ? '<span class="badge">hidden</span>' : "";
+      return [
+        '<li class="entry">',
+        '<a class="entry-link" href="' + href + '">',
+        '<span class="entry-title">' + escapeHtml(entry.name) + "</span>",
+        '<span class="entry-meta">' + kind + hiddenBadge + "</span>",
+        "</a>",
+        "</li>",
+      ].join("");
     })
     .join("");
 
   const parentLink = parentPath
-    ? `<a class="parent-link" href="${buildOpenRoute(parentPath)}">Up one level</a>`
+    ? '<a class="parent-link" href="' + buildOpenRoute(parentPath) + '">Up one level</a>'
     : "";
   const listingMarkup =
     entries.length > 0
-      ? `<ul class="list">${rows}</ul>`
+      ? '<ul class="list">' + rows + "</ul>"
       : '<div class="empty">This directory is empty.</div>';
+  const title = escapeHtml(path.basename(currentPath) || currentPath);
+  const escapedCurrentPath = escapeHtml(currentPath);
 
-  return `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>${escapeHtml(path.basename(currentPath) || currentPath)}</title>
-    <style>
-      :root {
-        color-scheme: dark;
-        font-family: "Segoe UI", system-ui, sans-serif;
-        background: #0f1115;
-        color: #f4f4f5;
-      }
-      body {
-        margin: 0;
-        min-height: 100vh;
-        background:
-          radial-gradient(circle at top left, rgba(79, 70, 229, 0.18), transparent 32%),
-          linear-gradient(180deg, #10131a 0%, #0b0d11 100%);
-      }
-      main {
-        max-width: 900px;
-        margin: 0 auto;
-        padding: 40px 20px 64px;
-      }
-      .chrome {
-        margin-bottom: 24px;
-        padding: 18px 20px;
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        border-radius: 18px;
-        background: rgba(16, 18, 24, 0.8);
-        backdrop-filter: blur(12px);
-      }
-      .eyebrow {
-        font-size: 11px;
-        font-weight: 700;
-        letter-spacing: 0.16em;
-        text-transform: uppercase;
-        color: rgba(244, 244, 245, 0.58);
-      }
-      h1 {
-        margin: 10px 0 6px;
-        font-size: 24px;
-        line-height: 1.2;
-      }
-      .path {
-        margin: 0;
-        color: rgba(244, 244, 245, 0.72);
-        word-break: break-all;
-      }
-      .parent-link {
-        display: inline-flex;
-        margin-top: 14px;
-        color: #9cc9ff;
-        text-decoration: none;
-      }
-      .list {
-        list-style: none;
-        margin: 0;
-        padding: 0;
-        display: grid;
-        gap: 12px;
-      }
-      .entry-link {
-        display: flex;
-        justify-content: space-between;
-        gap: 18px;
-        padding: 14px 16px;
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        border-radius: 14px;
-        background: rgba(15, 17, 21, 0.78);
-        color: inherit;
-        text-decoration: none;
-      }
-      .entry-link:hover {
-        border-color: rgba(156, 201, 255, 0.45);
-        background: rgba(22, 26, 34, 0.95);
-      }
-      .entry-title {
-        font-weight: 600;
-        word-break: break-word;
-      }
-      .entry-meta {
-        flex-shrink: 0;
-        color: rgba(244, 244, 245, 0.58);
-        font-size: 13px;
-      }
-      .badge {
-        margin-left: 8px;
-        padding: 2px 6px;
-        border-radius: 999px;
-        background: rgba(244, 244, 245, 0.08);
-        font-size: 11px;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-      }
-      .empty {
-        padding: 28px 16px;
-        border: 1px dashed rgba(255, 255, 255, 0.15);
-        border-radius: 14px;
-        color: rgba(244, 244, 245, 0.66);
-        text-align: center;
-      }
-    </style>
-  </head>
-  <body>
-    <main>
-      <section class="chrome">
-        <div class="eyebrow">Cowork Browser Shell</div>
-        <h1>${escapeHtml(path.basename(currentPath) || currentPath)}</h1>
-        <p class="path">${escapeHtml(currentPath)}</p>
-        ${parentLink}
-      </section>
-      ${listingMarkup}
-    </main>
-  </body>
-</html>`;
+  return [
+    "<!doctype html>",
+    '<html lang="en">',
+    "<head>",
+    '<meta charset="utf-8" />',
+    '<meta name="viewport" content="width=device-width, initial-scale=1" />',
+    "<title>" + title + "</title>",
+    "<style>",
+    ":root { color-scheme: dark; font-family: \"Segoe UI\", system-ui, sans-serif; background: #0f1115; color: #f4f4f5; }",
+    "body { margin: 0; min-height: 100vh; background: radial-gradient(circle at top left, rgba(79, 70, 229, 0.18), transparent 32%), linear-gradient(180deg, #10131a 0%, #0b0d11 100%); }",
+    "main { max-width: 900px; margin: 0 auto; padding: 40px 20px 64px; }",
+    ".chrome { margin-bottom: 24px; padding: 18px 20px; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 18px; background: rgba(16, 18, 24, 0.8); backdrop-filter: blur(12px); }",
+    ".eyebrow { font-size: 11px; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase; color: rgba(244, 244, 245, 0.58); }",
+    "h1 { margin: 10px 0 6px; font-size: 24px; line-height: 1.2; }",
+    ".path { margin: 0; color: rgba(244, 244, 245, 0.72); word-break: break-all; }",
+    ".parent-link { display: inline-flex; margin-top: 14px; color: #9cc9ff; text-decoration: none; }",
+    ".list { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }",
+    ".entry-link { display: flex; justify-content: space-between; gap: 18px; padding: 14px 16px; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 14px; background: rgba(15, 17, 21, 0.78); color: inherit; text-decoration: none; }",
+    ".entry-link:hover { border-color: rgba(156, 201, 255, 0.45); background: rgba(22, 26, 34, 0.95); }",
+    ".entry-title { font-weight: 600; word-break: break-word; }",
+    ".entry-meta { flex-shrink: 0; color: rgba(244, 244, 245, 0.58); font-size: 13px; }",
+    ".badge { margin-left: 8px; padding: 2px 6px; border-radius: 999px; background: rgba(244, 244, 245, 0.08); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; }",
+    ".empty { padding: 28px 16px; border: 1px dashed rgba(255, 255, 255, 0.15); border-radius: 14px; color: rgba(244, 244, 245, 0.66); text-align: center; }",
+    "</style>",
+    "</head>",
+    "<body>",
+    "<main>",
+    '<section class="chrome">',
+    '<div class="eyebrow">Cowork Browser Shell</div>',
+    "<h1>" + title + "</h1>",
+    '<p class="path">' + escapedCurrentPath + "</p>",
+    parentLink,
+    "</section>",
+    listingMarkup,
+    "</main>",
+    "</body>",
+    "</html>",
+  ].join("");
 }
 
 function jsonResponse(value: unknown, status = 200): Response {

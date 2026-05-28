@@ -18,6 +18,10 @@ const RESEARCH_TABLE_MIGRATION = 13;
 const RESEARCH_PLAN_COLUMNS_MIGRATION = 14;
 const RESEARCH_WORKSPACE_COLUMN_MIGRATION = 15;
 
+function sql(lines: readonly string[]): string {
+  return lines.join("\n");
+}
+
 type BootstrapSessionDbOptions = {
   db: Database;
   busyTimeoutMs: number;
@@ -46,13 +50,15 @@ export async function bootstrapSessionDb(opts: BootstrapSessionDbOptions): Promi
   opts.db.exec("PRAGMA journal_mode=WAL;");
   opts.db.exec("PRAGMA synchronous=NORMAL;");
   opts.db.exec("PRAGMA foreign_keys=ON;");
-  opts.db.exec(`PRAGMA busy_timeout=${Math.max(0, Math.floor(opts.busyTimeoutMs))};`);
+  opts.db.exec("PRAGMA busy_timeout=" + Math.max(0, Math.floor(opts.busyTimeoutMs)) + ";");
 
   opts.db.exec(
-    `CREATE TABLE IF NOT EXISTS schema_migrations (
-       version INTEGER PRIMARY KEY,
-       applied_at TEXT NOT NULL
-     )`,
+    sql([
+      "CREATE TABLE IF NOT EXISTS schema_migrations (",
+      "  version INTEGER PRIMARY KEY,",
+      "  applied_at TEXT NOT NULL",
+      ")",
+    ]),
   );
 
   const appliedMigrations = opts.repository.getAppliedMigrationVersions();

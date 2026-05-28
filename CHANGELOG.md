@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.1.5 - 2026-05-28
+
+### Fixed
+
+- **Windows ARM64 desktop release smoke** — Stabilized the packaged sidecar bundle for Windows ARM64 by keeping bundled-runtime sidecar chunks unminified and avoiding generated multiline template separators in SQL helpers.
+- **Packaged desktop startup** — Deferred source workspace launcher construction inside the web desktop service so packaged sidecars no longer try to resolve a repository checkout from `resources/binaries/server` during startup.
+
 ## 1.1.4 - 2026-05-28
 
 ### Added

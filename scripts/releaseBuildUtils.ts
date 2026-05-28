@@ -403,14 +403,7 @@ export async function ensureBundledBunRuntime(
   await rmrf(cacheDir);
   await fs.mkdir(cacheDir, { recursive: true });
 
-  const response = await fetch(downloadUrl);
-  if (!response.ok) {
-    throw new Error(
-      `Failed to download Bun runtime from ${downloadUrl}: ${response.status} ${response.statusText}`,
-    );
-  }
-
-  await Bun.write(archivePath, response);
+  await downloadFile(downloadUrl, archivePath);
   await fs.mkdir(extractDir, { recursive: true });
   await extractZipArchive(archivePath, extractDir);
 

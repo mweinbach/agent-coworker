@@ -50,20 +50,23 @@ async function createFakeCodexBin(prefix: string): Promise<string> {
 }
 
 describe("codex app-server resolver", () => {
-  test.serial("uses explicit command overrides without adding implicit app-server args", async () => {
-    process.env.COWORK_CODEX_APP_SERVER_COMMAND = "/tmp/custom-codex-app-server";
-    process.env.COWORK_CODEX_APP_SERVER_ARGS = "";
+  test.serial(
+    "uses explicit command overrides without adding implicit app-server args",
+    async () => {
+      process.env.COWORK_CODEX_APP_SERVER_COMMAND = "/tmp/custom-codex-app-server";
+      process.env.COWORK_CODEX_APP_SERVER_ARGS = "";
 
-    const command = await resolveCodexAppServerCommand({
-      spawnForResult: async () => ({ ok: false, stdout: "", stderr: "" }),
-    });
+      const command = await resolveCodexAppServerCommand({
+        spawnForResult: async () => ({ ok: false, stdout: "", stderr: "" }),
+      });
 
-    expect(command).toEqual({
-      command: "/tmp/custom-codex-app-server",
-      args: [],
-      source: "override",
-    });
-  });
+      expect(command).toEqual({
+        command: "/tmp/custom-codex-app-server",
+        args: [],
+        source: "override",
+      });
+    },
+  );
 
   test.serial("downloads a managed app-server before using system codex", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-system-"));
@@ -91,46 +94,50 @@ describe("codex app-server resolver", () => {
     expect(probedCommands).toEqual([]);
   });
 
-  test.serial("skips repo-local node_modules codex binaries when resolving system codex", async () => {
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-shadow-home-"));
-    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-shadow-root-"));
-    const localBinDir = path.join(rootDir, "node_modules", ".bin");
-    const systemBinDir = path.join(rootDir, "system-bin");
-    await fs.mkdir(localBinDir, { recursive: true });
-    await fs.mkdir(systemBinDir, { recursive: true });
-    const staleCodexPath = path.join(localBinDir, "codex");
-    const systemCodexPath = path.join(systemBinDir, "codex");
-    await fs.writeFile(staleCodexPath, "#!/bin/sh\n", "utf8");
-    await fs.writeFile(systemCodexPath, "#!/bin/sh\n", "utf8");
-    await fs.chmod(staleCodexPath, 0o755);
-    await fs.chmod(systemCodexPath, 0o755);
-    const probedCalls: string[] = [];
+  test.serial(
+    "skips repo-local node_modules codex binaries when resolving system codex",
+    async () => {
+      const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-shadow-home-"));
+      const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-shadow-root-"));
+      const localBinDir = path.join(rootDir, "node_modules", ".bin");
+      const systemBinDir = path.join(rootDir, "system-bin");
+      await fs.mkdir(localBinDir, { recursive: true });
+      await fs.mkdir(systemBinDir, { recursive: true });
+      const staleCodexPath = path.join(localBinDir, "codex");
+      const systemCodexPath = path.join(systemBinDir, "codex");
+      await fs.writeFile(staleCodexPath, "#!/bin/sh\n", "utf8");
+      await fs.writeFile(systemCodexPath, "#!/bin/sh\n", "utf8");
+      await fs.chmod(staleCodexPath, 0o755);
+      await fs.chmod(systemCodexPath, 0o755);
+      const probedCalls: string[] = [];
 
-    const command = await resolveCodexAppServerCommand({
-      homeDir,
-      pathEnv: [localBinDir, systemBinDir].join(path.delimiter),
-      fetchImpl: async () => {
-        throw new Error("managed install unavailable");
-      },
-      spawnForResult: async (cmd, args) => {
-        probedCalls.push([cmd, ...args].join(" "));
-        if (cmd === staleCodexPath) return { ok: true, stdout: "codex-cli 0.87.0\n", stderr: "" };
-        if (cmd === systemCodexPath) return { ok: true, stdout: "codex-cli 0.128.0\n", stderr: "" };
-        return { ok: false, stdout: "", stderr: "" };
-      },
-    });
+      const command = await resolveCodexAppServerCommand({
+        homeDir,
+        pathEnv: [localBinDir, systemBinDir].join(path.delimiter),
+        fetchImpl: async () => {
+          throw new Error("managed install unavailable");
+        },
+        spawnForResult: async (cmd, args) => {
+          probedCalls.push([cmd, ...args].join(" "));
+          if (cmd === staleCodexPath) return { ok: true, stdout: "codex-cli 0.87.0\n", stderr: "" };
+          if (cmd === systemCodexPath)
+            return { ok: true, stdout: "codex-cli 0.128.0\n", stderr: "" };
+          return { ok: false, stdout: "", stderr: "" };
+        },
+      });
 
-    expect(probedCalls).toEqual([
-      `${systemCodexPath} --version`,
-      `${systemCodexPath} app-server --help`,
-    ]);
-    expect(command).toEqual({
-      command: systemCodexPath,
-      args: ["app-server"],
-      source: "system",
-      version: "0.128.0",
-    });
-  });
+      expect(probedCalls).toEqual([
+        `${systemCodexPath} --version`,
+        `${systemCodexPath} app-server --help`,
+      ]);
+      expect(command).toEqual({
+        command: systemCodexPath,
+        args: ["app-server"],
+        source: "system",
+        version: "0.128.0",
+      });
+    },
+  );
 
   test.serial("downloads and promotes a managed app-server when codex is missing", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-managed-"));

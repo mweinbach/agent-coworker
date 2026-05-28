@@ -6,7 +6,7 @@ import { z } from "zod";
 import type { SkillInstallManifest, SkillInstallOrigin, SkillScope } from "../types";
 import { writeTextFileAtomic } from "../utils/atomicFile";
 
-export const SKILL_INSTALL_MANIFEST_FILENAME = ".cowork-skill.json";
+const SKILL_INSTALL_MANIFEST_FILENAME = ".cowork-skill.json";
 
 const skillInstallOriginSchema = z
   .object({

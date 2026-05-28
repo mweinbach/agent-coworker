@@ -36,12 +36,6 @@ export type ModelStreamRawFormat =
   | "google-interactions-v1"
   | "codex-app-server-v2";
 
-export interface ModelStreamRawEvent {
-  format: ModelStreamRawFormat;
-  normalizerVersion: number;
-  event: Record<string, unknown>;
-}
-
 export interface NormalizedModelStreamPart {
   normalizerVersion: number;
   partType: ModelStreamPartType;

@@ -49,7 +49,7 @@ export function resolveChildModelRoutingMode(v: unknown): ChildModelRoutingMode 
   return parsed.success ? parsed.data : null;
 }
 
-export const RUNTIME_NAMES = [
+const RUNTIME_NAMES = [
   "pi",
   "openai-responses",
   "google-interactions",
@@ -123,11 +123,11 @@ export interface CommandTemplateConfig {
   source?: CommandSource;
 }
 
-export interface ModelRuntimeSettings {
+interface ModelRuntimeSettings {
   maxRetries?: number;
 }
 
-export interface UserProfile {
+interface UserProfile {
   instructions?: string;
   work?: string;
   details?: string;
@@ -305,7 +305,7 @@ export interface PluginAppSummary {
   authType?: string;
 }
 
-export interface InstalledPluginSkillSummary {
+interface InstalledPluginSkillSummary {
   name: string;
   rawName: string;
   description: string;
@@ -381,7 +381,7 @@ export interface PluginCatalogSnapshot {
 
 export type PluginInstallTargetScope = "workspace" | "user";
 
-export type PluginSourceInputKind =
+type PluginSourceInputKind =
   | "github_repo"
   | "github_tree"
   | "github_blob"
@@ -443,9 +443,9 @@ export type SkillScope = SkillEntry["source"];
 
 export type SkillMutationTargetScope = "project" | "global";
 
-export type SkillInstallState = "effective" | "shadowed" | "disabled" | "invalid";
+type SkillInstallState = "effective" | "shadowed" | "disabled" | "invalid";
 
-export type SkillInstallOriginKind =
+type SkillInstallOriginKind =
   | "github"
   | "skills.sh"
   | "local"
@@ -471,7 +471,7 @@ export interface SkillInstallManifest {
   origin?: SkillInstallOrigin;
 }
 
-export type SkillInstallationDiagnosticSeverity = "info" | "warning" | "error";
+type SkillInstallationDiagnosticSeverity = "info" | "warning" | "error";
 
 export interface SkillInstallationDiagnostic {
   code: string;
@@ -624,7 +624,7 @@ export interface ObservabilityConfig {
   release?: string;
 }
 
-export type ObservabilityHealthStatus = "disabled" | "ready" | "degraded";
+type ObservabilityHealthStatus = "disabled" | "ready" | "degraded";
 
 export interface ObservabilityHealth {
   status: ObservabilityHealthStatus;
@@ -633,12 +633,12 @@ export interface ObservabilityHealth {
   updatedAt: string;
 }
 
-export interface HarnessConfig {
+interface HarnessConfig {
   reportOnly: boolean;
   strictMode: boolean;
 }
 
-export interface HarnessContextMetadata {
+interface HarnessContextMetadata {
   [key: string]: string;
 }
 
@@ -655,9 +655,7 @@ export interface HarnessContextState extends HarnessContextPayload {
   updatedAt: string;
 }
 
-export type AgentMessages = ModelMessage[];
-
-export type MCPServerTransport =
+type MCPServerTransport =
   | {
       type: "stdio";
       command: string;

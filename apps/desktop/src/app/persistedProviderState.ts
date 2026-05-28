@@ -50,7 +50,7 @@ function normalizeSavedMaskMap(value: unknown): Record<string, string> | undefin
   return Object.fromEntries(entries);
 }
 
-export function normalizePersistedProviderStatus(
+function normalizePersistedProviderStatus(
   expectedProvider: ProviderName,
   value: unknown,
 ): PersistedProviderStatus | null {

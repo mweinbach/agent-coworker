@@ -249,9 +249,3 @@ export async function generatePhiSilicaTitle(
     model?.Close();
   }
 }
-
-export const __internal = {
-  isPhiSilicaReady,
-  isPhiSilicaGenerationConfigured,
-  unlockPhiSilicaGeneration,
-};

@@ -2,7 +2,7 @@ import { asFiniteNumber, asRecord, asString } from "../../shared/recordParsing";
 import type { ModelMessage } from "../../types";
 import type { CodexImageDetail, CodexTextElement, CodexTurnInputPart } from "./types";
 
-export function extractTextContent(content: unknown): string {
+function extractTextContent(content: unknown): string {
   if (typeof content === "string") return content;
   if (Array.isArray(content)) {
     return content
@@ -18,7 +18,7 @@ export function extractTextContent(content: unknown): string {
   return asString(record?.text) ?? "";
 }
 
-export function latestUserMessage(messages: readonly ModelMessage[]): ModelMessage | null {
+function latestUserMessage(messages: readonly ModelMessage[]): ModelMessage | null {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (message?.role === "user") {
@@ -28,7 +28,7 @@ export function latestUserMessage(messages: readonly ModelMessage[]): ModelMessa
   return null;
 }
 
-export function extractTextElements(content: unknown): CodexTextElement[] {
+function extractTextElements(content: unknown): CodexTextElement[] {
   if (!Array.isArray(content)) return [];
   const elements: CodexTextElement[] = [];
   for (const part of content) {

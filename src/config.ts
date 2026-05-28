@@ -356,7 +356,7 @@ function normalizeNullableNonNegativeInt(v: unknown): number | null | undefined 
   return normalizeNonNegativeInt(v);
 }
 
-export function getSavedProviderApiKeyForHome(
+function getSavedProviderApiKeyForHome(
   home: string,
   provider: ProviderName,
 ): string | undefined {
@@ -390,78 +390,6 @@ export function getSavedProviderApiKey(
   provider: ProviderName,
 ): string | undefined {
   return getSavedProviderApiKeyForHome(resolveAuthHomeDir(config), provider);
-}
-
-function isSubpathOf(parent: string, candidate: string): boolean {
-  const relative = path.relative(parent, candidate);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
-function rebaseAbsolutePathWithinWorkspace(
-  filePath: string | undefined,
-  previousWorkspaceRoot: string,
-  nextWorkspaceRoot: string,
-): string | undefined {
-  if (!filePath) {
-    return undefined;
-  }
-  if (!isSubpathOf(previousWorkspaceRoot, filePath)) {
-    return filePath;
-  }
-  return path.join(nextWorkspaceRoot, path.relative(previousWorkspaceRoot, filePath));
-}
-
-export function rebaseWorkspaceConfig(config: AgentConfig, cwd: string): AgentConfig {
-  const previousWorkspaceRoot = path.dirname(config.projectCoworkDir);
-  if (previousWorkspaceRoot === cwd) {
-    return {
-      ...config,
-      workingDirectory: cwd,
-    };
-  }
-
-  const projectCoworkDir = path.join(cwd, ".cowork");
-  const workspaceAgentsDir = path.join(cwd, ".agents");
-  const workspacePluginsDir = path.join(projectCoworkDir, "plugins");
-  const builtInSkillsDir = path.join(config.builtInDir, "skills");
-  const builtInSkillsEnabled = config.skillsDirs.includes(builtInSkillsDir);
-
-  return {
-    ...config,
-    workingDirectory: cwd,
-    projectCoworkDir,
-    workspaceAgentsDir,
-    workspacePluginsDir,
-    outputDirectory: rebaseAbsolutePathWithinWorkspace(
-      config.outputDirectory,
-      previousWorkspaceRoot,
-      cwd,
-    ),
-    uploadsDirectory: rebaseAbsolutePathWithinWorkspace(
-      config.uploadsDirectory,
-      previousWorkspaceRoot,
-      cwd,
-    ),
-    skillsDirs: [
-      path.join(projectCoworkDir, "skills"),
-      ...config.skillsDirs.filter(
-        (skillsDir) =>
-          skillsDir !== path.join(config.projectCoworkDir, "skills") &&
-          skillsDir !== builtInSkillsDir,
-      ),
-      ...(builtInSkillsEnabled ? [builtInSkillsDir] : []),
-    ],
-    memoryDirs: [
-      path.join(projectCoworkDir, "memory"),
-      ...config.memoryDirs.filter(
-        (memoryDir) => memoryDir !== path.join(config.projectCoworkDir, "memory"),
-      ),
-    ],
-    configDirs: [
-      projectCoworkDir,
-      ...config.configDirs.filter((configDir) => configDir !== config.projectCoworkDir),
-    ],
-  };
 }
 
 export async function loadConfig(options: LoadConfigOptions = {}): Promise<AgentConfig> {

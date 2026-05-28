@@ -256,7 +256,7 @@ const feedItemSchema: z.ZodType<SessionFeedItem> = z.discriminatedUnion("kind", 
     .strict(),
 ]);
 
-export const sessionLastTurnUsageSchema: z.ZodType<SessionLastTurnUsage> = z
+const sessionLastTurnUsageSchema: z.ZodType<SessionLastTurnUsage> = z
   .object({
     turnId: z.string().trim().min(1),
     usage: turnUsageSchema,

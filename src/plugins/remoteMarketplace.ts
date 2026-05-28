@@ -4,11 +4,11 @@ import type { PluginInstallMetadata } from "./manifest";
 import { type ParsedMarketplaceDocument, parseRemotePluginMarketplace } from "./marketplace";
 
 export const BUILT_IN_MARKETPLACE_REPO = "mweinbach/cowork-skills-plugins";
-export const BUILT_IN_MARKETPLACE_REF = "main";
-export const BUILT_IN_MARKETPLACE_PATH = ".agents/plugins/marketplace.json";
-export const BUILT_IN_MARKETPLACE_URL = `https://github.com/${BUILT_IN_MARKETPLACE_REPO}/tree/${BUILT_IN_MARKETPLACE_REF}`;
+const BUILT_IN_MARKETPLACE_REF = "main";
+const BUILT_IN_MARKETPLACE_PATH = ".agents/plugins/marketplace.json";
+const BUILT_IN_MARKETPLACE_URL = `https://github.com/${BUILT_IN_MARKETPLACE_REPO}/tree/${BUILT_IN_MARKETPLACE_REF}`;
 export const DEFAULT_MARKETPLACE_PLUGIN_IDS = ["workspace-tools"] as const;
-export const DEFAULT_MARKETPLACE_PLUGIN_LEGACY_TOMBSTONES: Record<string, readonly string[]> = {
+const DEFAULT_MARKETPLACE_PLUGIN_LEGACY_TOMBSTONES: Record<string, readonly string[]> = {
   "workspace-tools": ["documents", "presentations", "spreadsheets"],
 };
 
@@ -66,7 +66,7 @@ export function buildMarketplaceCatalogMetadata(input: {
   };
 }
 
-export function buildMarketplaceInstallMetadata(
+function buildMarketplaceInstallMetadata(
   marketplace: ParsedMarketplaceDocument,
   plugin: ParsedMarketplaceDocument["plugins"][number],
 ): PluginMarketplaceInstallMetadata | null {
@@ -102,7 +102,7 @@ export function buildMarketplaceInstallMetadataByPluginId(
   return metadataByPluginId;
 }
 
-export function buildMarketplaceInstallMetadataBySourceInput(
+function buildMarketplaceInstallMetadataBySourceInput(
   marketplace: ParsedMarketplaceDocument,
   input: string,
 ): Map<string, PluginMarketplaceInstallMetadata> {

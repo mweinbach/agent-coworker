@@ -684,7 +684,7 @@ export function fileUrlToDesktopPath(rawHref: string): string | null {
   }
 }
 
-export function desktopPathToFileUrl(rawPath: string): string | null {
+function desktopPathToFileUrl(rawPath: string): string | null {
   const normalized = rawPath.trim();
   if (!normalized) {
     return null;
@@ -903,7 +903,7 @@ const URL_SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
 const RELATIVE_FILENAME_RE = /^[\w.\-+ ()%,&'!@$=~^]+\.[A-Za-z0-9]{1,12}$/;
 
 /** Resolve a markdown href that looks like a bare filename (no scheme, no slashes) against the active workspace path. */
-export function resolveRelativeFileHref(rawHref: string, basePath: string | null): string | null {
+function resolveRelativeFileHref(rawHref: string, basePath: string | null): string | null {
   if (!basePath) return null;
   if (!rawHref || URL_SCHEME_RE.test(rawHref)) return null;
   if (rawHref.startsWith("/") || rawHref.startsWith("\\") || rawHref.startsWith("#")) {

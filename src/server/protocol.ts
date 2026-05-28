@@ -47,8 +47,8 @@ import type { PersistedSessionSummary } from "./sessionStore";
 
 export { ASK_SKIP_TOKEN } from "../shared/ask";
 
-export type MCPServerEventSource = "workspace" | "user" | "system" | "plugin";
-export type MCPServerAuthMode =
+type MCPServerEventSource = "workspace" | "user" | "system" | "plugin";
+type MCPServerAuthMode =
   | "none"
   | "missing"
   | "api_key"
@@ -86,7 +86,7 @@ export type SessionConfigPatch = {
   };
 };
 
-export type SessionConfigState = {
+type SessionConfigState = {
   yolo: boolean;
   observabilityEnabled: boolean;
   backupsEnabled: boolean;

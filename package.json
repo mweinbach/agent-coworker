@@ -27,7 +27,6 @@
     "!src/client/modelStreamReplay.ts",
     "!src/shared/displayCitationMarkers.ts",
     "!src/shared/askPrompt.ts",
-    "!src/runtime/openaiEventStream.ts",
     "config/**/*",
     "prompts/**/*",
     "!prompts/system-models/.research",

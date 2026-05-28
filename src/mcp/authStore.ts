@@ -13,12 +13,8 @@ export {
 
 export { readMCPAuthFiles } from "./authStore/store";
 export type {
-  MCPAuthFileState,
   MCPAuthMode,
   MCPAuthScope,
-  MCPResolvedServerAuth,
-  MCPServerCredentialRecord,
-  MCPServerCredentialsDocument,
   MCPServerOAuthClientInfo,
   MCPServerOAuthPending,
   MCPServerOAuthTokens,

@@ -1070,8 +1070,3 @@ export function getShellCommandPolicyViolation(
 
   return null;
 }
-
-export const __internal = {
-  collectShellPolicyCandidates,
-  normalizeShellCommandForPolicy,
-};

@@ -229,7 +229,3 @@ export function applyEnvelope(
     surfaceId,
   };
 }
-
-export function toSerializable(state: A2uiSurfaceState): A2uiSurfaceState {
-  return structuredClone(state);
-}

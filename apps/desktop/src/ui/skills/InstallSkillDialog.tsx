@@ -36,7 +36,7 @@ function skillPreviewSummary(preview: SkillPreviewState) {
   return validCount === 1 ? "1 skill ready" : `${validCount} skills ready`;
 }
 
-export function isSkillPreviewVisibleForInput(opts: {
+function isSkillPreviewVisibleForInput(opts: {
   normalizedSourceInput: string;
   lastPreviewSourceInput: string | null;
   lastPreviewTargetScope: SkillMutationTargetScope | null;

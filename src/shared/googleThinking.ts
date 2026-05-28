@@ -3,7 +3,7 @@ export const GOOGLE_DYNAMIC_REASONING_EFFORT = "dynamic" as const;
 export const GOOGLE_THINKING_LEVEL_VALUES = ["minimal", "low", "medium", "high"] as const;
 export type GoogleThinkingLevel = (typeof GOOGLE_THINKING_LEVEL_VALUES)[number];
 
-export const GOOGLE_REASONING_EFFORT_VALUES = [
+const GOOGLE_REASONING_EFFORT_VALUES = [
   GOOGLE_DYNAMIC_REASONING_EFFORT,
   ...GOOGLE_THINKING_LEVEL_VALUES,
 ] as const;
@@ -29,14 +29,7 @@ export function isGoogleThinkingLevel(value: unknown): value is GoogleThinkingLe
   );
 }
 
-export function isGoogleReasoningEffort(value: unknown): value is GoogleReasoningEffort {
-  return (
-    typeof value === "string" &&
-    (GOOGLE_REASONING_EFFORT_VALUES as readonly string[]).includes(value)
-  );
-}
-
-export function listGoogleThinkingLevelsForModel(modelId: string): readonly GoogleThinkingLevel[] {
+function listGoogleThinkingLevelsForModel(modelId: string): readonly GoogleThinkingLevel[] {
   if (GOOGLE_FLASH_MODEL_IDS.has(modelId)) {
     return GOOGLE_FLASH_THINKING_LEVELS;
   }

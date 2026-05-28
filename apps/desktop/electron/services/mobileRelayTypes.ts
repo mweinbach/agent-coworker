@@ -1,4 +1,4 @@
-export type MobileRelayStatus =
+type MobileRelayStatus =
   | "idle"
   | "starting"
   | "pairing"
@@ -6,11 +6,11 @@ export type MobileRelayStatus =
   | "reconnecting"
   | "error";
 
-export type MobileRelaySource = "direct" | "remodex" | "managed" | "override" | "unavailable";
+type MobileRelaySource = "direct" | "remodex" | "managed" | "override" | "unavailable";
 
-export type MobileRelayServiceStatus = "unknown" | "running" | "not-running" | "unavailable";
+type MobileRelayServiceStatus = "unknown" | "running" | "not-running" | "unavailable";
 
-export type MobileRelayPairingPayload = {
+type MobileRelayPairingPayload = {
   v: 1;
   scheme: "h3";
   hosts: string[];
@@ -22,7 +22,7 @@ export type MobileRelayPairingPayload = {
   expiresAt: number;
 };
 
-export const MOBILE_RELAY_TRUSTED_DEVICE_PERMISSION_KEYS = [
+const MOBILE_RELAY_TRUSTED_DEVICE_PERMISSION_KEYS = [
   "turns",
   "serverRequests",
   "providerAuth",

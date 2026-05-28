@@ -65,7 +65,7 @@ function shortHash(str: string): string {
   return `${(h2 >>> 0).toString(36)}${(h1 >>> 0).toString(36)}`;
 }
 
-export function sanitizeSurrogates(text: string): string {
+function sanitizeSurrogates(text: string): string {
   return text.replace(
     /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,
     "",

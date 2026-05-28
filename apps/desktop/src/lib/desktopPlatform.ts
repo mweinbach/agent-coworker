@@ -17,8 +17,8 @@
 
 export type DesktopPlatform = "macos" | "windows" | "linux" | "other";
 
-export type SidebarTitlebandMode = "native" | "topbar";
-export type TopbarControlPlacement = "left-rail" | "sidebar" | "inline";
+type SidebarTitlebandMode = "native" | "topbar";
+type TopbarControlPlacement = "left-rail" | "sidebar" | "inline";
 
 export type DesktopPlatformInfo = {
   platform: DesktopPlatform;

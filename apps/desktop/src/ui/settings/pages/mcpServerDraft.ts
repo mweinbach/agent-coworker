@@ -59,7 +59,7 @@ function formatArgs(args: string[] | undefined): string {
   return args.map(quoteArg).join(" ");
 }
 
-export function parseArgs(value: string): string[] | undefined {
+function parseArgs(value: string): string[] | undefined {
   const tokens: string[] = [];
   let current = "";
   let quotedBy: '"' | "'" | null = null;

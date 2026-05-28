@@ -1,21 +1,21 @@
 import type { ProviderName } from "../types";
 
-export const OPENCODE_PROVIDER_NAMES = ["opencode-go", "opencode-zen"] as const;
+const OPENCODE_PROVIDER_NAMES = ["opencode-go", "opencode-zen"] as const;
 export type OpenCodeProviderName = (typeof OPENCODE_PROVIDER_NAMES)[number];
 
-export const OPENCODE_GO_AVAILABLE_MODELS = ["glm-5", "kimi-k2.5"] as const;
-export const OPENCODE_ZEN_EXTRA_MODELS = [
+const OPENCODE_GO_AVAILABLE_MODELS = ["glm-5", "kimi-k2.5"] as const;
+const OPENCODE_ZEN_EXTRA_MODELS = [
   "nemotron-3-super-free",
   "mimo-v2-flash-free",
   "big-pickle",
   "minimax-m2.5-free",
   "minimax-m2.5",
 ] as const;
-export const OPENCODE_ZEN_AVAILABLE_MODELS = [
+const OPENCODE_ZEN_AVAILABLE_MODELS = [
   ...OPENCODE_GO_AVAILABLE_MODELS,
   ...OPENCODE_ZEN_EXTRA_MODELS,
 ] as const;
-export const OPENCODE_MODEL_IDS = [
+const OPENCODE_MODEL_IDS = [
   ...OPENCODE_GO_AVAILABLE_MODELS,
   ...OPENCODE_ZEN_EXTRA_MODELS,
 ] as const;
@@ -47,7 +47,7 @@ type OpenCodeProviderConfig = {
   availableModels: readonly OpenCodeModelId[];
 };
 
-export const OPENCODE_DEFAULT_MODEL: OpenCodeModelId = "glm-5";
+const OPENCODE_DEFAULT_MODEL: OpenCodeModelId = "glm-5";
 
 // OpenCode Zen's public /models endpoint exposes ids but not full capability
 // limits, so only fields confirmed by current official docs should be set
@@ -59,7 +59,7 @@ const DEFAULT_OPENCODE_TEXT_MODEL_LIMITS = {
   maxTokens: 65536,
 };
 
-export const OPENCODE_MODEL_SPECS: Record<OpenCodeModelId, OpenCodeModelSpec> = {
+const OPENCODE_MODEL_SPECS: Record<OpenCodeModelId, OpenCodeModelSpec> = {
   "glm-5": {
     id: "glm-5",
     name: "GLM-5",
@@ -152,20 +152,7 @@ const OPENCODE_ZEN_MODEL_PRICING: Partial<Record<OpenCodeModelId, OpenCodeModelP
   },
 };
 
-export const OPENCODE_MODEL_METADATA_NOTES: Partial<Record<OpenCodeModelId, string>> = {
-  "nemotron-3-super-free":
-    "Official NVIDIA docs publish a 1M-token context window, but not an authoritative max-output limit.",
-  "mimo-v2-flash-free":
-    "Official Xiaomi docs publish a 256k context window, but not an authoritative max-output limit.",
-  "big-pickle":
-    "OpenCode Zen currently publishes this model id and pricing, but not a public context-window or max-output spec.",
-  "minimax-m2.5-free":
-    "Official MiniMax docs publish a 204,800-token input context window, but not an authoritative max-output limit.",
-  "minimax-m2.5":
-    "Official MiniMax docs publish a 204,800-token input context window, but not an authoritative max-output limit.",
-};
-
-export const OPENCODE_PROVIDER_CONFIGS: Record<OpenCodeProviderName, OpenCodeProviderConfig> = {
+const OPENCODE_PROVIDER_CONFIGS: Record<OpenCodeProviderName, OpenCodeProviderConfig> = {
   "opencode-go": {
     id: "opencode-go",
     label: "OpenCode Go",
@@ -236,10 +223,6 @@ export function resolveOpenCodeApiKey(
   const envVarName = getOpenCodeProviderConfig(provider).envVarName;
   const envValue = (opts.env ?? process.env)[envVarName]?.trim();
   return envValue ? envValue : undefined;
-}
-
-export function getOpenCodeSiblingProvider(provider: OpenCodeProviderName): OpenCodeProviderName {
-  return provider === "opencode-go" ? "opencode-zen" : "opencode-go";
 }
 
 export function isOpenCodeSiblingPair(

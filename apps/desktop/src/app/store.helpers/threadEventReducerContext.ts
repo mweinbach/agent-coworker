@@ -89,15 +89,6 @@ export type ThreadEventReducerDeps = {
   }) => boolean;
 };
 
-export type ThreadEventReducerRuntimeContext = {
-  deps: ThreadEventReducerDeps;
-  isWorkspaceDisposed: (workspaceId: string) => boolean;
-  reactivateWorkspaceThreadEventState: (workspaceId: string) => void;
-  rememberThreadStoreGet: (workspaceId: string, get: StoreGet) => void;
-  trackedThreadIdsForWorkspace: (workspaceId: string, getOverride?: StoreGet) => string[];
-  shouldReplayDisconnectedEvent: (evt: SessionEvent) => boolean;
-};
-
 export function sortAgentSummaries(agents: ThreadAgentSummary[]): ThreadAgentSummary[] {
   return [...agents].sort((left, right) => {
     const updatedDiff = Date.parse(right.updatedAt) - Date.parse(left.updatedAt);

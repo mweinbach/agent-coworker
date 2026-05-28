@@ -1,29 +1,29 @@
 import fs from "node:fs";
 import path from "node:path";
 
-export const SIDECAR_BASE_NAME = "cowork-server";
+const SIDECAR_BASE_NAME = "cowork-server";
 export const SIDECAR_MANIFEST_NAME = "cowork-server-manifest.json";
 export const SIDECAR_BUN_EXECUTABLE_NAME = "bun.exe";
 export const SIDECAR_BUN_ENTRYPOINT_PATH = "server/index.js";
-export const CODEX_APP_SERVER_BASE_NAME = "codex-app-server";
+const CODEX_APP_SERVER_BASE_NAME = "codex-app-server";
 export const FOUNDATION_MODELS_SDK_DIR_NAME = "tsfm-sdk";
 export const FOUNDATION_MODELS_KOFFI_TRIPLET = "darwin_arm64";
 export const WINDOWS_AI_ELECTRON_DIR_NAME = "windows-ai-electron";
 
-export type ExecutableSidecarLaunchSpec = {
+type ExecutableSidecarLaunchSpec = {
   kind: "executable";
   path: string;
   args?: string[];
 };
 
-export type BunSidecarLaunchSpec = {
+type BunSidecarLaunchSpec = {
   kind: "bun";
   runtime: string;
   entrypoint: string;
   args?: string[];
 };
 
-export type SidecarLaunchSpec = ExecutableSidecarLaunchSpec | BunSidecarLaunchSpec;
+type SidecarLaunchSpec = ExecutableSidecarLaunchSpec | BunSidecarLaunchSpec;
 
 export type SidecarManifest = {
   targetTriple: string;

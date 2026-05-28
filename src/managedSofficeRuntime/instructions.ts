@@ -4,7 +4,7 @@ import { ensureManagedSofficeRuntimeReady } from "./ensureReady";
 
 const DISABLE_PRINTER_DETECTION_ENV = "SAL_DISABLE_SYNCHRONOUS_PRINTER_DETECTION";
 
-export function managedSofficeEnvValue(
+function managedSofficeEnvValue(
   env: Record<string, string | undefined> | undefined,
   key: string,
 ): string {

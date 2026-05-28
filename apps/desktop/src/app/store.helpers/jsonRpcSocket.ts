@@ -366,13 +366,13 @@ export async function resumeJsonRpcThread(
   return await requestJsonRpc(get, set, workspaceId, "thread/resume", { threadId });
 }
 
-export type InlineFileAttachmentInput = {
+type InlineFileAttachmentInput = {
   filename: string;
   contentBase64: string;
   mimeType: string;
 };
 
-export type UploadedFileAttachmentInput = {
+type UploadedFileAttachmentInput = {
   filename: string;
   path: string;
   mimeType: string;

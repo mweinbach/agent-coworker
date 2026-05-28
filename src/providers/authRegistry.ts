@@ -12,20 +12,12 @@ import {
 import {
   getDefaultProviderAuthMethods,
   listDefaultProviderAuthMethods,
-  type ProviderAuthFieldKind,
   type ProviderAuthMethod,
-  type ProviderAuthMethodField,
-  type ProviderAuthMethodType,
 } from "../shared/providerAuthMethods";
 import type { ProviderName } from "../types";
 import { resolveAuthHomeDir } from "../utils/authHome";
 
-export type {
-  ProviderAuthFieldKind,
-  ProviderAuthMethod,
-  ProviderAuthMethodField,
-  ProviderAuthMethodType,
-};
+export type { ProviderAuthMethod };
 
 export type ProviderAuthChallenge = {
   method: "auto" | "code";

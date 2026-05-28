@@ -1,7 +1,7 @@
 import type { ProviderName } from "./wsProtocol";
 import { PROVIDER_NAMES } from "./wsProtocol";
 
-export const SETTINGS_PROVIDER_ORDER: readonly ProviderName[] = [
+const SETTINGS_PROVIDER_ORDER: readonly ProviderName[] = [
   "codex-cli",
   "opencode-go",
   "google",

@@ -50,7 +50,7 @@ import togetherQwenQwen35397bA17b from "../../config/models/together/qwen-qwen3.
 import togetherZaiOrgGlm5 from "../../config/models/together/zai-org-glm-5.json";
 import type { ProviderName } from "../types";
 
-export const STATIC_MODEL_PROVIDER_NAMES = [
+const STATIC_MODEL_PROVIDER_NAMES = [
   "google",
   "openai",
   "anthropic",
@@ -66,7 +66,7 @@ export const STATIC_MODEL_PROVIDER_NAMES = [
   "antigravity",
 ] as const satisfies readonly ProviderName[];
 
-export type StaticModelProviderName = (typeof STATIC_MODEL_PROVIDER_NAMES)[number];
+type StaticModelProviderName = (typeof STATIC_MODEL_PROVIDER_NAMES)[number];
 
 const providerNameSchema = z.enum(STATIC_MODEL_PROVIDER_NAMES);
 
@@ -251,7 +251,7 @@ export function describeModelProviderMismatch(
 
 export { MODEL_REGISTRY_ENTRIES };
 
-export function isStaticRegistryProvider(
+function isStaticRegistryProvider(
   provider: ProviderName,
 ): provider is StaticModelProviderName {
   return (STATIC_MODEL_PROVIDER_NAMES as readonly string[]).includes(provider);

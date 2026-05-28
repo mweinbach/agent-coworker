@@ -30,14 +30,6 @@ export function SettingsChromeProvider({
   return <SettingsChromeContext.Provider value={value}>{children}</SettingsChromeContext.Provider>;
 }
 
-export function useSettingsChrome(): SettingsChromeApi {
-  const ctx = useContext(SettingsChromeContext);
-  if (!ctx) {
-    throw new Error("useSettingsChrome must be used within SettingsChromeProvider");
-  }
-  return ctx;
-}
-
 /** Safe when the provider is absent (e.g. isolated tests rendering a page alone). */
 export function useOptionalSettingsChrome(): SettingsChromeApi | null {
   return useContext(SettingsChromeContext);

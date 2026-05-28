@@ -95,13 +95,13 @@ export function extractJsonRpcTextInput(input: unknown): string {
     .trim();
 }
 
-export type InlineFileAttachment = {
+type InlineFileAttachment = {
   filename: string;
   contentBase64: string;
   mimeType: string;
 };
 
-export type UploadedFileAttachment = {
+type UploadedFileAttachment = {
   filename: string;
   mimeType: string;
   path: string;
@@ -109,12 +109,12 @@ export type UploadedFileAttachment = {
 
 export type FileAttachment = InlineFileAttachment | UploadedFileAttachment;
 
-export type OrderedTextInputPart = {
+type OrderedTextInputPart = {
   type: "text";
   text: string;
 };
 
-export type OrderedFileInputPart =
+type OrderedFileInputPart =
   | ({
       type: "file";
     } & InlineFileAttachment)

@@ -34,7 +34,7 @@ export type ResponsesStreamProjector = {
   currentBlock: AssistantContentBlock | null;
 };
 
-export function parseStreamingJson(partialJson: string): Record<string, unknown> {
+function parseStreamingJson(partialJson: string): Record<string, unknown> {
   if (!partialJson || partialJson.trim() === "") return {};
   try {
     return JSON.parse(partialJson) as Record<string, unknown>;
@@ -99,7 +99,7 @@ function firstString(...values: unknown[]): string | undefined {
   return undefined;
 }
 
-export class OpenAiResponseFailedError extends Error {
+class OpenAiResponseFailedError extends Error {
   readonly code?: string;
   readonly status?: string;
   readonly failureType?: string;
@@ -125,7 +125,7 @@ type OpenAiResponseFailureDetails = {
   response?: unknown;
 };
 
-export function buildOpenAiResponseFailedError(
+function buildOpenAiResponseFailedError(
   event: Record<string, any>,
 ): OpenAiResponseFailedError {
   const response = asRecord(event.response);

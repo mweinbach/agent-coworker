@@ -38,12 +38,12 @@ export type MaterializedPluginSource = {
   cleanup: () => Promise<void>;
 };
 
-export const NO_VALID_PLUGIN_BUNDLES_MESSAGE =
+const NO_VALID_PLUGIN_BUNDLES_MESSAGE =
   "No valid plugin bundles were found in the provided source";
 export const MULTIPLE_VALID_PLUGIN_BUNDLES_MESSAGE =
   "The install source contains more than one valid plugin bundle. Install one plugin at a time so failures cannot leave a partially applied plugin set.";
 
-export function validPluginCandidates(
+function validPluginCandidates(
   candidates: readonly MaterializedPluginCandidate[],
 ): MaterializedPluginCandidate[] {
   return candidates.filter((candidate) => candidate.diagnostics.length === 0);
@@ -272,7 +272,7 @@ async function materializeLocalPath(localPath: string): Promise<MaterializedPlug
   };
 }
 
-export function resolvePluginSource(input: string, cwd = process.cwd()): PluginSourceDescriptor {
+function resolvePluginSource(input: string, cwd = process.cwd()): PluginSourceDescriptor {
   return resolveGitHubOrLocalSource<PluginSourceDescriptor>(input, cwd);
 }
 

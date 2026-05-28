@@ -366,7 +366,6 @@ export function convertMessagesToInteractionsInput(messages: ModelMessage[]): In
 }
 
 export {
-  asFiniteNumber,
   asNonEmptyString,
   asRecord,
   getGoogleThoughtSignature,

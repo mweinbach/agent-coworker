@@ -1,5 +1,4 @@
 import type {
-  ResearchExportFormat,
   ResearchRecord,
   ResearchSettings,
 } from "../../../../src/server/research/types";
@@ -142,7 +141,7 @@ export type PersistedProviderState = {
   statusLastUpdatedAt?: string | null;
 };
 
-export type LmStudioUiState = {
+type LmStudioUiState = {
   enabled: boolean;
   hiddenModels: string[];
 };
@@ -151,7 +150,7 @@ export type PersistedProviderUiState = {
   lmstudio: LmStudioUiState;
 };
 
-export type OnboardingStatus = "pending" | "dismissed" | "completed";
+type OnboardingStatus = "pending" | "dismissed" | "completed";
 
 export type PersistedOnboardingState = {
   status: OnboardingStatus;
@@ -169,7 +168,7 @@ export type PersistedDesktopSettings = {
   sidebarSectionOrder?: SidebarSectionKey[];
 };
 
-export const SIDEBAR_SECTION_KEYS = ["projects", "chats"] as const;
+const SIDEBAR_SECTION_KEYS = ["projects", "chats"] as const;
 
 export type SidebarSectionKey = (typeof SIDEBAR_SECTION_KEYS)[number];
 
@@ -228,7 +227,7 @@ export function normalizeDesktopSettings(value?: PersistedDesktopSettings | null
 
 export type OnboardingStep = "welcome" | "workspace" | "provider" | "defaults" | "firstThread";
 export type ViewId = "chat" | "skills" | "research" | "settings";
-export type PluginViewMode = "plugins" | "skills";
+type PluginViewMode = "plugins" | "skills";
 export type SettingsPageId =
   | "models"
   | "toolAccess"
@@ -285,11 +284,6 @@ export const DEFAULT_RESEARCH_SETTINGS: ResearchSettingsState = {
   visualization: "auto",
 };
 
-export type ResearchExportRequest = {
-  researchId: string;
-  format: ResearchExportFormat;
-};
-
 export type PluginManagementMode = "auto" | "global" | "workspace";
 
 export type PersistedState = {
@@ -306,7 +300,7 @@ export type PersistedState = {
   onboarding?: PersistedOnboardingState;
 };
 
-export type TranscriptDirection = "server" | "client";
+type TranscriptDirection = "server" | "client";
 
 export type TranscriptEvent = {
   ts: string;
@@ -384,18 +378,14 @@ export function createDefaultA2uiDock(): A2uiThreadDock {
   };
 }
 
-export type SessionConfigSubset = Extract<SessionEvent, { type: "session_config" }>["config"];
-export type MCPServersEvent = Extract<SessionEvent, { type: "mcp_servers" }>;
-export type MCPServerValidationEvent = Extract<SessionEvent, { type: "mcp_server_validation" }>;
-export type MCPServerAuthChallengeEvent = Extract<
+type SessionConfigSubset = Extract<SessionEvent, { type: "session_config" }>["config"];
+type MCPServersEvent = Extract<SessionEvent, { type: "mcp_servers" }>;
+type MCPServerValidationEvent = Extract<SessionEvent, { type: "mcp_server_validation" }>;
+type MCPServerAuthChallengeEvent = Extract<
   SessionEvent,
   { type: "mcp_server_auth_challenge" }
 >;
-export type MCPServerAuthResultEvent = Extract<SessionEvent, { type: "mcp_server_auth_result" }>;
-export type OpenAiNativeConnectorsEvent = Extract<
-  SessionEvent,
-  { type: "openai_native_connectors" }
->;
+type MCPServerAuthResultEvent = Extract<SessionEvent, { type: "mcp_server_auth_result" }>;
 export type SessionUsageSnapshot = NonNullable<
   Extract<SessionEvent, { type: "session_usage" }>["usage"]
 >;
@@ -403,10 +393,8 @@ export type TurnUsageSnapshot = Pick<
   Extract<SessionEvent, { type: "turn_usage" }>,
   "turnId" | "usage"
 >;
-export type WorkspaceBackupsEvent = Extract<SessionEvent, { type: "workspace_backups" }>;
+type WorkspaceBackupsEvent = Extract<SessionEvent, { type: "workspace_backups" }>;
 export type WorkspaceBackupDeltaEvent = Extract<SessionEvent, { type: "workspace_backup_delta" }>;
-export type PluginsCatalogEvent = Extract<SessionEvent, { type: "plugins_catalog" }>;
-export type PluginDetailEvent = Extract<SessionEvent, { type: "plugin_detail" }>;
 export type SessionSnapshot = Extract<SessionEvent, { type: "session_snapshot" }>["snapshot"];
 export type SessionSnapshotFingerprint = Pick<
   SessionSnapshot,
@@ -418,14 +406,14 @@ export type CachedSessionSnapshot = {
 };
 export type WorkspaceBackupEntry = WorkspaceBackupsEvent["backups"][number];
 export type ThreadAgentSummary = Extract<SessionEvent, { type: "agent_status" }>["agent"];
-export type ThreadSessionKind = Extract<SessionEvent, { type: "server_hello" }>["sessionKind"];
-export type ThreadAgentRole = Extract<SessionEvent, { type: "server_hello" }>["role"];
-export type ThreadAgentMode = Extract<SessionEvent, { type: "server_hello" }>["mode"];
-export type ThreadAgentReasoningEffort = Extract<
+type ThreadSessionKind = Extract<SessionEvent, { type: "server_hello" }>["sessionKind"];
+type ThreadAgentRole = Extract<SessionEvent, { type: "server_hello" }>["role"];
+type ThreadAgentMode = Extract<SessionEvent, { type: "server_hello" }>["mode"];
+type ThreadAgentReasoningEffort = Extract<
   SessionEvent,
   { type: "server_hello" }
 >["effectiveReasoningEffort"];
-export type ThreadAgentExecutionState = Extract<
+type ThreadAgentExecutionState = Extract<
   SessionEvent,
   { type: "server_hello" }
 >["executionState"];
@@ -535,11 +523,6 @@ export type HydratedTranscriptSnapshot = {
   agents: ThreadAgentSummary[];
   sessionUsage: SessionUsageSnapshot | null;
   lastTurnUsage: TurnUsageSnapshot | null;
-};
-
-export type ConnectDraft = {
-  provider: ProviderName;
-  apiKey: string;
 };
 
 export type AskPrompt = {

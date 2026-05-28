@@ -2,8 +2,6 @@ import type { CSSProperties, ReactNode } from "react";
 import { Fragment, useState } from "react";
 import { isSupportedBasicComponentType } from "../../../../../../src/experimental/a2ui/component";
 import {
-  formatString,
-  resolveDynamic,
   resolveDynamicBoolean,
   resolveDynamicString,
   stringifyDynamic,
@@ -922,9 +920,3 @@ export function A2uiRenderer({ root, dataModel, interactive, onAction }: A2uiRen
   };
   return <RenderNode component={root} context={context} />;
 }
-
-// Re-exported helpers used by tests.
-export const __internal = {
-  formatString,
-  resolveDynamic,
-};

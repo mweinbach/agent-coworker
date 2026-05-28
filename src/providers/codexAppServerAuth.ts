@@ -19,7 +19,7 @@ export type CodexAppServerAccount = {
   planType?: string;
 };
 
-export type CodexAppServerRateLimitWindow = {
+type CodexAppServerRateLimitWindow = {
   usedPercent: number;
   windowDurationMins: number;
   resetsAt?: number;

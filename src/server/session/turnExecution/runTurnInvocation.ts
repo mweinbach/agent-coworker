@@ -6,7 +6,7 @@ import type { SessionContext } from "../SessionContext";
 import type { SteerCoordinator } from "./steerCoordinator";
 import { isStartStepPart } from "./userMessageTurnHelpers";
 
-export type A2uiSurfaceManagerProvider = () => {
+type A2uiSurfaceManagerProvider = () => {
   applyUnknown: (
     value: unknown,
     meta?: { reason?: string; toolCallId?: string },
@@ -17,7 +17,7 @@ export type A2uiSurfaceManagerProvider = () => {
   };
 };
 
-export type TurnStreamTracker = {
+type TurnStreamTracker = {
   startedStepCount: number;
   streamPartIndex: number;
   rawStreamEventIndex: number;

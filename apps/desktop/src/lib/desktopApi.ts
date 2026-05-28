@@ -5,8 +5,6 @@ import type {
 import desktopPackage from "../../package.json";
 import type { HydratedTranscriptSnapshot, PersistedState, TranscriptEvent } from "../app/types";
 
-export { DEFAULT_QUICK_CHAT_SHORTCUT_ACCELERATOR as QUICK_CHAT_SHORTCUT_ACCELERATOR } from "./quickChatShortcut";
-
 export type StartWorkspaceServerInput = {
   workspaceId: string;
   workspacePath: string;
@@ -34,7 +32,7 @@ export type MobileRelayStartInput = {
   featureFlags?: DesktopFeatureFlagOverrides;
 };
 
-export const MOBILE_RELAY_TRUSTED_DEVICE_PERMISSION_KEYS = [
+const MOBILE_RELAY_TRUSTED_DEVICE_PERMISSION_KEYS = [
   "turns",
   "serverRequests",
   "providerAuth",
@@ -46,7 +44,7 @@ export const MOBILE_RELAY_TRUSTED_DEVICE_PERMISSION_KEYS = [
 export type MobileRelayTrustedDevicePermissionKey =
   (typeof MOBILE_RELAY_TRUSTED_DEVICE_PERMISSION_KEYS)[number];
 
-export type MobileRelayTrustedDevicePermissions = Record<
+type MobileRelayTrustedDevicePermissions = Record<
   MobileRelayTrustedDevicePermissionKey,
   boolean
 >;
@@ -175,7 +173,7 @@ export type ReadFileInput = {
   path: string;
 };
 
-export type ReadFileOutput = {
+type ReadFileOutput = {
   content: string;
 };
 
@@ -197,10 +195,6 @@ export type ReadFileForPreviewOutput = {
 
 export type CopyPathInput = {
   path: string;
-};
-
-export type CopyTextInput = {
-  text: string;
 };
 
 export type CreateDirectoryInput = {
@@ -235,7 +229,7 @@ export type DesktopMenuCommand =
   | "openSkills"
   | "openUpdates";
 
-export type ThemeSource = "system" | "light" | "dark";
+type ThemeSource = "system" | "light" | "dark";
 
 export type WindowsBackgroundMaterial = "auto" | "none" | "mica" | "acrylic" | "tabbed";
 
@@ -266,7 +260,7 @@ export type DesktopNotificationInput = {
   silent?: boolean;
 };
 
-export type UpdaterPhase =
+type UpdaterPhase =
   | "disabled"
   | "idle"
   | "checking"

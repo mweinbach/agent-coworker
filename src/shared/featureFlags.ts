@@ -11,7 +11,7 @@ export const FEATURE_FLAG_IDS = [
 export type FeatureFlagId = (typeof FEATURE_FLAG_IDS)[number];
 
 export type FeatureFlags = Record<FeatureFlagId, boolean>;
-export type FeatureFlagOverrides = Partial<FeatureFlags>;
+type FeatureFlagOverrides = Partial<FeatureFlags>;
 
 export type FeatureFlagDefinition = {
   id: FeatureFlagId;
@@ -154,7 +154,7 @@ export function resolveFeatureFlags(options: ResolveFeatureFlagsOptions): Featur
   return values;
 }
 
-export function normalizeFeatureFlagOverrides(value: unknown): FeatureFlagOverrides | undefined {
+function normalizeFeatureFlagOverrides(value: unknown): FeatureFlagOverrides | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
@@ -171,12 +171,8 @@ export function normalizeFeatureFlagOverrides(value: unknown): FeatureFlagOverri
 }
 
 // Backward-compat aliases while desktop migrates imports.
-export const DESKTOP_FEATURE_FLAG_IDS = FEATURE_FLAG_IDS;
 export type DesktopFeatureFlagId = FeatureFlagId;
 export type DesktopFeatureFlags = FeatureFlags;
 export type DesktopFeatureFlagOverrides = FeatureFlagOverrides;
-export type DesktopFeatureFlagDefinition = FeatureFlagDefinition;
-export const DESKTOP_FEATURE_FLAG_DEFINITIONS = FEATURE_FLAG_DEFINITIONS;
-export type ResolveDesktopFeatureFlagsOptions = ResolveFeatureFlagsOptions;
 export const resolveDesktopFeatureFlags = resolveFeatureFlags;
 export const normalizeDesktopFeatureFlagOverrides = normalizeFeatureFlagOverrides;

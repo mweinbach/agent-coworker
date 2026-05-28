@@ -22,9 +22,7 @@ import type {
 import { PROVIDER_NAMES } from "../lib/wsProtocol";
 import {
   buildContextPreamble,
-  extractAgentStateFromTranscript,
   extractUsageStateFromTranscript,
-  mapTranscriptToFeed,
 } from "./store.feedMapping";
 import { createControlSocketHelpers } from "./store.helpers/controlSocket";
 import {
@@ -42,7 +40,6 @@ import {
   beginThreadSelectionRequest,
   bumpWorkspaceJsonRpcSocketGeneration,
   bumpWorkspaceStartGeneration,
-  clearPendingThreadSteer,
   clearPendingThreadSteers,
   clearThreadSelectionRequest,
   clearWorkspaceJsonRpcSocketGeneration,
@@ -51,16 +48,11 @@ import {
   defaultWorkspaceRuntime,
   ensureThreadRuntime,
   ensureWorkspaceRuntime,
-  getWorkspaceJsonRpcSocketGeneration,
   getWorkspaceStartGeneration,
-  hasPendingThreadSteer,
   isCurrentThreadSelectionRequest,
-  markPendingThreadSteerAccepted,
-  prependPendingThreadMessage,
   prependPendingThreadMessageWithAttachments,
   queuePendingThreadMessage,
   RUNTIME,
-  rememberPendingThreadSteer,
   shiftPendingThreadAttachments,
   shiftPendingThreadMessage,
 } from "./store.helpers/runtimeState";
@@ -521,7 +513,7 @@ export type AppStoreState = {
   markA2uiSurfaceSeen: (threadId: string, surfaceId: string, revision: number) => void;
 };
 
-export type AppStoreActionKeys = {
+type AppStoreActionKeys = {
   [K in keyof AppStoreState]: AppStoreState[K] extends (...args: never[]) => unknown ? K : never;
 }[keyof AppStoreState];
 
@@ -702,7 +694,6 @@ export {
   buildContextPreamble,
   bumpWorkspaceJsonRpcSocketGeneration,
   bumpWorkspaceStartGeneration,
-  clearPendingThreadSteer,
   clearPendingThreadSteers,
   clearThreadSelectionRequest,
   clearWorkspaceJsonRpcSocketGeneration,
@@ -716,27 +707,19 @@ export {
   ensureThreadRuntime,
   ensureThreadSocket,
   ensureWorkspaceRuntime,
-  extractAgentStateFromTranscript,
   extractUsageStateFromTranscript,
-  getWorkspaceJsonRpcSocketGeneration,
-  hasPendingThreadSteer,
   isCurrentThreadSelectionRequest,
   isProviderName,
   makeId,
-  mapTranscriptToFeed,
-  markPendingThreadSteerAccepted,
   normalizeThreadTitleSource,
   nowIso,
-  persist,
   persistNow,
-  prependPendingThreadMessage,
   prependPendingThreadMessageWithAttachments,
   providerAuthMethodsFor,
   pushNotification,
   queuePendingThreadMessage,
   RUNTIME,
   reactivateWorkspaceJsonRpcState,
-  rememberPendingThreadSteer,
   requestJsonRpcControl,
   requestJsonRpcControlEvent,
   requestSessionSnapshot,

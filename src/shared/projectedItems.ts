@@ -11,7 +11,7 @@ const todoItemSchema = z
   })
   .strict();
 
-export const projectedToolStateSchema = z.enum([
+const projectedToolStateSchema = z.enum([
   "input-streaming",
   "input-available",
   "approval-requested",
@@ -20,7 +20,7 @@ export const projectedToolStateSchema = z.enum([
   "output-denied",
 ]);
 
-export const projectedUserMessageContentPartSchema = z
+const projectedUserMessageContentPartSchema = z
   .object({
     type: z.literal("text"),
     text: z.string(),

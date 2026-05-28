@@ -16,7 +16,6 @@ setBedrockProviderModule({
 });
 
 export { __internal } from "./internal";
-export { resolvePiModel } from "./modelResolution";
 export { createPiRuntime } from "./runTurn";
 export {
   buildInitialStepMessages,
@@ -35,7 +34,6 @@ export {
   shouldAddInvalidToolCallFormatReminder,
   toolMapToPiTools,
 } from "./tools";
-export type { ResolvedPiRuntimeModel } from "./types";
 export {
   markModelCallSpanError,
   markModelCallSpanSuccess,

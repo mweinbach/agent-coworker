@@ -22,7 +22,7 @@ const surfaceActionPayloadSchema = z
   .record(z.string(), z.unknown())
   .describe("Free-form key/value payload (e.g. current TextField values, checkbox state).");
 
-export const a2uiActionDispatchRequestSchema = z
+const a2uiActionDispatchRequestSchema = z
   .object({
     threadId: nonEmptyTrimmedStringSchema,
     surfaceId: nonEmptyTrimmedStringSchema,
@@ -34,21 +34,8 @@ export const a2uiActionDispatchRequestSchema = z
   })
   .strict();
 
-export const a2uiActionDispatchResultSchema = z
-  .object({
-    /** "delivered-as-steer" when the active turn accepted it, "delivered-as-turn" when a new turn was started. */
-    delivery: z.enum(["delivered-as-steer", "delivered-as-turn"]),
-    /** The turnId the action was folded into (new or existing). */
-    turnId: nonEmptyTrimmedStringSchema,
-  })
-  .strict();
-
 export const jsonRpcA2uiRequestSchemas = {
   "cowork/session/a2ui/action": a2uiActionDispatchRequestSchema,
-} as const;
-
-export const jsonRpcA2uiResultSchemas = {
-  "cowork/session/a2ui/action": a2uiActionDispatchResultSchema,
 } as const;
 
 /**

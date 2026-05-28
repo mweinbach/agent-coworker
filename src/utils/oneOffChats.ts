@@ -5,8 +5,8 @@ import path from "node:path";
 
 const PRIVATE_DIR_MODE = 0o700;
 
-export const ONE_OFF_CHAT_WORKSPACE_KIND = "oneOffChat";
-export const PROJECT_WORKSPACE_KIND = "project";
+const ONE_OFF_CHAT_WORKSPACE_KIND = "oneOffChat";
+const PROJECT_WORKSPACE_KIND = "project";
 
 export type WorkspaceKind = typeof PROJECT_WORKSPACE_KIND | typeof ONE_OFF_CHAT_WORKSPACE_KIND;
 

@@ -31,11 +31,11 @@ export type JsonRpcThreadSummaryFilter = {
   executionState?: string | null;
 };
 
-export type JsonRpcPendingPromptEvent =
+type JsonRpcPendingPromptEvent =
   | Extract<SessionEvent, { type: "ask" }>
   | Extract<SessionEvent, { type: "approval" }>;
 
-export type JsonRpcThreadSubscriptionOptions = {
+type JsonRpcThreadSubscriptionOptions = {
   initialActiveTurnId?: string | null;
   initialAgentText?: string | null;
   drainDisconnectedReplayBuffer?: boolean;

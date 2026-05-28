@@ -66,7 +66,7 @@ export function resolveAllowedPath(workspaceRoots: string[], requestedPath: stri
   return assertPathWithinRoots(workspaceRoots, requestedPath, "path");
 }
 
-export function getSaveExportSourceRoots(workspaceRoots: string[]): string[] {
+function getSaveExportSourceRoots(workspaceRoots: string[]): string[] {
   const home = os.homedir();
   return [...workspaceRoots, path.join(home, ".cowork", "research")];
 }
@@ -87,7 +87,7 @@ export function resolveAllowedSaveExportSourcePath(
  * (see `resolveDesktopBuiltinSkillRootsForReveal`); pass a freshly resolved list
  * per invocation so env / packaged paths stay accurate.
  */
-export function getRevealPathRoots(
+function getRevealPathRoots(
   workspaceRoots: string[],
   builtinSkillRoots: string[] = [],
 ): string[] {

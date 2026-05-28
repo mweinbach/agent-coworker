@@ -22,7 +22,6 @@ import {
 import {
   type AiCoworkerPaths,
   type ConnectionStore,
-  parseConnectionStoreJson,
   type StoredConnection,
 } from "../store/connections";
 import type { AgentConfig } from "../types";
@@ -30,7 +29,7 @@ import { writeTextFileAtomic } from "../utils/atomicFile";
 import { resolveAuthHomeDir } from "../utils/authHome";
 import type { ProviderCatalogModelEntry } from "./connectionCatalog";
 
-export type BedrockAuthMethodId = "aws_default" | "aws_profile" | "aws_keys" | "api_key";
+type BedrockAuthMethodId = "aws_default" | "aws_profile" | "aws_keys" | "api_key";
 
 export type ResolvedBedrockAuthConfig = {
   methodId: BedrockAuthMethodId;
@@ -93,19 +92,6 @@ function normalizeModelId(modelId: string, source = "model"): string {
     throw new Error(`${source} is required.`);
   }
   return trimmed;
-}
-
-function readConnectionStoreSync(paths: AiCoworkerPaths): ConnectionStore {
-  try {
-    const raw = fsSync.readFileSync(paths.connectionsFile, "utf-8");
-    return parseConnectionStoreJson(raw, paths.connectionsFile);
-  } catch (error) {
-    const code = asNonEmptyString(asRecord(error)?.code);
-    if (code === "ENOENT") {
-      return { version: 1, updatedAt: new Date().toISOString(), services: {} };
-    }
-    throw error;
-  }
 }
 
 function savedBedrockConnection(store: ConnectionStore): StoredConnection | null {
@@ -262,17 +248,7 @@ export async function resolveBedrockAuthConfig(
   return resolveSavedBedrockAuthFromStore(store, env) ?? resolveAmbientBedrockAuth(env, home);
 }
 
-export function resolveBedrockAuthConfigSync(
-  opts: { home?: string; env?: NodeJS.ProcessEnv; config?: Pick<AgentConfig, "skillsDirs"> } = {},
-): ResolvedBedrockAuthConfig | null {
-  const env = opts.env ?? process.env;
-  const home = opts.home ?? resolveAuthHomeDir(opts.config, undefined, env);
-  const paths = getAiCoworkerPaths({ homedir: home });
-  const store = readConnectionStoreSync(paths);
-  return resolveSavedBedrockAuthFromStore(store, env) ?? resolveAmbientBedrockAuth(env, home);
-}
-
-export function bedrockDiscoveryCachePath(paths: AiCoworkerPaths): string {
+function bedrockDiscoveryCachePath(paths: AiCoworkerPaths): string {
   return path.join(paths.configDir, BEDROCK_DISCOVERY_CACHE_NAME);
 }
 
@@ -302,7 +278,7 @@ export function bedrockClientConfig(
   return config;
 }
 
-export function bedrockAuthFingerprint(auth: ResolvedBedrockAuthConfig): string {
+function bedrockAuthFingerprint(auth: ResolvedBedrockAuthConfig): string {
   const hash = crypto.createHash("sha256");
   hash.update(auth.methodId);
   hash.update("\n");

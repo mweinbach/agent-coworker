@@ -10,8 +10,6 @@ import type {
 } from "../shared/agents";
 import type { AgentConfig, HarnessContextState, TodoItem } from "../types";
 
-export type { AgentWaitMode, AgentWaitResult } from "../server/agents/types";
-
 export interface AgentControl {
   spawn: (
     opts: AgentSpawnContextOptions & {

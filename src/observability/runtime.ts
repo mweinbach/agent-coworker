@@ -386,8 +386,3 @@ export const __internal = {
   },
   resolveRuntime,
 } as const;
-
-export type ObservabilityRuntimeConfig = Pick<
-  ObservabilityConfig,
-  "baseUrl" | "publicKey" | "secretKey" | "tracingEnvironment" | "release"
->;

@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.1.4 - 2026-05-28
+
+### Added
+
+- **Remote marketplace for curated plugins** — Default skills/plugins bootstrap now pulls from the remote `mweinbach/cowork-skills-plugins` marketplace on first run instead of a static built-in set. The plugins catalog surfaces remote entries with install/update/delete actions, sticky removal tombstones, and graceful fallback to cached details when the remote is transiently unavailable. Updated JSON-RPC protocol docs and shared materialization logic for GitHub/local plugin sources (`.cowork-plugin` / legacy `.codex-plugin` manifests).
+
+### Changed
+
+- **Desktop component and dependency footprint** — Comprehensive dead-code sweep removed ~7.4k lines (44 files, 35+ unused shadcn UI components, ~150 symbols, 20 npm packages). Added `bun run knip` guardrail (dead-code focused) to prevent regressions. Desktop now only ships the exact primitives and helpers it uses at runtime.
+
+### Tests & Coverage
+
+- Added targeted coverage for H3 mobile RPC permission gates, Codex app-server image steer/resume flows, and related image input handling.
+
+### Internal
+
+- CI speedups for Bun setup, various optimization passes, and maintenance merges.
+
 ## 1.1.3 - 2026-05-26
 
 ### Added

@@ -146,7 +146,7 @@ export function InstallPluginDialog({
       pluginInstallInFlight,
     });
 
-  const validPreviewCandidates = useMemo(
+  const validPreviewCandidateRows = useMemo(
     () =>
       showPreview
         ? (pluginPreview?.candidates.filter((candidate) => candidate.diagnostics.length === 0) ??
@@ -354,7 +354,7 @@ export function InstallPluginDialog({
                 a new preview for that scope first.
               </div>
             ) : null}
-            {showPreview && validPreviewCandidates.length === 0 ? (
+            {showPreview && validPreviewCandidateRows.length === 0 ? (
               <div className="rounded-md border border-border/70 bg-muted/25 px-3 py-2 text-xs text-muted-foreground">
                 Fix the preview issues before installing this plugin source.
               </div>

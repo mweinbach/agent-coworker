@@ -1,6 +1,5 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import coworkIconSvg from "../../../build/icon.icon/Assets/svgviewer-output.svg";
 import { useAppStore } from "../../app/store";
 import type { OnboardingStep } from "../../app/types";
 import { Badge } from "../../components/ui/badge";
@@ -85,14 +84,7 @@ function StepIndicator({ current }: { current: OnboardingStep }) {
 function WelcomeStep({ onContinue, onDismiss }: { onContinue: () => void; onDismiss: () => void }) {
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-4">
-        <img
-          src={coworkIconSvg}
-          alt=""
-          aria-hidden="true"
-          className="h-12 w-12 shrink-0"
-          draggable={false}
-        />
+      <div className="flex items-center">
         <div className="space-y-1">
           <h2 className="text-2xl font-semibold tracking-tight">Welcome to Cowork</h2>
           <p className="text-sm text-muted-foreground leading-relaxed">

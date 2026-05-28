@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { jsonRpcControlResultSchemas as mobileJsonRpcControlResultSchemas } from "../apps/mobile/src/cowork-shared/jsonrpcControlSchemas";
 import {
   jsonRpcAgentNotificationSchemas,
   jsonRpcAgentRequestSchemas,
@@ -121,6 +122,27 @@ describe("shared JSON-RPC control schemas", () => {
     expect(parsed.event.servers[0]?.authMode).toBe("oauth_pending");
     expect(parsed.event.files[0]?.editable).toBe(true);
     expect(parsed.event.files[1]?.pluginId).toBe("figma-toolkit");
+  });
+
+  test("keeps mobile plugin catalog schema aligned for partial marketplace snapshots", () => {
+    const event = {
+      type: "plugins_catalog",
+      sessionId: "session-1",
+      catalog: {
+        plugins: [],
+        availablePlugins: [],
+        warnings: [],
+      },
+      availablePluginsPartial: true,
+    };
+
+    const parsed = jsonRpcControlResultSchemas["cowork/plugins/catalog/read"].parse({ event });
+    const mobileParsed = mobileJsonRpcControlResultSchemas["cowork/plugins/catalog/read"].parse({
+      event,
+    });
+
+    expect(parsed.event.availablePluginsPartial).toBe(true);
+    expect(mobileParsed.event.availablePluginsPartial).toBe(true);
   });
 
   test("parses OpenAI native connector envelopes", () => {

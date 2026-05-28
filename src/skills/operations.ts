@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { buildPluginCatalogSnapshot, setPluginSkillEnabled } from "../plugins";
+import {
+  buildPluginCatalogSnapshot,
+  replacePluginInstallRoot,
+  setPluginSkillEnabled,
+} from "../plugins";
 import type {
   AgentConfig,
   SkillCatalogSnapshot,
@@ -22,11 +26,7 @@ import {
   createManagedInstallationId,
   writeSkillInstallManifest,
 } from "./manifest";
-import {
-  buildSkillInstallPreview,
-  materializeSkillSource,
-  resolveSkillSource,
-} from "./sourceResolver";
+import { buildSkillInstallPreview, materializeSkillSource } from "./sourceResolver";
 
 type WritableScopePaths = {
   scope: SkillMutationTargetScope;
@@ -83,15 +83,6 @@ function originFromDescriptor(descriptor: SkillInstallPreview["source"]): SkillI
         kind: "local",
         ...(descriptor.localPath ? { sourcePath: descriptor.localPath } : {}),
       };
-  }
-}
-
-async function removeConflictingTargets(
-  paths: WritableScopePaths,
-  skillName: string,
-): Promise<void> {
-  for (const targetRoot of conflictingTargetRoots(paths, skillName)) {
-    await fs.rm(targetRoot, { recursive: true, force: true });
   }
 }
 
@@ -243,20 +234,20 @@ export async function installSkillsFromSource(opts: {
   catalog: SkillCatalogSnapshot;
 }> {
   const currentCatalog = await refreshCatalog(opts.config);
-  const preview = await buildSkillInstallPreview({
-    input: opts.input,
-    targetScope: opts.targetScope,
-    catalog: currentCatalog,
-    cwd: opts.config.workingDirectory,
-  });
-
-  const writableScope = requireWritableScope(opts.config, opts.targetScope);
   const materialized = await materializeSkillSource({
     input: opts.input,
     cwd: opts.config.workingDirectory,
   });
 
   try {
+    const preview = await buildSkillInstallPreview({
+      input: opts.input,
+      targetScope: opts.targetScope,
+      catalog: currentCatalog,
+      cwd: opts.config.workingDirectory,
+      materialized,
+    });
+    const writableScope = requireWritableScope(opts.config, opts.targetScope);
     const validCandidates = materialized.candidates.filter(
       (candidate) => candidate.diagnostics.length === 0,
     );
@@ -278,22 +269,22 @@ export async function installSkillsFromSource(opts: {
     const installedIds: string[] = [];
     for (const candidate of validCandidates) {
       const destinationRoot = path.join(writableScope.skillsDir, candidate.name);
-      const stagedSource = await stageCopySourceIfNeeded(
-        candidate.rootDir,
-        conflictingTargetRoots(writableScope, candidate.name),
-      );
+      const conflictingRoots = conflictingTargetRoots(writableScope, candidate.name);
+      const stagedSource = await stageCopySourceIfNeeded(candidate.rootDir, conflictingRoots);
+      const installationId = createManagedInstallationId();
       try {
-        await removeConflictingTargets(writableScope, candidate.name);
-        await copySkillRoot(stagedSource.sourceRoot, destinationRoot);
+        await replacePluginInstallRoot({
+          sourceRoot: stagedSource.sourceRoot,
+          destinationRoot,
+          conflictingRoots,
+          onInstalled: async () => {
+            await writeSkillInstallManifest({ skillRoot: destinationRoot, installationId, origin });
+          },
+        });
       } finally {
         await stagedSource.cleanup();
       }
-      const manifest = await writeSkillInstallManifest({
-        skillRoot: destinationRoot,
-        installationId: createManagedInstallationId(),
-        origin,
-      });
-      installedIds.push(manifest.installationId);
+      installedIds.push(installationId);
     }
 
     return {
@@ -326,24 +317,28 @@ export async function copySkillInstallationToScope(opts: {
   }
 
   const destinationRoot = path.join(writableScope.skillsDir, opts.installation.name);
-  const stagedSource = await stageCopySourceIfNeeded(
-    opts.installation.rootDir,
-    conflictingTargetRoots(writableScope, opts.installation.name),
-  );
+  const conflictingRoots = conflictingTargetRoots(writableScope, opts.installation.name);
+  const stagedSource = await stageCopySourceIfNeeded(opts.installation.rootDir, conflictingRoots);
+  const installationId = createManagedInstallationId();
   try {
-    await removeConflictingTargets(writableScope, opts.installation.name);
-    await copySkillRoot(stagedSource.sourceRoot, destinationRoot);
+    await replacePluginInstallRoot({
+      sourceRoot: stagedSource.sourceRoot,
+      destinationRoot,
+      conflictingRoots,
+      onInstalled: async () => {
+        await writeSkillInstallManifest({
+          skillRoot: destinationRoot,
+          installationId,
+          origin: opts.installation.origin,
+        });
+      },
+    });
   } finally {
     await stagedSource.cleanup();
   }
-  const manifest = await writeSkillInstallManifest({
-    skillRoot: destinationRoot,
-    installationId: createManagedInstallationId(),
-    origin: opts.installation.origin,
-  });
 
   return {
-    installationId: manifest.installationId,
+    installationId,
     catalog: await refreshCatalog(opts.config),
   };
 }
@@ -558,22 +553,26 @@ export async function updateSkillInstallation(opts: {
       ? writableScope.skillsDir
       : writableScope.disabledSkillsDir;
     const destinationRoot = path.join(destinationBase, opts.installation.name);
-    const stagedSource = await stageCopySourceIfNeeded(
-      selectedCandidate.rootDir,
-      conflictingTargetRoots(writableScope, opts.installation.name),
-    );
+    const conflictingRoots = conflictingTargetRoots(writableScope, opts.installation.name);
+    const stagedSource = await stageCopySourceIfNeeded(selectedCandidate.rootDir, conflictingRoots);
+    const updateOrigin = originFromDescriptor(materialized.descriptor);
     try {
-      await removeConflictingTargets(writableScope, opts.installation.name);
-      await copySkillRoot(stagedSource.sourceRoot, destinationRoot);
+      await replacePluginInstallRoot({
+        sourceRoot: stagedSource.sourceRoot,
+        destinationRoot,
+        conflictingRoots,
+        onInstalled: async () => {
+          await writeSkillInstallManifest({
+            skillRoot: destinationRoot,
+            installationId: opts.installation.installationId,
+            installedAt: opts.installation.installedAt,
+            origin: updateOrigin,
+          });
+        },
+      });
     } finally {
       await stagedSource.cleanup();
     }
-    await writeSkillInstallManifest({
-      skillRoot: destinationRoot,
-      installationId: opts.installation.installationId,
-      installedAt: opts.installation.installedAt,
-      origin: originFromDescriptor(materialized.descriptor),
-    });
 
     return {
       preview,
@@ -610,8 +609,4 @@ export async function getSkillInstallationById(opts: {
 }): Promise<SkillInstallationEntry | null> {
   const catalog = await refreshCatalog(opts.config);
   return getInstallationById(catalog, opts.installationId);
-}
-
-export function resolveSourceDescriptorForInstallInput(input: string, cwd = process.cwd()) {
-  return resolveSkillSource(input, cwd);
 }

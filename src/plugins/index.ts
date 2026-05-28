@@ -1,5 +1,6 @@
 export {
   buildPluginCatalogSnapshot,
+  buildRemoteMarketplacePluginDetail,
   comparePluginCatalogEntries,
   resolvePluginCatalogEntry,
 } from "./catalog";
@@ -10,6 +11,7 @@ export {
   type ParsedPluginApp,
   type ParsedPluginSkill,
   type PluginManifest,
+  pluginManifestPathsForPluginRoot,
   readPluginAppSummaries,
   readPluginManifest,
   readPluginSkillSummaries,
@@ -19,6 +21,7 @@ export {
   type ParsedMarketplaceDocument,
   type ParsedMarketplacePluginEntry,
   parsePluginMarketplace,
+  parseRemotePluginMarketplace,
 } from "./marketplace";
 export {
   parsePluginMcpDocument,
@@ -28,19 +31,23 @@ export {
   validatePluginMcpPath,
 } from "./mcp";
 export {
+  deletePluginInstallation,
   installPluginsFromSource,
-  resolvePluginSourceDescriptorForInstallInput,
+  replacePluginInstallRoot,
 } from "./operations";
 export {
+  clearPluginEnabledOverride,
   isPluginEnabled,
   isPluginMcpServerEnabled,
   isPluginSkillEnabled,
   type PluginOverrideSnapshot,
   readPluginOverrides,
+  setDefaultPluginRemoved,
   setPluginEnabled,
   setPluginMcpServerEnabled,
   setPluginSkillEnabled,
 } from "./overrides";
+export { fetchRemotePluginMarketplace } from "./remoteMarketplace";
 export {
   buildPluginSkillSources,
   type PluginSkillCatalogSource,

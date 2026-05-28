@@ -3,7 +3,7 @@ import path from "node:path";
 import { z } from "zod";
 
 import type {
-  PluginCatalogEntry,
+  InstalledPluginCatalogEntry,
   SkillCatalogSnapshot,
   SkillEntry,
   SkillInstallationDiagnostic,
@@ -51,8 +51,8 @@ export type SkillCatalogSource =
     }
   | {
       kind: "plugin";
-      plugin: PluginCatalogEntry;
-      skill: PluginCatalogEntry["skills"][number];
+      plugin: InstalledPluginCatalogEntry;
+      skill: InstalledPluginCatalogEntry["skills"][number];
       enabled: boolean;
     };
 
@@ -349,7 +349,7 @@ function buildDiagnostic(
   return { code, severity, message };
 }
 
-function buildPluginOwner(plugin: PluginCatalogEntry): SkillPluginOwner {
+function buildPluginOwner(plugin: InstalledPluginCatalogEntry): SkillPluginOwner {
   return {
     pluginId: plugin.id,
     name: plugin.name,
@@ -361,8 +361,8 @@ function buildPluginOwner(plugin: PluginCatalogEntry): SkillPluginOwner {
 }
 
 function buildPluginSkillInstallationId(
-  plugin: PluginCatalogEntry,
-  skill: PluginCatalogEntry["skills"][number],
+  plugin: InstalledPluginCatalogEntry,
+  skill: InstalledPluginCatalogEntry["skills"][number],
 ): string {
   const relativeSkillRoot = path.relative(plugin.rootDir, skill.rootDir).split(path.sep).join("/");
   return `plugin:${plugin.scope}:${plugin.id}:${relativeSkillRoot || skill.rawName}`;
@@ -417,8 +417,8 @@ function getScanScopeDirs(
 }
 
 async function buildPluginInstallationEntry(opts: {
-  plugin: PluginCatalogEntry;
-  skill: PluginCatalogEntry["skills"][number];
+  plugin: InstalledPluginCatalogEntry;
+  skill: InstalledPluginCatalogEntry["skills"][number];
   enabled: boolean;
 }): Promise<SkillInstallationEntry> {
   const diagnostics: SkillInstallationDiagnostic[] = [];

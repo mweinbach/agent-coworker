@@ -1,20 +1,28 @@
-import type { AgentConfig, PluginCatalogEntry, PluginCatalogSnapshot, PluginScope } from "../types";
-import { type DiscoveredPluginCandidate, discoverPlugins } from "./discovery";
+import type { FetchLike } from "../extensions/source";
+import type {
+  AgentConfig,
+  InstalledPluginCatalogEntry,
+  MarketplacePluginCatalogEntry,
+  PluginCatalogEntry,
+  PluginCatalogSnapshot,
+  PluginScope,
+} from "../types";
+import { discoverPlugins } from "./discovery";
 import {
   buildPluginCatalogEntry,
+  type PluginManifest,
   readPluginAppSummaries,
+  readPluginInstallMetadata,
   readPluginManifest,
   readPluginSkillSummaries,
 } from "./manifest";
 import { readPluginMcpServers } from "./mcp";
 import { isPluginEnabled, isPluginSkillEnabled, readPluginOverrides } from "./overrides";
-
-function resolvePluginScope(config: AgentConfig, pluginRoot: string): PluginScope {
-  if (config.workspacePluginsDir && pluginRoot.startsWith(config.workspacePluginsDir)) {
-    return "workspace";
-  }
-  return "user";
-}
+import {
+  buildMarketplaceCatalogMetadata,
+  buildRemoteMarketplaceCatalogEntry,
+  fetchRemotePluginMarketplace,
+} from "./remoteMarketplace";
 
 async function readPluginMcpSummary(
   mcpPath: string | undefined,
@@ -34,11 +42,49 @@ async function readPluginMcpSummary(
   }
 }
 
-function _entryWarnings(
-  _candidate: DiscoveredPluginCandidate,
-  extraWarnings: string[] = [],
-): string[] {
-  return [...extraWarnings].filter((warning) => warning.trim().length > 0);
+async function buildPluginCatalogEntryFromManifest(opts: {
+  manifest: PluginManifest;
+  scope: PluginScope;
+  discoveryKind: PluginCatalogEntry["discoveryKind"];
+  enabled: boolean;
+  marketplace?: PluginCatalogEntry["marketplace"];
+  installSource?: string;
+  applySkillOverrides?: boolean;
+  overrides: Awaited<ReturnType<typeof readPluginOverrides>>;
+}): Promise<InstalledPluginCatalogEntry> {
+  const { skills, warnings: skillWarnings } = await readPluginSkillSummaries(opts.manifest);
+  const normalizedSkills = skills.map((skill) => ({
+    ...skill,
+    warnings: [...skill.warnings],
+  }));
+  const mcpSummary = await readPluginMcpSummary(opts.manifest.mcpPath);
+  const entry = buildPluginCatalogEntry({
+    pluginId: opts.manifest.name,
+    pluginManifest: opts.manifest,
+    scope: opts.scope,
+    discoveryKind: opts.discoveryKind,
+    enabled: opts.enabled,
+    skills: normalizedSkills.map((skill) => ({
+      ...skill,
+      warnings: [...skill.warnings],
+    })),
+    mcpServers: mcpSummary.serverNames,
+    apps: await readPluginAppSummaries(opts.manifest.appPath),
+    warnings: [...skillWarnings, ...(mcpSummary.warning ? [mcpSummary.warning] : [])],
+    ...(opts.marketplace ? { marketplace: opts.marketplace } : {}),
+    ...(opts.installSource ? { installSource: opts.installSource } : {}),
+  });
+  entry.skills = entry.skills.map((skill) => {
+    return {
+      ...skill,
+      enabled:
+        opts.enabled &&
+        (opts.applySkillOverrides === false
+          ? skill.enabled
+          : isPluginSkillEnabled(opts.manifest.name, opts.scope, skill.rawName, opts.overrides)),
+    };
+  });
+  return entry;
 }
 
 function pluginScopePriority(scope: PluginScope): number {
@@ -56,18 +102,34 @@ export function comparePluginCatalogEntries(
   return `${left.displayName}:${left.id}`.localeCompare(`${right.displayName}:${right.id}`);
 }
 
+function isPluginFromMarketplace(plugin: PluginCatalogEntry, marketplaceName: string): boolean {
+  return plugin.marketplace?.name === marketplaceName;
+}
+
 export async function buildPluginCatalogSnapshot(
   config: AgentConfig,
-): Promise<PluginCatalogSnapshot> {
+  opts: {
+    includeRemoteMarketplace?: boolean;
+    fetchImpl?: FetchLike;
+  } = {},
+): Promise<PluginCatalogSnapshot & { remoteMarketplaceFailed?: boolean }> {
   const discovery = await discoverPlugins(config);
   const overrides = await readPluginOverrides(config);
-  const plugins: PluginCatalogEntry[] = [];
+  const plugins: InstalledPluginCatalogEntry[] = [];
+  const availablePlugins: MarketplacePluginCatalogEntry[] = [];
   const warnings = [...discovery.warnings];
+  let remoteMarketplaceFailed = false;
 
   for (const candidate of discovery.plugins) {
     try {
       const manifest = await readPluginManifest(candidate.rootDir);
-      const scope = candidate.scope ?? resolvePluginScope(config, candidate.rootDir);
+      const installMetadata = await readPluginInstallMetadata(candidate.rootDir);
+      const metadataMarketplace = installMetadata?.marketplace;
+      const candidateMarketplace =
+        candidate.marketplace ??
+        (metadataMarketplace ? buildMarketplaceCatalogMetadata(metadataMarketplace) : undefined);
+      const discoveryKind = candidateMarketplace ? "marketplace" : candidate.discoveryKind;
+      const scope = candidate.scope;
       const pluginEnabled = isPluginEnabled(
         {
           id: manifest.name,
@@ -75,7 +137,8 @@ export async function buildPluginCatalogSnapshot(
           displayName: manifest.interface?.displayName ?? manifest.name,
           description: manifest.description,
           scope,
-          discoveryKind: candidate.discoveryKind,
+          discoveryKind,
+          installed: true,
           enabled: true,
           rootDir: manifest.rootDir,
           manifestPath: manifest.manifestPath,
@@ -89,54 +152,20 @@ export async function buildPluginCatalogSnapshot(
         },
         overrides,
       );
-      const { skills, warnings: skillWarnings } = await readPluginSkillSummaries(manifest);
-      const normalizedSkills = skills.map((skill) => ({
-        ...skill,
-        warnings: [...skill.warnings],
-      }));
-      const mcpSummary = await readPluginMcpSummary(manifest.mcpPath);
-      const entry = buildPluginCatalogEntry({
-        pluginId: manifest.name,
-        pluginManifest: manifest,
+      const entry = await buildPluginCatalogEntryFromManifest({
+        manifest,
         scope,
-        discoveryKind: candidate.discoveryKind,
+        discoveryKind,
         enabled: pluginEnabled,
-        skills: normalizedSkills.map((skill) => ({
-          ...skill,
-          warnings: [...skill.warnings],
-        })),
-        mcpServers: mcpSummary.serverNames,
-        apps: await readPluginAppSummaries(manifest.appPath),
-        warnings: _entryWarnings(candidate, [
-          ...skillWarnings,
-          ...(mcpSummary.warning ? [mcpSummary.warning] : []),
-        ]),
-        ...(candidate.marketplace
+        overrides,
+        ...(metadataMarketplace?.sourceInput
+          ? { installSource: metadataMarketplace.sourceInput }
+          : {}),
+        ...(candidateMarketplace
           ? {
-              marketplace: {
-                name: candidate.marketplace.name,
-                ...(candidate.marketplace.displayName
-                  ? { displayName: candidate.marketplace.displayName }
-                  : {}),
-                ...(candidate.marketplace.category
-                  ? { category: candidate.marketplace.category }
-                  : {}),
-                ...(candidate.marketplace.installationPolicy
-                  ? { installationPolicy: candidate.marketplace.installationPolicy }
-                  : {}),
-                ...(candidate.marketplace.authenticationPolicy
-                  ? { authenticationPolicy: candidate.marketplace.authenticationPolicy }
-                  : {}),
-              },
+              marketplace: buildMarketplaceCatalogMetadata(candidateMarketplace),
             }
           : {}),
-      });
-      entry.skills = entry.skills.map((skill) => {
-        return {
-          ...skill,
-          enabled:
-            pluginEnabled && isPluginSkillEnabled(manifest.name, scope, skill.rawName, overrides),
-        };
       });
       plugins.push(entry);
     } catch (error) {
@@ -144,16 +173,90 @@ export async function buildPluginCatalogSnapshot(
     }
   }
 
-  plugins.sort(comparePluginCatalogEntries);
+  const includeRemoteMarketplace = opts.includeRemoteMarketplace ?? false;
+  if (includeRemoteMarketplace) {
+    try {
+      const marketplace = await fetchRemotePluginMarketplace({ fetchImpl: opts.fetchImpl });
+      for (const marketplaceEntry of marketplace.plugins) {
+        const sameIdEntries = plugins.filter((plugin) => plugin.id === marketplaceEntry.name);
+        const installedEntries = sameIdEntries.filter((plugin) =>
+          isPluginFromMarketplace(plugin, marketplace.name),
+        );
+        const marketplaceMetadata = buildMarketplaceCatalogMetadata({
+          name: marketplace.name,
+          ...(marketplace.displayName ? { displayName: marketplace.displayName } : {}),
+          category: marketplaceEntry.category,
+          installationPolicy: marketplaceEntry.installationPolicy,
+          authenticationPolicy: marketplaceEntry.authenticationPolicy,
+        });
+        if (installedEntries.length > 0) {
+          for (const plugin of installedEntries) {
+            plugin.marketplace = plugin.marketplace ?? marketplaceMetadata;
+            if (marketplaceEntry.sourceInput) {
+              plugin.installSource = marketplaceEntry.sourceInput;
+            }
+          }
+          continue;
+        }
+        if (sameIdEntries.length > 0) {
+          continue;
+        }
+        if (!marketplaceEntry.sourceInput) {
+          continue;
+        }
 
-  return { plugins, warnings };
+        const entry = buildRemoteMarketplaceCatalogEntry({
+          marketplace,
+          plugin: marketplaceEntry,
+        });
+        if (entry) {
+          availablePlugins.push(entry);
+        }
+      }
+    } catch (error) {
+      remoteMarketplaceFailed = true;
+      warnings.push(`[plugins] Failed to load remote marketplace: ${String(error)}`);
+    }
+  }
+
+  plugins.sort(comparePluginCatalogEntries);
+  availablePlugins.sort(comparePluginCatalogEntries);
+
+  return {
+    plugins,
+    availablePlugins,
+    warnings,
+    // Signal (off-wire) that a remote refresh was requested but the fetch failed,
+    // so callers can keep the client's cached marketplace rows instead of treating
+    // the empty availablePlugins list as authoritative.
+    ...(remoteMarketplaceFailed ? { remoteMarketplaceFailed: true } : {}),
+  };
+}
+
+export async function buildRemoteMarketplacePluginDetail(opts: {
+  pluginId: string;
+  fetchImpl?: FetchLike;
+}): Promise<MarketplacePluginCatalogEntry | null> {
+  const marketplace = await fetchRemotePluginMarketplace({ fetchImpl: opts.fetchImpl });
+  const marketplaceEntry = marketplace.plugins.find((entry) => entry.name === opts.pluginId);
+  if (!marketplaceEntry) {
+    return null;
+  }
+  const baseEntry = buildRemoteMarketplaceCatalogEntry({
+    marketplace,
+    plugin: marketplaceEntry,
+  });
+  if (!baseEntry) {
+    return null;
+  }
+  return baseEntry;
 }
 
 export function resolvePluginCatalogEntry(opts: {
   catalog: PluginCatalogSnapshot;
   pluginId: string;
   scope?: PluginScope;
-}): { plugin: PluginCatalogEntry | null; error?: string } {
+}): { plugin: InstalledPluginCatalogEntry | null; error?: string } {
   const matches = opts.catalog.plugins.filter(
     (plugin) =>
       plugin.id === opts.pluginId && (opts.scope === undefined || plugin.scope === opts.scope),

@@ -1,93 +1,98 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 
-import { defaultWorkspaceRuntime } from "../src/app/store.helpers/runtimeState";
+import type { JsonRpcSocket } from "../src/lib/agentSocket";
+import {
+  createState,
+  createStoreHarness,
+  defaultWorkspaceRuntime,
+  RUNTIME,
+  resetSkillPluginActionRuntime,
+  secondaryWorkspaceId,
+  workspaceId,
+} from "./skill-plugin-actions.harness";
 
-const { createSkillActions } = await import("../src/app/store.actions/skills");
-const { reactivateWorkspaceJsonRpcState } = await import("../src/app/store.helpers");
-const { RUNTIME } = await import("../src/app/store.helpers/runtimeState");
-
-/** Distinct from control-socket tests (`ws-skills`) so parallel CI runs do not share disposed JSON-RPC state. */
-const workspaceId = "ws-skills-store-actions";
-const secondaryWorkspaceId = "ws-skills-secondary";
-
-function createState() {
-  return {
-    selectedWorkspaceId: workspaceId,
-    workspaces: [{ id: workspaceId, path: "/tmp/workspace" }],
-    workspaceRuntimeById: {
-      [workspaceId]: {
-        skillCatalogLoading: false,
-        skillCatalogError: "stale error",
-        skillMutationPendingKeys: {},
-        skillMutationError: "stale mutation error",
-      },
-    },
-    notifications: [],
-  };
-}
-
-function createStoreHarness(state: ReturnType<typeof createState>) {
-  const get = () => state as any;
-  const set = (updater: any) => {
-    const patch = typeof updater === "function" ? updater(state as any) : updater;
-    Object.assign(state, patch);
-  };
-  return { get, set };
-}
+const skillActionsModule = await import("../src/app/store.actions/skills");
+const { createSkillActions } = skillActionsModule;
 
 const failedSkillMutationActions = [
   {
+    name: "deleteSkill",
+    expectedError: "Unable to delete skill.",
+    invoke: (actions: ReturnType<typeof createSkillActions>) => actions.deleteSkill("skill-1"),
+  },
+  {
+    name: "disableSkill",
+    expectedError: "Unable to disable skill.",
+    invoke: (actions: ReturnType<typeof createSkillActions>) => actions.disableSkill("skill-1"),
+  },
+  {
+    name: "enableSkill",
+    expectedError: "Unable to enable skill.",
+    invoke: (actions: ReturnType<typeof createSkillActions>) => actions.enableSkill("skill-1"),
+  },
+  {
     name: "disableSkillInstallation",
+    expectedError: null,
     invoke: (actions: ReturnType<typeof createSkillActions>) =>
       actions.disableSkillInstallation("inst-1"),
   },
   {
     name: "enableSkillInstallation",
+    expectedError: null,
     invoke: (actions: ReturnType<typeof createSkillActions>) =>
       actions.enableSkillInstallation("inst-1"),
   },
   {
     name: "deleteSkillInstallation",
+    expectedError: null,
     invoke: (actions: ReturnType<typeof createSkillActions>) =>
       actions.deleteSkillInstallation("inst-1"),
   },
   {
     name: "copySkillInstallation",
+    expectedError: null,
     invoke: (actions: ReturnType<typeof createSkillActions>) =>
       actions.copySkillInstallation("inst-1", "project"),
   },
   {
     name: "updateSkillInstallation",
+    expectedError: null,
     invoke: (actions: ReturnType<typeof createSkillActions>) =>
       actions.updateSkillInstallation("inst-1"),
   },
 ] as const;
 
-const failedPluginMutationActions = [
+const rootSkillMutationActions = [
   {
-    name: "enablePlugin",
-    invoke: (actions: ReturnType<typeof createSkillActions>) =>
-      actions.enablePlugin("plugin-1", "workspace"),
+    name: "deleteSkill",
+    method: "cowork/skills/delete",
+    pendingKey: "delete:skill-1",
+    invoke: (actions: ReturnType<typeof createSkillActions>) => actions.deleteSkill("skill-1"),
   },
   {
-    name: "disablePlugin",
-    invoke: (actions: ReturnType<typeof createSkillActions>) =>
-      actions.disablePlugin("plugin-1", "workspace"),
+    name: "disableSkill",
+    method: "cowork/skills/disable",
+    pendingKey: "disable:skill-1",
+    invoke: (actions: ReturnType<typeof createSkillActions>) => actions.disableSkill("skill-1"),
+  },
+  {
+    name: "enableSkill",
+    method: "cowork/skills/enable",
+    pendingKey: "enable:skill-1",
+    invoke: (actions: ReturnType<typeof createSkillActions>) => actions.enableSkill("skill-1"),
   },
 ] as const;
 
 describe("skill store actions", () => {
   beforeEach(() => {
-    RUNTIME.jsonRpcSockets.clear();
-    RUNTIME.skillInstallWaiters.clear();
-    reactivateWorkspaceJsonRpcState(workspaceId);
+    resetSkillPluginActionRuntime();
   });
 
   test("refreshSkillsCatalog clears loading when sendControl fails", async () => {
     const state = createState();
     const { get, set } = createStoreHarness(state);
 
-    await createSkillActions(set as any, get as any).refreshSkillsCatalog();
+    await createSkillActions(set, get).refreshSkillsCatalog();
 
     expect(state.workspaceRuntimeById[workspaceId].skillCatalogLoading).toBe(false);
     expect(state.workspaceRuntimeById[workspaceId].skillCatalogError).toBe(
@@ -123,9 +128,9 @@ describe("skill store actions", () => {
       },
       respond: () => true,
       close: () => {},
-    } as any);
+    } as unknown as JsonRpcSocket);
 
-    const refreshPromise = createSkillActions(set as any, get as any).refreshSkillsCatalog();
+    const refreshPromise = createSkillActions(set, get).refreshSkillsCatalog();
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(calls).toEqual(["cowork/skills/catalog/read", "cowork/skills/list"]);
@@ -148,186 +153,20 @@ describe("skill store actions", () => {
     expect(state.notifications).toHaveLength(0);
   });
 
-  test("refreshPluginsCatalog clears loading when sendControl fails", async () => {
-    const state = createState();
-    const { get, set } = createStoreHarness(state);
-
-    await createSkillActions(set as any, get as any).refreshPluginsCatalog();
-
-    expect(state.workspaceRuntimeById[workspaceId].pluginsLoading).toBe(false);
-    expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBe(
-      "Unable to refresh plugins catalog.",
-    );
-    expect(state.notifications).toHaveLength(1);
-  });
-
-  test("refreshPluginsCatalog requests the plugin catalog and clears loading after success", async () => {
-    const state = createState();
-    state.workspaceRuntimeById[workspaceId] = {
-      ...defaultWorkspaceRuntime(),
-      serverUrl: "ws://mock",
-      controlSessionId: "jsonrpc-control",
-      pluginsLoading: false,
-      pluginsError: "stale plugin error",
-    } as any;
-    state.workspaces = [{ id: workspaceId, path: "/tmp/workspace" }];
-    const { get, set } = createStoreHarness(state);
-
-    let resolveCatalog!: (value: unknown) => void;
-    const catalogPromise = new Promise((resolve) => {
-      resolveCatalog = resolve;
-    });
-    RUNTIME.jsonRpcSockets.set(workspaceId, {
-      readyPromise: Promise.resolve(),
-      request: (method: string) => {
-        expect(method).toBe("cowork/plugins/catalog/read");
-        return catalogPromise;
-      },
-      respond: () => true,
-      close: () => {},
-    } as any);
-
-    const refreshPromise = createSkillActions(set as any, get as any).refreshPluginsCatalog();
-    expect(state.workspaceRuntimeById[workspaceId].pluginsLoading).toBe(true);
-    resolveCatalog({
-      event: {
-        type: "plugins_catalog",
-        sessionId: "jsonrpc-control",
-        catalog: { plugins: [], warnings: [] },
-      },
-    });
-    await refreshPromise;
-
-    expect(state.workspaceRuntimeById[workspaceId].pluginsLoading).toBe(false);
-    expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBeNull();
-    expect(state.notifications).toHaveLength(0);
-  });
-
-  test("selectPlugin enters loading state before the request and preserves loaded detail after success", async () => {
-    const state = createState();
-    state.workspaceRuntimeById[workspaceId] = {
-      ...defaultWorkspaceRuntime(),
-      serverUrl: "ws://mock",
-      controlSessionId: "jsonrpc-control",
-      pluginsCatalog: {
-        plugins: [],
-        warnings: [],
-      },
-    } as any;
-    state.workspaces = [{ id: workspaceId, path: "/tmp/workspace" }];
-    const { get, set } = createStoreHarness(state);
-
-    const plugin = {
-      id: "plugin-1",
-      name: "figma-toolkit",
-      displayName: "Figma Toolkit",
-      description: "Figma helpers",
-      scope: "workspace",
-      discoveryKind: "marketplace",
-      enabled: true,
-      rootDir: "/tmp/workspace/.agents/plugins/figma-toolkit",
-      manifestPath: "/tmp/workspace/.agents/plugins/figma-toolkit/.codex-plugin/plugin.json",
-      skillsPath: "/tmp/workspace/.agents/plugins/figma-toolkit/skills",
-      skills: [],
-      mcpServers: [],
-      apps: [],
-      warnings: [],
-    };
-
-    let resolveRequest!: (value: unknown) => void;
-    const requestPromise = new Promise((resolve) => {
-      resolveRequest = resolve;
-    });
-    RUNTIME.jsonRpcSockets.set(workspaceId, {
-      readyPromise: Promise.resolve(),
-      request: async (method: string, params: any) => {
-        expect(method).toBe("cowork/plugins/read");
-        expect(params).toEqual({
-          cwd: "/tmp/workspace",
-          pluginId: "plugin-1",
-          scope: "workspace",
-        });
-        return await requestPromise;
-      },
-      respond: () => true,
-      close: () => {},
-    } as any);
-
-    const selectPromise = createSkillActions(set as any, get as any).selectPlugin(
-      "plugin-1",
-      "workspace",
-    );
-    expect(state.workspaceRuntimeById[workspaceId].selectedPluginId).toBe("plugin-1");
-    expect(state.workspaceRuntimeById[workspaceId].selectedPluginScope).toBe("workspace");
-    expect(state.workspaceRuntimeById[workspaceId].selectedPlugin).toBeNull();
-    expect(state.workspaceRuntimeById[workspaceId].pluginsLoading).toBe(true);
-
-    resolveRequest({
-      event: {
-        type: "plugin_detail",
-        sessionId: "jsonrpc-control",
-        plugin,
-      },
-    });
-    await selectPromise;
-
-    expect(state.workspaceRuntimeById[workspaceId].selectedPluginId).toBe("plugin-1");
-    expect(state.workspaceRuntimeById[workspaceId].selectedPluginScope).toBe("workspace");
-    expect(state.workspaceRuntimeById[workspaceId].selectedPlugin).toEqual(plugin);
-    expect(state.workspaceRuntimeById[workspaceId].pluginsLoading).toBe(false);
-    expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBeNull();
-  });
-
-  test("selectPlugin preserves the selected plugin when the detail request fails", async () => {
-    const state = createState();
-    state.workspaceRuntimeById[workspaceId] = {
-      ...defaultWorkspaceRuntime(),
-      serverUrl: "ws://mock",
-      controlSessionId: "jsonrpc-control",
-      selectedPluginId: "plugin-1",
-      selectedPluginScope: "workspace",
-      pluginsError: null,
-    } as any;
-    state.workspaces = [{ id: workspaceId, path: "/tmp/workspace" }];
-    const { get, set } = createStoreHarness(state);
-
-    RUNTIME.jsonRpcSockets.set(workspaceId, {
-      readyPromise: Promise.resolve(),
-      request: async () => ({
-        event: {
-          type: "error",
-          sessionId: "jsonrpc-control",
-          message: "Plugin detail request failed.",
-          code: "validation_failed",
-          source: "session",
-        },
-      }),
-      respond: () => true,
-      close: () => {},
-    } as any);
-
-    await createSkillActions(set as any, get as any).selectPlugin("plugin-1", "workspace");
-
-    expect(state.workspaceRuntimeById[workspaceId].selectedPluginId).toBe("plugin-1");
-    expect(state.workspaceRuntimeById[workspaceId].selectedPluginScope).toBe("workspace");
-    expect(state.workspaceRuntimeById[workspaceId].selectedPlugin).toBeNull();
-    expect(state.workspaceRuntimeById[workspaceId].pluginsLoading).toBe(false);
-    expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBe(
-      "Unable to load plugin details.",
-    );
-  });
-
   test("previewSkillInstall removes only its pending key when sendControl fails", async () => {
     const state = createState();
     state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys = { other: true };
     const { get, set } = createStoreHarness(state);
 
-    await createSkillActions(set as any, get as any).previewSkillInstall("owner/repo", "project");
+    await createSkillActions(set, get).previewSkillInstall("owner/repo", "project");
 
     expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({
       other: true,
     });
-    expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBeNull();
+    expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBe(
+      "Unable to preview skill install.",
+    );
+    expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBeNull();
     expect(state.notifications).toHaveLength(1);
   });
 
@@ -337,13 +176,16 @@ describe("skill store actions", () => {
     const { get, set } = createStoreHarness(state);
 
     await expect(
-      createSkillActions(set as any, get as any).installSkills("owner/repo", "global"),
+      createSkillActions(set, get).installSkills("owner/repo", "global"),
     ).rejects.toThrow("Unable to install skills.");
 
     expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({
       other: true,
     });
-    expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBeNull();
+    expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBe(
+      "Unable to install skills.",
+    );
+    expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBeNull();
     expect(state.notifications).toHaveLength(1);
   });
 
@@ -363,386 +205,14 @@ describe("skill store actions", () => {
       },
       respond: () => true,
       close: () => {},
-    } as any);
+    } as unknown as JsonRpcSocket);
 
     await expect(
-      createSkillActions(set as any, get as any).installSkills("owner/repo", "global"),
+      createSkillActions(set, get).installSkills("owner/repo", "global"),
     ).rejects.toThrow("Unable to install skills.");
 
     expect(waiterPendingKey).toBe("install:global");
     expect(RUNTIME.skillInstallWaiters.has(workspaceId)).toBe(false);
-  });
-
-  test("previewPluginInstall uses the management workspace when selected", async () => {
-    const state = createState();
-    const managementWorkspaceId = "ws-plugin-management";
-    state.selectedWorkspaceId = workspaceId;
-    state.pluginManagementWorkspaceId = managementWorkspaceId;
-    state.workspaceRuntimeById = {
-      [workspaceId]: {
-        ...defaultWorkspaceRuntime(),
-      },
-      [managementWorkspaceId]: {
-        ...defaultWorkspaceRuntime(),
-        serverUrl: "ws://management",
-        controlSessionId: "jsonrpc-control",
-      },
-    } as any;
-    state.workspaces = [
-      { id: workspaceId, path: "/tmp/workspace" },
-      { id: managementWorkspaceId, path: "/tmp/management" },
-    ];
-    const { get, set } = createStoreHarness(state);
-
-    const requests: Array<{ method: string; params: any }> = [];
-    RUNTIME.jsonRpcSockets.set(managementWorkspaceId, {
-      readyPromise: Promise.resolve(),
-      request: async (method: string, params: any) => {
-        requests.push({ method, params });
-        return {
-          event: {
-            type: "plugin_install_preview",
-            sessionId: "jsonrpc-control",
-            fromUserPreviewRequest: true,
-            preview: {
-              source: {
-                kind: "github_shorthand",
-                raw: "owner/repo",
-                displaySource: "https://github.com/owner/repo",
-                url: "https://github.com/owner/repo",
-                repo: "owner/repo",
-              },
-              targetScope: "workspace",
-              candidates: [],
-              warnings: [],
-            },
-          },
-        };
-      },
-      respond: () => true,
-      close: () => {},
-    } as any);
-
-    await createSkillActions(set as any, get as any).previewPluginInstall(
-      "owner/repo",
-      "workspace",
-    );
-
-    expect(requests).toEqual([
-      {
-        method: "cowork/plugins/install/preview",
-        params: {
-          cwd: "/tmp/management",
-          sourceInput: "owner/repo",
-          targetScope: "workspace",
-        },
-      },
-    ]);
-    expect(
-      state.workspaceRuntimeById[managementWorkspaceId].selectedPluginPreview?.targetScope,
-    ).toBe("workspace");
-    expect(state.workspaceRuntimeById[managementWorkspaceId].skillMutationPendingKeys).toEqual({});
-  });
-
-  test("installPlugins registers its waiter on the management workspace", async () => {
-    const state = createState();
-    const managementWorkspaceId = "ws-plugin-management";
-    state.selectedWorkspaceId = workspaceId;
-    state.pluginManagementWorkspaceId = managementWorkspaceId;
-    state.workspaceRuntimeById = {
-      [workspaceId]: {
-        ...defaultWorkspaceRuntime(),
-      },
-      [managementWorkspaceId]: {
-        ...defaultWorkspaceRuntime(),
-        serverUrl: "ws://management",
-        controlSessionId: "jsonrpc-control",
-      },
-    } as any;
-    state.workspaces = [
-      { id: workspaceId, path: "/tmp/workspace" },
-      { id: managementWorkspaceId, path: "/tmp/management" },
-    ];
-    const { get, set } = createStoreHarness(state);
-
-    let waiterPendingKey: string | null = null;
-    let requestedParams: any = null;
-    RUNTIME.jsonRpcSockets.set(managementWorkspaceId, {
-      readyPromise: Promise.resolve(),
-      request: async (_method: string, params: any) => {
-        waiterPendingKey =
-          RUNTIME.pluginInstallWaiters.get(managementWorkspaceId)?.pendingKey ?? null;
-        requestedParams = params;
-        throw new Error("request failed");
-      },
-      respond: () => true,
-      close: () => {},
-    } as any);
-
-    await expect(
-      createSkillActions(set as any, get as any).installPlugins("owner/repo", "user"),
-    ).rejects.toThrow("request failed");
-
-    expect(waiterPendingKey).toBe("plugin:install:user");
-    expect(requestedParams).toEqual({
-      cwd: "/tmp/management",
-      sourceInput: "owner/repo",
-      targetScope: "user",
-    });
-    expect(RUNTIME.pluginInstallWaiters.has(managementWorkspaceId)).toBe(false);
-  });
-
-  test("installPlugins preserves server-side error details", async () => {
-    const state = createState();
-    const managementWorkspaceId = "ws-plugin-management";
-    state.selectedWorkspaceId = workspaceId;
-    state.pluginManagementWorkspaceId = managementWorkspaceId;
-    state.workspaceRuntimeById = {
-      [workspaceId]: {
-        ...defaultWorkspaceRuntime(),
-      },
-      [managementWorkspaceId]: {
-        ...defaultWorkspaceRuntime(),
-        serverUrl: "ws://management",
-        controlSessionId: "jsonrpc-control",
-      },
-    } as any;
-    state.workspaces = [
-      { id: workspaceId, path: "/tmp/workspace" },
-      { id: managementWorkspaceId, path: "/tmp/management" },
-    ];
-    const { get, set } = createStoreHarness(state);
-
-    RUNTIME.jsonRpcSockets.set(managementWorkspaceId, {
-      readyPromise: Promise.resolve(),
-      request: async () => ({
-        events: [
-          {
-            type: "error",
-            sessionId: "jsonrpc-control",
-            message: "Ambiguous plugin source; choose workspace or global explicitly.",
-            code: "validation_failed",
-            source: "session",
-          },
-        ],
-      }),
-      respond: () => true,
-      close: () => {},
-    } as any);
-
-    await expect(
-      createSkillActions(set as any, get as any).installPlugins("owner/repo", "user"),
-    ).rejects.toThrow("Ambiguous plugin source; choose workspace or global explicitly.");
-
-    expect(state.workspaceRuntimeById[managementWorkspaceId].skillMutationError).toBe(
-      "Ambiguous plugin source; choose workspace or global explicitly.",
-    );
-    expect(state.workspaceRuntimeById[managementWorkspaceId].pluginsError).toBe(
-      "Ambiguous plugin source; choose workspace or global explicitly.",
-    );
-    expect(state.notifications.at(-1)?.detail).toBe(
-      "Ambiguous plugin source; choose workspace or global explicitly.",
-    );
-  });
-
-  test("installPlugins refreshes other open workspaces after a user-scoped install succeeds", async () => {
-    const state = createState();
-    state.workspaceRuntimeById = {
-      [workspaceId]: {
-        ...defaultWorkspaceRuntime(),
-        serverUrl: "ws://source",
-        controlSessionId: "jsonrpc-control",
-      },
-      [secondaryWorkspaceId]: {
-        ...defaultWorkspaceRuntime(),
-        serverUrl: "ws://secondary",
-        controlSessionId: "jsonrpc-control",
-      },
-    } as any;
-    state.workspaces = [
-      { id: workspaceId, path: "/tmp/workspace" },
-      { id: secondaryWorkspaceId, path: "/tmp/secondary" },
-    ];
-    const { get, set } = createStoreHarness(state);
-
-    const sourceCalls: string[] = [];
-    const secondaryCalls: string[] = [];
-    RUNTIME.jsonRpcSockets.set(workspaceId, {
-      readyPromise: Promise.resolve(),
-      request: async (method: string) => {
-        sourceCalls.push(method);
-        expect(method).toBe("cowork/plugins/install");
-        return {
-          events: [
-            {
-              type: "skills_catalog",
-              sessionId: "jsonrpc-control",
-              catalog: {
-                installations: [],
-                sources: [],
-                stats: { totalInstallations: 0, enabledInstallations: 0 },
-              },
-              mutationBlocked: false,
-              clearedMutationPendingKeys: ["plugin:install:user"],
-            },
-            {
-              type: "plugins_catalog",
-              sessionId: "jsonrpc-control",
-              catalog: { plugins: [], warnings: [] },
-              clearedMutationPendingKeys: ["plugin:install:user"],
-            },
-          ],
-        };
-      },
-      respond: () => true,
-      close: () => {},
-    } as any);
-    RUNTIME.jsonRpcSockets.set(secondaryWorkspaceId, {
-      readyPromise: Promise.resolve(),
-      request: async (method: string) => {
-        secondaryCalls.push(method);
-        if (method === "cowork/plugins/catalog/read") {
-          return {
-            event: {
-              type: "plugins_catalog",
-              sessionId: "jsonrpc-control",
-              catalog: { plugins: [], warnings: [] },
-            },
-          };
-        }
-        if (method === "cowork/skills/catalog/read") {
-          return {
-            event: {
-              type: "skills_catalog",
-              sessionId: "jsonrpc-control",
-              catalog: {
-                installations: [],
-                sources: [],
-                stats: { totalInstallations: 0, enabledInstallations: 0 },
-              },
-              mutationBlocked: false,
-            },
-          };
-        }
-        if (method === "cowork/skills/list") {
-          return { event: { type: "skills_list", sessionId: "jsonrpc-control", skills: [] } };
-        }
-        if (method === "cowork/mcp/servers/read") {
-          return {
-            event: {
-              type: "mcp_servers",
-              sessionId: "jsonrpc-control",
-              servers: [],
-              legacy: [],
-              files: [],
-              warnings: [],
-            },
-          };
-        }
-        throw new Error(`Unexpected method: ${method}`);
-      },
-      respond: () => true,
-      close: () => {},
-    } as any);
-
-    await createSkillActions(set as any, get as any).installPlugins("owner/repo", "user");
-
-    expect(sourceCalls).toEqual(["cowork/plugins/install"]);
-    expect(secondaryCalls.sort()).toEqual([
-      "cowork/mcp/servers/read",
-      "cowork/plugins/catalog/read",
-      "cowork/skills/catalog/read",
-      "cowork/skills/list",
-    ]);
-  });
-
-  test("refreshPluginsCatalog falls back to the selected workspace when the management workspace no longer exists", async () => {
-    const state = createState();
-    state.pluginManagementWorkspaceId = "ws-stale";
-    state.workspaceRuntimeById[workspaceId] = {
-      ...defaultWorkspaceRuntime(),
-      serverUrl: "ws://mock",
-      controlSessionId: "jsonrpc-control",
-      pluginsLoading: false,
-      pluginsError: "stale plugin error",
-    } as any;
-    const { get, set } = createStoreHarness(state);
-
-    const requests: string[] = [];
-    RUNTIME.jsonRpcSockets.set(workspaceId, {
-      readyPromise: Promise.resolve(),
-      request: async (method: string) => {
-        requests.push(method);
-        return {
-          event: {
-            type: "plugins_catalog",
-            sessionId: "jsonrpc-control",
-            catalog: { plugins: [], warnings: [] },
-          },
-        };
-      },
-      respond: () => true,
-      close: () => {},
-    } as any);
-
-    await createSkillActions(set as any, get as any).refreshPluginsCatalog();
-
-    expect(requests).toEqual(["cowork/plugins/catalog/read"]);
-    expect(state.workspaceRuntimeById[workspaceId].pluginsLoading).toBe(false);
-    expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBeNull();
-  });
-
-  test("enablePlugin and disablePlugin preserve server-side error details", async () => {
-    const state = createState();
-    state.workspaceRuntimeById[workspaceId] = {
-      ...defaultWorkspaceRuntime(),
-      serverUrl: "ws://mock",
-      controlSessionId: "jsonrpc-control",
-    } as any;
-    state.workspaces = [{ id: workspaceId, path: "/tmp/workspace" }];
-    const { get, set } = createStoreHarness(state);
-
-    let requestCount = 0;
-    RUNTIME.jsonRpcSockets.set(workspaceId, {
-      readyPromise: Promise.resolve(),
-      request: async () => {
-        requestCount += 1;
-        return {
-          events: [
-            {
-              type: "error",
-              sessionId: "jsonrpc-control",
-              message:
-                requestCount === 1
-                  ? "Plugin is shadowed by a global install."
-                  : "Plugin is already disabled.",
-              code: "validation_failed",
-              source: "session",
-            },
-          ],
-        };
-      },
-      respond: () => true,
-      close: () => {},
-    } as any);
-
-    await createSkillActions(set as any, get as any).enablePlugin("plugin-1", "workspace");
-    expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBe(
-      "Plugin is shadowed by a global install.",
-    );
-    expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBe(
-      "Plugin is shadowed by a global install.",
-    );
-    expect(state.notifications.at(-1)?.detail).toBe("Plugin is shadowed by a global install.");
-
-    await createSkillActions(set as any, get as any).disablePlugin("plugin-1", "workspace");
-    expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBe(
-      "Plugin is already disabled.",
-    );
-    expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBe(
-      "Plugin is already disabled.",
-    );
-    expect(state.notifications.at(-1)?.detail).toBe("Plugin is already disabled.");
   });
 
   test("selectSkill preserves loaded content after the JSON-RPC read succeeds", async () => {
@@ -767,7 +237,7 @@ describe("skill store actions", () => {
           path: "/tmp/workspace/skills/example-skill/SKILL.md",
         },
       ],
-    } as any;
+    };
     state.workspaces = [{ id: workspaceId, path: "/tmp/workspace" }];
     const { get, set } = createStoreHarness(state);
 
@@ -783,9 +253,9 @@ describe("skill store actions", () => {
       }),
       respond: () => true,
       close: () => {},
-    } as any);
+    } as unknown as JsonRpcSocket);
 
-    await createSkillActions(set as any, get as any).selectSkill("example-skill");
+    await createSkillActions(set, get).selectSkill("example-skill");
 
     expect(state.workspaceRuntimeById[workspaceId].selectedSkillName).toBe("example-skill");
     expect(state.workspaceRuntimeById[workspaceId].selectedSkillContent).toBe("# Example skill");
@@ -804,7 +274,7 @@ describe("skill store actions", () => {
         serverUrl: "ws://secondary",
         controlSessionId: "jsonrpc-control",
       },
-    } as any;
+    };
     state.workspaces = [
       { id: workspaceId, path: "/tmp/workspace" },
       { id: secondaryWorkspaceId, path: "/tmp/secondary" },
@@ -834,7 +304,7 @@ describe("skill store actions", () => {
       },
       respond: () => true,
       close: () => {},
-    } as any);
+    } as unknown as JsonRpcSocket);
     RUNTIME.jsonRpcSockets.set(secondaryWorkspaceId, {
       readyPromise: Promise.resolve(),
       request: async (method: string) => {
@@ -844,7 +314,7 @@ describe("skill store actions", () => {
             event: {
               type: "plugins_catalog",
               sessionId: "jsonrpc-control",
-              catalog: { plugins: [], warnings: [] },
+              catalog: { plugins: [], availablePlugins: [], warnings: [] },
             },
           };
         }
@@ -881,9 +351,9 @@ describe("skill store actions", () => {
       },
       respond: () => true,
       close: () => {},
-    } as any);
+    } as unknown as JsonRpcSocket);
 
-    await createSkillActions(set as any, get as any).installSkills("owner/repo", "global");
+    await createSkillActions(set, get).installSkills("owner/repo", "global");
 
     expect(sourceCalls).toEqual(["cowork/skills/install"]);
     expect(secondaryCalls.sort()).toEqual([
@@ -904,7 +374,7 @@ describe("skill store actions", () => {
       skillMutationError: null,
       serverUrl: "ws://mock",
       controlSessionId: "jsonrpc-control",
-    } as any;
+    };
     state.workspaces = [{ id: workspaceId, path: "/tmp/workspace" }];
     const { get, set } = createStoreHarness(state);
 
@@ -936,11 +406,9 @@ describe("skill store actions", () => {
       request: async () => await requestPromise,
       respond: () => true,
       close: () => {},
-    } as any);
+    } as unknown as JsonRpcSocket);
 
-    const selectPromise = createSkillActions(set as any, get as any).selectSkillInstallation(
-      "inst-1",
-    );
+    const selectPromise = createSkillActions(set, get).selectSkillInstallation("inst-1");
 
     expect(state.workspaceRuntimeById[workspaceId].selectedSkillInstallationId).toBe("inst-1");
     expect(state.workspaceRuntimeById[workspaceId].selectedSkillInstallation).toBeNull();
@@ -961,37 +429,48 @@ describe("skill store actions", () => {
     expect(state.workspaceRuntimeById[workspaceId].selectedSkillContent).toBe("# Example skill");
   });
 
-  for (const { name, invoke } of failedSkillMutationActions) {
+  for (const { name, expectedError, invoke } of failedSkillMutationActions) {
     test(`${name} removes only its pending key when sendControl fails`, async () => {
       const state = createState();
       state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys = { other: true };
       const { get, set } = createStoreHarness(state);
 
-      await invoke(createSkillActions(set as any, get as any));
+      await invoke(createSkillActions(set, get));
 
       expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({
         other: true,
       });
+      expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBe(expectedError);
+      expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBeNull();
       expect(state.notifications).toHaveLength(1);
     });
   }
 
-  for (const { name, invoke } of failedPluginMutationActions) {
-    test(`${name} removes only its pending key when sendControl fails`, async () => {
+  for (const { name, method, pendingKey, invoke } of rootSkillMutationActions) {
+    test(`${name} registers its pending key before sending`, async () => {
       const state = createState();
-      state.workspaceRuntimeById[workspaceId] = {
-        ...defaultWorkspaceRuntime(),
-        skillMutationPendingKeys: { other: true },
-      } as any;
+      state.workspaceRuntimeById[workspaceId].serverUrl = "ws://mock";
+      state.workspaceRuntimeById[workspaceId].controlSessionId = "jsonrpc-control";
       state.workspaces = [{ id: workspaceId, path: "/tmp/workspace" }];
       const { get, set } = createStoreHarness(state);
+      let pendingAtRequest = false;
 
-      await invoke(createSkillActions(set as any, get as any));
+      RUNTIME.jsonRpcSockets.set(workspaceId, {
+        readyPromise: Promise.resolve(),
+        request: async (receivedMethod: string) => {
+          expect(receivedMethod).toBe(method);
+          pendingAtRequest =
+            state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys[pendingKey] === true;
+          throw new Error("request failed");
+        },
+        respond: () => true,
+        close: () => {},
+      } as unknown as JsonRpcSocket);
 
-      expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({
-        other: true,
-      });
-      expect(state.notifications).toHaveLength(1);
+      await invoke(createSkillActions(set, get));
+
+      expect(pendingAtRequest).toBe(true);
+      expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({});
     });
   }
 });

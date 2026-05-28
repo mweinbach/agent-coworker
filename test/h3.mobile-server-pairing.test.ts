@@ -156,19 +156,19 @@ describe("H3 mobile server pairing", () => {
       },
     },
     {
-      name: "workspace settings fallback requests",
+      name: "plugin delete requests",
       permission: "workspaceSettings",
       payload: {
         jsonrpc: "2.0",
         id: "workspace-settings-request",
-        method: "cowork/session/defaults/apply",
-        params: { defaults: { model: "model-1" } },
+        method: "cowork/plugins/delete",
+        params: { pluginId: "figma-toolkit", scope: "workspace" },
       },
       allowedStatus: 200,
       expectedHandledMessage: {
         id: "workspace-settings-request",
-        method: "cowork/session/defaults/apply",
-        params: { defaults: { model: "model-1" } },
+        method: "cowork/plugins/delete",
+        params: { pluginId: "figma-toolkit", scope: "workspace" },
       },
     },
     {

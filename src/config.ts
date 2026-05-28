@@ -422,7 +422,7 @@ export function rebaseWorkspaceConfig(config: AgentConfig, cwd: string): AgentCo
 
   const projectCoworkDir = path.join(cwd, ".cowork");
   const workspaceAgentsDir = path.join(cwd, ".agents");
-  const workspacePluginsDir = path.join(workspaceAgentsDir, "plugins");
+  const workspacePluginsDir = path.join(projectCoworkDir, "plugins");
   const builtInSkillsDir = path.join(config.builtInDir, "skills");
   const builtInSkillsEnabled = config.skillsDirs.includes(builtInSkillsDir);
 
@@ -473,11 +473,11 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
   const projectCoworkDir = path.join(cwd, ".cowork");
   const workspaceAgentsDir = path.join(cwd, ".agents");
   const userAgentsDir = path.join(homedir, ".agents");
-  const workspacePluginsDir = path.join(workspaceAgentsDir, "plugins");
-  const userPluginsDir = path.join(userAgentsDir, "plugins");
   const builtInConfigDir = path.join(builtInDir, "config");
   const coworkPaths = getAiCoworkerPaths({ homedir });
   const userCoworkDir = coworkPaths.rootDir;
+  const workspacePluginsDir = path.join(projectCoworkDir, "plugins");
+  const userPluginsDir = path.join(userCoworkDir, "plugins");
   const userConfigDir = coworkPaths.configDir;
 
   const builtInDefaults = await loadJsonSafe(path.join(builtInConfigDir, "defaults.json"));

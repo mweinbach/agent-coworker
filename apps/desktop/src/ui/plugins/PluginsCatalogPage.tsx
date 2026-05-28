@@ -3,6 +3,7 @@ import { useMemo } from "react";
 import { useAppStore } from "../../app/store";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
+import { isInstalledPluginCatalogEntry } from "../../lib/wsProtocol";
 import { InstallPluginDialog } from "./InstallPluginDialog";
 import { PluginCardGrid } from "./PluginCardGrid";
 import { PluginDetailDialog } from "./PluginDetailDialog";
@@ -27,7 +28,7 @@ export function PluginsCatalogPage({
   const showLoadingState = pluginsLoading && catalog === null;
 
   const plugins = useMemo(() => {
-    let items = [...(catalog?.plugins ?? [])];
+    let items = [...(catalog?.plugins ?? []), ...(catalog?.availablePlugins ?? [])];
     if (managementScope === "global") {
       items = items.filter((plugin) => plugin.scope === "user");
     }
@@ -44,13 +45,23 @@ export function PluginsCatalogPage({
     return items.sort((left, right) => left.displayName.localeCompare(right.displayName));
   }, [catalog, searchQuery, managementScope]);
 
-  const enabledPlugins = useMemo(() => plugins.filter((plugin) => plugin.enabled), [plugins]);
-  const disabledPlugins = useMemo(() => plugins.filter((plugin) => !plugin.enabled), [plugins]);
+  const availablePlugins = useMemo(
+    () => plugins.filter((plugin) => plugin.installed === false),
+    [plugins],
+  );
+  const enabledPlugins = useMemo(
+    () => plugins.filter((plugin) => isInstalledPluginCatalogEntry(plugin) && plugin.enabled),
+    [plugins],
+  );
+  const disabledPlugins = useMemo(
+    () => plugins.filter((plugin) => isInstalledPluginCatalogEntry(plugin) && !plugin.enabled),
+    [plugins],
+  );
 
   const emptyLabel =
     managementScope === "global"
-      ? "No Codex-style plugins were discovered in your global library."
-      : "No Codex-style plugins were discovered for this workspace.";
+      ? "No Cowork plugins were discovered in your global library."
+      : "No Cowork plugins were discovered for this workspace.";
 
   return (
     <div className="app-skills-view h-full min-h-0 overflow-y-auto px-6 py-4">
@@ -84,6 +95,16 @@ export function PluginsCatalogPage({
               <h2 className="mb-4 text-lg font-semibold text-muted-foreground">Disabled</h2>
               <PluginCardGrid
                 plugins={disabledPlugins}
+                onSelect={(pluginId, scope) => void selectPlugin(pluginId, scope)}
+              />
+            </section>
+          ) : null}
+
+          {availablePlugins.length > 0 ? (
+            <section>
+              <h2 className="mb-4 text-lg font-semibold text-muted-foreground">Available</h2>
+              <PluginCardGrid
+                plugins={availablePlugins}
                 onSelect={(pluginId, scope) => void selectPlugin(pluginId, scope)}
               />
             </section>

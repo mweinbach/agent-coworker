@@ -223,6 +223,23 @@ describe("control socket helpers over JSON-RPC", () => {
     expect(RUNTIME.pluginInstallWaiters.has(workspaceId)).toBe(false);
   });
 
+  test("disposeAllControlState rejects pending plugin install waiters with no other workspace state", async () => {
+    const workspaceId = "ws-plugin-dispose-all";
+    const rejected = Promise.withResolvers<void>();
+    RUNTIME.pluginInstallWaiters.set(workspaceId, {
+      pendingKey: "plugin:install:user",
+      resolve: rejected.resolve,
+      reject: rejected.reject,
+    });
+
+    const helpers = createControlSocketHelpers(deps);
+    const rejectedPromise = rejected.promise;
+    helpers.disposeAllControlState();
+
+    await expect(rejectedPromise).rejects.toThrow("Control connection closed");
+    expect(RUNTIME.pluginInstallWaiters.has(workspaceId)).toBe(false);
+  });
+
   test("waitForControlSession waits for JSON-RPC control bootstrap to hydrate control state", async () => {
     const workspaceId = "ws-control-state";
     const { state, get, set } = createState(workspaceId);

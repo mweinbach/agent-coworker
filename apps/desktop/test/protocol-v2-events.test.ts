@@ -426,6 +426,8 @@ describe("desktop JSON-RPC event mapping", () => {
             skillsMutationBlockedReason: null,
             skillMutationPendingKeys: {},
             skillMutationError: null,
+            pluginMutationPendingKeys: {},
+            pluginMutationError: null,
             memories: [],
             memoriesLoading: false,
             workspaceBackupsPath: null,

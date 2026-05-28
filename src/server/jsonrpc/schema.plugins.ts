@@ -10,6 +10,7 @@ export const jsonRpcPluginsRequestSchemas = {
   "cowork/plugins/install": jsonRpcControlRequestSchemas["cowork/plugins/install"],
   "cowork/plugins/enable": jsonRpcControlRequestSchemas["cowork/plugins/enable"],
   "cowork/plugins/disable": jsonRpcControlRequestSchemas["cowork/plugins/disable"],
+  "cowork/plugins/delete": jsonRpcControlRequestSchemas["cowork/plugins/delete"],
 } as const;
 
 export const jsonRpcPluginsResultSchemas = {
@@ -19,4 +20,5 @@ export const jsonRpcPluginsResultSchemas = {
   "cowork/plugins/install": jsonRpcControlResultSchemas["cowork/plugins/install"],
   "cowork/plugins/enable": jsonRpcControlResultSchemas["cowork/plugins/enable"],
   "cowork/plugins/disable": jsonRpcControlResultSchemas["cowork/plugins/disable"],
+  "cowork/plugins/delete": jsonRpcControlResultSchemas["cowork/plugins/delete"],
 } as const;

@@ -1,16 +1,12 @@
-import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import {
-  buildGitHubApiUrl,
-  downloadGitHubDirectory,
+  expandHomeDir,
   type FetchLike,
-  githubHeaders,
-  type ParsedGitHubSource,
-  parseGitHubShorthand,
-  parseGitHubUrl,
-} from "../skills/github";
+  materializeGitHubDirectorySource,
+  resolveGitHubOrLocalSource,
+  trimSlashes,
+} from "../extensions/source";
 import type {
   PluginCatalogSnapshot,
   PluginInstallPreview,
@@ -19,7 +15,12 @@ import type {
   PluginSourceDescriptor,
   SkillInstallationDiagnostic,
 } from "../types";
-import { readPluginManifest, validatePluginBundledSkills } from "./manifest";
+import {
+  isPluginManifestDirName,
+  pluginManifestPathsForPluginRoot,
+  readPluginManifest,
+  validatePluginBundledSkills,
+} from "./manifest";
 import { readPluginMcpServers } from "./mcp";
 
 export type MaterializedPluginCandidate = {
@@ -37,12 +38,32 @@ export type MaterializedPluginSource = {
   cleanup: () => Promise<void>;
 };
 
-function trimSlashes(value: string): string {
-  return value.replace(/^\/+|\/+$/g, "");
+export const NO_VALID_PLUGIN_BUNDLES_MESSAGE =
+  "No valid plugin bundles were found in the provided source";
+export const MULTIPLE_VALID_PLUGIN_BUNDLES_MESSAGE =
+  "The install source contains more than one valid plugin bundle. Install one plugin at a time so failures cannot leave a partially applied plugin set.";
+
+export function validPluginCandidates(
+  candidates: readonly MaterializedPluginCandidate[],
+): MaterializedPluginCandidate[] {
+  return candidates.filter((candidate) => candidate.diagnostics.length === 0);
+}
+
+export function selectSingleValidPluginCandidate(
+  candidates: readonly MaterializedPluginCandidate[],
+): MaterializedPluginCandidate {
+  const validCandidates = validPluginCandidates(candidates);
+  if (validCandidates.length === 0) {
+    throw new Error(NO_VALID_PLUGIN_BUNDLES_MESSAGE);
+  }
+  if (validCandidates.length > 1) {
+    throw new Error(MULTIPLE_VALID_PLUGIN_BUNDLES_MESSAGE);
+  }
+  return validCandidates[0];
 }
 
 function isPluginManifestGitHubInput(input: string): boolean {
-  return /(?:^|\/)\.codex-plugin\/plugin\.json(?:$|[?#])/.test(input);
+  return /(?:^|\/)\.(?:cowork|codex)-plugin\/plugin\.json(?:$|[?#])/.test(input);
 }
 
 function normalizePluginGitHubDirectoryPath(filePath: string): string {
@@ -53,7 +74,7 @@ function normalizePluginGitHubDirectoryPath(filePath: string): string {
 
   const fileName = path.posix.basename(normalizedFilePath);
   const parentDir = path.posix.dirname(normalizedFilePath);
-  if (fileName === "plugin.json" && path.posix.basename(parentDir) === ".codex-plugin") {
+  if (fileName === "plugin.json" && isPluginManifestDirName(path.posix.basename(parentDir))) {
     const bundleRoot = path.posix.dirname(parentDir);
     return bundleRoot === "." ? "" : bundleRoot;
   }
@@ -67,7 +88,7 @@ function normalizePluginGitHubTreePath(directoryPath: string): string {
     return "";
   }
 
-  if (path.posix.basename(normalizedDirectoryPath) !== ".codex-plugin") {
+  if (!isPluginManifestDirName(path.posix.basename(normalizedDirectoryPath))) {
     return normalizedDirectoryPath;
   }
 
@@ -83,20 +104,12 @@ function buildDiagnostic(
   return { code, severity, message };
 }
 
-function expandHomeDir(input: string): string {
-  if (!input.startsWith("~")) {
-    return input;
-  }
-  const remainder = input.slice(1).replace(/^[/\\]+/, "");
-  return path.join(os.homedir(), remainder);
-}
-
 function normalizeLocalPluginSourceRoot(absolutePath: string, isFile: boolean): string {
   const candidateRoot = isFile ? path.dirname(absolutePath) : absolutePath;
   const baseName = path.basename(candidateRoot);
   const fileName = isFile ? path.basename(absolutePath) : "";
 
-  if (baseName === ".codex-plugin") {
+  if (isPluginManifestDirName(baseName)) {
     if (!isFile || fileName === "plugin.json") {
       return path.dirname(candidateRoot);
     }
@@ -128,14 +141,16 @@ async function discoverPluginRoots(rootDir: string): Promise<string[]> {
       return;
     }
 
-    const manifestPath = path.join(dir, ".codex-plugin", "plugin.json");
-    try {
-      const stat = await fs.stat(manifestPath);
-      if (stat.isFile()) {
-        found.add(dir);
+    for (const manifestPath of pluginManifestPathsForPluginRoot(dir)) {
+      try {
+        const stat = await fs.stat(manifestPath);
+        if (stat.isFile()) {
+          found.add(dir);
+          break;
+        }
+      } catch {
+        // continue searching supported manifest locations
       }
-    } catch {
-      // continue searching descendants
     }
 
     for (const dirent of dirents) {
@@ -209,7 +224,7 @@ async function loadMaterializedPluginCandidates(
           buildDiagnostic(
             "invalid_plugin_manifest",
             "error",
-            `Invalid or unreadable .codex-plugin/plugin.json: ${String(error)}`,
+            `Invalid or unreadable plugin manifest: ${String(error)}`,
           ),
         ],
         relativeRootPath: path.relative(stageRoot, rootDir) || path.basename(rootDir),
@@ -227,7 +242,7 @@ async function loadMaterializedPluginCandidates(
         buildDiagnostic(
           "no_plugin_found",
           "error",
-          "No Codex plugin roots containing .codex-plugin/plugin.json were found",
+          "No plugin roots containing .cowork-plugin/plugin.json or .codex-plugin/plugin.json were found",
         ),
       ],
       relativeRootPath: ".",
@@ -257,337 +272,27 @@ async function materializeLocalPath(localPath: string): Promise<MaterializedPlug
   };
 }
 
-function buildDescriptorFromGitHubSource(
-  raw: string,
-  parsed: ParsedGitHubSource,
-): PluginSourceDescriptor {
-  const kindBySource: Record<ParsedGitHubSource["kind"], PluginSourceDescriptor["kind"]> = {
-    repo: "github_repo",
-    tree: "github_tree",
-    blob: "github_blob",
-    raw: "github_raw",
-  };
-
-  return {
-    kind: kindBySource[parsed.kind],
-    raw,
-    displaySource: parsed.url,
-    url: parsed.url,
-    repo: parsed.repo,
-    ...(parsed.ref ? { ref: parsed.ref } : {}),
-    ...(parsed.subdir ? { subdir: parsed.subdir } : {}),
-    ...(parsed.refPath ? { refPath: parsed.refPath } : {}),
-  };
-}
-
-type GitHubMaterializationAttempt = {
-  ref: string;
-  githubPath: string;
-  descriptor: PluginSourceDescriptor;
-};
-
-function buildResolvedGitHubDescriptor(
-  descriptor: PluginSourceDescriptor,
-  ref: string | undefined,
-  githubPath: string,
-): PluginSourceDescriptor {
-  return {
-    kind: descriptor.kind,
-    raw: descriptor.raw,
-    displaySource: descriptor.displaySource,
-    ...(descriptor.url ? { url: descriptor.url } : {}),
-    ...(descriptor.repo ? { repo: descriptor.repo } : {}),
-    ...(ref ? { ref } : {}),
-    ...(githubPath ? { subdir: githubPath } : {}),
-    ...(descriptor.localPath ? { localPath: descriptor.localPath } : {}),
-  };
-}
-
-function buildGitHubMaterializationAttempts(
-  descriptor: PluginSourceDescriptor,
-): GitHubMaterializationAttempt[] {
-  const refPathSegments = descriptor.refPath?.split("/").filter(Boolean) ?? [];
-  if (
-    refPathSegments.length === 0 ||
-    (descriptor.kind !== "github_tree" &&
-      descriptor.kind !== "github_blob" &&
-      descriptor.kind !== "github_raw")
-  ) {
-    return [];
-  }
-
-  const minimumTrailingSegments = descriptor.kind === "github_tree" ? 0 : 1;
-  const attempts: GitHubMaterializationAttempt[] = [];
-  for (let splitAt = refPathSegments.length - minimumTrailingSegments; splitAt >= 1; splitAt -= 1) {
-    const ref = refPathSegments.slice(0, splitAt).join("/");
-    const trailingPath = refPathSegments.slice(splitAt).join("/");
-    const githubPath =
-      descriptor.kind === "github_tree"
-        ? normalizePluginGitHubTreePath(trailingPath)
-        : trailingPath
-          ? normalizePluginGitHubDirectoryPath(trailingPath)
-          : "";
-    const normalizedPath = githubPath === "." ? "" : githubPath;
-
-    attempts.push({
-      ref,
-      githubPath: normalizedPath,
-      descriptor: buildResolvedGitHubDescriptor(descriptor, ref, normalizedPath),
-    });
-  }
-
-  return attempts;
-}
-
-function dedupeGitHubMaterializationAttempts(
-  attempts: GitHubMaterializationAttempt[],
-): GitHubMaterializationAttempt[] {
-  return attempts.filter(
-    (attempt, index, allAttempts) =>
-      allAttempts.findIndex(
-        (candidate) => candidate.ref === attempt.ref && candidate.githubPath === attempt.githubPath,
-      ) === index,
-  );
-}
-
 export function resolvePluginSource(input: string, cwd = process.cwd()): PluginSourceDescriptor {
-  const trimmed = input.trim();
-  if (!trimmed) {
-    throw new Error("Plugin source is required");
-  }
-
-  const githubUrl = parseGitHubUrl(trimmed);
-  if (githubUrl) {
-    return buildDescriptorFromGitHubSource(trimmed, githubUrl);
-  }
-
-  const githubShorthand = parseGitHubShorthand(trimmed);
-  if (githubShorthand) {
-    const candidateLocalPath = path.isAbsolute(trimmed)
-      ? path.resolve(expandHomeDir(trimmed))
-      : path.resolve(cwd, expandHomeDir(trimmed));
-    if (existsSync(candidateLocalPath)) {
-      return {
-        kind: "local_path",
-        raw: trimmed,
-        displaySource: candidateLocalPath,
-        localPath: candidateLocalPath,
-      };
-    }
-    return {
-      kind: "github_shorthand",
-      raw: trimmed,
-      displaySource: githubShorthand.url,
-      url: githubShorthand.url,
-      repo: githubShorthand.repo,
-    };
-  }
-
-  const localPath = path.isAbsolute(trimmed) ? trimmed : path.resolve(cwd, expandHomeDir(trimmed));
-  return {
-    kind: "local_path",
-    raw: trimmed,
-    displaySource: localPath,
-    localPath,
-  };
+  return resolveGitHubOrLocalSource<PluginSourceDescriptor>(input, cwd);
 }
 
 async function materializeGitHubSource(
   descriptor: PluginSourceDescriptor,
   fetchImpl: FetchLike,
 ): Promise<MaterializedPluginSource> {
-  if (!descriptor.repo) {
-    throw new Error("GitHub source is missing repo information");
-  }
-
-  const shouldSkipPreferredAttempt =
-    descriptor.refPath !== undefined &&
-    (descriptor.kind === "github_blob" || descriptor.kind === "github_raw") &&
-    isPluginManifestGitHubInput(descriptor.raw);
-  const preferredGitHubPath =
-    descriptor.kind === "github_tree"
-      ? normalizePluginGitHubTreePath(descriptor.subdir ?? "")
-      : (descriptor.subdir ?? "");
-  const preferredAttempt =
-    descriptor.ref && !shouldSkipPreferredAttempt
-      ? [
-          {
-            ref: descriptor.ref,
-            githubPath: preferredGitHubPath,
-            descriptor: buildResolvedGitHubDescriptor(
-              descriptor,
-              descriptor.ref,
-              preferredGitHubPath,
-            ),
-          },
-        ]
-      : [];
-  const attempts = buildGitHubMaterializationAttempts(descriptor);
-  const fallbackRefs = descriptor.ref
-    ? [descriptor.ref]
-    : await resolveGitHubFallbackRefs(descriptor.repo, fetchImpl);
-  const fallbackAttempts = fallbackRefs.map((ref) => {
-    const githubPath =
-      descriptor.kind === "github_tree"
-        ? normalizePluginGitHubTreePath(descriptor.subdir ?? "")
-        : (descriptor.subdir ?? "");
-    return {
-      ref,
-      githubPath,
-      descriptor: buildResolvedGitHubDescriptor(descriptor, ref, githubPath),
-    };
+  return await materializeGitHubDirectorySource({
+    descriptor,
+    fetchImpl,
+    tmpPrefix: "cowork-plugin-source-",
+    normalizeTreePath: normalizePluginGitHubTreePath,
+    normalizeFileDirectoryPath: normalizePluginGitHubDirectoryPath,
+    shouldSkipPreferredAttempt: (source) =>
+      source.refPath !== undefined &&
+      (source.kind === "github_blob" || source.kind === "github_raw") &&
+      isPluginManifestGitHubInput(source.raw),
+    includeRemoteDefaultBranch: true,
+    loadCandidates: async (stageRoot) => await loadMaterializedPluginCandidates(stageRoot),
   });
-  const materializationAttempts = dedupeGitHubMaterializationAttempts(
-    attempts.length > 0
-      ? await resolveAmbiguousGitHubMaterializationAttempts(descriptor.repo, attempts, fetchImpl)
-      : [...preferredAttempt, ...fallbackAttempts],
-  );
-  const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-plugin-source-"));
-  let resolvedDescriptor: PluginSourceDescriptor | null = null;
-  let resolvedCandidates: MaterializedPluginCandidate[] | null = null;
-  let lastError: unknown = null;
-
-  try {
-    for (const attempt of materializationAttempts) {
-      const repoRoot = path.join(tmpRoot, descriptor.repo.split("/").at(-1) ?? "repo");
-      try {
-        await fs.rm(repoRoot, { recursive: true, force: true });
-        let stageRoot: string;
-        if (attempt.githubPath) {
-          const destination = path.join(repoRoot, path.basename(attempt.githubPath));
-          await downloadGitHubDirectory({
-            fetchImpl,
-            repo: descriptor.repo,
-            ref: attempt.ref,
-            githubPath: attempt.githubPath,
-            destDir: destination,
-          });
-          stageRoot = destination;
-        } else {
-          await downloadGitHubDirectory({
-            fetchImpl,
-            repo: descriptor.repo,
-            ref: attempt.ref,
-            githubPath: "",
-            destDir: repoRoot,
-          });
-          stageRoot = repoRoot;
-        }
-        resolvedCandidates = await loadMaterializedPluginCandidates(stageRoot);
-        resolvedDescriptor = attempt.descriptor;
-        break;
-      } catch (error) {
-        lastError = error;
-      }
-    }
-
-    if (!resolvedDescriptor || !resolvedCandidates) {
-      throw lastError instanceof Error
-        ? lastError
-        : new Error(String(lastError ?? "Unable to fetch GitHub source"));
-    }
-
-    return {
-      descriptor: resolvedDescriptor,
-      candidates: resolvedCandidates,
-      cleanup: async () => {
-        await fs.rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
-      },
-    };
-  } catch (error) {
-    await fs.rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
-    throw error;
-  }
-}
-
-async function readResponseError(response: Response): Promise<string> {
-  try {
-    const text = await response.text();
-    return text.trim() || `${response.status} ${response.statusText}`;
-  } catch {
-    return `${response.status} ${response.statusText}`;
-  }
-}
-
-async function doesGitHubRefExist(
-  fetchImpl: FetchLike,
-  repo: string,
-  ref: string,
-): Promise<boolean> {
-  const response = await fetchImpl(buildGitHubApiUrl(repo, ref, ""), {
-    headers: githubHeaders(),
-  });
-  if (response.ok) {
-    return true;
-  }
-  if (response.status === 404) {
-    return false;
-  }
-  throw new Error(
-    `Failed to verify GitHub ref ${repo}@${ref}: ${await readResponseError(response)}`,
-  );
-}
-
-async function resolveAmbiguousGitHubMaterializationAttempts(
-  repo: string,
-  attempts: GitHubMaterializationAttempt[],
-  fetchImpl: FetchLike,
-): Promise<GitHubMaterializationAttempt[]> {
-  const uniqueAttempts = dedupeGitHubMaterializationAttempts(attempts);
-  const checkedRefs = new Map<string, boolean>();
-  const existingAttempts: GitHubMaterializationAttempt[] = [];
-
-  for (const attempt of uniqueAttempts) {
-    let refExists = checkedRefs.get(attempt.ref);
-    if (refExists === undefined) {
-      refExists = await doesGitHubRefExist(fetchImpl, repo, attempt.ref);
-      checkedRefs.set(attempt.ref, refExists);
-    }
-    if (refExists) {
-      existingAttempts.push(attempt);
-    }
-  }
-
-  return existingAttempts.length > 0 ? existingAttempts : uniqueAttempts;
-}
-
-async function fetchGitHubDefaultBranch(
-  fetchImpl: FetchLike,
-  repo: string,
-): Promise<string | null> {
-  const response = await fetchImpl(`https://api.github.com/repos/${repo}`, {
-    headers: githubHeaders(),
-  });
-  if (!response.ok) {
-    throw new Error(
-      `Failed to fetch GitHub repo metadata for ${repo}: ${await readResponseError(response)}`,
-    );
-  }
-
-  const parsed = (await response.json()) as Record<string, unknown>;
-  return typeof parsed.default_branch === "string" && parsed.default_branch.trim().length > 0
-    ? parsed.default_branch.trim()
-    : null;
-}
-
-async function resolveGitHubFallbackRefs(
-  repo: string | undefined,
-  fetchImpl: FetchLike,
-): Promise<string[]> {
-  const fallbackRefs = new Set<string>();
-  if (repo) {
-    try {
-      const defaultBranch = await fetchGitHubDefaultBranch(fetchImpl, repo);
-      if (defaultBranch) {
-        fallbackRefs.add(defaultBranch);
-      }
-    } catch {
-      // Fall back to conventional default branches when repo metadata is unavailable.
-    }
-  }
-  fallbackRefs.add("main");
-  fallbackRefs.add("master");
-  return [...fallbackRefs];
 }
 
 export async function materializePluginSource(opts: {
@@ -639,7 +344,6 @@ function buildPreviewCandidate(
         }
       : {}),
     wouldBePrimary: wouldCandidateBePrimary(candidate.pluginId, targetScope, catalog),
-    shadowedPluginIds: sameIdPlugins.map((plugin) => plugin.id),
     diagnostics: candidate.diagnostics,
   };
 }
@@ -665,9 +369,12 @@ export async function buildPluginInstallPreview(opts: {
     const candidates = materialized.candidates.map((candidate) =>
       buildPreviewCandidate(candidate, opts.targetScope, opts.catalog),
     );
+    const validCandidates = candidates.filter((candidate) => candidate.diagnostics.length === 0);
     const warnings: string[] = [];
-    if (candidates.every((candidate) => candidate.diagnostics.length > 0)) {
-      warnings.push("No valid plugin bundles were found in the provided source.");
+    if (validCandidates.length === 0) {
+      warnings.push(`${NO_VALID_PLUGIN_BUNDLES_MESSAGE}.`);
+    } else if (validCandidates.length > 1) {
+      warnings.push(MULTIPLE_VALID_PLUGIN_BUNDLES_MESSAGE);
     }
 
     return {

@@ -16,18 +16,20 @@ type PluginPreviewState = NonNullable<
   ReturnType<typeof useAppStore.getState>["workspaceRuntimeById"][string]["selectedPluginPreview"]
 >;
 
+function validPreviewCandidates(preview: PluginPreviewState) {
+  return preview.candidates.filter((candidate) => candidate.diagnostics.length === 0);
+}
+
 function previewSummary(
   preview: NonNullable<
     ReturnType<typeof useAppStore.getState>["workspaceRuntimeById"][string]["selectedPluginPreview"]
   >,
 ) {
-  const validCount = preview.candidates.filter(
-    (candidate) => candidate.diagnostics.length === 0,
-  ).length;
+  const validCount = validPreviewCandidates(preview).length;
   if (validCount === 0) {
     return "No valid plugins found";
   }
-  return validCount === 1 ? "1 plugin ready" : `${validCount} plugins ready`;
+  return validCount === 1 ? "1 plugin ready" : "Multiple plugins found";
 }
 
 export function isPluginPreviewVisibleForInput(opts: {
@@ -80,10 +82,7 @@ export function shouldDisablePluginInstallForScope(opts: {
   if (!previewVisible || opts.lastPreviewTargetScope !== opts.targetScope) {
     return false;
   }
-  return (
-    (opts.pluginPreview?.candidates.some((candidate) => candidate.diagnostics.length === 0) ??
-      false) === false
-  );
+  return opts.pluginPreview ? validPreviewCandidates(opts.pluginPreview).length !== 1 : true;
 }
 
 export function InstallPluginDialog({
@@ -115,10 +114,10 @@ export function InstallPluginDialog({
   const installPlugins = useAppStore((state) => state.installPlugins);
 
   const pluginPreview = runtime?.selectedPluginPreview ?? null;
-  const pluginInstallInFlight = Object.keys(runtime?.skillMutationPendingKeys ?? {}).some((key) =>
+  const pluginInstallInFlight = Object.keys(runtime?.pluginMutationPendingKeys ?? {}).some((key) =>
     key.startsWith("plugin:install:"),
   );
-  const pluginPreviewPending = runtime?.skillMutationPendingKeys["plugin:preview"] === true;
+  const pluginPreviewPending = runtime?.pluginMutationPendingKeys["plugin:preview"] === true;
   const normalizedSourceInput = sourceInput.trim();
   const showPreview = isPluginPreviewVisibleForInput({
     normalizedSourceInput,
@@ -132,20 +131,11 @@ export function InstallPluginDialog({
     normalizedSourceInput.length > 0 &&
     normalizedSourceInput === lastPreviewSourceInput;
   const showMutationError =
-    Boolean(runtime?.skillMutationError) &&
+    Boolean(runtime?.pluginMutationError) &&
     lastMutationSourceInput !== null &&
     normalizedSourceInput.length > 0 &&
     normalizedSourceInput === lastMutationSourceInput;
-  const showPluginsError =
-    Boolean(runtime?.pluginsError) &&
-    lastMutationSourceInput !== null &&
-    normalizedSourceInput.length > 0 &&
-    normalizedSourceInput === lastMutationSourceInput;
-  const dialogError = showMutationError
-    ? (runtime?.skillMutationError ?? null)
-    : showPluginsError
-      ? (runtime?.pluginsError ?? null)
-      : null;
+  const dialogError = showMutationError ? (runtime?.pluginMutationError ?? null) : null;
   const disableInstallForScope = (targetScope: PluginPreviewScope) =>
     shouldDisablePluginInstallForScope({
       normalizedSourceInput,
@@ -156,7 +146,7 @@ export function InstallPluginDialog({
       pluginInstallInFlight,
     });
 
-  const validPreviewCandidates = useMemo(
+  const validPreviewCandidateRows = useMemo(
     () =>
       showPreview
         ? (pluginPreview?.candidates.filter((candidate) => candidate.diagnostics.length === 0) ??
@@ -364,7 +354,7 @@ export function InstallPluginDialog({
                 a new preview for that scope first.
               </div>
             ) : null}
-            {showPreview && validPreviewCandidates.length === 0 ? (
+            {showPreview && validPreviewCandidateRows.length === 0 ? (
               <div className="rounded-md border border-border/70 bg-muted/25 px-3 py-2 text-xs text-muted-foreground">
                 Fix the preview issues before installing this plugin source.
               </div>

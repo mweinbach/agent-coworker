@@ -344,7 +344,6 @@ function buildPreviewCandidate(
         }
       : {}),
     wouldBePrimary: wouldCandidateBePrimary(candidate.pluginId, targetScope, catalog),
-    shadowedPluginIds: sameIdPlugins.map((plugin) => plugin.id),
     diagnostics: candidate.diagnostics,
   };
 }

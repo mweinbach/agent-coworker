@@ -27,17 +27,26 @@ export class PluginCatalogService {
     clearedMutationPendingKeys: string[] = [],
     opts: { includeRemoteMarketplace?: boolean; onlyIfEpoch?: number } = {},
   ) {
-    const catalog = await buildPluginCatalogSnapshot(this.context.state.config, {
-      includeRemoteMarketplace: opts.includeRemoteMarketplace ?? false,
-    });
+    const { remoteMarketplaceFailed, ...catalog } = await buildPluginCatalogSnapshot(
+      this.context.state.config,
+      {
+        includeRemoteMarketplace: opts.includeRemoteMarketplace ?? false,
+      },
+    );
     if (opts.onlyIfEpoch !== undefined && opts.onlyIfEpoch !== this.catalogEpoch) {
       return;
     }
+    // The available (marketplace) plugins are authoritative only when a remote
+    // refresh actually succeeded. A local-only refresh, or a remote refresh whose
+    // fetch failed, is partial — the client must keep its cached marketplace rows
+    // rather than clear them from an empty list.
+    const availablePluginsPartial =
+      !opts.includeRemoteMarketplace || remoteMarketplaceFailed === true;
     this.context.emit({
       type: "plugins_catalog",
       sessionId: this.context.id,
       catalog,
-      ...(!opts.includeRemoteMarketplace ? { availablePluginsPartial: true } : {}),
+      ...(availablePluginsPartial ? { availablePluginsPartial: true } : {}),
       ...(clearedMutationPendingKeys.length > 0 ? { clearedMutationPendingKeys } : {}),
     });
   }

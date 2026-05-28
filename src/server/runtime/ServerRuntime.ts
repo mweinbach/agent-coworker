@@ -172,7 +172,10 @@ export async function createAgentServerRuntime(
     builtInSkillsDir: packagedDesktopBundle ? undefined : path.join(config.builtInDir, "skills"),
     globalSkillsDir: defaultAiCoworkerPaths.skillsDir,
     globalPluginsDir: path.join(defaultAiCoworkerPaths.rootDir, "plugins"),
-    skipGlobalWorkspaceToolsPlugin: isDefaultPluginRemoved("workspace-tools", pluginOverrides),
+    skipGlobalWorkspaceToolsPlugin: isDefaultPluginRemoved(
+      WORKSPACE_TOOLS_PLUGIN_ID,
+      pluginOverrides,
+    ),
     env,
     log: (line) => {
       console.warn(`[codex-primary-runtime] ${line}`);

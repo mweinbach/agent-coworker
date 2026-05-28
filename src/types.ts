@@ -409,7 +409,6 @@ export interface PluginInstallPreviewCandidate {
   conflictsWithPluginId?: string;
   conflictsWithScope?: PluginScope;
   wouldBePrimary: boolean;
-  shadowedPluginIds: string[];
   diagnostics: SkillInstallationDiagnostic[];
 }
 

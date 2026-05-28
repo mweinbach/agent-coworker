@@ -833,7 +833,6 @@ const pluginInstallPreviewCandidateSchema = z
     conflictsWithPluginId: z.string().optional(),
     conflictsWithScope: pluginScopeSchema.optional(),
     wouldBePrimary: z.boolean(),
-    shadowedPluginIds: z.array(z.string()),
     diagnostics: z.array(skillInstallationDiagnosticSchema),
   })
   .passthrough();

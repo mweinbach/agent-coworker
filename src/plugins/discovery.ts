@@ -38,17 +38,6 @@ async function pathExists(targetPath: string): Promise<boolean> {
   }
 }
 
-async function __readMarketplaceDocument(
-  marketplacePath: string,
-): Promise<ParsedMarketplaceDocument | null> {
-  try {
-    const raw = await fs.readFile(marketplacePath, "utf-8");
-    return parsePluginMarketplace(raw, marketplacePath);
-  } catch {
-    return null;
-  }
-}
-
 async function resolveCanonicalPluginRoot(candidatePath: string): Promise<string | null> {
   try {
     const stat = await fs.stat(candidatePath);
@@ -175,6 +164,21 @@ export async function discoverPlugins(opts: {
     { scope: "user", pluginsDir: opts.userPluginsDir },
   ];
 
+  // Record a candidate at most once per literal root path AND per canonical
+  // (scope, realRootDir) pair. Marketplace entries are recorded before direct
+  // entries within a scope, so this preserves first-wins precedence (marketplace
+  // over direct, workspace over user) while collapsing aliases — e.g. two
+  // marketplace entries whose source paths resolve to the same canonical plugin
+  // root — into a single discovered candidate.
+  const recordPlugin = (plugin: DiscoveredPluginCandidate) => {
+    if (seenByRootPath.has(plugin.rootDir)) return;
+    const dedupeKey = `${plugin.scope}:${plugin.realRootDir}`;
+    if (seenByCanonicalRoot.has(dedupeKey)) return;
+    seenByRootPath.add(plugin.rootDir);
+    seenByCanonicalRoot.set(dedupeKey, plugin);
+    discovered.push(plugin);
+  };
+
   for (const scopeEntry of scopes) {
     if (!scopeEntry.pluginsDir) continue;
     const realPluginsDir = await resolveCanonicalDirectory(scopeEntry.pluginsDir);
@@ -189,13 +193,7 @@ export async function discoverPlugins(opts: {
     warnings.push(...marketplaceWarnings);
 
     for (const plugin of marketplacePlugins) {
-      if (seenByRootPath.has(plugin.rootDir)) continue;
-      seenByRootPath.add(plugin.rootDir);
-      const dedupeKey = `${plugin.scope}:${plugin.realRootDir}`;
-      if (!seenByCanonicalRoot.has(dedupeKey)) {
-        seenByCanonicalRoot.set(dedupeKey, plugin);
-      }
-      discovered.push(plugin);
+      recordPlugin(plugin);
     }
 
     const directPlugins = await discoverDirectPlugins({
@@ -203,12 +201,7 @@ export async function discoverPlugins(opts: {
       scope: scopeEntry.scope,
     });
     for (const plugin of directPlugins) {
-      if (seenByRootPath.has(plugin.rootDir)) continue;
-      seenByRootPath.add(plugin.rootDir);
-      const dedupeKey = `${plugin.scope}:${plugin.realRootDir}`;
-      if (seenByCanonicalRoot.has(dedupeKey)) continue;
-      seenByCanonicalRoot.set(dedupeKey, plugin);
-      discovered.push(plugin);
+      recordPlugin(plugin);
     }
   }
 

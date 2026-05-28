@@ -307,7 +307,6 @@ describe("plugins catalog page", () => {
                 description: "Old preview should be cleared",
                 relativeRootPath: ".",
                 wouldBePrimary: true,
-                shadowedPluginIds: [],
                 diagnostics: [],
               },
             ],
@@ -562,7 +561,6 @@ describe("plugins catalog page", () => {
           description: "Broken plugin",
           relativeRootPath: ".",
           wouldBePrimary: true,
-          shadowedPluginIds: [],
           diagnostics: [
             {
               code: "invalid_plugin_manifest",

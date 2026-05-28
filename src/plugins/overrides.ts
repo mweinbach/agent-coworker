@@ -26,10 +26,6 @@ type PluginOverrideDocument = {
 export type PluginOverrideSnapshot = {
   workspace: PluginScopeOverrides;
   user: PluginScopeOverrides;
-  plugins: Record<string, { enabled?: boolean }>;
-  skills: Record<string, Record<string, { enabled?: boolean }>>;
-  mcpServers: Record<string, Record<string, { enabled?: boolean }>>;
-  removedDefaultPlugins: Record<string, { removed?: boolean }>;
 };
 
 const CURRENT_DOCUMENT_VERSION = 2;
@@ -173,57 +169,9 @@ export async function readPluginOverrides(config: AgentConfig): Promise<PluginOv
     readDocument(paths.workspace),
     readDocument(paths.user),
   ]);
-  const byPlugin: PluginOverrideSnapshot["plugins"] = {};
-  const bySkill: PluginOverrideSnapshot["skills"] = {};
-  const byMcpServer: PluginOverrideSnapshot["mcpServers"] = {};
-  const byRemovedDefaultPlugin: PluginOverrideSnapshot["removedDefaultPlugins"] = {};
-  for (const [pluginId, enabled] of Object.entries(workspaceDoc.plugins ?? {})) {
-    byPlugin[pluginId] = { enabled };
-  }
-  for (const [pluginId, enabled] of Object.entries(userDoc.plugins ?? {})) {
-    byPlugin[pluginId] = { enabled };
-  }
-  for (const [compoundKey, enabled] of Object.entries(workspaceDoc.skills ?? {})) {
-    const [pluginId, ...rest] = compoundKey.split(":");
-    const rawSkillName = rest.join(":");
-    if (!pluginId || !rawSkillName) continue;
-    bySkill[pluginId] ??= {};
-    bySkill[pluginId][rawSkillName] = { enabled };
-  }
-  for (const [compoundKey, enabled] of Object.entries(userDoc.skills ?? {})) {
-    const [pluginId, ...rest] = compoundKey.split(":");
-    const rawSkillName = rest.join(":");
-    if (!pluginId || !rawSkillName) continue;
-    bySkill[pluginId] ??= {};
-    bySkill[pluginId][rawSkillName] = { enabled };
-  }
-  for (const [compoundKey, enabled] of Object.entries(workspaceDoc.mcpServers ?? {})) {
-    const [pluginId, ...rest] = compoundKey.split(":");
-    const serverName = rest.join(":");
-    if (!pluginId || !serverName) continue;
-    byMcpServer[pluginId] ??= {};
-    byMcpServer[pluginId][serverName] = { enabled };
-  }
-  for (const [compoundKey, enabled] of Object.entries(userDoc.mcpServers ?? {})) {
-    const [pluginId, ...rest] = compoundKey.split(":");
-    const serverName = rest.join(":");
-    if (!pluginId || !serverName) continue;
-    byMcpServer[pluginId] ??= {};
-    byMcpServer[pluginId][serverName] = { enabled };
-  }
-  for (const [pluginId, removed] of Object.entries(workspaceDoc.removedDefaultPlugins ?? {})) {
-    byRemovedDefaultPlugin[pluginId] = { removed };
-  }
-  for (const [pluginId, removed] of Object.entries(userDoc.removedDefaultPlugins ?? {})) {
-    byRemovedDefaultPlugin[pluginId] = { removed };
-  }
   return {
     workspace: scopeOverridesFromDocument(workspaceDoc),
     user: scopeOverridesFromDocument(userDoc),
-    plugins: byPlugin,
-    skills: bySkill,
-    mcpServers: byMcpServer,
-    removedDefaultPlugins: byRemovedDefaultPlugin,
   };
 }
 
@@ -310,12 +258,14 @@ export async function clearPluginEnabledOverride(opts: {
 export async function setDefaultPluginRemoved(opts: {
   config: AgentConfig;
   pluginId: string;
-  scope: PluginScope;
   removed: boolean;
 }): Promise<void> {
   const defaultPluginId = canonicalDefaultMarketplacePluginIdForTombstone(opts.pluginId);
   if (!defaultPluginId) return;
-  await mutateScopeDocument(opts.config, opts.scope, (doc) => {
+  // Default-plugin tombstones are a user-global concept: they are always written to
+  // and read from the user document (see isDefaultPluginRemoved + the bootstrap path),
+  // so set/clear must target the user scope regardless of where a plugin is installed.
+  await mutateScopeDocument(opts.config, "user", (doc) => {
     doc.removedDefaultPlugins ??= {};
     if (opts.removed) {
       doc.removedDefaultPlugins[defaultPluginId] = true;

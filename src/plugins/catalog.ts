@@ -24,13 +24,6 @@ import {
   fetchRemotePluginMarketplace,
 } from "./remoteMarketplace";
 
-function resolvePluginScope(config: AgentConfig, pluginRoot: string): PluginScope {
-  if (config.workspacePluginsDir && pluginRoot.startsWith(config.workspacePluginsDir)) {
-    return "workspace";
-  }
-  return "user";
-}
-
 async function readPluginMcpSummary(
   mcpPath: string | undefined,
 ): Promise<{ serverNames: string[]; warning?: string }> {
@@ -119,12 +112,13 @@ export async function buildPluginCatalogSnapshot(
     includeRemoteMarketplace?: boolean;
     fetchImpl?: FetchLike;
   } = {},
-): Promise<PluginCatalogSnapshot> {
+): Promise<PluginCatalogSnapshot & { remoteMarketplaceFailed?: boolean }> {
   const discovery = await discoverPlugins(config);
   const overrides = await readPluginOverrides(config);
   const plugins: InstalledPluginCatalogEntry[] = [];
   const availablePlugins: MarketplacePluginCatalogEntry[] = [];
   const warnings = [...discovery.warnings];
+  let remoteMarketplaceFailed = false;
 
   for (const candidate of discovery.plugins) {
     try {
@@ -135,7 +129,7 @@ export async function buildPluginCatalogSnapshot(
         candidate.marketplace ??
         (metadataMarketplace ? buildMarketplaceCatalogMetadata(metadataMarketplace) : undefined);
       const discoveryKind = candidateMarketplace ? "marketplace" : candidate.discoveryKind;
-      const scope = candidate.scope ?? resolvePluginScope(config, candidate.rootDir);
+      const scope = candidate.scope;
       const pluginEnabled = isPluginEnabled(
         {
           id: manifest.name,
@@ -220,6 +214,7 @@ export async function buildPluginCatalogSnapshot(
         }
       }
     } catch (error) {
+      remoteMarketplaceFailed = true;
       warnings.push(`[plugins] Failed to load remote marketplace: ${String(error)}`);
     }
   }
@@ -227,7 +222,15 @@ export async function buildPluginCatalogSnapshot(
   plugins.sort(comparePluginCatalogEntries);
   availablePlugins.sort(comparePluginCatalogEntries);
 
-  return { plugins, availablePlugins, warnings };
+  return {
+    plugins,
+    availablePlugins,
+    warnings,
+    // Signal (off-wire) that a remote refresh was requested but the fetch failed,
+    // so callers can keep the client's cached marketplace rows instead of treating
+    // the empty availablePlugins list as authoritative.
+    ...(remoteMarketplaceFailed ? { remoteMarketplaceFailed: true } : {}),
+  };
 }
 
 export async function buildRemoteMarketplacePluginDetail(opts: {

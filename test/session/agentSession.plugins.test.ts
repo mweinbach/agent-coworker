@@ -270,7 +270,11 @@ describe("AgentSession", () => {
         const pluginCatalogs = events.filter((event) => event.type === "plugins_catalog");
         expect(pluginCatalogs).toHaveLength(3);
         expect(pluginCatalogs.at(-1)?.catalog.plugins[0]?.enabled).toBe(false);
-        expect(pluginCatalogs.at(-1)).not.toHaveProperty("availablePluginsPartial");
+        // The re-queued remote refresh re-fetches the marketplace, and that fetch
+        // fails here (the contents endpoint returns a non-file payload), so the
+        // emitted catalog stays partial — preserving any cached marketplace rows
+        // instead of clearing them from an empty list.
+        expect(pluginCatalogs.at(-1)).toMatchObject({ availablePluginsPartial: true });
       } finally {
         globalThis.fetch = originalFetch;
         await fs.rm(root, { recursive: true, force: true });

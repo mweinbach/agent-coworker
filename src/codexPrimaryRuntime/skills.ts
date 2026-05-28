@@ -199,7 +199,11 @@ function isCurrentRuntimeSkillManifest(
   );
 }
 
-async function shouldOverwriteGlobalSkill(
+// Shared by both the global-skill install path and the Workspace Tools plugin
+// build: a bootstrap-managed destination may be overwritten when forced, when it
+// does not yet exist, or when it is an older bootstrap install; an up-to-date
+// current-runtime install is preserved.
+async function shouldOverwriteBootstrapSkill(
   destination: string,
   spec: SkillSourceSpec,
   force: boolean,
@@ -308,7 +312,7 @@ async function installSkill(opts: {
   }
 
   const overwrite = opts.global
-    ? await shouldOverwriteGlobalSkill(destination, opts.spec, opts.force)
+    ? await shouldOverwriteBootstrapSkill(destination, opts.spec, opts.force)
     : opts.force || !(await pathExists(destination));
   if (!overwrite) {
     return { name: opts.spec.name, status: "already_installed", source: opts.source, destination };
@@ -344,15 +348,12 @@ export async function installSkills(opts: {
   if (!opts.destinationRoot) return [];
   const results: CodexPrimaryRuntimeSkillResult[] = [];
   for (const spec of CODEX_RUNTIME_SKILLS) {
-    const source =
-      (opts.curatedRepoRoot &&
-      (await pathExists(
-        path.join(skillSourceFromCuratedRepo(opts.curatedRepoRoot, spec), "SKILL.md"),
-      ))
-        ? skillSourceFromCuratedRepo(opts.curatedRepoRoot, spec)
-        : null) ??
-      (await findFirstRuntimeSkillSource(opts.runtimeRoots, spec)) ??
-      (await skillSourceFromPluginCache(opts.home, spec));
+    const source = await resolveRuntimeSkillSource({
+      home: opts.home,
+      runtimeRoots: opts.runtimeRoots,
+      curatedRepoRoot: opts.curatedRepoRoot,
+      spec,
+    });
     results.push(
       await installSkill({
         spec,
@@ -380,24 +381,10 @@ async function workspaceToolsPluginManifestExists(pluginRoot: string): Promise<b
   return false;
 }
 
-async function shouldOverwriteWorkspaceToolsSkill(
-  destination: string,
-  spec: SkillSourceSpec,
-  force: boolean,
-): Promise<boolean> {
-  if (force) return true;
-  if (!(await pathExists(destination))) return true;
-  const manifest = await readSkillInstallManifest(destination);
-  if (
-    isCurrentRuntimeSkillManifest(manifest, spec) &&
-    (await pathExists(path.join(destination, "SKILL.md")))
-  ) {
-    return false;
-  }
-  return manifest?.origin?.kind === "bootstrap";
-}
-
-async function resolveWorkspaceToolsSkillSource(opts: {
+// Resolve a curated runtime skill's source directory, preferring an explicit
+// curated repo checkout, then any discovered runtime root, then the plugin cache.
+// Shared by the global-skill installer and the Workspace Tools plugin build.
+async function resolveRuntimeSkillSource(opts: {
   home: string;
   runtimeRoots: readonly string[];
   curatedRepoRoot?: string;
@@ -496,7 +483,7 @@ export async function installWorkspaceToolsPlugin(opts: {
   const plans: WorkspaceToolsSkillPlan[] = [];
   for (const spec of CODEX_RUNTIME_SKILLS) {
     const destination = workspaceToolsDestination(pluginRoot, spec);
-    const overwrite = await shouldOverwriteWorkspaceToolsSkill(destination, spec, opts.force);
+    const overwrite = await shouldOverwriteBootstrapSkill(destination, spec, opts.force);
     if (!overwrite) {
       plans.push({
         spec,
@@ -507,7 +494,7 @@ export async function installWorkspaceToolsPlugin(opts: {
       continue;
     }
 
-    const source = await resolveWorkspaceToolsSkillSource({
+    const source = await resolveRuntimeSkillSource({
       home: opts.home,
       runtimeRoots: opts.runtimeRoots,
       curatedRepoRoot: opts.curatedRepoRoot,

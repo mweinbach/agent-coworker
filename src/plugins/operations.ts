@@ -32,7 +32,6 @@ import {
   buildPluginInstallPreview,
   type MaterializedPluginSource,
   materializePluginSource,
-  resolvePluginSource,
   selectSingleValidPluginCandidate,
 } from "./sourceResolver";
 
@@ -374,6 +373,11 @@ export async function installPluginsFromSource(opts: {
         sourceRoot: stagedSource.sourceRoot,
         destinationRoot,
         conflictingRoots: targetRoots,
+        // Only the on-destination metadata write belongs inside the rollback window:
+        // it lives under destinationRoot, which the rollback removes. The auth/config
+        // side effects below run after the install commits so a post-rename failure
+        // can't strand them (e.g. an MCP credential rename orphaned against the
+        // restored old plugin).
         onInstalled: async () => {
           const marketplaceMetadata = marketplaceMetadataByPluginId.get(candidate.pluginId);
           if (marketplaceMetadata) {
@@ -383,23 +387,26 @@ export async function installPluginsFromSource(opts: {
           } else {
             await clearPluginInstallMetadata(destinationRoot);
           }
-          await migrateBundledPluginMcpCredentials({
-            config: opts.config,
-            targetScope: opts.targetScope,
-            previousServers,
-            nextServers: await readBundledPluginMcpServers(destinationRoot),
-          });
-          await setDefaultPluginRemoved({
-            config: opts.config,
-            pluginId: candidate.pluginId,
-            scope: opts.targetScope,
-            removed: false,
-          });
         },
       });
     } finally {
       await stagedSource.cleanup();
     }
+
+    // The destination is now irrevocably committed (the backup was removed on
+    // success), so these persistent, non-filesystem mutations can no longer be
+    // orphaned against a rolled-back tree.
+    await migrateBundledPluginMcpCredentials({
+      config: opts.config,
+      targetScope: opts.targetScope,
+      previousServers,
+      nextServers: await readBundledPluginMcpServers(destinationRoot),
+    });
+    await setDefaultPluginRemoved({
+      config: opts.config,
+      pluginId: candidate.pluginId,
+      removed: false,
+    });
 
     return {
       preview,
@@ -452,7 +459,6 @@ export async function deletePluginInstallation(opts: {
     await setDefaultPluginRemoved({
       config: opts.config,
       pluginId: removedDefaultPluginId,
-      scope: "user",
       removed: true,
     });
   }
@@ -460,10 +466,6 @@ export async function deletePluginInstallation(opts: {
 }
 
 export type { MaterializedPluginSource };
-
-export function resolvePluginSourceDescriptorForInstallInput(input: string, cwd = process.cwd()) {
-  return resolvePluginSource(input, cwd);
-}
 
 export const __internal = {
   setCopyPluginRootImplForTests(copyPluginRootImpl?: CopyPluginRootImpl) {

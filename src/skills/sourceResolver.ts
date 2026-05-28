@@ -218,6 +218,10 @@ async function materializeGitHubSource(
     tmpPrefix: "cowork-skill-source-",
     normalizeTreePath: (directoryPath) => directoryPath,
     normalizeFileDirectoryPath: (filePath) => path.posix.dirname(filePath),
+    // Match the plugin resolver: resolve the repo's real default branch for
+    // no-ref sources so a repo whose default branch is not main/master can be
+    // installed as a skill just like a plugin.
+    includeRemoteDefaultBranch: true,
     extra: (source) =>
       source.requestedSkillName ? { requestedSkillName: source.requestedSkillName } : {},
     loadCandidates: async (stageRoot, source) =>

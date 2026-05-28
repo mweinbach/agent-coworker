@@ -738,7 +738,8 @@ async function launchWorkspaceServer(opts: {
 
 export class WebDesktopService implements WebDesktopServiceLike {
   private readonly userDataDir: string;
-  private readonly serverManager: SourceWorkspaceServerManager;
+  private readonly serverManagerFactory: () => SourceWorkspaceServerManager;
+  private serverManager: SourceWorkspaceServerManager | null;
   private readonly stateChangeListeners = new Set<() => void>();
   private stateWatcher: fsSync.FSWatcher | null = null;
   private stateWatcherDebounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -748,10 +749,13 @@ export class WebDesktopService implements WebDesktopServiceLike {
       userDataDir?: string;
       homedir?: string;
       serverManager?: SourceWorkspaceServerManager;
+      serverManagerFactory?: () => SourceWorkspaceServerManager;
     } = {},
   ) {
     this.userDataDir = resolveDesktopUserDataDir(opts.userDataDir, opts.homedir);
-    this.serverManager = opts.serverManager ?? new SourceWorkspaceServerManager();
+    this.serverManager = opts.serverManager ?? null;
+    this.serverManagerFactory =
+      opts.serverManagerFactory ?? (() => new SourceWorkspaceServerManager());
   }
 
   private get stateFilePath(): string {
@@ -889,14 +893,14 @@ export class WebDesktopService implements WebDesktopServiceLike {
     workspacePath: string;
     yolo: boolean;
   }): Promise<{ url: string }> {
-    return await this.serverManager.startWorkspaceServer({
+    return await this.getServerManager().startWorkspaceServer({
       ...opts,
       yolo: false,
     });
   }
 
   async stopWorkspaceServer(workspaceId: string): Promise<void> {
-    await this.serverManager.stopWorkspaceServer(workspaceId);
+    await this.getServerManager().stopWorkspaceServer(workspaceId);
   }
 
   async readTranscript(threadId: string): Promise<DesktopTranscriptEvent[]> {
@@ -985,7 +989,12 @@ export class WebDesktopService implements WebDesktopServiceLike {
   async stopAll(): Promise<void> {
     this.closeStateWatcher();
     this.stateChangeListeners.clear();
-    await this.serverManager.stopAll();
+    await this.serverManager?.stopAll();
+  }
+
+  private getServerManager(): SourceWorkspaceServerManager {
+    this.serverManager ??= this.serverManagerFactory();
+    return this.serverManager;
   }
 }
 

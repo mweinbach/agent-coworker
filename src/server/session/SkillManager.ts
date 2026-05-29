@@ -20,6 +20,13 @@ import {
   updateSkillInstallation,
 } from "../../skills/operations";
 import { buildSkillInstallPreview } from "../../skills/sourceResolver";
+import {
+  type ImportableKind,
+  type ImportSource,
+  importPlugin as importPluginFromSource,
+  importSkill as importSkillFromSource,
+  listImportable,
+} from "../../import";
 import { createTools, filterToolsForCodexDynamicBoundary } from "../../tools";
 import type {
   PluginCatalogEntry,
@@ -671,6 +678,84 @@ export class SkillManager {
           "internal_error",
           "session",
           `Failed to install skills: ${String(err)}`,
+        );
+      }
+    });
+  }
+
+  async listImport(source: ImportSource, kind: ImportableKind) {
+    try {
+      const result = await listImportable({
+        config: this.context.state.config,
+        source,
+        kind,
+      });
+      this.context.emit({
+        type: "import_list",
+        sessionId: this.context.id,
+        source: result.source,
+        kind: result.kind,
+        homeExists: result.homeExists,
+        items: result.items,
+      });
+    } catch (err) {
+      this.context.emitError(
+        "internal_error",
+        "session",
+        `Failed to list importable ${kind}s: ${String(err)}`,
+      );
+    }
+  }
+
+  async importPlugin(
+    sourcePath: string,
+    conversionRequired: boolean,
+    targetScope: PluginInstallTargetScope,
+  ) {
+    await this.withSkillMutationLock(async () => {
+      try {
+        const result = await importPluginFromSource({
+          config: this.context.state.config,
+          sourcePath,
+          conversionRequired,
+          targetScope,
+        });
+        await this.mutationCoordinator.afterPluginMutation({
+          clearedMutationPendingKeys: [
+            this.skillMutationPendingKey(`plugin:import:${targetScope}`),
+          ],
+          refreshAllWorkspaces: this.isSharedPluginMutationScope(targetScope),
+        });
+        await this.pluginCatalogService.emitPluginDetail(result.pluginId, targetScope);
+      } catch (err) {
+        this.context.emitError(
+          "internal_error",
+          "session",
+          `Failed to import plugin: ${String(err)}`,
+        );
+      }
+    });
+  }
+
+  async importSkill(sourcePath: string, targetScope: PluginInstallTargetScope) {
+    await this.withSkillMutationLock(async () => {
+      try {
+        const result = await importSkillFromSource({
+          config: this.context.state.config,
+          sourcePath,
+          targetScope,
+        });
+        const skillScope: SkillMutationTargetScope = targetScope === "user" ? "global" : "project";
+        await this.mutationCoordinator.afterSkillMutation({
+          selectedInstallationId: result.installationIds[0],
+          clearedMutationPendingKeys: [this.skillMutationPendingKey(`import:${targetScope}`)],
+          refreshAllWorkspaces: this.isSharedSkillMutationScope(skillScope),
+        });
+      } catch (err) {
+        this.context.emitError(
+          "internal_error",
+          "session",
+          `Failed to import skill: ${String(err)}`,
         );
       }
     });

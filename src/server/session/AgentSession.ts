@@ -808,6 +808,25 @@ export class AgentSession {
     await this.getSkillManager().installPlugins(sourceInput, targetScope);
   }
 
+  async listImport(
+    source: import("../../import").ImportSource,
+    kind: import("../../import").ImportableKind,
+  ) {
+    await this.getSkillManager().listImport(source, kind);
+  }
+
+  async importPlugin(
+    sourcePath: string,
+    conversionRequired: boolean,
+    targetScope: "workspace" | "user",
+  ) {
+    await this.getSkillManager().importPlugin(sourcePath, conversionRequired, targetScope);
+  }
+
+  async importSkill(sourcePath: string, targetScope: "workspace" | "user") {
+    await this.getSkillManager().importSkill(sourcePath, targetScope);
+  }
+
   async getSkillInstallation(installationId: string) {
     await this.getSkillManager().getSkillInstallation(installationId);
   }

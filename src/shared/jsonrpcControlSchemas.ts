@@ -994,6 +994,33 @@ const pluginInstallResultEventSchema = z.union([
   pluginDetailEventSchema,
 ]);
 
+const importableItemSchema = z
+  .object({
+    kind: z.enum(["plugin", "skill"]),
+    source: z.enum(["claude", "codex"]),
+    id: z.string(),
+    displayName: z.string(),
+    description: z.string(),
+    version: z.string().optional(),
+    sourcePath: z.string(),
+    alreadyInstalledGlobal: z.boolean(),
+    alreadyInstalledWorkspace: z.boolean(),
+    diagnostics: z.array(z.object({ code: z.string(), message: z.string() }).passthrough()),
+    conversionRequired: z.boolean().optional(),
+  })
+  .passthrough();
+
+const importListEventSchema = z
+  .object({
+    type: z.literal("import_list"),
+    sessionId: nonEmptyTrimmedStringSchema.optional(),
+    source: z.enum(["claude", "codex"]),
+    kind: z.enum(["plugin", "skill"]),
+    homeExists: z.boolean(),
+    items: z.array(importableItemSchema),
+  })
+  .passthrough();
+
 const sessionBackupPublicCheckpointSchema = z
   .object({
     id: nonEmptyTrimmedStringSchema,
@@ -1305,6 +1332,33 @@ const pluginsInstallRequestSchema = z
   })
   .strict();
 
+const importListRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+    source: z.enum(["claude", "codex"]),
+    kind: z.enum(["plugin", "skill"]),
+  })
+  .strict();
+
+const importPluginRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+    source: z.enum(["claude", "codex"]),
+    sourcePath: nonEmptyTrimmedStringSchema,
+    conversionRequired: z.boolean(),
+    targetScope: z.enum(["workspace", "user"]),
+  })
+  .strict();
+
+const importSkillRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+    source: z.enum(["claude", "codex"]),
+    sourcePath: nonEmptyTrimmedStringSchema,
+    targetScope: z.enum(["workspace", "user"]),
+  })
+  .strict();
+
 const skillInstallationCopyRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
@@ -1469,6 +1523,9 @@ export const jsonRpcControlRequestSchemas = {
   "cowork/plugins/delete": pluginMutationRequestSchema,
   "cowork/plugins/install/preview": pluginsInstallPreviewRequestSchema,
   "cowork/plugins/install": pluginsInstallRequestSchema,
+  "cowork/import/list": importListRequestSchema,
+  "cowork/import/plugin": importPluginRequestSchema,
+  "cowork/import/skill": importSkillRequestSchema,
   "cowork/memory/list": memoryListRequestSchema,
   "cowork/memory/upsert": memoryUpsertRequestSchema,
   "cowork/memory/delete": memoryDeleteRequestSchema,
@@ -1538,6 +1595,9 @@ export const jsonRpcControlResultSchemas = {
   "cowork/plugins/delete": sessionEventsEnvelope(pluginMutationResultEventSchema),
   "cowork/plugins/install/preview": sessionEventEnvelope(pluginInstallPreviewEventSchema),
   "cowork/plugins/install": sessionEventsEnvelope(pluginInstallResultEventSchema),
+  "cowork/import/list": sessionEventEnvelope(importListEventSchema),
+  "cowork/import/plugin": sessionEventsEnvelope(pluginInstallResultEventSchema),
+  "cowork/import/skill": sessionEventEnvelope(skillsCatalogEventSchema),
   "cowork/memory/list": sessionEventEnvelope(memoryListEventSchema),
   "cowork/memory/upsert": sessionEventEnvelope(memoryListEventSchema),
   "cowork/memory/delete": sessionEventEnvelope(memoryListEventSchema),

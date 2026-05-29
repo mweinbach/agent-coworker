@@ -3,6 +3,7 @@ import { useMemo } from "react";
 import { useAppStore } from "../../app/store";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
+import { ImportDialog } from "../import/ImportDialog";
 import { InstallationCardGrid } from "./InstallationCardGrid";
 import { InstallSkillDialog } from "./InstallSkillDialog";
 import { SkillDetailDialog } from "./SkillDetailDialog";
@@ -73,6 +74,7 @@ export function SkillsCatalogPage({
             <RefreshCwIcon className="mr-1.5 h-4 w-4" />
             Refresh
           </Button>
+          <ImportDialog workspaceId={workspaceId} kind="skill" />
           <InstallSkillDialog workspaceId={workspaceId} />
         </div>
 

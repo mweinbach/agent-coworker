@@ -33,6 +33,11 @@ export type {
   TodoItem,
 } from "../../../../src/types";
 export { isInstalledPluginCatalogEntry, PROVIDER_NAMES } from "../../../../src/types";
+export type {
+  ImportableItem,
+  ImportableKind,
+  ImportSource,
+} from "../../../../src/import";
 
 export type ConfigSubset = Extract<CoreSessionEvent, { type: "server_hello" }>["config"];
 

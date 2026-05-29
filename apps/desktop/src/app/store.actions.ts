@@ -3,6 +3,7 @@ import { createWorkspaceBackupActions } from "./store.actions/backup";
 import { createBootstrapActions } from "./store.actions/bootstrap";
 import { createOpenAiNativeConnectorActions } from "./store.actions/connectors";
 import { createExplorerActions } from "./store.actions/explorer";
+import { createImportActions } from "./store.actions/import";
 import { createWorkspaceMcpActions } from "./store.actions/mcp";
 import { createWorkspaceMemoryActions } from "./store.actions/memory";
 import { createOnboardingActions } from "./store.actions/onboarding";
@@ -25,6 +26,7 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
     ...createThreadActions(set, get),
     ...createSkillActions(set, get),
     ...createPluginActions(set, get),
+    ...createImportActions(set, get),
     ...createResearchActions(set, get),
     ...createWorkspaceDefaultsActions(set, get),
     ...createWorkspaceMcpActions(set, get),

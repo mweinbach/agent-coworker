@@ -14,6 +14,9 @@ import type { NewChatLandingTarget } from "../lib/newChatLanding";
 import { fallbackAuthMethods } from "../lib/providerDisplayNames";
 import type {
   CodexAppServerInstallStatus,
+  ImportableItem,
+  ImportableKind,
+  ImportSource,
   MCPServerConfig,
   ProviderName,
   SessionEvent,
@@ -310,6 +313,9 @@ export type AppStoreState = {
   disablePlugin: (pluginId: string, scope?: "workspace" | "user") => Promise<void>;
   deletePlugin: (pluginId: string, scope?: "workspace" | "user") => Promise<void>;
   setPluginViewMode: (mode: "plugins" | "skills") => void;
+  listImportable: (source: ImportSource, kind: ImportableKind) => Promise<void>;
+  importPlugin: (item: ImportableItem, targetScope: "workspace" | "user") => Promise<void>;
+  importSkill: (item: ImportableItem, targetScope: "workspace" | "user") => Promise<void>;
   selectSkill: (skillName: string) => Promise<void>;
   selectSkillInstallation: (installationId: string | null) => Promise<void>;
   previewSkillInstall: (sourceInput: string, targetScope: "project" | "global") => Promise<void>;

@@ -36,6 +36,7 @@ import type {
   WorkspaceFeatureFlagOverrides,
   WorkspaceFeatureFlags,
 } from "../types";
+import type { ImportableItem, ImportableKind, ImportSource } from "../import";
 import type { AgentWaitMode } from "./agents/types";
 import type { ModelStreamPartType, ModelStreamRawFormat } from "./modelStream";
 import type {
@@ -382,6 +383,14 @@ export type SessionEvent =
       sessionId: string;
       preview: PluginInstallPreview;
       fromUserPreviewRequest?: boolean;
+    }
+  | {
+      type: "import_list";
+      sessionId: string;
+      source: ImportSource;
+      kind: ImportableKind;
+      homeExists: boolean;
+      items: ImportableItem[];
     }
   | {
       type: "session_backup_state";

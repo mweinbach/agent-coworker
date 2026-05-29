@@ -283,6 +283,8 @@ export function defaultWorkspaceRuntime(): WorkspaceRuntime {
     skillMutationError: null,
     pluginMutationPendingKeys: {},
     pluginMutationError: null,
+    importItemsByKey: {},
+    importPendingKeys: {},
     pluginViewMode: "plugins",
     memories: [],
     memoriesLoading: false,

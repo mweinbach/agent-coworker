@@ -4,6 +4,7 @@ import { useAppStore } from "../../app/store";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { isInstalledPluginCatalogEntry } from "../../lib/wsProtocol";
+import { ImportDialog } from "../import/ImportDialog";
 import { InstallPluginDialog } from "./InstallPluginDialog";
 import { PluginCardGrid } from "./PluginCardGrid";
 import { PluginDetailDialog } from "./PluginDetailDialog";
@@ -76,6 +77,7 @@ export function PluginsCatalogPage({
             <RefreshCwIcon className="mr-1.5 h-4 w-4" />
             Refresh
           </Button>
+          <ImportDialog workspaceId={workspaceId} kind="plugin" />
           <InstallPluginDialog workspaceId={workspaceId} />
         </div>
 

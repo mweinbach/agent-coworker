@@ -232,6 +232,10 @@ Currently implemented `cowork/*` methods include:
   - `cowork/plugins/enable`
   - `cowork/plugins/disable`
   - `cowork/plugins/delete`
+- import controls (import plugins/skills already on disk from Claude Code `~/.claude` and Codex `~/.codex`)
+  - `cowork/import/list`
+  - `cowork/import/plugin`
+  - `cowork/import/skill`
 - memory controls
   - `cowork/memory/list`
   - `cowork/memory/upsert`
@@ -256,6 +260,12 @@ The desktop JSON-RPC path now uses this namespace so one workspace connection ca
 - memories
 
 `cowork/plugins/read`, `cowork/plugins/enable`, `cowork/plugins/disable`, and `cowork/plugins/delete` accept an optional `scope` field (`workspace` or `user`) so callers can address a specific installed copy when the same plugin id exists in both scopes. Plugin catalog snapshots keep installed plugins in `plugins`; built-in remote marketplace offers live in `availablePlugins`, use `installed: false`, include `installSource`, and do not expose local paths until installed.
+
+The import controls let a client browse and copy plugins/skills that already exist on disk from other agent tools:
+
+- `cowork/import/list` — params `{ cwd?, source: "claude" | "codex", kind: "plugin" | "skill" }`. Returns an `import_list` event `{ source, kind, homeExists, items }`. Each `ImportableItem` has `{ kind, source, id, displayName, description, version?, sourcePath, alreadyInstalledGlobal, alreadyInstalledWorkspace, diagnostics, conversionRequired? }`. A non-empty `diagnostics` array means the item is surfaced but not importable. `conversionRequired` marks Claude `.claude-plugin` bundles that are converted on import. Discovery scans only `~/.claude/plugins/{cache,marketplaces}` + `~/.codex/plugins/cache` for plugin manifests, and `~/.{claude,codex}/skills` for `SKILL.md` bundles.
+- `cowork/import/plugin` — params `{ cwd?, source, sourcePath, conversionRequired, targetScope: "workspace" | "user" }`. Copies the plugin into the target scope (Claude bundles are converted first), reusing the standard install pipeline. Emits the same events as `cowork/plugins/install` (`plugins_catalog`, `plugin_detail`, `skills_catalog`, …).
+- `cowork/import/skill` — params `{ cwd?, source, sourcePath, targetScope: "workspace" | "user" }`. Copies a standalone `SKILL.md` bundle into the target scope (mapped to `global`/`project`) and emits `skills_catalog`.
 - opt-in workspace backups
 
 `thread/list` and workspace-scoped `cowork/*` control methods now default omitted `cwd` to the sidecar/server working directory. Mobile and other remote clients no longer need to know a host filesystem path just to list threads or read workspace control state.

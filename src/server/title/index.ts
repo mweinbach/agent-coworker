@@ -99,27 +99,12 @@ export function createSessionTitleGenerator(overrides: Partial<SessionTitleDeps>
         model: APPLE_FOUNDATION_TITLE_MODEL,
       };
     }
-    if (appleTitle.status === "failed") {
-      return {
-        title: heuristicTitleFromQuery(query),
-        source: "heuristic",
-        model: null,
-      };
-    }
-
     const phiSilicaTitle = await generatePhiSilicaTitle(query, deps);
     if (phiSilicaTitle.status === "generated") {
       return {
         title: phiSilicaTitle.title,
         source: "model",
         model: PHI_SILICA_TITLE_MODEL,
-      };
-    }
-    if (phiSilicaTitle.status === "failed") {
-      return {
-        title: heuristicTitleFromQuery(query),
-        source: "heuristic",
-        model: null,
       };
     }
 

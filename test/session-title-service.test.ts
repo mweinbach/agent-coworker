@@ -246,16 +246,20 @@ describe("sessionTitleService", () => {
     expect(defaultModelForProvider).not.toHaveBeenCalled();
   });
 
-  test("falls back to heuristic without provider calls when Apple generation fails", async () => {
+  test("falls back to provider title models when Apple generation fails", async () => {
     const apple = createAppleModule({
       respondWithJsonSchema: async () => {
         throw new Error("generation failed");
       },
     });
     const loadAppleFoundationModelsModule = mock(async () => apple.module);
-    const createRuntime = mock((_config: AgentConfig) => {
-      throw new Error("provider runtime should not be used");
-    });
+    const runTurn = mock(async (_args: any) => ({
+      text: "Provider After Apple Failure",
+      reasoningText: undefined,
+      responseMessages: [] as any[],
+      usage: undefined,
+    }));
+    const createRuntime = mock((_config: AgentConfig) => ({ name: "pi", runTurn }));
     const defaultModelForProvider = mock((_provider: AgentConfig["provider"]) => "gpt-5.2");
 
     const generateSessionTitle = createSessionTitleGenerator({
@@ -273,13 +277,14 @@ describe("sessionTitleService", () => {
     });
 
     expect(result).toEqual({
-      title: "build a macOS title service backed by Foundation…",
-      source: "heuristic",
-      model: null,
+      title: "Provider After Apple Failure",
+      source: "model",
+      model: "gpt-5-mini",
     });
     expect(loadAppleFoundationModelsModule).toHaveBeenCalledTimes(1);
-    expect(createRuntime).not.toHaveBeenCalled();
-    expect(defaultModelForProvider).not.toHaveBeenCalled();
+    expect(createRuntime).toHaveBeenCalledTimes(1);
+    expect(runTurn).toHaveBeenCalledTimes(1);
+    expect(defaultModelForProvider).toHaveBeenCalledTimes(1);
   });
 
   test("falls back to provider title models when Apple is unavailable", async () => {
@@ -592,6 +597,47 @@ describe("sessionTitleService", () => {
     expect(windowsAi.tryUnlockFeature).toHaveBeenCalledTimes(1);
     expect(windowsAi.createAsync).not.toHaveBeenCalled();
     expect(createRuntime).toHaveBeenCalledTimes(1);
+  });
+
+  test("falls back to provider title models when Phi Silica generation fails", async () => {
+    const windowsAi = createWindowsAiModule({
+      generateResponse: async () => {
+        throw new Error("generation failed");
+      },
+    });
+    const loadWindowsAiElectronModule = mock(async () => windowsAi.module);
+    const runTurn = mock(async (_args: any) => ({
+      text: "Provider After Phi Failure",
+      reasoningText: undefined,
+      responseMessages: [] as any[],
+      usage: undefined,
+    }));
+    const createRuntime = mock((_config: AgentConfig) => ({ name: "pi", runTurn }));
+    const defaultModelForProvider = mock((_provider: AgentConfig["provider"]) => "gpt-5.2");
+
+    const generateSessionTitle = createSessionTitleGenerator({
+      createRuntime: createRuntime as any,
+      defaultModelForProvider: defaultModelForProvider as any,
+      loadWindowsAiElectronModule: loadWindowsAiElectronModule as any,
+      platform: "win32",
+      arch: "arm64",
+      env: createPhiSilicaEnv(),
+    });
+
+    const result = await generateSessionTitle({
+      config: makeConfig("openai"),
+      query: "provider fallback path",
+    });
+
+    expect(result).toEqual({
+      title: "Provider After Phi Failure",
+      source: "model",
+      model: "gpt-5-mini",
+    });
+    expect(windowsAi.createAsync).toHaveBeenCalledTimes(1);
+    expect(windowsAi.close).toHaveBeenCalledTimes(1);
+    expect(createRuntime).toHaveBeenCalledTimes(1);
+    expect(runTurn).toHaveBeenCalledTimes(1);
   });
 
   test("returns sanitized model title on first successful candidate", async () => {

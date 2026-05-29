@@ -6,7 +6,6 @@ const {
   queuePendingThreadMessage,
   shiftPendingThreadMessage,
   shiftPendingThreadAttachments,
-  prependPendingThreadMessage,
 } = await import("../src/app/store.helpers/runtimeState");
 
 describe("runtimeState pending thread message queue", () => {
@@ -21,7 +20,7 @@ describe("runtimeState pending thread message queue", () => {
 
     expect(shiftPendingThreadMessage("thread-1")).toBe("first");
 
-    prependPendingThreadMessage("thread-1", "first");
+    prependPendingThreadMessageWithAttachments("thread-1", "first");
 
     expect(shiftPendingThreadMessage("thread-1")).toBe("first");
     expect(shiftPendingThreadMessage("thread-1")).toBe("second");

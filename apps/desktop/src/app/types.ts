@@ -7,6 +7,7 @@ import type {
   ApprovalRiskCode,
   ChildModelRoutingMode,
   ConfigSubset,
+  ImportableItem,
   OpenAiNativeConnector,
   PluginCatalogEntry,
   PluginCatalogSnapshot,
@@ -417,6 +418,13 @@ export type MemoryListEntry = {
   updatedAt: string;
 };
 
+export type ImportRuntimeState = {
+  items: ImportableItem[];
+  homeExists: boolean;
+  loading: boolean;
+  error: string | null;
+};
+
 export type WorkspaceRuntime = {
   serverUrl: string | null;
   starting: boolean;
@@ -461,6 +469,8 @@ export type WorkspaceRuntime = {
   skillMutationError: string | null;
   pluginMutationPendingKeys: Record<string, true>;
   pluginMutationError: string | null;
+  importItemsByKey: Record<string, ImportRuntimeState>;
+  importPendingKeys: Record<string, true>;
   memories: MemoryListEntry[];
   memoriesLoading: boolean;
   workspaceBackupsPath: string | null;

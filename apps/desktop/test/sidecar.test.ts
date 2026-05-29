@@ -63,6 +63,8 @@ describe("desktop sidecar packaging helpers", () => {
     const required = new Set([
       path.join(dir, "dist", "index.js"),
       path.join(dir, "native", "libFoundationModels.dylib"),
+      path.join(dir, "node_modules", "koffi", "index.js"),
+      path.join(dir, "node_modules", "koffi", "package.json"),
       path.join(
         dir,
         "node_modules",
@@ -89,6 +91,11 @@ describe("desktop sidecar packaging helpers", () => {
     expect(
       hasPackagedFoundationModelsSdk(dir, (candidate) =>
         candidate.endsWith("libFoundationModels.dylib") ? false : required.has(candidate),
+      ),
+    ).toBe(false);
+    expect(
+      hasPackagedFoundationModelsSdk(dir, (candidate) =>
+        candidate.endsWith(path.join("koffi", "package.json")) ? false : required.has(candidate),
       ),
     ).toBe(false);
   });

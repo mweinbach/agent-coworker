@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
-import { SessionCostTracker } from "../src/session/costTracker";
+import {
+  deriveUsageCostBreakdown,
+  SessionCostTracker,
+  type SessionUsageSnapshot,
+} from "../src/session/costTracker";
 
 describe("SessionCostTracker", () => {
   test("clears stop-triggered state when hard-stop threshold is removed", () => {
@@ -132,8 +136,140 @@ describe("SessionCostTracker", () => {
     expect(snapshot.byModel[0]?.totalCacheWritePromptTokens).toBe(100_000);
     expect(snapshot.byModel[0]?.totalReasoningOutputTokens).toBe(125_000);
     expect(snapshot.estimatedTotalCostUsd).toBeCloseTo(9.495, 6);
+    expect(snapshot.costBreakdown?.inputCostUsd).toBeCloseTo(1.5, 6);
+    expect(snapshot.costBreakdown?.cachedInputCostUsd).toBeCloseTo(0.12, 6);
+    expect(snapshot.costBreakdown?.cacheWriteInputCostUsd).toBeCloseTo(0.375, 6);
+    expect(snapshot.costBreakdown?.outputCostUsd).toBeCloseTo(7.5, 6);
+    expect(snapshot.byModel[0]?.costBreakdown?.cachedInputCostUsd).toBeCloseTo(0.12, 6);
+    expect(snapshot.turns[0]?.costBreakdown?.cacheWriteInputCostUsd).toBeCloseTo(0.375, 6);
     expect(tracker.formatSummary()).toContain("100.0k cache write");
     expect(tracker.formatSummary()).toContain("125.0k reasoning output");
+    expect(tracker.formatSummary()).toContain("$0.38 cache write");
+  });
+
+  test("derives missing spend buckets from legacy persisted usage snapshots", () => {
+    const legacySnapshot: SessionUsageSnapshot = {
+      sessionId: "session-1",
+      totalTurns: 3,
+      totalPromptTokens: 3_442_232,
+      totalCompletionTokens: 45_513,
+      totalTokens: 2_023_803,
+      totalCachedPromptTokens: 1_497_866,
+      totalReasoningOutputTokens: 33_924,
+      estimatedTotalCostUsd: 3.5508459,
+      costTrackingAvailable: true,
+      byModel: [
+        {
+          provider: "google",
+          model: "gemini-3.5-flash",
+          turns: 3,
+          totalPromptTokens: 3_442_232,
+          totalCompletionTokens: 45_513,
+          totalTokens: 2_023_803,
+          totalCachedPromptTokens: 1_497_866,
+          totalReasoningOutputTokens: 33_924,
+          estimatedCostUsd: 3.5508459,
+        },
+      ],
+      turns: [],
+      budgetStatus: {
+        configured: false,
+        warnAtUsd: null,
+        stopAtUsd: null,
+        warningTriggered: false,
+        stopTriggered: false,
+        currentCostUsd: 3.5508459,
+      },
+      createdAt: "2026-05-29T12:31:40.910Z",
+      updatedAt: "2026-05-29T13:00:26.616Z",
+    };
+
+    const derived = deriveUsageCostBreakdown(legacySnapshot);
+    expect(derived?.inputCostUsd).toBeCloseTo(2.916549, 6);
+    expect(derived?.cachedInputCostUsd).toBeCloseTo(0.2246799, 6);
+    expect(derived?.outputCostUsd).toBeCloseTo(0.409617, 6);
+    expect(derived?.otherCostUsd).toBeCloseTo(0, 6);
+
+    const restored = SessionCostTracker.fromSnapshot(legacySnapshot).getSnapshot();
+    expect(restored.costBreakdown?.inputCostUsd).toBeCloseTo(2.916549, 6);
+    expect(restored.costBreakdown?.cachedInputCostUsd).toBeCloseTo(0.2246799, 6);
+    expect(restored.costBreakdown?.outputCostUsd).toBeCloseTo(0.409617, 6);
+    expect(restored.costBreakdown?.otherCostUsd).toBeCloseTo(0, 6);
+  });
+
+  test("derives browser-safe spend buckets from stored turn pricing", () => {
+    const legacySnapshot: SessionUsageSnapshot = {
+      sessionId: "session-1",
+      totalTurns: 1,
+      totalPromptTokens: 3_442_232,
+      totalCompletionTokens: 45_513,
+      totalTokens: 2_023_803,
+      totalCachedPromptTokens: 1_497_866,
+      totalReasoningOutputTokens: 33_924,
+      estimatedTotalCostUsd: 3.5508459,
+      costTrackingAvailable: true,
+      byModel: [
+        {
+          provider: "google",
+          model: "gemini-3.5-flash",
+          turns: 1,
+          totalPromptTokens: 3_442_232,
+          totalCompletionTokens: 45_513,
+          totalTokens: 2_023_803,
+          totalCachedPromptTokens: 1_497_866,
+          totalReasoningOutputTokens: 33_924,
+          estimatedCostUsd: 3.5508459,
+        },
+      ],
+      turns: [
+        {
+          turnId: "turn-1",
+          turnIndex: 1,
+          timestamp: "2026-05-29T13:00:26.616Z",
+          provider: "google",
+          model: "gemini-3.5-flash",
+          usage: {
+            promptTokens: 3_442_232,
+            completionTokens: 45_513,
+            cachedPromptTokens: 1_497_866,
+            reasoningOutputTokens: 33_924,
+            totalTokens: 2_023_803,
+          },
+          estimatedCostUsd: 3.5508459,
+          pricing: {
+            inputPerMillion: 1.5,
+            cachedInputPerMillion: 0.15,
+            outputPerMillion: 9,
+          },
+        },
+      ],
+      budgetStatus: {
+        configured: false,
+        warnAtUsd: null,
+        stopAtUsd: null,
+        warningTriggered: false,
+        stopTriggered: false,
+        currentCostUsd: 3.5508459,
+      },
+      createdAt: "2026-05-29T12:31:40.910Z",
+      updatedAt: "2026-05-29T13:00:26.616Z",
+    };
+    const globalRecord = globalThis as Record<string, unknown>;
+    const originalProcess = globalRecord.process;
+
+    globalRecord.process = undefined;
+    try {
+      const derived = deriveUsageCostBreakdown(legacySnapshot, {
+        resolveMissingPricing: false,
+      });
+
+      expect(derived?.inputCostUsd).toBeCloseTo(2.916549, 6);
+      expect(derived?.cachedInputCostUsd).toBeCloseTo(0.2246799, 6);
+      expect(derived?.outputCostUsd).toBeCloseTo(0.409617, 6);
+      expect(derived?.otherCostUsd).toBeCloseTo(0, 6);
+    } finally {
+      globalRecord.process = originalProcess;
+    }
   });
 
   test("uses catalog pricing before runtime-provided estimated cost when available", () => {
@@ -172,6 +308,7 @@ describe("SessionCostTracker", () => {
 
     expect(tracker.getSnapshot().estimatedTotalCostUsd).toBe(1.23);
     expect(tracker.getSnapshot().turns[0]?.estimatedCostUsd).toBe(1.23);
+    expect(tracker.getSnapshot().costBreakdown?.otherCostUsd).toBe(1.23);
   });
 
   test("invalidates aggregate cost availability after an uncatalogued turn", () => {
@@ -205,6 +342,7 @@ describe("SessionCostTracker", () => {
         currentCostUsd: null,
       },
     });
+    expect(tracker.getSnapshot().costBreakdown).toBeUndefined();
   });
 
   test("updateBudget preserves unspecified thresholds and clears explicit nulls", () => {

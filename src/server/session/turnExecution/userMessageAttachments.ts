@@ -398,13 +398,28 @@ export function createUserMessageAttachmentHelpers(
     };
 
     if (inputParts && inputParts.length > 0) {
-      for (const part of inputParts) {
+      const orderedText = inputParts
+        .filter((part) => part.type === "text")
+        .map((part) => part.text)
+        .join("\n")
+        .trim();
+      const modelFacingSuffix =
+        orderedText && text.startsWith(orderedText) ? text.slice(orderedText.length) : "";
+      const lastTextPartIndex = inputParts.findLastIndex((part) => part.type === "text");
+
+      for (const [index, part] of inputParts.entries()) {
         if (part.type === "text") {
-          contentParts.push({ type: "text", text: part.text });
+          contentParts.push({
+            type: "text",
+            text: index === lastTextPartIndex ? `${part.text}${modelFacingSuffix}` : part.text,
+          });
           continue;
         }
         appendLargeOutputGuidance();
         await appendAttachment(part);
+      }
+      if (lastTextPartIndex < 0 && text) {
+        contentParts.unshift({ type: "text", text });
       }
       appendLargeOutputGuidance();
       return contentParts;

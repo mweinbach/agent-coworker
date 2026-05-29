@@ -379,12 +379,22 @@ async function assertPathInsidePluginRoot(
 
 const PLUGIN_MANIFEST_DIR_NAMES = [".cowork-plugin", ".codex-plugin"] as const;
 
+/**
+ * Claude Code stores plugin manifests under `.claude-plugin/`. Cowork does not
+ * recognize this directory in its normal install/discovery paths, but the
+ * import feature scans for it so Claude plugins can be converted and imported.
+ */
+export const CLAUDE_PLUGIN_MANIFEST_DIR_NAME = ".claude-plugin";
+
 export function isPluginManifestDirName(value: string): boolean {
   return PLUGIN_MANIFEST_DIR_NAMES.includes(value as (typeof PLUGIN_MANIFEST_DIR_NAMES)[number]);
 }
 
-export function pluginManifestPathsForPluginRoot(pluginRoot: string): string[] {
-  return PLUGIN_MANIFEST_DIR_NAMES.map((dirName) => path.join(pluginRoot, dirName, "plugin.json"));
+export function pluginManifestPathsForPluginRoot(
+  pluginRoot: string,
+  dirNames: readonly string[] = PLUGIN_MANIFEST_DIR_NAMES,
+): string[] {
+  return dirNames.map((dirName) => path.join(pluginRoot, dirName, "plugin.json"));
 }
 
 function pluginInstallMetadataPathForManifestPath(manifestPath: string): string {

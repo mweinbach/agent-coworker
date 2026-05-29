@@ -24,6 +24,8 @@ import {
   type MobileRelayUpdateTrustedPhonePermissionsInput,
   type OpenExternalUrlInput,
   type OpenPathInput,
+  type PickDirectoryInput,
+  type PlatformChromeInfo,
   type PreferredFileAppInput,
   type PreviewOSFileInput,
   type ReadFileForPreviewInput,
@@ -48,6 +50,7 @@ import {
 import {
   confirmActionInputSchema,
   copyPathInputSchema,
+  copyTextInputSchema,
   createDirectoryInputSchema,
   createOneOffChatWorkspaceInputSchema,
   deleteTranscriptInputSchema,
@@ -61,6 +64,8 @@ import {
   openExternalUrlInputSchema,
   openPathInputSchema,
   persistedStateInputSchema,
+  pickDirectoryInputSchema,
+  platformChromeInfoSchema,
   preferredFileAppInputSchema,
   previewOSFileInputSchema,
   readFileForPreviewInputSchema,
@@ -170,9 +175,7 @@ function assertCopyPathInput(opts: CopyPathInput): void {
 }
 
 function assertCopyTextInput(text: unknown): void {
-  if (typeof text !== "string") {
-    throw new Error("copyText expects a string");
-  }
+  parseWithSchema(copyTextInputSchema, text, "copyText text");
 }
 
 function assertCreateDirectoryInput(opts: CreateDirectoryInput): void {
@@ -189,6 +192,10 @@ function assertTrashPathInput(opts: TrashPathInput): void {
 
 function assertPersistedState(state: PersistedState): void {
   parseWithSchema(persistedStateInputSchema, state, "state");
+}
+
+function assertPickDirectoryInput(opts: PickDirectoryInput): void {
+  parseWithSchema(pickDirectoryInputSchema, opts, "pickDirectory options");
 }
 
 function assertConfirmActionInput(opts: ConfirmActionInput): void {
@@ -239,6 +246,10 @@ function assertMobileRelayBridgeState(value: unknown): asserts value is MobileRe
 
 function assertSystemAppearance(value: unknown): asserts value is SystemAppearance {
   parseWithSchema(systemAppearanceSchema, value, "system appearance");
+}
+
+function assertPlatformChromeInfo(value: unknown): asserts value is PlatformChromeInfo {
+  parseWithSchema(platformChromeInfoSchema, value, "platform chrome");
 }
 
 function resolvePreloadDesktopFeatureFlags(overrides?: DesktopFeatureFlagOverrides) {
@@ -357,6 +368,13 @@ const desktopApi = Object.freeze<DesktopApi>({
   },
 
   pickWorkspaceDirectory: () => ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.pickWorkspaceDirectory),
+
+  pickDirectory: (opts?: PickDirectoryInput) => {
+    if (opts !== undefined) {
+      assertPickDirectoryInput(opts);
+    }
+    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.pickDirectory, opts);
+  },
 
   showContextMenu: (opts: ShowContextMenuInput) => {
     assertShowContextMenuInput(opts);
@@ -499,6 +517,7 @@ const desktopApi = Object.freeze<DesktopApi>({
 
   getPlatformChrome: async () => {
     const chrome = await ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.getPlatformChrome);
+    assertPlatformChromeInfo(chrome);
     return chrome;
   },
 

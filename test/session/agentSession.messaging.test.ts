@@ -531,6 +531,221 @@ describe("AgentSession", () => {
       expect(stepMessages[1]?.at(-1)).toEqual({ role: "user", content: "mention tests" });
     });
 
+    test("injects referenced steer skills into the same prepared model step", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-steer-skillref-"));
+      const skillsDir = path.join(dir, "skills");
+      const skillDir = path.join(skillsDir, "steer-skill");
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.writeFile(
+        path.join(skillDir, "SKILL.md"),
+        [
+          "---",
+          'name: "steer-skill"',
+          'description: "Steer skill"',
+          "---",
+          "",
+          "STEER-SKILL-BODY-MARKER",
+        ].join("\n"),
+        "utf-8",
+      );
+      const { session } = makeSession({
+        config: { ...makeConfig(dir), skillsDirs: [skillsDir] },
+      });
+      const stepMessages: any[][] = [];
+      let allowSecondStep!: () => void;
+
+      mockRunTurn.mockImplementation(async (params: any) => {
+        const initialMessages = [{ role: "user", content: "go" }];
+        const stepOne = await params.prepareStep?.({ stepNumber: 1, messages: initialMessages });
+        stepMessages.push(stepOne?.messages ?? initialMessages);
+
+        await new Promise<void>((resolve) => {
+          allowSecondStep = resolve;
+        });
+
+        const stepTwo = await params.prepareStep?.({
+          stepNumber: 2,
+          messages: stepMessages[0]!,
+        });
+        stepMessages.push(stepTwo?.messages ?? stepMessages[0]!);
+
+        return {
+          text: "done",
+          reasoningText: undefined,
+          responseMessages: [{ role: "assistant", content: "done" }],
+        };
+      });
+
+      const turnPromise = session.sendUserMessage("go");
+      await new Promise((r) => setTimeout(r, 10));
+
+      await session.sendSteerMessage(
+        "use the referenced skill",
+        session.activeTurnId!,
+        "steer-skill-ref",
+        undefined,
+        undefined,
+        [{ kind: "skill", name: "steer-skill" }],
+      );
+      allowSecondStep();
+      await turnPromise;
+
+      expect(stepMessages).toHaveLength(2);
+      // The forced skill body is folded into the steer user message as plain text
+      // (provider-agnostic), NOT injected as a synthetic tool-call/tool-result pair.
+      const secondStep = stepMessages[1]!;
+      const serializedStep = JSON.stringify(secondStep);
+      expect(serializedStep).toContain("use the referenced skill");
+      expect(serializedStep).toContain("STEER-SKILL-BODY-MARKER");
+      expect(secondStep.some((m: any) => m.role === "tool")).toBe(false);
+      expect(
+        secondStep.some(
+          (m: any) =>
+            m.role === "assistant" &&
+            Array.isArray(m.content) &&
+            m.content.some((p: any) => p?.type === "tool-call"),
+        ),
+      ).toBe(false);
+    });
+
+    test("injects referenced steer plugin context into the same prepared model step", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-steer-pluginref-"));
+      const pluginRoot = path.join(dir, ".cowork", "plugins", "demo-plugin");
+      const pluginManifestDir = path.join(pluginRoot, ".cowork-plugin");
+      const pluginSkillDir = path.join(pluginRoot, "skills", "demo-skill");
+      await fs.mkdir(pluginSkillDir, { recursive: true });
+      await fs.mkdir(pluginManifestDir, { recursive: true });
+      await fs.writeFile(
+        path.join(pluginManifestDir, "plugin.json"),
+        JSON.stringify({
+          name: "demo-plugin",
+          description: "Demo plugin",
+          skills: "./skills",
+          interface: { displayName: "Demo Plugin" },
+        }),
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(pluginSkillDir, "SKILL.md"),
+        [
+          "---",
+          'name: "demo-skill"',
+          'description: "Demo skill"',
+          "---",
+          "",
+          "Demo skill body",
+        ].join("\n"),
+        "utf-8",
+      );
+      const config = {
+        ...makeConfig(dir),
+        workspacePluginsDir: path.join(dir, ".cowork", "plugins"),
+      };
+      const { session } = makeSession({ config });
+      const stepMessages: any[][] = [];
+      let allowSecondStep!: () => void;
+
+      mockRunTurn.mockImplementation(async (params: any) => {
+        const initialMessages = [{ role: "user", content: "go" }];
+        const stepOne = await params.prepareStep?.({ stepNumber: 1, messages: initialMessages });
+        stepMessages.push(stepOne?.messages ?? initialMessages);
+
+        await new Promise<void>((resolve) => {
+          allowSecondStep = resolve;
+        });
+
+        const stepTwo = await params.prepareStep?.({
+          stepNumber: 2,
+          messages: stepMessages[0]!,
+        });
+        stepMessages.push(stepTwo?.messages ?? stepMessages[0]!);
+
+        return {
+          text: "done",
+          reasoningText: undefined,
+          responseMessages: [{ role: "assistant", content: "done" }],
+        };
+      });
+
+      const turnPromise = session.sendUserMessage("go");
+      await new Promise((r) => setTimeout(r, 10));
+
+      await session.sendSteerMessage(
+        "use the referenced plugin",
+        session.activeTurnId!,
+        "steer-plugin-ref",
+        undefined,
+        undefined,
+        [{ kind: "plugin", name: "demo-plugin" }],
+      );
+      allowSecondStep();
+      await turnPromise;
+
+      expect(stepMessages).toHaveLength(2);
+      const serializedStep = JSON.stringify(stepMessages[1]);
+      expect(serializedStep).toContain("## Referenced Plugins");
+      expect(serializedStep).toContain("Demo Plugin");
+      expect(serializedStep).toContain("demo-skill");
+    });
+
+    test("active steer handlers receive referenced skill context before delivery", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-active-steer-skillref-"));
+      const skillsDir = path.join(dir, "skills");
+      const skillDir = path.join(skillsDir, "live-steer-skill");
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.writeFile(
+        path.join(skillDir, "SKILL.md"),
+        [
+          "---",
+          'name: "live-steer-skill"',
+          'description: "Live steer skill"',
+          "---",
+          "",
+          "LIVE-STEER-SKILL-BODY-MARKER",
+        ].join("\n"),
+        "utf-8",
+      );
+      const { session } = makeSession({
+        config: { ...makeConfig(dir), skillsDirs: [skillsDir] },
+      });
+      let deliveredContent: unknown;
+      let resolveRunTurn!: () => void;
+
+      mockRunTurn.mockImplementation(async (params: any) => {
+        params.registerSteerHandler?.(async (steer: any) => {
+          deliveredContent = steer.content;
+        });
+        await new Promise<void>((resolve) => {
+          resolveRunTurn = resolve;
+        });
+        return {
+          text: "done",
+          reasoningText: undefined,
+          responseMessages: [{ role: "assistant", content: "done" }],
+        };
+      });
+
+      const turnPromise = session.sendUserMessage("go");
+      await new Promise((r) => setTimeout(r, 10));
+
+      await session.sendSteerMessage(
+        "use the live referenced skill",
+        session.activeTurnId!,
+        "active-steer-skill-ref",
+        undefined,
+        undefined,
+        [{ kind: "skill", name: "live-steer-skill" }],
+      );
+
+      expect(JSON.stringify(deliveredContent)).toContain("LIVE-STEER-SKILL-BODY-MARKER");
+      expect(JSON.stringify((session as any).state.allMessages)).toContain(
+        "LIVE-STEER-SKILL-BODY-MARKER",
+      );
+
+      resolveRunTurn();
+      await turnPromise;
+    });
+
     test("late steer continuations only receive the remaining maxSteps budget", async () => {
       const { session } = makeSession();
       (session as any).state.maxSteps = 2;
@@ -1171,6 +1386,62 @@ describe("AgentSession", () => {
         clientMessageId: "msg-attachment",
       });
       await expect(fs.readFile(path.join(uploadsDir, "photo.png"), "utf8")).resolves.toBe("hello");
+    });
+
+    test("keeps referenced skill context in ordered file turns", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-ordered-skillref-"));
+      const uploadsDir = path.join(dir, "custom-uploads");
+      const skillsDir = path.join(dir, "skills");
+      const skillDir = path.join(skillsDir, "file-turn-skill");
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.writeFile(
+        path.join(skillDir, "SKILL.md"),
+        [
+          "---",
+          'name: "file-turn-skill"',
+          'description: "File turn skill"',
+          "---",
+          "",
+          "FILE-TURN-SKILL-BODY-MARKER",
+        ].join("\n"),
+        "utf-8",
+      );
+      const { session } = makeSession({
+        config: {
+          ...makeConfig(dir),
+          uploadsDirectory: uploadsDir,
+          skillsDirs: [skillsDir],
+        },
+      });
+
+      await session.sendUserMessage(
+        "summarize this",
+        "msg-ordered-skill",
+        undefined,
+        [
+          {
+            filename: "note.txt",
+            contentBase64: Buffer.from("hello").toString("base64"),
+            mimeType: "text/plain",
+          },
+        ],
+        [
+          { type: "text", text: "summarize this" },
+          {
+            type: "file",
+            filename: "note.txt",
+            contentBase64: Buffer.from("hello").toString("base64"),
+            mimeType: "text/plain",
+          },
+        ],
+        [{ kind: "skill", name: "file-turn-skill" }],
+      );
+
+      const call = mockRunTurn.mock.calls.at(-1)?.[0] as any;
+      const content = call.messages.at(-1)?.content;
+      expect(JSON.stringify(content)).toContain("summarize this");
+      expect(JSON.stringify(content)).toContain("FILE-TURN-SKILL-BODY-MARKER");
+      await expect(fs.readFile(path.join(uploadsDir, "note.txt"), "utf8")).resolves.toBe("hello");
     });
 
     test("includes attached MP3 label in text user_message events without mutating model input text", async () => {

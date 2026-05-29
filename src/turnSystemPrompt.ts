@@ -1,6 +1,7 @@
 import path from "node:path";
 import { renderHarnessContextSection } from "./sessionContext/renderHarnessContextSection";
-import type { AgentConfig, HarnessContextState } from "./types";
+import { renderReferencedPluginsSection } from "./sessionContext/renderReferencedPluginsSection";
+import type { AgentConfig, HarnessContextState, ReferencedPluginContext } from "./types";
 import {
   deriveActiveWorkspaceContext,
   renderActiveWorkspaceContextSection,
@@ -85,6 +86,7 @@ export function buildTurnSystemPrompt(
   config: AgentConfig | null | undefined,
   mcpToolNames: string[],
   harnessContext?: HarnessContextState | null,
+  referencedPlugins?: ReferencedPluginContext[] | null,
 ): string {
   const sections = [
     rewriteLegacyProjectPathGuidance(stripStaticMcpNamespacingGuidance(system), config),
@@ -108,6 +110,11 @@ export function buildTurnSystemPrompt(
   const harnessSection = renderHarnessContextSection(harnessContext);
   if (harnessSection) {
     sections.push(harnessSection);
+  }
+
+  const referencedPluginsSection = renderReferencedPluginsSection(referencedPlugins);
+  if (referencedPluginsSection) {
+    sections.push(referencedPluginsSection);
   }
 
   return sections.join("\n\n");

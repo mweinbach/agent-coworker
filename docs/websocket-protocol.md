@@ -164,6 +164,40 @@ Example request with a previously uploaded file path:
 }
 ```
 
+#### Skill and plugin references in `turn/start` and `turn/steer`
+
+Both `turn/start` and `turn/steer` accept an optional `references` array so clients can let users "@-mention" skills and plugins inline in the composer and have the model forced/biased toward them:
+
+```json
+{
+  "kind": "skill" | "plugin",
+  "name": "documents"
+}
+```
+
+- A **`skill`** reference is a *hard force*: the server loads the skill's `SKILL.md` body and appends it to the model-facing user/steer message as plain text. The user's visible message stays unchanged, and no synthetic tool-call or tool-result history is fabricated.
+- A **`plugin`** reference is *soft awareness*: it is resolved against the plugin catalog and rendered into a turn-scoped `## Referenced Plugins` system block listing the plugin's bundled skills, biasing the model toward them without force-loading any.
+
+The array is capped at 32 entries. Names that no longer resolve to an enabled skill / installed plugin at send time are skipped (the turn proceeds). Skill names take precedence over plugin names when a name matches both. The client derives `references` from the composer text against the live skill/plugin catalog; the typed text is sent unchanged as the user message.
+
+Example request referencing a skill and a plugin:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 7,
+  "method": "turn/start",
+  "params": {
+    "threadId": "abc-123",
+    "input": [{ "type": "text", "text": "Draft the Q3 report with @documents using @acme-suite." }],
+    "references": [
+      { "kind": "skill", "name": "documents" },
+      { "kind": "plugin", "name": "acme-suite" }
+    ]
+  }
+}
+```
+
 ### Cowork JSON-RPC control namespace
 
 Cowork also exposes a workspace-scoped control namespace over the same JSON-RPC connection. Some methods return typed session event payloads inside `{ "event": ... }` or `{ "events": [...] }` so clients can share reducers for control state and live notifications.
@@ -232,6 +266,10 @@ Currently implemented `cowork/*` methods include:
   - `cowork/plugins/enable`
   - `cowork/plugins/disable`
   - `cowork/plugins/delete`
+- import controls (import plugins/skills already on disk from Claude Code `~/.claude` and Codex `~/.codex`)
+  - `cowork/import/list`
+  - `cowork/import/plugin`
+  - `cowork/import/skill`
 - memory controls
   - `cowork/memory/list`
   - `cowork/memory/upsert`
@@ -256,6 +294,14 @@ The desktop JSON-RPC path now uses this namespace so one workspace connection ca
 - memories
 
 `cowork/plugins/read`, `cowork/plugins/enable`, `cowork/plugins/disable`, and `cowork/plugins/delete` accept an optional `scope` field (`workspace` or `user`) so callers can address a specific installed copy when the same plugin id exists in both scopes. Plugin catalog snapshots keep installed plugins in `plugins`; built-in remote marketplace offers live in `availablePlugins`, use `installed: false`, include `installSource`, and do not expose local paths until installed.
+
+A marketplace `marketplace.json` may also declare a `skills` array (same entry shape as `plugins`) for standalone skills. These surface in skill catalog snapshots under `availableSkills` (`installed: false`, each with an `installSource` GitHub URL); installed skills stay in `installations`. The `skills_catalog` event sets `availableSkillsPartial: true` whenever the remote marketplace was not fetched (local-only refresh) or the fetch failed, so clients keep their cached available-skill rows instead of clearing them. Install an available skill by passing its `installSource` to `cowork/skills/install` (no new method is required).
+
+The import controls let a client browse and copy plugins/skills that already exist on disk from other agent tools:
+
+- `cowork/import/list` — params `{ cwd?, source: "claude" | "codex", kind: "plugin" | "skill" }`. Returns an `import_list` event `{ source, kind, homeExists, items }`. Each `ImportableItem` has `{ kind, source, id, displayName, description, version?, sourcePath, alreadyInstalledGlobal, alreadyInstalledWorkspace, diagnostics, conversionRequired? }`. A non-empty `diagnostics` array means the item is surfaced but not importable. `conversionRequired` marks Claude `.claude-plugin` bundles that are converted on import. Discovery scans only `~/.claude/plugins/{cache,marketplaces}` + `~/.codex/plugins/cache` for plugin manifests, and `~/.{claude,codex}/skills` for `SKILL.md` bundles.
+- `cowork/import/plugin` — params `{ cwd?, source, sourcePath, conversionRequired, targetScope: "workspace" | "user" }`. Copies the plugin into the target scope (Claude bundles are converted first), reusing the standard install pipeline. Emits the same events as `cowork/plugins/install` (`plugins_catalog`, `plugin_detail`, `skills_catalog`, …).
+- `cowork/import/skill` — params `{ cwd?, source, sourcePath, targetScope: "workspace" | "user" }`. Copies a standalone `SKILL.md` bundle into the target scope (mapped to `global`/`project`) and emits `skills_catalog`.
 - opt-in workspace backups
 
 `thread/list` and workspace-scoped `cowork/*` control methods now default omitted `cwd` to the sidecar/server working directory. Mobile and other remote clients no longer need to know a host filesystem path just to list threads or read workspace control state.
@@ -1261,6 +1307,13 @@ Backups are opt-in. In git workspaces, clients and agents should prefer git-nati
   "totalReasoningOutputTokens": 600,
   "totalTokens": 7000,
   "estimatedTotalCostUsd": 0.45,
+  "costBreakdown": {
+    "inputCostUsd": 0.12,
+    "cachedInputCostUsd": 0.01,
+    "cacheWriteInputCostUsd": 0.03,
+    "outputCostUsd": 0.29,
+    "otherCostUsd": 0
+  },
   "costTrackingAvailable": true,
   "byModel": [],
   "turns": [],
@@ -1281,6 +1334,7 @@ Backups are opt-in. In git workspaces, clients and agents should prefer git-nati
 | `totalReasoningOutputTokens` | `number?` | Cumulative reasoning output tokens. Reasoning tokens are tracked as a subset/breakdown of output tokens unless a provider documents a separate billing bucket |
 | `totalTokens` | `number` | Cumulative total tokens |
 | `estimatedTotalCostUsd` | `number \| null` | Cumulative estimated cost in USD |
+| `costBreakdown` | `UsageCostBreakdown?` | Estimated cost split across input, cached input, cache-write input, output, and unattributed provider-estimate buckets. Omitted when total session cost is unavailable |
 | `costTrackingAvailable` | `boolean` | Whether cost tracking is active for this session |
 | `byModel` | `ModelUsageSummary[]` | Usage breakdown by model |
 | `turns` | `TurnCostEntry[]` | Detailed log of turns in this session |
@@ -1301,7 +1355,14 @@ Backups are opt-in. In git workspaces, clients and agents should prefer git-nati
   "totalCacheWritePromptTokens": 150,
   "totalReasoningOutputTokens": 250,
   "totalTokens": 4100,
-  "estimatedCostUsd": 0.0235
+  "estimatedCostUsd": 0.0235,
+  "costBreakdown": {
+    "inputCostUsd": 0.004,
+    "cachedInputCostUsd": 0.0001,
+    "cacheWriteInputCostUsd": 0.0002,
+    "outputCostUsd": 0.0192,
+    "otherCostUsd": 0
+  }
 }
 ```
 
@@ -1317,6 +1378,27 @@ Backups are opt-in. In git workspaces, clients and agents should prefer git-nati
 | `totalReasoningOutputTokens` | `number?` | Reasoning output tokens accumulated for this provider/model pair, as a subset/breakdown of output tokens |
 | `totalTokens` | `number` | Total tokens accumulated for this provider/model pair |
 | `estimatedCostUsd` | `number \| null` | Estimated cumulative cost for this provider/model pair |
+| `costBreakdown` | `UsageCostBreakdown?` | Estimated cost split across input, cached input, cache-write input, output, and unattributed provider-estimate buckets. Omitted when this model's cost is unavailable |
+
+### UsageCostBreakdown
+
+```json
+{
+  "inputCostUsd": 0.12,
+  "cachedInputCostUsd": 0.01,
+  "cacheWriteInputCostUsd": 0.03,
+  "outputCostUsd": 0.29,
+  "otherCostUsd": 0
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `inputCostUsd` | `number` | Estimated spend for uncached input tokens |
+| `cachedInputCostUsd` | `number` | Estimated spend for cache-read/cached input tokens |
+| `cacheWriteInputCostUsd` | `number` | Estimated spend for cache-write/cache-creation input tokens |
+| `outputCostUsd` | `number` | Estimated spend for output/completion tokens |
+| `otherCostUsd` | `number` | Estimated spend that could not be attributed to a local pricing bucket, usually runtime-provided cost for uncatalogued models |
 
 ### TurnCostEntry
 
@@ -1337,6 +1419,13 @@ Backups are opt-in. In git workspaces, clients and agents should prefer git-nati
     "estimatedCostUsd": 0.0084
   },
   "estimatedCostUsd": 0.0084,
+  "costBreakdown": {
+    "inputCostUsd": 0.00125,
+    "cachedInputCostUsd": 0.000025,
+    "cacheWriteInputCostUsd": 0.0000625,
+    "outputCostUsd": 0.003,
+    "otherCostUsd": 0
+  },
   "pricing": {
     "inputPerMillion": 1.25,
     "outputPerMillion": 10,
@@ -1359,6 +1448,7 @@ Backups are opt-in. In git workspaces, clients and agents should prefer git-nati
 | `model` | `string` | Model used for this turn |
 | `usage` | `TurnUsage` | Raw usage counters and optional turn-level estimate metadata |
 | `estimatedCostUsd` | `number \| null` | Estimated cost for this turn after pricing resolution |
+| `costBreakdown` | `UsageCostBreakdown \| null?` | Estimated turn cost split by billable bucket when available |
 | `pricing` | `ModelPricing \| null` | Pricing entry used for this estimate, or `null` when unavailable |
 
 ### TurnUsage
@@ -3011,6 +3101,8 @@ Persistent child-session list response to `agent_list_get`.
 | `executionState` | `"pending_init" \| "running" \| "completed" \| "errored" \| "closed"` | Current execution state |
 | `busy` | `boolean` | Whether the child session is mid-turn in memory |
 | `lastMessagePreview` | `string?` | Latest assistant preview text |
+| `sessionUsage` | `SessionUsageSnapshot \| null?` | Compact child-session usage snapshot, when the child session has reported usage |
+| `lastTurnUsage` | `TurnUsage \| null?` | Latest child-session turn usage shortcut, when available |
 
 ---
 
@@ -3035,7 +3127,27 @@ Live child-agent status update emitted on spawn, resume, close, and state transi
     "updatedAt": "2026-03-08T12:05:00.000Z",
     "lifecycleState": "active",
     "executionState": "completed",
-    "busy": false
+    "busy": false,
+    "sessionUsage": {
+      "sessionId": "child-456",
+      "totalTurns": 1,
+      "totalPromptTokens": 1200,
+      "totalCompletionTokens": 300,
+      "totalTokens": 1500,
+      "estimatedTotalCostUsd": 0.0084,
+      "costTrackingAvailable": true,
+      "byModel": [],
+      "turns": [],
+      "budgetStatus": { "...": "..." },
+      "createdAt": "2026-03-08T12:00:00.000Z",
+      "updatedAt": "2026-03-08T12:05:00.000Z"
+    },
+    "lastTurnUsage": {
+      "promptTokens": 1200,
+      "completionTokens": 300,
+      "totalTokens": 1500,
+      "estimatedCostUsd": 0.0084
+    }
   }
 }
 ```

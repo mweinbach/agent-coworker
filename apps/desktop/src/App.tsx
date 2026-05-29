@@ -271,6 +271,7 @@ const ChatShell = memo(function ChatShell({
         }
         sessionUsage={effectiveView === "chat" ? (runtime?.sessionUsage ?? null) : null}
         lastTurnUsage={effectiveView === "chat" ? (runtime?.lastTurnUsage ?? null) : null}
+        agents={effectiveView === "chat" ? (runtime?.agents ?? []) : []}
         canClearHardCap={canClearHardCap}
         onClearHardCap={
           selectedThreadId ? () => clearThreadUsageHardCap(selectedThreadId) : undefined

@@ -31,6 +31,29 @@ export type ModelMessage = {
   [key: string]: unknown;
 };
 
+/**
+ * A skill or plugin the user explicitly referenced ("@-mentioned") when sending
+ * a turn. A `skill` reference is hard-forced by appending its SKILL.md body to
+ * the model-facing user/steer message as plain text; a `plugin` reference is
+ * soft awareness (a turn-scoped system block biases the model toward the
+ * plugin's bundled skills).
+ */
+export type TurnReference = {
+  kind: "skill" | "plugin";
+  name: string;
+};
+
+/**
+ * A plugin the user referenced on a turn, resolved against the plugin catalog.
+ * Rendered into a turn-scoped system block by `renderReferencedPluginsSection`
+ * to bias the model toward the plugin's bundled skills.
+ */
+export type ReferencedPluginContext = {
+  name: string;
+  displayName: string;
+  skillNames: string[];
+};
+
 export function isProviderName(v: unknown): v is ProviderName {
   return providerNameSchema.safeParse(v).success;
 }
@@ -509,10 +532,40 @@ export interface SkillInstallationEntry {
   plugin?: SkillPluginOwner;
 }
 
+export interface SkillMarketplaceMetadata {
+  name: string;
+  displayName?: string;
+  category?: string;
+  installationPolicy?: string;
+  authenticationPolicy?: string;
+}
+
+/**
+ * A standalone skill offered by the marketplace but not yet installed. Mirrors
+ * MarketplacePluginCatalogEntry: `installed: false`, carries an `installSource`
+ * (a GitHub tree URL) that the existing skill install route consumes.
+ */
+export interface MarketplaceSkillCatalogEntry {
+  id: string;
+  name: string;
+  displayName: string;
+  description: string;
+  category: string;
+  installed: false;
+  enabled: false;
+  discoveryKind: "marketplace";
+  scope: "user";
+  marketplace: SkillMarketplaceMetadata;
+  installSource: string;
+  interface?: SkillInterfaceMeta;
+  warnings: string[];
+}
+
 export interface SkillCatalogSnapshot {
   scopes: SkillScopeDescriptor[];
   effectiveSkills: SkillInstallationEntry[];
   installations: SkillInstallationEntry[];
+  availableSkills: MarketplaceSkillCatalogEntry[];
 }
 
 export type SkillSourceInputKind =

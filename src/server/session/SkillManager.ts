@@ -1,5 +1,12 @@
 import fs from "node:fs/promises";
 import {
+  type ImportableKind,
+  type ImportSource,
+  importPlugin as importPluginFromSource,
+  importSkill as importSkillFromSource,
+  listImportable,
+} from "../../import";
+import {
   buildPluginCatalogSnapshot,
   buildPluginInstallPreview,
   deletePluginInstallation,
@@ -84,14 +91,25 @@ export class SkillManager {
     this.context.emit({ type: "skills_list", sessionId: this.context.id, skills });
   }
 
-  private async emitSkillsCatalog(clearedMutationPendingKeys: string[] = []) {
-    const catalog = await getSkillCatalog(this.context.state.config);
+  private async emitSkillsCatalog(
+    clearedMutationPendingKeys: string[] = [],
+    opts: { includeRemoteMarketplace?: boolean } = {},
+  ) {
+    const { remoteMarketplaceFailed, ...catalog } = await getSkillCatalog(
+      this.context.state.config,
+      { includeRemoteMarketplace: opts.includeRemoteMarketplace ?? false },
+    );
+    // Available (marketplace) skills are authoritative only when a remote refresh
+    // succeeded; otherwise the client must keep its cached marketplace rows.
+    const availableSkillsPartial =
+      !opts.includeRemoteMarketplace || remoteMarketplaceFailed === true;
     const mutationBlockedReason = this.mutationBlockReason;
     this.context.emit({
       type: "skills_catalog",
       sessionId: this.context.id,
       catalog,
       mutationBlocked: mutationBlockedReason !== null,
+      ...(availableSkillsPartial ? { availableSkillsPartial: true } : {}),
       ...(clearedMutationPendingKeys.length > 0 ? { clearedMutationPendingKeys } : {}),
       ...(mutationBlockedReason ? { mutationBlockedReason } : {}),
     });
@@ -413,7 +431,11 @@ export class SkillManager {
 
   async getSkillsCatalog() {
     try {
-      await this.emitSkillsCatalog();
+      // Emit a single marketplace-inclusive catalog. The workspace-control read/refresh
+      // path captures one synchronous skills_catalog emit per operation and disposes the
+      // binding, so availableSkills must be present in that emit — an async queued refresh
+      // would never reach the client.
+      await this.emitSkillsCatalog([], { includeRemoteMarketplace: true });
     } catch (err) {
       this.context.emitError(
         "internal_error",
@@ -671,6 +693,84 @@ export class SkillManager {
           "internal_error",
           "session",
           `Failed to install skills: ${String(err)}`,
+        );
+      }
+    });
+  }
+
+  async listImport(source: ImportSource, kind: ImportableKind) {
+    try {
+      const result = await listImportable({
+        config: this.context.state.config,
+        source,
+        kind,
+      });
+      this.context.emit({
+        type: "import_list",
+        sessionId: this.context.id,
+        source: result.source,
+        kind: result.kind,
+        homeExists: result.homeExists,
+        items: result.items,
+      });
+    } catch (err) {
+      this.context.emitError(
+        "internal_error",
+        "session",
+        `Failed to list importable ${kind}s: ${String(err)}`,
+      );
+    }
+  }
+
+  async importPlugin(
+    sourcePath: string,
+    conversionRequired: boolean,
+    targetScope: PluginInstallTargetScope,
+  ) {
+    await this.withSkillMutationLock(async () => {
+      try {
+        const result = await importPluginFromSource({
+          config: this.context.state.config,
+          sourcePath,
+          conversionRequired,
+          targetScope,
+        });
+        await this.mutationCoordinator.afterPluginMutation({
+          clearedMutationPendingKeys: [
+            this.skillMutationPendingKey(`plugin:import:${targetScope}`),
+          ],
+          refreshAllWorkspaces: this.isSharedPluginMutationScope(targetScope),
+        });
+        await this.pluginCatalogService.emitPluginDetail(result.pluginId, targetScope);
+      } catch (err) {
+        this.context.emitError(
+          "internal_error",
+          "session",
+          `Failed to import plugin: ${String(err)}`,
+        );
+      }
+    });
+  }
+
+  async importSkill(sourcePath: string, targetScope: PluginInstallTargetScope) {
+    await this.withSkillMutationLock(async () => {
+      try {
+        const result = await importSkillFromSource({
+          config: this.context.state.config,
+          sourcePath,
+          targetScope,
+        });
+        const skillScope: SkillMutationTargetScope = targetScope === "user" ? "global" : "project";
+        await this.mutationCoordinator.afterSkillMutation({
+          selectedInstallationId: result.installationIds[0],
+          clearedMutationPendingKeys: [this.skillMutationPendingKey(`import:${targetScope}`)],
+          refreshAllWorkspaces: this.isSharedSkillMutationScope(skillScope),
+        });
+      } catch (err) {
+        this.context.emitError(
+          "internal_error",
+          "session",
+          `Failed to import skill: ${String(err)}`,
         );
       }
     });

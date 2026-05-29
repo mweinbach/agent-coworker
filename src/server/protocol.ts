@@ -1,3 +1,4 @@
+import type { ImportableItem, ImportableKind, ImportSource } from "../import";
 import type { ProviderStatus } from "../providerStatus";
 import type { ProviderAuthChallenge, ProviderAuthMethod } from "../providers/authRegistry";
 import type { ProviderCatalogEntry } from "../providers/connectionCatalog";
@@ -342,6 +343,7 @@ export type SessionEvent =
       type: "skills_catalog";
       sessionId: string;
       catalog: SkillCatalogSnapshot;
+      availableSkillsPartial?: boolean;
       mutationBlocked: boolean;
       clearedMutationPendingKeys?: string[];
       mutationBlockedReason?: string;
@@ -382,6 +384,14 @@ export type SessionEvent =
       sessionId: string;
       preview: PluginInstallPreview;
       fromUserPreviewRequest?: boolean;
+    }
+  | {
+      type: "import_list";
+      sessionId: string;
+      source: ImportSource;
+      kind: ImportableKind;
+      homeExists: boolean;
+      items: ImportableItem[];
     }
   | {
       type: "session_backup_state";

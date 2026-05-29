@@ -3,7 +3,9 @@ import { useMemo } from "react";
 import { useAppStore } from "../../app/store";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
+import type { MarketplaceSkillCatalogEntry } from "../../lib/wsProtocol";
 import { ImportDialog } from "../import/ImportDialog";
+import { AvailableSkillCardGrid } from "./AvailableSkillCardGrid";
 import { InstallationCardGrid } from "./InstallationCardGrid";
 import { InstallSkillDialog } from "./InstallSkillDialog";
 import { SkillDetailDialog } from "./SkillDetailDialog";
@@ -20,6 +22,7 @@ export function SkillsCatalogPage({
   const wsRtById = useAppStore((s) => s.workspaceRuntimeById);
   const selectSkillInstallation = useAppStore((s) => s.selectSkillInstallation);
   const refreshSkillsCatalog = useAppStore((s) => s.refreshSkillsCatalog);
+  const installSkills = useAppStore((s) => s.installSkills);
 
   const rt = wsRtById[workspaceId];
   const catalog = rt?.skillsCatalog ?? null;
@@ -61,6 +64,30 @@ export function SkillsCatalogPage({
     return installations.filter((i) => i.state !== "effective");
   }, [installations]);
 
+  const availableSkills = useMemo(() => {
+    let items = [...(catalog?.availableSkills ?? [])];
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      items = items.filter(
+        (s) =>
+          s.name.toLowerCase().includes(q) ||
+          s.displayName.toLowerCase().includes(q) ||
+          s.description.toLowerCase().includes(q) ||
+          s.category.toLowerCase().includes(q),
+      );
+    }
+    return items.sort((left, right) => left.displayName.localeCompare(right.displayName));
+  }, [catalog, searchQuery]);
+
+  const installingSkill = Object.keys(rt?.skillMutationPendingKeys ?? {}).some((key) =>
+    key.startsWith("install:"),
+  );
+
+  const handleInstallAvailableSkill = (skill: MarketplaceSkillCatalogEntry) => {
+    // Marketplace skills are user-level offerings; install them globally.
+    void installSkills(skill.installSource, "global").catch(() => {});
+  };
+
   return (
     <div className="app-skills-view h-full min-h-0 overflow-y-auto px-6 py-4">
       <div className="mx-auto max-w-6xl">
@@ -101,6 +128,17 @@ export function SkillsCatalogPage({
             </section>
           )}
 
+          {availableSkills.length > 0 && (
+            <section>
+              <h2 className="mb-4 text-lg font-semibold">Available</h2>
+              <AvailableSkillCardGrid
+                skills={availableSkills}
+                onInstall={handleInstallAvailableSkill}
+                installing={installingSkill}
+              />
+            </section>
+          )}
+
           {showLoadingState && (
             <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border/50 bg-muted/10 py-10 text-center">
               <div className="mb-1 text-base font-medium">Loading...</div>
@@ -122,7 +160,10 @@ export function SkillsCatalogPage({
             </div>
           ) : null}
 
-          {!showLoadingState && !skillCatalogError && installations.length === 0 && (
+          {!showLoadingState &&
+            !skillCatalogError &&
+            installations.length === 0 &&
+            availableSkills.length === 0 && (
             <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border/50 bg-muted/10 py-10 text-center">
               <div className="mb-1 text-base font-medium">No skills found</div>
               <div className="text-sm text-muted-foreground">

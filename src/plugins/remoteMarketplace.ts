@@ -1,5 +1,9 @@
 import { type FetchLike, fetchGitHubTextFile } from "../extensions/source";
-import type { MarketplacePluginCatalogEntry, PluginMarketplaceMetadata } from "../types";
+import type {
+  MarketplacePluginCatalogEntry,
+  MarketplaceSkillCatalogEntry,
+  PluginMarketplaceMetadata,
+} from "../types";
 import type { PluginInstallMetadata } from "./manifest";
 import { type ParsedMarketplaceDocument, parseRemotePluginMarketplace } from "./marketplace";
 
@@ -152,6 +156,40 @@ export function buildRemoteMarketplaceCatalogEntry(opts: {
       authenticationPolicy: opts.plugin.authenticationPolicy,
     }),
     installSource: opts.plugin.sourceInput,
+    warnings: [],
+  };
+}
+
+export function buildRemoteMarketplaceSkillCatalogEntry(opts: {
+  marketplace: ParsedMarketplaceDocument;
+  skill: ParsedMarketplaceDocument["skills"][number];
+}): MarketplaceSkillCatalogEntry | null {
+  if (!opts.skill.sourceInput) {
+    return null;
+  }
+  const displayName = opts.skill.displayName ?? opts.skill.name;
+  return {
+    id: opts.skill.name,
+    name: opts.skill.name,
+    displayName,
+    description: `Available from ${opts.marketplace.displayName ?? opts.marketplace.name}.`,
+    category: opts.skill.category,
+    scope: "user",
+    discoveryKind: "marketplace",
+    installed: false,
+    enabled: false,
+    interface: {
+      displayName,
+      shortDescription: opts.skill.category,
+    },
+    marketplace: buildMarketplaceCatalogMetadata({
+      name: opts.marketplace.name,
+      ...(opts.marketplace.displayName ? { displayName: opts.marketplace.displayName } : {}),
+      category: opts.skill.category,
+      installationPolicy: opts.skill.installationPolicy,
+      authenticationPolicy: opts.skill.authenticationPolicy,
+    }),
+    installSource: opts.skill.sourceInput,
     warnings: [],
   };
 }

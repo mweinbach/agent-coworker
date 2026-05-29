@@ -91,17 +91,54 @@ export class SkillManager {
     this.context.emit({ type: "skills_list", sessionId: this.context.id, skills });
   }
 
-  private async emitSkillsCatalog(clearedMutationPendingKeys: string[] = []) {
-    const catalog = await getSkillCatalog(this.context.state.config);
+  private remoteSkillCatalogRefresh: Promise<void> | null = null;
+  private remoteSkillCatalogRefreshQueued = false;
+
+  private async emitSkillsCatalog(
+    clearedMutationPendingKeys: string[] = [],
+    opts: { includeRemoteMarketplace?: boolean } = {},
+  ) {
+    const { remoteMarketplaceFailed, ...catalog } = await getSkillCatalog(
+      this.context.state.config,
+      { includeRemoteMarketplace: opts.includeRemoteMarketplace ?? false },
+    );
+    // Available (marketplace) skills are authoritative only when a remote refresh
+    // succeeded; otherwise the client must keep its cached marketplace rows.
+    const availableSkillsPartial =
+      !opts.includeRemoteMarketplace || remoteMarketplaceFailed === true;
     const mutationBlockedReason = this.mutationBlockReason;
     this.context.emit({
       type: "skills_catalog",
       sessionId: this.context.id,
       catalog,
       mutationBlocked: mutationBlockedReason !== null,
+      ...(availableSkillsPartial ? { availableSkillsPartial: true } : {}),
       ...(clearedMutationPendingKeys.length > 0 ? { clearedMutationPendingKeys } : {}),
       ...(mutationBlockedReason ? { mutationBlockedReason } : {}),
     });
+  }
+
+  private queueRemoteSkillCatalogRefresh() {
+    if (this.remoteSkillCatalogRefresh) {
+      this.remoteSkillCatalogRefreshQueued = true;
+      return;
+    }
+    const refresh = this.emitSkillsCatalog([], { includeRemoteMarketplace: true })
+      .catch((err) => {
+        this.context.emitError(
+          "internal_error",
+          "session",
+          `Failed to refresh remote skill catalog: ${String(err)}`,
+        );
+      })
+      .finally(() => {
+        this.remoteSkillCatalogRefresh = null;
+        if (this.remoteSkillCatalogRefreshQueued) {
+          this.remoteSkillCatalogRefreshQueued = false;
+          this.queueRemoteSkillCatalogRefresh();
+        }
+      });
+    this.remoteSkillCatalogRefresh = refresh;
   }
 
   private async emitPluginInstallPreview(
@@ -421,6 +458,7 @@ export class SkillManager {
   async getSkillsCatalog() {
     try {
       await this.emitSkillsCatalog();
+      this.queueRemoteSkillCatalogRefresh();
     } catch (err) {
       this.context.emitError(
         "internal_error",

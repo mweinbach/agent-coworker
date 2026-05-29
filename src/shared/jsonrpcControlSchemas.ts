@@ -702,11 +702,40 @@ const skillInstallationEntrySchema = z
   })
   .passthrough();
 
+const skillMarketplaceMetadataSchema = z
+  .object({
+    name: nonEmptyTrimmedStringSchema,
+    displayName: z.string().optional(),
+    category: z.string().optional(),
+    installationPolicy: z.string().optional(),
+    authenticationPolicy: z.string().optional(),
+  })
+  .passthrough();
+
+const marketplaceSkillCatalogEntrySchema = z
+  .object({
+    id: nonEmptyTrimmedStringSchema,
+    name: nonEmptyTrimmedStringSchema,
+    displayName: nonEmptyTrimmedStringSchema,
+    description: z.string(),
+    category: z.string(),
+    scope: z.literal("user"),
+    discoveryKind: z.literal("marketplace"),
+    installed: z.literal(false),
+    enabled: z.literal(false),
+    interface: skillInterfaceSchema.optional(),
+    marketplace: skillMarketplaceMetadataSchema,
+    installSource: z.string(),
+    warnings: z.array(z.string()),
+  })
+  .passthrough();
+
 const skillCatalogSnapshotSchema = z
   .object({
     scopes: z.array(skillScopeDescriptorSchema),
     effectiveSkills: z.array(skillInstallationEntrySchema),
     installations: z.array(skillInstallationEntrySchema),
+    availableSkills: z.array(marketplaceSkillCatalogEntrySchema).default([]),
   })
   .strict();
 
@@ -913,6 +942,7 @@ export const skillsCatalogEventSchema = z
     type: z.literal("skills_catalog"),
     sessionId: nonEmptyTrimmedStringSchema.optional(),
     catalog: skillCatalogSnapshotSchema,
+    availableSkillsPartial: z.boolean().optional(),
     mutationBlocked: z.boolean(),
     clearedMutationPendingKeys: z.array(z.string()).optional(),
     mutationBlockedReason: z.string().optional(),

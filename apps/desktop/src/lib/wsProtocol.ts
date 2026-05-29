@@ -22,6 +22,7 @@ export type { OpenAiNativeConnector } from "../../../../src/shared/openaiNativeC
 export type {
   ApprovalRiskCode,
   ChildModelRoutingMode,
+  MarketplaceSkillCatalogEntry,
   MCPServerConfig,
   PluginCatalogEntry,
   PluginCatalogSnapshot,

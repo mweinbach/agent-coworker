@@ -343,6 +343,7 @@ export type SessionEvent =
       type: "skills_catalog";
       sessionId: string;
       catalog: SkillCatalogSnapshot;
+      availableSkillsPartial?: boolean;
       mutationBlocked: boolean;
       clearedMutationPendingKeys?: string[];
       mutationBlockedReason?: string;

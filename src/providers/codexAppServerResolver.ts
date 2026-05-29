@@ -52,6 +52,12 @@ export type CodexAppServerResolverOverrides = {
   fetchImpl?: typeof fetch;
   spawnForResult?: (command: string, args: string[]) => Promise<ProcessResult>;
   spawnAppServer?: typeof spawn;
+  promoteManagedInstall?: (
+    executablePath: string,
+    currentPath: string,
+    version: string,
+    target: { platform: NodeJS.Platform; arch: string },
+  ) => Promise<void>;
   homeDir?: string;
   pathEnv?: string;
   platform?: NodeJS.Platform;
@@ -133,6 +139,15 @@ function managedCurrentPath(homeDir: string, target: BuildTarget): string {
     `${target.platform}-${target.arch}`,
     `codex-app-server${ext}`,
   );
+}
+
+function managedCommand(command: string, version?: string): CodexAppServerCommand {
+  return {
+    command,
+    args: [],
+    source: "managed",
+    ...(version ? { version } : {}),
+  };
 }
 
 function parseCodexVersion(output: string): string | undefined {
@@ -311,14 +326,12 @@ async function resolveManagedCommand(
 ): Promise<CodexAppServerCommand | null> {
   const target = currentTarget(overrides);
   const homeDir = overrides.homeDir ?? resolveAuthHomeDir();
+  const versioned = await listManagedVersionCommands(homeDir, target);
+  if (target.platform === "win32" && versioned[0]) return versioned[0];
+
   const command = managedCurrentPath(homeDir, target);
-  if (!(await pathExists(command))) return null;
-  return {
-    command,
-    args: [],
-    source: "managed",
-    version: await readVersionFile(command),
-  };
+  if (await pathExists(command)) return managedCommand(command, await readVersionFile(command));
+  return versioned[0] ?? null;
 }
 
 async function fetchCodexRelease(
@@ -412,6 +425,27 @@ async function findFileRecursive(dir: string, wantedBasename: string): Promise<s
   return null;
 }
 
+async function listManagedVersionCommands(
+  homeDir: string,
+  target: BuildTarget,
+): Promise<CodexAppServerCommand[]> {
+  const versionsDir = path.join(managedRoot(homeDir), "versions");
+  try {
+    const entries = await fs.readdir(versionsDir, { withFileTypes: true });
+    const commands: CodexAppServerCommand[] = [];
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const command = managedExecutablePath(homeDir, entry.name, target);
+      if (!(await pathExists(command))) continue;
+      commands.push(managedCommand(command, (await readVersionFile(command)) ?? entry.name));
+    }
+    commands.sort((left, right) => -compareVersions(left.version, right.version));
+    return commands;
+  } catch {
+    return [];
+  }
+}
+
 async function pruneManagedVersions(homeDir: string): Promise<void> {
   const versionsDir = path.join(managedRoot(homeDir), "versions");
   try {
@@ -428,6 +462,28 @@ async function pruneManagedVersions(homeDir: string): Promise<void> {
   }
 }
 
+function isWindowsPromotionLockError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return code === "EPERM" || code === "EACCES" || code === "EBUSY";
+}
+
+async function promoteManagedInstallBestEffort(
+  executablePath: string,
+  currentPath: string,
+  version: string,
+  target: BuildTarget,
+  overrides: CodexAppServerResolverOverrides,
+): Promise<void> {
+  const promote = overrides.promoteManagedInstall ?? promoteManagedInstall;
+  try {
+    await promote(executablePath, currentPath, version, target);
+  } catch (error) {
+    if (target.platform !== "win32" || !isWindowsPromotionLockError(error)) throw error;
+    await fs.rm(`${currentPath}.tmp`, { force: true }).catch(() => {});
+    await fs.rm(`${currentPath}.version.tmp`, { force: true }).catch(() => {});
+  }
+}
+
 async function installCodexAppServer(
   opts: { version?: string; force?: boolean } = {},
   overrides: CodexAppServerResolverOverrides = {},
@@ -440,9 +496,18 @@ async function installCodexAppServer(
   const key = `${homeDir}-${target.platform}-${target.arch}-${release.version}`;
   const existing = await pathExists(executablePath);
   if (existing && !opts.force) {
-    await promoteManagedInstall(executablePath, currentPath, release.version, target);
+    await promoteManagedInstallBestEffort(
+      executablePath,
+      currentPath,
+      release.version,
+      target,
+      overrides,
+    );
     await pruneManagedVersions(homeDir);
-    return { command: currentPath, args: [], source: "managed", version: release.version };
+    return managedCommand(
+      target.platform === "win32" ? executablePath : currentPath,
+      release.version,
+    );
   }
 
   const inFlight = inFlightInstalls.get(key);
@@ -472,14 +537,18 @@ async function installCodexAppServer(
         await fs.copyFile(assetPath, executablePath);
       }
       await fs.writeFile(`${executablePath}.version`, `${release.version}\n`, "utf8");
-      await promoteManagedInstall(executablePath, currentPath, release.version, target);
+      await promoteManagedInstallBestEffort(
+        executablePath,
+        currentPath,
+        release.version,
+        target,
+        overrides,
+      );
       await pruneManagedVersions(homeDir);
-      return {
-        command: currentPath,
-        args: [],
-        source: "managed" as const,
-        version: release.version,
-      };
+      return managedCommand(
+        target.platform === "win32" ? executablePath : currentPath,
+        release.version,
+      );
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });
     }

@@ -124,10 +124,6 @@ export async function pickWorkspaceDirectory(): Promise<string | null> {
   return await requireDesktopApi().pickWorkspaceDirectory();
 }
 
-export function isDesktopApiAvailable(): boolean {
-  return getDesktopApi() !== undefined;
-}
-
 export async function pickDirectory(opts?: { title?: string }): Promise<string | null> {
   return await requireDesktopApi().pickDirectory(opts);
 }

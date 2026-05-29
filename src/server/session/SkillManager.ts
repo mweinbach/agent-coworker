@@ -66,7 +66,6 @@ export class SkillManager {
         emitLegacySkillsList: async () => await this.emitLegacySkillsList(),
         emitSkillsCatalog: async (clearedMutationPendingKeys) =>
           await this.emitSkillsCatalog(clearedMutationPendingKeys),
-        queueRemoteSkillCatalogRefresh: () => this.queueRemoteSkillCatalogRefresh(),
         emitSkillInstallationDetail: async (installationId) =>
           await this.emitInstallationDetail(installationId),
         listCommands: async () => await this.listCommands(),
@@ -92,9 +91,6 @@ export class SkillManager {
     this.context.emit({ type: "skills_list", sessionId: this.context.id, skills });
   }
 
-  private remoteSkillCatalogRefresh: Promise<void> | null = null;
-  private remoteSkillCatalogRefreshQueued = false;
-
   private async emitSkillsCatalog(
     clearedMutationPendingKeys: string[] = [],
     opts: { includeRemoteMarketplace?: boolean } = {},
@@ -117,29 +113,6 @@ export class SkillManager {
       ...(clearedMutationPendingKeys.length > 0 ? { clearedMutationPendingKeys } : {}),
       ...(mutationBlockedReason ? { mutationBlockedReason } : {}),
     });
-  }
-
-  private queueRemoteSkillCatalogRefresh() {
-    if (this.remoteSkillCatalogRefresh) {
-      this.remoteSkillCatalogRefreshQueued = true;
-      return;
-    }
-    const refresh = this.emitSkillsCatalog([], { includeRemoteMarketplace: true })
-      .catch((err) => {
-        this.context.emitError(
-          "internal_error",
-          "session",
-          `Failed to refresh remote skill catalog: ${String(err)}`,
-        );
-      })
-      .finally(() => {
-        this.remoteSkillCatalogRefresh = null;
-        if (this.remoteSkillCatalogRefreshQueued) {
-          this.remoteSkillCatalogRefreshQueued = false;
-          this.queueRemoteSkillCatalogRefresh();
-        }
-      });
-    this.remoteSkillCatalogRefresh = refresh;
   }
 
   private async emitPluginInstallPreview(
@@ -458,8 +431,11 @@ export class SkillManager {
 
   async getSkillsCatalog() {
     try {
-      await this.emitSkillsCatalog();
-      this.queueRemoteSkillCatalogRefresh();
+      // Emit a single marketplace-inclusive catalog. The workspace-control read/refresh
+      // path captures one synchronous skills_catalog emit per operation and disposes the
+      // binding, so availableSkills must be present in that emit — an async queued refresh
+      // would never reach the client.
+      await this.emitSkillsCatalog([], { includeRemoteMarketplace: true });
     } catch (err) {
       this.context.emitError(
         "internal_error",

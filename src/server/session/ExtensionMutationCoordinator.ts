@@ -13,7 +13,6 @@ type SkillMutationOptions = ExtensionMutationOptions & {
 type ExtensionMutationEmitters = {
   emitLegacySkillsList: () => Promise<void>;
   emitSkillsCatalog: (clearedMutationPendingKeys?: string[]) => Promise<void>;
-  queueRemoteSkillCatalogRefresh: () => void;
   emitSkillInstallationDetail: (installationId: string) => Promise<void>;
   listCommands: () => Promise<void>;
 };
@@ -34,10 +33,6 @@ export class ExtensionMutationCoordinator {
       clearedMutationPendingKeys,
       refreshAllWorkspaces,
     });
-    // Re-fetch the remote skill marketplace so a skill uninstalled/installed here
-    // reappears (or drops) under "available" without a manual refresh. Scoped to
-    // skill mutations so plugin mutations don't trigger an extra marketplace fetch.
-    this.emitters.queueRemoteSkillCatalogRefresh();
     if (selectedInstallationId) {
       await this.emitters.emitSkillInstallationDetail(selectedInstallationId);
     }

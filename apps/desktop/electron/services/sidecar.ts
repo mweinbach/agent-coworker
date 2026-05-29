@@ -98,6 +98,8 @@ export function hasPackagedFoundationModelsSdk(
   return (
     existsSync(path.join(candidateDir, "dist", "index.js")) &&
     existsSync(path.join(candidateDir, "native", "libFoundationModels.dylib")) &&
+    existsSync(path.join(candidateDir, "node_modules", "koffi", "index.js")) &&
+    existsSync(path.join(candidateDir, "node_modules", "koffi", "package.json")) &&
     existsSync(
       path.join(
         candidateDir,

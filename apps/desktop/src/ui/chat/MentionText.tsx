@@ -68,11 +68,10 @@ export function MentionText({ text, catalog }: { text: string; catalog: MentionC
   const segments = parseComposerSegments(text, catalog);
   return (
     <>
-      {segments.map((segment, index) =>
+      {segments.map((segment) =>
         segment.type === "mention" ? (
           <MentionChip
-            // index is stable for a derived, render-only projection of the text
-            key={index}
+            key={`mention:${segment.kind}:${segment.name}:${segment.start}:${segment.end}`}
             kind={segment.kind}
             name={segment.name}
             item={catalog.items.find(
@@ -80,7 +79,7 @@ export function MentionText({ text, catalog }: { text: string; catalog: MentionC
             )}
           />
         ) : (
-          <span key={index}>{segment.text}</span>
+          <span key={`text:${segment.start}:${segment.end}`}>{segment.text}</span>
         ),
       )}
     </>

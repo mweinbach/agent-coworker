@@ -11,7 +11,8 @@ describe("Canvas file reads", () => {
     expect(source).not.toContain("readFile, writeFile");
     expect(source).not.toContain("readFile({ path })");
     expect(source).not.toContain("readFileForPreview({ path })");
-    expect(source.match(/readFileForPreview\(\{ path, maxBytes: CANVAS_PREVIEW_MAX_BYTES \}\)/g))
-      .toHaveLength(2);
+    expect(
+      source.match(/readFileForPreview\(\{ path, maxBytes: CANVAS_PREVIEW_MAX_BYTES \}\)/g),
+    ).toHaveLength(2);
   });
 });

@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 
 import {
   deriveUsageCostBreakdown,
-  type SessionUsageSnapshot,
   SessionCostTracker,
+  type SessionUsageSnapshot,
 } from "../src/session/costTracker";
 
 describe("SessionCostTracker", () => {

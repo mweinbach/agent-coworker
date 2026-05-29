@@ -124,7 +124,10 @@ function matchMentionAt(
   // names are longest-first, so the first match is the greedy/longest one.
   for (const name of catalog.names) {
     const candidate = text.slice(atIndex + 1, atIndex + 1 + name.length);
-    if (candidate.length !== name.length || mentionLookupKey(candidate) !== mentionLookupKey(name)) {
+    if (
+      candidate.length !== name.length ||
+      mentionLookupKey(candidate) !== mentionLookupKey(name)
+    ) {
       continue;
     }
     const afterIndex = atIndex + 1 + name.length;

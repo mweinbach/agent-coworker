@@ -154,8 +154,9 @@ describe("codex app-server resolver", () => {
 
     expect(status.source).toBe("managed");
     expect(status.version).toBe("0.129.0");
-    expect(status.command).toContain(path.join(".cowork", "codex-app-server", "current"));
-    expect(await fs.readFile(status.command!, "utf8")).toBe("managed app-server");
+    expect(status.command).toContain(path.join(".cowork", "codex-app-server", "versions"));
+    const statusCommand = status.command ?? "";
+    expect(await fs.readFile(statusCommand, "utf8")).toBe("managed app-server");
 
     const managed = await resolveCodexAppServerCommand({
       homeDir,
@@ -164,6 +165,82 @@ describe("codex app-server resolver", () => {
       spawnForResult: async () => ({ ok: false, stdout: "", stderr: "" }),
     });
     expect(managed.source).toBe("managed");
+    expect(managed.version).toBe("0.129.0");
+  });
+
+  test.serial(
+    "prefers the newest versioned app-server on Windows when current is stale",
+    async () => {
+      const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-stale-current-"));
+      const target = { platform: "win32" as const, arch: "x64" };
+      const currentPath = __internal.managedCurrentPath(homeDir, target);
+      const oldVersionPath = __internal.managedExecutablePath(homeDir, "0.133.0", target);
+      const newVersionPath = __internal.managedExecutablePath(homeDir, "0.135.0", target);
+
+      await fs.mkdir(path.dirname(currentPath), { recursive: true });
+      await fs.mkdir(path.dirname(oldVersionPath), { recursive: true });
+      await fs.mkdir(path.dirname(newVersionPath), { recursive: true });
+      await fs.writeFile(currentPath, "old-current", "utf8");
+      await fs.writeFile(`${currentPath}.version`, "0.133.0\n", "utf8");
+      await fs.writeFile(`${currentPath}.tmp`, "new-copy-left-by-locked-rename", "utf8");
+      await fs.writeFile(oldVersionPath, "old-version", "utf8");
+      await fs.writeFile(`${oldVersionPath}.version`, "0.133.0\n", "utf8");
+      await fs.writeFile(newVersionPath, "new-version", "utf8");
+      await fs.writeFile(`${newVersionPath}.version`, "0.135.0\n", "utf8");
+
+      const command = await resolveCodexAppServerCommand({
+        homeDir,
+        platform: "win32",
+        arch: "x64",
+        spawnForResult: async () => ({ ok: false, stdout: "", stderr: "" }),
+      });
+
+      expect(command).toEqual({
+        command: newVersionPath,
+        args: [],
+        source: "managed",
+        version: "0.135.0",
+      });
+    },
+  );
+
+  test.serial("keeps Windows update usable when current promotion is locked", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-locked-current-"));
+    let attemptedPromotion = false;
+
+    const status = await updateManagedCodexAppServer(
+      {},
+      {
+        homeDir,
+        platform: "win32",
+        arch: "x64",
+        fetchImpl: fakeReleaseFetch("0.129.0"),
+        spawnForResult: async () => ({ ok: false, stdout: "", stderr: "" }),
+        promoteManagedInstall: async () => {
+          attemptedPromotion = true;
+          const error = new Error("current executable is locked") as NodeJS.ErrnoException;
+          error.code = "EPERM";
+          throw error;
+        },
+      },
+    );
+
+    const statusCommand = status.command ?? "";
+    expect(attemptedPromotion).toBe(true);
+    expect(status).toMatchObject({
+      source: "managed",
+      version: "0.129.0",
+      command: expect.stringContaining(path.join(".cowork", "codex-app-server", "versions")),
+    });
+    expect(await fs.readFile(statusCommand, "utf8")).toBe("managed app-server");
+
+    const managed = await resolveCodexAppServerCommand({
+      homeDir,
+      platform: "win32",
+      arch: "x64",
+      spawnForResult: async () => ({ ok: false, stdout: "", stderr: "" }),
+    });
+    expect(managed.command).toBe(statusCommand);
     expect(managed.version).toBe("0.129.0");
   });
 

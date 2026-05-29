@@ -279,7 +279,7 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
     const committedReferences = drained.flatMap((steer) => steer.references ?? []);
     const resolvedReferences = await resolveSteerReferences(committedReferences);
     mergeReferencedPlugins(resolvedReferences.plugins);
-    const skillContext = renderReferencedSkillsForSteer(resolvedReferences.skills);
+    const referenceContext = renderSteerReferenceContext(resolvedReferences);
 
     const steerMessages: ModelMessage[] = [];
     for (const [index, steer] of drained.entries()) {
@@ -288,8 +288,8 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
         steer.attachments,
         steer.inputParts,
       );
-      if (index === 0 && skillContext) {
-        content = prependReferenceContextToContent(content, skillContext);
+      if (index === 0 && referenceContext) {
+        content = prependReferenceContextToContent(content, referenceContext);
       }
       steerMessages.push({ role: "user", content });
     }

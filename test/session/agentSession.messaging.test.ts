@@ -608,6 +608,86 @@ describe("AgentSession", () => {
       ).toBe(false);
     });
 
+    test("injects referenced steer plugin context into the same prepared model step", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-steer-pluginref-"));
+      const pluginRoot = path.join(dir, ".cowork", "plugins", "demo-plugin");
+      const pluginManifestDir = path.join(pluginRoot, ".cowork-plugin");
+      const pluginSkillDir = path.join(pluginRoot, "skills", "demo-skill");
+      await fs.mkdir(pluginSkillDir, { recursive: true });
+      await fs.mkdir(pluginManifestDir, { recursive: true });
+      await fs.writeFile(
+        path.join(pluginManifestDir, "plugin.json"),
+        JSON.stringify({
+          name: "demo-plugin",
+          description: "Demo plugin",
+          skills: "./skills",
+          interface: { displayName: "Demo Plugin" },
+        }),
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(pluginSkillDir, "SKILL.md"),
+        [
+          "---",
+          'name: "demo-skill"',
+          'description: "Demo skill"',
+          "---",
+          "",
+          "Demo skill body",
+        ].join("\n"),
+        "utf-8",
+      );
+      const config = {
+        ...makeConfig(dir),
+        workspacePluginsDir: path.join(dir, ".cowork", "plugins"),
+      };
+      const { session } = makeSession({ config });
+      const stepMessages: any[][] = [];
+      let allowSecondStep!: () => void;
+
+      mockRunTurn.mockImplementation(async (params: any) => {
+        const initialMessages = [{ role: "user", content: "go" }];
+        const stepOne = await params.prepareStep?.({ stepNumber: 1, messages: initialMessages });
+        stepMessages.push(stepOne?.messages ?? initialMessages);
+
+        await new Promise<void>((resolve) => {
+          allowSecondStep = resolve;
+        });
+
+        const stepTwo = await params.prepareStep?.({
+          stepNumber: 2,
+          messages: stepMessages[0]!,
+        });
+        stepMessages.push(stepTwo?.messages ?? stepMessages[0]!);
+
+        return {
+          text: "done",
+          reasoningText: undefined,
+          responseMessages: [{ role: "assistant", content: "done" }],
+        };
+      });
+
+      const turnPromise = session.sendUserMessage("go");
+      await new Promise((r) => setTimeout(r, 10));
+
+      await session.sendSteerMessage(
+        "use the referenced plugin",
+        session.activeTurnId!,
+        "steer-plugin-ref",
+        undefined,
+        undefined,
+        [{ kind: "plugin", name: "demo-plugin" }],
+      );
+      allowSecondStep();
+      await turnPromise;
+
+      expect(stepMessages).toHaveLength(2);
+      const serializedStep = JSON.stringify(stepMessages[1]);
+      expect(serializedStep).toContain("## Referenced Plugins");
+      expect(serializedStep).toContain("Demo Plugin");
+      expect(serializedStep).toContain("demo-skill");
+    });
+
     test("active steer handlers receive referenced skill context before delivery", async () => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-active-steer-skillref-"));
       const skillsDir = path.join(dir, "skills");
@@ -1306,6 +1386,62 @@ describe("AgentSession", () => {
         clientMessageId: "msg-attachment",
       });
       await expect(fs.readFile(path.join(uploadsDir, "photo.png"), "utf8")).resolves.toBe("hello");
+    });
+
+    test("keeps referenced skill context in ordered file turns", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-ordered-skillref-"));
+      const uploadsDir = path.join(dir, "custom-uploads");
+      const skillsDir = path.join(dir, "skills");
+      const skillDir = path.join(skillsDir, "file-turn-skill");
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.writeFile(
+        path.join(skillDir, "SKILL.md"),
+        [
+          "---",
+          'name: "file-turn-skill"',
+          'description: "File turn skill"',
+          "---",
+          "",
+          "FILE-TURN-SKILL-BODY-MARKER",
+        ].join("\n"),
+        "utf-8",
+      );
+      const { session } = makeSession({
+        config: {
+          ...makeConfig(dir),
+          uploadsDirectory: uploadsDir,
+          skillsDirs: [skillsDir],
+        },
+      });
+
+      await session.sendUserMessage(
+        "summarize this",
+        "msg-ordered-skill",
+        undefined,
+        [
+          {
+            filename: "note.txt",
+            contentBase64: Buffer.from("hello").toString("base64"),
+            mimeType: "text/plain",
+          },
+        ],
+        [
+          { type: "text", text: "summarize this" },
+          {
+            type: "file",
+            filename: "note.txt",
+            contentBase64: Buffer.from("hello").toString("base64"),
+            mimeType: "text/plain",
+          },
+        ],
+        [{ kind: "skill", name: "file-turn-skill" }],
+      );
+
+      const call = mockRunTurn.mock.calls.at(-1)?.[0] as any;
+      const content = call.messages.at(-1)?.content;
+      expect(JSON.stringify(content)).toContain("summarize this");
+      expect(JSON.stringify(content)).toContain("FILE-TURN-SKILL-BODY-MARKER");
+      await expect(fs.readFile(path.join(uploadsDir, "note.txt"), "utf8")).resolves.toBe("hello");
     });
 
     test("includes attached MP3 label in text user_message events without mutating model input text", async () => {

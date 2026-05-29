@@ -341,6 +341,8 @@ async function syncFoundationModelsSdk(opts: {
   const currentLooksComplete =
     (await pathExists(path.join(opts.dest, "dist", "index.js"))) &&
     (await pathExists(path.join(opts.dest, "native", "libFoundationModels.dylib"))) &&
+    (await pathExists(path.join(opts.dest, "node_modules", "koffi", "index.js"))) &&
+    (await pathExists(path.join(opts.dest, "node_modules", "koffi", "package.json"))) &&
     (await pathExists(
       path.join(
         opts.dest,
@@ -665,6 +667,8 @@ if (import.meta.main) {
 }
 
 export const __internal = {
+  ensureFoundationModelsSdkInputs,
+  syncFoundationModelsSdk,
   ensureWindowsAiElectronInputs,
   syncWindowsAiElectronPackage,
 };

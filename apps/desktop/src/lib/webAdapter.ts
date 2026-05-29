@@ -571,6 +571,11 @@ export function createWebAdapter(): DesktopApi {
       return resolved?.path ?? candidate.trim();
     },
 
+    async pickDirectory(opts): Promise<string | null> {
+      const candidate = window.prompt(opts?.title ?? "Directory path");
+      return candidate?.trim() ? candidate.trim() : null;
+    },
+
     async showContextMenu(opts): Promise<string | null> {
       return await showBrowserActionSheet(opts.items);
     },

@@ -8,6 +8,11 @@ export { DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS } from "../../../../src/shared/toolO
 import { persistentAgentSummarySchema } from "../../../../src/shared/agents";
 import { sessionSnapshotSchema } from "../../../../src/shared/sessionSnapshot";
 
+export type {
+  ImportableItem,
+  ImportableKind,
+  ImportSource,
+} from "../../../../src/import";
 export type { SessionEvent } from "../../../../src/server/protocol";
 export type {
   CodexAppServerInstallStatus,
@@ -17,6 +22,7 @@ export type { OpenAiNativeConnector } from "../../../../src/shared/openaiNativeC
 export type {
   ApprovalRiskCode,
   ChildModelRoutingMode,
+  MarketplaceSkillCatalogEntry,
   MCPServerConfig,
   PluginCatalogEntry,
   PluginCatalogSnapshot,
@@ -31,6 +37,7 @@ export type {
   SkillMutationTargetScope,
   SkillUpdateCheckResult,
   TodoItem,
+  TurnReference,
 } from "../../../../src/types";
 export { isInstalledPluginCatalogEntry, PROVIDER_NAMES } from "../../../../src/types";
 

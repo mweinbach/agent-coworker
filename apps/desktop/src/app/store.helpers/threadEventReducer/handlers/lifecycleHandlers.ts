@@ -7,9 +7,10 @@ import type { ApprovalPrompt, AskPrompt } from "../../../types";
 import {
   clearPendingThreadSteers,
   markPendingThreadSteerAccepted,
-  prependPendingThreadMessage,
+  prependPendingThreadMessageWithAttachments,
   RUNTIME,
   shiftPendingThreadAttachments,
+  shiftPendingThreadReferences,
 } from "../../runtimeState";
 import { sortAgentSummaries } from "../../threadEventReducerContext";
 import type { HandlerDispatch, HandlerModuleContext } from "./shared";
@@ -95,17 +96,18 @@ export function handleLifecycleThreadEvent(
     if (pendingFirstMessage?.trim()) {
       if (resumedBusy) {
         if (!pendingFirstMessageQueued) {
-          prependPendingThreadMessage(threadId, pendingFirstMessage);
+          prependPendingThreadMessageWithAttachments(threadId, pendingFirstMessage);
         }
       } else if (hasPendingWorkspaceDefaultApply(threadId)) {
         if (!pendingFirstMessageQueued) {
-          prependPendingThreadMessage(threadId, pendingFirstMessage);
+          prependPendingThreadMessageWithAttachments(threadId, pendingFirstMessage);
         }
       } else {
         if (pendingFirstMessageQueued) {
           acceptedPendingFirstMessage = flushOneQueuedThreadMessageIfReady(get, set, threadId);
         } else {
           const firstMsgAttachments = shiftPendingThreadAttachments(threadId);
+          const firstMsgReferences = shiftPendingThreadReferences(threadId);
           acceptedPendingFirstMessage = sendUserMessageToThread(
             get,
             set,
@@ -113,6 +115,7 @@ export function handleLifecycleThreadEvent(
             pendingFirstMessage,
             undefined,
             firstMsgAttachments,
+            firstMsgReferences,
           );
         }
       }

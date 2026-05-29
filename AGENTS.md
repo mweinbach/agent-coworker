@@ -8,7 +8,7 @@ All logic for the application should be done in the harness itself, consider the
 
 When you run into an issue, create tests to target the error. Then work on that error until the test passes. Make sure we have tests for all error cases to prevent regressions.
 
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/mweinbach/agent-coworker)
+[Ask DeepWiki](https://deepwiki.com/mweinbach/agent-coworker)
 
 ## Project Structure & Module Organization
 
@@ -38,6 +38,8 @@ When you run into an issue, create tests to target the error. Then work on that 
 Example (CLI with initial workspace): `bun run cli -- --dir /path/to/project`. Desktop `bun run start` does not forward `--dir` (use in-app workspace selection).
 
 Always run tests while doing work, make sure you run these tests.
+
+While debugging an issue, make sure to recreate the issue, figure out why it's happening, then fix it. Try not to write extra code for simple fixes. Simplicity is key!
 
 ## Coding Style & Naming Conventions
 
@@ -252,8 +254,9 @@ Durable rules distilled from prior corrections. Apply before editing, not after.
 - When both an installed app and a repo-local app bundle exist, verify the exact on-disk bundle path for the running process instead of trusting the shared app name or bundle ID.
 - When a tray/menu-bar utility window and a quick chat window both exist, treat them as separate surfaces: tray clicks should open the explicitly requested utility popup instead of reusing quick chat.
 - For shared dialogs/modals: portal to `document.body`, own the centered overlay, never let the backdrop sit at a higher `z-`* than the dialog body.
-- For desktop renderer wrappers re-exporting core types, prefer repo-root relative imports over `@cowork/*` aliases — `electron-vite` accepts the alias in TS but Rollup can fail at renderer build.
+- For desktop renderer wrappers re-exporting core types, prefer repo-root relative imports over `@cowork/`* aliases — `electron-vite` accepts the alias in TS but Rollup can fail at renderer build.
 - For Electron preloads, bundle deps like `zod` into `out/preload/preload.js`; do not externalize runtime deps.
 - For Electron main-process CommonJS deps, use `createRequire` interop, not named ESM imports.
 - For dense desktop settings panels, prefer compact controls and separators over nested rounded subcards.
 - Make sure all platform-specific desktop behavior is properly handled and tested for that platform. When making changes with native elements, do not rely on platform defaults or implicit behavior — always specify explicit styles and behaviors.
+

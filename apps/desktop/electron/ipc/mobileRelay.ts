@@ -26,7 +26,7 @@ function emitStateToAllWindows(windows: BrowserWindow[], payload: unknown) {
   }
 }
 
-export function registerMobileRelayIpc(context: DesktopIpcModuleContext): void {
+export function registerMobileRelayIpc(context: DesktopIpcModuleContext): () => void {
   const { deps, handleDesktopInvoke, parseWithSchema, workspaceRoots } = context;
 
   const disabledState = () =>
@@ -70,9 +70,10 @@ export function registerMobileRelayIpc(context: DesktopIpcModuleContext): void {
     }
   };
 
-  deps.mobileRelayBridge.on("stateChanged", (state) => {
+  const emitMobileRelayState = (state: unknown) => {
     emitStateToAllWindows(BrowserWindow.getAllWindows(), state);
-  });
+  };
+  deps.mobileRelayBridge.on("stateChanged", emitMobileRelayState);
 
   handleDesktopInvoke(
     DESKTOP_IPC_CHANNELS.mobileRelayStart,
@@ -157,4 +158,8 @@ export function registerMobileRelayIpc(context: DesktopIpcModuleContext): void {
       );
     },
   );
+
+  return () => {
+    deps.mobileRelayBridge.off("stateChanged", emitMobileRelayState);
+  };
 }

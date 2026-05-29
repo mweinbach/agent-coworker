@@ -25,7 +25,13 @@ import type { ProviderContinuationState } from "./shared/providerContinuation";
 import type { AgentControl } from "./tools";
 import { createTools, filterToolsForCodexDynamicBoundary } from "./tools";
 import { buildTurnSystemPrompt } from "./turnSystemPrompt";
-import type { AgentConfig, HarnessContextState, ModelMessage, TodoItem } from "./types";
+import type {
+  AgentConfig,
+  HarnessContextState,
+  ModelMessage,
+  ReferencedPluginContext,
+  TodoItem,
+} from "./types";
 import { resolveAuthHomeDir } from "./utils/authHome";
 
 /** Maximum time (ms) to wait for the legacy stream to drain after response promises settle. */
@@ -76,6 +82,8 @@ export interface RunTurnParams {
   allMessages?: ModelMessage[];
   providerState?: ProviderContinuationState | null;
   harnessContext?: HarnessContextState | null;
+  /** Plugins the user @-mentioned this turn; rendered as a soft-awareness system block. */
+  referencedPlugins?: ReferencedPluginContext[];
   agentControl?: AgentControl;
   prepareStep?: RuntimePrepareStep;
   registerSteerHandler?: RuntimeRegisterSteerHandler;
@@ -414,7 +422,13 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       .filter((name) => name.startsWith("mcp__"))
       .sort();
     const turnSystem = appendRuntimeInstructions(
-      buildTurnSystemPrompt(system, config, mcpToolNames, params.harnessContext),
+      buildTurnSystemPrompt(
+        system,
+        config,
+        mcpToolNames,
+        params.harnessContext,
+        params.referencedPlugins,
+      ),
       turnToolEnv,
     );
     const turnProviderOptions = config.providerOptions;

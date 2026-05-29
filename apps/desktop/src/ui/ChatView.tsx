@@ -38,6 +38,7 @@ import {
   parseA2uiActionMessage,
   resolveComposerBusyPolicy,
 } from "./chat/chatLogic";
+import { buildMentionCatalog, extractReferencesFromText } from "./chat/composerMentions";
 import { NewChatLanding } from "./chat/NewChatLanding";
 import { loadOverflowCitationContext } from "./chat/overflowCitationContext";
 import { normalizeFeedForToolCards } from "./chat/toolCards/legacyToolLogs";
@@ -78,6 +79,15 @@ export function ChatView() {
     return s.threadRuntimeById[s.selectedThreadId] ?? null;
   });
   const composerText = useAppStore((s) => s.composerText);
+  const composerWorkspaceId = thread?.workspaceId ?? "";
+  const workspaceSkills = useAppStore((s) => s.workspaceRuntimeById[composerWorkspaceId]?.skills);
+  const workspacePluginsCatalog = useAppStore(
+    (s) => s.workspaceRuntimeById[composerWorkspaceId]?.pluginsCatalog ?? null,
+  );
+  const mentionCatalog = useMemo(
+    () => buildMentionCatalog(workspaceSkills, workspacePluginsCatalog),
+    [workspaceSkills, workspacePluginsCatalog],
+  );
   const hasPromptModal = useAppStore((s) => s.promptModal !== null);
   const hasFilePreview = useAppStore((s) => s.filePreview !== null);
   const developerMode = useAppStore((s) => s.developerMode);
@@ -347,8 +357,9 @@ export function ChatView() {
   const contextValue = useMemo(
     () => ({
       developerMode,
+      mentionCatalog,
     }),
-    [developerMode],
+    [developerMode, mentionCatalog],
   );
 
   const workspace = useAppStore((s) => {
@@ -551,7 +562,13 @@ export function ChatView() {
             return;
           }
 
-          const accepted = await sendMessage(composerText, busyPolicy, attachments);
+          const references = extractReferencesFromText(composerText, mentionCatalog);
+          const accepted = await sendMessage(
+            composerText,
+            busyPolicy,
+            attachments,
+            references.length > 0 ? references : undefined,
+          );
           if (accepted && busyPolicy !== "steer") {
             clearPendingAttachments();
             setAttachmentPickerError(null);
@@ -572,6 +589,7 @@ export function ChatView() {
     [
       clearPendingAttachments,
       composerText,
+      mentionCatalog,
       pendingAttachments,
       pendingTurnStart?.status,
       preparingAttachments,
@@ -707,6 +725,7 @@ export function ChatView() {
           composerText={composerText}
           setComposerText={setComposerText}
           onComposerKeyDown={onComposerKeyDown}
+          mentionCatalog={mentionCatalog}
           placeholder={placeholder}
           textareaRef={textareaRef}
           fileInputRef={fileInputRef}

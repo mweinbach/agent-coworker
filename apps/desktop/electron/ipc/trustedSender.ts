@@ -10,9 +10,9 @@ const __dirname = path.dirname(__filename);
 const PACKAGED_RENDERER_DIR = path.resolve(path.join(__dirname, "../renderer"));
 
 function resolveSenderUrl(event: IpcMainInvokeEvent): string {
-  const senderFrameUrl = event.senderFrame?.url?.trim();
-  if (senderFrameUrl) {
-    return senderFrameUrl;
+  const senderFrameUrl = event.senderFrame?.url;
+  if (typeof senderFrameUrl === "string") {
+    return senderFrameUrl.trim();
   }
   return event.sender.getURL();
 }

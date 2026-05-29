@@ -1,5 +1,6 @@
 import type { AgentExecutionState } from "../../../shared/agents";
 import { supportsProviderManagedContinuationProvider } from "../../../shared/providerContinuation";
+import type { TurnReference } from "../../../types";
 import type { FileAttachment, OrderedInputPart } from "../../jsonrpc/routes/shared";
 import { reasoningModeForProvider } from "../../modelStream";
 import type { HistoryManager } from "../HistoryManager";
@@ -13,6 +14,11 @@ import {
   getPartialTurnResponseMessages,
   resolvePartialTurnProgressSource,
 } from "./partialTurnError";
+import {
+  renderReferencedSkillsInjection,
+  resolveReferencedPlugins,
+  resolveReferencedSkills,
+} from "./referenceInjection";
 import { createRunTurnInvocation } from "./runTurnInvocation";
 import type { SteerCoordinator } from "./steerCoordinator";
 import {
@@ -62,6 +68,7 @@ export type UserMessageTurnRunner = {
     displayText?: string,
     attachments?: FileAttachment[],
     inputParts?: OrderedInputPart[],
+    references?: TurnReference[],
   ) => Promise<void>;
 };
 
@@ -116,6 +123,7 @@ export function createUserMessageTurnRunner(
     displayText?: string,
     attachments?: FileAttachment[],
     inputParts?: OrderedInputPart[],
+    references?: TurnReference[],
   ) => {
     if (context.state.running) {
       context.emitError("busy", "session", "Agent is busy");
@@ -157,6 +165,7 @@ export function createUserMessageTurnRunner(
     const turnStartedAt = Date.now();
     const turnId = makeTurnId();
     context.state.currentTurnId = turnId;
+    context.state.turnReferenceInjectionCounter = 0;
     context.state.currentTurnOutcome = "completed";
     updateSessionExecutionState("running");
     const cause: "user_message" | "command" = visibleText.startsWith("/")
@@ -214,7 +223,26 @@ export function createUserMessageTurnRunner(
         model: context.state.config.model,
       });
 
-      const userMessageContent = await buildUserMessageContent(text, attachments, inputParts);
+      // Apply @-mentioned references BEFORE building the user message so a forced
+      // skill's body can be folded into the model-facing text. This is
+      // provider-agnostic: stateful interaction APIs reject synthetic tool-call
+      // history. The user's typed text stays the UI-visible message (`visibleText`).
+      context.state.turnReferencedPlugins = undefined;
+      let skillInjectionText = "";
+      if (references && references.length > 0) {
+        const referencedSkills = await resolveReferencedSkills({ context, references, log });
+        skillInjectionText = renderReferencedSkillsInjection(referencedSkills);
+        const referencedPlugins = await resolveReferencedPlugins(context, references);
+        if (referencedPlugins.length > 0) {
+          context.state.turnReferencedPlugins = referencedPlugins;
+        }
+      }
+      const modelFacingText = skillInjectionText ? `${text}\n\n${skillInjectionText}` : text;
+      const userMessageContent = await buildUserMessageContent(
+        modelFacingText,
+        attachments,
+        inputParts,
+      );
       historyManager.appendMessagesToHistory([{ role: "user", content: userMessageContent }]);
       metadataManager.maybeGenerateTitleFromQuery(text || visibleText);
       context.queuePersistSessionSnapshot("session.user_message");
@@ -314,7 +342,8 @@ export function createUserMessageTurnRunner(
           continue;
         }
 
-        const lateSteersCommitted = (await steerCoordinator.commitPendingSteers()).length > 0;
+        const lateSteersCommitted =
+          (await steerCoordinator.commitPendingSteers()).committedCount > 0;
         continueSameTurn = lateSteersCommitted && !context.state.abortController?.signal.aborted;
         context.state.acceptingSteers =
           continueSameTurn && tracker.startedStepCount < context.state.maxSteps;
@@ -391,6 +420,7 @@ export function createUserMessageTurnRunner(
       context.state.acceptingSteers = false;
       context.state.activeSteerHandler = null;
       context.state.pendingSteers.splice(0);
+      context.state.turnReferencedPlugins = undefined;
       metadataManager.updateSessionInfo({
         executionState: settledExecutionState(),
         lastMessagePreview,

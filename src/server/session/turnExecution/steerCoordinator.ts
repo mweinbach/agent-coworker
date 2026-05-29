@@ -1,14 +1,25 @@
 import path from "node:path";
-
+import { renderReferencedPluginsSection } from "../../../sessionContext/renderReferencedPluginsSection";
 import {
   formatUserInputDisplayText,
   getAttachmentTotalBase64Size,
   MAX_TURN_ATTACHMENT_TOTAL_BASE64_SIZE,
 } from "../../../shared/attachments";
-import type { ModelMessage, ServerErrorCode, ServerErrorSource } from "../../../types";
+import type {
+  ModelMessage,
+  ReferencedPluginContext,
+  ServerErrorCode,
+  ServerErrorSource,
+  TurnReference,
+} from "../../../types";
 import type { FileAttachment, OrderedInputPart } from "../../jsonrpc/routes/shared";
 import type { HistoryManager } from "../HistoryManager";
 import type { SessionContext } from "../SessionContext";
+import {
+  type ReferencedSkillContext,
+  resolveReferencedPlugins,
+  resolveReferencedSkills,
+} from "./referenceInjection";
 
 const MAX_PENDING_STEER_COUNT = 32;
 
@@ -60,16 +71,80 @@ export type SteerCoordinator = {
     clientMessageId?: string,
     attachments?: FileAttachment[],
     inputParts?: OrderedInputPart[],
+    references?: TurnReference[],
   ) => Promise<void>;
-  commitPendingSteers: () => Promise<ModelMessage[]>;
+  commitPendingSteers: () => Promise<{ messages: ModelMessage[]; committedCount: number }>;
   drainPendingSteers: (
     stepMessages: ModelMessage[],
   ) => Promise<{ messages: ModelMessage[] } | undefined>;
   rejectPendingSteers: (message: string) => void;
 };
 
+type ResolvedSteerReferences = {
+  skills: ReferencedSkillContext[];
+  plugins: ReferencedPluginContext[];
+};
+
+function renderReferencedSkillsForSteer(skills: ReferencedSkillContext[]): string {
+  if (skills.length === 0) return "";
+  const lines: string[] = [
+    "## Referenced Skills",
+    "",
+    "The user explicitly referenced the following skill(s) for this steer. Apply these instructions to the steer immediately.",
+    "",
+  ];
+  for (const skill of skills) {
+    lines.push(`### ${skill.name}`, "", skill.body, "");
+  }
+  return lines.join("\n").trim();
+}
+
+function renderSteerReferenceContext(resolved: ResolvedSteerReferences): string {
+  const sections = [
+    renderReferencedSkillsForSteer(resolved.skills),
+    renderReferencedPluginsSection(resolved.plugins),
+  ].filter(Boolean);
+  return sections.join("\n\n");
+}
+
+function prependReferenceContextToContent(
+  content: ModelMessage["content"],
+  referenceContext: string,
+): ModelMessage["content"] {
+  if (!referenceContext.trim()) return content;
+  const prefix = `Reference context for this steer:\n\n${referenceContext}`;
+  if (Array.isArray(content)) {
+    return [{ type: "text", text: prefix }, ...content];
+  }
+  return `${prefix}\n\n${typeof content === "string" ? content : ""}`.trim();
+}
+
 export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordinator {
   const { context, historyManager } = deps;
+
+  const log = (line: string) => context.emit({ type: "log", sessionId: context.id, line });
+
+  const mergeReferencedPlugins = (incoming: ReferencedPluginContext[]) => {
+    if (incoming.length === 0) return;
+    const byName = new Map(
+      (context.state.turnReferencedPlugins ?? []).map((plugin) => [plugin.name, plugin] as const),
+    );
+    for (const plugin of incoming) byName.set(plugin.name, plugin);
+    context.state.turnReferencedPlugins = [...byName.values()];
+  };
+
+  const resolveSteerReferences = async (
+    references: TurnReference[] | undefined,
+  ): Promise<ResolvedSteerReferences> => {
+    if (!references || references.length === 0) {
+      return { skills: [], plugins: [] };
+    }
+    const [skills, plugins] = await Promise.all([
+      resolveReferencedSkills({ context, references, log }),
+      resolveReferencedPlugins(context, references),
+    ]);
+    return { skills, plugins };
+  };
 
   const sendSteerMessage = async (
     text: string,
@@ -77,6 +152,7 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
     clientMessageId?: string,
     attachments?: FileAttachment[],
     inputParts?: OrderedInputPart[],
+    references?: TurnReference[],
   ) => {
     if (!context.state.running) {
       context.emitError("validation_failed", "session", "No active turn to steer.");
@@ -120,14 +196,22 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
     if (activeSteerHandler) {
       try {
         const content = await deps.buildUserMessageContent(text, attachments, inputParts);
-        await activeSteerHandler({ text, expectedTurnId: currentTurnId, content });
-        historyManager.appendMessagesToHistory([{ role: "user", content }]);
+        const resolvedReferences = await resolveSteerReferences(references);
+        const deliveryContent = prependReferenceContextToContent(
+          content,
+          renderSteerReferenceContext(resolvedReferences),
+        );
+        await activeSteerHandler({ text, expectedTurnId: currentTurnId, content: deliveryContent });
+        // Persist the model-facing content (with any forced-skill text folded in)
+        // as plain text — accepted by all providers, unlike synthetic tool calls.
+        historyManager.appendMessagesToHistory([{ role: "user", content: deliveryContent }]);
         context.emit({
           type: "user_message",
           sessionId: context.id,
           text: displayText,
           ...(clientMessageId ? { clientMessageId } : {}),
         });
+        mergeReferencedPlugins(resolvedReferences.plugins);
         context.queuePersistSessionSnapshot("session.steer_committed");
         context.emit({
           type: "steer_accepted",
@@ -170,6 +254,7 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
       ...(clientMessageId ? { clientMessageId } : {}),
       ...(attachments && attachments.length > 0 ? { attachments } : {}),
       ...(inputParts && inputParts.length > 0 ? { inputParts } : {}),
+      ...(references && references.length > 0 ? { references } : {}),
       acceptedAt: new Date().toISOString(),
     });
     context.emit({
@@ -181,17 +266,31 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
     });
   };
 
-  const commitPendingSteers = async (): Promise<ModelMessage[]> => {
+  const commitPendingSteers = async (): Promise<{
+    messages: ModelMessage[];
+    committedCount: number;
+  }> => {
     const drained = context.state.pendingSteers.splice(0);
-    if (drained.length === 0) return [];
+    if (drained.length === 0) return { messages: [], committedCount: 0 };
+
+    // Resolve references first so a forced skill's body can be folded into the
+    // model-facing steer message as plain text (provider-agnostic). Plugin
+    // awareness flows through the turn-scoped system block via mergeReferencedPlugins.
+    const committedReferences = drained.flatMap((steer) => steer.references ?? []);
+    const resolvedReferences = await resolveSteerReferences(committedReferences);
+    mergeReferencedPlugins(resolvedReferences.plugins);
+    const referenceContext = renderSteerReferenceContext(resolvedReferences);
 
     const steerMessages: ModelMessage[] = [];
-    for (const steer of drained) {
-      const content = await deps.buildUserMessageContent(
+    for (const [index, steer] of drained.entries()) {
+      let content: ModelMessage["content"] = await deps.buildUserMessageContent(
         steer.text,
         steer.attachments,
         steer.inputParts,
       );
+      if (index === 0 && referenceContext) {
+        content = prependReferenceContextToContent(content, referenceContext);
+      }
       steerMessages.push({ role: "user", content });
     }
     historyManager.appendMessagesToHistory(steerMessages);
@@ -204,16 +303,16 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
       });
     }
     context.queuePersistSessionSnapshot("session.steer_committed");
-    return steerMessages;
+    return { messages: steerMessages, committedCount: drained.length };
   };
 
   const drainPendingSteers = async (
     stepMessages: ModelMessage[],
   ): Promise<{ messages: ModelMessage[] } | undefined> => {
-    const steerMessages = await commitPendingSteers();
-    if (steerMessages.length === 0) return undefined;
+    const committed = await commitPendingSteers();
+    if (committed.committedCount === 0) return undefined;
     return {
-      messages: [...stepMessages, ...steerMessages],
+      messages: [...stepMessages, ...committed.messages],
     };
   };
 

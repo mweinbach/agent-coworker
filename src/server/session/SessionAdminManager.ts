@@ -291,6 +291,7 @@ export class SessionAdminManager {
     try {
       const agents = await this.context.deps.listAgentSessionsImpl(this.context.id);
       this.context.emit({ type: "agent_list", sessionId: this.context.id, agents });
+      this.context.queuePersistSessionSnapshot("session.agent_list");
     } catch (err) {
       this.context.emitError(
         "internal_error",
@@ -346,6 +347,7 @@ export class SessionAdminManager {
             : 0,
       });
       this.context.emit({ type: "agent_spawned", sessionId: this.context.id, agent });
+      this.context.queuePersistSessionSnapshot("session.agent_spawned");
     } catch (err) {
       this.context.emitError(
         "internal_error",
@@ -414,6 +416,7 @@ export class SessionAdminManager {
         agents: result.agents,
         readyAgentIds: result.readyAgentIds,
       });
+      this.context.queuePersistSessionSnapshot("session.agent_wait_result");
     } catch (err) {
       this.context.emitError(
         "internal_error",

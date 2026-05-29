@@ -8,7 +8,6 @@ import {
   PromptInputRoot,
   PromptInputStatusRow,
   PromptInputSubmit,
-  PromptInputTextarea,
   PromptInputTools,
 } from "../../components/ai-elements/prompt-input";
 import { Progress } from "../../components/ui/progress";
@@ -16,7 +15,9 @@ import type { ComposerAttachmentFile } from "../../lib/composerAttachments";
 import { cn } from "../../lib/utils";
 import type { ProviderName } from "../../lib/wsProtocol";
 import { MessageBarResizer } from "../layout/MessageBarResizer";
+import { ComposerMentionInput } from "./ComposerMentionInput";
 import { type getComposerSubmitState, resolveComposerBusyPolicy } from "./chatLogic";
+import type { MentionCatalog } from "./composerMentions";
 
 type ComposerSubmitState = ReturnType<typeof getComposerSubmitState>;
 
@@ -42,6 +43,7 @@ export function ChatComposer(props: {
   composerText: string;
   setComposerText: (text: string) => void;
   onComposerKeyDown: (event: ReactKeyboardEvent<HTMLTextAreaElement>) => void;
+  mentionCatalog: MentionCatalog;
   placeholder: string;
   textareaRef: RefObject<HTMLTextAreaElement | null>;
   fileInputRef: RefObject<HTMLInputElement | null>;
@@ -72,6 +74,7 @@ export function ChatComposer(props: {
     composerText,
     setComposerText,
     onComposerKeyDown,
+    mentionCatalog,
     placeholder,
     textareaRef,
     fileInputRef,
@@ -135,14 +138,15 @@ export function ChatComposer(props: {
                   </span>
                 </div>
               ) : null}
-              <PromptInputTextarea
-                ref={textareaRef}
+              <ComposerMentionInput
+                textareaRef={textareaRef}
                 value={composerText}
+                setValue={setComposerText}
+                onKeyDown={onComposerKeyDown}
                 disabled={inputDisabled}
                 placeholder={placeholder}
-                onChange={(event) => setComposerText(event.currentTarget.value)}
-                onKeyDown={onComposerKeyDown}
-                aria-label="Message input"
+                catalog={mentionCatalog}
+                ariaLabel="Message input"
               />
             </PromptInputBody>
             <PromptInputFooter className="gap-3 pt-1">

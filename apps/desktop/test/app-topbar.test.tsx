@@ -1,7 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
-
+import type { ThreadAgentSummary } from "../src/app/types";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
 import { setupJsdom } from "./jsdomHarness";
 
@@ -14,8 +14,17 @@ const sessionUsage = {
   totalTurns: 3,
   totalPromptTokens: 900,
   totalCompletionTokens: 300,
+  totalCachedPromptTokens: 200,
+  totalCacheWritePromptTokens: 100,
   totalTokens: 1200,
   estimatedTotalCostUsd: 0.0245,
+  costBreakdown: {
+    inputCostUsd: 0.001,
+    cachedInputCostUsd: 0.0001,
+    cacheWriteInputCostUsd: 0.0002,
+    outputCostUsd: 0.0232,
+    otherCostUsd: 0,
+  },
   costTrackingAvailable: true,
   byModel: [],
   turns: [],
@@ -41,6 +50,119 @@ const lastTurnUsage = {
   },
 };
 
+const legacySessionUsage = {
+  sessionId: "legacy-session",
+  totalTurns: 3,
+  totalPromptTokens: 3_442_232,
+  totalCompletionTokens: 45_513,
+  totalCachedPromptTokens: 1_497_866,
+  totalTokens: 2_023_803,
+  totalReasoningOutputTokens: 33_924,
+  estimatedTotalCostUsd: 3.5508459,
+  costTrackingAvailable: true,
+  byModel: [
+    {
+      provider: "google" as const,
+      model: "gemini-3.5-flash",
+      turns: 3,
+      totalPromptTokens: 3_442_232,
+      totalCompletionTokens: 45_513,
+      totalCachedPromptTokens: 1_497_866,
+      totalTokens: 2_023_803,
+      totalReasoningOutputTokens: 33_924,
+      estimatedCostUsd: 3.5508459,
+    },
+  ],
+  turns: [
+    {
+      turnId: "turn-1",
+      turnIndex: 1,
+      timestamp: "2026-05-29T13:00:26.616Z",
+      provider: "google" as const,
+      model: "gemini-3.5-flash",
+      usage: {
+        promptTokens: 3_442_232,
+        completionTokens: 45_513,
+        cachedPromptTokens: 1_497_866,
+        reasoningOutputTokens: 33_924,
+        totalTokens: 2_023_803,
+      },
+      estimatedCostUsd: 3.5508459,
+      pricing: {
+        inputPerMillion: 1.5,
+        cachedInputPerMillion: 0.15,
+        outputPerMillion: 9,
+      },
+    },
+  ],
+  budgetStatus: {
+    configured: false,
+    warnAtUsd: null,
+    stopAtUsd: null,
+    warningTriggered: false,
+    stopTriggered: false,
+    currentCostUsd: 3.5508459,
+  },
+  createdAt: "2026-05-29T12:31:40.910Z",
+  updatedAt: "2026-05-29T13:00:26.616Z",
+};
+
+const subagentUsage = {
+  sessionId: "agent-1",
+  totalTurns: 2,
+  totalPromptTokens: 600,
+  totalCompletionTokens: 400,
+  totalCachedPromptTokens: 50,
+  totalTokens: 1000,
+  estimatedTotalCostUsd: 0.01,
+  costBreakdown: {
+    inputCostUsd: 0.002,
+    cachedInputCostUsd: 0.0005,
+    cacheWriteInputCostUsd: 0,
+    outputCostUsd: 0.0075,
+    otherCostUsd: 0,
+  },
+  costTrackingAvailable: true,
+  byModel: [],
+  turns: [],
+  budgetStatus: {
+    configured: false,
+    warnAtUsd: null,
+    stopAtUsd: null,
+    warningTriggered: false,
+    stopTriggered: false,
+    currentCostUsd: 0.01,
+  },
+  createdAt: "2026-03-24T16:02:00.000Z",
+  updatedAt: "2026-03-24T16:04:00.000Z",
+};
+
+const agents: ThreadAgentSummary[] = [
+  {
+    agentId: "agent-1",
+    parentSessionId: "session-1",
+    role: "research",
+    mode: "collaborative",
+    depth: 1,
+    effectiveModel: "gpt-5-mini",
+    title: "Research agent",
+    provider: "openai",
+    createdAt: "2026-03-24T16:02:00.000Z",
+    updatedAt: "2026-03-24T16:04:00.000Z",
+    lifecycleState: "active",
+    executionState: "completed",
+    busy: false,
+    sessionUsage: subagentUsage,
+    lastTurnUsage: {
+      promptTokens: 600,
+      cachedPromptTokens: 50,
+      completionTokens: 400,
+      totalTokens: 1000,
+      estimatedCostUsd: 0.01,
+    },
+  },
+];
+
 describe("desktop app top bar", () => {
   test("renders a left-aligned thread title and opens usage details from it", async () => {
     const harness = setupJsdom();
@@ -64,6 +186,7 @@ describe("desktop app top bar", () => {
             subtitle: "agent-coworker",
             sessionUsage,
             lastTurnUsage,
+            agents,
             managementMode: "thread",
           }),
         );
@@ -116,9 +239,84 @@ describe("desktop app top bar", () => {
 
       expect(container.textContent).toContain("Usage");
       expect(container.textContent).toContain("Estimated cost");
-      expect(container.textContent).toContain("$0.02");
-      expect(container.textContent).toContain("1.2k");
+      expect(container.textContent).toContain("$0.03");
+      expect(container.textContent).toContain("2.2k");
+      expect(container.textContent).toContain("Original input");
+      expect(container.textContent).not.toContain("Cache-read input");
       expect(container.textContent).toContain("Last turn cost");
+
+      const moreButton = container.querySelector('button[aria-label="Show usage details"]');
+      expect(moreButton).not.toBeNull();
+      await act(async () => {
+        moreButton?.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(container.textContent).toContain("Parent cost");
+      expect(container.textContent).toContain("Subagent cost");
+      expect(container.textContent).toContain("Standard-rate input");
+      expect(container.textContent).toContain("Cache-read input");
+      expect(container.textContent).toContain("Cache-write input");
+      expect(container.textContent).toContain("Standard-rate spend");
+      expect(container.textContent).toContain("Output spend");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("maps legacy usage estimates into token spend buckets", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          createElement(AppTopBar, {
+            busy: false,
+            onToggleSidebar: () => {},
+            onNewChat: () => {},
+            sidebarCollapsed: false,
+            sidebarWidth: 280,
+            contextSidebarCollapsed: false,
+            onToggleContextSidebar: () => {},
+            title: "Tesla Robotics and Self-Driving Synergy",
+            subtitle: null,
+            sessionUsage: legacySessionUsage,
+            lastTurnUsage: null,
+            managementMode: "thread",
+          }),
+        );
+      });
+
+      const titleButton = container.querySelector('button[aria-label="Open thread details"]');
+      expect(titleButton).not.toBeNull();
+      await act(async () => {
+        titleButton?.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      const moreButton = container.querySelector('button[aria-label="Show usage details"]');
+      expect(moreButton).not.toBeNull();
+      await act(async () => {
+        moreButton?.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(container.textContent).toContain("Original input");
+      expect(container.textContent).toContain("1.94M");
+      expect(container.textContent).toContain("Cache-read input");
+      expect(container.textContent).toContain("1.50M");
+      expect(container.textContent).toContain("Standard-rate spend");
+      expect(container.textContent).toContain("$2.92");
+      expect(container.textContent).toContain("Cache-read spend");
+      expect(container.textContent).toContain("$0.22");
+      expect(container.textContent).toContain("Output spend");
+      expect(container.textContent).toContain("$0.41");
+      expect(container.textContent).not.toContain("Other estimated spend");
 
       await act(async () => {
         root.unmount();

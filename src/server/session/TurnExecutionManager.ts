@@ -1,3 +1,4 @@
+import type { TurnReference } from "../../types";
 import type { FileAttachment, OrderedInputPart } from "../jsonrpc/routes/shared";
 import type { HistoryManager } from "./HistoryManager";
 import type { InteractionManager } from "./InteractionManager";
@@ -80,6 +81,7 @@ export class TurnExecutionManager {
     clientMessageId?: string,
     attachments?: FileAttachment[],
     inputParts?: OrderedInputPart[],
+    references?: TurnReference[],
   ) {
     return await this.steerCoordinator.sendSteerMessage(
       text,
@@ -87,6 +89,7 @@ export class TurnExecutionManager {
       clientMessageId,
       attachments,
       inputParts,
+      references,
     );
   }
 
@@ -96,6 +99,7 @@ export class TurnExecutionManager {
     displayText?: string,
     attachments?: FileAttachment[],
     inputParts?: OrderedInputPart[],
+    references?: TurnReference[],
   ) {
     return await this.userMessageTurnRunner.sendUserMessage(
       text,
@@ -103,6 +107,7 @@ export class TurnExecutionManager {
       displayText,
       attachments,
       inputParts,
+      references,
     );
   }
 

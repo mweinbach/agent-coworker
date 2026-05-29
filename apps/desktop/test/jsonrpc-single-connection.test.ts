@@ -445,6 +445,7 @@ describe("desktop JSON-RPC single connection path", () => {
     RUNTIME.jsonRpcSockets.clear();
     RUNTIME.pendingThreadAttachments.clear();
     RUNTIME.pendingThreadMessages.clear();
+    RUNTIME.pendingThreadReferences.clear();
     RUNTIME.pendingThreadSteers.clear();
     RUNTIME.pendingWorkspaceDefaultApplyByThread.clear();
     RUNTIME.threadSelectionRequests.clear();
@@ -562,12 +563,15 @@ describe("desktop JSON-RPC single connection path", () => {
     const oneOffWorkspaceId = oneOffState.selectedWorkspaceId;
     if (!oneOffThreadId || !oneOffWorkspaceId) throw new Error("missing one-off thread");
 
+    RUNTIME.pendingThreadReferences.set(oneOffThreadId, [[{ kind: "skill", name: "documents" }]]);
+
     await useAppStore.getState().removeThread(oneOffThreadId);
 
     const state = useAppStore.getState();
     expect(state.workspaces.some((workspace) => workspace.id === oneOffWorkspaceId)).toBe(false);
     expect(state.workspaces.some((workspace) => workspace.id === "ws-jsonrpc")).toBe(true);
     expect(state.threads.some((thread) => thread.id === oneOffThreadId)).toBe(false);
+    expect(RUNTIME.pendingThreadReferences.has(oneOffThreadId)).toBe(false);
     expect(state.selectedWorkspaceId).toBe("ws-jsonrpc");
   });
 
@@ -626,6 +630,7 @@ describe("desktop JSON-RPC single connection path", () => {
       workspaceId: "ws-jsonrpc",
       titleHint: "Draft",
       firstMessage: "hello over jsonrpc",
+      references: [{ kind: "skill", name: "documents" }],
     });
     await flushAsyncWork();
 
@@ -660,6 +665,7 @@ describe("desktop JSON-RPC single connection path", () => {
     expect(jsonRpcRequests.find((entry) => entry.method === "turn/start")?.params).toMatchObject({
       threadId: "jsonrpc-thread-1",
       input: [{ type: "text", text: "hello over jsonrpc" }],
+      references: [{ kind: "skill", name: "documents" }],
       clientMessageId: expect.any(String),
     });
   });

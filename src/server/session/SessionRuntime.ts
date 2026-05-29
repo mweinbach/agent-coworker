@@ -7,7 +7,12 @@ import type {
   AgentSpawnContextOptions,
 } from "../../shared/agents";
 import type { SessionSnapshot } from "../../shared/sessionSnapshot";
-import type { AgentConfig, HarnessContextPayload, MCPServerConfig } from "../../types";
+import type {
+  AgentConfig,
+  HarnessContextPayload,
+  MCPServerConfig,
+  TurnReference,
+} from "../../types";
 import type { AgentWaitMode } from "../agents/types";
 import type { FileAttachment, OrderedInputPart } from "../jsonrpc/routes/shared";
 import type { SessionConfigPatch } from "../protocol";
@@ -132,8 +137,16 @@ export class SessionTurnService {
     displayText?: string,
     attachments?: FileAttachment[],
     inputParts?: OrderedInputPart[],
+    references?: TurnReference[],
   ): Promise<void> {
-    await this.session.sendUserMessage(text, clientMessageId, displayText, attachments, inputParts);
+    await this.session.sendUserMessage(
+      text,
+      clientMessageId,
+      displayText,
+      attachments,
+      inputParts,
+      references,
+    );
   }
 
   async sendSteerMessage(
@@ -142,6 +155,7 @@ export class SessionTurnService {
     clientMessageId?: string,
     attachments?: FileAttachment[],
     inputParts?: OrderedInputPart[],
+    references?: TurnReference[],
   ): Promise<void> {
     await this.session.sendSteerMessage(
       text,
@@ -149,6 +163,7 @@ export class SessionTurnService {
       clientMessageId,
       attachments,
       inputParts,
+      references,
     );
   }
 
@@ -445,6 +460,29 @@ export class SessionPluginService {
   }
 }
 
+export class SessionImportService {
+  constructor(private readonly session: AgentSession) {}
+
+  async list(
+    source: import("../../import").ImportSource,
+    kind: import("../../import").ImportableKind,
+  ): Promise<void> {
+    await this.session.listImport(source, kind);
+  }
+
+  async plugin(
+    sourcePath: string,
+    conversionRequired: boolean,
+    targetScope: "workspace" | "user",
+  ): Promise<void> {
+    await this.session.importPlugin(sourcePath, conversionRequired, targetScope);
+  }
+
+  async skill(sourcePath: string, targetScope: "workspace" | "user"): Promise<void> {
+    await this.session.importSkill(sourcePath, targetScope);
+  }
+}
+
 export class SessionAgentService {
   constructor(private readonly session: AgentSession) {}
 
@@ -619,6 +657,7 @@ export class SessionRuntime {
   readonly memory: SessionMemoryService;
   readonly skills: SessionSkillService;
   readonly plugins: SessionPluginService;
+  readonly import: SessionImportService;
   readonly agents: SessionAgentService;
   readonly backups: SessionBackupService;
   readonly a2ui: SessionA2uiService;
@@ -636,6 +675,7 @@ export class SessionRuntime {
     this.memory = new SessionMemoryService(session);
     this.skills = new SessionSkillService(session);
     this.plugins = new SessionPluginService(session);
+    this.import = new SessionImportService(session);
     this.agents = new SessionAgentService(session);
     this.backups = new SessionBackupService(session);
     this.a2ui = new SessionA2uiService(session);

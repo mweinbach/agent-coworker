@@ -1,3 +1,4 @@
+import type { TurnReference } from "../../../lib/wsProtocol";
 import { buildAttachmentSignature, buildUserInputDisplayText } from "../../attachmentInputs";
 import type { StoreGet, StoreSet } from "../../store.helpers";
 import type { FeedItem, ThreadBusyPolicy } from "../../types";
@@ -19,6 +20,7 @@ import {
   rememberPendingThreadSteer,
   shiftPendingThreadAttachments,
   shiftPendingThreadMessage,
+  shiftPendingThreadReferences,
 } from "../runtimeState";
 import { MAX_FEED_ITEMS, type ThreadOutboundMessage } from "../threadEventReducerContext";
 import type { ThreadEventReducerContext } from "./context";
@@ -235,6 +237,7 @@ export function createMessagingModule(
     threadId: string,
     clientMessageId: string,
     attachments?: FileAttachmentInput[],
+    references?: TurnReference[],
   ) {
     void startJsonRpcTurn(
       get,
@@ -244,6 +247,7 @@ export function createMessagingModule(
       text,
       clientMessageId,
       attachments,
+      references,
     ).catch(() => {
       surfaceJsonRpcTurnSendFailure(set, threadId, {
         pendingTurnStartClientMessageId: clientMessageId,
@@ -261,6 +265,7 @@ export function createMessagingModule(
     threadId: string,
     clientMessageId: string,
     attachments?: FileAttachmentInput[],
+    references?: TurnReference[],
   ) {
     void steerJsonRpcTurn(
       get,
@@ -271,6 +276,7 @@ export function createMessagingModule(
       text,
       clientMessageId,
       attachments,
+      references,
     ).catch(() => {
       surfaceJsonRpcTurnSendFailure(set, threadId, { clientMessageId });
     });
@@ -285,6 +291,7 @@ export function createMessagingModule(
     text: string,
     busyPolicy: ThreadBusyPolicy = "reject",
     attachments?: FileAttachmentInput[],
+    references?: TurnReference[],
   ): boolean {
     const trimmed = text.trim();
     const hasAttachments = attachments && attachments.length > 0;
@@ -302,7 +309,7 @@ export function createMessagingModule(
 
     if (rt.busy) {
       if (busyPolicy === "queue") {
-        queuePendingThreadMessage(threadId, trimmed, attachments);
+        queuePendingThreadMessage(threadId, trimmed, attachments, references);
         return true;
       }
 
@@ -361,6 +368,7 @@ export function createMessagingModule(
           threadId,
           clientMessageId,
           attachments,
+          references,
         );
         return true;
       }
@@ -416,6 +424,7 @@ export function createMessagingModule(
       threadId,
       clientMessageId,
       attachments,
+      references,
     );
     return true;
   }
@@ -427,6 +436,7 @@ export function createMessagingModule(
     const next = shiftPendingThreadMessage(threadId);
     if (next === undefined) return false;
     const queuedAttachments = shiftPendingThreadAttachments(threadId);
+    const queuedReferences = shiftPendingThreadReferences(threadId);
     const accepted = sendUserMessageToThread(
       get,
       set,
@@ -434,9 +444,15 @@ export function createMessagingModule(
       next,
       undefined,
       queuedAttachments,
+      queuedReferences,
     );
     if (!accepted) {
-      prependPendingThreadMessageWithAttachments(threadId, next, queuedAttachments);
+      prependPendingThreadMessageWithAttachments(
+        threadId,
+        next,
+        queuedAttachments,
+        queuedReferences,
+      );
     }
     return accepted;
   }

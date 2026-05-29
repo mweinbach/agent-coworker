@@ -1,13 +1,19 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { FetchLike } from "../extensions/source";
 import {
   buildPluginCatalogSnapshot,
   replacePluginInstallRoot,
   setPluginSkillEnabled,
 } from "../plugins";
+import {
+  buildRemoteMarketplaceSkillCatalogEntry,
+  fetchRemotePluginMarketplace,
+} from "../plugins/remoteMarketplace";
 import type {
   AgentConfig,
+  MarketplaceSkillCatalogEntry,
   SkillCatalogSnapshot,
   SkillInstallationEntry,
   SkillInstallOrigin,
@@ -583,8 +589,33 @@ export async function updateSkillInstallation(opts: {
   }
 }
 
-export async function getSkillCatalog(config: AgentConfig): Promise<SkillCatalogSnapshot> {
-  return await refreshCatalog(config);
+export async function getSkillCatalog(
+  config: AgentConfig,
+  opts: { includeRemoteMarketplace?: boolean; fetchImpl?: FetchLike } = {},
+): Promise<SkillCatalogSnapshot & { remoteMarketplaceFailed?: boolean }> {
+  const catalog = await refreshCatalog(config);
+  if (!opts.includeRemoteMarketplace) {
+    return catalog;
+  }
+  // Offer marketplace skills that are not already installed (deduped by name).
+  try {
+    const marketplace = await fetchRemotePluginMarketplace({ fetchImpl: opts.fetchImpl });
+    const installedNames = new Set(catalog.installations.map((entry) => entry.name));
+    const availableSkills: MarketplaceSkillCatalogEntry[] = [];
+    for (const skillEntry of marketplace.skills) {
+      if (!skillEntry.sourceInput || installedNames.has(skillEntry.name)) {
+        continue;
+      }
+      const entry = buildRemoteMarketplaceSkillCatalogEntry({ marketplace, skill: skillEntry });
+      if (entry) {
+        availableSkills.push(entry);
+      }
+    }
+    return { ...catalog, availableSkills };
+  } catch {
+    // Partial: keep installed skills; signal failure so the client preserves cached rows.
+    return { ...catalog, remoteMarketplaceFailed: true };
+  }
 }
 
 export async function getSkillInstallationById(opts: {

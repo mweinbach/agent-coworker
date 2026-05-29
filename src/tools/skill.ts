@@ -1,48 +1,9 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-
 import { z } from "zod";
 
 import { resolveExperimentalA2uiConfig } from "../experimental/a2ui/flags";
-import { discoverSkillsForConfig, stripSkillFrontMatter } from "../skills";
+import { loadSkillBodyByName } from "../skills/loadSkillBody";
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
-
-type SkillCacheEntry = {
-  content: string;
-  mtimeMs: number;
-  size: number;
-};
-
-const loadedSkills = new Map<string, SkillCacheEntry>();
-const SKILL_POLICY_OVERLAYS: Record<string, string> = {
-  presentations: [
-    "## Cowork Addendum",
-    "",
-    "- Keep slide task folders clean. For one-off deck work, do not create `package.json`, lockfiles, or `node_modules` in the user's deck/output folder just to run PptxGenJS.",
-    "- If JavaScript dependencies are truly unavoidable, stage them outside the user's requested workspace/output folder (for example a shared Cowork cache) instead of next to the deliverable.",
-    "- The deliverable folder should usually contain only the `.pptx`, the authoring `.js`, copied helper/assets that are actually needed, and review outputs the user asked to keep.",
-  ].join("\n"),
-};
-
-async function readIfExists(p: string): Promise<string | null> {
-  try {
-    const stat = await fs.stat(p);
-    if (!stat.isFile()) return null;
-
-    const cacheKey = path.resolve(p);
-    const cached = loadedSkills.get(cacheKey);
-    if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
-      return cached.content;
-    }
-
-    const content = await fs.readFile(p, "utf-8");
-    loadedSkills.set(cacheKey, { content, mtimeMs: stat.mtimeMs, size: stat.size });
-    return content;
-  } catch {
-    return null;
-  }
-}
 
 export function createSkillTool(ctx: ToolContext) {
   const a2uiEnabled = resolveExperimentalA2uiConfig(ctx.config);
@@ -83,25 +44,15 @@ export function createSkillTool(ctx: ToolContext) {
         ctx.log(`tool< skill ${JSON.stringify({ ok: false, reason: "feature_disabled" })}`);
         return `Skill "${skillName}" not found.`;
       }
-      const discovered = await discoverSkillsForConfig(ctx.config);
-      const selected = discovered.find((s) => s.enabled && s.name === skillName);
-      if (!selected) {
+
+      const loaded = await loadSkillBodyByName(ctx.config, skillName);
+      if (!loaded) {
         ctx.log(`tool< skill ${JSON.stringify({ ok: false, reason: "not_found" })}`);
         return `Skill "${skillName}" not found.`;
       }
 
-      const content = await readIfExists(path.resolve(selected.path));
-      if (!content) {
-        ctx.log(`tool< skill ${JSON.stringify({ ok: false, reason: "read_error" })}`);
-        return `Skill "${skillName}" not found.`;
-      }
       ctx.log(`tool< skill ${JSON.stringify({ ok: true })}`);
-
-      const body = stripSkillFrontMatter(content);
-      const overlay = SKILL_POLICY_OVERLAYS[skillName];
-      if (!overlay) return body;
-
-      return `${body}\n\n${overlay}`;
+      return loaded.body;
     },
   });
 }

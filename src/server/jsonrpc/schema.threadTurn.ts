@@ -94,6 +94,15 @@ const turnInputPartsSchema = z.array(inputPart).superRefine((input, ctx) => {
 });
 const turnInputSchema = z.union([z.string(), turnInputPartsSchema]);
 
+const turnReferenceSchema = z
+  .object({
+    kind: z.enum(["skill", "plugin"]),
+    name: nonEmptyTrimmedStringSchema,
+  })
+  .strict();
+// Bound history inflation: each skill reference injects a full SKILL.md body.
+const turnReferencesSchema = z.array(turnReferenceSchema).max(32);
+
 export const jsonRpcThreadTurnRequestSchemas = {
   "thread/start": z
     .object({
@@ -138,6 +147,7 @@ export const jsonRpcThreadTurnRequestSchemas = {
       threadId: nonEmptyTrimmedStringSchema,
       clientMessageId: nonEmptyTrimmedStringSchema.optional(),
       input: turnInputSchema,
+      references: turnReferencesSchema.optional(),
     })
     .strict(),
   "turn/steer": z
@@ -146,6 +156,7 @@ export const jsonRpcThreadTurnRequestSchemas = {
       turnId: nonEmptyTrimmedStringSchema.optional(),
       clientMessageId: nonEmptyTrimmedStringSchema.optional(),
       input: turnInputSchema,
+      references: turnReferencesSchema.optional(),
     })
     .strict(),
   "turn/interrupt": z

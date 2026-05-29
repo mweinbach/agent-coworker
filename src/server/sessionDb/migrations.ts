@@ -50,7 +50,7 @@ export async function bootstrapSessionDb(opts: BootstrapSessionDbOptions): Promi
   opts.db.exec("PRAGMA journal_mode=WAL;");
   opts.db.exec("PRAGMA synchronous=NORMAL;");
   opts.db.exec("PRAGMA foreign_keys=ON;");
-  opts.db.exec("PRAGMA busy_timeout=" + Math.max(0, Math.floor(opts.busyTimeoutMs)) + ";");
+  opts.db.exec(`PRAGMA busy_timeout=${Math.max(0, Math.floor(opts.busyTimeoutMs))};`);
 
   opts.db.exec(
     sql([

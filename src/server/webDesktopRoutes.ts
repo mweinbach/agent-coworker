@@ -257,7 +257,7 @@ function shouldServeOpenPathAsAttachment(filePath: string, mimeType: string): bo
 }
 
 function buildOpenRoute(pathValue: string): string {
-  return "/cowork/fs/open?path=" + encodeURIComponent(pathValue);
+  return `/cowork/fs/open?path=${encodeURIComponent(pathValue)}`;
 }
 
 function renderDirectoryHtml(
@@ -272,9 +272,9 @@ function renderDirectoryHtml(
       const hiddenBadge = entry.isHidden ? '<span class="badge">hidden</span>' : "";
       return [
         '<li class="entry">',
-        '<a class="entry-link" href="' + href + '">',
-        '<span class="entry-title">' + escapeHtml(entry.name) + "</span>",
-        '<span class="entry-meta">' + kind + hiddenBadge + "</span>",
+        `<a class="entry-link" href="${href}">`,
+        `<span class="entry-title">${escapeHtml(entry.name)}</span>`,
+        `<span class="entry-meta">${kind}${hiddenBadge}</span>`,
         "</a>",
         "</li>",
       ].join("");
@@ -282,11 +282,11 @@ function renderDirectoryHtml(
     .join("");
 
   const parentLink = parentPath
-    ? '<a class="parent-link" href="' + buildOpenRoute(parentPath) + '">Up one level</a>'
+    ? `<a class="parent-link" href="${buildOpenRoute(parentPath)}">Up one level</a>`
     : "";
   const listingMarkup =
     entries.length > 0
-      ? '<ul class="list">' + rows + "</ul>"
+      ? `<ul class="list">${rows}</ul>`
       : '<div class="empty">This directory is empty.</div>';
   const title = escapeHtml(path.basename(currentPath) || currentPath);
   const escapedCurrentPath = escapeHtml(currentPath);
@@ -297,9 +297,9 @@ function renderDirectoryHtml(
     "<head>",
     '<meta charset="utf-8" />',
     '<meta name="viewport" content="width=device-width, initial-scale=1" />',
-    "<title>" + title + "</title>",
+    `<title>${title}</title>`,
     "<style>",
-    ":root { color-scheme: dark; font-family: \"Segoe UI\", system-ui, sans-serif; background: #0f1115; color: #f4f4f5; }",
+    ':root { color-scheme: dark; font-family: "Segoe UI", system-ui, sans-serif; background: #0f1115; color: #f4f4f5; }',
     "body { margin: 0; min-height: 100vh; background: radial-gradient(circle at top left, rgba(79, 70, 229, 0.18), transparent 32%), linear-gradient(180deg, #10131a 0%, #0b0d11 100%); }",
     "main { max-width: 900px; margin: 0 auto; padding: 40px 20px 64px; }",
     ".chrome { margin-bottom: 24px; padding: 18px 20px; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 18px; background: rgba(16, 18, 24, 0.8); backdrop-filter: blur(12px); }",
@@ -320,8 +320,8 @@ function renderDirectoryHtml(
     "<main>",
     '<section class="chrome">',
     '<div class="eyebrow">Cowork Browser Shell</div>',
-    "<h1>" + title + "</h1>",
-    '<p class="path">' + escapedCurrentPath + "</p>",
+    `<h1>${title}</h1>`,
+    `<p class="path">${escapedCurrentPath}</p>`,
     parentLink,
     "</section>",
     listingMarkup,

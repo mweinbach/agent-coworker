@@ -44,6 +44,8 @@ function basenamePath(p: string): string {
   return parts[parts.length - 1] ?? p;
 }
 
+const CANVAS_PREVIEW_MAX_BYTES = 256 * 1024;
+
 export function Canvas({ path }: { path: string }) {
   const isCanvasMode = getDesktopWindowMode() === "canvas";
   const pxClass = isCanvasMode ? "px-5" : "px-3";
@@ -99,7 +101,7 @@ export function Canvas({ path }: { path: string }) {
     if (isSpreadsheet || isPptx) return;
     try {
       setLoading(true);
-      const result = await readFileForPreview({ path });
+      const result = await readFileForPreview({ path, maxBytes: CANVAS_PREVIEW_MAX_BYTES });
       const fileContent = decodeUtf8(result.bytes);
       setContent(fileContent);
       setContentTruncated(result.truncated);
@@ -128,7 +130,7 @@ export function Canvas({ path }: { path: string }) {
       if (isEditingRef.current) return;
 
       try {
-        const result = await readFileForPreview({ path });
+        const result = await readFileForPreview({ path, maxBytes: CANVAS_PREVIEW_MAX_BYTES });
         const diskContent = decodeUtf8(result.bytes);
         if (!active) return;
         setContentTruncated(result.truncated);

@@ -66,6 +66,7 @@ export class SkillManager {
         emitLegacySkillsList: async () => await this.emitLegacySkillsList(),
         emitSkillsCatalog: async (clearedMutationPendingKeys) =>
           await this.emitSkillsCatalog(clearedMutationPendingKeys),
+        queueRemoteSkillCatalogRefresh: () => this.queueRemoteSkillCatalogRefresh(),
         emitSkillInstallationDetail: async (installationId) =>
           await this.emitInstallationDetail(installationId),
         listCommands: async () => await this.listCommands(),

@@ -27,6 +27,7 @@ import {
   type PreferredFileAppInput,
   type PreviewOSFileInput,
   type ReadFileForPreviewInput,
+  type PickDirectoryInput,
   type ReadFileInput,
   type ReadTranscriptInput,
   type RenamePathInput,
@@ -357,6 +358,9 @@ const desktopApi = Object.freeze<DesktopApi>({
   },
 
   pickWorkspaceDirectory: () => ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.pickWorkspaceDirectory),
+
+  pickDirectory: (opts?: PickDirectoryInput) =>
+    ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.pickDirectory, opts),
 
   showContextMenu: (opts: ShowContextMenuInput) => {
     assertShowContextMenuInput(opts);

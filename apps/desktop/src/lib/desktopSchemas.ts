@@ -30,6 +30,7 @@ import type {
   PreviewOSFileInput,
   ReadFileForPreviewInput,
   ReadFileInput,
+  PickDirectoryInput,
   ReadTranscriptInput,
   RenamePathInput,
   RevealPathInput,
@@ -241,6 +242,10 @@ export const transcriptBatchInputSchema: z.ZodType<TranscriptBatchInput> = z.obj
 
 export const showContextMenuInputSchema: z.ZodType<ShowContextMenuInput> = z.object({
   items: z.array(contextMenuItemSchema),
+});
+
+export const pickDirectoryInputSchema: z.ZodType<PickDirectoryInput> = z.object({
+  title: z.string().optional(),
 });
 
 export const windowDragPointInputSchema: z.ZodType<WindowDragPointInput> = z.object({

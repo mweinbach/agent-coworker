@@ -4,6 +4,7 @@ import { useAppStore } from "../../app/store";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { ImportDialog } from "../import/ImportDialog";
+import { ImportDirectoryButton } from "./ImportDirectoryButton";
 import { InstallationCardGrid } from "./InstallationCardGrid";
 import { InstallSkillDialog } from "./InstallSkillDialog";
 import { SkillDetailDialog } from "./SkillDetailDialog";
@@ -75,6 +76,7 @@ export function SkillsCatalogPage({
             Refresh
           </Button>
           <ImportDialog workspaceId={workspaceId} kind="skill" />
+          <ImportDirectoryButton />
           <InstallSkillDialog workspaceId={workspaceId} />
         </div>
 

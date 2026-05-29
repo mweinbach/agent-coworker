@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { FetchLike } from "../extensions/source";
 import {
   buildPluginCatalogSnapshot,
   replacePluginInstallRoot,
@@ -10,7 +11,6 @@ import {
   buildRemoteMarketplaceSkillCatalogEntry,
   fetchRemotePluginMarketplace,
 } from "../plugins/remoteMarketplace";
-import type { FetchLike } from "../extensions/source";
 import type {
   AgentConfig,
   MarketplaceSkillCatalogEntry,

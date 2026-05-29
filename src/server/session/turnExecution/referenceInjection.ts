@@ -105,7 +105,9 @@ export async function resolveReferencedPlugins(
       name: entry.name,
       displayName: entry.displayName || entry.name,
       skillNames: entry.skills
-        .filter((skill) => skill.enabled && isSkillBodyLoadAllowed(context.state.config, skill.name))
+        .filter(
+          (skill) => skill.enabled && isSkillBodyLoadAllowed(context.state.config, skill.name),
+        )
         .map((skill) => skill.name),
     });
   }

@@ -195,9 +195,14 @@ describe("skill reference injection (e2e via turn/start references)", () => {
     await fs.mkdir(skillDir, { recursive: true });
     await fs.writeFile(
       path.join(skillDir, "SKILL.md"),
-      ["---", 'name: "test-skill"', 'description: "A test skill"', "---", "", SKILL_BODY_MARKER].join(
-        "\n",
-      ),
+      [
+        "---",
+        'name: "test-skill"',
+        'description: "A test skill"',
+        "---",
+        "",
+        SKILL_BODY_MARKER,
+      ].join("\n"),
       "utf-8",
     );
 

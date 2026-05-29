@@ -164,15 +164,15 @@ export function SkillsCatalogPage({
             !skillCatalogError &&
             installations.length === 0 &&
             availableSkills.length === 0 && (
-            <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border/50 bg-muted/10 py-10 text-center">
-              <div className="mb-1 text-base font-medium">No skills found</div>
-              <div className="text-sm text-muted-foreground">
-                {searchQuery
-                  ? "Try adjusting your search query."
-                  : "Install a skill to give Codex superpowers."}
+              <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border/50 bg-muted/10 py-10 text-center">
+                <div className="mb-1 text-base font-medium">No skills found</div>
+                <div className="text-sm text-muted-foreground">
+                  {searchQuery
+                    ? "Try adjusting your search query."
+                    : "Install a skill to give Codex superpowers."}
+                </div>
               </div>
-            </div>
-          )}
+            )}
         </div>
       </div>
 

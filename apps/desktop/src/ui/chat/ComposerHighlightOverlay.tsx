@@ -1,7 +1,7 @@
 import { forwardRef } from "react";
 
 import { cn } from "@/lib/utils";
-import { type MentionCatalog, MENTION_CHIP_CLASS, parseComposerSegments } from "./composerMentions";
+import { MENTION_CHIP_CLASS, type MentionCatalog, parseComposerSegments } from "./composerMentions";
 
 /**
  * Read-only mirror rendered behind the composer textarea. It re-renders the

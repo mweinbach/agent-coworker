@@ -65,7 +65,10 @@ function createSkillMarketplaceFetch(doc: unknown): typeof fetch {
   };
   return (async (input: RequestInfo | URL) => {
     const url = String(input);
-    if (url.startsWith("https://api.github.com/") && url.includes("/contents/.agents/plugins/marketplace.json")) {
+    if (
+      url.startsWith("https://api.github.com/") &&
+      url.includes("/contents/.agents/plugins/marketplace.json")
+    ) {
       return new Response(JSON.stringify(contents), {
         status: 200,
         headers: { "content-type": "application/json" },
@@ -168,7 +171,9 @@ describe("skill marketplace", () => {
     try {
       const catalog = await getSkillCatalog(config, {
         includeRemoteMarketplace: true,
-        fetchImpl: createSkillMarketplaceFetch(marketplaceDoc(["create-skill", "already-installed"])),
+        fetchImpl: createSkillMarketplaceFetch(
+          marketplaceDoc(["create-skill", "already-installed"]),
+        ),
       });
 
       expect(catalog.remoteMarketplaceFailed).toBeUndefined();

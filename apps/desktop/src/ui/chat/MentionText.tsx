@@ -2,18 +2,14 @@ import { Badge } from "@/components/ui/badge";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import {
+  MENTION_CHIP_CLASS,
   type MentionCatalog,
   type MentionItem,
   type MentionKind,
-  MENTION_CHIP_CLASS,
   parseComposerSegments,
 } from "./composerMentions";
 
-function MentionChip(props: {
-  kind: MentionKind;
-  name: string;
-  item: MentionItem | undefined;
-}) {
+function MentionChip(props: { kind: MentionKind; name: string; item: MentionItem | undefined }) {
   const { kind, name, item } = props;
   const label = `@${name}`;
 

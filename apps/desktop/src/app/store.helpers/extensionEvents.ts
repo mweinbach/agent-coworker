@@ -1,4 +1,8 @@
-import type { PluginCatalogSnapshot, SessionEvent, SkillCatalogSnapshot } from "../../lib/wsProtocol";
+import type {
+  PluginCatalogSnapshot,
+  SessionEvent,
+  SkillCatalogSnapshot,
+} from "../../lib/wsProtocol";
 import type { WorkspaceRuntime } from "../types";
 import { RUNTIME } from "./runtimeState";
 

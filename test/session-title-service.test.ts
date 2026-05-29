@@ -48,6 +48,10 @@ function createAppleModule(opts: {
     jsonSchema: Record<string, unknown>,
     opts?: unknown,
   ) => Promise<{ value: (propertyName: string) => unknown }>;
+  waitUntilAvailable?: (
+    timeoutMs?: number,
+    intervalMs?: number,
+  ) => Promise<{ available: boolean; reason?: number }>;
 }) {
   const respond = mock(
     opts.respond ??
@@ -74,11 +78,19 @@ function createAppleModule(opts: {
     available: opts.available ?? true,
     ...(opts.reason === undefined ? {} : { reason: opts.reason }),
   }));
+  const modelWaitUntilAvailable = mock(
+    opts.waitUntilAvailable ??
+      (async () => ({
+        available: opts.available ?? true,
+        ...(opts.reason === undefined ? {} : { reason: opts.reason }),
+      })),
+  );
 
   return {
     module: {
       SystemLanguageModel: class {
         isAvailable = modelIsAvailable;
+        waitUntilAvailable = modelWaitUntilAvailable;
         dispose = modelDispose;
       },
       LanguageModelSession: class {
@@ -93,6 +105,7 @@ function createAppleModule(opts: {
     },
     modelDispose,
     modelIsAvailable,
+    modelWaitUntilAvailable,
     random,
     respond,
     respondWithJsonSchema,
@@ -237,11 +250,50 @@ describe("sessionTitleService", () => {
         probabilityThreshold: __internal.APPLE_TITLE_RANDOM_TOP_P,
       },
       maximumResponseTokens: 80,
-      temperature: __internal.APPLE_TITLE_TEMPERATURE,
     });
+    expect(respondOpts.options?.temperature).toBeUndefined();
     expect(typeof respondOpts.options?.sampling?.seed).toBe("number");
     expect(apple.sessionDispose).toHaveBeenCalledTimes(1);
     expect(apple.modelDispose).toHaveBeenCalledTimes(1);
+    expect(createRuntime).not.toHaveBeenCalled();
+    expect(defaultModelForProvider).not.toHaveBeenCalled();
+  });
+
+  test("waits for Apple Foundation Models to become ready before falling back", async () => {
+    const apple = createAppleModule({
+      available: false,
+      reason: 2,
+      waitUntilAvailable: async () => ({ available: true }),
+    });
+    const loadAppleFoundationModelsModule = mock(async () => apple.module);
+    const createRuntime = mock((_config: AgentConfig) => {
+      throw new Error("provider runtime should not be used");
+    });
+    const defaultModelForProvider = mock((_provider: AgentConfig["provider"]) => "gpt-5.2");
+
+    const generateSessionTitle = createSessionTitleGenerator({
+      createRuntime: createRuntime as any,
+      defaultModelForProvider: defaultModelForProvider as any,
+      loadAppleFoundationModelsModule: loadAppleFoundationModelsModule as any,
+      platform: "darwin",
+      arch: "arm64",
+      env: {},
+    });
+
+    const result = await generateSessionTitle({
+      config: makeConfig("openai"),
+      query: "title model warms up slowly on macOS",
+    });
+
+    expect(result).toEqual({
+      title: "Apple Foundation Title",
+      source: "model",
+      model: __internal.APPLE_FOUNDATION_TITLE_MODEL,
+    });
+    expect(apple.modelWaitUntilAvailable).toHaveBeenCalledWith(
+      __internal.APPLE_TITLE_WAIT_TIMEOUT_MS,
+      __internal.APPLE_TITLE_WAIT_INTERVAL_MS,
+    );
     expect(createRuntime).not.toHaveBeenCalled();
     expect(defaultModelForProvider).not.toHaveBeenCalled();
   });

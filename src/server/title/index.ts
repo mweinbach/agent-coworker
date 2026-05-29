@@ -1,7 +1,9 @@
 import {
   APPLE_FOUNDATION_TITLE_MODEL,
+  APPLE_TITLE_WAIT_INTERVAL_MS,
   APPLE_TITLE_RANDOM_TOP_P,
   APPLE_TITLE_TEMPERATURE,
+  APPLE_TITLE_WAIT_TIMEOUT_MS,
   generateAppleFoundationTitle,
   isAppleSiliconMac,
   loadAppleFoundationModelsModule,
@@ -131,6 +133,8 @@ export const __internal = {
   APPLE_FOUNDATION_TITLE_MODEL,
   APPLE_TITLE_RANDOM_TOP_P,
   APPLE_TITLE_TEMPERATURE,
+  APPLE_TITLE_WAIT_INTERVAL_MS,
+  APPLE_TITLE_WAIT_TIMEOUT_MS,
   generateAppleFoundationTitle,
   generatePhiSilicaTitle,
   isAppleSiliconMac,

@@ -6,8 +6,8 @@ import { buildTitlePrompt, sanitizeTitle, TITLE_MAX_CHARS, tokenize } from "./sh
 
 export const APPLE_FOUNDATION_TITLE_MODEL = "SystemLanguageModel";
 const APPLE_MODEL_NOT_READY_REASON = 2;
-const APPLE_TITLE_WAIT_TIMEOUT_MS = 1_000;
-const APPLE_TITLE_WAIT_INTERVAL_MS = 100;
+export const APPLE_TITLE_WAIT_TIMEOUT_MS = 10_000;
+export const APPLE_TITLE_WAIT_INTERVAL_MS = 100;
 const APPLE_TITLE_MAX_RESPONSE_TOKENS = 80;
 const APPLE_TITLE_OPTION_COUNT = 4;
 export const APPLE_TITLE_TEMPERATURE = 0.65;
@@ -109,6 +109,23 @@ export type AppleFoundationTitleDeps = {
   env: NodeJS.ProcessEnv;
 };
 
+function describeAppleTitleError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message ? `${error.name}: ${error.message}` : error.name;
+  }
+  return String(error);
+}
+
+function describeAppleAvailability(availability: AppleFoundationAvailability): string {
+  return availability.reason === undefined
+    ? `available=${availability.available}`
+    : `available=${availability.available} reason=${availability.reason}`;
+}
+
+function logAppleTitleIssue(message: string, detail?: string): void {
+  console.error(`[title:apple] ${message}${detail ? ` (${detail})` : ""}`);
+}
+
 function buildAppleTitleOptionsPrompt(query: string, variationHint: string): string {
   const keywords = tokenize(query).slice(0, 8);
   return [
@@ -176,7 +193,8 @@ export async function generateAppleFoundationTitle(
   let appleModule: AppleFoundationModelsModule;
   try {
     appleModule = await deps.loadAppleFoundationModelsModule(deps.env);
-  } catch {
+  } catch (error) {
+    logAppleTitleIssue("tsfm-sdk load failed", describeAppleTitleError(error));
     return { status: "unavailable" };
   }
 
@@ -185,10 +203,18 @@ export async function generateAppleFoundationTitle(
     model = new appleModule.SystemLanguageModel();
     const availability = await resolveAppleModelAvailability(model);
     if (!availability.available) {
+      logAppleTitleIssue(
+        "SystemLanguageModel unavailable",
+        describeAppleAvailability(availability),
+      );
       model.dispose();
       return { status: "unavailable" };
     }
-  } catch {
+  } catch (error) {
+    logAppleTitleIssue(
+      "SystemLanguageModel availability check failed",
+      describeAppleTitleError(error),
+    );
     model?.dispose();
     return { status: "unavailable" };
   }
@@ -213,7 +239,7 @@ export async function generateAppleFoundationTitle(
       options: {
         ...(sampling ? { sampling } : {}),
         maximumResponseTokens: APPLE_TITLE_MAX_RESPONSE_TOKENS,
-        temperature: APPLE_TITLE_TEMPERATURE,
+        ...(sampling ? {} : { temperature: APPLE_TITLE_TEMPERATURE }),
       },
     };
     const result =
@@ -228,8 +254,11 @@ export async function generateAppleFoundationTitle(
           )
         : await session.respond(titlePrompt, generationOptions);
     const title = sanitizeTitle(result);
-    return title ? { status: "generated", title } : { status: "failed" };
-  } catch {
+    if (title) return { status: "generated", title };
+    logAppleTitleIssue("generation returned an empty title");
+    return { status: "failed" };
+  } catch (error) {
+    logAppleTitleIssue("generation failed", describeAppleTitleError(error));
     return { status: "failed" };
   } finally {
     session?.dispose();

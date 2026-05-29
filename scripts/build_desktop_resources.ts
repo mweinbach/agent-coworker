@@ -21,8 +21,8 @@ import {
   copyDir,
   ensureBundledBunRuntime,
   pathExists,
-  resolveBundledBunRuntimeVersion,
   resolveBuildTarget,
+  resolveBundledBunRuntimeVersion,
   rmrf,
   runCommand,
 } from "./releaseBuildUtils";

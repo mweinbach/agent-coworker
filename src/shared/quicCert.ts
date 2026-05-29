@@ -13,9 +13,7 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
 function pemEncode(label: string, der: ArrayBuffer): string {
   const base64 = arrayBufferToBase64(der);
   const lines = base64.match(/.{1,64}/g) ?? [];
-  return ["-----BEGIN " + label + "-----", ...lines, "-----END " + label + "-----", ""].join(
-    PEM_LINE_BREAK,
-  );
+  return [`-----BEGIN ${label}-----`, ...lines, `-----END ${label}-----`, ""].join(PEM_LINE_BREAK);
 }
 
 function sha256Hex(bytes: ArrayBuffer): string {
@@ -61,7 +59,7 @@ export async function createEphemeralQuicCertificate(
   const notAfter = new Date(now.getTime() + lifetimeMs);
   const cert = await x509.X509CertificateGenerator.createSelfSigned({
     serialNumber: Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString("hex"),
-    name: "CN=" + CERT_COMMON_NAME,
+    name: `CN=${CERT_COMMON_NAME}`,
     notBefore: now,
     notAfter,
     signingAlgorithm: algorithm,

@@ -1,3 +1,4 @@
+import { closePooledCodexAppServerClients } from "../../../providers/codexAppServerClient";
 import {
   getCodexAppServerInstallStatus,
   updateManagedCodexAppServer,
@@ -80,6 +81,7 @@ export function createProviderRouteHandlers(
         typeof params.version === "string" && params.version.trim()
           ? params.version.trim()
           : undefined;
+      await closePooledCodexAppServerClients();
       const status = await updateManagedCodexAppServer({
         ...(version ? { version } : {}),
         force: params.force === true,

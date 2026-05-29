@@ -197,6 +197,81 @@ describe("SessionCostTracker", () => {
     expect(restored.costBreakdown?.otherCostUsd).toBeCloseTo(0, 6);
   });
 
+  test("derives browser-safe spend buckets from stored turn pricing", () => {
+    const legacySnapshot: SessionUsageSnapshot = {
+      sessionId: "session-1",
+      totalTurns: 1,
+      totalPromptTokens: 3_442_232,
+      totalCompletionTokens: 45_513,
+      totalTokens: 2_023_803,
+      totalCachedPromptTokens: 1_497_866,
+      totalReasoningOutputTokens: 33_924,
+      estimatedTotalCostUsd: 3.5508459,
+      costTrackingAvailable: true,
+      byModel: [
+        {
+          provider: "google",
+          model: "gemini-3.5-flash",
+          turns: 1,
+          totalPromptTokens: 3_442_232,
+          totalCompletionTokens: 45_513,
+          totalTokens: 2_023_803,
+          totalCachedPromptTokens: 1_497_866,
+          totalReasoningOutputTokens: 33_924,
+          estimatedCostUsd: 3.5508459,
+        },
+      ],
+      turns: [
+        {
+          turnId: "turn-1",
+          turnIndex: 1,
+          timestamp: "2026-05-29T13:00:26.616Z",
+          provider: "google",
+          model: "gemini-3.5-flash",
+          usage: {
+            promptTokens: 3_442_232,
+            completionTokens: 45_513,
+            cachedPromptTokens: 1_497_866,
+            reasoningOutputTokens: 33_924,
+            totalTokens: 2_023_803,
+          },
+          estimatedCostUsd: 3.5508459,
+          pricing: {
+            inputPerMillion: 1.5,
+            cachedInputPerMillion: 0.15,
+            outputPerMillion: 9,
+          },
+        },
+      ],
+      budgetStatus: {
+        configured: false,
+        warnAtUsd: null,
+        stopAtUsd: null,
+        warningTriggered: false,
+        stopTriggered: false,
+        currentCostUsd: 3.5508459,
+      },
+      createdAt: "2026-05-29T12:31:40.910Z",
+      updatedAt: "2026-05-29T13:00:26.616Z",
+    };
+    const globalRecord = globalThis as Record<string, unknown>;
+    const originalProcess = globalRecord.process;
+
+    globalRecord.process = undefined;
+    try {
+      const derived = deriveUsageCostBreakdown(legacySnapshot, {
+        resolveMissingPricing: false,
+      });
+
+      expect(derived?.inputCostUsd).toBeCloseTo(2.916549, 6);
+      expect(derived?.cachedInputCostUsd).toBeCloseTo(0.2246799, 6);
+      expect(derived?.outputCostUsd).toBeCloseTo(0.409617, 6);
+      expect(derived?.otherCostUsd).toBeCloseTo(0, 6);
+    } finally {
+      globalRecord.process = originalProcess;
+    }
+  });
+
   test("uses catalog pricing before runtime-provided estimated cost when available", () => {
     const tracker = new SessionCostTracker("session-1");
 

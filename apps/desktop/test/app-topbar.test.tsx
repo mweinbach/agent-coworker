@@ -73,7 +73,28 @@ const legacySessionUsage = {
       estimatedCostUsd: 3.5508459,
     },
   ],
-  turns: [],
+  turns: [
+    {
+      turnId: "turn-1",
+      turnIndex: 1,
+      timestamp: "2026-05-29T13:00:26.616Z",
+      provider: "google" as const,
+      model: "gemini-3.5-flash",
+      usage: {
+        promptTokens: 3_442_232,
+        completionTokens: 45_513,
+        cachedPromptTokens: 1_497_866,
+        reasoningOutputTokens: 33_924,
+        totalTokens: 2_023_803,
+      },
+      estimatedCostUsd: 3.5508459,
+      pricing: {
+        inputPerMillion: 1.5,
+        cachedInputPerMillion: 0.15,
+        outputPerMillion: 9,
+      },
+    },
+  ],
   budgetStatus: {
     configured: false,
     warnAtUsd: null,

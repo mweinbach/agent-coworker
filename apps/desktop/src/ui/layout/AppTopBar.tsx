@@ -153,7 +153,9 @@ function addUsageToTopBarSummary(
     usage.costTrackingAvailable && typeof usage.estimatedTotalCostUsd === "number";
   if (hasKnownCost) {
     const costUsd = usage.estimatedTotalCostUsd ?? 0;
-    const breakdown = deriveUsageCostBreakdown(usage) ?? fallbackCostBreakdown(costUsd);
+    const breakdown =
+      deriveUsageCostBreakdown(usage, { resolveMissingPricing: false }) ??
+      fallbackCostBreakdown(costUsd);
     summary.totalCostUsd = addNullableCost(summary.totalCostUsd, costUsd);
     summary.costBreakdown = summary.costBreakdown
       ? addTopBarCostBreakdown(summary.costBreakdown, breakdown)

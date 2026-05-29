@@ -208,12 +208,19 @@ function deriveModelUsageCostBreakdown(summary: ModelUsageSummary): UsageCostBre
     : null;
 }
 
-function deriveTurnUsageCostBreakdown(entry: TurnCostEntry): UsageCostBreakdown | null {
+function deriveTurnUsageCostBreakdown(
+  entry: TurnCostEntry,
+  options: DeriveUsageCostBreakdownOptions,
+): UsageCostBreakdown | null {
   if (entry.costBreakdown !== undefined) {
     return entry.costBreakdown ? { ...entry.costBreakdown } : null;
   }
 
-  const pricing = entry.pricing ?? resolveModelPricing(entry.provider, entry.model);
+  const pricing =
+    entry.pricing ??
+    (options.resolveMissingPricing === false
+      ? null
+      : resolveModelPricing(entry.provider, entry.model));
   if (pricing) {
     return usageCostBreakdownFromTokenBreakdown(
       calculateTokenCostBreakdown(
@@ -231,20 +238,30 @@ function deriveTurnUsageCostBreakdown(entry: TurnCostEntry): UsageCostBreakdown 
     : null;
 }
 
+export type DeriveUsageCostBreakdownOptions = {
+  resolveMissingPricing?: boolean;
+};
+
 export function deriveUsageCostBreakdown(
   snapshot: Pick<
     SessionUsageSnapshot,
     "byModel" | "costBreakdown" | "estimatedTotalCostUsd" | "turns"
   >,
+  options: DeriveUsageCostBreakdownOptions = {},
 ): UsageCostBreakdown | null {
   if (snapshot.costBreakdown) {
     return { ...snapshot.costBreakdown };
   }
 
   let aggregate: UsageCostBreakdown | null = null;
-  const modelBreakdowns = snapshot.byModel
-    .map((summary) => deriveModelUsageCostBreakdown(summary))
-    .filter((breakdown): breakdown is UsageCostBreakdown => breakdown !== null);
+  const modelBreakdowns =
+    options.resolveMissingPricing === false
+      ? snapshot.byModel
+          .map((summary) => (summary.costBreakdown ? { ...summary.costBreakdown } : null))
+          .filter((breakdown): breakdown is UsageCostBreakdown => breakdown !== null)
+      : snapshot.byModel
+          .map((summary) => deriveModelUsageCostBreakdown(summary))
+          .filter((breakdown): breakdown is UsageCostBreakdown => breakdown !== null);
 
   if (modelBreakdowns.length === snapshot.byModel.length && modelBreakdowns.length > 0) {
     aggregate = modelBreakdowns.reduce(
@@ -253,7 +270,7 @@ export function deriveUsageCostBreakdown(
     );
   } else if (snapshot.turns.length > 0) {
     aggregate = snapshot.turns.reduce<UsageCostBreakdown | null>((current, entry) => {
-      const next = deriveTurnUsageCostBreakdown(entry);
+      const next = deriveTurnUsageCostBreakdown(entry, options);
       if (!next) return current;
       return current ? addUsageCostBreakdown(current, next) : { ...next };
     }, null);

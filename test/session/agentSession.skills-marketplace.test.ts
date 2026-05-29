@@ -72,7 +72,11 @@ describe("AgentSession skills marketplace", () => {
     }
 
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = marketplaceFetch(["create-skill", "create-plugin", "apple-native-transcribe"]);
+    globalThis.fetch = marketplaceFetch([
+      "create-skill",
+      "create-plugin",
+      "apple-native-transcribe",
+    ]);
 
     try {
       const cfg: AgentConfig = { ...makeConfig(root), skillsDirs: [skillsDir] };

@@ -54,6 +54,10 @@ export const MAX_TURN_REFERENCES = 32;
 // Characters that may appear in a kebab-case skill/plugin name.
 const NAME_CHAR = /[a-z0-9-]/i;
 
+function mentionLookupKey(name: string): string {
+  return name.toLowerCase();
+}
+
 function sourceBadge(source: SkillEntry["source"]): string {
   switch (source) {
     case "project":
@@ -82,10 +86,10 @@ export function buildMentionCatalog(
       description: skill.description ?? "",
       badge: skill.plugin?.displayName ?? sourceBadge(skill.source),
     }));
-  const skillNames = new Set(skillItems.map((item) => item.name));
+  const skillNames = new Set(skillItems.map((item) => mentionLookupKey(item.name)));
 
   const pluginItems: MentionItem[] = (plugins?.plugins ?? [])
-    .filter((plugin) => plugin.enabled && !skillNames.has(plugin.name))
+    .filter((plugin) => plugin.enabled && !skillNames.has(mentionLookupKey(plugin.name)))
     .map((plugin) => ({
       kind: "plugin" as const,
       name: plugin.name,
@@ -120,7 +124,9 @@ function matchMentionAt(
   // names are longest-first, so the first match is the greedy/longest one.
   for (const name of catalog.names) {
     const candidate = text.slice(atIndex + 1, atIndex + 1 + name.length);
-    if (candidate.length !== name.length || candidate.toLowerCase() !== name) continue;
+    if (candidate.length !== name.length || mentionLookupKey(candidate) !== mentionLookupKey(name)) {
+      continue;
+    }
     const afterIndex = atIndex + 1 + name.length;
     const after = text[afterIndex];
     if (after !== undefined && NAME_CHAR.test(after)) continue; // not a word boundary

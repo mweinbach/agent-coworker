@@ -66,6 +66,12 @@ describe("composerMentions.buildMentionCatalog", () => {
     expect(catalog.items.find((i) => i.name === "shared")?.kind).toBe("skill");
   });
 
+  test("skill wins when a plugin name only differs by case", () => {
+    const catalog = buildMentionCatalog([skill("myTool")], pluginCatalog(["mytool"]));
+    expect(catalog.items).toHaveLength(1);
+    expect(catalog.items[0]).toMatchObject({ kind: "skill", name: "myTool" });
+  });
+
   test("badges skills by source and plugin-owned skills by plugin display name", () => {
     const catalog = buildMentionCatalog(
       [
@@ -121,6 +127,16 @@ describe("composerMentions.parseComposerSegments", () => {
     const mention = segments.find((s) => s.type === "mention");
     expect(mention).toMatchObject({ name: "documents", raw: "@Documents" });
   });
+
+  test("matches uppercase catalog names case-insensitively but keeps canonical names", () => {
+    const mixedCaseCatalog = buildMentionCatalog([skill("myTool")], pluginCatalog(["DataPipe"]));
+    const segments = parseComposerSegments("@mytool with @DATAPIPE", mixedCaseCatalog);
+    const mentions = segments.filter((s) => s.type === "mention");
+    expect(mentions).toEqual([
+      { type: "mention", kind: "skill", name: "myTool", raw: "@mytool", start: 0, end: 7 },
+      { type: "mention", kind: "plugin", name: "DataPipe", raw: "@DATAPIPE", start: 13, end: 22 },
+    ]);
+  });
 });
 
 describe("composerMentions.extractReferencesFromText", () => {
@@ -132,6 +148,17 @@ describe("composerMentions.extractReferencesFromText", () => {
       { kind: "skill", name: "b" },
       { kind: "skill", name: "a" },
       { kind: "plugin", name: "p" },
+    ]);
+  });
+
+  test("keeps canonical names for mixed-case catalog references", () => {
+    const refs = extractReferencesFromText(
+      "@mytool then @DATAPIPE",
+      buildMentionCatalog([skill("myTool")], pluginCatalog(["DataPipe"])),
+    );
+    expect(refs).toEqual([
+      { kind: "skill", name: "myTool" },
+      { kind: "plugin", name: "DataPipe" },
     ]);
   });
 

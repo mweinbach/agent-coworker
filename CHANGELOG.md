@@ -4,6 +4,41 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.1.7 - 2026-05-29
+
+### Added
+
+- **Plugin and skill imports** — Added a desktop import flow for bringing local
+  Claude Code and Codex plugins/skills into Cowork, including source discovery,
+  installed-state diagnostics, Claude plugin manifest conversion, and
+  JSON-RPC-backed import actions that refresh the plugin and skill catalogs.
+- **Turn-scoped plugin and skill references** — Added composer `@mention`
+  plumbing for skills and plugins so referenced skills are injected before model
+  execution and referenced plugins are rendered into turn context across new
+  turns, steering, reconnects, queued sends, and workspace-default paths.
+- **Marketplace skills** — The plugin marketplace can now surface standalone
+  skills alongside plugins, with available skill snapshots, install actions, and
+  desktop catalog rendering.
+
+### Changed
+
+- **Import and mention UI polish** — Added a contained import dialog with
+  Claude/Codex/folder sources, native folder picking, installed indicators,
+  diagnostics, spinners, and searchable composer mention menus.
+- **Usage accounting** — Expanded cost tracking so renderer-safe legacy usage
+  derivation and subagent usage accounting are surfaced consistently.
+
+### Fixed
+
+- **Desktop robustness** — Hardened desktop IPC boundaries, preserved turn
+  reference context through canvas previews, capped canvas preview reads, and
+  kept local title generation resilient when Apple title generation fails.
+- **Marketplace refresh behavior** — Ensured marketplace skills reappear after
+  uninstall and catalog reads deliver available skills in the same emit the
+  desktop client consumes.
+- **Import discovery** — Hardened local import discovery and raw GitHub
+  marketplace fallback paths.
+
 ## 1.1.6 - 2026-05-28
 
 ### Added

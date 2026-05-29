@@ -175,7 +175,7 @@ Both `turn/start` and `turn/steer` accept an optional `references` array so clie
 }
 ```
 
-- A **`skill`** reference is a *hard force* ("inject + persist"): the server loads the skill's `SKILL.md` body and injects a synthetic `skill` tool-call + tool-result pair into the turn. It is appended to model history (so it persists for later turns) and surfaced to the transcript as a normal `skill` tool call (live and on journal replay) — the model does not have to choose to call the tool.
+- A **`skill`** reference is a *hard force*: the server loads the skill's `SKILL.md` body and appends it to the model-facing user/steer message as plain text. The user's visible message stays unchanged, and no synthetic tool-call or tool-result history is fabricated.
 - A **`plugin`** reference is *soft awareness*: it is resolved against the plugin catalog and rendered into a turn-scoped `## Referenced Plugins` system block listing the plugin's bundled skills, biasing the model toward them without force-loading any.
 
 The array is capped at 32 entries. Names that no longer resolve to an enabled skill / installed plugin at send time are skipped (the turn proceeds). Skill names take precedence over plugin names when a name matches both. The client derives `references` from the composer text against the live skill/plugin catalog; the typed text is sent unchanged as the user message.

@@ -33,10 +33,10 @@ export type ModelMessage = {
 
 /**
  * A skill or plugin the user explicitly referenced ("@-mentioned") when sending
- * a turn. A `skill` reference is hard-forced (its SKILL.md body is injected as a
- * synthetic skill tool call+result so it is guaranteed loaded and persists in
- * history); a `plugin` reference is soft awareness (a turn-scoped system block
- * biases the model toward the plugin's bundled skills).
+ * a turn. A `skill` reference is hard-forced by appending its SKILL.md body to
+ * the model-facing user/steer message as plain text; a `plugin` reference is
+ * soft awareness (a turn-scoped system block biases the model toward the
+ * plugin's bundled skills).
  */
 export type TurnReference = {
   kind: "skill" | "plugin";

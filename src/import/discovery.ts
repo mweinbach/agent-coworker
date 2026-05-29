@@ -44,11 +44,19 @@ const IMPORT_PLUGIN_MANIFEST_DIR_NAMES = [
   CLAUDE_PLUGIN_MANIFEST_DIR_NAME,
 ] as const;
 
-// Heavy directories that never contain a plugin root we care about.
+// Heavy/scratch directories that never contain a plugin root we care about.
 const SKIP_WALK_DIR_NAMES = new Set([".git", "node_modules"]);
+const SKIP_WALK_DIR_PREFIXES = ["plugin-backup-", "plugin-install-"] as const;
 const MAX_PLUGIN_WALK_DEPTH = 8;
 
 type DiscoveredPluginRoot = { rootDir: string; manifestDirName: string };
+
+function shouldSkipWalkDirName(name: string): boolean {
+  return (
+    SKIP_WALK_DIR_NAMES.has(name) ||
+    SKIP_WALK_DIR_PREFIXES.some((prefix) => name.startsWith(prefix))
+  );
+}
 
 async function manifestDirNameAt(dir: string): Promise<string | null> {
   for (const dirName of IMPORT_PLUGIN_MANIFEST_DIR_NAMES) {
@@ -95,7 +103,7 @@ async function discoverPluginRoots(scanRoot: string): Promise<DiscoveredPluginRo
       return;
     }
     for (const dirent of dirents) {
-      if (SKIP_WALK_DIR_NAMES.has(dirent.name)) continue;
+      if (shouldSkipWalkDirName(dirent.name)) continue;
       const childPath = path.join(dir, dirent.name);
       if (dirent.isDirectory()) {
         await visit(childPath, depth + 1);

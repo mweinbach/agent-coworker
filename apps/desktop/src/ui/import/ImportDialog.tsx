@@ -370,6 +370,10 @@ export function ImportDialog({ workspaceId, kind }: { workspaceId: string; kind:
               <div className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
                 <Spinner /> Scanning {SOURCE_LABELS[tab]}…
               </div>
+            ) : state?.error ? (
+              <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+                {state.error}
+              </div>
             ) : !state?.homeExists ? (
               <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border/60 bg-muted/10 py-16 text-center">
                 <PackageIcon className="h-6 w-6 text-muted-foreground/60" />
@@ -396,11 +400,6 @@ export function ImportDialog({ workspaceId, kind }: { workspaceId: string; kind:
               </div>
             ) : (
               <div className="space-y-2.5">
-                {state?.error ? (
-                  <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
-                    {state.error}
-                  </div>
-                ) : null}
                 {items.map((item) => (
                   <ImportItemCard
                     key={`${item.source}:${item.id}`}

@@ -111,8 +111,9 @@ describe("import/discovery plugins", () => {
     const userHome = await mkTmp("import-user-");
     const config = makeConfig(workspace, userHome);
 
+    const alphaRoot = path.join(codexHome, "plugins", "cache", "openai-curated", "alpha", "1.0.0");
     await writePluginBundle({
-      root: path.join(codexHome, "plugins", "cache", "openai-curated", "alpha", "1.0.0"),
+      root: alphaRoot,
       manifestDir: ".codex-plugin",
       manifest: {
         name: "alpha",
@@ -121,6 +122,39 @@ describe("import/discovery plugins", () => {
         skills: "./skills/",
       },
       withSkill: { name: "alpha-skill", description: "Alpha skill" },
+    });
+    const zetaRoot = path.join(codexHome, "plugins", "cache", "openai-curated", "zeta", "1.0.0");
+    await writePluginBundle({
+      root: zetaRoot,
+      manifestDir: ".codex-plugin",
+      manifest: {
+        name: "zeta",
+        version: "1.0.0",
+        description: "Zeta plugin",
+        skills: "./skills/",
+      },
+      withSkill: { name: "zeta-skill", description: "Zeta skill" },
+    });
+    // Install/backup scratch dirs can contain stale manifests and sort before
+    // the canonical cache entry for the same plugin id.
+    await writePluginBundle({
+      root: path.join(
+        codexHome,
+        "plugins",
+        "cache",
+        "openai-curated",
+        "plugin-backup-aaaa",
+        "zeta",
+        "0.1.0",
+      ),
+      manifestDir: ".codex-plugin",
+      manifest: {
+        name: "zeta",
+        version: "0.1.0",
+        description: "Stale zeta backup",
+        skills: "./skills/",
+      },
+      withSkill: { name: "zeta-skill", description: "Stale zeta skill" },
     });
     await writePluginBundle({
       root: path.join(claudeHome, "plugins", "cache", "mkt", "beta", "2.0.0"),
@@ -154,6 +188,8 @@ describe("import/discovery plugins", () => {
     expect(byId.has("alpha")).toBe(true);
     expect(byId.get("alpha")?.conversionRequired).toBeFalsy();
     expect(byId.get("alpha")?.source).toBe("codex");
+    expect(byId.get("zeta")?.version).toBe("1.0.0");
+    expect(byId.get("zeta")?.sourcePath).toBe(zetaRoot);
     expect(byId.has("beta")).toBe(true);
     expect(byId.get("beta")?.conversionRequired).toBe(true);
     expect(byId.get("beta")?.diagnostics).toHaveLength(0);

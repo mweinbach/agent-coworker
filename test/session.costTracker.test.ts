@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
-import { SessionCostTracker } from "../src/session/costTracker";
+import {
+  deriveUsageCostBreakdown,
+  type SessionUsageSnapshot,
+  SessionCostTracker,
+} from "../src/session/costTracker";
 
 describe("SessionCostTracker", () => {
   test("clears stop-triggered state when hard-stop threshold is removed", () => {
@@ -141,6 +145,56 @@ describe("SessionCostTracker", () => {
     expect(tracker.formatSummary()).toContain("100.0k cache write");
     expect(tracker.formatSummary()).toContain("125.0k reasoning output");
     expect(tracker.formatSummary()).toContain("$0.38 cache write");
+  });
+
+  test("derives missing spend buckets from legacy persisted usage snapshots", () => {
+    const legacySnapshot: SessionUsageSnapshot = {
+      sessionId: "session-1",
+      totalTurns: 3,
+      totalPromptTokens: 3_442_232,
+      totalCompletionTokens: 45_513,
+      totalTokens: 2_023_803,
+      totalCachedPromptTokens: 1_497_866,
+      totalReasoningOutputTokens: 33_924,
+      estimatedTotalCostUsd: 3.5508459,
+      costTrackingAvailable: true,
+      byModel: [
+        {
+          provider: "google",
+          model: "gemini-3.5-flash",
+          turns: 3,
+          totalPromptTokens: 3_442_232,
+          totalCompletionTokens: 45_513,
+          totalTokens: 2_023_803,
+          totalCachedPromptTokens: 1_497_866,
+          totalReasoningOutputTokens: 33_924,
+          estimatedCostUsd: 3.5508459,
+        },
+      ],
+      turns: [],
+      budgetStatus: {
+        configured: false,
+        warnAtUsd: null,
+        stopAtUsd: null,
+        warningTriggered: false,
+        stopTriggered: false,
+        currentCostUsd: 3.5508459,
+      },
+      createdAt: "2026-05-29T12:31:40.910Z",
+      updatedAt: "2026-05-29T13:00:26.616Z",
+    };
+
+    const derived = deriveUsageCostBreakdown(legacySnapshot);
+    expect(derived?.inputCostUsd).toBeCloseTo(2.916549, 6);
+    expect(derived?.cachedInputCostUsd).toBeCloseTo(0.2246799, 6);
+    expect(derived?.outputCostUsd).toBeCloseTo(0.409617, 6);
+    expect(derived?.otherCostUsd).toBeCloseTo(0, 6);
+
+    const restored = SessionCostTracker.fromSnapshot(legacySnapshot).getSnapshot();
+    expect(restored.costBreakdown?.inputCostUsd).toBeCloseTo(2.916549, 6);
+    expect(restored.costBreakdown?.cachedInputCostUsd).toBeCloseTo(0.2246799, 6);
+    expect(restored.costBreakdown?.outputCostUsd).toBeCloseTo(0.409617, 6);
+    expect(restored.costBreakdown?.otherCostUsd).toBeCloseTo(0, 6);
   });
 
   test("uses catalog pricing before runtime-provided estimated cost when available", () => {

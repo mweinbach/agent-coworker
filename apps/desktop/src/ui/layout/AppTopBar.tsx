@@ -12,6 +12,10 @@ import {
   XIcon,
 } from "lucide-react";
 import { type CSSProperties, useEffect, useId, useMemo, useRef, useState } from "react";
+import {
+  deriveUsageCostBreakdown,
+  type UsageCostBreakdown,
+} from "../../../../../src/session/costTracker";
 import { formatCost, formatTokenCount } from "../../../../../src/session/pricing";
 import type { SessionUsageSnapshot, ThreadAgentSummary, TurnUsageSnapshot } from "../../app/types";
 import { Badge } from "../../components/ui/badge";
@@ -67,7 +71,7 @@ interface AppTopBarProps {
   onCloseCanvas?: () => void;
 }
 
-type TopBarUsageCostBreakdown = NonNullable<SessionUsageSnapshot["costBreakdown"]>;
+type TopBarUsageCostBreakdown = UsageCostBreakdown;
 
 type TopBarUsageSummary = {
   hasUsage: boolean;
@@ -149,7 +153,7 @@ function addUsageToTopBarSummary(
     usage.costTrackingAvailable && typeof usage.estimatedTotalCostUsd === "number";
   if (hasKnownCost) {
     const costUsd = usage.estimatedTotalCostUsd ?? 0;
-    const breakdown = usage.costBreakdown ?? fallbackCostBreakdown(costUsd);
+    const breakdown = deriveUsageCostBreakdown(usage) ?? fallbackCostBreakdown(costUsd);
     summary.totalCostUsd = addNullableCost(summary.totalCostUsd, costUsd);
     summary.costBreakdown = summary.costBreakdown
       ? addTopBarCostBreakdown(summary.costBreakdown, breakdown)
@@ -217,11 +221,7 @@ function summarizeTopBarUsage(
   return summary;
 }
 
-function formatUsageCost(
-  costUsd: number | null,
-  unavailable: boolean,
-  noUsageLabel = "—",
-): string {
+function formatUsageCost(costUsd: number | null, unavailable: boolean, noUsageLabel = "—"): string {
   if (costUsd !== null) {
     return unavailable ? `${formatCost(costUsd)}+` : formatCost(costUsd);
   }
@@ -288,10 +288,10 @@ export function AppTopBar({
       ? 0
       : sidebarWidth;
   const rightSidebarLabel = contextSidebarCollapsed ? "Show context" : "Hide context";
-  const usageSummary = useMemo(() => summarizeTopBarUsage(sessionUsage, agents), [
-    agents,
-    sessionUsage,
-  ]);
+  const usageSummary = useMemo(
+    () => summarizeTopBarUsage(sessionUsage, agents),
+    [agents, sessionUsage],
+  );
   const hasUsage = usageSummary.hasUsage || lastTurnUsage !== null;
   const estimatedCostLabel = useMemo(() => {
     if (!usageSummary.hasUsage) {

@@ -19,8 +19,8 @@ import {
   formatCost,
   formatTokenCount,
   type ModelPricing,
-  type TokenCostBreakdown,
   resolveModelPricing,
+  type TokenCostBreakdown,
 } from "./pricing";
 
 // ── Public types ───────────────────────────────────────────────────────
@@ -130,9 +130,7 @@ function emptyUsageCostBreakdown(): UsageCostBreakdown {
   };
 }
 
-function usageCostBreakdownFromTokenBreakdown(
-  breakdown: TokenCostBreakdown,
-): UsageCostBreakdown {
+function usageCostBreakdownFromTokenBreakdown(breakdown: TokenCostBreakdown): UsageCostBreakdown {
   return {
     inputCostUsd: breakdown.inputCostUsd,
     cachedInputCostUsd: breakdown.cachedInputCostUsd,
@@ -160,6 +158,110 @@ function addUsageCostBreakdown(
     outputCostUsd: target.outputCostUsd + next.outputCostUsd,
     otherCostUsd: target.otherCostUsd + next.otherCostUsd,
   };
+}
+
+function reconcileDerivedCostBreakdown(
+  breakdown: UsageCostBreakdown,
+  expectedCostUsd: number | null,
+): UsageCostBreakdown {
+  if (expectedCostUsd === null || !Number.isFinite(expectedCostUsd)) {
+    return breakdown;
+  }
+
+  const derivedTotal =
+    breakdown.inputCostUsd +
+    breakdown.cachedInputCostUsd +
+    breakdown.cacheWriteInputCostUsd +
+    breakdown.outputCostUsd +
+    breakdown.otherCostUsd;
+  const delta = expectedCostUsd - derivedTotal;
+  if (Math.abs(delta) < 0.000001 || delta < 0) {
+    return breakdown;
+  }
+
+  return {
+    ...breakdown,
+    otherCostUsd: breakdown.otherCostUsd + delta,
+  };
+}
+
+function deriveModelUsageCostBreakdown(summary: ModelUsageSummary): UsageCostBreakdown | null {
+  if (summary.costBreakdown) {
+    return { ...summary.costBreakdown };
+  }
+
+  const pricing = resolveModelPricing(summary.provider, summary.model);
+  if (pricing) {
+    return usageCostBreakdownFromTokenBreakdown(
+      calculateTokenCostBreakdown(
+        summary.totalPromptTokens,
+        summary.totalCompletionTokens,
+        pricing,
+        summary.totalCachedPromptTokens ?? 0,
+        summary.totalCacheWritePromptTokens ?? 0,
+      ),
+    );
+  }
+
+  return summary.estimatedCostUsd !== null
+    ? usageCostBreakdownFromUnattributedCost(summary.estimatedCostUsd)
+    : null;
+}
+
+function deriveTurnUsageCostBreakdown(entry: TurnCostEntry): UsageCostBreakdown | null {
+  if (entry.costBreakdown !== undefined) {
+    return entry.costBreakdown ? { ...entry.costBreakdown } : null;
+  }
+
+  const pricing = entry.pricing ?? resolveModelPricing(entry.provider, entry.model);
+  if (pricing) {
+    return usageCostBreakdownFromTokenBreakdown(
+      calculateTokenCostBreakdown(
+        entry.usage.promptTokens,
+        entry.usage.completionTokens,
+        pricing,
+        entry.usage.cachedPromptTokens ?? 0,
+        entry.usage.cacheWritePromptTokens ?? 0,
+      ),
+    );
+  }
+
+  return entry.estimatedCostUsd !== null
+    ? usageCostBreakdownFromUnattributedCost(entry.estimatedCostUsd)
+    : null;
+}
+
+export function deriveUsageCostBreakdown(
+  snapshot: Pick<
+    SessionUsageSnapshot,
+    "byModel" | "costBreakdown" | "estimatedTotalCostUsd" | "turns"
+  >,
+): UsageCostBreakdown | null {
+  if (snapshot.costBreakdown) {
+    return { ...snapshot.costBreakdown };
+  }
+
+  let aggregate: UsageCostBreakdown | null = null;
+  const modelBreakdowns = snapshot.byModel
+    .map((summary) => deriveModelUsageCostBreakdown(summary))
+    .filter((breakdown): breakdown is UsageCostBreakdown => breakdown !== null);
+
+  if (modelBreakdowns.length === snapshot.byModel.length && modelBreakdowns.length > 0) {
+    aggregate = modelBreakdowns.reduce(
+      (current, next) => addUsageCostBreakdown(current, next),
+      emptyUsageCostBreakdown(),
+    );
+  } else if (snapshot.turns.length > 0) {
+    aggregate = snapshot.turns.reduce<UsageCostBreakdown | null>((current, entry) => {
+      const next = deriveTurnUsageCostBreakdown(entry);
+      if (!next) return current;
+      return current ? addUsageCostBreakdown(current, next) : { ...next };
+    }, null);
+  }
+
+  return aggregate
+    ? reconcileDerivedCostBreakdown(aggregate, snapshot.estimatedTotalCostUsd)
+    : null;
 }
 
 export class SessionCostTracker {
@@ -243,7 +345,7 @@ export class SessionCostTracker {
     tracker.estimatedTotalCostUsd = tracker.hasUnknownCostTurns
       ? null
       : snapshot.estimatedTotalCostUsd;
-    tracker.costBreakdown = snapshot.costBreakdown ? { ...snapshot.costBreakdown } : null;
+    tracker.costBreakdown = tracker.hasUnknownCostTurns ? null : deriveUsageCostBreakdown(snapshot);
     tracker.costTrackingAvailable =
       !tracker.hasUnknownCostTurns &&
       snapshot.costTrackingAvailable &&
@@ -616,7 +718,10 @@ export class SessionCostTracker {
     }
   }
 
-  private recordSessionCost(costUsd: number | null, costBreakdown: UsageCostBreakdown | null): void {
+  private recordSessionCost(
+    costUsd: number | null,
+    costBreakdown: UsageCostBreakdown | null,
+  ): void {
     if (costUsd === null) {
       this.hasUnknownCostTurns = true;
       this.costTrackingAvailable = false;

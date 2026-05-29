@@ -339,13 +339,7 @@ describe("pricing", () => {
 
     it("returns the same total with per-bucket spend breakdown", () => {
       const pricing = resolveModelPricing("anthropic", "claude-sonnet-4-5")!;
-      const breakdown = calculateTokenCostBreakdown(
-        1_000_000,
-        500_000,
-        pricing,
-        400_000,
-        100_000,
-      );
+      const breakdown = calculateTokenCostBreakdown(1_000_000, 500_000, pricing, 400_000, 100_000);
 
       expect(breakdown.inputCostUsd).toBeCloseTo(1.5, 4);
       expect(breakdown.cachedInputCostUsd).toBeCloseTo(0.12, 4);

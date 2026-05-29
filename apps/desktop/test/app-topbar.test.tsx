@@ -1,10 +1,9 @@
 import { describe, expect, mock, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
-
+import type { ThreadAgentSummary } from "../src/app/types";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
 import { setupJsdom } from "./jsdomHarness";
-import type { ThreadAgentSummary } from "../src/app/types";
 
 mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock());
 
@@ -49,6 +48,42 @@ const lastTurnUsage = {
     totalTokens: 200,
     estimatedCostUsd: 0.0032,
   },
+};
+
+const legacySessionUsage = {
+  sessionId: "legacy-session",
+  totalTurns: 3,
+  totalPromptTokens: 3_442_232,
+  totalCompletionTokens: 45_513,
+  totalCachedPromptTokens: 1_497_866,
+  totalTokens: 2_023_803,
+  totalReasoningOutputTokens: 33_924,
+  estimatedTotalCostUsd: 3.5508459,
+  costTrackingAvailable: true,
+  byModel: [
+    {
+      provider: "google" as const,
+      model: "gemini-3.5-flash",
+      turns: 3,
+      totalPromptTokens: 3_442_232,
+      totalCompletionTokens: 45_513,
+      totalCachedPromptTokens: 1_497_866,
+      totalTokens: 2_023_803,
+      totalReasoningOutputTokens: 33_924,
+      estimatedCostUsd: 3.5508459,
+    },
+  ],
+  turns: [],
+  budgetStatus: {
+    configured: false,
+    warnAtUsd: null,
+    stopAtUsd: null,
+    warningTriggered: false,
+    stopTriggered: false,
+    currentCostUsd: 3.5508459,
+  },
+  createdAt: "2026-05-29T12:31:40.910Z",
+  updatedAt: "2026-05-29T13:00:26.616Z",
 };
 
 const subagentUsage = {
@@ -202,6 +237,65 @@ describe("desktop app top bar", () => {
       expect(container.textContent).toContain("Cache-write input");
       expect(container.textContent).toContain("Standard-rate spend");
       expect(container.textContent).toContain("Output spend");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("maps legacy usage estimates into token spend buckets", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          createElement(AppTopBar, {
+            busy: false,
+            onToggleSidebar: () => {},
+            onNewChat: () => {},
+            sidebarCollapsed: false,
+            sidebarWidth: 280,
+            contextSidebarCollapsed: false,
+            onToggleContextSidebar: () => {},
+            title: "Tesla Robotics and Self-Driving Synergy",
+            subtitle: null,
+            sessionUsage: legacySessionUsage,
+            lastTurnUsage: null,
+            managementMode: "thread",
+          }),
+        );
+      });
+
+      const titleButton = container.querySelector('button[aria-label="Open thread details"]');
+      expect(titleButton).not.toBeNull();
+      await act(async () => {
+        titleButton?.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      const moreButton = container.querySelector('button[aria-label="Show usage details"]');
+      expect(moreButton).not.toBeNull();
+      await act(async () => {
+        moreButton?.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(container.textContent).toContain("Original input");
+      expect(container.textContent).toContain("1.94M");
+      expect(container.textContent).toContain("Cache-read input");
+      expect(container.textContent).toContain("1.50M");
+      expect(container.textContent).toContain("Standard-rate spend");
+      expect(container.textContent).toContain("$2.92");
+      expect(container.textContent).toContain("Cache-read spend");
+      expect(container.textContent).toContain("$0.22");
+      expect(container.textContent).toContain("Output spend");
+      expect(container.textContent).toContain("$0.41");
+      expect(container.textContent).not.toContain("Other estimated spend");
 
       await act(async () => {
         root.unmount();

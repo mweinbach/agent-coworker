@@ -84,6 +84,28 @@ function createSkillMarketplaceFetch(doc: unknown): typeof fetch {
   }) as typeof fetch;
 }
 
+function createRawFallbackMarketplaceFetch(doc: unknown): typeof fetch {
+  return (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (
+      url.startsWith("https://api.github.com/") &&
+      url.includes("/contents/.agents/plugins/marketplace.json")
+    ) {
+      return new Response("rate limited", { status: 403 });
+    }
+    if (
+      url ===
+      "https://raw.githubusercontent.com/mweinbach/cowork-skills-plugins/main/.agents/plugins/marketplace.json"
+    ) {
+      return new Response(JSON.stringify(doc), {
+        status: 200,
+        headers: { "content-type": "text/plain; charset=utf-8" },
+      });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+}
+
 describe("skill marketplace", () => {
   test("parseRemotePluginMarketplace builds skill sourceInput URLs alongside plugins", () => {
     const doc = parseRemotePluginMarketplace(
@@ -189,6 +211,29 @@ describe("skill marketplace", () => {
           "https://github.com/mweinbach/cowork-skills-plugins/tree/main/skills/create-skill",
         marketplace: { name: "cowork-test", displayName: "Cowork Test", category: "Authoring" },
       });
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test("getSkillCatalog falls back to raw GitHub marketplace JSON when contents API is rate limited", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "skill-market-raw-ws-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "skill-market-raw-home-"));
+    const skillsDir = path.join(home, ".cowork", "skills");
+    await fs.mkdir(skillsDir, { recursive: true });
+    const config = makeConfig(workspace, home, skillsDir);
+
+    try {
+      const catalog = await getSkillCatalog(config, {
+        includeRemoteMarketplace: true,
+        fetchImpl: createRawFallbackMarketplaceFetch(marketplaceDoc(["apple-native-transcribe"])),
+      });
+
+      expect(catalog.remoteMarketplaceFailed).toBeUndefined();
+      expect(catalog.availableSkills.map((skill) => skill.name)).toEqual([
+        "apple-native-transcribe",
+      ]);
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
       await fs.rm(home, { recursive: true, force: true });

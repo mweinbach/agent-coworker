@@ -54,6 +54,68 @@ function normalizeInstallSourceInput(input: string): string {
   return input.trim().replace(/\/+$/g, "");
 }
 
+async function readResponseText(response: Response): Promise<string> {
+  try {
+    return await response.text();
+  } catch {
+    return "";
+  }
+}
+
+async function fetchRawGitHubTextFile(opts: {
+  fetchImpl: FetchLike;
+  repo: string;
+  ref: string;
+  githubPath: string;
+}): Promise<string> {
+  const rawUrl = `https://raw.githubusercontent.com/${opts.repo}/${encodeURIComponent(opts.ref)}/${opts.githubPath
+    .split("/")
+    .filter(Boolean)
+    .map((segment) => encodeURIComponent(segment))
+    .join("/")}`;
+  const response = await opts.fetchImpl(rawUrl);
+  if (!response.ok) {
+    const body = (await readResponseText(response)).trim();
+    throw new Error(
+      `Failed to fetch ${rawUrl}: ${body || `${response.status} ${response.statusText}`}`,
+    );
+  }
+  return await response.text();
+}
+
+async function fetchMarketplaceJsonText(opts: {
+  fetchImpl: FetchLike;
+  repo: string;
+  ref: string;
+  marketplacePath: string;
+}): Promise<string> {
+  try {
+    return await fetchGitHubTextFile({
+      fetchImpl: opts.fetchImpl,
+      repo: opts.repo,
+      ref: opts.ref,
+      githubPath: opts.marketplacePath,
+    });
+  } catch (contentsError) {
+    const message = contentsError instanceof Error ? contentsError.message : String(contentsError);
+    if (!message.startsWith("Failed to fetch ")) {
+      throw contentsError;
+    }
+    try {
+      return await fetchRawGitHubTextFile({
+        fetchImpl: opts.fetchImpl,
+        repo: opts.repo,
+        ref: opts.ref,
+        githubPath: opts.marketplacePath,
+      });
+    } catch (rawError) {
+      throw new Error(
+        `Failed to fetch remote marketplace: ${message}; raw fallback failed: ${rawError instanceof Error ? rawError.message : String(rawError)}`,
+      );
+    }
+  }
+}
+
 export function buildMarketplaceCatalogMetadata(input: {
   name: string;
   displayName?: string;
@@ -201,17 +263,18 @@ export async function fetchRemotePluginMarketplace(
   const repo = opts.repo ?? BUILT_IN_MARKETPLACE_REPO;
   const ref = opts.ref ?? BUILT_IN_MARKETPLACE_REF;
   const marketplacePath = opts.marketplacePath ?? BUILT_IN_MARKETPLACE_PATH;
-  const raw = await fetchGitHubTextFile({
+  const raw = await fetchMarketplaceJsonText({
     fetchImpl,
     repo,
     ref,
-    githubPath: marketplacePath,
+    marketplacePath,
   });
-  return parseRemotePluginMarketplace(raw, {
+  const marketplace = parseRemotePluginMarketplace(raw, {
     marketplacePath: `https://github.com/${repo}/blob/${ref}/${marketplacePath}`,
     repo,
     ref,
   });
+  return marketplace;
 }
 
 export async function fetchMarketplaceInstallMetadataBySourceInput(opts: {

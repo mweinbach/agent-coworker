@@ -301,6 +301,8 @@ describe("desktop server manager startup mode", () => {
       });
       await fs.writeFile(path.join(sdkDir, "dist", "index.js"), "");
       await fs.writeFile(path.join(sdkDir, "native", "libFoundationModels.dylib"), "");
+      await fs.writeFile(path.join(sdkDir, "node_modules", "koffi", "index.js"), "");
+      await fs.writeFile(path.join(sdkDir, "node_modules", "koffi", "package.json"), "{}");
       await fs.writeFile(
         path.join(sdkDir, "node_modules", "koffi", "build", "koffi", "darwin_arm64", "koffi.node"),
         "",

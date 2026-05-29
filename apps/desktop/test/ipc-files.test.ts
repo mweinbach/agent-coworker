@@ -340,6 +340,54 @@ describe("files IPC", () => {
     await fs.rm(tempWorkspace, { recursive: true, force: true });
   });
 
+  test("readFile returns full UTF-8 content from approved roots", async () => {
+    const registerFilesIpc = await loadRegisterFilesIpc();
+    const tempWorkspaceRaw = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-read-file-ws-"));
+    const tempWorkspace = await fs.realpath(tempWorkspaceRaw);
+    const filePath = path.join(tempWorkspace, "large.txt");
+    const content = `${"line\n".repeat(70_000)}tail`;
+    await fs.writeFile(filePath, content, "utf-8");
+
+    const handlers = new Map<
+      string,
+      (event: unknown, args?: unknown) => Promise<unknown> | unknown
+    >();
+    registerFilesIpc({
+      deps: {} as never,
+      workspaceRoots: {
+        async ensureApprovedWorkspaceRoots() {},
+        async refreshApprovedWorkspaceRootsFromState() {},
+        async assertApprovedWorkspacePath(workspacePath: string) {
+          return workspacePath;
+        },
+        async addApprovedWorkspacePath(workspacePath: string) {
+          return workspacePath;
+        },
+        setApprovedWorkspaceRoots() {},
+        getApprovedWorkspaceRoots() {
+          return [tempWorkspace];
+        },
+      },
+      handleDesktopInvoke(channel, handler) {
+        handlers.set(channel, handler as never);
+      },
+      parseWithSchema(schema, value, label) {
+        const parsed = schema.safeParse(value);
+        if (parsed.success) {
+          return parsed.data as never;
+        }
+        throw new Error(`${label} ${parsed.error.issues[0]?.message ?? "is invalid"}`);
+      },
+    });
+
+    const handler = handlers.get(DESKTOP_IPC_CHANNELS.readFile);
+    expect(handler).toBeDefined();
+
+    await expect(handler?.({ sender: {} }, { path: filePath })).resolves.toEqual({ content });
+
+    await fs.rm(tempWorkspace, { recursive: true, force: true });
+  });
+
   test("trashPath does not permanently delete when moving to Trash fails", async () => {
     const registerFilesIpc = await loadRegisterFilesIpc();
     const tempWorkspaceRaw = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-trash-path-ws-"));
@@ -446,5 +494,52 @@ describe("files IPC", () => {
 
     await fs.rm(tempWorkspace, { recursive: true, force: true });
     await fs.rm(outsideDir, { recursive: true, force: true });
+  });
+
+  test("copyText rejects non-string payloads before touching clipboard", async () => {
+    const registerFilesIpc = await loadRegisterFilesIpc();
+    const handlers = new Map<
+      string,
+      (event: unknown, args?: unknown) => Promise<unknown> | unknown
+    >();
+
+    registerFilesIpc({
+      deps: {} as never,
+      workspaceRoots: {
+        async ensureApprovedWorkspaceRoots() {},
+        async refreshApprovedWorkspaceRootsFromState() {},
+        async assertApprovedWorkspacePath(workspacePath: string) {
+          return workspacePath;
+        },
+        async addApprovedWorkspacePath(workspacePath: string) {
+          return workspacePath;
+        },
+        setApprovedWorkspaceRoots() {},
+        getApprovedWorkspaceRoots() {
+          return [];
+        },
+      },
+      handleDesktopInvoke(channel, handler) {
+        handlers.set(channel, handler as never);
+      },
+      parseWithSchema(schema, value, label) {
+        const parsed = schema.safeParse(value);
+        if (parsed.success) {
+          return parsed.data as never;
+        }
+        throw new Error(`${label} ${parsed.error.issues[0]?.message ?? "is invalid"}`);
+      },
+    });
+
+    const handler = handlers.get(DESKTOP_IPC_CHANNELS.copyText);
+    expect(handler).toBeDefined();
+
+    clipboardWriteTextMock.mockClear();
+
+    await expect(handler?.({ sender: {} }, { text: "not a string" })).rejects.toThrow(
+      "copyText text",
+    );
+
+    expect(clipboardWriteTextMock).not.toHaveBeenCalled();
   });
 });

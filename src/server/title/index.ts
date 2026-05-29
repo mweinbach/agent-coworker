@@ -2,6 +2,8 @@ import {
   APPLE_FOUNDATION_TITLE_MODEL,
   APPLE_TITLE_RANDOM_TOP_P,
   APPLE_TITLE_TEMPERATURE,
+  APPLE_TITLE_WAIT_INTERVAL_MS,
+  APPLE_TITLE_WAIT_TIMEOUT_MS,
   generateAppleFoundationTitle,
   isAppleSiliconMac,
   loadAppleFoundationModelsModule,
@@ -99,27 +101,12 @@ export function createSessionTitleGenerator(overrides: Partial<SessionTitleDeps>
         model: APPLE_FOUNDATION_TITLE_MODEL,
       };
     }
-    if (appleTitle.status === "failed") {
-      return {
-        title: heuristicTitleFromQuery(query),
-        source: "heuristic",
-        model: null,
-      };
-    }
-
     const phiSilicaTitle = await generatePhiSilicaTitle(query, deps);
     if (phiSilicaTitle.status === "generated") {
       return {
         title: phiSilicaTitle.title,
         source: "model",
         model: PHI_SILICA_TITLE_MODEL,
-      };
-    }
-    if (phiSilicaTitle.status === "failed") {
-      return {
-        title: heuristicTitleFromQuery(query),
-        source: "heuristic",
-        model: null,
       };
     }
 
@@ -146,6 +133,8 @@ export const __internal = {
   APPLE_FOUNDATION_TITLE_MODEL,
   APPLE_TITLE_RANDOM_TOP_P,
   APPLE_TITLE_TEMPERATURE,
+  APPLE_TITLE_WAIT_INTERVAL_MS,
+  APPLE_TITLE_WAIT_TIMEOUT_MS,
   generateAppleFoundationTitle,
   generatePhiSilicaTitle,
   isAppleSiliconMac,

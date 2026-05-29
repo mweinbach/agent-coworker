@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  copyTextInputSchema,
   desktopMenuCommandSchema,
   mobileRelayBridgeStateSchema,
   mobileRelayForgetTrustedPhoneInputSchema,
@@ -8,6 +9,8 @@ import {
   mobileRelayUpdateTrustedPhonePermissionsInputSchema,
   openExternalUrlInputSchema,
   persistedStateInputSchema,
+  pickDirectoryInputSchema,
+  platformChromeInfoSchema,
   showQuickChatWindowInputSchema,
   updaterStateSchema,
 } from "../src/lib/desktopSchemas";
@@ -154,6 +157,58 @@ describe("desktop persisted-state schema defaults", () => {
     expect(showQuickChatWindowInputSchema.parse({ newThread: true })).toEqual({
       newThread: true,
     });
+  });
+
+  test("validates simple preload IPC inputs", () => {
+    expect(pickDirectoryInputSchema.parse({ title: "Choose workspace" })).toEqual({
+      title: "Choose workspace",
+    });
+    expect(copyTextInputSchema.parse("copy me")).toBe("copy me");
+
+    expect(() => pickDirectoryInputSchema.parse({ title: 42 })).toThrow();
+    expect(() => copyTextInputSchema.parse({ text: "not a string" })).toThrow();
+  });
+
+  test("accepts platform chrome IPC payloads", () => {
+    expect(
+      platformChromeInfoSchema.parse({
+        platform: "darwin",
+        titlebarHeight: 28,
+        dragStripHeight: 28,
+        leftNativeReserve: 72,
+        rightNativeReserve: 0,
+        captionButtonReserve: 0,
+        collapsedLeftRailWidth: 48,
+        topbarToolbarGap: 8,
+        sidebarTitlebandMode: "native",
+        topbarControlPlacement: "sidebar",
+        usesNativeGlass: true,
+        disableCssBlur: false,
+      }),
+    ).toMatchObject({
+      platform: "darwin",
+      sidebarTitlebandMode: "native",
+      topbarControlPlacement: "sidebar",
+    });
+  });
+
+  test("rejects invalid platform chrome IPC payloads", () => {
+    expect(() =>
+      platformChromeInfoSchema.parse({
+        platform: "darwin",
+        titlebarHeight: -1,
+        dragStripHeight: 28,
+        leftNativeReserve: 72,
+        rightNativeReserve: 0,
+        captionButtonReserve: 0,
+        collapsedLeftRailWidth: 48,
+        topbarToolbarGap: 8,
+        sidebarTitlebandMode: "native",
+        topbarControlPlacement: "sidebar",
+        usesNativeGlass: true,
+        disableCssBlur: false,
+      }),
+    ).toThrow();
   });
 
   test("accepts mobile relay start input", () => {

@@ -12,8 +12,12 @@ import {
   XIcon,
 } from "lucide-react";
 import { type CSSProperties, useEffect, useId, useMemo, useRef, useState } from "react";
+import {
+  deriveUsageCostBreakdown,
+  type UsageCostBreakdown,
+} from "../../../../../src/session/costTracker";
 import { formatCost, formatTokenCount } from "../../../../../src/session/pricing";
-import type { SessionUsageSnapshot, TurnUsageSnapshot } from "../../app/types";
+import type { SessionUsageSnapshot, ThreadAgentSummary, TurnUsageSnapshot } from "../../app/types";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import {
@@ -47,6 +51,7 @@ interface AppTopBarProps {
   subtitle: string | null;
   sessionUsage: SessionUsageSnapshot | null;
   lastTurnUsage: TurnUsageSnapshot | null;
+  agents?: ThreadAgentSummary[];
   canClearHardCap?: boolean;
   onClearHardCap?: () => void;
   showContextToggle?: boolean;
@@ -66,6 +71,175 @@ interface AppTopBarProps {
   onCloseCanvas?: () => void;
 }
 
+type TopBarUsageCostBreakdown = UsageCostBreakdown;
+
+type TopBarUsageSummary = {
+  hasUsage: boolean;
+  hasSubagents: boolean;
+  parentTurns: number;
+  subagentTurns: number;
+  totalTurns: number;
+  totalTokens: number;
+  promptTokens: number;
+  cachedPromptTokens: number;
+  cacheWritePromptTokens: number;
+  completionTokens: number;
+  reasoningOutputTokens: number;
+  parentCostUsd: number | null;
+  parentCostUnavailable: boolean;
+  subagentCostUsd: number | null;
+  subagentCostUnavailable: boolean;
+  totalCostUsd: number | null;
+  totalCostUnavailable: boolean;
+  costBreakdown: TopBarUsageCostBreakdown | null;
+};
+
+function emptyTopBarCostBreakdown(): TopBarUsageCostBreakdown {
+  return {
+    inputCostUsd: 0,
+    cachedInputCostUsd: 0,
+    cacheWriteInputCostUsd: 0,
+    outputCostUsd: 0,
+    otherCostUsd: 0,
+  };
+}
+
+function addTopBarCostBreakdown(
+  current: TopBarUsageCostBreakdown,
+  next: TopBarUsageCostBreakdown,
+): TopBarUsageCostBreakdown {
+  return {
+    inputCostUsd: current.inputCostUsd + next.inputCostUsd,
+    cachedInputCostUsd: current.cachedInputCostUsd + next.cachedInputCostUsd,
+    cacheWriteInputCostUsd: current.cacheWriteInputCostUsd + next.cacheWriteInputCostUsd,
+    outputCostUsd: current.outputCostUsd + next.outputCostUsd,
+    otherCostUsd: current.otherCostUsd + next.otherCostUsd,
+  };
+}
+
+function fallbackCostBreakdown(costUsd: number): TopBarUsageCostBreakdown {
+  return {
+    ...emptyTopBarCostBreakdown(),
+    otherCostUsd: costUsd,
+  };
+}
+
+function addNullableCost(current: number | null, next: number): number {
+  return (current ?? 0) + next;
+}
+
+function addUsageToTopBarSummary(
+  summary: TopBarUsageSummary,
+  usage: SessionUsageSnapshot,
+  scope: "parent" | "subagent",
+): void {
+  summary.hasUsage = true;
+  summary.totalTurns += usage.totalTurns;
+  summary.totalTokens += usage.totalTokens;
+  summary.promptTokens += usage.totalPromptTokens;
+  summary.cachedPromptTokens += usage.totalCachedPromptTokens ?? 0;
+  summary.cacheWritePromptTokens += usage.totalCacheWritePromptTokens ?? 0;
+  summary.completionTokens += usage.totalCompletionTokens;
+  summary.reasoningOutputTokens += usage.totalReasoningOutputTokens ?? 0;
+
+  if (scope === "parent") {
+    summary.parentTurns += usage.totalTurns;
+  } else {
+    summary.hasSubagents = true;
+    summary.subagentTurns += usage.totalTurns;
+  }
+
+  const hasKnownCost =
+    usage.costTrackingAvailable && typeof usage.estimatedTotalCostUsd === "number";
+  if (hasKnownCost) {
+    const costUsd = usage.estimatedTotalCostUsd ?? 0;
+    const breakdown =
+      deriveUsageCostBreakdown(usage, { resolveMissingPricing: false }) ??
+      fallbackCostBreakdown(costUsd);
+    summary.totalCostUsd = addNullableCost(summary.totalCostUsd, costUsd);
+    summary.costBreakdown = summary.costBreakdown
+      ? addTopBarCostBreakdown(summary.costBreakdown, breakdown)
+      : { ...breakdown };
+    if (scope === "parent") {
+      summary.parentCostUsd = addNullableCost(summary.parentCostUsd, costUsd);
+    } else {
+      summary.subagentCostUsd = addNullableCost(summary.subagentCostUsd, costUsd);
+    }
+  } else if (usage.totalTurns > 0) {
+    summary.totalCostUnavailable = true;
+    if (scope === "parent") {
+      summary.parentCostUnavailable = true;
+    } else {
+      summary.subagentCostUnavailable = true;
+    }
+  }
+}
+
+function originalInputTokens(summary: TopBarUsageSummary): number {
+  return Math.max(0, summary.promptTokens - summary.cachedPromptTokens);
+}
+
+function standardInputTokens(summary: TopBarUsageSummary): number {
+  return Math.max(
+    0,
+    summary.promptTokens - summary.cachedPromptTokens - summary.cacheWritePromptTokens,
+  );
+}
+
+function summarizeTopBarUsage(
+  sessionUsage: SessionUsageSnapshot | null,
+  agents: ThreadAgentSummary[],
+): TopBarUsageSummary {
+  const summary: TopBarUsageSummary = {
+    hasUsage: false,
+    hasSubagents: false,
+    parentTurns: 0,
+    subagentTurns: 0,
+    totalTurns: 0,
+    totalTokens: 0,
+    promptTokens: 0,
+    cachedPromptTokens: 0,
+    cacheWritePromptTokens: 0,
+    completionTokens: 0,
+    reasoningOutputTokens: 0,
+    parentCostUsd: null,
+    parentCostUnavailable: false,
+    subagentCostUsd: null,
+    subagentCostUnavailable: false,
+    totalCostUsd: null,
+    totalCostUnavailable: false,
+    costBreakdown: null,
+  };
+
+  if (sessionUsage) {
+    addUsageToTopBarSummary(summary, sessionUsage, "parent");
+  }
+  for (const agent of agents) {
+    if (agent.sessionUsage) {
+      addUsageToTopBarSummary(summary, agent.sessionUsage, "subagent");
+    }
+  }
+
+  return summary;
+}
+
+function formatUsageCost(costUsd: number | null, unavailable: boolean, noUsageLabel = "—"): string {
+  if (costUsd !== null) {
+    return unavailable ? `${formatCost(costUsd)}+` : formatCost(costUsd);
+  }
+  return unavailable ? "Unavailable" : noUsageLabel;
+}
+
+function formatTurnSummary(summary: TopBarUsageSummary): string {
+  const parent = `${summary.parentTurns} turn${summary.parentTurns === 1 ? "" : "s"}`;
+  if (!summary.hasSubagents) {
+    return parent;
+  }
+  return `${parent} + ${summary.subagentTurns} subagent turn${
+    summary.subagentTurns === 1 ? "" : "s"
+  }`;
+}
+
 export function AppTopBar({
   busy,
   onToggleSidebar,
@@ -79,6 +253,7 @@ export function AppTopBar({
   subtitle,
   sessionUsage,
   lastTurnUsage,
+  agents = [],
   canClearHardCap = false,
   onClearHardCap,
   showContextToggle = true,
@@ -98,6 +273,7 @@ export function AppTopBar({
   onCloseCanvas,
 }: AppTopBarProps) {
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [usageDetailsOpen, setUsageDetailsOpen] = useState(false);
   const detailsRef = useRef<HTMLDivElement | null>(null);
   const detailsId = useId();
   const platformInfo = useDesktopPlatform();
@@ -114,30 +290,75 @@ export function AppTopBar({
       ? 0
       : sidebarWidth;
   const rightSidebarLabel = contextSidebarCollapsed ? "Show context" : "Hide context";
-  const hasUsage = sessionUsage !== null || lastTurnUsage !== null;
+  const usageSummary = useMemo(
+    () => summarizeTopBarUsage(sessionUsage, agents),
+    [agents, sessionUsage],
+  );
+  const hasUsage = usageSummary.hasUsage || lastTurnUsage !== null;
   const estimatedCostLabel = useMemo(() => {
-    if (!sessionUsage) {
+    if (!usageSummary.hasUsage) {
       return "No usage yet";
     }
-    if (sessionUsage.costTrackingAvailable && sessionUsage.estimatedTotalCostUsd !== null) {
-      return formatCost(sessionUsage.estimatedTotalCostUsd);
-    }
-    return sessionUsage.totalTurns > 0 ? "Unavailable" : "No usage yet";
-  }, [sessionUsage]);
+    return formatUsageCost(
+      usageSummary.totalCostUsd,
+      usageSummary.totalCostUnavailable,
+      "No usage yet",
+    );
+  }, [usageSummary]);
   const totalTokensLabel = useMemo(() => {
-    if (sessionUsage) {
-      return formatTokenCount(sessionUsage.totalTokens);
+    if (usageSummary.hasUsage) {
+      return formatTokenCount(usageSummary.totalTokens);
     }
     if (lastTurnUsage) {
       return formatTokenCount(lastTurnUsage.usage.totalTokens);
     }
     return "—";
-  }, [lastTurnUsage, sessionUsage]);
-  const promptTokensLabel = sessionUsage ? formatTokenCount(sessionUsage.totalPromptTokens) : "—";
-  const completionTokensLabel = sessionUsage
-    ? formatTokenCount(sessionUsage.totalCompletionTokens)
+  }, [lastTurnUsage, usageSummary]);
+  const inputTokensLabel = usageSummary.hasUsage
+    ? formatTokenCount(originalInputTokens(usageSummary))
     : "—";
-  const totalTurnsLabel = sessionUsage ? `${sessionUsage.totalTurns}` : "0";
+  const standardInputTokensLabel = usageSummary.hasUsage
+    ? formatTokenCount(standardInputTokens(usageSummary))
+    : "—";
+  const cachedInputTokensLabel = usageSummary.hasUsage
+    ? formatTokenCount(usageSummary.cachedPromptTokens)
+    : "—";
+  const cacheWriteTokensLabel = usageSummary.hasUsage
+    ? formatTokenCount(usageSummary.cacheWritePromptTokens)
+    : "—";
+  const completionTokensLabel = usageSummary.hasUsage
+    ? formatTokenCount(usageSummary.completionTokens)
+    : "—";
+  const reasoningTokensLabel = usageSummary.hasUsage
+    ? formatTokenCount(usageSummary.reasoningOutputTokens)
+    : "—";
+  const totalTurnsLabel = usageSummary.hasUsage ? `${usageSummary.totalTurns}` : "0";
+  const parentTurnsLabel = usageSummary.hasUsage ? `${usageSummary.parentTurns}` : "0";
+  const subagentTurnsLabel = usageSummary.hasUsage ? `${usageSummary.subagentTurns}` : "0";
+  const turnSummaryLabel = usageSummary.hasUsage ? formatTurnSummary(usageSummary) : "0 turns";
+  const parentCostLabel = formatUsageCost(
+    usageSummary.parentCostUsd,
+    usageSummary.parentCostUnavailable,
+  );
+  const subagentCostLabel = formatUsageCost(
+    usageSummary.subagentCostUsd,
+    usageSummary.subagentCostUnavailable,
+  );
+  const inputSpendLabel = usageSummary.costBreakdown
+    ? formatCost(usageSummary.costBreakdown.inputCostUsd)
+    : "—";
+  const cachedInputSpendLabel = usageSummary.costBreakdown
+    ? formatCost(usageSummary.costBreakdown.cachedInputCostUsd)
+    : "—";
+  const cacheWriteSpendLabel = usageSummary.costBreakdown
+    ? formatCost(usageSummary.costBreakdown.cacheWriteInputCostUsd)
+    : "—";
+  const outputSpendLabel = usageSummary.costBreakdown
+    ? formatCost(usageSummary.costBreakdown.outputCostUsd)
+    : "—";
+  const otherSpendLabel = usageSummary.costBreakdown
+    ? formatCost(usageSummary.costBreakdown.otherCostUsd)
+    : "—";
   const lastTurnTokensLabel = lastTurnUsage
     ? formatTokenCount(lastTurnUsage.usage.totalTokens)
     : "—";
@@ -198,6 +419,12 @@ export function AppTopBar({
       } as CSSProperties)
     : undefined;
   const toolbarPositionClass = reservesNativeCaptionButtons ? undefined : "right-3";
+
+  useEffect(() => {
+    if (!detailsOpen) {
+      setUsageDetailsOpen(false);
+    }
+  }, [detailsOpen]);
 
   useEffect(() => {
     setDetailsOpen(false);
@@ -376,7 +603,7 @@ export function AppTopBar({
                         <span className="font-semibold tabular-nums">{estimatedCostLabel}</span>
                         <span className="font-normal text-muted-foreground"> · </span>
                         <span className="font-normal text-muted-foreground">
-                          {totalTurnsLabel} turn{totalTurnsLabel === "1" ? "" : "s"}
+                          {turnSummaryLabel}
                         </span>
                       </p>
                     ) : (
@@ -397,13 +624,70 @@ export function AppTopBar({
                 </div>
 
                 <div className="app-topbar__thread-metrics app-context-sidebar__nested-panel mt-2.5 flex flex-col rounded-[10px] border px-2.5 py-1">
-                  <TopBarMetricRow label="Estimated cost" value={estimatedCostLabel} />
-                  <TopBarMetricRow label="Total tokens" value={totalTokensLabel} />
-                  <TopBarMetricRow label="Prompt tokens" value={promptTokensLabel} />
-                  <TopBarMetricRow label="Completion tokens" value={completionTokensLabel} />
-                  <TopBarMetricRow label="Turns" value={totalTurnsLabel} />
-                  <TopBarMetricRow label="Last turn tokens" value={lastTurnTokensLabel} />
+                  {usageDetailsOpen ? (
+                    <>
+                      <TopBarMetricRow label="Estimated cost" value={estimatedCostLabel} />
+                      {usageSummary.hasSubagents ? (
+                        <>
+                          <TopBarMetricRow label="Parent cost" value={parentCostLabel} />
+                          <TopBarMetricRow label="Subagent cost" value={subagentCostLabel} />
+                        </>
+                      ) : null}
+                      <TopBarMetricRow label="Total tokens" value={totalTokensLabel} />
+                      <TopBarMetricRow label="Original input" value={inputTokensLabel} />
+                      <TopBarMetricRow
+                        label="Standard-rate input"
+                        value={standardInputTokensLabel}
+                      />
+                      <TopBarMetricRow label="Cache-read input" value={cachedInputTokensLabel} />
+                      <TopBarMetricRow label="Cache-write input" value={cacheWriteTokensLabel} />
+                      <TopBarMetricRow label="Output tokens" value={completionTokensLabel} />
+                      {usageSummary.reasoningOutputTokens > 0 ? (
+                        <TopBarMetricRow label="Reasoning output" value={reasoningTokensLabel} />
+                      ) : null}
+                      <TopBarMetricRow label="Standard-rate spend" value={inputSpendLabel} />
+                      <TopBarMetricRow label="Cache-read spend" value={cachedInputSpendLabel} />
+                      <TopBarMetricRow label="Cache-write spend" value={cacheWriteSpendLabel} />
+                      <TopBarMetricRow label="Output spend" value={outputSpendLabel} />
+                      {usageSummary.costBreakdown && usageSummary.costBreakdown.otherCostUsd > 0 ? (
+                        <TopBarMetricRow label="Other estimated spend" value={otherSpendLabel} />
+                      ) : null}
+                    </>
+                  ) : (
+                    <>
+                      <TopBarMetricRow label="Estimated cost" value={estimatedCostLabel} />
+                      <TopBarMetricRow label="Total tokens" value={totalTokensLabel} />
+                      <TopBarMetricRow label="Original input" value={inputTokensLabel} />
+                      <TopBarMetricRow label="Output tokens" value={completionTokensLabel} />
+                      {usageSummary.hasSubagents ? (
+                        <>
+                          <TopBarMetricRow label="Parent turns" value={parentTurnsLabel} />
+                          <TopBarMetricRow label="Subagent turns" value={subagentTurnsLabel} />
+                        </>
+                      ) : (
+                        <TopBarMetricRow label="Turns" value={totalTurnsLabel} />
+                      )}
+                      <TopBarMetricRow label="Last turn tokens" value={lastTurnTokensLabel} />
+                    </>
+                  )}
                 </div>
+
+                {hasUsage ? (
+                  <div className="mt-2 flex justify-end">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      aria-label={usageDetailsOpen ? "Show usage summary" : "Show usage details"}
+                      aria-expanded={usageDetailsOpen}
+                      className="h-6 gap-1.5 rounded-md px-2 text-[11px] text-muted-foreground hover:text-foreground"
+                      onClick={() => setUsageDetailsOpen((open) => !open)}
+                    >
+                      <MoreVerticalIcon data-icon="inline-start" />
+                      {usageDetailsOpen ? "Summary" : "More"}
+                    </Button>
+                  </div>
+                ) : null}
 
                 {lastTurnUsage ? (
                   <div className="mt-2 flex items-center justify-between gap-3 px-0.5 text-[11px]">

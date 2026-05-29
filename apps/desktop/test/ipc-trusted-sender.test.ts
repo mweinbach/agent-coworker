@@ -45,4 +45,21 @@ describe("trusted sender IPC helpers", () => {
       } as never),
     ).toBe(true);
   });
+
+  test("does not trust blank frame URLs instead of falling back to the top-level sender URL", async () => {
+    const { isTrustedSender } = await loadTrustedSender({
+      isPackaged: false,
+    });
+
+    expect(
+      isTrustedSender({
+        senderFrame: {
+          url: "   ",
+        },
+        sender: {
+          getURL: () => "http://localhost:1420/index.html",
+        },
+      } as never),
+    ).toBe(false);
+  });
 });

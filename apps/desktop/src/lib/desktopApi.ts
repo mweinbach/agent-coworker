@@ -150,6 +150,10 @@ export type SaveExportedFileInput = {
   defaultFileName: string;
 };
 
+export type PickDirectoryInput = {
+  title?: string;
+};
+
 export type PreferredFileAppInput = {
   path: string;
 };
@@ -365,6 +369,7 @@ export interface DesktopApi {
   appendTranscriptBatch(events: TranscriptBatchInput[]): Promise<void>;
   deleteTranscript(opts: DeleteTranscriptInput): Promise<void>;
   pickWorkspaceDirectory(): Promise<string | null>;
+  pickDirectory(opts?: PickDirectoryInput): Promise<string | null>;
   showContextMenu(opts: ShowContextMenuInput): Promise<string | null>;
   windowMinimize(): Promise<void>;
   windowMaximize(): Promise<void>;
@@ -425,6 +430,7 @@ export const DESKTOP_IPC_CHANNELS = {
   appendTranscriptBatch: "desktop:appendTranscriptBatch",
   deleteTranscript: "desktop:deleteTranscript",
   pickWorkspaceDirectory: "desktop:pickWorkspaceDirectory",
+  pickDirectory: "desktop:pickDirectory",
   showContextMenu: "desktop:showContextMenu",
   windowMinimize: "desktop:windowMinimize",
   windowMaximize: "desktop:windowMaximize",

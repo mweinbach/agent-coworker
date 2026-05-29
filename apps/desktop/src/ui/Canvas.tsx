@@ -25,7 +25,7 @@ import { ScrollArea } from "../components/ui/scroll-area";
 import { Tabs, TabsContent } from "../components/ui/tabs";
 import { Textarea } from "../components/ui/textarea";
 import { cleanMarkdown, markdownToHtml, nodeToMarkdown } from "../lib/canvasMarkdown";
-import { readFile, writeFile } from "../lib/desktopCommands";
+import { readFileForPreview, writeFile } from "../lib/desktopCommands";
 import { getFilePreviewKind, isSlideModule } from "../lib/filePreviewKind";
 import { cn } from "../lib/utils";
 import { getDesktopWindowMode } from "../lib/windowMode";
@@ -35,10 +35,16 @@ import { PptxPreview } from "./PptxPreview";
 import { SlidePreview } from "./SlidePreview";
 import { SpreadsheetPreview } from "./SpreadsheetPreview";
 
+function decodeUtf8(bytes: Uint8Array): string {
+  return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+}
+
 function basenamePath(p: string): string {
   const parts = p.replace(/\\/g, "/").split("/").filter(Boolean);
   return parts[parts.length - 1] ?? p;
 }
+
+const CANVAS_PREVIEW_MAX_BYTES = 256 * 1024;
 
 export function Canvas({ path }: { path: string }) {
   const isCanvasMode = getDesktopWindowMode() === "canvas";
@@ -62,6 +68,7 @@ export function Canvas({ path }: { path: string }) {
   const showFormattingBar = useAppStore((s) => s.canvasShowFormattingBar);
   const setShowFormattingBar = useAppStore((s) => s.setCanvasShowFormattingBar);
   const [content, setContent] = useState<string>("");
+  const [contentTruncated, setContentTruncated] = useState<boolean>(false);
   const [previewRefreshTrigger, setPreviewRefreshTrigger] = useState<number>(0);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -94,8 +101,10 @@ export function Canvas({ path }: { path: string }) {
     if (isSpreadsheet || isPptx) return;
     try {
       setLoading(true);
-      const fileContent = await readFile({ path });
+      const result = await readFileForPreview({ path, maxBytes: CANVAS_PREVIEW_MAX_BYTES });
+      const fileContent = decodeUtf8(result.bytes);
       setContent(fileContent);
+      setContentTruncated(result.truncated);
       contentRef.current = fileContent;
       lastSavedContentRef.current = fileContent;
       setError(null);
@@ -121,8 +130,10 @@ export function Canvas({ path }: { path: string }) {
       if (isEditingRef.current) return;
 
       try {
-        const diskContent = await readFile({ path });
+        const result = await readFileForPreview({ path, maxBytes: CANVAS_PREVIEW_MAX_BYTES });
+        const diskContent = decodeUtf8(result.bytes);
         if (!active) return;
+        setContentTruncated(result.truncated);
         if (diskContent !== contentRef.current) {
           setContent(diskContent);
           contentRef.current = diskContent;
@@ -144,6 +155,7 @@ export function Canvas({ path }: { path: string }) {
   useEffect(() => {
     if (isSpreadsheet || isPptx) return;
     const timer = setTimeout(async () => {
+      if (contentTruncated) return;
       if (content === lastSavedContentRef.current) return;
       try {
         await writeFile({ path, content });
@@ -156,7 +168,7 @@ export function Canvas({ path }: { path: string }) {
     }, 500);
 
     return () => clearTimeout(timer);
-  }, [content, path, isSpreadsheet, isPptx]);
+  }, [content, contentTruncated, path, isSpreadsheet, isPptx]);
 
   useEffect(() => {
     if (activeTab === "preview") {
@@ -674,7 +686,7 @@ ${textToSend}`;
                         }
                       }}
                       role="textbox"
-                      contentEditable
+                      contentEditable={!contentTruncated}
                       suppressContentEditableWarning
                       onInput={handleInput}
                       onKeyDown={handleKeyDown}
@@ -695,6 +707,7 @@ ${textToSend}`;
                     value={content}
                     onChange={(e) => handleContentChange(e.target.value)}
                     onBlur={handleBlur}
+                    readOnly={contentTruncated}
                     placeholder="Type your markdown here..."
                     className="flex-1 min-h-0 resize-none font-mono text-sm leading-relaxed p-4 bg-background/50 border border-border/60 focus-visible:ring-1 focus-visible:ring-primary focus-visible:border-primary/80"
                   />
@@ -717,6 +730,7 @@ ${textToSend}`;
                     value={content}
                     onChange={(e) => handleContentChange(e.target.value)}
                     onBlur={handleBlur}
+                    readOnly={contentTruncated}
                     placeholder="Type your slide code here..."
                     className="flex-1 min-h-0 resize-none font-mono text-sm leading-relaxed p-4 bg-background/50 border border-border/60 focus-visible:ring-1 focus-visible:ring-primary focus-visible:border-primary/80"
                   />
@@ -739,6 +753,7 @@ ${textToSend}`;
                   value={content}
                   onChange={(e) => handleContentChange(e.target.value)}
                   onBlur={handleBlur}
+                  readOnly={contentTruncated}
                   placeholder="Type your text here..."
                   className="w-full h-full resize-none font-mono text-sm leading-relaxed p-4 bg-background/50 border border-border/60 focus-visible:ring-1 focus-visible:ring-primary focus-visible:border-primary/80"
                 />

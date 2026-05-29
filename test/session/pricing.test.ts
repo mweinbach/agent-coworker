@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 
 import {
   calculateTokenCost,
+  calculateTokenCostBreakdown,
   formatCost,
   formatTokenCount,
   listPricingCatalog,
@@ -334,6 +335,20 @@ describe("pricing", () => {
       // 500K output @ 15 = 7.5
       const cost = calculateTokenCost(1_000_000, 500_000, pricing, 400_000, 100_000);
       expect(cost).toBeCloseTo(9.495, 4);
+    });
+
+    it("returns the same total with per-bucket spend breakdown", () => {
+      const pricing = resolveModelPricing("anthropic", "claude-sonnet-4-5")!;
+      const breakdown = calculateTokenCostBreakdown(1_000_000, 500_000, pricing, 400_000, 100_000);
+
+      expect(breakdown.inputCostUsd).toBeCloseTo(1.5, 4);
+      expect(breakdown.cachedInputCostUsd).toBeCloseTo(0.12, 4);
+      expect(breakdown.cacheWriteInputCostUsd).toBeCloseTo(0.375, 4);
+      expect(breakdown.outputCostUsd).toBeCloseTo(7.5, 4);
+      expect(breakdown.totalCostUsd).toBeCloseTo(
+        calculateTokenCost(1_000_000, 500_000, pricing, 400_000, 100_000),
+        6,
+      );
     });
 
     it("applies GPT-5.5 long-context pricing above the published threshold", () => {

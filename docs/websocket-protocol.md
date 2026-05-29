@@ -1307,6 +1307,13 @@ Backups are opt-in. In git workspaces, clients and agents should prefer git-nati
   "totalReasoningOutputTokens": 600,
   "totalTokens": 7000,
   "estimatedTotalCostUsd": 0.45,
+  "costBreakdown": {
+    "inputCostUsd": 0.12,
+    "cachedInputCostUsd": 0.01,
+    "cacheWriteInputCostUsd": 0.03,
+    "outputCostUsd": 0.29,
+    "otherCostUsd": 0
+  },
   "costTrackingAvailable": true,
   "byModel": [],
   "turns": [],
@@ -1327,6 +1334,7 @@ Backups are opt-in. In git workspaces, clients and agents should prefer git-nati
 | `totalReasoningOutputTokens` | `number?` | Cumulative reasoning output tokens. Reasoning tokens are tracked as a subset/breakdown of output tokens unless a provider documents a separate billing bucket |
 | `totalTokens` | `number` | Cumulative total tokens |
 | `estimatedTotalCostUsd` | `number \| null` | Cumulative estimated cost in USD |
+| `costBreakdown` | `UsageCostBreakdown?` | Estimated cost split across input, cached input, cache-write input, output, and unattributed provider-estimate buckets. Omitted when total session cost is unavailable |
 | `costTrackingAvailable` | `boolean` | Whether cost tracking is active for this session |
 | `byModel` | `ModelUsageSummary[]` | Usage breakdown by model |
 | `turns` | `TurnCostEntry[]` | Detailed log of turns in this session |
@@ -1347,7 +1355,14 @@ Backups are opt-in. In git workspaces, clients and agents should prefer git-nati
   "totalCacheWritePromptTokens": 150,
   "totalReasoningOutputTokens": 250,
   "totalTokens": 4100,
-  "estimatedCostUsd": 0.0235
+  "estimatedCostUsd": 0.0235,
+  "costBreakdown": {
+    "inputCostUsd": 0.004,
+    "cachedInputCostUsd": 0.0001,
+    "cacheWriteInputCostUsd": 0.0002,
+    "outputCostUsd": 0.0192,
+    "otherCostUsd": 0
+  }
 }
 ```
 
@@ -1363,6 +1378,27 @@ Backups are opt-in. In git workspaces, clients and agents should prefer git-nati
 | `totalReasoningOutputTokens` | `number?` | Reasoning output tokens accumulated for this provider/model pair, as a subset/breakdown of output tokens |
 | `totalTokens` | `number` | Total tokens accumulated for this provider/model pair |
 | `estimatedCostUsd` | `number \| null` | Estimated cumulative cost for this provider/model pair |
+| `costBreakdown` | `UsageCostBreakdown?` | Estimated cost split across input, cached input, cache-write input, output, and unattributed provider-estimate buckets. Omitted when this model's cost is unavailable |
+
+### UsageCostBreakdown
+
+```json
+{
+  "inputCostUsd": 0.12,
+  "cachedInputCostUsd": 0.01,
+  "cacheWriteInputCostUsd": 0.03,
+  "outputCostUsd": 0.29,
+  "otherCostUsd": 0
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `inputCostUsd` | `number` | Estimated spend for uncached input tokens |
+| `cachedInputCostUsd` | `number` | Estimated spend for cache-read/cached input tokens |
+| `cacheWriteInputCostUsd` | `number` | Estimated spend for cache-write/cache-creation input tokens |
+| `outputCostUsd` | `number` | Estimated spend for output/completion tokens |
+| `otherCostUsd` | `number` | Estimated spend that could not be attributed to a local pricing bucket, usually runtime-provided cost for uncatalogued models |
 
 ### TurnCostEntry
 
@@ -1383,6 +1419,13 @@ Backups are opt-in. In git workspaces, clients and agents should prefer git-nati
     "estimatedCostUsd": 0.0084
   },
   "estimatedCostUsd": 0.0084,
+  "costBreakdown": {
+    "inputCostUsd": 0.00125,
+    "cachedInputCostUsd": 0.000025,
+    "cacheWriteInputCostUsd": 0.0000625,
+    "outputCostUsd": 0.003,
+    "otherCostUsd": 0
+  },
   "pricing": {
     "inputPerMillion": 1.25,
     "outputPerMillion": 10,
@@ -1405,6 +1448,7 @@ Backups are opt-in. In git workspaces, clients and agents should prefer git-nati
 | `model` | `string` | Model used for this turn |
 | `usage` | `TurnUsage` | Raw usage counters and optional turn-level estimate metadata |
 | `estimatedCostUsd` | `number \| null` | Estimated cost for this turn after pricing resolution |
+| `costBreakdown` | `UsageCostBreakdown \| null?` | Estimated turn cost split by billable bucket when available |
 | `pricing` | `ModelPricing \| null` | Pricing entry used for this estimate, or `null` when unavailable |
 
 ### TurnUsage
@@ -3057,6 +3101,8 @@ Persistent child-session list response to `agent_list_get`.
 | `executionState` | `"pending_init" \| "running" \| "completed" \| "errored" \| "closed"` | Current execution state |
 | `busy` | `boolean` | Whether the child session is mid-turn in memory |
 | `lastMessagePreview` | `string?` | Latest assistant preview text |
+| `sessionUsage` | `SessionUsageSnapshot \| null?` | Compact child-session usage snapshot, when the child session has reported usage |
+| `lastTurnUsage` | `TurnUsage \| null?` | Latest child-session turn usage shortcut, when available |
 
 ---
 
@@ -3081,7 +3127,27 @@ Live child-agent status update emitted on spawn, resume, close, and state transi
     "updatedAt": "2026-03-08T12:05:00.000Z",
     "lifecycleState": "active",
     "executionState": "completed",
-    "busy": false
+    "busy": false,
+    "sessionUsage": {
+      "sessionId": "child-456",
+      "totalTurns": 1,
+      "totalPromptTokens": 1200,
+      "totalCompletionTokens": 300,
+      "totalTokens": 1500,
+      "estimatedTotalCostUsd": 0.0084,
+      "costTrackingAvailable": true,
+      "byModel": [],
+      "turns": [],
+      "budgetStatus": { "...": "..." },
+      "createdAt": "2026-03-08T12:00:00.000Z",
+      "updatedAt": "2026-03-08T12:05:00.000Z"
+    },
+    "lastTurnUsage": {
+      "promptTokens": 1200,
+      "completionTokens": 300,
+      "totalTokens": 1500,
+      "estimatedCostUsd": 0.0084
+    }
   }
 }
 ```

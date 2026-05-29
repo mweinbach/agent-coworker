@@ -129,6 +129,8 @@ export class AgentControl {
     }
     const info = session.getSessionInfoEvent();
     const executionState = overrides.executionState ?? executionStateForSession(session);
+    const sessionUsage = session.getCompactUsageSnapshot();
+    const lastTurnUsage = session.getLastTurnUsage();
     const summary: PersistentAgentSummary = {
       agentId: session.id,
       parentSessionId: session.parentSessionId,
@@ -158,6 +160,8 @@ export class AgentControl {
           info.lastMessagePreview ?? session.getLatestAssistantText() ?? null;
         return lastMessagePreview ? { lastMessagePreview } : {};
       })(),
+      ...(sessionUsage ? { sessionUsage } : {}),
+      ...(lastTurnUsage ? { lastTurnUsage } : {}),
     };
     return summary;
   }
@@ -311,8 +315,9 @@ export class AgentControl {
   async inspect(opts: AgentInspectOptions): Promise<AgentInspectResult> {
     const session = this.ensureAgentSession(opts.parentSessionId, opts.agentId);
     const latestAssistantText = session.getLatestAssistantText() ?? null;
+    const agent = this.publish(opts.parentSessionId, session);
     return {
-      agent: this.buildAgentSummary(session),
+      agent,
       latestAssistantText,
       parsedReport: parseChildAgentReport(latestAssistantText),
       sessionUsage: session.getCompactUsageSnapshot(),

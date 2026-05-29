@@ -15,10 +15,11 @@
 
 import type { ProviderName } from "../types";
 import {
-  calculateTokenCost,
+  calculateTokenCostBreakdown,
   formatCost,
   formatTokenCount,
   type ModelPricing,
+  type TokenCostBreakdown,
   resolveModelPricing,
 } from "./pricing";
 
@@ -34,6 +35,14 @@ export type TurnUsage = {
   estimatedCostUsd?: number;
 };
 
+export type UsageCostBreakdown = {
+  inputCostUsd: number;
+  cachedInputCostUsd: number;
+  cacheWriteInputCostUsd: number;
+  outputCostUsd: number;
+  otherCostUsd: number;
+};
+
 export type TurnCostEntry = {
   turnId: string;
   turnIndex: number;
@@ -42,6 +51,7 @@ export type TurnCostEntry = {
   model: string;
   usage: TurnUsage;
   estimatedCostUsd: number | null;
+  costBreakdown?: UsageCostBreakdown | null;
   pricing: ModelPricing | null;
 };
 
@@ -56,6 +66,7 @@ export type ModelUsageSummary = {
   totalCacheWritePromptTokens?: number;
   totalReasoningOutputTokens?: number;
   estimatedCostUsd: number | null;
+  costBreakdown?: UsageCostBreakdown;
 };
 
 export type SessionUsageSnapshot = {
@@ -68,6 +79,7 @@ export type SessionUsageSnapshot = {
   totalCacheWritePromptTokens?: number;
   totalReasoningOutputTokens?: number;
   estimatedTotalCostUsd: number | null;
+  costBreakdown?: UsageCostBreakdown;
   costTrackingAvailable: boolean;
   byModel: ModelUsageSummary[];
   turns: TurnCostEntry[];
@@ -108,6 +120,48 @@ export type CostTrackerListener = (event: CostTrackerEvent) => void;
 
 const MAX_TURNS = 512;
 
+function emptyUsageCostBreakdown(): UsageCostBreakdown {
+  return {
+    inputCostUsd: 0,
+    cachedInputCostUsd: 0,
+    cacheWriteInputCostUsd: 0,
+    outputCostUsd: 0,
+    otherCostUsd: 0,
+  };
+}
+
+function usageCostBreakdownFromTokenBreakdown(
+  breakdown: TokenCostBreakdown,
+): UsageCostBreakdown {
+  return {
+    inputCostUsd: breakdown.inputCostUsd,
+    cachedInputCostUsd: breakdown.cachedInputCostUsd,
+    cacheWriteInputCostUsd: breakdown.cacheWriteInputCostUsd,
+    outputCostUsd: breakdown.outputCostUsd,
+    otherCostUsd: 0,
+  };
+}
+
+function usageCostBreakdownFromUnattributedCost(costUsd: number): UsageCostBreakdown {
+  return {
+    ...emptyUsageCostBreakdown(),
+    otherCostUsd: costUsd,
+  };
+}
+
+function addUsageCostBreakdown(
+  target: UsageCostBreakdown,
+  next: UsageCostBreakdown,
+): UsageCostBreakdown {
+  return {
+    inputCostUsd: target.inputCostUsd + next.inputCostUsd,
+    cachedInputCostUsd: target.cachedInputCostUsd + next.cachedInputCostUsd,
+    cacheWriteInputCostUsd: target.cacheWriteInputCostUsd + next.cacheWriteInputCostUsd,
+    outputCostUsd: target.outputCostUsd + next.outputCostUsd,
+    otherCostUsd: target.otherCostUsd + next.otherCostUsd,
+  };
+}
+
 export class SessionCostTracker {
   private static readonly COMPACT_SNAPSHOT_TURNS_LIMIT = 8;
   private readonly sessionId: string;
@@ -123,6 +177,7 @@ export class SessionCostTracker {
   private totalCacheWritePromptTokens = 0;
   private totalReasoningOutputTokens = 0;
   private estimatedTotalCostUsd: number | null = null;
+  private costBreakdown: UsageCostBreakdown | null = emptyUsageCostBreakdown();
   private costTrackingAvailable = false;
   private hasUnknownCostTurns = false;
 
@@ -154,13 +209,21 @@ export class SessionCostTracker {
       ...snapshot.turns.map((entry) => ({
         ...entry,
         usage: { ...entry.usage },
+        ...(entry.costBreakdown !== undefined
+          ? {
+              costBreakdown: entry.costBreakdown ? { ...entry.costBreakdown } : null,
+            }
+          : {}),
         pricing: entry.pricing ? { ...entry.pricing } : null,
       })),
     );
 
     tracker.modelSummaries.clear();
     for (const summary of snapshot.byModel) {
-      tracker.modelSummaries.set(`${summary.provider}:${summary.model}`, { ...summary });
+      tracker.modelSummaries.set(`${summary.provider}:${summary.model}`, {
+        ...summary,
+        ...(summary.costBreakdown ? { costBreakdown: { ...summary.costBreakdown } } : {}),
+      });
     }
 
     tracker.lifetimeTurnCount = Math.max(snapshot.totalTurns, snapshot.turns.length);
@@ -180,6 +243,7 @@ export class SessionCostTracker {
     tracker.estimatedTotalCostUsd = tracker.hasUnknownCostTurns
       ? null
       : snapshot.estimatedTotalCostUsd;
+    tracker.costBreakdown = snapshot.costBreakdown ? { ...snapshot.costBreakdown } : null;
     tracker.costTrackingAvailable =
       !tracker.hasUnknownCostTurns &&
       snapshot.costTrackingAvailable &&
@@ -206,17 +270,27 @@ export class SessionCostTracker {
   }): TurnCostEntry {
     const { turnId, provider, model, usage } = opts;
     const pricing = resolveModelPricing(provider, model);
-    const costUsd =
+    const tokenCostBreakdown =
       pricing !== null
-        ? calculateTokenCost(
+        ? calculateTokenCostBreakdown(
             usage.promptTokens,
             usage.completionTokens,
             pricing,
             usage.cachedPromptTokens ?? 0,
             usage.cacheWritePromptTokens ?? 0,
           )
+        : null;
+    const costUsd =
+      tokenCostBreakdown !== null
+        ? tokenCostBreakdown.totalCostUsd
         : typeof usage.estimatedCostUsd === "number" && Number.isFinite(usage.estimatedCostUsd)
           ? usage.estimatedCostUsd
+          : null;
+    const costBreakdown =
+      tokenCostBreakdown !== null
+        ? usageCostBreakdownFromTokenBreakdown(tokenCostBreakdown)
+        : costUsd !== null
+          ? usageCostBreakdownFromUnattributedCost(costUsd)
           : null;
 
     const entry: TurnCostEntry = {
@@ -227,6 +301,7 @@ export class SessionCostTracker {
       model,
       usage: { ...usage },
       estimatedCostUsd: costUsd,
+      costBreakdown,
       pricing,
     };
 
@@ -239,8 +314,8 @@ export class SessionCostTracker {
     this.totalCachedPromptTokens += usage.cachedPromptTokens ?? 0;
     this.totalCacheWritePromptTokens += usage.cacheWritePromptTokens ?? 0;
     this.totalReasoningOutputTokens += usage.reasoningOutputTokens ?? 0;
-    this.recordSessionCost(costUsd);
-    this.updateModelSummary(provider, model, usage, costUsd);
+    this.recordSessionCost(costUsd, costBreakdown);
+    this.updateModelSummary(provider, model, usage, costUsd, costBreakdown);
 
     if (this.turns.length > MAX_TURNS) {
       this.turns.splice(0, this.turns.length - MAX_TURNS);
@@ -327,11 +402,20 @@ export class SessionCostTracker {
         ? { totalReasoningOutputTokens: this.totalReasoningOutputTokens }
         : {}),
       estimatedTotalCostUsd: this.estimatedTotalCostUsd,
+      ...(this.costBreakdown ? { costBreakdown: { ...this.costBreakdown } } : {}),
       costTrackingAvailable: this.costTrackingAvailable,
-      byModel: Array.from(this.modelSummaries.values()).map((s) => ({ ...s })),
+      byModel: Array.from(this.modelSummaries.values()).map((summary) => ({
+        ...summary,
+        ...(summary.costBreakdown ? { costBreakdown: { ...summary.costBreakdown } } : {}),
+      })),
       turns: turns.map((entry) => ({
         ...entry,
         usage: { ...entry.usage },
+        ...(entry.costBreakdown !== undefined
+          ? {
+              costBreakdown: entry.costBreakdown ? { ...entry.costBreakdown } : null,
+            }
+          : {}),
         pricing: entry.pricing ? { ...entry.pricing } : null,
       })),
       budgetStatus: this.getBudgetStatus(),
@@ -375,6 +459,29 @@ export class SessionCostTracker {
 
     if (this.estimatedTotalCostUsd !== null) {
       lines.push(`  Cost:    ${formatCost(this.estimatedTotalCostUsd)}`);
+      if (this.costBreakdown) {
+        const spendBreakdown: string[] = [];
+        if (this.costBreakdown.inputCostUsd > 0) {
+          spendBreakdown.push(`${formatCost(this.costBreakdown.inputCostUsd)} input`);
+        }
+        if (this.costBreakdown.cachedInputCostUsd > 0) {
+          spendBreakdown.push(`${formatCost(this.costBreakdown.cachedInputCostUsd)} cache read`);
+        }
+        if (this.costBreakdown.cacheWriteInputCostUsd > 0) {
+          spendBreakdown.push(
+            `${formatCost(this.costBreakdown.cacheWriteInputCostUsd)} cache write`,
+          );
+        }
+        if (this.costBreakdown.outputCostUsd > 0) {
+          spendBreakdown.push(`${formatCost(this.costBreakdown.outputCostUsd)} output`);
+        }
+        if (this.costBreakdown.otherCostUsd > 0) {
+          spendBreakdown.push(`${formatCost(this.costBreakdown.otherCostUsd)} other`);
+        }
+        if (spendBreakdown.length > 0) {
+          lines.push(`  Spend:   ${spendBreakdown.join(" / ")}`);
+        }
+      }
     } else {
       lines.push("  Cost:    (pricing unavailable for this model)");
     }
@@ -452,6 +559,7 @@ export class SessionCostTracker {
     model: string,
     usage: TurnUsage,
     costUsd: number | null,
+    costBreakdown: UsageCostBreakdown | null,
   ): void {
     const key = `${provider}:${model}`;
     const existing = this.modelSummaries.get(key);
@@ -478,8 +586,14 @@ export class SessionCostTracker {
       }
       if (existing.estimatedCostUsd === null || costUsd === null) {
         existing.estimatedCostUsd = null;
+        delete existing.costBreakdown;
       } else {
         existing.estimatedCostUsd += costUsd;
+        if (existing.costBreakdown && costBreakdown) {
+          existing.costBreakdown = addUsageCostBreakdown(existing.costBreakdown, costBreakdown);
+        } else {
+          delete existing.costBreakdown;
+        }
       }
     } else {
       this.modelSummaries.set(key, {
@@ -497,26 +611,34 @@ export class SessionCostTracker {
           ? { totalReasoningOutputTokens: usage.reasoningOutputTokens }
           : {}),
         estimatedCostUsd: costUsd,
+        ...(costBreakdown ? { costBreakdown: { ...costBreakdown } } : {}),
       });
     }
   }
 
-  private recordSessionCost(costUsd: number | null): void {
+  private recordSessionCost(costUsd: number | null, costBreakdown: UsageCostBreakdown | null): void {
     if (costUsd === null) {
       this.hasUnknownCostTurns = true;
       this.costTrackingAvailable = false;
       this.estimatedTotalCostUsd = null;
+      this.costBreakdown = null;
       return;
     }
 
     if (this.hasUnknownCostTurns) {
       this.costTrackingAvailable = false;
       this.estimatedTotalCostUsd = null;
+      this.costBreakdown = null;
       return;
     }
 
     this.costTrackingAvailable = true;
     this.estimatedTotalCostUsd = (this.estimatedTotalCostUsd ?? 0) + costUsd;
+    if (this.costBreakdown && costBreakdown) {
+      this.costBreakdown = addUsageCostBreakdown(this.costBreakdown, costBreakdown);
+    } else {
+      this.costBreakdown = null;
+    }
   }
 
   private checkBudget(): void {

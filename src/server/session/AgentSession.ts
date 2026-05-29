@@ -21,6 +21,7 @@ import type {
   AgentReasoningEffort,
   AgentRole,
   AgentSpawnContextOptions,
+  PersistentAgentSummary,
 } from "../../shared/agents";
 import type { SessionSnapshot } from "../../shared/sessionSnapshot";
 import { getAiCoworkerPaths } from "../../store/connections";
@@ -663,6 +664,11 @@ export class AgentSession {
       if (text) return text;
     }
     return undefined;
+  }
+
+  recordAgentStatus(agent: PersistentAgentSummary): void {
+    this.context.emit({ type: "agent_status", sessionId: this.id, agent });
+    this.queuePersistSessionSnapshot("session.agent_status");
   }
 
   getCompactUsageSnapshot(): SessionUsageSnapshot | null {

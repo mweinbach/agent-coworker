@@ -568,6 +568,10 @@ export class SessionRegistry {
       emitParentAgentStatus: (parentSessionId, agent) => {
         const parentBinding = this.sessionBindings.get(parentSessionId);
         if (!parentBinding) return;
+        if (parentBinding.session) {
+          parentBinding.session.recordAgentStatus(agent);
+          return;
+        }
         for (const sink of parentBinding.sinks.values()) {
           try {
             sink({ type: "agent_status", sessionId: parentSessionId, agent });

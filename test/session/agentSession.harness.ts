@@ -279,6 +279,7 @@ export function makeSession(
       source: "default" | "model" | "heuristic";
       model: string | null;
     }>;
+    sessionDb: ConstructorParameters<typeof AgentSession>[0]["sessionDb"];
     writePersistedSessionSnapshotImpl: (opts: any) => Promise<string>;
     createAgentSessionImpl: (opts: any) => Promise<any>;
     listAgentSessionsImpl: (parentSessionId: string) => Promise<any[]>;
@@ -322,6 +323,7 @@ export function makeSession(
     persistModelSelectionImpl: overrides?.persistModelSelectionImpl,
     persistProjectConfigPatchImpl: overrides?.persistProjectConfigPatchImpl,
     generateSessionTitleImpl: overrides?.generateSessionTitleImpl ?? mockGenerateSessionTitle,
+    sessionDb: overrides?.sessionDb,
     writePersistedSessionSnapshotImpl:
       overrides?.writePersistedSessionSnapshotImpl ?? mockWritePersistedSessionSnapshot,
     createAgentSessionImpl: overrides?.createAgentSessionImpl,

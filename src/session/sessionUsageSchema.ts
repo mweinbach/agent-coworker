@@ -7,6 +7,7 @@ import type {
   SessionUsageSnapshot,
   TurnCostEntry,
   TurnUsage,
+  UsageCostBreakdown,
 } from "./costTracker";
 import type { ModelPricing } from "./pricing";
 
@@ -23,6 +24,16 @@ const modelPricingSchema: z.ZodType<ModelPricing> = z
     longContextInputPerMillion: z.number().optional(),
     longContextOutputPerMillion: z.number().optional(),
     longContextCachedInputPerMillion: z.number().optional(),
+  })
+  .strict();
+
+const usageCostBreakdownSchema: z.ZodType<UsageCostBreakdown> = z
+  .object({
+    inputCostUsd: z.number(),
+    cachedInputCostUsd: z.number(),
+    cacheWriteInputCostUsd: z.number(),
+    outputCostUsd: z.number(),
+    otherCostUsd: z.number(),
   })
   .strict();
 
@@ -47,6 +58,7 @@ const turnCostEntrySchema: z.ZodType<TurnCostEntry> = z
     model: z.string().trim().min(1),
     usage: turnUsageSchema,
     estimatedCostUsd: z.number().nullable(),
+    costBreakdown: usageCostBreakdownSchema.nullable().optional(),
     pricing: modelPricingSchema.nullable(),
   })
   .strict();
@@ -63,6 +75,7 @@ const modelUsageSummarySchema: z.ZodType<ModelUsageSummary> = z
     totalCacheWritePromptTokens: z.number().int().nonnegative().optional(),
     totalReasoningOutputTokens: z.number().int().nonnegative().optional(),
     estimatedCostUsd: z.number().nullable(),
+    costBreakdown: usageCostBreakdownSchema.optional(),
   })
   .strict();
 
@@ -88,6 +101,7 @@ export const sessionUsageSnapshotSchema: z.ZodType<SessionUsageSnapshot> = z
     totalCacheWritePromptTokens: z.number().int().nonnegative().optional(),
     totalReasoningOutputTokens: z.number().int().nonnegative().optional(),
     estimatedTotalCostUsd: z.number().nullable(),
+    costBreakdown: usageCostBreakdownSchema.optional(),
     costTrackingAvailable: z.boolean(),
     byModel: z.array(modelUsageSummarySchema),
     turns: z.array(turnCostEntrySchema),

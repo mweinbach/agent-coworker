@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
 import { setupJsdom } from "./jsdomHarness";
+import type { ThreadAgentSummary } from "../src/app/types";
 
 mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock());
 
@@ -14,8 +15,17 @@ const sessionUsage = {
   totalTurns: 3,
   totalPromptTokens: 900,
   totalCompletionTokens: 300,
+  totalCachedPromptTokens: 200,
+  totalCacheWritePromptTokens: 100,
   totalTokens: 1200,
   estimatedTotalCostUsd: 0.0245,
+  costBreakdown: {
+    inputCostUsd: 0.001,
+    cachedInputCostUsd: 0.0001,
+    cacheWriteInputCostUsd: 0.0002,
+    outputCostUsd: 0.0232,
+    otherCostUsd: 0,
+  },
   costTrackingAvailable: true,
   byModel: [],
   turns: [],
@@ -41,6 +51,62 @@ const lastTurnUsage = {
   },
 };
 
+const subagentUsage = {
+  sessionId: "agent-1",
+  totalTurns: 2,
+  totalPromptTokens: 600,
+  totalCompletionTokens: 400,
+  totalCachedPromptTokens: 50,
+  totalTokens: 1000,
+  estimatedTotalCostUsd: 0.01,
+  costBreakdown: {
+    inputCostUsd: 0.002,
+    cachedInputCostUsd: 0.0005,
+    cacheWriteInputCostUsd: 0,
+    outputCostUsd: 0.0075,
+    otherCostUsd: 0,
+  },
+  costTrackingAvailable: true,
+  byModel: [],
+  turns: [],
+  budgetStatus: {
+    configured: false,
+    warnAtUsd: null,
+    stopAtUsd: null,
+    warningTriggered: false,
+    stopTriggered: false,
+    currentCostUsd: 0.01,
+  },
+  createdAt: "2026-03-24T16:02:00.000Z",
+  updatedAt: "2026-03-24T16:04:00.000Z",
+};
+
+const agents: ThreadAgentSummary[] = [
+  {
+    agentId: "agent-1",
+    parentSessionId: "session-1",
+    role: "research",
+    mode: "collaborative",
+    depth: 1,
+    effectiveModel: "gpt-5-mini",
+    title: "Research agent",
+    provider: "openai",
+    createdAt: "2026-03-24T16:02:00.000Z",
+    updatedAt: "2026-03-24T16:04:00.000Z",
+    lifecycleState: "active",
+    executionState: "completed",
+    busy: false,
+    sessionUsage: subagentUsage,
+    lastTurnUsage: {
+      promptTokens: 600,
+      cachedPromptTokens: 50,
+      completionTokens: 400,
+      totalTokens: 1000,
+      estimatedCostUsd: 0.01,
+    },
+  },
+];
+
 describe("desktop app top bar", () => {
   test("renders a left-aligned thread title and opens usage details from it", async () => {
     const harness = setupJsdom();
@@ -64,6 +130,7 @@ describe("desktop app top bar", () => {
             subtitle: "agent-coworker",
             sessionUsage,
             lastTurnUsage,
+            agents,
             managementMode: "thread",
           }),
         );
@@ -116,9 +183,25 @@ describe("desktop app top bar", () => {
 
       expect(container.textContent).toContain("Usage");
       expect(container.textContent).toContain("Estimated cost");
-      expect(container.textContent).toContain("$0.02");
-      expect(container.textContent).toContain("1.2k");
+      expect(container.textContent).toContain("$0.03");
+      expect(container.textContent).toContain("2.2k");
+      expect(container.textContent).toContain("Original input");
+      expect(container.textContent).not.toContain("Cache-read input");
       expect(container.textContent).toContain("Last turn cost");
+
+      const moreButton = container.querySelector('button[aria-label="Show usage details"]');
+      expect(moreButton).not.toBeNull();
+      await act(async () => {
+        moreButton?.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(container.textContent).toContain("Parent cost");
+      expect(container.textContent).toContain("Subagent cost");
+      expect(container.textContent).toContain("Standard-rate input");
+      expect(container.textContent).toContain("Cache-read input");
+      expect(container.textContent).toContain("Cache-write input");
+      expect(container.textContent).toContain("Standard-rate spend");
+      expect(container.textContent).toContain("Output spend");
 
       await act(async () => {
         root.unmount();

@@ -132,8 +132,15 @@ describe("SessionCostTracker", () => {
     expect(snapshot.byModel[0]?.totalCacheWritePromptTokens).toBe(100_000);
     expect(snapshot.byModel[0]?.totalReasoningOutputTokens).toBe(125_000);
     expect(snapshot.estimatedTotalCostUsd).toBeCloseTo(9.495, 6);
+    expect(snapshot.costBreakdown?.inputCostUsd).toBeCloseTo(1.5, 6);
+    expect(snapshot.costBreakdown?.cachedInputCostUsd).toBeCloseTo(0.12, 6);
+    expect(snapshot.costBreakdown?.cacheWriteInputCostUsd).toBeCloseTo(0.375, 6);
+    expect(snapshot.costBreakdown?.outputCostUsd).toBeCloseTo(7.5, 6);
+    expect(snapshot.byModel[0]?.costBreakdown?.cachedInputCostUsd).toBeCloseTo(0.12, 6);
+    expect(snapshot.turns[0]?.costBreakdown?.cacheWriteInputCostUsd).toBeCloseTo(0.375, 6);
     expect(tracker.formatSummary()).toContain("100.0k cache write");
     expect(tracker.formatSummary()).toContain("125.0k reasoning output");
+    expect(tracker.formatSummary()).toContain("$0.38 cache write");
   });
 
   test("uses catalog pricing before runtime-provided estimated cost when available", () => {
@@ -172,6 +179,7 @@ describe("SessionCostTracker", () => {
 
     expect(tracker.getSnapshot().estimatedTotalCostUsd).toBe(1.23);
     expect(tracker.getSnapshot().turns[0]?.estimatedCostUsd).toBe(1.23);
+    expect(tracker.getSnapshot().costBreakdown?.otherCostUsd).toBe(1.23);
   });
 
   test("invalidates aggregate cost availability after an uncatalogued turn", () => {
@@ -205,6 +213,7 @@ describe("SessionCostTracker", () => {
         currentCostUsd: null,
       },
     });
+    expect(tracker.getSnapshot().costBreakdown).toBeUndefined();
   });
 
   test("updateBudget preserves unspecified thresholds and clears explicit nulls", () => {

@@ -159,6 +159,41 @@ describe("session managers", () => {
     });
   });
 
+  test("SessionAdminManager listAgentSessions queues snapshot persistence", async () => {
+    const context = makeBaseContext();
+    const emitted: any[] = [];
+    const persistedReasons: string[] = [];
+    const agent = {
+      agentId: "agent-1",
+      parentSessionId: "session-1",
+      role: "research",
+      mode: "collaborative",
+      depth: 1,
+      taskType: "research",
+      effectiveModel: "gemini-3-flash-preview",
+      title: "Research agent",
+      provider: "google",
+      createdAt: "2026-05-29T19:43:58.000Z",
+      updatedAt: "2026-05-29T19:43:58.000Z",
+      lifecycleState: "active",
+      executionState: "running",
+      busy: true,
+    } as const;
+    context.emit = (evt) => emitted.push(evt);
+    context.queuePersistSessionSnapshot = (reason) => persistedReasons.push(reason);
+    context.deps.listAgentSessionsImpl = async () => [agent];
+    const manager = new SessionAdminManager(context);
+
+    await manager.listAgentSessions();
+
+    expect(emitted).toContainEqual({
+      type: "agent_list",
+      sessionId: "session-1",
+      agents: [agent],
+    });
+    expect(persistedReasons).toEqual(["session.agent_list"]);
+  });
+
   test("SessionAdminManager deleteSession blocks live targets outside the active workspace", async () => {
     const context = makeBaseContext();
     const errors: any[] = [];

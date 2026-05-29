@@ -1,5 +1,5 @@
 import { execFile as execFileCallback } from "node:child_process";
-import fs, { type FileHandle } from "node:fs/promises";
+import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
@@ -26,6 +26,7 @@ import {
 } from "../../src/lib/desktopApi";
 import {
   copyPathInputSchema,
+  copyTextInputSchema,
   createDirectoryInputSchema,
   listDirectoryInputSchema,
   openPathInputSchema,
@@ -113,22 +114,7 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
     const input = parseWithSchema(readFileInputSchema, args, "readFile options");
     await workspaceRoots.ensureApprovedWorkspaceRoots();
     const safePath = resolveAllowedPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
-
-    let fh: FileHandle | null = null;
-    try {
-      fh = await fs.open(safePath, "r");
-      const buffer = Buffer.alloc(256 * 1024); // max 256KB preview
-      const { bytesRead } = await fh.read(buffer, 0, buffer.length, 0);
-      const content = buffer.subarray(0, bytesRead).toString("utf8");
-
-      // If it looks like binary or just unprintable, maybe we don't preview or just let it be.
-      // We'll just return the string.
-      return { content };
-    } finally {
-      if (fh) {
-        await fh.close();
-      }
-    }
+    return { content: await fs.readFile(safePath, "utf8") };
   });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.writeFile, async (_event, args: WriteFileInput) => {
@@ -266,9 +252,8 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
   });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.copyText, async (_event, text: string) => {
-    if (typeof text === "string") {
-      clipboard.writeText(text);
-    }
+    const input = parseWithSchema(copyTextInputSchema, text, "copyText text");
+    clipboard.writeText(input);
   });
 
   handleDesktopInvoke(

@@ -16,7 +16,6 @@ import type { FileAttachment, OrderedInputPart } from "../../jsonrpc/routes/shar
 import type { HistoryManager } from "../HistoryManager";
 import type { SessionContext } from "../SessionContext";
 import {
-  injectResolvedReferencedSkills,
   type ReferencedSkillContext,
   resolveReferencedPlugins,
   resolveReferencedSkills,
@@ -125,11 +124,6 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
 
   const log = (line: string) => context.emit({ type: "log", sessionId: context.id, line });
 
-  // Stream index for synthetic skill-load chunks injected while steering. The
-  // index is informational in the projector (items key off toolCallId), so a
-  // coordinator-local counter is sufficient.
-  let steerStreamIndex = 0;
-
   const mergeReferencedPlugins = (incoming: ReferencedPluginContext[]) => {
     if (incoming.length === 0) return;
     const byName = new Map(
@@ -150,25 +144,6 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
       resolveReferencedPlugins(context, references),
     ]);
     return { skills, plugins };
-  };
-
-  // Hard-force skill references and merge plugin awareness when a steer commits.
-  const commitResolvedSteerReferences = (
-    resolved: ResolvedSteerReferences,
-    turnId: string | null,
-  ): ModelMessage[] => {
-    if (!turnId) return [];
-    const skillMessages = injectResolvedReferencedSkills({
-      context,
-      appendToHistory: (messages) => historyManager.appendMessagesToHistory(messages),
-      turnId,
-      skills: resolved.skills,
-      allocateStreamIndex: () => steerStreamIndex++,
-      includeRawChunks: context.state.config.includeRawChunks ?? true,
-      log,
-    });
-    mergeReferencedPlugins(resolved.plugins);
-    return skillMessages;
   };
 
   const sendSteerMessage = async (
@@ -227,14 +202,16 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
           renderSteerReferenceContext(resolvedReferences),
         );
         await activeSteerHandler({ text, expectedTurnId: currentTurnId, content: deliveryContent });
-        historyManager.appendMessagesToHistory([{ role: "user", content }]);
+        // Persist the model-facing content (with any forced-skill text folded in)
+        // as plain text — accepted by all providers, unlike synthetic tool calls.
+        historyManager.appendMessagesToHistory([{ role: "user", content: deliveryContent }]);
         context.emit({
           type: "user_message",
           sessionId: context.id,
           text: displayText,
           ...(clientMessageId ? { clientMessageId } : {}),
         });
-        commitResolvedSteerReferences(resolvedReferences, currentTurnId);
+        mergeReferencedPlugins(resolvedReferences.plugins);
         context.queuePersistSessionSnapshot("session.steer_committed");
         context.emit({
           type: "steer_accepted",
@@ -296,13 +273,24 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
     const drained = context.state.pendingSteers.splice(0);
     if (drained.length === 0) return { messages: [], committedCount: 0 };
 
+    // Resolve references first so a forced skill's body can be folded into the
+    // model-facing steer message as plain text (provider-agnostic). Plugin
+    // awareness flows through the turn-scoped system block via mergeReferencedPlugins.
+    const committedReferences = drained.flatMap((steer) => steer.references ?? []);
+    const resolvedReferences = await resolveSteerReferences(committedReferences);
+    mergeReferencedPlugins(resolvedReferences.plugins);
+    const skillContext = renderReferencedSkillsForSteer(resolvedReferences.skills);
+
     const steerMessages: ModelMessage[] = [];
-    for (const steer of drained) {
-      const content = await deps.buildUserMessageContent(
+    for (const [index, steer] of drained.entries()) {
+      let content: ModelMessage["content"] = await deps.buildUserMessageContent(
         steer.text,
         steer.attachments,
         steer.inputParts,
       );
+      if (index === 0 && skillContext) {
+        content = prependReferenceContextToContent(content, skillContext);
+      }
       steerMessages.push({ role: "user", content });
     }
     historyManager.appendMessagesToHistory(steerMessages);
@@ -315,20 +303,7 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
       });
     }
     context.queuePersistSessionSnapshot("session.steer_committed");
-    const committedReferences = drained.flatMap((steer) => steer.references ?? []);
-    const resolvedReferences = await resolveSteerReferences(committedReferences);
-    const referenceSystem = renderReferencedPluginsSection(resolvedReferences.plugins);
-    const skillMessages = commitResolvedSteerReferences(
-      resolvedReferences,
-      context.state.currentTurnId,
-    );
-    const referenceMessages: ModelMessage[] = referenceSystem
-      ? [{ role: "system", content: referenceSystem }]
-      : [];
-    return {
-      messages: [...referenceMessages, ...steerMessages, ...skillMessages],
-      committedCount: drained.length,
-    };
+    return { messages: steerMessages, committedCount: drained.length };
   };
 
   const drainPendingSteers = async (

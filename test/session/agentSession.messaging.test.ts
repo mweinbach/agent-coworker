@@ -591,14 +591,21 @@ describe("AgentSession", () => {
       await turnPromise;
 
       expect(stepMessages).toHaveLength(2);
-      expect(stepMessages[1]).toEqual(
-        expect.arrayContaining([
-          { role: "user", content: "use the referenced skill" },
-          expect.objectContaining({ role: "assistant" }),
-          expect.objectContaining({ role: "tool" }),
-        ]),
-      );
-      expect(JSON.stringify(stepMessages[1])).toContain("STEER-SKILL-BODY-MARKER");
+      // The forced skill body is folded into the steer user message as plain text
+      // (provider-agnostic), NOT injected as a synthetic tool-call/tool-result pair.
+      const secondStep = stepMessages[1]!;
+      const serializedStep = JSON.stringify(secondStep);
+      expect(serializedStep).toContain("use the referenced skill");
+      expect(serializedStep).toContain("STEER-SKILL-BODY-MARKER");
+      expect(secondStep.some((m: any) => m.role === "tool")).toBe(false);
+      expect(
+        secondStep.some(
+          (m: any) =>
+            m.role === "assistant" &&
+            Array.isArray(m.content) &&
+            m.content.some((p: any) => p?.type === "tool-call"),
+        ),
+      ).toBe(false);
     });
 
     test("active steer handlers receive referenced skill context before delivery", async () => {

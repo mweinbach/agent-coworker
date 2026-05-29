@@ -357,8 +357,9 @@ export function ChatView() {
   const contextValue = useMemo(
     () => ({
       developerMode,
+      mentionCatalog,
     }),
-    [developerMode],
+    [developerMode, mentionCatalog],
   );
 
   const workspace = useAppStore((s) => {

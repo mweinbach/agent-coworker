@@ -14,7 +14,11 @@ import {
   getPartialTurnResponseMessages,
   resolvePartialTurnProgressSource,
 } from "./partialTurnError";
-import { injectReferencedSkills, resolveReferencedPlugins } from "./referenceInjection";
+import {
+  renderReferencedSkillsInjection,
+  resolveReferencedPlugins,
+  resolveReferencedSkills,
+} from "./referenceInjection";
 import { createRunTurnInvocation } from "./runTurnInvocation";
 import type { SteerCoordinator } from "./steerCoordinator";
 import {
@@ -219,31 +223,29 @@ export function createUserMessageTurnRunner(
         model: context.state.config.model,
       });
 
-      const userMessageContent = await buildUserMessageContent(text, attachments, inputParts);
-      historyManager.appendMessagesToHistory([{ role: "user", content: userMessageContent }]);
-      metadataManager.maybeGenerateTitleFromQuery(text || visibleText);
-      context.queuePersistSessionSnapshot("session.user_message");
-
-      // Apply @-mentioned skill/plugin references for this turn: hard-force each
-      // skill (synthetic tool call+result, persisted to history and shown in the
-      // transcript) and resolve plugin awareness for the turn-scoped system block.
+      // Apply @-mentioned references BEFORE building the user message so a forced
+      // skill's body can be folded into the model-facing text. This is
+      // provider-agnostic: stateful interaction APIs reject synthetic tool-call
+      // history. The user's typed text stays the UI-visible message (`visibleText`).
       context.state.turnReferencedPlugins = undefined;
+      let skillInjectionText = "";
       if (references && references.length > 0) {
-        await injectReferencedSkills({
-          context,
-          appendToHistory: (messages) => historyManager.appendMessagesToHistory(messages),
-          turnId,
-          references,
-          allocateStreamIndex: () => tracker.streamPartIndex++,
-          includeRawChunks,
-          log,
-        });
+        const referencedSkills = await resolveReferencedSkills({ context, references, log });
+        skillInjectionText = renderReferencedSkillsInjection(referencedSkills);
         const referencedPlugins = await resolveReferencedPlugins(context, references);
         if (referencedPlugins.length > 0) {
           context.state.turnReferencedPlugins = referencedPlugins;
         }
-        context.queuePersistSessionSnapshot("session.references_injected");
       }
+      const modelFacingText = skillInjectionText ? `${text}\n\n${skillInjectionText}` : text;
+      const userMessageContent = await buildUserMessageContent(
+        modelFacingText,
+        attachments,
+        inputParts,
+      );
+      historyManager.appendMessagesToHistory([{ role: "user", content: userMessageContent }]);
+      metadataManager.maybeGenerateTitleFromQuery(text || visibleText);
+      context.queuePersistSessionSnapshot("session.user_message");
       let continueSameTurn = true;
       while (continueSameTurn) {
         const remainingSteps = context.state.maxSteps - tracker.startedStepCount;

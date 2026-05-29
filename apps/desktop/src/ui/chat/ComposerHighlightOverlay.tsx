@@ -1,7 +1,7 @@
 import { forwardRef } from "react";
 
 import { cn } from "@/lib/utils";
-import { type MentionCatalog, parseComposerSegments } from "./composerMentions";
+import { type MentionCatalog, MENTION_CHIP_CLASS, parseComposerSegments } from "./composerMentions";
 
 /**
  * Read-only mirror rendered behind the composer textarea. It re-renders the
@@ -33,7 +33,7 @@ export const ComposerHighlightOverlay = forwardRef<
         segment.type === "mention" ? (
           <span
             key={`mention-${segment.start}-${segment.name}`}
-            className="-mx-0.5 rounded-[5px] border border-primary/45 px-0.5 text-primary"
+            className={cn(MENTION_CHIP_CLASS, "-mx-0.5 px-0.5")}
           >
             {segment.raw}
           </span>

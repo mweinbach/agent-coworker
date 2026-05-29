@@ -5,103 +5,25 @@ import {
   type LoadedSkillBody,
   loadSkillBodyByName,
 } from "../../../skills/loadSkillBody";
-import type {
-  ModelMessage,
-  PluginCatalogSnapshot,
-  ReferencedPluginContext,
-  TurnReference,
-} from "../../../types";
-import { normalizeModelStreamPart } from "../../modelStream";
+import type { PluginCatalogSnapshot, ReferencedPluginContext, TurnReference } from "../../../types";
 import type { SessionContext } from "../SessionContext";
 
 /**
  * Server-side handling for skill/plugin references the user @-mentioned on a turn
  * (`TurnReference[]`).
  *
- * - Skill references are HARD-forced: each skill's SKILL.md body is injected as a
- *   synthetic `skill` tool-call + tool-result pair, both appended to model history
- *   (so it persists for later turns) and surfaced to the transcript via
- *   `model_stream_chunk` events (so it renders exactly like a real skill load,
- *   live and on journal replay). This does not depend on the model choosing to
- *   call the tool.
+ * - Skill references are HARD-forced by folding the skill's SKILL.md body into the
+ *   model-facing user message as plain text (see `renderReferencedSkillsInjection`).
+ *   This is provider-agnostic: stateful interaction APIs (google-interactions,
+ *   openai-responses, codex-app-server) reject synthetic tool-call/tool-result
+ *   history they did not generate, so we must not fabricate one. The user's typed
+ *   text stays the UI-visible message (`displayText`); only the model sees the
+ *   appended skill instructions.
  * - Plugin references are SOFT awareness: resolved to `ReferencedPluginContext`
- *   and rendered into a turn-scoped system block elsewhere
- *   (`renderReferencedPluginsSection`).
+ *   and rendered into a turn-scoped system block (`renderReferencedPluginsSection`).
  */
 
 export type ReferencedSkillContext = LoadedSkillBody;
-
-export type InjectReferencedSkillsResult = {
-  messages: ModelMessage[];
-  skills: ReferencedSkillContext[];
-};
-
-/** Deterministic, occurrence-stable id so live + journal-replay item ids match. */
-export function buildSyntheticSkillToolCallId(
-  turnId: string,
-  skillName: string,
-  index: number,
-): string {
-  return `skillref_${turnId}_${index}_${skillName}`;
-}
-
-/**
- * Build the synthetic history messages for a forced skill load. Shapes match what
- * a real `skill` tool call produces in history (`piMessageBridge` round-trips
- * these across every provider): an assistant `tool-call` part and a `tool` message
- * whose `tool-result` output uses the structured `{ type: "text", value }` form.
- */
-export function buildSyntheticSkillMessages(
-  toolCallId: string,
-  skillName: string,
-  body: string,
-): { assistant: ModelMessage; tool: ModelMessage } {
-  return {
-    assistant: {
-      role: "assistant",
-      content: [{ type: "tool-call", toolCallId, toolName: "skill", input: { skillName } }],
-    },
-    tool: {
-      role: "tool",
-      content: [
-        {
-          type: "tool-result",
-          toolCallId,
-          toolName: "skill",
-          output: { type: "text", value: body },
-          isError: false,
-        },
-      ],
-    },
-  };
-}
-
-function emitSkillLoadChunk(
-  context: SessionContext,
-  turnId: string,
-  index: number,
-  includeRawChunks: boolean,
-  rawPart: Record<string, unknown>,
-): void {
-  const normalized = normalizeModelStreamPart(rawPart, {
-    provider: context.state.config.provider,
-    includeRawPart: includeRawChunks,
-    fallbackIdSeed: turnId,
-    rawPartMode: process.env.COWORK_MODEL_STREAM_RAW_MODE === "full" ? "full" : "sanitized",
-  });
-  context.emit({
-    type: "model_stream_chunk",
-    sessionId: context.id,
-    turnId,
-    index,
-    provider: context.state.config.provider,
-    model: context.state.config.model,
-    normalizerVersion: normalized.normalizerVersion,
-    partType: normalized.partType,
-    part: normalized.part,
-    ...(normalized.rawPart !== undefined ? { rawPart: normalized.rawPart } : {}),
-  });
-}
 
 function dedupeReferenceNames(references: TurnReference[], kind: TurnReference["kind"]): string[] {
   const seen = new Set<string>();
@@ -115,6 +37,7 @@ function dedupeReferenceNames(references: TurnReference[], kind: TurnReference["
   return out;
 }
 
+/** Load the bodies of every enabled `kind:"skill"` reference. Unknown/disabled are dropped. */
 export async function resolveReferencedSkills(opts: {
   context: SessionContext;
   references: TurnReference[];
@@ -134,85 +57,28 @@ export async function resolveReferencedSkills(opts: {
   return skills;
 }
 
-export function injectResolvedReferencedSkills(opts: {
-  context: SessionContext;
-  appendToHistory: (messages: ModelMessage[]) => void;
-  turnId: string;
-  skills: ReferencedSkillContext[];
-  allocateStreamIndex: () => number;
-  includeRawChunks: boolean;
-  log: (line: string) => void;
-}): ModelMessage[] {
-  const { context, appendToHistory, turnId, skills, allocateStreamIndex, includeRawChunks, log } =
-    opts;
-  const injectedMessages: ModelMessage[] = [];
-  for (const loaded of skills) {
-    const toolCallId = buildSyntheticSkillToolCallId(
-      turnId,
-      loaded.name,
-      context.state.turnReferenceInjectionCounter++,
-    );
-    const { assistant, tool } = buildSyntheticSkillMessages(toolCallId, loaded.name, loaded.body);
-    appendToHistory([assistant, tool]);
-    injectedMessages.push(assistant, tool);
-    emitSkillLoadChunk(context, turnId, allocateStreamIndex(), includeRawChunks, {
-      type: "tool-call",
-      toolCallId,
-      toolName: "skill",
-      input: { skillName: loaded.name },
-    });
-    emitSkillLoadChunk(context, turnId, allocateStreamIndex(), includeRawChunks, {
-      type: "tool-result",
-      toolCallId,
-      toolName: "skill",
-      output: loaded.body,
-    });
-    log(`[skill-ref] injected skill "${loaded.name}"`);
-  }
-  return injectedMessages;
-}
-
 /**
- * Hard-force every `kind:"skill"` reference: load its body, append the synthetic
- * tool-call/result pair to history, and emit the matching transcript chunks.
- * The stream-chunk's tool-result `output` is the raw body string (matching the
- * pi runtime's real tool-result emission); the history message uses the
- * structured output form (matching the canonical persisted shape).
+ * Render the resolved skill bodies as an instruction block to append to the
+ * model-facing user (or steer) message. Returns "" when there is nothing to inject.
  */
-export async function injectReferencedSkills(opts: {
-  context: SessionContext;
-  appendToHistory: (messages: ModelMessage[]) => void;
-  turnId: string;
-  references: TurnReference[];
-  allocateStreamIndex: () => number;
-  includeRawChunks: boolean;
-  log: (line: string) => void;
-}): Promise<InjectReferencedSkillsResult> {
-  const {
-    context,
-    appendToHistory,
-    turnId,
-    references,
-    allocateStreamIndex,
-    includeRawChunks,
-    log,
-  } = opts;
-  const skills = await resolveReferencedSkills({ context, references, log });
-  const messages = injectResolvedReferencedSkills({
-    context,
-    appendToHistory,
-    turnId,
-    skills,
-    allocateStreamIndex,
-    includeRawChunks,
-    log,
-  });
-  return { messages, skills };
+export function renderReferencedSkillsInjection(skills: ReferencedSkillContext[]): string {
+  if (skills.length === 0) return "";
+  const lines: string[] = [
+    "## Referenced Skills",
+    "",
+    "The user explicitly invoked the following skill(s) for this request. Treat the content below as authoritative instructions and follow them.",
+    "",
+  ];
+  for (const skill of skills) {
+    lines.push(`### ${skill.name}`, "", skill.body, "");
+  }
+  return lines.join("\n").trim();
 }
 
 /**
  * Resolve every `kind:"plugin"` reference against the plugin catalog into the
- * turn-scoped awareness context. Unknown plugin names are dropped.
+ * turn-scoped awareness context. Unknown plugin names are dropped, and names that
+ * also resolve to an enabled skill are skipped (skills take precedence).
  */
 export async function resolveReferencedPlugins(
   context: SessionContext,
@@ -239,9 +105,7 @@ export async function resolveReferencedPlugins(
       name: entry.name,
       displayName: entry.displayName || entry.name,
       skillNames: entry.skills
-        .filter(
-          (skill) => skill.enabled && isSkillBodyLoadAllowed(context.state.config, skill.name),
-        )
+        .filter((skill) => skill.enabled && isSkillBodyLoadAllowed(context.state.config, skill.name))
         .map((skill) => skill.name),
     });
   }

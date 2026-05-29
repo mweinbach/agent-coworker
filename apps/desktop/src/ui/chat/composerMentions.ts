@@ -1,6 +1,13 @@
 import type { PluginCatalogSnapshot, SkillEntry, TurnReference } from "@/lib/wsProtocol";
 
 /**
+ * Shared base styling for an @-mention chip — a soft solid fill in the accent
+ * color (not an outline). Used by the composer highlight overlay and the
+ * transcript mention chips so they look identical. Per-use callers add padding.
+ */
+export const MENTION_CHIP_CLASS = "rounded-[5px] bg-primary/20 font-medium text-primary";
+
+/**
  * Pure, DOM-free parsing for composer @-mentions of skills and plugins. The
  * composer text string is the single source of truth — segments, references,
  * and the active autocomplete query are all derived from it against the live

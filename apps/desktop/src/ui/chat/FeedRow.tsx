@@ -16,6 +16,7 @@ import { Card, CardContent } from "../../components/ui/card";
 import { A2uiInlineCard } from "./a2ui/A2uiInlineCard";
 import { A2uiSurfaceHistoryRow } from "./a2ui/A2uiSurfaceHistoryRow";
 import { useChatViewContext } from "./ChatViewContext";
+import { MentionText } from "./MentionText";
 import { parseA2uiActionMessage, summarizeA2uiActionMessage } from "./chatLogic";
 import { parseCanvasEditMessage, parseUserMessageAttachments } from "./feedMessageParsing";
 import { ToolCard } from "./toolCards/ToolCard";
@@ -28,7 +29,7 @@ export const FeedRow = memo(function FeedRow(props: {
   isLatestUiSurface?: boolean;
   a2uiEnabled: boolean;
 }) {
-  const { developerMode } = useChatViewContext();
+  const { developerMode, mentionCatalog } = useChatViewContext();
   const item = props.item;
   const hasSources = props.citationSources && props.citationSources.length > 0;
   const hasInlineCitationChip =
@@ -96,10 +97,12 @@ export const FeedRow = memo(function FeedRow(props: {
                                 <span>Selected Text</span>
                               </div>
                             )}
-                            <div>{parsed.instructions}</div>
+                            <div>
+                              <MentionText text={parsed.instructions} catalog={mentionCatalog} />
+                            </div>
                           </div>
                         ) : (
-                          cleanText
+                          <MentionText text={cleanText} catalog={mentionCatalog} />
                         )}
                       </div>
                     ) : null}

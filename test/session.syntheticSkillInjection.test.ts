@@ -4,97 +4,33 @@ import os from "node:os";
 import path from "node:path";
 
 import {
-  modelMessagesToPiMessages,
-  piTurnMessagesToModelMessages,
-} from "../src/runtime/piMessageBridge";
-import {
-  buildSyntheticSkillMessages,
-  buildSyntheticSkillToolCallId,
-  injectResolvedReferencedSkills,
+  renderReferencedSkillsInjection,
   resolveReferencedPlugins,
 } from "../src/server/session/turnExecution/referenceInjection";
 import { startAgentServer } from "../src/server/startServer";
 import type { AgentConfig } from "../src/types";
 import { stopTestServer } from "./helpers/wsHarness";
 
-const SKILL_BODY_MARKER = "SYNTHETIC-SKILL-BODY-MARKER-42";
+const SKILL_BODY_MARKER = "REFERENCED-SKILL-BODY-MARKER-42";
 
-describe("synthetic skill messages (unit)", () => {
-  test("match the canonical history tool-call/result shapes", () => {
-    const toolCallId = buildSyntheticSkillToolCallId("turn-1", "documents", 0);
-    expect(toolCallId).toBe("skillref_turn-1_0_documents");
-
-    const { assistant, tool } = buildSyntheticSkillMessages(toolCallId, "documents", "BODY");
-    expect(assistant).toEqual({
-      role: "assistant",
-      content: [
-        { type: "tool-call", toolCallId, toolName: "skill", input: { skillName: "documents" } },
-      ],
-    });
-    const part = (tool.content as Array<Record<string, unknown>>)[0];
-    expect(part).toMatchObject({
-      type: "tool-result",
-      toolCallId,
-      toolName: "skill",
-      isError: false,
-    });
-    expect(part.output).toEqual({ type: "text", value: "BODY" });
+describe("renderReferencedSkillsInjection (unit)", () => {
+  test("returns empty string when there are no skills", () => {
+    expect(renderReferencedSkillsInjection([])).toBe("");
   });
 
-  test("round-trip through the pi message bridge preserves the body for each provider", () => {
-    for (const provider of ["openai", "google", "anthropic"]) {
-      const { assistant, tool } = buildSyntheticSkillMessages("tc1", "documents", "BODY-XYZ");
-      const pi = modelMessagesToPiMessages([assistant, tool], provider);
-      const back = piTurnMessagesToModelMessages(pi);
-      const serialized = JSON.stringify(back);
-      expect(serialized).toContain("BODY-XYZ");
-      expect(serialized).toContain("documents");
-      expect(serialized).toContain("skill");
-    }
-  });
-
-  test("allocates unique synthetic tool-call ids across repeated injections in one turn", () => {
-    const appended: any[] = [];
-    const emitted: any[] = [];
-    const context = {
-      id: "session-1",
-      state: {
-        turnReferenceInjectionCounter: 0,
-        config: { provider: "google", model: "gemini-3-flash-preview" },
-      },
-      emit: (event: any) => emitted.push(event),
-    } as any;
-
-    injectResolvedReferencedSkills({
-      context,
-      appendToHistory: (messages) => appended.push(...messages),
-      turnId: "turn-1",
-      skills: [{ name: "documents", body: "DOCS", source: "project" } as any],
-      allocateStreamIndex: () => emitted.length,
-      includeRawChunks: false,
-      log: () => {},
-    });
-    injectResolvedReferencedSkills({
-      context,
-      appendToHistory: (messages) => appended.push(...messages),
-      turnId: "turn-1",
-      skills: [{ name: "documents", body: "DOCS AGAIN", source: "project" } as any],
-      allocateStreamIndex: () => emitted.length,
-      includeRawChunks: false,
-      log: () => {},
-    });
-
-    const ids = appended
-      .flatMap((message) => (Array.isArray(message.content) ? message.content : []))
-      .map((part) => part.toolCallId)
-      .filter(Boolean);
-    expect(new Set(ids).size).toBe(2);
-    expect(ids).toEqual([
-      "skillref_turn-1_0_documents",
-      "skillref_turn-1_0_documents",
-      "skillref_turn-1_1_documents",
-      "skillref_turn-1_1_documents",
+  test("renders each skill body under an instruction heading", () => {
+    const text = renderReferencedSkillsInjection([
+      { name: "documents", body: "DOC BODY", source: "project", path: "/x" } as any,
+      { name: "pdf", body: "PDF BODY", source: "built-in", path: "/y" } as any,
     ]);
+    expect(text).toContain("## Referenced Skills");
+    expect(text).toContain("### documents");
+    expect(text).toContain("DOC BODY");
+    expect(text).toContain("### pdf");
+    expect(text).toContain("PDF BODY");
+    // Plain text only — never a fabricated tool call (rejected by stateful providers).
+    expect(text).not.toContain("tool-call");
+    expect(text).not.toContain("tool-result");
   });
 });
 
@@ -252,21 +188,16 @@ async function connectJsonRpc(url: string): Promise<JsonRpcConn> {
   return { sendRequest, waitFor, takeQueued, close: () => ws.close() };
 }
 
-describe("synthetic skill injection (e2e via turn/start references)", () => {
-  test("forces a skill: transcript tool card + persisted history, no malformed-tool failure", async () => {
+describe("skill reference injection (e2e via turn/start references)", () => {
+  test("folds the skill body into the model-facing user message, not a synthetic tool call", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "skillref-e2e-"));
     const skillDir = path.join(tmp, ".cowork", "skills", "test-skill");
     await fs.mkdir(skillDir, { recursive: true });
     await fs.writeFile(
       path.join(skillDir, "SKILL.md"),
-      [
-        "---",
-        'name: "test-skill"',
-        'description: "A test skill"',
-        "---",
-        "",
-        SKILL_BODY_MARKER,
-      ].join("\n"),
+      ["---", 'name: "test-skill"', 'description: "A test skill"', "---", "", SKILL_BODY_MARKER].join(
+        "\n",
+      ),
       "utf-8",
     );
 
@@ -319,44 +250,36 @@ describe("synthetic skill injection (e2e via turn/start references)", () => {
       await new Promise((resolve) => setTimeout(resolve, 50));
       notifications.push(...rpc.takeQueued((c) => typeof c.method === "string"));
 
-      // (a) The transcript shows a `skill` tool card (live stream), stable id.
-      const toolStarted = notifications.find(
-        (m) => m.method === "item/started" && m.params.item.type === "toolCall",
-      );
-      const toolCompleted = notifications.find(
-        (m) => m.method === "item/completed" && m.params.item.type === "toolCall",
-      );
-      expect(toolStarted).toBeDefined();
-      expect(toolCompleted).toBeDefined();
-      expect(toolStarted.params.item).toMatchObject({
-        type: "toolCall",
-        toolName: "skill",
-        args: { skillName: "test-skill" },
-      });
-      expect(toolCompleted.params.item.id).toBe(toolStarted.params.item.id);
-      expect(JSON.stringify(toolCompleted.params.item)).toContain(SKILL_BODY_MARKER);
-
-      // (b) The synthetic messages are in model history BEFORE the model runs.
+      // (a) The skill body is folded into the model-facing USER message.
       expect(capturedMessages).not.toBeNull();
       const messages = capturedMessages ?? [];
-      const serialized = JSON.stringify(messages);
-      expect(serialized).toContain(SKILL_BODY_MARKER);
-      const assistantToolCall = messages.find(
-        (m: any) =>
-          m.role === "assistant" &&
-          Array.isArray(m.content) &&
-          m.content.some((p: any) => p.type === "tool-call" && p.toolName === "skill"),
-      );
-      const toolResult = messages.find(
-        (m: any) =>
-          m.role === "tool" &&
-          Array.isArray(m.content) &&
-          m.content.some((p: any) => p.type === "tool-result" && p.toolName === "skill"),
-      );
-      expect(assistantToolCall).toBeDefined();
-      expect(toolResult).toBeDefined();
+      const userMessage = messages.find((m: any) => m.role === "user");
+      expect(userMessage).toBeDefined();
+      expect(JSON.stringify(userMessage)).toContain(SKILL_BODY_MARKER);
+      expect(JSON.stringify(userMessage)).toContain("use the skill");
 
-      // (c) No malformed-tool / error notification; the turn completed.
+      // (b) Provider-safe: NO synthetic tool-call / tool-result messages in history.
+      expect(messages.some((m: any) => m.role === "tool")).toBe(false);
+      expect(
+        messages.some(
+          (m: any) =>
+            m.role === "assistant" &&
+            Array.isArray(m.content) &&
+            m.content.some((p: any) => p?.type === "tool-call"),
+        ),
+      ).toBe(false);
+
+      // (c) The UI-visible user bubble stays clean (skill body is not leaked to it).
+      const userItem = notifications.find(
+        (m) =>
+          (m.method === "item/started" || m.method === "item/completed") &&
+          m.params.item?.type === "userMessage",
+      );
+      expect(userItem).toBeDefined();
+      expect(JSON.stringify(userItem.params.item)).not.toContain(SKILL_BODY_MARKER);
+      expect(JSON.stringify(userItem.params.item)).toContain("use the skill");
+
+      // (d) No error notification; the turn completed.
       const errorNotification = notifications.find(
         (m) => m.method === "error" || m.method === "session/error",
       );

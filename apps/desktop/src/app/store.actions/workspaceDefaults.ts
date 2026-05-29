@@ -24,6 +24,7 @@ import {
   sendUserMessageToThread,
   shiftPendingThreadAttachments,
   shiftPendingThreadMessage,
+  shiftPendingThreadReferences,
   waitForControlSession,
 } from "../store.helpers";
 import { requestJsonRpc } from "../store.helpers/jsonRpcSocket";
@@ -431,6 +432,7 @@ export function createWorkspaceDefaultsActions(
       return false;
     }
     const queuedAttachments = shiftPendingThreadAttachments(threadId);
+    const queuedReferences = shiftPendingThreadReferences(threadId);
 
     const accepted = sendUserMessageToThread(
       get,
@@ -439,9 +441,10 @@ export function createWorkspaceDefaultsActions(
       next,
       undefined,
       queuedAttachments,
+      queuedReferences,
     );
     if (!accepted) {
-      prependPendingThreadMessageWithAttachments(threadId, next, queuedAttachments);
+      prependPendingThreadMessageWithAttachments(threadId, next, queuedAttachments, queuedReferences);
     }
     return accepted;
   };

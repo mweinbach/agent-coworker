@@ -31,6 +31,29 @@ export type ModelMessage = {
   [key: string]: unknown;
 };
 
+/**
+ * A skill or plugin the user explicitly referenced ("@-mentioned") when sending
+ * a turn. A `skill` reference is hard-forced (its SKILL.md body is injected as a
+ * synthetic skill tool call+result so it is guaranteed loaded and persists in
+ * history); a `plugin` reference is soft awareness (a turn-scoped system block
+ * biases the model toward the plugin's bundled skills).
+ */
+export type TurnReference = {
+  kind: "skill" | "plugin";
+  name: string;
+};
+
+/**
+ * A plugin the user referenced on a turn, resolved against the plugin catalog.
+ * Rendered into a turn-scoped system block by `renderReferencedPluginsSection`
+ * to bias the model toward the plugin's bundled skills.
+ */
+export type ReferencedPluginContext = {
+  name: string;
+  displayName: string;
+  skillNames: string[];
+};
+
 export function isProviderName(v: unknown): v is ProviderName {
   return providerNameSchema.safeParse(v).success;
 }

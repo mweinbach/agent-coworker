@@ -531,6 +531,134 @@ describe("AgentSession", () => {
       expect(stepMessages[1]?.at(-1)).toEqual({ role: "user", content: "mention tests" });
     });
 
+    test("injects referenced steer skills into the same prepared model step", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-steer-skillref-"));
+      const skillsDir = path.join(dir, "skills");
+      const skillDir = path.join(skillsDir, "steer-skill");
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.writeFile(
+        path.join(skillDir, "SKILL.md"),
+        [
+          "---",
+          'name: "steer-skill"',
+          'description: "Steer skill"',
+          "---",
+          "",
+          "STEER-SKILL-BODY-MARKER",
+        ].join("\n"),
+        "utf-8",
+      );
+      const { session } = makeSession({
+        config: { ...makeConfig(dir), skillsDirs: [skillsDir] },
+      });
+      const stepMessages: any[][] = [];
+      let allowSecondStep!: () => void;
+
+      mockRunTurn.mockImplementation(async (params: any) => {
+        const initialMessages = [{ role: "user", content: "go" }];
+        const stepOne = await params.prepareStep?.({ stepNumber: 1, messages: initialMessages });
+        stepMessages.push(stepOne?.messages ?? initialMessages);
+
+        await new Promise<void>((resolve) => {
+          allowSecondStep = resolve;
+        });
+
+        const stepTwo = await params.prepareStep?.({
+          stepNumber: 2,
+          messages: stepMessages[0]!,
+        });
+        stepMessages.push(stepTwo?.messages ?? stepMessages[0]!);
+
+        return {
+          text: "done",
+          reasoningText: undefined,
+          responseMessages: [{ role: "assistant", content: "done" }],
+        };
+      });
+
+      const turnPromise = session.sendUserMessage("go");
+      await new Promise((r) => setTimeout(r, 10));
+
+      await session.sendSteerMessage(
+        "use the referenced skill",
+        session.activeTurnId!,
+        "steer-skill-ref",
+        undefined,
+        undefined,
+        [{ kind: "skill", name: "steer-skill" }],
+      );
+      allowSecondStep();
+      await turnPromise;
+
+      expect(stepMessages).toHaveLength(2);
+      expect(stepMessages[1]).toEqual(
+        expect.arrayContaining([
+          { role: "user", content: "use the referenced skill" },
+          expect.objectContaining({ role: "assistant" }),
+          expect.objectContaining({ role: "tool" }),
+        ]),
+      );
+      expect(JSON.stringify(stepMessages[1])).toContain("STEER-SKILL-BODY-MARKER");
+    });
+
+    test("active steer handlers receive referenced skill context before delivery", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-active-steer-skillref-"));
+      const skillsDir = path.join(dir, "skills");
+      const skillDir = path.join(skillsDir, "live-steer-skill");
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.writeFile(
+        path.join(skillDir, "SKILL.md"),
+        [
+          "---",
+          'name: "live-steer-skill"',
+          'description: "Live steer skill"',
+          "---",
+          "",
+          "LIVE-STEER-SKILL-BODY-MARKER",
+        ].join("\n"),
+        "utf-8",
+      );
+      const { session } = makeSession({
+        config: { ...makeConfig(dir), skillsDirs: [skillsDir] },
+      });
+      let deliveredContent: unknown;
+      let resolveRunTurn!: () => void;
+
+      mockRunTurn.mockImplementation(async (params: any) => {
+        params.registerSteerHandler?.(async (steer: any) => {
+          deliveredContent = steer.content;
+        });
+        await new Promise<void>((resolve) => {
+          resolveRunTurn = resolve;
+        });
+        return {
+          text: "done",
+          reasoningText: undefined,
+          responseMessages: [{ role: "assistant", content: "done" }],
+        };
+      });
+
+      const turnPromise = session.sendUserMessage("go");
+      await new Promise((r) => setTimeout(r, 10));
+
+      await session.sendSteerMessage(
+        "use the live referenced skill",
+        session.activeTurnId!,
+        "active-steer-skill-ref",
+        undefined,
+        undefined,
+        [{ kind: "skill", name: "live-steer-skill" }],
+      );
+
+      expect(JSON.stringify(deliveredContent)).toContain("LIVE-STEER-SKILL-BODY-MARKER");
+      expect(JSON.stringify((session as any).state.allMessages)).toContain(
+        "LIVE-STEER-SKILL-BODY-MARKER",
+      );
+
+      resolveRunTurn();
+      await turnPromise;
+    });
+
     test("late steer continuations only receive the remaining maxSteps budget", async () => {
       const { session } = makeSession();
       (session as any).state.maxSteps = 2;

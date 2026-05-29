@@ -31,6 +31,7 @@ export type {
   SkillMutationTargetScope,
   SkillUpdateCheckResult,
   TodoItem,
+  TurnReference,
 } from "../../../../src/types";
 export { isInstalledPluginCatalogEntry, PROVIDER_NAMES } from "../../../../src/types";
 export type {

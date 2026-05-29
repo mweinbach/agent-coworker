@@ -7,7 +7,12 @@ import type {
   AgentSpawnContextOptions,
 } from "../../shared/agents";
 import type { SessionSnapshot } from "../../shared/sessionSnapshot";
-import type { AgentConfig, HarnessContextPayload, MCPServerConfig } from "../../types";
+import type {
+  AgentConfig,
+  HarnessContextPayload,
+  MCPServerConfig,
+  TurnReference,
+} from "../../types";
 import type { AgentWaitMode } from "../agents/types";
 import type { FileAttachment, OrderedInputPart } from "../jsonrpc/routes/shared";
 import type { SessionConfigPatch } from "../protocol";
@@ -132,8 +137,16 @@ export class SessionTurnService {
     displayText?: string,
     attachments?: FileAttachment[],
     inputParts?: OrderedInputPart[],
+    references?: TurnReference[],
   ): Promise<void> {
-    await this.session.sendUserMessage(text, clientMessageId, displayText, attachments, inputParts);
+    await this.session.sendUserMessage(
+      text,
+      clientMessageId,
+      displayText,
+      attachments,
+      inputParts,
+      references,
+    );
   }
 
   async sendSteerMessage(
@@ -142,6 +155,7 @@ export class SessionTurnService {
     clientMessageId?: string,
     attachments?: FileAttachment[],
     inputParts?: OrderedInputPart[],
+    references?: TurnReference[],
   ): Promise<void> {
     await this.session.sendSteerMessage(
       text,
@@ -149,6 +163,7 @@ export class SessionTurnService {
       clientMessageId,
       attachments,
       inputParts,
+      references,
     );
   }
 

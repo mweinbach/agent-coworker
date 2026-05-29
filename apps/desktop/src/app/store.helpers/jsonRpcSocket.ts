@@ -4,6 +4,7 @@ import type {
 } from "../../../../../src/shared/spreadsheetPreview";
 import { JsonRpcSocket } from "../../lib/agentSocket";
 import { withBrowserAccessToken } from "../../lib/webAdapter";
+import type { TurnReference } from "../../lib/wsProtocol";
 import type { StoreGet, StoreSet } from "../store.helpers";
 import type { ThreadRuntime, WorkspaceRecord } from "../types";
 import { JSONRPC_SOCKET_OVERRIDE_KEY } from "./jsonRpcSocketOverride";
@@ -388,6 +389,7 @@ export async function startJsonRpcTurn(
   text: string,
   clientMessageId?: string,
   attachments?: FileAttachmentInput[],
+  references?: TurnReference[],
 ): Promise<unknown> {
   const input: Array<Record<string, unknown>> = [];
   if (text) {
@@ -416,6 +418,7 @@ export async function startJsonRpcTurn(
     threadId,
     input,
     ...(clientMessageId ? { clientMessageId } : {}),
+    ...(references && references.length > 0 ? { references } : {}),
   });
 }
 
@@ -428,6 +431,7 @@ export async function steerJsonRpcTurn(
   text: string,
   clientMessageId?: string,
   attachments?: FileAttachmentInput[],
+  references?: TurnReference[],
 ): Promise<unknown> {
   const input: Array<Record<string, unknown>> = [];
   if (text) {
@@ -457,6 +461,7 @@ export async function steerJsonRpcTurn(
     turnId,
     input,
     ...(clientMessageId ? { clientMessageId } : {}),
+    ...(references && references.length > 0 ? { references } : {}),
   });
 }
 

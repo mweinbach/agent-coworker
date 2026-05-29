@@ -164,6 +164,40 @@ Example request with a previously uploaded file path:
 }
 ```
 
+#### Skill and plugin references in `turn/start` and `turn/steer`
+
+Both `turn/start` and `turn/steer` accept an optional `references` array so clients can let users "@-mention" skills and plugins inline in the composer and have the model forced/biased toward them:
+
+```json
+{
+  "kind": "skill" | "plugin",
+  "name": "documents"
+}
+```
+
+- A **`skill`** reference is a *hard force* ("inject + persist"): the server loads the skill's `SKILL.md` body and injects a synthetic `skill` tool-call + tool-result pair into the turn. It is appended to model history (so it persists for later turns) and surfaced to the transcript as a normal `skill` tool call (live and on journal replay) — the model does not have to choose to call the tool.
+- A **`plugin`** reference is *soft awareness*: it is resolved against the plugin catalog and rendered into a turn-scoped `## Referenced Plugins` system block listing the plugin's bundled skills, biasing the model toward them without force-loading any.
+
+The array is capped at 32 entries. Names that no longer resolve to an enabled skill / installed plugin at send time are skipped (the turn proceeds). Skill names take precedence over plugin names when a name matches both. The client derives `references` from the composer text against the live skill/plugin catalog; the typed text is sent unchanged as the user message.
+
+Example request referencing a skill and a plugin:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 7,
+  "method": "turn/start",
+  "params": {
+    "threadId": "abc-123",
+    "input": [{ "type": "text", "text": "Draft the Q3 report with @documents using @acme-suite." }],
+    "references": [
+      { "kind": "skill", "name": "documents" },
+      { "kind": "plugin", "name": "acme-suite" }
+    ]
+  }
+}
+```
+
 ### Cowork JSON-RPC control namespace
 
 Cowork also exposes a workspace-scoped control namespace over the same JSON-RPC connection. Some methods return typed session event payloads inside `{ "event": ... }` or `{ "events": [...] }` so clients can share reducers for control state and live notifications.

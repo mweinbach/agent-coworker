@@ -26,9 +26,11 @@ import type {
   ChildModelRoutingMode,
   HarnessContextState,
   ModelMessage,
+  ReferencedPluginContext,
   ServerErrorCode,
   ServerErrorSource,
   TodoItem,
+  TurnReference,
 } from "../../types";
 import type { AgentWaitMode, AgentWaitResult } from "../agents/types";
 import type { SessionEvent } from "../protocol";
@@ -111,6 +113,7 @@ type PendingSteer = {
   acceptedAt: string;
   attachments?: import("../jsonrpc/routes/shared").FileAttachment[];
   inputParts?: import("../jsonrpc/routes/shared").OrderedInputPart[];
+  references?: TurnReference[];
 };
 
 export type SessionRuntimeState = {
@@ -143,6 +146,18 @@ export type SessionRuntimeState = {
   backupOperationQueue: Promise<void>;
   lastAutoCheckpointAt: number;
   costTracker: SessionCostTracker | null;
+  /**
+   * Monotonic counter for synthetic referenced-skill tool calls within the active
+   * turn. Reset at turn start so late steers cannot reuse IDs from the initial
+   * turn reference injection.
+   */
+  turnReferenceInjectionCounter: number;
+  /**
+   * Plugins the user @-mentioned for the active turn, resolved against the plugin
+   * catalog. Turn-scoped (set before the run loop, cleared when the turn settles)
+   * and read by `runTurnInvocation` to render the soft-awareness system block.
+   */
+  turnReferencedPlugins?: ReferencedPluginContext[];
 };
 
 export type ExperimentalA2uiManager = {

@@ -30,7 +30,7 @@ export function createTurnRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
         return;
       }
 
-      const { threadId, input, clientMessageId } = parsed.data;
+      const { threadId, input, clientMessageId, references } = parsed.data;
       const { text, attachments, orderedParts } = context.utils.extractInput(input);
       const hasInput = text || attachments.length > 0;
       if (!threadId || !hasInput) {
@@ -62,6 +62,7 @@ export function createTurnRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
             undefined,
             attachments.length > 0 ? attachments : undefined,
             orderedParts,
+            references,
           );
         },
         (event): event is JsonRpcTurnStartOutcome =>
@@ -97,7 +98,7 @@ export function createTurnRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
         return;
       }
 
-      const { threadId, turnId, input, clientMessageId } = parsed.data;
+      const { threadId, turnId, input, clientMessageId, references } = parsed.data;
       const { text, attachments, orderedParts } = context.utils.extractInput(input);
       const runtime = context.threads.getLive(threadId)?.runtime;
       const expectedTurnId = turnId || (runtime?.turns.activeTurnId ?? "");
@@ -127,6 +128,7 @@ export function createTurnRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
             clientMessageId,
             attachments.length > 0 ? attachments : undefined,
             orderedParts,
+            references,
           ),
         (event): event is JsonRpcTurnSteerOutcome =>
           (event.type === "steer_accepted" &&

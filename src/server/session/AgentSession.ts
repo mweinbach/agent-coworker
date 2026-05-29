@@ -284,6 +284,7 @@ export class AgentSession {
       backupOperationQueue: Promise.resolve(),
       lastAutoCheckpointAt: 0,
       costTracker: null,
+      turnReferenceInjectionCounter: 0,
     };
 
     this.memoryStore = new MemoryStore(
@@ -1380,6 +1381,7 @@ export class AgentSession {
     displayText?: string,
     attachments?: import("../jsonrpc/routes/shared").FileAttachment[],
     inputParts?: import("../jsonrpc/routes/shared").OrderedInputPart[],
+    references?: import("../../types").TurnReference[],
   ) {
     await this.pendingConfigMutation.catch(() => {});
     if (!(await this.ensureSystemPromptReady())) {
@@ -1391,6 +1393,7 @@ export class AgentSession {
       displayText,
       attachments,
       inputParts,
+      references,
     );
   }
 
@@ -1400,6 +1403,7 @@ export class AgentSession {
     clientMessageId?: string,
     attachments?: import("../jsonrpc/routes/shared").FileAttachment[],
     inputParts?: import("../jsonrpc/routes/shared").OrderedInputPart[],
+    references?: import("../../types").TurnReference[],
   ) {
     await this.pendingConfigMutation.catch(() => {});
     if (!(await this.ensureSystemPromptReady())) {
@@ -1411,6 +1415,7 @@ export class AgentSession {
       clientMessageId,
       attachments,
       inputParts,
+      references,
     );
   }
 

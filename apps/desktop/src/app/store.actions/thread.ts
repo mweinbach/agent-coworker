@@ -585,6 +585,7 @@ export function createThreadActions(
       RUNTIME.optimisticUserMessageIds.delete(threadId);
       RUNTIME.pendingThreadMessages.delete(threadId);
       RUNTIME.pendingThreadAttachments.delete(threadId);
+      RUNTIME.pendingThreadReferences.delete(threadId);
       RUNTIME.pendingWorkspaceDefaultApplyByThread.delete(threadId);
       RUNTIME.modelStreamByThread.delete(threadId);
       RUNTIME.threadSelectionRequests.delete(threadId);
@@ -888,7 +889,7 @@ export function createThreadActions(
       const hasFirstMessage = Boolean(firstMessage.trim());
       const hasResolvedAttachments = Boolean(resolvedAttachments && resolvedAttachments.length > 0);
       if (hasFirstMessage || hasResolvedAttachments) {
-        queuePendingThreadMessage(threadId, firstMessage, resolvedAttachments);
+        queuePendingThreadMessage(threadId, firstMessage, resolvedAttachments, opts?.references);
       }
       ensureThreadSocket(
         get,
@@ -938,6 +939,7 @@ export function createThreadActions(
         selectionRequestId?: number;
         skipWorkspaceSelect?: boolean;
         attachments?: import("../store.helpers/jsonRpcSocket").FileAttachmentInput[];
+        references?: import("../../lib/wsProtocol").TurnReference[];
         refreshSnapshot?: boolean;
       },
     ) => {
@@ -981,7 +983,7 @@ export function createThreadActions(
 
       const hasFirstMessage = firstMessage?.trim();
       if (hasFirstMessage || hasQueuedAttachments) {
-        queuePendingThreadMessage(threadId, firstMessage ?? "", opts?.attachments);
+        queuePendingThreadMessage(threadId, firstMessage ?? "", opts?.attachments, opts?.references);
       }
       ensureThreadSocket(
         get,
@@ -1000,6 +1002,7 @@ export function createThreadActions(
       text: string,
       busyPolicy: ThreadBusyPolicy = "reject",
       attachments?: import("../store.helpers/jsonRpcSocket").FileAttachmentInput[],
+      references?: import("../../lib/wsProtocol").TurnReference[],
     ): Promise<boolean> => {
       const activeThreadId = get().selectedThreadId;
       if (!activeThreadId) return false;
@@ -1022,6 +1025,7 @@ export function createThreadActions(
           titleHint: thread.title,
           firstMessage,
           attachments,
+          references,
         });
         if (!started) return false;
         set({ composerText: "" });
@@ -1033,6 +1037,7 @@ export function createThreadActions(
         const firstMessage = preamble ? `${preamble}${trimmed}` : trimmed;
         const reconnected = await get().reconnectThread(activeThreadId, firstMessage, {
           attachments,
+          references,
         });
         if (!reconnected) return false;
         set({ composerText: "" });
@@ -1046,6 +1051,7 @@ export function createThreadActions(
         trimmed,
         busyPolicy,
         attachments,
+        references,
       );
       if (!accepted) return false;
       if (busyPolicy === "steer" && rt?.busy) return true;

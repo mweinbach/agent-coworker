@@ -45,9 +45,9 @@ import {
 } from "../../lib/composerAttachments";
 import { modelDisplayNamesFromCatalog } from "../../lib/modelChoices";
 import { resolveNewChatLandingTarget } from "../../lib/newChatLanding";
+import { ComposerMentionInput } from "./ComposerMentionInput";
 import { type ComposerModelSelection, ComposerModelSelector } from "./ComposerModelSelector";
 import { buildMentionCatalog, extractReferencesFromText } from "./composerMentions";
-import { ComposerMentionInput } from "./ComposerMentionInput";
 import { resolveDefaultNewChatModel } from "./newChatLandingModel";
 
 export function NewChatLanding() {

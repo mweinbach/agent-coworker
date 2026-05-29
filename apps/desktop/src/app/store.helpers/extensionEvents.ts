@@ -1,4 +1,8 @@
-import type { PluginCatalogSnapshot, SessionEvent } from "../../lib/wsProtocol";
+import type {
+  PluginCatalogSnapshot,
+  SessionEvent,
+  SkillCatalogSnapshot,
+} from "../../lib/wsProtocol";
 import type { WorkspaceRuntime } from "../types";
 import { RUNTIME } from "./runtimeState";
 
@@ -43,6 +47,30 @@ function mergeStableAvailablePlugins(
     ...nextCatalog,
     availablePlugins: previousCatalog.availablePlugins.filter(
       (plugin) => !installedPluginIds.has(plugin.id),
+    ),
+  };
+}
+
+function mergeStableAvailableSkills(
+  previousCatalog: SkillCatalogSnapshot | null,
+  nextCatalog: SkillCatalogSnapshot,
+  availableSkillsPartial: boolean,
+): SkillCatalogSnapshot {
+  const nextAvailableSkills = nextCatalog.availableSkills ?? [];
+  if (
+    !availableSkillsPartial ||
+    nextAvailableSkills.length > 0 ||
+    !previousCatalog ||
+    (previousCatalog.availableSkills?.length ?? 0) === 0
+  ) {
+    return { ...nextCatalog, availableSkills: nextAvailableSkills };
+  }
+
+  const installedSkillNames = new Set(nextCatalog.installations.map((skill) => skill.name));
+  return {
+    ...nextCatalog,
+    availableSkills: previousCatalog.availableSkills.filter(
+      (skill) => !installedSkillNames.has(skill.name),
     ),
   };
 }
@@ -111,16 +139,21 @@ export function applySkillsCatalogEvent(
   evt: SkillsCatalogEvent,
 ): WorkspaceRuntime {
   const clearedMutationPendingKeys = evt.clearedMutationPendingKeys ?? [];
+  const skillsCatalog = mergeStableAvailableSkills(
+    workspaceRuntime.skillsCatalog,
+    evt.catalog,
+    evt.availableSkillsPartial === true,
+  );
   const selectedInstallationId = workspaceRuntime.selectedSkillInstallationId;
   const selectedInstallation = selectedInstallationId
-    ? (evt.catalog.installations.find(
+    ? (skillsCatalog.installations.find(
         (installation) => installation.installationId === selectedInstallationId,
       ) ?? null)
     : null;
 
   return {
     ...workspaceRuntime,
-    skillsCatalog: evt.catalog,
+    skillsCatalog,
     skillCatalogLoading: false,
     skillCatalogError: null,
     skillsMutationBlocked: evt.mutationBlocked,

@@ -688,6 +688,13 @@ describe("AgentControl persisted child control", () => {
       totalCompletionTokens: 7,
       totalTokens: 12,
       estimatedTotalCostUsd: 0.01,
+      costBreakdown: {
+        inputCostUsd: 0.002,
+        cachedInputCostUsd: 0,
+        cacheWriteInputCostUsd: 0,
+        outputCostUsd: 0.008,
+        otherCostUsd: 0,
+      },
       costTrackingAvailable: true,
       byModel: [],
       turns: [],
@@ -708,6 +715,7 @@ describe("AgentControl persisted child control", () => {
       totalTokens: 12,
       estimatedCostUsd: 0.01,
     });
+    const emitParentAgentStatus = mock(() => {});
     const control = new AgentControl({
       sessionBindings: new Map(),
       sessionDb: {
@@ -721,7 +729,7 @@ describe("AgentControl persisted child control", () => {
       }) as any,
       loadAgentPrompt: async () => "child system prompt",
       disposeBinding: () => {},
-      emitParentAgentStatus: () => {},
+      emitParentAgentStatus,
       emitParentLog: () => {},
     });
 
@@ -742,6 +750,15 @@ describe("AgentControl persisted child control", () => {
     );
     expect(inspected.sessionUsage?.totalTokens).toBe(12);
     expect(inspected.lastTurnUsage?.totalTokens).toBe(12);
+    expect(emitParentAgentStatus).toHaveBeenCalledWith(
+      "root-1",
+      expect.objectContaining({
+        agentId: "child-1",
+        lastMessagePreview: expect.stringContaining("Finished the task."),
+        sessionUsage: expect.objectContaining({ estimatedTotalCostUsd: 0.01 }),
+        lastTurnUsage: expect.objectContaining({ totalTokens: 12 }),
+      }),
+    );
   });
 
   test("inspect falls back to legacy fenced JSON when no tagged report exists", async () => {

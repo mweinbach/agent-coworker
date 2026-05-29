@@ -1052,6 +1052,31 @@ export function createControlSocketHelpers(
       return;
     }
 
+    if (evt.type === "import_list") {
+      const key = `${evt.source}:${evt.kind}`;
+      set((s) => {
+        const rt = s.workspaceRuntimeById[workspaceId];
+        return {
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...rt,
+              importItemsByKey: {
+                ...rt.importItemsByKey,
+                [key]: {
+                  items: evt.items,
+                  homeExists: evt.homeExists,
+                  loading: false,
+                  error: null,
+                },
+              },
+            },
+          },
+        };
+      });
+      return;
+    }
+
     if (evt.type === "plugin_detail") {
       set((s) => ({
         workspaceRuntimeById: {

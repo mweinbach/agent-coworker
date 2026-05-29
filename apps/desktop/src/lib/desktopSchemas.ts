@@ -26,6 +26,8 @@ import type {
   MobileRelayUpdateTrustedPhonePermissionsInput,
   OpenExternalUrlInput,
   OpenPathInput,
+  PickDirectoryInput,
+  PlatformChromeInfo,
   PreferredFileAppInput,
   PreviewOSFileInput,
   ReadFileForPreviewInput,
@@ -243,6 +245,10 @@ export const showContextMenuInputSchema: z.ZodType<ShowContextMenuInput> = z.obj
   items: z.array(contextMenuItemSchema),
 });
 
+export const pickDirectoryInputSchema: z.ZodType<PickDirectoryInput> = z.object({
+  title: z.string().optional(),
+});
+
 export const windowDragPointInputSchema: z.ZodType<WindowDragPointInput> = z.object({
   screenX: z.number().finite(),
   screenY: z.number().finite(),
@@ -299,6 +305,7 @@ export const readFileForPreviewInputSchema: z.ZodType<ReadFileForPreviewInput> =
 
 export const revealPathInputSchema: z.ZodType<RevealPathInput> = sharedPathSchema;
 export const copyPathInputSchema: z.ZodType<CopyPathInput> = sharedPathSchema;
+export const copyTextInputSchema = z.string();
 export const trashPathInputSchema: z.ZodType<TrashPathInput> = sharedPathSchema;
 
 export const createDirectoryInputSchema: z.ZodType<CreateDirectoryInput> = z.object({
@@ -574,6 +581,21 @@ export const systemAppearanceSchema: z.ZodType<SystemAppearance> = z.object({
   shouldUseInvertedColorScheme: z.boolean(),
   prefersReducedTransparency: z.boolean(),
   inForcedColorsMode: z.boolean(),
+});
+
+export const platformChromeInfoSchema: z.ZodType<PlatformChromeInfo> = z.object({
+  platform: nonEmptyStringSchema,
+  titlebarHeight: z.number().finite().nonnegative(),
+  dragStripHeight: z.number().finite().nonnegative(),
+  leftNativeReserve: z.number().finite().nonnegative(),
+  rightNativeReserve: z.number().finite().nonnegative(),
+  captionButtonReserve: z.number().finite().nonnegative(),
+  collapsedLeftRailWidth: z.number().finite().nonnegative(),
+  topbarToolbarGap: z.number().finite().nonnegative(),
+  sidebarTitlebandMode: z.enum(["native", "topbar"]),
+  topbarControlPlacement: z.enum(["left-rail", "sidebar", "inline"]),
+  usesNativeGlass: z.boolean(),
+  disableCssBlur: z.boolean(),
 });
 
 const h3MobileRelayPairingPayloadSchema = z.object({

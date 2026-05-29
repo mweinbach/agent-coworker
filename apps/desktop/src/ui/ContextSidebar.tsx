@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { memo } from "react";
 
+import { formatCost, formatTokenCount } from "../../../../src/session/pricing";
 import { useAppStore } from "../app/store";
 import type { ThreadAgentSummary } from "../app/types";
 import { MessageResponse } from "../components/ai-elements/message";
@@ -41,6 +42,17 @@ function agentStatusLabel(agent: ThreadAgentSummary): string {
   if (agent.lifecycleState === "closed") return "closed";
   if (agent.busy) return "busy";
   return agent.executionState.replace(/_/g, " ");
+}
+
+function agentUsageLabel(agent: ThreadAgentSummary): string | null {
+  const usage = agent.sessionUsage;
+  if (!usage) return null;
+  const tokenLabel = `${formatTokenCount(usage.totalTokens)} tokens`;
+  const costLabel =
+    usage.costTrackingAvailable && typeof usage.estimatedTotalCostUsd === "number"
+      ? formatCost(usage.estimatedTotalCostUsd)
+      : "cost unavailable";
+  return `${tokenLabel} · ${costLabel}`;
 }
 
 export const ContextSidebar = memo(function ContextSidebar() {
@@ -182,32 +194,40 @@ export const ContextSidebar = memo(function ContextSidebar() {
             data-sidebar-section="subagents"
           >
             <div className="space-y-1.5">
-              {agents.map((agent) => (
-                <div
-                  key={agent.agentId}
-                  className="app-context-sidebar__nested-panel rounded-[10px] border px-2.5 py-2"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="truncate text-[11px] font-medium text-foreground">
-                        {agent.nickname || agent.title}
+              {agents.map((agent) => {
+                const usageLabel = agentUsageLabel(agent);
+                return (
+                  <div
+                    key={agent.agentId}
+                    className="app-context-sidebar__nested-panel rounded-[10px] border px-2.5 py-2"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="truncate text-[11px] font-medium text-foreground">
+                          {agent.nickname || agent.title}
+                        </div>
+                        <div className="truncate text-[10px] text-muted-foreground">
+                          {agent.role} · depth {agent.depth} · {agent.effectiveModel}
+                        </div>
+                        {usageLabel ? (
+                          <div className="mt-0.5 truncate text-[10px] tabular-nums text-muted-foreground/88">
+                            {usageLabel}
+                          </div>
+                        ) : null}
                       </div>
-                      <div className="truncate text-[10px] text-muted-foreground">
-                        {agent.role} · depth {agent.depth} · {agent.effectiveModel}
+                      <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                        {agentStatusIcon(agent)}
+                        <span>{agentStatusLabel(agent)}</span>
                       </div>
                     </div>
-                    <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
-                      {agentStatusIcon(agent)}
-                      <span>{agentStatusLabel(agent)}</span>
-                    </div>
+                    {agent.lastMessagePreview ? (
+                      <MessageResponse className="mt-1.5 line-clamp-2 text-[10px] leading-4 text-muted-foreground [&_p]:my-0 [&_p]:leading-4 [&_ul]:my-0 [&_ol]:my-0 [&_li]:leading-4 [&_pre]:border-0 [&_pre]:bg-transparent [&_pre]:p-0 [&_code]:bg-transparent [&_code]:px-0 [&_code]:py-0 [&_a]:text-inherit">
+                        {buildMarkdownPreviewText(agent.lastMessagePreview, 2)}
+                      </MessageResponse>
+                    ) : null}
                   </div>
-                  {agent.lastMessagePreview ? (
-                    <MessageResponse className="mt-1.5 line-clamp-2 text-[10px] leading-4 text-muted-foreground [&_p]:my-0 [&_p]:leading-4 [&_ul]:my-0 [&_ol]:my-0 [&_li]:leading-4 [&_pre]:border-0 [&_pre]:bg-transparent [&_pre]:p-0 [&_code]:bg-transparent [&_code]:px-0 [&_code]:py-0 [&_a]:text-inherit">
-                      {buildMarkdownPreviewText(agent.lastMessagePreview, 2)}
-                    </MessageResponse>
-                  ) : null}
-                </div>
-              ))}
+                );
+              })}
             </div>
           </ScrollShadow>
         )}

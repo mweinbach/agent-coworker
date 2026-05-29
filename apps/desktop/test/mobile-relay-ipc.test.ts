@@ -404,4 +404,44 @@ describe("mobile relay IPC", () => {
     });
     expect(refreshTrustedPhones).toHaveBeenCalledTimes(1);
   });
+
+  test("unregisters relay state fanout listeners", () => {
+    const on = mock((_eventName: string, _listener: (state: unknown) => void) => {});
+    const off = mock((_eventName: string, _listener: (state: unknown) => void) => {});
+    const handlers = new Map<string, (_event: unknown, args?: unknown) => Promise<unknown>>();
+
+    const unregister = registerMobileRelayIpc({
+      deps: {
+        persistence: { loadState: async () => ({ workspaces: [] }) } as never,
+        mobileRelayBridge: {
+          on,
+          off,
+          initialize() {},
+          start: async () => ({}),
+          stop: async () => ({}),
+          getSnapshot: () => ({}),
+          refreshTrustedPhones: async () => ({}),
+          rotateSession: async () => ({}),
+          forgetTrustedPhone: async () => ({}),
+          updateTrustedPhonePermissions: async () => ({}),
+        } as never,
+      } as never,
+      workspaceRoots: {} as never,
+      handleDesktopInvoke(channel, handler) {
+        handlers.set(channel, handler as (_event: unknown, args?: unknown) => Promise<unknown>);
+      },
+      parseWithSchema(_schema, value) {
+        return value as never;
+      },
+    });
+
+    expect(on).toHaveBeenCalledTimes(1);
+    expect(on.mock.calls[0]?.[0]).toBe("stateChanged");
+
+    unregister();
+
+    expect(off).toHaveBeenCalledTimes(1);
+    expect(off.mock.calls[0]?.[0]).toBe("stateChanged");
+    expect(off.mock.calls[0]?.[1]).toBe(on.mock.calls[0]?.[1]);
+  });
 });

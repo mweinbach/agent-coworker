@@ -21,6 +21,7 @@ import type {
   AgentReasoningEffort,
   AgentRole,
   AgentSpawnContextOptions,
+  PersistentAgentSummary,
 } from "../../shared/agents";
 import type { SessionSnapshot } from "../../shared/sessionSnapshot";
 import { getAiCoworkerPaths } from "../../store/connections";
@@ -284,6 +285,7 @@ export class AgentSession {
       backupOperationQueue: Promise.resolve(),
       lastAutoCheckpointAt: 0,
       costTracker: null,
+      turnReferenceInjectionCounter: 0,
     };
 
     this.memoryStore = new MemoryStore(
@@ -664,6 +666,11 @@ export class AgentSession {
     return undefined;
   }
 
+  recordAgentStatus(agent: PersistentAgentSummary): void {
+    this.context.emit({ type: "agent_status", sessionId: this.id, agent });
+    this.queuePersistSessionSnapshot("session.agent_status");
+  }
+
   getCompactUsageSnapshot(): SessionUsageSnapshot | null {
     return this.state.costTracker?.getCompactSnapshot() ?? null;
   }
@@ -806,6 +813,25 @@ export class AgentSession {
 
   async installPlugins(sourceInput: string, targetScope: "workspace" | "user") {
     await this.getSkillManager().installPlugins(sourceInput, targetScope);
+  }
+
+  async listImport(
+    source: import("../../import").ImportSource,
+    kind: import("../../import").ImportableKind,
+  ) {
+    await this.getSkillManager().listImport(source, kind);
+  }
+
+  async importPlugin(
+    sourcePath: string,
+    conversionRequired: boolean,
+    targetScope: "workspace" | "user",
+  ) {
+    await this.getSkillManager().importPlugin(sourcePath, conversionRequired, targetScope);
+  }
+
+  async importSkill(sourcePath: string, targetScope: "workspace" | "user") {
+    await this.getSkillManager().importSkill(sourcePath, targetScope);
   }
 
   async getSkillInstallation(installationId: string) {
@@ -1361,6 +1387,7 @@ export class AgentSession {
     displayText?: string,
     attachments?: import("../jsonrpc/routes/shared").FileAttachment[],
     inputParts?: import("../jsonrpc/routes/shared").OrderedInputPart[],
+    references?: import("../../types").TurnReference[],
   ) {
     await this.pendingConfigMutation.catch(() => {});
     if (!(await this.ensureSystemPromptReady())) {
@@ -1372,6 +1399,7 @@ export class AgentSession {
       displayText,
       attachments,
       inputParts,
+      references,
     );
   }
 
@@ -1381,6 +1409,7 @@ export class AgentSession {
     clientMessageId?: string,
     attachments?: import("../jsonrpc/routes/shared").FileAttachment[],
     inputParts?: import("../jsonrpc/routes/shared").OrderedInputPart[],
+    references?: import("../../types").TurnReference[],
   ) {
     await this.pendingConfigMutation.catch(() => {});
     if (!(await this.ensureSystemPromptReady())) {
@@ -1392,6 +1421,7 @@ export class AgentSession {
       clientMessageId,
       attachments,
       inputParts,
+      references,
     );
   }
 

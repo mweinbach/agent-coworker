@@ -62,6 +62,7 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
       allMessages: context.state.allMessages,
       providerState: providerStateOverride,
       harnessContext,
+      referencedPlugins: context.state.turnReferencedPlugins,
       prepareStep: async ({ messages }) => steerCoordinator.drainPendingSteers(messages),
       registerSteerHandler: (handler) => {
         context.state.activeSteerHandler = handler;

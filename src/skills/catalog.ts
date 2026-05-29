@@ -592,6 +592,7 @@ function applyEffectiveResolution(installations: SkillInstallationEntry[]): Skil
     scopes: [],
     effectiveSkills: resolved.filter((installation) => installation.effective),
     installations: resolved,
+    availableSkills: [],
   };
 }
 
@@ -661,6 +662,7 @@ export async function scanSkillCatalogFromSources(
     scopes: descriptors,
     effectiveSkills: resolved.effectiveSkills,
     installations: resolved.installations,
+    availableSkills: [],
   };
 }
 

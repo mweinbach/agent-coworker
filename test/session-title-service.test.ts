@@ -48,6 +48,10 @@ function createAppleModule(opts: {
     jsonSchema: Record<string, unknown>,
     opts?: unknown,
   ) => Promise<{ value: (propertyName: string) => unknown }>;
+  waitUntilAvailable?: (
+    timeoutMs?: number,
+    intervalMs?: number,
+  ) => Promise<{ available: boolean; reason?: number }>;
 }) {
   const respond = mock(
     opts.respond ??
@@ -74,11 +78,19 @@ function createAppleModule(opts: {
     available: opts.available ?? true,
     ...(opts.reason === undefined ? {} : { reason: opts.reason }),
   }));
+  const modelWaitUntilAvailable = mock(
+    opts.waitUntilAvailable ??
+      (async () => ({
+        available: opts.available ?? true,
+        ...(opts.reason === undefined ? {} : { reason: opts.reason }),
+      })),
+  );
 
   return {
     module: {
       SystemLanguageModel: class {
         isAvailable = modelIsAvailable;
+        waitUntilAvailable = modelWaitUntilAvailable;
         dispose = modelDispose;
       },
       LanguageModelSession: class {
@@ -93,6 +105,7 @@ function createAppleModule(opts: {
     },
     modelDispose,
     modelIsAvailable,
+    modelWaitUntilAvailable,
     random,
     respond,
     respondWithJsonSchema,
@@ -237,8 +250,8 @@ describe("sessionTitleService", () => {
         probabilityThreshold: __internal.APPLE_TITLE_RANDOM_TOP_P,
       },
       maximumResponseTokens: 80,
-      temperature: __internal.APPLE_TITLE_TEMPERATURE,
     });
+    expect(respondOpts.options?.temperature).toBeUndefined();
     expect(typeof respondOpts.options?.sampling?.seed).toBe("number");
     expect(apple.sessionDispose).toHaveBeenCalledTimes(1);
     expect(apple.modelDispose).toHaveBeenCalledTimes(1);
@@ -246,11 +259,11 @@ describe("sessionTitleService", () => {
     expect(defaultModelForProvider).not.toHaveBeenCalled();
   });
 
-  test("falls back to heuristic without provider calls when Apple generation fails", async () => {
+  test("waits for Apple Foundation Models to become ready before falling back", async () => {
     const apple = createAppleModule({
-      respondWithJsonSchema: async () => {
-        throw new Error("generation failed");
-      },
+      available: false,
+      reason: 2,
+      waitUntilAvailable: async () => ({ available: true }),
     });
     const loadAppleFoundationModelsModule = mock(async () => apple.module);
     const createRuntime = mock((_config: AgentConfig) => {
@@ -269,17 +282,61 @@ describe("sessionTitleService", () => {
 
     const result = await generateSessionTitle({
       config: makeConfig("openai"),
+      query: "title model warms up slowly on macOS",
+    });
+
+    expect(result).toEqual({
+      title: "Apple Foundation Title",
+      source: "model",
+      model: __internal.APPLE_FOUNDATION_TITLE_MODEL,
+    });
+    expect(apple.modelWaitUntilAvailable).toHaveBeenCalledWith(
+      __internal.APPLE_TITLE_WAIT_TIMEOUT_MS,
+      __internal.APPLE_TITLE_WAIT_INTERVAL_MS,
+    );
+    expect(createRuntime).not.toHaveBeenCalled();
+    expect(defaultModelForProvider).not.toHaveBeenCalled();
+  });
+
+  test("falls back to provider title models when Apple generation fails", async () => {
+    const apple = createAppleModule({
+      respondWithJsonSchema: async () => {
+        throw new Error("generation failed");
+      },
+    });
+    const loadAppleFoundationModelsModule = mock(async () => apple.module);
+    const runTurn = mock(async (_args: any) => ({
+      text: "Provider After Apple Failure",
+      reasoningText: undefined,
+      responseMessages: [] as any[],
+      usage: undefined,
+    }));
+    const createRuntime = mock((_config: AgentConfig) => ({ name: "pi", runTurn }));
+    const defaultModelForProvider = mock((_provider: AgentConfig["provider"]) => "gpt-5.2");
+
+    const generateSessionTitle = createSessionTitleGenerator({
+      createRuntime: createRuntime as any,
+      defaultModelForProvider: defaultModelForProvider as any,
+      loadAppleFoundationModelsModule: loadAppleFoundationModelsModule as any,
+      platform: "darwin",
+      arch: "arm64",
+      env: {},
+    });
+
+    const result = await generateSessionTitle({
+      config: makeConfig("openai"),
       query: "build a macOS title service backed by Foundation Models",
     });
 
     expect(result).toEqual({
-      title: "build a macOS title service backed by Foundation…",
-      source: "heuristic",
-      model: null,
+      title: "Provider After Apple Failure",
+      source: "model",
+      model: "gpt-5-mini",
     });
     expect(loadAppleFoundationModelsModule).toHaveBeenCalledTimes(1);
-    expect(createRuntime).not.toHaveBeenCalled();
-    expect(defaultModelForProvider).not.toHaveBeenCalled();
+    expect(createRuntime).toHaveBeenCalledTimes(1);
+    expect(runTurn).toHaveBeenCalledTimes(1);
+    expect(defaultModelForProvider).toHaveBeenCalledTimes(1);
   });
 
   test("falls back to provider title models when Apple is unavailable", async () => {
@@ -592,6 +649,47 @@ describe("sessionTitleService", () => {
     expect(windowsAi.tryUnlockFeature).toHaveBeenCalledTimes(1);
     expect(windowsAi.createAsync).not.toHaveBeenCalled();
     expect(createRuntime).toHaveBeenCalledTimes(1);
+  });
+
+  test("falls back to provider title models when Phi Silica generation fails", async () => {
+    const windowsAi = createWindowsAiModule({
+      generateResponse: async () => {
+        throw new Error("generation failed");
+      },
+    });
+    const loadWindowsAiElectronModule = mock(async () => windowsAi.module);
+    const runTurn = mock(async (_args: any) => ({
+      text: "Provider After Phi Failure",
+      reasoningText: undefined,
+      responseMessages: [] as any[],
+      usage: undefined,
+    }));
+    const createRuntime = mock((_config: AgentConfig) => ({ name: "pi", runTurn }));
+    const defaultModelForProvider = mock((_provider: AgentConfig["provider"]) => "gpt-5.2");
+
+    const generateSessionTitle = createSessionTitleGenerator({
+      createRuntime: createRuntime as any,
+      defaultModelForProvider: defaultModelForProvider as any,
+      loadWindowsAiElectronModule: loadWindowsAiElectronModule as any,
+      platform: "win32",
+      arch: "arm64",
+      env: createPhiSilicaEnv(),
+    });
+
+    const result = await generateSessionTitle({
+      config: makeConfig("openai"),
+      query: "provider fallback path",
+    });
+
+    expect(result).toEqual({
+      title: "Provider After Phi Failure",
+      source: "model",
+      model: "gpt-5-mini",
+    });
+    expect(windowsAi.createAsync).toHaveBeenCalledTimes(1);
+    expect(windowsAi.close).toHaveBeenCalledTimes(1);
+    expect(createRuntime).toHaveBeenCalledTimes(1);
+    expect(runTurn).toHaveBeenCalledTimes(1);
   });
 
   test("returns sanitized model title on first successful candidate", async () => {

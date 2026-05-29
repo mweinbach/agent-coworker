@@ -14,6 +14,9 @@ import type { NewChatLandingTarget } from "../lib/newChatLanding";
 import { fallbackAuthMethods } from "../lib/providerDisplayNames";
 import type {
   CodexAppServerInstallStatus,
+  ImportableItem,
+  ImportableKind,
+  ImportSource,
   MCPServerConfig,
   ProviderName,
   SessionEvent,
@@ -52,6 +55,7 @@ import {
   RUNTIME,
   shiftPendingThreadAttachments,
   shiftPendingThreadMessage,
+  shiftPendingThreadReferences,
 } from "./store.helpers/runtimeState";
 import { createThreadEventReducer } from "./store.helpers/threadEventReducer";
 import { createTranscriptBuffer } from "./store.helpers/transcriptBuffer";
@@ -243,6 +247,7 @@ export type AppStoreState = {
     scope?: "oneOff" | "project";
     titleHint?: string;
     firstMessage?: string;
+    references?: import("../lib/wsProtocol").TurnReference[];
     mode?: "draft" | "session";
     attachments?: import("./store.helpers/jsonRpcSocket").FileAttachmentInput[];
     attachmentFiles?: File[];
@@ -263,6 +268,7 @@ export type AppStoreState = {
       selectionRequestId?: number;
       skipWorkspaceSelect?: boolean;
       attachments?: import("./store.helpers/jsonRpcSocket").FileAttachmentInput[];
+      references?: import("../lib/wsProtocol").TurnReference[];
       refreshSnapshot?: boolean;
     },
   ) => Promise<boolean>;
@@ -272,6 +278,7 @@ export type AppStoreState = {
     text: string,
     busyPolicy?: ThreadBusyPolicy,
     attachments?: import("./store.helpers/jsonRpcSocket").FileAttachmentInput[],
+    references?: import("../lib/wsProtocol").TurnReference[],
   ) => Promise<boolean>;
   cancelThread: (threadId: string, opts?: { includeSubagents?: boolean }) => void;
   clearThreadUsageHardCap: (threadId: string) => void;
@@ -310,6 +317,9 @@ export type AppStoreState = {
   disablePlugin: (pluginId: string, scope?: "workspace" | "user") => Promise<void>;
   deletePlugin: (pluginId: string, scope?: "workspace" | "user") => Promise<void>;
   setPluginViewMode: (mode: "plugins" | "skills") => void;
+  listImportable: (source: ImportSource, kind: ImportableKind) => Promise<void>;
+  importPlugin: (item: ImportableItem, targetScope: "workspace" | "user") => Promise<void>;
+  importSkill: (item: ImportableItem, targetScope: "workspace" | "user") => Promise<void>;
   selectSkill: (skillName: string) => Promise<void>;
   selectSkillInstallation: (installationId: string | null) => Promise<void>;
   previewSkillInstall: (sourceInput: string, targetScope: "project" | "global") => Promise<void>;
@@ -725,6 +735,7 @@ export {
   sendUserMessageToThread,
   shiftPendingThreadAttachments,
   shiftPendingThreadMessage,
+  shiftPendingThreadReferences,
   syncDesktopStateCache,
   syncDesktopStateCacheNow,
   truncateTitle,

@@ -110,6 +110,7 @@ export function createDesktopCommandsMock(
     appendTranscriptBatch: async () => {},
     deleteTranscript: async () => {},
     pickWorkspaceDirectory: async () => null,
+    pickDirectory: async () => null,
     showContextMenu: async () => null,
     windowMinimize: async () => {},
     windowMaximize: async () => {},

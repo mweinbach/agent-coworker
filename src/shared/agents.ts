@@ -128,6 +128,8 @@ export type PersistentAgentSummary = {
   executionState: AgentExecutionState;
   busy: boolean;
   lastMessagePreview?: string;
+  sessionUsage?: SessionUsageSnapshot | null;
+  lastTurnUsage?: TurnUsage | null;
 };
 
 export const persistentAgentSummarySchema = z
@@ -152,6 +154,8 @@ export const persistentAgentSummarySchema = z
     executionState: agentExecutionStateSchema,
     busy: z.boolean(),
     lastMessagePreview: z.string().trim().min(1).optional(),
+    sessionUsage: sessionUsageSnapshotSchema.nullable().optional(),
+    lastTurnUsage: turnUsageSchema.nullable().optional(),
   })
   .strict();
 

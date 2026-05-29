@@ -109,6 +109,27 @@ describe("desktop context sidebar", () => {
                 busy: true,
                 lastMessagePreview:
                   "**Markdown** _preview_ for the [summary](https://example.com).",
+                sessionUsage: {
+                  sessionId: "child-456",
+                  totalTurns: 1,
+                  totalPromptTokens: 800,
+                  totalCompletionTokens: 200,
+                  totalTokens: 1000,
+                  estimatedTotalCostUsd: 0.005,
+                  costTrackingAvailable: true,
+                  byModel: [],
+                  turns: [],
+                  budgetStatus: {
+                    configured: false,
+                    warnAtUsd: null,
+                    stopAtUsd: null,
+                    warningTriggered: false,
+                    stopTriggered: false,
+                    currentCostUsd: 0.005,
+                  },
+                  createdAt: "2026-03-15T10:00:00.000Z",
+                  updatedAt: "2026-03-15T10:05:00.000Z",
+                },
               },
             ],
             sessionUsage: null,
@@ -132,6 +153,8 @@ describe("desktop context sidebar", () => {
       expect(text).toContain("Subagents");
       expect(text).toContain("Investigate parser test");
       expect(text).toContain("worker · depth 1 · gpt-5.4");
+      expect(text).toContain("1.0k tokens");
+      expect(text).toContain("$0.0050");
       expect(text).toContain("Markdown");
       expect(text).toContain("preview");
       expect(text).toContain("summary");

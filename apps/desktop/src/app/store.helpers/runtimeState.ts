@@ -1,5 +1,5 @@
 import type { JsonRpcSocket } from "../../lib/agentSocket";
-import type { ProviderName } from "../../lib/wsProtocol";
+import type { ProviderName, TurnReference } from "../../lib/wsProtocol";
 import {
   clearThreadModelStreamRuntime,
   createThreadModelStreamRuntime,
@@ -50,6 +50,7 @@ export type RuntimeMaps = {
     string,
     Array<import("./jsonRpcSocket").FileAttachmentInput[] | undefined>
   >;
+  pendingThreadReferences: Map<string, Array<TurnReference[] | undefined>>;
   pendingThreadSteers: Map<string, Map<string, PendingThreadSteer>>;
   threadSelectionRequests: Map<string, number>;
   nextThreadSelectionRequestId: number;
@@ -71,6 +72,7 @@ export const RUNTIME: RuntimeMaps = {
   optimisticUserMessageIds: new Map(),
   pendingThreadMessages: new Map(),
   pendingThreadAttachments: new Map(),
+  pendingThreadReferences: new Map(),
   pendingThreadSteers: new Map(),
   threadSelectionRequests: new Map(),
   nextThreadSelectionRequestId: 0,
@@ -104,6 +106,7 @@ export function queuePendingThreadMessage(
   threadId: string,
   text: string,
   attachments?: import("./jsonRpcSocket").FileAttachmentInput[],
+  references?: TurnReference[],
 ) {
   const trimmed = text.trim();
   if (!trimmed && (!attachments || attachments.length === 0)) return;
@@ -113,6 +116,9 @@ export function queuePendingThreadMessage(
   const existingAttachments = RUNTIME.pendingThreadAttachments.get(threadId) ?? [];
   existingAttachments.push(attachments && attachments.length > 0 ? attachments : undefined);
   RUNTIME.pendingThreadAttachments.set(threadId, existingAttachments);
+  const existingReferences = RUNTIME.pendingThreadReferences.get(threadId) ?? [];
+  existingReferences.push(references && references.length > 0 ? [...references] : undefined);
+  RUNTIME.pendingThreadReferences.set(threadId, existingReferences);
 }
 
 export function shiftPendingThreadAttachments(
@@ -129,6 +135,18 @@ export function shiftPendingThreadAttachments(
   return next;
 }
 
+export function shiftPendingThreadReferences(threadId: string): TurnReference[] | undefined {
+  const existing = RUNTIME.pendingThreadReferences.get(threadId);
+  if (!existing || existing.length === 0) return undefined;
+  const next = existing.shift();
+  if (existing.length === 0) {
+    RUNTIME.pendingThreadReferences.delete(threadId);
+  } else {
+    RUNTIME.pendingThreadReferences.set(threadId, existing);
+  }
+  return next;
+}
+
 export function shiftPendingThreadMessage(threadId: string): string | undefined {
   const existing = RUNTIME.pendingThreadMessages.get(threadId);
   if (!existing || existing.length === 0) return undefined;
@@ -141,18 +159,11 @@ export function shiftPendingThreadMessage(threadId: string): string | undefined 
   return next;
 }
 
-export function prependPendingThreadMessage(threadId: string, text: string) {
-  const trimmed = text.trim();
-  if (!trimmed) return;
-  const existing = RUNTIME.pendingThreadMessages.get(threadId) ?? [];
-  existing.unshift(trimmed);
-  RUNTIME.pendingThreadMessages.set(threadId, existing);
-}
-
 export function prependPendingThreadMessageWithAttachments(
   threadId: string,
   text: string,
   attachments?: import("./jsonRpcSocket").FileAttachmentInput[],
+  references?: TurnReference[],
 ) {
   const trimmed = text.trim();
   if (!trimmed && (!attachments || attachments.length === 0)) return;
@@ -162,6 +173,9 @@ export function prependPendingThreadMessageWithAttachments(
   const existingAttachments = RUNTIME.pendingThreadAttachments.get(threadId) ?? [];
   existingAttachments.unshift(attachments && attachments.length > 0 ? attachments : undefined);
   RUNTIME.pendingThreadAttachments.set(threadId, existingAttachments);
+  const existingReferences = RUNTIME.pendingThreadReferences.get(threadId) ?? [];
+  existingReferences.unshift(references && references.length > 0 ? [...references] : undefined);
+  RUNTIME.pendingThreadReferences.set(threadId, existingReferences);
 }
 
 export function rememberPendingThreadSteer(threadId: string, steer: PendingThreadSteer) {
@@ -216,6 +230,7 @@ export function rekeyThreadRuntimeMaps(fromThreadId: string, toThreadId: string)
   moveMapEntry(RUNTIME.optimisticUserMessageIds, fromThreadId, toThreadId);
   moveMapEntry(RUNTIME.pendingThreadMessages, fromThreadId, toThreadId);
   moveMapEntry(RUNTIME.pendingThreadAttachments, fromThreadId, toThreadId);
+  moveMapEntry(RUNTIME.pendingThreadReferences, fromThreadId, toThreadId);
   moveMapEntry(RUNTIME.pendingThreadSteers, fromThreadId, toThreadId);
   moveMapEntry(RUNTIME.pendingWorkspaceDefaultApplyByThread, fromThreadId, toThreadId);
   moveMapEntry(RUNTIME.modelStreamByThread, fromThreadId, toThreadId);
@@ -283,6 +298,8 @@ export function defaultWorkspaceRuntime(): WorkspaceRuntime {
     skillMutationError: null,
     pluginMutationPendingKeys: {},
     pluginMutationError: null,
+    importItemsByKey: {},
+    importPendingKeys: {},
     pluginViewMode: "plugins",
     memories: [],
     memoriesLoading: false,

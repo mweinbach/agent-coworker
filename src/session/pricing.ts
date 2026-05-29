@@ -51,6 +51,14 @@ export type PricingCatalogEntry = {
   pricing: ModelPricing;
 };
 
+export type TokenCostBreakdown = {
+  inputCostUsd: number;
+  cachedInputCostUsd: number;
+  cacheWriteInputCostUsd: number;
+  outputCostUsd: number;
+  totalCostUsd: number;
+};
+
 type PricingEnv = Record<string, string | undefined>;
 
 function fireworksInferencePricingTable(): Record<string, ModelPricing> {
@@ -484,6 +492,25 @@ export function calculateTokenCost(
   cachedPromptTokens = 0,
   cacheWritePromptTokens = 0,
 ): number {
+  return calculateTokenCostBreakdown(
+    promptTokens,
+    completionTokens,
+    pricing,
+    cachedPromptTokens,
+    cacheWritePromptTokens,
+  ).totalCostUsd;
+}
+
+/**
+ * Calculate a USD cost estimate split across billable token buckets.
+ */
+export function calculateTokenCostBreakdown(
+  promptTokens: number,
+  completionTokens: number,
+  pricing: ModelPricing,
+  cachedPromptTokens = 0,
+  cacheWritePromptTokens = 0,
+): TokenCostBreakdown {
   const useLongContextPricing =
     pricing.longContextThresholdTokens !== undefined &&
     promptTokens > pricing.longContextThresholdTokens;
@@ -517,7 +544,13 @@ export function calculateTokenCost(
   const cacheWriteInputCost =
     (normalizedCacheWritePromptTokens / 1_000_000) * cacheWriteInputPerMillion;
   const outputCost = (completionTokens / 1_000_000) * outputPerMillion;
-  return inputCost + cachedInputCost + cacheWriteInputCost + outputCost;
+  return {
+    inputCostUsd: inputCost,
+    cachedInputCostUsd: cachedInputCost,
+    cacheWriteInputCostUsd: cacheWriteInputCost,
+    outputCostUsd: outputCost,
+    totalCostUsd: inputCost + cachedInputCost + cacheWriteInputCost + outputCost,
+  };
 }
 
 /**

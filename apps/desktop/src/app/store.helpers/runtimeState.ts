@@ -159,14 +159,6 @@ export function shiftPendingThreadMessage(threadId: string): string | undefined 
   return next;
 }
 
-export function prependPendingThreadMessage(threadId: string, text: string) {
-  const trimmed = text.trim();
-  if (!trimmed) return;
-  const existing = RUNTIME.pendingThreadMessages.get(threadId) ?? [];
-  existing.unshift(trimmed);
-  RUNTIME.pendingThreadMessages.set(threadId, existing);
-}
-
 export function prependPendingThreadMessageWithAttachments(
   threadId: string,
   text: string,

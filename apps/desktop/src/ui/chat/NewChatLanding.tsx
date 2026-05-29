@@ -7,7 +7,7 @@ import {
   MessageSquareIcon,
   PlusIcon,
 } from "lucide-react";
-import type { ChangeEvent, FormEvent } from "react";
+import type { ChangeEvent, FormEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getAttachmentCountValidationMessage } from "../../../../../src/shared/attachments";
 import { buildAttachmentDisplayText } from "../../app/attachmentInputs";
@@ -23,7 +23,6 @@ import {
   PromptInputRoot,
   PromptInputStatusRow,
   PromptInputSubmit,
-  PromptInputTextarea,
   PromptInputTools,
 } from "../../components/ai-elements/prompt-input";
 import { Button } from "../../components/ui/button";
@@ -47,6 +46,8 @@ import {
 import { modelDisplayNamesFromCatalog } from "../../lib/modelChoices";
 import { resolveNewChatLandingTarget } from "../../lib/newChatLanding";
 import { type ComposerModelSelection, ComposerModelSelector } from "./ComposerModelSelector";
+import { buildMentionCatalog, extractReferencesFromText } from "./composerMentions";
+import { ComposerMentionInput } from "./ComposerMentionInput";
 import { resolveDefaultNewChatModel } from "./newChatLandingModel";
 
 export function NewChatLanding() {
@@ -88,6 +89,25 @@ export function NewChatLanding() {
   const fallbackModelWorkspace =
     targetWorkspace ?? selectedProjectWorkspace ?? projectWorkspaces[0] ?? null;
   const targetLabel = targetWorkspace?.name ?? "Don't work in a project";
+
+  // Source the @-mention catalog from the target/selected workspace; fall back to
+  // any connected workspace that has skills loaded (global + built-in skills are
+  // identical across workspaces, so this works in the "no project" case too).
+  const workspaceRuntimeById = useAppStore((s) => s.workspaceRuntimeById);
+  const mentionSourceWorkspaceId =
+    targetWorkspace?.id ?? selectedWorkspaceId ?? fallbackModelWorkspace?.id ?? null;
+  const mentionCatalog = useMemo(() => {
+    const preferred = mentionSourceWorkspaceId
+      ? workspaceRuntimeById[mentionSourceWorkspaceId]
+      : undefined;
+    const source =
+      preferred?.skills && preferred.skills.length > 0
+        ? preferred
+        : (Object.values(workspaceRuntimeById).find((rt) => rt.skills && rt.skills.length > 0) ??
+          preferred);
+    return buildMentionCatalog(source?.skills, source?.pluginsCatalog ?? null);
+  }, [workspaceRuntimeById, mentionSourceWorkspaceId]);
+
   const trimmedComposerText = composerText.trim();
   const hasPendingAttachments = pendingAttachments.length > 0;
   const canSubmitNewChat = Boolean(trimmedComposerText || hasPendingAttachments);
@@ -186,6 +206,8 @@ export function NewChatLanding() {
         pendingAttachments.map((attachment) => ({ filename: attachment.filename })),
       );
       const titleHint = trimmedComposerText || attachmentTitleHint || "New chat";
+      const references = extractReferencesFromText(composerText, mentionCatalog);
+      const referencesArg = references.length > 0 ? references : undefined;
 
       try {
         let firstMessage = trimmedComposerText;
@@ -221,6 +243,7 @@ export function NewChatLanding() {
                 titleHint,
                 mode: "session",
                 attachments,
+                references: referencesArg,
                 provider: modelSelection.provider,
                 model: modelSelection.model,
               })
@@ -230,6 +253,7 @@ export function NewChatLanding() {
                 titleHint,
                 mode: "session",
                 attachmentFiles,
+                references: referencesArg,
                 provider: modelSelection.provider,
                 model: modelSelection.model,
               });
@@ -249,7 +273,9 @@ export function NewChatLanding() {
     [
       canSubmitNewChat,
       clearPendingAttachments,
+      composerText,
       hasPendingAttachments,
+      mentionCatalog,
       modelSelection,
       newThread,
       pendingAttachments,
@@ -311,14 +337,16 @@ export function NewChatLanding() {
                   </span>
                 </div>
               ) : null}
-              <PromptInputTextarea
-                ref={textareaRef}
+              <ComposerMentionInput
+                textareaRef={textareaRef}
                 value={composerText}
+                setValue={setComposerText}
                 disabled={submitting}
                 placeholder="Message Cowork..."
-                className="min-h-[5.5rem] text-[16px] leading-relaxed placeholder:text-muted-foreground/75"
-                onChange={(event) => setComposerText(event.currentTarget.value)}
-                onKeyDown={(event) => {
+                catalog={mentionCatalog}
+                ariaLabel="New chat message"
+                textareaClassName="min-h-[5.5rem] text-[16px] leading-relaxed placeholder:text-muted-foreground/75"
+                onKeyDown={(event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
                   if (
                     event.key === "Enter" &&
                     !event.shiftKey &&
@@ -341,7 +369,6 @@ export function NewChatLanding() {
                     });
                   }
                 }}
-                aria-label="New chat message"
               />
             </PromptInputBody>
             <PromptInputFooter className="gap-3 pt-1">

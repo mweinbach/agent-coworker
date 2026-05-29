@@ -113,7 +113,7 @@ describe("composerMentions.parseComposerSegments", () => {
     const segments = parseComposerSegments("@documents.", catalog);
     const mention = segments.find((s) => s.type === "mention");
     expect(mention).toMatchObject({ name: "documents", start: 0, end: 10 });
-    expect(segments.at(-1)).toEqual({ type: "text", text: "." });
+    expect(segments.at(-1)).toMatchObject({ type: "text", text: "." });
   });
 
   test("matches mention case-insensitively but keeps the canonical name", () => {

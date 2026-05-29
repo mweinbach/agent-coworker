@@ -8,6 +8,7 @@ import {
 } from "react";
 
 import { PromptInputTextarea } from "@/components/ai-elements/prompt-input";
+import { cn } from "@/lib/utils";
 import { ComposerHighlightOverlay } from "./ComposerHighlightOverlay";
 import { ComposerMentionMenu } from "./ComposerMentionMenu";
 import {
@@ -33,9 +34,24 @@ export function ComposerMentionInput(props: {
   textareaRef: RefObject<HTMLTextAreaElement | null>;
   catalog: MentionCatalog;
   ariaLabel?: string;
+  /**
+   * Extra classes applied to BOTH the textarea and the highlight overlay so
+   * their typography/padding stay identical (and the boxes line up). Use this
+   * for composers with non-default font size / line height.
+   */
+  textareaClassName?: string;
 }) {
-  const { value, setValue, onKeyDown, placeholder, disabled, textareaRef, catalog, ariaLabel } =
-    props;
+  const {
+    value,
+    setValue,
+    onKeyDown,
+    placeholder,
+    disabled,
+    textareaRef,
+    catalog,
+    ariaLabel,
+    textareaClassName,
+  } = props;
   const overlayRef = useRef<HTMLDivElement | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [items, setItems] = useState<MentionItem[]>([]);
@@ -139,14 +155,22 @@ export function ComposerMentionInput(props: {
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
-      <ComposerHighlightOverlay ref={overlayRef} text={value} catalog={catalog} />
+      <ComposerHighlightOverlay
+        ref={overlayRef}
+        text={value}
+        catalog={catalog}
+        className={textareaClassName}
+      />
       <PromptInputTextarea
         ref={textareaRef}
         value={value}
         disabled={disabled}
         placeholder={placeholder}
         aria-label={ariaLabel}
-        className="relative z-[1] break-words text-transparent caret-foreground"
+        className={cn(
+          "relative z-[1] break-words text-transparent caret-foreground",
+          textareaClassName,
+        )}
         onChange={(event) => {
           setValue(event.currentTarget.value);
           refreshMenu(

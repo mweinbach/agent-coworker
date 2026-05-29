@@ -71,7 +71,11 @@ async function writePluginBundle(opts: {
   }
 }
 
-async function writeSkillDir(skillsDir: string, name: string, frontmatter: string): Promise<string> {
+async function writeSkillDir(
+  skillsDir: string,
+  name: string,
+  frontmatter: string,
+): Promise<string> {
   const dir = path.join(skillsDir, name);
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(path.join(dir, "SKILL.md"), `---\n${frontmatter}\n---\n\nBody\n`, "utf-8");
@@ -110,7 +114,12 @@ describe("import/discovery plugins", () => {
     await writePluginBundle({
       root: path.join(codexHome, "plugins", "cache", "openai-curated", "alpha", "1.0.0"),
       manifestDir: ".codex-plugin",
-      manifest: { name: "alpha", version: "1.0.0", description: "Alpha plugin", skills: "./skills/" },
+      manifest: {
+        name: "alpha",
+        version: "1.0.0",
+        description: "Alpha plugin",
+        skills: "./skills/",
+      },
       withSkill: { name: "alpha-skill", description: "Alpha skill" },
     });
     await writePluginBundle({

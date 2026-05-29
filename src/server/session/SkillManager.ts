@@ -1,5 +1,12 @@
 import fs from "node:fs/promises";
 import {
+  type ImportableKind,
+  type ImportSource,
+  importPlugin as importPluginFromSource,
+  importSkill as importSkillFromSource,
+  listImportable,
+} from "../../import";
+import {
   buildPluginCatalogSnapshot,
   buildPluginInstallPreview,
   deletePluginInstallation,
@@ -20,13 +27,6 @@ import {
   updateSkillInstallation,
 } from "../../skills/operations";
 import { buildSkillInstallPreview } from "../../skills/sourceResolver";
-import {
-  type ImportableKind,
-  type ImportSource,
-  importPlugin as importPluginFromSource,
-  importSkill as importSkillFromSource,
-  listImportable,
-} from "../../import";
 import { createTools, filterToolsForCodexDynamicBoundary } from "../../tools";
 import type {
   PluginCatalogEntry,

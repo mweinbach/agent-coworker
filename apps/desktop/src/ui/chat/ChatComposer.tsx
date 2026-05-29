@@ -15,8 +15,8 @@ import type { ComposerAttachmentFile } from "../../lib/composerAttachments";
 import { cn } from "../../lib/utils";
 import type { ProviderName } from "../../lib/wsProtocol";
 import { MessageBarResizer } from "../layout/MessageBarResizer";
-import { type getComposerSubmitState, resolveComposerBusyPolicy } from "./chatLogic";
 import { ComposerMentionInput } from "./ComposerMentionInput";
+import { type getComposerSubmitState, resolveComposerBusyPolicy } from "./chatLogic";
 import type { MentionCatalog } from "./composerMentions";
 
 type ComposerSubmitState = ReturnType<typeof getComposerSubmitState>;

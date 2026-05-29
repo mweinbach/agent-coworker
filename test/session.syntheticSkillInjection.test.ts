@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { modelMessagesToPiMessages, piTurnMessagesToModelMessages } from "../src/runtime/piMessageBridge";
+import {
+  modelMessagesToPiMessages,
+  piTurnMessagesToModelMessages,
+} from "../src/runtime/piMessageBridge";
 import {
   buildSyntheticSkillMessages,
   buildSyntheticSkillToolCallId,
@@ -24,7 +27,9 @@ describe("synthetic skill messages (unit)", () => {
     const { assistant, tool } = buildSyntheticSkillMessages(toolCallId, "documents", "BODY");
     expect(assistant).toEqual({
       role: "assistant",
-      content: [{ type: "tool-call", toolCallId, toolName: "skill", input: { skillName: "documents" } }],
+      content: [
+        { type: "tool-call", toolCallId, toolName: "skill", input: { skillName: "documents" } },
+      ],
     });
     const part = (tool.content as Array<Record<string, unknown>>)[0];
     expect(part).toMatchObject({
@@ -254,9 +259,14 @@ describe("synthetic skill injection (e2e via turn/start references)", () => {
     await fs.mkdir(skillDir, { recursive: true });
     await fs.writeFile(
       path.join(skillDir, "SKILL.md"),
-      ["---", 'name: "test-skill"', 'description: "A test skill"', "---", "", SKILL_BODY_MARKER].join(
-        "\n",
-      ),
+      [
+        "---",
+        'name: "test-skill"',
+        'description: "A test skill"',
+        "---",
+        "",
+        SKILL_BODY_MARKER,
+      ].join("\n"),
       "utf-8",
     );
 
@@ -290,9 +300,7 @@ describe("synthetic skill injection (e2e via turn/start references)", () => {
     try {
       const started = await rpc.sendRequest("thread/start", { cwd: tmp });
       const threadId = started.result.thread.id as string;
-      await rpc.waitFor(
-        (m) => m.method === "thread/started" && m.params.thread.id === threadId,
-      );
+      await rpc.waitFor((m) => m.method === "thread/started" && m.params.thread.id === threadId);
 
       const turnStarted = await rpc.sendRequest("turn/start", {
         threadId,

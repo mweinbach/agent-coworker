@@ -122,7 +122,10 @@ const claudeManifestSchema = z
     name: z.string().trim().min(1),
     version: z.string().trim().min(1).optional(),
     description: z.string().trim().min(1).optional(),
-    interface: z.object({ displayName: z.string().trim().min(1).optional() }).passthrough().optional(),
+    interface: z
+      .object({ displayName: z.string().trim().min(1).optional() })
+      .passthrough()
+      .optional(),
   })
   .passthrough();
 
@@ -365,5 +368,7 @@ function dedupeImportable(items: ImportableItem[]): ImportableItem[] {
       byKey.set(key, item);
     }
   }
-  return [...byKey.values()].sort((left, right) => left.displayName.localeCompare(right.displayName));
+  return [...byKey.values()].sort((left, right) =>
+    left.displayName.localeCompare(right.displayName),
+  );
 }

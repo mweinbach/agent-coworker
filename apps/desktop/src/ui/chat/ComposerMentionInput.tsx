@@ -9,13 +9,13 @@ import {
 
 import { PromptInputTextarea } from "@/components/ai-elements/prompt-input";
 import { ComposerHighlightOverlay } from "./ComposerHighlightOverlay";
+import { ComposerMentionMenu } from "./ComposerMentionMenu";
 import {
   detectActiveMentionQuery,
   filterMentionItems,
   type MentionCatalog,
   type MentionItem,
 } from "./composerMentions";
-import { ComposerMentionMenu } from "./ComposerMentionMenu";
 
 /**
  * Composer text input with inline @-mention support. Wraps the plain
@@ -53,7 +53,7 @@ export function ComposerMentionInput(props: {
   // change scroll position / wrapping).
   useLayoutEffect(() => {
     syncScroll();
-  }, [value, syncScroll]);
+  }, [syncScroll]);
 
   const refreshMenu = useCallback(
     (text: string, caret: number) => {

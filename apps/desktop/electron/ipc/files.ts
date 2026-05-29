@@ -215,22 +215,27 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
     },
   );
 
-  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.pickDirectory, async (event, args: PickDirectoryInput) => {
-    const input = parseWithSchema(pickDirectoryInputSchema, args ?? {}, "pickDirectory options");
-    const ownerWindow =
-      BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getFocusedWindow() ?? undefined;
-    const dialogOptions = {
-      title: input.title ?? "Select a directory",
-      properties: ["openDirectory"] as Array<"openDirectory">,
-    };
-    const result = ownerWindow
-      ? await dialog.showOpenDialog(ownerWindow, dialogOptions)
-      : await dialog.showOpenDialog(dialogOptions);
-    if (result.canceled) {
-      return null;
-    }
-    return result.filePaths[0] ?? null;
-  });
+  handleDesktopInvoke(
+    DESKTOP_IPC_CHANNELS.pickDirectory,
+    async (event, args: PickDirectoryInput) => {
+      const input = parseWithSchema(pickDirectoryInputSchema, args ?? {}, "pickDirectory options");
+      const ownerWindow =
+        BrowserWindow.fromWebContents(event.sender) ??
+        BrowserWindow.getFocusedWindow() ??
+        undefined;
+      const dialogOptions = {
+        title: input.title ?? "Select a directory",
+        properties: ["openDirectory"] as Array<"openDirectory">,
+      };
+      const result = ownerWindow
+        ? await dialog.showOpenDialog(ownerWindow, dialogOptions)
+        : await dialog.showOpenDialog(dialogOptions);
+      if (result.canceled) {
+        return null;
+      }
+      return result.filePaths[0] ?? null;
+    },
+  );
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.revealPath, async (_event, args: RevealPathInput) => {
     const input = parseWithSchema(revealPathInputSchema, args, "revealPath options");

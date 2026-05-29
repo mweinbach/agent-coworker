@@ -45,16 +45,15 @@ function itemPendingKey(item: ImportableItem, targetScope: "workspace" | "user")
 }
 
 function basename(p: string): string {
-  return p.replace(/[/\\]+$/, "").split(/[/\\]/).pop() || p;
+  return (
+    p
+      .replace(/[/\\]+$/, "")
+      .split(/[/\\]/)
+      .pop() || p
+  );
 }
 
-function SourceToggle({
-  tab,
-  onSelect,
-}: {
-  tab: ImportTab;
-  onSelect: (next: ImportTab) => void;
-}) {
+function SourceToggle({ tab, onSelect }: { tab: ImportTab; onSelect: (next: ImportTab) => void }) {
   return (
     <div className="inline-flex items-center gap-1 rounded-lg bg-muted/60 p-1">
       {(Object.keys(TAB_LABELS) as ImportTab[]).map((candidate) => {
@@ -291,13 +290,7 @@ function FolderImportPanel({ kind }: { kind: ImportableKind }) {
   );
 }
 
-export function ImportDialog({
-  workspaceId,
-  kind,
-}: {
-  workspaceId: string;
-  kind: ImportableKind;
-}) {
+export function ImportDialog({ workspaceId, kind }: { workspaceId: string; kind: ImportableKind }) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<ImportTab>("claude");
 
@@ -307,7 +300,9 @@ export function ImportDialog({
   const importSkill = useAppStore((state) => state.importSkill);
 
   const homeSource: ImportSource | null = tab === "folder" ? null : tab;
-  const state = homeSource ? (runtime?.importItemsByKey[importKey(homeSource, kind)] ?? null) : null;
+  const state = homeSource
+    ? (runtime?.importItemsByKey[importKey(homeSource, kind)] ?? null)
+    : null;
   const pendingKeys = runtime?.importPendingKeys ?? {};
   const noun = kind === "plugin" ? "plugin" : "skill";
   const items = state?.items ?? [];
@@ -352,8 +347,8 @@ export function ImportDialog({
           <DialogHeader className="border-b border-border/60 px-6 pt-6 pb-4">
             <DialogTitle>Import {noun}s</DialogTitle>
             <DialogDescription>
-              Bring {noun}s from Claude Code (<code>~/.claude</code>), Codex (<code>~/.codex</code>),
-              or a local folder into Cowork.
+              Bring {noun}s from Claude Code (<code>~/.claude</code>), Codex (<code>~/.codex</code>
+              ), or a local folder into Cowork.
             </DialogDescription>
             <div className="mt-3 flex items-center justify-between gap-3">
               <div className="flex items-center gap-2">

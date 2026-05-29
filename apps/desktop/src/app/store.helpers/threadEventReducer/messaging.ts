@@ -1,5 +1,5 @@
-import { buildAttachmentSignature, buildUserInputDisplayText } from "../../attachmentInputs";
 import type { TurnReference } from "../../../lib/wsProtocol";
+import { buildAttachmentSignature, buildUserInputDisplayText } from "../../attachmentInputs";
 import type { StoreGet, StoreSet } from "../../store.helpers";
 import type { FeedItem, ThreadBusyPolicy } from "../../types";
 import {
@@ -447,7 +447,12 @@ export function createMessagingModule(
       queuedReferences,
     );
     if (!accepted) {
-      prependPendingThreadMessageWithAttachments(threadId, next, queuedAttachments, queuedReferences);
+      prependPendingThreadMessageWithAttachments(
+        threadId,
+        next,
+        queuedAttachments,
+        queuedReferences,
+      );
     }
     return accepted;
   }

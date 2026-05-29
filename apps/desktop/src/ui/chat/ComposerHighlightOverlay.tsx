@@ -29,17 +29,16 @@ export const ComposerHighlightOverlay = forwardRef<
         className,
       )}
     >
-      {segments.map((segment, index) =>
+      {segments.map((segment) =>
         segment.type === "mention" ? (
           <span
-            // index keys are stable enough for a derived, render-only mirror
-            key={index}
+            key={`mention-${segment.start}-${segment.name}`}
             className="-mx-0.5 rounded-[5px] border border-primary/45 px-0.5 text-primary"
           >
             {segment.raw}
           </span>
         ) : (
-          <span key={index}>{segment.text}</span>
+          <span key={`text-${segment.start}`}>{segment.text}</span>
         ),
       )}
       {/* Trailing newline guard so a text ending in "\n" matches the textarea's extra line. */}

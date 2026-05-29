@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
 import {
-  desktopMenuCommandSchema,
   copyTextInputSchema,
+  desktopMenuCommandSchema,
   mobileRelayBridgeStateSchema,
   mobileRelayForgetTrustedPhoneInputSchema,
   mobileRelayStartInputSchema,

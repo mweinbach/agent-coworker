@@ -1,5 +1,5 @@
 import path from "node:path";
-
+import { renderReferencedPluginsSection } from "../../../sessionContext/renderReferencedPluginsSection";
 import {
   formatUserInputDisplayText,
   getAttachmentTotalBase64Size,
@@ -12,15 +12,14 @@ import type {
   ServerErrorSource,
   TurnReference,
 } from "../../../types";
-import { renderReferencedPluginsSection } from "../../../sessionContext/renderReferencedPluginsSection";
 import type { FileAttachment, OrderedInputPart } from "../../jsonrpc/routes/shared";
 import type { HistoryManager } from "../HistoryManager";
 import type { SessionContext } from "../SessionContext";
 import {
   injectResolvedReferencedSkills,
+  type ReferencedSkillContext,
   resolveReferencedPlugins,
   resolveReferencedSkills,
-  type ReferencedSkillContext,
 } from "./referenceInjection";
 
 const MAX_PENDING_STEER_COUNT = 32;

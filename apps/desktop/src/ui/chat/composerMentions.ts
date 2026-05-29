@@ -30,7 +30,7 @@ export type MentionCatalog = {
 };
 
 export type ComposerSegment =
-  | { type: "text"; text: string }
+  | { type: "text"; text: string; start: number; end: number }
   | {
       type: "mention";
       kind: MentionKind;
@@ -135,7 +135,12 @@ export function parseComposerSegments(text: string, catalog: MentionCatalog): Co
       const match = matchMentionAt(text, cursor, catalog);
       if (match) {
         if (textStart < cursor) {
-          segments.push({ type: "text", text: text.slice(textStart, cursor) });
+          segments.push({
+            type: "text",
+            text: text.slice(textStart, cursor),
+            start: textStart,
+            end: cursor,
+          });
         }
         segments.push({
           type: "mention",
@@ -153,7 +158,12 @@ export function parseComposerSegments(text: string, catalog: MentionCatalog): Co
     cursor++;
   }
   if (textStart < text.length) {
-    segments.push({ type: "text", text: text.slice(textStart) });
+    segments.push({
+      type: "text",
+      text: text.slice(textStart),
+      start: textStart,
+      end: text.length,
+    });
   }
   return segments;
 }

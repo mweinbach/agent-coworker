@@ -1,3 +1,4 @@
+import type { ImportableItem, ImportableKind, ImportSource } from "../import";
 import type { ProviderStatus } from "../providerStatus";
 import type { ProviderAuthChallenge, ProviderAuthMethod } from "../providers/authRegistry";
 import type { ProviderCatalogEntry } from "../providers/connectionCatalog";
@@ -36,7 +37,6 @@ import type {
   WorkspaceFeatureFlagOverrides,
   WorkspaceFeatureFlags,
 } from "../types";
-import type { ImportableItem, ImportableKind, ImportSource } from "../import";
 import type { AgentWaitMode } from "./agents/types";
 import type { ModelStreamPartType, ModelStreamRawFormat } from "./modelStream";
 import type {

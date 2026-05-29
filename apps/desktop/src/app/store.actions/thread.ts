@@ -983,7 +983,12 @@ export function createThreadActions(
 
       const hasFirstMessage = firstMessage?.trim();
       if (hasFirstMessage || hasQueuedAttachments) {
-        queuePendingThreadMessage(threadId, firstMessage ?? "", opts?.attachments, opts?.references);
+        queuePendingThreadMessage(
+          threadId,
+          firstMessage ?? "",
+          opts?.attachments,
+          opts?.references,
+        );
       }
       ensureThreadSocket(
         get,

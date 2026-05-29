@@ -28,7 +28,6 @@ import { buildChatRenderItems } from "./chat/activityGroups";
 import { CancelSubagentsDialog } from "./chat/CancelSubagentsDialog";
 import { ChatComposer } from "./chat/ChatComposer";
 import { ChatFeed } from "./chat/ChatFeed";
-import { buildMentionCatalog, extractReferencesFromText } from "./chat/composerMentions";
 import { ChatViewContext } from "./chat/ChatViewContext";
 import { isChatProviderName } from "./chat/ComposerModelSelector";
 import {
@@ -39,6 +38,7 @@ import {
   parseA2uiActionMessage,
   resolveComposerBusyPolicy,
 } from "./chat/chatLogic";
+import { buildMentionCatalog, extractReferencesFromText } from "./chat/composerMentions";
 import { NewChatLanding } from "./chat/NewChatLanding";
 import { loadOverflowCitationContext } from "./chat/overflowCitationContext";
 import { normalizeFeedForToolCards } from "./chat/toolCards/legacyToolLogs";
@@ -80,9 +80,7 @@ export function ChatView() {
   });
   const composerText = useAppStore((s) => s.composerText);
   const composerWorkspaceId = thread?.workspaceId ?? "";
-  const workspaceSkills = useAppStore(
-    (s) => s.workspaceRuntimeById[composerWorkspaceId]?.skills,
-  );
+  const workspaceSkills = useAppStore((s) => s.workspaceRuntimeById[composerWorkspaceId]?.skills);
   const workspacePluginsCatalog = useAppStore(
     (s) => s.workspaceRuntimeById[composerWorkspaceId]?.pluginsCatalog ?? null,
   );

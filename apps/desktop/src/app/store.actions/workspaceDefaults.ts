@@ -444,7 +444,12 @@ export function createWorkspaceDefaultsActions(
       queuedReferences,
     );
     if (!accepted) {
-      prependPendingThreadMessageWithAttachments(threadId, next, queuedAttachments, queuedReferences);
+      prependPendingThreadMessageWithAttachments(
+        threadId,
+        next,
+        queuedAttachments,
+        queuedReferences,
+      );
     }
     return accepted;
   };

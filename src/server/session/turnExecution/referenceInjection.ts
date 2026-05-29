@@ -2,8 +2,8 @@ import { buildPluginCatalogSnapshot } from "../../../plugins";
 import { discoverSkillsForConfig } from "../../../skills";
 import {
   isSkillBodyLoadAllowed,
-  loadSkillBodyByName,
   type LoadedSkillBody,
+  loadSkillBodyByName,
 } from "../../../skills/loadSkillBody";
 import type {
   ModelMessage,
@@ -188,8 +188,15 @@ export async function injectReferencedSkills(opts: {
   includeRawChunks: boolean;
   log: (line: string) => void;
 }): Promise<InjectReferencedSkillsResult> {
-  const { context, appendToHistory, turnId, references, allocateStreamIndex, includeRawChunks, log } =
-    opts;
+  const {
+    context,
+    appendToHistory,
+    turnId,
+    references,
+    allocateStreamIndex,
+    includeRawChunks,
+    log,
+  } = opts;
   const skills = await resolveReferencedSkills({ context, references, log });
   const messages = injectResolvedReferencedSkills({
     context,
@@ -218,10 +225,7 @@ export async function resolveReferencedPlugins(
   const catalog = pluginCatalog ?? (await buildPluginCatalogSnapshot(context.state.config));
   const enabledSkillNames = new Set(
     (await discoverSkillsForConfig(context.state.config))
-      .filter(
-        (skill) =>
-          skill.enabled && isSkillBodyLoadAllowed(context.state.config, skill.name),
-      )
+      .filter((skill) => skill.enabled && isSkillBodyLoadAllowed(context.state.config, skill.name))
       .map((skill) => skill.name),
   );
   const out: ReferencedPluginContext[] = [];
@@ -236,8 +240,7 @@ export async function resolveReferencedPlugins(
       displayName: entry.displayName || entry.name,
       skillNames: entry.skills
         .filter(
-          (skill) =>
-            skill.enabled && isSkillBodyLoadAllowed(context.state.config, skill.name),
+          (skill) => skill.enabled && isSkillBodyLoadAllowed(context.state.config, skill.name),
         )
         .map((skill) => skill.name),
     });

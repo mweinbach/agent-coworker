@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.1.8 - 2026-05-29
+
+### Fixed
+
+- **macOS release notarization retries** — Retries transient Apple notarization
+  network failures, including `NSURLErrorDomain Code=-1009`, so release builds
+  can recover from temporary App Store Connect or runner connectivity drops.
+
 ## 1.1.7 - 2026-05-29
 
 ### Added

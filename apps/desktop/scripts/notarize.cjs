@@ -1,6 +1,58 @@
 const path = require("node:path");
 
-module.exports = async function notarizeDesktopBuild(context) {
+const MAX_NOTARIZE_ATTEMPTS = 4;
+const NOTARIZE_RETRY_DELAY_MS = 30_000;
+
+function getErrorText(error) {
+  if (!error) {
+    return "";
+  }
+
+  if (error instanceof Error) {
+    return `${error.name}\n${error.message}\n${error.stack ?? ""}`;
+  }
+
+  return String(error);
+}
+
+function isRetryableNotarizeError(error) {
+  const text = getErrorText(error);
+
+  return /NSURLErrorDomain Code=-(1001|1005|1009)\b/.test(text)
+    || /\b(ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|ENETDOWN|ENETUNREACH)\b/.test(text)
+    || /\b(?:statusCode|status code)[:=]\s*(?:429|5\d\d)\b/i.test(text)
+    || /The Internet connection appears to be offline/i.test(text)
+    || /network.*(?:timeout|offline|reset|unreachable)/i.test(text);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function notarizeWithRetry(notarize, options, retryOptions = {}) {
+  const maxAttempts = retryOptions.maxAttempts ?? MAX_NOTARIZE_ATTEMPTS;
+  const retryDelayMs = retryOptions.retryDelayMs ?? NOTARIZE_RETRY_DELAY_MS;
+  const sleepFn = retryOptions.sleep ?? sleep;
+  const logger = retryOptions.logger ?? console;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await notarize(options);
+      return;
+    } catch (error) {
+      if (attempt >= maxAttempts || !isRetryableNotarizeError(error)) {
+        throw error;
+      }
+
+      logger.warn(
+        `[desktop] Notarization attempt ${attempt}/${maxAttempts} failed with a transient error; retrying in ${Math.round(retryDelayMs / 1000)}s.`,
+      );
+      await sleepFn(retryDelayMs);
+    }
+  }
+}
+
+async function notarizeDesktopBuild(context) {
   if (process.platform !== "darwin") {
     return;
   }
@@ -38,9 +90,15 @@ module.exports = async function notarizeDesktopBuild(context) {
         teamId,
       };
 
-  await notarize({
+  await notarizeWithRetry(notarize, {
     appBundleId: context.packager.appInfo.id,
     appPath,
     ...authOptions,
   });
+}
+
+module.exports = notarizeDesktopBuild;
+module.exports.__private = {
+  isRetryableNotarizeError,
+  notarizeWithRetry,
 };

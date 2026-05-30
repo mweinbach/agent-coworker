@@ -902,6 +902,37 @@ export function rewriteBareDesktopFilePathsInTree(node: HastNode): void {
 const URL_SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
 const RELATIVE_FILENAME_RE = /^[\w.\-+ ()%,&'!@$=~^]+\.[A-Za-z0-9]{1,12}$/;
 
+function resolveAbsoluteDesktopFileHref(rawHref: string): string | null {
+  if (!rawHref || rawHref.startsWith("#")) {
+    return null;
+  }
+
+  const hasNonPathScheme = URL_SCHEME_RE.test(rawHref) && !/^[A-Za-z]:[\\/]/.test(rawHref);
+  if (hasNonPathScheme) {
+    return null;
+  }
+
+  const withoutDecorations = rawHref.replace(/[?#].*$/, "");
+  let candidate = withoutDecorations;
+  try {
+    candidate = decodeURIComponent(withoutDecorations);
+  } catch {
+    candidate = withoutDecorations;
+  }
+
+  const matches = findBareDesktopFilePathMatches(candidate);
+  if (matches.length !== 1) {
+    return null;
+  }
+
+  const [match] = matches;
+  if (!match || match.start !== 0 || match.end !== candidate.length) {
+    return null;
+  }
+
+  return desktopPathToFileUrl(match.path);
+}
+
 /** Resolve a markdown href that looks like a bare filename (no scheme, no slashes) against the active workspace path. */
 function resolveRelativeFileHref(rawHref: string, basePath: string | null): string | null {
   if (!basePath) return null;
@@ -924,7 +955,8 @@ export function rewriteDesktopFileLinksInTree(
   basePath: string | null = null,
 ): void {
   if (typeof node.url === "string") {
-    const rebased = resolveRelativeFileHref(node.url, basePath);
+    const rebased =
+      resolveAbsoluteDesktopFileHref(node.url) ?? resolveRelativeFileHref(node.url, basePath);
     if (rebased) {
       node.url = rebased;
     }
@@ -950,7 +982,8 @@ export function rewriteDesktopFileLinksInTree(
     typeof node.properties?.href === "string"
   ) {
     const href = node.properties.href;
-    const rebased = resolveRelativeFileHref(href, basePath);
+    const rebased =
+      resolveAbsoluteDesktopFileHref(href) ?? resolveRelativeFileHref(href, basePath);
     if (rebased) {
       node.properties.href = rebased;
     }

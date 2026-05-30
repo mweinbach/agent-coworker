@@ -81,6 +81,30 @@ describe("desktop message local file links", () => {
     expect(tree.children[0]?.children[1]?.url).toBe("https://example.com/docs");
   });
 
+  test("rewrites absolute desktop path hrefs before they become localhost browser links", () => {
+    const tree = {
+      type: "root",
+      children: [
+        {
+          type: "paragraph",
+          children: [
+            {
+              type: "link",
+              url: "/Users/mweinbach/.cowork/chats/example/outputs/Gemini_2.5_Flash_TPU_Companion.xlsx",
+              children: [{ type: "text", value: "Gemini_2.5_Flash_TPU_Companion.xlsx" }],
+            },
+          ],
+        },
+      ],
+    };
+
+    rewriteDesktopFileLinksInTree(tree);
+
+    expect(tree.children[0]?.children[0]?.url).toBe(
+      "cowork-file://open?path=%2FUsers%2Fmweinbach%2F.cowork%2Fchats%2Fexample%2Foutputs%2FGemini_2.5_Flash_TPU_Companion.xlsx",
+    );
+  });
+
   test("rewrites custom app links into desktop-safe hrefs before sanitize", () => {
     const tree = {
       type: "root",
@@ -193,6 +217,21 @@ describe("desktop message local file links", () => {
     expect(html).toContain("create_models.py");
     expect(html).toContain("<button");
     expect(html).not.toContain("[blocked]");
+  });
+
+  test("renders absolute desktop path markdown links as in-app file buttons", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        MessageResponse,
+        null,
+        "[Gemini_2.5_Flash_TPU_Companion.xlsx](/Users/mweinbach/.cowork/chats/example/outputs/Gemini_2.5_Flash_TPU_Companion.xlsx)",
+      ),
+    );
+
+    expect(html).toContain("Gemini_2.5_Flash_TPU_Companion.xlsx");
+    expect(html).toContain("<button");
+    expect(html).not.toContain("localhost");
+    expect(html).not.toContain('target="_blank"');
   });
 
   test("renders custom app markdown links without blocked markers", () => {

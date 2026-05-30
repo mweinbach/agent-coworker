@@ -187,6 +187,8 @@ export function createExplorerActions(
     openWorkspaceFile: async (workspaceId: string, targetPath: string, isDirectory: boolean) => {
       if (isDirectory) {
         await get().navigateWorkspaceFiles(workspaceId, targetPath);
+      } else if (isCanvasSupportedFile(targetPath)) {
+        get().openFilePreview({ path: targetPath });
       } else {
         await openPath({ path: targetPath });
       }

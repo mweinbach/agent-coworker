@@ -57,6 +57,35 @@ const spreadsheetCellSchema = z
   })
   .strict();
 
+const spreadsheetTableSummarySchema = z
+  .object({
+    name: nonEmptyTrimmedStringSchema,
+    ref: nonEmptyTrimmedStringSchema,
+    startRow: z.number().int().nonnegative(),
+    startCol: z.number().int().nonnegative(),
+    endRow: z.number().int().nonnegative(),
+    endCol: z.number().int().nonnegative(),
+  })
+  .strict();
+
+const spreadsheetChartAnchorSchema = z
+  .object({
+    fromRow: z.number().int().nonnegative().optional(),
+    fromCol: z.number().int().nonnegative().optional(),
+    toRow: z.number().int().nonnegative().optional(),
+    toCol: z.number().int().nonnegative().optional(),
+  })
+  .strict();
+
+const spreadsheetChartSummarySchema = z
+  .object({
+    id: nonEmptyTrimmedStringSchema,
+    title: z.string().optional(),
+    type: z.string().optional(),
+    anchor: spreadsheetChartAnchorSchema.optional(),
+  })
+  .strict();
+
 const spreadsheetPreviewSchema = z
   .object({
     kind: z.enum(["csv", "xlsx"]),
@@ -108,6 +137,8 @@ const spreadsheetPreviewSchema = z
         })
         .strict(),
     ),
+    tables: z.array(spreadsheetTableSummarySchema),
+    charts: z.array(spreadsheetChartSummarySchema),
     warnings: z.array(z.string()),
   })
   .strict();

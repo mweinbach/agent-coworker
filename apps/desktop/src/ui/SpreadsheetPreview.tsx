@@ -1,4 +1,5 @@
 import {
+  BarChart3Icon,
   ChevronLeftIcon,
   ChevronRightIcon,
   ClipboardIcon,
@@ -10,6 +11,7 @@ import {
   Redo2Icon,
   SearchIcon,
   SparklesIcon,
+  Table2Icon,
   Undo2Icon,
 } from "lucide-react";
 import {
@@ -23,10 +25,13 @@ import {
 } from "react";
 
 import type {
+  SpreadsheetCellStyle,
+  SpreadsheetChartSummary,
   SpreadsheetMergedRange,
   SpreadsheetPreviewCell,
   SpreadsheetPreview as SpreadsheetPreviewData,
   SpreadsheetPreviewResult,
+  SpreadsheetTableSummary,
   SpreadsheetPreviewViewport,
 } from "../../../../src/shared/spreadsheetPreview";
 import { useAppStore } from "../app/store";
@@ -177,6 +182,63 @@ function buildCellStyle(cell: SpreadsheetPreviewCell, widthPx?: number): CSSProp
   };
 }
 
+function tableForCell(
+  preview: SpreadsheetPreviewData,
+  cell: SpreadsheetPreviewCell,
+): SpreadsheetTableSummary | null {
+  return (
+    preview.tables.find(
+      (table) =>
+        cell.row >= table.startRow &&
+        cell.row <= table.endRow &&
+        cell.col >= table.startCol &&
+        cell.col <= table.endCol,
+    ) ?? null
+  );
+}
+
+function formatCellStyle(style: SpreadsheetCellStyle | undefined): string | null {
+  if (!style) return null;
+  const parts = [
+    style.bold ? "bold" : null,
+    style.italic ? "italic" : null,
+    style.fillColor ? `fill ${style.fillColor}` : null,
+    style.textColor ? `text ${style.textColor}` : null,
+    style.horizontalAlign ? `align ${style.horizontalAlign}` : null,
+    style.numberFormat ? `number format ${style.numberFormat}` : null,
+  ].filter((part): part is string => Boolean(part));
+  return parts.length > 0 ? parts.join(", ") : null;
+}
+
+function chartAnchorLabel(chart: SpreadsheetChartSummary): string | null {
+  const anchor = chart.anchor;
+  if (anchor?.fromRow === undefined || anchor.fromCol === undefined) return null;
+  return `near ${addressFor(anchor.fromRow, anchor.fromCol)}`;
+}
+
+function chartDisplayLabel(chart: SpreadsheetChartSummary): string {
+  return [chart.title, chart.type ? `${chart.type} chart` : null, chartAnchorLabel(chart)]
+    .filter((part): part is string => Boolean(part))
+    .join(" - ");
+}
+
+function objectContextForPrompt(preview: SpreadsheetPreviewData): string {
+  const lines: string[] = [];
+  if (preview.tables.length > 0) {
+    lines.push(
+      "Tables on sheet:",
+      ...preview.tables.slice(0, 12).map((table) => `- ${table.name} (${table.ref})`),
+    );
+  }
+  if (preview.charts.length > 0) {
+    lines.push(
+      "Charts on sheet:",
+      ...preview.charts.slice(0, 12).map((chart) => `- ${chartDisplayLabel(chart) || chart.id}`),
+    );
+  }
+  return lines.length > 0 ? `\n${lines.join("\n")}` : "";
+}
+
 function formatViewportLabel(viewport: SpreadsheetPreviewViewport): string {
   if (viewport.totalRows === 0 || viewport.totalCols === 0) {
     return "Empty sheet";
@@ -325,6 +387,10 @@ export function SpreadsheetPreview({ path, compact = false }: SpreadsheetPreview
     if (!preview || !selected) return null;
     return cellAt(preview, selected.row, selected.col);
   }, [preview, selected]);
+  const selectedTable = useMemo(() => {
+    if (!preview || !selectedCell) return null;
+    return tableForCell(preview, selectedCell);
+  }, [preview, selectedCell]);
 
   // Keep the formula bar in sync with the selected cell (unless mid-edit).
   useEffect(() => {
@@ -615,24 +681,36 @@ export function SpreadsheetPreview({ path, compact = false }: SpreadsheetPreview
       return;
     }
 
+    const selectedStyle = formatCellStyle(selectedCell?.style);
     const selectedContext = selectedCell
       ? `\nSelected cell: ${selectedCell.address}\nSelected value: ${
           selectedCell.value || "(blank)"
-        }${selectedCell.formula ? `\nSelected formula: =${selectedCell.formula}` : ""}`
+        }${selectedCell.formula ? `\nSelected formula: =${selectedCell.formula}` : ""}${
+          selectedStyle ? `\nSelected style: ${selectedStyle}` : ""
+        }${selectedTable ? `\nSelected table: ${selectedTable.name} (${selectedTable.ref})` : ""}`
       : "";
     const searchContext = search.trim() ? `\nSearch query: ${search.trim()}` : "";
     const prompt = `[Spreadsheet Collaborative Edit]
 Please edit the spreadsheet file \`${basenamePath(path)}\` located at \`${path}\`.
 
 Active sheet: ${preview.selectedSheetName}
-Visible viewport: ${formatViewportLabel(preview.viewport)}${selectedContext}${searchContext}
+Visible viewport: ${formatViewportLabel(preview.viewport)}${selectedContext}${searchContext}${objectContextForPrompt(preview)}
 
 Instructions:
 ${instructions}`;
 
     setPromptText("");
     await sendMessage(prompt);
-  }, [path, preview, promptText, search, selectedCell, selectedThreadId, sendMessage]);
+  }, [
+    path,
+    preview,
+    promptText,
+    search,
+    selectedCell,
+    selectedTable,
+    selectedThreadId,
+    sendMessage,
+  ]);
 
   if (loading && !preview) {
     return (
@@ -843,6 +921,43 @@ ${instructions}`;
         </div>
       </div>
 
+      {preview.tables.length > 0 || preview.charts.length > 0 ? (
+        <div
+          data-spreadsheet-objects="true"
+          className="flex shrink-0 items-center gap-2 overflow-x-auto border-b border-[var(--border-spreadsheet)] bg-[var(--surface-spreadsheet-chrome)] px-3 py-1.5 text-xs text-[var(--text-spreadsheet-secondary)]"
+        >
+          {preview.tables.map((table) => (
+            <span
+              key={`table:${table.name}:${table.ref}`}
+              className="inline-flex shrink-0 items-center gap-1.5 border border-[var(--border-spreadsheet)] bg-[var(--surface-spreadsheet)] px-2 py-1 text-[var(--text-spreadsheet)]"
+              title={`${table.name} ${table.ref}`}
+            >
+              <Table2Icon className="size-3.5 text-[var(--spreadsheet-accent)]" />
+              <span className="font-medium">{table.name}</span>
+              <span className="text-[var(--text-spreadsheet-muted)]">{table.ref}</span>
+            </span>
+          ))}
+          {preview.charts.map((chart) => (
+            <span
+              key={`chart:${chart.id}`}
+              className="inline-flex shrink-0 items-center gap-1.5 border border-[var(--border-spreadsheet)] bg-[var(--surface-spreadsheet)] px-2 py-1 text-[var(--text-spreadsheet)]"
+              title={chartDisplayLabel(chart) || chart.id}
+            >
+              <BarChart3Icon className="size-3.5 text-[var(--spreadsheet-accent)]" />
+              <span className="font-medium">{chart.title ?? chart.id}</span>
+              {chart.type ? (
+                <span className="text-[var(--text-spreadsheet-muted)]">{chart.type}</span>
+              ) : null}
+              {chartAnchorLabel(chart) ? (
+                <span className="text-[var(--text-spreadsheet-muted)]">
+                  {chartAnchorLabel(chart)}
+                </span>
+              ) : null}
+            </span>
+          ))}
+        </div>
+      ) : null}
+
       {editError ? (
         <div className="mx-3 mt-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-1.5 text-xs text-destructive">
           {editError}
@@ -911,6 +1026,8 @@ ${instructions}`;
                     const isSelected = selected?.row === cell.row && selected?.col === cell.col;
                     const isEditingCell = isSelected && editing;
                     const matched = isSearchMatch(cell, search);
+                    const table = tableForCell(preview, cell);
+                    const isTableHeader = table?.startRow === cell.row;
                     return (
                       <td
                         key={cell.address}
@@ -918,6 +1035,12 @@ ${instructions}`;
                         rowSpan={span?.rowSpan}
                         className={cn(
                           "h-8 max-w-[320px] border-b border-r border-[var(--border-spreadsheet)] bg-[var(--surface-spreadsheet)] p-0 align-middle text-[var(--text-spreadsheet)]",
+                          table &&
+                            "outline outline-1 outline-offset-[-1px] outline-[var(--spreadsheet-focus-soft)]",
+                          table &&
+                            !cell.style?.fillColor &&
+                            "bg-[var(--surface-spreadsheet-hover)]",
+                          isTableHeader && !cell.style?.bold && "font-semibold",
                           matched && "bg-[var(--surface-spreadsheet-match)]",
                           isSelected && "ring-2 ring-inset ring-[var(--spreadsheet-accent)]",
                         )}
@@ -1003,6 +1126,14 @@ ${instructions}`;
               ) : null}
               {selectedCell.style?.numberFormat ? (
                 <div>Number format: {selectedCell.style.numberFormat}</div>
+              ) : null}
+              {formatCellStyle(selectedCell.style) ? (
+                <div>Style: {formatCellStyle(selectedCell.style)}</div>
+              ) : null}
+              {selectedTable ? (
+                <div>
+                  Table: {selectedTable.name} ({selectedTable.ref})
+                </div>
               ) : null}
             </div>
           ) : (

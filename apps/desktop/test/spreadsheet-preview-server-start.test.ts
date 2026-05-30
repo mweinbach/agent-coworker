@@ -84,6 +84,8 @@ describe("spreadsheet preview workspace startup", () => {
           cells: [[{ row: 0, col: 0, address: "A1", value: "Ready" }]],
           mergedCells: [],
           columnWidths: [],
+          tables: [],
+          charts: [],
           warnings: [],
         },
       };

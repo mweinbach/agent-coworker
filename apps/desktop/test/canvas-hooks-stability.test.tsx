@@ -25,6 +25,7 @@ const { reactivateWorkspaceJsonRpcSocketState } = await import(
 );
 const { RUNTIME } = await import("../src/app/store.helpers/runtimeState");
 const { Canvas } = await import("../src/ui/Canvas");
+const { CanvasFilePreviewLayout } = await import("../src/ui/canvas/CanvasFilePreviewLayout");
 
 type AppStoreState = ReturnType<typeof useAppStore.getState>;
 
@@ -80,6 +81,8 @@ function installSpreadsheetSocket(path: string) {
       cells: [[{ row: 0, col: 0, address: "A1", value: "Metric" }]],
       mergedCells: [],
       columnWidths: [],
+      tables: [],
+      charts: [],
       warnings: [],
     },
   }));
@@ -147,6 +150,48 @@ describe("Canvas hooks stability across file-type switches", () => {
         await flushUi();
       });
       expect(harness.dom.window.document.body.textContent).toContain("Heading");
+    } finally {
+      if (root) {
+        try {
+          await act(async () => {
+            root!.unmount();
+          });
+        } catch {}
+      }
+      harness.restore();
+    }
+  });
+
+  test.serial("omits duplicate spreadsheet filename chrome in canvas mode", async () => {
+    const harness = setupJsdom({ includeAnimationFrame: true });
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root!.render(
+          createElement(
+            CanvasFilePreviewLayout,
+            {
+              isCanvasMode: true,
+              isAgentBusy: false,
+              fileName: "model.xlsx",
+              previewKind: "xlsx",
+              onClose: () => {},
+            },
+            createElement("div", null, "Workbook body"),
+          ),
+        );
+        await flushUi();
+      });
+
+      expect(harness.dom.window.document.body.textContent).toContain("Workbook body");
+      expect(harness.dom.window.document.body.textContent).not.toContain("model.xlsx");
+      expect(
+        harness.dom.window.document.querySelector("button[title='Close Window']"),
+      ).not.toBeNull();
     } finally {
       if (root) {
         try {

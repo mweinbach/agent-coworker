@@ -50,6 +50,8 @@ function buildPreview() {
       ],
       mergedCells: [],
       columnWidths: [],
+      tables: [],
+      charts: [],
       warnings: [],
     },
   };

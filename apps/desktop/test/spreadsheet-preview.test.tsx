@@ -121,12 +121,35 @@ describe("SpreadsheetPreview", () => {
                     value: "$12.50",
                     formattedValue: "$12.50",
                     formula: "SUM(Data!B2:B10)",
-                    style: { numberFormat: "$0.00", bold: true },
+                    style: {
+                      numberFormat: "$0.00",
+                      bold: true,
+                      fillColor: "#FFE08A",
+                      textColor: "#174A2A",
+                    },
                   },
                 ],
               ],
               mergedCells: [],
               columnWidths: [{ col: 0, widthChars: 18 }],
+              tables: [
+                {
+                  name: "RevenueTable",
+                  ref: "A1:B2",
+                  startRow: 0,
+                  startCol: 0,
+                  endRow: 1,
+                  endCol: 1,
+                },
+              ],
+              charts: [
+                {
+                  id: "chart1",
+                  title: "Revenue by Quarter",
+                  type: "bar",
+                  anchor: { fromRow: 0, fromCol: 3 },
+                },
+              ],
               warnings: [],
             },
           };
@@ -154,6 +177,8 @@ describe("SpreadsheetPreview", () => {
         expect(doc.body.textContent).toContain("Summary");
         expect(doc.body.textContent).toContain("Data");
         expect(doc.body.textContent).toContain("Revenue");
+        expect(doc.body.textContent).toContain("RevenueTable");
+        expect(doc.body.textContent).toContain("Revenue by Quarter");
 
         const searchInput = doc.querySelector<HTMLInputElement>("input[type='search']");
         if (!searchInput) throw new Error("missing search input");
@@ -167,6 +192,10 @@ describe("SpreadsheetPreview", () => {
           (cell) => cell.textContent?.trim() === "$12.50",
         );
         if (!valueCell) throw new Error("missing value cell");
+        const valueTd = valueCell.closest("td") as HTMLTableCellElement | null;
+        expect(valueTd?.style.backgroundColor).toBe("rgb(255, 224, 138)");
+        expect(valueTd?.style.color).toBe("rgb(23, 74, 42)");
+        expect(valueTd?.style.fontWeight).toBe("600");
         await act(async () => {
           valueCell.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
           await flushUi();
@@ -174,6 +203,8 @@ describe("SpreadsheetPreview", () => {
         expect(doc.body.textContent).toContain("B2");
         expect(doc.body.textContent).toContain("Formula: =SUM(Data!B2:B10)");
         expect(doc.body.textContent).toContain("Number format: $0.00");
+        expect(doc.body.textContent).toContain("Style: bold, fill #FFE08A");
+        expect(doc.body.textContent).toContain("Table: RevenueTable (A1:B2)");
 
         const promptInput = doc.querySelector<HTMLInputElement>(
           "input[placeholder='Ask agent to edit this file...']",
@@ -197,6 +228,12 @@ describe("SpreadsheetPreview", () => {
         expect(prompt).toContain("[Spreadsheet Collaborative Edit]");
         expect(prompt).toContain("Active sheet: Summary");
         expect(prompt).toContain("Selected cell: B2");
+        expect(prompt).toContain("Selected style: bold, fill #FFE08A");
+        expect(prompt).toContain("Selected table: RevenueTable (A1:B2)");
+        expect(prompt).toContain("Tables on sheet:");
+        expect(prompt).toContain("- RevenueTable (A1:B2)");
+        expect(prompt).toContain("Charts on sheet:");
+        expect(prompt).toContain("- Revenue by Quarter - bar chart - near D1");
         expect(prompt).toContain("Search query: Revenue");
         expect(prompt).toContain("Increase revenue by ten percent");
 
@@ -261,6 +298,8 @@ describe("SpreadsheetPreview", () => {
             cells: [[{ row: 0, col: 0, address: "A1", value: "Metric" }]],
             mergedCells: [],
             columnWidths: [],
+            tables: [],
+            charts: [],
             warnings: [],
           },
         };

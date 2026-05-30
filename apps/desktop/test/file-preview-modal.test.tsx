@@ -340,6 +340,8 @@ describe("file preview modal", () => {
                   ],
             mergedCells: [],
             columnWidths: [],
+            tables: [],
+            charts: [],
             warnings:
               selectedSheetName === "Summary"
                 ? ["Showing rows 1-2 and columns 1-2 of 240 rows and 2 columns."]

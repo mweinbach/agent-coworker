@@ -67,6 +67,29 @@ export type SpreadsheetColumnWidth = {
   widthPx?: number;
 };
 
+export type SpreadsheetTableSummary = {
+  name: string;
+  ref: string;
+  startRow: number;
+  startCol: number;
+  endRow: number;
+  endCol: number;
+};
+
+export type SpreadsheetChartAnchor = {
+  fromRow?: number;
+  fromCol?: number;
+  toRow?: number;
+  toCol?: number;
+};
+
+export type SpreadsheetChartSummary = {
+  id: string;
+  title?: string;
+  type?: string;
+  anchor?: SpreadsheetChartAnchor;
+};
+
 export type SpreadsheetPreview = {
   kind: SpreadsheetFileKind;
   path: string;
@@ -77,6 +100,8 @@ export type SpreadsheetPreview = {
   cells: SpreadsheetPreviewCell[][];
   mergedCells: SpreadsheetMergedRange[];
   columnWidths: SpreadsheetColumnWidth[];
+  tables: SpreadsheetTableSummary[];
+  charts: SpreadsheetChartSummary[];
   warnings: string[];
 };
 

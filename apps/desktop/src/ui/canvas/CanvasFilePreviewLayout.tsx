@@ -42,20 +42,24 @@ export function CanvasFilePreviewLayout({
           <CanvasElectronTitlebar
             isAgentBusy={isAgentBusy}
             leading={
-              <>
-                <TableIcon className="size-3.5 text-muted-foreground shrink-0" />
-                <div className="flex min-w-0 items-center gap-1">
-                  <span
-                    className="truncate text-xs font-semibold tracking-wide text-foreground"
-                    title={fileName}
-                  >
-                    {fileName}
-                  </span>
-                  <span className="text-[10px] text-muted-foreground shrink-0 uppercase">
-                    ({previewKind})
-                  </span>
-                </div>
-              </>
+              isSpreadsheet ? (
+                <span className="sr-only">Spreadsheet preview</span>
+              ) : (
+                <>
+                  <TableIcon className="size-3.5 text-muted-foreground shrink-0" />
+                  <div className="flex min-w-0 items-center gap-1">
+                    <span
+                      className="truncate text-xs font-semibold tracking-wide text-foreground"
+                      title={fileName}
+                    >
+                      {fileName}
+                    </span>
+                    <span className="text-[10px] text-muted-foreground shrink-0 uppercase">
+                      ({previewKind})
+                    </span>
+                  </div>
+                </>
+              )
             }
             trailing={
               <Button

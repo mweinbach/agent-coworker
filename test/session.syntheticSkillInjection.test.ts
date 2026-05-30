@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { createRunTurn } from "../src/agent";
 import {
   renderReferencedSkillsInjection,
   resolveReferencedPlugins,
@@ -294,6 +295,122 @@ describe("skill reference injection (e2e via turn/start references)", () => {
       );
       expect(completed).toBeDefined();
       expect(completed.params.turn.status).not.toBe("error");
+    } finally {
+      rpc.close();
+      await stopTestServer(server);
+    }
+  }, 20_000);
+});
+
+describe("plugin reference injection (e2e via turn/start references)", () => {
+  test("adds the referenced plugin context to the runtime system prompt only", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "pluginref-e2e-"));
+    const pluginRoot = path.join(tmp, ".cowork", "plugins", "demo-plugin");
+    const pluginManifestDir = path.join(pluginRoot, ".cowork-plugin");
+    const pluginSkillDir = path.join(pluginRoot, "skills", "demo-skill");
+    await fs.mkdir(pluginSkillDir, { recursive: true });
+    await fs.mkdir(pluginManifestDir, { recursive: true });
+    await fs.writeFile(
+      path.join(pluginManifestDir, "plugin.json"),
+      JSON.stringify({
+        name: "demo-plugin",
+        description: "Demo plugin",
+        skills: "./skills",
+        interface: { displayName: "Demo Plugin" },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(pluginSkillDir, "SKILL.md"),
+      [
+        "---",
+        'name: "demo-skill"',
+        'description: "Demo skill"',
+        "---",
+        "",
+        "Demo skill body",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const capturedSystems: string[] = [];
+    const capturedMessages: unknown[] = [];
+    const runTurnImpl = createRunTurn({
+      createRuntime: () => ({
+        name: "pi",
+        runTurn: async (params) => {
+          capturedSystems.push(params.system);
+          capturedMessages.push(...params.messages);
+          return {
+            text: "Done.",
+            responseMessages: [],
+          };
+        },
+      }),
+    });
+
+    const { server, url } = await startAgentServer({
+      cwd: tmp,
+      hostname: "127.0.0.1",
+      port: 0,
+      homedir: tmp,
+      env: {
+        AGENT_WORKING_DIR: tmp,
+        AGENT_PROVIDER: "google",
+        AGENT_OBSERVABILITY_ENABLED: "false",
+        COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1",
+      },
+      runTurnImpl,
+    });
+
+    const rpc = await connectJsonRpc(url);
+    try {
+      const started = await rpc.sendRequest("thread/start", { cwd: tmp });
+      const threadId = started.result.thread.id as string;
+      await rpc.waitFor((m) => m.method === "thread/started" && m.params.thread.id === threadId);
+
+      const turnStarted = await rpc.sendRequest("turn/start", {
+        threadId,
+        clientMessageId: "msg-plugin-1",
+        input: [{ type: "text", text: "use the plugin" }],
+        references: [{ kind: "plugin", name: "demo-plugin" }],
+      });
+      const turnId = turnStarted.result.turn.id as string;
+
+      const notifications: any[] = [];
+      while (true) {
+        const message = await rpc.waitFor((c) => typeof c.method === "string", 10_000);
+        notifications.push(message);
+        if (message.method === "turn/completed" && message.params.turn.id === turnId) break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      notifications.push(...rpc.takeQueued((c) => typeof c.method === "string"));
+
+      expect(capturedSystems).toHaveLength(1);
+      expect(capturedSystems[0]).toContain("## Referenced Plugins");
+      expect(capturedSystems[0]).toContain("Demo Plugin");
+      expect(capturedSystems[0]).toContain("demo-skill");
+
+      const serializedMessages = JSON.stringify(capturedMessages);
+      expect(serializedMessages).toContain("use the plugin");
+      expect(serializedMessages).not.toContain("## Referenced Plugins");
+      expect(serializedMessages).not.toContain("Demo Plugin");
+      expect(serializedMessages).not.toContain("demo-skill");
+
+      const userItem = notifications.find(
+        (m) =>
+          (m.method === "item/started" || m.method === "item/completed") &&
+          m.params.item?.type === "userMessage",
+      );
+      expect(userItem).toBeDefined();
+      expect(JSON.stringify(userItem.params.item)).toContain("use the plugin");
+      expect(JSON.stringify(userItem.params.item)).not.toContain("Demo Plugin");
+      expect(JSON.stringify(userItem.params.item)).not.toContain("demo-skill");
+
+      const errorNotification = notifications.find(
+        (m) => m.method === "error" || m.method === "session/error",
+      );
+      expect(errorNotification).toBeUndefined();
     } finally {
       rpc.close();
       await stopTestServer(server);

@@ -36,12 +36,25 @@ const spreadsheetCellStyleSchema = z
   .object({
     bold: z.boolean().optional(),
     italic: z.boolean().optional(),
+    fontSize: z.number().positive().optional(),
     horizontalAlign: z.string().optional(),
     fillColor: z.string().optional(),
     textColor: z.string().optional(),
     numberFormat: z.string().optional(),
   })
   .strict();
+
+const spreadsheetCellStylePatchSchema = z
+  .object({
+    bold: z.boolean().nullable().optional(),
+    italic: z.boolean().nullable().optional(),
+    fontSize: z.number().positive().nullable().optional(),
+    horizontalAlign: z.string().nullable().optional(),
+    fillColor: z.string().nullable().optional(),
+    textColor: z.string().nullable().optional(),
+  })
+  .strict()
+  .refine((style) => Object.keys(style).length > 0, "style must include at least one change");
 
 const spreadsheetCellSchema = z
   .object({
@@ -237,6 +250,15 @@ export const jsonRpcWorkspaceRequestSchemas = {
       rawInput: z.string(),
     })
     .strict(),
+  "cowork/workspace/spreadsheet/format": z
+    .object({
+      cwd: nonEmptyTrimmedStringSchema.optional(),
+      path: nonEmptyTrimmedStringSchema,
+      sheetName: nonEmptyTrimmedStringSchema.optional(),
+      range: nonEmptyTrimmedStringSchema,
+      style: spreadsheetCellStylePatchSchema,
+    })
+    .strict(),
   "cowork/workspace/presentation/preview": z
     .object({
       cwd: nonEmptyTrimmedStringSchema.optional(),
@@ -267,5 +289,6 @@ export const jsonRpcWorkspaceResultSchemas = {
     .strict(),
   "cowork/workspace/spreadsheet/preview": spreadsheetPreviewResultSchema,
   "cowork/workspace/spreadsheet/edit": spreadsheetEditResultSchema,
+  "cowork/workspace/spreadsheet/format": spreadsheetEditResultSchema,
   "cowork/workspace/presentation/preview": presentationPreviewResultSchema,
 } as const;

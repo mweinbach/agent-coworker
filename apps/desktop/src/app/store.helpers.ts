@@ -8,6 +8,8 @@ import type {
   SpreadsheetCellEditResult,
   SpreadsheetPreviewResult,
   SpreadsheetPreviewViewportRequest,
+  SpreadsheetCellStylePatch,
+  SpreadsheetRangeFormatResult,
 } from "../../../../src/shared/spreadsheetPreview";
 import { createDefaultUpdaterState, type UpdaterState } from "../lib/desktopApi";
 import { startWorkspaceServer } from "../lib/desktopCommands";
@@ -519,6 +521,10 @@ export type AppStoreState = {
     path: string,
     opts: { sheetName?: string; address: string; rawInput: string },
   ) => Promise<SpreadsheetCellEditResult>;
+  formatSpreadsheetRange: (
+    path: string,
+    opts: { sheetName?: string; range: string; style: SpreadsheetCellStylePatch },
+  ) => Promise<SpreadsheetRangeFormatResult>;
   loadPresentationPreview: (path: string) => Promise<PresentationPreviewResult>;
 
   setA2uiDockExpanded: (threadId: string, expanded: boolean) => void;

@@ -382,7 +382,7 @@ describe("file preview modal", () => {
       });
       expect(doc.querySelector("[data-file-preview-spreadsheet='true']")).not.toBeNull();
       expect(doc.body.textContent).toContain("Revenue");
-      expect(doc.body.textContent).toContain("Showing rows 1-2");
+      expect(doc.body.textContent).toContain("Summary");
 
       const dataTab = Array.from(doc.querySelectorAll("button")).find(
         (button) => button.textContent === "Data",

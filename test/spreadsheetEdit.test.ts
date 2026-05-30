@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import JSZip from "jszip";
 
-import { editSpreadsheetCell } from "../src/server/spreadsheetEdit";
+import { editSpreadsheetCell, formatSpreadsheetRange } from "../src/server/spreadsheetEdit";
 import { previewSpreadsheetFile } from "../src/server/spreadsheetPreview";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
@@ -226,6 +226,54 @@ describe("xlsx single-cell edit (lossless)", () => {
       ).toEqual({ ok: true });
       const sheet1 = await partText(filePath, "xl/worksheets/sheet1.xml");
       expect(sheet1).toMatch(/<c r="B2" s="3"\/>/);
+    });
+  });
+
+  test("formats a range while preserving formulas, number formats, and workbook parts", async () => {
+    await withTempDir(async (dir) => {
+      const filePath = path.join(dir, "model.xlsx");
+      const original = await buildWorkbook();
+      await fs.writeFile(filePath, original);
+
+      expect(
+        await formatSpreadsheetRange({
+          cwd: dir,
+          filePath,
+          sheetName: "Summary",
+          range: "A1:B2",
+          style: {
+            bold: true,
+            italic: true,
+            fontSize: 14,
+            fillColor: "#FFF2CC",
+            textColor: "#1F4E79",
+            horizontalAlign: "center",
+          },
+        }),
+      ).toEqual({ ok: true });
+
+      const preview = await previewSpreadsheetFile({ cwd: dir, filePath, sheetName: "Summary" });
+      expect(preview.ok).toBe(true);
+      if (!preview.ok) return;
+
+      const a1 = preview.preview.cells.flat().find((cell) => cell.address === "A1");
+      const b2 = preview.preview.cells.flat().find((cell) => cell.address === "B2");
+      for (const cell of [a1, b2]) {
+        expect(cell?.style).toMatchObject({
+          bold: true,
+          italic: true,
+          fontSize: 14,
+          fillColor: "#FFF2CC",
+          textColor: "#1F4E79",
+          horizontalAlign: "center",
+        });
+      }
+      expect(b2?.style?.numberFormat).toBe('"$"#,##0.00');
+
+      const before = await entryBytes(original);
+      const after = await entryBytes(await fs.readFile(filePath));
+      expect(after.get("xl/charts/chart1.xml")).toBe(before.get("xl/charts/chart1.xml"));
+      expect(after.get("xl/worksheets/sheet2.xml")).toBe(before.get("xl/worksheets/sheet2.xml"));
     });
   });
 

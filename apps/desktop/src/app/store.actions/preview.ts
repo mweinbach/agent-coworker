@@ -1,13 +1,16 @@
 import type { PresentationPreviewResult } from "../../../../../src/server/presentationPreview";
 import type {
   SpreadsheetCellEditResult,
+  SpreadsheetCellStylePatch,
   SpreadsheetPreviewResult,
   SpreadsheetPreviewViewportRequest,
+  SpreadsheetRangeFormatResult,
 } from "../../../../../src/shared/spreadsheetPreview";
 import type { AppStoreActions, StoreGet, StoreSet } from "../store.helpers";
 import { ensureServerRunning } from "../store.helpers";
 import {
   editJsonRpcWorkspaceSpreadsheet,
+  formatJsonRpcWorkspaceSpreadsheet,
   previewJsonRpcWorkspacePresentation,
   previewJsonRpcWorkspaceSpreadsheet,
 } from "../store.helpers/jsonRpcSocket";
@@ -17,7 +20,7 @@ export function createPreviewActions(
   get: StoreGet,
 ): Pick<
   AppStoreActions,
-  "loadSpreadsheetPreview" | "editSpreadsheetCell" | "loadPresentationPreview"
+  "loadSpreadsheetPreview" | "editSpreadsheetCell" | "formatSpreadsheetRange" | "loadPresentationPreview"
 > {
   return {
     loadSpreadsheetPreview: async (
@@ -45,6 +48,18 @@ export function createPreviewActions(
       }
       await ensureServerRunning(get, set, workspaceId);
       return editJsonRpcWorkspaceSpreadsheet(get, set, workspaceId, path, opts);
+    },
+
+    formatSpreadsheetRange: async (
+      path: string,
+      opts: { sheetName?: string; range: string; style: SpreadsheetCellStylePatch },
+    ): Promise<SpreadsheetRangeFormatResult> => {
+      const workspaceId = get().selectedWorkspaceId;
+      if (!workspaceId) {
+        throw new Error("No active workspace is available for spreadsheet formatting.");
+      }
+      await ensureServerRunning(get, set, workspaceId);
+      return formatJsonRpcWorkspaceSpreadsheet(get, set, workspaceId, path, opts);
     },
 
     loadPresentationPreview: async (path: string): Promise<PresentationPreviewResult> => {

@@ -35,6 +35,7 @@ export type SpreadsheetSheetSummary = {
 export type SpreadsheetCellStyle = {
   bold?: boolean;
   italic?: boolean;
+  fontSize?: number;
   horizontalAlign?: string;
   fillColor?: string;
   textColor?: string;
@@ -145,5 +146,30 @@ export type SpreadsheetCellEditFailureKind =
   | "write_error";
 
 export type SpreadsheetCellEditResult =
+  | { ok: true }
+  | { ok: false; error: { kind: SpreadsheetCellEditFailureKind; message: string } };
+
+// ---- Range formatting (write-back) ----
+
+export type SpreadsheetCellStylePatch = {
+  bold?: boolean | null;
+  italic?: boolean | null;
+  fontSize?: number | null;
+  horizontalAlign?: string | null;
+  fillColor?: string | null;
+  textColor?: string | null;
+};
+
+export type SpreadsheetRangeFormatRequest = {
+  cwd: string;
+  filePath: string;
+  /** Defaults to the first sheet for XLSX. */
+  sheetName?: string;
+  /** A1-style cell or range, e.g. "B2" or "A1:C4". */
+  range: string;
+  style: SpreadsheetCellStylePatch;
+};
+
+export type SpreadsheetRangeFormatResult =
   | { ok: true }
   | { ok: false; error: { kind: SpreadsheetCellEditFailureKind; message: string } };

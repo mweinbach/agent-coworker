@@ -1,15 +1,22 @@
 import {
+  AlignCenterIcon,
+  AlignLeftIcon,
+  AlignRightIcon,
   BarChart3Icon,
+  BoldIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   ClipboardIcon,
   EraserIcon,
+  EyeIcon,
+  ItalicIcon,
   Loader2Icon,
   Maximize2Icon,
   MoreHorizontalIcon,
+  PaintBucketIcon,
+  PaletteIcon,
   Minimize2Icon,
   Redo2Icon,
-  SearchIcon,
   SparklesIcon,
   Table2Icon,
   Undo2Icon,
@@ -26,6 +33,7 @@ import {
 
 import type {
   SpreadsheetCellStyle,
+  SpreadsheetCellStylePatch,
   SpreadsheetChartSummary,
   SpreadsheetMergedRange,
   SpreadsheetPreviewCell,
@@ -52,6 +60,12 @@ type CellSpan = {
 };
 
 type CellCoord = { row: number; col: number };
+type CellRange = {
+  startRow: number;
+  startCol: number;
+  endRow: number;
+  endCol: number;
+};
 type CellEditHistoryEntry = {
   row: number;
   col: number;
@@ -59,6 +73,19 @@ type CellEditHistoryEntry = {
   before: string;
   after: string;
 };
+
+const FONT_SIZE_OPTIONS = [9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 32];
+const TEXT_COLOR_SWATCHES = ["24292F", "000000", "1F4E79", "0F7B3A", "C00000", "7030A0"];
+const FILL_COLOR_SWATCHES = [
+  "FFFFFF",
+  "FFF2CC",
+  "DDEBF7",
+  "E2F0D9",
+  "FCE4D6",
+  "E7E6E6",
+  "D9EAD3",
+  "CFE2F3",
+];
 
 function basenamePath(p: string): string {
   const parts = p.replace(/\\/g, "/").split("/").filter(Boolean);
@@ -80,20 +107,40 @@ function addressFor(row: number, col: number): string {
   return `${columnLabel(col)}${row + 1}`;
 }
 
+function normalizeRange(anchor: CellCoord, active: CellCoord): CellRange {
+  return {
+    startRow: Math.min(anchor.row, active.row),
+    startCol: Math.min(anchor.col, active.col),
+    endRow: Math.max(anchor.row, active.row),
+    endCol: Math.max(anchor.col, active.col),
+  };
+}
+
+function cellInRange(cell: CellCoord, range: CellRange): boolean {
+  return (
+    cell.row >= range.startRow &&
+    cell.row <= range.endRow &&
+    cell.col >= range.startCol &&
+    cell.col <= range.endCol
+  );
+}
+
+function rangeAddress(range: CellRange): string {
+  const start = addressFor(range.startRow, range.startCol);
+  const end = addressFor(range.endRow, range.endCol);
+  return start === end ? start : `${start}:${end}`;
+}
+
+function rangeCellCount(range: CellRange): number {
+  return (range.endRow - range.startRow + 1) * (range.endCol - range.startCol + 1);
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
 
-function cellSearchText(cell: SpreadsheetPreviewCell): string {
-  return [cell.address, cell.value, cell.formattedValue, cell.rawValue, cell.formula]
-    .filter((value) => value !== undefined && value !== null)
-    .join(" ")
-    .toLowerCase();
-}
-
-function isSearchMatch(cell: SpreadsheetPreviewCell, query: string): boolean {
-  const needle = query.trim().toLowerCase();
-  return needle.length > 0 && cellSearchText(cell).includes(needle);
+function spreadsheetSwatchColor(hexBody: string): string {
+  return `#${hexBody}`;
 }
 
 /** The string shown in the formula bar / used to seed an inline edit. */
@@ -133,6 +180,56 @@ function patchPreviewCell(
         next.formula = undefined;
       }
       return next;
+    }),
+  );
+  return { ...result, preview: { ...result.preview, cells } };
+}
+
+function applyStylePatchToPreview(
+  style: SpreadsheetCellStyle | undefined,
+  patch: SpreadsheetCellStylePatch,
+): SpreadsheetCellStyle | undefined {
+  const next: SpreadsheetCellStyle = { ...(style ?? {}) };
+  if (Object.hasOwn(patch, "bold")) {
+    if (patch.bold) next.bold = true;
+    else delete next.bold;
+  }
+  if (Object.hasOwn(patch, "italic")) {
+    if (patch.italic) next.italic = true;
+    else delete next.italic;
+  }
+  if (Object.hasOwn(patch, "fontSize")) {
+    if (patch.fontSize === null || patch.fontSize === undefined) delete next.fontSize;
+    else next.fontSize = patch.fontSize;
+  }
+  if (Object.hasOwn(patch, "horizontalAlign")) {
+    if (patch.horizontalAlign === null || patch.horizontalAlign === undefined) {
+      delete next.horizontalAlign;
+    } else {
+      next.horizontalAlign = patch.horizontalAlign;
+    }
+  }
+  if (Object.hasOwn(patch, "fillColor")) {
+    if (patch.fillColor === null || patch.fillColor === undefined) delete next.fillColor;
+    else next.fillColor = patch.fillColor;
+  }
+  if (Object.hasOwn(patch, "textColor")) {
+    if (patch.textColor === null || patch.textColor === undefined) delete next.textColor;
+    else next.textColor = patch.textColor;
+  }
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
+function patchPreviewRangeStyle(
+  result: SpreadsheetPreviewResult,
+  range: CellRange,
+  patch: SpreadsheetCellStylePatch,
+): SpreadsheetPreviewResult {
+  if (!result.ok) return result;
+  const cells = result.preview.cells.map((cellRow) =>
+    cellRow.map((cell) => {
+      if (!cellInRange(cell, range)) return cell;
+      return { ...cell, style: applyStylePatchToPreview(cell.style, patch) };
     }),
   );
   return { ...result, preview: { ...result.preview, cells } };
@@ -179,6 +276,7 @@ function buildCellStyle(cell: SpreadsheetPreviewCell, widthPx?: number): CSSProp
       : {}),
     ...(cell.style?.bold ? { fontWeight: 600 } : {}),
     ...(cell.style?.italic ? { fontStyle: "italic" } : {}),
+    ...(cell.style?.fontSize ? { fontSize: `${cell.style.fontSize}pt` } : {}),
   };
 }
 
@@ -202,6 +300,7 @@ function formatCellStyle(style: SpreadsheetCellStyle | undefined): string | null
   const parts = [
     style.bold ? "bold" : null,
     style.italic ? "italic" : null,
+    style.fontSize ? `${style.fontSize}pt` : null,
     style.fillColor ? `fill ${style.fillColor}` : null,
     style.textColor ? `text ${style.textColor}` : null,
     style.horizontalAlign ? `align ${style.horizontalAlign}` : null,
@@ -255,6 +354,7 @@ export function SpreadsheetPreview({ path, compact = false }: SpreadsheetPreview
   const sendMessage = useAppStore((s) => s.sendMessage);
   const loadSpreadsheetPreview = useAppStore((s) => s.loadSpreadsheetPreview);
   const editSpreadsheetCell = useAppStore((s) => s.editSpreadsheetCell);
+  const formatSpreadsheetRange = useAppStore((s) => s.formatSpreadsheetRange);
   const isCanvasMaximized = useAppStore((s) => s.isCanvasMaximized);
   const setCanvasMaximized = useAppStore((s) => s.setCanvasMaximized);
   const hasActiveWorkspace = useMemo(
@@ -273,8 +373,9 @@ export function SpreadsheetPreview({ path, compact = false }: SpreadsheetPreview
   const [viewportStartRow, setViewportStartRow] = useState(0);
   const [viewportStartCol, setViewportStartCol] = useState(0);
   const [reloadNonce, setReloadNonce] = useState(0);
-  const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<CellCoord | null>(null);
+  const [selectionAnchor, setSelectionAnchor] = useState<CellCoord | null>(null);
+  const [isSelectingRange, setIsSelectingRange] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState("");
   const [formulaDraft, setFormulaDraft] = useState("");
@@ -283,26 +384,30 @@ export function SpreadsheetPreview({ path, compact = false }: SpreadsheetPreview
   const [undoStack, setUndoStack] = useState<CellEditHistoryEntry[]>([]);
   const [redoStack, setRedoStack] = useState<CellEditHistoryEntry[]>([]);
   const [moreOpen, setMoreOpen] = useState(false);
+  const [showFormulas, setShowFormulas] = useState(false);
 
   const gridRef = useRef<HTMLDivElement>(null);
   const editInputRef = useRef<HTMLInputElement>(null);
   const moreMenuRef = useRef<HTMLDivElement>(null);
   const suppressBlurRef = useRef(false);
   const wasEditingRef = useRef(false);
+  const skipNextCellClickRef = useRef(false);
 
   useEffect(() => {
     setResult(null);
     setSheetName(null);
     setViewportStartRow(0);
     setViewportStartCol(0);
-    setSearch("");
     setSelected(null);
+    setSelectionAnchor(null);
+    setIsSelectingRange(false);
     setEditing(false);
     setEditError(null);
     setPromptText("");
     setUndoStack([]);
     setRedoStack([]);
     setMoreOpen(false);
+    setShowFormulas(false);
   }, []);
 
   useEffect(() => {
@@ -332,6 +437,13 @@ export function SpreadsheetPreview({ path, compact = false }: SpreadsheetPreview
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [moreOpen]);
+
+  useEffect(() => {
+    if (!isSelectingRange) return;
+    const stopSelecting = () => setIsSelectingRange(false);
+    window.addEventListener("mouseup", stopSelecting);
+    return () => window.removeEventListener("mouseup", stopSelecting);
+  }, [isSelectingRange]);
 
   const runMoreAction = useCallback((action: () => void) => {
     action();
@@ -387,6 +499,10 @@ export function SpreadsheetPreview({ path, compact = false }: SpreadsheetPreview
     if (!preview || !selected) return null;
     return cellAt(preview, selected.row, selected.col);
   }, [preview, selected]);
+  const selectedRange = useMemo(() => {
+    if (!selected) return null;
+    return normalizeRange(selectionAnchor ?? selected, selected);
+  }, [selected, selectionAnchor]);
   const selectedTable = useMemo(() => {
     if (!preview || !selectedCell) return null;
     return tableForCell(preview, selectedCell);
@@ -423,16 +539,12 @@ export function SpreadsheetPreview({ path, compact = false }: SpreadsheetPreview
     }
     return map;
   }, [preview]);
-  const searchMatchCount = useMemo(() => {
-    if (!preview || !search.trim()) return 0;
-    return preview.cells.flat().filter((cell) => isSearchMatch(cell, search)).length;
-  }, [preview, search]);
-
   const changeSheet = useCallback((name: string) => {
     setSheetName(name);
     setViewportStartRow(0);
     setViewportStartCol(0);
     setSelected(null);
+    setSelectionAnchor(null);
     setEditing(false);
     setUndoStack([]);
     setRedoStack([]);
@@ -449,6 +561,7 @@ export function SpreadsheetPreview({ path, compact = false }: SpreadsheetPreview
         ),
       );
       setSelected(null);
+      setSelectionAnchor(null);
     },
     [preview],
   );
@@ -464,19 +577,22 @@ export function SpreadsheetPreview({ path, compact = false }: SpreadsheetPreview
         ),
       );
       setSelected(null);
+      setSelectionAnchor(null);
     },
     [preview],
   );
 
   // Move the active cell, paging the viewport into view when crossing an edge.
   const moveSelection = useCallback(
-    (deltaRow: number, deltaCol: number) => {
+    (deltaRow: number, deltaCol: number, opts: { extend?: boolean } = {}) => {
       if (!preview) return;
       const v = preview.viewport;
       const base = selected ?? { row: v.startRow, col: v.startCol };
       const row = clamp(base.row + deltaRow, 0, Math.max(v.totalRows - 1, 0));
       const col = clamp(base.col + deltaCol, 0, Math.max(v.totalCols - 1, 0));
-      setSelected({ row, col });
+      const next = { row, col };
+      setSelected(next);
+      setSelectionAnchor((current) => (opts.extend ? current ?? base : next));
       if (row < v.startRow || row > v.endRow) setViewportStartRow(row);
       if (col < v.startCol || col > v.endCol) setViewportStartCol(col);
     },
@@ -528,6 +644,7 @@ export function SpreadsheetPreview({ path, compact = false }: SpreadsheetPreview
       if (!canEdit || !preview) return;
       const cell = cellAt(preview, coord.row, coord.col);
       setSelected(coord);
+      setSelectionAnchor(coord);
       setEditValue(seed ?? editStringFor(cell));
       setEditing(true);
     },
@@ -552,19 +669,19 @@ export function SpreadsheetPreview({ path, compact = false }: SpreadsheetPreview
       switch (event.key) {
         case "ArrowUp":
           event.preventDefault();
-          moveSelection(-1, 0);
+          moveSelection(-1, 0, { extend: event.shiftKey });
           return;
         case "ArrowDown":
           event.preventDefault();
-          moveSelection(1, 0);
+          moveSelection(1, 0, { extend: event.shiftKey });
           return;
         case "ArrowLeft":
           event.preventDefault();
-          moveSelection(0, -1);
+          moveSelection(0, -1, { extend: event.shiftKey });
           return;
         case "ArrowRight":
           event.preventDefault();
-          moveSelection(0, 1);
+          moveSelection(0, 1, { extend: event.shiftKey });
           return;
         case "Tab":
           event.preventDefault();
@@ -624,11 +741,20 @@ export function SpreadsheetPreview({ path, compact = false }: SpreadsheetPreview
     finishEdit(editValue);
   }, [editValue, finishEdit]);
 
-  const selectCell = useCallback((coord: CellCoord) => {
+  const selectCell = useCallback(
+    (coord: CellCoord, opts: { extend?: boolean } = {}) => {
+      setSelectionAnchor(opts.extend ? selectionAnchor ?? selected ?? coord : coord);
+      setSelected(coord);
+      setEditing(false);
+      gridRef.current?.focus({ preventScroll: true });
+    },
+    [selected, selectionAnchor],
+  );
+
+  const extendSelectionTo = useCallback((coord: CellCoord) => {
+    setSelectionAnchor((current) => current ?? selected ?? coord);
     setSelected(coord);
-    setEditing(false);
-    gridRef.current?.focus({ preventScroll: true });
-  }, []);
+  }, [selected]);
 
   const undoLastEdit = useCallback(async () => {
     const entry = undoStack.at(-1);
@@ -640,6 +766,7 @@ export function SpreadsheetPreview({ path, compact = false }: SpreadsheetPreview
     });
     if (!ok) return;
     setSelected({ row: entry.row, col: entry.col });
+    setSelectionAnchor({ row: entry.row, col: entry.col });
     setUndoStack((current) => current.slice(0, -1));
     setRedoStack((current) => [...current, entry]);
   }, [commitCell, preview, undoStack]);
@@ -654,6 +781,7 @@ export function SpreadsheetPreview({ path, compact = false }: SpreadsheetPreview
     });
     if (!ok) return;
     setSelected({ row: entry.row, col: entry.col });
+    setSelectionAnchor({ row: entry.row, col: entry.col });
     setRedoStack((current) => current.slice(0, -1));
     setUndoStack((current) => [...current, entry]);
   }, [commitCell, preview, redoStack]);
@@ -673,6 +801,40 @@ export function SpreadsheetPreview({ path, compact = false }: SpreadsheetPreview
     }
   }, [selectedCell]);
 
+  const applyFormatting = useCallback(
+    async (style: SpreadsheetCellStylePatch) => {
+      if (!preview || !selectedRange || !canEdit) return;
+      const targetSheet = preview.selectedSheetName;
+      const range = rangeAddress(selectedRange);
+      setEditError(null);
+      setResult((prev) => (prev ? patchPreviewRangeStyle(prev, selectedRange, style) : prev));
+      try {
+        const res = await formatSpreadsheetRange(path, {
+          sheetName: targetSheet,
+          range,
+          style,
+        });
+        if (!res.ok) setEditError(res.error.message);
+      } catch (err) {
+        setEditError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setReloadNonce((nonce) => nonce + 1);
+      }
+    },
+    [canEdit, formatSpreadsheetRange, path, preview, selectedRange],
+  );
+
+  const clearSelectedFormatting = useCallback(() => {
+    void applyFormatting({
+      bold: null,
+      italic: null,
+      fontSize: null,
+      fillColor: null,
+      textColor: null,
+      horizontalAlign: null,
+    });
+  }, [applyFormatting]);
+
   const sendEditPrompt = useCallback(async () => {
     const instructions = promptText.trim();
     if (!instructions || !preview) return;
@@ -682,19 +844,21 @@ export function SpreadsheetPreview({ path, compact = false }: SpreadsheetPreview
     }
 
     const selectedStyle = formatCellStyle(selectedCell?.style);
-    const selectedContext = selectedCell
-      ? `\nSelected cell: ${selectedCell.address}\nSelected value: ${
-          selectedCell.value || "(blank)"
-        }${selectedCell.formula ? `\nSelected formula: =${selectedCell.formula}` : ""}${
-          selectedStyle ? `\nSelected style: ${selectedStyle}` : ""
-        }${selectedTable ? `\nSelected table: ${selectedTable.name} (${selectedTable.ref})` : ""}`
+    const selectedRangeContext = selectedRange
+      ? `\nSelected range: ${rangeAddress(selectedRange)} (${rangeCellCount(selectedRange)} cells)`
       : "";
-    const searchContext = search.trim() ? `\nSearch query: ${search.trim()}` : "";
+    const selectedContext = selectedCell
+      ? `${selectedRangeContext}\nActive cell: ${selectedCell.address}\nActive value: ${
+          selectedCell.value || "(blank)"
+        }${selectedCell.formula ? `\nActive formula: =${selectedCell.formula}` : ""}${
+          selectedStyle ? `\nActive style: ${selectedStyle}` : ""
+        }${selectedTable ? `\nActive table: ${selectedTable.name} (${selectedTable.ref})` : ""}`
+      : "";
     const prompt = `[Spreadsheet Collaborative Edit]
 Please edit the spreadsheet file \`${basenamePath(path)}\` located at \`${path}\`.
 
 Active sheet: ${preview.selectedSheetName}
-Visible viewport: ${formatViewportLabel(preview.viewport)}${selectedContext}${searchContext}${objectContextForPrompt(preview)}
+Visible viewport: ${formatViewportLabel(preview.viewport)}${selectedContext}${objectContextForPrompt(preview)}
 
 Instructions:
 ${instructions}`;
@@ -705,8 +869,8 @@ ${instructions}`;
     path,
     preview,
     promptText,
-    search,
     selectedCell,
+    selectedRange,
     selectedTable,
     selectedThreadId,
     sendMessage,
@@ -733,6 +897,156 @@ ${instructions}`;
 
   if (!preview) return null;
 
+  const selectedRangeLabel = selectedRange ? rangeAddress(selectedRange) : "—";
+  const selectedFontSize = selectedCell?.style?.fontSize ?? 11;
+  const fontSizeOptions = FONT_SIZE_OPTIONS.includes(selectedFontSize)
+    ? FONT_SIZE_OPTIONS
+    : [...FONT_SIZE_OPTIONS, selectedFontSize].sort((left, right) => left - right);
+  const formatButtonClassName =
+    "size-8 rounded-none border-[var(--border-spreadsheet)] bg-[var(--surface-spreadsheet)] text-[var(--text-spreadsheet-secondary)] shadow-none hover:bg-[var(--surface-spreadsheet-hover)] disabled:cursor-not-allowed disabled:opacity-45";
+  const moreMenu = (
+    <div ref={moreMenuRef} className="relative shrink-0">
+      <Button
+        type="button"
+        variant="outline"
+        size="icon"
+        className="size-8 rounded-none border-[var(--border-spreadsheet)] bg-[var(--surface-spreadsheet)] text-[var(--text-spreadsheet-secondary)] shadow-none hover:bg-[var(--surface-spreadsheet-hover)]"
+        aria-haspopup="menu"
+        aria-expanded={moreOpen}
+        aria-label="More spreadsheet options"
+        title="More spreadsheet options"
+        onClick={() => setMoreOpen((open) => !open)}
+      >
+        <MoreHorizontalIcon className="size-4" />
+      </Button>
+      {moreOpen ? (
+        <div
+          role="menu"
+          className="absolute right-0 top-full z-50 mt-1 w-52 overflow-hidden rounded-md border border-[var(--border-spreadsheet)] bg-[var(--surface-spreadsheet)] py-1 text-[var(--text-spreadsheet)] shadow-lg"
+        >
+          <button
+            type="button"
+            role="menuitem"
+            className={menuItemClassName}
+            disabled={undoStack.length === 0}
+            onClick={() => runMoreAction(() => void undoLastEdit())}
+          >
+            <Undo2Icon className="size-3.5" />
+            Undo
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className={menuItemClassName}
+            disabled={redoStack.length === 0}
+            onClick={() => runMoreAction(() => void redoLastEdit())}
+          >
+            <Redo2Icon className="size-3.5" />
+            Redo
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className={menuItemClassName}
+            disabled={!selectedCell}
+            onClick={() => runMoreAction(() => void copySelectedCell())}
+          >
+            <ClipboardIcon className="size-3.5" />
+            Copy
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className={menuItemClassName}
+            disabled={!selected || !canEdit}
+            onClick={() => runMoreAction(clearSelectedCell)}
+          >
+            <EraserIcon className="size-3.5" />
+            Clear
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className={menuItemClassName}
+            disabled={!selectedRange || !canEdit}
+            onClick={() => runMoreAction(clearSelectedFormatting)}
+          >
+            <EraserIcon className="size-3.5" />
+            Clear formatting
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className={menuItemClassName}
+            onClick={() => runMoreAction(() => setShowFormulas((show) => !show))}
+          >
+            <EyeIcon className="size-3.5" />
+            {showFormulas ? "Show values" : "Show formulas"}
+          </button>
+          <div className="my-1 h-px bg-[var(--border-spreadsheet)]" aria-hidden />
+          <button
+            type="button"
+            role="menuitem"
+            className={menuItemClassName}
+            disabled={preview.viewport.startRow === 0}
+            onClick={() => runMoreAction(() => moveRows(-1))}
+          >
+            <ChevronLeftIcon className="size-3.5" />
+            Previous rows
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className={menuItemClassName}
+            disabled={!preview.viewport.truncatedRows}
+            onClick={() => runMoreAction(() => moveRows(1))}
+          >
+            <ChevronRightIcon className="size-3.5" />
+            Next rows
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className={menuItemClassName}
+            disabled={preview.viewport.startCol === 0}
+            onClick={() => runMoreAction(() => moveCols(-1))}
+          >
+            <ChevronLeftIcon className="size-3.5" />
+            Previous columns
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className={menuItemClassName}
+            disabled={!preview.viewport.truncatedCols}
+            onClick={() => runMoreAction(() => moveCols(1))}
+          >
+            <ChevronRightIcon className="size-3.5" />
+            Next columns
+          </button>
+          {showMaximizeToggle ? (
+            <>
+              <div className="my-1 h-px bg-[var(--border-spreadsheet)]" aria-hidden />
+              <button
+                type="button"
+                role="menuitem"
+                className={menuItemClassName}
+                onClick={() => runMoreAction(() => setCanvasMaximized(!isCanvasMaximized))}
+              >
+                {isCanvasMaximized ? (
+                  <Minimize2Icon className="size-3.5" />
+                ) : (
+                  <Maximize2Icon className="size-3.5" />
+                )}
+                {isCanvasMaximized ? "Restore spreadsheet" : "Maximize spreadsheet"}
+              </button>
+            </>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+
   return (
     <div
       className={cn(
@@ -742,162 +1056,10 @@ ${instructions}`;
       data-file-preview-spreadsheet="true"
       data-spreadsheet-preview="true"
     >
-      <div className="flex shrink-0 items-center gap-2 border-b border-[var(--border-spreadsheet)] bg-[var(--surface-spreadsheet-toolbar)] px-3 py-2 text-[var(--text-spreadsheet-secondary)]">
-        <div className="min-w-0 flex-1 text-xs font-medium text-[var(--text-spreadsheet-secondary)]">
-          <span className="truncate">{formatViewportLabel(preview.viewport)}</span>
-          {preview.warnings[0] ? (
-            <span
-              className="ml-3 inline-block max-w-[320px] truncate align-bottom text-[var(--warning)]"
-              title={preview.warnings[0]}
-            >
-              {preview.warnings[0]}
-            </span>
-          ) : null}
-        </div>
-        <div className="relative min-w-[220px] max-w-[360px] flex-1">
-          <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-[var(--text-spreadsheet-muted)]" />
-          <Input
-            value={search}
-            onInput={(event) => setSearch(event.currentTarget.value)}
-            placeholder="Search visible cells"
-            className="h-8 rounded border-[var(--border-spreadsheet)] bg-[var(--surface-spreadsheet)] pl-8 text-sm text-[var(--text-spreadsheet)] shadow-none focus-visible:ring-1 focus-visible:ring-[var(--spreadsheet-accent)]"
-            type="search"
-            aria-label="Search visible cells"
-          />
-        </div>
-        {search.trim() ? (
-          <span className="shrink-0 text-xs text-[var(--text-spreadsheet-muted)]">
-            {searchMatchCount} {searchMatchCount === 1 ? "match" : "matches"}
-          </span>
-        ) : null}
-        <div ref={moreMenuRef} className="relative shrink-0">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-8 rounded border-[var(--border-spreadsheet)] bg-[var(--surface-spreadsheet)] px-2 text-xs text-[var(--text-spreadsheet-secondary)] shadow-none hover:bg-[var(--surface-spreadsheet-hover)]"
-            aria-haspopup="menu"
-            aria-expanded={moreOpen}
-            aria-label="More spreadsheet options"
-            title="More spreadsheet options"
-            onClick={() => setMoreOpen((open) => !open)}
-          >
-            <MoreHorizontalIcon className="mr-1.5 size-3.5" />
-            More
-          </Button>
-          {moreOpen ? (
-            <div
-              role="menu"
-              className="absolute right-0 top-full z-50 mt-1 w-52 overflow-hidden rounded-md border border-[var(--border-spreadsheet)] bg-[var(--surface-spreadsheet)] py-1 text-[var(--text-spreadsheet)] shadow-lg"
-            >
-              <button
-                type="button"
-                role="menuitem"
-                className={menuItemClassName}
-                disabled={undoStack.length === 0}
-                onClick={() => runMoreAction(() => void undoLastEdit())}
-              >
-                <Undo2Icon className="size-3.5" />
-                Undo
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                className={menuItemClassName}
-                disabled={redoStack.length === 0}
-                onClick={() => runMoreAction(() => void redoLastEdit())}
-              >
-                <Redo2Icon className="size-3.5" />
-                Redo
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                className={menuItemClassName}
-                disabled={!selectedCell}
-                onClick={() => runMoreAction(() => void copySelectedCell())}
-              >
-                <ClipboardIcon className="size-3.5" />
-                Copy
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                className={menuItemClassName}
-                disabled={!selected || !canEdit}
-                onClick={() => runMoreAction(clearSelectedCell)}
-              >
-                <EraserIcon className="size-3.5" />
-                Clear
-              </button>
-              <div className="my-1 h-px bg-[var(--border-spreadsheet)]" aria-hidden />
-              <button
-                type="button"
-                role="menuitem"
-                className={menuItemClassName}
-                disabled={preview.viewport.startRow === 0}
-                onClick={() => runMoreAction(() => moveRows(-1))}
-              >
-                <ChevronLeftIcon className="size-3.5" />
-                Previous rows
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                className={menuItemClassName}
-                disabled={!preview.viewport.truncatedRows}
-                onClick={() => runMoreAction(() => moveRows(1))}
-              >
-                <ChevronRightIcon className="size-3.5" />
-                Next rows
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                className={menuItemClassName}
-                disabled={preview.viewport.startCol === 0}
-                onClick={() => runMoreAction(() => moveCols(-1))}
-              >
-                <ChevronLeftIcon className="size-3.5" />
-                Previous columns
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                className={menuItemClassName}
-                disabled={!preview.viewport.truncatedCols}
-                onClick={() => runMoreAction(() => moveCols(1))}
-              >
-                <ChevronRightIcon className="size-3.5" />
-                Next columns
-              </button>
-              {showMaximizeToggle ? (
-                <>
-                  <div className="my-1 h-px bg-[var(--border-spreadsheet)]" aria-hidden />
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className={menuItemClassName}
-                    onClick={() => runMoreAction(() => setCanvasMaximized(!isCanvasMaximized))}
-                  >
-                    {isCanvasMaximized ? (
-                      <Minimize2Icon className="size-3.5" />
-                    ) : (
-                      <Maximize2Icon className="size-3.5" />
-                    )}
-                    {isCanvasMaximized ? "Restore spreadsheet" : "Maximize spreadsheet"}
-                  </button>
-                </>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
-      </div>
-
       {/* Name box + formula/value bar */}
       <div className="flex shrink-0 items-stretch gap-2 border-b border-[var(--border-spreadsheet)] bg-[var(--surface-spreadsheet)] px-3 py-2">
         <div className="flex h-8 min-w-[64px] items-center justify-center border border-[var(--border-spreadsheet)] bg-[var(--surface-spreadsheet-header)] px-2 text-xs font-semibold tabular-nums text-[var(--text-spreadsheet-secondary)]">
-          {selected ? addressFor(selected.row, selected.col) : "—"}
+          {selectedRangeLabel}
         </div>
         <div className="relative flex-1">
           <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 font-serif text-sm italic text-[var(--spreadsheet-accent)]">
@@ -919,6 +1081,158 @@ ${instructions}`;
             aria-label="Formula bar"
           />
         </div>
+        <div className="flex min-w-[260px] max-w-[360px] flex-[0.55] items-center border border-[var(--border-spreadsheet)] bg-[var(--surface-spreadsheet)] focus-within:border-[var(--spreadsheet-accent)] focus-within:ring-1 focus-within:ring-[var(--spreadsheet-focus-soft)]">
+          <Input
+            value={promptText}
+            onInput={(event) => setPromptText(event.currentTarget.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                void sendEditPrompt();
+              }
+            }}
+            placeholder="Ask agent..."
+            className="h-8 flex-1 border-none bg-transparent pl-2 pr-8 text-sm text-[var(--text-spreadsheet)] shadow-none focus-visible:ring-0"
+          />
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            onClick={() => void sendEditPrompt()}
+            disabled={!promptText.trim()}
+            className="mr-0.5 size-7 rounded-none"
+            aria-label="Ask model to edit spreadsheet"
+          >
+            <SparklesIcon className="size-4" />
+          </Button>
+        </div>
+        {moreMenu}
+      </div>
+
+      <div
+        className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-[var(--border-spreadsheet)] bg-[var(--surface-spreadsheet-toolbar)] px-3 py-1.5"
+        aria-label="Spreadsheet formatting controls"
+      >
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          className={cn(
+            formatButtonClassName,
+            selectedCell?.style?.bold &&
+              "bg-[var(--surface-spreadsheet-selected)] text-[var(--spreadsheet-accent)]",
+          )}
+          disabled={!selectedRange || !canEdit}
+          onClick={() => void applyFormatting({ bold: !selectedCell?.style?.bold })}
+          aria-label="Bold"
+          title="Bold"
+        >
+          <BoldIcon className="size-4" />
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          className={cn(
+            formatButtonClassName,
+            selectedCell?.style?.italic &&
+              "bg-[var(--surface-spreadsheet-selected)] text-[var(--spreadsheet-accent)]",
+          )}
+          disabled={!selectedRange || !canEdit}
+          onClick={() => void applyFormatting({ italic: !selectedCell?.style?.italic })}
+          aria-label="Italic"
+          title="Italic"
+        >
+          <ItalicIcon className="size-4" />
+        </Button>
+        <select
+          value={selectedFontSize}
+          disabled={!selectedRange || !canEdit}
+          onChange={(event) => void applyFormatting({ fontSize: Number(event.currentTarget.value) })}
+          className="h-8 rounded-none border border-[var(--border-spreadsheet)] bg-[var(--surface-spreadsheet)] px-2 text-xs tabular-nums text-[var(--text-spreadsheet)] outline-none focus-visible:ring-1 focus-visible:ring-[var(--spreadsheet-accent)] disabled:cursor-not-allowed disabled:opacity-45"
+          aria-label="Font size"
+          title="Font size"
+        >
+          {fontSizeOptions.map((size) => (
+            <option key={size} value={size}>
+              {size}
+            </option>
+          ))}
+        </select>
+        <div className="mx-1 h-5 w-px bg-[var(--border-spreadsheet)]" aria-hidden />
+        <div className="flex items-center gap-0.5" aria-label="Text color">
+          <PaletteIcon className="mx-1 size-3.5 text-[var(--text-spreadsheet-muted)]" />
+          {TEXT_COLOR_SWATCHES.map((hexBody) => {
+            const color = spreadsheetSwatchColor(hexBody);
+            return (
+              <button
+                key={`text-${hexBody}`}
+                type="button"
+                disabled={!selectedRange || !canEdit}
+                onClick={() => void applyFormatting({ textColor: color })}
+                className="size-6 border border-[var(--border-spreadsheet)] bg-[var(--spreadsheet-swatch-color)] outline-none focus-visible:ring-1 focus-visible:ring-[var(--spreadsheet-accent)] disabled:cursor-not-allowed disabled:opacity-45"
+                style={{ "--spreadsheet-swatch-color": color } as CSSProperties}
+                aria-label={`Text color ${color}`}
+                title={`Text color ${color}`}
+              />
+            );
+          })}
+        </div>
+        <div className="flex items-center gap-0.5" aria-label="Fill color">
+          <PaintBucketIcon className="mx-1 size-3.5 text-[var(--text-spreadsheet-muted)]" />
+          {FILL_COLOR_SWATCHES.map((hexBody) => {
+            const color = spreadsheetSwatchColor(hexBody);
+            return (
+              <button
+                key={`fill-${hexBody}`}
+                type="button"
+                disabled={!selectedRange || !canEdit}
+                onClick={() => void applyFormatting({ fillColor: color })}
+                className="size-6 border border-[var(--border-spreadsheet)] bg-[var(--spreadsheet-swatch-color)] outline-none focus-visible:ring-1 focus-visible:ring-[var(--spreadsheet-accent)] disabled:cursor-not-allowed disabled:opacity-45"
+                style={{ "--spreadsheet-swatch-color": color } as CSSProperties}
+                aria-label={`Fill color ${color}`}
+                title={`Fill color ${color}`}
+              />
+            );
+          })}
+        </div>
+        <div className="mx-1 h-5 w-px bg-[var(--border-spreadsheet)]" aria-hidden />
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          className={formatButtonClassName}
+          disabled={!selectedRange || !canEdit}
+          onClick={() => void applyFormatting({ horizontalAlign: "left" })}
+          aria-label="Align left"
+          title="Align left"
+        >
+          <AlignLeftIcon className="size-4" />
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          className={formatButtonClassName}
+          disabled={!selectedRange || !canEdit}
+          onClick={() => void applyFormatting({ horizontalAlign: "center" })}
+          aria-label="Align center"
+          title="Align center"
+        >
+          <AlignCenterIcon className="size-4" />
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          className={formatButtonClassName}
+          disabled={!selectedRange || !canEdit}
+          onClick={() => void applyFormatting({ horizontalAlign: "right" })}
+          aria-label="Align right"
+          title="Align right"
+        >
+          <AlignRightIcon className="size-4" />
+        </Button>
       </div>
 
       {preview.tables.length > 0 || preview.charts.length > 0 ? (
@@ -993,7 +1307,9 @@ ${instructions}`;
                     key={col}
                     className={cn(
                       "sticky top-0 z-20 h-7 min-w-24 border-b border-r border-[var(--border-spreadsheet)] bg-[var(--surface-spreadsheet-header)] px-2 text-left text-xs font-medium text-[var(--text-spreadsheet-secondary)]",
-                      selected?.col === col &&
+                      selectedRange &&
+                        col >= selectedRange.startCol &&
+                        col <= selectedRange.endCol &&
                         "bg-[var(--surface-spreadsheet-selected)] text-[var(--spreadsheet-accent)]",
                     )}
                     style={
@@ -1014,7 +1330,9 @@ ${instructions}`;
                   <th
                     className={cn(
                       "sticky left-0 z-10 border-b border-r border-[var(--border-spreadsheet)] bg-[var(--surface-spreadsheet-header)] px-2 text-right text-xs font-medium text-[var(--text-spreadsheet-secondary)]",
-                      selected?.row === rowIndex &&
+                      selectedRange &&
+                        rowIndex >= selectedRange.startRow &&
+                        rowIndex <= selectedRange.endRow &&
                         "bg-[var(--surface-spreadsheet-selected)] text-[var(--spreadsheet-accent)]",
                     )}
                   >
@@ -1024,10 +1342,12 @@ ${instructions}`;
                     const span = clippedMergeSpan(cell, preview.mergedCells, preview.viewport);
                     if (span === "covered") return null;
                     const isSelected = selected?.row === cell.row && selected?.col === cell.col;
+                    const isInSelectedRange =
+                      selectedRange !== null && cellInRange(cell, selectedRange);
                     const isEditingCell = isSelected && editing;
-                    const matched = isSearchMatch(cell, search);
                     const table = tableForCell(preview, cell);
                     const isTableHeader = table?.startRow === cell.row;
+                    const displayValue = showFormulas && cell.formula ? `=${cell.formula}` : cell.value;
                     return (
                       <td
                         key={cell.address}
@@ -1041,7 +1361,9 @@ ${instructions}`;
                             !cell.style?.fillColor &&
                             "bg-[var(--surface-spreadsheet-hover)]",
                           isTableHeader && !cell.style?.bold && "font-semibold",
-                          matched && "bg-[var(--surface-spreadsheet-match)]",
+                          isInSelectedRange &&
+                            !isSelected &&
+                            "bg-[var(--surface-spreadsheet-selected)] outline outline-1 outline-offset-[-1px] outline-[var(--spreadsheet-focus-soft)]",
                           isSelected && "ring-2 ring-inset ring-[var(--spreadsheet-accent)]",
                         )}
                         style={buildCellStyle(cell, widthByCol.get(cell.col))}
@@ -1062,11 +1384,31 @@ ${instructions}`;
                             type="button"
                             tabIndex={-1}
                             data-cell-address={cell.address}
-                            onClick={() => selectCell({ row: cell.row, col: cell.col })}
+                            onMouseDown={(event) => {
+                              if (event.button !== 0) return;
+                              skipNextCellClickRef.current = true;
+                              setIsSelectingRange(true);
+                              selectCell({ row: cell.row, col: cell.col }, { extend: event.shiftKey });
+                            }}
+                            onMouseEnter={() => {
+                              if (isSelectingRange) extendSelectionTo({ row: cell.row, col: cell.col });
+                            }}
+                            onClick={(event) => {
+                              if (skipNextCellClickRef.current) {
+                                skipNextCellClickRef.current = false;
+                                return;
+                              }
+                              selectCell({ row: cell.row, col: cell.col }, { extend: event.shiftKey });
+                            }}
                             onDoubleClick={() => beginEdit({ row: cell.row, col: cell.col }, null)}
                             className="block size-full cursor-cell truncate px-2 py-1.5 text-left text-[var(--text-spreadsheet)] outline-none hover:bg-[var(--surface-spreadsheet-hover)]"
                           >
-                            {cell.value || " "}
+                            {displayValue || " "}
+                            {cell.formula && !showFormulas ? (
+                              <span className="ml-1 text-[10px] font-medium text-[var(--spreadsheet-accent)]">
+                                fx
+                              </span>
+                            ) : null}
                           </button>
                         )}
                       </td>
@@ -1112,61 +1454,6 @@ ${instructions}`;
         })}
       </div>
 
-      <div className="grid shrink-0 gap-3 border-t border-[var(--border-spreadsheet)] bg-[var(--surface-spreadsheet-chrome)] px-3 py-2 md:grid-cols-[minmax(0,1fr)_minmax(280px,0.8fr)]">
-        <div className="min-w-0 text-xs text-[var(--text-spreadsheet-secondary)]">
-          {selectedCell ? (
-            <div className="space-y-1">
-              <div className="font-medium text-[var(--text-spreadsheet)]">
-                {selectedCell.address}
-              </div>
-              <div>Value: {selectedCell.value || "(blank)"}</div>
-              {selectedCell.formula ? <div>Formula: ={selectedCell.formula}</div> : null}
-              {selectedCell.formattedValue ? (
-                <div>Formatted: {selectedCell.formattedValue}</div>
-              ) : null}
-              {selectedCell.style?.numberFormat ? (
-                <div>Number format: {selectedCell.style.numberFormat}</div>
-              ) : null}
-              {formatCellStyle(selectedCell.style) ? (
-                <div>Style: {formatCellStyle(selectedCell.style)}</div>
-              ) : null}
-              {selectedTable ? (
-                <div>
-                  Table: {selectedTable.name} ({selectedTable.ref})
-                </div>
-              ) : null}
-            </div>
-          ) : (
-            !canEdit && <span>Read-only</span>
-          )}
-        </div>
-
-        <div className="flex min-w-0 items-center border border-[var(--border-spreadsheet)] bg-[var(--surface-spreadsheet)] shadow-sm focus-within:border-[var(--spreadsheet-accent)] focus-within:ring-1 focus-within:ring-[var(--spreadsheet-focus-soft)]">
-          <Input
-            value={promptText}
-            onInput={(event) => setPromptText(event.currentTarget.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                void sendEditPrompt();
-              }
-            }}
-            placeholder="Ask agent to edit this file..."
-            className="h-9 flex-1 border-none bg-transparent pl-3 pr-10 text-sm text-[var(--text-spreadsheet)] shadow-none focus-visible:ring-0"
-          />
-          <Button
-            type="button"
-            size="icon"
-            variant="ghost"
-            onClick={() => void sendEditPrompt()}
-            disabled={!promptText.trim()}
-            className="mr-1 size-7 rounded"
-            aria-label="Ask model to edit spreadsheet"
-          >
-            <SparklesIcon className="size-4" />
-          </Button>
-        </div>
-      </div>
     </div>
   );
 }

@@ -72,7 +72,7 @@ describe("SpreadsheetPreview", () => {
   });
 
   test.serial(
-    "renders workbook controls, search, cell metadata, and agent edit prompts",
+    "renders workbook controls, formulas, objects, and agent edit prompts",
     async () => {
       const harness = setupJsdom({ includeAnimationFrame: true });
       const sendMessageMock = mock(async () => true);
@@ -180,17 +180,9 @@ describe("SpreadsheetPreview", () => {
         expect(doc.body.textContent).toContain("RevenueTable");
         expect(doc.body.textContent).toContain("Revenue by Quarter");
 
-        const searchInput = doc.querySelector<HTMLInputElement>("input[type='search']");
-        if (!searchInput) throw new Error("missing search input");
-        await act(async () => {
-          setInputValue(harness.dom.window, searchInput, "Revenue");
-          await flushUi();
-        });
-        expect(doc.body.textContent).toContain("1 match");
+        expect(doc.querySelector<HTMLInputElement>("input[type='search']")).toBeNull();
 
-        const valueCell = Array.from(doc.querySelectorAll("td button")).find(
-          (cell) => cell.textContent?.trim() === "$12.50",
-        );
+        const valueCell = doc.querySelector("[data-cell-address='B2']");
         if (!valueCell) throw new Error("missing value cell");
         const valueTd = valueCell.closest("td") as HTMLTableCellElement | null;
         expect(valueTd?.style.backgroundColor).toBe("rgb(255, 224, 138)");
@@ -200,14 +192,12 @@ describe("SpreadsheetPreview", () => {
           valueCell.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
           await flushUi();
         });
-        expect(doc.body.textContent).toContain("B2");
-        expect(doc.body.textContent).toContain("Formula: =SUM(Data!B2:B10)");
-        expect(doc.body.textContent).toContain("Number format: $0.00");
-        expect(doc.body.textContent).toContain("Style: bold, fill #FFE08A");
-        expect(doc.body.textContent).toContain("Table: RevenueTable (A1:B2)");
+        const formulaBar = doc.querySelector<HTMLInputElement>("input[aria-label='Formula bar']");
+        if (!formulaBar) throw new Error("missing formula bar");
+        expect(formulaBar.value).toBe("=SUM(Data!B2:B10)");
 
         const promptInput = doc.querySelector<HTMLInputElement>(
-          "input[placeholder='Ask agent to edit this file...']",
+          "input[placeholder='Ask agent...']",
         );
         if (!promptInput) throw new Error("missing agent prompt input");
         await act(async () => {
@@ -227,14 +217,14 @@ describe("SpreadsheetPreview", () => {
         const prompt = sendMessageMock.mock.calls[0]?.[0];
         expect(prompt).toContain("[Spreadsheet Collaborative Edit]");
         expect(prompt).toContain("Active sheet: Summary");
-        expect(prompt).toContain("Selected cell: B2");
-        expect(prompt).toContain("Selected style: bold, fill #FFE08A");
-        expect(prompt).toContain("Selected table: RevenueTable (A1:B2)");
+        expect(prompt).toContain("Selected range: B2 (1 cells)");
+        expect(prompt).toContain("Active cell: B2");
+        expect(prompt).toContain("Active style: bold, fill #FFE08A");
+        expect(prompt).toContain("Active table: RevenueTable (A1:B2)");
         expect(prompt).toContain("Tables on sheet:");
         expect(prompt).toContain("- RevenueTable (A1:B2)");
         expect(prompt).toContain("Charts on sheet:");
         expect(prompt).toContain("- Revenue by Quarter - bar chart - near D1");
-        expect(prompt).toContain("Search query: Revenue");
         expect(prompt).toContain("Increase revenue by ten percent");
 
         const dataSheetButton = Array.from(doc.querySelectorAll("[role='tab']")).find(
@@ -323,8 +313,8 @@ describe("SpreadsheetPreview", () => {
       });
 
       const doc = harness.dom.window.document;
-      // Should render compact viewport label in pagination bar
-      expect(doc.body.textContent).toContain("Rows 1-1 of 1");
+      // Compact mode keeps the working surface quiet: no duplicate search/status strip.
+      expect(doc.querySelector<HTMLInputElement>("input[type='search']")).toBeNull();
       // Compact canvas mode should avoid duplicating the file title chrome owned by the window.
       expect(doc.body.textContent).not.toContain("Cowork Workbook");
 

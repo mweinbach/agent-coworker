@@ -58,13 +58,24 @@ function buildPreview() {
 }
 
 type EditParams = { address?: string; rawInput?: string; sheetName?: string; path?: string };
+type FormatParams = {
+  range?: string;
+  style?: Record<string, unknown>;
+  sheetName?: string;
+  path?: string;
+};
 
-function installSocket(): { editCalls: EditParams[] } {
+function installSocket(): { editCalls: EditParams[]; formatCalls: FormatParams[] } {
   const editCalls: EditParams[] = [];
-  const requestMock = mock(async (method: string, params?: EditParams) => {
+  const formatCalls: FormatParams[] = [];
+  const requestMock = mock(async (method: string, params?: EditParams | FormatParams) => {
     if (method === "cowork/workspace/spreadsheet/preview") return buildPreview();
     if (method === "cowork/workspace/spreadsheet/edit") {
-      editCalls.push(params ?? {});
+      editCalls.push((params ?? {}) as EditParams);
+      return { ok: true };
+    }
+    if (method === "cowork/workspace/spreadsheet/format") {
+      formatCalls.push((params ?? {}) as FormatParams);
       return { ok: true };
     }
     throw new Error(`unexpected method ${method}`);
@@ -76,7 +87,7 @@ function installSocket(): { editCalls: EditParams[] } {
     respond: () => true,
     request: requestMock,
   } as never);
-  return { editCalls };
+  return { editCalls, formatCalls };
 }
 
 function resetAppStore() {
@@ -349,6 +360,61 @@ describe("SpreadsheetPreview editing", () => {
       harness.restore();
     }
   });
+
+  test.serial("shift-selecting a range and pressing Bold formats the selected range", async () => {
+    const harness = setupJsdom({ includeAnimationFrame: true });
+    const { formatCalls } = installSocket();
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+      await act(async () => {
+        root!.render(createElement(SpreadsheetPreview, { path: PATH }));
+        await flushUi();
+        await flushUi();
+      });
+
+      const doc = harness.dom.window.document;
+      await act(async () => {
+        gridCell(doc, "Name").dispatchEvent(
+          new harness.dom.window.MouseEvent("click", { bubbles: true }),
+        );
+        await flushUi();
+      });
+      await act(async () => {
+        gridCell(doc, "100").dispatchEvent(
+          new harness.dom.window.MouseEvent("click", { bubbles: true, shiftKey: true }),
+        );
+        await flushUi();
+      });
+
+      const boldButton = doc.querySelector<HTMLButtonElement>("button[aria-label='Bold']");
+      if (!boldButton) throw new Error("missing bold button");
+      await act(async () => {
+        boldButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+        await flushUi();
+        await flushUi();
+      });
+
+      expect(formatCalls).toEqual([
+        {
+          cwd: "/Users/mweinbach/Projects/preview-workspace",
+          path: PATH,
+          sheetName: "Sheet1",
+          range: "A1:B2",
+          style: { bold: true },
+        },
+      ]);
+    } finally {
+      if (root) {
+        try {
+          await act(async () => root!.unmount());
+        } catch {}
+      }
+      harness.restore();
+    }
+  });
 });
 
 describe("editSpreadsheetCell store action", () => {
@@ -374,6 +440,25 @@ describe("editSpreadsheetCell store action", () => {
         sheetName: "Sheet1",
         address: "C4",
         rawInput: "=SUM(A1:A2)",
+      },
+    ]);
+  });
+
+  test.serial("issues cowork/workspace/spreadsheet/format with range style params", async () => {
+    const { formatCalls } = installSocket();
+    const result = await useAppStore.getState().formatSpreadsheetRange(PATH, {
+      sheetName: "Sheet1",
+      range: "A1:B2",
+      style: { bold: true, fillColor: "#FFF2CC" },
+    });
+    expect(result).toEqual({ ok: true });
+    expect(formatCalls).toEqual([
+      {
+        cwd: "/Users/mweinbach/Projects/preview-workspace",
+        path: PATH,
+        sheetName: "Sheet1",
+        range: "A1:B2",
+        style: { bold: true, fillColor: "#FFF2CC" },
       },
     ]);
   });

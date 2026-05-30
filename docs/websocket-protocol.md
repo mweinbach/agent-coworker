@@ -109,6 +109,7 @@ Any request before the handshake completes is rejected with a JSON-RPC error:
 - `cowork/workspace/bootstrap`
 - `cowork/workspace/spreadsheet/preview`
 - `cowork/workspace/spreadsheet/edit`
+- `cowork/workspace/spreadsheet/format`
 
 `turn/start` and `turn/steer` also accept an optional `clientMessageId` string so JSON-RPC clients can correlate optimistic user UI state with the projected `user_message` notification stream.
 
@@ -334,6 +335,8 @@ One-off chat thread workspaces must live under the global `~/.cowork/chats` dire
 
 `cowork/workspace/spreadsheet/edit` writes a single cell value back to a CSV or `.xlsx` file in the active workspace and returns `{ "ok": true }` or `{ "ok": false, "error": { "kind", "message" } }` (`kind` ∈ `unsupported_format | not_found | parse_error | write_error`). The request accepts `path`, optional `sheetName` (ignored for CSV), `address` (A1-style, e.g. `B2`), and `rawInput` (exactly what the user typed). For `.xlsx` the server infers the cell type from `rawInput` (leading `=` → formula, numeric → number, empty → blank, otherwise inline string) and applies the change as a **surgical, lossless patch**: only the target worksheet XML part is rewritten and the edited cell keeps its style index, so fonts, fills, number formats, charts, and other sheets are preserved byte-for-byte (SheetJS's community build cannot write styles, so the workbook is never round-tripped through it). CSV stores `rawInput` verbatim while preserving the byte-order mark, line terminator, and trailing-newline state. Paths are resolved under the workspace root and symlink escapes are rejected. Unlike the read-only preview method this is a write, so remote trusted devices require the `workspaceSettings` permission.
 
+`cowork/workspace/spreadsheet/format` writes formatting to an `.xlsx` cell or range and returns the same `{ "ok": true }` / structured error shape as `spreadsheet/edit`. The request accepts `path`, optional `sheetName`, `range` (A1-style, e.g. `B2` or `A1:C4`), and a `style` patch supporting `bold`, `italic`, `fontSize`, `fillColor`, `textColor`, and `horizontalAlign`; each field may be omitted to leave it unchanged or set to `null` to clear that formatting attribute. The server updates `xl/styles.xml` and only the target worksheet cell style indexes, preserving formulas, number formats, charts, tables, and unrelated sheets without workbook round-tripping. CSV formatting is unsupported. Like `spreadsheet/edit`, this is a write and remote trusted devices require the `workspaceSettings` permission.
+
 `cowork/session/agent/inspect` is a thread-scoped, root-only read for child agents. It returns the same detailed inspection payload as the root `inspectAgent` tool: the latest child summary, the full latest assistant text, a parsed structured child report when the final assistant text includes a recognized JSON footer, and compact session/last-turn usage snapshots for the child.
 
 ### OpenAI Native Connector JSON-RPC Methods
@@ -495,6 +498,7 @@ Sockets subscribed with `research/subscribe` can receive:
 - `thread/unsubscribe` returns an unsubscribe status and emits `thread/closed` with `{ threadId }` after the connection is detached from a live subscription
 - `cowork/workspace/bootstrap` returns persisted and live threads for a workspace plus workspace control state; used by desktop/mobile clients on initial load
 - `cowork/workspace/spreadsheet/preview` returns bounded spreadsheet preview data for workspace CSV and `.xlsx` files; desktop uses it to keep spreadsheet parsing in the harness.
+- `cowork/workspace/spreadsheet/format` applies persisted XLSX range formatting while preserving workbook objects and formulas.
 - Cowork persists canonical thread journal events in sqlite so reconnect / restart replay is no longer limited to an in-memory socket buffer
 
 ### Projected Conversation Contract

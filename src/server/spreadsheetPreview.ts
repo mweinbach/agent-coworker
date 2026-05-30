@@ -646,9 +646,11 @@ function readStyleFromXf(
   const patternFill = asRecord(fill?.patternFill);
   const alignment = asRecord(xf.alignment);
   const numberFormatId = readInteger(xf.numFmtId);
+  const fontSize = readNodeNumber(font?.sz);
   const result: SpreadsheetCellStyle = {
     ...(font && xmlToggleIsOn(font.b) ? { bold: true } : {}),
     ...(font && xmlToggleIsOn(font.i) ? { italic: true } : {}),
+    ...(fontSize !== null ? { fontSize } : {}),
     ...(typeof alignment?.horizontal === "string" ? { horizontalAlign: alignment.horizontal } : {}),
     ...(numberFormatId !== null && styles.numberFormats.has(numberFormatId)
       ? { numberFormat: styles.numberFormats.get(numberFormatId) }
@@ -871,6 +873,14 @@ function readInteger(value: unknown): number | null {
   if (!raw) return null;
   const parsed = Number.parseInt(raw, 10);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function readNodeNumber(value: unknown): number | null {
+  const record = asRecord(value);
+  const raw = stringValue(record?.val ?? value);
+  if (!raw) return null;
+  const parsed = Number.parseFloat(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
 function decodeA1Range(

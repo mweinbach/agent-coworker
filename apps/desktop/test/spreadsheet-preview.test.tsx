@@ -161,7 +161,7 @@ describe("SpreadsheetPreview", () => {
           setInputValue(harness.dom.window, searchInput, "Revenue");
           await flushUi();
         });
-        expect(doc.body.textContent).toContain("1 visible matches");
+        expect(doc.body.textContent).toContain("1 match");
 
         const valueCell = Array.from(doc.querySelectorAll("td button")).find(
           (cell) => cell.textContent?.trim() === "$12.50",
@@ -286,9 +286,8 @@ describe("SpreadsheetPreview", () => {
       const doc = harness.dom.window.document;
       // Should render compact viewport label in pagination bar
       expect(doc.body.textContent).toContain("Rows 1-1 of 1");
-      // Compact canvas mode should still expose the Office-like workbook chrome.
-      expect(doc.body.textContent).toContain("Cowork Workbook");
-      expect(doc.body.textContent).toContain("model.xlsx");
+      // Compact canvas mode should avoid duplicating the file title chrome owned by the window.
+      expect(doc.body.textContent).not.toContain("Cowork Workbook");
 
       // Should render the grid as the flexing body of the compact canvas surface.
       const tableWrapper = doc.querySelector("[data-spreadsheet-grid='true']");

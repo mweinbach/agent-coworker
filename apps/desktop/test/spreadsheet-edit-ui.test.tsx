@@ -129,6 +129,25 @@ function gridCell(doc: Document, text: string): Element {
   return cell;
 }
 
+async function openMoreMenu(doc: Document, window: Window) {
+  const moreButton = doc.querySelector<HTMLButtonElement>(
+    "button[aria-label='More spreadsheet options']",
+  );
+  if (!moreButton) throw new Error("missing spreadsheet more button");
+  await act(async () => {
+    moreButton.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    await flushUi();
+  });
+}
+
+function menuItem(doc: Document, text: string): Element {
+  const item = Array.from(doc.querySelectorAll("[role='menuitem']")).find(
+    (el) => el.textContent?.trim() === text,
+  );
+  if (!item) throw new Error(`missing menu item ${text}`);
+  return item;
+}
+
 describe("SpreadsheetPreview editing", () => {
   beforeEach(() => {
     resetAppStore();
@@ -253,10 +272,8 @@ describe("SpreadsheetPreview editing", () => {
       });
 
       const doc = harness.dom.window.document;
-      const maximize = doc.querySelector<HTMLButtonElement>(
-        "button[aria-label='Maximize spreadsheet']",
-      );
-      if (!maximize) throw new Error("missing maximize button");
+      await openMoreMenu(doc, harness.dom.window);
+      const maximize = menuItem(doc, "Maximize spreadsheet");
       expect(useAppStore.getState().isCanvasMaximized).toBe(false);
       await act(async () => {
         maximize.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
@@ -295,26 +312,24 @@ describe("SpreadsheetPreview editing", () => {
         await flushUi();
       });
 
-      const clearButton = Array.from(doc.querySelectorAll("button")).find(
-        (button) => button.textContent?.trim() === "Clear",
-      );
-      if (!clearButton) throw new Error("missing clear button");
+      await openMoreMenu(doc, harness.dom.window);
+      const clearButton = menuItem(doc, "Clear");
       await act(async () => {
         clearButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
         await flushUi();
         await flushUi();
       });
 
-      const undoButton = doc.querySelector<HTMLButtonElement>("button[aria-label='Undo']");
-      if (!undoButton) throw new Error("missing undo button");
+      await openMoreMenu(doc, harness.dom.window);
+      const undoButton = menuItem(doc, "Undo");
       await act(async () => {
         undoButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
         await flushUi();
         await flushUi();
       });
 
-      const redoButton = doc.querySelector<HTMLButtonElement>("button[aria-label='Redo']");
-      if (!redoButton) throw new Error("missing redo button");
+      await openMoreMenu(doc, harness.dom.window);
+      const redoButton = menuItem(doc, "Redo");
       await act(async () => {
         redoButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
         await flushUi();

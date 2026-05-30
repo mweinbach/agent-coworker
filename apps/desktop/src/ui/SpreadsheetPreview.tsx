@@ -5,11 +5,11 @@ import {
   EraserIcon,
   Loader2Icon,
   Maximize2Icon,
+  MoreHorizontalIcon,
   Minimize2Icon,
   Redo2Icon,
   SearchIcon,
   SparklesIcon,
-  TableIcon,
   Undo2Icon,
 } from "lucide-react";
 import {
@@ -30,7 +30,6 @@ import type {
   SpreadsheetPreviewViewport,
 } from "../../../../src/shared/spreadsheetPreview";
 import { useAppStore } from "../app/store";
-import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { copyText } from "../lib/desktopCommands";
@@ -202,6 +201,8 @@ export function SpreadsheetPreview({ path, compact = false }: SpreadsheetPreview
   );
   const canEdit = hasActiveWorkspace;
   const showMaximizeToggle = getDesktopWindowMode() !== "canvas";
+  const menuItemClassName =
+    "flex w-full items-center gap-2 px-2.5 py-2 text-left text-xs text-[var(--text-spreadsheet)] outline-none hover:bg-[var(--surface-spreadsheet-hover)] focus-visible:bg-[var(--surface-spreadsheet-hover)] disabled:cursor-not-allowed disabled:opacity-45";
 
   const [result, setResult] = useState<SpreadsheetPreviewResult | null>(null);
   const [loading, setLoading] = useState(true);
@@ -219,9 +220,11 @@ export function SpreadsheetPreview({ path, compact = false }: SpreadsheetPreview
   const [promptText, setPromptText] = useState("");
   const [undoStack, setUndoStack] = useState<CellEditHistoryEntry[]>([]);
   const [redoStack, setRedoStack] = useState<CellEditHistoryEntry[]>([]);
+  const [moreOpen, setMoreOpen] = useState(false);
 
   const gridRef = useRef<HTMLDivElement>(null);
   const editInputRef = useRef<HTMLInputElement>(null);
+  const moreMenuRef = useRef<HTMLDivElement>(null);
   const suppressBlurRef = useRef(false);
   const wasEditingRef = useRef(false);
 
@@ -237,6 +240,40 @@ export function SpreadsheetPreview({ path, compact = false }: SpreadsheetPreview
     setPromptText("");
     setUndoStack([]);
     setRedoStack([]);
+    setMoreOpen(false);
+  }, []);
+
+  useEffect(() => {
+    if (!moreOpen) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (
+        moreMenuRef.current &&
+        event.target instanceof Node &&
+        moreMenuRef.current.contains(event.target)
+      ) {
+        return;
+      }
+      setMoreOpen(false);
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setMoreOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [moreOpen]);
+
+  const runMoreAction = useCallback((action: () => void) => {
+    action();
+    setMoreOpen(false);
   }, []);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: reloadNonce is an intentional refetch trigger after edits
@@ -618,24 +655,6 @@ ${instructions}`;
 
   if (!preview) return null;
 
-  const maximizeButton = showMaximizeToggle ? (
-    <Button
-      type="button"
-      variant="outline"
-      size="sm"
-      className="h-7 shrink-0 rounded border-[var(--border-spreadsheet)] bg-[var(--surface-spreadsheet)] px-2 text-[var(--text-spreadsheet-secondary)] shadow-none hover:bg-[var(--surface-spreadsheet-hover)]"
-      onClick={() => setCanvasMaximized(!isCanvasMaximized)}
-      title={isCanvasMaximized ? "Restore" : "Maximize"}
-      aria-label={isCanvasMaximized ? "Restore spreadsheet" : "Maximize spreadsheet"}
-    >
-      {isCanvasMaximized ? (
-        <Minimize2Icon className="size-3.5" />
-      ) : (
-        <Maximize2Icon className="size-3.5" />
-      )}
-    </Button>
-  ) : null;
-
   return (
     <div
       className={cn(
@@ -645,133 +664,19 @@ ${instructions}`;
       data-file-preview-spreadsheet="true"
       data-spreadsheet-preview="true"
     >
-      <div className="flex shrink-0 items-center gap-3 border-b border-[var(--border-spreadsheet)] bg-[var(--surface-spreadsheet-titlebar)] px-3 py-2">
-        <div className="flex size-7 shrink-0 items-center justify-center rounded-md bg-[var(--spreadsheet-accent)] text-[var(--text-inverse)] shadow-sm">
-          <TableIcon className="size-4" />
+      <div className="flex shrink-0 items-center gap-2 border-b border-[var(--border-spreadsheet)] bg-[var(--surface-spreadsheet-toolbar)] px-3 py-2 text-[var(--text-spreadsheet-secondary)]">
+        <div className="min-w-0 flex-1 text-xs font-medium text-[var(--text-spreadsheet-secondary)]">
+          <span className="truncate">{formatViewportLabel(preview.viewport)}</span>
+          {preview.warnings[0] ? (
+            <span
+              className="ml-3 inline-block max-w-[320px] truncate align-bottom text-[var(--warning)]"
+              title={preview.warnings[0]}
+            >
+              {preview.warnings[0]}
+            </span>
+          ) : null}
         </div>
-        <div className="min-w-0">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--text-spreadsheet-muted)]">
-            Cowork Workbook
-          </div>
-          <div
-            className="truncate text-sm font-semibold text-[var(--text-spreadsheet)]"
-            title={preview.filename}
-          >
-            {preview.filename}
-          </div>
-        </div>
-        <Badge
-          variant="secondary"
-          className="ml-auto shrink-0 border border-[var(--border-spreadsheet)] bg-[var(--surface-spreadsheet)] font-normal uppercase text-[var(--text-spreadsheet-secondary)]"
-        >
-          {preview.kind}
-        </Badge>
-        {maximizeButton}
-      </div>
-
-      <div className="flex shrink-0 items-end gap-4 overflow-x-auto border-b border-[var(--border-spreadsheet)] bg-[var(--surface-spreadsheet-chrome)] px-3 pt-1">
-        <div className="relative h-8 shrink-0 px-0.5 text-sm font-semibold text-[var(--text-spreadsheet)]">
-          Home
-          <span className="absolute inset-x-0 bottom-0 h-0.5 rounded-full bg-[var(--spreadsheet-accent)]" />
-        </div>
-        <div className="pb-2 text-xs text-[var(--text-spreadsheet-muted)]">Ready</div>
-      </div>
-
-      <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-[var(--border-spreadsheet)] bg-[var(--surface-spreadsheet-toolbar)] px-2 py-1.5 text-[var(--text-spreadsheet-secondary)]">
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          onClick={() => void undoLastEdit()}
-          disabled={undoStack.length === 0}
-          className="size-7 rounded text-[var(--text-spreadsheet-muted)]"
-          aria-label="Undo"
-        >
-          <Undo2Icon className="size-4" />
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          onClick={() => void redoLastEdit()}
-          disabled={redoStack.length === 0}
-          className="size-7 rounded text-[var(--text-spreadsheet-muted)]"
-          aria-label="Redo"
-        >
-          <Redo2Icon className="size-4" />
-        </Button>
-        <div className="mx-1 h-6 w-px shrink-0 bg-[var(--border-spreadsheet)]" aria-hidden />
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          onClick={() => void copySelectedCell()}
-          disabled={!selectedCell}
-          className="h-7 rounded px-2 text-xs text-[var(--text-spreadsheet-secondary)] hover:bg-[var(--surface-spreadsheet-hover)]"
-        >
-          <ClipboardIcon className="mr-1.5 size-3.5" />
-          Copy
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          onClick={clearSelectedCell}
-          disabled={!selected || !canEdit}
-          className="h-7 rounded px-2 text-xs text-[var(--text-spreadsheet-secondary)] hover:bg-[var(--surface-spreadsheet-hover)]"
-        >
-          <EraserIcon className="mr-1.5 size-3.5" />
-          Clear
-        </Button>
-        <div className="mx-1 h-6 w-px shrink-0 bg-[var(--border-spreadsheet)]" aria-hidden />
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={() => moveRows(-1)}
-          disabled={preview.viewport.startRow === 0}
-          className="h-7 rounded border-[var(--border-spreadsheet)] bg-[var(--surface-spreadsheet)] px-2 text-xs text-[var(--text-spreadsheet-secondary)] shadow-none hover:bg-[var(--surface-spreadsheet-hover)]"
-        >
-          <ChevronLeftIcon className="mr-1 size-3.5" />
-          Rows
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={() => moveRows(1)}
-          disabled={!preview.viewport.truncatedRows}
-          className="h-7 rounded border-[var(--border-spreadsheet)] bg-[var(--surface-spreadsheet)] px-2 text-xs text-[var(--text-spreadsheet-secondary)] shadow-none hover:bg-[var(--surface-spreadsheet-hover)]"
-        >
-          Rows
-          <ChevronRightIcon className="ml-1 size-3.5" />
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={() => moveCols(-1)}
-          disabled={preview.viewport.startCol === 0}
-          className="h-7 rounded border-[var(--border-spreadsheet)] bg-[var(--surface-spreadsheet)] px-2 text-xs text-[var(--text-spreadsheet-secondary)] shadow-none hover:bg-[var(--surface-spreadsheet-hover)]"
-        >
-          <ChevronLeftIcon className="mr-1 size-3.5" />
-          Cols
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={() => moveCols(1)}
-          disabled={!preview.viewport.truncatedCols}
-          className="h-7 rounded border-[var(--border-spreadsheet)] bg-[var(--surface-spreadsheet)] px-2 text-xs text-[var(--text-spreadsheet-secondary)] shadow-none hover:bg-[var(--surface-spreadsheet-hover)]"
-        >
-          Cols
-          <ChevronRightIcon className="ml-1 size-3.5" />
-        </Button>
-        <span className="ml-1 shrink-0 text-xs font-medium text-[var(--text-spreadsheet-secondary)]">
-          {formatViewportLabel(preview.viewport)}
-        </span>
-        <div className="relative ml-auto min-w-[220px] max-w-[360px] flex-1">
+        <div className="relative min-w-[220px] max-w-[360px] flex-1">
           <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-[var(--text-spreadsheet-muted)]" />
           <Input
             value={search}
@@ -784,13 +689,135 @@ ${instructions}`;
         </div>
         {search.trim() ? (
           <span className="shrink-0 text-xs text-[var(--text-spreadsheet-muted)]">
-            {searchMatchCount} matches
+            {searchMatchCount} {searchMatchCount === 1 ? "match" : "matches"}
           </span>
         ) : null}
+        <div ref={moreMenuRef} className="relative shrink-0">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-8 rounded border-[var(--border-spreadsheet)] bg-[var(--surface-spreadsheet)] px-2 text-xs text-[var(--text-spreadsheet-secondary)] shadow-none hover:bg-[var(--surface-spreadsheet-hover)]"
+            aria-haspopup="menu"
+            aria-expanded={moreOpen}
+            aria-label="More spreadsheet options"
+            title="More spreadsheet options"
+            onClick={() => setMoreOpen((open) => !open)}
+          >
+            <MoreHorizontalIcon className="mr-1.5 size-3.5" />
+            More
+          </Button>
+          {moreOpen ? (
+            <div
+              role="menu"
+              className="absolute right-0 top-full z-50 mt-1 w-52 overflow-hidden rounded-md border border-[var(--border-spreadsheet)] bg-[var(--surface-spreadsheet)] py-1 text-[var(--text-spreadsheet)] shadow-lg"
+            >
+              <button
+                type="button"
+                role="menuitem"
+                className={menuItemClassName}
+                disabled={undoStack.length === 0}
+                onClick={() => runMoreAction(() => void undoLastEdit())}
+              >
+                <Undo2Icon className="size-3.5" />
+                Undo
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className={menuItemClassName}
+                disabled={redoStack.length === 0}
+                onClick={() => runMoreAction(() => void redoLastEdit())}
+              >
+                <Redo2Icon className="size-3.5" />
+                Redo
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className={menuItemClassName}
+                disabled={!selectedCell}
+                onClick={() => runMoreAction(() => void copySelectedCell())}
+              >
+                <ClipboardIcon className="size-3.5" />
+                Copy
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className={menuItemClassName}
+                disabled={!selected || !canEdit}
+                onClick={() => runMoreAction(clearSelectedCell)}
+              >
+                <EraserIcon className="size-3.5" />
+                Clear
+              </button>
+              <div className="my-1 h-px bg-[var(--border-spreadsheet)]" aria-hidden />
+              <button
+                type="button"
+                role="menuitem"
+                className={menuItemClassName}
+                disabled={preview.viewport.startRow === 0}
+                onClick={() => runMoreAction(() => moveRows(-1))}
+              >
+                <ChevronLeftIcon className="size-3.5" />
+                Previous rows
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className={menuItemClassName}
+                disabled={!preview.viewport.truncatedRows}
+                onClick={() => runMoreAction(() => moveRows(1))}
+              >
+                <ChevronRightIcon className="size-3.5" />
+                Next rows
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className={menuItemClassName}
+                disabled={preview.viewport.startCol === 0}
+                onClick={() => runMoreAction(() => moveCols(-1))}
+              >
+                <ChevronLeftIcon className="size-3.5" />
+                Previous columns
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className={menuItemClassName}
+                disabled={!preview.viewport.truncatedCols}
+                onClick={() => runMoreAction(() => moveCols(1))}
+              >
+                <ChevronRightIcon className="size-3.5" />
+                Next columns
+              </button>
+              {showMaximizeToggle ? (
+                <>
+                  <div className="my-1 h-px bg-[var(--border-spreadsheet)]" aria-hidden />
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className={menuItemClassName}
+                    onClick={() => runMoreAction(() => setCanvasMaximized(!isCanvasMaximized))}
+                  >
+                    {isCanvasMaximized ? (
+                      <Minimize2Icon className="size-3.5" />
+                    ) : (
+                      <Maximize2Icon className="size-3.5" />
+                    )}
+                    {isCanvasMaximized ? "Restore spreadsheet" : "Maximize spreadsheet"}
+                  </button>
+                </>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
       </div>
 
       {/* Name box + formula/value bar */}
-      <div className="flex shrink-0 items-stretch gap-2 bg-[var(--surface-spreadsheet)] px-3 pt-2">
+      <div className="flex shrink-0 items-stretch gap-2 border-b border-[var(--border-spreadsheet)] bg-[var(--surface-spreadsheet)] px-3 py-2">
         <div className="flex h-8 min-w-[64px] items-center justify-center border border-[var(--border-spreadsheet)] bg-[var(--surface-spreadsheet-header)] px-2 text-xs font-semibold tabular-nums text-[var(--text-spreadsheet-secondary)]">
           {selected ? addressFor(selected.row, selected.col) : "—"}
         </div>
@@ -814,21 +841,6 @@ ${instructions}`;
             aria-label="Formula bar"
           />
         </div>
-      </div>
-
-      <div className="flex shrink-0 items-center gap-3 border-b border-[var(--border-spreadsheet)] bg-[var(--surface-spreadsheet)] px-3 py-1.5 text-xs text-[var(--text-spreadsheet-secondary)]">
-        <span className="min-w-0 truncate font-medium text-[var(--text-spreadsheet-secondary)]">
-          {formatViewportLabel(preview.viewport)}
-        </span>
-        {search.trim() ? <span>{searchMatchCount} visible matches</span> : null}
-        {preview.warnings[0] ? (
-          <span
-            className="ml-auto max-w-[260px] truncate text-[var(--warning)]"
-            title={preview.warnings[0]}
-          >
-            {preview.warnings[0]}
-          </span>
-        ) : null}
       </div>
 
       {editError ? (
@@ -994,7 +1006,7 @@ ${instructions}`;
               ) : null}
             </div>
           ) : (
-            <span>{canEdit ? "Ready" : "Read-only"}</span>
+            !canEdit && <span>Read-only</span>
           )}
         </div>
 

@@ -200,7 +200,7 @@ describe("SpreadsheetPreview", () => {
         expect(prompt).toContain("Search query: Revenue");
         expect(prompt).toContain("Increase revenue by ten percent");
 
-        const dataSheetButton = Array.from(doc.querySelectorAll("button")).find(
+        const dataSheetButton = Array.from(doc.querySelectorAll("[role='tab']")).find(
           (button) => button.textContent === "Data",
         );
         if (!dataSheetButton) throw new Error("missing Data sheet button");
@@ -286,16 +286,17 @@ describe("SpreadsheetPreview", () => {
       const doc = harness.dom.window.document;
       // Should render compact viewport label in pagination bar
       expect(doc.body.textContent).toContain("Rows 1-1 of 1");
-      // Should NOT render duplicate top header with filename
-      const titleElement = Array.from(doc.querySelectorAll("div")).find(
-        (div) => div.textContent === "model.xlsx",
-      );
-      expect(titleElement).toBeUndefined();
+      // Compact canvas mode should still expose the Office-like workbook chrome.
+      expect(doc.body.textContent).toContain("Cowork Workbook");
+      expect(doc.body.textContent).toContain("model.xlsx");
 
-      // Should render table container with flex-1
-      const tableWrapper = doc.querySelector(".overflow-auto.rounded-md.border");
+      // Should render the grid as the flexing body of the compact canvas surface.
+      const tableWrapper = doc.querySelector("[data-spreadsheet-grid='true']");
       expect(tableWrapper?.className).toContain("flex-1");
       expect(tableWrapper?.className).not.toContain("max-h-[58vh]");
+      expect(doc.querySelector("[data-spreadsheet-preview='true']")?.className).toContain(
+        "bg-[var(--surface-spreadsheet)]",
+      );
     } finally {
       if (root) {
         try {

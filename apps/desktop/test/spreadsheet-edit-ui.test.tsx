@@ -272,6 +272,66 @@ describe("SpreadsheetPreview editing", () => {
       harness.restore();
     }
   });
+
+  test.serial("toolbar clear, undo, and redo write real cell edits", async () => {
+    const harness = setupJsdom({ includeAnimationFrame: true });
+    const { editCalls } = installSocket();
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+      await act(async () => {
+        root!.render(createElement(SpreadsheetPreview, { path: PATH }));
+        await flushUi();
+        await flushUi();
+      });
+
+      const doc = harness.dom.window.document;
+      await act(async () => {
+        gridCell(doc, "100").dispatchEvent(
+          new harness.dom.window.MouseEvent("click", { bubbles: true }),
+        );
+        await flushUi();
+      });
+
+      const clearButton = Array.from(doc.querySelectorAll("button")).find(
+        (button) => button.textContent?.trim() === "Clear",
+      );
+      if (!clearButton) throw new Error("missing clear button");
+      await act(async () => {
+        clearButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+        await flushUi();
+        await flushUi();
+      });
+
+      const undoButton = doc.querySelector<HTMLButtonElement>("button[aria-label='Undo']");
+      if (!undoButton) throw new Error("missing undo button");
+      await act(async () => {
+        undoButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+        await flushUi();
+        await flushUi();
+      });
+
+      const redoButton = doc.querySelector<HTMLButtonElement>("button[aria-label='Redo']");
+      if (!redoButton) throw new Error("missing redo button");
+      await act(async () => {
+        redoButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+        await flushUi();
+        await flushUi();
+      });
+
+      expect(editCalls.map((call) => call.rawInput)).toEqual(["", "100", ""]);
+      expect(editCalls.every((call) => call.address === "B2")).toBe(true);
+    } finally {
+      if (root) {
+        try {
+          await act(async () => root!.unmount());
+        } catch {}
+      }
+      harness.restore();
+    }
+  });
 });
 
 describe("editSpreadsheetCell store action", () => {

@@ -5,6 +5,7 @@ import type {
   SpreadsheetPreviewViewportRequest,
 } from "../../../../../src/shared/spreadsheetPreview";
 import type { AppStoreActions, StoreGet, StoreSet } from "../store.helpers";
+import { ensureServerRunning } from "../store.helpers";
 import {
   editJsonRpcWorkspaceSpreadsheet,
   previewJsonRpcWorkspacePresentation,
@@ -30,6 +31,7 @@ export function createPreviewActions(
       if (!workspaceId) {
         throw new Error("No active workspace is available for spreadsheet preview.");
       }
+      await ensureServerRunning(get, set, workspaceId);
       return previewJsonRpcWorkspaceSpreadsheet(get, set, workspaceId, path, opts ?? {});
     },
 
@@ -41,6 +43,7 @@ export function createPreviewActions(
       if (!workspaceId) {
         throw new Error("No active workspace is available for spreadsheet editing.");
       }
+      await ensureServerRunning(get, set, workspaceId);
       return editJsonRpcWorkspaceSpreadsheet(get, set, workspaceId, path, opts);
     },
 
@@ -49,6 +52,7 @@ export function createPreviewActions(
       if (!workspaceId) {
         throw new Error("No active workspace found.");
       }
+      await ensureServerRunning(get, set, workspaceId);
       return previewJsonRpcWorkspacePresentation(
         get,
         set,

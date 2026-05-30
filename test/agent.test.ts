@@ -266,10 +266,10 @@ describe("runTurn", () => {
     expect(runtimeParams.tools).not.toHaveProperty("bash");
     expect(runtimeParams.tools).not.toHaveProperty("read");
     expect(runtimeParams.tools).not.toHaveProperty("webFetch");
-    expect(runtimeParams.toolEnv).toMatchObject({
-      PATH: "/tmp/cowork-managed-bin",
-      COWORK_SOFFICE: "/tmp/cowork-managed-bin/soffice",
-    });
+    expect(runtimeParams.toolEnv.COWORK_SOFFICE).toBe("/tmp/cowork-managed-bin/soffice");
+    expect(String(runtimeParams.toolEnv.PATH).split(path.delimiter)).toContain(
+      "/tmp/cowork-managed-bin",
+    );
     expect(runtimeParams.system).toContain("## Active MCP Tools");
     expect(runtimeParams.system).toContain("`mcp__{serverName}__{toolName}`");
   });

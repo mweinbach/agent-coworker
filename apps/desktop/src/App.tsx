@@ -529,11 +529,10 @@ export default function App() {
         <MenuBarUtilityShell init={init} ready={ready} startupError={startupError} />
       ) : windowMode === "canvas" ? (
         <div
-          className="flex h-full w-full bg-[var(--surface-sidebar-pane)] relative flex-col"
+          className="relative flex h-full w-full flex-col bg-[var(--surface-spreadsheet)] text-[var(--text-spreadsheet)]"
           style={
             {
-              backdropFilter: "blur(var(--sidebar-blur, 0px))",
-              WebkitBackdropFilter: "blur(var(--sidebar-blur, 0px))",
+              colorScheme: "light",
             } as CSSProperties
           }
         >

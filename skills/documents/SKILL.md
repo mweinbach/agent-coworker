@@ -9,7 +9,7 @@ Use this skill when you need to create or modify `.docx` files **in this contain
 
 ## Tools + Contract
 
-- Use Cowork workspace dependencies for docx artifact work: resolve them through the workspace dependency loader or runtime skill, then treat the returned Node/Python runtimes and package directory as authoritative. Do not use system `node`, system `python`, global npm packages, or repo-local installs.
+- Use the Cowork-managed artifact runtime for docx artifact work: its bundled Node/Python runtimes and package directory are authoritative. Do not use system `node`, system `python`, global npm packages, or repo-local installs.
 - For document creation and deterministic OOXML edits, it is still acceptable to use the bundled Python/OOXML helper scripts in this skill package when the JS surface is incomplete.
 - Run any builder or helper file from a writable workspace or temp directory, not from the managed dependency directory itself.
 - Final user-facing responses should describe only the requested document result and link only to the final `.docx` deliverable unless the user explicitly asks for QA intermediates.

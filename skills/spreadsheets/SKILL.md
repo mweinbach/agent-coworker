@@ -14,10 +14,10 @@ For additional stylistic best practices, follow: `style_guidelines.md`
 Read `charts.md` when creating or editing substantive charts, dashboards, or chart-ready summaries.
 
 # Tools + Contract
-- Use Cowork workspace dependencies for spreadsheet artifact work: resolve them through the workspace dependency loader or runtime skill, then treat the returned Node/Python runtimes, package directory, and verification details as authoritative. Do not use system `node`, system `python`, global npm packages, or repo-local installs.
+- Use the Cowork-managed artifact runtime for spreadsheet artifact work: its bundled Node/Python runtimes, package directory, and verification details are authoritative. Do not use system `node`, system `python`, global npm packages, or repo-local installs.
 - Use `@oai/artifact-tool` JS library, which exists in the default Cowork workspace dependencies node_modules, for authoring, editing, inspecting, rendering, and exporting spreadsheet `.xlsx` workbooks.
 - Run builders from a writable conversation-specific temp or workspace directory, not from the managed dependency directory. Outputs and scratch files may live under the OS temp directory.
-- Start by setting up the work directory to work with normal Node module resolution: link or junction local `node_modules` to the workspace dependency node_modules so `import "@oai/artifact-tool"` resolves.
+- The Cowork artifact runtime is already wired into Node module resolution, so `import "@oai/artifact-tool"` resolves directly from your builder — no `node_modules` linking, `NODE_PATH` tweak, or other module-resolution setup is needed.
 - Prefer one executable `.mjs` builder; patch and rerun it when iterating. Do NOT use shell heredocs or keep extra builder copies.
 - If workspace dependencies or `@oai/artifact-tool` are unavailable, report a setup blocker; do not guess paths, install packages, use system deps, alter module resolution, copy/import bundled internals, or do a broad file system search.
 - Do not search package internals or dump prototypes to discover APIs. Use the API reference below; if blocked, run at most one exact `workbook.help("<api_or_feature>")` query before building.

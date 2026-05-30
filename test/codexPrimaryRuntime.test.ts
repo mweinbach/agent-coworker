@@ -19,25 +19,6 @@ function bytesResponse(payload: Uint8Array): Response {
   return new Response(payload, { status: 200 });
 }
 
-async function writeFakeOaiNamespace(home: string): Promise<string> {
-  const source = path.join(
-    home,
-    ".cache",
-    "codex-runtimes",
-    "codex-primary-runtime",
-    "node",
-    "node_modules",
-    "@oai",
-  );
-  await fs.mkdir(path.join(source, "artifact-tool"), { recursive: true });
-  await fs.writeFile(
-    path.join(source, "artifact-tool", "package.json"),
-    JSON.stringify({ name: "@oai/artifact-tool" }),
-    "utf-8",
-  );
-  return source;
-}
-
 function executableBasename(name: "node" | "python"): string {
   return process.platform === "win32" ? `${name}.exe` : name;
 }
@@ -132,7 +113,6 @@ describe("Codex primary runtime bootstrap", () => {
     const builtInSkillsDir = path.join(workspace, "built-in-skills");
     const globalSkillsDir = path.join(home, ".cowork", "skills");
     const globalPluginsDir = path.join(home, ".cowork", "plugins");
-    const oaiSource = await writeFakeOaiNamespace(home);
 
     const fetchImpl = mock(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -160,10 +140,6 @@ describe("Codex primary runtime bootstrap", () => {
       });
 
       expect(result?.archive.status).toBe("downloaded");
-      expect(result?.artifactTool).toMatchObject({
-        status: "available",
-        source: oaiSource,
-      });
       await expect(fs.stat(path.join(workspace, "node_modules"))).rejects.toThrow();
       expect(
         await fs.readFile(path.join(builtInSkillsDir, "documents", "SKILL.md"), "utf-8"),
@@ -538,7 +514,7 @@ describe("Codex primary runtime bootstrap", () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-runtime-workspace-"));
     const builtInRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-runtime-built-in-"));
     const bundledRuntimeDir = path.join(builtInRoot, "codex-primary-runtime");
-    const oaiSource = await writeFakeBundledRuntime(bundledRuntimeDir);
+    await writeFakeBundledRuntime(bundledRuntimeDir);
     const fetchImpl = mock(async () => new Response("unexpected", { status: 500 })) as typeof fetch;
 
     try {
@@ -552,42 +528,7 @@ describe("Codex primary runtime bootstrap", () => {
         allowNetwork: false,
       });
 
-      expect(result?.runtime).toMatchObject({
-        status: "available",
-        source: bundledRuntimeDir,
-        nodeModulesPath: path.join(bundledRuntimeDir, "node", "node_modules"),
-      });
-      expect(result?.runtimeEnv.COWORK_CODEX_PRIMARY_RUNTIME_DIR).toBe(bundledRuntimeDir);
-      expect(result?.runtimeEnv.COWORK_CODEX_RUNTIME_NODE).toBe(
-        path.join(bundledRuntimeDir, "node", "bin", executableBasename("node")),
-      );
-      expect(result?.runtimeEnv.COWORK_CODEX_RUNTIME_PYTHON).toBe(
-        path.join(bundledRuntimeDir, "python", executableBasename("python")),
-      );
-      expect(result?.runtimeEnv.COWORK_CODEX_RUNTIME_NODE_MODULES).toBe(
-        path.join(bundledRuntimeDir, "node", "node_modules"),
-      );
-      expect(result?.runtimeEnv.NODE_PATH?.split(path.delimiter)[0]).toBe(
-        path.join(bundledRuntimeDir, "node", "node_modules"),
-      );
-      expect(result?.runtimeEnv.COWORK_CODEX_RUNTIME_NODE_RESOLVER).toBe(
-        path.join(
-          home,
-          ".cache",
-          "codex-runtimes",
-          "codex-primary-runtime",
-          "node-resolver",
-          "register.mjs",
-        ),
-      );
-      expect(result?.runtimeEnv.NODE_OPTIONS).toContain("--import=file://");
-      await expect(
-        fs.readFile(result?.runtimeEnv.COWORK_CODEX_RUNTIME_NODE_RESOLVER ?? "", "utf-8"),
-      ).resolves.toContain("register(new URL");
-      expect(result?.artifactTool).toMatchObject({
-        status: "available",
-        source: oaiSource,
-      });
+      expect(result?.archive.status).toBe("skipped");
       await expect(fs.stat(path.join(workspace, "node_modules"))).rejects.toThrow();
       expect(
         await fs.readFile(path.join(builtInRoot, "skills", "presentations", "SKILL.md"), "utf-8"),

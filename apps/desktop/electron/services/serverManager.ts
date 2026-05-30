@@ -230,6 +230,36 @@ function findBundledCodexPrimaryRuntimeDir(): string | null {
   return fs.existsSync(candidate) ? candidate : null;
 }
 
+function findBundledArtifactRuntimeDir(): string | null {
+  const fromEnv = process.env.COWORK_BUNDLED_ARTIFACT_RUNTIME_DIR;
+  if (fromEnv && fs.existsSync(fromEnv)) {
+    return fromEnv;
+  }
+
+  const isUsable = (dir: string): boolean =>
+    fs.existsSync(path.join(dir, "runtime.json")) ||
+    fs.existsSync(path.join(dir, "node", "node_modules", "@oai", "artifact-tool"));
+
+  if (!app.isPackaged) {
+    try {
+      const devRepoRoot = resolveRepoRoot();
+      const candidate = path.join(devRepoRoot, "dist", "artifact-runtime");
+      if (isUsable(candidate)) {
+        return candidate;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  const builtInDist = resolvePackagedBuiltinDistDir();
+  if (!builtInDist) {
+    return null;
+  }
+  const candidate = path.join(builtInDist, "artifact-runtime");
+  return isUsable(candidate) ? candidate : null;
+}
+
 function findBundledFoundationModelsSdkDir(): string | null {
   for (const dir of getSidecarSearchDirs()) {
     const candidate = path.join(dir, FOUNDATION_MODELS_SDK_DIR_NAME);
@@ -427,6 +457,7 @@ function buildServerEnv(
   } = {},
 ): NodeJS.ProcessEnv {
   const bundledCodexPrimaryRuntime = findBundledCodexPrimaryRuntimeDir();
+  const bundledArtifactRuntime = findBundledArtifactRuntimeDir();
   const bundledFoundationModelsSdk =
     opts.includeBundledFoundationModelsSdk && !process.env.COWORK_TSFMSDK_DIR
       ? findBundledFoundationModelsSdkDir()
@@ -445,6 +476,9 @@ function buildServerEnv(
     COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: process.env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP ?? "1",
     ...(bundledCodexPrimaryRuntime
       ? { COWORK_BUNDLED_CODEX_PRIMARY_RUNTIME_DIR: bundledCodexPrimaryRuntime }
+      : {}),
+    ...(bundledArtifactRuntime
+      ? { COWORK_BUNDLED_ARTIFACT_RUNTIME_DIR: bundledArtifactRuntime }
       : {}),
     ...(bundledFoundationModelsSdk ? { COWORK_TSFMSDK_DIR: bundledFoundationModelsSdk } : {}),
     ...(bundledWindowsAiElectron

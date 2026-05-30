@@ -426,17 +426,22 @@ describe("runTurn", () => {
     }
   });
 
-  test("adds Codex workspace dependency instructions when runtime node modules are available", async () => {
-    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-turn-codex-runtime-"));
-    const nodeModulesPath = path.join(workspaceRoot, "codex-runtime", "node", "node_modules");
+  test("adds artifact runtime dependency instructions when runtime node modules are available", async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-turn-artifact-runtime-"));
+    const nodeModulesPath = path.join(workspaceRoot, "artifact-runtime", "node", "node_modules");
     const nodePath = path.join(
       workspaceRoot,
-      "codex-runtime",
+      "artifact-runtime",
       "node",
       "bin",
       process.platform === "win32" ? "node.exe" : "node",
     );
-    const resolverPath = path.join(workspaceRoot, "codex-runtime", "node-resolver", "register.mjs");
+    const resolverPath = path.join(
+      workspaceRoot,
+      "artifact-runtime",
+      "node-resolver",
+      "register.mjs",
+    );
     const config = makeConfig({
       workingDirectory: workspaceRoot,
       projectCoworkDir: path.join(workspaceRoot, ".cowork"),
@@ -467,20 +472,20 @@ describe("runTurn", () => {
         toolEnv: {
           PATH: "/usr/bin",
           COWORK_SOFFICE: path.join(workspaceRoot, "soffice"),
-          COWORK_CODEX_RUNTIME_NODE: nodePath,
-          COWORK_CODEX_RUNTIME_NODE_MODULES: nodeModulesPath,
-          COWORK_CODEX_RUNTIME_NODE_RESOLVER: resolverPath,
+          COWORK_ARTIFACT_RUNTIME_NODE: nodePath,
+          COWORK_ARTIFACT_RUNTIME_NODE_MODULES: nodeModulesPath,
+          COWORK_ARTIFACT_RUNTIME_NODE_RESOLVER: resolverPath,
         },
       }),
     );
 
     const toolCtx = createToolsForTurn.mock.calls[0][0] as any;
-    expect(toolCtx.toolEnv.COWORK_CODEX_RUNTIME_NODE_MODULES).toBe(nodeModulesPath);
+    expect(toolCtx.toolEnv.COWORK_ARTIFACT_RUNTIME_NODE_MODULES).toBe(nodeModulesPath);
 
     const runtimeParams = runtimeRunTurn.mock.calls[0][0] as any;
-    expect(runtimeParams.system).toContain("## Codex Workspace Dependencies");
+    expect(runtimeParams.system).toContain("## Artifact Runtime Dependencies");
     expect(runtimeParams.system).toContain(nodePath);
-    expect(runtimeParams.system).toContain("bare imports");
+    expect(runtimeParams.system).toContain("artifact runtime");
     expect(runtimeParams.system).toContain('import "@oai/artifact-tool"');
     expect(runtimeParams.system).not.toContain(
       process.platform === "win32" ? "cmd /c mklink /J" : "ln -s",

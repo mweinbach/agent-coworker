@@ -14,8 +14,8 @@ For additional stylistic best practices, follow: `style_guidelines.md`
 Read `charts.md` when creating or editing substantive charts, dashboards, or chart-ready summaries.
 
 # Tools + Contract
-- Use Codex workspace dependencies for spreadsheet artifact work: resolve them through the workspace dependency loader or runtime skill, then treat the returned Node/Python runtimes, package directory, and verification details as authoritative. Do not use system `node`, system `python`, global npm packages, or repo-local installs.
-- Use `@oai/artifact-tool` JS library, which exists in the default Codex workspace dependencies node_modules, for authoring, editing, inspecting, rendering, and exporting spreadsheet `.xlsx` workbooks.
+- Use Cowork workspace dependencies for spreadsheet artifact work: resolve them through the workspace dependency loader or runtime skill, then treat the returned Node/Python runtimes, package directory, and verification details as authoritative. Do not use system `node`, system `python`, global npm packages, or repo-local installs.
+- Use `@oai/artifact-tool` JS library, which exists in the default Cowork workspace dependencies node_modules, for authoring, editing, inspecting, rendering, and exporting spreadsheet `.xlsx` workbooks.
 - Run builders from a writable conversation-specific temp or workspace directory, not from the managed dependency directory. Outputs and scratch files may live under the OS temp directory.
 - Start by setting up the work directory to work with normal Node module resolution: link or junction local `node_modules` to the workspace dependency node_modules so `import "@oai/artifact-tool"` resolves.
 - Prefer one executable `.mjs` builder; patch and rerun it when iterating. Do NOT use shell heredocs or keep extra builder copies.

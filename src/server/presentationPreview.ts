@@ -42,14 +42,14 @@ export type PresentationPreviewResult =
     };
 
 async function resolveNodeBinary(): Promise<string> {
-  if (process.env.COWORK_CODEX_RUNTIME_NODE) {
-    return process.env.COWORK_CODEX_RUNTIME_NODE;
+  if (process.env.COWORK_ARTIFACT_RUNTIME_NODE) {
+    return process.env.COWORK_ARTIFACT_RUNTIME_NODE;
   }
   const home = process.env.HOME || process.env.USERPROFILE || "";
   const candidates = [
-    path.join(home, ".cache/codex-runtimes/codex-primary-runtime/node/bin/node"),
-    path.join(home, ".cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node"),
-    path.join(home, ".cache/codex-runtimes/codex-primary-runtime/bin/node"),
+    path.join(home, ".cache/cowork/artifact-runtime/node/bin/node"),
+    path.join(home, ".cache/cowork/artifact-runtime/dependencies/node/bin/node"),
+    path.join(home, ".cache/cowork/artifact-runtime/bin/node"),
   ];
   for (const c of candidates) {
     try {

@@ -93,6 +93,7 @@ describe("package manifest", () => {
     expect(paths).toContain("scripts/postinstall.ts");
     expect(paths).toContain("scripts/releaseBuildUtils.ts");
     expect(paths).toContain("scripts/setup_codex_primary_runtime.ts");
+    expect(paths).toContain("scripts/setup_artifact_runtime.ts");
 
     expect(paths.some((path) => path.startsWith(".agents/"))).toBeFalse();
     expect(paths.some((path) => path.startsWith("apps/"))).toBeFalse();

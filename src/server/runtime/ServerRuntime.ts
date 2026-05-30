@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { runTurn as runTurnFn } from "../../agent";
+import { ensureArtifactRuntimeReady } from "../../artifactRuntime";
 import {
   ensureCodexPrimaryRuntimeReady,
   shouldBootstrapCodexPrimaryRuntime,
@@ -166,7 +167,7 @@ export async function createAgentServerRuntime(
   const packagedDesktopBundle = env.COWORK_DESKTOP_BUNDLE === "1";
   const defaultAiCoworkerPaths = getAiCoworkerPathsDefault({ homedir: opts.homedir });
   const pluginOverrides = await readPluginOverrides(config);
-  const codexRuntimeSetup = await ensureCodexPrimaryRuntimeReady({
+  await ensureCodexPrimaryRuntimeReady({
     homedir: opts.homedir,
     workspaceDir: config.workingDirectory,
     builtInSkillsDir: packagedDesktopBundle ? undefined : path.join(config.builtInDir, "skills"),
@@ -181,8 +182,15 @@ export async function createAgentServerRuntime(
       console.warn(`[codex-primary-runtime] ${line}`);
     },
   });
-  if (codexRuntimeSetup) {
-    Object.assign(env, codexRuntimeSetup.runtimeEnv);
+  const artifactRuntimeSetup = await ensureArtifactRuntimeReady({
+    homedir: opts.homedir,
+    env,
+    log: (line) => {
+      console.warn(`[artifact-runtime] ${line}`);
+    },
+  });
+  if (artifactRuntimeSetup) {
+    Object.assign(env, artifactRuntimeSetup.runtimeEnv);
   }
   Object.assign(
     env,

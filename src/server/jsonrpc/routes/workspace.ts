@@ -1,4 +1,5 @@
 import { previewPresentationFile } from "../../presentationPreview";
+import { editSpreadsheetCell } from "../../spreadsheetEdit";
 import { previewSpreadsheetFile } from "../../spreadsheetPreview";
 import { JSONRPC_ERROR_CODES } from "../protocol";
 import { jsonRpcWorkspaceRequestSchemas } from "../schema.workspace";
@@ -119,6 +120,37 @@ export function createWorkspaceRouteHandlers(
           filePath: parsed.data.path,
           ...(parsed.data.sheetName ? { sheetName: parsed.data.sheetName } : {}),
           ...(parsed.data.viewport ? { viewport: parsed.data.viewport } : {}),
+        });
+        context.jsonrpc.sendResult(ws, message.id, result);
+      } catch (error) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    },
+
+    "cowork/workspace/spreadsheet/edit": async (ws, message) => {
+      const parsed = jsonRpcWorkspaceRequestSchemas["cowork/workspace/spreadsheet/edit"].safeParse(
+        message.params,
+      );
+      if (!parsed.success) {
+        const detail = parsed.error.issues[0]?.message;
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: detail ? `${message.method}: ${detail}` : `${message.method}: invalid params`,
+        });
+        return;
+      }
+
+      try {
+        const cwd = context.utils.resolveWorkspacePath(parsed.data, message.method);
+        const result = await editSpreadsheetCell({
+          cwd,
+          filePath: parsed.data.path,
+          ...(parsed.data.sheetName ? { sheetName: parsed.data.sheetName } : {}),
+          address: parsed.data.address,
+          rawInput: parsed.data.rawInput,
         });
         context.jsonrpc.sendResult(ws, message.id, result);
       } catch (error) {

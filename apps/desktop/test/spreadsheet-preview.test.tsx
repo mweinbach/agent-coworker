@@ -163,12 +163,12 @@ describe("SpreadsheetPreview", () => {
         });
         expect(doc.body.textContent).toContain("1 visible matches");
 
-        const valueButton = Array.from(doc.querySelectorAll("td button")).find(
-          (button) => button.textContent === "$12.50",
+        const valueCell = Array.from(doc.querySelectorAll("td button")).find(
+          (cell) => cell.textContent?.trim() === "$12.50",
         );
-        if (!valueButton) throw new Error("missing value cell");
+        if (!valueCell) throw new Error("missing value cell");
         await act(async () => {
-          valueButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+          valueCell.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
           await flushUi();
         });
         expect(doc.body.textContent).toContain("B2");

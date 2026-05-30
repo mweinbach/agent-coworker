@@ -59,9 +59,12 @@ const RightSidebarPane = memo(function RightSidebarPane({ collapsed }: { collaps
   const canvasSidebarWidth = useAppStore((s) => s.canvasSidebarWidth);
   const filePreview = useAppStore((s) => s.filePreview);
   const canvasEnabled = useAppStore((s) => s.desktopFeatureFlags?.canvas === true);
+  const isCanvasMaximized = useAppStore((s) => s.isCanvasMaximized);
 
   const isCanvasSupported = filePreview?.path && isCanvasSupportedFile(filePreview.path);
-  const showCanvas = canvasEnabled && isCanvasSupported;
+  // While maximized the canvas renders as a full-bleed overlay (see ChatShell),
+  // so the sidebar reverts to the context panel to avoid a second instance.
+  const showCanvas = canvasEnabled && isCanvasSupported && !isCanvasMaximized;
   const activeWidth = showCanvas ? canvasSidebarWidth : contextSidebarWidth;
 
   return (
@@ -136,6 +139,7 @@ const ChatShell = memo(function ChatShell({
   const setCanvasActiveTab = useAppStore((s) => s.setCanvasActiveTab);
   const canvasShowFormattingBar = useAppStore((s) => s.canvasShowFormattingBar);
   const setCanvasShowFormattingBar = useAppStore((s) => s.setCanvasShowFormattingBar);
+  const isCanvasMaximized = useAppStore((s) => s.isCanvasMaximized);
   const hasAnimatedSidebarsRef = useRef(false);
   const previousSidebarStateRef = useRef({
     sidebarCollapsed,
@@ -212,6 +216,10 @@ const ChatShell = memo(function ChatShell({
     isCanvasSupportedFile(canvasPath) &&
     !contextSidebarCollapsed;
   const canvasIsMarkdown = canvasPath !== null && getFilePreviewKind(canvasPath) === "markdown";
+  const maximizedCanvasPath =
+    isCanvasMaximized && canvasEnabled && canvasPath !== null && isCanvasSupportedFile(canvasPath)
+      ? canvasPath
+      : null;
   useEffect(() => {
     const sidebarStateChanged =
       previousSidebarStateRef.current.sidebarCollapsed !== sidebarCollapsed ||
@@ -293,7 +301,7 @@ const ChatShell = memo(function ChatShell({
         }
         onCloseCanvas={showCanvasInTopBar ? closeFilePreview : undefined}
       />
-      <div className="app-chat-body flex min-h-0 min-w-0 flex-1 flex-row">
+      <div className="app-chat-body relative flex min-h-0 min-w-0 flex-1 flex-row">
         <LeftSidebarPane collapsed={sidebarCollapsed} />
         <main className="app-main-content flex min-h-0 min-w-0 flex-1 flex-col">
           <div className="flex min-h-0 flex-1 overflow-hidden">
@@ -314,6 +322,11 @@ const ChatShell = memo(function ChatShell({
             {showContextSidebar ? <RightSidebarPane collapsed={contextSidebarCollapsed} /> : null}
           </div>
         </main>
+        {maximizedCanvasPath ? (
+          <div className="absolute inset-0 z-40 bg-background">
+            <Canvas path={maximizedCanvasPath} />
+          </div>
+        ) : null}
       </div>
     </div>
   );

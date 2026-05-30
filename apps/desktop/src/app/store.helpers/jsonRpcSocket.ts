@@ -1,4 +1,5 @@
 import type {
+  SpreadsheetCellEditResult,
   SpreadsheetPreviewResult,
   SpreadsheetPreviewViewportRequest,
 } from "../../../../../src/shared/spreadsheetPreview";
@@ -535,6 +536,23 @@ export async function previewJsonRpcWorkspaceSpreadsheet(
     ...(opts.sheetName ? { sheetName: opts.sheetName } : {}),
     ...(opts.viewport ? { viewport: opts.viewport } : {}),
   })) as SpreadsheetPreviewResult;
+}
+
+export async function editJsonRpcWorkspaceSpreadsheet(
+  get: StoreGet,
+  set: StoreSet | undefined,
+  workspaceId: string,
+  filePath: string,
+  opts: { sheetName?: string; address: string; rawInput: string },
+): Promise<SpreadsheetCellEditResult> {
+  const workspace = getWorkspaceById(get, workspaceId);
+  return (await requestJsonRpc(get, set, workspaceId, "cowork/workspace/spreadsheet/edit", {
+    cwd: workspace?.path,
+    path: filePath,
+    ...(opts.sheetName ? { sheetName: opts.sheetName } : {}),
+    address: opts.address,
+    rawInput: opts.rawInput,
+  })) as SpreadsheetCellEditResult;
 }
 
 export async function previewJsonRpcWorkspacePresentation(

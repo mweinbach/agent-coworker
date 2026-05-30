@@ -2,15 +2,26 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   Loader2Icon,
+  Maximize2Icon,
+  Minimize2Icon,
   SearchIcon,
   SparklesIcon,
   TableIcon,
 } from "lucide-react";
-import { type CSSProperties, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import type {
   SpreadsheetMergedRange,
   SpreadsheetPreviewCell,
+  SpreadsheetPreview as SpreadsheetPreviewData,
   SpreadsheetPreviewResult,
   SpreadsheetPreviewViewport,
 } from "../../../../src/shared/spreadsheetPreview";
@@ -19,6 +30,7 @@ import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { cn } from "../lib/utils";
+import { getDesktopWindowMode } from "../lib/windowMode";
 
 type SpreadsheetPreviewProps = {
   path: string;
@@ -29,6 +41,8 @@ type CellSpan = {
   colSpan: number;
   rowSpan: number;
 };
+
+type CellCoord = { row: number; col: number };
 
 function basenamePath(p: string): string {
   const parts = p.replace(/\\/g, "/").split("/").filter(Boolean);
@@ -46,6 +60,14 @@ function columnLabel(index: number): string {
   return label;
 }
 
+function addressFor(row: number, col: number): string {
+  return `${columnLabel(col)}${row + 1}`;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
 function cellSearchText(cell: SpreadsheetPreviewCell): string {
   return [cell.address, cell.value, cell.formattedValue, cell.rawValue, cell.formula]
     .filter((value) => value !== undefined && value !== null)
@@ -56,6 +78,52 @@ function cellSearchText(cell: SpreadsheetPreviewCell): string {
 function isSearchMatch(cell: SpreadsheetPreviewCell, query: string): boolean {
   const needle = query.trim().toLowerCase();
   return needle.length > 0 && cellSearchText(cell).includes(needle);
+}
+
+/** The string shown in the formula bar / used to seed an inline edit. */
+function editStringFor(cell: SpreadsheetPreviewCell | null): string {
+  if (!cell) return "";
+  return cell.formula ? `=${cell.formula}` : cell.value;
+}
+
+function cellAt(
+  preview: SpreadsheetPreviewData,
+  row: number,
+  col: number,
+): SpreadsheetPreviewCell | null {
+  const r = row - preview.viewport.startRow;
+  const c = col - preview.viewport.startCol;
+  return preview.cells[r]?.[c] ?? null;
+}
+
+/** Optimistically reflect an edit in the preview so the UI updates before reload. */
+function patchPreviewCell(
+  result: SpreadsheetPreviewResult,
+  row: number,
+  col: number,
+  rawInput: string,
+): SpreadsheetPreviewResult {
+  if (!result.ok) return result;
+  const isFormula = rawInput.startsWith("=");
+  const cells = result.preview.cells.map((cellRow) =>
+    cellRow.map((cell) => {
+      if (cell.row !== row || cell.col !== col) return cell;
+      const next: SpreadsheetPreviewCell = { ...cell };
+      if (isFormula) {
+        next.formula = rawInput.slice(1);
+      } else {
+        next.value = rawInput;
+        next.formattedValue = undefined;
+        next.formula = undefined;
+      }
+      return next;
+    }),
+  );
+  return { ...result, preview: { ...result.preview, cells } };
+}
+
+function isPrintableKey(event: ReactKeyboardEvent): boolean {
+  return event.key.length === 1 && !event.metaKey && !event.ctrlKey && !event.altKey;
 }
 
 function clippedMergeSpan(
@@ -113,10 +181,15 @@ export function SpreadsheetPreview({ path, compact = false }: SpreadsheetPreview
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
   const sendMessage = useAppStore((s) => s.sendMessage);
   const loadSpreadsheetPreview = useAppStore((s) => s.loadSpreadsheetPreview);
+  const editSpreadsheetCell = useAppStore((s) => s.editSpreadsheetCell);
+  const isCanvasMaximized = useAppStore((s) => s.isCanvasMaximized);
+  const setCanvasMaximized = useAppStore((s) => s.setCanvasMaximized);
   const hasActiveWorkspace = useMemo(
     () => workspaces.some((workspace) => workspace.id === selectedWorkspaceId),
     [selectedWorkspaceId, workspaces],
   );
+  const canEdit = hasActiveWorkspace;
+  const showMaximizeToggle = getDesktopWindowMode() !== "canvas";
 
   const [result, setResult] = useState<SpreadsheetPreviewResult | null>(null);
   const [loading, setLoading] = useState(true);
@@ -124,9 +197,19 @@ export function SpreadsheetPreview({ path, compact = false }: SpreadsheetPreview
   const [sheetName, setSheetName] = useState<string | null>(null);
   const [viewportStartRow, setViewportStartRow] = useState(0);
   const [viewportStartCol, setViewportStartCol] = useState(0);
+  const [reloadNonce, setReloadNonce] = useState(0);
   const [search, setSearch] = useState("");
-  const [selectedCellAddress, setSelectedCellAddress] = useState<string | null>(null);
+  const [selected, setSelected] = useState<CellCoord | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [editValue, setEditValue] = useState("");
+  const [formulaDraft, setFormulaDraft] = useState("");
+  const [editError, setEditError] = useState<string | null>(null);
   const [promptText, setPromptText] = useState("");
+
+  const gridRef = useRef<HTMLDivElement>(null);
+  const editInputRef = useRef<HTMLInputElement>(null);
+  const suppressBlurRef = useRef(false);
+  const wasEditingRef = useRef(false);
 
   useEffect(() => {
     setResult(null);
@@ -134,10 +217,13 @@ export function SpreadsheetPreview({ path, compact = false }: SpreadsheetPreview
     setViewportStartRow(0);
     setViewportStartCol(0);
     setSearch("");
-    setSelectedCellAddress(null);
+    setSelected(null);
+    setEditing(false);
+    setEditError(null);
     setPromptText("");
   }, []);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reloadNonce is an intentional refetch trigger after edits
   useEffect(() => {
     let active = true;
     if (!selectedWorkspaceId || !hasActiveWorkspace) {
@@ -177,14 +263,38 @@ export function SpreadsheetPreview({ path, compact = false }: SpreadsheetPreview
     sheetName,
     viewportStartCol,
     viewportStartRow,
+    reloadNonce,
     loadSpreadsheetPreview,
   ]);
 
   const preview = result?.ok ? result.preview : null;
   const selectedCell = useMemo(() => {
-    if (!preview || !selectedCellAddress) return null;
-    return preview.cells.flat().find((cell) => cell.address === selectedCellAddress) ?? null;
-  }, [preview, selectedCellAddress]);
+    if (!preview || !selected) return null;
+    return cellAt(preview, selected.row, selected.col);
+  }, [preview, selected]);
+
+  // Keep the formula bar in sync with the selected cell (unless mid-edit).
+  useEffect(() => {
+    if (editing) return;
+    setFormulaDraft(editStringFor(selectedCell));
+  }, [selectedCell, editing]);
+
+  // Return focus to the grid after an inline edit ends so navigation continues.
+  useEffect(() => {
+    if (editing) {
+      wasEditingRef.current = true;
+      const el = editInputRef.current;
+      if (el) {
+        el.focus();
+        const len = el.value.length;
+        el.setSelectionRange(len, len);
+      }
+    } else if (wasEditingRef.current) {
+      wasEditingRef.current = false;
+      gridRef.current?.focus({ preventScroll: true });
+    }
+  }, [editing]);
+
   const widthByCol = useMemo(() => {
     const map = new Map<number, number>();
     if (!preview) return map;
@@ -203,7 +313,8 @@ export function SpreadsheetPreview({ path, compact = false }: SpreadsheetPreview
     setSheetName(name);
     setViewportStartRow(0);
     setViewportStartCol(0);
-    setSelectedCellAddress(null);
+    setSelected(null);
+    setEditing(false);
   }, []);
 
   const moveRows = useCallback(
@@ -216,7 +327,7 @@ export function SpreadsheetPreview({ path, compact = false }: SpreadsheetPreview
           Math.min(current + direction * amount, Math.max(preview.viewport.totalRows - 1, 0)),
         ),
       );
-      setSelectedCellAddress(null);
+      setSelected(null);
     },
     [preview],
   );
@@ -231,10 +342,154 @@ export function SpreadsheetPreview({ path, compact = false }: SpreadsheetPreview
           Math.min(current + direction * amount, Math.max(preview.viewport.totalCols - 1, 0)),
         ),
       );
-      setSelectedCellAddress(null);
+      setSelected(null);
     },
     [preview],
   );
+
+  // Move the active cell, paging the viewport into view when crossing an edge.
+  const moveSelection = useCallback(
+    (deltaRow: number, deltaCol: number) => {
+      if (!preview) return;
+      const v = preview.viewport;
+      const base = selected ?? { row: v.startRow, col: v.startCol };
+      const row = clamp(base.row + deltaRow, 0, Math.max(v.totalRows - 1, 0));
+      const col = clamp(base.col + deltaCol, 0, Math.max(v.totalCols - 1, 0));
+      setSelected({ row, col });
+      if (row < v.startRow || row > v.endRow) setViewportStartRow(row);
+      if (col < v.startCol || col > v.endCol) setViewportStartCol(col);
+    },
+    [preview, selected],
+  );
+
+  const commitCell = useCallback(
+    async (row: number, col: number, rawInput: string) => {
+      if (!preview) return;
+      setEditError(null);
+      const targetSheet = preview.selectedSheetName;
+      setResult((prev) => (prev ? patchPreviewCell(prev, row, col, rawInput) : prev));
+      try {
+        const res = await editSpreadsheetCell(path, {
+          sheetName: targetSheet,
+          address: addressFor(row, col),
+          rawInput,
+        });
+        if (!res.ok) setEditError(res.error.message);
+      } catch (err) {
+        setEditError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setReloadNonce((nonce) => nonce + 1);
+      }
+    },
+    [preview, path, editSpreadsheetCell],
+  );
+
+  const beginEdit = useCallback(
+    (coord: CellCoord, seed: string | null) => {
+      if (!canEdit || !preview) return;
+      const cell = cellAt(preview, coord.row, coord.col);
+      setSelected(coord);
+      setEditValue(seed ?? editStringFor(cell));
+      setEditing(true);
+    },
+    [canEdit, preview],
+  );
+
+  const finishEdit = useCallback(
+    (value: string) => {
+      setEditing(false);
+      if (!preview || !selected) return;
+      const current = editStringFor(cellAt(preview, selected.row, selected.col));
+      if (value === current) return;
+      void commitCell(selected.row, selected.col, value);
+    },
+    [preview, selected, commitCell],
+  );
+
+  const handleGridKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (editing || !preview) return;
+      const active = selected ?? { row: preview.viewport.startRow, col: preview.viewport.startCol };
+      switch (event.key) {
+        case "ArrowUp":
+          event.preventDefault();
+          moveSelection(-1, 0);
+          return;
+        case "ArrowDown":
+          event.preventDefault();
+          moveSelection(1, 0);
+          return;
+        case "ArrowLeft":
+          event.preventDefault();
+          moveSelection(0, -1);
+          return;
+        case "ArrowRight":
+          event.preventDefault();
+          moveSelection(0, 1);
+          return;
+        case "Tab":
+          event.preventDefault();
+          moveSelection(0, event.shiftKey ? -1 : 1);
+          return;
+        case "Enter":
+          event.preventDefault();
+          moveSelection(1, 0);
+          return;
+        case "F2":
+          event.preventDefault();
+          beginEdit(active, null);
+          return;
+        case "Backspace":
+        case "Delete":
+          if (!canEdit) return;
+          event.preventDefault();
+          void commitCell(active.row, active.col, "");
+          return;
+        default:
+          if (isPrintableKey(event) && canEdit) {
+            event.preventDefault();
+            beginEdit(active, event.key);
+          }
+      }
+    },
+    [editing, preview, selected, moveSelection, beginEdit, commitCell, canEdit],
+  );
+
+  const handleEditKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLInputElement>) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        suppressBlurRef.current = true;
+        finishEdit(editValue);
+        moveSelection(1, 0);
+      } else if (event.key === "Tab") {
+        event.preventDefault();
+        suppressBlurRef.current = true;
+        finishEdit(editValue);
+        moveSelection(0, event.shiftKey ? -1 : 1);
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        suppressBlurRef.current = true;
+        setEditing(false);
+        setEditValue("");
+      }
+    },
+    [editValue, finishEdit, moveSelection],
+  );
+
+  const handleEditBlur = useCallback(() => {
+    if (suppressBlurRef.current) {
+      suppressBlurRef.current = false;
+      return;
+    }
+    finishEdit(editValue);
+  }, [editValue, finishEdit]);
+
+  const selectCell = useCallback((coord: CellCoord) => {
+    setSelected(coord);
+    setEditing(false);
+    gridRef.current?.focus({ preventScroll: true });
+  }, []);
 
   const sendEditPrompt = useCallback(async () => {
     const instructions = promptText.trim();
@@ -244,7 +499,7 @@ export function SpreadsheetPreview({ path, compact = false }: SpreadsheetPreview
       return;
     }
 
-    const selectedCellContext = selectedCell
+    const selectedContext = selectedCell
       ? `\nSelected cell: ${selectedCell.address}\nSelected value: ${
           selectedCell.value || "(blank)"
         }${selectedCell.formula ? `\nSelected formula: =${selectedCell.formula}` : ""}`
@@ -254,7 +509,7 @@ export function SpreadsheetPreview({ path, compact = false }: SpreadsheetPreview
 Please edit the spreadsheet file \`${basenamePath(path)}\` located at \`${path}\`.
 
 Active sheet: ${preview.selectedSheetName}
-Visible viewport: ${formatViewportLabel(preview.viewport)}${selectedCellContext}${searchContext}
+Visible viewport: ${formatViewportLabel(preview.viewport)}${selectedContext}${searchContext}
 
 Instructions:
 ${instructions}`;
@@ -284,6 +539,24 @@ ${instructions}`;
 
   if (!preview) return null;
 
+  const maximizeButton = showMaximizeToggle ? (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      className="shrink-0"
+      onClick={() => setCanvasMaximized(!isCanvasMaximized)}
+      title={isCanvasMaximized ? "Restore" : "Maximize"}
+      aria-label={isCanvasMaximized ? "Restore spreadsheet" : "Maximize spreadsheet"}
+    >
+      {isCanvasMaximized ? (
+        <Minimize2Icon className="size-3.5" />
+      ) : (
+        <Maximize2Icon className="size-3.5" />
+      )}
+    </Button>
+  ) : null;
+
   return (
     <div
       className={cn("flex min-h-0 flex-col gap-3", compact && "h-full")}
@@ -310,14 +583,14 @@ ${instructions}`;
       {preview.sheets.length > 1 ? (
         <div className="flex gap-1 overflow-x-auto" role="tablist" aria-label="Workbook sheets">
           {preview.sheets.map((sheet) => {
-            const selected = sheet.name === preview.selectedSheetName;
+            const selectedSheet = sheet.name === preview.selectedSheetName;
             return (
               <Button
                 key={sheet.name}
                 type="button"
                 role="tab"
-                aria-selected={selected}
-                variant={selected ? "secondary" : "ghost"}
+                aria-selected={selectedSheet}
+                variant={selectedSheet ? "secondary" : "ghost"}
                 size="sm"
                 onClick={() => changeSheet(sheet.name)}
                 className="h-8 shrink-0"
@@ -331,6 +604,33 @@ ${instructions}`;
           })}
         </div>
       ) : null}
+
+      {/* Name box + formula/value bar */}
+      <div className="flex items-stretch gap-2">
+        <div className="flex h-9 min-w-[64px] items-center justify-center rounded-md border border-border/70 bg-muted/40 px-2 text-xs font-semibold tabular-nums text-muted-foreground">
+          {selected ? addressFor(selected.row, selected.col) : "—"}
+        </div>
+        <div className="relative flex-1">
+          <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 font-serif text-sm italic text-muted-foreground">
+            fx
+          </span>
+          <Input
+            value={formulaDraft}
+            onInput={(event) => setFormulaDraft(event.currentTarget.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && selected) {
+                event.preventDefault();
+                void commitCell(selected.row, selected.col, formulaDraft);
+                moveSelection(1, 0);
+              }
+            }}
+            disabled={!selected || !canEdit}
+            placeholder={selected ? "Enter a value or =formula" : "Select a cell"}
+            className="h-9 pl-8 font-mono text-sm"
+            aria-label="Formula bar"
+          />
+        </div>
+      </div>
 
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative min-w-[220px] flex-1">
@@ -350,10 +650,10 @@ ${instructions}`;
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-        <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
           {compact ? (
             <span
-              className="font-medium text-foreground mr-1.5 truncate max-w-[200px]"
+              className="mr-1.5 max-w-[200px] truncate font-medium text-foreground"
               title={formatViewportLabel(preview.viewport)}
             >
               {formatViewportLabel(preview.viewport)}
@@ -400,19 +700,36 @@ ${instructions}`;
             <ChevronRightIcon className="ml-1 size-3.5" />
           </Button>
         </div>
-        {preview.warnings[0] ? <span className="truncate">{preview.warnings[0]}</span> : null}
+        <div className="ml-auto flex items-center gap-2">
+          {preview.warnings[0] ? (
+            <span className="max-w-[240px] truncate" title={preview.warnings[0]}>
+              {preview.warnings[0]}
+            </span>
+          ) : null}
+          {maximizeButton}
+        </div>
       </div>
 
+      {editError ? (
+        <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-1.5 text-xs text-destructive">
+          {editError}
+        </div>
+      ) : null}
+
+      {/* biome-ignore lint/a11y/useSemanticElements: standard ARIA grid wrapper around a scrollable table; keyboard handled at the container per the grid pattern */}
       <div
+        ref={gridRef}
+        tabIndex={0}
+        onKeyDown={handleGridKeyDown}
+        role="grid"
+        data-spreadsheet-grid="true"
+        aria-label={`${preview.filename} spreadsheet`}
         className={cn(
-          "overflow-auto rounded-md border border-border/70 bg-background",
-          compact ? "flex-1 min-h-0" : "max-h-[58vh]",
+          "overflow-auto rounded-md border border-border/70 bg-background outline-none focus-visible:ring-1 focus-visible:ring-primary/40",
+          compact ? "min-h-0 flex-1" : "max-h-[58vh]",
         )}
       >
-        <table
-          className="w-full border-collapse text-sm"
-          aria-label={`${preview.filename} spreadsheet preview`}
-        >
+        <table className="w-full border-collapse text-sm" aria-label={`${preview.filename} cells`}>
           <thead>
             <tr>
               <th className="sticky left-0 top-0 z-30 h-8 min-w-12 border-b border-r border-border bg-muted/70 px-2 text-right text-xs font-medium text-muted-foreground">
@@ -423,7 +740,10 @@ ${instructions}`;
                 return (
                   <th
                     key={col}
-                    className="sticky top-0 z-20 h-8 min-w-24 border-b border-r border-border bg-muted/70 px-2 text-left text-xs font-medium text-muted-foreground"
+                    className={cn(
+                      "sticky top-0 z-20 h-8 min-w-24 border-b border-r border-border bg-muted/70 px-2 text-left text-xs font-medium text-muted-foreground",
+                      selected?.col === col && "bg-primary/15 text-foreground",
+                    )}
                     style={
                       widthByCol.get(col) ? { minWidth: `${widthByCol.get(col)}px` } : undefined
                     }
@@ -435,43 +755,65 @@ ${instructions}`;
             </tr>
           </thead>
           <tbody>
-            {preview.cells.map((row) => (
-              <tr key={row[0]?.row ?? "empty"}>
-                <th className="sticky left-0 z-10 border-b border-r border-border bg-muted/45 px-2 text-right text-xs font-medium text-muted-foreground">
-                  {(row[0]?.row ?? 0) + 1}
-                </th>
-                {row.map((cell) => {
-                  const span = clippedMergeSpan(cell, preview.mergedCells, preview.viewport);
-                  if (span === "covered") return null;
-                  const selected = selectedCellAddress === cell.address;
-                  const matched = isSearchMatch(cell, search);
-                  return (
-                    <td
-                      key={cell.address}
-                      colSpan={span?.colSpan}
-                      rowSpan={span?.rowSpan}
-                      className={cn(
-                        "h-8 max-w-[280px] cursor-default border-b border-r border-border px-2 align-middle text-foreground",
-                        "focus-within:outline-none",
-                        matched && "bg-primary/10 ring-1 ring-inset ring-primary/30",
-                        selected && "bg-primary/15 ring-2 ring-inset ring-primary",
-                      )}
-                      style={buildCellStyle(cell, widthByCol.get(cell.col))}
-                      title={cell.formula ? `=${cell.formula}` : cell.value}
-                    >
-                      <button
-                        type="button"
-                        className="block size-full truncate text-left outline-none"
-                        onClick={() => setSelectedCellAddress(cell.address)}
-                        onFocus={() => setSelectedCellAddress(cell.address)}
+            {preview.cells.map((row) => {
+              const rowIndex = row[0]?.row ?? 0;
+              return (
+                <tr key={rowIndex}>
+                  <th
+                    className={cn(
+                      "sticky left-0 z-10 border-b border-r border-border bg-muted/45 px-2 text-right text-xs font-medium text-muted-foreground",
+                      selected?.row === rowIndex && "bg-primary/15 text-foreground",
+                    )}
+                  >
+                    {rowIndex + 1}
+                  </th>
+                  {row.map((cell) => {
+                    const span = clippedMergeSpan(cell, preview.mergedCells, preview.viewport);
+                    if (span === "covered") return null;
+                    const isSelected = selected?.row === cell.row && selected?.col === cell.col;
+                    const isEditingCell = isSelected && editing;
+                    const matched = isSearchMatch(cell, search);
+                    return (
+                      <td
+                        key={cell.address}
+                        colSpan={span?.colSpan}
+                        rowSpan={span?.rowSpan}
+                        className={cn(
+                          "h-8 max-w-[280px] border-b border-r border-border p-0 align-middle text-foreground",
+                          matched && "bg-primary/10",
+                          isSelected && "ring-2 ring-inset ring-primary",
+                        )}
+                        style={buildCellStyle(cell, widthByCol.get(cell.col))}
+                        title={cell.formula ? `=${cell.formula}` : cell.value}
                       >
-                        {cell.value || "\u00a0"}
-                      </button>
-                    </td>
-                  );
-                })}
-              </tr>
-            ))}
+                        {isEditingCell ? (
+                          <input
+                            ref={editInputRef}
+                            value={editValue}
+                            onInput={(event) => setEditValue(event.currentTarget.value)}
+                            onKeyDown={handleEditKeyDown}
+                            onBlur={handleEditBlur}
+                            className="block size-full bg-background px-2 font-mono text-sm outline-none ring-2 ring-inset ring-primary"
+                            aria-label={`Edit ${cell.address}`}
+                          />
+                        ) : (
+                          <button
+                            type="button"
+                            tabIndex={-1}
+                            data-cell-address={cell.address}
+                            onClick={() => selectCell({ row: cell.row, col: cell.col })}
+                            onDoubleClick={() => beginEdit({ row: cell.row, col: cell.col }, null)}
+                            className="block size-full cursor-cell truncate px-2 py-1.5 text-left outline-none"
+                          >
+                            {cell.value || " "}
+                          </button>
+                        )}
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -491,7 +833,11 @@ ${instructions}`;
               ) : null}
             </div>
           ) : (
-            <span>Select a cell to inspect value and formula details.</span>
+            <span>
+              {canEdit
+                ? "Click a cell to edit. Double-click, Enter, or just type to start; Tab/arrows to move."
+                : "Select a cell to inspect value and formula details."}
+            </span>
           )}
         </div>
 

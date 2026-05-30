@@ -95,3 +95,30 @@ type SpreadsheetPreviewFailure = {
 };
 
 export type SpreadsheetPreviewResult = SpreadsheetPreviewSuccess | SpreadsheetPreviewFailure;
+
+// ---- Single-cell edit (write-back) ----
+
+export type SpreadsheetCellEditRequest = {
+  cwd: string;
+  filePath: string;
+  /** Ignored for CSV (single sheet). Defaults to the first sheet for XLSX. */
+  sheetName?: string;
+  /** A1-style address, e.g. "B2". */
+  address: string;
+  /**
+   * Exactly what the user typed. The server infers the cell type for XLSX
+   * (leading "=" → formula, numeric → number, empty → blank, else text). CSV
+   * stores the string verbatim.
+   */
+  rawInput: string;
+};
+
+export type SpreadsheetCellEditFailureKind =
+  | "unsupported_format"
+  | "not_found"
+  | "parse_error"
+  | "write_error";
+
+export type SpreadsheetCellEditResult =
+  | { ok: true }
+  | { ok: false; error: { kind: SpreadsheetCellEditFailureKind; message: string } };

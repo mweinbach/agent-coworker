@@ -5,6 +5,7 @@ import type {
   DesktopFeatureFlags,
 } from "../../../../src/shared/featureFlags";
 import type {
+  SpreadsheetCellEditResult,
   SpreadsheetPreviewResult,
   SpreadsheetPreviewViewportRequest,
 } from "../../../../src/shared/spreadsheetPreview";
@@ -182,6 +183,7 @@ export type AppStoreState = {
   filePreview: { path: string } | null;
   canvasActiveTab: "preview" | "edit";
   canvasShowFormattingBar: boolean;
+  isCanvasMaximized: boolean;
   notifications: Notification[];
 
   providerStatusByName: Partial<Record<ProviderName, ProviderStatus>>;
@@ -505,6 +507,7 @@ export type AppStoreState = {
   closeFilePreview: () => void;
   setCanvasActiveTab: (tab: "preview" | "edit") => void;
   setCanvasShowFormattingBar: (show: boolean) => void;
+  setCanvasMaximized: (maximized: boolean) => void;
   loadSpreadsheetPreview: (
     path: string,
     opts?: {
@@ -512,6 +515,10 @@ export type AppStoreState = {
       viewport?: SpreadsheetPreviewViewportRequest;
     },
   ) => Promise<SpreadsheetPreviewResult>;
+  editSpreadsheetCell: (
+    path: string,
+    opts: { sheetName?: string; address: string; rawInput: string },
+  ) => Promise<SpreadsheetCellEditResult>;
   loadPresentationPreview: (path: string) => Promise<PresentationPreviewResult>;
 
   setA2uiDockExpanded: (threadId: string, expanded: boolean) => void;

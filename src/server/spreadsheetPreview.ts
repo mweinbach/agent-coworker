@@ -393,7 +393,7 @@ function validateCsvQuoteBalance(input: string): void {
   }
 }
 
-function validateXlsxZipSignature(bytes: Buffer): void {
+export function validateXlsxZipSignature(bytes: Buffer): void {
   if (bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b) {
     return;
   }

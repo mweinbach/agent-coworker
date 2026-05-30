@@ -108,6 +108,7 @@ Any request before the handshake completes is rejected with a JSON-RPC error:
 - `turn/interrupt`
 - `cowork/workspace/bootstrap`
 - `cowork/workspace/spreadsheet/preview`
+- `cowork/workspace/spreadsheet/edit`
 
 `turn/start` and `turn/steer` also accept an optional `clientMessageId` string so JSON-RPC clients can correlate optimistic user UI state with the projected `user_message` notification stream.
 
@@ -330,6 +331,8 @@ One-off chat thread workspaces must live under the global `~/.cowork/chats` dire
 `cowork/session/file/upload` writes a file into the workspace uploads directory and returns a `file_uploaded` session event envelope. JSON-RPC clients can then reference that saved file from `turn/start` or `turn/steer` with an `uploadedFile` input part when the file is too large to send inline.
 
 `cowork/workspace/spreadsheet/preview` reads a CSV or `.xlsx` file from the active workspace and returns structured sheet, viewport, cell, merged-range, and column-width data. The request accepts `path`, optional `sheetName`, and optional `viewport` (`startRow`, `startCol`, `rowCount`, `colCount`) so clients can render workbook previews without parsing spreadsheet bytes in the UI layer. Paths are resolved under the workspace root and symlink escapes are rejected.
+
+`cowork/workspace/spreadsheet/edit` writes a single cell value back to a CSV or `.xlsx` file in the active workspace and returns `{ "ok": true }` or `{ "ok": false, "error": { "kind", "message" } }` (`kind` ∈ `unsupported_format | not_found | parse_error | write_error`). The request accepts `path`, optional `sheetName` (ignored for CSV), `address` (A1-style, e.g. `B2`), and `rawInput` (exactly what the user typed). For `.xlsx` the server infers the cell type from `rawInput` (leading `=` → formula, numeric → number, empty → blank, otherwise inline string) and applies the change as a **surgical, lossless patch**: only the target worksheet XML part is rewritten and the edited cell keeps its style index, so fonts, fills, number formats, charts, and other sheets are preserved byte-for-byte (SheetJS's community build cannot write styles, so the workbook is never round-tripped through it). CSV stores `rawInput` verbatim while preserving the byte-order mark, line terminator, and trailing-newline state. Paths are resolved under the workspace root and symlink escapes are rejected. Unlike the read-only preview method this is a write, so remote trusted devices require the `workspaceSettings` permission.
 
 `cowork/session/agent/inspect` is a thread-scoped, root-only read for child agents. It returns the same detailed inspection payload as the root `inspectAgent` tool: the latest child summary, the full latest assistant text, a parsed structured child report when the final assistant text includes a recognized JSON footer, and compact session/last-turn usage snapshots for the child.
 

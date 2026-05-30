@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type {
   JsonRpcLiteError,
   JsonRpcLiteId,
@@ -175,6 +178,21 @@ async function invokeWorkspacePresentationPreview(
   return {};
 }
 
+async function invokeWorkspaceSpreadsheetEdit(
+  handlers: JsonRpcRequestHandlerMap,
+  params: unknown,
+): Promise<void> {
+  const handler = handlers["cowork/workspace/spreadsheet/edit"];
+  if (!handler) {
+    throw new Error("cowork/workspace/spreadsheet/edit handler was not registered");
+  }
+  await handler({} as never, {
+    id: 1,
+    method: "cowork/workspace/spreadsheet/edit",
+    params,
+  } satisfies JsonRpcLiteRequest);
+}
+
 describe("workspace JSON-RPC route", () => {
   test("bootstrap filters empty persisted threads, lets live sessions win, and sorts by updatedAt", async () => {
     const harness = createWorkspaceRouteHarness();
@@ -227,6 +245,43 @@ describe("workspace JSON-RPC route", () => {
     const handlers = createWorkspaceRouteHandlers(harness.context);
 
     await invokeWorkspacePresentationPreview(handlers, { cwd: "/workspace/project" }); // missing path
+
+    expect(harness.results).toEqual([]);
+    expect(harness.errors).toHaveLength(1);
+    expect(harness.errors[0]?.error.code).toBe(JSONRPC_ERROR_CODES.invalidParams);
+  });
+
+  test("spreadsheet/edit writes a cell and returns ok", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-edit-route-"));
+    try {
+      const filePath = path.join(dir, "data.csv");
+      await fs.writeFile(filePath, "a,b\nc,d\n", "utf8");
+
+      const harness = createWorkspaceRouteHarness();
+      const handlers = createWorkspaceRouteHandlers(harness.context);
+      await invokeWorkspaceSpreadsheetEdit(handlers, {
+        cwd: dir,
+        path: filePath,
+        address: "A1",
+        rawInput: "edited",
+      });
+
+      expect(harness.errors).toEqual([]);
+      const parsed = jsonRpcWorkspaceResultSchemas["cowork/workspace/spreadsheet/edit"].parse(
+        harness.results[0]?.result,
+      );
+      expect(parsed).toEqual({ ok: true });
+      expect(await fs.readFile(filePath, "utf8")).toBe("edited,b\nc,d\n");
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("spreadsheet/edit rejects invalid params schema", async () => {
+    const harness = createWorkspaceRouteHarness();
+    const handlers = createWorkspaceRouteHandlers(harness.context);
+
+    await invokeWorkspaceSpreadsheetEdit(handlers, { cwd: "/workspace/project", path: "x.csv" }); // missing address + rawInput
 
     expect(harness.results).toEqual([]);
     expect(harness.errors).toHaveLength(1);

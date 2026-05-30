@@ -30,6 +30,7 @@ export function createExplorerActions(
   | "closeFilePreview"
   | "setCanvasActiveTab"
   | "setCanvasShowFormattingBar"
+  | "setCanvasMaximized"
 > {
   const bumpWorkspaceExplorerRefresh = (workspaceId: string) => {
     set((state) => ({
@@ -50,14 +51,15 @@ export function createExplorerActions(
           filePreview: { path: opts.path },
           contextSidebarCollapsed: false,
           canvasSidebarWidth: Math.max(state.canvasSidebarWidth, 500),
+          isCanvasMaximized: false,
         });
       } else {
-        set({ filePreview: { path: opts.path } });
+        set({ filePreview: { path: opts.path }, isCanvasMaximized: false });
       }
     },
 
     closeFilePreview: () => {
-      set({ filePreview: null });
+      set({ filePreview: null, isCanvasMaximized: false });
     },
 
     setCanvasActiveTab: (tab: "preview" | "edit") => {
@@ -66,6 +68,10 @@ export function createExplorerActions(
 
     setCanvasShowFormattingBar: (show: boolean) => {
       set({ canvasShowFormattingBar: show });
+    },
+
+    setCanvasMaximized: (maximized: boolean) => {
+      set({ isCanvasMaximized: maximized });
     },
 
     refreshWorkspaceFiles: async (workspaceId: string) => {

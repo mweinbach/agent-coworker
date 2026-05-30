@@ -322,14 +322,9 @@ describe("plugin reference injection (e2e via turn/start references)", () => {
     );
     await fs.writeFile(
       path.join(pluginSkillDir, "SKILL.md"),
-      [
-        "---",
-        'name: "demo-skill"',
-        'description: "Demo skill"',
-        "---",
-        "",
-        "Demo skill body",
-      ].join("\n"),
+      ["---", 'name: "demo-skill"', 'description: "Demo skill"', "---", "", "Demo skill body"].join(
+        "\n",
+      ),
       "utf-8",
     );
 

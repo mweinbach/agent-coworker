@@ -179,35 +179,14 @@ export function Canvas({ path }: { path: string }) {
   const fileName = basenamePath(path);
   const isAgentBusy = threadRuntime?.busy === true;
 
-  if (isSpreadsheet) {
-    return (
-      <CanvasFilePreviewLayout
-        isCanvasMode={isCanvasMode}
-        isAgentBusy={isAgentBusy}
-        fileName={fileName}
-        previewKind={previewKind}
-        onClose={closeFilePreview}
-      >
-        <SpreadsheetPreview path={path} compact />
-      </CanvasFilePreviewLayout>
-    );
-  }
-
-  if (isPptx) {
-    return (
-      <CanvasFilePreviewLayout
-        isCanvasMode={isCanvasMode}
-        isAgentBusy={isAgentBusy}
-        fileName={fileName}
-        previewKind={previewKind}
-        onClose={closeFilePreview}
-      >
-        <PptxPreview path={path} />
-      </CanvasFilePreviewLayout>
-    );
-  }
-
+  // NOTE: All hooks must be declared unconditionally before any early return.
+  // Canvas is mounted unkeyed (see App.tsx), so the same instance re-renders
+  // across file-type switches — bailing out above a hook would change the hook
+  // count between renders and crash React. The spreadsheet/pptx returns live
+  // below, after every hook. Editor-only effects guard on isSpreadsheet/isPptx
+  // so they stay inert for preview-only file kinds.
   useEffect(() => {
+    if (isSpreadsheet || isPptx) return;
     if (!floatingCoords) {
       if ("Highlight" in window) {
         try {
@@ -216,7 +195,7 @@ export function Canvas({ path }: { path: string }) {
       }
       savedSelectionRangeRef.current = null;
     }
-  }, [floatingCoords]);
+  }, [floatingCoords, isSpreadsheet, isPptx]);
 
   const handleInput = () => {
     if (!editorRef.current) return;
@@ -289,6 +268,7 @@ export function Canvas({ path }: { path: string }) {
   }, []);
 
   useEffect(() => {
+    if (isSpreadsheet || isPptx) return;
     const handleSelection = () => {
       // Don't wipe out coordinates if the user is interacting with the floating bar
       if (isInteractingRef.current) {
@@ -356,7 +336,7 @@ export function Canvas({ path }: { path: string }) {
 
     document.addEventListener("selectionchange", handleSelection);
     return () => document.removeEventListener("selectionchange", handleSelection);
-  }, [activeTab]);
+  }, [activeTab, isSpreadsheet, isPptx]);
 
   const clearSelectionState = useCallback(() => {
     setSelectedText("");
@@ -377,6 +357,7 @@ export function Canvas({ path }: { path: string }) {
   }, [clearSelectionState]);
 
   useEffect(() => {
+    if (isSpreadsheet || isPptx) return;
     const handleWindowPointerDown = (e: MouseEvent) => {
       const target = e.target as HTMLElement | null;
       if (floatingRef.current?.contains(target)) {
@@ -437,7 +418,7 @@ export function Canvas({ path }: { path: string }) {
       document.removeEventListener("pointerdown", handleWindowPointerDown);
       document.removeEventListener("pointerup", handleWindowPointerUp);
     };
-  }, [clearSelectionState]);
+  }, [clearSelectionState, isSpreadsheet, isPptx]);
 
   const handleSendPrompt = async (explicitPrompt?: string) => {
     const textToSend = (explicitPrompt !== undefined ? explicitPrompt : promptText).trim();
@@ -478,6 +459,34 @@ ${textToSend}`;
       }
     }
   };
+
+  if (isSpreadsheet) {
+    return (
+      <CanvasFilePreviewLayout
+        isCanvasMode={isCanvasMode}
+        isAgentBusy={isAgentBusy}
+        fileName={fileName}
+        previewKind={previewKind}
+        onClose={closeFilePreview}
+      >
+        <SpreadsheetPreview path={path} compact />
+      </CanvasFilePreviewLayout>
+    );
+  }
+
+  if (isPptx) {
+    return (
+      <CanvasFilePreviewLayout
+        isCanvasMode={isCanvasMode}
+        isAgentBusy={isAgentBusy}
+        fileName={fileName}
+        previewKind={previewKind}
+        onClose={closeFilePreview}
+      >
+        <PptxPreview path={path} />
+      </CanvasFilePreviewLayout>
+    );
+  }
 
   return (
     <div

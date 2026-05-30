@@ -7,6 +7,18 @@ function escapeHtml(text: string): string {
     .replace(/'/g, "&apos;");
 }
 
+// Only allow links the renderer can safely follow. Relative paths, anchors,
+// and a small protocol allowlist pass through; everything else with a scheme
+// (javascript:, data:, vbscript:, …) is neutralized to avoid script execution
+// when a document authored elsewhere is opened in the canvas.
+function sanitizeUrl(rawUrl: string): string {
+  const url = rawUrl.trim();
+  if (/^(https?:|mailto:|tel:|#|\/|\.\/|\.\.\/)/i.test(url)) return url;
+  // Bare/relative references (no scheme) are safe; a disallowed scheme is not.
+  if (/^[a-z][a-z0-9+.-]*:/i.test(url)) return "#";
+  return url;
+}
+
 function parseInlineMarkdown(text: string): string {
   let html = escapeHtml(text);
   html = html.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
@@ -16,7 +28,8 @@ function parseInlineMarkdown(text: string): string {
   html = html.replace(/`(.*?)`/g, "<code>$1</code>");
   html = html.replace(
     /\[(.*?)\]\((.*?)\)/g,
-    '<a href="$2" target="_blank" class="underline text-primary">$1</a>',
+    (_match, label: string, url: string) =>
+      `<a href="${sanitizeUrl(url)}" target="_blank" rel="noopener noreferrer" class="underline text-primary">${label}</a>`,
   );
   return html;
 }
@@ -83,7 +96,9 @@ export function markdownToHtml(md: string): string {
       continue;
     }
 
-    const listMatch = line.match(/^(\s*)(?:-\s*|\*\s*|\d+\.\s+)(.*)$/);
+    // Require whitespace after the marker so emphasis lines like "*note*" or
+    // dash-prefixed prose like "-5 degrees" are not misparsed as list items.
+    const listMatch = line.match(/^(\s*)(?:[-*]\s+|\d+\.\s+)(.*)$/);
     if (listMatch) {
       flushParagraph();
       const isOrdered = line.trim().match(/^\d+\./);
@@ -170,9 +185,23 @@ export function nodeToMarkdown(node: Node): string {
         case "ol":
           result += `${nodeToMarkdown(el)}\n`;
           break;
-        case "li":
-          result += `- ${nodeToMarkdown(el)}\n`;
+        case "li": {
+          // Preserve ordered-list numbering: an <li> under <ol> must serialize
+          // back to "N." rather than collapsing to a "-" bullet.
+          const ordered = el.parentElement?.tagName.toLowerCase() === "ol";
+          if (ordered) {
+            let index = 1;
+            let sibling = el.previousElementSibling;
+            while (sibling) {
+              if (sibling.tagName.toLowerCase() === "li") index += 1;
+              sibling = sibling.previousElementSibling;
+            }
+            result += `${index}. ${nodeToMarkdown(el)}\n`;
+          } else {
+            result += `- ${nodeToMarkdown(el)}\n`;
+          }
           break;
+        }
         case "pre":
           result += `\`\`\`\n${el.innerText}\n\`\`\`\n\n`;
           break;

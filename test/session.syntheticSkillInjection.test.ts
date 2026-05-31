@@ -4,8 +4,11 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+  MAX_REFERENCED_SKILL_BODY_BYTES,
+  MAX_TOTAL_REFERENCED_SKILL_INJECTION_BYTES,
   renderReferencedSkillsInjection,
   resolveReferencedPlugins,
+  resolveReferencedSkills,
 } from "../src/server/session/turnExecution/referenceInjection";
 import { startAgentServer } from "../src/server/startServer";
 import type { AgentConfig } from "../src/types";
@@ -113,6 +116,80 @@ describe("referenced plugin resolution", () => {
     expect(resolved).toEqual([
       { name: "enabled", displayName: "Enabled", skillNames: ["enabled-skill"] },
     ]);
+  });
+});
+
+describe("referenced skill resolution limits", () => {
+  test("skips oversized skill bodies with a clear log", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "skillrefs-oversized-"));
+    const skillsDir = path.join(root, "skills");
+    const largeSkillDir = path.join(skillsDir, "large-skill");
+    await fs.mkdir(largeSkillDir, { recursive: true });
+    await fs.writeFile(
+      path.join(largeSkillDir, "SKILL.md"),
+      [
+        "---",
+        'name: "large-skill"',
+        'description: "Large skill"',
+        "---",
+        "",
+        "x".repeat(MAX_REFERENCED_SKILL_BODY_BYTES + 1),
+      ].join("\n"),
+      "utf-8",
+    );
+    const config = makeReferenceConfig(root, skillsDir);
+    const logs: string[] = [];
+
+    const resolved = await resolveReferencedSkills({
+      context: { state: { config } } as any,
+      references: [{ kind: "skill", name: "large-skill" }],
+      log: (line) => logs.push(line),
+    });
+
+    expect(resolved).toEqual([]);
+    expect(logs.some((line) => line.includes("skipping oversized skill \"large-skill\""))).toBe(
+      true,
+    );
+  });
+
+  test("stops referenced skill injection at the total byte cap", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "skillrefs-total-cap-"));
+    const skillsDir = path.join(root, "skills");
+    const body = "x".repeat(MAX_REFERENCED_SKILL_BODY_BYTES - 4096);
+    for (const name of ["skill-1", "skill-2", "skill-3", "skill-4"]) {
+      const skillDir = path.join(skillsDir, name);
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.writeFile(
+        path.join(skillDir, "SKILL.md"),
+        ["---", `name: "${name}"`, `description: "${name}"`, "---", "", `${name}:${body}`].join(
+          "\n",
+        ),
+        "utf-8",
+      );
+    }
+    const config = makeReferenceConfig(root, skillsDir);
+    const logs: string[] = [];
+
+    const resolved = await resolveReferencedSkills({
+      context: { state: { config } } as any,
+      references: [
+        { kind: "skill", name: "skill-1" },
+        { kind: "skill", name: "skill-2" },
+        { kind: "skill", name: "skill-3" },
+        { kind: "skill", name: "skill-4" },
+      ],
+      log: (line) => logs.push(line),
+    });
+
+    expect(resolved.map((skill) => skill.name)).toEqual(["skill-1", "skill-2", "skill-3"]);
+    expect(renderReferencedSkillsInjection(resolved)).not.toContain("skill-4:");
+    expect(
+      logs.some(
+        (line) =>
+          line.includes("skipping remaining skills at \"skill-4\"") &&
+          line.includes(String(MAX_TOTAL_REFERENCED_SKILL_INJECTION_BYTES)),
+      ),
+    ).toBe(true);
   });
 });
 

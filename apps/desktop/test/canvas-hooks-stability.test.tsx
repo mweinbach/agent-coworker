@@ -5,17 +5,22 @@ import { createRoot } from "react-dom/client";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
 import { setupJsdom } from "./jsdomHarness";
 
+function makePreviewResult(text: string, truncated = false) {
+  const bytes = new TextEncoder().encode(text);
+  return { bytes, byteLength: bytes.byteLength, truncated };
+}
+
+let previewResult = makePreviewResult("# Heading\n\n1. one\n2. two\n");
+
 // Canvas reads files through desktopCommands; serve deterministic markdown so a
 // re-render with a new path exercises the editor render path without real IPC.
-const readFileForPreviewMock = mock(async () => {
-  const bytes = new TextEncoder().encode("# Heading\n\n1. one\n2. two\n");
-  return { bytes, byteLength: bytes.byteLength, truncated: false };
-});
+const readFileForPreviewMock = mock(async () => previewResult);
+const writeFileMock = mock(async () => {});
 
 mock.module("../src/lib/desktopCommands", () =>
   createDesktopCommandsMock({
     readFileForPreview: readFileForPreviewMock,
-    writeFile: mock(async () => {}),
+    writeFile: writeFileMock,
   }),
 );
 
@@ -103,6 +108,9 @@ async function flushUi() {
 
 describe("Canvas hooks stability across file-type switches", () => {
   beforeEach(() => {
+    previewResult = makePreviewResult("# Heading\n\n1. one\n2. two\n");
+    readFileForPreviewMock.mockClear();
+    writeFileMock.mockClear();
     resetAppStore();
   });
 
@@ -192,6 +200,68 @@ describe("Canvas hooks stability across file-type switches", () => {
       expect(
         harness.dom.window.document.querySelector("button[title='Close Window']"),
       ).not.toBeNull();
+    } finally {
+      if (root) {
+        try {
+          await act(async () => {
+            root!.unmount();
+          });
+        } catch {}
+      }
+      harness.restore();
+    }
+  });
+
+  test.serial("explains truncated previews and keeps markdown editing read-only", async () => {
+    previewResult = makePreviewResult("# Large file preview\n\nVisible prefix only.\n", true);
+    const harness = setupJsdom({ includeAnimationFrame: true });
+    const mdPath = "/Users/mweinbach/Projects/preview-workspace/large.md";
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root!.render(createElement(Canvas, { path: mdPath }));
+        await flushUi();
+        await flushUi();
+      });
+
+      const text = harness.dom.window.document.body.textContent ?? "";
+      expect(text).toContain("Editing disabled for large preview");
+      expect(text).toContain(
+        "Editing is disabled to avoid overwriting the full file with partial content.",
+      );
+      const previewEditor = harness.dom.window.document.querySelector('[role="textbox"]');
+      expect(previewEditor?.getAttribute("contenteditable")).toBe("false");
+
+      await act(async () => {
+        root!.unmount();
+      });
+      root = null;
+      useAppStore.setState({ canvasActiveTab: "edit" } as Partial<AppStoreState>);
+      root = createRoot(container);
+      await act(async () => {
+        root!.render(createElement(Canvas, { path: mdPath }));
+        await flushUi();
+        await flushUi();
+      });
+
+      const textarea = harness.dom.window.document.querySelector("textarea");
+      expect(textarea?.readOnly).toBe(true);
+      expect(harness.dom.window.document.body.textContent).toContain(
+        "Editing disabled for large preview",
+      );
+
+      if (textarea) {
+        await act(async () => {
+          textarea.value = "# Mutated truncated content";
+          textarea.dispatchEvent(new harness.dom.window.Event("input", { bubbles: true }));
+          await new Promise((resolve) => setTimeout(resolve, 650));
+        });
+      }
+      expect(writeFileMock).not.toHaveBeenCalled();
     } finally {
       if (root) {
         try {

@@ -65,6 +65,18 @@ describe("markdownToHtml", () => {
     expect(markdownToHtml("[mail](mailto:a@b.com)")).toContain('href="mailto:a@b.com"');
   });
 
+  test("keeps Windows absolute paths in markdown links", () => {
+    expect(markdownToHtml("[drive](C:\\Users\\me\\notes.md)")).toContain(
+      'href="C:\\Users\\me\\notes.md"',
+    );
+    expect(markdownToHtml("[drive](C:/Users/me/notes.md)")).toContain(
+      'href="C:/Users/me/notes.md"',
+    );
+    expect(markdownToHtml("[unc](\\\\server\\share\\notes.md)")).toContain(
+      'href="\\\\server\\share\\notes.md"',
+    );
+  });
+
   test("returns an empty paragraph for empty input", () => {
     expect(markdownToHtml("")).toBe("<p><br></p>");
   });

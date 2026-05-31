@@ -13,6 +13,7 @@ function escapeHtml(text: string): string {
 // when a document authored elsewhere is opened in the canvas.
 function sanitizeUrl(rawUrl: string): string {
   const url = rawUrl.trim();
+  if (/^[a-z]:[\\/]/i.test(url) || /^\\\\/.test(url)) return url;
   if (/^(https?:|mailto:|tel:|#|\/|\.\/|\.\.\/)/i.test(url)) return url;
   // Bare/relative references (no scheme) are safe; a disallowed scheme is not.
   if (/^[a-z][a-z0-9+.-]*:/i.test(url)) return "#";

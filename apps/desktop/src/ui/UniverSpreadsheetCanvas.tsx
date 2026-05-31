@@ -49,6 +49,7 @@ import { useAppStore } from "../app/store";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { openExternalUrl } from "../lib/desktopCommands";
+import { buildUniverSheetsFooterConfig } from "../lib/univerCanvasConfig";
 import { shouldDeferExternalWorkbookReload, type UniverSaveState } from "../lib/univerSaveState";
 import {
   buildUniverSpreadsheetPrompt,
@@ -281,12 +282,7 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
             disableForceStringAlert: true,
             disableForceStringMark: true,
           },
-          footer: {
-            sheetBar: true,
-            statisticBar: true,
-            menus: true,
-            zoomSlider: true,
-          },
+          footer: buildUniverSheetsFooterConfig(),
         }),
         UniverSheetsFilterPreset(),
         UniverSheetsSortPreset(),
@@ -466,12 +462,26 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
     const saved = await flushSaveRef.current();
     if (!saved) return;
     const currentWorkbook = workbookRef.current ?? workbook;
+    const latestWorkbookResult = await loadSpreadsheetWorkbook(
+      path,
+      selectionRef.current?.sheetName ? { sheetName: selectionRef.current.sheetName } : undefined,
+    );
+    if (!latestWorkbookResult.ok) {
+      alert(`Could not refresh workbook context: ${latestWorkbookResult.error.message}`);
+      return;
+    }
+    const latestWorkbook = latestWorkbookResult.workbook;
+    workbookRef.current = latestWorkbook;
+    sourceVersionRef.current = latestWorkbook.fileVersion;
     const prompt = buildUniverSpreadsheetPrompt({
       path,
-      workbook: currentWorkbook,
+      workbook: latestWorkbook,
       selection: selectionRef.current ?? selection,
       request,
     });
+    if (latestWorkbook.fileVersion.fingerprint !== currentWorkbook.fileVersion.fingerprint) {
+      setWorkbook(latestWorkbook);
+    }
     const originalPrompt = promptText;
     setPromptText("");
     const accepted = await sendMessage(prompt);

@@ -519,7 +519,7 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
 function SaveStateIcon({ state }: { state: SaveState }) {
   if (state === "saving") return <Loader2Icon className="size-3.5 animate-spin" />;
   if (state === "saved") return <CheckIcon className="size-3.5 text-success" />;
-  if (state === "dirty") return <SaveIcon className="size-3.5 text-[var(--accent)]" />;
+  if (state === "dirty") return <SaveIcon className="size-3.5 text-primary" />;
   if (state === "error") return <AlertCircleIcon className="size-3.5 text-destructive" />;
   return <SaveIcon className="size-3.5 text-muted-foreground" />;
 }

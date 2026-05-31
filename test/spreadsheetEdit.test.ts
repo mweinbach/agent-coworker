@@ -341,6 +341,62 @@ describe("xlsx single-cell edit (lossless)", () => {
     });
   });
 
+  test("aborts a batch atomically, leaving the file byte-identical, when an op fails", async () => {
+    await withTempDir(async (dir) => {
+      const filePath = path.join(dir, "model.xlsx");
+      await fs.writeFile(filePath, await buildWorkbook());
+      const before = await entryBytes(await fs.readFile(filePath));
+
+      const result = await patchSpreadsheetBatch({
+        cwd: dir,
+        filePath,
+        operations: [
+          { type: "cell", sheetName: "Summary", address: "A1", rawInput: "Changed" },
+          // Second op has a malformed address, so the whole batch must roll back.
+          { type: "cell", sheetName: "Summary", address: "B", rawInput: "boom" },
+        ],
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.kind).toBe("parse_error");
+      expect(result.error.message).toContain("Operation 2 failed");
+
+      // Nothing from the partially-applied batch should have touched disk.
+      const after = await entryBytes(await fs.readFile(filePath));
+      expect([...after.entries()]).toEqual([...before.entries()]);
+    });
+  });
+
+  test("serializes concurrent batches to the same file so neither edit is lost", async () => {
+    await withTempDir(async (dir) => {
+      const filePath = path.join(dir, "model.xlsx");
+      await fs.writeFile(filePath, await buildWorkbook());
+
+      const [first, second] = await Promise.all([
+        patchSpreadsheetBatch({
+          cwd: dir,
+          filePath,
+          operations: [{ type: "cell", sheetName: "Summary", address: "A1", rawInput: "One" }],
+        }),
+        patchSpreadsheetBatch({
+          cwd: dir,
+          filePath,
+          operations: [{ type: "cell", sheetName: "Summary", address: "B1", rawInput: "Two" }],
+        }),
+      ]);
+      expect(first).toEqual({ ok: true });
+      expect(second).toEqual({ ok: true });
+
+      const preview = await previewSpreadsheetFile({ cwd: dir, filePath, sheetName: "Summary" });
+      expect(preview.ok).toBe(true);
+      if (!preview.ok) return;
+      const cells = preview.preview.cells.flat();
+      expect(cells.find((cell) => cell.address === "A1")?.value).toBe("One");
+      expect(cells.find((cell) => cell.address === "B1")?.value).toBe("Two");
+    });
+  });
+
   test("reports not_found for an unknown sheet", async () => {
     await withTempDir(async (dir) => {
       const filePath = path.join(dir, "model.xlsx");

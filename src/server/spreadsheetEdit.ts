@@ -6,8 +6,10 @@ import JSZip from "jszip";
 import * as XLSX from "xlsx";
 
 import type {
+  SpreadsheetBatchPatchOperation,
   SpreadsheetBatchPatchRequest,
   SpreadsheetBatchPatchResult,
+  SpreadsheetCellEditFailureKind,
   SpreadsheetCellEditRequest,
   SpreadsheetCellEditResult,
   SpreadsheetCellStylePatch,
@@ -17,6 +19,14 @@ import type {
 import { resolveWorkspaceFilePath, validateXlsxZipSignature } from "./spreadsheetPreview";
 
 const MAX_BATCH_PATCH_OPERATIONS = 2_000;
+
+type EditFailure = { kind: SpreadsheetCellEditFailureKind; message: string };
+
+/**
+ * Outcome of applying an ordered list of operations to one file. `index` marks
+ * which operation failed so the batch entry point can attribute the error.
+ */
+type OpsOutcome = { ok: true } | { ok: false; index: number; error: EditFailure };
 
 /**
  * Apply a single-cell edit to a CSV or XLSX file and persist it, losslessly.
@@ -33,69 +43,42 @@ const MAX_BATCH_PATCH_OPERATIONS = 2_000;
 export async function editSpreadsheetCell(
   req: SpreadsheetCellEditRequest,
 ): Promise<SpreadsheetCellEditResult> {
-  let resolvedPath: string;
-  try {
-    resolvedPath = await resolveWorkspaceFilePath(req.cwd, req.filePath);
-  } catch (error) {
-    return {
-      ok: false,
-      error: { kind: "not_found", message: error instanceof Error ? error.message : String(error) },
-    };
-  }
-
-  const ext = path.extname(resolvedPath).toLowerCase();
-  try {
-    if (ext === ".csv") return await editCsvCell(resolvedPath, req);
-    if (ext === ".xlsx") return await editXlsxCell(resolvedPath, req);
-    return {
-      ok: false,
-      error: { kind: "unsupported_format", message: "Editing supports CSV and XLSX files." },
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      error: {
-        kind: "write_error",
-        message: error instanceof Error ? error.message : String(error),
-      },
-    };
-  }
+  const target = await resolveEditTarget(req.cwd, req.filePath);
+  if (!target.ok) return target;
+  const outcome = await executeOps(target.resolvedPath, target.ext, [
+    {
+      type: "cell",
+      ...(req.sheetName ? { sheetName: req.sheetName } : {}),
+      address: req.address,
+      rawInput: req.rawInput,
+    },
+  ]);
+  return outcome.ok ? { ok: true } : { ok: false, error: outcome.error };
 }
 
 export async function formatSpreadsheetRange(
   req: SpreadsheetRangeFormatRequest,
 ): Promise<SpreadsheetRangeFormatResult> {
-  let resolvedPath: string;
-  try {
-    resolvedPath = await resolveWorkspaceFilePath(req.cwd, req.filePath);
-  } catch (error) {
-    return {
-      ok: false,
-      error: { kind: "not_found", message: error instanceof Error ? error.message : String(error) },
-    };
-  }
-
-  const ext = path.extname(resolvedPath).toLowerCase();
-  if (ext !== ".xlsx") {
-    return {
-      ok: false,
-      error: { kind: "unsupported_format", message: "Formatting supports XLSX files." },
-    };
-  }
-
-  try {
-    return await formatXlsxRange(resolvedPath, req);
-  } catch (error) {
-    return {
-      ok: false,
-      error: {
-        kind: "write_error",
-        message: error instanceof Error ? error.message : String(error),
-      },
-    };
-  }
+  const target = await resolveEditTarget(req.cwd, req.filePath);
+  if (!target.ok) return target;
+  const outcome = await executeOps(target.resolvedPath, target.ext, [
+    {
+      type: "format",
+      ...(req.sheetName ? { sheetName: req.sheetName } : {}),
+      range: req.range,
+      style: req.style,
+    },
+  ]);
+  return outcome.ok ? { ok: true } : { ok: false, error: outcome.error };
 }
 
+/**
+ * Apply an ordered batch of cell/format operations as a single atomic
+ * read-modify-write: the file is read and (for XLSX) unzipped exactly once, all
+ * operations are applied in memory, and the result is written exactly once. A
+ * mid-batch failure aborts before any bytes are persisted, so partial batches
+ * never land on disk.
+ */
 export async function patchSpreadsheetBatch(
   req: SpreadsheetBatchPatchRequest,
 ): Promise<SpreadsheetBatchPatchResult> {
@@ -109,35 +92,81 @@ export async function patchSpreadsheetBatch(
     };
   }
 
-  for (const [index, operation] of req.operations.entries()) {
-    const result =
-      operation.type === "cell"
-        ? await editSpreadsheetCell({
-            cwd: req.cwd,
-            filePath: req.filePath,
-            ...(operation.sheetName ? { sheetName: operation.sheetName } : {}),
-            address: operation.address,
-            rawInput: operation.rawInput,
-          })
-        : await formatSpreadsheetRange({
-            cwd: req.cwd,
-            filePath: req.filePath,
-            ...(operation.sheetName ? { sheetName: operation.sheetName } : {}),
-            range: operation.range,
-            style: operation.style,
-          });
-    if (!result.ok) {
+  const target = await resolveEditTarget(req.cwd, req.filePath);
+  if (!target.ok) return target;
+  const outcome = await executeOps(target.resolvedPath, target.ext, req.operations);
+  if (outcome.ok) return { ok: true };
+  return {
+    ok: false,
+    error: {
+      kind: outcome.error.kind,
+      message: `Operation ${outcome.index + 1} failed: ${outcome.error.message}`,
+    },
+  };
+}
+
+async function resolveEditTarget(
+  cwd: string,
+  filePath: string,
+): Promise<{ ok: true; resolvedPath: string; ext: string } | { ok: false; error: EditFailure }> {
+  try {
+    const resolvedPath = await resolveWorkspaceFilePath(cwd, filePath);
+    return { ok: true, resolvedPath, ext: path.extname(resolvedPath).toLowerCase() };
+  } catch (error) {
+    return {
+      ok: false,
+      error: { kind: "not_found", message: error instanceof Error ? error.message : String(error) },
+    };
+  }
+}
+
+/**
+ * Serialize all read-modify-write cycles against a given resolved path so two
+ * concurrent edits to the same workbook can never interleave and clobber each
+ * other. Failures don't poison the lock; the next waiter still runs.
+ */
+const fileWriteChains = new Map<string, Promise<void>>();
+
+function withFileLock<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
+  const previous = fileWriteChains.get(filePath) ?? Promise.resolve();
+  const result = previous.then(fn, fn);
+  const settled = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  fileWriteChains.set(filePath, settled);
+  void settled.then(() => {
+    if (fileWriteChains.get(filePath) === settled) fileWriteChains.delete(filePath);
+  });
+  return result;
+}
+
+/** Acquire the per-file lock, dispatch by extension, and map throws to write_error. */
+function executeOps(
+  resolvedPath: string,
+  ext: string,
+  operations: SpreadsheetBatchPatchOperation[],
+): Promise<OpsOutcome> {
+  return withFileLock(resolvedPath, async () => {
+    try {
+      if (ext === ".csv") return await runCsvOps(resolvedPath, operations);
+      if (ext === ".xlsx") return await runXlsxOps(resolvedPath, operations);
+      const message =
+        operations[0]?.type === "format"
+          ? "Formatting supports XLSX files."
+          : "Editing supports CSV and XLSX files.";
+      return { ok: false, index: 0, error: { kind: "unsupported_format", message } };
+    } catch (error) {
       return {
         ok: false,
+        index: 0,
         error: {
-          kind: result.error.kind,
-          message: `Operation ${index + 1} failed: ${result.error.message}`,
+          kind: "write_error",
+          message: error instanceof Error ? error.message : String(error),
         },
       };
     }
-  }
-
-  return { ok: true };
+  });
 }
 
 type CellAddress = { row: number; col: number };
@@ -191,18 +220,10 @@ async function writeFileAtomic(filePath: string, data: Buffer | string): Promise
 // CSV
 // ---------------------------------------------------------------------------
 
-async function editCsvCell(
+async function runCsvOps(
   filePath: string,
-  req: SpreadsheetCellEditRequest,
-): Promise<SpreadsheetCellEditResult> {
-  const addr = parseAddress(req.address);
-  if (!addr) {
-    return {
-      ok: false,
-      error: { kind: "parse_error", message: `Invalid cell address: ${req.address}` },
-    };
-  }
-
+  operations: SpreadsheetBatchPatchOperation[],
+): Promise<OpsOutcome> {
   const raw = (await fs.readFile(filePath)).toString("utf8");
   const hasBom = raw.charCodeAt(0) === 0xfeff;
   const text = hasBom ? raw.slice(1) : raw;
@@ -210,10 +231,27 @@ async function editCsvCell(
   const hasTrailingNewline = /\r?\n$/.test(text);
 
   const rows = parseCsv(text);
-  while (rows.length <= addr.row) rows.push([]);
-  const row = rows[addr.row] as string[];
-  while (row.length <= addr.col) row.push("");
-  row[addr.col] = req.rawInput;
+  for (const [index, op] of operations.entries()) {
+    if (op.type === "format") {
+      return {
+        ok: false,
+        index,
+        error: { kind: "unsupported_format", message: "Formatting supports XLSX files." },
+      };
+    }
+    const addr = parseAddress(op.address);
+    if (!addr) {
+      return {
+        ok: false,
+        index,
+        error: { kind: "parse_error", message: `Invalid cell address: ${op.address}` },
+      };
+    }
+    while (rows.length <= addr.row) rows.push([]);
+    const row = rows[addr.row] as string[];
+    while (row.length <= addr.col) row.push("");
+    row[addr.col] = op.rawInput;
+  }
 
   let out = rows.map((cells) => cells.map(csvQuoteField).join(",")).join(eol);
   if (hasTrailingNewline) out += eol;
@@ -290,150 +328,189 @@ function csvQuoteField(value: string): string {
 // XLSX (surgical, lossless)
 // ---------------------------------------------------------------------------
 
-async function editXlsxCell(
-  filePath: string,
-  req: SpreadsheetCellEditRequest,
-): Promise<SpreadsheetCellEditResult> {
-  const addr = parseAddress(req.address);
-  if (!addr) {
-    return {
-      ok: false,
-      error: { kind: "parse_error", message: `Invalid cell address: ${req.address}` },
-    };
-  }
+/**
+ * In-memory editing session over a single workbook: the zip is loaded once and
+ * worksheet XML parts plus the stylesheet are read, mutated, and cached here so
+ * a whole batch shares one read-modify-write cycle. Nothing touches disk until
+ * {@link flushXlsxSession} validates and {@link writeXlsxSession} persists.
+ */
+type XlsxSession = {
+  zip: JSZip;
+  sheetXmlByPart: Map<string, string>;
+  partBySheet: Map<string, string | null>;
+  dirtyParts: Set<string>;
+  styles: ReturnType<typeof parseStylesheet> | null;
+  stylesDirty: boolean;
+};
 
+async function runXlsxOps(
+  filePath: string,
+  operations: SpreadsheetBatchPatchOperation[],
+): Promise<OpsOutcome> {
   const bytes = await fs.readFile(filePath);
   validateXlsxZipSignature(bytes);
-  const zip = await JSZip.loadAsync(bytes);
+  const session: XlsxSession = {
+    zip: await JSZip.loadAsync(bytes),
+    sheetXmlByPart: new Map(),
+    partBySheet: new Map(),
+    dirtyParts: new Set(),
+    styles: null,
+    stylesDirty: false,
+  };
 
-  const partPath = await resolveWorksheetPart(zip, req.sheetName);
-  if (!partPath) {
-    return {
-      ok: false,
-      error: { kind: "not_found", message: `Sheet not found: ${req.sheetName ?? "(first sheet)"}` },
-    };
-  }
-  const partFile = zip.file(partPath);
-  if (!partFile) {
-    return {
-      ok: false,
-      error: { kind: "parse_error", message: `Worksheet part missing: ${partPath}` },
-    };
-  }
-
-  const sheetXml = await partFile.async("string");
-  const ref = XLSX.utils.encode_cell({ r: addr.row, c: addr.col });
-  const styleAttr = readCellStyleAttr(sheetXml, ref);
-  const cellXml = encodeCellXml(ref, styleAttr, req.rawInput);
-  const newSheetXml = applyCellEdit(sheetXml, addr, ref, cellXml);
-
-  const validation = XMLValidator.validate(newSheetXml);
-  if (validation !== true) {
-    return {
-      ok: false,
-      error: {
-        kind: "parse_error",
-        message: `Edited worksheet XML is invalid: ${validation.err?.msg ?? "unknown error"}`,
-      },
-    };
+  for (const [index, op] of operations.entries()) {
+    const failure =
+      op.type === "cell"
+        ? await applyXlsxCellOp(session, op)
+        : await applyXlsxFormatOp(session, op);
+    if (failure) return { ok: false, index, error: failure };
   }
 
-  zip.file(partPath, newSheetXml);
-  const out = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
-  await writeFileAtomic(filePath, out);
+  const flushed = flushXlsxSession(session);
+  if (!flushed.ok) return { ok: false, index: 0, error: flushed.error };
+
+  await writeXlsxSession(session, filePath);
   return { ok: true };
 }
 
-async function formatXlsxRange(
-  filePath: string,
-  req: SpreadsheetRangeFormatRequest,
-): Promise<SpreadsheetRangeFormatResult> {
-  const range = parseRange(req.range);
-  if (!range) {
-    return {
-      ok: false,
-      error: { kind: "parse_error", message: `Invalid cell range: ${req.range}` },
-    };
+async function sessionWorksheetPart(
+  session: XlsxSession,
+  sheetName?: string,
+): Promise<string | null> {
+  const key = sheetName ?? "";
+  if (!session.partBySheet.has(key)) {
+    session.partBySheet.set(key, await resolveWorksheetPart(session.zip, sheetName));
+  }
+  return session.partBySheet.get(key) ?? null;
+}
+
+async function sessionSheetXml(session: XlsxSession, partPath: string): Promise<string | null> {
+  const cached = session.sheetXmlByPart.get(partPath);
+  if (cached !== undefined) return cached;
+  const file = session.zip.file(partPath);
+  if (!file) return null;
+  const xml = await file.async("string");
+  session.sheetXmlByPart.set(partPath, xml);
+  return xml;
+}
+
+async function sessionStyles(session: XlsxSession): Promise<ReturnType<typeof parseStylesheet>> {
+  if (!session.styles) {
+    session.styles = parseStylesheet(await ensureStylesXml(session.zip));
+  }
+  return session.styles;
+}
+
+async function applyXlsxCellOp(
+  session: XlsxSession,
+  op: { sheetName?: string; address: string; rawInput: string },
+): Promise<EditFailure | null> {
+  const addr = parseAddress(op.address);
+  if (!addr) return { kind: "parse_error", message: `Invalid cell address: ${op.address}` };
+
+  const partPath = await sessionWorksheetPart(session, op.sheetName);
+  if (!partPath) {
+    return { kind: "not_found", message: `Sheet not found: ${op.sheetName ?? "(first sheet)"}` };
+  }
+  const sheetXml = await sessionSheetXml(session, partPath);
+  if (sheetXml === null) {
+    return { kind: "parse_error", message: `Worksheet part missing: ${partPath}` };
   }
 
-  const cellCount =
-    (range.end.row - range.start.row + 1) * (range.end.col - range.start.col + 1);
+  const ref = XLSX.utils.encode_cell({ r: addr.row, c: addr.col });
+  const styleAttr = readCellStyleAttr(sheetXml, ref);
+  const cellXml = encodeCellXml(ref, styleAttr, op.rawInput);
+  session.sheetXmlByPart.set(partPath, applyCellEdit(sheetXml, addr, ref, cellXml));
+  session.dirtyParts.add(partPath);
+  return null;
+}
+
+async function applyXlsxFormatOp(
+  session: XlsxSession,
+  op: { sheetName?: string; range: string; style: SpreadsheetCellStylePatch },
+): Promise<EditFailure | null> {
+  const range = parseRange(op.range);
+  if (!range) return { kind: "parse_error", message: `Invalid cell range: ${op.range}` };
+
+  const cellCount = (range.end.row - range.start.row + 1) * (range.end.col - range.start.col + 1);
   if (cellCount > 50_000) {
     return {
-      ok: false,
-      error: {
-        kind: "parse_error",
-        message: "Formatting ranges are limited to 50,000 cells per request.",
-      },
+      kind: "parse_error",
+      message: "Formatting ranges are limited to 50,000 cells per request.",
     };
   }
 
-  const bytes = await fs.readFile(filePath);
-  validateXlsxZipSignature(bytes);
-  const zip = await JSZip.loadAsync(bytes);
-
-  const partPath = await resolveWorksheetPart(zip, req.sheetName);
+  const partPath = await sessionWorksheetPart(session, op.sheetName);
   if (!partPath) {
-    return {
-      ok: false,
-      error: { kind: "not_found", message: `Sheet not found: ${req.sheetName ?? "(first sheet)"}` },
-    };
+    return { kind: "not_found", message: `Sheet not found: ${op.sheetName ?? "(first sheet)"}` };
   }
-  const partFile = zip.file(partPath);
-  if (!partFile) {
-    return {
-      ok: false,
-      error: { kind: "parse_error", message: `Worksheet part missing: ${partPath}` },
-    };
+  let sheetXml = await sessionSheetXml(session, partPath);
+  if (sheetXml === null) {
+    return { kind: "parse_error", message: `Worksheet part missing: ${partPath}` };
   }
 
-  const stylesXml = await ensureStylesXml(zip);
-  const styles = parseStylesheet(stylesXml);
-  let sheetXml = await partFile.async("string");
+  const styles = await sessionStyles(session);
   const styleCache = new Map<string, number>();
-
   for (let row = range.start.row; row <= range.end.row; row += 1) {
     for (let col = range.start.col; col <= range.end.col; col += 1) {
       const ref = XLSX.utils.encode_cell({ r: row, c: col });
       const currentStyle = Number.parseInt(readCellStyleIndex(sheetXml, ref) ?? "0", 10);
       const baseStyle = Number.isFinite(currentStyle) && currentStyle >= 0 ? currentStyle : 0;
-      const cacheKey = `${baseStyle}:${JSON.stringify(req.style)}`;
+      const cacheKey = `${baseStyle}:${JSON.stringify(op.style)}`;
       let nextStyle = styleCache.get(cacheKey);
       if (nextStyle === undefined) {
-        nextStyle = styles.applyPatch(baseStyle, req.style);
+        nextStyle = styles.applyPatch(baseStyle, op.style);
         styleCache.set(cacheKey, nextStyle);
       }
       sheetXml = applyCellStyle(sheetXml, { row, col }, ref, nextStyle);
     }
   }
 
-  const newStylesXml = styles.toXml();
-  const sheetValidation = XMLValidator.validate(sheetXml);
-  if (sheetValidation !== true) {
-    return {
-      ok: false,
-      error: {
-        kind: "parse_error",
-        message: `Formatted worksheet XML is invalid: ${sheetValidation.err?.msg ?? "unknown error"}`,
-      },
-    };
-  }
-  const stylesValidation = XMLValidator.validate(newStylesXml);
-  if (stylesValidation !== true) {
-    return {
-      ok: false,
-      error: {
-        kind: "parse_error",
-        message: `Formatted styles XML is invalid: ${stylesValidation.err?.msg ?? "unknown error"}`,
-      },
-    };
+  session.sheetXmlByPart.set(partPath, sheetXml);
+  session.dirtyParts.add(partPath);
+  session.stylesDirty = true;
+  return null;
+}
+
+/** Validate every mutated part once and stage it back into the in-memory zip. */
+function flushXlsxSession(session: XlsxSession): { ok: true } | { ok: false; error: EditFailure } {
+  for (const partPath of session.dirtyParts) {
+    const xml = session.sheetXmlByPart.get(partPath);
+    if (xml === undefined) continue;
+    const validation = XMLValidator.validate(xml);
+    if (validation !== true) {
+      return {
+        ok: false,
+        error: {
+          kind: "parse_error",
+          message: `Edited worksheet XML is invalid: ${validation.err?.msg ?? "unknown error"}`,
+        },
+      };
+    }
+    session.zip.file(partPath, xml);
   }
 
-  zip.file(partPath, sheetXml);
-  zip.file("xl/styles.xml", newStylesXml);
-  const out = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
-  await writeFileAtomic(filePath, out);
+  if (session.stylesDirty && session.styles) {
+    const newStylesXml = session.styles.toXml();
+    const validation = XMLValidator.validate(newStylesXml);
+    if (validation !== true) {
+      return {
+        ok: false,
+        error: {
+          kind: "parse_error",
+          message: `Formatted styles XML is invalid: ${validation.err?.msg ?? "unknown error"}`,
+        },
+      };
+    }
+    session.zip.file("xl/styles.xml", newStylesXml);
+  }
+
   return { ok: true };
+}
+
+async function writeXlsxSession(session: XlsxSession, filePath: string): Promise<void> {
+  const out = await session.zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
+  await writeFileAtomic(filePath, out);
 }
 
 const OOXML_STYLE_PARSER = new XMLParser({

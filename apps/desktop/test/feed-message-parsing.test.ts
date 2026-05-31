@@ -1,15 +1,13 @@
 import { describe, expect, test } from "bun:test";
 
 import type { SpreadsheetWorkbookSnapshot } from "../../../src/shared/spreadsheetPreview";
+import { buildCanvasDocumentPrompt } from "../src/lib/canvasRequest";
 import {
   buildUniverSpreadsheetPrompt,
   selectionContextFromWorkbook,
   spreadsheetSnapshotToUniverData,
 } from "../src/lib/univerSpreadsheet";
-import {
-  parseCanvasEditMessage,
-  parseSpreadsheetCanvasRequest,
-} from "../src/ui/chat/feedMessageParsing";
+import { parseCanvasRequest } from "../src/ui/chat/feedMessageParsing";
 
 const WORKBOOK: SpreadsheetWorkbookSnapshot = {
   kind: "xlsx",
@@ -43,8 +41,8 @@ const WORKBOOK: SpreadsheetWorkbookSnapshot = {
   ],
 };
 
-describe("parseSpreadsheetCanvasRequest", () => {
-  test("extracts file, sheet, region, and unescaped request from the canvas envelope", () => {
+describe("parseCanvasRequest", () => {
+  test("parses the spreadsheet envelope with file, sheet, region, and unescaped request", () => {
     const data = spreadsheetSnapshotToUniverData(WORKBOOK);
     const selection = selectionContextFromWorkbook(
       WORKBOOK,
@@ -61,47 +59,73 @@ describe("parseSpreadsheetCanvasRequest", () => {
       request: 'highlight "A1" & make it bold',
     });
 
-    const parsed = parseSpreadsheetCanvasRequest(prompt);
+    const parsed = parseCanvasRequest(prompt);
     expect(parsed).not.toBeNull();
+    expect(parsed?.surface).toBe("spreadsheet");
     expect(parsed?.fileName).toBe("Q3 & Q4.xlsx");
-    expect(parsed?.kind).toBe("xlsx");
+    expect(parsed?.fileKind).toBe("xlsx");
     expect(parsed?.sheet).toBe("Dashboard <main>");
-    expect(parsed?.selectionRange).toBe("A1:B1");
-    expect(parsed?.activeCell).toBe("A1");
-    expect(parsed?.value).toBe("Revenue & growth");
+    expect(parsed?.region).toBe("A1:B1");
+    expect(parsed?.selectionText).toBe("Revenue & growth");
     expect(parsed?.userRequest).toBe('highlight "A1" & make it bold');
   });
 
-  test("returns null for plain user messages and legacy canvas-edit messages", () => {
-    expect(parseSpreadsheetCanvasRequest("just a normal question")).toBeNull();
-    expect(
-      parseSpreadsheetCanvasRequest(
-        "[Open Canvas Collaborative Edit]\n\n**Instructions:**\nrewrite this",
-      ),
-    ).toBeNull();
-    // The legacy parser still handles its own format.
-    expect(
-      parseCanvasEditMessage("[Open Canvas Collaborative Edit]\n\n**Instructions:**\nrewrite this")
-        ?.instructions,
-    ).toBe("rewrite this");
+  test("parses the document envelope round-tripped through buildCanvasDocumentPrompt", () => {
+    const prompt = buildCanvasDocumentPrompt({
+      path: "/workspace/notes & ideas.md",
+      fileName: "notes & ideas.md",
+      kind: "markdown",
+      selection: 'The "old" intro <paragraph>',
+      request: "tighten this up & fix grammar",
+    });
+
+    const parsed = parseCanvasRequest(prompt);
+    expect(parsed).not.toBeNull();
+    expect(parsed?.surface).toBe("document");
+    expect(parsed?.fileName).toBe("notes & ideas.md");
+    expect(parsed?.fileKind).toBe("markdown");
+    expect(parsed?.sheet).toBeNull();
+    expect(parsed?.region).toBeNull();
+    expect(parsed?.selectionText).toBe('The "old" intro <paragraph>');
+    expect(parsed?.userRequest).toBe("tighten this up & fix grammar");
   });
 
-  test("tolerates an empty selection value", () => {
-    const prompt = [
-      '<spreadsheet_canvas_request version="2" source="univer">',
-      '  <workbook file_name="model.xlsx" path="/w/model.xlsx" kind="xlsx">',
-      "    <active_sheet>Sheet1</active_sheet>",
-      '    <selection range="A5:C11" active_cell="A5">',
-      "      <value></value>",
-      "    </selection>",
-      "  </workbook>",
-      "  <user_request>can you highlight this text</user_request>",
-      "</spreadsheet_canvas_request>",
+  test("omits the selection when the document canvas has no active selection", () => {
+    const prompt = buildCanvasDocumentPrompt({
+      path: "/w/readme.md",
+      fileName: "readme.md",
+      kind: "markdown",
+      selection: null,
+      request: "add a quickstart section",
+    });
+
+    expect(prompt).not.toContain("<selection>");
+    const parsed = parseCanvasRequest(prompt);
+    expect(parsed?.selectionText).toBeNull();
+    expect(parsed?.userRequest).toBe("add a quickstart section");
+  });
+
+  test("parses the legacy [Canvas Collaborative Edit] markdown envelope", () => {
+    const legacy = [
+      "[Canvas Collaborative Edit]",
+      "Please edit the file `plan.md` (located at `/w/plan.md`) based on my instructions below.",
+      "",
+      "**Instructions:**",
+      "make the tone friendlier",
+      "",
+      "**Target Section / Selection:**",
+      "> Welcome to the project.",
     ].join("\n");
 
-    const parsed = parseSpreadsheetCanvasRequest(prompt);
-    expect(parsed?.value).toBeNull();
-    expect(parsed?.selectionRange).toBe("A5:C11");
-    expect(parsed?.userRequest).toBe("can you highlight this text");
+    const parsed = parseCanvasRequest(legacy);
+    expect(parsed?.surface).toBe("document");
+    expect(parsed?.fileName).toBe("plan.md");
+    expect(parsed?.selectionText).toBe("Welcome to the project.");
+    expect(parsed?.userRequest).toBe("make the tone friendlier");
+  });
+
+  test("returns null for ordinary user messages", () => {
+    expect(parseCanvasRequest("just a normal question")).toBeNull();
+    expect(parseCanvasRequest("<not_a_canvas>hi</not_a_canvas>")).toBeNull();
   });
 });

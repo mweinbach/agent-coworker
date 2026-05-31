@@ -28,6 +28,7 @@ import { ScrollArea } from "../components/ui/scroll-area";
 import { Tabs, TabsContent } from "../components/ui/tabs";
 import { Textarea } from "../components/ui/textarea";
 import { cleanMarkdown, markdownToHtml, nodeToMarkdown } from "../lib/canvasMarkdown";
+import { buildCanvasDocumentPrompt } from "../lib/canvasRequest";
 import { openPath, readFileForPreview, revealPath, writeFile } from "../lib/desktopCommands";
 import { getFilePreviewKind, isSlideModule } from "../lib/filePreviewKind";
 import { cn } from "../lib/utils";
@@ -473,16 +474,14 @@ export function Canvas({ path }: { path: string }) {
     }
 
     const filename = basenamePath(path);
-    let promptWithContext = `[Canvas Collaborative Edit]
-Please edit the file \`${filename}\` (located at \`${path}\`) based on my instructions below.
-
-**Instructions:**
-${textToSend}`;
-
-    if (selectedText) {
-      promptWithContext += `\n\n**Target Section / Selection:**
-> ${selectedText}`;
-    }
+    const canvasKind = isMarkdown ? "markdown" : isSlide ? "slide" : "text";
+    const promptWithContext = buildCanvasDocumentPrompt({
+      path,
+      fileName: filename,
+      kind: canvasKind,
+      selection: selectedText || null,
+      request: textToSend,
+    });
 
     const originalPrompt = promptText;
     if (explicitPrompt !== undefined) {

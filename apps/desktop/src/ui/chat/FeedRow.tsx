@@ -21,28 +21,25 @@ import { useChatViewContext } from "./ChatViewContext";
 import { parseA2uiActionMessage, summarizeA2uiActionMessage } from "./chatLogic";
 import type { MentionCatalog } from "./composerMentions";
 import {
-  parseCanvasEditMessage,
-  parseSpreadsheetCanvasRequest,
-  type SpreadsheetCanvasRequest,
+  type CanvasRequest,
+  parseCanvasRequest,
   parseUserMessageAttachments,
 } from "./feedMessageParsing";
 import { MentionText } from "./MentionText";
 import { ToolCard } from "./toolCards/ToolCard";
 
-export function SpreadsheetCanvasRequestBody(props: {
-  request: SpreadsheetCanvasRequest;
-  catalog: MentionCatalog;
-}) {
+export function CanvasRequestBody(props: { request: CanvasRequest; catalog: MentionCatalog }) {
   const { request, catalog } = props;
-  const region = request.selectionRange ?? request.activeCell;
+  const FileGlyph = request.surface === "spreadsheet" ? FileSpreadsheetIcon : FileTextIcon;
+  const fallbackName = request.surface === "spreadsheet" ? "Spreadsheet" : "Document";
 
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-1.5 select-none">
         <span className="inline-flex min-w-0 items-center gap-1 rounded-md border border-primary/25 bg-primary/10 px-1.5 py-0.5 text-[11px] font-medium text-foreground/90">
-          <FileSpreadsheetIcon className="size-3 shrink-0 text-primary/80" />
+          <FileGlyph className="size-3 shrink-0 text-primary/80" />
           <span className="max-w-[200px] truncate" title={request.fileName ?? undefined}>
-            {request.fileName ?? "Spreadsheet"}
+            {request.fileName ?? fallbackName}
           </span>
         </span>
         {request.sheet ? (
@@ -51,18 +48,18 @@ export function SpreadsheetCanvasRequestBody(props: {
             {request.sheet}
           </span>
         ) : null}
-        {region ? (
+        {request.region ? (
           <span className="inline-flex items-center rounded-md bg-muted/50 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
-            {region}
+            {request.region}
           </span>
         ) : null}
       </div>
-      {request.value ? (
+      {request.selectionText ? (
         <div
-          className="truncate rounded-md border border-border/40 bg-muted/30 px-2 py-1 text-xs italic text-muted-foreground"
-          title={request.value}
+          className="line-clamp-3 rounded-md border border-border/40 bg-muted/30 px-2 py-1 text-xs italic text-muted-foreground"
+          title={request.selectionText}
         >
-          {`\u201C${request.value}\u201D`}
+          {`\u201C${request.selectionText}\u201D`}
         </div>
       ) : null}
       {request.userRequest ? (
@@ -137,29 +134,14 @@ export const FeedRow = memo(function FeedRow(props: {
             <div className="whitespace-pre-wrap">
               {(() => {
                 const { cleanText, fileNames } = parseUserMessageAttachments(item.text);
-                const canvasRequest = parseSpreadsheetCanvasRequest(cleanText);
-                const parsed = canvasRequest ? null : parseCanvasEditMessage(cleanText);
+                const canvasRequest = parseCanvasRequest(cleanText);
 
                 return (
                   <div className="flex flex-col gap-3">
                     {cleanText ? (
                       <div>
                         {canvasRequest ? (
-                          <SpreadsheetCanvasRequestBody
-                            request={canvasRequest}
-                            catalog={mentionCatalog}
-                          />
-                        ) : parsed ? (
-                          <div className="flex flex-col gap-1.5">
-                            {parsed.selection && (
-                              <div className="text-[10px] font-semibold text-primary/70 uppercase tracking-wider flex items-center gap-1 select-none">
-                                <span>Selected Text</span>
-                              </div>
-                            )}
-                            <div>
-                              <MentionText text={parsed.instructions} catalog={mentionCatalog} />
-                            </div>
-                          </div>
+                          <CanvasRequestBody request={canvasRequest} catalog={mentionCatalog} />
                         ) : (
                           <MentionText text={cleanText} catalog={mentionCatalog} />
                         )}

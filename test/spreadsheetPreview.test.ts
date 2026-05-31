@@ -210,6 +210,10 @@ describe("spreadsheet preview parser", () => {
         name: "Summary",
         rowCount: 3,
         colCount: 2,
+        loadedRowCount: 3,
+        loadedColCount: 2,
+        truncatedRows: false,
+        truncatedCols: false,
       });
       expect(sheet.cells.map((cell) => cell.address)).toEqual(["A1", "B1", "A2", "B2", "A3", "B3"]);
       expect(sheet.cells.find((cell) => cell.address === "A1")?.style).toMatchObject({
@@ -260,6 +264,10 @@ describe("spreadsheet preview parser", () => {
       const sheet = result.workbook.sheets[0];
       expect(sheet?.rowCount).toBe(301);
       expect(sheet?.colCount).toBe(250);
+      expect(sheet?.loadedRowCount).toBe(250);
+      expect(sheet?.loadedColCount).toBe(200);
+      expect(sheet?.truncatedRows).toBe(true);
+      expect(sheet?.truncatedCols).toBe(true);
       expect(sheet?.cells.length).toBeLessThanOrEqual(50_000);
       expect(sheet?.cells.some((cell) => cell.col >= 200)).toBe(false);
       expect(result.workbook.warnings[0]).toContain("workbook canvas snapshot is limited");

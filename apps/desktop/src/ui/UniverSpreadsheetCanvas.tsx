@@ -104,6 +104,10 @@ function shouldBlockWindowUnload(saveState: SaveState, saveInFlight: Promise<boo
   return saveState === "dirty" || saveState === "saving" || saveInFlight !== null;
 }
 
+function idleStateAfterNoPendingOperations(current: SaveState): SaveState {
+  return current === "error" ? "error" : "idle";
+}
+
 export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreadsheetCanvasProps) {
   const loadSpreadsheetWorkbook = useAppStore((s) => s.loadSpreadsheetWorkbook);
   const loadSpreadsheetFileVersion = useAppStore((s) => s.loadSpreadsheetFileVersion);
@@ -159,12 +163,13 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
       if (!shouldBlockWindowUnload(saveStateRef.current, saveInFlightRef.current)) return;
       void flushSaveRef.current();
       event.preventDefault();
+      event.stopImmediatePropagation();
       event.returnValue = "";
     };
 
-    window.addEventListener("beforeunload", handleBeforeUnload);
+    window.addEventListener("beforeunload", handleBeforeUnload, { capture: true });
     return () => {
-      window.removeEventListener("beforeunload", handleBeforeUnload);
+      window.removeEventListener("beforeunload", handleBeforeUnload, { capture: true });
     };
   }, []);
 
@@ -394,7 +399,7 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
           includeFormatting: supportsWorkbookFormatting,
         });
         if (operations.length === 0) {
-          updateSaveState("idle");
+          updateSaveState(idleStateAfterNoPendingOperations);
           return true;
         }
 
@@ -449,7 +454,7 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
 
     const scheduleSave = () => {
       if (getPendingOperations().length === 0) {
-        updateSaveState("idle");
+        updateSaveState(idleStateAfterNoPendingOperations);
         return;
       }
       updateSaveState((current) => (current === "saving" ? "saving" : "dirty"));

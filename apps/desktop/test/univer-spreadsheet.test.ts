@@ -167,6 +167,57 @@ describe("Univer spreadsheet helpers", () => {
     expect(data.sheets["sheet-1"]?.cellData?.[0]?.[1]?.t).toBe(CellValueType.STRING);
   });
 
+  test("uses XLSX error display text instead of raw error codes", () => {
+    const data = spreadsheetSnapshotToUniverData({
+      ...WORKBOOK,
+      sheets: [
+        {
+          ...WORKBOOK.sheets[0]!,
+          cells: [
+            {
+              row: 0,
+              col: 0,
+              address: "A1",
+              value: "#DIV/0!",
+              formattedValue: "#DIV/0!",
+              rawValue: 7,
+              type: "e",
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(data.sheets["sheet-1"]?.cellData?.[0]?.[0]?.v).toBe("#DIV/0!");
+    expect(data.sheets["sheet-1"]?.cellData?.[0]?.[0]?.t).toBe(CellValueType.STRING);
+  });
+
+  test("caps truncated sheets to loaded snapshot bounds", () => {
+    const data = spreadsheetSnapshotToUniverData({
+      ...WORKBOOK,
+      warnings: ["Summary: workbook canvas snapshot is limited"],
+      sheets: [
+        {
+          ...WORKBOOK.sheets[0]!,
+          rowCount: 10_000,
+          colCount: 250,
+          loadedRowCount: 200,
+          loadedColCount: 25,
+          truncatedRows: true,
+          truncatedCols: true,
+          cells: [],
+          mergedCells: [],
+          columnWidths: [],
+          tables: [],
+          charts: [],
+        },
+      ],
+    });
+
+    expect(data.sheets["sheet-1"]?.rowCount).toBe(200);
+    expect(data.sheets["sheet-1"]?.columnCount).toBe(25);
+  });
+
   test("diffs Univer workbook edits into value and format batch operations", () => {
     const previous = spreadsheetSnapshotToUniverData(WORKBOOK);
     const current = cloneUniverWorkbookData(previous);

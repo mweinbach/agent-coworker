@@ -115,6 +115,10 @@ export type SpreadsheetFileVersionResult =
 
 export type SpreadsheetWorkbookSnapshotSheet = SpreadsheetSheetSummary & {
   id: string;
+  loadedRowCount?: number;
+  loadedColCount?: number;
+  truncatedRows?: boolean;
+  truncatedCols?: boolean;
   cells: SpreadsheetPreviewCell[];
   mergedCells: SpreadsheetMergedRange[];
   columnWidths: SpreadsheetColumnWidth[];

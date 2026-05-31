@@ -575,21 +575,19 @@ function parseStylesheet(xml: string): {
 }
 
 function readCellStyleIndex(sheetXml: string, ref: string): string | undefined {
-  const match =
-    sheetXml.match(new RegExp(`<c\\b[^>]*\\br="${ref}"[^>]*?>`)) ??
-    sheetXml.match(new RegExp(`<c\\b[^>]*\\br="${ref}"[^>]*?/>`));
+  const match = sheetXml.match(cellOpenTagRegex(ref)) ?? sheetXml.match(cellSelfClosingRegex(ref));
   return match ? getXmlAttr(match[0], "s") : undefined;
 }
 
 function applyCellStyle(xml: string, addr: CellAddress, ref: string, styleIndex: number): string {
-  const selfClose = new RegExp(`<c\\b[^>]*\\br="${ref}"[^>]*?/>`);
+  const selfClose = cellSelfClosingRegex(ref);
   if (selfClose.test(xml)) {
     return maybeExpandDimension(
       xml.replace(selfClose, (cellXml) => setCellStyle(cellXml, styleIndex)),
       addr,
     );
   }
-  const withChildren = new RegExp(`<c\\b[^>]*\\br="${ref}"[^>]*?>[\\s\\S]*?</c>`);
+  const withChildren = cellWithChildrenRegex(ref);
   if (withChildren.test(xml)) {
     return maybeExpandDimension(
       xml.replace(withChildren, (cellXml) => setCellStyle(cellXml, styleIndex)),
@@ -686,9 +684,9 @@ function defaultXf(): XmlRecord {
 
 /** Pull the existing `s="N"` style attribute off the target cell, if any. */
 function readCellStyleAttr(sheetXml: string, ref: string): string {
-  const match = sheetXml.match(new RegExp(`<c\\b[^>]*\\br="${ref}"[^>]*?>`));
+  const match = sheetXml.match(cellOpenTagRegex(ref));
   if (!match) {
-    const selfClosing = sheetXml.match(new RegExp(`<c\\b[^>]*\\br="${ref}"[^>]*?/>`));
+    const selfClosing = sheetXml.match(cellSelfClosingRegex(ref));
     if (!selfClosing) return "";
     const s = getXmlAttr(selfClosing[0], "s");
     return s !== undefined ? `s="${s}"` : "";
@@ -840,15 +838,31 @@ function setColRange(tag: string, min: number, max: number): string {
  * in ascending order when absent. Only the single `<c>` / `<row>` is touched.
  */
 function applyCellEdit(xml: string, addr: CellAddress, ref: string, cellXml: string): string {
-  const selfClose = new RegExp(`<c\\b[^>]*\\br="${ref}"[^>]*?/>`);
+  const selfClose = cellSelfClosingRegex(ref);
   if (selfClose.test(xml)) {
     return maybeExpandDimension(xml.replace(selfClose, cellXml), addr);
   }
-  const withChildren = new RegExp(`<c\\b[^>]*\\br="${ref}"[^>]*?>[\\s\\S]*?</c>`);
+  const withChildren = cellWithChildrenRegex(ref);
   if (withChildren.test(xml)) {
     return maybeExpandDimension(xml.replace(withChildren, cellXml), addr);
   }
   return maybeExpandDimension(insertCell(xml, addr, ref, cellXml), addr);
+}
+
+function cellOpenTagRegex(ref: string): RegExp {
+  return new RegExp(`<c\\b(?=[^>]*\\br="${escapeRegExp(ref)}"(?=[\\s/>]))[^>]*?>`);
+}
+
+function cellSelfClosingRegex(ref: string): RegExp {
+  return new RegExp(`<c\\b(?=[^>]*\\br="${escapeRegExp(ref)}"(?=[\\s/>]))[^>]*?/>`);
+}
+
+function cellWithChildrenRegex(ref: string): RegExp {
+  return new RegExp(`<c\\b(?=[^>]*\\br="${escapeRegExp(ref)}"(?=[\\s/>]))[^>]*?>[\\s\\S]*?</c>`);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function insertCell(xml: string, addr: CellAddress, _ref: string, cellXml: string): string {

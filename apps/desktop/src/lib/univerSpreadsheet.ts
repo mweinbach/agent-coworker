@@ -254,6 +254,18 @@ function sheetSnapshotToUniverSheet(
   styles: Record<string, IStyleData>,
   styleIds: Map<string, string>,
 ): Partial<IWorksheetData> {
+  const rowCount = resolveUniverSheetLength({
+    total: sheet.rowCount,
+    loaded: sheet.loadedRowCount,
+    truncated: sheet.truncatedRows,
+    minimum: MIN_UNIVER_ROWS,
+  });
+  const columnCount = resolveUniverSheetLength({
+    total: sheet.colCount,
+    loaded: sheet.loadedColCount,
+    truncated: sheet.truncatedCols,
+    minimum: MIN_UNIVER_COLS,
+  });
   const cellData: UniverCellMatrix = {};
   for (const cell of sheet.cells) {
     const univerCell = previewCellToUniverCell(cell, kind, styles, styleIds);
@@ -278,8 +290,8 @@ function sheetSnapshotToUniverSheet(
     tabColor: "",
     hidden: sheet.hidden ? BooleanNumber.TRUE : BooleanNumber.FALSE,
     freeze: { startRow: -1, startColumn: -1, ySplit: 0, xSplit: 0 },
-    rowCount: Math.max(sheet.rowCount, MIN_UNIVER_ROWS),
-    columnCount: Math.max(sheet.colCount, MIN_UNIVER_COLS),
+    rowCount,
+    columnCount,
     zoomRatio: 1,
     scrollTop: 0,
     scrollLeft: 0,
@@ -314,6 +326,10 @@ function previewCellToUniverCell(
       data.v = cell.value;
       data.t = CellValueType.STRING;
     }
+  } else if (cell.type === "e") {
+    data.v = cell.formattedValue ?? cell.value;
+    data.t = CellValueType.STRING;
+    if (cell.formula) data.f = `=${cell.formula}`;
   } else if (cell.formula) {
     data.f = `=${cell.formula}`;
     if (cell.rawValue !== undefined && cell.rawValue !== null) {
@@ -331,6 +347,16 @@ function previewCellToUniverCell(
     data.s = styleIdFor(cell.style, styles, styleIds);
   }
   return data;
+}
+
+function resolveUniverSheetLength(opts: {
+  total: number;
+  loaded: number | undefined;
+  truncated: boolean | undefined;
+  minimum: number;
+}): number {
+  if (!opts.truncated) return Math.max(opts.total, opts.minimum);
+  return Math.max(opts.loaded ?? 0, 1);
 }
 
 function cellValueTypeFor(value: string | number | boolean): CellValueType {

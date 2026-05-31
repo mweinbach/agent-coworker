@@ -263,6 +263,10 @@ async function buildSpreadsheetWorkbookSnapshot(opts: {
     sheets.push({
       ...sheet,
       id: `sheet-${index + 1}`,
+      loadedRowCount: viewport.rowCount,
+      loadedColCount: viewport.colCount,
+      truncatedRows: viewport.truncatedRows,
+      truncatedCols: viewport.truncatedCols,
       cells: worksheet
         ? buildSnapshotCells(worksheet, packageDetails.cellStyles, viewport, date1904)
         : buildStyledBlankCells(packageDetails.cellStyles, viewport),

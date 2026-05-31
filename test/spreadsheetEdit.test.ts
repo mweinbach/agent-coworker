@@ -265,6 +265,35 @@ describe("xlsx single-cell edit (lossless)", () => {
     });
   });
 
+  test("matches edited XLSX cell addresses exactly", async () => {
+    await withTempDir(async (dir) => {
+      const filePath = path.join(dir, "model.xlsx");
+      const workbook = await buildWorkbook();
+      const zip = await JSZip.loadAsync(workbook);
+      zip.file(
+        "xl/worksheets/sheet1.xml",
+        `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:AA10"/><sheetData><row r="1"><c r="AA1" t="inlineStr"><is><t>wide</t></is></c></row><row r="10"><c r="A10" t="inlineStr"><is><t>lower</t></is></c></row></sheetData></worksheet>`,
+      );
+      await fs.writeFile(filePath, await zip.generateAsync({ type: "nodebuffer" }));
+
+      expect(
+        await editSpreadsheetCell({
+          cwd: dir,
+          filePath,
+          sheetName: "Summary",
+          address: "A1",
+          rawInput: "top",
+        }),
+      ).toEqual({ ok: true });
+
+      const cells = await readSheetCells(dir, filePath, "Summary");
+      expect(cells.find((cell) => cell.address === "A1")?.value).toBe("top");
+      expect(cells.find((cell) => cell.address === "A10")?.value).toBe("lower");
+      expect(cells.find((cell) => cell.address === "AA1")?.value).toBe("wide");
+    });
+  });
+
   test("creates a missing row in row order", async () => {
     await withTempDir(async (dir) => {
       const filePath = path.join(dir, "model.xlsx");

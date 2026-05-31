@@ -102,6 +102,10 @@ const spreadsheetWorkbookSnapshotSheetSchema = z
     name: nonEmptyTrimmedStringSchema,
     rowCount: z.number().int().nonnegative(),
     colCount: z.number().int().nonnegative(),
+    loadedRowCount: z.number().int().nonnegative().optional(),
+    loadedColCount: z.number().int().nonnegative().optional(),
+    truncatedRows: z.boolean().optional(),
+    truncatedCols: z.boolean().optional(),
     hidden: z.boolean().optional(),
     cells: z.array(spreadsheetCellSchema),
     mergedCells: z.array(

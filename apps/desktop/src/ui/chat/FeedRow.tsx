@@ -2,9 +2,11 @@ import {
   FileAudioIcon,
   FileIcon,
   FileImageIcon,
+  FileSpreadsheetIcon,
   FileTextIcon,
   FileVideoIcon,
   MousePointerClickIcon,
+  Table2Icon,
 } from "lucide-react";
 import { memo } from "react";
 import type { CitationSource } from "../../../../../src/shared/displayCitationMarkers";
@@ -17,9 +19,60 @@ import { A2uiInlineCard } from "./a2ui/A2uiInlineCard";
 import { A2uiSurfaceHistoryRow } from "./a2ui/A2uiSurfaceHistoryRow";
 import { useChatViewContext } from "./ChatViewContext";
 import { parseA2uiActionMessage, summarizeA2uiActionMessage } from "./chatLogic";
-import { parseCanvasEditMessage, parseUserMessageAttachments } from "./feedMessageParsing";
+import type { MentionCatalog } from "./composerMentions";
+import {
+  parseCanvasEditMessage,
+  parseSpreadsheetCanvasRequest,
+  type SpreadsheetCanvasRequest,
+  parseUserMessageAttachments,
+} from "./feedMessageParsing";
 import { MentionText } from "./MentionText";
 import { ToolCard } from "./toolCards/ToolCard";
+
+export function SpreadsheetCanvasRequestBody(props: {
+  request: SpreadsheetCanvasRequest;
+  catalog: MentionCatalog;
+}) {
+  const { request, catalog } = props;
+  const region = request.selectionRange ?? request.activeCell;
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-1.5 select-none">
+        <span className="inline-flex min-w-0 items-center gap-1 rounded-md border border-primary/25 bg-primary/10 px-1.5 py-0.5 text-[11px] font-medium text-foreground/90">
+          <FileSpreadsheetIcon className="size-3 shrink-0 text-primary/80" />
+          <span className="max-w-[200px] truncate" title={request.fileName ?? undefined}>
+            {request.fileName ?? "Spreadsheet"}
+          </span>
+        </span>
+        {request.sheet ? (
+          <span className="inline-flex items-center gap-1 rounded-md bg-muted/50 px-1.5 py-0.5 text-[11px] text-muted-foreground">
+            <Table2Icon className="size-3 shrink-0" />
+            {request.sheet}
+          </span>
+        ) : null}
+        {region ? (
+          <span className="inline-flex items-center rounded-md bg-muted/50 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+            {region}
+          </span>
+        ) : null}
+      </div>
+      {request.value ? (
+        <div
+          className="truncate rounded-md border border-border/40 bg-muted/30 px-2 py-1 text-xs italic text-muted-foreground"
+          title={request.value}
+        >
+          {`\u201C${request.value}\u201D`}
+        </div>
+      ) : null}
+      {request.userRequest ? (
+        <div className="text-foreground">
+          <MentionText text={request.userRequest} catalog={catalog} />
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 export const FeedRow = memo(function FeedRow(props: {
   item: FeedItem;
@@ -84,13 +137,19 @@ export const FeedRow = memo(function FeedRow(props: {
             <div className="whitespace-pre-wrap">
               {(() => {
                 const { cleanText, fileNames } = parseUserMessageAttachments(item.text);
-                const parsed = parseCanvasEditMessage(cleanText);
+                const canvasRequest = parseSpreadsheetCanvasRequest(cleanText);
+                const parsed = canvasRequest ? null : parseCanvasEditMessage(cleanText);
 
                 return (
                   <div className="flex flex-col gap-3">
                     {cleanText ? (
                       <div>
-                        {parsed ? (
+                        {canvasRequest ? (
+                          <SpreadsheetCanvasRequestBody
+                            request={canvasRequest}
+                            catalog={mentionCatalog}
+                          />
+                        ) : parsed ? (
                           <div className="flex flex-col gap-1.5">
                             {parsed.selection && (
                               <div className="text-[10px] font-semibold text-primary/70 uppercase tracking-wider flex items-center gap-1 select-none">

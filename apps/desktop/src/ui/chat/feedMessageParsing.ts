@@ -1,3 +1,56 @@
+export type SpreadsheetCanvasRequest = {
+  fileName: string | null;
+  kind: string | null;
+  sheet: string | null;
+  selectionRange: string | null;
+  activeCell: string | null;
+  value: string | null;
+  userRequest: string;
+};
+
+function unescapeXml(value: string): string {
+  // Order matters: decode "&amp;" last so a literal "&lt;" isn't double-decoded.
+  return value
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
+function firstCapture(text: string, pattern: RegExp): string | null {
+  const match = text.match(pattern);
+  if (!match || match[1] === undefined) return null;
+  const decoded = unescapeXml(match[1]).trim();
+  return decoded.length > 0 ? decoded : null;
+}
+
+/**
+ * Parse the `<spreadsheet_canvas_request>` envelope the Univer canvas sends as a
+ * chat message (see `lib/univerSpreadsheet.ts#buildUniverSpreadsheetPrompt`).
+ * The renderer uses this to show a compact file/region header above the user's
+ * request instead of the raw XML blob. Returns null for non-canvas messages.
+ */
+export function parseSpreadsheetCanvasRequest(text: string): SpreadsheetCanvasRequest | null {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("<spreadsheet_canvas_request")) return null;
+
+  const userRequestMatch = trimmed.match(/<user_request>([\s\S]*?)<\/user_request>/);
+  if (!userRequestMatch) return null;
+
+  const selectionMatch = trimmed.match(/<selection\s+range="([^"]*)"\s+active_cell="([^"]*)"/);
+
+  return {
+    fileName: firstCapture(trimmed, /<workbook\b[^>]*?\sfile_name="([^"]*)"/),
+    kind: firstCapture(trimmed, /<workbook\b[^>]*?\skind="([^"]*)"/),
+    sheet: firstCapture(trimmed, /<active_sheet>([\s\S]*?)<\/active_sheet>/),
+    selectionRange: selectionMatch ? (unescapeXml(selectionMatch[1]).trim() || null) : null,
+    activeCell: selectionMatch ? (unescapeXml(selectionMatch[2]).trim() || null) : null,
+    value: firstCapture(trimmed, /<selection\b[^>]*>\s*<value>([\s\S]*?)<\/value>/),
+    userRequest: unescapeXml(userRequestMatch[1]).trim(),
+  };
+}
+
 export function parseCanvasEditMessage(text: string) {
   if (!text.startsWith("[Open Canvas Collaborative Edit]")) return null;
 

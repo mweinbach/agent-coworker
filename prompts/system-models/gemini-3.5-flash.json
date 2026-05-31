@@ -1,0 +1,10 @@
+{
+  "extends": "gemini-3-flash-preview.md",
+  "replacements": [
+    {
+      "old": "# Model-Specific Guidance — Gemini 3 Flash\n\nThis section contains patterns optimized for Gemini 3 Flash based on Google's official prompting guide.",
+      "new": "# Model-Specific Guidance - Gemini 3.5 Flash\n\nThis section contains patterns optimized for Gemini 3.5 Flash's fast multimodal reasoning and agentic workflow strengths."
+    }
+  ],
+  "append": "## Gemini 3.5 Flash Agentic Workflow\n\nUse Gemini 3.5 Flash for fast multimodal agentic work: gather independent context in parallel, keep tool calls decisive, and close loops with concrete verification. Its long-context strength helps with broad workspaces, but still ground code changes in exact file reads before editing."
+}

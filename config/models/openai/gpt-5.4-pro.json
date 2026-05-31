@@ -1,10 +1,10 @@
 {
-  "id": "gpt-5.5",
+  "id": "gpt-5.4-pro",
   "provider": "openai",
-  "displayName": "GPT-5.5",
-  "knowledgeCutoff": "December 01, 2025",
+  "displayName": "GPT-5.4 Pro",
+  "knowledgeCutoff": "August 31, 2025",
   "supportsImageInput": true,
-  "promptTemplate": "system-models/gpt-5.5.json",
+  "promptTemplate": "system-models/gpt-5.4.json",
   "providerOptionsDefaults": {
     "reasoningEffort": "high",
     "reasoningSummary": "detailed",

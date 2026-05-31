@@ -100,10 +100,22 @@ function maybeBuildReasoningPayload(
   };
 }
 
-function normalizeOpenAiReasoningEffort(value: unknown): string | undefined {
+function openAiModelSupportsXhighReasoning(modelId: string | undefined): boolean {
+  const normalized = modelId?.trim().toLowerCase();
+  return (
+    normalized === "gpt-5.5" ||
+    normalized?.startsWith("gpt-5.5-") === true ||
+    normalized === "gpt-5.4" ||
+    normalized?.startsWith("gpt-5.4-") === true
+  );
+}
+
+function normalizeOpenAiReasoningEffort(value: unknown, modelId?: string): string | undefined {
   const normalized = asNonEmptyString(value)?.toLowerCase();
   if (!normalized || normalized === "none") return undefined;
-  if (normalized === "xhigh") return "high";
+  if (normalized === "xhigh") {
+    return openAiModelSupportsXhighReasoning(modelId) ? "xhigh" : "high";
+  }
   return ["minimal", "low", "medium", "high"].includes(normalized) ? normalized : undefined;
 }
 
@@ -223,7 +235,10 @@ function buildOpenAiNativeRequest(opts: OpenAiNativeStepRequest): Record<string,
     request.temperature = temperature;
   }
 
-  const reasoningEffort = normalizeOpenAiReasoningEffort(opts.streamOptions.reasoningEffort);
+  const reasoningEffort = normalizeOpenAiReasoningEffort(
+    opts.streamOptions.reasoningEffort,
+    opts.model.id,
+  );
   const reasoningSummary = asNonEmptyString(opts.streamOptions.reasoningSummary);
   const reasoning = maybeBuildReasoningPayload(
     reasoningEffort,
@@ -366,6 +381,7 @@ export const __internal = {
   convertPiToolsToResponsesTools,
   mergeUniqueStrings,
   normalizeOpenAiReasoningEffort,
+  openAiModelSupportsXhighReasoning,
   normalizeAllowedDomains,
   normalizeWebSearchLocation,
 } as const;

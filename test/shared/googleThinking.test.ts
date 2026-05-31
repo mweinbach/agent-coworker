@@ -15,6 +15,13 @@ describe("googleThinking helpers", () => {
       "medium",
       "high",
     ]);
+    expect(listGoogleReasoningEffortValuesForModel("gemini-3.1-flash-lite")).toEqual([
+      GOOGLE_DYNAMIC_REASONING_EFFORT,
+      "minimal",
+      "low",
+      "medium",
+      "high",
+    ]);
     expect(listGoogleReasoningEffortValuesForModel("gemini-3.1-flash-lite-preview")).toEqual([
       GOOGLE_DYNAMIC_REASONING_EFFORT,
       "minimal",

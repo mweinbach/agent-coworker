@@ -1,0 +1,4 @@
+{
+  "extends": "gpt-5.4.json",
+  "append": "# Model-Specific Guidance - GPT-5.5\n\n- Treat GPT-5.5 as the frontier OpenAI choice for complex coding, long-context synthesis, and hard agent workflows.\n- Use the larger context window deliberately: keep broad plans and cross-file state coherent, but still inspect exact files before editing.\n- For long-running coding tasks, favor decisive tool use, focused verification, and concise reasoning summaries over long visible deliberation."
+}

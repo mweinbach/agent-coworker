@@ -7,9 +7,9 @@
   "promptTemplate": "system-models/claude-opus-4-7.json",
   "providerOptionsDefaults": {
     "thinking": {
-      "type": "enabled",
-      "budgetTokens": 32000
+      "type": "adaptive"
     },
+    "effort": "high",
     "disableParallelToolUse": true
   },
   "isDefault": false

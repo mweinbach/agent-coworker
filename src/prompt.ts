@@ -96,6 +96,7 @@ async function resolveSystemTemplatePath(config: AgentConfig): Promise<string> {
 
 type PromptTemplateOverlaySpec = {
   extends: string;
+  append?: string;
   replacements?: Array<{ old: string; new: string }>;
 };
 
@@ -130,11 +131,14 @@ function parsePromptTemplateOverlaySpec(
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error(`Prompt template overlay must contain a JSON object: ${templatePath}`);
   }
-  const overlay = parsed as { extends?: unknown; replacements?: unknown };
+  const overlay = parsed as { append?: unknown; extends?: unknown; replacements?: unknown };
   if (typeof overlay.extends !== "string" || overlay.extends.trim().length === 0) {
     throw new Error(
       `Prompt template overlay must include a non-empty string "extends": ${templatePath}`,
     );
+  }
+  if (overlay.append !== undefined && typeof overlay.append !== "string") {
+    throw new Error(`Prompt template overlay append must be a string: ${templatePath}`);
   }
   if (overlay.replacements !== undefined && !Array.isArray(overlay.replacements)) {
     throw new Error(`Prompt template overlay replacements must be an array: ${templatePath}`);
@@ -155,6 +159,7 @@ function parsePromptTemplateOverlaySpec(
   });
   return {
     extends: overlay.extends,
+    ...(overlay.append !== undefined ? { append: overlay.append } : {}),
     ...(replacements.length > 0 ? { replacements } : {}),
   };
 }
@@ -189,6 +194,13 @@ async function loadPromptTemplate(
       );
     }
     prompt = prompt.replace(replacement.old, replacement.new);
+  }
+
+  if (overlay.append !== undefined) {
+    const append = normalizePromptTemplateNewlines(overlay.append).trim();
+    if (append) {
+      prompt = `${prompt.trimEnd()}\n\n${append}\n`;
+    }
   }
 
   return prompt;

@@ -14,6 +14,7 @@ const GOOGLE_PRO_THINKING_LEVELS = ["low", "medium", "high"] as const;
 
 const GOOGLE_FLASH_MODEL_IDS = new Set([
   "gemini-3-flash-preview",
+  "gemini-3.1-flash-lite",
   "gemini-3.1-flash-lite-preview",
   "gemini-3.5-flash",
 ]);

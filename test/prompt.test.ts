@@ -229,6 +229,16 @@ const IMAGE_GUIDANCE_PROMPT_CONFIGS = [
   },
   {
     provider: "google",
+    model: "gemini-3.1-flash-lite",
+    preferredChildModel: "gemini-3.1-flash-lite",
+  },
+  {
+    provider: "google",
+    model: "gemini-3.5-flash",
+    preferredChildModel: "gemini-3.5-flash",
+  },
+  {
+    provider: "google",
     model: "gemini-3.1-pro-preview",
     preferredChildModel: "gemini-3.1-pro-preview",
   },
@@ -245,6 +255,16 @@ const GEMINI_PROMPT_CONFIGS = [
     provider: "google",
     model: "gemini-3-flash-preview",
     preferredChildModel: "gemini-3-flash-preview",
+  },
+  {
+    provider: "google",
+    model: "gemini-3.1-flash-lite",
+    preferredChildModel: "gemini-3.1-flash-lite",
+  },
+  {
+    provider: "google",
+    model: "gemini-3.5-flash",
+    preferredChildModel: "gemini-3.5-flash",
   },
 ] as const;
 
@@ -641,6 +661,44 @@ describe("loadSystemPrompt", () => {
     expect(prompt).not.toContain("DEFAULT SYSTEM TEMPLATE");
   });
 
+  test("appends prompt template overlay content after replacements", async () => {
+    const { builtIn } = await makeTmpDirs();
+
+    await writeFile(path.join(builtIn, "prompts", "system.md"), "Base {{modelName}}\n");
+    await writeFile(
+      path.join(builtIn, "prompts", "system-models", "gpt-5.4.json"),
+      JSON.stringify(
+        {
+          extends: "../system.md",
+          replacements: [
+            {
+              old: "Base {{modelName}}",
+              new: "Replaced {{modelName}}",
+            },
+          ],
+          append: "Appended {{modelName}} guidance.",
+        },
+        null,
+        2,
+      ),
+    );
+
+    const prompt = await loadSystemPrompt(
+      makeConfig({
+        builtInDir: builtIn,
+        provider: "openai",
+        model: "gpt-5.4",
+        skillsDirs: ["/nonexistent/skills"],
+      }),
+    );
+
+    expect(prompt).toContain("Replaced GPT-5.4");
+    expect(prompt).toContain("Appended GPT-5.4 guidance.");
+    expect(prompt.indexOf("Replaced GPT-5.4")).toBeLessThan(
+      prompt.indexOf("Appended GPT-5.4 guidance."),
+    );
+  });
+
   test("uses the gpt-5.4 system template for gpt-5.4-mini", async () => {
     const { builtIn } = await makeTmpDirs();
 
@@ -695,6 +753,22 @@ describe("loadSystemPrompt", () => {
     expect(prompt).toContain("prefer the native search/open/find tool");
     expect(prompt).toContain("unless provider-native citations already cover them");
     expect(prompt).toContain("Do not create extra staging files or helper folders");
+  });
+
+  test("real gpt-5.5 prompt appends frontier long-context guidance", async () => {
+    const config = makeConfig({
+      provider: "openai",
+      model: "gpt-5.5",
+      preferredChildModel: "gpt-5.5",
+      skillsDirs: ["/nonexistent/skills"],
+    });
+    const prompt = await loadSystemPrompt(config);
+
+    expectWorkspaceHygieneAndShellFirstGuidance(prompt);
+    expect(prompt).toContain("Model-Specific Guidance - GPT-5.5");
+    expect(prompt).toContain("frontier OpenAI choice for complex coding");
+    expect(prompt).toContain("Use the larger context window deliberately");
+    expect(prompt).not.toContain("{{");
   });
 
   test("real gpt-5.2 prompt includes workspace hygiene and shell-first guidance", async () => {
@@ -778,6 +852,23 @@ describe("loadSystemPrompt", () => {
       expect(prompt.toLowerCase()).toContain("already attached in the current message");
       expect(prompt.toLowerCase()).toContain("use the attached content directly");
     }
+  });
+
+  test("Gemini 3.5 Flash prompt uses its own model-specific guidance", async () => {
+    const prompt = await loadSystemPrompt(
+      makeConfig({
+        provider: "google",
+        model: "gemini-3.5-flash",
+        preferredChildModel: "gemini-3.5-flash",
+        skillsDirs: ["/nonexistent/skills"],
+      }),
+    );
+
+    expect(prompt).toContain("Model-Specific Guidance - Gemini 3.5 Flash");
+    expect(prompt).toContain("Gemini 3.5 Flash Agentic Workflow");
+    expect(prompt).toContain("fast multimodal agentic work");
+    expect(prompt).not.toContain("Model-Specific Guidance — Gemini 3 Flash");
+    expect(prompt).not.toContain("optimized for Gemini 3 Flash based");
   });
 
   test("uses model-specific system template for gemini-3.1-pro-preview when present", async () => {
@@ -869,6 +960,22 @@ describe("loadSystemPrompt", () => {
     expect(prompt).toContain("<thinking_process>");
     expect(prompt).toContain("Use XML tags in your output when producing structured results");
     expect(prompt).not.toContain("<opus_reasoning>");
+  });
+
+  test("real Claude Opus 4.8 prompt emphasizes adaptive thinking without exposing complete reasoning", async () => {
+    const prompt = await loadSystemPrompt(
+      makeConfig({
+        provider: "anthropic",
+        model: "claude-opus-4-8",
+        preferredChildModel: "claude-opus-4-8",
+        skillsDirs: ["/nonexistent/skills"],
+      }),
+    );
+
+    expect(prompt).toContain("Claude Opus 4.8 with adaptive thinking");
+    expect(prompt).toContain("Use adaptive tool-aware reasoning");
+    expect(prompt).toContain("without exposing full private reasoning");
+    expect(prompt).not.toContain("show your complete reasoning");
   });
 
   test("falls back to default system template when model template is missing", async () => {

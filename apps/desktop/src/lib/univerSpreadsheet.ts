@@ -15,7 +15,6 @@ import type {
   SpreadsheetCellStyle,
   SpreadsheetCellStylePatch,
   SpreadsheetPreviewCell,
-  SpreadsheetTableSummary,
   SpreadsheetWorkbookSnapshot,
   SpreadsheetWorkbookSnapshotSheet,
 } from "../../../../src/shared/spreadsheetPreview";
@@ -209,7 +208,11 @@ function sheetSnapshotToUniverSheet(
   for (const cell of sheet.cells) {
     const univerCell = previewCellToUniverCell(cell, styles, styleIds);
     if (Object.keys(univerCell).length === 0) continue;
-    const row = (cellData[cell.row] ??= {});
+    let row = cellData[cell.row];
+    if (!row) {
+      row = {};
+      cellData[cell.row] = row;
+    }
     row[cell.col] = univerCell;
   }
 

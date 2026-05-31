@@ -55,6 +55,10 @@ code {
   -webkit-user-select: text;
 }
 
+* {
+  box-sizing: border-box;
+}
+
 [data-cowork-univer-canvas="true"],
 [data-cowork-univer-canvas="true"] * {
   --primary-color: var(--accent);
@@ -76,6 +80,7 @@ code {
 }
 
 [data-cowork-univer-canvas="true"] [data-u-comp="formula-bar"] {
+  /* biome-ignore lint/complexity/noImportantStyles: override Univer's own formula-bar height */
   height: 2.25rem !important;
   min-height: 2.25rem;
   overflow: hidden;
@@ -109,10 +114,6 @@ kbd,
 pre,
 samp {
   font-family: var(--font-mono);
-}
-
-* {
-  box-sizing: border-box;
 }
 
 /* Thin overlay-style scrollbars for Chromium 146+ */

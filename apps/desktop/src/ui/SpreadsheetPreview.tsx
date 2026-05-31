@@ -1216,6 +1216,7 @@ export function SpreadsheetPreview({ path, compact = false }: SpreadsheetPreview
 
       <div
         className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-[var(--border-spreadsheet)] bg-[var(--surface-spreadsheet-toolbar)] px-3 py-1.5"
+        role="toolbar"
         aria-label="Spreadsheet formatting controls"
       >
         <Button
@@ -1267,7 +1268,8 @@ export function SpreadsheetPreview({ path, compact = false }: SpreadsheetPreview
           ))}
         </select>
         <div className="mx-1 h-5 w-px bg-[var(--border-spreadsheet)]" aria-hidden />
-        <div className="flex items-center gap-0.5" aria-label="Text color">
+        {/* biome-ignore lint/a11y/useSemanticElements: ARIA toolbar sub-group; fieldset is for forms */}
+        <div className="flex items-center gap-0.5" role="group" aria-label="Text color">
           <PaletteIcon className="mx-1 size-3.5 text-[var(--text-spreadsheet-muted)]" />
           {TEXT_COLOR_SWATCHES.map((hexBody) => {
             const color = spreadsheetSwatchColor(hexBody);
@@ -1285,7 +1287,8 @@ export function SpreadsheetPreview({ path, compact = false }: SpreadsheetPreview
             );
           })}
         </div>
-        <div className="flex items-center gap-0.5" aria-label="Fill color">
+        {/* biome-ignore lint/a11y/useSemanticElements: ARIA toolbar sub-group; fieldset is for forms */}
+        <div className="flex items-center gap-0.5" role="group" aria-label="Fill color">
           <PaintBucketIcon className="mx-1 size-3.5 text-[var(--text-spreadsheet-muted)]" />
           {FILL_COLOR_SWATCHES.map((hexBody) => {
             const color = spreadsheetSwatchColor(hexBody);

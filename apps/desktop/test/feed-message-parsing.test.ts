@@ -105,6 +105,30 @@ describe("parseCanvasRequest", () => {
     expect(parsed?.userRequest).toBe("add a quickstart section");
   });
 
+  test("keeps feedback-mode instructions consistent across canvas surfaces", () => {
+    const feedbackRequest = "what do you think about this?";
+    const feedbackInstruction =
+      "The user is asking for feedback or analysis; answer directly unless they explicitly ask for file changes.";
+    const documentPrompt = buildCanvasDocumentPrompt({
+      path: "/w/readme.md",
+      fileName: "readme.md",
+      kind: "markdown",
+      selection: null,
+      request: feedbackRequest,
+    });
+    const spreadsheetPrompt = buildUniverSpreadsheetPrompt({
+      path: WORKBOOK.path,
+      workbook: WORKBOOK,
+      selection: null,
+      request: feedbackRequest,
+    });
+
+    expect(documentPrompt).toContain('mode="answer_without_editing"');
+    expect(spreadsheetPrompt).toContain('mode="answer_without_editing"');
+    expect(documentPrompt).toContain(feedbackInstruction);
+    expect(spreadsheetPrompt).toContain(feedbackInstruction);
+  });
+
   test("parses the legacy [Canvas Collaborative Edit] markdown envelope", () => {
     const legacy = [
       "[Canvas Collaborative Edit]",

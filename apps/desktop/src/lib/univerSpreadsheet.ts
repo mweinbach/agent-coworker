@@ -18,6 +18,7 @@ import type {
   SpreadsheetWorkbookSnapshot,
   SpreadsheetWorkbookSnapshotSheet,
 } from "../../../../src/shared/spreadsheetPreview";
+import { buildCanvasAssistantInstructions, escapeXml } from "./canvasRequest";
 
 export type UniverSelectionContext = {
   sheetName: string;
@@ -128,21 +129,17 @@ export function buildUniverSpreadsheetPrompt(opts: {
     opts.workbook.sheets[0]?.name ??
     "Sheet1";
   const selection = opts.selection;
-  const feedbackMode = requestLooksLikeFeedback(opts.request)
-    ? "answer_without_editing"
-    : "edit_when_requested";
   const sheet = opts.workbook.sheets.find((candidate) => candidate.name === selectedSheet);
   const objectsXml = sheet ? workbookObjectsXml(sheet) : "";
+  const assistantInstructions = buildCanvasAssistantInstructions({
+    request: opts.request,
+    contextLabel: "embedded Univer spreadsheet canvas",
+    editInstruction:
+      "If the user asks for workbook changes, edit the local workbook file and summarize the exact changes.",
+  });
 
   return `<spreadsheet_canvas_request version="2" source="univer">
-  <assistant_instructions>
-    <instruction>Treat this as structured context from Cowork's embedded Univer spreadsheet canvas.</instruction>
-    <instruction mode="${feedbackMode}">${
-      feedbackMode === "answer_without_editing"
-        ? "The user is asking for feedback or analysis; answer directly unless they explicitly ask for file changes."
-        : "If the user asks for workbook changes, edit the local workbook file and summarize the exact changes."
-    }</instruction>
-  </assistant_instructions>
+${assistantInstructions}
   <workbook file_name="${escapeXml(opts.workbook.filename)}" path="${escapeXml(opts.path)}" kind="${
     opts.workbook.kind
   }">
@@ -425,12 +422,6 @@ function cellByAddress(
   return sheet.cells.find((cell) => cell.address === address.toUpperCase());
 }
 
-function requestLooksLikeFeedback(request: string): boolean {
-  return /\b(what do you think|thoughts?|feedback|opinion|comment|review|analy[sz]e|assessment)\b/i.test(
-    request,
-  );
-}
-
 function workbookObjectsXml(sheet: SpreadsheetWorkbookSnapshotSheet): string {
   const lines: string[] = [];
   if (sheet.tables.length > 0) {
@@ -547,11 +538,3 @@ function stableId(value: string): string {
   return Math.abs(hash).toString(36);
 }
 
-function escapeXml(value: string | number | null | undefined): string {
-  return String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&apos;");
-}

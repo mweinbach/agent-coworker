@@ -124,6 +124,8 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
   const sourceVersionRef = useRef<SpreadsheetFileVersion | null>(null);
   const lastSavedDataRef = useRef<IWorkbookData | null>(null);
   const saveTimerRef = useRef<number | null>(null);
+  const saveInFlightRef = useRef<Promise<boolean> | null>(null);
+  const saveRequestedDuringFlightRef = useRef(false);
   const reloadNoticeTimerRef = useRef<number | null>(null);
   const externalReloadPendingRef = useRef(false);
   const reloadInFlightRef = useRef(false);
@@ -341,35 +343,60 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
     };
 
     const persistWorkbook = async (): Promise<boolean> => {
-      const currentWorkbook = workbookApiRef.current;
-      const previousData = lastSavedDataRef.current;
-      if (!currentWorkbook || !previousData) return true;
+      const activeSave = saveInFlightRef.current;
+      if (activeSave) {
+        saveRequestedDuringFlightRef.current = true;
+        return activeSave;
+      }
 
-      const currentData = cloneUniverWorkbookData(currentWorkbook.save());
-      const operations = diffUniverWorkbookPatches(previousData, currentData);
-      if (operations.length === 0) {
-        setSaveState("idle");
+      const persistOnce = async (): Promise<boolean> => {
+        const currentWorkbook = workbookApiRef.current;
+        const previousData = lastSavedDataRef.current;
+        if (!currentWorkbook || !previousData) return true;
+        const currentData = cloneUniverWorkbookData(currentWorkbook.save());
+        const operations = diffUniverWorkbookPatches(previousData, currentData);
+        if (operations.length === 0) {
+          setSaveState("idle");
+          return true;
+        }
+
+        setSaveState("saving");
+        setSaveError(null);
+        const result = await patchSpreadsheetWorkbook(path, operations);
+        if (!result.ok) {
+          setSaveState("error");
+          setSaveError(result.error.message);
+          return false;
+        }
+        lastSavedDataRef.current = currentData;
+        await refreshSourceVersion();
+        setSaveState("saved");
+        window.setTimeout(() => {
+          setSaveState((current) => (current === "saved" ? "idle" : current));
+        }, 1_800);
+        if (externalReloadPendingRef.current) {
+          void reloadWorkbookFromDisk("Updated from disk after save");
+        }
         return true;
-      }
+      };
 
-      setSaveState("saving");
-      setSaveError(null);
-      const result = await patchSpreadsheetWorkbook(path, operations);
-      if (!result.ok) {
-        setSaveState("error");
-        setSaveError(result.error.message);
-        return false;
+      const savePromise = (async (): Promise<boolean> => {
+        let saved = await persistOnce();
+        while (saved && saveRequestedDuringFlightRef.current) {
+          saveRequestedDuringFlightRef.current = false;
+          saved = await persistOnce();
+        }
+        return saved;
+      })();
+
+      saveInFlightRef.current = savePromise;
+      try {
+        return await savePromise;
+      } finally {
+        if (saveInFlightRef.current === savePromise) {
+          saveInFlightRef.current = null;
+        }
       }
-      lastSavedDataRef.current = currentData;
-      await refreshSourceVersion();
-      setSaveState("saved");
-      window.setTimeout(() => {
-        setSaveState((current) => (current === "saved" ? "idle" : current));
-      }, 1_800);
-      if (externalReloadPendingRef.current) {
-        void reloadWorkbookFromDisk("Updated from disk after save");
-      }
-      return true;
     };
 
     const flushPendingSave = async (): Promise<boolean> => {
@@ -412,11 +439,16 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
       }
       const pendingOperations = getPendingOperations();
       if (pendingOperations.length > 0) {
-        void patchSpreadsheetWorkbook(path, pendingOperations)
-          .then((result) => {
-            if (result.ok) return loadSpreadsheetFileVersion(path);
-            return null;
-          })
+        const patchPendingOperations = async () => {
+          const result = await patchSpreadsheetWorkbook(path, pendingOperations);
+          if (!result.ok) return null;
+          return loadSpreadsheetFileVersion(path);
+        };
+        const activeSave = saveInFlightRef.current;
+        const patchAfterActiveSave = activeSave
+          ? activeSave.then(() => patchPendingOperations())
+          : patchPendingOperations();
+        void patchAfterActiveSave
           .then((result) => {
             if (result?.ok) sourceVersionRef.current = result.version;
           })

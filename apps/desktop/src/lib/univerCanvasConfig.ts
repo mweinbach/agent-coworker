@@ -7,12 +7,9 @@ export type UniverSheetsFooterConfig = Exclude<
 
 export function buildUniverSheetsFooterConfig(): UniverSheetsFooterConfig {
   return {
-    sheetBar: true,
+    sheetBar: false,
     statisticBar: true,
     menus: true,
     zoomSlider: true,
-    addSheetButtonConfig: {
-      show: false,
-    },
   };
 }

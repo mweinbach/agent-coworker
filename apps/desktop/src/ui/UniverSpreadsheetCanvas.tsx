@@ -103,6 +103,7 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
   const loadSpreadsheetFileVersion = useAppStore((s) => s.loadSpreadsheetFileVersion);
   const patchSpreadsheetWorkbook = useAppStore((s) => s.patchSpreadsheetWorkbook);
   const sendMessage = useAppStore((s) => s.sendMessage);
+  const selectedThreadId = useAppStore((s) => s.selectedThreadId);
 
   const [workbook, setWorkbook] = useState<SpreadsheetWorkbookSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
@@ -457,6 +458,10 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
     event.preventDefault();
     const request = promptText.trim();
     if (!request || !workbook) return;
+    if (!selectedThreadId) {
+      alert("Please select or start a chat thread to collaborate with the agent.");
+      return;
+    }
     const saved = await flushSaveRef.current();
     if (!saved) return;
     const currentWorkbook = workbookRef.current ?? workbook;
@@ -466,8 +471,13 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
       selection: selectionRef.current ?? selection,
       request,
     });
+    const originalPrompt = promptText;
     setPromptText("");
-    await sendMessage(prompt);
+    const accepted = await sendMessage(prompt);
+    if (!accepted) {
+      setPromptText(originalPrompt);
+      alert("Please select or start a chat thread to collaborate with the agent.");
+    }
   };
 
   if (loading) {

@@ -2,8 +2,8 @@ import {
   AlertTriangleIcon,
   BoldIcon,
   CheckIcon,
-  EyeIcon,
   ExternalLinkIcon,
+  EyeIcon,
   FileTextIcon,
   FolderOpenIcon,
   ItalicIcon,
@@ -753,10 +753,7 @@ export function Canvas({ path }: { path: string }) {
                       </ScrollArea>
                     </TabsContent>
 
-                    <TabsContent
-                      value="edit"
-                      className="h-full m-0 p-0 outline-none bg-background"
-                    >
+                    <TabsContent value="edit" className="h-full m-0 p-0 outline-none bg-background">
                       <div className={cn("flex h-full flex-col pb-2.5 pt-1.5 gap-2", pxClass)}>
                         <div className="text-[10px] text-muted-foreground px-1 flex items-center justify-between shrink-0">
                           <span>Markdown Source</span>
@@ -781,10 +778,7 @@ export function Canvas({ path }: { path: string }) {
                       <SlidePreview path={path} refreshTrigger={previewRefreshTrigger} />
                     </TabsContent>
 
-                    <TabsContent
-                      value="edit"
-                      className="h-full m-0 p-0 outline-none bg-background"
-                    >
+                    <TabsContent value="edit" className="h-full m-0 p-0 outline-none bg-background">
                       <div className={cn("flex h-full flex-col pb-2.5 pt-1.5 gap-2", pxClass)}>
                         <div className="text-[10px] text-muted-foreground px-1 flex items-center justify-between shrink-0">
                           <span>Slide Source Code</span>

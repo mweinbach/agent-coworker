@@ -82,7 +82,12 @@ export type SpreadsheetChartSummary = {
 type SpreadsheetWorkbookFailure = {
   ok: false;
   error: {
-    kind: "unsupported_format" | "not_found" | "outside_workspace" | "parse_error" | "empty_workbook";
+    kind:
+      | "unsupported_format"
+      | "not_found"
+      | "outside_workspace"
+      | "parse_error"
+      | "empty_workbook";
     message: string;
   };
   warnings: string[];
@@ -175,6 +180,7 @@ export type SpreadsheetCellStylePatch = {
   horizontalAlign?: string | null;
   fillColor?: string | null;
   textColor?: string | null;
+  numberFormat?: string | null;
 };
 
 export type SpreadsheetRangeFormatRequest = {

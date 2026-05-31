@@ -330,6 +330,7 @@ function stylePatchFromUniverStyle(style: IStyleData | null): SpreadsheetCellSty
     fontSize: normalized?.fontSize ?? null,
     fillColor: normalized?.fillColor ?? null,
     textColor: normalized?.textColor ?? null,
+    numberFormat: normalized?.numberFormat ?? null,
     horizontalAlign: normalized?.horizontalAlign ?? null,
   };
 }
@@ -344,6 +345,7 @@ function stylePatchBetween(
   if (previous.fontSize !== current.fontSize) patch.fontSize = current.fontSize;
   if (previous.fillColor !== current.fillColor) patch.fillColor = current.fillColor;
   if (previous.textColor !== current.textColor) patch.textColor = current.textColor;
+  if (previous.numberFormat !== current.numberFormat) patch.numberFormat = current.numberFormat;
   if (previous.horizontalAlign !== current.horizontalAlign) {
     patch.horizontalAlign = current.horizontalAlign;
   }
@@ -537,4 +539,3 @@ function stableId(value: string): string {
   }
   return Math.abs(hash).toString(36);
 }
-

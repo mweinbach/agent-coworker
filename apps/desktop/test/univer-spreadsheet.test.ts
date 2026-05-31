@@ -116,6 +116,7 @@ describe("Univer spreadsheet helpers", () => {
       fs: 14,
       bg: { rgb: "#FFF2CC" },
       cl: { rgb: "#1F4E79" },
+      n: { pattern: "0.0%" },
       ht: HorizontalAlign.CENTER,
     };
 
@@ -135,6 +136,7 @@ describe("Univer spreadsheet helpers", () => {
           fillColor: "#FFF2CC",
           fontSize: 14,
           horizontalAlign: "center",
+          numberFormat: "0.0%",
           textColor: "#1F4E79",
         },
       },

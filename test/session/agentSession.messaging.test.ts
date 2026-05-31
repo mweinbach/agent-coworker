@@ -724,9 +724,9 @@ describe("AgentSession", () => {
       await turnPromise;
 
       expect(stepMessages).toHaveLength(2);
-      const committedSteers = stepMessages[1]!.filter((message) => message.role === "user").slice(
-        -2,
-      );
+      const committedSteers = stepMessages[1]!
+        .filter((message) => message.role === "user")
+        .slice(-2);
       expect(committedSteers).toHaveLength(2);
       const firstSteer = JSON.stringify(committedSteers[0]);
       const secondSteer = JSON.stringify(committedSteers[1]);

@@ -2,10 +2,13 @@ import fs from "node:fs/promises";
 import { XMLBuilder, XMLParser, XMLValidator } from "fast-xml-parser";
 import JSZip from "jszip";
 import * as XLSX from "xlsx";
-import type { SpreadsheetBatchPatchOperation, SpreadsheetCellStylePatch } from "../shared/spreadsheetPreview";
+import type {
+  SpreadsheetBatchPatchOperation,
+  SpreadsheetCellStylePatch,
+} from "../shared/spreadsheetPreview";
 import { type CellAddress, parseAddress, parseRange } from "./spreadsheetA1";
 import type { EditFailure, OpsOutcome } from "./spreadsheetEditTypes";
-import { asRecord, resolveWorksheetPart, type XmlRecord } from "./spreadsheetOoxml";
+import { asRecord, resolveWorksheetPart, stringValue, type XmlRecord } from "./spreadsheetOoxml";
 import { validateXlsxZipSignature } from "./spreadsheetPreview";
 
 /**
@@ -243,12 +246,14 @@ function parseStylesheet(xml: string): {
   const root = asRecord(OOXML_STYLE_PARSER.parse(xml)) ?? {};
   delete root["?xml"];
   const styleSheet = ensureRecord(root, "styleSheet");
+  const numFmtsNode = ensureRecord(styleSheet, "numFmts");
   const fontsNode = ensureRecord(styleSheet, "fonts");
   const fillsNode = ensureRecord(styleSheet, "fills");
   const bordersNode = ensureRecord(styleSheet, "borders");
   const cellStyleXfsNode = ensureRecord(styleSheet, "cellStyleXfs");
   const cellXfsNode = ensureRecord(styleSheet, "cellXfs");
 
+  const numFmts = ensureNodeArray(numFmtsNode, "numFmt", []);
   const fonts = ensureNodeArray(fontsNode, "font", [defaultFont()]);
   const fills = ensureNodeArray(fillsNode, "fill", defaultFills());
   ensureNodeArray(bordersNode, "border", [defaultBorder()]);
@@ -256,6 +261,7 @@ function parseStylesheet(xml: string): {
   const cellXfs = ensureNodeArray(cellXfsNode, "xf", [defaultXf()]);
 
   const syncCounts = () => {
+    numFmtsNode.count = String(numFmts.length);
     fontsNode.count = String(fonts.length);
     fillsNode.count = String(fills.length);
     bordersNode.count = String(ensureNodeArray(bordersNode, "border", [defaultBorder()]).length);
@@ -269,6 +275,19 @@ function parseStylesheet(xml: string): {
     if (found >= 0) return found;
     items.push(node);
     return items.length - 1;
+  };
+
+  const findOrAddNumberFormat = (pattern: string): number => {
+    for (const numberFormat of numFmts) {
+      const id = readNonnegativeInteger(numberFormat.numFmtId);
+      if (id !== null && stringValue(numberFormat.formatCode) === pattern) return id;
+    }
+    const existingIds = numFmts
+      .map((numberFormat) => readNonnegativeInteger(numberFormat.numFmtId))
+      .filter((id): id is number => id !== null);
+    const id = Math.max(164, ...existingIds.map((existingId) => existingId + 1));
+    numFmts.push({ numFmtId: String(id), formatCode: pattern });
+    return id;
   };
 
   return {
@@ -330,6 +349,15 @@ function parseStylesheet(xml: string): {
             horizontal: patch.horizontalAlign,
           };
           baseXf.applyAlignment = "1";
+        }
+      }
+      if (Object.hasOwn(patch, "numberFormat")) {
+        if (patch.numberFormat === null || patch.numberFormat === undefined) {
+          baseXf.numFmtId = "0";
+          delete baseXf.applyNumberFormat;
+        } else {
+          baseXf.numFmtId = String(findOrAddNumberFormat(patch.numberFormat));
+          baseXf.applyNumberFormat = "1";
         }
       }
 

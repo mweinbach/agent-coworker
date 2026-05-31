@@ -275,7 +275,7 @@ describe("xlsx single-cell edit (lossless)", () => {
     });
   });
 
-  test("formats a range while preserving formulas, number formats, and workbook parts", async () => {
+  test("formats a range with number formats while preserving formulas and workbook parts", async () => {
     await withTempDir(async (dir) => {
       const filePath = path.join(dir, "model.xlsx");
       const original = await buildWorkbook();
@@ -293,6 +293,7 @@ describe("xlsx single-cell edit (lossless)", () => {
             fontSize: 14,
             fillColor: "#FFF2CC",
             textColor: "#1F4E79",
+            numberFormat: "0.0%",
             horizontalAlign: "center",
           },
         }),
@@ -309,9 +310,9 @@ describe("xlsx single-cell edit (lossless)", () => {
           fillColor: "#FFF2CC",
           textColor: "#1F4E79",
           horizontalAlign: "center",
+          numberFormat: "0.0%",
         });
       }
-      expect(b2?.style?.numberFormat).toBe('"$"#,##0.00');
 
       const before = await entryBytes(original);
       const after = await entryBytes(await fs.readFile(filePath));
@@ -351,6 +352,7 @@ describe("xlsx single-cell edit (lossless)", () => {
               fontSize: 16,
               fillColor: "#FFF2CC",
               textColor: "#1F4E79",
+              numberFormat: "0.0%",
               horizontalAlign: "center",
             },
           },
@@ -371,9 +373,9 @@ describe("xlsx single-cell edit (lossless)", () => {
           fillColor: "#FFF2CC",
           textColor: "#1F4E79",
           horizontalAlign: "center",
+          numberFormat: "0.0%",
         });
       }
-      expect(b2?.style?.numberFormat).toBe('"$"#,##0.00');
     });
   });
 

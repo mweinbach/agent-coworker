@@ -147,9 +147,7 @@ describe("referenced skill resolution limits", () => {
     });
 
     expect(resolved).toEqual([]);
-    expect(logs.some((line) => line.includes("skipping oversized skill \"large-skill\""))).toBe(
-      true,
-    );
+    expect(logs.some((line) => line.includes('skipping oversized skill "large-skill"'))).toBe(true);
   });
 
   test("stops referenced skill injection at the total byte cap", async () => {
@@ -186,7 +184,7 @@ describe("referenced skill resolution limits", () => {
     expect(
       logs.some(
         (line) =>
-          line.includes("skipping remaining skills at \"skill-4\"") &&
+          line.includes('skipping remaining skills at "skill-4"') &&
           line.includes(String(MAX_TOTAL_REFERENCED_SKILL_INJECTION_BYTES)),
       ),
     ).toBe(true);

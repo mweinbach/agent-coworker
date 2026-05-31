@@ -3,25 +3,21 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import * as XLSX from "xlsx";
 
-import {
-  type SpreadsheetCellStyle,
-  type SpreadsheetColumnWidth,
-  type SpreadsheetFileKind,
-  type SpreadsheetFileVersion,
-  type SpreadsheetFileVersionResult,
-  type SpreadsheetMergedRange,
-  type SpreadsheetPreviewCell,
-  type SpreadsheetPreviewViewport,
-  type SpreadsheetSheetSummary,
-  type SpreadsheetWorkbookSnapshot,
-  type SpreadsheetWorkbookSnapshotResult,
-  type SpreadsheetWorkbookSnapshotSheet,
+import type {
+  SpreadsheetCellStyle,
+  SpreadsheetColumnWidth,
+  SpreadsheetFileKind,
+  SpreadsheetFileVersion,
+  SpreadsheetFileVersionResult,
+  SpreadsheetMergedRange,
+  SpreadsheetPreviewCell,
+  SpreadsheetPreviewViewport,
+  SpreadsheetSheetSummary,
+  SpreadsheetWorkbookSnapshot,
+  SpreadsheetWorkbookSnapshotResult,
+  SpreadsheetWorkbookSnapshotSheet,
 } from "../shared/spreadsheetPreview";
-import {
-  readOoxmlColor,
-  readXlsxSheetObjects,
-  type XlsxSheetObjects,
-} from "./spreadsheetOoxml";
+import { readOoxmlColor, readXlsxSheetObjects, type XlsxSheetObjects } from "./spreadsheetOoxml";
 
 type Worksheet = XLSX.WorkSheet;
 type Workbook = XLSX.WorkBook;
@@ -144,9 +140,10 @@ export async function resolveWorkspaceFilePath(cwd: string, filePath: string): P
   return resolvedCandidate;
 }
 
-export function spreadsheetPathFailure(
-  error: unknown,
-): { kind: "not_found" | "outside_workspace"; message: string } {
+export function spreadsheetPathFailure(error: unknown): {
+  kind: "not_found" | "outside_workspace";
+  message: string;
+} {
   if (isFileNotFoundError(error)) {
     return { kind: "not_found", message: "Spreadsheet file was not found." };
   }

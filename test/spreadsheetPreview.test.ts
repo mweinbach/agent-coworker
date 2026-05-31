@@ -231,7 +231,10 @@ describe("spreadsheet preview parser", () => {
       try {
         const outsideFile = path.join(outside, "data.csv");
         await fs.writeFile(outsideFile, "a,b\n1,2\n", "utf8");
-        const outsideResult = await readSpreadsheetWorkbookSnapshot({ cwd: dir, filePath: outsideFile });
+        const outsideResult = await readSpreadsheetWorkbookSnapshot({
+          cwd: dir,
+          filePath: outsideFile,
+        });
         expect(outsideResult.ok).toBe(false);
         if (!outsideResult.ok) expect(outsideResult.error.kind).toBe("outside_workspace");
 
@@ -241,7 +244,10 @@ describe("spreadsheet preview parser", () => {
         } catch {
           return;
         }
-        const symlinkResult = await readSpreadsheetWorkbookSnapshot({ cwd: dir, filePath: linkPath });
+        const symlinkResult = await readSpreadsheetWorkbookSnapshot({
+          cwd: dir,
+          filePath: linkPath,
+        });
         expect(symlinkResult.ok).toBe(false);
         if (!symlinkResult.ok) expect(symlinkResult.error.kind).toBe("outside_workspace");
       } finally {

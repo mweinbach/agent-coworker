@@ -39,6 +39,7 @@ const spreadsheetCellStylePatchSchema = z
     horizontalAlign: z.string().nullable().optional(),
     fillColor: z.string().nullable().optional(),
     textColor: z.string().nullable().optional(),
+    numberFormat: z.string().nullable().optional(),
   })
   .strict()
   .refine((style) => Object.keys(style).length > 0, "style must include at least one change");

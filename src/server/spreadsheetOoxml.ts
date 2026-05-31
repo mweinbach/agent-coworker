@@ -53,10 +53,7 @@ function emptySheetObjects(): XlsxSheetObjects {
   return { tables: [], charts: [], cellStyles: new Map() };
 }
 
-export async function resolveWorksheetPart(
-  zip: JSZip,
-  sheetName?: string,
-): Promise<string | null> {
+export async function resolveWorksheetPart(zip: JSZip, sheetName?: string): Promise<string | null> {
   const workbookRoot = await readXmlPart(zip, "xl/workbook.xml");
   const workbook = asRecord(workbookRoot?.workbook);
   const sheetsNode = asRecord(workbook?.sheets);
@@ -194,7 +191,8 @@ async function readTableSummary(
   const range = decodeA1Range(ref);
   if (!range) return null;
   return {
-    name: stringValue(table?.displayName) ?? stringValue(table?.name) ?? path.posix.basename(tablePart),
+    name:
+      stringValue(table?.displayName) ?? stringValue(table?.name) ?? path.posix.basename(tablePart),
     ref,
     ...range,
   };

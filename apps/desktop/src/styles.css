@@ -75,6 +75,24 @@ code {
   -webkit-user-select: text;
 }
 
+[data-cowork-univer-canvas="true"] [data-u-comp="formula-bar"] {
+  height: 2.25rem !important;
+  min-height: 2.25rem;
+  overflow: hidden;
+}
+
+[data-cowork-univer-canvas="true"] [data-u-comp="formula-bar"] .univer-break-words {
+  overflow: hidden;
+  overflow-wrap: normal;
+  white-space: nowrap;
+  word-break: normal;
+}
+
+[data-cowork-univer-canvas="true"] [data-u-comp="formula-bar"] [data-u-comp="render-canvas"] {
+  display: block;
+  max-height: 2rem;
+}
+
 :root[data-window-mode="quick-chat"] body,
 :root[data-window-mode="utility"] body {
   background: transparent;

@@ -158,6 +158,10 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
           ribbonType: "simple",
           contextMenu: true,
           formulaBar: true,
+          sheets: {
+            disableForceStringAlert: true,
+            disableForceStringMark: true,
+          },
           footer: {
             sheetBar: true,
             statisticBar: true,

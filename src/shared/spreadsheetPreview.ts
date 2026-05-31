@@ -114,7 +114,7 @@ type SpreadsheetPreviewSuccess = {
 type SpreadsheetPreviewFailure = {
   ok: false;
   error: {
-    kind: "unsupported_format" | "parse_error" | "empty_workbook";
+    kind: "unsupported_format" | "not_found" | "parse_error" | "empty_workbook";
     message: string;
   };
   warnings: string[];
@@ -123,6 +123,24 @@ type SpreadsheetPreviewFailure = {
 export type SpreadsheetPreviewResult = SpreadsheetPreviewSuccess | SpreadsheetPreviewFailure;
 
 // ---- Full-workbook snapshot (Univer canvas source) ----
+
+export type SpreadsheetFileVersion = {
+  modifiedAtMs: number;
+  changeTimeMs: number;
+  size: number;
+  fingerprint: string;
+};
+
+export type SpreadsheetFileVersionResult =
+  | { ok: true; version: SpreadsheetFileVersion }
+  | {
+      ok: false;
+      error: {
+        kind: "unsupported_format" | "not_found" | "parse_error";
+        message: string;
+      };
+      warnings: string[];
+    };
 
 export type SpreadsheetWorkbookSnapshotSheet = SpreadsheetSheetSummary & {
   id: string;
@@ -137,6 +155,7 @@ export type SpreadsheetWorkbookSnapshot = {
   kind: SpreadsheetFileKind;
   path: string;
   filename: string;
+  fileVersion: SpreadsheetFileVersion;
   sheets: SpreadsheetWorkbookSnapshotSheet[];
   activeSheetName: string;
   warnings: string[];

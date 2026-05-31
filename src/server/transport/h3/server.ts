@@ -233,6 +233,7 @@ const ALWAYS_ALLOWED_H3_RPC_METHODS = new Set([
   "cowork/workspace/bootstrap",
   "cowork/workspace/spreadsheet/preview",
   "cowork/workspace/spreadsheet/workbook",
+  "cowork/workspace/spreadsheet/version",
   "cowork/workspace/presentation/preview",
   "cowork/session/state/read",
   "cowork/session/harnessContext/get",

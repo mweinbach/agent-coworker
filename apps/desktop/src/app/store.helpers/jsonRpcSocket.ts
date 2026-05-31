@@ -3,6 +3,7 @@ import type {
   SpreadsheetBatchPatchResult,
   SpreadsheetCellEditResult,
   SpreadsheetCellStylePatch,
+  SpreadsheetFileVersionResult,
   SpreadsheetPreviewResult,
   SpreadsheetPreviewViewportRequest,
   SpreadsheetRangeFormatResult,
@@ -558,6 +559,19 @@ export async function previewJsonRpcWorkspaceSpreadsheetWorkbook(
     path: filePath,
     ...(opts.sheetName ? { sheetName: opts.sheetName } : {}),
   })) as SpreadsheetWorkbookSnapshotResult;
+}
+
+export async function versionJsonRpcWorkspaceSpreadsheet(
+  get: StoreGet,
+  set: StoreSet | undefined,
+  workspaceId: string,
+  filePath: string,
+): Promise<SpreadsheetFileVersionResult> {
+  const workspace = getWorkspaceById(get, workspaceId);
+  return (await requestJsonRpc(get, set, workspaceId, "cowork/workspace/spreadsheet/version", {
+    cwd: workspace?.path,
+    path: filePath,
+  })) as SpreadsheetFileVersionResult;
 }
 
 export async function editJsonRpcWorkspaceSpreadsheet(

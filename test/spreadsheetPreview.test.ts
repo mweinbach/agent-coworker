@@ -5,7 +5,11 @@ import path from "node:path";
 import JSZip from "jszip";
 import * as XLSX from "xlsx";
 
-import { previewSpreadsheetFile, readSpreadsheetWorkbookSnapshot } from "../src/server/spreadsheetPreview";
+import {
+  previewSpreadsheetFile,
+  readSpreadsheetFileVersion,
+  readSpreadsheetWorkbookSnapshot,
+} from "../src/server/spreadsheetPreview";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-spreadsheet-preview-"));
@@ -182,6 +186,10 @@ describe("spreadsheet preview parser", () => {
       if (!result.ok) return;
       expect(result.workbook.kind).toBe("xlsx");
       expect(result.workbook.activeSheetName).toBe("Summary");
+      expect(result.workbook.fileVersion).toMatchObject({
+        size: expect.any(Number),
+        fingerprint: expect.any(String),
+      });
       expect(result.workbook.sheets).toHaveLength(1);
       const [sheet] = result.workbook.sheets;
       expect(sheet).toMatchObject({
@@ -219,6 +227,26 @@ describe("spreadsheet preview parser", () => {
           },
         },
       ]);
+    });
+  });
+
+  test("returns a lightweight file version fingerprint for auto-refresh checks", async () => {
+    await withTempDir(async (dir) => {
+      const filePath = path.join(dir, "data.csv");
+      await fs.writeFile(filePath, "name,value\nAlpha,1\n", "utf8");
+
+      const initial = await readSpreadsheetFileVersion({ cwd: dir, filePath });
+      expect(initial.ok).toBe(true);
+      if (!initial.ok) return;
+      expect(initial.version.size).toBeGreaterThan(0);
+      expect(initial.version.fingerprint).toContain(":");
+
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      await fs.appendFile(filePath, "Beta,2\n", "utf8");
+      const updated = await readSpreadsheetFileVersion({ cwd: dir, filePath });
+      expect(updated.ok).toBe(true);
+      if (!updated.ok) return;
+      expect(updated.version.fingerprint).not.toBe(initial.version.fingerprint);
     });
   });
 

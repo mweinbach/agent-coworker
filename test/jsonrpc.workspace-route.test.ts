@@ -193,6 +193,21 @@ async function invokeWorkspaceSpreadsheetEdit(
   } satisfies JsonRpcLiteRequest);
 }
 
+async function invokeWorkspaceSpreadsheetVersion(
+  handlers: JsonRpcRequestHandlerMap,
+  params: unknown,
+): Promise<void> {
+  const handler = handlers["cowork/workspace/spreadsheet/version"];
+  if (!handler) {
+    throw new Error("cowork/workspace/spreadsheet/version handler was not registered");
+  }
+  await handler({} as never, {
+    id: 1,
+    method: "cowork/workspace/spreadsheet/version",
+    params,
+  } satisfies JsonRpcLiteRequest);
+}
+
 describe("workspace JSON-RPC route", () => {
   test("bootstrap filters empty persisted threads, lets live sessions win, and sorts by updatedAt", async () => {
     const harness = createWorkspaceRouteHarness();
@@ -272,6 +287,33 @@ describe("workspace JSON-RPC route", () => {
       );
       expect(parsed).toEqual({ ok: true });
       expect(await fs.readFile(filePath, "utf8")).toBe("edited,b\nc,d\n");
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("spreadsheet/version returns a file fingerprint for spreadsheet canvases", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-version-route-"));
+    try {
+      const filePath = path.join(dir, "data.csv");
+      await fs.writeFile(filePath, "a,b\nc,d\n", "utf8");
+
+      const harness = createWorkspaceRouteHarness();
+      const handlers = createWorkspaceRouteHandlers(harness.context);
+      await invokeWorkspaceSpreadsheetVersion(handlers, {
+        cwd: dir,
+        path: filePath,
+      });
+
+      expect(harness.errors).toEqual([]);
+      const parsed = jsonRpcWorkspaceResultSchemas["cowork/workspace/spreadsheet/version"].parse(
+        harness.results[0]?.result,
+      );
+      expect(parsed.ok).toBe(true);
+      if (parsed.ok) {
+        expect(parsed.version.size).toBeGreaterThan(0);
+        expect(parsed.version.fingerprint).toContain(":");
+      }
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }

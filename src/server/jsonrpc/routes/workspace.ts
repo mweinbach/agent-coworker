@@ -4,7 +4,11 @@ import {
   formatSpreadsheetRange,
   patchSpreadsheetBatch,
 } from "../../spreadsheetEdit";
-import { previewSpreadsheetFile, readSpreadsheetWorkbookSnapshot } from "../../spreadsheetPreview";
+import {
+  previewSpreadsheetFile,
+  readSpreadsheetFileVersion,
+  readSpreadsheetWorkbookSnapshot,
+} from "../../spreadsheetPreview";
 import { JSONRPC_ERROR_CODES } from "../protocol";
 import { jsonRpcWorkspaceRequestSchemas } from "../schema.workspace";
 import { listWorkspaceSummaries, switchWorkspaceSummary } from "../workspaceCatalog";
@@ -153,6 +157,34 @@ export function createWorkspaceRouteHandlers(
           cwd,
           filePath: parsed.data.path,
           ...(parsed.data.sheetName ? { sheetName: parsed.data.sheetName } : {}),
+        });
+        context.jsonrpc.sendResult(ws, message.id, result);
+      } catch (error) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    },
+
+    "cowork/workspace/spreadsheet/version": async (ws, message) => {
+      const parsed = jsonRpcWorkspaceRequestSchemas[
+        "cowork/workspace/spreadsheet/version"
+      ].safeParse(message.params);
+      if (!parsed.success) {
+        const detail = parsed.error.issues[0]?.message;
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: detail ? `${message.method}: ${detail}` : `${message.method}: invalid params`,
+        });
+        return;
+      }
+
+      try {
+        const cwd = context.utils.resolveWorkspacePath(parsed.data, message.method);
+        const result = await readSpreadsheetFileVersion({
+          cwd,
+          filePath: parsed.data.path,
         });
         context.jsonrpc.sendResult(ws, message.id, result);
       } catch (error) {

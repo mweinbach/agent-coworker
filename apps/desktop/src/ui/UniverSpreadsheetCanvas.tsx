@@ -33,9 +33,12 @@ import { UniverSheetsThreadCommentPreset } from "@univerjs/preset-sheets-thread-
 import sheetsThreadCommentEnUS from "@univerjs/preset-sheets-thread-comment/locales/en-US";
 import { createUniver } from "@univerjs/presets";
 import { AlertCircleIcon, CheckIcon, Loader2Icon, SaveIcon, SparklesIcon } from "lucide-react";
-import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { SpreadsheetWorkbookSnapshot } from "../../../../src/shared/spreadsheetPreview";
+import type {
+  SpreadsheetFileVersion,
+  SpreadsheetWorkbookSnapshot,
+} from "../../../../src/shared/spreadsheetPreview";
 import { useAppStore } from "../app/store";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -91,6 +94,7 @@ const univerLocales = {
 
 export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreadsheetCanvasProps) {
   const loadSpreadsheetWorkbook = useAppStore((s) => s.loadSpreadsheetWorkbook);
+  const loadSpreadsheetFileVersion = useAppStore((s) => s.loadSpreadsheetFileVersion);
   const patchSpreadsheetWorkbook = useAppStore((s) => s.patchSpreadsheetWorkbook);
   const sendMessage = useAppStore((s) => s.sendMessage);
 
@@ -101,11 +105,82 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
   const [promptText, setPromptText] = useState("");
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [reloadNotice, setReloadNotice] = useState<string | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const workbookApiRef = useRef<UniverWorkbookApi | null>(null);
+  const workbookRef = useRef<SpreadsheetWorkbookSnapshot | null>(null);
+  const selectionRef = useRef<UniverSelectionContext | null>(null);
+  const saveStateRef = useRef<SaveState>("idle");
+  const sourceVersionRef = useRef<SpreadsheetFileVersion | null>(null);
   const lastSavedDataRef = useRef<IWorkbookData | null>(null);
   const saveTimerRef = useRef<number | null>(null);
+  const reloadNoticeTimerRef = useRef<number | null>(null);
+  const externalReloadPendingRef = useRef(false);
+  const reloadInFlightRef = useRef(false);
+  const flushSaveRef = useRef<() => Promise<boolean>>(async () => true);
+
+  useEffect(() => {
+    workbookRef.current = workbook;
+    if (workbook) sourceVersionRef.current = workbook.fileVersion;
+  }, [workbook]);
+
+  useEffect(() => {
+    selectionRef.current = selection;
+  }, [selection]);
+
+  useEffect(() => {
+    saveStateRef.current = saveState;
+  }, [saveState]);
+
+  useEffect(() => {
+    return () => {
+      if (reloadNoticeTimerRef.current !== null) {
+        window.clearTimeout(reloadNoticeTimerRef.current);
+        reloadNoticeTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  const showReloadNotice = useCallback((message: string) => {
+    setReloadNotice(message);
+    if (reloadNoticeTimerRef.current !== null) {
+      window.clearTimeout(reloadNoticeTimerRef.current);
+    }
+    reloadNoticeTimerRef.current = window.setTimeout(() => {
+      reloadNoticeTimerRef.current = null;
+      setReloadNotice(null);
+    }, 2_500);
+  }, []);
+
+  const reloadWorkbookFromDisk = useCallback(
+    async (notice = "Updated from disk") => {
+      if (reloadInFlightRef.current) return;
+      reloadInFlightRef.current = true;
+      try {
+        const currentWorkbook = workbookRef.current;
+        const sheetName = selectionRef.current?.sheetName ?? currentWorkbook?.activeSheetName;
+        const response = await loadSpreadsheetWorkbook(
+          path,
+          sheetName ? { sheetName } : undefined,
+        );
+        if (!response.ok) {
+          setSaveState("error");
+          setSaveError(`Reload failed: ${response.error.message}`);
+          return;
+        }
+        sourceVersionRef.current = response.workbook.fileVersion;
+        externalReloadPendingRef.current = false;
+        setWorkbook(response.workbook);
+        setSaveError(null);
+        setSaveState("idle");
+        showReloadNotice(notice);
+      } finally {
+        reloadInFlightRef.current = false;
+      }
+    },
+    [loadSpreadsheetWorkbook, path, showReloadNotice],
+  );
 
   useEffect(() => {
     let active = true;
@@ -115,6 +190,9 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
     setSelection(null);
     setSaveState("idle");
     setSaveError(null);
+    setReloadNotice(null);
+    sourceVersionRef.current = null;
+    externalReloadPendingRef.current = false;
 
     void (async () => {
       try {
@@ -124,6 +202,7 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
           setLoadError(response.error.message);
           return;
         }
+        sourceVersionRef.current = response.workbook.fileVersion;
         setWorkbook(response.workbook);
       } catch (error) {
         if (active) setLoadError(error instanceof Error ? error.message : String(error));
@@ -136,6 +215,41 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
       active = false;
     };
   }, [loadSpreadsheetWorkbook, path]);
+
+  useEffect(() => {
+    if (!workbook) return;
+    let active = true;
+
+    const checkForExternalUpdate = async () => {
+      const result = await loadSpreadsheetFileVersion(path);
+      if (!active || !result.ok) return;
+      const currentVersion = sourceVersionRef.current;
+      if (!currentVersion) {
+        sourceVersionRef.current = result.version;
+        return;
+      }
+      if (result.version.fingerprint === currentVersion.fingerprint) return;
+
+      if (saveStateRef.current === "dirty" || saveStateRef.current === "saving") {
+        externalReloadPendingRef.current = true;
+        showReloadNotice("File changed on disk; syncing after save");
+        return;
+      }
+
+      await reloadWorkbookFromDisk("Updated from disk");
+    };
+
+    const intervalId = window.setInterval(() => {
+      void checkForExternalUpdate();
+    }, 2_000);
+    window.addEventListener("focus", checkForExternalUpdate);
+
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+      window.removeEventListener("focus", checkForExternalUpdate);
+    };
+  }, [loadSpreadsheetFileVersion, path, reloadWorkbookFromDisk, showReloadNotice, workbook]);
 
   useEffect(() => {
     if (!workbook || !containerRef.current) return;
@@ -217,16 +331,21 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
       return diffUniverWorkbookPatches(previousData, cloneUniverWorkbookData(currentWorkbook.save()));
     };
 
-    const persistWorkbook = async () => {
+    const refreshSourceVersion = async () => {
+      const result = await loadSpreadsheetFileVersion(path);
+      if (result.ok) sourceVersionRef.current = result.version;
+    };
+
+    const persistWorkbook = async (): Promise<boolean> => {
       const currentWorkbook = workbookApiRef.current;
       const previousData = lastSavedDataRef.current;
-      if (!currentWorkbook || !previousData) return;
+      if (!currentWorkbook || !previousData) return true;
 
       const currentData = cloneUniverWorkbookData(currentWorkbook.save());
       const operations = diffUniverWorkbookPatches(previousData, currentData);
       if (operations.length === 0) {
         setSaveState("idle");
-        return;
+        return true;
       }
 
       setSaveState("saving");
@@ -235,14 +354,28 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
       if (!result.ok) {
         setSaveState("error");
         setSaveError(result.error.message);
-        return;
+        return false;
       }
       lastSavedDataRef.current = currentData;
+      await refreshSourceVersion();
       setSaveState("saved");
       window.setTimeout(() => {
         setSaveState((current) => (current === "saved" ? "idle" : current));
       }, 1_800);
+      if (externalReloadPendingRef.current) {
+        void reloadWorkbookFromDisk("Updated from disk after save");
+      }
+      return true;
     };
+
+    const flushPendingSave = async (): Promise<boolean> => {
+      if (saveTimerRef.current !== null) {
+        window.clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
+      return persistWorkbook();
+    };
+    flushSaveRef.current = flushPendingSave;
 
     const scheduleSave = () => {
       if (getPendingOperations().length === 0) {
@@ -273,6 +406,21 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
         window.clearTimeout(saveTimerRef.current);
         saveTimerRef.current = null;
       }
+      const pendingOperations = getPendingOperations();
+      if (pendingOperations.length > 0) {
+        void patchSpreadsheetWorkbook(path, pendingOperations)
+          .then((result) => {
+            if (result.ok) return loadSpreadsheetFileVersion(path);
+            return null;
+          })
+          .then((result) => {
+            if (result?.ok) sourceVersionRef.current = result.version;
+          })
+          .catch((error: unknown) => {
+            void error;
+          });
+      }
+      flushSaveRef.current = async () => true;
       for (const disposable of disposables) {
         disposable.dispose();
       }
@@ -282,24 +430,34 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
       formulaWorker.terminate();
       container.innerHTML = "";
     };
-  }, [patchSpreadsheetWorkbook, path, workbook]);
+  }, [
+    loadSpreadsheetFileVersion,
+    patchSpreadsheetWorkbook,
+    path,
+    reloadWorkbookFromDisk,
+    workbook,
+  ]);
 
   const statusLabel = useMemo(() => {
+    if (reloadNotice) return reloadNotice;
     if (saveState === "dirty") return "Unsaved changes";
     if (saveState === "saving") return "Saving";
     if (saveState === "saved") return "Saved";
     if (saveState === "error") return "Save failed";
     return selection?.rangeA1 ?? workbook?.activeSheetName ?? "";
-  }, [saveState, selection?.rangeA1, workbook?.activeSheetName]);
+  }, [reloadNotice, saveState, selection?.rangeA1, workbook?.activeSheetName]);
 
   const handlePromptSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const request = promptText.trim();
     if (!request || !workbook) return;
+    const saved = await flushSaveRef.current();
+    if (!saved) return;
+    const currentWorkbook = workbookRef.current ?? workbook;
     const prompt = buildUniverSpreadsheetPrompt({
       path,
-      workbook,
-      selection,
+      workbook: currentWorkbook,
+      selection: selectionRef.current ?? selection,
       request,
     });
     setPromptText("");

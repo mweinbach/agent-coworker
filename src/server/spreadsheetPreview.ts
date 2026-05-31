@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import type { Stats } from "node:fs";
 import path from "node:path";
 import { XMLParser } from "fast-xml-parser";
 import JSZip from "jszip";
@@ -12,6 +13,8 @@ import {
   type SpreadsheetCellStyle,
   type SpreadsheetChartSummary,
   type SpreadsheetColumnWidth,
+  type SpreadsheetFileVersion,
+  type SpreadsheetFileVersionResult,
   type SpreadsheetFileKind,
   type SpreadsheetMergedRange,
   type SpreadsheetPreview,
@@ -118,6 +121,7 @@ export async function readSpreadsheetWorkbookSnapshot(
   }
 
   try {
+    const stat = await fs.stat(resolvedPath);
     const bytes = await fs.readFile(resolvedPath);
     if (kind === "csv") {
       validateCsvQuoteBalance(bytes.toString("utf8"));
@@ -130,6 +134,7 @@ export async function readSpreadsheetWorkbookSnapshot(
       kind,
       filePath: resolvedPath,
       bytes,
+      fileVersion: spreadsheetFileVersionFromStat(stat),
       requestedSheetName: request.sheetName,
     });
     return { ok: true, workbook: snapshot };
@@ -138,6 +143,56 @@ export async function readSpreadsheetWorkbookSnapshot(
       ok: false,
       error: {
         kind: "parse_error",
+        message: error instanceof Error ? error.message : String(error),
+      },
+      warnings: [],
+    };
+  }
+}
+
+export async function readSpreadsheetFileVersion(
+  request: Pick<SpreadsheetPreviewRequest, "cwd" | "filePath">,
+): Promise<SpreadsheetFileVersionResult> {
+  let resolvedPath: string;
+  try {
+    resolvedPath = await resolveWorkspaceFilePath(request.cwd, request.filePath);
+  } catch (error) {
+    if (isFileNotFoundError(error)) {
+      return {
+        ok: false,
+        error: {
+          kind: "not_found",
+          message: "Spreadsheet file was not found.",
+        },
+        warnings: [],
+      };
+    }
+    throw error;
+  }
+
+  const kind = spreadsheetKindForPath(resolvedPath);
+  if (!kind) {
+    return {
+      ok: false,
+      error: {
+        kind: "unsupported_format",
+        message: "Spreadsheet file versions support CSV and XLSX files.",
+      },
+      warnings: [],
+    };
+  }
+
+  try {
+    const stat = await fs.stat(resolvedPath);
+    return {
+      ok: true,
+      version: spreadsheetFileVersionFromStat(stat),
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: {
+        kind: isFileNotFoundError(error) ? "not_found" : "parse_error",
         message: error instanceof Error ? error.message : String(error),
       },
       warnings: [],
@@ -156,6 +211,26 @@ export async function resolveWorkspaceFilePath(cwd: string, filePath: string): P
     throw new Error("Path is outside the workspace root.");
   }
   return resolvedCandidate;
+}
+
+function spreadsheetFileVersionFromStat(stat: Stats): SpreadsheetFileVersion {
+  const modifiedAtMs = Math.round(stat.mtimeMs);
+  const changeTimeMs = Math.round(stat.ctimeMs);
+  return {
+    modifiedAtMs,
+    changeTimeMs,
+    size: stat.size,
+    fingerprint: `${modifiedAtMs}:${changeTimeMs}:${stat.size}`,
+  };
+}
+
+function isFileNotFoundError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "ENOENT"
+  );
 }
 
 function spreadsheetKindForPath(filePath: string): SpreadsheetFileKind | null {
@@ -232,6 +307,7 @@ async function buildSpreadsheetWorkbookSnapshot(opts: {
   kind: SpreadsheetFileKind;
   filePath: string;
   bytes: Buffer;
+  fileVersion: SpreadsheetFileVersion;
   requestedSheetName?: string;
 }): Promise<SpreadsheetWorkbookSnapshot> {
   const sheetNames = opts.kind === "csv" ? ["CSV"] : opts.workbook.SheetNames;
@@ -287,6 +363,7 @@ async function buildSpreadsheetWorkbookSnapshot(opts: {
     kind: opts.kind,
     path: opts.filePath,
     filename: path.basename(opts.filePath),
+    fileVersion: opts.fileVersion,
     sheets,
     activeSheetName,
     warnings,

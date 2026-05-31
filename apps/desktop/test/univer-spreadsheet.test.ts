@@ -14,6 +14,7 @@ const WORKBOOK: SpreadsheetWorkbookSnapshot = {
   kind: "xlsx",
   path: "/workspace/model.xlsx",
   filename: "model.xlsx",
+  fileVersion: { modifiedAtMs: 1, changeTimeMs: 1, size: 1, fingerprint: "1:1:1" },
   activeSheetName: "Summary",
   warnings: [],
   sheets: [

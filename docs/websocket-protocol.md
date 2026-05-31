@@ -109,6 +109,7 @@ Any request before the handshake completes is rejected with a JSON-RPC error:
 - `cowork/workspace/bootstrap`
 - `cowork/workspace/spreadsheet/preview`
 - `cowork/workspace/spreadsheet/workbook`
+- `cowork/workspace/spreadsheet/version`
 - `cowork/workspace/spreadsheet/edit`
 - `cowork/workspace/spreadsheet/format`
 - `cowork/workspace/spreadsheet/patch`
@@ -337,6 +338,8 @@ One-off chat thread workspaces must live under the global `~/.cowork/chats` dire
 
 `cowork/workspace/spreadsheet/workbook` reads a CSV or `.xlsx` file from the active workspace and returns a full workbook snapshot for spreadsheet editors such as the desktop Univer canvas. The result includes all sheets, sparse cells, formulas, styles, merged ranges, column widths, table metadata, chart metadata, the active sheet, and warnings. This is a read-only harness boundary: clients receive editor-ready data without parsing spreadsheet bytes, and `.xlsx` objects that the OSS editor cannot render fully (for example native Excel charts) remain preserved in the original file.
 
+`cowork/workspace/spreadsheet/version` returns a lightweight file-version fingerprint for a CSV or `.xlsx` file in the active workspace. Desktop spreadsheet canvases use this to auto-refresh when the source workbook changes on disk, including updates made by an agent, without reparsing the full workbook on every poll.
+
 `cowork/workspace/spreadsheet/edit` writes a single cell value back to a CSV or `.xlsx` file in the active workspace and returns `{ "ok": true }` or `{ "ok": false, "error": { "kind", "message" } }` (`kind` ∈ `unsupported_format | not_found | parse_error | write_error`). The request accepts `path`, optional `sheetName` (ignored for CSV), `address` (A1-style, e.g. `B2`), and `rawInput` (exactly what the user typed). For `.xlsx` the server infers the cell type from `rawInput` (leading `=` → formula, numeric → number, empty → blank, otherwise inline string) and applies the change as a **surgical, lossless patch**: only the target worksheet XML part is rewritten and the edited cell keeps its style index, so fonts, fills, number formats, charts, and other sheets are preserved byte-for-byte (SheetJS's community build cannot write styles, so the workbook is never round-tripped through it). CSV stores `rawInput` verbatim while preserving the byte-order mark, line terminator, and trailing-newline state. Paths are resolved under the workspace root and symlink escapes are rejected. Unlike the read-only preview method this is a write, so remote trusted devices require the `workspaceSettings` permission.
 
 `cowork/workspace/spreadsheet/format` writes formatting to an `.xlsx` cell or range and returns the same `{ "ok": true }` / structured error shape as `spreadsheet/edit`. The request accepts `path`, optional `sheetName`, `range` (A1-style, e.g. `B2` or `A1:C4`), and a `style` patch supporting `bold`, `italic`, `fontSize`, `fillColor`, `textColor`, and `horizontalAlign`; each field may be omitted to leave it unchanged or set to `null` to clear that formatting attribute. The server updates `xl/styles.xml` and only the target worksheet cell style indexes, preserving formulas, number formats, charts, tables, and unrelated sheets without workbook round-tripping. CSV formatting is unsupported. Like `spreadsheet/edit`, this is a write and remote trusted devices require the `workspaceSettings` permission.
@@ -505,6 +508,7 @@ Sockets subscribed with `research/subscribe` can receive:
 - `cowork/workspace/bootstrap` returns persisted and live threads for a workspace plus workspace control state; used by desktop/mobile clients on initial load
 - `cowork/workspace/spreadsheet/preview` returns bounded spreadsheet preview data for workspace CSV and `.xlsx` files; desktop uses it to keep spreadsheet parsing in the harness.
 - `cowork/workspace/spreadsheet/workbook` returns full workbook snapshots for embedded spreadsheet editors while preserving native workbook objects in the source file.
+- `cowork/workspace/spreadsheet/version` returns a cheap workbook file fingerprint so embedded editors can detect external file updates.
 - `cowork/workspace/spreadsheet/format` applies persisted XLSX range formatting while preserving workbook objects and formulas.
 - `cowork/workspace/spreadsheet/patch` batches editor value and formatting saves through the same lossless XLSX patch path.
 - Cowork persists canonical thread journal events in sqlite so reconnect / restart replay is no longer limited to an in-memory socket buffer

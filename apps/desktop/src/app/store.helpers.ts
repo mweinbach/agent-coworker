@@ -8,6 +8,7 @@ import type {
   SpreadsheetCellEditResult,
   SpreadsheetBatchPatchOperation,
   SpreadsheetBatchPatchResult,
+  SpreadsheetFileVersionResult,
   SpreadsheetPreviewResult,
   SpreadsheetPreviewViewportRequest,
   SpreadsheetCellStylePatch,
@@ -526,6 +527,7 @@ export type AppStoreState = {
       sheetName?: string;
     },
   ) => Promise<SpreadsheetWorkbookSnapshotResult>;
+  loadSpreadsheetFileVersion: (path: string) => Promise<SpreadsheetFileVersionResult>;
   editSpreadsheetCell: (
     path: string,
     opts: { sheetName?: string; address: string; rawInput: string },

@@ -56,6 +56,15 @@ const spreadsheetCellStylePatchSchema = z
   .strict()
   .refine((style) => Object.keys(style).length > 0, "style must include at least one change");
 
+const spreadsheetFileVersionSchema = z
+  .object({
+    modifiedAtMs: z.number().nonnegative(),
+    changeTimeMs: z.number().nonnegative(),
+    size: z.number().int().nonnegative(),
+    fingerprint: nonEmptyTrimmedStringSchema,
+  })
+  .strict();
+
 const spreadsheetCellSchema = z
   .object({
     row: z.number().int().nonnegative(),
@@ -194,6 +203,7 @@ const spreadsheetWorkbookSnapshotSchema = z
     kind: z.enum(["csv", "xlsx"]),
     path: nonEmptyTrimmedStringSchema,
     filename: nonEmptyTrimmedStringSchema,
+    fileVersion: spreadsheetFileVersionSchema,
     sheets: z.array(spreadsheetWorkbookSnapshotSheetSchema),
     activeSheetName: nonEmptyTrimmedStringSchema,
     warnings: z.array(z.string()),
@@ -212,7 +222,7 @@ const spreadsheetPreviewResultSchema = z.discriminatedUnion("ok", [
       ok: z.literal(false),
       error: z
         .object({
-          kind: z.enum(["unsupported_format", "parse_error", "empty_workbook"]),
+          kind: z.enum(["unsupported_format", "not_found", "parse_error", "empty_workbook"]),
           message: z.string(),
         })
         .strict(),
@@ -233,7 +243,28 @@ const spreadsheetWorkbookSnapshotResultSchema = z.discriminatedUnion("ok", [
       ok: z.literal(false),
       error: z
         .object({
-          kind: z.enum(["unsupported_format", "parse_error", "empty_workbook"]),
+          kind: z.enum(["unsupported_format", "not_found", "parse_error", "empty_workbook"]),
+          message: z.string(),
+        })
+        .strict(),
+      warnings: z.array(z.string()),
+    })
+    .strict(),
+]);
+
+const spreadsheetFileVersionResultSchema = z.discriminatedUnion("ok", [
+  z
+    .object({
+      ok: z.literal(true),
+      version: spreadsheetFileVersionSchema,
+    })
+    .strict(),
+  z
+    .object({
+      ok: z.literal(false),
+      error: z
+        .object({
+          kind: z.enum(["unsupported_format", "not_found", "parse_error"]),
           message: z.string(),
         })
         .strict(),
@@ -332,6 +363,12 @@ export const jsonRpcWorkspaceRequestSchemas = {
       sheetName: nonEmptyTrimmedStringSchema.optional(),
     })
     .strict(),
+  "cowork/workspace/spreadsheet/version": z
+    .object({
+      cwd: nonEmptyTrimmedStringSchema.optional(),
+      path: nonEmptyTrimmedStringSchema,
+    })
+    .strict(),
   "cowork/workspace/spreadsheet/edit": z
     .object({
       cwd: nonEmptyTrimmedStringSchema.optional(),
@@ -387,6 +424,7 @@ export const jsonRpcWorkspaceResultSchemas = {
     .strict(),
   "cowork/workspace/spreadsheet/preview": spreadsheetPreviewResultSchema,
   "cowork/workspace/spreadsheet/workbook": spreadsheetWorkbookSnapshotResultSchema,
+  "cowork/workspace/spreadsheet/version": spreadsheetFileVersionResultSchema,
   "cowork/workspace/spreadsheet/edit": spreadsheetEditResultSchema,
   "cowork/workspace/spreadsheet/format": spreadsheetEditResultSchema,
   "cowork/workspace/spreadsheet/patch": spreadsheetEditResultSchema,

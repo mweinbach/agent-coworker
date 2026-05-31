@@ -4,6 +4,7 @@ import type {
   SpreadsheetBatchPatchResult,
   SpreadsheetCellEditResult,
   SpreadsheetCellStylePatch,
+  SpreadsheetFileVersionResult,
   SpreadsheetPreviewResult,
   SpreadsheetPreviewViewportRequest,
   SpreadsheetRangeFormatResult,
@@ -18,6 +19,7 @@ import {
   previewJsonRpcWorkspacePresentation,
   previewJsonRpcWorkspaceSpreadsheetWorkbook,
   previewJsonRpcWorkspaceSpreadsheet,
+  versionJsonRpcWorkspaceSpreadsheet,
 } from "../store.helpers/jsonRpcSocket";
 
 export function createPreviewActions(
@@ -27,6 +29,7 @@ export function createPreviewActions(
   AppStoreActions,
   | "loadSpreadsheetPreview"
   | "loadSpreadsheetWorkbook"
+  | "loadSpreadsheetFileVersion"
   | "editSpreadsheetCell"
   | "formatSpreadsheetRange"
   | "patchSpreadsheetWorkbook"
@@ -60,6 +63,15 @@ export function createPreviewActions(
       }
       await ensureServerRunning(get, set, workspaceId);
       return previewJsonRpcWorkspaceSpreadsheetWorkbook(get, set, workspaceId, path, opts ?? {});
+    },
+
+    loadSpreadsheetFileVersion: async (path: string): Promise<SpreadsheetFileVersionResult> => {
+      const workspaceId = get().selectedWorkspaceId;
+      if (!workspaceId) {
+        throw new Error("No active workspace is available for spreadsheet file versions.");
+      }
+      await ensureServerRunning(get, set, workspaceId);
+      return versionJsonRpcWorkspaceSpreadsheet(get, set, workspaceId, path);
     },
 
     editSpreadsheetCell: async (

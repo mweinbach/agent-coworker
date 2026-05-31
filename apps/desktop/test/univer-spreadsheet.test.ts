@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { BooleanNumber, CellValueType, HorizontalAlign } from "@univerjs/core";
 
 import type { SpreadsheetWorkbookSnapshot } from "../../../src/shared/spreadsheetPreview";
+import { useAppStore } from "../src/app/store";
+import { reportSpreadsheetBackgroundSaveFailure } from "../src/lib/spreadsheetSaveNotifications";
 import {
   buildUniverSpreadsheetPrompt,
   cloneUniverWorkbookData,
@@ -67,6 +69,20 @@ const WORKBOOK: SpreadsheetWorkbookSnapshot = {
 };
 
 describe("Univer spreadsheet helpers", () => {
+  test("reports background spreadsheet save failures through app notifications", () => {
+    useAppStore.setState({ notifications: [] });
+
+    reportSpreadsheetBackgroundSaveFailure("/workspace/Budget.xlsx", "File changed on disk.");
+
+    expect(useAppStore.getState().notifications).toMatchObject([
+      {
+        kind: "error",
+        title: "Spreadsheet save failed",
+        detail: "Budget.xlsx could not save before closing. File changed on disk.",
+      },
+    ]);
+  });
+
   test("builds XML prompt context from Univer selection and escapes user content", () => {
     const data = spreadsheetSnapshotToUniverData(WORKBOOK);
     const selection = selectionContextFromWorkbook(

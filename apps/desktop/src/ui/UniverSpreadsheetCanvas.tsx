@@ -49,6 +49,7 @@ import { useAppStore } from "../app/store";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { openExternalUrl } from "../lib/desktopCommands";
+import { reportSpreadsheetBackgroundSaveFailure } from "../lib/spreadsheetSaveNotifications";
 import { buildUniverSheetsFooterConfig } from "../lib/univerCanvasConfig";
 import { shouldDeferExternalWorkbookReload, type UniverSaveState } from "../lib/univerSaveState";
 import {
@@ -505,7 +506,10 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
             pendingOperations,
             sourceVersionRef.current ?? undefined,
           );
-          if (!result.ok) return null;
+          if (!result.ok) {
+            reportSpreadsheetBackgroundSaveFailure(path, result.error.message);
+            return null;
+          }
           return loadSpreadsheetFileVersion(path);
         };
         const activeSave = saveInFlightRef.current;
@@ -517,7 +521,8 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
             if (result?.ok) sourceVersionRef.current = result.version;
           })
           .catch((error: unknown) => {
-            void error;
+            const message = error instanceof Error ? error.message : "The save request failed.";
+            reportSpreadsheetBackgroundSaveFailure(path, message);
           });
       }
       flushSaveRef.current = async () => true;

@@ -140,6 +140,7 @@ const ChatShell = memo(function ChatShell({
   const canvasShowFormattingBar = useAppStore((s) => s.canvasShowFormattingBar);
   const setCanvasShowFormattingBar = useAppStore((s) => s.setCanvasShowFormattingBar);
   const isCanvasMaximized = useAppStore((s) => s.isCanvasMaximized);
+  const setCanvasMaximized = useAppStore((s) => s.setCanvasMaximized);
   const hasAnimatedSidebarsRef = useRef(false);
   const previousSidebarStateRef = useRef({
     sidebarCollapsed,
@@ -291,6 +292,10 @@ const ChatShell = memo(function ChatShell({
         onSetCanvasActiveTab={setCanvasActiveTab}
         canvasShowFormattingBar={canvasShowFormattingBar}
         onToggleCanvasFormattingBar={() => setCanvasShowFormattingBar(!canvasShowFormattingBar)}
+        canvasMaximized={isCanvasMaximized}
+        onToggleCanvasMaximized={
+          showCanvasInTopBar ? () => setCanvasMaximized(!isCanvasMaximized) : undefined
+        }
         onPopOutCanvas={
           showCanvasInTopBar && canvasPath
             ? () => {

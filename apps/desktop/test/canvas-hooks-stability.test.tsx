@@ -24,6 +24,11 @@ mock.module("../src/lib/desktopCommands", () =>
   }),
 );
 
+mock.module("../src/ui/LazyUniverSpreadsheetCanvas", () => ({
+  LazyUniverSpreadsheetCanvas: ({ path }: { path: string }) =>
+    createElement("div", { "data-testid": "spreadsheet-canvas" }, path),
+}));
+
 const { useAppStore } = await import("../src/app/store");
 const { reactivateWorkspaceJsonRpcSocketState } = await import(
   "../src/app/store.helpers/jsonRpcSocket"

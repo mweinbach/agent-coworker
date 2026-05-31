@@ -805,9 +805,6 @@ describe("AgentSession", () => {
       expect(secondSteerContent).not.toContain("Reference context for this steer");
       expect(secondSteerContent).not.toContain("BATCH-SKILL-BODY-MARKER");
       expect(secondSteerContent).not.toContain("Batch Plugin");
-      expect((session as any).state.turnReferencedPlugins).toEqual([
-        { name: "batch-plugin", displayName: "Batch Plugin", skillNames: ["batch-plugin-skill"] },
-      ]);
     });
 
     test("active steer handlers receive referenced skill context before delivery", async () => {

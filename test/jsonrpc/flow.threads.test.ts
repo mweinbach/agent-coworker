@@ -74,7 +74,7 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
-  test("workspace spreadsheet preview returns viewport data and rejects path escapes", async () => {
+  test("workspace spreadsheet workbook returns snapshot data and rejects path escapes", async () => {
     const tmpDir = await makeTmpProject();
     const csvPath = path.join(tmpDir, "large.csv");
     const lines = ["name,value"];
@@ -86,35 +86,32 @@ describe("server JSON-RPC flows", () => {
 
     try {
       const rpc = await connectJsonRpc(url);
-      const preview = await rpc.sendRequest("cowork/workspace/spreadsheet/preview", {
+      const preview = await rpc.sendRequest("cowork/workspace/spreadsheet/workbook", {
         cwd: tmpDir,
         path: csvPath,
-        viewport: { rowCount: 5, colCount: 2 },
       });
 
       expect(preview.result.ok).toBe(true);
-      expect(preview.result.preview.kind).toBe("csv");
-      expect(preview.result.preview.viewport.rowCount).toBe(5);
-      expect(preview.result.preview.viewport.truncatedRows).toBe(true);
-      expect(preview.result.preview.cells[1][0].value).toBe("row 0");
+      expect(preview.result.workbook.kind).toBe("csv");
+      expect(preview.result.workbook.sheets[0].cells[2].value).toBe("row 0");
 
       const outsideDir = await makeTmpProject("agent-harness-spreadsheet-outside-");
       const outsidePath = path.join(outsideDir, "outside.csv");
       await fs.writeFile(outsidePath, "a,b\n1,2\n", "utf8");
-      const escaped = await rpc.sendRequest("cowork/workspace/spreadsheet/preview", {
+      const escaped = await rpc.sendRequest("cowork/workspace/spreadsheet/workbook", {
         cwd: tmpDir,
         path: outsidePath,
       });
-      expect(escaped.error.message).toContain("outside the workspace root");
+      expect(escaped.result.error.kind).toBe("outside_workspace");
 
       const linkPath = path.join(tmpDir, "linked.csv");
       try {
         await fs.symlink(outsidePath, linkPath);
-        const linked = await rpc.sendRequest("cowork/workspace/spreadsheet/preview", {
+        const linked = await rpc.sendRequest("cowork/workspace/spreadsheet/workbook", {
           cwd: tmpDir,
           path: linkPath,
         });
-        expect(linked.error.message).toContain("outside the workspace root");
+        expect(linked.result.error.kind).toBe("outside_workspace");
       } catch {
         // Symlink creation may be unavailable in some environments.
       } finally {

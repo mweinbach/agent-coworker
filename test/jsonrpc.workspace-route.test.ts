@@ -178,17 +178,17 @@ async function invokeWorkspacePresentationPreview(
   return {};
 }
 
-async function invokeWorkspaceSpreadsheetEdit(
+async function invokeWorkspaceSpreadsheetPatch(
   handlers: JsonRpcRequestHandlerMap,
   params: unknown,
 ): Promise<void> {
-  const handler = handlers["cowork/workspace/spreadsheet/edit"];
+  const handler = handlers["cowork/workspace/spreadsheet/patch"];
   if (!handler) {
-    throw new Error("cowork/workspace/spreadsheet/edit handler was not registered");
+    throw new Error("cowork/workspace/spreadsheet/patch handler was not registered");
   }
   await handler({} as never, {
     id: 1,
-    method: "cowork/workspace/spreadsheet/edit",
+    method: "cowork/workspace/spreadsheet/patch",
     params,
   } satisfies JsonRpcLiteRequest);
 }
@@ -266,7 +266,7 @@ describe("workspace JSON-RPC route", () => {
     expect(harness.errors[0]?.error.code).toBe(JSONRPC_ERROR_CODES.invalidParams);
   });
 
-  test("spreadsheet/edit writes a cell and returns ok", async () => {
+  test("spreadsheet/patch writes a cell and returns ok", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-edit-route-"));
     try {
       const filePath = path.join(dir, "data.csv");
@@ -274,15 +274,14 @@ describe("workspace JSON-RPC route", () => {
 
       const harness = createWorkspaceRouteHarness();
       const handlers = createWorkspaceRouteHandlers(harness.context);
-      await invokeWorkspaceSpreadsheetEdit(handlers, {
+      await invokeWorkspaceSpreadsheetPatch(handlers, {
         cwd: dir,
         path: filePath,
-        address: "A1",
-        rawInput: "edited",
+        operations: [{ type: "cell", address: "A1", rawInput: "edited" }],
       });
 
       expect(harness.errors).toEqual([]);
-      const parsed = jsonRpcWorkspaceResultSchemas["cowork/workspace/spreadsheet/edit"].parse(
+      const parsed = jsonRpcWorkspaceResultSchemas["cowork/workspace/spreadsheet/patch"].parse(
         harness.results[0]?.result,
       );
       expect(parsed).toEqual({ ok: true });
@@ -319,11 +318,11 @@ describe("workspace JSON-RPC route", () => {
     }
   });
 
-  test("spreadsheet/edit rejects invalid params schema", async () => {
+  test("spreadsheet/patch rejects invalid params schema", async () => {
     const harness = createWorkspaceRouteHarness();
     const handlers = createWorkspaceRouteHandlers(harness.context);
 
-    await invokeWorkspaceSpreadsheetEdit(handlers, { cwd: "/workspace/project", path: "x.csv" }); // missing address + rawInput
+    await invokeWorkspaceSpreadsheetPatch(handlers, { cwd: "/workspace/project", path: "x.csv" }); // missing operations
 
     expect(harness.results).toEqual([]);
     expect(harness.errors).toHaveLength(1);

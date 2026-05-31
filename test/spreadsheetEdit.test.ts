@@ -4,12 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import JSZip from "jszip";
 
-import {
-  editSpreadsheetCell,
-  formatSpreadsheetRange,
-  patchSpreadsheetBatch,
-} from "../src/server/spreadsheetEdit";
-import { previewSpreadsheetFile } from "../src/server/spreadsheetPreview";
+import { patchSpreadsheetBatch } from "../src/server/spreadsheetEdit";
+import { readSpreadsheetWorkbookSnapshot } from "../src/server/spreadsheetPreview";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-spreadsheet-edit-"));
@@ -73,6 +69,58 @@ async function partText(filePath: string, part: string): Promise<string> {
   return zip.file(part)!.async("string");
 }
 
+async function readSheetCells(cwd: string, filePath: string, sheetName: string) {
+  const snapshot = await readSpreadsheetWorkbookSnapshot({ cwd, filePath, sheetName });
+  expect(snapshot.ok).toBe(true);
+  if (!snapshot.ok) return [];
+  return snapshot.workbook.sheets.find((sheet) => sheet.name === sheetName)?.cells ?? [];
+}
+
+const editSpreadsheetCell = (req: {
+  cwd: string;
+  filePath: string;
+  sheetName?: string;
+  address: string;
+  rawInput: string;
+}) =>
+  patchSpreadsheetBatch({
+    cwd: req.cwd,
+    filePath: req.filePath,
+    operations: [
+      {
+        type: "cell",
+        ...(req.sheetName ? { sheetName: req.sheetName } : {}),
+        address: req.address,
+        rawInput: req.rawInput,
+      },
+    ],
+  });
+
+const formatSpreadsheetRange = (req: {
+  cwd: string;
+  filePath: string;
+  sheetName?: string;
+  range: string;
+  style: Parameters<typeof patchSpreadsheetBatch>[0]["operations"][number] extends {
+    type: "format";
+    style: infer Style;
+  }
+    ? Style
+    : never;
+}) =>
+  patchSpreadsheetBatch({
+    cwd: req.cwd,
+    filePath: req.filePath,
+    operations: [
+      {
+        type: "format",
+        ...(req.sheetName ? { sheetName: req.sheetName } : {}),
+        range: req.range,
+        style: req.style,
+      },
+    ],
+  });
+
 describe("xlsx single-cell edit (lossless)", () => {
   test("changes the value, preserves the style index, and leaves all other parts byte-identical", async () => {
     await withTempDir(async (dir) => {
@@ -90,10 +138,8 @@ describe("xlsx single-cell edit (lossless)", () => {
       expect(result).toEqual({ ok: true });
 
       // (a) value changed when re-read via SheetJS
-      const preview = await previewSpreadsheetFile({ cwd: dir, filePath, sheetName: "Summary" });
-      expect(preview.ok).toBe(true);
-      if (!preview.ok) return;
-      const b2 = preview.preview.cells.flat().find((cell) => cell.address === "B2");
+      const cells = await readSheetCells(dir, filePath, "Summary");
+      const b2 = cells.find((cell) => cell.address === "B2");
       expect(b2?.value).toBe("hello world");
 
       // (b) the style index survived on the edited cell
@@ -153,10 +199,8 @@ describe("xlsx single-cell edit (lossless)", () => {
       // C1 inserted after B1 within row 1
       expect(sheet1).toMatch(/r="B1"[\s\S]*r="C1"/);
 
-      const preview = await previewSpreadsheetFile({ cwd: dir, filePath, sheetName: "Summary" });
-      expect(preview.ok).toBe(true);
-      if (!preview.ok) return;
-      expect(preview.preview.cells.flat().find((c) => c.address === "C1")?.value).toBe("Tail");
+      const cells = await readSheetCells(dir, filePath, "Summary");
+      expect(cells.find((cell) => cell.address === "C1")?.value).toBe("Tail");
     });
   });
 
@@ -176,10 +220,8 @@ describe("xlsx single-cell edit (lossless)", () => {
 
       const sheet1 = await partText(filePath, "xl/worksheets/sheet1.xml");
       expect(sheet1).toMatch(/r="2"[\s\S]*<row r="5">/);
-      const preview = await previewSpreadsheetFile({ cwd: dir, filePath, sheetName: "Summary" });
-      expect(preview.ok).toBe(true);
-      if (!preview.ok) return;
-      expect(preview.preview.cells.flat().find((c) => c.address === "A5")?.value).toBe("footer");
+      const cells = await readSheetCells(dir, filePath, "Summary");
+      expect(cells.find((cell) => cell.address === "A5")?.value).toBe("footer");
     });
   });
 
@@ -256,12 +298,9 @@ describe("xlsx single-cell edit (lossless)", () => {
         }),
       ).toEqual({ ok: true });
 
-      const preview = await previewSpreadsheetFile({ cwd: dir, filePath, sheetName: "Summary" });
-      expect(preview.ok).toBe(true);
-      if (!preview.ok) return;
-
-      const a1 = preview.preview.cells.flat().find((cell) => cell.address === "A1");
-      const b2 = preview.preview.cells.flat().find((cell) => cell.address === "B2");
+      const cells = await readSheetCells(dir, filePath, "Summary");
+      const a1 = cells.find((cell) => cell.address === "A1");
+      const b2 = cells.find((cell) => cell.address === "B2");
       for (const cell of [a1, b2]) {
         expect(cell?.style).toMatchObject({
           bold: true,
@@ -319,12 +358,9 @@ describe("xlsx single-cell edit (lossless)", () => {
       });
       expect(result).toEqual({ ok: true });
 
-      const preview = await previewSpreadsheetFile({ cwd: dir, filePath, sheetName: "Summary" });
-      expect(preview.ok).toBe(true);
-      if (!preview.ok) return;
-
-      const a1 = preview.preview.cells.flat().find((cell) => cell.address === "A1");
-      const b2 = preview.preview.cells.flat().find((cell) => cell.address === "B2");
+      const cells = await readSheetCells(dir, filePath, "Summary");
+      const a1 = cells.find((cell) => cell.address === "A1");
+      const b2 = cells.find((cell) => cell.address === "B2");
       expect(a1?.value).toBe("Updated metric");
       expect(b2?.formula).toBe("1+2");
       for (const cell of [a1, b2]) {
@@ -388,10 +424,7 @@ describe("xlsx single-cell edit (lossless)", () => {
       expect(first).toEqual({ ok: true });
       expect(second).toEqual({ ok: true });
 
-      const preview = await previewSpreadsheetFile({ cwd: dir, filePath, sheetName: "Summary" });
-      expect(preview.ok).toBe(true);
-      if (!preview.ok) return;
-      const cells = preview.preview.cells.flat();
+      const cells = await readSheetCells(dir, filePath, "Summary");
       expect(cells.find((cell) => cell.address === "A1")?.value).toBe("One");
       expect(cells.find((cell) => cell.address === "B1")?.value).toBe("Two");
     });

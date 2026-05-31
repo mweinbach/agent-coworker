@@ -1,16 +1,4 @@
-export const SPREADSHEET_PREVIEW_DEFAULT_ROW_COUNT = 200;
-export const SPREADSHEET_PREVIEW_DEFAULT_COL_COUNT = 40;
-export const SPREADSHEET_PREVIEW_MAX_ROW_COUNT = 500;
-export const SPREADSHEET_PREVIEW_MAX_COL_COUNT = 100;
-
 export type SpreadsheetFileKind = "csv" | "xlsx";
-
-export type SpreadsheetPreviewViewportRequest = {
-  startRow?: number;
-  startCol?: number;
-  rowCount?: number;
-  colCount?: number;
-};
 
 export type SpreadsheetPreviewViewport = {
   startRow: number;
@@ -91,36 +79,14 @@ export type SpreadsheetChartSummary = {
   anchor?: SpreadsheetChartAnchor;
 };
 
-export type SpreadsheetPreview = {
-  kind: SpreadsheetFileKind;
-  path: string;
-  filename: string;
-  sheets: SpreadsheetSheetSummary[];
-  selectedSheetName: string;
-  viewport: SpreadsheetPreviewViewport;
-  cells: SpreadsheetPreviewCell[][];
-  mergedCells: SpreadsheetMergedRange[];
-  columnWidths: SpreadsheetColumnWidth[];
-  tables: SpreadsheetTableSummary[];
-  charts: SpreadsheetChartSummary[];
-  warnings: string[];
-};
-
-type SpreadsheetPreviewSuccess = {
-  ok: true;
-  preview: SpreadsheetPreview;
-};
-
-type SpreadsheetPreviewFailure = {
+type SpreadsheetWorkbookFailure = {
   ok: false;
   error: {
-    kind: "unsupported_format" | "not_found" | "parse_error" | "empty_workbook";
+    kind: "unsupported_format" | "not_found" | "outside_workspace" | "parse_error" | "empty_workbook";
     message: string;
   };
   warnings: string[];
 };
-
-export type SpreadsheetPreviewResult = SpreadsheetPreviewSuccess | SpreadsheetPreviewFailure;
 
 // ---- Full-workbook snapshot (Univer canvas source) ----
 
@@ -136,7 +102,7 @@ export type SpreadsheetFileVersionResult =
   | {
       ok: false;
       error: {
-        kind: "unsupported_format" | "not_found" | "parse_error";
+        kind: "unsupported_format" | "not_found" | "outside_workspace" | "parse_error";
         message: string;
       };
       warnings: string[];
@@ -166,7 +132,7 @@ type SpreadsheetWorkbookSnapshotSuccess = {
   workbook: SpreadsheetWorkbookSnapshot;
 };
 
-type SpreadsheetWorkbookSnapshotFailure = SpreadsheetPreviewFailure;
+type SpreadsheetWorkbookSnapshotFailure = SpreadsheetWorkbookFailure;
 
 export type SpreadsheetWorkbookSnapshotResult =
   | SpreadsheetWorkbookSnapshotSuccess
@@ -192,6 +158,7 @@ export type SpreadsheetCellEditRequest = {
 export type SpreadsheetCellEditFailureKind =
   | "unsupported_format"
   | "not_found"
+  | "outside_workspace"
   | "parse_error"
   | "write_error";
 

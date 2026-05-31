@@ -52,47 +52,43 @@ function resetPopupWorkspace(requestMock: RequestMock) {
   } as Partial<AppStoreState>);
 }
 
-describe("spreadsheet preview workspace startup", () => {
+describe("spreadsheet workbook workspace startup", () => {
   beforeEach(() => {
     startWorkspaceServerMock.mockClear();
   });
 
-  test("starts the workspace server before requesting spreadsheet data", async () => {
+  test("starts the workspace server before requesting workbook data", async () => {
     const requestMock = mock(async (method: string, params?: Record<string, unknown>) => {
-      expect(method).toBe("cowork/workspace/spreadsheet/preview");
+      expect(method).toBe("cowork/workspace/spreadsheet/workbook");
       expect(params?.cwd).toBe("/Users/mweinbach/Projects/preview-workspace");
       return {
         ok: true,
-        preview: {
+        workbook: {
           kind: "xlsx",
           path: PATH,
           filename: "popup.xlsx",
-          sheets: [{ name: "Sheet1", rowCount: 1, colCount: 1 }],
-          selectedSheetName: "Sheet1",
-          viewport: {
-            startRow: 0,
-            startCol: 0,
-            rowCount: 1,
-            colCount: 1,
-            endRow: 0,
-            endCol: 0,
-            totalRows: 1,
-            totalCols: 1,
-            truncatedRows: false,
-            truncatedCols: false,
-          },
-          cells: [[{ row: 0, col: 0, address: "A1", value: "Ready" }]],
-          mergedCells: [],
-          columnWidths: [],
-          tables: [],
-          charts: [],
+          fileVersion: { modifiedAtMs: 1, changeTimeMs: 1, size: 1, fingerprint: "1:1:1" },
+          activeSheetName: "Sheet1",
+          sheets: [
+            {
+              id: "sheet-1",
+              name: "Sheet1",
+              rowCount: 1,
+              colCount: 1,
+              cells: [{ row: 0, col: 0, address: "A1", value: "Ready" }],
+              mergedCells: [],
+              columnWidths: [],
+              tables: [],
+              charts: [],
+            },
+          ],
           warnings: [],
         },
       };
     });
     resetPopupWorkspace(requestMock);
 
-    const result = await useAppStore.getState().loadSpreadsheetPreview(PATH);
+    const result = await useAppStore.getState().loadSpreadsheetWorkbook(PATH);
 
     expect(result.ok).toBe(true);
     expect(startWorkspaceServerMock).toHaveBeenCalledTimes(1);

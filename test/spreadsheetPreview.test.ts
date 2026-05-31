@@ -6,7 +6,6 @@ import JSZip from "jszip";
 import * as XLSX from "xlsx";
 
 import {
-  previewSpreadsheetFile,
   readSpreadsheetFileVersion,
   readSpreadsheetWorkbookSnapshot,
 } from "../src/server/spreadsheetPreview";
@@ -54,7 +53,7 @@ async function buildObjectWorkbook(): Promise<Buffer> {
 }
 
 describe("spreadsheet preview parser", () => {
-  test("parses CSV with quoted commas, newlines, empty cells, and viewport truncation", async () => {
+  test("builds a full CSV workbook snapshot with quoted commas, newlines, and empty cells", async () => {
     await withTempDir(async (dir) => {
       const rows = [
         "name,note,amount",
@@ -67,25 +66,24 @@ describe("spreadsheet preview parser", () => {
       const filePath = path.join(dir, "data.csv");
       await fs.writeFile(filePath, `${rows.join("\n")}\n`, "utf8");
 
-      const result = await previewSpreadsheetFile({
+      const result = await readSpreadsheetWorkbookSnapshot({
         cwd: dir,
         filePath,
-        viewport: { startRow: 1, rowCount: 2, colCount: 3 },
       });
 
       expect(result.ok).toBe(true);
       if (!result.ok) return;
-      expect(result.preview.kind).toBe("csv");
-      expect(result.preview.sheets).toEqual([{ name: "CSV", rowCount: 223, colCount: 3 }]);
-      expect(result.preview.viewport.truncatedRows).toBe(true);
-      expect(result.preview.cells[0]?.[0]?.value).toBe("Alice");
-      expect(result.preview.cells[0]?.[1]?.value).toBe("quoted, comma");
-      expect(result.preview.cells[1]?.[1]?.value).toBe("line one\nline two");
-      expect(result.preview.cells[1]?.[2]?.value).toBe("");
+      expect(result.workbook.kind).toBe("csv");
+      const [sheet] = result.workbook.sheets;
+      expect(sheet).toMatchObject({ name: "CSV", rowCount: 223, colCount: 3 });
+      expect(sheet?.cells.find((cell) => cell.address === "A2")?.value).toBe("Alice");
+      expect(sheet?.cells.find((cell) => cell.address === "B2")?.value).toBe("quoted, comma");
+      expect(sheet?.cells.find((cell) => cell.address === "B3")?.value).toBe("line one\nline two");
+      expect(sheet?.cells.find((cell) => cell.address === "C3")).toBeUndefined();
     });
   });
 
-  test("parses XLSX sheets, formulas, merged cells, widths, and number formats", async () => {
+  test("builds a full XLSX workbook snapshot with formulas, merged cells, widths, and number formats", async () => {
     await withTempDir(async (dir) => {
       const filePath = path.join(dir, "model.xlsx");
       const workbook = XLSX.utils.book_new();
@@ -103,71 +101,27 @@ describe("spreadsheet preview parser", () => {
       const xlsxBytes = XLSX.write(workbook, { bookType: "xlsx", type: "buffer" });
       await fs.writeFile(filePath, xlsxBytes);
 
-      const result = await previewSpreadsheetFile({
+      const result = await readSpreadsheetWorkbookSnapshot({
         cwd: dir,
         filePath,
         sheetName: "Summary",
-        viewport: { rowCount: 10, colCount: 4 },
       });
 
       expect(result.ok).toBe(true);
       if (!result.ok) return;
-      expect(result.preview.kind).toBe("xlsx");
-      expect(result.preview.sheets.map((sheet) => sheet.name)).toEqual(["Summary", "Data"]);
-      expect(result.preview.selectedSheetName).toBe("Summary");
-      expect(result.preview.cells[1]?.[2]?.formula).toBe("B2*2");
-      expect(result.preview.cells[1]?.[1]?.style?.numberFormat).toBe("$0.00");
-      expect(result.preview.cells[3]?.[1]?.value).toBe("");
-      expect(result.preview.mergedCells).toEqual([
+      expect(result.workbook.kind).toBe("xlsx");
+      expect(result.workbook.sheets.map((sheet) => sheet.name)).toEqual(["Summary", "Data"]);
+      expect(result.workbook.activeSheetName).toBe("Summary");
+      const summarySheet = result.workbook.sheets[0];
+      expect(summarySheet?.cells.find((cell) => cell.address === "C2")?.formula).toBe("B2*2");
+      expect(summarySheet?.cells.find((cell) => cell.address === "B2")?.style?.numberFormat).toBe(
+        "$0.00",
+      );
+      expect(summarySheet?.cells.find((cell) => cell.address === "B4")).toBeUndefined();
+      expect(summarySheet?.mergedCells).toEqual([
         { ref: "A4:B4", startRow: 3, startCol: 0, endRow: 3, endCol: 1 },
       ]);
-      expect(result.preview.columnWidths[0]?.widthChars).toBe(18);
-    });
-  });
-
-  test("parses XLSX styles, tables, and charts", async () => {
-    await withTempDir(async (dir) => {
-      const filePath = path.join(dir, "objects.xlsx");
-      await fs.writeFile(filePath, await buildObjectWorkbook());
-
-      const result = await previewSpreadsheetFile({
-        cwd: dir,
-        filePath,
-        sheetName: "Summary",
-        viewport: { rowCount: 6, colCount: 6 },
-      });
-
-      expect(result.ok).toBe(true);
-      if (!result.ok) return;
-      const a1 = result.preview.cells.flat().find((cell) => cell.address === "A1");
-      expect(a1?.style).toMatchObject({
-        bold: true,
-        fillColor: "#FFE08A",
-        textColor: "#174A2A",
-      });
-      expect(result.preview.tables).toEqual([
-        {
-          name: "RevenueTable",
-          ref: "A1:B3",
-          startRow: 0,
-          startCol: 0,
-          endRow: 2,
-          endCol: 1,
-        },
-      ]);
-      expect(result.preview.charts).toEqual([
-        {
-          id: "chart1",
-          title: "Revenue by Quarter",
-          type: "bar",
-          anchor: {
-            fromRow: 0,
-            fromCol: 3,
-            toRow: 12,
-            toCol: 8,
-          },
-        },
-      ]);
+      expect(summarySheet?.columnWidths[0]?.widthChars).toBe(18);
     });
   });
 
@@ -254,7 +208,7 @@ describe("spreadsheet preview parser", () => {
     await withTempDir(async (dir) => {
       const csvPath = path.join(dir, "bad.csv");
       await fs.writeFile(csvPath, 'name,note\nAlice,"unterminated\n', "utf8");
-      const csvResult = await previewSpreadsheetFile({ cwd: dir, filePath: csvPath });
+      const csvResult = await readSpreadsheetWorkbookSnapshot({ cwd: dir, filePath: csvPath });
       expect(csvResult.ok).toBe(false);
       if (!csvResult.ok) {
         expect(csvResult.error.kind).toBe("parse_error");
@@ -263,7 +217,7 @@ describe("spreadsheet preview parser", () => {
 
       const xlsxPath = path.join(dir, "bad.xlsx");
       await fs.writeFile(xlsxPath, "not a zip", "utf8");
-      const xlsxResult = await previewSpreadsheetFile({ cwd: dir, filePath: xlsxPath });
+      const xlsxResult = await readSpreadsheetWorkbookSnapshot({ cwd: dir, filePath: xlsxPath });
       expect(xlsxResult.ok).toBe(false);
       if (!xlsxResult.ok) {
         expect(xlsxResult.error.kind).toBe("parse_error");
@@ -277,9 +231,9 @@ describe("spreadsheet preview parser", () => {
       try {
         const outsideFile = path.join(outside, "data.csv");
         await fs.writeFile(outsideFile, "a,b\n1,2\n", "utf8");
-        await expect(previewSpreadsheetFile({ cwd: dir, filePath: outsideFile })).rejects.toThrow(
-          /outside the workspace root/,
-        );
+        const outsideResult = await readSpreadsheetWorkbookSnapshot({ cwd: dir, filePath: outsideFile });
+        expect(outsideResult.ok).toBe(false);
+        if (!outsideResult.ok) expect(outsideResult.error.kind).toBe("outside_workspace");
 
         const linkPath = path.join(dir, "linked.csv");
         try {
@@ -287,9 +241,9 @@ describe("spreadsheet preview parser", () => {
         } catch {
           return;
         }
-        await expect(previewSpreadsheetFile({ cwd: dir, filePath: linkPath })).rejects.toThrow(
-          /outside the workspace root/,
-        );
+        const symlinkResult = await readSpreadsheetWorkbookSnapshot({ cwd: dir, filePath: linkPath });
+        expect(symlinkResult.ok).toBe(false);
+        if (!symlinkResult.ok) expect(symlinkResult.error.kind).toBe("outside_workspace");
       } finally {
         await fs.rm(outside, { recursive: true, force: true });
       }

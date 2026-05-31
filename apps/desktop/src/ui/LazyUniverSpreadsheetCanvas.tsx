@@ -1,6 +1,5 @@
 import { Loader2Icon } from "lucide-react";
 import { lazy, Suspense } from "react";
-import { SpreadsheetPreview } from "./SpreadsheetPreview";
 
 const UniverSpreadsheetCanvasImpl = lazy(() =>
   import("./UniverSpreadsheetCanvas").then((module) => ({
@@ -14,10 +13,6 @@ type LazyUniverSpreadsheetCanvasProps = {
 };
 
 export function LazyUniverSpreadsheetCanvas(props: LazyUniverSpreadsheetCanvasProps) {
-  if (shouldUseLegacySpreadsheetPreviewForTests()) {
-    return <SpreadsheetPreview {...props} />;
-  }
-
   return (
     <Suspense
       fallback={
@@ -29,16 +24,5 @@ export function LazyUniverSpreadsheetCanvas(props: LazyUniverSpreadsheetCanvasPr
     >
       <UniverSpreadsheetCanvasImpl {...props} />
     </Suspense>
-  );
-}
-
-function shouldUseLegacySpreadsheetPreviewForTests(): boolean {
-  const globalWithBun = globalThis as { Bun?: unknown };
-  const userAgent = typeof navigator === "undefined" ? "" : navigator.userAgent.toLowerCase();
-  return (
-    import.meta.env.MODE === "test" ||
-    (typeof process !== "undefined" && process.env.NODE_ENV === "test") ||
-    userAgent.includes("jsdom") ||
-    (Boolean(globalWithBun.Bun) && typeof document !== "undefined" && typeof window !== "undefined")
   );
 }

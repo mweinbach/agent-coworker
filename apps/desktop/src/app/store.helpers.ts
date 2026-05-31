@@ -7,12 +7,7 @@ import type {
 import type {
   SpreadsheetBatchPatchOperation,
   SpreadsheetBatchPatchResult,
-  SpreadsheetCellEditResult,
-  SpreadsheetCellStylePatch,
   SpreadsheetFileVersionResult,
-  SpreadsheetPreviewResult,
-  SpreadsheetPreviewViewportRequest,
-  SpreadsheetRangeFormatResult,
   SpreadsheetWorkbookSnapshotResult,
 } from "../../../../src/shared/spreadsheetPreview";
 import { createDefaultUpdaterState, type UpdaterState } from "../lib/desktopApi";
@@ -514,13 +509,6 @@ export type AppStoreState = {
   setCanvasActiveTab: (tab: "preview" | "edit") => void;
   setCanvasShowFormattingBar: (show: boolean) => void;
   setCanvasMaximized: (maximized: boolean) => void;
-  loadSpreadsheetPreview: (
-    path: string,
-    opts?: {
-      sheetName?: string;
-      viewport?: SpreadsheetPreviewViewportRequest;
-    },
-  ) => Promise<SpreadsheetPreviewResult>;
   loadSpreadsheetWorkbook: (
     path: string,
     opts?: {
@@ -528,14 +516,6 @@ export type AppStoreState = {
     },
   ) => Promise<SpreadsheetWorkbookSnapshotResult>;
   loadSpreadsheetFileVersion: (path: string) => Promise<SpreadsheetFileVersionResult>;
-  editSpreadsheetCell: (
-    path: string,
-    opts: { sheetName?: string; address: string; rawInput: string },
-  ) => Promise<SpreadsheetCellEditResult>;
-  formatSpreadsheetRange: (
-    path: string,
-    opts: { sheetName?: string; range: string; style: SpreadsheetCellStylePatch },
-  ) => Promise<SpreadsheetRangeFormatResult>;
   patchSpreadsheetWorkbook: (
     path: string,
     operations: SpreadsheetBatchPatchOperation[],

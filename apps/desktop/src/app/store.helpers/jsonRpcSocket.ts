@@ -1,12 +1,7 @@
 import type {
   SpreadsheetBatchPatchOperation,
   SpreadsheetBatchPatchResult,
-  SpreadsheetCellEditResult,
-  SpreadsheetCellStylePatch,
   SpreadsheetFileVersionResult,
-  SpreadsheetPreviewResult,
-  SpreadsheetPreviewViewportRequest,
-  SpreadsheetRangeFormatResult,
   SpreadsheetWorkbookSnapshotResult,
 } from "../../../../../src/shared/spreadsheetPreview";
 import { JsonRpcSocket } from "../../lib/agentSocket";
@@ -525,25 +520,6 @@ export async function uploadJsonRpcWorkspaceFile(
   };
 }
 
-export async function previewJsonRpcWorkspaceSpreadsheet(
-  get: StoreGet,
-  set: StoreSet | undefined,
-  workspaceId: string,
-  filePath: string,
-  opts: {
-    sheetName?: string;
-    viewport?: SpreadsheetPreviewViewportRequest;
-  } = {},
-): Promise<SpreadsheetPreviewResult> {
-  const workspace = getWorkspaceById(get, workspaceId);
-  return (await requestJsonRpc(get, set, workspaceId, "cowork/workspace/spreadsheet/preview", {
-    cwd: workspace?.path,
-    path: filePath,
-    ...(opts.sheetName ? { sheetName: opts.sheetName } : {}),
-    ...(opts.viewport ? { viewport: opts.viewport } : {}),
-  })) as SpreadsheetPreviewResult;
-}
-
 export async function previewJsonRpcWorkspaceSpreadsheetWorkbook(
   get: StoreGet,
   set: StoreSet | undefined,
@@ -572,40 +548,6 @@ export async function versionJsonRpcWorkspaceSpreadsheet(
     cwd: workspace?.path,
     path: filePath,
   })) as SpreadsheetFileVersionResult;
-}
-
-export async function editJsonRpcWorkspaceSpreadsheet(
-  get: StoreGet,
-  set: StoreSet | undefined,
-  workspaceId: string,
-  filePath: string,
-  opts: { sheetName?: string; address: string; rawInput: string },
-): Promise<SpreadsheetCellEditResult> {
-  const workspace = getWorkspaceById(get, workspaceId);
-  return (await requestJsonRpc(get, set, workspaceId, "cowork/workspace/spreadsheet/edit", {
-    cwd: workspace?.path,
-    path: filePath,
-    ...(opts.sheetName ? { sheetName: opts.sheetName } : {}),
-    address: opts.address,
-    rawInput: opts.rawInput,
-  })) as SpreadsheetCellEditResult;
-}
-
-export async function formatJsonRpcWorkspaceSpreadsheet(
-  get: StoreGet,
-  set: StoreSet | undefined,
-  workspaceId: string,
-  filePath: string,
-  opts: { sheetName?: string; range: string; style: SpreadsheetCellStylePatch },
-): Promise<SpreadsheetRangeFormatResult> {
-  const workspace = getWorkspaceById(get, workspaceId);
-  return (await requestJsonRpc(get, set, workspaceId, "cowork/workspace/spreadsheet/format", {
-    cwd: workspace?.path,
-    path: filePath,
-    ...(opts.sheetName ? { sheetName: opts.sheetName } : {}),
-    range: opts.range,
-    style: opts.style,
-  })) as SpreadsheetRangeFormatResult;
 }
 
 export async function patchJsonRpcWorkspaceSpreadsheet(

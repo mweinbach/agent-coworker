@@ -74,7 +74,7 @@ export async function runXlsxOps(
     await invalidateFormulaCaches(session);
   }
 
-  const flushed = flushXlsxSession(session);
+  const flushed = await flushXlsxSession(session);
   if (!flushed.ok) return { ok: false, index: null, error: flushed.error };
 
   // Skip the rewrite entirely when no operation actually mutated the workbook.
@@ -310,7 +310,9 @@ async function applyXlsxColumnWidthOp(
 }
 
 /** Validate every mutated part once and stage it back into the in-memory zip. */
-function flushXlsxSession(session: XlsxSession): { ok: true } | { ok: false; error: EditFailure } {
+async function flushXlsxSession(
+  session: XlsxSession,
+): Promise<{ ok: true } | { ok: false; error: EditFailure }> {
   for (const partPath of session.dirtyParts) {
     const xml = session.sheetXmlByPart.get(partPath);
     if (xml === undefined) continue;
@@ -339,6 +341,7 @@ function flushXlsxSession(session: XlsxSession): { ok: true } | { ok: false; err
         },
       };
     }
+    session.workbookDirty = (await registerStylesPart(session.zip)) || session.workbookDirty;
     session.zip.file("xl/styles.xml", newStylesXml);
   }
 
@@ -371,11 +374,56 @@ const OOXML_STYLE_BUILDER = new XMLBuilder({
 });
 
 const OOXML_SPREADSHEET_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+const OOXML_RELATIONSHIPS_NS = "http://schemas.openxmlformats.org/package/2006/relationships";
+const OOXML_STYLES_RELATIONSHIP_TYPE =
+  "http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles";
+const OOXML_STYLES_CONTENT_TYPE =
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml";
 
 async function ensureStylesXml(zip: JSZip): Promise<string> {
   const existing = await zip.file("xl/styles.xml")?.async("string");
   if (existing) return existing;
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="${OOXML_SPREADSHEET_NS}"><fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`;
+}
+
+async function registerStylesPart(zip: JSZip): Promise<boolean> {
+  const contentTypesChanged = await updateZipTextPart(
+    zip,
+    "[Content_Types].xml",
+    ensureStylesContentType,
+  );
+  const relationshipChanged = await updateZipTextPart(
+    zip,
+    "xl/_rels/workbook.xml.rels",
+    ensureStylesRelationship,
+  );
+  return contentTypesChanged || relationshipChanged;
+}
+
+function ensureStylesContentType(xml: string): string {
+  if (/<Override\b[^>]*PartName="\/xl\/styles\.xml"[^>]*\/?>/.test(xml)) return xml;
+  return xml.replace(
+    "</Types>",
+    `<Override PartName="/xl/styles.xml" ContentType="${OOXML_STYLES_CONTENT_TYPE}"/></Types>`,
+  );
+}
+
+function ensureStylesRelationship(xml: string): string {
+  if (
+    xml.includes(`Type="${OOXML_STYLES_RELATIONSHIP_TYPE}"`) ||
+    /<Relationship\b(?=[^>]*Target="styles\.xml")/.test(xml)
+  ) {
+    return xml;
+  }
+  const ids = [...xml.matchAll(/\bId="rId(\d+)"/g)]
+    .map((match) => Number.parseInt(match[1] ?? "", 10))
+    .filter((id) => Number.isFinite(id));
+  const nextId = `rId${Math.max(0, ...ids) + 1}`;
+  const relationship = `<Relationship Id="${nextId}" Type="${OOXML_STYLES_RELATIONSHIP_TYPE}" Target="styles.xml"/>`;
+  if (xml.includes("</Relationships>")) {
+    return xml.replace("</Relationships>", `${relationship}</Relationships>`);
+  }
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="${OOXML_RELATIONSHIPS_NS}">${relationship}</Relationships>`;
 }
 
 function parseStylesheet(xml: string): {

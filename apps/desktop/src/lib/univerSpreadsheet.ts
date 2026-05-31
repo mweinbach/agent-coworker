@@ -51,7 +51,7 @@ export function spreadsheetSnapshotToUniverData(
   for (const sheet of workbook.sheets) {
     const sheetId = sheet.id;
     sheetOrder.push(sheetId);
-    sheets[sheetId] = sheetSnapshotToUniverSheet(sheet, styles, styleIds);
+    sheets[sheetId] = sheetSnapshotToUniverSheet(sheet, workbook.kind, styles, styleIds);
   }
 
   return {
@@ -250,12 +250,13 @@ export function selectionContextFromWorkbook(
 
 function sheetSnapshotToUniverSheet(
   sheet: SpreadsheetWorkbookSnapshotSheet,
+  kind: SpreadsheetWorkbookSnapshot["kind"],
   styles: Record<string, IStyleData>,
   styleIds: Map<string, string>,
 ): Partial<IWorksheetData> {
   const cellData: UniverCellMatrix = {};
   for (const cell of sheet.cells) {
-    const univerCell = previewCellToUniverCell(cell, styles, styleIds);
+    const univerCell = previewCellToUniverCell(cell, kind, styles, styleIds);
     if (Object.keys(univerCell).length === 0) continue;
     let row = cellData[cell.row];
     if (!row) {
@@ -303,11 +304,17 @@ function sheetSnapshotToUniverSheet(
 
 function previewCellToUniverCell(
   cell: SpreadsheetPreviewCell,
+  kind: SpreadsheetWorkbookSnapshot["kind"],
   styles: Record<string, IStyleData>,
   styleIds: Map<string, string>,
 ): ICellData {
   const data: ICellData = {};
-  if (cell.formula) {
+  if (kind === "csv") {
+    if (cell.value !== "") {
+      data.v = cell.value;
+      data.t = CellValueType.STRING;
+    }
+  } else if (cell.formula) {
     data.f = `=${cell.formula}`;
     if (cell.rawValue !== undefined && cell.rawValue !== null) {
       data.v = cell.rawValue;

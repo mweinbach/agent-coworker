@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { BooleanNumber, HorizontalAlign } from "@univerjs/core";
+import { BooleanNumber, CellValueType, HorizontalAlign } from "@univerjs/core";
 
 import type { SpreadsheetWorkbookSnapshot } from "../../../src/shared/spreadsheetPreview";
 import {
@@ -130,6 +130,41 @@ describe("Univer spreadsheet helpers", () => {
     expect(selection?.activeValue).toBe("");
     expect(selection?.activeFormula).toBeUndefined();
     expect(selection?.activeStyle).toBeUndefined();
+  });
+
+  test("uses CSV display text instead of coerced raw values", () => {
+    const data = spreadsheetSnapshotToUniverData({
+      ...WORKBOOK,
+      kind: "csv",
+      filename: "data.csv",
+      path: "/workspace/data.csv",
+      sheets: [
+        {
+          ...WORKBOOK.sheets[0]!,
+          cells: [
+            {
+              row: 0,
+              col: 0,
+              address: "A1",
+              value: "001",
+              rawValue: 1,
+            },
+            {
+              row: 0,
+              col: 1,
+              address: "B1",
+              value: "TRUE",
+              rawValue: true,
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(data.sheets["sheet-1"]?.cellData?.[0]?.[0]?.v).toBe("001");
+    expect(data.sheets["sheet-1"]?.cellData?.[0]?.[0]?.t).toBe(CellValueType.STRING);
+    expect(data.sheets["sheet-1"]?.cellData?.[0]?.[1]?.v).toBe("TRUE");
+    expect(data.sheets["sheet-1"]?.cellData?.[0]?.[1]?.t).toBe(CellValueType.STRING);
   });
 
   test("diffs Univer workbook edits into value and format batch operations", () => {

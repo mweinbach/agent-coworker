@@ -83,6 +83,22 @@ describe("spreadsheet preview parser", () => {
     });
   });
 
+  test("keeps CSV cell values as text", async () => {
+    await withTempDir(async (dir) => {
+      const filePath = path.join(dir, "text-values.csv");
+      await fs.writeFile(filePath, "code,date,flag\n001,1/2/2020,TRUE\n", "utf8");
+
+      const result = await readSpreadsheetWorkbookSnapshot({ cwd: dir, filePath });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      const sheet = result.workbook.sheets[0];
+      expect(sheet?.cells.find((cell) => cell.address === "A2")?.rawValue).toBe("001");
+      expect(sheet?.cells.find((cell) => cell.address === "B2")?.rawValue).toBe("1/2/2020");
+      expect(sheet?.cells.find((cell) => cell.address === "C2")?.rawValue).toBe("TRUE");
+    });
+  });
+
   test("builds a full XLSX workbook snapshot with formulas, merged cells, widths, and number formats", async () => {
     await withTempDir(async (dir) => {
       const filePath = path.join(dir, "model.xlsx");
@@ -142,6 +158,28 @@ describe("spreadsheet preview parser", () => {
       if (!result.ok) return;
       const dateCell = result.workbook.sheets[0]?.cells.find((cell) => cell.address === "A2");
       expect(typeof dateCell?.rawValue).toBe("number");
+      expect(dateCell?.style?.numberFormat).toBe("m/d/yy");
+    });
+  });
+
+  test("serializes XLSX dates using the workbook 1904 date system", async () => {
+    await withTempDir(async (dir) => {
+      const filePath = path.join(dir, "dates-1904.xlsx");
+      const workbook = XLSX.utils.book_new();
+      workbook.Workbook = { WBProps: { date1904: true } };
+      const sheet = XLSX.utils.aoa_to_sheet([["Date"], [new Date(Date.UTC(2024, 0, 15))]], {
+        cellDates: true,
+      });
+      if (sheet.A2) sheet.A2.z = "m/d/yy";
+      XLSX.utils.book_append_sheet(workbook, sheet, "Dates");
+      await fs.writeFile(filePath, XLSX.write(workbook, { bookType: "xlsx", type: "buffer" }));
+
+      const result = await readSpreadsheetWorkbookSnapshot({ cwd: dir, filePath });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      const dateCell = result.workbook.sheets[0]?.cells.find((cell) => cell.address === "A2");
+      expect(dateCell?.rawValue).toBe(43844);
       expect(dateCell?.style?.numberFormat).toBe("m/d/yy");
     });
   });

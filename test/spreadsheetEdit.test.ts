@@ -77,6 +77,26 @@ async function buildFormulaWorkbook(): Promise<Buffer> {
   return zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
 }
 
+async function buildWorkbookWithoutStyles(): Promise<Buffer> {
+  const zip = new JSZip();
+  const parts = {
+    ...WORKBOOK_PARTS,
+    "[Content_Types].xml": WORKBOOK_PARTS["[Content_Types].xml"].replace(
+      /<Override PartName="\/xl\/styles\.xml"[^>]*\/>/,
+      "",
+    ),
+    "xl/_rels/workbook.xml.rels": WORKBOOK_PARTS["xl/_rels/workbook.xml.rels"].replace(
+      /<Relationship Id="rId3" Type="http:\/\/schemas\.openxmlformats\.org\/officeDocument\/2006\/relationships\/styles" Target="styles\.xml"\/>/,
+      "",
+    ),
+  };
+  delete parts["xl/styles.xml"];
+  for (const [name, content] of Object.entries(parts)) {
+    zip.file(name, content);
+  }
+  return zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
+}
+
 async function entryBytes(buffer: Buffer): Promise<Map<string, string>> {
   const zip = await JSZip.loadAsync(buffer);
   const map = new Map<string, string>();
@@ -396,6 +416,35 @@ describe("xlsx single-cell edit (lossless)", () => {
       const after = await entryBytes(await fs.readFile(filePath));
       expect(after.get("xl/charts/chart1.xml")).toBe(before.get("xl/charts/chart1.xml"));
       expect(after.get("xl/worksheets/sheet2.xml")).toBe(before.get("xl/worksheets/sheet2.xml"));
+    });
+  });
+
+  test("registers a created styles part when formatting a minimal workbook", async () => {
+    await withTempDir(async (dir) => {
+      const filePath = path.join(dir, "minimal.xlsx");
+      await fs.writeFile(filePath, await buildWorkbookWithoutStyles());
+
+      expect(
+        await formatSpreadsheetRange({
+          cwd: dir,
+          filePath,
+          sheetName: "Summary",
+          range: "A1",
+          style: { bold: true },
+        }),
+      ).toEqual({ ok: true });
+
+      const zip = await JSZip.loadAsync(await fs.readFile(filePath));
+      expect(zip.file("xl/styles.xml")).not.toBeNull();
+      expect(await partText(filePath, "[Content_Types].xml")).toContain(
+        'PartName="/xl/styles.xml"',
+      );
+      expect(await partText(filePath, "xl/_rels/workbook.xml.rels")).toContain(
+        "/relationships/styles",
+      );
+      expect(await partText(filePath, "xl/worksheets/sheet1.xml")).toMatch(
+        /<c[^>]*r="A1"[^>]*s="\d+"/,
+      );
     });
   });
 

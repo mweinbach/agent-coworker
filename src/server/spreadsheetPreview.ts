@@ -195,7 +195,7 @@ function readWorkbook(bytes: Buffer, kind: SpreadsheetFileKind): Workbook {
     cellFormula: true,
     cellNF: true,
     cellStyles: true,
-    raw: kind === "csv" ? false : undefined,
+    raw: kind === "csv" ? true : undefined,
   });
 }
 
@@ -243,6 +243,7 @@ async function buildSpreadsheetWorkbookSnapshot(opts: {
   }
 
   const sheets: SpreadsheetWorkbookSnapshotSheet[] = [];
+  const date1904 = opts.workbook.Workbook?.WBProps?.date1904 === true;
   for (const [index, sheet] of sheetSummaries.entries()) {
     const worksheet = readWorksheet(opts.workbook, opts.kind, sheet.name, index);
     const viewport = viewportBySheetName.get(sheet.name) ?? buildBoundedSheetViewport(sheet, 0);
@@ -263,7 +264,7 @@ async function buildSpreadsheetWorkbookSnapshot(opts: {
       ...sheet,
       id: `sheet-${index + 1}`,
       cells: worksheet
-        ? buildSnapshotCells(worksheet, packageDetails.cellStyles, viewport)
+        ? buildSnapshotCells(worksheet, packageDetails.cellStyles, viewport, date1904)
         : buildStyledBlankCells(packageDetails.cellStyles, viewport),
       mergedCells: worksheet ? readMergedCells(worksheet, viewport) : [],
       columnWidths: worksheet ? readColumnWidths(worksheet, viewport) : [],
@@ -355,6 +356,7 @@ function buildSnapshotCells(
   worksheet: Worksheet,
   packageStyles: Map<string, SpreadsheetCellStyle>,
   viewport: SpreadsheetPreviewViewport,
+  date1904: boolean,
 ): SpreadsheetPreviewCell[] {
   const cells = new Map<string, SpreadsheetPreviewCell>();
   for (const key of Object.keys(worksheet)) {
@@ -365,7 +367,13 @@ function buildSnapshotCells(
     if (!cellInsideViewport(decoded.r, decoded.c, viewport)) continue;
     cells.set(
       address,
-      buildCell(decoded.r, decoded.c, address, worksheet[address] as XLSX.CellObject | undefined),
+      buildCell(
+        decoded.r,
+        decoded.c,
+        address,
+        worksheet[address] as XLSX.CellObject | undefined,
+        date1904,
+      ),
     );
   }
 
@@ -425,6 +433,7 @@ function buildCell(
   col: number,
   address: string,
   cell: XLSX.CellObject | undefined,
+  date1904 = false,
 ): SpreadsheetPreviewCell {
   const value = cell ? stringifyCellValue(cell) : "";
   const style = cell ? readCellStyle(cell) : undefined;
@@ -434,7 +443,7 @@ function buildCell(
     address,
     value,
     ...(cell?.w && cell.w !== value ? { formattedValue: cell.w } : {}),
-    ...(cell && "v" in cell ? { rawValue: normalizeRawValue(cell.v) } : {}),
+    ...(cell && "v" in cell ? { rawValue: normalizeRawValue(cell.v, date1904) } : {}),
     ...(cell?.f ? { formula: cell.f } : {}),
     ...(cell?.t ? { type: cell.t } : {}),
     ...(style ? { style } : {}),
@@ -448,18 +457,18 @@ function stringifyCellValue(cell: XLSX.CellObject): string {
   return String(cell.v);
 }
 
-function normalizeRawValue(value: unknown): string | number | boolean | null {
+function normalizeRawValue(value: unknown, date1904: boolean): string | number | boolean | null {
   if (value === null || value === undefined) return null;
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
     return value;
   }
-  if (value instanceof Date) return excelSerialFromDate(value);
+  if (value instanceof Date) return excelSerialFromDate(value, date1904);
   return String(value);
 }
 
-function excelSerialFromDate(value: Date): number {
+function excelSerialFromDate(value: Date, date1904: boolean): number {
   const millisPerDay = 24 * 60 * 60 * 1000;
-  return (
+  const serial1900 =
     (Date.UTC(
       value.getUTCFullYear(),
       value.getUTCMonth(),
@@ -470,8 +479,8 @@ function excelSerialFromDate(value: Date): number {
       value.getUTCMilliseconds(),
     ) -
       Date.UTC(1899, 11, 30)) /
-    millisPerDay
-  );
+    millisPerDay;
+  return date1904 ? serial1900 - 1462 : serial1900;
 }
 
 function readCellStyle(cell: XLSX.CellObject): SpreadsheetCellStyle | undefined {

@@ -363,9 +363,15 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
       );
     };
 
-    const refreshSourceVersion = async () => {
+    const refreshSourceVersion = async (): Promise<SpreadsheetFileVersion | null> => {
       const result = await loadSpreadsheetFileVersion(path);
-      if (result.ok) sourceVersionRef.current = result.version;
+      if (!result.ok) return null;
+      sourceVersionRef.current = result.version;
+      const currentWorkbook = workbookRef.current;
+      if (currentWorkbook) {
+        workbookRef.current = { ...currentWorkbook, fileVersion: result.version };
+      }
+      return result.version;
     };
 
     const persistWorkbook = async (): Promise<boolean> => {

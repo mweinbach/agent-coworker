@@ -22,6 +22,7 @@ import {
 import { getFilePreviewKind, isCanvasSupportedFile } from "./lib/filePreviewKind";
 import { applyPlatformChromeToDocument, syncPlatformChromeCssVars } from "./lib/platformChromeDom";
 import { canPopOutQuickChatThread } from "./lib/quickChatPopout";
+import { cn } from "./lib/utils";
 import { getDesktopWindowMode } from "./lib/windowMode";
 import { ASK_SKIP_TOKEN } from "./lib/wsProtocol";
 import { Canvas } from "./ui/Canvas";
@@ -62,18 +63,31 @@ const RightSidebarPane = memo(function RightSidebarPane({ collapsed }: { collaps
   const isCanvasMaximized = useAppStore((s) => s.isCanvasMaximized);
 
   const isCanvasSupported = filePreview?.path && isCanvasSupportedFile(filePreview.path);
-  // While maximized the canvas renders as a full-bleed overlay (see ChatShell),
-  // so the sidebar reverts to the context panel to avoid a second instance.
-  const showCanvas = canvasEnabled && isCanvasSupported && !isCanvasMaximized;
-  const activeWidth = showCanvas ? canvasSidebarWidth : contextSidebarWidth;
+  const showCanvas = canvasEnabled && isCanvasSupported;
+  const canvasMaximized = showCanvas && isCanvasMaximized;
+  const activeWidth = showCanvas && !canvasMaximized ? canvasSidebarWidth : contextSidebarWidth;
+  const canvasContainerStyle: CSSProperties = canvasMaximized
+    ? {
+        top: "calc(var(--platform-drag-strip-height) + var(--platform-titlebar-height))",
+        right: 0,
+        bottom: 0,
+        left: 0,
+      }
+    : { width: activeWidth };
 
   return (
     <div
       className="app-right-sidebar-pane relative shrink-0 overflow-hidden"
       style={{ width: collapsed ? 0 : activeWidth }}
     >
-      {!collapsed ? <ContextSidebarResizer /> : null}
-      <div className="absolute top-0 bottom-0 left-0 flex" style={{ width: activeWidth }}>
+      {!collapsed && !canvasMaximized ? <ContextSidebarResizer /> : null}
+      <div
+        className={cn(
+          "flex bg-background",
+          canvasMaximized ? "fixed z-40" : "absolute top-0 bottom-0 left-0",
+        )}
+        style={canvasContainerStyle}
+      >
         {showCanvas && filePreview?.path ? <Canvas path={filePreview.path} /> : <ContextSidebar />}
       </div>
     </div>
@@ -215,12 +229,8 @@ const ChatShell = memo(function ChatShell({
     canvasEnabled &&
     canvasPath !== null &&
     isCanvasSupportedFile(canvasPath) &&
-    !contextSidebarCollapsed;
+    (!contextSidebarCollapsed || isCanvasMaximized);
   const canvasIsMarkdown = canvasPath !== null && getFilePreviewKind(canvasPath) === "markdown";
-  const maximizedCanvasPath =
-    isCanvasMaximized && canvasEnabled && canvasPath !== null && isCanvasSupportedFile(canvasPath)
-      ? canvasPath
-      : null;
   useEffect(() => {
     const sidebarStateChanged =
       previousSidebarStateRef.current.sidebarCollapsed !== sidebarCollapsed ||
@@ -300,7 +310,6 @@ const ChatShell = memo(function ChatShell({
           showCanvasInTopBar && canvasPath
             ? () => {
                 void showCanvasWindow({ path: canvasPath }).catch(() => {});
-                closeFilePreview();
               }
             : undefined
         }
@@ -327,11 +336,6 @@ const ChatShell = memo(function ChatShell({
             {showContextSidebar ? <RightSidebarPane collapsed={contextSidebarCollapsed} /> : null}
           </div>
         </main>
-        {maximizedCanvasPath ? (
-          <div className="absolute inset-0 z-40 bg-background">
-            <Canvas path={maximizedCanvasPath} />
-          </div>
-        ) : null}
       </div>
     </div>
   );

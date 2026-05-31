@@ -397,6 +397,55 @@ describe("xlsx single-cell edit (lossless)", () => {
     });
   });
 
+  test("treats an empty batch as a no-op without rewriting the file", async () => {
+    await withTempDir(async (dir) => {
+      const filePath = path.join(dir, "model.xlsx");
+      await fs.writeFile(filePath, await buildWorkbook());
+      const before = await entryBytes(await fs.readFile(filePath));
+      const beforeStat = await fs.stat(filePath);
+
+      const result = await patchSpreadsheetBatch({ cwd: dir, filePath, operations: [] });
+      expect(result).toEqual({ ok: true });
+
+      const after = await entryBytes(await fs.readFile(filePath));
+      const afterStat = await fs.stat(filePath);
+      expect([...after.entries()]).toEqual([...before.entries()]);
+      // The file must not be touched at all (same mtime, no re-zip).
+      expect(afterStat.mtimeMs).toBe(beforeStat.mtimeMs);
+    });
+  });
+
+  test("attributes a thrown batch failure to the offending operation index", async () => {
+    await withTempDir(async (dir) => {
+      const filePath = path.join(dir, "model.xlsx");
+      await fs.writeFile(filePath, await buildWorkbook());
+      const before = await entryBytes(await fs.readFile(filePath));
+
+      const result = await patchSpreadsheetBatch({
+        cwd: dir,
+        filePath,
+        operations: [
+          { type: "cell", sheetName: "Summary", address: "A1", rawInput: "ok" },
+          // Invalid color throws inside normalizeColor; the failure must be
+          // blamed on operation 2, not operation 1.
+          {
+            type: "format",
+            sheetName: "Summary",
+            range: "A1",
+            style: { fillColor: "not-a-color" },
+          },
+        ],
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toContain("Operation 2 failed");
+      // The aborted batch must leave the file byte-identical.
+      const after = await entryBytes(await fs.readFile(filePath));
+      expect([...after.entries()]).toEqual([...before.entries()]);
+    });
+  });
+
   test("reports not_found for an unknown sheet", async () => {
     await withTempDir(async (dir) => {
       const filePath = path.join(dir, "model.xlsx");

@@ -24,9 +24,11 @@ type EditFailure = { kind: SpreadsheetCellEditFailureKind; message: string };
 
 /**
  * Outcome of applying an ordered list of operations to one file. `index` marks
- * which operation failed so the batch entry point can attribute the error.
+ * which operation failed so the batch entry point can attribute the error, or is
+ * `null` when the failure isn't tied to a specific operation (file read/write,
+ * post-batch validation, or an unsupported file type).
  */
-type OpsOutcome = { ok: true } | { ok: false; index: number; error: EditFailure };
+type OpsOutcome = { ok: true } | { ok: false; index: number | null; error: EditFailure };
 
 /**
  * Apply a single-cell edit to a CSV or XLSX file and persist it, losslessly.
@@ -91,18 +93,20 @@ export async function patchSpreadsheetBatch(
       },
     };
   }
+  // A no-op batch must not touch disk (re-zipping or re-quoting would change the
+  // file's bytes and fingerprint with no actual edit).
+  if (req.operations.length === 0) return { ok: true };
 
   const target = await resolveEditTarget(req.cwd, req.filePath);
   if (!target.ok) return target;
   const outcome = await executeOps(target.resolvedPath, target.ext, req.operations);
   if (outcome.ok) return { ok: true };
-  return {
-    ok: false,
-    error: {
-      kind: outcome.error.kind,
-      message: `Operation ${outcome.index + 1} failed: ${outcome.error.message}`,
-    },
-  };
+  // Attribute the failure to a specific operation only when one is known.
+  const message =
+    outcome.index === null
+      ? outcome.error.message
+      : `Operation ${outcome.index + 1} failed: ${outcome.error.message}`;
+  return { ok: false, error: { kind: outcome.error.kind, message } };
 }
 
 async function resolveEditTarget(
@@ -155,11 +159,12 @@ function executeOps(
         operations[0]?.type === "format"
           ? "Formatting supports XLSX files."
           : "Editing supports CSV and XLSX files.";
-      return { ok: false, index: 0, error: { kind: "unsupported_format", message } };
+      return { ok: false, index: null, error: { kind: "unsupported_format", message } };
     } catch (error) {
+      // A throw here is from reading/loading or writing the file, not a single op.
       return {
         ok: false,
-        index: 0,
+        index: null,
         error: {
           kind: "write_error",
           message: error instanceof Error ? error.message : String(error),
@@ -359,17 +364,33 @@ async function runXlsxOps(
   };
 
   for (const [index, op] of operations.entries()) {
-    const failure =
-      op.type === "cell"
-        ? await applyXlsxCellOp(session, op)
-        : await applyXlsxFormatOp(session, op);
+    let failure: EditFailure | null;
+    try {
+      failure =
+        op.type === "cell"
+          ? await applyXlsxCellOp(session, op)
+          : await applyXlsxFormatOp(session, op);
+    } catch (error) {
+      // e.g. an invalid color reaching normalizeColor — attribute it to this op.
+      return {
+        ok: false,
+        index,
+        error: {
+          kind: "write_error",
+          message: error instanceof Error ? error.message : String(error),
+        },
+      };
+    }
     if (failure) return { ok: false, index, error: failure };
   }
 
   const flushed = flushXlsxSession(session);
-  if (!flushed.ok) return { ok: false, index: 0, error: flushed.error };
+  if (!flushed.ok) return { ok: false, index: null, error: flushed.error };
 
-  await writeXlsxSession(session, filePath);
+  // Skip the rewrite entirely when no operation actually mutated the workbook.
+  if (session.dirtyParts.size > 0 || session.stylesDirty) {
+    await writeXlsxSession(session, filePath);
+  }
   return { ok: true };
 }
 

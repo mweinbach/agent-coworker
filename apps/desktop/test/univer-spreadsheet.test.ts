@@ -119,6 +119,7 @@ describe("Univer spreadsheet helpers", () => {
       n: { pattern: "0.0%" },
       ht: HorizontalAlign.CENTER,
     };
+    sheet.mergeData = [{ startRow: 1, startColumn: 0, endRow: 1, endColumn: 1 }];
 
     expect(diffUniverWorkbookPatches(previous, current)).toEqual([
       {
@@ -139,6 +140,18 @@ describe("Univer spreadsheet helpers", () => {
           numberFormat: "0.0%",
           textColor: "#1F4E79",
         },
+      },
+      {
+        type: "merge",
+        sheetName: "Summary",
+        range: "A1:B1",
+        merged: false,
+      },
+      {
+        type: "merge",
+        sheetName: "Summary",
+        range: "A2:B2",
+        merged: true,
       },
     ]);
   });

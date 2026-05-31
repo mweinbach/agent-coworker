@@ -12,7 +12,7 @@ import type { EditFailure, OpsOutcome } from "./spreadsheetEditTypes";
 import { runXlsxOps } from "./spreadsheetEditXlsx";
 import { resolveWorkspaceFilePath, spreadsheetPathFailure } from "./spreadsheetPreview";
 
-const MAX_BATCH_PATCH_OPERATIONS = 2_000;
+const MAX_BATCH_PATCH_OPERATIONS = 50_000;
 
 /**
  * Apply an ordered batch of cell/format operations as a single atomic
@@ -83,10 +83,13 @@ function executeOps(
     try {
       if (ext === ".csv") return await runCsvOps(resolvedPath, operations, writeFileAtomic);
       if (ext === ".xlsx") return await runXlsxOps(resolvedPath, operations, writeFileAtomic);
+      const firstType = operations[0]?.type;
       const message =
-        operations[0]?.type === "format"
+        firstType === "format"
           ? "Formatting supports XLSX files."
-          : "Editing supports CSV and XLSX files.";
+          : firstType === "merge"
+            ? "Merging supports XLSX files."
+            : "Editing supports CSV and XLSX files.";
       return { ok: false, index: null, error: { kind: "unsupported_format", message } };
     } catch (error) {
       return {

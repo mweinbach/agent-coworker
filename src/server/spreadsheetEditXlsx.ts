@@ -45,10 +45,13 @@ export async function runXlsxOps(
   for (const [index, op] of operations.entries()) {
     let failure: EditFailure | null;
     try {
-      failure =
-        op.type === "cell"
-          ? await applyXlsxCellOp(session, op)
-          : await applyXlsxFormatOp(session, op);
+      if (op.type === "cell") {
+        failure = await applyXlsxCellOp(session, op);
+      } else if (op.type === "format") {
+        failure = await applyXlsxFormatOp(session, op);
+      } else {
+        failure = await applyXlsxMergeOp(session, op);
+      }
     } catch (error) {
       // e.g. an invalid color reaching normalizeColor — attribute it to this op.
       return {
@@ -172,6 +175,27 @@ async function applyXlsxFormatOp(
   return null;
 }
 
+async function applyXlsxMergeOp(
+  session: XlsxSession,
+  op: { sheetName?: string; range: string; merged: boolean },
+): Promise<EditFailure | null> {
+  const range = parseRange(op.range);
+  if (!range) return { kind: "parse_error", message: `Invalid cell range: ${op.range}` };
+
+  const partPath = await sessionWorksheetPart(session, op.sheetName);
+  if (!partPath) {
+    return { kind: "not_found", message: `Sheet not found: ${op.sheetName ?? "(first sheet)"}` };
+  }
+  const sheetXml = await sessionSheetXml(session, partPath);
+  if (sheetXml === null) {
+    return { kind: "parse_error", message: `Worksheet part missing: ${partPath}` };
+  }
+
+  session.sheetXmlByPart.set(partPath, applyWorksheetMerge(sheetXml, range, op.merged));
+  session.dirtyParts.add(partPath);
+  return null;
+}
+
 /** Validate every mutated part once and stage it back into the in-memory zip. */
 function flushXlsxSession(session: XlsxSession): { ok: true } | { ok: false; error: EditFailure } {
   for (const partPath of session.dirtyParts) {
@@ -233,10 +257,12 @@ const OOXML_STYLE_BUILDER = new XMLBuilder({
   format: false,
 });
 
+const OOXML_SPREADSHEET_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+
 async function ensureStylesXml(zip: JSZip): Promise<string> {
   const existing = await zip.file("xl/styles.xml")?.async("string");
   if (existing) return existing;
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`;
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="${OOXML_SPREADSHEET_NS}"><fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`;
 }
 
 function parseStylesheet(xml: string): {
@@ -246,6 +272,7 @@ function parseStylesheet(xml: string): {
   const root = asRecord(OOXML_STYLE_PARSER.parse(xml)) ?? {};
   delete root["?xml"];
   const styleSheet = ensureRecord(root, "styleSheet");
+  styleSheet.xmlns ??= OOXML_SPREADSHEET_NS;
   const numFmtsNode = ensureRecord(styleSheet, "numFmts");
   const fontsNode = ensureRecord(styleSheet, "fonts");
   const fillsNode = ensureRecord(styleSheet, "fills");
@@ -528,6 +555,60 @@ function encodeCellXml(ref: string, styleAttr: string, rawInput: string): string
 
 function escapeXmlText(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function applyWorksheetMerge(
+  xml: string,
+  range: ReturnType<typeof parseRange>,
+  merged: boolean,
+): string {
+  if (!range) return xml;
+  const rangeRef = XLSX.utils.encode_range({
+    s: { r: range.start.row, c: range.start.col },
+    e: { r: range.end.row, c: range.end.col },
+  });
+  const mergeCellsRe = /<mergeCells\b([^>]*)>([\s\S]*?)<\/mergeCells>/;
+  const mergeCellsSelfClosingRe = /<mergeCells\b([^>]*)\/>/;
+  const existing =
+    mergeCellsRe.exec(xml) ??
+    mergeCellsSelfClosingRe.exec(xml)?.map((value, index) => (index === 2 ? "" : value));
+  const refs = existing ? readMergeRefs(existing[2] ?? "") : [];
+  const nextRefs = refs.filter((ref) => ref.toUpperCase() !== rangeRef.toUpperCase());
+  if (merged) nextRefs.push(rangeRef);
+
+  const nextXml =
+    nextRefs.length > 0
+      ? `<mergeCells count="${nextRefs.length}">${nextRefs
+          .map((ref) => `<mergeCell ref="${ref}"/>`)
+          .join("")}</mergeCells>`
+      : "";
+
+  let updated = xml;
+  if (existing) {
+    updated = nextXml ? xml.replace(existing[0], nextXml) : xml.replace(existing[0], "");
+  } else if (nextXml) {
+    const sheetDataClose = "</sheetData>";
+    const insertAt = xml.indexOf(sheetDataClose);
+    if (insertAt === -1) throw new Error("Worksheet <sheetData> is not closed.");
+    updated =
+      xml.slice(0, insertAt + sheetDataClose.length) +
+      nextXml +
+      xml.slice(insertAt + sheetDataClose.length);
+  }
+
+  if (!merged) return updated;
+  return maybeExpandDimension(maybeExpandDimension(updated, range.start), range.end);
+}
+
+function readMergeRefs(xml: string): string[] {
+  const refs: string[] = [];
+  const mergeRe = /<mergeCell\b[^>]*\bref="([^"]+)"[^>]*\/?>/g;
+  let match = mergeRe.exec(xml);
+  while (match) {
+    refs.push(match[1] as string);
+    match = mergeRe.exec(xml);
+  }
+  return refs;
 }
 
 /**

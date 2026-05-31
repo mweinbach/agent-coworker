@@ -213,9 +213,17 @@ export type SpreadsheetBatchPatchFormatOperation = {
   style: SpreadsheetCellStylePatch;
 };
 
+export type SpreadsheetBatchPatchMergeOperation = {
+  type: "merge";
+  sheetName?: string;
+  range: string;
+  merged: boolean;
+};
+
 export type SpreadsheetBatchPatchOperation =
   | SpreadsheetBatchPatchCellOperation
-  | SpreadsheetBatchPatchFormatOperation;
+  | SpreadsheetBatchPatchFormatOperation
+  | SpreadsheetBatchPatchMergeOperation;
 
 export type SpreadsheetBatchPatchRequest = {
   cwd: string;

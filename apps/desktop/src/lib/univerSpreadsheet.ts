@@ -38,6 +38,7 @@ const DEFAULT_GRID_COLOR = rgbHex(229, 231, 235);
 type UniverCellMatrix = NonNullable<IWorksheetData["cellData"]>;
 type UniverRowMatrix = NonNullable<IWorksheetData["rowData"]>;
 type UniverColumnMatrix = NonNullable<IWorksheetData["columnData"]>;
+type UniverMergeRange = NonNullable<IWorksheetData["mergeData"]>[number];
 
 export function spreadsheetSnapshotToUniverData(
   workbook: SpreadsheetWorkbookSnapshot,
@@ -106,6 +107,29 @@ export function diffUniverWorkbookPatches(
           sheetName: currentSheet.name,
           range: address,
           style: patch,
+        });
+      }
+    }
+
+    const previousMerges = mergeRangeMap(previousSheet?.mergeData);
+    const currentMerges = mergeRangeMap(currentSheet.mergeData);
+    for (const [key, merge] of previousMerges) {
+      if (!currentMerges.has(key)) {
+        operations.push({
+          type: "merge",
+          sheetName: currentSheet.name,
+          range: mergeRangeToA1(merge),
+          merged: false,
+        });
+      }
+    }
+    for (const [key, merge] of currentMerges) {
+      if (!previousMerges.has(key)) {
+        operations.push({
+          type: "merge",
+          sheetName: currentSheet.name,
+          range: mergeRangeToA1(merge),
+          merged: true,
         });
       }
     }
@@ -381,6 +405,27 @@ function collectCellCoords(
       return { row: Number.isFinite(row) ? row : 0, col: Number.isFinite(col) ? col : 0 };
     })
     .sort((left, right) => left.row - right.row || left.col - right.col);
+}
+
+function mergeRangeMap(
+  ranges: Partial<IWorksheetData>["mergeData"] | undefined,
+): Map<string, UniverMergeRange> {
+  const map = new Map<string, UniverMergeRange>();
+  for (const range of ranges ?? []) {
+    const startRow = Math.min(range.startRow, range.endRow);
+    const startColumn = Math.min(range.startColumn, range.endColumn);
+    const endRow = Math.max(range.startRow, range.endRow);
+    const endColumn = Math.max(range.startColumn, range.endColumn);
+    const normalized = { startRow, startColumn, endRow, endColumn };
+    map.set(`${startRow}:${startColumn}:${endRow}:${endColumn}`, normalized);
+  }
+  return map;
+}
+
+function mergeRangeToA1(range: UniverMergeRange): string {
+  const start = addressFor(range.startRow, range.startColumn);
+  const end = addressFor(range.endRow, range.endColumn);
+  return start === end ? start : `${start}:${end}`;
 }
 
 function readUniverCell(

@@ -16,11 +16,17 @@ export async function runCsvOps(
 
   const rows = parseCsv(text);
   for (const [index, op] of operations.entries()) {
-    if (op.type === "format") {
+    if (op.type === "format" || op.type === "merge") {
       return {
         ok: false,
         index,
-        error: { kind: "unsupported_format", message: "Formatting supports XLSX files." },
+        error: {
+          kind: "unsupported_format",
+          message:
+            op.type === "format"
+              ? "Formatting supports XLSX files."
+              : "Merging supports XLSX files.",
+        },
       };
     }
     const addr = parseAddress(op.address);

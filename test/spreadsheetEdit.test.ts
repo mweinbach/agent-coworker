@@ -76,6 +76,13 @@ async function readSheetCells(cwd: string, filePath: string, sheetName: string) 
   return snapshot.workbook.sheets.find((sheet) => sheet.name === sheetName)?.cells ?? [];
 }
 
+async function readSheetMergedRanges(cwd: string, filePath: string, sheetName: string) {
+  const snapshot = await readSpreadsheetWorkbookSnapshot({ cwd, filePath, sheetName });
+  expect(snapshot.ok).toBe(true);
+  if (!snapshot.ok) return [];
+  return snapshot.workbook.sheets.find((sheet) => sheet.name === sheetName)?.mergedCells ?? [];
+}
+
 const editSpreadsheetCell = (req: {
   cwd: string;
   filePath: string;
@@ -313,6 +320,9 @@ describe("xlsx single-cell edit (lossless)", () => {
           numberFormat: "0.0%",
         });
       }
+      expect(await partText(filePath, "xl/styles.xml")).toContain(
+        'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"',
+      );
 
       const before = await entryBytes(original);
       const after = await entryBytes(await fs.readFile(filePath));
@@ -376,6 +386,35 @@ describe("xlsx single-cell edit (lossless)", () => {
           numberFormat: "0.0%",
         });
       }
+    });
+  });
+
+  test("applies batched merge and unmerge patches", async () => {
+    await withTempDir(async (dir) => {
+      const filePath = path.join(dir, "model.xlsx");
+      await fs.writeFile(filePath, await buildWorkbook());
+
+      expect(
+        await patchSpreadsheetBatch({
+          cwd: dir,
+          filePath,
+          operations: [{ type: "merge", sheetName: "Summary", range: "A1:B1", merged: true }],
+        }),
+      ).toEqual({ ok: true });
+      expect(
+        (await readSheetMergedRanges(dir, filePath, "Summary")).map((range) => range.ref),
+      ).toContain("A1:B1");
+
+      expect(
+        await patchSpreadsheetBatch({
+          cwd: dir,
+          filePath,
+          operations: [{ type: "merge", sheetName: "Summary", range: "A1:B1", merged: false }],
+        }),
+      ).toEqual({ ok: true });
+      expect(
+        (await readSheetMergedRanges(dir, filePath, "Summary")).map((range) => range.ref),
+      ).not.toContain("A1:B1");
     });
   });
 
@@ -574,6 +613,26 @@ describe("csv single-cell edit (lossless)", () => {
 });
 
 describe("spreadsheet edit guards", () => {
+  test("accepts canvas-sized batches above the legacy 2,000 operation limit", async () => {
+    await withTempDir(async (dir) => {
+      const filePath = path.join(dir, "data.csv");
+      await fs.writeFile(filePath, "value\n", "utf8");
+
+      const result = await patchSpreadsheetBatch({
+        cwd: dir,
+        filePath,
+        operations: Array.from({ length: 2_025 }, (_, index) => ({
+          type: "cell",
+          address: "A1",
+          rawInput: String(index),
+        })),
+      });
+
+      expect(result).toEqual({ ok: true });
+      expect(await fs.readFile(filePath, "utf8")).toBe("2024\n");
+    });
+  });
+
   test("rejects unsupported extensions", async () => {
     await withTempDir(async (dir) => {
       const filePath = path.join(dir, "notes.txt");

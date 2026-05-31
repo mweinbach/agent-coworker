@@ -227,6 +227,14 @@ const spreadsheetBatchPatchOperationSchema = z.discriminatedUnion("type", [
       style: spreadsheetCellStylePatchSchema,
     })
     .strict(),
+  z
+    .object({
+      type: z.literal("merge"),
+      sheetName: nonEmptyTrimmedStringSchema.optional(),
+      range: nonEmptyTrimmedStringSchema,
+      merged: z.boolean(),
+    })
+    .strict(),
 ]);
 
 const presentationSlideSchema = z
@@ -287,7 +295,7 @@ export const jsonRpcWorkspaceRequestSchemas = {
     .object({
       cwd: nonEmptyTrimmedStringSchema.optional(),
       path: nonEmptyTrimmedStringSchema,
-      operations: z.array(spreadsheetBatchPatchOperationSchema).max(2_000),
+      operations: z.array(spreadsheetBatchPatchOperationSchema).max(50_000),
     })
     .strict(),
   "cowork/workspace/presentation/preview": z

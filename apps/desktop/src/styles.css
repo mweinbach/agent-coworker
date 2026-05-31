@@ -55,6 +55,26 @@ code {
   -webkit-user-select: text;
 }
 
+[data-cowork-univer-canvas="true"],
+[data-cowork-univer-canvas="true"] * {
+  --primary-color: var(--accent);
+  --brand-color: var(--accent);
+}
+
+[data-cowork-univer-canvas="true"] {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+[data-cowork-univer-canvas="true"] :where(.univer, .univer-app, .univer-container) {
+  background: var(--surface-spreadsheet);
+}
+
+[data-cowork-univer-canvas="true"] :where(input, textarea, [contenteditable="true"]) {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
 :root[data-window-mode="quick-chat"] body,
 :root[data-window-mode="utility"] body {
   background: transparent;

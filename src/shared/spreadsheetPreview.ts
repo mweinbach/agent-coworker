@@ -122,6 +122,37 @@ type SpreadsheetPreviewFailure = {
 
 export type SpreadsheetPreviewResult = SpreadsheetPreviewSuccess | SpreadsheetPreviewFailure;
 
+// ---- Full-workbook snapshot (Univer canvas source) ----
+
+export type SpreadsheetWorkbookSnapshotSheet = SpreadsheetSheetSummary & {
+  id: string;
+  cells: SpreadsheetPreviewCell[];
+  mergedCells: SpreadsheetMergedRange[];
+  columnWidths: SpreadsheetColumnWidth[];
+  tables: SpreadsheetTableSummary[];
+  charts: SpreadsheetChartSummary[];
+};
+
+export type SpreadsheetWorkbookSnapshot = {
+  kind: SpreadsheetFileKind;
+  path: string;
+  filename: string;
+  sheets: SpreadsheetWorkbookSnapshotSheet[];
+  activeSheetName: string;
+  warnings: string[];
+};
+
+type SpreadsheetWorkbookSnapshotSuccess = {
+  ok: true;
+  workbook: SpreadsheetWorkbookSnapshot;
+};
+
+type SpreadsheetWorkbookSnapshotFailure = SpreadsheetPreviewFailure;
+
+export type SpreadsheetWorkbookSnapshotResult =
+  | SpreadsheetWorkbookSnapshotSuccess
+  | SpreadsheetWorkbookSnapshotFailure;
+
 // ---- Single-cell edit (write-back) ----
 
 export type SpreadsheetCellEditRequest = {
@@ -173,3 +204,31 @@ export type SpreadsheetRangeFormatRequest = {
 export type SpreadsheetRangeFormatResult =
   | { ok: true }
   | { ok: false; error: { kind: SpreadsheetCellEditFailureKind; message: string } };
+
+// ---- Batched workbook patches (Univer save bridge) ----
+
+export type SpreadsheetBatchPatchCellOperation = {
+  type: "cell";
+  sheetName?: string;
+  address: string;
+  rawInput: string;
+};
+
+export type SpreadsheetBatchPatchFormatOperation = {
+  type: "format";
+  sheetName?: string;
+  range: string;
+  style: SpreadsheetCellStylePatch;
+};
+
+export type SpreadsheetBatchPatchOperation =
+  | SpreadsheetBatchPatchCellOperation
+  | SpreadsheetBatchPatchFormatOperation;
+
+export type SpreadsheetBatchPatchRequest = {
+  cwd: string;
+  filePath: string;
+  operations: SpreadsheetBatchPatchOperation[];
+};
+
+export type SpreadsheetBatchPatchResult = SpreadsheetRangeFormatResult;

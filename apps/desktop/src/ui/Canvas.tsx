@@ -31,9 +31,9 @@ import { cn } from "../lib/utils";
 import { getDesktopWindowMode } from "../lib/windowMode";
 import { CanvasElectronTitlebar } from "./canvas/CanvasElectronTitlebar";
 import { CanvasFilePreviewLayout } from "./canvas/CanvasFilePreviewLayout";
+import { LazyUniverSpreadsheetCanvas } from "./LazyUniverSpreadsheetCanvas";
 import { PptxPreview } from "./PptxPreview";
 import { SlidePreview } from "./SlidePreview";
-import { SpreadsheetPreview } from "./SpreadsheetPreview";
 
 function decodeUtf8(bytes: Uint8Array): string {
   return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
@@ -469,7 +469,7 @@ ${textToSend}`;
         previewKind={previewKind}
         onClose={closeFilePreview}
       >
-        <SpreadsheetPreview path={path} compact />
+        <LazyUniverSpreadsheetCanvas path={path} compact />
       </CanvasFilePreviewLayout>
     );
   }

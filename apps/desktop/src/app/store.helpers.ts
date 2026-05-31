@@ -6,10 +6,13 @@ import type {
 } from "../../../../src/shared/featureFlags";
 import type {
   SpreadsheetCellEditResult,
+  SpreadsheetBatchPatchOperation,
+  SpreadsheetBatchPatchResult,
   SpreadsheetPreviewResult,
   SpreadsheetPreviewViewportRequest,
   SpreadsheetCellStylePatch,
   SpreadsheetRangeFormatResult,
+  SpreadsheetWorkbookSnapshotResult,
 } from "../../../../src/shared/spreadsheetPreview";
 import { createDefaultUpdaterState, type UpdaterState } from "../lib/desktopApi";
 import { startWorkspaceServer } from "../lib/desktopCommands";
@@ -517,6 +520,12 @@ export type AppStoreState = {
       viewport?: SpreadsheetPreviewViewportRequest;
     },
   ) => Promise<SpreadsheetPreviewResult>;
+  loadSpreadsheetWorkbook: (
+    path: string,
+    opts?: {
+      sheetName?: string;
+    },
+  ) => Promise<SpreadsheetWorkbookSnapshotResult>;
   editSpreadsheetCell: (
     path: string,
     opts: { sheetName?: string; address: string; rawInput: string },
@@ -525,6 +534,10 @@ export type AppStoreState = {
     path: string,
     opts: { sheetName?: string; range: string; style: SpreadsheetCellStylePatch },
   ) => Promise<SpreadsheetRangeFormatResult>;
+  patchSpreadsheetWorkbook: (
+    path: string,
+    operations: SpreadsheetBatchPatchOperation[],
+  ) => Promise<SpreadsheetBatchPatchResult>;
   loadPresentationPreview: (path: string) => Promise<PresentationPreviewResult>;
 
   setA2uiDockExpanded: (threadId: string, expanded: boolean) => void;

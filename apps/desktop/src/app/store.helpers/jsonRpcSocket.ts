@@ -1,9 +1,12 @@
 import type {
+  SpreadsheetBatchPatchOperation,
+  SpreadsheetBatchPatchResult,
   SpreadsheetCellEditResult,
   SpreadsheetCellStylePatch,
   SpreadsheetPreviewResult,
   SpreadsheetPreviewViewportRequest,
   SpreadsheetRangeFormatResult,
+  SpreadsheetWorkbookSnapshotResult,
 } from "../../../../../src/shared/spreadsheetPreview";
 import { JsonRpcSocket } from "../../lib/agentSocket";
 import { withBrowserAccessToken } from "../../lib/webAdapter";
@@ -540,6 +543,23 @@ export async function previewJsonRpcWorkspaceSpreadsheet(
   })) as SpreadsheetPreviewResult;
 }
 
+export async function previewJsonRpcWorkspaceSpreadsheetWorkbook(
+  get: StoreGet,
+  set: StoreSet | undefined,
+  workspaceId: string,
+  filePath: string,
+  opts: {
+    sheetName?: string;
+  } = {},
+): Promise<SpreadsheetWorkbookSnapshotResult> {
+  const workspace = getWorkspaceById(get, workspaceId);
+  return (await requestJsonRpc(get, set, workspaceId, "cowork/workspace/spreadsheet/workbook", {
+    cwd: workspace?.path,
+    path: filePath,
+    ...(opts.sheetName ? { sheetName: opts.sheetName } : {}),
+  })) as SpreadsheetWorkbookSnapshotResult;
+}
+
 export async function editJsonRpcWorkspaceSpreadsheet(
   get: StoreGet,
   set: StoreSet | undefined,
@@ -572,6 +592,21 @@ export async function formatJsonRpcWorkspaceSpreadsheet(
     range: opts.range,
     style: opts.style,
   })) as SpreadsheetRangeFormatResult;
+}
+
+export async function patchJsonRpcWorkspaceSpreadsheet(
+  get: StoreGet,
+  set: StoreSet | undefined,
+  workspaceId: string,
+  filePath: string,
+  operations: SpreadsheetBatchPatchOperation[],
+): Promise<SpreadsheetBatchPatchResult> {
+  const workspace = getWorkspaceById(get, workspaceId);
+  return (await requestJsonRpc(get, set, workspaceId, "cowork/workspace/spreadsheet/patch", {
+    cwd: workspace?.path,
+    path: filePath,
+    operations,
+  })) as SpreadsheetBatchPatchResult;
 }
 
 export async function previewJsonRpcWorkspacePresentation(

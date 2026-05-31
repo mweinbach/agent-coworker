@@ -156,11 +156,76 @@ const spreadsheetPreviewSchema = z
   })
   .strict();
 
+const spreadsheetWorkbookSnapshotSheetSchema = z
+  .object({
+    id: nonEmptyTrimmedStringSchema,
+    name: nonEmptyTrimmedStringSchema,
+    rowCount: z.number().int().nonnegative(),
+    colCount: z.number().int().nonnegative(),
+    hidden: z.boolean().optional(),
+    cells: z.array(spreadsheetCellSchema),
+    mergedCells: z.array(
+      z
+        .object({
+          ref: nonEmptyTrimmedStringSchema,
+          startRow: z.number().int().nonnegative(),
+          startCol: z.number().int().nonnegative(),
+          endRow: z.number().int().nonnegative(),
+          endCol: z.number().int().nonnegative(),
+        })
+        .strict(),
+    ),
+    columnWidths: z.array(
+      z
+        .object({
+          col: z.number().int().nonnegative(),
+          widthChars: z.number().optional(),
+          widthPx: z.number().optional(),
+        })
+        .strict(),
+    ),
+    tables: z.array(spreadsheetTableSummarySchema),
+    charts: z.array(spreadsheetChartSummarySchema),
+  })
+  .strict();
+
+const spreadsheetWorkbookSnapshotSchema = z
+  .object({
+    kind: z.enum(["csv", "xlsx"]),
+    path: nonEmptyTrimmedStringSchema,
+    filename: nonEmptyTrimmedStringSchema,
+    sheets: z.array(spreadsheetWorkbookSnapshotSheetSchema),
+    activeSheetName: nonEmptyTrimmedStringSchema,
+    warnings: z.array(z.string()),
+  })
+  .strict();
+
 const spreadsheetPreviewResultSchema = z.discriminatedUnion("ok", [
   z
     .object({
       ok: z.literal(true),
       preview: spreadsheetPreviewSchema,
+    })
+    .strict(),
+  z
+    .object({
+      ok: z.literal(false),
+      error: z
+        .object({
+          kind: z.enum(["unsupported_format", "parse_error", "empty_workbook"]),
+          message: z.string(),
+        })
+        .strict(),
+      warnings: z.array(z.string()),
+    })
+    .strict(),
+]);
+
+const spreadsheetWorkbookSnapshotResultSchema = z.discriminatedUnion("ok", [
+  z
+    .object({
+      ok: z.literal(true),
+      workbook: spreadsheetWorkbookSnapshotSchema,
     })
     .strict(),
   z
@@ -188,6 +253,25 @@ const spreadsheetEditResultSchema = z.discriminatedUnion("ok", [
           message: z.string(),
         })
         .strict(),
+    })
+    .strict(),
+]);
+
+const spreadsheetBatchPatchOperationSchema = z.discriminatedUnion("type", [
+  z
+    .object({
+      type: z.literal("cell"),
+      sheetName: nonEmptyTrimmedStringSchema.optional(),
+      address: nonEmptyTrimmedStringSchema,
+      rawInput: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("format"),
+      sheetName: nonEmptyTrimmedStringSchema.optional(),
+      range: nonEmptyTrimmedStringSchema,
+      style: spreadsheetCellStylePatchSchema,
     })
     .strict(),
 ]);
@@ -241,6 +325,13 @@ export const jsonRpcWorkspaceRequestSchemas = {
       viewport: spreadsheetViewportRequestSchema.optional(),
     })
     .strict(),
+  "cowork/workspace/spreadsheet/workbook": z
+    .object({
+      cwd: nonEmptyTrimmedStringSchema.optional(),
+      path: nonEmptyTrimmedStringSchema,
+      sheetName: nonEmptyTrimmedStringSchema.optional(),
+    })
+    .strict(),
   "cowork/workspace/spreadsheet/edit": z
     .object({
       cwd: nonEmptyTrimmedStringSchema.optional(),
@@ -257,6 +348,13 @@ export const jsonRpcWorkspaceRequestSchemas = {
       sheetName: nonEmptyTrimmedStringSchema.optional(),
       range: nonEmptyTrimmedStringSchema,
       style: spreadsheetCellStylePatchSchema,
+    })
+    .strict(),
+  "cowork/workspace/spreadsheet/patch": z
+    .object({
+      cwd: nonEmptyTrimmedStringSchema.optional(),
+      path: nonEmptyTrimmedStringSchema,
+      operations: z.array(spreadsheetBatchPatchOperationSchema).max(2_000),
     })
     .strict(),
   "cowork/workspace/presentation/preview": z
@@ -288,7 +386,9 @@ export const jsonRpcWorkspaceResultSchemas = {
     })
     .strict(),
   "cowork/workspace/spreadsheet/preview": spreadsheetPreviewResultSchema,
+  "cowork/workspace/spreadsheet/workbook": spreadsheetWorkbookSnapshotResultSchema,
   "cowork/workspace/spreadsheet/edit": spreadsheetEditResultSchema,
   "cowork/workspace/spreadsheet/format": spreadsheetEditResultSchema,
+  "cowork/workspace/spreadsheet/patch": spreadsheetEditResultSchema,
   "cowork/workspace/presentation/preview": presentationPreviewResultSchema,
 } as const;

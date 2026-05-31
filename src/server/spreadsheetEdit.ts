@@ -6,6 +6,8 @@ import JSZip from "jszip";
 import * as XLSX from "xlsx";
 
 import type {
+  SpreadsheetBatchPatchRequest,
+  SpreadsheetBatchPatchResult,
   SpreadsheetCellEditRequest,
   SpreadsheetCellEditResult,
   SpreadsheetCellStylePatch,
@@ -13,6 +15,8 @@ import type {
   SpreadsheetRangeFormatResult,
 } from "../shared/spreadsheetPreview";
 import { resolveWorkspaceFilePath, validateXlsxZipSignature } from "./spreadsheetPreview";
+
+const MAX_BATCH_PATCH_OPERATIONS = 2_000;
 
 /**
  * Apply a single-cell edit to a CSV or XLSX file and persist it, losslessly.
@@ -90,6 +94,50 @@ export async function formatSpreadsheetRange(
       },
     };
   }
+}
+
+export async function patchSpreadsheetBatch(
+  req: SpreadsheetBatchPatchRequest,
+): Promise<SpreadsheetBatchPatchResult> {
+  if (req.operations.length > MAX_BATCH_PATCH_OPERATIONS) {
+    return {
+      ok: false,
+      error: {
+        kind: "parse_error",
+        message: `Spreadsheet patch batches are limited to ${MAX_BATCH_PATCH_OPERATIONS} operations.`,
+      },
+    };
+  }
+
+  for (const [index, operation] of req.operations.entries()) {
+    const result =
+      operation.type === "cell"
+        ? await editSpreadsheetCell({
+            cwd: req.cwd,
+            filePath: req.filePath,
+            ...(operation.sheetName ? { sheetName: operation.sheetName } : {}),
+            address: operation.address,
+            rawInput: operation.rawInput,
+          })
+        : await formatSpreadsheetRange({
+            cwd: req.cwd,
+            filePath: req.filePath,
+            ...(operation.sheetName ? { sheetName: operation.sheetName } : {}),
+            range: operation.range,
+            style: operation.style,
+          });
+    if (!result.ok) {
+      return {
+        ok: false,
+        error: {
+          kind: result.error.kind,
+          message: `Operation ${index + 1} failed: ${result.error.message}`,
+        },
+      };
+    }
+  }
+
+  return { ok: true };
 }
 
 type CellAddress = { row: number; col: number };

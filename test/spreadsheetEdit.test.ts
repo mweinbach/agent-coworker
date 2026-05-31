@@ -4,7 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import JSZip from "jszip";
 
-import { editSpreadsheetCell, formatSpreadsheetRange } from "../src/server/spreadsheetEdit";
+import {
+  editSpreadsheetCell,
+  formatSpreadsheetRange,
+  patchSpreadsheetBatch,
+} from "../src/server/spreadsheetEdit";
 import { previewSpreadsheetFile } from "../src/server/spreadsheetPreview";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
@@ -274,6 +278,66 @@ describe("xlsx single-cell edit (lossless)", () => {
       const after = await entryBytes(await fs.readFile(filePath));
       expect(after.get("xl/charts/chart1.xml")).toBe(before.get("xl/charts/chart1.xml"));
       expect(after.get("xl/worksheets/sheet2.xml")).toBe(before.get("xl/worksheets/sheet2.xml"));
+    });
+  });
+
+  test("applies batched Univer-style value, formula, and format patches", async () => {
+    await withTempDir(async (dir) => {
+      const filePath = path.join(dir, "model.xlsx");
+      await fs.writeFile(filePath, await buildWorkbook());
+
+      const result = await patchSpreadsheetBatch({
+        cwd: dir,
+        filePath,
+        operations: [
+          {
+            type: "cell",
+            sheetName: "Summary",
+            address: "A1",
+            rawInput: "Updated metric",
+          },
+          {
+            type: "cell",
+            sheetName: "Summary",
+            address: "B2",
+            rawInput: "=1+2",
+          },
+          {
+            type: "format",
+            sheetName: "Summary",
+            range: "A1:B2",
+            style: {
+              bold: true,
+              italic: true,
+              fontSize: 16,
+              fillColor: "#FFF2CC",
+              textColor: "#1F4E79",
+              horizontalAlign: "center",
+            },
+          },
+        ],
+      });
+      expect(result).toEqual({ ok: true });
+
+      const preview = await previewSpreadsheetFile({ cwd: dir, filePath, sheetName: "Summary" });
+      expect(preview.ok).toBe(true);
+      if (!preview.ok) return;
+
+      const a1 = preview.preview.cells.flat().find((cell) => cell.address === "A1");
+      const b2 = preview.preview.cells.flat().find((cell) => cell.address === "B2");
+      expect(a1?.value).toBe("Updated metric");
+      expect(b2?.formula).toBe("1+2");
+      for (const cell of [a1, b2]) {
+        expect(cell?.style).toMatchObject({
+          bold: true,
+          italic: true,
+          fontSize: 16,
+          fillColor: "#FFF2CC",
+          textColor: "#1F4E79",
+          horizontalAlign: "center",
+        });
+      }
+      expect(b2?.style?.numberFormat).toBe('"$"#,##0.00');
     });
   });
 

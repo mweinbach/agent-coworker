@@ -5,7 +5,7 @@ import path from "node:path";
 import JSZip from "jszip";
 import * as XLSX from "xlsx";
 
-import { previewSpreadsheetFile } from "../src/server/spreadsheetPreview";
+import { previewSpreadsheetFile, readSpreadsheetWorkbookSnapshot } from "../src/server/spreadsheetPreview";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-spreadsheet-preview-"));
@@ -152,6 +152,61 @@ describe("spreadsheet preview parser", () => {
         },
       ]);
       expect(result.preview.charts).toEqual([
+        {
+          id: "chart1",
+          title: "Revenue by Quarter",
+          type: "bar",
+          anchor: {
+            fromRow: 0,
+            fromCol: 3,
+            toRow: 12,
+            toCol: 8,
+          },
+        },
+      ]);
+    });
+  });
+
+  test("builds a full workbook snapshot for Univer without viewport truncation", async () => {
+    await withTempDir(async (dir) => {
+      const filePath = path.join(dir, "objects.xlsx");
+      await fs.writeFile(filePath, await buildObjectWorkbook());
+
+      const result = await readSpreadsheetWorkbookSnapshot({
+        cwd: dir,
+        filePath,
+        sheetName: "Summary",
+      });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.workbook.kind).toBe("xlsx");
+      expect(result.workbook.activeSheetName).toBe("Summary");
+      expect(result.workbook.sheets).toHaveLength(1);
+      const [sheet] = result.workbook.sheets;
+      expect(sheet).toMatchObject({
+        id: "sheet-1",
+        name: "Summary",
+        rowCount: 3,
+        colCount: 2,
+      });
+      expect(sheet.cells.map((cell) => cell.address)).toEqual(["A1", "B1", "A2", "B2", "A3", "B3"]);
+      expect(sheet.cells.find((cell) => cell.address === "A1")?.style).toMatchObject({
+        bold: true,
+        fillColor: "#FFE08A",
+        textColor: "#174A2A",
+      });
+      expect(sheet.tables).toEqual([
+        {
+          name: "RevenueTable",
+          ref: "A1:B3",
+          startRow: 0,
+          startCol: 0,
+          endRow: 2,
+          endCol: 1,
+        },
+      ]);
+      expect(sheet.charts).toEqual([
         {
           id: "chart1",
           title: "Revenue by Quarter",

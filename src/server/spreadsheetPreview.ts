@@ -20,6 +20,9 @@ import {
   type SpreadsheetTableSummary,
   type SpreadsheetPreviewViewport,
   type SpreadsheetPreviewViewportRequest,
+  type SpreadsheetWorkbookSnapshot,
+  type SpreadsheetWorkbookSnapshotResult,
+  type SpreadsheetWorkbookSnapshotSheet,
   type SpreadsheetSheetSummary,
 } from "../shared/spreadsheetPreview";
 
@@ -86,6 +89,50 @@ export async function previewSpreadsheetFile(
       }
     }
     return { ok: true, preview };
+  } catch (error) {
+    return {
+      ok: false,
+      error: {
+        kind: "parse_error",
+        message: error instanceof Error ? error.message : String(error),
+      },
+      warnings: [],
+    };
+  }
+}
+
+export async function readSpreadsheetWorkbookSnapshot(
+  request: SpreadsheetPreviewRequest,
+): Promise<SpreadsheetWorkbookSnapshotResult> {
+  const resolvedPath = await resolveWorkspaceFilePath(request.cwd, request.filePath);
+  const kind = spreadsheetKindForPath(resolvedPath);
+  if (!kind) {
+    return {
+      ok: false,
+      error: {
+        kind: "unsupported_format",
+        message: "Spreadsheet workbook snapshots support CSV and XLSX files.",
+      },
+      warnings: [],
+    };
+  }
+
+  try {
+    const bytes = await fs.readFile(resolvedPath);
+    if (kind === "csv") {
+      validateCsvQuoteBalance(bytes.toString("utf8"));
+    } else {
+      validateXlsxZipSignature(bytes);
+    }
+    const workbook = readWorkbook(bytes, kind);
+    const snapshot = await buildSpreadsheetWorkbookSnapshot({
+      workbook,
+      kind,
+      filePath: resolvedPath,
+      bytes,
+      requestedSheetName: request.sheetName,
+    });
+    return { ok: true, workbook: snapshot };
   } catch (error) {
     return {
       ok: false,
@@ -177,6 +224,89 @@ function buildSpreadsheetPreview(opts: {
     tables: [],
     charts: [],
     warnings: buildWarnings(selectedSummary, viewport),
+  };
+}
+
+async function buildSpreadsheetWorkbookSnapshot(opts: {
+  workbook: Workbook;
+  kind: SpreadsheetFileKind;
+  filePath: string;
+  bytes: Buffer;
+  requestedSheetName?: string;
+}): Promise<SpreadsheetWorkbookSnapshot> {
+  const sheetNames = opts.kind === "csv" ? ["CSV"] : opts.workbook.SheetNames;
+  const sheetSummaries = sheetNames.map((name, index) =>
+    summarizeSheet(
+      name,
+      readWorksheet(opts.workbook, opts.kind, name, index),
+      opts.workbook,
+      index,
+    ),
+  );
+  if (sheetSummaries.length === 0) {
+    throw new Error("Workbook does not contain any sheets.");
+  }
+
+  const warnings: string[] = [];
+  const sheets: SpreadsheetWorkbookSnapshotSheet[] = [];
+  for (const [index, sheet] of sheetSummaries.entries()) {
+    const worksheet = readWorksheet(opts.workbook, opts.kind, sheet.name, index);
+    const viewport = buildFullSheetViewport(sheet);
+    let packageDetails: XlsxSheetObjects = { tables: [], charts: [], cellStyles: new Map() };
+    if (opts.kind === "xlsx") {
+      try {
+        packageDetails = await readXlsxSheetObjects(opts.bytes, sheet.name);
+      } catch (metadataError) {
+        warnings.push(
+          `${sheet.name}: workbook objects could not be read: ${
+            metadataError instanceof Error ? metadataError.message : String(metadataError)
+          }`,
+        );
+      }
+    }
+
+    sheets.push({
+      ...sheet,
+      id: `sheet-${index + 1}`,
+      cells: worksheet
+        ? buildSnapshotCells(worksheet, packageDetails.cellStyles, viewport)
+        : buildStyledBlankCells(packageDetails.cellStyles, viewport),
+      mergedCells: worksheet ? readMergedCells(worksheet, viewport) : [],
+      columnWidths: worksheet ? readColumnWidths(worksheet, viewport) : [],
+      tables: packageDetails.tables,
+      charts: packageDetails.charts,
+    });
+  }
+
+  const activeSheetName =
+    opts.requestedSheetName && sheetNames.includes(opts.requestedSheetName)
+      ? opts.requestedSheetName
+      : (sheetNames[0] ?? "Sheet1");
+
+  return {
+    kind: opts.kind,
+    path: opts.filePath,
+    filename: path.basename(opts.filePath),
+    sheets,
+    activeSheetName,
+    warnings,
+  };
+}
+
+function buildFullSheetViewport(sheet: SpreadsheetSheetSummary): SpreadsheetPreviewViewport {
+  const rowCount = Math.max(sheet.rowCount, 0);
+  const colCount = Math.max(sheet.colCount, 0);
+  return {
+    startRow: 0,
+    startCol: 0,
+    rowCount,
+    colCount,
+    endRow: rowCount > 0 ? rowCount - 1 : 0,
+    endCol: colCount > 0 ? colCount - 1 : 0,
+    totalRows: rowCount,
+    totalCols: colCount,
+    truncatedRows: false,
+    truncatedCols: false,
   };
 }
 
@@ -279,6 +409,75 @@ function buildVisibleCells(
     rows.push(cells);
   }
   return rows;
+}
+
+function buildSnapshotCells(
+  worksheet: Worksheet,
+  packageStyles: Map<string, SpreadsheetCellStyle>,
+  viewport: SpreadsheetPreviewViewport,
+): SpreadsheetPreviewCell[] {
+  const cells = new Map<string, SpreadsheetPreviewCell>();
+  for (const key of Object.keys(worksheet)) {
+    if (key.startsWith("!")) continue;
+    const address = normalizeCellAddress(key);
+    if (!address) continue;
+    const decoded = XLSX.utils.decode_cell(address);
+    if (!cellInsideViewport(decoded.r, decoded.c, viewport)) continue;
+    cells.set(
+      address,
+      buildCell(decoded.r, decoded.c, address, worksheet[address] as XLSX.CellObject | undefined),
+    );
+  }
+
+  for (const [address, style] of packageStyles.entries()) {
+    const decoded = XLSX.utils.decode_cell(address);
+    if (!cellInsideViewport(decoded.r, decoded.c, viewport)) continue;
+    const existing = cells.get(address);
+    cells.set(address, {
+      ...(existing ?? buildCell(decoded.r, decoded.c, address, undefined)),
+      style: {
+        ...existing?.style,
+        ...style,
+      },
+    });
+  }
+
+  return [...cells.values()].sort((left, right) => left.row - right.row || left.col - right.col);
+}
+
+function buildStyledBlankCells(
+  packageStyles: Map<string, SpreadsheetCellStyle>,
+  viewport: SpreadsheetPreviewViewport,
+): SpreadsheetPreviewCell[] {
+  const cells: SpreadsheetPreviewCell[] = [];
+  for (const [address, style] of packageStyles.entries()) {
+    const decoded = XLSX.utils.decode_cell(address);
+    if (!cellInsideViewport(decoded.r, decoded.c, viewport)) continue;
+    cells.push({
+      ...buildCell(decoded.r, decoded.c, address, undefined),
+      style,
+    });
+  }
+  return cells.sort((left, right) => left.row - right.row || left.col - right.col);
+}
+
+function normalizeCellAddress(key: string): string | null {
+  if (!/^[A-Z]+[1-9][0-9]*$/i.test(key)) return null;
+  return key.toUpperCase();
+}
+
+function cellInsideViewport(
+  row: number,
+  col: number,
+  viewport: SpreadsheetPreviewViewport,
+): boolean {
+  if (viewport.rowCount <= 0 || viewport.colCount <= 0) return false;
+  return (
+    row >= viewport.startRow &&
+    row <= viewport.endRow &&
+    col >= viewport.startCol &&
+    col <= viewport.endCol
+  );
 }
 
 function mergePackageCellStyles(

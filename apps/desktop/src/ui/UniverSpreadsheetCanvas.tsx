@@ -49,6 +49,7 @@ import { useAppStore } from "../app/store";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { openExternalUrl } from "../lib/desktopCommands";
+import { shouldDeferExternalWorkbookReload, type UniverSaveState } from "../lib/univerSaveState";
 import {
   buildUniverSpreadsheetPrompt,
   cloneUniverWorkbookData,
@@ -64,7 +65,7 @@ type UniverSpreadsheetCanvasProps = {
   compact?: boolean;
 };
 
-type SaveState = "idle" | "dirty" | "saving" | "saved" | "error";
+type SaveState = UniverSaveState;
 type UniverWorksheetApi = {
   getSheetName: () => string;
 };
@@ -234,7 +235,7 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
       }
       if (result.version.fingerprint === currentVersion.fingerprint) return;
 
-      if (saveStateRef.current === "dirty" || saveStateRef.current === "saving") {
+      if (shouldDeferExternalWorkbookReload(saveStateRef.current)) {
         externalReloadPendingRef.current = true;
         showReloadNotice("File changed on disk; syncing after save");
         return;

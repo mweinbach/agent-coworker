@@ -77,8 +77,11 @@ const RightSidebarPane = memo(function RightSidebarPane({ collapsed }: { collaps
 
   return (
     <div
-      className="app-right-sidebar-pane relative shrink-0 overflow-hidden"
-      style={{ width: collapsed ? 0 : activeWidth }}
+      className={cn(
+        "app-right-sidebar-pane relative shrink-0",
+        canvasMaximized ? "overflow-visible" : "overflow-hidden",
+      )}
+      style={{ width: collapsed || canvasMaximized ? 0 : activeWidth }}
     >
       {!collapsed && !canvasMaximized ? <ContextSidebarResizer /> : null}
       <div

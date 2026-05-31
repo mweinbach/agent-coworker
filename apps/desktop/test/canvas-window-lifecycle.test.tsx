@@ -187,6 +187,13 @@ describe("canvas window lifecycle", () => {
       });
       expect(canvasMounts).toBe(1);
       expect(canvasUnmounts).toBe(0);
+      const pane = harness.dom.window.document.querySelector(".app-right-sidebar-pane");
+      if (!(pane instanceof harness.dom.window.HTMLElement)) {
+        throw new Error("missing right sidebar pane");
+      }
+      expect(pane.style.width).toBe("0px");
+      expect(pane.className).toContain("overflow-visible");
+      expect(pane.className).not.toContain("overflow-hidden");
 
       await act(async () => {
         useAppStore.getState().setCanvasMaximized(false);

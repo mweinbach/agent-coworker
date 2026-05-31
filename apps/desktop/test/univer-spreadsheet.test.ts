@@ -177,4 +177,56 @@ describe("Univer spreadsheet helpers", () => {
       },
     ]);
   });
+
+  test("diffs column width changes for XLSX save batches", () => {
+    const previous = spreadsheetSnapshotToUniverData(WORKBOOK);
+    const current = cloneUniverWorkbookData(previous);
+    const sheet = current.sheets["sheet-1"];
+    expect(sheet).toBeDefined();
+    if (!sheet) return;
+
+    sheet.columnData = {
+      ...sheet.columnData,
+      0: { w: 220 },
+    };
+
+    expect(diffUniverWorkbookPatches(previous, current)).toContainEqual({
+      type: "columnWidth",
+      sheetName: "Summary",
+      col: 0,
+      widthPx: 220,
+    });
+  });
+
+  test("omits unsupported formatting changes when diffing CSV workbooks", () => {
+    const previous = spreadsheetSnapshotToUniverData(WORKBOOK);
+    const current = cloneUniverWorkbookData(previous);
+    const sheet = current.sheets["sheet-1"];
+    expect(sheet).toBeDefined();
+    if (!sheet) return;
+
+    sheet.cellData = {
+      ...sheet.cellData,
+      1: {
+        ...sheet.cellData?.[1],
+        1: {
+          ...(sheet.cellData?.[1]?.[1] ?? {}),
+          f: "=SUM(20,30)",
+          s: "changed-style",
+        },
+      },
+    };
+    current.styles["changed-style"] = { bl: BooleanNumber.TRUE };
+    sheet.mergeData = [{ startRow: 1, startColumn: 0, endRow: 1, endColumn: 1 }];
+    sheet.columnData = { ...sheet.columnData, 0: { w: 220 } };
+
+    expect(diffUniverWorkbookPatches(previous, current, { includeFormatting: false })).toEqual([
+      {
+        type: "cell",
+        sheetName: "Summary",
+        address: "B2",
+        rawInput: "=SUM(20,30)",
+      },
+    ]);
+  });
 });

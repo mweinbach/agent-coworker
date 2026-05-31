@@ -16,7 +16,7 @@ export async function runCsvOps(
 
   const rows = parseCsv(text);
   for (const [index, op] of operations.entries()) {
-    if (op.type === "format" || op.type === "merge") {
+    if (op.type === "format" || op.type === "merge" || op.type === "columnWidth") {
       return {
         ok: false,
         index,
@@ -25,7 +25,9 @@ export async function runCsvOps(
           message:
             op.type === "format"
               ? "Formatting supports XLSX files."
-              : "Merging supports XLSX files.",
+              : op.type === "merge"
+                ? "Merging supports XLSX files."
+                : "Column widths support XLSX files.",
         },
       };
     }

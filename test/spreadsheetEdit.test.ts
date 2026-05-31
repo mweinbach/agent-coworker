@@ -83,6 +83,13 @@ async function readSheetMergedRanges(cwd: string, filePath: string, sheetName: s
   return snapshot.workbook.sheets.find((sheet) => sheet.name === sheetName)?.mergedCells ?? [];
 }
 
+async function readSheetColumnWidths(cwd: string, filePath: string, sheetName: string) {
+  const snapshot = await readSpreadsheetWorkbookSnapshot({ cwd, filePath, sheetName });
+  expect(snapshot.ok).toBe(true);
+  if (!snapshot.ok) return [];
+  return snapshot.workbook.sheets.find((sheet) => sheet.name === sheetName)?.columnWidths ?? [];
+}
+
 const editSpreadsheetCell = (req: {
   cwd: string;
   filePath: string;
@@ -415,6 +422,50 @@ describe("xlsx single-cell edit (lossless)", () => {
       expect(
         (await readSheetMergedRanges(dir, filePath, "Summary")).map((range) => range.ref),
       ).not.toContain("A1:B1");
+    });
+  });
+
+  test("persists column width patches", async () => {
+    await withTempDir(async (dir) => {
+      const filePath = path.join(dir, "model.xlsx");
+      await fs.writeFile(filePath, await buildWorkbook());
+
+      expect(
+        await patchSpreadsheetBatch({
+          cwd: dir,
+          filePath,
+          operations: [{ type: "columnWidth", sheetName: "Summary", col: 1, widthPx: 180 }],
+        }),
+      ).toEqual({ ok: true });
+
+      const widths = await readSheetColumnWidths(dir, filePath, "Summary");
+      expect(widths.find((width) => width.col === 1)?.widthChars).toBeGreaterThan(24);
+    });
+  });
+
+  test("rejects stale canvas patches when the file changed on disk", async () => {
+    await withTempDir(async (dir) => {
+      const filePath = path.join(dir, "model.xlsx");
+      await fs.writeFile(filePath, await buildWorkbook());
+      const before = await fs.stat(filePath);
+
+      await fs.appendFile(filePath, " ");
+      const result = await patchSpreadsheetBatch({
+        cwd: dir,
+        filePath,
+        expectedFileVersion: {
+          modifiedAtMs: Math.round(before.mtimeMs),
+          changeTimeMs: Math.round(before.ctimeMs),
+          size: before.size,
+          fingerprint: `${Math.round(before.mtimeMs)}:${Math.round(before.ctimeMs)}:${before.size}`,
+        },
+        operations: [{ type: "cell", sheetName: "Summary", address: "A1", rawInput: "Changed" }],
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.kind).toBe("write_error");
+      expect(result.error.message).toContain("changed on disk");
     });
   });
 

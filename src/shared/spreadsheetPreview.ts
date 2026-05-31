@@ -220,15 +220,24 @@ export type SpreadsheetBatchPatchMergeOperation = {
   merged: boolean;
 };
 
+export type SpreadsheetBatchPatchColumnWidthOperation = {
+  type: "columnWidth";
+  sheetName?: string;
+  col: number;
+  widthPx: number;
+};
+
 export type SpreadsheetBatchPatchOperation =
   | SpreadsheetBatchPatchCellOperation
   | SpreadsheetBatchPatchFormatOperation
-  | SpreadsheetBatchPatchMergeOperation;
+  | SpreadsheetBatchPatchMergeOperation
+  | SpreadsheetBatchPatchColumnWidthOperation;
 
 export type SpreadsheetBatchPatchRequest = {
   cwd: string;
   filePath: string;
   operations: SpreadsheetBatchPatchOperation[];
+  expectedFileVersion?: SpreadsheetFileVersion;
 };
 
 export type SpreadsheetBatchPatchResult = SpreadsheetRangeFormatResult;

@@ -2,6 +2,7 @@ import type { PresentationPreviewResult } from "../../../../../src/server/presen
 import type {
   SpreadsheetBatchPatchOperation,
   SpreadsheetBatchPatchResult,
+  SpreadsheetFileVersion,
   SpreadsheetFileVersionResult,
   SpreadsheetWorkbookSnapshotResult,
 } from "../../../../../src/shared/spreadsheetPreview";
@@ -51,13 +52,21 @@ export function createPreviewActions(
     patchSpreadsheetWorkbook: async (
       path: string,
       operations: SpreadsheetBatchPatchOperation[],
+      expectedFileVersion?: SpreadsheetFileVersion,
     ): Promise<SpreadsheetBatchPatchResult> => {
       const workspaceId = get().selectedWorkspaceId;
       if (!workspaceId) {
         throw new Error("No active workspace is available for spreadsheet patching.");
       }
       await ensureServerRunning(get, set, workspaceId);
-      return patchJsonRpcWorkspaceSpreadsheet(get, set, workspaceId, path, operations);
+      return patchJsonRpcWorkspaceSpreadsheet(
+        get,
+        set,
+        workspaceId,
+        path,
+        operations,
+        expectedFileVersion,
+      );
     },
 
     loadPresentationPreview: async (path: string): Promise<PresentationPreviewResult> => {

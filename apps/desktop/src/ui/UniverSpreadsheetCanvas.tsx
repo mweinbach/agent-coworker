@@ -100,6 +100,10 @@ const univerLocales = {
   ),
 };
 
+function shouldBlockWindowUnload(saveState: SaveState, saveInFlight: Promise<boolean> | null) {
+  return saveState === "dirty" || saveState === "saving" || saveInFlight !== null;
+}
+
 export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreadsheetCanvasProps) {
   const loadSpreadsheetWorkbook = useAppStore((s) => s.loadSpreadsheetWorkbook);
   const loadSpreadsheetFileVersion = useAppStore((s) => s.loadSpreadsheetFileVersion);
@@ -149,6 +153,20 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
   useEffect(() => {
     saveStateRef.current = saveState;
   }, [saveState]);
+
+  useEffect(() => {
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!shouldBlockWindowUnload(saveStateRef.current, saveInFlightRef.current)) return;
+      void flushSaveRef.current();
+      event.preventDefault();
+      event.returnValue = "";
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+    };
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -271,6 +289,7 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
     container.innerHTML = "";
     updateSaveState("idle");
     setSaveError(null);
+    const supportsWorkbookFormatting = workbook.kind === "xlsx";
 
     const initialData = spreadsheetSnapshotToUniverData(workbook);
     const formulaWorker = new Worker(workerUrl, { type: "module" });
@@ -282,9 +301,9 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
           container,
           workerURL: formulaWorker,
           header: true,
-          toolbar: true,
+          toolbar: supportsWorkbookFormatting,
           ribbonType: "simple",
-          contextMenu: true,
+          contextMenu: supportsWorkbookFormatting,
           formulaBar: true,
           sheets: {
             disableForceStringAlert: true,
@@ -340,6 +359,7 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
       return diffUniverWorkbookPatches(
         previousData,
         cloneUniverWorkbookData(currentWorkbook.save()),
+        { includeFormatting: supportsWorkbookFormatting },
       );
     };
 
@@ -364,7 +384,9 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
           return false;
         }
         const currentData = cloneUniverWorkbookData(currentWorkbook.save());
-        const operations = diffUniverWorkbookPatches(previousData, currentData);
+        const operations = diffUniverWorkbookPatches(previousData, currentData, {
+          includeFormatting: supportsWorkbookFormatting,
+        });
         if (operations.length === 0) {
           updateSaveState("idle");
           return true;
@@ -372,7 +394,8 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
 
         updateSaveState("saving");
         setSaveError(null);
-        const result = await patchSpreadsheetWorkbook(path, operations);
+        const expectedVersion = sourceVersionRef.current ?? undefined;
+        const result = await patchSpreadsheetWorkbook(path, operations, expectedVersion);
         if (!result.ok) {
           updateSaveState("error");
           setSaveError(result.error.message);
@@ -450,7 +473,11 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
       const pendingOperations = getPendingOperations();
       if (pendingOperations.length > 0) {
         const patchPendingOperations = async () => {
-          const result = await patchSpreadsheetWorkbook(path, pendingOperations);
+          const result = await patchSpreadsheetWorkbook(
+            path,
+            pendingOperations,
+            sourceVersionRef.current ?? undefined,
+          );
           if (!result.ok) return null;
           return loadSpreadsheetFileVersion(path);
         };

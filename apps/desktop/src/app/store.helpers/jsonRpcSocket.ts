@@ -1,6 +1,7 @@
 import type {
   SpreadsheetBatchPatchOperation,
   SpreadsheetBatchPatchResult,
+  SpreadsheetFileVersion,
   SpreadsheetFileVersionResult,
   SpreadsheetWorkbookSnapshotResult,
 } from "../../../../../src/shared/spreadsheetPreview";
@@ -556,12 +557,14 @@ export async function patchJsonRpcWorkspaceSpreadsheet(
   workspaceId: string,
   filePath: string,
   operations: SpreadsheetBatchPatchOperation[],
+  expectedFileVersion?: SpreadsheetFileVersion,
 ): Promise<SpreadsheetBatchPatchResult> {
   const workspace = getWorkspaceById(get, workspaceId);
   return (await requestJsonRpc(get, set, workspaceId, "cowork/workspace/spreadsheet/patch", {
     cwd: workspace?.path,
     path: filePath,
     operations,
+    ...(expectedFileVersion ? { expectedFileVersion } : {}),
   })) as SpreadsheetBatchPatchResult;
 }
 

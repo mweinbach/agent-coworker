@@ -10,7 +10,11 @@ import type {
 import { runCsvOps } from "./spreadsheetEditCsv";
 import type { EditFailure, OpsOutcome } from "./spreadsheetEditTypes";
 import { runXlsxOps } from "./spreadsheetEditXlsx";
-import { resolveWorkspaceFilePath, spreadsheetPathFailure } from "./spreadsheetPreview";
+import {
+  resolveWorkspaceFilePath,
+  spreadsheetFileVersionFromStat,
+  spreadsheetPathFailure,
+} from "./spreadsheetPreview";
 
 const MAX_BATCH_PATCH_OPERATIONS = 50_000;
 
@@ -37,7 +41,12 @@ export async function patchSpreadsheetBatch(
 
   const target = await resolveEditTarget(req.cwd, req.filePath);
   if (!target.ok) return target;
-  const outcome = await executeOps(target.resolvedPath, target.ext, req.operations);
+  const outcome = await executeOps(
+    target.resolvedPath,
+    target.ext,
+    req.operations,
+    req.expectedFileVersion,
+  );
   if (outcome.ok) return { ok: true };
   const message =
     outcome.index === null
@@ -78,9 +87,23 @@ function executeOps(
   resolvedPath: string,
   ext: string,
   operations: SpreadsheetBatchPatchOperation[],
+  expectedFileVersion: SpreadsheetBatchPatchRequest["expectedFileVersion"],
 ): Promise<OpsOutcome> {
   return withFileLock(resolvedPath, async () => {
     try {
+      if (expectedFileVersion) {
+        const currentVersion = spreadsheetFileVersionFromStat(await fs.stat(resolvedPath));
+        if (currentVersion.fingerprint !== expectedFileVersion.fingerprint) {
+          return {
+            ok: false,
+            index: null,
+            error: {
+              kind: "write_error",
+              message: "Spreadsheet file changed on disk; reload before saving.",
+            },
+          };
+        }
+      }
       if (ext === ".csv") return await runCsvOps(resolvedPath, operations, writeFileAtomic);
       if (ext === ".xlsx") return await runXlsxOps(resolvedPath, operations, writeFileAtomic);
       const firstType = operations[0]?.type;

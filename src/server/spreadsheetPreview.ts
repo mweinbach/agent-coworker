@@ -158,7 +158,7 @@ function isOutsideWorkspaceError(error: unknown): boolean {
   return error instanceof Error && error.message === OUTSIDE_WORKSPACE_MESSAGE;
 }
 
-function spreadsheetFileVersionFromStat(stat: Stats): SpreadsheetFileVersion {
+export function spreadsheetFileVersionFromStat(stat: Stats): SpreadsheetFileVersion {
   const modifiedAtMs = Math.round(stat.mtimeMs);
   const changeTimeMs = Math.round(stat.ctimeMs);
   return {
@@ -421,8 +421,25 @@ function normalizeRawValue(value: unknown): string | number | boolean | null {
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
     return value;
   }
-  if (value instanceof Date) return value.toISOString();
+  if (value instanceof Date) return excelSerialFromDate(value);
   return String(value);
+}
+
+function excelSerialFromDate(value: Date): number {
+  const millisPerDay = 24 * 60 * 60 * 1000;
+  return (
+    (Date.UTC(
+      value.getUTCFullYear(),
+      value.getUTCMonth(),
+      value.getUTCDate(),
+      value.getUTCHours(),
+      value.getUTCMinutes(),
+      value.getUTCSeconds(),
+      value.getUTCMilliseconds(),
+    ) -
+      Date.UTC(1899, 11, 30)) /
+    millisPerDay
+  );
 }
 
 function readCellStyle(cell: XLSX.CellObject): SpreadsheetCellStyle | undefined {

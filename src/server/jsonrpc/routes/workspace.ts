@@ -179,6 +179,9 @@ export function createWorkspaceRouteHandlers(
           cwd,
           filePath: parsed.data.path,
           operations: parsed.data.operations,
+          ...(parsed.data.expectedFileVersion
+            ? { expectedFileVersion: parsed.data.expectedFileVersion }
+            : {}),
         });
         context.jsonrpc.sendResult(ws, message.id, result);
       } catch (error) {

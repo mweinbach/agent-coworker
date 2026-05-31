@@ -7,6 +7,7 @@ import type {
 import type {
   SpreadsheetBatchPatchOperation,
   SpreadsheetBatchPatchResult,
+  SpreadsheetFileVersion,
   SpreadsheetFileVersionResult,
   SpreadsheetWorkbookSnapshotResult,
 } from "../../../../src/shared/spreadsheetPreview";
@@ -519,6 +520,7 @@ export type AppStoreState = {
   patchSpreadsheetWorkbook: (
     path: string,
     operations: SpreadsheetBatchPatchOperation[],
+    expectedFileVersion?: SpreadsheetFileVersion,
   ) => Promise<SpreadsheetBatchPatchResult>;
   loadPresentationPreview: (path: string) => Promise<PresentationPreviewResult>;
 

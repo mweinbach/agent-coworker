@@ -73,7 +73,9 @@ export function spreadsheetSnapshotToUniverData(
 export function diffUniverWorkbookPatches(
   previous: IWorkbookData,
   current: IWorkbookData,
+  opts: { includeFormatting?: boolean } = {},
 ): SpreadsheetBatchPatchOperation[] {
+  const includeFormatting = opts.includeFormatting ?? true;
   const operations: SpreadsheetBatchPatchOperation[] = [];
   for (const sheetId of current.sheetOrder) {
     const currentSheet = current.sheets[sheetId];
@@ -96,6 +98,7 @@ export function diffUniverWorkbookPatches(
         });
       }
 
+      if (!includeFormatting) continue;
       const previousStyle = stylePatchFromUniverStyle(
         resolveUniverStyle(previous, previousCell?.s),
       );
@@ -111,25 +114,39 @@ export function diffUniverWorkbookPatches(
       }
     }
 
-    const previousMerges = mergeRangeMap(previousSheet?.mergeData);
-    const currentMerges = mergeRangeMap(currentSheet.mergeData);
-    for (const [key, merge] of previousMerges) {
-      if (!currentMerges.has(key)) {
-        operations.push({
-          type: "merge",
-          sheetName: currentSheet.name,
-          range: mergeRangeToA1(merge),
-          merged: false,
-        });
+    if (includeFormatting) {
+      const previousMerges = mergeRangeMap(previousSheet?.mergeData);
+      const currentMerges = mergeRangeMap(currentSheet.mergeData);
+      for (const [key, merge] of previousMerges) {
+        if (!currentMerges.has(key)) {
+          operations.push({
+            type: "merge",
+            sheetName: currentSheet.name,
+            range: mergeRangeToA1(merge),
+            merged: false,
+          });
+        }
       }
-    }
-    for (const [key, merge] of currentMerges) {
-      if (!previousMerges.has(key)) {
+      for (const [key, merge] of currentMerges) {
+        if (!previousMerges.has(key)) {
+          operations.push({
+            type: "merge",
+            sheetName: currentSheet.name,
+            range: mergeRangeToA1(merge),
+            merged: true,
+          });
+        }
+      }
+
+      const previousWidths = columnWidthMap(previousSheet?.columnData);
+      const currentWidths = columnWidthMap(currentSheet.columnData);
+      for (const [col, widthPx] of currentWidths) {
+        if (previousWidths.get(col) === widthPx) continue;
         operations.push({
-          type: "merge",
+          type: "columnWidth",
           sheetName: currentSheet.name,
-          range: mergeRangeToA1(merge),
-          merged: true,
+          col,
+          widthPx,
         });
       }
     }
@@ -428,6 +445,19 @@ function mergeRangeToA1(range: UniverMergeRange): string {
   const start = addressFor(range.startRow, range.startColumn);
   const end = addressFor(range.endRow, range.endColumn);
   return start === end ? start : `${start}:${end}`;
+}
+
+function columnWidthMap(
+  columnData: Partial<IWorksheetData>["columnData"] | undefined,
+): Map<number, number> {
+  const map = new Map<number, number>();
+  for (const [colKey, column] of Object.entries(columnData ?? {})) {
+    const col = Number.parseInt(colKey, 10);
+    const width = column?.w;
+    if (!Number.isFinite(col) || typeof width !== "number" || width <= 0) continue;
+    map.set(col, Math.round(width));
+  }
+  return map;
 }
 
 function readUniverCell(

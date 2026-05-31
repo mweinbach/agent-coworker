@@ -235,6 +235,14 @@ const spreadsheetBatchPatchOperationSchema = z.discriminatedUnion("type", [
       merged: z.boolean(),
     })
     .strict(),
+  z
+    .object({
+      type: z.literal("columnWidth"),
+      sheetName: nonEmptyTrimmedStringSchema.optional(),
+      col: z.number().int().nonnegative(),
+      widthPx: z.number().positive(),
+    })
+    .strict(),
 ]);
 
 const presentationSlideSchema = z
@@ -296,6 +304,7 @@ export const jsonRpcWorkspaceRequestSchemas = {
       cwd: nonEmptyTrimmedStringSchema.optional(),
       path: nonEmptyTrimmedStringSchema,
       operations: z.array(spreadsheetBatchPatchOperationSchema).max(50_000),
+      expectedFileVersion: spreadsheetFileVersionSchema.optional(),
     })
     .strict(),
   "cowork/workspace/presentation/preview": z

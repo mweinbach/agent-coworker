@@ -49,8 +49,10 @@ export async function runXlsxOps(
         failure = await applyXlsxCellOp(session, op);
       } else if (op.type === "format") {
         failure = await applyXlsxFormatOp(session, op);
-      } else {
+      } else if (op.type === "merge") {
         failure = await applyXlsxMergeOp(session, op);
+      } else {
+        failure = await applyXlsxColumnWidthOp(session, op);
       }
     } catch (error) {
       // e.g. an invalid color reaching normalizeColor — attribute it to this op.
@@ -192,6 +194,28 @@ async function applyXlsxMergeOp(
   }
 
   session.sheetXmlByPart.set(partPath, applyWorksheetMerge(sheetXml, range, op.merged));
+  session.dirtyParts.add(partPath);
+  return null;
+}
+
+async function applyXlsxColumnWidthOp(
+  session: XlsxSession,
+  op: { sheetName?: string; col: number; widthPx: number },
+): Promise<EditFailure | null> {
+  if (!Number.isFinite(op.widthPx) || op.widthPx <= 0) {
+    return { kind: "parse_error", message: `Invalid column width: ${op.widthPx}` };
+  }
+
+  const partPath = await sessionWorksheetPart(session, op.sheetName);
+  if (!partPath) {
+    return { kind: "not_found", message: `Sheet not found: ${op.sheetName ?? "(first sheet)"}` };
+  }
+  const sheetXml = await sessionSheetXml(session, partPath);
+  if (sheetXml === null) {
+    return { kind: "parse_error", message: `Worksheet part missing: ${partPath}` };
+  }
+
+  session.sheetXmlByPart.set(partPath, applyWorksheetColumnWidth(sheetXml, op.col, op.widthPx));
   session.dirtyParts.add(partPath);
   return null;
 }
@@ -609,6 +633,65 @@ function readMergeRefs(xml: string): string[] {
     match = mergeRe.exec(xml);
   }
   return refs;
+}
+
+function applyWorksheetColumnWidth(xml: string, col: number, widthPx: number): string {
+  const colIndex = col + 1;
+  const widthChars = Math.max(0.1, (widthPx - 5) / 7);
+  const colXml = `<col min="${colIndex}" max="${colIndex}" width="${formatStyleNumber(
+    widthChars,
+  )}" customWidth="1"/>`;
+  const colsRe = /<cols\b[^>]*>([\s\S]*?)<\/cols>/;
+  const colsMatch = colsRe.exec(xml);
+  if (!colsMatch) {
+    const insertAt = xml.indexOf("<sheetData");
+    if (insertAt === -1) throw new Error("Worksheet has no <sheetData> element.");
+    return `${xml.slice(0, insertAt)}<cols>${colXml}</cols>${xml.slice(insertAt)}`;
+  }
+
+  const nextCols = rewriteCols(colsMatch[1] ?? "", colIndex, colXml);
+  return xml.replace(colsRe, `<cols>${nextCols}</cols>`);
+}
+
+function rewriteCols(innerXml: string, colIndex: number, colXml: string): string {
+  const parts: string[] = [];
+  let cursor = 0;
+  let inserted = false;
+  const colRe = /<col\b[^>]*\/?>/g;
+  let match = colRe.exec(innerXml);
+  while (match) {
+    parts.push(innerXml.slice(cursor, match.index));
+    const tag = match[0];
+    const min = Number.parseInt(getXmlAttr(tag, "min") ?? "", 10);
+    const max = Number.parseInt(getXmlAttr(tag, "max") ?? "", 10);
+    if (!Number.isFinite(min) || !Number.isFinite(max)) {
+      parts.push(tag);
+    } else if (colIndex < min) {
+      if (!inserted) {
+        parts.push(colXml);
+        inserted = true;
+      }
+      parts.push(tag);
+    } else if (colIndex > max) {
+      parts.push(tag);
+    } else {
+      if (min < colIndex) parts.push(setColRange(tag, min, colIndex - 1));
+      if (!inserted) {
+        parts.push(colXml);
+        inserted = true;
+      }
+      if (colIndex < max) parts.push(setColRange(tag, colIndex + 1, max));
+    }
+    cursor = match.index + tag.length;
+    match = colRe.exec(innerXml);
+  }
+  parts.push(innerXml.slice(cursor));
+  if (!inserted) parts.push(colXml);
+  return parts.join("");
+}
+
+function setColRange(tag: string, min: number, max: number): string {
+  return tag.replace(/\bmin="[^"]*"/, `min="${min}"`).replace(/\bmax="[^"]*"/, `max="${max}"`);
 }
 
 /**

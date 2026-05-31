@@ -125,6 +125,27 @@ describe("spreadsheet preview parser", () => {
     });
   });
 
+  test("keeps formatted XLSX dates as numeric date values for Univer", async () => {
+    await withTempDir(async (dir) => {
+      const filePath = path.join(dir, "dates.xlsx");
+      const workbook = XLSX.utils.book_new();
+      const sheet = XLSX.utils.aoa_to_sheet([["Date"], [new Date(Date.UTC(2024, 0, 15))]], {
+        cellDates: true,
+      });
+      if (sheet.A2) sheet.A2.z = "m/d/yy";
+      XLSX.utils.book_append_sheet(workbook, sheet, "Dates");
+      await fs.writeFile(filePath, XLSX.write(workbook, { bookType: "xlsx", type: "buffer" }));
+
+      const result = await readSpreadsheetWorkbookSnapshot({ cwd: dir, filePath });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      const dateCell = result.workbook.sheets[0]?.cells.find((cell) => cell.address === "A2");
+      expect(typeof dateCell?.rawValue).toBe("number");
+      expect(dateCell?.style?.numberFormat).toBe("m/d/yy");
+    });
+  });
+
   test("builds a full workbook snapshot for Univer without viewport truncation", async () => {
     await withTempDir(async (dir) => {
       const filePath = path.join(dir, "objects.xlsx");

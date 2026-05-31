@@ -389,6 +389,18 @@ describe("SpreadsheetPreview editing", () => {
         await flushUi();
       });
 
+      const selectedRangeCells = doc.querySelectorAll("[data-selected-range-cell='true']");
+      expect(selectedRangeCells.length).toBe(4);
+      const firstSelectedCell = gridCell(doc, "Name") as HTMLElement;
+      expect(firstSelectedCell.closest("td")?.style.boxShadow).toContain(
+        "var(--spreadsheet-accent)",
+      );
+      expect(firstSelectedCell.querySelector("span[aria-hidden='true']")?.className).toContain(
+        "surface-spreadsheet-range-overlay",
+      );
+      const activeCell = doc.querySelector("[data-active-cell='true']");
+      expect(activeCell?.textContent?.trim()).toBe("100");
+
       const boldButton = doc.querySelector<HTMLButtonElement>("button[aria-label='Bold']");
       if (!boldButton) throw new Error("missing bold button");
       await act(async () => {

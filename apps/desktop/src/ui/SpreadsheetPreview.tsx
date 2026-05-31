@@ -66,6 +66,13 @@ type CellRange = {
   endRow: number;
   endCol: number;
 };
+type SelectionEdges = {
+  active: boolean;
+  top: boolean;
+  right: boolean;
+  bottom: boolean;
+  left: boolean;
+};
 type CellEditHistoryEntry = {
   row: number;
   col: number;
@@ -133,6 +140,40 @@ function rangeAddress(range: CellRange): string {
 
 function rangeCellCount(range: CellRange): number {
   return (range.endRow - range.startRow + 1) * (range.endCol - range.startCol + 1);
+}
+
+function selectionEdgesForCell(
+  cell: CellCoord,
+  range: CellRange | null,
+  active: CellCoord | null,
+  span: CellSpan | null,
+): SelectionEdges | null {
+  if (!range || !cellInRange(cell, range)) return null;
+  const endRow = cell.row + (span?.rowSpan ?? 1) - 1;
+  const endCol = cell.col + (span?.colSpan ?? 1) - 1;
+  return {
+    active: active?.row === cell.row && active.col === cell.col,
+    top: cell.row <= range.startRow,
+    left: cell.col <= range.startCol,
+    bottom: endRow >= range.endRow,
+    right: endCol >= range.endCol,
+  };
+}
+
+function buildSelectionStyle(edges: SelectionEdges | null): CSSProperties | undefined {
+  if (!edges) return undefined;
+  if (edges.active) {
+    return {
+      boxShadow: "inset 0 0 0 2px var(--spreadsheet-accent), 0 0 0 1px var(--surface-spreadsheet)",
+    };
+  }
+
+  const shadows: string[] = [];
+  if (edges.top) shadows.push("inset 0 2px 0 var(--spreadsheet-accent)");
+  if (edges.right) shadows.push("inset -2px 0 0 var(--spreadsheet-accent)");
+  if (edges.bottom) shadows.push("inset 0 -2px 0 var(--spreadsheet-accent)");
+  if (edges.left) shadows.push("inset 2px 0 0 var(--spreadsheet-accent)");
+  return shadows.length > 0 ? { boxShadow: shadows.join(", ") } : undefined;
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -321,21 +362,91 @@ function chartDisplayLabel(chart: SpreadsheetChartSummary): string {
     .join(" - ");
 }
 
-function objectContextForPrompt(preview: SpreadsheetPreviewData): string {
+function escapeXml(value: string | number | null | undefined): string {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&apos;");
+}
+
+function spreadsheetObjectsXml(preview: SpreadsheetPreviewData): string {
   const lines: string[] = [];
   if (preview.tables.length > 0) {
     lines.push(
-      "Tables on sheet:",
-      ...preview.tables.slice(0, 12).map((table) => `- ${table.name} (${table.ref})`),
+      "    <tables>",
+      ...preview.tables
+        .slice(0, 12)
+        .map(
+          (table) =>
+            `      <table name="${escapeXml(table.name)}" ref="${escapeXml(table.ref)}" />`,
+        ),
+      "    </tables>",
     );
   }
   if (preview.charts.length > 0) {
     lines.push(
-      "Charts on sheet:",
-      ...preview.charts.slice(0, 12).map((chart) => `- ${chartDisplayLabel(chart) || chart.id}`),
+      "    <charts>",
+      ...preview.charts.slice(0, 12).map((chart) => {
+        const anchor = chartAnchorLabel(chart);
+        return `      <chart id="${escapeXml(chart.id)}" title="${escapeXml(
+          chart.title ?? "",
+        )}" type="${escapeXml(chart.type ?? "")}" anchor="${escapeXml(anchor ?? "")}" />`;
+      }),
+      "    </charts>",
     );
   }
-  return lines.length > 0 ? `\n${lines.join("\n")}` : "";
+  return lines.join("\n");
+}
+
+function spreadsheetCanvasPrompt(opts: {
+  path: string;
+  preview: SpreadsheetPreviewData;
+  selectedRange: CellRange | null;
+  selectedCell: SpreadsheetPreviewCell | null;
+  selectedStyle: string | null;
+  selectedTable: SpreadsheetTableSummary | null;
+  instructions: string;
+}): string {
+  const selectionAttributes = opts.selectedRange
+    ? ` range="${escapeXml(rangeAddress(opts.selectedRange))}" cell_count="${rangeCellCount(
+        opts.selectedRange,
+      )}"`
+    : "";
+  const activeCellLines = opts.selectedCell
+    ? [
+        `      <active_cell address="${escapeXml(opts.selectedCell.address)}">`,
+        `        <value>${escapeXml(opts.selectedCell.value || "(blank)")}</value>`,
+        opts.selectedCell.formula
+          ? `        <formula>${escapeXml(`=${opts.selectedCell.formula}`)}</formula>`
+          : null,
+        opts.selectedStyle ? `        <style>${escapeXml(opts.selectedStyle)}</style>` : null,
+        opts.selectedTable
+          ? `        <table name="${escapeXml(opts.selectedTable.name)}" ref="${escapeXml(
+              opts.selectedTable.ref,
+            )}" />`
+          : null,
+        "      </active_cell>",
+      ].filter((line): line is string => Boolean(line))
+    : [];
+  const objectLines = spreadsheetObjectsXml(opts.preview);
+
+  return `<spreadsheet_canvas_request version="1">
+  <assistant_instructions>
+    <instruction>Treat this as context from the spreadsheet canvas for the user's request.</instruction>
+    <instruction>If the user asks for feedback, analysis, or a comment, answer directly and do not edit the workbook.</instruction>
+    <instruction>If the user asks for changes, edit the referenced workbook file directly and summarize the exact changes.</instruction>
+  </assistant_instructions>
+  <workbook file_name="${escapeXml(basenamePath(opts.path))}" path="${escapeXml(opts.path)}">
+    <active_sheet>${escapeXml(opts.preview.selectedSheetName)}</active_sheet>
+    <visible_viewport>${escapeXml(formatViewportLabel(opts.preview.viewport))}</visible_viewport>
+    <selection${selectionAttributes}>
+${activeCellLines.length > 0 ? activeCellLines.join("\n") : "      <active_cell />"}
+    </selection>${objectLines ? `\n${objectLines}` : ""}
+  </workbook>
+  <user_request>${escapeXml(opts.instructions)}</user_request>
+</spreadsheet_canvas_request>`;
 }
 
 function formatViewportLabel(viewport: SpreadsheetPreviewViewport): string {
@@ -592,7 +703,7 @@ export function SpreadsheetPreview({ path, compact = false }: SpreadsheetPreview
       const col = clamp(base.col + deltaCol, 0, Math.max(v.totalCols - 1, 0));
       const next = { row, col };
       setSelected(next);
-      setSelectionAnchor((current) => (opts.extend ? current ?? base : next));
+      setSelectionAnchor((current) => (opts.extend ? (current ?? base) : next));
       if (row < v.startRow || row > v.endRow) setViewportStartRow(row);
       if (col < v.startCol || col > v.endCol) setViewportStartCol(col);
     },
@@ -743,7 +854,7 @@ export function SpreadsheetPreview({ path, compact = false }: SpreadsheetPreview
 
   const selectCell = useCallback(
     (coord: CellCoord, opts: { extend?: boolean } = {}) => {
-      setSelectionAnchor(opts.extend ? selectionAnchor ?? selected ?? coord : coord);
+      setSelectionAnchor(opts.extend ? (selectionAnchor ?? selected ?? coord) : coord);
       setSelected(coord);
       setEditing(false);
       gridRef.current?.focus({ preventScroll: true });
@@ -751,10 +862,13 @@ export function SpreadsheetPreview({ path, compact = false }: SpreadsheetPreview
     [selected, selectionAnchor],
   );
 
-  const extendSelectionTo = useCallback((coord: CellCoord) => {
-    setSelectionAnchor((current) => current ?? selected ?? coord);
-    setSelected(coord);
-  }, [selected]);
+  const extendSelectionTo = useCallback(
+    (coord: CellCoord) => {
+      setSelectionAnchor((current) => current ?? selected ?? coord);
+      setSelected(coord);
+    },
+    [selected],
+  );
 
   const undoLastEdit = useCallback(async () => {
     const entry = undoStack.at(-1);
@@ -844,24 +958,15 @@ export function SpreadsheetPreview({ path, compact = false }: SpreadsheetPreview
     }
 
     const selectedStyle = formatCellStyle(selectedCell?.style);
-    const selectedRangeContext = selectedRange
-      ? `\nSelected range: ${rangeAddress(selectedRange)} (${rangeCellCount(selectedRange)} cells)`
-      : "";
-    const selectedContext = selectedCell
-      ? `${selectedRangeContext}\nActive cell: ${selectedCell.address}\nActive value: ${
-          selectedCell.value || "(blank)"
-        }${selectedCell.formula ? `\nActive formula: =${selectedCell.formula}` : ""}${
-          selectedStyle ? `\nActive style: ${selectedStyle}` : ""
-        }${selectedTable ? `\nActive table: ${selectedTable.name} (${selectedTable.ref})` : ""}`
-      : "";
-    const prompt = `[Spreadsheet Collaborative Edit]
-Please edit the spreadsheet file \`${basenamePath(path)}\` located at \`${path}\`.
-
-Active sheet: ${preview.selectedSheetName}
-Visible viewport: ${formatViewportLabel(preview.viewport)}${selectedContext}${objectContextForPrompt(preview)}
-
-Instructions:
-${instructions}`;
+    const prompt = spreadsheetCanvasPrompt({
+      path,
+      preview,
+      selectedRange,
+      selectedCell,
+      selectedStyle,
+      selectedTable,
+      instructions,
+    });
 
     setPromptText("");
     await sendMessage(prompt);
@@ -1091,7 +1196,7 @@ ${instructions}`;
                 void sendEditPrompt();
               }
             }}
-            placeholder="Ask agent..."
+            placeholder="Ask, comment, or edit..."
             className="h-8 flex-1 border-none bg-transparent pl-2 pr-8 text-sm text-[var(--text-spreadsheet)] shadow-none focus-visible:ring-0"
           />
           <Button
@@ -1101,7 +1206,7 @@ ${instructions}`;
             onClick={() => void sendEditPrompt()}
             disabled={!promptText.trim()}
             className="mr-0.5 size-7 rounded-none"
-            aria-label="Ask model to edit spreadsheet"
+            aria-label="Send spreadsheet request"
           >
             <SparklesIcon className="size-4" />
           </Button>
@@ -1148,7 +1253,9 @@ ${instructions}`;
         <select
           value={selectedFontSize}
           disabled={!selectedRange || !canEdit}
-          onChange={(event) => void applyFormatting({ fontSize: Number(event.currentTarget.value) })}
+          onChange={(event) =>
+            void applyFormatting({ fontSize: Number(event.currentTarget.value) })
+          }
           className="h-8 rounded-none border border-[var(--border-spreadsheet)] bg-[var(--surface-spreadsheet)] px-2 text-xs tabular-nums text-[var(--text-spreadsheet)] outline-none focus-visible:ring-1 focus-visible:ring-[var(--spreadsheet-accent)] disabled:cursor-not-allowed disabled:opacity-45"
           aria-label="Font size"
           title="Font size"
@@ -1344,29 +1451,37 @@ ${instructions}`;
                     const isSelected = selected?.row === cell.row && selected?.col === cell.col;
                     const isInSelectedRange =
                       selectedRange !== null && cellInRange(cell, selectedRange);
+                    const selectionEdges = selectionEdgesForCell(
+                      cell,
+                      selectedRange,
+                      selected,
+                      span,
+                    );
                     const isEditingCell = isSelected && editing;
                     const table = tableForCell(preview, cell);
                     const isTableHeader = table?.startRow === cell.row;
-                    const displayValue = showFormulas && cell.formula ? `=${cell.formula}` : cell.value;
+                    const displayValue =
+                      showFormulas && cell.formula ? `=${cell.formula}` : cell.value;
                     return (
                       <td
                         key={cell.address}
                         colSpan={span?.colSpan}
                         rowSpan={span?.rowSpan}
                         className={cn(
-                          "h-8 max-w-[320px] border-b border-r border-[var(--border-spreadsheet)] bg-[var(--surface-spreadsheet)] p-0 align-middle text-[var(--text-spreadsheet)]",
+                          "relative h-8 max-w-[320px] border-b border-r border-[var(--border-spreadsheet)] bg-[var(--surface-spreadsheet)] p-0 align-middle text-[var(--text-spreadsheet)]",
                           table &&
                             "outline outline-1 outline-offset-[-1px] outline-[var(--spreadsheet-focus-soft)]",
                           table &&
                             !cell.style?.fillColor &&
                             "bg-[var(--surface-spreadsheet-hover)]",
                           isTableHeader && !cell.style?.bold && "font-semibold",
-                          isInSelectedRange &&
-                            !isSelected &&
-                            "bg-[var(--surface-spreadsheet-selected)] outline outline-1 outline-offset-[-1px] outline-[var(--spreadsheet-focus-soft)]",
-                          isSelected && "ring-2 ring-inset ring-[var(--spreadsheet-accent)]",
+                          isInSelectedRange && "z-10",
+                          isSelected && "z-20",
                         )}
-                        style={buildCellStyle(cell, widthByCol.get(cell.col))}
+                        style={{
+                          ...buildCellStyle(cell, widthByCol.get(cell.col)),
+                          ...(buildSelectionStyle(selectionEdges) ?? {}),
+                        }}
                         title={cell.formula ? `=${cell.formula}` : cell.value}
                       >
                         {isEditingCell ? (
@@ -1388,26 +1503,52 @@ ${instructions}`;
                               if (event.button !== 0) return;
                               skipNextCellClickRef.current = true;
                               setIsSelectingRange(true);
-                              selectCell({ row: cell.row, col: cell.col }, { extend: event.shiftKey });
+                              selectCell(
+                                { row: cell.row, col: cell.col },
+                                { extend: event.shiftKey },
+                              );
                             }}
                             onMouseEnter={() => {
-                              if (isSelectingRange) extendSelectionTo({ row: cell.row, col: cell.col });
+                              if (isSelectingRange)
+                                extendSelectionTo({ row: cell.row, col: cell.col });
                             }}
                             onClick={(event) => {
                               if (skipNextCellClickRef.current) {
                                 skipNextCellClickRef.current = false;
                                 return;
                               }
-                              selectCell({ row: cell.row, col: cell.col }, { extend: event.shiftKey });
+                              selectCell(
+                                { row: cell.row, col: cell.col },
+                                { extend: event.shiftKey },
+                              );
                             }}
                             onDoubleClick={() => beginEdit({ row: cell.row, col: cell.col }, null)}
-                            className="block size-full cursor-cell truncate px-2 py-1.5 text-left text-[var(--text-spreadsheet)] outline-none hover:bg-[var(--surface-spreadsheet-hover)]"
+                            className="relative block size-full cursor-cell overflow-hidden px-2 py-1.5 text-left text-[var(--text-spreadsheet)] outline-none hover:bg-[var(--surface-spreadsheet-hover)]"
+                            data-active-cell={isSelected ? "true" : undefined}
+                            data-selected-range-cell={isInSelectedRange ? "true" : undefined}
                           >
-                            {displayValue || " "}
-                            {cell.formula && !showFormulas ? (
-                              <span className="ml-1 text-[10px] font-medium text-[var(--spreadsheet-accent)]">
-                                fx
-                              </span>
+                            {isInSelectedRange ? (
+                              <span
+                                aria-hidden="true"
+                                className={cn(
+                                  "pointer-events-none absolute inset-0 z-0 bg-[var(--surface-spreadsheet-range-overlay)]",
+                                  isSelected && "bg-[var(--surface-spreadsheet-active-overlay)]",
+                                )}
+                              />
+                            ) : null}
+                            <span className="relative z-10 block truncate">
+                              {displayValue || " "}
+                              {cell.formula && !showFormulas ? (
+                                <span className="ml-1 text-[10px] font-medium text-[var(--spreadsheet-accent)]">
+                                  fx
+                                </span>
+                              ) : null}
+                            </span>
+                            {isSelected ? (
+                              <span
+                                aria-hidden="true"
+                                className="pointer-events-none absolute bottom-0 right-0 z-20 size-1.5 bg-[var(--spreadsheet-accent)]"
+                              />
                             ) : null}
                           </button>
                         )}
@@ -1453,7 +1594,6 @@ ${instructions}`;
           );
         })}
       </div>
-
     </div>
   );
 }

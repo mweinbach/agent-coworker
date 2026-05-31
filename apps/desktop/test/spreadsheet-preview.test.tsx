@@ -71,191 +71,191 @@ describe("SpreadsheetPreview", () => {
     useAppStore.setState({ sendMessage: originalSendMessage } as Partial<AppStoreState>);
   });
 
-  test.serial(
-    "renders workbook controls, formulas, objects, and agent edit prompts",
-    async () => {
-      const harness = setupJsdom({ includeAnimationFrame: true });
-      const sendMessageMock = mock(async () => true);
-      resetAppStore(sendMessageMock);
+  test.serial("renders workbook controls, formulas, objects, and agent edit prompts", async () => {
+    const harness = setupJsdom({ includeAnimationFrame: true });
+    const sendMessageMock = mock(async () => true);
+    resetAppStore(sendMessageMock);
 
-      let root: ReturnType<typeof createRoot> | null = null;
-      try {
-        const path = "/Users/mweinbach/Projects/preview-workspace/model.xlsx";
-        const requestMock = mock(async (method: string, params?: Record<string, unknown>) => {
-          expect(method).toBe("cowork/workspace/spreadsheet/preview");
-          return {
-            ok: true,
-            preview: {
-              kind: "xlsx",
-              path,
-              filename: "model.xlsx",
-              sheets: [
-                { name: "Summary", rowCount: 2, colCount: 2 },
-                { name: "Data", rowCount: 2, colCount: 2 },
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const path = "/Users/mweinbach/Projects/preview-workspace/model.xlsx";
+      const requestMock = mock(async (method: string, params?: Record<string, unknown>) => {
+        expect(method).toBe("cowork/workspace/spreadsheet/preview");
+        return {
+          ok: true,
+          preview: {
+            kind: "xlsx",
+            path,
+            filename: "model.xlsx",
+            sheets: [
+              { name: "Summary", rowCount: 2, colCount: 2 },
+              { name: "Data", rowCount: 2, colCount: 2 },
+            ],
+            selectedSheetName: typeof params?.sheetName === "string" ? params.sheetName : "Summary",
+            viewport: {
+              startRow: 0,
+              startCol: 0,
+              rowCount: 2,
+              colCount: 2,
+              endRow: 1,
+              endCol: 1,
+              totalRows: 2,
+              totalCols: 2,
+              truncatedRows: false,
+              truncatedCols: false,
+            },
+            cells: [
+              [
+                { row: 0, col: 0, address: "A1", value: "Metric" },
+                { row: 0, col: 1, address: "B1", value: "Value" },
               ],
-              selectedSheetName:
-                typeof params?.sheetName === "string" ? params.sheetName : "Summary",
-              viewport: {
+              [
+                { row: 1, col: 0, address: "A2", value: "Revenue" },
+                {
+                  row: 1,
+                  col: 1,
+                  address: "B2",
+                  value: "$12.50",
+                  formattedValue: "$12.50",
+                  formula: "SUM(Data!B2:B10)",
+                  style: {
+                    numberFormat: "$0.00",
+                    bold: true,
+                    fillColor: "#FFE08A",
+                    textColor: "#174A2A",
+                  },
+                },
+              ],
+            ],
+            mergedCells: [],
+            columnWidths: [{ col: 0, widthChars: 18 }],
+            tables: [
+              {
+                name: "RevenueTable",
+                ref: "A1:B2",
                 startRow: 0,
                 startCol: 0,
-                rowCount: 2,
-                colCount: 2,
                 endRow: 1,
                 endCol: 1,
-                totalRows: 2,
-                totalCols: 2,
-                truncatedRows: false,
-                truncatedCols: false,
               },
-              cells: [
-                [
-                  { row: 0, col: 0, address: "A1", value: "Metric" },
-                  { row: 0, col: 1, address: "B1", value: "Value" },
-                ],
-                [
-                  { row: 1, col: 0, address: "A2", value: "Revenue" },
-                  {
-                    row: 1,
-                    col: 1,
-                    address: "B2",
-                    value: "$12.50",
-                    formattedValue: "$12.50",
-                    formula: "SUM(Data!B2:B10)",
-                    style: {
-                      numberFormat: "$0.00",
-                      bold: true,
-                      fillColor: "#FFE08A",
-                      textColor: "#174A2A",
-                    },
-                  },
-                ],
-              ],
-              mergedCells: [],
-              columnWidths: [{ col: 0, widthChars: 18 }],
-              tables: [
-                {
-                  name: "RevenueTable",
-                  ref: "A1:B2",
-                  startRow: 0,
-                  startCol: 0,
-                  endRow: 1,
-                  endCol: 1,
-                },
-              ],
-              charts: [
-                {
-                  id: "chart1",
-                  title: "Revenue by Quarter",
-                  type: "bar",
-                  anchor: { fromRow: 0, fromCol: 3 },
-                },
-              ],
-              warnings: [],
-            },
-          };
-        });
-        RUNTIME.jsonRpcSockets.set("ws-1", {
-          readyPromise: Promise.resolve(),
-          connect: () => {},
-          close: () => {},
-          respond: () => true,
-          request: requestMock,
-        } as never);
+            ],
+            charts: [
+              {
+                id: "chart1",
+                title: "Revenue by Quarter",
+                type: "bar",
+                anchor: { fromRow: 0, fromCol: 3 },
+              },
+            ],
+            warnings: [],
+          },
+        };
+      });
+      RUNTIME.jsonRpcSockets.set("ws-1", {
+        readyPromise: Promise.resolve(),
+        connect: () => {},
+        close: () => {},
+        respond: () => true,
+        request: requestMock,
+      } as never);
 
-        const container = harness.dom.window.document.getElementById("root");
-        if (!container) throw new Error("missing root");
-        root = createRoot(container);
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
 
-        await act(async () => {
-          root.render(createElement(SpreadsheetPreview, { path }));
-          await flushUi();
-          await flushUi();
-        });
+      await act(async () => {
+        root.render(createElement(SpreadsheetPreview, { path }));
+        await flushUi();
+        await flushUi();
+      });
 
-        const doc = harness.dom.window.document;
-        expect(doc.querySelector("[data-spreadsheet-preview='true']")).not.toBeNull();
-        expect(doc.body.textContent).toContain("Summary");
-        expect(doc.body.textContent).toContain("Data");
-        expect(doc.body.textContent).toContain("Revenue");
-        expect(doc.body.textContent).toContain("RevenueTable");
-        expect(doc.body.textContent).toContain("Revenue by Quarter");
+      const doc = harness.dom.window.document;
+      expect(doc.querySelector("[data-spreadsheet-preview='true']")).not.toBeNull();
+      expect(doc.body.textContent).toContain("Summary");
+      expect(doc.body.textContent).toContain("Data");
+      expect(doc.body.textContent).toContain("Revenue");
+      expect(doc.body.textContent).toContain("RevenueTable");
+      expect(doc.body.textContent).toContain("Revenue by Quarter");
 
-        expect(doc.querySelector<HTMLInputElement>("input[type='search']")).toBeNull();
+      expect(doc.querySelector<HTMLInputElement>("input[type='search']")).toBeNull();
 
-        const valueCell = doc.querySelector("[data-cell-address='B2']");
-        if (!valueCell) throw new Error("missing value cell");
-        const valueTd = valueCell.closest("td") as HTMLTableCellElement | null;
-        expect(valueTd?.style.backgroundColor).toBe("rgb(255, 224, 138)");
-        expect(valueTd?.style.color).toBe("rgb(23, 74, 42)");
-        expect(valueTd?.style.fontWeight).toBe("600");
-        await act(async () => {
-          valueCell.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
-          await flushUi();
-        });
-        const formulaBar = doc.querySelector<HTMLInputElement>("input[aria-label='Formula bar']");
-        if (!formulaBar) throw new Error("missing formula bar");
-        expect(formulaBar.value).toBe("=SUM(Data!B2:B10)");
+      const valueCell = doc.querySelector("[data-cell-address='B2']");
+      if (!valueCell) throw new Error("missing value cell");
+      const valueTd = valueCell.closest("td") as HTMLTableCellElement | null;
+      expect(valueTd?.style.backgroundColor).toBe("rgb(255, 224, 138)");
+      expect(valueTd?.style.color).toBe("rgb(23, 74, 42)");
+      expect(valueTd?.style.fontWeight).toBe("600");
+      await act(async () => {
+        valueCell.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+        await flushUi();
+      });
+      const formulaBar = doc.querySelector<HTMLInputElement>("input[aria-label='Formula bar']");
+      if (!formulaBar) throw new Error("missing formula bar");
+      expect(formulaBar.value).toBe("=SUM(Data!B2:B10)");
 
-        const promptInput = doc.querySelector<HTMLInputElement>(
-          "input[placeholder='Ask agent...']",
+      const promptInput = doc.querySelector<HTMLInputElement>(
+        "input[placeholder='Ask, comment, or edit...']",
+      );
+      if (!promptInput) throw new Error("missing agent prompt input");
+      await act(async () => {
+        setInputValue(harness.dom.window, promptInput, "Increase revenue by ten percent");
+        await flushUi();
+      });
+      const askButton = doc.querySelector<HTMLButtonElement>(
+        "button[aria-label='Send spreadsheet request']",
+      );
+      if (!askButton) throw new Error("missing ask button");
+      await act(async () => {
+        askButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+        await flushUi();
+      });
+
+      expect(sendMessageMock).toHaveBeenCalledTimes(1);
+      const prompt = sendMessageMock.mock.calls[0]?.[0];
+      expect(prompt).toContain('<spreadsheet_canvas_request version="1">');
+      expect(prompt).toContain(
+        "<instruction>If the user asks for feedback, analysis, or a comment, answer directly and do not edit the workbook.</instruction>",
+      );
+      expect(prompt).toContain('<workbook file_name="model.xlsx" path="');
+      expect(prompt).toContain("<active_sheet>Summary</active_sheet>");
+      expect(prompt).toContain('<selection range="B2" cell_count="1">');
+      expect(prompt).toContain('<active_cell address="B2">');
+      expect(prompt).toContain("<formula>=SUM(Data!B2:B10)</formula>");
+      expect(prompt).toContain("<style>bold, fill #FFE08A");
+      expect(prompt).toContain('<table name="RevenueTable" ref="A1:B2" />');
+      expect(prompt).toContain("<tables>");
+      expect(prompt).toContain('<chart id="chart1" title="Revenue by Quarter"');
+      expect(prompt).toContain("<user_request>Increase revenue by ten percent</user_request>");
+      expect(prompt).toContain("</spreadsheet_canvas_request>");
+
+      const dataSheetButton = Array.from(doc.querySelectorAll("[role='tab']")).find(
+        (button) => button.textContent === "Data",
+      );
+      if (!dataSheetButton) throw new Error("missing Data sheet button");
+      await act(async () => {
+        dataSheetButton.dispatchEvent(
+          new harness.dom.window.MouseEvent("click", {
+            bubbles: true,
+            cancelable: true,
+            view: harness.dom.window,
+          }),
         );
-        if (!promptInput) throw new Error("missing agent prompt input");
-        await act(async () => {
-          setInputValue(harness.dom.window, promptInput, "Increase revenue by ten percent");
-          await flushUi();
-        });
-        const askButton = doc.querySelector<HTMLButtonElement>(
-          "button[aria-label='Ask model to edit spreadsheet']",
-        );
-        if (!askButton) throw new Error("missing ask button");
-        await act(async () => {
-          askButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
-          await flushUi();
-        });
-
-        expect(sendMessageMock).toHaveBeenCalledTimes(1);
-        const prompt = sendMessageMock.mock.calls[0]?.[0];
-        expect(prompt).toContain("[Spreadsheet Collaborative Edit]");
-        expect(prompt).toContain("Active sheet: Summary");
-        expect(prompt).toContain("Selected range: B2 (1 cells)");
-        expect(prompt).toContain("Active cell: B2");
-        expect(prompt).toContain("Active style: bold, fill #FFE08A");
-        expect(prompt).toContain("Active table: RevenueTable (A1:B2)");
-        expect(prompt).toContain("Tables on sheet:");
-        expect(prompt).toContain("- RevenueTable (A1:B2)");
-        expect(prompt).toContain("Charts on sheet:");
-        expect(prompt).toContain("- Revenue by Quarter - bar chart - near D1");
-        expect(prompt).toContain("Increase revenue by ten percent");
-
-        const dataSheetButton = Array.from(doc.querySelectorAll("[role='tab']")).find(
-          (button) => button.textContent === "Data",
-        );
-        if (!dataSheetButton) throw new Error("missing Data sheet button");
-        await act(async () => {
-          dataSheetButton.dispatchEvent(
-            new harness.dom.window.MouseEvent("click", {
-              bubbles: true,
-              cancelable: true,
-              view: harness.dom.window,
-            }),
-          );
-          await flushUi();
-          await flushUi();
-        });
-        expect(requestMock.mock.calls.at(-1)?.[1]).toMatchObject({ sheetName: "Data" });
-      } finally {
-        if (root) {
-          try {
-            await act(async () => {
-              root!.unmount();
-            });
-          } catch {}
-        }
-        useAppStore.setState({ sendMessage: originalSendMessage } as Partial<AppStoreState>);
-        harness.restore();
+        await flushUi();
+        await flushUi();
+      });
+      expect(requestMock.mock.calls.at(-1)?.[1]).toMatchObject({ sheetName: "Data" });
+    } finally {
+      if (root) {
+        try {
+          await act(async () => {
+            root!.unmount();
+          });
+        } catch {}
       }
-    },
-  );
+      useAppStore.setState({ sendMessage: originalSendMessage } as Partial<AppStoreState>);
+      harness.restore();
+    }
+  });
 
   test.serial("renders in compact mode for canvas integration", async () => {
     const harness = setupJsdom({ includeAnimationFrame: true });

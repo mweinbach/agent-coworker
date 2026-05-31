@@ -99,6 +99,8 @@
     --surface-spreadsheet-hover: #eef6ff;
     --surface-spreadsheet-match: #e8f3ff;
     --surface-spreadsheet-selected: color-mix(in srgb, var(--accent-base) 18%, #ffffff);
+    --surface-spreadsheet-range-overlay: color-mix(in srgb, var(--accent-base) 16%, transparent);
+    --surface-spreadsheet-active-overlay: color-mix(in srgb, var(--accent-base) 5%, transparent);
     --surface-landing-accent-glow: radial-gradient(
       circle,
       color-mix(in srgb, var(--accent-base) 9%, transparent) 0%,

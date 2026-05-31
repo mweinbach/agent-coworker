@@ -113,6 +113,25 @@ describe("Univer spreadsheet helpers", () => {
     expect(selection?.activeStyle).toBeUndefined();
   });
 
+  test("selection context treats cleared live cells as empty", () => {
+    const data = spreadsheetSnapshotToUniverData(WORKBOOK);
+    const sheet = data.sheets["sheet-1"];
+    expect(sheet).toBeDefined();
+    if (!sheet) return;
+    const row = { ...sheet.cellData?.[1] };
+    delete row[1];
+    sheet.cellData = {
+      ...sheet.cellData,
+      1: row,
+    };
+
+    const selection = selectionContextFromWorkbook(WORKBOOK, data, "Summary", null, "B2");
+
+    expect(selection?.activeValue).toBe("");
+    expect(selection?.activeFormula).toBeUndefined();
+    expect(selection?.activeStyle).toBeUndefined();
+  });
+
   test("diffs Univer workbook edits into value and format batch operations", () => {
     const previous = spreadsheetSnapshotToUniverData(WORKBOOK);
     const current = cloneUniverWorkbookData(previous);
@@ -195,6 +214,23 @@ describe("Univer spreadsheet helpers", () => {
       sheetName: "Summary",
       col: 0,
       widthPx: 220,
+    });
+  });
+
+  test("diffs column width resets for XLSX save batches", () => {
+    const previous = spreadsheetSnapshotToUniverData(WORKBOOK);
+    const current = cloneUniverWorkbookData(previous);
+    const sheet = current.sheets["sheet-1"];
+    expect(sheet).toBeDefined();
+    if (!sheet) return;
+
+    sheet.columnData = {};
+
+    expect(diffUniverWorkbookPatches(previous, current)).toContainEqual({
+      type: "columnWidth",
+      sheetName: "Summary",
+      col: 0,
+      widthPx: null,
     });
   });
 

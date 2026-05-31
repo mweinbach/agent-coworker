@@ -224,7 +224,7 @@ export type SpreadsheetBatchPatchColumnWidthOperation = {
   type: "columnWidth";
   sheetName?: string;
   col: number;
-  widthPx: number;
+  widthPx: number | null;
 };
 
 export type SpreadsheetBatchPatchOperation =

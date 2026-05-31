@@ -140,13 +140,16 @@ export function diffUniverWorkbookPatches(
 
       const previousWidths = columnWidthMap(previousSheet?.columnData);
       const currentWidths = columnWidthMap(currentSheet.columnData);
-      for (const [col, widthPx] of currentWidths) {
-        if (previousWidths.get(col) === widthPx) continue;
+      const widthCols = new Set([...previousWidths.keys(), ...currentWidths.keys()]);
+      for (const col of [...widthCols].sort((left, right) => left - right)) {
+        const previousWidthPx = previousWidths.get(col) ?? null;
+        const currentWidthPx = currentWidths.get(col) ?? null;
+        if (previousWidthPx === currentWidthPx) continue;
         operations.push({
           type: "columnWidth",
           sheetName: currentSheet.name,
           col,
-          widthPx,
+          widthPx: currentWidthPx,
         });
       }
     }
@@ -214,16 +217,19 @@ export function selectionContextFromWorkbook(
   if (!sheet) return null;
   const activeCell = activeCellA1 ? cellByAddress(sheet, activeCellA1) : null;
   const rangeA1 = range ? rangeToA1(range) : (activeCellA1 ?? "A1");
-  const currentCellData = cellDataBySheetName(
+  const currentCellLookup = cellDataBySheetName(
     data,
     sheetName,
     activeCellA1 ?? rangeA1.split(":")[0] ?? "A1",
   );
-  const activeStyle = currentCellData
-    ? styleFromUniverStyle(resolveUniverStyle(data, currentCellData.s))
+  const currentCellData = currentCellLookup.cell;
+  const activeStyle = currentCellLookup.hasLiveAddress
+    ? currentCellData
+      ? styleFromUniverStyle(resolveUniverStyle(data, currentCellData.s))
+      : undefined
     : activeCell?.style;
-  const activeFormula = currentCellData
-    ? typeof currentCellData.f === "string" && currentCellData.f.trim() !== ""
+  const activeFormula = currentCellLookup.hasLiveAddress
+    ? currentCellData && typeof currentCellData.f === "string" && currentCellData.f.trim() !== ""
       ? rawInputFromCellData(currentCellData)
       : undefined
     : activeCell?.formula
@@ -234,7 +240,9 @@ export function selectionContextFromWorkbook(
     sheetName,
     rangeA1,
     activeCellA1: activeCellA1 ?? rangeA1.split(":")[0] ?? "A1",
-    activeValue: displayValueFromCellData(currentCellData) ?? activeCell?.value ?? "",
+    activeValue: currentCellLookup.hasLiveAddress
+      ? (displayValueFromCellData(currentCellData) ?? "")
+      : (activeCell?.value ?? ""),
     ...(activeFormula ? { activeFormula } : {}),
     ...(activeStyle ? { activeStyle } : {}),
   };
@@ -487,11 +495,12 @@ function cellDataBySheetName(
   data: IWorkbookData,
   sheetName: string,
   address: string,
-): ICellData | undefined {
+): { hasLiveAddress: boolean; cell: ICellData | undefined } {
   const sheet = Object.values(data.sheets).find((candidate) => candidate?.name === sheetName);
-  if (!sheet) return undefined;
+  if (!sheet) return { hasLiveAddress: false, cell: undefined };
   const decoded = decodeAddress(address);
-  return decoded ? readUniverCell(sheet.cellData, decoded.row, decoded.col) : undefined;
+  if (!decoded) return { hasLiveAddress: false, cell: undefined };
+  return { hasLiveAddress: true, cell: readUniverCell(sheet.cellData, decoded.row, decoded.col) };
 }
 
 function cellByAddress(

@@ -240,7 +240,7 @@ const spreadsheetBatchPatchOperationSchema = z.discriminatedUnion("type", [
       type: z.literal("columnWidth"),
       sheetName: nonEmptyTrimmedStringSchema.optional(),
       col: z.number().int().nonnegative(),
-      widthPx: z.number().positive(),
+      widthPx: z.number().positive().nullable(),
     })
     .strict(),
 ]);

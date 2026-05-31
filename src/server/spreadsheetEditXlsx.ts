@@ -289,9 +289,9 @@ async function applyXlsxMergeOp(
 
 async function applyXlsxColumnWidthOp(
   session: XlsxSession,
-  op: { sheetName?: string; col: number; widthPx: number },
+  op: { sheetName?: string; col: number; widthPx: number | null },
 ): Promise<EditFailure | null> {
-  if (!Number.isFinite(op.widthPx) || op.widthPx <= 0) {
+  if (op.widthPx !== null && (!Number.isFinite(op.widthPx) || op.widthPx <= 0)) {
     return { kind: "parse_error", message: `Invalid column width: ${op.widthPx}` };
   }
 
@@ -724,25 +724,29 @@ function readMergeRefs(xml: string): string[] {
   return refs;
 }
 
-function applyWorksheetColumnWidth(xml: string, col: number, widthPx: number): string {
+function applyWorksheetColumnWidth(xml: string, col: number, widthPx: number | null): string {
   const colIndex = col + 1;
-  const widthChars = Math.max(0.1, (widthPx - 5) / 7);
-  const colXml = `<col min="${colIndex}" max="${colIndex}" width="${formatStyleNumber(
-    widthChars,
-  )}" customWidth="1"/>`;
+  const colXml =
+    widthPx === null
+      ? null
+      : `<col min="${colIndex}" max="${colIndex}" width="${formatStyleNumber(
+          Math.max(0.1, (widthPx - 5) / 7),
+        )}" customWidth="1"/>`;
   const colsRe = /<cols\b[^>]*>([\s\S]*?)<\/cols>/;
   const colsMatch = colsRe.exec(xml);
   if (!colsMatch) {
+    if (colXml === null) return xml;
     const insertAt = xml.indexOf("<sheetData");
     if (insertAt === -1) throw new Error("Worksheet has no <sheetData> element.");
     return `${xml.slice(0, insertAt)}<cols>${colXml}</cols>${xml.slice(insertAt)}`;
   }
 
   const nextCols = rewriteCols(colsMatch[1] ?? "", colIndex, colXml);
+  if (nextCols.trim() === "") return xml.replace(colsRe, "");
   return xml.replace(colsRe, `<cols>${nextCols}</cols>`);
 }
 
-function rewriteCols(innerXml: string, colIndex: number, colXml: string): string {
+function rewriteCols(innerXml: string, colIndex: number, colXml: string | null): string {
   const parts: string[] = [];
   let cursor = 0;
   let inserted = false;
@@ -756,7 +760,7 @@ function rewriteCols(innerXml: string, colIndex: number, colXml: string): string
     if (!Number.isFinite(min) || !Number.isFinite(max)) {
       parts.push(tag);
     } else if (colIndex < min) {
-      if (!inserted) {
+      if (!inserted && colXml !== null) {
         parts.push(colXml);
         inserted = true;
       }
@@ -765,7 +769,7 @@ function rewriteCols(innerXml: string, colIndex: number, colXml: string): string
       parts.push(tag);
     } else {
       if (min < colIndex) parts.push(setColRange(tag, min, colIndex - 1));
-      if (!inserted) {
+      if (!inserted && colXml !== null) {
         parts.push(colXml);
         inserted = true;
       }
@@ -775,7 +779,7 @@ function rewriteCols(innerXml: string, colIndex: number, colXml: string): string
     match = colRe.exec(innerXml);
   }
   parts.push(innerXml.slice(cursor));
-  if (!inserted) parts.push(colXml);
+  if (!inserted && colXml !== null) parts.push(colXml);
   return parts.join("");
 }
 

@@ -504,6 +504,36 @@ describe("xlsx single-cell edit (lossless)", () => {
     });
   });
 
+  test("resets custom column width patches", async () => {
+    await withTempDir(async (dir) => {
+      const filePath = path.join(dir, "model.xlsx");
+      await fs.writeFile(filePath, await buildWorkbook());
+
+      expect(
+        await patchSpreadsheetBatch({
+          cwd: dir,
+          filePath,
+          operations: [{ type: "columnWidth", sheetName: "Summary", col: 1, widthPx: 180 }],
+        }),
+      ).toEqual({ ok: true });
+      expect((await readSheetColumnWidths(dir, filePath, "Summary")).some((w) => w.col === 1)).toBe(
+        true,
+      );
+
+      expect(
+        await patchSpreadsheetBatch({
+          cwd: dir,
+          filePath,
+          operations: [{ type: "columnWidth", sheetName: "Summary", col: 1, widthPx: null }],
+        }),
+      ).toEqual({ ok: true });
+
+      expect((await readSheetColumnWidths(dir, filePath, "Summary")).some((w) => w.col === 1)).toBe(
+        false,
+      );
+    });
+  });
+
   test("rejects stale canvas patches when the file changed on disk", async () => {
     await withTempDir(async (dir) => {
       const filePath = path.join(dir, "model.xlsx");

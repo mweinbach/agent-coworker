@@ -205,6 +205,29 @@ describe("spreadsheet preview parser", () => {
     });
   });
 
+  test("caps workbook snapshots before serializing oversized sheets", async () => {
+    await withTempDir(async (dir) => {
+      const filePath = path.join(dir, "large.csv");
+      const header = Array.from({ length: 250 }, (_, index) => `col${index + 1}`).join(",");
+      const row = Array.from({ length: 250 }, (_, index) => String(index + 1)).join(",");
+      await fs.writeFile(
+        filePath,
+        `${header}\n${Array.from({ length: 300 }, () => row).join("\n")}\n`,
+      );
+
+      const result = await readSpreadsheetWorkbookSnapshot({ cwd: dir, filePath });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      const sheet = result.workbook.sheets[0];
+      expect(sheet?.rowCount).toBe(301);
+      expect(sheet?.colCount).toBe(250);
+      expect(sheet?.cells.length).toBeLessThanOrEqual(50_000);
+      expect(sheet?.cells.some((cell) => cell.col >= 200)).toBe(false);
+      expect(result.workbook.warnings[0]).toContain("workbook canvas snapshot is limited");
+    });
+  });
+
   test("returns a lightweight file version fingerprint for auto-refresh checks", async () => {
     await withTempDir(async (dir) => {
       const filePath = path.join(dir, "data.csv");

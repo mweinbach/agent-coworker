@@ -50,6 +50,33 @@ async function buildWorkbook(): Promise<Buffer> {
   return zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
 }
 
+async function buildFormulaWorkbook(): Promise<Buffer> {
+  const zip = new JSZip();
+  const parts = {
+    ...WORKBOOK_PARTS,
+    "[Content_Types].xml": WORKBOOK_PARTS["[Content_Types].xml"].replace(
+      "</Types>",
+      '<Override PartName="/xl/calcChain.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.calcChain+xml"/></Types>',
+    ),
+    "xl/workbook.xml": WORKBOOK_PARTS["xl/workbook.xml"].replace(
+      "</workbook>",
+      '<calcPr calcId="1"/></workbook>',
+    ),
+    "xl/_rels/workbook.xml.rels": WORKBOOK_PARTS["xl/_rels/workbook.xml.rels"].replace(
+      "</Relationships>",
+      '<Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/calcChain" Target="calcChain.xml"/></Relationships>',
+    ),
+    "xl/worksheets/sheet1.xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:C1"/><sheetData><row r="1"><c r="A1"><v>1</v></c><c r="B1"><v>2</v></c><c r="C1"><f>A1+B1</f><v>3</v></c></row></sheetData></worksheet>`,
+    "xl/calcChain.xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<calcChain xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><c r="C1" i="1"/></calcChain>`,
+  };
+  for (const [name, content] of Object.entries(parts)) {
+    zip.file(name, content);
+  }
+  return zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
+}
+
 async function entryBytes(buffer: Buffer): Promise<Map<string, string>> {
   const zip = await JSZip.loadAsync(buffer);
   const map = new Map<string, string>();
@@ -267,6 +294,40 @@ describe("xlsx single-cell edit (lossless)", () => {
       ).toEqual({ ok: true });
       sheet1 = await partText(filePath, "xl/worksheets/sheet1.xml");
       expect(sheet1).toMatch(/<c[^>]*r="B2"[^>]*s="3"><v>42.5<\/v><\/c>/);
+    });
+  });
+
+  test("invalidates formula caches and calc chain after cell edits", async () => {
+    await withTempDir(async (dir) => {
+      const filePath = path.join(dir, "formula.xlsx");
+      await fs.writeFile(filePath, await buildFormulaWorkbook());
+
+      expect(
+        await editSpreadsheetCell({
+          cwd: dir,
+          filePath,
+          sheetName: "Summary",
+          address: "A1",
+          rawInput: "10",
+        }),
+      ).toEqual({ ok: true });
+
+      const sheet1 = await partText(filePath, "xl/worksheets/sheet1.xml");
+      expect(sheet1).toContain('<c r="C1"><f>A1+B1</f></c>');
+      const workbookXml = await partText(filePath, "xl/workbook.xml");
+      expect(workbookXml).toContain('fullCalcOnLoad="1"');
+      expect(workbookXml).toContain('forceFullCalc="1"');
+      const rels = await partText(filePath, "xl/_rels/workbook.xml.rels");
+      expect(rels).not.toContain("calcChain");
+      const contentTypes = await partText(filePath, "[Content_Types].xml");
+      expect(contentTypes).not.toContain("calcChain.xml");
+
+      const zip = await JSZip.loadAsync(await fs.readFile(filePath));
+      expect(zip.file("xl/calcChain.xml")).toBeNull();
+      const cells = await readSheetCells(dir, filePath, "Summary");
+      const formula = cells.find((cell) => cell.address === "C1");
+      expect(formula?.formula).toBe("A1+B1");
+      expect(formula?.value).not.toBe("3");
     });
   });
 

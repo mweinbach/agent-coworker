@@ -22,6 +22,9 @@ import { readOoxmlColor, readXlsxSheetObjects, type XlsxSheetObjects } from "./s
 type Worksheet = XLSX.WorkSheet;
 type Workbook = XLSX.WorkBook;
 const OUTSIDE_WORKSPACE_MESSAGE = "Path is outside the workspace root.";
+const MAX_WORKBOOK_SNAPSHOT_CELLS = 50_000;
+const MAX_SNAPSHOT_ROWS_PER_SHEET = 2_000;
+const MAX_SNAPSHOT_COLS_PER_SHEET = 200;
 
 export type SpreadsheetWorkbookRequest = {
   cwd: string;
@@ -217,11 +220,32 @@ async function buildSpreadsheetWorkbookSnapshot(opts: {
     throw new Error("Workbook does not contain any sheets.");
   }
 
+  const activeSheetName =
+    opts.requestedSheetName && sheetNames.includes(opts.requestedSheetName)
+      ? opts.requestedSheetName
+      : (sheetNames[0] ?? "Sheet1");
   const warnings: string[] = [];
+  const viewportBySheetName = new Map<string, SpreadsheetPreviewViewport>();
+  let remainingCells = MAX_WORKBOOK_SNAPSHOT_CELLS;
+  const prioritizedSummaries = [
+    ...sheetSummaries.filter((sheet) => sheet.name === activeSheetName),
+    ...sheetSummaries.filter((sheet) => sheet.name !== activeSheetName),
+  ];
+  for (const sheet of prioritizedSummaries) {
+    const viewport = buildBoundedSheetViewport(sheet, remainingCells);
+    viewportBySheetName.set(sheet.name, viewport);
+    remainingCells = Math.max(0, remainingCells - viewport.rowCount * viewport.colCount);
+    if (viewport.truncatedRows || viewport.truncatedCols) {
+      warnings.push(
+        `${sheet.name}: workbook canvas snapshot is limited to ${viewport.rowCount} rows x ${viewport.colCount} columns of ${sheet.rowCount} rows x ${sheet.colCount} columns.`,
+      );
+    }
+  }
+
   const sheets: SpreadsheetWorkbookSnapshotSheet[] = [];
   for (const [index, sheet] of sheetSummaries.entries()) {
     const worksheet = readWorksheet(opts.workbook, opts.kind, sheet.name, index);
-    const viewport = buildFullSheetViewport(sheet);
+    const viewport = viewportBySheetName.get(sheet.name) ?? buildBoundedSheetViewport(sheet, 0);
     let packageDetails: XlsxSheetObjects = { tables: [], charts: [], cellStyles: new Map() };
     if (opts.kind === "xlsx") {
       try {
@@ -248,11 +272,6 @@ async function buildSpreadsheetWorkbookSnapshot(opts: {
     });
   }
 
-  const activeSheetName =
-    opts.requestedSheetName && sheetNames.includes(opts.requestedSheetName)
-      ? opts.requestedSheetName
-      : (sheetNames[0] ?? "Sheet1");
-
   return {
     kind: opts.kind,
     path: opts.filePath,
@@ -264,9 +283,22 @@ async function buildSpreadsheetWorkbookSnapshot(opts: {
   };
 }
 
-function buildFullSheetViewport(sheet: SpreadsheetSheetSummary): SpreadsheetPreviewViewport {
-  const rowCount = Math.max(sheet.rowCount, 0);
-  const colCount = Math.max(sheet.colCount, 0);
+function buildBoundedSheetViewport(
+  sheet: SpreadsheetSheetSummary,
+  remainingWorkbookCells: number,
+): SpreadsheetPreviewViewport {
+  const totalRows = Math.max(sheet.rowCount, 0);
+  const totalCols = Math.max(sheet.colCount, 0);
+  const maxCells = Math.max(0, Math.floor(remainingWorkbookCells));
+  let colCount = Math.min(totalCols, MAX_SNAPSHOT_COLS_PER_SHEET, maxCells);
+  let rowCount = 0;
+  if (totalRows > 0 && colCount > 0) {
+    rowCount = Math.min(totalRows, MAX_SNAPSHOT_ROWS_PER_SHEET, Math.floor(maxCells / colCount));
+    if (rowCount === 0) {
+      rowCount = 1;
+      colCount = Math.min(colCount, maxCells);
+    }
+  }
   return {
     startRow: 0,
     startCol: 0,
@@ -274,10 +306,10 @@ function buildFullSheetViewport(sheet: SpreadsheetSheetSummary): SpreadsheetPrev
     colCount,
     endRow: rowCount > 0 ? rowCount - 1 : 0,
     endCol: colCount > 0 ? colCount - 1 : 0,
-    totalRows: rowCount,
-    totalCols: colCount,
-    truncatedRows: false,
-    truncatedCols: false,
+    totalRows,
+    totalCols,
+    truncatedRows: rowCount < totalRows,
+    truncatedCols: colCount < totalCols,
   };
 }
 

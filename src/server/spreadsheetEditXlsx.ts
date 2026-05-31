@@ -24,6 +24,7 @@ type XlsxSession = {
   dirtyParts: Set<string>;
   styles: ReturnType<typeof parseStylesheet> | null;
   stylesDirty: boolean;
+  workbookDirty: boolean;
 };
 
 export async function runXlsxOps(
@@ -40,6 +41,7 @@ export async function runXlsxOps(
     dirtyParts: new Set(),
     styles: null,
     stylesDirty: false,
+    workbookDirty: false,
   };
 
   for (const [index, op] of operations.entries()) {
@@ -68,11 +70,15 @@ export async function runXlsxOps(
     if (failure) return { ok: false, index, error: failure };
   }
 
+  if (operations.some((op) => op.type === "cell")) {
+    await invalidateFormulaCaches(session);
+  }
+
   const flushed = flushXlsxSession(session);
   if (!flushed.ok) return { ok: false, index: null, error: flushed.error };
 
   // Skip the rewrite entirely when no operation actually mutated the workbook.
-  if (session.dirtyParts.size > 0 || session.stylesDirty) {
+  if (session.dirtyParts.size > 0 || session.stylesDirty || session.workbookDirty) {
     await writeXlsxSession(session, filePath, writeFileAtomic);
   }
   return { ok: true };
@@ -128,6 +134,89 @@ async function applyXlsxCellOp(
   session.sheetXmlByPart.set(partPath, applyCellEdit(sheetXml, addr, ref, cellXml));
   session.dirtyParts.add(partPath);
   return null;
+}
+
+async function invalidateFormulaCaches(session: XlsxSession): Promise<void> {
+  let foundFormulaCell = false;
+  for (const partPath of Object.keys(session.zip.files)) {
+    const file = session.zip.files[partPath];
+    if (file?.dir || !/^xl\/worksheets\/[^/]+\.xml$/.test(partPath)) continue;
+    const sheetXml = await sessionSheetXml(session, partPath);
+    if (sheetXml === null) continue;
+    const { xml: updated, foundFormula } = clearFormulaCachedValues(sheetXml);
+    foundFormulaCell ||= foundFormula;
+    if (updated === sheetXml) continue;
+    session.sheetXmlByPart.set(partPath, updated);
+    session.dirtyParts.add(partPath);
+  }
+
+  const hadCalcChain = Boolean(session.zip.file("xl/calcChain.xml"));
+  if (hadCalcChain) {
+    session.zip.remove("xl/calcChain.xml");
+    session.workbookDirty = true;
+  }
+  if (!foundFormulaCell && !hadCalcChain) return;
+  session.workbookDirty =
+    (await updateZipTextPart(session.zip, "[Content_Types].xml", removeCalcChainContentType)) ||
+    session.workbookDirty;
+  session.workbookDirty =
+    (await updateZipTextPart(
+      session.zip,
+      "xl/_rels/workbook.xml.rels",
+      removeCalcChainRelationship,
+    )) || session.workbookDirty;
+  session.workbookDirty =
+    (await updateZipTextPart(session.zip, "xl/workbook.xml", markWorkbookCalcPr)) ||
+    session.workbookDirty;
+}
+
+function clearFormulaCachedValues(xml: string): { xml: string; foundFormula: boolean } {
+  let foundFormula = false;
+  const nextXml = xml.replace(/<c\b[^>]*>[\s\S]*?<\/c>/g, (cellXml) => {
+    if (!/<f\b/.test(cellXml)) return cellXml;
+    foundFormula = true;
+    return cellXml.replace(/<v>[\s\S]*?<\/v>/g, "");
+  });
+  return { xml: nextXml, foundFormula };
+}
+
+async function updateZipTextPart(
+  zip: JSZip,
+  partPath: string,
+  update: (xml: string) => string,
+): Promise<boolean> {
+  const file = zip.file(partPath);
+  if (!file) return false;
+  const xml = await file.async("string");
+  const nextXml = update(xml);
+  if (nextXml === xml) return false;
+  zip.file(partPath, nextXml);
+  return true;
+}
+
+function removeCalcChainContentType(xml: string): string {
+  return xml.replace(
+    /<Override\b[^>]*PartName="\/xl\/calcChain\.xml"[^>]*(?:\/>|>[\s\S]*?<\/Override>)/g,
+    "",
+  );
+}
+
+function removeCalcChainRelationship(xml: string): string {
+  return xml.replace(
+    /<Relationship\b(?=[^>]*(?:Type="[^"]*\/calcChain"|Target="calcChain\.xml"))[^>]*\/>/g,
+    "",
+  );
+}
+
+function markWorkbookCalcPr(xml: string): string {
+  const calcPr = '<calcPr calcMode="auto" fullCalcOnLoad="1" forceFullCalc="1"/>';
+  if (/<calcPr\b[^>]*\/>/.test(xml)) {
+    return xml.replace(/<calcPr\b[^>]*\/>/, calcPr);
+  }
+  if (/<calcPr\b[^>]*>[\s\S]*?<\/calcPr>/.test(xml)) {
+    return xml.replace(/<calcPr\b[^>]*>[\s\S]*?<\/calcPr>/, calcPr);
+  }
+  return xml.replace("</workbook>", `${calcPr}</workbook>`);
 }
 
 async function applyXlsxFormatOp(

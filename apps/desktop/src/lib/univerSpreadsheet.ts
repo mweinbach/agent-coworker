@@ -202,14 +202,16 @@ export function selectionContextFromWorkbook(
     sheetName,
     activeCellA1 ?? rangeA1.split(":")[0] ?? "A1",
   );
-  const activeStyle =
-    activeCell?.style ?? styleFromUniverStyle(resolveUniverStyle(data, currentCellData?.s));
-  const activeFormula =
-    typeof currentCellData?.f === "string" && currentCellData.f.trim() !== ""
+  const activeStyle = currentCellData
+    ? styleFromUniverStyle(resolveUniverStyle(data, currentCellData.s))
+    : activeCell?.style;
+  const activeFormula = currentCellData
+    ? typeof currentCellData.f === "string" && currentCellData.f.trim() !== ""
       ? rawInputFromCellData(currentCellData)
-      : activeCell?.formula
-        ? `=${activeCell.formula}`
-        : undefined;
+      : undefined
+    : activeCell?.formula
+      ? `=${activeCell.formula}`
+      : undefined;
 
   return {
     sheetName,

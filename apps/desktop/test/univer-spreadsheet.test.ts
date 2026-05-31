@@ -91,6 +91,28 @@ describe("Univer spreadsheet helpers", () => {
     expect(prompt).toContain("what do you think of &quot;margin&quot; &amp; &lt;growth&gt;?");
   });
 
+  test("selection context uses live Univer style and formula state", () => {
+    const data = spreadsheetSnapshotToUniverData(WORKBOOK);
+    const sheet = data.sheets["sheet-1"];
+    expect(sheet).toBeDefined();
+    if (!sheet) return;
+    sheet.cellData = {
+      ...sheet.cellData,
+      1: {
+        ...sheet.cellData?.[1],
+        1: {
+          v: 50,
+        },
+      },
+    };
+
+    const selection = selectionContextFromWorkbook(WORKBOOK, data, "Summary", null, "B2");
+
+    expect(selection?.activeValue).toBe("50");
+    expect(selection?.activeFormula).toBeUndefined();
+    expect(selection?.activeStyle).toBeUndefined();
+  });
+
   test("diffs Univer workbook edits into value and format batch operations", () => {
     const previous = spreadsheetSnapshotToUniverData(WORKBOOK);
     const current = cloneUniverWorkbookData(previous);

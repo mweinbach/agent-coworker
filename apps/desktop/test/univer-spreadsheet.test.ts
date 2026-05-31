@@ -6,6 +6,7 @@ import {
   buildUniverSpreadsheetPrompt,
   cloneUniverWorkbookData,
   diffUniverWorkbookPatches,
+  selectionContextFromSnapshot,
   selectionContextFromWorkbook,
   spreadsheetSnapshotToUniverData,
 } from "../src/lib/univerSpreadsheet";
@@ -130,6 +131,49 @@ describe("Univer spreadsheet helpers", () => {
     expect(selection?.activeValue).toBe("");
     expect(selection?.activeFormula).toBeUndefined();
     expect(selection?.activeStyle).toBeUndefined();
+  });
+
+  test("rebuilds prompt selection from a refreshed workbook snapshot", () => {
+    const selection = selectionContextFromSnapshot(
+      {
+        ...WORKBOOK,
+        fileVersion: { modifiedAtMs: 2, changeTimeMs: 2, size: 2, fingerprint: "2:2:2" },
+        sheets: [
+          {
+            ...WORKBOOK.sheets[0]!,
+            cells: [
+              ...WORKBOOK.sheets[0]!.cells.filter((cell) => cell.address !== "B2"),
+              {
+                row: 1,
+                col: 1,
+                address: "B2",
+                value: "99",
+                rawValue: 99,
+                formula: "SUM(40,59)",
+                style: { bold: true },
+              },
+            ],
+          },
+        ],
+      },
+      {
+        sheetName: "Summary",
+        rangeA1: "A1:B2",
+        activeCellA1: "B2",
+        activeValue: "25",
+        activeFormula: "=SUM(10,15)",
+        activeStyle: { italic: true },
+      },
+    );
+
+    expect(selection).toEqual({
+      sheetName: "Summary",
+      rangeA1: "A1:B2",
+      activeCellA1: "B2",
+      activeValue: "99",
+      activeFormula: "=SUM(40,59)",
+      activeStyle: { bold: true },
+    });
   });
 
   test("uses CSV display text instead of coerced raw values", () => {

@@ -230,7 +230,9 @@ const ChatShell = memo(function ChatShell({
     canvasPath !== null &&
     isCanvasSupportedFile(canvasPath) &&
     (!contextSidebarCollapsed || isCanvasMaximized);
-  const canvasIsMarkdown = canvasPath !== null && getFilePreviewKind(canvasPath) === "markdown";
+  const canvasKind = canvasPath !== null ? getFilePreviewKind(canvasPath) : "other";
+  const canvasIsMarkdown = canvasKind === "markdown";
+  const canvasIsSpreadsheet = canvasKind === "csv" || canvasKind === "xlsx";
   useEffect(() => {
     const sidebarStateChanged =
       previousSidebarStateRef.current.sidebarCollapsed !== sidebarCollapsed ||
@@ -307,7 +309,7 @@ const ChatShell = memo(function ChatShell({
           showCanvasInTopBar ? () => setCanvasMaximized(!isCanvasMaximized) : undefined
         }
         onPopOutCanvas={
-          showCanvasInTopBar && canvasPath
+          showCanvasInTopBar && canvasPath && !canvasIsSpreadsheet
             ? () => {
                 void showCanvasWindow({ path: canvasPath }).catch(() => {});
               }

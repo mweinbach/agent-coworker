@@ -248,6 +248,32 @@ export function selectionContextFromWorkbook(
   };
 }
 
+export function selectionContextFromSnapshot(
+  snapshot: SpreadsheetWorkbookSnapshot,
+  previousSelection: UniverSelectionContext | null,
+): UniverSelectionContext | null {
+  const sheetName =
+    previousSelection?.sheetName &&
+    snapshot.sheets.some((sheet) => sheet.name === previousSelection.sheetName)
+      ? previousSelection.sheetName
+      : snapshot.activeSheetName;
+  const sheet = snapshot.sheets.find((candidate) => candidate.name === sheetName);
+  if (!sheet) return null;
+  const activeCellA1 =
+    previousSelection?.activeCellA1 ?? previousSelection?.rangeA1.split(":")[0] ?? "A1";
+  const activeCell = cellByAddress(sheet, activeCellA1);
+  const activeFormula = activeCell?.formula ? `=${activeCell.formula}` : undefined;
+
+  return {
+    sheetName,
+    rangeA1: previousSelection?.rangeA1 ?? activeCellA1,
+    activeCellA1,
+    activeValue: activeCell?.value ?? "",
+    ...(activeFormula ? { activeFormula } : {}),
+    ...(activeCell?.style ? { activeStyle: activeCell.style } : {}),
+  };
+}
+
 function sheetSnapshotToUniverSheet(
   sheet: SpreadsheetWorkbookSnapshotSheet,
   kind: SpreadsheetWorkbookSnapshot["kind"],

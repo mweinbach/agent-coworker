@@ -55,6 +55,7 @@ import {
   buildUniverSpreadsheetPrompt,
   cloneUniverWorkbookData,
   diffUniverWorkbookPatches,
+  selectionContextFromSnapshot,
   selectionContextFromWorkbook,
   spreadsheetSnapshotToUniverData,
   type UniverSelectionContext,
@@ -106,6 +107,10 @@ function shouldBlockWindowUnload(saveState: SaveState, saveInFlight: Promise<boo
 
 function idleStateAfterNoPendingOperations(current: SaveState): SaveState {
   return current === "error" ? "error" : "idle";
+}
+
+function isDiskVersionMismatchSaveFailure(message: string): boolean {
+  return message.toLowerCase().includes("changed on disk");
 }
 
 export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreadsheetCanvasProps) {
@@ -408,6 +413,17 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
         const expectedVersion = sourceVersionRef.current ?? undefined;
         const result = await patchSpreadsheetWorkbook(path, operations, expectedVersion);
         if (!result.ok) {
+          if (
+            externalReloadPendingRef.current &&
+            isDiskVersionMismatchSaveFailure(result.error.message)
+          ) {
+            const latestVersion = await loadSpreadsheetFileVersion(path);
+            if (latestVersion.ok) {
+              sourceVersionRef.current = latestVersion.version;
+              externalReloadPendingRef.current = false;
+              showReloadNotice("File changed on disk; retry save to keep canvas edits");
+            }
+          }
           updateSaveState("error");
           setSaveError(result.error.message);
           return false;
@@ -519,6 +535,7 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
     patchSpreadsheetWorkbook,
     path,
     reloadWorkbookFromDisk,
+    showReloadNotice,
     updateSaveState,
     workbook,
   ]);
@@ -552,12 +569,17 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
       return;
     }
     const latestWorkbook = latestWorkbookResult.workbook;
+    const currentSelection = selectionRef.current ?? selection;
+    const latestSelection =
+      latestWorkbook.fileVersion.fingerprint !== currentWorkbook.fileVersion.fingerprint
+        ? selectionContextFromSnapshot(latestWorkbook, currentSelection)
+        : currentSelection;
     workbookRef.current = latestWorkbook;
     sourceVersionRef.current = latestWorkbook.fileVersion;
     const prompt = buildUniverSpreadsheetPrompt({
       path,
       workbook: latestWorkbook,
-      selection: selectionRef.current ?? selection,
+      selection: latestSelection,
       request,
     });
     if (latestWorkbook.fileVersion.fingerprint !== currentWorkbook.fileVersion.fingerprint) {

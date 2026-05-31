@@ -205,7 +205,46 @@ describe("canvas window lifecycle", () => {
     }
   });
 
-  test.serial("opens a canvas window without closing the active preview", async () => {
+  test.serial(
+    "does not expose spreadsheet pop-out while the embedded editor is active",
+    async () => {
+      const harness = setupJsdom({ includeAnimationFrame: true });
+      let root: ReturnType<typeof createRoot> | null = null;
+      try {
+        const container = harness.dom.window.document.getElementById("root");
+        if (!container) throw new Error("missing root");
+        const createdRoot = createRoot(container);
+        root = createdRoot;
+
+        await act(async () => {
+          createdRoot.render(createElement(App));
+          await flushUi();
+        });
+
+        expect(
+          harness.dom.window.document.querySelector("[data-testid='popout-canvas']"),
+        ).toBeNull();
+        expect(showCanvasWindowMock).not.toHaveBeenCalled();
+        expect(useAppStore.getState().filePreview).toEqual({
+          path: "/Users/mweinbach/Projects/agent-coworker/model.xlsx",
+        });
+        expect(canvasUnmounts).toBe(0);
+      } finally {
+        if (root) {
+          const mountedRoot = root;
+          await act(async () => {
+            mountedRoot.unmount();
+          });
+        }
+        harness.restore();
+      }
+    },
+  );
+
+  test.serial("opens a document canvas window without closing the active preview", async () => {
+    useAppStore.setState({
+      filePreview: { path: "/Users/mweinbach/Projects/agent-coworker/notes.md" },
+    } as Partial<AppStoreState>);
     const harness = setupJsdom({ includeAnimationFrame: true });
     let root: ReturnType<typeof createRoot> | null = null;
     try {
@@ -229,10 +268,10 @@ describe("canvas window lifecycle", () => {
       });
 
       expect(showCanvasWindowMock).toHaveBeenCalledWith({
-        path: "/Users/mweinbach/Projects/agent-coworker/model.xlsx",
+        path: "/Users/mweinbach/Projects/agent-coworker/notes.md",
       });
       expect(useAppStore.getState().filePreview).toEqual({
-        path: "/Users/mweinbach/Projects/agent-coworker/model.xlsx",
+        path: "/Users/mweinbach/Projects/agent-coworker/notes.md",
       });
       expect(canvasUnmounts).toBe(0);
     } finally {

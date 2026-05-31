@@ -17,8 +17,8 @@ import {
   formatJsonRpcWorkspaceSpreadsheet,
   patchJsonRpcWorkspaceSpreadsheet,
   previewJsonRpcWorkspacePresentation,
-  previewJsonRpcWorkspaceSpreadsheetWorkbook,
   previewJsonRpcWorkspaceSpreadsheet,
+  previewJsonRpcWorkspaceSpreadsheetWorkbook,
   versionJsonRpcWorkspaceSpreadsheet,
 } from "../store.helpers/jsonRpcSocket";
 

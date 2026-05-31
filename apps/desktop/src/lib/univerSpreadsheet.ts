@@ -2,12 +2,12 @@ import {
   BooleanNumber,
   CellValueType,
   HorizontalAlign,
-  LocaleType,
   type ICellData,
   type IRange,
   type IStyleData,
   type IWorkbookData,
   type IWorksheetData,
+  LocaleType,
 } from "@univerjs/core";
 
 import type {
@@ -94,7 +94,9 @@ export function diffUniverWorkbookPatches(
         });
       }
 
-      const previousStyle = stylePatchFromUniverStyle(resolveUniverStyle(previous, previousCell?.s));
+      const previousStyle = stylePatchFromUniverStyle(
+        resolveUniverStyle(previous, previousCell?.s),
+      );
       const currentStyle = stylePatchFromUniverStyle(resolveUniverStyle(current, currentCell?.s));
       const patch = stylePatchBetween(previousStyle, currentStyle);
       if (Object.keys(patch).length > 0) {
@@ -180,8 +182,7 @@ export function selectionContextFromWorkbook(
     activeCellA1 ?? rangeA1.split(":")[0] ?? "A1",
   );
   const activeStyle =
-    activeCell?.style ??
-    styleFromUniverStyle(resolveUniverStyle(data, currentCellData?.s));
+    activeCell?.style ?? styleFromUniverStyle(resolveUniverStyle(data, currentCellData?.s));
   const activeFormula =
     typeof currentCellData?.f === "string" && currentCellData.f.trim() !== ""
       ? rawInputFromCellData(currentCellData)

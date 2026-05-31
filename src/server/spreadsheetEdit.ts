@@ -579,9 +579,7 @@ function parseStylesheet(xml: string): {
     fontsNode.count = String(fonts.length);
     fillsNode.count = String(fills.length);
     bordersNode.count = String(ensureNodeArray(bordersNode, "border", [defaultBorder()]).length);
-    cellStyleXfsNode.count = String(
-      ensureNodeArray(cellStyleXfsNode, "xf", [defaultXf()]).length,
-    );
+    cellStyleXfsNode.count = String(ensureNodeArray(cellStyleXfsNode, "xf", [defaultXf()]).length);
     cellXfsNode.count = String(cellXfs.length);
   };
 
@@ -690,7 +688,10 @@ function readCellStyleIndex(sheetXml: string, ref: string): string | undefined {
 function applyCellStyle(xml: string, addr: CellAddress, ref: string, styleIndex: number): string {
   const selfClose = new RegExp(`<c\\b[^>]*\\br="${ref}"[^>]*?/>`);
   if (selfClose.test(xml)) {
-    return maybeExpandDimension(xml.replace(selfClose, (cellXml) => setCellStyle(cellXml, styleIndex)), addr);
+    return maybeExpandDimension(
+      xml.replace(selfClose, (cellXml) => setCellStyle(cellXml, styleIndex)),
+      addr,
+    );
   }
   const withChildren = new RegExp(`<c\\b[^>]*\\br="${ref}"[^>]*?>[\\s\\S]*?</c>`);
   if (withChildren.test(xml)) {
@@ -699,7 +700,10 @@ function applyCellStyle(xml: string, addr: CellAddress, ref: string, styleIndex:
       addr,
     );
   }
-  return maybeExpandDimension(insertCell(xml, addr, ref, `<c r="${ref}" s="${styleIndex}"/>`), addr);
+  return maybeExpandDimension(
+    insertCell(xml, addr, ref, `<c r="${ref}" s="${styleIndex}"/>`),
+    addr,
+  );
 }
 
 function setCellStyle(cellXml: string, styleIndex: number): string {

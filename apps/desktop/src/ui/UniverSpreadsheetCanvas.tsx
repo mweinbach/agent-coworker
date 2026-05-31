@@ -9,14 +9,20 @@ import "@univerjs/preset-sheets-hyper-link/lib/index.css";
 import "@univerjs/preset-sheets-table/lib/index.css";
 import "@univerjs/preset-sheets-thread-comment/lib/index.css";
 
-import { LocaleType, mergeLocales, type IDisposable, type IRange, type IWorkbookData } from "@univerjs/core";
-import sheetsConditionalFormattingEnUS from "@univerjs/preset-sheets-conditional-formatting/locales/en-US";
+import {
+  type IDisposable,
+  type IRange,
+  type IWorkbookData,
+  LocaleType,
+  mergeLocales,
+} from "@univerjs/core";
 import { UniverSheetsConditionalFormattingPreset } from "@univerjs/preset-sheets-conditional-formatting";
+import sheetsConditionalFormattingEnUS from "@univerjs/preset-sheets-conditional-formatting/locales/en-US";
 import { UniverSheetsCorePreset } from "@univerjs/preset-sheets-core";
-import sheetsCoreEnUS from "@univerjs/preset-sheets-core/locales/en-US";
 import workerUrl from "@univerjs/preset-sheets-core/lib/worker.js?url";
-import sheetsDataValidationEnUS from "@univerjs/preset-sheets-data-validation/locales/en-US";
+import sheetsCoreEnUS from "@univerjs/preset-sheets-core/locales/en-US";
 import { UniverSheetsDataValidationPreset } from "@univerjs/preset-sheets-data-validation";
+import sheetsDataValidationEnUS from "@univerjs/preset-sheets-data-validation/locales/en-US";
 import { UniverSheetsFilterPreset } from "@univerjs/preset-sheets-filter";
 import sheetsFilterEnUS from "@univerjs/preset-sheets-filter/locales/en-US";
 import { UniverSheetsFindReplacePreset } from "@univerjs/preset-sheets-find-replace";
@@ -160,10 +166,7 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
       try {
         const currentWorkbook = workbookRef.current;
         const sheetName = selectionRef.current?.sheetName ?? currentWorkbook?.activeSheetName;
-        const response = await loadSpreadsheetWorkbook(
-          path,
-          sheetName ? { sheetName } : undefined,
-        );
+        const response = await loadSpreadsheetWorkbook(path, sheetName ? { sheetName } : undefined);
         if (!response.ok) {
           setSaveState("error");
           setSaveError(`Reload failed: ${response.error.message}`);
@@ -328,7 +331,10 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
       const currentWorkbook = workbookApiRef.current;
       const previousData = lastSavedDataRef.current;
       if (!currentWorkbook || !previousData) return [];
-      return diffUniverWorkbookPatches(previousData, cloneUniverWorkbookData(currentWorkbook.save()));
+      return diffUniverWorkbookPatches(
+        previousData,
+        cloneUniverWorkbookData(currentWorkbook.save()),
+      );
     };
 
     const refreshSourceVersion = async () => {
@@ -498,7 +504,10 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
           <span className="truncate">{statusLabel}</span>
         </div>
         {saveError ? <span className="truncate text-xs text-destructive">{saveError}</span> : null}
-        <form className="ml-auto flex min-w-[260px] max-w-[560px] flex-1 items-center gap-2" onSubmit={handlePromptSubmit}>
+        <form
+          className="ml-auto flex min-w-[260px] max-w-[560px] flex-1 items-center gap-2"
+          onSubmit={handlePromptSubmit}
+        >
           <Input
             className="h-8 border-border bg-white text-sm shadow-none"
             value={promptText}

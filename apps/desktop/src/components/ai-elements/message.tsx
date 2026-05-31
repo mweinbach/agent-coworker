@@ -982,8 +982,7 @@ export function rewriteDesktopFileLinksInTree(
     typeof node.properties?.href === "string"
   ) {
     const href = node.properties.href;
-    const rebased =
-      resolveAbsoluteDesktopFileHref(href) ?? resolveRelativeFileHref(href, basePath);
+    const rebased = resolveAbsoluteDesktopFileHref(href) ?? resolveRelativeFileHref(href, basePath);
     if (rebased) {
       node.properties.href = rebased;
     }

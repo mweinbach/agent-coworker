@@ -1,5 +1,5 @@
-import { BooleanNumber, HorizontalAlign } from "@univerjs/core";
 import { describe, expect, test } from "bun:test";
+import { BooleanNumber, HorizontalAlign } from "@univerjs/core";
 
 import type { SpreadsheetWorkbookSnapshot } from "../../../src/shared/spreadsheetPreview";
 import {

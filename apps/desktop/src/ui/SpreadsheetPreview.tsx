@@ -12,10 +12,10 @@ import {
   ItalicIcon,
   Loader2Icon,
   Maximize2Icon,
+  Minimize2Icon,
   MoreHorizontalIcon,
   PaintBucketIcon,
   PaletteIcon,
-  Minimize2Icon,
   Redo2Icon,
   SparklesIcon,
   Table2Icon,
@@ -39,8 +39,8 @@ import type {
   SpreadsheetPreviewCell,
   SpreadsheetPreview as SpreadsheetPreviewData,
   SpreadsheetPreviewResult,
-  SpreadsheetTableSummary,
   SpreadsheetPreviewViewport,
+  SpreadsheetTableSummary,
 } from "../../../../src/shared/spreadsheetPreview";
 import { useAppStore } from "../app/store";
 import { Button } from "../components/ui/button";

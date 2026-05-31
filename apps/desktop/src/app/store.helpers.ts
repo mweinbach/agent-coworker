@@ -5,13 +5,13 @@ import type {
   DesktopFeatureFlags,
 } from "../../../../src/shared/featureFlags";
 import type {
-  SpreadsheetCellEditResult,
   SpreadsheetBatchPatchOperation,
   SpreadsheetBatchPatchResult,
+  SpreadsheetCellEditResult,
+  SpreadsheetCellStylePatch,
   SpreadsheetFileVersionResult,
   SpreadsheetPreviewResult,
   SpreadsheetPreviewViewportRequest,
-  SpreadsheetCellStylePatch,
   SpreadsheetRangeFormatResult,
   SpreadsheetWorkbookSnapshotResult,
 } from "../../../../src/shared/spreadsheetPreview";

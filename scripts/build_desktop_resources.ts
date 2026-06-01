@@ -708,6 +708,44 @@ async function main() {
   });
 
   console.log("[resources] skipped dist/server desktop bundle (unused at runtime)");
+
+  await pruneStaleDesktopBinaryArtifacts(desktopBinariesDir);
+}
+
+async function pruneStaleDesktopBinaryArtifacts(desktopBinariesDir: string): Promise<void> {
+  if (!(await pathExists(desktopBinariesDir))) {
+    return;
+  }
+
+  const staleNames = new Set([".DS_Store"]);
+  const staleSuffixes = [".map", ".map.json", ".tsbuildinfo"];
+
+  let removed = 0;
+  const stack: string[] = [desktopBinariesDir];
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    const entries = await fs.readdir(current, { withFileTypes: true });
+    for (const entry of entries) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(full);
+        continue;
+      }
+      if (!entry.isFile()) {
+        continue;
+      }
+      if (staleNames.has(entry.name) || staleSuffixes.some((suffix) => entry.name.endsWith(suffix))) {
+        await fs.rm(full, { force: true });
+        removed += 1;
+      }
+    }
+  }
+
+  if (removed > 0) {
+    console.log(
+      `[resources] desktop binaries: pruned ${removed} stale artifact${removed === 1 ? "" : "s"} (sourcemaps, tsbuildinfo, .DS_Store)`,
+    );
+  }
 }
 
 if (import.meta.main) {
@@ -722,4 +760,5 @@ export const __internal = {
   syncFoundationModelsSdk,
   ensureWindowsAiElectronInputs,
   syncWindowsAiElectronPackage,
+  pruneStaleDesktopBinaryArtifacts,
 };

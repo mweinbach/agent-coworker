@@ -99,4 +99,45 @@ describe("desktop resource build helpers", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
+
+  test("prunes stale sourcemaps, tsbuildinfo files, and .DS_Store from desktop binaries", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-resources-"));
+    const binariesDir = path.join(root, "apps", "desktop", "resources", "binaries");
+
+    try {
+      await fs.mkdir(path.join(binariesDir, "nested"), { recursive: true });
+      await fs.writeFile(path.join(binariesDir, "cowork-server-aarch64-apple-darwin"), "binary");
+      await fs.writeFile(path.join(binariesDir, "index.js.map"), "sourcemap");
+      await fs.writeFile(path.join(binariesDir, "index.js.map.json"), "sourcemap-json");
+      await fs.writeFile(path.join(binariesDir, "tsconfig.tsbuildinfo"), "buildinfo");
+      await fs.writeFile(path.join(binariesDir, ".DS_Store"), "junk");
+      await fs.writeFile(path.join(binariesDir, "nested", "inner.map"), "nested sourcemap");
+      await fs.writeFile(path.join(binariesDir, "nested", "keep.txt"), "keep me");
+
+      await __internal.pruneStaleDesktopBinaryArtifacts(binariesDir);
+
+      await expect(fs.stat(path.join(binariesDir, "cowork-server-aarch64-apple-darwin"))).resolves.toBeDefined();
+      await expect(fs.stat(path.join(binariesDir, "index.js.map"))).rejects.toThrow();
+      await expect(fs.stat(path.join(binariesDir, "index.js.map.json"))).rejects.toThrow();
+      await expect(fs.stat(path.join(binariesDir, "tsconfig.tsbuildinfo"))).rejects.toThrow();
+      await expect(fs.stat(path.join(binariesDir, ".DS_Store"))).rejects.toThrow();
+      await expect(fs.stat(path.join(binariesDir, "nested", "inner.map"))).rejects.toThrow();
+      await expect(fs.stat(path.join(binariesDir, "nested", "keep.txt"))).resolves.toBeDefined();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("prune is a no-op when the desktop binaries directory does not exist", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-resources-"));
+    try {
+      await expect(
+        __internal.pruneStaleDesktopBinaryArtifacts(
+          path.join(root, "apps", "desktop", "resources", "binaries"),
+        ),
+      ).resolves.toBeUndefined();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
 });

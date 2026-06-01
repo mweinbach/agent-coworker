@@ -54,7 +54,26 @@ async function notarizeWithRetry(notarize, options, retryOptions = {}) {
   }
 }
 
-async function notarizeDesktopBuild(context) {
+function defaultRunCommand(command, args) {
+  const { spawnSync } = require("node:child_process");
+  const result = spawnSync(command, args, { stdio: "inherit" });
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(`${command} ${args.join(" ")} exited with status ${result.status}`);
+  }
+}
+
+function stapleNotarizedApp(appPath, options = {}) {
+  const runCommand = options.runCommand ?? defaultRunCommand;
+  const logger = options.logger ?? console;
+
+  logger.log(`[desktop] Stapling notarization ticket to ${appPath}`);
+  runCommand("xcrun", ["stapler", "staple", appPath]);
+}
+
+async function notarizeDesktopBuild(context, options = {}) {
   if (process.platform !== "darwin") {
     return;
   }
@@ -92,15 +111,22 @@ async function notarizeDesktopBuild(context) {
         teamId,
       };
 
-  await notarizeWithRetry(notarize, {
-    appBundleId: context.packager.appInfo.id,
-    appPath,
-    ...authOptions,
-  });
+  await notarizeWithRetry(
+    notarize,
+    {
+      appBundleId: context.packager.appInfo.id,
+      appPath,
+      ...authOptions,
+    },
+    options.retryOptions,
+  );
+
+  stapleNotarizedApp(appPath, options.stapleOptions);
 }
 
 module.exports = notarizeDesktopBuild;
 module.exports.__private = {
   isRetryableNotarizeError,
   notarizeWithRetry,
+  stapleNotarizedApp,
 };

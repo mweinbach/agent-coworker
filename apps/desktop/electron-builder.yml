@@ -8,6 +8,10 @@ directories:
 files:
   - out/**
   - package.json
+  - "!**/*.map"
+  - "!**/*.map.json"
+  - "!**/*.tsbuildinfo"
+  - "!**/.DS_Store"
 extraResources:
   - from: ../../dist/prompts
     to: dist/prompts
@@ -23,6 +27,12 @@ extraResources:
     to: tray/icon.ico
   - from: resources/binaries
     to: binaries
+    filter:
+      - "**/*"
+      - "!**/*.map"
+      - "!**/*.map.json"
+      - "!**/*.tsbuildinfo"
+      - "!**/.DS_Store"
 afterSign: scripts/notarize.cjs
 publish:
   provider: github

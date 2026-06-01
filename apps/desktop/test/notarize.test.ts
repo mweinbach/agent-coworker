@@ -3,6 +3,8 @@ import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
 
+type RunCommand = (command: string, args: string[]) => void;
+
 type NotarizePrivate = {
   isRetryableNotarizeError(error: unknown): boolean;
   notarizeWithRetry(
@@ -15,13 +17,18 @@ type NotarizePrivate = {
       sleep(ms: number): Promise<void>;
     },
   ): Promise<void>;
+  stapleNotarizedApp(
+    appPath: string,
+    options: { logger: { log(message: string): void }; runCommand: RunCommand },
+  ): void;
 };
 
 const notarizeModule = require("../scripts/notarize.cjs") as {
   __private: NotarizePrivate;
 };
 
-const { isRetryableNotarizeError, notarizeWithRetry } = notarizeModule.__private;
+const { isRetryableNotarizeError, notarizeWithRetry, stapleNotarizedApp } =
+  notarizeModule.__private;
 
 describe("desktop notarization helper", () => {
   test("classifies transient Apple notarization network errors as retryable", () => {
@@ -88,5 +95,32 @@ describe("desktop notarization helper", () => {
     ).rejects.toThrow("NSURLErrorDomain Code=-1009");
 
     expect(attempts).toBe(2);
+  });
+
+  test("staples the notarization ticket onto the app bundle", () => {
+    const calls: Array<[string, string[]]> = [];
+    const logs: string[] = [];
+
+    stapleNotarizedApp("/tmp/Cowork.app", {
+      logger: { log: (message) => logs.push(message) },
+      runCommand: (command, args) => {
+        calls.push([command, args]);
+      },
+    });
+
+    expect(calls).toEqual([["xcrun", ["stapler", "staple", "/tmp/Cowork.app"]]]);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain("/tmp/Cowork.app");
+  });
+
+  test("propagates staple failures so the build fails loud", () => {
+    expect(() =>
+      stapleNotarizedApp("/tmp/Cowork.app", {
+        logger: { log: () => {} },
+        runCommand: () => {
+          throw new Error("stapler staple failed");
+        },
+      }),
+    ).toThrow("stapler staple failed");
   });
 });

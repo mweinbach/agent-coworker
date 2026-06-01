@@ -740,6 +740,134 @@ describe("AgentSession", () => {
       expect(secondSteer).not.toContain("STEER-SKILL-A-BODY-MARKER");
     });
 
+    test("preserves separate batched skill and plugin steer reference contexts", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-steer-batched-refs-"));
+      const skillsDir = path.join(dir, "skills");
+      const skillDir = path.join(skillsDir, "batch-skill");
+      const pluginRoot = path.join(dir, ".cowork", "plugins", "batch-plugin");
+      const pluginManifestDir = path.join(pluginRoot, ".cowork-plugin");
+      const pluginSkillDir = path.join(pluginRoot, "skills", "batch-plugin-skill");
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.mkdir(pluginSkillDir, { recursive: true });
+      await fs.mkdir(pluginManifestDir, { recursive: true });
+      await fs.writeFile(
+        path.join(skillDir, "SKILL.md"),
+        [
+          "---",
+          'name: "batch-skill"',
+          'description: "Batch skill"',
+          "---",
+          "",
+          "BATCH-SKILL-BODY-MARKER",
+        ].join("\n"),
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(pluginManifestDir, "plugin.json"),
+        JSON.stringify({
+          name: "batch-plugin",
+          description: "Batch plugin",
+          skills: "./skills",
+          interface: { displayName: "Batch Plugin" },
+        }),
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(pluginSkillDir, "SKILL.md"),
+        [
+          "---",
+          'name: "batch-plugin-skill"',
+          'description: "Batch plugin skill"',
+          "---",
+          "",
+          "Batch plugin skill body",
+        ].join("\n"),
+        "utf-8",
+      );
+      const config = {
+        ...makeConfig(dir),
+        skillsDirs: [skillsDir],
+        workspacePluginsDir: path.join(dir, ".cowork", "plugins"),
+      };
+      const { session } = makeSession({ config });
+      const stepMessages: unknown[][] = [];
+      let referencedPluginsDuringTurn: unknown;
+      let allowSecondStep!: () => void;
+
+      mockRunTurn.mockImplementation(async (params: any) => {
+        const initialMessages = [{ role: "user", content: "go" }];
+        const stepOne = await params.prepareStep?.({ stepNumber: 1, messages: initialMessages });
+        stepMessages.push(stepOne?.messages ?? initialMessages);
+
+        await new Promise<void>((resolve) => {
+          allowSecondStep = resolve;
+        });
+
+        const stepTwo = await params.prepareStep?.({
+          stepNumber: 2,
+          messages: stepMessages[0]!,
+        });
+        stepMessages.push(stepTwo?.messages ?? stepMessages[0]!);
+        referencedPluginsDuringTurn = (
+          session as unknown as { state: { turnReferencedPlugins?: unknown } }
+        ).state.turnReferencedPlugins;
+
+        return {
+          text: "done",
+          reasoningText: undefined,
+          responseMessages: [{ role: "assistant", content: "done" }],
+        };
+      });
+
+      const turnPromise = session.sendUserMessage("go");
+      await new Promise((r) => setTimeout(r, 10));
+
+      await session.sendSteerMessage(
+        "use batched skill",
+        session.activeTurnId!,
+        "steer-batch-skill",
+        undefined,
+        undefined,
+        [{ kind: "skill", name: "batch-skill" }],
+      );
+      await session.sendSteerMessage(
+        "use batched plugin",
+        session.activeTurnId!,
+        "steer-batch-plugin",
+        undefined,
+        undefined,
+        [{ kind: "plugin", name: "batch-plugin" }],
+      );
+      allowSecondStep();
+      await turnPromise;
+
+      expect(stepMessages).toHaveLength(2);
+      const committedSteers = stepMessages[1]!
+        .filter((message) => isRecord(message) && message.role === "user")
+        .slice(-2);
+      expect(committedSteers).toHaveLength(2);
+      const firstSteer = JSON.stringify(committedSteers[0]);
+      const secondSteer = JSON.stringify(committedSteers[1]);
+      expect(firstSteer).toContain("Reference context for this steer");
+      expect(firstSteer).toContain("use batched skill");
+      expect(firstSteer).toContain("BATCH-SKILL-BODY-MARKER");
+      expect(firstSteer).not.toContain("Batch Plugin");
+      expect(firstSteer).not.toContain("batch-plugin-skill");
+      expect(secondSteer).toContain("Reference context for this steer");
+      expect(secondSteer).toContain("use batched plugin");
+      expect(secondSteer).toContain("## Referenced Plugins");
+      expect(secondSteer).toContain("Batch Plugin");
+      expect(secondSteer).toContain("batch-plugin-skill");
+      expect(secondSteer).not.toContain("BATCH-SKILL-BODY-MARKER");
+      expect(referencedPluginsDuringTurn).toEqual([
+        {
+          name: "batch-plugin",
+          displayName: "Batch Plugin",
+          skillNames: ["batch-plugin:batch-plugin-skill"],
+        },
+      ]);
+    });
+
     test("injects referenced steer plugin context into the same prepared model step", async () => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-steer-pluginref-"));
       const pluginRoot = path.join(dir, ".cowork", "plugins", "demo-plugin");

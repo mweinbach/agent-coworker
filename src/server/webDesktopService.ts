@@ -747,6 +747,7 @@ export class WebDesktopService implements WebDesktopServiceLike {
   private readonly stateChangeListeners = new Set<() => void>();
   private stateWatcher: fsSync.FSWatcher | null = null;
   private stateWatcherDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private stateWatcherLastSignature: string | null = null;
 
   constructor(
     opts: {
@@ -812,6 +813,7 @@ export class WebDesktopService implements WebDesktopServiceLike {
     await writeTextFileAtomic(this.stateFilePath, JSON.stringify(normalized, null, 2), {
       mode: PRIVATE_FILE_MODE,
     });
+    this.stateWatcherLastSignature = this.readStateFileSignature();
     this.notifyStateChangeListeners();
     return normalized;
   }
@@ -839,6 +841,7 @@ export class WebDesktopService implements WebDesktopServiceLike {
     }
 
     fsSync.mkdirSync(this.userDataDir, { recursive: true, mode: PRIVATE_DIR_MODE });
+    this.stateWatcherLastSignature = this.readStateFileSignature();
     this.stateWatcher = fsSync.watch(this.userDataDir, (eventType, filename) => {
       if (filename && filename !== "state.json") {
         return;
@@ -851,6 +854,11 @@ export class WebDesktopService implements WebDesktopServiceLike {
       }
       this.stateWatcherDebounceTimer = setTimeout(() => {
         this.stateWatcherDebounceTimer = null;
+        const signature = this.readStateFileSignature();
+        if (signature === this.stateWatcherLastSignature) {
+          return;
+        }
+        this.stateWatcherLastSignature = signature;
         this.notifyStateChangeListeners();
       }, 25);
       (this.stateWatcherDebounceTimer as { unref?: () => void }).unref?.();
@@ -864,6 +872,23 @@ export class WebDesktopService implements WebDesktopServiceLike {
     }
     this.stateWatcher?.close();
     this.stateWatcher = null;
+    this.stateWatcherLastSignature = null;
+  }
+
+  private readStateFileSignature(): string | null {
+    try {
+      const stat = fsSync.statSync(this.stateFilePath);
+      return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+    } catch (error) {
+      const code =
+        typeof error === "object" && error !== null && "code" in error
+          ? String((error as { code?: unknown }).code)
+          : "";
+      if (code === "ENOENT") {
+        return null;
+      }
+      throw error;
+    }
   }
 
   async listWorkspaces(fallbackCwd: string): Promise<Array<{ name: string; path: string }>> {

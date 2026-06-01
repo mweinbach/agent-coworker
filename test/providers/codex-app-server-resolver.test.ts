@@ -357,10 +357,7 @@ describe("codex app-server resolver", () => {
       },
     });
 
-    expect(probedCalls).toEqual([
-      `${codexCmdPath} --version`,
-      `${codexCmdPath} app-server --help`,
-    ]);
+    expect(probedCalls).toEqual([`${codexCmdPath} --version`, `${codexCmdPath} app-server --help`]);
     expect(command).toEqual({
       command: codexCmdPath,
       args: ["app-server"],

@@ -196,6 +196,8 @@ describe("web desktop routes", () => {
         threads: [],
       });
       expect(changeCount).toBe(1);
+      await Bun.sleep(75);
+      expect(changeCount).toBe(1);
     } finally {
       dispose();
       await service.stopAll();
@@ -264,6 +266,46 @@ describe("web desktop routes", () => {
     } finally {
       disposeFirst();
       disposeSecond();
+      await service.stopAll();
+    }
+  });
+
+  test("desktop service watches existing state files until the listener is disposed", async () => {
+    const userDataDir = await makeTempDir("cowork-web-desktop-existing-watch-userdata-");
+    const statePath = path.join(userDataDir, "state.json");
+    await fs.writeFile(
+      statePath,
+      JSON.stringify({ version: 2, workspaces: [], threads: [] }),
+      "utf8",
+    );
+    const service = new WebDesktopService({ userDataDir });
+    let changeCount = 0;
+    const dispose = service.watchStateChanges(() => {
+      changeCount += 1;
+    });
+
+    try {
+      await fs.writeFile(path.join(userDataDir, "other.json"), "{}", "utf8");
+      await Bun.sleep(75);
+      expect(changeCount).toBe(0);
+
+      await fs.writeFile(
+        statePath,
+        JSON.stringify({ version: 2, workspaces: [], threads: [], developerMode: true }),
+        "utf8",
+      );
+      await waitForCondition(() => changeCount === 1);
+
+      dispose();
+      await fs.writeFile(
+        statePath,
+        JSON.stringify({ version: 2, workspaces: [], threads: [], developerMode: false }),
+        "utf8",
+      );
+      await Bun.sleep(75);
+      expect(changeCount).toBe(1);
+    } finally {
+      dispose();
       await service.stopAll();
     }
   });

@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type * as Electron from "electron";
-
+import { CloudSyncService } from "../../../src/sync/service";
 import type { PersistedState } from "../src/app/types";
 import {
   DESKTOP_EVENT_CHANNELS,
@@ -71,6 +71,20 @@ if (process.platform === "win32") {
 process.env.COWORK_IS_PACKAGED = String(app.isPackaged);
 
 const productAnalytics = new DesktopProductAnalyticsService();
+const cloudSync = new CloudSyncService({
+  env: process.env,
+  log: (level, message, meta) => {
+    if (level === "error") {
+      logError("cloud-sync", message, meta);
+      return;
+    }
+    if (level === "warn") {
+      logWarn("cloud-sync", message, meta);
+      return;
+    }
+    logInfo("cloud-sync", message, meta);
+  },
+});
 const serverManager = new ServerManager({
   getProductAnalyticsState: () => productAnalytics.getPersistedState(),
 });
@@ -722,6 +736,7 @@ if (!gotSingleInstanceLock) {
         mobileRelayBridge,
         persistence,
         productAnalytics,
+        cloudSync,
         diagnostics,
         serverManager,
         updater,
@@ -794,6 +809,7 @@ if (!gotSingleInstanceLock) {
       },
       stopQuickChat: () => quickChatController?.dispose(),
       stopProductAnalytics: () => productAnalytics.shutdown(),
+      stopCloudSync: () => cloudSync.shutdown(),
       stopAllServers: () => serverManager.stopAll(),
       quit: () => app.quit(),
       onError: (error) => {

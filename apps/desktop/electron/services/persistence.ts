@@ -16,10 +16,11 @@ import {
   normalizePersistedProviderUiState,
 } from "../../src/app/providerUiState";
 import type {
+  PersistedCloudSyncSettings,
   PersistedDesktopSettings,
-  PersistedProductAnalyticsState,
   PersistedOnboardingState,
   PersistedPrivacyTelemetrySettings,
+  PersistedProductAnalyticsState,
   PersistedState,
   ThreadRecord,
   TranscriptEvent,
@@ -28,6 +29,7 @@ import type {
   WorkspaceUserProfile,
 } from "../../src/app/types";
 import {
+  normalizeCloudSyncSettings,
   normalizeDesktopSettings,
   normalizePersistedProductAnalyticsState,
   normalizePrivacyTelemetrySettings,
@@ -71,6 +73,7 @@ function defaultState(): PersistedState {
     perWorkspaceSettings: false,
     desktopSettings: normalizeDesktopSettings(),
     privacyTelemetrySettings: normalizePrivacyTelemetrySettings(),
+    cloudSync: normalizeCloudSyncSettings(),
     ...(productAnalytics ? { productAnalytics } : {}),
     desktopFeatureFlagOverrides: {},
     providerUiState: normalizePersistedProviderUiState(undefined),
@@ -155,6 +158,12 @@ function sanitizeDesktopSettings(value: unknown): PersistedDesktopSettings {
 function sanitizePrivacyTelemetrySettings(value: unknown): PersistedPrivacyTelemetrySettings {
   return normalizePrivacyTelemetrySettings(
     isRecord(value) ? (value as PersistedPrivacyTelemetrySettings) : undefined,
+  );
+}
+
+function sanitizeCloudSyncSettings(value: unknown): PersistedCloudSyncSettings {
+  return normalizeCloudSyncSettings(
+    isRecord(value) ? (value as PersistedCloudSyncSettings) : undefined,
   );
 }
 
@@ -388,6 +397,7 @@ async function sanitizePersistedState(value: unknown): Promise<PersistedState> {
       typeof value.perWorkspaceSettings === "boolean" ? value.perWorkspaceSettings : false,
     desktopSettings: sanitizeDesktopSettings(value.desktopSettings),
     privacyTelemetrySettings: sanitizePrivacyTelemetrySettings(value.privacyTelemetrySettings),
+    cloudSync: sanitizeCloudSyncSettings(value.cloudSync),
     ...(productAnalytics ? { productAnalytics } : {}),
     desktopFeatureFlagOverrides: normalizeDesktopFeatureFlagOverrides(
       value.desktopFeatureFlagOverrides,

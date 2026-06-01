@@ -392,6 +392,14 @@ describe("desktop persistence state validation", () => {
         diagnosticsUploadEnabled: true,
         cloudSyncEnabled: false,
       },
+      cloudSync: {
+        enabled: true,
+        provider: "custom",
+        endpoint: " https://sync.example.test ",
+        syncSettings: true,
+        syncWorkspaceMetadata: false,
+        syncThreads: false,
+      },
     });
 
     const loaded = await persistence.loadState();
@@ -406,6 +414,14 @@ describe("desktop persistence state validation", () => {
       aiTracePayloadsEnabled: true,
       diagnosticsUploadEnabled: true,
       cloudSyncEnabled: false,
+    });
+    expect(loaded.cloudSync).toEqual({
+      enabled: true,
+      provider: "custom",
+      endpoint: "https://sync.example.test",
+      syncSettings: true,
+      syncWorkspaceMetadata: false,
+      syncThreads: false,
     });
   });
 
@@ -687,6 +703,14 @@ describe("desktop persistence state validation", () => {
             diagnosticsUploadEnabled: null,
             cloudSyncEnabled: {},
           },
+          cloudSync: {
+            enabled: "yes",
+            provider: "none",
+            endpoint: "/Users/me/secret",
+            syncSettings: false,
+            syncWorkspaceMetadata: "yes",
+            syncThreads: {},
+          },
         },
         null,
         2,
@@ -707,6 +731,13 @@ describe("desktop persistence state validation", () => {
       aiTracePayloadsEnabled: false,
       diagnosticsUploadEnabled: false,
       cloudSyncEnabled: false,
+    });
+    expect(loaded.cloudSync).toEqual({
+      enabled: false,
+      provider: "none",
+      syncSettings: false,
+      syncWorkspaceMetadata: false,
+      syncThreads: false,
     });
     expect(loaded.providerState).toBeUndefined();
   });
@@ -781,6 +812,13 @@ describe("desktop persistence state validation", () => {
         aiTracePayloadsEnabled: false,
         diagnosticsUploadEnabled: false,
         cloudSyncEnabled: false,
+      },
+      cloudSync: {
+        enabled: false,
+        provider: "none",
+        syncSettings: true,
+        syncWorkspaceMetadata: false,
+        syncThreads: false,
       },
       desktopFeatureFlagOverrides: {},
       providerUiState: {

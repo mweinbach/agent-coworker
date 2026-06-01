@@ -18,6 +18,9 @@ export type DesktopIpcDeps = {
   mobileRelayBridge: MobileRelayBridge;
   persistence: PersistenceService;
   productAnalytics?: DesktopProductAnalyticsService;
+  cloudSync?: {
+    enqueuePersistedState(state: PersistedState): Promise<unknown> | unknown;
+  };
   diagnostics: DiagnosticsService;
   serverManager: ServerManager;
   updater: DesktopUpdaterService;

@@ -10,7 +10,6 @@ export function PrivacyTelemetryPage() {
   const setAiTraceTelemetryEnabled = useAppStore((s) => s.setAiTraceTelemetryEnabled);
   const setAiTracePayloadsEnabled = useAppStore((s) => s.setAiTracePayloadsEnabled);
   const setDiagnosticsUploadEnabled = useAppStore((s) => s.setDiagnosticsUploadEnabled);
-  const setCloudSyncEnabled = useAppStore((s) => s.setCloudSyncEnabled);
   const crashReportingConfig = window.cowork?.crashReporting ?? null;
   const crashStatus = !crashReportingConfig?.dsnConfigured
     ? { label: "Not configured", variant: "outline" as const }
@@ -28,7 +27,7 @@ export function PrivacyTelemetryPage() {
     <SettingsPage>
       <SettingsSection
         title="Privacy & Telemetry"
-        description="Cowork is local-first. These toggles only control optional cloud reporting/sync. Disabling them must prevent network telemetry from starting."
+        description="Cowork is local-first. These toggles only control optional cloud reporting. Disabling them must prevent network telemetry from starting."
       >
         <SettingsRow
           title="Crash reports"
@@ -89,17 +88,6 @@ export function PrivacyTelemetryPage() {
               checked={settings.diagnosticsUploadEnabled}
               aria-label="Diagnostic log uploads"
               onCheckedChange={setDiagnosticsUploadEnabled}
-            />
-          }
-        />
-        <SettingsRow
-          title="Cloud sync"
-          description="Syncs selected settings/data only when configured and explicitly enabled. No repository contents."
-          control={
-            <Switch
-              checked={settings.cloudSyncEnabled}
-              aria-label="Cloud sync"
-              onCheckedChange={setCloudSyncEnabled}
             />
           }
         />

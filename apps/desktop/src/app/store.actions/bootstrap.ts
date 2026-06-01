@@ -57,10 +57,12 @@ import { runAfterNextPaintOrTimeout } from "../store.helpers/paintScheduling";
 import {
   type CachedDesktopUiState,
   type CachedSessionSnapshot,
+  normalizeCloudSyncSettings,
   normalizeDesktopSettings,
   normalizePrivacyTelemetrySettings,
   normalizeSidebarSectionOrder,
   normalizeWorkspaceUserProfile,
+  type PersistedCloudSyncSettings,
   type PersistedOnboardingState,
   type PersistedPrivacyTelemetrySettings,
   type PersistedProviderState,
@@ -379,6 +381,19 @@ const privacyTelemetrySettingsSchema = z.preprocess(
   }),
 );
 
+const cloudSyncSettingsSchema = z.preprocess(
+  (value) =>
+    normalizeCloudSyncSettings(isRecord(value) ? (value as PersistedCloudSyncSettings) : undefined),
+  z.object({
+    enabled: z.boolean(),
+    provider: z.enum(["custom", "none"]),
+    endpoint: z.string().optional(),
+    syncSettings: z.boolean(),
+    syncWorkspaceMetadata: z.boolean(),
+    syncThreads: z.boolean(),
+  }),
+);
+
 const persistedStateSchema = z
   .object({
     workspaces: z.preprocess((value) => value ?? [], z.array(persistedWorkspaceSchema)),
@@ -434,6 +449,7 @@ const persistedStateSchema = z
       })
       .optional(),
     privacyTelemetrySettings: privacyTelemetrySettingsSchema.optional(),
+    cloudSync: cloudSyncSettingsSchema.optional(),
     desktopFeatureFlagOverrides: z.preprocess(
       (value) => normalizeDesktopFeatureFlagOverrides(value),
       z
@@ -472,6 +488,7 @@ const persistedStateSchema = z
       perWorkspaceSettings: state.perWorkspaceSettings,
       desktopSettings: state.desktopSettings,
       privacyTelemetrySettings: state.privacyTelemetrySettings,
+      cloudSync: state.cloudSync,
       desktopFeatureFlagOverrides: state.desktopFeatureFlagOverrides,
       providerState,
       providerUiState,
@@ -705,6 +722,7 @@ export function buildCachedDesktopStateSeed(value: unknown): Partial<AppStoreDat
       perWorkspaceSettings: state.perWorkspaceSettings,
       desktopSettings: normalizeDesktopSettings(state.desktopSettings),
       privacyTelemetrySettings: normalizePrivacyTelemetrySettings(state.privacyTelemetrySettings),
+      cloudSync: normalizeCloudSyncSettings(state.cloudSync),
       desktopFeatureFlags,
       desktopFeatureFlagOverrides: state.desktopFeatureFlagOverrides ?? {},
       onboardingState: state.onboarding ?? DEFAULT_ONBOARDING_STATE,
@@ -861,6 +879,7 @@ export function createBootstrapActions(
           privacyTelemetrySettings: normalizePrivacyTelemetrySettings(
             state.privacyTelemetrySettings,
           ),
+          cloudSync: normalizeCloudSyncSettings(state.cloudSync),
           desktopFeatureFlags,
           desktopFeatureFlagOverrides: state.desktopFeatureFlagOverrides ?? {},
           updateState,

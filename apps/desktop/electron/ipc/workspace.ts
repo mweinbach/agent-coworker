@@ -270,6 +270,11 @@ export function registerWorkspaceIpc(context: DesktopIpcModuleContext): void {
     const preparedState =
       deps.productAnalytics?.preparePersistedState(nextState).state ?? nextState;
     await deps.persistence.saveState(preparedState);
+    if (deps.cloudSync) {
+      void Promise.resolve(deps.cloudSync.enqueuePersistedState(preparedState)).catch(() => {
+        // Cloud sync is best-effort and must not affect local persistence.
+      });
+    }
     workspaceRoots.setApprovedWorkspaceRoots(
       preparedState.workspaces.map((workspace) => workspace.path),
     );

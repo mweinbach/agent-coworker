@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  normalizeCloudSyncSettings,
   normalizePersistedProductAnalyticsState,
   normalizePrivacyTelemetrySettings,
-  type PersistedProductAnalyticsState,
+  type PersistedCloudSyncSettings,
   type PersistedPrivacyTelemetrySettings,
+  type PersistedProductAnalyticsState,
 } from "../src/app/types";
 
 describe("privacy telemetry settings", () => {
@@ -53,6 +55,45 @@ describe("privacy telemetry settings", () => {
         aiTracePayloadsEnabled: true,
       }).aiTracePayloadsEnabled,
     ).toBe(true);
+  });
+});
+
+describe("cloud sync settings", () => {
+  test("defaults hidden sync plumbing to disabled", () => {
+    expect(normalizeCloudSyncSettings()).toEqual({
+      enabled: false,
+      provider: "none",
+      syncSettings: true,
+      syncWorkspaceMetadata: false,
+      syncThreads: false,
+    });
+  });
+
+  test("normalizes malformed values safely", () => {
+    expect(
+      normalizeCloudSyncSettings({
+        enabled: "yes",
+        provider: "dropbox",
+        endpoint: "   ",
+        syncSettings: "yes",
+        syncWorkspaceMetadata: 1,
+        syncThreads: null,
+      } as PersistedCloudSyncSettings),
+    ).toEqual({
+      enabled: false,
+      provider: "none",
+      syncSettings: true,
+      syncWorkspaceMetadata: false,
+      syncThreads: false,
+    });
+  });
+
+  test("keeps cloud sync consent separate from legacy telemetry compatibility", () => {
+    const privacySettings = normalizePrivacyTelemetrySettings({ cloudSyncEnabled: true });
+    const cloudSyncSettings = normalizeCloudSyncSettings();
+
+    expect(privacySettings.cloudSyncEnabled).toBe(true);
+    expect(cloudSyncSettings.enabled).toBe(false);
   });
 });
 

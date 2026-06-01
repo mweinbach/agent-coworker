@@ -20,7 +20,6 @@ const defaultStoreActions = {
   setAiTraceTelemetryEnabled: useAppStore.getState().setAiTraceTelemetryEnabled,
   setAiTracePayloadsEnabled: useAppStore.getState().setAiTracePayloadsEnabled,
   setDiagnosticsUploadEnabled: useAppStore.getState().setDiagnosticsUploadEnabled,
-  setCloudSyncEnabled: useAppStore.getState().setCloudSyncEnabled,
 };
 
 describe("privacy telemetry settings page", () => {
@@ -82,11 +81,9 @@ describe("privacy telemetry settings page", () => {
       expect(container.textContent).toContain(
         "Allows user-initiated upload of redacted diagnostic bundles. No automatic upload.",
       );
-      expect(container.textContent).toContain("Cloud sync");
-      expect(container.textContent).toContain(
-        "Syncs selected settings/data only when configured and explicitly enabled. No repository contents.",
-      );
-      expect(container.querySelectorAll('[role="switch"]')).toHaveLength(6);
+      expect(container.textContent).not.toContain("Cloud sync");
+      expect(container.querySelector('[aria-label="Cloud sync"]')).toBeNull();
+      expect(container.querySelectorAll('[role="switch"]')).toHaveLength(5);
 
       const crashReportsSwitch = container.querySelector('[aria-label="Crash reports"]');
       const aiPayloadSwitch = container.querySelector(

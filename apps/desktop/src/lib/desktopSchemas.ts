@@ -15,8 +15,10 @@ import {
   type ProductAnalyticsProperties,
 } from "../../../../src/telemetry/productAnalytics";
 import {
+  normalizeCloudSyncSettings,
   normalizePersistedProductAnalyticsState,
   normalizePrivacyTelemetrySettings,
+  type PersistedCloudSyncSettings,
   type PersistedPrivacyTelemetrySettings,
   type PersistedProductAnalyticsState,
   type PersistedState,
@@ -237,6 +239,23 @@ const persistedPrivacyTelemetrySettingsSchema = z.preprocess(
     aiTracePayloadsEnabled: z.boolean(),
     diagnosticsUploadEnabled: z.boolean(),
     cloudSyncEnabled: z.boolean(),
+  }),
+);
+
+const persistedCloudSyncSettingsSchema = z.preprocess(
+  (value) =>
+    normalizeCloudSyncSettings(
+      value && typeof value === "object" && !Array.isArray(value)
+        ? (value as PersistedCloudSyncSettings)
+        : undefined,
+    ),
+  z.object({
+    enabled: z.boolean(),
+    provider: z.enum(["custom", "none"]),
+    endpoint: z.string().optional(),
+    syncSettings: z.boolean(),
+    syncWorkspaceMetadata: z.boolean(),
+    syncThreads: z.boolean(),
   }),
 );
 
@@ -555,6 +574,7 @@ export const persistedStateInputSchema: z.ZodType<PersistedState> = z
       .optional(),
     desktopSettings: persistedDesktopSettingsSchema,
     privacyTelemetrySettings: persistedPrivacyTelemetrySettingsSchema.optional(),
+    cloudSync: persistedCloudSyncSettingsSchema.optional(),
     productAnalytics: persistedProductAnalyticsStateSchema,
     desktopFeatureFlagOverrides: desktopFeatureFlagOverridesSchema,
     version: z.preprocess(

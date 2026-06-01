@@ -107,6 +107,14 @@ describe("desktop persisted-state schema defaults", () => {
         diagnosticsUploadEnabled: true,
         cloudSyncEnabled: "yes",
       },
+      cloudSync: {
+        enabled: true,
+        provider: "custom",
+        endpoint: " https://sync.example.test ",
+        syncSettings: true,
+        syncWorkspaceMetadata: false,
+        syncThreads: false,
+      },
       productAnalytics: {
         anonymousInstallationId: "anon_1234567890123456",
         lastAppVersion: "1.2.3",
@@ -138,6 +146,14 @@ describe("desktop persisted-state schema defaults", () => {
       aiTracePayloadsEnabled: false,
       diagnosticsUploadEnabled: true,
       cloudSyncEnabled: false,
+    });
+    expect(parsed.cloudSync).toEqual({
+      enabled: true,
+      provider: "custom",
+      endpoint: "https://sync.example.test",
+      syncSettings: true,
+      syncWorkspaceMetadata: false,
+      syncThreads: false,
     });
     expect(parsed.productAnalytics).toEqual({
       anonymousInstallationId: "anon_1234567890123456",

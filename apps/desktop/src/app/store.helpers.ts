@@ -63,6 +63,7 @@ import {
 import { createThreadEventReducer } from "./store.helpers/threadEventReducer";
 import { createTranscriptBuffer } from "./store.helpers/transcriptBuffer";
 import type {
+  CloudSyncSettings,
   DesktopSettings,
   Notification,
   OnboardingStep,
@@ -212,6 +213,7 @@ export type AppStoreState = {
   perWorkspaceSettings: boolean;
   desktopSettings: DesktopSettings;
   privacyTelemetrySettings: PrivacyTelemetrySettings;
+  cloudSync: CloudSyncSettings;
   desktopFeatureFlags: DesktopFeatureFlags;
   desktopFeatureFlagOverrides: DesktopFeatureFlagOverrides;
   updateState: UpdaterState;

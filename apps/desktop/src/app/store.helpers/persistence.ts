@@ -7,6 +7,7 @@ import { normalizePersistedProviderUiState } from "../providerUiState";
 import type { AppStoreState } from "../store.helpers";
 import {
   type CachedDesktopUiState,
+  normalizeCloudSyncSettings,
   normalizePrivacyTelemetrySettings,
   type PersistedState,
 } from "../types";
@@ -54,6 +55,7 @@ function buildPersistedState(state: AppStoreState): PersistedState {
     perWorkspaceSettings: state.perWorkspaceSettings,
     desktopSettings: state.desktopSettings,
     privacyTelemetrySettings: normalizePrivacyTelemetrySettings(state.privacyTelemetrySettings),
+    cloudSync: normalizeCloudSyncSettings(state.cloudSync),
     desktopFeatureFlagOverrides: state.desktopFeatureFlagOverrides,
     ...(providerState ? { providerState } : {}),
     providerUiState,

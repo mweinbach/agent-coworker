@@ -2,6 +2,11 @@ import type { ResearchRecord, ResearchSettings } from "../../../../src/server/re
 import { DEFAULT_RESEARCH_AGENT_ID } from "../../../../src/server/research/types";
 import type { DesktopFeatureFlagOverrides } from "../../../../src/shared/featureFlags";
 import type { SessionFeedItem } from "../../../../src/shared/sessionSnapshot";
+import {
+  type CloudSyncSettings,
+  normalizeCloudSyncSettings,
+  type PersistedCloudSyncSettings,
+} from "../../../../src/sync/types";
 import { normalizeQuickChatShortcutAccelerator } from "../lib/quickChatShortcut";
 import type {
   ApprovalRiskCode,
@@ -179,6 +184,9 @@ export type PersistedProductAnalyticsState = {
   anonymousInstallationId?: string;
   lastAppVersion?: string | null;
 };
+
+export type { CloudSyncSettings, PersistedCloudSyncSettings };
+export { normalizeCloudSyncSettings };
 
 export type PrivacyTelemetrySettings = {
   crashReportsEnabled: boolean;
@@ -368,6 +376,7 @@ export type PersistedState = {
   perWorkspaceSettings?: boolean;
   desktopSettings?: PersistedDesktopSettings;
   privacyTelemetrySettings?: PersistedPrivacyTelemetrySettings;
+  cloudSync?: PersistedCloudSyncSettings;
   productAnalytics?: PersistedProductAnalyticsState;
   desktopFeatureFlagOverrides?: DesktopFeatureFlagOverrides;
   providerState?: PersistedProviderState;

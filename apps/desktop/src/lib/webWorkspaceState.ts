@@ -1,4 +1,4 @@
-import type { PersistedState } from "../app/types";
+import { normalizeCloudSyncSettings, type PersistedState } from "../app/types";
 import {
   DEFAULT_QUICK_CHAT_SHORTCUT_ACCELERATOR,
   normalizeQuickChatShortcutAccelerator,
@@ -78,6 +78,7 @@ function createEmptyState(): PersistedState {
       },
       archivedChatsAutoDeleteDays: 0,
     },
+    cloudSync: normalizeCloudSyncSettings(),
     onboarding: {
       status: "completed",
       completedAt: new Date().toISOString(),
@@ -116,6 +117,7 @@ export function loadPersistedState(): PersistedState {
             : 0,
       },
       desktopFeatureFlagOverrides: parsed.desktopFeatureFlagOverrides ?? {},
+      cloudSync: normalizeCloudSyncSettings(parsed.cloudSync),
       perWorkspaceSettings: parsed.perWorkspaceSettings,
       providerState: parsed.providerState,
       providerUiState: parsed.providerUiState,

@@ -63,12 +63,15 @@ import {
 import { createThreadEventReducer } from "./store.helpers/threadEventReducer";
 import { createTranscriptBuffer } from "./store.helpers/transcriptBuffer";
 import type {
+  CloudSyncSettings,
   DesktopSettings,
   Notification,
   OnboardingStep,
   PersistedOnboardingState,
+  PersistedPrivacyTelemetrySettings,
   PersistedProviderUiState,
   PluginManagementMode,
+  PrivacyTelemetrySettings,
   PromptModalState,
   ResearchCard,
   ResearchDetail,
@@ -209,6 +212,8 @@ export type AppStoreState = {
   showHiddenFiles: boolean;
   perWorkspaceSettings: boolean;
   desktopSettings: DesktopSettings;
+  privacyTelemetrySettings: PrivacyTelemetrySettings;
+  cloudSync: CloudSyncSettings;
   desktopFeatureFlags: DesktopFeatureFlags;
   desktopFeatureFlagOverrides: DesktopFeatureFlagOverrides;
   updateState: UpdaterState;
@@ -304,6 +309,13 @@ export type AppStoreState = {
   setQuickChatShortcutEnabled: (enabled: boolean) => void;
   setQuickChatShortcutAccelerator: (accelerator: string) => void;
   setSidebarSectionOrder: (orderedSections: SidebarSectionKey[]) => void;
+  setCrashReportsEnabled: (enabled: boolean) => void;
+  setProductAnalyticsEnabled: (enabled: boolean) => void;
+  setAiTraceTelemetryEnabled: (enabled: boolean) => void;
+  setAiTracePayloadsEnabled: (enabled: boolean) => void;
+  setDiagnosticsUploadEnabled: (enabled: boolean) => void;
+  setCloudSyncEnabled: (enabled: boolean) => void;
+  setPrivacyTelemetrySettings: (patch: PersistedPrivacyTelemetrySettings) => void;
   setDesktopFeatureFlagOverride: (flagId: DesktopFeatureFlagId, enabled: boolean) => Promise<void>;
   setUpdateState: (state: UpdaterState) => void;
   checkForUpdates: () => Promise<void>;
@@ -653,6 +665,7 @@ async function ensureServerRunning(
         workspacePath: ws.path,
         yolo: ws.yolo,
         featureFlags: get().desktopFeatureFlags,
+        privacyTelemetrySettings: get().privacyTelemetrySettings,
       });
       if (getWorkspaceStartGeneration(workspaceId) !== generation) {
         return;

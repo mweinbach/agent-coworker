@@ -5,8 +5,14 @@ import {
   normalizeDesktopFeatureFlagOverrides,
   resolveDesktopFeatureFlags,
 } from "../../../src/shared/featureFlags";
+import {
+  type CrashReportingEnvironment,
+  resolveCrashReportingConfig,
+} from "../../../src/telemetry/crashReporting";
+import { resolveProductAnalyticsConfig } from "../../../src/telemetry/productAnalytics";
 import type { PersistedState } from "../src/app/types";
 import {
+  type CaptureProductEventInput,
   type ConfirmActionInput,
   type CopyPathInput,
   type CreateDirectoryInput,
@@ -15,8 +21,11 @@ import {
   DESKTOP_IPC_CHANNELS,
   type DeleteTranscriptInput,
   type DesktopApi,
+  type DesktopCrashReportingConfig,
   type DesktopMenuCommand,
   type DesktopNotificationInput,
+  type DesktopProductAnalyticsConfig,
+  type DiagnosticsBundlePathInput,
   type ListDirectoryInput,
   type MobileRelayBridgeState,
   type MobileRelayForgetTrustedPhoneInput,
@@ -41,13 +50,16 @@ import {
   type StartWorkspaceServerInput,
   type StopWorkspaceServerInput,
   type SystemAppearance,
+  type TelemetryStatusSnapshot,
   type TranscriptBatchInput,
   type TrashPathInput,
   type UpdaterState,
+  type UploadDiagnosticsBundleInput,
   type WindowDragPointInput,
   type WriteFileInput,
 } from "../src/lib/desktopApi";
 import {
+  captureProductEventInputSchema,
   confirmActionInputSchema,
   copyPathInputSchema,
   copyTextInputSchema,
@@ -56,6 +68,7 @@ import {
   deleteTranscriptInputSchema,
   desktopMenuCommandSchema,
   desktopNotificationInputSchema,
+  diagnosticsBundlePathInputSchema,
   listDirectoryInputSchema,
   mobileRelayBridgeStateSchema,
   mobileRelayForgetTrustedPhoneInputSchema,
@@ -81,12 +94,28 @@ import {
   startWorkspaceServerInputSchema,
   stopWorkspaceServerInputSchema,
   systemAppearanceSchema,
+  telemetryStatusSnapshotSchema,
   transcriptBatchInputSchema,
   trashPathInputSchema,
   updaterStateSchema,
+  uploadDiagnosticsBundleInputSchema,
   windowDragPointInputSchema,
   writeFileInputSchema,
 } from "../src/lib/desktopSchemas";
+import type { PublicTelemetryEnv } from "./services/publicTelemetryEnv";
+import { resolveDesktopTelemetryStatus } from "./services/telemetryStatus";
+
+declare global {
+  // Defined by electron-vite for safe public build-time telemetry values only.
+  var __COWORK_PUBLIC_TELEMETRY_ENV__: PublicTelemetryEnv | undefined;
+}
+
+function getPreloadEnv(): NodeJS.ProcessEnv {
+  return {
+    ...(globalThis.__COWORK_PUBLIC_TELEMETRY_ENV__ ?? {}),
+    ...process.env,
+  };
+}
 
 function parseWithSchema<T>(schema: z.ZodType<T>, value: unknown, label: string): T {
   const parsed = schema.safeParse(value);
@@ -194,6 +223,10 @@ function assertPersistedState(state: PersistedState): void {
   parseWithSchema(persistedStateInputSchema, state, "state");
 }
 
+function assertCaptureProductEventInput(input: CaptureProductEventInput): void {
+  parseWithSchema(captureProductEventInputSchema, input, "product analytics event");
+}
+
 function assertPickDirectoryInput(opts: PickDirectoryInput): void {
   parseWithSchema(pickDirectoryInputSchema, opts, "pickDirectory options");
 }
@@ -204,6 +237,14 @@ function assertConfirmActionInput(opts: ConfirmActionInput): void {
 
 function assertDesktopNotificationInput(opts: DesktopNotificationInput): void {
   parseWithSchema(desktopNotificationInputSchema, opts, "showNotification options");
+}
+
+function assertDiagnosticsBundlePathInput(opts: DiagnosticsBundlePathInput): void {
+  parseWithSchema(diagnosticsBundlePathInputSchema, opts, "diagnostics bundle path options");
+}
+
+function assertUploadDiagnosticsBundleInput(opts: UploadDiagnosticsBundleInput): void {
+  parseWithSchema(uploadDiagnosticsBundleInputSchema, opts, "uploadDiagnosticsBundle options");
 }
 
 function assertSetWindowAppearanceInput(opts: SetWindowAppearanceInput): void {
@@ -252,19 +293,95 @@ function assertPlatformChromeInfo(value: unknown): asserts value is PlatformChro
   parseWithSchema(platformChromeInfoSchema, value, "platform chrome");
 }
 
+function assertTelemetryStatusSnapshot(value: unknown): asserts value is TelemetryStatusSnapshot {
+  parseWithSchema(telemetryStatusSnapshotSchema, value, "telemetry status");
+}
+
 function resolvePreloadDesktopFeatureFlags(overrides?: DesktopFeatureFlagOverrides) {
   return resolveDesktopFeatureFlags({
     isPackaged: process.env.COWORK_IS_PACKAGED === "true",
-    env: process.env,
+    env: getPreloadEnv(),
     ...(overrides ? { overrides } : {}),
   });
 }
 
+function resolvePreloadCrashReportingConfig(): DesktopCrashReportingConfig {
+  const env = getPreloadEnv();
+  const appVersion = env.COWORK_RELEASE?.trim() || "unknown";
+  const config = resolveCrashReportingConfig({
+    component: "electron-renderer",
+    enabled: env.COWORK_CRASH_REPORTS_ENABLED === "true",
+    env,
+    fallbackRelease: appVersion,
+    appVersion,
+    environment: env.COWORK_SENTRY_ENVIRONMENT as CrashReportingEnvironment | undefined,
+    isPackaged: env.COWORK_IS_PACKAGED === "true",
+    platform: process.platform,
+    arch: process.arch,
+  });
+
+  return {
+    enabled: config.enabled,
+    dsnConfigured: config.dsnConfigured,
+    dsn: config.dsn,
+    release: config.release,
+    environment: config.environment,
+    appVersion,
+    platform: process.platform,
+    arch: process.arch,
+    packaged: env.COWORK_IS_PACKAGED === "true",
+  };
+}
+
+function resolvePreloadProductAnalyticsConfig(): DesktopProductAnalyticsConfig {
+  const env = getPreloadEnv();
+  const appVersion = env.COWORK_RELEASE?.trim() || "unknown";
+  const config = resolveProductAnalyticsConfig({
+    enabled: env.COWORK_PRODUCT_ANALYTICS_ENABLED === "true",
+    env,
+    anonymousId: env.COWORK_PRODUCT_ANALYTICS_INSTALLATION_ID,
+    release: appVersion,
+    appVersion,
+    environment: env.COWORK_POSTHOG_ENVIRONMENT,
+    eventSource: "renderer",
+    packaged: env.COWORK_IS_PACKAGED === "true",
+    platform: process.platform,
+    arch: process.arch,
+  });
+
+  return {
+    enabled: config.enabled,
+    keyConfigured: config.keyConfigured,
+    host: config.host,
+    environment: config.environment,
+    appVersion,
+    platform: process.platform,
+    arch: process.arch,
+    packaged: env.COWORK_IS_PACKAGED === "true",
+  };
+}
+
+function resolvePreloadTelemetryStatus(): TelemetryStatusSnapshot {
+  const env = getPreloadEnv();
+  const appVersion = env.COWORK_RELEASE?.trim() || "unknown";
+  return resolveDesktopTelemetryStatus({
+    env,
+    isPackaged: env.COWORK_IS_PACKAGED === "true",
+    appVersion,
+  });
+}
+
 const desktopFeatures = Object.freeze(resolvePreloadDesktopFeatureFlags());
+const crashReporting = Object.freeze(resolvePreloadCrashReportingConfig());
+const productAnalytics = Object.freeze(resolvePreloadProductAnalyticsConfig());
+const telemetryStatus = Object.freeze(resolvePreloadTelemetryStatus());
 
 const desktopApi = Object.freeze<DesktopApi>({
   features: desktopFeatures,
-  isPackaged: process.env.COWORK_IS_PACKAGED === "true",
+  isPackaged: getPreloadEnv().COWORK_IS_PACKAGED === "true",
+  crashReporting,
+  productAnalytics,
+  telemetryStatus,
   resolveDesktopFeatureFlags: (overrides) =>
     resolvePreloadDesktopFeatureFlags(normalizeDesktopFeatureFlagOverrides(overrides)),
   createOneOffChatWorkspace: (opts: CreateOneOffChatWorkspaceInput = {}) => {
@@ -340,6 +457,11 @@ const desktopApi = Object.freeze<DesktopApi>({
   saveState: (state: PersistedState) => {
     assertPersistedState(state);
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.saveState, state);
+  },
+
+  captureProductEvent: (input: CaptureProductEventInput) => {
+    assertCaptureProductEventInput(input);
+    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.captureProductEvent, input);
   },
 
   readTranscript: (opts: ReadTranscriptInput) => {
@@ -497,6 +619,26 @@ const desktopApi = Object.freeze<DesktopApi>({
   showNotification: (opts: DesktopNotificationInput) => {
     assertDesktopNotificationInput(opts);
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.showNotification, opts);
+  },
+
+  createDiagnosticsBundle: () => ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.createDiagnosticsBundle),
+
+  revealDiagnosticsBundle: (opts: DiagnosticsBundlePathInput) => {
+    assertDiagnosticsBundlePathInput(opts);
+    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.revealDiagnosticsBundle, opts);
+  },
+
+  openLogsFolder: () => ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.openLogsFolder),
+
+  uploadDiagnosticsBundle: (opts: UploadDiagnosticsBundleInput) => {
+    assertUploadDiagnosticsBundleInput(opts);
+    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.uploadDiagnosticsBundle, opts);
+  },
+
+  getTelemetryStatus: async () => {
+    const status = await ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.getTelemetryStatus);
+    assertTelemetryStatusSnapshot(status);
+    return status;
   },
 
   getUpdateState: async () => {

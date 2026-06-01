@@ -192,6 +192,14 @@ describe("settings nav (store)", () => {
         archivedChatsAutoDeleteDays: 0,
         sidebarSectionOrder: ["projects", "chats"],
       },
+      privacyTelemetrySettings: {
+        crashReportsEnabled: false,
+        productAnalyticsEnabled: false,
+        aiTraceTelemetryEnabled: false,
+        aiTracePayloadsEnabled: false,
+        diagnosticsUploadEnabled: false,
+        cloudSyncEnabled: false,
+      },
       threads: [],
       threadRuntimeById: {},
       selectedThreadId: null,
@@ -246,6 +254,11 @@ describe("settings nav (store)", () => {
   test("setSettingsPage accepts desktop page", () => {
     useAppStore.getState().setSettingsPage("desktop");
     expect(useAppStore.getState().settingsPage).toBe("desktop");
+  });
+
+  test("setSettingsPage accepts privacy telemetry page", () => {
+    useAppStore.getState().setSettingsPage("privacyTelemetry");
+    expect(useAppStore.getState().settingsPage).toBe("privacyTelemetry");
   });
 
   test("setSettingsPage accepts backup page", () => {
@@ -561,6 +574,43 @@ describe("settings nav (store)", () => {
       "projects",
     ]);
     expect(savedStates.at(-1)?.desktopSettings?.sidebarSectionOrder).toEqual(["chats", "projects"]);
+  });
+
+  test("setPrivacyTelemetrySettings normalizes and persists privacy settings", () => {
+    useAppStore.getState().setPrivacyTelemetrySettings({
+      crashReportsEnabled: true,
+      aiTracePayloadsEnabled: true,
+    });
+
+    expect(useAppStore.getState().privacyTelemetrySettings).toMatchObject({
+      crashReportsEnabled: true,
+      aiTraceTelemetryEnabled: false,
+      aiTracePayloadsEnabled: false,
+    });
+    expect(savedStates.at(-1)?.privacyTelemetrySettings).toMatchObject({
+      crashReportsEnabled: true,
+      aiTraceTelemetryEnabled: false,
+      aiTracePayloadsEnabled: false,
+    });
+  });
+
+  test("disabling AI trace diagnostics clears persisted AI trace payloads", () => {
+    useAppStore.getState().setPrivacyTelemetrySettings({
+      aiTraceTelemetryEnabled: true,
+      aiTracePayloadsEnabled: true,
+    });
+    expect(useAppStore.getState().privacyTelemetrySettings.aiTracePayloadsEnabled).toBe(true);
+
+    useAppStore.getState().setAiTraceTelemetryEnabled(false);
+
+    expect(useAppStore.getState().privacyTelemetrySettings).toMatchObject({
+      aiTraceTelemetryEnabled: false,
+      aiTracePayloadsEnabled: false,
+    });
+    expect(savedStates.at(-1)?.privacyTelemetrySettings).toMatchObject({
+      aiTraceTelemetryEnabled: false,
+      aiTracePayloadsEnabled: false,
+    });
   });
 
   test("archiveThread archives thread and clears selectedThreadId if active", async () => {

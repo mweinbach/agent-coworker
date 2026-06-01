@@ -4,6 +4,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { ConnectPage } from "./components/ConnectPage";
 import { configureWebAdapter, createWebAdapter } from "./lib/webAdapter";
 import "./styles.css";
+import { CrashReportingErrorBoundary } from "./ui/CrashReportingErrorBoundary";
 
 // Hoisted to module scope so it isn't re-created on each render.
 const App = React.lazy(() => import("./App"));
@@ -49,7 +50,9 @@ function WebEntry() {
     <React.Suspense
       fallback={<div style={{ height: "100vh", background: "var(--surface-window)" }} />}
     >
-      <App />
+      <CrashReportingErrorBoundary>
+        <App />
+      </CrashReportingErrorBoundary>
     </React.Suspense>
   );
 }

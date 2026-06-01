@@ -29,6 +29,7 @@ import {
   updateSkillInstallation,
 } from "../../skills/operations";
 import { buildSkillInstallPreview } from "../../skills/sourceResolver";
+import { captureProductEvent } from "../../telemetry/productAnalytics";
 import { createTools, filterToolsForCodexDynamicBoundary } from "../../tools";
 import type {
   PluginCatalogEntry,
@@ -510,6 +511,11 @@ export class SkillManager {
           ],
           refreshAllWorkspaces: this.isSharedPluginMutationScope(targetScope),
         });
+        captureProductEvent("plugin_installed", {
+          eventSource: "server",
+          status: targetScope,
+          pluginCount: 1,
+        });
         await this.pluginCatalogService.emitPluginDetail(result.pluginId, targetScope);
       } catch (err) {
         this.context.emitError(
@@ -761,6 +767,11 @@ export class SkillManager {
           clearedMutationPendingKeys: [this.skillMutationPendingKey(`install:${targetScope}`)],
           refreshAllWorkspaces: this.isSharedSkillMutationScope(targetScope),
         });
+        captureProductEvent("skill_installed", {
+          eventSource: "server",
+          status: targetScope,
+          skillCount: result.installationIds.length,
+        });
       } catch (err) {
         this.context.emitError(
           "internal_error",
@@ -814,6 +825,11 @@ export class SkillManager {
           ],
           refreshAllWorkspaces: this.isSharedPluginMutationScope(targetScope),
         });
+        captureProductEvent("plugin_installed", {
+          eventSource: "server",
+          status: targetScope,
+          pluginCount: 1,
+        });
         await this.pluginCatalogService.emitPluginDetail(result.pluginId, targetScope);
       } catch (err) {
         this.context.emitError(
@@ -838,6 +854,11 @@ export class SkillManager {
           selectedInstallationId: result.installationIds[0],
           clearedMutationPendingKeys: [this.skillMutationPendingKey(`import:${targetScope}`)],
           refreshAllWorkspaces: this.isSharedSkillMutationScope(skillScope),
+        });
+        captureProductEvent("skill_installed", {
+          eventSource: "server",
+          status: skillScope,
+          skillCount: result.installationIds.length,
         });
       } catch (err) {
         this.context.emitError(

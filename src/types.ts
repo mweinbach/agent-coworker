@@ -691,6 +691,8 @@ export interface ObservabilityConfig {
   secretKey?: string;
   tracingEnvironment?: string;
   release?: string;
+  recordInputs?: boolean;
+  recordOutputs?: boolean;
 }
 
 type ObservabilityHealthStatus = "disabled" | "ready" | "degraded";

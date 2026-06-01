@@ -6,6 +6,7 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { handleWebDesktopRoute } from "../src/server/webDesktopRoutes";
 import { __internal, WebDesktopService } from "../src/server/webDesktopService";
+import { getOneOffChatsRoot } from "../src/utils/oneOffChats";
 
 const cleanupPaths = new Set<string>();
 
@@ -179,6 +180,41 @@ describe("web desktop routes", () => {
     expect(state.desktopFeatureFlagOverrides).toEqual({});
 
     await service.stopAll();
+  });
+
+  test("desktop service allows fs access to global one-off chat session dirs", async () => {
+    const userDataDir = await makeTempDir("cowork-web-desktop-oneoff-userdata-");
+    const workspace = await makeTempDir("cowork-web-desktop-oneoff-ws-");
+    const service = new WebDesktopService({ userDataDir });
+
+    const chatsRoot = getOneOffChatsRoot();
+    await fs.mkdir(chatsRoot, { recursive: true });
+    const sessionDir = await fs.mkdtemp(path.join(chatsRoot, "20260601T000000Z-research-"));
+    cleanupPaths.add(sessionDir);
+    await fs.writeFile(path.join(sessionDir, "report.md"), "# findings\n", "utf8");
+
+    try {
+      const roots = await service.getWorkspaceRoots(workspace);
+      expect(roots).toContain(chatsRoot);
+
+      const listResponse = await handleWebDesktopRoute(
+        new Request(`http://localhost/cowork/fs/list?path=${encodeURIComponent(sessionDir)}`),
+        { cwd: workspace, desktopService: service },
+      );
+      expect(listResponse).not.toBeNull();
+      expect(await readJson(listResponse!)).toEqual([
+        {
+          isDirectory: false,
+          isHidden: false,
+          modifiedAtMs: expect.any(Number),
+          name: "report.md",
+          path: path.join(sessionDir, "report.md"),
+          sizeBytes: 11,
+        },
+      ]);
+    } finally {
+      await service.stopAll();
+    }
   });
 
   test("desktop service notifies watchers when persisted state changes", async () => {

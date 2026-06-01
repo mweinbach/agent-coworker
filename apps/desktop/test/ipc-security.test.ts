@@ -217,6 +217,30 @@ describe("desktop IPC security helpers", () => {
     }
   });
 
+  test("resolveAllowedDirectoryPath and resolveAllowedPath allow one-off chat session dirs", async () => {
+    const tempWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-ws-"));
+    const workspaceRoot = await fs.realpath(tempWorkspace);
+    const home = os.homedir();
+    try {
+      const chatDir = path.join(home, ".cowork", "chats", "20260601T000000Z-research-abc123");
+      const chatFile = path.join(chatDir, "report.md");
+      const unrelatedHomePath = path.join(home, ".cowork", "auth", "codex-cli", "auth.json");
+
+      // Global "New chat" cwd lives under ~/.cowork/chats and must be browseable
+      // even though it is not a persisted project workspace root.
+      expect(() => resolveAllowedDirectoryPath([workspaceRoot], chatDir)).not.toThrow();
+      expect(() => resolveAllowedPath([workspaceRoot], chatFile)).not.toThrow();
+      // Other ~/.cowork locations stay off-limits to the Files panel.
+      expect(() => resolveAllowedPath([workspaceRoot], unrelatedHomePath)).toThrow(
+        "outside allowed workspace roots",
+      );
+      // Chat dirs are allowed even when there are no project roots at all.
+      expect(() => resolveAllowedDirectoryPath([], chatDir)).not.toThrow();
+    } finally {
+      await fs.rm(tempWorkspace, { recursive: true, force: true });
+    }
+  });
+
   test("resolveAllowedRevealPath allows ~/.cowork and ~/.cowork paths for skill folders", async () => {
     const tempWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-ws-"));
     const workspaceRoot = await fs.realpath(tempWorkspace);

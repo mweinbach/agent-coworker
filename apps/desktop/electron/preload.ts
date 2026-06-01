@@ -50,6 +50,7 @@ import {
   type StartWorkspaceServerInput,
   type StopWorkspaceServerInput,
   type SystemAppearance,
+  type TelemetryStatusInput,
   type TelemetryStatusSnapshot,
   type TranscriptBatchInput,
   type TrashPathInput,
@@ -94,6 +95,7 @@ import {
   startWorkspaceServerInputSchema,
   stopWorkspaceServerInputSchema,
   systemAppearanceSchema,
+  telemetryStatusInputSchema,
   telemetryStatusSnapshotSchema,
   transcriptBatchInputSchema,
   trashPathInputSchema,
@@ -295,6 +297,10 @@ function assertPlatformChromeInfo(value: unknown): asserts value is PlatformChro
 
 function assertTelemetryStatusSnapshot(value: unknown): asserts value is TelemetryStatusSnapshot {
   parseWithSchema(telemetryStatusSnapshotSchema, value, "telemetry status");
+}
+
+function assertTelemetryStatusInput(opts: TelemetryStatusInput): void {
+  parseWithSchema(telemetryStatusInputSchema, opts, "telemetry status options");
 }
 
 function resolvePreloadDesktopFeatureFlags(overrides?: DesktopFeatureFlagOverrides) {
@@ -635,8 +641,9 @@ const desktopApi = Object.freeze<DesktopApi>({
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.uploadDiagnosticsBundle, opts);
   },
 
-  getTelemetryStatus: async () => {
-    const status = await ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.getTelemetryStatus);
+  getTelemetryStatus: async (opts: TelemetryStatusInput = {}) => {
+    assertTelemetryStatusInput(opts);
+    const status = await ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.getTelemetryStatus, opts);
     assertTelemetryStatusSnapshot(status);
     return status;
   },

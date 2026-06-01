@@ -385,6 +385,10 @@ export type UploadDiagnosticsBundleInput = DiagnosticsBundlePathInput & {
   confirmed: boolean;
 };
 
+export type TelemetryStatusInput = {
+  privacyTelemetrySettings?: PersistedPrivacyTelemetrySettings;
+};
+
 export type CreateDiagnosticsBundleOutput = {
   path: string;
   createdAt: string;
@@ -509,7 +513,7 @@ export interface DesktopApi {
   uploadDiagnosticsBundle(
     opts: UploadDiagnosticsBundleInput,
   ): Promise<UploadDiagnosticsBundleOutput>;
-  getTelemetryStatus(): Promise<TelemetryStatusSnapshot>;
+  getTelemetryStatus(opts?: TelemetryStatusInput): Promise<TelemetryStatusSnapshot>;
   getUpdateState(): Promise<UpdaterState>;
   checkForUpdates(): Promise<void>;
   quitAndInstallUpdate(): Promise<void>;

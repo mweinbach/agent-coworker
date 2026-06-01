@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-
+import {
+  listGoogleReasoningEffortValuesForModel as listMobileGoogleReasoningEffortValuesForModel,
+  GOOGLE_DYNAMIC_REASONING_EFFORT as MOBILE_GOOGLE_DYNAMIC_REASONING_EFFORT,
+} from "../../apps/mobile/src/cowork-shared/googleThinking";
 import {
   GOOGLE_DYNAMIC_REASONING_EFFORT,
   listGoogleReasoningEffortValuesForModel,
@@ -8,15 +11,27 @@ import {
 
 describe("googleThinking helpers", () => {
   test("flash models expose dynamic plus minimal through high", () => {
-    expect(listGoogleReasoningEffortValuesForModel("gemini-3-flash-preview")).toEqual([
+    const flashReasoningEfforts = [
       GOOGLE_DYNAMIC_REASONING_EFFORT,
       "minimal",
       "low",
       "medium",
       "high",
+    ];
+    expect(listGoogleReasoningEffortValuesForModel("gemini-3-flash-preview")).toEqual([
+      ...flashReasoningEfforts,
+    ]);
+    expect(listGoogleReasoningEffortValuesForModel("gemini-3.1-flash-lite")).toEqual([
+      ...flashReasoningEfforts,
     ]);
     expect(listGoogleReasoningEffortValuesForModel("gemini-3.1-flash-lite-preview")).toEqual([
-      GOOGLE_DYNAMIC_REASONING_EFFORT,
+      ...flashReasoningEfforts,
+    ]);
+  });
+
+  test("mobile flash-lite mirror exposes minimal for canonical model id", () => {
+    expect(listMobileGoogleReasoningEffortValuesForModel("gemini-3.1-flash-lite")).toEqual([
+      MOBILE_GOOGLE_DYNAMIC_REASONING_EFFORT,
       "minimal",
       "low",
       "medium",

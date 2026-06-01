@@ -17,6 +17,7 @@ import {
   isOpenCodeSiblingPair,
 } from "../../providers/opencodeShared";
 import { supportsProviderManagedContinuationProvider } from "../../shared/providerContinuation";
+import { captureProductEvent } from "../../telemetry/productAnalytics";
 import type { AgentConfig, ServerErrorCode, ServerErrorSource } from "../../types";
 import { defaultRuntimeNameForProvider, isProviderName } from "../../types";
 import type { SessionEvent } from "../protocol";
@@ -41,6 +42,27 @@ type PreparedModelSelection = {
 function stringArrayEqual(left: string[] | undefined, right: string[] | undefined): boolean {
   if ((left?.length ?? 0) !== (right?.length ?? 0)) return false;
   return (left ?? []).every((value, index) => value === (right ?? [])[index]);
+}
+
+function captureProviderAuthResult(
+  provider: AgentConfig["provider"],
+  ok: boolean,
+  errorCategory = "auth_failed",
+): void {
+  if (ok) {
+    captureProductEvent("provider_connected", {
+      eventSource: "server",
+      provider,
+      status: "connected",
+    });
+    return;
+  }
+  captureProductEvent("provider_auth_failed", {
+    eventSource: "server",
+    provider,
+    status: "failed",
+    errorCategory,
+  });
 }
 
 export class ProviderAuthManager {
@@ -290,6 +312,7 @@ export class ProviderAuthManager {
     const result = authorizeProviderAuth({ provider: providerRaw, methodId });
     if (!result.ok) {
       this.opts.emitError("provider_error", "provider", result.message);
+      captureProviderAuthResult(providerRaw, false, "authorize_failed");
       this.opts.emitTelemetry("provider.auth.authorize", "error", {
         sessionId: this.opts.sessionId,
         provider: providerRaw,
@@ -373,6 +396,7 @@ export class ProviderAuthManager {
         this.opts.queuePersistSessionSnapshot("provider.auth.callback");
         await this.refreshProviderState(providerRaw);
       }
+      captureProviderAuthResult(providerRaw, result.ok);
       this.opts.emitTelemetry(
         "provider.auth.callback",
         result.ok ? "ok" : "error",
@@ -390,6 +414,7 @@ export class ProviderAuthManager {
         "provider",
         `Provider auth callback failed: ${String(err)}`,
       );
+      captureProviderAuthResult(providerRaw, false, "callback_exception");
       this.opts.emitTelemetry(
         "provider.auth.callback",
         "error",
@@ -526,6 +551,7 @@ export class ProviderAuthManager {
         this.opts.queuePersistSessionSnapshot("provider.auth.api_key");
         await this.refreshProviderState(providerRaw);
       }
+      captureProviderAuthResult(providerRaw, result.ok);
       this.opts.emitTelemetry(
         "provider.auth.api_key",
         result.ok ? "ok" : "error",
@@ -543,6 +569,7 @@ export class ProviderAuthManager {
         "provider",
         `Setting provider API key failed: ${String(err)}`,
       );
+      captureProviderAuthResult(providerRaw, false, "api_key_exception");
       this.opts.emitTelemetry(
         "provider.auth.api_key",
         "error",
@@ -615,6 +642,7 @@ export class ProviderAuthManager {
         this.opts.queuePersistSessionSnapshot("provider.auth.config");
         await this.refreshProviderState(providerRaw);
       }
+      captureProviderAuthResult(providerRaw, result.ok);
       this.opts.emitTelemetry(
         "provider.auth.config",
         result.ok ? "ok" : "error",
@@ -632,6 +660,7 @@ export class ProviderAuthManager {
         "provider",
         `Setting provider credentials failed: ${String(err)}`,
       );
+      captureProviderAuthResult(providerRaw, false, "config_exception");
       this.opts.emitTelemetry(
         "provider.auth.config",
         "error",
@@ -728,6 +757,7 @@ export class ProviderAuthManager {
         this.opts.queuePersistSessionSnapshot("provider.auth.api_key_copy");
         await this.refreshProviderState(providerRaw);
       }
+      captureProviderAuthResult(providerRaw, result.ok);
       this.opts.emitTelemetry(
         "provider.auth.api_key_copy",
         result.ok ? "ok" : "error",
@@ -746,6 +776,7 @@ export class ProviderAuthManager {
         "provider",
         `Copying provider API key failed: ${String(err)}`,
       );
+      captureProviderAuthResult(providerRaw, false, "api_key_copy_exception");
       this.opts.emitTelemetry(
         "provider.auth.api_key_copy",
         "error",

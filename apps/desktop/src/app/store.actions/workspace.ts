@@ -1,5 +1,6 @@
 import { defaultModelForProvider } from "@cowork/providers/catalog";
 
+import { captureProductEvent } from "../../lib/analytics";
 import { pickWorkspaceDirectory, stopWorkspaceServer } from "../../lib/desktopCommands";
 import { applyWorkspaceOrder, reorderSidebarItemsById } from "../../ui/sidebarHelpers";
 import {
@@ -107,6 +108,12 @@ export function createWorkspaceActions(
         selectedWorkspaceId: ws.id,
         view: stayInSettings ? "settings" : "chat",
       }));
+      captureProductEvent("workspace_added", {
+        eventSource: "renderer",
+        workspaceCount: get().workspaces.length,
+        mcpEnabled: ws.defaultEnableMcp,
+        yoloEnabled: ws.yolo,
+      });
       ensureWorkspaceRuntime(get, set, ws.id);
       await persistNow(get);
       await ensureServerRunning(get, set, ws.id);
@@ -176,6 +183,10 @@ export function createWorkspaceActions(
       });
       clearWorkspaceStartState(workspaceId);
       await persistNow(get);
+      captureProductEvent("workspace_removed", {
+        eventSource: "renderer",
+        workspaceCount: get().workspaces.length,
+      });
     },
 
     selectWorkspace: async (workspaceId: string) => {

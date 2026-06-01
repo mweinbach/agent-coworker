@@ -1,20 +1,28 @@
 import type { IpcMainInvokeEvent } from "electron";
 import type { z } from "zod";
-
+import type { CloudSyncStatus } from "../../../../src/sync/types";
 import type { PersistedState } from "../../src/app/types";
 import type {
   DesktopMenuCommand,
   ShowCanvasWindowInput,
   ShowQuickChatWindowInput,
 } from "../../src/lib/desktopApi";
+import type { DiagnosticsService } from "../services/diagnostics";
 import type { MobileRelayBridge } from "../services/mobileRelayBridge";
 import type { PersistenceService } from "../services/persistence";
+import type { DesktopProductAnalyticsService } from "../services/productAnalytics";
 import type { ServerManager } from "../services/serverManager";
 import type { DesktopUpdaterService } from "../services/updater";
 
 export type DesktopIpcDeps = {
   mobileRelayBridge: MobileRelayBridge;
   persistence: PersistenceService;
+  productAnalytics?: DesktopProductAnalyticsService;
+  cloudSync?: {
+    enqueuePersistedState(state: PersistedState): Promise<unknown> | unknown;
+    getStatus?(): CloudSyncStatus;
+  };
+  diagnostics: DiagnosticsService;
   serverManager: ServerManager;
   updater: DesktopUpdaterService;
   showMainWindow: () => Promise<void> | void;

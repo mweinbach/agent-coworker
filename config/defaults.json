@@ -4,11 +4,13 @@
   "knowledgeCutoff": "End of May 2025",
   "toolOutputOverflowChars": 25000,
   "includeRawChunks": true,
-  "observabilityEnabled": true,
+  "observabilityEnabled": false,
   "observability": {
     "provider": "langfuse",
     "baseUrl": "https://cloud.langfuse.com",
-    "otelEndpoint": "https://cloud.langfuse.com/api/public/otel/v1/traces"
+    "otelEndpoint": "https://cloud.langfuse.com/api/public/otel/v1/traces",
+    "recordInputs": false,
+    "recordOutputs": false
   },
   "harness": {
     "reportOnly": true,

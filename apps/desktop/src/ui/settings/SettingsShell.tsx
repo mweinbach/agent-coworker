@@ -9,6 +9,7 @@ import {
   type LucideIcon,
   MonitorIcon,
   RefreshCcwIcon,
+  ShieldCheckIcon,
   SlidersHorizontalIcon,
   UserRoundCogIcon,
   WifiIcon,
@@ -26,6 +27,7 @@ import { BackupPage } from "./pages/BackupPage";
 import { DesktopPage } from "./pages/DesktopPage";
 import { DeveloperPage } from "./pages/DeveloperPage";
 import { FeatureFlagsPage } from "./pages/FeatureFlagsPage";
+import { PrivacyTelemetryPage } from "./pages/PrivacyTelemetryPage";
 import { RemoteAccessPage } from "./pages/RemoteAccessPage";
 import {
   ChatsSettingsPage,
@@ -81,6 +83,10 @@ const SETTINGS_PAGE_META: Record<SettingsPageId, { title: string; description: s
   usage: {
     title: "Usage",
     description: "Token usage and estimated cost across sessions.",
+  },
+  privacyTelemetry: {
+    title: "Privacy & Telemetry",
+    description: "Optional reporting, diagnostics, and cloud sync consent.",
   },
   experiments: {
     title: "Experiments",
@@ -187,6 +193,12 @@ export function getSettingsGroups(
     {
       label: "App",
       pages: [
+        {
+          id: "privacyTelemetry",
+          label: "Privacy & Telemetry",
+          icon: ShieldCheckIcon,
+          render: () => <PrivacyTelemetryPage />,
+        },
         { id: "desktop", label: "Desktop", icon: MonitorIcon, render: () => <DesktopPage /> },
         { id: "updates", label: "Updates", icon: RefreshCcwIcon, render: () => <UpdatesPage /> },
       ],

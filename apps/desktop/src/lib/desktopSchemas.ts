@@ -10,8 +10,21 @@ import {
   OPENAI_REASONING_SUMMARY_VALUES,
   OPENAI_TEXT_VERBOSITY_VALUES,
 } from "../../../../src/shared/openaiCompatibleOptions";
-import type { PersistedState } from "../app/types";
+import {
+  PRODUCT_ANALYTICS_EVENT_NAMES,
+  type ProductAnalyticsProperties,
+} from "../../../../src/telemetry/productAnalytics";
+import {
+  normalizeCloudSyncSettings,
+  normalizePersistedProductAnalyticsState,
+  normalizePrivacyTelemetrySettings,
+  type PersistedCloudSyncSettings,
+  type PersistedPrivacyTelemetrySettings,
+  type PersistedProductAnalyticsState,
+  type PersistedState,
+} from "../app/types";
 import type {
+  CaptureProductEventInput,
   ConfirmActionInput,
   ContextMenuItem,
   CopyPathInput,
@@ -20,6 +33,7 @@ import type {
   DeleteTranscriptInput,
   DesktopMenuCommand,
   DesktopNotificationInput,
+  DiagnosticsBundlePathInput,
   ListDirectoryInput,
   MobileRelayForgetTrustedPhoneInput,
   MobileRelayStartInput,
@@ -43,11 +57,13 @@ import type {
   StartWorkspaceServerInput,
   StopWorkspaceServerInput,
   SystemAppearance,
+  TelemetryStatusSnapshot,
   TranscriptBatchInput,
   TrashPathInput,
   UpdaterProgress,
   UpdaterReleaseInfo,
   UpdaterState,
+  UploadDiagnosticsBundleInput,
   WindowDragPointInput,
   WriteFileInput,
 } from "./desktopApi";
@@ -210,11 +226,102 @@ const desktopFeatureFlagOverridesSchema = z
   .passthrough()
   .optional();
 
+const persistedPrivacyTelemetrySettingsSchema = z.preprocess(
+  (value) =>
+    normalizePrivacyTelemetrySettings(
+      value && typeof value === "object" && !Array.isArray(value)
+        ? (value as PersistedPrivacyTelemetrySettings)
+        : undefined,
+    ),
+  z.object({
+    crashReportsEnabled: z.boolean(),
+    productAnalyticsEnabled: z.boolean(),
+    aiTraceTelemetryEnabled: z.boolean(),
+    aiTracePayloadsEnabled: z.boolean(),
+    diagnosticsUploadEnabled: z.boolean(),
+    cloudSyncEnabled: z.boolean(),
+  }),
+);
+
+const persistedCloudSyncSettingsSchema = z.preprocess(
+  (value) =>
+    normalizeCloudSyncSettings(
+      value && typeof value === "object" && !Array.isArray(value)
+        ? (value as PersistedCloudSyncSettings)
+        : undefined,
+    ),
+  z.object({
+    enabled: z.boolean(),
+    provider: z.enum(["custom", "none"]),
+    endpoint: z.string().optional(),
+    syncSettings: z.boolean(),
+    syncWorkspaceMetadata: z.boolean(),
+    syncThreads: z.boolean(),
+  }),
+);
+
+const telemetryStatusEntrySchema = z
+  .object({
+    label: z.enum([
+      "Disabled",
+      "Not configured",
+      "Enabled",
+      "Metadata only",
+      "Full payload",
+      "Local only",
+      "Upload configured",
+      "Connected",
+      "Error",
+    ]),
+    status: z.enum([
+      "disabled",
+      "not_configured",
+      "enabled",
+      "metadata_only",
+      "full_payload",
+      "local_only",
+      "upload_configured",
+      "connected",
+      "error",
+    ]),
+    configured: z.boolean(),
+    enabled: z.boolean(),
+    message: z.string().optional(),
+  })
+  .strict();
+
+export const telemetryStatusSnapshotSchema: z.ZodType<TelemetryStatusSnapshot> = z
+  .object({
+    globalKillSwitchActive: z.boolean(),
+    crashReports: telemetryStatusEntrySchema,
+    productAnalytics: telemetryStatusEntrySchema,
+    aiTraces: telemetryStatusEntrySchema,
+    diagnosticsUpload: telemetryStatusEntrySchema,
+    cloudSync: telemetryStatusEntrySchema,
+  })
+  .strict();
+
+const persistedProductAnalyticsStateSchema = z.preprocess(
+  (value) =>
+    normalizePersistedProductAnalyticsState(
+      value && typeof value === "object" && !Array.isArray(value)
+        ? (value as PersistedProductAnalyticsState)
+        : undefined,
+    ),
+  z
+    .object({
+      anonymousInstallationId: z.string().trim().min(16).max(128).optional(),
+      lastAppVersion: z.string().trim().min(1).nullable().optional(),
+    })
+    .optional(),
+);
+
 export const startWorkspaceServerInputSchema: z.ZodType<StartWorkspaceServerInput> = z.object({
   workspaceId: safeIdSchema,
   workspacePath: nonEmptyStringSchema,
   yolo: z.boolean(),
   featureFlags: desktopFeatureFlagOverridesSchema.optional(),
+  privacyTelemetrySettings: persistedPrivacyTelemetrySettingsSchema.optional(),
 });
 
 export const createOneOffChatWorkspaceInputSchema: z.ZodType<CreateOneOffChatWorkspaceInput> =
@@ -224,6 +331,21 @@ export const createOneOffChatWorkspaceInputSchema: z.ZodType<CreateOneOffChatWor
 
 export const stopWorkspaceServerInputSchema: z.ZodType<StopWorkspaceServerInput> = z.object({
   workspaceId: safeIdSchema,
+});
+
+const productAnalyticsPropertyValueSchema = z.union([
+  z.string(),
+  z.number(),
+  z.boolean(),
+  z.null(),
+]);
+
+export const captureProductEventInputSchema: z.ZodType<CaptureProductEventInput> = z.object({
+  name: z.enum(PRODUCT_ANALYTICS_EVENT_NAMES),
+  properties: z
+    .record(z.string(), productAnalyticsPropertyValueSchema)
+    .optional()
+    .transform((value) => value as ProductAnalyticsProperties | undefined),
 });
 
 export const readTranscriptInputSchema: z.ZodType<ReadTranscriptInput> = z.object({
@@ -493,6 +615,9 @@ export const persistedStateInputSchema: z.ZodType<PersistedState> = z
       .preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean())
       .optional(),
     desktopSettings: persistedDesktopSettingsSchema,
+    privacyTelemetrySettings: persistedPrivacyTelemetrySettingsSchema.optional(),
+    cloudSync: persistedCloudSyncSettingsSchema.optional(),
+    productAnalytics: persistedProductAnalyticsStateSchema,
     desktopFeatureFlagOverrides: desktopFeatureFlagOverridesSchema,
     version: z.preprocess(
       (value) =>
@@ -519,6 +644,14 @@ export const desktopNotificationInputSchema: z.ZodType<DesktopNotificationInput>
   body: optionalNonEmptyStringSchema,
   silent: z.boolean().optional(),
 });
+
+export const diagnosticsBundlePathInputSchema: z.ZodType<DiagnosticsBundlePathInput> =
+  sharedPathSchema;
+
+export const uploadDiagnosticsBundleInputSchema: z.ZodType<UploadDiagnosticsBundleInput> =
+  sharedPathSchema.extend({
+    confirmed: z.boolean(),
+  });
 
 const updaterProgressSchema: z.ZodType<UpdaterProgress> = z.object({
   percent: z.number().finite(),

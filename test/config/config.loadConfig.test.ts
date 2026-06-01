@@ -315,7 +315,9 @@ describe("loadConfig", () => {
     expect(cfg.preferredChildModel).toBe(defaultModelForProvider("google"));
     expect(cfg.knowledgeCutoff).toBe("January 2025");
     expect(cfg.userName).toBe("");
-    expect(cfg.observabilityEnabled).toBe(true);
+    expect(cfg.observabilityEnabled).toBe(false);
+    expect(cfg.observability?.recordInputs).toBe(false);
+    expect(cfg.observability?.recordOutputs).toBe(false);
     expect(cfg.toolOutputOverflowChars).toBe(25000);
   });
 
@@ -1056,6 +1058,65 @@ describe("loadConfig", () => {
     expect(cfg.observability?.secretKey).toBe("sk-lf-test");
     expect(cfg.observability?.tracingEnvironment).toBe("staging");
     expect(cfg.observability?.release).toBe("release-123");
+    expect(cfg.observability?.recordInputs).toBe(false);
+    expect(cfg.observability?.recordOutputs).toBe(false);
+  });
+
+  test("observability payload shorthand enables input and output recording", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {
+        AGENT_OBSERVABILITY_ENABLED: "true",
+        AGENT_OBSERVABILITY_RECORD_PAYLOADS: "true",
+      },
+    });
+
+    expect(cfg.observabilityEnabled).toBe(true);
+    expect(cfg.observability?.recordInputs).toBe(true);
+    expect(cfg.observability?.recordOutputs).toBe(true);
+  });
+
+  test("specific observability payload env vars override shorthand", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {
+        AGENT_OBSERVABILITY_RECORD_PAYLOADS: "true",
+        AGENT_OBSERVABILITY_RECORD_INPUTS: "false",
+        AGENT_OBSERVABILITY_RECORD_OUTPUTS: "true",
+      },
+    });
+
+    expect(cfg.observability?.recordInputs).toBe(false);
+    expect(cfg.observability?.recordOutputs).toBe(true);
+  });
+
+  test("loads observability payload settings from project config", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    await writeJson(path.join(cwd, ".cowork", "config.json"), {
+      observability: {
+        recordInputs: true,
+        recordOutputs: false,
+      },
+    });
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {},
+    });
+
+    expect(cfg.observability?.recordInputs).toBe(true);
+    expect(cfg.observability?.recordOutputs).toBe(false);
   });
 
   test("enabled observability remains non-fatal when Langfuse keys are missing", async () => {
@@ -1093,6 +1154,29 @@ describe("loadConfig", () => {
     expect(cfg.observabilityEnabled).toBe(false);
     expect(cfg.observability?.publicKey).toBe("pk-lf-test");
     expect(cfg.observability?.secretKey).toBe("sk-lf-test");
+  });
+
+  test("global network telemetry kill switch disables Langfuse config", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {
+        COWORK_DISABLE_NETWORK_TELEMETRY: "1",
+        AGENT_OBSERVABILITY_ENABLED: "true",
+        AGENT_OBSERVABILITY_RECORD_PAYLOADS: "true",
+        LANGFUSE_PUBLIC_KEY: "pk-lf-test",
+        LANGFUSE_SECRET_KEY: "sk-lf-test",
+      },
+    });
+
+    expect(cfg.observabilityEnabled).toBe(false);
+    expect(cfg.observability?.recordInputs).toBe(false);
+    expect(cfg.observability?.recordOutputs).toBe(false);
+    expect(cfg.observability?.publicKey).toBeUndefined();
+    expect(cfg.observability?.secretKey).toBeUndefined();
   });
 });
 

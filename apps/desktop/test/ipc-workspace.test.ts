@@ -35,13 +35,15 @@ describe("workspace IPC", () => {
       string,
       (event: unknown, args?: unknown) => Promise<unknown> | unknown
     >();
+    let managerStartOptions: unknown;
 
     registerWorkspaceIpc({
       deps: {
         mobileRelayBridge: {},
         persistence: {},
         serverManager: {
-          async startWorkspaceServer() {
+          async startWorkspaceServer(opts: unknown) {
+            managerStartOptions = opts;
             return {
               url: "ws://127.0.0.1:7337/ws",
               mobileH3: {
@@ -88,11 +90,23 @@ describe("workspace IPC", () => {
         workspaceId: "ws-1",
         workspacePath: "/tmp/ws-1",
         yolo: false,
-        mobileH3: true,
+        privacyTelemetrySettings: {
+          aiTraceTelemetryEnabled: true,
+          aiTracePayloadsEnabled: false,
+        },
       },
     );
 
     expect(result).toEqual({ url: "ws://127.0.0.1:7337/ws" });
+    expect(managerStartOptions).toMatchObject({
+      workspaceId: "ws-1",
+      workspacePath: "/tmp/ws-1",
+      yolo: false,
+      privacyTelemetrySettings: {
+        aiTraceTelemetryEnabled: true,
+        aiTracePayloadsEnabled: false,
+      },
+    });
   });
 
   test("updates approved roots after saving workspace state", async () => {

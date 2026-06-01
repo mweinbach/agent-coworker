@@ -1,10 +1,22 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
-import {
-  __internal,
-  DesktopUpdaterService,
-  type UpdaterClient,
-} from "../electron/services/updater";
+import type { UpdaterClient } from "../electron/services/updater";
+import { createElectronMock, setElectronMockOverrides } from "./helpers/mockElectron";
+
+let userDataDir = "";
+
+setElectronMockOverrides({
+  app: {
+    getPath: (name: string) => (name === "userData" ? userDataDir : process.cwd()),
+  },
+});
+
+mock.module("electron", () => createElectronMock());
+
+const { __internal, DesktopUpdaterService } = await import("../electron/services/updater");
 
 type Handler = (...args: any[]) => void;
 
@@ -35,6 +47,18 @@ class FakeUpdater implements UpdaterClient {
 }
 
 describe("desktop updater service", () => {
+  beforeEach(async () => {
+    userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-updater-test-"));
+  });
+
+  afterEach(async () => {
+    if (!userDataDir) {
+      return;
+    }
+    await fs.rm(userDataDir, { recursive: true, force: true });
+    userDataDir = "";
+  });
+
   test("resolves autoUpdater from direct CommonJS export shape", () => {
     const updater = new FakeUpdater();
 

@@ -8,6 +8,7 @@ import {
   type DiagnosticsBundlePathInput,
   type OpenExternalUrlInput,
   type SetWindowAppearanceInput,
+  type TelemetryStatusInput,
   type UploadDiagnosticsBundleInput,
 } from "../../src/lib/desktopApi";
 import {
@@ -17,6 +18,7 @@ import {
   diagnosticsBundlePathInputSchema,
   openExternalUrlInputSchema,
   setWindowAppearanceInputSchema,
+  telemetryStatusInputSchema,
   uploadDiagnosticsBundleInputSchema,
 } from "../../src/lib/desktopSchemas";
 import { applyWindowAppearance, getSystemAppearanceSnapshot } from "../services/appearance";
@@ -97,16 +99,29 @@ export function registerSystemIpc(context: DesktopIpcModuleContext): void {
     },
   );
 
-  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.getTelemetryStatus, async () => {
-    const state = await context.deps.persistence.loadState();
-    return resolveDesktopTelemetryStatus({
-      state,
-      env: process.env,
-      isPackaged: app.isPackaged,
-      appVersion: app.getVersion().trim() || "unknown",
-      cloudSyncStatus: context.deps.cloudSync?.getStatus?.() ?? null,
-    });
-  });
+  handleDesktopInvoke(
+    DESKTOP_IPC_CHANNELS.getTelemetryStatus,
+    async (_event, args: TelemetryStatusInput | undefined) => {
+      const input = parseWithSchema(
+        telemetryStatusInputSchema,
+        args ?? {},
+        "telemetry status options",
+      );
+      const state = await context.deps.persistence.loadState();
+      return resolveDesktopTelemetryStatus({
+        state: {
+          ...state,
+          ...(input.privacyTelemetrySettings
+            ? { privacyTelemetrySettings: input.privacyTelemetrySettings }
+            : {}),
+        },
+        env: process.env,
+        isPackaged: app.isPackaged,
+        appVersion: app.getVersion().trim() || "unknown",
+        cloudSyncStatus: context.deps.cloudSync?.getStatus?.() ?? null,
+      });
+    },
+  );
 
   handleDesktopInvoke(
     DESKTOP_IPC_CHANNELS.openExternalUrl,

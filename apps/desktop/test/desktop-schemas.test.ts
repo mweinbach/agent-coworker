@@ -14,6 +14,7 @@ import {
   platformChromeInfoSchema,
   showQuickChatWindowInputSchema,
   startWorkspaceServerInputSchema,
+  telemetryStatusInputSchema,
   updaterStateSchema,
 } from "../src/lib/desktopSchemas";
 
@@ -225,9 +226,25 @@ describe("desktop persisted-state schema defaults", () => {
       title: "Choose workspace",
     });
     expect(copyTextInputSchema.parse("copy me")).toBe("copy me");
+    expect(
+      telemetryStatusInputSchema.parse({
+        privacyTelemetrySettings: {
+          productAnalyticsEnabled: true,
+          aiTracePayloadsEnabled: true,
+        },
+      }).privacyTelemetrySettings,
+    ).toEqual({
+      crashReportsEnabled: false,
+      productAnalyticsEnabled: true,
+      aiTraceTelemetryEnabled: false,
+      aiTracePayloadsEnabled: false,
+      diagnosticsUploadEnabled: false,
+      cloudSyncEnabled: false,
+    });
 
     expect(() => pickDirectoryInputSchema.parse({ title: 42 })).toThrow();
     expect(() => copyTextInputSchema.parse({ text: "not a string" })).toThrow();
+    expect(() => telemetryStatusInputSchema.parse({ extra: true })).toThrow();
   });
 
   test("accepts product analytics IPC event payloads", () => {

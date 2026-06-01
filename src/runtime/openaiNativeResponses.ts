@@ -106,7 +106,9 @@ function openAiModelSupportsXhighReasoning(modelId: string | undefined): boolean
     normalized === "gpt-5.5" ||
     normalized?.startsWith("gpt-5.5-") === true ||
     normalized === "gpt-5.4" ||
-    normalized?.startsWith("gpt-5.4-") === true
+    normalized?.startsWith("gpt-5.4-") === true ||
+    normalized === "gpt-5.2" ||
+    normalized?.startsWith("gpt-5.2-") === true
   );
 }
 

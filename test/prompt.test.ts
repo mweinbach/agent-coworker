@@ -3,14 +3,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
+import { MODEL_REGISTRY_ENTRIES } from "../src/models/registry";
 import {
   loadAgentPrompt,
   loadSubAgentPrompt,
   loadSystemPrompt,
   loadSystemPromptWithSkills,
 } from "../src/prompt";
-import { MODEL_REGISTRY_ENTRIES } from "../src/models/registry";
 import {
   AGENT_ROLE_DEFINITIONS,
   buildSpawnAgentRolePromptLines,

@@ -207,7 +207,6 @@ Cowork ships with server-side tools for:
 - web research: `webSearch`, `webFetch`
 - workflow control: `AskUserQuestion`, `todoWrite`, `spawnAgent`
 - contextual guidance: `skill`, `memory`
-- session diagnostics: `usage`
 
 When agent control is enabled, sessions also expose persistent-agent tools: `listAgents`, `sendAgentInput`, `waitForAgent`, `inspectAgent`, `resumeAgent`, and `closeAgent`.
 

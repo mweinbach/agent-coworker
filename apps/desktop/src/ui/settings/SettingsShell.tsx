@@ -86,7 +86,7 @@ const SETTINGS_PAGE_META: Record<SettingsPageId, { title: string; description: s
   },
   privacyTelemetry: {
     title: "Privacy & Telemetry",
-    description: "Optional reporting, diagnostics, and cloud sync consent.",
+    description: "Optional crash reports, product analytics, and AI trace consent.",
   },
   experiments: {
     title: "Experiments",

@@ -34,6 +34,25 @@ function statusEntry(
   };
 }
 
+function aiTraceStatusEntry(opts: {
+  consent: ReturnType<typeof resolveTelemetryConsent>;
+  telemetry: ReturnType<typeof resolveTelemetryConfig>;
+}): TelemetryStatusEntry {
+  if (opts.telemetry.networkTelemetryDisabled || !opts.consent.aiTraceTelemetryEnabled) {
+    return statusEntry("disabled", false, false);
+  }
+
+  const publicConfigReady = Boolean(
+    opts.telemetry.aiTraces.baseUrl && opts.telemetry.aiTraces.publicKey,
+  );
+  if (!publicConfigReady) {
+    return statusEntry("not_configured", false, false);
+  }
+
+  const status = opts.consent.aiTracePayloadsEnabled ? "full_payload" : "metadata_only";
+  return statusEntry(status, true, true);
+}
+
 export function resolveDesktopTelemetryStatus(opts: {
   state?: PersistedState | null;
   env?: TelemetryEnv;
@@ -75,15 +94,7 @@ export function resolveDesktopTelemetryStatus(opts: {
       telemetry.productAnalytics.keyConfigured,
       telemetry.productAnalytics.enabled,
     ),
-    aiTraces: statusEntry(
-      telemetry.aiTraces.status,
-      Boolean(
-        telemetry.aiTraces.baseUrl &&
-          telemetry.aiTraces.publicKey &&
-          telemetry.aiTraces.hasSecretKey,
-      ),
-      telemetry.aiTraces.enabled,
-    ),
+    aiTraces: aiTraceStatusEntry({ consent, telemetry }),
     diagnosticsUpload: statusEntry(
       telemetry.diagnosticsUpload.status,
       telemetry.diagnosticsUpload.uploadUrlConfigured,

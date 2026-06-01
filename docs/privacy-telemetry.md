@@ -12,22 +12,20 @@ All network telemetry and cloud sync share the resolver in `src/telemetry/config
 | Anonymous product analytics | Off | `productAnalyticsEnabled` | Optional PostHog product event counts. |
 | AI trace diagnostics | Off | `aiTraceTelemetryEnabled` | Optional Langfuse model/turn/tool timing traces. |
 | Include prompts and responses in AI traces | Off | `aiTracePayloadsEnabled` | Full Langfuse payload capture. Only works when AI trace diagnostics is enabled. |
-| Diagnostic log uploads | Off | `diagnosticsUploadEnabled` | User-confirmed upload of a redacted diagnostics bundle. |
-| Cloud sync | Off | `cloudSyncEnabled` | Legacy display-only toggle. Effective v1 sync is controlled by top-level `cloudSync` settings or self-host env. |
 
 ## Status Labels
 
-The desktop Privacy & Telemetry page shows resolver-backed status labels:
+The desktop Privacy & Telemetry page shows resolver-backed network telemetry status labels:
 
 | Integration | Labels |
 | --- | --- |
 | Crash reports | `Disabled`, `Not configured`, `Enabled` |
 | Product analytics | `Disabled`, `Not configured`, `Enabled` |
 | AI traces | `Disabled`, `Metadata only`, `Full payload`, `Not configured` |
-| Diagnostics upload | `Disabled`, `Local only`, `Upload configured` |
-| Cloud sync | `Disabled`, `Not configured`, `Connected`, `Error` |
 
 When `COWORK_DISABLE_NETWORK_TELEMETRY=1`, the page also shows a global kill switch message.
+
+The page does not expose diagnostic-upload or cloud-sync controls/status rows. Diagnostic bundles remain local unless initiated from diagnostics tooling, and cloud sync is managed by its own hidden/self-hosted configuration path.
 
 ## Packaging Modes
 

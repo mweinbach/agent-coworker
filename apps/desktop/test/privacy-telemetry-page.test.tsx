@@ -26,7 +26,6 @@ const defaultStoreActions = {
   setProductAnalyticsEnabled: useAppStore.getState().setProductAnalyticsEnabled,
   setAiTraceTelemetryEnabled: useAppStore.getState().setAiTraceTelemetryEnabled,
   setAiTracePayloadsEnabled: useAppStore.getState().setAiTracePayloadsEnabled,
-  setDiagnosticsUploadEnabled: useAppStore.getState().setDiagnosticsUploadEnabled,
 };
 
 describe("privacy telemetry settings page", () => {
@@ -85,14 +84,12 @@ describe("privacy telemetry settings page", () => {
       expect(container.textContent).toContain(
         "Off by default. Only available when AI trace diagnostics is enabled. Strong warning: this may include prompts, responses, commands, logs, file paths or names, and other content.",
       );
-      expect(container.textContent).toContain("Diagnostic log uploads");
-      expect(container.textContent).toContain(
-        "Allows user-initiated upload of redacted diagnostic bundles. No automatic upload.",
-      );
       expect(container.textContent).toContain("Telemetry status");
-      expect(container.textContent).toContain("Cloud sync");
+      expect(container.textContent).not.toContain("Diagnostic log uploads");
+      expect(container.textContent).not.toContain("Diagnostics upload");
+      expect(container.textContent).not.toContain("Cloud sync");
       expect(container.querySelector('[aria-label="Cloud sync"]')).toBeNull();
-      expect(container.querySelectorAll('[role="switch"]')).toHaveLength(5);
+      expect(container.querySelectorAll('[role="switch"]')).toHaveLength(4);
 
       const crashReportsSwitch = container.querySelector('[aria-label="Crash reports"]');
       const aiPayloadSwitch = container.querySelector(
@@ -187,8 +184,8 @@ describe("privacy telemetry settings page", () => {
       expect(container.textContent).toContain("Enabled");
       expect(container.textContent).toContain("Not configured");
       expect(container.textContent).toContain("Full payload");
-      expect(container.textContent).toContain("Upload configured");
-      expect(container.textContent).toContain("Error");
+      expect(container.textContent).not.toContain("Upload configured");
+      expect(container.textContent).not.toContain("Error");
 
       await act(async () => {
         root.unmount();
@@ -198,7 +195,7 @@ describe("privacy telemetry settings page", () => {
     }
   });
 
-  test("renders metadata-only, local-only, and connected telemetry statuses", async () => {
+  test("renders metadata-only status without diagnostics upload or cloud sync statuses", async () => {
     getTelemetryStatusMock.mockImplementation(async () => ({
       globalKillSwitchActive: false,
       crashReports: {
@@ -243,8 +240,8 @@ describe("privacy telemetry settings page", () => {
       });
 
       expect(container.textContent).toContain("Metadata only");
-      expect(container.textContent).toContain("Local only");
-      expect(container.textContent).toContain("Connected");
+      expect(container.textContent).not.toContain("Local only");
+      expect(container.textContent).not.toContain("Connected");
 
       await act(async () => {
         root.unmount();
@@ -296,6 +293,54 @@ describe("privacy telemetry settings page", () => {
       });
 
       expect(setAiTracePayloadsEnabled).toHaveBeenCalledWith(true);
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("renders AI trace status beside the AI trace diagnostics switch", async () => {
+    getTelemetryStatusMock.mockImplementation(async () => ({
+      ...DEFAULT_TELEMETRY_STATUS,
+      aiTraces: {
+        label: "Not configured",
+        status: "not_configured",
+        configured: false,
+        enabled: false,
+      },
+    }));
+    const harness = setupJsdom();
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        useAppStore.setState({
+          privacyTelemetrySettings: {
+            crashReportsEnabled: false,
+            productAnalyticsEnabled: false,
+            aiTraceTelemetryEnabled: true,
+            aiTracePayloadsEnabled: false,
+            diagnosticsUploadEnabled: false,
+            cloudSyncEnabled: false,
+          },
+        });
+      });
+
+      await act(async () => {
+        root.render(createElement(PrivacyTelemetryPage));
+      });
+
+      const aiTraceSwitch = container.querySelector('[aria-label="AI trace diagnostics"]');
+      if (!(aiTraceSwitch instanceof harness.dom.window.HTMLElement)) {
+        throw new Error("missing AI trace diagnostics switch");
+      }
+
+      expect(aiTraceSwitch.parentElement?.textContent).toContain("Not configured");
 
       await act(async () => {
         root.unmount();

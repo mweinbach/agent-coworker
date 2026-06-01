@@ -138,6 +138,31 @@ describe("telemetry config resolver", () => {
     expect(serverConfig.aiTraces.secretKey).toBe("sk_langfuse");
   });
 
+  test("AI trace runtime export still requires the Langfuse secret", () => {
+    const consent = resolveTelemetryConsent({
+      settings: { aiTraceTelemetryEnabled: true },
+      env: {
+        LANGFUSE_BASE_URL: "https://langfuse.example",
+        LANGFUSE_PUBLIC_KEY: "pk_langfuse",
+      },
+      isPackaged: true,
+      mode: "packaged-public",
+    });
+    const config = resolveTelemetryConfig({
+      consent,
+      env: {
+        LANGFUSE_BASE_URL: "https://langfuse.example",
+        LANGFUSE_PUBLIC_KEY: "pk_langfuse",
+      },
+      isPackaged: true,
+      surface: "server",
+    });
+
+    expect(config.aiTraces.status).toBe("not_configured");
+    expect(config.aiTraces.enabled).toBe(false);
+    expect(config.aiTraces.hasSecretKey).toBe(false);
+  });
+
   test("cloud sync ignores endpoint and token under the kill switch", () => {
     const cloud = resolveCloudSyncConfig({
       persisted: { enabled: true, provider: "custom", endpoint: "https://sync.example/v1" },

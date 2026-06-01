@@ -43,7 +43,7 @@ The workflow fails the public desktop package build if those variables are missi
 | --- | --- |
 | Sentry crash reports | Disabled unless Crash reports is on and `COWORK_SENTRY_DSN` exists. |
 | PostHog product analytics | Disabled unless Anonymous product analytics is on, `COWORK_POSTHOG_KEY` exists, and an anonymous installation id exists. |
-| Langfuse AI traces | Disabled unless AI trace diagnostics is on and `LANGFUSE_BASE_URL`, `LANGFUSE_PUBLIC_KEY`, and runtime-only `LANGFUSE_SECRET_KEY` exist. Metadata-only unless full payload toggle is on. |
+| Langfuse AI traces | Settings status is disabled unless AI trace diagnostics is on and public Langfuse config exists, then metadata-only unless full payload toggle is on. Runtime export still requires the server/runtime-only `LANGFUSE_SECRET_KEY`. |
 
 SDKs must not initialize when disabled or not configured. Disabled/no-config paths must not throw. Langfuse runtime imports `@langfuse/otel` and `@opentelemetry/sdk-node` only after consent, credentials, and kill-switch checks pass.
 

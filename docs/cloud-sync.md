@@ -70,15 +70,6 @@ The queue is best-effort and never blocks app usage or local state persistence. 
 
 Queue and provider errors are logged locally only. They are not sent through product analytics, Sentry, PostHog, or Langfuse.
 
-## Status Labels
-
-The Privacy & Telemetry page reports cloud sync as:
-
-- `Disabled` when sync is off, sync settings are disabled, or `COWORK_DISABLE_NETWORK_TELEMETRY=1`
-- `Not configured` when sync is enabled without a custom endpoint
-- `Connected` when a custom endpoint is configured and the last status is connected or queued
-- `Error` when the last sync operation failed
-
 ## Future Thread Sync
 
 Full thread/content sync is out of scope for v1. Future thread sync must be explicitly designed as end-to-end encrypted sync and must not reuse the current settings snapshot payload for prompts, completions, transcripts, shell output, file contents, or local paths.

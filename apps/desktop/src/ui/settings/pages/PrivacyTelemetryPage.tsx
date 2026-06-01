@@ -73,7 +73,6 @@ export function PrivacyTelemetryPage() {
   const setProductAnalyticsEnabled = useAppStore((s) => s.setProductAnalyticsEnabled);
   const setAiTraceTelemetryEnabled = useAppStore((s) => s.setAiTraceTelemetryEnabled);
   const setAiTracePayloadsEnabled = useAppStore((s) => s.setAiTracePayloadsEnabled);
-  const setDiagnosticsUploadEnabled = useAppStore((s) => s.setDiagnosticsUploadEnabled);
   const [telemetryStatus, setTelemetryStatus] = useState<TelemetryStatusSnapshot | null>(() =>
     typeof window === "undefined" ? null : (window.cowork?.telemetryStatus ?? null),
   );
@@ -99,7 +98,7 @@ export function PrivacyTelemetryPage() {
     <SettingsPage>
       <SettingsSection
         title="Privacy & Telemetry"
-        description="Cowork is local-first. These toggles only control optional cloud reporting. Disabling them must prevent network telemetry from starting."
+        description="Cowork is local-first. These toggles only control optional reporting and AI diagnostics. Disabling them must prevent network telemetry from starting."
       >
         <SettingsRow
           title="Crash reports"
@@ -133,11 +132,14 @@ export function PrivacyTelemetryPage() {
           title="AI trace diagnostics"
           description="Sends high-level model/turn/tool timing metadata for debugging AI behavior."
           control={
-            <Switch
-              checked={settings.aiTraceTelemetryEnabled}
-              aria-label="AI trace diagnostics"
-              onCheckedChange={setAiTraceTelemetryEnabled}
-            />
+            <div className="flex items-center gap-2">
+              {statusBadge(status.aiTraces)}
+              <Switch
+                checked={settings.aiTraceTelemetryEnabled}
+                aria-label="AI trace diagnostics"
+                onCheckedChange={setAiTraceTelemetryEnabled}
+              />
+            </div>
           }
         />
         <SettingsRow
@@ -152,26 +154,15 @@ export function PrivacyTelemetryPage() {
             />
           }
         />
-        <SettingsRow
-          title="Diagnostic log uploads"
-          description="Allows user-initiated upload of redacted diagnostic bundles. No automatic upload."
-          control={
-            <Switch
-              checked={settings.diagnosticsUploadEnabled}
-              aria-label="Diagnostic log uploads"
-              onCheckedChange={setDiagnosticsUploadEnabled}
-            />
-          }
-        />
       </SettingsSection>
       <SettingsSection
         title="Telemetry status"
-        description="Current network telemetry and sync state for this build and configuration."
+        description="Current network telemetry state for this build and configuration."
       >
         {status.globalKillSwitchActive ? (
           <SettingsRow
             title="Global kill switch"
-            description="COWORK_DISABLE_NETWORK_TELEMETRY is active. Network telemetry and cloud sync are disabled."
+            description="COWORK_DISABLE_NETWORK_TELEMETRY is active. Network telemetry is disabled."
             control={<Badge variant="destructive">Disabled</Badge>}
           />
         ) : null}
@@ -189,16 +180,6 @@ export function PrivacyTelemetryPage() {
           title="AI traces"
           description="Langfuse turn/tool tracing."
           control={statusBadge(status.aiTraces)}
-        />
-        <SettingsRow
-          title="Diagnostics upload"
-          description="User-confirmed upload for redacted local diagnostics bundles."
-          control={statusBadge(status.diagnosticsUpload)}
-        />
-        <SettingsRow
-          title="Cloud sync"
-          description="Optional self-hosted sync for redacted settings snapshots."
-          control={statusBadge(status.cloudSync)}
         />
       </SettingsSection>
     </SettingsPage>

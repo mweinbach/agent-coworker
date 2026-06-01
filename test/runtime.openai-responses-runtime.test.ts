@@ -538,7 +538,39 @@ describe("openai responses runtime", () => {
         reasoningEffort: "xhigh",
       },
     });
-    expect(xhighRequest.reasoning).toEqual({ effort: "high", summary: "auto" });
+    expect(xhighRequest.reasoning).toEqual({ effort: "xhigh", summary: "auto" });
+
+    const gpt54Request = openAiNativeInternal.buildOpenAiNativeRequest({
+      provider: "openai",
+      model: {
+        ...model,
+        id: "gpt-5.4",
+        name: "gpt-5.4",
+      },
+      systemPrompt: "You are helpful.",
+      piMessages: [{ role: "user", content: "hello" }],
+      tools: [],
+      streamOptions: {
+        reasoningEffort: "xhigh",
+      },
+    });
+    expect(gpt54Request.reasoning).toEqual({ effort: "xhigh", summary: "auto" });
+
+    const gpt5Request = openAiNativeInternal.buildOpenAiNativeRequest({
+      provider: "openai",
+      model: {
+        ...model,
+        id: "gpt-5",
+        name: "gpt-5",
+      },
+      systemPrompt: "You are helpful.",
+      piMessages: [{ role: "user", content: "hello" }],
+      tools: [],
+      streamOptions: {
+        reasoningEffort: "xhigh",
+      },
+    });
+    expect(gpt5Request.reasoning).toEqual({ effort: "high", summary: "auto" });
 
     const noneRequest = openAiNativeInternal.buildOpenAiNativeRequest({
       provider: "openai",

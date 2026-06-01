@@ -564,7 +564,6 @@ describe("REPL slash command routing", () => {
     const rendered = log.mock.calls[0]?.[0];
     expect(typeof rendered).toBe("string");
     expect(rendered).toContain("  - AskUserQuestion");
-    expect(rendered).toContain("  - ask");
     expect(rendered).toContain("  - spawnAgent");
     expect(rendered).toContain("  - listAgents");
     expect(rendered).toContain("  - sendAgentInput");
@@ -611,7 +610,7 @@ describe("REPL slash command routing", () => {
     expect(typeof rendered).toBe("string");
     expect(rendered).toContain("  - spawnAgent");
     expect(rendered).toContain("  - memory");
-    expect(rendered).toContain("  - usage");
+    expect(rendered).not.toContain("  - usage");
     expect(rendered).not.toContain("  - bash");
     expect(rendered).not.toContain("  - read");
     expect(rendered).not.toContain("  - write");
@@ -620,7 +619,6 @@ describe("REPL slash command routing", () => {
     expect(rendered).not.toContain("  - grep");
     expect(rendered).not.toContain("  - webSearch");
     expect(rendered).not.toContain("  - webFetch");
-    expect(rendered).not.toContain("  - notebookEdit");
   });
 
   test("/reasoning-effort refuses non-openai-compatible providers", async () => {

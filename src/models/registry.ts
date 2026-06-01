@@ -25,7 +25,7 @@ import fireworksGlm5p1 from "../../config/models/fireworks/accounts-fireworks-mo
 import fireworksKimiK2p6 from "../../config/models/fireworks/accounts-fireworks-models-kimi-k2p6.json";
 import fireworksMinimaxM2p7 from "../../config/models/fireworks/accounts-fireworks-models-minimax-m2p7.json";
 import fireworksQwen3p6Plus from "../../config/models/fireworks/accounts-fireworks-models-qwen3p6-plus.json";
-import googleGemini31FlashLitePreview from "../../config/models/google/gemini-3.1-flash-lite-preview.json";
+import googleGemini31FlashLite from "../../config/models/google/gemini-3.1-flash-lite.json";
 import googleGemini31ProPreview from "../../config/models/google/gemini-3.1-pro-preview.json";
 import googleGemini31ProPreviewCustomtools from "../../config/models/google/gemini-3.1-pro-preview-customtools.json";
 import googleGemini35Flash from "../../config/models/google/gemini-3.5-flash.json";
@@ -35,6 +35,8 @@ import openaiGpt52 from "../../config/models/openai/gpt-5.2.json";
 import openaiGpt52Pro from "../../config/models/openai/gpt-5.2-pro.json";
 import openaiGpt54 from "../../config/models/openai/gpt-5.4.json";
 import openaiGpt54Mini from "../../config/models/openai/gpt-5.4-mini.json";
+import openaiGpt54Nano from "../../config/models/openai/gpt-5.4-nano.json";
+import openaiGpt54Pro from "../../config/models/openai/gpt-5.4-pro.json";
 import openaiGpt55 from "../../config/models/openai/gpt-5.5.json";
 import openaiGpt5Mini from "../../config/models/openai/gpt-5-mini.json";
 import opencodeGoGlm5 from "../../config/models/opencode-go/glm-5.json";
@@ -115,7 +117,7 @@ const RAW_MODEL_REGISTRY_ENTRIES = [
   antigravityGemini35Flash,
   antigravityGemini31Pro,
   antigravityGemini31FlashLite,
-  googleGemini31FlashLitePreview,
+  googleGemini31FlashLite,
   googleGemini31ProPreview,
   googleGemini31ProPreviewCustomtools,
   openaiGpt5Mini,
@@ -124,6 +126,8 @@ const RAW_MODEL_REGISTRY_ENTRIES = [
   openaiGpt55,
   openaiGpt54,
   openaiGpt54Mini,
+  openaiGpt54Nano,
+  openaiGpt54Pro,
   nvidiaNemotron3Super120bA12b,
   opencodeGoGlm5,
   opencodeGoKimiK25,
@@ -207,6 +211,7 @@ const LEGACY_MODEL_ALIASES: Record<string, string> = {
   "codex-cli:gpt-5.1-codex-mini": "codex-cli:gpt-5.4",
   "codex-cli:gpt-5.2-codex": "codex-cli:gpt-5.4",
   "google:gemini-3-pro-preview": "google:gemini-3.1-pro-preview-customtools",
+  "google:gemini-3.1-flash-lite-preview": "google:gemini-3.1-flash-lite",
   "antigravity:gemini-3.1-pro": "antigravity:gemini-3.1-pro-preview",
 };
 

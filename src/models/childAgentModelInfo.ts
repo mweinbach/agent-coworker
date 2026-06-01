@@ -77,8 +77,10 @@ const kimi26Turbo = {
 
 const CHILD_AGENT_MODEL_INFO_BY_KEY: Readonly<Record<string, ChildAgentModelInfo>> = {
   [key("openai", "gpt-5.5")]: frontierCoding,
+  [key("openai", "gpt-5.4-pro")]: deepReasoning,
   [key("openai", "gpt-5.4")]: frontierCoding,
   [key("openai", "gpt-5.4-mini")]: frontierCoding,
+  [key("openai", "gpt-5.4-nano")]: fastGeneral,
   [key("openai", "gpt-5.2")]: balancedGeneral,
   [key("openai", "gpt-5.2-pro")]: deepReasoning,
   [key("openai", "gpt-5-mini")]: fastGeneral,
@@ -102,7 +104,7 @@ const CHILD_AGENT_MODEL_INFO_BY_KEY: Readonly<Record<string, ChildAgentModelInfo
   [key("google", "gemini-3.1-pro-preview")]: geminiPro,
   [key("google", "gemini-3.1-pro-preview-customtools")]: geminiPro,
   [key("google", "gemini-3-flash-preview")]: geminiFlash,
-  [key("google", "gemini-3.1-flash-lite-preview")]: geminiFlash,
+  [key("google", "gemini-3.1-flash-lite")]: geminiFlash,
   [key("google", "gemini-3.5-flash")]: geminiFlash,
 
   [key("nvidia", "nvidia/nemotron-3-super-120b-a12b")]: openReasoner,

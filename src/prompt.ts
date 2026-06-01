@@ -94,104 +94,19 @@ async function resolveSystemTemplatePath(config: AgentConfig): Promise<string> {
   }
 }
 
-type PromptTemplateOverlaySpec = {
-  extends: string;
-  replacements?: Array<{ old: string; new: string }>;
-};
-
 function normalizePromptTemplateNewlines(value: string): string {
   return value.replace(/\r\n?/g, "\n");
 }
 
-function countOccurrences(haystack: string, needle: string): number {
-  if (!needle) return 0;
-  let count = 0;
-  let start = 0;
-  while (true) {
-    const found = haystack.indexOf(needle, start);
-    if (found === -1) {
-      return count;
-    }
-    count += 1;
-    start = found + needle.length;
-  }
-}
-
-function parsePromptTemplateOverlaySpec(
-  raw: string,
-  templatePath: string,
-): PromptTemplateOverlaySpec {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (error) {
-    throw new Error(`Invalid JSON in prompt template overlay ${templatePath}: ${String(error)}`);
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`Prompt template overlay must contain a JSON object: ${templatePath}`);
-  }
-  const overlay = parsed as { extends?: unknown; replacements?: unknown };
-  if (typeof overlay.extends !== "string" || overlay.extends.trim().length === 0) {
-    throw new Error(
-      `Prompt template overlay must include a non-empty string "extends": ${templatePath}`,
-    );
-  }
-  if (overlay.replacements !== undefined && !Array.isArray(overlay.replacements)) {
-    throw new Error(`Prompt template overlay replacements must be an array: ${templatePath}`);
-  }
-  const replacements = (overlay.replacements ?? []).map((replacement, index) => {
-    if (!replacement || typeof replacement !== "object" || Array.isArray(replacement)) {
-      throw new Error(
-        `Prompt template overlay replacement ${index} must be an object: ${templatePath}`,
-      );
-    }
-    const candidate = replacement as { old?: unknown; new?: unknown };
-    if (typeof candidate.old !== "string" || typeof candidate.new !== "string") {
-      throw new Error(
-        `Prompt template overlay replacement ${index} must include string old/new values: ${templatePath}`,
-      );
-    }
-    return { old: candidate.old, new: candidate.new };
-  });
-  return {
-    extends: overlay.extends,
-    ...(replacements.length > 0 ? { replacements } : {}),
-  };
-}
-
-async function loadPromptTemplate(
-  templatePath: string,
-  ancestors = new Set<string>(),
-): Promise<string> {
+/**
+ * Load a model-specific system prompt template. Each model maps to a single,
+ * self-contained Markdown template (see `promptTemplate` in the model registry);
+ * dynamic sections are filled later via `{{...}}` template variables, not by
+ * composing/overlaying separate files. Newlines are normalized to `\n`.
+ */
+async function loadPromptTemplate(templatePath: string): Promise<string> {
   const resolvedTemplatePath = path.resolve(templatePath);
-  if (ancestors.has(resolvedTemplatePath)) {
-    throw new Error(`Prompt template overlay cycle detected at ${resolvedTemplatePath}`);
-  }
-
-  const raw = normalizePromptTemplateNewlines(await fs.readFile(resolvedTemplatePath, "utf-8"));
-  if (!resolvedTemplatePath.endsWith(".json")) {
-    return raw;
-  }
-
-  const overlay = parsePromptTemplateOverlaySpec(raw, resolvedTemplatePath);
-  const nextAncestors = new Set(ancestors);
-  nextAncestors.add(resolvedTemplatePath);
-  let prompt = await loadPromptTemplate(
-    path.resolve(path.dirname(resolvedTemplatePath), overlay.extends),
-    nextAncestors,
-  );
-
-  for (const replacement of overlay.replacements ?? []) {
-    const occurrences = countOccurrences(prompt, replacement.old);
-    if (occurrences !== 1) {
-      throw new Error(
-        `Prompt template overlay replacement must match exactly once in ${overlay.extends}; got ${occurrences} matches in ${resolvedTemplatePath}`,
-      );
-    }
-    prompt = prompt.replace(replacement.old, replacement.new);
-  }
-
-  return prompt;
+  return normalizePromptTemplateNewlines(await fs.readFile(resolvedTemplatePath, "utf-8"));
 }
 
 function stripPromptLine(prompt: string, matcher: RegExp): string {
@@ -217,50 +132,28 @@ function renderTemplateVariables(prompt: string, vars: Record<string, string>): 
   return out.replace(/\{\{([A-Za-z0-9_]+)\}\}/g, (match, key: string) => vars[key] ?? match);
 }
 
+// Image-input guidance in the prompt templates is wrapped in
+// `<image_input>...</image_input>` spans (see prompts/system.md). Because the markup
+// lives inline with the guidance it gates, there is no separate set of phrase-matching
+// regexes to keep in sync with the wording — edit the prompt freely and the spans travel
+// with it. A regression test renders every text-only model and asserts the guidance is
+// gone, so a new text-only model on an un-marked-up template fails loudly instead of
+// silently shipping image instructions.
+const IMAGE_INPUT_SPAN = /<image_input>[\s\S]*?<\/image_input>/g;
+const IMAGE_INPUT_DELIMITERS = /<\/?image_input>/g;
+
 function renderCapabilitySpecificPrompt(
   prompt: string,
   modelMetadata: ResolvedModelMetadata,
 ): string {
-  if (modelMetadata.supportsImageInput) return prompt;
-
-  let out = prompt;
-  const replacements: Array<[RegExp, string]> = [
-    [/(text,\s*CSV,\s*)images(,\s*PDFs)/gi, "$1PDFs"],
-    [/(text,\s*images,\s*and\s*)PDFs/gi, "text and PDFs"],
-    [
-      /(text files,\s*)images\s*\(returned as visual content if the model supports it\),\s*and\s*PDFs/gi,
-      "text files and PDFs",
-    ],
-    [/(Supports\s*)text,\s*images,\s*and\s*PDFs/gi, "$1text and PDFs"],
-    [
-      /(supports\s*)text files,\s*images\s*\(visual content\),\s*and\s*PDFs/gi,
-      "$1text files and PDFs",
-    ],
-    [/(creating a PDF from uploaded )images/gi, "$1files"],
-  ];
-
-  for (const [pattern, replacement] of replacements) {
-    out = out.replace(pattern, replacement);
+  if (modelMetadata.supportsImageInput) {
+    // Multimodal: keep the guidance, drop only the delimiters. Stripping just the tag
+    // text reproduces the original wording byte-for-byte.
+    return prompt.replace(IMAGE_INPUT_DELIMITERS, "");
   }
-
-  // Keep these patterns aligned with prompt template wording; non-image models still
-  // rely on stripping matching guidance lines rather than template conditionals here.
-  const imageGuidancePatterns = [
-    /visual content for supported images/i,
-    /if read returns an image/i,
-    /do not ask the user to re-upload it just because it is visual/i,
-    /url points directly to an image/i,
-    /download a direct image url and inspect it with `read`/i,
-    /downloaded path to inspect it visually/i,
-    /uploads an image of text/i,
-    /images might require both the pdf skill and an image processing skill/i,
-  ];
-
-  for (const pattern of imageGuidancePatterns) {
-    out = stripPromptLine(out, pattern);
-  }
-
-  return out;
+  // Text-only: omit the delimited image-input guidance entirely, then collapse any blank
+  // lines left where a whole paragraph was removed.
+  return prompt.replace(IMAGE_INPUT_SPAN, "").replace(/\n{3,}/g, "\n\n");
 }
 
 function renderMemorySpecificPrompt(prompt: string, enabled: boolean): string {
@@ -477,7 +370,7 @@ function renderSpawnAgentSpecificPrompt(prompt: string, config: AgentConfig): st
     return prompt.replace(/<spawnAgent>[\s\S]*?<\/spawnAgent>/i, xmlSection);
   }
   if (prompt.includes("### spawnAgent")) {
-    return prompt.replace(/### spawnAgent[\s\S]*?(?=\n### notebookEdit\b)/i, markdownSection);
+    return prompt.replace(/### spawnAgent[\s\S]*?(?=\n### skill\b)/i, markdownSection);
   }
   return prompt;
 }

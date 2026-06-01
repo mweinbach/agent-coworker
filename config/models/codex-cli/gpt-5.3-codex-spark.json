@@ -4,7 +4,7 @@
   "displayName": "GPT-5.3-Codex-Spark",
   "knowledgeCutoff": "Unknown",
   "supportsImageInput": false,
-  "promptTemplate": "system-models/gpt-5.4.json",
+  "promptTemplate": "system-models/gpt-5.4.md",
   "providerOptionsDefaults": {
     "reasoningEffort": "high",
     "reasoningSummary": "detailed",

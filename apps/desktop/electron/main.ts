@@ -35,6 +35,7 @@ import { MobileRelayBridge } from "./services/mobileRelayBridge";
 import { isPathEqualOrInside } from "./services/pathBoundary";
 import { PersistenceService } from "./services/persistence";
 import { DesktopProductAnalyticsService } from "./services/productAnalytics";
+import { applyPublicTelemetryEnv } from "./services/publicTelemetryEnv";
 import { QuickChatController } from "./services/quickChatController";
 import { resolveElectronRemoteDebugConfig } from "./services/remoteDebug";
 import { resolveDesktopRendererUrl } from "./services/rendererUrl";
@@ -69,6 +70,7 @@ if (process.platform === "win32") {
 
 // Keep packaged-mode feature resolution consistent across main and preload.
 process.env.COWORK_IS_PACKAGED = String(app.isPackaged);
+applyPublicTelemetryEnv(process.env);
 
 const productAnalytics = new DesktopProductAnalyticsService();
 const cloudSync = new CloudSyncService({

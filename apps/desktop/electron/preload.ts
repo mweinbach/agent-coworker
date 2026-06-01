@@ -102,13 +102,12 @@ import {
   windowDragPointInputSchema,
   writeFileInputSchema,
 } from "../src/lib/desktopSchemas";
+import type { PublicTelemetryEnv } from "./services/publicTelemetryEnv";
 import { resolveDesktopTelemetryStatus } from "./services/telemetryStatus";
-
-type SafePublicTelemetryEnv = Record<string, string | undefined>;
 
 declare global {
   // Defined by electron-vite for safe public build-time telemetry values only.
-  var __COWORK_PUBLIC_TELEMETRY_ENV__: SafePublicTelemetryEnv | undefined;
+  var __COWORK_PUBLIC_TELEMETRY_ENV__: PublicTelemetryEnv | undefined;
 }
 
 function getPreloadEnv(): NodeJS.ProcessEnv {

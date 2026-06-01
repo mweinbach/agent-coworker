@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig, externalizeDepsPlugin } from "electron-vite";
+import { pickPublicTelemetryEnv } from "./electron/services/publicTelemetryEnv";
 
 const appRoot = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(appRoot, "../..");
@@ -26,30 +27,10 @@ function resolveDesktopRendererPort(value: string | undefined): number {
 }
 
 const desktopRendererPort = resolveDesktopRendererPort(process.env.COWORK_DESKTOP_RENDERER_PORT);
-const safePublicTelemetryEnvKeys = [
-  "COWORK_SENTRY_DSN",
-  "COWORK_POSTHOG_KEY",
-  "COWORK_POSTHOG_HOST",
-  "LANGFUSE_BASE_URL",
-  "LANGFUSE_PUBLIC_KEY",
-  "COWORK_DIAGNOSTICS_UPLOAD_URL",
-  "COWORK_CLOUD_SYNC_ENDPOINT",
-  "COWORK_DISABLE_NETWORK_TELEMETRY",
-] as const;
-
-function buildSafePublicTelemetryEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const key of safePublicTelemetryEnvKeys) {
-    const value = process.env[key]?.trim();
-    if (value) {
-      env[key] = value;
-    }
-  }
-  return env;
-}
-
 const safePublicTelemetryDefine = {
-  "globalThis.__COWORK_PUBLIC_TELEMETRY_ENV__": JSON.stringify(buildSafePublicTelemetryEnv()),
+  "globalThis.__COWORK_PUBLIC_TELEMETRY_ENV__": JSON.stringify(
+    pickPublicTelemetryEnv(process.env),
+  ),
 };
 
 export default defineConfig({

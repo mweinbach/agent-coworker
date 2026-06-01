@@ -24,6 +24,7 @@ import {
 import { getModelForProvider, getProviderKeyCandidates } from "./providers";
 import { DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS } from "./shared/toolOutputOverflow";
 import { parseConnectionStoreJson } from "./store/connections";
+import { isNetworkTelemetryGloballyDisabled } from "./telemetry/config";
 import type {
   AgentConfig,
   CommandTemplateConfig,
@@ -608,33 +609,44 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     false;
 
   const mergedObservability = parseLayer(observabilityLayerSchema, merged.observability, {});
-  const observabilityEnabled =
+  const networkTelemetryDisabled = isNetworkTelemetryGloballyDisabled(env);
+  const requestedObservabilityEnabled =
     asBoolean(env.AGENT_OBSERVABILITY_ENABLED) ??
     asBoolean(projectConfig.observabilityEnabled) ??
     asBoolean(userConfig.observabilityEnabled) ??
     asBoolean(builtInDefaults.observabilityEnabled) ??
     false;
+  const observabilityEnabled = networkTelemetryDisabled ? false : requestedObservabilityEnabled;
   const observabilityRecordPayloads = asBoolean(env.AGENT_OBSERVABILITY_RECORD_PAYLOADS);
-  const observabilityRecordInputs =
-    asBoolean(env.AGENT_OBSERVABILITY_RECORD_INPUTS) ??
-    observabilityRecordPayloads ??
-    asBoolean(mergedObservability.recordInputs) ??
-    false;
-  const observabilityRecordOutputs =
-    asBoolean(env.AGENT_OBSERVABILITY_RECORD_OUTPUTS) ??
-    observabilityRecordPayloads ??
-    asBoolean(mergedObservability.recordOutputs) ??
-    false;
+  const observabilityRecordInputs = networkTelemetryDisabled
+    ? false
+    : (asBoolean(env.AGENT_OBSERVABILITY_RECORD_INPUTS) ??
+      observabilityRecordPayloads ??
+      asBoolean(mergedObservability.recordInputs) ??
+      false);
+  const observabilityRecordOutputs = networkTelemetryDisabled
+    ? false
+    : (asBoolean(env.AGENT_OBSERVABILITY_RECORD_OUTPUTS) ??
+      observabilityRecordPayloads ??
+      asBoolean(mergedObservability.recordOutputs) ??
+      false);
   const langfuseBaseUrl = (
     env.LANGFUSE_BASE_URL ||
     mergedObservability.baseUrl ||
     "https://cloud.langfuse.com"
   ).replace(/\/+$/, "");
-  const langfusePublicKey = env.LANGFUSE_PUBLIC_KEY || mergedObservability.publicKey;
-  const langfuseSecretKey = env.LANGFUSE_SECRET_KEY || mergedObservability.secretKey;
-  const langfuseTracingEnvironment =
-    env.LANGFUSE_TRACING_ENVIRONMENT || mergedObservability.tracingEnvironment;
-  const langfuseRelease = env.LANGFUSE_RELEASE || mergedObservability.release;
+  const langfusePublicKey = networkTelemetryDisabled
+    ? undefined
+    : env.LANGFUSE_PUBLIC_KEY || mergedObservability.publicKey;
+  const langfuseSecretKey = networkTelemetryDisabled
+    ? undefined
+    : env.LANGFUSE_SECRET_KEY || mergedObservability.secretKey;
+  const langfuseTracingEnvironment = networkTelemetryDisabled
+    ? undefined
+    : env.LANGFUSE_TRACING_ENVIRONMENT || mergedObservability.tracingEnvironment;
+  const langfuseRelease = networkTelemetryDisabled
+    ? undefined
+    : env.LANGFUSE_RELEASE || mergedObservability.release;
 
   const observability: AgentConfig["observability"] = {
     provider: "langfuse",

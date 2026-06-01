@@ -3,6 +3,12 @@ import { DEFAULT_RESEARCH_AGENT_ID } from "../../../../src/server/research/types
 import type { DesktopFeatureFlagOverrides } from "../../../../src/shared/featureFlags";
 import type { SessionFeedItem } from "../../../../src/shared/sessionSnapshot";
 import {
+  DEFAULT_PRIVACY_TELEMETRY_SETTINGS,
+  normalizePrivacyTelemetrySettings,
+  type PersistedPrivacyTelemetrySettings,
+  type PrivacyTelemetrySettings,
+} from "../../../../src/telemetry/config";
+import {
   type CloudSyncSettings,
   normalizeCloudSyncSettings,
   type PersistedCloudSyncSettings,
@@ -171,15 +177,6 @@ export type PersistedDesktopSettings = {
   sidebarSectionOrder?: SidebarSectionKey[];
 };
 
-export type PersistedPrivacyTelemetrySettings = {
-  crashReportsEnabled?: boolean;
-  productAnalyticsEnabled?: boolean;
-  aiTraceTelemetryEnabled?: boolean;
-  aiTracePayloadsEnabled?: boolean;
-  diagnosticsUploadEnabled?: boolean;
-  cloudSyncEnabled?: boolean;
-};
-
 export type PersistedProductAnalyticsState = {
   anonymousInstallationId?: string;
   lastAppVersion?: string | null;
@@ -187,39 +184,8 @@ export type PersistedProductAnalyticsState = {
 
 export type { CloudSyncSettings, PersistedCloudSyncSettings };
 export { normalizeCloudSyncSettings };
-
-export type PrivacyTelemetrySettings = {
-  crashReportsEnabled: boolean;
-  productAnalyticsEnabled: boolean;
-  aiTraceTelemetryEnabled: boolean;
-  aiTracePayloadsEnabled: boolean;
-  diagnosticsUploadEnabled: boolean;
-  cloudSyncEnabled: boolean;
-};
-
-export const DEFAULT_PRIVACY_TELEMETRY_SETTINGS: PrivacyTelemetrySettings = {
-  crashReportsEnabled: false,
-  productAnalyticsEnabled: false,
-  aiTraceTelemetryEnabled: false,
-  aiTracePayloadsEnabled: false,
-  diagnosticsUploadEnabled: false,
-  cloudSyncEnabled: false,
-};
-
-export function normalizePrivacyTelemetrySettings(
-  value?: PersistedPrivacyTelemetrySettings | null,
-): PrivacyTelemetrySettings {
-  const aiTraceTelemetryEnabled = value?.aiTraceTelemetryEnabled === true;
-
-  return {
-    crashReportsEnabled: value?.crashReportsEnabled === true,
-    productAnalyticsEnabled: value?.productAnalyticsEnabled === true,
-    aiTraceTelemetryEnabled,
-    aiTracePayloadsEnabled: aiTraceTelemetryEnabled && value?.aiTracePayloadsEnabled === true,
-    diagnosticsUploadEnabled: value?.diagnosticsUploadEnabled === true,
-    cloudSyncEnabled: value?.cloudSyncEnabled === true,
-  };
-}
+export type { PersistedPrivacyTelemetrySettings, PrivacyTelemetrySettings };
+export { DEFAULT_PRIVACY_TELEMETRY_SETTINGS, normalizePrivacyTelemetrySettings };
 
 const SAFE_PRODUCT_ANALYTICS_ID = /^[A-Za-z0-9_-]{16,128}$/;
 

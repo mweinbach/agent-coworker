@@ -1,8 +1,8 @@
-import { LangfuseSpanProcessor } from "@langfuse/otel";
 import type { AttributeValue } from "@opentelemetry/api";
-import { NodeSDK } from "@opentelemetry/sdk-node";
+import type { NodeSDK } from "@opentelemetry/sdk-node";
 import { z } from "zod";
 
+import { isNetworkTelemetryGloballyDisabled } from "../telemetry/config";
 import type { AgentConfig, ObservabilityHealth } from "../types";
 import { nowIso } from "../utils/typeGuards";
 
@@ -34,7 +34,7 @@ type ResolvedRuntime =
 
 type RuntimeState = {
   sdk: NodeSDK | null;
-  spanProcessor: LangfuseSpanProcessor | null;
+  spanProcessor: { forceFlush: () => Promise<void> | void } | null;
   initPromise: Promise<void> | null;
   signature: string | null;
   health: ObservabilityHealth;
@@ -73,6 +73,14 @@ function asNonEmptyString(value: unknown): string {
 }
 
 function resolveRuntime(config: AgentConfig): ResolvedRuntime {
+  if (isNetworkTelemetryGloballyDisabled()) {
+    return {
+      kind: "disabled",
+      reason: "network_telemetry_disabled",
+      message: "Network telemetry is disabled by COWORK_DISABLE_NETWORK_TELEMETRY.",
+    };
+  }
+
   if (!config.observabilityEnabled) {
     return {
       kind: "disabled",
@@ -228,6 +236,10 @@ export async function ensureObservabilityRuntime(
   state.signature = resolved.signature;
   const initPromise = (async () => {
     try {
+      const [{ LangfuseSpanProcessor }, { NodeSDK }] = await Promise.all([
+        import("@langfuse/otel"),
+        import("@opentelemetry/sdk-node"),
+      ]);
       const spanProcessor = new LangfuseSpanProcessor({
         publicKey: resolved.publicKey,
         secretKey: resolved.secretKey,

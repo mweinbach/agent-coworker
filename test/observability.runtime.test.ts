@@ -42,6 +42,7 @@ function makeConfig(overrides?: Partial<AgentConfig>): AgentConfig {
 }
 
 afterEach(async () => {
+  delete process.env.COWORK_DISABLE_NETWORK_TELEMETRY;
   await __internal.resetForTests();
 });
 
@@ -125,6 +126,18 @@ describe("observability runtime", () => {
       functionId: "session.turn",
     });
     expect(telemetry).toBeUndefined();
+  });
+
+  test("global kill switch disables Langfuse runtime before SDK initialization", async () => {
+    process.env.COWORK_DISABLE_NETWORK_TELEMETRY = "1";
+    const cfg = makeConfig();
+    const runtime = await ensureObservabilityRuntime(cfg);
+
+    expect(runtime.ready).toBe(false);
+    expect(runtime.health.status).toBe("disabled");
+    expect(runtime.health.reason).toBe("network_telemetry_disabled");
+    expect(__internal.getStateSnapshot().hasSdk).toBe(false);
+    expect(__internal.getStateSnapshot().hasSpanProcessor).toBe(false);
   });
 
   test("noteObservabilityFailure degrades and noteObservabilitySuccess recovers", () => {

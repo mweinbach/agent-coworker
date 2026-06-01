@@ -1155,6 +1155,29 @@ describe("loadConfig", () => {
     expect(cfg.observability?.publicKey).toBe("pk-lf-test");
     expect(cfg.observability?.secretKey).toBe("sk-lf-test");
   });
+
+  test("global network telemetry kill switch disables Langfuse config", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {
+        COWORK_DISABLE_NETWORK_TELEMETRY: "1",
+        AGENT_OBSERVABILITY_ENABLED: "true",
+        AGENT_OBSERVABILITY_RECORD_PAYLOADS: "true",
+        LANGFUSE_PUBLIC_KEY: "pk-lf-test",
+        LANGFUSE_SECRET_KEY: "sk-lf-test",
+      },
+    });
+
+    expect(cfg.observabilityEnabled).toBe(false);
+    expect(cfg.observability?.recordInputs).toBe(false);
+    expect(cfg.observability?.recordOutputs).toBe(false);
+    expect(cfg.observability?.publicKey).toBeUndefined();
+    expect(cfg.observability?.secretKey).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------

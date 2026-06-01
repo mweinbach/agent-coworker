@@ -61,6 +61,24 @@ describe("crash reporting wrapper", () => {
     expect(loaderCalls).toBe(0);
   });
 
+  test("global kill switch does not load the Sentry SDK", async () => {
+    let loaderCalls = 0;
+    const status = await initCrashReporting({
+      component: "cowork-server",
+      enabled: true,
+      dsn: "https://public@sentry.example/1",
+      env: { COWORK_DISABLE_NETWORK_TELEMETRY: "true" },
+      loadSdk: async () => {
+        loaderCalls += 1;
+        return createFakeSdk().sdk;
+      },
+    });
+
+    expect(status.initialized).toBe(false);
+    expect(status.reason).toBe("disabled");
+    expect(loaderCalls).toBe(0);
+  });
+
   test("enabled mode initializes, captures, and breadcrumbs through the loaded SDK", async () => {
     const fake = createFakeSdk();
     const status = await initCrashReporting({

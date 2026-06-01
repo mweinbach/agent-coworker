@@ -60,6 +60,24 @@ describe("product analytics wrapper", () => {
     expect(loaderCalls).toBe(0);
   });
 
+  test("global kill switch does not load the PostHog SDK", async () => {
+    let loaderCalls = 0;
+    const status = await initProductAnalytics({
+      enabled: true,
+      apiKey: "phc_test",
+      anonymousId: "anon_1234567890123456",
+      env: { COWORK_DISABLE_NETWORK_TELEMETRY: "on" },
+      loadSdk: async () => {
+        loaderCalls += 1;
+        return createFakePostHogModule([]);
+      },
+    });
+
+    expect(status.initialized).toBe(false);
+    expect(status.reason).toBe("disabled");
+    expect(loaderCalls).toBe(0);
+  });
+
   test("captures anonymous events with no person profile and no feature flags", async () => {
     const captures: CapturedEvent[] = [];
     const status = await initProductAnalytics({

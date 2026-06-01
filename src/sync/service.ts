@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 
+import { resolveCloudSyncConfig } from "../telemetry/config";
 import type { CloudSyncProvider } from "./CloudSyncProvider";
 import { createCustomHttpCloudSyncProvider } from "./providers/customHttp";
 import { CloudSyncQueue } from "./queue";
@@ -11,7 +12,6 @@ import {
   type CloudSyncProviderId,
   type CloudSyncSettings,
   type CloudSyncStatus,
-  normalizeCloudSyncSettings,
 } from "./types";
 
 type CloudSyncLogLevel = "info" | "warn" | "error";
@@ -35,37 +35,19 @@ type EffectiveCloudSyncConfig = CloudSyncSettings & {
   token?: string;
 };
 
-function parseEnvBoolean(value: string | undefined): boolean | undefined {
-  const normalized = value?.trim().toLowerCase();
-  if (!normalized) return undefined;
-  if (normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on") {
-    return true;
-  }
-  if (normalized === "0" || normalized === "false" || normalized === "no" || normalized === "off") {
-    return false;
-  }
-  return undefined;
-}
-
 export function resolveEffectiveCloudSyncConfig(
   persisted: unknown,
   env: NodeJS.ProcessEnv = process.env,
 ): EffectiveCloudSyncConfig {
-  const settings = normalizeCloudSyncSettings(
-    persisted && typeof persisted === "object" && !Array.isArray(persisted)
-      ? (persisted as Parameters<typeof normalizeCloudSyncSettings>[0])
-      : undefined,
-  );
-  const envEnabled = parseEnvBoolean(env.COWORK_CLOUD_SYNC_ENABLED);
-  const endpoint = env.COWORK_CLOUD_SYNC_ENDPOINT?.trim() || settings.endpoint;
-  const provider: CloudSyncProviderId =
-    settings.provider === "custom" || endpoint ? "custom" : settings.provider;
+  const resolved = resolveCloudSyncConfig({ persisted, env, includeSecrets: true });
   return {
-    ...settings,
-    enabled: envEnabled ?? settings.enabled,
-    provider,
-    ...(endpoint ? { endpoint } : {}),
-    ...(env.COWORK_CLOUD_SYNC_TOKEN?.trim() ? { token: env.COWORK_CLOUD_SYNC_TOKEN.trim() } : {}),
+    enabled: resolved.enabled,
+    provider: resolved.provider,
+    ...(resolved.endpoint ? { endpoint: resolved.endpoint } : {}),
+    syncSettings: resolved.syncSettings,
+    syncWorkspaceMetadata: resolved.syncWorkspaceMetadata,
+    syncThreads: resolved.syncThreads,
+    ...(resolved.token ? { token: resolved.token } : {}),
   };
 }
 
@@ -82,6 +64,7 @@ export class CloudSyncService {
   private providerKey = "";
   private flushing = false;
   private effectiveConfig: EffectiveCloudSyncConfig | null = null;
+  private lastStatus: CloudSyncStatus = { status: "disabled", queued: 0 };
 
   constructor(opts: CloudSyncServiceOptions = {}) {
     this.env = opts.env ?? process.env;
@@ -115,6 +98,15 @@ export class CloudSyncService {
     return this.provider;
   }
 
+  getStatus(): CloudSyncStatus {
+    return this.lastStatus;
+  }
+
+  private rememberStatus(status: CloudSyncStatus): CloudSyncStatus {
+    this.lastStatus = status;
+    return status;
+  }
+
   async enqueuePersistedState(state: unknown): Promise<CloudSyncStatus> {
     try {
       const config = resolveEffectiveCloudSyncConfig(
@@ -124,20 +116,31 @@ export class CloudSyncService {
         this.env,
       );
       this.effectiveConfig = config;
-      if (!config.enabled) return { status: "disabled", queued: (await this.queue.read()).length };
+      if (!config.enabled) {
+        return this.rememberStatus({
+          status: "disabled",
+          queued: (await this.queue.read()).length,
+        });
+      }
       if (config.provider !== "custom" || !config.endpoint) {
-        return { status: "not_configured", queued: (await this.queue.read()).length };
+        return this.rememberStatus({
+          status: "not_configured",
+          queued: (await this.queue.read()).length,
+        });
       }
       if (!config.syncSettings)
-        return { status: "disabled", queued: (await this.queue.read()).length };
+        return this.rememberStatus({
+          status: "disabled",
+          queued: (await this.queue.read()).length,
+        });
 
       const payload = buildCloudSyncSettingsSnapshot(state);
       if (containsForbiddenCloudSyncData(payload)) {
-        return {
+        return this.rememberStatus({
           status: "error",
           queued: (await this.queue.read()).length,
           message: "unsafe_payload",
-        };
+        });
       }
       const patch: CloudSyncPatch = {
         version: CLOUD_SYNC_PAYLOAD_VERSION,
@@ -149,12 +152,12 @@ export class CloudSyncService {
       };
       const entries = await this.queue.enqueue(patch);
       this.scheduleFlush();
-      return { status: "queued", queued: entries.length };
+      return this.rememberStatus({ status: "queued", queued: entries.length });
     } catch (error) {
       this.log?.("warn", "cloud sync enqueue failed", {
         error: error instanceof Error ? error.message : String(error),
       });
-      return { status: "error", queued: 0, message: "enqueue_failed" };
+      return this.rememberStatus({ status: "error", queued: 0, message: "enqueue_failed" });
     }
   }
 
@@ -167,11 +170,23 @@ export class CloudSyncService {
   }
 
   async flushNow(): Promise<CloudSyncStatus> {
-    if (this.flushing) return { status: "queued", queued: (await this.queue.read()).length };
+    if (this.flushing) {
+      return this.rememberStatus({ status: "queued", queued: (await this.queue.read()).length });
+    }
     const config = this.effectiveConfig ?? resolveEffectiveCloudSyncConfig(undefined, this.env);
-    if (!config.enabled) return { status: "disabled", queued: (await this.queue.read()).length };
+    if (!config.enabled) {
+      return this.rememberStatus({
+        status: "disabled",
+        queued: (await this.queue.read()).length,
+      });
+    }
     const provider = this.providerFor(config);
-    if (!provider) return { status: "not_configured", queued: (await this.queue.read()).length };
+    if (!provider) {
+      return this.rememberStatus({
+        status: "not_configured",
+        queued: (await this.queue.read()).length,
+      });
+    }
 
     this.flushing = true;
     try {
@@ -188,12 +203,16 @@ export class CloudSyncService {
         }
       }
       const queued = (await this.queue.read()).length;
-      return { status: queued > 0 ? "queued" : "connected", queued };
+      return this.rememberStatus({ status: queued > 0 ? "queued" : "connected", queued });
     } catch (error) {
       this.log?.("warn", "cloud sync flush failed", {
         error: error instanceof Error ? error.message : String(error),
       });
-      return { status: "error", queued: (await this.queue.read()).length, message: "flush_failed" };
+      return this.rememberStatus({
+        status: "error",
+        queued: (await this.queue.read()).length,
+        message: "flush_failed",
+      });
     } finally {
       this.flushing = false;
     }
@@ -201,7 +220,7 @@ export class CloudSyncService {
 
   async clearLocalQueue(): Promise<CloudSyncStatus> {
     await this.queue.clear();
-    return { status: "disabled", queued: 0 };
+    return this.rememberStatus({ status: "disabled", queued: 0 });
   }
 
   async shutdown(): Promise<void> {

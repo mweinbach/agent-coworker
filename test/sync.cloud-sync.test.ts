@@ -285,6 +285,31 @@ describe("cloud sync service and custom provider", () => {
     expect(providerCalls).toBe(0);
   });
 
+  test("global kill switch prevents cloud sync provider creation", async () => {
+    let providerCalls = 0;
+    const service = new CloudSyncService({
+      queue: new CloudSyncQueue({ outboxPath: await tempOutboxPath() }),
+      env: { COWORK_DISABLE_NETWORK_TELEMETRY: "1" },
+      providerFactory: () => {
+        providerCalls += 1;
+        throw new Error("provider should not be created");
+      },
+      setTimer: () => null,
+      clearTimer: () => {},
+    });
+
+    await expect(service.enqueuePersistedState(safePersistedState())).resolves.toMatchObject({
+      status: "disabled",
+      queued: 0,
+    });
+    await expect(service.flushNow()).resolves.toMatchObject({
+      status: "disabled",
+      queued: 0,
+    });
+    expect(providerCalls).toBe(0);
+    expect(service.getStatus()).toMatchObject({ status: "disabled", queued: 0 });
+  });
+
   test("queues and flushes safe settings without blocking callers", async () => {
     const pushed: CloudSyncPatch[] = [];
     const provider: CloudSyncProvider = {

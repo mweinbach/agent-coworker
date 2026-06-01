@@ -1,3 +1,5 @@
+import { isNetworkTelemetryGloballyDisabled } from "./config";
+
 export const PRODUCT_ANALYTICS_EVENT_NAMES = [
   "app_started",
   "app_updated",
@@ -121,10 +123,7 @@ export type ProductAnalyticsEventMap = {
       | "referenceCount"
     >;
   turn_completed: CommonProperties &
-    Pick<
-      ProductAnalyticsProperties,
-      "provider" | "model" | "durationMs" | "status" | "toolCount"
-    >;
+    Pick<ProductAnalyticsProperties, "provider" | "model" | "durationMs" | "status" | "toolCount">;
   turn_failed: CommonProperties &
     Pick<
       ProductAnalyticsProperties,
@@ -145,8 +144,7 @@ export type ProductAnalyticsEventMap = {
     Pick<ProductAnalyticsProperties, "durationMs" | "status" | "mobilePairingEnabled">;
   update_checked: CommonProperties &
     Pick<ProductAnalyticsProperties, "durationMs" | "status" | "errorCategory" | "updateAvailable">;
-  update_downloaded: CommonProperties &
-    Pick<ProductAnalyticsProperties, "durationMs" | "status">;
+  update_downloaded: CommonProperties & Pick<ProductAnalyticsProperties, "durationMs" | "status">;
   update_install_started: CommonProperties & Pick<ProductAnalyticsProperties, "status">;
 };
 
@@ -293,8 +291,7 @@ const SECRET_VALUE_PATTERN =
   /\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{16,}|Bearer\s+[A-Za-z0-9._~+/-]{12,})\b/i;
 const ABSOLUTE_POSIX_PATH_PATTERN =
   /(?:^|[\s"'`])\/(?:Users|home|tmp|private|var|Volumes|Applications|opt|etc)\b/i;
-const WINDOWS_PATH_PATTERN =
-  /(?:^|[\s"'`])(?:[A-Za-z]:[\\/]|\\\\)[^\s"'`<>{}[\]]*/;
+const WINDOWS_PATH_PATTERN = /(?:^|[\s"'`])(?:[A-Za-z]:[\\/]|\\\\)[^\s"'`<>{}[\]]*/;
 const RELATIVE_PATH_PATTERN = /(?:^|[\s"'`])(?:\.{1,2}[\\/]|~[\\/])/;
 const GENERIC_PATH_WITH_EXTENSION_PATTERN =
   /(?:^|[\s"'`])[\w.-]+[\\/][^\s"'`<>{}[\]]+\.[A-Za-z0-9]{1,12}\b/;
@@ -350,10 +347,7 @@ function resolveEnvironment(opts: {
   return opts.packaged ? "packaged" : "development";
 }
 
-function normalizeEnvironmentValue(
-  value: string,
-  packaged?: boolean,
-): ProductAnalyticsEnvironment {
+function normalizeEnvironmentValue(value: string, packaged?: boolean): ProductAnalyticsEnvironment {
   const normalized = value.toLowerCase();
   if (
     normalized === "development" ||
@@ -400,6 +394,7 @@ export function resolveProductAnalyticsConfig(
   context: Omit<ProductAnalyticsInitContext, "loadSdk">,
 ): ResolvedProductAnalyticsConfig {
   const env = context.env ?? {};
+  const networkTelemetryDisabled = isNetworkTelemetryGloballyDisabled(env);
   const apiKey = normalizeEnvValue(context.apiKey) ?? normalizeEnvValue(env.COWORK_POSTHOG_KEY);
   const anonymousId =
     normalizeAnonymousId(context.anonymousId) ??
@@ -422,7 +417,11 @@ export function resolveProductAnalyticsConfig(
       : "server";
 
   return {
-    enabled: context.enabled === true && Boolean(apiKey) && Boolean(anonymousId),
+    enabled:
+      !networkTelemetryDisabled &&
+      context.enabled === true &&
+      Boolean(apiKey) &&
+      Boolean(anonymousId),
     keyConfigured: Boolean(apiKey),
     apiKey,
     host: normalizeHost(context.host ?? env.COWORK_POSTHOG_HOST),
@@ -462,7 +461,7 @@ export async function initProductAnalytics(
   const config = resolveProductAnalyticsConfig(context);
   activeCommonProperties = buildCommonProperties(config);
 
-  if (!context.enabled) {
+  if (!context.enabled || isNetworkTelemetryGloballyDisabled(context.env ?? {})) {
     await shutdownProductAnalytics();
     return toStatus(config, false, "disabled");
   }
@@ -765,7 +764,8 @@ function sanitizeStringProperty(
       ? { ok: true, value: limited }
       : { ok: false, reason: "property_value_invalid" };
   }
-  const maxLength = key === "status" || key === "errorCategory" ? MAX_STATUS_LENGTH : MAX_STRING_LENGTH;
+  const maxLength =
+    key === "status" || key === "errorCategory" ? MAX_STATUS_LENGTH : MAX_STRING_LENGTH;
   const limited = limitString(trimmed, maxLength);
   return SAFE_SLUG_PATTERN.test(limited)
     ? { ok: true, value: limited }

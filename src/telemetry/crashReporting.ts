@@ -1,3 +1,5 @@
+import { isNetworkTelemetryGloballyDisabled } from "./config";
+
 export type CrashReportingEnvironment = "development" | "packaged" | "beta" | "production";
 
 export type CrashReportingComponent = "electron-main" | "electron-renderer" | "cowork-server";
@@ -171,6 +173,7 @@ export function resolveCrashReportingConfig(
   context: Omit<CrashReportingInitContext, "loadSdk" | "tags" | "workspacePaths" | "homeDir">,
 ): ResolvedCrashReportingConfig {
   const env = context.env ?? {};
+  const networkTelemetryDisabled = isNetworkTelemetryGloballyDisabled(env);
   const dsn =
     normalizeEnvValue(context.dsn) ??
     normalizeEnvValue(env.COWORK_SENTRY_DSN) ??
@@ -189,7 +192,7 @@ export function resolveCrashReportingConfig(
   const isPackaged = context.isPackaged === true;
 
   return {
-    enabled: context.enabled === true && Boolean(dsn),
+    enabled: !networkTelemetryDisabled && context.enabled === true && Boolean(dsn),
     dsnConfigured: Boolean(dsn),
     dsn,
     release,
@@ -294,7 +297,7 @@ export async function initCrashReporting(
   const config = resolveCrashReportingConfig(context);
   activeScrubContext = buildScrubContext(context);
 
-  if (!context.enabled) {
+  if (!context.enabled || isNetworkTelemetryGloballyDisabled(context.env ?? {})) {
     await shutdownCrashReporting();
     return toStatus(config, false, "disabled");
   }

@@ -273,22 +273,17 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
     const drained = context.state.pendingSteers.splice(0);
     if (drained.length === 0) return { messages: [], committedCount: 0 };
 
-    // Resolve references first so a forced skill's body can be folded into the
-    // model-facing steer message as plain text (provider-agnostic). Plugin
-    // awareness flows through the turn-scoped system block via mergeReferencedPlugins.
-    const committedReferences = drained.flatMap((steer) => steer.references ?? []);
-    const resolvedReferences = await resolveSteerReferences(committedReferences);
-    mergeReferencedPlugins(resolvedReferences.plugins);
-    const referenceContext = renderSteerReferenceContext(resolvedReferences);
-
     const steerMessages: ModelMessage[] = [];
-    for (const [index, steer] of drained.entries()) {
+    for (const steer of drained) {
+      const resolvedReferences = await resolveSteerReferences(steer.references);
+      mergeReferencedPlugins(resolvedReferences.plugins);
+      const referenceContext = renderSteerReferenceContext(resolvedReferences);
       let content: ModelMessage["content"] = await deps.buildUserMessageContent(
         steer.text,
         steer.attachments,
         steer.inputParts,
       );
-      if (index === 0 && referenceContext) {
+      if (referenceContext) {
         content = prependReferenceContextToContent(content, referenceContext);
       }
       steerMessages.push({ role: "user", content });

@@ -91,6 +91,16 @@
     --surface-selection-inverse: color-mix(in srgb, var(--text-inverse) 30%, transparent);
     --surface-sidebar-drop: color-mix(in srgb, var(--accent-base) 6%, transparent);
     --surface-sidebar-drop-strong: color-mix(in srgb, var(--accent-base) 10%, transparent);
+    --surface-spreadsheet: #ffffff;
+    --surface-spreadsheet-titlebar: color-mix(in srgb, var(--panel-bg) 72%, #ffffff 28%);
+    --surface-spreadsheet-chrome: #fbfbf8;
+    --surface-spreadsheet-toolbar: #ffffff;
+    --surface-spreadsheet-header: #f3f4f6;
+    --surface-spreadsheet-hover: #eef6ff;
+    --surface-spreadsheet-match: #e8f3ff;
+    --surface-spreadsheet-selected: color-mix(in srgb, var(--accent-base) 18%, #ffffff);
+    --surface-spreadsheet-range-overlay: color-mix(in srgb, var(--accent-base) 16%, transparent);
+    --surface-spreadsheet-active-overlay: color-mix(in srgb, var(--accent-base) 5%, transparent);
     --surface-landing-accent-glow: radial-gradient(
       circle,
       color-mix(in srgb, var(--accent-base) 9%, transparent) 0%,
@@ -105,6 +115,9 @@
     --text-muted-subtle: color-mix(in srgb, var(--muted-base) 78%, transparent);
     --text-inverse: var(--inverse-text);
     --text-link: var(--accent-base);
+    --text-spreadsheet: #24292f;
+    --text-spreadsheet-secondary: #57606a;
+    --text-spreadsheet-muted: #6e7781;
 
     --border-default: var(--border-base);
     --border-subtle: color-mix(in srgb, var(--border-base) 76%, transparent);
@@ -117,6 +130,9 @@
     --border-settings-back-button: color-mix(in srgb, var(--border-base) 50%, transparent);
     --border-accent-soft: color-mix(in srgb, var(--accent-base) 18%, transparent);
     --border-accent-strong: color-mix(in srgb, var(--accent-base) 28%, transparent);
+    --border-spreadsheet: #d0d7de;
+    --spreadsheet-accent: var(--accent-base);
+    --spreadsheet-focus-soft: color-mix(in srgb, var(--accent-base) 30%, transparent);
 
     --background: var(--surface-window);
     --foreground: var(--text-primary);

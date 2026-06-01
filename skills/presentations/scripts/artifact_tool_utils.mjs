@@ -57,12 +57,13 @@ export function slideNumberFromModuleName(filePath) {
 }
 
 function defaultRuntimeNodeModules() {
+  const fromEnv = process.env.COWORK_ARTIFACT_RUNTIME_NODE_MODULES;
+  if (fromEnv) return fromEnv;
   return path.join(
     process.env.HOME || process.cwd(),
     ".cache",
-    "codex-runtimes",
-    ["codex", "primary", "runtime"].join("-"),
-    "dependencies",
+    "cowork",
+    "artifact-runtime",
     "node",
     "node_modules",
   );
@@ -183,7 +184,7 @@ function validateArtifactToolPackage(packageDir, context) {
 function findArtifactToolPackage() {
   return validateArtifactToolPackage(
     runtimePackagePath("@oai/artifact-tool"),
-    "the bundled Codex runtime @oai/artifact-tool package",
+    "the Cowork artifact runtime @oai/artifact-tool package",
   );
 }
 

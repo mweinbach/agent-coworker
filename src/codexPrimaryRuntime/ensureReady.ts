@@ -8,11 +8,6 @@ import {
   bundledRuntimeDirFromOptions,
   codexRuntimeRoot,
   collectRuntimeRoots,
-  prepareNodeModuleResolverEnv,
-  prependNodePath,
-  prependToolPath,
-  resolveArtifactTool,
-  resolveRuntimeExecutablePaths,
 } from "./runtimeDiscovery";
 import {
   installSkills,
@@ -77,22 +72,6 @@ export async function ensureCodexPrimaryRuntimeReady(
     env,
   });
   const runtimeRoots = await collectRuntimeRoots(home, bundledRuntimeDir);
-  const runtime = await resolveRuntimeExecutablePaths(runtimeRoots);
-  const runtimePathDirs = [
-    runtime.nodePath ? path.dirname(runtime.nodePath) : "",
-    runtime.pythonPath ? path.dirname(runtime.pythonPath) : "",
-    runtime.pythonPath ? path.join(path.dirname(runtime.pythonPath), "Scripts") : "",
-  ];
-  const runtimeEnv = await prepareNodeModuleResolverEnv({
-    env,
-    runtimeDir: codexRuntimeRoot(home),
-    runtimeEnv: prependNodePath(
-      env,
-      prependToolPath(env, runtime.runtimeEnv, runtimePathDirs),
-      runtime.nodeModulesPath,
-    ),
-    nodeModulesPath: runtime.nodeModulesPath,
-  });
   let archive: CodexPrimaryRuntimeSetupResult["archive"] = {
     status: "skipped",
     endpoint: CODEX_CURATED_PLUGINS_EXPORT_URL,
@@ -130,10 +109,6 @@ export async function ensureCodexPrimaryRuntimeReady(
       };
     }
 
-    const artifactTool = await resolveArtifactTool({
-      home,
-      runtimeRoots,
-    });
     await removeLegacyRuntimeSkills({
       destinationRoot: opts.builtInSkillsDir,
       global: false,
@@ -174,21 +149,11 @@ export async function ensureCodexPrimaryRuntimeReady(
       });
     }
     const skills = [...builtInSkillResults, ...workspaceToolsSkillResults];
-    await writeState({ stateFile, artifactSource: artifactTool.source, skills });
+    await writeState({ stateFile, skills });
 
     return {
       runtimeDir: codexRuntimeRoot(home),
-      ...(runtime.source ? { runtimeSourceDir: runtime.source } : {}),
       stateFile,
-      runtimeEnv,
-      runtime: {
-        status: runtime.status,
-        ...(runtime.source ? { source: runtime.source } : {}),
-        ...(runtime.nodePath ? { nodePath: runtime.nodePath } : {}),
-        ...(runtime.pythonPath ? { pythonPath: runtime.pythonPath } : {}),
-        ...(runtime.nodeModulesPath ? { nodeModulesPath: runtime.nodeModulesPath } : {}),
-      },
-      artifactTool,
       skills,
       archive,
     };

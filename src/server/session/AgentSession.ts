@@ -807,6 +807,14 @@ export class AgentSession {
     await this.getSkillManager().deletePlugin(pluginId, scope);
   }
 
+  async checkPluginUpdate(pluginId: string, scope?: "workspace" | "user") {
+    await this.getSkillManager().checkPluginUpdate(pluginId, scope);
+  }
+
+  async updatePlugin(pluginId: string, scope?: "workspace" | "user") {
+    await this.getSkillManager().updatePlugin(pluginId, scope);
+  }
+
   async previewPluginInstall(sourceInput: string, targetScope: "workspace" | "user") {
     await this.getSkillManager().previewPluginInstall(sourceInput, targetScope);
   }

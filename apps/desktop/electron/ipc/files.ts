@@ -56,6 +56,8 @@ const execFile = promisify(execFileCallback);
 const require = createRequire(import.meta.url);
 const { app, BrowserWindow, clipboard, dialog, shell } = require("electron") as typeof Electron;
 
+export const MAX_READ_FILE_BYTES = 5 * 1024 * 1024;
+
 export function registerFilesIpc(context: DesktopIpcModuleContext): void {
   const { handleDesktopInvoke, parseWithSchema, workspaceRoots } = context;
 
@@ -114,6 +116,15 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
     const input = parseWithSchema(readFileInputSchema, args, "readFile options");
     await workspaceRoots.ensureApprovedWorkspaceRoots();
     const safePath = resolveAllowedPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
+    const stat = await fs.stat(safePath);
+    if (!stat.isFile()) {
+      throw new Error("Path is not a file");
+    }
+    if (stat.size > MAX_READ_FILE_BYTES) {
+      throw new Error(
+        `File is too large to read fully (${stat.size} bytes exceeds ${MAX_READ_FILE_BYTES} bytes).`,
+      );
+    }
     return { content: await fs.readFile(safePath, "utf8") };
   });
 

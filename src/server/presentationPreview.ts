@@ -2,6 +2,11 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { ARTIFACT_RUNTIME_ENV_NODE } from "../artifactRuntime/constants";
+import {
+  bundledRuntimeDirFromOptions,
+  discoverArtifactRuntimeEnv,
+} from "../artifactRuntime/runtimeDiscovery";
 import { runCommand } from "./sessionBackup/command";
 import { resolveWorkspaceFilePath } from "./spreadsheetPreview";
 
@@ -41,23 +46,21 @@ export type PresentationPreviewResult =
       };
     };
 
-async function resolveNodeBinary(): Promise<string> {
-  if (process.env.COWORK_CODEX_RUNTIME_NODE) {
-    return process.env.COWORK_CODEX_RUNTIME_NODE;
-  }
-  const home = process.env.HOME || process.env.USERPROFILE || "";
-  const candidates = [
-    path.join(home, ".cache/codex-runtimes/codex-primary-runtime/node/bin/node"),
-    path.join(home, ".cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node"),
-    path.join(home, ".cache/codex-runtimes/codex-primary-runtime/bin/node"),
-  ];
-  for (const c of candidates) {
-    try {
-      await fs.stat(c);
-      return c;
-    } catch {}
-  }
-  return "node";
+async function resolvePresentationRuntimeEnv(
+  requestEnv: Record<string, string | undefined> | undefined,
+): Promise<{ nodeBin: string; env: NodeJS.ProcessEnv }> {
+  const baseEnv: NodeJS.ProcessEnv = { ...process.env, ...requestEnv };
+  const home = baseEnv.HOME || baseEnv.USERPROFILE || os.homedir();
+  const runtimeEnv = await discoverArtifactRuntimeEnv({
+    home,
+    env: baseEnv,
+    bundledRuntimeDir: bundledRuntimeDirFromOptions({ env: baseEnv }),
+  });
+  const env: NodeJS.ProcessEnv = { ...baseEnv, ...runtimeEnv };
+  return {
+    nodeBin: env[ARTIFACT_RUNTIME_ENV_NODE] || "node",
+    env,
+  };
 }
 
 export async function previewPresentationFile(
@@ -90,7 +93,7 @@ export async function previewPresentationFile(
     };
   }
 
-  const nodeBin = await resolveNodeBinary();
+  const { nodeBin, env } = await resolvePresentationRuntimeEnv(request.env);
   const scriptPath = path.join(
     request.builtInDir,
     "skills",
@@ -127,7 +130,7 @@ export async function previewPresentationFile(
           "--workspace",
           request.cwd,
         ],
-        { cwd: request.cwd },
+        { cwd: request.cwd, env },
       );
 
       if (runResult.exitCode !== 0) {
@@ -268,7 +271,7 @@ export async function previewPresentationFile(
             "--workspace",
             request.cwd,
           ],
-          { cwd: request.cwd },
+          { cwd: request.cwd, env },
         );
 
         if (runResult.exitCode === 0) {

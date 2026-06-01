@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 
+import { ensureArtifactRuntimeReady } from "../src/artifactRuntime";
 import { ensureCodexPrimaryRuntimeReady } from "../src/codexPrimaryRuntime";
 
 const APP_DIRS = ["apps/desktop"] as const;
@@ -18,6 +19,11 @@ await ensureCodexPrimaryRuntimeReady({
   builtInSkillsDir: path.join(process.cwd(), "skills"),
   allowNetwork: true,
   log: (line) => console.log(`[postinstall] ${line}`),
+});
+
+await ensureArtifactRuntimeReady({
+  allowNetwork: true,
+  log: (line) => console.log(`[postinstall] [artifact-runtime] ${line}`),
 });
 
 function runBunInstall(args: string[]): Promise<void> {

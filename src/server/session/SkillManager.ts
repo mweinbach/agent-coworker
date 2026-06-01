@@ -9,8 +9,10 @@ import {
 import {
   buildPluginCatalogSnapshot,
   buildPluginInstallPreview,
+  checkPluginInstallationUpdate,
   deletePluginInstallation,
   installPluginsFromSource,
+  updatePluginInstallation,
 } from "../../plugins";
 import { setPluginEnabled } from "../../plugins/overrides";
 import { discoverSkillsForConfig, stripSkillFrontMatter } from "../../skills";
@@ -623,6 +625,77 @@ export class SkillManager {
           "internal_error",
           "session",
           `Failed to delete plugin: ${String(err)}`,
+        );
+      }
+    });
+  }
+
+  async checkPluginUpdate(pluginIdRaw: string, scope?: PluginCatalogEntry["scope"]) {
+    const pluginId = pluginIdRaw.trim();
+    if (!pluginId) {
+      this.context.emitError("validation_failed", "session", "Plugin ID is required");
+      return;
+    }
+    try {
+      const catalog = await buildPluginCatalogSnapshot(this.context.state.config);
+      const plugin = this.pluginCatalogService.resolveInstalledPluginSelection(
+        catalog,
+        pluginId,
+        scope,
+      );
+      if (!plugin) {
+        return;
+      }
+      const result = await checkPluginInstallationUpdate({
+        config: this.context.state.config,
+        plugin,
+      });
+      this.context.emit({
+        type: "plugin_update_check",
+        sessionId: this.context.id,
+        result,
+      });
+    } catch (err) {
+      this.context.emitError(
+        "internal_error",
+        "session",
+        `Failed to check for plugin update: ${String(err)}`,
+      );
+    }
+  }
+
+  async updatePlugin(pluginIdRaw: string, scope?: PluginCatalogEntry["scope"]) {
+    const pluginId = pluginIdRaw.trim();
+    if (!pluginId) {
+      this.context.emitError("validation_failed", "session", "Plugin ID is required");
+      return;
+    }
+    await this.withSkillMutationLock(async () => {
+      try {
+        const catalog = await buildPluginCatalogSnapshot(this.context.state.config);
+        const plugin = this.pluginCatalogService.resolveInstalledPluginSelection(
+          catalog,
+          pluginId,
+          scope,
+        );
+        if (!plugin) {
+          return;
+        }
+        const result = await updatePluginInstallation({
+          config: this.context.state.config,
+          plugin,
+        });
+        await this.emitPluginInstallPreview(result.preview, false);
+        await this.mutationCoordinator.afterPluginMutation({
+          clearedMutationPendingKeys: [this.pluginMutationPendingKey("update", plugin)],
+          refreshAllWorkspaces: this.isSharedPluginMutationScope(plugin.scope),
+        });
+        await this.pluginCatalogService.emitPluginDetail(result.pluginId, plugin.scope);
+      } catch (err) {
+        this.context.emitError(
+          "internal_error",
+          "session",
+          `Failed to update plugin: ${String(err)}`,
         );
       }
     });

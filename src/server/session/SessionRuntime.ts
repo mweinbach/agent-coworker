@@ -447,6 +447,14 @@ export class SessionPluginService {
     await this.session.installPlugins(sourceInput, targetScope);
   }
 
+  async checkUpdate(pluginId: string, scope?: "workspace" | "user"): Promise<void> {
+    await this.session.checkPluginUpdate(pluginId, scope);
+  }
+
+  async update(pluginId: string, scope?: "workspace" | "user"): Promise<void> {
+    await this.session.updatePlugin(pluginId, scope);
+  }
+
   async enable(pluginId: string, scope?: "workspace" | "user"): Promise<void> {
     await this.session.enablePlugin(pluginId, scope);
   }

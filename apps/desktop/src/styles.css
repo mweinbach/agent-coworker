@@ -55,6 +55,49 @@ code {
   -webkit-user-select: text;
 }
 
+* {
+  box-sizing: border-box;
+}
+
+[data-cowork-univer-canvas="true"],
+[data-cowork-univer-canvas="true"] * {
+  --primary-color: var(--accent);
+  --brand-color: var(--accent);
+}
+
+[data-cowork-univer-canvas="true"] {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+[data-cowork-univer-canvas="true"] :where(.univer, .univer-app, .univer-container) {
+  background: var(--surface-spreadsheet);
+}
+
+[data-cowork-univer-canvas="true"] :where(input, textarea, [contenteditable="true"]) {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+[data-cowork-univer-canvas="true"] [data-u-comp="formula-bar"] {
+  /* biome-ignore lint/complexity/noImportantStyles: override Univer's own formula-bar height */
+  height: 2.25rem !important;
+  min-height: 2.25rem;
+  overflow: hidden;
+}
+
+[data-cowork-univer-canvas="true"] [data-u-comp="formula-bar"] .univer-break-words {
+  overflow: hidden;
+  overflow-wrap: normal;
+  white-space: nowrap;
+  word-break: normal;
+}
+
+[data-cowork-univer-canvas="true"] [data-u-comp="formula-bar"] [data-u-comp="render-canvas"] {
+  display: block;
+  max-height: 2rem;
+}
+
 :root[data-window-mode="quick-chat"] body,
 :root[data-window-mode="utility"] body {
   background: transparent;
@@ -71,10 +114,6 @@ kbd,
 pre,
 samp {
   font-family: var(--font-mono);
-}
-
-* {
-  box-sizing: border-box;
 }
 
 /* Thin overlay-style scrollbars for Chromium 146+ */

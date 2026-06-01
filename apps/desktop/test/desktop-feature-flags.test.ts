@@ -33,4 +33,14 @@ describe("desktop feature flag bridge fallback", () => {
 
     expect(getDesktopFeatureFlags()).toEqual(resolveFeatureFlags({ isPackaged: false }));
   });
+
+  test("uses no-op desktop subscriptions when the bridge is unavailable", async () => {
+    const { onMenuCommand, onSystemAppearanceChanged, onUpdateStateChanged } = await import(
+      "../src/lib/desktopCommands.ts?desktop-subscription-fallback-test"
+    );
+
+    expect(() => onMenuCommand(() => {})()).not.toThrow();
+    expect(() => onSystemAppearanceChanged(() => {})()).not.toThrow();
+    expect(() => onUpdateStateChanged(() => {})()).not.toThrow();
+  });
 });

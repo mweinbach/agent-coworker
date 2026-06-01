@@ -1,6 +1,9 @@
 import type {
-  SpreadsheetPreviewResult,
-  SpreadsheetPreviewViewportRequest,
+  SpreadsheetBatchPatchOperation,
+  SpreadsheetBatchPatchResult,
+  SpreadsheetFileVersion,
+  SpreadsheetFileVersionResult,
+  SpreadsheetWorkbookSnapshotResult,
 } from "../../../../../src/shared/spreadsheetPreview";
 import { JsonRpcSocket } from "../../lib/agentSocket";
 import { withBrowserAccessToken } from "../../lib/webAdapter";
@@ -518,23 +521,51 @@ export async function uploadJsonRpcWorkspaceFile(
   };
 }
 
-export async function previewJsonRpcWorkspaceSpreadsheet(
+export async function previewJsonRpcWorkspaceSpreadsheetWorkbook(
   get: StoreGet,
   set: StoreSet | undefined,
   workspaceId: string,
   filePath: string,
   opts: {
     sheetName?: string;
-    viewport?: SpreadsheetPreviewViewportRequest;
   } = {},
-): Promise<SpreadsheetPreviewResult> {
+): Promise<SpreadsheetWorkbookSnapshotResult> {
   const workspace = getWorkspaceById(get, workspaceId);
-  return (await requestJsonRpc(get, set, workspaceId, "cowork/workspace/spreadsheet/preview", {
+  return (await requestJsonRpc(get, set, workspaceId, "cowork/workspace/spreadsheet/workbook", {
     cwd: workspace?.path,
     path: filePath,
     ...(opts.sheetName ? { sheetName: opts.sheetName } : {}),
-    ...(opts.viewport ? { viewport: opts.viewport } : {}),
-  })) as SpreadsheetPreviewResult;
+  })) as SpreadsheetWorkbookSnapshotResult;
+}
+
+export async function versionJsonRpcWorkspaceSpreadsheet(
+  get: StoreGet,
+  set: StoreSet | undefined,
+  workspaceId: string,
+  filePath: string,
+): Promise<SpreadsheetFileVersionResult> {
+  const workspace = getWorkspaceById(get, workspaceId);
+  return (await requestJsonRpc(get, set, workspaceId, "cowork/workspace/spreadsheet/version", {
+    cwd: workspace?.path,
+    path: filePath,
+  })) as SpreadsheetFileVersionResult;
+}
+
+export async function patchJsonRpcWorkspaceSpreadsheet(
+  get: StoreGet,
+  set: StoreSet | undefined,
+  workspaceId: string,
+  filePath: string,
+  operations: SpreadsheetBatchPatchOperation[],
+  expectedFileVersion?: SpreadsheetFileVersion,
+): Promise<SpreadsheetBatchPatchResult> {
+  const workspace = getWorkspaceById(get, workspaceId);
+  return (await requestJsonRpc(get, set, workspaceId, "cowork/workspace/spreadsheet/patch", {
+    cwd: workspace?.path,
+    path: filePath,
+    operations,
+    ...(expectedFileVersion ? { expectedFileVersion } : {}),
+  })) as SpreadsheetBatchPatchResult;
 }
 
 export async function previewJsonRpcWorkspacePresentation(

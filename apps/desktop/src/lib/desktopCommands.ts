@@ -33,6 +33,8 @@ function requireDesktopApi(): DesktopApi {
   return api;
 }
 
+function noopUnsubscribe(): void {}
+
 function getDefaultDesktopFeatureFlags(): DesktopFeatureFlags {
   return resolveFeatureFlags({ isPackaged: false });
 }
@@ -304,19 +306,19 @@ export async function updateMobileRelayTrustedPhonePermissions(
 export function onSystemAppearanceChanged(
   listener: (appearance: SystemAppearance) => void,
 ): () => void {
-  return requireDesktopApi().onSystemAppearanceChanged(listener);
+  return getDesktopApi()?.onSystemAppearanceChanged(listener) ?? noopUnsubscribe;
 }
 
 export function onUpdateStateChanged(listener: (state: UpdaterState) => void): () => void {
-  return requireDesktopApi().onUpdateStateChanged(listener);
+  return getDesktopApi()?.onUpdateStateChanged(listener) ?? noopUnsubscribe;
 }
 
 export function onMenuCommand(listener: (command: DesktopMenuCommand) => void): () => void {
-  return requireDesktopApi().onMenuCommand(listener);
+  return getDesktopApi()?.onMenuCommand(listener) ?? noopUnsubscribe;
 }
 
 export function onMobileRelayStateChanged(
   listener: (state: import("./desktopApi").MobileRelayBridgeState) => void,
 ): () => void {
-  return requireDesktopApi().onMobileRelayStateChanged(listener);
+  return getDesktopApi()?.onMobileRelayStateChanged(listener) ?? noopUnsubscribe;
 }

@@ -1,8 +1,11 @@
 import {
+  AlertTriangleIcon,
   BoldIcon,
   CheckIcon,
+  ExternalLinkIcon,
   EyeIcon,
   FileTextIcon,
+  FolderOpenIcon,
   ItalicIcon,
   ListIcon,
   Loader2Icon,
@@ -25,15 +28,16 @@ import { ScrollArea } from "../components/ui/scroll-area";
 import { Tabs, TabsContent } from "../components/ui/tabs";
 import { Textarea } from "../components/ui/textarea";
 import { cleanMarkdown, markdownToHtml, nodeToMarkdown } from "../lib/canvasMarkdown";
-import { readFileForPreview, writeFile } from "../lib/desktopCommands";
+import { buildCanvasDocumentPrompt } from "../lib/canvasRequest";
+import { openPath, readFileForPreview, revealPath, writeFile } from "../lib/desktopCommands";
 import { getFilePreviewKind, isSlideModule } from "../lib/filePreviewKind";
 import { cn } from "../lib/utils";
 import { getDesktopWindowMode } from "../lib/windowMode";
 import { CanvasElectronTitlebar } from "./canvas/CanvasElectronTitlebar";
 import { CanvasFilePreviewLayout } from "./canvas/CanvasFilePreviewLayout";
+import { LazyUniverSpreadsheetCanvas } from "./LazyUniverSpreadsheetCanvas";
 import { PptxPreview } from "./PptxPreview";
 import { SlidePreview } from "./SlidePreview";
-import { SpreadsheetPreview } from "./SpreadsheetPreview";
 
 function decodeUtf8(bytes: Uint8Array): string {
   return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
@@ -45,6 +49,47 @@ function basenamePath(p: string): string {
 }
 
 const CANVAS_PREVIEW_MAX_BYTES = 256 * 1024;
+
+function CanvasTruncationBanner({ path }: { path: string }) {
+  const openFullFile = useCallback(() => {
+    void openPath({ path }).catch((error) => {
+      console.error("Failed to open truncated preview externally:", error);
+    });
+  }, [path]);
+
+  const revealFile = useCallback(() => {
+    void revealPath({ path }).catch((error) => {
+      console.error("Failed to reveal truncated preview:", error);
+    });
+  }, [path]);
+
+  return (
+    <div
+      role="status"
+      data-testid="canvas-truncated-warning"
+      className="mx-3 mt-3 flex shrink-0 flex-wrap items-start gap-3 rounded-md border border-warning/35 bg-warning/10 px-3 py-2.5 text-sm"
+    >
+      <AlertTriangleIcon className="mt-0.5 size-4 shrink-0 text-warning" />
+      <div className="min-w-[220px] flex-1">
+        <div className="font-medium text-foreground">Editing disabled for large preview</div>
+        <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+          This file is larger than the Canvas preview limit and only the first 256 KB were loaded.
+          Editing is disabled to avoid overwriting the full file with partial content.
+        </p>
+      </div>
+      <div className="flex shrink-0 items-center gap-1.5">
+        <Button type="button" variant="ghost" size="sm" onClick={openFullFile}>
+          <ExternalLinkIcon data-icon="inline-start" />
+          Open externally
+        </Button>
+        <Button type="button" variant="ghost" size="sm" onClick={revealFile}>
+          <FolderOpenIcon data-icon="inline-start" />
+          Reveal in Finder
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 export function Canvas({ path }: { path: string }) {
   const isCanvasMode = getDesktopWindowMode() === "canvas";
@@ -179,35 +224,14 @@ export function Canvas({ path }: { path: string }) {
   const fileName = basenamePath(path);
   const isAgentBusy = threadRuntime?.busy === true;
 
-  if (isSpreadsheet) {
-    return (
-      <CanvasFilePreviewLayout
-        isCanvasMode={isCanvasMode}
-        isAgentBusy={isAgentBusy}
-        fileName={fileName}
-        previewKind={previewKind}
-        onClose={closeFilePreview}
-      >
-        <SpreadsheetPreview path={path} compact />
-      </CanvasFilePreviewLayout>
-    );
-  }
-
-  if (isPptx) {
-    return (
-      <CanvasFilePreviewLayout
-        isCanvasMode={isCanvasMode}
-        isAgentBusy={isAgentBusy}
-        fileName={fileName}
-        previewKind={previewKind}
-        onClose={closeFilePreview}
-      >
-        <PptxPreview path={path} />
-      </CanvasFilePreviewLayout>
-    );
-  }
-
+  // NOTE: All hooks must be declared unconditionally before any early return.
+  // Canvas is mounted unkeyed (see App.tsx), so the same instance re-renders
+  // across file-type switches — bailing out above a hook would change the hook
+  // count between renders and crash React. The spreadsheet/pptx returns live
+  // below, after every hook. Editor-only effects guard on isSpreadsheet/isPptx
+  // so they stay inert for preview-only file kinds.
   useEffect(() => {
+    if (isSpreadsheet || isPptx) return;
     if (!floatingCoords) {
       if ("Highlight" in window) {
         try {
@@ -216,7 +240,7 @@ export function Canvas({ path }: { path: string }) {
       }
       savedSelectionRangeRef.current = null;
     }
-  }, [floatingCoords]);
+  }, [floatingCoords, isSpreadsheet, isPptx]);
 
   const handleInput = () => {
     if (!editorRef.current) return;
@@ -289,6 +313,7 @@ export function Canvas({ path }: { path: string }) {
   }, []);
 
   useEffect(() => {
+    if (isSpreadsheet || isPptx) return;
     const handleSelection = () => {
       // Don't wipe out coordinates if the user is interacting with the floating bar
       if (isInteractingRef.current) {
@@ -356,7 +381,7 @@ export function Canvas({ path }: { path: string }) {
 
     document.addEventListener("selectionchange", handleSelection);
     return () => document.removeEventListener("selectionchange", handleSelection);
-  }, [activeTab]);
+  }, [activeTab, isSpreadsheet, isPptx]);
 
   const clearSelectionState = useCallback(() => {
     setSelectedText("");
@@ -377,6 +402,7 @@ export function Canvas({ path }: { path: string }) {
   }, [clearSelectionState]);
 
   useEffect(() => {
+    if (isSpreadsheet || isPptx) return;
     const handleWindowPointerDown = (e: MouseEvent) => {
       const target = e.target as HTMLElement | null;
       if (floatingRef.current?.contains(target)) {
@@ -437,7 +463,7 @@ export function Canvas({ path }: { path: string }) {
       document.removeEventListener("pointerdown", handleWindowPointerDown);
       document.removeEventListener("pointerup", handleWindowPointerUp);
     };
-  }, [clearSelectionState]);
+  }, [clearSelectionState, isSpreadsheet, isPptx]);
 
   const handleSendPrompt = async (explicitPrompt?: string) => {
     const textToSend = (explicitPrompt !== undefined ? explicitPrompt : promptText).trim();
@@ -448,16 +474,14 @@ export function Canvas({ path }: { path: string }) {
     }
 
     const filename = basenamePath(path);
-    let promptWithContext = `[Canvas Collaborative Edit]
-Please edit the file \`${filename}\` (located at \`${path}\`) based on my instructions below.
-
-**Instructions:**
-${textToSend}`;
-
-    if (selectedText) {
-      promptWithContext += `\n\n**Target Section / Selection:**
-> ${selectedText}`;
-    }
+    const canvasKind = isMarkdown ? "markdown" : isSlide ? "slide" : "text";
+    const promptWithContext = buildCanvasDocumentPrompt({
+      path,
+      fileName: filename,
+      kind: canvasKind,
+      selection: selectedText || null,
+      request: textToSend,
+    });
 
     const originalPrompt = promptText;
     if (explicitPrompt !== undefined) {
@@ -478,6 +502,34 @@ ${textToSend}`;
       }
     }
   };
+
+  if (isSpreadsheet) {
+    return (
+      <CanvasFilePreviewLayout
+        isCanvasMode={isCanvasMode}
+        isAgentBusy={isAgentBusy}
+        fileName={fileName}
+        previewKind={previewKind}
+        onClose={closeFilePreview}
+      >
+        <LazyUniverSpreadsheetCanvas path={path} compact />
+      </CanvasFilePreviewLayout>
+    );
+  }
+
+  if (isPptx) {
+    return (
+      <CanvasFilePreviewLayout
+        isCanvasMode={isCanvasMode}
+        isAgentBusy={isAgentBusy}
+        fileName={fileName}
+        previewKind={previewKind}
+        onClose={closeFilePreview}
+      >
+        <PptxPreview path={path} />
+      </CanvasFilePreviewLayout>
+    );
+  }
 
   return (
     <div
@@ -673,90 +725,101 @@ ${textToSend}`;
               <div className="font-semibold mb-1">Failed to load content</div>
               <p>{error}</p>
             </div>
-          ) : isMarkdown ? (
-            <>
-              <TabsContent value="preview" className="h-full m-0 p-0 outline-none">
-                <ScrollArea className="h-full">
-                  <div className="mx-auto w-full max-w-[840px] px-4 py-8">
-                    <div
-                      ref={(el) => {
-                        editorRef.current = el;
-                        if (el && !el.innerHTML) {
-                          el.innerHTML = markdownToHtml(content);
-                        }
-                      }}
-                      role="textbox"
-                      contentEditable={!contentTruncated}
-                      suppressContentEditableWarning
-                      onInput={handleInput}
-                      onKeyDown={handleKeyDown}
-                      onBlur={handleBlur}
-                      className="mx-auto w-full min-h-[1056px] p-12 md:p-16 focus:outline-none focus:ring-0 max-w-none text-left select-text leading-relaxed [&_p]:mb-4 [&_h1]:text-4xl [&_h1]:font-bold [&_h1]:mb-6 [&_h1]:mt-8 [&_h2]:text-3xl [&_h2]:font-bold [&_h2]:mb-4 [&_h2]:mt-8 [&_h3]:text-2xl [&_h3]:font-semibold [&_h3]:mb-4 [&_h3]:mt-6 [&_h4]:text-xl [&_h4]:font-semibold [&_h4]:mb-3 [&_h4]:mt-6 [&_h5]:text-lg [&_h5]:font-semibold [&_h5]:mb-2 [&_h5]:mt-4 [&_ul]:list-disc [&_ul]:pl-6 [&_ul]:mb-4 [&_ol]:list-decimal [&_ol]:pl-6 [&_ol]:mb-4 [&_li]:mb-1 [&_blockquote]:border-l-4 [&_blockquote]:border-border/80 [&_blockquote]:pl-4 [&_blockquote]:italic [&_blockquote]:mb-4 [&_hr]:my-8 [&_hr]:border-border/60 [&_pre]:bg-muted/40 [&_pre]:p-4 [&_pre]:rounded-md [&_pre]:mb-4 [&_code]:bg-muted/70 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded-sm"
-                    />
-                  </div>
-                </ScrollArea>
-              </TabsContent>
-
-              <TabsContent value="edit" className="h-full m-0 p-0 outline-none bg-background">
-                <div className={cn("flex h-full flex-col pb-2.5 pt-1.5 gap-2", pxClass)}>
-                  <div className="text-[10px] text-muted-foreground px-1 flex items-center justify-between shrink-0">
-                    <span>Markdown Source</span>
-                    <span className="tabular-nums font-mono">{content.length} characters</span>
-                  </div>
-                  <Textarea
-                    value={content}
-                    onChange={(e) => handleContentChange(e.target.value)}
-                    onBlur={handleBlur}
-                    readOnly={contentTruncated}
-                    placeholder="Type your markdown here..."
-                    className="flex-1 min-h-0 resize-none font-mono text-sm leading-relaxed p-4 bg-background/50 border border-border/60 focus-visible:ring-1 focus-visible:ring-primary focus-visible:border-primary/80"
-                  />
-                </div>
-              </TabsContent>
-            </>
-          ) : isSlide ? (
-            <>
-              <TabsContent value="preview" className="h-full m-0 p-0 outline-none">
-                <SlidePreview path={path} refreshTrigger={previewRefreshTrigger} />
-              </TabsContent>
-
-              <TabsContent value="edit" className="h-full m-0 p-0 outline-none bg-background">
-                <div className={cn("flex h-full flex-col pb-2.5 pt-1.5 gap-2", pxClass)}>
-                  <div className="text-[10px] text-muted-foreground px-1 flex items-center justify-between shrink-0">
-                    <span>Slide Source Code</span>
-                    <span className="tabular-nums font-mono">{content.length} characters</span>
-                  </div>
-                  <Textarea
-                    value={content}
-                    onChange={(e) => handleContentChange(e.target.value)}
-                    onBlur={handleBlur}
-                    readOnly={contentTruncated}
-                    placeholder="Type your slide code here..."
-                    className="flex-1 min-h-0 resize-none font-mono text-sm leading-relaxed p-4 bg-background/50 border border-border/60 focus-visible:ring-1 focus-visible:ring-primary focus-visible:border-primary/80"
-                  />
-                </div>
-              </TabsContent>
-            </>
           ) : (
-            <div className="h-full flex flex-col pb-2.5 pt-1.5 gap-2 bg-background">
-              <div
-                className={cn(
-                  "text-[10px] text-muted-foreground px-1 flex items-center justify-between shrink-0",
-                  pxClass,
+            <div className="flex h-full min-h-0 flex-col">
+              {contentTruncated ? <CanvasTruncationBanner path={path} /> : null}
+              <div className="min-h-0 flex-1">
+                {isMarkdown ? (
+                  <>
+                    <TabsContent value="preview" className="h-full m-0 p-0 outline-none">
+                      <ScrollArea className="h-full">
+                        <div className="mx-auto w-full max-w-[840px] px-4 py-8">
+                          <div
+                            ref={(el) => {
+                              editorRef.current = el;
+                              if (el && !el.innerHTML) {
+                                el.innerHTML = markdownToHtml(content);
+                              }
+                            }}
+                            role="textbox"
+                            contentEditable={!contentTruncated}
+                            suppressContentEditableWarning
+                            onInput={handleInput}
+                            onKeyDown={handleKeyDown}
+                            onBlur={handleBlur}
+                            className="mx-auto w-full min-h-[1056px] p-12 md:p-16 focus:outline-none focus:ring-0 max-w-none text-left select-text leading-relaxed [&_p]:mb-4 [&_h1]:text-4xl [&_h1]:font-bold [&_h1]:mb-6 [&_h1]:mt-8 [&_h2]:text-3xl [&_h2]:font-bold [&_h2]:mb-4 [&_h2]:mt-8 [&_h3]:text-2xl [&_h3]:font-semibold [&_h3]:mb-4 [&_h3]:mt-6 [&_h4]:text-xl [&_h4]:font-semibold [&_h4]:mb-3 [&_h4]:mt-6 [&_h5]:text-lg [&_h5]:font-semibold [&_h5]:mb-2 [&_h5]:mt-4 [&_ul]:list-disc [&_ul]:pl-6 [&_ul]:mb-4 [&_ol]:list-decimal [&_ol]:pl-6 [&_ol]:mb-4 [&_li]:mb-1 [&_blockquote]:border-l-4 [&_blockquote]:border-border/80 [&_blockquote]:pl-4 [&_blockquote]:italic [&_blockquote]:mb-4 [&_hr]:my-8 [&_hr]:border-border/60 [&_pre]:bg-muted/40 [&_pre]:p-4 [&_pre]:rounded-md [&_pre]:mb-4 [&_code]:bg-muted/70 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded-sm"
+                          />
+                        </div>
+                      </ScrollArea>
+                    </TabsContent>
+
+                    <TabsContent value="edit" className="h-full m-0 p-0 outline-none bg-background">
+                      <div className={cn("flex h-full flex-col pb-2.5 pt-1.5 gap-2", pxClass)}>
+                        <div className="text-[10px] text-muted-foreground px-1 flex items-center justify-between shrink-0">
+                          <span>Markdown Source</span>
+                          <span className="tabular-nums font-mono">
+                            {content.length} characters
+                          </span>
+                        </div>
+                        <Textarea
+                          value={content}
+                          onChange={(e) => handleContentChange(e.target.value)}
+                          onBlur={handleBlur}
+                          readOnly={contentTruncated}
+                          placeholder="Type your markdown here..."
+                          className="flex-1 min-h-0 resize-none font-mono text-sm leading-relaxed p-4 bg-background/50 border border-border/60 focus-visible:ring-1 focus-visible:ring-primary focus-visible:border-primary/80"
+                        />
+                      </div>
+                    </TabsContent>
+                  </>
+                ) : isSlide ? (
+                  <>
+                    <TabsContent value="preview" className="h-full m-0 p-0 outline-none">
+                      <SlidePreview path={path} refreshTrigger={previewRefreshTrigger} />
+                    </TabsContent>
+
+                    <TabsContent value="edit" className="h-full m-0 p-0 outline-none bg-background">
+                      <div className={cn("flex h-full flex-col pb-2.5 pt-1.5 gap-2", pxClass)}>
+                        <div className="text-[10px] text-muted-foreground px-1 flex items-center justify-between shrink-0">
+                          <span>Slide Source Code</span>
+                          <span className="tabular-nums font-mono">
+                            {content.length} characters
+                          </span>
+                        </div>
+                        <Textarea
+                          value={content}
+                          onChange={(e) => handleContentChange(e.target.value)}
+                          onBlur={handleBlur}
+                          readOnly={contentTruncated}
+                          placeholder="Type your slide code here..."
+                          className="flex-1 min-h-0 resize-none font-mono text-sm leading-relaxed p-4 bg-background/50 border border-border/60 focus-visible:ring-1 focus-visible:ring-primary focus-visible:border-primary/80"
+                        />
+                      </div>
+                    </TabsContent>
+                  </>
+                ) : (
+                  <div className="h-full flex flex-col pb-2.5 pt-1.5 gap-2 bg-background">
+                    <div
+                      className={cn(
+                        "text-[10px] text-muted-foreground px-1 flex items-center justify-between shrink-0",
+                        pxClass,
+                      )}
+                    >
+                      <span>Source Editor (Auto-saving)</span>
+                      <span className="tabular-nums font-mono">{content.length} characters</span>
+                    </div>
+                    <div className={cn("flex-1 min-h-0", pxClass)}>
+                      <Textarea
+                        value={content}
+                        onChange={(e) => handleContentChange(e.target.value)}
+                        onBlur={handleBlur}
+                        readOnly={contentTruncated}
+                        placeholder="Type your text here..."
+                        className="w-full h-full resize-none font-mono text-sm leading-relaxed p-4 bg-background/50 border border-border/60 focus-visible:ring-1 focus-visible:ring-primary focus-visible:border-primary/80"
+                      />
+                    </div>
+                  </div>
                 )}
-              >
-                <span>Source Editor (Auto-saving)</span>
-                <span className="tabular-nums font-mono">{content.length} characters</span>
-              </div>
-              <div className={cn("flex-1 min-h-0", pxClass)}>
-                <Textarea
-                  value={content}
-                  onChange={(e) => handleContentChange(e.target.value)}
-                  onBlur={handleBlur}
-                  readOnly={contentTruncated}
-                  placeholder="Type your text here..."
-                  className="w-full h-full resize-none font-mono text-sm leading-relaxed p-4 bg-background/50 border border-border/60 focus-visible:ring-1 focus-visible:ring-primary focus-visible:border-primary/80"
-                />
               </div>
             </div>
           )}

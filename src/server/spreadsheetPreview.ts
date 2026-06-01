@@ -1,51 +1,55 @@
+import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import * as XLSX from "xlsx";
 
-import {
-  SPREADSHEET_PREVIEW_DEFAULT_COL_COUNT,
-  SPREADSHEET_PREVIEW_DEFAULT_ROW_COUNT,
-  SPREADSHEET_PREVIEW_MAX_COL_COUNT,
-  SPREADSHEET_PREVIEW_MAX_ROW_COUNT,
-  type SpreadsheetCellStyle,
-  type SpreadsheetColumnWidth,
-  type SpreadsheetFileKind,
-  type SpreadsheetMergedRange,
-  type SpreadsheetPreview,
-  type SpreadsheetPreviewCell,
-  type SpreadsheetPreviewResult,
-  type SpreadsheetPreviewViewport,
-  type SpreadsheetPreviewViewportRequest,
-  type SpreadsheetSheetSummary,
+import type {
+  SpreadsheetCellStyle,
+  SpreadsheetColumnWidth,
+  SpreadsheetFileKind,
+  SpreadsheetFileVersion,
+  SpreadsheetFileVersionResult,
+  SpreadsheetMergedRange,
+  SpreadsheetPreviewCell,
+  SpreadsheetPreviewViewport,
+  SpreadsheetSheetSummary,
+  SpreadsheetWorkbookSnapshot,
+  SpreadsheetWorkbookSnapshotResult,
+  SpreadsheetWorkbookSnapshotSheet,
 } from "../shared/spreadsheetPreview";
+import { readOoxmlColor, readXlsxSheetObjects, type XlsxSheetObjects } from "./spreadsheetOoxml";
 
 type Worksheet = XLSX.WorkSheet;
 type Workbook = XLSX.WorkBook;
+const OUTSIDE_WORKSPACE_MESSAGE = "Path is outside the workspace root.";
+const MAX_WORKBOOK_SNAPSHOT_CELLS = 50_000;
+const MAX_SNAPSHOT_ROWS_PER_SHEET = 2_000;
+const MAX_SNAPSHOT_COLS_PER_SHEET = 200;
 
-export type SpreadsheetPreviewRequest = {
+export type SpreadsheetWorkbookRequest = {
   cwd: string;
   filePath: string;
   sheetName?: string;
-  viewport?: SpreadsheetPreviewViewportRequest;
 };
 
-export async function previewSpreadsheetFile(
-  request: SpreadsheetPreviewRequest,
-): Promise<SpreadsheetPreviewResult> {
-  const resolvedPath = await resolveWorkspaceFilePath(request.cwd, request.filePath);
-  const kind = spreadsheetKindForPath(resolvedPath);
-  if (!kind) {
-    return {
-      ok: false,
-      error: {
-        kind: "unsupported_format",
-        message: "Spreadsheet preview supports CSV and XLSX files.",
-      },
-      warnings: [],
-    };
-  }
-
+export async function readSpreadsheetWorkbookSnapshot(
+  request: SpreadsheetWorkbookRequest,
+): Promise<SpreadsheetWorkbookSnapshotResult> {
   try {
+    const resolvedPath = await resolveWorkspaceFilePath(request.cwd, request.filePath);
+    const kind = spreadsheetKindForPath(resolvedPath);
+    if (!kind) {
+      return {
+        ok: false,
+        error: {
+          kind: "unsupported_format",
+          message: "Spreadsheet workbook snapshots support CSV and XLSX files.",
+        },
+        warnings: [],
+      };
+    }
+
+    const stat = await fs.stat(resolvedPath);
     const bytes = await fs.readFile(resolvedPath);
     if (kind === "csv") {
       validateCsvQuoteBalance(bytes.toString("utf8"));
@@ -53,19 +57,72 @@ export async function previewSpreadsheetFile(
       validateXlsxZipSignature(bytes);
     }
     const workbook = readWorkbook(bytes, kind);
-    const preview = buildSpreadsheetPreview({
+    const snapshot = await buildSpreadsheetWorkbookSnapshot({
       workbook,
       kind,
       filePath: resolvedPath,
+      bytes,
+      fileVersion: spreadsheetFileVersionFromStat(stat),
       requestedSheetName: request.sheetName,
-      requestedViewport: request.viewport,
     });
-    return { ok: true, preview };
+    return { ok: true, workbook: snapshot };
   } catch (error) {
+    if (isFileNotFoundError(error) || isOutsideWorkspaceError(error)) {
+      return {
+        ok: false,
+        error: spreadsheetPathFailure(error),
+        warnings: [],
+      };
+    }
     return {
       ok: false,
       error: {
         kind: "parse_error",
+        message: error instanceof Error ? error.message : String(error),
+      },
+      warnings: [],
+    };
+  }
+}
+
+export async function readSpreadsheetFileVersion(
+  request: Pick<SpreadsheetWorkbookRequest, "cwd" | "filePath">,
+): Promise<SpreadsheetFileVersionResult> {
+  let resolvedPath: string;
+  try {
+    resolvedPath = await resolveWorkspaceFilePath(request.cwd, request.filePath);
+  } catch (error) {
+    const failure = spreadsheetPathFailure(error);
+    return {
+      ok: false,
+      error: failure,
+      warnings: [],
+    };
+  }
+
+  const kind = spreadsheetKindForPath(resolvedPath);
+  if (!kind) {
+    return {
+      ok: false,
+      error: {
+        kind: "unsupported_format",
+        message: "Spreadsheet file versions support CSV and XLSX files.",
+      },
+      warnings: [],
+    };
+  }
+
+  try {
+    const stat = await fs.stat(resolvedPath);
+    return {
+      ok: true,
+      version: spreadsheetFileVersionFromStat(stat),
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: {
+        kind: isFileNotFoundError(error) ? "not_found" : "parse_error",
         message: error instanceof Error ? error.message : String(error),
       },
       warnings: [],
@@ -81,9 +138,47 @@ export async function resolveWorkspaceFilePath(cwd: string, filePath: string): P
   const resolvedCandidate = await fs.realpath(candidate);
   const relative = path.relative(workspaceRoot, resolvedCandidate);
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error("Path is outside the workspace root.");
+    throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
   }
   return resolvedCandidate;
+}
+
+export function spreadsheetPathFailure(error: unknown): {
+  kind: "not_found" | "outside_workspace";
+  message: string;
+} {
+  if (isFileNotFoundError(error)) {
+    return { kind: "not_found", message: "Spreadsheet file was not found." };
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    kind: message === OUTSIDE_WORKSPACE_MESSAGE ? "outside_workspace" : "not_found",
+    message,
+  };
+}
+
+function isOutsideWorkspaceError(error: unknown): boolean {
+  return error instanceof Error && error.message === OUTSIDE_WORKSPACE_MESSAGE;
+}
+
+export function spreadsheetFileVersionFromStat(stat: Stats): SpreadsheetFileVersion {
+  const modifiedAtMs = Math.round(stat.mtimeMs);
+  const changeTimeMs = Math.round(stat.ctimeMs);
+  return {
+    modifiedAtMs,
+    changeTimeMs,
+    size: stat.size,
+    fingerprint: `${modifiedAtMs}:${changeTimeMs}:${stat.size}`,
+  };
+}
+
+function isFileNotFoundError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "ENOENT"
+  );
 }
 
 function spreadsheetKindForPath(filePath: string): SpreadsheetFileKind | null {
@@ -100,19 +195,20 @@ function readWorkbook(bytes: Buffer, kind: SpreadsheetFileKind): Workbook {
     cellFormula: true,
     cellNF: true,
     cellStyles: true,
-    raw: kind === "csv" ? false : undefined,
+    raw: kind === "csv" ? true : undefined,
   });
 }
 
-function buildSpreadsheetPreview(opts: {
+async function buildSpreadsheetWorkbookSnapshot(opts: {
   workbook: Workbook;
   kind: SpreadsheetFileKind;
   filePath: string;
+  bytes: Buffer;
+  fileVersion: SpreadsheetFileVersion;
   requestedSheetName?: string;
-  requestedViewport?: SpreadsheetPreviewViewportRequest;
-}): SpreadsheetPreview {
+}): Promise<SpreadsheetWorkbookSnapshot> {
   const sheetNames = opts.kind === "csv" ? ["CSV"] : opts.workbook.SheetNames;
-  const sheets = sheetNames.map((name, index) =>
+  const sheetSummaries = sheetNames.map((name, index) =>
     summarizeSheet(
       name,
       readWorksheet(opts.workbook, opts.kind, name, index),
@@ -120,36 +216,105 @@ function buildSpreadsheetPreview(opts: {
       index,
     ),
   );
-  if (sheets.length === 0) {
+  if (sheetSummaries.length === 0) {
     throw new Error("Workbook does not contain any sheets.");
   }
 
-  const selectedSheetName =
+  const activeSheetName =
     opts.requestedSheetName && sheetNames.includes(opts.requestedSheetName)
       ? opts.requestedSheetName
       : (sheetNames[0] ?? "Sheet1");
-  const selectedIndex = Math.max(0, sheetNames.indexOf(selectedSheetName));
-  const worksheet = readWorksheet(opts.workbook, opts.kind, selectedSheetName, selectedIndex);
-  if (!worksheet) {
-    throw new Error(`Sheet not found: ${selectedSheetName}`);
+  const warnings: string[] = [];
+  const viewportBySheetName = new Map<string, SpreadsheetPreviewViewport>();
+  let remainingCells = MAX_WORKBOOK_SNAPSHOT_CELLS;
+  const prioritizedSummaries = [
+    ...sheetSummaries.filter((sheet) => sheet.name === activeSheetName),
+    ...sheetSummaries.filter((sheet) => sheet.name !== activeSheetName),
+  ];
+  for (const sheet of prioritizedSummaries) {
+    const viewport = buildBoundedSheetViewport(sheet, remainingCells);
+    viewportBySheetName.set(sheet.name, viewport);
+    remainingCells = Math.max(0, remainingCells - viewport.rowCount * viewport.colCount);
+    if (viewport.truncatedRows || viewport.truncatedCols) {
+      warnings.push(
+        `${sheet.name}: workbook canvas snapshot is limited to ${viewport.rowCount} rows x ${viewport.colCount} columns of ${sheet.rowCount} rows x ${sheet.colCount} columns.`,
+      );
+    }
   }
-  const selectedSummary = sheets[selectedIndex] ?? sheets[0];
-  if (!selectedSummary) {
-    throw new Error("Workbook does not contain a readable sheet.");
+
+  const sheets: SpreadsheetWorkbookSnapshotSheet[] = [];
+  const date1904 = opts.workbook.Workbook?.WBProps?.date1904 === true;
+  for (const [index, sheet] of sheetSummaries.entries()) {
+    const worksheet = readWorksheet(opts.workbook, opts.kind, sheet.name, index);
+    const viewport = viewportBySheetName.get(sheet.name) ?? buildBoundedSheetViewport(sheet, 0);
+    let packageDetails: XlsxSheetObjects = { tables: [], charts: [], cellStyles: new Map() };
+    if (opts.kind === "xlsx") {
+      try {
+        packageDetails = await readXlsxSheetObjects(opts.bytes, sheet.name);
+      } catch (metadataError) {
+        warnings.push(
+          `${sheet.name}: workbook objects could not be read: ${
+            metadataError instanceof Error ? metadataError.message : String(metadataError)
+          }`,
+        );
+      }
+    }
+
+    sheets.push({
+      ...sheet,
+      id: `sheet-${index + 1}`,
+      loadedRowCount: viewport.rowCount,
+      loadedColCount: viewport.colCount,
+      truncatedRows: viewport.truncatedRows,
+      truncatedCols: viewport.truncatedCols,
+      cells: worksheet
+        ? buildSnapshotCells(worksheet, packageDetails.cellStyles, viewport, date1904)
+        : buildStyledBlankCells(packageDetails.cellStyles, viewport),
+      mergedCells: worksheet ? readMergedCells(worksheet, viewport) : [],
+      columnWidths: worksheet ? readColumnWidths(worksheet, viewport) : [],
+      tables: packageDetails.tables,
+      charts: packageDetails.charts,
+    });
   }
-  const viewport = buildViewport(selectedSummary, opts.requestedViewport);
 
   return {
     kind: opts.kind,
     path: opts.filePath,
     filename: path.basename(opts.filePath),
+    fileVersion: opts.fileVersion,
     sheets,
-    selectedSheetName: selectedSummary.name,
-    viewport,
-    cells: buildVisibleCells(worksheet, viewport),
-    mergedCells: readMergedCells(worksheet, viewport),
-    columnWidths: readColumnWidths(worksheet, viewport),
-    warnings: buildWarnings(selectedSummary, viewport),
+    activeSheetName,
+    warnings,
+  };
+}
+
+function buildBoundedSheetViewport(
+  sheet: SpreadsheetSheetSummary,
+  remainingWorkbookCells: number,
+): SpreadsheetPreviewViewport {
+  const totalRows = Math.max(sheet.rowCount, 0);
+  const totalCols = Math.max(sheet.colCount, 0);
+  const maxCells = Math.max(0, Math.floor(remainingWorkbookCells));
+  let colCount = Math.min(totalCols, MAX_SNAPSHOT_COLS_PER_SHEET, maxCells);
+  let rowCount = 0;
+  if (totalRows > 0 && colCount > 0) {
+    rowCount = Math.min(totalRows, MAX_SNAPSHOT_ROWS_PER_SHEET, Math.floor(maxCells / colCount));
+    if (rowCount === 0) {
+      rowCount = 1;
+      colCount = Math.min(colCount, maxCells);
+    }
+  }
+  return {
+    startRow: 0,
+    startCol: 0,
+    rowCount,
+    colCount,
+    endRow: rowCount > 0 ? rowCount - 1 : 0,
+    endCol: colCount > 0 ? colCount - 1 : 0,
+    totalRows,
+    totalCols,
+    truncatedRows: rowCount < totalRows,
+    truncatedCols: colCount < totalCols,
   };
 }
 
@@ -191,67 +356,80 @@ function readSheetRange(worksheet: Worksheet): XLSX.Range | null {
   }
 }
 
-function buildViewport(
-  sheet: SpreadsheetSheetSummary,
-  requested?: SpreadsheetPreviewViewportRequest,
-): SpreadsheetPreviewViewport {
-  const startRow = clampInteger(requested?.startRow, 0, Math.max(sheet.rowCount - 1, 0), 0);
-  const startCol = clampInteger(requested?.startCol, 0, Math.max(sheet.colCount - 1, 0), 0);
-  const requestedRows = requested?.rowCount ?? SPREADSHEET_PREVIEW_DEFAULT_ROW_COUNT;
-  const requestedCols = requested?.colCount ?? SPREADSHEET_PREVIEW_DEFAULT_COL_COUNT;
-  const rowCount = Math.min(
-    clampInteger(
-      requestedRows,
-      1,
-      SPREADSHEET_PREVIEW_MAX_ROW_COUNT,
-      SPREADSHEET_PREVIEW_DEFAULT_ROW_COUNT,
-    ),
-    Math.max(sheet.rowCount - startRow, 0),
-  );
-  const colCount = Math.min(
-    clampInteger(
-      requestedCols,
-      1,
-      SPREADSHEET_PREVIEW_MAX_COL_COUNT,
-      SPREADSHEET_PREVIEW_DEFAULT_COL_COUNT,
-    ),
-    Math.max(sheet.colCount - startCol, 0),
-  );
-  const endRow = rowCount > 0 ? startRow + rowCount - 1 : startRow;
-  const endCol = colCount > 0 ? startCol + colCount - 1 : startCol;
-  return {
-    startRow,
-    startCol,
-    rowCount,
-    colCount,
-    endRow,
-    endCol,
-    totalRows: sheet.rowCount,
-    totalCols: sheet.colCount,
-    truncatedRows: startRow + rowCount < sheet.rowCount,
-    truncatedCols: startCol + colCount < sheet.colCount,
-  };
-}
-
-function clampInteger(value: unknown, min: number, max: number, fallback: number): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
-  return Math.min(Math.max(Math.floor(value), min), max);
-}
-
-function buildVisibleCells(
+function buildSnapshotCells(
   worksheet: Worksheet,
+  packageStyles: Map<string, SpreadsheetCellStyle>,
   viewport: SpreadsheetPreviewViewport,
-): SpreadsheetPreviewCell[][] {
-  const rows: SpreadsheetPreviewCell[][] = [];
-  for (let row = viewport.startRow; row <= viewport.endRow && viewport.rowCount > 0; row++) {
-    const cells: SpreadsheetPreviewCell[] = [];
-    for (let col = viewport.startCol; col <= viewport.endCol && viewport.colCount > 0; col++) {
-      const address = XLSX.utils.encode_cell({ r: row, c: col });
-      cells.push(buildCell(row, col, address, worksheet[address] as XLSX.CellObject | undefined));
-    }
-    rows.push(cells);
+  date1904: boolean,
+): SpreadsheetPreviewCell[] {
+  const cells = new Map<string, SpreadsheetPreviewCell>();
+  for (const key of Object.keys(worksheet)) {
+    if (key.startsWith("!")) continue;
+    const address = normalizeCellAddress(key);
+    if (!address) continue;
+    const decoded = XLSX.utils.decode_cell(address);
+    if (!cellInsideViewport(decoded.r, decoded.c, viewport)) continue;
+    cells.set(
+      address,
+      buildCell(
+        decoded.r,
+        decoded.c,
+        address,
+        worksheet[address] as XLSX.CellObject | undefined,
+        date1904,
+      ),
+    );
   }
-  return rows;
+
+  for (const [address, style] of packageStyles.entries()) {
+    const decoded = XLSX.utils.decode_cell(address);
+    if (!cellInsideViewport(decoded.r, decoded.c, viewport)) continue;
+    const existing = cells.get(address);
+    cells.set(address, {
+      ...(existing ?? buildCell(decoded.r, decoded.c, address, undefined)),
+      style: {
+        ...existing?.style,
+        ...style,
+      },
+    });
+  }
+
+  return [...cells.values()].sort((left, right) => left.row - right.row || left.col - right.col);
+}
+
+function buildStyledBlankCells(
+  packageStyles: Map<string, SpreadsheetCellStyle>,
+  viewport: SpreadsheetPreviewViewport,
+): SpreadsheetPreviewCell[] {
+  const cells: SpreadsheetPreviewCell[] = [];
+  for (const [address, style] of packageStyles.entries()) {
+    const decoded = XLSX.utils.decode_cell(address);
+    if (!cellInsideViewport(decoded.r, decoded.c, viewport)) continue;
+    cells.push({
+      ...buildCell(decoded.r, decoded.c, address, undefined),
+      style,
+    });
+  }
+  return cells.sort((left, right) => left.row - right.row || left.col - right.col);
+}
+
+function normalizeCellAddress(key: string): string | null {
+  if (!/^[A-Z]+[1-9][0-9]*$/i.test(key)) return null;
+  return key.toUpperCase();
+}
+
+function cellInsideViewport(
+  row: number,
+  col: number,
+  viewport: SpreadsheetPreviewViewport,
+): boolean {
+  if (viewport.rowCount <= 0 || viewport.colCount <= 0) return false;
+  return (
+    row >= viewport.startRow &&
+    row <= viewport.endRow &&
+    col >= viewport.startCol &&
+    col <= viewport.endCol
+  );
 }
 
 function buildCell(
@@ -259,6 +437,7 @@ function buildCell(
   col: number,
   address: string,
   cell: XLSX.CellObject | undefined,
+  date1904 = false,
 ): SpreadsheetPreviewCell {
   const value = cell ? stringifyCellValue(cell) : "";
   const style = cell ? readCellStyle(cell) : undefined;
@@ -268,7 +447,7 @@ function buildCell(
     address,
     value,
     ...(cell?.w && cell.w !== value ? { formattedValue: cell.w } : {}),
-    ...(cell && "v" in cell ? { rawValue: normalizeRawValue(cell.v) } : {}),
+    ...(cell && "v" in cell ? { rawValue: normalizeRawValue(cell.v, date1904) } : {}),
     ...(cell?.f ? { formula: cell.f } : {}),
     ...(cell?.t ? { type: cell.t } : {}),
     ...(style ? { style } : {}),
@@ -282,13 +461,30 @@ function stringifyCellValue(cell: XLSX.CellObject): string {
   return String(cell.v);
 }
 
-function normalizeRawValue(value: unknown): string | number | boolean | null {
+function normalizeRawValue(value: unknown, date1904: boolean): string | number | boolean | null {
   if (value === null || value === undefined) return null;
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
     return value;
   }
-  if (value instanceof Date) return value.toISOString();
+  if (value instanceof Date) return excelSerialFromDate(value, date1904);
   return String(value);
+}
+
+function excelSerialFromDate(value: Date, date1904: boolean): number {
+  const millisPerDay = 24 * 60 * 60 * 1000;
+  const serial1900 =
+    (Date.UTC(
+      value.getUTCFullYear(),
+      value.getUTCMonth(),
+      value.getUTCDate(),
+      value.getUTCHours(),
+      value.getUTCMinutes(),
+      value.getUTCSeconds(),
+      value.getUTCMilliseconds(),
+    ) -
+      Date.UTC(1899, 11, 30)) /
+    millisPerDay;
+  return date1904 ? serial1900 - 1462 : serial1900;
 }
 
 function readCellStyle(cell: XLSX.CellObject): SpreadsheetCellStyle | undefined {
@@ -303,23 +499,19 @@ function readCellStyle(cell: XLSX.CellObject): SpreadsheetCellStyle | undefined 
     ...(typeof alignment?.horizontal === "string" ? { horizontalAlign: alignment.horizontal } : {}),
     ...(typeof record.z === "string" ? { numberFormat: record.z } : {}),
   };
-  const fillColor = readColor(fill?.fgColor) ?? readColor(fill?.bgColor);
+  const fillColor =
+    readOoxmlColor(fill?.fgColor) ??
+    readOoxmlColor(fill?.bgColor) ??
+    readOoxmlColor(style?.fgColor) ??
+    readOoxmlColor(style?.bgColor);
   if (fillColor) result.fillColor = fillColor;
-  const textColor = readColor(font?.color);
+  const textColor = readOoxmlColor(font?.color);
   if (textColor) result.textColor = textColor;
   return Object.keys(result).length > 0 ? result : undefined;
 }
 
 function readRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
-}
-
-function readColor(value: unknown): string | null {
-  const record = readRecord(value);
-  const rgb = typeof record?.rgb === "string" ? record.rgb : null;
-  if (!rgb) return null;
-  const normalized = rgb.length === 8 ? rgb.slice(2) : rgb;
-  return /^[0-9a-fA-F]{6}$/.test(normalized) ? `#${normalized.toUpperCase()}` : null;
 }
 
 function readMergedCells(
@@ -365,19 +557,6 @@ function readColumnWidths(
   return widths;
 }
 
-function buildWarnings(
-  sheet: SpreadsheetSheetSummary,
-  viewport: SpreadsheetPreviewViewport,
-): string[] {
-  const warnings: string[] = [];
-  if (viewport.truncatedRows || viewport.truncatedCols) {
-    warnings.push(
-      `Showing rows ${viewport.startRow + 1}-${viewport.endRow + 1} and columns ${viewport.startCol + 1}-${viewport.endCol + 1} of ${sheet.rowCount} rows and ${sheet.colCount} columns.`,
-    );
-  }
-  return warnings;
-}
-
 function validateCsvQuoteBalance(input: string): void {
   let inQuotes = false;
   for (let i = 0; i < input.length; i++) {
@@ -393,7 +572,7 @@ function validateCsvQuoteBalance(input: string): void {
   }
 }
 
-function validateXlsxZipSignature(bytes: Buffer): void {
+export function validateXlsxZipSignature(bytes: Buffer): void {
   if (bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b) {
     return;
   }

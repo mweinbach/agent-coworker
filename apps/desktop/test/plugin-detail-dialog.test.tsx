@@ -29,6 +29,8 @@ const revealPathMock = mock(async () => {});
 const installPluginsMock = mock(async (_sourceInput: string, _scope: "workspace" | "user") => {});
 const enablePluginMock = mock(async (_pluginId: string, _scope?: "workspace" | "user") => {});
 const disablePluginMock = mock(async (_pluginId: string, _scope?: "workspace" | "user") => {});
+const checkPluginUpdateMock = mock(async (_pluginId: string, _scope?: "workspace" | "user") => {});
+const updatePluginMock = mock(async (_pluginId: string, _scope?: "workspace" | "user") => {});
 
 mock.module("../src/lib/desktopCommands", () =>
   createDesktopCommandsMock({
@@ -287,6 +289,7 @@ describe("plugin detail dialog", () => {
     const scenarios = [
       {
         buttonText: "Install Plugin",
+        action: "install" as const,
         plugin: {
           id: "marketplace-tools",
           name: "marketplace-tools",
@@ -307,6 +310,7 @@ describe("plugin detail dialog", () => {
       },
       {
         buttonText: "Update Plugin",
+        action: "update" as const,
         plugin: {
           id: "marketplace-tools",
           name: "marketplace-tools",
@@ -317,6 +321,7 @@ describe("plugin detail dialog", () => {
           installed: true,
           enabled: true,
           installSource: "github:mweinbach/marketplace-tools",
+          updateAvailable: true,
           rootDir: "/tmp/home/.cowork/plugins/marketplace-tools",
           manifestPath: "/tmp/home/.cowork/plugins/marketplace-tools/.codex-plugin/plugin.json",
           skillsPath: "/tmp/home/.cowork/plugins/marketplace-tools/skills",
@@ -332,7 +337,9 @@ describe("plugin detail dialog", () => {
       const previousState = useAppStore.getState();
       let rejectionHandled = false;
       installPluginsMock.mockClear();
-      installPluginsMock.mockImplementation(
+      updatePluginMock.mockClear();
+      const actionMock = scenario.action === "install" ? installPluginsMock : updatePluginMock;
+      actionMock.mockImplementation(
         () =>
           ({
             then: (_resolve: () => void, reject?: (error: Error) => void) => {
@@ -345,6 +352,7 @@ describe("plugin detail dialog", () => {
       useAppStore.setState({
         ...previousState,
         installPlugins: installPluginsMock as typeof previousState.installPlugins,
+        updatePlugin: updatePluginMock as typeof previousState.updatePlugin,
         workspaceRuntimeById: {
           ...previousState.workspaceRuntimeById,
           "ws-1": {
@@ -382,10 +390,14 @@ describe("plugin detail dialog", () => {
           await new Promise((resolve) => setTimeout(resolve, 0));
         });
 
-        expect(installPluginsMock).toHaveBeenCalledWith(
-          "github:mweinbach/marketplace-tools",
-          "user",
-        );
+        if (scenario.action === "install") {
+          expect(installPluginsMock).toHaveBeenCalledWith(
+            "github:mweinbach/marketplace-tools",
+            "user",
+          );
+        } else {
+          expect(updatePluginMock).toHaveBeenCalledWith("marketplace-tools", "user");
+        }
         expect(rejectionHandled).toBe(true);
       } finally {
         if (root) {
@@ -396,6 +408,83 @@ describe("plugin detail dialog", () => {
         useAppStore.setState(previousState);
         harness.restore();
       }
+    }
+  });
+
+  test("shows plugin update actions only when an update is available", async () => {
+    const previousState = useAppStore.getState();
+    checkPluginUpdateMock.mockClear();
+    updatePluginMock.mockClear();
+
+    useAppStore.setState({
+      ...previousState,
+      checkPluginUpdate: checkPluginUpdateMock as typeof previousState.checkPluginUpdate,
+      updatePlugin: updatePluginMock as typeof previousState.updatePlugin,
+      workspaceRuntimeById: {
+        ...previousState.workspaceRuntimeById,
+        "ws-1": {
+          ...defaultWorkspaceRuntime(),
+          selectedPluginId: "marketplace-tools",
+          selectedPluginScope: "user",
+          selectedPlugin: {
+            id: "marketplace-tools",
+            name: "marketplace-tools",
+            displayName: "Marketplace Tools",
+            description: "Installed plugin.",
+            scope: "user",
+            discoveryKind: "marketplace",
+            installed: true,
+            enabled: true,
+            installSource: "github:mweinbach/marketplace-tools",
+            updateAvailable: false,
+            rootDir: "/tmp/home/.cowork/plugins/marketplace-tools",
+            manifestPath: "/tmp/home/.cowork/plugins/marketplace-tools/.codex-plugin/plugin.json",
+            skillsPath: "/tmp/home/.cowork/plugins/marketplace-tools/skills",
+            skills: [],
+            mcpServers: [],
+            apps: [],
+            warnings: [],
+          },
+        },
+      },
+    } as any);
+
+    const harness = setupJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(PluginDetailDialog, { workspaceId: "ws-1" }));
+      });
+
+      const buttons = Array.from(harness.dom.window.document.querySelectorAll("button"));
+      expect(buttons.some((button) => button.textContent?.includes("Update Plugin"))).toBe(false);
+      const checkButton = buttons.find((button) => button.textContent?.includes("Check Update"));
+      if (!(checkButton instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing Check Update button");
+      }
+
+      await act(async () => {
+        checkButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(checkPluginUpdateMock).toHaveBeenCalledWith("marketplace-tools", "user");
+      expect(updatePluginMock).not.toHaveBeenCalled();
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      useAppStore.setState(previousState);
+      harness.restore();
     }
   });
 

@@ -30,6 +30,8 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
   const enablePlugin = useAppStore((s) => s.enablePlugin);
   const disablePlugin = useAppStore((s) => s.disablePlugin);
   const deletePlugin = useAppStore((s) => s.deletePlugin);
+  const checkPluginUpdate = useAppStore((s) => s.checkPluginUpdate);
+  const updatePlugin = useAppStore((s) => s.updatePlugin);
 
   const plugin = runtime?.selectedPlugin ?? null;
   const pluginId = runtime?.selectedPluginId ?? null;
@@ -59,6 +61,22 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
   const installPending = plugin
     ? actionPending(runtime, `plugin:install:${plugin.scope}`, undefined, "plugin")
     : false;
+  const checkUpdatePending = installedPlugin
+    ? actionPending(
+        runtime,
+        "plugin:checkUpdate",
+        `${installedPlugin.scope}:${installedPlugin.id}`,
+        "plugin",
+      )
+    : false;
+  const updatePending = installedPlugin
+    ? actionPending(
+        runtime,
+        "plugin:update",
+        `${installedPlugin.scope}:${installedPlugin.id}`,
+        "plugin",
+      )
+    : false;
 
   const handleOpenChange = (open: boolean) => {
     if (!open) {
@@ -69,6 +87,22 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
   const handleInstallPlugin = async (sourceInput: string, targetScope: "workspace" | "user") => {
     try {
       await installPlugins(sourceInput, targetScope);
+    } catch {
+      // Control-session and mutation errors are surfaced via runtime state.
+    }
+  };
+
+  const handleCheckPluginUpdate = async (pluginId: string, scope: "workspace" | "user") => {
+    try {
+      await checkPluginUpdate(pluginId, scope);
+    } catch {
+      // Control-session and mutation errors are surfaced via runtime state.
+    }
+  };
+
+  const handleUpdatePlugin = async (pluginId: string, scope: "workspace" | "user") => {
+    try {
+      await updatePlugin(pluginId, scope);
     } catch {
       // Control-session and mutation errors are surfaced via runtime state.
     }
@@ -152,7 +186,16 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
                 {installedPlugin?.version ? (
                   <Badge variant="outline">v{installedPlugin.version}</Badge>
                 ) : null}
+                {installedPlugin?.updateAvailable ? (
+                  <Badge variant="outline">Update available</Badge>
+                ) : null}
               </div>
+
+              {installedPlugin?.updateCheckReason ? (
+                <div className="rounded-lg border border-border/60 bg-muted/15 px-3 py-2 text-sm text-muted-foreground">
+                  {installedPlugin.updateCheckReason}
+                </div>
+              ) : null}
 
               {installedPlugin ? (
                 <div className="grid gap-4 md:grid-cols-3">
@@ -281,15 +324,20 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
                   <Button
                     variant="outline"
                     size="sm"
-                    disabled={installPending}
-                    onClick={() =>
-                      void handleInstallPlugin(
-                        installedPlugin.installSource ?? "",
-                        installedPlugin.scope,
-                      )
-                    }
+                    disabled={checkUpdatePending}
+                    onClick={() => void handleCheckPluginUpdate(plugin.id, plugin.scope)}
                   >
-                    {installPending ? "Updating..." : "Update Plugin"}
+                    {checkUpdatePending ? "Checking..." : "Check Update"}
+                  </Button>
+                ) : null}
+                {installedPlugin?.installSource && installedPlugin.updateAvailable ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={installPending || updatePending}
+                    onClick={() => void handleUpdatePlugin(plugin.id, plugin.scope)}
+                  >
+                    {updatePending ? "Updating..." : "Update Plugin"}
                   </Button>
                 ) : null}
                 {installedPlugin ? (

@@ -81,7 +81,7 @@ export function PrivacyTelemetryPage() {
   useEffect(() => {
     let cancelled = false;
     setTelemetryStatus(fallbackTelemetryStatus(settings));
-    void getTelemetryStatus()
+    void getTelemetryStatus({ privacyTelemetrySettings: settings })
       .then((status) => {
         if (!cancelled) {
           setTelemetryStatus(status);

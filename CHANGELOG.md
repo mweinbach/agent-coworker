@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.1.11 - 2026-06-01
+
+### Fixed
+
+- **Privacy & Telemetry status sync** — Resolved the desktop telemetry status
+  against the live privacy settings on the renderer side instead of stale
+  persisted state, so the status indicator in the Privacy & Telemetry
+  settings page updates immediately when the telemetry or crash reporting
+  switches are toggled.
+
 ## 1.1.10 - 2026-06-01
 
 ### Added

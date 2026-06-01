@@ -4,8 +4,12 @@ import os from "node:os";
 import path from "node:path";
 
 import { parsePluginMarketplace, parseRemotePluginMarketplace } from "../src/plugins/marketplace";
+import { writeSkillInstallManifest } from "../src/skills/manifest";
 import { getSkillCatalog } from "../src/skills/operations";
 import type { AgentConfig } from "../src/types";
+
+const OLD_SOURCE_HASH = `sha256:${"1".repeat(64)}`;
+const NEW_SOURCE_HASH = `sha256:${"2".repeat(64)}`;
 
 function makeConfig(workspaceRoot: string, userHome: string, skillsDir: string): AgentConfig {
   return {
@@ -115,6 +119,7 @@ describe("skill marketplace", () => {
           {
             name: "workspace-tools",
             source: { source: "local", path: "./plugins/workspace-tools" },
+            sourceHash: NEW_SOURCE_HASH,
             policy: { installation: "AVAILABLE", authentication: "ON_INSTALL" },
             category: "Productivity",
           },
@@ -123,6 +128,7 @@ describe("skill marketplace", () => {
           {
             name: "create-skill",
             source: { source: "local", path: "./skills/create-skill" },
+            sourceHash: NEW_SOURCE_HASH,
             policy: { installation: "AVAILABLE", authentication: "NONE" },
             category: "Authoring",
           },
@@ -141,6 +147,7 @@ describe("skill marketplace", () => {
     expect(doc.skills[0]).toMatchObject({
       name: "create-skill",
       sourcePath: "skills/create-skill",
+      sourceHash: NEW_SOURCE_HASH,
       sourceInput:
         "https://github.com/mweinbach/cowork-skills-plugins/tree/main/skills/create-skill",
       category: "Authoring",
@@ -210,6 +217,62 @@ describe("skill marketplace", () => {
         installSource:
           "https://github.com/mweinbach/cowork-skills-plugins/tree/main/skills/create-skill",
         marketplace: { name: "cowork-test", displayName: "Cowork Test", category: "Authoring" },
+      });
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test("getSkillCatalog annotates installed marketplace skills with stale hashes", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "skill-market-stale-ws-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "skill-market-stale-home-"));
+    const skillsDir = path.join(home, ".cowork", "skills");
+    await fs.mkdir(skillsDir, { recursive: true });
+    await writeSkill(skillsDir, "create-skill", "Installed");
+    await writeSkillInstallManifest({
+      skillRoot: path.join(skillsDir, "create-skill"),
+      installationId: "installed-create-skill",
+      origin: {
+        kind: "github",
+        repo: "mweinbach/cowork-skills-plugins",
+        ref: "main",
+        subdir: "skills/create-skill",
+        sourceHash: OLD_SOURCE_HASH,
+      },
+    });
+    const config = makeConfig(workspace, home, skillsDir);
+
+    try {
+      const catalog = await getSkillCatalog(config, {
+        includeRemoteMarketplace: true,
+        fetchImpl: createSkillMarketplaceFetch({
+          name: "cowork-test",
+          interface: { displayName: "Cowork Test" },
+          plugins: [],
+          skills: [
+            {
+              name: "create-skill",
+              source: { source: "local", path: "./skills/create-skill" },
+              sourceHash: NEW_SOURCE_HASH,
+              policy: { installation: "AVAILABLE", authentication: "NONE" },
+              category: "Authoring",
+            },
+          ],
+        }),
+      });
+
+      expect(catalog.availableSkills).toEqual([]);
+      expect(catalog.installations[0]).toMatchObject({
+        name: "create-skill",
+        installedSourceHash: OLD_SOURCE_HASH,
+        latestSourceHash: NEW_SOURCE_HASH,
+        updateAvailable: true,
+      });
+      expect(catalog.effectiveSkills[0]).toMatchObject({
+        installedSourceHash: OLD_SOURCE_HASH,
+        latestSourceHash: NEW_SOURCE_HASH,
+        updateAvailable: true,
       });
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });

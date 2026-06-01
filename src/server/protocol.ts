@@ -26,6 +26,7 @@ import type {
   PluginCatalogEntry,
   PluginCatalogSnapshot,
   PluginInstallPreview,
+  PluginUpdateCheckResult,
   ServerErrorCode,
   ServerErrorSource,
   SkillCatalogSnapshot,
@@ -384,6 +385,11 @@ export type SessionEvent =
       sessionId: string;
       preview: PluginInstallPreview;
       fromUserPreviewRequest?: boolean;
+    }
+  | {
+      type: "plugin_update_check";
+      sessionId: string;
+      result: PluginUpdateCheckResult;
     }
   | {
       type: "import_list";

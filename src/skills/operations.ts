@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { FetchLike } from "../extensions/source";
+import { computeSourceRootHash } from "../extensions/sourceFingerprint";
 import {
   buildPluginCatalogSnapshot,
   replacePluginInstallRoot,
@@ -159,6 +160,11 @@ function installSourceFromOrigin(installation: SkillInstallationEntry): string |
   return null;
 }
 
+function normalizeInstallSourceInput(input: string | null | undefined): string | null {
+  const normalized = input?.trim().replace(/\/+$/g, "") ?? "";
+  return normalized.length > 0 ? normalized : null;
+}
+
 async function refreshCatalog(config: AgentConfig): Promise<SkillCatalogSnapshot> {
   const pluginCatalog = await buildPluginCatalogSnapshot(config);
   return await scanSkillCatalogFromSources(
@@ -276,6 +282,7 @@ export async function installSkillsFromSource(opts: {
     for (const candidate of validCandidates) {
       const destinationRoot = path.join(writableScope.skillsDir, candidate.name);
       const conflictingRoots = conflictingTargetRoots(writableScope, candidate.name);
+      const sourceHash = await computeSourceRootHash(candidate.rootDir);
       const stagedSource = await stageCopySourceIfNeeded(candidate.rootDir, conflictingRoots);
       const installationId = createManagedInstallationId();
       try {
@@ -284,7 +291,11 @@ export async function installSkillsFromSource(opts: {
           destinationRoot,
           conflictingRoots,
           onInstalled: async () => {
-            await writeSkillInstallManifest({ skillRoot: destinationRoot, installationId, origin });
+            await writeSkillInstallManifest({
+              skillRoot: destinationRoot,
+              installationId,
+              origin: { ...origin, sourceHash },
+            });
           },
         });
       } finally {
@@ -482,32 +493,56 @@ export async function checkSkillInstallationUpdate(opts: {
     };
   }
 
-  const preview = await buildSkillInstallPreview({
+  const materialized = await materializeSkillSource({
     input,
-    targetScope: opts.installation.scope as SkillMutationTargetScope,
-    catalog: await refreshCatalog(opts.config),
     cwd: opts.config.workingDirectory,
   });
-  const resolvedCandidate = resolveRecordedUpdateCandidate(
-    preview.candidates,
-    opts.installation.name,
-  );
-  if (!resolvedCandidate.candidate) {
+  try {
+    const preview = await buildSkillInstallPreview({
+      input,
+      targetScope: opts.installation.scope as SkillMutationTargetScope,
+      catalog: await refreshCatalog(opts.config),
+      cwd: opts.config.workingDirectory,
+      materialized,
+    });
+    const resolvedCandidate = resolveRecordedUpdateCandidate(
+      materialized.candidates,
+      opts.installation.name,
+    );
+    if (!resolvedCandidate.candidate) {
+      return {
+        installationId: opts.installation.installationId,
+        canUpdate: false,
+        reason:
+          resolvedCandidate.reason ??
+          `No valid update candidate was found for "${opts.installation.name}".`,
+        preview,
+      };
+    }
+
+    const latestSourceHash = await computeSourceRootHash(resolvedCandidate.candidate.rootDir);
+    const installedSourceHash = opts.installation.origin?.sourceHash;
+    if (installedSourceHash && installedSourceHash === latestSourceHash) {
+      return {
+        installationId: opts.installation.installationId,
+        canUpdate: false,
+        reason: "This skill is already up to date.",
+        preview,
+        installedSourceHash,
+        latestSourceHash,
+      };
+    }
+
     return {
       installationId: opts.installation.installationId,
-      canUpdate: false,
-      reason:
-        resolvedCandidate.reason ??
-        `No valid update candidate was found for "${opts.installation.name}".`,
+      canUpdate: true,
       preview,
+      ...(installedSourceHash ? { installedSourceHash } : {}),
+      latestSourceHash,
     };
+  } finally {
+    await materialized.cleanup();
   }
-
-  return {
-    installationId: opts.installation.installationId,
-    canUpdate: true,
-    preview,
-  };
 }
 
 export async function updateSkillInstallation(opts: {
@@ -560,6 +595,7 @@ export async function updateSkillInstallation(opts: {
       : writableScope.disabledSkillsDir;
     const destinationRoot = path.join(destinationBase, opts.installation.name);
     const conflictingRoots = conflictingTargetRoots(writableScope, opts.installation.name);
+    const sourceHash = await computeSourceRootHash(selectedCandidate.rootDir);
     const stagedSource = await stageCopySourceIfNeeded(selectedCandidate.rootDir, conflictingRoots);
     const updateOrigin = originFromDescriptor(materialized.descriptor);
     try {
@@ -572,7 +608,7 @@ export async function updateSkillInstallation(opts: {
             skillRoot: destinationRoot,
             installationId: opts.installation.installationId,
             installedAt: opts.installation.installedAt,
-            origin: updateOrigin,
+            origin: { ...updateOrigin, sourceHash },
           });
         },
       });
@@ -589,17 +625,66 @@ export async function updateSkillInstallation(opts: {
   }
 }
 
+function annotateMarketplaceSkillUpdates(
+  catalog: SkillCatalogSnapshot,
+  marketplaceSkills: Array<{
+    name: string;
+    sourceInput?: string;
+    sourceHash?: string;
+  }>,
+): SkillCatalogSnapshot {
+  const marketplaceByName = new Map(
+    marketplaceSkills
+      .filter((entry) => entry.sourceInput && entry.sourceHash)
+      .map((entry) => [entry.name, entry]),
+  );
+
+  const annotatedInstallations = catalog.installations.map((installation) => {
+    if (installation.plugin) return installation;
+    const marketplaceEntry = marketplaceByName.get(installation.name);
+    if (!marketplaceEntry?.sourceHash) return installation;
+    const installedSource = normalizeInstallSourceInput(installSourceFromOrigin(installation));
+    const marketplaceSource = normalizeInstallSourceInput(marketplaceEntry.sourceInput);
+    if (!installedSource || !marketplaceSource || installedSource !== marketplaceSource) {
+      return installation;
+    }
+
+    const installedSourceHash = installation.origin?.sourceHash;
+    const updateAvailable = installedSourceHash !== marketplaceEntry.sourceHash;
+    return {
+      ...installation,
+      ...(installedSourceHash ? { installedSourceHash } : {}),
+      latestSourceHash: marketplaceEntry.sourceHash,
+      updateAvailable,
+      ...(updateAvailable && !installedSourceHash
+        ? { updateCheckReason: "Installed source hash is missing." }
+        : {}),
+    };
+  });
+  const byId = new Map(
+    annotatedInstallations.map((installation) => [installation.installationId, installation]),
+  );
+  return {
+    ...catalog,
+    installations: annotatedInstallations,
+    effectiveSkills: catalog.effectiveSkills.map(
+      (installation) => byId.get(installation.installationId) ?? installation,
+    ),
+  };
+}
+
 export async function getSkillCatalog(
   config: AgentConfig,
   opts: { includeRemoteMarketplace?: boolean; fetchImpl?: FetchLike } = {},
 ): Promise<SkillCatalogSnapshot & { remoteMarketplaceFailed?: boolean }> {
-  const catalog = await refreshCatalog(config);
+  let catalog = await refreshCatalog(config);
   if (!opts.includeRemoteMarketplace) {
     return catalog;
   }
   // Offer marketplace skills that are not already installed (deduped by name).
   try {
     const marketplace = await fetchRemotePluginMarketplace({ fetchImpl: opts.fetchImpl });
+    catalog = annotateMarketplaceSkillUpdates(catalog, marketplace.skills);
     const installedNames = new Set(catalog.installations.map((entry) => entry.name));
     const availableSkills: MarketplaceSkillCatalogEntry[] = [];
     for (const skillEntry of marketplace.skills) {

@@ -24,7 +24,7 @@ export async function ensureManagedSofficeRuntimeReady(
   const shimDir = path.join(rootDir, "bin");
   const helperPath = path.join(rootDir, "libexec", "managed-soffice.mjs");
   const shimPath = path.join(shimDir, process.platform === "win32" ? "soffice.cmd" : "soffice");
-  const nodePath = opts.nodePath || env.COWORK_CODEX_RUNTIME_NODE || process.execPath;
+  const nodePath = opts.nodePath || env.COWORK_ARTIFACT_RUNTIME_NODE || process.execPath;
 
   await fs.mkdir(path.dirname(helperPath), { recursive: true, mode: 0o700 });
   await fs.mkdir(shimDir, { recursive: true, mode: 0o700 });

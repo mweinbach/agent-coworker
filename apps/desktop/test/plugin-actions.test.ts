@@ -32,6 +32,12 @@ const failedPluginMutationActions = [
     invoke: (actions: ReturnType<typeof createPluginActions>) =>
       actions.deletePlugin("plugin-1", "workspace"),
   },
+  {
+    name: "updatePlugin",
+    pendingKey: "plugin:update:workspace:plugin-1",
+    invoke: (actions: ReturnType<typeof createPluginActions>) =>
+      actions.updatePlugin("plugin-1", "workspace"),
+  },
 ] as const;
 
 describe("plugin store actions", () => {
@@ -697,6 +703,46 @@ describe("plugin store actions", () => {
         },
       },
     ]);
+  });
+
+  test("updatePlugin clears its pending key after a successful update request", async () => {
+    const state = createState();
+    state.workspaceRuntimeById[workspaceId] = {
+      ...defaultWorkspaceRuntime(),
+      serverUrl: "ws://mock",
+      controlSessionId: "jsonrpc-control",
+      pluginMutationPendingKeys: { other: true },
+    };
+    state.workspaces = [{ id: workspaceId, path: "/tmp/workspace" }];
+    const { get, set } = createStoreHarness(state);
+
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      readyPromise: Promise.resolve(),
+      request: async (method: string, params: Record<string, unknown>) => {
+        requests.push({ method, params });
+        return {};
+      },
+      respond: () => true,
+      close: () => {},
+    } as unknown as JsonRpcSocket);
+
+    await createPluginActions(set, get).updatePlugin("plugin-1", "workspace");
+
+    expect(requests).toEqual([
+      {
+        method: "cowork/plugins/update",
+        params: {
+          cwd: "/tmp/workspace",
+          pluginId: "plugin-1",
+          scope: "workspace",
+        },
+      },
+    ]);
+    expect(state.workspaceRuntimeById[workspaceId].pluginMutationPendingKeys).toEqual({
+      other: true,
+    });
+    expect(state.workspaceRuntimeById[workspaceId].pluginMutationError).toBeNull();
   });
 
   for (const { name, pendingKey, invoke } of failedPluginMutationActions) {

@@ -1,8 +1,4 @@
 import { z } from "zod";
-import {
-  SPREADSHEET_PREVIEW_MAX_COL_COUNT,
-  SPREADSHEET_PREVIEW_MAX_ROW_COUNT,
-} from "../../shared/spreadsheetPreview";
 import { nonEmptyTrimmedStringSchema } from "./schema.shared";
 import { jsonRpcThreadSchema } from "./schema.threadTurn";
 
@@ -23,23 +19,37 @@ const jsonRpcWorkspaceSummarySchema = z
   })
   .strict();
 
-const spreadsheetViewportRequestSchema = z
-  .object({
-    startRow: z.number().int().nonnegative().optional(),
-    startCol: z.number().int().nonnegative().optional(),
-    rowCount: z.number().int().positive().max(SPREADSHEET_PREVIEW_MAX_ROW_COUNT).optional(),
-    colCount: z.number().int().positive().max(SPREADSHEET_PREVIEW_MAX_COL_COUNT).optional(),
-  })
-  .strict();
-
 const spreadsheetCellStyleSchema = z
   .object({
     bold: z.boolean().optional(),
     italic: z.boolean().optional(),
+    fontSize: z.number().positive().optional(),
     horizontalAlign: z.string().optional(),
     fillColor: z.string().optional(),
     textColor: z.string().optional(),
     numberFormat: z.string().optional(),
+  })
+  .strict();
+
+const spreadsheetCellStylePatchSchema = z
+  .object({
+    bold: z.boolean().nullable().optional(),
+    italic: z.boolean().nullable().optional(),
+    fontSize: z.number().positive().nullable().optional(),
+    horizontalAlign: z.string().nullable().optional(),
+    fillColor: z.string().nullable().optional(),
+    textColor: z.string().nullable().optional(),
+    numberFormat: z.string().nullable().optional(),
+  })
+  .strict()
+  .refine((style) => Object.keys(style).length > 0, "style must include at least one change");
+
+const spreadsheetFileVersionSchema = z
+  .object({
+    modifiedAtMs: z.number().nonnegative(),
+    changeTimeMs: z.number().nonnegative(),
+    size: z.number().int().nonnegative(),
+    fingerprint: nonEmptyTrimmedStringSchema,
   })
   .strict();
 
@@ -57,37 +67,47 @@ const spreadsheetCellSchema = z
   })
   .strict();
 
-const spreadsheetPreviewSchema = z
+const spreadsheetTableSummarySchema = z
   .object({
-    kind: z.enum(["csv", "xlsx"]),
-    path: nonEmptyTrimmedStringSchema,
-    filename: nonEmptyTrimmedStringSchema,
-    sheets: z.array(
-      z
-        .object({
-          name: nonEmptyTrimmedStringSchema,
-          rowCount: z.number().int().nonnegative(),
-          colCount: z.number().int().nonnegative(),
-          hidden: z.boolean().optional(),
-        })
-        .strict(),
-    ),
-    selectedSheetName: nonEmptyTrimmedStringSchema,
-    viewport: z
-      .object({
-        startRow: z.number().int().nonnegative(),
-        startCol: z.number().int().nonnegative(),
-        rowCount: z.number().int().nonnegative(),
-        colCount: z.number().int().nonnegative(),
-        endRow: z.number().int().nonnegative(),
-        endCol: z.number().int().nonnegative(),
-        totalRows: z.number().int().nonnegative(),
-        totalCols: z.number().int().nonnegative(),
-        truncatedRows: z.boolean(),
-        truncatedCols: z.boolean(),
-      })
-      .strict(),
-    cells: z.array(z.array(spreadsheetCellSchema)),
+    name: nonEmptyTrimmedStringSchema,
+    ref: nonEmptyTrimmedStringSchema,
+    startRow: z.number().int().nonnegative(),
+    startCol: z.number().int().nonnegative(),
+    endRow: z.number().int().nonnegative(),
+    endCol: z.number().int().nonnegative(),
+  })
+  .strict();
+
+const spreadsheetChartAnchorSchema = z
+  .object({
+    fromRow: z.number().int().nonnegative().optional(),
+    fromCol: z.number().int().nonnegative().optional(),
+    toRow: z.number().int().nonnegative().optional(),
+    toCol: z.number().int().nonnegative().optional(),
+  })
+  .strict();
+
+const spreadsheetChartSummarySchema = z
+  .object({
+    id: nonEmptyTrimmedStringSchema,
+    title: z.string().optional(),
+    type: z.string().optional(),
+    anchor: spreadsheetChartAnchorSchema.optional(),
+  })
+  .strict();
+
+const spreadsheetWorkbookSnapshotSheetSchema = z
+  .object({
+    id: nonEmptyTrimmedStringSchema,
+    name: nonEmptyTrimmedStringSchema,
+    rowCount: z.number().int().nonnegative(),
+    colCount: z.number().int().nonnegative(),
+    loadedRowCount: z.number().int().nonnegative().optional(),
+    loadedColCount: z.number().int().nonnegative().optional(),
+    truncatedRows: z.boolean().optional(),
+    truncatedCols: z.boolean().optional(),
+    hidden: z.boolean().optional(),
+    cells: z.array(spreadsheetCellSchema),
     mergedCells: z.array(
       z
         .object({
@@ -108,15 +128,28 @@ const spreadsheetPreviewSchema = z
         })
         .strict(),
     ),
+    tables: z.array(spreadsheetTableSummarySchema),
+    charts: z.array(spreadsheetChartSummarySchema),
+  })
+  .strict();
+
+const spreadsheetWorkbookSnapshotSchema = z
+  .object({
+    kind: z.enum(["csv", "xlsx"]),
+    path: nonEmptyTrimmedStringSchema,
+    filename: nonEmptyTrimmedStringSchema,
+    fileVersion: spreadsheetFileVersionSchema,
+    sheets: z.array(spreadsheetWorkbookSnapshotSheetSchema),
+    activeSheetName: nonEmptyTrimmedStringSchema,
     warnings: z.array(z.string()),
   })
   .strict();
 
-const spreadsheetPreviewResultSchema = z.discriminatedUnion("ok", [
+const spreadsheetWorkbookSnapshotResultSchema = z.discriminatedUnion("ok", [
   z
     .object({
       ok: z.literal(true),
-      preview: spreadsheetPreviewSchema,
+      workbook: spreadsheetWorkbookSnapshotSchema,
     })
     .strict(),
   z
@@ -124,11 +157,94 @@ const spreadsheetPreviewResultSchema = z.discriminatedUnion("ok", [
       ok: z.literal(false),
       error: z
         .object({
-          kind: z.enum(["unsupported_format", "parse_error", "empty_workbook"]),
+          kind: z.enum([
+            "unsupported_format",
+            "not_found",
+            "outside_workspace",
+            "parse_error",
+            "empty_workbook",
+          ]),
           message: z.string(),
         })
         .strict(),
       warnings: z.array(z.string()),
+    })
+    .strict(),
+]);
+
+const spreadsheetFileVersionResultSchema = z.discriminatedUnion("ok", [
+  z
+    .object({
+      ok: z.literal(true),
+      version: spreadsheetFileVersionSchema,
+    })
+    .strict(),
+  z
+    .object({
+      ok: z.literal(false),
+      error: z
+        .object({
+          kind: z.enum(["unsupported_format", "not_found", "outside_workspace", "parse_error"]),
+          message: z.string(),
+        })
+        .strict(),
+      warnings: z.array(z.string()),
+    })
+    .strict(),
+]);
+
+const spreadsheetEditResultSchema = z.discriminatedUnion("ok", [
+  z.object({ ok: z.literal(true) }).strict(),
+  z
+    .object({
+      ok: z.literal(false),
+      error: z
+        .object({
+          kind: z.enum([
+            "unsupported_format",
+            "not_found",
+            "outside_workspace",
+            "parse_error",
+            "write_error",
+          ]),
+          message: z.string(),
+        })
+        .strict(),
+    })
+    .strict(),
+]);
+
+const spreadsheetBatchPatchOperationSchema = z.discriminatedUnion("type", [
+  z
+    .object({
+      type: z.literal("cell"),
+      sheetName: nonEmptyTrimmedStringSchema.optional(),
+      address: nonEmptyTrimmedStringSchema,
+      rawInput: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("format"),
+      sheetName: nonEmptyTrimmedStringSchema.optional(),
+      range: nonEmptyTrimmedStringSchema,
+      style: spreadsheetCellStylePatchSchema,
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("merge"),
+      sheetName: nonEmptyTrimmedStringSchema.optional(),
+      range: nonEmptyTrimmedStringSchema,
+      merged: z.boolean(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("columnWidth"),
+      sheetName: nonEmptyTrimmedStringSchema.optional(),
+      col: z.number().int().nonnegative(),
+      widthPx: z.number().positive().nullable(),
     })
     .strict(),
 ]);
@@ -174,12 +290,25 @@ export const jsonRpcWorkspaceRequestSchemas = {
       cwd: nonEmptyTrimmedStringSchema.optional(),
     })
     .strict(),
-  "cowork/workspace/spreadsheet/preview": z
+  "cowork/workspace/spreadsheet/workbook": z
     .object({
       cwd: nonEmptyTrimmedStringSchema.optional(),
       path: nonEmptyTrimmedStringSchema,
       sheetName: nonEmptyTrimmedStringSchema.optional(),
-      viewport: spreadsheetViewportRequestSchema.optional(),
+    })
+    .strict(),
+  "cowork/workspace/spreadsheet/version": z
+    .object({
+      cwd: nonEmptyTrimmedStringSchema.optional(),
+      path: nonEmptyTrimmedStringSchema,
+    })
+    .strict(),
+  "cowork/workspace/spreadsheet/patch": z
+    .object({
+      cwd: nonEmptyTrimmedStringSchema.optional(),
+      path: nonEmptyTrimmedStringSchema,
+      operations: z.array(spreadsheetBatchPatchOperationSchema).max(50_000),
+      expectedFileVersion: spreadsheetFileVersionSchema.optional(),
     })
     .strict(),
   "cowork/workspace/presentation/preview": z
@@ -210,6 +339,8 @@ export const jsonRpcWorkspaceResultSchemas = {
       state: z.array(z.unknown()),
     })
     .strict(),
-  "cowork/workspace/spreadsheet/preview": spreadsheetPreviewResultSchema,
+  "cowork/workspace/spreadsheet/workbook": spreadsheetWorkbookSnapshotResultSchema,
+  "cowork/workspace/spreadsheet/version": spreadsheetFileVersionResultSchema,
+  "cowork/workspace/spreadsheet/patch": spreadsheetEditResultSchema,
   "cowork/workspace/presentation/preview": presentationPreviewResultSchema,
 } as const;

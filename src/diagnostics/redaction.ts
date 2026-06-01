@@ -20,6 +20,8 @@ const EMAIL_PATTERN = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi;
 const BEARER_PATTERN = /\bBearer\s+[A-Za-z0-9._~+/=-]{12,}/gi;
 const ASSIGNMENT_SECRET_PATTERN =
   /\b([A-Za-z0-9_.-]*(?:token|secret|api[_-]?key|apikey|password|authorization|cookie)[A-Za-z0-9_.-]*)\s*[:=]\s*["']?[^"'\s,;}{]{6,}/gi;
+const BODY_ASSIGNMENT_PATTERN =
+  /\b(?:prompt|completion|stdout|stderr|command|file[_-]?content|contents|transcript|messages|request[_-]?body|response[_-]?body|body|form[_-]?data|payload|response)(?:tail|text|json|data|content|line)?\b\s*[:=]\s*[^\n\r]*/gim;
 const COMMON_SECRET_VALUE_PATTERN =
   /\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{16,}|xox[baprs]-[A-Za-z0-9-]{16,}|AKIA[0-9A-Z]{16})\b/g;
 
@@ -79,6 +81,10 @@ function redactSecretLikeText(value: string): string {
     .replace(COMMON_SECRET_VALUE_PATTERN, "[redacted-secret]");
 }
 
+function redactBodyAssignmentText(value: string): string {
+  return value.replace(BODY_ASSIGNMENT_PATTERN, "[redacted-body]");
+}
+
 function truncateLongString(value: string, maxStringLength: number): string {
   if (value.length <= maxStringLength) return value;
   return `${value.slice(0, Math.max(0, maxStringLength - 32))}[redacted-long-string:${value.length}]`;
@@ -112,6 +118,7 @@ export function redactDiagnosticText(
   next = redactLocalUsername(next, homeDir);
   next = next.replace(EMAIL_PATTERN, "[redacted-email]");
   next = redactSecretLikeText(next);
+  next = redactBodyAssignmentText(next);
   if (looksLikeJsonBody(next)) {
     return "[redacted-json-body]";
   }

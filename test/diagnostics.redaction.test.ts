@@ -61,4 +61,25 @@ describe("diagnostics redaction", () => {
     expect(rendered).toContain("[redacted-long-string:1200]");
     expect(rendered).toContain("[redacted-json-body]");
   });
+
+  test("redacts body-like assignment fields from legacy log lines", () => {
+    const redacted = redactDiagnosticText(
+      [
+        "server exited code=1 stderr=private stack with /Users/alice/project/file.ts",
+        "tool finished stdout=private shell output token=secret-token-value",
+        "turn prompt=read a private file completion=done",
+      ].join("\n"),
+      {
+        homeDir: "/Users/alice",
+        workspacePaths: ["/Users/alice/project"],
+      },
+    );
+
+    expect(redacted).not.toContain("private stack");
+    expect(redacted).not.toContain("private shell output");
+    expect(redacted).not.toContain("read a private file");
+    expect(redacted).not.toContain("completion=done");
+    expect(redacted).not.toContain("/Users/alice");
+    expect(redacted).toContain("[redacted-body]");
+  });
 });

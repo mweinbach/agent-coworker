@@ -129,6 +129,7 @@ describe("desktop diagnostics service", () => {
         [
           "workspace=/Users/alice/project token=abc123456789 email=max@example.com",
           '{"prompt":"read /Users/alice/project/secret.txt","completion":"done"}',
+          "server exited code=1 stderr=private shell output",
         ].join("\n"),
       );
       await fs.mkdir(path.join(userDataDir, "transcripts"), { recursive: true });
@@ -153,6 +154,8 @@ describe("desktop diagnostics service", () => {
       expect(bundleText).not.toContain("abc123456789");
       expect(bundleText).not.toContain("max@example.com");
       expect(bundleText).not.toContain("secret.txt");
+      expect(bundleText).not.toContain("private shell output");
+      expect(bundle.logs["server.log"]).not.toContain("stderr=");
       expect(bundle.logs["server.log"]).toContain("[workspace-path]");
       expect(result.uploadConfigured).toBe(false);
       expect(result.uploadEnabled).toBe(false);

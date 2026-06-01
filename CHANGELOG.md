@@ -164,8 +164,8 @@ All notable changes to this project will be documented in this file.
   for document, presentation, and spreadsheet workflows, with runtime env
   propagation across Antigravity, Codex app-server, and local tool execution.
 - **Workspace canvas previews** — Presentation slide preview in the workspace
-  canvas, plus JSON-RPC `cowork/workspace/spreadsheet/preview` and a desktop
-  spreadsheet inspector for bounded CSV/XLSX rendering without client-side parsing.
+  canvas, plus JSON-RPC spreadsheet workbook snapshots and the desktop Univer
+  spreadsheet canvas for CSV/XLSX editing without client-side file parsing.
 - **Universal new chat landing** — Dedicated new-chat surface with model selector,
   one-off chat workspaces under `~/.cowork/chats/*`, sidebar section reordering,
   and project-scoped “new chat in project” flows on the existing JSON-RPC thread

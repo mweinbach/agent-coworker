@@ -20,13 +20,11 @@ export function runtimeStateFile(homedir?: string): string {
 
 export async function writeState(opts: {
   stateFile: string;
-  artifactSource?: string;
   skills: CodexPrimaryRuntimeSkillResult[];
 }): Promise<void> {
   const state: CodexPrimaryRuntimeState = {
     version: CODEX_RUNTIME_STATE_VERSION,
     updatedAt: new Date().toISOString(),
-    ...(opts.artifactSource ? { artifactSource: opts.artifactSource } : {}),
     installedSkills: opts.skills
       .filter((skill) => skill.status === "installed" || skill.status === "already_installed")
       .map((skill) => skill.name),

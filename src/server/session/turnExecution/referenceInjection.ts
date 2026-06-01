@@ -1,3 +1,6 @@
+import { Buffer } from "node:buffer";
+import fs from "node:fs/promises";
+
 import { buildPluginCatalogSnapshot } from "../../../plugins";
 import { discoverSkillsForConfig } from "../../../skills";
 import {
@@ -25,6 +28,13 @@ import type { SessionContext } from "../SessionContext";
 
 export type ReferencedSkillContext = LoadedSkillBody;
 
+export const MAX_REFERENCED_SKILL_BODY_BYTES = 64 * 1024;
+export const MAX_TOTAL_REFERENCED_SKILL_INJECTION_BYTES = 192 * 1024;
+
+function utf8ByteLength(value: string): number {
+  return Buffer.byteLength(value, "utf8");
+}
+
 function dedupeReferenceNames(references: TurnReference[], kind: TurnReference["kind"]): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
@@ -46,12 +56,39 @@ export async function resolveReferencedSkills(opts: {
   const { context, references, log } = opts;
   const skillNames = dedupeReferenceNames(references, "skill");
   const skills: ReferencedSkillContext[] = [];
+  let totalBytes = 0;
+  const discovered = await discoverSkillsForConfig(context.state.config);
   for (const name of skillNames) {
+    const discoveredSkill = discovered.find((skill) => skill.enabled && skill.name === name);
+    if (discoveredSkill && isSkillBodyLoadAllowed(context.state.config, name)) {
+      const stat = await fs.stat(discoveredSkill.path).catch(() => null);
+      if (stat?.isFile() && stat.size > MAX_REFERENCED_SKILL_BODY_BYTES) {
+        log(
+          `[skill-ref] skipping oversized skill "${name}" (${stat.size} bytes exceeds ${MAX_REFERENCED_SKILL_BODY_BYTES} bytes)`,
+        );
+        continue;
+      }
+    }
+
     const loaded = await loadSkillBodyByName(context.state.config, name);
     if (!loaded) {
       log(`[skill-ref] skipping unknown, disabled, or unreadable skill "${name}"`);
       continue;
     }
+    const bodyBytes = utf8ByteLength(loaded.body);
+    if (bodyBytes > MAX_REFERENCED_SKILL_BODY_BYTES) {
+      log(
+        `[skill-ref] skipping oversized skill "${name}" (${bodyBytes} injected bytes exceeds ${MAX_REFERENCED_SKILL_BODY_BYTES} bytes)`,
+      );
+      continue;
+    }
+    if (totalBytes + bodyBytes > MAX_TOTAL_REFERENCED_SKILL_INJECTION_BYTES) {
+      log(
+        `[skill-ref] skipping remaining skills at "${name}" (${totalBytes + bodyBytes} total injected bytes would exceed ${MAX_TOTAL_REFERENCED_SKILL_INJECTION_BYTES} bytes)`,
+      );
+      break;
+    }
+    totalBytes += bodyBytes;
     skills.push(loaded);
   }
   return skills;

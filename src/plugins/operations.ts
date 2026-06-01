@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { FetchLike } from "../extensions/source";
+import { computeSourceRootHash } from "../extensions/sourceFingerprint";
 import { renameMCPServerCredentials } from "../mcp/authStore";
 import type {
   AgentConfig,
@@ -10,6 +11,7 @@ import type {
   PluginCatalogSnapshot,
   PluginInstallPreview,
   PluginInstallTargetScope,
+  PluginUpdateCheckResult,
 } from "../types";
 import { workspacePathOverlaps } from "../utils/workspacePath";
 import { buildPluginCatalogSnapshot } from "./catalog";
@@ -329,6 +331,7 @@ export async function installPluginsFromSource(opts: {
   targetScope: PluginInstallTargetScope;
   fetchImpl?: FetchLike;
   marketplaceMetadataByPluginId?: ReadonlyMap<string, PluginMarketplaceInstallMetadata>;
+  expectedPluginId?: string;
 }): Promise<{
   preview: PluginInstallPreview;
   pluginId: string;
@@ -361,6 +364,18 @@ export async function installPluginsFromSource(opts: {
         fetchImpl: opts.fetchImpl,
       }));
     const candidate = selectSingleValidPluginCandidate(materialized.candidates);
+    if (opts.expectedPluginId && candidate.pluginId !== opts.expectedPluginId) {
+      throw new Error(
+        `Recorded plugin "${opts.expectedPluginId}" resolved to "${candidate.pluginId}" in the update source.`,
+      );
+    }
+    const sourceHash = await computeSourceRootHash(candidate.rootDir);
+    const marketplaceMetadata = marketplaceMetadataByPluginId.get(candidate.pluginId);
+    if (marketplaceMetadata?.sourceHash && marketplaceMetadata.sourceHash !== sourceHash) {
+      throw new Error(
+        `Marketplace source hash mismatch for "${candidate.pluginId}": expected ${marketplaceMetadata.sourceHash}, got ${sourceHash}.`,
+      );
+    }
     const destinationRoot = path.join(writableScope.pluginsDir, candidate.pluginId);
     const targetRoots = conflictingTargetRoots(currentCatalog, writableScope, candidate.pluginId);
     const existingInstallRoot = await findExistingInstallRoot(destinationRoot, targetRoots);
@@ -379,10 +394,9 @@ export async function installPluginsFromSource(opts: {
         // can't strand them (e.g. an MCP credential rename orphaned against the
         // restored old plugin).
         onInstalled: async () => {
-          const marketplaceMetadata = marketplaceMetadataByPluginId.get(candidate.pluginId);
           if (marketplaceMetadata) {
             await writePluginInstallMetadata(destinationRoot, {
-              marketplace: marketplaceMetadata,
+              marketplace: { ...marketplaceMetadata, sourceHash },
             });
           } else {
             await clearPluginInstallMetadata(destinationRoot);
@@ -416,6 +430,95 @@ export async function installPluginsFromSource(opts: {
   } finally {
     await materialized.cleanup();
   }
+}
+
+export async function checkPluginInstallationUpdate(opts: {
+  config: AgentConfig;
+  plugin: InstalledPluginCatalogEntry;
+  fetchImpl?: FetchLike;
+}): Promise<PluginUpdateCheckResult> {
+  if (!opts.plugin.installSource) {
+    return {
+      pluginId: opts.plugin.id,
+      scope: opts.plugin.scope,
+      canUpdate: false,
+      reason: "No update source is recorded for this plugin.",
+    };
+  }
+
+  const materialized = await materializePluginSource({
+    input: opts.plugin.installSource,
+    cwd: opts.config.workingDirectory,
+    fetchImpl: opts.fetchImpl,
+  });
+  try {
+    const preview = await buildPluginInstallPreview({
+      input: opts.plugin.installSource,
+      targetScope: opts.plugin.scope,
+      catalog: await buildPluginCatalogSnapshot(opts.config, { fetchImpl: opts.fetchImpl }),
+      cwd: opts.config.workingDirectory,
+      fetchImpl: opts.fetchImpl,
+      materialized,
+    });
+    const candidate = selectSingleValidPluginCandidate(materialized.candidates);
+    if (candidate.pluginId !== opts.plugin.id) {
+      return {
+        pluginId: opts.plugin.id,
+        scope: opts.plugin.scope,
+        canUpdate: false,
+        reason: `Recorded plugin "${opts.plugin.id}" resolved to "${candidate.pluginId}" in the update source.`,
+        preview,
+      };
+    }
+
+    const latestSourceHash = await computeSourceRootHash(candidate.rootDir);
+    const installedSourceHash =
+      opts.plugin.installedSourceHash ?? opts.plugin.marketplace?.sourceHash;
+    if (installedSourceHash && installedSourceHash === latestSourceHash) {
+      return {
+        pluginId: opts.plugin.id,
+        scope: opts.plugin.scope,
+        canUpdate: false,
+        reason: "This plugin is already up to date.",
+        preview,
+        installedSourceHash,
+        latestSourceHash,
+      };
+    }
+
+    return {
+      pluginId: opts.plugin.id,
+      scope: opts.plugin.scope,
+      canUpdate: true,
+      preview,
+      ...(installedSourceHash ? { installedSourceHash } : {}),
+      latestSourceHash,
+    };
+  } finally {
+    await materialized.cleanup();
+  }
+}
+
+export async function updatePluginInstallation(opts: {
+  config: AgentConfig;
+  plugin: InstalledPluginCatalogEntry;
+  fetchImpl?: FetchLike;
+}): Promise<{
+  preview: PluginInstallPreview;
+  pluginId: string;
+  catalog: PluginCatalogSnapshot;
+}> {
+  if (!opts.plugin.installSource) {
+    throw new Error("No update source is recorded for this plugin");
+  }
+
+  return await installPluginsFromSource({
+    config: opts.config,
+    input: opts.plugin.installSource,
+    targetScope: opts.plugin.scope,
+    fetchImpl: opts.fetchImpl,
+    expectedPluginId: opts.plugin.id,
+  });
 }
 
 async function defaultPluginTombstoneIdForDeletedPlugin(

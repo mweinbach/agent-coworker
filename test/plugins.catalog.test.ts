@@ -11,8 +11,9 @@ import {
   resolvePluginCatalogEntry,
 } from "../src/plugins/catalog";
 import { discoverPlugins } from "../src/plugins/discovery";
-import { readPluginManifest } from "../src/plugins/manifest";
+import { readPluginManifest, writePluginInstallMetadata } from "../src/plugins/manifest";
 import {
+  checkPluginInstallationUpdate,
   deletePluginInstallation,
   installPluginsFromSource,
   __internal as pluginOperationsInternal,
@@ -21,6 +22,9 @@ import {
 import { setPluginMcpServerEnabled } from "../src/plugins/overrides";
 import { discoverSkillsForConfig } from "../src/skills";
 import type { AgentConfig, PluginCatalogEntry, PluginCatalogSnapshot } from "../src/types";
+
+const OLD_SOURCE_HASH = `sha256:${"1".repeat(64)}`;
+const NEW_SOURCE_HASH = `sha256:${"2".repeat(64)}`;
 
 function makeConfig(
   workspaceRoot: string,
@@ -182,7 +186,7 @@ function textResponse(payload: string, status = 200): Response {
 }
 
 function createRemoteMarketplaceFetch(
-  opts: { includeMissingPlugin?: boolean; remoteManifestName?: string } = {},
+  opts: { includeMissingPlugin?: boolean; remoteManifestName?: string; sourceHash?: string } = {},
 ): typeof fetch {
   const tree: Record<string, unknown> = {
     ".agents/plugins/marketplace.json": {
@@ -253,6 +257,7 @@ function createRemoteMarketplaceFetch(
       {
         name: "figma-toolkit",
         source: { source: "local", path: "./plugins/figma-toolkit" },
+        ...(opts.sourceHash ? { sourceHash: opts.sourceHash } : {}),
         policy: { installation: "AVAILABLE", authentication: "ON_INSTALL" },
         category: "Design",
       },
@@ -440,6 +445,49 @@ describe("plugin catalog and install operations", () => {
     }
   });
 
+  test("remote marketplace metadata annotates installed plugins with stale source hashes", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-market-stale-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-market-stale-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-market-stale-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      if (!config.userPluginsDir) {
+        throw new Error("Expected user plugin directory");
+      }
+      const pluginRoot = path.join(config.userPluginsDir, "figma-toolkit");
+      await writePlugin(pluginRoot, "Marketplace Figma Toolkit");
+      await writePluginInstallMetadata(pluginRoot, {
+        marketplace: {
+          name: "cowork-test",
+          sourceInput:
+            "https://github.com/mweinbach/cowork-skills-plugins/tree/main/plugins/figma-toolkit",
+          sourceHash: OLD_SOURCE_HASH,
+        },
+      });
+
+      const catalog = await buildPluginCatalogSnapshot(config, {
+        includeRemoteMarketplace: true,
+        fetchImpl: createRemoteMarketplaceFetch({ sourceHash: NEW_SOURCE_HASH }),
+      });
+
+      expect(catalog.plugins[0]).toMatchObject({
+        id: "figma-toolkit",
+        installedSourceHash: OLD_SOURCE_HASH,
+        latestSourceHash: NEW_SOURCE_HASH,
+        updateAvailable: true,
+        marketplace: {
+          name: "cowork-test",
+          sourceHash: NEW_SOURCE_HASH,
+        },
+      });
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
   test("installing a remote marketplace plugin preserves update provenance", async () => {
     const workspace = await fs.mkdtemp(
       path.join(os.tmpdir(), "plugins-market-install-provenance-workspace-"),
@@ -470,6 +518,12 @@ describe("plugin catalog and install operations", () => {
 
       expect(catalog.warnings).toEqual([]);
       expect(catalog.plugins).toHaveLength(1);
+      const installedPlugin = catalog.plugins[0];
+      if (!installedPlugin) {
+        throw new Error("Expected installed plugin in catalog");
+      }
+      const installedSourceHash = installedPlugin.installedSourceHash;
+      expect(installedSourceHash).toMatch(/^sha256:[a-f0-9]{64}$/);
       expect(catalog.plugins[0]).toMatchObject({
         id: "figma-toolkit",
         discoveryKind: "marketplace",
@@ -478,7 +532,22 @@ describe("plugin catalog and install operations", () => {
         marketplace: {
           name: "cowork-test",
           category: "Design",
+          sourceHash: installedSourceHash,
         },
+      });
+
+      const updateCheck = await checkPluginInstallationUpdate({
+        config,
+        plugin: installedPlugin,
+        fetchImpl,
+      });
+
+      expect(updateCheck).toMatchObject({
+        pluginId: "figma-toolkit",
+        canUpdate: false,
+        reason: "This plugin is already up to date.",
+        installedSourceHash,
+        latestSourceHash: installedSourceHash,
       });
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
@@ -520,6 +589,37 @@ describe("plugin catalog and install operations", () => {
         path.join(home, ".agents", "plugins", "figma-toolkit"),
       );
       expect(manifest.description).toBe("Remote Figma helpers");
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  test("installPluginsFromSource rejects mismatched marketplace source hashes", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-install-hash-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-install-hash-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-install-hash-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      const sourceRoot = path.join(workspace, "plugin-source");
+      await writeNamedPlugin(sourceRoot, "figma-toolkit", "Figma Toolkit");
+
+      await expect(
+        installPluginsFromSource({
+          config,
+          input: sourceRoot,
+          targetScope: "workspace",
+          marketplaceMetadataByPluginId: new Map([
+            ["figma-toolkit", { name: "cowork-test", sourceHash: OLD_SOURCE_HASH }],
+          ]),
+        }),
+      ).rejects.toThrow(/Marketplace source hash mismatch/);
+
+      await expect(
+        fs.access(path.join(config.workspacePluginsDir ?? "", "figma-toolkit")),
+      ).rejects.toThrow();
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
       await fs.rm(home, { recursive: true, force: true });

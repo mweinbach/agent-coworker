@@ -18,11 +18,13 @@ function getErrorText(error) {
 function isRetryableNotarizeError(error) {
   const text = getErrorText(error);
 
-  return /NSURLErrorDomain Code=-(1001|1005|1009)\b/.test(text)
-    || /\b(ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|ENETDOWN|ENETUNREACH)\b/.test(text)
-    || /\b(?:statusCode|status code)[:=]\s*(?:429|5\d\d)\b/i.test(text)
-    || /The Internet connection appears to be offline/i.test(text)
-    || /network.*(?:timeout|offline|reset|unreachable)/i.test(text);
+  return (
+    /NSURLErrorDomain Code=-(1001|1005|1009)\b/.test(text) ||
+    /\b(ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|ENETDOWN|ENETUNREACH)\b/.test(text) ||
+    /\b(?:statusCode|status code)[:=]\s*(?:429|5\d\d)\b/i.test(text) ||
+    /The Internet connection appears to be offline/i.test(text) ||
+    /network.*(?:timeout|offline|reset|unreachable)/i.test(text)
+  );
 }
 
 function sleep(ms) {

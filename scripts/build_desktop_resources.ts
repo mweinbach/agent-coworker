@@ -27,7 +27,7 @@ import {
   runCommand,
 } from "./releaseBuildUtils";
 
-const CACHE_VERSION = 7;
+const CACHE_VERSION = 8;
 const MANAGED_SOFFICE_HELPER_RELATIVE_PATH = path.join("assets", "managed-soffice-helper.mjs");
 
 type DesktopResourcesCache = {
@@ -40,6 +40,7 @@ type DesktopResourcesCache = {
   configFingerprint: string;
   skillsFingerprint: string;
   codexPrimaryRuntimeFingerprint: string | null;
+  artifactRuntimeFingerprint: string | null;
   foundationModelsSdkFingerprint: string | null;
   windowsAiElectronFingerprint: string | null;
   docsFingerprint: string | null;
@@ -116,6 +117,8 @@ async function loadCache(cachePath: string): Promise<DesktopResourcesCache | nul
       typeof parsed.skillsFingerprint !== "string" ||
       (parsed.codexPrimaryRuntimeFingerprint !== null &&
         typeof parsed.codexPrimaryRuntimeFingerprint !== "string") ||
+      (parsed.artifactRuntimeFingerprint !== null &&
+        typeof parsed.artifactRuntimeFingerprint !== "string") ||
       (parsed.foundationModelsSdkFingerprint !== null &&
         typeof parsed.foundationModelsSdkFingerprint !== "string") ||
       (parsed.windowsAiElectronFingerprint !== null &&
@@ -175,6 +178,26 @@ async function resolveCodexPrimaryRuntimeSource(): Promise<string | null> {
   }
 
   return null;
+}
+
+async function resolveArtifactRuntimeSource(): Promise<string | null> {
+  const fromEnv = process.env.COWORK_ARTIFACT_RUNTIME_DIR?.trim();
+  const isUsable = async (dir: string): Promise<boolean> =>
+    (await pathExists(path.join(dir, "runtime.json"))) ||
+    (await pathExists(path.join(dir, "node", "node_modules", "@oai", "artifact-tool")));
+
+  if (fromEnv) {
+    const resolved = path.resolve(fromEnv);
+    if (!(await isUsable(resolved))) {
+      throw new Error(
+        `COWORK_ARTIFACT_RUNTIME_DIR does not contain an artifact runtime tree: ${resolved}`,
+      );
+    }
+    return resolved;
+  }
+
+  const defaultRuntimeDir = path.join(os.homedir(), ".cache", "cowork", "artifact-runtime");
+  return (await isUsable(defaultRuntimeDir)) ? defaultRuntimeDir : null;
 }
 
 async function syncCopiedDir(opts: {
@@ -427,11 +450,23 @@ async function main() {
       "COWORK_BUNDLE_CODEX_PRIMARY_RUNTIME=1 but no Codex primary runtime cache was found. Set COWORK_CODEX_PRIMARY_RUNTIME_DIR or run the Codex runtime setup first.",
     );
   }
+  const shouldBundleArtifactRuntime = process.env.COWORK_BUNDLE_ARTIFACT_RUNTIME === "1";
+  const artifactRuntimeSource = shouldBundleArtifactRuntime
+    ? await resolveArtifactRuntimeSource()
+    : null;
+  if (shouldBundleArtifactRuntime && !artifactRuntimeSource) {
+    throw new Error(
+      "COWORK_BUNDLE_ARTIFACT_RUNTIME=1 but no artifact runtime cache was found. Set COWORK_ARTIFACT_RUNTIME_DIR or run `bun run setup:artifact-runtime` first.",
+    );
+  }
   const promptsFingerprint = await fingerprintInputs([promptsSrc], root);
   const configFingerprint = await fingerprintInputs([configSrc], root);
   const skillsFingerprint = await fingerprintInputs([skillsSrc], root);
   const codexPrimaryRuntimeFingerprint = codexPrimaryRuntimeSource
     ? await fingerprintInputs([codexPrimaryRuntimeSource], codexPrimaryRuntimeSource)
+    : null;
+  const artifactRuntimeFingerprint = artifactRuntimeSource
+    ? await fingerprintInputs([artifactRuntimeSource], artifactRuntimeSource)
     : null;
   const foundationModelsSdkInputs = shouldBundleFoundationModelsSdk(platform, arch)
     ? await ensureFoundationModelsSdkInputs(root)
@@ -569,6 +604,7 @@ async function main() {
   const configDest = path.join(distDir, "config");
   const skillsDest = path.join(distDir, "skills");
   const codexPrimaryRuntimeDest = path.join(distDir, "codex-primary-runtime");
+  const artifactRuntimeDest = path.join(distDir, "artifact-runtime");
 
   await syncCopiedDir({
     label: "prompts",
@@ -606,6 +642,20 @@ async function main() {
     await rmrf(codexPrimaryRuntimeDest);
     await fs.mkdir(codexPrimaryRuntimeDest, { recursive: true });
     console.log("[resources] codex primary runtime: disabled");
+  }
+
+  if (artifactRuntimeSource && artifactRuntimeFingerprint) {
+    await syncCopiedDir({
+      label: "artifact runtime",
+      src: artifactRuntimeSource,
+      dest: artifactRuntimeDest,
+      previousFingerprint: cache?.artifactRuntimeFingerprint ?? null,
+      nextFingerprint: artifactRuntimeFingerprint,
+    });
+  } else {
+    await rmrf(artifactRuntimeDest);
+    await fs.mkdir(artifactRuntimeDest, { recursive: true });
+    console.log("[resources] artifact runtime: disabled");
   }
 
   await syncFoundationModelsSdk({
@@ -650,6 +700,7 @@ async function main() {
     configFingerprint,
     skillsFingerprint,
     codexPrimaryRuntimeFingerprint,
+    artifactRuntimeFingerprint,
     foundationModelsSdkFingerprint,
     windowsAiElectronFingerprint,
     docsFingerprint,

@@ -439,7 +439,11 @@ export function createPluginActions(
           { pluginMutationError: detail },
           "plugin",
         );
-      } else if (pluginScope === "user") {
+        return;
+      }
+
+      clearPluginMutationPending(workspaceId, key);
+      if (pluginScope === "user") {
         await refreshSharedWorkspaceState(get, set, workspaceId);
       }
     },

@@ -51,7 +51,12 @@ import { Input } from "../components/ui/input";
 import { openExternalUrl } from "../lib/desktopCommands";
 import { reportSpreadsheetBackgroundSaveFailure } from "../lib/spreadsheetSaveNotifications";
 import { buildUniverSheetsFooterConfig } from "../lib/univerCanvasConfig";
-import { shouldDeferExternalWorkbookReload, type UniverSaveState } from "../lib/univerSaveState";
+import {
+  isWorkbookSnapshotForPath,
+  shouldBlockSpreadsheetUnload,
+  shouldDeferExternalWorkbookReload,
+  type UniverSaveState,
+} from "../lib/univerSaveState";
 import {
   buildUniverSpreadsheetPrompt,
   cloneUniverWorkbookData,
@@ -101,10 +106,6 @@ const univerLocales = {
     sheetsThreadCommentEnUS,
   ),
 };
-
-function shouldBlockWindowUnload(saveState: SaveState, saveInFlight: Promise<boolean> | null) {
-  return saveState === "dirty" || saveState === "saving" || saveInFlight !== null;
-}
 
 function idleStateAfterNoPendingOperations(current: SaveState): SaveState {
   return current === "error" ? "error" : "idle";
@@ -166,7 +167,7 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
 
   useEffect(() => {
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
-      if (!shouldBlockWindowUnload(saveStateRef.current, saveInFlightRef.current)) return;
+      if (!shouldBlockSpreadsheetUnload(saveStateRef.current, saveInFlightRef.current)) return;
       void flushSaveRef.current();
       event.preventDefault();
       event.stopImmediatePropagation();
@@ -230,11 +231,14 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
     setLoading(true);
     setLoadError(null);
     setWorkbook(null);
+    workbookRef.current = null;
     setSelection(null);
+    selectionRef.current = null;
     updateSaveState("idle");
     setSaveError(null);
     setReloadNotice(null);
     sourceVersionRef.current = null;
+    lastSavedDataRef.current = null;
     externalReloadPendingRef.current = false;
 
     void (async () => {
@@ -243,6 +247,10 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
         if (!active) return;
         if (!response.ok) {
           setLoadError(response.error.message);
+          return;
+        }
+        if (!isWorkbookSnapshotForPath(response.workbook, path)) {
+          setLoadError("Loaded workbook did not match the selected file.");
           return;
         }
         sourceVersionRef.current = response.workbook.fileVersion;
@@ -260,7 +268,7 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
   }, [loadSpreadsheetWorkbook, path, updateSaveState]);
 
   useEffect(() => {
-    if (!workbook) return;
+    if (!workbook || !isWorkbookSnapshotForPath(workbook, path)) return;
     let active = true;
 
     const checkForExternalUpdate = async () => {
@@ -295,7 +303,7 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
   }, [loadSpreadsheetFileVersion, path, reloadWorkbookFromDisk, showReloadNotice, workbook]);
 
   useEffect(() => {
-    if (!workbook || !containerRef.current) return;
+    if (!workbook || !isWorkbookSnapshotForPath(workbook, path) || !containerRef.current) return;
     const container = containerRef.current;
     container.innerHTML = "";
     updateSaveState("idle");
@@ -379,7 +387,7 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
       if (!result.ok) return null;
       sourceVersionRef.current = result.version;
       const currentWorkbook = workbookRef.current;
-      if (currentWorkbook) {
+      if (currentWorkbook && isWorkbookSnapshotForPath(currentWorkbook, path)) {
         workbookRef.current = { ...currentWorkbook, fileVersion: result.version };
       }
       return result.version;
@@ -545,36 +553,42 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
     workbook,
   ]);
 
+  const activeWorkbook = isWorkbookSnapshotForPath(workbook, path) ? workbook : null;
+  const activeSelection = activeWorkbook ? selection : null;
+
   const statusLabel = useMemo(() => {
     if (reloadNotice) return reloadNotice;
     if (saveState === "dirty") return "Unsaved changes";
     if (saveState === "saving") return "Saving";
     if (saveState === "saved") return "Saved";
     if (saveState === "error") return "Save failed";
-    return selection?.rangeA1 ?? workbook?.activeSheetName ?? "";
-  }, [reloadNotice, saveState, selection?.rangeA1, workbook?.activeSheetName]);
+    return activeSelection?.rangeA1 ?? activeWorkbook?.activeSheetName ?? "";
+  }, [reloadNotice, saveState, activeSelection?.rangeA1, activeWorkbook?.activeSheetName]);
 
   const handlePromptSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const request = promptText.trim();
-    if (!request || !workbook) return;
+    if (!request || !activeWorkbook) return;
     if (!selectedThreadId) {
       alert("Please select or start a chat thread to collaborate with the agent.");
       return;
     }
     const saved = await flushSaveRef.current();
     if (!saved) return;
-    const currentWorkbook = workbookRef.current ?? workbook;
+    const currentWorkbook =
+      workbookRef.current && isWorkbookSnapshotForPath(workbookRef.current, path)
+        ? workbookRef.current
+        : activeWorkbook;
     const latestWorkbookResult = await loadSpreadsheetWorkbook(
       path,
-      selectionRef.current?.sheetName ? { sheetName: selectionRef.current.sheetName } : undefined,
+      activeSelection?.sheetName ? { sheetName: activeSelection.sheetName } : undefined,
     );
     if (!latestWorkbookResult.ok) {
       alert(`Could not refresh workbook context: ${latestWorkbookResult.error.message}`);
       return;
     }
     const latestWorkbook = latestWorkbookResult.workbook;
-    const currentSelection = selectionRef.current ?? selection;
+    const currentSelection = activeSelection;
     const latestSelection =
       latestWorkbook.fileVersion.fingerprint !== currentWorkbook.fileVersion.fingerprint
         ? selectionContextFromSnapshot(latestWorkbook, currentSelection)

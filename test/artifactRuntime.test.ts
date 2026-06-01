@@ -37,8 +37,7 @@ async function writeFakeArtifactRuntime(rootDir: string): Promise<string> {
   return oaiSource;
 }
 
-async function writeFakeLegacyCodexRuntime(home: string): Promise<string> {
-  const root = path.join(home, ".cache", "codex-runtimes", "codex-primary-runtime");
+async function writeFakeLegacyCodexRuntimeAt(root: string): Promise<string> {
   await writeFakeArtifactRuntime(root);
   // Skills that live under the legacy runtime must NOT be migrated into the
   // artifact runtime cache (they are owned by the cowork-skills-plugins
@@ -55,6 +54,12 @@ async function writeFakeLegacyCodexRuntime(home: string): Promise<string> {
   await fs.mkdir(legacySkill, { recursive: true });
   await fs.writeFile(path.join(legacySkill, "SKILL.md"), "---\nname: spreadsheets\n---\nlegacy\n");
   return root;
+}
+
+async function writeFakeLegacyCodexRuntime(home: string): Promise<string> {
+  return writeFakeLegacyCodexRuntimeAt(
+    path.join(home, ".cache", "codex-runtimes", "codex-primary-runtime"),
+  );
 }
 
 describe("artifact runtime bootstrap", () => {
@@ -167,6 +172,43 @@ describe("artifact runtime bootstrap", () => {
     }
   });
 
+  test("migrates a legacy Codex artifact runtime from an install payload directory", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-artifact-install-migrate-"));
+    const legacyRoot = await writeFakeLegacyCodexRuntimeAt(
+      path.join(
+        home,
+        ".cache",
+        "codex-runtimes",
+        "codex-runtime-install-42",
+        "payload",
+        "codex-primary-runtime",
+      ),
+    );
+    const cacheDir = path.join(home, ".cache", "cowork", "artifact-runtime");
+
+    try {
+      const result = await ensureArtifactRuntimeReady({
+        homedir: home,
+        env: {},
+        allowNetwork: false,
+      });
+
+      expect(result?.migration).toMatchObject({ status: "migrated", source: legacyRoot });
+      expect(result?.runtime.status).toBe("available");
+      expect(result?.runtime.source).toBe(cacheDir);
+      expect(result?.artifactTool).toMatchObject({
+        status: "available",
+        source: path.join(cacheDir, "node", "node_modules", "@oai"),
+      });
+      await expect(fs.stat(path.join(cacheDir, "plugins"))).rejects.toThrow();
+
+      const state = JSON.parse(await fs.readFile(result?.stateFile ?? "", "utf-8"));
+      expect(state.migratedFrom).toBe(legacyRoot);
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
   test("prefers a fresh download over legacy migration under force", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-artifact-migrate-force-"));
     await writeFakeLegacyCodexRuntime(home);
@@ -229,6 +271,37 @@ describe("artifact runtime bootstrap", () => {
           path.join(cacheDir, "node", "node_modules", "@oai", "artifact-tool", "package.json"),
         ),
       ).resolves.toBeDefined();
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test("reports failed archive setup when extraction does not contain a runtime root", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-artifact-bad-archive-"));
+    const archiveUrl = "https://download.test/bad-artifact-runtime.zip";
+    const fetchImpl = mock(
+      async () => new Response(new Uint8Array([1, 2, 3]), { status: 200 }),
+    ) as typeof fetch;
+
+    try {
+      const result = await ensureArtifactRuntimeReady({
+        homedir: home,
+        env: {},
+        archiveUrl,
+        fetchImpl,
+        extractArchive: async (_archivePath, destinationDir) => {
+          await fs.mkdir(path.join(destinationDir, "not-a-runtime"), { recursive: true });
+        },
+      });
+
+      expect(result?.archive).toMatchObject({
+        status: "failed",
+        endpoint: archiveUrl,
+      });
+      expect(result?.archive.reason).toContain("Could not locate an artifact runtime root");
+      expect(result?.runtime.status).toBe("missing");
+      expect(result?.artifactTool.status).toBe("missing");
       expect(fetchImpl).toHaveBeenCalledTimes(1);
     } finally {
       await fs.rm(home, { recursive: true, force: true });

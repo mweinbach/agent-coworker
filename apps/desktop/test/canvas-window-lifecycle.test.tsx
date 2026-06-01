@@ -15,8 +15,8 @@ mock.module("../src/lib/desktopCommands", () =>
   }),
 );
 
-mock.module("../src/ui/Canvas", () => ({
-  Canvas: ({ path }: { path: string }) => {
+mock.module("../src/ui/LazyUniverSpreadsheetCanvas", () => ({
+  LazyUniverSpreadsheetCanvas: ({ path }: { path: string }) => {
     useEffect(() => {
       canvasMounts += 1;
       return () => {

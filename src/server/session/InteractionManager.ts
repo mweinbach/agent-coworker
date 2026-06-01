@@ -1,7 +1,6 @@
 import path from "node:path";
-
-import type { AgentConfig, ServerErrorCode, ServerErrorSource } from "../../types";
 import { captureProductEvent } from "../../telemetry/productAnalytics";
+import type { AgentConfig, ServerErrorCode, ServerErrorSource } from "../../types";
 import { classifyCommandDetailed } from "../../utils/approval";
 import { ASK_SKIP_TOKEN, type SessionEvent } from "../protocol";
 

@@ -3,9 +3,9 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 import {
   __internal,
   addBreadcrumb,
+  type CrashReportingSdk,
   captureError,
   initCrashReporting,
-  type CrashReportingSdk,
 } from "../src/telemetry/crashReporting";
 
 function createFakeSdk() {

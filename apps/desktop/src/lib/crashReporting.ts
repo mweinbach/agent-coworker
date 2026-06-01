@@ -1,9 +1,9 @@
 import {
+  type CrashReportingSdk,
   captureError,
   initCrashReporting,
   setCrashReportingEnabled,
   shutdownCrashReporting,
-  type CrashReportingSdk,
 } from "../../../../src/telemetry/crashReporting";
 import type { DesktopCrashReportingConfig } from "./desktopApi";
 

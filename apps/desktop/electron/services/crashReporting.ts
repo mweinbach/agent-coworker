@@ -1,6 +1,6 @@
 import os from "node:os";
 import { app } from "electron";
-
+import { resolveTelemetryConsent } from "../../../../src/telemetry/config";
 import {
   type CrashReportingEnv,
   type CrashReportingSdk,
@@ -10,8 +10,7 @@ import {
   resolveCrashReportingConfig,
   shutdownCrashReporting,
 } from "../../../../src/telemetry/crashReporting";
-import { resolveTelemetryConsent } from "../../../../src/telemetry/config";
-import { type PersistedPrivacyTelemetrySettings } from "../../src/app/types";
+import type { PersistedPrivacyTelemetrySettings } from "../../src/app/types";
 import { writeLocalLog } from "./localLogs";
 
 let processHandlersRegistered = false;

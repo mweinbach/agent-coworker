@@ -1,10 +1,10 @@
+import type { CloudSyncStatus } from "../../../../src/sync/types";
 import {
   resolveCloudSyncConfig,
   resolveTelemetryConfig,
   resolveTelemetryConsent,
   type TelemetryEnv,
 } from "../../../../src/telemetry/config";
-import type { CloudSyncStatus } from "../../../../src/sync/types";
 import type { PersistedState } from "../../src/app/types";
 import type { TelemetryStatusEntry, TelemetryStatusSnapshot } from "../../src/lib/desktopApi";
 
@@ -77,7 +77,11 @@ export function resolveDesktopTelemetryStatus(opts: {
     ),
     aiTraces: statusEntry(
       telemetry.aiTraces.status,
-      Boolean(telemetry.aiTraces.baseUrl && telemetry.aiTraces.publicKey && telemetry.aiTraces.hasSecretKey),
+      Boolean(
+        telemetry.aiTraces.baseUrl &&
+          telemetry.aiTraces.publicKey &&
+          telemetry.aiTraces.hasSecretKey,
+      ),
       telemetry.aiTraces.enabled,
     ),
     diagnosticsUpload: statusEntry(

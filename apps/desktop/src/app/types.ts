@@ -3,16 +3,16 @@ import { DEFAULT_RESEARCH_AGENT_ID } from "../../../../src/server/research/types
 import type { DesktopFeatureFlagOverrides } from "../../../../src/shared/featureFlags";
 import type { SessionFeedItem } from "../../../../src/shared/sessionSnapshot";
 import {
+  type CloudSyncSettings,
+  normalizeCloudSyncSettings,
+  type PersistedCloudSyncSettings,
+} from "../../../../src/sync/types";
+import {
   DEFAULT_PRIVACY_TELEMETRY_SETTINGS,
   normalizePrivacyTelemetrySettings,
   type PersistedPrivacyTelemetrySettings,
   type PrivacyTelemetrySettings,
 } from "../../../../src/telemetry/config";
-import {
-  type CloudSyncSettings,
-  normalizeCloudSyncSettings,
-  type PersistedCloudSyncSettings,
-} from "../../../../src/sync/types";
 import { normalizeQuickChatShortcutAccelerator } from "../lib/quickChatShortcut";
 import type {
   ApprovalRiskCode,
@@ -182,10 +182,17 @@ export type PersistedProductAnalyticsState = {
   lastAppVersion?: string | null;
 };
 
-export type { CloudSyncSettings, PersistedCloudSyncSettings };
-export { normalizeCloudSyncSettings };
-export type { PersistedPrivacyTelemetrySettings, PrivacyTelemetrySettings };
-export { DEFAULT_PRIVACY_TELEMETRY_SETTINGS, normalizePrivacyTelemetrySettings };
+export type {
+  CloudSyncSettings,
+  PersistedCloudSyncSettings,
+  PersistedPrivacyTelemetrySettings,
+  PrivacyTelemetrySettings,
+};
+export {
+  DEFAULT_PRIVACY_TELEMETRY_SETTINGS,
+  normalizeCloudSyncSettings,
+  normalizePrivacyTelemetrySettings,
+};
 
 const SAFE_PRODUCT_ANALYTICS_ID = /^[A-Za-z0-9_-]{16,128}$/;
 

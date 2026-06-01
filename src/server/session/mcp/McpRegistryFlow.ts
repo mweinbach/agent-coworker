@@ -4,8 +4,8 @@ import {
   setMCPServerEnabled,
   upsertWorkspaceMCPServer,
 } from "../../../mcp/configRegistry";
-import type { MCPServerConfig, PluginScope } from "../../../types";
 import { captureProductEvent } from "../../../telemetry/productAnalytics";
+import type { MCPServerConfig, PluginScope } from "../../../types";
 import type { SessionContext } from "../SessionContext";
 
 type PreparedEnableMcpChange = {

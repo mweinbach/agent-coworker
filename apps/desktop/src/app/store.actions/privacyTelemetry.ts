@@ -1,10 +1,10 @@
+import { setProductAnalyticsEnabled as syncRendererProductAnalyticsPreference } from "../../lib/analytics";
+import { syncRendererCrashReportingPreference } from "../../lib/crashReporting";
 import { type AppStoreActions, persistNow, type StoreGet, type StoreSet } from "../store.helpers";
 import {
   normalizePrivacyTelemetrySettings,
   type PersistedPrivacyTelemetrySettings,
 } from "../types";
-import { setProductAnalyticsEnabled as syncRendererProductAnalyticsPreference } from "../../lib/analytics";
-import { syncRendererCrashReportingPreference } from "../../lib/crashReporting";
 
 type PrivacyTelemetryActionKeys =
   | "setCrashReportsEnabled"

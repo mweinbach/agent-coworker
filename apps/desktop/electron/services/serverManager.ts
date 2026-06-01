@@ -6,16 +6,16 @@ import readline from "node:readline";
 import type { Readable } from "node:stream";
 import { app } from "electron";
 import { z } from "zod";
+import { resolveTelemetryConsent } from "../../../../src/telemetry/config";
 import {
   captureError,
   resolveCrashReportingConfig,
 } from "../../../../src/telemetry/crashReporting";
-import { resolveTelemetryConsent } from "../../../../src/telemetry/config";
 import { captureProductEvent } from "../../../../src/telemetry/productAnalytics";
-import {
+import type {
   normalizePrivacyTelemetrySettings,
-  type PersistedPrivacyTelemetrySettings,
-  type PersistedProductAnalyticsState,
+  PersistedPrivacyTelemetrySettings,
+  PersistedProductAnalyticsState,
 } from "../../src/app/types";
 import { resolvePackagedBuiltinDistDir } from "./desktopBuiltinPaths";
 import { flushLocalLogWrites, getLocalLogPath, writeLocalLog } from "./localLogs";
@@ -48,6 +48,15 @@ const DEBUG_SERVER_STDERR = process.env.COWORK_DESKTOP_DEBUG_SERVER_STDERR === "
 const OBSERVABILITY_ENV_PREFIXES = ["AGENT_OBSERVABILITY_", "LANGFUSE_"] as const;
 const CRASH_REPORTING_ENV_PREFIXES = ["COWORK_SENTRY_", "SENTRY_"] as const;
 const PRODUCT_ANALYTICS_ENV_PREFIXES = ["COWORK_POSTHOG_", "POSTHOG_"] as const;
+const TELEMETRY_CONSENT_ENV_KEYS = [
+  "COWORK_CRASH_REPORTS_ENABLED",
+  "COWORK_PRODUCT_ANALYTICS_ENABLED",
+  "AGENT_OBSERVABILITY_ENABLED",
+  "AGENT_OBSERVABILITY_RECORD_INPUTS",
+  "AGENT_OBSERVABILITY_RECORD_OUTPUTS",
+  "AGENT_OBSERVABILITY_RECORD_PAYLOADS",
+  "COWORK_CLOUD_SYNC_ENABLED",
+] as const;
 
 type ServerHandle = {
   child: ServerChildProcess;
@@ -489,9 +498,10 @@ function buildServerEnv(
     opts.includeBundledWindowsAiElectron && !process.env.COWORK_WINDOWS_AI_ELECTRON_DIR
       ? findBundledWindowsAiElectronDir()
       : null;
+  const telemetryConsentEnv = withoutInheritedTelemetryConsentEnv(process.env);
   const privacyTelemetrySettings = resolveTelemetryConsent({
     settings: opts.privacyTelemetrySettings,
-    env: process.env,
+    env: telemetryConsentEnv,
     isPackaged: app.isPackaged,
   });
   const inheritedEnv = privacyTelemetrySettings.aiTraceTelemetryEnabled
@@ -524,8 +534,20 @@ function buildServerEnv(
     ...(opts.rotateMobileH3Tls ? { COWORK_H3_ROTATE_TLS: "1" } : {}),
     ...buildDesktopObservabilityEnv(privacyTelemetrySettings),
     ...buildDesktopCrashReportingEnv(privacyTelemetrySettings),
-    ...buildDesktopProductAnalyticsEnv(privacyTelemetrySettings, opts.productAnalyticsState),
+    ...buildDesktopProductAnalyticsEnv(
+      privacyTelemetrySettings,
+      opts.productAnalyticsState,
+      telemetryConsentEnv,
+    ),
   };
+}
+
+function withoutInheritedTelemetryConsentEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const next = { ...env };
+  for (const key of TELEMETRY_CONSENT_ENV_KEYS) {
+    delete next[key];
+  }
+  return next;
 }
 
 function withoutInheritedObservabilityEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {

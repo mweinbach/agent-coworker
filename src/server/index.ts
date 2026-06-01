@@ -7,9 +7,9 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+  type CrashReportingSdk,
   captureError,
   initCrashReporting,
-  type CrashReportingSdk,
 } from "../telemetry/crashReporting";
 import { initProductAnalytics, shutdownProductAnalytics } from "../telemetry/productAnalytics";
 import { VERSION } from "../version";

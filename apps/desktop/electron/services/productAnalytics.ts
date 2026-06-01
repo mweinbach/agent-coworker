@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { app } from "electron";
-
+import { resolveTelemetryConsent } from "../../../../src/telemetry/config";
 import {
   captureProductEvent,
   initProductAnalytics,
@@ -12,7 +12,6 @@ import {
   setProductAnalyticsEnabled,
   shutdownProductAnalytics,
 } from "../../../../src/telemetry/productAnalytics";
-import { resolveTelemetryConsent } from "../../../../src/telemetry/config";
 import {
   normalizeDesktopSettings,
   normalizePersistedProductAnalyticsState,

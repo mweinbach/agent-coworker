@@ -1,8 +1,7 @@
 import type { IpcMainInvokeEvent } from "electron";
 import type { z } from "zod";
-
-import type { PersistedState } from "../../src/app/types";
 import type { CloudSyncStatus } from "../../../../src/sync/types";
+import type { PersistedState } from "../../src/app/types";
 import type {
   DesktopMenuCommand,
   ShowCanvasWindowInput,

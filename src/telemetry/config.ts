@@ -223,12 +223,14 @@ export function normalizePrivacyTelemetrySettings(
   };
 }
 
-export function resolveTelemetryConsent(opts: {
-  settings?: PersistedPrivacyTelemetrySettings | PrivacyTelemetrySettings | null;
-  env?: TelemetryEnv;
-  isPackaged?: boolean;
-  mode?: TelemetryPackagingMode | null;
-} = {}): ResolvedTelemetryConsent {
+export function resolveTelemetryConsent(
+  opts: {
+    settings?: PersistedPrivacyTelemetrySettings | PrivacyTelemetrySettings | null;
+    env?: TelemetryEnv;
+    isPackaged?: boolean;
+    mode?: TelemetryPackagingMode | null;
+  } = {},
+): ResolvedTelemetryConsent {
   const env = opts.env ?? defaultEnv();
   const isPackaged = opts.isPackaged === true;
   const mode = resolvePackagingMode({ env, isPackaged, mode: opts.mode ?? null });
@@ -274,17 +276,19 @@ export function resolveTelemetryConsent(opts: {
   };
 }
 
-export function resolveTelemetryConfig(opts: {
-  consent?: ResolvedTelemetryConsent;
-  settings?: PersistedPrivacyTelemetrySettings | PrivacyTelemetrySettings | null;
-  env?: TelemetryEnv;
-  isPackaged?: boolean;
-  appVersion?: string | null;
-  anonymousId?: string | null;
-  surface?: TelemetrySurface;
-  includeSecrets?: boolean;
-  mode?: TelemetryPackagingMode | null;
-} = {}): ResolvedTelemetryConfig {
+export function resolveTelemetryConfig(
+  opts: {
+    consent?: ResolvedTelemetryConsent;
+    settings?: PersistedPrivacyTelemetrySettings | PrivacyTelemetrySettings | null;
+    env?: TelemetryEnv;
+    isPackaged?: boolean;
+    appVersion?: string | null;
+    anonymousId?: string | null;
+    surface?: TelemetrySurface;
+    includeSecrets?: boolean;
+    mode?: TelemetryPackagingMode | null;
+  } = {},
+): ResolvedTelemetryConfig {
   const env = opts.env ?? defaultEnv();
   const surface = opts.surface ?? "server";
   const consent =
@@ -404,12 +408,14 @@ export function resolveTelemetryConfig(opts: {
   };
 }
 
-export function resolveCloudSyncConfig(opts: {
-  persisted?: PersistedCloudSyncSettings | null | unknown;
-  env?: TelemetryEnv;
-  lastStatus?: CloudSyncStatus | null;
-  includeSecrets?: boolean;
-} = {}): ResolvedCloudSyncConfig {
+export function resolveCloudSyncConfig(
+  opts: {
+    persisted?: PersistedCloudSyncSettings | null | unknown;
+    env?: TelemetryEnv;
+    lastStatus?: CloudSyncStatus | null;
+    includeSecrets?: boolean;
+  } = {},
+): ResolvedCloudSyncConfig {
   const env = opts.env ?? defaultEnv();
   const networkTelemetryDisabled = isNetworkTelemetryGloballyDisabled(env);
   const persisted =
@@ -419,7 +425,8 @@ export function resolveCloudSyncConfig(opts: {
   const settings = normalizeCloudSyncSettings(persisted);
   const envEnabled = parseEnvBoolean(env.COWORK_CLOUD_SYNC_ENABLED);
   const endpoint = normalizeUrl(env.COWORK_CLOUD_SYNC_ENDPOINT) ?? settings.endpoint;
-  const provider: CloudSyncProviderId = settings.provider === "custom" || endpoint ? "custom" : "none";
+  const provider: CloudSyncProviderId =
+    settings.provider === "custom" || endpoint ? "custom" : "none";
   const enabled = !networkTelemetryDisabled && (envEnabled ?? settings.enabled);
   const queued = opts.lastStatus?.queued ?? 0;
 

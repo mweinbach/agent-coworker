@@ -24,7 +24,7 @@ Cowork takes the opposite approach:
 
 - Interfaces: plain CLI REPL, Electron desktop app, and custom WebSocket clients.
 - Local-first workflow: your repo stays on your machine; external calls only happen through the providers and tools you configure.
-- Server-side tools for shell, files, search, fetch, notebook edits, memory, task tracking, and subagent delegation.
+- Server-side tools for shell, files, search, fetch, memory, task tracking, and subagent delegation.
 - Persistent session history in `~/.cowork/sessions.db`, with resume support across restarts.
 - Opt-in workspace backup APIs for manual recovery snapshots when git-native checkpointing is not available.
 - Layered skills and MCP configuration for project, user, global, and built-in capabilities.
@@ -205,10 +205,8 @@ Cowork ships with server-side tools for:
 - file reads and writes: `read`, `write`, `edit`
 - workspace search: `glob`, `grep`
 - web research: `webSearch`, `webFetch`
-- workflow control: `ask`, `todoWrite`, `spawnAgent`
-- artifact editing: `notebookEdit`
+- workflow control: `AskUserQuestion`, `todoWrite`, `spawnAgent`
 - contextual guidance: `skill`, `memory`
-- session diagnostics: `usage`
 
 When agent control is enabled, sessions also expose persistent-agent tools: `listAgents`, `sendAgentInput`, `waitForAgent`, `inspectAgent`, `resumeAgent`, and `closeAgent`.
 

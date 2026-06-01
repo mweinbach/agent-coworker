@@ -4,12 +4,12 @@
   "displayName": "Claude Opus 4.7",
   "knowledgeCutoff": "Unknown",
   "supportsImageInput": true,
-  "promptTemplate": "system-models/claude-opus-4-7.json",
+  "promptTemplate": "system-models/claude-opus-4-7.md",
   "providerOptionsDefaults": {
     "thinking": {
-      "type": "enabled",
-      "budgetTokens": 32000
+      "type": "adaptive"
     },
+    "effort": "high",
     "disableParallelToolUse": true
   },
   "isDefault": false

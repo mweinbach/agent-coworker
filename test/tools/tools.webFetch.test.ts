@@ -8,7 +8,6 @@ import {
   createGlobTool,
   createGrepTool,
   createMemoryTool,
-  createNotebookEditTool,
   createReadTool,
   createSkillTool,
   createTodoWriteTool,

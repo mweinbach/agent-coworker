@@ -118,6 +118,17 @@ describe("OpenAI provider (gpt-5.4 with reasoning)", () => {
     expect(model.specificationVersion).toBe("v3");
   });
 
+  test("getModel supports gpt-5.4-pro and gpt-5.4-nano", () => {
+    for (const modelId of ["gpt-5.4-pro", "gpt-5.4-nano"] as const) {
+      const cfg = makeConfig({ provider: "openai", model: modelId });
+      const model = getModel(cfg);
+
+      expect(model.modelId).toBe(modelId);
+      expect(model.provider).toBe("openai.responses");
+      expect(model.specificationVersion).toBe("v3");
+    }
+  });
+
   test("loadConfig openai from project config file", async () => {
     const { cwd, home } = await makeTmpDirs();
 

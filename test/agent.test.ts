@@ -258,13 +258,10 @@ describe("runTurn", () => {
     expect(closeMcpForCodex).toHaveBeenCalledTimes(1);
     expect(runtimeRunTurn).toHaveBeenCalledTimes(1);
     const runtimeParams = runtimeRunTurn.mock.calls[0][0] as any;
-    expect(Object.keys(runtimeParams.tools).sort()).toEqual([
-      "mcp__srv__custom",
-      "spawnAgent",
-      "usage",
-    ]);
+    expect(Object.keys(runtimeParams.tools).sort()).toEqual(["mcp__srv__custom", "spawnAgent"]);
     expect(runtimeParams.tools).not.toHaveProperty("bash");
     expect(runtimeParams.tools).not.toHaveProperty("read");
+    expect(runtimeParams.tools).not.toHaveProperty("usage");
     expect(runtimeParams.tools).not.toHaveProperty("webFetch");
     expect(runtimeParams.toolEnv.COWORK_SOFFICE).toBe("/tmp/cowork-managed-bin/soffice");
     expect(String(runtimeParams.toolEnv.PATH).split(path.delimiter)).toContain(

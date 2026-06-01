@@ -53,7 +53,7 @@ export async function generateRemoteModelTitle(opts: {
 }): Promise<SessionTitleResult | null> {
   const isAntigravity = opts.config.provider === "antigravity";
   const candidates = isAntigravity
-    ? ["gemini-3.1-flash-lite-preview"]
+    ? ["gemini-3.1-flash-lite"]
     : modelCandidatesForProvider(
         opts.config.provider,
         opts.config.model,

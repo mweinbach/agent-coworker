@@ -8,7 +8,6 @@ import {
   createGlobTool,
   createGrepTool,
   createMemoryTool,
-  createNotebookEditTool,
   createReadTool,
   createSkillTool,
   createTodoWriteTool,
@@ -50,23 +49,20 @@ describe("createTools", () => {
       "glob",
       "grep",
       "webFetch",
-      "ask",
       "AskUserQuestion",
       "todoWrite",
-      "notebookEdit",
       "skill",
       "memory",
-      "usage",
     ];
     for (const name of expected) {
       expect(tools).toHaveProperty(name);
     }
   });
 
-  test("returns exactly 15 tools without child-agent control", async () => {
+  test("returns exactly 11 tools without child-agent control", async () => {
     const dir = await tmpDir();
     const tools = createTools(makeCtx(dir));
-    expect(Object.keys(tools).length).toBe(14);
+    expect(Object.keys(tools).length).toBe(11);
   });
 
   test("hides legacy webSearch for codex-cli by default", async () => {
@@ -151,7 +147,7 @@ describe("createTools", () => {
     const dir = await tmpDir();
     const tools = createTools(makeCtx(dir, { config: makeConfig(dir, { enableMemory: false }) }));
     expect(tools).not.toHaveProperty("memory");
-    expect(Object.keys(tools).length).toBe(13);
+    expect(Object.keys(tools).length).toBe(10);
   });
 
   test("includes a2ui for non-google providers when enabled", async () => {
@@ -255,11 +251,9 @@ describe("createTools", () => {
     expect(names).toEqual(
       expect.arrayContaining([
         "AskUserQuestion",
-        "ask",
         "todoWrite",
         "skill",
         "memory",
-        "usage",
         "spawnAgent",
         "listAgents",
         "sendAgentInput",
@@ -277,7 +271,7 @@ describe("createTools", () => {
     expect(names).not.toContain("grep");
     expect(names).not.toContain("webSearch");
     expect(names).not.toContain("webFetch");
-    expect(names).not.toContain("notebookEdit");
+    expect(names).not.toContain("usage");
   });
 
   test("omits child-agent lifecycle tools when child-agent control is unavailable", async () => {

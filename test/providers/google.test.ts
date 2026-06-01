@@ -19,7 +19,8 @@ describe("Google provider (gemini-3.1-pro-preview)", () => {
     expect(PROVIDER_MODEL_CATALOG.google.availableModels).toContain(
       "gemini-3.1-pro-preview-customtools",
     );
-    expect(PROVIDER_MODEL_CATALOG.google.availableModels).toContain(
+    expect(PROVIDER_MODEL_CATALOG.google.availableModels).toContain("gemini-3.1-flash-lite");
+    expect(PROVIDER_MODEL_CATALOG.google.availableModels).not.toContain(
       "gemini-3.1-flash-lite-preview",
     );
   });
@@ -104,6 +105,20 @@ describe("Google provider (gemini-3.1-pro-preview)", () => {
 
     expect(model).toBeDefined();
     expect(model.modelId).toBe("gemini-3.1-pro-preview-customtools");
+    expect(model.provider).toBe("google.generative-ai");
+  });
+
+  test("legacy alias gemini-3.1-flash-lite-preview normalizes to gemini-3.1-flash-lite", () => {
+    const normalized = normalizeModelIdForProvider("google", "gemini-3.1-flash-lite-preview");
+    expect(normalized).toBe("gemini-3.1-flash-lite");
+  });
+
+  test("getModel accepts legacy alias gemini-3.1-flash-lite-preview", () => {
+    const cfg = makeConfig({ provider: "google", model: "gemini-3.1-flash-lite-preview" });
+    const model = getModel(cfg);
+
+    expect(model).toBeDefined();
+    expect(model.modelId).toBe("gemini-3.1-flash-lite");
     expect(model.provider).toBe("google.generative-ai");
   });
 });

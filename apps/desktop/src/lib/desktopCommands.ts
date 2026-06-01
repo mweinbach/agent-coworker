@@ -80,6 +80,11 @@ export function isPackagedDesktopApp(): boolean {
   return api?.isPackaged === true;
 }
 
+export function isDesktopDemoMode(): boolean {
+  const api = getDesktopApi();
+  return api?.demoMode === true;
+}
+
 export async function startWorkspaceServer(opts: {
   workspaceId: string;
   workspacePath: string;

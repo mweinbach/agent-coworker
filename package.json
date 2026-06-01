@@ -46,6 +46,7 @@
     "cli": "bun src/index.ts",
     "dev": "bun --watch src/index.ts",
     "serve": "bun src/server/index.ts",
+    "desktop:demo": "COWORK_DEMO_MODE=1 bun run start",
     "setup:codex-runtime": "bun scripts/setup_codex_primary_runtime.ts",
     "setup:artifact-runtime": "bun scripts/setup_artifact_runtime.ts",
     "build:server-binary": "bun scripts/build_cowork_server_binary.ts",

@@ -385,6 +385,7 @@ const telemetryStatus = Object.freeze(resolvePreloadTelemetryStatus());
 const desktopApi = Object.freeze<DesktopApi>({
   features: desktopFeatures,
   isPackaged: getPreloadEnv().COWORK_IS_PACKAGED === "true",
+  demoMode: getPreloadEnv().COWORK_DEMO_MODE === "1",
   crashReporting,
   productAnalytics,
   telemetryStatus,

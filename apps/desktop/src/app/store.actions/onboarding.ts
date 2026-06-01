@@ -50,6 +50,43 @@ export function shouldBackfillOnboardingCompleted(opts: {
   return opts.workspaceCount > 0 || opts.threadCount > 0 || opts.hasConnectedProvider;
 }
 
+export function resolveStartupOnboarding(opts: {
+  onboarding: PersistedOnboardingState | undefined;
+  workspaceCount: number;
+  threadCount: number;
+  hasConnectedProvider: boolean;
+  demoMode: boolean;
+  nowIso: () => string;
+}): {
+  onboardingState: PersistedOnboardingState;
+  visible: boolean;
+  shouldPersist: boolean;
+} {
+  const onboardingState = opts.onboarding ?? DEFAULT_ONBOARDING_STATE;
+
+  if (opts.demoMode) {
+    return {
+      onboardingState,
+      visible: true,
+      shouldPersist: false,
+    };
+  }
+
+  if (shouldBackfillOnboardingCompleted(opts)) {
+    return {
+      onboardingState: { status: "completed", completedAt: opts.nowIso(), dismissedAt: null },
+      visible: false,
+      shouldPersist: true,
+    };
+  }
+
+  return {
+    onboardingState,
+    visible: shouldAutoOpenOnboarding(opts),
+    shouldPersist: false,
+  };
+}
+
 export function createOnboardingActions(
   set: StoreSet,
   get: StoreGet,

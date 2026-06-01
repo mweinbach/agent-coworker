@@ -8,6 +8,7 @@ import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
 
 import {
   DEFAULT_ONBOARDING_STATE,
+  resolveStartupOnboarding,
   shouldAutoOpenOnboarding,
   shouldBackfillOnboardingCompleted,
 } from "../src/app/store.actions/onboarding";
@@ -164,6 +165,47 @@ describe("DEFAULT_ONBOARDING_STATE", () => {
     expect(DEFAULT_ONBOARDING_STATE).toEqual({
       status: "pending",
       completedAt: null,
+      dismissedAt: null,
+    });
+  });
+});
+
+describe("resolveStartupOnboarding", () => {
+  test("demo mode opens onboarding without rewriting completed state", () => {
+    const result = resolveStartupOnboarding({
+      onboarding: {
+        status: "completed",
+        completedAt: "2026-03-10T00:00:00Z",
+        dismissedAt: null,
+      },
+      workspaceCount: 1,
+      threadCount: 2,
+      hasConnectedProvider: true,
+      demoMode: true,
+      nowIso: () => "2026-06-01T00:00:00Z",
+    });
+
+    expect(result.visible).toBe(true);
+    expect(result.shouldPersist).toBe(false);
+    expect(result.onboardingState.status).toBe("completed");
+    expect(result.onboardingState.completedAt).toBe("2026-03-10T00:00:00Z");
+  });
+
+  test("existing users are backfilled outside demo mode", () => {
+    const result = resolveStartupOnboarding({
+      onboarding: undefined,
+      workspaceCount: 1,
+      threadCount: 0,
+      hasConnectedProvider: false,
+      demoMode: false,
+      nowIso: () => "2026-06-01T00:00:00Z",
+    });
+
+    expect(result.visible).toBe(false);
+    expect(result.shouldPersist).toBe(true);
+    expect(result.onboardingState).toEqual({
+      status: "completed",
+      completedAt: "2026-06-01T00:00:00Z",
       dismissedAt: null,
     });
   });

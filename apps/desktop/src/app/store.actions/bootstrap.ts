@@ -9,6 +9,7 @@ import {
   deleteTranscript,
   getDesktopFeatureFlags,
   getUpdateState,
+  isDesktopDemoMode,
   isPackagedDesktopApp,
   loadState,
   quitAndInstallUpdate as runQuitAndInstallUpdate,
@@ -72,8 +73,7 @@ import {
 } from "../types";
 import {
   DEFAULT_ONBOARDING_STATE,
-  shouldAutoOpenOnboarding,
-  shouldBackfillOnboardingCompleted,
+  resolveStartupOnboarding,
 } from "./onboarding";
 
 const optionalStringWithContentSchema = z.preprocess(
@@ -821,13 +821,13 @@ export function createBootstrapActions(
           hasConnectedProvider: connectedProviders.length > 0,
         };
 
-        // Backfill: if existing user but onboarding metadata was never set, mark completed.
-        let resolvedOnboarding = state.onboarding ?? DEFAULT_ONBOARDING_STATE;
-        if (shouldBackfillOnboardingCompleted(onboardingOpts)) {
-          resolvedOnboarding = { status: "completed", completedAt: nowIso(), dismissedAt: null };
-        }
-
-        const autoOpen = shouldAutoOpenOnboarding(onboardingOpts);
+        const startupOnboarding = resolveStartupOnboarding({
+          ...onboardingOpts,
+          demoMode: isDesktopDemoMode(),
+          nowIso,
+        });
+        const resolvedOnboarding = startupOnboarding.onboardingState;
+        const autoOpen = startupOnboarding.visible;
 
         const resolvedDesktopSettings = normalizeDesktopSettings(state.desktopSettings);
         const autoDeleteDays = resolvedDesktopSettings.archivedChatsAutoDeleteDays;
@@ -901,7 +901,7 @@ export function createBootstrapActions(
         });
 
         // Persist backfilled onboarding status if we changed it.
-        if (resolvedOnboarding.status !== (state.onboarding?.status ?? "pending")) {
+        if (startupOnboarding.shouldPersist) {
           void persistNow(get);
         } else {
           syncDesktopStateCacheNow(get);

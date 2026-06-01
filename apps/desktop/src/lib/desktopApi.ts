@@ -448,6 +448,7 @@ export type PlatformChromeInfo = {
 export interface DesktopApi {
   readonly features: DesktopFeatureFlags;
   readonly isPackaged?: boolean;
+  readonly demoMode?: boolean;
   readonly crashReporting?: DesktopCrashReportingConfig;
   readonly productAnalytics?: DesktopProductAnalyticsConfig;
   readonly telemetryStatus?: TelemetryStatusSnapshot;

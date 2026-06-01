@@ -5,6 +5,7 @@ import type { SpreadsheetWorkbookSnapshot } from "../../../src/shared/spreadshee
 import { useAppStore } from "../src/app/store";
 import { reportSpreadsheetBackgroundSaveFailure } from "../src/lib/spreadsheetSaveNotifications";
 import {
+  applySpreadsheetPatchOperationsToUniverData,
   buildUniverSpreadsheetPrompt,
   cloneUniverWorkbookData,
   diffUniverWorkbookPatches,
@@ -339,6 +340,62 @@ describe("Univer spreadsheet helpers", () => {
         sheetName: "Summary",
         range: "A2:B2",
         merged: true,
+      },
+    ]);
+  });
+
+  test("rebases pending local edits onto the latest disk workbook data", () => {
+    const latestWorkbook: SpreadsheetWorkbookSnapshot = {
+      ...WORKBOOK,
+      fileVersion: { modifiedAtMs: 2, changeTimeMs: 2, size: 2, fingerprint: "2:2:2" },
+      sheets: [
+        {
+          ...WORKBOOK.sheets[0]!,
+          cells: [
+            ...WORKBOOK.sheets[0]!.cells.filter((cell) => cell.address !== "A2"),
+            {
+              row: 1,
+              col: 0,
+              address: "A2",
+              value: "External update",
+              rawValue: "External update",
+            },
+          ],
+        },
+      ],
+    };
+    const latestBaseline = spreadsheetSnapshotToUniverData(latestWorkbook);
+
+    const rebased = applySpreadsheetPatchOperationsToUniverData(latestBaseline, [
+      {
+        type: "cell",
+        sheetName: "Summary",
+        address: "B2",
+        rawInput: "42",
+      },
+      {
+        type: "format",
+        sheetName: "Summary",
+        range: "B2",
+        style: {
+          bold: true,
+          italic: null,
+        },
+      },
+    ]);
+
+    expect(rebased.sheets["sheet-1"]?.cellData?.[1]?.[0]?.v).toBe("External update");
+    expect(rebased.sheets["sheet-1"]?.cellData?.[1]?.[1]?.v).toBe("42");
+    expect(
+      diffUniverWorkbookPatches(latestBaseline, rebased).filter(
+        (operation) => operation.type === "cell",
+      ),
+    ).toEqual([
+      {
+        type: "cell",
+        sheetName: "Summary",
+        address: "B2",
+        rawInput: "42",
       },
     ]);
   });

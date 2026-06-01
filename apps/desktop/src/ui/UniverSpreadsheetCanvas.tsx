@@ -42,6 +42,7 @@ import { AlertCircleIcon, CheckIcon, Loader2Icon, SaveIcon, SparklesIcon } from 
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type {
+  SpreadsheetBatchPatchOperation,
   SpreadsheetFileVersion,
   SpreadsheetWorkbookSnapshot,
 } from "../../../../src/shared/spreadsheetPreview";
@@ -58,6 +59,7 @@ import {
   type UniverSaveState,
 } from "../lib/univerSaveState";
 import {
+  applySpreadsheetPatchOperationsToUniverData,
   buildUniverSpreadsheetPrompt,
   cloneUniverWorkbookData,
   diffUniverWorkbookPatches,
@@ -90,6 +92,14 @@ type UniverWorkbookApi = {
   save: () => IWorkbookData;
   onSelectionChange: (callback: (selections: IRange[]) => void) => IDisposable;
   onCommandExecuted: (callback: () => void) => IDisposable;
+};
+
+type PendingConflictRebase = {
+  path: string;
+  fingerprint: string;
+  initialData: IWorkbookData;
+  baselineData: IWorkbookData;
+  saveError: string;
 };
 
 const univerLocales = {
@@ -144,6 +154,8 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
   const reloadNoticeTimerRef = useRef<number | null>(null);
   const externalReloadPendingRef = useRef(false);
   const reloadInFlightRef = useRef(false);
+  const pendingConflictRebaseRef = useRef<PendingConflictRebase | null>(null);
+  const skipNextUnmountSaveRef = useRef(false);
   const flushSaveRef = useRef<() => Promise<boolean>>(async () => true);
 
   const updateSaveState = useCallback((next: SaveState | ((current: SaveState) => SaveState)) => {
@@ -213,6 +225,11 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
           setSaveError(`Reload failed: ${response.error.message}`);
           return;
         }
+        if (!isWorkbookSnapshotForPath(response.workbook, path)) {
+          updateSaveState("error");
+          setSaveError("Reload failed: loaded workbook did not match the selected file.");
+          return;
+        }
         sourceVersionRef.current = response.workbook.fileVersion;
         externalReloadPendingRef.current = false;
         setWorkbook(response.workbook);
@@ -234,6 +251,8 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
     workbookRef.current = null;
     setSelection(null);
     selectionRef.current = null;
+    pendingConflictRebaseRef.current = null;
+    skipNextUnmountSaveRef.current = false;
     updateSaveState("idle");
     setSaveError(null);
     setReloadNotice(null);
@@ -306,11 +325,18 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
     if (!workbook || !isWorkbookSnapshotForPath(workbook, path) || !containerRef.current) return;
     const container = containerRef.current;
     container.innerHTML = "";
-    updateSaveState("idle");
-    setSaveError(null);
+    const conflictRebase =
+      pendingConflictRebaseRef.current?.path === path &&
+      pendingConflictRebaseRef.current.fingerprint === workbook.fileVersion.fingerprint
+        ? pendingConflictRebaseRef.current
+        : null;
+    pendingConflictRebaseRef.current = null;
+    updateSaveState(conflictRebase ? "dirty" : "idle");
+    setSaveError(conflictRebase?.saveError ?? null);
     const supportsWorkbookFormatting = workbook.kind === "xlsx";
 
-    const initialData = spreadsheetSnapshotToUniverData(workbook);
+    const initialData = conflictRebase?.initialData ?? spreadsheetSnapshotToUniverData(workbook);
+    const savedBaselineData = conflictRebase?.baselineData ?? initialData;
     const formulaWorker = new Worker(workerUrl, { type: "module" });
     const { univer, univerAPI } = createUniver({
       locale: LocaleType.EN_US,
@@ -351,7 +377,7 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
     const activeSheet = fWorkbook.getSheetByName(workbook.activeSheetName);
     if (activeSheet) fWorkbook.setActiveSheet(activeSheet);
     workbookApiRef.current = fWorkbook;
-    lastSavedDataRef.current = cloneUniverWorkbookData(fWorkbook.save());
+    lastSavedDataRef.current = cloneUniverWorkbookData(savedBaselineData);
 
     const updateSelection = () => {
       const currentWorkbook = workbookApiRef.current;
@@ -393,6 +419,38 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
       return result.version;
     };
 
+    const rebasePendingOperationsOnLatestDisk = async (
+      operations: SpreadsheetBatchPatchOperation[],
+      saveErrorMessage: string,
+    ): Promise<boolean> => {
+      const activeSheetName =
+        workbookApiRef.current?.getActiveSheet()?.getSheetName() ??
+        selectionRef.current?.sheetName ??
+        workbook.activeSheetName;
+      const response = await loadSpreadsheetWorkbook(
+        path,
+        activeSheetName ? { sheetName: activeSheetName } : undefined,
+      );
+      if (!response.ok || !isWorkbookSnapshotForPath(response.workbook, path)) return false;
+
+      const baselineData = spreadsheetSnapshotToUniverData(response.workbook);
+      const rebasedData = applySpreadsheetPatchOperationsToUniverData(baselineData, operations);
+      pendingConflictRebaseRef.current = {
+        path,
+        fingerprint: response.workbook.fileVersion.fingerprint,
+        initialData: rebasedData,
+        baselineData,
+        saveError: `${saveErrorMessage} Review the synced workbook, then retry save to keep canvas edits.`,
+      };
+      skipNextUnmountSaveRef.current = true;
+      sourceVersionRef.current = response.workbook.fileVersion;
+      workbookRef.current = response.workbook;
+      externalReloadPendingRef.current = false;
+      setWorkbook(response.workbook);
+      showReloadNotice("File changed on disk; synced latest copy with local edits");
+      return true;
+    };
+
     const persistWorkbook = async (): Promise<boolean> => {
       const activeSave = saveInFlightRef.current;
       if (activeSave) {
@@ -426,11 +484,13 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
             externalReloadPendingRef.current &&
             isDiskVersionMismatchSaveFailure(result.error.message)
           ) {
-            const latestVersion = await loadSpreadsheetFileVersion(path);
-            if (latestVersion.ok) {
-              sourceVersionRef.current = latestVersion.version;
-              externalReloadPendingRef.current = false;
-              showReloadNotice("File changed on disk; retry save to keep canvas edits");
+            const rebased = await rebasePendingOperationsOnLatestDisk(
+              operations,
+              result.error.message,
+            );
+            if (rebased) {
+              updateSaveState("dirty");
+              return false;
             }
           }
           updateSaveState("error");
@@ -507,7 +567,9 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
         saveTimerRef.current = null;
       }
       const pendingOperations = getPendingOperations();
-      if (pendingOperations.length > 0) {
+      const shouldSkipUnmountSave = skipNextUnmountSaveRef.current;
+      skipNextUnmountSaveRef.current = false;
+      if (!shouldSkipUnmountSave && pendingOperations.length > 0) {
         const patchPendingOperations = async () => {
           const result = await patchSpreadsheetWorkbook(
             path,
@@ -545,6 +607,7 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
     };
   }, [
     loadSpreadsheetFileVersion,
+    loadSpreadsheetWorkbook,
     patchSpreadsheetWorkbook,
     path,
     reloadWorkbookFromDisk,

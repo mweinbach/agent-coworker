@@ -161,6 +161,32 @@ export function cloneUniverWorkbookData(workbook: IWorkbookData): IWorkbookData 
   return JSON.parse(JSON.stringify(workbook)) as IWorkbookData;
 }
 
+export function applySpreadsheetPatchOperationsToUniverData(
+  workbook: IWorkbookData,
+  operations: SpreadsheetBatchPatchOperation[],
+): IWorkbookData {
+  const next = cloneUniverWorkbookData(workbook);
+  const styleIds = new Map(
+    Object.entries(next.styles ?? {}).map(([id, style]) => [stableStringify(style), id]),
+  );
+
+  for (const operation of operations) {
+    const sheet = findSheetForPatchOperation(next, operation.sheetName);
+    if (!sheet) continue;
+    if (operation.type === "cell") {
+      applyCellOperation(sheet, operation.address, operation.rawInput);
+    } else if (operation.type === "format") {
+      applyFormatOperation(next, styleIds, sheet, operation.range, operation.style);
+    } else if (operation.type === "merge") {
+      applyMergeOperation(sheet, operation.range, operation.merged);
+    } else if (operation.type === "columnWidth") {
+      applyColumnWidthOperation(sheet, operation.col, operation.widthPx);
+    }
+  }
+
+  return next;
+}
+
 export function buildUniverSpreadsheetPrompt(opts: {
   path: string;
   workbook: SpreadsheetWorkbookSnapshot;
@@ -393,14 +419,19 @@ function cellValueTypeFor(value: string | number | boolean): CellValueType {
 
 function styleIdFor(
   style: SpreadsheetCellStyle,
-  styles: Record<string, IStyleData>,
+  styles: Record<string, unknown>,
   styleIds: Map<string, string>,
 ): string {
   const univerStyle = styleToUniverStyle(style);
   const key = stableStringify(univerStyle);
   const existing = styleIds.get(key);
   if (existing) return existing;
-  const id = `cowork-style-${styleIds.size + 1}`;
+  let index = styleIds.size + 1;
+  let id = `cowork-style-${index}`;
+  while (styles[id]) {
+    index += 1;
+    id = `cowork-style-${index}`;
+  }
   styleIds.set(key, id);
   styles[id] = univerStyle;
   return id;
@@ -460,6 +491,23 @@ function stylePatchBetween(
     patch.horizontalAlign = current.horizontalAlign;
   }
   return patch;
+}
+
+function applyStylePatch(
+  previous: SpreadsheetCellStyle | undefined,
+  patch: SpreadsheetCellStylePatch,
+): SpreadsheetCellStyle | undefined {
+  const next: SpreadsheetCellStyle = { ...(previous ?? {}) };
+  for (const key of Object.keys(patch) as Array<keyof SpreadsheetCellStylePatch>) {
+    const value = patch[key];
+    if (value === undefined) continue;
+    if (value === null) {
+      delete next[key as keyof SpreadsheetCellStyle];
+    } else {
+      (next as Record<string, unknown>)[key] = value;
+    }
+  }
+  return Object.keys(next).length > 0 ? next : undefined;
 }
 
 function resolveUniverStyle(
@@ -525,6 +573,131 @@ function columnWidthMap(
     map.set(col, Math.round(width));
   }
   return map;
+}
+
+function findSheetForPatchOperation(
+  workbook: IWorkbookData,
+  sheetName: string | undefined,
+): Partial<IWorksheetData> | null {
+  if (sheetName) {
+    const named = Object.values(workbook.sheets).find((candidate) => candidate?.name === sheetName);
+    if (named) return named;
+  }
+  const firstSheetId = workbook.sheetOrder[0];
+  return firstSheetId ? (workbook.sheets[firstSheetId] ?? null) : null;
+}
+
+function applyCellOperation(
+  sheet: Partial<IWorksheetData>,
+  address: string,
+  rawInput: string,
+): void {
+  const decoded = decodeAddress(address);
+  if (!decoded) return;
+  const cell = ensureUniverCell(sheet, decoded.row, decoded.col);
+  delete cell.p;
+  delete cell.si;
+  const input = rawInput.trim();
+  if (input === "") {
+    delete cell.f;
+    delete cell.v;
+    delete cell.t;
+  } else if (input.startsWith("=")) {
+    cell.f = input;
+    delete cell.t;
+  } else {
+    delete cell.f;
+    cell.v = rawInput;
+    cell.t = CellValueType.STRING;
+  }
+  pruneEmptyUniverCell(sheet, decoded.row, decoded.col);
+}
+
+function applyFormatOperation(
+  workbook: IWorkbookData,
+  styleIds: Map<string, string>,
+  sheet: Partial<IWorksheetData>,
+  range: string,
+  patch: SpreadsheetCellStylePatch,
+): void {
+  const decoded = decodeRange(range);
+  if (!decoded) return;
+  for (let row = decoded.startRow; row <= decoded.endRow; row += 1) {
+    for (let col = decoded.startCol; col <= decoded.endCol; col += 1) {
+      const cell = ensureUniverCell(sheet, row, col);
+      const previousStyle = styleFromUniverStyle(resolveUniverStyle(workbook, cell.s));
+      const nextStyle = applyStylePatch(previousStyle, patch);
+      if (nextStyle) {
+        cell.s = styleIdFor(nextStyle, workbook.styles, styleIds);
+      } else {
+        delete cell.s;
+      }
+      pruneEmptyUniverCell(sheet, row, col);
+    }
+  }
+}
+
+function applyMergeOperation(sheet: Partial<IWorksheetData>, range: string, merged: boolean): void {
+  const decoded = decodeRange(range);
+  if (!decoded) return;
+  const nextRange = {
+    startRow: decoded.startRow,
+    startColumn: decoded.startCol,
+    endRow: decoded.endRow,
+    endColumn: decoded.endCol,
+  };
+  const nextKey = `${nextRange.startRow}:${nextRange.startColumn}:${nextRange.endRow}:${nextRange.endColumn}`;
+  const existing = mergeRangeMap(sheet.mergeData);
+  if (merged) {
+    existing.set(nextKey, nextRange);
+  } else {
+    existing.delete(nextKey);
+  }
+  sheet.mergeData = [...existing.values()];
+}
+
+function applyColumnWidthOperation(
+  sheet: Partial<IWorksheetData>,
+  col: number,
+  widthPx: number | null,
+): void {
+  if (!Number.isInteger(col) || col < 0) return;
+  const columnData = { ...(sheet.columnData ?? {}) };
+  if (widthPx === null) {
+    delete columnData[col];
+  } else if (Number.isFinite(widthPx) && widthPx > 0) {
+    columnData[col] = { ...(columnData[col] ?? {}), w: Math.round(widthPx) };
+  }
+  sheet.columnData = columnData;
+}
+
+function ensureUniverCell(sheet: Partial<IWorksheetData>, row: number, col: number): ICellData {
+  let cellData = sheet.cellData;
+  if (!cellData) {
+    cellData = {};
+    sheet.cellData = cellData;
+  }
+  let rowData = cellData[row];
+  if (!rowData) {
+    rowData = {};
+    cellData[row] = rowData;
+  }
+  let cell = rowData[col];
+  if (!cell) {
+    cell = {};
+    rowData[col] = cell;
+  }
+  return cell;
+}
+
+function pruneEmptyUniverCell(sheet: Partial<IWorksheetData>, row: number, col: number): void {
+  const rowData = sheet.cellData?.[row];
+  const cell = rowData?.[col];
+  if (!rowData || !cell || Object.keys(cell).length > 0) return;
+  delete rowData[col];
+  if (Object.keys(rowData).length === 0) {
+    delete sheet.cellData?.[row];
+  }
 }
 
 function readUniverCell(
@@ -640,6 +813,21 @@ function rangeToA1(range: IRange): string {
   const start = addressFor(range.startRow, range.startColumn);
   const end = addressFor(range.endRow, range.endColumn);
   return start === end ? start : `${start}:${end}`;
+}
+
+function decodeRange(
+  range: string,
+): { startRow: number; startCol: number; endRow: number; endCol: number } | null {
+  const [rawStart, rawEnd = rawStart] = range.split(":");
+  const start = decodeAddress(rawStart ?? "");
+  const end = decodeAddress(rawEnd ?? "");
+  if (!start || !end) return null;
+  return {
+    startRow: Math.min(start.row, end.row),
+    startCol: Math.min(start.col, end.col),
+    endRow: Math.max(start.row, end.row),
+    endCol: Math.max(start.col, end.col),
+  };
 }
 
 function addressFor(row: number, col: number): string {

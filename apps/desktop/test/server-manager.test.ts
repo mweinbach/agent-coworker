@@ -17,6 +17,7 @@ const electronMockOverrides = {
   app: {
     getPath: (name: string) => (name === "userData" ? userDataDir : process.cwd()),
     getAppPath: () => process.cwd(),
+    getVersion: () => "1.2.3",
     isPackaged: false,
   },
   BrowserWindow: {
@@ -61,6 +62,34 @@ function createFakeChild(): FakeChild {
     return true;
   };
   return child;
+}
+
+async function withProcessEnv<T>(
+  patch: Record<string, string | undefined>,
+  fn: () => T | Promise<T>,
+): Promise<T> {
+  const previous = new Map<string, string | undefined>();
+  for (const key of Object.keys(patch)) {
+    previous.set(key, process.env[key]);
+    const value = patch[key];
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+
+  try {
+    return await fn();
+  } finally {
+    for (const [key, value] of previous.entries()) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
 }
 
 describe("desktop server manager startup parsing", () => {
@@ -222,6 +251,8 @@ describe("desktop server manager startup mode", () => {
     expect(env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP).toBe(
       process.env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP ?? "1",
     );
+    expect(env.AGENT_OBSERVABILITY_ENABLED).toBe("false");
+    expect(env.AGENT_OBSERVABILITY_RECORD_PAYLOADS).toBe("false");
   });
 
   test("buildServerEnv preserves explicit browser access tokens", () => {
@@ -235,6 +266,181 @@ describe("desktop server manager startup mode", () => {
       if (previous === undefined) delete process.env.COWORK_BROWSER_ACCESS_TOKEN;
       else process.env.COWORK_BROWSER_ACCESS_TOKEN = previous;
     }
+  });
+
+  test("buildServerEnv forces Langfuse off and strips inherited env by default", () => {
+    const previousLangfusePublicKey = process.env.LANGFUSE_PUBLIC_KEY;
+    const previousLangfuseSecretKey = process.env.LANGFUSE_SECRET_KEY;
+    const previousLangfuseBaseUrl = process.env.LANGFUSE_BASE_URL;
+    const previousAgentObservabilityEnabled = process.env.AGENT_OBSERVABILITY_ENABLED;
+    try {
+      process.env.LANGFUSE_PUBLIC_KEY = "pk-inherited";
+      process.env.LANGFUSE_SECRET_KEY = "sk-inherited";
+      process.env.LANGFUSE_BASE_URL = "https://langfuse.example";
+      process.env.AGENT_OBSERVABILITY_ENABLED = "true";
+
+      const env = __internal.buildServerEnv();
+
+      expect(env.LANGFUSE_PUBLIC_KEY).toBeUndefined();
+      expect(env.LANGFUSE_SECRET_KEY).toBeUndefined();
+      expect(env.LANGFUSE_BASE_URL).toBeUndefined();
+      expect(env.AGENT_OBSERVABILITY_ENABLED).toBe("false");
+      expect(env.AGENT_OBSERVABILITY_RECORD_INPUTS).toBe("false");
+      expect(env.AGENT_OBSERVABILITY_RECORD_OUTPUTS).toBe("false");
+      expect(env.AGENT_OBSERVABILITY_RECORD_PAYLOADS).toBe("false");
+    } finally {
+      if (previousLangfusePublicKey === undefined) delete process.env.LANGFUSE_PUBLIC_KEY;
+      else process.env.LANGFUSE_PUBLIC_KEY = previousLangfusePublicKey;
+      if (previousLangfuseSecretKey === undefined) delete process.env.LANGFUSE_SECRET_KEY;
+      else process.env.LANGFUSE_SECRET_KEY = previousLangfuseSecretKey;
+      if (previousLangfuseBaseUrl === undefined) delete process.env.LANGFUSE_BASE_URL;
+      else process.env.LANGFUSE_BASE_URL = previousLangfuseBaseUrl;
+      if (previousAgentObservabilityEnabled === undefined) {
+        delete process.env.AGENT_OBSERVABILITY_ENABLED;
+      } else {
+        process.env.AGENT_OBSERVABILITY_ENABLED = previousAgentObservabilityEnabled;
+      }
+    }
+  });
+
+  test("buildServerEnv enables metadata-only Langfuse env from privacy settings", () => {
+    const env = __internal.buildServerEnv(undefined, {
+      privacyTelemetrySettings: {
+        aiTraceTelemetryEnabled: true,
+        aiTracePayloadsEnabled: false,
+      },
+    });
+
+    expect(env.AGENT_OBSERVABILITY_ENABLED).toBe("true");
+    expect(env.AGENT_OBSERVABILITY_RECORD_INPUTS).toBe("false");
+    expect(env.AGENT_OBSERVABILITY_RECORD_OUTPUTS).toBe("false");
+    expect(env.AGENT_OBSERVABILITY_RECORD_PAYLOADS).toBe("false");
+    expect(env.LANGFUSE_TRACING_ENVIRONMENT).toBe("desktop-dev");
+    expect(env.LANGFUSE_RELEASE).toBe("1.2.3");
+  });
+
+  test("buildServerEnv enables full payload Langfuse env only from payload consent", () => {
+    const env = __internal.buildServerEnv(undefined, {
+      privacyTelemetrySettings: {
+        aiTraceTelemetryEnabled: true,
+        aiTracePayloadsEnabled: true,
+      },
+    });
+
+    expect(env.AGENT_OBSERVABILITY_ENABLED).toBe("true");
+    expect(env.AGENT_OBSERVABILITY_RECORD_INPUTS).toBe("true");
+    expect(env.AGENT_OBSERVABILITY_RECORD_OUTPUTS).toBe("true");
+    expect(env.AGENT_OBSERVABILITY_RECORD_PAYLOADS).toBe("true");
+  });
+
+  test("buildServerEnv strips inherited Sentry env and disables crash reporting without consent", async () => {
+    await withProcessEnv(
+      {
+        COWORK_CRASH_REPORTS_ENABLED: "true",
+        COWORK_SENTRY_DSN: "https://cowork@sentry.example/1",
+        COWORK_SENTRY_ENVIRONMENT: "production",
+        SENTRY_AUTH_TOKEN: "auth-token",
+        SENTRY_DSN: "https://fallback@sentry.example/1",
+      },
+      () => {
+        const env = __internal.buildServerEnv(undefined, {
+          privacyTelemetrySettings: {
+            crashReportsEnabled: false,
+            aiTraceTelemetryEnabled: true,
+          },
+        });
+
+        expect(env.COWORK_CRASH_REPORTS_ENABLED).toBe("false");
+        expect(env.COWORK_SENTRY_DSN).toBeUndefined();
+        expect(env.COWORK_SENTRY_ENVIRONMENT).toBeUndefined();
+        expect(env.SENTRY_AUTH_TOKEN).toBeUndefined();
+        expect(env.SENTRY_DSN).toBeUndefined();
+      },
+    );
+  });
+
+  test("buildServerEnv passes only safe crash reporting env when enabled and configured", async () => {
+    await withProcessEnv(
+      {
+        COWORK_SENTRY_DSN: "https://cowork@sentry.example/1",
+        COWORK_SENTRY_ENVIRONMENT: "production",
+        COWORK_RELEASE: "desktop-release",
+        SENTRY_AUTH_TOKEN: "auth-token",
+        SENTRY_DSN: "https://fallback@sentry.example/1",
+      },
+      () => {
+        const env = __internal.buildServerEnv(undefined, {
+          privacyTelemetrySettings: {
+            crashReportsEnabled: true,
+          },
+        });
+
+        expect(env.COWORK_CRASH_REPORTS_ENABLED).toBe("true");
+        expect(env.COWORK_SENTRY_DSN).toBe("https://cowork@sentry.example/1");
+        expect(env.COWORK_SENTRY_ENVIRONMENT).toBe("production");
+        expect(env.COWORK_RELEASE).toBe("desktop-release");
+        expect(env.SENTRY_AUTH_TOKEN).toBeUndefined();
+        expect(env.SENTRY_DSN).toBeUndefined();
+      },
+    );
+  });
+
+  test("buildServerEnv strips inherited PostHog env and disables product analytics without consent", async () => {
+    await withProcessEnv(
+      {
+        COWORK_PRODUCT_ANALYTICS_ENABLED: "true",
+        COWORK_PRODUCT_ANALYTICS_INSTALLATION_ID: "anon_inherited123456",
+        COWORK_POSTHOG_KEY: "phc_inherited",
+        COWORK_POSTHOG_HOST: "https://posthog.example",
+        COWORK_POSTHOG_ENVIRONMENT: "production",
+        POSTHOG_API_KEY: "legacy-key",
+      },
+      () => {
+        const env = __internal.buildServerEnv(undefined, {
+          privacyTelemetrySettings: {
+            productAnalyticsEnabled: false,
+          },
+        });
+
+        expect(env.COWORK_PRODUCT_ANALYTICS_ENABLED).toBe("false");
+        expect(env.COWORK_PRODUCT_ANALYTICS_INSTALLATION_ID).toBeUndefined();
+        expect(env.COWORK_POSTHOG_KEY).toBeUndefined();
+        expect(env.COWORK_POSTHOG_HOST).toBeUndefined();
+        expect(env.COWORK_POSTHOG_ENVIRONMENT).toBeUndefined();
+        expect(env.POSTHOG_API_KEY).toBeUndefined();
+      },
+    );
+  });
+
+  test("buildServerEnv passes safe PostHog env only when enabled and configured", async () => {
+    await withProcessEnv(
+      {
+        COWORK_POSTHOG_KEY: "phc_configured",
+        COWORK_POSTHOG_HOST: "https://posthog.example",
+        COWORK_POSTHOG_ENVIRONMENT: "production",
+        COWORK_RELEASE: "desktop-release",
+        POSTHOG_API_KEY: "legacy-key",
+      },
+      () => {
+        const env = __internal.buildServerEnv(undefined, {
+          privacyTelemetrySettings: {
+            productAnalyticsEnabled: true,
+          },
+          productAnalyticsState: {
+            anonymousInstallationId: "anon_1234567890123456",
+            lastAppVersion: "1.2.3",
+          },
+        });
+
+        expect(env.COWORK_PRODUCT_ANALYTICS_ENABLED).toBe("true");
+        expect(env.COWORK_PRODUCT_ANALYTICS_INSTALLATION_ID).toBe("anon_1234567890123456");
+        expect(env.COWORK_POSTHOG_KEY).toBe("phc_configured");
+        expect(env.COWORK_POSTHOG_HOST).toBe("https://posthog.example");
+        expect(env.COWORK_POSTHOG_ENVIRONMENT).toBe("production");
+        expect(env.COWORK_RELEASE).toBe("desktop-release");
+        expect(env.POSTHOG_API_KEY).toBeUndefined();
+      },
+    );
   });
 
   test("appendBrowserAccessToken returns a browser-authorized websocket URL", () => {

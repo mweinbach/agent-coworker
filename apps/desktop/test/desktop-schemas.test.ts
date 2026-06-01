@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  captureProductEventInputSchema,
   copyTextInputSchema,
   desktopMenuCommandSchema,
   mobileRelayBridgeStateSchema,
@@ -12,6 +13,7 @@ import {
   pickDirectoryInputSchema,
   platformChromeInfoSchema,
   showQuickChatWindowInputSchema,
+  startWorkspaceServerInputSchema,
   updaterStateSchema,
 } from "../src/lib/desktopSchemas";
 
@@ -97,6 +99,26 @@ describe("desktop persisted-state schema defaults", () => {
         },
         sidebarSectionOrder: ["chats", "projects"],
       },
+      privacyTelemetrySettings: {
+        crashReportsEnabled: true,
+        productAnalyticsEnabled: true,
+        aiTraceTelemetryEnabled: false,
+        aiTracePayloadsEnabled: true,
+        diagnosticsUploadEnabled: true,
+        cloudSyncEnabled: "yes",
+      },
+      cloudSync: {
+        enabled: true,
+        provider: "custom",
+        endpoint: " https://sync.example.test ",
+        syncSettings: true,
+        syncWorkspaceMetadata: false,
+        syncThreads: false,
+      },
+      productAnalytics: {
+        anonymousInstallationId: "anon_1234567890123456",
+        lastAppVersion: "1.2.3",
+      },
     });
 
     expect(parsed.workspaces[0]?.defaultEnableMcp).toBe(false);
@@ -117,6 +139,26 @@ describe("desktop persisted-state schema defaults", () => {
     expect(parsed.desktopSettings?.quickChat?.shortcutAccelerator).toBe("Alt+Space");
     expect(parsed.desktopSettings?.archivedChatsAutoDeleteDays).toBe(14);
     expect(parsed.desktopSettings?.sidebarSectionOrder).toEqual(["chats", "projects"]);
+    expect(parsed.privacyTelemetrySettings).toEqual({
+      crashReportsEnabled: true,
+      productAnalyticsEnabled: true,
+      aiTraceTelemetryEnabled: false,
+      aiTracePayloadsEnabled: false,
+      diagnosticsUploadEnabled: true,
+      cloudSyncEnabled: false,
+    });
+    expect(parsed.cloudSync).toEqual({
+      enabled: true,
+      provider: "custom",
+      endpoint: "https://sync.example.test",
+      syncSettings: true,
+      syncWorkspaceMetadata: false,
+      syncThreads: false,
+    });
+    expect(parsed.productAnalytics).toEqual({
+      anonymousInstallationId: "anon_1234567890123456",
+      lastAppVersion: "1.2.3",
+    });
   });
 
   test("accepts updater state payloads", () => {
@@ -160,6 +202,25 @@ describe("desktop persisted-state schema defaults", () => {
   });
 
   test("validates simple preload IPC inputs", () => {
+    expect(
+      startWorkspaceServerInputSchema.parse({
+        workspaceId: "ws_1",
+        workspacePath: "/tmp/workspace",
+        yolo: false,
+        privacyTelemetrySettings: {
+          aiTraceTelemetryEnabled: false,
+          aiTracePayloadsEnabled: true,
+        },
+      }).privacyTelemetrySettings,
+    ).toEqual({
+      crashReportsEnabled: false,
+      productAnalyticsEnabled: false,
+      aiTraceTelemetryEnabled: false,
+      aiTracePayloadsEnabled: false,
+      diagnosticsUploadEnabled: false,
+      cloudSyncEnabled: false,
+    });
+
     expect(pickDirectoryInputSchema.parse({ title: "Choose workspace" })).toEqual({
       title: "Choose workspace",
     });
@@ -167,6 +228,33 @@ describe("desktop persisted-state schema defaults", () => {
 
     expect(() => pickDirectoryInputSchema.parse({ title: 42 })).toThrow();
     expect(() => copyTextInputSchema.parse({ text: "not a string" })).toThrow();
+  });
+
+  test("accepts product analytics IPC event payloads", () => {
+    expect(
+      captureProductEventInputSchema.parse({
+        name: "workspace_added",
+        properties: {
+          eventSource: "renderer",
+          workspaceCount: 2,
+          mcpEnabled: true,
+        },
+      }),
+    ).toEqual({
+      name: "workspace_added",
+      properties: {
+        eventSource: "renderer",
+        workspaceCount: 2,
+        mcpEnabled: true,
+      },
+    });
+
+    expect(() =>
+      captureProductEventInputSchema.parse({
+        name: "not_real",
+        properties: {},
+      }),
+    ).toThrow();
   });
 
   test("accepts platform chrome IPC payloads", () => {

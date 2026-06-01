@@ -44,6 +44,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     env:
+      COWORK_SENTRY_DSN: ${{ vars.COWORK_SENTRY_DSN }}
+      COWORK_POSTHOG_KEY: ${{ vars.COWORK_POSTHOG_KEY }}
+      COWORK_POSTHOG_HOST: ${{ vars.COWORK_POSTHOG_HOST }}
+      LANGFUSE_BASE_URL: ${{ vars.LANGFUSE_BASE_URL }}
+      LANGFUSE_PUBLIC_KEY: ${{ vars.LANGFUSE_PUBLIC_KEY }}
       WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
       WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
     strategy:
@@ -70,6 +75,51 @@ jobs:
 
       - name: Setup dependencies
         uses: ./.github/actions/setup-bun
+
+      - name: Validate public telemetry build variables
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          required=(
+            COWORK_SENTRY_DSN
+            COWORK_POSTHOG_KEY
+            COWORK_POSTHOG_HOST
+            LANGFUSE_BASE_URL
+            LANGFUSE_PUBLIC_KEY
+          )
+          missing=()
+
+          for name in "${required[@]}"; do
+            if [ -z "${!name:-}" ]; then
+              missing+=("$name")
+            fi
+          done
+
+          if [ "${#missing[@]}" -gt 0 ]; then
+            printf 'Missing required public telemetry GitHub variables:\n' >&2
+            printf ' - %s\n' "${missing[@]}" >&2
+            exit 1
+          fi
+
+          forbidden=(
+            LANGFUSE_SECRET_KEY
+            COWORK_DIAGNOSTICS_UPLOAD_URL
+            COWORK_CLOUD_SYNC_ENDPOINT
+          )
+          present=()
+
+          for name in "${forbidden[@]}"; do
+            if [ -n "${!name:-}" ]; then
+              present+=("$name")
+            fi
+          done
+
+          if [ "${#present[@]}" -gt 0 ]; then
+            printf 'Forbidden telemetry variables must not be present in the public desktop build:\n' >&2
+            printf ' - %s\n' "${present[@]}" >&2
+            exit 1
+          fi
 
       - name: Validate macOS signing and notarization inputs
         if: ${{ runner.os == 'macOS' }}

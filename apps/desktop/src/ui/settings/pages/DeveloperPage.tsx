@@ -1,4 +1,12 @@
-import { CheckCircle2Icon, RefreshCwIcon, TriangleAlertIcon } from "lucide-react";
+import {
+  ArchiveIcon,
+  CheckCircle2Icon,
+  CopyIcon,
+  FolderOpenIcon,
+  RefreshCwIcon,
+  TriangleAlertIcon,
+  UploadCloudIcon,
+} from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
@@ -21,6 +29,15 @@ import {
 } from "../../../components/ui/select";
 import { Spinner } from "../../../components/ui/spinner";
 import { Switch } from "../../../components/ui/switch";
+import type { CreateDiagnosticsBundleOutput } from "../../../lib/desktopApi";
+import {
+  confirmAction,
+  copyText,
+  createDiagnosticsBundle,
+  openLogsFolder,
+  revealDiagnosticsBundle,
+  uploadDiagnosticsBundle,
+} from "../../../lib/desktopCommands";
 import {
   DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS,
   type LibreOfficeRuntimeDiagnostic,
@@ -52,6 +69,7 @@ function smokeSummary(status: LibreOfficeRuntimeDiagnostic | null): string {
 }
 
 export function DeveloperPage() {
+  const privacyTelemetrySettings = useAppStore((s) => s.privacyTelemetrySettings);
   const desktopFeatures = useAppStore((s) => s.desktopFeatureFlags);
   const workspacePickerEnabled = desktopFeatures.workspacePicker !== false;
   const developerMode = useAppStore((s) => s.developerMode);
@@ -70,6 +88,13 @@ export function DeveloperPage() {
     null,
   );
   const [libreOfficeChecking, setLibreOfficeChecking] = useState(false);
+  const [diagnosticsBundle, setDiagnosticsBundle] = useState<CreateDiagnosticsBundleOutput | null>(
+    null,
+  );
+  const [diagnosticsBusy, setDiagnosticsBusy] = useState<
+    "create" | "upload" | "openLogs" | "copy" | null
+  >(null);
+  const [diagnosticsStatus, setDiagnosticsStatus] = useState<string | null>(null);
 
   const workspace = useMemo(
     () => workspaces.find((entry) => entry.id === selectedWorkspaceId) ?? workspaces[0] ?? null,
@@ -134,8 +159,175 @@ export function DeveloperPage() {
     }
   };
 
+  const createBundle = async () => {
+    setDiagnosticsBusy("create");
+    setDiagnosticsStatus(null);
+    try {
+      const bundle = await createDiagnosticsBundle();
+      setDiagnosticsBundle(bundle);
+      setDiagnosticsStatus("Diagnostics bundle created.");
+      await revealDiagnosticsBundle({ path: bundle.path }).catch(() => {});
+    } catch (error) {
+      setDiagnosticsStatus(
+        error instanceof Error ? error.message : "Unable to create diagnostics bundle.",
+      );
+    } finally {
+      setDiagnosticsBusy(null);
+    }
+  };
+
+  const copyDiagnosticSummary = async () => {
+    if (!diagnosticsBundle) return;
+    setDiagnosticsBusy("copy");
+    try {
+      await copyText(diagnosticsBundle.summary);
+      setDiagnosticsStatus("Diagnostic summary copied.");
+    } catch (error) {
+      setDiagnosticsStatus(
+        error instanceof Error ? error.message : "Unable to copy diagnostic summary.",
+      );
+    } finally {
+      setDiagnosticsBusy(null);
+    }
+  };
+
+  const uploadBundle = async () => {
+    if (!diagnosticsBundle) return;
+    if (!privacyTelemetrySettings.diagnosticsUploadEnabled) {
+      setDiagnosticsStatus("Diagnostic log uploads are disabled.");
+      return;
+    }
+
+    const confirmed = await confirmAction({
+      title: "Upload diagnostics bundle?",
+      message: "Upload the redacted diagnostics bundle to the configured support endpoint.",
+      detail:
+        "The bundle is generated locally and excludes transcripts, prompts, completions, file contents, shell output, workspace paths, and credentials.",
+      kind: "warning",
+      confirmLabel: "Upload",
+      cancelLabel: "Cancel",
+      defaultAction: "cancel",
+    });
+    if (!confirmed) {
+      setDiagnosticsStatus("Diagnostics upload canceled.");
+      return;
+    }
+
+    setDiagnosticsBusy("upload");
+    try {
+      const result = await uploadDiagnosticsBundle({
+        path: diagnosticsBundle.path,
+        confirmed: true,
+      });
+      const copyValue = result.url ?? result.diagnosticId;
+      if (copyValue) {
+        await copyText(copyValue);
+      }
+      setDiagnosticsStatus(
+        copyValue ? `Diagnostics uploaded. ${result.url ? "URL" : "ID"} copied.` : result.message,
+      );
+    } catch (error) {
+      setDiagnosticsStatus(error instanceof Error ? error.message : "Diagnostics upload failed.");
+    } finally {
+      setDiagnosticsBusy(null);
+    }
+  };
+
   return (
     <div className="space-y-5">
+      <Card className="border-border/80 bg-card/85">
+        <CardHeader>
+          <div className="flex items-start justify-between gap-3 max-[720px]:flex-col">
+            <div>
+              <CardTitle>Diagnostics Bundle</CardTitle>
+              <CardDescription>Local logs and redacted technical metadata.</CardDescription>
+            </div>
+            <Badge
+              variant={privacyTelemetrySettings.diagnosticsUploadEnabled ? "secondary" : "outline"}
+            >
+              Uploads {privacyTelemetrySettings.diagnosticsUploadEnabled ? "allowed" : "off"}
+            </Badge>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              disabled={diagnosticsBusy !== null}
+              onClick={() => void createBundle()}
+            >
+              {diagnosticsBusy === "create" ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <ArchiveIcon data-icon="inline-start" />
+              )}
+              Create Diagnostics Bundle
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={diagnosticsBusy !== null}
+              onClick={() => {
+                setDiagnosticsBusy("openLogs");
+                void openLogsFolder()
+                  .then(() => setDiagnosticsStatus("Logs folder opened."))
+                  .catch((error: unknown) =>
+                    setDiagnosticsStatus(
+                      error instanceof Error ? error.message : "Unable to open logs folder.",
+                    ),
+                  )
+                  .finally(() => setDiagnosticsBusy(null));
+              }}
+            >
+              {diagnosticsBusy === "openLogs" ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <FolderOpenIcon data-icon="inline-start" />
+              )}
+              Open Logs Folder
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={!diagnosticsBundle || diagnosticsBusy !== null}
+              onClick={() => void copyDiagnosticSummary()}
+            >
+              {diagnosticsBusy === "copy" ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <CopyIcon data-icon="inline-start" />
+              )}
+              Copy Diagnostic Summary
+            </Button>
+            {diagnosticsBundle?.uploadConfigured ? (
+              <Button
+                type="button"
+                variant="outline"
+                disabled={!diagnosticsBundle || diagnosticsBusy !== null}
+                onClick={() => void uploadBundle()}
+              >
+                {diagnosticsBusy === "upload" ? (
+                  <Spinner data-icon="inline-start" />
+                ) : (
+                  <UploadCloudIcon data-icon="inline-start" />
+                )}
+                Upload Bundle
+              </Button>
+            ) : null}
+          </div>
+
+          <div className="rounded-xl border border-border/70 bg-muted/15 p-4 text-xs">
+            <div className="font-medium text-foreground">Last bundle</div>
+            <div className="mt-1 break-all text-muted-foreground">
+              {diagnosticsBundle?.path ?? "No bundle created yet."}
+            </div>
+            {diagnosticsStatus ? (
+              <div className="mt-2 text-muted-foreground">{diagnosticsStatus}</div>
+            ) : null}
+          </div>
+        </CardContent>
+      </Card>
+
       <Card className="border-border/80 bg-card/85">
         <CardHeader>
           <CardTitle>File Explorer</CardTitle>

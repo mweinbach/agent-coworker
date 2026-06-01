@@ -13,6 +13,7 @@ import {
   DEFAULT_QUICK_CHAT_SHORTCUT_ACCELERATOR,
   normalizeQuickChatShortcutAccelerator,
 } from "../shared/quickChatShortcut";
+import { type CloudSyncSettings, normalizeCloudSyncSettings } from "../sync/types";
 import { writeTextFileAtomic } from "../utils/atomicFile";
 import {
   createOneOffChatWorkspace as createOneOffChatWorkspaceDirectory,
@@ -70,6 +71,7 @@ export type DesktopPersistedState = {
     };
     archivedChatsAutoDeleteDays?: number;
   };
+  cloudSync: CloudSyncSettings;
   desktopFeatureFlagOverrides: DesktopFeatureFlagOverrides;
   providerState?: unknown;
   providerUiState?: unknown;
@@ -253,6 +255,7 @@ function defaultState(): DesktopPersistedState {
       },
       archivedChatsAutoDeleteDays: 0,
     },
+    cloudSync: normalizeCloudSyncSettings(),
     desktopFeatureFlagOverrides: {},
   };
 }
@@ -384,6 +387,7 @@ async function normalizeState(raw: unknown): Promise<DesktopPersistedState> {
           ? raw.desktopSettings.archivedChatsAutoDeleteDays
           : 0,
     },
+    cloudSync: normalizeCloudSyncSettings(isRecord(raw.cloudSync) ? raw.cloudSync : undefined),
     desktopFeatureFlagOverrides:
       normalizeDesktopFeatureFlagOverrides(raw.desktopFeatureFlagOverrides) ?? {},
     ...(raw.providerState !== undefined ? { providerState: raw.providerState } : {}),

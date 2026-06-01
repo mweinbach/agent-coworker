@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 
 import type { DesktopFeatureFlagOverrides } from "../../../../src/shared/featureFlags";
+import { captureProductEvent } from "../../../../src/telemetry/productAnalytics";
 import type {
   MobileRelayBridgeState,
   MobileRelaySnapshot,
@@ -190,8 +191,14 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
 
   async start(options: StartOptions): Promise<MobileRelaySnapshot> {
     const previousOptions = this.currentStartOptions;
+    const startedAt = Date.now();
     let switchedToNewOptions = false;
     let errorOptions = options;
+    captureProductEvent("mobile_pairing_started", {
+      eventSource: "main",
+      status: "started",
+      mobilePairingEnabled: true,
+    });
     this.state = {
       ...buildIdleState(),
       status: "starting",
@@ -213,6 +220,14 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
         mobileH3: true,
       });
       this.state = stateFromMobileH3(options, listening.mobileH3);
+      if (this.state.status === "connected") {
+        captureProductEvent("mobile_pairing_completed", {
+          eventSource: "main",
+          status: "connected",
+          durationMs: Date.now() - startedAt,
+          mobilePairingEnabled: true,
+        });
+      }
       if (!listening.mobileH3) {
         this.currentStartOptions = null;
       }
@@ -328,7 +343,15 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     }
     try {
       const trustedPhoneDevices = await this.serverManager.listMobileH3TrustedDevices(workspaceId);
+      const wasConnected = this.state.status === "connected";
       this.state = stateWithTrustedPhoneDevices(this.state, trustedPhoneDevices);
+      if (!wasConnected && this.state.status === "connected") {
+        captureProductEvent("mobile_pairing_completed", {
+          eventSource: "main",
+          status: "connected",
+          mobilePairingEnabled: true,
+        });
+      }
     } catch (error) {
       this.state = {
         ...this.state,

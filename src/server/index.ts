@@ -6,9 +6,39 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import {
+  type CrashReportingSdk,
+  captureError,
+  initCrashReporting,
+} from "../telemetry/crashReporting";
+import { initProductAnalytics, shutdownProductAnalytics } from "../telemetry/productAnalytics";
+import { VERSION } from "../version";
+
 // Keep server output clean by default.
 const globalSettings = globalThis as typeof globalThis & { AI_SDK_LOG_WARNINGS?: boolean };
 globalSettings.AI_SDK_LOG_WARNINGS = false;
+
+let crashReportingHandlersRegistered = false;
+
+function registerCrashReportingProcessHandlers(): void {
+  if (crashReportingHandlersRegistered) {
+    return;
+  }
+  crashReportingHandlersRegistered = true;
+
+  process.on("uncaughtExceptionMonitor", (error) => {
+    captureError(error, {
+      tags: { operation: "unhandled_exception" },
+    });
+  });
+
+  process.on("unhandledRejection", (reason) => {
+    captureError(reason, {
+      tags: { operation: "unhandled_rejection" },
+      extra: { reasonType: typeof reason },
+    });
+  });
+}
 
 function printUsage() {
   console.log(
@@ -189,6 +219,40 @@ async function main() {
   const cwd = dir ? await resolveAndValidateDir(dir) : process.cwd();
   if (dir) process.chdir(cwd);
 
+  const crashReportingStatus = await initCrashReporting({
+    component: "cowork-server",
+    enabled: process.env.COWORK_CRASH_REPORTS_ENABLED === "true",
+    env: process.env,
+    release: VERSION,
+    appVersion: VERSION,
+    platform: process.platform,
+    arch: process.arch,
+    homeDir: os.homedir(),
+    workspacePaths: [cwd],
+    tags: {
+      component: "cowork-server",
+      appVersion: VERSION,
+    },
+    loadSdk: async () => {
+      const sdk = await import("@sentry/bun");
+      return sdk as unknown as CrashReportingSdk;
+    },
+  });
+  if (crashReportingStatus.initialized) {
+    registerCrashReportingProcessHandlers();
+  }
+
+  await initProductAnalytics({
+    enabled: process.env.COWORK_PRODUCT_ANALYTICS_ENABLED === "true",
+    env: process.env,
+    anonymousId: process.env.COWORK_PRODUCT_ANALYTICS_INSTALLATION_ID,
+    release: VERSION,
+    appVersion: VERSION,
+    eventSource: "server",
+    platform: process.platform,
+    arch: process.arch,
+  });
+
   const [{ DEFAULT_PROVIDER_OPTIONS }, { startAgentServer }] = await Promise.all([
     import("../providers/providerOptions"),
     import("./startServer"),
@@ -220,6 +284,7 @@ async function main() {
     stopping = true;
     try {
       server.stop();
+      void shutdownProductAnalytics();
     } catch {
       // ignore
     }
@@ -234,6 +299,7 @@ async function main() {
     // Last-resort synchronous cleanup.
     try {
       server.stop();
+      void shutdownProductAnalytics();
     } catch {
       // ignore
     }
@@ -291,6 +357,9 @@ async function main() {
 if (import.meta.main) {
   main().catch((err) => {
     if (String(err) === "Error: help") return;
+    captureError(err, {
+      tags: { operation: "server_startup" },
+    });
     console.error(err);
     process.exitCode = 1;
   });

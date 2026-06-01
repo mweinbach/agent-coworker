@@ -52,10 +52,80 @@ const SECRET_ATTRIBUTE_TOKENS = [
   "privatekey",
   "secretkey",
 ];
+const PAYLOAD_ATTRIBUTE_TOKENS = [
+  "prompt",
+  "input",
+  "message",
+  "response",
+  "output",
+  "completion",
+  "command",
+  "stdout",
+  "stderr",
+  "path",
+  "filepath",
+  "file_path",
+  "filename",
+  "file_name",
+  "transcript",
+  "uploaded",
+  "log",
+  "error",
+];
+const SAFE_METADATA_ATTRIBUTE_TOKENS = [
+  "token",
+  "tokens",
+  "cost",
+  "count",
+  "duration",
+  "latency",
+  "attempt",
+  "status",
+  "provider",
+  "model",
+  "session",
+  "turn",
+  "run",
+  "step",
+  "id",
+  "bytes",
+  "size",
+];
 
 function isSecretLikeKey(key: string): boolean {
   const lowered = key.toLowerCase();
+  const compact = lowered.replace(/[^a-z0-9]/g, "");
+  if (
+    compact.includes("token") &&
+    !/(access|auth|api|bearer|cookie|password|private|refresh|secret|session)/.test(compact)
+  ) {
+    return false;
+  }
   return SECRET_ATTRIBUTE_TOKENS.some((token) => lowered.includes(token));
+}
+
+function isPayloadLikeKey(key: string): boolean {
+  const lowered = key.toLowerCase();
+  const compact = lowered.replace(/[^a-z0-9]/g, "");
+  return PAYLOAD_ATTRIBUTE_TOKENS.some((token) => {
+    const compactToken = token.replace(/[^a-z0-9]/g, "");
+    return lowered.includes(token) || compact.includes(compactToken);
+  });
+}
+
+function isSafeMetadataKey(key: string): boolean {
+  const lowered = key.toLowerCase();
+  const compact = lowered.replace(/[^a-z0-9]/g, "");
+  return SAFE_METADATA_ATTRIBUTE_TOKENS.some((token) => {
+    const compactToken = token.replace(/[^a-z0-9]/g, "");
+    return lowered.includes(token) || compact.includes(compactToken);
+  });
+}
+
+function allowsPayloadAttributes(config: AgentConfig): boolean {
+  return (
+    config.observability?.recordInputs === true && config.observability?.recordOutputs === true
+  );
 }
 
 function truncateString(value: string): string {
@@ -66,8 +136,12 @@ function truncateString(value: string): string {
 function sanitizeAttributeValue(
   key: string,
   value: string | number | boolean,
+  options: { allowPayloadAttributes: boolean },
 ): AttributeValue | undefined {
   if (isSecretLikeKey(key)) return "[REDACTED]";
+  if (!options.allowPayloadAttributes && isPayloadLikeKey(key) && !isSafeMetadataKey(key)) {
+    return "[REDACTED]";
+  }
 
   if (typeof value === "string") {
     return truncateString(value);
@@ -83,12 +157,13 @@ function sanitizeAttributeValue(
 
 function sanitizeAttributes(
   attributes: Record<string, string | number | boolean> | undefined,
+  options: { allowPayloadAttributes: boolean },
 ): Record<string, AttributeValue> {
   if (!attributes) return {};
 
   const out: Record<string, AttributeValue> = {};
   for (const [key, value] of Object.entries(attributes)) {
-    const sanitized = sanitizeAttributeValue(key, value);
+    const sanitized = sanitizeAttributeValue(key, value, options);
     if (sanitized === undefined) continue;
     out[key] = sanitized;
   }
@@ -143,7 +218,9 @@ export async function emitObservabilityEvent(
   }
 
   const { startTime, endTime } = computeSpanWindow(event.at, event.durationMs);
-  const attributes = sanitizeAttributes(event.attributes);
+  const attributes = sanitizeAttributes(event.attributes, {
+    allowPayloadAttributes: allowsPayloadAttributes(config),
+  });
 
   let emitted = false;
   try {

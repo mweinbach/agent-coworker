@@ -57,10 +57,14 @@ import { runAfterNextPaintOrTimeout } from "../store.helpers/paintScheduling";
 import {
   type CachedDesktopUiState,
   type CachedSessionSnapshot,
+  normalizeCloudSyncSettings,
   normalizeDesktopSettings,
+  normalizePrivacyTelemetrySettings,
   normalizeSidebarSectionOrder,
   normalizeWorkspaceUserProfile,
+  type PersistedCloudSyncSettings,
   type PersistedOnboardingState,
+  type PersistedPrivacyTelemetrySettings,
   type PersistedProviderState,
   type SettingsPageId,
   type ThreadRecord,
@@ -80,6 +84,10 @@ const optionalStringSchema = z.preprocess(
   (value) => (typeof value === "string" ? value : undefined),
   z.string().optional(),
 );
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
 
 const normalizedProviderSchema = z.preprocess(
   (value) => (isProviderName(value) ? value : "google"),
@@ -139,6 +147,7 @@ function normalizeKnownSettingsPageId(value: unknown): SettingsPageId {
     value === "chats" ||
     value === "experiments" ||
     value === "diagnostics" ||
+    value === "privacyTelemetry" ||
     value === "desktop" ||
     value === "usage" ||
     value === "remoteAccess" ||
@@ -158,6 +167,7 @@ const normalizedSettingsPageSchema = z.preprocess(
     "chats",
     "experiments",
     "diagnostics",
+    "privacyTelemetry",
     "desktop",
     "usage",
     "remoteAccess",
@@ -356,6 +366,34 @@ const persistedUiSchema = z
     }),
   );
 
+const privacyTelemetrySettingsSchema = z.preprocess(
+  (value) =>
+    normalizePrivacyTelemetrySettings(
+      isRecord(value) ? (value as PersistedPrivacyTelemetrySettings) : undefined,
+    ),
+  z.object({
+    crashReportsEnabled: z.boolean(),
+    productAnalyticsEnabled: z.boolean(),
+    aiTraceTelemetryEnabled: z.boolean(),
+    aiTracePayloadsEnabled: z.boolean(),
+    diagnosticsUploadEnabled: z.boolean(),
+    cloudSyncEnabled: z.boolean(),
+  }),
+);
+
+const cloudSyncSettingsSchema = z.preprocess(
+  (value) =>
+    normalizeCloudSyncSettings(isRecord(value) ? (value as PersistedCloudSyncSettings) : undefined),
+  z.object({
+    enabled: z.boolean(),
+    provider: z.enum(["custom", "none"]),
+    endpoint: z.string().optional(),
+    syncSettings: z.boolean(),
+    syncWorkspaceMetadata: z.boolean(),
+    syncThreads: z.boolean(),
+  }),
+);
+
 const persistedStateSchema = z
   .object({
     workspaces: z.preprocess((value) => value ?? [], z.array(persistedWorkspaceSchema)),
@@ -410,6 +448,8 @@ const persistedStateSchema = z
           .optional(),
       })
       .optional(),
+    privacyTelemetrySettings: privacyTelemetrySettingsSchema.optional(),
+    cloudSync: cloudSyncSettingsSchema.optional(),
     desktopFeatureFlagOverrides: z.preprocess(
       (value) => normalizeDesktopFeatureFlagOverrides(value),
       z
@@ -447,6 +487,8 @@ const persistedStateSchema = z
       showHiddenFiles: state.showHiddenFiles,
       perWorkspaceSettings: state.perWorkspaceSettings,
       desktopSettings: state.desktopSettings,
+      privacyTelemetrySettings: state.privacyTelemetrySettings,
+      cloudSync: state.cloudSync,
       desktopFeatureFlagOverrides: state.desktopFeatureFlagOverrides,
       providerState,
       providerUiState,
@@ -679,6 +721,8 @@ export function buildCachedDesktopStateSeed(value: unknown): Partial<AppStoreDat
       showHiddenFiles: state.showHiddenFiles,
       perWorkspaceSettings: state.perWorkspaceSettings,
       desktopSettings: normalizeDesktopSettings(state.desktopSettings),
+      privacyTelemetrySettings: normalizePrivacyTelemetrySettings(state.privacyTelemetrySettings),
+      cloudSync: normalizeCloudSyncSettings(state.cloudSync),
       desktopFeatureFlags,
       desktopFeatureFlagOverrides: state.desktopFeatureFlagOverrides ?? {},
       onboardingState: state.onboarding ?? DEFAULT_ONBOARDING_STATE,
@@ -832,6 +876,10 @@ export function createBootstrapActions(
           showHiddenFiles: state.showHiddenFiles,
           perWorkspaceSettings: state.perWorkspaceSettings,
           desktopSettings: normalizeDesktopSettings(state.desktopSettings),
+          privacyTelemetrySettings: normalizePrivacyTelemetrySettings(
+            state.privacyTelemetrySettings,
+          ),
+          cloudSync: normalizeCloudSyncSettings(state.cloudSync),
           desktopFeatureFlags,
           desktopFeatureFlagOverrides: state.desktopFeatureFlagOverrides ?? {},
           updateState,

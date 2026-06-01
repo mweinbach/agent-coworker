@@ -1,18 +1,29 @@
 import { type ChildProcessByStdio, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
-import fsp from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
 import type { Readable } from "node:stream";
 import { app } from "electron";
 import { z } from "zod";
-
+import { resolveTelemetryConsent } from "../../../../src/telemetry/config";
+import {
+  captureError,
+  resolveCrashReportingConfig,
+} from "../../../../src/telemetry/crashReporting";
+import { captureProductEvent } from "../../../../src/telemetry/productAnalytics";
+import type {
+  normalizePrivacyTelemetrySettings,
+  PersistedPrivacyTelemetrySettings,
+  PersistedProductAnalyticsState,
+} from "../../src/app/types";
 import { resolvePackagedBuiltinDistDir } from "./desktopBuiltinPaths";
+import { flushLocalLogWrites, getLocalLogPath, writeLocalLog } from "./localLogs";
 import type {
   MobileRelayTrustedDevicePermissionKey,
   MobileRelayTrustedPhoneDevice,
 } from "./mobileRelayTypes";
+import { buildDesktopProductAnalyticsEnv } from "./productAnalytics";
 import {
   buildSourceEnvForAttempt,
   getServerTerminationSignal,
@@ -33,6 +44,19 @@ const MAX_SERVER_STARTUP_TIMEOUT_MS = 300_000;
 const STDERR_TAIL_LIMIT = 16_384;
 const SERVER_LOG_FILE_NAME = "server.log";
 const DEBUG_SERVER_STDERR = process.env.COWORK_DESKTOP_DEBUG_SERVER_STDERR === "1";
+
+const OBSERVABILITY_ENV_PREFIXES = ["AGENT_OBSERVABILITY_", "LANGFUSE_"] as const;
+const CRASH_REPORTING_ENV_PREFIXES = ["COWORK_SENTRY_", "SENTRY_"] as const;
+const PRODUCT_ANALYTICS_ENV_PREFIXES = ["COWORK_POSTHOG_", "POSTHOG_"] as const;
+const TELEMETRY_CONSENT_ENV_KEYS = [
+  "COWORK_CRASH_REPORTS_ENABLED",
+  "COWORK_PRODUCT_ANALYTICS_ENABLED",
+  "AGENT_OBSERVABILITY_ENABLED",
+  "AGENT_OBSERVABILITY_RECORD_INPUTS",
+  "AGENT_OBSERVABILITY_RECORD_OUTPUTS",
+  "AGENT_OBSERVABILITY_RECORD_PAYLOADS",
+  "COWORK_CLOUD_SYNC_ENABLED",
+] as const;
 
 type ServerHandle = {
   child: ServerChildProcess;
@@ -82,8 +106,14 @@ type StartWorkspaceServerOptions = {
   workspacePath: string;
   yolo: boolean;
   featureFlags?: { openAiNativeConnectors?: boolean };
+  privacyTelemetrySettings?: PersistedPrivacyTelemetrySettings | null;
+  productAnalyticsState?: PersistedProductAnalyticsState | null;
   mobileH3?: boolean;
   rotateMobileH3Tls?: boolean;
+};
+
+type ServerManagerOptions = {
+  getProductAnalyticsState?: () => PersistedProductAnalyticsState | null | undefined;
 };
 
 const trustedDevicePermissionSchema = z.preprocess(
@@ -454,6 +484,8 @@ function buildServerEnv(
     includeBundledFoundationModelsSdk?: boolean;
     includeBundledWindowsAiElectron?: boolean;
     rotateMobileH3Tls?: boolean;
+    privacyTelemetrySettings?: PersistedPrivacyTelemetrySettings | null;
+    productAnalyticsState?: PersistedProductAnalyticsState | null;
   } = {},
 ): NodeJS.ProcessEnv {
   const bundledCodexPrimaryRuntime = findBundledCodexPrimaryRuntimeDir();
@@ -466,8 +498,20 @@ function buildServerEnv(
     opts.includeBundledWindowsAiElectron && !process.env.COWORK_WINDOWS_AI_ELECTRON_DIR
       ? findBundledWindowsAiElectronDir()
       : null;
+  const telemetryConsentEnv = withoutInheritedTelemetryConsentEnv(process.env);
+  const privacyTelemetrySettings = resolveTelemetryConsent({
+    settings: opts.privacyTelemetrySettings,
+    env: telemetryConsentEnv,
+    isPackaged: app.isPackaged,
+  });
+  const inheritedEnv = privacyTelemetrySettings.aiTraceTelemetryEnabled
+    ? { ...process.env }
+    : withoutInheritedObservabilityEnv(process.env);
+  const processEnv = withoutInheritedProductAnalyticsEnv(
+    withoutInheritedCrashReportingEnv(inheritedEnv),
+  );
   return {
-    ...process.env,
+    ...processEnv,
     COWORK_WEB_DESKTOP_SERVICE: "1",
     COWORK_DESKTOP_USER_DATA_DIR: app.getPath("userData"),
     COWORK_BROWSER_ACCESS_TOKEN:
@@ -488,6 +532,115 @@ function buildServerEnv(
       ? { COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS: "1" }
       : {}),
     ...(opts.rotateMobileH3Tls ? { COWORK_H3_ROTATE_TLS: "1" } : {}),
+    ...buildDesktopObservabilityEnv(privacyTelemetrySettings),
+    ...buildDesktopCrashReportingEnv(privacyTelemetrySettings),
+    ...buildDesktopProductAnalyticsEnv(
+      privacyTelemetrySettings,
+      opts.productAnalyticsState,
+      telemetryConsentEnv,
+    ),
+  };
+}
+
+function withoutInheritedTelemetryConsentEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const next = { ...env };
+  for (const key of TELEMETRY_CONSENT_ENV_KEYS) {
+    delete next[key];
+  }
+  return next;
+}
+
+function withoutInheritedObservabilityEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const next = { ...env };
+  for (const key of Object.keys(next)) {
+    if (OBSERVABILITY_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))) {
+      delete next[key];
+    }
+  }
+  return next;
+}
+
+function withoutInheritedCrashReportingEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const next = { ...env };
+  for (const key of Object.keys(next)) {
+    if (
+      key === "COWORK_CRASH_REPORTS_ENABLED" ||
+      CRASH_REPORTING_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))
+    ) {
+      delete next[key];
+    }
+  }
+  return next;
+}
+
+function withoutInheritedProductAnalyticsEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const next = { ...env };
+  for (const key of Object.keys(next)) {
+    if (
+      key === "COWORK_PRODUCT_ANALYTICS_ENABLED" ||
+      key === "COWORK_PRODUCT_ANALYTICS_INSTALLATION_ID" ||
+      PRODUCT_ANALYTICS_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))
+    ) {
+      delete next[key];
+    }
+  }
+  return next;
+}
+
+function resolveAppRelease(): string {
+  const version = (app as { getVersion?: () => string }).getVersion?.().trim();
+  return version || "unknown";
+}
+
+function buildDesktopObservabilityEnv(
+  privacyTelemetrySettings: ReturnType<typeof normalizePrivacyTelemetrySettings>,
+): NodeJS.ProcessEnv {
+  if (!privacyTelemetrySettings.aiTraceTelemetryEnabled) {
+    return {
+      AGENT_OBSERVABILITY_ENABLED: "false",
+      AGENT_OBSERVABILITY_RECORD_INPUTS: "false",
+      AGENT_OBSERVABILITY_RECORD_OUTPUTS: "false",
+      AGENT_OBSERVABILITY_RECORD_PAYLOADS: "false",
+    };
+  }
+
+  const recordPayloads = privacyTelemetrySettings.aiTracePayloadsEnabled ? "true" : "false";
+  return {
+    AGENT_OBSERVABILITY_ENABLED: "true",
+    AGENT_OBSERVABILITY_RECORD_INPUTS: recordPayloads,
+    AGENT_OBSERVABILITY_RECORD_OUTPUTS: recordPayloads,
+    AGENT_OBSERVABILITY_RECORD_PAYLOADS: recordPayloads,
+    LANGFUSE_TRACING_ENVIRONMENT: app.isPackaged ? "desktop-packaged" : "desktop-dev",
+    LANGFUSE_RELEASE: resolveAppRelease(),
+  };
+}
+
+function buildDesktopCrashReportingEnv(
+  privacyTelemetrySettings: ReturnType<typeof normalizePrivacyTelemetrySettings>,
+): NodeJS.ProcessEnv {
+  const release = resolveAppRelease();
+  const config = resolveCrashReportingConfig({
+    component: "cowork-server",
+    enabled: privacyTelemetrySettings.crashReportsEnabled,
+    env: process.env,
+    fallbackRelease: release,
+    appVersion: release,
+    isPackaged: app.isPackaged,
+    platform: process.platform,
+    arch: process.arch,
+  });
+
+  if (!config.enabled || !config.dsn) {
+    return {
+      COWORK_CRASH_REPORTS_ENABLED: "false",
+    };
+  }
+
+  return {
+    COWORK_CRASH_REPORTS_ENABLED: "true",
+    COWORK_SENTRY_DSN: config.dsn,
+    COWORK_RELEASE: config.release ?? release,
+    COWORK_SENTRY_ENVIRONMENT: config.environment,
   };
 }
 
@@ -526,34 +679,15 @@ function toHttpServerUrl(websocketUrl: string): string {
 }
 
 function getServerLogPath(): string {
-  return path.join(app.getPath("userData"), "logs", SERVER_LOG_FILE_NAME);
+  return getLocalLogPath(SERVER_LOG_FILE_NAME);
 }
 
-let pendingServerLogWrite: Promise<void> = Promise.resolve();
-
-function logServerManagerEvent(message: string): void {
-  const entry = `[${new Date().toISOString()}] ${message}\n`;
-  pendingServerLogWrite = pendingServerLogWrite
-    .catch(() => {
-      // Preserve future writes if a previous append failed.
-    })
-    .then(async () => {
-      try {
-        const logPath = getServerLogPath();
-        await fsp.mkdir(path.dirname(logPath), { recursive: true });
-        await fsp.appendFile(logPath, entry, "utf8");
-      } catch {
-        // Best effort diagnostics only.
-      }
-    });
+function logServerManagerEvent(message: string, meta?: unknown): void {
+  writeLocalLog(SERVER_LOG_FILE_NAME, "info", "server-manager", message, meta);
 }
 
 async function flushServerManagerLogWrites(): Promise<void> {
-  try {
-    await pendingServerLogWrite;
-  } catch {
-    // Best effort diagnostics only.
-  }
+  await flushLocalLogWrites(SERVER_LOG_FILE_NAME);
 }
 
 function summarizeLogChunk(chunk: string): string {
@@ -563,6 +697,24 @@ function summarizeLogChunk(chunk: string): string {
 function withStderrTail(message: string, stderrTail: string): string {
   const summary = summarizeLogChunk(stderrTail);
   return summary ? `${message}; stderr=${summary}` : message;
+}
+
+function captureWorkspaceServerStartupFailure(input: {
+  error: unknown;
+  workspaceId: string;
+  mode: "source" | "packaged";
+  attempt: number;
+}): void {
+  captureError(input.error, {
+    tags: {
+      operation: "workspace_server_start",
+      mode: input.mode,
+      attempt: input.attempt,
+    },
+    extra: {
+      workspaceId: input.workspaceId,
+    },
+  });
 }
 
 function shouldReplaceForMobileH3Request(
@@ -576,6 +728,8 @@ export class ServerManager {
   private readonly servers = new Map<string, ServerHandle>();
   private readonly pendingStarts = new Map<string, PendingServerHandle>();
 
+  constructor(private readonly options: ServerManagerOptions = {}) {}
+
   async startWorkspaceServer(
     opts: StartWorkspaceServerOptions,
   ): Promise<{ url: string; mobileH3: ServerListening["mobileH3"] }> {
@@ -583,6 +737,9 @@ export class ServerManager {
 
     assertSafeId(workspaceId, "workspaceId");
     await assertWorkspaceDirectory(workspacePath);
+    const startedAt = Date.now();
+    const productAnalyticsState =
+      opts.productAnalyticsState ?? this.options.getProductAnalyticsState?.() ?? null;
 
     const existing = this.servers.get(workspaceId);
     if (existing) {
@@ -597,6 +754,12 @@ export class ServerManager {
           }
           existing.cleanup();
         } else {
+          captureProductEvent("workspace_server_started", {
+            eventSource: "main",
+            status: "reused",
+            durationMs: Date.now() - startedAt,
+            yoloEnabled: yolo,
+          });
           return { url: existing.url, mobileH3: existing.mobileH3 };
         }
       }
@@ -627,9 +790,12 @@ export class ServerManager {
       );
     }
 
-    logServerManagerEvent(
-      `workspace=${workspaceId} start requested mode=${useSource ? "source" : "packaged"} workspacePath=${workspacePath}`,
-    );
+    logServerManagerEvent("workspace server start requested", {
+      workspaceId,
+      mode: useSource ? "source" : "packaged",
+      workspacePath,
+      yolo,
+    });
 
     const attemptCount = getSourceStartupAttemptCount(useSource);
     let previousError: unknown = null;
@@ -639,6 +805,8 @@ export class ServerManager {
         includeBundledFoundationModelsSdk: !useSource,
         includeBundledWindowsAiElectron: !useSource,
         rotateMobileH3Tls: opts.rotateMobileH3Tls === true,
+        privacyTelemetrySettings: opts.privacyTelemetrySettings,
+        productAnalyticsState,
       });
       const sourceEnvForAttempt = useSource ? buildSourceEnvForAttempt(serverEnv, attempt) : null;
       const cleanup = sourceEnvForAttempt?.cleanup ?? (() => {});
@@ -668,12 +836,15 @@ export class ServerManager {
             COWORK_DESKTOP_BUNDLE: "1",
           },
         });
-        spawnDescription = `${sidecar.command} ${sidecar.args.join(" ")}`.trim();
+        spawnDescription = `${path.basename(sidecar.command)} ${sidecar.args.join(" ")}`.trim();
       }
 
-      logServerManagerEvent(
-        `workspace=${workspaceId} attempt=${attempt}/${attemptCount} spawn=${spawnDescription}`,
-      );
+      logServerManagerEvent("workspace server spawn attempt", {
+        workspaceId,
+        attempt,
+        attemptCount,
+        spawn: spawnDescription,
+      });
 
       let cleaned = false;
       const cleanupOnce = () => {
@@ -696,16 +867,20 @@ export class ServerManager {
         if (DEBUG_SERVER_STDERR) {
           process.stderr.write(`[cowork-server] ${text}`);
         }
-        const summary = summarizeLogChunk(text);
-        if (summary) {
-          logServerManagerEvent(`workspace=${workspaceId} stderr=${summary}`);
-        }
+        logServerManagerEvent("workspace server stderr emitted", {
+          workspaceId,
+          bytes: Buffer.byteLength(text),
+          bunCrash: isLikelyBunSegfault(text),
+        });
       });
 
       try {
         const listening = await waitForServerListening(child);
         const url = appendBrowserAccessToken(listening.url, listening.browserAccessToken);
-        logServerManagerEvent(`workspace=${workspaceId} listening url=${listening.url}`);
+        logServerManagerEvent("workspace server listening", {
+          workspaceId,
+          url: listening.url,
+        });
         const pendingHandle = this.pendingStarts.get(workspaceId);
         if (pendingHandle?.child === child) {
           this.pendingStarts.delete(workspaceId);
@@ -716,6 +891,13 @@ export class ServerManager {
           url,
           mobileH3: listening.mobileH3 ?? null,
           cleanup: cleanupOnce,
+        });
+
+        captureProductEvent("workspace_server_started", {
+          eventSource: "main",
+          status: "started",
+          durationMs: Date.now() - startedAt,
+          yoloEnabled: yolo,
         });
 
         child.once("exit", () => {
@@ -747,9 +929,11 @@ export class ServerManager {
 
         if (shouldRetry) {
           previousError = error;
-          logServerManagerEvent(
-            `workspace=${workspaceId} retrying after Bun crash attempt=${attempt} error=${toErrorMessage(error)}`,
-          );
+          logServerManagerEvent("workspace server retrying after Bun crash", {
+            workspaceId,
+            attempt,
+            error: toErrorMessage(error),
+          });
           if (DEBUG_SERVER_STDERR) {
             process.stderr.write(
               "[cowork-server] Bun crashed during startup; retrying with async transpiler disabled.\n",
@@ -759,9 +943,23 @@ export class ServerManager {
         }
 
         if (isLikelyBunSegfault(stderrTail)) {
-          logServerManagerEvent(
-            `workspace=${workspaceId} bun_crash error=${toErrorMessage(error)} stderrTail=${summarizeLogChunk(stderrTail)}`,
-          );
+          captureWorkspaceServerStartupFailure({
+            error,
+            workspaceId,
+            mode: useSource ? "source" : "packaged",
+            attempt,
+          });
+          logServerManagerEvent("workspace server Bun crash", {
+            workspaceId,
+            error: toErrorMessage(error),
+            stderrBytes: Buffer.byteLength(stderrTail),
+          });
+          captureProductEvent("workspace_server_failed", {
+            eventSource: "main",
+            status: "failed",
+            errorCategory: "bun_crash",
+            durationMs: Date.now() - startedAt,
+          });
           throw new Error(
             withStderrTail(
               `Cowork server crashed inside Bun while starting: ${toErrorMessage(error)}. ` +
@@ -771,9 +969,23 @@ export class ServerManager {
           );
         }
 
-        logServerManagerEvent(
-          `workspace=${workspaceId} start_failed error=${toErrorMessage(error)} stderrTail=${summarizeLogChunk(stderrTail)}`,
-        );
+        captureWorkspaceServerStartupFailure({
+          error,
+          workspaceId,
+          mode: useSource ? "source" : "packaged",
+          attempt,
+        });
+        logServerManagerEvent("workspace server start failed", {
+          workspaceId,
+          error: toErrorMessage(error),
+          stderrBytes: Buffer.byteLength(stderrTail),
+        });
+        captureProductEvent("workspace_server_failed", {
+          eventSource: "main",
+          status: "failed",
+          errorCategory: "startup_failed",
+          durationMs: Date.now() - startedAt,
+        });
         const message = withStderrTail(toErrorMessage(error), stderrTail);
         throw error instanceof Error ? new Error(message, { cause: error }) : new Error(message);
       }
@@ -947,6 +1159,7 @@ export class ServerManager {
 }
 
 export const __internal = {
+  buildDesktopCrashReportingEnv,
   buildServerEnv,
   buildSourceEnvForAttempt,
   findBundledFoundationModelsSdkDir,
@@ -965,4 +1178,7 @@ export const __internal = {
   summarizeLogChunk,
   withStderrTail,
   waitForServerListening,
+  withoutInheritedCrashReportingEnv,
+  withoutInheritedObservabilityEnv,
+  withoutInheritedProductAnalyticsEnv,
 };

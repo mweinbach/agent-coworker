@@ -4,9 +4,16 @@ import type {
   DesktopFeatureFlags,
 } from "../../../../src/shared/featureFlags";
 import { resolveFeatureFlags } from "../../../../src/shared/featureFlags";
-import type { HydratedTranscriptSnapshot, PersistedState, TranscriptEvent } from "../app/types";
 import type {
+  HydratedTranscriptSnapshot,
+  PersistedPrivacyTelemetrySettings,
+  PersistedState,
+  TranscriptEvent,
+} from "../app/types";
+import type {
+  CaptureProductEventInput,
   ConfirmActionInput,
+  CreateDiagnosticsBundleOutput,
   CreateOneOffChatWorkspaceInput,
   CreateOneOffChatWorkspaceOutput,
   DesktopApi,
@@ -18,7 +25,9 @@ import type {
   SetWindowAppearanceInput,
   ShowQuickChatWindowInput,
   SystemAppearance,
+  TelemetryStatusSnapshot,
   UpdaterState,
+  UploadDiagnosticsBundleOutput,
 } from "./desktopApi";
 
 function getDesktopApi(): DesktopApi | undefined {
@@ -75,6 +84,7 @@ export async function startWorkspaceServer(opts: {
   workspacePath: string;
   yolo: boolean;
   featureFlags?: DesktopFeatureFlagOverrides;
+  privacyTelemetrySettings?: PersistedPrivacyTelemetrySettings;
 }): Promise<{ url: string }> {
   return await requireDesktopApi().startWorkspaceServer(opts);
 }
@@ -95,6 +105,10 @@ export async function loadState(): Promise<PersistedState> {
 
 export async function saveState(state: PersistedState): Promise<void> {
   await requireDesktopApi().saveState(state);
+}
+
+export async function captureProductEvent(input: CaptureProductEventInput): Promise<void> {
+  await requireDesktopApi().captureProductEvent(input);
 }
 
 export async function readTranscript(opts: { threadId: string }): Promise<TranscriptEvent[]> {
@@ -232,6 +246,29 @@ export async function confirmAction(opts: ConfirmActionInput): Promise<boolean> 
 
 export async function showNotification(opts: DesktopNotificationInput): Promise<boolean> {
   return await requireDesktopApi().showNotification(opts);
+}
+
+export async function createDiagnosticsBundle(): Promise<CreateDiagnosticsBundleOutput> {
+  return await requireDesktopApi().createDiagnosticsBundle();
+}
+
+export async function revealDiagnosticsBundle(opts: { path: string }): Promise<void> {
+  await requireDesktopApi().revealDiagnosticsBundle(opts);
+}
+
+export async function openLogsFolder(): Promise<void> {
+  await requireDesktopApi().openLogsFolder();
+}
+
+export async function uploadDiagnosticsBundle(opts: {
+  path: string;
+  confirmed: boolean;
+}): Promise<UploadDiagnosticsBundleOutput> {
+  return await requireDesktopApi().uploadDiagnosticsBundle(opts);
+}
+
+export async function getTelemetryStatus(): Promise<TelemetryStatusSnapshot> {
+  return await requireDesktopApi().getTelemetryStatus();
 }
 
 export async function getUpdateState(): Promise<UpdaterState> {

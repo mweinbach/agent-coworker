@@ -62,6 +62,40 @@ const DEFAULT_PLATFORM_CHROME = {
   disableCssBlur: false,
 } satisfies Awaited<ReturnType<typeof import("../../src/lib/desktopCommands").getPlatformChrome>>;
 
+export const DEFAULT_TELEMETRY_STATUS = {
+  globalKillSwitchActive: false,
+  crashReports: {
+    label: "Not configured",
+    status: "not_configured",
+    configured: false,
+    enabled: false,
+  },
+  productAnalytics: {
+    label: "Disabled",
+    status: "disabled",
+    configured: false,
+    enabled: false,
+  },
+  aiTraces: {
+    label: "Disabled",
+    status: "disabled",
+    configured: false,
+    enabled: false,
+  },
+  diagnosticsUpload: {
+    label: "Disabled",
+    status: "disabled",
+    configured: false,
+    enabled: false,
+  },
+  cloudSync: {
+    label: "Disabled",
+    status: "disabled",
+    configured: false,
+    enabled: false,
+  },
+} satisfies Awaited<ReturnType<typeof import("../../src/lib/desktopCommands").getTelemetryStatus>>;
+
 export function createDesktopCommandsMock(
   overrides: Partial<DesktopCommandsModule> = {},
 ): DesktopCommandsModule {
@@ -99,6 +133,7 @@ export function createDesktopCommandsMock(
     stopWorkspaceServer: async () => {},
     loadState: async () => ({ version: 2, workspaces: [], threads: [] }),
     saveState: async () => {},
+    captureProductEvent: async () => {},
     readTranscript: async () => [],
     hydrateTranscript: async () => ({
       feed: [],
@@ -140,6 +175,23 @@ export function createDesktopCommandsMock(
     trashPath: async () => {},
     confirmAction: async () => true,
     showNotification: async () => true,
+    createDiagnosticsBundle: async () => ({
+      path: "/tmp/cowork-diagnostics.json",
+      createdAt: "2026-06-01T00:00:00.000Z",
+      summary: "Cowork diagnostics bundle",
+      uploadConfigured: false,
+      uploadEnabled: false,
+    }),
+    revealDiagnosticsBundle: async () => {},
+    openLogsFolder: async () => {},
+    uploadDiagnosticsBundle: async () => ({
+      uploaded: false,
+      path: "/tmp/cowork-diagnostics.json",
+      diagnosticId: null,
+      url: null,
+      message: "No diagnostics upload endpoint is configured. The local bundle is ready.",
+    }),
+    getTelemetryStatus: async () => DEFAULT_TELEMETRY_STATUS,
     getUpdateState: async () => DEFAULT_UPDATE_STATE,
     checkForUpdates: async () => {},
     quitAndInstallUpdate: async () => {},

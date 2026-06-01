@@ -48,6 +48,8 @@ export function createPluginActions(
   | "enablePlugin"
   | "disablePlugin"
   | "deletePlugin"
+  | "checkPluginUpdate"
+  | "updatePlugin"
 > {
   const resolvePluginScopeForMutation = (
     workspaceId: string,
@@ -368,6 +370,78 @@ export function createPluginActions(
 
     deletePlugin: async (pluginId: string, scope?: PluginSelection["scope"]) => {
       await runPluginMutation("delete", pluginId, scope);
+    },
+
+    checkPluginUpdate: async (pluginId: string, scope?: PluginSelection["scope"]) => {
+      const workspaceId = managementWorkspaceIdFor(get);
+      if (!workspaceId) return;
+      const cwd = workspacePathFor(get, workspaceId);
+      const pluginScope = resolvePluginScopeForMutation(workspaceId, pluginId, scope);
+      const selection = pluginScope ? { id: pluginId, scope: pluginScope } : undefined;
+      const key = pluginPendingKey("checkUpdate", selection);
+      setMutationPending(set, workspaceId, "plugin", key, { pluginsError: null });
+      const rpcError: { message?: string } = {};
+      const ok = await requestJsonRpcControlEvent(
+        get,
+        set,
+        workspaceId,
+        "cowork/plugins/checkUpdate",
+        {
+          cwd,
+          pluginId,
+          ...(pluginScope ? { scope: pluginScope } : {}),
+        },
+        rpcError,
+      );
+      if (!ok) {
+        const detail = rpcError.message?.trim() || "Unable to check plugin update.";
+        clearFailedMutationSend(
+          set,
+          workspaceId,
+          key,
+          detail,
+          { pluginMutationError: detail },
+          "plugin",
+        );
+        return;
+      }
+      clearPluginMutationPending(workspaceId, key);
+    },
+
+    updatePlugin: async (pluginId: string, scope?: PluginSelection["scope"]) => {
+      const workspaceId = managementWorkspaceIdFor(get);
+      if (!workspaceId) return;
+      const cwd = workspacePathFor(get, workspaceId);
+      const pluginScope = resolvePluginScopeForMutation(workspaceId, pluginId, scope);
+      const selection = pluginScope ? { id: pluginId, scope: pluginScope } : undefined;
+      const key = pluginPendingKey("update", selection);
+      setMutationPending(set, workspaceId, "plugin", key, { pluginsError: null });
+      const rpcError: { message?: string } = {};
+      const ok = await requestJsonRpcControlEvent(
+        get,
+        set,
+        workspaceId,
+        "cowork/plugins/update",
+        {
+          cwd,
+          pluginId,
+          ...(pluginScope ? { scope: pluginScope } : {}),
+        },
+        rpcError,
+      );
+      if (!ok) {
+        const detail = rpcError.message?.trim() || "Unable to update plugin.";
+        clearFailedMutationSend(
+          set,
+          workspaceId,
+          key,
+          detail,
+          { pluginMutationError: detail },
+          "plugin",
+        );
+      } else if (pluginScope === "user") {
+        await refreshSharedWorkspaceState(get, set, workspaceId);
+      }
     },
   };
 }

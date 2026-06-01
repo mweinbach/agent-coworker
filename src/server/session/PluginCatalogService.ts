@@ -96,7 +96,9 @@ export class PluginCatalogService {
   }
 
   async emitPluginDetail(pluginId: string, scope?: PluginScope) {
-    const localCatalog = await buildPluginCatalogSnapshot(this.context.state.config);
+    const localCatalog = await buildPluginCatalogSnapshot(this.context.state.config, {
+      includeRemoteMarketplace: true,
+    });
     const localMatches = localCatalog.plugins.filter(
       (entry) => entry.id === pluginId && (scope === undefined || entry.scope === scope),
     );

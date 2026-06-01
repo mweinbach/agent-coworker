@@ -268,6 +268,8 @@ Currently implemented `cowork/*` methods include:
   - `cowork/plugins/enable`
   - `cowork/plugins/disable`
   - `cowork/plugins/delete`
+  - `cowork/plugins/checkUpdate`
+  - `cowork/plugins/update`
 - import controls (import plugins/skills already on disk from Claude Code `~/.claude` and Codex `~/.codex`)
   - `cowork/import/list`
   - `cowork/import/plugin`
@@ -295,7 +297,9 @@ The desktop JSON-RPC path now uses this namespace so one workspace connection ca
 - MCP management
 - memories
 
-`cowork/plugins/read`, `cowork/plugins/enable`, `cowork/plugins/disable`, and `cowork/plugins/delete` accept an optional `scope` field (`workspace` or `user`) so callers can address a specific installed copy when the same plugin id exists in both scopes. Plugin catalog snapshots keep installed plugins in `plugins`; built-in remote marketplace offers live in `availablePlugins`, use `installed: false`, include `installSource`, and do not expose local paths until installed.
+`cowork/plugins/read`, `cowork/plugins/enable`, `cowork/plugins/disable`, `cowork/plugins/delete`, `cowork/plugins/checkUpdate`, and `cowork/plugins/update` accept an optional `scope` field (`workspace` or `user`) so callers can address a specific installed copy when the same plugin id exists in both scopes. Plugin catalog snapshots keep installed plugins in `plugins`; built-in remote marketplace offers live in `availablePlugins`, use `installed: false`, include `installSource`, and do not expose local paths until installed.
+
+A marketplace `marketplace.json` may include `sourceHash: "sha256:<64 hex chars>"` on plugin and standalone skill entries. Installed marketplace copies report `installedSourceHash`, `latestSourceHash`, and `updateAvailable` when Cowork can compare the stored install hash with the latest marketplace hash. Updates stay opt-in: clients should offer `cowork/plugins/update` or `cowork/skills/installation/update` only when the catalog or explicit check says an update is available.
 
 A marketplace `marketplace.json` may also declare a `skills` array (same entry shape as `plugins`) for standalone skills. These surface in skill catalog snapshots under `availableSkills` (`installed: false`, each with an `installSource` GitHub URL); installed skills stay in `installations`. The `skills_catalog` event sets `availableSkillsPartial: true` whenever the remote marketplace was not fetched (local-only refresh) or the fetch failed, so clients keep their cached available-skill rows instead of clearing them. Install an available skill by passing its `installSource` to `cowork/skills/install` (no new method is required).
 
@@ -1033,7 +1037,16 @@ Returned in `server_hello` and `config_updated`:
   "triggers": ["/commit"],
   "descriptionSource": "frontmatter",
   "diagnostics": [],
-  "origin": { "kind": "github", "repo": "example/skills", "ref": "main", "subdir": "skills/commit" }
+  "origin": {
+    "kind": "github",
+    "repo": "example/skills",
+    "ref": "main",
+    "subdir": "skills/commit",
+    "sourceHash": "sha256:..."
+  },
+  "installedSourceHash": "sha256:...",
+  "latestSourceHash": "sha256:...",
+  "updateAvailable": false
 }
 ```
 
@@ -1084,11 +1097,28 @@ Install preview built from a pasted source input before any mutation occurs.
 {
   "installationId": "0ed1f33e-...",
   "canUpdate": true,
-  "preview": { "...": "SkillInstallPreview" }
+  "preview": { "...": "SkillInstallPreview" },
+  "installedSourceHash": "sha256:...",
+  "latestSourceHash": "sha256:..."
 }
 ```
 
 Represents whether a managed installation can be refreshed from its recorded origin and, when possible, includes the update preview.
+
+### PluginUpdateCheckResult
+
+```json
+{
+  "pluginId": "workspace-tools",
+  "scope": "user",
+  "canUpdate": true,
+  "preview": { "...": "PluginInstallPreview" },
+  "installedSourceHash": "sha256:...",
+  "latestSourceHash": "sha256:..."
+}
+```
+
+Represents whether a managed plugin can be refreshed from its recorded install source and, when possible, includes the update preview.
 
 ### HarnessContextPayload
 
@@ -2463,6 +2493,30 @@ Update-check result for a managed installation.
 | `type` | `"skill_installation_update_check"` | — |
 | `sessionId` | `string` | Session identifier |
 | `result` | `SkillUpdateCheckResult` | Update-check result |
+
+---
+
+### plugin_update_check
+
+Update-check result for a managed plugin.
+
+```json
+{
+  "type": "plugin_update_check",
+  "sessionId": "...",
+  "result": {
+    "pluginId": "workspace-tools",
+    "scope": "user",
+    "canUpdate": true
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `"plugin_update_check"` | — |
+| `sessionId` | `string` | Session identifier |
+| `result` | `PluginUpdateCheckResult` | Update-check result |
 
 ---
 

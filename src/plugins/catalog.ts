@@ -167,6 +167,9 @@ export async function buildPluginCatalogSnapshot(
             }
           : {}),
       });
+      if (metadataMarketplace?.sourceHash) {
+        entry.installedSourceHash = metadataMarketplace.sourceHash;
+      }
       plugins.push(entry);
     } catch (error) {
       warnings.push(`[plugins] Failed to catalog plugin at ${candidate.rootDir}: ${String(error)}`);
@@ -188,12 +191,31 @@ export async function buildPluginCatalogSnapshot(
           category: marketplaceEntry.category,
           installationPolicy: marketplaceEntry.installationPolicy,
           authenticationPolicy: marketplaceEntry.authenticationPolicy,
+          sourceHash: marketplaceEntry.sourceHash,
         });
         if (installedEntries.length > 0) {
           for (const plugin of installedEntries) {
-            plugin.marketplace = plugin.marketplace ?? marketplaceMetadata;
+            const installedSourceHash = plugin.installedSourceHash ?? plugin.marketplace?.sourceHash;
+            plugin.marketplace = plugin.marketplace
+              ? {
+                  ...plugin.marketplace,
+                  ...(marketplaceEntry.sourceHash
+                    ? { sourceHash: marketplaceEntry.sourceHash }
+                    : {}),
+                }
+              : marketplaceMetadata;
             if (marketplaceEntry.sourceInput) {
               plugin.installSource = marketplaceEntry.sourceInput;
+            }
+            if (marketplaceEntry.sourceHash) {
+              if (installedSourceHash) {
+                plugin.installedSourceHash = installedSourceHash;
+              }
+              plugin.latestSourceHash = marketplaceEntry.sourceHash;
+              plugin.updateAvailable = installedSourceHash !== marketplaceEntry.sourceHash;
+              if (plugin.updateAvailable && !installedSourceHash) {
+                plugin.updateCheckReason = "Installed source hash is missing.";
+              }
             }
           }
           continue;

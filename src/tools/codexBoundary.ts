@@ -7,7 +7,6 @@ const CODEX_NATIVE_EXECUTION_TOOL_NAMES = new Set([
   "grep",
   "webSearch",
   "webFetch",
-  "notebookEdit",
 ]);
 
 const MODEL_HIDDEN_COWORK_TOOL_NAMES = new Set(["usage"]);

@@ -71,7 +71,7 @@ function extractSpawnAgentBody(prompt: string): string {
   const patterns = [
     /<tool name="spawnAgent">\n([\s\S]*?)\n<\/tool>/,
     /<spawnAgent>\n([\s\S]*?)\n<\/spawnAgent>/,
-    /### spawnAgent\n([\s\S]*?)(?=\n### notebookEdit\b)/,
+    /### spawnAgent\n([\s\S]*?)(?=\n### skill\b)/,
   ];
 
   for (const pattern of patterns) {

@@ -13,7 +13,7 @@
 *   **Core Architecture:**
     *   **Server (`src/server/`):** Manages `AgentSession` state, LLM orchestration, and WebSocket communication.
     *   **Agent (`src/agent.ts`):** Implements the agent loop, system prompt management, and tool execution.
-    *   **Tools (`src/tools/`):** Built-in capabilities including `bash`, `read`, `write`, `edit`, `glob`, `grep`, `webSearch`, `webFetch`, `spawnAgent`, `todoWrite`, `notebookEdit`, `skill`, `memory`, and `usage`.
+    *   **Tools (`src/tools/`):** Built-in capabilities including `bash`, `read`, `write`, `edit`, `glob`, `grep`, `webSearch`, `webFetch`, `spawnAgent`, `todoWrite`, `skill`, `memory`, and `usage`.
     *   **Clients:**
         *   **Desktop (`apps/desktop/`):** Primary native GUI using Electron.
         *   **CLI (`src/cli/`):** Minimal REPL for direct interaction.

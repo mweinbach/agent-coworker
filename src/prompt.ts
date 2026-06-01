@@ -370,7 +370,7 @@ function renderSpawnAgentSpecificPrompt(prompt: string, config: AgentConfig): st
     return prompt.replace(/<spawnAgent>[\s\S]*?<\/spawnAgent>/i, xmlSection);
   }
   if (prompt.includes("### spawnAgent")) {
-    return prompt.replace(/### spawnAgent[\s\S]*?(?=\n### notebookEdit\b)/i, markdownSection);
+    return prompt.replace(/### spawnAgent[\s\S]*?(?=\n### skill\b)/i, markdownSection);
   }
   return prompt;
 }

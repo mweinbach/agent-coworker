@@ -106,12 +106,11 @@ Built-in capabilities exposed to the agent:
 | `grep`         | Search file contents           | No                |
 | `webSearch`    | Search the web                 | No                |
 | `webFetch`     | Fetch web content              | No                |
-| `ask`          | Ask user questions             | No                |
+| `AskUserQuestion` | Ask user questions          | No                |
 | `todoWrite`    | Update progress list           | No                |
 | `spawnAgent`   | Delegate to a child agent      | No                |
 | `skill`        | Load skill instructions        | No                |
 | `memory`       | Read/write persistent memory   | No                |
-| `notebookEdit` | Edit Jupyter notebook cells    | Yes (write path)  |
 
 
 When agent control is enabled, the following tools are also available: `listAgents`, `sendAgentInput`, `waitForAgent`, `inspectAgent`, `resumeAgent`, `closeAgent`.

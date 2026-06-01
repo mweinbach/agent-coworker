@@ -136,7 +136,7 @@ function isCanonicalPathInsideRoots(filePath: string, roots: string[]): boolean 
 export async function assertWritePathAllowed(
   filePath: string,
   config: AgentConfig,
-  action: "write" | "edit" | "notebookEdit",
+  action: "write" | "edit",
 ): Promise<string> {
   const resolved = path.resolve(filePath);
   const roots = writeRoots(config);

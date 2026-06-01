@@ -8,7 +8,6 @@ import {
   createGlobTool,
   createGrepTool,
   createMemoryTool,
-  createNotebookEditTool,
   createReadTool,
   createSkillTool,
   createTodoWriteTool,
@@ -104,7 +103,3 @@ describe("todoWrite tool", () => {
     expect(res).not.toContain("Old task");
   });
 });
-
-// ---------------------------------------------------------------------------
-// notebookEdit tool
-// ---------------------------------------------------------------------------

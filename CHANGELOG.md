@@ -4,6 +4,82 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.1.9 - 2026-06-01
+
+### Added
+
+- **Canvas-backed spreadsheet editing** — Replaced the spreadsheet preview
+  surface with an Excel-like canvas (Univer) that supports direct cell
+  editing, a formula/value bar, click-to-select, inline editing, and
+  arrow/Tab/Enter navigation with viewport auto-paging, alongside an
+  in-app Maximize/Restore full-bleed layout.
+- **Lossless CSV and XLSX round-trips** — CSV edits preserve BOM, line
+  terminators, and trailing-newline state through a quote-aware round trip.
+  XLSX edits apply a surgical zip patch (jszip + fast-xml-parser) that only
+  rewrites the target worksheet XML and keeps each cell's style index, so
+  fonts, number formats, charts, and other sheets stay byte-identical.
+- **Atomic spreadsheet batch patches** — `spreadsheetEditBatch` now runs
+  against a shared in-memory editing core with a per-file write lock, so
+  bulk pastes apply as one read-modify-write and concurrent batches against
+  the same file are serialized without lost edits. Empty batches no-op
+  before touching disk, and operation errors are attributed to the failing
+  op's index.
+- **Artifact runtime support** — Added an `artifactRuntime` module that
+  discovers, prepares, and migrates the LibreOffice/soffice runtime used
+  for spreadsheet and presentation previews, and is wired into the server
+  preview path.
+- **Unified canvas request envelope** — Documents, text, slides, and
+  spreadsheets now emit a single structured XML envelope for canvas
+  requests, parsed by a shared `parseCanvasRequest` + `CanvasRequestBody`
+  helper, with a compact file/sheet/region header rendered in chat and a
+  legacy markdown fallback for historical transcripts.
+- **Marketplace extension update detection** — The plugin marketplace
+  surfaces extension updates so installed plugins can be refreshed without
+  a full reinstall.
+- **Markdown model prompts** — Migrated model-specific system prompts from
+  JSON to Markdown, with refreshed metadata across the registry.
+- **GPT-5.4 Pro and Nano** — Added OpenAI registry entries for GPT-5.4 Pro
+  and Nano.
+
+### Changed
+
+- **Clarifying question tool** — Renamed the model-facing `ask` tool to
+  `AskUserQuestion` across registration, prompts, and docs, and dropped
+  the redundant `AskUserQuestion` alias.
+- **Built-in toolbelt** — Removed the unused `notebookEdit` tool
+  end-to-end and the model-visible `usage` tool. Harness eval scenarios,
+  permissions, codex boundary, and prompts were updated to match.
+
+### Fixed
+
+- **Canvas hooks-stability** — Canvas preview no longer crashes when a
+  file flips between markdown/text and CSV/XLSX/PPTX (moved spreadsheet
+  and PPTX returns below all hooks and guarded editor-only effects).
+- **Lossy markdown editing** — Numbered lists no longer silently become
+  bullets (`<ol>` serializes as `N.`), list markers now require
+  whitespace, and link hrefs are hardened against `javascript:` and
+  `data:` schemes.
+- **Steer reference context** — Queued steer messages retain the
+  reference context supplied with the steer that queued them.
+- **Forced skill injection** — Capped by per-skill and total byte limits
+  so large skill sets can't blow up model context.
+- **Oversized file reads** — Desktop `readFile` is capped so large files
+  no longer crash the renderer; canvas previews show a truncation banner
+  with guidance and keep the file read-only.
+- **Windows markdown links** — Preserved on desktop so `file://` links
+  round-trip cleanly on Windows builds.
+- **Univer spreadsheet polish** — Fixed formula-bar styling specificity,
+  save-state icon, maximize control wiring, canvas editor lifecycle,
+  save ownership conflicts, maximized-canvas clipping, and unload save
+  failure reporting.
+- **Spreadsheet save guards** — Failed saves leave the workbook
+  untouched, column resets persist, and date/style metadata is preserved
+  through the XLSX patch.
+- **Marketplace refresh** — Workspace tools and skills refresh on
+  detected updates, and stale skill/extension metadata is reconciled.
+- **Model prompt review findings** — Sharpened agent invocation patterns
+  surfaced by prompt review.
+
 ## 1.1.8 - 2026-05-29
 
 ### Fixed

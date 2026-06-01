@@ -29,9 +29,7 @@ const revealPathMock = mock(async () => {});
 const installPluginsMock = mock(async (_sourceInput: string, _scope: "workspace" | "user") => {});
 const enablePluginMock = mock(async (_pluginId: string, _scope?: "workspace" | "user") => {});
 const disablePluginMock = mock(async (_pluginId: string, _scope?: "workspace" | "user") => {});
-const checkPluginUpdateMock = mock(
-  async (_pluginId: string, _scope?: "workspace" | "user") => {},
-);
+const checkPluginUpdateMock = mock(async (_pluginId: string, _scope?: "workspace" | "user") => {});
 const updatePluginMock = mock(async (_pluginId: string, _scope?: "workspace" | "user") => {});
 
 mock.module("../src/lib/desktopCommands", () =>

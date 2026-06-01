@@ -195,7 +195,8 @@ export async function buildPluginCatalogSnapshot(
         });
         if (installedEntries.length > 0) {
           for (const plugin of installedEntries) {
-            const installedSourceHash = plugin.installedSourceHash ?? plugin.marketplace?.sourceHash;
+            const installedSourceHash =
+              plugin.installedSourceHash ?? plugin.marketplace?.sourceHash;
             plugin.marketplace = plugin.marketplace
               ? {
                   ...plugin.marketplace,

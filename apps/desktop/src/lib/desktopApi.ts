@@ -307,6 +307,18 @@ export type UpdaterState = {
 
 const desktopAppVersion = desktopPackage.version;
 
+export type DesktopCrashReportingConfig = {
+  enabled: boolean;
+  dsnConfigured: boolean;
+  dsn: string | null;
+  release: string | null;
+  environment: "development" | "packaged" | "beta" | "production";
+  appVersion: string;
+  platform: string;
+  arch: string;
+  packaged: boolean;
+};
+
 export function createDefaultUpdaterState(
   currentVersion = desktopAppVersion,
   packaged = false,
@@ -350,6 +362,7 @@ export type PlatformChromeInfo = {
 export interface DesktopApi {
   readonly features: DesktopFeatureFlags;
   readonly isPackaged?: boolean;
+  readonly crashReporting?: DesktopCrashReportingConfig;
   resolveDesktopFeatureFlags(overrides?: DesktopFeatureFlagOverrides): DesktopFeatureFlags;
   createOneOffChatWorkspace(
     opts?: CreateOneOffChatWorkspaceInput,

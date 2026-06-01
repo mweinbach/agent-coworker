@@ -21,6 +21,7 @@
     "test": "bun test"
   },
   "dependencies": {
+    "@sentry/electron": "7.13.0",
     "@univerjs/preset-sheets-conditional-formatting": "0.25.0",
     "@univerjs/preset-sheets-core": "0.25.0",
     "@univerjs/preset-sheets-data-validation": "0.25.0",

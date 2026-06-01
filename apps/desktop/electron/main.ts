@@ -16,6 +16,10 @@ import {
 } from "../src/lib/desktopApi";
 import { registerDesktopIpc } from "./ipc";
 import {
+  captureCrashReportingError,
+  initElectronMainCrashReporting,
+} from "./services/crashReporting";
+import {
   applySystemAppearanceToWindow,
   getInitialWindowAppearanceOptions,
   getSystemAppearanceSnapshot,
@@ -74,6 +78,13 @@ const updater = new DesktopUpdaterService({
   },
   notifyUpdateReady: (state) => {
     showUpdateReadyNotification(state);
+  },
+  captureError: (error, context) => {
+    captureCrashReportingError(error, {
+      tags: {
+        operation: context.operation,
+      },
+    });
   },
 });
 let unregisterAppearanceListener = () => {};
@@ -271,7 +282,7 @@ function resolveDesktopSmokeConfig(): { workspacePath: string; outputPath: strin
   return { workspacePath, outputPath };
 }
 
-async function maybeRunPackagedSmoke(): Promise<boolean> {
+async function maybeRunPackagedSmoke(initialState: PersistedState | null): Promise<boolean> {
   const smokeConfig = resolveDesktopSmokeConfig();
   if (!smokeConfig) {
     return false;
@@ -284,6 +295,7 @@ async function maybeRunPackagedSmoke(): Promise<boolean> {
       workspaceId,
       workspacePath: smokeConfig.workspacePath,
       yolo: true,
+      privacyTelemetrySettings: initialState?.privacyTelemetrySettings,
     });
     await runDesktopSmokePromptLoadCheck({
       url: listening.url,
@@ -313,6 +325,9 @@ async function maybeRunPackagedSmoke(): Promise<boolean> {
     app.exit(0);
     return true;
   } catch (error) {
+    captureCrashReportingError(error, {
+      tags: { operation: "desktop_smoke" },
+    });
     await fs.mkdir(path.dirname(smokeConfig.outputPath), { recursive: true });
     await fs.writeFile(
       smokeConfig.outputPath,
@@ -648,76 +663,87 @@ if (!gotSingleInstanceLock) {
     void quickChatController?.showMainWindow();
   });
 
-  app.whenReady().then(async () => {
-    if (await maybeRunPackagedSmoke()) {
-      return;
-    }
+  app
+    .whenReady()
+    .then(async () => {
+      const initialState: PersistedState | null = await persistence.loadState().catch(() => null);
+      await initElectronMainCrashReporting(initialState?.privacyTelemetrySettings);
 
-    quickChatController = new QuickChatController({
-      appName: DESKTOP_APP_NAME,
-      trayIconPath: resolveTrayIconPath(__dirname),
-      getMainWindow: () => mainWindow,
-      createMainWindow,
-      createQuickChatWindow,
-      retargetQuickChatWindow,
-      createUtilityWindow,
-    });
-    const initialState: PersistedState | null = await persistence.loadState().catch(() => null);
-    if (initialState) {
-      quickChatController.applyPersistedState(initialState);
-    }
-    quickChatController.initialize();
+      if (await maybeRunPackagedSmoke(initialState)) {
+        return;
+      }
 
-    registerDesktopIpc({
-      mobileRelayBridge,
-      persistence,
-      serverManager,
-      updater,
-      showMainWindow: () => quickChatController?.showMainWindow(),
-      consumePendingMenuCommands: () => menuCommandDispatcher.drainPending(),
-      showQuickChatWindow: (opts?: ShowQuickChatWindowInput) =>
-        quickChatController?.showQuickChatWindow(opts),
-      showCanvasWindow: (opts: ShowCanvasWindowInput) => {
-        void createCanvasWindow(opts);
-      },
-      shouldKeepPopupWindowsAlive: () =>
-        quickChatController?.shouldKeepPopupWindowsAlive() === true,
-      applyPersistedState: (state: PersistedState) => {
-        quickChatController?.applyPersistedState(state);
-      },
-    });
-    unregisterAppearanceListener = registerSystemAppearanceListener(
-      (appearance: SystemAppearance) => {
-        for (const win of BrowserWindow.getAllWindows()) {
-          if (win.isDestroyed()) {
-            continue;
+      quickChatController = new QuickChatController({
+        appName: DESKTOP_APP_NAME,
+        trayIconPath: resolveTrayIconPath(__dirname),
+        getMainWindow: () => mainWindow,
+        createMainWindow,
+        createQuickChatWindow,
+        retargetQuickChatWindow,
+        createUtilityWindow,
+      });
+      if (initialState) {
+        quickChatController.applyPersistedState(initialState);
+      }
+      quickChatController.initialize();
+
+      registerDesktopIpc({
+        mobileRelayBridge,
+        persistence,
+        serverManager,
+        updater,
+        showMainWindow: () => quickChatController?.showMainWindow(),
+        consumePendingMenuCommands: () => menuCommandDispatcher.drainPending(),
+        showQuickChatWindow: (opts?: ShowQuickChatWindowInput) =>
+          quickChatController?.showQuickChatWindow(opts),
+        showCanvasWindow: (opts: ShowCanvasWindowInput) => {
+          void createCanvasWindow(opts);
+        },
+        shouldKeepPopupWindowsAlive: () =>
+          quickChatController?.shouldKeepPopupWindowsAlive() === true,
+        applyPersistedState: (state: PersistedState) => {
+          quickChatController?.applyPersistedState(state);
+        },
+      });
+      unregisterAppearanceListener = registerSystemAppearanceListener(
+        (appearance: SystemAppearance) => {
+          for (const win of BrowserWindow.getAllWindows()) {
+            if (win.isDestroyed()) {
+              continue;
+            }
+            applySystemAppearanceToWindow(win, appearance);
           }
-          applySystemAppearanceToWindow(win, appearance);
-        }
-        emitDesktopEvent(DESKTOP_EVENT_CHANNELS.systemAppearanceChanged, appearance);
-      },
-    );
+          emitDesktopEvent(DESKTOP_EVENT_CHANNELS.systemAppearanceChanged, appearance);
+        },
+      );
 
-    installDesktopApplicationMenu({
-      includeDevTools: !app.isPackaged,
-      openExternal: (url: string) => {
-        void shell.openExternal(url);
-      },
-      openQuickChat: () => {
-        void quickChatController?.showQuickChatWindow();
-      },
-      sendCommand: (command: DesktopMenuCommand) => {
-        void sendMenuCommand(command);
-      },
-    });
+      installDesktopApplicationMenu({
+        includeDevTools: !app.isPackaged,
+        openExternal: (url: string) => {
+          void shell.openExternal(url);
+        },
+        openQuickChat: () => {
+          void quickChatController?.showQuickChatWindow();
+        },
+        sendCommand: (command: DesktopMenuCommand) => {
+          void sendMenuCommand(command);
+        },
+      });
 
-    updater.start();
-    void ensureMainWindow();
-
-    app.on("activate", () => {
+      updater.start();
       void ensureMainWindow();
+
+      app.on("activate", () => {
+        void ensureMainWindow();
+      });
+    })
+    .catch((error) => {
+      captureCrashReportingError(error, {
+        tags: { operation: "desktop_startup" },
+      });
+      console.error(error);
+      app.exit(1);
     });
-  });
 
   app.on(
     "before-quit",

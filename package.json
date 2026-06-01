@@ -85,6 +85,7 @@
     "@opentelemetry/sdk-node": "^0.218.0",
     "@peculiar/x509": "^2.0.0",
     "@react-pdf/renderer": "^4.5.1",
+    "@sentry/bun": "10.55.0",
     "docx": "^9.7.0",
     "fast-glob": "^3.3.3",
     "jsdom": "^29.1.1",

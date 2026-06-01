@@ -21,6 +21,26 @@ Repository contents must never be uploaded or synced through cloud sync. Diagnos
 
 Prompts, responses, shell commands, stdout/stderr, transcripts, file paths, and uploaded file names may only be included in AI traces when both `aiTraceTelemetryEnabled` and `aiTracePayloadsEnabled` are true.
 
+## Crash Reports
+
+Crash reports are optional and only start when the Crash reports toggle is on and a Sentry DSN is configured. They cover Electron main, Electron renderer, and the Cowork server sidecar.
+
+Crash reports may include sanitized error names/messages, stack traces, component tags, release/app version, environment, platform, architecture, and whether the desktop app is packaged. The renderer does not enable Sentry session replay, tracing, structured logs, user identification, or AI instrumentation.
+
+Crash reports must never include prompts, completions, file contents, shell commands, stdout/stderr, API keys, auth tokens, cookies, local usernames, or absolute workspace paths. The Sentry wrapper runs `beforeSend` and `beforeBreadcrumb` scrubbing to redact local paths, known workspace/home paths, secret-like keys, request bodies, large payloads, console breadcrumbs, and unsafe automatic breadcrumbs.
+
+Packaged or self-hosted builds can configure crash reports with:
+
+| Variable | Purpose |
+| --- | --- |
+| `COWORK_SENTRY_DSN` | Preferred Sentry DSN. |
+| `SENTRY_DSN` | Fallback DSN when already conventional in the deployment environment. |
+| `COWORK_RELEASE` | Preferred release identifier. |
+| `SENTRY_RELEASE` | Fallback release identifier. |
+| `COWORK_SENTRY_ENVIRONMENT` | Optional environment: `development`, `packaged`, `beta`, or `production`. |
+
+Desktop sidecars do not inherit arbitrary `SENTRY_*` or `COWORK_SENTRY_*` values. The desktop process strips them and passes only the safe crash-reporting env when the user toggle is enabled and a DSN is configured.
+
 ## Integration Contract
 
 Integrations must read the normalized desktop setting from `privacyTelemetrySettings` before starting any network telemetry, reporting, upload, or sync work. Missing or malformed settings must be treated as false by calling `normalizePrivacyTelemetrySettings()`.

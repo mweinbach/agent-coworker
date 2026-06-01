@@ -1,6 +1,10 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { z } from "zod";
 import {
+  resolveCrashReportingConfig,
+  type CrashReportingEnvironment,
+} from "../../../src/telemetry/crashReporting";
+import {
   type DesktopFeatureFlagOverrides,
   normalizeDesktopFeatureFlagOverrides,
   resolveDesktopFeatureFlags,
@@ -14,6 +18,7 @@ import {
   DESKTOP_EVENT_CHANNELS,
   DESKTOP_IPC_CHANNELS,
   type DeleteTranscriptInput,
+  type DesktopCrashReportingConfig,
   type DesktopApi,
   type DesktopMenuCommand,
   type DesktopNotificationInput,
@@ -260,11 +265,40 @@ function resolvePreloadDesktopFeatureFlags(overrides?: DesktopFeatureFlagOverrid
   });
 }
 
+function resolvePreloadCrashReportingConfig(): DesktopCrashReportingConfig {
+  const appVersion = process.env.COWORK_RELEASE?.trim() || "unknown";
+  const config = resolveCrashReportingConfig({
+    component: "electron-renderer",
+    enabled: process.env.COWORK_CRASH_REPORTS_ENABLED === "true",
+    env: process.env,
+    fallbackRelease: appVersion,
+    appVersion,
+    environment: process.env.COWORK_SENTRY_ENVIRONMENT as CrashReportingEnvironment | undefined,
+    isPackaged: process.env.COWORK_IS_PACKAGED === "true",
+    platform: process.platform,
+    arch: process.arch,
+  });
+
+  return {
+    enabled: config.enabled,
+    dsnConfigured: config.dsnConfigured,
+    dsn: config.dsn,
+    release: config.release,
+    environment: config.environment,
+    appVersion,
+    platform: process.platform,
+    arch: process.arch,
+    packaged: process.env.COWORK_IS_PACKAGED === "true",
+  };
+}
+
 const desktopFeatures = Object.freeze(resolvePreloadDesktopFeatureFlags());
+const crashReporting = Object.freeze(resolvePreloadCrashReportingConfig());
 
 const desktopApi = Object.freeze<DesktopApi>({
   features: desktopFeatures,
   isPackaged: process.env.COWORK_IS_PACKAGED === "true",
+  crashReporting,
   resolveDesktopFeatureFlags: (overrides) =>
     resolvePreloadDesktopFeatureFlags(normalizeDesktopFeatureFlagOverrides(overrides)),
   createOneOffChatWorkspace: (opts: CreateOneOffChatWorkspaceInput = {}) => {

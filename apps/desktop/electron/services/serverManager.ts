@@ -12,6 +12,10 @@ import {
   normalizePrivacyTelemetrySettings,
   type PersistedPrivacyTelemetrySettings,
 } from "../../src/app/types";
+import {
+  captureError,
+  resolveCrashReportingConfig,
+} from "../../../../src/telemetry/crashReporting";
 import { resolvePackagedBuiltinDistDir } from "./desktopBuiltinPaths";
 import type {
   MobileRelayTrustedDevicePermissionKey,
@@ -39,6 +43,7 @@ const SERVER_LOG_FILE_NAME = "server.log";
 const DEBUG_SERVER_STDERR = process.env.COWORK_DESKTOP_DEBUG_SERVER_STDERR === "1";
 
 const OBSERVABILITY_ENV_PREFIXES = ["AGENT_OBSERVABILITY_", "LANGFUSE_"] as const;
+const CRASH_REPORTING_ENV_PREFIXES = ["COWORK_SENTRY_", "SENTRY_"] as const;
 
 type ServerHandle = {
   child: ServerChildProcess;
@@ -474,12 +479,11 @@ function buildServerEnv(
     opts.includeBundledWindowsAiElectron && !process.env.COWORK_WINDOWS_AI_ELECTRON_DIR
       ? findBundledWindowsAiElectronDir()
       : null;
-  const privacyTelemetrySettings = normalizePrivacyTelemetrySettings(
-    opts.privacyTelemetrySettings,
-  );
-  const processEnv = privacyTelemetrySettings.aiTraceTelemetryEnabled
+  const privacyTelemetrySettings = normalizePrivacyTelemetrySettings(opts.privacyTelemetrySettings);
+  const inheritedEnv = privacyTelemetrySettings.aiTraceTelemetryEnabled
     ? { ...process.env }
     : withoutInheritedObservabilityEnv(process.env);
+  const processEnv = withoutInheritedCrashReportingEnv(inheritedEnv);
   return {
     ...processEnv,
     COWORK_WEB_DESKTOP_SERVICE: "1",
@@ -503,6 +507,7 @@ function buildServerEnv(
       : {}),
     ...(opts.rotateMobileH3Tls ? { COWORK_H3_ROTATE_TLS: "1" } : {}),
     ...buildDesktopObservabilityEnv(privacyTelemetrySettings),
+    ...buildDesktopCrashReportingEnv(privacyTelemetrySettings),
   };
 }
 
@@ -510,6 +515,19 @@ function withoutInheritedObservabilityEnv(env: NodeJS.ProcessEnv): NodeJS.Proces
   const next = { ...env };
   for (const key of Object.keys(next)) {
     if (OBSERVABILITY_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))) {
+      delete next[key];
+    }
+  }
+  return next;
+}
+
+function withoutInheritedCrashReportingEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const next = { ...env };
+  for (const key of Object.keys(next)) {
+    if (
+      key === "COWORK_CRASH_REPORTS_ENABLED" ||
+      CRASH_REPORTING_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))
+    ) {
       delete next[key];
     }
   }
@@ -541,6 +559,35 @@ function buildDesktopObservabilityEnv(
     AGENT_OBSERVABILITY_RECORD_PAYLOADS: recordPayloads,
     LANGFUSE_TRACING_ENVIRONMENT: app.isPackaged ? "desktop-packaged" : "desktop-dev",
     LANGFUSE_RELEASE: resolveAppRelease(),
+  };
+}
+
+function buildDesktopCrashReportingEnv(
+  privacyTelemetrySettings: ReturnType<typeof normalizePrivacyTelemetrySettings>,
+): NodeJS.ProcessEnv {
+  const release = resolveAppRelease();
+  const config = resolveCrashReportingConfig({
+    component: "cowork-server",
+    enabled: privacyTelemetrySettings.crashReportsEnabled,
+    env: process.env,
+    fallbackRelease: release,
+    appVersion: release,
+    isPackaged: app.isPackaged,
+    platform: process.platform,
+    arch: process.arch,
+  });
+
+  if (!config.enabled || !config.dsn) {
+    return {
+      COWORK_CRASH_REPORTS_ENABLED: "false",
+    };
+  }
+
+  return {
+    COWORK_CRASH_REPORTS_ENABLED: "true",
+    COWORK_SENTRY_DSN: config.dsn,
+    COWORK_RELEASE: config.release ?? release,
+    COWORK_SENTRY_ENVIRONMENT: config.environment,
   };
 }
 
@@ -616,6 +663,24 @@ function summarizeLogChunk(chunk: string): string {
 function withStderrTail(message: string, stderrTail: string): string {
   const summary = summarizeLogChunk(stderrTail);
   return summary ? `${message}; stderr=${summary}` : message;
+}
+
+function captureWorkspaceServerStartupFailure(input: {
+  error: unknown;
+  workspaceId: string;
+  mode: "source" | "packaged";
+  attempt: number;
+}): void {
+  captureError(input.error, {
+    tags: {
+      operation: "workspace_server_start",
+      mode: input.mode,
+      attempt: input.attempt,
+    },
+    extra: {
+      workspaceId: input.workspaceId,
+    },
+  });
 }
 
 function shouldReplaceForMobileH3Request(
@@ -813,6 +878,12 @@ export class ServerManager {
         }
 
         if (isLikelyBunSegfault(stderrTail)) {
+          captureWorkspaceServerStartupFailure({
+            error,
+            workspaceId,
+            mode: useSource ? "source" : "packaged",
+            attempt,
+          });
           logServerManagerEvent(
             `workspace=${workspaceId} bun_crash error=${toErrorMessage(error)} stderrTail=${summarizeLogChunk(stderrTail)}`,
           );
@@ -825,6 +896,12 @@ export class ServerManager {
           );
         }
 
+        captureWorkspaceServerStartupFailure({
+          error,
+          workspaceId,
+          mode: useSource ? "source" : "packaged",
+          attempt,
+        });
         logServerManagerEvent(
           `workspace=${workspaceId} start_failed error=${toErrorMessage(error)} stderrTail=${summarizeLogChunk(stderrTail)}`,
         );
@@ -1001,6 +1078,7 @@ export class ServerManager {
 }
 
 export const __internal = {
+  buildDesktopCrashReportingEnv,
   buildServerEnv,
   buildSourceEnvForAttempt,
   findBundledFoundationModelsSdkDir,
@@ -1019,4 +1097,6 @@ export const __internal = {
   summarizeLogChunk,
   withStderrTail,
   waitForServerListening,
+  withoutInheritedCrashReportingEnv,
+  withoutInheritedObservabilityEnv,
 };

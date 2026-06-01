@@ -64,6 +64,34 @@ function createFakeChild(): FakeChild {
   return child;
 }
 
+async function withProcessEnv<T>(
+  patch: Record<string, string | undefined>,
+  fn: () => T | Promise<T>,
+): Promise<T> {
+  const previous = new Map<string, string | undefined>();
+  for (const key of Object.keys(patch)) {
+    previous.set(key, process.env[key]);
+    const value = patch[key];
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+
+  try {
+    return await fn();
+  } finally {
+    for (const [key, value] of previous.entries()) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
 describe("desktop server manager startup parsing", () => {
   beforeEach(() => {
     setElectronMockOverrides(electronMockOverrides);
@@ -303,6 +331,58 @@ describe("desktop server manager startup mode", () => {
     expect(env.AGENT_OBSERVABILITY_RECORD_INPUTS).toBe("true");
     expect(env.AGENT_OBSERVABILITY_RECORD_OUTPUTS).toBe("true");
     expect(env.AGENT_OBSERVABILITY_RECORD_PAYLOADS).toBe("true");
+  });
+
+  test("buildServerEnv strips inherited Sentry env and disables crash reporting without consent", async () => {
+    await withProcessEnv(
+      {
+        COWORK_CRASH_REPORTS_ENABLED: "true",
+        COWORK_SENTRY_DSN: "https://cowork@sentry.example/1",
+        COWORK_SENTRY_ENVIRONMENT: "production",
+        SENTRY_AUTH_TOKEN: "auth-token",
+        SENTRY_DSN: "https://fallback@sentry.example/1",
+      },
+      () => {
+        const env = __internal.buildServerEnv(undefined, {
+          privacyTelemetrySettings: {
+            crashReportsEnabled: false,
+            aiTraceTelemetryEnabled: true,
+          },
+        });
+
+        expect(env.COWORK_CRASH_REPORTS_ENABLED).toBe("false");
+        expect(env.COWORK_SENTRY_DSN).toBeUndefined();
+        expect(env.COWORK_SENTRY_ENVIRONMENT).toBeUndefined();
+        expect(env.SENTRY_AUTH_TOKEN).toBeUndefined();
+        expect(env.SENTRY_DSN).toBeUndefined();
+      },
+    );
+  });
+
+  test("buildServerEnv passes only safe crash reporting env when enabled and configured", async () => {
+    await withProcessEnv(
+      {
+        COWORK_SENTRY_DSN: "https://cowork@sentry.example/1",
+        COWORK_SENTRY_ENVIRONMENT: "production",
+        COWORK_RELEASE: "desktop-release",
+        SENTRY_AUTH_TOKEN: "auth-token",
+        SENTRY_DSN: "https://fallback@sentry.example/1",
+      },
+      () => {
+        const env = __internal.buildServerEnv(undefined, {
+          privacyTelemetrySettings: {
+            crashReportsEnabled: true,
+          },
+        });
+
+        expect(env.COWORK_CRASH_REPORTS_ENABLED).toBe("true");
+        expect(env.COWORK_SENTRY_DSN).toBe("https://cowork@sentry.example/1");
+        expect(env.COWORK_SENTRY_ENVIRONMENT).toBe("production");
+        expect(env.COWORK_RELEASE).toBe("desktop-release");
+        expect(env.SENTRY_AUTH_TOKEN).toBeUndefined();
+        expect(env.SENTRY_DSN).toBeUndefined();
+      },
+    );
   });
 
   test("appendBrowserAccessToken returns a browser-authorized websocket URL", () => {

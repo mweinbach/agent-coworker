@@ -82,6 +82,7 @@ type DesktopUpdaterServiceOptions = {
   isPackaged: boolean;
   onStateChange?: (state: UpdaterState) => void;
   notifyUpdateReady?: (state: UpdaterState) => void;
+  captureError?: (error: unknown, context: { operation: string }) => void;
   updater?: UpdaterClient;
   platform?: NodeJS.Platform;
   arch?: string;
@@ -172,6 +173,7 @@ export class DesktopUpdaterService {
   private readonly isPackaged: boolean;
   private readonly onStateChange?: (state: UpdaterState) => void;
   private readonly notifyUpdateReady?: (state: UpdaterState) => void;
+  private readonly captureError?: (error: unknown, context: { operation: string }) => void;
   private readonly updater: UpdaterClient;
   private readonly platform: NodeJS.Platform;
   private readonly arch: string;
@@ -191,6 +193,7 @@ export class DesktopUpdaterService {
     this.isPackaged = options.isPackaged;
     this.onStateChange = options.onStateChange;
     this.notifyUpdateReady = options.notifyUpdateReady;
+    this.captureError = options.captureError;
     this.updater = options.updater ?? getDefaultUpdaterClient();
     this.platform = options.platform ?? process.platform;
     this.arch = options.arch ?? process.arch;
@@ -281,6 +284,7 @@ export class DesktopUpdaterService {
       }
 
       console.warn(`[desktop] Auto updater check failed: ${message}`);
+      this.captureError?.(error, { operation: "updater_check_failed" });
       this.setState({
         phase: "error",
         lastCheckedAt: this.now(),
@@ -387,6 +391,7 @@ export class DesktopUpdaterService {
       }
 
       console.warn(`[desktop] Auto updater error: ${message}`);
+      this.captureError?.(error, { operation: "updater_event_error" });
       this.setState({
         phase: "error",
         lastCheckedAt: this.now(),

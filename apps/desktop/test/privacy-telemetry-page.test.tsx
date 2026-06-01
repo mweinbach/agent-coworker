@@ -62,6 +62,7 @@ describe("privacy telemetry settings page", () => {
 
       expect(container.textContent).toContain("Cowork is local-first");
       expect(container.textContent).toContain("Crash reports");
+      expect(container.textContent).toContain("Not configured");
       expect(container.textContent).toContain(
         "Sends crash/error reports and basic technical metadata.",
       );
@@ -159,6 +160,67 @@ describe("privacy telemetry settings page", () => {
       });
 
       expect(setAiTracePayloadsEnabled).toHaveBeenCalledWith(true);
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("shows crash reporting status when a DSN is configured", async () => {
+    const harness = setupJsdom({
+      setupWindow: (dom) => {
+        (dom.window as typeof dom.window & { cowork?: unknown }).cowork = {
+          crashReporting: {
+            enabled: false,
+            dsnConfigured: true,
+            dsn: "https://public@sentry.example/1",
+            release: "1.2.3",
+            environment: "development",
+            appVersion: "1.2.3",
+            platform: "darwin",
+            arch: "arm64",
+            packaged: false,
+          },
+        };
+      },
+    });
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        useAppStore.setState({
+          privacyTelemetrySettings: {
+            crashReportsEnabled: false,
+            productAnalyticsEnabled: false,
+            aiTraceTelemetryEnabled: false,
+            aiTracePayloadsEnabled: false,
+            diagnosticsUploadEnabled: false,
+            cloudSyncEnabled: false,
+          },
+        });
+      });
+
+      await act(async () => {
+        root.render(createElement(PrivacyTelemetryPage));
+      });
+
+      expect(container.textContent).toContain("Disabled");
+
+      await act(async () => {
+        useAppStore.setState({
+          privacyTelemetrySettings: {
+            ...useAppStore.getState().privacyTelemetrySettings,
+            crashReportsEnabled: true,
+          },
+        });
+      });
+
+      expect(container.textContent).toContain("Enabled");
 
       await act(async () => {
         root.unmount();

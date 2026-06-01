@@ -1,4 +1,5 @@
 import { useAppStore } from "../../../app/store";
+import { Badge } from "../../../components/ui/badge";
 import { Switch } from "../../../components/ui/switch";
 import { SettingsPage, SettingsRow, SettingsSection } from "../SettingsPrimitives";
 
@@ -10,6 +11,12 @@ export function PrivacyTelemetryPage() {
   const setAiTracePayloadsEnabled = useAppStore((s) => s.setAiTracePayloadsEnabled);
   const setDiagnosticsUploadEnabled = useAppStore((s) => s.setDiagnosticsUploadEnabled);
   const setCloudSyncEnabled = useAppStore((s) => s.setCloudSyncEnabled);
+  const crashReportingConfig = window.cowork?.crashReporting ?? null;
+  const crashStatus = !crashReportingConfig?.dsnConfigured
+    ? { label: "Not configured", variant: "outline" as const }
+    : settings.crashReportsEnabled
+      ? { label: "Enabled", variant: "secondary" as const }
+      : { label: "Disabled", variant: "outline" as const };
 
   return (
     <SettingsPage>
@@ -21,11 +28,14 @@ export function PrivacyTelemetryPage() {
           title="Crash reports"
           description="Sends crash/error reports and basic technical metadata."
           control={
-            <Switch
-              checked={settings.crashReportsEnabled}
-              aria-label="Crash reports"
-              onCheckedChange={setCrashReportsEnabled}
-            />
+            <div className="flex items-center gap-2">
+              <Badge variant={crashStatus.variant}>{crashStatus.label}</Badge>
+              <Switch
+                checked={settings.crashReportsEnabled}
+                aria-label="Crash reports"
+                onCheckedChange={setCrashReportsEnabled}
+              />
+            </div>
           }
         />
         <SettingsRow

@@ -3,6 +3,7 @@ import {
   normalizePrivacyTelemetrySettings,
   type PersistedPrivacyTelemetrySettings,
 } from "../types";
+import { syncRendererCrashReportingPreference } from "../../lib/crashReporting";
 
 type PrivacyTelemetryActionKeys =
   | "setCrashReportsEnabled"
@@ -34,6 +35,7 @@ export function createPrivacyTelemetryActions(
   return {
     setCrashReportsEnabled: (enabled) => {
       applyPrivacyTelemetrySettings(set, get, { crashReportsEnabled: enabled });
+      void syncRendererCrashReportingPreference(enabled);
     },
     setProductAnalyticsEnabled: (enabled) => {
       applyPrivacyTelemetrySettings(set, get, { productAnalyticsEnabled: enabled });

@@ -393,7 +393,7 @@ describe("Codex primary runtime bootstrap", () => {
     }
   });
 
-  test("preserves existing Workspace Tools skills during partial replacement", async () => {
+  test("refreshes stale bootstrap Workspace Tools skills during partial replacement", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-runtime-overlay-home-"));
     const workspace = await fs.mkdtemp(
       path.join(os.tmpdir(), "cowork-codex-runtime-overlay-workspace-"),
@@ -461,13 +461,13 @@ describe("Codex primary runtime bootstrap", () => {
       ).toEqual([
         ["documents", "already_installed"],
         ["presentations", "installed"],
-        ["spreadsheets", "already_installed"],
+        ["spreadsheets", "installed"],
       ]);
       expect(await fs.readFile(path.join(manualDocuments, "SKILL.md"), "utf-8")).toContain(
         "manual documents body",
       );
       expect(await fs.readFile(path.join(currentSpreadsheets, "SKILL.md"), "utf-8")).toContain(
-        "current spreadsheets body",
+        "spreadsheets body",
       );
       expect(
         await fs.readFile(

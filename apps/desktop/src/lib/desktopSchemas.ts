@@ -57,6 +57,7 @@ import type {
   StartWorkspaceServerInput,
   StopWorkspaceServerInput,
   SystemAppearance,
+  TelemetryStatusInput,
   TelemetryStatusSnapshot,
   TranscriptBatchInput,
   TrashPathInput,
@@ -298,6 +299,12 @@ export const telemetryStatusSnapshotSchema: z.ZodType<TelemetryStatusSnapshot> =
     aiTraces: telemetryStatusEntrySchema,
     diagnosticsUpload: telemetryStatusEntrySchema,
     cloudSync: telemetryStatusEntrySchema,
+  })
+  .strict();
+
+export const telemetryStatusInputSchema: z.ZodType<TelemetryStatusInput> = z
+  .object({
+    privacyTelemetrySettings: persistedPrivacyTelemetrySettingsSchema.optional(),
   })
   .strict();
 

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
+import type { TelemetryStatusInput } from "../src/lib/desktopApi";
 import { NoopJsonRpcSocket } from "./helpers/jsonRpcSocketMock";
 import { createDesktopCommandsMock, DEFAULT_TELEMETRY_STATUS } from "./helpers/mockDesktopCommands";
 import { setupJsdom } from "./jsdomHarness";
@@ -163,6 +164,19 @@ describe("privacy telemetry settings page", () => {
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
       const root = createRoot(container);
+
+      await act(async () => {
+        useAppStore.setState({
+          privacyTelemetrySettings: {
+            crashReportsEnabled: false,
+            productAnalyticsEnabled: true,
+            aiTraceTelemetryEnabled: true,
+            aiTracePayloadsEnabled: false,
+            diagnosticsUploadEnabled: true,
+            cloudSyncEnabled: false,
+          },
+        });
+      });
 
       await act(async () => {
         root.render(createElement(PrivacyTelemetryPage));
@@ -354,6 +368,75 @@ describe("privacy telemetry settings page", () => {
         });
       });
 
+      expect(container.textContent).toContain("Enabled");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("refreshes telemetry status with the current privacy settings after a toggle", async () => {
+    getTelemetryStatusMock.mockImplementation(async (opts?: TelemetryStatusInput) => {
+      const enabled = opts?.privacyTelemetrySettings?.productAnalyticsEnabled === true;
+      return {
+        ...DEFAULT_TELEMETRY_STATUS,
+        productAnalytics: {
+          label: enabled ? "Enabled" : "Disabled",
+          status: enabled ? "enabled" : "disabled",
+          configured: true,
+          enabled,
+        },
+      };
+    });
+    const harness = setupJsdom();
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        useAppStore.setState({
+          privacyTelemetrySettings: {
+            crashReportsEnabled: false,
+            productAnalyticsEnabled: false,
+            aiTraceTelemetryEnabled: false,
+            aiTracePayloadsEnabled: false,
+            diagnosticsUploadEnabled: false,
+            cloudSyncEnabled: false,
+          },
+        });
+      });
+
+      await act(async () => {
+        root.render(createElement(PrivacyTelemetryPage));
+      });
+
+      const productAnalyticsSwitch = container.querySelector(
+        '[aria-label="Anonymous product analytics"]',
+      );
+      if (!(productAnalyticsSwitch instanceof harness.dom.window.HTMLElement)) {
+        throw new Error("missing product analytics switch");
+      }
+
+      await act(async () => {
+        productAnalyticsSwitch.dispatchEvent(
+          new harness.dom.window.MouseEvent("click", { bubbles: true }),
+        );
+      });
+
+      expect(getTelemetryStatusMock).toHaveBeenLastCalledWith({
+        privacyTelemetrySettings: {
+          crashReportsEnabled: false,
+          productAnalyticsEnabled: true,
+          aiTraceTelemetryEnabled: false,
+          aiTracePayloadsEnabled: false,
+          diagnosticsUploadEnabled: false,
+          cloudSyncEnabled: false,
+        },
+      });
       expect(container.textContent).toContain("Enabled");
 
       await act(async () => {

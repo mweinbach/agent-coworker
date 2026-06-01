@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 
@@ -55,29 +55,17 @@ mock.module("../src/ui/layout/AppTopBar", () => ({
     ),
 }));
 
-mock.module("../src/ui/ContextSidebar", () => ({
-  ContextSidebar: () => createElement("div", { "data-testid": "context-sidebar" }),
-}));
 mock.module("../src/ui/Sidebar", () => ({
   Sidebar: () => createElement("div", { "data-testid": "left-sidebar" }),
 }));
 mock.module("../src/ui/layout/PrimaryContent", () => ({
   PrimaryContent: () => createElement("main", { "data-testid": "primary-content" }),
 }));
-mock.module("../src/ui/layout/ContextSidebarResizer", () => ({
-  ContextSidebarResizer: () => createElement("div", { "data-testid": "context-resizer" }),
-}));
 mock.module("../src/ui/layout/SidebarResizer", () => ({
   SidebarResizer: () => createElement("div", { "data-testid": "sidebar-resizer" }),
 }));
-mock.module("../src/ui/FilePreviewModal", () => ({
-  FilePreviewModal: () => null,
-}));
 mock.module("../src/ui/PromptModal", () => ({
   PromptModal: () => null,
-}));
-mock.module("../src/ui/onboarding/DesktopOnboarding", () => ({
-  DesktopOnboarding: () => null,
 }));
 mock.module("../src/ui/layout/SettingsContent", () => ({
   SettingsContent: () => createElement("div", { "data-testid": "settings-content" }),
@@ -154,6 +142,10 @@ async function flushUi() {
 }
 
 describe("canvas window lifecycle", () => {
+  afterAll(() => {
+    mock.restore();
+  });
+
   beforeEach(() => {
     canvasMounts = 0;
     canvasUnmounts = 0;

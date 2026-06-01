@@ -227,6 +227,8 @@ const observabilityLayerSchema = z
     secretKey: nonEmptyTrimmedStringSchema.optional(),
     tracingEnvironment: nonEmptyTrimmedStringSchema.optional(),
     release: nonEmptyTrimmedStringSchema.optional(),
+    recordInputs: booleanLikeSchema.optional(),
+    recordOutputs: booleanLikeSchema.optional(),
   })
   .passthrough();
 const harnessLayerSchema = z
@@ -611,7 +613,18 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     asBoolean(projectConfig.observabilityEnabled) ??
     asBoolean(userConfig.observabilityEnabled) ??
     asBoolean(builtInDefaults.observabilityEnabled) ??
-    true;
+    false;
+  const observabilityRecordPayloads = asBoolean(env.AGENT_OBSERVABILITY_RECORD_PAYLOADS);
+  const observabilityRecordInputs =
+    asBoolean(env.AGENT_OBSERVABILITY_RECORD_INPUTS) ??
+    observabilityRecordPayloads ??
+    asBoolean(mergedObservability.recordInputs) ??
+    false;
+  const observabilityRecordOutputs =
+    asBoolean(env.AGENT_OBSERVABILITY_RECORD_OUTPUTS) ??
+    observabilityRecordPayloads ??
+    asBoolean(mergedObservability.recordOutputs) ??
+    false;
   const langfuseBaseUrl = (
     env.LANGFUSE_BASE_URL ||
     mergedObservability.baseUrl ||
@@ -631,6 +644,8 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     ...(langfuseSecretKey ? { secretKey: langfuseSecretKey } : {}),
     ...(langfuseTracingEnvironment ? { tracingEnvironment: langfuseTracingEnvironment } : {}),
     ...(langfuseRelease ? { release: langfuseRelease } : {}),
+    recordInputs: observabilityRecordInputs,
+    recordOutputs: observabilityRecordOutputs,
   };
 
   const mergedHarness = parseLayer(harnessLayerSchema, merged.harness, {});

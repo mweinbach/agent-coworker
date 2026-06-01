@@ -354,8 +354,8 @@ export async function buildRuntimeTelemetrySettings(
 
   return {
     isEnabled: true,
-    recordInputs: true,
-    recordOutputs: true,
+    recordInputs: config.observability?.recordInputs === true,
+    recordOutputs: config.observability?.recordOutputs === true,
     functionId: context.functionId,
     metadata: sanitizeTelemetryMetadata({
       provider: config.provider,

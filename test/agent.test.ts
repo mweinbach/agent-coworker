@@ -1088,7 +1088,7 @@ describe("runTurn", () => {
     expect(callArg.providerOptions).toBeUndefined();
   });
 
-  test("enables runtime telemetry with full I/O when observability is configured", async () => {
+  test("enables metadata-only runtime telemetry when observability is configured", async () => {
     const config = makeConfig({
       observabilityEnabled: true,
       observability: {
@@ -1113,8 +1113,8 @@ describe("runTurn", () => {
     const callArg = mockStreamText.mock.calls[0][0] as any;
     expect(callArg.experimental_telemetry).toBeDefined();
     expect(callArg.experimental_telemetry.isEnabled).toBe(true);
-    expect(callArg.experimental_telemetry.recordInputs).toBe(true);
-    expect(callArg.experimental_telemetry.recordOutputs).toBe(true);
+    expect(callArg.experimental_telemetry.recordInputs).toBe(false);
+    expect(callArg.experimental_telemetry.recordOutputs).toBe(false);
     expect(callArg.experimental_telemetry.functionId).toBe("session.turn");
     expect(callArg.experimental_telemetry.metadata.sessionId).toBe("session-123");
   });

@@ -66,11 +66,12 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
     async (_event, args: ListDirectoryInput) => {
       await workspaceRoots.ensureApprovedWorkspaceRoots();
       const input = parseWithSchema(listDirectoryInputSchema, args, "listDirectory options");
-      const approvedRoots = workspaceRoots.getApprovedWorkspaceRoots();
-      if (approvedRoots.length === 0) {
-        throw new Error("No workspace roots available for directory listing");
-      }
-      const safePath = resolveAllowedDirectoryPath(approvedRoots, input.path);
+      // resolveAllowedDirectoryPath also allows the app-managed one-off chats
+      // root, so global chat sessions list correctly even with no project roots.
+      const safePath = resolveAllowedDirectoryPath(
+        workspaceRoots.getApprovedWorkspaceRoots(),
+        input.path,
+      );
 
       const entries = await fs.readdir(safePath, { withFileTypes: true });
       const results = await Promise.all(

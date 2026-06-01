@@ -2,6 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { getOneOffChatsRoot } from "../../../../src/utils/oneOffChats";
 import { isPathEqualOrInside } from "./pathBoundary";
 import { resolveDesktopRendererUrl } from "./rendererUrl";
 import { assertPathWithinRoots } from "./validation";
@@ -55,15 +56,29 @@ export function isTrustedDesktopSenderUrl(senderUrl: string, opts: TrustedSender
   }
 }
 
+/**
+ * Workspace roots plus the app-managed one-off chats home (`~/.cowork/chats`).
+ *
+ * Global "New chat" sessions run with their cwd under `~/.cowork/chats/<session>`,
+ * which the server already trusts as a valid thread workspace (see
+ * `requireWorkspacePath` in `src/server/jsonrpc/routes/shared.ts`). Those session
+ * directories are not persisted as project workspace roots, so the Files panel
+ * must allow them explicitly; otherwise `listDirectory`/`readFile` for a global
+ * chat cwd throws "path is outside allowed workspace roots".
+ */
+function getFilePanelRoots(workspaceRoots: string[]): string[] {
+  return [...workspaceRoots, getOneOffChatsRoot()];
+}
+
 export function resolveAllowedDirectoryPath(
   workspaceRoots: string[],
   requestedPath: string,
 ): string {
-  return assertPathWithinRoots(workspaceRoots, requestedPath, "path");
+  return assertPathWithinRoots(getFilePanelRoots(workspaceRoots), requestedPath, "path");
 }
 
 export function resolveAllowedPath(workspaceRoots: string[], requestedPath: string): string {
-  return assertPathWithinRoots(workspaceRoots, requestedPath, "path");
+  return assertPathWithinRoots(getFilePanelRoots(workspaceRoots), requestedPath, "path");
 }
 
 function getSaveExportSourceRoots(workspaceRoots: string[]): string[] {

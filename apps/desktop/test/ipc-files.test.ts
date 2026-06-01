@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { getOneOffChatsRoot } from "../../../src/utils/oneOffChats";
 import { DESKTOP_IPC_CHANNELS } from "../src/lib/desktopApi";
 import { createElectronMock } from "./helpers/mockElectron";
 
@@ -602,6 +603,63 @@ describe("files IPC", () => {
 
     await fs.rm(tempWorkspace, { recursive: true, force: true });
     await fs.rm(outsideDir, { recursive: true, force: true });
+  });
+
+  test("listDirectory lists a global chat session dir without any approved project roots", async () => {
+    const registerFilesIpc = await loadRegisterFilesIpc();
+    const chatsRoot = getOneOffChatsRoot();
+    await fs.mkdir(chatsRoot, { recursive: true });
+    const sessionDir = await fs.mkdtemp(path.join(chatsRoot, "20260601T000000Z-research-"));
+    await fs.writeFile(path.join(sessionDir, "report.md"), "# findings\n", "utf-8");
+    await fs.mkdir(path.join(sessionDir, "assets"));
+
+    const handlers = new Map<
+      string,
+      (event: unknown, args?: unknown) => Promise<unknown> | unknown
+    >();
+    registerFilesIpc({
+      deps: {} as never,
+      workspaceRoots: {
+        async ensureApprovedWorkspaceRoots() {},
+        async refreshApprovedWorkspaceRootsFromState() {},
+        async assertApprovedWorkspacePath(workspacePath: string) {
+          return workspacePath;
+        },
+        async addApprovedWorkspacePath(workspacePath: string) {
+          return workspacePath;
+        },
+        setApprovedWorkspaceRoots() {},
+        getApprovedWorkspaceRoots() {
+          // Reproduces the reported state: only persisted project roots exist
+          // (here: none), so the chat cwd is not an approved workspace root.
+          return [];
+        },
+      },
+      handleDesktopInvoke(channel, handler) {
+        handlers.set(channel, handler as never);
+      },
+      parseWithSchema(schema, value, label) {
+        const parsed = schema.safeParse(value);
+        if (parsed.success) {
+          return parsed.data as never;
+        }
+        throw new Error(`${label} ${parsed.error.issues[0]?.message ?? "is invalid"}`);
+      },
+    });
+
+    const handler = handlers.get(DESKTOP_IPC_CHANNELS.listDirectory);
+    expect(handler).toBeDefined();
+
+    try {
+      const entries = (await handler?.(
+        { sender: {} },
+        { path: sessionDir, includeHidden: false },
+      )) as Array<{ name: string; isDirectory: boolean }>;
+      expect(entries.map((entry) => entry.name)).toEqual(["assets", "report.md"]);
+      expect(entries[0]?.isDirectory).toBe(true);
+    } finally {
+      await fs.rm(sessionDir, { recursive: true, force: true });
+    }
   });
 
   test("copyText rejects non-string payloads before touching clipboard", async () => {

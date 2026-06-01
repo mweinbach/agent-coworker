@@ -18,6 +18,7 @@ import { writeTextFileAtomic } from "../utils/atomicFile";
 import {
   createOneOffChatWorkspace as createOneOffChatWorkspaceDirectory,
   ensureOneOffChatWorkspacePath,
+  getOneOffChatsRoot,
   isPathInsideOneOffChatsRoot,
   normalizeWorkspaceKind,
   type WorkspaceKind,
@@ -910,7 +911,11 @@ export class WebDesktopService implements WebDesktopServiceLike {
   async getWorkspaceRoots(fallbackCwd: string): Promise<string[]> {
     const state = await this.loadState({ fallbackCwd });
     const roots = state.workspaces.map((workspace) => workspace.path);
-    return roots.length > 0 ? roots : [fallbackCwd];
+    const base = roots.length > 0 ? roots : [fallbackCwd];
+    // Global "New chat" sessions run under ~/.cowork/chats/<session> and may not
+    // be persisted as project workspace roots; the file routes must still allow
+    // browsing that app-managed location.
+    return [...base, getOneOffChatsRoot()];
   }
 
   async resolveWorkspaceDirectory(workspacePath: string): Promise<string> {

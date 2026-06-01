@@ -37,8 +37,8 @@ import {
 } from "../lib/filePreviewKind";
 import { cn } from "../lib/utils";
 import { CodeFilePreview } from "./CodeFilePreview";
+import { LazyUniverSpreadsheetCanvas } from "./LazyUniverSpreadsheetCanvas";
 import { PptxPreview } from "./PptxPreview";
-import { SpreadsheetPreview } from "./SpreadsheetPreview";
 
 function decodeUtf8(bytes: Uint8Array): string {
   return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
@@ -586,7 +586,7 @@ export function FilePreviewModal() {
               ) : null}
             </div>
           ) : (kind === "csv" || kind === "xlsx") && path ? (
-            <SpreadsheetPreview key={path} path={path} />
+            <LazyUniverSpreadsheetCanvas key={path} path={path} />
           ) : kind === "pptx" && path ? (
             <PptxPreview key={path} path={path} />
           ) : showUnknownAsText ? (

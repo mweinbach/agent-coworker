@@ -20,21 +20,7 @@ export type CodexPrimaryRuntimeSkillResult = {
 
 export type CodexPrimaryRuntimeSetupResult = {
   runtimeDir: string;
-  runtimeSourceDir?: string;
   stateFile: string;
-  runtimeEnv: Record<string, string>;
-  runtime: {
-    status: "available" | "missing";
-    source?: string;
-    nodePath?: string;
-    pythonPath?: string;
-    nodeModulesPath?: string;
-  };
-  artifactTool: {
-    status: "available" | "missing" | "skipped";
-    source?: string;
-    reason?: string;
-  };
   skills: CodexPrimaryRuntimeSkillResult[];
   archive: {
     status: "downloaded" | "skipped" | "failed";
@@ -47,7 +33,6 @@ export type CodexPrimaryRuntimeSetupResult = {
 export type CodexPrimaryRuntimeState = {
   version: number;
   updatedAt: string;
-  artifactSource?: string;
   installedSkills: CodexRuntimeSkillName[];
 };
 

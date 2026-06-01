@@ -22,6 +22,7 @@ import {
 import { getFilePreviewKind, isCanvasSupportedFile } from "./lib/filePreviewKind";
 import { applyPlatformChromeToDocument, syncPlatformChromeCssVars } from "./lib/platformChromeDom";
 import { canPopOutQuickChatThread } from "./lib/quickChatPopout";
+import { cn } from "./lib/utils";
 import { getDesktopWindowMode } from "./lib/windowMode";
 import { ASK_SKIP_TOKEN } from "./lib/wsProtocol";
 import { Canvas } from "./ui/Canvas";
@@ -59,18 +60,37 @@ const RightSidebarPane = memo(function RightSidebarPane({ collapsed }: { collaps
   const canvasSidebarWidth = useAppStore((s) => s.canvasSidebarWidth);
   const filePreview = useAppStore((s) => s.filePreview);
   const canvasEnabled = useAppStore((s) => s.desktopFeatureFlags?.canvas === true);
+  const isCanvasMaximized = useAppStore((s) => s.isCanvasMaximized);
 
   const isCanvasSupported = filePreview?.path && isCanvasSupportedFile(filePreview.path);
   const showCanvas = canvasEnabled && isCanvasSupported;
-  const activeWidth = showCanvas ? canvasSidebarWidth : contextSidebarWidth;
+  const canvasMaximized = showCanvas && isCanvasMaximized;
+  const activeWidth = showCanvas && !canvasMaximized ? canvasSidebarWidth : contextSidebarWidth;
+  const canvasContainerStyle: CSSProperties = canvasMaximized
+    ? {
+        top: "calc(var(--platform-drag-strip-height) + var(--platform-titlebar-height))",
+        right: 0,
+        bottom: 0,
+        left: 0,
+      }
+    : { width: activeWidth };
 
   return (
     <div
-      className="app-right-sidebar-pane relative shrink-0 overflow-hidden"
-      style={{ width: collapsed ? 0 : activeWidth }}
+      className={cn(
+        "app-right-sidebar-pane relative shrink-0",
+        canvasMaximized ? "overflow-visible" : "overflow-hidden",
+      )}
+      style={{ width: collapsed || canvasMaximized ? 0 : activeWidth }}
     >
-      {!collapsed ? <ContextSidebarResizer /> : null}
-      <div className="absolute top-0 bottom-0 left-0 flex" style={{ width: activeWidth }}>
+      {!collapsed && !canvasMaximized ? <ContextSidebarResizer /> : null}
+      <div
+        className={cn(
+          "flex bg-background",
+          canvasMaximized ? "fixed z-40" : "absolute top-0 bottom-0 left-0",
+        )}
+        style={canvasContainerStyle}
+      >
         {showCanvas && filePreview?.path ? <Canvas path={filePreview.path} /> : <ContextSidebar />}
       </div>
     </div>
@@ -136,6 +156,8 @@ const ChatShell = memo(function ChatShell({
   const setCanvasActiveTab = useAppStore((s) => s.setCanvasActiveTab);
   const canvasShowFormattingBar = useAppStore((s) => s.canvasShowFormattingBar);
   const setCanvasShowFormattingBar = useAppStore((s) => s.setCanvasShowFormattingBar);
+  const isCanvasMaximized = useAppStore((s) => s.isCanvasMaximized);
+  const setCanvasMaximized = useAppStore((s) => s.setCanvasMaximized);
   const hasAnimatedSidebarsRef = useRef(false);
   const previousSidebarStateRef = useRef({
     sidebarCollapsed,
@@ -210,8 +232,10 @@ const ChatShell = memo(function ChatShell({
     canvasEnabled &&
     canvasPath !== null &&
     isCanvasSupportedFile(canvasPath) &&
-    !contextSidebarCollapsed;
-  const canvasIsMarkdown = canvasPath !== null && getFilePreviewKind(canvasPath) === "markdown";
+    (!contextSidebarCollapsed || isCanvasMaximized);
+  const canvasKind = canvasPath !== null ? getFilePreviewKind(canvasPath) : "other";
+  const canvasIsMarkdown = canvasKind === "markdown";
+  const canvasIsSpreadsheet = canvasKind === "csv" || canvasKind === "xlsx";
   useEffect(() => {
     const sidebarStateChanged =
       previousSidebarStateRef.current.sidebarCollapsed !== sidebarCollapsed ||
@@ -283,17 +307,20 @@ const ChatShell = memo(function ChatShell({
         onSetCanvasActiveTab={setCanvasActiveTab}
         canvasShowFormattingBar={canvasShowFormattingBar}
         onToggleCanvasFormattingBar={() => setCanvasShowFormattingBar(!canvasShowFormattingBar)}
+        canvasMaximized={isCanvasMaximized}
+        onToggleCanvasMaximized={
+          showCanvasInTopBar ? () => setCanvasMaximized(!isCanvasMaximized) : undefined
+        }
         onPopOutCanvas={
-          showCanvasInTopBar && canvasPath
+          showCanvasInTopBar && canvasPath && !canvasIsSpreadsheet
             ? () => {
                 void showCanvasWindow({ path: canvasPath }).catch(() => {});
-                closeFilePreview();
               }
             : undefined
         }
         onCloseCanvas={showCanvasInTopBar ? closeFilePreview : undefined}
       />
-      <div className="app-chat-body flex min-h-0 min-w-0 flex-1 flex-row">
+      <div className="app-chat-body relative flex min-h-0 min-w-0 flex-1 flex-row">
         <LeftSidebarPane collapsed={sidebarCollapsed} />
         <main className="app-main-content flex min-h-0 min-w-0 flex-1 flex-col">
           <div className="flex min-h-0 flex-1 overflow-hidden">
@@ -516,11 +543,10 @@ export default function App() {
         <MenuBarUtilityShell init={init} ready={ready} startupError={startupError} />
       ) : windowMode === "canvas" ? (
         <div
-          className="flex h-full w-full bg-[var(--surface-sidebar-pane)] relative flex-col"
+          className="relative flex h-full w-full flex-col bg-[var(--surface-spreadsheet)] text-[var(--text-spreadsheet)]"
           style={
             {
-              backdropFilter: "blur(var(--sidebar-blur, 0px))",
-              WebkitBackdropFilter: "blur(var(--sidebar-blur, 0px))",
+              colorScheme: "light",
             } as CSSProperties
           }
         >

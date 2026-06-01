@@ -205,9 +205,32 @@ function isTrustedRendererNavigation(rawUrl: string): boolean {
   }
 }
 
+function parseTrustedCanvasWindowUrl(rawUrl: string): ShowCanvasWindowInput | null {
+  if (!isTrustedRendererNavigation(rawUrl)) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.searchParams.get("window") !== "canvas") {
+      return null;
+    }
+    const targetPath = parsed.searchParams.get("path");
+    if (!targetPath) {
+      return null;
+    }
+    return { path: targetPath };
+  } catch {
+    return null;
+  }
+}
+
 function applyWindowSecurity(win: Electron.BrowserWindow): void {
   win.webContents.setWindowOpenHandler(({ url }) => {
-    if (isExternalUrl(url)) {
+    const canvasWindow = parseTrustedCanvasWindowUrl(url);
+    if (canvasWindow) {
+      void createCanvasWindow(canvasWindow);
+    } else if (isExternalUrl(url)) {
       void shell.openExternal(url);
     }
     return { action: "deny" };

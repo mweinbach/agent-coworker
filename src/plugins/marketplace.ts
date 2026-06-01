@@ -9,6 +9,7 @@ import {
 } from "../utils/paths";
 
 const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
+const sourceHashSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 
 const marketplaceSourceSchema = z
   .object({
@@ -39,6 +40,7 @@ const marketplaceEntrySchema = z
     policy: marketplacePolicySchema,
     category: nonEmptyTrimmedStringSchema,
     interface: marketplaceEntryInterfaceSchema.optional(),
+    sourceHash: sourceHashSchema.optional(),
   })
   .strict();
 
@@ -68,6 +70,7 @@ interface ParsedMarketplaceEntry {
   installationPolicy: string;
   authenticationPolicy: string;
   displayName?: string;
+  sourceHash?: string;
 }
 
 export interface ParsedMarketplaceDocument {
@@ -133,6 +136,7 @@ function mapLocalMarketplaceEntries(
       category: entry.category,
       installationPolicy: entry.policy.installation,
       authenticationPolicy: entry.policy.authentication,
+      ...(entry.sourceHash ? { sourceHash: entry.sourceHash } : {}),
       ...entryDisplayName(entry),
     };
   });
@@ -161,6 +165,7 @@ function mapRemoteMarketplaceEntries(
       category: entry.category,
       installationPolicy: entry.policy.installation,
       authenticationPolicy: entry.policy.authentication,
+      ...(entry.sourceHash ? { sourceHash: entry.sourceHash } : {}),
       ...entryDisplayName(entry),
     };
   });

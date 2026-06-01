@@ -6,6 +6,8 @@ import {
   ExternalLinkIcon,
   EyeIcon,
   LoaderCircleIcon,
+  Maximize2Icon,
+  Minimize2Icon,
   MoreVerticalIcon,
   PanelRightIcon,
   PenIcon,
@@ -67,6 +69,8 @@ interface AppTopBarProps {
   onSetCanvasActiveTab?: (tab: "preview" | "edit") => void;
   canvasShowFormattingBar?: boolean;
   onToggleCanvasFormattingBar?: () => void;
+  canvasMaximized?: boolean;
+  onToggleCanvasMaximized?: () => void;
   onPopOutCanvas?: () => void;
   onCloseCanvas?: () => void;
 }
@@ -269,6 +273,8 @@ export function AppTopBar({
   onSetCanvasActiveTab,
   canvasShowFormattingBar = true,
   onToggleCanvasFormattingBar,
+  canvasMaximized = false,
+  onToggleCanvasMaximized,
   onPopOutCanvas,
   onCloseCanvas,
 }: AppTopBarProps) {
@@ -802,6 +808,22 @@ export function AppTopBar({
               className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
             >
               <ExternalLinkIcon className="h-4 w-4" />
+            </Button>
+          ) : null}
+          {onToggleCanvasMaximized ? (
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              onClick={onToggleCanvasMaximized}
+              title={canvasMaximized ? "Restore canvas" : "Maximize canvas"}
+              aria-label={canvasMaximized ? "Restore canvas" : "Maximize canvas"}
+              className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
+            >
+              {canvasMaximized ? (
+                <Minimize2Icon className="h-4 w-4" />
+              ) : (
+                <Maximize2Icon className="h-4 w-4" />
+              )}
             </Button>
           ) : null}
           {onCloseCanvas ? (

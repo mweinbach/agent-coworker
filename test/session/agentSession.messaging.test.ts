@@ -608,6 +608,138 @@ describe("AgentSession", () => {
       ).toBe(false);
     });
 
+    test("keeps queued steer reference context attached to the steer that referenced it", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-steer-skillref-queue-"));
+      const skillsDir = path.join(dir, "skills");
+      const skillADir = path.join(skillsDir, "steer-skill-a");
+      const skillBDir = path.join(skillsDir, "steer-skill-b");
+      const pluginRoot = path.join(dir, ".cowork", "plugins", "queue-plugin");
+      const pluginManifestDir = path.join(pluginRoot, ".cowork-plugin");
+      const pluginSkillDir = path.join(pluginRoot, "skills", "queue-plugin-skill");
+      await fs.mkdir(skillADir, { recursive: true });
+      await fs.mkdir(skillBDir, { recursive: true });
+      await fs.mkdir(pluginSkillDir, { recursive: true });
+      await fs.mkdir(pluginManifestDir, { recursive: true });
+      await fs.writeFile(
+        path.join(skillADir, "SKILL.md"),
+        [
+          "---",
+          'name: "steer-skill-a"',
+          'description: "Steer skill A"',
+          "---",
+          "",
+          "STEER-SKILL-A-BODY-MARKER",
+        ].join("\n"),
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(skillBDir, "SKILL.md"),
+        [
+          "---",
+          'name: "steer-skill-b"',
+          'description: "Steer skill B"',
+          "---",
+          "",
+          "STEER-SKILL-B-BODY-MARKER",
+        ].join("\n"),
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(pluginManifestDir, "plugin.json"),
+        JSON.stringify({
+          name: "queue-plugin",
+          description: "Queue plugin",
+          skills: "./skills",
+          interface: { displayName: "Queue Plugin" },
+        }),
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(pluginSkillDir, "SKILL.md"),
+        [
+          "---",
+          'name: "queue-plugin-skill"',
+          'description: "Queue plugin skill"',
+          "---",
+          "",
+          "Queue plugin skill body",
+        ].join("\n"),
+        "utf-8",
+      );
+      const { session } = makeSession({
+        config: {
+          ...makeConfig(dir),
+          skillsDirs: [skillsDir],
+          workspacePluginsDir: path.join(dir, ".cowork", "plugins"),
+        },
+      });
+      const stepMessages: any[][] = [];
+      let allowSecondStep!: () => void;
+
+      mockRunTurn.mockImplementation(async (params: any) => {
+        const initialMessages = [{ role: "user", content: "go" }];
+        const stepOne = await params.prepareStep?.({ stepNumber: 1, messages: initialMessages });
+        stepMessages.push(stepOne?.messages ?? initialMessages);
+
+        await new Promise<void>((resolve) => {
+          allowSecondStep = resolve;
+        });
+
+        const stepTwo = await params.prepareStep?.({
+          stepNumber: 2,
+          messages: stepMessages[0]!,
+        });
+        stepMessages.push(stepTwo?.messages ?? stepMessages[0]!);
+
+        return {
+          text: "done",
+          reasoningText: undefined,
+          responseMessages: [{ role: "assistant", content: "done" }],
+        };
+      });
+
+      const turnPromise = session.sendUserMessage("go");
+      await new Promise((r) => setTimeout(r, 10));
+
+      await session.sendSteerMessage(
+        "first queued steer",
+        session.activeTurnId!,
+        "steer-skill-a-ref",
+        undefined,
+        undefined,
+        [{ kind: "skill", name: "steer-skill-a" }],
+      );
+      await session.sendSteerMessage(
+        "second queued steer",
+        session.activeTurnId!,
+        "steer-skill-b-ref",
+        undefined,
+        undefined,
+        [
+          { kind: "skill", name: "steer-skill-b" },
+          { kind: "plugin", name: "queue-plugin" },
+        ],
+      );
+      allowSecondStep();
+      await turnPromise;
+
+      expect(stepMessages).toHaveLength(2);
+      const committedSteers = stepMessages[1]!
+        .filter((message) => message.role === "user")
+        .slice(-2);
+      expect(committedSteers).toHaveLength(2);
+      const firstSteer = JSON.stringify(committedSteers[0]);
+      const secondSteer = JSON.stringify(committedSteers[1]);
+      expect(firstSteer).toContain("first queued steer");
+      expect(firstSteer).toContain("STEER-SKILL-A-BODY-MARKER");
+      expect(firstSteer).not.toContain("STEER-SKILL-B-BODY-MARKER");
+      expect(firstSteer).not.toContain("Queue Plugin");
+      expect(secondSteer).toContain("second queued steer");
+      expect(secondSteer).toContain("STEER-SKILL-B-BODY-MARKER");
+      expect(secondSteer).toContain("Queue Plugin");
+      expect(secondSteer).not.toContain("STEER-SKILL-A-BODY-MARKER");
+    });
+
     test("injects referenced steer plugin context into the same prepared model step", async () => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-steer-pluginref-"));
       const pluginRoot = path.join(dir, ".cowork", "plugins", "demo-plugin");

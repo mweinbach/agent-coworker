@@ -92,6 +92,70 @@ describe("presentation preview renderer", () => {
     });
   });
 
+  test("uses the bundled artifact runtime environment for slide rendering", async () => {
+    await withTempDir(async (dir) => {
+      const filePath = path.join(dir, "slide-1.mjs");
+      await fs.writeFile(filePath, "export default {}", "utf8");
+
+      const scriptDir = path.join(dir, "skills/presentations/scripts");
+      await fs.mkdir(scriptDir, { recursive: true });
+      await fs.writeFile(
+        path.join(scriptDir, "render_artifact_slide.mjs"),
+        "throw new Error('the fake bundled node handles this script');",
+        "utf8",
+      );
+
+      const bundledRuntime = path.join(dir, "bundled-runtime");
+      const bundledNodeDir = path.join(bundledRuntime, "node/bin");
+      const bundledModulesDir = path.join(bundledRuntime, "node/node_modules/@oai/artifact-tool");
+      await fs.mkdir(bundledNodeDir, { recursive: true });
+      await fs.mkdir(bundledModulesDir, { recursive: true });
+      await fs.writeFile(path.join(bundledRuntime, "runtime.json"), "{}\n", "utf8");
+      await fs.writeFile(path.join(bundledModulesDir, "package.json"), "{}\n", "utf8");
+      const fakeNode = path.join(bundledNodeDir, "node");
+      await fs.writeFile(
+        fakeNode,
+        `#!/usr/bin/env bash
+env > "$COWORK_TEST_ENV_CAPTURE"
+output=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--output" ]; then
+    shift
+    output="$1"
+  fi
+  shift || true
+done
+printf 'bundled-runtime-png' > "$output"
+`,
+        "utf8",
+      );
+      await fs.chmod(fakeNode, 0o755);
+
+      const envCapture = path.join(dir, "render-env.txt");
+      const result = await previewPresentationFile({
+        cwd: dir,
+        filePath: "slide-1.mjs",
+        builtInDir: dir,
+        env: {
+          COWORK_BUNDLED_ARTIFACT_RUNTIME_DIR: bundledRuntime,
+          COWORK_TEST_ENV_CAPTURE: envCapture,
+          HOME: path.join(dir, "home"),
+        },
+      });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.slides[0]?.pngBase64).toBe(
+        "data:image/png;base64,YnVuZGxlZC1ydW50aW1lLXBuZw==",
+      );
+      const capturedEnv = await fs.readFile(envCapture, "utf8");
+      expect(capturedEnv).toContain(`COWORK_ARTIFACT_RUNTIME_NODE=${fakeNode}`);
+      expect(capturedEnv).toContain(
+        `COWORK_ARTIFACT_RUNTIME_NODE_MODULES=${path.join(bundledRuntime, "node/node_modules")}`,
+      );
+    });
+  });
+
   test("dynamic deck compilation renders all slide modules in order", async () => {
     await withTempDir(async (dir) => {
       // 1. Set up slide modules and dummy pptx file

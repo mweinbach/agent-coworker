@@ -700,6 +700,80 @@ describe("desktop app top bar", () => {
     }
   });
 
+  test("toggles canvas maximize from the canvas top bar", async () => {
+    const harness = setupJsdom();
+    const onToggleCanvasMaximized = mock(() => {});
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          createElement(AppTopBar, {
+            busy: false,
+            onToggleSidebar: () => {},
+            onNewChat: () => {},
+            sidebarCollapsed: false,
+            sidebarWidth: 280,
+            contextSidebarCollapsed: false,
+            onToggleContextSidebar: () => {},
+            title: "Workbook",
+            subtitle: "agent-coworker",
+            sessionUsage: null,
+            lastTurnUsage: null,
+            managementMode: "thread",
+            canvasMode: true,
+            canvasMaximized: false,
+            onToggleCanvasMaximized,
+          }),
+        );
+      });
+
+      const maximizeButton = container.querySelector('button[aria-label="Maximize canvas"]');
+      if (!(maximizeButton instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing canvas maximize button");
+      }
+
+      await act(async () => {
+        maximizeButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(onToggleCanvasMaximized).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        root.render(
+          createElement(AppTopBar, {
+            busy: false,
+            onToggleSidebar: () => {},
+            onNewChat: () => {},
+            sidebarCollapsed: false,
+            sidebarWidth: 280,
+            contextSidebarCollapsed: false,
+            onToggleContextSidebar: () => {},
+            title: "Workbook",
+            subtitle: "agent-coworker",
+            sessionUsage: null,
+            lastTurnUsage: null,
+            managementMode: "thread",
+            canvasMode: true,
+            canvasMaximized: true,
+            onToggleCanvasMaximized,
+          }),
+        );
+      });
+
+      expect(container.querySelector('button[aria-label="Restore canvas"]')).not.toBeNull();
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
   test("consumes Escape while the thread details popover is open", async () => {
     const harness = setupJsdom();
 

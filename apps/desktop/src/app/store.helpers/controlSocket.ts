@@ -1122,6 +1122,41 @@ export function createControlSocketHelpers(
       return;
     }
 
+    if (evt.type === "plugin_update_check") {
+      set((s) => {
+        const rt = s.workspaceRuntimeById[workspaceId];
+        const selectedPlugin = rt.selectedPlugin;
+        const resultScope = evt.result.scope ?? null;
+        const matchesSelected =
+          selectedPlugin?.id === evt.result.pluginId &&
+          (resultScope === null || selectedPlugin.scope === resultScope);
+        return {
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...rt,
+              selectedPlugin:
+                matchesSelected && selectedPlugin?.installed
+                  ? {
+                      ...selectedPlugin,
+                      updateAvailable: evt.result.canUpdate,
+                      ...(evt.result.installedSourceHash
+                        ? { installedSourceHash: evt.result.installedSourceHash }
+                        : {}),
+                      ...(evt.result.latestSourceHash
+                        ? { latestSourceHash: evt.result.latestSourceHash }
+                        : {}),
+                      ...(evt.result.reason ? { updateCheckReason: evt.result.reason } : {}),
+                    }
+                  : selectedPlugin,
+              pluginMutationError: null,
+            },
+          },
+        };
+      });
+      return;
+    }
+
     if (evt.type === "skill_content") {
       set((s) => ({
         workspaceRuntimeById: {

@@ -22,6 +22,8 @@ const MOCK_UPDATE_STATE = {
   error: null,
 };
 
+const openPathMock = mock(async () => {});
+
 mock.module("../src/lib/desktopCommands", () =>
   createDesktopCommandsMock({
     appendTranscriptBatch: async () => {},
@@ -70,7 +72,7 @@ mock.module("../src/lib/desktopCommands", () =>
     getPlatform: async () => "linux",
     readFile: async () => "",
     previewOSFile: async () => {},
-    openPath: async () => {},
+    openPath: openPathMock,
     openExternalUrl: async () => {},
     revealPath: async () => {},
     copyPath: async () => {},
@@ -116,7 +118,22 @@ describe("store explorer actions", () => {
       selectedWorkspaceId: wsId,
       showHiddenFiles: false,
       workspaceExplorerById: {},
+      filePreview: null,
+      contextSidebarCollapsed: true,
+      canvasSidebarWidth: 320,
+      isCanvasMaximized: true,
+      desktopFeatureFlags: {
+        canvas: true,
+        appServer: false,
+        charts: false,
+        chronicle: false,
+        voice: false,
+        mobileRelay: false,
+        quickChat: false,
+        research: false,
+      },
     });
+    openPathMock.mockClear();
   });
 
   test("navigateWorkspaceFiles loads entries without hidden files by default", async () => {
@@ -173,5 +190,27 @@ describe("store explorer actions", () => {
     await useAppStore.getState().navigateWorkspaceFiles(wsId, rootPath);
     const id = useAppStore.getState().workspaceExplorerById[wsId]?.requestId;
     expect(id).toBeGreaterThan(0);
+  });
+
+  test("openWorkspaceFile opens canvas-supported files inside Cowork", async () => {
+    const workbookPath = `${rootPath}/report.xlsx`;
+
+    await useAppStore.getState().openWorkspaceFile(wsId, workbookPath, false);
+
+    const state = useAppStore.getState();
+    expect(state.filePreview).toEqual({ path: workbookPath });
+    expect(state.contextSidebarCollapsed).toBe(false);
+    expect(state.canvasSidebarWidth).toBe(500);
+    expect(state.isCanvasMaximized).toBe(false);
+    expect(openPathMock).not.toHaveBeenCalled();
+  });
+
+  test("openWorkspaceFile still delegates unsupported files to the OS", async () => {
+    const archivePath = `${rootPath}/bundle.zip`;
+
+    await useAppStore.getState().openWorkspaceFile(wsId, archivePath, false);
+
+    expect(useAppStore.getState().filePreview).toBeNull();
+    expect(openPathMock).toHaveBeenCalledWith({ path: archivePath });
   });
 });

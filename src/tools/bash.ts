@@ -211,8 +211,8 @@ async function runShellCommandWithExec(opts: {
 
   let command = opts.command;
   const env = opts.env || process.env;
-  const runtimePython = env.COWORK_CODEX_RUNTIME_PYTHON;
-  const runtimeNode = env.COWORK_CODEX_RUNTIME_NODE;
+  const runtimePython = env.COWORK_ARTIFACT_RUNTIME_PYTHON;
+  const runtimeNode = env.COWORK_ARTIFACT_RUNTIME_NODE;
   const managedSofficeShim = env.COWORK_SOFFICE || env.COWORK_MANAGED_SOFFICE_SHIM;
   const managedSofficeShimDir =
     env.COWORK_MANAGED_SOFFICE_SHIM_DIR ||

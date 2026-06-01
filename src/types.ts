@@ -345,6 +345,7 @@ export interface PluginMarketplaceMetadata {
   category?: string;
   installationPolicy?: string;
   authenticationPolicy?: string;
+  sourceHash?: string;
 }
 
 interface PluginCatalogEntryBase {
@@ -374,6 +375,10 @@ export interface InstalledPluginCatalogEntry extends PluginCatalogEntryBase {
   license?: string;
   keywords?: string[];
   installSource?: string;
+  installedSourceHash?: string;
+  latestSourceHash?: string;
+  updateAvailable?: boolean;
+  updateCheckReason?: string;
   skills: InstalledPluginSkillSummary[];
   mcpServers: string[];
   apps: PluginAppSummary[];
@@ -530,6 +535,10 @@ export interface SkillInstallationEntry {
   updatedAt?: string;
   fileModifiedAt?: string;
   plugin?: SkillPluginOwner;
+  installedSourceHash?: string;
+  latestSourceHash?: string;
+  updateAvailable?: boolean;
+  updateCheckReason?: string;
 }
 
 export interface SkillMarketplaceMetadata {
@@ -538,6 +547,7 @@ export interface SkillMarketplaceMetadata {
   category?: string;
   installationPolicy?: string;
   authenticationPolicy?: string;
+  sourceHash?: string;
 }
 
 /**
@@ -613,6 +623,18 @@ export interface SkillUpdateCheckResult {
   canUpdate: boolean;
   reason?: string;
   preview?: SkillInstallPreview;
+  installedSourceHash?: string;
+  latestSourceHash?: string;
+}
+
+export interface PluginUpdateCheckResult {
+  pluginId: string;
+  scope?: PluginScope;
+  canUpdate: boolean;
+  reason?: string;
+  preview?: PluginInstallPreview;
+  installedSourceHash?: string;
+  latestSourceHash?: string;
 }
 
 export interface TodoItem {

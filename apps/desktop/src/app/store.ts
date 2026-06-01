@@ -38,6 +38,7 @@ const initialState: AppStoreDataState = {
   filePreview: null,
   canvasActiveTab: "preview",
   canvasShowFormattingBar: true,
+  isCanvasMaximized: false,
   notifications: [],
 
   providerStatusByName: {},

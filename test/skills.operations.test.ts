@@ -356,6 +356,48 @@ describe("installSkillsFromSource", () => {
     }
   });
 
+  test("records source hashes and treats matching sources as current", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "skills-install-source-hash-"));
+    try {
+      const config = makeConfig(root);
+      const sourceRoot = path.join(root, "source");
+      await createSkill(sourceRoot, "my-skill", "Hash tracked skill");
+
+      const result = await installSkillsFromSource({
+        config,
+        input: path.join(sourceRoot, "my-skill"),
+        targetScope: "project",
+      });
+
+      const catalog = await scanSkillCatalog(config.skillsDirs, {
+        includeDisabled: true,
+        adoptManagedWritableInstalls: true,
+      });
+      const installation = catalog.installations.find(
+        (entry) => entry.installationId === result.installationIds[0],
+      );
+      if (!installation) {
+        throw new Error("Expected installed skill to be present in catalog");
+      }
+      expect(installation?.origin?.sourceHash).toMatch(/^sha256:[a-f0-9]{64}$/);
+
+      const updateCheck = await checkSkillInstallationUpdate({
+        config,
+        installation,
+      });
+
+      expect(updateCheck).toMatchObject({
+        installationId: result.installationIds[0],
+        canUpdate: false,
+        reason: "This skill is already up to date.",
+        installedSourceHash: installation.origin?.sourceHash,
+        latestSourceHash: installation.origin?.sourceHash,
+      });
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("rejects a source with two valid skills that share the same name", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "skills-install-dup-"));
     try {

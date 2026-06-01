@@ -90,6 +90,7 @@ export interface PluginInstallMetadata {
     installationPolicy?: string;
     authenticationPolicy?: string;
     sourceInput?: string;
+    sourceHash?: string;
   };
   bootstrap?: {
     name: string;
@@ -433,6 +434,7 @@ const pluginInstallMetadataSchema = z
         installationPolicy: nonEmptyStringSchema.optional(),
         authenticationPolicy: nonEmptyStringSchema.optional(),
         sourceInput: nonEmptyStringSchema.optional(),
+        sourceHash: nonEmptyStringSchema.optional(),
       })
       .optional(),
     bootstrap: z
@@ -469,6 +471,9 @@ export async function readPluginInstallMetadata(
                   : {}),
                 ...(parsed.marketplace.sourceInput
                   ? { sourceInput: parsed.marketplace.sourceInput }
+                  : {}),
+                ...(parsed.marketplace.sourceHash
+                  ? { sourceHash: parsed.marketplace.sourceHash }
                   : {}),
               },
             }

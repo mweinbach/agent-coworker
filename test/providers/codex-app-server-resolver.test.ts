@@ -12,12 +12,15 @@ import {
 
 const previousCommand = process.env.COWORK_CODEX_APP_SERVER_COMMAND;
 const previousArgs = process.env.COWORK_CODEX_APP_SERVER_ARGS;
+const previousPathExt = process.env.PATHEXT;
 
 afterEach(() => {
   if (previousCommand === undefined) delete process.env.COWORK_CODEX_APP_SERVER_COMMAND;
   else process.env.COWORK_CODEX_APP_SERVER_COMMAND = previousCommand;
   if (previousArgs === undefined) delete process.env.COWORK_CODEX_APP_SERVER_ARGS;
   else process.env.COWORK_CODEX_APP_SERVER_ARGS = previousArgs;
+  if (previousPathExt === undefined) delete process.env.PATHEXT;
+  else process.env.PATHEXT = previousPathExt;
 });
 
 function fakeReleaseFetch(version = "0.129.0"): typeof fetch {
@@ -168,6 +171,57 @@ describe("codex app-server resolver", () => {
     expect(managed.version).toBe("0.129.0");
   });
 
+  test.serial("returns the promoted current path for managed installs on darwin", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-darwin-current-"));
+    const target = { platform: "darwin" as const, arch: "arm64" };
+    const versionedPath = __internal.managedExecutablePath(homeDir, "0.129.0", target);
+    const currentPath = __internal.managedCurrentPath(homeDir, target);
+    let promotedFrom: string | undefined;
+
+    await fs.mkdir(path.dirname(versionedPath), { recursive: true });
+    await fs.writeFile(versionedPath, "managed app-server", "utf8");
+    await fs.writeFile(`${versionedPath}.version`, "0.129.0\n", "utf8");
+
+    const status = await updateManagedCodexAppServer(
+      {},
+      {
+        homeDir,
+        platform: "darwin",
+        arch: "arm64",
+        fetchImpl: fakeReleaseFetch("0.129.0"),
+        spawnForResult: async () => ({ ok: false, stdout: "", stderr: "" }),
+        promoteManagedInstall: async (executablePath, promotedPath, version) => {
+          promotedFrom = executablePath;
+          await fs.mkdir(path.dirname(promotedPath), { recursive: true });
+          await fs.copyFile(executablePath, promotedPath);
+          await fs.writeFile(`${promotedPath}.version`, `${version}\n`, "utf8");
+        },
+      },
+    );
+
+    expect(promotedFrom).toBe(versionedPath);
+    expect(status).toMatchObject({
+      source: "managed",
+      version: "0.129.0",
+      command: currentPath,
+      managedPath: currentPath,
+    });
+    expect(await fs.readFile(currentPath, "utf8")).toBe("managed app-server");
+
+    const managed = await resolveCodexAppServerCommand({
+      homeDir,
+      platform: "darwin",
+      arch: "arm64",
+      spawnForResult: async () => ({ ok: false, stdout: "", stderr: "" }),
+    });
+    expect(managed).toEqual({
+      command: currentPath,
+      args: [],
+      source: "managed",
+      version: "0.129.0",
+    });
+  });
+
   test.serial(
     "prefers the newest versioned app-server on Windows when current is stale",
     async () => {
@@ -278,6 +332,41 @@ describe("codex app-server resolver", () => {
 
     expect(command.source).toBe("managed");
     expect(command.version).toBe("0.129.0");
+  });
+
+  test.serial("discovers codex.cmd on Windows PATH when managed install fails", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-win-path-home-"));
+    const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-win-path-bin-"));
+    const codexCmdPath = path.join(binDir, "codex.cmd");
+    const probedCalls: string[] = [];
+    process.env.PATHEXT = ".CMD;.EXE";
+
+    await fs.writeFile(codexCmdPath, "@echo off\n", "utf8");
+
+    const command = await resolveCodexAppServerCommand({
+      homeDir,
+      pathEnv: binDir,
+      platform: "win32",
+      arch: "x64",
+      fetchImpl: async () => {
+        throw new Error("managed install unavailable");
+      },
+      spawnForResult: async (cmd, args) => {
+        probedCalls.push([cmd, ...args].join(" "));
+        return { ok: true, stdout: "codex-cli 0.129.0\n", stderr: "" };
+      },
+    });
+
+    expect(probedCalls).toEqual([
+      `${codexCmdPath} --version`,
+      `${codexCmdPath} app-server --help`,
+    ]);
+    expect(command).toEqual({
+      command: codexCmdPath,
+      args: ["app-server"],
+      source: "system",
+      version: "0.129.0",
+    });
   });
 
   test.serial("prefers an existing managed app-server over system codex", async () => {

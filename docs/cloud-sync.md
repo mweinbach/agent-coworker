@@ -2,7 +2,7 @@
 
 Cloud sync is a hidden v1 architecture layer. It is opt-in, disabled by default, and separate from Sentry, PostHog, Langfuse, diagnostics uploads, and product analytics.
 
-This PR does not render cloud sync anywhere in the desktop UI. Activation is only possible through explicit persisted developer/test state or through `COWORK_CLOUD_SYNC_ENABLED=1` plus `COWORK_CLOUD_SYNC_ENDPOINT`.
+Set `COWORK_DISABLE_NETWORK_TELEMETRY=1` to disable cloud sync in every process. The local queue remains non-fatal, but the network provider is not created and no sync fetch runs.
 
 ## V1 Scope
 
@@ -44,11 +44,12 @@ Supported environment variables:
 | --- | --- |
 | `COWORK_CLOUD_SYNC_ENABLED` | Enables the hidden sync layer when set to `1`, `true`, `yes`, or `on`. |
 | `COWORK_CLOUD_SYNC_ENDPOINT` | Custom/self-hosted HTTP endpoint. Must be `http` or `https`. |
-| `COWORK_CLOUD_SYNC_TOKEN` | Optional bearer token read from env only. It is never persisted to desktop state. |
+| `COWORK_CLOUD_SYNC_TOKEN` | Optional bearer token read from env only. It is never persisted to desktop state or exposed to the renderer. |
+| `COWORK_DISABLE_NETWORK_TELEMETRY` | Disables cloud sync and ignores endpoint/token config when truthy. |
 
 Effective sync is a no-op unless cloud sync is enabled and a custom endpoint is configured.
 
-## Backend Contract
+## Self-Hosted Backend Contract
 
 The v1 custom HTTP provider uses these routes:
 
@@ -68,6 +69,15 @@ Cloud sync writes a durable local outbox at `~/.cowork/sync/outbox.jsonl`.
 The queue is best-effort and never blocks app usage or local state persistence. Settings sync entries share a dedupe key, so newer safe settings snapshots replace older pending settings snapshots. The outbox is capped at 1000 entries and 2 MiB. Failed pushes retry with exponential backoff capped at five minutes.
 
 Queue and provider errors are logged locally only. They are not sent through product analytics, Sentry, PostHog, or Langfuse.
+
+## Status Labels
+
+The Privacy & Telemetry page reports cloud sync as:
+
+- `Disabled` when sync is off, sync settings are disabled, or `COWORK_DISABLE_NETWORK_TELEMETRY=1`
+- `Not configured` when sync is enabled without a custom endpoint
+- `Connected` when a custom endpoint is configured and the last status is connected or queued
+- `Error` when the last sync operation failed
 
 ## Future Thread Sync
 

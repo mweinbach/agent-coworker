@@ -1,71 +1,74 @@
 # Privacy & Telemetry
 
-Cowork is local-first. Privacy and telemetry settings are explicit user consent toggles, not experiment flags. All toggles default to off.
+Cowork is local-first. Network telemetry is off by default in packaged public builds and only starts when the user enables the relevant Privacy & Telemetry toggle and the matching integration is configured.
+
+All network telemetry and cloud sync share the resolver in `src/telemetry/config.ts`. Set `COWORK_DISABLE_NETWORK_TELEMETRY=1` to disable Sentry, PostHog, Langfuse, diagnostics upload, and cloud sync in every process. Local logs and local diagnostics bundle creation still work.
 
 ## Toggles
 
-| Setting | Default | Controls |
+| Setting | Default | Exact persisted key | Controls |
+| --- | --- | --- | --- |
+| Crash reports | Off | `crashReportsEnabled` | Optional Sentry crash/error reports. |
+| Anonymous product analytics | Off | `productAnalyticsEnabled` | Optional PostHog product event counts. |
+| AI trace diagnostics | Off | `aiTraceTelemetryEnabled` | Optional Langfuse model/turn/tool timing traces. |
+| Include prompts and responses in AI traces | Off | `aiTracePayloadsEnabled` | Full Langfuse payload capture. Only works when AI trace diagnostics is enabled. |
+| Diagnostic log uploads | Off | `diagnosticsUploadEnabled` | User-confirmed upload of a redacted diagnostics bundle. |
+| Cloud sync | Off | `cloudSyncEnabled` | Legacy display-only toggle. Effective v1 sync is controlled by top-level `cloudSync` settings or self-host env. |
+
+## Status Labels
+
+The desktop Privacy & Telemetry page shows resolver-backed status labels:
+
+| Integration | Labels |
+| --- | --- |
+| Crash reports | `Disabled`, `Not configured`, `Enabled` |
+| Product analytics | `Disabled`, `Not configured`, `Enabled` |
+| AI traces | `Disabled`, `Metadata only`, `Full payload`, `Not configured` |
+| Diagnostics upload | `Disabled`, `Local only`, `Upload configured` |
+| Cloud sync | `Disabled`, `Not configured`, `Connected`, `Error` |
+
+When `COWORK_DISABLE_NETWORK_TELEMETRY=1`, the page also shows a global kill switch message.
+
+## Packaging Modes
+
+| Mode | Default behavior |
+| --- | --- |
+| `local-dev` | Env vars may opt in for local testing and harness development. Missing config remains a no-op. |
+| `packaged-public` | All network telemetry defaults off. Public keys in the build are not enough; user consent is still required. |
+| `self-hosted` | Sentry, PostHog, Langfuse, diagnostics upload, and cloud sync endpoints can come from runtime env or config. |
+| `enterprise/offline` | `COWORK_DISABLE_NETWORK_TELEMETRY=1` disables every network telemetry and sync path. |
+
+## Environment Variables
+
+| Variable | Used by | Notes |
 | --- | --- | --- |
-| Crash reports | Off | Optional crash/error reports and basic technical metadata. |
-| Anonymous product analytics | Off | Event counts like app opened, workspace added, and turn completed. |
-| AI trace diagnostics | Off | Metadata-only Langfuse spans for model, turn, tool timing, and usage diagnostics. |
-| Include prompts and responses in AI traces | Off | Full AI trace payload capture. This can only be enabled when AI trace diagnostics is enabled and may include prompts, responses, commands, logs, file paths/names, and other content. |
-| Diagnostic log uploads | Off | User-initiated upload of redacted diagnostic bundles. It must never upload automatically. |
+| `COWORK_DISABLE_NETWORK_TELEMETRY` | All network telemetry and cloud sync | Truthy values: `1`, `true`, `yes`, `on`. Forces everything networked off. |
+| `COWORK_SENTRY_DSN` | Crash reports | Public DSN for Sentry. No secret DSN should be committed. |
+| `COWORK_POSTHOG_KEY` | Product analytics | Public PostHog project key. |
+| `COWORK_POSTHOG_HOST` | Product analytics | Optional self-hosted PostHog host. |
+| `LANGFUSE_BASE_URL` | AI traces | Optional Langfuse Cloud or self-hosted base URL. |
+| `LANGFUSE_PUBLIC_KEY` | AI traces | Public Langfuse key. Safe for server and build-time public config. |
+| `LANGFUSE_SECRET_KEY` | AI traces | Secret key. Allowed only in local-dev, self-hosted, or harness/server runtime environments. It must never be embedded into public renderer, preload, or browser bundles. |
+| `COWORK_DIAGNOSTICS_UPLOAD_URL` | Diagnostics upload | Optional support upload endpoint. Ignored under the kill switch. |
+| `COWORK_CLOUD_SYNC_ENDPOINT` | Cloud sync | Optional custom/self-hosted sync endpoint. Ignored under the kill switch. |
 
-## Never Collect
+Existing local-dev and sidecar envs are still honored when policy allows them: `COWORK_CRASH_REPORTS_ENABLED`, `COWORK_PRODUCT_ANALYTICS_ENABLED`, `AGENT_OBSERVABILITY_ENABLED`, `AGENT_OBSERVABILITY_RECORD_INPUTS`, `AGENT_OBSERVABILITY_RECORD_OUTPUTS`, `AGENT_OBSERVABILITY_RECORD_PAYLOADS`, `COWORK_CLOUD_SYNC_ENABLED`, and `COWORK_CLOUD_SYNC_TOKEN`.
 
-Later integrations must never collect prompts, model responses, file contents, shell commands, or file paths through crash reports or anonymous product analytics.
+## Data Never Collected
 
-Diagnostic log upload flows must be user-initiated and must redact sensitive values before upload. Cloud sync is not telemetry and is documented separately in [Cloud Sync](cloud-sync.md).
+Crash reports and product analytics must never collect prompts, model responses, transcripts, file contents, shell commands, stdout/stderr, local filenames, repo names, workspace paths, provider auth, MCP credentials, API keys, tokens, cookies, email addresses, local usernames, or machine names.
 
-Prompts, responses, shell commands, stdout/stderr, transcripts, file paths, and uploaded file names may only be included in AI traces when both `aiTraceTelemetryEnabled` and `aiTracePayloadsEnabled` are true.
+Diagnostics bundles are local unless the user explicitly uploads them. The bundle redactor removes home/workspace paths, secret-like fields, emails, JSON bodies, prompts, completions, stdout/stderr, oversized strings, and local paths.
 
-## Local Diagnostics
+AI traces are metadata-only unless both `aiTraceTelemetryEnabled` and `aiTracePayloadsEnabled` are true. Full payload traces can include prompts, responses, commands, logs, file paths or names, and other content, so the full payload toggle stays off by default.
 
-Desktop diagnostics are local-first. The Electron app writes best-effort local logs under the Electron `userData/logs` directory, including `server.log`, `desktop-main.log`, optional `renderer.log`, and `updater.log`.
+Cloud sync is not telemetry. V1 sync may only emit a sanitized settings snapshot and must not sync threads, transcripts, prompts, completions, shell output, files, auth, tokens, local paths, repo names, diagnostics bundles, or analytics identity.
 
-Local logs must not include prompts, completions, file contents, shell output, API keys, tokens, cookies, or unsanitized absolute paths. Main-process log helpers sanitize metadata before writing and redact home/workspace paths, secret-like fields, emails, JSON bodies, and oversized strings.
+## Event Schemas
 
-Users can create a diagnostics bundle from Settings -> Diagnostics. Bundle generation is local and explicit. The bundle is a redacted JSON file under `userData/diagnostics`; it includes technical metadata, toggle states, update state, counts, and sanitized recent log tails. It excludes transcripts, prompts, completions, shell output, workspace paths, filenames, API keys/tokens, and SQLite databases.
+Crash reports may include sanitized error names/messages, stack traces, component tags, release/app version, environment, platform, architecture, and packaged/dev mode. Sentry session replay, tracing, structured logs, user identification, and AI instrumentation are disabled for crash reporting.
 
-`diagnosticsUploadEnabled` only means the user is allowed to upload a generated diagnostics bundle after pressing an upload button and confirming. It never enables automatic upload. If `COWORK_DIAGNOSTICS_UPLOAD_URL` is not configured, Cowork creates and reveals the local bundle instead of uploading.
-
-## Crash Reports
-
-Crash reports are optional and only start when the Crash reports toggle is on and a Sentry DSN is configured. They cover Electron main, Electron renderer, and the Cowork server sidecar.
-
-Crash reports may include sanitized error names/messages, stack traces, component tags, release/app version, environment, platform, architecture, and whether the desktop app is packaged. The renderer does not enable Sentry session replay, tracing, structured logs, user identification, or AI instrumentation.
-
-Crash reports must never include prompts, completions, file contents, shell commands, stdout/stderr, API keys, auth tokens, cookies, local usernames, or absolute workspace paths. The Sentry wrapper runs `beforeSend` and `beforeBreadcrumb` scrubbing to redact local paths, known workspace/home paths, secret-like keys, request bodies, large payloads, console breadcrumbs, and unsafe automatic breadcrumbs.
-
-Packaged or self-hosted builds can configure crash reports with:
-
-| Variable | Purpose |
-| --- | --- |
-| `COWORK_SENTRY_DSN` | Preferred Sentry DSN. |
-| `SENTRY_DSN` | Fallback DSN when already conventional in the deployment environment. |
-| `COWORK_RELEASE` | Preferred release identifier. |
-| `SENTRY_RELEASE` | Fallback release identifier. |
-| `COWORK_SENTRY_ENVIRONMENT` | Optional environment: `development`, `packaged`, `beta`, or `production`. |
-
-Desktop sidecars do not inherit arbitrary `SENTRY_*` or `COWORK_SENTRY_*` values. The desktop process strips them and passes only the safe crash-reporting env when the user toggle is enabled and a DSN is configured.
-
-## Anonymous Product Analytics
-
-Anonymous product analytics are optional and only start when the Anonymous product analytics toggle is on, a PostHog key is configured, and a random local installation id exists. The installation id is generated with randomness, stored in desktop state, and is not derived from name, email, GitHub username, local username, workspace path, repo name, or machine name. Deleting the persisted desktop state resets it.
-
-Cowork uses the current PostHog Node SDK from main/server code. Renderer code sends allowed product events through the desktop bridge instead of loading a separate analytics SDK. Product analytics calls are fire-and-forget and must not block UI or turn execution.
-
-Configured variables:
-
-| Variable | Purpose |
-| --- | --- |
-| `COWORK_POSTHOG_KEY` | PostHog project key. If missing, product analytics are a no-op. |
-| `COWORK_POSTHOG_HOST` | Optional PostHog host. Defaults to the PostHog US ingest host. |
-| `COWORK_RELEASE` | Optional release/app version override. |
-| `COWORK_POSTHOG_ENVIRONMENT` | Optional environment bucket: `development`, `packaged`, `beta`, `production`, or `test`. |
-
-Exact event list:
+Product analytics event names are fixed in `src/telemetry/productAnalytics.ts`:
 
 | Event | Purpose |
 | --- | --- |
@@ -92,26 +95,14 @@ Exact event list:
 | `update_downloaded` | Update was downloaded. |
 | `update_install_started` | Update install/restart was requested. |
 
-Allowed product analytics properties are limited in code to: `appVersion`, `platform`, `arch`, `packaged`, `eventSource`, `provider`, `model`, `durationMs`, `status`, `errorCategory`, `workspaceCount`, `threadCount`, `providerCount`, `mcpServerCount`, `pluginCount`, `skillCount`, `toolCount`, `attachmentCount`, `referenceCount`, `productAnalyticsEnabled`, `crashReportsEnabled`, `aiTraceTelemetryEnabled`, `aiTracePayloadsEnabled`, `diagnosticsUploadEnabled`, `cloudSyncEnabled`, `mcpEnabled`, `yoloEnabled`, `quickChatIconEnabled`, `quickChatShortcutEnabled`, `mobilePairingEnabled`, `hasAttachments`, `hasReferences`, `remoteAccessEnabled`, `openAiNativeConnectorsEnabled`, and `updateAvailable`.
+Allowed product analytics properties are limited to short technical fields such as app version, platform, architecture, packaged mode, event source, provider/model identifiers, duration, status/error category, safe counts, and enabled feature/toggle booleans. Unknown property names, path-looking values, URL values, email addresses, and secret-looking values are rejected before sending.
 
-Property values are capped by type and length. Counts and durations are bounded. String values are restricted to safe short slugs, versions, provider names, status/error categories, or hosted model ids. Local model paths are rejected.
+## Disabling Everything
 
-Product analytics must never capture prompts, responses, transcripts, file contents, filenames, absolute paths, repo names, shell commands, stdout/stderr, API keys, auth tokens, cookies, email addresses, usernames, provider keys, local usernames, or machine names. The sanitizer rejects unknown property names, sensitive-looking property names, email/secret-looking values, URL values, and path-looking values before sending.
+To disable every network telemetry and sync path:
 
-To disable product analytics, turn off Anonymous product analytics or omit `COWORK_POSTHOG_KEY`. Desktop sidecars strip inherited `POSTHOG_*` and `COWORK_POSTHOG_*` values and pass only the safe product analytics env when the user toggle is enabled and a key plus anonymous installation id are available.
+```sh
+COWORK_DISABLE_NETWORK_TELEMETRY=1 bun run start
+```
 
-PostHog remote feature flags must not override privacy settings. Events are sent with feature flag capture disabled and person-profile processing disabled.
-
-## Integration Contract
-
-Integrations must read the normalized desktop setting from `privacyTelemetrySettings` before starting any network telemetry, reporting, or upload work. Missing or malformed settings must be treated as false by calling `normalizePrivacyTelemetrySettings()`.
-
-Disabling a toggle must prevent the corresponding network telemetry from starting. Disabling AI trace diagnostics must also force AI trace payload capture off.
-
-For spawned workspace servers, the desktop app maps normalized AI trace settings to harness env vars. When AI trace diagnostics is off or settings are missing, it forces `AGENT_OBSERVABILITY_ENABLED=false`, forces payload flags false, and strips inherited `LANGFUSE_*` env from the server process. When diagnostics is on, it sets metadata-only tracing by default. The full-payload toggle sets `AGENT_OBSERVABILITY_RECORD_INPUTS=true`, `AGENT_OBSERVABILITY_RECORD_OUTPUTS=true`, and `AGENT_OBSERVABILITY_RECORD_PAYLOADS=true`.
-
-Packaged desktop builds must not start Langfuse tracing without user consent. Source/dev harnesses can still opt in with `AGENT_OBSERVABILITY_ENABLED=true` and Langfuse credentials.
-
-## Feature Flags
-
-Product feature flags in `src/shared/featureFlags.ts` control experimental product surfaces. Privacy and telemetry settings are user consent controls. Future code must not gate privacy consent through experimental feature flags, and it must not treat enabled feature flags as consent for telemetry or cloud sync.
+In packaged or enterprise deployments, set `COWORK_DISABLE_NETWORK_TELEMETRY=1` in the launch environment. This disables Sentry, PostHog, Langfuse, diagnostics upload fetches, and cloud sync provider creation. Local logs and local diagnostics bundle creation remain available for offline support.

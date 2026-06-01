@@ -1190,6 +1190,24 @@ describe("loadSystemPrompt", () => {
     expect(prompt).not.toContain("Read, write, or search persistent memory");
   });
 
+  test("removes XML memory tool guidance from Claude prompts when memory is disabled", async () => {
+    const config = makeConfig({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      preferredChildModel: "claude-sonnet-4-6",
+      enableMemory: false,
+      skillsDirs: ["/nonexistent/skills"],
+    });
+
+    const prompt = await loadSystemPrompt(config);
+    expect(prompt).toContain("## Memory Disabled");
+    expect(prompt).not.toContain('<tool name="memory">');
+    expect(prompt).not.toContain("Lookup flow: AGENT.md");
+    expect(prompt).not.toContain("Read, write, or search persistent memory");
+    expect(prompt).not.toContain("{{spawnAgentToolSection}}");
+    expect(prompt).not.toContain("{{spawnAgentXmlSection}}");
+  });
+
   test("injects A2UI enabled guidance into the system prompt", async () => {
     const previous = process.env.COWORK_EXPERIMENTAL_A2UI;
     process.env.COWORK_EXPERIMENTAL_A2UI = "1";

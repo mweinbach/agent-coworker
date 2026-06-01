@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig, externalizeDepsPlugin } from "electron-vite";
+import { pickPublicTelemetryEnv } from "./electron/services/publicTelemetryEnv";
 
 const appRoot = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(appRoot, "../..");
@@ -26,11 +27,15 @@ function resolveDesktopRendererPort(value: string | undefined): number {
 }
 
 const desktopRendererPort = resolveDesktopRendererPort(process.env.COWORK_DESKTOP_RENDERER_PORT);
+const safePublicTelemetryDefine = {
+  "globalThis.__COWORK_PUBLIC_TELEMETRY_ENV__": JSON.stringify(pickPublicTelemetryEnv(process.env)),
+};
 
 export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin()],
     future: "warn",
+    define: safePublicTelemetryDefine,
     resolve: {
       alias: coworkAlias,
     },
@@ -46,6 +51,7 @@ export default defineConfig({
   preload: {
     plugins: [externalizeDepsPlugin({ exclude: ["zod"] })],
     future: "warn",
+    define: safePublicTelemetryDefine,
     resolve: {
       alias: coworkAlias,
     },

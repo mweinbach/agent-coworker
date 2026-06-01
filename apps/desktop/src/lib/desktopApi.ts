@@ -2,14 +2,25 @@ import type {
   DesktopFeatureFlagOverrides,
   DesktopFeatureFlags,
 } from "../../../../src/shared/featureFlags";
+import type {
+  ProductAnalyticsEnvironment,
+  ProductAnalyticsEventName,
+  ProductAnalyticsProperties,
+} from "../../../../src/telemetry/productAnalytics";
 import desktopPackage from "../../package.json";
-import type { HydratedTranscriptSnapshot, PersistedState, TranscriptEvent } from "../app/types";
+import type {
+  HydratedTranscriptSnapshot,
+  PersistedPrivacyTelemetrySettings,
+  PersistedState,
+  TranscriptEvent,
+} from "../app/types";
 
 export type StartWorkspaceServerInput = {
   workspaceId: string;
   workspacePath: string;
   yolo: boolean;
   featureFlags?: DesktopFeatureFlagOverrides;
+  privacyTelemetrySettings?: PersistedPrivacyTelemetrySettings;
 };
 
 export type CreateOneOffChatWorkspaceInput = {
@@ -301,6 +312,95 @@ export type UpdaterState = {
 
 const desktopAppVersion = desktopPackage.version;
 
+export type DesktopCrashReportingConfig = {
+  enabled: boolean;
+  dsnConfigured: boolean;
+  dsn: string | null;
+  release: string | null;
+  environment: "development" | "packaged" | "beta" | "production";
+  appVersion: string;
+  platform: string;
+  arch: string;
+  packaged: boolean;
+};
+
+export type DesktopProductAnalyticsConfig = {
+  enabled: boolean;
+  keyConfigured: boolean;
+  host: string;
+  environment: ProductAnalyticsEnvironment;
+  appVersion: string;
+  platform: string;
+  arch: string;
+  packaged: boolean;
+};
+
+export type TelemetryStatusLabel =
+  | "Disabled"
+  | "Not configured"
+  | "Enabled"
+  | "Metadata only"
+  | "Full payload"
+  | "Local only"
+  | "Upload configured"
+  | "Connected"
+  | "Error";
+
+export type TelemetryStatusEntry = {
+  label: TelemetryStatusLabel;
+  status:
+    | "disabled"
+    | "not_configured"
+    | "enabled"
+    | "metadata_only"
+    | "full_payload"
+    | "local_only"
+    | "upload_configured"
+    | "connected"
+    | "error";
+  configured: boolean;
+  enabled: boolean;
+  message?: string;
+};
+
+export type TelemetryStatusSnapshot = {
+  globalKillSwitchActive: boolean;
+  crashReports: TelemetryStatusEntry;
+  productAnalytics: TelemetryStatusEntry;
+  aiTraces: TelemetryStatusEntry;
+  diagnosticsUpload: TelemetryStatusEntry;
+  cloudSync: TelemetryStatusEntry;
+};
+
+export type CaptureProductEventInput = {
+  name: ProductAnalyticsEventName;
+  properties?: ProductAnalyticsProperties;
+};
+
+export type DiagnosticsBundlePathInput = {
+  path: string;
+};
+
+export type UploadDiagnosticsBundleInput = DiagnosticsBundlePathInput & {
+  confirmed: boolean;
+};
+
+export type CreateDiagnosticsBundleOutput = {
+  path: string;
+  createdAt: string;
+  summary: string;
+  uploadConfigured: boolean;
+  uploadEnabled: boolean;
+};
+
+export type UploadDiagnosticsBundleOutput = {
+  uploaded: boolean;
+  path: string;
+  diagnosticId: string | null;
+  url: string | null;
+  message: string;
+};
+
 export function createDefaultUpdaterState(
   currentVersion = desktopAppVersion,
   packaged = false,
@@ -344,6 +444,9 @@ export type PlatformChromeInfo = {
 export interface DesktopApi {
   readonly features: DesktopFeatureFlags;
   readonly isPackaged?: boolean;
+  readonly crashReporting?: DesktopCrashReportingConfig;
+  readonly productAnalytics?: DesktopProductAnalyticsConfig;
+  readonly telemetryStatus?: TelemetryStatusSnapshot;
   resolveDesktopFeatureFlags(overrides?: DesktopFeatureFlagOverrides): DesktopFeatureFlags;
   createOneOffChatWorkspace(
     opts?: CreateOneOffChatWorkspaceInput,
@@ -363,6 +466,7 @@ export interface DesktopApi {
   ): Promise<MobileRelayBridgeState>;
   loadState(): Promise<PersistedState>;
   saveState(state: PersistedState): Promise<void>;
+  captureProductEvent(input: CaptureProductEventInput): Promise<void>;
   readTranscript(opts: ReadTranscriptInput): Promise<TranscriptEvent[]>;
   hydrateTranscript(opts: ReadTranscriptInput): Promise<HydratedTranscriptSnapshot>;
   appendTranscriptEvent(opts: TranscriptBatchInput): Promise<void>;
@@ -399,6 +503,13 @@ export interface DesktopApi {
   trashPath(opts: TrashPathInput): Promise<void>;
   confirmAction(opts: ConfirmActionInput): Promise<boolean>;
   showNotification(opts: DesktopNotificationInput): Promise<boolean>;
+  createDiagnosticsBundle(): Promise<CreateDiagnosticsBundleOutput>;
+  revealDiagnosticsBundle(opts: DiagnosticsBundlePathInput): Promise<void>;
+  openLogsFolder(): Promise<void>;
+  uploadDiagnosticsBundle(
+    opts: UploadDiagnosticsBundleInput,
+  ): Promise<UploadDiagnosticsBundleOutput>;
+  getTelemetryStatus(): Promise<TelemetryStatusSnapshot>;
   getUpdateState(): Promise<UpdaterState>;
   checkForUpdates(): Promise<void>;
   quitAndInstallUpdate(): Promise<void>;
@@ -424,6 +535,7 @@ export const DESKTOP_IPC_CHANNELS = {
   mobileRelayUpdateTrustedPhonePermissions: "desktop:mobileRelayUpdateTrustedPhonePermissions",
   loadState: "desktop:loadState",
   saveState: "desktop:saveState",
+  captureProductEvent: "desktop:captureProductEvent",
   readTranscript: "desktop:readTranscript",
   hydrateTranscript: "desktop:hydrateTranscript",
   appendTranscriptEvent: "desktop:appendTranscriptEvent",
@@ -461,6 +573,11 @@ export const DESKTOP_IPC_CHANNELS = {
   trashPath: "desktop:trashPath",
   confirmAction: "desktop:confirmAction",
   showNotification: "desktop:showNotification",
+  createDiagnosticsBundle: "desktop:createDiagnosticsBundle",
+  revealDiagnosticsBundle: "desktop:revealDiagnosticsBundle",
+  openLogsFolder: "desktop:openLogsFolder",
+  uploadDiagnosticsBundle: "desktop:uploadDiagnosticsBundle",
+  getTelemetryStatus: "desktop:getTelemetryStatus",
   getUpdateState: "desktop:getUpdateState",
   checkForUpdates: "desktop:checkForUpdates",
   quitAndInstallUpdate: "desktop:quitAndInstallUpdate",

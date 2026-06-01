@@ -1,20 +1,27 @@
-import { BrowserWindow, dialog, Notification, nativeTheme, shell } from "electron";
+import { app, BrowserWindow, dialog, Notification, nativeTheme, shell } from "electron";
 
 import {
+  type CaptureProductEventInput,
   type ConfirmActionInput,
   DESKTOP_IPC_CHANNELS,
   type DesktopNotificationInput,
+  type DiagnosticsBundlePathInput,
   type OpenExternalUrlInput,
   type SetWindowAppearanceInput,
+  type UploadDiagnosticsBundleInput,
 } from "../../src/lib/desktopApi";
 import {
+  captureProductEventInputSchema,
   confirmActionInputSchema,
   desktopNotificationInputSchema,
+  diagnosticsBundlePathInputSchema,
   openExternalUrlInputSchema,
   setWindowAppearanceInputSchema,
+  uploadDiagnosticsBundleInputSchema,
 } from "../../src/lib/desktopSchemas";
 import { applyWindowAppearance, getSystemAppearanceSnapshot } from "../services/appearance";
 import { buildConfirmDialog } from "../services/dialogs";
+import { resolveDesktopTelemetryStatus } from "../services/telemetryStatus";
 import type { DesktopIpcModuleContext } from "./types";
 
 export function registerSystemIpc(context: DesktopIpcModuleContext): void {
@@ -58,6 +65,49 @@ export function registerSystemIpc(context: DesktopIpcModuleContext): void {
     },
   );
 
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.createDiagnosticsBundle, async () => {
+    return await context.deps.diagnostics.createBundle();
+  });
+
+  handleDesktopInvoke(
+    DESKTOP_IPC_CHANNELS.revealDiagnosticsBundle,
+    async (_event, args: DiagnosticsBundlePathInput) => {
+      const input = parseWithSchema(
+        diagnosticsBundlePathInputSchema,
+        args,
+        "revealDiagnosticsBundle options",
+      );
+      await context.deps.diagnostics.revealBundle(input.path);
+    },
+  );
+
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.openLogsFolder, async () => {
+    await context.deps.diagnostics.openLogsFolder();
+  });
+
+  handleDesktopInvoke(
+    DESKTOP_IPC_CHANNELS.uploadDiagnosticsBundle,
+    async (_event, args: UploadDiagnosticsBundleInput) => {
+      const input = parseWithSchema(
+        uploadDiagnosticsBundleInputSchema,
+        args,
+        "uploadDiagnosticsBundle options",
+      );
+      return await context.deps.diagnostics.uploadBundle(input.path, input.confirmed);
+    },
+  );
+
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.getTelemetryStatus, async () => {
+    const state = await context.deps.persistence.loadState();
+    return resolveDesktopTelemetryStatus({
+      state,
+      env: process.env,
+      isPackaged: app.isPackaged,
+      appVersion: app.getVersion().trim() || "unknown",
+      cloudSyncStatus: context.deps.cloudSync?.getStatus?.() ?? null,
+    });
+  });
+
   handleDesktopInvoke(
     DESKTOP_IPC_CHANNELS.openExternalUrl,
     async (_event, args: OpenExternalUrlInput) => {
@@ -82,6 +132,21 @@ export function registerSystemIpc(context: DesktopIpcModuleContext): void {
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.getUpdateState, async () => {
     return context.deps.updater.getState();
   });
+
+  handleDesktopInvoke(
+    DESKTOP_IPC_CHANNELS.captureProductEvent,
+    async (_event, args: CaptureProductEventInput) => {
+      const input = parseWithSchema(
+        captureProductEventInputSchema,
+        args,
+        "product analytics event",
+      );
+      context.deps.productAnalytics?.capture(input.name, {
+        eventSource: "renderer",
+        ...(input.properties ?? {}),
+      });
+    },
+  );
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.checkForUpdates, async () => {
     await context.deps.updater.checkForUpdates();

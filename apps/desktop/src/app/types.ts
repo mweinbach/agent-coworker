@@ -2,6 +2,17 @@ import type { ResearchRecord, ResearchSettings } from "../../../../src/server/re
 import { DEFAULT_RESEARCH_AGENT_ID } from "../../../../src/server/research/types";
 import type { DesktopFeatureFlagOverrides } from "../../../../src/shared/featureFlags";
 import type { SessionFeedItem } from "../../../../src/shared/sessionSnapshot";
+import {
+  type CloudSyncSettings,
+  normalizeCloudSyncSettings,
+  type PersistedCloudSyncSettings,
+} from "../../../../src/sync/types";
+import {
+  DEFAULT_PRIVACY_TELEMETRY_SETTINGS,
+  normalizePrivacyTelemetrySettings,
+  type PersistedPrivacyTelemetrySettings,
+  type PrivacyTelemetrySettings,
+} from "../../../../src/telemetry/config";
 import { normalizeQuickChatShortcutAccelerator } from "../lib/quickChatShortcut";
 import type {
   ApprovalRiskCode,
@@ -166,6 +177,50 @@ export type PersistedDesktopSettings = {
   sidebarSectionOrder?: SidebarSectionKey[];
 };
 
+export type PersistedProductAnalyticsState = {
+  anonymousInstallationId?: string;
+  lastAppVersion?: string | null;
+};
+
+export type {
+  CloudSyncSettings,
+  PersistedCloudSyncSettings,
+  PersistedPrivacyTelemetrySettings,
+  PrivacyTelemetrySettings,
+};
+export {
+  DEFAULT_PRIVACY_TELEMETRY_SETTINGS,
+  normalizeCloudSyncSettings,
+  normalizePrivacyTelemetrySettings,
+};
+
+const SAFE_PRODUCT_ANALYTICS_ID = /^[A-Za-z0-9_-]{16,128}$/;
+
+export function normalizePersistedProductAnalyticsState(
+  value?: PersistedProductAnalyticsState | null,
+): PersistedProductAnalyticsState | undefined {
+  const anonymousInstallationId =
+    typeof value?.anonymousInstallationId === "string" &&
+    SAFE_PRODUCT_ANALYTICS_ID.test(value.anonymousInstallationId.trim())
+      ? value.anonymousInstallationId.trim()
+      : undefined;
+  const lastAppVersion =
+    typeof value?.lastAppVersion === "string" && value.lastAppVersion.trim()
+      ? value.lastAppVersion.trim()
+      : value?.lastAppVersion === null
+        ? null
+        : undefined;
+
+  if (!anonymousInstallationId && lastAppVersion === undefined) {
+    return undefined;
+  }
+
+  return {
+    ...(anonymousInstallationId ? { anonymousInstallationId } : {}),
+    ...(lastAppVersion !== undefined ? { lastAppVersion } : {}),
+  };
+}
+
 const SIDEBAR_SECTION_KEYS = ["projects", "chats"] as const;
 
 export type SidebarSectionKey = (typeof SIDEBAR_SECTION_KEYS)[number];
@@ -236,6 +291,7 @@ export type SettingsPageId =
   | "diagnostics"
   | "providers"
   | "openAiNativeConnectors"
+  | "privacyTelemetry"
   | "desktop"
   | "usage"
   | "workspaces"
@@ -292,6 +348,9 @@ export type PersistedState = {
   showHiddenFiles?: boolean;
   perWorkspaceSettings?: boolean;
   desktopSettings?: PersistedDesktopSettings;
+  privacyTelemetrySettings?: PersistedPrivacyTelemetrySettings;
+  cloudSync?: PersistedCloudSyncSettings;
+  productAnalytics?: PersistedProductAnalyticsState;
   desktopFeatureFlagOverrides?: DesktopFeatureFlagOverrides;
   providerState?: PersistedProviderState;
   providerUiState?: PersistedProviderUiState;

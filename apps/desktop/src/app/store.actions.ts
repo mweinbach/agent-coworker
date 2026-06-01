@@ -9,6 +9,7 @@ import { createWorkspaceMemoryActions } from "./store.actions/memory";
 import { createOnboardingActions } from "./store.actions/onboarding";
 import { createPluginActions } from "./store.actions/plugins";
 import { createPreviewActions } from "./store.actions/preview";
+import { createPrivacyTelemetryActions } from "./store.actions/privacyTelemetry";
 import { createProviderActions } from "./store.actions/provider";
 import { createResearchActions } from "./store.actions/research";
 import { createRuntimeDiagnosticsActions } from "./store.actions/runtimeDiagnostics";
@@ -37,6 +38,7 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
     ...createExplorerActions(set, get),
     ...createPreviewActions(set, get),
     ...createOnboardingActions(set, get),
+    ...createPrivacyTelemetryActions(set, get),
     ...createA2uiDockActions(set, get),
   };
 }

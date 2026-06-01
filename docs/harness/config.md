@@ -59,6 +59,9 @@ Invalid child-routing config is ignored with a warning and the harness falls bac
 
 - `AGENT_OBSERVABILITY_ENABLED`
 - top-level `observabilityEnabled`
+- `AGENT_OBSERVABILITY_RECORD_INPUTS` or `observability.recordInputs`
+- `AGENT_OBSERVABILITY_RECORD_OUTPUTS` or `observability.recordOutputs`
+- `AGENT_OBSERVABILITY_RECORD_PAYLOADS` as shorthand for both payload flags
 - `LANGFUSE_PUBLIC_KEY` or `observability.publicKey`
 - `LANGFUSE_SECRET_KEY` or `observability.secretKey`
 - `LANGFUSE_BASE_URL` or `observability.baseUrl`

@@ -2,6 +2,7 @@ import path from "node:path";
 import type { BrowserWindow, Rectangle, Tray } from "electron";
 import * as electron from "electron";
 import { resolveDesktopFeatureFlags } from "../../../../src/shared/featureFlags";
+import { captureProductEvent } from "../../../../src/telemetry/productAnalytics";
 import type { PersistedState } from "../../src/app/types";
 import { normalizeDesktopSettings } from "../../src/app/types";
 import type { ShowQuickChatWindowInput } from "../../src/lib/desktopApi";
@@ -110,6 +111,11 @@ export class QuickChatController {
     opts: ShowQuickChatWindowInput & { anchorBounds?: Rectangle } = {},
   ): Promise<void> {
     this.hideUtilityWindow();
+    captureProductEvent("quick_chat_opened", {
+      eventSource: "main",
+      quickChatIconEnabled: this.quickChatIconEnabled,
+      quickChatShortcutEnabled: this.quickChatShortcutEnabled,
+    });
     const win = await this.ensureQuickChatWindow(opts);
     this.positionPopupWindow(win, opts.anchorBounds ?? this.tray?.getBounds());
     revealAndActivateWindow(electron.app, win, this.platform);

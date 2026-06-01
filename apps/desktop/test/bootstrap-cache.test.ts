@@ -439,7 +439,39 @@ describe("desktop bootstrap cache", () => {
     expect(seed?.contextSidebarCollapsed).toBe(true);
     expect(seed?.contextSidebarWidth).toBe(420);
     expect(seed?.messageBarHeight).toBe(180);
+    expect(seed?.privacyTelemetrySettings).toEqual({
+      crashReportsEnabled: false,
+      productAnalyticsEnabled: false,
+      aiTraceTelemetryEnabled: false,
+      aiTracePayloadsEnabled: false,
+      diagnosticsUploadEnabled: false,
+      cloudSyncEnabled: false,
+    });
     expect(seed?.threadRuntimeById?.["thread-cached"]?.hydrating).toBeUndefined();
+  });
+
+  test("buildCachedDesktopStateSeed restores normalized privacy telemetry settings", () => {
+    const seed = buildCachedDesktopStateSeed({
+      ...cachedState,
+      persistedState: {
+        ...cachedState.persistedState,
+        privacyTelemetrySettings: {
+          crashReportsEnabled: true,
+          aiTraceTelemetryEnabled: false,
+          aiTracePayloadsEnabled: true,
+          diagnosticsUploadEnabled: true,
+        },
+      },
+    });
+
+    expect(seed?.privacyTelemetrySettings).toEqual({
+      crashReportsEnabled: true,
+      productAnalyticsEnabled: false,
+      aiTraceTelemetryEnabled: false,
+      aiTracePayloadsEnabled: false,
+      diagnosticsUploadEnabled: true,
+      cloudSyncEnabled: false,
+    });
   });
 
   test("buildCachedDesktopStateSeed falls back from remote access when the feature is unavailable", () => {

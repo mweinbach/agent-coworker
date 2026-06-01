@@ -6,6 +6,8 @@ type ShutdownDeps = {
   unregisterAppearanceListener?: () => void;
   stopUpdater?: () => void;
   stopQuickChat?: () => void;
+  stopProductAnalytics?: () => Promise<void> | void;
+  stopCloudSync?: () => Promise<void> | void;
   stopAllServers: () => Promise<void>;
   stopMobileRelayBridge?: () => Promise<void>;
   quit: () => void;
@@ -51,6 +53,16 @@ export function createBeforeQuitHandler(deps: ShutdownDeps): (event: QuitEvent) 
       deps.unregisterAppearanceListener?.();
       deps.stopUpdater?.();
       deps.stopQuickChat?.();
+      try {
+        await deps.stopProductAnalytics?.();
+      } catch (error) {
+        deps.onError?.(error);
+      }
+      try {
+        await deps.stopCloudSync?.();
+      } catch (error) {
+        deps.onError?.(error);
+      }
       shutdownFinished = true;
       deps.quit();
     })();

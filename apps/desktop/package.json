@@ -1,7 +1,7 @@
 {
   "name": "desktop",
   "private": true,
-  "version": "1.1.9",
+  "version": "1.1.10",
   "description": "Cowork desktop app",
   "author": {
     "name": "Max Weinbach",
@@ -21,6 +21,7 @@
     "test": "bun test"
   },
   "dependencies": {
+    "@sentry/electron": "7.13.0",
     "@univerjs/preset-sheets-conditional-formatting": "0.25.0",
     "@univerjs/preset-sheets-core": "0.25.0",
     "@univerjs/preset-sheets-data-validation": "0.25.0",
@@ -37,6 +38,7 @@
     "dompurify": "^3.4.5",
     "electron-updater": "^6.8.3",
     "mammoth": "^1.12.0",
+    "posthog-node": "5.35.8",
     "qrcode.react": "^4.2.0",
     "radix-ui": "^1.4.3",
     "rxjs": "7.8.2",

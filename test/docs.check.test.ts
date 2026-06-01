@@ -114,4 +114,31 @@ describe("docs checker parity", () => {
       resolveDocReferencePath(cwd, "docs/harness/index.md", "../../README.md", "markdown"),
     ).toBe(path.join(cwd, "README.md"));
   });
+
+  test("telemetry docs mention every supported network telemetry env var", async () => {
+    const docs = await Promise.all(
+      [
+        "privacy-telemetry.md",
+        "diagnostics.md",
+        "cloud-sync.md",
+        "packaged-telemetry.md",
+        "release-telemetry-checklist.md",
+      ].map((file) => fs.readFile(path.join(repoRoot(), "docs", file), "utf-8")),
+    );
+    const combined = docs.join("\n");
+
+    for (const envVar of [
+      "COWORK_SENTRY_DSN",
+      "COWORK_POSTHOG_KEY",
+      "COWORK_POSTHOG_HOST",
+      "LANGFUSE_BASE_URL",
+      "LANGFUSE_PUBLIC_KEY",
+      "LANGFUSE_SECRET_KEY",
+      "COWORK_DIAGNOSTICS_UPLOAD_URL",
+      "COWORK_CLOUD_SYNC_ENDPOINT",
+      "COWORK_DISABLE_NETWORK_TELEMETRY",
+    ]) {
+      expect(combined).toContain(envVar);
+    }
+  });
 });

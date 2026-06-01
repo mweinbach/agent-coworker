@@ -166,6 +166,48 @@ export type PersistedDesktopSettings = {
   sidebarSectionOrder?: SidebarSectionKey[];
 };
 
+export type PersistedPrivacyTelemetrySettings = {
+  crashReportsEnabled?: boolean;
+  productAnalyticsEnabled?: boolean;
+  aiTraceTelemetryEnabled?: boolean;
+  aiTracePayloadsEnabled?: boolean;
+  diagnosticsUploadEnabled?: boolean;
+  cloudSyncEnabled?: boolean;
+};
+
+export type PrivacyTelemetrySettings = {
+  crashReportsEnabled: boolean;
+  productAnalyticsEnabled: boolean;
+  aiTraceTelemetryEnabled: boolean;
+  aiTracePayloadsEnabled: boolean;
+  diagnosticsUploadEnabled: boolean;
+  cloudSyncEnabled: boolean;
+};
+
+export const DEFAULT_PRIVACY_TELEMETRY_SETTINGS: PrivacyTelemetrySettings = {
+  crashReportsEnabled: false,
+  productAnalyticsEnabled: false,
+  aiTraceTelemetryEnabled: false,
+  aiTracePayloadsEnabled: false,
+  diagnosticsUploadEnabled: false,
+  cloudSyncEnabled: false,
+};
+
+export function normalizePrivacyTelemetrySettings(
+  value?: PersistedPrivacyTelemetrySettings | null,
+): PrivacyTelemetrySettings {
+  const aiTraceTelemetryEnabled = value?.aiTraceTelemetryEnabled === true;
+
+  return {
+    crashReportsEnabled: value?.crashReportsEnabled === true,
+    productAnalyticsEnabled: value?.productAnalyticsEnabled === true,
+    aiTraceTelemetryEnabled,
+    aiTracePayloadsEnabled: aiTraceTelemetryEnabled && value?.aiTracePayloadsEnabled === true,
+    diagnosticsUploadEnabled: value?.diagnosticsUploadEnabled === true,
+    cloudSyncEnabled: value?.cloudSyncEnabled === true,
+  };
+}
+
 const SIDEBAR_SECTION_KEYS = ["projects", "chats"] as const;
 
 export type SidebarSectionKey = (typeof SIDEBAR_SECTION_KEYS)[number];
@@ -236,6 +278,7 @@ export type SettingsPageId =
   | "diagnostics"
   | "providers"
   | "openAiNativeConnectors"
+  | "privacyTelemetry"
   | "desktop"
   | "usage"
   | "workspaces"
@@ -292,6 +335,7 @@ export type PersistedState = {
   showHiddenFiles?: boolean;
   perWorkspaceSettings?: boolean;
   desktopSettings?: PersistedDesktopSettings;
+  privacyTelemetrySettings?: PersistedPrivacyTelemetrySettings;
   desktopFeatureFlagOverrides?: DesktopFeatureFlagOverrides;
   providerState?: PersistedProviderState;
   providerUiState?: PersistedProviderUiState;

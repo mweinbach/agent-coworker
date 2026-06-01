@@ -10,7 +10,11 @@ import {
   OPENAI_REASONING_SUMMARY_VALUES,
   OPENAI_TEXT_VERBOSITY_VALUES,
 } from "../../../../src/shared/openaiCompatibleOptions";
-import type { PersistedState } from "../app/types";
+import {
+  normalizePrivacyTelemetrySettings,
+  type PersistedPrivacyTelemetrySettings,
+  type PersistedState,
+} from "../app/types";
 import type {
   ConfirmActionInput,
   ContextMenuItem,
@@ -477,6 +481,23 @@ const persistedDesktopSettingsSchema = z
   })
   .optional();
 
+const persistedPrivacyTelemetrySettingsSchema = z.preprocess(
+  (value) =>
+    normalizePrivacyTelemetrySettings(
+      value && typeof value === "object" && !Array.isArray(value)
+        ? (value as PersistedPrivacyTelemetrySettings)
+        : undefined,
+    ),
+  z.object({
+    crashReportsEnabled: z.boolean(),
+    productAnalyticsEnabled: z.boolean(),
+    aiTraceTelemetryEnabled: z.boolean(),
+    aiTracePayloadsEnabled: z.boolean(),
+    diagnosticsUploadEnabled: z.boolean(),
+    cloudSyncEnabled: z.boolean(),
+  }),
+);
+
 export const persistedStateInputSchema: z.ZodType<PersistedState> = z
   .object({
     workspaces: z.array(persistedWorkspaceSchema),
@@ -493,6 +514,7 @@ export const persistedStateInputSchema: z.ZodType<PersistedState> = z
       .preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean())
       .optional(),
     desktopSettings: persistedDesktopSettingsSchema,
+    privacyTelemetrySettings: persistedPrivacyTelemetrySettingsSchema.optional(),
     desktopFeatureFlagOverrides: desktopFeatureFlagOverridesSchema,
     version: z.preprocess(
       (value) =>

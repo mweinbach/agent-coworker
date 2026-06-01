@@ -5,7 +5,11 @@ import { normalizePersistedProviderState } from "../persistedProviderState";
 import { resolvePluginManagementWorkspaceId } from "../pluginManagement";
 import { normalizePersistedProviderUiState } from "../providerUiState";
 import type { AppStoreState } from "../store.helpers";
-import type { CachedDesktopUiState, PersistedState } from "../types";
+import {
+  type CachedDesktopUiState,
+  normalizePrivacyTelemetrySettings,
+  type PersistedState,
+} from "../types";
 import { RUNTIME } from "./runtimeState";
 
 const PERSIST_DEBOUNCE_MS = 300;
@@ -49,6 +53,7 @@ function buildPersistedState(state: AppStoreState): PersistedState {
     showHiddenFiles: state.showHiddenFiles,
     perWorkspaceSettings: state.perWorkspaceSettings,
     desktopSettings: state.desktopSettings,
+    privacyTelemetrySettings: normalizePrivacyTelemetrySettings(state.privacyTelemetrySettings),
     desktopFeatureFlagOverrides: state.desktopFeatureFlagOverrides,
     ...(providerState ? { providerState } : {}),
     providerUiState,

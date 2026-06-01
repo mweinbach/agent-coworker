@@ -384,6 +384,14 @@ describe("desktop persistence state validation", () => {
         },
         sidebarSectionOrder: ["chats", "projects"],
       },
+      privacyTelemetrySettings: {
+        crashReportsEnabled: true,
+        productAnalyticsEnabled: false,
+        aiTraceTelemetryEnabled: true,
+        aiTracePayloadsEnabled: true,
+        diagnosticsUploadEnabled: true,
+        cloudSyncEnabled: false,
+      },
     });
 
     const loaded = await persistence.loadState();
@@ -391,6 +399,14 @@ describe("desktop persistence state validation", () => {
     expect(loaded.desktopSettings?.quickChat?.shortcutEnabled).toBe(true);
     expect(loaded.desktopSettings?.quickChat?.shortcutAccelerator).toBe("Alt+Space");
     expect(loaded.desktopSettings?.sidebarSectionOrder).toEqual(["chats", "projects"]);
+    expect(loaded.privacyTelemetrySettings).toEqual({
+      crashReportsEnabled: true,
+      productAnalyticsEnabled: false,
+      aiTraceTelemetryEnabled: true,
+      aiTracePayloadsEnabled: true,
+      diagnosticsUploadEnabled: true,
+      cloudSyncEnabled: false,
+    });
   });
 
   test("loadState enables LM Studio UI by default when the saved provider status is already connected", async () => {
@@ -663,6 +679,14 @@ describe("desktop persistence state validation", () => {
           },
           developerMode: "sometimes",
           showHiddenFiles: "always",
+          privacyTelemetrySettings: {
+            crashReportsEnabled: "yes",
+            productAnalyticsEnabled: 1,
+            aiTraceTelemetryEnabled: false,
+            aiTracePayloadsEnabled: true,
+            diagnosticsUploadEnabled: null,
+            cloudSyncEnabled: {},
+          },
         },
         null,
         2,
@@ -676,6 +700,14 @@ describe("desktop persistence state validation", () => {
     expect(loaded.threads).toEqual([]);
     expect(loaded.developerMode).toBe(false);
     expect(loaded.showHiddenFiles).toBe(false);
+    expect(loaded.privacyTelemetrySettings).toEqual({
+      crashReportsEnabled: false,
+      productAnalyticsEnabled: false,
+      aiTraceTelemetryEnabled: false,
+      aiTracePayloadsEnabled: false,
+      diagnosticsUploadEnabled: false,
+      cloudSyncEnabled: false,
+    });
     expect(loaded.providerState).toBeUndefined();
   });
 
@@ -741,6 +773,14 @@ describe("desktop persistence state validation", () => {
         },
         archivedChatsAutoDeleteDays: 0,
         sidebarSectionOrder: ["projects", "chats"],
+      },
+      privacyTelemetrySettings: {
+        crashReportsEnabled: false,
+        productAnalyticsEnabled: false,
+        aiTraceTelemetryEnabled: false,
+        aiTracePayloadsEnabled: false,
+        diagnosticsUploadEnabled: false,
+        cloudSyncEnabled: false,
       },
       desktopFeatureFlagOverrides: {},
       providerUiState: {

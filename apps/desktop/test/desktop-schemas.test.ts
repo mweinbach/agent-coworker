@@ -97,6 +97,14 @@ describe("desktop persisted-state schema defaults", () => {
         },
         sidebarSectionOrder: ["chats", "projects"],
       },
+      privacyTelemetrySettings: {
+        crashReportsEnabled: true,
+        productAnalyticsEnabled: true,
+        aiTraceTelemetryEnabled: false,
+        aiTracePayloadsEnabled: true,
+        diagnosticsUploadEnabled: true,
+        cloudSyncEnabled: "yes",
+      },
     });
 
     expect(parsed.workspaces[0]?.defaultEnableMcp).toBe(false);
@@ -117,6 +125,14 @@ describe("desktop persisted-state schema defaults", () => {
     expect(parsed.desktopSettings?.quickChat?.shortcutAccelerator).toBe("Alt+Space");
     expect(parsed.desktopSettings?.archivedChatsAutoDeleteDays).toBe(14);
     expect(parsed.desktopSettings?.sidebarSectionOrder).toEqual(["chats", "projects"]);
+    expect(parsed.privacyTelemetrySettings).toEqual({
+      crashReportsEnabled: true,
+      productAnalyticsEnabled: true,
+      aiTraceTelemetryEnabled: false,
+      aiTracePayloadsEnabled: false,
+      diagnosticsUploadEnabled: true,
+      cloudSyncEnabled: false,
+    });
   });
 
   test("accepts updater state payloads", () => {

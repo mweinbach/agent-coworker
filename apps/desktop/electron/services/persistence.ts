@@ -18,6 +18,7 @@ import {
 import type {
   PersistedDesktopSettings,
   PersistedOnboardingState,
+  PersistedPrivacyTelemetrySettings,
   PersistedState,
   ThreadRecord,
   TranscriptEvent,
@@ -25,7 +26,11 @@ import type {
   WorkspaceRecord,
   WorkspaceUserProfile,
 } from "../../src/app/types";
-import { normalizeDesktopSettings, normalizeWorkspaceUserProfile } from "../../src/app/types";
+import {
+  normalizeDesktopSettings,
+  normalizePrivacyTelemetrySettings,
+  normalizeWorkspaceUserProfile,
+} from "../../src/app/types";
 import type { TranscriptBatchInput } from "../../src/lib/desktopApi";
 
 import { assertDirection, assertSafeId, assertWithinTranscriptsDir } from "./validation";
@@ -62,6 +67,7 @@ function defaultState(): PersistedState {
     showHiddenFiles: false,
     perWorkspaceSettings: false,
     desktopSettings: normalizeDesktopSettings(),
+    privacyTelemetrySettings: normalizePrivacyTelemetrySettings(),
     desktopFeatureFlagOverrides: {},
     providerUiState: normalizePersistedProviderUiState(undefined),
   };
@@ -140,6 +146,12 @@ function sanitizeDesktopSettings(value: unknown): PersistedDesktopSettings {
     archivedChatsAutoDeleteDays: normalized.archivedChatsAutoDeleteDays,
     sidebarSectionOrder: normalized.sidebarSectionOrder,
   };
+}
+
+function sanitizePrivacyTelemetrySettings(value: unknown): PersistedPrivacyTelemetrySettings {
+  return normalizePrivacyTelemetrySettings(
+    isRecord(value) ? (value as PersistedPrivacyTelemetrySettings) : undefined,
+  );
 }
 
 function asLegacyPreferredChildModel(item: Record<string, unknown>): string | undefined {
@@ -364,6 +376,7 @@ async function sanitizePersistedState(value: unknown): Promise<PersistedState> {
     perWorkspaceSettings:
       typeof value.perWorkspaceSettings === "boolean" ? value.perWorkspaceSettings : false,
     desktopSettings: sanitizeDesktopSettings(value.desktopSettings),
+    privacyTelemetrySettings: sanitizePrivacyTelemetrySettings(value.privacyTelemetrySettings),
     desktopFeatureFlagOverrides: normalizeDesktopFeatureFlagOverrides(
       value.desktopFeatureFlagOverrides,
     ),

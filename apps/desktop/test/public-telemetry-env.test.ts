@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
 import {
-  PUBLIC_TELEMETRY_ENV_KEYS,
   applyPublicTelemetryEnv,
+  PUBLIC_TELEMETRY_ENV_KEYS,
   pickPublicTelemetryEnv,
 } from "../electron/services/publicTelemetryEnv";
 

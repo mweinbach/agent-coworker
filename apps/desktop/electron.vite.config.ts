@@ -28,9 +28,7 @@ function resolveDesktopRendererPort(value: string | undefined): number {
 
 const desktopRendererPort = resolveDesktopRendererPort(process.env.COWORK_DESKTOP_RENDERER_PORT);
 const safePublicTelemetryDefine = {
-  "globalThis.__COWORK_PUBLIC_TELEMETRY_ENV__": JSON.stringify(
-    pickPublicTelemetryEnv(process.env),
-  ),
+  "globalThis.__COWORK_PUBLIC_TELEMETRY_ENV__": JSON.stringify(pickPublicTelemetryEnv(process.env)),
 };
 
 export default defineConfig({

@@ -12,8 +12,10 @@ const SUPPORTED_OPENAI_RESPONSES_MODEL_LIMITS: Record<string, SupportedResponses
   "gpt-5-mini": { contextWindow: 400_000, maxTokens: 128_000 },
   "gpt-5.2": { contextWindow: 400_000, maxTokens: 128_000 },
   "gpt-5.2-pro": { contextWindow: 400_000, maxTokens: 128_000 },
-  "gpt-5.4": { contextWindow: 400_000, maxTokens: 128_000 },
+  "gpt-5.4": { contextWindow: 1_050_000, maxTokens: 128_000 },
   "gpt-5.4-mini": { contextWindow: 400_000, maxTokens: 128_000 },
+  "gpt-5.4-nano": { contextWindow: 400_000, maxTokens: 128_000 },
+  "gpt-5.4-pro": { contextWindow: 1_050_000, maxTokens: 128_000 },
   "gpt-5.5": { contextWindow: 1_050_000, maxTokens: 128_000 },
 };
 

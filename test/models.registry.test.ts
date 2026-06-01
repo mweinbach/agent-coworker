@@ -38,11 +38,45 @@ describe("model registry invariants", () => {
       "opencode-go",
       "opencode-zen",
       "codex-cli",
+      "antigravity",
     ] as ProviderName[]) {
       const models = listSupportedModels(provider);
       expect(models.length).toBeGreaterThan(0);
       expect(defaultSupportedModel(provider).provider).toBe(provider);
     }
+  });
+
+  test("every config/models JSON file is imported into MODEL_REGISTRY_ENTRIES", () => {
+    const root = repoRoot();
+    const modelsRoot = path.join(root, "config", "models");
+    const expectedKeys = new Set<string>();
+    const pending = [modelsRoot];
+
+    while (pending.length > 0) {
+      const dir = pending.pop();
+      if (!dir) continue;
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const entryPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          pending.push(entryPath);
+          continue;
+        }
+        if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+        const raw = JSON.parse(fs.readFileSync(entryPath, "utf-8")) as {
+          id?: unknown;
+          provider?: unknown;
+        };
+        if (typeof raw.provider !== "string" || typeof raw.id !== "string") {
+          throw new Error(`Invalid model config shape in ${entryPath}`);
+        }
+        expectedKeys.add(`${raw.provider}:${raw.id}`);
+      }
+    }
+
+    const importedKeys = new Set(
+      MODEL_REGISTRY_ENTRIES.map((model) => `${model.provider}:${model.id}`),
+    );
+    expect([...importedKeys].sort()).toEqual([...expectedKeys].sort());
   });
 
   test("every model entry has display metadata and a prompt template that exists", () => {
@@ -77,6 +111,7 @@ describe("model registry invariants", () => {
       "opencode-go",
       "opencode-zen",
       "codex-cli",
+      "antigravity",
     ] as ProviderName[]) {
       expect(seenDefaults.get(provider)).toBe(1);
     }
@@ -120,6 +155,15 @@ describe("model registry helpers", () => {
 
   test("providerOptionsDefaultsForModel returns an empty object for unknown models", () => {
     expect(providerOptionsDefaultsForModel("anthropic", "missing-model")).toEqual({});
+  });
+
+  test("Claude Opus 4.7 and 4.8 use adaptive thinking defaults", () => {
+    for (const modelId of ["claude-opus-4-7", "claude-opus-4-8"] as const) {
+      expect(providerOptionsDefaultsForModel("anthropic", modelId)).toMatchObject({
+        thinking: { type: "adaptive" },
+        effort: "high",
+      });
+    }
   });
 
   test("every user-facing model has child-agent guidance metadata", () => {
@@ -188,6 +232,15 @@ describe("legacy model aliases", () => {
   test("normalizeModelIdForProvider resolves legacy alias gemini-3-pro-preview", () => {
     const normalized = normalizeModelIdForProvider("google", "gemini-3-pro-preview");
     expect(normalized).toBe("gemini-3.1-pro-preview-customtools");
+  });
+
+  test("Gemini 3.1 Flash-Lite preview normalizes to the canonical model id", () => {
+    const model = getSupportedModel("google", "gemini-3.1-flash-lite-preview");
+    expect(model).not.toBeNull();
+    expect(model?.id).toBe("gemini-3.1-flash-lite");
+    expect(normalizeModelIdForProvider("google", "gemini-3.1-flash-lite-preview")).toBe(
+      "gemini-3.1-flash-lite",
+    );
   });
 
   test("parseChildModelRef normalizes legacy alias in child model ref", () => {

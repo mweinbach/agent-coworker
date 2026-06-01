@@ -887,7 +887,7 @@ describe("sessionTitleService", () => {
     });
   });
 
-  test("routes antigravity provider to google provider and gemini-3.1-flash-lite-preview", async () => {
+  test("routes antigravity provider to google provider and gemini-3.1-flash-lite", async () => {
     const runTurn = mock(async (_args: any) => ({
       text: "Antigravity Routed Title",
       reasoningText: undefined,
@@ -900,7 +900,7 @@ describe("sessionTitleService", () => {
       model: config.model,
     }));
     const defaultModelForProvider = mock(
-      (_provider: AgentConfig["provider"]) => "gemini-3.1-flash-lite-preview",
+      (_provider: AgentConfig["provider"]) => "gemini-3.1-flash-lite",
     );
 
     const generateSessionTitle = createNonAppleTitleGenerator({
@@ -916,12 +916,12 @@ describe("sessionTitleService", () => {
     expect(result).toEqual({
       title: "Antigravity Routed Title",
       source: "model",
-      model: "gemini-3.1-flash-lite-preview",
+      model: "gemini-3.1-flash-lite",
     });
     expect(createRuntime).toHaveBeenCalledTimes(1);
     expect(createRuntime.mock.calls[0]?.[0]).toMatchObject({
       provider: "google",
-      model: "gemini-3.1-flash-lite-preview",
+      model: "gemini-3.1-flash-lite",
     });
     expect(runTurn).toHaveBeenCalledTimes(1);
   });

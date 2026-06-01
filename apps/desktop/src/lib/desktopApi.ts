@@ -340,6 +340,30 @@ export type CaptureProductEventInput = {
   properties?: ProductAnalyticsProperties;
 };
 
+export type DiagnosticsBundlePathInput = {
+  path: string;
+};
+
+export type UploadDiagnosticsBundleInput = DiagnosticsBundlePathInput & {
+  confirmed: boolean;
+};
+
+export type CreateDiagnosticsBundleOutput = {
+  path: string;
+  createdAt: string;
+  summary: string;
+  uploadConfigured: boolean;
+  uploadEnabled: boolean;
+};
+
+export type UploadDiagnosticsBundleOutput = {
+  uploaded: boolean;
+  path: string;
+  diagnosticId: string | null;
+  url: string | null;
+  message: string;
+};
+
 export function createDefaultUpdaterState(
   currentVersion = desktopAppVersion,
   packaged = false,
@@ -441,6 +465,12 @@ export interface DesktopApi {
   trashPath(opts: TrashPathInput): Promise<void>;
   confirmAction(opts: ConfirmActionInput): Promise<boolean>;
   showNotification(opts: DesktopNotificationInput): Promise<boolean>;
+  createDiagnosticsBundle(): Promise<CreateDiagnosticsBundleOutput>;
+  revealDiagnosticsBundle(opts: DiagnosticsBundlePathInput): Promise<void>;
+  openLogsFolder(): Promise<void>;
+  uploadDiagnosticsBundle(
+    opts: UploadDiagnosticsBundleInput,
+  ): Promise<UploadDiagnosticsBundleOutput>;
   getUpdateState(): Promise<UpdaterState>;
   checkForUpdates(): Promise<void>;
   quitAndInstallUpdate(): Promise<void>;
@@ -504,6 +534,10 @@ export const DESKTOP_IPC_CHANNELS = {
   trashPath: "desktop:trashPath",
   confirmAction: "desktop:confirmAction",
   showNotification: "desktop:showNotification",
+  createDiagnosticsBundle: "desktop:createDiagnosticsBundle",
+  revealDiagnosticsBundle: "desktop:revealDiagnosticsBundle",
+  openLogsFolder: "desktop:openLogsFolder",
+  uploadDiagnosticsBundle: "desktop:uploadDiagnosticsBundle",
   getUpdateState: "desktop:getUpdateState",
   checkForUpdates: "desktop:checkForUpdates",
   quitAndInstallUpdate: "desktop:quitAndInstallUpdate",

@@ -8,6 +8,7 @@ import {
   type UpdaterReleaseInfo,
   type UpdaterState,
 } from "../../src/lib/desktopApi";
+import { writeLocalLog } from "./localLogs";
 import { applyUpdaterPlatformDefaults } from "./updaterPlatform";
 
 const AUTOMATIC_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
@@ -99,6 +100,10 @@ function toMessage(error: unknown): string {
     return error.message;
   }
   return String(error);
+}
+
+function logUpdater(level: "info" | "warn" | "error", message: string, meta?: unknown): void {
+  writeLocalLog("updater.log", level, "updater", message, meta);
 }
 
 function isMissingReleaseFeedMessage(message: string): boolean {
@@ -219,6 +224,11 @@ export class DesktopUpdaterService {
     if (!this.isPackaged || this.started) {
       return;
     }
+    logUpdater("info", "updater started", {
+      currentVersion: this.currentVersion,
+      platform: this.platform,
+      arch: this.arch,
+    });
     this.started = true;
     this.startupHandle = this.setTimeoutFn(() => {
       void this.checkForUpdates();
@@ -279,6 +289,7 @@ export class DesktopUpdaterService {
     } catch (error) {
       const message = toMessage(error);
       if (isMissingReleaseFeedMessage(message)) {
+        logUpdater("warn", "auto updater feed unavailable", { error: message });
         console.warn(`[desktop] Auto updater feed unavailable: ${message}`);
         this.setState({
           phase: "disabled",
@@ -299,6 +310,7 @@ export class DesktopUpdaterService {
         return;
       }
 
+      logUpdater("warn", "auto updater check failed", { error: message });
       console.warn(`[desktop] Auto updater check failed: ${message}`);
       this.captureError?.(error, { operation: "updater_check_failed" });
       this.setState({
@@ -331,6 +343,7 @@ export class DesktopUpdaterService {
 
   private registerListeners(): void {
     this.updater.on("checking-for-update", () => {
+      logUpdater("info", "checking for update");
       this.setState({
         phase: "checking",
         lastCheckStartedAt: this.state.lastCheckStartedAt ?? this.now(),
@@ -342,6 +355,10 @@ export class DesktopUpdaterService {
 
     this.updater.on("update-available", (info: UpdateInfo) => {
       const release = normalizeReleaseInfo(info);
+      logUpdater("info", "update available", {
+        version: release?.version,
+        releaseDate: release?.releaseDate,
+      });
       this.setState({
         phase: "available",
         lastCheckedAt: this.now(),
@@ -362,6 +379,7 @@ export class DesktopUpdaterService {
     });
 
     this.updater.on("update-not-available", () => {
+      logUpdater("info", "update not available");
       this.setState({
         phase: "up-to-date",
         lastCheckedAt: this.now(),
@@ -393,6 +411,7 @@ export class DesktopUpdaterService {
 
     this.updater.on("update-downloaded", (info: UpdateDownloadedEvent) => {
       const release = normalizeReleaseInfo(info) ?? this.state.release;
+      logUpdater("info", "update downloaded", { version: release?.version });
       const nextState = {
         phase: "downloaded" as const,
         lastCheckedAt: this.now(),
@@ -421,6 +440,7 @@ export class DesktopUpdaterService {
     this.updater.on("error", (error: unknown) => {
       const message = toMessage(error);
       if (isMissingReleaseFeedMessage(message)) {
+        logUpdater("warn", "auto updater feed unavailable", { error: message });
         console.warn(`[desktop] Auto updater feed unavailable: ${message}`);
         this.setState({
           phase: "disabled",
@@ -441,6 +461,7 @@ export class DesktopUpdaterService {
         return;
       }
 
+      logUpdater("error", "auto updater error", { error: message });
       console.warn(`[desktop] Auto updater error: ${message}`);
       this.captureError?.(error, { operation: "updater_event_error" });
       this.setState({

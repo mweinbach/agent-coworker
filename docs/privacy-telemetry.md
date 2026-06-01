@@ -21,6 +21,16 @@ Repository contents must never be uploaded or synced through cloud sync. Diagnos
 
 Prompts, responses, shell commands, stdout/stderr, transcripts, file paths, and uploaded file names may only be included in AI traces when both `aiTraceTelemetryEnabled` and `aiTracePayloadsEnabled` are true.
 
+## Local Diagnostics
+
+Desktop diagnostics are local-first. The Electron app writes best-effort local logs under the Electron `userData/logs` directory, including `server.log`, `desktop-main.log`, optional `renderer.log`, and `updater.log`.
+
+Local logs must not include prompts, completions, file contents, shell output, API keys, tokens, cookies, or unsanitized absolute paths. Main-process log helpers sanitize metadata before writing and redact home/workspace paths, secret-like fields, emails, JSON bodies, and oversized strings.
+
+Users can create a diagnostics bundle from Settings -> Diagnostics. Bundle generation is local and explicit. The bundle is a redacted JSON file under `userData/diagnostics`; it includes technical metadata, toggle states, update state, counts, and sanitized recent log tails. It excludes transcripts, prompts, completions, shell output, workspace paths, filenames, API keys/tokens, and SQLite databases.
+
+`diagnosticsUploadEnabled` only means the user is allowed to upload a generated diagnostics bundle after pressing an upload button and confirming. It never enables automatic upload. If `COWORK_DIAGNOSTICS_UPLOAD_URL` is not configured, Cowork creates and reveals the local bundle instead of uploading.
+
 ## Crash Reports
 
 Crash reports are optional and only start when the Crash reports toggle is on and a Sentry DSN is configured. They cover Electron main, Electron renderer, and the Cowork server sidecar.

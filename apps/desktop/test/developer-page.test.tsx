@@ -24,6 +24,16 @@ const MOCK_UPDATE_STATE = {
   progress: null,
   error: null,
 };
+const createDiagnosticsBundleMock = mock(async () => ({
+  path: "/tmp/cowork-diagnostics.json",
+  createdAt: "2026-06-01T00:00:00.000Z",
+  summary: "Cowork diagnostics bundle\nWorkspaces: 1\nThreads: 1",
+  uploadConfigured: false,
+  uploadEnabled: false,
+}));
+const revealDiagnosticsBundleMock = mock(async () => {});
+const openLogsFolderMock = mock(async () => {});
+const copyTextMock = mock(async (_text: string) => {});
 
 mock.module("../src/lib/desktopCommands", () =>
   createDesktopCommandsMock({
@@ -53,6 +63,10 @@ mock.module("../src/lib/desktopCommands", () =>
     trashPath: async () => {},
     confirmAction: async () => true,
     showNotification: async () => true,
+    createDiagnosticsBundle: createDiagnosticsBundleMock,
+    revealDiagnosticsBundle: revealDiagnosticsBundleMock,
+    openLogsFolder: openLogsFolderMock,
+    copyText: copyTextMock,
     getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
     setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
     getUpdateState: async () => MOCK_UPDATE_STATE,
@@ -79,6 +93,10 @@ const defaultStoreActions = {
 
 describe("desktop developer page", () => {
   beforeEach(() => {
+    createDiagnosticsBundleMock.mockClear();
+    revealDiagnosticsBundleMock.mockClear();
+    openLogsFolderMock.mockClear();
+    copyTextMock.mockClear();
     useAppStore.setState(defaultStoreActions);
   });
 
@@ -128,6 +146,59 @@ describe("desktop developer page", () => {
       expect(container.textContent).toContain("Workspace 1");
       expect(container.textContent).toContain("/tmp/workspace-1");
       expect(container.innerHTML).toContain('value="12000"');
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("creates and reveals a diagnostics bundle from developer settings", async () => {
+    const harness = setupJsdom();
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(DeveloperPage));
+      });
+
+      expect(container.textContent).toContain("Diagnostics Bundle");
+      expect(container.textContent).toContain("Create Diagnostics Bundle");
+      expect(container.textContent).toContain("Open Logs Folder");
+      expect(container.textContent).toContain("Copy Diagnostic Summary");
+
+      const createButton = [...container.querySelectorAll("button")].find((entry) =>
+        entry.textContent?.includes("Create Diagnostics Bundle"),
+      );
+      if (!createButton) throw new Error("missing create diagnostics button");
+
+      await act(async () => {
+        createButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(createDiagnosticsBundleMock).toHaveBeenCalledTimes(1);
+      expect(revealDiagnosticsBundleMock).toHaveBeenCalledWith({
+        path: "/tmp/cowork-diagnostics.json",
+      });
+      expect(container.textContent).toContain("/tmp/cowork-diagnostics.json");
+      expect(container.textContent).toContain("Diagnostics bundle created.");
+
+      const copyButton = [...container.querySelectorAll("button")].find((entry) =>
+        entry.textContent?.includes("Copy Diagnostic Summary"),
+      );
+      if (!copyButton) throw new Error("missing copy diagnostics button");
+
+      await act(async () => {
+        copyButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(copyTextMock).toHaveBeenCalledWith(
+        "Cowork diagnostics bundle\nWorkspaces: 1\nThreads: 1",
+      );
 
       await act(async () => {
         root.unmount();

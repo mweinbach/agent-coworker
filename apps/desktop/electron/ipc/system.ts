@@ -5,15 +5,19 @@ import {
   type ConfirmActionInput,
   DESKTOP_IPC_CHANNELS,
   type DesktopNotificationInput,
+  type DiagnosticsBundlePathInput,
   type OpenExternalUrlInput,
   type SetWindowAppearanceInput,
+  type UploadDiagnosticsBundleInput,
 } from "../../src/lib/desktopApi";
 import {
   captureProductEventInputSchema,
   confirmActionInputSchema,
   desktopNotificationInputSchema,
+  diagnosticsBundlePathInputSchema,
   openExternalUrlInputSchema,
   setWindowAppearanceInputSchema,
+  uploadDiagnosticsBundleInputSchema,
 } from "../../src/lib/desktopSchemas";
 import { applyWindowAppearance, getSystemAppearanceSnapshot } from "../services/appearance";
 import { buildConfirmDialog } from "../services/dialogs";
@@ -57,6 +61,38 @@ export function registerSystemIpc(context: DesktopIpcModuleContext): void {
       });
       notification.show();
       return true;
+    },
+  );
+
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.createDiagnosticsBundle, async () => {
+    return await context.deps.diagnostics.createBundle();
+  });
+
+  handleDesktopInvoke(
+    DESKTOP_IPC_CHANNELS.revealDiagnosticsBundle,
+    async (_event, args: DiagnosticsBundlePathInput) => {
+      const input = parseWithSchema(
+        diagnosticsBundlePathInputSchema,
+        args,
+        "revealDiagnosticsBundle options",
+      );
+      await context.deps.diagnostics.revealBundle(input.path);
+    },
+  );
+
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.openLogsFolder, async () => {
+    await context.deps.diagnostics.openLogsFolder();
+  });
+
+  handleDesktopInvoke(
+    DESKTOP_IPC_CHANNELS.uploadDiagnosticsBundle,
+    async (_event, args: UploadDiagnosticsBundleInput) => {
+      const input = parseWithSchema(
+        uploadDiagnosticsBundleInputSchema,
+        args,
+        "uploadDiagnosticsBundle options",
+      );
+      return await context.deps.diagnostics.uploadBundle(input.path, input.confirmed);
     },
   );
 

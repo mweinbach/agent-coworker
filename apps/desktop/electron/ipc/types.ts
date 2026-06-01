@@ -7,6 +7,7 @@ import type {
   ShowCanvasWindowInput,
   ShowQuickChatWindowInput,
 } from "../../src/lib/desktopApi";
+import type { DiagnosticsService } from "../services/diagnostics";
 import type { MobileRelayBridge } from "../services/mobileRelayBridge";
 import type { PersistenceService } from "../services/persistence";
 import type { DesktopProductAnalyticsService } from "../services/productAnalytics";
@@ -17,6 +18,7 @@ export type DesktopIpcDeps = {
   mobileRelayBridge: MobileRelayBridge;
   persistence: PersistenceService;
   productAnalytics?: DesktopProductAnalyticsService;
+  diagnostics: DiagnosticsService;
   serverManager: ServerManager;
   updater: DesktopUpdaterService;
   showMainWindow: () => Promise<void> | void;

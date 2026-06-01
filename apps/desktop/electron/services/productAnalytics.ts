@@ -4,23 +4,24 @@ import { app } from "electron";
 import {
   captureProductEvent,
   initProductAnalytics,
-  resolveProductAnalyticsConfig,
-  setProductAnalyticsEnabled,
-  shutdownProductAnalytics,
   type ProductAnalyticsEventName,
   type ProductAnalyticsEventProperties,
   type ProductAnalyticsProperties,
   type ProductAnalyticsStatus,
+  resolveProductAnalyticsConfig,
+  setProductAnalyticsEnabled,
+  shutdownProductAnalytics,
 } from "../../../../src/telemetry/productAnalytics";
 import {
   normalizeDesktopSettings,
   normalizePersistedProductAnalyticsState,
   normalizePrivacyTelemetrySettings,
-  type PersistedProductAnalyticsState,
   type PersistedPrivacyTelemetrySettings,
+  type PersistedProductAnalyticsState,
   type PersistedState,
 } from "../../src/app/types";
 import type { DesktopProductAnalyticsConfig } from "../../src/lib/desktopApi";
+import { writeLocalLog } from "./localLogs";
 
 type DesktopProductAnalyticsServiceOptions = {
   env?: NodeJS.ProcessEnv;
@@ -311,6 +312,12 @@ export class DesktopProductAnalyticsService {
         eventSource: "main",
       }),
     );
+    writeLocalLog("desktop-main.log", "info", "product-analytics", "product analytics status", {
+      initialized: this.lastStatus.initialized,
+      reason: this.lastStatus.reason,
+      enabled: this.lastStatus.enabled,
+      keyConfigured: this.lastStatus.keyConfigured,
+    });
 
     if (this.lastStatus.initialized) {
       if (!this.startupCaptured) {

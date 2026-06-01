@@ -2,18 +2,19 @@ import os from "node:os";
 import { app } from "electron";
 
 import {
-  captureError,
-  initCrashReporting,
-  resolveCrashReportingConfig,
   type CrashReportingEnv,
   type CrashReportingSdk,
   type CrashReportingStatus,
+  captureError,
+  initCrashReporting,
+  resolveCrashReportingConfig,
   shutdownCrashReporting,
 } from "../../../../src/telemetry/crashReporting";
 import {
   normalizePrivacyTelemetrySettings,
   type PersistedPrivacyTelemetrySettings,
 } from "../../src/app/types";
+import { writeLocalLog } from "./localLogs";
 
 let processHandlersRegistered = false;
 
@@ -112,6 +113,12 @@ export async function initElectronMainCrashReporting(
   if (status.initialized) {
     registerMainCrashReportingHandlers();
   }
+  writeLocalLog("desktop-main.log", "info", "crash-reporting", "crash reporting status", {
+    initialized: status.initialized,
+    reason: status.reason,
+    enabled: status.enabled,
+    dsnConfigured: status.dsnConfigured,
+  });
   return status;
 }
 

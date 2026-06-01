@@ -1,29 +1,28 @@
 import { type ChildProcessByStdio, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
-import fsp from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
 import type { Readable } from "node:stream";
 import { app } from "electron";
 import { z } from "zod";
-
-import {
-  normalizePrivacyTelemetrySettings,
-  type PersistedProductAnalyticsState,
-  type PersistedPrivacyTelemetrySettings,
-} from "../../src/app/types";
 import {
   captureError,
   resolveCrashReportingConfig,
 } from "../../../../src/telemetry/crashReporting";
 import { captureProductEvent } from "../../../../src/telemetry/productAnalytics";
+import {
+  normalizePrivacyTelemetrySettings,
+  type PersistedPrivacyTelemetrySettings,
+  type PersistedProductAnalyticsState,
+} from "../../src/app/types";
 import { resolvePackagedBuiltinDistDir } from "./desktopBuiltinPaths";
-import { buildDesktopProductAnalyticsEnv } from "./productAnalytics";
+import { flushLocalLogWrites, getLocalLogPath, writeLocalLog } from "./localLogs";
 import type {
   MobileRelayTrustedDevicePermissionKey,
   MobileRelayTrustedPhoneDevice,
 } from "./mobileRelayTypes";
+import { buildDesktopProductAnalyticsEnv } from "./productAnalytics";
 import {
   buildSourceEnvForAttempt,
   getServerTerminationSignal,
@@ -653,34 +652,15 @@ function toHttpServerUrl(websocketUrl: string): string {
 }
 
 function getServerLogPath(): string {
-  return path.join(app.getPath("userData"), "logs", SERVER_LOG_FILE_NAME);
+  return getLocalLogPath(SERVER_LOG_FILE_NAME);
 }
 
-let pendingServerLogWrite: Promise<void> = Promise.resolve();
-
-function logServerManagerEvent(message: string): void {
-  const entry = `[${new Date().toISOString()}] ${message}\n`;
-  pendingServerLogWrite = pendingServerLogWrite
-    .catch(() => {
-      // Preserve future writes if a previous append failed.
-    })
-    .then(async () => {
-      try {
-        const logPath = getServerLogPath();
-        await fsp.mkdir(path.dirname(logPath), { recursive: true });
-        await fsp.appendFile(logPath, entry, "utf8");
-      } catch {
-        // Best effort diagnostics only.
-      }
-    });
+function logServerManagerEvent(message: string, meta?: unknown): void {
+  writeLocalLog(SERVER_LOG_FILE_NAME, "info", "server-manager", message, meta);
 }
 
 async function flushServerManagerLogWrites(): Promise<void> {
-  try {
-    await pendingServerLogWrite;
-  } catch {
-    // Best effort diagnostics only.
-  }
+  await flushLocalLogWrites(SERVER_LOG_FILE_NAME);
 }
 
 function summarizeLogChunk(chunk: string): string {
@@ -783,9 +763,12 @@ export class ServerManager {
       );
     }
 
-    logServerManagerEvent(
-      `workspace=${workspaceId} start requested mode=${useSource ? "source" : "packaged"} workspacePath=${workspacePath}`,
-    );
+    logServerManagerEvent("workspace server start requested", {
+      workspaceId,
+      mode: useSource ? "source" : "packaged",
+      workspacePath,
+      yolo,
+    });
 
     const attemptCount = getSourceStartupAttemptCount(useSource);
     let previousError: unknown = null;
@@ -826,12 +809,15 @@ export class ServerManager {
             COWORK_DESKTOP_BUNDLE: "1",
           },
         });
-        spawnDescription = `${sidecar.command} ${sidecar.args.join(" ")}`.trim();
+        spawnDescription = `${path.basename(sidecar.command)} ${sidecar.args.join(" ")}`.trim();
       }
 
-      logServerManagerEvent(
-        `workspace=${workspaceId} attempt=${attempt}/${attemptCount} spawn=${spawnDescription}`,
-      );
+      logServerManagerEvent("workspace server spawn attempt", {
+        workspaceId,
+        attempt,
+        attemptCount,
+        spawn: spawnDescription,
+      });
 
       let cleaned = false;
       const cleanupOnce = () => {
@@ -854,16 +840,20 @@ export class ServerManager {
         if (DEBUG_SERVER_STDERR) {
           process.stderr.write(`[cowork-server] ${text}`);
         }
-        const summary = summarizeLogChunk(text);
-        if (summary) {
-          logServerManagerEvent(`workspace=${workspaceId} stderr=${summary}`);
-        }
+        logServerManagerEvent("workspace server stderr emitted", {
+          workspaceId,
+          bytes: Buffer.byteLength(text),
+          bunCrash: isLikelyBunSegfault(text),
+        });
       });
 
       try {
         const listening = await waitForServerListening(child);
         const url = appendBrowserAccessToken(listening.url, listening.browserAccessToken);
-        logServerManagerEvent(`workspace=${workspaceId} listening url=${listening.url}`);
+        logServerManagerEvent("workspace server listening", {
+          workspaceId,
+          url: listening.url,
+        });
         const pendingHandle = this.pendingStarts.get(workspaceId);
         if (pendingHandle?.child === child) {
           this.pendingStarts.delete(workspaceId);
@@ -912,9 +902,11 @@ export class ServerManager {
 
         if (shouldRetry) {
           previousError = error;
-          logServerManagerEvent(
-            `workspace=${workspaceId} retrying after Bun crash attempt=${attempt} error=${toErrorMessage(error)}`,
-          );
+          logServerManagerEvent("workspace server retrying after Bun crash", {
+            workspaceId,
+            attempt,
+            error: toErrorMessage(error),
+          });
           if (DEBUG_SERVER_STDERR) {
             process.stderr.write(
               "[cowork-server] Bun crashed during startup; retrying with async transpiler disabled.\n",
@@ -930,9 +922,11 @@ export class ServerManager {
             mode: useSource ? "source" : "packaged",
             attempt,
           });
-          logServerManagerEvent(
-            `workspace=${workspaceId} bun_crash error=${toErrorMessage(error)} stderrTail=${summarizeLogChunk(stderrTail)}`,
-          );
+          logServerManagerEvent("workspace server Bun crash", {
+            workspaceId,
+            error: toErrorMessage(error),
+            stderrBytes: Buffer.byteLength(stderrTail),
+          });
           captureProductEvent("workspace_server_failed", {
             eventSource: "main",
             status: "failed",
@@ -954,9 +948,11 @@ export class ServerManager {
           mode: useSource ? "source" : "packaged",
           attempt,
         });
-        logServerManagerEvent(
-          `workspace=${workspaceId} start_failed error=${toErrorMessage(error)} stderrTail=${summarizeLogChunk(stderrTail)}`,
-        );
+        logServerManagerEvent("workspace server start failed", {
+          workspaceId,
+          error: toErrorMessage(error),
+          stderrBytes: Buffer.byteLength(stderrTail),
+        });
         captureProductEvent("workspace_server_failed", {
           eventSource: "main",
           status: "failed",

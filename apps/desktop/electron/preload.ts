@@ -1,30 +1,31 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { z } from "zod";
 import {
-  resolveCrashReportingConfig,
-  type CrashReportingEnvironment,
-} from "../../../src/telemetry/crashReporting";
-import { resolveProductAnalyticsConfig } from "../../../src/telemetry/productAnalytics";
-import {
   type DesktopFeatureFlagOverrides,
   normalizeDesktopFeatureFlagOverrides,
   resolveDesktopFeatureFlags,
 } from "../../../src/shared/featureFlags";
+import {
+  type CrashReportingEnvironment,
+  resolveCrashReportingConfig,
+} from "../../../src/telemetry/crashReporting";
+import { resolveProductAnalyticsConfig } from "../../../src/telemetry/productAnalytics";
 import type { PersistedState } from "../src/app/types";
 import {
+  type CaptureProductEventInput,
   type ConfirmActionInput,
   type CopyPathInput,
-  type CaptureProductEventInput,
   type CreateDirectoryInput,
   type CreateOneOffChatWorkspaceInput,
   DESKTOP_EVENT_CHANNELS,
   DESKTOP_IPC_CHANNELS,
   type DeleteTranscriptInput,
-  type DesktopCrashReportingConfig,
   type DesktopApi,
+  type DesktopCrashReportingConfig,
   type DesktopMenuCommand,
   type DesktopNotificationInput,
   type DesktopProductAnalyticsConfig,
+  type DiagnosticsBundlePathInput,
   type ListDirectoryInput,
   type MobileRelayBridgeState,
   type MobileRelayForgetTrustedPhoneInput,
@@ -52,19 +53,21 @@ import {
   type TranscriptBatchInput,
   type TrashPathInput,
   type UpdaterState,
+  type UploadDiagnosticsBundleInput,
   type WindowDragPointInput,
   type WriteFileInput,
 } from "../src/lib/desktopApi";
 import {
+  captureProductEventInputSchema,
   confirmActionInputSchema,
   copyPathInputSchema,
   copyTextInputSchema,
-  captureProductEventInputSchema,
   createDirectoryInputSchema,
   createOneOffChatWorkspaceInputSchema,
   deleteTranscriptInputSchema,
   desktopMenuCommandSchema,
   desktopNotificationInputSchema,
+  diagnosticsBundlePathInputSchema,
   listDirectoryInputSchema,
   mobileRelayBridgeStateSchema,
   mobileRelayForgetTrustedPhoneInputSchema,
@@ -93,6 +96,7 @@ import {
   transcriptBatchInputSchema,
   trashPathInputSchema,
   updaterStateSchema,
+  uploadDiagnosticsBundleInputSchema,
   windowDragPointInputSchema,
   writeFileInputSchema,
 } from "../src/lib/desktopSchemas";
@@ -217,6 +221,14 @@ function assertConfirmActionInput(opts: ConfirmActionInput): void {
 
 function assertDesktopNotificationInput(opts: DesktopNotificationInput): void {
   parseWithSchema(desktopNotificationInputSchema, opts, "showNotification options");
+}
+
+function assertDiagnosticsBundlePathInput(opts: DiagnosticsBundlePathInput): void {
+  parseWithSchema(diagnosticsBundlePathInputSchema, opts, "diagnostics bundle path options");
+}
+
+function assertUploadDiagnosticsBundleInput(opts: UploadDiagnosticsBundleInput): void {
+  parseWithSchema(uploadDiagnosticsBundleInputSchema, opts, "uploadDiagnosticsBundle options");
 }
 
 function assertSetWindowAppearanceInput(opts: SetWindowAppearanceInput): void {
@@ -573,6 +585,20 @@ const desktopApi = Object.freeze<DesktopApi>({
   showNotification: (opts: DesktopNotificationInput) => {
     assertDesktopNotificationInput(opts);
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.showNotification, opts);
+  },
+
+  createDiagnosticsBundle: () => ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.createDiagnosticsBundle),
+
+  revealDiagnosticsBundle: (opts: DiagnosticsBundlePathInput) => {
+    assertDiagnosticsBundlePathInput(opts);
+    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.revealDiagnosticsBundle, opts);
+  },
+
+  openLogsFolder: () => ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.openLogsFolder),
+
+  uploadDiagnosticsBundle: (opts: UploadDiagnosticsBundleInput) => {
+    assertUploadDiagnosticsBundleInput(opts);
+    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.uploadDiagnosticsBundle, opts);
   },
 
   getUpdateState: async () => {

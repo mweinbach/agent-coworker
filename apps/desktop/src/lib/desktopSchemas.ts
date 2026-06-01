@@ -17,20 +17,21 @@ import {
 import {
   normalizePersistedProductAnalyticsState,
   normalizePrivacyTelemetrySettings,
-  type PersistedProductAnalyticsState,
   type PersistedPrivacyTelemetrySettings,
+  type PersistedProductAnalyticsState,
   type PersistedState,
 } from "../app/types";
 import type {
+  CaptureProductEventInput,
   ConfirmActionInput,
   ContextMenuItem,
   CopyPathInput,
-  CaptureProductEventInput,
   CreateDirectoryInput,
   CreateOneOffChatWorkspaceInput,
   DeleteTranscriptInput,
   DesktopMenuCommand,
   DesktopNotificationInput,
+  DiagnosticsBundlePathInput,
   ListDirectoryInput,
   MobileRelayForgetTrustedPhoneInput,
   MobileRelayStartInput,
@@ -59,6 +60,7 @@ import type {
   UpdaterProgress,
   UpdaterReleaseInfo,
   UpdaterState,
+  UploadDiagnosticsBundleInput,
   WindowDragPointInput,
   WriteFileInput,
 } from "./desktopApi";
@@ -580,6 +582,14 @@ export const desktopNotificationInputSchema: z.ZodType<DesktopNotificationInput>
   body: optionalNonEmptyStringSchema,
   silent: z.boolean().optional(),
 });
+
+export const diagnosticsBundlePathInputSchema: z.ZodType<DiagnosticsBundlePathInput> =
+  sharedPathSchema;
+
+export const uploadDiagnosticsBundleInputSchema: z.ZodType<UploadDiagnosticsBundleInput> =
+  sharedPathSchema.extend({
+    confirmed: z.boolean(),
+  });
 
 const updaterProgressSchema: z.ZodType<UpdaterProgress> = z.object({
   percent: z.number().finite(),

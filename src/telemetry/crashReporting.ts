@@ -129,6 +129,7 @@ let activeSdk: CrashReportingSdk | null = null;
 let activeConfig: ResolvedCrashReportingConfig | null = null;
 let activeScrubContext: ScrubContext = { workspacePaths: [], homeDir: null };
 let initPromise: Promise<CrashReportingStatus> | null = null;
+let recentCrashReportIds: string[] = [];
 
 function normalizeEnvValue(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
@@ -350,7 +351,10 @@ export function captureError(error: unknown, context: CrashReportingCaptureConte
   }
 
   const captureContext = scrubCaptureContext(context, activeScrubContext);
-  activeSdk.captureException(error, captureContext);
+  const eventId = activeSdk.captureException(error, captureContext);
+  if (typeof eventId === "string" && eventId.trim()) {
+    recentCrashReportIds = [eventId.trim(), ...recentCrashReportIds].slice(0, 10);
+  }
 }
 
 export function addBreadcrumb(breadcrumb: CrashReportingBreadcrumb): void {
@@ -388,6 +392,10 @@ export async function shutdownCrashReporting(): Promise<void> {
   } catch {
     // Crash reporting must never block app shutdown.
   }
+}
+
+export function getRecentCrashReportIds(): string[] {
+  return [...recentCrashReportIds];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -567,5 +575,6 @@ export const __internal = {
   async resetCrashReportingForTests() {
     await shutdownCrashReporting();
     activeScrubContext = { workspacePaths: [], homeDir: null };
+    recentCrashReportIds = [];
   },
 };

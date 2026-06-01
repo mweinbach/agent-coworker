@@ -689,6 +689,23 @@ export function createWebAdapter(): DesktopApi {
       return false;
     },
 
+    async createDiagnosticsBundle() {
+      throw new Error("Diagnostics bundles require the Cowork desktop app.");
+    },
+    async revealDiagnosticsBundle(): Promise<void> {},
+    async openLogsFolder(): Promise<void> {
+      throw new Error("Local logs are only available in the Cowork desktop app.");
+    },
+    async uploadDiagnosticsBundle(opts) {
+      return {
+        uploaded: false,
+        path: opts.path,
+        diagnosticId: null,
+        url: null,
+        message: "Diagnostics uploads require the Cowork desktop app.",
+      };
+    },
+
     async getUpdateState(): Promise<UpdaterState> {
       return createDefaultUpdaterState("0.0.0-web", false);
     },

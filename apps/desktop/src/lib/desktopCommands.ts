@@ -13,6 +13,7 @@ import type {
 import type {
   CaptureProductEventInput,
   ConfirmActionInput,
+  CreateDiagnosticsBundleOutput,
   CreateOneOffChatWorkspaceInput,
   CreateOneOffChatWorkspaceOutput,
   DesktopApi,
@@ -25,6 +26,7 @@ import type {
   ShowQuickChatWindowInput,
   SystemAppearance,
   UpdaterState,
+  UploadDiagnosticsBundleOutput,
 } from "./desktopApi";
 
 function getDesktopApi(): DesktopApi | undefined {
@@ -243,6 +245,25 @@ export async function confirmAction(opts: ConfirmActionInput): Promise<boolean> 
 
 export async function showNotification(opts: DesktopNotificationInput): Promise<boolean> {
   return await requireDesktopApi().showNotification(opts);
+}
+
+export async function createDiagnosticsBundle(): Promise<CreateDiagnosticsBundleOutput> {
+  return await requireDesktopApi().createDiagnosticsBundle();
+}
+
+export async function revealDiagnosticsBundle(opts: { path: string }): Promise<void> {
+  await requireDesktopApi().revealDiagnosticsBundle(opts);
+}
+
+export async function openLogsFolder(): Promise<void> {
+  await requireDesktopApi().openLogsFolder();
+}
+
+export async function uploadDiagnosticsBundle(opts: {
+  path: string;
+  confirmed: boolean;
+}): Promise<UploadDiagnosticsBundleOutput> {
+  return await requireDesktopApi().uploadDiagnosticsBundle(opts);
 }
 
 export async function getUpdateState(): Promise<UpdaterState> {

@@ -16,17 +16,19 @@ import {
 } from "../src/lib/desktopApi";
 import { registerDesktopIpc } from "./ipc";
 import {
-  captureCrashReportingError,
-  initElectronMainCrashReporting,
-} from "./services/crashReporting";
-import {
   applySystemAppearanceToWindow,
   getInitialWindowAppearanceOptions,
   getSystemAppearanceSnapshot,
   registerSystemAppearanceListener,
   syncWindowAppearance,
 } from "./services/appearance";
+import {
+  captureCrashReportingError,
+  initElectronMainCrashReporting,
+} from "./services/crashReporting";
 import { runDesktopSmokePromptLoadCheck } from "./services/desktopSmoke";
+import { DiagnosticsService } from "./services/diagnostics";
+import { logError, logInfo, logWarn } from "./services/localLogs";
 import { installDesktopApplicationMenu } from "./services/menu";
 import { createMenuCommandDispatcher } from "./services/menuCommandDispatcher";
 import { MobileRelayBridge } from "./services/mobileRelayBridge";
@@ -91,6 +93,7 @@ const updater = new DesktopUpdaterService({
     });
   },
 });
+const diagnostics = new DiagnosticsService({ persistence, updater });
 let unregisterAppearanceListener = () => {};
 let mainWindow: Electron.BrowserWindow | null = null;
 let quickChatController: QuickChatController | null = null;
@@ -106,6 +109,13 @@ if (electronRemoteDebug.enabled) {
   app.commandLine.appendSwitch("remote-debugging-port", electronRemoteDebug.port);
   app.commandLine.appendSwitch("remote-debugging-address", "127.0.0.1");
 }
+
+logInfo("main", "desktop process starting", {
+  version: app.getVersion(),
+  packaged: app.isPackaged,
+  platform: process.platform,
+  arch: process.arch,
+});
 
 function emitDesktopEvent(channel: string, payload: unknown): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -368,6 +378,7 @@ async function loadRendererWindow(
       process.env.COWORK_DESKTOP_RENDERER_PORT,
     );
     if (warning) {
+      logWarn("renderer", "renderer URL warning", { warning });
       console.warn(`[desktop] ${warning}`);
     }
     const target = new URL(url);
@@ -711,6 +722,7 @@ if (!gotSingleInstanceLock) {
         mobileRelayBridge,
         persistence,
         productAnalytics,
+        diagnostics,
         serverManager,
         updater,
         showMainWindow: () => quickChatController?.showMainWindow(),
@@ -764,6 +776,7 @@ if (!gotSingleInstanceLock) {
       });
     })
     .catch((error) => {
+      logError("main", error, { operation: "desktop_startup" });
       captureCrashReportingError(error, {
         tags: { operation: "desktop_startup" },
       });
@@ -784,6 +797,7 @@ if (!gotSingleInstanceLock) {
       stopAllServers: () => serverManager.stopAll(),
       quit: () => app.quit(),
       onError: (error) => {
+        logError("shutdown", error, { operation: "stop_workspace_servers" });
         console.error(
           `[desktop] Failed to stop workspace servers during shutdown: ${String(error)}`,
         );

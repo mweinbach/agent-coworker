@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.1.10 - 2026-06-01
+
+### Added
+
+- **Privacy & Telemetry Settings** — Introduced comprehensive privacy and telemetry controls to the desktop UI and server runtime, enabling users to opt-in or opt-out of data tracing and anonymous telemetry collection.
+- **Product Analytics & Crash Reporting** — Integrated optional Sentry crash reporting across desktop and server runtimes, along with a unified product analytics wrapper utilizing PostHog for anonymous usage analytics.
+- **Diagnostics Bundles** — Added a local diagnostics bundling utility to simplify collecting environment logs and system status for troubleshooting.
+- **Cloud Sync Foundation** — Implemented a disabled-by-default cloud sync engine with provider abstractions, data redaction/sanitization, a durable retry queue, and a fire-and-forget desktop persistence hook.
+
+### Fixed
+
+- **Opt-in Telemetry Tracing** — Changed Langfuse payload tracing to be strictly opt-in rather than enabled by default.
+- **Telemetry Consent Synchronization** — Ensured desktop client telemetry consent state is correctly wired and respected by local and remote servers.
+- **Diagnostics Redaction** — Implemented automatic redaction of legacy diagnostic log bodies to protect sensitive user information.
+
 ## 1.1.9 - 2026-06-01
 
 ### Added

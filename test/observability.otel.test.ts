@@ -105,7 +105,7 @@ describe("emitObservabilityEvent (Langfuse runtime tracer)", () => {
     expect(captured.calls).toBe(0);
   });
 
-  test("emits span and keeps diagnostic attributes while redacting secrets", async () => {
+  test("emits metadata-only span and redacts payload-like diagnostic attributes", async () => {
     const cfg = makeConfig();
     const { tracer, captured } = makeTracer();
     const ready = makeHealth("ready", "runtime_ready");
@@ -121,6 +121,11 @@ describe("emitObservabilityEvent (Langfuse runtime tracer)", () => {
           sessionId: "session-123",
           error: "request failed",
           message: "upstream timeout",
+          command: "cat /private/workspace/secrets.txt",
+          stdout: "prompt text leaked here",
+          filePath: "/private/workspace/secrets.txt",
+          uploadedFilename: "customer-list.csv",
+          promptTokens: 12,
           apiKey: "sk-test-secret",
         },
       },
@@ -139,11 +144,71 @@ describe("emitObservabilityEvent (Langfuse runtime tracer)", () => {
     expect(res.emitted).toBe(true);
     expect(captured.name).toBe("agent.turn.failed");
     expect(captured.attributes["sessionId"]).toBe("session-123");
-    expect(captured.attributes["error"]).toBe("request failed");
-    expect(captured.attributes["message"]).toBe("upstream timeout");
+    expect(captured.attributes["error"]).toBe("[REDACTED]");
+    expect(captured.attributes["message"]).toBe("[REDACTED]");
+    expect(captured.attributes["command"]).toBe("[REDACTED]");
+    expect(captured.attributes["stdout"]).toBe("[REDACTED]");
+    expect(captured.attributes["filePath"]).toBe("[REDACTED]");
+    expect(captured.attributes["uploadedFilename"]).toBe("[REDACTED]");
+    expect(captured.attributes["promptTokens"]).toBe(12);
     expect(captured.attributes["apiKey"]).toBe("[REDACTED]");
     expect(captured.attributes["duration.ms"]).toBe(250);
     expect(captured.statusCode).toBe(SpanStatusCode.ERROR);
+  });
+
+  test("preserves payload-like diagnostic attributes only in full payload mode", async () => {
+    const cfg = makeConfig({
+      observability: {
+        provider: "langfuse",
+        baseUrl: "https://cloud.langfuse.com",
+        otelEndpoint: "https://cloud.langfuse.com/api/public/otel/v1/traces",
+        publicKey: "pk-lf-test",
+        secretKey: "sk-lf-test",
+        tracingEnvironment: "test",
+        release: "test-release",
+        recordInputs: true,
+        recordOutputs: true,
+      },
+    });
+    const { tracer, captured } = makeTracer();
+    const ready = makeHealth("ready", "runtime_ready");
+
+    const res = await emitObservabilityEvent(
+      cfg,
+      {
+        name: "agent.turn.completed",
+        at: "2026-02-19T08:00:00.000Z",
+        status: "ok",
+        attributes: {
+          prompt: "Summarize the private plan",
+          response: "Private model output",
+          command: "cat /private/workspace/plan.md",
+          stdout: "private log text",
+          filePath: "/private/workspace/plan.md",
+          uploadedFilename: "plan.md",
+          apiKey: "sk-test-secret",
+        },
+      },
+      {
+        tracer: tracer as any,
+        runtime: {
+          ensure: async () => ({ ready: true, health: ready, healthChanged: false }),
+          getHealth: () => ready,
+          noteFailure: () => ({ changed: false, health: ready }),
+          noteSuccess: () => ({ changed: false, health: ready }),
+          forceFlush: async () => {},
+        },
+      },
+    );
+
+    expect(res.emitted).toBe(true);
+    expect(captured.attributes["prompt"]).toBe("Summarize the private plan");
+    expect(captured.attributes["response"]).toBe("Private model output");
+    expect(captured.attributes["command"]).toBe("cat /private/workspace/plan.md");
+    expect(captured.attributes["stdout"]).toBe("private log text");
+    expect(captured.attributes["filePath"]).toBe("/private/workspace/plan.md");
+    expect(captured.attributes["uploadedFilename"]).toBe("plan.md");
+    expect(captured.attributes["apiKey"]).toBe("[REDACTED]");
   });
 
   test("redacts all secret-like attribute keys", async () => {

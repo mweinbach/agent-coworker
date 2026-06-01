@@ -143,7 +143,7 @@ describe("emitObservabilityEvent payload details", () => {
         at: "2026-02-19T08:00:00.000Z",
         status: "ok",
         attributes: {
-          message: veryLong,
+          diagnosticDetail: veryLong,
         },
       },
       {
@@ -158,7 +158,7 @@ describe("emitObservabilityEvent payload details", () => {
       },
     );
 
-    const message = String(capture.attributes["message"] ?? "");
-    expect(message.length).toBeLessThanOrEqual(2048);
+    const diagnosticDetail = String(capture.attributes["diagnosticDetail"] ?? "");
+    expect(diagnosticDetail.length).toBeLessThanOrEqual(2048);
   });
 });

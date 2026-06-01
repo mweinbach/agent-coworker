@@ -28,6 +28,27 @@ describe("desktop release workflow", () => {
     );
   });
 
+  test("passes only public telemetry variables into desktop package builds", () => {
+    const packageJob = workflow.match(/package:[\s\S]*?\n {2}smoke-windows-arm64:/)?.[0] ?? "";
+
+    expect(packageJob).toContain("COWORK_SENTRY_DSN: ${{ vars.COWORK_SENTRY_DSN }}");
+    expect(packageJob).toContain("COWORK_POSTHOG_KEY: ${{ vars.COWORK_POSTHOG_KEY }}");
+    expect(packageJob).toContain("COWORK_POSTHOG_HOST: ${{ vars.COWORK_POSTHOG_HOST }}");
+    expect(packageJob).toContain("LANGFUSE_BASE_URL: ${{ vars.LANGFUSE_BASE_URL }}");
+    expect(packageJob).toContain("LANGFUSE_PUBLIC_KEY: ${{ vars.LANGFUSE_PUBLIC_KEY }}");
+    expect(packageJob).toContain("- name: Validate public telemetry build variables");
+    expect(packageJob).toContain("Missing required public telemetry GitHub variables");
+    expect(packageJob).toContain(
+      "Forbidden telemetry variables must not be present in the public desktop build",
+    );
+    expect(packageJob).toContain("LANGFUSE_SECRET_KEY");
+    expect(packageJob).toContain("COWORK_DIAGNOSTICS_UPLOAD_URL");
+    expect(packageJob).toContain("COWORK_CLOUD_SYNC_ENDPOINT");
+    expect(workflow).not.toMatch(/secrets\.LANGFUSE_SECRET_KEY/);
+    expect(workflow).not.toMatch(/vars\.COWORK_DIAGNOSTICS_UPLOAD_URL/);
+    expect(workflow).not.toMatch(/vars\.COWORK_CLOUD_SYNC_ENDPOINT/);
+  });
+
   test("builds separate Windows x64 and ARM64 release entries", () => {
     expect(workflow).toContain("label: Windows x64");
     expect(workflow).toContain("artifact_name: desktop-release-windows-x64");

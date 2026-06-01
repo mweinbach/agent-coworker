@@ -2,11 +2,13 @@ import { createRequire } from "node:module";
 
 import type { ProgressInfo, UpdateDownloadedEvent, UpdateInfo } from "electron-updater";
 
+import { captureProductEvent } from "../../../../src/telemetry/productAnalytics";
 import {
   createDefaultUpdaterState,
   type UpdaterReleaseInfo,
   type UpdaterState,
 } from "../../src/lib/desktopApi";
+import { writeLocalLog } from "./localLogs";
 import { applyUpdaterPlatformDefaults } from "./updaterPlatform";
 
 const AUTOMATIC_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
@@ -82,6 +84,7 @@ type DesktopUpdaterServiceOptions = {
   isPackaged: boolean;
   onStateChange?: (state: UpdaterState) => void;
   notifyUpdateReady?: (state: UpdaterState) => void;
+  captureError?: (error: unknown, context: { operation: string }) => void;
   updater?: UpdaterClient;
   platform?: NodeJS.Platform;
   arch?: string;
@@ -97,6 +100,10 @@ function toMessage(error: unknown): string {
     return error.message;
   }
   return String(error);
+}
+
+function logUpdater(level: "info" | "warn" | "error", message: string, meta?: unknown): void {
+  writeLocalLog("updater.log", level, "updater", message, meta);
 }
 
 function isMissingReleaseFeedMessage(message: string): boolean {
@@ -172,6 +179,7 @@ export class DesktopUpdaterService {
   private readonly isPackaged: boolean;
   private readonly onStateChange?: (state: UpdaterState) => void;
   private readonly notifyUpdateReady?: (state: UpdaterState) => void;
+  private readonly captureError?: (error: unknown, context: { operation: string }) => void;
   private readonly updater: UpdaterClient;
   private readonly platform: NodeJS.Platform;
   private readonly arch: string;
@@ -185,12 +193,14 @@ export class DesktopUpdaterService {
   private startupHandle: ReturnType<typeof setTimeout> | null = null;
   private started = false;
   private state: UpdaterState;
+  private checkStartedAtMs: number | null = null;
 
   constructor(options: DesktopUpdaterServiceOptions) {
     this.currentVersion = options.currentVersion;
     this.isPackaged = options.isPackaged;
     this.onStateChange = options.onStateChange;
     this.notifyUpdateReady = options.notifyUpdateReady;
+    this.captureError = options.captureError;
     this.updater = options.updater ?? getDefaultUpdaterClient();
     this.platform = options.platform ?? process.platform;
     this.arch = options.arch ?? process.arch;
@@ -214,6 +224,11 @@ export class DesktopUpdaterService {
     if (!this.isPackaged || this.started) {
       return;
     }
+    logUpdater("info", "updater started", {
+      currentVersion: this.currentVersion,
+      platform: this.platform,
+      arch: this.arch,
+    });
     this.started = true;
     this.startupHandle = this.setTimeoutFn(() => {
       void this.checkForUpdates();
@@ -247,6 +262,12 @@ export class DesktopUpdaterService {
       this.setState({
         ...createDefaultUpdaterState(this.currentVersion, false),
       });
+      captureProductEvent("update_checked", {
+        eventSource: "main",
+        status: "disabled",
+        durationMs: 0,
+        updateAvailable: false,
+      });
       return;
     }
 
@@ -261,12 +282,14 @@ export class DesktopUpdaterService {
       error: null,
       progress: null,
     });
+    this.checkStartedAtMs = Date.now();
 
     try {
       await this.updater.checkForUpdates();
     } catch (error) {
       const message = toMessage(error);
       if (isMissingReleaseFeedMessage(message)) {
+        logUpdater("warn", "auto updater feed unavailable", { error: message });
         console.warn(`[desktop] Auto updater feed unavailable: ${message}`);
         this.setState({
           phase: "disabled",
@@ -277,16 +300,32 @@ export class DesktopUpdaterService {
           release: null,
           downloadedAt: null,
         });
+        captureProductEvent("update_checked", {
+          eventSource: "main",
+          status: "feed_unavailable",
+          errorCategory: "missing_release_feed",
+          durationMs: this.updateCheckDurationMs(),
+          updateAvailable: false,
+        });
         return;
       }
 
+      logUpdater("warn", "auto updater check failed", { error: message });
       console.warn(`[desktop] Auto updater check failed: ${message}`);
+      this.captureError?.(error, { operation: "updater_check_failed" });
       this.setState({
         phase: "error",
         lastCheckedAt: this.now(),
         message: "Unable to check for updates.",
         error: message,
         progress: null,
+      });
+      captureProductEvent("update_checked", {
+        eventSource: "main",
+        status: "failed",
+        errorCategory: "check_failed",
+        durationMs: this.updateCheckDurationMs(),
+        updateAvailable: false,
       });
     }
   }
@@ -295,11 +334,16 @@ export class DesktopUpdaterService {
     if (!this.isPackaged || this.state.phase !== "downloaded") {
       return;
     }
+    captureProductEvent("update_install_started", {
+      eventSource: "main",
+      status: "started",
+    });
     this.updater.quitAndInstall(false, true);
   }
 
   private registerListeners(): void {
     this.updater.on("checking-for-update", () => {
+      logUpdater("info", "checking for update");
       this.setState({
         phase: "checking",
         lastCheckStartedAt: this.state.lastCheckStartedAt ?? this.now(),
@@ -311,6 +355,10 @@ export class DesktopUpdaterService {
 
     this.updater.on("update-available", (info: UpdateInfo) => {
       const release = normalizeReleaseInfo(info);
+      logUpdater("info", "update available", {
+        version: release?.version,
+        releaseDate: release?.releaseDate,
+      });
       this.setState({
         phase: "available",
         lastCheckedAt: this.now(),
@@ -322,9 +370,16 @@ export class DesktopUpdaterService {
         progress: null,
         downloadedAt: null,
       });
+      captureProductEvent("update_checked", {
+        eventSource: "main",
+        status: "available",
+        durationMs: this.updateCheckDurationMs(),
+        updateAvailable: true,
+      });
     });
 
     this.updater.on("update-not-available", () => {
+      logUpdater("info", "update not available");
       this.setState({
         phase: "up-to-date",
         lastCheckedAt: this.now(),
@@ -333,6 +388,12 @@ export class DesktopUpdaterService {
         progress: null,
         release: null,
         downloadedAt: null,
+      });
+      captureProductEvent("update_checked", {
+        eventSource: "main",
+        status: "up_to_date",
+        durationMs: this.updateCheckDurationMs(),
+        updateAvailable: false,
       });
     });
 
@@ -350,6 +411,7 @@ export class DesktopUpdaterService {
 
     this.updater.on("update-downloaded", (info: UpdateDownloadedEvent) => {
       const release = normalizeReleaseInfo(info) ?? this.state.release;
+      logUpdater("info", "update downloaded", { version: release?.version });
       const nextState = {
         phase: "downloaded" as const,
         lastCheckedAt: this.now(),
@@ -367,12 +429,18 @@ export class DesktopUpdaterService {
         release,
       };
       this.setState(nextState);
+      captureProductEvent("update_downloaded", {
+        eventSource: "main",
+        status: "downloaded",
+        durationMs: this.updateCheckDurationMs(),
+      });
       this.notifyUpdateReady?.(this.getState());
     });
 
     this.updater.on("error", (error: unknown) => {
       const message = toMessage(error);
       if (isMissingReleaseFeedMessage(message)) {
+        logUpdater("warn", "auto updater feed unavailable", { error: message });
         console.warn(`[desktop] Auto updater feed unavailable: ${message}`);
         this.setState({
           phase: "disabled",
@@ -383,10 +451,19 @@ export class DesktopUpdaterService {
           release: null,
           downloadedAt: null,
         });
+        captureProductEvent("update_checked", {
+          eventSource: "main",
+          status: "feed_unavailable",
+          errorCategory: "missing_release_feed",
+          durationMs: this.updateCheckDurationMs(),
+          updateAvailable: false,
+        });
         return;
       }
 
+      logUpdater("error", "auto updater error", { error: message });
       console.warn(`[desktop] Auto updater error: ${message}`);
+      this.captureError?.(error, { operation: "updater_event_error" });
       this.setState({
         phase: "error",
         lastCheckedAt: this.now(),
@@ -394,7 +471,21 @@ export class DesktopUpdaterService {
         error: message,
         progress: null,
       });
+      captureProductEvent("update_checked", {
+        eventSource: "main",
+        status: "failed",
+        errorCategory: "event_error",
+        durationMs: this.updateCheckDurationMs(),
+        updateAvailable: false,
+      });
     });
+  }
+
+  private updateCheckDurationMs(): number {
+    if (!this.checkStartedAtMs) {
+      return 0;
+    }
+    return Math.max(0, Date.now() - this.checkStartedAtMs);
   }
 
   private setState(patch: Partial<UpdaterState>): void {

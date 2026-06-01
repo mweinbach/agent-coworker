@@ -8,7 +8,12 @@ import {
   type AppStoreState,
   createDefaultUpdaterState,
 } from "./store.helpers";
-import { DEFAULT_RESEARCH_SETTINGS, normalizeDesktopSettings } from "./types";
+import {
+  DEFAULT_RESEARCH_SETTINGS,
+  normalizeCloudSyncSettings,
+  normalizeDesktopSettings,
+  normalizePrivacyTelemetrySettings,
+} from "./types";
 
 const initialState: AppStoreDataState = {
   ready: false,
@@ -62,6 +67,8 @@ const initialState: AppStoreDataState = {
   showHiddenFiles: false,
   perWorkspaceSettings: false,
   desktopSettings: normalizeDesktopSettings(),
+  privacyTelemetrySettings: normalizePrivacyTelemetrySettings(),
+  cloudSync: normalizeCloudSyncSettings(),
   desktopFeatureFlags: {
     menuBar: true,
     remoteAccess: false,

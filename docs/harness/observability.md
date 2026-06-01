@@ -13,19 +13,26 @@ The harness resolves observability from the same layered config path as the rest
 
 `AGENT_OBSERVABILITY_ENABLED` overrides the top-level `observabilityEnabled` boolean. Langfuse connection fields can come from environment variables or the `observability` config object.
 
+Public/default packaged builds keep `observabilityEnabled` off unless the desktop Privacy & Telemetry setting explicitly enables AI trace diagnostics. Source/dev harness runs can opt in with `AGENT_OBSERVABILITY_ENABLED=true` plus Langfuse credentials.
+
 ## Runtime Behavior
 
 - Telemetry is controlled by `AGENT_OBSERVABILITY_ENABLED`.
 - When enabled with valid Langfuse credentials, the runtime initializes `LangfuseSpanProcessor` and exports spans to:
   - `{LANGFUSE_BASE_URL}/api/public/otel/v1/traces`
 - `otelEndpoint` is derived from the resolved base URL; it is not configured independently.
-- Runtime model calls are traced with `recordInputs=true` and `recordOutputs=true` (full LLM I/O) whenever observability is enabled and healthy.
+- Runtime model calls are metadata-only by default: spans include model/provider/usage/timing metadata, but `recordInputs=false` and `recordOutputs=false`.
+- Full LLM I/O capture is only enabled when `recordInputs` and/or `recordOutputs` are explicitly true through env/config. In the desktop app, this only happens when the user enables both AI trace diagnostics and the full-payload toggle.
+- Metadata-only spans redact payload-like attributes such as prompts, responses, commands, stdout/stderr, transcripts, file paths, and uploaded file names. Secret-like attributes are always redacted.
 - When telemetry is enabled but credentials are missing/misconfigured, the runtime degrades observability health, emits warnings, and continues without failing turns/runs.
 - Runtime/export failures are non-fatal and surfaced via observability health status.
 
 ## Environment Variables
 
-- `AGENT_OBSERVABILITY_ENABLED` (`true|false`, defaults to `true`)
+- `AGENT_OBSERVABILITY_ENABLED` (`true|false`, defaults to `false`)
+- `AGENT_OBSERVABILITY_RECORD_INPUTS` (`true|false`, defaults to `false`)
+- `AGENT_OBSERVABILITY_RECORD_OUTPUTS` (`true|false`, defaults to `false`)
+- `AGENT_OBSERVABILITY_RECORD_PAYLOADS` (`true|false`, shorthand for both inputs and outputs unless a specific flag overrides it)
 - `LANGFUSE_PUBLIC_KEY`
 - `LANGFUSE_SECRET_KEY`
 - `LANGFUSE_BASE_URL` (defaults to `https://cloud.langfuse.com`)
@@ -40,6 +47,19 @@ Equivalent config-file keys:
 - `observability.secretKey`
 - `observability.tracingEnvironment`
 - `observability.release`
+- `observability.recordInputs`
+- `observability.recordOutputs`
+
+Example source/dev opt-in:
+
+```sh
+export AGENT_OBSERVABILITY_ENABLED=true
+export AGENT_OBSERVABILITY_RECORD_PAYLOADS=false
+export LANGFUSE_PUBLIC_KEY=...
+export LANGFUSE_SECRET_KEY=...
+```
+
+Set `AGENT_OBSERVABILITY_RECORD_PAYLOADS=true` only for runs where prompt/response capture is intentional.
 
 ## Harness Runner Emissions
 

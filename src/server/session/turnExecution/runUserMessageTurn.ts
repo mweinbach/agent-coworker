@@ -1,5 +1,6 @@
 import type { AgentExecutionState } from "../../../shared/agents";
 import { supportsProviderManagedContinuationProvider } from "../../../shared/providerContinuation";
+import { captureProductEvent } from "../../../telemetry/productAnalytics";
 import type { TurnReference } from "../../../types";
 import type { FileAttachment, OrderedInputPart } from "../../jsonrpc/routes/shared";
 import { reasoningModeForProvider } from "../../modelStream";
@@ -222,6 +223,16 @@ export function createUserMessageTurnRunner(
         provider: context.state.config.provider,
         model: context.state.config.model,
       });
+      captureProductEvent("turn_started", {
+        eventSource: "server",
+        provider: context.state.config.provider,
+        model: context.state.config.model,
+        mcpEnabled: context.state.config.enableMcp === true,
+        hasAttachments: (attachments?.length ?? 0) > 0,
+        hasReferences: (references?.length ?? 0) > 0,
+        attachmentCount: attachments?.length ?? 0,
+        referenceCount: references?.length ?? 0,
+      });
 
       // Apply @-mentioned references BEFORE building the user message so a forced
       // skill's body can be folded into the model-facing text. This is
@@ -361,6 +372,14 @@ export function createUserMessageTurnRunner(
         },
         Date.now() - turnStartedAt,
       );
+      captureProductEvent("turn_completed", {
+        eventSource: "server",
+        provider: context.state.config.provider,
+        model: context.state.config.model,
+        status: "completed",
+        durationMs: Date.now() - turnStartedAt,
+        toolCount: tracker.startedStepCount,
+      });
     } catch (err) {
       const actualErr =
         tracker.lastStreamError && context.formatError(err).includes("No output generated")
@@ -402,6 +421,14 @@ export function createUserMessageTurnRunner(
           },
           Date.now() - turnStartedAt,
         );
+        captureProductEvent("turn_failed", {
+          eventSource: "server",
+          provider: context.state.config.provider,
+          model: context.state.config.model,
+          status: "failed",
+          errorCategory: classified.code,
+          durationMs: Date.now() - turnStartedAt,
+        });
       } else {
         context.state.currentTurnOutcome = "cancelled";
         context.emitTelemetry(

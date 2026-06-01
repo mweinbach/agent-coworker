@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
+import { MODEL_REGISTRY_ENTRIES } from "../src/models/registry";
 import {
   loadAgentPrompt,
   loadSubAgentPrompt,
@@ -70,7 +70,7 @@ function extractSpawnAgentBody(prompt: string): string {
   const patterns = [
     /<tool name="spawnAgent">\n([\s\S]*?)\n<\/tool>/,
     /<spawnAgent>\n([\s\S]*?)\n<\/spawnAgent>/,
-    /### spawnAgent\n([\s\S]*?)(?=\n### notebookEdit\b)/,
+    /### spawnAgent\n([\s\S]*?)(?=\n### skill\b)/,
   ];
 
   for (const pattern of patterns) {
@@ -229,6 +229,16 @@ const IMAGE_GUIDANCE_PROMPT_CONFIGS = [
   },
   {
     provider: "google",
+    model: "gemini-3.1-flash-lite",
+    preferredChildModel: "gemini-3.1-flash-lite",
+  },
+  {
+    provider: "google",
+    model: "gemini-3.5-flash",
+    preferredChildModel: "gemini-3.5-flash",
+  },
+  {
+    provider: "google",
     model: "gemini-3.1-pro-preview",
     preferredChildModel: "gemini-3.1-pro-preview",
   },
@@ -245,6 +255,16 @@ const GEMINI_PROMPT_CONFIGS = [
     provider: "google",
     model: "gemini-3-flash-preview",
     preferredChildModel: "gemini-3-flash-preview",
+  },
+  {
+    provider: "google",
+    model: "gemini-3.1-flash-lite",
+    preferredChildModel: "gemini-3.1-flash-lite",
+  },
+  {
+    provider: "google",
+    model: "gemini-3.5-flash",
+    preferredChildModel: "gemini-3.5-flash",
   },
 ] as const;
 
@@ -576,20 +596,8 @@ describe("loadSystemPrompt", () => {
       "DEFAULT SYSTEM TEMPLATE {{modelName}}",
     );
     await writeFile(
-      path.join(builtIn, "prompts", "system-models", "gpt-5.4.json"),
-      JSON.stringify(
-        {
-          extends: "../system.md",
-          replacements: [
-            {
-              old: "DEFAULT SYSTEM TEMPLATE {{modelName}}",
-              new: "GPT-5.4 SYSTEM TEMPLATE {{modelName}}",
-            },
-          ],
-        },
-        null,
-        2,
-      ),
+      path.join(builtIn, "prompts", "system-models", "gpt-5.4.md"),
+      "GPT-5.4 SYSTEM TEMPLATE {{modelName}}",
     );
 
     const config = makeConfig({
@@ -604,28 +612,13 @@ describe("loadSystemPrompt", () => {
     expect(prompt).not.toContain("DEFAULT SYSTEM TEMPLATE");
   });
 
-  test("applies prompt template overlays when the base template uses CRLF newlines", async () => {
+  test("normalizes CRLF newlines in model-specific system templates", async () => {
     const { builtIn } = await makeTmpDirs();
 
+    await writeFile(path.join(builtIn, "prompts", "system.md"), "DEFAULT SYSTEM TEMPLATE");
     await writeFile(
-      path.join(builtIn, "prompts", "system.md"),
-      "DEFAULT SYSTEM TEMPLATE\r\n{{modelName}}",
-    );
-    await writeFile(
-      path.join(builtIn, "prompts", "system-models", "gpt-5.4.json"),
-      JSON.stringify(
-        {
-          extends: "../system.md",
-          replacements: [
-            {
-              old: "DEFAULT SYSTEM TEMPLATE\n{{modelName}}",
-              new: "GPT-5.4 SYSTEM TEMPLATE\n{{modelName}}",
-            },
-          ],
-        },
-        null,
-        2,
-      ),
+      path.join(builtIn, "prompts", "system-models", "gpt-5.4.md"),
+      "GPT-5.4 SYSTEM TEMPLATE\r\n{{modelName}}",
     );
 
     const prompt = await loadSystemPrompt(
@@ -649,20 +642,8 @@ describe("loadSystemPrompt", () => {
       "DEFAULT SYSTEM TEMPLATE {{modelName}}",
     );
     await writeFile(
-      path.join(builtIn, "prompts", "system-models", "gpt-5.4.json"),
-      JSON.stringify(
-        {
-          extends: "../system.md",
-          replacements: [
-            {
-              old: "DEFAULT SYSTEM TEMPLATE {{modelName}}",
-              new: "Base system prompt.\nMini marker.",
-            },
-          ],
-        },
-        null,
-        2,
-      ),
+      path.join(builtIn, "prompts", "system-models", "gpt-5.4.md"),
+      "Base system prompt.\nMini marker.\n{{modelName}}",
     );
 
     const prompt = await loadSystemPrompt(
@@ -695,6 +676,22 @@ describe("loadSystemPrompt", () => {
     expect(prompt).toContain("prefer the native search/open/find tool");
     expect(prompt).toContain("unless provider-native citations already cover them");
     expect(prompt).toContain("Do not create extra staging files or helper folders");
+  });
+
+  test("real gpt-5.5 prompt appends frontier long-context guidance", async () => {
+    const config = makeConfig({
+      provider: "openai",
+      model: "gpt-5.5",
+      preferredChildModel: "gpt-5.5",
+      skillsDirs: ["/nonexistent/skills"],
+    });
+    const prompt = await loadSystemPrompt(config);
+
+    expectWorkspaceHygieneAndShellFirstGuidance(prompt);
+    expect(prompt).toContain("Model-Specific Guidance - GPT-5.5");
+    expect(prompt).toContain("frontier OpenAI choice for complex coding");
+    expect(prompt).toContain("Use the larger context window deliberately");
+    expect(prompt).not.toContain("{{");
   });
 
   test("real gpt-5.2 prompt includes workspace hygiene and shell-first guidance", async () => {
@@ -780,6 +777,23 @@ describe("loadSystemPrompt", () => {
     }
   });
 
+  test("Gemini 3.5 Flash prompt uses its own model-specific guidance", async () => {
+    const prompt = await loadSystemPrompt(
+      makeConfig({
+        provider: "google",
+        model: "gemini-3.5-flash",
+        preferredChildModel: "gemini-3.5-flash",
+        skillsDirs: ["/nonexistent/skills"],
+      }),
+    );
+
+    expect(prompt).toContain("Model-Specific Guidance - Gemini 3.5 Flash");
+    expect(prompt).toContain("Gemini 3.5 Flash Agentic Workflow");
+    expect(prompt).toContain("fast multimodal agentic work");
+    expect(prompt).not.toContain("Model-Specific Guidance — Gemini 3 Flash");
+    expect(prompt).not.toContain("optimized for Gemini 3 Flash based");
+  });
+
   test("uses model-specific system template for gemini-3.1-pro-preview when present", async () => {
     const { builtIn } = await makeTmpDirs();
 
@@ -806,20 +820,8 @@ describe("loadSystemPrompt", () => {
 
     await writeFile(path.join(builtIn, "prompts", "system.md"), "DEFAULT {{modelName}}");
     await writeFile(
-      path.join(builtIn, "prompts", "system-models", "claude-opus-4-6.json"),
-      JSON.stringify(
-        {
-          extends: "../system.md",
-          replacements: [
-            {
-              old: "DEFAULT {{modelName}}",
-              new: "OPUS TEMPLATE {{modelName}}",
-            },
-          ],
-        },
-        null,
-        2,
-      ),
+      path.join(builtIn, "prompts", "system-models", "claude-opus-4-6.md"),
+      "OPUS TEMPLATE {{modelName}}",
     );
 
     const config = makeConfig({
@@ -871,6 +873,22 @@ describe("loadSystemPrompt", () => {
     expect(prompt).not.toContain("<opus_reasoning>");
   });
 
+  test("real Claude Opus 4.8 prompt emphasizes adaptive thinking without exposing complete reasoning", async () => {
+    const prompt = await loadSystemPrompt(
+      makeConfig({
+        provider: "anthropic",
+        model: "claude-opus-4-8",
+        preferredChildModel: "claude-opus-4-8",
+        skillsDirs: ["/nonexistent/skills"],
+      }),
+    );
+
+    expect(prompt).toContain("Claude Opus 4.8 with adaptive thinking");
+    expect(prompt).toContain("Use adaptive tool-aware reasoning");
+    expect(prompt).toContain("without exposing full private reasoning");
+    expect(prompt).not.toContain("show your complete reasoning");
+  });
+
   test("falls back to default system template when model template is missing", async () => {
     const { builtIn } = await makeTmpDirs();
     await writeFile(path.join(builtIn, "prompts", "system.md"), "DEFAULT TEMPLATE {{modelName}}");
@@ -901,6 +919,43 @@ describe("loadSystemPrompt", () => {
     expect(normalized).not.toContain(
       "do not ask the user to re-upload it just because it is visual",
     );
+  });
+
+  test("no rendered prompt leaks <image_input> delimiters; text-only models omit image guidance", async () => {
+    // Image-input guidance is gated by <image_input>...</image_input> spans in the
+    // templates (see prompts/system.md). Multimodal models keep the guidance (delimiters
+    // stripped); text-only models drop the whole span. This renders EVERY registry model
+    // so a future text-only model on an un-marked-up template fails loudly here.
+    const imagePhrases = [
+      "if read returns an image",
+      "re-upload it just because it is visual",
+      "download a direct image url and inspect it with `read`",
+      "visual content for supported images",
+      "to inspect it visually",
+    ];
+
+    for (const model of MODEL_REGISTRY_ENTRIES) {
+      const prompt = await loadSystemPrompt(
+        makeConfig({
+          provider: model.provider,
+          model: model.id,
+          preferredChildModel: model.id,
+          skillsDirs: ["/nonexistent/skills"],
+        }),
+      );
+
+      // The delimiters are an internal capability switch — they must never survive into
+      // a rendered prompt for any model, multimodal or text-only.
+      expect(prompt).not.toContain("<image_input>");
+      expect(prompt).not.toContain("</image_input>");
+
+      if (!model.supportsImageInput) {
+        const normalized = prompt.toLowerCase();
+        for (const phrase of imagePhrases) {
+          expect(normalized.includes(phrase)).toBe(false);
+        }
+      }
+    }
   });
 
   test("always appends strict skill loading policy", async () => {

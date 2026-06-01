@@ -88,12 +88,15 @@ describe("live model API integration", () => {
 
     const runTurnResult = await runTurn({
       config: makeConfig({ provider: "openai", model: "gpt-5.2" }),
-      system: "Always call the ask tool before answering.",
+      system: "Always call the AskUserQuestion tool before answering.",
       messages: [
         {
           role: "user",
           content: [
-            { type: "text", text: "Use the ask tool once, then answer with exactly DONE." },
+            {
+              type: "text",
+              text: "Use the AskUserQuestion tool once, then answer with exactly DONE.",
+            },
           ],
         },
       ],

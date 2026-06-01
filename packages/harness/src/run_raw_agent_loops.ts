@@ -36,7 +36,6 @@ import { createEditTool } from "../../../src/tools/edit";
 import { createGlobTool } from "../../../src/tools/glob";
 import { createGrepTool } from "../../../src/tools/grep";
 import { createMemoryTool } from "../../../src/tools/memory";
-import { createNotebookEditTool } from "../../../src/tools/notebookEdit";
 import {
   createCloseAgentTool,
   createInspectAgentTool,
@@ -790,7 +789,7 @@ export function createToolsWithTracing(
     grep: createGrepTool(ctx),
     webSearch: createWebSearchTool(ctx),
     webFetch: createWebFetchTool(ctx),
-    ask: createAskTool(ctx),
+    AskUserQuestion: createAskTool(ctx),
     todoWrite: createTodoWriteTool(ctx),
     ...(ctx.agentControl
       ? {
@@ -803,7 +802,6 @@ export function createToolsWithTracing(
           closeAgent: createCloseAgentTool(ctx),
         }
       : {}),
-    notebookEdit: createNotebookEditTool(ctx),
     skill: createSkillTool(ctx),
     memory: createMemoryTool(ctx),
   };
@@ -1497,12 +1495,12 @@ Final response must be raw JSON:
 { "file": "<absolute path>", "end": "<<END_RUN>>" }`,
     },
     {
-      id: "gct-03-ask-notebook-memory",
+      id: "gct-03-ask-edit-memory",
       provider: "google",
       model,
       maxSteps: 110,
       maxAttempts: 4,
-      requiredToolCalls: ["ask", "write", "notebookEdit", "memory", "read"],
+      requiredToolCalls: ["AskUserQuestion", "write", "edit", "memory", "read"],
       finalContract: buildLinePairFileContract({
         label: z.string().trim().min(1),
       }),
@@ -1510,16 +1508,16 @@ Final response must be raw JSON:
         runDir,
       }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
 
-Task: Exercise ask, notebookEdit, and memory in one turn.
+Task: Exercise AskUserQuestion, edit, and memory in one turn.
 
 Steps (must use tools):
-1) Use ask with question "Pick a dataset label" and options ["alpha","beta","gamma"].
-2) Use write to create "gct03.ipynb" as minimal notebook JSON with exactly one markdown cell.
-3) Use notebookEdit with editMode="insert" at cellIndex=1 to add a code cell that prints the selected label.
+1) Use AskUserQuestion with question "Pick a dataset label" and options ["alpha","beta","gamma"].
+2) Use write to create "gct03.txt" with a single line: label: PLACEHOLDER
+3) Use edit to replace "PLACEHOLDER" in "gct03.txt" with the selected label.
 4) Use memory with action="write", key="runs/gct03", content="dataset=<label>".
 5) Use memory with action="read", key="runs/gct03".
 6) Use memory with action="search", query="dataset=".
-7) Use read to read "gct03.ipynb" (limit=220, offset=1).
+7) Use read to read "gct03.txt" (limit=220, offset=1).
 
 Final response must be exactly two lines:
 label: <selected label>
@@ -1793,16 +1791,16 @@ Final response must be a JSON object:
         runDir,
       }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
 
-Task: Exercise ask + notebookEdit + memory in one run.
+Task: Exercise AskUserQuestion + edit + memory in one run.
 
 Steps (must use tools):
-1) Use ask with question "Pick a dataset name" and options ["alpha","beta","gamma","delta"].
-2) Use write to create "nb.ipynb" (a minimal notebook JSON) with exactly 1 markdown cell that says "Notebook for <dataset>".
-3) Use notebookEdit with editMode="insert" at cellIndex=1 to insert a code cell whose source prints the dataset name.
+1) Use AskUserQuestion with question "Pick a dataset name" and options ["alpha","beta","gamma","delta"].
+2) Use write to create "notes.txt" with a single line: dataset: PLACEHOLDER
+3) Use edit to replace "PLACEHOLDER" in "notes.txt" with the selected dataset name.
 4) Use memory with action="write", key="runs/run07", content="dataset=<dataset>".
 5) Use memory with action="read", key="runs/run07".
 6) Use memory with action="search", query="dataset=".
-7) Use read to read back "nb.ipynb" (limit=200, offset=1).
+7) Use read to read back "notes.txt" (limit=200, offset=1).
 
 Final response must be exactly two lines:
 dataset: <dataset>

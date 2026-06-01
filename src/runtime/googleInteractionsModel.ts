@@ -59,9 +59,9 @@ const SUPPORTED_GOOGLE_INTERACTIONS_MODELS: Record<string, GoogleInteractionsMod
     maxTokens: 65_536,
     cost: { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite: 0 },
   },
-  "gemini-3.1-flash-lite-preview": {
-    id: "gemini-3.1-flash-lite-preview",
-    name: "Gemini 3.1 Flash-Lite Preview",
+  "gemini-3.1-flash-lite": {
+    id: "gemini-3.1-flash-lite",
+    name: "Gemini 3.1 Flash-Lite",
     reasoning: true,
     input: GOOGLE_MULTIMODAL_INPUT,
     contextWindow: 1_048_576,
@@ -83,15 +83,7 @@ function resolveGoogleInteractionsModelInfo(modelId: string): GoogleInteractions
   const known = SUPPORTED_GOOGLE_INTERACTIONS_MODELS[modelId];
   if (known) return known;
 
-  // Fallback for unknown models — use conservative defaults
-  return {
-    id: modelId,
-    name: modelId,
-    reasoning: true,
-    input: GOOGLE_MULTIMODAL_INPUT,
-    contextWindow: 1_000_000,
-    maxTokens: 64_000,
-  };
+  throw new Error(`Missing supported Google Interactions model metadata for ${modelId}.`);
 }
 
 function googleInteractionsInputForModel(
@@ -100,6 +92,10 @@ function googleInteractionsInputForModel(
   if (supportsImageInput) return GOOGLE_MULTIMODAL_INPUT;
   return ["text", "audio", "video", "document"];
 }
+
+export const __internal = {
+  SUPPORTED_GOOGLE_INTERACTIONS_MODELS,
+} as const;
 
 export async function resolveGoogleInteractionsModel(
   params: RuntimeRunTurnParams,

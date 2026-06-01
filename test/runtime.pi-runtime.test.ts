@@ -5,6 +5,8 @@ import path from "node:path";
 
 import { z } from "zod";
 import { getAiCoworkerPaths } from "../src/connect";
+import { listSupportedModels } from "../src/models/registry";
+import { resolveGoogleInteractionsModel } from "../src/runtime/googleInteractionsModel";
 import { resolveOpenAiResponsesModel } from "../src/runtime/openaiResponsesModel";
 import { createPiRuntime, __internal as piRuntimeInternal } from "../src/runtime/piRuntime";
 import type { RuntimeRunTurnParams } from "../src/runtime/types";
@@ -150,8 +152,54 @@ describe("pi runtime regressions", () => {
     const resolved = await resolveOpenAiResponsesModel(makeParams(config));
 
     expect(resolved.model.api).toBe("openai-responses");
-    expect(resolved.model.contextWindow).toBe(400000);
+    expect(resolved.model.contextWindow).toBe(1050000);
     expect(resolved.model.maxTokens).toBe(128000);
+  });
+
+  test("openai responses model resolution covers every supported OpenAI registry model", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-openai-coverage-"));
+
+    for (const model of listSupportedModels("openai")) {
+      const config = makeConfig(homeDir, {
+        provider: "openai",
+        model: model.id,
+        preferredChildModel: model.id,
+      });
+      const resolved = await resolveOpenAiResponsesModel(makeParams(config));
+
+      expect(resolved.model.id).toBe(model.id);
+      expect(resolved.model.api).toBe("openai-responses");
+      expect(resolved.model.contextWindow).toBeGreaterThan(0);
+      expect(resolved.model.maxTokens).toBeGreaterThan(0);
+    }
+  });
+
+  test("openai responses model resolution keeps supported token limits for gpt-5.4 family additions", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-openai-gpt54-family-"));
+
+    const nano = await resolveOpenAiResponsesModel(
+      makeParams(
+        makeConfig(homeDir, {
+          provider: "openai",
+          model: "gpt-5.4-nano",
+          preferredChildModel: "gpt-5.4-nano",
+        }),
+      ),
+    );
+    expect(nano.model.contextWindow).toBe(400000);
+    expect(nano.model.maxTokens).toBe(128000);
+
+    const pro = await resolveOpenAiResponsesModel(
+      makeParams(
+        makeConfig(homeDir, {
+          provider: "openai",
+          model: "gpt-5.4-pro",
+          preferredChildModel: "gpt-5.4-pro",
+        }),
+      ),
+    );
+    expect(pro.model.contextWindow).toBe(1050000);
+    expect(pro.model.maxTokens).toBe(128000);
   });
 
   test("openai responses model resolution keeps supported token limits for gpt-5.5", async () => {
@@ -182,6 +230,37 @@ describe("pi runtime regressions", () => {
     expect(resolved.model.api).toBe("openai-responses");
     expect(resolved.model.contextWindow).toBe(400000);
     expect(resolved.model.maxTokens).toBe(128000);
+  });
+
+  test("google interactions model resolution covers every supported Google registry model", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-google-coverage-"));
+
+    for (const model of listSupportedModels("google")) {
+      const config = makeConfig(homeDir, {
+        provider: "google",
+        model: model.id,
+        preferredChildModel: model.id,
+      });
+      const resolved = await resolveGoogleInteractionsModel(makeParams(config));
+
+      expect(resolved.model.id).toBe(model.id);
+      expect(resolved.model.contextWindow).toBeGreaterThan(0);
+      expect(resolved.model.maxTokens).toBeGreaterThan(0);
+    }
+  });
+
+  test("google interactions model resolution normalizes Gemini 3.1 Flash-Lite preview alias", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-google-flash-lite-"));
+    const config = makeConfig(homeDir, {
+      provider: "google",
+      model: "gemini-3.1-flash-lite-preview",
+      preferredChildModel: "gemini-3.1-flash-lite-preview",
+    });
+
+    const resolved = await resolveGoogleInteractionsModel(makeParams(config));
+
+    expect(resolved.model.id).toBe("gemini-3.1-flash-lite");
+    expect(resolved.model.name).toBe("Gemini 3.1 Flash-Lite");
   });
 
   test("LM Studio PI model resolution builds a dynamic openai-completions model from live metadata", async () => {

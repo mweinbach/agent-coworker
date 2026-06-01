@@ -12,7 +12,6 @@ import { createGlobTool } from "../../src/tools/glob";
 import { createGrepTool } from "../../src/tools/grep";
 import { createTools, listSessionToolNames } from "../../src/tools/index";
 import { createMemoryTool } from "../../src/tools/memory";
-import { createNotebookEditTool } from "../../src/tools/notebookEdit";
 import { createReadTool } from "../../src/tools/read";
 import { createSkillTool } from "../../src/tools/skill";
 import { createTodoWriteTool, currentTodos, onTodoChange } from "../../src/tools/todoWrite";
@@ -33,7 +32,6 @@ export {
   createGlobTool,
   createGrepTool,
   createMemoryTool,
-  createNotebookEditTool,
   createReadTool,
   createSkillTool,
   createTodoWriteTool,

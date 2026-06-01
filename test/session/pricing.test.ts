@@ -48,6 +48,24 @@ describe("pricing", () => {
       expect(pricing!.cachedInputPerMillion).toBe(0.075);
     });
 
+    it("resolves exact match for openai gpt-5.4-nano pricing", () => {
+      const pricing = resolveModelPricing("openai", "gpt-5.4-nano");
+      expect(pricing).not.toBeNull();
+      expect(pricing!.inputPerMillion).toBe(0.2);
+      expect(pricing!.outputPerMillion).toBe(1.25);
+      expect(pricing!.cachedInputPerMillion).toBe(0.02);
+    });
+
+    it("resolves exact match for openai gpt-5.4-pro pricing", () => {
+      const pricing = resolveModelPricing("openai", "gpt-5.4-pro");
+      expect(pricing).not.toBeNull();
+      expect(pricing!.inputPerMillion).toBe(30);
+      expect(pricing!.outputPerMillion).toBe(180);
+      expect(pricing!.longContextThresholdTokens).toBe(272_000);
+      expect(pricing!.longContextInputPerMillion).toBe(60);
+      expect(pricing!.longContextOutputPerMillion).toBe(270);
+    });
+
     it("resolves exact match for openai gpt-5.5 pricing", () => {
       const pricing = resolveModelPricing("openai", "gpt-5.5");
       expect(pricing).not.toBeNull();
@@ -68,7 +86,15 @@ describe("pricing", () => {
       expect(pricing!.cachedInputPerMillion).toBe(0.05);
     });
 
-    it("resolves exact match for gemini-3.1-flash-lite-preview pricing", () => {
+    it("resolves exact match for gemini-3.1-flash-lite pricing", () => {
+      const pricing = resolveModelPricing("google", "gemini-3.1-flash-lite");
+      expect(pricing).not.toBeNull();
+      expect(pricing!.inputPerMillion).toBe(0.25);
+      expect(pricing!.outputPerMillion).toBe(1.5);
+      expect(pricing!.cachedInputPerMillion).toBe(0.025);
+    });
+
+    it("preserves historical pricing lookup for gemini-3.1-flash-lite-preview", () => {
       const pricing = resolveModelPricing("google", "gemini-3.1-flash-lite-preview");
       expect(pricing).not.toBeNull();
       expect(pricing!.inputPerMillion).toBe(0.25);

@@ -25,10 +25,10 @@ jobs:
       - name: Setup dependencies
         uses: ./.github/actions/setup-bun
 
-      # Serialize async tests: many desktop tests swap global JSDOM document/window and
-      # cannot run concurrently without clobbering each other on shared globalThis.
+      # Run each test file in a fresh Bun process: desktop tests swap global JSDOM
+      # document/window and can leak async React cleanup into later files.
       - name: Unit tests
-        run: bun test --max-concurrency 1
+        run: bun run test:stable -- --max-concurrency 1
 
       - name: Typecheck
         run: bun run typecheck

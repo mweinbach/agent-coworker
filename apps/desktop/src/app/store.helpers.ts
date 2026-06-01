@@ -5,8 +5,11 @@ import type {
   DesktopFeatureFlags,
 } from "../../../../src/shared/featureFlags";
 import type {
-  SpreadsheetPreviewResult,
-  SpreadsheetPreviewViewportRequest,
+  SpreadsheetBatchPatchOperation,
+  SpreadsheetBatchPatchResult,
+  SpreadsheetFileVersion,
+  SpreadsheetFileVersionResult,
+  SpreadsheetWorkbookSnapshotResult,
 } from "../../../../src/shared/spreadsheetPreview";
 import { createDefaultUpdaterState, type UpdaterState } from "../lib/desktopApi";
 import { startWorkspaceServer } from "../lib/desktopCommands";
@@ -182,6 +185,7 @@ export type AppStoreState = {
   filePreview: { path: string } | null;
   canvasActiveTab: "preview" | "edit";
   canvasShowFormattingBar: boolean;
+  isCanvasMaximized: boolean;
   notifications: Notification[];
 
   providerStatusByName: Partial<Record<ProviderName, ProviderStatus>>;
@@ -316,6 +320,8 @@ export type AppStoreState = {
   enablePlugin: (pluginId: string, scope?: "workspace" | "user") => Promise<void>;
   disablePlugin: (pluginId: string, scope?: "workspace" | "user") => Promise<void>;
   deletePlugin: (pluginId: string, scope?: "workspace" | "user") => Promise<void>;
+  checkPluginUpdate: (pluginId: string, scope?: "workspace" | "user") => Promise<void>;
+  updatePlugin: (pluginId: string, scope?: "workspace" | "user") => Promise<void>;
   setPluginViewMode: (mode: "plugins" | "skills") => void;
   listImportable: (source: ImportSource, kind: ImportableKind) => Promise<void>;
   importPlugin: (item: ImportableItem, targetScope: "workspace" | "user") => Promise<void>;
@@ -505,13 +511,19 @@ export type AppStoreState = {
   closeFilePreview: () => void;
   setCanvasActiveTab: (tab: "preview" | "edit") => void;
   setCanvasShowFormattingBar: (show: boolean) => void;
-  loadSpreadsheetPreview: (
+  setCanvasMaximized: (maximized: boolean) => void;
+  loadSpreadsheetWorkbook: (
     path: string,
     opts?: {
       sheetName?: string;
-      viewport?: SpreadsheetPreviewViewportRequest;
     },
-  ) => Promise<SpreadsheetPreviewResult>;
+  ) => Promise<SpreadsheetWorkbookSnapshotResult>;
+  loadSpreadsheetFileVersion: (path: string) => Promise<SpreadsheetFileVersionResult>;
+  patchSpreadsheetWorkbook: (
+    path: string,
+    operations: SpreadsheetBatchPatchOperation[],
+    expectedFileVersion?: SpreadsheetFileVersion,
+  ) => Promise<SpreadsheetBatchPatchResult>;
   loadPresentationPreview: (path: string) => Promise<PresentationPreviewResult>;
 
   setA2uiDockExpanded: (threadId: string, expanded: boolean) => void;

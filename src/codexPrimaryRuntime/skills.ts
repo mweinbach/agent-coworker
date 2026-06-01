@@ -112,19 +112,23 @@ async function writeWorkspaceToolsPluginManifest(pluginRoot: string): Promise<vo
   );
 }
 
-async function normalizeInstalledSkillName(skillRoot: string, name: string): Promise<void> {
-  const skillFile = path.join(skillRoot, "SKILL.md");
-  const raw = await fs.readFile(skillFile, "utf-8").catch(() => null);
-  if (!raw) return;
-
+function normalizeSkillMarkdownName(raw: string, name: string): string {
   const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-  if (!match) return;
+  if (!match) return raw;
 
   const frontMatter = match[1] ?? "";
   const nextFrontMatter = /^name\s*:/m.test(frontMatter)
     ? frontMatter.replace(/^name\s*:.*$/m, `name: ${name}`)
     : `name: ${name}\n${frontMatter}`;
-  const nextRaw = raw.replace(match[0], `---\n${nextFrontMatter}\n---`);
+  return raw.replace(match[0], `---\n${nextFrontMatter}\n---`);
+}
+
+async function normalizeInstalledSkillName(skillRoot: string, name: string): Promise<void> {
+  const skillFile = path.join(skillRoot, "SKILL.md");
+  const raw = await fs.readFile(skillFile, "utf-8").catch(() => null);
+  if (!raw) return;
+
+  const nextRaw = normalizeSkillMarkdownName(raw, name);
   await fs.writeFile(skillFile, nextRaw, "utf-8");
 }
 
@@ -207,6 +211,7 @@ async function shouldOverwriteBootstrapSkill(
   destination: string,
   spec: SkillSourceSpec,
   force: boolean,
+  source?: string | null,
 ): Promise<boolean> {
   if (force) return true;
   if (!(await pathExists(destination))) return true;
@@ -215,6 +220,13 @@ async function shouldOverwriteBootstrapSkill(
     isCurrentRuntimeSkillManifest(manifest, spec) &&
     (await pathExists(path.join(destination, "SKILL.md")))
   ) {
+    if (source && (await pathExists(path.join(source, "SKILL.md")))) {
+      const [sourceSkill, installedSkill] = await Promise.all([
+        fs.readFile(path.join(source, "SKILL.md"), "utf-8"),
+        fs.readFile(path.join(destination, "SKILL.md"), "utf-8"),
+      ]);
+      if (normalizeSkillMarkdownName(sourceSkill, spec.name) !== installedSkill) return true;
+    }
     return false;
   }
   return manifest?.origin?.kind === "bootstrap";
@@ -312,7 +324,7 @@ async function installSkill(opts: {
   }
 
   const overwrite = opts.global
-    ? await shouldOverwriteBootstrapSkill(destination, opts.spec, opts.force)
+    ? await shouldOverwriteBootstrapSkill(destination, opts.spec, opts.force, opts.source)
     : opts.force || !(await pathExists(destination));
   if (!overwrite) {
     return { name: opts.spec.name, status: "already_installed", source: opts.source, destination };
@@ -482,24 +494,24 @@ export async function installWorkspaceToolsPlugin(opts: {
 
   const plans: WorkspaceToolsSkillPlan[] = [];
   for (const spec of CODEX_RUNTIME_SKILLS) {
-    const destination = workspaceToolsDestination(pluginRoot, spec);
-    const overwrite = await shouldOverwriteBootstrapSkill(destination, spec, opts.force);
-    if (!overwrite) {
-      plans.push({
-        spec,
-        status: "already_installed",
-        destination,
-        action: "preserve",
-      });
-      continue;
-    }
-
     const source = await resolveRuntimeSkillSource({
       home: opts.home,
       runtimeRoots: opts.runtimeRoots,
       curatedRepoRoot: opts.curatedRepoRoot,
       spec,
     });
+    const destination = workspaceToolsDestination(pluginRoot, spec);
+    const overwrite = await shouldOverwriteBootstrapSkill(destination, spec, opts.force, source);
+    if (!overwrite) {
+      plans.push({
+        spec,
+        status: "already_installed",
+        ...(source ? { source } : {}),
+        destination,
+        action: "preserve",
+      });
+      continue;
+    }
 
     if (!source) {
       plans.push({

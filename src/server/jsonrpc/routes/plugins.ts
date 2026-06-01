@@ -15,6 +15,7 @@ type PluginMutationResponseEvent = Extract<
 type PluginInstallResponseEvent =
   | PluginMutationResponseEvent
   | Extract<SessionEvent, { type: "plugin_install_preview" | "plugin_detail" }>;
+type PluginUpdateCheckResponseEvent = Extract<SessionEvent, { type: "plugin_update_check" }>;
 const PLUGIN_INSTALL_EVENTS_TIMEOUT_MS = 60_000;
 
 function isPluginMutationResponseEvent(event: SessionEvent): event is PluginMutationResponseEvent {
@@ -101,6 +102,46 @@ export function createPluginsRouteHandlers(context: JsonRpcRouteContext): JsonRp
         context,
         cwd,
         async (runtime) => await runtime.plugins.install(sourceInput, targetScope),
+        isPluginInstallResponseEvent,
+        { timeoutMs: PLUGIN_INSTALL_EVENTS_TIMEOUT_MS },
+      );
+      const error = events.find(context.utils.isSessionError);
+      if (error) {
+        sendSessionMutationError(context, ws, message.id, error);
+        return;
+      }
+      context.jsonrpc.sendResult(ws, message.id, { events });
+    },
+
+    "cowork/plugins/checkUpdate": async (ws, message) => {
+      const params = toJsonRpcParams(message.params);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
+      const pluginId = typeof params.pluginId === "string" ? params.pluginId.trim() : "";
+      const scope =
+        params.scope === "workspace" || params.scope === "user" ? params.scope : undefined;
+      const event = await captureWorkspaceControlOutcome(
+        context,
+        cwd,
+        async (runtime) => await runtime.plugins.checkUpdate(pluginId, scope),
+        (event): event is PluginUpdateCheckResponseEvent => event.type === "plugin_update_check",
+      );
+      if (context.utils.isSessionError(event)) {
+        sendSessionMutationError(context, ws, message.id, event);
+        return;
+      }
+      context.jsonrpc.sendResult(ws, message.id, { event });
+    },
+
+    "cowork/plugins/update": async (ws, message) => {
+      const params = toJsonRpcParams(message.params);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
+      const pluginId = typeof params.pluginId === "string" ? params.pluginId.trim() : "";
+      const scope =
+        params.scope === "workspace" || params.scope === "user" ? params.scope : undefined;
+      const events = await captureWorkspaceControlMutationEvents(
+        context,
+        cwd,
+        async (runtime) => await runtime.plugins.update(pluginId, scope),
         isPluginInstallResponseEvent,
         { timeoutMs: PLUGIN_INSTALL_EVENTS_TIMEOUT_MS },
       );

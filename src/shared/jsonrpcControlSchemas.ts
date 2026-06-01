@@ -16,6 +16,7 @@ const providerNameSchema = z.enum(PROVIDER_NAMES);
 const childModelRoutingModeSchema = z.enum(CHILD_MODEL_ROUTING_MODES);
 const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
 const optionalNonEmptyTrimmedStringSchema = nonEmptyTrimmedStringSchema.optional();
+const sourceHashSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const _anyObjectSchema = z.record(z.string(), z.unknown());
 const targetScopeSchema = z.enum(["project", "global"]);
 const workspaceMemoryScopeSchema = z.enum(["workspace", "user"]);
@@ -699,6 +700,10 @@ const skillInstallationEntrySchema = z
     updatedAt: z.string().optional(),
     fileModifiedAt: z.string().optional(),
     plugin: skillPluginOwnerSchema.optional(),
+    installedSourceHash: sourceHashSchema.optional(),
+    latestSourceHash: sourceHashSchema.optional(),
+    updateAvailable: z.boolean().optional(),
+    updateCheckReason: z.string().optional(),
   })
   .passthrough();
 
@@ -709,6 +714,7 @@ const skillMarketplaceMetadataSchema = z
     category: z.string().optional(),
     installationPolicy: z.string().optional(),
     authenticationPolicy: z.string().optional(),
+    sourceHash: sourceHashSchema.optional(),
   })
   .passthrough();
 
@@ -768,6 +774,7 @@ const pluginMarketplaceMetadataSchema = z
     category: z.string().optional(),
     installationPolicy: z.string().optional(),
     authenticationPolicy: z.string().optional(),
+    sourceHash: sourceHashSchema.optional(),
   })
   .passthrough();
 
@@ -795,6 +802,10 @@ const installedPluginCatalogEntrySchema = z
     interface: pluginInterfaceSchema.optional(),
     marketplace: pluginMarketplaceMetadataSchema.optional(),
     installSource: z.string().optional(),
+    installedSourceHash: sourceHashSchema.optional(),
+    latestSourceHash: sourceHashSchema.optional(),
+    updateAvailable: z.boolean().optional(),
+    updateCheckReason: z.string().optional(),
     skills: z.array(pluginSkillSummarySchema),
     mcpServers: z.array(z.string()),
     apps: z.array(pluginAppSummarySchema),
@@ -926,6 +937,8 @@ const skillUpdateCheckResultSchema = z
     canUpdate: z.boolean(),
     reason: z.string().optional(),
     preview: skillInstallPreviewSchema.optional(),
+    installedSourceHash: sourceHashSchema.optional(),
+    latestSourceHash: sourceHashSchema.optional(),
   })
   .strict();
 
@@ -1000,6 +1013,26 @@ const pluginInstallPreviewEventSchema = z
     sessionId: nonEmptyTrimmedStringSchema.optional(),
     preview: pluginInstallPreviewSchema,
     fromUserPreviewRequest: z.boolean().optional(),
+  })
+  .passthrough();
+
+const pluginUpdateCheckResultSchema = z
+  .object({
+    pluginId: nonEmptyTrimmedStringSchema,
+    scope: pluginScopeSchema.optional(),
+    canUpdate: z.boolean(),
+    reason: z.string().optional(),
+    preview: pluginInstallPreviewSchema.optional(),
+    installedSourceHash: sourceHashSchema.optional(),
+    latestSourceHash: sourceHashSchema.optional(),
+  })
+  .strict();
+
+const pluginUpdateCheckEventSchema = z
+  .object({
+    type: z.literal("plugin_update_check"),
+    sessionId: nonEmptyTrimmedStringSchema.optional(),
+    result: pluginUpdateCheckResultSchema,
   })
   .passthrough();
 
@@ -1551,6 +1584,8 @@ export const jsonRpcControlRequestSchemas = {
   "cowork/plugins/enable": pluginMutationRequestSchema,
   "cowork/plugins/disable": pluginMutationRequestSchema,
   "cowork/plugins/delete": pluginMutationRequestSchema,
+  "cowork/plugins/checkUpdate": pluginMutationRequestSchema,
+  "cowork/plugins/update": pluginMutationRequestSchema,
   "cowork/plugins/install/preview": pluginsInstallPreviewRequestSchema,
   "cowork/plugins/install": pluginsInstallRequestSchema,
   "cowork/import/list": importListRequestSchema,
@@ -1623,6 +1658,8 @@ export const jsonRpcControlResultSchemas = {
   "cowork/plugins/enable": sessionEventsEnvelope(pluginMutationResultEventSchema),
   "cowork/plugins/disable": sessionEventsEnvelope(pluginMutationResultEventSchema),
   "cowork/plugins/delete": sessionEventsEnvelope(pluginMutationResultEventSchema),
+  "cowork/plugins/checkUpdate": sessionEventEnvelope(pluginUpdateCheckEventSchema),
+  "cowork/plugins/update": sessionEventsEnvelope(pluginInstallResultEventSchema),
   "cowork/plugins/install/preview": sessionEventEnvelope(pluginInstallPreviewEventSchema),
   "cowork/plugins/install": sessionEventsEnvelope(pluginInstallResultEventSchema),
   "cowork/import/list": sessionEventEnvelope(importListEventSchema),

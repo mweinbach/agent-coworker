@@ -122,6 +122,7 @@ export function buildMarketplaceCatalogMetadata(input: {
   category?: string;
   installationPolicy?: string;
   authenticationPolicy?: string;
+  sourceHash?: string;
 }): PluginMarketplaceMetadata {
   return {
     name: input.name,
@@ -129,6 +130,7 @@ export function buildMarketplaceCatalogMetadata(input: {
     ...(input.category ? { category: input.category } : {}),
     ...(input.installationPolicy ? { installationPolicy: input.installationPolicy } : {}),
     ...(input.authenticationPolicy ? { authenticationPolicy: input.authenticationPolicy } : {}),
+    ...(input.sourceHash ? { sourceHash: input.sourceHash } : {}),
   };
 }
 
@@ -146,6 +148,7 @@ function buildMarketplaceInstallMetadata(
       category: plugin.category,
       installationPolicy: plugin.installationPolicy,
       authenticationPolicy: plugin.authenticationPolicy,
+      sourceHash: plugin.sourceHash,
     }),
     sourceInput: plugin.sourceInput,
   };
@@ -216,6 +219,7 @@ export function buildRemoteMarketplaceCatalogEntry(opts: {
       category: opts.plugin.category,
       installationPolicy: opts.plugin.installationPolicy,
       authenticationPolicy: opts.plugin.authenticationPolicy,
+      sourceHash: opts.plugin.sourceHash,
     }),
     installSource: opts.plugin.sourceInput,
     warnings: [],
@@ -250,6 +254,7 @@ export function buildRemoteMarketplaceSkillCatalogEntry(opts: {
       category: opts.skill.category,
       installationPolicy: opts.skill.installationPolicy,
       authenticationPolicy: opts.skill.authenticationPolicy,
+      sourceHash: opts.skill.sourceHash,
     }),
     installSource: opts.skill.sourceInput,
     warnings: [],

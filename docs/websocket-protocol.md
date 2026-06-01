@@ -107,7 +107,9 @@ Any request before the handshake completes is rejected with a JSON-RPC error:
 - `turn/steer`
 - `turn/interrupt`
 - `cowork/workspace/bootstrap`
-- `cowork/workspace/spreadsheet/preview`
+- `cowork/workspace/spreadsheet/workbook`
+- `cowork/workspace/spreadsheet/version`
+- `cowork/workspace/spreadsheet/patch`
 
 `turn/start` and `turn/steer` also accept an optional `clientMessageId` string so JSON-RPC clients can correlate optimistic user UI state with the projected `user_message` notification stream.
 
@@ -266,6 +268,8 @@ Currently implemented `cowork/*` methods include:
   - `cowork/plugins/enable`
   - `cowork/plugins/disable`
   - `cowork/plugins/delete`
+  - `cowork/plugins/checkUpdate`
+  - `cowork/plugins/update`
 - import controls (import plugins/skills already on disk from Claude Code `~/.claude` and Codex `~/.codex`)
   - `cowork/import/list`
   - `cowork/import/plugin`
@@ -293,7 +297,9 @@ The desktop JSON-RPC path now uses this namespace so one workspace connection ca
 - MCP management
 - memories
 
-`cowork/plugins/read`, `cowork/plugins/enable`, `cowork/plugins/disable`, and `cowork/plugins/delete` accept an optional `scope` field (`workspace` or `user`) so callers can address a specific installed copy when the same plugin id exists in both scopes. Plugin catalog snapshots keep installed plugins in `plugins`; built-in remote marketplace offers live in `availablePlugins`, use `installed: false`, include `installSource`, and do not expose local paths until installed.
+`cowork/plugins/read`, `cowork/plugins/enable`, `cowork/plugins/disable`, `cowork/plugins/delete`, `cowork/plugins/checkUpdate`, and `cowork/plugins/update` accept an optional `scope` field (`workspace` or `user`) so callers can address a specific installed copy when the same plugin id exists in both scopes. Plugin catalog snapshots keep installed plugins in `plugins`; built-in remote marketplace offers live in `availablePlugins`, use `installed: false`, include `installSource`, and do not expose local paths until installed.
+
+A marketplace `marketplace.json` may include `sourceHash: "sha256:<64 hex chars>"` on plugin and standalone skill entries. Installed marketplace copies report `installedSourceHash`, `latestSourceHash`, and `updateAvailable` when Cowork can compare the stored install hash with the latest marketplace hash. Updates stay opt-in: clients should offer `cowork/plugins/update` or `cowork/skills/installation/update` only when the catalog or explicit check says an update is available.
 
 A marketplace `marketplace.json` may also declare a `skills` array (same entry shape as `plugins`) for standalone skills. These surface in skill catalog snapshots under `availableSkills` (`installed: false`, each with an `installSource` GitHub URL); installed skills stay in `installations`. The `skills_catalog` event sets `availableSkillsPartial: true` whenever the remote marketplace was not fetched (local-only refresh) or the fetch failed, so clients keep their cached available-skill rows instead of clearing them. Install an available skill by passing its `installSource` to `cowork/skills/install` (no new method is required).
 
@@ -329,7 +335,11 @@ One-off chat thread workspaces must live under the global `~/.cowork/chats` dire
 
 `cowork/session/file/upload` writes a file into the workspace uploads directory and returns a `file_uploaded` session event envelope. JSON-RPC clients can then reference that saved file from `turn/start` or `turn/steer` with an `uploadedFile` input part when the file is too large to send inline.
 
-`cowork/workspace/spreadsheet/preview` reads a CSV or `.xlsx` file from the active workspace and returns structured sheet, viewport, cell, merged-range, and column-width data. The request accepts `path`, optional `sheetName`, and optional `viewport` (`startRow`, `startCol`, `rowCount`, `colCount`) so clients can render workbook previews without parsing spreadsheet bytes in the UI layer. Paths are resolved under the workspace root and symlink escapes are rejected.
+`cowork/workspace/spreadsheet/workbook` reads a CSV or `.xlsx` file from the active workspace and returns a full workbook snapshot for spreadsheet editors such as the desktop Univer canvas. The result includes all sheets, sparse cells, formulas, styles, merged ranges, column widths, table metadata, chart metadata, the active sheet, and warnings. This is a read-only harness boundary: clients receive editor-ready data without parsing spreadsheet bytes, and `.xlsx` objects that the OSS editor cannot render fully (for example native Excel charts) remain preserved in the original file.
+
+`cowork/workspace/spreadsheet/version` returns a lightweight file-version fingerprint for a CSV or `.xlsx` file in the active workspace. Desktop spreadsheet canvases use this to auto-refresh when the source workbook changes on disk, including updates made by an agent, without reparsing the full workbook on every poll.
+
+`cowork/workspace/spreadsheet/patch` applies a bounded batch of spreadsheet mutations generated by an embedded editor. Each operation is one of `{ type: "cell", sheetName?, address, rawInput }`, `{ type: "format", sheetName?, range, style }`, `{ type: "merge", sheetName?, range, merged }`, or `{ type: "columnWidth", sheetName?, col, widthPx }`; `columnWidth.widthPx` is either a positive pixel width or `null` to clear a custom width. Empty batches are accepted as no-ops and non-empty batches are capped at 50,000 operations. Clients may pass `expectedFileVersion` from `cowork/workspace/spreadsheet/workbook` or `cowork/workspace/spreadsheet/version`; when present, the server rejects the patch if the on-disk fingerprint changed before writing. The server executes all operations as one atomic read-modify-write, stops on the first structured failure, and never rewrites the whole `.xlsx` package through a lossy writer. The result is `{ "ok": true }` or `{ "ok": false, "error": { "kind", "message" } }` (`kind` ∈ `unsupported_format | not_found | outside_workspace | parse_error | write_error`). Paths are resolved under the workspace root, symlink escapes return `outside_workspace`, and remote trusted devices require the `workspaceSettings` permission.
 
 `cowork/session/agent/inspect` is a thread-scoped, root-only read for child agents. It returns the same detailed inspection payload as the root `inspectAgent` tool: the latest child summary, the full latest assistant text, a parsed structured child report when the final assistant text includes a recognized JSON footer, and compact session/last-turn usage snapshots for the child.
 
@@ -491,7 +501,9 @@ Sockets subscribed with `research/subscribe` can receive:
 - `thread/resume` accepts `afterSeq` to replay journaled notifications after a known cursor, then reattaches the live thread sink so reconnecting clients do not receive the same journaled events twice
 - `thread/unsubscribe` returns an unsubscribe status and emits `thread/closed` with `{ threadId }` after the connection is detached from a live subscription
 - `cowork/workspace/bootstrap` returns persisted and live threads for a workspace plus workspace control state; used by desktop/mobile clients on initial load
-- `cowork/workspace/spreadsheet/preview` returns bounded spreadsheet preview data for workspace CSV and `.xlsx` files; desktop uses it to keep spreadsheet parsing in the harness.
+- `cowork/workspace/spreadsheet/workbook` returns full workbook snapshots for embedded spreadsheet editors while preserving native workbook objects in the source file.
+- `cowork/workspace/spreadsheet/version` returns a cheap workbook file fingerprint so embedded editors can detect external file updates.
+- `cowork/workspace/spreadsheet/patch` batches editor value and formatting saves through the same lossless XLSX patch path.
 - Cowork persists canonical thread journal events in sqlite so reconnect / restart replay is no longer limited to an in-memory socket buffer
 
 ### Projected Conversation Contract
@@ -1025,7 +1037,16 @@ Returned in `server_hello` and `config_updated`:
   "triggers": ["/commit"],
   "descriptionSource": "frontmatter",
   "diagnostics": [],
-  "origin": { "kind": "github", "repo": "example/skills", "ref": "main", "subdir": "skills/commit" }
+  "origin": {
+    "kind": "github",
+    "repo": "example/skills",
+    "ref": "main",
+    "subdir": "skills/commit",
+    "sourceHash": "sha256:..."
+  },
+  "installedSourceHash": "sha256:...",
+  "latestSourceHash": "sha256:...",
+  "updateAvailable": false
 }
 ```
 
@@ -1076,11 +1097,28 @@ Install preview built from a pasted source input before any mutation occurs.
 {
   "installationId": "0ed1f33e-...",
   "canUpdate": true,
-  "preview": { "...": "SkillInstallPreview" }
+  "preview": { "...": "SkillInstallPreview" },
+  "installedSourceHash": "sha256:...",
+  "latestSourceHash": "sha256:..."
 }
 ```
 
 Represents whether a managed installation can be refreshed from its recorded origin and, when possible, includes the update preview.
+
+### PluginUpdateCheckResult
+
+```json
+{
+  "pluginId": "workspace-tools",
+  "scope": "user",
+  "canUpdate": true,
+  "preview": { "...": "PluginInstallPreview" },
+  "installedSourceHash": "sha256:...",
+  "latestSourceHash": "sha256:..."
+}
+```
+
+Represents whether a managed plugin can be refreshed from its recorded install source and, when possible, includes the update preview.
 
 ### HarnessContextPayload
 
@@ -2455,6 +2493,30 @@ Update-check result for a managed installation.
 | `type` | `"skill_installation_update_check"` | — |
 | `sessionId` | `string` | Session identifier |
 | `result` | `SkillUpdateCheckResult` | Update-check result |
+
+---
+
+### plugin_update_check
+
+Update-check result for a managed plugin.
+
+```json
+{
+  "type": "plugin_update_check",
+  "sessionId": "...",
+  "result": {
+    "pluginId": "workspace-tools",
+    "scope": "user",
+    "canUpdate": true
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `"plugin_update_check"` | — |
+| `sessionId` | `string` | Session identifier |
+| `result` | `PluginUpdateCheckResult` | Update-check result |
 
 ---
 

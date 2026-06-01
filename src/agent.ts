@@ -1,6 +1,10 @@
 import { z } from "zod";
 
-import { renderCodexPrimaryRuntimeInstructions } from "./codexPrimaryRuntime";
+import {
+  ARTIFACT_RUNTIME_INSTRUCTIONS_HEADING,
+  prepareArtifactRuntimeToolEnv,
+  renderArtifactRuntimeInstructions,
+} from "./artifactRuntime";
 import { getModel as realGetModel } from "./config";
 import {
   prepareManagedSofficeToolEnv,
@@ -267,9 +271,15 @@ function providerOwnsExecutableTools(config: AgentConfig): boolean {
 async function prepareTurnToolEnv(
   params: Pick<RunTurnParams, "config" | "toolEnv" | "log">,
 ): Promise<Record<string, string | undefined> | undefined> {
-  return await prepareManagedSofficeToolEnv({
-    homedir: resolveAuthHomeDir(params.config),
+  const homedir = resolveAuthHomeDir(params.config);
+  const withArtifactRuntime = await prepareArtifactRuntimeToolEnv({
+    homedir,
     env: params.toolEnv ?? { ...process.env },
+    log: (line) => params.log?.(`[artifact-runtime] ${line}`),
+  });
+  return await prepareManagedSofficeToolEnv({
+    homedir,
+    env: withArtifactRuntime,
     log: (line) => params.log?.(`[managed-soffice] ${line}`),
   });
 }
@@ -288,10 +298,10 @@ function appendRuntimeInstructions(
   env: Record<string, string | undefined> | undefined,
 ): string {
   let nextSystem = system;
-  if (!nextSystem.includes("## Codex Workspace Dependencies")) {
-    const codexRuntimeInstructions = renderCodexPrimaryRuntimeInstructions(env);
-    if (codexRuntimeInstructions) {
-      nextSystem = `${nextSystem}\n\n${codexRuntimeInstructions}`;
+  if (!nextSystem.includes(ARTIFACT_RUNTIME_INSTRUCTIONS_HEADING)) {
+    const artifactRuntimeInstructions = renderArtifactRuntimeInstructions(env);
+    if (artifactRuntimeInstructions) {
+      nextSystem = `${nextSystem}\n\n${artifactRuntimeInstructions}`;
     }
   }
   return appendManagedSofficeInstructions(nextSystem, env);

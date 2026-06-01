@@ -8,6 +8,7 @@ import {
   redactDiagnosticText,
   sanitizeLogMeta,
 } from "../../../../src/diagnostics/redaction";
+import { isNetworkTelemetryGloballyDisabled } from "../../../../src/telemetry/config";
 import { getRecentCrashReportIds } from "../../../../src/telemetry/crashReporting";
 import { normalizePrivacyTelemetrySettings, type PersistedState } from "../../src/app/types";
 import type {
@@ -72,6 +73,7 @@ function isPathInside(root: string, target: string): boolean {
 }
 
 function readUploadUrl(env: NodeJS.ProcessEnv): string | null {
+  if (isNetworkTelemetryGloballyDisabled(env)) return null;
   const raw = env.COWORK_DIAGNOSTICS_UPLOAD_URL?.trim();
   if (!raw) return null;
   try {
@@ -169,6 +171,8 @@ export class DiagnosticsService {
     const state = await this.persistence.loadState();
     const createdAt = this.now().toISOString();
     const settings = normalizePrivacyTelemetrySettings(state.privacyTelemetrySettings);
+    const uploadEnabled =
+      !isNetworkTelemetryGloballyDisabled(this.env) && settings.diagnosticsUploadEnabled;
     const uploadConfigured = Boolean(readUploadUrl(this.env));
     const context = this.buildRedactionContext(state);
     const logs = await this.collectLogTails(context);
@@ -218,12 +222,12 @@ export class DiagnosticsService {
       workspaceCount: bundle.counts.workspaceCount,
       threadCount: bundle.counts.threadCount,
       uploadConfigured,
-      uploadEnabled: settings.diagnosticsUploadEnabled,
+      uploadEnabled,
       includedLogs,
     });
     logInfo("diagnostics", "created diagnostics bundle", {
       uploadConfigured,
-      uploadEnabled: settings.diagnosticsUploadEnabled,
+      uploadEnabled,
       workspaceCount: bundle.counts.workspaceCount,
       threadCount: bundle.counts.threadCount,
       includedLogs,
@@ -233,7 +237,7 @@ export class DiagnosticsService {
       createdAt,
       summary,
       uploadConfigured,
-      uploadEnabled: settings.diagnosticsUploadEnabled,
+      uploadEnabled,
     };
   }
 
@@ -257,6 +261,9 @@ export class DiagnosticsService {
     const safeBundlePath = await this.resolveBundlePath(bundlePath);
     const state = await this.persistence.loadState();
     const settings = normalizePrivacyTelemetrySettings(state.privacyTelemetrySettings);
+    if (isNetworkTelemetryGloballyDisabled(this.env)) {
+      throw new Error("Diagnostic log uploads are disabled by COWORK_DISABLE_NETWORK_TELEMETRY.");
+    }
     if (!settings.diagnosticsUploadEnabled) {
       throw new Error("Diagnostic log uploads are disabled.");
     }

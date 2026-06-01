@@ -50,6 +50,7 @@ import {
   type StartWorkspaceServerInput,
   type StopWorkspaceServerInput,
   type SystemAppearance,
+  type TelemetryStatusSnapshot,
   type TranscriptBatchInput,
   type TrashPathInput,
   type UpdaterState,
@@ -93,6 +94,7 @@ import {
   startWorkspaceServerInputSchema,
   stopWorkspaceServerInputSchema,
   systemAppearanceSchema,
+  telemetryStatusSnapshotSchema,
   transcriptBatchInputSchema,
   trashPathInputSchema,
   updaterStateSchema,
@@ -100,6 +102,21 @@ import {
   windowDragPointInputSchema,
   writeFileInputSchema,
 } from "../src/lib/desktopSchemas";
+import { resolveDesktopTelemetryStatus } from "./services/telemetryStatus";
+
+type SafePublicTelemetryEnv = Record<string, string | undefined>;
+
+declare global {
+  // Defined by electron-vite for safe public build-time telemetry values only.
+  var __COWORK_PUBLIC_TELEMETRY_ENV__: SafePublicTelemetryEnv | undefined;
+}
+
+function getPreloadEnv(): NodeJS.ProcessEnv {
+  return {
+    ...(globalThis.__COWORK_PUBLIC_TELEMETRY_ENV__ ?? {}),
+    ...process.env,
+  };
+}
 
 function parseWithSchema<T>(schema: z.ZodType<T>, value: unknown, label: string): T {
   const parsed = schema.safeParse(value);
@@ -277,24 +294,29 @@ function assertPlatformChromeInfo(value: unknown): asserts value is PlatformChro
   parseWithSchema(platformChromeInfoSchema, value, "platform chrome");
 }
 
+function assertTelemetryStatusSnapshot(value: unknown): asserts value is TelemetryStatusSnapshot {
+  parseWithSchema(telemetryStatusSnapshotSchema, value, "telemetry status");
+}
+
 function resolvePreloadDesktopFeatureFlags(overrides?: DesktopFeatureFlagOverrides) {
   return resolveDesktopFeatureFlags({
     isPackaged: process.env.COWORK_IS_PACKAGED === "true",
-    env: process.env,
+    env: getPreloadEnv(),
     ...(overrides ? { overrides } : {}),
   });
 }
 
 function resolvePreloadCrashReportingConfig(): DesktopCrashReportingConfig {
-  const appVersion = process.env.COWORK_RELEASE?.trim() || "unknown";
+  const env = getPreloadEnv();
+  const appVersion = env.COWORK_RELEASE?.trim() || "unknown";
   const config = resolveCrashReportingConfig({
     component: "electron-renderer",
-    enabled: process.env.COWORK_CRASH_REPORTS_ENABLED === "true",
-    env: process.env,
+    enabled: env.COWORK_CRASH_REPORTS_ENABLED === "true",
+    env,
     fallbackRelease: appVersion,
     appVersion,
-    environment: process.env.COWORK_SENTRY_ENVIRONMENT as CrashReportingEnvironment | undefined,
-    isPackaged: process.env.COWORK_IS_PACKAGED === "true",
+    environment: env.COWORK_SENTRY_ENVIRONMENT as CrashReportingEnvironment | undefined,
+    isPackaged: env.COWORK_IS_PACKAGED === "true",
     platform: process.platform,
     arch: process.arch,
   });
@@ -308,21 +330,22 @@ function resolvePreloadCrashReportingConfig(): DesktopCrashReportingConfig {
     appVersion,
     platform: process.platform,
     arch: process.arch,
-    packaged: process.env.COWORK_IS_PACKAGED === "true",
+    packaged: env.COWORK_IS_PACKAGED === "true",
   };
 }
 
 function resolvePreloadProductAnalyticsConfig(): DesktopProductAnalyticsConfig {
-  const appVersion = process.env.COWORK_RELEASE?.trim() || "unknown";
+  const env = getPreloadEnv();
+  const appVersion = env.COWORK_RELEASE?.trim() || "unknown";
   const config = resolveProductAnalyticsConfig({
-    enabled: process.env.COWORK_PRODUCT_ANALYTICS_ENABLED === "true",
-    env: process.env,
-    anonymousId: process.env.COWORK_PRODUCT_ANALYTICS_INSTALLATION_ID,
+    enabled: env.COWORK_PRODUCT_ANALYTICS_ENABLED === "true",
+    env,
+    anonymousId: env.COWORK_PRODUCT_ANALYTICS_INSTALLATION_ID,
     release: appVersion,
     appVersion,
-    environment: process.env.COWORK_POSTHOG_ENVIRONMENT,
+    environment: env.COWORK_POSTHOG_ENVIRONMENT,
     eventSource: "renderer",
-    packaged: process.env.COWORK_IS_PACKAGED === "true",
+    packaged: env.COWORK_IS_PACKAGED === "true",
     platform: process.platform,
     arch: process.arch,
   });
@@ -335,19 +358,31 @@ function resolvePreloadProductAnalyticsConfig(): DesktopProductAnalyticsConfig {
     appVersion,
     platform: process.platform,
     arch: process.arch,
-    packaged: process.env.COWORK_IS_PACKAGED === "true",
+    packaged: env.COWORK_IS_PACKAGED === "true",
   };
+}
+
+function resolvePreloadTelemetryStatus(): TelemetryStatusSnapshot {
+  const env = getPreloadEnv();
+  const appVersion = env.COWORK_RELEASE?.trim() || "unknown";
+  return resolveDesktopTelemetryStatus({
+    env,
+    isPackaged: env.COWORK_IS_PACKAGED === "true",
+    appVersion,
+  });
 }
 
 const desktopFeatures = Object.freeze(resolvePreloadDesktopFeatureFlags());
 const crashReporting = Object.freeze(resolvePreloadCrashReportingConfig());
 const productAnalytics = Object.freeze(resolvePreloadProductAnalyticsConfig());
+const telemetryStatus = Object.freeze(resolvePreloadTelemetryStatus());
 
 const desktopApi = Object.freeze<DesktopApi>({
   features: desktopFeatures,
-  isPackaged: process.env.COWORK_IS_PACKAGED === "true",
+  isPackaged: getPreloadEnv().COWORK_IS_PACKAGED === "true",
   crashReporting,
   productAnalytics,
+  telemetryStatus,
   resolveDesktopFeatureFlags: (overrides) =>
     resolvePreloadDesktopFeatureFlags(normalizeDesktopFeatureFlagOverrides(overrides)),
   createOneOffChatWorkspace: (opts: CreateOneOffChatWorkspaceInput = {}) => {
@@ -599,6 +634,12 @@ const desktopApi = Object.freeze<DesktopApi>({
   uploadDiagnosticsBundle: (opts: UploadDiagnosticsBundleInput) => {
     assertUploadDiagnosticsBundleInput(opts);
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.uploadDiagnosticsBundle, opts);
+  },
+
+  getTelemetryStatus: async () => {
+    const status = await ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.getTelemetryStatus);
+    assertTelemetryStatusSnapshot(status);
+    return status;
   },
 
   getUpdateState: async () => {

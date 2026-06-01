@@ -12,10 +12,10 @@ import {
   setProductAnalyticsEnabled,
   shutdownProductAnalytics,
 } from "../../../../src/telemetry/productAnalytics";
+import { resolveTelemetryConsent } from "../../../../src/telemetry/config";
 import {
   normalizeDesktopSettings,
   normalizePersistedProductAnalyticsState,
-  normalizePrivacyTelemetrySettings,
   type PersistedPrivacyTelemetrySettings,
   type PersistedProductAnalyticsState,
   type PersistedState,
@@ -96,7 +96,11 @@ function resolveDesktopConfig(opts: {
   arch: string;
   eventSource?: "main" | "server";
 }) {
-  const settings = normalizePrivacyTelemetrySettings(opts.privacyTelemetrySettings);
+  const settings = resolveTelemetryConsent({
+    settings: opts.privacyTelemetrySettings,
+    env: opts.env,
+    isPackaged: opts.isPackaged,
+  });
   return resolveProductAnalyticsConfig(
     buildInitContext({
       enabled: settings.productAnalyticsEnabled,
@@ -253,7 +257,11 @@ export class DesktopProductAnalyticsService {
   }
 
   preparePersistedState(state: PersistedState): PreparedPersistedState {
-    const settings = normalizePrivacyTelemetrySettings(state.privacyTelemetrySettings);
+    const settings = resolveTelemetryConsent({
+      settings: state.privacyTelemetrySettings,
+      env: this.env,
+      isPackaged: this.resolveIsPackaged(),
+    });
     const currentVersion = this.resolveAppVersion();
     const existing =
       normalizePersistedProductAnalyticsState(state.productAnalytics) ?? this.persistedState;
@@ -293,7 +301,11 @@ export class DesktopProductAnalyticsService {
 
   async applyPersistedState(state: PersistedState): Promise<PreparedPersistedState> {
     const prepared = this.preparePersistedState(state);
-    const settings = normalizePrivacyTelemetrySettings(prepared.state.privacyTelemetrySettings);
+    const settings = resolveTelemetryConsent({
+      settings: prepared.state.privacyTelemetrySettings,
+      env: this.env,
+      isPackaged: this.resolveIsPackaged(),
+    });
     applyProductAnalyticsProcessEnv(
       prepared.state.privacyTelemetrySettings,
       prepared.state.productAnalytics,
@@ -350,7 +362,11 @@ export class DesktopProductAnalyticsService {
   }
 
   private captureStartupEvent(state: PersistedState): void {
-    const settings = normalizePrivacyTelemetrySettings(state.privacyTelemetrySettings);
+    const settings = resolveTelemetryConsent({
+      settings: state.privacyTelemetrySettings,
+      env: this.env,
+      isPackaged: this.resolveIsPackaged(),
+    });
     const desktopSettings = normalizeDesktopSettings(state.desktopSettings);
     const providerCount = Object.values(state.providerState?.statusByName ?? {}).filter(
       (provider) => provider.authorized || provider.verified,

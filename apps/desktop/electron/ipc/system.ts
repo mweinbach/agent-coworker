@@ -1,4 +1,4 @@
-import { BrowserWindow, dialog, Notification, nativeTheme, shell } from "electron";
+import { app, BrowserWindow, dialog, Notification, nativeTheme, shell } from "electron";
 
 import {
   type CaptureProductEventInput,
@@ -21,6 +21,7 @@ import {
 } from "../../src/lib/desktopSchemas";
 import { applyWindowAppearance, getSystemAppearanceSnapshot } from "../services/appearance";
 import { buildConfirmDialog } from "../services/dialogs";
+import { resolveDesktopTelemetryStatus } from "../services/telemetryStatus";
 import type { DesktopIpcModuleContext } from "./types";
 
 export function registerSystemIpc(context: DesktopIpcModuleContext): void {
@@ -95,6 +96,17 @@ export function registerSystemIpc(context: DesktopIpcModuleContext): void {
       return await context.deps.diagnostics.uploadBundle(input.path, input.confirmed);
     },
   );
+
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.getTelemetryStatus, async () => {
+    const state = await context.deps.persistence.loadState();
+    return resolveDesktopTelemetryStatus({
+      state,
+      env: process.env,
+      isPackaged: app.isPackaged,
+      appVersion: app.getVersion().trim() || "unknown",
+      cloudSyncStatus: context.deps.cloudSync?.getStatus?.() ?? null,
+    });
+  });
 
   handleDesktopInvoke(
     DESKTOP_IPC_CHANNELS.openExternalUrl,

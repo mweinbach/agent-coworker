@@ -10,6 +10,7 @@ import {
   captureError,
   resolveCrashReportingConfig,
 } from "../../../../src/telemetry/crashReporting";
+import { resolveTelemetryConsent } from "../../../../src/telemetry/config";
 import { captureProductEvent } from "../../../../src/telemetry/productAnalytics";
 import {
   normalizePrivacyTelemetrySettings,
@@ -488,7 +489,11 @@ function buildServerEnv(
     opts.includeBundledWindowsAiElectron && !process.env.COWORK_WINDOWS_AI_ELECTRON_DIR
       ? findBundledWindowsAiElectronDir()
       : null;
-  const privacyTelemetrySettings = normalizePrivacyTelemetrySettings(opts.privacyTelemetrySettings);
+  const privacyTelemetrySettings = resolveTelemetryConsent({
+    settings: opts.privacyTelemetrySettings,
+    env: process.env,
+    isPackaged: app.isPackaged,
+  });
   const inheritedEnv = privacyTelemetrySettings.aiTraceTelemetryEnabled
     ? { ...process.env }
     : withoutInheritedObservabilityEnv(process.env);

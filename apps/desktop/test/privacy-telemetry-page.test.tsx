@@ -3,10 +3,16 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
 import { NoopJsonRpcSocket } from "./helpers/jsonRpcSocketMock";
-import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
+import { createDesktopCommandsMock, DEFAULT_TELEMETRY_STATUS } from "./helpers/mockDesktopCommands";
 import { setupJsdom } from "./jsdomHarness";
 
-mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock());
+const getTelemetryStatusMock = mock(async () => DEFAULT_TELEMETRY_STATUS);
+
+mock.module("../src/lib/desktopCommands", () =>
+  createDesktopCommandsMock({
+    getTelemetryStatus: getTelemetryStatusMock,
+  }),
+);
 mock.module("../src/lib/agentSocket", () => ({
   JsonRpcSocket: NoopJsonRpcSocket,
 }));
@@ -24,6 +30,7 @@ const defaultStoreActions = {
 
 describe("privacy telemetry settings page", () => {
   beforeEach(() => {
+    getTelemetryStatusMock.mockImplementation(async () => DEFAULT_TELEMETRY_STATUS);
     useAppStore.setState(defaultStoreActions);
   });
 
@@ -81,7 +88,8 @@ describe("privacy telemetry settings page", () => {
       expect(container.textContent).toContain(
         "Allows user-initiated upload of redacted diagnostic bundles. No automatic upload.",
       );
-      expect(container.textContent).not.toContain("Cloud sync");
+      expect(container.textContent).toContain("Telemetry status");
+      expect(container.textContent).toContain("Cloud sync");
       expect(container.querySelector('[aria-label="Cloud sync"]')).toBeNull();
       expect(container.querySelectorAll('[role="switch"]')).toHaveLength(5);
 
@@ -106,6 +114,123 @@ describe("privacy telemetry settings page", () => {
 
       expect(setCrashReportsEnabled).toHaveBeenCalledWith(false);
       expect(setAiTracePayloadsEnabled).not.toHaveBeenCalled();
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("renders telemetry status labels and kill switch state", async () => {
+    getTelemetryStatusMock.mockImplementation(async () => ({
+      globalKillSwitchActive: true,
+      crashReports: {
+        label: "Enabled",
+        status: "enabled",
+        configured: true,
+        enabled: true,
+      },
+      productAnalytics: {
+        label: "Not configured",
+        status: "not_configured",
+        configured: false,
+        enabled: false,
+      },
+      aiTraces: {
+        label: "Full payload",
+        status: "full_payload",
+        configured: true,
+        enabled: true,
+      },
+      diagnosticsUpload: {
+        label: "Upload configured",
+        status: "upload_configured",
+        configured: true,
+        enabled: true,
+      },
+      cloudSync: {
+        label: "Error",
+        status: "error",
+        configured: true,
+        enabled: true,
+        message: "sync_failed",
+      },
+    }));
+    const harness = setupJsdom();
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(PrivacyTelemetryPage));
+      });
+
+      expect(container.textContent).toContain("Global kill switch");
+      expect(container.textContent).toContain("COWORK_DISABLE_NETWORK_TELEMETRY is active");
+      expect(container.textContent).toContain("Enabled");
+      expect(container.textContent).toContain("Not configured");
+      expect(container.textContent).toContain("Full payload");
+      expect(container.textContent).toContain("Upload configured");
+      expect(container.textContent).toContain("Error");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("renders metadata-only, local-only, and connected telemetry statuses", async () => {
+    getTelemetryStatusMock.mockImplementation(async () => ({
+      globalKillSwitchActive: false,
+      crashReports: {
+        label: "Disabled",
+        status: "disabled",
+        configured: true,
+        enabled: false,
+      },
+      productAnalytics: {
+        label: "Enabled",
+        status: "enabled",
+        configured: true,
+        enabled: true,
+      },
+      aiTraces: {
+        label: "Metadata only",
+        status: "metadata_only",
+        configured: true,
+        enabled: true,
+      },
+      diagnosticsUpload: {
+        label: "Local only",
+        status: "local_only",
+        configured: false,
+        enabled: false,
+      },
+      cloudSync: {
+        label: "Connected",
+        status: "connected",
+        configured: true,
+        enabled: true,
+      },
+    }));
+    const harness = setupJsdom();
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(PrivacyTelemetryPage));
+      });
+
+      expect(container.textContent).toContain("Metadata only");
+      expect(container.textContent).toContain("Local only");
+      expect(container.textContent).toContain("Connected");
 
       await act(async () => {
         root.unmount();
@@ -167,6 +292,18 @@ describe("privacy telemetry settings page", () => {
   });
 
   test("shows crash reporting status when a DSN is configured", async () => {
+    getTelemetryStatusMock.mockImplementation(async () => {
+      const enabled = useAppStore.getState().privacyTelemetrySettings.crashReportsEnabled;
+      return {
+        ...DEFAULT_TELEMETRY_STATUS,
+        crashReports: {
+          label: enabled ? "Enabled" : "Disabled",
+          status: enabled ? "enabled" : "disabled",
+          configured: true,
+          enabled,
+        },
+      };
+    });
     const harness = setupJsdom({
       setupWindow: (dom) => {
         (dom.window as typeof dom.window & { cowork?: unknown }).cowork = {

@@ -335,6 +335,43 @@ export type DesktopProductAnalyticsConfig = {
   packaged: boolean;
 };
 
+export type TelemetryStatusLabel =
+  | "Disabled"
+  | "Not configured"
+  | "Enabled"
+  | "Metadata only"
+  | "Full payload"
+  | "Local only"
+  | "Upload configured"
+  | "Connected"
+  | "Error";
+
+export type TelemetryStatusEntry = {
+  label: TelemetryStatusLabel;
+  status:
+    | "disabled"
+    | "not_configured"
+    | "enabled"
+    | "metadata_only"
+    | "full_payload"
+    | "local_only"
+    | "upload_configured"
+    | "connected"
+    | "error";
+  configured: boolean;
+  enabled: boolean;
+  message?: string;
+};
+
+export type TelemetryStatusSnapshot = {
+  globalKillSwitchActive: boolean;
+  crashReports: TelemetryStatusEntry;
+  productAnalytics: TelemetryStatusEntry;
+  aiTraces: TelemetryStatusEntry;
+  diagnosticsUpload: TelemetryStatusEntry;
+  cloudSync: TelemetryStatusEntry;
+};
+
 export type CaptureProductEventInput = {
   name: ProductAnalyticsEventName;
   properties?: ProductAnalyticsProperties;
@@ -409,6 +446,7 @@ export interface DesktopApi {
   readonly isPackaged?: boolean;
   readonly crashReporting?: DesktopCrashReportingConfig;
   readonly productAnalytics?: DesktopProductAnalyticsConfig;
+  readonly telemetryStatus?: TelemetryStatusSnapshot;
   resolveDesktopFeatureFlags(overrides?: DesktopFeatureFlagOverrides): DesktopFeatureFlags;
   createOneOffChatWorkspace(
     opts?: CreateOneOffChatWorkspaceInput,
@@ -471,6 +509,7 @@ export interface DesktopApi {
   uploadDiagnosticsBundle(
     opts: UploadDiagnosticsBundleInput,
   ): Promise<UploadDiagnosticsBundleOutput>;
+  getTelemetryStatus(): Promise<TelemetryStatusSnapshot>;
   getUpdateState(): Promise<UpdaterState>;
   checkForUpdates(): Promise<void>;
   quitAndInstallUpdate(): Promise<void>;
@@ -538,6 +577,7 @@ export const DESKTOP_IPC_CHANNELS = {
   revealDiagnosticsBundle: "desktop:revealDiagnosticsBundle",
   openLogsFolder: "desktop:openLogsFolder",
   uploadDiagnosticsBundle: "desktop:uploadDiagnosticsBundle",
+  getTelemetryStatus: "desktop:getTelemetryStatus",
   getUpdateState: "desktop:getUpdateState",
   checkForUpdates: "desktop:checkForUpdates",
   quitAndInstallUpdate: "desktop:quitAndInstallUpdate",

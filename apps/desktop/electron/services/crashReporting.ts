@@ -10,10 +10,8 @@ import {
   resolveCrashReportingConfig,
   shutdownCrashReporting,
 } from "../../../../src/telemetry/crashReporting";
-import {
-  normalizePrivacyTelemetrySettings,
-  type PersistedPrivacyTelemetrySettings,
-} from "../../src/app/types";
+import { resolveTelemetryConsent } from "../../../../src/telemetry/config";
+import { type PersistedPrivacyTelemetrySettings } from "../../src/app/types";
 import { writeLocalLog } from "./localLogs";
 
 let processHandlersRegistered = false;
@@ -26,7 +24,11 @@ export function resolveDesktopMainCrashReportingConfig(
   privacyTelemetrySettings?: PersistedPrivacyTelemetrySettings | null,
   env: CrashReportingEnv = process.env,
 ) {
-  const settings = normalizePrivacyTelemetrySettings(privacyTelemetrySettings);
+  const settings = resolveTelemetryConsent({
+    settings: privacyTelemetrySettings,
+    env,
+    isPackaged: app.isPackaged,
+  });
   return resolveCrashReportingConfig({
     component: "electron-main",
     enabled: settings.crashReportsEnabled,
@@ -82,7 +84,11 @@ export async function initElectronMainCrashReporting(
   privacyTelemetrySettings?: PersistedPrivacyTelemetrySettings | null,
 ): Promise<CrashReportingStatus> {
   applyCrashReportingProcessEnv(privacyTelemetrySettings);
-  const settings = normalizePrivacyTelemetrySettings(privacyTelemetrySettings);
+  const settings = resolveTelemetryConsent({
+    settings: privacyTelemetrySettings,
+    env: process.env,
+    isPackaged: app.isPackaged,
+  });
   if (!settings.crashReportsEnabled) {
     await shutdownCrashReporting();
   }

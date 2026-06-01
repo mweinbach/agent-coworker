@@ -62,6 +62,40 @@ const DEFAULT_PLATFORM_CHROME = {
   disableCssBlur: false,
 } satisfies Awaited<ReturnType<typeof import("../../src/lib/desktopCommands").getPlatformChrome>>;
 
+export const DEFAULT_TELEMETRY_STATUS = {
+  globalKillSwitchActive: false,
+  crashReports: {
+    label: "Not configured",
+    status: "not_configured",
+    configured: false,
+    enabled: false,
+  },
+  productAnalytics: {
+    label: "Disabled",
+    status: "disabled",
+    configured: false,
+    enabled: false,
+  },
+  aiTraces: {
+    label: "Disabled",
+    status: "disabled",
+    configured: false,
+    enabled: false,
+  },
+  diagnosticsUpload: {
+    label: "Disabled",
+    status: "disabled",
+    configured: false,
+    enabled: false,
+  },
+  cloudSync: {
+    label: "Disabled",
+    status: "disabled",
+    configured: false,
+    enabled: false,
+  },
+} satisfies Awaited<ReturnType<typeof import("../../src/lib/desktopCommands").getTelemetryStatus>>;
+
 export function createDesktopCommandsMock(
   overrides: Partial<DesktopCommandsModule> = {},
 ): DesktopCommandsModule {
@@ -157,6 +191,7 @@ export function createDesktopCommandsMock(
       url: null,
       message: "No diagnostics upload endpoint is configured. The local bundle is ready.",
     }),
+    getTelemetryStatus: async () => DEFAULT_TELEMETRY_STATUS,
     getUpdateState: async () => DEFAULT_UPDATE_STATE,
     checkForUpdates: async () => {},
     quitAndInstallUpdate: async () => {},

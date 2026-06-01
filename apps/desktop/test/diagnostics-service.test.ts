@@ -83,6 +83,7 @@ async function createService(opts: {
   userDataDir: string;
   uploadEnabled: boolean;
   uploadUrl?: string;
+  disableNetworkTelemetry?: boolean;
   fetchImpl?: typeof fetch;
 }) {
   const { DiagnosticsService } = await loadDiagnosticsModule(opts.userDataDir);
@@ -105,7 +106,10 @@ async function createService(opts: {
         release: null,
       }),
     } as never,
-    env: opts.uploadUrl ? { COWORK_DIAGNOSTICS_UPLOAD_URL: opts.uploadUrl } : {},
+    env: {
+      ...(opts.uploadUrl ? { COWORK_DIAGNOSTICS_UPLOAD_URL: opts.uploadUrl } : {}),
+      ...(opts.disableNetworkTelemetry ? { COWORK_DISABLE_NETWORK_TELEMETRY: "1" } : {}),
+    },
     now: () => new Date("2026-06-01T12:00:00.000Z"),
     fetchImpl: opts.fetchImpl,
     appVersion: () => "1.2.3",
@@ -210,6 +214,30 @@ describe("desktop diagnostics service", () => {
         "Diagnostic upload requires explicit confirmation.",
       );
 
+      expect(fetchImpl).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(userDataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("global kill switch keeps local bundles but prevents upload fetches", async () => {
+    const userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-diagnostics-"));
+    const fetchImpl = mock(async () => new Response("{}"));
+    try {
+      const service = await createService({
+        userDataDir,
+        uploadEnabled: true,
+        uploadUrl: "https://support.example/upload",
+        disableNetworkTelemetry: true,
+        fetchImpl: fetchImpl as typeof fetch,
+      });
+      const bundle = await service.createBundle();
+
+      expect(bundle.uploadConfigured).toBe(false);
+      expect(bundle.uploadEnabled).toBe(false);
+      await expect(service.uploadBundle(bundle.path, true)).rejects.toThrow(
+        "COWORK_DISABLE_NETWORK_TELEMETRY",
+      );
       expect(fetchImpl).not.toHaveBeenCalled();
     } finally {
       await fs.rm(userDataDir, { recursive: true, force: true });

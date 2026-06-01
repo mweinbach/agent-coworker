@@ -25,6 +25,7 @@ import type {
   SetWindowAppearanceInput,
   ShowQuickChatWindowInput,
   SystemAppearance,
+  TelemetryStatusSnapshot,
   UpdaterState,
   UploadDiagnosticsBundleOutput,
 } from "./desktopApi";
@@ -264,6 +265,10 @@ export async function uploadDiagnosticsBundle(opts: {
   confirmed: boolean;
 }): Promise<UploadDiagnosticsBundleOutput> {
   return await requireDesktopApi().uploadDiagnosticsBundle(opts);
+}
+
+export async function getTelemetryStatus(): Promise<TelemetryStatusSnapshot> {
+  return await requireDesktopApi().getTelemetryStatus();
 }
 
 export async function getUpdateState(): Promise<UpdaterState> {

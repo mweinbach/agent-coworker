@@ -14,6 +14,7 @@ import type {
   ReadFileForPreviewOutput,
   ShowQuickChatWindowInput,
   SystemAppearance,
+  TelemetryStatusSnapshot,
   UpdaterState,
 } from "./desktopApi";
 import { createDefaultUpdaterState } from "./desktopApi";
@@ -33,6 +34,39 @@ const menuListeners = new Set<(command: DesktopMenuCommand) => void>();
 const appearanceListeners = new Set<(appearance: SystemAppearance) => void>();
 const SAME_ORIGIN_PROXY_WS_PATH = "/cowork/ws";
 const LEGACY_SAME_ORIGIN_WS_PATH = "/ws";
+const WEB_TELEMETRY_STATUS: TelemetryStatusSnapshot = {
+  globalKillSwitchActive: false,
+  crashReports: {
+    label: "Disabled",
+    status: "disabled",
+    configured: false,
+    enabled: false,
+  },
+  productAnalytics: {
+    label: "Disabled",
+    status: "disabled",
+    configured: false,
+    enabled: false,
+  },
+  aiTraces: {
+    label: "Disabled",
+    status: "disabled",
+    configured: false,
+    enabled: false,
+  },
+  diagnosticsUpload: {
+    label: "Disabled",
+    status: "disabled",
+    configured: false,
+    enabled: false,
+  },
+  cloudSync: {
+    label: "Disabled",
+    status: "disabled",
+    configured: false,
+    enabled: false,
+  },
+};
 
 function getInjectedWebServerUrl(): string | null {
   const value = (globalThis as typeof globalThis & { __COWORK_SERVER_URL__?: unknown })
@@ -454,6 +488,7 @@ export function createWebAdapter(): DesktopApi {
   return {
     features,
     isPackaged: false,
+    telemetryStatus: WEB_TELEMETRY_STATUS,
     productAnalytics: {
       enabled: false,
       keyConfigured: false,
@@ -704,6 +739,10 @@ export function createWebAdapter(): DesktopApi {
         url: null,
         message: "Diagnostics uploads require the Cowork desktop app.",
       };
+    },
+
+    async getTelemetryStatus(): Promise<TelemetryStatusSnapshot> {
+      return WEB_TELEMETRY_STATUS;
     },
 
     async getUpdateState(): Promise<UpdaterState> {

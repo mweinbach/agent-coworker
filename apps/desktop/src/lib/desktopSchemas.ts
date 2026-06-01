@@ -57,6 +57,7 @@ import type {
   StartWorkspaceServerInput,
   StopWorkspaceServerInput,
   SystemAppearance,
+  TelemetryStatusSnapshot,
   TranscriptBatchInput,
   TrashPathInput,
   UpdaterProgress,
@@ -258,6 +259,47 @@ const persistedCloudSyncSettingsSchema = z.preprocess(
     syncThreads: z.boolean(),
   }),
 );
+
+const telemetryStatusEntrySchema = z
+  .object({
+    label: z.enum([
+      "Disabled",
+      "Not configured",
+      "Enabled",
+      "Metadata only",
+      "Full payload",
+      "Local only",
+      "Upload configured",
+      "Connected",
+      "Error",
+    ]),
+    status: z.enum([
+      "disabled",
+      "not_configured",
+      "enabled",
+      "metadata_only",
+      "full_payload",
+      "local_only",
+      "upload_configured",
+      "connected",
+      "error",
+    ]),
+    configured: z.boolean(),
+    enabled: z.boolean(),
+    message: z.string().optional(),
+  })
+  .strict();
+
+export const telemetryStatusSnapshotSchema: z.ZodType<TelemetryStatusSnapshot> = z
+  .object({
+    globalKillSwitchActive: z.boolean(),
+    crashReports: telemetryStatusEntrySchema,
+    productAnalytics: telemetryStatusEntrySchema,
+    aiTraces: telemetryStatusEntrySchema,
+    diagnosticsUpload: telemetryStatusEntrySchema,
+    cloudSync: telemetryStatusEntrySchema,
+  })
+  .strict();
 
 const persistedProductAnalyticsStateSchema = z.preprocess(
   (value) =>

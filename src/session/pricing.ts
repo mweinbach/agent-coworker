@@ -207,6 +207,18 @@ const BASE_PRICING_TABLE: Record<string, ModelPricing> = {
     outputPerMillion: 4.5,
     cachedInputPerMillion: 0.075,
   },
+  "openai:gpt-5.4-nano": {
+    inputPerMillion: 0.2,
+    outputPerMillion: 1.25,
+    cachedInputPerMillion: 0.02,
+  },
+  "openai:gpt-5.4-pro": {
+    inputPerMillion: 30,
+    outputPerMillion: 180,
+    longContextThresholdTokens: 272_000,
+    longContextInputPerMillion: 60,
+    longContextOutputPerMillion: 270,
+  },
   "openai:gpt-5.2": {
     inputPerMillion: 1.75,
     outputPerMillion: 14,
@@ -282,6 +294,11 @@ const BASE_PRICING_TABLE: Record<string, ModelPricing> = {
     cachedInputPerMillion: 0.05,
   },
   "google:gemini-3.1-flash-lite-preview": {
+    inputPerMillion: 0.25,
+    outputPerMillion: 1.5,
+    cachedInputPerMillion: 0.025,
+  },
+  "google:gemini-3.1-flash-lite": {
     inputPerMillion: 0.25,
     outputPerMillion: 1.5,
     cachedInputPerMillion: 0.025,

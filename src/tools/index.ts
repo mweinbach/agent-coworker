@@ -13,7 +13,6 @@ import { createEditTool } from "./edit";
 import { createGlobTool } from "./glob";
 import { createGrepTool } from "./grep";
 import { createMemoryTool } from "./memory";
-import { createNotebookEditTool } from "./notebookEdit";
 import {
   createCloseAgentTool,
   createInspectAgentTool,
@@ -26,7 +25,6 @@ import { createReadTool } from "./read";
 import { createSkillTool } from "./skill";
 import { createSpawnAgentTool } from "./spawnAgent";
 import { createTodoWriteTool } from "./todoWrite";
-import { createUsageTool } from "./usage";
 import { createWebFetchTool } from "./webFetch";
 import { createWebSearchTool } from "./webSearch";
 import { createWriteTool } from "./write";
@@ -79,16 +77,13 @@ export function listSessionToolNames(
     "grep",
     ...(includeLegacyWebSearch ? ["webSearch"] : []),
     "webFetch",
-    "notebookEdit",
   ];
 
   const coworkToolNames = [
-    "ask",
     "AskUserQuestion",
     "todoWrite",
     "skill",
     ...((config.enableMemory ?? true) ? ["memory"] : []),
-    "usage",
     ...(opts.includeAgentControl
       ? [
           "spawnAgent",
@@ -120,11 +115,9 @@ export function createTools(ctx: ToolContext): Record<string, any> {
     grep: createGrepTool(ctx),
     ...(includeLegacyWebSearch ? { webSearch: createWebSearchTool(ctx) } : {}),
     webFetch: createWebFetchTool(ctx),
-    ask: askTool,
     AskUserQuestion: askTool,
     todoWrite: createTodoWriteTool(ctx),
     ...(ctx.agentControl ? { spawnAgent: createSpawnAgentTool(ctx) } : {}),
-    notebookEdit: createNotebookEditTool(ctx),
     skill: createSkillTool(ctx),
     ...((ctx.config.enableMemory ?? true) ? { memory: createMemoryTool(ctx) } : {}),
     ...(resolveExperimentalA2uiConfig(ctx.config) && ctx.applyA2uiEnvelope
@@ -134,7 +127,6 @@ export function createTools(ctx: ToolContext): Record<string, any> {
           ).createA2uiTool(ctx),
         }
       : {}),
-    usage: createUsageTool(ctx),
   };
 
   const roleFilteredTools = ctx.agentRole

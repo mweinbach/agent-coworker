@@ -426,7 +426,6 @@ describe("WebSocket harness golden flows", () => {
       expect(explorerTools).toEqual(expect.arrayContaining(["bash", "glob", "grep", "read"]));
       expect(explorerTools).not.toContain("write");
       expect(explorerTools).not.toContain("edit");
-      expect(explorerTools).not.toContain("notebookEdit");
 
       expect(workerTools).toEqual(
         expect.arrayContaining(["bash", "glob", "grep", "read", "write", "edit"]),

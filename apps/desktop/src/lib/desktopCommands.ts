@@ -4,7 +4,12 @@ import type {
   DesktopFeatureFlags,
 } from "../../../../src/shared/featureFlags";
 import { resolveFeatureFlags } from "../../../../src/shared/featureFlags";
-import type { HydratedTranscriptSnapshot, PersistedState, TranscriptEvent } from "../app/types";
+import type {
+  HydratedTranscriptSnapshot,
+  PersistedPrivacyTelemetrySettings,
+  PersistedState,
+  TranscriptEvent,
+} from "../app/types";
 import type {
   ConfirmActionInput,
   CreateOneOffChatWorkspaceInput,
@@ -75,6 +80,7 @@ export async function startWorkspaceServer(opts: {
   workspacePath: string;
   yolo: boolean;
   featureFlags?: DesktopFeatureFlagOverrides;
+  privacyTelemetrySettings?: PersistedPrivacyTelemetrySettings;
 }): Promise<{ url: string }> {
   return await requireDesktopApi().startWorkspaceServer(opts);
 }

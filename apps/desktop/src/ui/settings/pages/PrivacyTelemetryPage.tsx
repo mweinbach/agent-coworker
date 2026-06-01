@@ -52,7 +52,7 @@ export function PrivacyTelemetryPage() {
         />
         <SettingsRow
           title="Include prompts and responses in AI traces"
-          description="Off by default. Only available when AI trace diagnostics is enabled. Strong warning: this may include prompt/output content."
+          description="Off by default. Only available when AI trace diagnostics is enabled. Strong warning: this may include prompts, responses, commands, logs, file paths or names, and other content."
           control={
             <Switch
               checked={settings.aiTracePayloadsEnabled}

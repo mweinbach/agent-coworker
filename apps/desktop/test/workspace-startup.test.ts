@@ -41,7 +41,13 @@ async function waitForCondition(
 }
 
 const startDeferreds: Deferred<{ url: string }>[] = [];
-const startCalls: Array<{ workspaceId: string; workspacePath: string; yolo: boolean }> = [];
+const startCalls: Array<{
+  workspaceId: string;
+  workspacePath: string;
+  yolo: boolean;
+  featureFlags?: Record<string, boolean>;
+  privacyTelemetrySettings?: Record<string, boolean>;
+}> = [];
 const stopCalls: string[] = [];
 const savedStates: any[] = [];
 let pickedWorkspaceDirectory: string | null = null;
@@ -117,6 +123,8 @@ mock.module("../src/lib/desktopCommands", () =>
       workspaceId: string;
       workspacePath: string;
       yolo: boolean;
+      featureFlags?: Record<string, boolean>;
+      privacyTelemetrySettings?: Record<string, boolean>;
     }) => {
       startCalls.push(opts);
       const deferred = createDeferred<{ url: string }>();
@@ -229,6 +237,14 @@ describe("workspace startup flow", () => {
         a2ui: false,
       },
       desktopFeatureFlagOverrides: {},
+      privacyTelemetrySettings: {
+        crashReportsEnabled: false,
+        productAnalyticsEnabled: false,
+        aiTraceTelemetryEnabled: false,
+        aiTracePayloadsEnabled: false,
+        diagnosticsUploadEnabled: false,
+        cloudSyncEnabled: false,
+      },
       updateState: MOCK_UPDATE_STATE,
       onboardingVisible: false,
       onboardingStep: "welcome",
@@ -265,6 +281,47 @@ describe("workspace startup flow", () => {
     expect(state.workspaceRuntimeById[state.workspaces[0]!.id]?.serverUrl).toBe(
       "ws://new-workspace",
     );
+  });
+
+  test("startWorkspaceServer forwards normalized privacy telemetry settings", async () => {
+    const workspaceId = "ws-privacy";
+    useAppStore.setState({
+      privacyTelemetrySettings: {
+        crashReportsEnabled: false,
+        productAnalyticsEnabled: false,
+        aiTraceTelemetryEnabled: true,
+        aiTracePayloadsEnabled: true,
+        diagnosticsUploadEnabled: false,
+        cloudSyncEnabled: false,
+      },
+      workspaces: [
+        {
+          id: workspaceId,
+          name: "Workspace",
+          path: "/tmp/workspace",
+          createdAt: "2026-03-08T00:00:00.000Z",
+          lastOpenedAt: "2026-03-08T00:00:00.000Z",
+          defaultEnableMcp: true,
+          yolo: false,
+        },
+      ],
+      selectedWorkspaceId: null,
+    });
+
+    const selectPromise = useAppStore.getState().selectWorkspace(workspaceId);
+    await waitForCondition(() => startCalls.length === 1);
+
+    expect(startCalls[0]?.privacyTelemetrySettings).toEqual({
+      crashReportsEnabled: false,
+      productAnalyticsEnabled: false,
+      aiTraceTelemetryEnabled: true,
+      aiTracePayloadsEnabled: true,
+      diagnosticsUploadEnabled: false,
+      cloudSyncEnabled: false,
+    });
+
+    startDeferreds[0]?.resolve({ url: "ws://privacy" });
+    await selectPromise;
   });
 
   test("restartWorkspaceServer supersedes an in-flight startup and ignores stale completion", async () => {

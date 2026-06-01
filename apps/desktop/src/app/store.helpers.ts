@@ -663,6 +663,7 @@ async function ensureServerRunning(
         workspacePath: ws.path,
         yolo: ws.yolo,
         featureFlags: get().desktopFeatureFlags,
+        privacyTelemetrySettings: get().privacyTelemetrySettings,
       });
       if (getWorkspaceStartGeneration(workspaceId) !== generation) {
         return;

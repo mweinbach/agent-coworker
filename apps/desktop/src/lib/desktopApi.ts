@@ -3,13 +3,19 @@ import type {
   DesktopFeatureFlags,
 } from "../../../../src/shared/featureFlags";
 import desktopPackage from "../../package.json";
-import type { HydratedTranscriptSnapshot, PersistedState, TranscriptEvent } from "../app/types";
+import type {
+  HydratedTranscriptSnapshot,
+  PersistedPrivacyTelemetrySettings,
+  PersistedState,
+  TranscriptEvent,
+} from "../app/types";
 
 export type StartWorkspaceServerInput = {
   workspaceId: string;
   workspacePath: string;
   yolo: boolean;
   featureFlags?: DesktopFeatureFlagOverrides;
+  privacyTelemetrySettings?: PersistedPrivacyTelemetrySettings;
 };
 
 export type CreateOneOffChatWorkspaceInput = {

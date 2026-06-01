@@ -12,6 +12,7 @@ import {
   pickDirectoryInputSchema,
   platformChromeInfoSchema,
   showQuickChatWindowInputSchema,
+  startWorkspaceServerInputSchema,
   updaterStateSchema,
 } from "../src/lib/desktopSchemas";
 
@@ -176,6 +177,25 @@ describe("desktop persisted-state schema defaults", () => {
   });
 
   test("validates simple preload IPC inputs", () => {
+    expect(
+      startWorkspaceServerInputSchema.parse({
+        workspaceId: "ws_1",
+        workspacePath: "/tmp/workspace",
+        yolo: false,
+        privacyTelemetrySettings: {
+          aiTraceTelemetryEnabled: false,
+          aiTracePayloadsEnabled: true,
+        },
+      }).privacyTelemetrySettings,
+    ).toEqual({
+      crashReportsEnabled: false,
+      productAnalyticsEnabled: false,
+      aiTraceTelemetryEnabled: false,
+      aiTracePayloadsEnabled: false,
+      diagnosticsUploadEnabled: false,
+      cloudSyncEnabled: false,
+    });
+
     expect(pickDirectoryInputSchema.parse({ title: "Choose workspace" })).toEqual({
       title: "Choose workspace",
     });

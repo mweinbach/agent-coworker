@@ -75,7 +75,7 @@ describe("privacy telemetry settings page", () => {
       );
       expect(container.textContent).toContain("Include prompts and responses in AI traces");
       expect(container.textContent).toContain(
-        "Off by default. Only available when AI trace diagnostics is enabled. Strong warning: this may include prompt/output content.",
+        "Off by default. Only available when AI trace diagnostics is enabled. Strong warning: this may include prompts, responses, commands, logs, file paths or names, and other content.",
       );
       expect(container.textContent).toContain("Diagnostic log uploads");
       expect(container.textContent).toContain(

@@ -8,6 +8,10 @@ import type { Readable } from "node:stream";
 import { app } from "electron";
 import { z } from "zod";
 
+import {
+  normalizePrivacyTelemetrySettings,
+  type PersistedPrivacyTelemetrySettings,
+} from "../../src/app/types";
 import { resolvePackagedBuiltinDistDir } from "./desktopBuiltinPaths";
 import type {
   MobileRelayTrustedDevicePermissionKey,
@@ -33,6 +37,8 @@ const MAX_SERVER_STARTUP_TIMEOUT_MS = 300_000;
 const STDERR_TAIL_LIMIT = 16_384;
 const SERVER_LOG_FILE_NAME = "server.log";
 const DEBUG_SERVER_STDERR = process.env.COWORK_DESKTOP_DEBUG_SERVER_STDERR === "1";
+
+const OBSERVABILITY_ENV_PREFIXES = ["AGENT_OBSERVABILITY_", "LANGFUSE_"] as const;
 
 type ServerHandle = {
   child: ServerChildProcess;
@@ -82,6 +88,7 @@ type StartWorkspaceServerOptions = {
   workspacePath: string;
   yolo: boolean;
   featureFlags?: { openAiNativeConnectors?: boolean };
+  privacyTelemetrySettings?: PersistedPrivacyTelemetrySettings | null;
   mobileH3?: boolean;
   rotateMobileH3Tls?: boolean;
 };
@@ -454,6 +461,7 @@ function buildServerEnv(
     includeBundledFoundationModelsSdk?: boolean;
     includeBundledWindowsAiElectron?: boolean;
     rotateMobileH3Tls?: boolean;
+    privacyTelemetrySettings?: PersistedPrivacyTelemetrySettings | null;
   } = {},
 ): NodeJS.ProcessEnv {
   const bundledCodexPrimaryRuntime = findBundledCodexPrimaryRuntimeDir();
@@ -466,8 +474,14 @@ function buildServerEnv(
     opts.includeBundledWindowsAiElectron && !process.env.COWORK_WINDOWS_AI_ELECTRON_DIR
       ? findBundledWindowsAiElectronDir()
       : null;
+  const privacyTelemetrySettings = normalizePrivacyTelemetrySettings(
+    opts.privacyTelemetrySettings,
+  );
+  const processEnv = privacyTelemetrySettings.aiTraceTelemetryEnabled
+    ? { ...process.env }
+    : withoutInheritedObservabilityEnv(process.env);
   return {
-    ...process.env,
+    ...processEnv,
     COWORK_WEB_DESKTOP_SERVICE: "1",
     COWORK_DESKTOP_USER_DATA_DIR: app.getPath("userData"),
     COWORK_BROWSER_ACCESS_TOKEN:
@@ -488,6 +502,45 @@ function buildServerEnv(
       ? { COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS: "1" }
       : {}),
     ...(opts.rotateMobileH3Tls ? { COWORK_H3_ROTATE_TLS: "1" } : {}),
+    ...buildDesktopObservabilityEnv(privacyTelemetrySettings),
+  };
+}
+
+function withoutInheritedObservabilityEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const next = { ...env };
+  for (const key of Object.keys(next)) {
+    if (OBSERVABILITY_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))) {
+      delete next[key];
+    }
+  }
+  return next;
+}
+
+function resolveAppRelease(): string {
+  const version = (app as { getVersion?: () => string }).getVersion?.().trim();
+  return version || "unknown";
+}
+
+function buildDesktopObservabilityEnv(
+  privacyTelemetrySettings: ReturnType<typeof normalizePrivacyTelemetrySettings>,
+): NodeJS.ProcessEnv {
+  if (!privacyTelemetrySettings.aiTraceTelemetryEnabled) {
+    return {
+      AGENT_OBSERVABILITY_ENABLED: "false",
+      AGENT_OBSERVABILITY_RECORD_INPUTS: "false",
+      AGENT_OBSERVABILITY_RECORD_OUTPUTS: "false",
+      AGENT_OBSERVABILITY_RECORD_PAYLOADS: "false",
+    };
+  }
+
+  const recordPayloads = privacyTelemetrySettings.aiTracePayloadsEnabled ? "true" : "false";
+  return {
+    AGENT_OBSERVABILITY_ENABLED: "true",
+    AGENT_OBSERVABILITY_RECORD_INPUTS: recordPayloads,
+    AGENT_OBSERVABILITY_RECORD_OUTPUTS: recordPayloads,
+    AGENT_OBSERVABILITY_RECORD_PAYLOADS: recordPayloads,
+    LANGFUSE_TRACING_ENVIRONMENT: app.isPackaged ? "desktop-packaged" : "desktop-dev",
+    LANGFUSE_RELEASE: resolveAppRelease(),
   };
 }
 
@@ -639,6 +692,7 @@ export class ServerManager {
         includeBundledFoundationModelsSdk: !useSource,
         includeBundledWindowsAiElectron: !useSource,
         rotateMobileH3Tls: opts.rotateMobileH3Tls === true,
+        privacyTelemetrySettings: opts.privacyTelemetrySettings,
       });
       const sourceEnvForAttempt = useSource ? buildSourceEnvForAttempt(serverEnv, attempt) : null;
       const cleanup = sourceEnvForAttempt?.cleanup ?? (() => {});

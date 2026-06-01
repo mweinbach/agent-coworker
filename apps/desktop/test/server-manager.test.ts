@@ -17,6 +17,7 @@ const electronMockOverrides = {
   app: {
     getPath: (name: string) => (name === "userData" ? userDataDir : process.cwd()),
     getAppPath: () => process.cwd(),
+    getVersion: () => "1.2.3",
     isPackaged: false,
   },
   BrowserWindow: {
@@ -222,6 +223,8 @@ describe("desktop server manager startup mode", () => {
     expect(env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP).toBe(
       process.env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP ?? "1",
     );
+    expect(env.AGENT_OBSERVABILITY_ENABLED).toBe("false");
+    expect(env.AGENT_OBSERVABILITY_RECORD_PAYLOADS).toBe("false");
   });
 
   test("buildServerEnv preserves explicit browser access tokens", () => {
@@ -235,6 +238,71 @@ describe("desktop server manager startup mode", () => {
       if (previous === undefined) delete process.env.COWORK_BROWSER_ACCESS_TOKEN;
       else process.env.COWORK_BROWSER_ACCESS_TOKEN = previous;
     }
+  });
+
+  test("buildServerEnv forces Langfuse off and strips inherited env by default", () => {
+    const previousLangfusePublicKey = process.env.LANGFUSE_PUBLIC_KEY;
+    const previousLangfuseSecretKey = process.env.LANGFUSE_SECRET_KEY;
+    const previousLangfuseBaseUrl = process.env.LANGFUSE_BASE_URL;
+    const previousAgentObservabilityEnabled = process.env.AGENT_OBSERVABILITY_ENABLED;
+    try {
+      process.env.LANGFUSE_PUBLIC_KEY = "pk-inherited";
+      process.env.LANGFUSE_SECRET_KEY = "sk-inherited";
+      process.env.LANGFUSE_BASE_URL = "https://langfuse.example";
+      process.env.AGENT_OBSERVABILITY_ENABLED = "true";
+
+      const env = __internal.buildServerEnv();
+
+      expect(env.LANGFUSE_PUBLIC_KEY).toBeUndefined();
+      expect(env.LANGFUSE_SECRET_KEY).toBeUndefined();
+      expect(env.LANGFUSE_BASE_URL).toBeUndefined();
+      expect(env.AGENT_OBSERVABILITY_ENABLED).toBe("false");
+      expect(env.AGENT_OBSERVABILITY_RECORD_INPUTS).toBe("false");
+      expect(env.AGENT_OBSERVABILITY_RECORD_OUTPUTS).toBe("false");
+      expect(env.AGENT_OBSERVABILITY_RECORD_PAYLOADS).toBe("false");
+    } finally {
+      if (previousLangfusePublicKey === undefined) delete process.env.LANGFUSE_PUBLIC_KEY;
+      else process.env.LANGFUSE_PUBLIC_KEY = previousLangfusePublicKey;
+      if (previousLangfuseSecretKey === undefined) delete process.env.LANGFUSE_SECRET_KEY;
+      else process.env.LANGFUSE_SECRET_KEY = previousLangfuseSecretKey;
+      if (previousLangfuseBaseUrl === undefined) delete process.env.LANGFUSE_BASE_URL;
+      else process.env.LANGFUSE_BASE_URL = previousLangfuseBaseUrl;
+      if (previousAgentObservabilityEnabled === undefined) {
+        delete process.env.AGENT_OBSERVABILITY_ENABLED;
+      } else {
+        process.env.AGENT_OBSERVABILITY_ENABLED = previousAgentObservabilityEnabled;
+      }
+    }
+  });
+
+  test("buildServerEnv enables metadata-only Langfuse env from privacy settings", () => {
+    const env = __internal.buildServerEnv(undefined, {
+      privacyTelemetrySettings: {
+        aiTraceTelemetryEnabled: true,
+        aiTracePayloadsEnabled: false,
+      },
+    });
+
+    expect(env.AGENT_OBSERVABILITY_ENABLED).toBe("true");
+    expect(env.AGENT_OBSERVABILITY_RECORD_INPUTS).toBe("false");
+    expect(env.AGENT_OBSERVABILITY_RECORD_OUTPUTS).toBe("false");
+    expect(env.AGENT_OBSERVABILITY_RECORD_PAYLOADS).toBe("false");
+    expect(env.LANGFUSE_TRACING_ENVIRONMENT).toBe("desktop-dev");
+    expect(env.LANGFUSE_RELEASE).toBe("1.2.3");
+  });
+
+  test("buildServerEnv enables full payload Langfuse env only from payload consent", () => {
+    const env = __internal.buildServerEnv(undefined, {
+      privacyTelemetrySettings: {
+        aiTraceTelemetryEnabled: true,
+        aiTracePayloadsEnabled: true,
+      },
+    });
+
+    expect(env.AGENT_OBSERVABILITY_ENABLED).toBe("true");
+    expect(env.AGENT_OBSERVABILITY_RECORD_INPUTS).toBe("true");
+    expect(env.AGENT_OBSERVABILITY_RECORD_OUTPUTS).toBe("true");
+    expect(env.AGENT_OBSERVABILITY_RECORD_PAYLOADS).toBe("true");
   });
 
   test("appendBrowserAccessToken returns a browser-authorized websocket URL", () => {

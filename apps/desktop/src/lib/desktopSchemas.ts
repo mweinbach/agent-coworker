@@ -214,11 +214,29 @@ const desktopFeatureFlagOverridesSchema = z
   .passthrough()
   .optional();
 
+const persistedPrivacyTelemetrySettingsSchema = z.preprocess(
+  (value) =>
+    normalizePrivacyTelemetrySettings(
+      value && typeof value === "object" && !Array.isArray(value)
+        ? (value as PersistedPrivacyTelemetrySettings)
+        : undefined,
+    ),
+  z.object({
+    crashReportsEnabled: z.boolean(),
+    productAnalyticsEnabled: z.boolean(),
+    aiTraceTelemetryEnabled: z.boolean(),
+    aiTracePayloadsEnabled: z.boolean(),
+    diagnosticsUploadEnabled: z.boolean(),
+    cloudSyncEnabled: z.boolean(),
+  }),
+);
+
 export const startWorkspaceServerInputSchema: z.ZodType<StartWorkspaceServerInput> = z.object({
   workspaceId: safeIdSchema,
   workspacePath: nonEmptyStringSchema,
   yolo: z.boolean(),
   featureFlags: desktopFeatureFlagOverridesSchema.optional(),
+  privacyTelemetrySettings: persistedPrivacyTelemetrySettingsSchema.optional(),
 });
 
 export const createOneOffChatWorkspaceInputSchema: z.ZodType<CreateOneOffChatWorkspaceInput> =
@@ -480,23 +498,6 @@ const persistedDesktopSettingsSchema = z
       .optional(),
   })
   .optional();
-
-const persistedPrivacyTelemetrySettingsSchema = z.preprocess(
-  (value) =>
-    normalizePrivacyTelemetrySettings(
-      value && typeof value === "object" && !Array.isArray(value)
-        ? (value as PersistedPrivacyTelemetrySettings)
-        : undefined,
-    ),
-  z.object({
-    crashReportsEnabled: z.boolean(),
-    productAnalyticsEnabled: z.boolean(),
-    aiTraceTelemetryEnabled: z.boolean(),
-    aiTracePayloadsEnabled: z.boolean(),
-    diagnosticsUploadEnabled: z.boolean(),
-    cloudSyncEnabled: z.boolean(),
-  }),
-);
 
 export const persistedStateInputSchema: z.ZodType<PersistedState> = z
   .object({

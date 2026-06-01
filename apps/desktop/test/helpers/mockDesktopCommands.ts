@@ -99,6 +99,7 @@ export function createDesktopCommandsMock(
     stopWorkspaceServer: async () => {},
     loadState: async () => ({ version: 2, workspaces: [], threads: [] }),
     saveState: async () => {},
+    captureProductEvent: async () => {},
     readTranscript: async () => [],
     hydrateTranscript: async () => ({
       feed: [],

@@ -454,6 +454,16 @@ export function createWebAdapter(): DesktopApi {
   return {
     features,
     isPackaged: false,
+    productAnalytics: {
+      enabled: false,
+      keyConfigured: false,
+      host: "https://us.i.posthog.com",
+      environment: "development",
+      appVersion: "0.0.0-web",
+      platform: "web",
+      arch: "unknown",
+      packaged: false,
+    },
     resolveDesktopFeatureFlags: (overrides) => resolveWebDesktopFeatureFlags(overrides),
 
     async startWorkspaceServer(opts): Promise<{ url: string }> {
@@ -515,6 +525,8 @@ export function createWebAdapter(): DesktopApi {
         savePersistedState(state);
       }
     },
+
+    async captureProductEvent(): Promise<void> {},
 
     async readTranscript(opts): Promise<TranscriptEvent[]> {
       return (

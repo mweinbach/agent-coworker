@@ -175,6 +175,11 @@ export type PersistedPrivacyTelemetrySettings = {
   cloudSyncEnabled?: boolean;
 };
 
+export type PersistedProductAnalyticsState = {
+  anonymousInstallationId?: string;
+  lastAppVersion?: string | null;
+};
+
 export type PrivacyTelemetrySettings = {
   crashReportsEnabled: boolean;
   productAnalyticsEnabled: boolean;
@@ -205,6 +210,33 @@ export function normalizePrivacyTelemetrySettings(
     aiTracePayloadsEnabled: aiTraceTelemetryEnabled && value?.aiTracePayloadsEnabled === true,
     diagnosticsUploadEnabled: value?.diagnosticsUploadEnabled === true,
     cloudSyncEnabled: value?.cloudSyncEnabled === true,
+  };
+}
+
+const SAFE_PRODUCT_ANALYTICS_ID = /^[A-Za-z0-9_-]{16,128}$/;
+
+export function normalizePersistedProductAnalyticsState(
+  value?: PersistedProductAnalyticsState | null,
+): PersistedProductAnalyticsState | undefined {
+  const anonymousInstallationId =
+    typeof value?.anonymousInstallationId === "string" &&
+    SAFE_PRODUCT_ANALYTICS_ID.test(value.anonymousInstallationId.trim())
+      ? value.anonymousInstallationId.trim()
+      : undefined;
+  const lastAppVersion =
+    typeof value?.lastAppVersion === "string" && value.lastAppVersion.trim()
+      ? value.lastAppVersion.trim()
+      : value?.lastAppVersion === null
+        ? null
+        : undefined;
+
+  if (!anonymousInstallationId && lastAppVersion === undefined) {
+    return undefined;
+  }
+
+  return {
+    ...(anonymousInstallationId ? { anonymousInstallationId } : {}),
+    ...(lastAppVersion !== undefined ? { lastAppVersion } : {}),
   };
 }
 
@@ -336,6 +368,7 @@ export type PersistedState = {
   perWorkspaceSettings?: boolean;
   desktopSettings?: PersistedDesktopSettings;
   privacyTelemetrySettings?: PersistedPrivacyTelemetrySettings;
+  productAnalytics?: PersistedProductAnalyticsState;
   desktopFeatureFlagOverrides?: DesktopFeatureFlagOverrides;
   providerState?: PersistedProviderState;
   providerUiState?: PersistedProviderUiState;

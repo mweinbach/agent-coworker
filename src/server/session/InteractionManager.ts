@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import type { AgentConfig, ServerErrorCode, ServerErrorSource } from "../../types";
+import { captureProductEvent } from "../../telemetry/productAnalytics";
 import { classifyCommandDetailed } from "../../utils/approval";
 import { ASK_SKIP_TOKEN, type SessionEvent } from "../protocol";
 
@@ -168,6 +169,11 @@ export class InteractionManager {
     };
     this.pendingApprovalEvents.set(requestId, evt);
     this.opts.emit(evt);
+    captureProductEvent("tool_approval_requested", {
+      eventSource: "server",
+      status: classification.dangerous ? "dangerous" : "review",
+      errorCategory: classification.riskCode,
+    });
     this.opts.queuePersistSessionSnapshot("session.approval_pending");
 
     return await this.waitForPromptResponse(requestId, this.pendingApproval).finally(() => {

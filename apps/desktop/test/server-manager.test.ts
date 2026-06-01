@@ -385,6 +385,64 @@ describe("desktop server manager startup mode", () => {
     );
   });
 
+  test("buildServerEnv strips inherited PostHog env and disables product analytics without consent", async () => {
+    await withProcessEnv(
+      {
+        COWORK_PRODUCT_ANALYTICS_ENABLED: "true",
+        COWORK_PRODUCT_ANALYTICS_INSTALLATION_ID: "anon_inherited123456",
+        COWORK_POSTHOG_KEY: "phc_inherited",
+        COWORK_POSTHOG_HOST: "https://posthog.example",
+        COWORK_POSTHOG_ENVIRONMENT: "production",
+        POSTHOG_API_KEY: "legacy-key",
+      },
+      () => {
+        const env = __internal.buildServerEnv(undefined, {
+          privacyTelemetrySettings: {
+            productAnalyticsEnabled: false,
+          },
+        });
+
+        expect(env.COWORK_PRODUCT_ANALYTICS_ENABLED).toBe("false");
+        expect(env.COWORK_PRODUCT_ANALYTICS_INSTALLATION_ID).toBeUndefined();
+        expect(env.COWORK_POSTHOG_KEY).toBeUndefined();
+        expect(env.COWORK_POSTHOG_HOST).toBeUndefined();
+        expect(env.COWORK_POSTHOG_ENVIRONMENT).toBeUndefined();
+        expect(env.POSTHOG_API_KEY).toBeUndefined();
+      },
+    );
+  });
+
+  test("buildServerEnv passes safe PostHog env only when enabled and configured", async () => {
+    await withProcessEnv(
+      {
+        COWORK_POSTHOG_KEY: "phc_configured",
+        COWORK_POSTHOG_HOST: "https://posthog.example",
+        COWORK_POSTHOG_ENVIRONMENT: "production",
+        COWORK_RELEASE: "desktop-release",
+        POSTHOG_API_KEY: "legacy-key",
+      },
+      () => {
+        const env = __internal.buildServerEnv(undefined, {
+          privacyTelemetrySettings: {
+            productAnalyticsEnabled: true,
+          },
+          productAnalyticsState: {
+            anonymousInstallationId: "anon_1234567890123456",
+            lastAppVersion: "1.2.3",
+          },
+        });
+
+        expect(env.COWORK_PRODUCT_ANALYTICS_ENABLED).toBe("true");
+        expect(env.COWORK_PRODUCT_ANALYTICS_INSTALLATION_ID).toBe("anon_1234567890123456");
+        expect(env.COWORK_POSTHOG_KEY).toBe("phc_configured");
+        expect(env.COWORK_POSTHOG_HOST).toBe("https://posthog.example");
+        expect(env.COWORK_POSTHOG_ENVIRONMENT).toBe("production");
+        expect(env.COWORK_RELEASE).toBe("desktop-release");
+        expect(env.POSTHOG_API_KEY).toBeUndefined();
+      },
+    );
+  });
+
   test("appendBrowserAccessToken returns a browser-authorized websocket URL", () => {
     expect(__internal.appendBrowserAccessToken("ws://127.0.0.1:7337/ws", "token value")).toBe(
       "ws://127.0.0.1:7337/ws?coworkBrowserToken=token+value",

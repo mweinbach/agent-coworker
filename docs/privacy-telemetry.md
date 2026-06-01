@@ -41,6 +41,58 @@ Packaged or self-hosted builds can configure crash reports with:
 
 Desktop sidecars do not inherit arbitrary `SENTRY_*` or `COWORK_SENTRY_*` values. The desktop process strips them and passes only the safe crash-reporting env when the user toggle is enabled and a DSN is configured.
 
+## Anonymous Product Analytics
+
+Anonymous product analytics are optional and only start when the Anonymous product analytics toggle is on, a PostHog key is configured, and a random local installation id exists. The installation id is generated with randomness, stored in desktop state, and is not derived from name, email, GitHub username, local username, workspace path, repo name, or machine name. Deleting the persisted desktop state resets it.
+
+Cowork uses the current PostHog Node SDK from main/server code. Renderer code sends allowed product events through the desktop bridge instead of loading a separate analytics SDK. Product analytics calls are fire-and-forget and must not block UI or turn execution.
+
+Configured variables:
+
+| Variable | Purpose |
+| --- | --- |
+| `COWORK_POSTHOG_KEY` | PostHog project key. If missing, product analytics are a no-op. |
+| `COWORK_POSTHOG_HOST` | Optional PostHog host. Defaults to the PostHog US ingest host. |
+| `COWORK_RELEASE` | Optional release/app version override. |
+| `COWORK_POSTHOG_ENVIRONMENT` | Optional environment bucket: `development`, `packaged`, `beta`, `production`, or `test`. |
+
+Exact event list:
+
+| Event | Purpose |
+| --- | --- |
+| `app_started` | App startup counts and enabled feature/toggle states. |
+| `app_updated` | Local app version changed since the previous analytics-enabled run. |
+| `workspace_added` | Workspace was added. |
+| `workspace_removed` | Workspace was removed. |
+| `workspace_server_started` | Desktop workspace server started or was reused. |
+| `workspace_server_failed` | Desktop workspace server failed to start. |
+| `provider_connected` | Provider auth/config completed. |
+| `provider_auth_failed` | Provider auth/config failed. |
+| `turn_started` | A user turn started. |
+| `turn_completed` | A user turn completed. |
+| `turn_failed` | A user turn failed. |
+| `tool_approval_requested` | A tool approval prompt was shown. |
+| `mcp_server_added` | An MCP server config was added or updated. |
+| `mcp_server_validation_failed` | MCP server validation failed. |
+| `plugin_installed` | A plugin was installed or imported. |
+| `skill_installed` | One or more skills were installed or imported. |
+| `quick_chat_opened` | Quick chat window was opened. |
+| `mobile_pairing_started` | Mobile pairing flow started. |
+| `mobile_pairing_completed` | Mobile pairing connected. |
+| `update_checked` | Update check completed or failed. |
+| `update_downloaded` | Update was downloaded. |
+| `update_install_started` | Update install/restart was requested. |
+
+Allowed product analytics properties are limited in code to: `appVersion`, `platform`, `arch`, `packaged`, `eventSource`, `provider`, `model`, `durationMs`, `status`, `errorCategory`, `workspaceCount`, `threadCount`, `providerCount`, `mcpServerCount`, `pluginCount`, `skillCount`, `toolCount`, `attachmentCount`, `referenceCount`, `productAnalyticsEnabled`, `crashReportsEnabled`, `aiTraceTelemetryEnabled`, `aiTracePayloadsEnabled`, `diagnosticsUploadEnabled`, `cloudSyncEnabled`, `mcpEnabled`, `yoloEnabled`, `quickChatIconEnabled`, `quickChatShortcutEnabled`, `mobilePairingEnabled`, `hasAttachments`, `hasReferences`, `remoteAccessEnabled`, `openAiNativeConnectorsEnabled`, and `updateAvailable`.
+
+Property values are capped by type and length. Counts and durations are bounded. String values are restricted to safe short slugs, versions, provider names, status/error categories, or hosted model ids. Local model paths are rejected.
+
+Product analytics must never capture prompts, responses, transcripts, file contents, filenames, absolute paths, repo names, shell commands, stdout/stderr, API keys, auth tokens, cookies, email addresses, usernames, provider keys, local usernames, or machine names. The sanitizer rejects unknown property names, sensitive-looking property names, email/secret-looking values, URL values, and path-looking values before sending.
+
+To disable product analytics, turn off Anonymous product analytics or omit `COWORK_POSTHOG_KEY`. Desktop sidecars strip inherited `POSTHOG_*` and `COWORK_POSTHOG_*` values and pass only the safe product analytics env when the user toggle is enabled and a key plus anonymous installation id are available.
+
+PostHog remote feature flags must not override privacy settings. Events are sent with feature flag capture disabled and person-profile processing disabled.
+
 ## Integration Contract
 
 Integrations must read the normalized desktop setting from `privacyTelemetrySettings` before starting any network telemetry, reporting, upload, or sync work. Missing or malformed settings must be treated as false by calling `normalizePrivacyTelemetrySettings()`.

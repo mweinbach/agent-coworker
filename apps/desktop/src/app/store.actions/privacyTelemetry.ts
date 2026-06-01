@@ -3,6 +3,7 @@ import {
   normalizePrivacyTelemetrySettings,
   type PersistedPrivacyTelemetrySettings,
 } from "../types";
+import { setProductAnalyticsEnabled as syncRendererProductAnalyticsPreference } from "../../lib/analytics";
 import { syncRendererCrashReportingPreference } from "../../lib/crashReporting";
 
 type PrivacyTelemetryActionKeys =
@@ -39,6 +40,7 @@ export function createPrivacyTelemetryActions(
     },
     setProductAnalyticsEnabled: (enabled) => {
       applyPrivacyTelemetrySettings(set, get, { productAnalyticsEnabled: enabled });
+      syncRendererProductAnalyticsPreference(enabled);
     },
     setAiTraceTelemetryEnabled: (enabled) => {
       applyPrivacyTelemetrySettings(set, get, {

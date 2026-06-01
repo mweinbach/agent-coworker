@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  normalizePersistedProductAnalyticsState,
   normalizePrivacyTelemetrySettings,
+  type PersistedProductAnalyticsState,
   type PersistedPrivacyTelemetrySettings,
 } from "../src/app/types";
 
@@ -51,5 +53,28 @@ describe("privacy telemetry settings", () => {
         aiTracePayloadsEnabled: true,
       }).aiTracePayloadsEnabled,
     ).toBe(true);
+  });
+});
+
+describe("persisted product analytics state", () => {
+  test("keeps only anonymous installation ids and app versions", () => {
+    expect(
+      normalizePersistedProductAnalyticsState({
+        anonymousInstallationId: "anon_1234567890123456",
+        lastAppVersion: "1.2.3",
+      }),
+    ).toEqual({
+      anonymousInstallationId: "anon_1234567890123456",
+      lastAppVersion: "1.2.3",
+    });
+  });
+
+  test("rejects malformed anonymous installation state", () => {
+    expect(
+      normalizePersistedProductAnalyticsState({
+        anonymousInstallationId: "alice@example.com",
+        lastAppVersion: "",
+      } as PersistedProductAnalyticsState),
+    ).toBeUndefined();
   });
 });

@@ -5,6 +5,7 @@ import {
   upsertWorkspaceMCPServer,
 } from "../../../mcp/configRegistry";
 import type { MCPServerConfig, PluginScope } from "../../../types";
+import { captureProductEvent } from "../../../telemetry/productAnalytics";
 import type { SessionContext } from "../SessionContext";
 
 type PreparedEnableMcpChange = {
@@ -116,6 +117,10 @@ export class McpRegistryFlow {
     }
 
     await this.emitMcpServers();
+    captureProductEvent("mcp_server_added", {
+      eventSource: "server",
+      mcpServerCount: 1,
+    });
     return server.name;
   }
 

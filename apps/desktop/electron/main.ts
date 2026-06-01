@@ -32,6 +32,7 @@ import { createMenuCommandDispatcher } from "./services/menuCommandDispatcher";
 import { MobileRelayBridge } from "./services/mobileRelayBridge";
 import { isPathEqualOrInside } from "./services/pathBoundary";
 import { PersistenceService } from "./services/persistence";
+import { DesktopProductAnalyticsService } from "./services/productAnalytics";
 import { QuickChatController } from "./services/quickChatController";
 import { resolveElectronRemoteDebugConfig } from "./services/remoteDebug";
 import { resolveDesktopRendererUrl } from "./services/rendererUrl";
@@ -67,7 +68,10 @@ if (process.platform === "win32") {
 // Keep packaged-mode feature resolution consistent across main and preload.
 process.env.COWORK_IS_PACKAGED = String(app.isPackaged);
 
-const serverManager = new ServerManager();
+const productAnalytics = new DesktopProductAnalyticsService();
+const serverManager = new ServerManager({
+  getProductAnalyticsState: () => productAnalytics.getPersistedState(),
+});
 const mobileRelayBridge = new MobileRelayBridge({ serverManager });
 const persistence = new PersistenceService();
 const updater = new DesktopUpdaterService({
@@ -668,8 +672,24 @@ if (!gotSingleInstanceLock) {
     .then(async () => {
       const initialState: PersistedState | null = await persistence.loadState().catch(() => null);
       await initElectronMainCrashReporting(initialState?.privacyTelemetrySettings);
+      let preparedInitialState = initialState;
+      if (preparedInitialState) {
+        const prepared = productAnalytics.preparePersistedState(preparedInitialState);
+        preparedInitialState = prepared.state;
+        if (prepared.changed) {
+          await persistence.saveState(preparedInitialState);
+        }
+        await productAnalytics.applyPersistedState(preparedInitialState);
+      } else {
+        await productAnalytics.applyPersistedState({
+          version: 2,
+          workspaces: [],
+          threads: [],
+          privacyTelemetrySettings: undefined,
+        });
+      }
 
-      if (await maybeRunPackagedSmoke(initialState)) {
+      if (await maybeRunPackagedSmoke(preparedInitialState)) {
         return;
       }
 
@@ -682,14 +702,15 @@ if (!gotSingleInstanceLock) {
         retargetQuickChatWindow,
         createUtilityWindow,
       });
-      if (initialState) {
-        quickChatController.applyPersistedState(initialState);
+      if (preparedInitialState) {
+        quickChatController.applyPersistedState(preparedInitialState);
       }
       quickChatController.initialize();
 
       registerDesktopIpc({
         mobileRelayBridge,
         persistence,
+        productAnalytics,
         serverManager,
         updater,
         showMainWindow: () => quickChatController?.showMainWindow(),
@@ -703,6 +724,11 @@ if (!gotSingleInstanceLock) {
           quickChatController?.shouldKeepPopupWindowsAlive() === true,
         applyPersistedState: (state: PersistedState) => {
           quickChatController?.applyPersistedState(state);
+          void productAnalytics.applyPersistedState(state).then(async (prepared) => {
+            if (prepared.changed) {
+              await persistence.saveState(prepared.state);
+            }
+          });
         },
       });
       unregisterAppearanceListener = registerSystemAppearanceListener(
@@ -754,6 +780,7 @@ if (!gotSingleInstanceLock) {
         mobileRelayBridge.stopForShutdown();
       },
       stopQuickChat: () => quickChatController?.dispose(),
+      stopProductAnalytics: () => productAnalytics.shutdown(),
       stopAllServers: () => serverManager.stopAll(),
       quit: () => app.quit(),
       onError: (error) => {

@@ -11,6 +11,7 @@ import type {
   TranscriptEvent,
 } from "../app/types";
 import type {
+  CaptureProductEventInput,
   ConfirmActionInput,
   CreateOneOffChatWorkspaceInput,
   CreateOneOffChatWorkspaceOutput,
@@ -101,6 +102,10 @@ export async function loadState(): Promise<PersistedState> {
 
 export async function saveState(state: PersistedState): Promise<void> {
   await requireDesktopApi().saveState(state);
+}
+
+export async function captureProductEvent(input: CaptureProductEventInput): Promise<void> {
+  await requireDesktopApi().captureProductEvent(input);
 }
 
 export async function readTranscript(opts: { threadId: string }): Promise<TranscriptEvent[]> {

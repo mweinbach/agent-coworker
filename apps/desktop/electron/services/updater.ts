@@ -2,6 +2,7 @@ import { createRequire } from "node:module";
 
 import type { ProgressInfo, UpdateDownloadedEvent, UpdateInfo } from "electron-updater";
 
+import { captureProductEvent } from "../../../../src/telemetry/productAnalytics";
 import {
   createDefaultUpdaterState,
   type UpdaterReleaseInfo,
@@ -187,6 +188,7 @@ export class DesktopUpdaterService {
   private startupHandle: ReturnType<typeof setTimeout> | null = null;
   private started = false;
   private state: UpdaterState;
+  private checkStartedAtMs: number | null = null;
 
   constructor(options: DesktopUpdaterServiceOptions) {
     this.currentVersion = options.currentVersion;
@@ -250,6 +252,12 @@ export class DesktopUpdaterService {
       this.setState({
         ...createDefaultUpdaterState(this.currentVersion, false),
       });
+      captureProductEvent("update_checked", {
+        eventSource: "main",
+        status: "disabled",
+        durationMs: 0,
+        updateAvailable: false,
+      });
       return;
     }
 
@@ -264,6 +272,7 @@ export class DesktopUpdaterService {
       error: null,
       progress: null,
     });
+    this.checkStartedAtMs = Date.now();
 
     try {
       await this.updater.checkForUpdates();
@@ -280,6 +289,13 @@ export class DesktopUpdaterService {
           release: null,
           downloadedAt: null,
         });
+        captureProductEvent("update_checked", {
+          eventSource: "main",
+          status: "feed_unavailable",
+          errorCategory: "missing_release_feed",
+          durationMs: this.updateCheckDurationMs(),
+          updateAvailable: false,
+        });
         return;
       }
 
@@ -292,6 +308,13 @@ export class DesktopUpdaterService {
         error: message,
         progress: null,
       });
+      captureProductEvent("update_checked", {
+        eventSource: "main",
+        status: "failed",
+        errorCategory: "check_failed",
+        durationMs: this.updateCheckDurationMs(),
+        updateAvailable: false,
+      });
     }
   }
 
@@ -299,6 +322,10 @@ export class DesktopUpdaterService {
     if (!this.isPackaged || this.state.phase !== "downloaded") {
       return;
     }
+    captureProductEvent("update_install_started", {
+      eventSource: "main",
+      status: "started",
+    });
     this.updater.quitAndInstall(false, true);
   }
 
@@ -326,6 +353,12 @@ export class DesktopUpdaterService {
         progress: null,
         downloadedAt: null,
       });
+      captureProductEvent("update_checked", {
+        eventSource: "main",
+        status: "available",
+        durationMs: this.updateCheckDurationMs(),
+        updateAvailable: true,
+      });
     });
 
     this.updater.on("update-not-available", () => {
@@ -337,6 +370,12 @@ export class DesktopUpdaterService {
         progress: null,
         release: null,
         downloadedAt: null,
+      });
+      captureProductEvent("update_checked", {
+        eventSource: "main",
+        status: "up_to_date",
+        durationMs: this.updateCheckDurationMs(),
+        updateAvailable: false,
       });
     });
 
@@ -371,6 +410,11 @@ export class DesktopUpdaterService {
         release,
       };
       this.setState(nextState);
+      captureProductEvent("update_downloaded", {
+        eventSource: "main",
+        status: "downloaded",
+        durationMs: this.updateCheckDurationMs(),
+      });
       this.notifyUpdateReady?.(this.getState());
     });
 
@@ -387,6 +431,13 @@ export class DesktopUpdaterService {
           release: null,
           downloadedAt: null,
         });
+        captureProductEvent("update_checked", {
+          eventSource: "main",
+          status: "feed_unavailable",
+          errorCategory: "missing_release_feed",
+          durationMs: this.updateCheckDurationMs(),
+          updateAvailable: false,
+        });
         return;
       }
 
@@ -399,7 +450,21 @@ export class DesktopUpdaterService {
         error: message,
         progress: null,
       });
+      captureProductEvent("update_checked", {
+        eventSource: "main",
+        status: "failed",
+        errorCategory: "event_error",
+        durationMs: this.updateCheckDurationMs(),
+        updateAvailable: false,
+      });
     });
+  }
+
+  private updateCheckDurationMs(): number {
+    if (!this.checkStartedAtMs) {
+      return 0;
+    }
+    return Math.max(0, Date.now() - this.checkStartedAtMs);
   }
 
   private setState(patch: Partial<UpdaterState>): void {

@@ -41,7 +41,6 @@ export type ProductAnalyticsPropertyName =
   | "platform"
   | "arch"
   | "packaged"
-  | "environment"
   | "eventSource"
   | "provider"
   | "model"
@@ -80,7 +79,7 @@ export type ProductAnalyticsProperties = Partial<
 
 type CommonProperties = Pick<
   ProductAnalyticsProperties,
-  "appVersion" | "platform" | "arch" | "packaged" | "environment" | "eventSource"
+  "appVersion" | "platform" | "arch" | "packaged" | "eventSource"
 >;
 
 export type ProductAnalyticsEventMap = {
@@ -224,7 +223,6 @@ const PRODUCT_ANALYTICS_PROPERTY_NAMES = new Set<string>([
   "platform",
   "arch",
   "packaged",
-  "environment",
   "eventSource",
   "provider",
   "model",
@@ -281,7 +279,6 @@ const STRING_PROPERTY_NAMES = new Set<string>([
   "appVersion",
   "platform",
   "arch",
-  "environment",
   "eventSource",
   "provider",
   "model",
@@ -454,7 +451,6 @@ function buildCommonProperties(config: ResolvedProductAnalyticsConfig): ProductA
     ...(config.platform ? { platform: config.platform } : {}),
     ...(config.arch ? { arch: config.arch } : {}),
     packaged: config.packaged,
-    environment: config.environment,
     eventSource: config.eventSource,
   };
 }

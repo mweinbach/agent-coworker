@@ -191,6 +191,7 @@ export function registerWorkspaceIpc(context: DesktopIpcModuleContext): void {
       const listening = await deps.serverManager.startWorkspaceServer({
         ...input,
         workspacePath,
+        productAnalyticsState: deps.productAnalytics?.getPersistedState(),
       });
       return { url: listening.url };
     },
@@ -266,11 +267,13 @@ export function registerWorkspaceIpc(context: DesktopIpcModuleContext): void {
       return nextState;
     })();
 
-    await deps.persistence.saveState(nextState);
+    const preparedState =
+      deps.productAnalytics?.preparePersistedState(nextState).state ?? nextState;
+    await deps.persistence.saveState(preparedState);
     workspaceRoots.setApprovedWorkspaceRoots(
-      nextState.workspaces.map((workspace) => workspace.path),
+      preparedState.workspaces.map((workspace) => workspace.path),
     );
-    deps.applyPersistedState?.(nextState);
+    deps.applyPersistedState?.(preparedState);
   });
 
   handleDesktopInvoke(

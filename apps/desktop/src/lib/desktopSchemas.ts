@@ -11,7 +11,13 @@ import {
   OPENAI_TEXT_VERBOSITY_VALUES,
 } from "../../../../src/shared/openaiCompatibleOptions";
 import {
+  PRODUCT_ANALYTICS_EVENT_NAMES,
+  type ProductAnalyticsProperties,
+} from "../../../../src/telemetry/productAnalytics";
+import {
+  normalizePersistedProductAnalyticsState,
   normalizePrivacyTelemetrySettings,
+  type PersistedProductAnalyticsState,
   type PersistedPrivacyTelemetrySettings,
   type PersistedState,
 } from "../app/types";
@@ -19,6 +25,7 @@ import type {
   ConfirmActionInput,
   ContextMenuItem,
   CopyPathInput,
+  CaptureProductEventInput,
   CreateDirectoryInput,
   CreateOneOffChatWorkspaceInput,
   DeleteTranscriptInput,
@@ -231,6 +238,21 @@ const persistedPrivacyTelemetrySettingsSchema = z.preprocess(
   }),
 );
 
+const persistedProductAnalyticsStateSchema = z.preprocess(
+  (value) =>
+    normalizePersistedProductAnalyticsState(
+      value && typeof value === "object" && !Array.isArray(value)
+        ? (value as PersistedProductAnalyticsState)
+        : undefined,
+    ),
+  z
+    .object({
+      anonymousInstallationId: z.string().trim().min(16).max(128).optional(),
+      lastAppVersion: z.string().trim().min(1).nullable().optional(),
+    })
+    .optional(),
+);
+
 export const startWorkspaceServerInputSchema: z.ZodType<StartWorkspaceServerInput> = z.object({
   workspaceId: safeIdSchema,
   workspacePath: nonEmptyStringSchema,
@@ -246,6 +268,21 @@ export const createOneOffChatWorkspaceInputSchema: z.ZodType<CreateOneOffChatWor
 
 export const stopWorkspaceServerInputSchema: z.ZodType<StopWorkspaceServerInput> = z.object({
   workspaceId: safeIdSchema,
+});
+
+const productAnalyticsPropertyValueSchema = z.union([
+  z.string(),
+  z.number(),
+  z.boolean(),
+  z.null(),
+]);
+
+export const captureProductEventInputSchema: z.ZodType<CaptureProductEventInput> = z.object({
+  name: z.enum(PRODUCT_ANALYTICS_EVENT_NAMES),
+  properties: z
+    .record(z.string(), productAnalyticsPropertyValueSchema)
+    .optional()
+    .transform((value) => value as ProductAnalyticsProperties | undefined),
 });
 
 export const readTranscriptInputSchema: z.ZodType<ReadTranscriptInput> = z.object({
@@ -516,6 +553,7 @@ export const persistedStateInputSchema: z.ZodType<PersistedState> = z
       .optional(),
     desktopSettings: persistedDesktopSettingsSchema,
     privacyTelemetrySettings: persistedPrivacyTelemetrySettingsSchema.optional(),
+    productAnalytics: persistedProductAnalyticsStateSchema,
     desktopFeatureFlagOverrides: desktopFeatureFlagOverridesSchema,
     version: z.preprocess(
       (value) =>

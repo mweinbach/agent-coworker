@@ -4,6 +4,7 @@ import {
   resolveCrashReportingConfig,
   type CrashReportingEnvironment,
 } from "../../../src/telemetry/crashReporting";
+import { resolveProductAnalyticsConfig } from "../../../src/telemetry/productAnalytics";
 import {
   type DesktopFeatureFlagOverrides,
   normalizeDesktopFeatureFlagOverrides,
@@ -13,6 +14,7 @@ import type { PersistedState } from "../src/app/types";
 import {
   type ConfirmActionInput,
   type CopyPathInput,
+  type CaptureProductEventInput,
   type CreateDirectoryInput,
   type CreateOneOffChatWorkspaceInput,
   DESKTOP_EVENT_CHANNELS,
@@ -22,6 +24,7 @@ import {
   type DesktopApi,
   type DesktopMenuCommand,
   type DesktopNotificationInput,
+  type DesktopProductAnalyticsConfig,
   type ListDirectoryInput,
   type MobileRelayBridgeState,
   type MobileRelayForgetTrustedPhoneInput,
@@ -56,6 +59,7 @@ import {
   confirmActionInputSchema,
   copyPathInputSchema,
   copyTextInputSchema,
+  captureProductEventInputSchema,
   createDirectoryInputSchema,
   createOneOffChatWorkspaceInputSchema,
   deleteTranscriptInputSchema,
@@ -199,6 +203,10 @@ function assertPersistedState(state: PersistedState): void {
   parseWithSchema(persistedStateInputSchema, state, "state");
 }
 
+function assertCaptureProductEventInput(input: CaptureProductEventInput): void {
+  parseWithSchema(captureProductEventInputSchema, input, "product analytics event");
+}
+
 function assertPickDirectoryInput(opts: PickDirectoryInput): void {
   parseWithSchema(pickDirectoryInputSchema, opts, "pickDirectory options");
 }
@@ -292,13 +300,42 @@ function resolvePreloadCrashReportingConfig(): DesktopCrashReportingConfig {
   };
 }
 
+function resolvePreloadProductAnalyticsConfig(): DesktopProductAnalyticsConfig {
+  const appVersion = process.env.COWORK_RELEASE?.trim() || "unknown";
+  const config = resolveProductAnalyticsConfig({
+    enabled: process.env.COWORK_PRODUCT_ANALYTICS_ENABLED === "true",
+    env: process.env,
+    anonymousId: process.env.COWORK_PRODUCT_ANALYTICS_INSTALLATION_ID,
+    release: appVersion,
+    appVersion,
+    environment: process.env.COWORK_POSTHOG_ENVIRONMENT,
+    eventSource: "renderer",
+    packaged: process.env.COWORK_IS_PACKAGED === "true",
+    platform: process.platform,
+    arch: process.arch,
+  });
+
+  return {
+    enabled: config.enabled,
+    keyConfigured: config.keyConfigured,
+    host: config.host,
+    environment: config.environment,
+    appVersion,
+    platform: process.platform,
+    arch: process.arch,
+    packaged: process.env.COWORK_IS_PACKAGED === "true",
+  };
+}
+
 const desktopFeatures = Object.freeze(resolvePreloadDesktopFeatureFlags());
 const crashReporting = Object.freeze(resolvePreloadCrashReportingConfig());
+const productAnalytics = Object.freeze(resolvePreloadProductAnalyticsConfig());
 
 const desktopApi = Object.freeze<DesktopApi>({
   features: desktopFeatures,
   isPackaged: process.env.COWORK_IS_PACKAGED === "true",
   crashReporting,
+  productAnalytics,
   resolveDesktopFeatureFlags: (overrides) =>
     resolvePreloadDesktopFeatureFlags(normalizeDesktopFeatureFlagOverrides(overrides)),
   createOneOffChatWorkspace: (opts: CreateOneOffChatWorkspaceInput = {}) => {
@@ -374,6 +411,11 @@ const desktopApi = Object.freeze<DesktopApi>({
   saveState: (state: PersistedState) => {
     assertPersistedState(state);
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.saveState, state);
+  },
+
+  captureProductEvent: (input: CaptureProductEventInput) => {
+    assertCaptureProductEventInput(input);
+    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.captureProductEvent, input);
   },
 
   readTranscript: (opts: ReadTranscriptInput) => {

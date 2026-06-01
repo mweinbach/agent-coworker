@@ -11,6 +11,7 @@ import {
   initCrashReporting,
   type CrashReportingSdk,
 } from "../telemetry/crashReporting";
+import { initProductAnalytics, shutdownProductAnalytics } from "../telemetry/productAnalytics";
 import { VERSION } from "../version";
 
 // Keep server output clean by default.
@@ -222,7 +223,7 @@ async function main() {
     component: "cowork-server",
     enabled: process.env.COWORK_CRASH_REPORTS_ENABLED === "true",
     env: process.env,
-    fallbackRelease: VERSION,
+    release: VERSION,
     appVersion: VERSION,
     platform: process.platform,
     arch: process.arch,
@@ -240,6 +241,17 @@ async function main() {
   if (crashReportingStatus.initialized) {
     registerCrashReportingProcessHandlers();
   }
+
+  await initProductAnalytics({
+    enabled: process.env.COWORK_PRODUCT_ANALYTICS_ENABLED === "true",
+    env: process.env,
+    anonymousId: process.env.COWORK_PRODUCT_ANALYTICS_INSTALLATION_ID,
+    release: VERSION,
+    appVersion: VERSION,
+    eventSource: "server",
+    platform: process.platform,
+    arch: process.arch,
+  });
 
   const [{ DEFAULT_PROVIDER_OPTIONS }, { startAgentServer }] = await Promise.all([
     import("../providers/providerOptions"),
@@ -272,6 +284,7 @@ async function main() {
     stopping = true;
     try {
       server.stop();
+      void shutdownProductAnalytics();
     } catch {
       // ignore
     }
@@ -286,6 +299,7 @@ async function main() {
     // Last-resort synchronous cleanup.
     try {
       server.stop();
+      void shutdownProductAnalytics();
     } catch {
       // ignore
     }

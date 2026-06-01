@@ -17,6 +17,12 @@ export function PrivacyTelemetryPage() {
     : settings.crashReportsEnabled
       ? { label: "Enabled", variant: "secondary" as const }
       : { label: "Disabled", variant: "outline" as const };
+  const productAnalyticsConfig = window.cowork?.productAnalytics ?? null;
+  const productAnalyticsStatus = !productAnalyticsConfig?.keyConfigured
+    ? { label: "Not configured", variant: "outline" as const }
+    : settings.productAnalyticsEnabled
+      ? { label: "Enabled", variant: "secondary" as const }
+      : { label: "Disabled", variant: "outline" as const };
 
   return (
     <SettingsPage>
@@ -42,11 +48,14 @@ export function PrivacyTelemetryPage() {
           title="Anonymous product analytics"
           description="Sends event counts like app opened, workspace added, turn completed. Never sends prompts, file contents, shell commands, or file paths."
           control={
-            <Switch
-              checked={settings.productAnalyticsEnabled}
-              aria-label="Anonymous product analytics"
-              onCheckedChange={setProductAnalyticsEnabled}
-            />
+            <div className="flex items-center gap-2">
+              <Badge variant={productAnalyticsStatus.variant}>{productAnalyticsStatus.label}</Badge>
+              <Switch
+                checked={settings.productAnalyticsEnabled}
+                aria-label="Anonymous product analytics"
+                onCheckedChange={setProductAnalyticsEnabled}
+              />
+            </div>
           }
         />
         <SettingsRow

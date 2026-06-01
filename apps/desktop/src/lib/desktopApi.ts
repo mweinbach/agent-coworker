@@ -2,6 +2,11 @@ import type {
   DesktopFeatureFlagOverrides,
   DesktopFeatureFlags,
 } from "../../../../src/shared/featureFlags";
+import type {
+  ProductAnalyticsEnvironment,
+  ProductAnalyticsEventName,
+  ProductAnalyticsProperties,
+} from "../../../../src/telemetry/productAnalytics";
 import desktopPackage from "../../package.json";
 import type {
   HydratedTranscriptSnapshot,
@@ -319,6 +324,22 @@ export type DesktopCrashReportingConfig = {
   packaged: boolean;
 };
 
+export type DesktopProductAnalyticsConfig = {
+  enabled: boolean;
+  keyConfigured: boolean;
+  host: string;
+  environment: ProductAnalyticsEnvironment;
+  appVersion: string;
+  platform: string;
+  arch: string;
+  packaged: boolean;
+};
+
+export type CaptureProductEventInput = {
+  name: ProductAnalyticsEventName;
+  properties?: ProductAnalyticsProperties;
+};
+
 export function createDefaultUpdaterState(
   currentVersion = desktopAppVersion,
   packaged = false,
@@ -363,6 +384,7 @@ export interface DesktopApi {
   readonly features: DesktopFeatureFlags;
   readonly isPackaged?: boolean;
   readonly crashReporting?: DesktopCrashReportingConfig;
+  readonly productAnalytics?: DesktopProductAnalyticsConfig;
   resolveDesktopFeatureFlags(overrides?: DesktopFeatureFlagOverrides): DesktopFeatureFlags;
   createOneOffChatWorkspace(
     opts?: CreateOneOffChatWorkspaceInput,
@@ -382,6 +404,7 @@ export interface DesktopApi {
   ): Promise<MobileRelayBridgeState>;
   loadState(): Promise<PersistedState>;
   saveState(state: PersistedState): Promise<void>;
+  captureProductEvent(input: CaptureProductEventInput): Promise<void>;
   readTranscript(opts: ReadTranscriptInput): Promise<TranscriptEvent[]>;
   hydrateTranscript(opts: ReadTranscriptInput): Promise<HydratedTranscriptSnapshot>;
   appendTranscriptEvent(opts: TranscriptBatchInput): Promise<void>;
@@ -443,6 +466,7 @@ export const DESKTOP_IPC_CHANNELS = {
   mobileRelayUpdateTrustedPhonePermissions: "desktop:mobileRelayUpdateTrustedPhonePermissions",
   loadState: "desktop:loadState",
   saveState: "desktop:saveState",
+  captureProductEvent: "desktop:captureProductEvent",
   readTranscript: "desktop:readTranscript",
   hydrateTranscript: "desktop:hydrateTranscript",
   appendTranscriptEvent: "desktop:appendTranscriptEvent",

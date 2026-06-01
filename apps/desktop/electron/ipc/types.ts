@@ -9,12 +9,14 @@ import type {
 } from "../../src/lib/desktopApi";
 import type { MobileRelayBridge } from "../services/mobileRelayBridge";
 import type { PersistenceService } from "../services/persistence";
+import type { DesktopProductAnalyticsService } from "../services/productAnalytics";
 import type { ServerManager } from "../services/serverManager";
 import type { DesktopUpdaterService } from "../services/updater";
 
 export type DesktopIpcDeps = {
   mobileRelayBridge: MobileRelayBridge;
   persistence: PersistenceService;
+  productAnalytics?: DesktopProductAnalyticsService;
   serverManager: ServerManager;
   updater: DesktopUpdaterService;
   showMainWindow: () => Promise<void> | void;

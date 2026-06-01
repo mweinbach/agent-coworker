@@ -1,6 +1,7 @@
 import { BrowserWindow, dialog, Notification, nativeTheme, shell } from "electron";
 
 import {
+  type CaptureProductEventInput,
   type ConfirmActionInput,
   DESKTOP_IPC_CHANNELS,
   type DesktopNotificationInput,
@@ -8,6 +9,7 @@ import {
   type SetWindowAppearanceInput,
 } from "../../src/lib/desktopApi";
 import {
+  captureProductEventInputSchema,
   confirmActionInputSchema,
   desktopNotificationInputSchema,
   openExternalUrlInputSchema,
@@ -82,6 +84,21 @@ export function registerSystemIpc(context: DesktopIpcModuleContext): void {
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.getUpdateState, async () => {
     return context.deps.updater.getState();
   });
+
+  handleDesktopInvoke(
+    DESKTOP_IPC_CHANNELS.captureProductEvent,
+    async (_event, args: CaptureProductEventInput) => {
+      const input = parseWithSchema(
+        captureProductEventInputSchema,
+        args,
+        "product analytics event",
+      );
+      context.deps.productAnalytics?.capture(input.name, {
+        eventSource: "renderer",
+        ...(input.properties ?? {}),
+      });
+    },
+  );
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.checkForUpdates, async () => {
     await context.deps.updater.checkForUpdates();

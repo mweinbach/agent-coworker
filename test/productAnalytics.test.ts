@@ -91,7 +91,6 @@ describe("product analytics wrapper", () => {
         platform: "darwin",
         arch: "arm64",
         packaged: true,
-        environment: "production",
         eventSource: "server",
         workspaceCount: 2,
         productAnalyticsEnabled: true,

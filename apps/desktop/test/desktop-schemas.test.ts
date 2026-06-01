@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  captureProductEventInputSchema,
   copyTextInputSchema,
   desktopMenuCommandSchema,
   mobileRelayBridgeStateSchema,
@@ -106,6 +107,10 @@ describe("desktop persisted-state schema defaults", () => {
         diagnosticsUploadEnabled: true,
         cloudSyncEnabled: "yes",
       },
+      productAnalytics: {
+        anonymousInstallationId: "anon_1234567890123456",
+        lastAppVersion: "1.2.3",
+      },
     });
 
     expect(parsed.workspaces[0]?.defaultEnableMcp).toBe(false);
@@ -133,6 +138,10 @@ describe("desktop persisted-state schema defaults", () => {
       aiTracePayloadsEnabled: false,
       diagnosticsUploadEnabled: true,
       cloudSyncEnabled: false,
+    });
+    expect(parsed.productAnalytics).toEqual({
+      anonymousInstallationId: "anon_1234567890123456",
+      lastAppVersion: "1.2.3",
     });
   });
 
@@ -203,6 +212,33 @@ describe("desktop persisted-state schema defaults", () => {
 
     expect(() => pickDirectoryInputSchema.parse({ title: 42 })).toThrow();
     expect(() => copyTextInputSchema.parse({ text: "not a string" })).toThrow();
+  });
+
+  test("accepts product analytics IPC event payloads", () => {
+    expect(
+      captureProductEventInputSchema.parse({
+        name: "workspace_added",
+        properties: {
+          eventSource: "renderer",
+          workspaceCount: 2,
+          mcpEnabled: true,
+        },
+      }),
+    ).toEqual({
+      name: "workspace_added",
+      properties: {
+        eventSource: "renderer",
+        workspaceCount: 2,
+        mcpEnabled: true,
+      },
+    });
+
+    expect(() =>
+      captureProductEventInputSchema.parse({
+        name: "not_real",
+        properties: {},
+      }),
+    ).toThrow();
   });
 
   test("accepts platform chrome IPC payloads", () => {

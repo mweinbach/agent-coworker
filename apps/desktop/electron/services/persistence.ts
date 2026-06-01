@@ -17,6 +17,7 @@ import {
 } from "../../src/app/providerUiState";
 import type {
   PersistedDesktopSettings,
+  PersistedProductAnalyticsState,
   PersistedOnboardingState,
   PersistedPrivacyTelemetrySettings,
   PersistedState,
@@ -28,6 +29,7 @@ import type {
 } from "../../src/app/types";
 import {
   normalizeDesktopSettings,
+  normalizePersistedProductAnalyticsState,
   normalizePrivacyTelemetrySettings,
   normalizeWorkspaceUserProfile,
 } from "../../src/app/types";
@@ -59,6 +61,7 @@ class AsyncLock {
 }
 
 function defaultState(): PersistedState {
+  const productAnalytics = normalizePersistedProductAnalyticsState();
   return {
     version: 2,
     workspaces: [],
@@ -68,6 +71,7 @@ function defaultState(): PersistedState {
     perWorkspaceSettings: false,
     desktopSettings: normalizeDesktopSettings(),
     privacyTelemetrySettings: normalizePrivacyTelemetrySettings(),
+    ...(productAnalytics ? { productAnalytics } : {}),
     desktopFeatureFlagOverrides: {},
     providerUiState: normalizePersistedProviderUiState(undefined),
   };
@@ -151,6 +155,12 @@ function sanitizeDesktopSettings(value: unknown): PersistedDesktopSettings {
 function sanitizePrivacyTelemetrySettings(value: unknown): PersistedPrivacyTelemetrySettings {
   return normalizePrivacyTelemetrySettings(
     isRecord(value) ? (value as PersistedPrivacyTelemetrySettings) : undefined,
+  );
+}
+
+function sanitizeProductAnalyticsState(value: unknown): PersistedProductAnalyticsState | undefined {
+  return normalizePersistedProductAnalyticsState(
+    isRecord(value) ? (value as PersistedProductAnalyticsState) : undefined,
   );
 }
 
@@ -367,6 +377,7 @@ async function sanitizePersistedState(value: unknown): Promise<PersistedState> {
       ? Math.max(0, Math.floor(value.version))
       : 0;
   const onboarding = sanitizeOnboarding(value.onboarding);
+  const productAnalytics = sanitizeProductAnalyticsState(value.productAnalytics);
   return {
     version: parsedVersion >= 2 ? parsedVersion : 2,
     workspaces,
@@ -377,6 +388,7 @@ async function sanitizePersistedState(value: unknown): Promise<PersistedState> {
       typeof value.perWorkspaceSettings === "boolean" ? value.perWorkspaceSettings : false,
     desktopSettings: sanitizeDesktopSettings(value.desktopSettings),
     privacyTelemetrySettings: sanitizePrivacyTelemetrySettings(value.privacyTelemetrySettings),
+    ...(productAnalytics ? { productAnalytics } : {}),
     desktopFeatureFlagOverrides: normalizeDesktopFeatureFlagOverrides(
       value.desktopFeatureFlagOverrides,
     ),

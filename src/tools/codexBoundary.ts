@@ -10,8 +10,10 @@ const CODEX_NATIVE_EXECUTION_TOOL_NAMES = new Set([
   "notebookEdit",
 ]);
 
+const MODEL_HIDDEN_COWORK_TOOL_NAMES = new Set(["usage"]);
+
 export function isCodexDynamicCoworkToolName(name: string): boolean {
-  return !CODEX_NATIVE_EXECUTION_TOOL_NAMES.has(name);
+  return !CODEX_NATIVE_EXECUTION_TOOL_NAMES.has(name) && !MODEL_HIDDEN_COWORK_TOOL_NAMES.has(name);
 }
 
 export function filterToolsForCodexDynamicBoundary<T>(tools: Record<string, T>): Record<string, T> {

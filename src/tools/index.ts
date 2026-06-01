@@ -26,7 +26,6 @@ import { createReadTool } from "./read";
 import { createSkillTool } from "./skill";
 import { createSpawnAgentTool } from "./spawnAgent";
 import { createTodoWriteTool } from "./todoWrite";
-import { createUsageTool } from "./usage";
 import { createWebFetchTool } from "./webFetch";
 import { createWebSearchTool } from "./webSearch";
 import { createWriteTool } from "./write";
@@ -88,7 +87,6 @@ export function listSessionToolNames(
     "todoWrite",
     "skill",
     ...((config.enableMemory ?? true) ? ["memory"] : []),
-    "usage",
     ...(opts.includeAgentControl
       ? [
           "spawnAgent",
@@ -134,7 +132,6 @@ export function createTools(ctx: ToolContext): Record<string, any> {
           ).createA2uiTool(ctx),
         }
       : {}),
-    usage: createUsageTool(ctx),
   };
 
   const roleFilteredTools = ctx.agentRole

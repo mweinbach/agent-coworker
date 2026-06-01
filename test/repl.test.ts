@@ -611,7 +611,7 @@ describe("REPL slash command routing", () => {
     expect(typeof rendered).toBe("string");
     expect(rendered).toContain("  - spawnAgent");
     expect(rendered).toContain("  - memory");
-    expect(rendered).toContain("  - usage");
+    expect(rendered).not.toContain("  - usage");
     expect(rendered).not.toContain("  - bash");
     expect(rendered).not.toContain("  - read");
     expect(rendered).not.toContain("  - write");

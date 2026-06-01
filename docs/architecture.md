@@ -112,12 +112,11 @@ Built-in capabilities exposed to the agent:
 | `skill`        | Load skill instructions        | No                |
 | `memory`       | Read/write persistent memory   | No                |
 | `notebookEdit` | Edit Jupyter notebook cells    | Yes (write path)  |
-| `usage`        | Query session token/cost usage | No                |
 
 
 When agent control is enabled, the following tools are also available: `listAgents`, `sendAgentInput`, `waitForAgent`, `inspectAgent`, `resumeAgent`, `closeAgent`.
 
-For non-Codex providers, Cowork exposes the full built-in toolbelt plus loaded MCP tools. For `codex-cli`, Cowork uses a hybrid boundary: Codex app-server owns local shell execution, sandboxing, approvals, filesystem reads/writes/edits/search, and native web search/fetch. Cowork exposes only coordination tools such as subagents, ask/todos/memory/skills/usage/A2UI, plus Cowork-managed MCP tools as Codex app-server `dynamicTools`.
+For non-Codex providers, Cowork exposes the full built-in toolbelt plus loaded MCP tools. For `codex-cli`, Cowork uses a hybrid boundary: Codex app-server owns local shell execution, sandboxing, approvals, filesystem reads/writes/edits/search, and native web search/fetch. Cowork exposes only coordination tools such as subagents, ask/todos/memory/skills/A2UI, plus Cowork-managed MCP tools as Codex app-server `dynamicTools`.
 
 `webSearch` is backed by either Exa or Parallel depending on configured credentials (`EXA_API_KEY` / `PARALLEL_API_KEY`) and is not exposed to `codex-cli` turns in hybrid mode. Supporting modules like `exa.ts`, `parallel.ts`, and `api-keys.ts` are implementation helpers, not standalone tools.
 

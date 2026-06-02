@@ -82,6 +82,7 @@ const agentSpawnRequestSchema = z
     threadId: nonEmptyTrimmedStringSchema,
     message: nonEmptyTrimmedStringSchema,
     role: agentRoleSchema.optional(),
+    profileRef: optionalNonEmptyTrimmedStringSchema,
     model: optionalNonEmptyTrimmedStringSchema,
     reasoningEffort: agentReasoningEffortSchema.optional(),
     nickname: optionalNonEmptyTrimmedStringSchema,

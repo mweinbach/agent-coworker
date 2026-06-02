@@ -22,8 +22,9 @@ import type {
 } from "./runtime/types";
 import type { AgentShellPolicy } from "./server/agents/commandPolicy";
 import { getAgentRoleDefinition, getAgentRoleShellPolicy } from "./server/agents/roles";
-import { filterToolsForRole } from "./server/agents/toolPolicy";
+import { filterToolsForProfile, filterToolsForRole } from "./server/agents/toolPolicy";
 import type { SessionCostTracker, SessionUsageSnapshot } from "./session/costTracker";
+import type { AgentProfileSnapshot } from "./shared/agentProfiles";
 import type { AgentRole } from "./shared/agents";
 import type { ProviderContinuationState } from "./shared/providerContinuation";
 import type { AgentControl } from "./tools";
@@ -103,6 +104,7 @@ export interface RunTurnParams {
   /** Sub-agent nesting depth (0 for root session turn). */
   spawnDepth?: number;
   agentRole?: AgentRole;
+  agentProfile?: AgentProfileSnapshot;
   agentTargetPaths?: readonly string[] | null;
   shellPolicy?: AgentShellPolicy;
   yolo?: boolean;
@@ -391,6 +393,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       getTurnUserPrompt: () => extractTurnUserPrompt(latestTurnMessages),
       harnessContext: params.harnessContext,
       agentRole: params.agentRole,
+      agentProfile: params.agentProfile,
       agentTargetPaths: params.agentTargetPaths,
       shellPolicy: params.shellPolicy ?? getAgentRoleShellPolicy(params.agentRole),
       agentControl: params.agentControl,
@@ -427,9 +430,14 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
     }
 
     const mergedTools = mergeToolSets(builtInTools, mcpTools, log);
-    const tools = params.agentRole
-      ? filterToolsForRole(mergedTools, getAgentRoleDefinition(params.agentRole))
+    const roleFilteredTools = params.agentRole
+      ? filterToolsForRole(mergedTools, getAgentRoleDefinition(params.agentRole), {
+          allowProfileMcp: !!params.agentProfile,
+        })
       : mergedTools;
+    const tools = params.agentProfile
+      ? filterToolsForProfile(roleFilteredTools, params.agentProfile)
+      : roleFilteredTools;
     const mcpToolNames = Object.keys(tools)
       .filter((name) => name.startsWith("mcp__"))
       .sort();

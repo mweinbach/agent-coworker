@@ -12,6 +12,7 @@ import {
   type ServerErrorSource,
   type TodoItem,
 } from "../types";
+import { type AgentProfileSnapshot, agentProfileSnapshotSchema } from "./agentProfiles";
 import {
   type AgentExecutionState,
   type AgentMode,
@@ -134,6 +135,7 @@ export type SessionSnapshot = {
   nickname: string | null;
   taskType: AgentTaskType | null;
   targetPaths: string[] | null;
+  profile: AgentProfileSnapshot | null;
   requestedModel: string | null;
   effectiveModel: string | null;
   requestedReasoningEffort: AgentReasoningEffort | null;
@@ -281,6 +283,7 @@ export const sessionSnapshotSchema: z.ZodType<SessionSnapshot> = z
     nickname: z.string().nullable(),
     taskType: agentTaskTypeSchema.nullable(),
     targetPaths: agentTargetPathsSchema.nullable(),
+    profile: agentProfileSnapshotSchema.nullable().optional().default(null),
     requestedModel: z.string().nullable(),
     effectiveModel: z.string().nullable(),
     requestedReasoningEffort: agentReasoningEffortSchema.nullable(),

@@ -1,5 +1,10 @@
 import type { PresentationPreviewResult } from "../../../../src/server/presentationPreview";
 import type {
+  AgentProfileCopyInput,
+  AgentProfileScope,
+  AgentProfileUpsertInput,
+} from "../../../../src/shared/agentProfiles";
+import type {
   DesktopFeatureFlagId,
   DesktopFeatureFlagOverrides,
   DesktopFeatureFlags,
@@ -324,6 +329,10 @@ export type AppStoreState = {
   openSkills: () => Promise<void>;
   openResearch: () => Promise<void>;
   refreshSkillsCatalog: () => Promise<void>;
+  refreshAgentProfilesCatalog: (workspaceId?: string) => Promise<void>;
+  upsertAgentProfile: (profile: AgentProfileUpsertInput) => Promise<void>;
+  deleteAgentProfile: (scope: AgentProfileScope, id: string) => Promise<void>;
+  copyAgentProfile: (copy: AgentProfileCopyInput) => Promise<void>;
   refreshPluginsCatalog: () => Promise<void>;
   selectPlugin: (pluginId: string | null, scope?: "workspace" | "user" | null) => Promise<void>;
   setPluginManagementWorkspace: (workspaceId: string | null) => Promise<void>;

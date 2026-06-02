@@ -1,6 +1,7 @@
 import type { AgentShellPolicy } from "../server/agents/commandPolicy";
 import type { AgentWaitMode, AgentWaitResult } from "../server/agents/types";
 import type { SessionCostTracker, SessionUsageSnapshot } from "../session/costTracker";
+import type { AgentProfileSnapshot } from "../shared/agentProfiles";
 import type {
   AgentInspectResult,
   AgentReasoningEffort,
@@ -15,6 +16,7 @@ export interface AgentControl {
     opts: AgentSpawnContextOptions & {
       message: string;
       role?: AgentRole;
+      profileRef?: string;
       model?: string;
       reasoningEffort?: AgentReasoningEffort;
     },
@@ -67,6 +69,9 @@ export interface ToolContext {
 
   /** Optional role for child-agent tool filtering. */
   agentRole?: AgentRole;
+
+  /** Resolved child-agent profile snapshot, persisted at spawn time. */
+  agentProfile?: AgentProfileSnapshot;
 
   /** Optional filesystem scope for child agents spawned with targetPaths. */
   agentTargetPaths?: readonly string[] | null;

@@ -209,6 +209,7 @@ export type SessionDependencies = {
       parentConfig: AgentConfig;
       message: string;
       role?: AgentRole;
+      profileRef?: string;
       model?: string;
       reasoningEffort?: AgentReasoningEffort;
       parentDepth?: number;

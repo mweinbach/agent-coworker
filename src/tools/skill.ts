@@ -7,9 +7,10 @@ import { defineTool } from "./defineTool";
 
 export function createSkillTool(ctx: ToolContext) {
   const a2uiEnabled = resolveExperimentalA2uiConfig(ctx.config);
-  const skills = (ctx.availableSkills ?? []).filter(
-    (skill) => a2uiEnabled || skill.name !== "a2ui",
-  );
+  const allowedSkillNames = ctx.agentProfile ? new Set(ctx.agentProfile.skillNames) : null;
+  const skills = (ctx.availableSkills ?? [])
+    .filter((skill) => !allowedSkillNames || allowedSkillNames.has(skill.name))
+    .filter((skill) => a2uiEnabled || skill.name !== "a2ui");
   const searchOrder = [
     "project",
     "global (~/.cowork/skills)",
@@ -40,6 +41,10 @@ export function createSkillTool(ctx: ToolContext) {
     }),
     execute: async ({ skillName }: { skillName: string }) => {
       ctx.log(`tool> skill ${JSON.stringify({ skillName })}`);
+      if (allowedSkillNames && !allowedSkillNames.has(skillName)) {
+        ctx.log(`tool< skill ${JSON.stringify({ ok: false, reason: "profile_blocked" })}`);
+        return `Skill "${skillName}" is not available to this subagent profile.`;
+      }
       if (!a2uiEnabled && skillName === "a2ui") {
         ctx.log(`tool< skill ${JSON.stringify({ ok: false, reason: "feature_disabled" })}`);
         return `Skill "${skillName}" not found.`;

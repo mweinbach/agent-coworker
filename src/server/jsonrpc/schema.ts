@@ -5,6 +5,11 @@ import {
   jsonRpcAgentRequestSchemas,
   jsonRpcAgentResultSchemas,
 } from "./schema.agents";
+import {
+  jsonRpcAgentProfilesNotificationSchemas,
+  jsonRpcAgentProfilesRequestSchemas,
+  jsonRpcAgentProfilesResultSchemas,
+} from "./schema.agentProfiles";
 import { jsonRpcBackupsRequestSchemas, jsonRpcBackupsResultSchemas } from "./schema.backups";
 import {
   jsonRpcConnectorsRequestSchemas,
@@ -45,6 +50,7 @@ export const jsonRpcRequestSchemas = {
   ...jsonRpcThreadTurnRequestSchemas,
   ...jsonRpcSessionRequestSchemas,
   ...jsonRpcAgentRequestSchemas,
+  ...jsonRpcAgentProfilesRequestSchemas,
   ...jsonRpcConnectorsRequestSchemas,
   ...jsonRpcProviderRequestSchemas,
   ...jsonRpcRuntimeRequestSchemas,
@@ -62,6 +68,7 @@ export const jsonRpcNotificationSchemas = {
   ...jsonRpcThreadTurnNotificationSchemas,
   ...jsonRpcSessionNotificationSchemas,
   ...jsonRpcAgentNotificationSchemas,
+  ...jsonRpcAgentProfilesNotificationSchemas,
   ...jsonRpcResearchNotificationSchemas,
   ...jsonRpcMiscNotificationSchemas,
 } as const;
@@ -75,6 +82,7 @@ export const jsonRpcResultSchemas = {
   ...jsonRpcThreadTurnResultSchemas,
   ...jsonRpcSessionResultSchemas,
   ...jsonRpcAgentResultSchemas,
+  ...jsonRpcAgentProfilesResultSchemas,
   ...jsonRpcConnectorsResultSchemas,
   ...jsonRpcProviderResultSchemas,
   ...jsonRpcRuntimeResultSchemas,

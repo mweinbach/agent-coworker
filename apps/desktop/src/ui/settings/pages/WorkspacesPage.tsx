@@ -913,6 +913,7 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
 
   const perWorkspaceSettings = useAppStore((s) => s.perWorkspaceSettings);
   const setPerWorkspaceSettings = useAppStore((s) => s.setPerWorkspaceSettings);
+  const setSettingsPage = useAppStore((s) => s.setSettingsPage);
 
   const addWorkspace = useAppStore((s) => s.addWorkspace);
   const removeWorkspace = useAppStore((s) => s.removeWorkspace);
@@ -1575,6 +1576,16 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
                         <div className="text-xs text-muted-foreground">
                           Lets Cowork subagents use models from different providers you've set up.
                           Codex can call these subagents through hybrid dynamic tools.
+                        </div>
+                        <div>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 px-2 text-xs"
+                            onClick={() => setSettingsPage("subagents")}
+                          >
+                            Manage profiles
+                          </Button>
                         </div>
                       </div>
 

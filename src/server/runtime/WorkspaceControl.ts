@@ -12,7 +12,14 @@ import type { SocketSendQueue } from "./SocketSendQueue";
 
 type WorkspaceControlRefreshEvent = Extract<
   SessionEvent,
-  { type: "skills_list" | "skills_catalog" | "plugins_catalog" | "mcp_servers" }
+  {
+    type:
+      | "skills_list"
+      | "skills_catalog"
+      | "plugins_catalog"
+      | "mcp_servers"
+      | "agent_profiles_catalog";
+  }
 >;
 
 export class WorkspaceControl {
@@ -283,6 +290,11 @@ export class WorkspaceControl {
           async () => await runtime.mcp.emitServers(),
           (event): event is Extract<SessionEvent, { type: "mcp_servers" }> =>
             event.type === "mcp_servers",
+        ),
+        await captureRefreshEvent(
+          async () => await runtime.agentProfiles.getCatalog(),
+          (event): event is Extract<SessionEvent, { type: "agent_profiles_catalog" }> =>
+            event.type === "agent_profiles_catalog",
         ),
       ];
       return events.filter((event): event is WorkspaceControlRefreshEvent => event !== null);

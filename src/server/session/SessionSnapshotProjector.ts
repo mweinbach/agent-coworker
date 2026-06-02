@@ -131,6 +131,7 @@ export function createLegacySessionSnapshot(record: PersistedSessionRecord): Ses
     nickname: record.nickname ?? null,
     taskType: record.taskType ?? null,
     targetPaths: record.targetPaths ?? null,
+    profile: record.profile ?? null,
     requestedModel: record.requestedModel ?? null,
     effectiveModel: record.effectiveModel ?? null,
     requestedReasoningEffort: record.requestedReasoningEffort ?? null,
@@ -201,6 +202,7 @@ export class SessionSnapshotProjector {
         nickname: evt.nickname ?? this.snapshot.nickname,
         taskType: evt.taskType ?? this.snapshot.taskType,
         targetPaths: evt.targetPaths ?? this.snapshot.targetPaths,
+        profile: evt.profile ?? this.snapshot.profile,
         requestedModel: evt.requestedModel ?? this.snapshot.requestedModel,
         effectiveModel: evt.effectiveModel ?? this.snapshot.effectiveModel,
         requestedReasoningEffort:
@@ -230,6 +232,7 @@ export class SessionSnapshotProjector {
         nickname: evt.nickname ?? this.snapshot.nickname,
         taskType: evt.taskType ?? this.snapshot.taskType,
         targetPaths: evt.targetPaths ?? this.snapshot.targetPaths,
+        profile: evt.profile ?? this.snapshot.profile,
         requestedModel: evt.requestedModel ?? this.snapshot.requestedModel,
         effectiveModel: evt.effectiveModel ?? this.snapshot.effectiveModel,
         requestedReasoningEffort:

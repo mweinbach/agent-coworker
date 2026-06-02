@@ -283,6 +283,7 @@ export type ViewId = "chat" | "skills" | "research" | "settings";
 type PluginViewMode = "plugins" | "skills";
 export type SettingsPageId =
   | "models"
+  | "subagents"
   | "toolAccess"
   | "defaults"
   | "profileMemory"
@@ -437,6 +438,7 @@ export function createDefaultA2uiDock(): A2uiThreadDock {
 
 type SessionConfigSubset = Extract<SessionEvent, { type: "session_config" }>["config"];
 type MCPServersEvent = Extract<SessionEvent, { type: "mcp_servers" }>;
+type AgentProfilesCatalogEvent = Extract<SessionEvent, { type: "agent_profiles_catalog" }>;
 type MCPServerValidationEvent = Extract<SessionEvent, { type: "mcp_server_validation" }>;
 type MCPServerAuthChallengeEvent = Extract<SessionEvent, { type: "mcp_server_auth_challenge" }>;
 type MCPServerAuthResultEvent = Extract<SessionEvent, { type: "mcp_server_auth_result" }>;
@@ -498,6 +500,9 @@ export type WorkspaceRuntime = {
   mcpValidationByName: Record<string, MCPServerValidationEvent>;
   mcpLastAuthChallenge: MCPServerAuthChallengeEvent | null;
   mcpLastAuthResult: MCPServerAuthResultEvent | null;
+  agentProfilesCatalog: AgentProfilesCatalogEvent["catalog"] | null;
+  agentProfilesLoading: boolean;
+  agentProfilesError: string | null;
   openAiNativeConnectors: OpenAiNativeConnector[];
   openAiNativeConnectorsLoading: boolean;
   openAiNativeConnectorsError: string | null;

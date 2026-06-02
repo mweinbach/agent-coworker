@@ -1,4 +1,5 @@
 import type { MemoryScope } from "../../memoryStore";
+import type { AgentProfileCopyInput, AgentProfileUpsertInput } from "../../shared/agentProfiles";
 import type {
   AgentContextMode,
   AgentInspectResult,
@@ -428,6 +429,26 @@ export class SessionSkillService {
   }
 }
 
+export class SessionAgentProfileService {
+  constructor(private readonly session: AgentSession) {}
+
+  async getCatalog(): Promise<void> {
+    await this.session.getAgentProfilesCatalog();
+  }
+
+  async upsert(input: AgentProfileUpsertInput): Promise<void> {
+    await this.session.upsertAgentProfile(input);
+  }
+
+  async delete(scope: "global" | "workspace", id: string): Promise<void> {
+    await this.session.deleteAgentProfile(scope, id);
+  }
+
+  async copy(input: AgentProfileCopyInput): Promise<void> {
+    await this.session.copyAgentProfile(input);
+  }
+}
+
 export class SessionPluginService {
   constructor(private readonly session: AgentSession) {}
 
@@ -498,6 +519,7 @@ export class SessionAgentService {
     opts: AgentSpawnContextOptions & {
       message: string;
       role?: AgentRole;
+      profileRef?: string;
       model?: string;
       reasoningEffort?: AgentReasoningEffort;
     },
@@ -670,6 +692,7 @@ export class SessionRuntime {
   readonly mcp: SessionMcpService;
   readonly memory: SessionMemoryService;
   readonly skills: SessionSkillService;
+  readonly agentProfiles: SessionAgentProfileService;
   readonly plugins: SessionPluginService;
   readonly import: SessionImportService;
   readonly agents: SessionAgentService;
@@ -688,6 +711,7 @@ export class SessionRuntime {
     this.mcp = new SessionMcpService(session);
     this.memory = new SessionMemoryService(session);
     this.skills = new SessionSkillService(session);
+    this.agentProfiles = new SessionAgentProfileService(session);
     this.plugins = new SessionPluginService(session);
     this.import = new SessionImportService(session);
     this.agents = new SessionAgentService(session);

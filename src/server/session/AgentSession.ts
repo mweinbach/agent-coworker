@@ -15,6 +15,7 @@ import {
   type TurnUsage,
 } from "../../session/costTracker";
 import { HarnessContextStore } from "../../sessionContext/HarnessContextStore";
+import type { AgentProfileCopyInput, AgentProfileUpsertInput } from "../../shared/agentProfiles";
 import type {
   AgentContextMode,
   AgentInspectResult,
@@ -33,6 +34,12 @@ import type {
   ServerErrorSource,
 } from "../../types";
 import { resolveAuthHomeDir } from "../../utils/authHome";
+import {
+  copyAgentProfile,
+  deleteAgentProfile,
+  readAgentProfilesCatalog,
+  upsertAgentProfile,
+} from "../agents/profiles";
 import type { AgentWaitMode } from "../agents/types";
 import type { SessionConfigPatch, SessionEvent } from "../protocol";
 import {
@@ -249,6 +256,7 @@ export class AgentSession {
         ...(opts.sessionInfoPatch?.targetPaths !== undefined
           ? { targetPaths: opts.sessionInfoPatch.targetPaths }
           : {}),
+        ...(opts.sessionInfoPatch?.profile ? { profile: opts.sessionInfoPatch.profile } : {}),
         ...(opts.sessionInfoPatch?.requestedModel
           ? { requestedModel: opts.sessionInfoPatch.requestedModel }
           : {}),
@@ -759,6 +767,33 @@ export class AgentSession {
 
   async getSkillsCatalog() {
     await this.getSkillManager().getSkillsCatalog();
+  }
+
+  async getAgentProfilesCatalog() {
+    const catalog = await readAgentProfilesCatalog(this.state.config);
+    this.context.emit({
+      type: "agent_profiles_catalog",
+      sessionId: this.id,
+      catalog,
+    });
+  }
+
+  async upsertAgentProfile(input: AgentProfileUpsertInput) {
+    const catalog = await upsertAgentProfile(this.state.config, input);
+    this.context.emit({ type: "agent_profiles_catalog", sessionId: this.id, catalog });
+    await this.refreshSystemPromptWithSkills("agent_profiles.upsert");
+  }
+
+  async deleteAgentProfile(scope: "global" | "workspace", id: string) {
+    const catalog = await deleteAgentProfile(this.state.config, scope, id);
+    this.context.emit({ type: "agent_profiles_catalog", sessionId: this.id, catalog });
+    await this.refreshSystemPromptWithSkills("agent_profiles.delete");
+  }
+
+  async copyAgentProfile(input: AgentProfileCopyInput) {
+    const catalog = await copyAgentProfile(this.state.config, input);
+    this.context.emit({ type: "agent_profiles_catalog", sessionId: this.id, catalog });
+    await this.refreshSystemPromptWithSkills("agent_profiles.copy");
   }
 
   async getPluginsCatalog() {
@@ -1291,6 +1326,7 @@ export class AgentSession {
     opts: AgentSpawnContextOptions & {
       message: string;
       role?: AgentRole;
+      profileRef?: string;
       model?: string;
       reasoningEffort?: AgentReasoningEffort;
     },

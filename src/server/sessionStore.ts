@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { AiCoworkerPaths } from "../connect";
 import type { SessionUsageSnapshot } from "../session/costTracker";
 import { sessionUsageSnapshotSchema } from "../session/sessionUsageSchema";
+import { type AgentProfileSnapshot, agentProfileSnapshotSchema } from "../shared/agentProfiles";
 import {
   type AgentExecutionState,
   type AgentMode,
@@ -250,7 +251,9 @@ type PersistedSessionSnapshotV7 = {
   sessionId: string;
   createdAt: string;
   updatedAt: string;
-  session: PersistedSessionSnapshotV6["session"];
+  session: PersistedSessionSnapshotV6["session"] & {
+    profile?: AgentProfileSnapshot | null;
+  };
   config: PersistedSessionSnapshotV6["config"] & {
     providerOptions?: AgentConfig["providerOptions"];
   };
@@ -581,7 +584,11 @@ const persistedSessionSnapshotV7Schema = z
     sessionId: z.string().trim().min(1),
     createdAt: isoTimestampSchema,
     updatedAt: isoTimestampSchema,
-    session: persistedSessionSnapshotV6Schema.shape.session,
+    session: persistedSessionSnapshotV6Schema.shape.session
+      .extend({
+        profile: agentProfileSnapshotSchema.nullable().optional(),
+      })
+      .strict(),
     config: persistedSessionSnapshotV6Schema.shape.config
       .extend({
         providerOptions: z.record(z.string(), z.unknown()).optional(),
@@ -668,6 +675,7 @@ export function parsePersistedSessionSnapshot(raw: unknown): PersistedSessionSna
         nickname: snapshot.session.nickname,
         taskType: snapshot.session.taskType ?? null,
         targetPaths: snapshot.session.targetPaths ?? null,
+        profile: snapshot.session.profile ?? null,
         requestedModel: snapshot.session.requestedModel,
         effectiveModel: snapshot.session.effectiveModel,
         requestedReasoningEffort: snapshot.session.requestedReasoningEffort,

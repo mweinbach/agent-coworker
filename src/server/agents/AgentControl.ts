@@ -11,6 +11,7 @@ import type { AgentSession } from "../session/AgentSession";
 import type { SessionBinding } from "../startServer/types";
 
 import { routeAgentConfig } from "./modelRouter";
+import { resolveAgentProfileSnapshot } from "./profiles";
 import { inspectChildAgentReport } from "./reportParser";
 import { getAgentRoleDefinition } from "./roles";
 import { StatusBus } from "./StatusBus";
@@ -143,6 +144,7 @@ export class AgentControl {
       ...(info.nickname ? { nickname: info.nickname } : {}),
       ...(info.taskType ? { taskType: info.taskType } : {}),
       ...(info.targetPaths !== undefined ? { targetPaths: info.targetPaths } : {}),
+      ...(info.profile ? { profile: info.profile } : {}),
       ...(info.requestedModel ? { requestedModel: info.requestedModel } : {}),
       effectiveModel: info.effectiveModel ?? session.getPublicConfig().model,
       ...(info.requestedReasoningEffort
@@ -243,10 +245,16 @@ export class AgentControl {
   }
 
   async spawn(opts: AgentSpawnOptions): Promise<PersistentAgentSummary> {
-    const role = opts.role ?? "default";
+    const profile = opts.profileRef
+      ? await resolveAgentProfileSnapshot(opts.parentConfig, opts.profileRef)
+      : undefined;
+    const role = profile?.baseRole ?? opts.role ?? "default";
     const roleDefinition = getAgentRoleDefinition(role);
     const depth = (opts.parentDepth ?? 0) + 1;
-    const resolvedContext = resolveAgentSpawnContextOptions(opts);
+    const resolvedContext = resolveAgentSpawnContextOptions({
+      ...opts,
+      contextMode: opts.contextMode ?? profile?.defaultContextMode,
+    });
     const parentSession = shouldReadParentSeedContext(resolvedContext)
       ? this.deps.sessionBindings.get(opts.parentSessionId)?.session
       : null;
@@ -258,8 +266,10 @@ export class AgentControl {
       : null;
     const routed = routeAgentConfig(opts.parentConfig, {
       role: roleDefinition,
-      ...(opts.model ? { model: opts.model } : {}),
-      ...(opts.reasoningEffort ? { reasoningEffort: opts.reasoningEffort } : {}),
+      ...(opts.model || profile?.model ? { model: opts.model ?? profile?.model } : {}),
+      ...(opts.reasoningEffort || profile?.reasoningEffort
+        ? { reasoningEffort: opts.reasoningEffort ?? profile?.reasoningEffort }
+        : {}),
       connectedProviders: await this.deps.getConnectedProviders(opts.parentConfig),
     });
     if (routed.fallbackLine) {
@@ -267,9 +277,11 @@ export class AgentControl {
     }
     const nickname = normalizeNickname(opts.nickname);
     const taskType =
-      opts.taskType === undefined ? undefined : agentTaskTypeSchema.parse(opts.taskType);
+      opts.taskType === undefined && profile?.defaultTaskType === undefined
+        ? undefined
+        : agentTaskTypeSchema.parse(opts.taskType ?? profile?.defaultTaskType);
     const targetPaths = normalizeAgentTargetPaths(opts.targetPaths);
-    const childSystem = await this.deps.loadAgentPrompt(routed.config, role);
+    const childSystem = await this.deps.loadAgentPrompt(routed.config, role, profile);
     const binding: SessionBinding = {
       session: null,
       runtime: null,
@@ -289,6 +301,7 @@ export class AgentControl {
         ...(nickname ? { nickname } : {}),
         ...(taskType ? { taskType } : {}),
         ...(targetPaths !== undefined ? { targetPaths } : {}),
+        ...(profile ? { profile } : {}),
         requestedModel: routed.requestedModel ?? null,
         effectiveModel: routed.effectiveModel,
         requestedReasoningEffort: routed.requestedReasoningEffort ?? null,

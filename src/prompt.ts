@@ -8,6 +8,10 @@ import { getResolvedModelMetadataSync, resolveModelMetadata } from "./models/met
 import type { ResolvedModelMetadata } from "./models/metadataTypes";
 import { loadProjectInstructionsSection } from "./projectInstructions";
 import { isUserFacingProviderEnabled } from "./providers/catalog";
+import {
+  formatAgentProfilePromptSummaries,
+  readAgentProfilesCatalog,
+} from "./server/agents/profiles";
 import type { AgentRoleDefinition } from "./server/agents/roles";
 import {
   AGENT_ROLE_DEFINITIONS,
@@ -18,6 +22,7 @@ import {
   SPAWN_AGENT_PROMPT_OVERVIEW,
   SPAWN_AGENT_WHEN_TO_USE,
 } from "./server/agents/roles";
+import type { AgentProfileSnapshot } from "./shared/agentProfiles";
 import type { AgentRole } from "./shared/agents";
 import {
   getGoogleNativeWebSearchFromProviderOptions,
@@ -275,7 +280,10 @@ const SPAWN_AGENT_TOOL_SECTION_PLACEHOLDER = "{{spawnAgentToolSection}}";
 const SPAWN_AGENT_XML_SECTION_PLACEHOLDER = "{{spawnAgentXmlSection}}";
 const SPAWN_AGENT_PROMPT_BODY_PLACEHOLDER = "{{spawnAgentPromptBody}}";
 
-export function buildSpawnAgentPromptBody(config: AgentConfig): string {
+export function buildSpawnAgentPromptBody(
+  config: AgentConfig,
+  profileLines: readonly string[] = [],
+): string {
   const providerLabel = PROVIDER_DISPLAY_NAMES[config.provider] ?? config.provider;
   const currentModel = getResolvedModelMetadataSync(config.provider, config.model, "model");
   const roleLines = buildSpawnAgentRolePromptLines().join("\n");
@@ -337,6 +345,14 @@ export function buildSpawnAgentPromptBody(config: AgentConfig): string {
     "",
     "Available child-agent roles:",
     roleLines,
+    ...(profileLines.length > 0
+      ? [
+          "",
+          "Available specialized subagent profiles:",
+          "Use `profileRef` with either the scoped ref or the bare id. If both `profileRef` and `role` are present, `profileRef` wins.",
+          ...profileLines,
+        ]
+      : []),
     "",
     config.childModelRoutingMode === "cross-provider-allowlist" && crossProviderRefs.length > 0
       ? "Available allowed child target refs for this workspace:"
@@ -348,13 +364,16 @@ export function buildSpawnAgentPromptBody(config: AgentConfig): string {
   ].join("\n");
 }
 
-function buildSpawnAgentPromptSections(config: AgentConfig): {
+function buildSpawnAgentPromptSections(
+  config: AgentConfig,
+  profileLines: readonly string[] = [],
+): {
   body: string;
   markdownSection: string;
   toolSection: string;
   xmlSection: string;
 } {
-  const body = buildSpawnAgentPromptBody(config);
+  const body = buildSpawnAgentPromptBody(config, profileLines);
   return {
     body,
     markdownSection: `### spawnAgent\n${body}`,
@@ -363,8 +382,15 @@ function buildSpawnAgentPromptSections(config: AgentConfig): {
   };
 }
 
-function renderSpawnAgentSpecificPrompt(prompt: string, config: AgentConfig): string {
-  const { body, markdownSection, toolSection, xmlSection } = buildSpawnAgentPromptSections(config);
+function renderSpawnAgentSpecificPrompt(
+  prompt: string,
+  config: AgentConfig,
+  profileLines: readonly string[] = [],
+): string {
+  const { body, markdownSection, toolSection, xmlSection } = buildSpawnAgentPromptSections(
+    config,
+    profileLines,
+  );
 
   if (prompt.includes(SPAWN_AGENT_MARKDOWN_SECTION_PLACEHOLDER)) {
     return prompt.replaceAll(SPAWN_AGENT_MARKDOWN_SECTION_PLACEHOLDER, markdownSection);
@@ -436,6 +462,14 @@ function buildAvailableSubagentTypesList(): string {
   return Object.values(AGENT_ROLE_DEFINITIONS)
     .map((role) => `- \`${role.id}\`: ${role.description}`)
     .join("\n");
+}
+
+async function readAgentProfilePromptLines(config: AgentConfig): Promise<string[]> {
+  try {
+    return formatAgentProfilePromptSummaries(await readAgentProfilesCatalog(config));
+  } catch {
+    return [];
+  }
 }
 
 function selectRoleByCapabilities(
@@ -567,6 +601,7 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
   let prompt = await loadPromptTemplate(systemPath);
 
   const discoveredSkills = await discoverSkillsForConfig(config);
+  const agentProfilePromptLines = await readAgentProfilePromptLines(config);
   const a2uiEnabled = isA2uiEnabled(config);
   const skills = a2uiEnabled
     ? discoveredSkills
@@ -624,7 +659,7 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
   prompt = renderLocalWebToolProviderPrompt(prompt, config);
   prompt = renderCodexNativeWebSearchPrompt(prompt, config);
   prompt = renderGoogleNativeToolsPrompt(prompt, config);
-  prompt = renderSpawnAgentSpecificPrompt(prompt, config);
+  prompt = renderSpawnAgentSpecificPrompt(prompt, config, agentProfilePromptLines);
   prompt = normalizeLegacySpawnAgentGuidance(prompt);
 
   // User profile instructions render via {{userProfileInstructions}} in system templates; do not duplicate.
@@ -695,7 +730,11 @@ export async function loadSubAgentPrompt(
   return await loadAgentPrompt(config, mappedRole);
 }
 
-export async function loadAgentPrompt(config: AgentConfig, role: AgentRole): Promise<string> {
+export async function loadAgentPrompt(
+  config: AgentConfig,
+  role: AgentRole,
+  profile?: AgentProfileSnapshot,
+): Promise<string> {
   const basePath = path.join(config.builtInDir, "prompts", "sub-agents", "base.md");
   const rolePath = path.join(
     config.builtInDir,
@@ -707,6 +746,37 @@ export async function loadAgentPrompt(config: AgentConfig, role: AgentRole): Pro
     fs.readFile(basePath, "utf-8"),
     fs.readFile(rolePath, "utf-8"),
   ]);
-  const combined = `${basePrompt.trimEnd()}\n\n${rolePrompt.trim()}\n`;
+  const combined = [
+    basePrompt.trimEnd(),
+    rolePrompt.trim(),
+    ...(profile ? [buildAgentProfilePromptSection(profile)] : []),
+  ].join("\n\n");
   return await appendWorkspaceContextBlocks(combined, config, { includeProjectInstructions: true });
+}
+
+function buildAgentProfilePromptSection(profile: AgentProfileSnapshot): string {
+  const lines = [
+    "## Specialized Subagent Profile",
+    "",
+    `Profile: ${profile.displayName} (\`${profile.ref}\`)`,
+    profile.description ? `Description: ${profile.description}` : "",
+    "",
+    "Profile policy:",
+    `- Base role safety baseline: \`${profile.baseRole}\`.`,
+    `- Built-in tools allowed by this profile: ${formatInlineList(profile.allowedBuiltInTools)}.`,
+    `- MCP servers allowed by this profile: ${formatInlineList(profile.allowedMcpServers)}.`,
+    `- Skills allowed by this profile: ${formatInlineList(profile.skillNames)}.`,
+    "- Do not attempt to load skills, built-in tools, or MCP servers outside this profile policy.",
+  ].filter(Boolean);
+
+  const prompt = profile.prompt.trim();
+  if (prompt) {
+    lines.push("", "Profile-specific instructions:", prompt);
+  }
+  return lines.join("\n");
+}
+
+function formatInlineList(values: readonly string[]): string {
+  if (values.length === 0) return "none";
+  return values.map((value) => `\`${value}\``).join(", ");
 }

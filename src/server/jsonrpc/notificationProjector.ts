@@ -142,6 +142,9 @@ export function createJsonRpcNotificationProjector(
         case "agent_wait_result":
           sendNotification("cowork/session/agentWaitResult", event);
           return;
+        case "agent_profiles_catalog":
+          sendNotification("cowork/agentProfiles/catalog", event);
+          return;
         default:
           projection.handle(event);
           return;

@@ -8,7 +8,7 @@ Cowork supports one live WebSocket protocol on `/ws`: JSON-RPC-lite. The canonic
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
-- Current protocol version: `7.34`
+- Current protocol version: `7.35`
 - WebSocket protocol mode: `jsonrpc`
 
 Loopback listeners (`127.0.0.1`, `localhost`, or `::1`) allow local non-browser clients to
@@ -218,6 +218,17 @@ Currently implemented `cowork/*` methods include:
   - `cowork/session/file/upload`
   - `cowork/session/delete`
   - `cowork/session/agent/inspect`
+  - `cowork/session/agent/spawn`
+  - `cowork/session/agent/list`
+  - `cowork/session/agent/input/send`
+  - `cowork/session/agent/wait`
+  - `cowork/session/agent/resume`
+  - `cowork/session/agent/close`
+- agent profile controls
+  - `cowork/agentProfiles/catalog/read`
+  - `cowork/agentProfiles/upsert`
+  - `cowork/agentProfiles/delete`
+  - `cowork/agentProfiles/copy`
 - provider controls
   - `cowork/provider/catalog/read`
   - `cowork/provider/authMethods/read`
@@ -309,6 +320,17 @@ The import controls let a client browse and copy plugins/skills that already exi
 - `cowork/import/plugin` — params `{ cwd?, source, sourcePath, conversionRequired, targetScope: "workspace" | "user" }`. Copies the plugin into the target scope (Claude bundles are converted first), reusing the standard install pipeline. Emits the same events as `cowork/plugins/install` (`plugins_catalog`, `plugin_detail`, `skills_catalog`, …).
 - `cowork/import/skill` — params `{ cwd?, source, sourcePath, targetScope: "workspace" | "user" }`. Copies a standalone `SKILL.md` bundle into the target scope (mapped to `global`/`project`) and emits `skills_catalog`.
 - opt-in workspace backups
+
+Agent profile controls let clients manage user-created subagent profiles without expanding the built-in child-agent role enum:
+
+- `cowork/agentProfiles/catalog/read` — params `{ cwd? }`. Returns `{ event }` where `event.type` is `agent_profiles_catalog`. The catalog includes `profiles`, `diagnostics`, `globalDir`, and `workspaceDir`.
+- `cowork/agentProfiles/upsert` — params `{ cwd?, profile }`, where `profile` includes `id`, `scope: "global" | "workspace"`, `displayName`, optional `description`, `enabled`, `baseRole: "default" | "explorer" | "research" | "worker" | "reviewer"`, optional `prompt`, `allowedBuiltInTools`, `allowedMcpServers`, `skillNames`, `model`, `reasoningEffort`, `defaultTaskType`, and `defaultContextMode`. The result returns the updated `agent_profiles_catalog` event.
+- `cowork/agentProfiles/delete` — params `{ cwd?, scope, id }`. Deletes the profile file in the requested scope and returns the updated catalog. Deleting a workspace profile may reveal a shadowed global profile with the same id.
+- `cowork/agentProfiles/copy` — params `{ cwd?, copy: { sourceRef, targetScope, targetId?, targetDisplayName? } }`. `sourceRef` accepts either a bare profile id or a scoped ref. The result returns the updated catalog.
+
+Profile ids resolve with workspace-over-global precedence. Bare refs such as `"qa-reviewer"` resolve the effective profile for the active workspace. Scoped refs use `"workspace:qa-reviewer"` or `"global:qa-reviewer"`.
+
+`cowork/session/agent/spawn` and the model-facing `spawnAgent` tool accept `profileRef?: string`. When both `role` and `profileRef` are present, `profileRef` wins. The resolved profile supplies the child agent's base role, prompt appendix, optional model/reasoning defaults, built-in tool allowlist, MCP server grants, and skill allowlist. The server stores a resolved profile snapshot on the child session so resumed child agents keep the exact prompt/tool/skill policy they were spawned with even if the source profile changes later.
 
 `thread/list` and workspace-scoped `cowork/*` control methods now default omitted `cwd` to the sidecar/server working directory. Mobile and other remote clients no longer need to know a host filesystem path just to list threads or read workspace control state.
 
@@ -562,6 +584,12 @@ The remainder of this document describes the JSON-RPC method and notification pa
 - [Session event payload shapes](#session-event-payload-shapes)
 
 ## Protocol v7 Notes
+
+Changes in `7.35`:
+
+- Added user-created subagent profile controls: `cowork/agentProfiles/catalog/read`, `cowork/agentProfiles/upsert`, `cowork/agentProfiles/delete`, and `cowork/agentProfiles/copy`. Catalog snapshots use the `agent_profiles_catalog` event payload.
+- `cowork/session/agent/spawn` and the `spawnAgent` tool now accept `profileRef`. Bare refs resolve by workspace-over-global precedence; scoped refs use `workspace:<id>` or `global:<id>`. `profileRef` wins over `role` when both are present.
+- Child agent session metadata now persists a resolved profile snapshot so resumed child agents keep the prompt, tool, MCP, skill, model, and reasoning policy that existed at spawn time.
 
 Changes in `7.34`:
 

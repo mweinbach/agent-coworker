@@ -150,6 +150,56 @@ describe("skill tool", () => {
     expect(res).toBe("First dir");
   });
 
+  test("profile skill allowlist filters descriptions and blocks hidden skill loads", async () => {
+    const dir = await tmpDir();
+    const skillsDir = path.join(dir, "skills");
+    await fs.mkdir(path.join(skillsDir, "documents"), { recursive: true });
+    await fs.mkdir(path.join(skillsDir, "presentations"), { recursive: true });
+    await fs.writeFile(
+      path.join(skillsDir, "documents", "SKILL.md"),
+      skillDoc("documents", "Document helper.", "Document guidance."),
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(skillsDir, "presentations", "SKILL.md"),
+      skillDoc("presentations", "Deck helper.", "Presentation guidance."),
+      "utf-8",
+    );
+
+    const config = makeConfig(dir, { skillsDirs: [skillsDir] });
+    const logs: string[] = [];
+    const ctx = makeCtx(dir, {
+      config,
+      log: (line) => logs.push(line),
+      availableSkills: [
+        { name: "documents", description: "Document helper." },
+        { name: "presentations", description: "Deck helper." },
+      ],
+      agentProfile: {
+        id: "docs-only",
+        ref: "workspace:docs-only",
+        scope: "workspace",
+        displayName: "Docs Only",
+        description: "",
+        baseRole: "worker",
+        prompt: "",
+        allowedBuiltInTools: ["skill"],
+        allowedMcpServers: [],
+        skillNames: ["documents"],
+        resolvedAt: "2026-06-02T12:00:00.000Z",
+      },
+    });
+
+    const t: any = createSkillTool(ctx);
+    expect(t.description).toContain('"documents"');
+    expect(t.description).not.toContain('"presentations"');
+    await expect(t.execute({ skillName: "documents" })).resolves.toContain("Document guidance.");
+    await expect(t.execute({ skillName: "presentations" })).resolves.toContain(
+      'Skill "presentations" is not available to this subagent profile.',
+    );
+    expect(logs).toContain('tool< skill {"ok":false,"reason":"profile_blocked"}');
+  });
+
   test("hides the a2ui skill when the workspace A2UI feature flag is disabled", async () => {
     const dir = await tmpDir();
     const skillDir = path.join(dir, "skills", "a2ui");

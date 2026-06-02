@@ -3,6 +3,7 @@ import path from "node:path";
 
 import type { AiCoworkerPaths } from "../connect";
 import type { SessionUsageSnapshot } from "../session/costTracker";
+import type { AgentProfileSnapshot } from "../shared/agentProfiles";
 import type {
   AgentExecutionState,
   AgentMode,
@@ -46,6 +47,7 @@ export type PersistedSessionRecord = {
   nickname?: string | null;
   taskType?: AgentTaskType | null;
   targetPaths?: string[] | null;
+  profile?: AgentProfileSnapshot | null;
   requestedModel?: string | null;
   effectiveModel?: string | null;
   requestedReasoningEffort?: AgentReasoningEffort | null;
@@ -93,6 +95,7 @@ export type PersistedSessionMutation = {
     nickname?: string | null;
     taskType?: AgentTaskType | null;
     targetPaths?: string[] | null;
+    profile?: AgentProfileSnapshot | null;
     requestedModel?: string | null;
     effectiveModel?: string | null;
     requestedReasoningEffort?: AgentReasoningEffort | null;

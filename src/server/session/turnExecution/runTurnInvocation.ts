@@ -79,6 +79,7 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
               spawn: async ({
                 message,
                 role,
+                profileRef,
                 model,
                 reasoningEffort,
                 nickname,
@@ -99,6 +100,7 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
                   parentConfig: context.state.config,
                   message,
                   ...(role ? { role } : {}),
+                  ...(profileRef ? { profileRef } : {}),
                   ...(nickname ? { nickname } : {}),
                   ...(taskType ? { taskType } : {}),
                   ...(targetPaths !== undefined ? { targetPaths } : {}),
@@ -181,6 +183,7 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
       spawnDepth:
         typeof context.state.sessionInfo.depth === "number" ? context.state.sessionInfo.depth : 0,
       agentRole: context.state.sessionInfo.role,
+      agentProfile: context.state.sessionInfo.profile,
       agentTargetPaths:
         context.state.sessionInfo.sessionKind === "agent"
           ? (context.state.sessionInfo.targetPaths ?? null)

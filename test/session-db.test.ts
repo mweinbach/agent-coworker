@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { SessionDb } from "../src/server/sessionDb";
+import type { AgentProfileSnapshot } from "../src/shared/agentProfiles";
 import type { SessionSnapshot } from "../src/shared/sessionSnapshot";
 
 async function makeTmpCoworkHome(prefix = "session-db-test-"): Promise<{
@@ -34,6 +35,7 @@ function makeSnapshot(overrides: Partial<SessionSnapshot> = {}): SessionSnapshot
     nickname: null,
     taskType: null,
     targetPaths: null,
+    profile: null,
     requestedModel: null,
     effectiveModel: null,
     requestedReasoningEffort: null,
@@ -60,6 +62,26 @@ function makeSnapshot(overrides: Partial<SessionSnapshot> = {}): SessionSnapshot
     hasPendingAsk: false,
     hasPendingApproval: false,
     ...overrides,
+  };
+}
+
+function makeAgentProfileSnapshot(): AgentProfileSnapshot {
+  return {
+    id: "qa-reviewer",
+    ref: "workspace:qa-reviewer",
+    scope: "workspace",
+    displayName: "QA Reviewer",
+    description: "Checks completed work.",
+    baseRole: "reviewer",
+    prompt: "Report concrete defects only.",
+    allowedBuiltInTools: ["read", "grep"],
+    allowedMcpServers: ["github"],
+    skillNames: ["code-review"],
+    model: "gpt-5-mini",
+    reasoningEffort: "high",
+    defaultTaskType: "verify",
+    defaultContextMode: "brief",
+    resolvedAt: "2026-06-02T12:00:00.000Z",
   };
 }
 
@@ -306,6 +328,7 @@ describe("sessionDb", () => {
           nickname: "verify-auth",
           taskType: "verify",
           targetPaths: ["src/auth", "test/auth"],
+          profile: makeAgentProfileSnapshot(),
           title: "Child Session",
           titleSource: "default",
           titleModel: null,
@@ -1019,6 +1042,7 @@ describe("sessionDb", () => {
           nickname: "verify-auth",
           taskType: "verify",
           targetPaths: ["src/auth", "test/auth"],
+          profile: makeAgentProfileSnapshot(),
           title: "Child Session",
           titleSource: "default",
           titleModel: null,
@@ -1050,10 +1074,16 @@ describe("sessionDb", () => {
         nickname: "verify-auth",
         taskType: "verify",
         targetPaths: ["src/auth", "test/auth"],
+        profile: expect.objectContaining({
+          id: "qa-reviewer",
+          ref: "workspace:qa-reviewer",
+          skillNames: ["code-review"],
+        }),
         mode: "collaborative",
         depth: 1,
         lifecycleState: "active",
       });
+      expect(db.getSessionRecord("child-1")?.profile).toEqual(makeAgentProfileSnapshot());
 
       await db.deleteSession("root-1");
       expect(db.getSessionRecord("root-1")).toBeNull();

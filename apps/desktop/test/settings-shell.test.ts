@@ -25,6 +25,7 @@ describe("settings shell", () => {
     expect(pageIds).toContain("remoteAccess");
     expect(pageIds).toContain("experiments");
     expect(pageIds).toContain("models");
+    expect(pageIds).toContain("subagents");
     expect(pageIds).toContain("toolAccess");
     expect(pageIds).toContain("privacyTelemetry");
     expect(pageIds).not.toContain("openAiNativeConnectors");
@@ -46,6 +47,7 @@ describe("settings shell", () => {
     expect(pageIds).toContain("privacyTelemetry");
     expect(pageIds).not.toContain("remoteAccess");
     expect(pageIds).toContain("models");
+    expect(pageIds).toContain("subagents");
     expect(pageIds).not.toContain("openAiNativeConnectors");
   });
 

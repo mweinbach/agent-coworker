@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { JSONRPC_ERROR_CODES } from "../src/server/jsonrpc/protocol";
+import { createAgentProfilesRouteHandlers } from "../src/server/jsonrpc/routes/agentProfiles";
 import { createAgentRouteHandlers } from "../src/server/jsonrpc/routes/agents";
 import { createMcpRouteHandlers } from "../src/server/jsonrpc/routes/mcp";
 import { createMemoryRouteHandlers } from "../src/server/jsonrpc/routes/memory";
@@ -113,6 +114,13 @@ function createRuntimeDouble(session: Record<string, any>) {
         await session.copySkillInstallation?.(installationId, targetScope),
       checkInstallationUpdate: async (installationId: string) =>
         await session.checkSkillInstallationUpdate?.(installationId),
+    },
+    agentProfiles: {
+      getCatalog: async () => await session.getAgentProfilesCatalog?.(),
+      upsert: async (profile: unknown) => await session.upsertAgentProfile?.(profile),
+      delete: async (scope: "global" | "workspace", id: string) =>
+        await session.deleteAgentProfile?.(scope, id),
+      copy: async (copy: unknown) => await session.copyAgentProfile?.(copy),
     },
     agents: {
       create: async (opts: Record<string, unknown>) => await session.createAgentSession?.(opts),
@@ -352,6 +360,90 @@ describe("JSON-RPC extracted route review fixes", () => {
     expect((response.result as any).event).toEqual(currentConfigEvent);
   });
 
+  test("agent profile routes return catalog events and forward upserts", async () => {
+    const profile = {
+      version: 1 as const,
+      id: "qa-reviewer",
+      displayName: "QA Reviewer",
+      description: "Checks completed work.",
+      enabled: true,
+      baseRole: "reviewer" as const,
+      prompt: "Report concrete defects only.",
+      allowedBuiltInTools: ["read", "grep"],
+      allowedMcpServers: ["github"],
+      skillNames: ["code-review"],
+    };
+    const catalogEvent: Extract<SessionEvent, { type: "agent_profiles_catalog" }> = {
+      type: "agent_profiles_catalog",
+      sessionId: "session-1",
+      catalog: {
+        profiles: [
+          {
+            scope: "workspace",
+            effective: true,
+            shadowed: false,
+            profile,
+          },
+        ],
+        effectiveProfiles: [
+          {
+            scope: "workspace",
+            effective: true,
+            shadowed: false,
+            profile,
+          },
+        ],
+        diagnostics: [],
+        roots: {
+          globalDir: "/tmp/home/.cowork/agent-profiles",
+          workspaceDir: "/tmp/project/.cowork/agent-profiles",
+        },
+      },
+    };
+    const seenProfiles: unknown[] = [];
+    const harness = createRouteHarness({
+      getAgentProfilesCatalog: async () => {
+        harness.emitted.push(catalogEvent);
+      },
+      upsertAgentProfile: async (profileInput: unknown) => {
+        seenProfiles.push(profileInput);
+      },
+    });
+    const handlers = createAgentProfilesRouteHandlers(harness.context);
+
+    const readResponse = await harness.invoke(handlers, "cowork/agentProfiles/catalog/read", {
+      cwd: "C:/workspace",
+    });
+    const upsertResponse = await harness.invoke(handlers, "cowork/agentProfiles/upsert", {
+      cwd: "C:/workspace",
+      profile: {
+        ...profile,
+        scope: "workspace",
+      },
+    });
+
+    expect(readResponse.error).toBeUndefined();
+    expect((readResponse.result as any).event).toMatchObject({
+      type: "agent_profiles_catalog",
+      catalog: {
+        effectiveProfiles: [
+          expect.objectContaining({
+            scope: "workspace",
+            profile: expect.objectContaining({ id: "qa-reviewer" }),
+          }),
+        ],
+      },
+    });
+    expect(upsertResponse.error).toBeUndefined();
+    expect(seenProfiles).toEqual([
+      expect.objectContaining({
+        scope: "workspace",
+        id: "qa-reviewer",
+        baseRole: "reviewer",
+      }),
+    ]);
+  });
+
   test("session harness context set rejects malformed context as invalidParams", async () => {
     const threadSession = {
       id: "thread-1",
@@ -432,6 +524,7 @@ describe("JSON-RPC extracted route review fixes", () => {
       id: "thread-1",
       createAgentSession: async (opts: {
         role?: string;
+        profileRef?: string;
         reasoningEffort?: string;
         contextMode?: string;
         briefing?: string;
@@ -439,6 +532,7 @@ describe("JSON-RPC extracted route review fixes", () => {
         includeHarnessContext?: boolean;
       }) => {
         expect(opts.role).toBe("explorer");
+        expect(opts.profileRef).toBe("workspace:qa-reviewer");
         expect(opts.reasoningEffort).toBe("low");
         expect(opts.contextMode).toBe("brief");
         expect(opts.briefing).toBe("Focus on the parser failure.");
@@ -453,6 +547,7 @@ describe("JSON-RPC extracted route review fixes", () => {
       threadId: "thread-1",
       message: "hi",
       role: "explorer",
+      profileRef: "workspace:qa-reviewer",
       reasoningEffort: "low",
       contextMode: "brief",
       briefing: "Focus on the parser failure.",

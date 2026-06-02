@@ -23,6 +23,7 @@ export function createAgentRouteHandlers(context: JsonRpcRouteContext): JsonRpcR
         threadId,
         message: prompt,
         role,
+        profileRef,
         model,
         reasoningEffort,
         nickname,
@@ -47,6 +48,7 @@ export function createAgentRouteHandlers(context: JsonRpcRouteContext): JsonRpcR
       await runtime.agents.create({
         message: prompt,
         ...(role !== undefined ? { role } : {}),
+        ...(profileRef !== undefined ? { profileRef } : {}),
         ...(nickname !== undefined ? { nickname } : {}),
         ...(taskType !== undefined ? { taskType } : {}),
         ...(targetPaths !== undefined ? { targetPaths } : {}),

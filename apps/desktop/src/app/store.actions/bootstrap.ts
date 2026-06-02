@@ -138,6 +138,7 @@ function normalizeKnownSettingsPageId(value: unknown): SettingsPageId {
   if (value === "developer") return "diagnostics";
 
   return value === "models" ||
+    value === "subagents" ||
     value === "toolAccess" ||
     value === "defaults" ||
     value === "profileMemory" ||

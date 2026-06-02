@@ -130,6 +130,69 @@ describe("spawnAgent tool", () => {
     expect(result).toEqual(summary);
   });
 
+  test("forwards profileRef while keeping role compatibility", async () => {
+    const summary = makeSummary({
+      role: "worker",
+      profile: {
+        id: "qa-reviewer",
+        ref: "workspace:qa-reviewer",
+        scope: "workspace",
+        displayName: "QA Reviewer",
+        description: "",
+        baseRole: "worker",
+        prompt: "Check carefully.",
+        allowedBuiltInTools: ["read"],
+        allowedMcpServers: [],
+        skillNames: [],
+        resolvedAt: "2026-06-02T12:00:00.000Z",
+      },
+    });
+    const spawn = mock(async () => summary);
+    const tool: any = createSpawnAgentTool(
+      makeCtx({
+        agentControl: {
+          spawn,
+          list: async () => [],
+          sendInput: async () => {},
+          wait: async () => ({
+            timedOut: false,
+            mode: "any" as const,
+            agents: [],
+            readyAgentIds: [],
+          }),
+          inspect: async () => ({
+            agent: summary,
+            latestAssistantText: null,
+            parsedReport: null,
+            reportRequired: true,
+            reportFound: false,
+            reportValid: false,
+            reportBlockCount: 0,
+            reportDiagnostic:
+              "No assistant message available to inspect for an <agent_report> footer.",
+            sessionUsage: null,
+            lastTurnUsage: null,
+          }),
+          resume: async () => summary,
+          close: async () => summary,
+        },
+      }),
+    );
+
+    await tool.execute({
+      message: "Review the profile flow",
+      role: "reviewer",
+      profileRef: " workspace:qa-reviewer ",
+    });
+
+    expect(spawn).toHaveBeenCalledWith({
+      message: "Review the profile flow",
+      role: "reviewer",
+      profileRef: "workspace:qa-reviewer",
+      contextMode: "none",
+    });
+  });
+
   test("rejects empty targetPaths entries", async () => {
     const tool: any = createSpawnAgentTool(
       makeCtx({

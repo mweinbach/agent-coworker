@@ -305,6 +305,7 @@ export class SessionAdminManager {
     opts: AgentSpawnContextOptions & {
       message: string;
       role?: AgentRole;
+      profileRef?: string;
       model?: string;
       reasoningEffort?: AgentReasoningEffort;
     },
@@ -327,6 +328,7 @@ export class SessionAdminManager {
         parentConfig: this.context.state.config,
         message: opts.message,
         role: opts.role,
+        ...(opts.profileRef ? { profileRef: opts.profileRef } : {}),
         ...(opts.nickname !== undefined ? { nickname: opts.nickname } : {}),
         ...(opts.taskType !== undefined ? { taskType: opts.taskType } : {}),
         ...(opts.targetPaths !== undefined ? { targetPaths: opts.targetPaths } : {}),

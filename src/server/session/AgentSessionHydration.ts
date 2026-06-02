@@ -129,6 +129,7 @@ export function buildInitialSessionSnapshot(opts: {
     nickname: opts.state.sessionInfo.nickname ?? null,
     taskType: opts.state.sessionInfo.taskType ?? null,
     targetPaths: opts.state.sessionInfo.targetPaths ?? null,
+    profile: opts.state.sessionInfo.profile ?? null,
     requestedModel: opts.state.sessionInfo.requestedModel ?? null,
     effectiveModel: opts.state.sessionInfo.effectiveModel ?? null,
     requestedReasoningEffort: opts.state.sessionInfo.requestedReasoningEffort ?? null,
@@ -172,6 +173,7 @@ export function decorateSessionSnapshot(
   snapshot.nickname = opts.state.sessionInfo.nickname ?? null;
   snapshot.taskType = opts.state.sessionInfo.taskType ?? null;
   snapshot.targetPaths = opts.state.sessionInfo.targetPaths ?? null;
+  snapshot.profile = opts.state.sessionInfo.profile ?? null;
   snapshot.requestedModel = opts.state.sessionInfo.requestedModel ?? null;
   snapshot.effectiveModel = opts.state.sessionInfo.effectiveModel ?? null;
   snapshot.requestedReasoningEffort = opts.state.sessionInfo.requestedReasoningEffort ?? null;

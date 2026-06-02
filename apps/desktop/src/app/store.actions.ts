@@ -1,4 +1,5 @@
 import { createA2uiDockActions } from "./store.actions/a2uiDock";
+import { createAgentProfileActions } from "./store.actions/agentProfiles";
 import { createWorkspaceBackupActions } from "./store.actions/backup";
 import { createBootstrapActions } from "./store.actions/bootstrap";
 import { createOpenAiNativeConnectorActions } from "./store.actions/connectors";
@@ -25,6 +26,7 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
     ...createWorkspaceActions(set, get),
     ...createWorkspaceBackupActions(set, get),
     ...createThreadActions(set, get),
+    ...createAgentProfileActions(set, get),
     ...createSkillActions(set, get),
     ...createPluginActions(set, get),
     ...createImportActions(set, get),

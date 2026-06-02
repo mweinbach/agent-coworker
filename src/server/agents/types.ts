@@ -1,3 +1,4 @@
+import type { AgentProfileSnapshot } from "../../shared/agentProfiles";
 import type {
   AgentMode,
   AgentReasoningEffort,
@@ -19,6 +20,7 @@ export type AgentSpawnOptions = AgentSpawnContextOptions & {
   parentConfig: AgentConfig;
   message: string;
   role?: AgentRole;
+  profileRef?: string;
   model?: string;
   reasoningEffort?: AgentReasoningEffort;
   parentDepth?: number;
@@ -101,7 +103,11 @@ export type AgentControlDeps = {
     isResume: boolean;
     resumedFromStorage: boolean;
   };
-  loadAgentPrompt: (config: AgentConfig, role: AgentRole) => Promise<string>;
+  loadAgentPrompt: (
+    config: AgentConfig,
+    role: AgentRole,
+    profile?: AgentProfileSnapshot,
+  ) => Promise<string>;
   disposeBinding: (binding: SessionBinding, reason: string) => void;
   emitParentAgentStatus: (parentSessionId: string, agent: PersistentAgentSummary) => void;
   emitParentLog: (parentSessionId: string, line: string) => void;

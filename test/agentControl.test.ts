@@ -1,7 +1,10 @@
 import { describe, expect, mock, test } from "bun:test";
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 import { AgentControl } from "../src/server/agents/AgentControl";
+import { upsertAgentProfile } from "../src/server/agents/profiles";
 import { parseChildAgentReport } from "../src/server/agents/reportParser";
 import type { SeededSessionContext } from "../src/server/session/SessionContext";
 import type { PersistedSessionRecord } from "../src/server/sessionDb";
@@ -28,6 +31,24 @@ function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
     configDirs: [],
     ...overrides,
   };
+}
+
+async function makeTempConfig(overrides: Partial<AgentConfig> = {}): Promise<AgentConfig> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "agent-control-test-"));
+  const workspace = path.join(root, "workspace");
+  const home = path.join(root, "home");
+  await fs.mkdir(workspace, { recursive: true });
+  await fs.mkdir(home, { recursive: true });
+  return makeConfig({
+    workingDirectory: workspace,
+    outputDirectory: path.join(workspace, "output"),
+    uploadsDirectory: path.join(workspace, "uploads"),
+    projectCoworkDir: path.join(workspace, ".cowork"),
+    userCoworkDir: path.join(home, ".cowork"),
+    builtInDir: root,
+    builtInConfigDir: path.join(root, "config"),
+    ...overrides,
+  });
 }
 
 function makeChildSession(config: AgentConfig) {
@@ -315,6 +336,139 @@ describe("AgentControl.spawn", () => {
       undefined,
       expect.not.objectContaining({
         seedContext: expect.anything(),
+      }),
+    );
+  });
+
+  test("resolves profileRef before role and stores a profile snapshot on the child", async () => {
+    const parentConfig = await makeTempConfig();
+    await upsertAgentProfile(parentConfig, {
+      version: 1,
+      scope: "workspace",
+      id: "research-review",
+      displayName: "Research Review",
+      description: "Research-focused profile.",
+      enabled: true,
+      baseRole: "research",
+      prompt: "Use sourced claims only.",
+      allowedBuiltInTools: ["read", "webSearch"],
+      allowedMcpServers: ["github"],
+      skillNames: ["source-pack-report"],
+      model: "gpt-5-mini",
+      reasoningEffort: "high",
+      defaultTaskType: "verify",
+      defaultContextMode: "brief",
+    });
+    const seedContext: SeededSessionContext = {
+      messages: [{ role: "user", content: "Parent briefing:\nCheck the research plan." }],
+      todos: [],
+      harnessContext: null,
+    };
+    const childConfig = makeConfig({
+      ...parentConfig,
+      model: "gpt-5-mini",
+      preferredChildModel: "gpt-5-mini",
+    });
+    const childSession = makeChildSession(childConfig);
+    const baseInfo = childSession.getSessionInfoEvent;
+    const buildContextSeed = mock(() => seedContext);
+    const buildSession = mock(
+      (
+        binding: SessionBinding,
+        _persistedSessionId?: string,
+        overrides?: Record<string, unknown>,
+      ) => {
+        const sessionInfoPatch = overrides?.sessionInfoPatch as Record<string, unknown>;
+        childSession.role = sessionInfoPatch.role;
+        childSession.getSessionInfoEvent = () => ({
+          ...baseInfo(),
+          ...sessionInfoPatch,
+        });
+        binding.session = childSession;
+        return { session: childSession, isResume: false, resumedFromStorage: false, overrides };
+      },
+    );
+    const loadAgentPrompt = mock(
+      async (_config: AgentConfig, role: string, profile: unknown) => "profile system prompt",
+    );
+    const control = new AgentControl({
+      sessionBindings: new Map([
+        [
+          "root-1",
+          {
+            session: {
+              buildForkContextSeed: mock(() => ({
+                messages: [],
+                todos: [],
+                harnessContext: null,
+              })),
+              buildContextSeed,
+            },
+            socket: null,
+          },
+        ],
+      ]) as Map<string, SessionBinding>,
+      sessionDb: null,
+      getConnectedProviders: async () => ["openai"],
+      buildSession: buildSession as any,
+      loadAgentPrompt,
+      disposeBinding: () => {},
+      emitParentAgentStatus: () => {},
+      emitParentLog: () => {},
+    });
+
+    const summary = await control.spawn({
+      parentSessionId: "root-1",
+      parentConfig,
+      role: "reviewer",
+      profileRef: "research-review",
+      message: "Check the research plan.",
+      briefing: "Check the research plan.",
+    });
+
+    expect(buildContextSeed).toHaveBeenCalledWith({
+      contextMode: "brief",
+      briefing: "Check the research plan.",
+      includeParentTodos: false,
+      includeHarnessContext: false,
+    });
+    expect(loadAgentPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "gpt-5-mini" }),
+      "research",
+      expect.objectContaining({
+        id: "research-review",
+        ref: "workspace:research-review",
+        baseRole: "research",
+        prompt: "Use sourced claims only.",
+      }),
+    );
+    expect(buildSession).toHaveBeenCalledWith(
+      expect.anything(),
+      undefined,
+      expect.objectContaining({
+        config: expect.objectContaining({ model: "gpt-5-mini" }),
+        system: "profile system prompt",
+        seedContext,
+        sessionInfoPatch: expect.objectContaining({
+          role: "research",
+          taskType: "verify",
+          profile: expect.objectContaining({
+            id: "research-review",
+            allowedMcpServers: ["github"],
+            skillNames: ["source-pack-report"],
+          }),
+          requestedModel: "gpt-5-mini",
+          effectiveModel: "gpt-5-mini",
+          requestedReasoningEffort: "high",
+          effectiveReasoningEffort: "high",
+        }),
+      }),
+    );
+    expect(summary.role).toBe("research");
+    expect(summary.profile).toEqual(
+      expect.objectContaining({
+        id: "research-review",
+        ref: "workspace:research-review",
       }),
     );
   });

@@ -155,6 +155,7 @@ export class SessionDbRepository {
           "           nickname,",
           "           task_type,",
           "           target_paths_json,",
+          "           agent_profile_json,",
           "           requested_model,",
           "           effective_model,",
           "           requested_reasoning_effort,",
@@ -230,6 +231,7 @@ export class SessionDbRepository {
           "           s.nickname,",
           "           s.task_type,",
           "           s.target_paths_json,",
+          "           s.agent_profile_json,",
           "           s.requested_model,",
           "           s.effective_model,",
           "           s.requested_reasoning_effort,",
@@ -290,6 +292,9 @@ export class SessionDbRepository {
       if (!("targetPaths" in snapshotRecord)) {
         snapshotRecord.targetPaths = null;
       }
+      if (!("profile" in snapshotRecord)) {
+        snapshotRecord.profile = null;
+      }
     }
     return sessionSnapshotSchema.parse(rawSnapshot);
   }
@@ -325,6 +330,10 @@ export class SessionDbRepository {
         snapshot.targetPaths === null || snapshot.targetPaths === undefined
           ? null
           : toJsonString(snapshot.targetPaths);
+      const agentProfileJson =
+        snapshot.profile === null || snapshot.profile === undefined
+          ? null
+          : toJsonString(snapshot.profile);
       const requestedModel = snapshot.requestedModel ?? null;
       const effectiveModel = snapshot.effectiveModel ?? null;
       const requestedReasoningEffort = snapshot.requestedReasoningEffort ?? null;
@@ -351,6 +360,7 @@ export class SessionDbRepository {
             "             nickname,",
             "             task_type,",
             "             target_paths_json,",
+            "             agent_profile_json,",
             "             requested_model,",
             "             effective_model,",
             "             requested_reasoning_effort,",
@@ -374,7 +384,7 @@ export class SessionDbRepository {
             "             has_pending_approval,",
             "             message_count,",
             "             last_event_seq",
-            "           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             "           ON CONFLICT(session_id) DO UPDATE SET",
             "             session_kind = excluded.session_kind,",
             "             parent_session_id = excluded.parent_session_id,",
@@ -385,6 +395,7 @@ export class SessionDbRepository {
             "             nickname = excluded.nickname,",
             "             task_type = excluded.task_type,",
             "             target_paths_json = excluded.target_paths_json,",
+            "             agent_profile_json = excluded.agent_profile_json,",
             "             requested_model = excluded.requested_model,",
             "             effective_model = excluded.effective_model,",
             "             requested_reasoning_effort = excluded.requested_reasoning_effort,",
@@ -420,6 +431,7 @@ export class SessionDbRepository {
           nickname,
           taskType,
           targetPathsJson,
+          agentProfileJson,
           requestedModel,
           effectiveModel,
           requestedReasoningEffort,
@@ -924,6 +936,7 @@ export class SessionDbRepository {
         "         nickname TEXT NULL,",
         "         task_type TEXT NULL,",
         "         target_paths_json TEXT NULL,",
+        "         agent_profile_json TEXT NULL,",
         "         requested_model TEXT NULL,",
         "         effective_model TEXT NULL,",
         "         requested_reasoning_effort TEXT NULL,",
@@ -1160,6 +1173,7 @@ export class SessionDbRepository {
     if (!this.hasSessionsColumn("last_message_preview")) {
       this.db.exec("ALTER TABLE sessions ADD COLUMN last_message_preview TEXT NULL");
     }
+    this.addAgentProfileMetadataColumn();
     this.db.exec(
       "UPDATE sessions SET session_kind = 'root' WHERE session_kind IS NULL OR session_kind = ''",
     );
@@ -1200,6 +1214,12 @@ export class SessionDbRepository {
     }
     if (!this.hasSessionsColumn("target_paths_json")) {
       this.db.exec("ALTER TABLE sessions ADD COLUMN target_paths_json TEXT NULL");
+    }
+  }
+
+  addAgentProfileMetadataColumn(): void {
+    if (!this.hasSessionsColumn("agent_profile_json")) {
+      this.db.exec("ALTER TABLE sessions ADD COLUMN agent_profile_json TEXT NULL");
     }
   }
 

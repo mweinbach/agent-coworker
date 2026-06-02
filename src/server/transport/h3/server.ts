@@ -243,6 +243,7 @@ const ALWAYS_ALLOWED_H3_RPC_METHODS = new Set([
   "cowork/runtime/libreoffice/check",
   "cowork/mcp/servers/read",
   "cowork/mcp/server/validate",
+  "cowork/agentProfiles/catalog/read",
   "cowork/skills/catalog/read",
   "cowork/skills/list",
   "cowork/skills/read",

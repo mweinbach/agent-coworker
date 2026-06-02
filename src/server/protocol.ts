@@ -3,6 +3,7 @@ import type { ProviderStatus } from "../providerStatus";
 import type { ProviderAuthChallenge, ProviderAuthMethod } from "../providers/authRegistry";
 import type { ProviderCatalogEntry } from "../providers/connectionCatalog";
 import type { SessionUsageSnapshot, TurnUsage } from "../session/costTracker";
+import type { AgentProfileSnapshot, AgentProfilesCatalog } from "../shared/agentProfiles";
 import type {
   AgentExecutionState,
   AgentMode,
@@ -54,7 +55,7 @@ type MCPServerAuthMode = "none" | "missing" | "api_key" | "oauth" | "oauth_pendi
 
 // Version of the internal session event payload schema documented for JSON-RPC
 // control envelopes and persisted session artifacts.
-export const WEBSOCKET_PROTOCOL_VERSION = "7.34";
+export const WEBSOCKET_PROTOCOL_VERSION = "7.35";
 
 export type SessionConfigPatch = {
   yolo?: boolean;
@@ -135,6 +136,7 @@ export type SessionEvent =
       nickname?: string;
       taskType?: AgentTaskType;
       targetPaths?: string[];
+      profile?: AgentProfileSnapshot;
       requestedModel?: string;
       effectiveModel?: string;
       requestedReasoningEffort?: AgentReasoningEffort;
@@ -167,6 +169,7 @@ export type SessionEvent =
       nickname?: string;
       taskType?: AgentTaskType;
       targetPaths?: string[];
+      profile?: AgentProfileSnapshot;
       requestedModel?: string;
       effectiveModel?: string;
       requestedReasoningEffort?: AgentReasoningEffort;
@@ -234,6 +237,11 @@ export type SessionEvent =
       ok: boolean;
       mode?: MCPServerAuthMode;
       message: string;
+    }
+  | {
+      type: "agent_profiles_catalog";
+      sessionId: string;
+      catalog: AgentProfilesCatalog;
     }
   | OpenAiNativeConnectorsEvent
   | {

@@ -1,5 +1,11 @@
 import { z } from "zod";
 import { CHILD_MODEL_ROUTING_MODES, PROVIDER_NAMES } from "../types";
+import {
+  agentProfileCopyInputSchema,
+  agentProfileScopeSchema,
+  agentProfilesCatalogSchema,
+  agentProfileUpsertInputSchema,
+} from "./agentProfiles";
 import { GOOGLE_THINKING_LEVEL_VALUES } from "./googleThinking";
 import {
   CODEX_WEB_SEARCH_BACKEND_VALUES,
@@ -25,6 +31,14 @@ const cwdRequestSchema = z
     cwd: z.string().optional(),
   })
   .passthrough();
+
+const agentProfilesCatalogEventSchema = z
+  .object({
+    type: z.literal("agent_profiles_catalog"),
+    sessionId: nonEmptyTrimmedStringSchema,
+    catalog: agentProfilesCatalogSchema,
+  })
+  .strict();
 
 const sessionEventEnvelope = <T extends z.ZodTypeAny>(eventSchema: T) =>
   z
@@ -1301,6 +1315,34 @@ const mcpServerAuthSetApiKeyRequestSchema = z
   })
   .strict();
 
+const agentProfilesCatalogReadRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+  })
+  .strict();
+
+const agentProfilesUpsertRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+    profile: agentProfileUpsertInputSchema,
+  })
+  .strict();
+
+const agentProfilesDeleteRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+    scope: agentProfileScopeSchema,
+    id: nonEmptyTrimmedStringSchema,
+  })
+  .strict();
+
+const agentProfilesCopyRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+    copy: agentProfileCopyInputSchema,
+  })
+  .strict();
+
 const skillsCatalogReadRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
@@ -1556,6 +1598,10 @@ export const jsonRpcControlRequestSchemas = {
   "cowork/mcp/server/auth/authorize": mcpServerAuthAuthorizeRequestSchema,
   "cowork/mcp/server/auth/callback": mcpServerAuthCallbackRequestSchema,
   "cowork/mcp/server/auth/setApiKey": mcpServerAuthSetApiKeyRequestSchema,
+  "cowork/agentProfiles/catalog/read": agentProfilesCatalogReadRequestSchema,
+  "cowork/agentProfiles/upsert": agentProfilesUpsertRequestSchema,
+  "cowork/agentProfiles/delete": agentProfilesDeleteRequestSchema,
+  "cowork/agentProfiles/copy": agentProfilesCopyRequestSchema,
   "cowork/connectors/openai-native/list": cwdRequestSchema,
   "cowork/connectors/openai-native/refresh": cwdRequestSchema,
   "cowork/connectors/openai-native/setEnabled": cwdRequestSchema
@@ -1629,6 +1675,10 @@ export const jsonRpcControlResultSchemas = {
   ),
   "cowork/mcp/server/auth/callback": sessionEventEnvelope(mcpAuthResultEventSchema),
   "cowork/mcp/server/auth/setApiKey": sessionEventEnvelope(mcpAuthResultEventSchema),
+  "cowork/agentProfiles/catalog/read": sessionEventEnvelope(agentProfilesCatalogEventSchema),
+  "cowork/agentProfiles/upsert": sessionEventEnvelope(agentProfilesCatalogEventSchema),
+  "cowork/agentProfiles/delete": sessionEventEnvelope(agentProfilesCatalogEventSchema),
+  "cowork/agentProfiles/copy": sessionEventEnvelope(agentProfilesCatalogEventSchema),
   "cowork/connectors/openai-native/list": sessionEventEnvelope(openAiNativeConnectorsEventSchema),
   "cowork/connectors/openai-native/refresh": sessionEventEnvelope(
     openAiNativeConnectorsEventSchema,

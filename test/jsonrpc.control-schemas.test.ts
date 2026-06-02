@@ -336,13 +336,82 @@ describe("shared JSON-RPC control schemas", () => {
       threadId: "thread-1",
       message: "Plan the auth refactor",
       nickname: " plan-auth ",
+      profileRef: "workspace:qa-reviewer",
       taskType: "plan",
       targetPaths: ["src/auth", " test/auth ", "src/auth"],
     });
 
     expect(request.nickname).toBe("plan-auth");
+    expect(request.profileRef).toBe("workspace:qa-reviewer");
     expect(request.taskType).toBe("plan");
     expect(request.targetPaths).toEqual(["src/auth", "test/auth", "src/auth"]);
+  });
+
+  test("parses agent profile CRUD control schemas", () => {
+    const upsert = jsonRpcControlRequestSchemas["cowork/agentProfiles/upsert"].parse({
+      cwd: "/tmp/project",
+      profile: {
+        version: 1,
+        scope: "workspace",
+        id: "qa-reviewer",
+        displayName: "QA Reviewer",
+        description: "Checks completed work.",
+        enabled: true,
+        baseRole: "reviewer",
+        prompt: "Report concrete defects only.",
+        allowedBuiltInTools: ["read", "grep"],
+        allowedMcpServers: ["github"],
+        skillNames: ["code-review"],
+        model: "gpt-5-mini",
+        reasoningEffort: "high",
+        defaultTaskType: "verify",
+        defaultContextMode: "brief",
+      },
+    });
+    const copy = jsonRpcControlRequestSchemas["cowork/agentProfiles/copy"].parse({
+      copy: {
+        sourceRef: "workspace:qa-reviewer",
+        targetScope: "global",
+        targetId: "qa-reviewer-global",
+        targetDisplayName: "QA Reviewer Global",
+      },
+    });
+    const { scope, ...catalogProfile } = upsert.profile;
+    const result = jsonRpcControlResultSchemas["cowork/agentProfiles/upsert"].parse({
+      event: {
+        type: "agent_profiles_catalog",
+        sessionId: "thread-1",
+        catalog: {
+          profiles: [
+            {
+              scope: "workspace",
+              path: "/tmp/project/.cowork/agent-profiles/qa-reviewer.json",
+              effective: true,
+              shadowed: false,
+              profile: catalogProfile,
+            },
+          ],
+          effectiveProfiles: [
+            {
+              scope: "workspace",
+              path: "/tmp/project/.cowork/agent-profiles/qa-reviewer.json",
+              effective: true,
+              shadowed: false,
+              profile: catalogProfile,
+            },
+          ],
+          diagnostics: [],
+          roots: {
+            globalDir: "/tmp/home/.cowork/agent-profiles",
+            workspaceDir: "/tmp/project/.cowork/agent-profiles",
+          },
+        },
+      },
+    });
+
+    expect(scope).toBe("workspace");
+    expect(copy.copy.targetId).toBe("qa-reviewer-global");
+    expect(result.event.catalog.effectiveProfiles[0]?.profile.id).toBe("qa-reviewer");
   });
 
   test("parses waitForAgent any/all request modes and wait-result notifications", () => {

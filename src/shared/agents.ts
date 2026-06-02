@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { SessionUsageSnapshot, TurnUsage } from "../session/costTracker";
 import { sessionUsageSnapshotSchema, turnUsageSchema } from "../session/sessionUsageSchema";
 import { PROVIDER_NAMES, type ProviderName } from "../types";
+import type { AgentProfileSnapshot } from "./agentProfiles";
 import {
   OPENAI_REASONING_EFFORT_VALUES,
   type OpenAiReasoningEffort,
@@ -44,6 +45,26 @@ const agentLifecycleStateSchema = z.enum(AGENT_LIFECYCLE_STATE_VALUES);
 export const agentExecutionStateSchema = z.enum(AGENT_EXECUTION_STATE_VALUES);
 export const agentTaskTypeSchema = z.enum(AGENT_TASK_TYPE_VALUES);
 export const agentReasoningEffortSchema = z.enum(OPENAI_REASONING_EFFORT_VALUES);
+const persistentAgentProfileScopeSchema = z.enum(["global", "workspace"]);
+const persistentAgentProfileSnapshotSchema = z
+  .object({
+    id: z.string().trim().min(1),
+    ref: z.string().trim().min(1),
+    scope: persistentAgentProfileScopeSchema,
+    displayName: z.string().trim().min(1),
+    description: z.string(),
+    baseRole: agentRoleSchema,
+    prompt: z.string(),
+    allowedBuiltInTools: z.array(z.string().trim().min(1)),
+    allowedMcpServers: z.array(z.string().trim().min(1)),
+    skillNames: z.array(z.string().trim().min(1)),
+    model: z.string().trim().min(1).optional(),
+    reasoningEffort: agentReasoningEffortSchema.optional(),
+    defaultTaskType: agentTaskTypeSchema.optional(),
+    defaultContextMode: agentContextModeSchema.optional(),
+    resolvedAt: z.string().datetime({ offset: true }),
+  })
+  .strict();
 
 function dedupeStringsPreserveOrder(values: readonly string[]): string[] {
   const normalized: string[] = [];
@@ -116,6 +137,7 @@ export type PersistentAgentSummary = {
   nickname?: string;
   taskType?: AgentTaskType;
   targetPaths?: string[];
+  profile?: AgentProfileSnapshot;
   requestedModel?: string;
   effectiveModel: string;
   requestedReasoningEffort?: AgentReasoningEffort;
@@ -142,6 +164,7 @@ export const persistentAgentSummarySchema = z
     nickname: z.string().trim().min(1).optional(),
     taskType: agentTaskTypeSchema.optional(),
     targetPaths: agentTargetPathsSchema.optional(),
+    profile: persistentAgentProfileSnapshotSchema.optional(),
     requestedModel: z.string().trim().min(1).optional(),
     effectiveModel: z.string().trim().min(1),
     requestedReasoningEffort: agentReasoningEffortSchema.optional(),

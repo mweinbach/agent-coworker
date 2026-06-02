@@ -1438,7 +1438,7 @@ describe("loadSubAgentPrompt", () => {
       projectCoworkDir: path.join(cwd, ".cowork"),
     });
     const prompt = await loadSubAgentPrompt(config, "explore");
-    const combined = `${basePrompt}\n\n${promptContent}\n`;
+    const combined = `${basePrompt}\n\n${promptContent}`;
     const expected = `${combined}\n\n${buildWorkspaceMapSection(config)}`;
     expect(prompt).toBe(expected);
   });

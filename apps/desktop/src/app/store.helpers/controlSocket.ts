@@ -676,6 +676,9 @@ export function createControlSocketHelpers(
       }),
       requestJsonRpcControlEvent(get, set, workspaceId, "cowork/provider/status/refresh", { cwd }),
       requestJsonRpcControlEvent(get, set, workspaceId, "cowork/mcp/servers/read", { cwd }),
+      requestJsonRpcControlEvent(get, set, workspaceId, "cowork/agentProfiles/catalog/read", {
+        cwd,
+      }),
       requestJsonRpcControlEvent(get, set, workspaceId, "cowork/memory/list", { cwd }),
       requestJsonRpcControlEvent(get, set, workspaceId, "cowork/plugins/catalog/read", { cwd }),
       requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/catalog/read", { cwd }),
@@ -916,6 +919,21 @@ export function createControlSocketHelpers(
             mcpServers: evt.servers,
             mcpFiles: evt.files,
             mcpWarnings: evt.warnings ?? [],
+          },
+        },
+      }));
+      return;
+    }
+
+    if (evt.type === "agent_profiles_catalog") {
+      set((s) => ({
+        workspaceRuntimeById: {
+          ...s.workspaceRuntimeById,
+          [workspaceId]: {
+            ...s.workspaceRuntimeById[workspaceId],
+            agentProfilesCatalog: evt.catalog,
+            agentProfilesLoading: false,
+            agentProfilesError: null,
           },
         },
       }));

@@ -106,6 +106,7 @@ export function createAgentSessionFromPersisted(
     ...(persisted.targetPaths !== undefined && persisted.targetPaths !== null
       ? { targetPaths: persisted.targetPaths }
       : {}),
+    ...(persisted.profile ? { profile: persisted.profile } : {}),
     ...(persisted.requestedModel ? { requestedModel: persisted.requestedModel } : {}),
     ...(persisted.effectiveModel ? { effectiveModel: persisted.effectiveModel } : {}),
     ...(persisted.requestedReasoningEffort

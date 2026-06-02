@@ -36,6 +36,7 @@ import {
   ProfileMemorySettingsPage,
   ToolAccessSettingsPage,
 } from "./pages/SettingsIntentPages";
+import { SubagentsPage } from "./pages/SubagentsPage";
 import { UpdatesPage } from "./pages/UpdatesPage";
 import { UsagePage } from "./pages/UsagePage";
 import { SettingsChromeProvider, type SettingsChromeState } from "./SettingsChromeContext";
@@ -51,6 +52,10 @@ const SETTINGS_PAGE_META: Record<SettingsPageId, { title: string; description: s
   models: {
     title: "Models",
     description: "Provider health, model defaults, and subagent routing.",
+  },
+  subagents: {
+    title: "Subagents",
+    description: "Specialized child-agent profiles and scoped tool access.",
   },
   toolAccess: {
     title: "Tool Access",
@@ -147,6 +152,12 @@ export function getSettingsGroups(
       label: "Models & tools",
       pages: [
         { id: "models", label: "Models", icon: BotIcon, render: () => <ModelsSettingsPage /> },
+        {
+          id: "subagents",
+          label: "Subagents",
+          icon: BotIcon,
+          render: () => <SubagentsPage />,
+        },
         {
           id: "toolAccess",
           label: "Tool Access",

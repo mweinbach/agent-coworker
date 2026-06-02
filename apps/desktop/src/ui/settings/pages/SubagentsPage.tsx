@@ -184,12 +184,19 @@ function formatWorkspaceName(workspace: WorkspaceRecord): string {
   return workspace.name.trim() || workspace.path;
 }
 
-function slugify(value: string): string {
+export function profileIdFromName(value: string): string {
   return value
     .trim()
     .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80)
+    .replace(/-+$/g, "");
+}
+
+function slugify(value: string): string {
+  return profileIdFromName(value);
 }
 
 function sortedUnique(values: readonly string[]): string[] {
@@ -292,8 +299,8 @@ export async function saveAgentProfileDraft(
   ) => Promise<boolean>,
 ): Promise<"invalid" | "failed" | "saved"> {
   if (!draft) return "invalid";
-  const id = draft.id.trim();
   const displayName = draft.displayName.trim();
+  const id = draft.originalRef || draft.locked ? draft.id.trim() : profileIdFromName(displayName);
   if (!id || !displayName) return "invalid";
   const model = draft.model?.trim() || undefined;
   const saved = await upsertAgentProfile({
@@ -340,7 +347,6 @@ export function SubagentsPage() {
   const profilesLoading = runtime?.agentProfilesLoading ?? false;
   const [scope, setScope] = useState<AgentProfileScope>("workspace");
   const [draft, setDraft] = useState<DraftProfile | null>(null);
-  const [idTouched, setIdTouched] = useState(false);
 
   useEffect(() => {
     const nextWorkspace = resolveSubagentProfilesWorkspace(
@@ -402,7 +408,6 @@ export function SubagentsPage() {
   }, [catalog?.profiles]);
 
   const startCreate = () => {
-    setIdTouched(false);
     setDraft(newDraft(scope, defaultPromptForRole(rolePromptDefaults, "worker") ?? ""));
   };
 
@@ -529,7 +534,6 @@ export function SubagentsPage() {
                   key={`${entry.scope}:${entry.profile.id}`}
                   entry={entry}
                   onEdit={() => {
-                    setIdTouched(true);
                     setDraft(draftFromEntry(entry));
                   }}
                   onCopy={() => void copyProfile(entry)}
@@ -546,8 +550,6 @@ export function SubagentsPage() {
       <ProfileDialog
         draft={draft}
         setDraft={setDraft}
-        idTouched={idTouched}
-        setIdTouched={setIdTouched}
         mcpServerNames={mcpServerNames}
         skillNames={skillNames}
         providerCatalog={providerCatalog}
@@ -576,30 +578,31 @@ function WorkspaceTargetPicker({
   if (!selectedWorkspace) return null;
 
   return (
-    <div className="grid gap-3 rounded-md border border-border/60 bg-background/55 px-3 py-3 sm:grid-cols-[minmax(0,1fr)_minmax(220px,320px)] sm:items-center">
+    <div className="grid gap-3 rounded-md border border-border/60 bg-background/55 px-3 py-3 sm:grid-cols-[minmax(0,1fr)_minmax(180px,220px)] sm:items-start">
       <div className="flex min-w-0 flex-col gap-1">
         <Label className="text-xs text-muted-foreground">Profile workspace</Label>
         <div className="truncate text-sm font-medium">{formatWorkspaceName(selectedWorkspace)}</div>
         <div className="truncate text-xs text-muted-foreground">{selectedWorkspace.path}</div>
       </div>
-      <Select
-        value={selectedWorkspace.id}
-        disabled={disabled || workspaces.length <= 1}
-        onValueChange={onValueChange}
-      >
-        <SelectTrigger className="w-full">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectGroup>
-            {workspaces.map((workspace) => (
-              <SelectItem key={workspace.id} value={workspace.id}>
-                {formatWorkspaceName(workspace)}
-              </SelectItem>
-            ))}
-          </SelectGroup>
-        </SelectContent>
-      </Select>
+      {workspaces.length > 1 ? (
+        <div className="flex flex-col gap-1 sm:items-end">
+          <Label className="text-xs text-muted-foreground">Workspace</Label>
+          <Select value={selectedWorkspace.id} disabled={disabled} onValueChange={onValueChange}>
+            <SelectTrigger className="w-full sm:w-[220px]">
+              <span>Change workspace</span>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                {workspaces.map((workspace) => (
+                  <SelectItem key={workspace.id} value={workspace.id}>
+                    {formatWorkspaceName(workspace)}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -632,7 +635,7 @@ function ProfileRow({
           ) : null}
         </div>
         <div className="text-xs text-muted-foreground">
-          <code>{ref}</code> · {ROLE_LABELS[entry.profile.baseRole]}
+          <code>{ref}</code> · Template: {ROLE_LABELS[entry.profile.baseRole]}
           {entry.profile.model ? ` · ${entry.profile.model}` : ""}
         </div>
         {entry.profile.description ? (
@@ -665,8 +668,6 @@ function ProfileRow({
 export function ProfileDialog({
   draft,
   setDraft,
-  idTouched,
-  setIdTouched,
   mcpServerNames,
   skillNames,
   providerCatalog = [],
@@ -678,8 +679,6 @@ export function ProfileDialog({
 }: {
   draft: DraftProfile | null;
   setDraft: (draft: DraftProfile | null) => void;
-  idTouched: boolean;
-  setIdTouched: (value: boolean) => void;
   mcpServerNames: string[];
   skillNames: string[];
   providerCatalog?: ProviderCatalogEntry[];
@@ -698,6 +697,9 @@ export function ProfileDialog({
   const canSave = !!draft?.id.trim() && !!draft.displayName.trim();
   const editingExisting = draft?.originalRef !== undefined;
   const disableEnabledSwitch = draft?.locked === true;
+  const generatedProfileRef = draft?.id.trim()
+    ? `${draft.scope}:${draft.id.trim()}`
+    : "generated from name";
 
   return (
     <Dialog open={draft !== null} onOpenChange={(open) => !open && setDraft(null)}>
@@ -729,7 +731,7 @@ export function ProfileDialog({
                     </SelectContent>
                   </Select>
                 </Field>
-                <Field label="Base role">
+                <Field label="Template">
                   <Select
                     value={draft.baseRole}
                     onValueChange={(value) => {
@@ -788,8 +790,8 @@ export function ProfileDialog({
               />
             ) : null}
 
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="Display name">
+            <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(180px,240px)]">
+              <Field label="Name">
                 <Input
                   value={draft.displayName}
                   onChange={(event) => {
@@ -797,20 +799,15 @@ export function ProfileDialog({
                     setDraft({
                       ...draft,
                       displayName,
-                      id: idTouched ? draft.id : slugify(displayName),
+                      id: editingExisting ? draft.id : profileIdFromName(displayName),
                     });
                   }}
                 />
               </Field>
-              <Field label="Profile id">
-                <Input
-                  value={draft.id}
-                  disabled={editingExisting}
-                  onChange={(event) => {
-                    setIdTouched(true);
-                    setDraft({ ...draft, id: slugify(event.target.value) });
-                  }}
-                />
+              <Field label="Subagent id">
+                <div className="flex min-h-9 items-center rounded-md border border-border/60 bg-muted/30 px-3 text-sm text-muted-foreground">
+                  <code className="truncate text-xs">{generatedProfileRef}</code>
+                </div>
               </Field>
             </div>
 

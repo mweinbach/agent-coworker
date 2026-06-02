@@ -78,6 +78,7 @@ const {
   ProfileDialog,
   SubagentsPage,
   listSubagentProfileWorkspaces,
+  profileIdFromName,
   profileModelSupportsReasoning,
   providerCatalogForSubagentWorkspace,
   resolveSubagentProfilesWorkspace,
@@ -322,7 +323,28 @@ describe("subagents settings page", () => {
     );
   });
 
-  test("keeps existing profile identity immutable while editing", async () => {
+  test("generates profile ids from profile names before saving", async () => {
+    const upsertAgentProfile = mock(async () => true);
+    const draft = {
+      ...draftProfile(),
+      id: "",
+      displayName: "QA Reviewer 2!",
+    };
+
+    const result = await saveAgentProfileDraft(draft, upsertAgentProfile);
+
+    expect(profileIdFromName("QA Reviewer 2!")).toBe("qa-reviewer-2");
+    expect(profileIdFromName("Model_IO.Review")).toBe("model-io-review");
+    expect(result).toBe("saved");
+    expect(upsertAgentProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "qa-reviewer-2",
+        displayName: "QA Reviewer 2!",
+      }),
+    );
+  });
+
+  test("shows existing profile identity as generated metadata while editing", async () => {
     let root: ReturnType<typeof createRoot> | null = null;
     const harness = setupJsdom();
     try {
@@ -342,8 +364,6 @@ describe("subagents settings page", () => {
           createElement(ProfileDialog, {
             draft,
             setDraft: mock(() => {}),
-            idTouched: true,
-            setIdTouched: mock(() => {}),
             mcpServerNames: [],
             skillNames: [],
             onSave: mock(() => {}),
@@ -352,21 +372,16 @@ describe("subagents settings page", () => {
         await flushUi();
       });
 
-      const profileIdInput = [...harness.dom.window.document.querySelectorAll("input")].find(
-        (input) => input.value === "qa-reviewer",
-      );
-      if (!(profileIdInput instanceof harness.dom.window.HTMLInputElement)) {
-        throw new Error(
-          `missing profile id input: ${harness.dom.window.document.body.textContent ?? ""}`,
-        );
-      }
       const scopeSelect = harness.dom.window.document.querySelector('[role="combobox"]');
       if (!(scopeSelect instanceof harness.dom.window.HTMLButtonElement)) {
         throw new Error("missing scope select");
       }
+      const text = harness.dom.window.document.body.textContent ?? "";
 
-      expect(harness.dom.window.document.body.textContent).toContain("Edit subagent");
-      expect(profileIdInput.disabled).toBe(true);
+      expect(text).toContain("Edit subagent");
+      expect(text).toContain("Subagent id");
+      expect(text).toContain("workspace:qa-reviewer");
+      expect(text).not.toContain("Profile id");
       expect(scopeSelect.disabled).toBe(true);
     } finally {
       if (root) {
@@ -395,8 +410,6 @@ describe("subagents settings page", () => {
               prompt: "Explorer default role prompt.",
             },
             setDraft: mock(() => {}),
-            idTouched: true,
-            setIdTouched: mock(() => {}),
             mcpServerNames: [],
             skillNames: [],
             workspace: null,
@@ -453,8 +466,6 @@ describe("subagents settings page", () => {
               allowedBuiltInTools: ["read", "grep"],
             },
             setDraft: mock(() => {}),
-            idTouched: true,
-            setIdTouched: mock(() => {}),
             mcpServerNames: [],
             skillNames: [],
             workspace: null,
@@ -500,8 +511,6 @@ describe("subagents settings page", () => {
               reasoningEffort: "high",
             },
             setDraft: mock(() => {}),
-            idTouched: true,
-            setIdTouched: mock(() => {}),
             mcpServerNames: [],
             skillNames: [],
             providerCatalog: [],
@@ -525,8 +534,6 @@ describe("subagents settings page", () => {
               reasoningEffort: "high",
             },
             setDraft: mock(() => {}),
-            idTouched: true,
-            setIdTouched: mock(() => {}),
             mcpServerNames: [],
             skillNames: [],
             providerCatalog: [],
@@ -758,6 +765,48 @@ describe("subagents settings page", () => {
     );
   });
 
+  test("shows workspace details without duplicating them in the picker trigger", async () => {
+    let root: ReturnType<typeof createRoot> | null = null;
+    const harness = setupJsdom();
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+      const first = workspaceRecord("project-1", "Project One", "project");
+      const second = workspaceRecord("project-2", "Project Two", "project");
+
+      await act(async () => {
+        root.render(
+          createElement(ProfileDialog, {
+            draft: draftProfile(),
+            setDraft: mock(() => {}),
+            mcpServerNames: [],
+            skillNames: [],
+            workspace: first,
+            workspaceChoices: [first, second],
+            onWorkspaceChange: mock(() => {}),
+            onSave: mock(() => {}),
+          }),
+        );
+        await flushUi();
+      });
+
+      const text = harness.dom.window.document.body.textContent ?? "";
+      expect(text).toContain("Profile workspace");
+      expect(text).toContain("Project One");
+      expect(text).toContain("/tmp/project-1");
+      expect(text).toContain("Change workspace");
+      expect(text.match(/Project One/g)?.length ?? 0).toBe(1);
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
   test("puts the scope choice before identity fields in the profile dialog", async () => {
     let root: ReturnType<typeof createRoot> | null = null;
     const harness = setupJsdom();
@@ -772,8 +821,6 @@ describe("subagents settings page", () => {
           createElement(ProfileDialog, {
             draft: draftProfile(),
             setDraft: mock(() => {}),
-            idTouched: true,
-            setIdTouched: mock(() => {}),
             mcpServerNames: [],
             skillNames: [],
             workspace: project,
@@ -787,8 +834,11 @@ describe("subagents settings page", () => {
 
       const text = harness.dom.window.document.body.textContent ?? "";
       expect(text).toContain(ONE_OFF_CHAT_GLOBAL_NOTE);
+      expect(text).toContain("Template");
+      expect(text).not.toContain("Base role");
+      expect(text).not.toContain("Display name");
       expect(text.indexOf("Scope")).toBeGreaterThanOrEqual(0);
-      expect(text.indexOf("Scope")).toBeLessThan(text.indexOf("Display name"));
+      expect(text.indexOf("Scope")).toBeLessThan(text.indexOf("Name"));
     } finally {
       if (root) {
         await act(async () => {

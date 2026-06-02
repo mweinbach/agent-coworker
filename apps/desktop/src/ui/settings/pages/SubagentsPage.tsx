@@ -7,11 +7,11 @@ import type {
   AgentProfileDefinition,
   AgentProfileScope,
 } from "../../../../../../src/shared/agentProfiles";
-import type {
-  AgentContextMode,
-  AgentRole,
-  AgentTaskType,
-} from "../../../../../../src/shared/agents";
+import type { AgentRole } from "../../../../../../src/shared/agents";
+import {
+  OPENAI_COMPATIBLE_PROVIDER_NAMES,
+  OPENAI_REASONING_EFFORT_VALUES,
+} from "../../../../../../src/shared/openaiCompatibleOptions";
 import { useAppStore } from "../../../app/store";
 import { isOneOffChatWorkspace, type WorkspaceRecord } from "../../../app/types";
 import { Badge } from "../../../components/ui/badge";
@@ -32,12 +32,25 @@ import {
   SelectContent,
   SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "../../../components/ui/select";
 import { Switch } from "../../../components/ui/switch";
 import { Textarea } from "../../../components/ui/textarea";
+import {
+  decodeProviderModelSelection,
+  encodeProviderModelSelection,
+  modelChoicesFromCatalog,
+  modelDisplayNamesFromCatalog,
+  resolveModelDisplayLabel,
+  UI_DISABLED_PROVIDERS,
+} from "../../../lib/modelChoices";
+import { displayProviderName } from "../../../lib/providerDisplayNames";
+import { sortProviderEntriesForSettings } from "../../../lib/providerOrdering";
 import { cn } from "../../../lib/utils";
+import type { ProviderName, SessionEvent } from "../../../lib/wsProtocol";
+import { PROVIDER_NAMES } from "../../../lib/wsProtocol";
 import { SettingsEmptyState, SettingsSection, SettingsStatusPill } from "../SettingsPrimitives";
 
 export type DraftProfile = AgentProfileDefinition & {
@@ -90,11 +103,22 @@ const ROLE_TOOLS: Record<AgentRole, string[]> = {
   reviewer: ["bash", "read", "glob", "grep"],
 };
 
-const REASONING_EFFORTS = ["none", "low", "medium", "high", "xhigh"] as const;
-const TASK_TYPES: AgentTaskType[] = ["research", "plan", "implement", "verify"];
-const CONTEXT_MODES: AgentContextMode[] = ["none", "brief", "full"];
+const ALL_BUILT_IN_TOOLS = Array.from(new Set(Object.values(ROLE_TOOLS).flat()));
 const ONE_OFF_CHAT_GLOBAL_PROFILE_NOTE =
   "One-off chats can only use global profiles. Choose Global if this subagent should be available there.";
+const INHERIT_MODEL_VALUE = "__inherit_model__";
+const REASONING_PROVIDER_SET = new Set<string>(OPENAI_COMPATIBLE_PROVIDER_NAMES);
+
+type ProviderCatalogEntry = Extract<SessionEvent, { type: "provider_catalog" }>["all"][number];
+type ProfileModelOption = {
+  value: string;
+  label: string;
+};
+type ProfileModelGroup = {
+  provider: ProviderName;
+  label: string;
+  options: ProfileModelOption[];
+};
 
 function newDraft(scope: AgentProfileScope): DraftProfile {
   return {
@@ -176,12 +200,73 @@ function toggleList(values: readonly string[], item: string, checked: boolean): 
   return values.filter((value) => value !== item);
 }
 
-function visibleBuiltInToolsForRole(
-  baseRole: AgentRole,
-  selectedTools: readonly string[],
-): string[] {
+function validBuiltInToolsForProfile(selectedTools: readonly string[]): string[] {
   const selected = new Set(selectedTools);
-  return ROLE_TOOLS[baseRole].filter((tool) => selected.has(tool));
+  return ALL_BUILT_IN_TOOLS.filter((tool) => selected.has(tool));
+}
+
+export function profileModelSupportsReasoning(model: string | undefined): boolean {
+  const parsed = model ? decodeProviderModelSelection(model.trim()) : null;
+  return parsed ? REASONING_PROVIDER_SET.has(parsed.provider) : false;
+}
+
+export function buildProfileModelGroups(
+  providerCatalog: readonly ProviderCatalogEntry[],
+  currentModel?: string | null,
+): { groups: ProfileModelGroup[]; customOptions: ProfileModelOption[] } {
+  const modelChoices = modelChoicesFromCatalog(providerCatalog);
+  const displayNames = modelDisplayNamesFromCatalog(providerCatalog);
+  const current = currentModel?.trim() || "";
+  const groups = sortProviderEntriesForSettings(
+    PROVIDER_NAMES.filter((provider) => !UI_DISABLED_PROVIDERS.has(provider))
+      .map((provider) => {
+        const options = (modelChoices[provider] ?? []).map((modelId) => ({
+          value: encodeProviderModelSelection(provider, modelId),
+          label: resolveModelDisplayLabel(provider, modelId, displayNames),
+        }));
+        return {
+          provider,
+          label: displayProviderName(provider),
+          options,
+        };
+      })
+      .filter((group) => group.options.length > 0),
+  );
+  const hasCurrent = groups.some((group) =>
+    group.options.some((option) => option.value === current),
+  );
+  if (!current || hasCurrent) {
+    return { groups, customOptions: [] };
+  }
+
+  const parsed = decodeProviderModelSelection(current);
+  if (!parsed) {
+    return {
+      groups,
+      customOptions: [{ value: current, label: `${current} (custom)` }],
+    };
+  }
+
+  const customOption = {
+    value: current,
+    label: `${resolveModelDisplayLabel(parsed.provider, parsed.modelId, displayNames)} (custom)`,
+  };
+  const existingGroup = groups.find((group) => group.provider === parsed.provider);
+  if (existingGroup) {
+    existingGroup.options = [customOption, ...existingGroup.options];
+    return { groups, customOptions: [] };
+  }
+  return {
+    groups: [
+      ...groups,
+      {
+        provider: parsed.provider,
+        label: displayProviderName(parsed.provider),
+        options: [customOption],
+      },
+    ],
+    customOptions: [],
+  };
 }
 
 export async function saveAgentProfileDraft(
@@ -194,6 +279,7 @@ export async function saveAgentProfileDraft(
   const id = draft.id.trim();
   const displayName = draft.displayName.trim();
   if (!id || !displayName) return "invalid";
+  const model = draft.model?.trim() || undefined;
   const saved = await upsertAgentProfile({
     version: draft.version,
     id,
@@ -202,13 +288,13 @@ export async function saveAgentProfileDraft(
     enabled: draft.locked ? true : draft.enabled,
     baseRole: draft.baseRole,
     prompt: draft.prompt.trim(),
-    allowedBuiltInTools: visibleBuiltInToolsForRole(draft.baseRole, draft.allowedBuiltInTools),
+    allowedBuiltInTools: validBuiltInToolsForProfile(draft.allowedBuiltInTools),
     allowedMcpServers: draft.allowedMcpServers,
     skillNames: draft.skillNames,
-    model: draft.model?.trim() || undefined,
-    reasoningEffort: draft.reasoningEffort,
-    defaultTaskType: draft.defaultTaskType,
-    defaultContextMode: draft.defaultContextMode,
+    model,
+    reasoningEffort: profileModelSupportsReasoning(model) ? draft.reasoningEffort : undefined,
+    defaultTaskType: undefined,
+    defaultContextMode: undefined,
     scope: draft.scope,
   });
   return saved ? "saved" : "failed";
@@ -224,6 +310,7 @@ export function SubagentsPage() {
   const copyAgentProfile = useAppStore((s) => s.copyAgentProfile);
   const requestWorkspaceMcpServers = useAppStore((s) => s.requestWorkspaceMcpServers);
   const refreshSkillsCatalog = useAppStore((s) => s.refreshSkillsCatalog);
+  const providerCatalog = useAppStore((s) => s.providerCatalog);
 
   const workspaceChoices = useMemo(() => listSubagentProfileWorkspaces(workspaces), [workspaces]);
   const [profileWorkspaceId, setProfileWorkspaceId] = useState<string | null>(null);
@@ -434,6 +521,7 @@ export function SubagentsPage() {
         setIdTouched={setIdTouched}
         mcpServerNames={mcpServerNames}
         skillNames={skillNames}
+        providerCatalog={providerCatalog}
         workspace={workspace}
         workspaceChoices={workspaceChoices}
         onWorkspaceChange={setProfileWorkspaceId}
@@ -551,6 +639,7 @@ export function ProfileDialog({
   setIdTouched,
   mcpServerNames,
   skillNames,
+  providerCatalog = [],
   workspace,
   workspaceChoices,
   onWorkspaceChange,
@@ -562,12 +651,18 @@ export function ProfileDialog({
   setIdTouched: (value: boolean) => void;
   mcpServerNames: string[];
   skillNames: string[];
+  providerCatalog?: ProviderCatalogEntry[];
   workspace: WorkspaceRecord | null;
   workspaceChoices: WorkspaceRecord[];
   onWorkspaceChange: (workspaceId: string) => void;
   onSave: () => void;
 }) {
-  const tools = draft ? ROLE_TOOLS[draft.baseRole] : [];
+  const tools = ALL_BUILT_IN_TOOLS;
+  const { groups: modelGroups, customOptions } = useMemo(
+    () => buildProfileModelGroups(providerCatalog, draft?.model),
+    [draft?.model, providerCatalog],
+  );
+  const modelSupportsReasoning = profileModelSupportsReasoning(draft?.model);
   const canSave = !!draft?.id.trim() && !!draft.displayName.trim();
   const editingExisting = draft?.originalRef !== undefined;
   const disableEnabledSwitch = draft?.locked === true;
@@ -688,107 +783,96 @@ export function ProfileDialog({
               <Textarea
                 value={draft.prompt}
                 className="min-h-32"
+                placeholder="Add instructions this subagent should follow."
                 onChange={(event) => setDraft({ ...draft, prompt: event.target.value })}
               />
+              <p className="text-xs text-muted-foreground">
+                Profile instructions are appended after the base role prompt.
+              </p>
             </Field>
 
-            <div className="grid gap-3 sm:grid-cols-3">
+            <div className="grid gap-3 sm:grid-cols-2">
               <Field label="Model target">
-                <Input
-                  value={draft.model ?? ""}
-                  placeholder="provider:model or model"
-                  onChange={(event) =>
-                    setDraft({ ...draft, model: event.target.value || undefined })
-                  }
-                />
-              </Field>
-              <Field label="Reasoning">
                 <Select
-                  value={draft.reasoningEffort ?? "inherit"}
-                  onValueChange={(value) =>
+                  value={draft.model?.trim() || INHERIT_MODEL_VALUE}
+                  onValueChange={(value) => {
+                    const model = value === INHERIT_MODEL_VALUE ? undefined : value;
                     setDraft({
                       ...draft,
-                      reasoningEffort:
-                        value === "inherit"
-                          ? undefined
-                          : (value as DraftProfile["reasoningEffort"]),
-                    })
-                  }
+                      model,
+                      reasoningEffort: profileModelSupportsReasoning(model)
+                        ? draft.reasoningEffort
+                        : undefined,
+                    });
+                  }}
                 >
-                  <SelectTrigger>
-                    <SelectValue />
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Inherit parent model" />
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent className="max-h-72">
                     <SelectGroup>
-                      <SelectItem value="inherit">Inherit</SelectItem>
-                      {REASONING_EFFORTS.map((effort) => (
-                        <SelectItem key={effort} value={effort}>
-                          {effort}
-                        </SelectItem>
-                      ))}
+                      <SelectItem value={INHERIT_MODEL_VALUE}>Inherit parent model</SelectItem>
                     </SelectGroup>
-                  </SelectContent>
-                </Select>
-              </Field>
-              <Field label="Task type">
-                <Select
-                  value={draft.defaultTaskType ?? "inherit"}
-                  onValueChange={(value) =>
-                    setDraft({
-                      ...draft,
-                      defaultTaskType: value === "inherit" ? undefined : (value as AgentTaskType),
-                    })
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      <SelectItem value="inherit">Inherit</SelectItem>
-                      {TASK_TYPES.map((taskType) => (
-                        <SelectItem key={taskType} value={taskType}>
-                          {taskType}
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-              </Field>
-            </div>
-
-            <Field label="Context default">
-              <Select
-                value={draft.defaultContextMode ?? "inherit"}
-                onValueChange={(value) =>
-                  setDraft({
-                    ...draft,
-                    defaultContextMode:
-                      value === "inherit" ? undefined : (value as AgentContextMode),
-                  })
-                }
-              >
-                <SelectTrigger className="max-w-xs">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    <SelectItem value="inherit">Inherit</SelectItem>
-                    {CONTEXT_MODES.map((mode) => (
-                      <SelectItem key={mode} value={mode}>
-                        {mode}
-                      </SelectItem>
+                    {customOptions.length > 0 ? (
+                      <SelectGroup>
+                        <SelectLabel>Current target</SelectLabel>
+                        {customOptions.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    ) : null}
+                    {modelGroups.map((group) => (
+                      <SelectGroup key={group.provider}>
+                        <SelectLabel>{group.label}</SelectLabel>
+                        {group.options.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
                     ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-            </Field>
+                  </SelectContent>
+                </Select>
+              </Field>
+              {modelSupportsReasoning ? (
+                <Field label="Reasoning">
+                  <Select
+                    value={draft.reasoningEffort ?? "inherit"}
+                    onValueChange={(value) =>
+                      setDraft({
+                        ...draft,
+                        reasoningEffort:
+                          value === "inherit"
+                            ? undefined
+                            : (value as DraftProfile["reasoningEffort"]),
+                      })
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        <SelectItem value="inherit">Inherit</SelectItem>
+                        {OPENAI_REASONING_EFFORT_VALUES.map((effort) => (
+                          <SelectItem key={effort} value={effort}>
+                            {effort}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </Field>
+              ) : null}
+            </div>
 
             <Checklist
               title="Built-in tools"
               values={tools}
               selected={draft.allowedBuiltInTools}
-              emptyLabel="No built-in tools are available for this role."
+              emptyLabel="No built-in tools are available."
               onChange={(item, checked) =>
                 setDraft({
                   ...draft,

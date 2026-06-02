@@ -18,8 +18,19 @@ async function makeConfig(): Promise<AgentConfig> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "agent-profile-test-"));
   const workspace = path.join(root, "workspace");
   const home = path.join(root, "home");
+  const subAgentPrompts = path.join(root, "prompts", "sub-agents");
   await fs.mkdir(workspace, { recursive: true });
   await fs.mkdir(home, { recursive: true });
+  await fs.mkdir(subAgentPrompts, { recursive: true });
+  await Promise.all(
+    ["default", "explorer", "research", "worker", "reviewer"].map(async (role) => {
+      await fs.writeFile(
+        path.join(subAgentPrompts, `${role}.md`),
+        `${role} built-in profile prompt.`,
+        "utf-8",
+      );
+    }),
+  );
   return {
     provider: "openai",
     model: "gpt-5.4",
@@ -79,7 +90,15 @@ describe("agent profile catalog", () => {
       profile: {
         displayName: "Main Agent",
         enabled: true,
+        prompt: "default built-in profile prompt.",
         defaultContextMode: "full",
+      },
+    });
+    expect(catalog.profiles.find((entry) => entry.profile.id === "explorer")).toMatchObject({
+      builtIn: true,
+      profile: {
+        displayName: "Explorer",
+        prompt: "explorer built-in profile prompt.",
       },
     });
   });

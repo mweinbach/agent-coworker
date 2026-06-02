@@ -74,9 +74,11 @@ mock.module("../src/lib/agentSocket", () => ({
 }));
 
 const {
+  buildProfileModelGroups,
   ProfileDialog,
   SubagentsPage,
   listSubagentProfileWorkspaces,
+  profileModelSupportsReasoning,
   resolveSubagentProfilesWorkspace,
   saveAgentProfileDraft,
 } = await import("../src/ui/settings/pages/SubagentsPage");
@@ -217,12 +219,12 @@ describe("subagents settings page", () => {
     });
   });
 
-  test("strips hidden built-in tools outside the selected base role before saving", async () => {
+  test("keeps valid built-in tools outside the selected base role before saving", async () => {
     const upsertAgentProfile = mock(async () => true);
     const draft = {
       ...draftProfile(),
       baseRole: "reviewer" as const,
-      allowedBuiltInTools: ["read", "write", "grep", "webSearch"],
+      allowedBuiltInTools: ["read", "write", "grep", "webSearch", "unknownTool"],
     };
 
     const result = await saveAgentProfileDraft(draft, upsertAgentProfile);
@@ -231,7 +233,49 @@ describe("subagents settings page", () => {
     expect(upsertAgentProfile).toHaveBeenCalledWith(
       expect.objectContaining({
         baseRole: "reviewer",
-        allowedBuiltInTools: ["read", "grep"],
+        allowedBuiltInTools: ["read", "write", "grep", "webSearch"],
+      }),
+    );
+  });
+
+  test("clears reasoning when the selected profile model has no reasoning option", async () => {
+    const upsertAgentProfile = mock(async () => true);
+    const draft = {
+      ...draftProfile(),
+      model: "google:gemini-3-flash-preview",
+      reasoningEffort: "high" as const,
+      defaultTaskType: "verify" as const,
+      defaultContextMode: "brief" as const,
+    };
+
+    const result = await saveAgentProfileDraft(draft, upsertAgentProfile);
+
+    expect(result).toBe("saved");
+    expect(upsertAgentProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "google:gemini-3-flash-preview",
+        reasoningEffort: undefined,
+        defaultTaskType: undefined,
+        defaultContextMode: undefined,
+      }),
+    );
+  });
+
+  test("keeps reasoning for explicit OpenAI-compatible profile model targets", async () => {
+    const upsertAgentProfile = mock(async () => true);
+    const draft = {
+      ...draftProfile(),
+      model: "openai:gpt-5.4",
+      reasoningEffort: "high" as const,
+    };
+
+    const result = await saveAgentProfileDraft(draft, upsertAgentProfile);
+
+    expect(result).toBe("saved");
+    expect(upsertAgentProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "openai:gpt-5.4",
+        reasoningEffort: "high",
       }),
     );
   });
@@ -314,6 +358,155 @@ describe("subagents settings page", () => {
       }
       harness.restore();
     }
+  });
+
+  test("shows every built-in tool in the profile editor", async () => {
+    let root: ReturnType<typeof createRoot> | null = null;
+    const harness = setupJsdom();
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          createElement(ProfileDialog, {
+            draft: {
+              ...draftProfile(),
+              baseRole: "reviewer",
+              allowedBuiltInTools: ["read", "grep"],
+            },
+            setDraft: mock(() => {}),
+            idTouched: true,
+            setIdTouched: mock(() => {}),
+            mcpServerNames: [],
+            skillNames: [],
+            workspace: null,
+            workspaceChoices: [],
+            onWorkspaceChange: mock(() => {}),
+            onSave: mock(() => {}),
+          }),
+        );
+        await flushUi();
+      });
+
+      const text = harness.dom.window.document.body.textContent ?? "";
+      expect(text).toContain("Built-in tools");
+      expect(text).toContain("write");
+      expect(text).toContain("webSearch");
+      expect(text).toContain("todoWrite");
+      expect(text).not.toContain("Task type");
+      expect(text).not.toContain("Context default");
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test("shows reasoning only for model targets that support it", async () => {
+    let root: ReturnType<typeof createRoot> | null = null;
+    const harness = setupJsdom();
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          createElement(ProfileDialog, {
+            draft: {
+              ...draftProfile(),
+              model: "google:gemini-3-flash-preview",
+              reasoningEffort: "high",
+            },
+            setDraft: mock(() => {}),
+            idTouched: true,
+            setIdTouched: mock(() => {}),
+            mcpServerNames: [],
+            skillNames: [],
+            providerCatalog: [],
+            workspace: null,
+            workspaceChoices: [],
+            onWorkspaceChange: mock(() => {}),
+            onSave: mock(() => {}),
+          }),
+        );
+        await flushUi();
+      });
+
+      expect(harness.dom.window.document.body.textContent ?? "").not.toContain("Reasoning");
+
+      await act(async () => {
+        root?.render(
+          createElement(ProfileDialog, {
+            draft: {
+              ...draftProfile(),
+              model: "openai:gpt-5.4",
+              reasoningEffort: "high",
+            },
+            setDraft: mock(() => {}),
+            idTouched: true,
+            setIdTouched: mock(() => {}),
+            mcpServerNames: [],
+            skillNames: [],
+            providerCatalog: [],
+            workspace: null,
+            workspaceChoices: [],
+            onWorkspaceChange: mock(() => {}),
+            onSave: mock(() => {}),
+          }),
+        );
+        await flushUi();
+      });
+
+      expect(harness.dom.window.document.body.textContent ?? "").toContain("Reasoning");
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test("builds model picker groups from the provider catalog", () => {
+    const result = buildProfileModelGroups(
+      [
+        {
+          id: "openai",
+          name: "OpenAI",
+          defaultModel: "gpt-5.4",
+          models: [
+            {
+              id: "gpt-5.4",
+              displayName: "GPT 5.4",
+              knowledgeCutoff: "unknown",
+              supportsImageInput: true,
+            },
+          ],
+        },
+      ],
+      "openai:gpt-5.4",
+    );
+
+    expect(profileModelSupportsReasoning("openai:gpt-5.4")).toBe(true);
+    expect(profileModelSupportsReasoning("google:gemini-3-flash-preview")).toBe(false);
+    expect(result.groups).toContainEqual(
+      expect.objectContaining({
+        provider: "openai",
+        options: [
+          {
+            value: "openai:gpt-5.4",
+            label: "GPT 5.4",
+          },
+        ],
+      }),
+    );
   });
 
   test("shows built-in profiles in the global scope", async () => {

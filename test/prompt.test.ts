@@ -19,6 +19,7 @@ import {
   SPAWN_AGENT_PROMPT_OVERVIEW,
   SPAWN_AGENT_WHEN_TO_USE,
 } from "../src/server/agents/roles";
+import { createAgentProfileSnapshot } from "../src/shared/agentProfiles";
 import type { AgentConfig } from "../src/types";
 import { buildWorkspaceMapSection } from "../src/workspace/map";
 
@@ -1447,6 +1448,40 @@ describe("loadSubAgentPrompt", () => {
     const combined = `${basePrompt}\n\n${promptContent}`;
     const expected = `${combined}\n\n${buildWorkspaceMapSection(config)}`;
     expect(prompt).toBe(expected);
+  });
+
+  test("does not duplicate profile prompt when it matches the base role prompt", async () => {
+    const { builtIn, cwd } = await makeTmpDirs();
+    await fs.mkdir(path.join(cwd, ".git"), { recursive: true });
+
+    const basePrompt = "Shared base prompt.";
+    const rolePrompt = "Explorer role prompt for testing.";
+    await writeFile(path.join(builtIn, "prompts", "sub-agents", "base.md"), basePrompt);
+    await writeFile(path.join(builtIn, "prompts", "sub-agents", "explorer.md"), rolePrompt);
+
+    const config = makeConfig({
+      builtInDir: builtIn,
+      workingDirectory: cwd,
+      projectCoworkDir: path.join(cwd, ".cowork"),
+    });
+    const profile = createAgentProfileSnapshot("global", {
+      version: 1,
+      id: "explorer",
+      displayName: "Explorer",
+      description: "",
+      enabled: true,
+      baseRole: "explorer",
+      prompt: rolePrompt,
+      allowedBuiltInTools: ["read"],
+      allowedMcpServers: [],
+      skillNames: [],
+    });
+
+    const prompt = await loadAgentPrompt(config, "explorer", profile);
+
+    expect(prompt.split(rolePrompt).length - 1).toBe(1);
+    expect(prompt).toContain("## Specialized Subagent Profile");
+    expect(prompt).not.toContain("Profile-specific instructions:");
   });
 });
 

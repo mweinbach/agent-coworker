@@ -749,12 +749,15 @@ export async function loadAgentPrompt(
   const combined = [
     basePrompt.trimEnd(),
     rolePrompt.trim(),
-    ...(profile ? [buildAgentProfilePromptSection(profile)] : []),
+    ...(profile ? [buildAgentProfilePromptSection(profile, rolePrompt)] : []),
   ].join("\n\n");
   return await appendWorkspaceContextBlocks(combined, config, { includeProjectInstructions: true });
 }
 
-function buildAgentProfilePromptSection(profile: AgentProfileSnapshot): string {
+function buildAgentProfilePromptSection(
+  profile: AgentProfileSnapshot,
+  rolePrompt?: string,
+): string {
   const lines = [
     "## Specialized Subagent Profile",
     "",
@@ -770,7 +773,7 @@ function buildAgentProfilePromptSection(profile: AgentProfileSnapshot): string {
   ].filter(Boolean);
 
   const prompt = profile.prompt.trim();
-  if (prompt) {
+  if (prompt && prompt !== rolePrompt?.trim()) {
     lines.push("", "Profile-specific instructions:", prompt);
   }
   return lines.join("\n");

@@ -112,7 +112,7 @@ export async function readAgentProfilesCatalog(config: AgentConfig): Promise<Age
 
   const workspaceIds = new Set(workspaceProfiles.entries.map((entry) => entry.profile.id));
   const globalIds = new Set(globalProfiles.entries.map((entry) => entry.profile.id));
-  const builtInProfiles = buildBuiltInProfileEntries(globalIds);
+  const builtInProfiles = await buildBuiltInProfileEntries(config, globalIds);
   const profiles = [
     ...workspaceProfiles.entries,
     ...globalProfiles.entries,
@@ -236,12 +236,15 @@ async function writeProfileFile(
   await fs.writeFile(filePath, `${JSON.stringify(normalized, null, 2)}\n`, "utf-8");
 }
 
-function buildBuiltInProfileEntries(
+async function buildBuiltInProfileEntries(
+  config: AgentConfig,
   globalOverrideIds: ReadonlySet<string>,
-): AgentProfileCatalogEntry[] {
-  return Object.values(AGENT_ROLE_DEFINITIONS)
-    .filter((role) => !globalOverrideIds.has(role.id))
-    .map((role) => {
+): Promise<AgentProfileCatalogEntry[]> {
+  const roles = Object.values(AGENT_ROLE_DEFINITIONS).filter(
+    (role) => !globalOverrideIds.has(role.id),
+  );
+  return await Promise.all(
+    roles.map(async (role) => {
       const profile = normalizeAgentProfileDefinition({
         version: 1,
         id: role.id,
@@ -249,7 +252,7 @@ function buildBuiltInProfileEntries(
         description: BUILT_IN_PROFILE_DESCRIPTIONS[role.id] ?? role.description,
         enabled: true,
         baseRole: role.id,
-        prompt: "",
+        prompt: await readBuiltInRolePrompt(config, role.promptFile),
         allowedBuiltInTools: role.allowTools,
         allowedMcpServers: [],
         skillNames: [],
@@ -263,7 +266,20 @@ function buildBuiltInProfileEntries(
         shadowed: false,
         profile,
       };
-    });
+    }),
+  );
+}
+
+async function readBuiltInRolePrompt(config: AgentConfig, promptFile: string): Promise<string> {
+  const promptPath = path.join(config.builtInDir, "prompts", "sub-agents", promptFile);
+  try {
+    return (await fs.readFile(promptPath, "utf-8")).trim();
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") {
+      return "";
+    }
+    throw error;
+  }
 }
 
 function applyAgentProfileInvariants(profile: AgentProfileDefinition): AgentProfileDefinition {

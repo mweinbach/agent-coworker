@@ -57,6 +57,103 @@ function profile(overrides: Partial<AgentProfileUpsertInput> = {}): AgentProfile
 }
 
 describe("agent profile catalog", () => {
+  test("surfaces built-in subagent profiles without seeding profile files", async () => {
+    const config = await makeConfig();
+
+    const catalog = await readAgentProfilesCatalog(config);
+
+    expect(catalog.profiles.map((entry) => entry.profile.id)).toEqual([
+      "default",
+      "explorer",
+      "research",
+      "worker",
+      "reviewer",
+    ]);
+    expect(catalog.profiles.every((entry) => entry.scope === "global")).toBe(true);
+    expect(catalog.profiles.every((entry) => entry.builtIn === true)).toBe(true);
+    expect(catalog.effectiveProfiles).toHaveLength(5);
+    expect(catalog.profiles.find((entry) => entry.profile.id === "default")).toMatchObject({
+      builtIn: true,
+      locked: true,
+      effective: true,
+      profile: {
+        displayName: "Main Agent",
+        enabled: true,
+        defaultContextMode: "full",
+      },
+    });
+  });
+
+  test("keeps the built-in main agent enabled when edited", async () => {
+    const config = await makeConfig();
+
+    await upsertAgentProfile(
+      config,
+      profile({
+        scope: "global",
+        id: "default",
+        displayName: "Customized Main",
+        description: "Customized clone.",
+        enabled: false,
+        baseRole: "default",
+        allowedBuiltInTools: ["read", "write"],
+      }),
+    );
+
+    const catalog = await readAgentProfilesCatalog(config);
+    const defaultProfiles = catalog.profiles.filter((entry) => entry.profile.id === "default");
+
+    expect(defaultProfiles).toHaveLength(1);
+    expect(defaultProfiles[0]).toMatchObject({
+      scope: "global",
+      locked: true,
+      effective: true,
+      profile: {
+        displayName: "Customized Main",
+        enabled: true,
+      },
+    });
+    await expect(resolveAgentProfileSnapshot(config, "default")).resolves.toMatchObject({
+      id: "default",
+      ref: "global:default",
+      displayName: "Customized Main",
+      baseRole: "default",
+    });
+  });
+
+  test("disabled user profile overrides can hide a built-in profile", async () => {
+    const config = await makeConfig();
+
+    await upsertAgentProfile(
+      config,
+      profile({
+        scope: "workspace",
+        id: "reviewer",
+        displayName: "Reviewer Override",
+        enabled: false,
+        baseRole: "reviewer",
+      }),
+    );
+
+    const catalog = await readAgentProfilesCatalog(config);
+
+    expect(
+      catalog.profiles.find((entry) => entry.profile.id === "reviewer" && entry.builtIn),
+    ).toMatchObject({
+      scope: "global",
+      shadowed: true,
+      effective: false,
+    });
+    await expect(resolveAgentProfileSnapshot(config, "reviewer")).rejects.toThrow(
+      "Subagent profile is disabled: workspace:reviewer",
+    );
+    await expect(resolveAgentProfileSnapshot(config, "global:reviewer")).resolves.toMatchObject({
+      id: "reviewer",
+      ref: "global:reviewer",
+      displayName: "Reviewer",
+    });
+  });
+
   test("reads global and workspace profiles with workspace precedence", async () => {
     const config = await makeConfig();
 
@@ -84,7 +181,7 @@ describe("agent profile catalog", () => {
       globalDir: getAgentProfileDir(config, "global"),
       workspaceDir: getAgentProfileDir(config, "workspace"),
     });
-    expect(catalog.profiles).toHaveLength(2);
+    expect(catalog.profiles).toHaveLength(7);
     expect(catalog.profiles.find((entry) => entry.scope === "global")).toMatchObject({
       effective: false,
       shadowed: true,
@@ -93,8 +190,10 @@ describe("agent profile catalog", () => {
         allowedBuiltInTools: ["read", "grep"],
       },
     });
-    expect(catalog.effectiveProfiles).toHaveLength(1);
-    expect(catalog.effectiveProfiles[0]).toMatchObject({
+    expect(catalog.effectiveProfiles).toHaveLength(6);
+    expect(
+      catalog.effectiveProfiles.find((entry) => entry.profile.id === "qa-reviewer"),
+    ).toMatchObject({
       scope: "workspace",
       effective: true,
       shadowed: false,
@@ -128,7 +227,14 @@ describe("agent profile catalog", () => {
 
     const catalog = await readAgentProfilesCatalog(config);
 
-    expect(catalog.effectiveProfiles.map((entry) => entry.profile.id)).toEqual(["qa-reviewer"]);
+    expect(catalog.effectiveProfiles.map((entry) => entry.profile.id)).toEqual([
+      "qa-reviewer",
+      "default",
+      "explorer",
+      "research",
+      "worker",
+      "reviewer",
+    ]);
     expect(catalog.diagnostics).toEqual([
       expect.objectContaining({
         scope: "workspace",
@@ -150,10 +256,12 @@ describe("agent profile catalog", () => {
       targetDisplayName: "QA Reviewer Copy",
     });
 
-    expect(catalog.effectiveProfiles.map((entry) => entry.profile.id).sort()).toEqual([
-      "qa-reviewer",
-      "qa-reviewer-copy",
-    ]);
+    expect(
+      catalog.effectiveProfiles
+        .map((entry) => entry.profile.id)
+        .filter((id) => id.startsWith("qa-reviewer"))
+        .sort(),
+    ).toEqual(["qa-reviewer", "qa-reviewer-copy"]);
     expect(
       catalog.effectiveProfiles.find((entry) => entry.profile.id === "qa-reviewer-copy"),
     ).toMatchObject({
@@ -165,7 +273,11 @@ describe("agent profile catalog", () => {
     });
 
     catalog = await deleteAgentProfile(config, "workspace", "qa-reviewer-copy");
-    expect(catalog.effectiveProfiles.map((entry) => entry.profile.id)).toEqual(["qa-reviewer"]);
+    expect(
+      catalog.effectiveProfiles
+        .map((entry) => entry.profile.id)
+        .filter((id) => id.startsWith("qa-reviewer")),
+    ).toEqual(["qa-reviewer"]);
   });
 
   test("copy allows disabled source profiles without enabling them for spawn", async () => {

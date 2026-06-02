@@ -19,9 +19,24 @@ import {
   normalizeAgentProfileDefinition,
   parseAgentProfileRef,
 } from "../../shared/agentProfiles";
+import type { AgentRole } from "../../shared/agents";
 import type { AgentConfig } from "../../types";
+import { AGENT_ROLE_DEFINITIONS } from "./roles";
 
 const PROFILE_DIR_NAME = "agent-profiles";
+const MAIN_AGENT_PROFILE_ID = "default";
+
+const BUILT_IN_PROFILE_DISPLAY_NAMES: Record<AgentRole, string> = {
+  default: "Main Agent",
+  explorer: "Explorer",
+  research: "Research",
+  worker: "Worker",
+  reviewer: "Reviewer",
+};
+
+const BUILT_IN_PROFILE_DESCRIPTIONS: Partial<Record<AgentRole, string>> = {
+  default: "Direct clone of the parent agent for bounded collaborative work.",
+};
 
 type ReadScopeResult = {
   entries: AgentProfileCatalogEntry[];
@@ -68,10 +83,11 @@ async function readScope(config: AgentConfig, scope: AgentProfileScope): Promise
     const filePath = path.join(dir, file);
     try {
       const raw = await fs.readFile(filePath, "utf-8");
-      const parsed = normalizeAgentProfileDefinition(JSON.parse(raw));
+      const parsed = applyAgentProfileInvariants(normalizeAgentProfileDefinition(JSON.parse(raw)));
       entries.push({
         scope,
         path: filePath,
+        locked: isLockedProfile(parsed.id),
         effective: false,
         shadowed: false,
         profile: parsed,
@@ -95,7 +111,13 @@ export async function readAgentProfilesCatalog(config: AgentConfig): Promise<Age
   ]);
 
   const workspaceIds = new Set(workspaceProfiles.entries.map((entry) => entry.profile.id));
-  const profiles = [...workspaceProfiles.entries, ...globalProfiles.entries].map((entry) => {
+  const globalIds = new Set(globalProfiles.entries.map((entry) => entry.profile.id));
+  const builtInProfiles = buildBuiltInProfileEntries(globalIds);
+  const profiles = [
+    ...workspaceProfiles.entries,
+    ...globalProfiles.entries,
+    ...builtInProfiles,
+  ].map((entry) => {
     const shadowed = entry.scope === "global" && workspaceIds.has(entry.profile.id);
     return {
       ...entry,
@@ -207,11 +229,53 @@ async function writeProfileFile(
   scope: AgentProfileScope,
   profile: AgentProfileDefinition,
 ): Promise<void> {
-  const normalized = normalizeAgentProfileDefinition(profile);
+  const normalized = applyAgentProfileInvariants(normalizeAgentProfileDefinition(profile));
   const dir = getAgentProfileDir(config, scope);
   await fs.mkdir(dir, { recursive: true });
   const filePath = profilePathForId(config, scope, normalized.id);
   await fs.writeFile(filePath, `${JSON.stringify(normalized, null, 2)}\n`, "utf-8");
+}
+
+function buildBuiltInProfileEntries(
+  globalOverrideIds: ReadonlySet<string>,
+): AgentProfileCatalogEntry[] {
+  return Object.values(AGENT_ROLE_DEFINITIONS)
+    .filter((role) => !globalOverrideIds.has(role.id))
+    .map((role) => {
+      const profile = normalizeAgentProfileDefinition({
+        version: 1,
+        id: role.id,
+        displayName: BUILT_IN_PROFILE_DISPLAY_NAMES[role.id],
+        description: BUILT_IN_PROFILE_DESCRIPTIONS[role.id] ?? role.description,
+        enabled: true,
+        baseRole: role.id,
+        prompt: "",
+        allowedBuiltInTools: role.allowTools,
+        allowedMcpServers: [],
+        skillNames: [],
+        ...(role.id === MAIN_AGENT_PROFILE_ID ? { defaultContextMode: "full" } : {}),
+      });
+      return {
+        scope: "global",
+        builtIn: true,
+        locked: isLockedProfile(profile.id),
+        effective: false,
+        shadowed: false,
+        profile,
+      };
+    });
+}
+
+function applyAgentProfileInvariants(profile: AgentProfileDefinition): AgentProfileDefinition {
+  if (!isLockedProfile(profile.id)) return profile;
+  return {
+    ...profile,
+    enabled: true,
+  };
+}
+
+function isLockedProfile(id: string): boolean {
+  return id === MAIN_AGENT_PROFILE_ID;
 }
 
 export function formatAgentProfilePromptSummaries(catalog: AgentProfilesCatalog): string[] {

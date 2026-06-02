@@ -228,6 +228,30 @@ describe("subagents settings page", () => {
     );
   });
 
+  test("keeps locked profiles enabled before saving", async () => {
+    const upsertAgentProfile = mock(async () => true);
+    const draft = {
+      ...draftProfile(),
+      id: "default",
+      displayName: "Main Agent",
+      enabled: false,
+      locked: true,
+      baseRole: "default" as const,
+      allowedBuiltInTools: ["read", "write"],
+    };
+
+    const result = await saveAgentProfileDraft(draft, upsertAgentProfile);
+
+    expect(result).toBe("saved");
+    expect(upsertAgentProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "default",
+        enabled: true,
+        baseRole: "default",
+      }),
+    );
+  });
+
   test("keeps existing profile identity immutable while editing", async () => {
     let root: ReturnType<typeof createRoot> | null = null;
     const harness = setupJsdom();
@@ -280,6 +304,67 @@ describe("subagents settings page", () => {
           root.unmount();
         });
       }
+      harness.restore();
+    }
+  });
+
+  test("shows built-in profiles in the global scope", async () => {
+    const project = workspaceRecord("project-1", "Project", "project");
+    const builtInDefault = catalogEntry("global", "default", "Main Agent");
+    const { path: _path, ...builtInDefaultEntry } = builtInDefault;
+    resetSubagentsStore({
+      refreshAgentProfilesCatalog: mock(async () => {}),
+      refreshSkillsCatalog: mock(async () => {}),
+      requestWorkspaceMcpServers: mock(async () => {}),
+      selectedWorkspaceId: "project-1",
+      workspaces: [project],
+      workspaceRuntimeById: {
+        "project-1": {
+          ...defaultWorkspaceRuntime(),
+          agentProfilesCatalog: profilesCatalog([
+            {
+              ...builtInDefaultEntry,
+              builtIn: true,
+              locked: true,
+              profile: {
+                ...builtInDefault.profile,
+                baseRole: "default",
+                enabled: true,
+              },
+            },
+          ]),
+        },
+      },
+    });
+
+    const { harness, container, root } = await renderSubagentsPage();
+    try {
+      expect(container.textContent).not.toContain("Main Agent");
+
+      const globalTab = [...container.querySelectorAll("button")].find(
+        (button) => button.textContent === "Global",
+      );
+      if (!(globalTab instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing global scope tab");
+      }
+
+      await act(async () => {
+        globalTab.click();
+        await flushUi();
+      });
+
+      expect(container.textContent).toContain("Main Agent");
+      expect(container.textContent).toContain("Built-in");
+      expect(container.textContent).toContain("Main");
+      const deleteButton = container.querySelector('[aria-label="Delete profile"]');
+      if (!(deleteButton instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing delete profile button");
+      }
+      expect(deleteButton.disabled).toBe(true);
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
       harness.restore();
     }
   });

@@ -323,7 +323,7 @@ The import controls let a client browse and copy plugins/skills that already exi
 
 Agent profile controls let clients manage user-created subagent profiles without expanding the built-in child-agent role enum:
 
-- `cowork/agentProfiles/catalog/read` — params `{ cwd? }`. Returns `{ event }` where `event.type` is `agent_profiles_catalog`. The catalog includes `profiles`, `diagnostics`, `globalDir`, and `workspaceDir`.
+- `cowork/agentProfiles/catalog/read` — params `{ cwd? }`. Returns `{ event }` where `event.type` is `agent_profiles_catalog`. The catalog includes `profiles`, `effectiveProfiles`, `diagnostics`, and `roots: { globalDir, workspaceDir }`. The five built-in subagent profiles (`default`, `explorer`, `research`, `worker`, `reviewer`) are surfaced as global catalog entries unless a global user profile overrides the same id. Catalog entries may include `builtIn: true` for built-in templates and `locked: true` for profiles that cannot be disabled; the built-in `default` profile is the locked Main Agent clone.
 - `cowork/agentProfiles/upsert` — params `{ cwd?, profile }`, where `profile` includes `id`, `scope: "global" | "workspace"`, `displayName`, optional `description`, `enabled`, `baseRole: "default" | "explorer" | "research" | "worker" | "reviewer"`, optional `prompt`, `allowedBuiltInTools`, `allowedMcpServers`, `skillNames`, `model`, `reasoningEffort`, `defaultTaskType`, and `defaultContextMode`. The result returns the updated `agent_profiles_catalog` event.
 - `cowork/agentProfiles/delete` — params `{ cwd?, scope, id }`. Deletes the profile file in the requested scope and returns the updated catalog. Deleting a workspace profile may reveal a shadowed global profile with the same id.
 - `cowork/agentProfiles/copy` — params `{ cwd?, copy: { sourceRef, targetScope, targetId?, targetDisplayName? } }`. `sourceRef` accepts either a bare profile id or a scoped ref. The result returns the updated catalog.
@@ -590,6 +590,7 @@ Changes in `7.35`:
 - Added user-created subagent profile controls: `cowork/agentProfiles/catalog/read`, `cowork/agentProfiles/upsert`, `cowork/agentProfiles/delete`, and `cowork/agentProfiles/copy`. Catalog snapshots use the `agent_profiles_catalog` event payload.
 - `cowork/session/agent/spawn` and the `spawnAgent` tool now accept `profileRef`. Bare refs resolve by workspace-over-global precedence; scoped refs use `workspace:<id>` or `global:<id>`. `profileRef` wins over `role` when both are present.
 - Child agent session metadata now persists a resolved profile snapshot so resumed child agents keep the prompt, tool, MCP, skill, model, and reasoning policy that existed at spawn time.
+- Agent profile catalogs now include the five built-in subagent templates as editable global entries. The built-in `default` profile is labeled Main Agent and marked locked so clients keep it enabled.
 
 Changes in `7.34`:
 

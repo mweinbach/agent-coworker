@@ -41,6 +41,8 @@ import { SettingsEmptyState, SettingsSection, SettingsStatusPill } from "../Sett
 
 export type DraftProfile = AgentProfileDefinition & {
   scope: AgentProfileScope;
+  builtIn?: boolean;
+  locked?: boolean;
   originalRef?: {
     scope: AgentProfileScope;
     id: string;
@@ -87,7 +89,7 @@ const ROLE_TOOLS: Record<AgentRole, string[]> = {
   reviewer: ["bash", "read", "glob", "grep"],
 };
 
-const REASONING_EFFORTS = ["minimal", "low", "medium", "high"] as const;
+const REASONING_EFFORTS = ["none", "low", "medium", "high", "xhigh"] as const;
 const TASK_TYPES: AgentTaskType[] = ["research", "plan", "implement", "verify"];
 const CONTEXT_MODES: AgentContextMode[] = ["none", "brief", "full"];
 
@@ -111,6 +113,8 @@ function draftFromEntry(entry: AgentProfileCatalogEntry): DraftProfile {
   return {
     ...entry.profile,
     scope: entry.scope,
+    builtIn: entry.builtIn,
+    locked: entry.locked,
     originalRef: {
       scope: entry.scope,
       id: entry.profile.id,
@@ -178,7 +182,7 @@ export async function saveAgentProfileDraft(
     id,
     displayName,
     description: draft.description.trim(),
-    enabled: draft.enabled,
+    enabled: draft.locked ? true : draft.enabled,
     baseRole: draft.baseRole,
     prompt: draft.prompt.trim(),
     allowedBuiltInTools: visibleBuiltInToolsForRole(draft.baseRole, draft.allowedBuiltInTools),
@@ -410,6 +414,8 @@ function ProfileRow({
           <SettingsStatusPill tone={entry.profile.enabled ? "success" : "neutral"}>
             {entry.profile.enabled ? "Enabled" : "Disabled"}
           </SettingsStatusPill>
+          {entry.builtIn ? <SettingsStatusPill>Built-in</SettingsStatusPill> : null}
+          {entry.locked ? <SettingsStatusPill>Main</SettingsStatusPill> : null}
           {entry.shadowed ? <SettingsStatusPill tone="warning">Shadowed</SettingsStatusPill> : null}
           {entry.effective && entry.profile.enabled ? (
             <SettingsStatusPill>Effective</SettingsStatusPill>
@@ -432,7 +438,13 @@ function ProfileRow({
         <Button variant="ghost" size="icon" aria-label="Copy profile" onClick={onCopy}>
           <CopyIcon />
         </Button>
-        <Button variant="ghost" size="icon" aria-label="Delete profile" onClick={onDelete}>
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="Delete profile"
+          disabled={entry.builtIn && !entry.path}
+          onClick={onDelete}
+        >
           <Trash2Icon />
         </Button>
       </div>
@@ -460,6 +472,7 @@ export function ProfileDialog({
   const tools = draft ? ROLE_TOOLS[draft.baseRole] : [];
   const canSave = !!draft?.id.trim() && !!draft.displayName.trim();
   const editingExisting = draft?.originalRef !== undefined;
+  const disableEnabledSwitch = draft?.locked === true;
 
   return (
     <Dialog open={draft !== null} onOpenChange={(open) => !open && setDraft(null)}>
@@ -541,7 +554,8 @@ export function ProfileDialog({
               <Field label="Enabled">
                 <div className="flex h-9 items-center">
                   <Switch
-                    checked={draft.enabled}
+                    checked={draft.locked ? true : draft.enabled}
+                    disabled={disableEnabledSwitch}
                     onCheckedChange={(enabled) => setDraft({ ...draft, enabled })}
                   />
                 </div>

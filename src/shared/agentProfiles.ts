@@ -73,6 +73,8 @@ export const agentProfileCatalogEntrySchema = z
   .object({
     scope: agentProfileScopeSchema,
     path: z.string().optional(),
+    builtIn: z.boolean().optional(),
+    locked: z.boolean().optional(),
     effective: z.boolean(),
     shadowed: z.boolean(),
     profile: agentProfileDefinitionSchema,

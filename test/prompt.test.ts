@@ -108,7 +108,7 @@ function expectedSpawnAgentSharedGuidance(): string {
 function extractSpawnAgentRoleCatalog(prompt: string): string {
   const body = extractSpawnAgentBody(prompt);
   const match = body.match(
-    /Available child-agent roles:\n([\s\S]*?)(?=\n\n(?:Available allowed child target refs for this workspace:|Available model overrides for the current provider \(|$))/,
+    /Available child-agent roles:\n([\s\S]*?)(?=\n\n(?:Available specialized subagent profiles:|Available allowed child target refs for this workspace:|Available model overrides for the current provider \(|$))/,
   );
 
   if (!match?.[1]) {
@@ -361,6 +361,12 @@ describe("loadSystemPrompt", () => {
 
       expect(spawnAgentBody.startsWith(expectedSharedGuidance)).toBe(true);
       expect(extractSpawnAgentRoleCatalog(prompt)).toBe(expectedRoleCatalog);
+      expect(spawnAgentBody).toContain("Available specialized subagent profiles:");
+      expect(spawnAgentBody).toContain("- **Main Agent** (`global:default`, bare ref `default`):");
+      expect(spawnAgentBody).toContain("- **Explorer** (`global:explorer`, bare ref `explorer`):");
+      expect(spawnAgentBody).toContain("- **Research** (`global:research`, bare ref `research`):");
+      expect(spawnAgentBody).toContain("- **Worker** (`global:worker`, bare ref `worker`):");
+      expect(spawnAgentBody).toContain("- **Reviewer** (`global:reviewer`, bare ref `reviewer`):");
       expect(spawnAgentBody).not.toContain("**explore**:");
       expect(spawnAgentBody).not.toContain("**general**:");
     }

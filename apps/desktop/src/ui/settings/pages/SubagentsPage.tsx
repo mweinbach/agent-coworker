@@ -93,6 +93,8 @@ const ROLE_TOOLS: Record<AgentRole, string[]> = {
 const REASONING_EFFORTS = ["none", "low", "medium", "high", "xhigh"] as const;
 const TASK_TYPES: AgentTaskType[] = ["research", "plan", "implement", "verify"];
 const CONTEXT_MODES: AgentContextMode[] = ["none", "brief", "full"];
+const ONE_OFF_CHAT_GLOBAL_PROFILE_NOTE =
+  "One-off chats can only use global profiles. Choose Global if this subagent should be available there.";
 
 function newDraft(scope: AgentProfileScope): DraftProfile {
   return {
@@ -340,25 +342,30 @@ export function SubagentsPage() {
         }
       >
         <div className="flex flex-col gap-4 px-4 py-4">
+          <div className="flex flex-col gap-2">
+            <div className="grid w-full max-w-sm grid-cols-2 rounded-md border border-border/60 bg-muted/25 p-1">
+              {(["workspace", "global"] as const).map((value) => (
+                <Button
+                  key={value}
+                  variant={scope === value ? "secondary" : "ghost"}
+                  size="sm"
+                  className="h-8"
+                  onClick={() => setScope(value)}
+                >
+                  {value === "workspace" ? "Workspace" : "Global"}
+                </Button>
+              ))}
+            </div>
+            <p className="max-w-2xl text-xs text-muted-foreground">
+              {ONE_OFF_CHAT_GLOBAL_PROFILE_NOTE}
+            </p>
+          </div>
+
           <WorkspaceTargetPicker
             workspaces={workspaceChoices}
             value={workspace?.id ?? ""}
             onValueChange={setProfileWorkspaceId}
           />
-
-          <div className="grid w-full max-w-sm grid-cols-2 rounded-md border border-border/60 bg-muted/25 p-1">
-            {(["workspace", "global"] as const).map((value) => (
-              <Button
-                key={value}
-                variant={scope === value ? "secondary" : "ghost"}
-                size="sm"
-                className="h-8"
-                onClick={() => setScope(value)}
-              >
-                {value === "workspace" ? "Workspace" : "Global"}
-              </Button>
-            ))}
-          </div>
 
           {runtime?.agentProfilesError ? (
             <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
@@ -573,7 +580,77 @@ export function ProfileDialog({
           <DialogDescription className="sr-only">Configure the subagent profile.</DialogDescription>
         </DialogHeader>
         {draft ? (
-          <div className="space-y-5 py-2">
+          <div className="flex flex-col gap-5 py-2">
+            <div className="flex flex-col gap-2">
+              <div className="grid gap-3 sm:grid-cols-3">
+                <Field label="Scope">
+                  <Select
+                    value={draft.scope}
+                    disabled={editingExisting}
+                    onValueChange={(value) =>
+                      setDraft({ ...draft, scope: value as AgentProfileScope })
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        <SelectItem value="workspace">Workspace</SelectItem>
+                        <SelectItem value="global">Global</SelectItem>
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field label="Base role">
+                  <Select
+                    value={draft.baseRole}
+                    onValueChange={(value) => {
+                      const baseRole = value as AgentRole;
+                      setDraft({
+                        ...draft,
+                        baseRole,
+                        allowedBuiltInTools: ROLE_TOOLS[baseRole],
+                      });
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {Object.entries(ROLE_LABELS).map(([value, label]) => (
+                          <SelectItem key={value} value={value}>
+                            {label}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field label="Enabled">
+                  <div className="flex h-9 items-center">
+                    <Switch
+                      checked={draft.locked ? true : draft.enabled}
+                      disabled={disableEnabledSwitch}
+                      onCheckedChange={(enabled) => setDraft({ ...draft, enabled })}
+                    />
+                  </div>
+                </Field>
+              </div>
+
+              <p className="text-xs text-muted-foreground">{ONE_OFF_CHAT_GLOBAL_PROFILE_NOTE}</p>
+            </div>
+
+            {draft.scope === "workspace" && workspace ? (
+              <WorkspaceTargetPicker
+                workspaces={workspaceChoices}
+                value={workspace.id}
+                onValueChange={onWorkspaceChange}
+                disabled={editingExisting}
+              />
+            ) : null}
+
             <div className="grid gap-3 sm:grid-cols-2">
               <Field label="Display name">
                 <Input
@@ -599,68 +676,6 @@ export function ProfileDialog({
                 />
               </Field>
             </div>
-
-            <div className="grid gap-3 sm:grid-cols-3">
-              <Field label="Scope">
-                <Select
-                  value={draft.scope}
-                  disabled={editingExisting}
-                  onValueChange={(value) =>
-                    setDraft({ ...draft, scope: value as AgentProfileScope })
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="workspace">Workspace</SelectItem>
-                    <SelectItem value="global">Global</SelectItem>
-                  </SelectContent>
-                </Select>
-              </Field>
-              <Field label="Base role">
-                <Select
-                  value={draft.baseRole}
-                  onValueChange={(value) => {
-                    const baseRole = value as AgentRole;
-                    setDraft({
-                      ...draft,
-                      baseRole,
-                      allowedBuiltInTools: ROLE_TOOLS[baseRole],
-                    });
-                  }}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {Object.entries(ROLE_LABELS).map(([value, label]) => (
-                      <SelectItem key={value} value={value}>
-                        {label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </Field>
-              <Field label="Enabled">
-                <div className="flex h-9 items-center">
-                  <Switch
-                    checked={draft.locked ? true : draft.enabled}
-                    disabled={disableEnabledSwitch}
-                    onCheckedChange={(enabled) => setDraft({ ...draft, enabled })}
-                  />
-                </div>
-              </Field>
-            </div>
-
-            {draft.scope === "workspace" && workspace ? (
-              <WorkspaceTargetPicker
-                workspaces={workspaceChoices}
-                value={workspace.id}
-                onValueChange={onWorkspaceChange}
-                disabled={editingExisting}
-              />
-            ) : null}
 
             <Field label="Description">
               <Input
@@ -704,12 +719,14 @@ export function ProfileDialog({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="inherit">Inherit</SelectItem>
-                    {REASONING_EFFORTS.map((effort) => (
-                      <SelectItem key={effort} value={effort}>
-                        {effort}
-                      </SelectItem>
-                    ))}
+                    <SelectGroup>
+                      <SelectItem value="inherit">Inherit</SelectItem>
+                      {REASONING_EFFORTS.map((effort) => (
+                        <SelectItem key={effort} value={effort}>
+                          {effort}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
                   </SelectContent>
                 </Select>
               </Field>
@@ -727,12 +744,14 @@ export function ProfileDialog({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="inherit">Inherit</SelectItem>
-                    {TASK_TYPES.map((taskType) => (
-                      <SelectItem key={taskType} value={taskType}>
-                        {taskType}
-                      </SelectItem>
-                    ))}
+                    <SelectGroup>
+                      <SelectItem value="inherit">Inherit</SelectItem>
+                      {TASK_TYPES.map((taskType) => (
+                        <SelectItem key={taskType} value={taskType}>
+                          {taskType}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
                   </SelectContent>
                 </Select>
               </Field>
@@ -753,12 +772,14 @@ export function ProfileDialog({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="inherit">Inherit</SelectItem>
-                  {CONTEXT_MODES.map((mode) => (
-                    <SelectItem key={mode} value={mode}>
-                      {mode}
-                    </SelectItem>
-                  ))}
+                  <SelectGroup>
+                    <SelectItem value="inherit">Inherit</SelectItem>
+                    {CONTEXT_MODES.map((mode) => (
+                      <SelectItem key={mode} value={mode}>
+                        {mode}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
                 </SelectContent>
               </Select>
             </Field>

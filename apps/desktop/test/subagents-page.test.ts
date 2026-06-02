@@ -93,6 +93,9 @@ const defaultStoreActions = {
   upsertAgentProfile: useAppStore.getState().upsertAgentProfile,
 };
 
+const ONE_OFF_CHAT_GLOBAL_NOTE =
+  "One-off chats can only use global profiles. Choose Global if this subagent should be available there.";
+
 function resetSubagentsStore(patch: Partial<ReturnType<typeof useAppStore.getState>> = {}) {
   useAppStore.setState((state) => ({
     ...state,
@@ -414,6 +417,7 @@ describe("subagents settings page", () => {
       expect(requestWorkspaceMcpServers).toHaveBeenCalledWith("project-1");
       expect(refreshSkillsCatalog).toHaveBeenCalledWith("project-1");
       expect(container.textContent).toContain("Workspace");
+      expect(container.textContent).toContain(ONE_OFF_CHAT_GLOBAL_NOTE);
       expect(container.textContent).toContain("Project");
       expect(container.textContent).toContain("/tmp/project-1");
       expect(container.textContent).toContain("Project Reviewer");
@@ -433,6 +437,47 @@ describe("subagents settings page", () => {
     expect(resolveSubagentProfilesWorkspace([first, second], "project-1", "project-2")?.id).toBe(
       "project-2",
     );
+  });
+
+  test("puts the scope choice before identity fields in the profile dialog", async () => {
+    let root: ReturnType<typeof createRoot> | null = null;
+    const harness = setupJsdom();
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+      const project = workspaceRecord("project-1", "Project", "project");
+
+      await act(async () => {
+        root.render(
+          createElement(ProfileDialog, {
+            draft: draftProfile(),
+            setDraft: mock(() => {}),
+            idTouched: true,
+            setIdTouched: mock(() => {}),
+            mcpServerNames: [],
+            skillNames: [],
+            workspace: project,
+            workspaceChoices: [project],
+            onWorkspaceChange: mock(() => {}),
+            onSave: mock(() => {}),
+          }),
+        );
+        await flushUi();
+      });
+
+      const text = harness.dom.window.document.body.textContent ?? "";
+      expect(text).toContain(ONE_OFF_CHAT_GLOBAL_NOTE);
+      expect(text.indexOf("Scope")).toBeGreaterThanOrEqual(0);
+      expect(text.indexOf("Scope")).toBeLessThan(text.indexOf("Display name"));
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      harness.restore();
+    }
   });
 
   test("shows a loading state while profiles are refreshing", async () => {

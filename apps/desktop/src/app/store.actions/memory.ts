@@ -17,8 +17,14 @@ export function createWorkspaceMemoryActions(
   AppStoreActions,
   "requestWorkspaceMemories" | "upsertWorkspaceMemory" | "deleteWorkspaceMemory"
 > {
+  const resolveMemoryCwd = (workspaceId: string, opts?: { cwd?: string }) => {
+    const explicit = opts?.cwd?.trim();
+    if (explicit) return explicit;
+    return get().workspaces.find((workspace) => workspace.id === workspaceId)?.path;
+  };
+
   return {
-    requestWorkspaceMemories: async (workspaceId: string) => {
+    requestWorkspaceMemories: async (workspaceId: string, opts?: { cwd?: string }) => {
       await ensureServerRunning(get, set, workspaceId);
       const socket = ensureControlSocket(get, set, workspaceId);
 
@@ -39,7 +45,7 @@ export function createWorkspaceMemoryActions(
       }));
 
       const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/memory/list", {
-        cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
+        cwd: resolveMemoryCwd(workspaceId, opts),
       });
       if (!ok) {
         set((s) => ({
@@ -61,12 +67,12 @@ export function createWorkspaceMemoryActions(
       }
     },
 
-    upsertWorkspaceMemory: async (workspaceId, scope, id, content) => {
+    upsertWorkspaceMemory: async (workspaceId, scope, id, content, opts) => {
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);
 
       const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/memory/upsert", {
-        cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
+        cwd: resolveMemoryCwd(workspaceId, opts),
         scope,
         ...(id ? { id } : {}),
         content,
@@ -84,12 +90,12 @@ export function createWorkspaceMemoryActions(
       }));
     },
 
-    deleteWorkspaceMemory: async (workspaceId, scope, id) => {
+    deleteWorkspaceMemory: async (workspaceId, scope, id, opts) => {
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);
 
       const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/memory/delete", {
-        cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
+        cwd: resolveMemoryCwd(workspaceId, opts),
         scope,
         id,
       });

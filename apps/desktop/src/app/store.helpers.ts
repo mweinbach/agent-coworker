@@ -452,17 +452,19 @@ export type AppStoreState = {
     enabled: boolean,
   ) => Promise<void>;
 
-  requestWorkspaceMemories: (workspaceId: string) => Promise<void>;
+  requestWorkspaceMemories: (workspaceId: string, opts?: { cwd?: string }) => Promise<void>;
   upsertWorkspaceMemory: (
     workspaceId: string,
     scope: "workspace" | "user",
     id: string | undefined,
     content: string,
+    opts?: { cwd?: string },
   ) => Promise<void>;
   deleteWorkspaceMemory: (
     workspaceId: string,
     scope: "workspace" | "user",
     id: string,
+    opts?: { cwd?: string },
   ) => Promise<void>;
 
   connectProvider: (provider: ProviderName, apiKey?: string) => Promise<void>;

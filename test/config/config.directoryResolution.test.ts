@@ -201,6 +201,25 @@ describe("directory resolution", () => {
     expect(cfg.memoryDirs[1]).toBe(path.join(home, ".cowork", "memory"));
   });
 
+  test("one-off chat workspaces share the Chats memory directory", async () => {
+    const { home } = await makeTmpDirs();
+    const chatsRoot = path.join(home, ".cowork", "chats");
+    const cwd = path.join(chatsRoot, "20260602-chat-1");
+    await fs.mkdir(cwd, { recursive: true });
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {},
+    });
+
+    expect(cfg.projectCoworkDir).toBe(path.join(cwd, ".cowork"));
+    expect(cfg.projectMemoryDir).toBe(path.join(chatsRoot, ".cowork", "memory"));
+    expect(cfg.projectMemoryDbPath).toBe(path.join(chatsRoot, ".cowork", "memory.sqlite"));
+    expect(cfg.memoryDirs[0]).toBe(path.join(chatsRoot, ".cowork", "memory"));
+  });
+
   test("configDirs populated correctly", async () => {
     const { cwd, home } = await makeTmpDirs();
 

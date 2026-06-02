@@ -22,7 +22,7 @@ function defaultWriteKey(key?: string): string {
 
 export function createMemoryTool(ctx: ToolContext, _opts: { execFileImpl?: unknown } = {}) {
   const memoryStore = new MemoryStore(
-    path.join(ctx.config.projectCoworkDir, "memory.sqlite"),
+    ctx.config.projectMemoryDbPath ?? path.join(ctx.config.projectCoworkDir, "memory.sqlite"),
     path.join(ctx.config.userCoworkDir, "memory.sqlite"),
   );
 

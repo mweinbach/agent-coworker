@@ -231,6 +231,7 @@ Durable rules distilled from prior corrections. Apply before editing, not after.
 - **Canonical config roots**: `.cowork/` and `~/.cowork/` are the only runtime config/skills/memory/MCP namespaces; support legacy `.agent` only through an explicit one-time migration command, not permanent dual lookups.
 - **Workspace settings**: any new field must round-trip through `PersistenceService.sanitizeWorkspaces()` — partial sanitizer updates silently drop fields on save/load. Audit every new field, not just the headline one.
 - **Workspace settings target**: settings controls must render and mutate the same workspace class; hidden `oneOffChat` records should not back project default controls.
+- **Chat target pickers**: settings and memory target pickers should collapse all non-project `oneOffChat` records into one `Chats` target, while project workspaces still appear individually.
 - **Checkpoints/backups**: keep backups and checkpoints opt-in; prefer git-native worktrees/stash/diffs for git workspaces and manual snapshots for non-git workspaces over auto-wired core backup flows.
 - **Skill refreshes**: avoid background polling for skill metadata; refresh on explicit UI/server actions, `fs.watch` notifications, or before turns when skill directory mtimes changed.
 - **Tool prompt guidance**: use actual callable tool IDs (`bash`, `glob`, `grep`); generic names like `shell`/`search` route the model into nonexistent calls.

@@ -10,7 +10,11 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
-import type { MemoryListEntry } from "../../../app/types";
+import {
+  isOneOffChatWorkspace,
+  type MemoryListEntry,
+  type WorkspaceRecord,
+} from "../../../app/types";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
@@ -33,7 +37,16 @@ type DraftMemory = {
 };
 
 const HOT_MEMORY_ID = "hot";
+export const CHATS_MEMORY_TARGET_ID = "__cowork_chats__";
 export const MEMORY_LOADING_STALL_MS = 1_500;
+
+export type MemoryTarget = {
+  id: string;
+  label: string;
+  kind: "chats" | "project";
+  workspaceId: string;
+  targetPath: string;
+};
 
 export function resolveDraftMemoryId(rawId: string): string {
   return rawId.trim() || HOT_MEMORY_ID;
@@ -51,6 +64,55 @@ export function isMemoryLoadStalled(
 
 function emptyDraft(): DraftMemory {
   return { scope: "workspace", id: "", content: "" };
+}
+
+export function parentDirectoryPath(input: string): string {
+  const trimmed = input.trim().replace(/[\\/]+$/, "");
+  const lastSlash = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+  return lastSlash > 0 ? trimmed.slice(0, lastSlash) : trimmed;
+}
+
+export function resolveMemoryTargets(
+  workspaces: WorkspaceRecord[],
+  selectedWorkspaceId: string | null,
+): { targets: MemoryTarget[]; activeTarget: MemoryTarget | null } {
+  const selectedWorkspace =
+    workspaces.find((workspace) => workspace.id === selectedWorkspaceId) ?? null;
+  const oneOffChatWorkspaces = workspaces.filter(isOneOffChatWorkspace);
+  const chatAnchor =
+    selectedWorkspace && isOneOffChatWorkspace(selectedWorkspace)
+      ? selectedWorkspace
+      : (oneOffChatWorkspaces[0] ?? null);
+  const chatsTarget = chatAnchor
+    ? {
+        id: CHATS_MEMORY_TARGET_ID,
+        label: "Chats",
+        kind: "chats" as const,
+        workspaceId: chatAnchor.id,
+        targetPath: parentDirectoryPath(chatAnchor.path),
+      }
+    : null;
+  const projectTargets = workspaces
+    .filter((workspace) => !isOneOffChatWorkspace(workspace))
+    .map(
+      (workspace): MemoryTarget => ({
+        id: workspace.id,
+        label: workspace.name,
+        kind: "project",
+        workspaceId: workspace.id,
+        targetPath: workspace.path,
+      }),
+    );
+  const targets = chatsTarget ? [chatsTarget, ...projectTargets] : projectTargets;
+
+  const activeTarget =
+    selectedWorkspace && isOneOffChatWorkspace(selectedWorkspace)
+      ? chatsTarget
+      : (targets.find((target) => target.workspaceId === selectedWorkspaceId) ??
+        targets[0] ??
+        null);
+
+  return { targets, activeTarget };
 }
 
 function relativeTime(isoString: string): string {
@@ -85,14 +147,13 @@ export function MemoryPage() {
   const upsertWorkspaceMemory = useAppStore((s) => s.upsertWorkspaceMemory);
   const deleteWorkspaceMemory = useAppStore((s) => s.deleteWorkspaceMemory);
 
-  const workspace = useMemo(
-    () => workspaces.find((entry) => entry.id === selectedWorkspaceId) ?? workspaces[0] ?? null,
+  const { targets: memoryTargets, activeTarget } = useMemo(
+    () => resolveMemoryTargets(workspaces, selectedWorkspaceId),
     [workspaces, selectedWorkspaceId],
   );
-  const runtime = workspace ? workspaceRuntimeById[workspace.id] : null;
+  const runtime = activeTarget ? workspaceRuntimeById[activeTarget.workspaceId] : null;
   const memories = runtime?.memories ?? [];
   const memoriesLoading = runtime?.memoriesLoading ?? false;
-  const activeWorkspaceId = workspace?.id ?? null;
 
   const [draft, setDraft] = useState<DraftMemory>(emptyDraft);
   const [editingEntry, setEditingEntry] = useState<MemoryListEntry | null>(null);
@@ -105,21 +166,21 @@ export function MemoryPage() {
   const [parent] = useAutoAnimate();
 
   const requestMemories = useCallback(
-    (workspaceId: string) => {
+    (target: MemoryTarget) => {
       setMemoryLoadRequestedAt(Date.now());
       setMemoryLoadStalled(false);
-      void requestWorkspaceMemories(workspaceId);
+      void requestWorkspaceMemories(target.workspaceId, { cwd: target.targetPath });
     },
     [requestWorkspaceMemories],
   );
 
   useEffect(() => {
-    if (!activeWorkspaceId) return;
+    if (!activeTarget) return;
     setEditingEntry(null);
     setDraft(emptyDraft());
     setDialogOpen(false);
-    requestMemories(activeWorkspaceId);
-  }, [activeWorkspaceId, requestMemories]);
+    requestMemories(activeTarget);
+  }, [activeTarget, requestMemories]);
 
   useEffect(() => {
     if (!memoriesLoading) {
@@ -176,14 +237,16 @@ export function MemoryPage() {
   };
 
   const handleSave = () => {
-    if (!workspace || !draft.content.trim()) return;
+    if (!activeTarget || !draft.content.trim()) return;
     const id = resolveDraftMemoryId(draft.id);
-    void upsertWorkspaceMemory(workspace.id, draft.scope, id, draft.content.trim());
+    void upsertWorkspaceMemory(activeTarget.workspaceId, draft.scope, id, draft.content.trim(), {
+      cwd: activeTarget.targetPath,
+    });
     closeDialog();
   };
 
   const handleDelete = async (entry: MemoryListEntry) => {
-    if (!workspace) return;
+    if (!activeTarget) return;
     const confirmed = await confirmAction({
       title: "Delete memory",
       message: `Delete "${entry.id}"?`,
@@ -193,27 +256,38 @@ export function MemoryPage() {
       cancelLabel: "Cancel",
     });
     if (!confirmed) return;
-    void deleteWorkspaceMemory(workspace.id, entry.scope, entry.id);
+    void deleteWorkspaceMemory(activeTarget.workspaceId, entry.scope, entry.id, {
+      cwd: activeTarget.targetPath,
+    });
   };
 
   const scopeLabel = (scope: "workspace" | "user") =>
-    scope === "workspace" ? "This folder/chat" : "Everywhere";
+    scope === "workspace"
+      ? activeTarget?.kind === "chats"
+        ? "Chats"
+        : "This workspace"
+      : "Everywhere";
   const memoryTitle = (entry: MemoryListEntry) =>
     entry.id === HOT_MEMORY_ID ? "Always include" : entry.id;
+  const handleTargetChange = (targetId: string) => {
+    const target = memoryTargets.find((entry) => entry.id === targetId);
+    if (!target) return;
+    void selectWorkspace(target.workspaceId);
+  };
 
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          {workspacePickerEnabled && workspaces.length > 1 && workspace ? (
-            <Select value={workspace.id} onValueChange={(value) => void selectWorkspace(value)}>
+          {workspacePickerEnabled && memoryTargets.length > 1 && activeTarget ? (
+            <Select value={activeTarget.id} onValueChange={handleTargetChange}>
               <SelectTrigger className="max-w-48" aria-label="Memory target">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {workspaces.map((entry) => (
+                {memoryTargets.map((entry) => (
                   <SelectItem key={entry.id} value={entry.id}>
-                    {entry.name}
+                    {entry.label}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -244,13 +318,13 @@ export function MemoryPage() {
             size="sm"
             type="button"
             disabled={showMemoryLoading}
-            onClick={() => workspace && requestMemories(workspace.id)}
+            onClick={() => activeTarget && requestMemories(activeTarget)}
           >
             {showMemoryLoading ? "Loading..." : "Refresh"}
           </Button>
         </div>
 
-        {workspace ? (
+        {activeTarget ? (
           <Button
             variant="ghost"
             size="sm"
@@ -269,7 +343,7 @@ export function MemoryPage() {
           <p className="text-sm text-muted-foreground">
             {showMemoryLoading ? "Loading..." : "No remembered facts yet"}
           </p>
-          {!showMemoryLoading && workspace ? (
+          {!showMemoryLoading && activeTarget ? (
             <Button variant="outline" size="sm" onClick={openCreateDialog}>
               Add your first memory
             </Button>
@@ -398,8 +472,8 @@ export function MemoryPage() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="workspace">This workspace</SelectItem>
-                  <SelectItem value="user">All workspaces</SelectItem>
+                  <SelectItem value="workspace">{scopeLabel("workspace")}</SelectItem>
+                  <SelectItem value="user">Everywhere</SelectItem>
                 </SelectContent>
               </Select>
             </div>

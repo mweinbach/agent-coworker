@@ -657,7 +657,7 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
 
   if (config.enableMemory ?? true) {
     const memoryStore = new MemoryStore(
-      path.join(config.projectCoworkDir, "memory.sqlite"),
+      config.projectMemoryDbPath ?? path.join(config.projectCoworkDir, "memory.sqlite"),
       path.join(config.userCoworkDir, "memory.sqlite"),
     );
     try {

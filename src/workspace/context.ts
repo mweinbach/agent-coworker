@@ -12,6 +12,7 @@ type ActiveWorkspaceContext = {
   outputDirectory?: string;
   effectiveUploadsDirectory: string;
   projectCoworkDir: string;
+  projectMemoryDir: string;
 };
 
 function findGitRootSync(startDir: string): string | undefined {
@@ -85,6 +86,7 @@ export function deriveActiveWorkspaceContext(
 ): ActiveWorkspaceContext {
   const workspaceRoot = path.dirname(config.projectCoworkDir);
   const executionCwd = config.workingDirectory;
+  const projectMemoryDir = config.projectMemoryDir ?? path.join(config.projectCoworkDir, "memory");
 
   return {
     workspaceRoot,
@@ -95,6 +97,7 @@ export function deriveActiveWorkspaceContext(
     effectiveUploadsDirectory:
       config.uploadsDirectory ?? path.resolve(config.workingDirectory, "User Uploads"),
     projectCoworkDir: config.projectCoworkDir,
+    projectMemoryDir,
   };
 }
 
@@ -121,9 +124,18 @@ export function renderActiveWorkspaceContextSection(
     lines.push(`- Output directory: ${context.outputDirectory}`);
   }
 
+  lines.push(`- Uploads directory: ${context.effectiveUploadsDirectory}`);
+
+  if (context.projectMemoryDir === path.join(context.projectCoworkDir, "memory")) {
+    lines.push(`- Project config, memory, and MCP overrides: ${context.projectCoworkDir}`);
+  } else {
+    lines.push(
+      `- Project config and MCP overrides: ${context.projectCoworkDir}`,
+      `- Project memory: ${context.projectMemoryDir}`,
+    );
+  }
+
   lines.push(
-    `- Uploads directory: ${context.effectiveUploadsDirectory}`,
-    `- Project config, memory, and MCP overrides: ${context.projectCoworkDir}`,
     "- Path rule: `bash`, `read`, `write`, `glob`, and `grep` default to the execution working directory.",
     `- Path rule: project config, memory, and MCP overrides live under ${context.projectCoworkDir}.`,
   );

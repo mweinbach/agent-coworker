@@ -39,6 +39,7 @@ import {
   resolveRuntimeName as resolveRuntimeNameFromValue,
 } from "./types";
 import { resolveAuthHomeDir } from "./utils/authHome";
+import { getOneOffChatsRoot, isPathInsideOneOffChatsRoot } from "./utils/oneOffChats";
 import { isPathInside } from "./utils/paths";
 
 export { defaultModelForProvider } from "./providers";
@@ -404,6 +405,12 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
   const builtInConfigDir = path.join(builtInDir, "config");
   const coworkPaths = getAiCoworkerPaths({ homedir });
   const userCoworkDir = coworkPaths.rootDir;
+  const oneOffChatsRoot = getOneOffChatsRoot(homedir);
+  const projectMemoryCoworkDir = isPathInsideOneOffChatsRoot(cwd, homedir)
+    ? path.join(oneOffChatsRoot, ".cowork")
+    : projectCoworkDir;
+  const projectMemoryDir = path.join(projectMemoryCoworkDir, "memory");
+  const projectMemoryDbPath = path.join(projectMemoryCoworkDir, "memory.sqlite");
   const workspacePluginsDir = path.join(projectCoworkDir, "plugins");
   const userPluginsDir = path.join(userCoworkDir, "plugins");
   const userConfigDir = coworkPaths.configDir;
@@ -710,6 +717,8 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     knowledgeCutoff,
 
     projectCoworkDir,
+    projectMemoryDir,
+    projectMemoryDbPath,
     userCoworkDir,
     workspaceAgentsDir,
     userAgentsDir,
@@ -723,7 +732,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
       coworkPaths.skillsDir,
       ...(disableBuiltInSkills ? [] : [path.join(builtInDir, "skills")]),
     ],
-    memoryDirs: [path.join(projectCoworkDir, "memory"), path.join(userCoworkDir, "memory")],
+    memoryDirs: [projectMemoryDir, path.join(userCoworkDir, "memory")],
     configDirs: [projectCoworkDir, userConfigDir, builtInConfigDir],
 
     enableMcp,

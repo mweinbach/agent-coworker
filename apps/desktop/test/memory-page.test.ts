@@ -68,8 +68,15 @@ mock.module("../src/lib/agentSocket", () => ({
   JsonRpcSocket: NoopJsonRpcSocket,
 }));
 
-const { MEMORY_LOADING_STALL_MS, MemoryPage, isMemoryLoadStalled, resolveDraftMemoryId } =
-  await import("../src/ui/settings/pages/MemoryPage");
+const {
+  CHATS_MEMORY_TARGET_ID,
+  MEMORY_LOADING_STALL_MS,
+  MemoryPage,
+  isMemoryLoadStalled,
+  parentDirectoryPath,
+  resolveDraftMemoryId,
+  resolveMemoryTargets,
+} = await import("../src/ui/settings/pages/MemoryPage");
 const { useAppStore } = await import("../src/app/store");
 
 describe("desktop memory page", () => {
@@ -164,5 +171,79 @@ describe("desktop memory page", () => {
     expect(isMemoryLoadStalled(true, null, Date.now())).toBe(false);
     expect(isMemoryLoadStalled(true, 1000, 1000 + MEMORY_LOADING_STALL_MS - 1)).toBe(false);
     expect(isMemoryLoadStalled(true, 1000, 1000 + MEMORY_LOADING_STALL_MS)).toBe(true);
+  });
+
+  test("memory targets collapse non-project chats while keeping projects individual", () => {
+    const chatsRoot = "/tmp/cowork-home/.cowork/chats";
+    const workspaces = [
+      {
+        id: "chat-1",
+        name: "New chat",
+        path: `${chatsRoot}/20260602-chat-1`,
+        workspaceKind: "oneOffChat",
+      },
+      {
+        id: "chat-2",
+        name: "New chat",
+        path: `${chatsRoot}/20260602-chat-2`,
+        workspaceKind: "oneOffChat",
+      },
+      {
+        id: "project-1",
+        name: "Cowork",
+        path: "/Users/me/Projects/Cowork",
+      },
+      {
+        id: "project-2",
+        name: "GoogleIO",
+        path: "/Users/me/Projects/GoogleIO",
+      },
+    ];
+
+    const { targets, activeTarget } = resolveMemoryTargets(workspaces as any, "chat-2");
+
+    expect(targets.map((target) => target.label)).toEqual(["Chats", "Cowork", "GoogleIO"]);
+    expect(targets.filter((target) => target.label === "New chat")).toHaveLength(0);
+    expect(activeTarget).toEqual({
+      id: CHATS_MEMORY_TARGET_ID,
+      label: "Chats",
+      kind: "chats",
+      workspaceId: "chat-2",
+      targetPath: chatsRoot,
+    });
+  });
+
+  test("memory targets use the selected project as an individual target", () => {
+    const { activeTarget } = resolveMemoryTargets(
+      [
+        {
+          id: "chat-1",
+          name: "New chat",
+          path: "/tmp/cowork-home/.cowork/chats/20260602-chat-1",
+          workspaceKind: "oneOffChat",
+        },
+        {
+          id: "project-1",
+          name: "Cowork",
+          path: "/Users/me/Projects/Cowork",
+        },
+      ] as any,
+      "project-1",
+    );
+
+    expect(activeTarget).toEqual({
+      id: "project-1",
+      label: "Cowork",
+      kind: "project",
+      workspaceId: "project-1",
+      targetPath: "/Users/me/Projects/Cowork",
+    });
+  });
+
+  test("parent directory resolver handles slash styles used by chat paths", () => {
+    expect(parentDirectoryPath("/tmp/.cowork/chats/chat-1")).toBe("/tmp/.cowork/chats");
+    expect(parentDirectoryPath(String.raw`C:\Users\me\.cowork\chats\chat-1`)).toBe(
+      String.raw`C:\Users\me\.cowork\chats`,
+    );
   });
 });

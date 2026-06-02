@@ -197,6 +197,8 @@ export interface AgentConfig {
   knowledgeCutoff: string;
 
   projectCoworkDir: string;
+  projectMemoryDir?: string;
+  projectMemoryDbPath?: string;
   userCoworkDir: string;
   workspaceAgentsDir?: string;
   userAgentsDir?: string;

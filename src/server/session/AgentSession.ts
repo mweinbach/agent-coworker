@@ -289,7 +289,7 @@ export class AgentSession {
     };
 
     this.memoryStore = new MemoryStore(
-      `${opts.config.projectCoworkDir}/memory.sqlite`,
+      opts.config.projectMemoryDbPath ?? `${opts.config.projectCoworkDir}/memory.sqlite`,
       `${opts.config.userCoworkDir}/memory.sqlite`,
     );
 

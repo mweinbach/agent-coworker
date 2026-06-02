@@ -50,14 +50,8 @@ function rewriteLegacyProjectPathGuidance(
     )
     .replaceAll("`.agent/AGENT.md`", `\`${path.join(context.projectCoworkDir, "AGENT.md")}\``)
     .replaceAll("`.cowork/AGENT.md`", `\`${path.join(context.projectCoworkDir, "AGENT.md")}\``)
-    .replaceAll(
-      "`.agent/memory/`",
-      `\`${withTrailingSeparator(path.join(context.projectCoworkDir, "memory"))}\``,
-    )
-    .replaceAll(
-      "`.cowork/memory/`",
-      `\`${withTrailingSeparator(path.join(context.projectCoworkDir, "memory"))}\``,
-    )
+    .replaceAll("`.agent/memory/`", `\`${withTrailingSeparator(context.projectMemoryDir)}\``)
+    .replaceAll("`.cowork/memory/`", `\`${withTrailingSeparator(context.projectMemoryDir)}\``)
     .replaceAll(
       "`.agent/mcp-servers.json`",
       `\`${path.join(context.projectCoworkDir, "mcp-servers.json")}\``,

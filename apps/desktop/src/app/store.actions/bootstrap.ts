@@ -71,10 +71,7 @@ import {
   type ThreadRecord,
   type WorkspaceRecord,
 } from "../types";
-import {
-  DEFAULT_ONBOARDING_STATE,
-  resolveStartupOnboarding,
-} from "./onboarding";
+import { DEFAULT_ONBOARDING_STATE, resolveStartupOnboarding } from "./onboarding";
 
 const optionalStringWithContentSchema = z.preprocess(
   (value) => (typeof value === "string" && value.trim() ? value : undefined),

@@ -833,6 +833,7 @@ export function createControlSocketHelpers(
 
     if (evt.type === "session_config") {
       const sessionConfig = evt.config as Record<string, unknown>;
+      const sessionConfigHas = (key: string) => Object.hasOwn(sessionConfig, key);
       const sessionConfigHasProviderOptions = Object.hasOwn(sessionConfig, "providerOptions");
       const providerOptions = sessionConfigHasProviderOptions
         ? normalizeWorkspaceProviderOptions(sessionConfig.providerOptions)
@@ -845,11 +846,21 @@ export function createControlSocketHelpers(
           workspace.id === workspaceId
             ? {
                 ...workspace,
-                defaultBackupsEnabled: evt.config.defaultBackupsEnabled,
-                defaultPreferredChildModel: evt.config.preferredChildModel,
-                defaultChildModelRoutingMode: evt.config.childModelRoutingMode,
-                defaultPreferredChildModelRef: evt.config.preferredChildModelRef,
-                defaultAllowedChildModelRefs: evt.config.allowedChildModelRefs,
+                ...(sessionConfigHas("defaultBackupsEnabled")
+                  ? { defaultBackupsEnabled: evt.config.defaultBackupsEnabled }
+                  : {}),
+                ...(sessionConfigHas("preferredChildModel")
+                  ? { defaultPreferredChildModel: evt.config.preferredChildModel }
+                  : {}),
+                ...(sessionConfigHas("childModelRoutingMode")
+                  ? { defaultChildModelRoutingMode: evt.config.childModelRoutingMode }
+                  : {}),
+                ...(sessionConfigHas("preferredChildModelRef")
+                  ? { defaultPreferredChildModelRef: evt.config.preferredChildModelRef }
+                  : {}),
+                ...(sessionConfigHas("allowedChildModelRefs")
+                  ? { defaultAllowedChildModelRefs: evt.config.allowedChildModelRefs }
+                  : {}),
                 defaultToolOutputOverflowChars: evt.config.defaultToolOutputOverflowChars,
                 ...(sessionConfigHasProviderOptions ? { providerOptions } : {}),
                 yolo: typeof evt.config.yolo === "boolean" ? evt.config.yolo : workspace.yolo,

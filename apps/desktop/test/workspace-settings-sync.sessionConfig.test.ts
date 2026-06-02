@@ -247,4 +247,49 @@ describe("workspace settings sync", () => {
     });
     expect((runtime?.controlSessionConfig as any)?.providerOptions).toBeUndefined();
   });
+
+  test("control session_config preserves saved routing defaults when snapshot omits them", async () => {
+    primeWorkspaceConnection();
+    useAppStore.setState((state) => ({
+      ...state,
+      workspaces: state.workspaces.map((workspace) =>
+        workspace.id === workspaceId
+          ? {
+              ...workspace,
+              defaultBackupsEnabled: false,
+              defaultPreferredChildModel: "claude-opus-4-8",
+              defaultChildModelRoutingMode: "cross-provider-allowlist",
+              defaultPreferredChildModelRef: "anthropic:claude-opus-4-8",
+              defaultAllowedChildModelRefs: ["anthropic:claude-opus-4-8", "openai:gpt-5.4"],
+            }
+          : workspace,
+      ),
+    }));
+
+    setControlSessionConfigResponse({
+      yolo: false,
+      observabilityEnabled: true,
+      backupsEnabled: true,
+      toolOutputOverflowChars: 25000,
+      maxSteps: 75,
+    });
+
+    await requestJsonRpcControlEvent(
+      useAppStore.getState as any,
+      useAppStore.setState as any,
+      workspaceId,
+      "cowork/session/defaults/apply",
+      { cwd: "/tmp/workspace" },
+    );
+
+    const workspace = useAppStore.getState().workspaces.find((entry) => entry.id === workspaceId);
+    expect(workspace?.defaultBackupsEnabled).toBe(false);
+    expect(workspace?.defaultPreferredChildModel).toBe("claude-opus-4-8");
+    expect(workspace?.defaultChildModelRoutingMode).toBe("cross-provider-allowlist");
+    expect(workspace?.defaultPreferredChildModelRef).toBe("anthropic:claude-opus-4-8");
+    expect(workspace?.defaultAllowedChildModelRefs).toEqual([
+      "anthropic:claude-opus-4-8",
+      "openai:gpt-5.4",
+    ]);
+  });
 });

@@ -194,7 +194,7 @@ describe("workspace settings sync", () => {
     });
   });
 
-  test("control session_config clears stale editable providerOptions when snapshot omits them", async () => {
+  test("control session_config preserves saved providerOptions when snapshot omits them", async () => {
     primeWorkspaceConnection();
     useAppStore.setState((state) => ({
       ...state,
@@ -203,10 +203,12 @@ describe("workspace settings sync", () => {
           ? {
               ...workspace,
               providerOptions: {
-                openai: {
-                  reasoningEffort: "high",
-                  reasoningSummary: "detailed",
-                  textVerbosity: "medium",
+                "codex-cli": {
+                  webSearchBackend: "parallel",
+                  webSearchFallbackBackend: "parallel",
+                },
+                google: {
+                  nativeWebSearch: false,
                 },
               },
             }
@@ -234,7 +236,15 @@ describe("workspace settings sync", () => {
 
     const workspace = useAppStore.getState().workspaces.find((entry) => entry.id === workspaceId);
     const runtime = useAppStore.getState().workspaceRuntimeById[workspaceId];
-    expect(workspace?.providerOptions).toBeUndefined();
+    expect(workspace?.providerOptions).toEqual({
+      "codex-cli": {
+        webSearchBackend: "parallel",
+        webSearchFallbackBackend: "parallel",
+      },
+      google: {
+        nativeWebSearch: false,
+      },
+    });
     expect((runtime?.controlSessionConfig as any)?.providerOptions).toBeUndefined();
   });
 });

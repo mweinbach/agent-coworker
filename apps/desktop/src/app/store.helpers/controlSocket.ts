@@ -833,7 +833,10 @@ export function createControlSocketHelpers(
 
     if (evt.type === "session_config") {
       const sessionConfig = evt.config as Record<string, unknown>;
-      const providerOptions = normalizeWorkspaceProviderOptions(sessionConfig.providerOptions);
+      const sessionConfigHasProviderOptions = Object.hasOwn(sessionConfig, "providerOptions");
+      const providerOptions = sessionConfigHasProviderOptions
+        ? normalizeWorkspaceProviderOptions(sessionConfig.providerOptions)
+        : undefined;
       const userProfile = evt.config.userProfile
         ? normalizeWorkspaceUserProfile(evt.config.userProfile)
         : undefined;
@@ -848,7 +851,7 @@ export function createControlSocketHelpers(
                 defaultPreferredChildModelRef: evt.config.preferredChildModelRef,
                 defaultAllowedChildModelRefs: evt.config.allowedChildModelRefs,
                 defaultToolOutputOverflowChars: evt.config.defaultToolOutputOverflowChars,
-                providerOptions,
+                ...(sessionConfigHasProviderOptions ? { providerOptions } : {}),
                 yolo: typeof evt.config.yolo === "boolean" ? evt.config.yolo : workspace.yolo,
                 ...(typeof evt.config.userName === "string"
                   ? { userName: evt.config.userName }

@@ -240,24 +240,7 @@ function hasConfiguredProviderStatus(
 }
 
 function useSharedUpdateWorkspaceDefaults() {
-  const perWorkspaceSettings = useAppStore((s) => s.perWorkspaceSettings);
-  const allWorkspaces = useAppStore((s) => s.workspaces);
-  const workspaces = useMemo(
-    () => allWorkspaces.filter((workspace) => !isOneOffChatWorkspace(workspace)),
-    [allWorkspaces],
-  );
-  const rawUpdate = useAppStore((s) => s.updateWorkspaceDefaults);
-  const projectWorkspaces = useMemo(
-    () => workspaces.filter((workspace) => !isOneOffChatWorkspace(workspace)),
-    [workspaces],
-  );
-  type WorkspaceDefaultsPatch = Parameters<typeof rawUpdate>[1];
-  return useMemo(() => {
-    if (perWorkspaceSettings) return rawUpdate;
-    return async (_workspaceId: string, patch: WorkspaceDefaultsPatch) => {
-      await Promise.all(projectWorkspaces.map((ws) => rawUpdate(ws.id, patch)));
-    };
-  }, [perWorkspaceSettings, projectWorkspaces, rawUpdate]);
+  return useAppStore((s) => s.updateWorkspaceDefaults);
 }
 
 type OpenAiCompatibleModelSettingsCardProps = {
@@ -326,7 +309,7 @@ export function OpenAiCompatibleModelSettingsCard({
       <CardHeader>
         <CardTitle>OpenAI &amp; ChatGPT Settings</CardTitle>
         <CardDescription>
-          Workspace defaults for ChatGPT Subscription and OpenAI API models.
+          Default behavior for ChatGPT Subscription and OpenAI API models.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -520,7 +503,7 @@ export function SearchSettingsCard({
                 <div className="text-sm font-medium text-foreground">Search provider</div>
                 <div className="text-xs text-muted-foreground">
                   {hasLegacyGeminiSearchOverride
-                    ? `Google models still use local ${formatWebSearchBackendLabel(selectedLocalProvider)} search from an older workspace override. Changing Search provider here will sync Google and ChatGPT settings.`
+                    ? `Google models still use local ${formatWebSearchBackendLabel(selectedLocalProvider)} search from an older Google-specific override. Changing Search provider here will sync Google and ChatGPT settings.`
                     : searchProviderUsesNative
                       ? "Use provider-native search when the active model supports it. Codex uses Codex app-server native web search in this mode."
                       : `Use the local webSearch tool backed by ${formatWebSearchBackendLabel(effectiveSearchProvider)} for non-Codex models.`}
@@ -563,7 +546,7 @@ export function SearchSettingsCard({
                     }
                   >
                     <SelectTrigger
-                      aria-label="Workspace local search fallback provider"
+                      aria-label="Local search fallback provider"
                       className={MODEL_CARD_SELECT_CLASS}
                       size="sm"
                     >
@@ -592,8 +575,8 @@ export function SearchSettingsCard({
             ) : (
               <div className="rounded-lg border border-border/60 bg-background/35 p-3 text-xs text-muted-foreground">
                 {hasLegacyGeminiSearchOverride
-                  ? `Google models currently use local ${LOCAL_WEB_SEARCH_PROVIDER_LABELS[selectedLocalProvider]} search because this workspace still has a Gemini-specific override. Choose Native above to restore provider-native search for both providers.`
-                  : `${LOCAL_WEB_SEARCH_PROVIDER_LABELS[selectedLocalProvider]} is the active local search tool for non-Codex models in this workspace.`}
+                  ? `Google models currently use local ${LOCAL_WEB_SEARCH_PROVIDER_LABELS[selectedLocalProvider]} search because these settings still have a Google-specific override. Choose Native above to restore provider-native search for both providers.`
+                  : `${LOCAL_WEB_SEARCH_PROVIDER_LABELS[selectedLocalProvider]} is the active local search tool for non-Codex models.`}
               </div>
             )}
           </div>
@@ -682,7 +665,7 @@ export function GeminiApiSettingsCard({
     <Card className="border-border/80 bg-card/85">
       <CardHeader>
         <CardTitle>Gemini API settings</CardTitle>
-        <CardDescription>Workspace defaults for Gemini API reasoning behavior.</CardDescription>
+        <CardDescription>Default Gemini API reasoning behavior.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="rounded-lg border border-border/60 px-4 py-4">
@@ -795,14 +778,14 @@ export function WorkspaceUserProfileCard({
   return (
     <Card className="border-border/80 bg-card/85">
       <CardHeader>
-        <CardTitle>How Cowork should understand you in this workspace</CardTitle>
-        <CardDescription>Workspace-specific identity and prompt context.</CardDescription>
+        <CardTitle>How Cowork should understand you</CardTitle>
+        <CardDescription>Identity and prompt context for new sessions.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="space-y-2">
           <div className="text-sm font-medium text-foreground">Name</div>
           <Input
-            aria-label="Workspace user name"
+            aria-label="User name"
             autoComplete="off"
             placeholder="Name used in prompt context"
             value={draft.userName}
@@ -819,7 +802,7 @@ export function WorkspaceUserProfileCard({
         <div className="space-y-2">
           <div className="text-sm font-medium text-foreground">Role or work context</div>
           <Textarea
-            aria-label="Workspace work context"
+            aria-label="Work context"
             className="min-h-24"
             placeholder="Role, team, domain, or responsibilities"
             value={draft.work}
@@ -836,7 +819,7 @@ export function WorkspaceUserProfileCard({
         <div className="space-y-2">
           <div className="text-sm font-medium text-foreground">Instructions</div>
           <Textarea
-            aria-label="Workspace profile instructions"
+            aria-label="Profile instructions"
             className="min-h-24"
             placeholder="Behavior instructions the agent should follow"
             value={draft.instructions}
@@ -853,7 +836,7 @@ export function WorkspaceUserProfileCard({
         <div className="space-y-2">
           <div className="text-sm font-medium text-foreground">Background details</div>
           <Textarea
-            aria-label="Workspace profile details"
+            aria-label="Profile details"
             className="min-h-24"
             placeholder="Personal or project details the agent should remember"
             value={draft.details}
@@ -939,14 +922,32 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
     () => workspaces.filter((workspace) => !isOneOffChatWorkspace(workspace)),
     [workspaces],
   );
-
-  const ws = useMemo(
+  const settingsTargetWorkspaces = useMemo(
     () =>
-      projectWorkspaces.find((workspace) => workspace.id === selectedWorkspaceId) ??
-      projectWorkspaces[0] ??
-      null,
-    [projectWorkspaces, selectedWorkspaceId],
+      perWorkspaceSettings
+        ? workspaces
+        : projectWorkspaces.length > 0
+          ? projectWorkspaces
+          : workspaces,
+    [perWorkspaceSettings, projectWorkspaces, workspaces],
   );
+
+  const ws = useMemo(() => {
+    const selected = selectedWorkspaceId
+      ? (workspaces.find((workspace) => workspace.id === selectedWorkspaceId) ?? null)
+      : null;
+    if (perWorkspaceSettings) {
+      return selected ?? settingsTargetWorkspaces[0] ?? null;
+    }
+    const selectedProject = selected && !isOneOffChatWorkspace(selected) ? selected : null;
+    return selectedProject ?? projectWorkspaces[0] ?? settingsTargetWorkspaces[0] ?? null;
+  }, [
+    perWorkspaceSettings,
+    projectWorkspaces,
+    selectedWorkspaceId,
+    settingsTargetWorkspaces,
+    workspaces,
+  ]);
 
   const provider = (ws?.defaultProvider ?? "google") as ProviderName;
   const model = (ws?.defaultModel ?? "").trim();
@@ -1064,7 +1065,7 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
 
   return (
     <div className="space-y-5">
-      {projectWorkspaces.length === 0 || !ws ? (
+      {settingsTargetWorkspaces.length === 0 || !ws ? (
         <Card className="border-border/80 bg-card/85">
           <CardContent className="p-8 text-center">
             {workspaceLifecycleEnabled ? (
@@ -1073,7 +1074,7 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
               </Button>
             ) : (
               <div className="text-sm text-muted-foreground">
-                This browser shell stays attached to the current server workspace.
+                This browser shell stays attached to the current server target.
               </div>
             )}
           </CardContent>
@@ -1132,8 +1133,10 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
               <Card className="border-border/80 bg-card/85">
                 <CardHeader className="flex-row items-center justify-between space-y-0">
                   <div>
-                    <CardTitle>Active workspace</CardTitle>
-                    <CardDescription>Selected project for this desktop session.</CardDescription>
+                    <CardTitle>Settings target</CardTitle>
+                    <CardDescription>
+                      Selected folder or chat for this settings mode.
+                    </CardDescription>
                   </div>
                   {workspaceLifecycleEnabled ? (
                     <Button variant="outline" type="button" onClick={() => void addWorkspace()}>
@@ -1146,15 +1149,17 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
                     <div className="text-sm font-medium text-foreground">{ws.name}</div>
                     <div className="text-xs text-muted-foreground">{ws.path}</div>
                   </div>
-                  {workspacePickerEnabled && projectWorkspaces.length > 1 ? (
+                  {workspacePickerEnabled && settingsTargetWorkspaces.length > 1 ? (
                     <Select value={ws.id} onValueChange={(value) => void selectWorkspace(value)}>
-                      <SelectTrigger aria-label="Active workspace">
+                      <SelectTrigger aria-label="Settings target">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {projectWorkspaces.map((workspace) => (
+                        {settingsTargetWorkspaces.map((workspace) => (
                           <SelectItem key={workspace.id} value={workspace.id}>
-                            {workspace.name}
+                            {isOneOffChatWorkspace(workspace)
+                              ? `${workspace.name} (chat)`
+                              : workspace.name}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -1168,7 +1173,7 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
               <CardHeader>
                 <CardTitle>Behavior</CardTitle>
                 <CardDescription>
-                  Execution and visibility options for this workspace.
+                  Execution and visibility options for all folders and chats.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -1206,7 +1211,7 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
                       Workspace backups
                     </Label>
                     <div className="text-xs text-muted-foreground">
-                      Opt into Cowork-managed recovery snapshots for sessions in this workspace.
+                      Opt into Cowork-managed recovery snapshots for future sessions.
                     </div>
                   </div>
                   <ToggleChip
@@ -1283,10 +1288,10 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
                     >
                       <span>
                         <span className="block text-sm font-semibold text-foreground">
-                          Advanced workspace actions
+                          Advanced actions
                         </span>
                         <span className="mt-1 block text-xs text-muted-foreground">
-                          Sharing, server restart, and workspace removal controls.
+                          Sharing, server restart, and folder/chat removal controls.
                         </span>
                       </span>
                       <ChevronDownIcon className="size-4 text-muted-foreground" />
@@ -1296,23 +1301,25 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
                     <CardContent className="space-y-4 border-t border-border/70 pt-4">
                       <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
                         <div>
-                          <div className="text-sm font-medium">Configure settings by workspace</div>
+                          <div className="text-sm font-medium">
+                            Configure settings per folder or chat
+                          </div>
                           <div className="text-xs text-muted-foreground">
-                            When enabled, each workspace has its own provider, model, and behavior
-                            settings.
+                            When enabled, each folder or one-off chat can keep different provider,
+                            model, and behavior settings.
                           </div>
                         </div>
                         <Switch
                           checked={perWorkspaceSettings}
-                          aria-label="Configure settings by workspace"
+                          aria-label="Configure settings per folder or chat"
                           onCheckedChange={async (checked) => {
                             if (!checked && workspaces.length > 1) {
                               const confirmed = await confirmAction({
-                                title: "Share settings across workspaces",
+                                title: "Share settings everywhere",
                                 message:
-                                  "All workspaces will be synced to the current workspace's settings.",
+                                  "All folders and chats will be synced to the current settings.",
                                 detail:
-                                  "This will overwrite provider, model, and behavior settings on other workspaces.",
+                                  "This will overwrite provider, model, and behavior settings on other folders and chats.",
                                 confirmLabel: "Share settings",
                                 cancelLabel: "Cancel",
                                 kind: "warning",
@@ -1330,7 +1337,7 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
                           <div>
                             <div className="text-sm font-medium">Restart server</div>
                             <div className="text-xs text-muted-foreground">
-                              Restart the workspace agent server if unresponsive.
+                              Restart the agent server for this folder or chat if unresponsive.
                             </div>
                           </div>
                           <Button
@@ -1347,10 +1354,10 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
                         <div className="flex items-center justify-between gap-3 rounded-md border border-destructive/20 bg-destructive/5 p-3 max-[960px]:items-start max-[960px]:flex-col">
                           <div>
                             <div className="text-sm font-medium text-destructive">
-                              Remove workspace
+                              Remove from Cowork
                             </div>
                             <div className="text-xs text-muted-foreground">
-                              Remove this workspace from the app. Your files on disk are not
+                              Remove this folder or chat from the app. Files on disk are not
                               affected.
                             </div>
                           </div>
@@ -1359,9 +1366,9 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
                             type="button"
                             onClick={async () => {
                               const confirmed = await confirmAction({
-                                title: "Remove workspace",
-                                message: `Remove workspace "${ws.name}"?`,
-                                detail: "Your files on disk will not be affected.",
+                                title: "Remove from Cowork",
+                                message: `Remove "${ws.name}" from Cowork?`,
+                                detail: "Files on disk will not be affected.",
                                 confirmLabel: "Remove",
                                 cancelLabel: "Cancel",
                                 kind: "warning",
@@ -1392,9 +1399,7 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
             <Card className="border-border/80 bg-card/85">
               <CardHeader>
                 <CardTitle>Model</CardTitle>
-                <CardDescription>
-                  The default provider and model for new sessions in this workspace.
-                </CardDescription>
+                <CardDescription>The default provider and model for new sessions.</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 {availableProviders.length === 0 ? (
@@ -1776,23 +1781,22 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
               <CardContent className="space-y-4">
                 <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
                   <div>
-                    <div className="text-sm font-medium">Configure settings by workspace</div>
+                    <div className="text-sm font-medium">Configure settings per folder or chat</div>
                     <div className="text-xs text-muted-foreground">
-                      When enabled, each workspace has its own provider, model, and behavior
-                      settings.
+                      When enabled, each folder or one-off chat can keep different provider, model,
+                      and behavior settings.
                     </div>
                   </div>
                   <Switch
                     checked={perWorkspaceSettings}
-                    aria-label="Configure settings by workspace"
+                    aria-label="Configure settings per folder or chat"
                     onCheckedChange={async (checked) => {
                       if (!checked && workspaces.length > 1) {
                         const confirmed = await confirmAction({
-                          title: "Share settings across workspaces",
-                          message:
-                            "All workspaces will be synced to the current workspace's settings.",
+                          title: "Share settings everywhere",
+                          message: "All folders and chats will be synced to the current settings.",
                           detail:
-                            "This will overwrite provider, model, and behavior settings on other workspaces.",
+                            "This will overwrite provider, model, and behavior settings on other folders and chats.",
                           confirmLabel: "Share settings",
                           cancelLabel: "Cancel",
                           kind: "warning",
@@ -1810,7 +1814,7 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
                     <div>
                       <div className="text-sm font-medium">Restart server</div>
                       <div className="text-xs text-muted-foreground">
-                        Restart the workspace agent server if unresponsive.
+                        Restart the agent server for this folder or chat if unresponsive.
                       </div>
                     </div>
                     <Button
@@ -1826,9 +1830,9 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
                 {workspaceLifecycleEnabled ? (
                   <div className="flex items-center justify-between gap-3 max-[960px]:items-start max-[960px]:flex-col">
                     <div>
-                      <div className="text-sm font-medium">Remove workspace</div>
+                      <div className="text-sm font-medium">Remove from Cowork</div>
                       <div className="text-xs text-muted-foreground">
-                        Remove this workspace from the app. Your files on disk are not affected.
+                        Remove this folder or chat from the app. Files on disk are not affected.
                       </div>
                     </div>
                     <Button
@@ -1836,9 +1840,9 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
                       type="button"
                       onClick={async () => {
                         const confirmed = await confirmAction({
-                          title: "Remove workspace",
-                          message: `Remove workspace "${ws.name}"?`,
-                          detail: "Your files on disk will not be affected.",
+                          title: "Remove from Cowork",
+                          message: `Remove "${ws.name}" from Cowork?`,
+                          detail: "Files on disk will not be affected.",
                           confirmLabel: "Remove",
                           cancelLabel: "Cancel",
                           kind: "warning",

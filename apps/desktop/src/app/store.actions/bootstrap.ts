@@ -1049,8 +1049,14 @@ export function createBootstrapActions(
       set({ perWorkspaceSettings: enabled });
       if (!enabled) {
         const state = get();
+        const selected = state.selectedWorkspaceId
+          ? (state.workspaces.find((w) => w.id === state.selectedWorkspaceId) ?? null)
+          : null;
         const source =
-          state.workspaces.find((w) => w.id === state.selectedWorkspaceId) ?? state.workspaces[0];
+          (selected?.workspaceKind === "oneOffChat" ? null : selected) ??
+          state.workspaces.find((w) => w.workspaceKind !== "oneOffChat") ??
+          selected ??
+          state.workspaces[0];
         if (source && state.workspaces.length > 1) {
           const settingsFields: (keyof typeof source)[] = [
             "defaultProvider",

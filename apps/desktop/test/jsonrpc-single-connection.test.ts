@@ -498,6 +498,33 @@ describe("desktop JSON-RPC single connection path", () => {
   });
 
   test("global newThread creates a one-off chat workspace and draft thread", async () => {
+    useAppStore.setState((state) => ({
+      ...state,
+      workspaces: state.workspaces.map((workspace) =>
+        workspace.id === "ws-jsonrpc"
+          ? {
+              ...workspace,
+              defaultProvider: "codex-cli",
+              defaultModel: "gpt-5.4",
+              defaultPreferredChildModel: "gpt-5.4",
+              defaultChildModelRoutingMode: "cross-provider-allowlist",
+              defaultPreferredChildModelRef: "codex-cli:gpt-5.4",
+              defaultAllowedChildModelRefs: ["codex-cli:gpt-5.4"],
+              defaultEnableMcp: false,
+              defaultBackupsEnabled: true,
+              providerOptions: {
+                "codex-cli": {
+                  webSearchBackend: "native",
+                  webSearchFallbackBackend: "parallel",
+                  webSearchMode: "live",
+                },
+              },
+              yolo: false,
+            }
+          : workspace,
+      ),
+    }));
+
     await useAppStore.getState().newThread();
     await flushAsyncWork();
 
@@ -506,9 +533,22 @@ describe("desktop JSON-RPC single connection path", () => {
     expect(state.workspaces[0]).toMatchObject({
       path: "/tmp/cowork-one-off-1",
       workspaceKind: "oneOffChat",
-      defaultProvider: "google",
-      defaultEnableMcp: true,
-      defaultBackupsEnabled: false,
+      defaultProvider: "codex-cli",
+      defaultModel: "gpt-5.4",
+      defaultPreferredChildModel: "gpt-5.4",
+      defaultChildModelRoutingMode: "cross-provider-allowlist",
+      defaultPreferredChildModelRef: "codex-cli:gpt-5.4",
+      defaultAllowedChildModelRefs: ["codex-cli:gpt-5.4"],
+      defaultEnableMcp: false,
+      defaultBackupsEnabled: true,
+      providerOptions: {
+        "codex-cli": {
+          webSearchBackend: "native",
+          webSearchFallbackBackend: "parallel",
+          webSearchMode: "live",
+        },
+      },
+      yolo: false,
     });
     expect(state.threads[0]).toMatchObject({
       workspaceId: state.workspaces[0]?.id,

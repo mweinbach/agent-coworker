@@ -30,8 +30,12 @@ import {
 } from "../store.helpers";
 import { requestJsonRpc } from "../store.helpers/jsonRpcSocket";
 import type { DraftModelSelection } from "../store.helpers/runtimeState";
-import type { WorkspaceDefaultsPatch, WorkspaceRecord } from "../types";
-import { normalizeWorkspaceUserProfile } from "../types";
+import {
+  isOneOffChatWorkspace,
+  normalizeWorkspaceUserProfile,
+  type WorkspaceDefaultsPatch,
+  type WorkspaceRecord,
+} from "../types";
 
 export function createWorkspaceDefaultsActions(
   set: StoreSet,
@@ -421,6 +425,185 @@ export function createWorkspaceDefaultsActions(
     };
   };
 
+  const copyWorkspaceSettings = (
+    target: WorkspaceRecord,
+    source: WorkspaceRecord,
+  ): WorkspaceRecord => ({
+    ...target,
+    defaultProvider: source.defaultProvider,
+    defaultModel: source.defaultModel,
+    defaultPreferredChildModel: source.defaultPreferredChildModel,
+    defaultChildModelRoutingMode: source.defaultChildModelRoutingMode,
+    defaultPreferredChildModelRef: source.defaultPreferredChildModelRef,
+    defaultAllowedChildModelRefs: [...(source.defaultAllowedChildModelRefs ?? [])],
+    defaultToolOutputOverflowChars: source.defaultToolOutputOverflowChars,
+    providerOptions: source.providerOptions,
+    userName: source.userName,
+    userProfile: source.userProfile ? normalizeWorkspaceUserProfile(source.userProfile) : undefined,
+    defaultEnableMcp: source.defaultEnableMcp,
+    defaultBackupsEnabled: source.defaultBackupsEnabled,
+    yolo: source.yolo,
+  });
+
+  const resolveSharedSettingsSource = (preferredWorkspaceId: string): WorkspaceRecord | null => {
+    const state = get();
+    const preferred =
+      state.workspaces.find((workspace) => workspace.id === preferredWorkspaceId) ?? null;
+    if (preferred && !isOneOffChatWorkspace(preferred)) {
+      return preferred;
+    }
+
+    const selected = state.selectedWorkspaceId
+      ? (state.workspaces.find((workspace) => workspace.id === state.selectedWorkspaceId) ?? null)
+      : null;
+    if (selected && !isOneOffChatWorkspace(selected)) {
+      return selected;
+    }
+
+    return (
+      state.workspaces.find((workspace) => !isOneOffChatWorkspace(workspace)) ??
+      preferred ??
+      selected ??
+      state.workspaces[0] ??
+      null
+    );
+  };
+
+  const syncWorkspaceDefaultsToRuntime = async (
+    workspaceId: string,
+    opts: { ensureControl: boolean; notifyOnMissingControl?: boolean },
+  ) => {
+    const desiredWorkspace = get().workspaces.find((workspace) => workspace.id === workspaceId);
+    if (!desiredWorkspace) return;
+
+    if (opts.ensureControl) {
+      await ensureServerRunning(get, set, workspaceId);
+      ensureControlSocket(get, set, workspaceId);
+    }
+
+    const controlReady = opts.ensureControl
+      ? await waitForControlSession(get, set, workspaceId)
+      : Boolean(get().workspaceRuntimeById[workspaceId]?.controlSessionId);
+    set((state) => ({
+      workspaces: state.workspaces.map((workspace) =>
+        workspace.id === workspaceId ? { ...workspace, ...desiredWorkspace } : workspace,
+      ),
+    }));
+    const nextWorkspace = desiredWorkspace;
+    const workspacePath = nextWorkspace.path;
+
+    const provider =
+      nextWorkspace.defaultProvider && isProviderName(nextWorkspace.defaultProvider)
+        ? nextWorkspace.defaultProvider
+        : "google";
+    const liveDefaultModel = get().providerDefaultModelByProvider[provider]?.trim() || "";
+    const model =
+      nextWorkspace.defaultModel?.trim() || liveDefaultModel || defaultModelForProvider(provider);
+    const preferredChildModel = nextWorkspace.defaultPreferredChildModel?.trim() || model || "";
+    const childModelRoutingMode = nextWorkspace.defaultChildModelRoutingMode ?? "same-provider";
+    const preferredChildModelRef =
+      nextWorkspace.defaultPreferredChildModelRef?.trim() ||
+      (preferredChildModel ? `${provider}:${preferredChildModel}` : "");
+    const allowedChildModelRefs = nextWorkspace.defaultAllowedChildModelRefs ?? [];
+    const providerOptions = nextWorkspace.providerOptions;
+    const userName = nextWorkspace.userName;
+    const userProfile = nextWorkspace.userProfile
+      ? normalizeWorkspaceUserProfile(nextWorkspace.userProfile)
+      : undefined;
+    const globalA2uiEnabled = get().desktopFeatureFlags.a2ui;
+    const currentWorkspaceRuntime = get().workspaceRuntimeById[workspaceId];
+    const controlMessage =
+      controlReady && currentWorkspaceRuntime?.controlSessionId
+        ? buildApplySessionDefaultsMessage({
+            sessionId: currentWorkspaceRuntime.controlSessionId,
+            current: {
+              config: currentWorkspaceRuntime.controlConfig,
+              sessionConfig: currentWorkspaceRuntime.controlSessionConfig,
+              enableMcp: currentWorkspaceRuntime.controlEnableMcp,
+            },
+            desired: {
+              provider,
+              model,
+              enableMcp: nextWorkspace.defaultEnableMcp,
+              backupsEnabled: nextWorkspace.defaultBackupsEnabled,
+              toolOutputOverflowChars: nextWorkspace.defaultToolOutputOverflowChars,
+              yolo: nextWorkspace.yolo,
+              ...(preferredChildModel ? { preferredChildModel } : {}),
+              childModelRoutingMode,
+              ...(preferredChildModelRef ? { preferredChildModelRef } : {}),
+              allowedChildModelRefs,
+              ...(providerOptions ? { providerOptions } : {}),
+              ...(userName !== undefined ? { userName } : {}),
+              ...(userProfile !== undefined ? { userProfile } : {}),
+              ...(globalA2uiEnabled ? { a2uiEnabled: true } : {}),
+            },
+          })
+        : null;
+
+    const persisted = controlReady
+      ? !controlMessage ||
+        (await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/session/defaults/apply", {
+          cwd: workspacePath,
+          ...(controlMessage.provider !== undefined ? { provider: controlMessage.provider } : {}),
+          ...(controlMessage.model !== undefined ? { model: controlMessage.model } : {}),
+          ...(controlMessage.enableMcp !== undefined
+            ? { enableMcp: controlMessage.enableMcp }
+            : {}),
+          ...(controlMessage.config !== undefined ? { config: controlMessage.config } : {}),
+        }))
+      : false;
+
+    if (persisted && controlMessage) {
+      set((s) => {
+        const workspaceRuntime = s.workspaceRuntimeById[workspaceId];
+        const workingDirectory = workspacePath ?? workspaceRuntime.controlConfig?.workingDirectory;
+        const nextControlConfig =
+          controlMessage.provider !== undefined &&
+          controlMessage.model !== undefined &&
+          workingDirectory
+            ? {
+                ...(workspaceRuntime.controlConfig ?? {}),
+                provider: controlMessage.provider,
+                model: controlMessage.model,
+                workingDirectory,
+              }
+            : workspaceRuntime.controlConfig;
+        return {
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...workspaceRuntime,
+              ...(nextControlConfig ? { controlConfig: nextControlConfig } : {}),
+              ...(controlMessage.enableMcp !== undefined
+                ? { controlEnableMcp: controlMessage.enableMcp }
+                : {}),
+            },
+          },
+        };
+      });
+    }
+
+    if (!persisted && opts.notifyOnMissingControl) {
+      set((s) => ({
+        notifications: pushNotification(s.notifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "error",
+          title: "Workspace settings partially applied",
+          detail:
+            "Control session is not fully connected yet. Reopen the workspace settings to retry.",
+        }),
+      }));
+    }
+
+    const threadIds = get()
+      .threads.filter((thread) => thread.workspaceId === workspaceId)
+      .map((thread) => thread.id);
+    for (const threadId of threadIds) {
+      void get().applyWorkspaceDefaultsToThread(threadId, "explicit");
+    }
+  };
+
   const hasPendingWorkspaceDefaultApply = (threadId: string): boolean =>
     Boolean(RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId));
 
@@ -663,18 +846,29 @@ export function createWorkspaceDefaultsActions(
     },
 
     updateWorkspaceDefaults: async (workspaceId, patch: WorkspaceDefaultsPatch) => {
-      const optimisticWorkspace =
-        resolveWorkspaceDefaults(workspaceId) ??
-        get().workspaces.find((workspace) => workspace.id === workspaceId);
+      const sharedSettings = !get().perWorkspaceSettings;
+      const sourceWorkspace = sharedSettings
+        ? resolveSharedSettingsSource(workspaceId)
+        : (get().workspaces.find((workspace) => workspace.id === workspaceId) ?? null);
+      if (!sourceWorkspace) {
+        return;
+      }
+
+      const optimisticWorkspace = resolveWorkspaceDefaults(sourceWorkspace.id) ?? sourceWorkspace;
       if (!optimisticWorkspace) {
         return;
       }
 
+      const nextWorkspace = applyWorkspacePatch(optimisticWorkspace, patch);
+
       set((s) => ({
-        workspaces: s.workspaces.map((w) => {
-          if (w.id !== workspaceId) return w;
-          return applyWorkspacePatch(optimisticWorkspace, patch);
-        }),
+        workspaces: s.workspaces.map((workspace) =>
+          sharedSettings
+            ? copyWorkspaceSettings(workspace, nextWorkspace)
+            : workspace.id === sourceWorkspace.id
+              ? nextWorkspace
+              : workspace,
+        ),
       }));
       await persistNow(get);
 
@@ -702,143 +896,29 @@ export function createWorkspaceDefaultsActions(
         return;
       }
 
-      await ensureServerRunning(get, set, workspaceId);
-      ensureControlSocket(get, set, workspaceId);
-      const controlReady = await waitForControlSession(get, set, workspaceId);
-      const workspacePath = get().workspaces.find(
-        (workspace) => workspace.id === workspaceId,
-      )?.path;
-      const workspace = controlReady
-        ? resolveWorkspaceDefaults(workspaceId)
-        : get().workspaces.find((w) => w.id === workspaceId);
-      if (!workspace) return;
-      const nextWorkspace = applyWorkspacePatch(workspace, patch);
-
-      set((s) => ({
-        workspaces: s.workspaces.map((entry) => (entry.id === workspaceId ? nextWorkspace : entry)),
-      }));
-      await persistNow(get);
-
-      const provider =
-        nextWorkspace.defaultProvider && isProviderName(nextWorkspace.defaultProvider)
-          ? nextWorkspace.defaultProvider
-          : "google";
-      const liveDefaultModel = get().providerDefaultModelByProvider[provider]?.trim() || "";
-      const model =
-        nextWorkspace.defaultModel?.trim() || liveDefaultModel || defaultModelForProvider(provider);
-      const preferredChildModel = nextWorkspace.defaultPreferredChildModel?.trim() || model || "";
-      const childModelRoutingMode = nextWorkspace.defaultChildModelRoutingMode ?? "same-provider";
-      const preferredChildModelRef =
-        nextWorkspace.defaultPreferredChildModelRef?.trim() ||
-        (preferredChildModel ? `${provider}:${preferredChildModel}` : "");
-      const allowedChildModelRefs = nextWorkspace.defaultAllowedChildModelRefs ?? [];
-      const toolOutputOverflowChars = nextWorkspace.defaultToolOutputOverflowChars;
-      const providerOptions = nextWorkspace.providerOptions;
-      const userName = nextWorkspace.userName;
-      const userProfile = nextWorkspace.userProfile
-        ? normalizeWorkspaceUserProfile(nextWorkspace.userProfile)
-        : undefined;
-      const globalA2uiEnabled = get().desktopFeatureFlags.a2ui;
-      const currentWorkspaceRuntime = get().workspaceRuntimeById[workspaceId];
-      const controlMessage =
-        controlReady && currentWorkspaceRuntime?.controlSessionId
-          ? buildApplySessionDefaultsMessage({
-              sessionId: currentWorkspaceRuntime.controlSessionId,
-              current: {
-                config: currentWorkspaceRuntime.controlConfig,
-                sessionConfig: currentWorkspaceRuntime.controlSessionConfig,
-                enableMcp: currentWorkspaceRuntime.controlEnableMcp,
-              },
-              desired: {
-                provider,
-                model,
-                enableMcp: nextWorkspace.defaultEnableMcp,
-                backupsEnabled: nextWorkspace.defaultBackupsEnabled,
-                toolOutputOverflowChars,
-                yolo: nextWorkspace.yolo,
-                ...(preferredChildModel ? { preferredChildModel } : {}),
-                childModelRoutingMode,
-                ...(preferredChildModelRef ? { preferredChildModelRef } : {}),
-                allowedChildModelRefs,
-                ...(providerOptions ? { providerOptions } : {}),
-                ...(userName !== undefined ? { userName } : {}),
-                ...(userProfile !== undefined ? { userProfile } : {}),
-                ...(globalA2uiEnabled ? { a2uiEnabled: true } : {}),
-              },
-            })
-          : null;
-
-      const persisted = controlReady
-        ? !controlMessage ||
-          (await requestJsonRpcControlEvent(
-            get,
-            set,
-            workspaceId,
-            "cowork/session/defaults/apply",
-            {
-              cwd: workspacePath,
-              ...(controlMessage.provider !== undefined
-                ? { provider: controlMessage.provider }
-                : {}),
-              ...(controlMessage.model !== undefined ? { model: controlMessage.model } : {}),
-              ...(controlMessage.enableMcp !== undefined
-                ? { enableMcp: controlMessage.enableMcp }
-                : {}),
-              ...(controlMessage.config !== undefined ? { config: controlMessage.config } : {}),
-            },
-          ))
-        : false;
-
-      if (persisted && controlMessage) {
-        set((s) => {
-          const workspaceRuntime = s.workspaceRuntimeById[workspaceId];
-          const workingDirectory =
-            workspacePath ?? workspaceRuntime.controlConfig?.workingDirectory;
-          const nextControlConfig =
-            controlMessage.provider !== undefined &&
-            controlMessage.model !== undefined &&
-            workingDirectory
-              ? {
-                  ...(workspaceRuntime.controlConfig ?? {}),
-                  provider: controlMessage.provider,
-                  model: controlMessage.model,
-                  workingDirectory,
-                }
-              : workspaceRuntime.controlConfig;
-          return {
-            workspaceRuntimeById: {
-              ...s.workspaceRuntimeById,
-              [workspaceId]: {
-                ...workspaceRuntime,
-                ...(nextControlConfig ? { controlConfig: nextControlConfig } : {}),
-                ...(controlMessage.enableMcp !== undefined
-                  ? { controlEnableMcp: controlMessage.enableMcp }
-                  : {}),
-              },
-            },
-          };
+      if (!sharedSettings) {
+        await syncWorkspaceDefaultsToRuntime(sourceWorkspace.id, {
+          ensureControl: true,
+          notifyOnMissingControl: true,
         });
+        return;
       }
 
-      if (!persisted) {
-        set((s) => ({
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "error",
-            title: "Workspace settings partially applied",
-            detail:
-              "Control session is not fully connected yet. Reopen the workspace settings to retry.",
-          }),
-        }));
-      }
-
-      const threadIds = get()
-        .threads.filter((thread) => thread.workspaceId === workspaceId)
-        .map((thread) => thread.id);
-      for (const threadId of threadIds) {
-        void get().applyWorkspaceDefaultsToThread(threadId, "explicit");
-      }
+      const workspaceIds = get().workspaces.map((workspace) => workspace.id);
+      await syncWorkspaceDefaultsToRuntime(sourceWorkspace.id, {
+        ensureControl: true,
+        notifyOnMissingControl: true,
+      });
+      await Promise.all(
+        workspaceIds
+          .filter((targetWorkspaceId) => targetWorkspaceId !== sourceWorkspace.id)
+          .map((targetWorkspaceId) =>
+            syncWorkspaceDefaultsToRuntime(targetWorkspaceId, {
+              ensureControl: false,
+              notifyOnMissingControl: false,
+            }),
+          ),
+      );
     },
   };
 }

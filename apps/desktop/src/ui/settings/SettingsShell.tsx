@@ -19,7 +19,7 @@ import { type CSSProperties, type ReactNode, useCallback, useState } from "react
 
 import { includeDevelopmentSettings } from "../../app/settingsPageAvailability";
 import { useAppStore } from "../../app/store";
-import { isOneOffChatWorkspace, type SettingsPageId } from "../../app/types";
+import type { SettingsPageId } from "../../app/types";
 import { isPackagedDesktopApp } from "../../lib/desktopCommands";
 import { type DesktopPlatformInfo, getDesktopPlatformInfo } from "../../lib/desktopPlatform";
 import { cn } from "../../lib/utils";
@@ -62,7 +62,7 @@ const SETTINGS_PAGE_META: Record<SettingsPageId, { title: string; description: s
   },
   defaults: {
     title: "Defaults",
-    description: "Defaults for models, tools, and behavior in this project.",
+    description: "Defaults for models, tools, and behavior everywhere.",
   },
   profileMemory: {
     title: "Profile & Memory",
@@ -70,7 +70,7 @@ const SETTINGS_PAGE_META: Record<SettingsPageId, { title: string; description: s
   },
   remoteAccess: {
     title: "Remote access",
-    description: "Pair a phone to this workspace over the relay when the app is open.",
+    description: "Pair a phone to this folder or chat over the relay when the app is open.",
   },
   backup: {
     title: "Backups",
@@ -114,7 +114,7 @@ const SETTINGS_PAGE_META: Record<SettingsPageId, { title: string; description: s
   },
   workspaces: {
     title: "Defaults",
-    description: "Defaults for models, tools, and behavior in this project.",
+    description: "Defaults for models, tools, and behavior everywhere.",
   },
   memory: {
     title: "Profile & Memory",
@@ -252,7 +252,7 @@ function SettingsNavigation({
   }>;
 }) {
   const currentWorkspace = useAppStore((s) =>
-    s.workspaces.find((w) => w.id === s.selectedWorkspaceId && !isOneOffChatWorkspace(w)),
+    s.workspaces.find((w) => w.id === s.selectedWorkspaceId),
   );
   const perWorkspaceSettings = useAppStore((s) => s.perWorkspaceSettings);
 

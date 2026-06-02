@@ -197,7 +197,7 @@ export function MemoryPage() {
   };
 
   const scopeLabel = (scope: "workspace" | "user") =>
-    scope === "workspace" ? "This workspace" : "All workspaces";
+    scope === "workspace" ? "This folder/chat" : "Everywhere";
   const memoryTitle = (entry: MemoryListEntry) =>
     entry.id === HOT_MEMORY_ID ? "Always include" : entry.id;
 
@@ -207,7 +207,7 @@ export function MemoryPage() {
         <div className="flex items-center gap-2">
           {workspacePickerEnabled && workspaces.length > 1 && workspace ? (
             <Select value={workspace.id} onValueChange={(value) => void selectWorkspace(value)}>
-              <SelectTrigger className="max-w-48" aria-label="Active workspace">
+              <SelectTrigger className="max-w-48" aria-label="Memory target">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>

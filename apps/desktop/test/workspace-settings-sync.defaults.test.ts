@@ -112,6 +112,174 @@ describe("workspace settings sync", () => {
     expect(useAppStore.getState().notifications).toHaveLength(0);
   });
 
+  test("shared workspace defaults copy the complete settings shape into one-off chats", async () => {
+    useAppStore.setState((state) => ({
+      ...state,
+      perWorkspaceSettings: false,
+      selectedWorkspaceId: "chat-1",
+      workspaces: [
+        {
+          ...state.workspaces[0]!,
+          workspaceKind: "project",
+          defaultProvider: "google",
+          defaultModel: "gemini-3-flash-preview",
+          defaultPreferredChildModel: "gemini-3-flash-preview",
+          defaultChildModelRoutingMode: "same-provider",
+          defaultPreferredChildModelRef: "google:gemini-3-flash-preview",
+          defaultAllowedChildModelRefs: [],
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          providerOptions: {
+            google: { nativeWebSearch: true },
+          },
+          userName: "Project user",
+          userProfile: {
+            instructions: "Project-only instructions",
+            work: "Project work",
+            details: "Project details",
+          },
+          yolo: false,
+        },
+        {
+          id: "chat-1",
+          name: "One-off chat",
+          path: "/tmp/one-off-chat",
+          workspaceKind: "oneOffChat",
+          createdAt: "2026-06-02T00:00:00.000Z",
+          lastOpenedAt: "2026-06-02T00:00:00.000Z",
+          wsProtocol: "jsonrpc",
+          defaultProvider: "google",
+          defaultModel: "ajax",
+          defaultPreferredChildModel: "ajax",
+          defaultChildModelRoutingMode: "same-provider",
+          defaultPreferredChildModelRef: "google:ajax",
+          defaultAllowedChildModelRefs: ["google:ajax"],
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          providerOptions: {
+            google: { nativeWebSearch: false },
+          },
+          userName: "Chat user",
+          userProfile: {
+            instructions: "Chat-only instructions",
+            work: "Chat work",
+            details: "Chat details",
+          },
+          yolo: false,
+        },
+      ],
+    }));
+
+    await useAppStore.getState().updateWorkspaceDefaults("chat-1", {
+      defaultProvider: "codex-cli",
+      defaultModel: "gpt-5.4",
+      defaultPreferredChildModel: "gpt-5.4",
+      defaultPreferredChildModelRef: "codex-cli:gpt-5.4",
+      defaultAllowedChildModelRefs: ["codex-cli:gpt-5.4"],
+      defaultEnableMcp: false,
+      defaultBackupsEnabled: false,
+      providerOptions: {
+        "codex-cli": {
+          webSearchBackend: "native",
+          webSearchFallbackBackend: "parallel",
+          webSearchMode: "live",
+        },
+      },
+      userName: "Shared user",
+      userProfile: {
+        instructions: "Shared instructions",
+        work: "Shared work",
+        details: "Shared details",
+      },
+      yolo: true,
+    });
+
+    const state = useAppStore.getState();
+    const project = state.workspaces.find((entry) => entry.id === workspaceId);
+    const oneOff = state.workspaces.find((entry) => entry.id === "chat-1");
+    expect(project?.defaultProvider).toBe("codex-cli");
+    expect(oneOff?.defaultProvider).toBe("codex-cli");
+    expect(oneOff?.defaultModel).toBe("gpt-5.4");
+    expect(oneOff?.defaultAllowedChildModelRefs).toEqual(["codex-cli:gpt-5.4"]);
+    expect(oneOff?.defaultEnableMcp).toBe(false);
+    expect(oneOff?.defaultBackupsEnabled).toBe(false);
+    expect(oneOff?.yolo).toBe(true);
+    expect(oneOff?.providerOptions).toEqual(project?.providerOptions);
+    expect(oneOff?.userName).toBe("Shared user");
+    expect(oneOff?.userProfile).toEqual({
+      instructions: "Shared instructions",
+      work: "Shared work",
+      details: "Shared details",
+    });
+  });
+
+  test("per-target workspace defaults allow one-off chats to diverge", async () => {
+    jsonRpcResponseOverrides.set("cowork/session/defaults/apply", async (params: any) => ({
+      event: {
+        type: "session_config",
+        sessionId: "jsonrpc-control",
+        config: {
+          yolo: params?.config?.yolo ?? false,
+          defaultBackupsEnabled: params?.config?.backupsEnabled ?? true,
+          preferredChildModel: "ajax-custom",
+          childModelRoutingMode: "same-provider",
+          preferredChildModelRef: "google:ajax-custom",
+          allowedChildModelRefs: [],
+          toolOutputOverflowChars: 25000,
+        },
+      },
+    }));
+
+    useAppStore.setState((state) => ({
+      ...state,
+      perWorkspaceSettings: true,
+      selectedWorkspaceId: "chat-1",
+      workspaces: [
+        {
+          ...state.workspaces[0]!,
+          workspaceKind: "project",
+          defaultModel: "gpt-5.2",
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+        {
+          id: "chat-1",
+          name: "One-off chat",
+          path: "/tmp/one-off-chat",
+          workspaceKind: "oneOffChat",
+          createdAt: "2026-06-02T00:00:00.000Z",
+          lastOpenedAt: "2026-06-02T00:00:00.000Z",
+          wsProtocol: "jsonrpc",
+          defaultProvider: "google",
+          defaultModel: "ajax",
+          defaultPreferredChildModel: "ajax",
+          defaultChildModelRoutingMode: "same-provider",
+          defaultPreferredChildModelRef: "google:ajax",
+          defaultAllowedChildModelRefs: [],
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+    }));
+
+    await useAppStore.getState().updateWorkspaceDefaults("chat-1", {
+      defaultModel: "ajax-custom",
+      defaultBackupsEnabled: false,
+      yolo: true,
+    });
+
+    const state = useAppStore.getState();
+    const project = state.workspaces.find((entry) => entry.id === workspaceId);
+    const oneOff = state.workspaces.find((entry) => entry.id === "chat-1");
+    expect(project?.defaultModel).toBe("gpt-5.2");
+    expect(project?.defaultBackupsEnabled).toBe(true);
+    expect(project?.yolo).toBe(false);
+    expect(oneOff?.defaultModel).toBe("ajax-custom");
+    expect(oneOff?.defaultBackupsEnabled).toBe(false);
+    expect(oneOff?.yolo).toBe(true);
+  });
+
   test("updateWorkspaceDefaults reports partial apply when the control request fails", async () => {
     jsonRpcResponseOverrides.set("cowork/session/defaults/apply", async () => {
       throw new Error("boom");

@@ -3,19 +3,26 @@ import * as desktopCommands from "../../lib/desktopCommands";
 import { makeId, nowIso, type StoreGet } from "../store.helpers";
 import { isOneOffChatWorkspace, type WorkspaceRecord } from "../types";
 
-function projectWorkspaces(get: StoreGet): WorkspaceRecord[] {
-  return get().workspaces.filter((workspace) => !isOneOffChatWorkspace(workspace));
-}
-
-function currentProjectDefaultsSource(get: StoreGet): WorkspaceRecord | null {
+export function resolveCurrentWorkspaceDefaultsSource(get: StoreGet): WorkspaceRecord | null {
   const state = get();
   const selected = state.selectedWorkspaceId
     ? (state.workspaces.find((workspace) => workspace.id === state.selectedWorkspaceId) ?? null)
     : null;
+
+  if (state.perWorkspaceSettings && selected) {
+    return selected;
+  }
+
   if (selected && !isOneOffChatWorkspace(selected)) {
     return selected;
   }
-  return projectWorkspaces(get)[0] ?? null;
+
+  return (
+    state.workspaces.find((workspace) => !isOneOffChatWorkspace(workspace)) ??
+    selected ??
+    state.workspaces[0] ??
+    null
+  );
 }
 
 export async function createOneOffWorkspaceRecord(
@@ -23,7 +30,7 @@ export async function createOneOffWorkspaceRecord(
   titleHint?: string,
 ): Promise<WorkspaceRecord> {
   const created = await desktopCommands.createOneOffChatWorkspace({ titleHint });
-  const source = currentProjectDefaultsSource(get);
+  const source = resolveCurrentWorkspaceDefaultsSource(get);
   const defaultProvider = source?.defaultProvider ?? "google";
   const defaultModel =
     source?.defaultModel?.trim() ||
@@ -50,11 +57,11 @@ export async function createOneOffWorkspaceRecord(
     defaultPreferredChildModel,
     defaultChildModelRoutingMode,
     defaultPreferredChildModelRef,
-    defaultAllowedChildModelRefs: source?.defaultAllowedChildModelRefs ?? [],
+    defaultAllowedChildModelRefs: [...(source?.defaultAllowedChildModelRefs ?? [])],
     defaultToolOutputOverflowChars: source?.defaultToolOutputOverflowChars,
     providerOptions: source?.providerOptions,
-    defaultEnableMcp: true,
-    defaultBackupsEnabled: false,
-    yolo: true,
+    defaultEnableMcp: source?.defaultEnableMcp ?? true,
+    defaultBackupsEnabled: source?.defaultBackupsEnabled ?? false,
+    yolo: source?.yolo ?? true,
   };
 }

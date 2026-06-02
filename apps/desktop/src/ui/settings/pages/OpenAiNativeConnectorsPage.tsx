@@ -63,7 +63,7 @@ export function OpenAiNativeConnectorsPage() {
             <div>
               <CardTitle className="text-base">ChatGPT apps for Codex</CardTitle>
               <CardDescription>
-                Enable ChatGPT apps from the Codex app-server for this workspace.
+                Enable ChatGPT apps from the Codex app-server for the current folder or chat.
               </CardDescription>
             </div>
             {workspace ? (

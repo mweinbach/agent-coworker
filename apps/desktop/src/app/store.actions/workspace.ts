@@ -24,6 +24,7 @@ import {
   type StoreSet,
   sendThread,
 } from "../store.helpers";
+import { resolveCurrentWorkspaceDefaultsSource } from "../store.helpers/oneOffWorkspaceRecord";
 import type { WorkspaceRecord } from "../types";
 import { hydrateThreadSelection } from "./thread";
 
@@ -84,6 +85,17 @@ export function createWorkspaceActions(
       }
 
       const stayInSettings = get().view === "settings";
+      const source = resolveCurrentWorkspaceDefaultsSource(get);
+      const defaultProvider = source?.defaultProvider ?? "google";
+      const defaultModel =
+        source?.defaultModel?.trim() ||
+        get().providerDefaultModelByProvider[defaultProvider] ||
+        defaultModelForProvider(defaultProvider);
+      const defaultPreferredChildModel = source?.defaultPreferredChildModel?.trim() || defaultModel;
+      const defaultChildModelRoutingMode = source?.defaultChildModelRoutingMode ?? "same-provider";
+      const defaultPreferredChildModelRef =
+        source?.defaultPreferredChildModelRef?.trim() ||
+        `${defaultProvider}:${defaultPreferredChildModel || defaultModel}`;
       const ws: WorkspaceRecord = {
         id: makeId(),
         name: basename(dir),
@@ -92,15 +104,19 @@ export function createWorkspaceActions(
         createdAt: nowIso(),
         lastOpenedAt: nowIso(),
         wsProtocol: "jsonrpc",
-        defaultProvider: "google",
-        defaultModel: defaultModelForProvider("google"),
-        defaultPreferredChildModel: defaultModelForProvider("google"),
-        defaultChildModelRoutingMode: "same-provider",
-        defaultPreferredChildModelRef: `google:${defaultModelForProvider("google")}`,
-        defaultAllowedChildModelRefs: [],
-        defaultEnableMcp: true,
-        defaultBackupsEnabled: false,
-        yolo: true,
+        defaultProvider,
+        defaultModel,
+        defaultPreferredChildModel,
+        defaultChildModelRoutingMode,
+        defaultPreferredChildModelRef,
+        defaultAllowedChildModelRefs: [...(source?.defaultAllowedChildModelRefs ?? [])],
+        defaultToolOutputOverflowChars: source?.defaultToolOutputOverflowChars,
+        providerOptions: source?.providerOptions,
+        userName: source?.userName,
+        userProfile: source?.userProfile,
+        defaultEnableMcp: source?.defaultEnableMcp ?? true,
+        defaultBackupsEnabled: source?.defaultBackupsEnabled ?? false,
+        yolo: source?.yolo ?? true,
       };
 
       set((s) => ({

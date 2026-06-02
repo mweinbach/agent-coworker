@@ -283,6 +283,84 @@ describe("workspace startup flow", () => {
     );
   });
 
+  test("addWorkspace inherits the current universal defaults", async () => {
+    pickedWorkspaceDirectory = "/tmp/new-universal-workspace";
+    useAppStore.setState((state) => ({
+      ...state,
+      workspaces: [
+        {
+          id: "ws-source",
+          name: "Source",
+          path: "/tmp/source",
+          workspaceKind: "project",
+          createdAt: "2026-06-02T00:00:00.000Z",
+          lastOpenedAt: "2026-06-02T00:00:00.000Z",
+          wsProtocol: "jsonrpc",
+          defaultProvider: "codex-cli",
+          defaultModel: "gpt-5.4",
+          defaultPreferredChildModel: "gpt-5.4",
+          defaultChildModelRoutingMode: "cross-provider-allowlist",
+          defaultPreferredChildModelRef: "codex-cli:gpt-5.4",
+          defaultAllowedChildModelRefs: ["codex-cli:gpt-5.4"],
+          defaultToolOutputOverflowChars: 12_000,
+          providerOptions: {
+            "codex-cli": {
+              webSearchBackend: "native",
+              webSearchFallbackBackend: "parallel",
+              webSearchMode: "live",
+            },
+          },
+          userName: "Universal user",
+          userProfile: {
+            instructions: "Universal instructions",
+            work: "Universal work",
+            details: "Universal details",
+          },
+          defaultEnableMcp: false,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      selectedWorkspaceId: "ws-source",
+      perWorkspaceSettings: false,
+    }));
+
+    const addPromise = useAppStore.getState().addWorkspace();
+    await waitForCondition(() => savedStates.length === 1 && startCalls.length === 1);
+    startDeferreds[0]?.resolve({ url: "ws://new-universal-workspace" });
+    await addPromise;
+
+    const created = useAppStore.getState().workspaces[0];
+    expect(created).toMatchObject({
+      path: "/tmp/new-universal-workspace",
+      workspaceKind: "project",
+      defaultProvider: "codex-cli",
+      defaultModel: "gpt-5.4",
+      defaultPreferredChildModel: "gpt-5.4",
+      defaultChildModelRoutingMode: "cross-provider-allowlist",
+      defaultPreferredChildModelRef: "codex-cli:gpt-5.4",
+      defaultAllowedChildModelRefs: ["codex-cli:gpt-5.4"],
+      defaultToolOutputOverflowChars: 12_000,
+      providerOptions: {
+        "codex-cli": {
+          webSearchBackend: "native",
+          webSearchFallbackBackend: "parallel",
+          webSearchMode: "live",
+        },
+      },
+      userName: "Universal user",
+      userProfile: {
+        instructions: "Universal instructions",
+        work: "Universal work",
+        details: "Universal details",
+      },
+      defaultEnableMcp: false,
+      defaultBackupsEnabled: true,
+      yolo: false,
+    });
+    expect(startCalls[0]?.yolo).toBe(false);
+  });
+
   test("startWorkspaceServer forwards normalized privacy telemetry settings", async () => {
     const workspaceId = "ws-privacy";
     useAppStore.setState({

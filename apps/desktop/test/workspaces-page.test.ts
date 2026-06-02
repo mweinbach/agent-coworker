@@ -155,7 +155,7 @@ describe("desktop workspaces page", () => {
     );
 
     expect(html).toContain("OpenAI &amp; ChatGPT Settings");
-    expect(html).toContain("Workspace defaults for ChatGPT Subscription and OpenAI API models.");
+    expect(html).toContain("Default behavior for ChatGPT Subscription and OpenAI API models.");
     expect(html).toContain("OpenAI API");
     expect(html).toContain("ChatGPT Subscription");
     expect(html).toContain("Verbosity");
@@ -291,7 +291,7 @@ describe("desktop workspaces page", () => {
     );
 
     expect(html).toContain(
-      "Google models still use local Parallel search from an older workspace override.",
+      "Google models still use local Parallel search from an older Google-specific override.",
     );
     expect(html).toContain(
       "Choose Native above to restore provider-native search for both providers.",
@@ -299,7 +299,7 @@ describe("desktop workspaces page", () => {
     expect(html).toContain("Codex web search mode");
   });
 
-  test("renders workspace controls for user profile context", () => {
+  test("renders controls for user profile context", () => {
     const html = renderToStaticMarkup(
       createElement(WorkspaceUserProfileCard, {
         workspace: {
@@ -315,7 +315,7 @@ describe("desktop workspaces page", () => {
       }),
     );
 
-    expect(html).toContain("How Cowork should understand you in this workspace");
+    expect(html).toContain("How Cowork should understand you");
     expect(html).toContain("Name");
     expect(html).toContain("Role or work context");
     expect(html).toContain("Instructions");
@@ -475,7 +475,7 @@ describe("desktop workspaces page", () => {
       });
 
       expect(container.textContent).not.toContain("Restart server");
-      expect(container.textContent).not.toContain("Remove workspace");
+      expect(container.textContent).not.toContain("Remove from Cowork");
     } finally {
       if (root) {
         await act(async () => {
@@ -486,7 +486,7 @@ describe("desktop workspaces page", () => {
     }
   });
 
-  test("renders project workspace defaults when a hidden one-off chat is selected", async () => {
+  test("uses project defaults in shared mode and the selected chat in per-target mode", async () => {
     useAppStore.setState((state) => ({
       ...state,
       perWorkspaceSettings: false,
@@ -572,6 +572,14 @@ describe("desktop workspaces page", () => {
       expect(container.textContent).toContain("gemini-3-flash-preview");
       expect(container.textContent).not.toContain("One-off chat");
       expect(container.textContent).not.toContain("ajax");
+
+      await act(async () => {
+        useAppStore.setState({ perWorkspaceSettings: true });
+        root?.render(createElement(WorkspacesPage));
+      });
+
+      expect(container.textContent).toContain("One-off chat");
+      expect(container.textContent).toContain("ajax");
     } finally {
       if (root) {
         await act(async () => {
@@ -761,7 +769,7 @@ describe("desktop workspaces page", () => {
       expect(topLevelText).toContain("Subagent routing:");
       expect(topLevelText).toContain("Preferred subagent model:");
       expect(topLevelText.indexOf("Current provider:")).toBeLessThan(
-        topLevelText.indexOf("Active workspace"),
+        topLevelText.indexOf("Settings target"),
       );
 
       const modelsTab = [...container.querySelectorAll("button")].find(
@@ -866,7 +874,7 @@ describe("desktop workspaces page", () => {
         );
       });
 
-      const textarea = container.querySelector('[aria-label="Workspace work context"]');
+      const textarea = container.querySelector('[aria-label="Work context"]');
       if (!(textarea instanceof harness.dom.window.HTMLTextAreaElement)) {
         throw new Error("missing workspace work context textarea");
       }
@@ -877,7 +885,7 @@ describe("desktop workspaces page", () => {
         textarea.dispatchEvent(new harness.dom.window.Event("change", { bubbles: true }));
       });
 
-      expect(container.textContent).toContain("How Cowork should understand you in this workspace");
+      expect(container.textContent).toContain("How Cowork should understand you");
       expect(textarea.value).toBe("Platform engineer");
       expect(consoleErrors.some((entry) => entry.includes("Maximum update depth exceeded"))).toBe(
         false,
@@ -946,7 +954,7 @@ describe("desktop workspaces page", () => {
         root.render(createElement(StrictMode, null, createElement(App)));
       });
 
-      const textarea = container.querySelector('[aria-label="Workspace work context"]');
+      const textarea = container.querySelector('[aria-label="Work context"]');
       if (!(textarea instanceof harness.dom.window.HTMLTextAreaElement)) {
         throw new Error("missing workspace work context textarea");
       }
@@ -958,7 +966,7 @@ describe("desktop workspaces page", () => {
         textarea.dispatchEvent(new harness.dom.window.FocusEvent("blur", { bubbles: true }));
       });
 
-      expect(container.textContent).toContain("How Cowork should understand you in this workspace");
+      expect(container.textContent).toContain("How Cowork should understand you");
       expect(container.textContent).toContain("Workspace 1");
       expect(consoleErrors.some((entry) => entry.includes("Maximum update depth exceeded"))).toBe(
         false,

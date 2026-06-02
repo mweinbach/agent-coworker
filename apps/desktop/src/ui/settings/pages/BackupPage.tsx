@@ -21,7 +21,6 @@ import type {
   WorkspaceRecord,
   WorkspaceRuntime,
 } from "../../../app/types";
-import { isOneOffChatWorkspace } from "../../../app/types";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import {
@@ -184,8 +183,8 @@ function BackupSidebar({
             <ArchiveIcon className="h-8 w-8 mb-3 text-muted-foreground/30" />
             <p className="text-sm text-muted-foreground">
               {backupsEnabled
-                ? "No backups yet. Backups appear after Cowork creates recovery snapshots for a session in this workspace."
-                : "Backups are off by default. Enable them to use advanced recovery snapshots for this workspace."}
+                ? "No backups yet. Backups appear after Cowork creates recovery snapshots for this folder or chat."
+                : "Backups are off by default. Enable them to use advanced recovery snapshots for future sessions."}
             </p>
           </div>
         ) : null}
@@ -722,14 +721,7 @@ export function BackupPage(props: BackupPageProps = {}) {
     props.onRevealFolder ?? (async (folderPath: string) => await revealPath({ path: folderPath }));
   const setWorkspaceBackupsDefault = async (enabled: boolean) => {
     if (!workspace) return;
-    const targets = perWorkspaceSettings
-      ? [workspace]
-      : workspaceList.filter((entry) => !isOneOffChatWorkspace(entry));
-    await Promise.all(
-      targets.map((entry) =>
-        updateWorkspaceDefaultsFromStore(entry.id, { defaultBackupsEnabled: enabled }),
-      ),
-    );
+    await updateWorkspaceDefaultsFromStore(workspace.id, { defaultBackupsEnabled: enabled });
     if (enabled && refreshBackups) {
       void refreshBackups();
     }
@@ -928,7 +920,7 @@ export function BackupPage(props: BackupPageProps = {}) {
             <InlineMetric
               label="Backed-up sessions"
               value={String(sortedEntries.length)}
-              detail="In this workspace"
+              detail="For this target"
             />
             <InlineMetric
               label="Checkpoints"
@@ -955,13 +947,13 @@ export function BackupPage(props: BackupPageProps = {}) {
               title="Workspace backups"
               description={
                 workspaceBackupsDefaultEnabled
-                  ? "New sessions in this workspace will keep Cowork-managed recovery snapshots."
+                  ? "New sessions will keep Cowork-managed recovery snapshots."
                   : "New sessions will not create Cowork-managed recovery snapshots unless you enable them."
               }
               meta={
                 perWorkspaceSettings
-                  ? "This setting applies to the selected workspace."
-                  : "Shared workspace settings are on, so this applies to all project workspaces."
+                  ? "This setting applies to the selected folder or chat."
+                  : "Shared settings are on, so this applies to every folder and chat."
               }
               control={
                 <Switch
@@ -1016,7 +1008,7 @@ export function BackupPage(props: BackupPageProps = {}) {
                 </div>
                 <p className="max-w-prose text-xs leading-relaxed text-muted-foreground">
                   {workspaceBackupsVisibleEnabled
-                    ? "Backups will appear here after Cowork creates recovery snapshots for sessions in this workspace."
+                    ? "Backups will appear here after Cowork creates recovery snapshots for sessions in this folder or chat."
                     : "Enable workspace backups to create local restore points for future sessions. Git workspaces can usually rely on git history instead."}
                 </p>
               </div>

@@ -88,6 +88,27 @@ describe("bash tool", () => {
     expect(result.stdout.trim()).toBe("hi");
   });
 
+  test("falls back through POSIX shell candidates", async () => {
+    await withEnv("SHELL", "/missing/user-shell", async () => {
+      const seen: string[] = [];
+      const result = await bashInternal.runShellCommandWithExec({
+        command: "echo hi",
+        cwd: "/tmp",
+        platform: "linux",
+        execRunner: async (file: string) => {
+          seen.push(file);
+          if (file === "/bin/sh") {
+            return { stdout: "hi\n", stderr: "", exitCode: 0 };
+          }
+          return { stdout: "", stderr: "", exitCode: 1, errorCode: "ENOENT" };
+        },
+      });
+
+      expect(seen).toEqual(["/missing/user-shell", "/bin/bash", "/bin/sh"]);
+      expect(result.stdout.trim()).toBe("hi");
+    });
+  });
+
   test("pins managed soffice shim inside POSIX shell commands", async () => {
     const seen: Array<{ file: string; args: string[] }> = [];
     const result = await bashInternal.runShellCommandWithExec({

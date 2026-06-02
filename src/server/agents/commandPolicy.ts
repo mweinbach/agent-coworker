@@ -80,11 +80,11 @@ const FILESYSTEM_MUTATION_COMMANDS = new Set([
   "rmdir",
   "erase",
   // PowerShell commands
-  "Remove-Item",
-  "New-Item",
-  "Copy-Item",
-  "Move-Item",
-  "Set-Content",
+  "remove-item",
+  "new-item",
+  "copy-item",
+  "move-item",
+  "set-content",
 ]);
 const INLINE_INTERPRETER_COMMANDS = new Set([
   "node",

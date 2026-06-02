@@ -20,8 +20,16 @@ export function createAgentProfileActions(
   AppStoreActions,
   "refreshAgentProfilesCatalog" | "upsertAgentProfile" | "deleteAgentProfile" | "copyAgentProfile"
 > {
-  const resolveWorkspaceId = (workspaceId?: string): string | null =>
-    workspaceId ?? get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
+  const resolveWorkspaceId = (workspaceId?: string): string | null => {
+    const workspaces = get().workspaces ?? [];
+    const isKnownWorkspace = (id: string | null | undefined): id is string =>
+      Boolean(id && workspaces.some((workspace) => workspace.id === id));
+    if (workspaceId) return isKnownWorkspace(workspaceId) ? workspaceId : null;
+    const selectedWorkspaceId = get().selectedWorkspaceId;
+    return isKnownWorkspace(selectedWorkspaceId)
+      ? selectedWorkspaceId
+      : (workspaces[0]?.id ?? null);
+  };
 
   const prepareWorkspace = async (workspaceId: string) => {
     ensureWorkspaceRuntime(get, set, workspaceId);

@@ -12,6 +12,9 @@ import {
 } from "./skill-plugin-actions.harness";
 
 const { createAgentProfileActions } = await import("../src/app/store.actions/agentProfiles");
+const { bumpAgentProfilesCatalogGeneration } = await import(
+  "../src/app/store.helpers/runtimeState"
+);
 
 type AgentProfilesCatalogEvent = Extract<SessionEvent, { type: "agent_profiles_catalog" }>;
 
@@ -156,5 +159,55 @@ describe("agent profile store actions", () => {
         .displayName,
     ).toBe("Fresh Profile");
     expect(state.workspaceRuntimeById[workspaceId].agentProfilesLoading).toBe(false);
+  });
+
+  test("stale skipped profile catalog reads clear loading", async () => {
+    const state = createState();
+    state.workspaceRuntimeById[workspaceId].serverUrl = "ws://profiles";
+    const { get, set } = createStoreHarness(state);
+    const staleRead = deferred<Record<string, unknown>>();
+
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      readyPromise: Promise.resolve(),
+      request: () => staleRead.promise,
+      respond: () => true,
+      close: () => {},
+    } as unknown as JsonRpcSocket);
+
+    const actions = createAgentProfileActions(set, get);
+    const refreshPromise = actions.refreshAgentProfilesCatalog(workspaceId);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(state.workspaceRuntimeById[workspaceId].agentProfilesLoading).toBe(true);
+
+    bumpAgentProfilesCatalogGeneration(workspaceId);
+    staleRead.resolve({ event: catalogEvent("Stale Profile") });
+    await refreshPromise;
+
+    expect(state.workspaceRuntimeById[workspaceId].agentProfilesCatalog).toBeNull();
+    expect(state.workspaceRuntimeById[workspaceId].agentProfilesLoading).toBe(false);
+    expect(state.workspaceRuntimeById[workspaceId].agentProfilesError).toBeNull();
+    expect(state.notifications).toHaveLength(0);
+  });
+
+  test("profile catalog reads that return no catalog event clear loading with an error", async () => {
+    const state = createState();
+    state.workspaceRuntimeById[workspaceId].serverUrl = "ws://profiles";
+    const { get, set } = createStoreHarness(state);
+
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      readyPromise: Promise.resolve(),
+      request: () => Promise.resolve({}),
+      respond: () => true,
+      close: () => {},
+    } as unknown as JsonRpcSocket);
+
+    await createAgentProfileActions(set, get).refreshAgentProfilesCatalog(workspaceId);
+
+    expect(state.workspaceRuntimeById[workspaceId].agentProfilesLoading).toBe(false);
+    expect(state.workspaceRuntimeById[workspaceId].agentProfilesError).toBe(
+      "Unable to refresh subagent profiles.",
+    );
+    expect(state.notifications).toHaveLength(1);
   });
 });

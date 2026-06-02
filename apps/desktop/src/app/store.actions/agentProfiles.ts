@@ -97,21 +97,24 @@ export function createAgentProfileActions(
         undefined,
         { shouldApplyEvent: shouldApplyCatalogRead(workspaceId, generation) },
       );
-      if (!ok) {
-        if (getAgentProfilesCatalogGeneration(workspaceId) !== generation) {
-          return;
-        }
+      const generationChanged = getAgentProfilesCatalogGeneration(workspaceId) !== generation;
+      const stillLoading = get().workspaceRuntimeById[workspaceId]?.agentProfilesLoading;
+      if (!ok || stillLoading) {
         set((s) => ({
           workspaceRuntimeById: {
             ...s.workspaceRuntimeById,
             [workspaceId]: {
               ...s.workspaceRuntimeById[workspaceId],
               agentProfilesLoading: false,
-              agentProfilesError: "Unable to refresh subagent profiles.",
+              agentProfilesError: generationChanged
+                ? (s.workspaceRuntimeById[workspaceId]?.agentProfilesError ?? null)
+                : "Unable to refresh subagent profiles.",
             },
           },
         }));
-        notifyFailure("Subagent profiles unavailable", "Unable to refresh subagent profiles.");
+        if (!generationChanged) {
+          notifyFailure("Subagent profiles unavailable", "Unable to refresh subagent profiles.");
+        }
       }
     },
 

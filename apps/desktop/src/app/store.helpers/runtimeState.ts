@@ -269,6 +269,7 @@ export function defaultWorkspaceRuntime(): WorkspaceRuntime {
     mcpValidationByName: {},
     mcpLastAuthChallenge: null,
     mcpLastAuthResult: null,
+    providerCatalog: [],
     agentProfilesCatalog: null,
     agentProfilesLoading: false,
     agentProfilesError: null,

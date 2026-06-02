@@ -500,6 +500,7 @@ export type WorkspaceRuntime = {
   mcpValidationByName: Record<string, MCPServerValidationEvent>;
   mcpLastAuthChallenge: MCPServerAuthChallengeEvent | null;
   mcpLastAuthResult: MCPServerAuthResultEvent | null;
+  providerCatalog: Extract<SessionEvent, { type: "provider_catalog" }>["all"];
   agentProfilesCatalog: AgentProfilesCatalogEvent["catalog"] | null;
   agentProfilesLoading: boolean;
   agentProfilesError: string | null;

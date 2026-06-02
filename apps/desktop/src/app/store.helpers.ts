@@ -489,7 +489,10 @@ export type AppStoreState = {
   callbackProviderAuth: (provider: ProviderName, methodId: string, code?: string) => Promise<void>;
   requestProviderCatalog: () => Promise<void>;
   requestProviderAuthMethods: () => Promise<void>;
-  refreshProviderStatus: (opts?: { refreshBedrockDiscovery?: boolean }) => Promise<void>;
+  refreshProviderStatus: (opts?: {
+    refreshBedrockDiscovery?: boolean;
+    workspaceId?: string;
+  }) => Promise<void>;
   checkCodexAppServerStatus: (opts?: { checkLatest?: boolean }) => Promise<void>;
   updateCodexAppServer: () => Promise<void>;
   checkLibreOfficeRuntime: (opts?: {

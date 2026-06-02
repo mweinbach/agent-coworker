@@ -1345,10 +1345,17 @@ export function createControlSocketHelpers(
       const connected = evt.connected.filter((provider): provider is ProviderName =>
         deps.isProviderName(provider),
       );
-      set(() => ({
+      set((s) => ({
         providerCatalog: evt.all,
         providerDefaultModelByProvider: evt.default,
         providerConnected: connected,
+        workspaceRuntimeById: {
+          ...s.workspaceRuntimeById,
+          [workspaceId]: {
+            ...s.workspaceRuntimeById[workspaceId],
+            providerCatalog: evt.all,
+          },
+        },
       }));
       return;
     }

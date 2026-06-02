@@ -24,6 +24,7 @@ type RefreshProviderStatusHelperOverrides = {
 
 type RefreshProviderStatusOptions = {
   refreshBedrockDiscovery?: boolean;
+  workspaceId?: string;
 };
 
 function isRefreshProviderStatusHelperOverrides(
@@ -121,11 +122,17 @@ export function createProviderActions(
   | "setLmStudioEnabled"
   | "setLmStudioModelVisible"
 > {
-  const resolveProviderWorkspaceId = (): string | null =>
-    get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
+  const resolveProviderWorkspaceId = (workspaceId?: string | null): string | null => {
+    if (workspaceId && get().workspaces.some((workspace) => workspace.id === workspaceId)) {
+      return workspaceId;
+    }
+    return get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
+  };
 
-  const ensureProviderControlReady = async (): Promise<string | null> => {
-    const workspaceId = resolveProviderWorkspaceId();
+  const ensureProviderControlReady = async (
+    workspaceIdOverride?: string | null,
+  ): Promise<string | null> => {
+    const workspaceId = resolveProviderWorkspaceId(workspaceIdOverride);
     if (!workspaceId) return null;
 
     await ensureServerRunning(get, set, workspaceId);
@@ -550,7 +557,7 @@ export function createProviderActions(
     },
 
     refreshProviderStatus: async (opts) => {
-      const workspaceId = await ensureProviderControlReady();
+      const workspaceId = await ensureProviderControlReady(opts?.workspaceId);
       if (!workspaceId) return;
 
       const path = get().workspaces.find((workspace) => workspace.id === workspaceId)?.path;

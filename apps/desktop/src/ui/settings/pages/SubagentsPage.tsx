@@ -13,7 +13,11 @@ import {
   OPENAI_REASONING_EFFORT_VALUES,
 } from "../../../../../../src/shared/openaiCompatibleOptions";
 import { useAppStore } from "../../../app/store";
-import { isOneOffChatWorkspace, type WorkspaceRecord } from "../../../app/types";
+import {
+  isOneOffChatWorkspace,
+  type WorkspaceRecord,
+  type WorkspaceRuntime,
+} from "../../../app/types";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { Checkbox } from "../../../components/ui/checkbox";
@@ -269,6 +273,12 @@ export function buildProfileModelGroups(
   };
 }
 
+export function providerCatalogForSubagentWorkspace(
+  runtime: WorkspaceRuntime | null,
+): ProviderCatalogEntry[] {
+  return runtime?.providerCatalog ?? [];
+}
+
 export async function saveAgentProfileDraft(
   draft: DraftProfile | null,
   upsertAgentProfile: (
@@ -310,7 +320,7 @@ export function SubagentsPage() {
   const copyAgentProfile = useAppStore((s) => s.copyAgentProfile);
   const requestWorkspaceMcpServers = useAppStore((s) => s.requestWorkspaceMcpServers);
   const refreshSkillsCatalog = useAppStore((s) => s.refreshSkillsCatalog);
-  const providerCatalog = useAppStore((s) => s.providerCatalog);
+  const refreshProviderStatus = useAppStore((s) => s.refreshProviderStatus);
 
   const workspaceChoices = useMemo(() => listSubagentProfileWorkspaces(workspaces), [workspaces]);
   const [profileWorkspaceId, setProfileWorkspaceId] = useState<string | null>(null);
@@ -320,6 +330,7 @@ export function SubagentsPage() {
   );
   const runtime = workspace ? workspaceRuntimeById[workspace.id] : null;
   const catalog = runtime?.agentProfilesCatalog ?? null;
+  const providerCatalog = providerCatalogForSubagentWorkspace(runtime);
   const profilesLoading = runtime?.agentProfilesLoading ?? false;
   const [scope, setScope] = useState<AgentProfileScope>("workspace");
   const [draft, setDraft] = useState<DraftProfile | null>(null);
@@ -342,12 +353,14 @@ export function SubagentsPage() {
     void refreshAgentProfilesCatalog(workspace.id);
     void requestWorkspaceMcpServers(workspace.id);
     void refreshSkillsCatalog(workspace.id);
+    void refreshProviderStatus({ workspaceId: workspace.id });
   }, [
     workspace?.id,
     workspace,
     refreshAgentProfilesCatalog,
     requestWorkspaceMcpServers,
     refreshSkillsCatalog,
+    refreshProviderStatus,
   ]);
 
   const profileRows = useMemo(

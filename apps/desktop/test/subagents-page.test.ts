@@ -79,6 +79,7 @@ const {
   SubagentsPage,
   listSubagentProfileWorkspaces,
   profileModelSupportsReasoning,
+  providerCatalogForSubagentWorkspace,
   resolveSubagentProfilesWorkspace,
   saveAgentProfileDraft,
 } = await import("../src/ui/settings/pages/SubagentsPage");
@@ -90,6 +91,7 @@ const defaultStoreActions = {
   copyAgentProfile: useAppStore.getState().copyAgentProfile,
   deleteAgentProfile: useAppStore.getState().deleteAgentProfile,
   refreshAgentProfilesCatalog: useAppStore.getState().refreshAgentProfilesCatalog,
+  refreshProviderStatus: useAppStore.getState().refreshProviderStatus,
   refreshSkillsCatalog: useAppStore.getState().refreshSkillsCatalog,
   requestWorkspaceMcpServers: useAppStore.getState().requestWorkspaceMcpServers,
   upsertAgentProfile: useAppStore.getState().upsertAgentProfile,
@@ -156,6 +158,22 @@ function profilesCatalog(entries: AgentProfileCatalogEntry[]) {
       globalDir: "/tmp/global",
       workspaceDir: "/tmp/workspace",
     },
+  };
+}
+
+function providerCatalogEntry(provider: "google" | "openai", modelId: string, displayName: string) {
+  return {
+    id: provider,
+    name: provider === "openai" ? "OpenAI" : "Google",
+    defaultModel: modelId,
+    models: [
+      {
+        id: modelId,
+        displayName,
+        knowledgeCutoff: "unknown",
+        supportsImageInput: true,
+      },
+    ],
   };
 }
 
@@ -507,6 +525,56 @@ describe("subagents settings page", () => {
         ],
       }),
     );
+  });
+
+  test("uses the selected profile workspace provider catalog for model choices", async () => {
+    const project = workspaceRecord("project-1", "Project", "project");
+    const refreshProviderStatus = mock(async () => {});
+    const runtimeProviderCatalog = [providerCatalogEntry("openai", "gpt-runtime", "GPT Runtime")];
+    resetSubagentsStore({
+      providerCatalog: [providerCatalogEntry("google", "gemini-stale", "Gemini Stale")],
+      refreshAgentProfilesCatalog: mock(async () => {}),
+      refreshProviderStatus,
+      refreshSkillsCatalog: mock(async () => {}),
+      requestWorkspaceMcpServers: mock(async () => {}),
+      selectedWorkspaceId: "project-1",
+      workspaces: [project],
+      workspaceRuntimeById: {
+        "project-1": {
+          ...defaultWorkspaceRuntime(),
+          agentProfilesCatalog: profilesCatalog([]),
+          providerCatalog: runtimeProviderCatalog,
+        },
+      },
+    });
+
+    const { harness, root } = await renderSubagentsPage();
+    try {
+      expect(refreshProviderStatus).toHaveBeenCalledWith({ workspaceId: "project-1" });
+
+      const selectedRuntime = useAppStore.getState().workspaceRuntimeById["project-1"] ?? null;
+      const result = buildProfileModelGroups(
+        providerCatalogForSubagentWorkspace(selectedRuntime),
+        "openai:gpt-runtime",
+      );
+      expect(result.groups).toContainEqual(
+        expect.objectContaining({
+          provider: "openai",
+          options: [
+            {
+              value: "openai:gpt-runtime",
+              label: "GPT Runtime",
+            },
+          ],
+        }),
+      );
+      expect(JSON.stringify(result)).not.toContain("Gemini Stale");
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+      harness.restore();
+    }
   });
 
   test("shows built-in profiles in the global scope", async () => {

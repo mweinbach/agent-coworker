@@ -100,7 +100,8 @@ mock.module("../src/lib/agentSocket", () => ({
 }));
 
 const { useAppStore } = await import("../src/app/store");
-const { RUNTIME } = await import("../src/app/store.helpers");
+const { createWorkspaceMcpActions } = await import("../src/app/store.actions/mcp");
+const { defaultWorkspaceRuntime, RUNTIME } = await import("../src/app/store.helpers");
 
 function setDefaultHandlers(workspacePath = "/tmp/workspace") {
   jsonRpcHandlers.set("thread/list", async () => ({ threads: [] }));
@@ -203,7 +204,13 @@ describe("workspace MCP editor flow", () => {
     MockJsonRpcSocket.instances.length = 0;
     RUNTIME.jsonRpcSockets.clear();
     RUNTIME.sessionSnapshots.clear();
+    RUNTIME.workspaceJsonRpcSocketGenerations.clear();
+    RUNTIME.workspaceStartPromises.clear();
     setDefaultHandlers();
+    const workspaceMcpActions = createWorkspaceMcpActions(
+      useAppStore.setState,
+      useAppStore.getState,
+    );
 
     act(() => {
       useAppStore.setState({
@@ -230,7 +237,12 @@ describe("workspace MCP editor flow", () => {
         threads: [],
         selectedWorkspaceId: workspaceId,
         selectedThreadId: null,
-        workspaceRuntimeById: {},
+        workspaceRuntimeById: {
+          [workspaceId]: {
+            ...defaultWorkspaceRuntime(),
+            serverUrl: "ws://mock",
+          },
+        },
         threadRuntimeById: {},
         latestTodosByThreadId: {},
         workspaceExplorerById: {},
@@ -254,6 +266,7 @@ describe("workspace MCP editor flow", () => {
         contextSidebarWidth: 300,
         messageBarHeight: 120,
         sidebarWidth: 280,
+        ...workspaceMcpActions,
       } as any);
     });
   });

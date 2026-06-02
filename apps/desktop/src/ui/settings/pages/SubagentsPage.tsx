@@ -13,6 +13,7 @@ import type {
   AgentTaskType,
 } from "../../../../../../src/shared/agents";
 import { useAppStore } from "../../../app/store";
+import { isOneOffChatWorkspace, type WorkspaceRecord } from "../../../app/types";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { Checkbox } from "../../../components/ui/checkbox";
@@ -120,6 +121,19 @@ function draftFromEntry(entry: AgentProfileCatalogEntry): DraftProfile {
   };
 }
 
+export function resolveSubagentProfilesWorkspace(
+  workspaces: WorkspaceRecord[],
+  selectedWorkspaceId: string | null,
+): WorkspaceRecord | null {
+  const selected = selectedWorkspaceId
+    ? (workspaces.find((entry) => entry.id === selectedWorkspaceId) ?? null)
+    : null;
+  if (selected && !isOneOffChatWorkspace(selected)) return selected;
+  return (
+    workspaces.find((entry) => !isOneOffChatWorkspace(entry)) ?? selected ?? workspaces[0] ?? null
+  );
+}
+
 function slugify(value: string): string {
   return value
     .trim()
@@ -183,11 +197,12 @@ export function SubagentsPage() {
   const refreshSkillsCatalog = useAppStore((s) => s.refreshSkillsCatalog);
 
   const workspace = useMemo(
-    () => workspaces.find((entry) => entry.id === selectedWorkspaceId) ?? workspaces[0] ?? null,
+    () => resolveSubagentProfilesWorkspace(workspaces, selectedWorkspaceId),
     [selectedWorkspaceId, workspaces],
   );
   const runtime = workspace ? workspaceRuntimeById[workspace.id] : null;
   const catalog = runtime?.agentProfilesCatalog ?? null;
+  const profilesLoading = runtime?.agentProfilesLoading ?? false;
   const [scope, setScope] = useState<AgentProfileScope>("workspace");
   const [draft, setDraft] = useState<DraftProfile | null>(null);
   const [idTouched, setIdTouched] = useState(false);
@@ -233,8 +248,23 @@ export function SubagentsPage() {
   };
 
   const saveDraft = async () => {
-    const result = await saveAgentProfileDraft(draft, upsertAgentProfile);
+    if (!workspace) return;
+    const result = await saveAgentProfileDraft(draft, (profile) =>
+      upsertAgentProfile(profile, workspace.id),
+    );
     if (result === "saved") setDraft(null);
+  };
+  const copyProfile = async (entry: AgentProfileCatalogEntry) => {
+    if (!workspace) return;
+    const targetScope: AgentProfileScope = entry.scope === "workspace" ? "global" : "workspace";
+    const copied = await copyAgentProfile(
+      {
+        sourceRef: `${entry.scope}:${entry.profile.id}`,
+        targetScope,
+      },
+      workspace.id,
+    );
+    if (copied) setScope(targetScope);
   };
 
   if (!workspace) {
@@ -302,7 +332,12 @@ export function SubagentsPage() {
             </div>
           ) : null}
 
-          {profileRows.length === 0 ? (
+          {profilesLoading && !catalog ? (
+            <SettingsEmptyState
+              title="Loading profiles"
+              description="Refreshing the subagent profile catalog."
+            />
+          ) : profileRows.length === 0 ? (
             <SettingsEmptyState
               title={`No ${scope} profiles`}
               description="Create a profile to make it available through spawnAgent(profileRef)."
@@ -323,13 +358,10 @@ export function SubagentsPage() {
                     setIdTouched(true);
                     setDraft(draftFromEntry(entry));
                   }}
-                  onCopy={() =>
-                    void copyAgentProfile({
-                      sourceRef: `${entry.scope}:${entry.profile.id}`,
-                      targetScope: entry.scope === "workspace" ? "global" : "workspace",
-                    })
+                  onCopy={() => void copyProfile(entry)}
+                  onDelete={() =>
+                    void deleteAgentProfile(entry.scope, entry.profile.id, workspace.id)
                   }
-                  onDelete={() => void deleteAgentProfile(entry.scope, entry.profile.id)}
                 />
               ))}
             </div>

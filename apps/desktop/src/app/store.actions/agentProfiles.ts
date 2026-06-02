@@ -87,8 +87,8 @@ export function createAgentProfileActions(
       }
     },
 
-    upsertAgentProfile: async (profile) => {
-      const workspaceId = resolveWorkspaceId();
+    upsertAgentProfile: async (profile, workspaceIdArg) => {
+      const workspaceId = resolveWorkspaceId(workspaceIdArg);
       if (!workspaceId) return false;
       const cwd = workspacePathFor(get, workspaceId);
       await prepareWorkspace(workspaceId);
@@ -111,8 +111,8 @@ export function createAgentProfileActions(
       return true;
     },
 
-    deleteAgentProfile: async (scope, id) => {
-      const workspaceId = resolveWorkspaceId();
+    deleteAgentProfile: async (scope, id, workspaceIdArg) => {
+      const workspaceId = resolveWorkspaceId(workspaceIdArg);
       if (!workspaceId) return;
       const cwd = workspacePathFor(get, workspaceId);
       await prepareWorkspace(workspaceId);
@@ -133,9 +133,9 @@ export function createAgentProfileActions(
       }
     },
 
-    copyAgentProfile: async (copy: AgentProfileCopyInput) => {
-      const workspaceId = resolveWorkspaceId();
-      if (!workspaceId) return;
+    copyAgentProfile: async (copy: AgentProfileCopyInput, workspaceIdArg) => {
+      const workspaceId = resolveWorkspaceId(workspaceIdArg);
+      if (!workspaceId) return false;
       const cwd = workspacePathFor(get, workspaceId);
       await prepareWorkspace(workspaceId);
       const rpcError: { message?: string } = {};
@@ -152,7 +152,9 @@ export function createAgentProfileActions(
           "Unable to copy subagent profile",
           rpcError.message?.trim() || "The profile could not be copied.",
         );
+        return false;
       }
+      return true;
     },
   };
 }

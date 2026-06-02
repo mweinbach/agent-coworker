@@ -1,3 +1,5 @@
+import { codexDynamicToolSpecs } from "../../src/runtime/codexAppServer/config";
+import { filterToolsForCodexDynamicBoundary } from "../../src/tools/codexBoundary";
 import {
   afterEach,
   bashInternal,
@@ -36,8 +38,6 @@ import {
   writeConnectionStore,
   z,
 } from "./tools.harness";
-import { codexDynamicToolSpecs } from "../../src/runtime/codexAppServer/config";
-import { filterToolsForCodexDynamicBoundary } from "../../src/tools/codexBoundary";
 
 describe("createTools", () => {
   test("returns base tool names when child-agent control is unavailable", async () => {

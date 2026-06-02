@@ -16,13 +16,7 @@ const grepInputSchema = z.object({
   pattern: z.string().describe("Regex pattern"),
   path: z.string().optional().describe("File or directory to search"),
   fileGlob: z.string().optional().describe("Glob to filter files (e.g. *.ts)"),
-  contextLines: z
-    .number()
-    .int()
-    .min(0)
-    .max(50)
-    .optional()
-    .describe("Context lines around matches"),
+  contextLines: z.number().int().min(0).max(50).optional().describe("Context lines around matches"),
   caseSensitive: z.boolean().optional().default(true),
   timeoutSeconds: z
     .number()

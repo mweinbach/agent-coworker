@@ -98,8 +98,7 @@ export function listSessionToolNames(
         ]
       : []),
   ];
-  const codexDynamicLocalToolNames =
-    providerIsCodex && includeLegacyWebSearch ? ["webSearch"] : [];
+  const codexDynamicLocalToolNames = providerIsCodex && includeLegacyWebSearch ? ["webSearch"] : [];
   const names = providerIsCodex
     ? [...codexDynamicLocalToolNames, ...coworkToolNames]
     : [...localToolNames, ...coworkToolNames];

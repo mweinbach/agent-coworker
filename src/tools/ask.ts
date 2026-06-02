@@ -17,12 +17,7 @@ const askStructuredInputSchema = z
     questions: z
       .array(
         z.object({
-          id: z
-            .string()
-            .trim()
-            .min(1)
-            .optional()
-            .describe("Stable answer key for this question"),
+          id: z.string().trim().min(1).optional().describe("Stable answer key for this question"),
           question: nonEmptyQuestionSchema.describe("The complete question to ask the user"),
           header: z.string().optional().describe("Short label shown in UX"),
           options: z

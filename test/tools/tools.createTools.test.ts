@@ -125,6 +125,22 @@ describe("createTools", () => {
     expect(codexDynamicToolSpecs(dynamicTools).map((tool) => tool.name)).toContain("webSearch");
   });
 
+  test("listSessionToolNames reports legacy codex-cli webSearch when configured", () => {
+    const names = listSessionToolNames({
+      provider: "codex-cli",
+      providerOptions: {
+        "codex-cli": {
+          webSearchBackend: "exa",
+        },
+      },
+      enableMemory: true,
+    });
+
+    expect(names).toContain("webSearch");
+    expect(names).not.toContain("bash");
+    expect(names).not.toContain("webFetch");
+  });
+
   test("replaces local webSearch but keeps webFetch for google when native web tools are enabled", async () => {
     const dir = await tmpDir();
     const tools = createTools(

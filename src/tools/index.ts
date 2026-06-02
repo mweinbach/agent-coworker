@@ -98,7 +98,11 @@ export function listSessionToolNames(
         ]
       : []),
   ];
-  const names = providerIsCodex ? coworkToolNames : [...localToolNames, ...coworkToolNames];
+  const codexDynamicLocalToolNames =
+    providerIsCodex && includeLegacyWebSearch ? ["webSearch"] : [];
+  const names = providerIsCodex
+    ? [...codexDynamicLocalToolNames, ...coworkToolNames]
+    : [...localToolNames, ...coworkToolNames];
 
   return [...names].sort((left, right) => left.localeCompare(right));
 }

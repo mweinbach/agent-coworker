@@ -256,7 +256,7 @@ describe("subagents settings page", () => {
     );
   });
 
-  test("clears reasoning when the selected profile model has no reasoning option", async () => {
+  test("clears unsupported reasoning while preserving hidden task and context defaults", async () => {
     const upsertAgentProfile = mock(async () => true);
     const draft = {
       ...draftProfile(),
@@ -273,8 +273,8 @@ describe("subagents settings page", () => {
       expect.objectContaining({
         model: "google:gemini-3-flash-preview",
         reasoningEffort: undefined,
-        defaultTaskType: undefined,
-        defaultContextMode: undefined,
+        defaultTaskType: "verify",
+        defaultContextMode: "brief",
       }),
     );
   });

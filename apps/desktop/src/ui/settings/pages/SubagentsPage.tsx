@@ -303,8 +303,8 @@ export async function saveAgentProfileDraft(
     skillNames: draft.skillNames,
     model,
     reasoningEffort: profileModelSupportsReasoning(model) ? draft.reasoningEffort : undefined,
-    defaultTaskType: undefined,
-    defaultContextMode: undefined,
+    defaultTaskType: draft.defaultTaskType,
+    defaultContextMode: draft.defaultContextMode,
     scope: draft.scope,
   });
   return saved ? "saved" : "failed";

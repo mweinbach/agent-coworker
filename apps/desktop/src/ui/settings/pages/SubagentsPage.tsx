@@ -123,8 +123,9 @@ type ProfileModelGroup = {
   label: string;
   options: ProfileModelOption[];
 };
+type RolePromptDefaults = Partial<Record<AgentRole, string>>;
 
-function newDraft(scope: AgentProfileScope): DraftProfile {
+function newDraft(scope: AgentProfileScope, prompt = ""): DraftProfile {
   return {
     version: 1,
     scope,
@@ -133,7 +134,7 @@ function newDraft(scope: AgentProfileScope): DraftProfile {
     description: "",
     enabled: true,
     baseRole: "worker",
-    prompt: "",
+    prompt,
     allowedBuiltInTools: ROLE_TOOLS.worker,
     allowedMcpServers: [],
     skillNames: [],
@@ -207,6 +208,11 @@ function toggleList(values: readonly string[], item: string, checked: boolean): 
 function validBuiltInToolsForProfile(selectedTools: readonly string[]): string[] {
   const selected = new Set(selectedTools);
   return ALL_BUILT_IN_TOOLS.filter((tool) => selected.has(tool));
+}
+
+function defaultPromptForRole(defaults: RolePromptDefaults, role: AgentRole): string | undefined {
+  const prompt = defaults[role]?.trim();
+  return prompt ? defaults[role] : undefined;
 }
 
 export function profileModelSupportsReasoning(model: string | undefined): boolean {
@@ -384,10 +390,20 @@ export function SubagentsPage() {
       ),
     [runtime?.skills, runtime?.skillsCatalog?.effectiveSkills],
   );
+  const rolePromptDefaults = useMemo<RolePromptDefaults>(() => {
+    const prompts: RolePromptDefaults = {};
+    for (const entry of catalog?.profiles ?? []) {
+      const profile = entry.profile;
+      if (entry.scope !== "global" || profile.id !== profile.baseRole) continue;
+      const prompt = profile.prompt.trim();
+      if (prompt) prompts[profile.baseRole] = profile.prompt;
+    }
+    return prompts;
+  }, [catalog?.profiles]);
 
   const startCreate = () => {
     setIdTouched(false);
-    setDraft(newDraft(scope));
+    setDraft(newDraft(scope, defaultPromptForRole(rolePromptDefaults, "worker") ?? ""));
   };
 
   const saveDraft = async () => {
@@ -535,6 +551,7 @@ export function SubagentsPage() {
         mcpServerNames={mcpServerNames}
         skillNames={skillNames}
         providerCatalog={providerCatalog}
+        rolePromptDefaults={rolePromptDefaults}
         workspace={workspace}
         workspaceChoices={workspaceChoices}
         onWorkspaceChange={setProfileWorkspaceId}
@@ -653,6 +670,7 @@ export function ProfileDialog({
   mcpServerNames,
   skillNames,
   providerCatalog = [],
+  rolePromptDefaults = {},
   workspace,
   workspaceChoices,
   onWorkspaceChange,
@@ -665,6 +683,7 @@ export function ProfileDialog({
   mcpServerNames: string[];
   skillNames: string[];
   providerCatalog?: ProviderCatalogEntry[];
+  rolePromptDefaults?: RolePromptDefaults;
   workspace: WorkspaceRecord | null;
   workspaceChoices: WorkspaceRecord[];
   onWorkspaceChange: (workspaceId: string) => void;
@@ -715,9 +734,19 @@ export function ProfileDialog({
                     value={draft.baseRole}
                     onValueChange={(value) => {
                       const baseRole = value as AgentRole;
+                      const previousDefault = defaultPromptForRole(
+                        rolePromptDefaults,
+                        draft.baseRole,
+                      );
+                      const nextDefault = defaultPromptForRole(rolePromptDefaults, baseRole);
+                      const currentPrompt = draft.prompt.trim();
+                      const shouldUseNextDefault =
+                        !currentPrompt ||
+                        (!!previousDefault && currentPrompt === previousDefault.trim());
                       setDraft({
                         ...draft,
                         baseRole,
+                        prompt: shouldUseNextDefault ? (nextDefault ?? "") : draft.prompt,
                         allowedBuiltInTools: ROLE_TOOLS[baseRole],
                       });
                     }}
@@ -796,11 +825,12 @@ export function ProfileDialog({
               <Textarea
                 value={draft.prompt}
                 className="min-h-32"
-                placeholder="Add instructions this subagent should follow."
+                placeholder="Add or edit this subagent prompt."
                 onChange={(event) => setDraft({ ...draft, prompt: event.target.value })}
               />
               <p className="text-xs text-muted-foreground">
-                Profile instructions are appended after the base role prompt.
+                Default role prompt is editable. Saved changes replace it while the shared subagent
+                contract still applies.
               </p>
             </Field>
 

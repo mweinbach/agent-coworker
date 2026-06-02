@@ -378,6 +378,54 @@ describe("subagents settings page", () => {
     }
   });
 
+  test("shows the profile prompt as the editable prompt value", async () => {
+    let root: ReturnType<typeof createRoot> | null = null;
+    const harness = setupJsdom();
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          createElement(ProfileDialog, {
+            draft: {
+              ...draftProfile(),
+              baseRole: "explorer",
+              prompt: "Explorer default role prompt.",
+            },
+            setDraft: mock(() => {}),
+            idTouched: true,
+            setIdTouched: mock(() => {}),
+            mcpServerNames: [],
+            skillNames: [],
+            workspace: null,
+            workspaceChoices: [],
+            onWorkspaceChange: mock(() => {}),
+            onSave: mock(() => {}),
+          }),
+        );
+        await flushUi();
+      });
+
+      const promptTextarea = harness.dom.window.document.querySelector("textarea");
+      if (!(promptTextarea instanceof harness.dom.window.HTMLTextAreaElement)) {
+        throw new Error("missing prompt textarea");
+      }
+      expect(promptTextarea.value).toBe("Explorer default role prompt.");
+      expect(harness.dom.window.document.body.textContent ?? "").toContain(
+        "Default role prompt is editable.",
+      );
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
   test("shows every built-in tool in the profile editor", async () => {
     let root: ReturnType<typeof createRoot> | null = null;
     const harness = setupJsdom();

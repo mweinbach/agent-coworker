@@ -83,7 +83,12 @@ async function readScope(config: AgentConfig, scope: AgentProfileScope): Promise
     const filePath = path.join(dir, file);
     try {
       const raw = await fs.readFile(filePath, "utf-8");
-      const parsed = applyAgentProfileInvariants(normalizeAgentProfileDefinition(JSON.parse(raw)));
+      const parsed = applyAgentProfileInvariants(
+        await applyAgentProfilePromptDefaults(
+          config,
+          normalizeAgentProfileDefinition(JSON.parse(raw)),
+        ),
+      );
       entries.push({
         scope,
         path: filePath,
@@ -292,6 +297,20 @@ function applyAgentProfileInvariants(profile: AgentProfileDefinition): AgentProf
 
 function isLockedProfile(id: string): boolean {
   return id === MAIN_AGENT_PROFILE_ID;
+}
+
+async function applyAgentProfilePromptDefaults(
+  config: AgentConfig,
+  profile: AgentProfileDefinition,
+): Promise<AgentProfileDefinition> {
+  if (profile.prompt.trim()) return profile;
+  const role = AGENT_ROLE_DEFINITIONS[profile.baseRole];
+  const prompt = await readBuiltInRolePrompt(config, role.promptFile);
+  if (!prompt) return profile;
+  return {
+    ...profile,
+    prompt,
+  };
 }
 
 export function formatAgentProfilePromptSummaries(catalog: AgentProfilesCatalog): string[] {

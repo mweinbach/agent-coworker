@@ -140,6 +140,40 @@ describe("agent profile catalog", () => {
     });
   });
 
+  test("fills empty customized built-in role prompts from role defaults", async () => {
+    const config = await makeConfig();
+
+    await upsertAgentProfile(
+      config,
+      profile({
+        scope: "global",
+        id: "explorer",
+        displayName: "Customized Explorer",
+        description: "Customized discovery agent.",
+        baseRole: "explorer",
+        prompt: "",
+        allowedBuiltInTools: ["read", "grep"],
+      }),
+    );
+
+    const catalog = await readAgentProfilesCatalog(config);
+    const explorer = catalog.profiles.find((entry) => entry.profile.id === "explorer");
+
+    expect(explorer).toMatchObject({
+      scope: "global",
+      effective: true,
+      profile: {
+        displayName: "Customized Explorer",
+        prompt: "explorer built-in profile prompt.",
+      },
+    });
+    expect(explorer?.builtIn).toBeUndefined();
+    await expect(resolveAgentProfileSnapshot(config, "explorer")).resolves.toMatchObject({
+      id: "explorer",
+      prompt: "explorer built-in profile prompt.",
+    });
+  });
+
   test("disabled user profile overrides can hide a built-in profile", async () => {
     const config = await makeConfig();
 

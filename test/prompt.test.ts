@@ -1483,6 +1483,43 @@ describe("loadSubAgentPrompt", () => {
     expect(prompt).toContain("## Specialized Subagent Profile");
     expect(prompt).not.toContain("Profile-specific instructions:");
   });
+
+  test("uses edited profile prompt as the role prompt replacement", async () => {
+    const { builtIn, cwd } = await makeTmpDirs();
+    await fs.mkdir(path.join(cwd, ".git"), { recursive: true });
+
+    const basePrompt = "Shared base prompt.";
+    const rolePrompt = "Explorer default role prompt.";
+    const editedPrompt = "Explorer edited role prompt.";
+    await writeFile(path.join(builtIn, "prompts", "sub-agents", "base.md"), basePrompt);
+    await writeFile(path.join(builtIn, "prompts", "sub-agents", "explorer.md"), rolePrompt);
+
+    const config = makeConfig({
+      builtInDir: builtIn,
+      workingDirectory: cwd,
+      projectCoworkDir: path.join(cwd, ".cowork"),
+    });
+    const profile = createAgentProfileSnapshot("global", {
+      version: 1,
+      id: "explorer",
+      displayName: "Explorer",
+      description: "",
+      enabled: true,
+      baseRole: "explorer",
+      prompt: editedPrompt,
+      allowedBuiltInTools: ["read"],
+      allowedMcpServers: [],
+      skillNames: [],
+    });
+
+    const prompt = await loadAgentPrompt(config, "explorer", profile);
+
+    expect(prompt).toContain(basePrompt);
+    expect(prompt).toContain(editedPrompt);
+    expect(prompt).not.toContain(rolePrompt);
+    expect(prompt).toContain("## Specialized Subagent Profile");
+    expect(prompt).not.toContain("Profile-specific instructions:");
+  });
 });
 
 // ---------------------------------------------------------------------------

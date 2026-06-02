@@ -746,18 +746,17 @@ export async function loadAgentPrompt(
     fs.readFile(basePath, "utf-8"),
     fs.readFile(rolePath, "utf-8"),
   ]);
+  const profilePrompt = profile?.prompt.trim();
+  const effectiveRolePrompt = profilePrompt || rolePrompt.trim();
   const combined = [
     basePrompt.trimEnd(),
-    rolePrompt.trim(),
-    ...(profile ? [buildAgentProfilePromptSection(profile, rolePrompt)] : []),
+    effectiveRolePrompt,
+    ...(profile ? [buildAgentProfilePromptSection(profile)] : []),
   ].join("\n\n");
   return await appendWorkspaceContextBlocks(combined, config, { includeProjectInstructions: true });
 }
 
-function buildAgentProfilePromptSection(
-  profile: AgentProfileSnapshot,
-  rolePrompt?: string,
-): string {
+function buildAgentProfilePromptSection(profile: AgentProfileSnapshot): string {
   const lines = [
     "## Specialized Subagent Profile",
     "",
@@ -771,11 +770,6 @@ function buildAgentProfilePromptSection(
     `- Skills allowed by this profile: ${formatInlineList(profile.skillNames)}.`,
     "- Do not attempt to load skills, built-in tools, or MCP servers outside this profile policy.",
   ].filter(Boolean);
-
-  const prompt = profile.prompt.trim();
-  if (prompt && prompt !== rolePrompt?.trim()) {
-    lines.push("", "Profile-specific instructions:", prompt);
-  }
   return lines.join("\n");
 }
 

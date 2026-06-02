@@ -153,6 +153,59 @@ describe("skill store actions", () => {
     expect(state.notifications).toHaveLength(0);
   });
 
+  test("refreshSkillsCatalog can target a non-management workspace", async () => {
+    const state = createState();
+    state.pluginManagementWorkspaceId = workspaceId;
+    state.workspaces = [
+      { id: workspaceId, path: "/tmp/management" },
+      { id: secondaryWorkspaceId, path: "/tmp/selected" },
+    ];
+    state.workspaceRuntimeById[workspaceId].serverUrl = "ws://management";
+    state.workspaceRuntimeById[secondaryWorkspaceId] = {
+      ...defaultWorkspaceRuntime(),
+      serverUrl: "ws://selected",
+    };
+    const { get, set } = createStoreHarness(state);
+
+    const workspaceCalls: Array<{ workspaceId: string; method: string }> = [];
+    const makeSocket = (socketWorkspaceId: string) =>
+      ({
+        readyPromise: Promise.resolve(),
+        request: (method: string) => {
+          workspaceCalls.push({ workspaceId: socketWorkspaceId, method });
+          return Promise.resolve({
+            event: {
+              type: method === "cowork/skills/catalog/read" ? "skills_catalog" : "skills_list",
+              sessionId: "jsonrpc-control",
+              ...(method === "cowork/skills/catalog/read"
+                ? {
+                    catalog: {
+                      installations: [],
+                      sources: [],
+                      stats: { totalInstallations: 0, enabledInstallations: 0 },
+                    },
+                    mutationBlocked: false,
+                  }
+                : { skills: [] }),
+            },
+          });
+        },
+        respond: () => true,
+        close: () => {},
+      }) as unknown as JsonRpcSocket;
+    RUNTIME.jsonRpcSockets.set(workspaceId, makeSocket(workspaceId));
+    RUNTIME.jsonRpcSockets.set(secondaryWorkspaceId, makeSocket(secondaryWorkspaceId));
+
+    await createSkillActions(set, get).refreshSkillsCatalog(secondaryWorkspaceId);
+
+    expect(workspaceCalls).toEqual([
+      { workspaceId: secondaryWorkspaceId, method: "cowork/skills/catalog/read" },
+      { workspaceId: secondaryWorkspaceId, method: "cowork/skills/list" },
+    ]);
+    expect(state.workspaceRuntimeById[secondaryWorkspaceId].skillCatalogLoading).toBe(false);
+    expect(state.workspaceRuntimeById[workspaceId].skillCatalogLoading).toBe(false);
+  });
+
   test("previewSkillInstall removes only its pending key when sendControl fails", async () => {
     const state = createState();
     state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys = { other: true };

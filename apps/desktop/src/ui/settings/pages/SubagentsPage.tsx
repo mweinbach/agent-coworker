@@ -196,7 +196,7 @@ export function SubagentsPage() {
     if (!workspace) return;
     void refreshAgentProfilesCatalog(workspace.id);
     void requestWorkspaceMcpServers(workspace.id);
-    void refreshSkillsCatalog();
+    void refreshSkillsCatalog(workspace.id);
   }, [
     workspace?.id,
     workspace,

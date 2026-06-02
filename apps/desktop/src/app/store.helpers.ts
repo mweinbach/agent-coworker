@@ -328,7 +328,7 @@ export type AppStoreState = {
 
   openSkills: () => Promise<void>;
   openResearch: () => Promise<void>;
-  refreshSkillsCatalog: () => Promise<void>;
+  refreshSkillsCatalog: (workspaceId?: string) => Promise<void>;
   refreshAgentProfilesCatalog: (workspaceId?: string) => Promise<void>;
   upsertAgentProfile: (profile: AgentProfileUpsertInput) => Promise<boolean>;
   deleteAgentProfile: (scope: AgentProfileScope, id: string) => Promise<void>;

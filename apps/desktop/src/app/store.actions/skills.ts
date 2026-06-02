@@ -106,8 +106,8 @@ export function createSkillActions(
       await Promise.all([get().refreshPluginsCatalog(), get().refreshSkillsCatalog()]);
     },
 
-    refreshSkillsCatalog: async () => {
-      const workspaceId = managementWorkspaceId();
+    refreshSkillsCatalog: async (targetWorkspaceId?: string) => {
+      const workspaceId = targetWorkspaceId ?? managementWorkspaceId();
       if (!workspaceId) return;
       const cwd = workspacePath(workspaceId);
       set((s) => ({

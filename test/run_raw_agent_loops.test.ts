@@ -425,6 +425,42 @@ describe("raw loop scripted spawnAgent prompts", () => {
     expect(mixedPrompt).toContain("lastMessagePreview JSON");
     expect(mixedPrompt).not.toContain(" task:");
   });
+
+  test("use platform-specific shell commands in scripted bash steps", () => {
+    const gctRun = buildGoogleCustomtoolsToolCoverageRuns("win32").find(
+      (run) => run.id === "gct-02-skill-bash",
+    );
+    const mixedRuns = buildMixedRuns("win32");
+    const notesRun = mixedRuns.find((run) => run.id === "run-02");
+    const workbookRun = mixedRuns.find((run) => run.id === "run-03");
+    const quickRefRun = mixedRuns.find((run) => run.id === "run-09");
+
+    expect(gctRun).toBeDefined();
+    expect(notesRun).toBeDefined();
+    expect(workbookRun).toBeDefined();
+    expect(quickRefRun).toBeDefined();
+
+    const gctPrompt = gctRun!.prompt({ runDir: "C:/raw-loop", repoDir: "C:/repo" });
+    const notesPrompt = notesRun!.prompt({ runDir: "C:/raw-loop", repoDir: "C:/repo" });
+    const workbookPrompt = workbookRun!.prompt({ runDir: "C:/raw-loop", repoDir: "C:/repo" });
+    const quickRefPrompt = quickRefRun!.prompt({ runDir: "C:/raw-loop", repoDir: "C:/repo" });
+
+    expect(gctPrompt).toContain("Use bash to run command: (Get-Location).Path");
+    expect(notesPrompt).toContain("Use bash to run: (Get-Location).Path");
+    expect(notesPrompt).toContain("Use bash to run: Get-ChildItem -Force");
+    expect(workbookPrompt).toContain("Use bash to run: py -3 'build_amortization.py'");
+    expect(quickRefPrompt).toContain(
+      "Use bash to run: (Get-Content 'ws_quickref.md' | Measure-Object -Line).Lines",
+    );
+
+    for (const prompt of [gctPrompt, notesPrompt, workbookPrompt, quickRefPrompt]) {
+      expect(prompt).not.toContain("python3 build_");
+      expect(prompt).not.toContain("ls -la");
+      expect(prompt).not.toContain("wc -l ws_quickref.md");
+      expect(prompt).not.toContain("Use bash to run: pwd");
+      expect(prompt).not.toContain("Use bash to run command: pwd");
+    }
+  });
 });
 
 describe("raw loop harness context", () => {

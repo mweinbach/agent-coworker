@@ -168,6 +168,32 @@ describe("agent profile catalog", () => {
     expect(catalog.effectiveProfiles.map((entry) => entry.profile.id)).toEqual(["qa-reviewer"]);
   });
 
+  test("copy allows disabled source profiles without enabling them for spawn", async () => {
+    const config = await makeConfig();
+    await upsertAgentProfile(config, profile({ enabled: false }));
+
+    const catalog = await copyAgentProfile(config, {
+      sourceRef: "global:qa-reviewer",
+      targetScope: "workspace",
+      targetId: "qa-reviewer-copy",
+      targetDisplayName: "QA Reviewer Copy",
+    });
+
+    const copied = catalog.effectiveProfiles.find(
+      (entry) => entry.profile.id === "qa-reviewer-copy",
+    );
+    expect(copied).toMatchObject({
+      scope: "workspace",
+      profile: {
+        enabled: true,
+        prompt: "Only report concrete defects.",
+      },
+    });
+    await expect(resolveAgentProfileSnapshot(config, "global:qa-reviewer")).rejects.toThrow(
+      "Subagent profile is disabled: global:qa-reviewer",
+    );
+  });
+
   test("rejects missing and disabled profile refs", async () => {
     const config = await makeConfig();
     await upsertAgentProfile(config, profile({ enabled: false }));

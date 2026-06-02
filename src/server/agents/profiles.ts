@@ -120,13 +120,8 @@ export async function resolveAgentProfileSnapshot(
   config: AgentConfig,
   profileRefRaw: string,
 ): Promise<AgentProfileSnapshot> {
-  const ref = parseAgentProfileRef(profileRefRaw);
   const catalog = await readAgentProfilesCatalog(config);
-  const candidates =
-    ref.kind === "scoped"
-      ? catalog.profiles.filter((entry) => entry.scope === ref.scope && entry.profile.id === ref.id)
-      : catalog.profiles.filter((entry) => entry.effective && entry.profile.id === ref.id);
-  const match = candidates[0];
+  const match = findAgentProfileEntry(catalog, profileRefRaw);
   if (!match) {
     throw new Error(`Unknown subagent profile: ${profileRefRaw}`);
   }
@@ -169,25 +164,42 @@ export async function copyAgentProfile(
   input: AgentProfileCopyInput,
 ): Promise<AgentProfilesCatalog> {
   const parsed = agentProfileCopyInputSchema.parse(input);
-  const snapshot = await resolveAgentProfileSnapshot(config, parsed.sourceRef);
+  const catalog = await readAgentProfilesCatalog(config);
+  const source = findAgentProfileEntry(catalog, parsed.sourceRef);
+  if (!source) {
+    throw new Error(`Unknown subagent profile: ${parsed.sourceRef}`);
+  }
+  const profile = source.profile;
   const targetProfile: AgentProfileDefinition = {
     version: 1,
-    id: parsed.targetId ?? snapshot.id,
-    displayName: parsed.targetDisplayName ?? snapshot.displayName,
-    description: snapshot.description,
+    id: parsed.targetId ?? profile.id,
+    displayName: parsed.targetDisplayName ?? profile.displayName,
+    description: profile.description,
     enabled: true,
-    baseRole: snapshot.baseRole,
-    prompt: snapshot.prompt,
-    allowedBuiltInTools: snapshot.allowedBuiltInTools,
-    allowedMcpServers: snapshot.allowedMcpServers,
-    skillNames: snapshot.skillNames,
-    ...(snapshot.model ? { model: snapshot.model } : {}),
-    ...(snapshot.reasoningEffort ? { reasoningEffort: snapshot.reasoningEffort } : {}),
-    ...(snapshot.defaultTaskType ? { defaultTaskType: snapshot.defaultTaskType } : {}),
-    ...(snapshot.defaultContextMode ? { defaultContextMode: snapshot.defaultContextMode } : {}),
+    baseRole: profile.baseRole,
+    prompt: profile.prompt,
+    allowedBuiltInTools: profile.allowedBuiltInTools,
+    allowedMcpServers: profile.allowedMcpServers,
+    skillNames: profile.skillNames,
+    ...(profile.model ? { model: profile.model } : {}),
+    ...(profile.reasoningEffort ? { reasoningEffort: profile.reasoningEffort } : {}),
+    ...(profile.defaultTaskType ? { defaultTaskType: profile.defaultTaskType } : {}),
+    ...(profile.defaultContextMode ? { defaultContextMode: profile.defaultContextMode } : {}),
   };
   await writeProfileFile(config, parsed.targetScope, targetProfile);
   return await readAgentProfilesCatalog(config);
+}
+
+function findAgentProfileEntry(
+  catalog: AgentProfilesCatalog,
+  profileRefRaw: string,
+): AgentProfileCatalogEntry | null {
+  const ref = parseAgentProfileRef(profileRefRaw);
+  const candidates =
+    ref.kind === "scoped"
+      ? catalog.profiles.filter((entry) => entry.scope === ref.scope && entry.profile.id === ref.id)
+      : catalog.profiles.filter((entry) => entry.effective && entry.profile.id === ref.id);
+  return candidates[0] ?? null;
 }
 
 async function writeProfileFile(

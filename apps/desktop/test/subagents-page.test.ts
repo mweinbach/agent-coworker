@@ -412,7 +412,17 @@ describe("subagents settings page", () => {
       if (!(promptTextarea instanceof harness.dom.window.HTMLTextAreaElement)) {
         throw new Error("missing prompt textarea");
       }
+      const dialogContent = harness.dom.window.document.querySelector(
+        '[data-slot="dialog-content"]',
+      );
+      if (!(dialogContent instanceof harness.dom.window.HTMLElement)) {
+        throw new Error("missing profile dialog content");
+      }
       expect(promptTextarea.value).toBe("Explorer default role prompt.");
+      expect(dialogContent.className).toContain("max-h-[94vh]");
+      expect(dialogContent.className).toContain("w-[min(94vw,58rem)]");
+      expect(dialogContent.className).toContain("max-w-none");
+      expect(dialogContent.className).toContain("sm:max-w-none");
       expect(harness.dom.window.document.body.textContent ?? "").toContain(
         "Default role prompt is editable.",
       );

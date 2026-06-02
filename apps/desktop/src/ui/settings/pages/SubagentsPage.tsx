@@ -701,7 +701,7 @@ export function ProfileDialog({
 
   return (
     <Dialog open={draft !== null} onOpenChange={(open) => !open && setDraft(null)}>
-      <DialogContent className="max-h-[86vh] max-w-3xl overflow-y-auto">
+      <DialogContent className="max-h-[94vh] w-[min(94vw,58rem)] max-w-none overflow-y-auto sm:max-w-none">
         <DialogHeader>
           <DialogTitle>{editingExisting ? "Edit subagent" : "New subagent"}</DialogTitle>
           <DialogDescription className="sr-only">Configure the subagent profile.</DialogDescription>

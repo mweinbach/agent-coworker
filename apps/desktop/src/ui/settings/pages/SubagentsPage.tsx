@@ -155,6 +155,14 @@ function toggleList(values: readonly string[], item: string, checked: boolean): 
   return values.filter((value) => value !== item);
 }
 
+function visibleBuiltInToolsForRole(
+  baseRole: AgentRole,
+  selectedTools: readonly string[],
+): string[] {
+  const selected = new Set(selectedTools);
+  return ROLE_TOOLS[baseRole].filter((tool) => selected.has(tool));
+}
+
 export async function saveAgentProfileDraft(
   draft: DraftProfile | null,
   upsertAgentProfile: (
@@ -173,7 +181,7 @@ export async function saveAgentProfileDraft(
     enabled: draft.enabled,
     baseRole: draft.baseRole,
     prompt: draft.prompt.trim(),
-    allowedBuiltInTools: draft.allowedBuiltInTools,
+    allowedBuiltInTools: visibleBuiltInToolsForRole(draft.baseRole, draft.allowedBuiltInTools),
     allowedMcpServers: draft.allowedMcpServers,
     skillNames: draft.skillNames,
     model: draft.model?.trim() || undefined,

@@ -209,6 +209,25 @@ describe("subagents settings page", () => {
     });
   });
 
+  test("strips hidden built-in tools outside the selected base role before saving", async () => {
+    const upsertAgentProfile = mock(async () => true);
+    const draft = {
+      ...draftProfile(),
+      baseRole: "reviewer" as const,
+      allowedBuiltInTools: ["read", "write", "grep", "webSearch"],
+    };
+
+    const result = await saveAgentProfileDraft(draft, upsertAgentProfile);
+
+    expect(result).toBe("saved");
+    expect(upsertAgentProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseRole: "reviewer",
+        allowedBuiltInTools: ["read", "grep"],
+      }),
+    );
+  });
+
   test("keeps existing profile identity immutable while editing", async () => {
     let root: ReturnType<typeof createRoot> | null = null;
     const harness = setupJsdom();

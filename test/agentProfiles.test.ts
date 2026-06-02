@@ -98,7 +98,15 @@ describe("agent profile catalog", () => {
       builtIn: true,
       profile: {
         displayName: "Explorer",
+        description: "Read-only discovery and synthesis for focused knowledge work.",
         prompt: "explorer built-in profile prompt.",
+      },
+    });
+    expect(catalog.profiles.find((entry) => entry.profile.id === "worker")).toMatchObject({
+      builtIn: true,
+      profile: {
+        displayName: "Worker",
+        description: "Execution-focused knowledge work with bounded ownership.",
       },
     });
   });

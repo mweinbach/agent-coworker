@@ -1385,10 +1385,14 @@ describe("loadSubAgentPrompt", () => {
     const config = makeConfig();
     const prompt = await loadAgentPrompt(config, "worker");
     expectSharedAgentReportContract(prompt);
-    expect(prompt).toContain("Own a narrow, explicitly assigned slice of work.");
-    expect(prompt).toContain("Run the most relevant verification you can before finishing.");
+    expect(prompt).toContain("You are an execution-focused knowledge-work agent.");
+    expect(prompt).toContain(
+      "Own a narrow, explicitly assigned slice of research, writing, analysis, organization, or file-based production work.",
+    );
+    expect(prompt).toContain("reviewing the edited artifact");
+    expect(prompt).not.toContain("implementation-focused child agent");
     expect(prompt).toContain("Summary");
-    expect(prompt).toContain("Files changed");
+    expect(prompt).toContain("Outputs / changes");
     expect(prompt).toContain("Verification");
     expect(prompt).toContain("Residual risks");
   });
@@ -1410,9 +1414,13 @@ describe("loadSubAgentPrompt", () => {
     const config = makeConfig();
     const prompt = await loadAgentPrompt(config, "explorer");
     expectSharedAgentReportContract(prompt);
+    expect(prompt).toContain("You are a read-only knowledge-work explorer.");
+    expect(prompt).toContain("source-grounded answers");
+    expect(prompt).not.toContain("read-only codebase explorer");
+    expect(prompt).not.toContain("current codebase state");
     expect(prompt).toContain("Answer");
     expect(prompt).toContain("Evidence");
-    expect(prompt).toContain("Important files");
+    expect(prompt).toContain("Important sources");
     expect(prompt).toContain("Uncertainties / open questions");
   });
 

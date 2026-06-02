@@ -92,7 +92,7 @@ export const AGENT_ROLE_DEFINITIONS: Record<AgentRole, AgentRoleDefinition> = {
   },
   explorer: {
     id: "explorer",
-    description: "Specific, well-scoped codebase questions.",
+    description: "Read-only discovery and synthesis for focused knowledge work.",
     promptFile: "explorer.md",
     defaultMode: "collaborative",
     readOnly: true,
@@ -116,7 +116,7 @@ export const AGENT_ROLE_DEFINITIONS: Record<AgentRole, AgentRoleDefinition> = {
   },
   worker: {
     id: "worker",
-    description: "Execution and production work with bounded ownership.",
+    description: "Execution-focused knowledge work with bounded ownership.",
     promptFile: "worker.md",
     defaultMode: "collaborative",
     readOnly: false,

@@ -11,6 +11,10 @@ import {
   type StoreGet,
   type StoreSet,
 } from "../store.helpers";
+import {
+  bumpAgentProfilesCatalogGeneration,
+  getAgentProfilesCatalogGeneration,
+} from "../store.helpers/runtimeState";
 import { workspacePathFor } from "./skillPluginHelpers";
 
 export function createAgentProfileActions(
@@ -49,12 +53,31 @@ export function createAgentProfileActions(
     }));
   };
 
+  const shouldApplyCatalogRead = (workspaceId: string, generation: number) => (event: unknown) =>
+    event === null ||
+    typeof event !== "object" ||
+    !("type" in event) ||
+    event.type !== "agent_profiles_catalog" ||
+    getAgentProfilesCatalogGeneration(workspaceId) === generation;
+
+  const bumpBeforeCatalogMutationEvent = (workspaceId: string) => (event: unknown) => {
+    if (
+      event !== null &&
+      typeof event === "object" &&
+      "type" in event &&
+      event.type === "agent_profiles_catalog"
+    ) {
+      bumpAgentProfilesCatalogGeneration(workspaceId);
+    }
+  };
+
   return {
     refreshAgentProfilesCatalog: async (workspaceIdArg) => {
       const workspaceId = resolveWorkspaceId(workspaceIdArg);
       if (!workspaceId) return;
       const cwd = workspacePathFor(get, workspaceId);
       await prepareWorkspace(workspaceId);
+      const generation = getAgentProfilesCatalogGeneration(workspaceId);
       set((s) => ({
         workspaceRuntimeById: {
           ...s.workspaceRuntimeById,
@@ -71,8 +94,13 @@ export function createAgentProfileActions(
         workspaceId,
         "cowork/agentProfiles/catalog/read",
         { cwd },
+        undefined,
+        { shouldApplyEvent: shouldApplyCatalogRead(workspaceId, generation) },
       );
       if (!ok) {
+        if (getAgentProfilesCatalogGeneration(workspaceId) !== generation) {
+          return;
+        }
         set((s) => ({
           workspaceRuntimeById: {
             ...s.workspaceRuntimeById,
@@ -100,6 +128,7 @@ export function createAgentProfileActions(
         "cowork/agentProfiles/upsert",
         { cwd, profile },
         rpcError,
+        { beforeApplyEvent: bumpBeforeCatalogMutationEvent(workspaceId) },
       );
       if (!ok) {
         notifyFailure(
@@ -124,6 +153,7 @@ export function createAgentProfileActions(
         "cowork/agentProfiles/delete",
         { cwd, scope, id },
         rpcError,
+        { beforeApplyEvent: bumpBeforeCatalogMutationEvent(workspaceId) },
       );
       if (!ok) {
         notifyFailure(
@@ -146,6 +176,7 @@ export function createAgentProfileActions(
         "cowork/agentProfiles/copy",
         { cwd, copy },
         rpcError,
+        { beforeApplyEvent: bumpBeforeCatalogMutationEvent(workspaceId) },
       );
       if (!ok) {
         notifyFailure(

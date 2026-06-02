@@ -62,6 +62,8 @@ export type RuntimeMaps = {
   workspacePickerOpen: boolean;
   /** Monotonic counter so overlapping provider status refreshes do not clear `providerStatusRefreshing` early. */
   providerStatusRefreshGeneration: number;
+  /** Per-workspace counter used to ignore stale subagent profile catalog reads after mutations. */
+  agentProfilesCatalogGenerations: Map<string, number>;
 };
 
 export const RUNTIME: RuntimeMaps = {
@@ -83,7 +85,18 @@ export const RUNTIME: RuntimeMaps = {
   sessionSnapshots: new Map(),
   workspacePickerOpen: false,
   providerStatusRefreshGeneration: 0,
+  agentProfilesCatalogGenerations: new Map(),
 };
+
+export function getAgentProfilesCatalogGeneration(workspaceId: string): number {
+  return RUNTIME.agentProfilesCatalogGenerations.get(workspaceId) ?? 0;
+}
+
+export function bumpAgentProfilesCatalogGeneration(workspaceId: string): number {
+  const next = getAgentProfilesCatalogGeneration(workspaceId) + 1;
+  RUNTIME.agentProfilesCatalogGenerations.set(workspaceId, next);
+  return next;
+}
 
 export function getModelStreamRuntime(threadId: string): ThreadModelStreamRuntime {
   const existing = RUNTIME.modelStreamByThread.get(threadId);

@@ -55,6 +55,7 @@ export function resetSkillPluginActionRuntime() {
   RUNTIME.jsonRpcSockets.clear();
   RUNTIME.skillInstallWaiters.clear();
   RUNTIME.pluginInstallWaiters.clear();
+  RUNTIME.agentProfilesCatalogGenerations.clear();
   reactivateWorkspaceJsonRpcState(workspaceId);
   reactivateWorkspaceJsonRpcState(secondaryWorkspaceId);
 }

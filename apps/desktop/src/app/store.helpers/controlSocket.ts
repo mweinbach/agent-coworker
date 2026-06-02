@@ -22,7 +22,7 @@ import {
   requestJsonRpcThreadRead,
   type WorkspaceJsonRpcSocket,
 } from "./jsonRpcSocket";
-import { RUNTIME } from "./runtimeState";
+import { getAgentProfilesCatalogGeneration, RUNTIME } from "./runtimeState";
 
 type ProviderStatusEvent = Extract<SessionEvent, { type: "provider_status" }>;
 type ProviderStatus = ProviderStatusEvent["providers"][number];
@@ -54,6 +54,11 @@ type ControlSocketDeps = {
 
 type ControlSocketHelperOptions = {
   requestTimeoutMs?: number;
+};
+
+type RequestJsonRpcControlEventOptions = {
+  beforeApplyEvent?: (event: SessionEvent) => void;
+  shouldApplyEvent?: (event: SessionEvent) => boolean;
 };
 
 const REQUEST_TIMEOUT_MS = 5_000;
@@ -667,6 +672,7 @@ export function createControlSocketHelpers(
       },
     }));
 
+    const agentProfilesCatalogGeneration = getAgentProfilesCatalogGeneration(workspaceId);
     await Promise.allSettled([
       requestWorkspaceSessions(get, set, workspaceId),
       requestJsonRpcControlEvent(get, set, workspaceId, "cowork/session/state/read", { cwd }),
@@ -676,9 +682,21 @@ export function createControlSocketHelpers(
       }),
       requestJsonRpcControlEvent(get, set, workspaceId, "cowork/provider/status/refresh", { cwd }),
       requestJsonRpcControlEvent(get, set, workspaceId, "cowork/mcp/servers/read", { cwd }),
-      requestJsonRpcControlEvent(get, set, workspaceId, "cowork/agentProfiles/catalog/read", {
-        cwd,
-      }),
+      requestJsonRpcControlEvent(
+        get,
+        set,
+        workspaceId,
+        "cowork/agentProfiles/catalog/read",
+        {
+          cwd,
+        },
+        undefined,
+        {
+          shouldApplyEvent: (event) =>
+            event.type !== "agent_profiles_catalog" ||
+            getAgentProfilesCatalogGeneration(workspaceId) === agentProfilesCatalogGeneration,
+        },
+      ),
       requestJsonRpcControlEvent(get, set, workspaceId, "cowork/memory/list", { cwd }),
       requestJsonRpcControlEvent(get, set, workspaceId, "cowork/plugins/catalog/read", { cwd }),
       requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/catalog/read", { cwd }),
@@ -1554,6 +1572,7 @@ export function createControlSocketHelpers(
     method: string,
     params: Record<string, unknown>,
     errorDetailOut?: { message?: string },
+    options: RequestJsonRpcControlEventOptions = {},
   ): Promise<boolean> {
     const setErrorDetail = (message: string) => {
       if (errorDetailOut) {
@@ -1581,6 +1600,10 @@ export function createControlSocketHelpers(
       }
       let ok = true;
       for (const nextEvent of normalizedEvents) {
+        if (options.shouldApplyEvent && !options.shouldApplyEvent(nextEvent)) {
+          continue;
+        }
+        options.beforeApplyEvent?.(nextEvent);
         applyJsonRpcControlEvent(get, set, workspaceId, nextEvent);
         if (nextEvent.type === "error") {
           ok = false;

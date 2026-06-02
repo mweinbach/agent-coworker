@@ -153,6 +153,62 @@ describe("skill store actions", () => {
     expect(state.notifications).toHaveLength(0);
   });
 
+  test("refreshSkillsCatalog waits for workspace startup before requesting skills", async () => {
+    const state = createState();
+    state.workspaces = [{ id: workspaceId, path: "/tmp/workspace" }];
+    const { get, set } = createStoreHarness(state);
+
+    const calls: string[] = [];
+    let resolveStart: (() => void) | null = null;
+    const socket = {
+      readyPromise: Promise.resolve(),
+      request: (method: string) => {
+        calls.push(method);
+        return Promise.resolve({
+          event: {
+            type: method === "cowork/skills/catalog/read" ? "skills_catalog" : "skills_list",
+            sessionId: "jsonrpc-control",
+            ...(method === "cowork/skills/catalog/read"
+              ? {
+                  catalog: {
+                    installations: [],
+                    sources: [],
+                    stats: { totalInstallations: 0, enabledInstallations: 0 },
+                  },
+                  mutationBlocked: false,
+                }
+              : { skills: [] }),
+          },
+        });
+      },
+      respond: () => true,
+      close: () => {},
+    } as unknown as JsonRpcSocket;
+    RUNTIME.workspaceStartPromises.set(workspaceId, {
+      generation: 0,
+      promise: new Promise<void>((resolve) => {
+        resolveStart = () => {
+          state.workspaceRuntimeById[workspaceId].serverUrl = "ws://ready";
+          RUNTIME.jsonRpcSockets.set(workspaceId, socket);
+          resolve();
+        };
+      }),
+    });
+
+    const refreshPromise = createSkillActions(set, get).refreshSkillsCatalog(workspaceId);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(calls).toEqual([]);
+    expect(state.workspaceRuntimeById[workspaceId].skillCatalogLoading).toBe(true);
+
+    resolveStart?.();
+    await refreshPromise;
+
+    expect(calls).toEqual(["cowork/skills/catalog/read", "cowork/skills/list"]);
+    expect(state.workspaceRuntimeById[workspaceId].skillCatalogLoading).toBe(false);
+    expect(state.notifications).toHaveLength(0);
+  });
+
   test("refreshSkillsCatalog can target a non-management workspace", async () => {
     const state = createState();
     state.pluginManagementWorkspaceId = workspaceId;

@@ -109,7 +109,7 @@ export function createSkillActions(
     refreshSkillsCatalog: async (targetWorkspaceId?: string) => {
       const workspaceId = targetWorkspaceId ?? managementWorkspaceId();
       if (!workspaceId) return;
-      const cwd = workspacePath(workspaceId);
+      ensureWorkspaceRuntime(get, set, workspaceId);
       set((s) => ({
         workspaceRuntimeById: {
           ...s.workspaceRuntimeById,
@@ -120,13 +120,31 @@ export function createSkillActions(
           },
         },
       }));
+      await ensureServerRunning(get, set, workspaceId);
+      const readyRuntime = get().workspaceRuntimeById[workspaceId];
+      if (!readyRuntime?.serverUrl || readyRuntime.error) {
+        set((s) => ({
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...s.workspaceRuntimeById[workspaceId],
+              skillCatalogLoading: false,
+              skillCatalogError: "Unable to refresh skills catalog.",
+            },
+          },
+        }));
+        return;
+      }
+      ensureControlSocket(get, set, workspaceId);
+      const cwd = workspacePath(workspaceId);
       const [catalogResult, listResult] = await Promise.allSettled([
         requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/catalog/read", { cwd }),
         requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/list", { cwd }),
       ]);
       const okCatalog = catalogResult.status === "fulfilled" && catalogResult.value;
       const okList = listResult.status === "fulfilled" && listResult.value;
-      if (!(okCatalog && okList)) {
+      const missingCatalogEvent = get().workspaceRuntimeById[workspaceId]?.skillCatalogLoading;
+      if (!(okCatalog && okList) || missingCatalogEvent) {
         set((s) => ({
           workspaceRuntimeById: {
             ...s.workspaceRuntimeById,

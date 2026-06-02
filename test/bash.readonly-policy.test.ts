@@ -267,4 +267,39 @@ describe("bash read-only shell policy", () => {
       timeoutMs: 300000,
     });
   });
+
+  test("blocks obvious shell writes outside child agent targetPaths before approval", async () => {
+    const dir = await tmpDir();
+    const approveCommand = mock(async () => true);
+    const runShell = mock(async () => ({
+      stdout: "should not run",
+      stderr: "",
+      exitCode: 0,
+    }));
+    bashInternal.setRunShellCommandForTests(runShell);
+
+    const tool: any = createBashTool(
+      makeCtx(dir, {
+        agentTargetPaths: ["src/foo"],
+        approveCommand,
+      }),
+    );
+
+    const blocked = await tool.execute({ command: "echo nope > src/bar/out.txt" });
+
+    expect(blocked.exitCode).toBe(1);
+    expect(blocked.stderr).toContain("Command blocked by targetPaths");
+    expect(approveCommand).not.toHaveBeenCalled();
+    expect(runShell).not.toHaveBeenCalled();
+
+    const allowed = await tool.execute({ command: "echo ok > src/foo/out.txt" });
+    expect(allowed.exitCode).toBe(0);
+    expect(approveCommand).toHaveBeenCalledWith("echo ok > src/foo/out.txt");
+    expect(runShell).toHaveBeenCalledWith({
+      command: "echo ok > src/foo/out.txt",
+      cwd: dir,
+      abortSignal: undefined,
+      timeoutMs: 300000,
+    });
+  });
 });

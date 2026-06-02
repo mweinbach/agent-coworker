@@ -38,6 +38,7 @@ export function createWriteTool(ctx: ToolContext) {
         resolveMaybeRelative(filePath, ctx.config.workingDirectory),
         ctx.config,
         "write",
+        ctx.agentTargetPaths,
       );
       await fs.mkdir(path.dirname(abs), { recursive: true });
       if (resolvedMode === "append") {

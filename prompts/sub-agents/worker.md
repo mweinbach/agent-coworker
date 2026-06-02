@@ -16,4 +16,10 @@ Summary
 Files changed
 Verification
 Residual risks
+
+Report footer rules:
+- End with exactly one `<agent_report>...</agent_report>` block.
+- The block must contain strict JSON only, with no markdown fences or comments.
+- Use `status:"completed"` only when the assigned task is done; use `blocked` for external blockers and `failed` for verification failures.
+
 <agent_report>{"status":"completed|blocked|failed","summary":"...","filesChanged":["..."],"verification":[{"command":"...","outcome":"passed|failed","notes":"..."}],"residualRisks":["..."]}</agent_report>

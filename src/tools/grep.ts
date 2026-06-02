@@ -73,6 +73,7 @@ export function createGrepTool(
         ),
         ctx.config,
         "grep",
+        ctx.agentTargetPaths,
       );
 
       args.push("--", pattern);

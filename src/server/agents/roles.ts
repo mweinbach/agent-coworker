@@ -20,7 +20,7 @@ export type AgentRoleDefinition = {
 };
 
 export const SPAWN_AGENT_PROMPT_OVERVIEW =
-  "Launch a collaborative child agent for a well-scoped task. It returns a durable child handle to use with follow-up agent tools; use inspectAgent to read the child agent's full result.";
+  "Launch a collaborative child agent for a well-scoped task. It returns a durable child handle to use with follow-up agent tools; use waitForAgent with includeFinalMessage/includeReport or inspectAgent to read the child agent's full result.";
 
 export const SPAWN_AGENT_WHEN_TO_USE = [
   {
@@ -40,7 +40,11 @@ export const SPAWN_AGENT_WHEN_TO_USE = [
 
 export const SPAWN_AGENT_ORCHESTRATION_RULES = [
   "Provide detailed, self-contained prompts with the exact files, ownership, and expected output.",
+  'Prefer `contextMode: "brief"` with a concise `briefing` for most delegated tasks; use `contextMode: "full"` only when the child needs the transcript.',
+  '`contextMode: "none"` includes no parent conversation, files, history, or assumptions. Use it only when the child message is fully self-contained.',
+  "`targetPaths` are an enforced child file-tool scope, not just labels. Only set paths the child may read or modify.",
   "Child-agent results are not visible to the user unless you summarize them.",
+  "Child agents cannot spawn more child agents. Coordinate all parallel delegation from the root session.",
   "Child agents should stay bounded; do not use them for vague or open-ended delegation.",
 ] as const;
 
@@ -84,7 +88,7 @@ export const AGENT_ROLE_DEFINITIONS: Record<AgentRole, AgentRoleDefinition> = {
     ],
     canAskUser: false,
     canSpawnChildren: false,
-    maxDepth: 2,
+    maxDepth: 0,
   },
   explorer: {
     id: "explorer",
@@ -96,7 +100,7 @@ export const AGENT_ROLE_DEFINITIONS: Record<AgentRole, AgentRoleDefinition> = {
     allowTools: ["bash", "read", "glob", "grep"],
     canAskUser: false,
     canSpawnChildren: false,
-    maxDepth: 2,
+    maxDepth: 0,
   },
   research: {
     id: "research",
@@ -108,7 +112,7 @@ export const AGENT_ROLE_DEFINITIONS: Record<AgentRole, AgentRoleDefinition> = {
     allowTools: ["read", "webSearch", "webFetch"],
     canAskUser: false,
     canSpawnChildren: false,
-    maxDepth: 2,
+    maxDepth: 0,
   },
   worker: {
     id: "worker",
@@ -132,7 +136,7 @@ export const AGENT_ROLE_DEFINITIONS: Record<AgentRole, AgentRoleDefinition> = {
     ],
     canAskUser: false,
     canSpawnChildren: false,
-    maxDepth: 2,
+    maxDepth: 0,
   },
   reviewer: {
     id: "reviewer",
@@ -144,7 +148,7 @@ export const AGENT_ROLE_DEFINITIONS: Record<AgentRole, AgentRoleDefinition> = {
     allowTools: ["bash", "read", "glob", "grep"],
     canAskUser: false,
     canSpawnChildren: false,
-    maxDepth: 2,
+    maxDepth: 0,
   },
 };
 
@@ -165,7 +169,7 @@ function formatRoleCapabilities(role: AgentRoleDefinition): string[] {
     role.canAskUser ? "Can ask the user directly." : "Cannot ask the user directly.",
     role.canSpawnChildren
       ? `Can spawn child agents up to depth ${role.maxDepth}.`
-      : `Cannot spawn child agents; max depth ${role.maxDepth}.`,
+      : "Cannot spawn child agents; recursive delegation is disabled.",
   ];
 
   if (role.modelPolicy?.fixedModel) {

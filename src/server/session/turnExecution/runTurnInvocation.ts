@@ -128,7 +128,7 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
                   ...(interrupt !== undefined ? { interrupt } : {}),
                 });
               },
-              wait: async ({ agentIds, timeoutMs, mode }) => {
+              wait: async ({ agentIds, timeoutMs, mode, includeFinalMessage, includeReport }) => {
                 if (!context.deps.waitForAgentImpl) {
                   throw new Error("Child-agent waiting is unavailable.");
                 }
@@ -137,6 +137,8 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
                   agentIds,
                   ...(timeoutMs !== undefined ? { timeoutMs } : {}),
                   ...(mode !== undefined ? { mode } : {}),
+                  ...(includeFinalMessage !== undefined ? { includeFinalMessage } : {}),
+                  ...(includeReport !== undefined ? { includeReport } : {}),
                 });
               },
               inspect: async ({ agentId }) => {
@@ -179,6 +181,10 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
       spawnDepth:
         typeof context.state.sessionInfo.depth === "number" ? context.state.sessionInfo.depth : 0,
       agentRole: context.state.sessionInfo.role,
+      agentTargetPaths:
+        context.state.sessionInfo.sessionKind === "agent"
+          ? (context.state.sessionInfo.targetPaths ?? null)
+          : null,
       shellPolicy: getAgentRoleShellPolicy(context.state.sessionInfo.role),
       telemetryContext: {
         functionId: "session.turn",

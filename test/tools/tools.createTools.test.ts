@@ -526,6 +526,11 @@ describe("createTools", () => {
         status: "completed" as const,
         summary: "Finished",
       },
+      reportRequired: true,
+      reportFound: true,
+      reportValid: true,
+      reportBlockCount: 1,
+      reportDiagnostic: null,
       sessionUsage: null,
       lastTurnUsage: null,
     }));

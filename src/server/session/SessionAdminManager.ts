@@ -386,7 +386,13 @@ export class SessionAdminManager {
     }
   }
 
-  async waitForAgents(agentIds: string[], timeoutMs?: number, mode?: AgentWaitMode) {
+  async waitForAgents(
+    agentIds: string[],
+    timeoutMs?: number,
+    mode?: AgentWaitMode,
+    includeFinalMessage?: boolean,
+    includeReport?: boolean,
+  ) {
     if ((this.context.state.sessionInfo.sessionKind ?? "root") !== "root") {
       this.context.emitError(
         "validation_failed",
@@ -406,6 +412,8 @@ export class SessionAdminManager {
         agentIds: requestedAgentIds,
         ...(timeoutMs !== undefined ? { timeoutMs } : {}),
         ...(mode !== undefined ? { mode } : {}),
+        ...(includeFinalMessage !== undefined ? { includeFinalMessage } : {}),
+        ...(includeReport !== undefined ? { includeReport } : {}),
       });
       this.context.emit({
         type: "agent_wait_result",
@@ -415,6 +423,7 @@ export class SessionAdminManager {
         mode: result.mode,
         agents: result.agents,
         readyAgentIds: result.readyAgentIds,
+        ...(result.inspections ? { inspections: result.inspections } : {}),
       });
       this.context.queuePersistSessionSnapshot("session.agent_wait_result");
     } catch (err) {

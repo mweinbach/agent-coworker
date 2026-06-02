@@ -5,7 +5,10 @@ import {
   buildPlatformShellCommandWithRuntimePrelude,
   buildPlatformShellExecutionPlan,
 } from "../platform/shell";
-import { getShellCommandPolicyViolation } from "../server/agents/commandPolicy";
+import {
+  getShellCommandPathScopeViolation,
+  getShellCommandPolicyViolation,
+} from "../server/agents/commandPolicy";
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
 
@@ -206,8 +209,11 @@ Timeout: commands default to a ${DEFAULT_TIMEOUT_SECONDS}s timeout and are kille
 }
 
 export function createBashTool(ctx: ToolContext) {
+  const description = ctx.agentTargetPaths?.length
+    ? `${buildBashToolDescription()}\n\nChild targetPaths scope: obvious file operands and write redirections are blocked when they fall outside this child agent's assigned targetPaths. Shell commands with dynamically computed paths cannot be fully proven statically; prefer read/write/edit/glob/grep for scoped file access.`
+    : buildBashToolDescription();
   return defineTool({
-    description: buildBashToolDescription(),
+    description,
     inputSchema: z.object({
       command: z.string().describe("The shell command to execute"),
       timeoutSeconds: z
@@ -241,6 +247,22 @@ export function createBashTool(ctx: ToolContext) {
           stderr:
             `Command blocked by shell policy "${shellPolicyViolation.shellPolicy}": ` +
             `${shellPolicyViolation.reason}. Use read/test/build commands or a write-capable role instead.`,
+          exitCode: 1,
+        };
+        ctx.log(`tool< bash ${JSON.stringify(res)}`);
+        return res;
+      }
+
+      const pathScopeViolation = getShellCommandPathScopeViolation(command, {
+        workingDirectory: ctx.config.workingDirectory,
+        targetPaths: ctx.agentTargetPaths,
+      });
+      if (pathScopeViolation) {
+        const res = {
+          stdout: "",
+          stderr:
+            `Command blocked by targetPaths: ${pathScopeViolation.targetPath} is outside this child agent's assigned target paths. ` +
+            "Use a path inside targetPaths or ask the parent to spawn a child with a broader scope.",
           exitCode: 1,
         };
         ctx.log(`tool< bash ${JSON.stringify(res)}`);

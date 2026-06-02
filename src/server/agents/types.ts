@@ -1,8 +1,10 @@
 import type {
   AgentMode,
   AgentReasoningEffort,
+  AgentReportStatus,
   AgentRole,
   AgentSpawnContextOptions,
+  ChildAgentReport,
   PersistentAgentSummary,
 } from "../../shared/agents";
 import type { AgentConfig, ProviderName } from "../../types";
@@ -37,6 +39,13 @@ export type AgentWaitResult = {
   mode: AgentWaitMode;
   agents: PersistentAgentSummary[];
   readyAgentIds: string[];
+  inspections?: AgentWaitInspection[];
+};
+
+export type AgentWaitInspection = Partial<AgentReportStatus> & {
+  agentId: string;
+  latestAssistantText?: string | null;
+  parsedReport?: ChildAgentReport | null;
 };
 
 export type AgentWaitOptions = {
@@ -44,6 +53,8 @@ export type AgentWaitOptions = {
   agentIds: string[];
   timeoutMs?: number;
   mode?: AgentWaitMode;
+  includeFinalMessage?: boolean;
+  includeReport?: boolean;
 };
 
 export type AgentResumeOptions = {

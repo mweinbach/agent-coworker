@@ -1,3 +1,7 @@
+import path from "node:path";
+
+import { isPathInside } from "../../utils/paths";
+
 export type AgentShellPolicy = "full" | "no_project_write";
 
 type ShellCommandPolicyViolation = {
@@ -14,6 +18,11 @@ type ShellCommandRule = {
   reason: ShellCommandPolicyViolation["reason"];
   input: "raw" | "stripped";
   matches: (command: string) => boolean;
+};
+
+export type ShellCommandPathScopeViolation = {
+  targetPath: string;
+  reason: "outside targetPaths";
 };
 
 const SHELL_COMMAND_ARG_FLAGS = new Set(["-c", "-command", "--command"]);
@@ -85,6 +94,18 @@ const FILESYSTEM_MUTATION_COMMANDS = new Set([
   "copy-item",
   "move-item",
   "set-content",
+]);
+const FILESYSTEM_PATH_ACCESS_COMMANDS = new Set([
+  ...FILESYSTEM_MUTATION_COMMANDS,
+  "cat",
+  "find",
+  "grep",
+  "head",
+  "less",
+  "ls",
+  "more",
+  "rg",
+  "tail",
 ]);
 const INLINE_INTERPRETER_COMMANDS = new Set([
   "node",
@@ -386,6 +407,134 @@ function tokenizeShellCommand(command: string): string[] {
 
   pushCurrent();
   return tokens;
+}
+
+function resolveShellScopeRoots(
+  workingDirectory: string,
+  targetPaths: readonly string[] | null | undefined,
+): string[] {
+  if (!targetPaths || targetPaths.length === 0) return [];
+  const roots: string[] = [];
+  const seen = new Set<string>();
+  for (const rawPath of targetPaths) {
+    const trimmed = rawPath.trim();
+    if (!trimmed) continue;
+    const resolved = path.isAbsolute(trimmed)
+      ? path.normalize(trimmed)
+      : path.resolve(workingDirectory, trimmed);
+    if (seen.has(resolved)) continue;
+    seen.add(resolved);
+    roots.push(resolved);
+  }
+  return roots;
+}
+
+function isShellPathLikeToken(token: string): boolean {
+  if (!token || token === "/dev/null") return false;
+  if (token.includes("$") || token.includes("*") || token.includes("?") || token.includes("{")) {
+    return false;
+  }
+  return (
+    token.startsWith("/") ||
+    token.startsWith("./") ||
+    token.startsWith("../") ||
+    token.includes("/") ||
+    token.includes("\\") ||
+    /\.[A-Za-z0-9]{1,8}$/.test(token)
+  );
+}
+
+function isShellPathInsideScope(
+  token: string,
+  workingDirectory: string,
+  scopeRoots: readonly string[],
+): boolean {
+  const resolved = path.isAbsolute(token)
+    ? path.normalize(token)
+    : path.resolve(workingDirectory, token);
+  return scopeRoots.some((root) => isPathInside(root, resolved));
+}
+
+function readShellPathToken(
+  command: string,
+  startIndex: number,
+): { value: string; endIndex: number } {
+  let index = startIndex;
+  while (/\s/.test(command[index] ?? "")) index += 1;
+
+  const quote = command[index];
+  if (quote === "'" || quote === '"' || quote === "`") {
+    return consumeQuotedShellToken(command, index + 1, quote);
+  }
+
+  let value = "";
+  while (index < command.length) {
+    const ch = command[index];
+    if (!ch || /\s/.test(ch) || [";", "|", "&", "(", ")"].includes(ch)) break;
+    if (ch === "\\") {
+      const next = command[index + 1];
+      if (next) {
+        value += next;
+        index += 2;
+        continue;
+      }
+    }
+    value += ch;
+    index += 1;
+  }
+  return { value, endIndex: index };
+}
+
+function extractWriteRedirectionTargets(command: string): string[] {
+  const targets: string[] = [];
+  let index = 0;
+
+  while (index < command.length) {
+    const ch = command[index];
+    const next = command[index + 1];
+    if (!ch) break;
+
+    if (ch === "\\" && next) {
+      index += next === "\r" && command[index + 2] === "\n" ? 3 : 2;
+      continue;
+    }
+
+    if (ch === "$" && (next === "'" || next === '"')) {
+      const quoted = consumeQuotedShellToken(command, index + 2, next);
+      index = quoted.endIndex;
+      continue;
+    }
+
+    if (ch === "'" || ch === '"' || ch === "`") {
+      const quoted = consumeQuotedShellToken(command, index + 1, ch);
+      index = quoted.endIndex;
+      continue;
+    }
+
+    const isReadWriteRedirect = ch === "<" && next === ">";
+    const isWriteRedirect = ch === ">" && command[index - 1] !== "<";
+    if (!isReadWriteRedirect && !isWriteRedirect) {
+      index += 1;
+      continue;
+    }
+
+    index += isReadWriteRedirect || next === ">" ? 2 : 1;
+    while (/\s/.test(command[index] ?? "")) index += 1;
+    if (command[index] === "&") {
+      const fdRedirect = command.slice(index + 1).match(/^\d+\b/);
+      if (fdRedirect) {
+        index += 1 + fdRedirect[0].length;
+        continue;
+      }
+    }
+    const token = readShellPathToken(command, index);
+    if (token.value && token.value !== "/dev/null") {
+      targets.push(token.value);
+    }
+    index = token.endIndex;
+  }
+
+  return targets;
 }
 
 function unwrapShellTokenValue(value: string): string {
@@ -1064,6 +1213,53 @@ export function getShellCommandPolicyViolation(
       if (!policyInput) continue;
       if (rule.matches(policyInput)) {
         return { shellPolicy: "no_project_write", reason: rule.reason };
+      }
+    }
+  }
+
+  return null;
+}
+
+export function getShellCommandPathScopeViolation(
+  command: string,
+  opts: {
+    workingDirectory: string;
+    targetPaths?: readonly string[] | null;
+  },
+): ShellCommandPathScopeViolation | null {
+  const scopeRoots = resolveShellScopeRoots(opts.workingDirectory, opts.targetPaths);
+  if (scopeRoots.length === 0) return null;
+
+  for (const candidate of collectShellPolicyCandidates(command)) {
+    for (const target of extractWriteRedirectionTargets(candidate)) {
+      if (
+        isShellPathLikeToken(target) &&
+        !isShellPathInsideScope(target, opts.workingDirectory, scopeRoots)
+      ) {
+        return { targetPath: target, reason: "outside targetPaths" };
+      }
+    }
+
+    for (const segment of splitShellCommandIntoSegments(candidate)) {
+      const executableIndex = findSegmentExecutableIndex(segment);
+      if (executableIndex < 0) continue;
+      const executable = getShellTokenBaseName(segment[executableIndex] ?? "");
+      if (!FILESYSTEM_PATH_ACCESS_COMMANDS.has(executable)) continue;
+
+      let skippedSearchPattern = false;
+      for (let index = executableIndex + 1; index < segment.length; index += 1) {
+        const rawToken = segment[index];
+        if (!rawToken || rawToken === "--") continue;
+        const token = unwrapShellTokenValue(rawToken);
+        if (!token || token.startsWith("-")) continue;
+        if ((executable === "grep" || executable === "rg") && !skippedSearchPattern) {
+          skippedSearchPattern = true;
+          continue;
+        }
+        if (!isShellPathLikeToken(token)) continue;
+        if (!isShellPathInsideScope(token, opts.workingDirectory, scopeRoots)) {
+          return { targetPath: token, reason: "outside targetPaths" };
+        }
       }
     }
   }

@@ -52,6 +52,7 @@ export function createReadTool(ctx: ToolContext) {
         resolveMaybeRelative(filePath, ctx.config.workingDirectory),
         ctx.config,
         "read",
+        ctx.agentTargetPaths,
       );
 
       const mimeType = mimeTypeFromPath(abs);

@@ -103,6 +103,7 @@ export interface RunTurnParams {
   /** Sub-agent nesting depth (0 for root session turn). */
   spawnDepth?: number;
   agentRole?: AgentRole;
+  agentTargetPaths?: readonly string[] | null;
   shellPolicy?: AgentShellPolicy;
   yolo?: boolean;
 
@@ -390,6 +391,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       getTurnUserPrompt: () => extractTurnUserPrompt(latestTurnMessages),
       harnessContext: params.harnessContext,
       agentRole: params.agentRole,
+      agentTargetPaths: params.agentTargetPaths,
       shellPolicy: params.shellPolicy ?? getAgentRoleShellPolicy(params.agentRole),
       agentControl: params.agentControl,
       costTracker: params.costTracker,

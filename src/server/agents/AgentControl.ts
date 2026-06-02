@@ -11,7 +11,7 @@ import type { AgentSession } from "../session/AgentSession";
 import type { SessionBinding } from "../startServer/types";
 
 import { routeAgentConfig } from "./modelRouter";
-import { parseChildAgentReport } from "./reportParser";
+import { inspectChildAgentReport } from "./reportParser";
 import { getAgentRoleDefinition } from "./roles";
 import { StatusBus } from "./StatusBus";
 import type {
@@ -22,19 +22,22 @@ import type {
   AgentResumeOptions,
   AgentSendInputOptions,
   AgentSpawnOptions,
+  AgentWaitInspection,
   AgentWaitOptions,
   AgentWaitResult,
 } from "./types";
 
 function executionStateForSession(
   session: AgentSession,
-  fallback: AgentExecutionState = "completed",
+  fallback: AgentExecutionState = "pending_init",
 ): AgentExecutionState {
   const info = session.getSessionInfoEvent();
   if (session.persistenceStatus === "closed") return "closed";
   if (session.isBusy) return "running";
   if (session.currentTurnOutcome === "error") return "errored";
-  if (info.executionState === "running" || info.executionState === "pending_init") return fallback;
+  if (info.executionState === "running" || info.executionState === "pending_init") {
+    return session.getLatestAssistantText() !== null ? "completed" : info.executionState;
+  }
   if (info.executionState) return info.executionState;
   return fallback;
 }
@@ -177,6 +180,46 @@ export class AgentControl {
     return summary;
   }
 
+  private buildAgentInspection(session: AgentSession): AgentInspectResult {
+    const latestAssistantText = session.getLatestAssistantText() ?? null;
+    const reportInspection = inspectChildAgentReport(latestAssistantText);
+    return {
+      agent: this.buildAgentSummary(session),
+      latestAssistantText,
+      parsedReport: reportInspection.parsedReport,
+      reportRequired: reportInspection.reportRequired,
+      reportFound: reportInspection.reportFound,
+      reportValid: reportInspection.reportValid,
+      reportBlockCount: reportInspection.reportBlockCount,
+      reportDiagnostic: reportInspection.reportDiagnostic,
+      sessionUsage: session.getCompactUsageSnapshot(),
+      lastTurnUsage: session.getLastTurnUsage(),
+    };
+  }
+
+  private buildWaitInspection(
+    session: AgentSession,
+    opts: Pick<AgentWaitOptions, "includeFinalMessage" | "includeReport">,
+  ): AgentWaitInspection {
+    const latestAssistantText = session.getLatestAssistantText() ?? null;
+    const inspection: AgentWaitInspection = {
+      agentId: session.id,
+      ...(opts.includeFinalMessage ? { latestAssistantText } : {}),
+    };
+
+    if (opts.includeReport) {
+      const reportInspection = inspectChildAgentReport(latestAssistantText);
+      inspection.parsedReport = reportInspection.parsedReport;
+      inspection.reportRequired = reportInspection.reportRequired;
+      inspection.reportFound = reportInspection.reportFound;
+      inspection.reportValid = reportInspection.reportValid;
+      inspection.reportBlockCount = reportInspection.reportBlockCount;
+      inspection.reportDiagnostic = reportInspection.reportDiagnostic;
+    }
+
+    return inspection;
+  }
+
   private trackRun(
     parentSessionId: string,
     session: AgentSession,
@@ -309,20 +352,24 @@ export class AgentControl {
         this.inFlightByAgentId.has(agentId) ? { executionState: "running", busy: true } : {},
       );
     }
-    return await this.statusBus.wait(opts.agentIds, opts.timeoutMs, opts.mode);
+    const result = await this.statusBus.wait(opts.agentIds, opts.timeoutMs, opts.mode);
+    if (opts.includeFinalMessage !== true && opts.includeReport !== true) {
+      return result;
+    }
+
+    const inspections = result.agents.map((agent) => {
+      const session = this.ensureAgentSession(opts.parentSessionId, agent.agentId);
+      return this.buildWaitInspection(session, opts);
+    });
+    return { ...result, inspections };
   }
 
   async inspect(opts: AgentInspectOptions): Promise<AgentInspectResult> {
     const session = this.ensureAgentSession(opts.parentSessionId, opts.agentId);
-    const latestAssistantText = session.getLatestAssistantText() ?? null;
-    const agent = this.publish(opts.parentSessionId, session);
-    return {
-      agent,
-      latestAssistantText,
-      parsedReport: parseChildAgentReport(latestAssistantText),
-      sessionUsage: session.getCompactUsageSnapshot(),
-      lastTurnUsage: session.getLastTurnUsage(),
-    };
+    const result = this.buildAgentInspection(session);
+    this.statusBus.publish(result.agent);
+    this.deps.emitParentAgentStatus(opts.parentSessionId, result.agent);
+    return result;
   }
 
   async resume(opts: AgentResumeOptions): Promise<PersistentAgentSummary> {

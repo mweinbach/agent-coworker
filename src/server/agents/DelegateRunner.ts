@@ -59,6 +59,7 @@ export class DelegateRunner {
     seedMessages?: ModelMessage[];
     initialTodos?: TodoItem[];
     harnessContext?: HarnessContextState | null;
+    targetPaths?: readonly string[] | null;
     updateTodos?: ToolContext["updateTodos"];
     model?: string;
     reasoningEffort?: AgentReasoningEffort;
@@ -92,6 +93,7 @@ export class DelegateRunner {
       turnUserPrompt: opts.message,
       harnessContext: opts.harnessContext,
       agentRole: opts.role,
+      agentTargetPaths: opts.targetPaths,
       shellPolicy: getAgentRoleShellPolicy(opts.role),
     };
     const rawTools = filterToolsForRole(this.deps.createTools(delegateContext), roleDefinition);

@@ -1302,8 +1302,20 @@ export class AgentSession {
     await this.getAdminManager().sendAgentInput(agentId, message, interrupt);
   }
 
-  async waitForAgents(agentIds: string[], timeoutMs?: number, mode?: AgentWaitMode) {
-    await this.getAdminManager().waitForAgents(agentIds, timeoutMs, mode);
+  async waitForAgents(
+    agentIds: string[],
+    timeoutMs?: number,
+    mode?: AgentWaitMode,
+    includeFinalMessage?: boolean,
+    includeReport?: boolean,
+  ) {
+    await this.getAdminManager().waitForAgents(
+      agentIds,
+      timeoutMs,
+      mode,
+      includeFinalMessage,
+      includeReport,
+    );
   }
 
   async inspectAgent(agentId: string): Promise<AgentInspectResult> {

@@ -29,8 +29,16 @@ export function createSpawnAgentTool(ctx: ToolContext) {
       reasoningEffort: agentReasoningEffortSchema.optional(),
       nickname: z.string().trim().min(1).optional(),
       taskType: agentTaskTypeSchema.optional(),
-      targetPaths: agentTargetPathsSchema.optional(),
-      contextMode: agentContextModeSchema.optional(),
+      targetPaths: agentTargetPathsSchema
+        .optional()
+        .describe(
+          "Filesystem scope for the child. File tools must stay inside these paths; omit only when the child needs the whole workspace.",
+        ),
+      contextMode: agentContextModeSchema
+        .optional()
+        .describe(
+          "Context handoff mode. Defaults to 'none' for compatibility: no parent conversation, files, history, or assumptions are included. Prefer 'brief' with briefing for most delegated tasks; use 'full' only when the transcript is required.",
+        ),
       briefing: z.string().trim().min(1).max(20_000).optional(),
       includeParentTodos: z.boolean().optional(),
       includeHarnessContext: z.boolean().optional(),
@@ -51,7 +59,7 @@ export function createSpawnAgentTool(ctx: ToolContext) {
     });
   return defineTool({
     description:
-      "Spawn a collaborative child agent for a well-scoped task. Use contextMode='brief' with an explicit briefing for a cheap handoff, or contextMode='full' only when the child truly needs the full parent transcript. The optional model override may be a same-provider model id or a provider:modelId child target ref. Returns the child handle to use with sendAgentInput, waitForAgent, inspectAgent, resumeAgent, and closeAgent.",
+      "Spawn a collaborative child agent for a well-scoped task. Prefer contextMode='brief' with an explicit briefing for most handoffs. contextMode='none' includes no parent conversation, files, history, or assumptions, so the message must be fully self-contained. Use contextMode='full' only when the child truly needs the full parent transcript. targetPaths are enforced as the child file-tool scope when provided. The optional model override may be a same-provider model id or a provider:modelId child target ref. Returns the child handle to use with sendAgentInput, waitForAgent, inspectAgent, resumeAgent, and closeAgent.",
     inputSchema,
     execute: async ({
       message,

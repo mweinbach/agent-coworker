@@ -53,9 +53,10 @@ Normalization rules:
 
 - Child sessions inherit parent context through explicit spawn context modes instead of a single coarse fork flag.
 - `contextMode: "full"` keeps the existing `AgentSession.buildForkContextSeed()` behavior and carries transcript, todos, and harness context together.
-- `contextMode: "brief"` injects a synthetic `Parent briefing:` user seed message and can optionally carry harness context and todos.
-- `contextMode: "none"` skips transcript cloning and only carries structured context when explicitly requested.
+- `contextMode: "brief"` injects a synthetic `Parent briefing:` user seed message and can optionally carry harness context and todos; this is the preferred low-cost handoff for most delegated work.
+- `contextMode: "none"` skips transcript cloning and only carries structured context when explicitly requested. The child receives no parent conversation, files, history, or assumptions, so the spawn message must be fully self-contained.
 - Deprecated `forkContext` still maps to `contextMode: "full"` / `"none"` for compatibility.
+- `targetPaths` are enforced as the child file-tool scope for workspace/project reads and writes where the harness can identify the path. Shell commands also block obvious outside-scope operands and redirections, but dynamically computed shell paths cannot be fully proven statically.
 - The child sees inherited harness context in its runtime prompt path, but the context is **not** duplicated into transcript messages.
 
 ## Raw-Loop Behavior

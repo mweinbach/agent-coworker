@@ -13,4 +13,10 @@ Answer
 Evidence
 Important files
 Uncertainties / open questions
+
+Report footer rules:
+- End with exactly one `<agent_report>...</agent_report>` block.
+- The block must contain strict JSON only, with no markdown fences or comments.
+- Use `status:"completed"` only when the assigned question is answered; use `blocked` for missing context and `failed` for incorrect or contradicted findings.
+
 <agent_report>{"status":"completed|blocked|failed","summary":"...","filesRead":["..."],"verification":[{"command":"...","outcome":"passed|failed","notes":"..."}],"residualRisks":["..."]}</agent_report>

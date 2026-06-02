@@ -627,7 +627,7 @@ describe("AgentControl persisted child control", () => {
     expect(emitParentAgentStatus).toHaveBeenCalled();
   });
 
-  test("wait normalizes hydrated stale running child status to completed when idle", async () => {
+  test("wait keeps hydrated stale running child status running when no assistant result exists", async () => {
     const config = makeConfig();
     const childSession = makeChildSession(config);
     const getSessionInfoEvent = childSession.getSessionInfoEvent;
@@ -660,11 +660,61 @@ describe("AgentControl persisted child control", () => {
       timeoutMs: 10,
     });
 
-    expect(result.timedOut).toBe(false);
+    expect(result.timedOut).toBe(true);
     expect(result.mode).toBe("any");
     expect(result.agents).toHaveLength(1);
+    expect(result.agents[0]?.executionState).toBe("running");
+    expect(result.readyAgentIds).toEqual([]);
+  });
+
+  test("wait treats stale running child with an assistant result as completed", async () => {
+    const config = makeConfig();
+    const childSession = makeChildSession(config);
+    const getSessionInfoEvent = childSession.getSessionInfoEvent;
+    childSession.getSessionInfoEvent = () => ({
+      ...getSessionInfoEvent(),
+      executionState: "running",
+    });
+    childSession.getLatestAssistantText = () =>
+      'Finished\n\n<agent_report>{"status":"completed","summary":"Done"}</agent_report>';
+    const control = new AgentControl({
+      sessionBindings: new Map(),
+      sessionDb: {
+        getSessionRecord: (sessionId: string) =>
+          sessionId === "child-1"
+            ? makePersistedChildRecord(config, { executionState: "running" })
+            : null,
+      } as any,
+      getConnectedProviders: async () => ["openai"],
+      buildSession: ((binding: SessionBinding) => {
+        binding.session = childSession;
+        return { session: childSession, isResume: true, resumedFromStorage: true };
+      }) as any,
+      loadAgentPrompt: async () => "child system prompt",
+      disposeBinding: () => {},
+      emitParentAgentStatus: () => {},
+      emitParentLog: () => {},
+    });
+
+    const result = await control.wait({
+      parentSessionId: "root-1",
+      agentIds: ["child-1"],
+      timeoutMs: 10,
+      includeFinalMessage: true,
+      includeReport: true,
+    });
+
+    expect(result.timedOut).toBe(false);
     expect(result.agents[0]?.executionState).toBe("completed");
     expect(result.readyAgentIds).toEqual(["child-1"]);
+    expect(result.inspections).toEqual([
+      expect.objectContaining({
+        agentId: "child-1",
+        latestAssistantText: expect.stringContaining("Finished"),
+        parsedReport: { status: "completed", summary: "Done" },
+        reportValid: true,
+      }),
+    ]);
   });
 
   test("inspect returns latest assistant text, parsed report, and usage for hydrated children", async () => {
@@ -807,7 +857,7 @@ describe("AgentControl persisted child control", () => {
     );
   });
 
-  test("list normalizes hydrated stale pending_init child status to completed when idle", async () => {
+  test("list keeps hydrated stale pending_init child status pending when no assistant result exists", async () => {
     const config = makeConfig();
     const childSession = makeChildSession(config);
     const getSessionInfoEvent = childSession.getSessionInfoEvent;
@@ -836,7 +886,7 @@ describe("AgentControl persisted child control", () => {
     const summaries = await control.list("root-1");
 
     expect(summaries).toHaveLength(1);
-    expect(summaries[0]?.executionState).toBe("completed");
+    expect(summaries[0]?.executionState).toBe("pending_init");
   });
 
   test("resume reopens a hydrated closed child session", async () => {

@@ -15,7 +15,7 @@ import { DEFAULT_PROVIDER_OPTIONS } from "../../../src/providers";
 import { getProviderCatalog } from "../../../src/providers/connectionCatalog";
 import { DelegateRunner } from "../../../src/server/agents/DelegateRunner";
 import { routeAgentConfig } from "../../../src/server/agents/modelRouter";
-import { parseChildAgentReport } from "../../../src/server/agents/reportParser";
+import { inspectChildAgentReport } from "../../../src/server/agents/reportParser";
 import { getAgentRoleDefinition } from "../../../src/server/agents/roles";
 import { StatusBus } from "../../../src/server/agents/StatusBus";
 import type { SessionUsageSnapshot, TurnUsage } from "../../../src/session/costTracker";
@@ -24,6 +24,7 @@ import {
   type AgentInspectResult,
   type AgentReasoningEffort,
   type AgentRole,
+  normalizeAgentTargetPaths,
   type PersistentAgentSummary,
   resolveAgentSpawnContextOptions,
 } from "../../../src/shared/agents";
@@ -590,6 +591,7 @@ export function createRawLoopAgentControl(
         ...(priorMessages.length > 0 ? { seedMessages: priorMessages } : {}),
         ...(state.todos.length > 0 ? { initialTodos: structuredClone(state.todos) } : {}),
         ...(state.harnessContext ? { harnessContext: state.harnessContext } : {}),
+        ...(state.summary.targetPaths ? { targetPaths: state.summary.targetPaths } : {}),
         updateTodos: (todos) => {
           state.todos = structuredClone(todos);
         },
@@ -656,6 +658,7 @@ export function createRawLoopAgentControl(
       const { message, role, model, reasoningEffort } = spawnOpts;
       const effectiveRole = role ?? "default";
       const resolvedContext = resolveAgentSpawnContextOptions(spawnOpts);
+      const targetPaths = normalizeAgentTargetPaths(spawnOpts.targetPaths);
       const connectedProviders = await getConnectedProviders();
       const routed = routeAgentConfig(opts.config, {
         role: getAgentRoleDefinition(effectiveRole),
@@ -679,6 +682,7 @@ export function createRawLoopAgentControl(
           role: effectiveRole,
           mode: "delegate",
           depth: (opts.spawnDepth ?? 0) + 1,
+          ...(targetPaths !== undefined ? { targetPaths } : {}),
           ...(routed.requestedModel ? { requestedModel: routed.requestedModel } : {}),
           effectiveModel: routed.effectiveModel,
           ...(routed.requestedReasoningEffort
@@ -740,18 +744,48 @@ export function createRawLoopAgentControl(
       }
       startRun(state, message);
     },
-    wait: async ({ agentIds, timeoutMs, mode }) => {
+    wait: async ({ agentIds, timeoutMs, mode, includeFinalMessage, includeReport }) => {
       for (const agentId of agentIds) {
         getState(agentId);
       }
-      return await statusBus.wait(agentIds, timeoutMs, mode);
+      const result = await statusBus.wait(agentIds, timeoutMs, mode);
+      if (includeFinalMessage !== true && includeReport !== true) {
+        return result;
+      }
+      return {
+        ...result,
+        inspections: result.agents.map((agent) => {
+          const state = getState(agent.agentId);
+          const inspection = {
+            agentId: agent.agentId,
+            ...(includeFinalMessage ? { latestAssistantText: state.latestAssistantText } : {}),
+          };
+          if (!includeReport) return inspection;
+          const reportInspection = inspectChildAgentReport(state.latestAssistantText);
+          return {
+            ...inspection,
+            parsedReport: reportInspection.parsedReport,
+            reportRequired: reportInspection.reportRequired,
+            reportFound: reportInspection.reportFound,
+            reportValid: reportInspection.reportValid,
+            reportBlockCount: reportInspection.reportBlockCount,
+            reportDiagnostic: reportInspection.reportDiagnostic,
+          };
+        }),
+      };
     },
     inspect: async ({ agentId }): Promise<AgentInspectResult> => {
       const state = getState(agentId);
+      const reportInspection = inspectChildAgentReport(state.latestAssistantText);
       return {
         agent: state.summary,
         latestAssistantText: state.latestAssistantText,
-        parsedReport: parseChildAgentReport(state.latestAssistantText),
+        parsedReport: reportInspection.parsedReport,
+        reportRequired: reportInspection.reportRequired,
+        reportFound: reportInspection.reportFound,
+        reportValid: reportInspection.reportValid,
+        reportBlockCount: reportInspection.reportBlockCount,
+        reportDiagnostic: reportInspection.reportDiagnostic,
         sessionUsage: state.sessionUsage,
         lastTurnUsage: state.lastTurnUsage,
       };

@@ -200,6 +200,35 @@ describe("grep tool", () => {
     ).rejects.toThrow(/blocked/i);
   });
 
+  test("enforces child agent targetPaths for grep path", async () => {
+    const dir = await tmpDir();
+    const allowedDir = path.join(dir, "src", "foo");
+    const blockedDir = path.join(dir, "src", "bar");
+    await fs.mkdir(allowedDir, { recursive: true });
+    await fs.mkdir(blockedDir, { recursive: true });
+    await fs.writeFile(path.join(allowedDir, "allowed.txt"), "needle\n", "utf-8");
+    await fs.writeFile(path.join(blockedDir, "blocked.txt"), "needle\n", "utf-8");
+
+    const t: any = createGrepTool(makeCtx(dir, { agentTargetPaths: ["src/foo"] }), {
+      execFileImpl: fakeExecFile,
+      ensureRipgrepImpl: fakeEnsureRipgrep,
+    });
+    await expect(
+      t.execute({
+        pattern: "needle",
+        path: allowedDir,
+        caseSensitive: true,
+      }),
+    ).resolves.toContain("allowed.txt");
+    await expect(
+      t.execute({
+        pattern: "needle",
+        path: blockedDir,
+        caseSensitive: true,
+      }),
+    ).rejects.toThrow(/targetPaths/);
+  });
+
   test("returns 'No matches' on no results", async () => {
     const dir = await tmpDir();
     await fs.writeFile(path.join(dir, "file.txt"), "some content\n", "utf-8");

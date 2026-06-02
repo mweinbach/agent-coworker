@@ -7,6 +7,7 @@ import {
   agentRoleSchema,
   agentTargetPathsSchema,
   agentTaskTypeSchema,
+  childAgentReportSchema,
   persistentAgentSummarySchema,
   resolveAgentSpawnContextOptions,
 } from "../../shared/agents";
@@ -43,6 +44,19 @@ const agentStatusEventSchema = z
 
 const agentWaitModeSchema = z.enum(AGENT_WAIT_MODE_VALUES);
 
+const agentWaitInspectionSchema = z
+  .object({
+    agentId: nonEmptyTrimmedStringSchema,
+    latestAssistantText: z.string().nullable().optional(),
+    parsedReport: childAgentReportSchema.nullable().optional(),
+    reportRequired: z.boolean().optional(),
+    reportFound: z.boolean().optional(),
+    reportValid: z.boolean().optional(),
+    reportBlockCount: z.number().int().min(0).optional(),
+    reportDiagnostic: z.string().nullable().optional(),
+  })
+  .strict();
+
 const agentWaitResultEventSchema = z
   .object({
     type: z.literal("agent_wait_result"),
@@ -52,6 +66,7 @@ const agentWaitResultEventSchema = z
     mode: agentWaitModeSchema,
     agents: z.array(persistentAgentSummarySchema),
     readyAgentIds: z.array(nonEmptyTrimmedStringSchema),
+    inspections: z.array(agentWaitInspectionSchema).optional(),
   })
   .strict();
 
@@ -113,6 +128,8 @@ export const jsonRpcAgentRequestSchemas = {
       agentIds: z.array(nonEmptyTrimmedStringSchema).min(1),
       timeoutMs: z.number().int().nonnegative().optional(),
       mode: agentWaitModeSchema.optional(),
+      includeFinalMessage: z.boolean().optional(),
+      includeReport: z.boolean().optional(),
     })
     .strict(),
   "cowork/session/agent/inspect": z

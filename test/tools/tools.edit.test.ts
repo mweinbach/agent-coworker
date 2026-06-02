@@ -140,6 +140,36 @@ describe("edit tool", () => {
     ).rejects.toThrow(/blocked/i);
   });
 
+  test("enforces child agent targetPaths for edits", async () => {
+    const dir = await tmpDir();
+    await fs.mkdir(path.join(dir, "src", "foo"), { recursive: true });
+    await fs.mkdir(path.join(dir, "src", "bar"), { recursive: true });
+    await fs.writeFile(path.join(dir, "src", "foo", "allowed.ts"), "old", "utf-8");
+    await fs.writeFile(path.join(dir, "src", "bar", "blocked.ts"), "old", "utf-8");
+
+    const t: any = createEditTool(makeCtx(dir, { agentTargetPaths: ["src/foo"] }));
+    await expect(
+      t.execute({
+        filePath: "src/foo/allowed.ts",
+        oldString: "old",
+        newString: "new",
+      }),
+    ).resolves.toBe("Edit applied.");
+    await expect(
+      t.execute({
+        filePath: "src/bar/blocked.ts",
+        oldString: "old",
+        newString: "new",
+      }),
+    ).rejects.toThrow(/targetPaths/);
+    await expect(fs.readFile(path.join(dir, "src", "foo", "allowed.ts"), "utf-8")).resolves.toBe(
+      "new",
+    );
+    await expect(fs.readFile(path.join(dir, "src", "bar", "blocked.ts"), "utf-8")).resolves.toBe(
+      "old",
+    );
+  });
+
   test("rejects edit through symlink segment to outside directory", async () => {
     if (process.platform === "win32") return;
 

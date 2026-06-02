@@ -89,6 +89,7 @@ export function createGlobTool(ctx: ToolContext) {
         ),
         ctx.config,
         "glob",
+        ctx.agentTargetPaths,
       );
       const files: Array<{ path: string; mtimeMs: number }> = [];
       let seen = 0;
@@ -116,7 +117,7 @@ export function createGlobTool(ctx: ToolContext) {
         const relativePath =
           typeof parsedEntry.data === "string" ? parsedEntry.data : parsedEntry.data.path;
         const absoluteMatchPath = path.resolve(searchCwd, relativePath);
-        await assertReadPathAllowed(absoluteMatchPath, ctx.config, "glob");
+        await assertReadPathAllowed(absoluteMatchPath, ctx.config, "glob", ctx.agentTargetPaths);
 
         if (typeof parsedEntry.data === "string") {
           keepNewestCandidate({ path: parsedEntry.data, mtimeMs: 0 });

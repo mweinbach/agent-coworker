@@ -85,6 +85,11 @@ describe("persistent agent tools", () => {
         status: "completed" as const,
         summary: "Finished",
       },
+      reportRequired: true,
+      reportFound: true,
+      reportValid: true,
+      reportBlockCount: 1,
+      reportDiagnostic: null,
       sessionUsage: null,
       lastTurnUsage: null,
     }));
@@ -125,6 +130,11 @@ describe("persistent agent tools", () => {
       agents: [makeSummary({ executionState: "completed" })],
       readyAgentIds: ["child-1"],
     });
+    await waitTool.execute({
+      agentIds: ["child-1"],
+      includeFinalMessage: true,
+      includeReport: true,
+    });
     await expect(inspectTool.execute({ agentId: "child-1" })).resolves.toEqual(
       expect.objectContaining({
         agent: expect.objectContaining({ agentId: "child-1" }),
@@ -140,7 +150,16 @@ describe("persistent agent tools", () => {
       message: "next step",
       interrupt: true,
     });
-    expect(wait).toHaveBeenCalledWith({ agentIds: ["child-1"], timeoutMs: 10, mode: "all" });
+    expect(wait).toHaveBeenNthCalledWith(1, {
+      agentIds: ["child-1"],
+      timeoutMs: 10,
+      mode: "all",
+    });
+    expect(wait).toHaveBeenNthCalledWith(2, {
+      agentIds: ["child-1"],
+      includeFinalMessage: true,
+      includeReport: true,
+    });
     expect(inspect).toHaveBeenCalledWith({ agentId: "child-1" });
     expect(resume).toHaveBeenCalledWith({ agentId: "child-1" });
     expect(close).toHaveBeenCalledWith({ agentId: "child-1" });

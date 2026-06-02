@@ -317,6 +317,11 @@ describe("shared JSON-RPC control schemas", () => {
           status: "completed",
           summary: "Task done",
         },
+        reportRequired: true,
+        reportFound: true,
+        reportValid: true,
+        reportBlockCount: 1,
+        reportDiagnostic: null,
         sessionUsage: null,
         lastTurnUsage: null,
       },
@@ -346,6 +351,8 @@ describe("shared JSON-RPC control schemas", () => {
       agentIds: ["agent-1", "agent-2"],
       timeoutMs: 250,
       mode: "all",
+      includeFinalMessage: true,
+      includeReport: true,
     });
     const waitNotification = jsonRpcAgentNotificationSchemas[
       "cowork/session/agentWaitResult"
@@ -394,11 +401,30 @@ describe("shared JSON-RPC control schemas", () => {
         },
       ],
       readyAgentIds: ["agent-1"],
+      inspections: [
+        {
+          agentId: "agent-1",
+          latestAssistantText:
+            'done\n\n<agent_report>{"status":"completed","summary":"Task done"}</agent_report>',
+          parsedReport: {
+            status: "completed",
+            summary: "Task done",
+          },
+          reportRequired: true,
+          reportFound: true,
+          reportValid: true,
+          reportBlockCount: 1,
+          reportDiagnostic: null,
+        },
+      ],
     });
 
     expect(waitRequest.mode).toBe("all");
+    expect(waitRequest.includeFinalMessage).toBe(true);
+    expect(waitRequest.includeReport).toBe(true);
     expect(waitNotification.mode).toBe("all");
     expect(waitNotification.readyAgentIds).toEqual(["agent-1"]);
     expect(waitNotification.agents).toHaveLength(2);
+    expect(waitNotification.inspections?.[0]?.parsedReport?.summary).toBe("Task done");
   });
 });

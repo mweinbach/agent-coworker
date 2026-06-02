@@ -513,8 +513,14 @@ export class SessionAgentService {
     await this.session.sendAgentInput(agentId, message, interrupt);
   }
 
-  async wait(agentIds: string[], timeoutMs?: number, mode?: AgentWaitMode): Promise<void> {
-    await this.session.waitForAgents(agentIds, timeoutMs, mode);
+  async wait(
+    agentIds: string[],
+    timeoutMs?: number,
+    mode?: AgentWaitMode,
+    includeFinalMessage?: boolean,
+    includeReport?: boolean,
+  ): Promise<void> {
+    await this.session.waitForAgents(agentIds, timeoutMs, mode, includeFinalMessage, includeReport);
   }
 
   async inspect(agentId: string): Promise<AgentInspectResult> {

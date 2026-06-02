@@ -59,6 +59,60 @@ function isPathInsideAnyRoot(filePath: string, roots: string[]): boolean {
   return roots.some((root) => isPathInside(root, resolved));
 }
 
+export function resolveAgentTargetPathRoots(
+  config: AgentConfig,
+  targetPaths: readonly string[] | null | undefined,
+): string[] {
+  if (!targetPaths || targetPaths.length === 0) return [];
+  const roots: string[] = [];
+  const seen = new Set<string>();
+  for (const rawPath of targetPaths) {
+    const trimmed = rawPath.trim();
+    if (!trimmed) continue;
+    const resolved = path.isAbsolute(trimmed)
+      ? path.normalize(trimmed)
+      : path.resolve(config.workingDirectory, trimmed);
+    if (seen.has(resolved)) continue;
+    seen.add(resolved);
+    roots.push(resolved);
+  }
+  return roots;
+}
+
+async function assertInsideAgentTargetPaths(
+  resolvedPath: string,
+  config: AgentConfig,
+  action: string,
+  targetPaths: readonly string[] | null | undefined,
+  opts: { projectPathsOnly: boolean },
+): Promise<void> {
+  const scopeRoots = resolveAgentTargetPathRoots(config, targetPaths);
+  if (scopeRoots.length === 0) return;
+
+  if (opts.projectPathsOnly && !isPathInsideAnyRoot(resolvedPath, writeRoots(config))) {
+    return;
+  }
+
+  if (!isPathInsideAnyRoot(resolvedPath, scopeRoots)) {
+    throw new Error(
+      `${action} blocked: path is outside this child agent's targetPaths (${targetPaths?.join(
+        ", ",
+      )}): ${resolvedPath}`,
+    );
+  }
+
+  const canonicalRoots = await Promise.all([
+    canonicalizeExistingPrefix(resolvedPath),
+    ...scopeRoots.map((root) => canonicalizeRoot(root)),
+  ]);
+  const [canonicalTarget, ...allowedRoots] = canonicalRoots;
+  if (!allowedRoots.some((root) => isPathInside(root, canonicalTarget))) {
+    throw new Error(
+      `${action} blocked: canonical target resolves outside this child agent's targetPaths: ${canonicalTarget}`,
+    );
+  }
+}
+
 export function isWritePathAllowed(filePath: string, config: AgentConfig): boolean {
   return isCanonicalPathInsideRoots(filePath, writeRoots(config));
 }
@@ -137,6 +191,7 @@ export async function assertWritePathAllowed(
   filePath: string,
   config: AgentConfig,
   action: "write" | "edit",
+  targetPaths?: readonly string[] | null,
 ): Promise<string> {
   const resolved = path.resolve(filePath);
   const roots = writeRoots(config);
@@ -158,6 +213,10 @@ export async function assertWritePathAllowed(
     );
   }
 
+  await assertInsideAgentTargetPaths(resolved, config, action, targetPaths, {
+    projectPathsOnly: false,
+  });
+
   return resolved;
 }
 
@@ -165,6 +224,7 @@ export async function assertReadPathAllowed(
   filePath: string,
   config: AgentConfig,
   action: "read" | "glob" | "grep",
+  targetPaths?: readonly string[] | null,
 ): Promise<string> {
   const resolved = path.resolve(filePath);
   const roots = [...readRoots(config), ...(await pluginReadRoots(config))];
@@ -183,6 +243,10 @@ export async function assertReadPathAllowed(
       `${action} blocked: canonical target resolves outside allowed directories: ${canonicalTarget}`,
     );
   }
+
+  await assertInsideAgentTargetPaths(resolved, config, action, targetPaths, {
+    projectPathsOnly: true,
+  });
 
   return resolved;
 }

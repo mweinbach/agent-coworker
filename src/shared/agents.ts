@@ -193,10 +193,33 @@ export const childAgentReportSchema: z.ZodType<ChildAgentReport> = z
   })
   .strict();
 
+export type AgentReportStatus = {
+  reportRequired: boolean;
+  reportFound: boolean;
+  reportValid: boolean;
+  reportBlockCount: number;
+  reportDiagnostic: string | null;
+};
+
+export const agentReportStatusSchema: z.ZodType<AgentReportStatus> = z
+  .object({
+    reportRequired: z.boolean(),
+    reportFound: z.boolean(),
+    reportValid: z.boolean(),
+    reportBlockCount: z.number().int().min(0),
+    reportDiagnostic: z.string().nullable(),
+  })
+  .strict();
+
 export type AgentInspectResult = {
   agent: PersistentAgentSummary;
   latestAssistantText: string | null;
   parsedReport: ChildAgentReport | null;
+  reportRequired: boolean;
+  reportFound: boolean;
+  reportValid: boolean;
+  reportBlockCount: number;
+  reportDiagnostic: string | null;
   sessionUsage: SessionUsageSnapshot | null;
   lastTurnUsage: TurnUsage | null;
 };
@@ -206,6 +229,11 @@ export const agentInspectResultSchema: z.ZodType<AgentInspectResult> = z
     agent: persistentAgentSummarySchema,
     latestAssistantText: z.string().nullable(),
     parsedReport: childAgentReportSchema.nullable(),
+    reportRequired: z.boolean(),
+    reportFound: z.boolean(),
+    reportValid: z.boolean(),
+    reportBlockCount: z.number().int().min(0),
+    reportDiagnostic: z.string().nullable(),
     sessionUsage: sessionUsageSnapshotSchema.nullable(),
     lastTurnUsage: turnUsageSchema.nullable(),
   })

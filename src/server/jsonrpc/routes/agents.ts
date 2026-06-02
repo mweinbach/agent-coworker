@@ -114,7 +114,8 @@ export function createAgentRouteHandlers(context: JsonRpcRouteContext): JsonRpcR
         return;
       }
 
-      const { threadId, agentIds, timeoutMs, mode } = parsed.data;
+      const { threadId, agentIds, timeoutMs, mode, includeFinalMessage, includeReport } =
+        parsed.data;
       const binding = context.threads.getLive(threadId);
       const runtime = binding?.runtime;
       if (!runtime || agentIds.length === 0) {
@@ -125,7 +126,7 @@ export function createAgentRouteHandlers(context: JsonRpcRouteContext): JsonRpcR
         return;
       }
 
-      await runtime.agents.wait(agentIds, timeoutMs, mode);
+      await runtime.agents.wait(agentIds, timeoutMs, mode, includeFinalMessage, includeReport);
       context.jsonrpc.sendResult(ws, message.id, {});
     },
 

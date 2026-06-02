@@ -34,6 +34,7 @@ export function createEditTool(ctx: ToolContext) {
         resolveMaybeRelative(filePath, ctx.config.workingDirectory),
         ctx.config,
         "edit",
+        ctx.agentTargetPaths,
       );
       let content = await fs.readFile(abs, "utf-8");
       if (!content.includes(oldString)) throw new Error(`oldString not found in ${abs}`);

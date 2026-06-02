@@ -149,6 +149,20 @@ describe("read tool", () => {
     await expect(t.execute({ filePath: outsideFile, limit: 10 })).rejects.toThrow(/blocked/i);
   });
 
+  test("rejects project reads outside child agent targetPaths", async () => {
+    const dir = await tmpDir();
+    await fs.mkdir(path.join(dir, "src", "foo"), { recursive: true });
+    await fs.mkdir(path.join(dir, "src", "bar"), { recursive: true });
+    await fs.writeFile(path.join(dir, "src", "foo", "allowed.ts"), "ok", "utf-8");
+    await fs.writeFile(path.join(dir, "src", "bar", "blocked.ts"), "secret", "utf-8");
+
+    const t: any = createReadTool(makeCtx(dir, { agentTargetPaths: ["src/foo"] }));
+    await expect(t.execute({ filePath: "src/foo/allowed.ts", limit: 10 })).resolves.toContain("ok");
+    await expect(t.execute({ filePath: "src/bar/blocked.ts", limit: 10 })).rejects.toThrow(
+      /targetPaths/,
+    );
+  });
+
   test("returns multimodal content for supported image files", async () => {
     const dir = await tmpDir();
     const p = path.join(dir, "pixel.png");

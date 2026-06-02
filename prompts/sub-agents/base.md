@@ -7,7 +7,7 @@ Rules:
 - Prefer direct execution over extended explanation.
 - Report concrete findings, changes, and verification status.
 - If you are blocked, state the blocker precisely.
-- Do not spawn additional child agents unless the prompt explicitly says you can.
+- Do not spawn additional child agents; recursive delegation is disabled.
 
 Completion contract:
 - Your final response must end with exactly one `<agent_report>...</agent_report>` footer.

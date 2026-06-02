@@ -18,4 +18,10 @@ Verification
 Adversarial probe
 Residual risks
 VERDICT: PASS|FAIL|PARTIAL
+
+Report footer rules:
+- End with exactly one `<agent_report>...</agent_report>` block.
+- The block must contain strict JSON only, with no markdown fences or comments.
+- Map the verdict to the footer status exactly: PASS -> `completed`, PARTIAL -> `blocked`, FAIL -> `failed`.
+
 <agent_report>{"status":"completed|blocked|failed","summary":"...","filesRead":["..."],"verification":[{"command":"...","outcome":"passed|failed","notes":"observed output ..."}],"residualRisks":["..."]}</agent_report>

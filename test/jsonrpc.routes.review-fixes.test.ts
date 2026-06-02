@@ -502,6 +502,11 @@ describe("JSON-RPC extracted route review fixes", () => {
         status: "completed",
         summary: "Task done",
       },
+      reportRequired: true,
+      reportFound: true,
+      reportValid: true,
+      reportBlockCount: 1,
+      reportDiagnostic: null,
       sessionUsage: null,
       lastTurnUsage: null,
     };

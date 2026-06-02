@@ -111,6 +111,26 @@ describe("write tool", () => {
     ).rejects.toThrow(/blocked/i);
   });
 
+  test("enforces child agent targetPaths for writes", async () => {
+    const dir = await tmpDir();
+    await fs.mkdir(path.join(dir, "src", "foo"), { recursive: true });
+    await fs.mkdir(path.join(dir, "src", "bar"), { recursive: true });
+
+    const t: any = createWriteTool(makeCtx(dir, { agentTargetPaths: ["src/foo"] }));
+    await expect(t.execute({ filePath: "src/foo/allowed.ts", content: "ok" })).resolves.toContain(
+      "Wrote",
+    );
+    await expect(t.execute({ filePath: "src/bar/blocked.ts", content: "nope" })).rejects.toThrow(
+      /targetPaths/,
+    );
+    await expect(fs.readFile(path.join(dir, "src", "foo", "allowed.ts"), "utf-8")).resolves.toBe(
+      "ok",
+    );
+    await expect(
+      fs.readFile(path.join(dir, "src", "bar", "blocked.ts"), "utf-8"),
+    ).rejects.toThrow();
+  });
+
   test("returns descriptive result string", async () => {
     const dir = await tmpDir();
     const p = path.join(dir, "desc.txt");

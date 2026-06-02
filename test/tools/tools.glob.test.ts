@@ -120,6 +120,20 @@ describe("glob tool", () => {
     await expect(t.execute({ pattern: "*.ts", cwd: outsideDir })).rejects.toThrow(/blocked/i);
   });
 
+  test("enforces child agent targetPaths for glob cwd and matches", async () => {
+    const dir = await tmpDir();
+    const allowedDir = path.join(dir, "src", "foo");
+    const blockedDir = path.join(dir, "src", "bar");
+    await fs.mkdir(allowedDir, { recursive: true });
+    await fs.mkdir(blockedDir, { recursive: true });
+    await fs.writeFile(path.join(allowedDir, "allowed.ts"), "", "utf-8");
+    await fs.writeFile(path.join(blockedDir, "blocked.ts"), "", "utf-8");
+
+    const t: any = createGlobTool(makeCtx(dir, { agentTargetPaths: ["src/foo"] }));
+    await expect(t.execute({ pattern: "*.ts", cwd: allowedDir })).resolves.toContain("allowed.ts");
+    await expect(t.execute({ pattern: "*.ts", cwd: blockedDir })).rejects.toThrow(/targetPaths/);
+  });
+
   test("rejects matches that escape allowed scope via symlink path segments", async () => {
     const dir = await tmpDir();
     const outsideDir = await tmpDir();

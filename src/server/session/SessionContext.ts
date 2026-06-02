@@ -226,6 +226,8 @@ export type SessionDependencies = {
     agentIds: string[];
     timeoutMs?: number;
     mode?: AgentWaitMode;
+    includeFinalMessage?: boolean;
+    includeReport?: boolean;
   }) => Promise<AgentWaitResult>;
   inspectAgentImpl?: (opts: {
     parentSessionId: string;

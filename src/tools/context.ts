@@ -25,6 +25,8 @@ export interface AgentControl {
     agentIds: string[];
     timeoutMs?: number;
     mode?: AgentWaitMode;
+    includeFinalMessage?: boolean;
+    includeReport?: boolean;
   }) => Promise<AgentWaitResult>;
   inspect: (opts: { agentId: string }) => Promise<AgentInspectResult>;
   resume: (opts: { agentId: string }) => Promise<PersistentAgentSummary>;
@@ -65,6 +67,9 @@ export interface ToolContext {
 
   /** Optional role for child-agent tool filtering. */
   agentRole?: AgentRole;
+
+  /** Optional filesystem scope for child agents spawned with targetPaths. */
+  agentTargetPaths?: readonly string[] | null;
 
   /** Effective shell mutation policy. Defaults to "full" when omitted. */
   shellPolicy?: AgentShellPolicy;

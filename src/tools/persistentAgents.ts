@@ -48,21 +48,58 @@ export function createSendAgentInputTool(ctx: ToolContext) {
 export function createWaitForAgentTool(ctx: ToolContext) {
   return defineTool({
     description:
-      "Wait for child agents to reach terminal states. mode='any' resolves on the first terminal child; mode='all' waits for every requested child. Returns the latest known status for all requested ids even when timed out.",
+      "Wait for child agents to reach terminal states. mode='any' resolves on the first terminal child; mode='all' waits for every requested child. Compact by default: returns latest statuses/previews only. Set includeFinalMessage=true to include each child's full latest assistant text, and includeReport=true to include parsed <agent_report> data plus report diagnostics in the same tool call.",
     inputSchema: z.object({
       agentIds: z.array(z.string().trim().min(1)).min(1),
       timeoutMs: z.number().int().min(0).max(300_000).optional(),
       mode: z.enum(AGENT_WAIT_MODE_VALUES).optional(),
+      includeFinalMessage: z
+        .boolean()
+        .optional()
+        .describe("Include full latest assistant text for returned child agents. Defaults false."),
+      includeReport: z
+        .boolean()
+        .optional()
+        .describe("Include parsed <agent_report> and report diagnostics. Defaults false."),
     }),
     execute: async ({
       agentIds,
       timeoutMs,
       mode,
+      includeFinalMessage,
+      includeReport,
     }: {
       agentIds: string[];
       timeoutMs?: number;
       mode?: "any" | "all";
-    }) => await requireAgentControl(ctx).wait({ agentIds, timeoutMs, mode }),
+      includeFinalMessage?: boolean;
+      includeReport?: boolean;
+    }) => {
+      ctx.log(
+        `tool> waitForAgent ${JSON.stringify({
+          agentIds,
+          timeoutMs,
+          mode,
+          includeFinalMessage: includeFinalMessage === true,
+          includeReport: includeReport === true,
+        })}`,
+      );
+      const result = await requireAgentControl(ctx).wait({
+        agentIds,
+        timeoutMs,
+        mode,
+        ...(includeFinalMessage !== undefined ? { includeFinalMessage } : {}),
+        ...(includeReport !== undefined ? { includeReport } : {}),
+      });
+      ctx.log(
+        `tool< waitForAgent ${JSON.stringify({
+          timedOut: result.timedOut,
+          readyAgentIds: result.readyAgentIds,
+          inspectionCount: result.inspections?.length ?? 0,
+        })}`,
+      );
+      return result;
+    },
   });
 }
 
@@ -77,7 +114,7 @@ export function createInspectAgentTool(ctx: ToolContext) {
       ctx.log(`tool> inspectAgent ${JSON.stringify({ agentId })}`);
       const result = await requireAgentControl(ctx).inspect({ agentId });
       ctx.log(
-        `tool< inspectAgent ${JSON.stringify({ agentId, hasText: !!result.latestAssistantText, hasReport: !!result.parsedReport })}`,
+        `tool< inspectAgent ${JSON.stringify({ agentId, hasText: !!result.latestAssistantText, reportValid: result.reportValid })}`,
       );
       return result;
     },

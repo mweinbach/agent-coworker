@@ -80,6 +80,98 @@ describe("webSearch tool", () => {
     expect(t.description).not.toContain("BRAVE_API_KEY");
   });
 
+  test("uses Parallel when the workspace selects the Parallel local search provider", async () => {
+    const dir = await tmpDir();
+    const oldExa = process.env.EXA_API_KEY;
+    const oldParallel = process.env.PARALLEL_API_KEY;
+    process.env.EXA_API_KEY = "exa_test_key";
+    process.env.PARALLEL_API_KEY = "parallel_test_key";
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      expect(url).not.toContain("api.exa.ai");
+      expect(url).toBe("https://api.parallel.ai/v1beta/search");
+      const body = JSON.parse(String(init?.body));
+      expect(body.objective).toBe("latest parallel search updates");
+      expect(body.search_queries).toEqual(["latest parallel search updates"]);
+      expect(body.mode).toBe("agentic");
+      expect(body.max_results).toBe(2);
+      expect(body.excerpts).toMatchObject({
+        max_chars_per_result: 2500,
+        max_chars_total: 5000,
+      });
+      return new Response(
+        JSON.stringify({
+          search_id: "search-1",
+          results: [
+            {
+              title: "Parallel result",
+              url: "https://example.com/parallel",
+              publish_date: "2026-06-01",
+              excerpts: ["Parallel excerpt"],
+            },
+          ],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }) as any;
+
+    try {
+      const t: any = createWebSearchTool(
+        makeCtx(dir, {
+          config: makeConfig(dir, {
+            provider: "google",
+            model: "gemini-3.1-pro-preview",
+            preferredChildModel: "gemini-3.1-pro-preview",
+            providerOptions: {
+              "codex-cli": {
+                webSearchBackend: "parallel",
+              },
+              google: {
+                nativeWebSearch: false,
+              },
+            },
+          }),
+        }),
+      );
+      expect(t.description).toContain("PARALLEL_API_KEY");
+      expect(t.description).not.toContain("EXA_API_KEY");
+
+      const out = await t.execute({
+        query: " latest parallel search updates ",
+        maxResults: 2,
+        type: "deep",
+        category: "company",
+      });
+      expect(out).toMatchObject({
+        provider: "parallel",
+        count: 1,
+        request: {
+          objective: "latest parallel search updates",
+          search_queries: ["latest parallel search updates"],
+          mode: "agentic",
+          max_results: 2,
+        },
+      });
+      expect((out as any).response.results).toEqual([
+        {
+          title: "Parallel result",
+          url: "https://example.com/parallel",
+          publish_date: "2026-06-01",
+          excerpts: ["Parallel excerpt"],
+        },
+      ]);
+      expect((globalThis.fetch as any).mock.calls).toHaveLength(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (oldExa) process.env.EXA_API_KEY = oldExa;
+      else delete process.env.EXA_API_KEY;
+      if (oldParallel) process.env.PARALLEL_API_KEY = oldParallel;
+      else delete process.env.PARALLEL_API_KEY;
+    }
+  });
+
   test("web search requires EXA_API_KEY", async () => {
     const dir = await tmpDir();
     const oldExa = process.env.EXA_API_KEY;

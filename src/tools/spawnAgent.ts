@@ -34,6 +34,10 @@ export function createSpawnAgentTool(ctx: ToolContext) {
       briefing: z.string().trim().min(1).max(20_000).optional(),
       includeParentTodos: z.boolean().optional(),
       includeHarnessContext: z.boolean().optional(),
+      forkContext: z
+        .boolean()
+        .optional()
+        .describe("Deprecated compatibility flag; prefer contextMode='full'."),
     })
     .superRefine((value, issueContext) => {
       try {

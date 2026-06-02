@@ -5,7 +5,6 @@ const CODEX_NATIVE_EXECUTION_TOOL_NAMES = new Set([
   "edit",
   "glob",
   "grep",
-  "webSearch",
   "webFetch",
 ]);
 

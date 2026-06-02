@@ -146,7 +146,6 @@ describe("ask tool", () => {
             { label: "Delete everything", description: "Remove all files" },
             { label: "Organize & tidy", description: "Keep files, improve layout" },
           ],
-          multiSelect: false,
         },
       ],
     });
@@ -177,7 +176,6 @@ describe("ask tool", () => {
             { label: "A", description: "A" },
             { label: "B", description: "B" },
           ],
-          multiSelect: false,
         },
         {
           question: "Pick second option?",
@@ -186,7 +184,6 @@ describe("ask tool", () => {
             { label: "A", description: "A" },
             { label: "B", description: "B" },
           ],
-          multiSelect: false,
         },
       ],
     });
@@ -196,6 +193,43 @@ describe("ask tool", () => {
       "Pick first option?": "A",
       "Pick second option?": "B",
     });
+  });
+
+  test("uses structured question ids as stable answer keys", async () => {
+    const dir = await tmpDir();
+    const answers = ["A", "B"];
+    const askFn = mock(async () => answers.shift() ?? "");
+    const ctx = makeCtx(dir);
+    ctx.askUser = askFn;
+
+    const t: any = createAskTool(ctx);
+    const res: any = await t.execute({
+      questions: [
+        { id: "first", question: "Pick one?", header: "First" },
+        { id: "second", question: "Pick one?", header: "Second" },
+      ],
+    });
+
+    expect(askFn).toHaveBeenCalledTimes(2);
+    expect(res.answers).toEqual({ first: "A", second: "B" });
+  });
+
+  test("rejects duplicate structured answer keys", async () => {
+    const dir = await tmpDir();
+    const askFn = mock(async () => "unused");
+    const ctx = makeCtx(dir);
+    ctx.askUser = askFn;
+
+    const t: any = createAskTool(ctx);
+    await expect(
+      t.execute({
+        questions: [
+          { question: "Pick one?", header: "First" },
+          { question: "Pick one?", header: "Second" },
+        ],
+      }),
+    ).rejects.toThrow(/unique answer keys/);
+    expect(askFn).not.toHaveBeenCalled();
   });
 });
 

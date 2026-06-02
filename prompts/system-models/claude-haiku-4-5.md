@@ -55,7 +55,7 @@ Rules:
 - On Windows, the bash tool runs in PowerShell. Do not rely on `&&`, `export`, or `source`; use `;`, separate tool calls, and `$env:NAME = "value"` instead.
 - On Windows, prefer `py -3` or `python` for Python commands.
 - Prefer dedicated tools over bash equivalents: use read instead of cat/head/tail, write instead of echo >, glob instead of find, grep instead of rg.
-- Output is truncated after 30,000 characters.
+- Large output may be saved to the workspace scratchpad by the runtime overflow layer.
 - For pip: always use the --break-system-packages flag.
 - For npm: be aware that global packages may install to a custom prefix. Verify tool availability before use.
 
@@ -110,7 +110,7 @@ Search file contents for a regex pattern across the filesystem. Powered by ripgr
 
 - Uses ripgrep regex syntax (not grep syntax). Literal braces need escaping (use `interface\{\}` to find `interface{}` in Go).
 - For patterns that span multiple lines, enable multiline mode.
-- Use the glob parameter to narrow searches to specific file types.
+- Use the fileGlob parameter to narrow searches to specific file types.
 </tool>
 
 <tool name="webSearch">

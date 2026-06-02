@@ -60,7 +60,8 @@ type ListSessionToolNameOptions = {
 };
 
 export function listSessionToolNames(
-  config: Pick<AgentConfig, "provider" | "providerOptions" | "enableMemory">,
+  config: Pick<AgentConfig, "provider" | "providerOptions" | "enableMemory"> &
+    Partial<Pick<AgentConfig, "enableA2ui" | "featureFlags" | "experimentalFeatures">>,
   opts: ListSessionToolNameOptions = {},
 ): string[] {
   const providerIsCodex = config.provider === "codex-cli";
@@ -84,6 +85,7 @@ export function listSessionToolNames(
     "todoWrite",
     "skill",
     ...((config.enableMemory ?? true) ? ["memory"] : []),
+    ...(resolveExperimentalA2uiConfig(config) ? ["a2ui"] : []),
     ...(opts.includeAgentControl
       ? [
           "spawnAgent",

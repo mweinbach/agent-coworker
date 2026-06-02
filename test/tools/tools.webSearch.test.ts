@@ -301,6 +301,91 @@ describe("webSearch tool", () => {
     }
   });
 
+  test("passes abort signal to Exa search requests", async () => {
+    const dir = await tmpDir();
+    const oldExa = process.env.EXA_API_KEY;
+    process.env.EXA_API_KEY = "exa_test_key";
+    const controller = new AbortController();
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async (_url: string, init?: RequestInit) => {
+      expect(init?.signal).toBe(controller.signal);
+      return new Response(JSON.stringify({ results: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as any;
+
+    try {
+      const t: any = createWebSearchTool(makeCtx(dir, { abortSignal: controller.signal }));
+      await t.execute({ query: "latest sdk changelog", maxResults: 1 });
+      expect((globalThis.fetch as any).mock.calls).toHaveLength(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (oldExa) process.env.EXA_API_KEY = oldExa;
+      else delete process.env.EXA_API_KEY;
+    }
+  });
+
+  test("passes abort signal to Parallel search requests", async () => {
+    const dir = await tmpDir();
+    const oldParallel = process.env.PARALLEL_API_KEY;
+    process.env.PARALLEL_API_KEY = "parallel_test_key";
+    const controller = new AbortController();
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async (_url: string, init?: RequestInit) => {
+      expect(init?.signal).toBe(controller.signal);
+      return new Response(JSON.stringify({ results: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as any;
+
+    try {
+      const t: any = createWebSearchTool(
+        makeCtx(dir, {
+          abortSignal: controller.signal,
+          config: makeConfig(dir, {
+            providerOptions: {
+              "codex-cli": {
+                webSearchBackend: "parallel",
+              },
+            },
+          }),
+        }),
+      );
+      await t.execute({ query: "latest sdk changelog", maxResults: 1 });
+      expect((globalThis.fetch as any).mock.calls).toHaveLength(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (oldParallel) process.env.PARALLEL_API_KEY = oldParallel;
+      else delete process.env.PARALLEL_API_KEY;
+    }
+  });
+
+  test("propagates webSearch abort errors instead of returning them as output", async () => {
+    const dir = await tmpDir();
+    const oldExa = process.env.EXA_API_KEY;
+    process.env.EXA_API_KEY = "exa_test_key";
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async () => {
+      const err = new Error("The operation was aborted.");
+      err.name = "AbortError";
+      throw err;
+    }) as any;
+
+    try {
+      const t: any = createWebSearchTool(makeCtx(dir));
+      await expect(t.execute({ query: "cancel me", maxResults: 1 })).rejects.toThrow(/aborted/i);
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (oldExa) process.env.EXA_API_KEY = oldExa;
+      else delete process.env.EXA_API_KEY;
+    }
+  });
+
   test("prefers the original turnUserPrompt over the latest steer fallback query", async () => {
     const dir = await tmpDir();
     const oldExa = process.env.EXA_API_KEY;

@@ -54,6 +54,12 @@ const parallelResponseSchema = z
     usage: z.array(z.unknown()).optional(),
   })
   .passthrough();
+const abortErrorSchema = z
+  .object({
+    name: z.string().optional(),
+    code: z.union([z.string(), z.number()]).optional(),
+  })
+  .passthrough();
 
 type WebSearchProviderRequest = {
   query: string;
@@ -77,6 +83,7 @@ type WebSearchProviderDefinition = {
   execute: (opts: {
     apiKey: string;
     request: WebSearchProviderRequest;
+    abortSignal?: AbortSignal;
   }) => Promise<WebSearchProviderOutput>;
 };
 
@@ -144,6 +151,13 @@ function normalizeExaCategory(
   return value === "news article" ? "news" : value;
 }
 
+function isAbortLikeError(error: unknown, signal?: AbortSignal): boolean {
+  if (signal?.aborted) return true;
+  const parsed = abortErrorSchema.safeParse(error);
+  if (!parsed.success) return false;
+  return parsed.data.name === "AbortError" || parsed.data.code === "ABORT_ERR";
+}
+
 const WEB_SEARCH_PROVIDERS: Record<LocalWebSearchProvider, WebSearchProviderDefinition> = {
   exa: {
     label: "Exa",
@@ -151,7 +165,7 @@ const WEB_SEARCH_PROVIDERS: Record<LocalWebSearchProvider, WebSearchProviderDefi
       "Search the web for current information using Exa. Requires EXA_API_KEY. Supports optional Exa search type/category controls and returns raw search response JSON with titles, URLs, and snippets/highlights.",
     missingKeyMessage: EXA_MISSING_KEY_MESSAGE,
     resolveApiKey: resolveExaApiKey,
-    execute: async ({ apiKey, request }) => {
+    execute: async ({ apiKey, request, abortSignal }) => {
       const response = await postExaJson({
         apiKey,
         path: "/search",
@@ -166,6 +180,7 @@ const WEB_SEARCH_PROVIDERS: Record<LocalWebSearchProvider, WebSearchProviderDefi
             },
           },
         },
+        abortSignal,
       });
       if (!response.ok) {
         const text = await response.text();
@@ -205,7 +220,7 @@ const WEB_SEARCH_PROVIDERS: Record<LocalWebSearchProvider, WebSearchProviderDefi
       "Search the web for current information using Parallel. Requires PARALLEL_API_KEY. Returns raw search response JSON with titles, URLs, and LLM-ready excerpts.",
     missingKeyMessage: PARALLEL_MISSING_KEY_MESSAGE,
     resolveApiKey: resolveParallelApiKey,
-    execute: async ({ apiKey, request }) => {
+    execute: async ({ apiKey, request, abortSignal }) => {
       const response = await postParallelJson({
         apiKey,
         path: "/v1beta/search",
@@ -219,6 +234,7 @@ const WEB_SEARCH_PROVIDERS: Record<LocalWebSearchProvider, WebSearchProviderDefi
             max_chars_total: Math.max(request.maxResults * 2500, 1000),
           },
         },
+        abortSignal,
       });
       if (!response.ok) {
         const text = await response.text();
@@ -340,12 +356,18 @@ function createCustomWebSearchTool(ctx: ToolContext) {
       }
 
       try {
-        const result = await provider.execute({ apiKey, request });
+        const result = await provider.execute({ apiKey, request, abortSignal: ctx.abortSignal });
         ctx.log(
           `tool< webSearch ${JSON.stringify({ provider: result.provider, count: result.count })}`,
         );
         return result;
       } catch (error) {
+        if (isAbortLikeError(error, ctx.abortSignal)) {
+          ctx.log(
+            `tool< webSearch ${JSON.stringify({ ok: false, provider: provider.label.toLowerCase(), aborted: true })}`,
+          );
+          throw error instanceof Error ? error : new Error("webSearch aborted.");
+        }
         const msg = error instanceof Error ? error.message : String(error);
         ctx.log(
           `tool< webSearch ${JSON.stringify({ ok: false, provider: provider.label.toLowerCase() })}`,

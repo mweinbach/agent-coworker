@@ -86,6 +86,24 @@ describe("todoWrite tool", () => {
     expect(res).toContain("[completed] C");
   });
 
+  test("rejects multiple in-progress todos", async () => {
+    const dir = await tmpDir();
+    const updateFn = mock((_todos: any) => {});
+    const ctx = makeCtx(dir);
+    ctx.updateTodos = updateFn;
+    const t: any = createTodoWriteTool(ctx);
+
+    await expect(
+      t.execute({
+        todos: [
+          { content: "A", status: "in_progress" as const, activeForm: "Doing A" },
+          { content: "B", status: "in_progress" as const, activeForm: "Doing B" },
+        ],
+      }),
+    ).rejects.toThrow(/At most one todo/);
+    expect(updateFn).not.toHaveBeenCalled();
+  });
+
   test("overwrites previous todos completely", async () => {
     const dir = await tmpDir();
     const t: any = createTodoWriteTool(makeCtx(dir));

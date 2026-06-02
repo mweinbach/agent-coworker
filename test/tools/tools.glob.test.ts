@@ -168,6 +168,27 @@ describe("glob tool", () => {
     expect(lines.length).toBeGreaterThanOrEqual(2);
     expect(res).toContain("truncated to 2 matches");
   });
+
+  test("returns newest matches when maxResults truncates output", async () => {
+    const dir = await tmpDir();
+    const oldest = path.join(dir, "oldest.txt");
+    const middle = path.join(dir, "middle.txt");
+    const newest = path.join(dir, "newest.txt");
+    await fs.writeFile(oldest, "", "utf-8");
+    await fs.writeFile(middle, "", "utf-8");
+    await fs.writeFile(newest, "", "utf-8");
+    await fs.utimes(oldest, new Date("2026-01-01T00:00:00Z"), new Date("2026-01-01T00:00:00Z"));
+    await fs.utimes(middle, new Date("2026-01-02T00:00:00Z"), new Date("2026-01-02T00:00:00Z"));
+    await fs.utimes(newest, new Date("2026-01-03T00:00:00Z"), new Date("2026-01-03T00:00:00Z"));
+
+    const t: any = createGlobTool(makeCtx(dir));
+    const res: string = await t.execute({ pattern: "*.txt", maxResults: 2 });
+
+    expect(res).toContain("newest.txt");
+    expect(res).toContain("middle.txt");
+    expect(res).not.toContain("oldest.txt");
+    expect(res).toContain("truncated to 2 matches");
+  });
 });
 
 // ---------------------------------------------------------------------------

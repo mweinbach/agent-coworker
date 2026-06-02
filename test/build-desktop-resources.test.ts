@@ -116,7 +116,9 @@ describe("desktop resource build helpers", () => {
 
       await __internal.pruneStaleDesktopBinaryArtifacts(binariesDir);
 
-      await expect(fs.stat(path.join(binariesDir, "cowork-server-aarch64-apple-darwin"))).resolves.toBeDefined();
+      await expect(
+        fs.stat(path.join(binariesDir, "cowork-server-aarch64-apple-darwin")),
+      ).resolves.toBeDefined();
       await expect(fs.stat(path.join(binariesDir, "index.js.map"))).rejects.toThrow();
       await expect(fs.stat(path.join(binariesDir, "index.js.map.json"))).rejects.toThrow();
       await expect(fs.stat(path.join(binariesDir, "tsconfig.tsbuildinfo"))).rejects.toThrow();

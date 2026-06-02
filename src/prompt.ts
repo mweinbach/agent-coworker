@@ -211,6 +211,22 @@ function renderCodexNativeWebSearchPrompt(prompt: string, config: AgentConfig): 
   return `${prompt}\n\n## Codex Web Search Backend\n\nCodex app-server owns web search and page fetching for this Codex CLI session.\n\n- Use Codex-native web search/fetch capabilities for current web lookup and page reading.\n- Do not call local Cowork webSearch or webFetch tools; they are reserved for non-Codex providers.`;
 }
 
+function renderLocalWebToolProviderPrompt(prompt: string, config: AgentConfig): string {
+  const localProvider = getLocalWebSearchProviderFromProviderOptions(config.providerOptions);
+  const providerName = localProvider === "parallel" ? "Parallel" : "Exa";
+  const apiKeyEnv = localProvider === "parallel" ? "PARALLEL_API_KEY" : "EXA_API_KEY";
+  const credentialGuidance = `- For local webSearch, this workspace uses ${providerName}. If credentials are missing, ask the user to save a ${providerName} API key in Providers > Tool Providers or set \`${apiKeyEnv}\`.`;
+  const exaCredentialGuidancePatterns = [
+    /^- For the Google provider in this app, webSearch is Exa-backed\. If credentials are missing, ask the user to save an Exa API key in provider settings \(Google -> Exa API key\) or set `EXA_API_KEY`\.$/gm,
+    /^- For the Google provider in this app, webSearch uses Exa\. If webSearch is disabled due missing credentials, ask the user to save an Exa API key in provider settings \(Google -> Exa API key\) or set `EXA_API_KEY`\.$/gm,
+  ];
+  let out = prompt;
+  for (const pattern of exaCredentialGuidancePatterns) {
+    out = out.replace(pattern, credentialGuidance);
+  }
+  return out.replaceAll("Exa-extracted content", `${providerName}-extracted content`);
+}
+
 function renderGoogleNativeToolsPrompt(prompt: string, config: AgentConfig): string {
   if (config.provider !== "google") {
     return prompt;
@@ -605,6 +621,7 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
   prompt = renderCapabilitySpecificPrompt(prompt, supportedModel);
   prompt = renderMemorySpecificPrompt(prompt, config.enableMemory ?? true);
   prompt = renderA2uiSpecificPrompt(prompt, a2uiEnabled);
+  prompt = renderLocalWebToolProviderPrompt(prompt, config);
   prompt = renderCodexNativeWebSearchPrompt(prompt, config);
   prompt = renderGoogleNativeToolsPrompt(prompt, config);
   prompt = renderSpawnAgentSpecificPrompt(prompt, config);

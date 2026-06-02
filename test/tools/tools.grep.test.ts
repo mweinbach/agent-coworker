@@ -362,6 +362,77 @@ describe("grep tool", () => {
     expect(searchPathArg).toBe(path.resolve(dir));
   });
 
+  test("passes abort signal and timeout to ripgrep", async () => {
+    const dir = await tmpDir();
+    const controller = new AbortController();
+    let capturedOpts: any;
+
+    const argCaptureExecFile: any = (_cmd: string, _args: string[], opts: any, cb: any) => {
+      capturedOpts = opts;
+      cb(null, "match\n", "");
+    };
+
+    const t: any = createGrepTool(makeCtx(dir, { abortSignal: controller.signal }), {
+      execFileImpl: argCaptureExecFile,
+      ensureRipgrepImpl: fakeEnsureRipgrep,
+    });
+    await t.execute({
+      pattern: "match",
+      path: dir,
+      caseSensitive: true,
+      timeoutSeconds: 7,
+    });
+
+    expect(capturedOpts.signal).toBe(controller.signal);
+    expect(capturedOpts.timeout).toBe(7000);
+    expect(capturedOpts.killSignal).toBe("SIGTERM");
+  });
+
+  test("returns an aborted message when ripgrep is cancelled", async () => {
+    const dir = await tmpDir();
+    const abortingExecFile: any = (_cmd: string, _args: string[], _opts: any, cb: any) => {
+      const err: any = new Error("aborted");
+      err.name = "AbortError";
+      err.code = "ABORT_ERR";
+      cb(err, "", "");
+    };
+
+    const t: any = createGrepTool(makeCtx(dir), {
+      execFileImpl: abortingExecFile,
+      ensureRipgrepImpl: fakeEnsureRipgrep,
+    });
+    const res: string = await t.execute({ pattern: "match", path: dir, caseSensitive: true });
+
+    expect(res).toContain("grep aborted");
+  });
+
+  test("includes ripgrep stderr diagnostics on failures", async () => {
+    const dir = await tmpDir();
+    const failingExecFile: any = (_cmd: string, _args: string[], _opts: any, cb: any) => {
+      cb(new Error("Command failed"), "", "regex parse error: missing ]");
+    };
+
+    const t: any = createGrepTool(makeCtx(dir), {
+      execFileImpl: failingExecFile,
+      ensureRipgrepImpl: fakeEnsureRipgrep,
+    });
+    const res: string = await t.execute({ pattern: "[", path: dir, caseSensitive: true });
+
+    expect(res).toContain("regex parse error");
+  });
+
+  test("validates contextLines bounds when execute is called directly", async () => {
+    const dir = await tmpDir();
+    const t: any = createGrepTool(makeCtx(dir), {
+      execFileImpl: fakeExecFile,
+      ensureRipgrepImpl: fakeEnsureRipgrep,
+    });
+
+    await expect(
+      t.execute({ pattern: "match", path: dir, contextLines: 51, caseSensitive: true }),
+    ).rejects.toThrow(/grep invalid input/);
+  });
+
   test("omits -i flag when caseSensitive is true", async () => {
     const dir = await tmpDir();
     await fs.writeFile(path.join(dir, "file.txt"), "data\n", "utf-8");

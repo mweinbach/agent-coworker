@@ -55,6 +55,11 @@ describe("package manifest", () => {
     expect(paths).toContain("src/server/index.ts");
     expect(paths).toContain("src/server/research/export/exportPdf.tsx");
     expect(paths).toContain("config/defaults.json");
+    // Runtime route handlers import these JSON-RPC control schemas (the backups
+    // route -> schema.backups -> jsonrpcControlSchemas), so they must ship even
+    // though the codegen-only schema aggregator (schema.ts) is excluded.
+    expect(paths).toContain("src/server/jsonrpc/schema.backups.ts");
+    expect(paths).toContain("src/shared/jsonrpcControlSchemas.ts");
     expect(paths).not.toContain("docs/architecture.md");
     expect(paths).not.toContain("docs/bundling-guide.md");
     expect(paths).not.toContain("docs/custom-tools.md");
@@ -67,11 +72,9 @@ describe("package manifest", () => {
     expect(paths).not.toContain("src/server/jsonrpc/schema.ts");
     expect(paths).not.toContain("src/server/jsonrpc/schema.provider.ts");
     expect(paths).not.toContain("src/server/jsonrpc/schema.skills.ts");
-    expect(paths).not.toContain("src/server/jsonrpc/schema.backups.ts");
     expect(paths).not.toContain("src/server/jsonrpc/schema.memory.ts");
     expect(paths).not.toContain("src/server/jsonrpc/schema.mcp.ts");
     expect(paths).not.toContain("src/server/jsonrpc/schema.misc.ts");
-    expect(paths).not.toContain("src/shared/jsonrpcControlSchemas.ts");
     expect(paths).not.toContain("src/server/agents/DelegateRunner.ts");
     expect(paths).not.toContain("packages/harness/src/rawLoopValidation.ts");
     expect(paths).not.toContain("src/client/modelStreamReplay.ts");

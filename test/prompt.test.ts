@@ -434,6 +434,32 @@ describe("loadSystemPrompt", () => {
     expect(prompt).not.toContain("configured to use the local Parallel-backed webSearch tool");
   });
 
+  test("Gemini local-search prompt honors Parallel provider selection", async () => {
+    const prompt = await loadSystemPrompt(
+      makeConfig({
+        provider: "google",
+        model: "gemini-3.1-pro-preview",
+        preferredChildModel: "gemini-3.1-pro-preview",
+        providerOptions: {
+          "codex-cli": {
+            webSearchBackend: "parallel",
+          },
+          google: {
+            nativeWebSearch: false,
+          },
+        },
+      }),
+    );
+
+    expect(prompt).toContain("configured to use the local Parallel-backed webSearch tool");
+    expect(prompt).toContain("For local webSearch, this workspace uses Parallel");
+    expect(prompt).toContain("PARALLEL_API_KEY");
+    expect(prompt).toContain("Parallel-extracted content");
+    expect(prompt).not.toContain("webSearch is Exa-backed");
+    expect(prompt).not.toContain("Google -> Exa API key");
+    expect(prompt).not.toContain("Exa-extracted content");
+  });
+
   test("does not list Baseten child models in the spawnAgent summary", async () => {
     const config = makeConfig({
       provider: "baseten",

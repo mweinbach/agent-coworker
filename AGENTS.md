@@ -220,6 +220,8 @@ Durable rules distilled from prior corrections. Apply before editing, not after.
 - For desktop UI changes, verify the live running app via the Playwright/CDP workflow with `COWORK_ELECTRON_REMOTE_DEBUG=1`. Tests alone are not proof.
 - For Expo mobile changes, run an explicit Metro bundle path (e.g. `expo export`) — `run:ios`/`run:android` success alone misses repo-root import and Babel/plugin drift.
 - Before creating a GitHub release from a local tag, confirm the tag has been pushed to `origin`.
+- Before commiting, always run "bun run check", "bun run test", "bun run lint".
+
 
 ### Repo-Specific Contracts
 
@@ -259,4 +261,3 @@ Durable rules distilled from prior corrections. Apply before editing, not after.
 - For Electron main-process CommonJS deps, use `createRequire` interop, not named ESM imports.
 - For dense desktop settings panels, prefer compact controls and separators over nested rounded subcards.
 - Make sure all platform-specific desktop behavior is properly handled and tested for that platform. When making changes with native elements, do not rely on platform defaults or implicit behavior — always specify explicit styles and behaviors.
-

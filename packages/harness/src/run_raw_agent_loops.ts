@@ -60,6 +60,7 @@ import type {
   TodoItem,
 } from "../../../src/types";
 import { isProviderName } from "../../../src/types";
+import { createHarnessPlatformCommands } from "./platformCommands";
 import {
   isoSafeNow,
   maskApiKey,
@@ -1093,7 +1094,14 @@ function mergeProviderOptions(defaults: JsonRecord, override?: JsonRecord): Json
   return deepMergeRecords(merged, override);
 }
 
-function buildNvidiaDcfPrompt(runDir: string, model: string, modelGuidance: string): string {
+function buildNvidiaDcfPrompt(
+  runDir: string,
+  model: string,
+  modelGuidance: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const shellCommands = createHarnessPlatformCommands(platform);
+
   return `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
 
 Task: Build an NVIDIA DCF valuation workbook (XLSX) and machine-readable validation output.
@@ -1126,7 +1134,7 @@ Steps (must use tools):
    - "formulaChecks": object with at least 8 key cells and their formulas (or null if missing)
    - "impliedPricePerShareCell": sheet+cell reference
    - "timestampUtc"
-3) Use bash to run: python3 build_nvda_dcf.py
+3) Use bash to run: ${shellCommands.runPythonScript("build_nvda_dcf.py")}
 4) Use glob to confirm "nvda_dcf.xlsx" and "dcf_validation.json" exist.
 5) Use read to read back "dcf_validation.json" (limit=260, offset=1).
 6) Ensure your final JSON includes "skillToolCalled": true only if the skill tool call actually happened.
@@ -1177,7 +1185,7 @@ Final response must be a JSON object:
 { "primary": "<absolute path>", "check": "<absolute path>", "skillName": "${skillName}", "skillToolCalled": true, "end": "<<END_RUN>>" }`;
 }
 
-function buildDcfModelMatrixRuns(): RunSpec[] {
+function buildDcfModelMatrixRuns(platform: NodeJS.Platform = process.platform): RunSpec[] {
   const profiles: Array<{
     id: string;
     provider: ProviderName;
@@ -1262,7 +1270,8 @@ function buildDcfModelMatrixRuns(): RunSpec[] {
         { field: "validation", ext: ".json" },
       ]),
     ),
-    prompt: ({ runDir }) => buildNvidiaDcfPrompt(runDir, profile.model, profile.modelGuidance),
+    prompt: ({ runDir }) =>
+      buildNvidiaDcfPrompt(runDir, profile.model, profile.modelGuidance, platform),
   }));
 }
 
@@ -1429,8 +1438,11 @@ function buildGptSkillReliabilityRuns(): RunSpec[] {
   ];
 }
 
-export function buildGoogleCustomtoolsToolCoverageRuns(): RunSpec[] {
+export function buildGoogleCustomtoolsToolCoverageRuns(
+  platform: NodeJS.Platform = process.platform,
+): RunSpec[] {
   const model = "gemini-3.1-pro-preview-customtools";
+  const shellCommands = createHarnessPlatformCommands(platform);
 
   return [
     {
@@ -1487,7 +1499,7 @@ Steps (must use tools):
 2) Use write to create "gct02_skill_bash.txt" containing:
 - A title
 - A line with text "BASH_OUTPUT_TODO"
-3) Use bash to run command: pwd
+3) Use bash to run command: ${shellCommands.printWorkingDirectory()}
 4) Use glob with pattern "gct02_skill_bash.txt".
 5) Use read to read "gct02_skill_bash.txt" (limit=180, offset=1).
 
@@ -1561,7 +1573,9 @@ Final response must be raw JSON:
   ];
 }
 
-export function buildMixedRuns(): RunSpec[] {
+export function buildMixedRuns(platform: NodeJS.Platform = process.platform): RunSpec[] {
+  const shellCommands = createHarnessPlatformCommands(platform);
+
   return [
     {
       id: "run-01",
@@ -1614,7 +1628,7 @@ Final response must be a JSON object:
 Task: Produce an internal note explaining how command approvals and the bash tool work in this repo.
 
 Steps (must use tools):
-1) Use bash to run: pwd
+1) Use bash to run: ${shellCommands.printWorkingDirectory()}
 2) Use grep to search for pattern "approveCommand" in path "${repoDir}/src" (caseSensitive=true).
 3) Use read to read "${repoDir}/src/tools/bash.ts" (limit=200, offset=1).
 4) Use read to read "${repoDir}/src/utils/approval.ts" (limit=240, offset=1).
@@ -1623,7 +1637,7 @@ Steps (must use tools):
 - A table listing: approval hook, working directory behavior, timeout defaults, stdout/stderr truncation
 - A "Gotchas" section
 6) Use edit to replace the exact string "TODO_REPLACE_ME" in "bash_tool_notes.md" with a concrete gotcha you found.
-7) Use bash to run: ls -la
+7) Use bash to run: ${shellCommands.listDirectory()}
 
 Final response must be exactly two lines:
 bash_tool_notes: <absolute path>
@@ -1661,7 +1675,7 @@ Steps (must use tools):
 Also have the script write "verify.txt" with:
 - workbook sheet names
 - first 5 schedule lines (values or formulas)
-3) Use bash to run: python3 build_amortization.py
+3) Use bash to run: ${shellCommands.runPythonScript("build_amortization.py")}
 4) Use glob to confirm both files exist: "amortization.xlsx" and "verify.txt".
 5) Use read to read back "verify.txt" (limit=200, offset=1).
 
@@ -1697,7 +1711,7 @@ Steps (must use tools):
 - A bulleted list
 - A 2x3 table
 The script must also extract plain text from the DOCX into "brief_excerpt.txt".
-3) Use bash to run: python3 build_brief_docx.py
+3) Use bash to run: ${shellCommands.runPythonScript("build_brief_docx.py")}
 4) Use glob to confirm "brief.docx" and "brief_excerpt.txt" exist.
 5) Use read to read back "brief_excerpt.txt" (limit=200, offset=1).
 
@@ -1734,7 +1748,7 @@ Steps (must use tools):
 - Slide 4: a simple bar chart (if charting is too hard, include a labeled bar chart as shapes)
 - Slide 5: conclusion
 Also have the script write "deck_outline.txt" with one line per slide: "<index> - <title>".
-3) Use bash to run: python3 build_deck.py
+3) Use bash to run: ${shellCommands.runPythonScript("build_deck.py")}
 4) Use glob to confirm "deck.pptx" and "deck_outline.txt" exist.
 5) Use read to read back "deck_outline.txt" (limit=50, offset=1).
 
@@ -1772,7 +1786,7 @@ Steps (must use tools):
 Also have the script write "report_meta.json" with:
 - page_count
 - sha256 of the PDF
-3) Use bash to run: python3 build_report_pdf.py
+3) Use bash to run: ${shellCommands.runPythonScript("build_report_pdf.py")}
 4) Use glob to confirm "report.pdf" and "report_meta.json" exist.
 5) Use read to read back "report_meta.json" (limit=80, offset=1).
 
@@ -1869,7 +1883,7 @@ Steps (must use tools):
 3) Use write to create "ws_quickref.md" that includes:
 - A short introduction
 - A table of message/event types you found (name + one-sentence meaning)
-4) Use bash to run: wc -l ws_quickref.md
+4) Use bash to run: ${shellCommands.countLines("ws_quickref.md")}
 
 Final response must be exactly two lines:
 ws_quickref: <absolute path>
@@ -1900,7 +1914,7 @@ Steps (must use tools):
 - Creates "bundle.docx" that contains a short narrative summary and a table of the dataset
 - Creates "bundle.pptx" with 4 slides: title, key metrics, table, conclusion
 - Writes "bundle_manifest.json" listing filenames and sha256 hashes
-5) Use bash to run: python3 build_bundle.py
+5) Use bash to run: ${shellCommands.runPythonScript("build_bundle.py")}
 6) Use glob with pattern "bundle_*.*".
 7) Use read to read back "bundle_manifest.json" (limit=200, offset=1).
 
@@ -1941,8 +1955,9 @@ Final response must be JSON with keys run_id, memo, and end="<<END_RUN>>".`,
   ];
 }
 
-function buildCodexHarnessSmokeRuns(): RunSpec[] {
+function buildCodexHarnessSmokeRuns(platform: NodeJS.Platform = process.platform): RunSpec[] {
   const model = "gpt-5.4";
+  const shellCommands = createHarnessPlatformCommands(platform);
 
   return [
     {
@@ -1964,7 +1979,7 @@ Task: Smoke-test the harness against the current repo using a focused local tool
 
 Steps (must use tools):
 1) Use todoWrite to create 4 items and set exactly one item to in_progress.
-2) Use bash to run: pwd
+2) Use bash to run: ${shellCommands.printWorkingDirectory()}
 3) Use write to create "harness_source.txt" containing at least 3 lines, and one line must include the exact text "runTurnWithDeps".
 4) Use grep with pattern "runTurnWithDeps" in path "harness_source.txt".
 5) Use read to read "harness_source.txt" (limit=120, offset=1).

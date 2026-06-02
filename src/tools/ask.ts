@@ -17,6 +17,7 @@ const askStructuredInputSchema = z
     questions: z
       .array(
         z.object({
+          id: z.string().trim().min(1).optional().describe("Stable answer key for this question"),
           question: nonEmptyQuestionSchema.describe("The complete question to ask the user"),
           header: z.string().optional().describe("Short label shown in UX"),
           options: z
@@ -28,7 +29,6 @@ const askStructuredInputSchema = z
             )
             .optional()
             .describe("Structured options for the question"),
-          multiSelect: z.boolean().optional().describe("Whether multiple options may be selected"),
         }),
       )
       .min(1)
@@ -70,6 +70,22 @@ const askInputSchema = z
         message: "`options` is only valid with `question`.",
       });
     }
+
+    if (input.questions !== undefined) {
+      const seenAnswerKeys = new Set<string>();
+      input.questions.forEach((question, index) => {
+        const key = question.id ?? question.question;
+        if (seenAnswerKeys.has(key)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["questions", index, question.id ? "id" : "question"],
+            message: "Structured ask questions must have unique answer keys.",
+          });
+          return;
+        }
+        seenAnswerKeys.add(key);
+      });
+    }
   });
 
 export function createAskTool(ctx: ToolContext) {
@@ -90,7 +106,7 @@ export function createAskTool(ctx: ToolContext) {
         for (const q of validated.questions) {
           const options = q.options?.map((option) => option.label);
           const answer = await ctx.askUser(q.question, options);
-          answers[q.question] = answer;
+          answers[q.id ?? q.question] = answer;
         }
         const result = { questions: validated.questions, answers };
         ctx.log(`tool< ask ${JSON.stringify(result)}`);

@@ -34,12 +34,6 @@ const globEntrySchema = z.union([
     })
     .passthrough(),
 ]);
-const destroyableStreamSchema = z
-  .object({
-    destroy: z.unknown().optional(),
-  })
-  .passthrough();
-
 function assertSafeGlobPattern(pattern: string): void {
   const normalizedPattern = pattern.replace(/\\/g, "/");
   const maybeNegatedPattern = normalizedPattern.startsWith("!")
@@ -97,6 +91,15 @@ export function createGlobTool(ctx: ToolContext) {
         "glob",
       );
       const files: Array<{ path: string; mtimeMs: number }> = [];
+      let seen = 0;
+      const keepNewestCandidate = (candidate: { path: string; mtimeMs: number }) => {
+        seen += 1;
+        files.push(candidate);
+        if (files.length > effectiveMaxResults * 2) {
+          files.sort((a, b) => b.mtimeMs - a.mtimeMs);
+          files.length = effectiveMaxResults;
+        }
+      };
       const stream = fg.stream(normalizedPattern, {
         cwd: searchCwd,
         dot: false,
@@ -105,38 +108,28 @@ export function createGlobTool(ctx: ToolContext) {
         braceExpansion: false,
         followSymbolicLinks: false,
       });
-      let truncated = false;
       for await (const entry of stream as AsyncIterable<unknown>) {
         if (ctx.abortSignal?.aborted) throw new Error("Cancelled by user");
         const parsedEntry = globEntrySchema.safeParse(entry);
         if (!parsedEntry.success) continue;
 
+        const relativePath =
+          typeof parsedEntry.data === "string" ? parsedEntry.data : parsedEntry.data.path;
+        const absoluteMatchPath = path.resolve(searchCwd, relativePath);
+        await assertReadPathAllowed(absoluteMatchPath, ctx.config, "glob");
+
         if (typeof parsedEntry.data === "string") {
-          files.push({ path: parsedEntry.data, mtimeMs: 0 });
+          keepNewestCandidate({ path: parsedEntry.data, mtimeMs: 0 });
         } else {
-          files.push({
+          keepNewestCandidate({
             path: parsedEntry.data.path,
             mtimeMs: parsedEntry.data.stats?.mtimeMs ?? 0,
           });
         }
-
-        if (files.length >= effectiveMaxResults) {
-          truncated = true;
-          const destroyableStream = destroyableStreamSchema.safeParse(stream);
-          if (destroyableStream.success && typeof destroyableStream.data.destroy === "function") {
-            destroyableStream.data.destroy?.();
-          }
-          break;
-        }
       }
       files.sort((a, b) => b.mtimeMs - a.mtimeMs);
-
-      await Promise.all(
-        files.map(async (f) => {
-          const absoluteMatchPath = path.resolve(searchCwd, f.path);
-          await assertReadPathAllowed(absoluteMatchPath, ctx.config, "glob");
-        }),
-      );
+      files.length = Math.min(files.length, effectiveMaxResults);
+      const truncated = seen > effectiveMaxResults;
 
       const listed = files.map((f) => f.path).join("\n");
       const res = listed

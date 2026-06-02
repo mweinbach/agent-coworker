@@ -9,9 +9,20 @@ const todoSchema = z.object({
   status: z.enum(["pending", "in_progress", "completed"]),
   activeForm: z.string().min(1).describe("Present continuous form"),
 });
-const todoWriteInputSchema = z.object({
-  todos: z.array(todoSchema).describe("The complete, updated todo list"),
-});
+const todoWriteInputSchema = z
+  .object({
+    todos: z.array(todoSchema).describe("The complete, updated todo list"),
+  })
+  .superRefine((value, ctx) => {
+    const inProgressCount = value.todos.filter((todo) => todo.status === "in_progress").length;
+    if (inProgressCount > 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["todos"],
+        message: "At most one todo may be in_progress.",
+      });
+    }
+  });
 
 export let currentTodos: TodoItem[] = [];
 
@@ -27,11 +38,12 @@ const todoWrite = defineTool({
 
 Rules:
 - Use this for multi-step tasks.
-- Exactly one item should be in_progress.
+- No more than one item should be in_progress; when work is done, all items may be completed.
 - Mark tasks completed immediately when done.
 - Include a final verification step for non-trivial work.`,
   inputSchema: todoWriteInputSchema,
-  execute: async ({ todos }: z.infer<typeof todoWriteInputSchema>) => {
+  execute: async (input: z.input<typeof todoWriteInputSchema>) => {
+    const { todos } = todoWriteInputSchema.parse(input);
     currentTodos = todos;
     for (const fn of listeners) fn(todos);
 
@@ -44,7 +56,8 @@ export function createTodoWriteTool(ctx: ToolContext) {
   return defineTool({
     description: todoWrite.description,
     inputSchema: todoWriteInputSchema,
-    execute: async ({ todos }: z.infer<typeof todoWriteInputSchema>) => {
+    execute: async (input: z.input<typeof todoWriteInputSchema>) => {
+      const { todos } = todoWriteInputSchema.parse(input);
       ctx.log(`tool> todoWrite ${JSON.stringify({ count: todos.length })}`);
       ctx.updateTodos?.(todos);
       // Keep global store updated too, so existing CLI renderers still work.

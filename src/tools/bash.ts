@@ -1,7 +1,10 @@
 import { execFile } from "node:child_process";
-import path from "node:path";
 import { z } from "zod";
 
+import {
+  buildPlatformShellCommandWithRuntimePrelude,
+  buildPlatformShellExecutionPlan,
+} from "../platform/shell";
 import { getShellCommandPolicyViolation } from "../server/agents/commandPolicy";
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
@@ -42,27 +45,6 @@ type ExecRunner = (
 
 const abortByNameSchema = z.object({ name: z.literal("AbortError") }).passthrough();
 const errorCodeSchema = z.object({ code: z.union([z.string(), z.number()]) }).passthrough();
-
-function posixShellQuote(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
-}
-
-function powerShellSingleQuote(value: string): string {
-  return `'${value.replaceAll("'", "''")}'`;
-}
-
-function dedupePathDirs(pathDirs: string[], platform: NodeJS.Platform): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const dir of pathDirs) {
-    if (!dir) continue;
-    const key = platform === "win32" ? dir.toLowerCase() : dir;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(dir);
-  }
-  return out;
-}
 
 function execFileAsync(
   file: string,
@@ -162,42 +144,6 @@ let runShellCommandOverrideForTests:
     }) => Promise<ExecResult>)
   | null = null;
 
-function buildShellExecutionPlan(
-  platform: NodeJS.Platform,
-  command: string,
-): Array<{ file: string; args: string[] }> {
-  if (platform === "win32") {
-    const args = [
-      "-NoProfile",
-      "-NonInteractive",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-Command",
-      command,
-    ];
-    return [
-      { file: "pwsh", args },
-      { file: "powershell.exe", args },
-    ];
-  }
-
-  const userShell = process.env.SHELL?.trim();
-  const plan: Array<{ file: string; args: string[] }> = [];
-
-  if (userShell) {
-    plan.push({ file: userShell, args: ["-lc", command] });
-  }
-
-  plan.push(
-    { file: "/bin/bash", args: ["-lc", command] },
-    { file: "/bin/sh", args: ["-lc", command] },
-    { file: "bash", args: ["-lc", command] },
-    { file: "sh", args: ["-lc", command] },
-  );
-
-  return plan;
-}
-
 async function runShellCommandWithExec(opts: {
   command: string;
   cwd: string;
@@ -209,64 +155,12 @@ async function runShellCommandWithExec(opts: {
 }): Promise<ExecResult> {
   const maxBuffer = 1024 * 1024 * 10;
 
-  let command = opts.command;
-  const env = opts.env || process.env;
-  const runtimePython = env.COWORK_ARTIFACT_RUNTIME_PYTHON;
-  const runtimeNode = env.COWORK_ARTIFACT_RUNTIME_NODE;
-  const managedSofficeShim = env.COWORK_SOFFICE || env.COWORK_MANAGED_SOFFICE_SHIM;
-  const managedSofficeShimDir =
-    env.COWORK_MANAGED_SOFFICE_SHIM_DIR ||
-    (managedSofficeShim ? path.dirname(managedSofficeShim) : undefined);
-
-  const pathDirs: string[] = [];
-  if (managedSofficeShimDir) {
-    pathDirs.push(managedSofficeShimDir);
-  }
-  if (runtimeNode) {
-    pathDirs.push(path.dirname(runtimeNode));
-  }
-  if (runtimePython) {
-    const pythonDir = path.dirname(runtimePython);
-    pathDirs.push(pythonDir);
-    if (opts.platform === "win32") {
-      pathDirs.push(path.join(pythonDir, "Scripts"));
-    }
-  }
-
-  const uniquePathDirs = dedupePathDirs(pathDirs, opts.platform);
-  const envExports: Record<string, string> = {};
-  if (managedSofficeShim) {
-    envExports.COWORK_SOFFICE = managedSofficeShim;
-  }
-  if (managedSofficeShimDir) {
-    envExports.COWORK_MANAGED_SOFFICE_SHIM_DIR = managedSofficeShimDir;
-  }
-
-  if (uniquePathDirs.length > 0 || Object.keys(envExports).length > 0) {
-    if (opts.platform === "win32") {
-      const statements: string[] = [];
-      if (uniquePathDirs.length > 0) {
-        statements.push(
-          `$env:PATH = ${powerShellSingleQuote(uniquePathDirs.join(";"))} + ';' + $env:PATH`,
-        );
-      }
-      for (const [key, value] of Object.entries(envExports)) {
-        statements.push(`$env:${key} = ${powerShellSingleQuote(value)}`);
-      }
-      command = `${statements.join("; ")}; ${command}`;
-    } else {
-      const statements: string[] = [];
-      if (uniquePathDirs.length > 0) {
-        statements.push(`export PATH=${posixShellQuote(uniquePathDirs.join(":"))}:$PATH`);
-      }
-      for (const [key, value] of Object.entries(envExports)) {
-        statements.push(`export ${key}=${posixShellQuote(value)}`);
-      }
-      command = `${statements.join(" && ")} && ${command}`;
-    }
-  }
-
-  const plan = buildShellExecutionPlan(opts.platform, command);
+  const command = buildPlatformShellCommandWithRuntimePrelude({
+    command: opts.command,
+    platform: opts.platform,
+    env: opts.env,
+  });
+  const plan = buildPlatformShellExecutionPlan(opts.platform, command);
 
   for (const candidate of plan) {
     const result = await opts.execRunner(candidate.file, candidate.args, {
@@ -390,7 +284,7 @@ export function createBashTool(ctx: ToolContext) {
 
 export const __internal = {
   buildBashToolDescription,
-  buildShellExecutionPlan,
+  buildShellExecutionPlan: buildPlatformShellExecutionPlan,
   runShellCommandWithExec,
   setRunShellCommandForTests(
     runner: (opts: {

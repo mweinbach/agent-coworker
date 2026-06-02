@@ -1,3 +1,5 @@
+import { codexDynamicToolSpecs } from "../../src/runtime/codexAppServer/config";
+import { filterToolsForCodexDynamicBoundary } from "../../src/tools/codexBoundary";
 import {
   afterEach,
   bashInternal,
@@ -99,6 +101,44 @@ describe("createTools", () => {
     );
 
     expect(tools).toHaveProperty("webSearch");
+  });
+
+  test("exposes legacy codex-cli webSearch through the dynamic tool boundary", async () => {
+    const dir = await tmpDir();
+    const rawTools = createTools(
+      makeCtx(dir, {
+        config: makeConfig(dir, {
+          provider: "codex-cli",
+          model: "gpt-5.2",
+          preferredChildModel: "gpt-5.2",
+          providerOptions: {
+            "codex-cli": {
+              webSearchBackend: "exa",
+            },
+          },
+        }),
+      }),
+    );
+
+    const dynamicTools = filterToolsForCodexDynamicBoundary(rawTools);
+    expect(dynamicTools).toHaveProperty("webSearch");
+    expect(codexDynamicToolSpecs(dynamicTools).map((tool) => tool.name)).toContain("webSearch");
+  });
+
+  test("listSessionToolNames reports legacy codex-cli webSearch when configured", () => {
+    const names = listSessionToolNames({
+      provider: "codex-cli",
+      providerOptions: {
+        "codex-cli": {
+          webSearchBackend: "exa",
+        },
+      },
+      enableMemory: true,
+    });
+
+    expect(names).toContain("webSearch");
+    expect(names).not.toContain("bash");
+    expect(names).not.toContain("webFetch");
   });
 
   test("replaces local webSearch but keeps webFetch for google when native web tools are enabled", async () => {
@@ -203,6 +243,19 @@ describe("createTools", () => {
     );
 
     expect(tools).not.toHaveProperty("a2ui");
+  });
+
+  test("listSessionToolNames includes a2ui when the experiment is enabled", async () => {
+    await withEnv("COWORK_EXPERIMENTAL_A2UI", "1", async () => {
+      const dir = await tmpDir();
+      const names = listSessionToolNames(
+        makeConfig(dir, {
+          enableA2ui: true,
+        }),
+      );
+
+      expect(names).toContain("a2ui");
+    });
   });
 
   test("listSessionToolNames includes root-session agent controls when requested", () => {

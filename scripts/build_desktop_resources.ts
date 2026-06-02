@@ -734,7 +734,10 @@ async function pruneStaleDesktopBinaryArtifacts(desktopBinariesDir: string): Pro
       if (!entry.isFile()) {
         continue;
       }
-      if (staleNames.has(entry.name) || staleSuffixes.some((suffix) => entry.name.endsWith(suffix))) {
+      if (
+        staleNames.has(entry.name) ||
+        staleSuffixes.some((suffix) => entry.name.endsWith(suffix))
+      ) {
         await fs.rm(full, { force: true });
         removed += 1;
       }

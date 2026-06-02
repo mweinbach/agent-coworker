@@ -10,6 +10,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
+import { resolveWorkspaceDisplayTargets } from "../../../app/workspaceDisplayTargets";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import {
@@ -96,9 +97,16 @@ export function DeveloperPage() {
   >(null);
   const [diagnosticsStatus, setDiagnosticsStatus] = useState<string | null>(null);
 
-  const workspace = useMemo(
-    () => workspaces.find((entry) => entry.id === selectedWorkspaceId) ?? workspaces[0] ?? null,
+  const { targets: workspaceTargets, activeTarget: activeWorkspaceTarget } = useMemo(
+    () => resolveWorkspaceDisplayTargets(workspaces, selectedWorkspaceId),
     [selectedWorkspaceId, workspaces],
+  );
+  const workspace = useMemo(
+    () =>
+      activeWorkspaceTarget
+        ? (workspaces.find((entry) => entry.id === activeWorkspaceTarget.workspaceId) ?? null)
+        : null,
+    [activeWorkspaceTarget, workspaces],
   );
   const workspaceRuntime = useMemo(
     () => (workspace ? (workspaceRuntimeById[workspace.id] ?? null) : null),
@@ -137,6 +145,11 @@ export function DeveloperPage() {
         ? { defaultToolOutputOverflowChars: DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS }
         : { clearDefaultToolOutputOverflowChars: true },
     );
+  };
+  const handleWorkspaceTargetChange = (targetId: string) => {
+    const target = workspaceTargets.find((entry) => entry.id === targetId);
+    if (!target) return;
+    void selectWorkspace(target.workspaceId);
   };
 
   const parsedOverflowThreshold = parseOverflowThresholdDraft(overflowThresholdDraft);
@@ -460,20 +473,20 @@ export function DeveloperPage() {
             </div>
           ) : (
             <>
-              {workspacePickerEnabled && workspaces.length > 1 ? (
+              {workspacePickerEnabled && workspaceTargets.length > 1 && activeWorkspaceTarget ? (
                 <div className="space-y-2">
                   <div className="text-sm font-medium">Workspace</div>
                   <Select
-                    value={workspace.id}
-                    onValueChange={(value) => void selectWorkspace(value)}
+                    value={activeWorkspaceTarget.id}
+                    onValueChange={handleWorkspaceTargetChange}
                   >
                     <SelectTrigger aria-label="Developer workspace">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {workspaces.map((entry) => (
+                      {workspaceTargets.map((entry) => (
                         <SelectItem key={entry.id} value={entry.id}>
-                          {entry.name}
+                          {entry.label}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -482,8 +495,12 @@ export function DeveloperPage() {
               ) : null}
 
               <div className="rounded-xl border border-border/70 bg-muted/15 p-4">
-                <div className="text-sm font-medium text-foreground">{workspace.name}</div>
-                <div className="mt-1 text-xs text-muted-foreground">{workspace.path}</div>
+                <div className="text-sm font-medium text-foreground">
+                  {activeWorkspaceTarget?.label ?? workspace.name}
+                </div>
+                <div className="mt-1 text-xs text-muted-foreground">
+                  {activeWorkspaceTarget?.targetPath ?? workspace.path}
+                </div>
               </div>
 
               <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">

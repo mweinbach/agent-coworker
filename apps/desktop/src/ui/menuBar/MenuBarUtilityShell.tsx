@@ -2,6 +2,7 @@ import { ArrowUpRightIcon, MessageSquarePlusIcon, XIcon } from "lucide-react";
 import { type CSSProperties, useMemo } from "react";
 
 import { useAppStore } from "../../app/store";
+import { workspaceLabelForThread } from "../../app/workspaceDisplayTargets";
 import { Button } from "../../components/ui/button";
 import { showMainWindow, showQuickChatWindow, windowClose } from "../../lib/desktopCommands";
 import { cn } from "../../lib/utils";
@@ -104,9 +105,11 @@ export function MenuBarUtilityShell({ init, ready, startupError }: MenuBarUtilit
                   ) : (
                     <div className="space-y-0.5">
                       {recentThreads.map((thread) => {
-                        const workspaceName =
-                          workspaces.find((workspace) => workspace.id === thread.workspaceId)
-                            ?.name ?? "Cowork";
+                        const workspaceName = workspaceLabelForThread(
+                          workspaces,
+                          thread.workspaceId,
+                          "Cowork",
+                        );
                         return (
                           <div
                             key={thread.id}

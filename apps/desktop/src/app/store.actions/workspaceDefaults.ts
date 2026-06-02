@@ -853,6 +853,7 @@ export function createWorkspaceDefaultsActions(
       if (!sourceWorkspace) {
         return;
       }
+      const chatSettingsTarget = !sharedSettings && isOneOffChatWorkspace(sourceWorkspace);
 
       const optimisticWorkspace = resolveWorkspaceDefaults(sourceWorkspace.id) ?? sourceWorkspace;
       if (!optimisticWorkspace) {
@@ -865,9 +866,11 @@ export function createWorkspaceDefaultsActions(
         workspaces: s.workspaces.map((workspace) =>
           sharedSettings
             ? copyWorkspaceSettings(workspace, nextWorkspace)
-            : workspace.id === sourceWorkspace.id
-              ? nextWorkspace
-              : workspace,
+            : chatSettingsTarget && isOneOffChatWorkspace(workspace)
+              ? copyWorkspaceSettings(workspace, nextWorkspace)
+              : workspace.id === sourceWorkspace.id
+                ? nextWorkspace
+                : workspace,
         ),
       }));
       await persistNow(get);
@@ -893,6 +896,27 @@ export function createWorkspaceDefaultsActions(
         userProfilePatch !== undefined ||
         workspacePatch.yolo !== undefined;
       if (!shouldSyncCoreSettings) {
+        return;
+      }
+
+      if (chatSettingsTarget) {
+        const workspaceIds = get()
+          .workspaces.filter((workspace) => isOneOffChatWorkspace(workspace))
+          .map((workspace) => workspace.id);
+        await syncWorkspaceDefaultsToRuntime(sourceWorkspace.id, {
+          ensureControl: true,
+          notifyOnMissingControl: true,
+        });
+        await Promise.all(
+          workspaceIds
+            .filter((targetWorkspaceId) => targetWorkspaceId !== sourceWorkspace.id)
+            .map((targetWorkspaceId) =>
+              syncWorkspaceDefaultsToRuntime(targetWorkspaceId, {
+                ensureControl: false,
+                notifyOnMissingControl: false,
+              }),
+            ),
+        );
         return;
       }
 

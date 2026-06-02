@@ -213,7 +213,7 @@ describe("workspace settings sync", () => {
     });
   });
 
-  test("per-target workspace defaults allow one-off chats to diverge", async () => {
+  test("per-target workspace defaults update grouped one-off chats", async () => {
     jsonRpcResponseOverrides.set("cowork/session/defaults/apply", async (params: any) => ({
       event: {
         type: "session_config",
@@ -260,6 +260,24 @@ describe("workspace settings sync", () => {
           defaultBackupsEnabled: true,
           yolo: false,
         },
+        {
+          id: "chat-2",
+          name: "One-off chat",
+          path: "/tmp/one-off-chat-2",
+          workspaceKind: "oneOffChat",
+          createdAt: "2026-06-02T00:00:00.000Z",
+          lastOpenedAt: "2026-06-02T00:00:00.000Z",
+          wsProtocol: "jsonrpc",
+          defaultProvider: "google",
+          defaultModel: "ajax-two",
+          defaultPreferredChildModel: "ajax-two",
+          defaultChildModelRoutingMode: "same-provider",
+          defaultPreferredChildModelRef: "google:ajax-two",
+          defaultAllowedChildModelRefs: [],
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
       ],
     }));
 
@@ -272,12 +290,16 @@ describe("workspace settings sync", () => {
     const state = useAppStore.getState();
     const project = state.workspaces.find((entry) => entry.id === workspaceId);
     const oneOff = state.workspaces.find((entry) => entry.id === "chat-1");
+    const otherOneOff = state.workspaces.find((entry) => entry.id === "chat-2");
     expect(project?.defaultModel).toBe("gpt-5.2");
     expect(project?.defaultBackupsEnabled).toBe(true);
     expect(project?.yolo).toBe(false);
     expect(oneOff?.defaultModel).toBe("ajax-custom");
     expect(oneOff?.defaultBackupsEnabled).toBe(false);
     expect(oneOff?.yolo).toBe(true);
+    expect(otherOneOff?.defaultModel).toBe("ajax-custom");
+    expect(otherOneOff?.defaultBackupsEnabled).toBe(false);
+    expect(otherOneOff?.yolo).toBe(true);
   });
 
   test("updateWorkspaceDefaults reports partial apply when the control request fails", async () => {

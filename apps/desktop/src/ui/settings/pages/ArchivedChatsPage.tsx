@@ -1,5 +1,6 @@
 import { ArchiveIcon, ClockIcon, RotateCcwIcon, Trash2Icon } from "lucide-react";
 import { useAppStore } from "../../../app/store";
+import { workspaceLabelForThread } from "../../../app/workspaceDisplayTargets";
 import { Button } from "../../../components/ui/button";
 import { Card, CardContent } from "../../../components/ui/card";
 import {
@@ -98,8 +99,11 @@ export function ArchivedChatsPage() {
         ) : (
           <div className="border border-border/45 rounded-xl divide-y divide-border/40 overflow-hidden bg-background">
             {archivedThreads.map((thread) => {
-              const wsName =
-                workspaces.find((w) => w.id === thread.workspaceId)?.name || "Unknown workspace";
+              const wsName = workspaceLabelForThread(
+                workspaces,
+                thread.workspaceId,
+                "Unknown workspace",
+              );
               return (
                 <div
                   key={thread.id}

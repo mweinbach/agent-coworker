@@ -11,7 +11,7 @@ import {
   SaveIcon,
   Trash2Icon,
 } from "lucide-react";
-import { type ComponentType, useEffect, useEffectEvent, useState } from "react";
+import { type ComponentType, useEffect, useEffectEvent, useMemo, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
 import { workspaceBackupActionKey } from "../../../app/store.helpers/backupActionKey";
@@ -21,6 +21,7 @@ import type {
   WorkspaceRecord,
   WorkspaceRuntime,
 } from "../../../app/types";
+import { resolveWorkspaceDisplayTargets } from "../../../app/workspaceDisplayTargets";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import {
@@ -656,14 +657,20 @@ export function BackupPage(props: BackupPageProps = {}) {
   const threads = serverState?.threads ?? threadsFromStore;
   const threadRuntimeById = serverState?.threadRuntimeById ?? threadRuntimeByIdFromStore;
 
-  const workspaceList =
-    props.workspace !== undefined ? (props.workspace ? [props.workspace] : []) : workspaces;
+  const workspaceList = useMemo(
+    () => (props.workspace !== undefined ? (props.workspace ? [props.workspace] : []) : workspaces),
+    [props.workspace, workspaces],
+  );
+  const { targets: workspaceTargets, activeTarget: activeWorkspaceTarget } = useMemo(
+    () => resolveWorkspaceDisplayTargets(workspaceList, selectedWorkspaceId),
+    [selectedWorkspaceId, workspaceList],
+  );
   const workspace =
     props.workspace !== undefined
       ? props.workspace
-      : selectedWorkspaceId
-        ? (workspaces.find((entry) => entry.id === selectedWorkspaceId) ?? workspaces[0] ?? null)
-        : (workspaces[0] ?? null);
+      : activeWorkspaceTarget
+        ? (workspaceList.find((entry) => entry.id === activeWorkspaceTarget.workspaceId) ?? null)
+        : null;
   const runtime =
     props.runtime !== undefined
       ? props.runtime
@@ -847,20 +854,25 @@ export function BackupPage(props: BackupPageProps = {}) {
             <RefreshCwIcon className={cn("mr-2 h-3.5 w-3.5", loading ? "animate-spin" : "")} />
             Refresh
           </Button>
-          {workspacePickerEnabled && workspaceList.length > 1 && props.workspace === undefined ? (
+          {workspacePickerEnabled &&
+          workspaceTargets.length > 1 &&
+          activeWorkspaceTarget &&
+          props.workspace === undefined ? (
             <Select
-              value={workspace.id}
+              value={activeWorkspaceTarget.id}
               onValueChange={(val) => {
-                if (val !== workspace.id) void selectWorkspaceFromStore(val);
+                if (val === activeWorkspaceTarget.id) return;
+                const target = workspaceTargets.find((entry) => entry.id === val);
+                if (target) void selectWorkspaceFromStore(target.workspaceId);
               }}
             >
               <SelectTrigger className="h-9 w-[min(200px,100%)] border-border/70 bg-background text-sm">
                 <SelectValue placeholder="Select workspace" />
               </SelectTrigger>
               <SelectContent>
-                {workspaceList.map((ws) => (
-                  <SelectItem key={ws.id} value={ws.id}>
-                    {ws.name}
+                {workspaceTargets.map((target) => (
+                  <SelectItem key={target.id} value={target.id}>
+                    {target.label}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -873,6 +885,7 @@ export function BackupPage(props: BackupPageProps = {}) {
       settingsChrome.setChrome(null);
     };
   }, [
+    activeWorkspaceTarget,
     loading,
     props.onRefresh,
     props.workspace,
@@ -882,7 +895,7 @@ export function BackupPage(props: BackupPageProps = {}) {
     workspace,
     workspaceBackupsVisibleEnabled,
     workspacePickerEnabled,
-    workspaceList,
+    workspaceTargets,
   ]);
 
   if (!workspace) {
@@ -902,7 +915,9 @@ export function BackupPage(props: BackupPageProps = {}) {
       <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
         <div className="space-y-3" data-backup-top="true">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm font-medium text-foreground">{workspace.name}</span>
+            <span className="text-sm font-medium text-foreground">
+              {activeWorkspaceTarget?.label ?? workspace.name}
+            </span>
             <span aria-hidden="true" className="text-muted-foreground/35">
               ·
             </span>

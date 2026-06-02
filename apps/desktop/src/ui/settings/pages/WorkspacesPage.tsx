@@ -42,6 +42,7 @@ import {
   type WorkspaceRecord,
   type WorkspaceUserProfile,
 } from "../../../app/types";
+import { resolveWorkspaceDisplayTargets } from "../../../app/workspaceDisplayTargets";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import {
@@ -922,14 +923,13 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
     () => workspaces.filter((workspace) => !isOneOffChatWorkspace(workspace)),
     [workspaces],
   );
-  const settingsTargetWorkspaces = useMemo(
-    () =>
-      perWorkspaceSettings
-        ? workspaces
-        : projectWorkspaces.length > 0
-          ? projectWorkspaces
-          : workspaces,
-    [perWorkspaceSettings, projectWorkspaces, workspaces],
+  const { targets: settingsTargets, activeTarget: activeSettingsTarget } = useMemo(
+    () => resolveWorkspaceDisplayTargets(workspaces, selectedWorkspaceId),
+    [selectedWorkspaceId, workspaces],
+  );
+  const defaultSettingsSourceWorkspaces = useMemo(
+    () => (projectWorkspaces.length > 0 ? projectWorkspaces : workspaces),
+    [projectWorkspaces, workspaces],
   );
 
   const ws = useMemo(() => {
@@ -937,17 +937,27 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
       ? (workspaces.find((workspace) => workspace.id === selectedWorkspaceId) ?? null)
       : null;
     if (perWorkspaceSettings) {
-      return selected ?? settingsTargetWorkspaces[0] ?? null;
+      return activeSettingsTarget
+        ? (workspaces.find((workspace) => workspace.id === activeSettingsTarget.workspaceId) ??
+            null)
+        : null;
     }
     const selectedProject = selected && !isOneOffChatWorkspace(selected) ? selected : null;
-    return selectedProject ?? projectWorkspaces[0] ?? settingsTargetWorkspaces[0] ?? null;
+    return selectedProject ?? projectWorkspaces[0] ?? defaultSettingsSourceWorkspaces[0] ?? null;
   }, [
+    activeSettingsTarget,
+    defaultSettingsSourceWorkspaces,
     perWorkspaceSettings,
     projectWorkspaces,
     selectedWorkspaceId,
-    settingsTargetWorkspaces,
     workspaces,
   ]);
+  const selectedSettingsTarget = perWorkspaceSettings ? activeSettingsTarget : null;
+  const handleSettingsTargetChange = (targetId: string) => {
+    const target = settingsTargets.find((entry) => entry.id === targetId);
+    if (!target) return;
+    void selectWorkspace(target.workspaceId);
+  };
 
   const provider = (ws?.defaultProvider ?? "google") as ProviderName;
   const model = (ws?.defaultModel ?? "").trim();
@@ -1065,7 +1075,8 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
 
   return (
     <div className="space-y-5">
-      {settingsTargetWorkspaces.length === 0 || !ws ? (
+      {(perWorkspaceSettings ? settingsTargets.length : defaultSettingsSourceWorkspaces.length) ===
+        0 || !ws ? (
         <Card className="border-border/80 bg-card/85">
           <CardContent className="p-8 text-center">
             {workspaceLifecycleEnabled ? (
@@ -1135,7 +1146,7 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
                   <div>
                     <CardTitle>Settings target</CardTitle>
                     <CardDescription>
-                      Selected folder or chat for this settings mode.
+                      Selected project or chat group for this settings mode.
                     </CardDescription>
                   </div>
                   {workspaceLifecycleEnabled ? (
@@ -1146,20 +1157,27 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
                 </CardHeader>
                 <CardContent className="space-y-3">
                   <div>
-                    <div className="text-sm font-medium text-foreground">{ws.name}</div>
-                    <div className="text-xs text-muted-foreground">{ws.path}</div>
+                    <div className="text-sm font-medium text-foreground">
+                      {selectedSettingsTarget?.label ?? ws.name}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      {selectedSettingsTarget?.targetPath ?? ws.path}
+                    </div>
                   </div>
-                  {workspacePickerEnabled && settingsTargetWorkspaces.length > 1 ? (
-                    <Select value={ws.id} onValueChange={(value) => void selectWorkspace(value)}>
+                  {workspacePickerEnabled &&
+                  settingsTargets.length > 1 &&
+                  selectedSettingsTarget ? (
+                    <Select
+                      value={selectedSettingsTarget.id}
+                      onValueChange={handleSettingsTargetChange}
+                    >
                       <SelectTrigger aria-label="Settings target">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {settingsTargetWorkspaces.map((workspace) => (
-                          <SelectItem key={workspace.id} value={workspace.id}>
-                            {isOneOffChatWorkspace(workspace)
-                              ? `${workspace.name} (chat)`
-                              : workspace.name}
+                        {settingsTargets.map((target) => (
+                          <SelectItem key={target.id} value={target.id}>
+                            {target.label}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -1332,7 +1350,7 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
                         />
                       </div>
 
-                      {workspaceLifecycleEnabled ? (
+                      {workspaceLifecycleEnabled && selectedSettingsTarget?.kind !== "chats" ? (
                         <div className="flex items-center justify-between gap-3 max-[960px]:items-start max-[960px]:flex-col">
                           <div>
                             <div className="text-sm font-medium">Restart server</div>
@@ -1350,7 +1368,7 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
                         </div>
                       ) : null}
 
-                      {workspaceLifecycleEnabled ? (
+                      {workspaceLifecycleEnabled && selectedSettingsTarget?.kind !== "chats" ? (
                         <div className="flex items-center justify-between gap-3 rounded-md border border-destructive/20 bg-destructive/5 p-3 max-[960px]:items-start max-[960px]:flex-col">
                           <div>
                             <div className="text-sm font-medium text-destructive">
@@ -1809,7 +1827,7 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
                   />
                 </div>
 
-                {workspaceLifecycleEnabled ? (
+                {workspaceLifecycleEnabled && selectedSettingsTarget?.kind !== "chats" ? (
                   <div className="flex items-center justify-between gap-3 max-[960px]:items-start max-[960px]:flex-col">
                     <div>
                       <div className="text-sm font-medium">Restart server</div>
@@ -1827,7 +1845,7 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
                   </div>
                 ) : null}
 
-                {workspaceLifecycleEnabled ? (
+                {workspaceLifecycleEnabled && selectedSettingsTarget?.kind !== "chats" ? (
                   <div className="flex items-center justify-between gap-3 max-[960px]:items-start max-[960px]:flex-col">
                     <div>
                       <div className="text-sm font-medium">Remove from Cowork</div>

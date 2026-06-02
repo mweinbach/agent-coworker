@@ -2,6 +2,10 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAppStore } from "../../app/store";
 import type { OnboardingStep } from "../../app/types";
+import {
+  resolveWorkspaceDisplayTargets,
+  workspaceDisplayLabel,
+} from "../../app/workspaceDisplayTargets";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
@@ -139,16 +143,28 @@ function WorkspaceStep({ onContinue, onBack }: { onContinue: () => void; onBack:
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const workspaceRuntimeById = useAppStore((s) => s.workspaceRuntimeById);
 
+  const { targets: workspaceTargets, activeTarget: activeWorkspaceTarget } = useMemo(
+    () => resolveWorkspaceDisplayTargets(workspaces, selectedWorkspaceId),
+    [selectedWorkspaceId, workspaces],
+  );
   const workspace = useMemo(
-    () => workspaces.find((w) => w.id === selectedWorkspaceId) ?? null,
-    [workspaces, selectedWorkspaceId],
+    () =>
+      activeWorkspaceTarget
+        ? (workspaces.find((w) => w.id === activeWorkspaceTarget.workspaceId) ?? null)
+        : null,
+    [activeWorkspaceTarget, workspaces],
   );
   const runtime = workspace ? workspaceRuntimeById[workspace.id] : null;
   const serverReady = Boolean(runtime?.serverUrl && !runtime?.error);
   const starting = runtime?.starting === true;
   const serverError = runtime?.error ?? null;
   const hasWorkspace = workspace !== null;
-  const hasMultipleWorkspaces = workspaces.length > 1;
+  const hasMultipleWorkspaces = workspaceTargets.length > 1;
+  const handleWorkspaceTargetChange = (targetId: string) => {
+    const target = workspaceTargets.find((entry) => entry.id === targetId);
+    if (!target) return;
+    void selectWorkspace(target.workspaceId);
+  };
 
   // Track how long the server has been starting for timeout display
   const [startingSince, setStartingSince] = useState<number | null>(null);
@@ -190,16 +206,16 @@ function WorkspaceStep({ onContinue, onBack }: { onContinue: () => void; onBack:
         <div className="space-y-2">
           <div className="text-sm font-medium">Active workspace</div>
           <Select
-            value={selectedWorkspaceId ?? ""}
-            onValueChange={(value) => void selectWorkspace(value)}
+            value={activeWorkspaceTarget?.id ?? ""}
+            onValueChange={handleWorkspaceTargetChange}
           >
             <SelectTrigger aria-label="Select workspace">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {workspaces.map((ws) => (
-                <SelectItem key={ws.id} value={ws.id}>
-                  {ws.name}
+              {workspaceTargets.map((target) => (
+                <SelectItem key={target.id} value={target.id}>
+                  {target.label}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -212,7 +228,9 @@ function WorkspaceStep({ onContinue, onBack }: { onContinue: () => void; onBack:
           <CardContent className="p-4">
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
-                <div className="text-sm font-semibold truncate">{workspace.name}</div>
+                <div className="text-sm font-semibold truncate">
+                  {activeWorkspaceTarget?.label ?? workspace.name}
+                </div>
                 <div className="text-xs text-muted-foreground truncate">{workspace.path}</div>
               </div>
               <div className="shrink-0">
@@ -701,8 +719,8 @@ function DefaultsStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
         <h2 className="text-2xl font-semibold tracking-tight">Review defaults</h2>
         <p className="text-sm text-muted-foreground leading-relaxed">
           These are the defaults for{" "}
-          <span className="font-medium text-foreground">{workspace.name}</span>. You can always
-          change them later in settings.
+          <span className="font-medium text-foreground">{workspaceDisplayLabel(workspace)}</span>.
+          You can always change them later in settings.
         </p>
       </div>
 

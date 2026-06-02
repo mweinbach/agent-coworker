@@ -578,7 +578,8 @@ describe("desktop workspaces page", () => {
         root?.render(createElement(WorkspacesPage));
       });
 
-      expect(container.textContent).toContain("One-off chat");
+      expect(container.textContent).toContain("Chats");
+      expect(container.textContent).not.toContain("One-off chat");
       expect(container.textContent).toContain("ajax");
     } finally {
       if (root) {

@@ -10,11 +10,12 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
+import type { MemoryListEntry } from "../../../app/types";
 import {
-  isOneOffChatWorkspace,
-  type MemoryListEntry,
-  type WorkspaceRecord,
-} from "../../../app/types";
+  CHATS_WORKSPACE_TARGET_ID,
+  resolveWorkspaceDisplayTargets,
+  type WorkspaceDisplayTarget,
+} from "../../../app/workspaceDisplayTargets";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
@@ -37,16 +38,11 @@ type DraftMemory = {
 };
 
 const HOT_MEMORY_ID = "hot";
-export const CHATS_MEMORY_TARGET_ID = "__cowork_chats__";
+export const CHATS_MEMORY_TARGET_ID = CHATS_WORKSPACE_TARGET_ID;
 export const MEMORY_LOADING_STALL_MS = 1_500;
+export { parentDirectoryPath } from "../../../app/workspaceDisplayTargets";
 
-export type MemoryTarget = {
-  id: string;
-  label: string;
-  kind: "chats" | "project";
-  workspaceId: string;
-  targetPath: string;
-};
+export type MemoryTarget = WorkspaceDisplayTarget;
 
 export function resolveDraftMemoryId(rawId: string): string {
   return rawId.trim() || HOT_MEMORY_ID;
@@ -66,54 +62,7 @@ function emptyDraft(): DraftMemory {
   return { scope: "workspace", id: "", content: "" };
 }
 
-export function parentDirectoryPath(input: string): string {
-  const trimmed = input.trim().replace(/[\\/]+$/, "");
-  const lastSlash = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
-  return lastSlash > 0 ? trimmed.slice(0, lastSlash) : trimmed;
-}
-
-export function resolveMemoryTargets(
-  workspaces: WorkspaceRecord[],
-  selectedWorkspaceId: string | null,
-): { targets: MemoryTarget[]; activeTarget: MemoryTarget | null } {
-  const selectedWorkspace =
-    workspaces.find((workspace) => workspace.id === selectedWorkspaceId) ?? null;
-  const oneOffChatWorkspaces = workspaces.filter(isOneOffChatWorkspace);
-  const chatAnchor =
-    selectedWorkspace && isOneOffChatWorkspace(selectedWorkspace)
-      ? selectedWorkspace
-      : (oneOffChatWorkspaces[0] ?? null);
-  const chatsTarget = chatAnchor
-    ? {
-        id: CHATS_MEMORY_TARGET_ID,
-        label: "Chats",
-        kind: "chats" as const,
-        workspaceId: chatAnchor.id,
-        targetPath: parentDirectoryPath(chatAnchor.path),
-      }
-    : null;
-  const projectTargets = workspaces
-    .filter((workspace) => !isOneOffChatWorkspace(workspace))
-    .map(
-      (workspace): MemoryTarget => ({
-        id: workspace.id,
-        label: workspace.name,
-        kind: "project",
-        workspaceId: workspace.id,
-        targetPath: workspace.path,
-      }),
-    );
-  const targets = chatsTarget ? [chatsTarget, ...projectTargets] : projectTargets;
-
-  const activeTarget =
-    selectedWorkspace && isOneOffChatWorkspace(selectedWorkspace)
-      ? chatsTarget
-      : (targets.find((target) => target.workspaceId === selectedWorkspaceId) ??
-        targets[0] ??
-        null);
-
-  return { targets, activeTarget };
-}
+export const resolveMemoryTargets = resolveWorkspaceDisplayTargets;
 
 function relativeTime(isoString: string): string {
   const now = Date.now();

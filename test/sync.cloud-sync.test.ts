@@ -346,6 +346,64 @@ describe("cloud sync service and custom provider", () => {
     expect(JSON.stringify(pushed[0])).not.toContain("/Users/alex");
   });
 
+  test("coalesces overlapping flushes without pushing duplicate patches", async () => {
+    const pushed: CloudSyncPatch[] = [];
+    let markPushStarted = () => {};
+    const pushStarted = new Promise<void>((resolve) => {
+      markPushStarted = resolve;
+    });
+    const pushGate: { release?: () => void } = {};
+    const pushRelease = new Promise<void>((resolve) => {
+      pushGate.release = resolve;
+    });
+    const provider: CloudSyncProvider = {
+      readRemoteState: async () => null,
+      pushPatch: async (_scope, pushedPatch) => {
+        pushed.push(pushedPatch);
+        markPushStarted();
+        await pushRelease;
+        return {};
+      },
+      pullSince: async () => ({ changes: [] }),
+      healthCheck: async () => ({ ok: true, status: "connected" }),
+      shutdown: async () => {},
+    };
+    const queue = new CloudSyncQueue({ outboxPath: await tempOutboxPath() });
+    const service = new CloudSyncService({
+      queue,
+      env: {},
+      providerFactory: () => provider,
+      setTimer: () => null,
+      clearTimer: () => {},
+    });
+
+    await expect(service.enqueuePersistedState(safePersistedState())).resolves.toMatchObject({
+      status: "queued",
+      queued: 1,
+    });
+
+    const firstFlush = service.flushNow();
+    await pushStarted;
+    await expect(service.flushNow()).resolves.toMatchObject({
+      status: "queued",
+      queued: 1,
+    });
+    expect(pushed).toHaveLength(1);
+
+    const releasePush = pushGate.release;
+    if (!releasePush) {
+      throw new Error("push gate was not initialized");
+    }
+    releasePush();
+
+    await expect(firstFlush).resolves.toMatchObject({
+      status: "connected",
+      queued: 0,
+    });
+    expect(pushed).toHaveLength(1);
+    expect(await queue.read()).toEqual([]);
+  });
+
   test("custom HTTP provider validates inbound remote payloads before returning them", async () => {
     const provider = new CustomHttpCloudSyncProvider({
       endpoint: "https://sync.example.test/",

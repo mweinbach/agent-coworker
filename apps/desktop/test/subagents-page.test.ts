@@ -73,8 +73,13 @@ mock.module("../src/lib/agentSocket", () => ({
   JsonRpcSocket: NoopJsonRpcSocket,
 }));
 
-const { ProfileDialog, SubagentsPage, resolveSubagentProfilesWorkspace, saveAgentProfileDraft } =
-  await import("../src/ui/settings/pages/SubagentsPage");
+const {
+  ProfileDialog,
+  SubagentsPage,
+  listSubagentProfileWorkspaces,
+  resolveSubagentProfilesWorkspace,
+  saveAgentProfileDraft,
+} = await import("../src/ui/settings/pages/SubagentsPage");
 const { useAppStore } = await import("../src/app/store");
 const { defaultWorkspaceRuntime } = await import("../src/app/store.helpers/runtimeState");
 mock.restore();
@@ -399,12 +404,18 @@ describe("subagents settings page", () => {
     });
 
     expect(resolveSubagentProfilesWorkspace([chat, project], "chat-1")?.id).toBe("project-1");
+    expect(listSubagentProfileWorkspaces([chat, project]).map((workspace) => workspace.id)).toEqual(
+      ["project-1"],
+    );
 
     const { harness, container, root } = await renderSubagentsPage();
     try {
       expect(refreshAgentProfilesCatalog).toHaveBeenCalledWith("project-1");
       expect(requestWorkspaceMcpServers).toHaveBeenCalledWith("project-1");
       expect(refreshSkillsCatalog).toHaveBeenCalledWith("project-1");
+      expect(container.textContent).toContain("Workspace");
+      expect(container.textContent).toContain("Project");
+      expect(container.textContent).toContain("/tmp/project-1");
       expect(container.textContent).toContain("Project Reviewer");
       expect(container.textContent).not.toContain("Chat Reviewer");
     } finally {
@@ -413,6 +424,15 @@ describe("subagents settings page", () => {
       });
       harness.restore();
     }
+  });
+
+  test("honors the explicit subagent profile workspace target", async () => {
+    const first = workspaceRecord("project-1", "Project One", "project");
+    const second = workspaceRecord("project-2", "Project Two", "project");
+
+    expect(resolveSubagentProfilesWorkspace([first, second], "project-1", "project-2")?.id).toBe(
+      "project-2",
+    );
   });
 
   test("shows a loading state while profiles are refreshing", async () => {

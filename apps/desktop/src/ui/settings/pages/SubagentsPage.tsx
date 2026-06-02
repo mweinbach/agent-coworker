@@ -30,6 +30,7 @@ import { Label } from "../../../components/ui/label";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
@@ -128,14 +129,28 @@ function draftFromEntry(entry: AgentProfileCatalogEntry): DraftProfile {
 export function resolveSubagentProfilesWorkspace(
   workspaces: WorkspaceRecord[],
   selectedWorkspaceId: string | null,
+  preferredWorkspaceId?: string | null,
 ): WorkspaceRecord | null {
+  const choices = listSubagentProfileWorkspaces(workspaces);
+  const preferred = preferredWorkspaceId
+    ? (choices.find((entry) => entry.id === preferredWorkspaceId) ?? null)
+    : null;
+  if (preferred) return preferred;
+
   const selected = selectedWorkspaceId
     ? (workspaces.find((entry) => entry.id === selectedWorkspaceId) ?? null)
     : null;
-  if (selected && !isOneOffChatWorkspace(selected)) return selected;
-  return (
-    workspaces.find((entry) => !isOneOffChatWorkspace(entry)) ?? selected ?? workspaces[0] ?? null
-  );
+  if (selected && choices.some((entry) => entry.id === selected.id)) return selected;
+  return choices[0] ?? null;
+}
+
+export function listSubagentProfileWorkspaces(workspaces: WorkspaceRecord[]): WorkspaceRecord[] {
+  const projectWorkspaces = workspaces.filter((entry) => !isOneOffChatWorkspace(entry));
+  return projectWorkspaces.length > 0 ? projectWorkspaces : workspaces;
+}
+
+function formatWorkspaceName(workspace: WorkspaceRecord): string {
+  return workspace.name.trim() || workspace.path;
 }
 
 function slugify(value: string): string {
@@ -208,9 +223,11 @@ export function SubagentsPage() {
   const requestWorkspaceMcpServers = useAppStore((s) => s.requestWorkspaceMcpServers);
   const refreshSkillsCatalog = useAppStore((s) => s.refreshSkillsCatalog);
 
+  const workspaceChoices = useMemo(() => listSubagentProfileWorkspaces(workspaces), [workspaces]);
+  const [profileWorkspaceId, setProfileWorkspaceId] = useState<string | null>(null);
   const workspace = useMemo(
-    () => resolveSubagentProfilesWorkspace(workspaces, selectedWorkspaceId),
-    [selectedWorkspaceId, workspaces],
+    () => resolveSubagentProfilesWorkspace(workspaces, selectedWorkspaceId, profileWorkspaceId),
+    [profileWorkspaceId, selectedWorkspaceId, workspaces],
   );
   const runtime = workspace ? workspaceRuntimeById[workspace.id] : null;
   const catalog = runtime?.agentProfilesCatalog ?? null;
@@ -218,6 +235,18 @@ export function SubagentsPage() {
   const [scope, setScope] = useState<AgentProfileScope>("workspace");
   const [draft, setDraft] = useState<DraftProfile | null>(null);
   const [idTouched, setIdTouched] = useState(false);
+
+  useEffect(() => {
+    const nextWorkspace = resolveSubagentProfilesWorkspace(
+      workspaces,
+      selectedWorkspaceId,
+      profileWorkspaceId,
+    );
+    const nextWorkspaceId = nextWorkspace?.id ?? null;
+    if (nextWorkspaceId !== profileWorkspaceId) {
+      setProfileWorkspaceId(nextWorkspaceId);
+    }
+  }, [profileWorkspaceId, selectedWorkspaceId, workspaces]);
 
   useEffect(() => {
     if (!workspace) return;
@@ -310,7 +339,13 @@ export function SubagentsPage() {
           </div>
         }
       >
-        <div className="space-y-4 px-4 py-4">
+        <div className="flex flex-col gap-4 px-4 py-4">
+          <WorkspaceTargetPicker
+            workspaces={workspaceChoices}
+            value={workspace?.id ?? ""}
+            onValueChange={setProfileWorkspaceId}
+          />
+
           <div className="grid w-full max-w-sm grid-cols-2 rounded-md border border-border/60 bg-muted/25 p-1">
             {(["workspace", "global"] as const).map((value) => (
               <Button
@@ -351,7 +386,11 @@ export function SubagentsPage() {
             />
           ) : profileRows.length === 0 ? (
             <SettingsEmptyState
-              title={`No ${scope} profiles`}
+              title={
+                scope === "workspace" && workspace
+                  ? `No profiles in ${formatWorkspaceName(workspace)}`
+                  : `No ${scope} profiles`
+              }
               description="Create a profile to make it available through spawnAgent(profileRef)."
               action={
                 <Button size="sm" onClick={startCreate}>
@@ -388,8 +427,54 @@ export function SubagentsPage() {
         setIdTouched={setIdTouched}
         mcpServerNames={mcpServerNames}
         skillNames={skillNames}
+        workspace={workspace}
+        workspaceChoices={workspaceChoices}
+        onWorkspaceChange={setProfileWorkspaceId}
         onSave={() => void saveDraft()}
       />
+    </div>
+  );
+}
+
+function WorkspaceTargetPicker({
+  workspaces,
+  value,
+  onValueChange,
+  disabled = false,
+}: {
+  workspaces: WorkspaceRecord[];
+  value: string;
+  onValueChange: (workspaceId: string) => void;
+  disabled?: boolean;
+}) {
+  const selectedWorkspace = workspaces.find((entry) => entry.id === value) ?? workspaces[0] ?? null;
+  if (!selectedWorkspace) return null;
+
+  return (
+    <div className="grid gap-3 rounded-md border border-border/60 bg-background/55 px-3 py-3 sm:grid-cols-[minmax(0,1fr)_minmax(220px,320px)] sm:items-center">
+      <div className="flex min-w-0 flex-col gap-1">
+        <Label className="text-xs text-muted-foreground">Profile workspace</Label>
+        <div className="truncate text-sm font-medium">{formatWorkspaceName(selectedWorkspace)}</div>
+        <div className="truncate text-xs text-muted-foreground">{selectedWorkspace.path}</div>
+      </div>
+      <Select
+        value={selectedWorkspace.id}
+        disabled={disabled || workspaces.length <= 1}
+        onValueChange={onValueChange}
+      >
+        <SelectTrigger className="w-full">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectGroup>
+            {workspaces.map((workspace) => (
+              <SelectItem key={workspace.id} value={workspace.id}>
+                {formatWorkspaceName(workspace)}
+              </SelectItem>
+            ))}
+          </SelectGroup>
+        </SelectContent>
+      </Select>
     </div>
   );
 }
@@ -459,6 +544,9 @@ export function ProfileDialog({
   setIdTouched,
   mcpServerNames,
   skillNames,
+  workspace,
+  workspaceChoices,
+  onWorkspaceChange,
   onSave,
 }: {
   draft: DraftProfile | null;
@@ -467,6 +555,9 @@ export function ProfileDialog({
   setIdTouched: (value: boolean) => void;
   mcpServerNames: string[];
   skillNames: string[];
+  workspace: WorkspaceRecord | null;
+  workspaceChoices: WorkspaceRecord[];
+  onWorkspaceChange: (workspaceId: string) => void;
   onSave: () => void;
 }) {
   const tools = draft ? ROLE_TOOLS[draft.baseRole] : [];
@@ -561,6 +652,15 @@ export function ProfileDialog({
                 </div>
               </Field>
             </div>
+
+            {draft.scope === "workspace" && workspace ? (
+              <WorkspaceTargetPicker
+                workspaces={workspaceChoices}
+                value={workspace.id}
+                onValueChange={onWorkspaceChange}
+                disabled={editingExisting}
+              />
+            ) : null}
 
             <Field label="Description">
               <Input

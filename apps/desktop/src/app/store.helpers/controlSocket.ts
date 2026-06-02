@@ -1,5 +1,8 @@
 import type { ProviderName, SessionEvent } from "../../lib/wsProtocol";
-import { normalizeWorkspaceProviderOptions } from "../openaiCompatibleProviderOptions";
+import {
+  mergeWorkspaceProviderOptionsPreservingSearchSettings,
+  normalizeWorkspaceProviderOptions,
+} from "../openaiCompatibleProviderOptions";
 import type { StoreGet, StoreSet } from "../store.helpers";
 import type { Notification, SessionSnapshot, ThreadRecord } from "../types";
 import { normalizeWorkspaceUserProfile } from "../types";
@@ -862,7 +865,14 @@ export function createControlSocketHelpers(
                   ? { defaultAllowedChildModelRefs: evt.config.allowedChildModelRefs }
                   : {}),
                 defaultToolOutputOverflowChars: evt.config.defaultToolOutputOverflowChars,
-                ...(sessionConfigHasProviderOptions ? { providerOptions } : {}),
+                ...(sessionConfigHasProviderOptions
+                  ? {
+                      providerOptions: mergeWorkspaceProviderOptionsPreservingSearchSettings(
+                        workspace.providerOptions,
+                        providerOptions,
+                      ),
+                    }
+                  : {}),
                 yolo: typeof evt.config.yolo === "boolean" ? evt.config.yolo : workspace.yolo,
                 ...(typeof evt.config.userName === "string"
                   ? { userName: evt.config.userName }

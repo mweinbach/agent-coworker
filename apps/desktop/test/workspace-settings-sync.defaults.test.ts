@@ -231,6 +231,84 @@ describe("workspace settings sync", () => {
     });
   });
 
+  test("applyWorkspaceDefaultsToThread restores saved search provider when live providerOptions are partial", async () => {
+    primeWorkspaceConnection();
+    const partialProviderOptions = {
+      "codex-cli": {
+        reasoningEffort: "high",
+        reasoningSummary: "detailed",
+        textVerbosity: "medium",
+      },
+      google: {
+        responseMimeType: "application/json",
+      },
+    };
+    useAppStore.setState((state) => ({
+      ...state,
+      workspaces: state.workspaces.map((workspace) =>
+        workspace.id === workspaceId
+          ? {
+              ...workspace,
+              providerOptions: {
+                "codex-cli": {
+                  webSearchBackend: "parallel",
+                  webSearchFallbackBackend: "parallel",
+                  webSearchMode: "live",
+                },
+                google: {
+                  nativeWebSearch: false,
+                },
+              },
+            }
+          : workspace,
+      ),
+      workspaceRuntimeById: {
+        ...state.workspaceRuntimeById,
+        [workspaceId]: {
+          ...state.workspaceRuntimeById[workspaceId],
+          controlSessionConfig: {
+            yolo: false,
+            defaultBackupsEnabled: true,
+            preferredChildModel: "gpt-5.2",
+            childModelRoutingMode: "same-provider",
+            preferredChildModelRef: "openai:gpt-5.2",
+            allowedChildModelRefs: [],
+            providerOptions: partialProviderOptions,
+          },
+          controlEnableMcp: true,
+        },
+      },
+    }));
+    const { threadId } = seedConnectedThread({
+      sessionConfig: {
+        providerOptions: partialProviderOptions,
+      },
+    });
+    jsonRpcRequests.length = 0;
+
+    await useAppStore.getState().applyWorkspaceDefaultsToThread(threadId, "auto");
+
+    expect(latestRequest("cowork/session/defaults/apply")?.params).toMatchObject({
+      cwd: "/tmp/workspace",
+      config: {
+        providerOptions: {
+          "codex-cli": {
+            reasoningEffort: "high",
+            reasoningSummary: "detailed",
+            textVerbosity: "medium",
+            webSearchBackend: "parallel",
+            webSearchFallbackBackend: "parallel",
+            webSearchMode: "live",
+          },
+          google: {
+            nativeWebSearch: false,
+            responseMimeType: "application/json",
+          },
+        },
+      },
+    });
+  });
+
   test("applyWorkspaceDefaultsToThread applies response-envelope thread state when no notification arrives", async () => {
     primeWorkspaceConnection();
     const { threadId, sessionId } = seedConnectedThread();

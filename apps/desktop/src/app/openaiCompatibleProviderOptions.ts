@@ -84,6 +84,56 @@ export function mergeWorkspaceProviderOptions(
   return normalizeWorkspaceProviderOptions(merged);
 }
 
+export function mergeWorkspaceProviderOptionsPreservingSearchSettings(
+  saved?: WorkspaceProviderOptions,
+  live?: WorkspaceProviderOptions,
+): WorkspaceProviderOptions | undefined {
+  const normalizedSaved = normalizeWorkspaceProviderOptions(saved);
+  const normalizedLive = normalizeWorkspaceProviderOptions(live);
+  if (!normalizedLive) return normalizedSaved;
+
+  const next = mergeWorkspaceProviderOptions(undefined, normalizedLive);
+  if (!next) return normalizedSaved;
+
+  const savedCodex = normalizedSaved?.["codex-cli"];
+  const liveCodex = normalizedLive["codex-cli"];
+  if (savedCodex) {
+    const codexSearchPatch: CodexCliProviderOptions = {};
+    if (liveCodex?.webSearchBackend === undefined && savedCodex.webSearchBackend !== undefined) {
+      codexSearchPatch.webSearchBackend = savedCodex.webSearchBackend;
+    }
+    if (
+      liveCodex?.webSearchFallbackBackend === undefined &&
+      savedCodex.webSearchFallbackBackend !== undefined
+    ) {
+      codexSearchPatch.webSearchFallbackBackend = savedCodex.webSearchFallbackBackend;
+    }
+    if (liveCodex?.webSearchMode === undefined && savedCodex.webSearchMode !== undefined) {
+      codexSearchPatch.webSearchMode = savedCodex.webSearchMode;
+    }
+    if (liveCodex?.webSearch === undefined && savedCodex.webSearch !== undefined) {
+      codexSearchPatch.webSearch = savedCodex.webSearch;
+    }
+    if (Object.keys(codexSearchPatch).length > 0) {
+      next["codex-cli"] = {
+        ...codexSearchPatch,
+        ...(next["codex-cli"] ?? {}),
+      };
+    }
+  }
+
+  const savedGoogle = normalizedSaved?.google;
+  const liveGoogle = normalizedLive.google;
+  if (savedGoogle?.nativeWebSearch !== undefined && liveGoogle?.nativeWebSearch === undefined) {
+    next.google = {
+      nativeWebSearch: savedGoogle.nativeWebSearch,
+      ...(next.google ?? {}),
+    };
+  }
+
+  return normalizeWorkspaceProviderOptions(next);
+}
+
 export function getWorkspaceReasoningEffort(
   options: WorkspaceProviderOptions | undefined,
   provider: OpenAICompatibleProviderName,

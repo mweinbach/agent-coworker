@@ -248,6 +248,82 @@ describe("workspace settings sync", () => {
     expect((runtime?.controlSessionConfig as any)?.providerOptions).toBeUndefined();
   });
 
+  test("control session_config preserves saved search settings when providerOptions are partial", async () => {
+    primeWorkspaceConnection();
+    useAppStore.setState((state) => ({
+      ...state,
+      workspaces: state.workspaces.map((workspace) =>
+        workspace.id === workspaceId
+          ? {
+              ...workspace,
+              providerOptions: {
+                "codex-cli": {
+                  reasoningEffort: "high",
+                  webSearchBackend: "parallel",
+                  webSearchFallbackBackend: "parallel",
+                  webSearchMode: "live",
+                },
+                google: {
+                  nativeWebSearch: false,
+                },
+              },
+            }
+          : workspace,
+      ),
+    }));
+
+    setControlSessionConfigResponse({
+      yolo: false,
+      observabilityEnabled: true,
+      backupsEnabled: true,
+      defaultBackupsEnabled: true,
+      toolOutputOverflowChars: 25000,
+      preferredChildModel: "gpt-5-mini",
+      providerOptions: {
+        "codex-cli": {
+          reasoningSummary: "detailed",
+          textVerbosity: "medium",
+        },
+        google: {
+          responseMimeType: "application/json",
+        },
+      },
+    });
+
+    await requestJsonRpcControlEvent(
+      useAppStore.getState as any,
+      useAppStore.setState as any,
+      workspaceId,
+      "cowork/session/defaults/apply",
+      { cwd: "/tmp/workspace" },
+    );
+
+    const workspace = useAppStore.getState().workspaces.find((entry) => entry.id === workspaceId);
+    const runtime = useAppStore.getState().workspaceRuntimeById[workspaceId];
+    expect(workspace?.providerOptions).toEqual({
+      "codex-cli": {
+        reasoningSummary: "detailed",
+        textVerbosity: "medium",
+        webSearchBackend: "parallel",
+        webSearchFallbackBackend: "parallel",
+        webSearchMode: "live",
+      },
+      google: {
+        nativeWebSearch: false,
+        responseMimeType: "application/json",
+      },
+    });
+    expect((runtime?.controlSessionConfig as any)?.providerOptions).toEqual({
+      "codex-cli": {
+        reasoningSummary: "detailed",
+        textVerbosity: "medium",
+      },
+      google: {
+        responseMimeType: "application/json",
+      },
+    });
+  });
+
   test("control session_config preserves saved routing defaults when snapshot omits them", async () => {
     primeWorkspaceConnection();
     useAppStore.setState((state) => ({

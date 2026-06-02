@@ -4,6 +4,7 @@ import type { SessionConfigPatch } from "../../../../../src/server/protocol";
 import type { ProviderName } from "../../lib/wsProtocol";
 import {
   mergeWorkspaceProviderOptions,
+  mergeWorkspaceProviderOptionsPreservingSearchSettings,
   normalizeWorkspaceProviderOptions,
 } from "../openaiCompatibleProviderOptions";
 import {
@@ -360,9 +361,10 @@ export function createWorkspaceDefaultsActions(
       defaultToolOutputOverflowChars:
         controlSessionConfig?.defaultToolOutputOverflowChars ??
         workspace.defaultToolOutputOverflowChars,
-      providerOptions:
-        normalizeWorkspaceProviderOptions(controlSessionConfig?.providerOptions) ??
+      providerOptions: mergeWorkspaceProviderOptionsPreservingSearchSettings(
         workspace.providerOptions,
+        normalizeWorkspaceProviderOptions(controlSessionConfig?.providerOptions),
+      ),
       userName:
         typeof controlSessionConfig?.userName === "string"
           ? controlSessionConfig.userName
